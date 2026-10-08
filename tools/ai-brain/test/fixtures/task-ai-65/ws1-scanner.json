@@ -1,0 +1,16 @@
+{
+  "taskId": "TASK-AI-65-WS1",
+  "role": "scanner",
+  "complexity": "standard",
+  "requiredCapabilities": [],
+  "proofFloor": "API_PASS",
+  "contextSize": 32000,
+  "expectedDuration": 300000,
+  "latencyPriority": "normal",
+  "qualityFloor": 0,
+  "costCeiling": 500,
+  "requiredHarness": null,
+  "forbiddenFailureDomains": [],
+  "resourceCeiling": 10,
+  "currentWorkload": 0
+}

@@ -3,15 +3,15 @@
   "cacheDir": ".turbo/cache",
   "tasks": {
     "build": {
-      "dependsOn": ["^build"],
+      "dependsOn": ["^build", "//#db:generate"],
       "outputs": [".next/**", "!.next/cache/**", "dist/**"]
     },
     "lint": {
-      "dependsOn": ["^build"],
+      "dependsOn": ["^build", "//#db:generate"],
       "inputs": ["$TURBO_DEFAULT$", ".eslintrc*", "eslint.config.*"]
     },
     "typecheck": {
-      "dependsOn": ["^build"],
+      "dependsOn": ["^build", "//#db:generate"],
       "inputs": ["$TURBO_DEFAULT$", "tsconfig*.json"]
     },
     "test": {
@@ -32,7 +32,7 @@
       "cache": false,
       "persistent": true
     },
-    "db:generate": {
+    "//#db:generate": {
       "cache": false
     }
   }

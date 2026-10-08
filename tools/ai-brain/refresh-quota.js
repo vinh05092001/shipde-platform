@@ -61,6 +61,13 @@ const READERS = {
       return quota;
     },
   },
+  'agy-pool': {
+    read: (account, opts) => {
+      const { getHarness } = require('./harness');
+      const adapter = getHarness('agy-pool');
+      return adapter.quota(account.id, opts);
+    },
+  },
   'claude-code': {
     read: (account, opts) => {
       const identity = account.email
@@ -158,17 +165,59 @@ function refreshAccount(account, options) {
   // it leaves the previous, healthier reading on screen looking current.
   saveReading(account.id, quota, opts);
 
+  const exhausted =
+    account.provider === 'agy-pool' &&
+    quota.available === true &&
+    Array.isArray(quota.rows) &&
+    quota.rows.length > 0 &&
+    quota.rows.every(
+      (row) =>
+        (Number.isFinite(row.remainingPercent) && Number(row.remainingPercent) <= 0) ||
+        row.disabled === true
+    );
+
   return {
     accountId: account.id,
-    ok: quota.available === true,
-    reason: quota.available ? null : quota.reason,
+    ok: quota.available === true && !exhausted,
+    reason: exhausted ? 'QUOTA_EXHAUSTED' : quota.available ? null : quota.reason,
     account: quota.account && quota.account.known ? quota.account.email : null,
     rows: quota.available ? quota.rows.length : 0,
   };
 }
 
 function refreshAll(accounts, options) {
-  return (accounts || []).map((a) => refreshAccount(a, options));
+  const allAccounts = [...(accounts || [])];
+  const pool = require('./agy-pool-runtime');
+  const seen = new Set(allAccounts.map((account) => account && account.id).filter(Boolean));
+  const opts = options || {};
+  const shouldDiscoverPool =
+    opts.discoverPool === true ||
+    opts.fakeRunsDir ||
+    opts.runsDir ||
+    process.env.AGY_POOL_RUNS_DIR ||
+    process.env.AGY_RUNS_DIR;
+  if (shouldDiscoverPool) {
+    for (const entry of pool.discoverAccounts(options)) {
+      if (!seen.has(entry)) {
+        allAccounts.push({
+          id: entry,
+          provider: 'agy-pool',
+        });
+        seen.add(entry);
+      }
+    }
+  }
+  const results = [];
+  for (const a of allAccounts) {
+    const res = refreshAccount(a, options);
+    if (typeof opts.onProgress === 'function') {
+      try {
+        opts.onProgress(res);
+      } catch {}
+    }
+    results.push(res);
+  }
+  return results;
 }
 
-module.exports = { SUPPORTED_PROVIDERS, identityFor, refreshAccount, refreshAll };
+module.exports = { SUPPORTED_PROVIDERS, identityFor, refreshAccount, refreshAll, READERS };

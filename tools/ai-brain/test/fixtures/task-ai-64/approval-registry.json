@@ -1,0 +1,11 @@
+{
+  "AP-64-1": {
+    "approvalId": "AP-64-1",
+    "state": "APPROVED",
+    "reviewedSha": "0000000000000000000000000000000000000000",
+    "verdict": "PASS",
+    "reviewer": "reviewer.primary",
+    "issuedAt": "2026-09-01T00:00:00.000Z",
+    "expiry": "2100-01-01T00:00:00.000Z"
+  }
+}

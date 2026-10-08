@@ -7,6 +7,7 @@
  *   node tools/ai-brain/cli.js reconcile [--json] [--strict]
  *   node tools/ai-brain/cli.js prove --tests "<command>" [...]
  *   node tools/ai-brain/cli.js dispatch [--dry-run | --execute] [--plan <file>]
+ *                                       [--profile <file.json>] [--report-outcome <file.json>]
  *   node tools/ai-brain/cli.js shadow --project|--compare [--register <p>] [--shadow <p>] [--json] [--dry-run]
  *   node tools/ai-brain/cli.js probe --account <id> [--model <m>] [--json]
  *                                   [--file <p>] [--timeout <ms>] [--cache-window <ms>]
@@ -28,7 +29,6 @@
  */
 
 const path = require('path');
-const { loadRegister } = require('../ai-dashboard/register-adapter');
 const { reconcileRegister, planReconciliation, applyStatusMutations } = require('./reconcile');
 const { auditManifest } = require('./manifest-audit');
 const { runCheck, currentBranch, headSha } = require('./facts');
@@ -85,6 +85,36 @@ const PROTECTED_WORKTREE = 'shipde-platform';
 const REFUSAL_PROTECTED =
   'Write-back refused: running in protected main worktree/branch. ' +
   'Mutations require a dedicated feature worktree and branch.';
+
+function loadRegister(filePath, preferredBranch, rootDir) {
+  try {
+    return require('../ai-dashboard/register-adapter').loadRegister(
+      filePath,
+      preferredBranch,
+      rootDir
+    );
+  } catch (err) {
+    if (
+      err &&
+      err.code === 'MODULE_NOT_FOUND' &&
+      String(err.message || '').includes('../ai-dashboard/register-adapter')
+    ) {
+      return {
+        health: {
+          name: 'register',
+          status: 'unavailable',
+          observedAt: new Date().toISOString(),
+          latencyMs: 0,
+          provenance: filePath,
+          impact: 'Register adapter is unavailable in this copied tool surface',
+          error: err.message,
+        },
+        data: { items: [] },
+      };
+    }
+    throw err;
+  }
+}
 
 function pick(args, kebab, camel) {
   return args[kebab] === undefined ? args[camel] : args[kebab];
@@ -532,15 +562,33 @@ function quotaCommand(args) {
   const { readIdentity } = require('./agy-identity');
   const { listAccounts } = require('./accounts');
   const { usableReadings, storePath } = require('./quota-store');
+  const os = require('os');
 
-  const identity = readIdentity({});
+  const home =
+    args.home ||
+    (process.platform === 'win32'
+      ? process.env.USERPROFILE || process.env.HOME || os.homedir()
+      : process.env.HOME || process.env.USERPROFILE || os.homedir());
+  const poolTimeout = args['pool-timeout'] || args['timeout-ms'] || args.timeout;
+  const runtimeOpts = {
+    home,
+    fakeRunsDir: args['pool-runtime-dir'] || args['agy-runs-dir'],
+    adapterScript: args['pool-adapter-script'],
+    ...(poolTimeout
+      ? {
+          timeoutMs: Math.max(1, Number(poolTimeout)),
+          adapterTimeoutMs: Math.max(1, Number(poolTimeout)),
+        }
+      : {}),
+  };
+  const identity = readIdentity({ home });
   const accounts = listAccounts() || [];
 
   if (args.show) {
-    const { reported, problems } = usableReadings(identity, {});
+    const { reported, problems } = usableReadings(identity, runtimeOpts);
     if (args.json) return console.log(JSON.stringify({ identity, reported, problems }, null, 2));
     console.log('');
-    console.log('  Số liệu quota đang dùng được — ' + storePath({}));
+    console.log('  Số liệu quota đang dùng được — ' + storePath(runtimeOpts));
     console.log('');
     for (const [id, q] of Object.entries(reported)) {
       for (const row of q.rows) {
@@ -549,7 +597,14 @@ function quotaCommand(args) {
             id.padEnd(14) +
             row.family.padEnd(12) +
             row.window.padEnd(10) +
-            (row.disabled ? 'đã tắt' : row.remainingPercent + '%')
+            (row.disabled
+              ? 'đã tắt'
+              : row.remainingPercent === null ||
+                  row.remainingPercent === undefined ||
+                  row.remainingPercent === 'UNKNOWN' ||
+                  row.known === false
+                ? 'UNKNOWN'
+                : row.remainingPercent + '%')
         );
       }
     }
@@ -560,8 +615,13 @@ function quotaCommand(args) {
     return;
   }
 
-  const results = refreshAll(accounts, { identity });
-  if (args.json) return console.log(JSON.stringify({ identity, results }, null, 2));
+  if (args.json) {
+    const results = refreshAll(
+      accounts,
+      Object.assign({ identity, discoverPool: true }, runtimeOpts)
+    );
+    return console.log(JSON.stringify({ identity, results }, null, 2));
+  }
 
   console.log('');
   console.log(
@@ -570,106 +630,1626 @@ function quotaCommand(args) {
       : '  Không xác định được account đang đăng nhập: ' + identity.reason
   );
   console.log('');
-  for (const r of results) {
+  const onProgress = (r) => {
     if (r.skipped) console.log('  BỎ QUA  ' + r.accountId + ' — ' + r.reason);
     else if (r.ok) console.log('  ĐỌC ĐƯỢC ' + r.accountId + ' — ' + r.rows + ' dòng');
     else console.log('  HỎNG    ' + r.accountId + ' — ' + r.reason);
-  }
+  };
+  refreshAll(accounts, Object.assign({ identity, discoverPool: true, onProgress }, runtimeOpts));
   console.log('');
 }
 
-/**
- * Plans with planDispatch and hands the plan to the executor (TASK-AI-24).
- * Dry run unless --execute is given; the plan comes from --plan <file> or is
- * built from READY_FOR_AUTHOR register rows and the account registry.
- */
-function dispatchCommand(args) {
-  const fs = require('fs');
-  const { executePlan } = require('./executor');
-  const rootDir = args.root || process.cwd();
-  const execute = args.execute === true;
-  if (execute && (args['dry-run'] || args.dryRun)) {
-    console.error('Dispatch refused: --execute and --dry-run are exclusive.');
-    process.exit(2);
+function assembleCandidates(
+  discoveryCat,
+  offerings,
+  registry,
+  accounts,
+  injectedCandidates,
+  gatewayCandidates
+) {
+  if (Array.isArray(injectedCandidates)) {
+    return injectedCandidates.map((c) => Object.assign({}, c));
   }
 
-  let plan;
+  const candidatesApi = require('./candidates');
+  const sourcesApi = require('./sources');
+
+  const offeringMap = new Map();
+  for (const off of offerings || []) {
+    const k1 = `${off.accountId || '*'}::${off.model}`;
+    offeringMap.set(k1, off);
+    if (!offeringMap.has(off.model)) {
+      offeringMap.set(off.model, off);
+    }
+  }
+
+  const result = [];
+  const seenKeys = new Set();
+
+  // 1. Discovery candidates
+  const discCands = (discoveryCat && discoveryCat.candidates) || [];
+  for (const dc of discCands) {
+    const accountId = dc.accountId || dc.account || '*';
+    const modelId = dc.modelId || dc.model;
+    const c = {
+      ...dc,
+      accountId,
+      quotaScope: dc.quotaScope || (accountId !== '*' ? accountId : dc.upstream || ''),
+      modelId,
+    };
+    const off = offeringMap.get(`${accountId}::${modelId}`) || offeringMap.get(modelId);
+    if (off) {
+      if (c.qualifiedRoles === undefined && off.qualifiedRoles !== undefined) {
+        c.qualifiedRoles = off.qualifiedRoles;
+      }
+      if (c.cost === undefined && off.cost !== undefined) c.cost = off.cost;
+      if (c.tier === undefined && off.tier !== undefined) c.tier = off.tier;
+      if (c.quality === undefined && off.quality !== undefined) c.quality = off.quality;
+      if (c.capabilities === undefined && off.capabilities !== undefined) {
+        c.capabilities = off.capabilities;
+      }
+    }
+    if (
+      (!c.capabilities || Object.keys(c.capabilities).length === 0) &&
+      accountId &&
+      accountId !== '*'
+    ) {
+      const acc = (accounts || []).find((a) => a && a.id === accountId);
+      if (acc && acc.capabilities) {
+        c.capabilities = Object.assign({}, acc.capabilities, c.capabilities || {});
+      }
+      if (c.cost === undefined && acc && acc.cost !== undefined) {
+        c.cost = acc.cost;
+      }
+    }
+    const key = candidatesApi.candidateKey(c);
+    c.key = key;
+    if (!seenKeys.has(key)) {
+      seenKeys.add(key);
+      result.push(c);
+    }
+  }
+
+  // 2. Offerings candidates, then the gateway-advertised candidates for each
+  // concrete account. The advertised ones come last so an operator's declared
+  // entry for the same seven-part key wins: it carries the declared grades and
+  // limits, and the advertised row only proves the route exists.
+  const advertised = gatewayCandidates || [];
+  for (const off of advertised) {
+    const key = candidatesApi.candidateKey(off);
+    const c = Object.assign({}, off, { key });
+    if (!seenKeys.has(key)) {
+      seenKeys.add(key);
+      result.push(c);
+    }
+  }
+
+  for (const off of offerings || []) {
+    const route = sourcesApi.dispatchRoute(off.provider, registry);
+    const source =
+      registry &&
+      registry.sources &&
+      registry.sources.find((s) => s.id === off.provider || s.id === off.accountId);
+    const harness =
+      off.harness || (route && route.harness) || (source && source.harness) || 'paseo';
+    let accessPath =
+      off.accessPath || (source ? candidatesApi.accessPathOf(source, registry) : null);
+    if (!accessPath && typeof off.accountId === 'string') {
+      const parts = off.accountId.split('::');
+      if (parts.length >= 7) accessPath = parts[1];
+    }
+    if (!accessPath) accessPath = 'cli';
+    // The gateway is derived from the registry, never from a name written here.
+    // An offering whose provider is a gateway IS that gateway; one whose
+    // provider declares a `reachedVia` rides it. When the registry says neither,
+    // the gateway is genuinely unknown — and an unknown gateway is recorded as
+    // empty, because a guess produces a key that can never match recorded
+    // evidence while looking exactly like one that can.
+    const gateway =
+      off.gateway ||
+      (source && source.reachedVia) ||
+      (source && source.kind === sourcesApi.Kind.ROUTER ? source.id : '');
+    const parsed = candidatesApi.parsePrefix(off.model);
+    const upstream =
+      off.upstream || (parsed && parsed.upstream) || off.provider || (source && source.id) || '';
+    const accountId = off.accountId || '*';
+    const quotaScope = off.quotaScope || (accountId !== '*' ? accountId : upstream);
+    const modelId = off.model;
+
+    const c = {
+      harness,
+      accessPath,
+      gateway,
+      upstream,
+      accountId,
+      quotaScope,
+      modelId,
+      qualifiedRoles: off.qualifiedRoles,
+      cost: off.cost,
+      capabilities: off.capabilities,
+      tier: off.tier,
+      quality: off.quality,
+      source: off.provider,
+    };
+    const key = candidatesApi.candidateKey(c);
+    c.key = key;
+    if (!seenKeys.has(key)) {
+      seenKeys.add(key);
+      result.push(c);
+    }
+  }
+
+  return result;
+}
+
+/**
+ * The whole candidate set for one dispatch: the discovery catalogue, the
+ * offerings, and the models each concrete gateway account can actually reach.
+ *
+ * The third part is what makes recorded evidence usable. An outcome recorded
+ * against `paseo::cli::9router::ag::ninerouter::ninerouter::ag/gemini-3.1-pro-low`
+ * can only ever match a candidate with that exact seven-part identity, and the
+ * only thing that can mint one is the account whose route reaches the gateway
+ * that advertises `ag/…`. Without this, a source that did real work tonight was
+ * invisible to the Controller until an operator typed its model name into an
+ * account file by hand.
+ *
+ * Both dispatch paths — the item path and the profile path — assemble here, so
+ * a candidate is the same kind of object with the same seven-part identity
+ * whichever way it was requested. An injected candidate list still wins: a
+ * caller that supplies its own candidates is testing or replaying them, not
+ * asking what the machine actually serves.
+ */
+function mergeEvidenceAccounts(inputAccounts, registryAccounts) {
+  const input = Array.isArray(inputAccounts) ? inputAccounts : [];
+  const registry = Array.isArray(registryAccounts) ? registryAccounts : [];
+  if (registry.length === 0) return input;
+  const map = new Map();
+  const noId = [];
+  const hasCaps = (a) => Boolean(a && a.capabilities && Object.keys(a.capabilities).length > 0);
+
+  for (const acc of input) {
+    if (!acc || typeof acc !== 'object') continue;
+    if (!acc.id) {
+      noId.push(acc);
+      continue;
+    }
+    map.set(acc.id, Object.assign({}, acc));
+  }
+  for (const reg of registry) {
+    if (!reg || typeof reg !== 'object' || !reg.id) continue;
+    if (map.has(reg.id)) {
+      const existing = map.get(reg.id);
+      if (!hasCaps(existing) && hasCaps(reg)) {
+        map.set(reg.id, Object.assign({}, reg, existing, { capabilities: reg.capabilities }));
+      }
+    } else {
+      map.set(reg.id, Object.assign({}, reg));
+    }
+  }
+  return [...Array.from(map.values()), ...noId];
+}
+
+/**
+ * Assemble candidates for a live dispatch run.
+ *
+ * Combines candidates generated from catalogue, openCodeIds, and accounts, with
+ * gateway-derived and pool-derived candidates. Merges evidence-only candidates
+ * so models seen in evidence history participate in selection.
+ *
+ * If `options.candidates` is provided, that array is returned directly: a
+ * caller that supplies its own candidates is testing or replaying them, not
+ * asking what the machine actually serves.
+ */
+function assembleForDispatch(discoveryCat, accounts, registry, options) {
+  const candidatesApi = require('./candidates');
+  const { expandOfferings } = require('./offerings');
+  const opts = options || {};
+
+  const resolvedRegistry = registry || require('./sources').loadSources();
+
+  if (Array.isArray(opts.candidates)) {
+    return assembleCandidates(discoveryCat, [], resolvedRegistry, accounts, opts.candidates);
+  }
+
+  let offs = opts.offerings;
+  if (!offs) {
+    try {
+      offs = expandOfferings(accounts);
+    } catch {
+      offs = [];
+    }
+  }
+
+  const registryAccounts = Array.isArray(opts.registryAccounts)
+    ? opts.registryAccounts
+    : typeof opts.listAccounts === 'function'
+      ? opts.listAccounts()
+      : require('./accounts').listAccounts();
+  const evidenceAccounts = mergeEvidenceAccounts(accounts, registryAccounts);
+
+  return assembleCandidates(discoveryCat, offs, resolvedRegistry, accounts, null, [
+    ...candidatesApi.generateCandidates({
+      registry: resolvedRegistry,
+      accounts: accounts || [],
+      openCodeIds: (accounts || []).flatMap((account) =>
+        ((account && account.models) || [])
+          .map((model) => (typeof model === 'string' ? model : model && model.model))
+          .filter(Boolean)
+      ),
+      catalogue: ((discoveryCat && discoveryCat.candidates) || [])
+        .map((row) => row && (row.modelId || row.model))
+        .filter(Boolean),
+      evidenceData: opts.evidenceData,
+      fakeRunsDir: opts.fakeRunsDir,
+      home: opts.home,
+      discoverPool: opts.discoverPool !== false,
+      adapterScript: opts.adapterScript,
+      platform: opts.platform,
+    }),
+    ...candidatesApi.gatewayAccountCandidates({
+      registry: resolvedRegistry,
+      accounts: accounts || [],
+      catalogue: (discoveryCat && discoveryCat.candidates) || [],
+    }),
+    ...candidatesApi.poolAccountCandidates({
+      registry: resolvedRegistry,
+      accounts: accounts || [],
+      catalogue: (discoveryCat && discoveryCat.candidates) || [],
+      evidenceData: opts.evidenceData,
+      fakeRunsDir: opts.fakeRunsDir,
+      home: opts.home,
+      discoverPool: opts.discoverPool !== false,
+      adapterScript: opts.adapterScript,
+      platform: opts.platform,
+    }),
+    ...candidatesApi
+      .candidatesFromEvidence(opts.evidenceData, { accounts: evidenceAccounts })
+      .filter((c) => {
+        if (c.legacy) return false;
+        return Array.isArray(c.evidence) && c.evidence.some((e) => e && e.status === 'passed');
+      }),
+  ]);
+}
+
+function readCheckpoint(file) {
+  const fs = require('fs');
+  if (!file) return null;
+  // A `.tmp` next to the checkpoint is a writeJsonFile write whose rename was
+  // interrupted: the file itself is complete (a torn write is not valid JSON)
+  // and it is newer than the checkpoint below it. Adopt it and finish the
+  // rename, so a one-step-stale checkpoint cannot silently relaunch work the
+  // decision log already records as launched (TASK-AI-105 P2-4). A torn
+  // half-write is dropped instead: the checkpoint is the last complete state.
+  const tmp = file + '.tmp';
+  if (fs.existsSync(tmp)) {
+    let adopted = null;
+    try {
+      adopted = JSON.parse(fs.readFileSync(tmp, 'utf8'));
+    } catch (err) {
+      adopted = null;
+    }
+    if (adopted && typeof adopted === 'object' && !Array.isArray(adopted)) {
+      try {
+        fs.renameSync(tmp, file);
+      } catch (err) {}
+      return adopted;
+    }
+    try {
+      fs.unlinkSync(tmp);
+    } catch (err) {}
+  }
+  if (!fs.existsSync(file)) return null;
+  return JSON.parse(fs.readFileSync(file, 'utf8'));
+}
+
+function writeJsonFile(file, value) {
+  const fs = require('fs');
+  const path = require('path');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = file + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n', 'utf8');
+  fs.renameSync(tmp, file);
+}
+
+/**
+ * Where the harness writes its durable session report for one dispatch.
+ *
+ * The worker writes the report, so the directory has to be one the worker can
+ * reach — inside the worker root for an isolated launch. It is named by the
+ * operator (`--usage-dir`) or by the caller, never derived from the worker's
+ * own answer, and never the host-owned launch-results directory a worker
+ * cannot write.
+ */
+function usageReportFile(args, deps, item, now) {
+  const explicit = (args && args['usage-report']) || (deps && deps.usageFile);
+  if (typeof explicit === 'string' && explicit) return explicit;
+  const dir = (args && args['usage-dir']) || (deps && deps.usageDir);
+  if (typeof dir !== 'string' || !dir) return null;
+  const stem = String((item && item.workItemId) || 'session').replace(/[^A-Za-z0-9._-]/g, '-');
+  return path.join(dir, stem + '-' + (now || Date.now()) + '.json');
+}
+
+function sevenFields(candidate) {
+  return {
+    harness: candidate.harness || '',
+    accessPath: candidate.accessPath || '',
+    gateway: candidate.gateway || '',
+    upstream: candidate.upstream || '',
+    accountId: candidate.accountId || '*',
+    quotaScope: candidate.quotaScope || '',
+    modelId: candidate.modelId || candidate.model || '',
+  };
+}
+
+function quotaSnapshot(candidate) {
+  const key = candidate.offeringId || candidate.key || '';
+  return {
+    offeringId: key,
+    headroom: candidate.headroom || candidate.headroomStatus || 'unknown',
+    reason: candidate.headroomReason || null,
+    reservations: Number(candidate.reservationsHeld || 0),
+  };
+}
+
+function candidateFromDecision(decision, key) {
+  return (decision.candidates || []).find((c) => c.offeringId === key) || null;
+}
+
+function simulatedFailureFor(candidate) {
+  const c = candidate || {};
+  return {
+    exitCode: 1,
+    httpStatus: 503,
+    body:
+      'HTTP 503 from gateway: [402]: upstream ' +
+      (c.upstream || 'unknown') +
+      ' budget exhausted; reset after 1h 00m',
+    stderr:
+      'HTTP 503 from gateway: [402]: upstream ' +
+      (c.upstream || 'unknown') +
+      ' budget exhausted; reset after 1h 00m',
+    accountId: c.accountId || '*',
+  };
+}
+
+function sameFailureDomain(candidate, failed, classification) {
+  // mvp-repair.test.js:66-70 evaluates this function via new Function without CommonJS require scope.
+  const routing =
+    typeof require === 'function'
+      ? require('./routing')
+      : process.getBuiltinModule('module').createRequire(`${process.cwd()}/tools/ai-brain/cli.js`)(
+          './routing'
+        );
+  return routing.sameFailureDomain(candidate, failed, classification);
+}
+
+/**
+ * Marks a failed candidate, and every candidate in the same failure domain, as
+ * blocked, so the next ranking round cannot pick either. One implementation, two
+ * vocabularies: the dry run says SIMULATED_*, a live run says the plain reason.
+ * The domain rule is the Controller's (sameFailureDomain, driven by
+ * failure-classifier.js), never a second, simpler "different gateway" test.
+ */
+function applyFailureBlocks(
+  candidates,
+  failedKeys,
+  failedCandidate,
+  classification,
+  avoidDomain,
+  codes
+) {
+  const candidatesApi = require('./candidates');
+  for (const c of candidates) {
+    if (c.blocked) continue;
+    const key = candidatesApi.candidateKey(c);
+    if (failedKeys.has(key)) {
+      c.blocked = true;
+      c.blockReason = codes.failed;
+      c.blockScope = 'candidate';
+      continue;
+    }
+    if (avoidDomain && sameFailureDomain(c, failedCandidate, classification)) {
+      c.blocked = true;
+      c.blockReason = codes.sameDomain;
+      c.blockScope = classification.scope || 'unknown';
+    }
+  }
+}
+
+const DRY_RUN_BLOCK_CODES = Object.freeze({
+  failed: 'SIMULATED_CANDIDATE_FAILED',
+  sameDomain: 'SIMULATED_FAILURE_DOMAIN_AVOIDED',
+});
+
+const LIVE_BLOCK_CODES = Object.freeze({
+  failed: 'CANDIDATE_FAILED',
+  sameDomain: 'FAILURE_DOMAIN_AVOIDED',
+});
+
+function applyDryRunBlocks(candidates, failedKeys, failedCandidate, classification, avoidDomain) {
+  return applyFailureBlocks(
+    candidates,
+    failedKeys,
+    failedCandidate,
+    classification,
+    avoidDomain,
+    DRY_RUN_BLOCK_CODES
+  );
+}
+
+function candidateContextWindow(candidate) {
+  const caps = candidate && candidate.capabilities;
+  return (
+    candidate &&
+    (candidate.contextWindow ||
+      candidate.context_window ||
+      (caps && (caps.contextWindow || caps.context_window || caps.contextTokens)))
+  );
+}
+
+function applyHarnessVerification(candidates) {
+  const { contextRefusal } = require('./harness');
+  for (const c of candidates || []) {
+    const reason = contextRefusal(c.harness, candidateContextWindow(c));
+    if (!reason) continue;
+    c.blocked = true;
+    c.blockReason = reason;
+    c.blockScope = 'model';
+  }
+}
+
+function buildDryRunLog(parts) {
+  const decision = parts.decision || {};
+  const fallback = parts.fallback || {};
+  const finalChoice = fallback.chosen || decision.chosen || null;
+  const firstChoice = parts.firstChoice || decision.chosen || null;
+  const rejected = new Map();
+  for (const r of decision.rejected || []) {
+    rejected.set(r.offeringId, r);
+  }
+  for (const r of (fallback.decision && fallback.decision.rejected) || []) {
+    rejected.set(r.offeringId, r);
+  }
+  const candidates = (parts.annotated || []).map((c) => {
+    const key = parts.candidatesApi.candidateKey(c);
+    return Object.assign(sevenFields(c), {
+      offeringId: key,
+      status: c.status === 'passed' ? 'PASS' : c.status || 'unknown',
+      score: c.score,
+    });
+  });
+  for (const c of candidates) {
+    if (c.offeringId === finalChoice || rejected.has(c.offeringId)) continue;
+    rejected.set(c.offeringId, {
+      offeringId: c.offeringId,
+      reason: 'NOT_SELECTED',
+      scope: 'candidate',
+    });
+  }
+  return {
+    schemaVersion: 1,
+    mode: 'dry-run',
+    workItemId: parts.item.workItemId,
+    generatedAt: new Date(parts.now).toISOString(),
+    resumed: Boolean(parts.resumed),
+    stages: [
+      'discovery',
+      '7-field candidates',
+      'quota/fairness',
+      'failure classifier',
+      'ranking',
+      'decision',
+      'dry-run dispatch',
+      'simulated first-source failure',
+      'fallback',
+      'checkpoint resume',
+    ],
+    candidates,
+    excluded: Array.from(rejected.values()).map((r) => ({
+      offeringId: r.offeringId,
+      candidateKey: r.offeringId,
+      reasonCode: String(r.reason || 'UNKNOWN').split(':')[0],
+      reason: r.reason || 'UNKNOWN',
+      scope: r.scope || null,
+    })),
+    excludedCandidates: Array.from(rejected.values()).map((r) => ({
+      offeringId: r.offeringId,
+      candidateKey: r.offeringId,
+      reasonCode: String(r.reason || 'UNKNOWN').split(':')[0],
+      reason: r.reason || 'UNKNOWN',
+      scope: r.scope || null,
+    })),
+    selected: finalChoice,
+    selectedCandidate: finalChoice,
+    firstChoice,
+    quotaState: candidates.map((c) => quotaSnapshot(c)),
+    ranking: {
+      reason: decision.reason,
+      ordered: (decision.candidates || []).map((c) => ({
+        offeringId: c.offeringId,
+        score: c.score,
+        headroom: c.headroom || 'unknown',
+      })),
+    },
+    dryRunDispatch: {
+      launched: false,
+      networkTouched: false,
+      executeTouched: false,
+    },
+    simulatedFailure: parts.simulatedFailure || null,
+    failure: parts.simulatedFailure || null,
+    fallback: {
+      candidateKey: fallback.chosen || null,
+      chosen: fallback.chosen || null,
+      reason: fallback.reason || null,
+      preferredDifferentFailureDomain: Boolean(fallback.preferredDifferentFailureDomain),
+      decision: fallback.decision || null,
+    },
+    checkpoint: parts.checkpoint || null,
+  };
+}
+
+/**
+ * TASK-AI-65: candidate assembly for a profile dispatch. The same assembly the
+ * item path uses (discovery catalogue + offerings + registry pins), so a
+ * profile-ranked candidate and an item-ranked candidate are the same kind of
+ * object with the same seven-part identity.
+ */
+function dispatchProfileCommand(args, deps) {
+  const rootDir = args.root || (deps && deps.rootDir) || process.cwd();
+  const sourcesApi = require('./sources');
+  const jev = require('./jev');
+  const { listAccounts } = require('./accounts');
+  const { readDiscoveryCatalogue } = require('./discovery/read');
+
+  let discCat;
+  if (!(deps && Array.isArray(deps.candidates))) {
+    try {
+      discCat = readDiscoveryCatalogue({
+        dataDir:
+          (deps && deps.discoveryDataDir) ||
+          args['discovery-dir'] ||
+          path.join(__dirname, 'data', 'discovery'),
+      });
+    } catch {
+      discCat = { candidates: [] };
+    }
+  }
+  const accounts = listAccounts() || [];
+
+  const evidenceDir =
+    (deps && deps.evidenceDir) || args['evidence-dir'] || path.join(__dirname, 'data', 'evidence');
+  let evidenceData;
+  try {
+    evidenceData = require('./evidence').loadEvidence(evidenceDir);
+  } catch (e) {
+    evidenceData = {};
+  }
+  const optsWithEvidence = Object.assign({}, deps, {
+    evidenceData,
+    discoveryDataDir: (deps && deps.discoveryDataDir) || args['discovery-dir'] || undefined,
+    fakeRunsDir:
+      (deps && deps.fakeRunsDir) ||
+      args['pool-runtime-dir'] ||
+      args['agy-runs-dir'] ||
+      process.env.AGY_POOL_RUNS_DIR ||
+      process.env.AGY_RUNS_DIR ||
+      undefined,
+    discoverPool:
+      (deps && deps.discoverPool === true) ||
+      Boolean(
+        args['pool-runtime-dir'] ||
+        args['agy-runs-dir'] ||
+        process.env.AGY_POOL_RUNS_DIR ||
+        process.env.AGY_RUNS_DIR
+      ),
+    home: (deps && deps.home) || args.home || undefined,
+    adapterScript: (deps && deps.adapterScript) || process.env.AGY_POOL_ADAPTER_SCRIPT || undefined,
+    platform: (deps && deps.platform) || undefined,
+  });
+
+  const registry = (deps && deps.registry) || sourcesApi.loadSources();
+  const candidateList = assembleForDispatch(discCat, accounts, registry, optsWithEvidence);
+  const jevSource = sourcesApi.getSource('jev', registry);
+  const jevAsk =
+    (deps && deps.ask) ||
+    (deps && deps.jevAsk) ||
+    jev.buildAskFromSource(jevSource, {
+      home: optsWithEvidence.home,
+      env: (deps && deps.env) || process.env,
+      httpClient: deps && deps.jevHttpClient,
+      timeoutMs: deps && deps.jevTimeoutMs,
+    });
+
+  return require('./routing').runProfileDispatch(
+    args,
+    Object.assign({}, deps, {
+      candidates: candidateList,
+      rootDir,
+      ask: jevAsk,
+      minConfidence: jevSource && jevSource.minConfidence,
+      explorationBudget:
+        args['exploration-budget'] !== undefined ? Number(args['exploration-budget']) : 0,
+      home: optsWithEvidence.home,
+      storePath: (deps && deps.storePath) || args['quota-store'] || undefined,
+      fakeRunsDir: optsWithEvidence.fakeRunsDir,
+      adapterScript: optsWithEvidence.adapterScript,
+      platform: optsWithEvidence.platform,
+      launcher: (deps && deps.launcher) || args.launcher || undefined,
+    })
+  );
+}
+
+/**
+ * Master-queue item 5: dispatch wiring.
+ * Chooses candidate through the brain (discovery + offerings, evidence/cooldowns,
+ * quota/reservations/load, ranked by ranking.js).
+ */
+function dispatchCommand(args, deps = {}) {
+  const fs = require('fs');
+  const rootDir = args.root || (deps && deps.rootDir) || process.cwd();
+  const execute = args.execute === true;
+  const dryRunFlag = Boolean(args['dry-run'] || args.dryRun);
+  const log = deps.log || console.log;
+  const error = deps.error || console.error;
+  const exit = deps.exit || process.exit;
+
+  // Releasing a claim is its own operation:
+  const close = args.close || args.complete || args.fail;
+  if (typeof close === 'string') {
+    const decisions = require('./decisions');
+    const outcome = args.fail ? 'failed' : 'completed';
+    const released = decisions.closeWriter(close, outcome, {
+      dir: args['decision-dir'] || (deps && deps.decisionDir) || undefined,
+      detail: typeof args.detail === 'string' ? args.detail : null,
+    });
+    if (!released) {
+      log('No open writer for ' + close + '; nothing to release.');
+      return { exitCode: 0, released: false };
+    }
+    log(
+      'Released ' + close + ' (' + outcome + ', session ' + (released.sessionId || 'unknown') + ')'
+    );
+    return { exitCode: 0, released: true };
+  }
+
+  if (execute && dryRunFlag) {
+    error('Dispatch refused: --execute and --dry-run are exclusive.');
+    exit(2);
+    return { exitCode: 2 };
+  }
+
+  // TASK-AI-65: report a structured execution outcome for a pinned candidate.
+  // The evidence store and cooldowns are updated through routing.js before any
+  // next ranking round, so a failure is seen by the Controller, not just logged.
+  const reportOutcome = pick(args, 'report-outcome', 'reportOutcome');
+  if (typeof reportOutcome === 'string') {
+    const routing = require('./routing');
+    return routing.reportDispatchOutcome(args, {
+      log,
+      error,
+      exit,
+      rootDir,
+      evidenceDir:
+        (deps && deps.evidenceDir) ||
+        args['evidence-dir'] ||
+        path.join(__dirname, 'data', 'evidence'),
+      decisionDir: args['decision-dir'] || (deps && deps.decisionDir) || undefined,
+      now: deps && deps.now,
+      storePath: deps && deps.storePath,
+      home: (deps && deps.home) || args.home || undefined,
+      fakeRunsDir:
+        (deps && deps.fakeRunsDir) || args['pool-runtime-dir'] || args['agy-runs-dir'] || undefined,
+    });
+  }
+
+  // TASK-AI-65: profile-driven live routing. The profile names the task, its
+  // floors and its constraints; JEV advises (never a model); the Controller
+  // ranks; rank 1 is pinned and, under --execute, reserved. Async, because the
+  // JEV advisory is.
+  if (typeof args.profile === 'string') {
+    return dispatchProfileCommand(args, deps);
+  }
+
+  const isDryRun = dryRunFlag || !execute;
+
+  // Pre-computed plan file fallback
   if (typeof args.plan === 'string') {
-    plan = readJsonOrExit(path.resolve(args.plan), 'plan');
+    const { executePlan } = require('./executor');
+    const plan = readJsonOrExit(path.resolve(args.plan), 'plan');
+    const result = executePlan(plan, {
+      dryRun: isDryRun,
+      isolatedWorker: args['isolated-worker'] || false,
+      project: args.project || 'shipde-platform',
+      cwd: args.cwd || (deps && deps.cwd) || undefined,
+      base: args.base || (deps && deps.base) || undefined,
+      decisionDir: args['decision-dir'] || (deps && deps.decisionDir) || undefined,
+      run: deps && deps.run,
+    });
+    const s = result.summary;
+    if (args.json) {
+      log(JSON.stringify({ plan, result }, null, 2));
+      exit(s.failed > 0 ? 1 : 0);
+      return { exitCode: s.failed > 0 ? 1 : 0, plan, result };
+    }
+    if (result.dryRun) {
+      log('Dispatch dry run: ' + (plan.assignments || []).length + ' planned, 0 launched');
+      exit(0);
+      return { exitCode: 0, result };
+    }
+    exit(s.failed > 0 ? 1 : 0);
+    return { exitCode: s.failed > 0 ? 1 : 0, result };
+  }
+
+  // Work items resolution
+  let items = [];
+  const targetItemId = args.item || args['work-item'] || (deps && deps.workItemId);
+  if (deps && deps.items) {
+    items = deps.items;
+  } else if (targetItemId) {
+    items = [
+      {
+        workItemId: targetItemId,
+        role: args.role || (deps && deps.role) || 'author.foundation',
+        branch:
+          args.branch || (deps && deps.branch) || 'feat/' + String(targetItemId).toLowerCase(),
+        riskDomains: [],
+        priority: 0,
+      },
+    ];
   } else {
-    const { planDispatch } = require('./scheduler');
-    const { listAccounts } = require('./accounts');
     const csvPath =
       args.csv ||
       path.join(
         rootDir,
-        'docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv'
+        'docs',
+        'product-spec',
+        'docs',
+        '10-ai-collaboration',
+        'FEATURE-DELIVERY-REGISTER.csv'
       );
     if (!fs.existsSync(csvPath)) {
-      console.error('SOURCE_MISSING: ' + csvPath);
-      process.exit(2);
+      if (args.csv) {
+        error('SOURCE_MISSING: ' + csvPath);
+        exit(2);
+        return { exitCode: 2 };
+      }
+      items = [];
+    } else {
+      const register = loadRegister(csvPath, null, rootDir);
+      items = ((register.data && register.data.items) || [])
+        .filter((row) => row.status === 'READY_FOR_AUTHOR')
+        .map((row) => ({
+          workItemId: row.work_item_id,
+          role: 'author.foundation',
+          branch: row.branch || null,
+          riskDomains: [],
+          priority: 0,
+        }));
     }
-    const register = loadRegister(csvPath, null, rootDir);
-    const items = ((register.data && register.data.items) || [])
-      .filter((row) => row.status === 'READY_FOR_AUTHOR')
-      .map((row) => ({
-        workItemId: row.work_item_id,
-        role: 'author.foundation',
-        branch: row.branch || null,
-        riskDomains: [],
-        priority: 0,
-      }));
-    plan = planDispatch(items, listAccounts() || [], {});
   }
 
-  const result = executePlan(plan, {
-    dryRun: !execute,
-    project: args.project || 'shipde-platform',
-  });
-  const deferred = plan.deferred || [];
-  const planned = (plan.assignments || []).length;
+  if (items.length === 0 && !deps.candidates && !args.item) {
+    log('Dispatch: 0 assignments (0 deferred)');
+    exit(0);
+    return { exitCode: 0, dispatched: 0 };
+  }
 
-  if (args.json) {
-    console.log(JSON.stringify({ plan, result }, null, 2));
-    process.exit(result.summary.failed > 0 ? 1 : 0);
-  } else {
-    if (planned === 0) {
-      console.log('Dispatch: 0 assignments (' + deferred.length + ' deferred)');
-      for (const d of deferred) console.log('  DEFERRED ' + JSON.stringify(d));
-      process.exit(0);
+  const item = items[0] || {
+    workItemId: targetItemId || 'TASK-DISPATCH',
+    role: args.role || (deps && deps.role) || 'author.foundation',
+    branch: args.branch || (deps && deps.branch) || 'feat/dispatch-work',
+  };
+
+  const sourcesApi = require('./sources');
+  const evidence = require('./evidence');
+  const ranking = require('./ranking');
+  const candidatesApi = require('./candidates');
+  const quotaStore = require('./quota-store');
+  const { listAccounts } = require('./accounts');
+  const { readDiscoveryCatalogue } = require('./discovery/read');
+  const { getHarness, runHarness, parseLastJson, structuredOutcome } = require('./harness');
+  // The durable-session-id rule lives with the executor, which owns the harness
+  // contract; this file reads it from there rather than keeping a second copy.
+  const { readSessionId } = require('./executor');
+  const { workerName, defaultPrompt } = require('./executor');
+
+  const registry = (deps && deps.registry) || sourcesApi.loadSources();
+  const evidenceDir =
+    (deps && deps.evidenceDir) || args['evidence-dir'] || path.join(__dirname, 'data', 'evidence');
+  const decisionDir = (deps && deps.decisionDir) || args['decision-dir'] || undefined;
+
+  // 1. Candidates from discovery + offerings
+  let discCat = deps && deps.discoveryCatalogue;
+  if (!discCat && (!deps || !deps.candidates)) {
+    const discDir =
+      (deps && deps.discoveryDataDir) ||
+      args['discovery-dir'] ||
+      path.join(__dirname, 'data', 'discovery');
+    try {
+      discCat = readDiscoveryCatalogue({ dataDir: discDir });
+    } catch {
+      discCat = { candidates: [] };
     }
-    for (const r of result.records) {
-      console.log(
-        '  ' +
-          r.outcome +
-          '  ' +
-          r.workItemId +
-          '  ' +
-          r.role +
-          '  ' +
-          (r.offeringId || '-') +
-          (r.sessionId ? '  session ' + r.sessionId : '') +
-          (r.detail ? '  ' + r.detail : '')
+  }
+
+  const accounts = deps && deps.accounts !== undefined ? deps.accounts : listAccounts() || [];
+  const candidateList = assembleForDispatch(discCat, accounts, registry, deps);
+
+  // Filter by explicit pins (--model, --account, --harness)
+  const pinModel = args.model || (deps && deps.model);
+  const pinAccount = args.account || (deps && deps.account);
+  const pinHarness = args.harness || (deps && deps.harness);
+  const isPinned = Boolean(pinModel || pinAccount || pinHarness);
+
+  let eligibleCandidates = candidateList.slice();
+  if (isPinned) {
+    if (pinModel) {
+      eligibleCandidates = eligibleCandidates.filter(
+        (c) => c.modelId === pinModel || c.model === pinModel || c.base === pinModel
       );
-      if (r.args) console.log('    args ' + JSON.stringify(r.args));
     }
-    for (const d of deferred) console.log('  DEFERRED ' + JSON.stringify(d));
+    if (pinAccount) {
+      eligibleCandidates = eligibleCandidates.filter(
+        (c) => c.accountId === pinAccount || c.account === pinAccount
+      );
+    }
+    if (pinHarness) {
+      eligibleCandidates = eligibleCandidates.filter((c) => c.harness === pinHarness);
+    }
   }
-  const s = result.summary;
-  if (result.dryRun) {
-    console.log('Dispatch dry run: ' + planned + ' planned, 0 launched');
-    process.exit(0);
+
+  // Handle dry-run
+  if (isDryRun) {
+    const now = (deps && deps.now) || Date.now();
+    const checkpointFile =
+      typeof args.checkpoint === 'string'
+        ? path.resolve(rootDir, args.checkpoint)
+        : deps && deps.checkpointFile;
+    const decisionLogFile =
+      typeof args['decision-log'] === 'string'
+        ? path.resolve(rootDir, args['decision-log'])
+        : deps && deps.decisionLogFile;
+    const checkpoint = readCheckpoint(checkpointFile);
+    const failedKeys = new Set((checkpoint && checkpoint.failedCandidates) || []);
+    const resumed =
+      Boolean(checkpoint && checkpoint.workItemId === item.workItemId && checkpoint.step) ||
+      Boolean(failedKeys.size);
+    const evidenceData = evidence.loadEvidence(evidenceDir);
+    const annotated = candidatesApi.annotateCandidates(
+      eligibleCandidates.map((c) => Object.assign({}, c)),
+      evidenceData,
+      { now }
+    );
+    applyHarnessVerification(annotated);
+
+    for (const c of annotated) {
+      const key = candidatesApi.candidateKey(c);
+      if (failedKeys.has(key)) {
+        c.blocked = true;
+        c.blockReason = 'checkpoint resume skipped previously failed candidate';
+        c.blockScope = 'candidate';
+      }
+    }
+
+    const rankingContext = {
+      workItemId: item.workItemId,
+      role: item.role,
+      kind: item.role,
+      registry,
+      evidenceData,
+      decisionOpts: { dir: decisionDir, now },
+      dryRun: true,
+      headrooms: deps && deps.headrooms,
+      load: deps && deps.load,
+      reservations: deps && deps.reservations,
+      explorationBudget:
+        args['exploration-budget'] !== undefined ? Number(args['exploration-budget']) : 1,
+      home: deps && deps.home,
+      storePath: deps && deps.storePath,
+      accounts,
+      now,
+    };
+    const decision = ranking.rankAndRecord(annotated, rankingContext);
+    if (
+      resumed &&
+      checkpoint &&
+      checkpoint.step === 'fallback_selected' &&
+      checkpoint.fallbackCandidate &&
+      annotated.some((c) => candidatesApi.candidateKey(c) === checkpoint.fallbackCandidate)
+    ) {
+      const resumedCandidate = annotated.find(
+        (c) => candidatesApi.candidateKey(c) === checkpoint.fallbackCandidate
+      );
+      decision.chosen = checkpoint.fallbackCandidate;
+      decision.harness = resumedCandidate ? resumedCandidate.harness : decision.harness;
+      decision.reason = 'RESUMED_CHECKPOINT_FALLBACK: continuing saved fallback candidate';
+    }
+    for (const c of annotated) {
+      const ranked = candidateFromDecision(decision, candidatesApi.candidateKey(c));
+      if (ranked) {
+        c.score = ranked.score;
+        c.headroomStatus = ranked.headroom;
+      }
+    }
+
+    if (isPinned) {
+      log('PINNED');
+    }
+
+    if (!decision.chosen) {
+      log('No eligible candidate for ' + item.workItemId);
+      for (const rej of decision.rejected) {
+        log(
+          '  EXCLUDED ' +
+            rej.offeringId +
+            ' — ' +
+            rej.reason +
+            (rej.scope ? ' [' + rej.scope + ']' : '')
+        );
+      }
+      exit(1);
+      return { exitCode: 1, decision, dryRun: true };
+    }
+
+    const simulateFailure = args['simulate-failure'] || (deps && deps.simulateFailure);
+    let simulatedFailure = null;
+    let fallback = null;
+    if (simulateFailure && simulateFailure !== false) {
+      const chosenCandidate =
+        annotated.find((c) => candidatesApi.candidateKey(c) === decision.chosen) ||
+        candidateFromDecision(decision, decision.chosen);
+      const shouldFail =
+        simulateFailure === true ||
+        simulateFailure === 'first' ||
+        simulateFailure === decision.chosen ||
+        (chosenCandidate && simulateFailure === candidatesApi.candidateKey(chosenCandidate));
+
+      if (shouldFail && chosenCandidate && !resumed && !failedKeys.has(decision.chosen)) {
+        const { classifyFailure } = require('./failure-classifier');
+        const failureInput = (deps && deps.failureInput) || simulatedFailureFor(chosenCandidate);
+        const classification = classifyFailure(failureInput);
+        failedKeys.add(decision.chosen);
+        simulatedFailure = {
+          candidate: decision.chosen,
+          failure: failureInput,
+          innermostCause: classification.cause,
+          classifierScope: classification.scope,
+          cooldownMs: classification.cooldownMs,
+        };
+
+        const fallbackAnnotated = candidatesApi.annotateCandidates(
+          eligibleCandidates.map((c) => Object.assign({}, c)),
+          evidenceData,
+          { now }
+        );
+        applyDryRunBlocks(
+          fallbackAnnotated,
+          failedKeys,
+          chosenCandidate,
+          classification,
+          classification.scope !== 'candidate' && classification.scope !== 'model'
+        );
+        let fallbackDecision = ranking.rankAndRecord(
+          fallbackAnnotated,
+          Object.assign({}, rankingContext, { dryRun: true })
+        );
+        let preferredDifferentFailureDomain = true;
+        if (!fallbackDecision.chosen) {
+          const exactOnlyAnnotated = candidatesApi.annotateCandidates(
+            eligibleCandidates.map((c) => Object.assign({}, c)),
+            evidenceData,
+            { now }
+          );
+          applyDryRunBlocks(exactOnlyAnnotated, failedKeys, chosenCandidate, classification, false);
+          fallbackDecision = ranking.rankAndRecord(
+            exactOnlyAnnotated,
+            Object.assign({}, rankingContext, { dryRun: true })
+          );
+          preferredDifferentFailureDomain = false;
+        }
+        fallback = {
+          chosen: fallbackDecision.chosen,
+          reason: fallbackDecision.chosen
+            ? preferredDifferentFailureDomain
+              ? 'selected highest-ranked candidate outside the simulated failure domain'
+              : 'no different failure domain remained; selected highest-ranked non-failed candidate'
+            : 'no fallback candidate qualifies',
+          preferredDifferentFailureDomain,
+          decision: fallbackDecision,
+        };
+      } else if (resumed) {
+        fallback = {
+          chosen: decision.chosen,
+          reason: 'checkpoint resume continued after prior simulated failure without retrying it',
+          preferredDifferentFailureDomain: false,
+          decision,
+        };
+      }
+    }
+
+    // firstChoice must stay the ORIGINAL first choice across resume.
+    const originalFirstChoice =
+      resumed && checkpoint && checkpoint.firstChoice
+        ? checkpoint.firstChoice
+        : decision.firstChoice || decision.chosen;
+
+    const finalChoice = fallback && fallback.chosen ? fallback.chosen : decision.chosen;
+    const nextCheckpoint = checkpointFile
+      ? {
+          schemaVersion: 1,
+          workItemId: item.workItemId,
+          step: fallback && fallback.chosen ? 'fallback_selected' : 'ranked',
+          updatedAt: new Date(now).toISOString(),
+          failedCandidates: Array.from(failedKeys),
+          selectedCandidate: finalChoice,
+          firstChoice: originalFirstChoice,
+          fallbackCandidate: fallback && fallback.chosen,
+          decisionLog: decisionLogFile || null,
+        }
+      : null;
+    if (nextCheckpoint) {
+      writeJsonFile(checkpointFile, nextCheckpoint);
+    }
+
+    if (decisionLogFile) {
+      writeJsonFile(
+        decisionLogFile,
+        buildDryRunLog({
+          item,
+          now,
+          resumed,
+          annotated,
+          decision,
+          firstChoice: originalFirstChoice,
+          simulatedFailure,
+          fallback,
+          checkpoint: nextCheckpoint
+            ? {
+                path: checkpointFile,
+                step: nextCheckpoint.step,
+                failedCandidates: nextCheckpoint.failedCandidates,
+              }
+            : checkpointFile
+              ? { path: checkpointFile, loaded: Boolean(checkpoint) }
+              : null,
+          candidatesApi,
+        })
+      );
+    }
+
+    log('Ranked candidates for ' + item.workItemId + ':');
+    for (let i = 0; i < decision.candidates.length; i++) {
+      const c = decision.candidates[i];
+      log('  ' + (i + 1) + '. ' + c.offeringId + ' (score: ' + c.score + ')');
+    }
+    log('Chosen: ' + decision.chosen);
+    if (fallback && fallback.chosen) {
+      log('Fallback: ' + fallback.chosen);
+    }
+    if (checkpointFile) {
+      log('Checkpoint: ' + checkpointFile);
+    }
+    exit(0);
+    return {
+      exitCode: 0,
+      decision,
+      fallback,
+      simulatedFailure,
+      checkpoint: nextCheckpoint,
+      dryRun: true,
+    };
   }
-  console.log(
-    'Dispatch executed: ' +
-      s.launched +
-      ' launched, ' +
-      s.refused +
-      ' refused, ' +
-      s.failed +
-      ' failed'
+
+  // Execution with retry/fallback
+  const checkpointFile =
+    args['checkpoint'] && typeof args['checkpoint'] === 'string'
+      ? path.resolve(rootDir, args['checkpoint'])
+      : deps && deps.checkpointFile;
+  const checkpoint = readCheckpoint(checkpointFile);
+  const failedKeys = new Set((checkpoint && checkpoint.failedCandidates) || []);
+
+  const maxAttempts = Number(
+    args['max-attempts'] || args.maxAttempts || (deps && deps.maxAttempts) || 3
   );
-  process.exit(s.failed > 0 ? 1 : 0);
+  let attempt = 0;
+  let lastDecision = null;
+  const decisionsStore = require('./decisions');
+  const failureClassifier = require('./failure-classifier');
+  const nowForWriter = (deps && deps.now) || Date.now();
+
+  if (checkpoint && checkpoint.dryRunDispatch && checkpoint.dryRunDispatch.executeTouched) {
+    log(`Work item ${item.workItemId} already executed according to checkpoint`);
+    return { exitCode: 0 };
+  }
+
+  const activeWriter = decisionsStore.writerFor(item.workItemId, {
+    dir: decisionDir,
+    now: nowForWriter,
+  });
+  if (activeWriter) {
+    log(`Work item ${item.workItemId} is already claimed by session ${activeWriter.sessionId}`);
+    exit(1);
+    return { exitCode: 1 };
+  }
+
+  let finalChosenCandidate = null;
+  let finalChosenKey = null;
+  let launchRes = null;
+  let failedAttempts = [];
+  let finalDecisionLog = null;
+
+  if (
+    checkpoint &&
+    (checkpoint.chosen || checkpoint.selectedCandidate || checkpoint.candidateKey)
+  ) {
+    finalChosenKey = checkpoint.chosen || checkpoint.selectedCandidate || checkpoint.candidateKey;
+    const parsedCheckpoint =
+      require('./discovery/identity').parseCandidateKey(finalChosenKey) || {};
+    finalChosenCandidate = {
+      offeringId: finalChosenKey,
+      harness: checkpoint.harness || parsedCheckpoint.harness,
+      source: checkpoint.source,
+      accessPath: checkpoint.accessPath || parsedCheckpoint.accessPath,
+      upstream: checkpoint.upstream || parsedCheckpoint.upstream,
+      gateway: checkpoint.gateway || parsedCheckpoint.gateway,
+      accountId: checkpoint.accountId || parsedCheckpoint.account,
+      quotaScope: checkpoint.quotaScope || parsedCheckpoint.quotaScope,
+      modelId: checkpoint.modelId || parsedCheckpoint.modelId,
+    };
+    log('Resuming checkpointed decision for ' + finalChosenKey);
+  }
+
+  while (attempt < maxAttempts) {
+    attempt += 1;
+    const now = (deps && deps.now) || Date.now();
+
+    if (!finalChosenKey) {
+      const evidenceData = evidence.loadEvidence(evidenceDir);
+      const annotated = candidatesApi.annotateCandidates(
+        eligibleCandidates.map((c) => Object.assign({}, c)),
+        evidenceData,
+        { now }
+      );
+      applyHarnessVerification(annotated);
+
+      for (const c of annotated) {
+        const key = candidatesApi.candidateKey(c);
+        if (failedKeys.has(key)) {
+          c.blocked = true;
+          c.blockReason = 'candidate failed in current dispatch run';
+          c.blockScope = 'candidate';
+          continue;
+        }
+        for (const f of failedAttempts) {
+          if (f.key === key) {
+            c.blocked = true;
+            c.blockReason = 'candidate failed in current dispatch run';
+            c.blockScope = 'candidate';
+            break;
+          }
+          if (
+            f.classification &&
+            f.classification.scope !== 'candidate' &&
+            f.classification.scope !== 'model' &&
+            sameFailureDomain(c, f.candidate, f.classification)
+          ) {
+            c.blocked = true;
+            c.blockReason = 'avoiding failure domain of previous attempt';
+            c.blockScope = f.classification.scope || 'unknown';
+            break;
+          }
+        }
+      }
+
+      const rankingContext = {
+        workItemId: item.workItemId,
+        role: item.role,
+        kind: item.role,
+        registry,
+        evidenceData,
+        decisionOpts: { dir: decisionDir, now },
+        dryRun: false,
+        headrooms: deps && deps.headrooms,
+        load: deps && deps.load,
+        reservations: deps && deps.reservations,
+        explorationBudget:
+          args['exploration-budget'] !== undefined ? Number(args['exploration-budget']) : 1,
+        home: deps && deps.home,
+        storePath: deps && deps.storePath,
+        accounts,
+        now,
+      };
+
+      const decision = ranking.rankAndRecord(annotated, rankingContext);
+      lastDecision = decision;
+
+      if (!decision.chosen) {
+        log(
+          'No eligible candidate for ' +
+            item.workItemId +
+            ' (attempt ' +
+            attempt +
+            '/' +
+            maxAttempts +
+            ')'
+        );
+        for (const rej of decision.rejected) {
+          log(
+            '  EXCLUDED ' +
+              rej.offeringId +
+              ' — ' +
+              rej.reason +
+              (rej.scope ? ' [' + rej.scope + ']' : '')
+          );
+        }
+        exit(1);
+        return { exitCode: 1, decision, attempts: attempt };
+      }
+
+      finalChosenKey = decision.chosen;
+      finalChosenCandidate = annotated.find(
+        (c) => candidatesApi.candidateKey(c) === finalChosenKey
+      ) || {
+        offeringId: finalChosenKey,
+        harness: decision.harness,
+      };
+
+      finalDecisionLog = {
+        item,
+        now,
+        annotated,
+        decision: decision,
+        fallback: {},
+        quotaState: annotated.map((c) => quotaSnapshot(c)),
+        headrooms: deps && deps.headrooms,
+        resourceCeiling: deps && deps.resourceCeiling ? deps.resourceCeiling() : undefined,
+        candidatesApi,
+      };
+      if (checkpointFile) writeJsonFile(checkpointFile, buildDryRunLog(finalDecisionLog));
+    }
+
+    if (isPinned) log('PINNED');
+    log(
+      'Dispatching ' +
+        item.workItemId +
+        ' to ' +
+        finalChosenKey +
+        ' (attempt ' +
+        attempt +
+        '/' +
+        maxAttempts +
+        ')'
+    );
+
+    const reservationOpts = { home: deps && deps.home, storePath: deps && deps.storePath, now };
+    quotaStore.recordReservation(
+      item.workItemId,
+      item.role,
+      finalChosenCandidate.accountId || '*',
+      finalChosenKey,
+      100000,
+      reservationOpts
+    );
+
+    let thrownError = null;
+    let isFailure = true;
+    let sessionHandle = null;
+    try {
+      let launcher = (deps && deps.run) || runHarness;
+      // AI-64-P03: an injected runner replaces what runs the harness process; it
+      // never decides whether the worker boundary exists. The old guard let a
+      // caller that injected a runner switch isolation off silently, with no log
+      // line, which is a control that only holds in the configuration nobody
+      // tests.
+      if (args['isolated-worker']) {
+        launcher = require('./isolation-launcher').getIsolatedLauncher();
+      }
+
+      const harnessName =
+        finalChosenCandidate.harness || (lastDecision && lastDecision.harness) || 'paseo';
+      const adapter = getHarness(harnessName);
+      const route = sourcesApi.dispatchRoute(
+        finalChosenCandidate.source ||
+          finalChosenCandidate.upstream ||
+          finalChosenCandidate.gateway,
+        registry
+      );
+      const candidateKey = candidatesApi.candidateKey(finalChosenCandidate);
+      if (candidateKey !== finalChosenKey) {
+        throw new Error('CANDIDATE_KEY_CHANGED_BEFORE_LAUNCH');
+      }
+
+      // The loop hands the harness a durable-report path. Under `-z` stdout is
+      // the final response prose, so the session id can only come from the
+      // report (TASK-AI-63), and a launch that cannot produce one is a launch
+      // that cannot be resumed.
+      const usageFile = usageReportFile(args, deps, item, now);
+      let launchArgs = null;
+      try {
+        launchArgs = adapter.launch({
+          candidateKey: finalChosenKey,
+          provider:
+            (route && route.provider) ||
+            finalChosenCandidate.source ||
+            finalChosenCandidate.upstream,
+          model: sourcesApi.qualifyModel(finalChosenCandidate.modelId, route),
+          accountId: finalChosenCandidate.accountId,
+          gateway: finalChosenCandidate.gateway || '',
+          upstream: finalChosenCandidate.upstream,
+          quotaScope: finalChosenCandidate.quotaScope,
+          prompt: defaultPrompt(item),
+          branch: item.branch,
+          base: args.base || (deps && deps.base) || 'main',
+          cwd: args.cwd || (deps && deps.cwd) || rootDir,
+          usageFile: usageFile,
+          checkpoint: checkpointFile,
+          maxAttempts: 1,
+          title: workerName(item.workItemId),
+          labels: {
+            workItem: item.workItemId,
+            role: item.role,
+            project: args.project || 'shipde-platform',
+          },
+        });
+      } catch (err) {
+        log('Harness launch preparation failed: ' + (err.message || String(err)));
+        thrownError = err;
+        launchRes = {
+          exitCode: err.exitCode !== undefined ? err.exitCode : 1,
+          stdout: '',
+          stderr: err.stderr || err.message || String(err),
+          error: err,
+        };
+      }
+
+      if (launchArgs && !Array.isArray(launchArgs)) {
+        const reason =
+          launchArgs.reason || launchArgs.refusal || launchArgs.error || 'LAUNCH_REFUSED';
+        log('Harness launch refused: ' + reason);
+        thrownError = new Error(reason);
+        launchRes = {
+          exitCode: launchArgs.exitCode !== undefined ? launchArgs.exitCode : 1,
+          stdout: '',
+          stderr: reason,
+          error: thrownError,
+        };
+        launchArgs = null;
+      }
+
+      if (launchArgs) {
+        try {
+          decisionsStore.recordDecision(
+            {
+              stage:
+                checkpoint && checkpoint.chosen
+                  ? decisionsStore.Stage.RESUMED
+                  : decisionsStore.Stage.LAUNCHED,
+              workItemId: item.workItemId,
+              role: item.role,
+              chosen: finalChosenKey,
+              harness: harnessName,
+              branch: item.branch,
+              // The claim on the branch, written before the launch. It is a claim,
+              // not a handle: the durable session id is only knowable once the
+              // harness has written its report, and it is recorded on the line
+              // below. It was `process.pid` here, which is a Node process id and
+              // not a session — decisions.js then treated that value as the
+              // session to resume (audit section 4, Gap C).
+              sessionId: null,
+              worktree: args.cwd || rootDir,
+              area: item.area,
+              firstChoice: lastDecision ? lastDecision.chosen || finalChosenKey : finalChosenKey,
+              selected: finalChosenKey,
+              excluded: lastDecision
+                ? (lastDecision.rejected || []).map((r) => ({
+                    candidateKey: r.offeringId,
+                    reasonCode: String(r.reason || 'UNKNOWN').split(':')[0],
+                    reason: r.reason,
+                  }))
+                : [],
+              quota:
+                lastDecision && lastDecision.candidates
+                  ? lastDecision.candidates.map((c) => ({
+                      candidateKey: c.offeringId,
+                      score: c.score,
+                      headroom: c.headroom,
+                    }))
+                  : [],
+              resourceCeiling: deps && deps.resourceCeiling ? deps.resourceCeiling() : undefined,
+              checkpoint: checkpointFile,
+            },
+            { dir: decisionDir, now }
+          );
+        } catch (err) {
+          log('Failed to append LAUNCHED to decision log');
+          exit(1);
+          return { exitCode: 1, error: err };
+        }
+
+        try {
+          launchRes = launcher(adapter, launchArgs, {
+            cwd: args.cwd || rootDir,
+            // The pinned base the worker root is provisioned at (AI-64-R15).
+            baseSha: args['base-sha'] || (deps && deps.baseSha) || undefined,
+            branch: item.branch,
+            workItemId: item.workItemId,
+          });
+        } catch (err) {
+          thrownError = err;
+          launchRes = {
+            exitCode: err.exitCode !== undefined ? err.exitCode : -1,
+            stdout: '',
+            stderr: err.stderr || err.message || String(err),
+            error: err,
+          };
+        }
+      }
+
+      if (deps && deps.rethrow && thrownError) {
+        throw thrownError;
+      }
+
+      isFailure =
+        thrownError !== null ||
+        !launchRes ||
+        launchRes.exitCode !== 0 ||
+        (typeof launchRes.httpStatus === 'number' && launchRes.httpStatus >= 400);
+
+      // The durable handle, read from the report the launch was given. Never a
+      // pid, a timestamp or a stdout guess.
+      sessionHandle = readSessionId(adapter, { usageFile: usageFile }, launchRes || {}).id;
+      if (usageFile && !sessionHandle) {
+        // The caller asked for a durable report and the report carries no
+        // session id, so this launch cannot be resumed or stopped. A launch the
+        // loop cannot find again is a failed launch (AI-64-R04), not a success
+        // with a null handle.
+        isFailure = true;
+      }
+      if (sessionHandle) {
+        // The claim now carries the session it is a claim about, so a restart
+        // resumes that session instead of starting a second writer.
+        decisionsStore.recordDecision(
+          {
+            stage: decisionsStore.Stage.LAUNCHED,
+            workItemId: item.workItemId,
+            role: item.role,
+            chosen: finalChosenKey,
+            harness: harnessName,
+            branch: item.branch,
+            sessionId: sessionHandle,
+            worktree: args.cwd || rootDir,
+            area: item.area,
+            detail: 'DURABLE_SESSION_ID',
+          },
+          { dir: decisionDir, now }
+        );
+      }
+
+      const parsed = launchRes && launchRes.stdout ? parseLastJson(launchRes.stdout) : null;
+      if (
+        parsed &&
+        parsed.status &&
+        /fail|error|refus|stalled|timeout/i.test(String(parsed.status))
+      ) {
+        isFailure = true;
+      }
+
+      try {
+        decisionsStore.recordDecision(
+          {
+            stage: isFailure ? decisionsStore.Stage.FAILED : decisionsStore.Stage.COMPLETED,
+            workItemId: item.workItemId,
+            role: item.role,
+            chosen: finalChosenKey,
+            harness: harnessName,
+            branch: item.branch,
+            sessionId: sessionHandle,
+            worktree: args.cwd || rootDir,
+            area: item.area,
+            outcome: isFailure ? 'failed' : 'passed',
+            detail: usageFile && !sessionHandle ? 'HARNESS_NO_SESSION_ID' : null,
+            firstChoice: lastDecision ? lastDecision.chosen || finalChosenKey : finalChosenKey,
+            selected: finalChosenKey,
+            excluded: lastDecision
+              ? (lastDecision.rejected || []).map((r) => ({
+                  candidateKey: r.offeringId,
+                  reasonCode: String(r.reason || 'UNKNOWN').split(':')[0],
+                  reason: r.reason,
+                }))
+              : [],
+            quota:
+              lastDecision && lastDecision.candidates
+                ? lastDecision.candidates.map((c) => ({
+                    candidateKey: c.offeringId,
+                    score: c.score,
+                    headroom: c.headroom,
+                  }))
+                : [],
+            resourceCeiling: deps && deps.resourceCeiling ? deps.resourceCeiling() : undefined,
+            checkpoint: checkpointFile,
+          },
+          { dir: decisionDir, now }
+        );
+      } catch (err) {}
+    } finally {
+      quotaStore.releaseReservation(item.workItemId, finalChosenKey, reservationOpts);
+    }
+
+    if (checkpointFile && finalDecisionLog) {
+      const finalLogData = buildDryRunLog(finalDecisionLog);
+      finalLogData.dryRunDispatch.executeTouched = true;
+      finalLogData.dryRunDispatch.launched = true;
+      finalLogData.outcome = isFailure ? 'failed' : 'passed';
+      try {
+        writeJsonFile(checkpointFile, finalLogData);
+      } catch (err) {}
+    }
+
+    if (!isFailure) {
+      evidence.recordOutcome(evidenceDir, finalChosenCandidate, {
+        status: 'passed',
+        level: evidence.Level.OUTCOME,
+        exitCode: 0,
+        source: 'dispatch',
+      });
+      log('Dispatch succeeded on ' + finalChosenKey);
+      exit(0);
+      return { exitCode: 0, chosen: finalChosenKey, result: launchRes, attempts: attempt };
+    } else {
+      evidence.recordOutcome(evidenceDir, finalChosenCandidate, {
+        status: 'failed',
+        level: evidence.Level.OUTCOME,
+        exitCode: launchRes ? launchRes.exitCode : -1,
+        httpStatus: launchRes ? launchRes.httpStatus : undefined,
+        body: launchRes
+          ? launchRes.body || launchRes.stderr || launchRes.stdout
+          : thrownError && thrownError.message,
+        stderr: launchRes ? launchRes.stderr : thrownError && thrownError.message,
+        cause: launchRes ? launchRes.body || launchRes.stderr : thrownError && thrownError.message,
+        error: thrownError ? thrownError.message || String(thrownError) : undefined,
+        source: 'dispatch',
+      });
+      const rawFail = {
+        httpStatus: launchRes ? launchRes.httpStatus : undefined,
+        body: launchRes
+          ? launchRes.body || launchRes.stderr || launchRes.stdout
+          : thrownError && thrownError.message,
+        stderr: launchRes ? launchRes.stderr : thrownError && thrownError.message,
+      };
+      const classification = failureClassifier.classifyFailure({
+        exitCode: launchRes ? launchRes.exitCode : -1,
+        httpStatus: rawFail.httpStatus,
+        body: rawFail.body,
+        stderr: rawFail.stderr,
+        accountId: finalChosenCandidate.accountId,
+      });
+      const parsedOutcome = launchRes && launchRes.stdout ? parseLastJson(launchRes.stdout) : null;
+      const outcome =
+        parsedOutcome && parsedOutcome.candidateKey
+          ? parsedOutcome
+          : structuredOutcome(finalChosenKey, launchRes, classification, {
+              status: 'failed',
+              checkpoint: checkpointFile,
+              reason: rawFail.body || rawFail.stderr || (thrownError && thrownError.message),
+            });
+      failedAttempts.push({
+        key: finalChosenKey,
+        candidate: finalChosenCandidate,
+        classification: classification,
+        outcome,
+      });
+      const scrubbedStderr = decisionsStore.scrubText(rawFail.stderr);
+      log('Candidate failed: ' + finalChosenKey + (scrubbedStderr ? ' — ' + scrubbedStderr : ''));
+      finalChosenKey = null; // force re-ranking
+      finalChosenCandidate = null;
+    }
+  }
+
+  log('Max dispatch attempts (' + maxAttempts + ') reached without success.');
+  exit(1);
+  return { exitCode: 1, decision: lastDecision, attempts: attempt, failedAttempts };
 }
 
 const SHADOW_FLAGS = new Set(['project', 'compare', 'json', 'dry-run', 'dryRun']);
@@ -762,6 +2342,585 @@ function shadowCommand(args) {
   if (result.mode === 'compare' && result.divergences.length > 0) process.exit(1);
 }
 
+/**
+ * `discovery import` and `discovery candidates` (TASK-AI-70).
+ *
+ * The Controller ranked one candidate at a time because the sources and models
+ * that work today were never visible to it as data. `import` turns a reviewed
+ * model audit into the two stores dispatch already reads, with the proof
+ * carried exactly as the audit stated it; `candidates` prints what the two
+ * production readers produce, so "what does the Controller see" is inspectable
+ * without dispatching anything.
+ *
+ * `import` is the only writer here and it writes only where it is told: the
+ * discovery ledger and import file under `--discovery-dir`, and the evidence
+ * store under `--evidence-dir`. It performs no network call, reads no
+ * credential, and never fabricates or promotes a proof.
+ */
+function discoveryCommand(args, deps) {
+  const d = deps || {};
+  const log = d.log || console.log;
+  const error = d.error || console.error;
+  const exit = d.exit || process.exit;
+  const fsx = require('fs');
+  const { listAccounts } = require('./accounts');
+  const sub = args._[1] || 'candidates';
+  const dataDir = args['discovery-dir'] || path.join(__dirname, 'data', 'discovery');
+  const evidenceDir = args['evidence-dir'] || path.join(__dirname, 'data', 'evidence');
+  const rootDir = args.root || d.rootDir || process.cwd();
+
+  if (sub === 'import') {
+    const { importCatalogue, formatSummary } = require('./discovery/catalogue-import');
+    if (typeof args.catalogue !== 'string' || !args.catalogue) {
+      error('discovery import requires --catalogue <audit catalogue.jsonl>');
+      exit(2);
+      return { exitCode: 2 };
+    }
+    const filePath = path.resolve(rootDir, args.catalogue);
+    if (!fsx.existsSync(filePath)) {
+      error('CATALOGUE_MISSING: ' + filePath);
+      exit(2);
+      return { exitCode: 2 };
+    }
+    const accounts = Array.isArray(d.accounts) ? d.accounts : listAccounts() || [];
+    let summary;
+    try {
+      summary = importCatalogue({
+        filePath,
+        accounts,
+        dataDir,
+        evidenceDir,
+        home: args.home || d.home,
+        dryRun: args['dry-run'] === true || args.dryRun === true,
+        now: d.now,
+      });
+    } catch (err) {
+      error('CATALOGUE_UNREADABLE: ' + (err && err.message ? err.message : err));
+      exit(2);
+      return { exitCode: 2 };
+    }
+    if (summary.refused) {
+      error('CATALOGUE_REFUSED: ' + summary.refused);
+      log(formatSummary(summary));
+      exit(2);
+      return { exitCode: 2, summary };
+    }
+    if (args.json) log(JSON.stringify(summary, null, 2));
+    else log(formatSummary(summary));
+    exit(0);
+    return { exitCode: 0, summary };
+  }
+
+  if (sub !== 'candidates') {
+    error('Lệnh không rõ: discovery ' + sub);
+    error(
+      'Dùng: discovery import --catalogue <file> | discovery candidates [--view dispatch|planner]'
+    );
+    exit(2);
+    return { exitCode: 2 };
+  }
+
+  const sourcesApi = require('./sources');
+  const candidatesApi = require('./candidates');
+  const routing = require('./routing');
+  const evidence = require('./evidence');
+  const { readDiscoveryCatalogue } = require('./discovery/read');
+
+  const view = typeof args.view === 'string' ? args.view : 'dispatch';
+  if (view !== 'dispatch' && view !== 'planner') {
+    error('UNKNOWN_VIEW: ' + view + ' (expected dispatch or planner)');
+    exit(2);
+    return { exitCode: 2 };
+  }
+
+  let accounts;
+  if (typeof args.accounts === 'string') {
+    accounts = readJsonOrExit(path.resolve(rootDir, args.accounts), 'accounts');
+    if (!Array.isArray(accounts)) {
+      error('ACCOUNTS_INVALID: --accounts must hold a JSON array');
+      exit(2);
+      return { exitCode: 2 };
+    }
+  } else if (Array.isArray(d.accounts)) {
+    accounts = d.accounts;
+  } else {
+    accounts = listAccounts() || [];
+  }
+
+  const registry = sourcesApi.loadSources();
+  let discCat = { candidates: [] };
+  try {
+    discCat = readDiscoveryCatalogue({ dataDir });
+  } catch {
+    discCat = { candidates: [] };
+  }
+  let evidenceData = {};
+  try {
+    evidenceData = evidence.loadEvidence(evidenceDir);
+  } catch {
+    evidenceData = {};
+  }
+
+  const poolRuntimeDir = args['pool-runtime-dir'] || args['agy-runs-dir'] || undefined;
+  const home = args.home || d.home;
+  const catalogueIds = discCat.candidates.map((c) => c.modelId).filter(Boolean);
+  const candidates =
+    view === 'planner'
+      ? candidatesApi.generateCandidates({
+          registry,
+          accounts,
+          catalogue: catalogueIds,
+          home,
+          fakeRunsDir: poolRuntimeDir,
+          discoverPool: Boolean(poolRuntimeDir),
+        })
+      : assembleForDispatch(discCat, accounts, registry, {
+          evidenceData,
+          home,
+          fakeRunsDir: poolRuntimeDir,
+          discoverPool: Boolean(poolRuntimeDir),
+        });
+
+  const annotated = candidatesApi.annotateCandidates(
+    candidates.map((c) => Object.assign({}, c)),
+    evidenceData,
+    { now: d.now }
+  );
+  const rows = annotated.map((c) => ({
+    candidateKey: candidatesApi.candidateKey(c),
+    harness: c.harness || '',
+    accessPath: c.accessPath || '',
+    gateway: c.gateway || '',
+    upstream: c.upstream || '',
+    account: c.accountId || '*',
+    quotaScope: c.quotaScope || '',
+    modelId: c.modelId || c.model || '',
+    proof: routing.proofObserved(evidenceData, c) || null,
+    failureDomain: routing.failureDomainOf(c),
+    blocked: Boolean(c.blocked),
+  }));
+
+  if (args.json) {
+    log(
+      JSON.stringify(
+        { view, discoveryDir: dataDir, evidenceDir, count: rows.length, candidates: rows },
+        null,
+        2
+      )
+    );
+  } else {
+    log('Discovery candidates (' + view + ' view): ' + rows.length);
+    for (const r of rows) {
+      log(
+        '  ' +
+          r.candidateKey +
+          ' | proof ' +
+          (r.proof || 'unproven') +
+          ' | failure-domain ' +
+          r.failureDomain +
+          ' | account ' +
+          r.account
+      );
+    }
+  }
+  if (exit === process.exit) process.exitCode = 0;
+  else exit(0);
+  return { exitCode: 0, view, candidates: rows };
+}
+
+/**
+ * evidence import-work (TASK-AI-75): turn real merged, independently reviewed
+ * work into WORK_ITEM_PASS evidence. Never fabricates.
+ *
+ *   node tools/ai-brain/cli.js evidence import-work \
+ *     --sha <40-hex> \
+ *     --manifest <path to review-manifest.json> \
+ *     --writer <7-part candidateKey harness::accessPath::gateway::upstream::account::quotaScope::modelId> \
+ *     --review <path to review md> \
+ *     --reviewer <reviewer identity string> \
+ *     --work-item <id> \
+ *     [--pr-head <40-hex>] \
+ *     [--main-ref origin/main] \
+ *     [--evidence-dir <dir>] \
+ *     [--json]
+ *
+ * TASK-AI-77: --manifest is what authorises the import. It is refused as
+ * MANIFEST_REQUIRED (exit 1) rather than as bad argv, so a caller that forgot it
+ * sees why instead of a usage error.
+ */
+function evidenceCommand(args, deps) {
+  const d = deps || {};
+  const log = d.log || console.log;
+  const error = d.error || console.error;
+  const exit = d.exit || process.exit;
+  const rootDir = args.root || d.rootDir || process.cwd();
+  const sub = args._[1];
+
+  if (sub === 'import-evaluation') {
+    const file = args.file;
+    if (typeof file !== 'string' || file.trim() === '') {
+      error('evidence import-evaluation requires --file <path>');
+      error(
+        'Dùng: evidence import-evaluation --file <path> [--evidence-dir <dir>] [--dry-run] [--json]'
+      );
+      exit(2);
+      return { exitCode: 2 };
+    }
+    const { importEvaluation } = require('./evaluation-import');
+    const dir =
+      args['evidence-dir'] ||
+      args.evidenceDir ||
+      d.evidenceDir ||
+      path.join(__dirname, 'data', 'evidence');
+    let result;
+    try {
+      result = importEvaluation({ file, evidenceDir: dir, dryRun: Boolean(args['dry-run']) });
+    } catch (err) {
+      error('REFUSED: ' + ((err && err.code) || 'ERROR') + ' - ' + ((err && err.message) || err));
+      exit(1);
+      return { exitCode: 1 };
+    }
+    const counts = result.counts || result;
+    const rejected = Array.isArray(counts.rejected) ? counts.rejected.length : counts.rejected || 0;
+    if (args.json) {
+      log(
+        JSON.stringify({
+          ok: true,
+          counts: {
+            importedAlive: counts.importedAlive,
+            cooldownsSet: counts.cooldownsSet,
+            skipped: counts.skipped,
+            rejected,
+          },
+        })
+      );
+    } else {
+      log('imported alive ' + counts.importedAlive);
+      log('cooldowns set ' + counts.cooldownsSet);
+      log('skipped ' + counts.skipped);
+      log('rejected ' + rejected);
+    }
+    exit(0);
+    return { exitCode: 0, result };
+  }
+
+  if (sub !== 'import-work') {
+    error('Lệnh không rõ: evidence ' + (sub || ''));
+    error(
+      'Dùng: evidence import-work --sha <40-hex> --manifest <file> --writer <key> --review <file> --reviewer <identity> --work-item <id> [--pr-head <sha>] [--main-ref <ref>] [--evidence-dir <dir>] [--json]'
+    );
+    error(
+      'Dùng: evidence import-evaluation --file <path> [--evidence-dir <dir>] [--dry-run] [--json]'
+    );
+    exit(2);
+    return { exitCode: 2 };
+  }
+
+  const sha = args.sha;
+  const writer = args.writer;
+  const review = args.review;
+  const reviewer = args.reviewer;
+  const workItem = args['work-item'] || args.workItem;
+
+  if (
+    typeof sha !== 'string' ||
+    !sha ||
+    typeof writer !== 'string' ||
+    !writer ||
+    typeof review !== 'string' ||
+    !review ||
+    typeof reviewer !== 'string' ||
+    !reviewer ||
+    typeof workItem !== 'string' ||
+    !workItem
+  ) {
+    error('evidence import-work requires --sha, --writer, --review, --reviewer, --work-item');
+    exit(2);
+    return { exitCode: 2 };
+  }
+
+  const { importWorkItemPass } = require('./work-evidence');
+  const evidenceDir =
+    args['evidence-dir'] ||
+    args.evidenceDir ||
+    d.evidenceDir ||
+    path.join(__dirname, 'data', 'evidence');
+  const mainRef = args['main-ref'] || args.mainRef || 'origin/main';
+  const reviewPath = path.isAbsolute(review) ? review : path.resolve(rootDir, review);
+
+  const result = importWorkItemPass({
+    sha,
+    writer,
+    review: reviewPath,
+    manifest: args.manifest || args['manifest-path'] || null,
+    prHead: args['pr-head'] || args.prHead || null,
+    reviewer,
+    workItem,
+    mainRef,
+    evidenceDir,
+    cwd: rootDir,
+  });
+
+  if (!result.ok) {
+    if (args.json) {
+      log(JSON.stringify(result, null, 2));
+    } else {
+      error('REFUSED: ' + result.code + (result.reason ? ' - ' + result.reason : ''));
+    }
+    exit(1);
+    return { exitCode: 1, result };
+  }
+
+  if (args.json) {
+    log(JSON.stringify(result, null, 2));
+  } else {
+    if (result.status === 'ALREADY_RECORDED') {
+      log('ALREADY_RECORDED: ' + result.candidateKey + ' sha ' + result.sha);
+    } else {
+      log(
+        'IMPORTED: ' + result.candidateKey + ' sha ' + result.sha + ' proof ' + result.mergeProof
+      );
+    }
+  }
+  exit(0);
+  return { exitCode: 0, result };
+}
+
+/**
+ * review manifest validate (TASK-AI-77): check a structured review manifest
+ * against git and against the markdown review it accompanies, before anything is
+ * published or promoted on the strength of it.
+ *
+ *   node tools/ai-brain/cli.js review manifest validate \
+ *     --manifest <path to review-manifest.json> --artifact <path to the review> \
+ *     --work-item <id> --sha <40-hex reviewed commit> [--json]
+ *
+ * Exit 0 when the manifest is a faithful binding, 1 when it is refused (the
+ * refusal code is printed), 2 on bad argv.
+ */
+function reviewCommand(args, deps) {
+  const d = deps || {};
+  const log = d.log || console.log;
+  const error = d.error || console.error;
+  const exit = d.exit || process.exit;
+  const rootDir = args.root || d.rootDir || process.cwd();
+  const sub = args._[1];
+  const action = args._[2];
+
+  if (sub !== 'manifest' || action !== 'validate') {
+    error('Lệnh không rõ: review ' + [sub, action].filter(Boolean).join(' '));
+    error(
+      'Dùng: review manifest validate --manifest <file> --artifact <file.md> --work-item <id> --sha <40-hex> [--json]'
+    );
+    if (exit === process.exit) process.exitCode = 2;
+    else exit(2);
+    return { exitCode: 2 };
+  }
+
+  const manifest = args.manifest;
+  const artifact = args.artifact;
+  const workItem = args['work-item'] || args.workItem;
+  const sha = args.sha;
+  const missing = [manifest, artifact, workItem, sha].some(
+    (value) => typeof value !== 'string' || value.trim() === ''
+  );
+  if (missing) {
+    error('review manifest validate requires --manifest, --artifact, --work-item, --sha');
+    if (exit === process.exit) process.exitCode = 2;
+    else exit(2);
+    return { exitCode: 2 };
+  }
+
+  const { validateManifestFile } = require('./review-manifest');
+  const resolveArg = (value) => (path.isAbsolute(value) ? value : path.resolve(rootDir, value));
+  const result = validateManifestFile(resolveArg(manifest), {
+    repoCwd: rootDir,
+    expected: { workItemId: workItem, commit: sha },
+    artifactPath: resolveArg(artifact),
+  });
+
+  if (args.json) {
+    log(JSON.stringify(result, null, 2));
+  } else if (!result.ok) {
+    error('REFUSED: ' + result.code + (result.reason ? ' - ' + result.reason : ''));
+  } else {
+    log(
+      'OK: ' +
+        result.workItemId +
+        ' ' +
+        result.reviewedCommit +
+        ' verdict ' +
+        result.verdict +
+        ' (' +
+        result.openFindings +
+        ' open finding(s))'
+    );
+  }
+
+  const code = result.ok ? 0 : 1;
+  if (exit === process.exit) process.exitCode = code;
+  else exit(code);
+  return { exitCode: code, result };
+}
+
+/**
+ * orchestrate (TASK-AI-64, TASK-AI-85): the live autonomous loop —
+ *   node tools/ai-brain/cli.js orchestrate --goal <text|file> --specs <file>
+ *     [--isolated-worker --base-sha <40-hex>] [--checkpoint <file>] [--out <file>]
+ *     [--evidence-dir <dir>] [--worker-timeout-min <1..240>]
+ */
+function orchestrateCommand(args, deps = {}) {
+  const d = deps || {};
+  const { runOrchestration } = d.runOrchestration ? d : require('./orchestrate');
+  const { generateCandidates } = require('./candidates');
+  const sourcesApi = require('./sources');
+  const decisionsApi = require('./decisions');
+  const fsx = require('fs');
+  const log = d.log || console.log;
+  const exit = d.exit || process.exit;
+  let goal = typeof args.goal === 'string' ? args.goal : null;
+  if (!goal) {
+    console.error('orchestrate requires --goal <text|file>');
+    exit(2);
+    return Promise.resolve({ exitCode: 2 });
+  }
+  if (fsx.existsSync(goal)) goal = fsx.readFileSync(goal, 'utf8');
+  if (typeof args.specs !== 'string') {
+    console.error('orchestrate requires --specs <file>: the real work-item specs, as a JSON array');
+    exit(2);
+    return Promise.resolve({ exitCode: 2 });
+  }
+  const specDoc = JSON.parse(fsx.readFileSync(args.specs, 'utf8'));
+  const specs = Array.isArray(specDoc) ? specDoc : specDoc.specs;
+  if (!Array.isArray(specs) || specs.length === 0) {
+    console.error('orchestrate: --specs carried no work items');
+    exit(2);
+    return Promise.resolve({ exitCode: 2 });
+  }
+  const out = typeof args.out === 'string' ? args.out : null;
+  // TASK-AI-121 LF-R03: --worker-timeout-min N (1..240, default 30) is the
+  // worker timeout every isolated launch (writer, reviewer, repair) uses.
+  // A value outside the range is a typo, and a typo is refused rather than
+  // clamped into a timeout nobody asked for.
+  const workerTimeoutMinRaw = args['worker-timeout-min'];
+  let workerTimeoutMs = 30 * 60 * 1000;
+  if (workerTimeoutMinRaw !== undefined) {
+    const minutes = Number(workerTimeoutMinRaw);
+    if (
+      workerTimeoutMinRaw === true ||
+      workerTimeoutMinRaw === '' ||
+      !Number.isInteger(minutes) ||
+      minutes < 1 ||
+      minutes > 240
+    ) {
+      console.error('orchestrate: --worker-timeout-min must be an integer between 1 and 240');
+      exit(2);
+      return Promise.resolve({ exitCode: 2 });
+    }
+    workerTimeoutMs = minutes * 60 * 1000;
+  }
+  const registry = (d && d.registry) || sourcesApi.loadSources();
+  const readJsonArg = (value) =>
+    typeof value === 'string' && value ? JSON.parse(fsx.readFileSync(value, 'utf8')) : null;
+  const inputAccounts = readJsonArg(args.accounts) || (Array.isArray(d.accounts) ? d.accounts : []);
+  const candidates = Array.isArray(d.candidates)
+    ? d.candidates
+    : generateCandidates({
+        registry,
+        catalogue: readJsonArg(args.catalogue) || [],
+        accounts: inputAccounts,
+        openCodeIds: Array.isArray(args['opencode-ids'])
+          ? args['opencode-ids']
+          : typeof args['opencode-ids'] === 'string'
+            ? args['opencode-ids'].split(',').filter(Boolean)
+            : [],
+      });
+  const evidenceDir =
+    typeof args['evidence-dir'] === 'string' && args['evidence-dir']
+      ? args['evidence-dir']
+      : path.join(__dirname, 'data', 'evidence');
+  const registryAccounts = Array.isArray(d.registryAccounts)
+    ? d.registryAccounts
+    : typeof d.listAccounts === 'function'
+      ? d.listAccounts()
+      : require('./accounts').listAccounts();
+  const evidenceAccounts = mergeEvidenceAccounts(inputAccounts, registryAccounts);
+  // The live loop is async (TASK-AI-65): the JEV assessment behind every
+  // Controller selection returns a promise. An unhandled rejection would crash
+  // silently, so it is caught here and turned into a non-zero exit instead.
+  return runOrchestration(goal, {
+    specs,
+    specText: typeof args['spec-text'] === 'string' ? args['spec-text'] : null,
+    candidates,
+    accounts: evidenceAccounts,
+    registryAccounts,
+    registry,
+    evidenceDir,
+    run: d.run,
+    tests: d.tests,
+    reviewer: d.reviewer,
+    measureFailBefore: d.measureFailBefore,
+    home: typeof args.home === 'string' ? args.home : undefined,
+    enforceProofFloors: true,
+    isolatedWorker: Boolean(args['isolated-worker']),
+    workerTimeoutMs,
+    decisionDir: args['decision-dir'] || decisionsApi.DEFAULT_DIR,
+    checkpointFile: typeof args.checkpoint === 'string' ? args.checkpoint : null,
+    usageDir: typeof args['usage-dir'] === 'string' ? args['usage-dir'] : null,
+    sha: typeof args.sha === 'string' ? args.sha : (d && d.sha) || null,
+    baseSha: typeof args['base-sha'] === 'string' ? args['base-sha'] : (d && d.baseSha) || null,
+    branch: typeof args.branch === 'string' ? args.branch : null,
+    cwd: typeof args.cwd === 'string' ? args.cwd : undefined,
+    workerRoot: typeof args['worker-root'] === 'string' ? args['worker-root'] : null,
+    exercise: typeof args.exercise === 'string' ? args.exercise : null,
+    reviewBudget: args['review-budget'],
+    // TASK-AI-122 PI-R02: --approval accepts several comma-separated ids, one
+    // per reviewed commit. PI-R03: the draft title comes from each item's own
+    // spec at publish time, never from specs[0] or the run-level goal.
+    publication: args.publish
+      ? {
+          approvalIds: String(args.approval || '')
+            .split(',')
+            .map((id) => id.trim())
+            .filter(Boolean),
+          expiry: args['approval-expiry'] ? Date.parse(args['approval-expiry']) : undefined,
+          remoteUrl: args['remote-url'],
+          branch: typeof args.branch === 'string' ? args.branch : null,
+          draft: {},
+        }
+      : null,
+    out,
+    now: (d && d.now) || Date.now(),
+  })
+    .then((result) => {
+      log(
+        JSON.stringify(
+          {
+            goal,
+            status: result.status,
+            reconciliation: result.reconciliation,
+            publication: result.publication,
+          },
+          null,
+          2
+        )
+      );
+      if (out) log('Wrote run log to ' + out);
+      const exitCode = result.status === 'COMPLETED' || result.status === 'PUBLISHED_DRAFT' ? 0 : 1;
+      exit(exitCode);
+      return Object.assign({ exitCode }, result);
+    })
+    .catch((err) => {
+      console.error(
+        'Orchestrate lỗi: ' +
+          (err && err.name ? err.name + ': ' : '') +
+          (err && err.message ? err.message : err)
+      );
+      exit(1);
+      return { exitCode: 1, error: err };
+    });
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const command = args._[0] || 'reconcile';
@@ -770,8 +2929,33 @@ function main() {
   if (command === 'manifest') return manifestCommand(args);
   if (command === 'prove') return proveCommand(args);
   if (command === 'quota') return quotaCommand(args);
-  if (command === 'dispatch') return dispatchCommand(args);
+  if (command === 'dispatch') {
+    const result = dispatchCommand(args);
+    // The profile path (TASK-AI-65) is async: the JEV advisory returns a
+    // promise. An unhandled rejection would crash silently, so it is caught
+    // here and turned into a non-zero exit instead.
+    if (result && typeof result.then === 'function') {
+      result.then(
+        () => {},
+        (err) => {
+          console.error('Dispatch lỗi: ' + (err && err.message ? err.message : err));
+          process.exitCode = 1;
+        }
+      );
+    }
+    return;
+  }
   if (command === 'shadow') return shadowCommand(args);
+  // discovery import | discovery candidates (TASK-AI-70): bring a reviewed
+  // model audit into the stores dispatch reads, then show what the Controller
+  // sees. Synchronous, like reconcile and quota.
+  if (command === 'discovery') return discoveryCommand(args);
+  // evidence import-work (TASK-AI-75): turn real merged, independently reviewed
+  // work into WORK_ITEM_PASS evidence.
+  if (command === 'evidence') return evidenceCommand(args);
+  // review manifest validate (TASK-AI-77): check a review manifest against git
+  // before anything is published or promoted on the strength of it.
+  if (command === 'review') return reviewCommand(args);
   // account add | account limits | account secret (TASK-AI-29). The account
   // surface parses its own argv strictly, so a mistyped flag is refused
   // rather than dropped, and never routes through reconcile allowlists.
@@ -820,11 +3004,48 @@ function main() {
     process.exit(runSerenaCli(process.argv.slice(3)));
   }
 
+  // orchestrate (TASK-AI-64): the live autonomous loop —
+  //   node tools/ai-brain/cli.js orchestrate --goal <text|file> --specs <file>
+  //     [--isolated-worker --base-sha <40-hex>] [--checkpoint <file>] [--out <file>]
+  //
+  // The specs are the real work items the operator named and the candidates come
+  // from the live registry: the old command synthesised one DRY-RUN-GOAL item and
+  // two demo candidates, injected a launcher that failed once on a counter, and
+  // injected three green gates, so the goal text never became work and no identity
+  // came from the registry. Nothing is injected here any more — a live run either
+  // launches for real or is refused.
+  if (command === 'orchestrate') return orchestrateCommand(args);
+
   console.error('Lệnh không rõ: ' + command);
   console.error(
-    'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | account | probe | qualify | serena'
+    'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | discovery | account | probe | qualify | serena | evidence | review'
   );
   process.exit(2);
 }
 
-main();
+module.exports = {
+  dispatchCommand,
+  parseArgs,
+  main,
+  // The Controller seams the live loop consumes rather than reimplements: the
+  // ranking decision, the failure-domain rule, the atomic checkpoint store.
+  readCheckpoint,
+  writeJsonFile,
+  sameFailureDomain,
+  applyFailureBlocks,
+  applyDryRunBlocks,
+  DRY_RUN_BLOCK_CODES,
+  LIVE_BLOCK_CODES,
+  // TASK-AI-70: one candidate assembly for both dispatch paths and for the
+  // read-only `discovery candidates` listing, so what is listed is what dispatch
+  // would rank.
+  assembleForDispatch,
+  discoveryCommand,
+  evidenceCommand,
+  reviewCommand,
+  orchestrateCommand,
+};
+
+if (require.main === module) {
+  main();
+}

@@ -1,0 +1,11 @@
+[
+  {
+    "id": "TASK-AI-89-ITEM",
+    "roleRequirement": { "role": "writer" },
+    "requiredCapabilities": ["jsonSchema", "tools"],
+    "files": ["tools/ai-brain/cli.js"],
+    "acceptanceCriteria": ["live capability lookup uses the official account registry"],
+    "proofFloor": "WORK_ITEM_PASS",
+    "verification": { "command": "node -e \"process.exit(0)\"", "expect": "" }
+  }
+]

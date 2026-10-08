@@ -180,6 +180,7 @@ describe('Spare capacity goes to review', () => {
     const plan = planDispatch([authoring], pool, {
       limits: { maxImplementationAgents: 3, maxReviewAgents: 2 },
       governedDecision: 'DEC-017',
+      resources: { freeMb: 8192 },
       now: NOW,
     });
     assert.equal(plan.utilisation.idleImplementation, 2);

@@ -77,6 +77,18 @@ const QUOTA_SIGNALS = [
   /quota/i,
   /too many requests/i,
   /insufficient.*(credit|balance)/i,
+  // A gateway puts the status in brackets and nothing else: 9Router answers
+  // "[kiro/claude-sonnet-4.5-agentic] [402]: …". The bracket is neither a
+  // keyword before the code nor a separator after it, so every pattern above
+  // missed it and a genuinely exhausted account kept being chosen first.
+  // Observed live on 2026-09-23.
+  /[[(]\s*(?:402|429)\s*[\])]/,
+  // Providers that refuse in words rather than codes. Kiro says "You have
+  // reached the limit" with reason MONTHLY_REQUEST_COUNT, and Codex says
+  // "You've hit your usage limit" — both are the same fact as a 429. The
+  // window is bounded so an unrelated sentence ("hit a compile error. limit
+  // is unrelated") cannot pin a ceiling that nothing refused.
+  /(?:reached|hit)\b[^.]{0,24}\blimit/i,
 ];
 
 function isQuotaRefusal(text) {
