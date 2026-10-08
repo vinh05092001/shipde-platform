@@ -1,17 +1,8 @@
 import { Injectable, Inject, ForbiddenException, NotFoundException } from '@nestjs/common';
-import { randomBytes, createHash } from 'node:crypto';
+import { randomBytes, createHash, createHmac } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { SessionStatusEnum } from '@prisma/client';
 import { formatStructuredLog } from '@shipde/config';
-
-export interface CreateSessionDto {
-  user_id: string;
-  device_id: string;
-  device_model?: string;
-  user_agent?: string;
-  ip_address?: string;
-  fcm_token?: string;
-}
 
 export interface RevokeAllDto {
   include_current?: boolean;
@@ -23,60 +14,6 @@ const INACTIVITY_DAYS = 30;
 @Injectable()
 export class SessionService {
   constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
-
-  async create(dto: CreateSessionDto, callerMerchantId: string, correlationId: string) {
-    const user = await this.prisma.user.findFirst({
-      where: { id: dto.user_id, merchant_id: callerMerchantId },
-    });
-    if (!user) {
-      throw new ForbiddenException({
-        error: {
-          code: 'FORBIDDEN',
-          message: 'Không thể tạo phiên cho người dùng ngoài cửa hàng',
-          retryable: false,
-        },
-      });
-    }
-
-    const rawToken = randomBytes(48).toString('hex');
-    const tokenHash = createHash('sha256').update(rawToken).digest('hex');
-    const expiresAt = new Date(Date.now() + ABSOLUTE_LIFETIME_DAYS * 24 * 60 * 60 * 1000);
-
-    const session = await this.prisma.deviceSession.create({
-      data: {
-        user_id: dto.user_id,
-        merchant_id: callerMerchantId,
-        session_token_hash: tokenHash,
-        device_id: dto.device_id,
-        device_model: dto.device_model || null,
-        user_agent: dto.user_agent || null,
-        ip_address: dto.ip_address ? this.hashIp(dto.ip_address) : null,
-        fcm_token: dto.fcm_token || null,
-        status: SessionStatusEnum.ACTIVE,
-        expires_at: expiresAt,
-      },
-    });
-
-    await this.logAudit({
-      merchantId: callerMerchantId,
-      userId: dto.user_id,
-      actor: dto.user_id,
-      action: 'SESSION_CREATED',
-      resource: `Session:${session.id}`,
-      details: { device_id: dto.device_id },
-      correlationId,
-    });
-
-    return {
-      session_id: session.id,
-      session_token: rawToken,
-      device_id: session.device_id,
-      device_model: session.device_model,
-      status: session.status,
-      expires_at: session.expires_at.toISOString(),
-      created_at: session.created_at.toISOString(),
-    };
-  }
 
   async list(userId: string, merchantId: string, currentSessionTokenHash?: string) {
     const now = new Date();
@@ -150,8 +87,8 @@ export class SessionService {
     correlationId: string,
     reason = 'User requested revocation'
   ) {
-    const session = await this.prisma.deviceSession.findFirst({
-      where: { id: sessionId, merchant_id: merchantId },
+    const session = await this.prisma.deviceSession.findUnique({
+      where: { id: sessionId },
     });
 
     if (!session) {
@@ -164,11 +101,21 @@ export class SessionService {
       });
     }
 
+    if (session.merchant_id !== merchantId) {
+      throw new ForbiddenException({
+        error: {
+          code: 'FORBIDDEN',
+          message: 'Không có quyền truy cập phiên của cửa hàng khác',
+          retryable: false,
+        },
+      });
+    }
+
     if (session.user_id !== userId) {
       throw new ForbiddenException({
         error: {
           code: 'FORBIDDEN',
-          message: 'Không có quyền thu hồi phiên của người dùng khác',
+          message: 'Không có quyền cập nhật phiên của người dùng khác',
           retryable: false,
         },
       });
@@ -189,6 +136,7 @@ export class SessionService {
       where: { id: sessionId },
       data: {
         status: SessionStatusEnum.REVOKED,
+        is_revoked: true,
         revoked_at: new Date(),
         revoked_by: userId,
         revoke_reason: reason,
@@ -241,6 +189,7 @@ export class SessionService {
       where: { id: { in: activeSessions.map((s) => s.id) } },
       data: {
         status: SessionStatusEnum.REVOKED,
+        is_revoked: true,
         revoked_at: now,
         revoked_by: userId,
         revoke_reason: 'Revoke all sessions',
@@ -263,9 +212,14 @@ export class SessionService {
     };
   }
 
-  async heartbeat(sessionId: string, userId: string, merchantId: string) {
-    const session = await this.prisma.deviceSession.findFirst({
-      where: { id: sessionId, merchant_id: merchantId },
+  async heartbeat(
+    sessionId: string,
+    userId: string,
+    merchantId: string,
+    currentSessionId?: string
+  ) {
+    const session = await this.prisma.deviceSession.findUnique({
+      where: { id: sessionId },
     });
 
     if (!session) {
@@ -278,11 +232,31 @@ export class SessionService {
       });
     }
 
+    if (session.merchant_id !== merchantId) {
+      throw new ForbiddenException({
+        error: {
+          code: 'FORBIDDEN',
+          message: 'Không có quyền truy cập phiên của cửa hàng khác',
+          retryable: false,
+        },
+      });
+    }
+
     if (session.user_id !== userId) {
       throw new ForbiddenException({
         error: {
           code: 'FORBIDDEN',
           message: 'Không có quyền cập nhật phiên của người dùng khác',
+          retryable: false,
+        },
+      });
+    }
+
+    if (currentSessionId && sessionId !== currentSessionId) {
+      throw new ForbiddenException({
+        error: {
+          code: 'FORBIDDEN',
+          message: 'Chỉ có thể cập nhật trạng thái hoạt động cho phiên hiện tại',
           retryable: false,
         },
       });
@@ -310,7 +284,12 @@ export class SessionService {
   }
 
   private hashIp(ip: string): string {
-    return createHash('sha256').update(ip).digest('hex').substring(0, 16);
+    return createHmac(
+      'sha256',
+      process.env.AUDIT_IDENTIFIER_HMAC_KEY || 'default-dev-audit-hmac-key-override-32-chars'
+    )
+      .update(ip)
+      .digest('hex');
   }
 
   private async logAudit(meta: {
@@ -345,6 +324,7 @@ export class SessionService {
       });
     } catch (err) {
       console.error('Failed to persist audit log:', err);
+      throw err;
     }
   }
 }

@@ -1198,7 +1198,13 @@ export class AuthService {
 
       await tx.deviceSession.updateMany({
         where: { user_id: tokenRecord.user_id, status: 'ACTIVE' },
-        data: { status: 'REVOKED' },
+        data: {
+          status: 'REVOKED',
+          is_revoked: true,
+          revoked_at: new Date(),
+          revoked_by: tokenRecord.user_id,
+          revoke_reason: 'Password reset',
+        },
       });
     });
 
@@ -2012,7 +2018,7 @@ export class AuthService {
         session_token_hash: createHash('sha256').update(token).digest('hex'),
         device_id: rememberDevice ? 'web-remember' : 'web-session',
         last_active_at: new Date(),
-        expires_at: new Date(Date.now() + ttlSeconds * 1000),
+        expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
       },
     });
 

@@ -307,6 +307,8 @@ export interface QueueSmokePayload {
 }
 
 // --- Session Management Contracts (FEAT-AUTH-06) ---
+import { components } from './openapi';
+
 export const SessionStatus = {
   ACTIVE: 'ACTIVE',
   REVOKED: 'REVOKED',
@@ -314,41 +316,12 @@ export const SessionStatus = {
   INACTIVE: 'INACTIVE',
 } as const;
 
-export type SessionStatus = (typeof SessionStatus)[keyof typeof SessionStatus];
-
-export interface SessionInfo {
-  session_id: string;
-  device_id: string;
-  device_model: string | null;
-  user_agent: string | null;
-  ip_address: string | null;
-  status: SessionStatus;
-  last_active_at: string;
-  expires_at: string;
-  created_at: string;
-  is_current: boolean;
-}
-
-export interface SessionListResponse {
-  data: SessionInfo[];
-  meta: { total: number };
-}
-
-export interface SessionRevokeResponse {
-  session_id: string;
-  status: SessionStatus;
-  message: string;
-}
-
-export interface SessionRevokeAllResponse {
-  revoked_count: number;
-  message: string;
-}
-
-export interface SessionHeartbeatResponse {
-  session_id: string;
-  last_active_at: string;
-}
+export type SessionStatus = components['schemas']['SessionInfo']['status'];
+export type SessionInfo = components['schemas']['SessionInfo'];
+export type SessionListResponse = components['schemas']['ListSessionsResponse'];
+export type SessionRevokeResponse = components['schemas']['RevokeSessionResponse'];
+export type SessionRevokeAllResponse = components['schemas']['RevokeAllSessionsResponse'];
+export type SessionHeartbeatResponse = components['schemas']['HeartbeatSessionResponse'];
 
 // --- Generated OpenAPI Schema Types ---
 export type * from './openapi';

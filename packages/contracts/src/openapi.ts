@@ -377,13 +377,7 @@ export interface paths {
      */
     get: operations['listSessions'];
     put?: never;
-    /**
-     * Create a new session at login (API-SESSION-CREATE, FEAT-AUTH-06)
-     * @description Creates a device session for the authenticated user. This endpoint is used
-     *     by the login flow (FEAT-AUTH-03) to issue a session token. The raw token
-     *     is returned once and never stored; only its SHA-256 hash is persisted.
-     */
-    post: operations['createSession'];
+    post?: never;
     delete?: never;
     options?: never;
     head?: never;
@@ -403,7 +397,7 @@ export interface paths {
     /**
      * Revoke a single session (API-SESSION-REVOKE, FEAT-AUTH-06)
      * @description Revokes the specified session. Idempotent: revoking an already-revoked
-     *     session returns success. Requires ownership (same user) or admin scope.
+     *     session returns success. Requires ownership (same user).
      */
     delete: operations['revokeSession'];
     options?: never;
@@ -935,33 +929,7 @@ export interface components {
       /** @example 123e4567-e89b-12d3-a456-426614174000 */
       correlationId: string;
     };
-    CreateSessionRequest: {
-      /** Format: uuid */
-      user_id: string;
-      device_id: string;
-      device_model?: string;
-      user_agent?: string;
-      ip_address?: string;
-      fcm_token?: string;
-    };
-    CreateSessionResponse: {
-      data: {
-        /** Format: uuid */
-        session_id: string;
-        /** @description Raw session token (returned once only) */
-        session_token: string;
-        device_id: string;
-        device_model?: string;
-        /** @enum {string} */
-        status: 'ACTIVE' | 'REVOKED' | 'EXPIRED' | 'INACTIVE';
-        /** Format: date-time */
-        expires_at: string;
-        /** Format: date-time */
-        created_at: string;
-      };
-      meta: components['schemas']['Meta'];
-    };
-    SessionListItem: {
+    SessionInfo: {
       /** Format: uuid */
       session_id: string;
       device_id: string;
@@ -981,7 +949,7 @@ export interface components {
       is_current: boolean;
     };
     ListSessionsResponse: {
-      data: components['schemas']['SessionListItem'][];
+      data: components['schemas']['SessionInfo'][];
       meta: components['schemas']['Meta'];
     };
     RevokeSessionResponse: {
@@ -1351,33 +1319,6 @@ export interface operations {
         };
       };
       401: components['responses']['Error'];
-    };
-  };
-  createSession: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    requestBody: {
-      content: {
-        'application/json': components['schemas']['CreateSessionRequest'];
-      };
-    };
-    responses: {
-      /** @description Session created */
-      201: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          'application/json': components['schemas']['CreateSessionResponse'];
-        };
-      };
-      400: components['responses']['Error'];
-      /** @description Cross-tenant session creation forbidden */
-      403: components['responses']['Error'];
     };
   };
   revokeSession: {

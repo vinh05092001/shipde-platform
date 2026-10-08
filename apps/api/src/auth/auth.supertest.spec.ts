@@ -1114,19 +1114,15 @@ async function runAuthSupertestSuite() {
 
     await prisma.deviceSession.create({
       data: {
-        id: '123e4567-e89b-12d3-a456-426614174000',
         user_id: userForSuspension!.id,
-        merchant_id: userForSuspension!.merchant_id,
-        session_token_hash: 'dummy-hash',
         device_id: 'web-session-test',
         last_active_at: new Date(),
-        expires_at: new Date(Date.now() + 3600000),
-        status: 'ACTIVE',
+        is_revoked: false,
       },
     });
 
     const sessionsBefore = await prisma.deviceSession.findMany({
-      where: { user_id: userForSuspension!.id, status: 'ACTIVE' },
+      where: { user_id: userForSuspension!.id, is_revoked: false },
     });
     assert.ok(sessionsBefore.length > 0, 'Should have active sessions before reset');
 
@@ -1144,7 +1140,7 @@ async function runAuthSupertestSuite() {
       where: { user_id: userForSuspension!.id },
     });
     assert.ok(
-      sessionsAfter.length > 0 && sessionsAfter.every((s) => s.status === 'REVOKED'),
+      sessionsAfter.length > 0 && sessionsAfter.every((s) => s.is_revoked),
       'All sessions should be revoked after reset'
     );
 

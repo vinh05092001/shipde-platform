@@ -344,33 +344,6 @@ paths:
         '200':
           description: Current user and memberships
   /sessions:
-    post:
-      tags: [Auth]
-      summary: Create a new session at login (API-SESSION-CREATE, FEAT-AUTH-06)
-      description: |
-        Creates a device session for the authenticated user. This endpoint is used
-        by the login flow (FEAT-AUTH-03) to issue a session token. The raw token
-        is returned once and never stored; only its SHA-256 hash is persisted.
-      operationId: createSession
-      security: []  # Called by login flow which provides merchant context via internal service
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/CreateSessionRequest'
-      responses:
-        '201':
-          description: Session created
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/CreateSessionResponse'
-        '400':
-          $ref: '#/components/responses/Error'
-        '403':
-          description: Cross-tenant session creation forbidden
-          $ref: '#/components/responses/Error'
     get:
       tags: [Auth]
       summary: List active sessions for current user (API-SESSION-LIST, FEAT-AUTH-06)
@@ -397,7 +370,7 @@ paths:
       summary: Revoke a single session (API-SESSION-REVOKE, FEAT-AUTH-06)
       description: |
         Revokes the specified session. Idempotent: revoking an already-revoked
-        session returns success. Requires ownership (same user) or admin scope.
+        session returns success. Requires ownership (same user).
       operationId: revokeSession
       parameters:
         - $ref: '#/components/parameters/SessionId'
@@ -1242,59 +1215,7 @@ components:
         correlationId:
           type: string
           example: 123e4567-e89b-12d3-a456-426614174000
-    CreateSessionRequest:
-      type: object
-      required: [user_id, device_id]
-      properties:
-        user_id:
-          type: string
-          format: uuid
-        device_id:
-          type: string
-          minLength: 1
-          maxLength: 128
-        device_model:
-          type: string
-          maxLength: 128
-        user_agent:
-          type: string
-          maxLength: 512
-        ip_address:
-          type: string
-          maxLength: 64
-        fcm_token:
-          type: string
-          maxLength: 256
-    CreateSessionResponse:
-      type: object
-      required: [data, meta]
-      properties:
-        data:
-          type: object
-          required: [session_id, session_token, device_id, status, expires_at, created_at]
-          properties:
-            session_id:
-              type: string
-              format: uuid
-            session_token:
-              type: string
-              description: Raw session token (returned once only)
-            device_id:
-              type: string
-            device_model:
-              type: string
-            status:
-              type: string
-              enum: [ACTIVE, REVOKED, EXPIRED, INACTIVE]
-            expires_at:
-              type: string
-              format: date-time
-            created_at:
-              type: string
-              format: date-time
-        meta:
-          $ref: '#/components/schemas/Meta'
-    SessionListItem:
+    SessionInfo:
       type: object
       required: [session_id, device_id, status, last_active_at, expires_at, created_at, is_current]
       properties:
@@ -1332,7 +1253,7 @@ components:
         data:
           type: array
           items:
-            $ref: '#/components/schemas/SessionListItem'
+            $ref: '#/components/schemas/SessionInfo'
         meta:
           $ref: '#/components/schemas/Meta'
     RevokeSessionResponse:

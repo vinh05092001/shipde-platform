@@ -213,6 +213,7 @@ model DeviceSession {
   user_agent         String?           @db.Text
   ip_address         String?           @db.VarChar(64)
   fcm_token          String?           @db.Text
+  is_revoked         Boolean           @default(false)
   status             SessionStatusEnum @default(ACTIVE)
   last_active_at     DateTime          @default(now()) @db.Timestamptz
   expires_at         DateTime          @db.Timestamptz
@@ -226,6 +227,7 @@ model DeviceSession {
 
   @@index([merchant_id, user_id, status])
   @@index([user_id, status])
+  @@index([user_id, is_revoked])
   @@map("device_sessions")
 }
 

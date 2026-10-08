@@ -4,9 +4,6 @@
 -- CreateEnum
 CREATE TYPE "SessionStatusEnum" AS ENUM ('ACTIVE', 'REVOKED', 'EXPIRED', 'INACTIVE');
 
--- Drop the old index that used is_revoked
-DROP INDEX IF EXISTS "device_sessions_user_id_is_revoked_idx";
-
 -- AlterTable: add new columns to device_sessions
 ALTER TABLE "device_sessions" ADD COLUMN "merchant_id" UUID;
 ALTER TABLE "device_sessions" ADD COLUMN "session_token_hash" VARCHAR(512);
@@ -52,9 +49,6 @@ ALTER TABLE "device_sessions" ALTER COLUMN "expires_at" SET NOT NULL;
 
 -- Migrate old is_revoked=true rows to REVOKED status
 UPDATE "device_sessions" SET "status" = 'REVOKED' WHERE "is_revoked" = true;
-
--- Drop old is_revoked column
-ALTER TABLE "device_sessions" DROP COLUMN "is_revoked";
 
 -- CreateIndex
 CREATE UNIQUE INDEX "device_sessions_session_token_hash_key" ON "device_sessions"("session_token_hash");
