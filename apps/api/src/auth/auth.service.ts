@@ -868,7 +868,7 @@ export class AuthService {
       return genericResponse;
     }
 
-    if (user.status === 'suspended' || user.status === 'disabled') {
+    if (user.status !== 'active') {
       await this.logAudit({
         merchantId: user.merchant_id,
         userId: user.id,
@@ -879,13 +879,7 @@ export class AuthService {
         ipAddress: this.hashIp(clientIp),
         details: { reason: user.status },
       });
-      throw new CanonicalApiException(
-        HttpStatus.FORBIDDEN,
-        'FORBIDDEN',
-        'Tài khoản bị khóa, không thể yêu cầu đặt lại mật khẩu.',
-        false,
-        'Vui lòng liên hệ bộ phận CSKH để được hỗ trợ'
-      );
+      return genericResponse;
     }
 
     const isVerified =
@@ -907,7 +901,8 @@ export class AuthService {
 
     const rawToken = randomBytes(32).toString('hex');
     const hashedToken = this.hashSecret(rawToken);
-    const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
+    const ttlSeconds = this.config?.PASSWORD_RESET_TTL_SECONDS || 3600;
+    const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
 
     await this.prisma.passwordResetToken.create({
       data: {
@@ -991,7 +986,7 @@ export class AuthService {
       );
     }
 
-    if (tokenRecord.user.status === 'suspended' || tokenRecord.user.status === 'disabled') {
+    if (tokenRecord.user.status !== 'active') {
       throw new CanonicalApiException(
         HttpStatus.FORBIDDEN,
         'FORBIDDEN',
@@ -1143,7 +1138,7 @@ export class AuthService {
       );
     }
 
-    if (tokenRecord.user.status === 'suspended' || tokenRecord.user.status === 'disabled') {
+    if (tokenRecord.user.status !== 'active') {
       throw new CanonicalApiException(
         HttpStatus.FORBIDDEN,
         'FORBIDDEN',
@@ -1206,11 +1201,32 @@ export class AuthService {
       merchantId: tokenRecord.user.merchant_id,
       userId: tokenRecord.user_id,
       actor: this.hashIp(clientIp),
-      action: 'AUTH_PASSWORD_RESET_SUCCESS',
+      action: 'AUTH_PASSWORD_RESET_TOKEN_CONSUMED',
       resource: `user:${tokenRecord.user_id}`,
       correlationId,
       ipAddress: this.hashIp(clientIp),
-      details: { channel: tokenRecord.channel, sessions_revoked: true },
+      details: { channel: tokenRecord.channel },
+    });
+
+    await this.logAudit({
+      merchantId: tokenRecord.user.merchant_id,
+      userId: tokenRecord.user_id,
+      actor: this.hashIp(clientIp),
+      action: 'AUTH_PASSWORD_CHANGED',
+      resource: `user:${tokenRecord.user_id}`,
+      correlationId,
+      ipAddress: this.hashIp(clientIp),
+    });
+
+    await this.logAudit({
+      merchantId: tokenRecord.user.merchant_id,
+      userId: tokenRecord.user_id,
+      actor: this.hashIp(clientIp),
+      action: 'AUTH_PASSWORD_RESET_SESSIONS_REVOKED',
+      resource: `user:${tokenRecord.user_id}`,
+      correlationId,
+      ipAddress: this.hashIp(clientIp),
+      details: { sessions_revoked: true },
     });
 
     return {

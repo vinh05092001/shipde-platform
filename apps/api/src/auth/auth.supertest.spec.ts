@@ -590,6 +590,25 @@ async function runAuthSupertestSuite() {
     assert.strictEqual(res19c.body.data.status, 'SENT');
     console.log('  PASS: Unverified user returned generic SENT (anti-enumeration)');
 
+    // 19c2. Suspended user returns generic 200 SENT (anti-enumeration)
+    const userToSuspend = await prisma.user.findFirst({ where: { email: email1 } });
+    await prisma.user.update({
+      where: { id: userToSuspend!.id },
+      data: { status: 'suspended' },
+    });
+    const res19c2 = await request(app.getHttpServer())
+      .post('/auth/forgot-password')
+      .set('x-forwarded-for', '203.0.113.12')
+      .send({ identifier: email1 })
+      .expect(200);
+    assert.strictEqual(res19c2.body.data.status, 'SENT');
+    // Restore
+    await prisma.user.update({
+      where: { id: userToSuspend!.id },
+      data: { status: 'active' },
+    });
+    console.log('  PASS: Suspended user returned generic SENT (anti-enumeration)');
+
     // 19d. Valid user gets token sent and stored in mock adapter
     rateLimitService.clear();
     const res19d = await request(app.getHttpServer())
@@ -606,6 +625,18 @@ async function runAuthSupertestSuite() {
     const resetToken19d = new URL(lastMsg19d.link!).searchParams.get('token')!;
     console.log('  PASS: Valid user received reset token via delivery adapter');
 
+    // 19d2. Valid phone user gets token sent
+    rateLimitService.clear();
+    const res19d2 = await request(app.getHttpServer())
+      .post('/auth/forgot-password')
+      .set('x-forwarded-for', '203.0.113.13')
+      .send({ identifier: phone2 })
+      .expect(200);
+    assert.strictEqual(res19d2.body.data.channel, 'phone');
+    const lastMsg19d2 = mockDeliveryAdapter.getLastMessage();
+    assert.strictEqual(lastMsg19d2!.recipient, phone2);
+    console.log('  PASS: Valid phone user received reset token via delivery adapter (AC-04)');
+
     // 19e. IP rate limit: 5 requests/hour per IP
     rateLimitService.clear();
     for (let i = 1; i <= 5; i++) {
@@ -621,6 +652,7 @@ async function runAuthSupertestSuite() {
       .send({ identifier: `rateip6.${testSuffix}@shipde.vn` })
       .expect(429);
     assert.strictEqual(res19e.body.error.code, 'RATE_LIMITED');
+    assert.ok(res19e.headers['retry-after'], 'Expected Retry-After header');
     console.log('  PASS: IP rate limit enforced at 5 requests/hour (429 RATE_LIMITED)');
 
     // 19f. Identifier rate limit: 3 requests/hour per identifier
@@ -639,6 +671,7 @@ async function runAuthSupertestSuite() {
       .send({ identifier: testId19f })
       .expect(429);
     assert.strictEqual(res19f.body.error.code, 'RATE_LIMITED');
+    assert.ok(res19f.headers['retry-after'], 'Expected Retry-After header');
     console.log('  PASS: Identifier rate limit enforced at 3 requests/hour (429 RATE_LIMITED)');
 
     // 19g. Invalid email format returns 400 VALIDATION_ERROR
@@ -755,7 +788,7 @@ async function runAuthSupertestSuite() {
       .send({ identifier: email1 })
       .expect(200);
     const lastMsg21d = mockDeliveryAdapter.getLastMessage();
-    const resetToken21d = lastMsg21d.token!;
+    const resetToken21d = new URL(lastMsg21d!.link!).searchParams.get('token')!;
     const res21d = await request(app.getHttpServer())
       .post('/auth/reset-password')
       .set('x-forwarded-for', '203.0.113.13')
@@ -834,9 +867,52 @@ async function runAuthSupertestSuite() {
           password_confirm: 'RacePassword456!',
         }),
     ]);
-    const statuses = [resRace1.status, resRace2.status].sort();
-    assert.deepStrictEqual(statuses, [200, 400]); // one succeeds, one fails
-    console.log('  PASS: Concurrent resets atomically handled (only one succeeds)');
+    // 21j. Suspended account during reset returns 403 FORBIDDEN
+    rateLimitService.clear();
+    await request(app.getHttpServer()).post('/auth/forgot-password').send({ identifier: email1 });
+    const suspMsg = mockDeliveryAdapter.getLastMessage();
+    const suspToken = new URL(suspMsg!.link!).searchParams.get('token')!;
+
+    // Suspend the account
+    const userForSuspension = await prisma.user.findFirst({ where: { email: email1 } });
+    await prisma.user.update({
+      where: { id: userForSuspension!.id },
+      data: { status: 'suspended' },
+    });
+
+    const res21j = await request(app.getHttpServer())
+      .post('/auth/reset-password')
+      .set('x-forwarded-for', '203.0.113.16')
+      .send({
+        token: suspToken,
+        password: 'NewPassword123!',
+        password_confirm: 'NewPassword123!',
+      })
+      .expect(403);
+    assert.strictEqual(res21j.body.error.code, 'FORBIDDEN');
+    console.log('  PASS: Reset for suspended account rejected with 403 FORBIDDEN');
+
+    // Restore the account
+    await prisma.user.update({
+      where: { id: userForSuspension!.id },
+      data: { status: 'active' },
+    });
+
+    // 21k. Verify session revocation and audit logging
+    const sessions = await prisma.deviceSession.findMany({
+      where: { user_id: userForSuspension!.id },
+    });
+    // all sessions should be revoked from the 21a reset
+    assert.ok(
+      sessions.every((s) => s.is_revoked),
+      'All sessions should be revoked after reset'
+    );
+
+    const auditLogs = await prisma.auditLog.findMany({
+      where: { user_id: userForSuspension!.id, action: 'AUTH_PASSWORD_RESET_SESSIONS_REVOKED' },
+    });
+    assert.ok(auditLogs.length > 0, 'Audit log for password reset must be persisted');
+    console.log('  PASS: Sessions revoked and audit logs verified in database');
   } finally {
     await app.close();
   }

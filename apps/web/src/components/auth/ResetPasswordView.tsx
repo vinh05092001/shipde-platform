@@ -58,6 +58,8 @@ export const ResetPasswordView: React.FC<Props> = ({ onBackToLogin }) => {
             setState('TOKEN_EXPIRED');
           } else if (res.code === 'TOKEN_ALREADY_USED') {
             setState('TOKEN_USED');
+          } else if (res.code === 'FORBIDDEN') {
+            setState('FORBIDDEN');
           } else {
             setState('INVALID_TOKEN');
           }
@@ -111,6 +113,9 @@ export const ResetPasswordView: React.FC<Props> = ({ onBackToLogin }) => {
           setErrorMessage(res.error || null);
         } else if (res.code === 'TOKEN_ALREADY_USED') {
           setState('TOKEN_USED');
+          setErrorMessage(res.error || null);
+        } else if (res.code === 'FORBIDDEN') {
+          setState('FORBIDDEN');
           setErrorMessage(res.error || null);
         } else if (res.code === 'INVALID_TOKEN') {
           setState('INVALID_TOKEN');
@@ -378,9 +383,7 @@ export const ResetPasswordView: React.FC<Props> = ({ onBackToLogin }) => {
               </div>
               <div className="text-center space-y-1">
                 <p className="text-sm font-bold text-slate-900">Đặt lại mật khẩu thành công</p>
-                <p className="text-xs text-slate-500">
-                  Hướng dẫn tự động đăng nhập trong 5 giây...
-                </p>
+                <p className="text-xs text-slate-500">Vui lòng đăng nhập lại với mật khẩu mới.</p>
               </div>
               <button
                 type="button"

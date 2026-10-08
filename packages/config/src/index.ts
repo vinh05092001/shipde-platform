@@ -39,6 +39,8 @@ export interface AppConfig {
   AUTH_TOKEN_TTL_SECONDS: number;
   /** Passwordless OTP login alternative (SCR-AUTH-01 "if configured"); default false. */
   AUTH_LOGIN_OTP_ENABLED: boolean;
+  /** Password reset token TTL in seconds */
+  PASSWORD_RESET_TTL_SECONDS: number;
   /** Frontend URL for building links in emails/SMS */
   FRONTEND_URL: string;
 }
@@ -237,6 +239,12 @@ export function validateConfig(rawEnv: NodeJS.ProcessEnv = process.env): AppConf
   }
   const AUTH_LOGIN_OTP_ENABLED = authLoginOtpRaw === 'true';
 
+  const passwordResetTtlRaw = rawEnv.PASSWORD_RESET_TTL_SECONDS || '3600';
+  const PASSWORD_RESET_TTL_SECONDS = parseInt(passwordResetTtlRaw, 10);
+  if (isNaN(PASSWORD_RESET_TTL_SECONDS) || PASSWORD_RESET_TTL_SECONDS <= 0) {
+    invalidFields.push('PASSWORD_RESET_TTL_SECONDS (must be positive number)');
+  }
+
   const FRONTEND_URL =
     rawEnv.FRONTEND_URL ||
     (NODE_ENV === 'production' ? 'https://shipde.vn' : 'http://localhost:3000');
@@ -264,6 +272,7 @@ export function validateConfig(rawEnv: NodeJS.ProcessEnv = process.env): AppConf
     AUTH_TOKEN_SECRET,
     AUTH_TOKEN_TTL_SECONDS,
     AUTH_LOGIN_OTP_ENABLED,
+    PASSWORD_RESET_TTL_SECONDS,
     FRONTEND_URL,
   };
 }
@@ -302,6 +311,9 @@ const SENSITIVE_PATTERNS = [
   /bearer/i,
   /cookie/i,
   /connection.*string/i,
+  /identifier/i,
+  /email/i,
+  /phone/i,
 ];
 
 import { getCurrentTraceAndSpanId } from './telemetry.js';

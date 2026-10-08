@@ -23,8 +23,6 @@ type ForgotPasswordState = 'IDLE' | 'LOADING' | 'SUCCESS' | 'RATE_LIMITED' | 'FO
 
 export const ForgotPasswordView: React.FC<Props> = ({ onBackToLogin }) => {
   const { forgotPassword } = useAuth();
-  const router = useRouter();
-
   const [identifier, setIdentifier] = useState('');
   const [state, setState] = useState<ForgotPasswordState>('IDLE');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -129,6 +127,12 @@ export const ForgotPasswordView: React.FC<Props> = ({ onBackToLogin }) => {
               <span>{errorMessage}</span>
             </div>
           )}
+          {state === 'IDLE' && !isEmpty && !isValidFormat && !errorMessage && (
+            <div className="p-3.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs font-semibold flex items-center gap-2 animate-in fade-in">
+              <span className="w-1.5 h-1.5 rounded-full bg-rose-600 shrink-0" />
+              <span>Email hoặc số điện thoại không hợp lệ</span>
+            </div>
+          )}
           {state === 'RATE_LIMITED' && (
             <div className="space-y-4 animate-in fade-in">
               <div className="p-3.5 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl text-xs font-semibold flex items-start gap-2">
@@ -138,13 +142,23 @@ export const ForgotPasswordView: React.FC<Props> = ({ onBackToLogin }) => {
                   <p className="text-amber-700 mt-1">Thử lại sau {rateLimitRetryAfter} giây</p>
                 </div>
               </div>
-              <button
-                type="button"
-                disabled
-                className="btn-primary w-full justify-center text-sm py-3 opacity-50 cursor-not-allowed"
-              >
-                Đang chờ...
-              </button>
+              {rateLimitRetryAfter === 0 ? (
+                <button
+                  type="button"
+                  onClick={handleTryAgain}
+                  className="btn-primary w-full justify-center text-sm py-3"
+                >
+                  Thử lại
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  disabled
+                  className="btn-primary w-full justify-center text-sm py-3 opacity-50 cursor-not-allowed"
+                >
+                  Đang chờ...
+                </button>
+              )}
             </div>
           )}
           {state === 'FORBIDDEN' && (
