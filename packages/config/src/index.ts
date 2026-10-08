@@ -39,6 +39,12 @@ export interface AppConfig {
   AUTH_TOKEN_TTL_SECONDS: number;
   /** Passwordless OTP login alternative (SCR-AUTH-01 "if configured"); default false. */
   AUTH_LOGIN_OTP_ENABLED: boolean;
+  /** Password reset token TTL in seconds */
+  PASSWORD_RESET_TTL_SECONDS: number;
+  /** Frontend URL for building links in emails/SMS */
+  FRONTEND_URL: string;
+  /** HMAC secret for audit log identifier hashes. Required in production. */
+  AUDIT_IDENTIFIER_HMAC_KEY: string;
 }
 
 export class ConfigValidationError extends Error {
@@ -235,6 +241,27 @@ export function validateConfig(rawEnv: NodeJS.ProcessEnv = process.env): AppConf
   }
   const AUTH_LOGIN_OTP_ENABLED = authLoginOtpRaw === 'true';
 
+  const passwordResetTtlRaw = rawEnv.PASSWORD_RESET_TTL_SECONDS || '3600';
+  const PASSWORD_RESET_TTL_SECONDS = parseInt(passwordResetTtlRaw, 10);
+  if (isNaN(PASSWORD_RESET_TTL_SECONDS) || PASSWORD_RESET_TTL_SECONDS <= 0) {
+    invalidFields.push('PASSWORD_RESET_TTL_SECONDS (must be positive number)');
+  }
+
+  const auditHmacKeyRaw = rawEnv.AUDIT_IDENTIFIER_HMAC_KEY;
+  if (NODE_ENV === 'production') {
+    if (!auditHmacKeyRaw || auditHmacKeyRaw.trim().length < 32) {
+      invalidFields.push(
+        'AUDIT_IDENTIFIER_HMAC_KEY (required in production with at least 32 characters)'
+      );
+    }
+  }
+  const AUDIT_IDENTIFIER_HMAC_KEY =
+    auditHmacKeyRaw || 'default-dev-audit-hmac-key-override-32-chars';
+
+  const FRONTEND_URL =
+    rawEnv.FRONTEND_URL ||
+    (NODE_ENV === 'production' ? 'https://shipde.vn' : 'http://localhost:3000');
+
   if (invalidFields.length > 0) {
     throw new ConfigValidationError(invalidFields);
   }
@@ -258,6 +285,9 @@ export function validateConfig(rawEnv: NodeJS.ProcessEnv = process.env): AppConf
     AUTH_TOKEN_SECRET,
     AUTH_TOKEN_TTL_SECONDS,
     AUTH_LOGIN_OTP_ENABLED,
+    PASSWORD_RESET_TTL_SECONDS,
+    AUDIT_IDENTIFIER_HMAC_KEY,
+    FRONTEND_URL,
   };
 }
 
@@ -295,6 +325,9 @@ const SENSITIVE_PATTERNS = [
   /bearer/i,
   /cookie/i,
   /connection.*string/i,
+  /identifier/i,
+  /email/i,
+  /phone/i,
 ];
 
 import { getCurrentTraceAndSpanId } from './telemetry.js';
