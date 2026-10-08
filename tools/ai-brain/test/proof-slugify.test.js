@@ -18,12 +18,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {
-  slugify,
-  branchNameFor,
-  SLUG_MAX_LENGTH,
-  SLUGIFY_INPUT_INVALID,
-} = require('../slugify');
+const { slugify, branchNameFor, SLUG_MAX_LENGTH, SLUGIFY_INPUT_INVALID } = require('../slugify');
 
 function throwsInvalid(fn) {
   assert.throws(fn, (error) => {
@@ -84,7 +79,7 @@ test('slugify is pure across calls', () => {
 test('slugify ships no dependencies beyond Node built-ins', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'slugify.js'), 'utf8');
   const specifiers = [...source.matchAll(/require\(\s*['"]([^'"]+)['"]\s*\)/g)].map(
-    (match) => match[1],
+    (match) => match[1]
   );
   for (const specifier of specifiers) {
     assert.ok(specifier.startsWith('node:'), `unexpected dependency ${specifier} in slugify.js`);
@@ -94,7 +89,7 @@ test('slugify ships no dependencies beyond Node built-ins', () => {
 test('branchNameFor returns feat/ plus lower-cased work item id and slugified title', () => {
   assert.equal(
     branchNameFor('feat', 'TASK-AI-111', 'Add slugify Helper!'),
-    'feat/task-ai-111-add-slugify-helper',
+    'feat/task-ai-111-add-slugify-helper'
   );
 });
 
@@ -106,7 +101,7 @@ test('branchNameFor omits the title when none is given', () => {
 test('branchNameFor derives fix branches the same way', () => {
   assert.equal(
     branchNameFor('fix', 'TASK-AI-120', 'Resume After Fail Before'),
-    'fix/task-ai-120-resume-after-fail-before',
+    'fix/task-ai-120-resume-after-fail-before'
   );
 });
 

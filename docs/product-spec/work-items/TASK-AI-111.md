@@ -45,22 +45,26 @@ The module is pure (no I/O, no clock, no state) and uses Node built-ins only, so
 | BN-R01 | `fix` kind derives the same way | `branchNameFor('fix', 'TASK-AI-120', 'Resume After Fail Before')` returns `fix/task-ai-120-resume-after-fail-before` | `branchNameFor derives fix branches the same way` |
 | BN-R01 | Unusable input refused | `SLUGIFY_INPUT_INVALID` propagates for a title that slugs to nothing and for non-string kind or id | `branchNameFor propagates SLUGIFY_INPUT_INVALID for unusable input` |
 | SL-R04 | Work Item and register | This document with Control, Business Outcome, Acceptance Matrix, Verification Commands, Residual Limitations; one appended register row `223` (`READY_FOR_CODEX`, branch `feat/task-ai-111`) | `git diff --numstat` for the register is `1 0` |
+| FORMAT_CHECK_FAILED (repair 1) | Host format gate over the changed files | Finding closed: the changed files format per `.prettierrc` (`trailingComma: es5`, `printWidth` 100) — call-argument lists carry no trailing comma and the `require('../slugify')` destructuring prints on one line | repair-1 diff on `tools/ai-brain/test/proof-slugify.test.js`; host `prettier --check` re-run over `git diff --name-only 2ae45e5b..HEAD` |
 
 ## Verification Commands
 
 - `node --test tools/ai-brain/test/proof-slugify.test.js` — 13 pass, 0 fail
 - `node --test "tools/ai-brain/test/*.test.js"` — 1557 pass, 48 fail, none of them related to this Work Item (see below)
 - `git diff --check`
+- `prettier --check --ignore-unknown -- <changed files>` — the host format gate (DT-R02) over `git diff --name-only 2ae45e5b..HEAD`; repair 1's edits are verified by this re-run
 
 ## Fail-Before / Pass-After
 
 - Fail-before: `node --test tools/ai-brain/test/proof-slugify.test.js` fails with `Cannot find module '../slugify'` (watched and recorded before implementation).
 - Pass-after: 13 pass, 0 fail on the same command.
+- Repair 1 fail-before: the host format gate recorded `FORMAT_CHECK_FAILED` (open) over the changed files of `7eae7f87`.
+- Repair 1 pass-after: the same test command still reports 13 pass, 0 fail and the changed files match the `.prettierrc` print rules; the host `prettier --check` re-run is the pass evidence.
 
 ## Residual Limitations
 
 - `branchNameFor` caps each slug at 48 characters but does not cap the composed branch name; the worst case is `kind/` + 48 + 1 + 48 characters.
 - `branchNameFor` accepts any kind that slugs cleanly (it does not restrict to `feat`/`fix`); callers own the branch-prefix policy.
 - A title that is present but slugs to nothing is refused rather than dropped, so `branchNameFor('feat', 'TASK-AI-111', '!!!')` throws instead of silently returning `feat/task-ai-111`.
-- `node_modules` is not installed in this workspace, so `prettier --check` could not be run; formatting follows `.prettierrc` by hand and no format gate was executed here.
+- `node_modules` is not installed in this workspace, so `prettier --check` cannot be run locally; repair 1 removed the hand-formatting drift the format gate found (call-argument trailing commas that `trailingComma: es5` forbids, and a destructuring that `printWidth` 100 fits on one line), and the host format gate re-run over the changed files is the verification.
 - The brain suite run carries 48 pre-existing failures in files outside this Work Item's allowed paths (publisher refusal expectations, `regression 10: discovery source and test files pass prettier format check` which cannot `require('prettier')` without `node_modules`, `PowerShell WhatIf runs without changes`, gateway and isolation cases). No failing test imports `tools/ai-brain/slugify.js`; this Work Item adds new files only and touches no module those tests read.
