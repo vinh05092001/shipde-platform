@@ -306,5 +306,22 @@ export interface QueueSmokePayload {
   metadata?: Record<string, unknown>;
 }
 
+// --- Session Management Contracts (FEAT-AUTH-06) ---
+import { components } from './openapi';
+
+export const SessionStatus = {
+  ACTIVE: 'ACTIVE',
+  REVOKED: 'REVOKED',
+  EXPIRED: 'EXPIRED',
+  INACTIVE: 'INACTIVE',
+} as const;
+
+export type SessionStatus = components['schemas']['SessionInfo']['status'];
+export type SessionInfo = components['schemas']['SessionInfo'];
+export type SessionListResponse = components['schemas']['ListSessionsResponse'];
+export type SessionRevokeResponse = components['schemas']['RevokeSessionResponse'];
+export type SessionRevokeAllResponse = components['schemas']['RevokeAllSessionsResponse'];
+export type SessionHeartbeatResponse = components['schemas']['HeartbeatSessionResponse'];
+
 // --- Generated OpenAPI Schema Types ---
 export type * from './openapi';

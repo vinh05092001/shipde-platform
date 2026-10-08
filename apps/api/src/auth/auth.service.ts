@@ -6,7 +6,7 @@ import {
   HttpStatus,
   Optional,
 } from '@nestjs/common';
-import { randomBytes, createHash, randomInt, createHmac } from 'node:crypto';
+import { randomBytes, createHash, randomInt, randomUUID, createHmac } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { RateLimitService } from './rate-limit.service';
 import { hashPassword, verifyPassword } from './password.util';
@@ -1197,8 +1197,14 @@ export class AuthService {
       }
 
       await tx.deviceSession.updateMany({
-        where: { user_id: tokenRecord.user_id, is_revoked: false },
-        data: { is_revoked: true },
+        where: { user_id: tokenRecord.user_id, status: 'ACTIVE' },
+        data: {
+          status: 'REVOKED',
+          is_revoked: true,
+          revoked_at: new Date(),
+          revoked_by: tokenRecord.user_id,
+          revoke_reason: 'Password reset',
+        },
       });
     });
 
@@ -1982,19 +1988,20 @@ export class AuthService {
     const ttlSeconds = this.config?.AUTH_TOKEN_TTL_SECONDS ?? 43200;
     const merchant = user.merchant;
 
-    const session = await this.prisma.deviceSession.create({
-      data: {
-        user_id: user.id,
-        device_id: rememberDevice ? 'web-remember' : 'web-session',
-        last_active_at: new Date(),
-      },
-    });
-
+    // FEAT-AUTH-06 made merchant_id, session_token_hash and expires_at required
+    // on DeviceSession, and this login path still created a row without them.
+    //
+    // The hash has to be the hash of the token the client will actually present,
+    // or the row can never be matched and the session is unusable while still
+    // reading as ACTIVE. The token needs the session id to sign, and the id used
+    // to come from the insert — so the id is minted here instead, the token is
+    // signed against it, and the row is written once with a hash that matches.
+    const sessionId = randomUUID();
     const secret = resolveAccessTokenSecret(this.config?.AUTH_TOKEN_SECRET);
     const { token } = signAccessToken(
       {
         sub: user.id,
-        sid: session.id,
+        sid: sessionId,
         mid: user.merchant_id,
         role: user.role,
         st: user.status,
@@ -2002,6 +2009,19 @@ export class AuthService {
       secret,
       ttlSeconds
     );
+
+    const session = await this.prisma.deviceSession.create({
+      data: {
+        id: sessionId,
+        user_id: user.id,
+        merchant_id: user.merchant_id,
+        session_token_hash: createHash('sha256').update(token).digest('hex'),
+        device_id: rememberDevice ? 'web-remember' : 'web-session',
+        last_active_at: new Date(),
+        expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+        ip_address: this.hashIp(clientIp),
+      },
+    });
 
     await this.logAudit({
       merchantId: user.merchant_id,
