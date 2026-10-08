@@ -226,6 +226,8 @@ async function runAuthSupertestSuite() {
         status: 'active',
         email_verified_at: new Date(),
         full_name: 'Verified User 5',
+        role: 'OWNER',
+        merchant_id: res1.body.data.merchant_id,
       },
     });
 
@@ -334,6 +336,8 @@ async function runAuthSupertestSuite() {
         password_hash: await hashPassword('SecurePassword123!'),
         status: 'pending_verification',
         full_name: 'Pending User 8',
+        role: 'OWNER',
+        merchant_id: res1.body.data.merchant_id,
       },
     });
     const expiredToken8 = `expired-token-${testSuffix}`;
@@ -369,6 +373,8 @@ async function runAuthSupertestSuite() {
         password_hash: await hashPassword('SecurePassword123!'),
         status: 'active',
         full_name: 'Pending User 9',
+        role: 'OWNER',
+        merchant_id: res1.body.data.merchant_id,
       },
     });
     const consumedToken9 = `consumed-token-${testSuffix}`;
@@ -447,6 +453,8 @@ async function runAuthSupertestSuite() {
         password_hash: await hashPassword('SecurePassword123!'),
         status: 'pending_verification',
         full_name: 'Pending User 11',
+        role: 'OWNER',
+        merchant_id: res1.body.data.merchant_id,
       },
     });
 
@@ -711,6 +719,8 @@ async function runAuthSupertestSuite() {
         password_hash: await hashPassword('SecurePassword123!'),
         status: 'pending_verification',
         full_name: 'Unverified User 19c',
+        role: 'OWNER',
+        merchant_id: res1.body.data.merchant_id,
       },
     });
     let auditLogMessage19c = '';
