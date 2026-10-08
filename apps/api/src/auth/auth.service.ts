@@ -6,7 +6,7 @@ import {
   HttpStatus,
   Optional,
 } from '@nestjs/common';
-import { randomBytes, createHash, randomInt } from 'node:crypto';
+import { randomBytes, createHash, randomInt, createHmac } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { RateLimitService } from './rate-limit.service';
 import { hashPassword, verifyPassword } from './password.util';
@@ -346,7 +346,10 @@ export class AuthService {
       actor: this.hashIp(clientIp),
       action: 'AUTH_REGISTER_SUCCESS',
       resource: `user:${user.id}`,
-      details: { email: user.email, phone: user.phone },
+      details: {
+        email: user.email ? this.hashIdentifierForAudit(user.email) : undefined,
+        phone: user.phone ? this.hashIdentifierForAudit(user.phone) : undefined,
+      },
       correlationId,
       ipAddress: this.hashIp(clientIp),
     });
@@ -856,7 +859,7 @@ export class AuthService {
       meta: { correlation_id: correlationId },
     };
 
-    const hashedIdentifierRef = this.hashSecret(normalizedIdentifier).substring(0, 16);
+    const hashedIdentifierRef = this.hashIdentifierForAudit(normalizedIdentifier);
 
     if (!user) {
       await this.logAudit({
@@ -2117,6 +2120,11 @@ export class AuthService {
 
   private hashSecret(secret: string): string {
     return createHash('sha256').update(secret).digest('hex');
+  }
+
+  private hashIdentifierForAudit(identifier: string): string {
+    const key = this.config?.AUDIT_IDENTIFIER_HMAC_KEY || 'default-dev-audit-hmac-key-override-32-chars';
+    return createHmac('sha256', key).update(identifier).digest('hex').substring(0, 16);
   }
 
   private hashIp(ip: string): string {

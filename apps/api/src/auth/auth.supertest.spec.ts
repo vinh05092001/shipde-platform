@@ -280,22 +280,35 @@ async function runAuthSupertestSuite() {
     // -------------------------------------------------------------------------
     console.log('[TEST 7 / AC-AUTH-02-07] Verify with valid token transitions to ACTIVE');
     const validToken = sent6[0].token!;
-    const res7 = await request(app.getHttpServer())
-      .post('/auth/verify-email')
-      .send({ token: validToken })
-      .expect(200);
+    const originalConsoleLog7 = console.log;
+    let verifyLogOutput = '';
+    console.log = (...args: any[]) => {
+      verifyLogOutput += JSON.stringify(args);
+      originalConsoleLog7(...args);
+    };
 
-    assert.strictEqual(res7.body.data.status, 'ACTIVE');
-    assert.strictEqual(res7.body.data.verified, true);
-    assert.strictEqual(res7.body.data.channel, 'email');
+    try {
+      const res7 = await request(app.getHttpServer())
+        .post('/auth/verify-email')
+        .send({ token: validToken })
+        .expect(200);
 
-    // Check DB state
-    const verifiedUser = await prisma.user.findUnique({
-      where: { id: res7.body.data.user_id },
-    });
-    assert.strictEqual(verifiedUser?.status, 'active');
-    assert.ok(verifiedUser?.email_verified_at, 'email_verified_at must be populated');
-    console.log('  PASS: AC-AUTH-02-07 Valid token transitioned user to active status');
+      assert.strictEqual(res7.body.data.status, 'ACTIVE');
+      assert.strictEqual(res7.body.data.verified, true);
+      assert.strictEqual(res7.body.data.channel, 'email');
+
+      // Check DB state
+      const verifiedUser = await prisma.user.findUnique({
+        where: { id: res7.body.data.user_id },
+      });
+      assert.strictEqual(verifiedUser?.status, 'active');
+      assert.ok(verifiedUser?.email_verified_at, 'email_verified_at must be populated');
+
+      assert.ok(!verifyLogOutput.includes(email1), 'Verify logs must not contain raw email');
+    } finally {
+      console.log = originalConsoleLog7;
+    }
+    console.log('  PASS: AC-AUTH-02-07 Valid token transitioned user to active status and protected PII');
 
     // -------------------------------------------------------------------------
     // AC-AUTH-02-08: Verify with expired token -> 410 TOKEN_EXPIRED
@@ -568,29 +581,31 @@ async function runAuthSupertestSuite() {
     console.log = (...args: any[]) => {
       const msg = typeof args[0] === 'string' ? args[0] : JSON.stringify(args);
       if (msg.includes('AUTH_FORGOT_PASSWORD_NO_USER')) {
-        auditLogMessage19a += msg;
+        auditLogMessage19a += JSON.stringify(args);
       }
       originalConsoleLog(...args);
     };
 
-    const res19a = await request(app.getHttpServer())
-      .post('/auth/forgot-password')
-      .set('x-forwarded-for', '203.0.113.10')
-      .send({ identifier: nonExistentEmail })
-      .expect(200);
+    try {
+      const res19a = await request(app.getHttpServer())
+        .post('/auth/forgot-password')
+        .set('x-forwarded-for', '203.0.113.10')
+        .send({ identifier: nonExistentEmail })
+        .expect(200);
 
-    console.log = originalConsoleLog;
-
-    assert.strictEqual(res19a.body.data.status, 'SENT');
-    assert.strictEqual(res19a.body.data.channel, 'email');
-    assert.ok(
-      auditLogMessage19a.includes('AUTH_FORGOT_PASSWORD_NO_USER'),
-      'Must log AUTH_FORGOT_PASSWORD_NO_USER'
-    );
-    assert.ok(
-      !auditLogMessage19a.includes('nonexistent'),
-      'Audit log must not contain raw identifier'
-    );
+      assert.strictEqual(res19a.body.data.status, 'SENT');
+      assert.strictEqual(res19a.body.data.channel, 'email');
+      assert.ok(
+        auditLogMessage19a.includes('AUTH_FORGOT_PASSWORD_NO_USER'),
+        'Must log AUTH_FORGOT_PASSWORD_NO_USER'
+      );
+      assert.ok(
+        !auditLogMessage19a.includes(nonExistentEmail),
+        'Audit log console args must not contain raw email'
+      );
+    } finally {
+      console.log = originalConsoleLog;
+    }
     console.log('  PASS: Non-existent email returned generic SENT and protected PII in audit logs');
 
     // 19b. Non-existent phone returns generic 200 SENT (anti-enumeration)
@@ -599,54 +614,67 @@ async function runAuthSupertestSuite() {
     console.log = (...args: any[]) => {
       const msg = typeof args[0] === 'string' ? args[0] : JSON.stringify(args);
       if (msg.includes('AUTH_FORGOT_PASSWORD_NO_USER')) {
-        auditLogMessage19b += msg;
+        auditLogMessage19b += JSON.stringify(args);
       }
       originalConsoleLog(...args);
     };
 
-    const res19b = await request(app.getHttpServer())
-      .post('/auth/forgot-password')
-      .set('x-forwarded-for', '203.0.113.11')
-      .send({ identifier: nonExistentPhone })
-      .expect(200);
+    try {
+      const res19b = await request(app.getHttpServer())
+        .post('/auth/forgot-password')
+        .set('x-forwarded-for', '203.0.113.11')
+        .send({ identifier: nonExistentPhone })
+        .expect(200);
 
-    console.log = originalConsoleLog;
-
-    assert.strictEqual(res19b.body.data.status, 'SENT');
-    assert.strictEqual(res19b.body.data.channel, 'phone');
-    assert.ok(
-      auditLogMessage19b.includes('AUTH_FORGOT_PASSWORD_NO_USER'),
-      'Must log AUTH_FORGOT_PASSWORD_NO_USER'
-    );
-    assert.ok(
-      !auditLogMessage19b.includes(nonExistentPhone),
-      'Audit log must not contain raw phone'
-    );
+      assert.strictEqual(res19b.body.data.status, 'SENT');
+      assert.strictEqual(res19b.body.data.channel, 'phone');
+      assert.ok(
+        auditLogMessage19b.includes('AUTH_FORGOT_PASSWORD_NO_USER'),
+        'Must log AUTH_FORGOT_PASSWORD_NO_USER'
+      );
+      assert.ok(
+        !auditLogMessage19b.includes(nonExistentPhone),
+        'Audit log console args must not contain raw phone'
+      );
+    } finally {
+      console.log = originalConsoleLog;
+    }
     console.log('  PASS: Non-existent phone returned generic SENT and protected PII in audit logs');
 
     // 19c. Unverified user returns generic 200 SENT (anti-enumeration)
     const unverifiedEmail = `unverified.${testSuffix}@shipde.vn`;
-    const res19c = await request(app.getHttpServer())
-      .post('/auth/forgot-password')
-      .set('x-forwarded-for', '203.0.113.12')
-      .send({ identifier: unverifiedEmail })
-      .expect(200);
-    assert.strictEqual(res19c.body.data.status, 'SENT');
+    let auditLogMessage19c = '';
+    console.log = (...args: any[]) => {
+      const msg = typeof args[0] === 'string' ? args[0] : JSON.stringify(args);
+      if (msg.includes('AUTH_FORGOT_PASSWORD_UNVERIFIED')) {
+        auditLogMessage19c += JSON.stringify(args);
+      }
+      originalConsoleLog(...args);
+    };
 
-    const unverifiedUser = await prisma.user.findUnique({ where: { email: unverifiedEmail } });
-    if (unverifiedUser) {
+    try {
+      const res19c = await request(app.getHttpServer())
+        .post('/auth/forgot-password')
+        .set('x-forwarded-for', '203.0.113.12')
+        .send({ identifier: unverifiedEmail })
+        .expect(200);
+      assert.strictEqual(res19c.body.data.status, 'SENT');
+
+      const unverifiedUser = await prisma.user.findUnique({ where: { email: unverifiedEmail } });
+      assert.ok(unverifiedUser, 'Unverified user must exist');
+
       const auditLogs19c = await prisma.auditLog.findMany({
         where: { user_id: unverifiedUser.id, action: 'AUTH_FORGOT_PASSWORD_UNVERIFIED' },
         orderBy: { created_at: 'desc' },
         take: 1,
       });
-      if (auditLogs19c.length > 0) {
-        const detailsStr = JSON.stringify(auditLogs19c[0].new_value || {});
-        assert.ok(
-          !detailsStr.includes('unverified.'),
-          'Audit log details must not contain raw email'
-        );
-      }
+      assert.strictEqual(auditLogs19c.length, 1, 'Audit log must be created');
+
+      const fullAuditRow = JSON.stringify(auditLogs19c[0]);
+      assert.ok(!fullAuditRow.includes(unverifiedEmail), 'Audit log row must not contain raw email');
+      assert.ok(!auditLogMessage19c.includes(unverifiedEmail), 'Console args must not contain raw email');
+    } finally {
+      console.log = originalConsoleLog;
     }
     console.log(
       '  PASS: Unverified user returned generic SENT (anti-enumeration) and protected PII in audit logs'
@@ -801,20 +829,31 @@ async function runAuthSupertestSuite() {
     console.log('[TEST 21 / FEAT-AUTH-04] Reset password');
 
     // 21a. Valid token + strong matching password → 200, token consumed, sessions revoked
-    const res21a = await request(app.getHttpServer())
-      .post('/auth/reset-password')
-      .set('x-forwarded-for', '203.0.113.13')
-      .send({
-        token: resetToken19d,
-        password: 'NewPassword123!',
-        password_confirm: 'NewPassword123!',
-      })
-      .expect(200);
-    assert.strictEqual(
-      res21a.body.data.message,
-      'Mật khẩu đã được đặt lại thành công. Tất cả phiên đăng nhập khác đã bị thu hồi.'
-    );
-    console.log('  PASS: Valid reset succeeded, token consumed, sessions revoked');
+    let resetLogOutput = '';
+    console.log = (...args: any[]) => {
+      resetLogOutput += JSON.stringify(args);
+      originalConsoleLog(...args);
+    };
+
+    try {
+      const res21a = await request(app.getHttpServer())
+        .post('/auth/reset-password')
+        .set('x-forwarded-for', '203.0.113.13')
+        .send({
+          token: resetToken19d,
+          password: 'NewPassword123!',
+          password_confirm: 'NewPassword123!',
+        })
+        .expect(200);
+      assert.strictEqual(
+        res21a.body.data.message,
+        'Mật khẩu đã được đặt lại thành công. Tất cả phiên đăng nhập khác đã bị thu hồi.'
+      );
+      assert.ok(!resetLogOutput.includes(email1), 'Reset logs must not contain raw email');
+    } finally {
+      console.log = originalConsoleLog;
+    }
+    console.log('  PASS: Valid reset succeeded, token consumed, sessions revoked, PII protected');
 
     // 21b. Reuse consumed token → 400 TOKEN_ALREADY_USED
     const res21b = await request(app.getHttpServer())

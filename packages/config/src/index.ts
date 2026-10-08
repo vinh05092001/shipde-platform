@@ -43,6 +43,8 @@ export interface AppConfig {
   PASSWORD_RESET_TTL_SECONDS: number;
   /** Frontend URL for building links in emails/SMS */
   FRONTEND_URL: string;
+  /** HMAC secret for audit log identifier hashes. Required in production. */
+  AUDIT_IDENTIFIER_HMAC_KEY: string;
 }
 
 export class ConfigValidationError extends Error {
@@ -245,6 +247,14 @@ export function validateConfig(rawEnv: NodeJS.ProcessEnv = process.env): AppConf
     invalidFields.push('PASSWORD_RESET_TTL_SECONDS (must be positive number)');
   }
 
+  const auditHmacKeyRaw = rawEnv.AUDIT_IDENTIFIER_HMAC_KEY;
+  if (NODE_ENV === 'production') {
+    if (!auditHmacKeyRaw || auditHmacKeyRaw.trim().length < 32) {
+      invalidFields.push('AUDIT_IDENTIFIER_HMAC_KEY (required in production with at least 32 characters)');
+    }
+  }
+  const AUDIT_IDENTIFIER_HMAC_KEY = auditHmacKeyRaw || 'default-dev-audit-hmac-key-override-32-chars';
+
   const FRONTEND_URL =
     rawEnv.FRONTEND_URL ||
     (NODE_ENV === 'production' ? 'https://shipde.vn' : 'http://localhost:3000');
@@ -273,6 +283,7 @@ export function validateConfig(rawEnv: NodeJS.ProcessEnv = process.env): AppConf
     AUTH_TOKEN_TTL_SECONDS,
     AUTH_LOGIN_OTP_ENABLED,
     PASSWORD_RESET_TTL_SECONDS,
+    AUDIT_IDENTIFIER_HMAC_KEY,
     FRONTEND_URL,
   };
 }
