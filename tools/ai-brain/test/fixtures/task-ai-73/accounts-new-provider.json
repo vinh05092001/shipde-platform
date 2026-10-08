@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "accounts": [
+    {
+      "id": "aurora-main",
+      "provider": "aurora",
+      "sourceId": "aurora",
+      "enabled": true,
+      "tier": 1,
+      "limits": {},
+      "capabilities": { "tools": true, "contextWindow": 128000 },
+      "cost": { "inputPerMillion": 2.5, "outputPerMillion": 10 },
+      "models": [{ "model": "aurora/aurora-coder-xl", "quality": 92 }]
+    }
+  ]
+}

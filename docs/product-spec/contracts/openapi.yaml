@@ -152,6 +152,91 @@ paths:
           $ref: '#/components/responses/Error'
         '429':
           $ref: '#/components/responses/RateLimited'
+  /auth/forgot-password:
+    post:
+      tags:
+        - Auth
+      summary: Request password reset link (FEAT-AUTH-04)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                identifier:
+                  type: string
+                  description: Email or phone number
+                channel:
+                  type: string
+                  enum: [email, phone]
+              required:
+                - identifier
+      responses:
+        '200':
+          description: Link sent
+        '429':
+          description: Rate limited
+
+  /auth/verify-reset-token:
+    post:
+      tags:
+        - Auth
+      summary: Verify password reset token (FEAT-AUTH-04)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                token:
+                  type: string
+              required:
+                - token
+      responses:
+        '200':
+          description: Token valid
+        '400':
+          description: Invalid, expired, or consumed token
+        '403':
+          description: Account locked
+
+  /auth/reset-password:
+    post:
+      tags:
+        - Auth
+      summary: Reset password using token (FEAT-AUTH-04)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                token:
+                  type: string
+                password:
+                  type: string
+                password_confirm:
+                  type: string
+              required:
+                - token
+                - password
+                - password_confirm
+      responses:
+        '200':
+          description: Password updated and sessions revoked
+        '400':
+          description: Invalid token or password mismatch
+        '403':
+          description: Account locked
+        '429':
+          description: Rate limited
+
   /auth/login:
     post:
       tags: [Auth]

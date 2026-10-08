@@ -179,6 +179,9 @@ export function createValidTestConfig(overrides: Partial<AppConfig> = {}): AppCo
     LOG_LEVEL: 'info',
     AUTH_TOKEN_TTL_SECONDS: 43200,
     AUTH_LOGIN_OTP_ENABLED: false,
+    PASSWORD_RESET_TTL_SECONDS: 3600,
+    FRONTEND_URL: 'http://localhost:3000',
+    AUDIT_IDENTIFIER_HMAC_KEY: 'test-audit-hmac-key-placeholder-32-chars',
     ...overrides,
   };
 }

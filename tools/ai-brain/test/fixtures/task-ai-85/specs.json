@@ -1,0 +1,10 @@
+[
+  {
+    "id": "TASK-AI-85-ITEM",
+    "roleRequirement": { "role": "writer" },
+    "files": ["tools/ai-brain/cli.js"],
+    "acceptanceCriteria": ["live orchestrate CLI loads evidence store"],
+    "proofFloor": "WORK_ITEM_PASS",
+    "verification": { "command": "node -e \"process.exit(0)\"", "expect": "" }
+  }
+]

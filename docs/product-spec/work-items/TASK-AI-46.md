@@ -13,8 +13,8 @@
 | Risk | `LOW` |
 | Allowed paths | `docs/product-spec/work-items/TASK-AI-46.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`, `tools/ai-brain/benchmarks.json`, `tools/ai-brain/benchmarks.js`, `tools/ai-brain/fitness.js`, `tools/ai-brain/offerings.js`, `tools/ai-brain/seed-accounts.js`, `tools/ai-brain/acceptance/ac-46-*.js`, `tools/ai-brain/test/benchmarks.test.js` |
 | Reviewer | `Codex — fresh independent task` |
-| Branch | `fix/task-ai-46-evidence-join` (successor of the closed chain #106 → #107 → #114) |
-| Pull Request | https://github.com/vinh05092001/shipde-platform/pull/116 |
+| Branch | `feat/task-ai-46-capability-table-104730` |
+| Pull Request | https://github.com/vinh05092001/shipde-platform/pull/106 |
 | Delivery register row | `FEATURE-DELIVERY-REGISTER.csv` line 180 (`delivery_order` 178) |
 | Original author | `GEMINI` |
 | Repair author | `CLAUDE` — review repair, rounds 2–5 (AGENTS.md § Role separation) |

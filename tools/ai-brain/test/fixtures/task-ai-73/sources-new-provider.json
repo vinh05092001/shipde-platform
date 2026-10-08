@@ -1,0 +1,43 @@
+{
+  "version": 2,
+  "updatedAt": "2026-10-04",
+  "note": "Fixture for TASK-AI-73: adding a new source/model by data only.",
+  "sources": [
+    {
+      "id": "9router",
+      "label": "9Router",
+      "kind": "router",
+      "servesModels": true,
+      "harness": "paseo",
+      "endpoint": "http://127.0.0.1:20128/v1",
+      "credential": { "type": "api-key", "env": "NINEROUTER_API_KEY" }
+    },
+    {
+      "id": "jev",
+      "label": "Jev",
+      "kind": "decision-service",
+      "servesModels": false,
+      "endpoint": "https://api.typesafe.ai/v1/systemone",
+      "model": "jev-latest",
+      "credential": { "type": "api-key", "env": "TYPESAFE_API_KEY", "store": "~/.typesafe-key" },
+      "verify": { "method": "closed-question" },
+      "mayWriteCode": false,
+      "minConfidence": 0.7
+    },
+    {
+      "id": "aurora",
+      "label": "Aurora Compute",
+      "kind": "model-source",
+      "servesModels": true,
+      "endpoint": "https://api.aurora-ai.net/v1",
+      "credential": { "type": "api-key", "env": "AURORA_API_KEY" },
+      "verify": { "method": "completion" }
+    }
+  ],
+  "dispatch": {
+    "providers": {
+      "aurora": { "harness": "paseo", "provider": "aurora" }
+    }
+  },
+  "retired": []
+}

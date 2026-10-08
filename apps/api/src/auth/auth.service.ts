@@ -6,7 +6,7 @@ import {
   HttpStatus,
   Optional,
 } from '@nestjs/common';
-import { randomBytes, createHash, randomInt, randomUUID } from 'node:crypto';
+import { randomBytes, createHash, randomInt, randomUUID, createHmac } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { RateLimitService } from './rate-limit.service';
 import { hashPassword, verifyPassword } from './password.util';
@@ -41,6 +41,21 @@ export interface ResendVerificationDto {
   channel: 'email' | 'phone';
 }
 
+export interface ForgotPasswordDto {
+  identifier: string;
+  channel?: 'email' | 'phone';
+}
+
+export interface VerifyResetTokenDto {
+  token: string;
+}
+
+export interface ResetPasswordDto {
+  token: string;
+  password: string;
+  password_confirm: string;
+}
+
 export interface LoginDto {
   identifier: string;
   password: string;
@@ -72,7 +87,8 @@ export class CanonicalApiException extends HttpException {
     message: string,
     public readonly retryable = false,
     public readonly next_action?: string,
-    public readonly fields?: CanonicalFieldError[]
+    public readonly fields?: CanonicalFieldError[],
+    public readonly retryAfterSeconds?: number
   ) {
     super(
       {
@@ -82,6 +98,7 @@ export class CanonicalApiException extends HttpException {
           retryable,
           next_action,
           fields,
+          ...(retryAfterSeconds !== undefined && { cooldown_seconds: retryAfterSeconds }),
         },
       },
       statusCode
@@ -202,7 +219,9 @@ export class AuthService {
         'RATE_LIMITED',
         rateLimitCheck.reason || 'Quá nhiều yêu cầu đăng ký. Vui lòng thử lại sau.',
         true,
-        `Vui lòng chờ ${rateLimitCheck.retryAfterSeconds || 3600} giây trước khi thử lại`
+        `Vui lòng chờ ${rateLimitCheck.retryAfterSeconds || 3600} giây trước khi thử lại`,
+        undefined,
+        rateLimitCheck.retryAfterSeconds
       );
     }
 
@@ -327,7 +346,10 @@ export class AuthService {
       actor: this.hashIp(clientIp),
       action: 'AUTH_REGISTER_SUCCESS',
       resource: `user:${user.id}`,
-      details: { email: user.email, phone: user.phone },
+      details: {
+        email: user.email ? this.hashIdentifierForAudit(user.email) : undefined,
+        phone: user.phone ? this.hashIdentifierForAudit(user.phone) : undefined,
+      },
       correlationId,
       ipAddress: this.hashIp(clientIp),
     });
@@ -470,7 +492,9 @@ export class AuthService {
         'RATE_LIMITED',
         otpLimit.reason || 'Quá nhiều lần thử mã OTP không chính xác. Vui lòng yêu cầu mã mới.',
         true,
-        `Vui lòng chờ ${otpLimit.retryAfterSeconds || 900} giây`
+        `Vui lòng chờ ${otpLimit.retryAfterSeconds || 900} giây`,
+        undefined,
+        otpLimit.retryAfterSeconds
       );
     }
 
@@ -617,7 +641,9 @@ export class AuthService {
         'RATE_LIMITED',
         rateCheck.reason || 'Vui lòng chờ trước khi yêu cầu gửi lại mã',
         true,
-        `Vui lòng chờ ${rateCheck.retryAfterSeconds || 60} giây`
+        `Vui lòng chờ ${rateCheck.retryAfterSeconds || 60} giây`,
+        undefined,
+        rateCheck.retryAfterSeconds
       );
     }
 
@@ -738,6 +764,486 @@ export class AuthService {
   }
 
   /**
+   * FEAT-AUTH-04: Forgot Password - Request Password Reset Token
+   * Anti-enumeration: always returns 200 SENT regardless of account existence
+   * Rate limited: 5 requests/hour per IP, 3 requests/hour per identifier
+   */
+  async forgotPassword(dto: ForgotPasswordDto, clientIp: string, correlationId: string) {
+    const identifier = dto.identifier?.trim();
+    if (!identifier) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Email hoặc số điện thoại không được để trống',
+        false,
+        undefined,
+        [
+          {
+            field: 'identifier',
+            code: 'REQUIRED',
+            message: 'Vui lòng nhập email hoặc số điện thoại',
+          },
+        ]
+      );
+    }
+
+    const isEmail = identifier.includes('@');
+    const channel = dto.channel || (isEmail ? 'email' : 'phone');
+    const normalizedIdentifier = isEmail
+      ? identifier.toLowerCase()
+      : identifier.replace(/\s+/g, '');
+
+    if (channel === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedIdentifier)) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Định dạng email không hợp lệ',
+        false,
+        undefined,
+        [{ field: 'identifier', code: 'INVALID_FORMAT', message: 'Định dạng email không hợp lệ' }]
+      );
+    }
+    if (channel === 'phone' && !/^(0|\+84)[3|5|7|8|9][0-9]{8}$/.test(normalizedIdentifier)) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Số điện thoại không hợp lệ (định dạng Việt Nam: 0xxxxxxxxx hoặc +84xxxxxxxxx)',
+        false,
+        undefined,
+        [{ field: 'identifier', code: 'INVALID_FORMAT', message: 'Số điện thoại không hợp lệ' }]
+      );
+    }
+
+    const ipRateCheck = await this.rateLimitService.checkForgotPasswordLimit(clientIp, 'ip');
+    if (!ipRateCheck.allowed) {
+      throw new CanonicalApiException(
+        HttpStatus.TOO_MANY_REQUESTS,
+        'RATE_LIMITED',
+        `Quá nhiều yêu cầu. Vui lòng thử lại sau ${ipRateCheck.retryAfterSeconds} giây.`,
+        true,
+        `Thử lại sau ${ipRateCheck.retryAfterSeconds} giây`,
+        undefined,
+        ipRateCheck.retryAfterSeconds
+      );
+    }
+
+    const identifierRateCheck = await this.rateLimitService.checkForgotPasswordLimit(
+      normalizedIdentifier,
+      'identifier'
+    );
+    if (!identifierRateCheck.allowed) {
+      throw new CanonicalApiException(
+        HttpStatus.TOO_MANY_REQUESTS,
+        'RATE_LIMITED',
+        `Quá nhiều yêu cầu cho tài khoản này. Vui lòng thử lại sau ${identifierRateCheck.retryAfterSeconds} giây.`,
+        true,
+        `Thử lại sau ${identifierRateCheck.retryAfterSeconds} giây`,
+        undefined,
+        identifierRateCheck.retryAfterSeconds
+      );
+    }
+
+    await this.rateLimitService.recordForgotPasswordAttempt(clientIp, normalizedIdentifier);
+
+    const user = await this.prisma.user.findFirst({
+      where:
+        channel === 'email' ? { email: normalizedIdentifier } : { phone: normalizedIdentifier },
+    });
+
+    const genericResponse = {
+      data: {
+        status: 'SENT' as const,
+        message: 'Nếu tài khoản tồn tại và đã xác thực, liên kết đặt lại mật khẩu đã được gửi.',
+        channel,
+      },
+      meta: { correlation_id: correlationId },
+    };
+
+    const hashedIdentifierRef = this.hashIdentifierForAudit(normalizedIdentifier);
+
+    if (!user) {
+      await this.logAudit({
+        actor: this.hashIp(clientIp),
+        action: 'AUTH_FORGOT_PASSWORD_NO_USER',
+        resource: `identifier:${hashedIdentifierRef}`,
+        correlationId,
+        ipAddress: this.hashIp(clientIp),
+        details: { identifier: hashedIdentifierRef, channel, reason: 'user_not_found' },
+      });
+      return genericResponse;
+    }
+
+    if (user.status !== 'active') {
+      await this.logAudit({
+        merchantId: user.merchant_id,
+        userId: user.id,
+        actor: this.hashIp(clientIp),
+        action: 'AUTH_FORGOT_PASSWORD_BLOCKED',
+        resource: `user:${user.id}`,
+        correlationId,
+        ipAddress: this.hashIp(clientIp),
+        details: { reason: user.status },
+      });
+      return genericResponse;
+    }
+
+    const isVerified =
+      channel === 'email' ? user.email_verified_at !== null : user.phone_verified_at !== null;
+
+    if (!isVerified) {
+      await this.logAudit({
+        merchantId: user.merchant_id,
+        userId: user.id,
+        actor: this.hashIp(clientIp),
+        action: 'AUTH_FORGOT_PASSWORD_UNVERIFIED',
+        resource: `user:${user.id}`,
+        correlationId,
+        ipAddress: this.hashIp(clientIp),
+        details: { identifier: hashedIdentifierRef, channel, reason: 'contact_not_verified' },
+      });
+      return genericResponse;
+    }
+
+    const rawToken = randomBytes(32).toString('hex');
+    const hashedToken = this.hashSecret(rawToken);
+    const ttlSeconds = this.config?.PASSWORD_RESET_TTL_SECONDS || 3600;
+    const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
+
+    await this.prisma.passwordResetToken.create({
+      data: {
+        user_id: user.id,
+        token: hashedToken,
+        channel,
+        identifier: normalizedIdentifier,
+        expires_at: expiresAt,
+      },
+    });
+
+    if (this.deliveryAdapter) {
+      const baseUrl = this.config?.FRONTEND_URL || 'http://localhost:3000';
+      await this.deliveryAdapter.sendVerification({
+        channel,
+        recipient: normalizedIdentifier,
+        purpose: 'password_reset',
+        link: `${baseUrl}/reset-password?token=${rawToken}`,
+      });
+    }
+
+    await this.logAudit({
+      merchantId: user.merchant_id,
+      userId: user.id,
+      actor: this.hashIp(clientIp),
+      action: 'AUTH_FORGOT_PASSWORD_TOKEN_ISSUED',
+      resource: `user:${user.id}`,
+      correlationId,
+      ipAddress: this.hashIp(clientIp),
+      details: { channel, expires_at: expiresAt.toISOString() },
+    });
+
+    return genericResponse;
+  }
+
+  /**
+   * FEAT-AUTH-04: Verify Reset Token
+   * Validates token exists, not expired, not consumed
+   * Returns identifier and channel for UI confirmation
+   */
+  async verifyResetToken(dto: VerifyResetTokenDto, clientIp: string, correlationId: string) {
+    const rawToken = dto.token?.trim();
+    if (!rawToken) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Token không được để trống',
+        false,
+        undefined,
+        [{ field: 'token', code: 'REQUIRED', message: 'Token không được để trống' }]
+      );
+    }
+
+    const resetLimit = await this.rateLimitService.checkResetTokenLimit(clientIp);
+    if (!resetLimit.allowed) {
+      throw new CanonicalApiException(
+        HttpStatus.TOO_MANY_REQUESTS,
+        'RATE_LIMITED',
+        resetLimit.reason || 'Quá nhiều yêu cầu. Vui lòng thử lại sau.',
+        true,
+        `Thử lại sau ${resetLimit.retryAfterSeconds} giây`,
+        undefined,
+        resetLimit.retryAfterSeconds
+      );
+    }
+
+    const hashedToken = this.hashSecret(rawToken);
+    const tokenRecord = await this.prisma.passwordResetToken.findUnique({
+      where: { token: hashedToken },
+      include: { user: true },
+    });
+
+    if (!tokenRecord) {
+      await this.rateLimitService.recordResetTokenFailure(clientIp);
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'INVALID_TOKEN',
+        'Liên kết đặt lại mật khẩu không hợp lệ hoặc đã hết hạn',
+        false,
+        'Vui lòng yêu cầu liên kết đặt lại mật khẩu mới'
+      );
+    }
+
+    if (tokenRecord.user.status !== 'active') {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Tài khoản bị khóa, không thể đặt lại mật khẩu.',
+        false,
+        'Vui lòng liên hệ bộ phận CSKH để được hỗ trợ'
+      );
+    }
+
+    if (tokenRecord.consumed_at) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'TOKEN_ALREADY_USED',
+        'Liên kết đặt lại mật khẩu này đã được sử dụng',
+        false,
+        'Vui lòng yêu cầu liên kết đặt lại mật khẩu mới'
+      );
+    }
+
+    if (new Date() > tokenRecord.expires_at) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'TOKEN_EXPIRED',
+        'Liên kết đặt lại mật khẩu đã hết hạn (hiệu lực 1 giờ)',
+        false,
+        'Vui lòng yêu cầu liên kết đặt lại mật khẩu mới'
+      );
+    }
+
+    return {
+      data: {
+        valid: true,
+        identifier: tokenRecord.identifier,
+        channel: tokenRecord.channel,
+      },
+      meta: { correlation_id: correlationId },
+    };
+  }
+
+  /**
+   * FEAT-AUTH-04: Reset Password with Token
+   * Validates token, updates password, consumes token, revokes all sessions
+   */
+  async resetPassword(dto: ResetPasswordDto, clientIp: string, correlationId: string) {
+    const fields: CanonicalFieldError[] = [];
+    const rawToken = dto.token?.trim();
+    const password = dto.password;
+    const passwordConfirm = dto.password_confirm;
+
+    if (!rawToken) {
+      fields.push({ field: 'token', code: 'REQUIRED', message: 'Token không được để trống' });
+    }
+    if (!password) {
+      fields.push({
+        field: 'password',
+        code: 'REQUIRED',
+        message: 'Mật khẩu mới không được để trống',
+      });
+    }
+    if (!passwordConfirm) {
+      fields.push({
+        field: 'password_confirm',
+        code: 'REQUIRED',
+        message: 'Xác nhận mật khẩu không được để trống',
+      });
+    }
+    if (password && password !== passwordConfirm) {
+      fields.push({
+        field: 'password_confirm',
+        code: 'MISMATCH',
+        message: 'Mật khẩu xác nhận không khớp',
+      });
+    }
+    if (password && password.length < 8) {
+      fields.push({
+        field: 'password',
+        code: 'WEAK_PASSWORD',
+        message: 'Mật khẩu phải có ít nhất 8 ký tự',
+      });
+    }
+    if (password && !/[A-Z]/.test(password)) {
+      fields.push({
+        field: 'password',
+        code: 'WEAK_PASSWORD',
+        message: 'Mật khẩu phải chứa ít nhất 1 chữ hoa',
+      });
+    }
+    if (password && !/[a-z]/.test(password)) {
+      fields.push({
+        field: 'password',
+        code: 'WEAK_PASSWORD',
+        message: 'Mật khẩu phải chứa ít nhất 1 chữ thường',
+      });
+    }
+    if (password && !/[0-9]/.test(password)) {
+      fields.push({
+        field: 'password',
+        code: 'WEAK_PASSWORD',
+        message: 'Mật khẩu phải chứa ít nhất 1 số',
+      });
+    }
+    if (password && !/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password)) {
+      fields.push({
+        field: 'password',
+        code: 'WEAK_PASSWORD',
+        message: 'Mật khẩu phải chứa ít nhất 1 ký tự đặc biệt',
+      });
+    }
+
+    if (fields.length > 0) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Dữ liệu không hợp lệ',
+        false,
+        undefined,
+        fields
+      );
+    }
+
+    const hashedToken = this.hashSecret(rawToken!);
+
+    const resetLimit = await this.rateLimitService.checkResetTokenLimit(clientIp);
+    if (!resetLimit.allowed) {
+      throw new CanonicalApiException(
+        HttpStatus.TOO_MANY_REQUESTS,
+        'RATE_LIMITED',
+        resetLimit.reason || 'Quá nhiều yêu cầu. Vui lòng thử lại sau.',
+        true,
+        `Thử lại sau ${resetLimit.retryAfterSeconds} giây`,
+        undefined,
+        resetLimit.retryAfterSeconds
+      );
+    }
+
+    const tokenRecord = await this.prisma.passwordResetToken.findUnique({
+      where: { token: hashedToken },
+      include: { user: true },
+    });
+
+    if (!tokenRecord) {
+      await this.rateLimitService.recordResetTokenFailure(clientIp);
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'INVALID_TOKEN',
+        'Liên kết đặt lại mật khẩu không hợp lệ hoặc đã hết hạn',
+        false,
+        'Vui lòng yêu cầu liên kết đặt lại mật khẩu mới'
+      );
+    }
+
+    if (tokenRecord.user.status !== 'active') {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Tài khoản bị khóa, không thể đặt lại mật khẩu.',
+        false,
+        'Vui lòng liên hệ bộ phận CSKH để được hỗ trợ'
+      );
+    }
+
+    if (tokenRecord.consumed_at) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'TOKEN_ALREADY_USED',
+        'Liên kết đặt lại mật khẩu này đã được sử dụng',
+        false,
+        'Vui lòng yêu cầu liên kết đặt lại mật khẩu mới'
+      );
+    }
+
+    if (new Date() > tokenRecord.expires_at) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'TOKEN_EXPIRED',
+        'Liên kết đặt lại mật khẩu đã hết hạn (hiệu lực 1 giờ)',
+        false,
+        'Vui lòng yêu cầu liên kết đặt lại mật khẩu mới'
+      );
+    }
+
+    const newPasswordHash = await hashPassword(password!);
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id: tokenRecord.user_id },
+        data: { password_hash: newPasswordHash, updated_at: new Date() },
+      });
+
+      const { count } = await tx.passwordResetToken.updateMany({
+        where: { id: tokenRecord.id, consumed_at: null },
+        data: { consumed_at: new Date() },
+      });
+
+      if (count === 0) {
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'TOKEN_ALREADY_USED',
+          'Liên kết đặt lại mật khẩu này đã được sử dụng',
+          false,
+          'Vui lòng yêu cầu liên kết đặt lại mật khẩu mới'
+        );
+      }
+
+      await tx.deviceSession.updateMany({
+        where: { user_id: tokenRecord.user_id, status: 'ACTIVE' },
+        data: { status: 'REVOKED' },
+      });
+    });
+
+    await this.logAudit({
+      merchantId: tokenRecord.user.merchant_id,
+      userId: tokenRecord.user_id,
+      actor: this.hashIp(clientIp),
+      action: 'AUTH_PASSWORD_RESET_TOKEN_CONSUMED',
+      resource: `user:${tokenRecord.user_id}`,
+      correlationId,
+      ipAddress: this.hashIp(clientIp),
+      details: { channel: tokenRecord.channel },
+    });
+
+    await this.logAudit({
+      merchantId: tokenRecord.user.merchant_id,
+      userId: tokenRecord.user_id,
+      actor: this.hashIp(clientIp),
+      action: 'AUTH_PASSWORD_CHANGED',
+      resource: `user:${tokenRecord.user_id}`,
+      correlationId,
+      ipAddress: this.hashIp(clientIp),
+    });
+
+    await this.logAudit({
+      merchantId: tokenRecord.user.merchant_id,
+      userId: tokenRecord.user_id,
+      actor: this.hashIp(clientIp),
+      action: 'AUTH_PASSWORD_RESET_SESSIONS_REVOKED',
+      resource: `user:${tokenRecord.user_id}`,
+      correlationId,
+      ipAddress: this.hashIp(clientIp),
+      details: { sessions_revoked: true },
+    });
+
+    return {
+      data: {
+        message: 'Mật khẩu đã được đặt lại thành công. Tất cả phiên đăng nhập khác đã bị thu hồi.',
+      },
+      meta: { correlation_id: correlationId },
+    };
+  }
+
+  /**
+
    * Request a login OTP (FEAT-AUTH-03 / SCR-AUTH-01 "if configured" / BR-AUTH-12).
    * Gated by AUTH_LOGIN_OTP_ENABLED; generic OTP_SENT response (CD-4..5, CD-7).
    */
@@ -803,7 +1309,9 @@ export class AuthService {
         'RATE_LIMITED',
         ipCheck.reason || 'Quá nhiều yêu cầu mã OTP. Vui lòng thử lại sau.',
         true,
-        `Vui lòng chờ ${ipCheck.retryAfterSeconds || 3600} giây trước khi thử lại`
+        `Vui lòng chờ ${ipCheck.retryAfterSeconds || 3600} giây trước khi thử lại`,
+        undefined,
+        ipCheck.retryAfterSeconds
       );
     }
     const idCheck = await this.rateLimitService.checkLoginOtpRequestLimit(normalized.stored);
@@ -821,7 +1329,9 @@ export class AuthService {
         'RATE_LIMITED',
         idCheck.reason || 'Quá nhiều yêu cầu mã OTP cho tài khoản này.',
         true,
-        `Vui lòng chờ ${idCheck.retryAfterSeconds || 60} giây trước khi thử lại`
+        `Vui lòng chờ ${idCheck.retryAfterSeconds || 60} giây trước khi thử lại`,
+        undefined,
+        idCheck.retryAfterSeconds
       );
     }
     await this.rateLimitService.recordLoginOtpIpAttempt(clientIp);
@@ -990,7 +1500,9 @@ export class AuthService {
         'RATE_LIMITED',
         otpLimit.reason || 'Quá nhiều lần thử mã OTP. Vui lòng thử lại sau.',
         true,
-        `Vui lòng chờ ${otpLimit.retryAfterSeconds || 900} giây trước khi thử lại`
+        `Vui lòng chờ ${otpLimit.retryAfterSeconds || 900} giây trước khi thử lại`,
+        undefined,
+        otpLimit.retryAfterSeconds
       );
     }
 
@@ -1185,7 +1697,9 @@ export class AuthService {
         'RATE_LIMITED',
         ipCheck.reason || 'Quá nhiều lần thử đăng nhập. Vui lòng thử lại sau.',
         true,
-        `Vui lòng chờ ${ipCheck.retryAfterSeconds || 900} giây trước khi thử lại`
+        `Vui lòng chờ ${ipCheck.retryAfterSeconds || 900} giây trước khi thử lại`,
+        undefined,
+        ipCheck.retryAfterSeconds
       );
     }
     await this.rateLimitService.recordLoginIpAttempt(clientIp);
@@ -1208,7 +1722,9 @@ export class AuthService {
         'RATE_LIMITED',
         identifierCheck.reason || 'Quá nhiều lần đăng nhập thất bại. Vui lòng thử lại sau.',
         true,
-        `Vui lòng chờ ${identifierCheck.retryAfterSeconds || 900} giây trước khi thử lại`
+        `Vui lòng chờ ${identifierCheck.retryAfterSeconds || 900} giây trước khi thử lại`,
+        undefined,
+        identifierCheck.retryAfterSeconds
       );
     }
 
@@ -1262,6 +1778,7 @@ export class AuthService {
   }
 
   /**
+
    * BR-AUTH-03 / BR-AUTH-10: resolve duplicate / pending account conflicts
    */
   private async resolveExistingAccountConflict(
@@ -1616,6 +2133,12 @@ export class AuthService {
 
   private hashSecret(secret: string): string {
     return createHash('sha256').update(secret).digest('hex');
+  }
+
+  private hashIdentifierForAudit(identifier: string): string {
+    const key =
+      this.config?.AUDIT_IDENTIFIER_HMAC_KEY || 'default-dev-audit-hmac-key-override-32-chars';
+    return createHmac('sha256', key).update(identifier).digest('hex').substring(0, 16);
   }
 
   private hashIp(ip: string): string {

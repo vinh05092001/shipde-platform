@@ -1,0 +1,10 @@
+{
+  "workItemId": "TASK-AI-78",
+  "acceptanceIds": ["R-R01", "R-R02", "R-R03", "R-R04", "S-R02", "S-R03", "O-R03"],
+  "ownedGlobs": ["src/**", "test/**", "package.json"],
+  "forbiddenGlobs": ["docs/**", "pnpm-lock.yaml", "*.lock"],
+  "testCommands": ["node --test test/*.test.js"],
+  "maxDiffLines": 200,
+  "repairBudget": 2,
+  "maxToolCalls": 40
+}

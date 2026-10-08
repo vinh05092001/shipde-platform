@@ -11,9 +11,12 @@ import { db } from '@/server/db';
  * BR-SESS-05: Idempotent revocation — revoking an already-revoked session returns success.
  * BR-SESS-06: Cross-tenant revoke is forbidden.
  */
-export async function DELETE(_req: NextRequest, { params }: { params: { sessionId: string } }) {
+export async function DELETE(
+  _req: NextRequest,
+  { params }: { params: Promise<{ sessionId: string }> }
+) {
   try {
-    const { sessionId } = params;
+    const { sessionId } = await params;
     const session = db.deviceSessions.find((s) => s.id === sessionId);
 
     if (!session) {

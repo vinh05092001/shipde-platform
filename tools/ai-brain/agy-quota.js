@@ -45,8 +45,142 @@ function familyOf(model) {
 
 const WINDOW_NAMES = {
   weekly: /weekly/i,
-  fiveHour: /five\s*hour/i,
+  fiveHour: /five\s*hour|\b5h\b/i,
+  daily: /daily/i,
+  session: /session/i,
 };
+
+function mapFamily(name) {
+  const s = String(name || '')
+    .trim()
+    .toLowerCase();
+  if (s.includes('gemini')) return Family.GEMINI;
+  if (s.includes('claude') || s.includes('gpt') || s.includes('3p')) return Family.CLAUDE_GPT;
+  return null;
+}
+
+function mapWindow(name) {
+  const s = String(name || '')
+    .trim()
+    .toLowerCase();
+  for (const [win, re] of Object.entries(WINDOW_NAMES)) {
+    if (re.test(s)) return win;
+  }
+  return null;
+}
+
+function parseNumberValue(val) {
+  if (val === null || val === undefined || val === '' || typeof val === 'boolean') {
+    return NaN;
+  }
+  if (typeof val === 'string') {
+    const trimmed = val.trim();
+    const stripped = trimmed.endsWith('%') ? trimmed.slice(0, -1).trim() : trimmed;
+    const n = Number(stripped);
+    return Number.isFinite(n) ? n : NaN;
+  }
+  const n = Number(val);
+  return Number.isFinite(n) ? n : NaN;
+}
+
+function parseTsvRows(text) {
+  const rows = [];
+  for (const rawLine of String(text || '').split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+
+    let cols = null;
+    if (rawLine.includes('\t')) {
+      cols = rawLine.split('\t').map((c) => c.trim());
+    } else if (/\s{2,}/.test(line)) {
+      cols = line.split(/\s{2,}/).map((c) => c.trim());
+    }
+
+    if (cols && cols.length >= 3) {
+      const family = mapFamily(cols[0]);
+      const window = mapWindow(cols[1]);
+      if (!family || !window) continue;
+
+      const rawPercent = cols[2];
+      const disabled = typeof rawPercent === 'string' && /\bdisabled\b/i.test(rawPercent);
+      const parsedNum = parseNumberValue(rawPercent);
+      const isFinite = Number.isFinite(parsedNum);
+      const remainingPercent = isFinite ? parsedNum : disabled ? 0 : null;
+      const known = isFinite || disabled;
+
+      const resetMatch = String(cols[3] || '').match(/\d{4}-\d{2}-\d{2}T[\d:]+(?:\.\d+)?Z/);
+      const resetsAt = resetMatch ? resetMatch[0] : null;
+
+      rows.push({
+        family,
+        window,
+        remainingPercent,
+        known,
+        disabled,
+        resetsAt,
+      });
+      continue;
+    }
+
+    const percentMatch = line.match(/(\d+(?:\.\d+)?)\s*%/);
+    const disabled = !percentMatch && /\bdisabled\b/i.test(line);
+    const family = mapFamily(line);
+    const window = mapWindow(line);
+    if (family && window && (percentMatch || disabled)) {
+      const resetMatch = line.match(/\d{4}-\d{2}-\d{2}T[\d:]+(?:\.\d+)?Z/);
+      rows.push({
+        family,
+        window,
+        remainingPercent: disabled ? 0 : Number(percentMatch[1]),
+        known: true,
+        disabled,
+        resetsAt: resetMatch ? resetMatch[0] : null,
+      });
+    }
+  }
+  return rows;
+}
+
+function parseFixtureGroups(doc) {
+  const rows = [];
+  const groups = Array.isArray(doc.groups) ? doc.groups : Array.isArray(doc) ? doc : [];
+  for (const group of groups) {
+    const family =
+      mapFamily(group.id || group.family || group.name) || group.id || group.family || group.name;
+    if (!family) continue;
+    for (const key of ['fiveHour', 'weekly', 'daily', 'session']) {
+      const windowValue = group[key];
+      if (!windowValue || typeof windowValue !== 'object') continue;
+      const hasRemaining =
+        windowValue.remainingPercent !== undefined ||
+        windowValue.remaining !== undefined ||
+        windowValue.disabled !== undefined;
+      if (!hasRemaining) continue;
+
+      const rawPercent = parseNumberValue(windowValue.remainingPercent);
+      const rawFraction = parseNumberValue(windowValue.remaining);
+      const parsed = Number.isFinite(rawPercent)
+        ? rawPercent
+        : Number.isFinite(rawFraction)
+          ? Math.round(rawFraction * 100)
+          : NaN;
+
+      const isFinite = Number.isFinite(parsed);
+      const remainingPercent = isFinite ? parsed : windowValue.disabled ? 0 : null;
+      const known = isFinite || Boolean(windowValue.disabled);
+
+      rows.push({
+        family,
+        window: mapWindow(key) || key,
+        remainingPercent,
+        known,
+        disabled: Boolean(windowValue.disabled),
+        resetsAt: windowValue.resetAt || windowValue.resetsAt || null,
+      });
+    }
+  }
+  return rows;
+}
 
 /**
  * Parses the `/quota` table.
@@ -56,36 +190,22 @@ const WINDOW_NAMES = {
  * an ISO instant — rather than by column position.
  */
 function parseQuota(text) {
-  const rows = [];
-  for (const line of String(text || '').split('\n')) {
-    // A window can report `disabled` instead of a percentage: the pool is off
-    // for this account, not merely unreported. Skipping the row would let the
-    // other window speak for the whole family, so it is read as no headroom.
-    const percent = line.match(/(\d+(?:\.\d+)?)\s*%/);
-    const disabled = !percent && /\bdisabled\b/i.test(line);
-    if (!percent && !disabled) continue;
+  let body = String(text || '').trim();
+  let parsedDoc = null;
+  if (body.startsWith('{') || body.startsWith('[')) {
+    try {
+      parsedDoc = JSON.parse(body);
+      if (parsedDoc && typeof parsedDoc === 'object') {
+        if (typeof parsedDoc.response === 'string') {
+          body = parsedDoc.response;
+        }
+      }
+    } catch {}
+  }
 
-    const reset = line.match(/\d{4}-\d{2}-\d{2}T[\d:]+(?:\.\d+)?Z/);
-    const family = /gemini/i.test(line)
-      ? Family.GEMINI
-      : /claude|gpt/i.test(line)
-        ? Family.CLAUDE_GPT
-        : null;
-    if (!family) continue;
-
-    let window = null;
-    for (const [name, re] of Object.entries(WINDOW_NAMES)) {
-      if (re.test(line)) window = name;
-    }
-    if (!window) continue;
-
-    rows.push({
-      family,
-      window,
-      remainingPercent: disabled ? 0 : Number(percent[1]),
-      disabled,
-      resetsAt: reset ? reset[0] : null,
-    });
+  let rows = parseTsvRows(body);
+  if (rows.length === 0 && parsedDoc) {
+    rows = parseFixtureGroups(parsedDoc);
   }
 
   if (rows.length === 0) {
@@ -205,11 +325,22 @@ function headroomFor(quota, model) {
   const family = familyOf(model);
   if (!family) return { known: false, reason: 'không rõ model thuộc nhóm nào' };
 
-  const rows = quota.rows.filter((r) => r.family === family);
+  const rows = (quota.rows || []).filter((r) => r.family === family);
   if (rows.length === 0) return { known: false, reason: 'không có dòng quota cho nhóm ' + family };
 
-  let tightest = rows[0];
-  for (const r of rows) {
+  const validRows = rows.filter((r) => r.known !== false && Number.isFinite(r.remainingPercent));
+  if (validRows.length === 0) {
+    return {
+      known: false,
+      reason: 'không có số liệu quota hợp lệ cho nhóm ' + family,
+      family,
+      remainingPercent: null,
+      windows: rows,
+    };
+  }
+
+  let tightest = validRows[0];
+  for (const r of validRows) {
     if (r.remainingPercent < tightest.remainingPercent) tightest = r;
   }
 
@@ -233,15 +364,27 @@ function statusFrom(headroom, options) {
   const tight = Number(opts.tightBelow) > 0 ? Number(opts.tightBelow) : 20;
   const exhausted = Number(opts.exhaustedBelow) >= 0 ? Number(opts.exhaustedBelow) : 2;
 
-  if (!headroom || !headroom.known) return 'unknown';
-  if (headroom.remainingPercent <= exhausted) return 'exhausted';
-  if (headroom.remainingPercent < tight) return 'tight';
+  const pct =
+    typeof headroom === 'number'
+      ? headroom
+      : headroom && headroom.known && Number.isFinite(headroom.remainingPercent)
+        ? headroom.remainingPercent
+        : null;
+
+  if (pct === null) return 'unknown';
+  if (pct <= exhausted) return 'exhausted';
+  if (pct < tight) return 'tight';
   return 'open';
 }
 
 module.exports = {
   Family,
   familyOf,
+  mapFamily,
+  mapWindow,
+  parseNumberValue,
+  parseTsvRows,
+  parseFixtureGroups,
   parseQuota,
   readQuota,
   budgetFingerprint,
