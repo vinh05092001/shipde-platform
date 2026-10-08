@@ -71,10 +71,7 @@ test('branchNameFor reuses the TASK-AI-111 slugify helper instead of re-implemen
   try {
     slugifyExports.slugify = () => 'patched-slug';
     const fresh = require('../branch-name');
-    assert.equal(
-      fresh.branchNameFor('TASK-AI-112', 'Any Title'),
-      'feat/task-ai-112-patched-slug'
-    );
+    assert.equal(fresh.branchNameFor('TASK-AI-112', 'Any Title'), 'feat/task-ai-112-patched-slug');
   } finally {
     slugifyExports.slugify = originalSlugify;
     delete require.cache[branchPath];
