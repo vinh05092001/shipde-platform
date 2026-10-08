@@ -2190,7 +2190,8 @@ function normalizeReviewForCheckpoint(entry, workItemId, logOpts) {
     workerRoot: workerRoot ? String(workerRoot).trim() : null,
     publishCwd: publishCwd ? String(publishCwd).trim() : null,
     branch: branch ? String(branch).trim() : null,
-    draftTitle: entry.draftTitle || draftTitleForItem(entry.item || { id: workItemId }, o.goal),
+    draftTitle:
+      entry.draftTitle || draftTitleForItem(entry.item || { id: workItemId }, (logOpts || {}).goal),
     tests,
     reviewRounds: decisionLog.reviewRounds,
     repairCount,
@@ -2833,7 +2834,7 @@ async function runOrchestration(goal, opts) {
   // happens to sit in.
   const hostCwd =
     o.hostCwd || o.cwd || o.workdir || (o && o.host && o.host.cwd) || (o && o.root) || null;
-  const logOpts = { dir: decisionDir, now };
+  const logOpts = { dir: decisionDir, now, goal: o.goal };
   const checkpointFile =
     o.checkpointFile || (typeof o.checkpoint === 'string' ? o.checkpoint : null);
   const usageDir = o.usageDir || path.join(os.tmpdir(), 'shipde-usage');
@@ -6300,6 +6301,7 @@ module.exports = {
   reviewLane,
   reviewItem,
   draftTitleForItem,
+  normalizeReviewForCheckpoint,
   provisionReviewRoot,
   publishCwdForReceipt,
   resolvePublishCwd,
