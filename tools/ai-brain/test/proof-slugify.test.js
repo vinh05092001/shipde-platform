@@ -105,7 +105,7 @@ describe('branchName (uses slugify)', () => {
   test('builds a feat branch from the work item id and the outcome', () => {
     assert.equal(
       branchName('feat', 'TASK-AI-111', 'Add a pure slugify helper'),
-      'feat/task-ai-111-add-a-pure-slugify-helper',
+      'feat/task-ai-111-add-a-pure-slugify-helper'
     );
   });
 
@@ -117,7 +117,7 @@ describe('branchName (uses slugify)', () => {
     assert.equal(branchName('feat', 'TASK-AI-60', 'a -- b'), 'feat/task-ai-60-a-b');
     assert.equal(
       branchName('feat', 'TASK-FOUND-02', '  spaced out  '),
-      'feat/task-found-02-spaced-out',
+      'feat/task-found-02-spaced-out'
     );
   });
 
@@ -132,7 +132,7 @@ describe('branchName (uses slugify)', () => {
         assert.ok(error instanceof Error);
         assert.equal(error.code, 'BRANCH_NAME_INPUT_INVALID');
         return true;
-      },
+      }
     );
   });
 
