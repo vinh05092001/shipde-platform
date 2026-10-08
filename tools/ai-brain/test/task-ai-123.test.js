@@ -275,8 +275,9 @@ test('DT-R01: title from outcome, exactly one ID even when outcome mentions anot
   // DT-R01: the outcome text itself carries no second Work Item ID, and the
   // composed title is truncated to 72 characters. Both fail on origin/main,
   // where the outcome is published verbatim.
+  const idPatternHyphen = /\b(?:FEAT|TASK-FOUND|TASK-AI)-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*\b/g;
   assert.equal(
-    (outcome.match(idPattern) || []).length,
+    (outcome.match(idPatternHyphen) || []).length,
     0,
     'the outcome must not quote another Work Item ID: ' + outcome
   );
@@ -307,13 +308,13 @@ test('DT-R01: strip multiple ID patterns from outcome', async () => {
     assert.ok(title.startsWith(tc.expectedStart), 'title starts correctly: ' + tc.description);
 
     // Only one ID in the title (the prefix)
-    const idPattern = /\b(FEAT-|TASK-FOUND-|TASK-AI-)[A-Za-z0-9]+\b/g;
+    const idPattern = /\b(?:FEAT|TASK-FOUND|TASK-AI)-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*\b/g;
     const allIds = title.match(idPattern) || [];
     assert.equal(allIds.length, 1, 'only one ID in title for ' + tc.description + ': ' + title);
 
     // DT-R01: the Controller composes that title itself. On origin/main the
     // builder is not exported and keeps the foreign ID, so this cannot pass.
-    const composed = draftTitleForItem({ id: 'TASK-AI-123', businessOutcome: tc.input });
+    const composed = draftTitleForItem({ id: 'TASK-AI-123' }, tc.input);
     assert.ok(
       composed.startsWith(tc.expectedStart),
       'the controller title starts correctly: ' + composed
@@ -335,7 +336,7 @@ test('DT-R01: truncate to 72 characters', async () => {
 
   // DT-R01: the Controller truncates the title it actually composes. On
   // origin/main the builder is not exported and truncates nothing.
-  const composed = draftTitleForItem({ id: 'TASK-AI-123', businessOutcome: longOutcome });
+  const composed = draftTitleForItem({ id: 'TASK-AI-123' }, longOutcome);
   assert.equal(
     composed.length,
     72,

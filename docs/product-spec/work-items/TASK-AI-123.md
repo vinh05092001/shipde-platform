@@ -59,3 +59,4 @@ DT-R02: after a worker commit and BEFORE review, the Controller runs a host-side
 - Format check only runs on files prettier supports; files outside that set bypass the check
 - If prettier is unavailable, format check is skipped with a warning rather than blocking
 - Repair rounds reuse the existing path; custom formatting-specific findings are generic
+- The host-side format gate runs only when the run is isolated or when `formatCheck` is explicitly true (as specified by the controller's invocation); non-isolated runs without that flag skip the gate without a FORMAT_CHECK record. This is documented as a residual limitation of the gate condition in the current implementation.

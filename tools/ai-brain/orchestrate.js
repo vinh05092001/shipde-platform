@@ -1673,7 +1673,7 @@ function normalizedReceiptTests(tests) {
  * another Work Item ID fails the Feature contract gate, so foreign IDs are
  * removed from the outcome before the title is composed.
  */
-const WORK_ITEM_ID = /\b(FEAT-|TASK-FOUND-|TASK-AI-)[A-Za-z0-9]+/g;
+const WORK_ITEM_ID = /\b(?:FEAT|TASK-FOUND|TASK-AI)-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*/g;
 const DRAFT_TITLE_LIMIT = 72;
 
 function draftTitleFor(workItemId, outcome, fallback) {
@@ -1688,13 +1688,15 @@ function draftTitleFor(workItemId, outcome, fallback) {
   return title.length > DRAFT_TITLE_LIMIT ? title.slice(0, DRAFT_TITLE_LIMIT) : title;
 }
 
-function draftTitleForItem(item) {
+function draftTitleForItem(item, goal) {
+  const goalText = goal ? String(goal).trim() : '';
+  const firstLine = goalText.split(/\r?\n/)[0];
   const outcome =
-    (item && (item.businessOutcome || item.outcome || item.title || item.name)) ||
-    (item && Array.isArray(item.acceptanceCriteria) && item.acceptanceCriteria[0]) ||
-    (item && item.verification && item.verification.expect) ||
+    (item && (item.outcome || item.title || item.name)) ||
+    (item && item.businessOutcome) ||
+    firstLine ||
     null;
-  return draftTitleFor(item && item.id, outcome, 'verified work item');
+  return draftTitleFor(item && item.id, outcome, 'work item');
 }
 
 function receiptFailureDomain(candidateKeyValue) {
@@ -2188,7 +2190,7 @@ function normalizeReviewForCheckpoint(entry, workItemId, logOpts) {
     workerRoot: workerRoot ? String(workerRoot).trim() : null,
     publishCwd: publishCwd ? String(publishCwd).trim() : null,
     branch: branch ? String(branch).trim() : null,
-    draftTitle: entry.draftTitle || draftTitleForItem(entry.item || { id: workItemId }),
+    draftTitle: entry.draftTitle || draftTitleForItem(entry.item || { id: workItemId }, o.goal),
     tests,
     reviewRounds: decisionLog.reviewRounds,
     repairCount,
@@ -5366,7 +5368,7 @@ async function reviewItem(
     publishCwd: publishCwdForReceipt(o, workerRoot || (session && session.worktree) || null),
     branch: (session && session.branch) || o.branch || null,
     baseSha: (session && session.baseSha) || o.baseSha || null,
-    draftTitle: draftTitleForItem(item),
+    draftTitle: draftTitleForItem(item, o.goal),
     item,
     testResult: lastTestResult,
     failBefore: (session && session.failBefore) || null,
