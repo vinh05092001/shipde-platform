@@ -2814,7 +2814,7 @@ function orderDependenciesFirst(items) {
  *   the loop is too.
  */
 async function runOrchestration(goal, opts) {
-  const o = Object.assign({}, opts || {});
+  const o = Object.assign({ goal }, opts || {});
   const now = o.now || Date.now();
   const log = buildDefaults();
   log.goal = goal || null;
