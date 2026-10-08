@@ -711,13 +711,15 @@ async function runAuthSupertestSuite() {
     }
     console.log('  PASS: Non-existent phone returned generic SENT and protected PII in audit logs');
 
-    // 19c. Unverified user returns generic 200 SENT (anti-enumeration)
+    // 19c. Unverified contact returns generic 200 SENT (anti-enumeration)
     const unverifiedEmail = `unverified.${testSuffix}@shipde.vn`;
     await prisma.user.create({
       data: {
         email: unverifiedEmail,
+        phone: `+84988${testSuffix.toString().slice(-5).padStart(5, '0')}`,
+        phone_verified_at: new Date(),
         password_hash: await hashPassword('SecurePassword123!'),
-        status: 'pending_verification',
+        status: 'active',
         full_name: 'Unverified User 19c',
         role: 'OWNER',
         merchant_id: res1.body.data.merchant_id,
