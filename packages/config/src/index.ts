@@ -45,6 +45,8 @@ export interface AppConfig {
   FRONTEND_URL: string;
   /** HMAC secret for audit log identifier hashes. Required in production. */
   AUDIT_IDENTIFIER_HMAC_KEY: string;
+  /** Number of trusted reverse proxies for Express 'trust proxy'. Defaults to 0. */
+  TRUST_PROXY_HOPS: number;
 }
 
 export class ConfigValidationError extends Error {
@@ -258,6 +260,17 @@ export function validateConfig(rawEnv: NodeJS.ProcessEnv = process.env): AppConf
   const AUDIT_IDENTIFIER_HMAC_KEY =
     auditHmacKeyRaw || 'default-dev-audit-hmac-key-override-32-chars';
 
+  const trustProxyRaw = rawEnv.TRUST_PROXY_HOPS;
+  let TRUST_PROXY_HOPS = 0;
+  if (trustProxyRaw !== undefined && trustProxyRaw !== '') {
+    const hopsParsed = parseInt(trustProxyRaw, 10);
+    if (isNaN(hopsParsed) || hopsParsed < 0) {
+      invalidFields.push('TRUST_PROXY_HOPS (must be a non-negative integer)');
+    } else {
+      TRUST_PROXY_HOPS = hopsParsed;
+    }
+  }
+
   const FRONTEND_URL =
     rawEnv.FRONTEND_URL ||
     (NODE_ENV === 'production' ? 'https://shipde.vn' : 'http://localhost:3000');
@@ -287,6 +300,7 @@ export function validateConfig(rawEnv: NodeJS.ProcessEnv = process.env): AppConf
     AUTH_LOGIN_OTP_ENABLED,
     PASSWORD_RESET_TTL_SECONDS,
     AUDIT_IDENTIFIER_HMAC_KEY,
+    TRUST_PROXY_HOPS,
     FRONTEND_URL,
   };
 }

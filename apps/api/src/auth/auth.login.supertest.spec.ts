@@ -4,6 +4,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import request from 'supertest';
 import { RoleEnum } from '@prisma/client';
 import { AppModule } from '../app.module';
@@ -98,6 +99,10 @@ async function runAuthLoginSupertestSuite() {
     LOG_LEVEL: 'info',
     AUTH_TOKEN_TTL_SECONDS: 43200,
     AUTH_LOGIN_OTP_ENABLED: false,
+    PASSWORD_RESET_TTL_SECONDS: 3600,
+    FRONTEND_URL: 'http://localhost:3000',
+    AUDIT_IDENTIFIER_HMAC_KEY: 'test-key-32-chars',
+    TRUST_PROXY_HOPS: 1,
   };
 
   const mockDeliveryAdapter = new MockVerificationDeliveryAdapter();
@@ -111,7 +116,8 @@ async function runAuthLoginSupertestSuite() {
     .useValue(mockDeliveryAdapter)
     .compile();
 
-  const app: INestApplication = moduleFixture.createNestApplication();
+  const app = moduleFixture.createNestApplication<NestExpressApplication>();
+  app.set('trust proxy', 1);
   await app.init();
 
   const prisma = app.get(PrismaService);

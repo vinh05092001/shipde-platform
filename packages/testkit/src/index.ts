@@ -182,6 +182,7 @@ export function createValidTestConfig(overrides: Partial<AppConfig> = {}): AppCo
     PASSWORD_RESET_TTL_SECONDS: 3600,
     FRONTEND_URL: 'http://localhost:3000',
     AUDIT_IDENTIFIER_HMAC_KEY: 'test-audit-hmac-key-placeholder-32-chars',
+    TRUST_PROXY_HOPS: 0,
     ...overrides,
   };
 }
