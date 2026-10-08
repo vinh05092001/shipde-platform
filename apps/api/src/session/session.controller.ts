@@ -16,6 +16,7 @@ import { SessionService, RevokeAllDto } from './session.service';
 import { normalizeCorrelationId } from '@shipde/config';
 import { SessionGuard } from './session.guard';
 import { SessionIdPipe } from './session-id.pipe';
+import { extractClientIp } from '../utils/ip.util';
 
 /**
  * FEAT-AUTH-06 — Session management controller.
@@ -24,10 +25,6 @@ import { SessionIdPipe } from './session-id.pipe';
 @UseGuards(SessionGuard)
 export class SessionController {
   constructor(@Inject(SessionService) private readonly sessionService: SessionService) {}
-
-  private extractIp(req: any): string {
-    return req.ip || req.socket?.remoteAddress || '127.0.0.1';
-  }
 
   /** GET /api/v1/sessions — List active sessions for current user */
   @Get()
@@ -46,7 +43,7 @@ export class SessionController {
     const userId = req.userId as string;
     const merchantId = req.merchantId as string;
     const correlationId = req.headers['x-correlation-id'] || normalizeCorrelationId();
-    const ip = this.extractIp(req);
+    const ip = extractClientIp(req);
     return this.sessionService.revoke(sessionId, userId, merchantId, correlationId, undefined, ip);
   }
 
@@ -58,7 +55,7 @@ export class SessionController {
     const merchantId = req.merchantId as string;
     const currentSessionId = req.sessionId as string | undefined;
     const correlationId = req.headers['x-correlation-id'] || normalizeCorrelationId();
-    const ip = this.extractIp(req);
+    const ip = extractClientIp(req);
     return this.sessionService.revokeAll(
       userId,
       merchantId,

@@ -4,6 +4,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import request from 'supertest';
 import { AppModule } from '../app.module';
 import { PrismaService } from '../prisma/prisma.service';
@@ -75,6 +76,12 @@ async function runAuthSupertestSuite() {
     S3_FORCE_PATH_STYLE: true,
     CARRIER_MODE: 'disabled',
     LOG_LEVEL: 'info',
+    TRUST_PROXY_HOPS: 1,
+    AUTH_TOKEN_TTL_SECONDS: 43200,
+    AUTH_LOGIN_OTP_ENABLED: false,
+    PASSWORD_RESET_TTL_SECONDS: 3600,
+    FRONTEND_URL: 'http://localhost:3000',
+    AUDIT_IDENTIFIER_HMAC_KEY: 'test-key-32-chars',
   };
 
   const mockDeliveryAdapter = new MockVerificationDeliveryAdapter();
@@ -88,7 +95,8 @@ async function runAuthSupertestSuite() {
     .useValue(mockDeliveryAdapter)
     .compile();
 
-  const app: INestApplication = moduleFixture.createNestApplication();
+  const app = moduleFixture.createNestApplication<NestExpressApplication>();
+  app.set('trust proxy', 1);
   await app.init();
 
   const prisma = app.get(PrismaService);
@@ -440,6 +448,49 @@ async function runAuthSupertestSuite() {
     console.log(
       '  PASS: AC-AUTH-02-10 Enforced 429 RATE_LIMITED after 5 registration attempts per IP'
     );
+
+    // -------------------------------------------------------------------------
+    // TEST 10.1: IP Spoofing Prevention (TRUST_PROXY_HOPS=0)
+    // -------------------------------------------------------------------------
+    console.log('[TEST 10.1] IP spoofing via X-Forwarded-For is ignored when TRUST_PROXY_HOPS=0');
+    // Disable proxy trust
+    app.set('trust proxy', 0);
+    rateLimitService.clear();
+
+    for (let i = 0; i < 5; i++) {
+      await request(app.getHttpServer())
+        .post('/auth/register')
+        .set('x-forwarded-for', `203.0.113.${100 + i}`) // Different fake IP each time
+        .send({
+          merchant_name: `Spoof Shop ${i}`,
+          full_name: 'Spoof Bot',
+          email: `spoof${i}.${testSuffix}@spam.test`,
+          password: 'Password123!',
+          terms_accepted: true,
+          terms_version: '2026.1',
+        })
+        .expect(201);
+    }
+
+    // 6th attempt must fail with 429 because the REAL IP (localhost) is the same
+    const res10_1 = await request(app.getHttpServer())
+      .post('/auth/register')
+      .set('x-forwarded-for', '203.0.113.200')
+      .send({
+        merchant_name: 'Spoof Blocked Shop',
+        full_name: 'Spoof Blocked Bot',
+        email: `spoofblocked.${testSuffix}@spam.test`,
+        password: 'Password123!',
+        terms_accepted: true,
+        terms_version: '2026.1',
+      })
+      .expect(429);
+
+    assert.strictEqual(res10_1.body.error.code, 'RATE_LIMITED');
+    console.log('  PASS: Spoofed X-Forwarded-For ignored, limit enforced on real IP');
+
+    // Restore proxy trust for subsequent tests
+    app.set('trust proxy', 1);
 
     // -------------------------------------------------------------------------
     // AC-AUTH-02-11: Resend-verification rate limit exceeded

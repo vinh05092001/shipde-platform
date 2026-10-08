@@ -1,5 +1,6 @@
 import * as path from 'path';
 import { NestFactory } from '@nestjs/core';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
 import {
   validateConfig,
@@ -60,9 +61,11 @@ export async function bootstrap(): Promise<void> {
     process.exit(1);
   }
 
-  const app = await NestFactory.create(AppModule, {
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     logger: false, // Structured JSON logs are handled directly
   });
+
+  app.set('trust proxy', config.TRUST_PROXY_HOPS);
 
   app.enableShutdownHooks();
 

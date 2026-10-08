@@ -143,3 +143,6 @@ Live supertest suites additionally require `pnpm infra:up` (PostgreSQL on :5433)
 - OTP login availability is discovered by the web client at request time (`AUTH_OTP_LOGIN_DISABLED`); no separate options endpoint was added.
 - The seed password is a documented test-only credential for local/CI fixtures (`TestPassword123!`); production user provisioning is out of scope.
 - `verifyPhone`'s legacy tolerance for plaintext seed OTPs is retained from FEAT-AUTH-01; new login OTPs are always hashed.
+
+## Security fix
+Fixed client IP extraction vulnerability where an attacker could bypass rate limits or forge audit IP records by spoofing the `X-Forwarded-For` header. The system now uses Express's `req.ip` governed by a new `TRUST_PROXY_HOPS` configuration (defaulting to 0 = trust no proxy). A regression test (`auth.supertest.spec.ts` TEST 10.1) prevents spoofing vectors.
