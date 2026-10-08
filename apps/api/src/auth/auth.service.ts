@@ -856,14 +856,16 @@ export class AuthService {
       meta: { correlation_id: correlationId },
     };
 
+    const hashedIdentifierRef = this.hashSecret(normalizedIdentifier).substring(0, 16);
+
     if (!user) {
       await this.logAudit({
         actor: this.hashIp(clientIp),
         action: 'AUTH_FORGOT_PASSWORD_NO_USER',
-        resource: `identifier:${normalizedIdentifier}`,
+        resource: `identifier:${hashedIdentifierRef}`,
         correlationId,
         ipAddress: this.hashIp(clientIp),
-        details: { identifier: normalizedIdentifier, channel, reason: 'user_not_found' },
+        details: { identifier: hashedIdentifierRef, channel, reason: 'user_not_found' },
       });
       return genericResponse;
     }
@@ -894,7 +896,7 @@ export class AuthService {
         resource: `user:${user.id}`,
         correlationId,
         ipAddress: this.hashIp(clientIp),
-        details: { identifier: normalizedIdentifier, channel, reason: 'contact_not_verified' },
+        details: { identifier: hashedIdentifierRef, channel, reason: 'contact_not_verified' },
       });
       return genericResponse;
     }

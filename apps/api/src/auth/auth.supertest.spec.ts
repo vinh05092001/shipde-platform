@@ -562,33 +562,95 @@ async function runAuthSupertestSuite() {
     console.log('[TEST 19 / FEAT-AUTH-04] Forgot password anti-enumeration and rate limiting');
 
     // 19a. Non-existent email returns generic 200 SENT (anti-enumeration)
+    const nonExistentEmail = `nonexistent.${testSuffix}@shipde.vn`;
+    const originalConsoleLog = console.log;
+    let auditLogMessage19a = '';
+    console.log = (...args: any[]) => {
+      const msg = typeof args[0] === 'string' ? args[0] : JSON.stringify(args);
+      if (msg.includes('AUTH_FORGOT_PASSWORD_NO_USER')) {
+        auditLogMessage19a += msg;
+      }
+      originalConsoleLog(...args);
+    };
+
     const res19a = await request(app.getHttpServer())
       .post('/auth/forgot-password')
       .set('x-forwarded-for', '203.0.113.10')
-      .send({ identifier: `nonexistent.${testSuffix}@shipde.vn` })
+      .send({ identifier: nonExistentEmail })
       .expect(200);
+
+    console.log = originalConsoleLog;
+
     assert.strictEqual(res19a.body.data.status, 'SENT');
     assert.strictEqual(res19a.body.data.channel, 'email');
-    console.log('  PASS: Non-existent email returned generic SENT (anti-enumeration)');
+    assert.ok(
+      auditLogMessage19a.includes('AUTH_FORGOT_PASSWORD_NO_USER'),
+      'Must log AUTH_FORGOT_PASSWORD_NO_USER'
+    );
+    assert.ok(
+      !auditLogMessage19a.includes('nonexistent'),
+      'Audit log must not contain raw identifier'
+    );
+    console.log('  PASS: Non-existent email returned generic SENT and protected PII in audit logs');
 
     // 19b. Non-existent phone returns generic 200 SENT (anti-enumeration)
+    const nonExistentPhone = '0909999999';
+    let auditLogMessage19b = '';
+    console.log = (...args: any[]) => {
+      const msg = typeof args[0] === 'string' ? args[0] : JSON.stringify(args);
+      if (msg.includes('AUTH_FORGOT_PASSWORD_NO_USER')) {
+        auditLogMessage19b += msg;
+      }
+      originalConsoleLog(...args);
+    };
+
     const res19b = await request(app.getHttpServer())
       .post('/auth/forgot-password')
       .set('x-forwarded-for', '203.0.113.11')
-      .send({ identifier: '0909999999' })
+      .send({ identifier: nonExistentPhone })
       .expect(200);
+
+    console.log = originalConsoleLog;
+
     assert.strictEqual(res19b.body.data.status, 'SENT');
     assert.strictEqual(res19b.body.data.channel, 'phone');
-    console.log('  PASS: Non-existent phone returned generic SENT (anti-enumeration)');
+    assert.ok(
+      auditLogMessage19b.includes('AUTH_FORGOT_PASSWORD_NO_USER'),
+      'Must log AUTH_FORGOT_PASSWORD_NO_USER'
+    );
+    assert.ok(
+      !auditLogMessage19b.includes(nonExistentPhone),
+      'Audit log must not contain raw phone'
+    );
+    console.log('  PASS: Non-existent phone returned generic SENT and protected PII in audit logs');
 
     // 19c. Unverified user returns generic 200 SENT (anti-enumeration)
+    const unverifiedEmail = `unverified.${testSuffix}@shipde.vn`;
     const res19c = await request(app.getHttpServer())
       .post('/auth/forgot-password')
       .set('x-forwarded-for', '203.0.113.12')
-      .send({ identifier: `unverified.${testSuffix}@shipde.vn` })
+      .send({ identifier: unverifiedEmail })
       .expect(200);
     assert.strictEqual(res19c.body.data.status, 'SENT');
-    console.log('  PASS: Unverified user returned generic SENT (anti-enumeration)');
+
+    const unverifiedUser = await prisma.user.findUnique({ where: { email: unverifiedEmail } });
+    if (unverifiedUser) {
+      const auditLogs19c = await prisma.auditLog.findMany({
+        where: { user_id: unverifiedUser.id, action: 'AUTH_FORGOT_PASSWORD_UNVERIFIED' },
+        orderBy: { created_at: 'desc' },
+        take: 1,
+      });
+      if (auditLogs19c.length > 0) {
+        const detailsStr = JSON.stringify(auditLogs19c[0].new_value || {});
+        assert.ok(
+          !detailsStr.includes('unverified.'),
+          'Audit log details must not contain raw email'
+        );
+      }
+    }
+    console.log(
+      '  PASS: Unverified user returned generic SENT (anti-enumeration) and protected PII in audit logs'
+    );
 
     // 19c2. Suspended user returns generic 200 SENT (anti-enumeration)
     const userToSuspend = await prisma.user.findFirst({ where: { email: email1 } });
