@@ -218,13 +218,24 @@ async function runAuthSupertestSuite() {
     // AC-AUTH-02-05: Duplicate already-verified email -> 400 VALIDATION_ERROR
     // -------------------------------------------------------------------------
     console.log('[TEST 5 / AC-AUTH-02-05] Duplicate already-verified email rejection');
+    const activeEmail5 = `active5.${testSuffix}@shipde.vn`;
+    await prisma.user.create({
+      data: {
+        email: activeEmail5,
+        password_hash: await hashPassword('SecurePassword123!'),
+        status: 'active',
+        email_verified_at: new Date(),
+        full_name: 'Verified User 5',
+      },
+    });
+
     const res5 = await request(app.getHttpServer())
       .post('/auth/register')
       .set('x-forwarded-for', '198.51.100.5')
       .send({
         merchant_name: 'Duplicate Shop',
         full_name: 'Duplicate Owner',
-        email: 'owner@shipde.vn', // Seed active & verified email
+        email: activeEmail5,
         password: 'SecurePassword123!',
         terms_accepted: true,
         terms_version: '2026.1',
@@ -316,9 +327,29 @@ async function runAuthSupertestSuite() {
     // AC-AUTH-02-08: Verify with expired token -> 410 TOKEN_EXPIRED
     // -------------------------------------------------------------------------
     console.log('[TEST 8 / AC-AUTH-02-08] Verify with expired token returns 410 TOKEN_EXPIRED');
+    const pendingEmail8 = `pending8.${testSuffix}@shipde.vn`;
+    const user8 = await prisma.user.create({
+      data: {
+        email: pendingEmail8,
+        password_hash: await hashPassword('SecurePassword123!'),
+        status: 'pending_verification',
+        full_name: 'Pending User 8',
+      },
+    });
+    const expiredToken8 = `expired-token-${testSuffix}`;
+    await prisma.verificationToken.create({
+      data: {
+        token: expiredToken8,
+        user_id: user8.id,
+        channel: 'email',
+        identifier: pendingEmail8,
+        expires_at: new Date(Date.now() - 10000),
+      },
+    });
+
     const res8 = await request(app.getHttpServer())
       .post('/auth/verify-email')
-      .send({ token: 'test-token-expired' }) // Seed expired token
+      .send({ token: expiredToken8 })
       .expect(410);
 
     assert.strictEqual(res8.body.error.code, 'TOKEN_EXPIRED');
@@ -331,9 +362,30 @@ async function runAuthSupertestSuite() {
     console.log(
       '[TEST 9 / AC-AUTH-02-09] Replay consumed token returns 410 TOKEN_ALREADY_CONSUMED'
     );
+    const pendingEmail9 = `pending9.${testSuffix}@shipde.vn`;
+    const user9 = await prisma.user.create({
+      data: {
+        email: pendingEmail9,
+        password_hash: await hashPassword('SecurePassword123!'),
+        status: 'active',
+        full_name: 'Pending User 9',
+      },
+    });
+    const consumedToken9 = `consumed-token-${testSuffix}`;
+    await prisma.verificationToken.create({
+      data: {
+        token: consumedToken9,
+        user_id: user9.id,
+        channel: 'email',
+        identifier: pendingEmail9,
+        expires_at: new Date(Date.now() + 3600000),
+        consumed_at: new Date(),
+      },
+    });
+
     const res9 = await request(app.getHttpServer())
       .post('/auth/verify-email')
-      .send({ token: 'test-token-consumed' }) // Seed consumed token
+      .send({ token: consumedToken9 })
       .expect(410);
 
     assert.strictEqual(res9.body.error.code, 'TOKEN_ALREADY_CONSUMED');
@@ -388,12 +440,20 @@ async function runAuthSupertestSuite() {
     // -------------------------------------------------------------------------
     console.log('[TEST 11 / AC-AUTH-02-11] Resend-verification rate limit (60s cooldown)');
     rateLimitService.clear();
-    const pendingEmail = 'pending@shipde.vn'; // Seed pending user
+    const pendingEmail11 = `pending11.${testSuffix}@shipde.vn`;
+    await prisma.user.create({
+      data: {
+        email: pendingEmail11,
+        password_hash: await hashPassword('SecurePassword123!'),
+        status: 'pending_verification',
+        full_name: 'Pending User 11',
+      },
+    });
 
     // 1st resend succeeds
     const res11_1 = await request(app.getHttpServer())
       .post('/auth/verify/resend')
-      .send({ identifier: pendingEmail, channel: 'email' })
+      .send({ identifier: pendingEmail11, channel: 'email' })
       .expect(200);
 
     assert.strictEqual(res11_1.body.data.status, 'SENT');
@@ -402,7 +462,7 @@ async function runAuthSupertestSuite() {
     // 2nd resend within cooldown returns 429 RATE_LIMITED
     const res11_2 = await request(app.getHttpServer())
       .post('/auth/verify/resend')
-      .send({ identifier: pendingEmail, channel: 'email' })
+      .send({ identifier: pendingEmail11, channel: 'email' })
       .expect(429);
 
     assert.strictEqual(res11_2.body.error.code, 'RATE_LIMITED');
@@ -645,6 +705,14 @@ async function runAuthSupertestSuite() {
 
     // 19c. Unverified user returns generic 200 SENT (anti-enumeration)
     const unverifiedEmail = `unverified.${testSuffix}@shipde.vn`;
+    await prisma.user.create({
+      data: {
+        email: unverifiedEmail,
+        password_hash: await hashPassword('SecurePassword123!'),
+        status: 'pending_verification',
+        full_name: 'Unverified User 19c',
+      },
+    });
     let auditLogMessage19c = '';
     console.log = (...args: any[]) => {
       const msg = typeof args[0] === 'string' ? args[0] : JSON.stringify(args);
