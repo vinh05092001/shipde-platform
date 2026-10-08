@@ -8,6 +8,7 @@ import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { AppModule } from '../app.module';
 import { PrismaService } from '../prisma/prisma.service';
+import { SessionService } from './session.service';
 import { APP_CONFIG } from '../config.token';
 import { AppConfig } from '@shipde/config';
 import { SessionStatusEnum, RoleEnum } from '@prisma/client';
@@ -92,6 +93,7 @@ async function runSessionSupertestSuite() {
   await app.init();
 
   const prisma = app.get(PrismaService);
+  const sessionService = app.get(SessionService);
 
   const dbStatus = await prisma.checkReadiness();
   if (dbStatus !== 'up') {
@@ -476,9 +478,9 @@ async function runSessionSupertestSuite() {
       },
     });
 
-    const originalAuditCreate = prisma.auditLog.create;
+    const originalLogAudit = (sessionService as any).logAudit;
     let auditCreateCalled = false;
-    prisma.auditLog.create = async () => {
+    (sessionService as any).logAudit = async () => {
       auditCreateCalled = true;
       throw new Error('Simulated audit failure');
     };
@@ -490,7 +492,7 @@ async function runSessionSupertestSuite() {
         .set('Authorization', `Bearer ${tokAudit.raw}`)
         .expect(500);
 
-      assert.ok(auditCreateCalled, 'auditLog.create should have been called');
+      assert.ok(auditCreateCalled, 'logAudit should have been called');
 
       // Verify the session was NOT revoked due to transaction rollback
       const checkSess = await prisma.deviceSession.findUnique({ where: { id: sessAudit.id } });
@@ -502,12 +504,12 @@ async function runSessionSupertestSuite() {
 
       // 2. Non-transactional path (idempotent revoke)
       // Manually revoke the session first (bypassing the mock)
-      prisma.auditLog.create = originalAuditCreate;
+      (sessionService as any).logAudit = originalLogAudit;
       await prisma.deviceSession.update({
         where: { id: sessAudit.id },
         data: { status: SessionStatusEnum.REVOKED },
       });
-      prisma.auditLog.create = async () => {
+      (sessionService as any).logAudit = async () => {
         auditCreateCalled = true;
         throw new Error('Simulated audit failure on idempotent path');
       };
@@ -532,11 +534,11 @@ async function runSessionSupertestSuite() {
         .set('Authorization', `Bearer ${tokIdemp.raw}`)
         .expect(500);
 
-      assert.ok(auditCreateCalled, 'auditLog.create should have been called on idempotent path');
+      assert.ok(auditCreateCalled, 'logAudit should have been called on idempotent path');
 
       console.log('  PASS: Audit failure aborted the operation and rolled back');
     } finally {
-      prisma.auditLog.create = originalAuditCreate;
+      (sessionService as any).logAudit = originalLogAudit;
     }
 
     console.log('================================================================');
