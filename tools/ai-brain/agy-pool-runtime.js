@@ -285,6 +285,166 @@ function modelIdsFromRuntime(options) {
   return [...out].sort();
 }
 
+let lastGoodModels = null;
+let lastDiscoveryWarning = null;
+
+function resetPoolDiscoveryCache() {
+  lastGoodModels = null;
+  lastDiscoveryWarning = null;
+}
+
+function getLastDiscoveryWarning() {
+  return lastDiscoveryWarning;
+}
+
+function parseCliModels(stdout) {
+  const models = new Set();
+  const lines = String(stdout || '').split(/\r?\n/);
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    if (/^fetching/i.test(line)) continue;
+    if (line.toLowerCase() === 'ok') continue;
+    const parts = line.split(/\t/);
+    const token = (parts[0] || '').trim().split(/\s+/)[0];
+    if (token && !token.includes(' ')) {
+      models.add(token);
+    }
+  }
+  return [...models].sort();
+}
+
+function parseCatalogueModels(catalogue) {
+  const models = new Set();
+  if (Array.isArray(catalogue)) {
+    for (const item of catalogue) {
+      if (!item) continue;
+      const modelId = typeof item === 'string' ? item : item.modelId || item.model || item.id || '';
+      const upstream = typeof item === 'object' ? item.upstream || item.gateway || '' : '';
+      if (modelId.startsWith('ag/')) {
+        models.add(modelId.slice(3));
+      } else if (upstream === 'ag' && modelId) {
+        models.add(modelId.replace(/^ag\//, ''));
+      } else if (modelId.startsWith('antigravity/')) {
+        models.add(modelId.slice('antigravity/'.length));
+      } else if (upstream === 'antigravity' && modelId) {
+        models.add(modelId.replace(/^antigravity\//, ''));
+      }
+    }
+  }
+  return [...models].sort();
+}
+
+function discoverPoolModels(options) {
+  const opts = options || {};
+  if (Array.isArray(opts.models) && opts.models.length > 0) {
+    return [...opts.models];
+  }
+
+  const dataDir = opts.dataDir || path.join(__dirname, 'data', 'discovery');
+  const cacheFile = opts.cacheFile || null;
+
+  if (!opts.refresh && lastGoodModels && lastGoodModels.length > 0) {
+    return [...lastGoodModels];
+  }
+
+  if (!opts.refresh && !opts.spawnSync && !opts.agyBin && !opts.bin && cacheFile) {
+    try {
+      if (fs.existsSync(cacheFile)) {
+        const cached = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+        if (Array.isArray(cached) && cached.length > 0) {
+          lastGoodModels = cached;
+          return [...cached];
+        }
+      }
+    } catch {}
+  }
+
+  // 1. Try agy CLI models listing
+  const bin = opts.agyBin || opts.bin || 'agy';
+  const spawnFn = opts.spawnSync || spawnSync;
+  let cliModels = [];
+  try {
+    const res = spawnFn(bin, ['models'], {
+      encoding: 'utf8',
+      timeout: Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : 15000,
+      windowsHide: true,
+      shell: false,
+    });
+    if (res && !res.error && res.status === 0 && res.stdout) {
+      cliModels = parseCliModels(res.stdout);
+    }
+  } catch {}
+
+  if (cliModels.length > 0) {
+    lastGoodModels = cliModels;
+    lastDiscoveryWarning = null;
+    if (cacheFile) {
+      try {
+        fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
+        fs.writeFileSync(cacheFile, JSON.stringify(cliModels, null, 2), 'utf8');
+      } catch {}
+    }
+    return [...cliModels];
+  }
+
+  // 2. Try catalogue import of Antigravity backend ("ag/" offerings)
+  let catModels = [];
+  if (Array.isArray(opts.catalogue) && opts.catalogue.length > 0) {
+    catModels = parseCatalogueModels(opts.catalogue);
+  } else {
+    const catFile = opts.catalogueFile || path.join(dataDir, 'catalogue.jsonl');
+    try {
+      if (fs.existsSync(catFile)) {
+        const content = fs.readFileSync(catFile, 'utf8');
+        const lines = content.split(/\r?\n/).filter(Boolean);
+        const parsedCatalogue = [];
+        for (const line of lines) {
+          try {
+            parsedCatalogue.push(JSON.parse(line));
+          } catch {}
+        }
+        catModels = parseCatalogueModels(parsedCatalogue);
+      }
+    } catch {}
+  }
+
+  if (catModels.length > 0) {
+    lastGoodModels = catModels;
+    lastDiscoveryWarning = 'agy CLI unavailable; models imported from catalogue';
+    if (cacheFile) {
+      try {
+        fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
+        fs.writeFileSync(cacheFile, JSON.stringify(catModels, null, 2), 'utf8');
+      } catch {}
+    }
+    return [...catModels];
+  }
+
+  // 3. Keep last good list with a warning
+  if (lastGoodModels && lastGoodModels.length > 0) {
+    lastDiscoveryWarning = 'agy discovery failed; keeping last good model list';
+    return [...lastGoodModels];
+  }
+
+  if (cacheFile) {
+    try {
+      if (fs.existsSync(cacheFile)) {
+        const cached = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+        if (Array.isArray(cached) && cached.length > 0) {
+          lastGoodModels = cached;
+          lastDiscoveryWarning = 'agy discovery failed; keeping last good model list';
+          return [...cached];
+        }
+      }
+    } catch {}
+  }
+
+  // 4. Failed discovery: never fall back to a hard-coded model id
+  lastDiscoveryWarning = 'agy discovery failed; no models available';
+  return [];
+}
+
 module.exports = {
   runsDir,
   accountDir,
@@ -297,5 +457,8 @@ module.exports = {
   parseQuotaOutput,
   quotaReading,
   modelIdsFromRuntime,
+  discoverPoolModels,
+  resetPoolDiscoveryCache,
+  getLastDiscoveryWarning,
   isValidAccountId,
 };

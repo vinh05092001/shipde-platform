@@ -30,6 +30,8 @@
  * candidate that can never run gets planned.
  */
 
+const fs = require('fs');
+const path = require('path');
 const sourcesApi = require('./sources');
 const evidence = require('./evidence');
 
@@ -38,9 +40,13 @@ const evidence = require('./evidence');
  * e.g. "gh/gpt-4o" → { upstream: "gh", model: "gpt-4o" }
  */
 function parsePrefix(modelId) {
-  const idx = modelId.indexOf('/');
+  const str =
+    typeof modelId === 'string'
+      ? modelId
+      : (modelId && (modelId.modelId || modelId.model || modelId.id)) || '';
+  const idx = str.indexOf('/');
   if (idx < 1) return null;
-  return { upstream: modelId.slice(0, idx), model: modelId.slice(idx + 1) };
+  return { upstream: str.slice(0, idx), model: str.slice(idx + 1) };
 }
 
 const { candidateKey } = require('./discovery/identity');
@@ -134,7 +140,9 @@ function generateCandidates(opts) {
       const harness = harnessOf(source, registry);
       const accessPath = accessPathOf(source, registry);
       if (!harness || !accessPath) continue;
-      for (const fullId of catalogue) {
+      for (const item of catalogue) {
+        const fullId =
+          typeof item === 'string' ? item : (item && (item.modelId || item.model || item.id)) || '';
         const parsed = parsePrefix(fullId);
         if (!parsed) continue;
         if (sharedArc) {
@@ -180,7 +188,11 @@ function generateCandidates(opts) {
         const accessPath = accessPathOf(source, registry);
         if (!harness || !accessPath) continue;
         const prefix = source.routerAlias + '/';
-        for (const fullId of catalogue) {
+        for (const item of catalogue) {
+          const fullId =
+            typeof item === 'string'
+              ? item
+              : (item && (item.modelId || item.model || item.id)) || '';
           if (!fullId.startsWith(prefix)) continue;
           if (sharedArc) {
             candidates.push({
@@ -302,7 +314,11 @@ function generateCandidates(opts) {
         const mp =
           source.modelPrefix || registry.dispatch?.providers?.[source.id]?.modelPrefix || '';
         if (mp) {
-          for (const fullId of catalogue) {
+          for (const item of catalogue) {
+            const fullId =
+              typeof item === 'string'
+                ? item
+                : (item && (item.modelId || item.model || item.id)) || '';
             const prefixed = mp + fullId;
             if (sharedArc) {
               candidates.push({
@@ -341,6 +357,7 @@ function generateCandidates(opts) {
           }
         }
       } else if (source.servesModels !== false) {
+        if (source.id === 'agy-pool') continue;
         // Self-contained CLI (agy, qwen).
         // Models are not enumerable from the live catalogue; they come from
         // evidence or from the accounts bound to this source. With a bound
@@ -348,26 +365,15 @@ function generateCandidates(opts) {
         // one we emit a '*' placeholder that the chooser must resolve — an
         // unresolved wildcard is rejected, never silently passed through.
         if (Array.isArray(source.accounts) && Array.isArray(source.models)) {
-          const isAgyPool = source.id === 'agy-pool';
-          const familyOf = isAgyPool ? require('./agy-quota').familyOf : null;
           for (const accId of source.accounts) {
             for (const model of source.models) {
-              const family = isAgyPool
-                ? familyOf(model) ||
-                  (model.includes('gemini')
-                    ? 'gemini'
-                    : model.includes('claude') || model.includes('gpt')
-                      ? 'claude-gpt'
-                      : null)
-                : null;
-              if (isAgyPool && !family) continue;
               candidates.push({
                 harness,
-                accessPath: isAgyPool ? `ShipDe\\ShipDe-${accId}` : accessPath,
+                accessPath,
                 gateway: '',
-                upstream: isAgyPool ? 'antigravity' : source.id,
+                upstream: source.id,
                 accountId: accId,
-                quotaScope: isAgyPool ? `${accId}:${family}` : source.id,
+                quotaScope: source.id,
                 modelId: model,
                 source: source.id,
                 kind: source.kind,
@@ -459,10 +465,23 @@ function generateCandidates(opts) {
  */
 function poolAccountCandidates(opts) {
   const o = opts || {};
-  const accounts = o.accounts || [];
+  const pool = require('./agy-pool-runtime');
   const { familyOf } = require('./agy-quota');
-  const poolModels = new Set();
+  const registry = o.registry || sourcesApi.loadSources();
+  const agySource =
+    (registry && registry.sources && registry.sources.find((s) => s.id === 'agy-pool')) || {};
 
+  // 1. Discover models (AC-R01)
+  const poolModels = new Set();
+  if (Array.isArray(o.models) && o.models.length > 0) {
+    for (const m of o.models) if (m) poolModels.add(String(m));
+  } else {
+    for (const m of pool.discoverPoolModels(o)) {
+      if (m) poolModels.add(m);
+    }
+  }
+
+  const accounts = o.accounts || [];
   const native = accounts.find((a) => a.provider === 'antigravity' || a.id === 'agy-native-a');
   if (native) {
     for (const m of accountModels(native)) poolModels.add(m);
@@ -470,21 +489,27 @@ function poolAccountCandidates(opts) {
 
   const catalogue = o.catalogue || [];
   for (const c of catalogue) {
-    if (c.upstream === 'antigravity' || c.source === 'antigravity') {
-      poolModels.add(c.modelId || c.model);
+    if (typeof c === 'object' && c) {
+      if (c.upstream === 'antigravity' || c.source === 'antigravity' || c.upstream === 'ag') {
+        const m = c.modelId || c.model;
+        if (m) poolModels.add(m.replace(/^(ag|antigravity)\//, ''));
+      }
     }
   }
 
   if (o.evidenceData && o.evidenceData.combinations) {
     for (const combo of o.evidenceData.combinations) {
-      if (combo.upstream === 'antigravity' || combo.source === 'antigravity') {
-        poolModels.add(combo.modelId || combo.model);
+      if (
+        combo.upstream === 'antigravity' ||
+        combo.source === 'antigravity' ||
+        combo.upstream === 'ag'
+      ) {
+        const m = combo.modelId || combo.model;
+        if (m) poolModels.add(m.replace(/^(ag|antigravity)\//, ''));
       }
     }
   }
 
-  const pool = require('./agy-pool-runtime');
-  const discoveredAccounts = new Set();
   const shouldDiscoverPool =
     o.discoverPool === false
       ? false
@@ -494,39 +519,187 @@ function poolAccountCandidates(opts) {
         process.env.AGY_POOL_RUNS_DIR ||
         process.env.AGY_RUNS_DIR;
   if (shouldDiscoverPool) {
-    for (const accountId of pool.discoverAccounts(o)) discoveredAccounts.add(accountId);
     for (const modelId of pool.modelIdsFromRuntime(o)) poolModels.add(modelId);
   }
 
-  const candidates = [];
-  if (poolModels.size > 0) {
-    for (const acc of discoveredAccounts) {
-      for (const model of poolModels) {
-        const family =
-          familyOf(model) ||
-          (model.includes('gemini')
-            ? 'gemini'
-            : model.includes('claude') || model.includes('gpt')
-              ? 'claude-gpt'
-              : null);
-        if (!family) continue;
-        candidates.push({
-          harness: 'agy-pool',
-          accessPath: `ShipDe\\ShipDe-${acc}`,
-          gateway: '',
-          upstream: 'antigravity',
-          accountId: acc,
-          quotaScope: `${acc}:${family}`,
-          modelId: model,
-          source: 'agy-pool',
-          kind: 'agent-cli',
-          capabilities: (native && native.capabilities) || {},
-          cost: native && native.cost,
-          sharedQuota: 'unknown',
-        });
+  if (poolModels.size === 0) return [];
+
+  // 2. Discover & filter accounts (AC-R03)
+  const candidateAccounts = new Set();
+  const hasRunsDir = Boolean(
+    o.fakeRunsDir || o.runsDir || process.env.AGY_POOL_RUNS_DIR || process.env.AGY_RUNS_DIR
+  );
+
+  if (shouldDiscoverPool) {
+    for (const accountId of pool.discoverAccounts(o)) candidateAccounts.add(accountId);
+  }
+
+  if (candidateAccounts.size === 0) {
+    if (Array.isArray(o.accounts)) {
+      for (const a of o.accounts) {
+        if (a && pool.isValidAccountId(a.id)) candidateAccounts.add(a.id);
+        else if (typeof a === 'string' && pool.isValidAccountId(a)) candidateAccounts.add(a);
+      }
+    }
+    if (candidateAccounts.size === 0 && Array.isArray(agySource.accounts)) {
+      for (const acc of agySource.accounts) {
+        if (pool.isValidAccountId(acc)) candidateAccounts.add(acc);
       }
     }
   }
+
+  if (candidateAccounts.size === 0) return [];
+
+  const usableAccounts = [];
+  for (const acc of candidateAccounts) {
+    if (hasRunsDir) {
+      let accDirExists = false;
+      try {
+        const accDir = pool.accountDir(acc, o);
+        accDirExists = fs.existsSync(accDir);
+      } catch {}
+      if (!accDirExists) continue;
+
+      const result = pool.readResult(acc, o);
+      if (
+        result &&
+        (result.state === 'login-required' ||
+          result.state === 'AUTH_FAILED' ||
+          result.reason === 'AUTH_FAILED')
+      ) {
+        continue;
+      }
+      try {
+        const stateFile = path.join(pool.accountDir(acc, o), 'state.json');
+        if (fs.existsSync(stateFile)) {
+          const stateDoc = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+          if (
+            stateDoc &&
+            (stateDoc.reason === 'AUTH_FAILED' ||
+              (stateDoc.result &&
+                (stateDoc.result.state === 'login-required' ||
+                  stateDoc.result.reason === 'AUTH_FAILED')))
+          ) {
+            continue;
+          }
+        }
+      } catch {}
+    }
+    usableAccounts.push(acc);
+  }
+
+  // 3. Harness capabilities from sources.json
+  const harnessCapabilities = Object.assign({}, agySource.capabilities || { tools: true });
+
+  // 4. Candidate generation
+  const candidates = [];
+  for (const acc of usableAccounts) {
+    let quotaReading = null;
+    if (hasRunsDir) {
+      const outText = pool.readOutText(acc, o);
+      if (outText) {
+        quotaReading = pool.parseQuotaOutput(outText);
+        if (quotaReading.available === false && quotaReading.reason === 'AUTH_FAILED') {
+          continue;
+        }
+      }
+    }
+
+    for (const model of poolModels) {
+      const family =
+        familyOf(model) ||
+        (model.includes('gemini')
+          ? 'gemini'
+          : model.includes('claude') || model.includes('gpt')
+            ? 'claude-gpt'
+            : null);
+      if (!family) continue;
+
+      // Exclude if family quota is 0%
+      if (quotaReading && Array.isArray(quotaReading.rows)) {
+        const familyRows = quotaReading.rows.filter((r) => r.family === family);
+        if (familyRows.length > 0) {
+          const isZero = familyRows.some(
+            (r) => r.remainingPercent === 0 || r.remainingPercent <= 0 || r.disabled === true
+          );
+          if (isZero) continue;
+        }
+      }
+
+      // Look up catalogue entry for the SAME backend model ID
+      let modelCapabilities = null;
+      let contextWindow = undefined;
+
+      if (Array.isArray(catalogue)) {
+        for (const entry of catalogue) {
+          if (!entry || typeof entry !== 'object') continue;
+          const entryModel = entry.modelId || entry.model || entry.id || '';
+          const matchBackend =
+            entryModel === model ||
+            entryModel === 'ag/' + model ||
+            entryModel === 'antigravity/' + model ||
+            ((entry.upstream === 'ag' || entry.upstream === 'antigravity') &&
+              entryModel.replace(/^(ag|antigravity)\//, '') === model);
+          if (matchBackend) {
+            if (entry.capabilities && Object.keys(entry.capabilities).length > 0) {
+              modelCapabilities = Object.assign({}, entry.capabilities);
+            }
+            if (entry.contextWindow !== undefined) {
+              contextWindow = entry.contextWindow;
+            } else if (entry.capabilities && entry.capabilities.contextWindow !== undefined) {
+              contextWindow = entry.capabilities.contextWindow;
+            }
+            break;
+          }
+        }
+      }
+
+      if (!modelCapabilities) {
+        const accList = Array.isArray(o.accounts) && o.accounts.length > 0 ? o.accounts : accounts;
+        for (const a of accList) {
+          if (!a || !a.capabilities) continue;
+          if (a.provider === 'antigravity' || a.id === 'agy-native-a' || a.id === 'agy-docker-b') {
+            const hasModel =
+              Array.isArray(a.models) &&
+              a.models.some((m) => (typeof m === 'string' ? m : m.model || m.modelId) === model);
+            if (hasModel) {
+              if (a.capabilities && Object.keys(a.capabilities).length > 0) {
+                modelCapabilities = Object.assign({}, a.capabilities);
+              }
+              if (a.contextWindow !== undefined) contextWindow = a.contextWindow;
+              else if (a.capabilities.contextWindow !== undefined)
+                contextWindow = a.capabilities.contextWindow;
+              break;
+            }
+          }
+        }
+      }
+
+      // Effective capabilities: model AND harness
+      let effectiveCapabilities = {};
+      if (modelCapabilities && Object.keys(modelCapabilities).length > 0) {
+        effectiveCapabilities = Object.assign({}, modelCapabilities, harnessCapabilities);
+      }
+
+      candidates.push({
+        harness: 'agy-pool',
+        accessPath: `ShipDe\\ShipDe-${acc}`,
+        gateway: '',
+        upstream: 'antigravity',
+        accountId: acc,
+        quotaScope: `${acc}:${family}`,
+        modelId: model,
+        source: 'agy-pool',
+        kind: 'agent-cli',
+        capabilities: effectiveCapabilities,
+        contextWindow:
+          contextWindow !== undefined ? contextWindow : effectiveCapabilities.contextWindow,
+        cost: native && native.cost,
+        sharedQuota: 'unknown',
+      });
+    }
+  }
+
   return candidates;
 }
 

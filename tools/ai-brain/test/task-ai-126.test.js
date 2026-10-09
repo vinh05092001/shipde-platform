@@ -286,9 +286,9 @@ describe('TASK-AI-126', () => {
     );
     for (const c of agyCandidates) {
       assert.equal(c.upstream, 'antigravity');
-      assert.equal(
+      assert.match(
         c.quotaScope,
-        c.accountId + ':gemini',
+        new RegExp('^' + c.accountId + ':(gemini|claude-gpt)$'),
         'the agy quota scope is <account>:<family>'
       );
       assert.match(c.accountId, /^agy\d{2}$/);
