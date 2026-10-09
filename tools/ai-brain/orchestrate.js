@@ -3601,11 +3601,9 @@ async function runOrchestration(goal, opts) {
             workItemId: item.id,
             role: roleOf(item),
             tools: promptToolIds,
+            chosen: decision.chosen,
+            ranking: (decision.decisionRecorded && decision.decisionRecorded.ranking) || [],
           },
-          logOpts
-        );
-        decisions.recordDecision(
-          Object.assign({}, decision.decisionRecorded || {}, { tools: promptToolIds }),
           logOpts
         );
       }
