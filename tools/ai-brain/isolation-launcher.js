@@ -964,10 +964,11 @@ function getIsolatedLauncher() {
                           ) {
                             const recWorktree = path.resolve(rec.worktree);
                             const currentWorktree = path.resolve(workerRoot);
-                            const pathsMatch = process.platform === 'win32'
-                              ? recWorktree.toLowerCase() === currentWorktree.toLowerCase()
-                              : recWorktree === currentWorktree;
-                            
+                            const pathsMatch =
+                              process.platform === 'win32'
+                                ? recWorktree.toLowerCase() === currentWorktree.toLowerCase()
+                                : recWorktree === currentWorktree;
+
                             if (pathsMatch) {
                               repairCommits.add(rec.sha.toLowerCase());
                             }
