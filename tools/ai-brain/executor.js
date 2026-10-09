@@ -34,6 +34,7 @@ const { REVIEW_ROLES, IMPLEMENTATION_ROLES } = require('./scheduler');
 const { offeringId: toOfferingId } = require('./offerings');
 const { getHarness, runHarness, parseLastJson } = require('./harness');
 const { loadSources, dispatchRoute, qualifyModel, runsOpenCodeHarness } = require('./sources');
+const { ISOLATED_WORKER_VERIFICATION_NOTE } = require('./prompt-compiler');
 const decisions = require('./decisions');
 
 const Outcome = Object.freeze({
@@ -49,11 +50,11 @@ function workerName(workItemId) {
   return name.length > 20 ? name.slice(0, 20) : name;
 }
 
+function isolatedExtra(opts) {
+  return opts && opts.isolatedWorker ? ' ' + ISOLATED_WORKER_VERIFICATION_NOTE : '';
+}
+
 function defaultPrompt(assignment, opts) {
-  const isolated = opts && opts.isolatedWorker;
-  const extra = isolated
-    ? ' You can now run pnpm lint, pnpm typecheck, pnpm format:check, prettier --write on your own files, and the focused tests. API supertests skip without a database (CI is the evidence).'
-    : '';
   return (
     'Work Item ' +
     assignment.workItemId +
@@ -61,15 +62,11 @@ function defaultPrompt(assignment, opts) {
     'items within Allowed paths on branch ' +
     assignment.branch +
     ', run its verification, and open or update the Pull Request. Do not merge.' +
-    extra
+    isolatedExtra(opts)
   );
 }
 
 function resumePrompt(assignment, opts) {
-  const isolated = opts && opts.isolatedWorker;
-  const extra = isolated
-    ? ' You can now run pnpm lint, pnpm typecheck, pnpm format:check, prettier --write on your own files, and the focused tests. API supertests skip without a database (CI is the evidence).'
-    : '';
   return (
     'Continue Work Item ' +
     assignment.workItemId +
@@ -79,7 +76,7 @@ function resumePrompt(assignment, opts) {
     'the remaining in-scope items, run the verification, and update the Pull Request. ' +
     'Do not redo work that is already committed and do not repeat any action with an external effect ' +
     'before checking whether it already happened.' +
-    extra
+    isolatedExtra(opts)
   );
 }
 

@@ -74,6 +74,45 @@ function getFolderHash(folder) {
   return finalHash.digest('hex');
 }
 
+// WD-R01 constraint: "Never copy credentials, .env files or tokens into the
+// worker area". The shared-deps copy source is node_modules only, and a
+// substring rule on package paths pruned real dependency content (whole
+// @aws-sdk/credential-provider-* store trees, `.../credentials.js` modules)
+// while stamping the cache READY — so the filter matches exact secret
+// filenames only, never package paths.
+const SECRET_BASENAMES = new Set([
+  '.env',
+  '.npmrc',
+  '.netrc',
+  '.git-credentials',
+  '.pgpass',
+  'credentials.json',
+  'credentials.xml',
+  'credentials.yml',
+  'credentials.yaml',
+  'id_rsa',
+  'id_rsa.pub',
+  'id_ed25519',
+  'id_ed25519.pub',
+  'id_ecdsa',
+  'id_ecdsa.pub',
+  'id_dsa',
+  'id_dsa.pub',
+]);
+const SECRET_EXTENSIONS = new Set(['.pem', '.p12', '.pfx', '.jks', '.keystore', '.ppk', '.key']);
+const SECRET_TOKEN_FILE =
+  /^(?:auth[-_]?|access[-_]?|refresh[-_]?|api[-_]?)?tokens?\.(?:json|txt|ya?ml|ini|cfg|conf|env|properties)$/;
+
+/** True only for names that are unambiguously credential/token material. */
+function isSecretFileName(name) {
+  const n = String(name || '').toLowerCase();
+  if (!n) return false;
+  if (SECRET_BASENAMES.has(n)) return true;
+  if (n.startsWith('.env.')) return true;
+  if (SECRET_EXTENSIONS.has(path.extname(n))) return true;
+  return SECRET_TOKEN_FILE.test(n);
+}
+
 function queryWorkerSid() {
   const sidRes = cp.spawnSync(
     'powershell',
@@ -693,6 +732,32 @@ function materialiseExercise(workerRoot, options) {
   return { path: target, cases: cases.length, failBefore };
 }
 
+/**
+ * WD-R03: a shared-deps failure must never block the launch, but it must leave
+ * a warning where operators look — the real append-only decision log
+ * (decisions.js), not a caller-supplied hook that nothing wires. The record is
+ * best-effort: a log that cannot be written must not turn a warning into a
+ * block either.
+ */
+function recordWorkerDepsUnavailable(opts, workerRoot, err) {
+  try {
+    const decisions = require('./decisions');
+    decisions.recordDecision(
+      {
+        stage: decisions.Stage.WARNING,
+        warning: 'WORKER_DEPS_UNAVAILABLE',
+        detail: String((err && err.message) || err).slice(0, 300),
+        workItemId: (opts && opts.workItemId) || null,
+        branch: (opts && opts.branch) || null,
+        worktree: workerRoot || null,
+      },
+      { dir: (opts && opts.decisionDir) || undefined }
+    );
+  } catch (logErr) {
+    console.error(logErr);
+  }
+}
+
 function getIsolatedLauncher() {
   return function isolatedLauncher(adapter, args, options) {
     if (args && !Array.isArray(args)) {
@@ -1044,37 +1109,61 @@ function getIsolatedLauncher() {
           return results;
         };
         const pkgJsons = findPackageJsons(workerRoot);
-        const allFiles = [pnpmLockPath, ...pkgJsons].sort();
+        // The hash mixes each file's repo-relative name with its content and a
+        // delimiter, so distinct file sets cannot collide on a bare content
+        // concatenation and the value does not depend on where the clone sits.
+        const hashEntries = [
+          { rel: 'pnpm-lock.yaml', file: pnpmLockPath },
+          ...pkgJsons.map((f) => ({
+            rel: path.relative(workerRoot, f).split(path.sep).join('/'),
+            file: f,
+          })),
+        ].sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
         const hash = crypto.createHash('sha256');
-        for (const f of allFiles) {
-          hash.update(fs.readFileSync(f));
+        for (const entry of hashEntries) {
+          hash.update(entry.rel, 'utf8');
+          hash.update('\0', 'utf8');
+          hash.update(fs.readFileSync(entry.file));
+          hash.update('\0', 'utf8');
         }
         const depsHash = hash.digest('hex').substring(0, 16);
         const depsDir = path.join(path.dirname(workerRoot), 'deps', depsHash);
         const depsNodeModules = path.join(depsDir, 'node_modules');
         const markerFile = path.join(depsDir, '.shipde-deps-ready');
+        const cacheReady = () => fs.existsSync(markerFile) && fs.existsSync(depsNodeModules);
 
-        if (!fs.existsSync(markerFile)) {
-          fs.mkdirSync(depsDir, { recursive: true });
+        // Populate ONCE (WD-R01): copy into a private staging tree, mark it,
+        // then rename it into place in one step. A visible deps dir carrying
+        // its marker is therefore always a complete tree, and two first-time
+        // launches cannot interleave writes inside it.
+        if (!cacheReady()) {
+          const stagingDir =
+            depsDir + '.staging-' + process.pid + '-' + Math.random().toString(36).slice(2, 8);
+          fs.mkdirSync(stagingDir, { recursive: true });
           let copySuccess = true;
           const copyNm = (relPath) => {
             if (!copySuccess) return;
             const hostNm = path.join(hostCwd, relPath);
-            const depsNm = path.join(depsDir, relPath);
+            const stagedNm = path.join(stagingDir, relPath);
             if (fs.existsSync(hostNm)) {
-              fs.mkdirSync(path.dirname(depsNm), { recursive: true });
+              fs.mkdirSync(path.dirname(stagedNm), { recursive: true });
               try {
-                fs.cpSync(hostNm, depsNm, {
+                fs.cpSync(hostNm, stagedNm, {
                   recursive: true,
                   dereference: false,
-                  filter: (src, dest) => {
-                    const name = path.basename(src).toLowerCase();
-                    if (
-                      name.includes('.env') ||
-                      name.includes('credential') ||
-                      name.includes('secret')
-                    )
-                      return false;
+                  filter: (src) => {
+                    if (isSecretFileName(path.basename(src))) return false;
+                    try {
+                      const st = fs.lstatSync(src);
+                      if (
+                        st.isSymbolicLink() &&
+                        isSecretFileName(path.basename(fs.readlinkSync(src)))
+                      ) {
+                        return false;
+                      }
+                    } catch {
+                      return true;
+                    }
                     return true;
                   },
                 });
@@ -1098,25 +1187,51 @@ function getIsolatedLauncher() {
             }
           }
 
-          if (copySuccess && fs.existsSync(depsNodeModules)) {
-            fs.writeFileSync(markerFile, 'ready', 'utf8');
+          if (copySuccess && fs.existsSync(path.join(stagingDir, 'node_modules'))) {
+            fs.writeFileSync(path.join(stagingDir, '.shipde-deps-ready'), 'ready', 'utf8');
+            try {
+              if (fs.existsSync(depsDir)) {
+                fs.rmSync(depsDir, { recursive: true, force: true });
+              }
+              fs.renameSync(stagingDir, depsDir);
+            } catch (renameErr) {
+              // A concurrent launch finished first: its complete tree wins.
+              fs.rmSync(stagingDir, { recursive: true, force: true });
+              if (!cacheReady()) throw renameErr;
+            }
           } else {
+            fs.rmSync(stagingDir, { recursive: true, force: true });
             throw new Error('failed to copy dependencies from host');
           }
         }
 
-        // Setup junctions
+        // WD-R02 junctions: the worker root must point at the shared tree. An
+        // existing path that is not that junction (a real directory left
+        // behind) is replaced, never silently kept without a warning.
         const setupJunction = (relPath) => {
           const depsNm = path.join(depsDir, relPath);
           const workerNm = path.join(workerRoot, relPath);
-          if (fs.existsSync(depsNm)) {
-            if (!fs.existsSync(workerNm)) {
-              fs.mkdirSync(path.dirname(workerNm), { recursive: true });
-              fs.symlinkSync(depsNm, workerNm, 'junction');
+          if (!fs.existsSync(depsNm)) return null;
+          let linked = false;
+          if (fs.existsSync(workerNm)) {
+            try {
+              const st = fs.lstatSync(workerNm);
+              const target = st.isSymbolicLink() ? fs.readlinkSync(workerNm) : null;
+              linked =
+                target !== null &&
+                path.resolve(target).toLowerCase() === path.resolve(depsNm).toLowerCase();
+            } catch {
+              linked = false;
             }
-            return relPath + '/';
+            if (!linked) {
+              fs.rmSync(workerNm, { recursive: true, force: true });
+            }
           }
-          return null;
+          if (!linked) {
+            fs.mkdirSync(path.dirname(workerNm), { recursive: true });
+            fs.symlinkSync(depsNm, workerNm, 'junction');
+          }
+          return relPath + '/';
         };
 
         const excluded = [];
@@ -1142,9 +1257,7 @@ function getIsolatedLauncher() {
         }
       } catch (err) {
         console.error(err);
-        if (opts.log) {
-          opts.log('WORKER_DEPS_UNAVAILABLE', { message: err.message });
-        }
+        recordWorkerDepsUnavailable(opts, workerRoot, err);
       }
     }
 
