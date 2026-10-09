@@ -207,6 +207,7 @@ function resolveLauncher(o, isolatedLauncher) {
       // TASK-AI-127 WD-R03: a WORKER_DEPS_UNAVAILABLE warning is recorded in
       // the same decision log the run itself writes.
       decisionDir: o.decisionDir || undefined,
+      checkpoint: o.checkpointFile || (typeof o.checkpoint === 'string' ? o.checkpoint : undefined),
     });
   };
 }
@@ -5790,29 +5791,33 @@ function repairRound(
     const adapter = harnessFor({ harness: repairJob.harness });
     const handle = adapter ? require('./executor').readSessionId(adapter, repairJob, res).id : null;
     const nextSha = headShaOf(repairWorkerRoot);
-    if (!handle || !nextSha || nextSha === sha || isTreeDirty(repairWorkerRoot)) return { sha };
-    decisions.recordDecision(
-      {
-        stage: decisions.Stage.LAUNCHED,
-        workItemId: planned.id,
-        role: roleOf(planned),
-        attempt: round,
-        attemptNumber: round,
-        chosen: decision.chosen,
-        harness: repairJob.harness,
-        branch: repairJob.branch,
-        sessionId: handle,
-        sha: nextSha,
-        detail: 'REPAIR_ROUND: repairs ' + item.id,
-        worktree: repairJob.cwd || null,
-      },
-      logOpts
-    );
-    if (typeof options.onCheckpoint === 'function') {
-      options.onCheckpoint('repair_round_completed', {
-        repair: { round, sha: nextSha, candidateKey: decision.chosen },
-      });
+
+    if (nextSha && nextSha !== sha) {
+      decisions.recordDecision(
+        {
+          stage: decisions.Stage.LAUNCHED,
+          workItemId: planned.id,
+          role: roleOf(planned),
+          attempt: round,
+          attemptNumber: round,
+          chosen: decision.chosen,
+          harness: repairJob.harness,
+          branch: repairJob.branch,
+          sessionId: handle,
+          sha: nextSha,
+          detail: 'REPAIR_ROUND: repairs ' + item.id,
+          worktree: repairJob.cwd || null,
+        },
+        logOpts
+      );
+      if (typeof options.onCheckpoint === 'function') {
+        options.onCheckpoint('repair_round_completed', {
+          repair: { round, sha: nextSha, candidateKey: decision.chosen },
+        });
+      }
     }
+
+    if (!handle || !nextSha || nextSha === sha || isTreeDirty(repairWorkerRoot)) return { sha };
     return { sha: nextSha };
   };
 }

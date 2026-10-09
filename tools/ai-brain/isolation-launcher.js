@@ -945,12 +945,17 @@ function getIsolatedLauncher() {
                       if (extraCommits.length > 0) {
                         const decisions = require('./decisions');
                         const logRecords = decisions.readDecisionsSafe({
-                          workItemId,
                           dir: (opts && opts.decisionDir) || undefined,
                         });
+                        const baseId = workItemId
+                          ? workItemId.replace(/-(repair-\d+|review)$/, '')
+                          : null;
                         const repairCommits = new Set();
                         for (const rec of logRecords) {
                           if (
+                            rec.workItemId &&
+                            baseId &&
+                            rec.workItemId.replace(/-(repair-\d+|review)$/, '') === baseId &&
                             rec.stage === decisions.Stage.LAUNCHED &&
                             rec.detail &&
                             rec.detail.startsWith('REPAIR_ROUND:') &&
@@ -972,9 +977,9 @@ function getIsolatedLauncher() {
                             if (
                               checkpointOnDisk &&
                               checkpointOnDisk.liveSteps &&
-                              checkpointOnDisk.liveSteps[workItemId]
+                              checkpointOnDisk.liveSteps[baseId]
                             ) {
-                              const step = checkpointOnDisk.liveSteps[workItemId];
+                              const step = checkpointOnDisk.liveSteps[baseId];
                               let updated = false;
                               if (step.launch) {
                                 step.launch.workerSha = retainedHeadSha;
@@ -1017,12 +1022,22 @@ function getIsolatedLauncher() {
         }
 
         if (!adopted) {
-          const err = new Error(
+          let errMsg =
             'WORKER_HEAD_MISMATCH: retained worker root HEAD (' +
-              (retainedHeadSha || 'unknown') +
-              ') does not match requested SHA ' +
-              retainWorkerHead
-          );
+            (retainedHeadSha || 'unknown') +
+            ') does not match requested SHA ' +
+            retainWorkerHead;
+
+          if (
+            retainedHeadSha &&
+            retainedHeadSha.toLowerCase() === retainWorkerHead.toLowerCase() &&
+            isTreeDirty(workerRoot)
+          ) {
+            errMsg =
+              'WORKER_HEAD_MISMATCH: retained worker root HEAD (' + retainedHeadSha + ') is dirty';
+          }
+
+          const err = new Error(errMsg);
           err.code = 'WORKER_HEAD_MISMATCH';
           throw err;
         }

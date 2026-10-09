@@ -75,7 +75,7 @@ const ISOLATION_VERDICT_HUMAN_ACTION = 'run scripts/ai/isolation/Test-WorkerIsol
  *   ISOLATION_VERDICT_STALE / _MISSING / _INVALID / _NOT_CLOSED — the boundary
  *   attestation is unusable; ISOLATION_CHECKOUT_FAILED and the pinned base-SHA
  *   errors; PROVISION_BASE_MISMATCH; a worker-root removal that failed with
- *   EPERM/EBUSY; and the clone failure the launcher reports verbatim.
+ *   EPERM/EBUSY; WORKER_HEAD_MISMATCH and WORKER_ROOT_MISSING; and the clone failure the launcher reports verbatim.
  *
  * Only the launcher's own stderr is read here — worker stdout never widens or
  * narrows the rule.
