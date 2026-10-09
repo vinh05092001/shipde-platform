@@ -480,16 +480,12 @@ function getReviewersFromDecisionLog(workItemId, reviewedSha, decisionDir) {
     const matchesItem = rId === normId || rId === `${normId}-REVIEW` || normOf === normId;
     if (!matchesItem) continue;
 
-    const isReviewRole = String(r.role || '').toLowerCase() === 'reviewer';
-    const isReviewStage = [
-      'reviewer-selection',
-      'review',
-      'review-launch',
-      'launched',
-      'completed',
-    ].includes(String(r.stage || '').toLowerCase());
+    // (b) Only accept a review-launch record written by orchestrate with stage 'review-launch' plus sessionId
+    const stage = String(r.stage || '').toLowerCase();
+    if (stage !== 'review-launch') continue;
 
-    if (!isReviewRole && !isReviewStage) continue;
+    const sessionId = typeof r.sessionId === 'string' ? r.sessionId.trim() : '';
+    if (!sessionId) continue;
 
     const rSha = String(
       r.reviewedSha || r.sha || r.targetSha || r.headSha || r.commit || r.commitSha || ''
@@ -514,6 +510,99 @@ function getReviewersFromDecisionLog(workItemId, reviewedSha, decisionDir) {
     }
   }
   return Array.from(reviewers);
+}
+
+function hasReviewProofForSha(
+  workItemId,
+  reviewedSha,
+  manifestPath,
+  repoCwd,
+  decisionDir,
+  options
+) {
+  const normId = String(workItemId || '')
+    .trim()
+    .toUpperCase();
+  const targetSha = String(reviewedSha || '')
+    .trim()
+    .toLowerCase();
+  if (!targetSha || !normId) return false;
+
+  const o = options || {};
+
+  // 1. Review file for that SHA
+  const artifactPath = findReviewArtifact(workItemId, manifestPath, repoCwd, decisionDir, o);
+  const potentialReviewFiles = [
+    artifactPath,
+    o.reviewFile,
+    o.artifactPath,
+    manifestPath && path.join(path.dirname(manifestPath), `review-artifact-${workItemId}.md`),
+    manifestPath && path.join(path.dirname(manifestPath), 'review-artifact.md'),
+    decisionDir && path.join(decisionDir, `review-artifact-${workItemId}.md`),
+    decisionDir && path.join(decisionDir, 'review-artifact.md'),
+    repoCwd && path.join(repoCwd, `review-artifact-${workItemId}.md`),
+    repoCwd && path.join(repoCwd, 'docs', 'reviews', `review-${workItemId}.md`),
+    repoCwd && path.join(repoCwd, 'docs', 'product-spec', 'work-items', `${workItemId}.md`),
+  ].filter(Boolean);
+
+  for (const rf of potentialReviewFiles) {
+    if (fs.existsSync(rf)) {
+      try {
+        const text = fs.readFileSync(rf, 'utf8').toLowerCase();
+        if (text.includes(targetSha)) {
+          return true;
+        }
+      } catch {
+        // ignore read errors
+      }
+    }
+  }
+
+  // 2. Imported review evidence entry for that SHA
+  if (o.evidence && typeof o.evidence === 'object') {
+    const combos = Array.isArray(o.evidence.combinations) ? o.evidence.combinations : [];
+    for (const combo of combos) {
+      for (const ev of combo.evidence || []) {
+        const evSha = String(ev.sha || ev.commitSha || ev.reviewedSha || '')
+          .trim()
+          .toLowerCase();
+        if (evSha === targetSha) {
+          return true;
+        }
+      }
+    }
+  }
+
+  const evidenceDirCandidates = [
+    o.evidenceDir,
+    repoCwd && path.join(repoCwd, 'tools', 'ai-brain', 'data', 'evidence'),
+    path.join(__dirname, 'data', 'evidence'),
+  ].filter(Boolean);
+
+  for (const ed of evidenceDirCandidates) {
+    const evFile = path.join(ed, 'evidence.json');
+    if (fs.existsSync(evFile)) {
+      try {
+        const raw = fs.readFileSync(evFile, 'utf8').replace(/^\uFEFF/, '');
+        const data = JSON.parse(raw);
+        const combos = Array.isArray(data.combinations) ? data.combinations : [];
+        for (const combo of combos) {
+          for (const ev of combo.evidence || []) {
+            const evSha = String(ev.sha || ev.commitSha || ev.reviewedSha || '')
+              .trim()
+              .toLowerCase();
+            if (evSha === targetSha) {
+              return true;
+            }
+          }
+        }
+      } catch {
+        // ignore read/parse errors
+      }
+    }
+  }
+
+  return false;
 }
 
 /**
@@ -653,6 +742,22 @@ async function governedMerge(options) {
     return refuse(
       RefusalCode.REVIEWER_NOT_INDEPENDENT,
       `cannot determine writers/reviewers from decision log: ${err.message}`
+    );
+  }
+
+  // (d) Must be matched by an imported review evidence entry or review file for that SHA
+  const hasProof = hasReviewProofForSha(
+    workItemId,
+    reviewedSha,
+    manifestPath,
+    repoCwd,
+    decisionDir,
+    o
+  );
+  if (!hasProof) {
+    return refuse(
+      RefusalCode.REVIEWER_NOT_RECORDED,
+      `no review file or imported review evidence entry matches reviewed commit SHA ${reviewedSha}`
     );
   }
 
@@ -1061,6 +1166,7 @@ module.exports = {
   hasOpenP0P1Findings,
   getWritersFromDecisionLog,
   getReviewersFromDecisionLog,
+  hasReviewProofForSha,
   governedMerge,
   isEligibleForMerge,
 };

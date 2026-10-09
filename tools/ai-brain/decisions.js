@@ -43,6 +43,8 @@ const Stage = Object.freeze({
   // append-only trace a human reads. It opens and closes no writer claim.
   REVIEW: 'review',
   REVIEWER_SELECTION: 'reviewer-selection',
+  // TASK-AI-133: Reviewer launch by orchestrate
+  REVIEW_LAUNCH: 'review-launch',
   // A non-blocking warning (TASK-AI-127 WD-R03, e.g. WORKER_DEPS_UNAVAILABLE):
   // the run continues, but the condition must be readable in the same trace.
   WARNING: 'warning',
@@ -230,6 +232,7 @@ function openWritersDetailed(options) {
     const isReview =
       r.stage === Stage.REVIEW ||
       r.stage === Stage.REVIEWER_SELECTION ||
+      r.stage === Stage.REVIEW_LAUNCH ||
       r.role === 'reviewer' ||
       (typeof r.role === 'string' && (r.role.startsWith('reviewer.') || r.role === 'reviewer'));
     if (isReview) continue;
@@ -315,6 +318,7 @@ function openReviewersDetailed(options) {
     const isReview =
       r.stage === Stage.REVIEW ||
       r.stage === Stage.REVIEWER_SELECTION ||
+      r.stage === Stage.REVIEW_LAUNCH ||
       r.role === 'reviewer' ||
       (typeof r.role === 'string' && (r.role.startsWith('reviewer.') || r.role === 'reviewer'));
 

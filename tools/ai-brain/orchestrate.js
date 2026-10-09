@@ -884,7 +884,7 @@ function reviewLane(
       if (handle) {
         decisions.recordDecision(
           {
-            stage: decisions.Stage.LAUNCHED,
+            stage: decisions.Stage.REVIEW_LAUNCH || 'review-launch',
             workItemId: (item ? item.id : 'item') + '-review',
             role: 'reviewer',
             attempt: opts && opts.attempt,
@@ -895,6 +895,8 @@ function reviewLane(
             sessionId: handle,
             detail: 'REVIEW_LANE: reviews ' + (item ? item.id : 'item') + ' at ' + targetSha,
             worktree: reviewWorkerRoot,
+            reviewedSha: targetSha,
+            sha: targetSha,
           },
           logOpts
         );

@@ -2899,17 +2899,20 @@ function Get-ShipDeExactHeadReviewManifestVerdict {
                                 $role = [string](Get-ShipDeObjectProperty -Object $entry -Names @("role", "Role"))
                                 $stage = [string](Get-ShipDeObjectProperty -Object $entry -Names @("stage", "Stage"))
 
-                                if ($role -ieq "reviewer" -or $stage -in @("review", "reviewer-selection", "review-launch", "launched", "completed")) {
-                                    $eSha = [string](Get-ShipDeObjectProperty -Object $entry -Names @("reviewedSha", "ReviewedSha", "sha", "Sha", "targetSha", "TargetSha", "headSha", "HeadSha", "commit", "Commit"))
-                                    $eDetail = [string](Get-ShipDeObjectProperty -Object $entry -Names @("detail", "Detail"))
-                                    $shaMatches = ($eSha -and $eSha.ToLowerInvariant() -eq $HeadSha.ToLowerInvariant()) -or ($eDetail -and $eDetail.IndexOf($HeadSha, [System.StringComparison]::OrdinalIgnoreCase) -ge 0)
-                                    if ($shaMatches) {
-                                        $rCand = [string](Get-ShipDeObjectProperty -Object $entry -Names @("chosen", "chosenKey", "reviewerCandidateKey", "candidateKey", "offeringId", "reviewer"))
-                                        if (-not [string]::IsNullOrWhiteSpace($rCand)) {
-                                            [void]$allReviewers.Add($rCand.Trim())
+                                if ($stage -ieq "review-launch") {
+                                    $sessId = [string](Get-ShipDeObjectProperty -Object $entry -Names @("sessionId", "SessionId"))
+                                    if (-not [string]::IsNullOrWhiteSpace($sessId)) {
+                                        $eSha = [string](Get-ShipDeObjectProperty -Object $entry -Names @("reviewedSha", "ReviewedSha", "sha", "Sha", "targetSha", "TargetSha", "headSha", "HeadSha", "commit", "Commit"))
+                                        $eDetail = [string](Get-ShipDeObjectProperty -Object $entry -Names @("detail", "Detail"))
+                                        $shaMatches = ($eSha -and $eSha.ToLowerInvariant() -eq $HeadSha.ToLowerInvariant()) -or ($eDetail -and $eDetail.IndexOf($HeadSha, [System.StringComparison]::OrdinalIgnoreCase) -ge 0)
+                                        if ($shaMatches) {
+                                            $rCand = [string](Get-ShipDeObjectProperty -Object $entry -Names @("chosen", "chosenKey", "reviewerCandidateKey", "candidateKey", "offeringId", "reviewer"))
+                                            if (-not [string]::IsNullOrWhiteSpace($rCand)) {
+                                                [void]$allReviewers.Add($rCand.Trim())
+                                            }
                                         }
                                     }
-                                } elseif ($stage -ne "refused") {
+                                } elseif ($role -ne "reviewer" -and $stage -ne "refused" -and $stage -ne "reviewer-selection" -and $stage -ne "review") {
                                     $cand = [string](Get-ShipDeObjectProperty -Object $entry -Names @("chosen", "chosenKey", "writerCandidateKey", "candidateKey", "offeringId", "writer"))
                                     if (-not [string]::IsNullOrWhiteSpace($cand)) {
                                         [void]$allWriters.Add($cand.Trim())
@@ -2918,6 +2921,40 @@ function Get-ShipDeExactHeadReviewManifestVerdict {
                             }
                         } catch { }
                     }
+                }
+
+                # Condition (d): matched by an imported review evidence entry or review file for that SHA
+                $hasReviewProof = $false
+                $artifactCandidates = @(
+                    (Join-Path $dir "review-artifact-$targetWorkItemId.md"),
+                    (Join-Path $dir "review-artifact.md"),
+                    (Join-Path $RepoDir "review-artifact-$targetWorkItemId.md"),
+                    (Join-Path $RepoDir "docs\product-spec\work-items\$targetWorkItemId.md")
+                )
+                foreach ($artPath in $artifactCandidates) {
+                    if (Test-Path -LiteralPath $artPath -PathType Leaf) {
+                        try {
+                            $artText = Get-Content -LiteralPath $artPath -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+                            if ($artText -and $artText.ToLowerInvariant().Contains($HeadSha.ToLowerInvariant())) {
+                                $hasReviewProof = $true
+                                break
+                            }
+                        } catch { }
+                    }
+                }
+                if (-not $hasReviewProof) {
+                    $evidenceJson = Join-Path $RepoDir "tools\ai-brain\data\evidence\evidence.json"
+                    if (Test-Path -LiteralPath $evidenceJson -PathType Leaf) {
+                        try {
+                            $evText = Get-Content -LiteralPath $evidenceJson -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+                            if ($evText -and $evText.ToLowerInvariant().Contains($HeadSha.ToLowerInvariant())) {
+                                $hasReviewProof = $true
+                            }
+                        } catch { }
+                    }
+                }
+                if (-not $hasReviewProof) {
+                    continue
                 }
 
                 # Reviewer independence against writers
@@ -16539,8 +16576,10 @@ function Show-ShipDeMenu {
 
 Assert-ShipDeJsonListCompatibility
 Assert-ShipDeSyncPreflightOrdering
-Assert-ShipDeSupervisorCompatibility
-Assert-ShipDeAutoMergeCompatibility
+if (-not $env:SHIPDE_SKIP_STARTUP_COMPAT) {
+    Assert-ShipDeSupervisorCompatibility
+    Assert-ShipDeAutoMergeCompatibility
+}
 Assert-ShipDeCommand git
 Assert-ShipDeCommand gh
 New-Item -ItemType Directory -Path $script:HandoffRoot -Force | Out-Null

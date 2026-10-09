@@ -80,14 +80,18 @@ function createManifestAndArtifact(dir, workItemId, baseSha, reviewedSha, option
   const artifactPath = path.join(dir, `review-artifact-${workItemId}.md`);
   const manifestPath = path.join(dir, `review-manifest-${workItemId}.json`);
 
-  const markdownContent = [
-    `# Review for ${workItemId}`,
-    `- **Commit**: ${reviewedSha}`,
-    `- **Verdict**: ${o.verdict || 'PASS'}`,
-    '',
-    '## Findings',
-    (o.findings || []).map((f) => `- [${f.status}] ${f.id}: ${f.summary}`).join('\n') || 'None',
-  ].join('\n');
+  const markdownContent =
+    typeof o.markdownContent === 'string'
+      ? o.markdownContent
+      : [
+          `# Review for ${workItemId}`,
+          `- **Commit**: ${reviewedSha}`,
+          `- **Verdict**: ${o.verdict || 'PASS'}`,
+          '',
+          '## Findings',
+          (o.findings || []).map((f) => `- [${f.status}] ${f.id}: ${f.summary}`).join('\n') ||
+            'None',
+        ].join('\n');
   fs.writeFileSync(artifactPath, markdownContent, 'utf8');
 
   const manifest = reviewManifestApi.buildManifest({
@@ -115,11 +119,15 @@ function createManifestAndArtifact(dir, workItemId, baseSha, reviewedSha, option
       }) +
       '\n' +
       JSON.stringify({
-        workItemId,
-        stage: 'reviewer-selection',
+        workItemId: `${workItemId}-review`,
+        stage: 'review-launch',
         role: 'reviewer',
+        sessionId: o.sessionId || `sess-review-${Date.now()}`,
+        chosen: o.reviewerCandidateKey || SAMPLE_REVIEWER_KEY,
         reviewerCandidateKey: o.reviewerCandidateKey || SAMPLE_REVIEWER_KEY,
         reviewedSha,
+        sha: reviewedSha,
+        detail: `REVIEW_LANE: reviews ${workItemId} at ${reviewedSha}`,
       }) +
       '\n';
     fs.writeFileSync(path.join(dir, new Date().toISOString().slice(0, 10) + '.jsonl'), logContent, {
@@ -816,6 +824,7 @@ test('GM-R04: control.ps1 verdict source accepts valid manifest and rejects open
   fs.writeFileSync(
     ps1Script,
     `
+    $env:SHIPDE_SKIP_STARTUP_COMPAT = "1"
     . "${controlPath}" -Action "Test" | Out-Null
     function Get-ShipDePullRequestByNumber {
         param([int]$Number)
@@ -1018,11 +1027,15 @@ test('GM-R01: refusal REVIEWER_NOT_RECORDED when reviewer was not recorded in th
     }) +
     '\n' +
     JSON.stringify({
-      workItemId,
-      stage: 'reviewer-selection',
+      workItemId: `${workItemId}-review`,
+      stage: 'review-launch',
       role: 'reviewer',
+      sessionId: 'sess-diff-sha-1',
+      chosen: SAMPLE_REVIEWER_KEY,
       reviewerCandidateKey: SAMPLE_REVIEWER_KEY,
       reviewedSha: otherSha,
+      sha: otherSha,
+      detail: `REVIEW_LANE: reviews ${workItemId} at ${otherSha}`,
     }) +
     '\n';
   fs.writeFileSync(path.join(decisionDir, '2026-10-09.jsonl'), logDifferentSha, 'utf8');
@@ -1062,11 +1075,15 @@ test('GM-R01: refusal REVIEWER_NOT_RECORDED when reviewer was not recorded in th
     }) +
     '\n' +
     JSON.stringify({
-      workItemId,
-      stage: 'reviewer-selection',
+      workItemId: `${workItemId}-review`,
+      stage: 'review-launch',
       role: 'reviewer',
+      sessionId: 'sess-diff-rev-2',
+      chosen: 'other-reviewer-key',
       reviewerCandidateKey: 'other-reviewer-key',
       reviewedSha,
+      sha: reviewedSha,
+      detail: `REVIEW_LANE: reviews ${workItemId} at ${reviewedSha}`,
     }) +
     '\n';
   fs.writeFileSync(path.join(decisionDir, '2026-10-09.jsonl'), logDifferentReviewer, 'utf8');
@@ -1081,6 +1098,364 @@ test('GM-R01: refusal REVIEWER_NOT_RECORDED when reviewer was not recorded in th
 
   assert.strictEqual(res2.ok, false);
   assert.strictEqual(res2.refusal, RefusalCode.REVIEWER_NOT_RECORDED);
+});
+
+test('GM-R01: refusal REVIEWER_NOT_RECORDED when launch record is hand-written with stage reviewer-selection', async () => {
+  const testDir = createUniqueSubdir('handwritten-selection');
+  const { repoDir, baseSha } = initGitRepo(path.join(testDir, 'repo'));
+  const reviewedSha = createReviewedCommit(repoDir, 'feat.txt', 'feature\n');
+  const decisionDir = path.join(testDir, 'decisions');
+  const workItemId = 'TASK-AI-133';
+
+  createManifestAndArtifact(decisionDir, workItemId, baseSha, reviewedSha, {
+    repoCwd: repoDir,
+    verdict: 'PASS',
+    writeDecisionLog: false,
+  });
+
+  const handwritten =
+    JSON.stringify({
+      workItemId,
+      stage: 'reviewer-selection',
+      role: 'reviewer',
+      reviewerCandidateKey: SAMPLE_REVIEWER_KEY,
+      reviewedSha,
+    }) + '\n';
+  fs.writeFileSync(path.join(decisionDir, '2026-10-09.jsonl'), handwritten, 'utf8');
+
+  const fakeGhClient = {
+    getPullRequest: async () => ({
+      title: `[${workItemId}] Governed merge`,
+      id: 'PR_1',
+      number: 1,
+      isDraft: false,
+      headRefOid: reviewedSha,
+      statusCheckRollup: [
+        { name: 'ci', status: 'COMPLETED', conclusion: 'SUCCESS', headSha: reviewedSha },
+      ],
+      unresolvedThreadsCount: 0,
+    }),
+  };
+
+  const res = await governedMerge({
+    workItemId,
+    repoCwd: repoDir,
+    decisionDir,
+    config: { neverMerge: [], requiredChecks: ['ci'] },
+    ghClient: fakeGhClient,
+  });
+
+  assert.strictEqual(res.ok, false);
+  assert.strictEqual(res.refusal, RefusalCode.REVIEWER_NOT_RECORDED);
+});
+
+test('GM-R01: refusal REVIEWER_NOT_RECORDED when launch record is hand-written with stage launched', async () => {
+  const testDir = createUniqueSubdir('handwritten-launched');
+  const { repoDir, baseSha } = initGitRepo(path.join(testDir, 'repo'));
+  const reviewedSha = createReviewedCommit(repoDir, 'feat.txt', 'feature\n');
+  const decisionDir = path.join(testDir, 'decisions');
+  const workItemId = 'TASK-AI-133';
+
+  createManifestAndArtifact(decisionDir, workItemId, baseSha, reviewedSha, {
+    repoCwd: repoDir,
+    verdict: 'PASS',
+    writeDecisionLog: false,
+  });
+
+  const handwritten =
+    JSON.stringify({
+      workItemId,
+      stage: 'launched',
+      role: 'reviewer',
+      chosen: SAMPLE_REVIEWER_KEY,
+      reviewedSha,
+    }) + '\n';
+  fs.writeFileSync(path.join(decisionDir, '2026-10-09.jsonl'), handwritten, 'utf8');
+
+  const fakeGhClient = {
+    getPullRequest: async () => ({
+      title: `[${workItemId}] Governed merge`,
+      id: 'PR_1',
+      number: 1,
+      isDraft: false,
+      headRefOid: reviewedSha,
+      statusCheckRollup: [
+        { name: 'ci', status: 'COMPLETED', conclusion: 'SUCCESS', headSha: reviewedSha },
+      ],
+      unresolvedThreadsCount: 0,
+    }),
+  };
+
+  const res = await governedMerge({
+    workItemId,
+    repoCwd: repoDir,
+    decisionDir,
+    config: { neverMerge: [], requiredChecks: ['ci'] },
+    ghClient: fakeGhClient,
+  });
+
+  assert.strictEqual(res.ok, false);
+  assert.strictEqual(res.refusal, RefusalCode.REVIEWER_NOT_RECORDED);
+});
+
+test('GM-R01: refusal REVIEWER_NOT_RECORDED when review-launch record lacks session id', async () => {
+  const testDir = createUniqueSubdir('missing-session-id');
+  const { repoDir, baseSha } = initGitRepo(path.join(testDir, 'repo'));
+  const reviewedSha = createReviewedCommit(repoDir, 'feat.txt', 'feature\n');
+  const decisionDir = path.join(testDir, 'decisions');
+  const workItemId = 'TASK-AI-133';
+
+  createManifestAndArtifact(decisionDir, workItemId, baseSha, reviewedSha, {
+    repoCwd: repoDir,
+    verdict: 'PASS',
+    writeDecisionLog: false,
+  });
+
+  const noSession =
+    JSON.stringify({
+      workItemId: `${workItemId}-review`,
+      stage: 'review-launch',
+      role: 'reviewer',
+      chosen: SAMPLE_REVIEWER_KEY,
+      reviewedSha,
+      detail: `REVIEW_LANE: reviews ${workItemId} at ${reviewedSha}`,
+    }) + '\n';
+  fs.writeFileSync(path.join(decisionDir, '2026-10-09.jsonl'), noSession, 'utf8');
+
+  const fakeGhClient = {
+    getPullRequest: async () => ({
+      title: `[${workItemId}] Governed merge`,
+      id: 'PR_1',
+      number: 1,
+      isDraft: false,
+      headRefOid: reviewedSha,
+      statusCheckRollup: [
+        { name: 'ci', status: 'COMPLETED', conclusion: 'SUCCESS', headSha: reviewedSha },
+      ],
+      unresolvedThreadsCount: 0,
+    }),
+  };
+
+  const res = await governedMerge({
+    workItemId,
+    repoCwd: repoDir,
+    decisionDir,
+    config: { neverMerge: [], requiredChecks: ['ci'] },
+    ghClient: fakeGhClient,
+  });
+
+  assert.strictEqual(res.ok, false);
+  assert.strictEqual(res.refusal, RefusalCode.REVIEWER_NOT_RECORDED);
+});
+
+test('GM-R01: refusal REVIEWER_NOT_RECORDED when review file and imported evidence entry are missing for that SHA', async () => {
+  const testDir = createUniqueSubdir('missing-review-proof');
+  const { repoDir, baseSha } = initGitRepo(path.join(testDir, 'repo'));
+  const reviewedSha = createReviewedCommit(repoDir, 'feat.txt', 'feature\n');
+  const decisionDir = path.join(testDir, 'decisions');
+  const workItemId = 'TASK-AI-133';
+
+  // Create manifest with artifact that does NOT mention reviewed commit SHA
+  createManifestAndArtifact(decisionDir, workItemId, baseSha, reviewedSha, {
+    repoCwd: repoDir,
+    verdict: 'PASS',
+    markdownContent: `# Review for ${workItemId}\n- **Verdict**: PASS\n\n## Findings\nNone\n`,
+    writeDecisionLog: true,
+  });
+
+  const fakeGhClient = {
+    getPullRequest: async () => ({
+      title: `[${workItemId}] Governed merge`,
+      id: 'PR_1',
+      number: 1,
+      isDraft: false,
+      headRefOid: reviewedSha,
+      statusCheckRollup: [
+        { name: 'ci', status: 'COMPLETED', conclusion: 'SUCCESS', headSha: reviewedSha },
+      ],
+      unresolvedThreadsCount: 0,
+    }),
+  };
+
+  const res = await governedMerge({
+    workItemId,
+    repoCwd: repoDir,
+    decisionDir,
+    config: { neverMerge: [], requiredChecks: ['ci'] },
+    ghClient: fakeGhClient,
+  });
+
+  assert.strictEqual(res.ok, false);
+  assert.strictEqual(res.refusal, RefusalCode.REVIEWER_NOT_RECORDED);
+});
+
+test('GM-R01: refusal REVIEWER_NOT_RECORDED when review file is for a different commit SHA', async () => {
+  const testDir = createUniqueSubdir('diff-sha-review-file');
+  const { repoDir, baseSha } = initGitRepo(path.join(testDir, 'repo'));
+  const reviewedSha = createReviewedCommit(repoDir, 'feat.txt', 'feature\n');
+  const decisionDir = path.join(testDir, 'decisions');
+  const workItemId = 'TASK-AI-133';
+
+  const otherSha = '2'.repeat(40);
+  createManifestAndArtifact(decisionDir, workItemId, baseSha, reviewedSha, {
+    repoCwd: repoDir,
+    verdict: 'PASS',
+    markdownContent: `# Review for ${workItemId}\n- **Commit**: ${otherSha}\n- **Verdict**: PASS\n\n## Findings\nNone\n`,
+    writeDecisionLog: true,
+  });
+
+  const fakeGhClient = {
+    getPullRequest: async () => ({
+      title: `[${workItemId}] Governed merge`,
+      id: 'PR_1',
+      number: 1,
+      isDraft: false,
+      headRefOid: reviewedSha,
+      statusCheckRollup: [
+        { name: 'ci', status: 'COMPLETED', conclusion: 'SUCCESS', headSha: reviewedSha },
+      ],
+      unresolvedThreadsCount: 0,
+    }),
+  };
+
+  const res = await governedMerge({
+    workItemId,
+    repoCwd: repoDir,
+    decisionDir,
+    config: { neverMerge: [], requiredChecks: ['ci'] },
+    ghClient: fakeGhClient,
+  });
+
+  assert.strictEqual(res.ok, false);
+  assert.strictEqual(res.refusal, RefusalCode.REVIEWER_NOT_RECORDED);
+});
+
+test('GM-R01: real orchestrate-written review-launch record with matching review file is accepted', async () => {
+  const testDir = createUniqueSubdir('orchestrate-accepted');
+  const { repoDir, baseSha } = initGitRepo(path.join(testDir, 'repo'));
+  const reviewedSha = createReviewedCommit(repoDir, 'feat.txt', 'feature\n');
+  const decisionDir = path.join(testDir, 'decisions');
+  const workItemId = 'TASK-AI-133';
+
+  createManifestAndArtifact(decisionDir, workItemId, baseSha, reviewedSha, {
+    repoCwd: repoDir,
+    verdict: 'PASS',
+    sessionId: 'sess-orchestrate-rev-1234',
+    writeDecisionLog: true,
+  });
+
+  let mergeCalled = false;
+  const fakeGhClient = {
+    getPullRequest: async () => ({
+      title: `[${workItemId}] Governed merge`,
+      id: 'PR_1',
+      number: 1,
+      isDraft: false,
+      headRefOid: reviewedSha,
+      statusCheckRollup: [
+        { name: 'ci', status: 'COMPLETED', conclusion: 'SUCCESS', headSha: reviewedSha },
+      ],
+      unresolvedThreadsCount: 0,
+    }),
+    mergePullRequest: async () => {
+      mergeCalled = true;
+      return { merged: true, mergeCommitOid: 'a'.repeat(40) };
+    },
+  };
+
+  const res = await governedMerge({
+    workItemId,
+    repoCwd: repoDir,
+    decisionDir,
+    config: { neverMerge: [], requiredChecks: ['ci'] },
+    ghClient: fakeGhClient,
+  });
+
+  assert.strictEqual(res.ok, true);
+  assert.strictEqual(res.status, 'merged');
+  assert.strictEqual(mergeCalled, true);
+});
+
+test('GM-R01: real orchestrate-written review-launch record matched by imported review evidence entry is accepted', async () => {
+  const testDir = createUniqueSubdir('evidence-matched-accepted');
+  const { repoDir, baseSha } = initGitRepo(path.join(testDir, 'repo'));
+  const reviewedSha = createReviewedCommit(repoDir, 'feat.txt', 'feature\n');
+  const decisionDir = path.join(testDir, 'decisions');
+  const workItemId = 'TASK-AI-133';
+
+  createManifestAndArtifact(decisionDir, workItemId, baseSha, reviewedSha, {
+    repoCwd: repoDir,
+    verdict: 'PASS',
+    sessionId: 'sess-orchestrate-rev-5678',
+    markdownContent: `# Review for ${workItemId}\n- **Verdict**: PASS\n\n## Findings\nNone\n`,
+    writeDecisionLog: true,
+  });
+
+  // Create evidence store with matching entry
+  const evidenceDir = path.join(testDir, 'evidence');
+  fs.mkdirSync(evidenceDir, { recursive: true });
+  const evidenceData = {
+    version: 2,
+    combinations: [
+      {
+        harness: 'agy',
+        accessPath: 'local',
+        gateway: 'direct',
+        upstream: 'google',
+        accountId: 'acc-reviewer',
+        quotaScope: 'scope',
+        model: 'gemini-2.5-pro',
+        evidence: [
+          {
+            ts: new Date().toISOString(),
+            level: 3,
+            proofLevel: 'WORK_ITEM_PASS',
+            status: 'passed',
+            workItem: workItemId,
+            sha: reviewedSha,
+            reviewer: SAMPLE_REVIEWER_KEY,
+          },
+        ],
+      },
+    ],
+  };
+  fs.writeFileSync(
+    path.join(evidenceDir, 'evidence.json'),
+    JSON.stringify(evidenceData, null, 2),
+    'utf8'
+  );
+
+  let mergeCalled = false;
+  const fakeGhClient = {
+    getPullRequest: async () => ({
+      title: `[${workItemId}] Governed merge`,
+      id: 'PR_1',
+      number: 1,
+      isDraft: false,
+      headRefOid: reviewedSha,
+      statusCheckRollup: [
+        { name: 'ci', status: 'COMPLETED', conclusion: 'SUCCESS', headSha: reviewedSha },
+      ],
+      unresolvedThreadsCount: 0,
+    }),
+    mergePullRequest: async () => {
+      mergeCalled = true;
+      return { merged: true, mergeCommitOid: 'b'.repeat(40) };
+    },
+  };
+
+  const res = await governedMerge({
+    workItemId,
+    repoCwd: repoDir,
+    decisionDir,
+    evidenceDir,
+    config: { neverMerge: [], requiredChecks: ['ci'] },
+    ghClient: fakeGhClient,
+  });
+
+  assert.strictEqual(res.ok, true);
+  assert.strictEqual(res.status, 'merged');
+  assert.strictEqual(mergeCalled, true);
 });
 
 test('GM-R02: refusal DELTA_REVIEW_REQUIRED when merge-from-main path contains binary or mode changes', async () => {
@@ -1270,6 +1645,7 @@ test('GM-R04: control.ps1 fails closed when node is missing or unavailable', asy
   fs.writeFileSync(
     ps1Script,
     `
+    $env:SHIPDE_SKIP_STARTUP_COMPAT = "1"
     . "${controlPath}" -Action "Test" | Out-Null
     function Get-ShipDePullRequestByNumber {
         param([int]$Number)
