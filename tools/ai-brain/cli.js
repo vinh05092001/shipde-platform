@@ -2078,6 +2078,7 @@ function dispatchCommand(args, deps = {}) {
             // TASK-AI-127 WD-R03: WORKER_DEPS_UNAVAILABLE warnings land in the
             // same decision log this dispatch records its launch in.
             decisionDir,
+            checkpoint: checkpointFile,
           });
         } catch (err) {
           thrownError = err;
