@@ -166,7 +166,9 @@ function causeRetryable(cause) {
 function addRetryFields(result) {
   const retryable = causeRetryable(result.cause);
   result.retryable = retryable;
-  result.retryAfterMs = result.resetTime ? result.resetTime - Date.now() : null;
+  if (result.retryAfterMs === undefined) {
+    result.retryAfterMs = result.resetTime ? Math.max(0, result.resetTime - Date.now()) : null;
+  }
   return result;
 }
 
@@ -625,6 +627,24 @@ function classifyFailure(input) {
       humanAction: HumanAction.NONE,
       evidence,
       resetTime: resetMs ? Date.now() + resetMs : null,
+    });
+  }
+
+  // 810002 rate limit (HTTP 403 + body code 810002). Must precede generic 403->entitlement.
+  if (
+    effectiveStatus === 403 &&
+    (/"code"\s*:\s*810002\b/.test(errorPayloadText || text) ||
+      /code=810002\b/.test(errorPayloadText || text) ||
+      /Error 810002\b/.test(errorPayloadText || text))
+  ) {
+    return addRetryFields({
+      cause: Cause.UPSTREAM_RATE_LIMIT,
+      scope: Scope.UPSTREAM,
+      cooldownMs: 120000,
+      humanAction: HumanAction.NONE,
+      evidence,
+      resetTime: Date.now() + 120000,
+      retryAfterMs: 120000,
     });
   }
 

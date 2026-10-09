@@ -2867,6 +2867,7 @@ function orchestrateCommand(args, deps = {}) {
     home: typeof args.home === 'string' ? args.home : undefined,
     enforceProofFloors: true,
     isolatedWorker: Boolean(args['isolated-worker']),
+    externalWorkers: args['external-workers'],
     workerTimeoutMs,
     decisionDir: args['decision-dir'] || decisionsApi.DEFAULT_DIR,
     checkpointFile: typeof args.checkpoint === 'string' ? args.checkpoint : null,
