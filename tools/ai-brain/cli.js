@@ -1979,7 +1979,7 @@ function dispatchCommand(args, deps = {}) {
           gateway: finalChosenCandidate.gateway || '',
           upstream: finalChosenCandidate.upstream,
           quotaScope: finalChosenCandidate.quotaScope,
-          prompt: defaultPrompt(item),
+          prompt: defaultPrompt(item, { isolatedWorker: Boolean(args['isolated-worker']) }),
           branch: item.branch,
           base: args.base || (deps && deps.base) || 'main',
           cwd: args.cwd || (deps && deps.cwd) || rootDir,
@@ -2075,6 +2075,9 @@ function dispatchCommand(args, deps = {}) {
             baseSha: args['base-sha'] || (deps && deps.baseSha) || undefined,
             branch: item.branch,
             workItemId: item.workItemId,
+            // TASK-AI-127 WD-R03: WORKER_DEPS_UNAVAILABLE warnings land in the
+            // same decision log this dispatch records its launch in.
+            decisionDir,
           });
         } catch (err) {
           thrownError = err;

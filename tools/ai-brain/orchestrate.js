@@ -238,6 +238,9 @@ function resolveLauncher(o, isolatedLauncher) {
       // TASK-AI-121 LF-R03: the worker timeout the run was given, for writer,
       // reviewer and repair launches alike.
       workerTimeoutMs: o.workerTimeoutMs || job.workerTimeoutMs || undefined,
+      // TASK-AI-127 WD-R03: a WORKER_DEPS_UNAVAILABLE warning is recorded in
+      // the same decision log the run itself writes.
+      decisionDir: o.decisionDir || undefined,
     });
   };
 }
@@ -3552,6 +3555,7 @@ async function runOrchestration(goal, opts) {
         candidateKey: decision.chosen,
         branch,
         usageFile,
+        isolatedWorker: Boolean(o.isolatedWorker),
       });
       log.prompts.push({ workItemId: item.id, attempt, candidateKey: decision.chosen, prompt });
 
@@ -5700,6 +5704,7 @@ function repairRound(
       dirtyPaths,
       headSha,
       baseSha,
+      isolatedWorker: Boolean(o.isolatedWorker),
     });
     const repairWorkerRoot = o.isolatedWorker ? isolatedWorkerRoot : o.workerRoot || o.cwd;
     const repairJob = {
