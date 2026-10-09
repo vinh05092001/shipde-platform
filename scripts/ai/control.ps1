@@ -2754,6 +2754,69 @@ function Get-ShipDeExactHeadCodexVerdict {
         return $githubVerdict
     }
 
+    # TASK-AI-133 GM-R04: Additional trusted verdict source under operator standing authorization (2026-10-04):
+    # "merge implementation PRs when the review PASS is on the exact SHA, CI is green and there are zero open P0/P1 findings".
+    $manifestVerdict = Get-ShipDeExactHeadReviewManifestVerdict -HeadSha $HeadSha -PullRequestNumber $PullRequestNumber
+    if ($manifestVerdict) {
+        return $manifestVerdict
+    }
+
+    return $null
+}
+
+function Get-ShipDeExactHeadReviewManifestVerdict {
+    param(
+        [Parameter(Mandatory = $true)][string]$HeadSha,
+        [int]$PullRequestNumber = 0
+    )
+
+    if ([string]::IsNullOrWhiteSpace($HeadSha)) {
+        return $null
+    }
+
+    $candidates = @()
+    $userHome = if (-not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) { $env:USERPROFILE } elseif (-not [string]::IsNullOrWhiteSpace($env:HOME)) { $env:HOME } else { "" }
+    if (-not [string]::IsNullOrWhiteSpace($userHome)) {
+        $candidates += (Join-Path $userHome ".shipde\decisions")
+    }
+    $candidates += (Join-Path $PSScriptRoot "..\..\tools\ai-brain\data")
+    $candidates += (Join-Path $PSScriptRoot "..\..\decisions")
+
+    foreach ($dir in $candidates) {
+        if (-not (Test-Path -LiteralPath $dir -PathType Container)) {
+            continue
+        }
+        $files = @(Get-ChildItem -LiteralPath $dir -Filter "review-manifest*.json" -File -ErrorAction SilentlyContinue)
+        foreach ($file in $files) {
+            try {
+                $content = Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8
+                $manifest = $content | ConvertFrom-Json
+                $revCommit = [string](Get-ShipDeObjectProperty -Object $manifest -Names @("reviewedCommit", "ReviewedCommit"))
+                if ($revCommit.ToLowerInvariant() -eq $HeadSha.ToLowerInvariant()) {
+                    $verdict = [string](Get-ShipDeObjectProperty -Object $manifest -Names @("verdict", "Verdict"))
+                    if ($verdict -eq "PASS") {
+                        $openP0P1 = $false
+                        if ($manifest.PSObject.Properties['findings'] -and $manifest.findings) {
+                            foreach ($f in @($manifest.findings)) {
+                                $st = [string](Get-ShipDeObjectProperty -Object $f -Names @("status", "Status"))
+                                $sev = [string](Get-ShipDeObjectProperty -Object $f -Names @("severity", "Severity"))
+                                if ($st -eq "open" -and ($sev -match "(?i)^p[01]$")) {
+                                    $openP0P1 = $true
+                                    break
+                                }
+                            }
+                        }
+                        if (-not $openP0P1) {
+                            Write-Host ("[SUPERVISOR] Exact-HEAD review PASS found in Controller review manifest '{0}' for {1} (OPERATOR-STANDING-AUTHORIZATION-2026-10-04)." -f $file.Name, $HeadSha)
+                            return "PASS"
+                        }
+                    }
+                }
+            } catch {
+                # Ignore invalid JSON and continue
+            }
+        }
+    }
     return $null
 }
 

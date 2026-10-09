@@ -2894,6 +2894,8 @@ function orchestrateCommand(args, deps = {}) {
           draft: {},
         }
       : null,
+    autoMerge: Boolean(args['auto-merge'] || args.merge),
+    mergeConfig: args['merge-config'] || args.config,
     out,
     now: (d && d.now) || Date.now(),
   })
@@ -2924,6 +2926,54 @@ function orchestrateCommand(args, deps = {}) {
       exit(1);
       return { exitCode: 1, error: err };
     });
+}
+
+async function mergeCommand(args) {
+  const workItemId = args['work-item'] || args.workItem || args.w;
+  if (!workItemId || typeof workItemId !== 'string') {
+    console.error('Lỗi: merge yêu cầu cờ --work-item <ID>');
+    process.exitCode = 2;
+    return { exitCode: 2, error: 'Thiếu --work-item' };
+  }
+
+  const { governedMerge } = require('./governed-merge');
+  const repoCwd = args['repo-cwd'] || args.root || process.cwd();
+  const decisionDir = args['decision-dir'] || args.decisionDir;
+  const configPath = args.config || args['config-path'];
+  const manifestPath = args.manifest || args['manifest-path'];
+  const artifactPath = args.artifact || args['artifact-path'];
+  const repo = args.repo;
+
+  try {
+    const res = await governedMerge({
+      workItemId,
+      repoCwd,
+      decisionDir,
+      configPath,
+      manifestPath,
+      artifactPath,
+      repo,
+    });
+
+    if (args.json) {
+      console.log(JSON.stringify(res, null, 2));
+    } else if (res.ok) {
+      console.log(
+        `Đã merge thành công ${workItemId} tại exact HEAD ${res.headSha} (merge commit: ${res.mergeCommitOid || 'squash'})`
+      );
+    } else {
+      console.error(`Từ chối merge ${workItemId}: ${res.refusal} (${res.reason})`);
+    }
+
+    if (!res.ok) {
+      process.exitCode = 1;
+    }
+    return { exitCode: res.ok ? 0 : 1, result: res };
+  } catch (err) {
+    console.error('Lỗi khi merge: ' + (err && err.message ? err.message : err));
+    process.exitCode = 1;
+    return { exitCode: 1, error: err };
+  }
 }
 
 function main() {
@@ -3021,9 +3071,25 @@ function main() {
   // launches for real or is refused.
   if (command === 'orchestrate') return orchestrateCommand(args);
 
+  // merge (TASK-AI-133): governed exact-HEAD auto-merge without supervisor
+  //   node tools/ai-brain/cli.js merge --work-item <ID> [--config <file>] [--repo <owner/repo>]
+  if (command === 'merge') {
+    const result = mergeCommand(args);
+    if (result && typeof result.then === 'function') {
+      result.then(
+        () => {},
+        (err) => {
+          console.error('Merge lỗi: ' + (err && err.message ? err.message : err));
+          process.exitCode = 1;
+        }
+      );
+    }
+    return;
+  }
+
   console.error('Lệnh không rõ: ' + command);
   console.error(
-    'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | discovery | account | probe | qualify | serena | evidence | review'
+    'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | discovery | account | probe | qualify | serena | evidence | review | merge'
   );
   process.exit(2);
 }
@@ -3049,6 +3115,7 @@ module.exports = {
   evidenceCommand,
   reviewCommand,
   orchestrateCommand,
+  mergeCommand,
 };
 
 if (require.main === module) {

@@ -4343,6 +4343,26 @@ async function runOrchestration(goal, opts) {
       }
     }
     recordPublishDecision(entry, published);
+
+    // GM-R05 (TASK-AI-133): the next-item loop calls merge after publish when the item is eligible.
+    if (o.mergeAfterPublish || o.autoMerge || o.merge) {
+      const { governedMerge, isEligibleForMerge } = require('./governed-merge');
+      if (isEligibleForMerge(entry, published, o)) {
+        log.merges = log.merges || [];
+        const mergeResult = await governedMerge({
+          workItemId: entry.workItemId,
+          repoCwd: o.repoCwd || o.cwd,
+          decisionDir: o.decisionDir || (logOpts && logOpts.dir),
+          config: o.mergeConfig || o.config,
+          configPath: o.mergeConfigPath || o.configPath,
+          ghClient: o.ghClient,
+          graphqlInvoker: o.graphqlInvoker,
+          ghRunner: o.ghRunner,
+        });
+        log.merges.push(mergeResult);
+        entry.merge = mergeResult;
+      }
+    }
   }
 
   log.publication = log.publications[log.publications.length - 1] || {
