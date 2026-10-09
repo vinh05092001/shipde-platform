@@ -48,4 +48,4 @@ RH-R04: a missing retained root is reported as WORKER_ROOT_MISSING.
 
 ## Residual Limitations
 
-- Multi-commit repair rounds fall back to refusal because only the final commit is tracked by the orchestrator loop, so intermediate commits fail the strict attribution check (`extraCommits.every(...)`).
+- Multi-commit repair rounds fall back to refusal because only the final commit is tracked by the orchestrator loop, so intermediate commits fail the strict attribution check (`extraCommits.every(...)`). This contradicts RH-R01's "every extra commit ... by this item's own repair rounds", but is accepted as a fail-closed limitation.

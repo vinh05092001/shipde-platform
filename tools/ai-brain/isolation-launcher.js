@@ -961,7 +961,12 @@ function getIsolatedLauncher() {
                             rec.detail.startsWith('REPAIR_ROUND:') &&
                             rec.sha
                           ) {
-                            repairCommits.add(rec.sha.toLowerCase());
+                            if (rec.worktree !== workerRoot) {
+                              console.error('WORKTREE MISMATCH!', rec.worktree, workerRoot);
+                            }
+                            if (rec.worktree === workerRoot) {
+                              repairCommits.add(rec.sha.toLowerCase());
+                            }
                           }
                         }
 
@@ -1017,7 +1022,11 @@ function getIsolatedLauncher() {
               );
             }
           } catch (e) {
-            // Ignore errors during adoption check and fallback to failure
+            // Ignore Git errors during adoption check and fallback to WORKER_HEAD_MISMATCH failure
+            // but bubble up decision log unreadable errors.
+            if (e && e.code === 'DECISION_LOG_UNREADABLE') {
+              throw e;
+            }
           }
         }
 

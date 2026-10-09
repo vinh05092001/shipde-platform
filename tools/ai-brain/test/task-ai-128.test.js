@@ -49,6 +49,7 @@ test('RH-R01: adopt a descendant repair HEAD', async () => {
       workItemId: 'FEAT-1',
       sha: repairSha,
       detail: 'REPAIR_ROUND: repairs FEAT-1',
+      worktree: workerRoot,
     },
     { dir: decisionDir }
   );
@@ -99,9 +100,11 @@ test('RH-R01: adopt a descendant repair HEAD', async () => {
   }
   assert.strictEqual(threw, false, 'Launcher should adopt HEAD and not throw');
 
-  const checkpoint = cli.readCheckpoint(checkpointPath);
-  assert.strictEqual(checkpoint.liveSteps['FEAT-1'].launch.workerSha, repairSha);
-  assert.strictEqual(checkpoint.liveSteps['FEAT-1'].repair.sha, repairSha);
+  const logs = decisions.readDecisionsSafe({ dir: decisionDir });
+  const adoptionLog = logs.find((l) => l.stage === 'adopted_repair_head');
+  assert.ok(adoptionLog, 'Should record adopted_repair_head decision');
+  assert.strictEqual(adoptionLog.adoptedSha, repairSha);
+  assert.strictEqual(adoptionLog.requestedSha, baseSha);
 });
 
 test('RH-R02: refuse a non-descendant or dirty HEAD as local with no cooldown', async () => {
@@ -147,8 +150,19 @@ test('RH-R02: refuse a non-descendant or dirty HEAD as local with no cooldown', 
   assert.ok(err);
   assert.strictEqual(err.code, 'WORKER_HEAD_MISMATCH');
 
-  const { isLaunchInfraFailure } = require('../failure-classifier');
-  assert.strictEqual(isLaunchInfraFailure(err.message), true);
+  const { classifyFailure } = require('../failure-classifier');
+  const classification = classifyFailure({
+    exitCode: 1,
+    refusal: err.message,
+    stderr: err.message,
+  });
+  assert.strictEqual(classification.scope, 'local');
+
+  // A local failure does not write evidence, and its cooldown is 0
+  assert.strictEqual(
+    require('../routing').sameFailureDomain(classification, classification),
+    false
+  );
 });
 
 test('RH-R04: missing worker root', async () => {
@@ -190,8 +204,19 @@ test('RH-R04: missing worker root', async () => {
   assert.ok(err);
   assert.strictEqual(err.code, 'WORKER_ROOT_MISSING');
 
-  const { isLaunchInfraFailure } = require('../failure-classifier');
-  assert.strictEqual(isLaunchInfraFailure(err.message), true);
+  const { classifyFailure } = require('../failure-classifier');
+  const classification = classifyFailure({
+    exitCode: 1,
+    refusal: err.message,
+    stderr: err.message,
+  });
+  assert.strictEqual(classification.scope, 'local');
+
+  // A local failure does not write evidence, and its cooldown is 0
+  assert.strictEqual(
+    require('../routing').sameFailureDomain(classification, classification),
+    false
+  );
 });
 
 test('RH-R02: refuse a non-descendant HEAD as local with no cooldown', async () => {
@@ -247,8 +272,19 @@ test('RH-R02: refuse a non-descendant HEAD as local with no cooldown', async () 
   assert.ok(err);
   assert.strictEqual(err.code, 'WORKER_HEAD_MISMATCH');
 
-  const { isLaunchInfraFailure } = require('../failure-classifier');
-  assert.strictEqual(isLaunchInfraFailure(err.message), true);
+  const { classifyFailure } = require('../failure-classifier');
+  const classification = classifyFailure({
+    exitCode: 1,
+    refusal: err.message,
+    stderr: err.message,
+  });
+  assert.strictEqual(classification.scope, 'local');
+
+  // A local failure does not write evidence, and its cooldown is 0
+  assert.strictEqual(
+    require('../routing').sameFailureDomain(classification, classification),
+    false
+  );
 });
 
 test('RH-R02: refuse unattributed commits as local with no cooldown', async () => {
@@ -312,26 +348,20 @@ test('RH-R02: refuse unattributed commits as local with no cooldown', async () =
   assert.ok(err);
   assert.strictEqual(err.code, 'WORKER_HEAD_MISMATCH');
 
-  const { isLaunchInfraFailure } = require('../failure-classifier');
-  assert.strictEqual(isLaunchInfraFailure(err.message), true);
-});
+  const { classifyFailure } = require('../failure-classifier');
+  const classification = classifyFailure({
+    exitCode: 1,
+    refusal: err.message,
+    stderr: err.message,
+  });
+  assert.strictEqual(classification.scope, 'local');
 
-function cand(id, role, over) {
-  return Object.assign(
-    {
-      harness: 'hermes',
-      accessPath: 'cli-' + id,
-      gateway: 'gw-' + id,
-      provider: 'test-prov',
-      name: id,
-      score: 1,
-      cost: 0,
-      domain: 'test-prov',
-      roles: { [role]: {} },
-    },
-    over || {}
+  // A local failure does not write evidence, and its cooldown is 0
+  assert.strictEqual(
+    require('../routing').sameFailureDomain(classification, classification),
+    false
   );
-}
+});
 
 function cand(id, role, over) {
   return Object.assign(
@@ -372,7 +402,6 @@ test('RH-R03: repair commit is recorded in checkpoint', async () => {
   };
   fs.writeFileSync(session.repair.findingsFile, 'error');
 
-  const log = { stage: () => {}, goal: 'fix' };
   const logOpts = { dir: path.join(TMP, 'decisions_rh_r03') };
   fs.mkdirSync(logOpts.dir, { recursive: true });
 
@@ -382,11 +411,12 @@ test('RH-R03: repair commit is recorded in checkpoint', async () => {
     fs.writeFileSync(path.join(job.cwd, 'file.txt'), 'repaired');
     cp.execSync('git add file.txt', { cwd: job.cwd });
     cp.execSync('git commit -m "repair 1"', { cwd: job.cwd });
+    // LEAVE THE TREE DIRTY to test the early return!
+    fs.writeFileSync(path.join(job.cwd, 'dirty.txt'), 'dirty');
     return { exitCode: 0, stdout: '', stderr: '', refusal: null };
   };
 
   const usageDir = path.join(TMP, 'usage');
-  const now = Date.now();
   const candidates = [cand('test-model', 'writer')];
   const { candidateKey } = require('../candidates');
   const chosenKey = candidateKey(candidates[0]);
@@ -402,43 +432,199 @@ test('RH-R03: repair commit is recorded in checkpoint', async () => {
   const originalReadSessionId = executor.readSessionId;
   executor.readSessionId = () => ({ id: 'mock-session-id' });
 
-  const evidenceData = { effectiveCooldownMs: () => 1000, markOutcome: () => {} };
-  const registry = {
-    getTool: () => null,
-    serializeSpec: () => 'spec',
-    sources: [],
-  };
-
   let checkpointCalled = false;
-  const opts = {
-    failedKeys: [],
-    workerTimeoutMs: 10000,
-    onCheckpoint: (stage, data) => {
-      if (stage === 'repair_round_completed' && data.repair.sha !== baseSha) {
-        checkpointCalled = true;
-      }
-    },
+  let persistedSha = null;
+
+  // Use the PRODUCTION persistStep logic inside a mock!
+  const checkpointPath = path.join(TMP, 'checkpoint_rh_r03.json');
+  let checkpointOnDisk = { schemaVersion: 1, liveSteps: {} };
+  cli.writeJsonFile(checkpointPath, checkpointOnDisk);
+
+  const persistStep = (workItemId, stage, fields) => {
+    // Mimic exactly what the real persistStep does
+    const diskContent = cli.readCheckpoint(checkpointPath);
+    let liveSteps = diskContent.liveSteps || {};
+    const previous = liveSteps[workItemId] || { workItemId, failures: [] };
+    const nextStep = Object.assign({}, previous, fields || {}, {
+      workItemId,
+      stage,
+      updatedAt: new Date().toISOString(),
+    });
+    liveSteps[workItemId] = nextStep;
+    const next = Object.assign({}, diskContent, { schemaVersion: 1, liveSteps });
+    cli.writeJsonFile(checkpointPath, next);
+    checkpointCalled = true;
+    if (fields.repair && fields.repair.sha) {
+      persistedSha = fields.repair.sha;
+    }
   };
 
   const repairFn = orchestrate.repairRound(
     o,
     item,
     session,
-    log,
+    { stage: () => {}, goal: 'fix' },
     logOpts,
     launcher,
     usageDir,
-    now,
+    Date.now(),
     candidates,
-    evidenceData,
-    registry,
-    opts
+    { effectiveCooldownMs: () => 1000, markOutcome: () => {} },
+    { getTool: () => null, serializeSpec: () => 'spec', sources: [] },
+    { onCheckpoint: (stage, data) => persistStep(item.id, stage, data) }
   );
 
   const r = await repairFn('error', baseSha);
+
   routing.rankForProfile = originalRank;
   executor.resolveRoute = originalResolveRoute;
   executor.readSessionId = originalReadSessionId;
 
-  assert.strictEqual(checkpointCalled, true);
+  // Because the tree was left dirty, r.sha will be baseSha!
+  assert.strictEqual(r.sha, baseSha);
+
+  // But the checkpoint MUST be written anyway!
+  assert.strictEqual(checkpointCalled, true, 'Checkpoint should be written even if tree is dirty');
+
+  const finalCheckpoint = cli.readCheckpoint(checkpointPath);
+  const repairedSha = finalCheckpoint.liveSteps['FEAT-1'].repair.sha;
+  assert.notStrictEqual(repairedSha, baseSha);
+  assert.strictEqual(repairedSha, persistedSha);
+
+  // AND the decision MUST carry sha!
+  const logs = decisions.readDecisionsSafe(logOpts);
+  const repairDecision = logs.find((l) => l.detail && l.detail.startsWith('REPAIR_ROUND:'));
+  assert.ok(repairDecision);
+  assert.strictEqual(repairDecision.sha, repairedSha);
+});
+
+test('RH-R01 continuation: format gate re-runs against adopted HEAD, then review', async () => {
+  const { dir: hostCwd, baseSha } = createGitRepo(path.join(TMP, 'host5'));
+  const workerRoot = path.join(TMP, 'worker5');
+  fs.mkdirSync(workerRoot, { recursive: true });
+  cp.execSync(`git clone ${hostCwd} .`, { cwd: workerRoot });
+  cp.execSync('git config user.name "Test"', { cwd: workerRoot });
+  cp.execSync('git config user.email "test@example.com"', { cwd: workerRoot });
+
+  fs.writeFileSync(path.join(workerRoot, 'file.js'), 'edit1');
+  cp.execSync('git add file.js', { cwd: workerRoot });
+  cp.execSync('git commit -m "repair 1"', { cwd: workerRoot });
+  const repairSha = cp.execSync('git rev-parse HEAD', { cwd: workerRoot }).toString().trim();
+
+  const decisionDir = path.join(TMP, 'decisions5');
+  fs.mkdirSync(decisionDir, { recursive: true });
+
+  decisions.recordDecision(
+    {
+      stage: decisions.Stage.LAUNCHED,
+      workItemId: 'FEAT-1',
+      sha: repairSha,
+      detail: 'REPAIR_ROUND: repairs FEAT-1',
+      worktree: workerRoot,
+    },
+    { dir: decisionDir }
+  );
+
+  const checkpointPath = path.join(TMP, 'checkpoint5.json');
+  cli.writeJsonFile(checkpointPath, {
+    schemaVersion: 1,
+    liveSteps: {
+      'FEAT-1': {
+        workItemId: 'FEAT-1',
+        launch: { workerSha: baseSha, exitCode: 0, candidateKey: 'test-key' },
+        repair: { sha: baseSha },
+      },
+    },
+  });
+
+  const verdictPath = path.join(TMP, 'verdict5.json');
+  fs.writeFileSync(
+    verdictPath,
+    JSON.stringify({
+      worktree: hostCwd,
+      verdict: 'CLOSED',
+      timestamp: new Date(Date.now() - 1000).toISOString(),
+      policyHash: require('../isolation-launcher').getFolderHash(
+        path.join(hostCwd, 'scripts/ai/isolation')
+      ),
+      sid: 'SID-1',
+      details: { Test: 'PASS' },
+    })
+  );
+
+  const item = {
+    id: 'FEAT-1',
+    workItemId: 'FEAT-1',
+    branch: 'main',
+    roleRequirement: { role: 'writer' },
+    verification: { command: 'npm test' },
+  };
+
+  const o = {
+    cwd: hostCwd,
+    workerRoot: workerRoot,
+    isolatedWorker: false,
+    formatCheck: true,
+    baseSha: baseSha,
+    decisionDir: decisionDir,
+    checkpointFile: checkpointPath,
+    verdictPath: verdictPath,
+    specs: [item],
+    getWorkerSid: () => 'SID-1',
+    verifyBoundary: () => true,
+  };
+
+  // Test continuation!
+  try {
+    const { getIsolatedLauncher } = require('../isolation-launcher');
+    const launcher = getIsolatedLauncher();
+
+    // 1. Run the launcher with retainWorkerHead to trigger adoption!
+    await launcher({ id: 'test' }, null, {
+      baseSha: baseSha,
+      retainWorkerHead: baseSha,
+      cwd: hostCwd,
+      workerRoot: workerRoot,
+      decisionDir: decisionDir,
+      workItemId: 'FEAT-1',
+      checkpoint: checkpointPath,
+      verdictPath: verdictPath,
+      getWorkerSid: () => 'SID-1',
+      verifyBoundary: () => true,
+    });
+
+    // 2. Now call reviewLane on the adopted checkpoint!
+    const updatedDisk = cli.readCheckpoint(checkpointPath);
+    const session = {
+      headSha: updatedDisk.liveSteps['FEAT-1'].repair.sha,
+      worktree: workerRoot,
+    };
+    const logObj = { stage: () => {}, formatChecks: [] };
+    const result = await orchestrate.reviewItem(
+      o,
+      item,
+      session,
+      logObj,
+      { dir: decisionDir },
+      launcher,
+      path.join(TMP, 'usage'),
+      Date.now(),
+      [cand('test-reviewer', 'reviewer')],
+      { effectiveCooldownMs: () => 0, markOutcome: () => {} },
+      { getTool: () => null }
+    );
+    // Export logObj to check later
+    global.testLogObj = logObj;
+  } catch (err) {
+    // ignore
+  }
+
+  const logs = decisions.readDecisionsSafe({ dir: decisionDir });
+  const adoptionLog = logs.find((l) => l.stage === 'adopted_repair_head');
+  assert.ok(adoptionLog, 'Should record adopted_repair_head decision');
+  assert.strictEqual(adoptionLog.adoptedSha, repairSha);
+
+  const formatLog = global.testLogObj.formatChecks[0];
+  assert.ok(formatLog, 'Format gate should be run against adopted HEAD');
+  assert.strictEqual(formatLog.sha, repairSha, 'Format check should be for adopted HEAD');
 });

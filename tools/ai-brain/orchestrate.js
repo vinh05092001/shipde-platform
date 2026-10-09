@@ -2892,6 +2892,25 @@ async function runOrchestration(goal, opts) {
       : {};
   const persistStep = (workItemId, stage, fields) => {
     if (!checkpointFile) return;
+
+    // TASK-AI-128 P1: re-read from disk so we don't clobber updates made by the launcher (adopted repair shas)
+    const diskContent = cli.readCheckpoint(checkpointFile);
+    if (diskContent && diskContent.liveSteps && diskContent.liveSteps[workItemId]) {
+      const diskStep = diskContent.liveSteps[workItemId];
+      if (liveSteps[workItemId]) {
+        if (diskStep.launch && diskStep.launch.workerSha) {
+          liveSteps[workItemId].launch = liveSteps[workItemId].launch || {};
+          liveSteps[workItemId].launch.workerSha = diskStep.launch.workerSha;
+        }
+        if (diskStep.repair && diskStep.repair.sha) {
+          liveSteps[workItemId].repair = liveSteps[workItemId].repair || {};
+          liveSteps[workItemId].repair.sha = diskStep.repair.sha;
+        }
+      } else {
+        liveSteps[workItemId] = diskStep;
+      }
+    }
+
     const previous = liveSteps[workItemId] || { workItemId, failures: [] };
     const nextStep = Object.assign({}, previous, fields || {}, {
       workItemId,
@@ -2899,7 +2918,7 @@ async function runOrchestration(goal, opts) {
       updatedAt: new Date(now).toISOString(),
     });
     liveSteps[workItemId] = nextStep;
-    const next = Object.assign({}, checkpointOnDisk || {}, {
+    const next = Object.assign({}, checkpointOnDisk || {}, diskContent || {}, {
       schemaVersion: 1,
       liveSteps,
       updatedAt: new Date(now).toISOString(),
@@ -3393,14 +3412,21 @@ async function runOrchestration(goal, opts) {
     // incomplete and keeps the launch/reattach path below (RS-R03).
     const recordedLaunch = savedStep && savedStep.launch ? savedStep.launch : null;
     const recordedLaunchExit = recordedLaunch ? recordedLaunch.exitCode : null;
+
+    // TASK-AI-128 P2: resume must read step.repair.sha so the next resume asks for the repair SHA.
+    const resumedWorkerSha =
+      (savedStep && savedStep.repair && savedStep.repair.sha) ||
+      (recordedLaunch && recordedLaunch.workerSha) ||
+      null;
+
     const resumedCompletedLaunch = Boolean(
       recordedLaunch &&
-      recordedLaunch.workerSha &&
-      SHA_40.test(String(recordedLaunch.workerSha).trim()) &&
+      resumedWorkerSha &&
+      SHA_40.test(String(resumedWorkerSha).trim()) &&
       (recordedLaunchExit === 0 || recordedLaunchExit === '0')
     );
     if (resumedCompletedLaunch) {
-      const workerSha = String(recordedLaunch.workerSha).trim();
+      const workerSha = String(resumedWorkerSha).trim();
       const resumedCandidate = (Array.isArray(candidates) ? candidates : []).find(
         (c) => candidateKey(c) === recordedLaunch.candidateKey
       );
@@ -4525,6 +4551,7 @@ async function runFormatGate(params) {
   };
 
   const changed = changedPrettierFiles(workerRoot, baseSha, targetSha);
+  console.log('CHANGED FILES:', changed);
   if (changed.detail) {
     // The changed files cannot be named, so nothing can be verified. That is the
     // same situation as a missing prettier: recorded, never a silent pass.
