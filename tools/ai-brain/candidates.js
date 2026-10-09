@@ -348,15 +348,26 @@ function generateCandidates(opts) {
         // one we emit a '*' placeholder that the chooser must resolve — an
         // unresolved wildcard is rejected, never silently passed through.
         if (Array.isArray(source.accounts) && Array.isArray(source.models)) {
+          const isAgyPool = source.id === 'agy-pool';
+          const familyOf = isAgyPool ? require('./agy-quota').familyOf : null;
           for (const accId of source.accounts) {
             for (const model of source.models) {
+              const family = isAgyPool
+                ? familyOf(model) ||
+                  (model.includes('gemini')
+                    ? 'gemini'
+                    : model.includes('claude') || model.includes('gpt')
+                      ? 'claude-gpt'
+                      : null)
+                : null;
+              if (isAgyPool && !family) continue;
               candidates.push({
                 harness,
-                accessPath,
+                accessPath: isAgyPool ? `ShipDe\\ShipDe-${accId}` : accessPath,
                 gateway: '',
-                upstream: source.id === 'agy-pool' ? 'agy' : source.id,
+                upstream: isAgyPool ? 'antigravity' : source.id,
                 accountId: accId,
-                quotaScope: source.id === 'agy-pool' ? accId : source.id,
+                quotaScope: isAgyPool ? `${accId}:${family}` : source.id,
                 modelId: model,
                 source: source.id,
                 kind: source.kind,

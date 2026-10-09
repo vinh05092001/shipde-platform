@@ -629,7 +629,12 @@ function classifyFailure(input) {
   }
 
   // 810002 rate limit (HTTP 403 + body code 810002). Must precede generic 403->entitlement.
-  if (effectiveStatus === 403 && (/"code"\s*:\s*810002\b/.test(errorPayloadText || text) || /code=810002\b/.test(errorPayloadText || text) || /Error 810002\b/.test(errorPayloadText || text))) {
+  if (
+    effectiveStatus === 403 &&
+    (/"code"\s*:\s*810002\b/.test(errorPayloadText || text) ||
+      /code=810002\b/.test(errorPayloadText || text) ||
+      /Error 810002\b/.test(errorPayloadText || text))
+  ) {
     return addRetryFields({
       cause: Cause.UPSTREAM_RATE_LIMIT,
       scope: Scope.UPSTREAM,

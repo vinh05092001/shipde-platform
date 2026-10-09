@@ -285,8 +285,12 @@ describe('TASK-AI-126', () => {
       'one candidate account per scheduled task'
     );
     for (const c of agyCandidates) {
-      assert.equal(c.upstream, 'agy');
-      assert.equal(c.quotaScope, c.accountId, 'the agy failure domain is agy/<account>');
+      assert.equal(c.upstream, 'antigravity');
+      assert.equal(
+        c.quotaScope,
+        c.accountId + ':gemini',
+        'the agy quota scope is <account>:<family>'
+      );
       assert.match(c.accountId, /^agy\d{2}$/);
     }
 
@@ -514,7 +518,8 @@ describe('TASK-AI-126', () => {
         cwd,
         prompt: 'pool prompt',
         model: 'gemini-3.1-pro-low',
-        candidateKey: 'agy-pool::cli::::agy::agy01::agy01::gemini-3.1-pro-low',
+        candidateKey:
+          'agy-pool::ShipDe\ShipDe-agy01::::antigravity::agy01::agy01:gemini::gemini-3.1-pro-low',
       });
       assert.equal(res.exitCode, 0);
 
