@@ -683,6 +683,177 @@ test('GM-R03: fail-closed decision logging writes named reasons with zero retrie
   );
 });
 
+test('GM-R01: refusal SCHEMA_INVALID when manifest is corrupted or violates schema', async () => {
+  const testDir = createUniqueSubdir('schema-invalid');
+  const { repoDir, baseSha } = initGitRepo(path.join(testDir, 'repo'));
+  const reviewedSha = createReviewedCommit(repoDir, 'feat.txt', 'feature\n');
+  const decisionDir = path.join(testDir, 'decisions');
+  const workItemId = 'TASK-AI-133';
+
+  createManifestAndArtifact(decisionDir, workItemId, baseSha, reviewedSha, { repoCwd: repoDir });
+  // Corrupt the manifest
+  const manifestPath = path.join(decisionDir, `review-manifest-${workItemId}.json`);
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  delete manifest.workItemId; // violate schema
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest), 'utf8');
+
+  const res = await governedMerge({
+    workItemId,
+    repoCwd: repoDir,
+    decisionDir,
+    config: { neverMerge: [] },
+  });
+  assert.strictEqual(res.ok, false);
+  assert.strictEqual(res.refusal, RefusalCode.SCHEMA_INVALID);
+});
+
+test('GM-R01: refusal MERGE_FAILED when merge mutation fails', async () => {
+  const testDir = createUniqueSubdir('merge-failed');
+  const { repoDir, baseSha } = initGitRepo(path.join(testDir, 'repo'));
+  const reviewedSha = createReviewedCommit(repoDir, 'feat.txt', 'feature\n');
+  const decisionDir = path.join(testDir, 'decisions');
+  const workItemId = 'TASK-AI-133';
+
+  createManifestAndArtifact(decisionDir, workItemId, baseSha, reviewedSha, {
+    repoCwd: repoDir,
+    verdict: 'PASS',
+  });
+
+  const fakeGhClient = {
+    getPullRequest: async () => ({
+      id: 'PR_FAIL',
+      number: 10,
+      title: `[${workItemId}] Fail merge`,
+      isDraft: false,
+      headRefOid: reviewedSha,
+      statusCheckRollup: [
+        { name: 'ci', status: 'COMPLETED', conclusion: 'SUCCESS', headSha: reviewedSha },
+      ],
+      unresolvedThreadsCount: 0,
+    }),
+    mergePullRequest: async () => ({ merged: false, error: 'GitHub returned 500' }),
+  };
+
+  const res = await governedMerge({
+    workItemId,
+    repoCwd: repoDir,
+    decisionDir,
+    config: { neverMerge: [] },
+    ghClient: fakeGhClient,
+  });
+  assert.strictEqual(res.ok, false);
+  assert.strictEqual(res.refusal, RefusalCode.MERGE_FAILED);
+});
+
+test('GM-R01: refusal REVIEWER_NOT_INDEPENDENT when reviewer shares failure domain with writer', async () => {
+  const testDir = createUniqueSubdir('reviewer-indep-domain');
+  const { repoDir, baseSha } = initGitRepo(path.join(testDir, 'repo'));
+  const reviewedSha = createReviewedCommit(repoDir, 'feat.txt', 'feature\n');
+  const decisionDir = path.join(testDir, 'decisions');
+  const workItemId = 'TASK-AI-133';
+
+  // Share the same upstream segment (part 3)
+  const WRITER_KEY = 'paseo::local::9router::anthropic::acc1::scope::claude-3-7-sonnet';
+  const REVIEWER_KEY = 'paseo::local::direct::anthropic::acc2::scope::claude-3-5-sonnet';
+
+  createManifestAndArtifact(decisionDir, workItemId, baseSha, reviewedSha, {
+    repoCwd: repoDir,
+    verdict: 'PASS',
+    writerCandidateKey: WRITER_KEY,
+    reviewerCandidateKey: REVIEWER_KEY,
+  });
+
+  const res = await governedMerge({
+    workItemId,
+    repoCwd: repoDir,
+    decisionDir,
+    config: { neverMerge: [] },
+  });
+  assert.strictEqual(res.ok, false);
+  assert.strictEqual(res.refusal, RefusalCode.REVIEWER_NOT_INDEPENDENT);
+});
+
+test('GM-R04: control.ps1 verdict source accepts valid manifest and rejects open P0', () => {
+  const testDir = createUniqueSubdir('control-ps1');
+  const { repoDir, baseSha } = initGitRepo(path.join(testDir, 'repo'));
+  const reviewedSha = createReviewedCommit(repoDir, 'feat.txt', 'feature\n');
+  const decisionDir = path.join(testDir, 'decisions');
+  const workItemId = 'TASK-AI-133';
+
+  createManifestAndArtifact(decisionDir, workItemId, baseSha, reviewedSha, {
+    repoCwd: repoDir,
+    verdict: 'PASS',
+  });
+  const logContent =
+    JSON.stringify({
+      workItemId,
+      stage: 'writer',
+      role: 'writer',
+      writerCandidateKey: SAMPLE_WRITER_KEY,
+    }) + '\n';
+  fs.writeFileSync(
+    path.join(decisionDir, new Date().toISOString().slice(0, 10) + '.jsonl'),
+    logContent,
+    'utf8'
+  );
+
+  const controlPath = path.join(__dirname, '..', '..', '..', 'scripts', 'ai', 'control.ps1');
+  const ps1Script = path.join(testDir, 'test-control.ps1');
+  const fakeNodeBat = path.join(testDir, 'node.bat');
+  fs.writeFileSync(fakeNodeBat, `@echo off\necho {"ok":true}\n`, 'utf8');
+
+  fs.writeFileSync(
+    ps1Script,
+    `
+    $env:PATH = "${testDir};" + $env:PATH
+    . "${controlPath}" -Action "Test" | Out-Null
+    $env:SHIPDE_DECISION_DIR = "${decisionDir}"
+    $res = Get-ShipDeExactHeadReviewManifestVerdict -HeadSha "${reviewedSha}" -PullRequestNumber 0
+    Write-Output "VERDICT_RESULT:$res"
+  `,
+    'utf8'
+  );
+
+  let stdout = '';
+  try {
+    stdout = cp
+      .execSync(
+        `powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${ps1Script}"`,
+        { encoding: 'utf8' }
+      )
+      .trim();
+  } catch (e) {
+    stdout = e.stdout || '';
+  }
+  assert.ok(
+    stdout.includes('VERDICT_RESULT:PASS'),
+    'control.ps1 must return PASS for valid manifest'
+  );
+
+  // Now create an open P0 finding
+  createManifestAndArtifact(decisionDir, workItemId, baseSha, reviewedSha, {
+    repoCwd: repoDir,
+    verdict: 'PASS',
+    findings: [{ id: 'F1', status: 'open', severity: 'p0', summary: 'fail' }],
+  });
+
+  let stdout2 = '';
+  try {
+    stdout2 = cp
+      .execSync(
+        `powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${ps1Script}"`,
+        { encoding: 'utf8' }
+      )
+      .trim();
+  } catch (e) {
+    stdout2 = e.stdout || '';
+  }
+  assert.ok(
+    !stdout2.includes('VERDICT_RESULT:PASS'),
+    'control.ps1 must not return PASS if there are open P0 findings'
+  );
+});
+
 test('GM-R05: isEligibleForMerge correctly gates auto-merge in orchestrate loop', () => {
   const validEntry = {
     workItemId: 'TASK-AI-133',

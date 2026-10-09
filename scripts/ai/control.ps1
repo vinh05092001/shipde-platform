@@ -2775,12 +2775,28 @@ function Get-ShipDeExactHeadReviewManifestVerdict {
     }
 
     $candidates = @()
+    if (-not [string]::IsNullOrWhiteSpace($env:SHIPDE_DECISION_DIR)) {
+        $candidates += $env:SHIPDE_DECISION_DIR
+    }
     $userHome = if (-not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) { $env:USERPROFILE } elseif (-not [string]::IsNullOrWhiteSpace($env:HOME)) { $env:HOME } else { "" }
     if (-not [string]::IsNullOrWhiteSpace($userHome)) {
         $candidates += (Join-Path $userHome ".shipde\decisions")
     }
-    $candidates += (Join-Path $PSScriptRoot "..\..\tools\ai-brain\data")
-    $candidates += (Join-Path $PSScriptRoot "..\..\decisions")
+
+    $expectedWorkItemId = $null
+    if ($PullRequestNumber -gt 0) {
+        try {
+            $pr = Get-ShipDePullRequestByNumber -Number $PullRequestNumber -ErrorAction SilentlyContinue
+            if ($pr -and $pr.title -match '\[([A-Za-z0-9-]+)\]') {
+                $expectedWorkItemId = $Matches[1].ToUpperInvariant()
+            }
+        } catch {
+            # PR lookup fallback
+        }
+    }
+
+    $repoDir = Join-Path $PSScriptRoot "..\.."
+    $reviewManifestJs = Join-Path $repoDir "tools\ai-brain\review-manifest.js"
 
     foreach ($dir in $candidates) {
         if (-not (Test-Path -LiteralPath $dir -PathType Container)) {
@@ -2792,26 +2808,144 @@ function Get-ShipDeExactHeadReviewManifestVerdict {
                 $content = Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8
                 $manifest = $content | ConvertFrom-Json
                 $revCommit = [string](Get-ShipDeObjectProperty -Object $manifest -Names @("reviewedCommit", "ReviewedCommit"))
-                if ($revCommit.ToLowerInvariant() -eq $HeadSha.ToLowerInvariant()) {
-                    $verdict = [string](Get-ShipDeObjectProperty -Object $manifest -Names @("verdict", "Verdict"))
-                    if ($verdict -eq "PASS") {
-                        $openP0P1 = $false
-                        if ($manifest.PSObject.Properties['findings'] -and $manifest.findings) {
-                            foreach ($f in @($manifest.findings)) {
-                                $st = [string](Get-ShipDeObjectProperty -Object $f -Names @("status", "Status"))
-                                $sev = [string](Get-ShipDeObjectProperty -Object $f -Names @("severity", "Severity"))
-                                if ($st -eq "open" -and ($sev -match "(?i)^p[01]$")) {
-                                    $openP0P1 = $true
-                                    break
-                                }
+                if ([string]::IsNullOrWhiteSpace($revCommit) -or $revCommit.ToLowerInvariant() -ne $HeadSha.ToLowerInvariant()) {
+                    continue
+                }
+
+                $manifestWorkItemId = [string](Get-ShipDeObjectProperty -Object $manifest -Names @("workItemId", "WorkItemId"))
+                if (-not [string]::IsNullOrWhiteSpace($expectedWorkItemId) -and -not [string]::IsNullOrWhiteSpace($manifestWorkItemId)) {
+                    if ($manifestWorkItemId.ToUpperInvariant() -ne $expectedWorkItemId) {
+                        continue
+                    }
+                }
+
+                $verdict = [string](Get-ShipDeObjectProperty -Object $manifest -Names @("verdict", "Verdict"))
+                if ($verdict -ne "PASS") {
+                    continue
+                }
+
+                # Robust Open P0/P1 detection
+                $openP0P1 = $false
+                if ($manifest.PSObject.Properties['findings'] -and $manifest.findings) {
+                    foreach ($f in @($manifest.findings)) {
+                        $isOpen = $false
+                        $st = [string](Get-ShipDeObjectProperty -Object $f -Names @("status", "Status"))
+                        if (-not [string]::IsNullOrWhiteSpace($st)) {
+                            $stTrim = $st.Trim().ToLowerInvariant()
+                            if ($stTrim -in @("open", "unresolved", "active", "pending")) {
+                                $isOpen = $true
+                            } elseif ($stTrim -in @("closed", "resolved", "fixed")) {
+                                $isOpen = $false
                             }
                         }
-                        if (-not $openP0P1) {
-                            Write-Host ("[SUPERVISOR] Exact-HEAD review PASS found in Controller review manifest '{0}' for {1} (OPERATOR-STANDING-AUTHORIZATION-2026-10-04)." -f $file.Name, $HeadSha)
-                            return "PASS"
+                        $openProp = Get-ShipDeObjectProperty -Object $f -Names @("open", "Open")
+                        if ($openProp -eq $true -or [string]$openProp -eq "true") {
+                            $isOpen = $true
+                        }
+                        $resProp = Get-ShipDeObjectProperty -Object $f -Names @("resolved", "Resolved", "isResolved", "IsResolved")
+                        if ($resProp -eq $false -or [string]$resProp -eq "false") {
+                            $isOpen = $true
+                        }
+                        $sev = [string](Get-ShipDeObjectProperty -Object $f -Names @("severity", "Severity", "level", "Level"))
+                        if (-not [string]::IsNullOrWhiteSpace($sev)) {
+                            $sevTrim = $sev.Trim().ToLowerInvariant()
+                            if ($isOpen -and ($sevTrim -match '^(p?[01]|p[-_]?[01])$')) {
+                                $openP0P1 = $true
+                                break
+                            }
                         }
                     }
                 }
+                if ($openP0P1) {
+                    continue
+                }
+
+                # Collect writers from decision log
+                $allWriters = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+                $manifestWriter = [string](Get-ShipDeObjectProperty -Object $manifest -Names @("writerCandidateKey", "WriterCandidateKey"))
+                if (-not [string]::IsNullOrWhiteSpace($manifestWriter)) {
+                    [void]$allWriters.Add($manifestWriter.Trim())
+                }
+
+                $targetWorkItemId = if (-not [string]::IsNullOrWhiteSpace($manifestWorkItemId)) { $manifestWorkItemId } else { $expectedWorkItemId }
+                if (-not [string]::IsNullOrWhiteSpace($targetWorkItemId)) {
+                    $logFiles = @(Get-ChildItem -LiteralPath $dir -Filter "*.jsonl" -File -ErrorAction SilentlyContinue)
+                    foreach ($lf in $logFiles) {
+                        try {
+                            $lines = Get-Content -LiteralPath $lf.FullName -Encoding UTF8 -ErrorAction SilentlyContinue
+                            foreach ($line in $lines) {
+                                if ([string]::IsNullOrWhiteSpace($line)) { continue }
+                                $entry = $line | ConvertFrom-Json -ErrorAction SilentlyContinue
+                                if (-not $entry) { continue }
+                                $eId = [string](Get-ShipDeObjectProperty -Object $entry -Names @("workItemId", "WorkItemId"))
+                                if ($eId.ToUpperInvariant() -ne $targetWorkItemId.ToUpperInvariant()) { continue }
+                                $role = [string](Get-ShipDeObjectProperty -Object $entry -Names @("role", "Role"))
+                                $stage = [string](Get-ShipDeObjectProperty -Object $entry -Names @("stage", "Stage"))
+                                if ($role -ieq "reviewer" -or $stage -in @("review", "reviewer-selection", "refused")) { continue }
+                                $cand = [string](Get-ShipDeObjectProperty -Object $entry -Names @("chosen", "chosenKey", "writerCandidateKey", "candidateKey", "offeringId", "writer"))
+                                if (-not [string]::IsNullOrWhiteSpace($cand)) {
+                                    [void]$allWriters.Add($cand.Trim())
+                                }
+                            }
+                        } catch { }
+                    }
+                }
+
+                # Reviewer independence against writers
+                $reviewerKey = [string](Get-ShipDeObjectProperty -Object $manifest -Names @("reviewerCandidateKey", "ReviewerCandidateKey"))
+                if ([string]::IsNullOrWhiteSpace($reviewerKey)) {
+                    continue
+                }
+                $isIndependent = $true
+                foreach ($wKey in $allWriters) {
+                    if ($reviewerKey.Trim().ToLowerInvariant() -eq $wKey.Trim().ToLowerInvariant()) {
+                        $isIndependent = $false
+                        break
+                    }
+                    $rParts = $reviewerKey.Trim() -split '::'
+                    $wParts = $wKey.Trim() -split '::'
+                    if ($rParts.Count -eq 7 -and $wParts.Count -eq 7) {
+                        if ($rParts[3].ToLowerInvariant() -eq $wParts[3].ToLowerInvariant()) {
+                            $isIndependent = $false; break
+                        }
+                        if ($rParts[6].ToLowerInvariant() -eq $wParts[6].ToLowerInvariant()) {
+                            $isIndependent = $false; break
+                        }
+                        if ($rParts[2].ToLowerInvariant() -eq $wParts[2].ToLowerInvariant() -and $rParts[3].ToLowerInvariant() -eq $wParts[3].ToLowerInvariant()) {
+                            $isIndependent = $false; break
+                        }
+                    }
+                }
+                $wDom = [string](Get-ShipDeObjectProperty -Object $manifest -Names @("writerFailureDomain", "WriterFailureDomain"))
+                $rDom = [string](Get-ShipDeObjectProperty -Object $manifest -Names @("reviewerFailureDomain", "ReviewerFailureDomain"))
+                if (-not [string]::IsNullOrWhiteSpace($wDom) -and -not [string]::IsNullOrWhiteSpace($rDom) -and $wDom.Trim().ToLowerInvariant() -eq $rDom.Trim().ToLowerInvariant()) {
+                    $isIndependent = $false
+                }
+                if (-not $isIndependent) {
+                    continue
+                }
+
+                # Validate manifest tree/patch via review-manifest.js
+                if (Test-Path -LiteralPath $reviewManifestJs -PathType Leaf) {
+                    $nodeCmd = Get-Command node -ErrorAction SilentlyContinue
+                    if ($null -ne $nodeCmd) {
+                        $artifactCandidate = Join-Path $file.DirectoryName ("review-artifact-{0}.md" -f $targetWorkItemId)
+                        if (-not (Test-Path -LiteralPath $artifactCandidate -PathType Leaf)) {
+                            $artifactCandidate = Join-Path $file.DirectoryName "review-artifact.md"
+                        }
+                        $nodeOut = & node $reviewManifestJs $file.FullName $repoDir $HeadSha $targetWorkItemId $artifactCandidate 2>$null
+                        if ($LASTEXITCODE -ne 0) {
+                            continue
+                        }
+                        $nodeRes = $nodeOut | ConvertFrom-Json -ErrorAction SilentlyContinue
+                        if (-not $nodeRes -or $nodeRes.ok -ne $true) {
+                            continue
+                        }
+                    }
+                }
+
+                Write-Host ("[SUPERVISOR] Exact-HEAD review PASS found in Controller review manifest '{0}' for {1} (OPERATOR-STANDING-AUTHORIZATION-2026-10-04)." -f $file.Name, $HeadSha)
+                return "PASS"
             } catch {
                 # Ignore invalid JSON and continue
             }
