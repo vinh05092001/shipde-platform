@@ -166,7 +166,16 @@ function controller() {
  */
 function resolveLauncher(o, isolatedLauncher) {
   if (typeof o.run === 'function') return o.run;
-  if (!isolatedLauncher) return null;
+
+  const externalWorkers =
+    typeof o.externalWorkers === 'string'
+      ? o.externalWorkers
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : [];
+
+  if (!isolatedLauncher && externalWorkers.length === 0) return null;
   const { getHarness } = require('./harness');
   return (job) => {
     const adapter = getHarness(job.harness);
@@ -192,6 +201,31 @@ function resolveLauncher(o, isolatedLauncher) {
         refusal: launchArgs.refusal || reason,
       };
     }
+
+    const isExternal = externalWorkers.includes(adapter.id);
+    if (isExternal && (adapter.id === 'agy-pool' || adapter.id === 'autoclaw')) {
+      const { runHarness } = require('./harness');
+      const fs = require('fs');
+      const path = require('path');
+      const os = require('os');
+      const env = Object.assign({}, process.env);
+      if (adapter.id === 'autoclaw') {
+        const tokenFile = path.join(os.homedir(), '.openclaw-autoclaw', '.gateway-token');
+        if (fs.existsSync(tokenFile)) {
+          env.OPENCLAW_GATEWAY_TOKEN = fs.readFileSync(tokenFile, 'utf8').trim();
+        }
+      }
+      return runHarness(adapter, launchArgs, {
+        cwd: job.cwd,
+        timeoutMs: job.workerTimeoutMs || o.workerTimeoutMs,
+        env,
+      });
+    }
+
+    if (!isolatedLauncher) {
+      throw new Error('LAUNCHER_MISSING: no isolated launcher for ' + adapter.id);
+    }
+
     return isolatedLauncher(adapter, launchArgs, {
       cwd: job.hostWorktree || job.cwd,
       workerRoot: job.workerRoot,
@@ -210,6 +244,7 @@ function resolveLauncher(o, isolatedLauncher) {
       // TASK-AI-127 WD-R03: a WORKER_DEPS_UNAVAILABLE warning is recorded in
       // the same decision log the run itself writes.
       decisionDir: o.decisionDir || undefined,
+      checkpoint: o.checkpointFile || (typeof o.checkpoint === 'string' ? o.checkpoint : undefined),
     });
   };
 }
@@ -771,6 +806,7 @@ function reviewLane(
       usageFile,
       verdictFile,
       isReview: true,
+      decisionDir: o.decisionDir || null,
       checkpoint: o.checkpointFile || null,
       title: (item ? item.id : 'item') + '-review',
       labels: {
@@ -2894,6 +2930,25 @@ async function runOrchestration(goal, opts) {
       : {};
   const persistStep = (workItemId, stage, fields) => {
     if (!checkpointFile) return;
+
+    // TASK-AI-128 P1: re-read from disk so we don't clobber updates made by the launcher (adopted repair shas)
+    const diskContent = cli.readCheckpoint(checkpointFile);
+    if (diskContent && diskContent.liveSteps && diskContent.liveSteps[workItemId]) {
+      const diskStep = diskContent.liveSteps[workItemId];
+      if (liveSteps[workItemId]) {
+        if (diskStep.launch && diskStep.launch.workerSha) {
+          liveSteps[workItemId].launch = liveSteps[workItemId].launch || {};
+          liveSteps[workItemId].launch.workerSha = diskStep.launch.workerSha;
+        }
+        if (diskStep.repair && diskStep.repair.sha) {
+          liveSteps[workItemId].repair = liveSteps[workItemId].repair || {};
+          liveSteps[workItemId].repair.sha = diskStep.repair.sha;
+        }
+      } else {
+        liveSteps[workItemId] = diskStep;
+      }
+    }
+
     const previous = liveSteps[workItemId] || { workItemId, failures: [] };
     const nextStep = Object.assign({}, previous, fields || {}, {
       workItemId,
@@ -2901,7 +2956,7 @@ async function runOrchestration(goal, opts) {
       updatedAt: new Date(now).toISOString(),
     });
     liveSteps[workItemId] = nextStep;
-    const next = Object.assign({}, checkpointOnDisk || {}, {
+    const next = Object.assign({}, checkpointOnDisk || {}, diskContent || {}, {
       schemaVersion: 1,
       liveSteps,
       updatedAt: new Date(now).toISOString(),
@@ -3395,14 +3450,21 @@ async function runOrchestration(goal, opts) {
     // incomplete and keeps the launch/reattach path below (RS-R03).
     const recordedLaunch = savedStep && savedStep.launch ? savedStep.launch : null;
     const recordedLaunchExit = recordedLaunch ? recordedLaunch.exitCode : null;
+
+    // TASK-AI-128 P2: resume must read step.repair.sha so the next resume asks for the repair SHA.
+    const resumedWorkerSha =
+      (savedStep && savedStep.repair && savedStep.repair.sha) ||
+      (recordedLaunch && recordedLaunch.workerSha) ||
+      null;
+
     const resumedCompletedLaunch = Boolean(
       recordedLaunch &&
-      recordedLaunch.workerSha &&
-      SHA_40.test(String(recordedLaunch.workerSha).trim()) &&
+      resumedWorkerSha &&
+      SHA_40.test(String(resumedWorkerSha).trim()) &&
       (recordedLaunchExit === 0 || recordedLaunchExit === '0')
     );
     if (resumedCompletedLaunch) {
-      const workerSha = String(recordedLaunch.workerSha).trim();
+      const workerSha = String(resumedWorkerSha).trim();
       const resumedCandidate = (Array.isArray(candidates) ? candidates : []).find(
         (c) => candidateKey(c) === recordedLaunch.candidateKey
       );
@@ -3555,6 +3617,7 @@ async function runOrchestration(goal, opts) {
         cwd: o.isolatedWorker ? isolatedWorkerRoot : o.workerRoot || o.cwd,
         isolatedWorker: Boolean(o.isolatedWorker),
         usageFile,
+        decisionDir: o.decisionDir || null,
         checkpoint: checkpointFile,
         title: String(item.id),
         labels: { workItem: String(item.id), role: roleOf(item) },
@@ -4917,6 +4980,7 @@ async function reviewItem(
         domainAttempts: domainAttemptsMap,
         triedKeys: triedKeySet,
         evidenceDir: options.evidenceDir || evidenceDir,
+        onCheckpoint: options.onCheckpoint,
       }
     )(findings, sha);
   };
@@ -5966,6 +6030,7 @@ function repairRound(
       cwd: repairWorkerRoot,
       isolatedWorker: Boolean(o.isolatedWorker),
       usageFile,
+      decisionDir: o.decisionDir || null,
       checkpoint: o.checkpointFile || null,
       title: planned.id,
       labels: { workItem: planned.id, role: roleOf(planned), repairOf: item.id },
@@ -6059,28 +6124,33 @@ function repairRound(
     const adapter = harnessFor({ harness: repairJob.harness });
     const handle = adapter ? require('./executor').readSessionId(adapter, repairJob, res).id : null;
     const nextSha = headShaOf(repairWorkerRoot);
-    if (!handle || !nextSha || nextSha === sha || isTreeDirty(repairWorkerRoot)) return { sha };
-    decisions.recordDecision(
-      {
-        stage: decisions.Stage.LAUNCHED,
-        workItemId: planned.id,
-        role: roleOf(planned),
-        attempt: round,
-        attemptNumber: round,
-        chosen: decision.chosen,
-        harness: repairJob.harness,
-        branch: repairJob.branch,
-        sessionId: handle,
-        detail: 'REPAIR_ROUND: repairs ' + item.id,
-        worktree: repairJob.cwd || null,
-      },
-      logOpts
-    );
-    if (typeof options.onCheckpoint === 'function') {
-      options.onCheckpoint('repair_round_completed', {
-        repair: { round, sha: nextSha, candidateKey: decision.chosen },
-      });
+
+    if (nextSha && nextSha !== sha) {
+      decisions.recordDecision(
+        {
+          stage: decisions.Stage.LAUNCHED,
+          workItemId: planned.id,
+          role: roleOf(planned),
+          attempt: round,
+          attemptNumber: round,
+          chosen: decision.chosen,
+          harness: repairJob.harness,
+          branch: repairJob.branch,
+          sessionId: handle,
+          sha: nextSha,
+          detail: 'REPAIR_ROUND: repairs ' + item.id,
+          worktree: repairJob.cwd || null,
+        },
+        logOpts
+      );
+      if (typeof options.onCheckpoint === 'function') {
+        options.onCheckpoint('repair_round_completed', {
+          repair: { round, sha: nextSha, candidateKey: decision.chosen },
+        });
+      }
     }
+
+    if (!handle || !nextSha || nextSha === sha || isTreeDirty(repairWorkerRoot)) return { sha };
     return { sha: nextSha };
   };
 }

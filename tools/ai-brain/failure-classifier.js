@@ -75,7 +75,7 @@ const ISOLATION_VERDICT_HUMAN_ACTION = 'run scripts/ai/isolation/Test-WorkerIsol
  *   ISOLATION_VERDICT_STALE / _MISSING / _INVALID / _NOT_CLOSED — the boundary
  *   attestation is unusable; ISOLATION_CHECKOUT_FAILED and the pinned base-SHA
  *   errors; PROVISION_BASE_MISMATCH; a worker-root removal that failed with
- *   EPERM/EBUSY; and the clone failure the launcher reports verbatim.
+ *   EPERM/EBUSY; WORKER_HEAD_MISMATCH and WORKER_ROOT_MISSING; and the clone failure the launcher reports verbatim.
  *
  * Only the launcher's own stderr is read here — worker stdout never widens or
  * narrows the rule.
@@ -86,6 +86,8 @@ function isLaunchInfraFailure(text) {
     /ISOLATION_VERDICT_(STALE|MISSING|INVALID|NOT_CLOSED)/.test(s) ||
     /ISOLATION_CHECKOUT_FAILED|ISOLATION_BASE_SHA_MISSING|ISOLATION_BASE_SHA_INVALID/.test(s) ||
     /PROVISION_BASE_MISMATCH/.test(s) ||
+    /WORKER_HEAD_MISMATCH/.test(s) ||
+    /WORKER_ROOT_MISSING/.test(s) ||
     /Failed to clone repository/.test(s) ||
     /\b(EPERM|EBUSY)\b[^\n]{0,120}(unlink|rmdir|operation not permitted|resource busy or locked)/.test(
       s
@@ -164,7 +166,9 @@ function causeRetryable(cause) {
 function addRetryFields(result) {
   const retryable = causeRetryable(result.cause);
   result.retryable = retryable;
-  result.retryAfterMs = result.resetTime ? result.resetTime - Date.now() : null;
+  if (result.retryAfterMs === undefined) {
+    result.retryAfterMs = result.resetTime ? Math.max(0, result.resetTime - Date.now()) : null;
+  }
   return result;
 }
 
@@ -623,6 +627,24 @@ function classifyFailure(input) {
       humanAction: HumanAction.NONE,
       evidence,
       resetTime: resetMs ? Date.now() + resetMs : null,
+    });
+  }
+
+  // 810002 rate limit (HTTP 403 + body code 810002). Must precede generic 403->entitlement.
+  if (
+    effectiveStatus === 403 &&
+    (/"code"\s*:\s*810002\b/.test(errorPayloadText || text) ||
+      /code=810002\b/.test(errorPayloadText || text) ||
+      /Error 810002\b/.test(errorPayloadText || text))
+  ) {
+    return addRetryFields({
+      cause: Cause.UPSTREAM_RATE_LIMIT,
+      scope: Scope.UPSTREAM,
+      cooldownMs: 120000,
+      humanAction: HumanAction.NONE,
+      evidence,
+      resetTime: Date.now() + 120000,
+      retryAfterMs: 120000,
     });
   }
 

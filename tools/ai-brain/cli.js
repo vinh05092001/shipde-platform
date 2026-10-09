@@ -2078,6 +2078,7 @@ function dispatchCommand(args, deps = {}) {
             // TASK-AI-127 WD-R03: WORKER_DEPS_UNAVAILABLE warnings land in the
             // same decision log this dispatch records its launch in.
             decisionDir,
+            checkpoint: checkpointFile,
           });
         } catch (err) {
           thrownError = err;
@@ -2866,6 +2867,7 @@ function orchestrateCommand(args, deps = {}) {
     home: typeof args.home === 'string' ? args.home : undefined,
     enforceProofFloors: true,
     isolatedWorker: Boolean(args['isolated-worker']),
+    externalWorkers: args['external-workers'],
     workerTimeoutMs,
     decisionDir: args['decision-dir'] || decisionsApi.DEFAULT_DIR,
     checkpointFile: typeof args.checkpoint === 'string' ? args.checkpoint : null,

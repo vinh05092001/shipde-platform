@@ -399,6 +399,48 @@ const HARNESSES = Object.freeze({
   hermes,
   'opencode-direct': opencodeDirect,
   'agy-pool': agyPool,
+  autoclaw: {
+    id: 'autoclaw',
+    command: 'openclaw',
+    launch(job, opts) {
+      const fs = require('fs');
+      const path = require('path');
+      const crypto = require('crypto');
+      if (!job.model) throw new Error('AUTOCLAW_REQUIRES_PINNED_MODEL');
+      if (!job.cwd) throw new Error('AUTOCLAW_REQUIRES_DIR');
+
+      const nonce = crypto.randomBytes(16).toString('hex');
+      const shipdeDir = path.join(job.cwd, '.shipde');
+      fs.mkdirSync(shipdeDir, { recursive: true });
+      const promptPath = path.join(shipdeDir, `prompt-${nonce}.md`);
+      fs.writeFileSync(promptPath, Buffer.from(job.prompt || '', 'utf8'));
+
+      const message = `Read the file .shipde/prompt-${nonce}.md in the current directory. It is your complete task; follow it exactly.`;
+      const sessionId = job.sessionId || crypto.randomBytes(8).toString('hex');
+
+      const args = ['agent', '--agent', 'main', '--session-id', sessionId, '--model', job.model];
+      if (opts && opts.timeoutMs) {
+        args.push('--timeout', Math.floor(opts.timeoutMs / 1000).toString());
+      }
+      args.push('--message', message);
+
+      // AutoClaw adapter does not write a usage file yet, but if the caller requires it:
+      if (job.usageFile) {
+        fs.writeFileSync(job.usageFile, JSON.stringify({ session_id: sessionId }));
+      }
+      return args;
+    },
+    resume(sessionId, prompt, job, opts) {
+      return this.launch(Object.assign({}, job, { prompt, sessionId }), opts);
+    },
+    stop() {
+      return null;
+    },
+    sessionIdFrom(parsed) {
+      const v = parsed && (parsed.session_id || parsed.sessionId || parsed.sessionID);
+      return v !== undefined && v !== null && String(v).trim() !== '' ? String(v) : null;
+    },
+  },
 });
 
 function pickId(obj) {
@@ -508,6 +550,7 @@ function runHarness(adapter, args, options) {
     windowsHide: true,
     shell: false,
     maxBuffer: 8 * 1024 * 1024,
+    env: opts.env || process.env,
   });
   return {
     exitCode: res.status === null ? -1 : res.status,
