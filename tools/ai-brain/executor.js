@@ -34,6 +34,7 @@ const { REVIEW_ROLES, IMPLEMENTATION_ROLES } = require('./scheduler');
 const { offeringId: toOfferingId } = require('./offerings');
 const { getHarness, runHarness, parseLastJson } = require('./harness');
 const { loadSources, dispatchRoute, qualifyModel, runsOpenCodeHarness } = require('./sources');
+const { ISOLATED_WORKER_VERIFICATION_NOTE } = require('./prompt-compiler');
 const decisions = require('./decisions');
 
 const Outcome = Object.freeze({
@@ -49,18 +50,23 @@ function workerName(workItemId) {
   return name.length > 20 ? name.slice(0, 20) : name;
 }
 
-function defaultPrompt(assignment) {
+function isolatedExtra(opts) {
+  return opts && opts.isolatedWorker ? ' ' + ISOLATED_WORKER_VERIFICATION_NOTE : '';
+}
+
+function defaultPrompt(assignment, opts) {
   return (
     'Work Item ' +
     assignment.workItemId +
     ' in shipde-platform. Read AGENTS.md and the Work Item. Implement exactly its in-scope ' +
     'items within Allowed paths on branch ' +
     assignment.branch +
-    ', run its verification, and open or update the Pull Request. Do not merge.'
+    ', run its verification, and open or update the Pull Request. Do not merge.' +
+    isolatedExtra(opts)
   );
 }
 
-function resumePrompt(assignment) {
+function resumePrompt(assignment, opts) {
   return (
     'Continue Work Item ' +
     assignment.workItemId +
@@ -69,7 +75,8 @@ function resumePrompt(assignment) {
     '. Read the branch as it stands now — it already carries your earlier commits — then finish ' +
     'the remaining in-scope items, run the verification, and update the Pull Request. ' +
     'Do not redo work that is already committed and do not repeat any action with an external effect ' +
-    'before checking whether it already happened.'
+    'before checking whether it already happened.' +
+    isolatedExtra(opts)
   );
 }
 
@@ -389,7 +396,7 @@ function executePlan(plan, options) {
       provider: route.provider,
       model: route.model,
       accountId: a.accountId,
-      prompt: promptFor(a),
+      prompt: promptFor(a, opts),
       branch: isReview ? null : a.branch,
       base: opts.base || 'main',
       cwd: opts.cwd,
@@ -401,7 +408,7 @@ function executePlan(plan, options) {
     let launchArgs;
     try {
       launchArgs = resuming
-        ? adapter.resume(existing.sessionId, resumePrompt(a), job)
+        ? adapter.resume(existing.sessionId, resumePrompt(a, opts), job)
         : adapter.launch(job);
     } catch (err) {
       record.outcome = Outcome.FAILED;

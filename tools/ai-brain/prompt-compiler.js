@@ -18,6 +18,15 @@ const PUBLISHER_BOUNDARY =
 const CLEAN_TREE_RULES =
   'Clean tree requirement: work only inside the allowed paths, do not create scratch/backup/test files outside them, delete any temporary file before finishing, finish with exactly one local commit and a clean git status (no untracked files).';
 
+// WD-R04: isolated workers share a provisioned dependency tree, so their
+// prompt must name the verification commands they can now run and the
+// supertest caveat. One constant for every prompt path — compilePrompt
+// (orchestrate author and repair rounds) and executor defaultPrompt /
+// resumePrompt (cli dispatch) — so the sentence cannot drift or be dropped
+// at one call site again.
+const ISOLATED_WORKER_VERIFICATION_NOTE =
+  'You can now run pnpm lint, pnpm typecheck, pnpm format:check, prettier --write on your own files, and the focused tests. API supertests skip without a database (CI is the evidence).';
+
 /**
  * The item's role, resolved the same way orchestrate.js resolves it: the
  * roleRequirement the plan pinned, else the item role, else the default
@@ -56,6 +65,7 @@ function compilePrompt(item, ctx) {
       (command || '(none declared: a work item with no verification command is not dispatchable)')
   );
   if (command) lines.push('Expected result: ' + (i.verification.expect || '(exit code 0)'));
+  if (c.isolatedWorker) lines.push(ISOLATED_WORKER_VERIFICATION_NOTE);
   lines.push('Evidence to submit: test output, the diff, and the acceptance matrix.');
   lines.push('Checkpoint: ' + (i.checkpointPolicy || 'resume-by-work-item'));
   lines.push(
@@ -210,4 +220,10 @@ function compileReviewPrompt(item, ctx) {
   return lines.join('\n');
 }
 
-module.exports = { compilePrompt, compileReviewPrompt, PUBLISHER_BOUNDARY, CLEAN_TREE_RULES };
+module.exports = {
+  compilePrompt,
+  compileReviewPrompt,
+  PUBLISHER_BOUNDARY,
+  CLEAN_TREE_RULES,
+  ISOLATED_WORKER_VERIFICATION_NOTE,
+};
