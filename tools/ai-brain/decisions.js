@@ -221,6 +221,12 @@ function openWritersDetailed(options) {
   const state = new Map();
   for (const r of records) {
     if (!r || !r.workItemId) continue;
+    const isReview =
+      r.stage === Stage.REVIEW ||
+      r.stage === Stage.REVIEWER_SELECTION ||
+      r.role === 'reviewer' ||
+      (typeof r.role === 'string' && (r.role.startsWith('reviewer.') || r.role === 'reviewer'));
+    if (isReview) continue;
     if (r.stage === Stage.LAUNCHED || r.stage === Stage.RESUMED) {
       state.set(r.workItemId, {
         workItemId: r.workItemId,
@@ -288,6 +294,71 @@ function openWritersDetailed(options) {
   };
 }
 
+/**
+ * Reviewers currently active according to the decision log.
+ */
+function openReviewersDetailed(options) {
+  const detail =
+    options && options.records
+      ? { records: options.records, damaged: [], readable: true }
+      : readDecisionsDetailed(options);
+  const records = detail.records;
+  const state = new Map();
+  for (const r of records) {
+    if (!r || !r.workItemId) continue;
+    const isReview =
+      r.stage === Stage.REVIEW ||
+      r.stage === Stage.REVIEWER_SELECTION ||
+      r.role === 'reviewer' ||
+      (typeof r.role === 'string' && (r.role.startsWith('reviewer.') || r.role === 'reviewer'));
+
+    if (isReview) {
+      if (
+        r.stage === Stage.COMPLETED ||
+        r.stage === Stage.FAILED ||
+        r.outcome === 'passed' ||
+        r.outcome === 'failed' ||
+        r.verdict === 'PASS' ||
+        r.verdict === 'FAIL' ||
+        r.verdict === 'CHANGES_REQUIRED' ||
+        r.verdict === 'BLOCKED'
+      ) {
+        state.delete(r.workItemId);
+      } else {
+        state.set(r.workItemId, {
+          workItemId: r.workItemId,
+          sessionId: r.sessionId || null,
+          role: r.role || 'reviewer',
+          reviewer: r.reviewer || null,
+          since: r.at,
+        });
+      }
+    } else if (r.stage === Stage.COMPLETED || r.stage === Stage.FAILED) {
+      state.delete(r.workItemId);
+    }
+  }
+
+  const ttlMs = (options && options.ttlMs) || 4 * 60 * 60 * 1000;
+  const now = (options && options.now) || Date.now();
+  const activeReviewers = [];
+  for (const rev of state.values()) {
+    const elapsed = now - new Date(rev.since).getTime();
+    if (elapsed <= ttlMs) {
+      activeReviewers.push(rev);
+    }
+  }
+
+  return {
+    reviewers: activeReviewers,
+    readable: detail.readable,
+    damaged: detail.damaged,
+  };
+}
+
+function openReviewers(options) {
+  return openReviewersDetailed(options).reviewers;
+}
+
 /** The open writer for this work item, or null when it is free to claim. */
 function writerFor(workItemId, options) {
   const detail = openWritersDetailed(options);
@@ -341,6 +412,8 @@ module.exports = {
   readDecisionsDetailed,
   openWriters,
   openWritersDetailed,
+  openReviewers,
+  openReviewersDetailed,
   writerFor,
   closeWriter,
   scrub,

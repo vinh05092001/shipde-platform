@@ -568,10 +568,16 @@ function planDispatch(items, accounts, context) {
   });
 }
 
+const CONCURRENCY_CEILING = Object.freeze({
+  maxWriters: 2,
+  maxReviewers: DEFAULTS.maxReviewAgents,
+});
+
 module.exports = {
   planDispatch,
   resourceCeiling,
   DEFAULTS,
+  CONCURRENCY_CEILING,
   IMPLEMENTATION_ROLES,
   RESEARCH_ROLES,
   REVIEW_ROLES,
