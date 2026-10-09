@@ -460,14 +460,56 @@ function generateCandidates(opts) {
   return candidates;
 }
 
+function isPoolEnabled(options) {
+  const o = options || {};
+  if (o.discoverPool === false && (!Array.isArray(o.models) || o.models.length === 0)) {
+    return false;
+  }
+  if (o.enablePool === true || o.poolEnabled === true || o.pool === true) return true;
+  if (o.discoverPool === true) return true;
+  if (Boolean(o.fakeRunsDir || o.runsDir || o.poolRuntimeDir)) return true;
+  if (Array.isArray(o.models) && o.models.length > 0) return true;
+
+  const ew = o.externalWorkers || o['external-workers'];
+  if (typeof ew === 'string') {
+    const list = ew.split(',').map((s) => s.trim());
+    if (list.includes('agy-pool')) return true;
+  } else if (Array.isArray(ew)) {
+    if (ew.includes('agy-pool')) return true;
+  }
+
+  if (Array.isArray(o.accounts)) {
+    if (
+      o.accounts.some(
+        (a) =>
+          a && (a.provider === 'agy-pool' || a.sourceId === 'agy-pool' || a.harness === 'agy-pool')
+      )
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 /**
  * Generate agy-pool candidates.
  */
 function poolAccountCandidates(opts) {
   const o = opts || {};
+  if (!isPoolEnabled(o)) {
+    return [];
+  }
+  const registry = o.registry || sourcesApi.loadSources();
+  if (
+    o.registry &&
+    Array.isArray(o.registry.sources) &&
+    !o.registry.sources.some((s) => s && s.id === 'agy-pool')
+  ) {
+    return [];
+  }
   const pool = require('./agy-pool-runtime');
   const { familyOf } = require('./agy-quota');
-  const registry = o.registry || sourcesApi.loadSources();
   const agySource =
     (registry && registry.sources && registry.sources.find((s) => s.id === 'agy-pool')) || {};
 

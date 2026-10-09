@@ -2464,6 +2464,10 @@ function buildCandidates(options, evidenceData) {
       registry: o.registry || sourcesApi.loadSources(),
       catalogue: o.catalogue || [],
       accounts: o.accounts || [],
+      externalWorkers: o.externalWorkers,
+      fakeRunsDir: o.fakeRunsDir || o.runsDir,
+      poolRuntimeDir: o.poolRuntimeDir,
+      discoverPool: o.discoverPool,
       openCodeIds: o.openCodeIds || [],
     });
   }
@@ -3038,8 +3042,21 @@ async function runOrchestration(goal, opts) {
     { now }
   );
 
+  const externalWorkersList =
+    typeof o.externalWorkers === 'string'
+      ? o.externalWorkers
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : Array.isArray(o.externalWorkers)
+        ? o.externalWorkers
+        : [];
+  const poolEnabled =
+    externalWorkersList.includes('agy-pool') ||
+    o.discoverPool === true ||
+    Boolean(o.fakeRunsDir || o.runsDir || o.poolRuntimeDir);
   const pool = require('./agy-pool-runtime');
-  const discoveryWarning = pool.getLastDiscoveryWarning();
+  const discoveryWarning = poolEnabled ? pool.getLastDiscoveryWarning() : null;
   if (discoveryWarning) {
     if (!log.warnings) log.warnings = [];
     log.warnings.push(discoveryWarning);

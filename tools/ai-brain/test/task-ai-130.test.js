@@ -40,14 +40,24 @@ function tmpDir(prefix) {
 }
 
 let tempHome;
+let origHome;
+let origUserProfile;
 
 beforeEach(() => {
   tempHome = tmpDir('task-ai-130-home-');
+  origHome = process.env.HOME;
+  origUserProfile = process.env.USERPROFILE;
+  process.env.HOME = tempHome;
+  process.env.USERPROFILE = tempHome;
   mock.method(os, 'homedir', () => tempHome);
   pool.resetPoolDiscoveryCache();
 });
 
 afterEach(() => {
+  if (origHome !== undefined) process.env.HOME = origHome;
+  else delete process.env.HOME;
+  if (origUserProfile !== undefined) process.env.USERPROFILE = origUserProfile;
+  else delete process.env.USERPROFILE;
   mock.restoreAll();
   pool.resetPoolDiscoveryCache();
 });

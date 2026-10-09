@@ -2827,12 +2827,19 @@ function orchestrateCommand(args, deps = {}) {
   const readJsonArg = (value) =>
     typeof value === 'string' && value ? JSON.parse(fsx.readFileSync(value, 'utf8')) : null;
   const inputAccounts = readJsonArg(args.accounts) || (Array.isArray(d.accounts) ? d.accounts : []);
+  const poolEnabled =
+    typeof args['external-workers'] === 'string' &&
+    args['external-workers']
+      .split(',')
+      .map((s) => s.trim())
+      .includes('agy-pool');
   const candidates = Array.isArray(d.candidates)
     ? d.candidates
     : generateCandidates({
         registry,
         catalogue: readJsonArg(args.catalogue) || [],
         accounts: inputAccounts,
+        externalWorkers: args['external-workers'],
         openCodeIds: Array.isArray(args['opencode-ids'])
           ? args['opencode-ids']
           : typeof args['opencode-ids'] === 'string'
@@ -2840,7 +2847,7 @@ function orchestrateCommand(args, deps = {}) {
             : [],
       });
   const pool = require('./agy-pool-runtime');
-  const discoveryWarning = pool.getLastDiscoveryWarning();
+  const discoveryWarning = poolEnabled ? pool.getLastDiscoveryWarning() : null;
   if (discoveryWarning && typeof console !== 'undefined' && console.warn) {
     console.warn(`[agy-pool] discovery warning: ${discoveryWarning}`);
   }
