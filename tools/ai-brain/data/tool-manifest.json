@@ -116,9 +116,9 @@
     "roles": ["security-review"],
     "triggers": ["secrets"],
     "gate": true,
-    "command": null,
-    "installed": "UNKNOWN",
-    "evidenceRef": null
+    "command": "security:secrets",
+    "installed": true,
+    "evidenceRef": "package.json:scripts.security:secrets"
   },
   {
     "id": "gemini-cli",
@@ -360,7 +360,8 @@
     "gate": true,
     "command": null,
     "installed": "UNKNOWN",
-    "evidenceRef": null
+    "evidenceRef": null,
+    "note": "No command on this host: the scanner is not installed here. As a gate it records TOOL_GATE_UNAVAILABLE, never blocks and never counts as a pass."
   },
   {
     "id": "hoverfly",

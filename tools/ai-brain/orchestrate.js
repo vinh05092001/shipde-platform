@@ -108,6 +108,9 @@ function buildDefaults() {
     // DT-R02: one record per host-side format check the Controller ran, so an
     // unavailable prettier is a visible warning and not a silent pass.
     formatChecks: [],
+    // TM-R03/TM-R04: one record per tool gate the Controller ran before
+    // review, with the tool id and the verdict — never raw tool output.
+    toolGates: [],
     reconciliation: null,
     checkpoint: null,
     resumed: null,
@@ -777,6 +780,7 @@ function reviewLane(
       usageFile,
       candidateKey: reviewerIdentity,
       exercise: o.exercise || null,
+      logOpts,
     });
 
     const reviewJob = {
@@ -2815,6 +2819,7 @@ async function selectCandidateForProfile(
     chosen: result.chosen,
     reason: result.reason,
     result,
+    decisionRecorded,
   };
 }
 
@@ -3613,14 +3618,31 @@ async function runOrchestration(goal, opts) {
 
       // The prompt carries the pinned key the Controller chose (AI-64-R02), so it
       // is compiled per attempt rather than once before any selection.
-      const prompt = compilePrompt(item, {
+      const compiledPrompt = compilePrompt(item, {
         goal,
         specText: o.specText,
         candidateKey: decision.chosen,
         branch,
         usageFile,
         isolatedWorker: Boolean(o.isolatedWorker),
+        recordTools: false,
+        returnTools: true,
       });
+      const prompt = compiledPrompt.prompt;
+      const promptToolIds = compiledPrompt.tools;
+      if (Array.isArray(promptToolIds) && promptToolIds.length > 0) {
+        decisions.recordDecision(
+          {
+            stage: decisions.Stage.PROMPT_TOOLS,
+            workItemId: item.id,
+            role: roleOf(item),
+            tools: promptToolIds,
+            chosen: decision.chosen,
+            ranking: (decision.decisionRecorded && decision.decisionRecorded.ranking) || [],
+          },
+          logOpts
+        );
+      }
       log.prompts.push({ workItemId: item.id, attempt, candidateKey: decision.chosen, prompt });
 
       const route = resolveLaunchRoute(candidate, o, registry);
@@ -4515,6 +4537,12 @@ const FormatGate = Object.freeze({
   UNAVAILABLE: 'UNAVAILABLE',
 });
 
+const ToolGate = Object.freeze({
+  PASSED: 'PASSED',
+  REFUSED: 'REFUSED',
+  UNAVAILABLE: 'UNAVAILABLE',
+});
+
 /** The file types `prettier --check` can judge. */
 const PRETTIER_FILE = /\.(js|jsx|ts|tsx|json|md|html|css|scss|less|yaml|yml)$/i;
 
@@ -4587,6 +4615,229 @@ function prettierCheck(files) {
     status: 'FAILED',
     detail: lines[0] || 'prettier --check exited with code ' + result.status,
   };
+}
+
+/**
+ * The worker's changed names between the handoff base and the commit under
+ * review — the same host-side `git diff` the format gate judges, without the
+ * prettier filter (TM-R03).
+ */
+function changedFileNames(workerRoot, baseSha, targetSha) {
+  const diff = spawnSync('git', ['diff', '--name-only', baseSha + '..' + targetSha], {
+    cwd: workerRoot,
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  if (diff.error || diff.status !== 0) {
+    const detail =
+      (diff.error && diff.error.message) || String(diff.stderr || '').trim() || 'git diff failed';
+    return { names: [], detail: 'changed files are unknown: ' + stripAnsi(detail).trim() };
+  }
+  const names = String(diff.stdout || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return { names, detail: null };
+}
+
+/**
+ * A manifest `command` is the repository's package.json script name (the same
+ * convention as the eslint/prettier/prisma entries), so a gate runs as
+ * `pnpm run <command>` host-side in the worker root — the tree that carries
+ * the reviewed SHA.
+ */
+function runGateCommand(o, gateTool, workerRoot) {
+  const check = o.spawnSync || spawnSync;
+  return check('pnpm', ['run', String(gateTool.command)], {
+    cwd: workerRoot,
+    shell: true,
+    encoding: 'utf8',
+    windowsHide: true,
+    timeout: o.timeoutMs || 300000,
+  });
+}
+
+/** A gate that cannot run here is UNAVAILABLE, never a failing scan. */
+function gateUnavailableReason(res) {
+  if (res && res.error) return String(res.error.message || res.error);
+  const text = String((res && res.stdout) || '') + String((res && res.stderr) || '');
+  if (/cannot find module|is not recognized|command not found|ENOENT/i.test(text)) {
+    return 'gate command is not runnable here: ' + (text.trim().split(/\r?\n/)[0] || '');
+  }
+  return null;
+}
+
+/** Scrubbed tail of the tool output — the only place raw output survives. */
+function gateOutput(res) {
+  return decisions
+    .scrubText(String((res && res.stdout) || '') + String((res && res.stderr) || ''))
+    .slice(-2000);
+}
+
+/**
+ * TM-R03: the tool gates, run after a worker commit and before review the
+ * same way as the format gate (DT-R02): host-side against the reviewed SHA.
+ *
+ * Every gatesFor() tool that applies to the changed files (or to the item's
+ * risk domains) and carries a command runs in the worker root. A failing gate
+ * gets exactly one bounded repair round carrying its tool output; if the
+ * repaired commit still fails, the item is refused — never reviewed, never
+ * published. A gate with no command, or one that is not installed or cannot
+ * run here, records TOOL_GATE_UNAVAILABLE, does not block, and is never
+ * counted as a pass. Decision entries carry the tool id and pass/fail only
+ * (TM-R04); the scrubbed tool output goes only into the repair finding.
+ */
+async function runToolGates(params) {
+  const o = params.o;
+  const item = params.item;
+  const log = params.log;
+  const logOpts = params.logOpts;
+  const workerRoot = params.workerRoot;
+  const baseSha = params.baseSha;
+  const targetSha = params.targetSha;
+  const repair = params.repair;
+
+  let currentSha = targetSha;
+  const record = (toolId, status, entry) => {
+    const value = Object.assign(
+      { workItemId: item.id, status, tool: toolId, baseSha: baseSha || null, sha: currentSha },
+      entry || {}
+    );
+    if (log) {
+      if (!Array.isArray(log.toolGates)) log.toolGates = [];
+      log.toolGates.push(value);
+    }
+    if (typeof o.log === 'function') o.log('TOOL_GATE_' + status, value);
+    if (logOpts) {
+      try {
+        const decisions = require('./decisions');
+        decisions.recordDecision(
+          {
+            stage: decisions.Stage.TOOL_GATE,
+            workItemId: item.id,
+            role: roleOf(item),
+            tool: toolId,
+            toolStatus: status,
+            code: 'TOOL_GATE_' + status,
+          },
+          logOpts
+        );
+      } catch (err) {
+        // A broken decision log must not break the gate verdict.
+      }
+    }
+    return value;
+  };
+
+  let tm;
+  try {
+    tm = require('./tool-manifest');
+  } catch (err) {
+    record('tool-manifest', ToolGate.UNAVAILABLE, {
+      reason: 'tool manifest missing or unreadable',
+    });
+    return {
+      status: ToolGate.UNAVAILABLE,
+      reason: 'tool manifest missing or unreadable',
+      sha: currentSha,
+    };
+  }
+
+  let gates;
+  try {
+    gates = tm.gatesFor();
+  } catch (err) {
+    record('tool-manifest', ToolGate.UNAVAILABLE, { reason: 'tool manifest is unreadable' });
+    return { status: ToolGate.UNAVAILABLE, reason: 'tool manifest is unreadable', sha: currentSha };
+  }
+
+  const changed = changedFileNames(workerRoot, baseSha, targetSha);
+  if (!changed.detail && changed.names.length === 0) {
+    return { status: ToolGate.PASSED, sha: currentSha };
+  }
+  // Unnamed changed files cannot narrow applicability; the risk domains can.
+  const changedFiles = changed.names;
+  const riskDomains =
+    (item && (item.riskDomains || (item.roleRequirement && item.roleRequirement.riskDomains))) ||
+    [];
+
+  for (const gateTool of gates) {
+    if (!tm.appliesTo(gateTool, changedFiles, riskDomains)) continue;
+
+    if (!gateTool.command || gateTool.installed !== true) {
+      record(gateTool.id, ToolGate.UNAVAILABLE, {
+        reason: gateTool.command ? 'gate tool is not installed' : 'gate tool has no command',
+      });
+      continue;
+    }
+
+    const first = runGateCommand(o, gateTool, workerRoot);
+    const unavailable = gateUnavailableReason(first);
+    if (unavailable) {
+      record(gateTool.id, ToolGate.UNAVAILABLE, { reason: unavailable });
+      continue;
+    }
+    if (first && first.status === 0) {
+      record(gateTool.id, ToolGate.PASSED, { exitCode: 0 });
+      continue;
+    }
+
+    record(gateTool.id, 'FAILED', {
+      exitCode: first ? first.status : -1,
+      reason: gateTool.id + ' gate failed',
+    });
+    const findings = [
+      {
+        id: 'TOOL_GATE_FAILED',
+        status: 'open',
+        summary:
+          gateTool.id +
+          ' gate failed on ' +
+          changedFiles.length +
+          ' changed file(s): ' +
+          changedFiles.slice(0, 5).join(', '),
+        detail: gateTool.id + ' gate failed:\n' + gateOutput(first),
+        dirtyPaths: changedFiles,
+      },
+    ];
+    const repaired = await repair(findings, currentSha);
+    const repairedSha = repaired && repaired.sha ? String(repaired.sha) : '';
+    if (!SHA_40.test(repairedSha)) {
+      const reason =
+        'TOOL_GATE_FAILED: ' +
+        gateTool.id +
+        ' gate failed and the repair round produced no reviewable commit';
+      record(gateTool.id, 'REFUSED', { reason, exitCode: first ? first.status : -1 });
+      return { status: ToolGate.REFUSED, reason, gate: gateTool.id, sha: currentSha };
+    }
+
+    const second = runGateCommand(o, gateTool, workerRoot);
+    const secondUnavailable = gateUnavailableReason(second);
+    if (secondUnavailable) {
+      record(gateTool.id, ToolGate.UNAVAILABLE, { reason: secondUnavailable, sha: repairedSha });
+      return {
+        status: ToolGate.UNAVAILABLE,
+        reason: secondUnavailable,
+        gate: gateTool.id,
+        sha: repairedSha,
+      };
+    }
+    if (second && second.status === 0) {
+      currentSha = repairedSha;
+      record(gateTool.id, ToolGate.PASSED, { exitCode: 0, sha: currentSha, repaired: true });
+      continue;
+    }
+
+    const reason = 'TOOL_GATE_FAILED: ' + gateTool.id + ' gate still fails after the repair round';
+    record(gateTool.id, 'REFUSED', {
+      reason,
+      exitCode: second ? second.status : -1,
+      sha: repairedSha,
+    });
+    return { status: ToolGate.REFUSED, reason, gate: gateTool.id, sha: repairedSha };
+  }
+
+  return { status: ToolGate.PASSED, sha: currentSha };
 }
 
 /**
@@ -4824,6 +5075,44 @@ async function reviewItem(
     if (gate.sha && SHA_40.test(String(gate.sha))) {
       // A repair round that did format the files produced the commit to review.
       targetSha = String(gate.sha);
+    }
+  }
+
+  // TM-R03: after the format gate and before review, every tool gate the
+  // manifest declares for this change runs host-side against the reviewed
+  // SHA, exactly like the format gate. A failing gate takes one bounded
+  // repair round carrying the tool output and is refused if it still fails;
+  // an unavailable gate records TOOL_GATE_UNAVAILABLE and never blocks.
+  if ((o.isolatedWorker || o.formatCheck === true) && workerRoot && formatBaseSha) {
+    const toolGate = await runToolGates({
+      o,
+      item,
+      log,
+      logOpts,
+      workerRoot,
+      baseSha: formatBaseSha,
+      targetSha,
+      repair: repairWithFinding,
+    });
+    if (toolGate.status === ToolGate.REFUSED) {
+      decisions.recordDecision(
+        {
+          stage: decisions.Stage.REFUSED,
+          workItemId: item.id,
+          role: roleOf(item),
+          chosen: (session && session.candidateKey) || null,
+          branch: (session && session.branch) || null,
+          sha: toolGate.sha || targetSha,
+          detail: toolGate.reason,
+          findings: [{ id: 'TOOL_GATE_FAILED', status: 'open', summary: toolGate.reason }],
+        },
+        logOpts
+      );
+      return { status: ItemStatus.REFUSED, reason: toolGate.reason, gate: 'TOOL_GATE_FAILED' };
+    }
+    if (toolGate.sha && SHA_40.test(String(toolGate.sha))) {
+      // A repair round that did clear the gate produced the commit to review.
+      targetSha = String(toolGate.sha);
     }
   }
 
@@ -5771,6 +6060,7 @@ function repairRound(
       headSha,
       baseSha,
       isolatedWorker: Boolean(o.isolatedWorker),
+      logOpts,
     });
     const repairWorkerRoot = o.isolatedWorker ? isolatedWorkerRoot : o.workerRoot || o.cwd;
     const repairJob = {
