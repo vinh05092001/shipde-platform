@@ -34,12 +34,14 @@ const DEFAULT_DECISION_DIR = path.join(os.homedir(), '.shipde', 'decisions');
 const SHA_40 = /^[0-9a-f]{40}$/i;
 
 const RefusalCode = Object.freeze({
+  CONFIG_INVALID: 'CONFIG_INVALID',
   NEVER_MERGE: 'NEVER_MERGE',
   MANIFEST_MISSING: 'MANIFEST_MISSING',
   SCHEMA_INVALID: 'SCHEMA_INVALID',
   VERDICT_NOT_PASS: 'VERDICT_NOT_PASS',
   OPEN_FINDINGS: 'OPEN_FINDINGS',
   REVIEWER_NOT_INDEPENDENT: 'REVIEWER_NOT_INDEPENDENT',
+  REVIEWER_NOT_RECORDED: 'REVIEWER_NOT_RECORDED',
   PR_NOT_FOUND: 'PR_NOT_FOUND',
   DRAFT: 'DRAFT',
   WORK_ITEM_MISMATCH: 'WORK_ITEM_MISMATCH',
@@ -78,6 +80,12 @@ function isGitAncestor(commitSha, ref, gitCwd) {
 function loadMergeConfig(options) {
   const o = options || {};
   if (o.config && typeof o.config === 'object' && !Array.isArray(o.config)) {
+    if (!Array.isArray(o.config.neverMerge) && !Array.isArray(o.config.never_merge)) {
+      return { ok: false, reason: 'config missing neverMerge array', neverMerge: null };
+    }
+    if (!Array.isArray(o.config.requiredChecks) && !Array.isArray(o.config.required_checks)) {
+      return { ok: false, reason: 'config missing requiredChecks array', neverMerge: null };
+    }
     return Object.assign({}, o.config, { ok: true, config: o.config });
   }
   const configPath = o.configPath || DEFAULT_CONFIG_PATH;
@@ -89,6 +97,12 @@ function loadMergeConfig(options) {
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       return { ok: false, reason: 'config is not a valid JSON object', neverMerge: null };
+    }
+    if (!Array.isArray(parsed.neverMerge) && !Array.isArray(parsed.never_merge)) {
+      return { ok: false, reason: 'config missing neverMerge array', neverMerge: null };
+    }
+    if (!Array.isArray(parsed.requiredChecks) && !Array.isArray(parsed.required_checks)) {
+      return { ok: false, reason: 'config missing requiredChecks array', neverMerge: null };
     }
     return Object.assign({}, parsed, { ok: true, config: parsed });
   } catch (err) {
@@ -148,17 +162,35 @@ function findReviewArtifact(workItemId, manifestPath, repoCwd, decisionDir, opti
   return null;
 }
 
-/** Extract only the added and removed change lines (+ / -), excluding diff headers. */
+/** Check for binary or mode changes in diff text. */
+function hasBinaryOrModeChanges(diffText) {
+  if (typeof diffText !== 'string' || !diffText.trim()) return false;
+  if (/^Binary files .* differ/m.test(diffText)) return true;
+  if (/^GIT binary patch/m.test(diffText)) return true;
+  if (/^old mode \d+/m.test(diffText)) return true;
+  if (/^new mode \d+/m.test(diffText)) return true;
+  if (/^mode change /m.test(diffText)) return true;
+  return false;
+}
+
+/** Extract file headers and added/removed change lines (+ / -), excluding diff metadata, @@ hunk headers and context lines. */
 function extractChangeLines(diffText) {
-  if (typeof diffText !== 'string') return '';
+  if (typeof diffText !== 'string' || !diffText.trim()) return '';
   return diffText
     .split(/\r?\n/)
     .filter(
       (line) =>
+        line.startsWith('diff --git ') ||
+        line.startsWith('old mode ') ||
+        line.startsWith('new mode ') ||
+        line.startsWith('new file mode ') ||
+        line.startsWith('deleted file mode ') ||
+        line.startsWith('mode change ') ||
         (line.startsWith('+') && !line.startsWith('+++')) ||
         (line.startsWith('-') && !line.startsWith('---'))
     )
-    .join('\n');
+    .join('\n')
+    .trim();
 }
 
 /** Normalize diff text, stripping volatile git index headers while preserving files, modes, binary markers, and all change lines. */
@@ -221,25 +253,34 @@ function checkByteIdenticalMerge(repoCwd, headSha, reviewedSha, manifestReviewed
   const effectiveBase = derivedBase;
 
   // 1. Reviewed SHA against independently derived base
-  const diffReviewed = gitOut(repoCwd, ['diff', `${effectiveBase}..${reviewedSha}`]);
+  const diffReviewed = gitOut(repoCwd, ['diff', '--binary', `${effectiveBase}..${reviewedSha}`]);
   if (!diffReviewed.ok) {
     return { ok: false, reason: RefusalCode.HEAD_MISMATCH };
   }
 
   // 2. Head merge commit against main parent
-  const diffMerge = gitOut(repoCwd, ['diff', `${pMain}..${headSha}`]);
+  const diffMerge = gitOut(repoCwd, ['diff', '--binary', `${pMain}..${headSha}`]);
   if (!diffMerge.ok) {
     return { ok: false, reason: RefusalCode.HEAD_MISMATCH };
   }
 
-  const normReviewed = normalizeDiff(diffReviewed.stdout);
-  const normMerge = normalizeDiff(diffMerge.stdout);
+  // P1: Refuse binary or mode changes on the merge-from-main path
+  if (hasBinaryOrModeChanges(diffReviewed.stdout) || hasBinaryOrModeChanges(diffMerge.stdout)) {
+    return {
+      ok: false,
+      reason: RefusalCode.DELTA_REVIEW_REQUIRED,
+      detail: 'binary or mode changes are not allowed on the merge-from-main path',
+    };
+  }
 
-  if (!normReviewed || !normMerge) {
+  const changeLinesReviewed = extractChangeLines(diffReviewed.stdout);
+  const changeLinesMerge = extractChangeLines(diffMerge.stdout);
+
+  if (!changeLinesReviewed || !changeLinesMerge) {
     return { ok: false, reason: RefusalCode.DELTA_REVIEW_REQUIRED };
   }
 
-  if (normReviewed === normMerge) {
+  if (changeLinesReviewed === changeLinesMerge) {
     return { ok: true, isMergeFromMain: true, headSha };
   }
 
@@ -254,13 +295,14 @@ function parseGhJson(output) {
   }
 }
 
-function runGh(args, cwd, ghRunner) {
+function runGh(args, cwd, ghRunner, input) {
   if (typeof ghRunner === 'function') {
-    return ghRunner(args, cwd);
+    return ghRunner(args, cwd, input);
   }
   const res = cp.spawnSync('gh', args, {
     cwd,
     encoding: 'utf8',
+    input,
     windowsHide: true,
   });
   return {
@@ -418,6 +460,62 @@ function getWritersFromDecisionLog(workItemId, decisionDir) {
   return Array.from(writers);
 }
 
+function getReviewersFromDecisionLog(workItemId, reviewedSha, decisionDir) {
+  const normId = String(workItemId).trim().toUpperCase();
+  const targetSha = String(reviewedSha || '')
+    .trim()
+    .toLowerCase();
+  const detail = decisions.readDecisionsDetailed({ dir: decisionDir });
+  if (!detail.readable) {
+    const err = new Error('decision log unreadable: ' + (detail.damaged || []).join('; '));
+    err.code = 'DECISION_LOG_UNREADABLE';
+    throw err;
+  }
+  const reviewers = new Set();
+  for (const r of detail.records) {
+    if (!r) continue;
+    const rId = r.workItemId ? String(r.workItemId).trim().toUpperCase() : '';
+    const rOf = (r.labels && r.labels.reviewOf) || r.reviewOf;
+    const normOf = rOf ? String(rOf).trim().toUpperCase() : '';
+    const matchesItem = rId === normId || rId === `${normId}-REVIEW` || normOf === normId;
+    if (!matchesItem) continue;
+
+    const isReviewRole = String(r.role || '').toLowerCase() === 'reviewer';
+    const isReviewStage = [
+      'reviewer-selection',
+      'review',
+      'review-launch',
+      'launched',
+      'completed',
+    ].includes(String(r.stage || '').toLowerCase());
+
+    if (!isReviewRole && !isReviewStage) continue;
+
+    const rSha = String(
+      r.reviewedSha || r.sha || r.targetSha || r.headSha || r.commit || r.commitSha || ''
+    )
+      .trim()
+      .toLowerCase();
+    const detailText = typeof r.detail === 'string' ? r.detail.toLowerCase() : '';
+    const shaMatches =
+      (targetSha && rSha === targetSha) || (targetSha && detailText.includes(targetSha));
+
+    if (!shaMatches) continue;
+
+    const cand =
+      r.chosen ||
+      r.chosenKey ||
+      r.reviewerCandidateKey ||
+      r.candidateKey ||
+      r.offeringId ||
+      r.reviewer;
+    if (cand && typeof cand === 'string' && cand.trim()) {
+      reviewers.add(cand.trim());
+    }
+  }
+  return Array.from(reviewers);
+}
+
 /**
  * Main governed merge entrypoint.
  *
@@ -471,7 +569,7 @@ async function governedMerge(options) {
   const cfgRes = loadMergeConfig(o);
   if (!cfgRes.ok) {
     return refuse(
-      RefusalCode.NEVER_MERGE,
+      RefusalCode.CONFIG_INVALID,
       `merge config missing or unparsable: failing closed (${cfgRes.reason})`
     );
   }
@@ -483,7 +581,23 @@ async function governedMerge(options) {
       : null;
 
   if (!neverMergeRaw) {
-    return refuse(RefusalCode.NEVER_MERGE, 'merge config missing neverMerge list: failing closed');
+    return refuse(
+      RefusalCode.CONFIG_INVALID,
+      'merge config missing neverMerge list: failing closed'
+    );
+  }
+
+  const reqChecksRaw = Array.isArray(config.requiredChecks)
+    ? config.requiredChecks
+    : Array.isArray(config.required_checks)
+      ? config.required_checks
+      : null;
+
+  if (!reqChecksRaw) {
+    return refuse(
+      RefusalCode.CONFIG_INVALID,
+      'merge config missing requiredChecks list: failing closed'
+    );
   }
 
   const neverMerge = neverMergeRaw.map((id) => String(id).trim().toUpperCase());
@@ -525,14 +639,31 @@ async function governedMerge(options) {
     );
   }
 
+  const reviewedSha = String(manifest.reviewedCommit || '')
+    .trim()
+    .toLowerCase();
+
   // Reviewer independence against all writers from decision log, options, and manifest
   let logWriters = [];
+  let logReviewers = [];
   try {
     logWriters = getWritersFromDecisionLog(workItemId, decisionDir);
+    logReviewers = getReviewersFromDecisionLog(workItemId, reviewedSha, decisionDir);
   } catch (err) {
     return refuse(
       RefusalCode.REVIEWER_NOT_INDEPENDENT,
-      `cannot determine writers from decision log: ${err.message}`
+      `cannot determine writers/reviewers from decision log: ${err.message}`
+    );
+  }
+
+  if (
+    !manifest.reviewerCandidateKey ||
+    logReviewers.length === 0 ||
+    !logReviewers.includes(manifest.reviewerCandidateKey.trim())
+  ) {
+    return refuse(
+      RefusalCode.REVIEWER_NOT_RECORDED,
+      `manifest reviewer candidate key was not recorded in the decision log for this work item and commit SHA`
     );
   }
 
@@ -603,9 +734,6 @@ async function governedMerge(options) {
 
   // 4. PR head OID vs reviewed commit / GM-R02 byte-identical merge
   const headSha = String(pr.headRefOid || '')
-    .trim()
-    .toLowerCase();
-  const reviewedSha = String(manifest.reviewedCommit || '')
     .trim()
     .toLowerCase();
   const reviewedBase = String(manifest.reviewedBase || '')
@@ -687,6 +815,12 @@ async function governedMerge(options) {
         );
       }
       if (typeof threadData.unresolvedCount === 'number') {
+        if (Number.isNaN(threadData.unresolvedCount) || threadData.unresolvedCount < 0) {
+          return refuse(
+            RefusalCode.THREADS_UNRESOLVED,
+            'cannot read review threads: unresolvedCount is invalid (NaN or negative)'
+          );
+        }
         unresolvedThreads = threadData.unresolvedCount;
       } else if (Array.isArray(threadData.nodes)) {
         unresolvedThreads = threadData.nodes.filter((n) => n && !n.isResolved).length;
@@ -699,11 +833,19 @@ async function governedMerge(options) {
     } catch (err) {
       return refuse(RefusalCode.THREADS_UNRESOLVED, `cannot read review threads: ${err.message}`);
     }
-  } else if (
-    pr.unresolvedThreadsCount !== undefined &&
-    typeof pr.unresolvedThreadsCount === 'number'
-  ) {
-    unresolvedThreads = pr.unresolvedThreadsCount;
+  } else if (pr.unresolvedThreadsCount !== undefined) {
+    if (
+      typeof pr.unresolvedThreadsCount === 'number' &&
+      !Number.isNaN(pr.unresolvedThreadsCount) &&
+      pr.unresolvedThreadsCount >= 0
+    ) {
+      unresolvedThreads = pr.unresolvedThreadsCount;
+    } else {
+      return refuse(
+        RefusalCode.THREADS_UNRESOLVED,
+        'cannot read review threads: unresolvedThreadsCount is invalid'
+      );
+    }
   } else {
     // Fail-closed default query via GraphQL
     try {
@@ -731,19 +873,7 @@ async function governedMerge(options) {
           query: threadsQuery,
           variables: { owner, name, pr: pr.number },
         });
-        const ghRes = runGh(['api', 'graphql', '--input', '-'], repoCwd, (args, cwd) => {
-          const res = cp.spawnSync('gh', args, {
-            cwd,
-            input: payload,
-            encoding: 'utf8',
-            windowsHide: true,
-          });
-          return {
-            exitCode: res.status === null ? -1 : res.status,
-            stdout: (res.stdout || '').trim(),
-            stderr: (res.stderr || '').trim(),
-          };
-        });
+        const ghRes = runGh(['api', 'graphql', '--input', '-'], repoCwd, o.ghRunner, payload);
         if (ghRes.exitCode !== 0) {
           return refuse(
             RefusalCode.THREADS_UNRESOLVED,
@@ -766,7 +896,12 @@ async function governedMerge(options) {
     }
   }
 
-  if (unresolvedThreads === null || unresolvedThreads === undefined) {
+  if (
+    unresolvedThreads === null ||
+    unresolvedThreads === undefined ||
+    Number.isNaN(unresolvedThreads) ||
+    unresolvedThreads < 0
+  ) {
     return refuse(
       RefusalCode.THREADS_UNRESOLVED,
       'review threads count cannot be determined: failing closed'
@@ -823,19 +958,7 @@ async function governedMerge(options) {
         },
       },
     });
-    const ghRes = runGh(['api', 'graphql', '--input', '-'], repoCwd, (args, cwd) => {
-      const res = cp.spawnSync('gh', args, {
-        cwd,
-        input: payload,
-        encoding: 'utf8',
-        windowsHide: true,
-      });
-      return {
-        exitCode: res.status === null ? -1 : res.status,
-        stdout: (res.stdout || '').trim(),
-        stderr: (res.stderr || '').trim(),
-      };
-    });
+    const ghRes = runGh(['api', 'graphql', '--input', '-'], repoCwd, o.ghRunner, payload);
     if (ghRes.exitCode !== 0) {
       if (/expectedHeadOid|head commit.*not.*expected|head.*changed/i.test(ghRes.stderr)) {
         return refuse(RefusalCode.HEAD_MISMATCH, 'GitHub rejected expectedHeadOid (head changed)');
@@ -929,6 +1052,7 @@ module.exports = {
   findReviewManifest,
   findReviewArtifact,
   extractChangeLines,
+  hasBinaryOrModeChanges,
   normalizeDiff,
   checkByteIdenticalMerge,
   validatePrTitle,
@@ -936,6 +1060,7 @@ module.exports = {
   verifyReviewerIndependence,
   hasOpenP0P1Findings,
   getWritersFromDecisionLog,
+  getReviewersFromDecisionLog,
   governedMerge,
   isEligibleForMerge,
 };

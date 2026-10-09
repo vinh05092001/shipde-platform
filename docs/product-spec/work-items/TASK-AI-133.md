@@ -55,5 +55,5 @@ GM-R05: next-item loop calls merge after publish when the item is eligible.
 
 ## Residual Limitations
 
-- Automatic rebase is not executed: when a branch is behind origin/main, the merge commit must already exist and its change lines must be byte-identical to the reviewed diff.
+- Automatic rebase is not executed: when a branch is behind origin/main, the merge commit must already exist and its change lines must be byte-identical to the reviewed diff against base. Binary and file mode changes are not permitted on the merge-from-main path and require a new review.
 - Live-proof drafts listed in neverMerge config remain permanently blocked from automated merge.

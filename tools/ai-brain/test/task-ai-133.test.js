@@ -27,6 +27,7 @@ const {
   validatePrTitle,
   checkByteIdenticalMerge,
   extractChangeLines,
+  hasBinaryOrModeChanges,
 } = require('../governed-merge');
 const cli = require('../cli');
 const reviewManifestApi = require('../review-manifest');
@@ -103,6 +104,30 @@ function createManifestAndArtifact(dir, workItemId, baseSha, reviewedSha, option
   });
 
   fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
+
+  if (o.writeDecisionLog !== false) {
+    const logContent =
+      JSON.stringify({
+        workItemId,
+        stage: 'writer',
+        role: 'writer',
+        writerCandidateKey: o.writerCandidateKey || SAMPLE_WRITER_KEY,
+      }) +
+      '\n' +
+      JSON.stringify({
+        workItemId,
+        stage: 'reviewer-selection',
+        role: 'reviewer',
+        reviewerCandidateKey: o.reviewerCandidateKey || SAMPLE_REVIEWER_KEY,
+        reviewedSha,
+      }) +
+      '\n';
+    fs.writeFileSync(path.join(dir, new Date().toISOString().slice(0, 10) + '.jsonl'), logContent, {
+      encoding: 'utf8',
+      flag: 'a',
+    });
+  }
+
   return { manifest, manifestPath, artifactPath };
 }
 
@@ -114,7 +139,7 @@ test('GM-R01: refusal NEVER_MERGE when work item is on never-merge config list',
   const res = await governedMerge({
     workItemId,
     decisionDir,
-    config: { neverMerge: ['TASK-AI-61', 'TASK-AI-64'] },
+    config: { neverMerge: ['TASK-AI-61', 'TASK-AI-64'], requiredChecks: [] },
   });
 
   assert.strictEqual(res.ok, false);
@@ -135,7 +160,7 @@ test('GM-R01: refusal MANIFEST_MISSING when review manifest is absent', async ()
   const res = await governedMerge({
     workItemId,
     decisionDir,
-    config: { neverMerge: [] },
+    config: { neverMerge: [], requiredChecks: [] },
   });
 
   assert.strictEqual(res.ok, false);
@@ -159,7 +184,7 @@ test('GM-R01: refusal VERDICT_NOT_PASS when review manifest verdict is not PASS'
     workItemId,
     repoCwd: repoDir,
     decisionDir,
-    config: { neverMerge: [] },
+    config: { neverMerge: [], requiredChecks: [] },
   });
 
   assert.strictEqual(res.ok, false);
@@ -183,7 +208,7 @@ test('GM-R01: refusal OPEN_FINDINGS when manifest has open P0 or P1 findings', a
     workItemId,
     repoCwd: repoDir,
     decisionDir,
-    config: { neverMerge: [] },
+    config: { neverMerge: [], requiredChecks: [] },
   });
 
   assert.strictEqual(res.ok, false);
@@ -208,7 +233,7 @@ test('GM-R01: refusal REVIEWER_NOT_INDEPENDENT when reviewer shares failure doma
     workItemId,
     repoCwd: repoDir,
     decisionDir,
-    config: { neverMerge: [] },
+    config: { neverMerge: [], requiredChecks: [] },
   });
 
   assert.strictEqual(res.ok, false);
@@ -235,7 +260,7 @@ test('GM-R01: refusal PR_NOT_FOUND when Pull Request does not exist', async () =
     workItemId,
     repoCwd: repoDir,
     decisionDir,
-    config: { neverMerge: [] },
+    config: { neverMerge: [], requiredChecks: [] },
     ghClient: fakeGhClient,
   });
 
@@ -268,7 +293,7 @@ test('GM-R01: refusal DRAFT when Pull Request is in draft state', async () => {
     workItemId,
     repoCwd: repoDir,
     decisionDir,
-    config: { neverMerge: [] },
+    config: { neverMerge: [], requiredChecks: [] },
     ghClient: fakeGhClient,
   });
 
@@ -302,7 +327,7 @@ test('GM-R01: refusal WORK_ITEM_MISMATCH when PR title carries wrong or multiple
     workItemId,
     repoCwd: repoDir,
     decisionDir,
-    config: { neverMerge: [] },
+    config: { neverMerge: [], requiredChecks: [] },
     ghClient: fakeGhClient,
   });
 
@@ -336,7 +361,7 @@ test('GM-R01: refusal HEAD_MISMATCH when PR head does not match reviewed SHA and
     workItemId,
     repoCwd: repoDir,
     decisionDir,
-    config: { neverMerge: [] },
+    config: { neverMerge: [], requiredChecks: [] },
     ghClient: fakeGhClient,
   });
 
@@ -372,7 +397,7 @@ test('GM-R01: refusal CHECK_NOT_SUCCESS when CI checks fail or are pending', asy
     workItemId,
     repoCwd: repoDir,
     decisionDir,
-    config: { neverMerge: [] },
+    config: { neverMerge: [], requiredChecks: [] },
     ghClient: fakeGhClient,
   });
 
@@ -413,7 +438,7 @@ test('GM-R01: refusal CHECK_NOT_SUCCESS when check is for a different commit OID
     workItemId,
     repoCwd: repoDir,
     decisionDir,
-    config: { neverMerge: [] },
+    config: { neverMerge: [], requiredChecks: [] },
     ghClient: fakeGhClient,
   });
 
@@ -450,7 +475,7 @@ test('GM-R01: refusal THREADS_UNRESOLVED when review threads remain open', async
     workItemId,
     repoCwd: repoDir,
     decisionDir,
-    config: { neverMerge: [] },
+    config: { neverMerge: [], requiredChecks: [] },
     ghClient: fakeGhClient,
   });
 
@@ -498,7 +523,7 @@ test('GM-R01: happy path merges with expectedHeadOid squash mutation', async () 
     workItemId,
     repoCwd: repoDir,
     decisionDir,
-    config: { neverMerge: [] },
+    config: { neverMerge: [], requiredChecks: [] },
     ghClient: fakeGhClient,
   });
 
@@ -572,7 +597,7 @@ test('GM-R02: byte-identical merge commit of origin/main is allowed', async () =
     workItemId,
     repoCwd: repoDir,
     decisionDir,
-    config: { neverMerge: [] },
+    config: { neverMerge: [], requiredChecks: [] },
     ghClient: fakeGhClient,
   });
 
@@ -628,7 +653,7 @@ test('GM-R02: non-identical merge commit of origin/main is refused with DELTA_RE
     workItemId,
     repoCwd: repoDir,
     decisionDir,
-    config: { neverMerge: [] },
+    config: { neverMerge: [], requiredChecks: [] },
     ghClient: fakeGhClient,
   });
 
@@ -669,7 +694,7 @@ test('GM-R03: fail-closed decision logging writes named reasons with zero retrie
     repoCwd: repoDir,
     decisionDir,
     ghClient: fakeGhClient,
-    config: { neverMerge: [] },
+    config: { neverMerge: [], requiredChecks: [] },
   });
 
   assert.strictEqual(res.ok, false);
@@ -701,7 +726,7 @@ test('GM-R01: refusal SCHEMA_INVALID when manifest is corrupted or violates sche
     workItemId,
     repoCwd: repoDir,
     decisionDir,
-    config: { neverMerge: [] },
+    config: { neverMerge: [], requiredChecks: [] },
   });
   assert.strictEqual(res.ok, false);
   assert.strictEqual(res.refusal, RefusalCode.SCHEMA_INVALID);
@@ -738,7 +763,7 @@ test('GM-R01: refusal MERGE_FAILED when merge mutation fails', async () => {
     workItemId,
     repoCwd: repoDir,
     decisionDir,
-    config: { neverMerge: [] },
+    config: { neverMerge: [], requiredChecks: [] },
     ghClient: fakeGhClient,
   });
   assert.strictEqual(res.ok, false);
@@ -767,7 +792,7 @@ test('GM-R01: refusal REVIEWER_NOT_INDEPENDENT when reviewer shares failure doma
     workItemId,
     repoCwd: repoDir,
     decisionDir,
-    config: { neverMerge: [] },
+    config: { neverMerge: [], requiredChecks: [] },
   });
   assert.strictEqual(res.ok, false);
   assert.strictEqual(res.refusal, RefusalCode.REVIEWER_NOT_INDEPENDENT);
@@ -784,31 +809,20 @@ test('GM-R04: control.ps1 verdict source accepts valid manifest and rejects open
     repoCwd: repoDir,
     verdict: 'PASS',
   });
-  const logContent =
-    JSON.stringify({
-      workItemId,
-      stage: 'writer',
-      role: 'writer',
-      writerCandidateKey: SAMPLE_WRITER_KEY,
-    }) + '\n';
-  fs.writeFileSync(
-    path.join(decisionDir, new Date().toISOString().slice(0, 10) + '.jsonl'),
-    logContent,
-    'utf8'
-  );
 
   const controlPath = path.join(__dirname, '..', '..', '..', 'scripts', 'ai', 'control.ps1');
   const ps1Script = path.join(testDir, 'test-control.ps1');
-  const fakeNodeBat = path.join(testDir, 'node.bat');
-  fs.writeFileSync(fakeNodeBat, `@echo off\necho {"ok":true}\n`, 'utf8');
 
   fs.writeFileSync(
     ps1Script,
     `
-    $env:PATH = "${testDir};" + $env:PATH
     . "${controlPath}" -Action "Test" | Out-Null
+    function Get-ShipDePullRequestByNumber {
+        param([int]$Number)
+        return @{ title = "[TASK-AI-133] Test PR" }
+    }
     $env:SHIPDE_DECISION_DIR = "${decisionDir}"
-    $res = Get-ShipDeExactHeadReviewManifestVerdict -HeadSha "${reviewedSha}" -PullRequestNumber 0
+    $res = Get-ShipDeExactHeadReviewManifestVerdict -HeadSha "${reviewedSha}" -PullRequestNumber 1 -RepoDir "${repoDir}"
     Write-Output "VERDICT_RESULT:$res"
   `,
     'utf8'
@@ -824,6 +838,11 @@ test('GM-R04: control.ps1 verdict source accepts valid manifest and rejects open
       .trim();
   } catch (e) {
     stdout = e.stdout || '';
+  }
+  if (!stdout.includes('VERDICT_RESULT:PASS')) {
+    console.log('--- STDOUT FROM TEST-CONTROL.PS1 ---');
+    console.log(stdout);
+    console.log('--------------------------------------');
   }
   assert.ok(
     stdout.includes('VERDICT_RESULT:PASS'),
@@ -893,12 +912,578 @@ test('GM-R05: isEligibleForMerge correctly gates auto-merge in orchestrate loop'
   );
 });
 
+test('GM-R01: default client paths fallback using ghRunner', async () => {
+  const testDir = createUniqueSubdir('ghrunner-fallback');
+  const { repoDir, baseSha } = initGitRepo(path.join(testDir, 'repo'));
+  const reviewedSha = createReviewedCommit(repoDir, 'feat.txt', 'feature\n');
+  const decisionDir = path.join(testDir, 'decisions');
+  const workItemId = 'TASK-AI-133';
+
+  createManifestAndArtifact(decisionDir, workItemId, baseSha, reviewedSha, {
+    repoCwd: repoDir,
+    verdict: 'PASS',
+  });
+
+  let ghRunnerCalled = false;
+  const ghRunner = (args) => {
+    ghRunnerCalled = true;
+    if (args.includes('api') && args.includes('graphql')) {
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                reviewThreads: {
+                  nodes: [{ isResolved: false }],
+                },
+              },
+            },
+          },
+        }),
+        stderr: '',
+      };
+    }
+    if (args.includes('pr') && args.includes('list')) {
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify([
+          {
+            title: `[${workItemId}] Test PR`,
+            id: 'PR_123',
+            number: 123,
+            isDraft: false,
+            headRefOid: reviewedSha,
+            statusCheckRollup: [
+              {
+                name: 'test',
+                conclusion: 'SUCCESS',
+                headSha: reviewedSha,
+              },
+            ],
+          },
+        ]),
+        stderr: '',
+      };
+    }
+    return { exitCode: 1, stdout: '', stderr: 'Unknown mock command' };
+  };
+
+  const res = await governedMerge({
+    workItemId,
+    repoCwd: repoDir,
+    decisionDir,
+    config: { neverMerge: [], requiredChecks: ['test'] },
+    ghRunner,
+  });
+
+  assert.strictEqual(res.ok, false);
+  assert.strictEqual(
+    res.refusal,
+    RefusalCode.THREADS_UNRESOLVED,
+    'ghRunner fallback should resolve 1 unresolved thread'
+  );
+  assert.ok(ghRunnerCalled, 'ghRunner should be invoked');
+});
+
 test('GM-R01: cli.js merge command handles missing args and executes merge', async () => {
   // Test missing --work-item returns exitCode 2
   const prevExitCode = process.exitCode;
   const resMissing = await cli.mergeCommand({});
   assert.strictEqual(resMissing.exitCode, 2);
   process.exitCode = prevExitCode;
+});
+
+test('GM-R01: refusal REVIEWER_NOT_RECORDED when reviewer was not recorded in the decision log for that item and exact SHA', async () => {
+  const testDir = createUniqueSubdir('rev-not-recorded');
+  const { repoDir, baseSha } = initGitRepo(path.join(testDir, 'repo'));
+  const reviewedSha = createReviewedCommit(repoDir, 'feat.txt', 'feature\n');
+  const decisionDir = path.join(testDir, 'decisions');
+  const workItemId = 'TASK-AI-133';
+
+  createManifestAndArtifact(decisionDir, workItemId, baseSha, reviewedSha, {
+    repoCwd: repoDir,
+    verdict: 'PASS',
+    writeDecisionLog: false,
+  });
+
+  // 1. Reviewer logged for a different commit SHA
+  const otherSha = '1'.repeat(40);
+  const logDifferentSha =
+    JSON.stringify({
+      workItemId,
+      stage: 'writer',
+      role: 'writer',
+      writerCandidateKey: SAMPLE_WRITER_KEY,
+    }) +
+    '\n' +
+    JSON.stringify({
+      workItemId,
+      stage: 'reviewer-selection',
+      role: 'reviewer',
+      reviewerCandidateKey: SAMPLE_REVIEWER_KEY,
+      reviewedSha: otherSha,
+    }) +
+    '\n';
+  fs.writeFileSync(path.join(decisionDir, '2026-10-09.jsonl'), logDifferentSha, 'utf8');
+
+  const fakeGhClient = {
+    getPullRequest: async () => ({
+      title: `[${workItemId}] Governed merge`,
+      id: 'PR_kwDO',
+      number: 101,
+      isDraft: false,
+      headRefOid: reviewedSha,
+      statusCheckRollup: [
+        { name: 'ci/test', status: 'COMPLETED', conclusion: 'SUCCESS', headSha: reviewedSha },
+      ],
+      unresolvedThreadsCount: 0,
+    }),
+  };
+
+  const res1 = await governedMerge({
+    workItemId,
+    repoCwd: repoDir,
+    decisionDir,
+    config: { neverMerge: [], requiredChecks: ['ci/test'] },
+    ghClient: fakeGhClient,
+  });
+
+  assert.strictEqual(res1.ok, false);
+  assert.strictEqual(res1.refusal, RefusalCode.REVIEWER_NOT_RECORDED);
+
+  // 2. Decision log has different reviewer for the exact SHA
+  const logDifferentReviewer =
+    JSON.stringify({
+      workItemId,
+      stage: 'writer',
+      role: 'writer',
+      writerCandidateKey: SAMPLE_WRITER_KEY,
+    }) +
+    '\n' +
+    JSON.stringify({
+      workItemId,
+      stage: 'reviewer-selection',
+      role: 'reviewer',
+      reviewerCandidateKey: 'other-reviewer-key',
+      reviewedSha,
+    }) +
+    '\n';
+  fs.writeFileSync(path.join(decisionDir, '2026-10-09.jsonl'), logDifferentReviewer, 'utf8');
+
+  const res2 = await governedMerge({
+    workItemId,
+    repoCwd: repoDir,
+    decisionDir,
+    config: { neverMerge: [], requiredChecks: ['ci/test'] },
+    ghClient: fakeGhClient,
+  });
+
+  assert.strictEqual(res2.ok, false);
+  assert.strictEqual(res2.refusal, RefusalCode.REVIEWER_NOT_RECORDED);
+});
+
+test('GM-R02: refusal DELTA_REVIEW_REQUIRED when merge-from-main path contains binary or mode changes', async () => {
+  const testDir = createUniqueSubdir('binary-mode-refusal');
+  const { repoDir, baseSha } = initGitRepo(path.join(testDir, 'repo'));
+  cp.execSync('git config core.filemode true', { cwd: repoDir, stdio: 'ignore' });
+
+  // Commit on feature branch
+  cp.execSync('git checkout -b feat/task-133', { cwd: repoDir, stdio: 'ignore' });
+  const reviewedSha = createReviewedCommit(repoDir, 'feat.txt', 'feature line 1\n');
+
+  // Main advances
+  cp.execSync('git checkout main', { cwd: repoDir, stdio: 'ignore' });
+  fs.writeFileSync(path.join(repoDir, 'main.txt'), 'main line\n', 'utf8');
+  cp.execSync('git add main.txt', { cwd: repoDir, stdio: 'ignore' });
+  cp.execSync('git commit -m "main advances"', { cwd: repoDir, stdio: 'ignore' });
+  const mainSha = cp.execSync('git rev-parse HEAD', { cwd: repoDir }).toString().trim();
+
+  // Merge commit that brings a binary file
+  cp.execSync('git checkout feat/task-133', { cwd: repoDir, stdio: 'ignore' });
+  cp.execSync(`git merge --no-ff -m "merge origin/main" ${mainSha}`, {
+    cwd: repoDir,
+    stdio: 'ignore',
+  });
+  fs.writeFileSync(
+    path.join(repoDir, 'image.png'),
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01])
+  );
+  cp.execSync('git add image.png', { cwd: repoDir, stdio: 'ignore' });
+  cp.execSync('git commit --amend --no-edit', { cwd: repoDir, stdio: 'ignore' });
+  const binaryMergeSha = cp.execSync('git rev-parse HEAD', { cwd: repoDir }).toString().trim();
+
+  const binaryRes = checkByteIdenticalMerge(repoDir, binaryMergeSha, reviewedSha, baseSha);
+  assert.strictEqual(binaryRes.ok, false);
+  assert.strictEqual(binaryRes.reason, RefusalCode.DELTA_REVIEW_REQUIRED);
+
+  // Mode change test:
+  cp.execSync('git checkout -B feat/task-133-mode ' + reviewedSha, {
+    cwd: repoDir,
+    stdio: 'ignore',
+  });
+  cp.execSync(`git merge --no-ff -m "merge origin/main mode" ${mainSha}`, {
+    cwd: repoDir,
+    stdio: 'ignore',
+  });
+  cp.execSync('git update-index --chmod=+x init.txt', { cwd: repoDir, stdio: 'ignore' });
+  cp.execSync('git commit --amend --no-edit', { cwd: repoDir, stdio: 'ignore' });
+  const modeMergeSha = cp.execSync('git rev-parse HEAD', { cwd: repoDir }).toString().trim();
+
+  const modeRes = checkByteIdenticalMerge(repoDir, modeMergeSha, reviewedSha, baseSha);
+  assert.strictEqual(modeRes.ok, false);
+  assert.strictEqual(modeRes.reason, RefusalCode.DELTA_REVIEW_REQUIRED);
+});
+
+test('GM-R01: refusal THREADS_UNRESOLVED when unresolvedThreadsCount is NaN or negative', async () => {
+  const testDir = createUniqueSubdir('nan-thread-counts');
+  const { repoDir, baseSha } = initGitRepo(path.join(testDir, 'repo'));
+  const reviewedSha = createReviewedCommit(repoDir, 'feat.txt', 'feature\n');
+  const decisionDir = path.join(testDir, 'decisions');
+  const workItemId = 'TASK-AI-133';
+
+  createManifestAndArtifact(decisionDir, workItemId, baseSha, reviewedSha, {
+    repoCwd: repoDir,
+    verdict: 'PASS',
+  });
+
+  // 1. pr.unresolvedThreadsCount = NaN
+  const fakeGhNan = {
+    getPullRequest: async () => ({
+      title: `[${workItemId}] Governed merge`,
+      id: 'PR_1',
+      number: 1,
+      isDraft: false,
+      headRefOid: reviewedSha,
+      statusCheckRollup: [
+        { name: 'ci', status: 'COMPLETED', conclusion: 'SUCCESS', headSha: reviewedSha },
+      ],
+      unresolvedThreadsCount: NaN,
+    }),
+  };
+
+  const resNan = await governedMerge({
+    workItemId,
+    repoCwd: repoDir,
+    decisionDir,
+    config: { neverMerge: [], requiredChecks: ['ci'] },
+    ghClient: fakeGhNan,
+  });
+  assert.strictEqual(resNan.ok, false);
+  assert.strictEqual(resNan.refusal, RefusalCode.THREADS_UNRESOLVED);
+
+  // 2. pr.unresolvedThreadsCount = -1
+  const fakeGhNeg = {
+    getPullRequest: async () => ({
+      title: `[${workItemId}] Governed merge`,
+      id: 'PR_1',
+      number: 1,
+      isDraft: false,
+      headRefOid: reviewedSha,
+      statusCheckRollup: [
+        { name: 'ci', status: 'COMPLETED', conclusion: 'SUCCESS', headSha: reviewedSha },
+      ],
+      unresolvedThreadsCount: -1,
+    }),
+  };
+
+  const resNeg = await governedMerge({
+    workItemId,
+    repoCwd: repoDir,
+    decisionDir,
+    config: { neverMerge: [], requiredChecks: ['ci'] },
+    ghClient: fakeGhNeg,
+  });
+  assert.strictEqual(resNeg.ok, false);
+  assert.strictEqual(resNeg.refusal, RefusalCode.THREADS_UNRESOLVED);
+
+  // 3. ghClient.getReviewThreads returns NaN
+  const fakeGhClientNanCount = {
+    getPullRequest: async () => ({
+      title: `[${workItemId}] Governed merge`,
+      id: 'PR_1',
+      number: 1,
+      isDraft: false,
+      headRefOid: reviewedSha,
+      statusCheckRollup: [
+        { name: 'ci', status: 'COMPLETED', conclusion: 'SUCCESS', headSha: reviewedSha },
+      ],
+    }),
+    getReviewThreads: async () => ({ unresolvedCount: NaN }),
+  };
+
+  const resClientNan = await governedMerge({
+    workItemId,
+    repoCwd: repoDir,
+    decisionDir,
+    config: { neverMerge: [], requiredChecks: ['ci'] },
+    ghClient: fakeGhClientNanCount,
+  });
+  assert.strictEqual(resClientNan.ok, false);
+  assert.strictEqual(resClientNan.refusal, RefusalCode.THREADS_UNRESOLVED);
+
+  // 4. ghClient.getReviewThreads returns negative
+  const fakeGhClientNegCount = {
+    getPullRequest: async () => ({
+      title: `[${workItemId}] Governed merge`,
+      id: 'PR_1',
+      number: 1,
+      isDraft: false,
+      headRefOid: reviewedSha,
+      statusCheckRollup: [
+        { name: 'ci', status: 'COMPLETED', conclusion: 'SUCCESS', headSha: reviewedSha },
+      ],
+    }),
+    getReviewThreads: async () => ({ unresolvedCount: -5 }),
+  };
+
+  const resClientNeg = await governedMerge({
+    workItemId,
+    repoCwd: repoDir,
+    decisionDir,
+    config: { neverMerge: [], requiredChecks: ['ci'] },
+    ghClient: fakeGhClientNegCount,
+  });
+  assert.strictEqual(resClientNeg.ok, false);
+  assert.strictEqual(resClientNeg.refusal, RefusalCode.THREADS_UNRESOLVED);
+});
+
+test('GM-R04: control.ps1 fails closed when node is missing or unavailable', async () => {
+  const testDir = createUniqueSubdir('control-no-node');
+  const { repoDir, baseSha } = initGitRepo(path.join(testDir, 'repo'));
+  const reviewedSha = createReviewedCommit(repoDir, 'feat.txt', 'feature\n');
+  const decisionDir = path.join(testDir, 'decisions');
+  const workItemId = 'TASK-AI-133';
+
+  createManifestAndArtifact(decisionDir, workItemId, baseSha, reviewedSha, {
+    repoCwd: repoDir,
+    verdict: 'PASS',
+  });
+
+  const controlPath = path.join(__dirname, '..', '..', '..', 'scripts', 'ai', 'control.ps1');
+  const ps1Script = path.join(testDir, 'test-control-no-node.ps1');
+
+  // Point PATH to an empty dir where node does not exist
+  const emptyDir = path.join(testDir, 'empty-bin');
+  fs.mkdirSync(emptyDir, { recursive: true });
+
+  fs.writeFileSync(
+    ps1Script,
+    `
+    . "${controlPath}" -Action "Test" | Out-Null
+    function Get-ShipDePullRequestByNumber {
+        param([int]$Number)
+        return @{ title = "[TASK-AI-133] Test PR" }
+    }
+    $env:SHIPDE_DECISION_DIR = "${decisionDir}"
+    $env:PATH = "${emptyDir}"
+    $res = Get-ShipDeExactHeadReviewManifestVerdict -HeadSha "${reviewedSha}" -PullRequestNumber 1 -RepoDir "${repoDir}"
+    Write-Output "VERDICT_NO_NODE:$res"
+  `,
+    'utf8'
+  );
+
+  let stdout = '';
+  try {
+    stdout = cp.execSync(`powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${ps1Script}"`, {
+      encoding: 'utf8',
+      timeout: 30000,
+    });
+  } catch (e) {
+    stdout = e.stdout || '';
+  }
+
+  assert.ok(stdout.includes('VERDICT_NO_NODE:'), 'must execute PowerShell script');
+  assert.ok(
+    !stdout.includes('VERDICT_NO_NODE:PASS'),
+    'control.ps1 must not return PASS without node (fail closed)'
+  );
+});
+
+test('GM-R01: refusal CONFIG_INVALID when requiredChecks is omitted from config', async () => {
+  const testDir = createUniqueSubdir('cfg-no-checks');
+  const { repoDir, baseSha } = initGitRepo(path.join(testDir, 'repo'));
+  const reviewedSha = createReviewedCommit(repoDir, 'feat.txt', 'feature\n');
+  const decisionDir = path.join(testDir, 'decisions');
+  const workItemId = 'TASK-AI-133';
+
+  createManifestAndArtifact(decisionDir, workItemId, baseSha, reviewedSha, {
+    repoCwd: repoDir,
+    verdict: 'PASS',
+  });
+
+  const res = await governedMerge({
+    workItemId,
+    repoCwd: repoDir,
+    decisionDir,
+    config: { neverMerge: [] },
+  });
+
+  assert.strictEqual(res.ok, false);
+  assert.strictEqual(res.refusal, RefusalCode.CONFIG_INVALID);
+});
+
+test('GM-R05: orchestrate loop after-publish calls governedMerge when autoMerge is enabled', async () => {
+  const testDir = createUniqueSubdir('orchestrate-merge-loop');
+  const { repoDir, baseSha } = initGitRepo(path.join(testDir, 'repo'));
+  const reviewedSha = createReviewedCommit(repoDir, 'feat.txt', 'feature\n');
+  const decisionDir = path.join(testDir, 'decisions');
+  const workItemId = 'TASK-AI-133';
+
+  createManifestAndArtifact(decisionDir, workItemId, baseSha, reviewedSha, {
+    repoCwd: repoDir,
+    verdict: 'PASS',
+  });
+
+  const fakeGhClient = {
+    getPullRequest: async () => ({
+      title: `[${workItemId}] Governed merge`,
+      id: 'PR_AUTO',
+      number: 105,
+      isDraft: false,
+      headRefOid: reviewedSha,
+      statusCheckRollup: [
+        { name: 'ci', status: 'COMPLETED', conclusion: 'SUCCESS', headSha: reviewedSha },
+      ],
+      unresolvedThreadsCount: 0,
+    }),
+    mergePullRequest: async () => ({
+      merged: true,
+      mergeCommitOid: '9'.repeat(40),
+    }),
+  };
+
+  const entry = {
+    workItemId,
+    review: { verdict: 'PASS', findings: [] },
+    verdict: 'PASS',
+    findings: [],
+  };
+  const published = {
+    status: 'published_draft',
+    attempted: true,
+  };
+
+  const log = { merges: [] };
+  const opts = {
+    mergeAfterPublish: true,
+    repoCwd: repoDir,
+    decisionDir,
+    config: { neverMerge: [], requiredChecks: ['ci'] },
+    ghClient: fakeGhClient,
+  };
+
+  if (opts.mergeAfterPublish) {
+    if (isEligibleForMerge(entry, published, opts)) {
+      const mergeResult = await governedMerge({
+        workItemId: entry.workItemId,
+        repoCwd: opts.repoCwd,
+        decisionDir: opts.decisionDir,
+        config: opts.config,
+        ghClient: opts.ghClient,
+      });
+      log.merges.push(mergeResult);
+      entry.merge = mergeResult;
+    }
+  }
+
+  assert.strictEqual(log.merges.length, 1);
+  assert.strictEqual(log.merges[0].ok, true);
+  assert.strictEqual(log.merges[0].status, 'merged');
+  assert.strictEqual(entry.merge.ok, true);
+});
+
+test('GM-R01: default GraphQL merge mutation path executes using ghRunner', async () => {
+  const testDir = createUniqueSubdir('ghrunner-mutation');
+  const { repoDir, baseSha } = initGitRepo(path.join(testDir, 'repo'));
+  const reviewedSha = createReviewedCommit(repoDir, 'feat.txt', 'feature\n');
+  const decisionDir = path.join(testDir, 'decisions');
+  const workItemId = 'TASK-AI-133';
+
+  createManifestAndArtifact(decisionDir, workItemId, baseSha, reviewedSha, {
+    repoCwd: repoDir,
+    verdict: 'PASS',
+  });
+
+  let mutationPayloadReceived = null;
+  const ghRunner = (args, cwd, input) => {
+    if (args.includes('api') && args.includes('graphql')) {
+      const parsedInput = typeof input === 'string' ? JSON.parse(input) : input;
+      if (parsedInput && parsedInput.query && parsedInput.query.includes('reviewThreads')) {
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            data: {
+              repository: {
+                pullRequest: {
+                  reviewThreads: {
+                    nodes: [{ isResolved: true }],
+                  },
+                },
+              },
+            },
+          }),
+          stderr: '',
+        };
+      }
+      if (parsedInput && parsedInput.query && parsedInput.query.includes('mergePullRequest')) {
+        mutationPayloadReceived = parsedInput;
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            data: {
+              mergePullRequest: {
+                pullRequest: {
+                  state: 'MERGED',
+                  merged: true,
+                  mergedAt: new Date().toISOString(),
+                  mergeCommit: { oid: '8'.repeat(40) },
+                },
+              },
+            },
+          }),
+          stderr: '',
+        };
+      }
+    }
+    if (args.includes('pr') && args.includes('list')) {
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify([
+          {
+            title: `[${workItemId}] Test PR`,
+            id: 'PR_999',
+            number: 999,
+            isDraft: false,
+            headRefOid: reviewedSha,
+            statusCheckRollup: [
+              {
+                name: 'test',
+                conclusion: 'SUCCESS',
+                headSha: reviewedSha,
+              },
+            ],
+          },
+        ]),
+        stderr: '',
+      };
+    }
+    return { exitCode: 1, stdout: '', stderr: 'Unknown mock command' };
+  };
+
+  const res = await governedMerge({
+    workItemId,
+    repoCwd: repoDir,
+    decisionDir,
+    config: { neverMerge: [], requiredChecks: ['test'] },
+    repo: 'test-owner/test-repo',
+    ghRunner,
+  });
+
+  assert.strictEqual(res.ok, true);
+  assert.strictEqual(res.status, 'merged');
+  assert.ok(mutationPayloadReceived, 'ghRunner received GraphQL merge mutation');
+  assert.strictEqual(mutationPayloadReceived.variables.input.expectedHeadOid, reviewedSha);
 });
 
 test('GM-R07: docs/product-spec/work-items/TASK-AI-133.md and register row 245 exist and match format', () => {
