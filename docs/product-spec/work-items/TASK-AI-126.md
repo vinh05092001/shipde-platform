@@ -24,13 +24,16 @@ The Controller must be able to select and launch agy-pool and AutoClaw workers i
 
 | AC/Test ID | Scenario | Expected result | Evidence required |
 |---|---|---|---|
-| AL-R01 | autoclaw argv building | Builds openclaw argv with prompt file pattern, passes token ONLY via env var name, reports session id | AL-R01 tests in `tools/ai-brain/test/task-ai-126.test.js` |
-| AL-R01 | 810002 classification | Classifies 810002 as upstream_rate_limit, retryable, 120000ms | AL-R01 test |
-| AL-R02 | candidate registration | Candidates exist with correct failure domains (agy/<account>, autoclaw/zai) | AL-R02 test |
-| AL-R03 | launcher flag gating | Live path uses host-sandboxed launcher enabled by --external-workers | AL-R03 test |
-| AL-R04 | reviewer role selection | Reviewer role may select an autoclaw candidate | Addressed by Fixing candidate wildcard |
-| AL-R05 | agy account validation | Validates account ID matches pattern | AL-R05 test |
-| AL-R06 | Work Item and register | `TASK-AI-126.md` added, exactly one appended register row `239` | `git diff origin/main --numstat` for the register is `1 0` |
+| AL-R01 | autoclaw argv building | Builds openclaw argv with prompt file pattern, passes token ONLY via env var name, reports session id | `tools/ai-brain/test/task-ai-126.test.js` — test "AL-R01: autoclaw argv building without the token value" |
+| AL-R01 | 810002 classification | HTTP 403 + body code 810002 is upstream_rate_limit, retryable, retryAfterMs exactly 120000; a plain 403 stays upstream_entitlement | `tools/ai-brain/test/task-ai-126.test.js` — test "AL-R01: 810002 classification" |
+| AL-R02 | candidate registration | agy-pool one candidate per account agy01..agy10 (failure domain agy/<account>) and autoclaw zai models (autoclaw/zai) are registered | `tools/ai-brain/test/task-ai-126.test.js` — test "AL-R02: candidate registration with failure domains" |
+| AL-R02 | Controller selection (autoclaw) | An autoclaw candidate has a concrete accountId (not '*') and the Controller selects it when it is the best candidate — never WILDCARD_ACCOUNT | `tools/ai-brain/test/task-ai-126.test.js` — test "AL-R02: the Controller selects an autoclaw candidate with a concrete account and no WILDCARD_ACCOUNT" |
+| AL-R02 | Controller selection (agy-pool) | An agy-pool candidate has a concrete accountId and the Controller selects it — never WILDCARD_ACCOUNT | `tools/ai-brain/test/task-ai-126.test.js` — test "AL-R02: the Controller selects an agy-pool candidate with a concrete account and no WILDCARD_ACCOUNT" |
+| AL-R03 | launcher flag gating | Live path uses host-sandboxed launcher enabled by --external-workers and is never the default | `tools/ai-brain/test/task-ai-126.test.js` — test "AL-R03: launcher flag gating and launch correctness" |
+| AL-R03 | external launch | The autoclaw/agy-pool launch is built with the prompt file and the token passed only through the env var name (never the value) | `tools/ai-brain/test/task-ai-126.test.js` — tests "AL-R03: the external launch passes the token only through the env var name" and "AL-R03: the agy-pool external launch writes job.json and triggers the scheduled task" |
+| AL-R04 | reviewer role selection | The reviewer role may select an autoclaw candidate and the review prompt carries the diff inline (no tool use) | `tools/ai-brain/test/task-ai-126.test.js` — test "AL-R04: the reviewer role selects an autoclaw candidate and the review prompt carries the diff inline" |
+| AL-R05 | agy account validation | Validates account ID matches pattern | `tools/ai-brain/test/task-ai-126.test.js` — test "AL-R05: agy account validation" |
+| AL-R06 | Work Item and register | `TASK-AI-126.md` maps every AL-R0x to a named test; exactly one appended register row `239` | `tools/ai-brain/test/task-ai-126.test.js` — test "AL-R06: every AL-R0x maps to a named test and the register row 239 is one 14-column row"; `git diff origin/main --numstat` for the register is `1 0` |
 
 ## Verification Commands
 
