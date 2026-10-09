@@ -49,18 +49,27 @@ function workerName(workItemId) {
   return name.length > 20 ? name.slice(0, 20) : name;
 }
 
-function defaultPrompt(assignment) {
+function defaultPrompt(assignment, opts) {
+  const isolated = opts && opts.isolatedWorker;
+  const extra = isolated
+    ? ' You can now run pnpm lint, pnpm typecheck, pnpm format:check, prettier --write on your own files, and the focused tests. API supertests skip without a database (CI is the evidence).'
+    : '';
   return (
     'Work Item ' +
     assignment.workItemId +
     ' in shipde-platform. Read AGENTS.md and the Work Item. Implement exactly its in-scope ' +
     'items within Allowed paths on branch ' +
     assignment.branch +
-    ', run its verification, and open or update the Pull Request. Do not merge.'
+    ', run its verification, and open or update the Pull Request. Do not merge.' +
+    extra
   );
 }
 
-function resumePrompt(assignment) {
+function resumePrompt(assignment, opts) {
+  const isolated = opts && opts.isolatedWorker;
+  const extra = isolated
+    ? ' You can now run pnpm lint, pnpm typecheck, pnpm format:check, prettier --write on your own files, and the focused tests. API supertests skip without a database (CI is the evidence).'
+    : '';
   return (
     'Continue Work Item ' +
     assignment.workItemId +
@@ -69,7 +78,8 @@ function resumePrompt(assignment) {
     '. Read the branch as it stands now — it already carries your earlier commits — then finish ' +
     'the remaining in-scope items, run the verification, and update the Pull Request. ' +
     'Do not redo work that is already committed and do not repeat any action with an external effect ' +
-    'before checking whether it already happened.'
+    'before checking whether it already happened.' +
+    extra
   );
 }
 
@@ -389,7 +399,7 @@ function executePlan(plan, options) {
       provider: route.provider,
       model: route.model,
       accountId: a.accountId,
-      prompt: promptFor(a),
+      prompt: promptFor(a, opts),
       branch: isReview ? null : a.branch,
       base: opts.base || 'main',
       cwd: opts.cwd,
@@ -401,7 +411,7 @@ function executePlan(plan, options) {
     let launchArgs;
     try {
       launchArgs = resuming
-        ? adapter.resume(existing.sessionId, resumePrompt(a), job)
+        ? adapter.resume(existing.sessionId, resumePrompt(a, opts), job)
         : adapter.launch(job);
     } catch (err) {
       record.outcome = Outcome.FAILED;

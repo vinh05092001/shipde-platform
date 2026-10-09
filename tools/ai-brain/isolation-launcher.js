@@ -1027,6 +1027,127 @@ function getIsolatedLauncher() {
       }
     }
 
+    // WD-R01, WD-R02, WD-R03: Shared dependency directory for pnpm
+    const pnpmLockPath = path.join(workerRoot, 'pnpm-lock.yaml');
+    if (fs.existsSync(pnpmLockPath)) {
+      try {
+        const findPackageJsons = (dir, results = []) => {
+          if (!fs.existsSync(dir)) return results;
+          const entries = fs.readdirSync(dir, { withFileTypes: true });
+          for (const entry of entries) {
+            if (entry.isDirectory() && entry.name !== 'node_modules' && entry.name !== '.git') {
+              findPackageJsons(path.join(dir, entry.name), results);
+            } else if (entry.isFile() && entry.name === 'package.json') {
+              results.push(path.join(dir, entry.name));
+            }
+          }
+          return results;
+        };
+        const pkgJsons = findPackageJsons(workerRoot);
+        const allFiles = [pnpmLockPath, ...pkgJsons].sort();
+        const hash = crypto.createHash('sha256');
+        for (const f of allFiles) {
+          hash.update(fs.readFileSync(f));
+        }
+        const depsHash = hash.digest('hex').substring(0, 16);
+        const depsDir = path.join(path.dirname(workerRoot), 'deps', depsHash);
+        const depsNodeModules = path.join(depsDir, 'node_modules');
+        const markerFile = path.join(depsDir, '.shipde-deps-ready');
+
+        if (!fs.existsSync(markerFile)) {
+          fs.mkdirSync(depsDir, { recursive: true });
+          let copySuccess = true;
+          const copyNm = (relPath) => {
+            if (!copySuccess) return;
+            const hostNm = path.join(hostCwd, relPath);
+            const depsNm = path.join(depsDir, relPath);
+            if (fs.existsSync(hostNm)) {
+              fs.mkdirSync(path.dirname(depsNm), { recursive: true });
+              try {
+                fs.cpSync(hostNm, depsNm, {
+                  recursive: true,
+                  dereference: false,
+                  filter: (src, dest) => {
+                    const name = path.basename(src).toLowerCase();
+                    if (
+                      name.includes('.env') ||
+                      name.includes('credential') ||
+                      name.includes('secret')
+                    )
+                      return false;
+                    return true;
+                  },
+                });
+              } catch (e) {
+                copySuccess = false;
+              }
+            }
+          };
+
+          copyNm('node_modules');
+          const workspaces = ['apps', 'packages'];
+          for (const ws of workspaces) {
+            const hostWsPath = path.join(hostCwd, ws);
+            if (fs.existsSync(hostWsPath)) {
+              const pkgs = fs.readdirSync(hostWsPath, { withFileTypes: true });
+              for (const pkg of pkgs) {
+                if (pkg.isDirectory()) {
+                  copyNm(path.join(ws, pkg.name, 'node_modules'));
+                }
+              }
+            }
+          }
+
+          if (copySuccess && fs.existsSync(depsNodeModules)) {
+            fs.writeFileSync(markerFile, 'ready', 'utf8');
+          } else {
+            throw new Error('failed to copy dependencies from host');
+          }
+        }
+
+        // Setup junctions
+        const setupJunction = (relPath) => {
+          const depsNm = path.join(depsDir, relPath);
+          const workerNm = path.join(workerRoot, relPath);
+          if (fs.existsSync(depsNm)) {
+            if (!fs.existsSync(workerNm)) {
+              fs.mkdirSync(path.dirname(workerNm), { recursive: true });
+              fs.symlinkSync(depsNm, workerNm, 'junction');
+            }
+            return relPath + '/';
+          }
+          return null;
+        };
+
+        const excluded = [];
+        const rootExcl = setupJunction('node_modules');
+        if (rootExcl) excluded.push(rootExcl);
+
+        const workspaces = ['apps', 'packages'];
+        for (const ws of workspaces) {
+          const workerWsPath = path.join(workerRoot, ws);
+          if (fs.existsSync(workerWsPath)) {
+            const pkgs = fs.readdirSync(workerWsPath, { withFileTypes: true });
+            for (const pkg of pkgs) {
+              if (pkg.isDirectory()) {
+                const excl = setupJunction(path.join(ws, pkg.name, 'node_modules'));
+                if (excl) excluded.push(excl.replace(/\\/g, '/'));
+              }
+            }
+          }
+        }
+
+        if (excluded.length > 0) {
+          appendGitInfoExclude(workerRoot, excluded);
+        }
+      } catch (err) {
+        console.error(err);
+        if (opts.log) {
+          opts.log('WORKER_DEPS_UNAVAILABLE', { message: err.message });
+        }
+      }
+    }
+
     // DS-R04: store the credential env for the worker allowlist
     let selectedCredentialEnv = null;
 
