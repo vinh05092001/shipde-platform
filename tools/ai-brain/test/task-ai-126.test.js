@@ -5,7 +5,7 @@
  * workers in live runs.
  *
  * Restores the coverage the fix commit removed and closes every review
- * finding (.upstream-tmp/findings1.md + .upstream-tmp/findings2.md):
+ * finding (.upstream-tmp/findings1.md + findings2.md + findings3.md):
  *
  *   (a) HTTP 403 + body code 810002 is upstream_rate_limit, retryable, with
  *       retryAfterMs exactly 120000; a plain 403 stays upstream_entitlement;
@@ -20,12 +20,22 @@
  *       the flag it does not.
  *   (d) the AL-R04 reviewer role may select an autoclaw candidate and the
  *       review prompt carries the diff inline (no tool use).
+ *   (e) findings3 P1: every test runs under a per-test temp home with
+ *       os.homedir mocked, so no test in this file can read the host
+ *       ~/.openclaw-autoclaw/.gateway-token at all; the tests that drive the
+ *       external launcher plant a sentinel token in the temp home and assert
+ *       the launcher surfaces exactly that sentinel (never a host value).
+ *   (f) findings3 P2: "AL-R05: agy account validation" is labelled baseline
+ *       regression — the adapter refusal predates this Work Item and the test
+ *       passes on origin/main as well; the fail-on-main instance for invalid
+ *       accounts is the seam check inside "AL-R03: the agy-pool external
+ *       launch writes job.json and triggers the scheduled task".
  *
  * Every spawn is faked before the harness modules capture `spawnSync`, so
  * openclaw, schtasks and taskkill never reach the real OS; no network is
- * touched; no real gateway token is read (the token file lives under a mocked
- * os.homedir()); and every side effect stays in temp directories that the
- * suite removes.
+ * touched; no real gateway token is read (the token file only ever exists
+ * under the mocked os.homedir() temp home); and every side effect stays in
+ * temp directories that the suite removes.
  */
 
 const cp = require('child_process');
@@ -67,6 +77,28 @@ function tmpDir(prefix) {
   const dir = fs.mkdtempSync(path.join(upstreamDir, prefix));
   tmpDirs.push(dir);
   return dir;
+}
+
+/**
+ * findings3 P1: the suite must never read the host's real
+ * ~/.openclaw-autoclaw/.gateway-token. Every test runs with os.homedir()
+ * pointing at its own empty temp home, so any token read resolves inside a
+ * temp directory this suite created and removes.
+ */
+function freshTempHome() {
+  return tmpDir('task-ai-126-home-');
+}
+
+/**
+ * Plant a sentinel gateway token under the mocked home and return the
+ * directory the launcher will look in. Tests assert the launcher surfaces
+ * exactly this sentinel, which fails if the real host home leaks in.
+ */
+function plantGatewayToken(home) {
+  const tokenDir = path.join(home, '.openclaw-autoclaw');
+  fs.mkdirSync(tokenDir, { recursive: true });
+  fs.writeFileSync(path.join(tokenDir, '.gateway-token'), TOKEN_SENTINEL + '\n');
+  return tokenDir;
 }
 
 const ASSESSMENT = {
@@ -112,8 +144,16 @@ function spawnMatching(pred) {
   return spawnCalls.find(pred);
 }
 
+let home;
+
 beforeEach(() => {
   spawnCalls.length = 0;
+  // findings3 P1: no test in this file can reach the host gateway token.
+  // os.homedir() is a fresh temp home for every test, and the host env token
+  // is removed for the test's duration (removed only — never read).
+  home = freshTempHome();
+  mock.method(os, 'homedir', () => home);
+  delete process.env.OPENCLAW_GATEWAY_TOKEN;
 });
 
 afterEach(() => {
@@ -339,6 +379,11 @@ describe('TASK-AI-126', () => {
 
   test('AL-R03: launcher flag gating and launch correctness', () => {
     const cwd = tmpDir('task-ai-126-cwd-');
+    // findings3 P1: the launch runs under the mocked temp home with a planted
+    // sentinel token. Asserting the launcher surfaces exactly that sentinel
+    // fails on every host if the real ~/.openclaw-autoclaw/.gateway-token is
+    // ever consulted instead.
+    plantGatewayToken(home);
 
     const noLauncher = orch.resolveLauncher({ externalWorkers: '' }, null);
     assert.equal(noLauncher, null, 'must be null if missing launcher flag');
@@ -362,6 +407,11 @@ describe('TASK-AI-126', () => {
       String(call.cmd).includes('openclaw') || call.args.some((a) => a.includes('openclaw')),
       'the spawned command is openclaw'
     );
+    assert.ok(
+      call.opts.env.OPENCLAW_GATEWAY_TOKEN === TOKEN_SENTINEL,
+      'the token comes from the mocked temp home, never the host gateway token'
+    );
+    assert.ok(!call.args.some((a) => a.includes(TOKEN_SENTINEL)), 'no token value in argv');
 
     // Without the flag the external launch is not built at all: the isolated
     // path keeps the job and nothing spawns.
@@ -389,11 +439,7 @@ describe('TASK-AI-126', () => {
 
   test('AL-R03: the external launch passes the token only through the env var name', () => {
     const cwd = tmpDir('task-ai-126-cwd-');
-    const home = tmpDir('task-ai-126-home-');
-    const tokenDir = path.join(home, '.openclaw-autoclaw');
-    fs.mkdirSync(tokenDir, { recursive: true });
-    fs.writeFileSync(path.join(tokenDir, '.gateway-token'), TOKEN_SENTINEL + '\n');
-    mock.method(os, 'homedir', () => home);
+    plantGatewayToken(home);
 
     const hadEnvToken = Object.prototype.hasOwnProperty.call(process.env, 'OPENCLAW_GATEWAY_TOKEN');
     const prevEnvToken = process.env.OPENCLAW_GATEWAY_TOKEN;
@@ -415,10 +461,10 @@ describe('TASK-AI-126', () => {
       const call = spawnMatching((c) => c.args.includes('s-token'));
       assert.ok(call, 'the openclaw spawn happened (fake spawn)');
 
-      // The token travels ONLY through the env var name.
-      assert.equal(
-        call.opts.env.OPENCLAW_GATEWAY_TOKEN,
-        TOKEN_SENTINEL,
+      // The token travels ONLY through the env var name. Boolean assert so a
+      // leak can never echo a real token value in the failure message.
+      assert.ok(
+        call.opts.env.OPENCLAW_GATEWAY_TOKEN === TOKEN_SENTINEL,
         'the token file under the mocked home is the source'
       );
       const carriers = Object.keys(call.opts.env).filter((k) =>
@@ -476,6 +522,10 @@ describe('TASK-AI-126', () => {
       assert.ok(call, 'the scheduled task is triggered (fake spawn, never real schtasks)');
       assert.ok(String(call.cmd).includes('schtasks'), 'the spawned command is schtasks');
       assert.deepEqual(call.args, ['/run', '/tn', 'ShipDe\\ShipDe-agy01'], 'schtasks argv');
+      assert.ok(
+        !('OPENCLAW_GATEWAY_TOKEN' in call.opts.env),
+        'no gateway token reaches the agy launch env'
+      );
 
       const jobJson = JSON.parse(fs.readFileSync(path.join(runsDir, 'agy01', 'job.json'), 'utf8'));
       assert.equal(jobJson.harness, 'agy-pool');
@@ -483,7 +533,9 @@ describe('TASK-AI-126', () => {
       assert.equal(jobJson.prompt, 'pool prompt');
       assert.equal(jobJson.model, 'gemini-3.1-pro-low');
 
-      // An invalid account never reaches a scheduled task (AL-R05 at the seam).
+      // findings3 P2: this seam check is the fail-on-main instance of AL-R05 —
+      // the launcher gate is new in this Work Item, so an invalid account that
+      // must never reach a scheduled task only exists behind it.
       spawnCalls.length = 0;
       const refused = launcher({ harness: 'agy-pool', accountId: 'nope', cwd, prompt: 'p' });
       assert.equal(refused.refusal, 'INVALID_ACCOUNT_ID');
@@ -538,7 +590,13 @@ describe('TASK-AI-126', () => {
     assert.ok(!/git diff/i.test(prompt), 'the reviewer needs no tool to read the diff');
   });
 
-  test('AL-R05: agy account validation', () => {
+  test('AL-R05: agy account validation (baseline regression)', () => {
+    // findings3 P2: baseline regression coverage only. The agy-pool adapter's
+    // INVALID_ACCOUNT_ID refusal predates this Work Item, so this direct check
+    // passes on origin/main as well and is not the fail-on-main guard. The
+    // fail-on-main instance for invalid accounts is the seam check inside
+    // "AL-R03: the agy-pool external launch writes job.json and triggers the
+    // scheduled task", which only exists behind the new launcher gate.
     const adapter = getHarness('agy-pool');
     const res = adapter.launch({ accountId: 'invalid' }, {});
     assert.equal(res.state, 'error');
