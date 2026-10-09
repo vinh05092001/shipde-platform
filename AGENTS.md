@@ -103,6 +103,7 @@ Following `TASK-FOUND-02` monorepo migration, use the authoritative workspace ro
 - `pnpm test`
 - `pnpm test:e2e`
 - `pnpm test:baseline`
+- `pnpm test:brain`
 - `pnpm security:secrets`
 - `pnpm build`
 

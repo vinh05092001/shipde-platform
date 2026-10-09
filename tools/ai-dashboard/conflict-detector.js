@@ -1,11 +1,11 @@
 /**
  * Ship Dễ — Multi-Source Conflict Detector
  * TASK-AI-15: AI15-R02, AI15-AC06
- * Compares register, git, AO sessions, and GitHub PR states side by side
+ * Compares register, git, Paseo agents, and GitHub PR states side by side
  * to detect operational conflicts without silently promoting any state.
  */
 
-function detectConflicts(registerData, gitData, aoData, githubData) {
+function detectConflicts(registerData, gitData, paseoData, githubData) {
   const conflicts = [];
   const activeItem = registerData?.activeItem;
 
@@ -74,8 +74,8 @@ function detectConflicts(registerData, gitData, aoData, githubData) {
   }
 
   // 4. AO session vs Register branch alignment
-  if (aoData?.sessions && aoData.sessions.length > 0) {
-    const activeAuthorSession = aoData.sessions.find(
+  if (paseoData?.sessions && paseoData.sessions.length > 0) {
+    const activeAuthorSession = paseoData.sessions.find(
       (s) => s.roleCategory === 'AUTHOR' && !s.isTerminated
     );
     if (activeAuthorSession && activeBranch && activeAuthorSession.branch) {
@@ -86,11 +86,11 @@ function detectConflicts(registerData, gitData, aoData, githubData) {
         conflicts.push({
           id: 'CONFLICT_AO_BRANCH_MISMATCH',
           severity: 'info',
-          title: `Phiên AO đang làm việc trên nhánh khác`,
-          description: `Phiên làm việc AO ${activeAuthorSession.id} gắn với nhánh "${activeAuthorSession.branch}", trong khi task active hiện tại là "${activeBranch}".`,
+          title: `Agent Paseo đang làm việc trên nhánh khác`,
+          description: `Agent Paseo ${activeAuthorSession.id} gắn với nhánh "${activeAuthorSession.branch}", trong khi task active hiện tại là "${activeBranch}".`,
           sources: [
             { name: 'register', value: activeBranch },
-            { name: 'ao', value: activeAuthorSession.branch },
+            { name: 'paseo', value: activeAuthorSession.branch },
           ],
           impact: 'Có thể có nhiều phiên song song hoặc phiên trước chưa đồng bộ',
         });

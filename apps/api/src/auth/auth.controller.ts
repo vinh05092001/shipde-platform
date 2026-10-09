@@ -1,18 +1,34 @@
-import { Controller, Post, Body, Req, Res, HttpCode, HttpStatus, Inject } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Body,
+  Req,
+  Res,
+  HttpCode,
+  HttpStatus,
+  Inject,
+  UseFilters,
+} from '@nestjs/common';
 import { Request, Response } from 'express';
+import { extractClientIp } from '../utils/ip.util';
 import {
   AuthService,
   RegisterDto,
   VerifyEmailDto,
   VerifyPhoneDto,
   ResendVerificationDto,
+  ForgotPasswordDto,
+  VerifyResetTokenDto,
+  ResetPasswordDto,
   LoginDto,
   LoginOtpRequestDto,
   LoginOtpVerifyDto,
 } from './auth.service';
+import { CanonicalExceptionFilter } from './canonical-exception.filter';
 import { normalizeCorrelationId } from '@shipde/config';
 
 @Controller('auth')
+@UseFilters(CanonicalExceptionFilter)
 export class AuthController {
   constructor(@Inject(AuthService) private readonly authService: AuthService) {}
 
@@ -24,7 +40,7 @@ export class AuthController {
     @Res() res: Response
   ): Promise<Response> {
     const correlationId = (req as any).correlationId || normalizeCorrelationId();
-    const clientIp = this.extractClientIp(req);
+    const clientIp = extractClientIp(req);
 
     const result = await this.authService.register(dto, clientIp, correlationId);
     return res.status(HttpStatus.CREATED).json(result);
@@ -62,8 +78,47 @@ export class AuthController {
     @Res() res: Response
   ): Promise<Response> {
     const correlationId = (req as any).correlationId || normalizeCorrelationId();
-    const clientIp = this.extractClientIp(req);
+    const clientIp = extractClientIp(req);
     const result = await this.authService.resendVerification(dto, clientIp, correlationId);
+    return res.status(HttpStatus.OK).json(result);
+  }
+
+  @Post('forgot-password')
+  @HttpCode(HttpStatus.OK)
+  async forgotPassword(
+    @Body() dto: ForgotPasswordDto,
+    @Req() req: Request,
+    @Res() res: Response
+  ): Promise<Response> {
+    const correlationId = (req as any).correlationId || normalizeCorrelationId();
+    const clientIp = extractClientIp(req);
+    const result = await this.authService.forgotPassword(dto, clientIp, correlationId);
+    return res.status(HttpStatus.OK).json(result);
+  }
+
+  @Post('verify-reset-token')
+  @HttpCode(HttpStatus.OK)
+  async verifyResetToken(
+    @Body() dto: VerifyResetTokenDto,
+    @Req() req: Request,
+    @Res() res: Response
+  ): Promise<Response> {
+    const correlationId = (req as any).correlationId || normalizeCorrelationId();
+    const clientIp = extractClientIp(req);
+    const result = await this.authService.verifyResetToken(dto, clientIp, correlationId);
+    return res.status(HttpStatus.OK).json(result);
+  }
+
+  @Post('reset-password')
+  @HttpCode(HttpStatus.OK)
+  async resetPassword(
+    @Body() dto: ResetPasswordDto,
+    @Req() req: Request,
+    @Res() res: Response
+  ): Promise<Response> {
+    const correlationId = (req as any).correlationId || normalizeCorrelationId();
+    const clientIp = extractClientIp(req);
+    const result = await this.authService.resetPassword(dto, clientIp, correlationId);
     return res.status(HttpStatus.OK).json(result);
   }
 
@@ -75,7 +130,7 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   async login(@Body() dto: LoginDto, @Req() req: Request, @Res() res: Response): Promise<Response> {
     const correlationId = (req as any).correlationId || normalizeCorrelationId();
-    const clientIp = this.extractClientIp(req);
+    const clientIp = extractClientIp(req);
     const result = await this.authService.login(dto, clientIp, correlationId);
     return res.status(HttpStatus.OK).json(result);
   }
@@ -92,7 +147,7 @@ export class AuthController {
     @Res() res: Response
   ): Promise<Response> {
     const correlationId = (req as any).correlationId || normalizeCorrelationId();
-    const clientIp = this.extractClientIp(req);
+    const clientIp = extractClientIp(req);
     const result = await this.authService.requestLoginOtp(dto, clientIp, correlationId);
     return res.status(HttpStatus.OK).json(result);
   }
@@ -110,17 +165,8 @@ export class AuthController {
     @Res() res: Response
   ): Promise<Response> {
     const correlationId = (req as any).correlationId || normalizeCorrelationId();
-    const clientIp = this.extractClientIp(req);
+    const clientIp = extractClientIp(req);
     const result = await this.authService.verifyLoginOtp(dto, clientIp, correlationId);
     return res.status(HttpStatus.OK).json(result);
-  }
-
-  private extractClientIp(req: Request): string {
-    const forwarded = req.headers['x-forwarded-for'];
-    if (forwarded) {
-      const first = Array.isArray(forwarded) ? forwarded[0] : forwarded.split(',')[0];
-      if (first && first.trim().length > 0) return first.trim();
-    }
-    return req.ip || req.socket.remoteAddress || '127.0.0.1';
   }
 }

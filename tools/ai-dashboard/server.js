@@ -9,6 +9,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { aggregateCockpitState, getLastAggregatedState } = require('./aggregator');
+const { buildRotationState } = require('./rotation');
 
 const DEFAULT_PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3333;
 const HOST = '127.0.0.1'; // Strictly loopback only (AI15-R05)
@@ -25,10 +26,11 @@ const MIME_TYPES = {
 
 const CONTENT_SECURITY_POLICY = [
   "default-src 'self'",
-  "script-src 'self' https://cdn.tailwindcss.com 'unsafe-inline'",
-  "style-src 'self' 'unsafe-inline'",
+  // jsDelivr serves Tailwind 4 and the daisyUI plugin the cockpit is built on.
+  "script-src 'self' https://cdn.tailwindcss.com https://cdn.jsdelivr.net 'unsafe-inline'",
+  "style-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'",
   "img-src 'self' data:",
-  "connect-src 'self'",
+  "connect-src 'self' https://cdn.jsdelivr.net",
   "frame-ancestors 'none'",
   "base-uri 'none'",
   "object-src 'none'",
@@ -89,6 +91,10 @@ function isPathTraversal(requestedPath, allowedRoots) {
 function createDashboardServer(options = {}) {
   const rootDir = options.rootDir || path.resolve(__dirname, '../..');
   const dashboardDir = path.resolve(__dirname);
+  const enableProbe =
+    options.probe !== undefined
+      ? Boolean(options.probe)
+      : !options.disablePolling && process.env.NODE_ENV !== 'test';
 
   // SSE connected clients
   const sseClients = new Set();
@@ -129,7 +135,13 @@ function createDashboardServer(options = {}) {
   }
 
   function broadcastHeartbeat() {
-    const heartbeat = `: heartbeat ${new Date().toISOString()}\n\n`;
+    // A `: comment` line keeps the socket warm but EventSource drops it, so the page
+    // could not tell a live poll from a dead one. Send a named event the client can read.
+    const at = new Date().toISOString();
+    const heartbeat = `event: heartbeat
+data: ${JSON.stringify({ at })}
+
+`;
     for (const client of sseClients) {
       try {
         client.res.write(heartbeat);
@@ -147,11 +159,30 @@ function createDashboardServer(options = {}) {
     if (pathname === '/' || pathname === '/index.html') {
       return path.join(dashboardDir, 'index.html');
     }
+    if (pathname === '/summary-view.js') {
+      return path.join(dashboardDir, 'summary-view.js');
+    }
+    if (pathname === '/roster-view.js') {
+      return path.join(dashboardDir, 'roster-view.js');
+    }
+    if (pathname === '/progress-view.js') {
+      return path.join(dashboardDir, 'progress-view.js');
+    }
+    if (pathname === '/architecture.js') {
+      return path.join(dashboardDir, 'architecture.js');
+    }
+    if (pathname === '/rotation-view.js') {
+      return path.join(dashboardDir, 'rotation-view.js');
+    }
     if (pathname === '/client.js') {
       return path.join(dashboardDir, 'client.js');
     }
     if (pathname === '/DASHBOARD.html') {
       return path.join(rootDir, 'DASHBOARD.html');
+    }
+    // The rotation view lives inside the dashboard's Capacity & Quota tab.
+    if (pathname === '/rotation' || pathname === '/rotation.html') {
+      return path.join(dashboardDir, 'index.html');
     }
     return null;
   }
@@ -336,6 +367,15 @@ function createDashboardServer(options = {}) {
       return;
     }
 
+    // TASK-AI-47: Model rotation JSON endpoint
+    if (pathname === '/api/rotation') {
+      const rotation = enableProbe
+        ? await buildRotationState({ rootDir, probe: true, async: true, ...options })
+        : buildRotationState({ rootDir, probe: false, ...options, async: false });
+      sendJson(req, res, 200, rotation);
+      return;
+    }
+
     // 4. Static File Resolution — fixed allowlist only (AI15-R05).
     // No repository file or dotfile is ever reachable through this server,
     // regardless of path traversal encoding.
@@ -364,6 +404,9 @@ function createDashboardServer(options = {}) {
   if (!options.disablePolling) {
     // Initial warm aggregation
     aggregateCockpitState({ rootDir }).catch(() => {});
+    if (enableProbe) {
+      buildRotationState({ rootDir, probe: true, async: true, ...options }).catch(() => {});
+    }
     pollIntervalTimer = setInterval(pollAndBroadcast, pollIntervalMs);
     heartbeatTimer = setInterval(broadcastHeartbeat, 15000);
   }

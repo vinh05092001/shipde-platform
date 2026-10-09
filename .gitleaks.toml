@@ -39,6 +39,14 @@ regexes = [
   # cannot reach a commit that already exists. The string states outright that
   # it is a length fixture, so exempting this exact text costs nothing.
   '''a-very-long-secret-key-that-exceeds-32-characters''',
+  # tools/ai-dashboard/rotation.js:469 — false positive on the generic-api-key
+  # rule. The line `const k1 = env.BAI_API_KEY || env.BAI_API_KEY_1;` reads
+  # API key names from process.env at runtime; there is no literal credential
+  # anywhere on the line. The regex `env\.BAI_API_KEY` is the narrowest anchor
+  # possible: it matches only member-access syntax (env.<identifier>), which
+  # can never contain an actual secret value. A real key pasted as a string
+  # literal would not match this pattern and would still be caught.
+  '''env\.BAI_API_KEY''',
 ]
 
 [[rules]]

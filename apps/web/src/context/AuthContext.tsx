@@ -20,6 +20,8 @@ interface AuthContextType {
   user: User | null;
   merchant: Merchant | null;
   isAuthenticated: boolean;
+  /** True only during the single localStorage restore tick. Screens return null while this is set. */
+  isHydrating: boolean;
   token: string | null;
   login: (
     emailOrPhone: string,
@@ -97,6 +99,29 @@ interface AuthContextType {
     cooldownSeconds?: number;
     nextAction?: string;
   }>;
+  forgotPassword: (identifier: string) => Promise<{
+    success: boolean;
+    error?: string;
+    code?: string;
+    data?: { status: string; channel: string };
+    cooldownSeconds?: number;
+    nextAction?: string;
+  }>;
+  verifyResetToken: (token: string) => Promise<{
+    success: boolean;
+    error?: string;
+    code?: string;
+    data?: { valid: boolean; identifier: string; channel: string };
+    nextAction?: string;
+  }>;
+  resetPassword: (dto: { token: string; password: string; password_confirm: string }) => Promise<{
+    success: boolean;
+    error?: string;
+    code?: string;
+    data?: { message: string };
+    nextAction?: string;
+    fields?: FieldError[];
+  }>;
   logout: () => void;
   switchRole: (role: Role) => void;
 }
@@ -147,28 +172,32 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser] = useState<User | null>(null);
   const [merchant, setMerchant] = useState<Merchant | null>(null);
   const [token, setToken] = useState<string | null>(null);
+  const [isHydrating, setIsHydrating] = useState(true);
 
   // Restore a persisted session when present. No fabricated default session:
   // FEAT-AUTH-03 (CD-10) removes the prototype's mock auto-login.
+  // isHydrating starts true and resolves false in finally, so a signed-out
+  // visitor never sits on a loading skeleton (BRAIN.md rule 4).
   useEffect(() => {
-    const savedUser = localStorage.getItem('shipde_user');
-    const savedMerchant = localStorage.getItem('shipde_merchant');
-    const savedToken = localStorage.getItem('shipde_token');
+    Promise.resolve().then(() => {
+      try {
+        const savedUser = localStorage.getItem('shipde_user');
+        const savedMerchant = localStorage.getItem('shipde_merchant');
+        const savedToken = localStorage.getItem('shipde_token');
 
-    if (!savedUser || !savedMerchant || !savedToken) {
-      return;
-    }
-
-    try {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- persisted session hydration
-      setUser(mapUser(JSON.parse(savedUser)));
-      setMerchant(mapMerchant(JSON.parse(savedMerchant)));
-      setToken(savedToken);
-    } catch {
-      localStorage.removeItem('shipde_user');
-      localStorage.removeItem('shipde_merchant');
-      localStorage.removeItem('shipde_token');
-    }
+        if (savedUser && savedMerchant && savedToken) {
+          setUser(mapUser(JSON.parse(savedUser)));
+          setMerchant(mapMerchant(JSON.parse(savedMerchant)));
+          setToken(savedToken);
+        }
+      } catch {
+        localStorage.removeItem('shipde_user');
+        localStorage.removeItem('shipde_merchant');
+        localStorage.removeItem('shipde_token');
+      } finally {
+        setIsHydrating(false);
+      }
+    });
   }, []);
 
   const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
@@ -409,6 +438,84 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const forgotPassword = async (identifier: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/auth/forgot-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier }),
+      });
+
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return {
+          success: false,
+          error: body?.error?.message || 'Gửi liên kết đặt lại mật khẩu thất bại',
+          code: body?.error?.code || 'VALIDATION_ERROR',
+          cooldownSeconds: body?.error?.cooldown_seconds,
+          nextAction: body?.error?.next_action,
+        };
+      }
+
+      return { success: true, data: body.data };
+    } catch {
+      return { success: false, error: 'Lỗi kết nối máy chủ', code: 'NETWORK_ERROR' };
+    }
+  };
+
+  const verifyResetToken = async (token: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/auth/verify-reset-token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token }),
+      });
+
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return {
+          success: false,
+          error: body?.error?.message || 'Liên kết đặt lại mật khẩu không hợp lệ',
+          code: body?.error?.code || 'INVALID_TOKEN',
+          nextAction: body?.error?.next_action,
+        };
+      }
+
+      return { success: true, data: body.data };
+    } catch {
+      return { success: false, error: 'Lỗi kết nối máy chủ', code: 'NETWORK_ERROR' };
+    }
+  };
+
+  const resetPassword = async (dto: {
+    token: string;
+    password: string;
+    password_confirm: string;
+  }) => {
+    try {
+      const res = await fetch(`${API_BASE}/auth/reset-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(dto),
+      });
+
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return {
+          success: false,
+          error: body?.error?.message || 'Đặt lại mật khẩu thất bại',
+          code: body?.error?.code || 'VALIDATION_ERROR',
+          nextAction: body?.error?.next_action,
+          fields: body?.error?.fields,
+        };
+      }
+
+      return { success: true, data: body.data };
+    } catch {
+      return { success: false, error: 'Lỗi kết nối máy chủ', code: 'NETWORK_ERROR' };
+    }
+  };
+
   const resendVerification = async (identifier: string, channel: 'email' | 'phone') => {
     try {
       const res = await fetch(`${API_BASE}/auth/verify/resend`, {
@@ -465,6 +572,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         user,
         merchant,
         isAuthenticated: !!user && !!token,
+        isHydrating,
         token,
         login,
         requestLoginOtp,
@@ -473,6 +581,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         verifyEmail,
         verifyPhone,
         resendVerification,
+        forgotPassword,
+        verifyResetToken,
+        resetPassword,
         logout,
         switchRole,
       }}

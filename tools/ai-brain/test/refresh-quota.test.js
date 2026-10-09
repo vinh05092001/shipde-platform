@@ -99,6 +99,22 @@ describe('Skipping accounts that cannot answer', () => {
 });
 
 describe('Refreshing every account', () => {
+  function writePoolAdapter(dir) {
+    const script = path.join(dir, 'fake-pool-adapter.js');
+    fs.writeFileSync(
+      script,
+      [
+        "const fs = require('fs');",
+        "const path = require('path');",
+        'const dir = process.argv[2];',
+        "const state = JSON.parse(fs.readFileSync(path.join(dir, 'state.json'), 'utf8'));",
+        "fs.writeFileSync(path.join(dir, 'result.json'), JSON.stringify(state.result));",
+        "if (state.out !== undefined) fs.writeFileSync(path.join(dir, 'out.txt'), state.out);",
+      ].join('\n')
+    );
+    return script;
+  }
+
   test('each account is reported separately', () => {
     const p = tmpStore();
     const out = refreshAll(
@@ -106,11 +122,57 @@ describe('Refreshing every account', () => {
         { id: 'acc-a', provider: 'antigravity' },
         { id: 'router', provider: '9router' },
       ],
-      { path: p, identity: ME, readQuota: () => OK }
+      {
+        path: p,
+        identity: ME,
+        readQuota: () => OK,
+        fakeRunsDir: fs.mkdtempSync(path.join(os.tmpdir(), 'agy-runs-')),
+      }
     );
     assert.equal(out.length, 2);
     assert.equal(out[0].ok, true);
     assert.equal(out[1].skipped, true);
+  });
+
+  test('agy-pool accounts are discovered from runs dir', () => {
+    const p = tmpStore();
+    const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-runs-'));
+    const adapterScript = writePoolAdapter(runDir);
+    fs.mkdirSync(path.join(runDir, 'agy01'));
+    fs.mkdirSync(path.join(runDir, 'agy02'));
+    fs.mkdirSync(path.join(runDir, 'not-agy'));
+
+    fs.writeFileSync(
+      path.join(runDir, 'agy01', 'state.json'),
+      JSON.stringify({
+        result: { state: 'ok' },
+        out: JSON.stringify({
+          groups: [
+            {
+              id: 'gemini',
+              models: ['gemini-test-pro'],
+              weekly: { remaining: 0.8 },
+            },
+          ],
+        }),
+      })
+    );
+
+    fs.writeFileSync(
+      path.join(runDir, 'agy02', 'state.json'),
+      JSON.stringify({ result: { state: 'login-required' }, out: '' })
+    );
+
+    const out = refreshAll([], { path: p, fakeRunsDir: runDir, adapterScript });
+
+    assert.equal(out.length, 2);
+
+    const a1 = out.find((o) => o.accountId === 'agy01');
+    assert.equal(a1.ok, true);
+
+    const a2 = out.find((o) => o.accountId === 'agy02');
+    assert.equal(a2.ok, false);
+    assert.equal(a2.reason, 'AUTH_FAILED');
   });
 });
 

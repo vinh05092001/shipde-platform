@@ -4,6 +4,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import request from 'supertest';
 import { AppModule } from '../app.module';
 import { PrismaService } from '../prisma/prisma.service';
@@ -75,6 +76,12 @@ async function runAuthSupertestSuite() {
     S3_FORCE_PATH_STYLE: true,
     CARRIER_MODE: 'disabled',
     LOG_LEVEL: 'info',
+    TRUST_PROXY_HOPS: 1,
+    AUTH_TOKEN_TTL_SECONDS: 43200,
+    AUTH_LOGIN_OTP_ENABLED: false,
+    PASSWORD_RESET_TTL_SECONDS: 3600,
+    FRONTEND_URL: 'http://localhost:3000',
+    AUDIT_IDENTIFIER_HMAC_KEY: 'test-key-32-chars',
   };
 
   const mockDeliveryAdapter = new MockVerificationDeliveryAdapter();
@@ -88,7 +95,8 @@ async function runAuthSupertestSuite() {
     .useValue(mockDeliveryAdapter)
     .compile();
 
-  const app: INestApplication = moduleFixture.createNestApplication();
+  const app = moduleFixture.createNestApplication<NestExpressApplication>();
+  app.set('trust proxy', 1);
   await app.init();
 
   const prisma = app.get(PrismaService);
@@ -218,13 +226,26 @@ async function runAuthSupertestSuite() {
     // AC-AUTH-02-05: Duplicate already-verified email -> 400 VALIDATION_ERROR
     // -------------------------------------------------------------------------
     console.log('[TEST 5 / AC-AUTH-02-05] Duplicate already-verified email rejection');
+    const activeEmail5 = `active5.${testSuffix}@shipde.vn`;
+    await prisma.user.create({
+      data: {
+        email: activeEmail5,
+        password_hash: await hashPassword('SecurePassword123!'),
+        status: 'active',
+        email_verified_at: new Date(),
+        full_name: 'Verified User 5',
+        role: 'OWNER',
+        merchant_id: res1.body.data.merchant_id,
+      },
+    });
+
     const res5 = await request(app.getHttpServer())
       .post('/auth/register')
       .set('x-forwarded-for', '198.51.100.5')
       .send({
         merchant_name: 'Duplicate Shop',
         full_name: 'Duplicate Owner',
-        email: 'owner@shipde.vn', // Seed active & verified email
+        email: activeEmail5,
         password: 'SecurePassword123!',
         terms_accepted: true,
         terms_version: '2026.1',
@@ -280,30 +301,67 @@ async function runAuthSupertestSuite() {
     // -------------------------------------------------------------------------
     console.log('[TEST 7 / AC-AUTH-02-07] Verify with valid token transitions to ACTIVE');
     const validToken = sent6[0].token!;
-    const res7 = await request(app.getHttpServer())
-      .post('/auth/verify-email')
-      .send({ token: validToken })
-      .expect(200);
+    const originalConsoleLog7 = console.log;
+    let verifyLogOutput = '';
+    console.log = (...args: any[]) => {
+      verifyLogOutput += JSON.stringify(args);
+      originalConsoleLog7(...args);
+    };
 
-    assert.strictEqual(res7.body.data.status, 'ACTIVE');
-    assert.strictEqual(res7.body.data.verified, true);
-    assert.strictEqual(res7.body.data.channel, 'email');
+    try {
+      const res7 = await request(app.getHttpServer())
+        .post('/auth/verify-email')
+        .send({ token: validToken })
+        .expect(200);
 
-    // Check DB state
-    const verifiedUser = await prisma.user.findUnique({
-      where: { id: res7.body.data.user_id },
-    });
-    assert.strictEqual(verifiedUser?.status, 'active');
-    assert.ok(verifiedUser?.email_verified_at, 'email_verified_at must be populated');
-    console.log('  PASS: AC-AUTH-02-07 Valid token transitioned user to active status');
+      assert.strictEqual(res7.body.data.status, 'ACTIVE');
+      assert.strictEqual(res7.body.data.verified, true);
+      assert.strictEqual(res7.body.data.channel, 'email');
+
+      // Check DB state
+      const verifiedUser = await prisma.user.findUnique({
+        where: { id: res7.body.data.user_id },
+      });
+      assert.strictEqual(verifiedUser?.status, 'active');
+      assert.ok(verifiedUser?.email_verified_at, 'email_verified_at must be populated');
+
+      assert.ok(!verifyLogOutput.includes(email1), 'Verify logs must not contain raw email');
+    } finally {
+      console.log = originalConsoleLog7;
+    }
+    console.log(
+      '  PASS: AC-AUTH-02-07 Valid token transitioned user to active status and protected PII'
+    );
 
     // -------------------------------------------------------------------------
     // AC-AUTH-02-08: Verify with expired token -> 410 TOKEN_EXPIRED
     // -------------------------------------------------------------------------
     console.log('[TEST 8 / AC-AUTH-02-08] Verify with expired token returns 410 TOKEN_EXPIRED');
+    const pendingEmail8 = `pending8.${testSuffix}@shipde.vn`;
+    const user8 = await prisma.user.create({
+      data: {
+        email: pendingEmail8,
+        password_hash: await hashPassword('SecurePassword123!'),
+        status: 'pending_verification',
+        full_name: 'Pending User 8',
+        role: 'OWNER',
+        merchant_id: res1.body.data.merchant_id,
+      },
+    });
+    const expiredToken8 = `expired-token-${testSuffix}`;
+    await prisma.verificationToken.create({
+      data: {
+        token: expiredToken8,
+        user_id: user8.id,
+        channel: 'email',
+        identifier: pendingEmail8,
+        expires_at: new Date(Date.now() - 10000),
+      },
+    });
+
     const res8 = await request(app.getHttpServer())
       .post('/auth/verify-email')
-      .send({ token: 'test-token-expired' }) // Seed expired token
+      .send({ token: expiredToken8 })
       .expect(410);
 
     assert.strictEqual(res8.body.error.code, 'TOKEN_EXPIRED');
@@ -316,9 +374,32 @@ async function runAuthSupertestSuite() {
     console.log(
       '[TEST 9 / AC-AUTH-02-09] Replay consumed token returns 410 TOKEN_ALREADY_CONSUMED'
     );
+    const pendingEmail9 = `pending9.${testSuffix}@shipde.vn`;
+    const user9 = await prisma.user.create({
+      data: {
+        email: pendingEmail9,
+        password_hash: await hashPassword('SecurePassword123!'),
+        status: 'active',
+        full_name: 'Pending User 9',
+        role: 'OWNER',
+        merchant_id: res1.body.data.merchant_id,
+      },
+    });
+    const consumedToken9 = `consumed-token-${testSuffix}`;
+    await prisma.verificationToken.create({
+      data: {
+        token: consumedToken9,
+        user_id: user9.id,
+        channel: 'email',
+        identifier: pendingEmail9,
+        expires_at: new Date(Date.now() + 3600000),
+        consumed_at: new Date(),
+      },
+    });
+
     const res9 = await request(app.getHttpServer())
       .post('/auth/verify-email')
-      .send({ token: 'test-token-consumed' }) // Seed consumed token
+      .send({ token: consumedToken9 })
       .expect(410);
 
     assert.strictEqual(res9.body.error.code, 'TOKEN_ALREADY_CONSUMED');
@@ -369,16 +450,69 @@ async function runAuthSupertestSuite() {
     );
 
     // -------------------------------------------------------------------------
+    // TEST 10.1: IP Spoofing Prevention (TRUST_PROXY_HOPS=0)
+    // -------------------------------------------------------------------------
+    console.log('[TEST 10.1] IP spoofing via X-Forwarded-For is ignored when TRUST_PROXY_HOPS=0');
+    // Disable proxy trust
+    app.set('trust proxy', 0);
+    rateLimitService.clear();
+
+    for (let i = 0; i < 5; i++) {
+      await request(app.getHttpServer())
+        .post('/auth/register')
+        .set('x-forwarded-for', `203.0.113.${100 + i}`) // Different fake IP each time
+        .send({
+          merchant_name: `Spoof Shop ${i}`,
+          full_name: 'Spoof Bot',
+          email: `spoof${i}.${testSuffix}@spam.test`,
+          password: 'Password123!',
+          terms_accepted: true,
+          terms_version: '2026.1',
+        })
+        .expect(201);
+    }
+
+    // 6th attempt must fail with 429 because the REAL IP (localhost) is the same
+    const res10_1 = await request(app.getHttpServer())
+      .post('/auth/register')
+      .set('x-forwarded-for', '203.0.113.200')
+      .send({
+        merchant_name: 'Spoof Blocked Shop',
+        full_name: 'Spoof Blocked Bot',
+        email: `spoofblocked.${testSuffix}@spam.test`,
+        password: 'Password123!',
+        terms_accepted: true,
+        terms_version: '2026.1',
+      })
+      .expect(429);
+
+    assert.strictEqual(res10_1.body.error.code, 'RATE_LIMITED');
+    console.log('  PASS: Spoofed X-Forwarded-For ignored, limit enforced on real IP');
+
+    // Restore proxy trust for subsequent tests
+    app.set('trust proxy', 1);
+
+    // -------------------------------------------------------------------------
     // AC-AUTH-02-11: Resend-verification rate limit exceeded
     // -------------------------------------------------------------------------
     console.log('[TEST 11 / AC-AUTH-02-11] Resend-verification rate limit (60s cooldown)');
     rateLimitService.clear();
-    const pendingEmail = 'pending@shipde.vn'; // Seed pending user
+    const pendingEmail11 = `pending11.${testSuffix}@shipde.vn`;
+    await prisma.user.create({
+      data: {
+        email: pendingEmail11,
+        password_hash: await hashPassword('SecurePassword123!'),
+        status: 'pending_verification',
+        full_name: 'Pending User 11',
+        role: 'OWNER',
+        merchant_id: res1.body.data.merchant_id,
+      },
+    });
 
     // 1st resend succeeds
     const res11_1 = await request(app.getHttpServer())
       .post('/auth/verify/resend')
-      .send({ identifier: pendingEmail, channel: 'email' })
+      .send({ identifier: pendingEmail11, channel: 'email' })
       .expect(200);
 
     assert.strictEqual(res11_1.body.data.status, 'SENT');
@@ -387,7 +521,7 @@ async function runAuthSupertestSuite() {
     // 2nd resend within cooldown returns 429 RATE_LIMITED
     const res11_2 = await request(app.getHttpServer())
       .post('/auth/verify/resend')
-      .send({ identifier: pendingEmail, channel: 'email' })
+      .send({ identifier: pendingEmail11, channel: 'email' })
       .expect(429);
 
     assert.strictEqual(res11_2.body.error.code, 'RATE_LIMITED');
@@ -556,9 +690,519 @@ async function runAuthSupertestSuite() {
     assert.strictEqual(res18.body.error.code, 'OTP_MAX_ATTEMPTS_EXCEEDED');
     console.log('  PASS: OTP brute-force locked out with 429 OTP_MAX_ATTEMPTS_EXCEEDED');
 
-    console.log('================================================================');
-    console.log('✅ ALL 18 SUPERTEST INTEGRATION TESTS PASSED (FEAT-AUTH-01)');
-    console.log('================================================================');
+    // -------------------------------------------------------------------------
+    // [TEST 19] Forgot Password Anti-Enumeration & Rate Limiting (FEAT-AUTH-04)
+    // -------------------------------------------------------------------------
+    console.log('[TEST 19 / FEAT-AUTH-04] Forgot password anti-enumeration and rate limiting');
+
+    // 19a. Non-existent email returns generic 200 SENT (anti-enumeration)
+    const nonExistentEmail = `nonexistent.${testSuffix}@shipde.vn`;
+    const originalConsoleLog = console.log;
+    let auditLogMessage19a = '';
+    console.log = (...args: any[]) => {
+      const msg = typeof args[0] === 'string' ? args[0] : JSON.stringify(args);
+      if (msg.includes('AUTH_FORGOT_PASSWORD_NO_USER')) {
+        auditLogMessage19a += JSON.stringify(args);
+      }
+      originalConsoleLog(...args);
+    };
+
+    try {
+      const res19a = await request(app.getHttpServer())
+        .post('/auth/forgot-password')
+        .set('x-forwarded-for', '203.0.113.10')
+        .send({ identifier: nonExistentEmail })
+        .expect(200);
+
+      assert.strictEqual(res19a.body.data.status, 'SENT');
+      assert.strictEqual(res19a.body.data.channel, 'email');
+      assert.ok(
+        auditLogMessage19a.includes('AUTH_FORGOT_PASSWORD_NO_USER'),
+        'Must log AUTH_FORGOT_PASSWORD_NO_USER'
+      );
+      assert.ok(
+        !auditLogMessage19a.includes(nonExistentEmail),
+        'Audit log console args must not contain raw email'
+      );
+    } finally {
+      console.log = originalConsoleLog;
+    }
+    console.log('  PASS: Non-existent email returned generic SENT and protected PII in audit logs');
+
+    // 19b. Non-existent phone returns generic 200 SENT (anti-enumeration)
+    const nonExistentPhone = '0909999999';
+    let auditLogMessage19b = '';
+    console.log = (...args: any[]) => {
+      const msg = typeof args[0] === 'string' ? args[0] : JSON.stringify(args);
+      if (msg.includes('AUTH_FORGOT_PASSWORD_NO_USER')) {
+        auditLogMessage19b += JSON.stringify(args);
+      }
+      originalConsoleLog(...args);
+    };
+
+    try {
+      const res19b = await request(app.getHttpServer())
+        .post('/auth/forgot-password')
+        .set('x-forwarded-for', '203.0.113.11')
+        .send({ identifier: nonExistentPhone })
+        .expect(200);
+
+      assert.strictEqual(res19b.body.data.status, 'SENT');
+      assert.strictEqual(res19b.body.data.channel, 'phone');
+      assert.ok(
+        auditLogMessage19b.includes('AUTH_FORGOT_PASSWORD_NO_USER'),
+        'Must log AUTH_FORGOT_PASSWORD_NO_USER'
+      );
+      assert.ok(
+        !auditLogMessage19b.includes(nonExistentPhone),
+        'Audit log console args must not contain raw phone'
+      );
+    } finally {
+      console.log = originalConsoleLog;
+    }
+    console.log('  PASS: Non-existent phone returned generic SENT and protected PII in audit logs');
+
+    // 19c. Unverified contact returns generic 200 SENT (anti-enumeration)
+    const unverifiedEmail = `unverified.${testSuffix}@shipde.vn`;
+    await prisma.user.create({
+      data: {
+        email: unverifiedEmail,
+        phone: `+84988${testSuffix.toString().slice(-5).padStart(5, '0')}`,
+        phone_verified_at: new Date(),
+        password_hash: await hashPassword('SecurePassword123!'),
+        status: 'active',
+        full_name: 'Unverified User 19c',
+        role: 'OWNER',
+        merchant_id: res1.body.data.merchant_id,
+      },
+    });
+    let auditLogMessage19c = '';
+    console.log = (...args: any[]) => {
+      const msg = typeof args[0] === 'string' ? args[0] : JSON.stringify(args);
+      if (msg.includes('AUTH_FORGOT_PASSWORD_UNVERIFIED')) {
+        auditLogMessage19c += JSON.stringify(args);
+      }
+      originalConsoleLog(...args);
+    };
+
+    try {
+      const res19c = await request(app.getHttpServer())
+        .post('/auth/forgot-password')
+        .set('x-forwarded-for', '203.0.113.12')
+        .send({ identifier: unverifiedEmail })
+        .expect(200);
+      assert.strictEqual(res19c.body.data.status, 'SENT');
+
+      const unverifiedUser = await prisma.user.findUnique({ where: { email: unverifiedEmail } });
+      assert.ok(unverifiedUser, 'Unverified user must exist');
+
+      const auditLogs19c = await prisma.auditLog.findMany({
+        where: { user_id: unverifiedUser.id, action: 'AUTH_FORGOT_PASSWORD_UNVERIFIED' },
+        orderBy: { created_at: 'desc' },
+        take: 1,
+      });
+      assert.strictEqual(auditLogs19c.length, 1, 'Audit log must be created');
+
+      const fullAuditRow = JSON.stringify(auditLogs19c[0]);
+      assert.ok(
+        !fullAuditRow.includes(unverifiedEmail),
+        'Audit log row must not contain raw email'
+      );
+      assert.ok(
+        !auditLogMessage19c.includes(unverifiedEmail),
+        'Console args must not contain raw email'
+      );
+    } finally {
+      console.log = originalConsoleLog;
+    }
+    console.log(
+      '  PASS: Unverified user returned generic SENT (anti-enumeration) and protected PII in audit logs'
+    );
+
+    // 19c2. Suspended user returns generic 200 SENT (anti-enumeration)
+    const userToSuspend = await prisma.user.findFirst({ where: { email: email1 } });
+    await prisma.user.update({
+      where: { id: userToSuspend!.id },
+      data: { status: 'suspended' },
+    });
+    const res19c2 = await request(app.getHttpServer())
+      .post('/auth/forgot-password')
+      .set('x-forwarded-for', '203.0.113.12')
+      .send({ identifier: email1 })
+      .expect(200);
+    assert.strictEqual(res19c2.body.data.status, 'SENT');
+    // Restore
+    await prisma.user.update({
+      where: { id: userToSuspend!.id },
+      data: { status: 'active' },
+    });
+    console.log('  PASS: Suspended user returned generic SENT (anti-enumeration)');
+
+    // 19d. Valid user gets token sent and stored in mock adapter
+    rateLimitService.clear();
+    const res19d = await request(app.getHttpServer())
+      .post('/auth/forgot-password')
+      .set('x-forwarded-for', '203.0.113.13')
+      .send({ identifier: email1 })
+      .expect(200);
+    assert.strictEqual(res19d.body.data.status, 'SENT');
+    assert.strictEqual(res19d.body.data.channel, 'email');
+    const lastMsg19d = mockDeliveryAdapter.getLastMessage();
+    assert.ok(lastMsg19d, 'Expected token delivery message');
+    assert.strictEqual(lastMsg19d.recipient, email1);
+    assert.ok(lastMsg19d.link, 'Expected reset link in delivery message');
+    const resetToken19d = new URL(lastMsg19d.link!).searchParams.get('token')!;
+    console.log('  PASS: Valid user received reset token via delivery adapter');
+
+    // 19d2. Valid phone user gets token sent
+    rateLimitService.clear();
+    const res19d2 = await request(app.getHttpServer())
+      .post('/auth/forgot-password')
+      .set('x-forwarded-for', '203.0.113.13')
+      .send({ identifier: phone2 })
+      .expect(200);
+    assert.strictEqual(res19d2.body.data.channel, 'phone');
+    const lastMsg19d2 = mockDeliveryAdapter.getLastMessage();
+    assert.strictEqual(lastMsg19d2!.recipient, phone2);
+    console.log('  PASS: Valid phone user received reset token via delivery adapter (AC-04)');
+
+    // 19e. IP rate limit: 5 requests/hour per IP
+    rateLimitService.clear();
+    for (let i = 1; i <= 5; i++) {
+      await request(app.getHttpServer())
+        .post('/auth/forgot-password')
+        .set('x-forwarded-for', '198.51.100.50')
+        .send({ identifier: `rateip${i}.${testSuffix}@shipde.vn` })
+        .expect(200);
+    }
+    const res19e = await request(app.getHttpServer())
+      .post('/auth/forgot-password')
+      .set('x-forwarded-for', '198.51.100.50')
+      .send({ identifier: `rateip6.${testSuffix}@shipde.vn` })
+      .expect(429);
+    assert.strictEqual(res19e.body.error.code, 'RATE_LIMITED');
+    assert.ok(res19e.headers['retry-after'], 'Expected Retry-After header');
+    console.log('  PASS: IP rate limit enforced at 5 requests/hour (429 RATE_LIMITED)');
+
+    // 19f. Identifier rate limit: 3 requests/hour per identifier
+    rateLimitService.clear();
+    const testId19f = `rateid.${testSuffix}@shipde.vn`;
+    for (let i = 1; i <= 3; i++) {
+      await request(app.getHttpServer())
+        .post('/auth/forgot-password')
+        .set('x-forwarded-for', `198.51.100.${50 + i}`)
+        .send({ identifier: testId19f })
+        .expect(200);
+    }
+    const res19f = await request(app.getHttpServer())
+      .post('/auth/forgot-password')
+      .set('x-forwarded-for', '198.51.100.55')
+      .send({ identifier: testId19f })
+      .expect(429);
+    assert.strictEqual(res19f.body.error.code, 'RATE_LIMITED');
+    assert.ok(res19f.headers['retry-after'], 'Expected Retry-After header');
+    console.log('  PASS: Identifier rate limit enforced at 3 requests/hour (429 RATE_LIMITED)');
+
+    // 19g. Invalid email format returns 400 VALIDATION_ERROR
+    const res19g = await request(app.getHttpServer())
+      .post('/auth/forgot-password')
+      .send({ identifier: 'invalid-email' })
+      .expect(400);
+    assert.strictEqual(res19g.body.error.code, 'VALIDATION_ERROR');
+    assert.strictEqual(res19g.body.error.fields[0].field, 'identifier');
+    console.log('  PASS: Invalid email format rejected with 400 VALIDATION_ERROR');
+
+    // 19h. Invalid phone format returns 400 VALIDATION_ERROR
+    const res19h = await request(app.getHttpServer())
+      .post('/auth/forgot-password')
+      .send({ identifier: '12345' })
+      .expect(400);
+    assert.strictEqual(res19h.body.error.code, 'VALIDATION_ERROR');
+    assert.strictEqual(res19h.body.error.fields[0].field, 'identifier');
+    console.log('  PASS: Invalid phone format rejected with 400 VALIDATION_ERROR');
+
+    // 19i. Empty identifier returns 400 VALIDATION_ERROR
+    const res19i = await request(app.getHttpServer())
+      .post('/auth/forgot-password')
+      .send({ identifier: '' })
+      .expect(400);
+    assert.strictEqual(res19i.body.error.code, 'VALIDATION_ERROR');
+    assert.strictEqual(res19i.body.error.fields[0].field, 'identifier');
+    console.log('  PASS: Empty identifier rejected with 400 VALIDATION_ERROR');
+
+    // -------------------------------------------------------------------------
+    // [TEST 20] Verify Reset Token (FEAT-AUTH-04)
+    // -------------------------------------------------------------------------
+    console.log('[TEST 20 / FEAT-AUTH-04] Verify reset token');
+
+    // 20a. Valid token returns identifier and channel
+    const res20a = await request(app.getHttpServer())
+      .post('/auth/verify-reset-token')
+      .send({ token: resetToken19d })
+      .expect(200);
+    assert.strictEqual(res20a.body.data.valid, true);
+    assert.strictEqual(res20a.body.data.identifier, email1);
+    assert.strictEqual(res20a.body.data.channel, 'email');
+    console.log('  PASS: Valid token returns identifier and channel');
+
+    // 20b. Invalid token returns 400 INVALID_TOKEN
+    const res20b = await request(app.getHttpServer())
+      .post('/auth/verify-reset-token')
+      .send({ token: 'invalid-token-123' })
+      .expect(400);
+    assert.strictEqual(res20b.body.error.code, 'INVALID_TOKEN');
+    console.log('  PASS: Invalid token rejected with 400 INVALID_TOKEN');
+
+    // 20c. Missing token returns 400 VALIDATION_ERROR
+    const res20c = await request(app.getHttpServer())
+      .post('/auth/verify-reset-token')
+      .send({})
+      .expect(400);
+    assert.strictEqual(res20c.body.error.code, 'VALIDATION_ERROR');
+    assert.strictEqual(res20c.body.error.fields[0].field, 'token');
+    console.log('  PASS: Missing token rejected with 400 VALIDATION_ERROR');
+
+    // -------------------------------------------------------------------------
+    // [TEST 21] Reset Password (FEAT-AUTH-04)
+    // -------------------------------------------------------------------------
+    console.log('[TEST 21 / FEAT-AUTH-04] Reset password');
+
+    // 21a. Valid token + strong matching password → 200, token consumed, sessions revoked
+    let resetLogOutput = '';
+    console.log = (...args: any[]) => {
+      resetLogOutput += JSON.stringify(args);
+      originalConsoleLog(...args);
+    };
+
+    try {
+      const res21a = await request(app.getHttpServer())
+        .post('/auth/reset-password')
+        .set('x-forwarded-for', '203.0.113.13')
+        .send({
+          token: resetToken19d,
+          password: 'NewPassword123!',
+          password_confirm: 'NewPassword123!',
+        })
+        .expect(200);
+      assert.strictEqual(
+        res21a.body.data.message,
+        'Mật khẩu đã được đặt lại thành công. Tất cả phiên đăng nhập khác đã bị thu hồi.'
+      );
+      assert.ok(!resetLogOutput.includes(email1), 'Reset logs must not contain raw email');
+    } finally {
+      console.log = originalConsoleLog;
+    }
+    console.log('  PASS: Valid reset succeeded, token consumed, sessions revoked, PII protected');
+
+    // 21b. Reuse consumed token → 400 TOKEN_ALREADY_USED
+    const res21b = await request(app.getHttpServer())
+      .post('/auth/reset-password')
+      .set('x-forwarded-for', '203.0.113.13')
+      .send({
+        token: resetToken19d,
+        password: 'AnotherPass123!',
+        password_confirm: 'AnotherPass123!',
+      })
+      .expect(400);
+    assert.strictEqual(res21b.body.error.code, 'TOKEN_ALREADY_USED');
+    console.log('  PASS: Consumed token rejected with 400 TOKEN_ALREADY_USED');
+
+    // 21c. Invalid token + valid password → 400 INVALID_TOKEN
+    const res21c = await request(app.getHttpServer())
+      .post('/auth/reset-password')
+      .set('x-forwarded-for', '203.0.113.13')
+      .send({
+        token: 'invalid-token-xyz',
+        password: 'ValidPass123!',
+        password_confirm: 'ValidPass123!',
+      })
+      .expect(400);
+    assert.strictEqual(res21c.body.error.code, 'INVALID_TOKEN');
+    console.log('  PASS: Invalid token rejected with 400 INVALID_TOKEN');
+
+    // 21d. Fresh token + weak password → 400 VALIDATION_ERROR with WEAK_PASSWORD
+    rateLimitService.clear();
+    const res21dFP = await request(app.getHttpServer())
+      .post('/auth/forgot-password')
+      .set('x-forwarded-for', '203.0.113.13')
+      .send({ identifier: email1 })
+      .expect(200);
+    const lastMsg21d = mockDeliveryAdapter.getLastMessage();
+    const resetToken21d = new URL(lastMsg21d!.link!).searchParams.get('token')!;
+    const res21d = await request(app.getHttpServer())
+      .post('/auth/reset-password')
+      .set('x-forwarded-for', '203.0.113.13')
+      .send({ token: resetToken21d, password: 'weakpass', password_confirm: 'weakpass' })
+      .expect(400);
+    assert.strictEqual(res21d.body.error.code, 'VALIDATION_ERROR');
+    const weakField = res21d.body.error.fields?.find((f) => f.code === 'WEAK_PASSWORD');
+    assert.ok(weakField, 'Expected WEAK_PASSWORD field error');
+    console.log('  PASS: Weak password rejected with 400 VALIDATION_ERROR WEAK_PASSWORD');
+
+    // 21e. Fresh token + password mismatch → 400 VALIDATION_ERROR with MISMATCH
+    const res21e = await request(app.getHttpServer())
+      .post('/auth/reset-password')
+      .set('x-forwarded-for', '203.0.113.13')
+      .send({
+        token: resetToken21d,
+        password: 'ValidPass123!',
+        password_confirm: 'DifferentPass123!',
+      })
+      .expect(400);
+    assert.strictEqual(res21e.body.error.code, 'VALIDATION_ERROR');
+    const mismatchField = res21e.body.error.fields?.find((f: any) => f.code === 'MISMATCH');
+    assert.ok(mismatchField, 'Expected MISMATCH field error');
+    console.log('  PASS: Password mismatch rejected with 400 VALIDATION_ERROR MISMATCH');
+
+    // 21h. Expired token (AC-07)
+    rateLimitService.clear();
+    await request(app.getHttpServer()).post('/auth/forgot-password').send({ identifier: email1 });
+    const expiredMsg = mockDeliveryAdapter.getLastMessage();
+    const expiredToken = new URL(expiredMsg.link!).searchParams.get('token')!;
+
+    const dbToken = await prisma.passwordResetToken.findFirst({
+      where: { identifier: email1, consumed_at: null },
+      orderBy: { created_at: 'desc' },
+    });
+    if (dbToken) {
+      await prisma.passwordResetToken.update({
+        where: { id: dbToken.id },
+        data: { expires_at: new Date(Date.now() - 3600000) },
+      });
+    }
+
+    const res21h = await request(app.getHttpServer())
+      .post('/auth/reset-password')
+      .set('x-forwarded-for', '203.0.113.13')
+      .send({
+        token: expiredToken,
+        password: 'AnotherPass123!',
+        password_confirm: 'AnotherPass123!',
+      })
+      .expect(400);
+    assert.strictEqual(res21h.body.error.code, 'TOKEN_EXPIRED');
+    console.log('  PASS: Expired token rejected with 400 TOKEN_EXPIRED');
+
+    // 21i. Atomic single-use test (concurrent requests)
+    rateLimitService.clear();
+    await request(app.getHttpServer()).post('/auth/forgot-password').send({ identifier: email1 });
+    const raceMsg = mockDeliveryAdapter.getLastMessage();
+    const raceToken = new URL(raceMsg.link!).searchParams.get('token')!;
+
+    const [resRace1, resRace2] = await Promise.all([
+      request(app.getHttpServer())
+        .post('/auth/reset-password')
+        .set('x-forwarded-for', '203.0.113.14')
+        .send({
+          token: raceToken,
+          password: 'RacePassword123!',
+          password_confirm: 'RacePassword123!',
+        }),
+      request(app.getHttpServer())
+        .post('/auth/reset-password')
+        .set('x-forwarded-for', '203.0.113.15')
+        .send({
+          token: raceToken,
+          password: 'RacePassword456!',
+          password_confirm: 'RacePassword456!',
+        }),
+    ]);
+
+    const statuses = [resRace1.status, resRace2.status].sort();
+    assert.deepStrictEqual(statuses, [200, 400]); // one succeeds, one fails
+    const failedRes = resRace1.status === 400 ? resRace1 : resRace2;
+    assert.strictEqual(failedRes.body.error.code, 'TOKEN_ALREADY_USED');
+
+    const userRace = await prisma.user.findFirst({ where: { email: email1 } });
+    const pw1Match = await verifyPassword('RacePassword123!', userRace!.password_hash);
+    const pw2Match = await verifyPassword('RacePassword456!', userRace!.password_hash);
+    assert.ok(pw1Match || pw2Match, 'Password should have changed to one of the race passwords');
+    assert.ok(!(pw1Match && pw2Match), 'Password cannot be both');
+    console.log('  PASS: Concurrent resets atomically handled (exactly one succeeds)');
+
+    // 21j. Suspended account during reset returns 403 FORBIDDEN
+    rateLimitService.clear();
+    await request(app.getHttpServer()).post('/auth/forgot-password').send({ identifier: email1 });
+    const suspMsg = mockDeliveryAdapter.getLastMessage();
+    const suspToken = new URL(suspMsg!.link!).searchParams.get('token')!;
+
+    // Suspend the account
+    const userForSuspension = await prisma.user.findFirst({ where: { email: email1 } });
+    await prisma.user.update({
+      where: { id: userForSuspension!.id },
+      data: { status: 'suspended' },
+    });
+
+    const resVerifySusp = await request(app.getHttpServer())
+      .post('/auth/verify-reset-token')
+      .send({ token: suspToken })
+      .expect(403);
+    assert.strictEqual(resVerifySusp.body.error.code, 'FORBIDDEN');
+
+    const res21j = await request(app.getHttpServer())
+      .post('/auth/reset-password')
+      .set('x-forwarded-for', '203.0.113.16')
+      .send({
+        token: suspToken,
+        password: 'NewPassword123!',
+        password_confirm: 'NewPassword123!',
+      })
+      .expect(403);
+    assert.strictEqual(res21j.body.error.code, 'FORBIDDEN');
+    console.log('  PASS: Verify and reset for suspended account rejected with 403 FORBIDDEN');
+
+    // Restore the account
+    await prisma.user.update({
+      where: { id: userForSuspension!.id },
+      data: { status: 'active' },
+    });
+
+    // 21k. Verify session revocation and audit logging
+    rateLimitService.clear();
+    await request(app.getHttpServer()).post('/auth/forgot-password').send({ identifier: email1 });
+    const revokeMsg = mockDeliveryAdapter.getLastMessage();
+    const revokeToken = new URL(revokeMsg!.link!).searchParams.get('token')!;
+
+    await prisma.deviceSession.create({
+      data: {
+        user_id: userForSuspension!.id,
+        merchant_id: userForSuspension!.merchant_id,
+        session_token_hash: 'dummy-hash-' + testSuffix,
+        expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+        device_id: 'web-session-test',
+        last_active_at: new Date(),
+        is_revoked: false,
+      },
+    });
+
+    const sessionsBefore = await prisma.deviceSession.findMany({
+      where: { user_id: userForSuspension!.id, is_revoked: false },
+    });
+    assert.ok(sessionsBefore.length > 0, 'Should have active sessions before reset');
+
+    const res21k = await request(app.getHttpServer())
+      .post('/auth/reset-password')
+      .set('x-forwarded-for', '203.0.113.17')
+      .send({
+        token: revokeToken,
+        password: 'RevokePassword123!',
+        password_confirm: 'RevokePassword123!',
+      })
+      .expect(200);
+
+    const sessionsAfter = await prisma.deviceSession.findMany({
+      where: { user_id: userForSuspension!.id },
+    });
+    assert.ok(
+      sessionsAfter.length > 0 && sessionsAfter.every((s) => s.is_revoked),
+      'All sessions should be revoked after reset'
+    );
+
+    const auditLogs = await prisma.auditLog.findMany({
+      where: { user_id: userForSuspension!.id, action: 'AUTH_PASSWORD_RESET_SESSIONS_REVOKED' },
+    });
+    assert.ok(auditLogs.length > 0, 'Audit log for password reset must be persisted');
+    console.log('  PASS: Sessions revoked and audit logs verified in database');
   } finally {
     await app.close();
   }
@@ -567,6 +1211,6 @@ async function runAuthSupertestSuite() {
 runAuthSupertestSuite()
   .then(() => process.exit(0))
   .catch((err) => {
-    console.error('❌ Auth Supertest Suite Failed:', err);
+    console.error('Auth Supertest Suite Failed:', err);
     process.exit(1);
   });

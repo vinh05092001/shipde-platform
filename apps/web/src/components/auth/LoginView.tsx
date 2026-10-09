@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { useAuth, AuthStatusBlock } from '@/context/AuthContext';
 import {
   Mail,
@@ -335,12 +336,12 @@ export const LoginView: React.FC<Props> = ({ onSwitchToRegister }) => {
                     <div>
                       <div className="flex justify-between items-center mb-1.5">
                         <label className="text-xs font-bold text-slate-700">Mật Khẩu</label>
-                        <span
-                          title="Tính năng khôi phục mật khẩu sẽ ra mắt sau. Vui lòng liên hệ CSKH nếu bạn cần hỗ trợ."
-                          className="text-xs text-slate-400 font-semibold cursor-not-allowed"
+                        <Link
+                          href="/forgot-password"
+                          className="text-xs text-[#EA4B12] font-semibold hover:underline"
                         >
                           Quên mật khẩu?
-                        </span>
+                        </Link>
                       </div>
                       <div className="relative">
                         <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />

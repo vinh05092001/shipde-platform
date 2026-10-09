@@ -95,7 +95,7 @@ function freshness(reading, currentIdentity, options) {
   const identity = checkFreshness(reading, currentIdentity);
   if (!identity.usable) return identity;
 
-  const cachedAt = Date.parse(reading.cachedAt || reading.observedAt || '');
+  const cachedAt = Date.parse(reading.cachedAt || reading.observedAt || reading.updatedAt || '');
   if (!Number.isFinite(cachedAt)) {
     return { usable: false, action: 'reread', reason: 'bản ghi không có mốc thời gian' };
   }
@@ -170,7 +170,7 @@ function identityToCompare(reading, hostIdentity, resolvers) {
   // is discarded and the panel goes blank for a reason that is not true.
   const provider = reading && reading.provider;
   const resolve = (resolvers || PROVIDER_IDENTITY)[provider];
-  if (resolve) return resolve();
+  if (resolve) return resolve(reading);
 
   return hostIdentity;
 }
@@ -187,6 +187,7 @@ const PROVIDER_IDENTITY = {
   // its CLI is signed in as — see budgetFingerprint. Listing it here with a
   // file-based lookup would restore a check that cannot fail and cannot help.
   'claude-code': () => require('./claude-usage').readAccount({}),
+  'agy-pool': (reading) => reading && reading.account,
 };
 
 /**
@@ -204,6 +205,15 @@ function usableReadings(currentIdentity, options) {
   const problems = {};
 
   for (const [accountId, reading] of Object.entries(store.accounts || {})) {
+    if (
+      reading &&
+      typeof reading === 'object' &&
+      reading.status &&
+      (reading.updatedAt || reading.cachedAt || reading.observedAt)
+    ) {
+      reported[accountId] = reading;
+      continue;
+    }
     const verdict = freshness(
       reading,
       identityToCompare(reading, currentIdentity, (options || {}).identityResolvers),
@@ -216,6 +226,113 @@ function usableReadings(currentIdentity, options) {
   return { reported, problems };
 }
 
+function withQuotaLock(options, fn) {
+  if (global.__quotaLocked) return fn();
+  const file = storePath(options);
+  const lock = file + '.lock';
+  const parent = path.dirname(file);
+  const fs = require('fs');
+  if (!fs.existsSync(parent)) fs.mkdirSync(parent, { recursive: true });
+
+  const maxRetries = 100;
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      fs.mkdirSync(lock);
+      break;
+    } catch (e) {
+      if (e.code !== 'EEXIST') throw e;
+      if (i === maxRetries - 1) throw new Error('Could not acquire quota lock');
+      const start = Date.now();
+      while (Date.now() - start < 50) {}
+    }
+  }
+  global.__quotaLocked = true;
+  try {
+    return fn();
+  } finally {
+    global.__quotaLocked = false;
+    try {
+      fs.rmdirSync(lock);
+    } catch (e) {}
+  }
+}
+
+function getReservations(options) {
+  const store = loadStore(options);
+  return store.reservations || {};
+}
+
+function saveReservations(reservations, options) {
+  const store = loadStore(options);
+  store.reservations = reservations;
+  fs.mkdirSync(path.dirname(storePath(options)), { recursive: true });
+  fs.writeFileSync(storePath(options), JSON.stringify(store, null, 2));
+}
+
+function activeReservations(options) {
+  const res = getReservations(options);
+  const byAccount = {};
+  const byOffering = {};
+  for (const r of Object.values(res)) {
+    byAccount[r.accountId] = byAccount[r.accountId] || [];
+    byAccount[r.accountId].push(r);
+    byOffering[r.offeringId] = byOffering[r.offeringId] || [];
+    byOffering[r.offeringId].push(r);
+  }
+  return { byAccount, byOffering };
+}
+
+const RESERVATION_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
+
+function pruneReservations(now, runningWorkItems, options, queuedWorkItems) {
+  const res = getReservations(options);
+  let changed = false;
+  const running = runningWorkItems || new Set();
+  const queued = queuedWorkItems || new Set();
+  for (const [id, r] of Object.entries(res)) {
+    const at = typeof r.at === 'number' ? r.at : Date.parse(r.at);
+    const isExpired = !Number.isFinite(at) || now - at > RESERVATION_TTL_MS || at > now + 60 * 1000;
+    const isQueued = queued.has(r.workItemId);
+    if (!running.has(r.workItemId) && (isExpired || isQueued)) {
+      delete res[id];
+      changed = true;
+    }
+  }
+  if (changed) saveReservations(res, options);
+}
+
+function releaseReservation(workItemId, offeringId, options) {
+  withQuotaLock(options, () => {
+    const res = getReservations(options);
+    let changed = false;
+    const prefix = workItemId + '::';
+    for (const key of Object.keys(res)) {
+      if (key === prefix + offeringId || (!offeringId && key.startsWith(prefix))) {
+        delete res[key];
+        changed = true;
+      }
+    }
+    if (changed) saveReservations(res, options);
+  });
+}
+
+function recordReservation(workItemId, role, accountId, offeringId, tokens, options) {
+  withQuotaLock(options, () => {
+    const res = getReservations(options);
+    const key = workItemId + '::' + offeringId;
+    res[key] = {
+      workItemId,
+      role,
+      accountId,
+      offeringId,
+      tokens,
+      at: (options && options.now) || Date.now(),
+      cost: 0,
+    };
+    saveReservations(res, options);
+  });
+}
+
 module.exports = {
   DEFAULT_MAX_AGE_MS,
   DEFAULT_FAILURE_MAX_AGE_MS,
@@ -226,4 +343,10 @@ module.exports = {
   identityToCompare,
   PROVIDER_IDENTITY,
   usableReadings,
+  withQuotaLock,
+  getReservations,
+  activeReservations,
+  pruneReservations,
+  releaseReservation,
+  recordReservation,
 };

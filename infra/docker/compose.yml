@@ -37,7 +37,7 @@ services:
       start_period: 3s
 
   minio:
-    image: quay.io/minio/minio:RELEASE.2025-02-18T16-25-55Z
+    image: cgr.dev/chainguard/minio@sha256:d7c906993247627c19f37fc1fa302c34cf2d209ae0e7dc7d52fb0be6ac2849ba
     container_name: shipde-minio
     restart: unless-stopped
     command: server /data --console-address ":9001"
@@ -51,14 +51,17 @@ services:
       - shipde-minio-data:/data
     healthcheck:
       test:
-        ['CMD-SHELL', 'mc ready local || curl -f http://localhost:9000/minio/health/live || exit 1']
+        [
+          'CMD-SHELL',
+          'wget -q -O /dev/null http://127.0.0.1:9000/minio/health/live || curl -f http://127.0.0.1:9000/minio/health/live || exit 1',
+        ]
       interval: 3s
       timeout: 5s
       retries: 15
       start_period: 5s
 
   minio-init:
-    image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z
+    image: cgr.dev/chainguard/minio-client@sha256:f0dd93b48af1f8a641edcd3c64661c8dbe05189bd2ef2f8cea216eb18af10bf8
     container_name: shipde-minio-init
     depends_on:
       minio:

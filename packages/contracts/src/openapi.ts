@@ -119,6 +119,173 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/auth/forgot-password': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Request password reset link (FEAT-AUTH-04) */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody: {
+        content: {
+          'application/json': {
+            /** @description Email or phone number */
+            identifier: string;
+            /** @enum {string} */
+            channel?: 'email' | 'phone';
+          };
+        };
+      };
+      responses: {
+        /** @description Link sent */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+        /** @description Rate limited */
+        429: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/auth/verify-reset-token': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Verify password reset token (FEAT-AUTH-04) */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody: {
+        content: {
+          'application/json': {
+            token: string;
+          };
+        };
+      };
+      responses: {
+        /** @description Token valid */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+        /** @description Invalid, expired, or consumed token */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+        /** @description Account locked */
+        403: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/auth/reset-password': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Reset password using token (FEAT-AUTH-04) */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody: {
+        content: {
+          'application/json': {
+            token: string;
+            password: string;
+            password_confirm: string;
+          };
+        };
+      };
+      responses: {
+        /** @description Password updated and sessions revoked */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+        /** @description Invalid token or password mismatch */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+        /** @description Account locked */
+        403: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+        /** @description Rate limited */
+        429: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/auth/login': {
     parameters: {
       query?: never;
@@ -189,6 +356,75 @@ export interface paths {
     get: operations['getMe'];
     put?: never;
     post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/sessions': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List active sessions for current user (API-SESSION-LIST, FEAT-AUTH-06)
+     * @description Returns all sessions for the authenticated user within the merchant tenant.
+     *     Sessions expired by inactivity (30 days) or absolute lifetime (90 days) are
+     *     marked EXPIRED. The current session is marked with is_current=true.
+     */
+    get: operations['listSessions'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/sessions/{sessionId}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    /**
+     * Revoke a single session (API-SESSION-REVOKE, FEAT-AUTH-06)
+     * @description Revokes the specified session. Idempotent: revoking an already-revoked
+     *     session returns success. Requires ownership (same user).
+     */
+    delete: operations['revokeSession'];
+    options?: never;
+    head?: never;
+    /**
+     * Update session last activity (heartbeat) (API-SESSION-HEARTBEAT, FEAT-AUTH-06)
+     * @description Updates the last_active_at timestamp for the current session only.
+     *     Returns 403 if session is not ACTIVE or not owned by caller.
+     */
+    patch: operations['heartbeatSession'];
+    trace?: never;
+  };
+  '/sessions/revoke-all': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Revoke all sessions for current user (API-SESSION-REVOKE-ALL, FEAT-AUTH-06)
+     * @description Revokes all active sessions for the authenticated user. Optionally includes
+     *     the current session (logout everywhere). Returns count of revoked sessions.
+     */
+    post: operations['revokeAllSessions'];
     delete?: never;
     options?: never;
     head?: never;
@@ -693,6 +929,50 @@ export interface components {
       /** @example 123e4567-e89b-12d3-a456-426614174000 */
       correlationId: string;
     };
+    SessionInfo: {
+      /** Format: uuid */
+      session_id: string;
+      device_id: string;
+      device_model?: string;
+      user_agent?: string;
+      /** @description SHA-256 truncated hash of IP address */
+      ip_address?: string;
+      /** @enum {string} */
+      status: 'ACTIVE' | 'REVOKED' | 'EXPIRED' | 'INACTIVE';
+      /** Format: date-time */
+      last_active_at: string;
+      /** Format: date-time */
+      expires_at: string;
+      /** Format: date-time */
+      created_at: string;
+      /** @description True if this is the current session making the request */
+      is_current: boolean;
+    };
+    ListSessionsResponse: {
+      data: components['schemas']['SessionInfo'][];
+      meta: components['schemas']['Meta'];
+    };
+    RevokeSessionResponse: {
+      /** Format: uuid */
+      session_id: string;
+      /** @enum {string} */
+      status: 'REVOKED';
+      message: string;
+    };
+    RevokeAllSessionsRequest: {
+      /** @default false */
+      include_current: boolean;
+    };
+    RevokeAllSessionsResponse: {
+      revoked_count: number;
+      message: string;
+    };
+    HeartbeatSessionResponse: {
+      /** Format: uuid */
+      session_id: string;
+      /** Format: date-time */
+      last_active_at: string;
+    };
     ReadinessResponse: {
       /** @enum {string} */
       status: 'ok' | 'error';
@@ -745,6 +1025,7 @@ export interface components {
   };
   parameters: {
     Id: string;
+    SessionId: string;
     IdempotencyKey: string;
     Page: number;
     PageSize: number;
@@ -1014,6 +1295,109 @@ export interface operations {
         };
         content?: never;
       };
+    };
+  };
+  listSessions: {
+    parameters: {
+      query?: {
+        page?: components['parameters']['Page'];
+        page_size?: components['parameters']['PageSize'];
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Paged list of sessions */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ListSessionsResponse'];
+        };
+      };
+      401: components['responses']['Error'];
+    };
+  };
+  revokeSession: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        sessionId: components['parameters']['SessionId'];
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Session revoked */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['RevokeSessionResponse'];
+        };
+      };
+      401: components['responses']['Error'];
+      /** @description Not owner of session or cross-tenant */
+      403: components['responses']['Error'];
+      /** @description Session not found */
+      404: components['responses']['Error'];
+    };
+  };
+  heartbeatSession: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        sessionId: components['parameters']['SessionId'];
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Heartbeat updated */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HeartbeatSessionResponse'];
+        };
+      };
+      401: components['responses']['Error'];
+      /** @description Session not active or not owned by caller */
+      403: components['responses']['Error'];
+      /** @description Session not found */
+      404: components['responses']['Error'];
+    };
+  };
+  revokeAllSessions: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['RevokeAllSessionsRequest'];
+      };
+    };
+    responses: {
+      /** @description All sessions revoked */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['RevokeAllSessionsResponse'];
+        };
+      };
+      401: components['responses']['Error'];
     };
   };
   listShops: {

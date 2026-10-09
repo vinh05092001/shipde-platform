@@ -1,0 +1,26 @@
+{
+  "version": 2,
+  "combinations": [
+    {
+      "harness": "paseo",
+      "accessPath": "http://127.0.0.1:20128/v1",
+      "gateway": "9router",
+      "upstream": "ocz",
+      "accountId": "xkiro",
+      "quotaScope": "xkiro",
+      "model": "ocz/big-pickle",
+      "evidence": [
+        {
+          "ts": "2026-10-05T00:00:00.000Z",
+          "status": "passed",
+          "exitCode": 0,
+          "proofLevel": "WORK_ITEM_PASS"
+        }
+      ]
+    }
+  ],
+  "aliases": [],
+  "sharedQuotas": [],
+  "upstreamStatus": {},
+  "cooldowns": {}
+}

@@ -276,7 +276,7 @@ async function collectAoState(projectName = 'shipde-platform') {
           observedAt: new Date().toISOString(),
           latencyMs: Date.now() - startTime,
           provenance: 'ao status --json',
-          impact: 'Agent Orchestrator daemon is not running or unreachable',
+          impact: 'Daemon Agent Orchestrator không chạy hoặc không kết nối được',
           error: redactSensitive(statusRes.stderr || 'AO daemon not reachable'),
         },
         data: {
@@ -295,7 +295,7 @@ async function collectAoState(projectName = 'shipde-platform') {
           observedAt: new Date().toISOString(),
           latencyMs: Date.now() - startTime,
           provenance: 'ao status --json',
-          impact: 'Agent Orchestrator reported unready state',
+          impact: 'Agent Orchestrator báo trạng thái chưa sẵn sàng',
           error: daemon.error || `Daemon state: ${daemon.state}`,
         },
         data: {
@@ -306,7 +306,7 @@ async function collectAoState(projectName = 'shipde-platform') {
     }
 
     let sessions = [];
-    let sessionsHealthNote = 'None — AO daemon and sessions healthy';
+    let sessionsHealthNote = 'Bình thường — daemon AO và các phiên đều khoẻ';
     let sourceStatus = 'live';
     let sessionError = null;
 
@@ -348,7 +348,7 @@ async function collectAoState(projectName = 'shipde-platform') {
         observedAt: new Date().toISOString(),
         latencyMs: Date.now() - startTime,
         provenance: 'ao CLI',
-        impact: 'Agent Orchestrator query failed with exception',
+        impact: 'Truy vấn Agent Orchestrator lỗi',
         error: redactSensitive(err.message),
       },
       data: {

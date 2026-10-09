@@ -1,0 +1,16 @@
+{
+  "taskId": "TASK-AI-73-SAMPLE",
+  "role": "writer",
+  "complexity": "complex",
+  "requiredCapabilities": ["tools", "workspace-edit"],
+  "proofFloor": "WORK_ITEM_PASS",
+  "contextSize": 128000,
+  "expectedDuration": 600000,
+  "latencyPriority": "normal",
+  "qualityFloor": 80,
+  "costCeiling": 5000,
+  "requiredHarness": null,
+  "forbiddenFailureDomains": [],
+  "resourceCeiling": 4,
+  "currentWorkload": 1
+}
