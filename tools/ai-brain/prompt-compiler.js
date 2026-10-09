@@ -42,6 +42,86 @@ function roleOf(item) {
 }
 
 /**
+ * TM-R01: the "Tools for this item" section, built from the tool manifest.
+ *
+ * Returns { tools } for the matched tools (at most 8), or { error } when the
+ * manifest is missing or unreadable — in which case the prompt must stay
+ * unchanged and a warning is recorded instead of crashing.
+ */
+function toolsForPrompt(item, role, files, riskDomains) {
+  let toolsFor;
+  try {
+    toolsFor = require('./tool-manifest').toolsFor;
+  } catch (err) {
+    return { error: err };
+  }
+  const wanted = files && files.length > 0 ? files : (item && item.allowedPaths) || [];
+  let matched;
+  try {
+    matched = toolsFor({ role, files: wanted, riskDomains: riskDomains || [] });
+  } catch (err) {
+    return { error: err };
+  }
+  return { tools: (Array.isArray(matched) ? matched : []).slice(0, 8) };
+}
+
+/** The section body: tool id, purpose, and the command only when one is known. */
+function toolsSectionLines(tools) {
+  const lines = ['Tools for this item:'];
+  for (const t of tools) {
+    lines.push('- ' + t.id + ': ' + t.purpose + (t.command ? ' (command: ' + t.command + ')' : ''));
+  }
+  return lines.join('\n');
+}
+
+/**
+ * A missing or unreadable manifest is a warning, never a crash and never a
+ * silent divergence: it is printed and recorded in the decision log
+ * (WORKER_DEPS_UNAVAILABLE's WARNING stage) when the caller supplies a log.
+ */
+function warnToolManifest(err, item, role, logOpts) {
+  console.warn(
+    'WARN: tool manifest missing or unreadable; the prompt carries no Tools section:',
+    (err && err.message) || err
+  );
+  if (!logOpts) return;
+  try {
+    const decisions = require('./decisions');
+    decisions.recordDecision(
+      {
+        stage: decisions.Stage.WARNING,
+        warning: 'TOOL_MANIFEST_UNAVAILABLE',
+        workItemId: (item && item.id) || 'item',
+        role,
+        detail: 'tool manifest missing or unreadable; the prompt is unchanged',
+      },
+      logOpts
+    );
+  } catch (_) {
+    // A broken decision log must not break prompt compilation either.
+  }
+}
+
+/** TM-R04: which tools the prompt offered, tool ids only, in the decision log. */
+function recordPromptTools(item, role, tools, logOpts) {
+  if (!logOpts) return;
+  try {
+    const decisions = require('./decisions');
+    decisions.recordDecision(
+      {
+        stage: decisions.Stage.PROMPT_TOOLS,
+        workItemId: (item && item.id) || 'item',
+        role,
+        tools: tools.map((t) => t.id),
+      },
+      logOpts
+    );
+  } catch (_) {
+    // A broken decision log must not break prompt compilation.
+  }
+}
+
+/**
  * @param item  a plan work item (from planner.js)
  * @param ctx   { goal, specText, candidateKey, branch, usageFile, dirtyPaths, headSha, baseSha }
  * @returns a single prompt string
@@ -133,6 +213,17 @@ function compilePrompt(item, ctx) {
     lines.push('Base SHA: ' + baseSha);
   }
 
+  // TM-R01: the tools this item can use (author and repair prompts share this
+  // compiler), from the manifest and only when the manifest is readable.
+  const role = roleOf(i);
+  const selected = toolsForPrompt(i, role, dirtyPaths, i.riskDomains || []);
+  if (selected.error) {
+    warnToolManifest(selected.error, i, role, c.logOpts);
+  } else if (selected.tools.length > 0) {
+    lines.push(toolsSectionLines(selected.tools));
+    recordPromptTools(i, role, selected.tools, c.logOpts);
+  }
+
   if (c.usageFile) {
     lines.push(
       'Usage report: write your session usage report to ' +
@@ -177,6 +268,18 @@ function compileReviewPrompt(item, ctx) {
   }
   lines.push('Diff (' + (c.baseSha || 'base') + '..' + (c.headSha || 'head') + '):');
   lines.push(c.diffText || '(empty diff)');
+
+  // TM-R01: the review lane gets its own tool list — the security tools show
+  // up for the security-review lane exactly as the author lanes get theirs.
+  const revRole = roleOf(i).includes('review') ? roleOf(i) : 'reviewer';
+  const revSelected = toolsForPrompt(i, revRole, i.allowedPaths || [], i.riskDomains || []);
+  if (revSelected.error) {
+    warnToolManifest(revSelected.error, i, revRole, c.logOpts);
+  } else if (revSelected.tools.length > 0) {
+    lines.push(toolsSectionLines(revSelected.tools));
+    recordPromptTools(i, revRole, revSelected.tools, c.logOpts);
+  }
+
   lines.push(PUBLISHER_BOUNDARY);
   lines.push(
     'Review instructions: You are an independent reviewer operating in a separate read-only root. ' +

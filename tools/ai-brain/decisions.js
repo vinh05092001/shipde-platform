@@ -46,6 +46,12 @@ const Stage = Object.freeze({
   // A non-blocking warning (TASK-AI-127 WD-R03, e.g. WORKER_DEPS_UNAVAILABLE):
   // the run continues, but the condition must be readable in the same trace.
   WARNING: 'warning',
+  // TASK-AI-129 (TM-R04): the tool manifest reaches the same trace — which
+  // tools the prompt offered (PROMPT_TOOLS) and how each gate tool ran before
+  // review (TOOL_GATE). Gate entries carry the tool id and pass/fail only;
+  // raw tool output never lands here.
+  PROMPT_TOOLS: 'prompt_tools',
+  TOOL_GATE: 'tool_gate',
 });
 
 const SECRET_KEYS = /^(key|apiKey|api_key|token|secret|password|authorization|credential)$/i;
