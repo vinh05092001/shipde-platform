@@ -165,7 +165,12 @@ function resolveLauncher(o, isolatedLauncher) {
   if (typeof o.run === 'function') return o.run;
 
   const externalWorkers =
-    typeof o.externalWorkers === 'string' ? o.externalWorkers.split(',').map((s) => s.trim()) : [];
+    typeof o.externalWorkers === 'string'
+      ? o.externalWorkers
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : [];
 
   if (!isolatedLauncher && externalWorkers.length === 0) return null;
   const { getHarness } = require('./harness');

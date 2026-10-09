@@ -372,7 +372,7 @@ function generateCandidates(opts) {
                 accessPath,
                 gateway: '',
                 upstream: source.id === 'autoclaw' ? 'zai' : source.id,
-                accountId: '*',
+                accountId: source.id === 'autoclaw' ? 'autoclaw' : '*',
                 quotaScope: source.id === 'autoclaw' ? 'zai' : source.id,
                 modelId: model,
                 source: source.id,

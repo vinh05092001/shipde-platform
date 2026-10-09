@@ -28,6 +28,7 @@ The Controller must be able to select and launch agy-pool and AutoClaw workers i
 | AL-R01 | 810002 classification | Classifies 810002 as upstream_rate_limit, retryable, 120000ms | AL-R01 test |
 | AL-R02 | candidate registration | Candidates exist with correct failure domains (agy/<account>, autoclaw/zai) | AL-R02 test |
 | AL-R03 | launcher flag gating | Live path uses host-sandboxed launcher enabled by --external-workers | AL-R03 test |
+| AL-R04 | reviewer role selection | Reviewer role may select an autoclaw candidate | Addressed by Fixing candidate wildcard |
 | AL-R05 | agy account validation | Validates account ID matches pattern | AL-R05 test |
 | AL-R06 | Work Item and register | `TASK-AI-126.md` added, exactly one appended register row `239` | `git diff origin/main --numstat` for the register is `1 0` |
 

@@ -164,7 +164,9 @@ function causeRetryable(cause) {
 function addRetryFields(result) {
   const retryable = causeRetryable(result.cause);
   result.retryable = retryable;
-  result.retryAfterMs = result.resetTime ? result.resetTime - Date.now() : null;
+  if (result.retryAfterMs === undefined) {
+    result.retryAfterMs = result.resetTime ? Math.max(0, result.resetTime - Date.now()) : null;
+  }
   return result;
 }
 
@@ -626,6 +628,19 @@ function classifyFailure(input) {
     });
   }
 
+  // 810002 rate limit (HTTP 403 + body code 810002). Must precede generic 403->entitlement.
+  if (effectiveStatus === 403 && (/"code"\s*:\s*810002\b/.test(errorPayloadText || text) || /code=810002\b/.test(errorPayloadText || text) || /Error 810002\b/.test(errorPayloadText || text))) {
+    return addRetryFields({
+      cause: Cause.UPSTREAM_RATE_LIMIT,
+      scope: Scope.UPSTREAM,
+      cooldownMs: 120000,
+      humanAction: HumanAction.NONE,
+      evidence,
+      resetTime: Date.now() + 120000,
+      retryAfterMs: 120000,
+    });
+  }
+
   // Case 3: upstream entitlement (403 unauthorized / not licensed)
   if (effectiveStatus === 403 || /not licensed to use Copilot/i.test(errorPayloadText || text)) {
     return addRetryFields({
@@ -772,11 +787,9 @@ function classifyFailure(input) {
   // Case 4: upstream rate limit (429 with rate limit indicators, or plain 429)
   if (
     effectiveStatus === 429 ||
-    /rate.?limit|too many requests|user_global_rate_limited/i.test(errorPayloadText) ||
-    /810002/.test(errorPayloadText || text)
+    /rate.?limit|too many requests|user_global_rate_limited/i.test(errorPayloadText)
   ) {
-    const is810002 = /810002/.test(errorPayloadText || text);
-    const resetMs = is810002 ? 120000 : parseResetTime(errorPayloadText || text);
+    const resetMs = parseResetTime(errorPayloadText || text);
     return addRetryFields({
       cause: Cause.UPSTREAM_RATE_LIMIT,
       scope: Scope.UPSTREAM,
