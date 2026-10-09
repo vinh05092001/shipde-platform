@@ -163,7 +163,11 @@ function controller() {
  */
 function resolveLauncher(o, isolatedLauncher) {
   if (typeof o.run === 'function') return o.run;
-  if (!isolatedLauncher) return null;
+
+  const externalWorkers =
+    typeof o.externalWorkers === 'string' ? o.externalWorkers.split(',').map((s) => s.trim()) : [];
+
+  if (!isolatedLauncher && externalWorkers.length === 0) return null;
   const { getHarness } = require('./harness');
   return (job) => {
     const adapter = getHarness(job.harness);
@@ -189,6 +193,31 @@ function resolveLauncher(o, isolatedLauncher) {
         refusal: launchArgs.refusal || reason,
       };
     }
+
+    const isExternal = externalWorkers.includes(adapter.id);
+    if (isExternal && (adapter.id === 'agy-pool' || adapter.id === 'autoclaw')) {
+      const { runHarness } = require('./harness');
+      const fs = require('fs');
+      const path = require('path');
+      const os = require('os');
+      const env = Object.assign({}, process.env);
+      if (adapter.id === 'autoclaw') {
+        const tokenFile = path.join(os.homedir(), '.openclaw-autoclaw', '.gateway-token');
+        if (fs.existsSync(tokenFile)) {
+          env.OPENCLAW_GATEWAY_TOKEN = fs.readFileSync(tokenFile, 'utf8').trim();
+        }
+      }
+      return runHarness(adapter, launchArgs, {
+        cwd: job.cwd,
+        timeoutMs: job.workerTimeoutMs || o.workerTimeoutMs,
+        env,
+      });
+    }
+
+    if (!isolatedLauncher) {
+      throw new Error('LAUNCHER_MISSING: no isolated launcher for ' + adapter.id);
+    }
+
     return isolatedLauncher(adapter, launchArgs, {
       cwd: job.hostWorktree || job.cwd,
       workerRoot: job.workerRoot,

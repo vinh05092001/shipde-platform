@@ -347,7 +347,60 @@ function generateCandidates(opts) {
         // account we emit one concrete candidate per declared model. Without
         // one we emit a '*' placeholder that the chooser must resolve — an
         // unresolved wildcard is rejected, never silently passed through.
-        if (sharedArc) {
+        if (Array.isArray(source.accounts) && Array.isArray(source.models)) {
+          for (const accId of source.accounts) {
+            for (const model of source.models) {
+              candidates.push({
+                harness,
+                accessPath,
+                gateway: '',
+                upstream: source.id === 'agy-pool' ? 'agy' : source.id,
+                accountId: accId,
+                quotaScope: source.id === 'agy-pool' ? accId : source.id,
+                modelId: model,
+                source: source.id,
+                kind: source.kind,
+                sharedQuota: 'unknown',
+              });
+            }
+          }
+        } else if (Array.isArray(source.models)) {
+          if (sharedArc) {
+            for (const model of source.models) {
+              candidates.push({
+                harness,
+                accessPath,
+                gateway: '',
+                upstream: source.id === 'autoclaw' ? 'zai' : source.id,
+                accountId: '*',
+                quotaScope: source.id === 'autoclaw' ? 'zai' : source.id,
+                modelId: model,
+                source: source.id,
+                kind: source.kind,
+                sharedQuota: 'unknown',
+              });
+            }
+          } else {
+            for (const acc of bound) {
+              for (const model of source.models) {
+                candidates.push({
+                  harness,
+                  accessPath,
+                  gateway: '',
+                  upstream: source.id === 'autoclaw' ? 'zai' : source.id,
+                  accountId: acc.id,
+                  quotaScope: source.id === 'autoclaw' ? 'zai' : source.id,
+                  modelId: model,
+                  source: source.id,
+                  kind: source.kind,
+                  capabilities: acc.capabilities || {},
+                  cost: acc.cost,
+                  sharedQuota: 'unknown',
+                });
+              }
+            }
+          }
+        } else if (sharedArc) {
           candidates.push({
             harness,
             accessPath,

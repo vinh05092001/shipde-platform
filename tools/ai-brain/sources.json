@@ -77,11 +77,35 @@
       "id": "autoclaw",
       "label": "AutoClaw",
       "kind": "agent-cli",
-      "servesModels": false,
+      "servesModels": true,
+      "models": ["zai/zai_auto", "zai/zai_glm-5.3-flash"],
       "harness": "autoclaw",
       "accessPath": "cli",
       "credential": { "type": "account", "store": "~/.openclaw" },
       "verify": { "method": "version-command", "command": "openclaw --version" }
+    },
+    {
+      "id": "agy-pool",
+      "label": "Agy Pool",
+      "kind": "agent-cli",
+      "servesModels": true,
+      "accounts": [
+        "agy01",
+        "agy02",
+        "agy03",
+        "agy04",
+        "agy05",
+        "agy06",
+        "agy07",
+        "agy08",
+        "agy09",
+        "agy10"
+      ],
+      "models": ["gemini-3.1-pro-low"],
+      "harness": "agy-pool",
+      "accessPath": "cli",
+      "credential": { "type": "none" },
+      "verify": { "method": "none" }
     },
     {
       "id": "paseo",

@@ -772,9 +772,11 @@ function classifyFailure(input) {
   // Case 4: upstream rate limit (429 with rate limit indicators, or plain 429)
   if (
     effectiveStatus === 429 ||
-    /rate.?limit|too many requests|user_global_rate_limited/i.test(errorPayloadText)
+    /rate.?limit|too many requests|user_global_rate_limited/i.test(errorPayloadText) ||
+    /810002/.test(errorPayloadText || text)
   ) {
-    const resetMs = parseResetTime(errorPayloadText || text);
+    const is810002 = /810002/.test(errorPayloadText || text);
+    const resetMs = is810002 ? 120000 : parseResetTime(errorPayloadText || text);
     return addRetryFields({
       cause: Cause.UPSTREAM_RATE_LIMIT,
       scope: Scope.UPSTREAM,
