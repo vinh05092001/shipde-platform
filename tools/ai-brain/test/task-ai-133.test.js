@@ -730,7 +730,7 @@ test('GM-R01: cli.js merge command handles missing args and executes merge', asy
   process.exitCode = prevExitCode;
 });
 
-test('GM-R07: docs/product-spec/work-items/TASK-AI-133.md and register row 242 exist and match format', () => {
+test('GM-R07: docs/product-spec/work-items/TASK-AI-133.md and register row 245 exist and match format', () => {
   const rootDir = path.join(__dirname, '..', '..', '..');
   const specPath = path.join(rootDir, 'docs', 'product-spec', 'work-items', 'TASK-AI-133.md');
   assert.ok(fs.existsSync(specPath), 'TASK-AI-133.md must exist');
@@ -757,6 +757,6 @@ test('GM-R07: docs/product-spec/work-items/TASK-AI-133.md and register row 242 e
 
   const cols = rows[0].match(/"[^"]*"/g) || [];
   assert.strictEqual(cols.length, 14, '14-column quoted format');
-  assert.strictEqual(cols[0], '"242"');
+  assert.strictEqual(cols[0], '"245"');
   assert.strictEqual(cols[3], '"TASK-AI-133"');
 });

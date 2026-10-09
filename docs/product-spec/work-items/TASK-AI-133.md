@@ -7,7 +7,7 @@
 | Work Item ID | `TASK-AI-133` |
 | Feature ID | `N/A` |
 | Status | `READY_FOR_CODEX` |
-| Delivery order | `242` |
+| Delivery order | `245` |
 | Dependencies | `TASK-AI-128` |
 | Assigned author | `GEMINI` |
 | Risk | `HIGH` |
@@ -42,7 +42,7 @@ GM-R05: next-item loop calls merge after publish when the item is eligible.
 | GM-R04 | Additional trusted verdict in control.ps1 | Review manifest PASS accepted without altering Codex-bot path | Test (`task-ai-133.test.js`) |
 | GM-R05 | Next-item loop merge integration | Merges after publish when item is eligible | Test (`task-ai-133.test.js`) |
 | GM-R06 | Comprehensive offline test suite | Covers all refusal reasons, happy path, byte-identical/non-identical merge | Test (`task-ai-133.test.js`) |
-| GM-R07 | Documentation and register row | Spec created and exactly one row 242 appended to register | File and git numstat 1 0 |
+| GM-R07 | Documentation and register row | Spec created and exactly one row 245 appended to register | File and git numstat 1 0 |
 
 ## Verification Commands
 
