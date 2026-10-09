@@ -52,15 +52,27 @@ function _matchesRiskDomain(riskDomain, triggers) {
 function toolsFor({ role, files, riskDomains } = {}) {
   const manifest = load();
   return manifest.filter((tool) => {
-    if (role && !tool.roles.includes(role)) return false;
-    if (files && files.length > 0) {
+    if (role) {
+      const roleParts = role.split('.');
+      const hasRole = roleParts.some((r) => tool.roles.includes(r));
+      if (!hasRole) return false;
+    }
+    let matches = false;
+    if (!files || files.length === 0) {
+      if (!riskDomains || riskDomains.length === 0) {
+        matches = true;
+      } else {
+        matches = riskDomains.some((r) => _matchesRiskDomain(r, tool.triggers));
+      }
+    } else {
       const fileMatches = files.some((f) => _matchesFilePatterns(f, tool.triggers));
-      if (!fileMatches) return false;
+      let riskMatches = false;
+      if (riskDomains && riskDomains.length > 0) {
+        riskMatches = riskDomains.some((r) => _matchesRiskDomain(r, tool.triggers));
+      }
+      matches = fileMatches || riskMatches;
     }
-    if (riskDomains && riskDomains.length > 0) {
-      const riskMatches = riskDomains.some((r) => _matchesRiskDomain(r, tool.triggers));
-      if (!riskMatches) return false;
-    }
+    if (!matches) return false;
     return true;
   });
 }
@@ -117,4 +129,19 @@ function gatesFor() {
   return [...gateTools, ...repoCommands];
 }
 
-module.exports = { load, toolsFor, gatesFor };
+/**
+ * Gate applicability (TM-R03): a gate covers a change when one of its
+ * file-pattern triggers matches a changed file, or one of its risk-word
+ * triggers matches a risk domain the Work Item declared. A tool with no
+ * triggers at all covers nothing (e.g. the synthetic repo commands from
+ * gatesFor() are never run as pre-review gates).
+ */
+function appliesTo(tool, files, riskDomains) {
+  if (!tool || !Array.isArray(tool.triggers) || tool.triggers.length === 0) return false;
+  const list = Array.isArray(files) ? files : [];
+  if (list.some((f) => _matchesFilePatterns(f, tool.triggers))) return true;
+  const domains = Array.isArray(riskDomains) ? riskDomains : [];
+  return domains.some((r) => _matchesRiskDomain(r, tool.triggers));
+}
+
+module.exports = { load, toolsFor, gatesFor, appliesTo };

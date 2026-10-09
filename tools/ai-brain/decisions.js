@@ -46,6 +46,12 @@ const Stage = Object.freeze({
   // A non-blocking warning (TASK-AI-127 WD-R03, e.g. WORKER_DEPS_UNAVAILABLE):
   // the run continues, but the condition must be readable in the same trace.
   WARNING: 'warning',
+  // TASK-AI-129 (TM-R04): the tool manifest reaches the same trace — which
+  // tools the prompt offered (PROMPT_TOOLS) and how each gate tool ran before
+  // review (TOOL_GATE). Gate entries carry the tool id and pass/fail only;
+  // raw tool output never lands here.
+  PROMPT_TOOLS: 'prompt_tools',
+  TOOL_GATE: 'tool_gate',
 });
 
 const SECRET_KEYS = /^(key|apiKey|api_key|token|secret|password|authorization|credential)$/i;
@@ -221,6 +227,12 @@ function openWritersDetailed(options) {
   const state = new Map();
   for (const r of records) {
     if (!r || !r.workItemId) continue;
+    const isReview =
+      r.stage === Stage.REVIEW ||
+      r.stage === Stage.REVIEWER_SELECTION ||
+      r.role === 'reviewer' ||
+      (typeof r.role === 'string' && (r.role.startsWith('reviewer.') || r.role === 'reviewer'));
+    if (isReview) continue;
     if (r.stage === Stage.LAUNCHED || r.stage === Stage.RESUMED) {
       state.set(r.workItemId, {
         workItemId: r.workItemId,
@@ -288,6 +300,100 @@ function openWritersDetailed(options) {
   };
 }
 
+/**
+ * Reviewers currently active according to the decision log.
+ */
+function openReviewersDetailed(options) {
+  const detail =
+    options && options.records
+      ? { records: options.records, damaged: [], readable: true }
+      : readDecisionsDetailed(options);
+  const records = detail.records;
+  const state = new Map();
+  for (const r of records) {
+    if (!r || !r.workItemId) continue;
+    const isReview =
+      r.stage === Stage.REVIEW ||
+      r.stage === Stage.REVIEWER_SELECTION ||
+      r.role === 'reviewer' ||
+      (typeof r.role === 'string' && (r.role.startsWith('reviewer.') || r.role === 'reviewer'));
+
+    if (isReview) {
+      const isTerminal =
+        r.stage === Stage.COMPLETED ||
+        r.stage === Stage.FAILED ||
+        r.outcome === 'passed' ||
+        r.outcome === 'failed' ||
+        r.verdict === 'PASS' ||
+        r.verdict === 'FAIL' ||
+        r.verdict === 'CHANGES_REQUIRED' ||
+        r.verdict === 'BLOCKED';
+
+      const revKey = r.sessionId
+        ? `${r.workItemId}:${r.sessionId}`
+        : r.reviewer
+          ? `${r.workItemId}:${r.reviewer}`
+          : r.role
+            ? `${r.workItemId}:${r.role}`
+            : r.workItemId;
+
+      if (isTerminal) {
+        if (state.has(revKey)) {
+          state.delete(revKey);
+        } else {
+          for (const [key, rev] of state.entries()) {
+            if (rev.workItemId === r.workItemId) {
+              if (r.sessionId && rev.sessionId === r.sessionId) {
+                state.delete(key);
+              } else if (r.reviewer && rev.reviewer === r.reviewer) {
+                state.delete(key);
+              } else if (r.role && rev.role === r.role) {
+                state.delete(key);
+              } else if (!r.sessionId && !r.reviewer && !r.role) {
+                state.delete(key);
+              }
+            }
+          }
+        }
+      } else {
+        state.set(revKey, {
+          workItemId: r.workItemId,
+          sessionId: r.sessionId || null,
+          role: r.role || 'reviewer',
+          reviewer: r.reviewer || null,
+          since: r.at,
+        });
+      }
+    } else if (r.stage === Stage.COMPLETED || r.stage === Stage.FAILED) {
+      for (const [key, rev] of state.entries()) {
+        if (rev.workItemId === r.workItemId) {
+          state.delete(key);
+        }
+      }
+    }
+  }
+
+  const ttlMs = (options && options.ttlMs) || 4 * 60 * 60 * 1000;
+  const now = (options && options.now) || Date.now();
+  const activeReviewers = [];
+  for (const rev of state.values()) {
+    const elapsed = now - new Date(rev.since).getTime();
+    if (elapsed <= ttlMs) {
+      activeReviewers.push(rev);
+    }
+  }
+
+  return {
+    reviewers: activeReviewers,
+    readable: detail.readable,
+    damaged: detail.damaged,
+  };
+}
+
+function openReviewers(options) {
+  return openReviewersDetailed(options).reviewers;
+}
+
 /** The open writer for this work item, or null when it is free to claim. */
 function writerFor(workItemId, options) {
   const detail = openWritersDetailed(options);
@@ -341,6 +447,8 @@ module.exports = {
   readDecisionsDetailed,
   openWriters,
   openWritersDetailed,
+  openReviewers,
+  openReviewersDetailed,
   writerFor,
   closeWriter,
   scrub,

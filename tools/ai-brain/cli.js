@@ -3163,9 +3163,35 @@ function main() {
     return;
   }
 
+  // next (TASK-AI-132): pick the next dependency-ready Work Item and run through intake.
+  if (command === 'next') {
+    const { nextCommand } = require('./next-runner');
+    const result = nextCommand(args);
+    if (result && typeof result.then === 'function') {
+      result.then(
+        (res) => {
+          if (
+            res &&
+            (res.status === 'failed' ||
+              res.failed ||
+              (typeof res.exitCode === 'number' && res.exitCode !== 0))
+          ) {
+            process.exitCode =
+              typeof res.exitCode === 'number' && res.exitCode !== 0 ? res.exitCode : 1;
+          }
+        },
+        (err) => {
+          console.error('Next lỗi: ' + (err && err.message ? err.message : err));
+          process.exitCode = 1;
+        }
+      );
+    }
+    return;
+  }
+
   console.error('Lệnh không rõ: ' + command);
   console.error(
-    'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | discovery | account | probe | qualify | serena | evidence | review | orchestrate | intake | merge'
+    'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | discovery | account | probe | qualify | serena | evidence | review | orchestrate | intake | next | merge'
   );
   process.exit(2);
 }
@@ -3193,6 +3219,7 @@ module.exports = {
   orchestrateCommand,
   mergeCommand,
   intakeCommand,
+  nextCommand: (args, deps) => require('./next-runner').nextCommand(args, deps),
 };
 
 if (require.main === module) {
