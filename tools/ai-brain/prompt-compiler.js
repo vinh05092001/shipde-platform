@@ -217,11 +217,13 @@ function compilePrompt(item, ctx) {
   // compiler), from the manifest and only when the manifest is readable.
   const role = roleOf(i);
   const selected = toolsForPrompt(i, role, dirtyPaths, i.riskDomains || []);
+  let offeredTools = [];
   if (selected.error) {
     warnToolManifest(selected.error, i, role, c.logOpts);
   } else if (selected.tools.length > 0) {
+    offeredTools = selected.tools;
     lines.push(toolsSectionLines(selected.tools));
-    recordPromptTools(i, role, selected.tools, c.logOpts);
+    if (c.logOpts && c.recordTools !== false) recordPromptTools(i, role, selected.tools, c.logOpts);
   }
 
   if (c.usageFile) {
@@ -237,7 +239,9 @@ function compilePrompt(item, ctx) {
   // leave the prompt byte-identical to before.
   const pack = skillPack.lockedPack(roleOf(i));
   if (pack) lines.push(pack);
-  return lines.join('\n');
+  const prompt = lines.join('\n');
+  if (c.returnTools) return { prompt, tools: offeredTools.map((tool) => tool.id) };
+  return prompt;
 }
 
 /**

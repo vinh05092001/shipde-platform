@@ -2813,6 +2813,7 @@ async function selectCandidateForProfile(
     chosen: result.chosen,
     reason: result.reason,
     result,
+    decisionRecorded,
   };
 }
 
@@ -3581,15 +3582,33 @@ async function runOrchestration(goal, opts) {
 
       // The prompt carries the pinned key the Controller chose (AI-64-R02), so it
       // is compiled per attempt rather than once before any selection.
-      const prompt = compilePrompt(item, {
+      const compiledPrompt = compilePrompt(item, {
         goal,
         specText: o.specText,
         candidateKey: decision.chosen,
         branch,
         usageFile,
         isolatedWorker: Boolean(o.isolatedWorker),
-        logOpts,
+        recordTools: false,
+        returnTools: true,
       });
+      const prompt = compiledPrompt.prompt;
+      const promptToolIds = compiledPrompt.tools;
+      if (Array.isArray(promptToolIds) && promptToolIds.length > 0) {
+        decisions.recordDecision(
+          {
+            stage: decisions.Stage.PROMPT_TOOLS,
+            workItemId: item.id,
+            role: roleOf(item),
+            tools: promptToolIds,
+          },
+          logOpts
+        );
+        decisions.recordDecision(
+          Object.assign({}, decision.decisionRecorded || {}, { tools: promptToolIds }),
+          logOpts
+        );
+      }
       log.prompts.push({ workItemId: item.id, attempt, candidateKey: decision.chosen, prompt });
 
       const route = resolveLaunchRoute(candidate, o, registry);
