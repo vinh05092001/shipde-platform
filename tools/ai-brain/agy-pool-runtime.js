@@ -44,11 +44,11 @@ function accountDir(accountId, options) {
       `INVALID_ACCOUNT_ID: account must match /^agy\\d{2}$/, got ${JSON.stringify(accountId)}`
     );
   }
-  return path.join(runsDir(options), accountId);
+  return path.join(exp.runsDir(options), accountId);
 }
 
 function discoverAccounts(options) {
-  const dir = runsDir(options);
+  const dir = exp.runsDir(options);
   try {
     return fs
       .readdirSync(dir, { withFileTypes: true })
@@ -66,7 +66,7 @@ function readJson(file) {
 
 function readResult(accountId, options) {
   if (!isValidAccountId(accountId)) return { state: 'error', reason: 'INVALID_ACCOUNT_ID' };
-  const file = path.join(accountDir(accountId, options), 'result.json');
+  const file = path.join(exp.accountDir(accountId, options), 'result.json');
   try {
     return readJson(file);
   } catch (err) {
@@ -77,7 +77,7 @@ function readResult(accountId, options) {
 
 function readOutText(accountId, options) {
   if (!isValidAccountId(accountId)) return '';
-  const file = path.join(accountDir(accountId, options), 'out.txt');
+  const file = path.join(exp.accountDir(accountId, options), 'out.txt');
   try {
     return fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '');
   } catch {
@@ -89,12 +89,12 @@ function waitForResult(accountId, sinceMs, options) {
   if (!isValidAccountId(accountId)) return { state: 'error', reason: 'INVALID_ACCOUNT_ID' };
   const opts = options || {};
   const timeoutMs = Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : 120000;
-  const file = path.join(accountDir(accountId, opts), 'result.json');
+  const file = path.join(exp.accountDir(accountId, opts), 'result.json');
   const start = Date.now();
   while (Date.now() - start <= timeoutMs) {
     try {
       const stat = fs.statSync(file);
-      if (!sinceMs || stat.mtimeMs >= sinceMs) return readResult(accountId, opts);
+      if (!sinceMs || stat.mtimeMs >= sinceMs) return exp.readResult(accountId, opts);
     } catch {}
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
   }
@@ -112,7 +112,7 @@ function runAdapter(accountId, options) {
   const opts = options || {};
   const script = opts.adapterScript || process.env.AGY_POOL_ADAPTER_SCRIPT;
   if (script) {
-    const res = spawnSync(process.execPath, [script, accountDir(accountId, opts), accountId], {
+    const res = spawnSync(process.execPath, [script, exp.accountDir(accountId, opts), accountId], {
       encoding: 'utf8',
       timeout: Number(opts.adapterTimeoutMs) > 0 ? Number(opts.adapterTimeoutMs) : 120000,
       windowsHide: true,
@@ -175,12 +175,12 @@ function submitJob(accountId, job, options) {
     return { state: 'error', exitCode: 1, reason: 'INVALID_ACCOUNT_ID' };
   }
   const opts = options || {};
-  const dir = accountDir(accountId, opts);
+  const dir = exp.accountDir(accountId, opts);
   fs.mkdirSync(dir, { recursive: true });
   const resultFile = path.join(dir, 'result.json');
   const startedAt = Date.now();
   fs.writeFileSync(path.join(dir, 'job.json'), JSON.stringify(job, null, 2), 'utf8');
-  const launch = runAdapter(accountId, opts);
+  const launch = exp.runAdapter(accountId, opts);
   if (launch.exitCode !== 0) {
     const isTimeout = Boolean(launch.stderr && launch.stderr.includes('ADAPTER_TIMEOUT'));
     const reason =
@@ -201,7 +201,7 @@ function submitJob(accountId, job, options) {
     } catch {}
     return errorResult;
   }
-  return waitForResult(accountId, startedAt, opts);
+  return exp.waitForResult(accountId, startedAt, opts);
 }
 
 function parseQuotaJson(value) {
@@ -259,7 +259,7 @@ function parseQuotaOutput(text) {
 
 function quotaReading(accountId, options) {
   const opts = options || {};
-  const result = opts.result || readResult(accountId, opts);
+  const result = opts.result || exp.readResult(accountId, opts);
   if (!result) return { available: false, reason: 'không có result.json', rows: [] };
   if (result.state === 'login-required') {
     return { available: false, reason: 'AUTH_FAILED', rows: [] };
@@ -267,7 +267,7 @@ function quotaReading(accountId, options) {
   if (result.state !== 'ok' && result.state !== 'quota') {
     return { available: false, reason: result.reason || result.state || 'FAILED', rows: [] };
   }
-  const parsed = parseQuotaOutput(readOutText(accountId, opts));
+  const parsed = parseQuotaOutput(exp.readOutText(accountId, opts));
   if (!parsed.available) return parsed;
   return Object.assign({}, parsed, {
     account: { known: true, email: accountId, source: 'pool' },
@@ -278,14 +278,180 @@ function quotaReading(accountId, options) {
 function modelIdsFromRuntime(options) {
   const opts = options || {};
   const out = new Set();
-  for (const accountId of discoverAccounts(opts)) {
-    const parsed = parseQuotaOutput(readOutText(accountId, opts));
+  for (const accountId of exp.discoverAccounts(opts)) {
+    const parsed = parseQuotaOutput(exp.readOutText(accountId, opts));
     for (const model of parsed.models || []) out.add(model);
   }
   return [...out].sort();
 }
 
-module.exports = {
+let lastGoodModels = null;
+let lastDiscoveryWarning = null;
+
+function resetPoolDiscoveryCache() {
+  lastGoodModels = null;
+  lastDiscoveryWarning = null;
+}
+
+function getLastDiscoveryWarning() {
+  return lastDiscoveryWarning;
+}
+
+function parseCliModels(stdout) {
+  const models = new Set();
+  const lines = String(stdout || '').split(/\r?\n/);
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    if (/^fetching/i.test(line)) continue;
+    if (line.toLowerCase() === 'ok') continue;
+    if (line.startsWith('#')) continue;
+    const parts = line.split(/\t/);
+    const token = (parts[0] || '').trim();
+    if (!token || token.includes(' ')) continue;
+    if (!/^[a-zA-Z0-9][-a-zA-Z0-9._/]*$/.test(token)) continue;
+    if (token.startsWith('---') || token.startsWith('===') || token.startsWith('___')) continue;
+    models.add(token);
+  }
+  return [...models].sort();
+}
+
+function parseCatalogueModels(catalogue) {
+  const models = new Set();
+  if (Array.isArray(catalogue)) {
+    for (const item of catalogue) {
+      if (!item) continue;
+      const modelId = typeof item === 'string' ? item : item.modelId || item.model || item.id || '';
+      const upstream = typeof item === 'object' ? item.upstream || item.gateway || '' : '';
+      if (modelId.startsWith('ag/')) {
+        models.add(modelId.slice(3));
+      } else if (upstream === 'ag' && modelId) {
+        models.add(modelId.replace(/^ag\//, ''));
+      } else if (modelId.startsWith('antigravity/')) {
+        models.add(modelId.slice('antigravity/'.length));
+      } else if (upstream === 'antigravity' && modelId) {
+        models.add(modelId.replace(/^antigravity\//, ''));
+      }
+    }
+  }
+  return [...models].sort();
+}
+
+function discoverPoolModels(options) {
+  const opts = options || {};
+  if (opts.discoverPool === false) {
+    return [];
+  }
+  if (Array.isArray(opts.models) && opts.models.length > 0) {
+    return [...opts.models];
+  }
+
+  const dataDir = opts.dataDir || path.join(__dirname, 'data', 'discovery');
+  const cacheFile =
+    opts.cacheFile !== undefined ? opts.cacheFile : path.join(dataDir, 'agy-pool-cache.tmp');
+
+  if (!opts.refresh && lastGoodModels && lastGoodModels.length > 0) {
+    return [...lastGoodModels];
+  }
+
+  if (!opts.refresh && !opts.spawnSync && !opts.agyBin && !opts.bin && cacheFile) {
+    try {
+      if (fs.existsSync(cacheFile)) {
+        const cached = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+        if (Array.isArray(cached) && cached.length > 0) {
+          lastGoodModels = cached;
+          return [...cached];
+        }
+      }
+    } catch {}
+  }
+
+  // 1. Try agy CLI models listing
+  const bin = opts.agyBin || opts.bin || 'agy';
+  const spawnFn = opts.spawnSync || spawnSync;
+  let cliModels = [];
+  try {
+    const res = spawnFn(bin, ['models'], {
+      encoding: 'utf8',
+      timeout: Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : 15000,
+      windowsHide: true,
+      shell: false,
+    });
+    if (res && !res.error && res.status === 0 && res.stdout) {
+      cliModels = parseCliModels(res.stdout);
+    }
+  } catch {}
+
+  if (cliModels.length > 0) {
+    lastGoodModels = cliModels;
+    lastDiscoveryWarning = null;
+    if (cacheFile) {
+      try {
+        fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
+        fs.writeFileSync(cacheFile, JSON.stringify(cliModels, null, 2), 'utf8');
+      } catch {}
+    }
+    return [...cliModels];
+  }
+
+  // 2. Try catalogue import of Antigravity backend ("ag/" offerings)
+  let catModels = [];
+  if (Array.isArray(opts.catalogue) && opts.catalogue.length > 0) {
+    catModels = parseCatalogueModels(opts.catalogue);
+  } else {
+    const catFile = opts.catalogueFile || path.join(dataDir, 'catalogue.jsonl');
+    try {
+      if (fs.existsSync(catFile)) {
+        const content = fs.readFileSync(catFile, 'utf8');
+        const lines = content.split(/\r?\n/).filter(Boolean);
+        const parsedCatalogue = [];
+        for (const line of lines) {
+          try {
+            parsedCatalogue.push(JSON.parse(line));
+          } catch {}
+        }
+        catModels = parseCatalogueModels(parsedCatalogue);
+      }
+    } catch {}
+  }
+
+  if (catModels.length > 0) {
+    lastGoodModels = catModels;
+    lastDiscoveryWarning = 'agy CLI unavailable; models imported from catalogue';
+    if (cacheFile) {
+      try {
+        fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
+        fs.writeFileSync(cacheFile, JSON.stringify(catModels, null, 2), 'utf8');
+      } catch {}
+    }
+    return [...catModels];
+  }
+
+  // 3. Keep last good list with a warning
+  if (lastGoodModels && lastGoodModels.length > 0) {
+    lastDiscoveryWarning = 'agy discovery failed; keeping last good model list';
+    return [...lastGoodModels];
+  }
+
+  if (cacheFile) {
+    try {
+      if (fs.existsSync(cacheFile)) {
+        const cached = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+        if (Array.isArray(cached) && cached.length > 0) {
+          lastGoodModels = cached;
+          lastDiscoveryWarning = 'agy discovery failed; keeping last good model list';
+          return [...cached];
+        }
+      }
+    } catch {}
+  }
+
+  // 4. Failed discovery: never fall back to a hard-coded model id
+  lastDiscoveryWarning = 'agy discovery failed; no models available';
+  return [];
+}
+
+const exp = {
   runsDir,
   accountDir,
   discoverAccounts,
@@ -297,5 +463,11 @@ module.exports = {
   parseQuotaOutput,
   quotaReading,
   modelIdsFromRuntime,
+  discoverPoolModels,
+  resetPoolDiscoveryCache,
+  getLastDiscoveryWarning,
   isValidAccountId,
+  parseCliModels,
 };
+
+module.exports = exp;

@@ -2827,18 +2827,30 @@ function orchestrateCommand(args, deps = {}) {
   const readJsonArg = (value) =>
     typeof value === 'string' && value ? JSON.parse(fsx.readFileSync(value, 'utf8')) : null;
   const inputAccounts = readJsonArg(args.accounts) || (Array.isArray(d.accounts) ? d.accounts : []);
+  const poolEnabled =
+    typeof args['external-workers'] === 'string' &&
+    args['external-workers']
+      .split(',')
+      .map((s) => s.trim())
+      .includes('agy-pool');
   const candidates = Array.isArray(d.candidates)
     ? d.candidates
     : generateCandidates({
         registry,
         catalogue: readJsonArg(args.catalogue) || [],
         accounts: inputAccounts,
+        externalWorkers: args['external-workers'],
         openCodeIds: Array.isArray(args['opencode-ids'])
           ? args['opencode-ids']
           : typeof args['opencode-ids'] === 'string'
             ? args['opencode-ids'].split(',').filter(Boolean)
             : [],
       });
+  const pool = require('./agy-pool-runtime');
+  const discoveryWarning = poolEnabled ? pool.getLastDiscoveryWarning() : null;
+  if (discoveryWarning && typeof console !== 'undefined' && console.warn) {
+    console.warn(`[agy-pool] discovery warning: ${discoveryWarning}`);
+  }
   const evidenceDir =
     typeof args['evidence-dir'] === 'string' && args['evidence-dir']
       ? args['evidence-dir']
@@ -3085,9 +3097,35 @@ function main() {
     return;
   }
 
+  // next (TASK-AI-132): pick the next dependency-ready Work Item and run through intake.
+  if (command === 'next') {
+    const { nextCommand } = require('./next-runner');
+    const result = nextCommand(args);
+    if (result && typeof result.then === 'function') {
+      result.then(
+        (res) => {
+          if (
+            res &&
+            (res.status === 'failed' ||
+              res.failed ||
+              (typeof res.exitCode === 'number' && res.exitCode !== 0))
+          ) {
+            process.exitCode =
+              typeof res.exitCode === 'number' && res.exitCode !== 0 ? res.exitCode : 1;
+          }
+        },
+        (err) => {
+          console.error('Next lỗi: ' + (err && err.message ? err.message : err));
+          process.exitCode = 1;
+        }
+      );
+    }
+    return;
+  }
+
   console.error('Lệnh không rõ: ' + command);
   console.error(
-    'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | discovery | account | probe | qualify | serena | evidence | review | orchestrate | intake'
+    'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | discovery | account | probe | qualify | serena | evidence | review | orchestrate | intake | next'
   );
   process.exit(2);
 }
@@ -3114,6 +3152,7 @@ module.exports = {
   reviewCommand,
   orchestrateCommand,
   intakeCommand,
+  nextCommand: (args, deps) => require('./next-runner').nextCommand(args, deps),
 };
 
 if (require.main === module) {
