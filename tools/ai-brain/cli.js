@@ -3091,7 +3091,17 @@ function main() {
     const result = nextCommand(args);
     if (result && typeof result.then === 'function') {
       result.then(
-        () => {},
+        (res) => {
+          if (
+            res &&
+            (res.status === 'failed' ||
+              res.failed ||
+              (typeof res.exitCode === 'number' && res.exitCode !== 0))
+          ) {
+            process.exitCode =
+              typeof res.exitCode === 'number' && res.exitCode !== 0 ? res.exitCode : 1;
+          }
+        },
         (err) => {
           console.error('Next lỗi: ' + (err && err.message ? err.message : err));
           process.exitCode = 1;

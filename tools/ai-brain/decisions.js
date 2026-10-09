@@ -313,7 +313,7 @@ function openReviewersDetailed(options) {
       (typeof r.role === 'string' && (r.role.startsWith('reviewer.') || r.role === 'reviewer'));
 
     if (isReview) {
-      if (
+      const isTerminal =
         r.stage === Stage.COMPLETED ||
         r.stage === Stage.FAILED ||
         r.outcome === 'passed' ||
@@ -321,11 +321,36 @@ function openReviewersDetailed(options) {
         r.verdict === 'PASS' ||
         r.verdict === 'FAIL' ||
         r.verdict === 'CHANGES_REQUIRED' ||
-        r.verdict === 'BLOCKED'
-      ) {
-        state.delete(r.workItemId);
+        r.verdict === 'BLOCKED';
+
+      const revKey = r.sessionId
+        ? `${r.workItemId}:${r.sessionId}`
+        : r.reviewer
+          ? `${r.workItemId}:${r.reviewer}`
+          : r.role
+            ? `${r.workItemId}:${r.role}`
+            : r.workItemId;
+
+      if (isTerminal) {
+        if (state.has(revKey)) {
+          state.delete(revKey);
+        } else {
+          for (const [key, rev] of state.entries()) {
+            if (rev.workItemId === r.workItemId) {
+              if (r.sessionId && rev.sessionId === r.sessionId) {
+                state.delete(key);
+              } else if (r.reviewer && rev.reviewer === r.reviewer) {
+                state.delete(key);
+              } else if (r.role && rev.role === r.role) {
+                state.delete(key);
+              } else if (!r.sessionId && !r.reviewer && !r.role) {
+                state.delete(key);
+              }
+            }
+          }
+        }
       } else {
-        state.set(r.workItemId, {
+        state.set(revKey, {
           workItemId: r.workItemId,
           sessionId: r.sessionId || null,
           role: r.role || 'reviewer',
@@ -334,7 +359,11 @@ function openReviewersDetailed(options) {
         });
       }
     } else if (r.stage === Stage.COMPLETED || r.stage === Stage.FAILED) {
-      state.delete(r.workItemId);
+      for (const [key, rev] of state.entries()) {
+        if (rev.workItemId === r.workItemId) {
+          state.delete(key);
+        }
+      }
     }
   }
 

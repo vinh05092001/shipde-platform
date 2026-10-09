@@ -21,16 +21,219 @@
  */
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 const decisions = require('./decisions');
 const { parseDependencies } = require('./reconcile');
-const { CONCURRENCY_CEILING } = require('./scheduler');
+const { CONCURRENCY_CEILING, DEFAULTS, isGovernedDecision } = require('./scheduler');
 const evidenceApi = require('./evidence');
 const intakeApi = require('./intake');
 
 function defaultSleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function loadConfig(rootDir) {
+  const dirs = [
+    rootDir ? path.join(path.resolve(rootDir), '.shipde') : null,
+    path.join(os.homedir(), '.shipde'),
+  ].filter(Boolean);
+
+  for (const dir of dirs) {
+    const cfgPath = path.join(dir, 'config.json');
+    try {
+      if (fs.existsSync(cfgPath)) {
+        return JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+      }
+    } catch (_) {}
+  }
+  return {};
+}
+
+function getPollingInterval(options, deps) {
+  const opts = options || {};
+  const d = deps || {};
+  if (typeof opts.pollIntervalMs === 'number') return opts.pollIntervalMs;
+  if (typeof d.pollIntervalMs === 'number') return d.pollIntervalMs;
+  const cfg = d.config || opts.config || loadConfig(opts.rootDir);
+  if (cfg && typeof cfg.pollIntervalMs === 'number') {
+    return cfg.pollIntervalMs;
+  }
+  return 5000;
+}
+
+function getAllDecisionDirs(options, deps) {
+  const opts = options || {};
+  const d = deps || {};
+  const rootDir = path.resolve(opts.rootDir || (d && d.rootDir) || process.cwd());
+  const dirs = new Set();
+
+  const primaryDir = opts.decisionDir || (d && d.decisionDir) || decisions.DEFAULT_DIR;
+  dirs.add(path.resolve(primaryDir));
+
+  if (Array.isArray(opts.decisionDirs)) {
+    for (const dir of opts.decisionDirs) if (dir) dirs.add(path.resolve(dir));
+  }
+  if (Array.isArray(d.decisionDirs)) {
+    for (const dir of d.decisionDirs) if (dir) dirs.add(path.resolve(dir));
+  }
+
+  // Scan intake per-run decision dirs
+  const intakeBase =
+    opts.intakeDir ||
+    (d && d.intakeDir) ||
+    path.join(rootDir, 'tools', 'ai-brain', 'data', 'intake');
+  try {
+    if (fs.existsSync(intakeBase)) {
+      const entries = fs.readdirSync(intakeBase);
+      for (const entry of entries) {
+        const runDecDir = path.join(intakeBase, entry, 'decisions');
+        try {
+          if (fs.existsSync(runDecDir)) {
+            dirs.add(path.resolve(runDecDir));
+          }
+        } catch (_) {}
+      }
+    }
+  } catch (_) {}
+
+  return Array.from(dirs);
+}
+
+function collectAllDecisionRecords(options, deps) {
+  const opts = options || {};
+  const d = deps || {};
+  if (Array.isArray(opts.records)) return { records: opts.records, readable: true, damaged: [] };
+  if (Array.isArray(d.records)) return { records: d.records, readable: true, damaged: [] };
+
+  const allDirs = getAllDecisionDirs(opts, deps);
+  const now = typeof d.now === 'function' ? d.now() : d.now || opts.now || Date.now();
+  const days = opts.days || 7;
+
+  const allRecords = [];
+  const damaged = [];
+  let readable = true;
+
+  for (const dir of allDirs) {
+    const detail = decisions.readDecisionsDetailed({ dir, days, now });
+    if (!detail.readable) {
+      readable = false;
+    }
+    if (detail.damaged && detail.damaged.length > 0) {
+      damaged.push(...detail.damaged);
+    }
+    if (Array.isArray(detail.records)) {
+      allRecords.push(...detail.records);
+    }
+  }
+
+  allRecords.sort((a, b) => new Date(a.at || 0).getTime() - new Date(b.at || 0).getTime());
+  return { records: allRecords, readable, damaged };
+}
+
+function getOpenRuns(options, deps) {
+  const opts = options || {};
+  const d = deps || {};
+  const rootDir = path.resolve(opts.rootDir || (d && d.rootDir) || process.cwd());
+  const intakeBase =
+    opts.intakeDir ||
+    (d && d.intakeDir) ||
+    path.join(rootDir, 'tools', 'ai-brain', 'data', 'intake');
+  const now = typeof d.now === 'function' ? d.now() : d.now || opts.now || Date.now();
+  const ttlMs = opts.ttlMs || (d && d.ttlMs) || 4 * 60 * 60 * 1000;
+
+  const openRuns = [];
+  try {
+    if (!fs.existsSync(intakeBase)) return openRuns;
+    const entries = fs.readdirSync(intakeBase);
+    for (const entry of entries) {
+      const runDir = path.join(intakeBase, entry);
+      let stat;
+      try {
+        stat = fs.statSync(runDir);
+      } catch (_) {
+        continue;
+      }
+      if (!stat.isDirectory()) continue;
+
+      let workItemId = null;
+      const specsFile = path.join(runDir, 'specs.json');
+      if (fs.existsSync(specsFile)) {
+        try {
+          const specs = JSON.parse(fs.readFileSync(specsFile, 'utf8'));
+          if (Array.isArray(specs) && specs[0] && specs[0].id) {
+            workItemId = specs[0].id;
+          }
+        } catch (_) {}
+      }
+      if (!workItemId) {
+        const lastDash = entry.lastIndexOf('-');
+        if (lastDash > 0) {
+          workItemId = entry.slice(0, lastDash);
+        }
+      }
+      if (!workItemId) continue;
+
+      if (now - stat.mtimeMs > ttlMs) continue;
+
+      let terminal = false;
+      const runDecDir = path.join(runDir, 'decisions');
+      if (fs.existsSync(runDecDir)) {
+        try {
+          const detail = decisions.readDecisionsDetailed({ dir: runDecDir, now });
+          const recs = detail.records || [];
+          for (const r of recs) {
+            if (
+              r.workItemId === workItemId &&
+              (r.stage === decisions.Stage.COMPLETED ||
+                r.stage === decisions.Stage.FAILED ||
+                r.stage === decisions.Stage.REFUSED)
+            ) {
+              terminal = true;
+              break;
+            }
+          }
+        } catch (_) {}
+      }
+
+      const checkpointFile = path.join(runDir, 'checkpoint.json');
+      if (!terminal && fs.existsSync(checkpointFile)) {
+        try {
+          const ckpt = JSON.parse(fs.readFileSync(checkpointFile, 'utf8'));
+          if (
+            ckpt &&
+            (ckpt.completed ||
+              ckpt.status === 'completed' ||
+              ckpt.status === 'failed' ||
+              ckpt.status === 'refused')
+          ) {
+            terminal = true;
+          }
+        } catch (_) {}
+      }
+
+      if (!terminal) {
+        openRuns.push({
+          workItemId,
+          runDir,
+          entry,
+          mtimeMs: stat.mtimeMs,
+        });
+      }
+    }
+  } catch (_) {}
+
+  return openRuns;
+}
+
+function isOpenRun(workItemId, options, deps) {
+  const d = deps || {};
+  if (typeof d.isOpenRun === 'function') {
+    return d.isOpenRun(workItemId);
+  }
+  const openRuns = getOpenRuns(options, deps);
+  return openRuns.some((r) => r.workItemId === workItemId);
 }
 
 function getEarliestResetTime(evidenceData, now) {
@@ -39,7 +242,7 @@ function getEarliestResetTime(evidenceData, now) {
 
   if (evidenceData.cooldowns) {
     for (const cd of Object.values(evidenceData.cooldowns)) {
-      if (!cd || cd.status !== 'blocked') continue;
+      if (!cd || (cd.status !== 'blocked' && cd.lastStatus !== 'blocked')) continue;
       let resetAt = null;
       if (cd.resetTime) {
         resetAt =
@@ -140,46 +343,95 @@ function checkCeiling(options, deps) {
   const d = deps || {};
   const opts = options || {};
   const ceiling = d.ceiling || opts.ceiling || CONCURRENCY_CEILING;
-  const maxWriters =
+
+  const requestedMaxWriters =
     ceiling.maxWriters !== undefined
       ? ceiling.maxWriters
       : ceiling.maxImplementationAgents !== undefined
         ? ceiling.maxImplementationAgents
-        : 2;
+        : DEFAULTS.maxImplementationAgents;
+
   const maxReviewers =
     ceiling.maxReviewers !== undefined
       ? ceiling.maxReviewers
       : ceiling.maxReviewAgents !== undefined
         ? ceiling.maxReviewAgents
-        : 2;
+        : DEFAULTS.maxReviewAgents;
 
-  const decisionOpts = {
-    dir: opts.decisionDir || (d && d.decisionDir) || decisions.DEFAULT_DIR,
-    now: typeof d.now === 'function' ? d.now() : d.now || opts.now || Date.now(),
-  };
+  // Governed decision clamp for implementation/writer ceiling
+  const decisionCandidate =
+    opts.governedDecision ||
+    (d && d.governedDecision) ||
+    (ceiling && ceiling.governedDecision) ||
+    null;
+  const decisionValid = isGovernedDecision(decisionCandidate);
+  let maxWriters = DEFAULTS.maxImplementationAgents;
+  if (Number.isFinite(requestedMaxWriters)) {
+    if (requestedMaxWriters <= 1) {
+      maxWriters = Math.max(0, requestedMaxWriters);
+    } else if (decisionValid) {
+      maxWriters = requestedMaxWriters;
+    } else {
+      maxWriters = DEFAULTS.maxImplementationAgents;
+    }
+  }
+
+  const now = typeof d.now === 'function' ? d.now() : d.now || opts.now || Date.now();
+  const decisionRecords = collectAllDecisionRecords(opts, d);
 
   const writersDetailed =
     typeof d.openWritersDetailed === 'function'
-      ? d.openWritersDetailed(decisionOpts)
-      : decisions.openWritersDetailed(decisionOpts);
+      ? d.openWritersDetailed({
+          records: decisionRecords.records,
+          readable: decisionRecords.readable,
+          now,
+        })
+      : decisions.openWritersDetailed({
+          records: decisionRecords.records,
+          readable: decisionRecords.readable,
+          now,
+        });
+
   const reviewersDetailed =
     typeof d.openReviewersDetailed === 'function'
-      ? d.openReviewersDetailed(decisionOpts)
-      : decisions.openReviewersDetailed(decisionOpts);
+      ? d.openReviewersDetailed({
+          records: decisionRecords.records,
+          readable: decisionRecords.readable,
+          now,
+        })
+      : decisions.openReviewersDetailed({
+          records: decisionRecords.records,
+          readable: decisionRecords.readable,
+          now,
+        });
 
   const writersCount =
     (writersDetailed && writersDetailed.writers && writersDetailed.writers.length) || 0;
   const reviewersCount =
     (reviewersDetailed && reviewersDetailed.reviewers && reviewersDetailed.reviewers.length) || 0;
 
-  if (writersCount >= maxWriters) {
+  // Also include active open runs from intake that are not already in writersDetailed
+  const openRuns = getOpenRuns(opts, d);
+  const openWriterIds = new Set(
+    ((writersDetailed && writersDetailed.writers) || []).map((w) => w.workItemId)
+  );
+  let unrecordedRuns = 0;
+  for (const r of openRuns) {
+    if (!openWriterIds.has(r.workItemId)) {
+      openWriterIds.add(r.workItemId);
+      unrecordedRuns++;
+    }
+  }
+  const effectiveWritersCount = writersCount + unrecordedRuns;
+
+  if (effectiveWritersCount >= maxWriters) {
     return {
       allowed: false,
       reason: 'WRITER_CEILING_REACHED',
-      detail: `active writers (${writersCount}) reached ceiling (${maxWriters})`,
-      writersCount,
-      reviewersCount,
+      detail: `active writers (${effectiveWritersCount}) reached ceiling (${maxWriters})`,
+      activeWriters: effectiveWritersCount,
       maxWriters,
+      activeReviewers: reviewersCount,
       maxReviewers,
     };
   }
@@ -210,7 +462,8 @@ function findNextWorkItem(options, deps) {
   const d = deps || {};
   const rootDir = path.resolve(opts.rootDir || process.cwd());
   const now = typeof d.now === 'function' ? d.now() : d.now || opts.now || Date.now();
-  const decisionDir = opts.decisionDir || d.decisionDir || decisions.DEFAULT_DIR;
+  const decisionRecords = collectAllDecisionRecords(opts, d);
+  const terminalWorkItems = opts.terminalWorkItems || d.terminalWorkItems || new Map();
 
   let items = [];
   if (Array.isArray(d.items)) {
@@ -259,6 +512,15 @@ function findNextWorkItem(options, deps) {
       continue;
     }
 
+    // Check if item already reached a terminal outcome in this session
+    if (terminalWorkItems.has(id)) {
+      skipped.push({
+        id,
+        reason: `terminal state reached in this session (${terminalWorkItems.get(id)})`,
+      });
+      continue;
+    }
+
     // 1. Items marked BLOCKED are never picked (NX-R04)
     if (status.startsWith('BLOCKED')) {
       skipped.push({
@@ -287,8 +549,12 @@ function findNextWorkItem(options, deps) {
 
     // 3. Open run or writer claim check
     const writerFn = d.writerFor || decisions.writerFor;
-    const activeWriter = writerFn(id, { dir: decisionDir, now });
-    const isOpen = typeof d.isOpenRun === 'function' ? d.isOpenRun(id) : false;
+    const activeWriter = writerFn(id, {
+      records: decisionRecords.records,
+      readable: decisionRecords.readable,
+      now,
+    });
+    const isOpen = isOpenRun(id, opts, d);
     if (activeWriter || isOpen) {
       const claimDetail = activeWriter
         ? `claimed by session ${activeWriter.sessionId || 'active'}`
@@ -317,6 +583,110 @@ function findNextWorkItem(options, deps) {
   return { item: selected, skipped };
 }
 
+async function awaitIntakeExecution(intakeResult) {
+  let childExitCode = 0;
+  if (intakeResult && intakeResult.child && typeof intakeResult.child.on === 'function') {
+    childExitCode = await new Promise((resolve) => {
+      let settled = false;
+      const done = (code) => {
+        if (!settled) {
+          settled = true;
+          resolve(typeof code === 'number' ? code : 0);
+        }
+      };
+      intakeResult.child.on('close', (code) => done(code));
+      intakeResult.child.on('exit', (code) => done(code));
+      intakeResult.child.on('error', () => done(1));
+    });
+  } else if (intakeResult && typeof intakeResult.exitCode === 'number') {
+    childExitCode = intakeResult.exitCode;
+  }
+
+  let terminalOutcome;
+  if (childExitCode !== 0) {
+    terminalOutcome = 'failed';
+  } else if (
+    intakeResult &&
+    intakeResult.status &&
+    intakeResult.status !== 'launched' &&
+    intakeResult.status !== 'prepared'
+  ) {
+    terminalOutcome = intakeResult.status;
+  } else {
+    terminalOutcome = 'completed';
+  }
+
+  return { exitCode: childExitCode, outcome: terminalOutcome };
+}
+
+async function executeIntakeForItem(item, options, deps, logOpts) {
+  const opts = options || {};
+  const d = deps || {};
+  const runIntakeFn = d.runIntake || intakeApi.runIntake;
+  const intakeDeps = d.intakeDeps || {};
+
+  const primaryDecisionDir = opts.decisionDir || d.decisionDir || decisions.DEFAULT_DIR;
+
+  try {
+    const intakeResult = await runIntakeFn(
+      {
+        workItem: item.work_item_id,
+        run: true,
+        publish: opts.publish,
+        decisionDir: primaryDecisionDir,
+      },
+      intakeDeps
+    );
+
+    const { exitCode, outcome } = await awaitIntakeExecution(intakeResult);
+
+    const stage =
+      outcome === 'completed' || outcome === 'published'
+        ? decisions.Stage.COMPLETED
+        : outcome === 'refused'
+          ? decisions.Stage.REFUSED
+          : decisions.Stage.FAILED;
+
+    decisions.recordDecision(
+      {
+        stage,
+        workItemId: item.work_item_id,
+        outcome,
+        exitCode,
+      },
+      logOpts
+    );
+
+    return {
+      success: exitCode === 0 && (outcome === 'completed' || outcome === 'published'),
+      outcome,
+      exitCode,
+      intakeResult,
+    };
+  } catch (err) {
+    const isRefusal =
+      err &&
+      (err.code === 'INTAKE_INCOMPLETE' ||
+        String(err.code || '').startsWith('ISOLATION_') ||
+        err.code === 'BASE_SHA_NOT_IN_LOCAL_MAIN');
+    const outcome = isRefusal ? 'refused' : 'failed';
+    const stage = isRefusal ? decisions.Stage.REFUSED : decisions.Stage.FAILED;
+
+    decisions.recordDecision(
+      {
+        stage,
+        workItemId: item.work_item_id,
+        outcome,
+        detail: err && err.message,
+        code: err && err.code,
+      },
+      logOpts
+    );
+
+    return { success: false, outcome, exitCode: 1, error: err };
+  }
+}
+
 async function nextLoop(options, deps) {
   const opts = options || {};
   const d = deps || {};
@@ -325,6 +695,8 @@ async function nextLoop(options, deps) {
   const sleepFn = d.sleep || defaultSleep;
   const getNow = typeof d.now === 'function' ? d.now : () => d.now || Date.now();
   const maxIterations = opts.maxIterations !== undefined ? Number(opts.maxIterations) : Infinity;
+  const pollIntervalMs = getPollingInterval(opts, d);
+  const terminalWorkItems = opts.terminalWorkItems || d.terminalWorkItems || new Map();
 
   let iteration = 0;
   while (iteration < maxIterations) {
@@ -341,7 +713,7 @@ async function nextLoop(options, deps) {
     if (hasStopFile) {
       decisions.recordDecision(
         {
-          stage: 'stopped',
+          stage: decisions.Stage.REFUSED,
           detail: 'STOP_FILE_EXISTS',
           stopFile: stopFilePath,
         },
@@ -352,7 +724,7 @@ async function nextLoop(options, deps) {
     }
 
     // 2. Find next work item
-    const findResult = findNextWorkItem({ ...opts, now }, d);
+    const findResult = findNextWorkItem({ ...opts, now, terminalWorkItems }, d);
     for (const s of findResult.skipped) {
       log(`Skipped ${s.id}: ${s.reason}`);
     }
@@ -360,7 +732,7 @@ async function nextLoop(options, deps) {
     if (!findResult.item) {
       decisions.recordDecision(
         {
-          stage: decisions.Stage.REFUSED || 'refused',
+          stage: decisions.Stage.REFUSED,
           detail: 'NO_READY_ITEM',
         },
         logOpts
@@ -377,7 +749,7 @@ async function nextLoop(options, deps) {
     if (!laneStatus.available) {
       decisions.recordDecision(
         {
-          stage: decisions.Stage.COOLED || 'cooled',
+          stage: decisions.Stage.COOLED,
           detail: 'ALL_LANES_UNAVAILABLE',
           earliestResetTime: laneStatus.earliestResetTime,
           workItemId: item.work_item_id,
@@ -390,18 +762,15 @@ async function nextLoop(options, deps) {
       const waitMs =
         laneStatus.earliestResetTime && laneStatus.earliestResetTime > now
           ? laneStatus.earliestResetTime - now
-          : opts.pollIntervalMs || 5000;
+          : pollIntervalMs;
       await sleepFn(waitMs);
-      if (opts.stopOnUnavailable || maxIterations <= 1) {
-        return {
-          stopped: true,
-          reason: 'ALL_LANES_UNAVAILABLE',
-          earliestResetTime: laneStatus.earliestResetTime,
-          waitMs,
-          iteration,
-        };
-      }
-      continue;
+      return {
+        stopped: true,
+        reason: 'ALL_LANES_UNAVAILABLE',
+        earliestResetTime: laneStatus.earliestResetTime,
+        waitMs,
+        iteration,
+      };
     }
 
     // 4. Check ceiling
@@ -409,15 +778,14 @@ async function nextLoop(options, deps) {
     if (!ceilingStatus.allowed) {
       decisions.recordDecision(
         {
-          stage: decisions.Stage.REFUSED || 'refused',
+          stage: decisions.Stage.REFUSED,
           detail: ceilingStatus.reason,
           workItemId: item.work_item_id,
         },
         logOpts
       );
       log(`Ceiling reached: ${ceilingStatus.detail}. Waiting.`);
-      const waitMs = opts.pollIntervalMs || 5000;
-      await sleepFn(waitMs);
+      await sleepFn(pollIntervalMs);
       if (maxIterations <= 1) {
         return {
           stopped: true,
@@ -432,42 +800,24 @@ async function nextLoop(options, deps) {
     // 5. Run item through intake --run
     decisions.recordDecision(
       {
-        stage: decisions.Stage.SELECTED || 'selected',
+        stage: decisions.Stage.SELECTED,
         workItemId: item.work_item_id,
       },
       logOpts
     );
 
-    const runIntakeFn = d.runIntake || intakeApi.runIntake;
-    const intakeResult = await runIntakeFn(
-      {
-        workItem: item.work_item_id,
-        run: true,
-        publish: opts.publish,
-      },
-      d
-    );
+    const execResult = await executeIntakeForItem(item, opts, d, {
+      dir: opts.decisionDir || d.decisionDir || decisions.DEFAULT_DIR,
+      now: getNow(),
+    });
 
-    if (intakeResult && intakeResult.child && typeof intakeResult.child.on === 'function') {
-      await new Promise((resolve) => {
-        intakeResult.child.on('close', resolve);
-        intakeResult.child.on('exit', resolve);
-        intakeResult.child.on('error', resolve);
-      });
+    const outcome = execResult.outcome || 'completed';
+    terminalWorkItems.set(item.work_item_id, outcome);
+    log(`Work Item ${item.work_item_id} ended with terminal state ${outcome}.`);
+
+    if (iteration < maxIterations) {
+      await sleepFn(pollIntervalMs);
     }
-
-    const terminalOutcome = (intakeResult && intakeResult.status) || 'completed';
-    decisions.recordDecision(
-      {
-        stage:
-          terminalOutcome === 'refused' || terminalOutcome === 'blocked'
-            ? decisions.Stage.FAILED
-            : decisions.Stage.COMPLETED,
-        workItemId: item.work_item_id,
-        outcome: terminalOutcome,
-      },
-      { dir: opts.decisionDir || d.decisionDir || decisions.DEFAULT_DIR, now: getNow() }
-    );
   }
 
   return { completed: true, iterations: iteration };
@@ -494,7 +844,7 @@ async function runNext(options, deps) {
   if (hasStopFile) {
     decisions.recordDecision(
       {
-        stage: 'stopped',
+        stage: decisions.Stage.REFUSED,
         detail: 'STOP_FILE_EXISTS',
         stopFile: stopFilePath,
       },
@@ -513,7 +863,7 @@ async function runNext(options, deps) {
   if (!findResult.item) {
     decisions.recordDecision(
       {
-        stage: decisions.Stage.REFUSED || 'refused',
+        stage: decisions.Stage.REFUSED,
         detail: 'NO_READY_ITEM',
       },
       logOpts
@@ -537,7 +887,7 @@ async function runNext(options, deps) {
   if (!laneStatus.available) {
     decisions.recordDecision(
       {
-        stage: decisions.Stage.COOLED || 'cooled',
+        stage: decisions.Stage.COOLED,
         detail: 'ALL_LANES_UNAVAILABLE',
         earliestResetTime: laneStatus.earliestResetTime,
         workItemId: item.work_item_id,
@@ -557,7 +907,7 @@ async function runNext(options, deps) {
   if (!ceilingStatus.allowed) {
     decisions.recordDecision(
       {
-        stage: decisions.Stage.REFUSED || 'refused',
+        stage: decisions.Stage.REFUSED,
         detail: ceilingStatus.reason,
         workItemId: item.work_item_id,
       },
@@ -567,26 +917,27 @@ async function runNext(options, deps) {
     return { run: false, reason: ceilingStatus.reason, detail: ceilingStatus.detail };
   }
 
-  // 5. Call intake --run
+  // 5. Call intake --run and await terminal outcome
   decisions.recordDecision(
     {
-      stage: decisions.Stage.SELECTED || 'selected',
+      stage: decisions.Stage.SELECTED,
       workItemId: item.work_item_id,
     },
     logOpts
   );
 
-  const runIntakeFn = d.runIntake || intakeApi.runIntake;
-  const intakeResult = await runIntakeFn(
-    {
-      workItem: item.work_item_id,
-      run: true,
-      publish: opts.publish,
-    },
-    d
-  );
+  const execResult = await executeIntakeForItem(item, opts, d, {
+    dir: opts.decisionDir || d.decisionDir || decisions.DEFAULT_DIR,
+    now: Date.now(),
+  });
 
-  return { item, intakeResult, ran: true };
+  return {
+    item,
+    intakeResult: execResult.intakeResult,
+    ran: true,
+    status: execResult.outcome,
+    exitCode: execResult.exitCode,
+  };
 }
 
 function nextCommand(args, deps) {
@@ -628,4 +979,10 @@ module.exports = {
   nextLoop,
   nextCommand,
   CONCURRENCY_CEILING,
+  loadConfig,
+  getPollingInterval,
+  getAllDecisionDirs,
+  collectAllDecisionRecords,
+  getOpenRuns,
+  isOpenRun,
 };

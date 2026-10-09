@@ -569,7 +569,7 @@ function planDispatch(items, accounts, context) {
 }
 
 const CONCURRENCY_CEILING = Object.freeze({
-  maxWriters: 2,
+  maxWriters: DEFAULTS.maxImplementationAgents,
   maxReviewers: DEFAULTS.maxReviewAgents,
 });
 
