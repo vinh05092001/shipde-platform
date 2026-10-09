@@ -959,12 +959,16 @@ function getIsolatedLauncher() {
                             rec.stage === decisions.Stage.LAUNCHED &&
                             rec.detail &&
                             rec.detail.startsWith('REPAIR_ROUND:') &&
-                            rec.sha
+                            rec.sha &&
+                            rec.worktree
                           ) {
-                            if (rec.worktree !== workerRoot) {
-                              console.error('WORKTREE MISMATCH!', rec.worktree, workerRoot);
-                            }
-                            if (rec.worktree === workerRoot) {
+                            const recWorktree = path.resolve(rec.worktree);
+                            const currentWorktree = path.resolve(workerRoot);
+                            const pathsMatch = process.platform === 'win32'
+                              ? recWorktree.toLowerCase() === currentWorktree.toLowerCase()
+                              : recWorktree === currentWorktree;
+                            
+                            if (pathsMatch) {
                               repairCommits.add(rec.sha.toLowerCase());
                             }
                           }

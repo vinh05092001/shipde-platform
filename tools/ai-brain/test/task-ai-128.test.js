@@ -506,7 +506,7 @@ test('RH-R01 continuation: format gate re-runs against adopted HEAD, then review
   cp.execSync('git config user.name "Test"', { cwd: workerRoot });
   cp.execSync('git config user.email "test@example.com"', { cwd: workerRoot });
 
-  fs.writeFileSync(path.join(workerRoot, 'file.js'), 'edit1');
+  fs.writeFileSync(path.join(workerRoot, 'file.js'), 'const a = 1;\n');
   cp.execSync('git add file.js', { cwd: workerRoot });
   cp.execSync('git commit -m "repair 1"', { cwd: workerRoot });
   const repairSha = cp.execSync('git rev-parse HEAD', { cwd: workerRoot }).toString().trim();
@@ -575,56 +575,53 @@ test('RH-R01 continuation: format gate re-runs against adopted HEAD, then review
   };
 
   // Test continuation!
-  try {
-    const { getIsolatedLauncher } = require('../isolation-launcher');
-    const launcher = getIsolatedLauncher();
+  const { getIsolatedLauncher } = require('../isolation-launcher');
+  const launcher = getIsolatedLauncher();
 
-    // 1. Run the launcher with retainWorkerHead to trigger adoption!
-    await launcher({ id: 'test' }, null, {
-      baseSha: baseSha,
-      retainWorkerHead: baseSha,
-      cwd: hostCwd,
-      workerRoot: workerRoot,
-      decisionDir: decisionDir,
-      workItemId: 'FEAT-1',
-      checkpoint: checkpointPath,
-      verdictPath: verdictPath,
-      getWorkerSid: () => 'SID-1',
-      verifyBoundary: () => true,
-    });
+  // 1. Run the launcher with retainWorkerHead to trigger adoption!
+  await launcher({ id: 'test' }, null, {
+    baseSha: baseSha,
+    retainWorkerHead: baseSha,
+    cwd: hostCwd,
+    workerRoot: workerRoot,
+    decisionDir: decisionDir,
+    workItemId: 'FEAT-1',
+    checkpoint: checkpointPath,
+    verdictPath: verdictPath,
+    getWorkerSid: () => 'SID-1',
+    verifyBoundary: () => true,
+  });
 
-    // 2. Now call reviewLane on the adopted checkpoint!
-    const updatedDisk = cli.readCheckpoint(checkpointPath);
-    const session = {
-      headSha: updatedDisk.liveSteps['FEAT-1'].repair.sha,
-      worktree: workerRoot,
-    };
-    const logObj = { stage: () => {}, formatChecks: [] };
-    const result = await orchestrate.reviewItem(
-      o,
-      item,
-      session,
-      logObj,
-      { dir: decisionDir },
-      launcher,
-      path.join(TMP, 'usage'),
-      Date.now(),
-      [cand('test-reviewer', 'reviewer')],
-      { effectiveCooldownMs: () => 0, markOutcome: () => {} },
-      { getTool: () => null }
-    );
-    // Export logObj to check later
-    global.testLogObj = logObj;
-  } catch (err) {
-    // ignore
-  }
+  // 2. Now call reviewLane on the adopted checkpoint!
+  const updatedDisk = cli.readCheckpoint(checkpointPath);
+  const session = {
+    headSha: updatedDisk.liveSteps['FEAT-1'].repair.sha,
+    worktree: workerRoot,
+  };
+  const logObj = { stage: () => {}, formatChecks: [], reviews: [] };
+  const result = await orchestrate.reviewItem(
+    o,
+    item,
+    session,
+    logObj,
+    { dir: decisionDir },
+    launcher,
+    path.join(TMP, 'usage'),
+    Date.now(),
+    [cand('test-reviewer', 'reviewer')],
+    { effectiveCooldownMs: () => 0, markOutcome: () => {} },
+    { getTool: () => null }
+  );
 
   const logs = decisions.readDecisionsSafe({ dir: decisionDir });
   const adoptionLog = logs.find((l) => l.stage === 'adopted_repair_head');
   assert.ok(adoptionLog, 'Should record adopted_repair_head decision');
   assert.strictEqual(adoptionLog.adoptedSha, repairSha);
 
-  const formatLog = global.testLogObj.formatChecks[0];
+  const formatLog = logObj.formatChecks[0];
   assert.ok(formatLog, 'Format gate should be run against adopted HEAD');
   assert.strictEqual(formatLog.sha, repairSha, 'Format check should be for adopted HEAD');
+
+  const reviewLog = logs.find((l) => l.stage === 'review');
+  assert.ok(reviewLog, 'Review phase should complete');
 });

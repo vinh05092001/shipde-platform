@@ -4551,7 +4551,6 @@ async function runFormatGate(params) {
   };
 
   const changed = changedPrettierFiles(workerRoot, baseSha, targetSha);
-  console.log('CHANGED FILES:', changed);
   if (changed.detail) {
     // The changed files cannot be named, so nothing can be verified. That is the
     // same situation as a missing prettier: recorded, never a silent pass.
