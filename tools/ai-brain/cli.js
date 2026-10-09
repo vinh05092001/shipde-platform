@@ -2976,6 +2976,53 @@ async function mergeCommand(args) {
   }
 }
 
+/**
+ * intake (TASK-AI-131): one command turns a Work Item ID into a full Controller
+ * run with no hand-written inputs —
+ *   node tools/ai-brain/cli.js intake --work-item <ID> [--run] [--publish]
+ *
+ * Every orchestrate input (goal, specs, catalogue, accounts) is built from
+ * repository sources only and written to tools/ai-brain/data/intake/<ID>-<ts>/.
+ * The orchestrate command comes from policy. Without --run it prints the exact
+ * command and the inputs dir; with --run it checks the isolation pre-flight and
+ * starts orchestrate. It never invents product meaning: a missing or ambiguous
+ * source refuses with INTAKE_INCOMPLETE naming what is missing.
+ */
+function intakeCommand(args, deps = {}) {
+  const d = deps || {};
+  const log = d.log || console.log;
+  const error = d.error || console.error;
+  const exit = d.exit || process.exit;
+  const { runIntake } = d.runIntake ? d : require('./intake');
+
+  const workItem = typeof args['work-item'] === 'string' ? args['work-item'] : null;
+  const run = Boolean(args.run);
+  const publish = Boolean(args.publish);
+
+  return Promise.resolve()
+    .then(() => runIntake({ workItem, run, publish }, d))
+    .then((result) => {
+      for (const warning of result.warnings || []) {
+        log('CẢNH catalogue source ' + warning.source + ': ' + warning.error);
+      }
+      if (run) {
+        log('Inputs dir: ' + result.runDir);
+        log('Started orchestrate with ' + result.command);
+        return result;
+      }
+      log('Inputs dir: ' + result.runDir);
+      log('Command: ' + result.command);
+      return result;
+    })
+    .catch((err) => {
+      error((err && err.code ? err.code + ': ' : '') + ((err && err.message) || err));
+      const code = err && err.code === 'INTAKE_INCOMPLETE' ? 2 : 1;
+      if (exit === process.exit) process.exitCode = code;
+      else exit(code);
+      return { exitCode: code, error: err };
+    });
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const command = args._[0] || 'reconcile';
@@ -3087,9 +3134,26 @@ function main() {
     return;
   }
 
+  // intake (TASK-AI-131): build every orchestrate input from repository sources.
+  // Async (the catalogue merge awaits its live listings), so the exit code is
+  // set via process.exitCode and any rejection is caught rather than crashing.
+  if (command === 'intake') {
+    const result = intakeCommand(args);
+    if (result && typeof result.then === 'function') {
+      result.then(
+        () => {},
+        (err) => {
+          console.error('Intake lỗi: ' + (err && err.message ? err.message : err));
+          process.exitCode = 1;
+        }
+      );
+    }
+    return;
+  }
+
   console.error('Lệnh không rõ: ' + command);
   console.error(
-    'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | discovery | account | probe | qualify | serena | evidence | review | merge'
+    'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | discovery | account | probe | qualify | serena | evidence | review | orchestrate | intake | merge'
   );
   process.exit(2);
 }
@@ -3116,6 +3180,7 @@ module.exports = {
   reviewCommand,
   orchestrateCommand,
   mergeCommand,
+  intakeCommand,
 };
 
 if (require.main === module) {
