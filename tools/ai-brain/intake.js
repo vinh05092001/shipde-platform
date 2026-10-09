@@ -480,7 +480,15 @@ function quoteArg(value) {
   return /\s/.test(s) ? '"' + s.replace(/"/g, '\\"') + '"' : s;
 }
 
-function composeOrchestrateCommand({ root, runDir, baseSha, repoRoot, hasAgyPoolQuota, publish }) {
+function composeOrchestrateCommand({
+  root,
+  runDir,
+  baseSha,
+  repoRoot,
+  hasAgyPoolQuota,
+  publish,
+  decisionDir,
+}) {
   const cli = path.join(root, 'tools', 'ai-brain', 'cli.js');
   const runFiles = {
     goal: path.join(runDir, 'goal.txt'),
@@ -488,7 +496,7 @@ function composeOrchestrateCommand({ root, runDir, baseSha, repoRoot, hasAgyPool
     catalogue: path.join(runDir, 'catalogue.json'),
     accounts: path.join(runDir, 'accounts.json'),
     checkpoint: path.join(runDir, 'checkpoint.json'),
-    decisionDir: path.join(runDir, 'decisions'),
+    decisionDir: decisionDir || path.join(runDir, 'decisions'),
   };
   const argv = [
     'node',
@@ -622,7 +630,11 @@ async function runIntake(opts, deps) {
     'intake',
     id + '-' + formatRunTimestamp(now)
   );
+  const targetDecisionDir = o.decisionDir || d.decisionDir || path.join(runDir, 'decisions');
   fs.mkdirSync(path.join(runDir, 'decisions'), { recursive: true });
+  if (targetDecisionDir !== path.join(runDir, 'decisions')) {
+    fs.mkdirSync(targetDecisionDir, { recursive: true });
+  }
   fs.writeFileSync(path.join(runDir, 'goal.txt'), derived.goal);
   fs.writeFileSync(path.join(runDir, 'specs.json'), JSON.stringify([derived.specItem], null, 2));
   fs.writeFileSync(path.join(runDir, 'catalogue.json'), JSON.stringify(catalogue.models, null, 2));
@@ -635,6 +647,7 @@ async function runIntake(opts, deps) {
     repoRoot,
     hasAgyPoolQuota: hasPoolQuota,
     publish: Boolean(o.publish),
+    decisionDir: o.decisionDir || d.decisionDir,
   });
 
   const result = {
@@ -653,6 +666,7 @@ async function runIntake(opts, deps) {
     argv,
     runFiles,
     ran: false,
+    status: o.run ? 'launched' : 'prepared',
   };
 
   if (o.run) {
@@ -666,6 +680,22 @@ async function runIntake(opts, deps) {
     });
     result.child = (d.spawnCommand || defaultSpawn)(argv, root);
     result.ran = true;
+    if (o.wait && result.child && typeof result.child.on === 'function') {
+      const exitCode = await new Promise((resolve) => {
+        let settled = false;
+        const done = (code) => {
+          if (!settled) {
+            settled = true;
+            resolve(typeof code === 'number' ? code : 0);
+          }
+        };
+        result.child.on('close', (c) => done(c));
+        result.child.on('exit', (c) => done(c));
+        result.child.on('error', () => done(1));
+      });
+      result.exitCode = exitCode;
+      result.status = exitCode === 0 ? 'completed' : 'failed';
+    }
   }
 
   return result;
