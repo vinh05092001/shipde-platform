@@ -128,9 +128,19 @@ function profile(overrides) {
   );
 }
 
-function generated() {
+function generated(extra) {
   const registry = sourcesApi.loadSources({ file: path.join(__dirname, '..', 'sources.json') });
-  return generateCandidates({ registry, discoverPool: false, openCodeIds: [] });
+  return generateCandidates(
+    Object.assign(
+      {
+        registry,
+        discoverPool: false,
+        openCodeIds: [],
+        models: ['gemini-3.1-pro-low'],
+      },
+      extra
+    )
+  );
 }
 
 function rank(profileOverrides, candidates) {
@@ -286,9 +296,9 @@ describe('TASK-AI-126', () => {
     );
     for (const c of agyCandidates) {
       assert.equal(c.upstream, 'antigravity');
-      assert.match(
+      assert.equal(
         c.quotaScope,
-        new RegExp('^' + c.accountId + ':(gemini|claude-gpt)$'),
+        c.accountId + ':gemini',
         'the agy quota scope is <account>:<family>'
       );
       assert.match(c.accountId, /^agy\d{2}$/);

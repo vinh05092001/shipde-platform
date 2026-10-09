@@ -121,6 +121,8 @@ function buildDefaults() {
     isolationStop: null,
     status: null,
     refusal: null,
+    warnings: [],
+    discoveryWarning: null,
   };
 }
 
@@ -3035,6 +3037,23 @@ async function runOrchestration(goal, opts) {
     evidenceData,
     { now }
   );
+
+  const pool = require('./agy-pool-runtime');
+  const discoveryWarning = pool.getLastDiscoveryWarning();
+  if (discoveryWarning) {
+    if (!log.warnings) log.warnings = [];
+    log.warnings.push(discoveryWarning);
+    log.discoveryWarning = discoveryWarning;
+    if (decisionDir) {
+      try {
+        fs.appendFileSync(
+          path.join(decisionDir, 'warnings.log'),
+          `[${new Date(now).toISOString()}] [DISCOVERY] ${discoveryWarning}\n`,
+          'utf8'
+        );
+      } catch {}
+    }
+  }
 
   const registry = o.registry || { sources: [] };
 
@@ -6384,4 +6403,5 @@ module.exports = {
   RunStatus,
   PublicationStatus,
   effectiveCooldownMs: evidence.effectiveCooldownMs,
+  buildDefaults,
 };

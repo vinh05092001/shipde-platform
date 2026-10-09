@@ -2839,6 +2839,11 @@ function orchestrateCommand(args, deps = {}) {
             ? args['opencode-ids'].split(',').filter(Boolean)
             : [],
       });
+  const pool = require('./agy-pool-runtime');
+  const discoveryWarning = pool.getLastDiscoveryWarning();
+  if (discoveryWarning && typeof console !== 'undefined' && console.warn) {
+    console.warn(`[agy-pool] discovery warning: ${discoveryWarning}`);
+  }
   const evidenceDir =
     typeof args['evidence-dir'] === 'string' && args['evidence-dir']
       ? args['evidence-dir']

@@ -44,11 +44,11 @@ function accountDir(accountId, options) {
       `INVALID_ACCOUNT_ID: account must match /^agy\\d{2}$/, got ${JSON.stringify(accountId)}`
     );
   }
-  return path.join(runsDir(options), accountId);
+  return path.join(exp.runsDir(options), accountId);
 }
 
 function discoverAccounts(options) {
-  const dir = runsDir(options);
+  const dir = exp.runsDir(options);
   try {
     return fs
       .readdirSync(dir, { withFileTypes: true })
@@ -66,7 +66,7 @@ function readJson(file) {
 
 function readResult(accountId, options) {
   if (!isValidAccountId(accountId)) return { state: 'error', reason: 'INVALID_ACCOUNT_ID' };
-  const file = path.join(accountDir(accountId, options), 'result.json');
+  const file = path.join(exp.accountDir(accountId, options), 'result.json');
   try {
     return readJson(file);
   } catch (err) {
@@ -77,7 +77,7 @@ function readResult(accountId, options) {
 
 function readOutText(accountId, options) {
   if (!isValidAccountId(accountId)) return '';
-  const file = path.join(accountDir(accountId, options), 'out.txt');
+  const file = path.join(exp.accountDir(accountId, options), 'out.txt');
   try {
     return fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '');
   } catch {
@@ -89,12 +89,12 @@ function waitForResult(accountId, sinceMs, options) {
   if (!isValidAccountId(accountId)) return { state: 'error', reason: 'INVALID_ACCOUNT_ID' };
   const opts = options || {};
   const timeoutMs = Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : 120000;
-  const file = path.join(accountDir(accountId, opts), 'result.json');
+  const file = path.join(exp.accountDir(accountId, opts), 'result.json');
   const start = Date.now();
   while (Date.now() - start <= timeoutMs) {
     try {
       const stat = fs.statSync(file);
-      if (!sinceMs || stat.mtimeMs >= sinceMs) return readResult(accountId, opts);
+      if (!sinceMs || stat.mtimeMs >= sinceMs) return exp.readResult(accountId, opts);
     } catch {}
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
   }
@@ -112,7 +112,7 @@ function runAdapter(accountId, options) {
   const opts = options || {};
   const script = opts.adapterScript || process.env.AGY_POOL_ADAPTER_SCRIPT;
   if (script) {
-    const res = spawnSync(process.execPath, [script, accountDir(accountId, opts), accountId], {
+    const res = spawnSync(process.execPath, [script, exp.accountDir(accountId, opts), accountId], {
       encoding: 'utf8',
       timeout: Number(opts.adapterTimeoutMs) > 0 ? Number(opts.adapterTimeoutMs) : 120000,
       windowsHide: true,
@@ -175,12 +175,12 @@ function submitJob(accountId, job, options) {
     return { state: 'error', exitCode: 1, reason: 'INVALID_ACCOUNT_ID' };
   }
   const opts = options || {};
-  const dir = accountDir(accountId, opts);
+  const dir = exp.accountDir(accountId, opts);
   fs.mkdirSync(dir, { recursive: true });
   const resultFile = path.join(dir, 'result.json');
   const startedAt = Date.now();
   fs.writeFileSync(path.join(dir, 'job.json'), JSON.stringify(job, null, 2), 'utf8');
-  const launch = runAdapter(accountId, opts);
+  const launch = exp.runAdapter(accountId, opts);
   if (launch.exitCode !== 0) {
     const isTimeout = Boolean(launch.stderr && launch.stderr.includes('ADAPTER_TIMEOUT'));
     const reason =
@@ -201,7 +201,7 @@ function submitJob(accountId, job, options) {
     } catch {}
     return errorResult;
   }
-  return waitForResult(accountId, startedAt, opts);
+  return exp.waitForResult(accountId, startedAt, opts);
 }
 
 function parseQuotaJson(value) {
@@ -259,7 +259,7 @@ function parseQuotaOutput(text) {
 
 function quotaReading(accountId, options) {
   const opts = options || {};
-  const result = opts.result || readResult(accountId, opts);
+  const result = opts.result || exp.readResult(accountId, opts);
   if (!result) return { available: false, reason: 'không có result.json', rows: [] };
   if (result.state === 'login-required') {
     return { available: false, reason: 'AUTH_FAILED', rows: [] };
@@ -267,7 +267,7 @@ function quotaReading(accountId, options) {
   if (result.state !== 'ok' && result.state !== 'quota') {
     return { available: false, reason: result.reason || result.state || 'FAILED', rows: [] };
   }
-  const parsed = parseQuotaOutput(readOutText(accountId, opts));
+  const parsed = parseQuotaOutput(exp.readOutText(accountId, opts));
   if (!parsed.available) return parsed;
   return Object.assign({}, parsed, {
     account: { known: true, email: accountId, source: 'pool' },
@@ -278,8 +278,8 @@ function quotaReading(accountId, options) {
 function modelIdsFromRuntime(options) {
   const opts = options || {};
   const out = new Set();
-  for (const accountId of discoverAccounts(opts)) {
-    const parsed = parseQuotaOutput(readOutText(accountId, opts));
+  for (const accountId of exp.discoverAccounts(opts)) {
+    const parsed = parseQuotaOutput(exp.readOutText(accountId, opts));
     for (const model of parsed.models || []) out.add(model);
   }
   return [...out].sort();
@@ -305,11 +305,13 @@ function parseCliModels(stdout) {
     if (!line) continue;
     if (/^fetching/i.test(line)) continue;
     if (line.toLowerCase() === 'ok') continue;
+    if (line.startsWith('#')) continue;
     const parts = line.split(/\t/);
-    const token = (parts[0] || '').trim().split(/\s+/)[0];
-    if (token && !token.includes(' ')) {
-      models.add(token);
-    }
+    const token = (parts[0] || '').trim();
+    if (!token || token.includes(' ')) continue;
+    if (!/^[a-zA-Z0-9][-a-zA-Z0-9._/]*$/.test(token)) continue;
+    if (token.startsWith('---') || token.startsWith('===') || token.startsWith('___')) continue;
+    models.add(token);
   }
   return [...models].sort();
 }
@@ -337,12 +339,16 @@ function parseCatalogueModels(catalogue) {
 
 function discoverPoolModels(options) {
   const opts = options || {};
+  if (opts.discoverPool === false) {
+    return [];
+  }
   if (Array.isArray(opts.models) && opts.models.length > 0) {
     return [...opts.models];
   }
 
   const dataDir = opts.dataDir || path.join(__dirname, 'data', 'discovery');
-  const cacheFile = opts.cacheFile || null;
+  const cacheFile =
+    opts.cacheFile !== undefined ? opts.cacheFile : path.join(dataDir, 'agy-pool-cache.tmp');
 
   if (!opts.refresh && lastGoodModels && lastGoodModels.length > 0) {
     return [...lastGoodModels];
@@ -445,7 +451,7 @@ function discoverPoolModels(options) {
   return [];
 }
 
-module.exports = {
+const exp = {
   runsDir,
   accountDir,
   discoverAccounts,
@@ -461,4 +467,7 @@ module.exports = {
   resetPoolDiscoveryCache,
   getLastDiscoveryWarning,
   isValidAccountId,
+  parseCliModels,
 };
+
+module.exports = exp;

@@ -11,7 +11,7 @@
 | Dependencies | `TASK-AI-126` |
 | Assigned author | `GEMINI` |
 | Risk | `LOW` |
-| Allowed paths | `tools/ai-brain/sources.json`; `tools/ai-brain/agy-pool-runtime.js`; `tools/ai-brain/candidates.js`; `tools/ai-brain/test/task-ai-126.test.js`; `tools/ai-brain/test/task-ai-130.test.js`; `docs/product-spec/work-items/TASK-AI-130.md`; `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` |
+| Allowed paths | `tools/ai-brain/sources.json`; `tools/ai-brain/agy-pool-runtime.js`; `tools/ai-brain/candidates.js`; `tools/ai-brain/orchestrate.js`; `tools/ai-brain/cli.js`; `tools/ai-brain/test/task-ai-126.test.js`; `tools/ai-brain/test/task-ai-130.test.js`; `docs/product-spec/work-items/TASK-AI-130.md`; `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` |
 | Reviewer | `Codex — fresh independent task` |
 | Branch | `fix/task-ai-130-agy-capabilities` |
 | Pull Request | `Pending` |
@@ -48,7 +48,7 @@ AC-R05: Without `--external-workers agy-pool`, no agy-pool candidate is selected
 ## Fail-Before / Pass-After
 
 - Fail-before: On `origin/main` (`fee07f2c`), `tools/ai-brain/test/task-ai-130.test.js` is absent; `sources.json` contains hard-coded `"models": ["gemini-3.1-pro-low"]`; `candidates.js` carries `isAgyPool` hard-coding and does not discover models or catalogue capabilities; and all agy-pool candidates are rejected with `CAPABILITY_MISSING:jsonSchema`.
-- Pass-after: All 6 sub-cases in `tools/ai-brain/test/task-ai-130.test.js` pass, and all baseline test files pass cleanly: 118 passing tests across 5 test files (`task-ai-130.test.js`, `task-ai-126.test.js`, `candidates.test.js`, `task-ai-68.test.js`, `discovery.test.js`). Prettier checks and `git diff --check` are clean.
+- Pass-after: All test cases in `tools/ai-brain/test/task-ai-130.test.js` pass, and all baseline test files pass cleanly: 124 passing tests across 5 test files (`task-ai-130.test.js`, `task-ai-126.test.js`, `candidates.test.js`, `task-ai-68.test.js`, `discovery.test.js`). Prettier checks and `git diff --check` are clean.
 
 ## Residual Limitations
 

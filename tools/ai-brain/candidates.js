@@ -473,52 +473,48 @@ function poolAccountCandidates(opts) {
 
   // 1. Discover models (AC-R01)
   const poolModels = new Set();
-  if (Array.isArray(o.models) && o.models.length > 0) {
-    for (const m of o.models) if (m) poolModels.add(String(m));
+  if (o.discoverPool === false) {
+    if (Array.isArray(o.models) && o.models.length > 0) {
+      for (const m of o.models) if (m) poolModels.add(String(m));
+    }
   } else {
-    for (const m of pool.discoverPoolModels(o)) {
-      if (m) poolModels.add(m);
-    }
-  }
-
-  const accounts = o.accounts || [];
-  const native = accounts.find((a) => a.provider === 'antigravity' || a.id === 'agy-native-a');
-  if (native) {
-    for (const m of accountModels(native)) poolModels.add(m);
-  }
-
-  const catalogue = o.catalogue || [];
-  for (const c of catalogue) {
-    if (typeof c === 'object' && c) {
-      if (c.upstream === 'antigravity' || c.source === 'antigravity' || c.upstream === 'ag') {
-        const m = c.modelId || c.model;
-        if (m) poolModels.add(m.replace(/^(ag|antigravity)\//, ''));
+    if (Array.isArray(o.models) && o.models.length > 0) {
+      for (const m of o.models) if (m) poolModels.add(String(m));
+    } else {
+      for (const m of pool.discoverPoolModels(o)) {
+        if (m) poolModels.add(m);
       }
     }
-  }
 
-  if (o.evidenceData && o.evidenceData.combinations) {
-    for (const combo of o.evidenceData.combinations) {
-      if (
-        combo.upstream === 'antigravity' ||
-        combo.source === 'antigravity' ||
-        combo.upstream === 'ag'
-      ) {
-        const m = combo.modelId || combo.model;
-        if (m) poolModels.add(m.replace(/^(ag|antigravity)\//, ''));
+    const accounts = o.accounts || [];
+    const native = accounts.find((a) => a.provider === 'antigravity' || a.id === 'agy-native-a');
+    if (native) {
+      for (const m of accountModels(native)) poolModels.add(m);
+    }
+
+    const catalogue = o.catalogue || [];
+    for (const c of catalogue) {
+      if (typeof c === 'object' && c) {
+        if (c.upstream === 'antigravity' || c.source === 'antigravity' || c.upstream === 'ag') {
+          const m = c.modelId || c.model;
+          if (m) poolModels.add(m.replace(/^(ag|antigravity)\//, ''));
+        }
       }
     }
-  }
 
-  const shouldDiscoverPool =
-    o.discoverPool === false
-      ? false
-      : o.discoverPool === true ||
-        o.fakeRunsDir ||
-        o.runsDir ||
-        process.env.AGY_POOL_RUNS_DIR ||
-        process.env.AGY_RUNS_DIR;
-  if (shouldDiscoverPool) {
+    if (o.evidenceData && o.evidenceData.combinations) {
+      for (const combo of o.evidenceData.combinations) {
+        if (
+          combo.upstream === 'antigravity' ||
+          combo.source === 'antigravity' ||
+          combo.upstream === 'ag'
+        ) {
+          const m = combo.modelId || combo.model;
+          if (m) poolModels.add(m.replace(/^(ag|antigravity)\//, ''));
+        }
+      }
+    }
+
     for (const modelId of pool.modelIdsFromRuntime(o)) poolModels.add(modelId);
   }
 
@@ -526,9 +522,12 @@ function poolAccountCandidates(opts) {
 
   // 2. Discover & filter accounts (AC-R03)
   const candidateAccounts = new Set();
-  const hasRunsDir = Boolean(
-    o.fakeRunsDir || o.runsDir || process.env.AGY_POOL_RUNS_DIR || process.env.AGY_RUNS_DIR
-  );
+  const shouldDiscoverPool = o.discoverPool !== false;
+  const runtimeDir = pool.runsDir(o);
+  let hasRunsDir = false;
+  try {
+    hasRunsDir = Boolean(shouldDiscoverPool && runtimeDir && fs.existsSync(runtimeDir));
+  } catch {}
 
   if (shouldDiscoverPool) {
     for (const accountId of pool.discoverAccounts(o)) candidateAccounts.add(accountId);
@@ -561,6 +560,9 @@ function poolAccountCandidates(opts) {
       if (!accDirExists) continue;
 
       const result = pool.readResult(acc, o);
+      const outText = pool.readOutText(acc, o);
+      if (!result && !outText) continue;
+
       if (
         result &&
         (result.state === 'login-required' ||
@@ -588,11 +590,15 @@ function poolAccountCandidates(opts) {
     usableAccounts.push(acc);
   }
 
-  // 3. Harness capabilities from sources.json
-  const harnessCapabilities = Object.assign({}, agySource.capabilities || { tools: true });
+  // 3. Harness capabilities from sources.json (never force tools true)
+  const harnessCapabilities = Object.assign({}, agySource.capabilities || {});
 
   // 4. Candidate generation
   const candidates = [];
+  const accounts = o.accounts || [];
+  const native = accounts.find((a) => a.provider === 'antigravity' || a.id === 'agy-native-a');
+  const catalogue = o.catalogue || [];
+
   for (const acc of usableAccounts) {
     let quotaReading = null;
     if (hasRunsDir) {
@@ -616,7 +622,7 @@ function poolAccountCandidates(opts) {
       if (!family) continue;
 
       // Exclude if family quota is 0%
-      if (quotaReading && Array.isArray(quotaReading.rows)) {
+      if (hasRunsDir && quotaReading && Array.isArray(quotaReading.rows)) {
         const familyRows = quotaReading.rows.filter((r) => r.family === family);
         if (familyRows.length > 0) {
           const isZero = familyRows.some(
@@ -654,31 +660,17 @@ function poolAccountCandidates(opts) {
         }
       }
 
-      if (!modelCapabilities) {
-        const accList = Array.isArray(o.accounts) && o.accounts.length > 0 ? o.accounts : accounts;
-        for (const a of accList) {
-          if (!a || !a.capabilities) continue;
-          if (a.provider === 'antigravity' || a.id === 'agy-native-a' || a.id === 'agy-docker-b') {
-            const hasModel =
-              Array.isArray(a.models) &&
-              a.models.some((m) => (typeof m === 'string' ? m : m.model || m.modelId) === model);
-            if (hasModel) {
-              if (a.capabilities && Object.keys(a.capabilities).length > 0) {
-                modelCapabilities = Object.assign({}, a.capabilities);
-              }
-              if (a.contextWindow !== undefined) contextWindow = a.contextWindow;
-              else if (a.capabilities.contextWindow !== undefined)
-                contextWindow = a.capabilities.contextWindow;
-              break;
-            }
-          }
-        }
-      }
-
-      // Effective capabilities: model AND harness
+      // Effective capabilities: model AND harness (never override an explicit false)
       let effectiveCapabilities = {};
       if (modelCapabilities && Object.keys(modelCapabilities).length > 0) {
-        effectiveCapabilities = Object.assign({}, modelCapabilities, harnessCapabilities);
+        effectiveCapabilities = Object.assign({}, modelCapabilities);
+        for (const [k, v] of Object.entries(harnessCapabilities)) {
+          if (typeof modelCapabilities[k] === 'boolean' && typeof v === 'boolean') {
+            effectiveCapabilities[k] = modelCapabilities[k] && v;
+          } else if (modelCapabilities[k] === undefined) {
+            effectiveCapabilities[k] = v;
+          }
+        }
       }
 
       candidates.push({

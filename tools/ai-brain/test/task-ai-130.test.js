@@ -107,11 +107,23 @@ describe('TASK-AI-130: agy-pool discovery and evidence selection', () => {
       },
     ];
 
-    const models = ['gemini-3.8-flash-high', 'claude-opus-4-6-thinking'];
+    // Real discovery via fake CLI spawn (never injected opts.models)
+    const fakeSpawn = () => ({
+      status: 0,
+      stdout:
+        'Fetching available models...\n' +
+        '# Header comment line\n' +
+        'gemini-3.8-flash-high\tGemini 3.8 Flash (High)\n' +
+        'claude-opus-4-6-thinking\tClaude Opus 4.6 (Thinking)\n' +
+        'junk line with spaces\n',
+      stderr: '',
+    });
+
     const generated = candidatesApi.generateCandidates({
       fakeRunsDir: runsDir,
       catalogue,
-      models,
+      spawnSync: fakeSpawn,
+      refresh: true,
     });
 
     const poolCands = generated.filter((c) => c.harness === 'agy-pool');
@@ -469,5 +481,315 @@ describe('TASK-AI-130: agy-pool discovery and evidence selection', () => {
       false,
       'isAgyPool branch removed from candidates.js'
     );
+  });
+
+  test('P2-1: capabilities only from catalogue entry for same model id, never from account rows', () => {
+    const runsDir = tmpDir('task-ai-130-p2-1-');
+    const dir01 = path.join(runsDir, 'agy01');
+    fs.mkdirSync(dir01, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir01, 'out.txt'),
+      JSON.stringify({
+        groups: [
+          {
+            id: 'gemini',
+            models: ['gemini-custom-native-99'],
+            weekly: { remaining: 1.0 },
+          },
+        ],
+      }),
+      'utf8'
+    );
+    fs.writeFileSync(path.join(dir01, 'result.json'), JSON.stringify({ state: 'ok' }), 'utf8');
+
+    // Catalogue has NO entry for gemini-custom-native-99
+    const catalogue = [];
+
+    // An agy-native account declares the model and carries capabilities
+    const accounts = [
+      {
+        id: 'agy-native-a',
+        provider: 'antigravity',
+        models: ['gemini-custom-native-99'],
+        capabilities: { jsonSchema: true, tools: true },
+        contextWindow: 500000,
+      },
+    ];
+
+    const generated = candidatesApi.generateCandidates({
+      fakeRunsDir: runsDir,
+      catalogue,
+      accounts,
+      models: ['gemini-custom-native-99'],
+    });
+
+    const poolCand = generated.find(
+      (c) => c.harness === 'agy-pool' && c.modelId === 'gemini-custom-native-99'
+    );
+    assert.ok(poolCand, 'candidate generated');
+    assert.deepEqual(
+      poolCand.capabilities,
+      {},
+      'capabilities must NOT come from agy-native-a account row'
+    );
+    assert.equal(
+      poolCand.contextWindow,
+      undefined,
+      'contextWindow must NOT come from agy-native-a account row'
+    );
+
+    const profile = {
+      taskId: 'TASK-AI-130-P2-1',
+      role: 'author.foundation',
+      requiredCapabilities: ['jsonSchema', 'tools'],
+      contextSize: 200000,
+      proofFloor: 'NONE',
+    };
+    const rankResult = routing.rankForProfile(
+      [poolCand],
+      profile,
+      {
+        weightProfile: 'BALANCED',
+        weights: { latency: 34, quality: 33, cost: 33 },
+      },
+      {
+        now: Date.now(),
+        evidenceData: {},
+      }
+    );
+    assert.equal(rankResult.chosen, null);
+    assert.ok(
+      rankResult.rejected.some((r) => r.reasonCode === 'CAPABILITY_MISSING:jsonSchema'),
+      'rejected with CAPABILITY_MISSING:jsonSchema because account row cannot supply capabilities'
+    );
+  });
+
+  test('P2-2: never force tools true and never let harness override an explicit false (effective = model AND harness)', () => {
+    const runsDir = tmpDir('task-ai-130-p2-2-');
+    const dir01 = path.join(runsDir, 'agy01');
+    fs.mkdirSync(dir01, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir01, 'out.txt'),
+      JSON.stringify({
+        groups: [
+          {
+            id: 'gemini',
+            models: ['gemini-no-tools', 'gemini-has-tools', 'gemini-plain'],
+            weekly: { remaining: 1.0 },
+          },
+        ],
+      }),
+      'utf8'
+    );
+    fs.writeFileSync(path.join(dir01, 'result.json'), JSON.stringify({ state: 'ok' }), 'utf8');
+
+    const catalogue = [
+      {
+        modelId: 'ag/gemini-no-tools',
+        capabilities: { jsonSchema: true, tools: false },
+        contextWindow: 100000,
+      },
+      {
+        modelId: 'ag/gemini-has-tools',
+        capabilities: { jsonSchema: true, tools: true },
+        contextWindow: 100000,
+      },
+      {
+        modelId: 'ag/gemini-plain',
+        capabilities: { jsonSchema: true },
+        contextWindow: 100000,
+      },
+    ];
+
+    // Standard registry where agy-pool has { tools: true }
+    const generated = candidatesApi.generateCandidates({
+      fakeRunsDir: runsDir,
+      catalogue,
+      models: ['gemini-no-tools', 'gemini-has-tools'],
+    });
+
+    const candNoTools = generated.find(
+      (c) => c.harness === 'agy-pool' && c.modelId === 'gemini-no-tools'
+    );
+    assert.ok(candNoTools);
+    assert.equal(
+      candNoTools.capabilities.tools,
+      false,
+      'explicit tools: false from catalogue must not be overridden to true by harness'
+    );
+    assert.equal(candNoTools.capabilities.jsonSchema, true);
+
+    const candHasTools = generated.find(
+      (c) => c.harness === 'agy-pool' && c.modelId === 'gemini-has-tools'
+    );
+    assert.ok(candHasTools);
+    assert.equal(
+      candHasTools.capabilities.tools,
+      true,
+      'tools: true when both model and harness allow tools'
+    );
+
+    // Custom registry where agy-pool lacks capabilities
+    const customRegistry = {
+      sources: [
+        {
+          id: 'agy-pool',
+          kind: 'agent-cli',
+          harness: 'agy-pool',
+          accounts: ['agy01'],
+        },
+      ],
+    };
+    const candWithoutHarnessTools = candidatesApi
+      .generateCandidates({
+        registry: customRegistry,
+        fakeRunsDir: runsDir,
+        catalogue,
+        models: ['gemini-plain'],
+      })
+      .find((c) => c.harness === 'agy-pool' && c.modelId === 'gemini-plain');
+
+    assert.ok(candWithoutHarnessTools);
+    assert.equal(
+      candWithoutHarnessTools.capabilities.tools,
+      undefined,
+      'tools is never forced true when sources.json lacks the block'
+    );
+  });
+
+  test('P3: discoverPool: false really disables model discovery', () => {
+    const registry = sourcesApi.loadSources();
+    const result = candidatesApi.generateCandidates({
+      registry,
+      discoverPool: false,
+      openCodeIds: [],
+    });
+    const agyCands = result.filter((c) => c.harness === 'agy-pool');
+    assert.equal(
+      agyCands.length,
+      0,
+      'no agy-pool candidates when discoverPool is false and no models passed'
+    );
+
+    const discovered = pool.discoverPoolModels({ discoverPool: false });
+    assert.deepEqual(discovered, [], 'discoverPoolModels returns [] when discoverPool is false');
+  });
+
+  test('P3: AUTH_FAILED and missing-quota exclusion with default runtime dir', () => {
+    const runsDir = tmpDir('task-ai-130-default-runs-');
+
+    // agy01: ok with valid quota
+    const dir01 = path.join(runsDir, 'agy01');
+    fs.mkdirSync(dir01, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir01, 'out.txt'),
+      JSON.stringify({
+        groups: [
+          {
+            id: 'gemini',
+            models: ['gemini-3.8-flash-high'],
+            weekly: { remaining: 0.9 },
+          },
+        ],
+      }),
+      'utf8'
+    );
+    fs.writeFileSync(path.join(dir01, 'result.json'), JSON.stringify({ state: 'ok' }), 'utf8');
+
+    // agy08: login-required
+    const dir08 = path.join(runsDir, 'agy08');
+    fs.mkdirSync(dir08, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir08, 'result.json'),
+      JSON.stringify({ state: 'login-required' }),
+      'utf8'
+    );
+
+    // agy09: empty dir (missing result and out.txt)
+    const dir09 = path.join(runsDir, 'agy09');
+    fs.mkdirSync(dir09, { recursive: true });
+
+    // Mock pool.runsDir to simulate default runtime directory pointing to runsDir
+    mock.method(pool, 'runsDir', () => runsDir);
+
+    const catalogue = [
+      {
+        modelId: 'ag/gemini-3.8-flash-high',
+        capabilities: { jsonSchema: true },
+        contextWindow: 1000000,
+      },
+    ];
+
+    const generated = candidatesApi.generateCandidates({
+      catalogue,
+      models: ['gemini-3.8-flash-high'],
+    });
+
+    const poolCands = generated.filter((c) => c.harness === 'agy-pool');
+    assert.ok(poolCands.length > 0, 'agy01 is included');
+    assert.ok(
+      poolCands.every((c) => c.accountId === 'agy01'),
+      'only agy01 is usable'
+    );
+    assert.equal(
+      generated.some((c) => c.accountId === 'agy08' || c.accountId === 'agy09'),
+      false,
+      'AUTH_FAILED and missing accounts are excluded under default runtime dir'
+    );
+  });
+
+  test('P3: discovery cache and warning wired into Controller path', () => {
+    const cacheDir = tmpDir('task-ai-130-cache-test-');
+    const cacheFile = path.join(cacheDir, 'agy-pool-cache.json');
+    pool.resetPoolDiscoveryCache();
+
+    // 1. Initial discovery writes to cacheFile
+    const fakeSpawn = () => ({
+      status: 0,
+      stdout: 'gemini-3.8-flash-high\tGemini 3.8 Flash (High)\n',
+      stderr: '',
+    });
+    const discovered = pool.discoverPoolModels({
+      spawnSync: fakeSpawn,
+      cacheFile,
+      refresh: true,
+    });
+    assert.deepEqual(discovered, ['gemini-3.8-flash-high']);
+    assert.equal(fs.existsSync(cacheFile), true, 'cache file written to disk');
+
+    // 2. Failure loads from cacheFile and sets warning
+    pool.resetPoolDiscoveryCache();
+    const badSpawn = () => ({ status: 1, stdout: '', stderr: 'down' });
+    const loaded = pool.discoverPoolModels({
+      spawnSync: badSpawn,
+      catalogue: [],
+      catalogueFile: path.join(cacheDir, 'nonexistent.jsonl'),
+      cacheFile,
+      refresh: true,
+    });
+    assert.deepEqual(loaded, ['gemini-3.8-flash-high'], 'loaded from disk cache');
+    assert.match(pool.getLastDiscoveryWarning(), /keeping last good model list/);
+
+    // 3. Controller path (runOrchestration defaults)
+    const orch = require('../orchestrate');
+    const logDefaults = orch.buildDefaults();
+    assert.ok(Array.isArray(logDefaults.warnings));
+    assert.equal(logDefaults.discoveryWarning, null);
+  });
+
+  test('parseCliModels rejects junk lines and extracts valid model IDs', () => {
+    const raw = [
+      'Fetching available models...',
+      '# Comment line',
+      'gemini-3.8-flash-high\tGemini 3.8 Flash (High)',
+      'claude-opus-4-6-thinking\tClaude Opus 4.6 (Thinking)',
+      'ok',
+      'junk with spaces',
+      '=== header ===',
+      '--- separator ---',
+      '',
+    ].join('\n');
+    const parsed = pool.parseCliModels(raw);
+    assert.deepEqual(parsed, ['claude-opus-4-6-thinking', 'gemini-3.8-flash-high']);
   });
 });
