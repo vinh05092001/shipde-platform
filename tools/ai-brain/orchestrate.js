@@ -767,6 +767,7 @@ function reviewLane(
       usageFile,
       verdictFile,
       isReview: true,
+      decisionDir: o.decisionDir || null,
       checkpoint: o.checkpointFile || null,
       title: (item ? item.id : 'item') + '-review',
       labels: {
@@ -3550,6 +3551,7 @@ async function runOrchestration(goal, opts) {
         cwd: o.isolatedWorker ? isolatedWorkerRoot : o.workerRoot || o.cwd,
         isolatedWorker: Boolean(o.isolatedWorker),
         usageFile,
+        decisionDir: o.decisionDir || null,
         checkpoint: checkpointFile,
         title: String(item.id),
         labels: { workItem: String(item.id), role: roleOf(item) },
@@ -4683,6 +4685,7 @@ async function reviewItem(
         domainAttempts: domainAttemptsMap,
         triedKeys: triedKeySet,
         evidenceDir: options.evidenceDir || evidenceDir,
+        onCheckpoint: options.onCheckpoint,
       }
     )(findings, sha);
   };
@@ -5693,6 +5696,7 @@ function repairRound(
       cwd: repairWorkerRoot,
       isolatedWorker: Boolean(o.isolatedWorker),
       usageFile,
+      decisionDir: o.decisionDir || null,
       checkpoint: o.checkpointFile || null,
       title: planned.id,
       labels: { workItem: planned.id, role: roleOf(planned), repairOf: item.id },
@@ -5798,6 +5802,7 @@ function repairRound(
         harness: repairJob.harness,
         branch: repairJob.branch,
         sessionId: handle,
+        sha: nextSha,
         detail: 'REPAIR_ROUND: repairs ' + item.id,
         worktree: repairJob.cwd || null,
       },

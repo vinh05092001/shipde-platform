@@ -801,7 +801,12 @@ function getIsolatedLauncher() {
       !verdictData.worktree ||
       String(verdictData.worktree).toLowerCase() !== String(hostCwd).toLowerCase()
     ) {
-      throw new Error('ISOLATION_VERDICT_INVALID: worktree mismatch or missing');
+      throw new Error(
+        'ISOLATION_VERDICT_INVALID: worktree mismatch or missing: ' +
+          verdictData.worktree +
+          ' vs ' +
+          hostCwd
+      );
     }
     if (!verdictData.timestamp || new Date(verdictData.timestamp).getTime() > Date.now()) {
       throw new Error('ISOLATION_VERDICT_INVALID: timestamp in future or missing');
@@ -860,7 +865,7 @@ function getIsolatedLauncher() {
     //     HEAD == that sha; never run checkout or any tree-mutating git in a retained root;
     //     mismatch -> structured WORKER_HEAD_MISMATCH failure for that repair attempt.
     const nulDevice = process.platform === 'win32' ? 'NUL' : '/dev/null';
-    const retainWorkerHead =
+    let retainWorkerHead =
       typeof opts.retainWorkerHead === 'string'
         ? opts.retainWorkerHead.trim()
         : opts.retainWorkerHead
@@ -869,6 +874,7 @@ function getIsolatedLauncher() {
 
     if (retainWorkerHead) {
       let retainedHeadSha = null;
+      let missingRoot = false;
       if (fs.existsSync(workerRoot) && fs.existsSync(path.join(workerRoot, '.git'))) {
         try {
           const { withCleanGitEnv, safeGit } = require('./supervisor');
@@ -891,17 +897,135 @@ function getIsolatedLauncher() {
         } catch {
           retainedHeadSha = null;
         }
+      } else {
+        missingRoot = true;
       }
 
-      if (!retainedHeadSha || retainedHeadSha.toLowerCase() !== retainWorkerHead.toLowerCase()) {
-        const err = new Error(
-          'WORKER_HEAD_MISMATCH: retained worker root HEAD (' +
-            (retainedHeadSha || 'unknown') +
-            ') does not match requested SHA ' +
-            retainWorkerHead
-        );
-        err.code = 'WORKER_HEAD_MISMATCH';
+      if (missingRoot) {
+        const err = new Error('WORKER_ROOT_MISSING: retained worker root is missing');
+        err.code = 'WORKER_ROOT_MISSING';
         throw err;
+      }
+
+      const { isTreeDirty } = require('./orchestrate');
+      if (
+        !retainedHeadSha ||
+        retainedHeadSha.toLowerCase() !== retainWorkerHead.toLowerCase() ||
+        isTreeDirty(workerRoot)
+      ) {
+        const workItemId = (opts && opts.workItemId) || null;
+        let adopted = false;
+
+        if (retainedHeadSha && retainWorkerHead && workItemId) {
+          try {
+            const { safeGit, withCleanGitEnv } = require('./supervisor');
+            const { isTreeDirty } = require('./orchestrate');
+            if (!isTreeDirty(workerRoot)) {
+              withCleanGitEnv(
+                workerRoot,
+                (safeGitDir) => {
+                  const mergeBaseRes = safeGit(
+                    safeGitDir,
+                    workerRoot,
+                    ['merge-base', '--is-ancestor', retainWorkerHead, retainedHeadSha],
+                    20000
+                  );
+                  if (mergeBaseRes && mergeBaseRes.status === 0) {
+                    const logRes = safeGit(
+                      safeGitDir,
+                      workerRoot,
+                      ['log', '--format=%H', retainWorkerHead + '..' + retainedHeadSha],
+                      20000
+                    );
+                    if (logRes && logRes.status === 0 && logRes.stdout) {
+                      const extraCommits = logRes.stdout
+                        .split('\n')
+                        .map((s) => s.trim())
+                        .filter(Boolean);
+                      if (extraCommits.length > 0) {
+                        const decisions = require('./decisions');
+                        const logRecords = decisions.readDecisionsSafe({
+                          workItemId,
+                          dir: (opts && opts.decisionDir) || undefined,
+                        });
+                        const repairCommits = new Set();
+                        for (const rec of logRecords) {
+                          if (
+                            rec.stage === decisions.Stage.LAUNCHED &&
+                            rec.detail &&
+                            rec.detail.startsWith('REPAIR_ROUND:') &&
+                            rec.sha
+                          ) {
+                            repairCommits.add(rec.sha.toLowerCase());
+                          }
+                        }
+
+                        const allExtraAreRepair = extraCommits.every((c) =>
+                          repairCommits.has(c.toLowerCase())
+                        );
+                        if (allExtraAreRepair) {
+                          adopted = true;
+
+                          if (opts.checkpoint) {
+                            const cli = require('./cli');
+                            const checkpointOnDisk = cli.readCheckpoint(opts.checkpoint);
+                            if (
+                              checkpointOnDisk &&
+                              checkpointOnDisk.liveSteps &&
+                              checkpointOnDisk.liveSteps[workItemId]
+                            ) {
+                              const step = checkpointOnDisk.liveSteps[workItemId];
+                              let updated = false;
+                              if (step.launch) {
+                                step.launch.workerSha = retainedHeadSha;
+                                updated = true;
+                              }
+                              if (step.repair) {
+                                step.repair.sha = retainedHeadSha;
+                                updated = true;
+                              }
+                              if (updated) {
+                                cli.writeJsonFile(opts.checkpoint, checkpointOnDisk);
+                              }
+                            }
+                          }
+
+                          decisions.recordDecision(
+                            {
+                              stage: 'adopted_repair_head',
+                              workItemId,
+                              branch: (opts && opts.branch) || null,
+                              worktree: workerRoot,
+                              detail: 'adopted descendant repair HEAD',
+                              requestedSha: retainWorkerHead,
+                              adoptedSha: retainedHeadSha,
+                            },
+                            { dir: (opts && opts.decisionDir) || undefined }
+                          );
+                          retainWorkerHead = retainedHeadSha;
+                        }
+                      }
+                    }
+                  }
+                },
+                { workerWritable: true }
+              );
+            }
+          } catch (e) {
+            // Ignore errors during adoption check and fallback to failure
+          }
+        }
+
+        if (!adopted) {
+          const err = new Error(
+            'WORKER_HEAD_MISMATCH: retained worker root HEAD (' +
+              (retainedHeadSha || 'unknown') +
+              ') does not match requested SHA ' +
+              retainWorkerHead
+          );
+          err.code = 'WORKER_HEAD_MISMATCH';
+          throw err;
+        }
       }
       // Matching HEAD: retain worker root and its commits as-is. NEVER run checkout.
     } else {

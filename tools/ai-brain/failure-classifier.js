@@ -86,6 +86,8 @@ function isLaunchInfraFailure(text) {
     /ISOLATION_VERDICT_(STALE|MISSING|INVALID|NOT_CLOSED)/.test(s) ||
     /ISOLATION_CHECKOUT_FAILED|ISOLATION_BASE_SHA_MISSING|ISOLATION_BASE_SHA_INVALID/.test(s) ||
     /PROVISION_BASE_MISMATCH/.test(s) ||
+    /WORKER_HEAD_MISMATCH/.test(s) ||
+    /WORKER_ROOT_MISSING/.test(s) ||
     /Failed to clone repository/.test(s) ||
     /\b(EPERM|EBUSY)\b[^\n]{0,120}(unlink|rmdir|operation not permitted|resource busy or locked)/.test(
       s
