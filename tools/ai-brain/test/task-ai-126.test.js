@@ -128,9 +128,19 @@ function profile(overrides) {
   );
 }
 
-function generated() {
+function generated(extra) {
   const registry = sourcesApi.loadSources({ file: path.join(__dirname, '..', 'sources.json') });
-  return generateCandidates({ registry, discoverPool: false, openCodeIds: [] });
+  return generateCandidates(
+    Object.assign(
+      {
+        registry,
+        discoverPool: false,
+        openCodeIds: [],
+        models: ['gemini-3.1-pro-low'],
+      },
+      extra
+    )
+  );
 }
 
 function rank(profileOverrides, candidates) {

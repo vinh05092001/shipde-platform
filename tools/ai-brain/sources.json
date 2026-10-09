@@ -101,7 +101,7 @@
         "agy09",
         "agy10"
       ],
-      "models": ["gemini-3.1-pro-low"],
+      "capabilities": { "tools": true },
       "harness": "agy-pool",
       "accessPath": "cli",
       "credential": { "type": "none" },
