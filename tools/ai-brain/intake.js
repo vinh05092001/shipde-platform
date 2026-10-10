@@ -204,6 +204,50 @@ function deriveGoal(text) {
   return sectionBody(text, /^##\s+(Business\s+Outcome|Outcome)\b/i);
 }
 
+const RISK_DOMAIN_PATTERNS = Object.freeze({
+  auth: /\b(?:auth(?:entication|orization)?|login|password|session|mfa|credential)\b/i,
+  security: /\b(?:security|secret|encryption|vulnerability|threat|permission|access control)\b/i,
+  money: /\b(?:money|payment|financial|settlement|cod|refund|billing|price|amount|bank)\b/i,
+  'tenant isolation': /\b(?:tenant|multi-tenant|cross-tenant|shop isolation)\b/i,
+  PII: /\b(?:pii|personal data|personal information|recipient data|phone number|email address)\b/i,
+  'carrier side effects': /\b(?:carrier|waybill|shipment|redelivery|cancel|claim|pickup)\b/i,
+  'database ownership': /\b(?:database|schema|migration|prisma|sql|persistence)\b/i,
+});
+
+function deriveRiskDomains(text) {
+  const explicit = controlValue(text, ['risk domains', 'risk domain']);
+  if (explicit) {
+    const normalized = explicit.toLowerCase();
+    return Object.keys(RISK_DOMAIN_PATTERNS).filter((domain) =>
+      normalized.includes(domain.toLowerCase())
+    );
+  }
+  const scope = sectionBody(text, /^##\s+(?:In Scope|Scope|Acceptance Matrix|Acceptance)\b/i);
+  const acceptance = sectionBody(text, /^##\s+Acceptance(?: Matrix)?\b/i);
+  const evidence = [scope, acceptance].filter(Boolean).join('\n');
+  return Object.entries(RISK_DOMAIN_PATTERNS)
+    .filter(([, pattern]) => pattern.test(evidence))
+    .map(([domain]) => domain);
+}
+
+function deriveComplexity(text, acceptanceCriteria, riskDomains, allowedPaths) {
+  const acCount = acceptanceCriteria.length;
+  const layers = new Set();
+  const scope = sectionBody(text, /^##\s+(?:In Scope|Scope)\b/i);
+  const material = scope + '\n' + allowedPaths.join('\n');
+  if (/\b(?:database|schema|migration|prisma|persistence|storage)\b/i.test(material))
+    layers.add('database');
+  if (/\b(?:api|endpoint|route|service|backend|controller)\b/i.test(material)) layers.add('api');
+  if (/\b(?:ui|screen|page|frontend|user interface)\b/i.test(material)) layers.add('ui');
+  if (/\b(?:worker|job|queue|event|webhook)\b/i.test(material)) layers.add('async');
+  if (/\b(?:carrier|provider|external integration)\b/i.test(material)) layers.add('external');
+  if ((riskDomains.includes('auth') || riskDomains.includes('security')) && acCount >= 15)
+    return 'complex';
+  if (riskDomains.length >= 2 || acCount >= 15 || layers.size >= 3) return 'complex';
+  if (acCount >= 8 || layers.size >= 2 || riskDomains.length === 1) return 'large';
+  return 'standard';
+}
+
 /**
  * Derive every spec field from repository sources. Returns the normalized
  * spec item, the goal, and the list of fields that could not be derived.
@@ -214,12 +258,6 @@ function deriveSpec({ id, workItemText, registerItem, root, deps }) {
   const namedRole = controlValue(workItemText, ['role']);
   const role = namedRole ? stripTicks(namedRole) : ROLE_DEFAULT;
 
-  const declaredComplexity = controlValue(workItemText, ['complexity']);
-  const complexity =
-    declaredComplexity && stripTicks(declaredComplexity)
-      ? stripTicks(declaredComplexity).toLowerCase()
-      : COMPLEXITY_DEFAULT;
-
   const allowedPaths = deriveAllowedPaths(workItemText);
   if (allowedPaths.length === 0) missing.push('allowedPaths');
 
@@ -228,6 +266,9 @@ function deriveSpec({ id, workItemText, registerItem, root, deps }) {
 
   const acceptanceCriteria = deriveAcceptanceCriteria(workItemText);
   if (acceptanceCriteria.length === 0) missing.push('acceptanceCriteria');
+
+  const riskDomains = deriveRiskDomains(workItemText);
+  const complexity = deriveComplexity(workItemText, acceptanceCriteria, riskDomains, allowedPaths);
 
   let verificationCommands = deriveVerificationCommands(workItemText);
   if (verificationCommands.length === 0) verificationCommands = foundationCommands(root, deps);
@@ -242,6 +283,7 @@ function deriveSpec({ id, workItemText, registerItem, root, deps }) {
     id,
     role,
     complexity,
+    riskDomains,
     allowedPaths: allowedPaths.slice(),
     files: allowedPaths.slice(),
     dependencies: dependencies.slice(),
@@ -255,6 +297,7 @@ function deriveSpec({ id, workItemText, registerItem, root, deps }) {
     missing,
     role,
     complexity,
+    riskDomains,
     allowedPaths,
     dependencies,
     acceptanceCriteria,
@@ -732,6 +775,22 @@ async function runIntake(opts, deps) {
   }
   fs.writeFileSync(path.join(runDir, 'goal.txt'), derived.goal);
   fs.writeFileSync(path.join(runDir, 'specs.json'), JSON.stringify([derived.specItem], null, 2));
+  fs.writeFileSync(
+    path.join(runDir, 'derivation.json'),
+    JSON.stringify(
+      {
+        complexity: derived.complexity,
+        acceptanceCriteriaCount: derived.acceptanceCriteria.length,
+        riskDomains: derived.riskDomains,
+        riskDomainSource: controlValue(workItemText, ['risk domains', 'risk domain'])
+          ? 'explicit-work-item-field'
+          : 'scope-and-acceptance-keywords',
+        allowedPaths: derived.allowedPaths,
+      },
+      null,
+      2
+    )
+  );
   fs.writeFileSync(
     path.join(runDir, 'resolved-dependencies.json'),
     JSON.stringify(resolvedDependencies, null, 2)
