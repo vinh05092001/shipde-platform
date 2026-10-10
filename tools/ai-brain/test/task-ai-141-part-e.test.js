@@ -556,14 +556,31 @@ test('5xx fallback retries the failed path once with backoff before choosing ano
   assert.deepEqual(sleeps, [25]);
 });
 
-test('due parked routes stay ineligible until a successful recheck', async (t) => {
+test('due parked routes are eligible for recheck and selection only after refresh', async (t) => {
   const { store } = temporaryStore(t);
   const now = 1_800_000_000_000;
   routes.recordResult(store, 'model-due', 'gateway', { ok: false, status: 429 }, now);
   store.paths['model-due|gateway'].nextCheckAt = new Date(now).toISOString();
+  assert.equal(routes.isEligible(store, 'model-due', 'gateway', now - 1), false);
+  assert.equal(routes.isDue(store, 'model-due', 'gateway', now + 1), true);
   assert.equal(routes.isEligible(store, 'model-due', 'gateway', now + 1), false);
   await routes.recheckDue(store, async () => ({ ok: true }), { now: now + 1 });
   assert.equal(routes.isEligible(store, 'model-due', 'gateway', now + 2), true);
+});
+
+test('probe --due returns failure when every due route remains parked', async (t) => {
+  const { file, store } = temporaryStore(t);
+  const now = Date.now();
+  routes.recordResult(store, 'model-due-fail', 'gateway', { ok: false, status: 429 }, now - 60000);
+  store.paths['model-due-fail|gateway'].nextCheckAt = new Date(now - 1).toISOString();
+  routes.saveStore(file, store);
+  const result = await routes.runDueCli({
+    file,
+    cap: 1,
+    log: () => {},
+    probe: async () => ({ ok: false, status: 503 }),
+  });
+  assert.equal(result, 1);
 });
 
 test('assembly performs due checks and bounded fresh probes before building live candidates', async (t) => {
@@ -655,6 +672,12 @@ test('live assembly fallback discovers account paths outside the catalogue', asy
         event.chosenPath === 'direct-vendor'
     )
   );
+  assert.ok(
+    result.some(
+      (candidate) => candidate.modelId === 'model-fallback' && candidate.gateway === 'direct-vendor'
+    )
+  );
+  assert.ok(result.some((candidate) => candidate.gateway === 'direct-vendor'));
 });
 
 test('fallback assembly probes every discovered direct and harness path', async (t) => {

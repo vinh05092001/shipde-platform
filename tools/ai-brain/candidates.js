@@ -714,7 +714,7 @@ function poolAccountCandidates(opts) {
         if (
           modelRows.length === 0 ||
           !modelRows.some((entry) => {
-            const routeId = entry.gateway || entry.upstream;
+            const routeId = entry.gateway;
             return routeId && health.isEligible(routeHealth, model, routeId, o.now);
           })
         )

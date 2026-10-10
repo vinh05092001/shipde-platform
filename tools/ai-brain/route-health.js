@@ -119,9 +119,16 @@ function recordResult(store, modelId, routeId, result, now) {
 
 function isEligible(store, modelId, routeId, now) {
   const record = store.paths[normalizeModelId(modelId) + '|' + String(routeId)];
-  // A due route is eligible only after a successful probe changes its status
-  // back to AVAILABLE. Selection must never become the implicit re-check.
+  // Due indicates the controller must re-check before selection; it is not
+  // itself evidence that the route is healthy.
   return !record || record.status === 'AVAILABLE';
+}
+
+function isDue(store, modelId, routeId, now) {
+  const record = store.paths[normalizeModelId(modelId) + '|' + String(routeId)];
+  return Boolean(
+    record && record.status !== 'AVAILABLE' && dueAt(record, Number(now) || Date.now())
+  );
 }
 
 async function routeFallback(modelId, failedPath, paths, probe, store, options) {
@@ -174,7 +181,7 @@ async function routeFallback(modelId, failedPath, paths, probe, store, options) 
         chosenPath: route.id,
         at: new Date(now).toISOString(),
       });
-      return { ok: true, route, failures };
+      return { ok: true, route, failures, failedPath, reason: failureReason };
     }
     failures.push({ path: route.id, reason: recorded.reason });
   }
@@ -203,6 +210,17 @@ async function routeFallbackDiscovered(
   options
 ) {
   const paths = discoverModelPaths(modelId, registry, accounts, catalogue);
+  for (const row of catalogue || []) {
+    const id = row && (row.modelId || row.model);
+    if (!id || normalizeModelId(id) !== normalizeModelId(modelId) || !row.gateway) continue;
+    if (!paths.some((route) => route.id === row.gateway))
+      paths.push({
+        id: row.gateway,
+        gateway: row.gateway,
+        evidence: Number(row.evidence || 0),
+        geoBlocked: row.geoBlocked === true || row.status === 'GEO_BLOCKED',
+      });
+  }
   return routeFallback(modelId, failedPath, paths, probe, store, options);
 }
 
@@ -542,12 +560,12 @@ async function runDueCli(options) {
   const store = loadStore(file);
   const result = await recheckDue(
     store,
-    (modelId, routeId) => probeGatewayModel(modelId, routeId),
+    o.probe || ((modelId, routeId) => probeGatewayModel(modelId, routeId)),
     { cap: o.cap || 20 }
   );
   saveStore(file, store);
-  console.log(JSON.stringify(result));
-  return 0;
+  (o.log || console.log)(JSON.stringify(result));
+  return result.checked > 0 && result.restored.length === 0 ? 1 : 0;
 }
 
 module.exports = {
@@ -557,6 +575,7 @@ module.exports = {
   saveStore,
   recordResult,
   isEligible,
+  isDue,
   routeFallback,
   routeFallbackDiscovered,
   recheckDue,

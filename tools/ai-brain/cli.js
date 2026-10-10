@@ -860,6 +860,7 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
   const healthFile =
     opts.routeHealthFile || path.join(__dirname, 'data', 'model-route-health.json');
   const catalogueRows = (discoveryCat && discoveryCat.candidates) || [];
+  const resolvedFallbackRoutes = [];
   const probeRoute =
     opts.probeRoute ||
     ((modelId, routeId, probeOptions) =>
@@ -881,6 +882,7 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
           allowUnprobed: true,
         })
       : null;
+  const fallbackAlreadyRefreshed = opts.refreshRoutes === true;
   const refreshedHealth = routeHealth;
   const persistHealth = () => {
     if (refresh) {
@@ -894,7 +896,8 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
             registry: resolvedRegistry,
             accounts: accounts || [],
             checkedBeforeFallback: Number((result && result.checked) || 0),
-            preResolvedFallback: true,
+            preResolvedFallback: fallbackAlreadyRefreshed,
+            resolvedRoutes: resolvedFallbackRoutes,
           })
         ).then(() => {
           if (opts.onRouteRefresh) opts.onRouteRefresh(result);
@@ -910,11 +913,13 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
     const buildExplicit = () =>
       assembleCandidates(discoveryCat, [], resolvedRegistry, accounts, opts.candidates).filter(
         (candidate) => {
-          if (opts.refreshRoutes === true) return true;
           const modelId = candidate && candidate.modelId;
           const gateway = candidate && candidate.gateway;
           return Boolean(
-            modelId && gateway && routeHealthApi.isEligible(routeHealth, modelId, gateway, opts.now)
+            modelId &&
+            gateway &&
+            (routeHealthApi.isEligible(routeHealth, modelId, gateway, opts.now) ||
+              routeHealthApi.isDue(routeHealth, modelId, gateway, opts.now))
           );
         }
       );
@@ -938,8 +943,8 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
       : require('./accounts').listAccounts();
   const evidenceAccounts = mergeEvidenceAccounts(accounts, registryAccounts);
 
-  const buildCandidates = () =>
-    assembleCandidates(discoveryCat, offs, resolvedRegistry, accounts, null, [
+  const buildCandidates = () => {
+    const assembled = assembleCandidates(discoveryCat, offs, resolvedRegistry, accounts, null, [
       ...candidatesApi
         .generateCandidates({
           registry: resolvedRegistry,
@@ -995,14 +1000,76 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
           if (c.legacy) return false;
           return Array.isArray(c.evidence) && c.evidence.some((e) => e && e.status === 'passed');
         }),
-    ]).filter((candidate) => {
+    ]);
+    for (const fallback of resolvedFallbackRoutes) {
+      const route = fallback.route;
+      if (!route) continue;
+      const matching = catalogueRows.find(
+        (row) =>
+          route.gateway &&
+          row.gateway === route.gateway &&
+          routeHealthApi.normalizeModelId(row.modelId || row.model) === fallback.modelId
+      );
+      if (matching) {
+        assembled.push(
+          ...assembleCandidates(
+            { candidates: [matching] },
+            offs,
+            resolvedRegistry,
+            accounts,
+            null,
+            []
+          )
+        );
+        continue;
+      }
+      const source = (resolvedRegistry.sources || []).find((item) => item.id === route.id);
+      if (!source) continue;
+      const generated = candidatesApi.generateCandidates({
+        registry: resolvedRegistry,
+        accounts: accounts || [],
+        openCodeIds: [fallback.modelId],
+        catalogue: [],
+        discoverPool: opts.discoverPool !== false,
+        home: opts.home,
+      });
+      const directCandidates = generated.filter((candidate) => candidate.gateway === route.id);
+      if (directCandidates.length === 0) {
+        const source = (resolvedRegistry.sources || []).find((item) => item.id === route.id);
+        const dispatch =
+          resolvedRegistry.dispatch && resolvedRegistry.dispatch.providers
+            ? resolvedRegistry.dispatch.providers[String(route.id).toLowerCase()]
+            : null;
+        const boundAccounts = (accounts || []).filter(
+          (account) => account && (account.provider === route.id || account.sourceId === route.id)
+        );
+        for (const account of boundAccounts) {
+          directCandidates.push({
+            harness: route.harness || (dispatch && dispatch.harness) || (source && source.harness),
+            accessPath: route.accessPath || (source && (source.accessPath || source.endpoint)),
+            gateway: route.gateway || route.id,
+            upstream: route.upstream || route.id,
+            accountId: account.id,
+            quotaScope: account.id,
+            modelId: fallback.modelId,
+            source: route.id,
+            kind: source && source.kind,
+            capabilities: account.capabilities || {},
+            sharedQuota: 'unknown',
+          });
+        }
+      }
+      assembled.push(...directCandidates);
+    }
+    return assembled.filter((candidate) => {
       const modelId = candidate && candidate.modelId;
       const gateway = candidate && candidate.gateway;
       if (!modelId || !gateway) return false;
       const key = routeHealthApi.normalizeModelId(modelId) + '|' + gateway;
       const record = routeHealth.paths[key];
       return record
-        ? routeHealthApi.isEligible(routeHealth, modelId, gateway, opts.now)
+        ? routeHealthApi.isEligible(routeHealth, modelId, gateway, opts.now) ||
+            routeHealthApi.isDue(routeHealth, modelId, gateway, opts.now)
         : Boolean(
             (opts.probeEvidence && opts.probeEvidence(modelId, gateway)) ||
             ((opts.trustCatalogueProbe === true || opts.refreshRoutes === true) &&
@@ -1011,6 +1078,7 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
               ))
           );
     });
+  };
   if (!refresh) return buildCandidates();
   return Promise.resolve(persistHealth()).then(buildCandidates);
 }
@@ -1054,6 +1122,7 @@ async function resolveFallbackRoutes(store, catalogue, probe, routeHealthApi, op
     pathsByModel.set(normalized, [...merged.values()]);
   }
   const now = Number(options && options.now) || Date.now();
+  const resolvedRoutes = [];
   for (const [normalized, paths] of pathsByModel) {
     for (const failed of paths) {
       const health = store.paths[normalized + '|' + failed.id];
@@ -1063,20 +1132,48 @@ async function resolveFallbackRoutes(store, catalogue, probe, routeHealthApi, op
         routeHealthApi.isEligible(store, normalized, failed.id, now)
       )
         continue;
-      if (preResolved) continue;
-      if (checked >= cap) return { checked, capped: true };
+      if (preResolved) {
+        const successful = paths.find(
+          (route) =>
+            route.id !== failed.id && routeHealthApi.isEligible(store, normalized, route.id, now)
+        );
+        if (successful)
+          resolvedRoutes.push({
+            modelId: normalized,
+            failedPath: failed.id,
+            reason: health.status,
+            route: successful,
+          });
+        continue;
+      }
+      if (checked >= cap) {
+        if (options && Array.isArray(options.resolvedRoutes))
+          options.resolvedRoutes.push(...resolvedRoutes);
+        return { checked, capped: true, resolvedRoutes };
+      }
       checked += 1;
-      await routeHealthApi.routeFallback(
+      const fallback = await routeHealthApi.routeFallbackDiscovered(
         normalized,
         failed.id,
-        paths,
+        registry,
+        accounts,
+        catalogue,
         (model, route) => probe(model, route.id, { timeoutMs: options.probeTimeoutMs }),
         store,
         { now, failureReason: health.status }
       );
+      if (fallback.ok)
+        resolvedRoutes.push({
+          modelId: normalized,
+          failedPath: failed.id,
+          reason: fallback.reason,
+          route: fallback.route,
+        });
     }
   }
-  return { checked, capped: false };
+  if (options && Array.isArray(options.resolvedRoutes))
+    options.resolvedRoutes.push(...resolvedRoutes);
+  return { checked, capped: false, resolvedRoutes };
 }
 
 function readCheckpoint(file) {
@@ -3082,11 +3179,12 @@ async function orchestrateCommand(args, deps = {}) {
       now: d.now,
       cap: d.probeCap,
       timeoutMs: d.probeTimeoutMs,
-      catalogue: JSON.parse(readJsonArg(args.catalogue) || '[]'),
+      catalogue: readJsonArg(args.catalogue) || [],
       registry,
       accounts: inputAccounts,
     });
     routeHealthApi.saveStore(healthFile, healthStore);
+    d.refreshRoutes = false;
   }
   // The live loop is async (TASK-AI-65): the JEV assessment behind every
   // Controller selection returns a promise. An unhandled rejection would crash
