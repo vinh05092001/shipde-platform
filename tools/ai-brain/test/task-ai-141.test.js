@@ -12,6 +12,8 @@ const sources = require('../sources');
 const { candidateKey } = require('../discovery/identity');
 const evidence = require('../evidence');
 const accountsApi = require('../accounts');
+const harnesses = require('../harness');
+const isolation = require('../isolation-launcher');
 
 const roots = [];
 function fixtureRoot() {
@@ -68,6 +70,67 @@ function intakeAccounts(root) {
 
 test.after(() => {
   for (const root of roots) fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('Codex harness requires an isolated worker and builds the guarded exec argv', () => {
+  const codex = harnesses.getHarness('codex');
+  assert.throws(() => codex.launch({ cwd: process.cwd() }), /CODEX_REQUIRES_ISOLATION/);
+  assert.throws(
+    () => codex.launch({ cwd: process.cwd(), isolatedWorker: true }),
+    /CODEX_REQUIRES_ISOLATION/
+  );
+  const worker = path.join('C:\\ShipDeWorker', 'task-ai-141');
+  assert.deepEqual(
+    codex.launch({ cwd: worker, isolatedWorker: true, model: 'codex-test', prompt: 'task' }),
+    ['exec', '--dangerously-bypass-approvals-and-sandbox', '--model', 'codex-test', 'task']
+  );
+});
+
+test('Codex bypass and worker login probe exist only in isolated launcher script', () => {
+  const regular = isolation.buildWorkerLaunchScript({
+    credPath: 'worker.cred',
+    workerRoot: 'C:\\worker',
+    exeFile: 'codex.exe',
+    payloadArgsPath: 'args.json',
+    launchResultPath: 'result.json',
+    workerTimeoutMs: 1000,
+    completionNonce: 'nonce',
+    adapterId: 'paseo',
+    runAsCurrentUser: true,
+  });
+  const codex = isolation.buildWorkerLaunchScript({
+    credPath: 'worker.cred',
+    workerRoot: 'C:\\worker',
+    exeFile: 'codex.exe',
+    payloadArgsPath: 'args.json',
+    launchResultPath: 'result.json',
+    workerTimeoutMs: 1000,
+    completionNonce: 'nonce',
+    adapterId: 'codex',
+    runAsCurrentUser: true,
+  });
+  assert.doesNotMatch(regular, /dangerously-bypass-approvals-and-sandbox|login status/);
+  assert.match(codex, /login status/);
+  assert.match(codex, /CODEX_NOT_LOGGED_IN/);
+  assert.match(codex, /\$env:HOME = "C:\\worker"/);
+  assert.match(codex, /\$env:USERPROFILE = "C:\\worker"/);
+  assert.doesNotMatch(codex, /\.codex.*credentials|credentials.*\.codex/i);
+});
+
+test('Codex login failure is returned as a local failure so execution can continue', () => {
+  const resultPath = path.join(fixtureRoot(), 'launch-result.json');
+  fs.writeFileSync(
+    resultPath,
+    JSON.stringify({
+      completionNonce: 'nonce',
+      completed: true,
+      exitCode: 0,
+      localFailure: 'CODEX_NOT_LOGGED_IN',
+    })
+  );
+  const result = isolation.readLaunchResult(resultPath, 'nonce', { status: 0 });
+  assert.equal(result.exitCode, 1);
+  assert.match(result.stderr, /CODEX_NOT_LOGGED_IN/);
 });
 
 test('intake catalogue and real account registry plus pool discovery produce candidates', async () => {

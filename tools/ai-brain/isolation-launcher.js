@@ -266,6 +266,8 @@ function buildWorkerLaunchScript(options) {
   const payloadArgsPath = options.payloadArgsPath;
   const launchResultPath = options.launchResultPath;
   const workerTimeoutMs = options.workerTimeoutMs;
+  const adapterId = options.adapterId;
+  const isCodex = adapterId === 'codex';
   const completionNonce = options.completionNonce || crypto.randomBytes(16).toString('hex');
   const markerPath = options.markerPath || path.join(workerRoot, 'run-target.complete.json');
   // Test-only seam. The generated host script normally impersonates the worker
@@ -287,6 +289,14 @@ $psi.Password = $sec
 
   const safeWorkerRootForGit = workerRoot.replace(/\\/g, '/');
   const rtkPathPrepend = options.rtkPathPrepend || null;
+  const codexLoginProbe = isCodex
+    ? `& "${exeFile}" login status *> $null
+if ($LASTEXITCODE -ne 0) {
+  @{ nonce = "${completionNonce}"; exitCode = 1; completed = $true; localFailure = "CODEX_NOT_LOGGED_IN"; completedAt = (Get-Date).ToString('o') } | ConvertTo-Json -Depth 5 | Out-File "${markerPath}" -Encoding UTF8
+  exit 0
+}
+`
+    : '';
 
   const envAllowed = [
     'PATH',
@@ -330,6 +340,7 @@ $wrapperStartTime = Get-Date
 if (-not (Test-Path "${workerRoot}\\temp")) { New-Item -ItemType Directory -Path "${workerRoot}\\temp" | Out-Null }
 Set-Location -Path "${workerRoot}"
 \`$env:SHIPDE_RUN_TARGET_PID = "\`$PID"
+${codexLoginProbe}
 \`$payloadArgs = @(Get-Content -LiteralPath "${payloadArgsPath}" -Raw | ConvertFrom-Json)
 & "${exeFile}" @payloadArgs
 \`$jobExit = \`$LASTEXITCODE
@@ -1881,9 +1892,11 @@ function readLaunchResult(launchResultPath, completionNonce, hostRes) {
   }
 
   return {
-    exitCode: jobExit,
+    exitCode: resJson.localFailure ? 1 : jobExit,
     stdout: String(resJson.stdout || ''),
-    stderr: String(resJson.stderr || ''),
+    stderr: [String(resJson.localFailure || ''), String(resJson.stderr || '')]
+      .filter(Boolean)
+      .join('\n'),
     timedOut: false,
     completionNonce: resJson.completionNonce,
   };

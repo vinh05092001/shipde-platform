@@ -206,6 +206,26 @@ const opencodeDirect = {
   writesUsageReport: true,
 };
 
+const codex = {
+  id: 'codex',
+  command: 'codex',
+  launch(job) {
+    if (!job || !job.isolatedWorker) throw new Error('CODEX_REQUIRES_ISOLATION');
+    const { isWorkerPath } = require('./isolation-launcher');
+    if (!isWorkerPath(job.cwd)) throw new Error('CODEX_REQUIRES_ISOLATION');
+    const args = ['exec', '--dangerously-bypass-approvals-and-sandbox'];
+    if (job.model) args.push('--model', job.model);
+    args.push(job.prompt || '');
+    return args;
+  },
+  resume() {
+    throw new Error('CODEX_REQUIRES_ISOLATION');
+  },
+  sessionIdFrom() {
+    return null;
+  },
+};
+
 const MIN_CONTEXT = Object.freeze({ hermes: 32000 });
 
 function contextRefusal(harnessName, contextWindow) {
@@ -397,6 +417,7 @@ const HARNESSES = Object.freeze({
   paseo,
   cline,
   hermes,
+  codex,
   'opencode-direct': opencodeDirect,
   'agy-pool': agyPool,
   autoclaw: {

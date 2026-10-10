@@ -55,13 +55,18 @@ The supervisor explicitly directed that proof transfer be handled in Part A. Thi
 These spec parts remain follow-up scope under TASK-AI-141 and are not implemented in this revision:
 
 - **Part B:** bounded automatic qualification of candidates that lack proof, with caps and exact-SHA independent review.
-- **Part C:** isolated Codex worker lane and worker login-state handling.
 - **Part D:** intake risk-domain and complexity derivation plus the QUALITY_FIRST safety floor.
 - **Part E and addenda:** live gateway model discovery/probing, same-model alternate-path fallback, temporary parking and due rechecks.
 
+## Part C — Codex lane inside the isolated worker
+
+The Codex harness runs `codex exec --dangerously-bypass-approvals-and-sandbox` only through the isolated launcher. Direct harness use and attempts outside a worker path fail with `CODEX_REQUIRES_ISOLATION`. The launcher probes `codex login status` under the worker account before execution; a missing login is returned as the local failure `CODEX_NOT_LOGGED_IN`, allowing orchestration to continue to another candidate. The worker uses its own HOME and USERPROFILE and no host `~/.codex` credential file is read or copied.
+
+Verification: focused Part C tests cover the isolation requirement, flag placement, worker-scoped login probe, credential non-copying, and local login failure result. The operator login steps are in `docs/product-spec/docs/10-ai-collaboration/WINDOWS-SETUP-RUNBOOK.md`.
+
 ## Out of Scope for This Revision
 
-- Automatic qualification, Codex worker lane, intake risk/complexity derivation, and live gateway discovery/fallback/rechecks (Parts B to E), except the supervisor-directed proof transfer above.
+- Automatic qualification, intake risk/complexity derivation, and live gateway discovery/fallback/rechecks (Parts B, D and E), except the supervisor-directed proof transfer above.
 - Product Work Item execution as qualification, automatic merge, or reading/copying Codex credentials.
 - Live account probing or changes to agy-pool quota policy.
 
@@ -110,5 +115,5 @@ No API, persisted product data, or external side effects change. Candidate gener
 
 ## Residual Limitations
 
-- Parts B to E and their acceptance criteria remain open follow-up work within TASK-AI-141, except proof transfer now included above by supervisor direction.
+- Parts B and D to E and their acceptance criteria remain open follow-up work within TASK-AI-141, except proof transfer now included above by supervisor direction.
 - This change consumes the models already discovered by intake; it does not add live per-account pool probing.

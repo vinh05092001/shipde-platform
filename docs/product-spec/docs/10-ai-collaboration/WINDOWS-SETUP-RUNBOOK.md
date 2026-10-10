@@ -212,6 +212,17 @@ From durable Git/GitHub state the controller performs exactly one next safe tran
 
 The human pastes a prepared prompt when an interactive client opens, approves posting a review comment, resolves material product choices and performs the merge (or relies on governed exact-HEAD auto-merge under TASK-AI-13). The controller never invents a product decision, bypasses red CI or resets a dirty worktree.
 
+### Codex isolated-worker login
+
+The Codex lane uses a separate Windows worker account. Sign in as that account, install the Codex CLI for that user, then complete and verify login from a PowerShell session running as that user:
+
+```powershell
+codex login
+codex login status
+```
+
+The operator account's `~/.codex` files are never copied. The worker launch gives Codex a fresh HOME/USERPROFILE rooted in its isolated worktree. If `codex login status` fails, the Controller records `CODEX_NOT_LOGGED_IN` as a local candidate failure and continues with another candidate; authenticate the worker user before selecting Codex again.
+
 ## 9. Synchronize after human merge
 
 After squash-merging the passing PR, run:
