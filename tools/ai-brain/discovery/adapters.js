@@ -165,7 +165,10 @@ function modelSourceAdapter() {
     if (endpoint) {
       const verifyPath = (source.verify && source.verify.path) || DEFAULT_MODELS_PATH;
       const url = joinUrl(endpoint, verifyPath);
-      const res = await ctx.httpGet(url, { envName: source.credential && source.credential.env });
+      const res = await ctx.httpGet(url, {
+        envName: source.credential && source.credential.env,
+        credentialType: source.credential && source.credential.type,
+      });
       if (!res.ok || !res.parsed || !Array.isArray(res.parsed.data)) {
         return {
           status: 'error',

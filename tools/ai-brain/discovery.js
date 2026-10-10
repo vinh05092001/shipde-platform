@@ -80,7 +80,11 @@ async function cmdRun(flags) {
 
   const ctx = {
     registry,
-    httpGet: (url, opts) => httpGetModels(url, { envName: opts && opts.envName }),
+    httpGet: (url, opts) =>
+      httpGetModels(url, {
+        envName: opts && opts.envName,
+        credentialType: opts && opts.credentialType,
+      }),
     runCommand,
     resolveCommand: (name) => classifyPresence(resolveCommand(name, {})),
   };
@@ -336,4 +340,5 @@ module.exports = {
   readCatalogue: readDiscoveryCatalogue,
   getCandidates: readDiscoveryCatalogue,
   readCandidates: readDiscoveryCatalogue,
+  httpGetModels,
 };

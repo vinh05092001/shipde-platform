@@ -39,6 +39,10 @@ async function httpGetModels(url, opts) {
       hadCredential = true;
     }
   }
+  if (o.credentialType === 'sso-api-key' && hadCredential) {
+    delete headers.authorization;
+    headers['sso-ak'] = env[o.envName];
+  }
 
   const controller = o.signal ? undefined : new AbortController();
   const signal = o.signal || (controller && controller.signal);
