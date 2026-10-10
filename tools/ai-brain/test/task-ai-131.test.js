@@ -145,6 +145,11 @@ function baseDeps(root, overrides) {
       root,
       now: () => Date.now(),
       baseSha: BASE_SHA,
+      readHistory: () => [
+        { sha: '9'.repeat(40), subject: '(#900) [TASK-AI-900] fixture dependency' },
+        { sha: '8'.repeat(40), subject: '(#901) [TASK-AI-901] fixture dependency' },
+        { sha: '7'.repeat(40), subject: '(#902) [TASK-AI-902] fixture dependency' },
+      ],
       listAccounts: () => [{ id: 'acct-one', provider: 'test' }],
       hasAgyPoolQuota: true,
       isAncestorOf: () => true,
@@ -179,7 +184,11 @@ test('IN-R01 derives every field from a fixture Work Item and register row', asy
     'tools/ai-brain/test/task-ai-131.test.js',
   ]);
   // dependencies come from the register row, not the Work Item's Control table.
-  assert.deepEqual(result.spec.dependencies, ['TASK-AI-900', 'TASK-AI-901']);
+  assert.deepEqual(result.spec.dependencies, []);
+  assert.deepEqual(
+    result.resolvedDependencies.map((dependency) => dependency.id),
+    ['TASK-AI-900', 'TASK-AI-901']
+  );
   assert.deepEqual(result.spec.acceptanceCriteria, [
     'FX-R01 | First scenario | First expected result',
     'FX-R02 | Second scenario | Second expected result',
