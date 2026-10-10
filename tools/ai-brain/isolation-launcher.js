@@ -742,11 +742,23 @@ function materialiseExercise(workerRoot, options) {
 function recordWorkerDepsUnavailable(opts, workerRoot, err) {
   try {
     const decisions = require('./decisions');
+    const code = err && err.code ? String(err.code) : 'UNKNOWN';
+    const rawMessage = String((err && err.message) || err).replace(/[\r\n]+/g, ' ');
+    const detailMessage =
+      err && err.code === 'WORKER_DEPS_SOURCE_MISSING'
+        ? `failed to copy dependencies from host: ${rawMessage}`
+        : rawMessage;
+    const detail = detailMessage.replace(/[A-Za-z]:\\[^'\"]+/g, '[path]').slice(0, 220);
+    const failedPath =
+      err && err.relativePath ? String(err.relativePath).replace(/\\/g, '/') : null;
     decisions.recordDecision(
       {
         stage: decisions.Stage.WARNING,
         warning: 'WORKER_DEPS_UNAVAILABLE',
-        detail: String((err && err.message) || err).slice(0, 300),
+        detail: `code=${code}; message=${detail}${failedPath ? `; path=${failedPath}` : ''}`.slice(
+          0,
+          300
+        ),
         workItemId: (opts && opts.workItemId) || null,
         branch: (opts && opts.branch) || null,
         worktree: workerRoot || null,
@@ -756,6 +768,23 @@ function recordWorkerDepsUnavailable(opts, workerRoot, err) {
   } catch (logErr) {
     console.error(logErr);
   }
+}
+
+function resolvePnpmCommand() {
+  if (process.platform !== 'win32') return 'pnpm';
+  const appData = process.env.APPDATA;
+  if (appData) {
+    const native = path.join(appData, 'npm', 'node_modules', 'pnpm', 'pnpm.exe');
+    if (fs.existsSync(native)) return native;
+  }
+  return 'pnpm.exe';
+}
+
+function offlineStoreMiss(error) {
+  const message = String((error && error.message) || '').toLowerCase();
+  return /offline|no matching version|not found in.*store|missing.*store|store.*missing/.test(
+    message
+  );
 }
 
 function getIsolatedLauncher() {
@@ -1284,63 +1313,70 @@ function getIsolatedLauncher() {
         const depsNodeModules = path.join(depsDir, 'node_modules');
         const markerFile = path.join(depsDir, '.shipde-deps-ready');
         const cacheReady = () => fs.existsSync(markerFile) && fs.existsSync(depsNodeModules);
-
-        // Populate ONCE (WD-R01): copy into a private staging tree, mark it,
-        // then rename it into place in one step. A visible deps dir carrying
-        // its marker is therefore always a complete tree, and two first-time
-        // launches cannot interleave writes inside it.
+        // Populate ONCE (WD-R01): stage only the lockfile/workspace manifests,
+        // install from the host pnpm store, mark the completed tree, then
+        // rename it into place. pnpm creates Windows junctions/hard links
+        // without requiring the symlink privilege needed by recursive copies.
         if (!cacheReady()) {
           const stagingDir =
             depsDir + '.staging-' + process.pid + '-' + Math.random().toString(36).slice(2, 8);
           fs.mkdirSync(stagingDir, { recursive: true });
-          let copySuccess = true;
-          const copyNm = (relPath) => {
-            if (!copySuccess) return;
-            const hostNm = path.join(hostCwd, relPath);
-            const stagedNm = path.join(stagingDir, relPath);
-            if (fs.existsSync(hostNm)) {
-              fs.mkdirSync(path.dirname(stagedNm), { recursive: true });
-              try {
-                fs.cpSync(hostNm, stagedNm, {
-                  recursive: true,
-                  dereference: false,
-                  filter: (src) => {
-                    if (isSecretFileName(path.basename(src))) return false;
-                    try {
-                      const st = fs.lstatSync(src);
-                      if (
-                        st.isSymbolicLink() &&
-                        isSecretFileName(path.basename(fs.readlinkSync(src)))
-                      ) {
-                        return false;
-                      }
-                    } catch {
-                      return true;
-                    }
-                    return true;
-                  },
-                });
-              } catch (e) {
-                copySuccess = false;
+          let failedPath = 'pnpm-lock.yaml';
+          try {
+            for (const entry of hashEntries) {
+              failedPath = entry.rel;
+              const hostManifest = path.join(hostCwd, entry.rel);
+              const stagedManifest = path.join(stagingDir, entry.rel);
+              if (!fs.existsSync(hostManifest)) {
+                const missing = new Error('host workspace manifest is missing');
+                missing.code = 'WORKER_DEPS_SOURCE_MISSING';
+                throw missing;
               }
+              fs.mkdirSync(path.dirname(stagedManifest), { recursive: true });
+              fs.copyFileSync(hostManifest, stagedManifest);
             }
-          };
+            const hostWorkspaceFile = path.join(hostCwd, 'pnpm-workspace.yaml');
+            if (fs.existsSync(hostWorkspaceFile)) {
+              failedPath = 'pnpm-workspace.yaml';
+              fs.copyFileSync(hostWorkspaceFile, path.join(stagingDir, 'pnpm-workspace.yaml'));
+            }
 
-          copyNm('node_modules');
-          const workspaces = ['apps', 'packages'];
-          for (const ws of workspaces) {
-            const hostWsPath = path.join(hostCwd, ws);
-            if (fs.existsSync(hostWsPath)) {
-              const pkgs = fs.readdirSync(hostWsPath, { withFileTypes: true });
-              for (const pkg of pkgs) {
-                if (pkg.isDirectory()) {
-                  copyNm(path.join(ws, pkg.name, 'node_modules'));
-                }
+            failedPath = 'node_modules';
+            const runPnpmInstall = (offline) => {
+              const args = ['install', '--frozen-lockfile'];
+              if (offline) args.push('--offline');
+              const pnpmExecutable = resolvePnpmCommand();
+              const result = cp.spawnSync(pnpmExecutable, args, {
+                cwd: stagingDir,
+                encoding: 'utf8',
+                windowsHide: true,
+                timeout: 600000,
+                maxBuffer: 10 * 1024 * 1024,
+              });
+              if (result.error) throw result.error;
+              if (result.status !== 0) {
+                const detail = (result.stderr || result.stdout || 'pnpm install failed').trim();
+                const error = new Error(detail.slice(-4000));
+                error.code = 'PNPM_INSTALL_FAILED';
+                error.offline = offline;
+                error.relativePath = failedPath;
+                throw error;
               }
-            }
-          }
+            };
 
-          if (copySuccess && fs.existsSync(path.join(stagingDir, 'node_modules'))) {
+            try {
+              runPnpmInstall(true);
+            } catch (offlineError) {
+              if (!offlineError.offline || !offlineStoreMiss(offlineError)) throw offlineError;
+              // An incomplete local store is the only reason to retry online.
+              runPnpmInstall(false);
+            }
+
+            if (!fs.existsSync(path.join(stagingDir, 'node_modules'))) {
+              const error = new Error('pnpm install completed without node_modules');
+              error.code = 'WORKER_DEPS_SOURCE_MISSING';
+              throw error;
+            }
             fs.writeFileSync(path.join(stagingDir, '.shipde-deps-ready'), 'ready', 'utf8');
             try {
               if (fs.existsSync(depsDir)) {
@@ -1352,9 +1388,10 @@ function getIsolatedLauncher() {
               fs.rmSync(stagingDir, { recursive: true, force: true });
               if (!cacheReady()) throw renameErr;
             }
-          } else {
+          } catch (provisionError) {
+            provisionError.relativePath = failedPath.split(path.sep).join('/');
             fs.rmSync(stagingDir, { recursive: true, force: true });
-            throw new Error('failed to copy dependencies from host');
+            throw provisionError;
           }
         }
 
@@ -1409,7 +1446,6 @@ function getIsolatedLauncher() {
           appendGitInfoExclude(workerRoot, excluded);
         }
       } catch (err) {
-        console.error(err);
         recordWorkerDepsUnavailable(opts, workerRoot, err);
       }
     }
