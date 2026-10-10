@@ -15,6 +15,13 @@
       "url": "https://benchlm.ai/benchmarks/liveBench",
       "retrievedAt": "2026-10-05T12:24:19.741Z",
       "tierRule": "used only without AA: T1>=79,T2>=73,T3>=66,else T4"
+    },
+    {
+      "id": "benchlm-model-metadata",
+      "release": "October 10, 2026",
+      "url": "https://benchlm.ai/data/models.json",
+      "retrievedAt": "2026-10-11T00:00:00.000Z",
+      "license": "CC BY-NC 4.0"
     }
   ],
   "ranking": [
@@ -24,8 +31,8 @@
       "reviewTier": "T1",
       "aaCodingIndex": 77.4,
       "liveBench": 81.1,
-      "releaseDate": null,
-      "contextWindow": null,
+      "releaseDate": "2026-07-09",
+      "contextWindow": 1050000,
       "sources": [
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
@@ -35,7 +42,11 @@
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/liveBench"
         }
-      ]
+      ],
+      "metadataSource": {
+        "url": "https://benchlm.ai/models/gpt-5-6-sol",
+        "retrievedAt": "2026-10-11T00:00:00.000Z"
+      }
     },
     {
       "canonical": "gpt-6-astra",
@@ -43,8 +54,8 @@
       "reviewTier": "T1",
       "aaCodingIndex": 76.9,
       "liveBench": 82.2,
-      "releaseDate": null,
-      "contextWindow": null,
+      "releaseDate": "2026-09-03",
+      "contextWindow": 1050000,
       "sources": [
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
@@ -54,7 +65,11 @@
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/liveBench"
         }
-      ]
+      ],
+      "metadataSource": {
+        "url": "https://benchlm.ai/models/gpt-6-astra",
+        "retrievedAt": "2026-10-11T00:00:00.000Z"
+      }
     },
     {
       "canonical": "grok-4-6",
@@ -62,8 +77,8 @@
       "reviewTier": "T1",
       "aaCodingIndex": 76.8,
       "liveBench": 78,
-      "releaseDate": null,
-      "contextWindow": null,
+      "releaseDate": "2026-08-12",
+      "contextWindow": 500000,
       "sources": [
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
@@ -73,7 +88,11 @@
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/liveBench"
         }
-      ]
+      ],
+      "metadataSource": {
+        "url": "https://benchlm.ai/models/grok-4-6",
+        "retrievedAt": "2026-10-11T00:00:00.000Z"
+      }
     },
     {
       "canonical": "gpt-5-6-terra",
@@ -81,8 +100,8 @@
       "reviewTier": "T1",
       "aaCodingIndex": 76.7,
       "liveBench": 77.9,
-      "releaseDate": null,
-      "contextWindow": null,
+      "releaseDate": "2026-07-09",
+      "contextWindow": 1050000,
       "sources": [
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
@@ -92,7 +111,11 @@
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/liveBench"
         }
-      ]
+      ],
+      "metadataSource": {
+        "url": "https://benchlm.ai/models/gpt-5-6-terra",
+        "retrievedAt": "2026-10-11T00:00:00.000Z"
+      }
     },
     {
       "canonical": "gemini-3-8-flash",
@@ -100,8 +123,8 @@
       "reviewTier": "T1",
       "aaCodingIndex": 76.3,
       "liveBench": 75.8,
-      "releaseDate": null,
-      "contextWindow": null,
+      "releaseDate": "2026-09-02",
+      "contextWindow": 1000000,
       "sources": [
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
@@ -111,7 +134,11 @@
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/liveBench"
         }
-      ]
+      ],
+      "metadataSource": {
+        "url": "https://benchlm.ai/models/gemini-3-8-flash",
+        "retrievedAt": "2026-10-11T00:00:00.000Z"
+      }
     },
     {
       "canonical": "kimi-k3",
@@ -138,8 +165,8 @@
       "reviewTier": "T1",
       "aaCodingIndex": 76.1,
       "liveBench": 78.8,
-      "releaseDate": null,
-      "contextWindow": null,
+      "releaseDate": "2026-08-13",
+      "contextWindow": 1000000,
       "sources": [
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
@@ -149,7 +176,11 @@
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/liveBench"
         }
-      ]
+      ],
+      "metadataSource": {
+        "url": "https://benchlm.ai/models/gemini-3-7-flash",
+        "retrievedAt": "2026-10-11T00:00:00.000Z"
+      }
     },
     {
       "canonical": "deepseek-v4-1-flash",
@@ -157,14 +188,18 @@
       "reviewTier": "T1",
       "aaCodingIndex": null,
       "liveBench": 81.1,
-      "releaseDate": null,
-      "contextWindow": null,
+      "releaseDate": "2026-09-10",
+      "contextWindow": 1000000,
       "sources": [
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/liveBench"
         }
-      ]
+      ],
+      "metadataSource": {
+        "url": "https://benchlm.ai/models/deepseek-v4-1-flash",
+        "retrievedAt": "2026-10-11T00:00:00.000Z"
+      }
     },
     {
       "canonical": "muse-spark-1-3",
@@ -172,8 +207,8 @@
       "reviewTier": "T1",
       "aaCodingIndex": 75.8,
       "liveBench": 81.6,
-      "releaseDate": null,
-      "contextWindow": null,
+      "releaseDate": "2026-09-02",
+      "contextWindow": 1000000,
       "sources": [
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
@@ -183,7 +218,11 @@
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/liveBench"
         }
-      ]
+      ],
+      "metadataSource": {
+        "url": "https://benchlm.ai/models/muse-spark-1-3",
+        "retrievedAt": "2026-10-11T00:00:00.000Z"
+      }
     },
     {
       "canonical": "gpt-5-5",
@@ -191,8 +230,8 @@
       "reviewTier": "T1",
       "aaCodingIndex": 74.9,
       "liveBench": 80.2,
-      "releaseDate": null,
-      "contextWindow": null,
+      "releaseDate": "2026-04-23",
+      "contextWindow": 1000000,
       "sources": [
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
@@ -202,7 +241,11 @@
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/liveBench"
         }
-      ]
+      ],
+      "metadataSource": {
+        "url": "https://benchlm.ai/models/gpt-5-5",
+        "retrievedAt": "2026-10-11T00:00:00.000Z"
+      }
     },
     {
       "canonical": "glm-5-3",
@@ -210,8 +253,8 @@
       "reviewTier": "T1",
       "aaCodingIndex": 74.8,
       "liveBench": 76.1,
-      "releaseDate": null,
-      "contextWindow": null,
+      "releaseDate": "2026-08-14",
+      "contextWindow": 1000000,
       "sources": [
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
@@ -221,7 +264,11 @@
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/liveBench"
         }
-      ]
+      ],
+      "metadataSource": {
+        "url": "https://benchlm.ai/models/glm-5-3",
+        "retrievedAt": "2026-10-11T00:00:00.000Z"
+      }
     },
     {
       "canonical": "qwen3-8-flash-next",
@@ -229,8 +276,8 @@
       "reviewTier": "T2",
       "aaCodingIndex": 73,
       "liveBench": 76.2,
-      "releaseDate": null,
-      "contextWindow": null,
+      "releaseDate": "2026-08-26",
+      "contextWindow": 262000,
       "sources": [
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
@@ -240,7 +287,11 @@
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/liveBench"
         }
-      ]
+      ],
+      "metadataSource": {
+        "url": "https://benchlm.ai/models/qwen3-8-flash-next",
+        "retrievedAt": "2026-10-11T00:00:00.000Z"
+      }
     },
     {
       "canonical": "grok-4-5",
@@ -248,14 +299,18 @@
       "reviewTier": "T2",
       "aaCodingIndex": 72.5,
       "liveBench": null,
-      "releaseDate": null,
-      "contextWindow": null,
+      "releaseDate": "2026-07-08",
+      "contextWindow": 500000,
       "sources": [
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/aacodingindex"
         }
-      ]
+      ],
+      "metadataSource": {
+        "url": "https://benchlm.ai/models/grok-4-5",
+        "retrievedAt": "2026-10-11T00:00:00.000Z"
+      }
     },
     {
       "canonical": "grok-4-7",
@@ -263,14 +318,18 @@
       "reviewTier": "T2",
       "aaCodingIndex": null,
       "liveBench": 77.4,
-      "releaseDate": null,
-      "contextWindow": null,
+      "releaseDate": "2026-09-21",
+      "contextWindow": 500000,
       "sources": [
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/liveBench"
         }
-      ]
+      ],
+      "metadataSource": {
+        "url": "https://benchlm.ai/models/grok-4-7",
+        "retrievedAt": "2026-10-11T00:00:00.000Z"
+      }
     },
     {
       "canonical": "muse-spark-1-2",
@@ -278,14 +337,18 @@
       "reviewTier": "T2",
       "aaCodingIndex": 72.2,
       "liveBench": null,
-      "releaseDate": null,
-      "contextWindow": null,
+      "releaseDate": "2026-08-05",
+      "contextWindow": 1000000,
       "sources": [
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/aacodingindex"
         }
-      ]
+      ],
+      "metadataSource": {
+        "url": "https://benchlm.ai/models/muse-spark-1-2",
+        "retrievedAt": "2026-10-11T00:00:00.000Z"
+      }
     },
     {
       "canonical": "qwen3-8-max",
@@ -293,8 +356,8 @@
       "reviewTier": "T2",
       "aaCodingIndex": 71.8,
       "liveBench": 78.5,
-      "releaseDate": null,
-      "contextWindow": null,
+      "releaseDate": "2026-08-03",
+      "contextWindow": 1000000,
       "sources": [
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
@@ -304,7 +367,11 @@
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/liveBench"
         }
-      ]
+      ],
+      "metadataSource": {
+        "url": "https://benchlm.ai/models/qwen3-8-max",
+        "retrievedAt": "2026-10-11T00:00:00.000Z"
+      }
     },
     {
       "canonical": "deepseek-v4-flash-vision-exp",
@@ -327,8 +394,8 @@
       "reviewTier": "T2",
       "aaCodingIndex": 71.5,
       "liveBench": 73.6,
-      "releaseDate": null,
-      "contextWindow": null,
+      "releaseDate": "2026-07-09",
+      "contextWindow": 1050000,
       "sources": [
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
@@ -338,7 +405,11 @@
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/liveBench"
         }
-      ]
+      ],
+      "metadataSource": {
+        "url": "https://benchlm.ai/models/gpt-5-6-luna",
+        "retrievedAt": "2026-10-11T00:00:00.000Z"
+      }
     },
     {
       "canonical": "muse-spark-1-1",
@@ -346,14 +417,18 @@
       "reviewTier": "T2",
       "aaCodingIndex": 71.3,
       "liveBench": null,
-      "releaseDate": null,
-      "contextWindow": null,
+      "releaseDate": "2026-07-09",
+      "contextWindow": 1000000,
       "sources": [
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/aacodingindex"
         }
-      ]
+      ],
+      "metadataSource": {
+        "url": "https://benchlm.ai/models/muse-spark-1-1",
+        "retrievedAt": "2026-10-11T00:00:00.000Z"
+      }
     },
     {
       "canonical": "gpt-5-4",
@@ -361,14 +436,18 @@
       "reviewTier": "T2",
       "aaCodingIndex": 71,
       "liveBench": null,
-      "releaseDate": null,
-      "contextWindow": null,
+      "releaseDate": "2026-03-05",
+      "contextWindow": 1050000,
       "sources": [
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/aacodingindex"
         }
-      ]
+      ],
+      "metadataSource": {
+        "url": "https://benchlm.ai/models/gpt-5-4",
+        "retrievedAt": "2026-10-11T00:00:00.000Z"
+      }
     },
     {
       "canonical": "deepseek-v4-flash-0731",
@@ -410,8 +489,8 @@
       "reviewTier": "T2",
       "aaCodingIndex": 68.8,
       "liveBench": 73.2,
-      "releaseDate": null,
-      "contextWindow": null,
+      "releaseDate": "2026-06-16",
+      "contextWindow": 1000000,
       "sources": [
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
@@ -421,7 +500,11 @@
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/liveBench"
         }
-      ]
+      ],
+      "metadataSource": {
+        "url": "https://benchlm.ai/models/glm-5-2",
+        "retrievedAt": "2026-10-11T00:00:00.000Z"
+      }
     },
     {
       "canonical": "qwen3-8-27b",
@@ -429,8 +512,8 @@
       "reviewTier": "T2",
       "aaCodingIndex": 68.1,
       "liveBench": 75.3,
-      "releaseDate": null,
-      "contextWindow": null,
+      "releaseDate": "2026-08-05",
+      "contextWindow": 262000,
       "sources": [
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
@@ -440,7 +523,11 @@
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/liveBench"
         }
-      ]
+      ],
+      "metadataSource": {
+        "url": "https://benchlm.ai/models/qwen3-8-27b",
+        "retrievedAt": "2026-10-11T00:00:00.000Z"
+      }
     },
     {
       "canonical": "gpt-6-luna",
@@ -448,14 +535,18 @@
       "reviewTier": "T3",
       "aaCodingIndex": null,
       "liveBench": 72,
-      "releaseDate": null,
-      "contextWindow": null,
+      "releaseDate": "2026-09-22",
+      "contextWindow": 1050000,
       "sources": [
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/liveBench"
         }
-      ]
+      ],
+      "metadataSource": {
+        "url": "https://benchlm.ai/models/gpt-6-luna",
+        "retrievedAt": "2026-10-11T00:00:00.000Z"
+      }
     },
     {
       "canonical": "glm-5-3-flash",
@@ -463,14 +554,18 @@
       "reviewTier": "T3",
       "aaCodingIndex": null,
       "liveBench": 71.6,
-      "releaseDate": null,
-      "contextWindow": null,
+      "releaseDate": "2026-08-26",
+      "contextWindow": 1000000,
       "sources": [
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/liveBench"
         }
-      ]
+      ],
+      "metadataSource": {
+        "url": "https://benchlm.ai/models/glm-5-3-flash",
+        "retrievedAt": "2026-10-11T00:00:00.000Z"
+      }
     },
     {
       "canonical": "qwen3-7-max",
@@ -478,8 +573,8 @@
       "reviewTier": "T2",
       "aaCodingIndex": 66,
       "liveBench": 73.1,
-      "releaseDate": null,
-      "contextWindow": null,
+      "releaseDate": "2026-05-16",
+      "contextWindow": 1000000,
       "sources": [
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
@@ -489,7 +584,11 @@
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/liveBench"
         }
-      ]
+      ],
+      "metadataSource": {
+        "url": "https://benchlm.ai/models/qwen3-7-max",
+        "retrievedAt": "2026-10-11T00:00:00.000Z"
+      }
     },
     {
       "canonical": "kimi-k2-6",
@@ -535,14 +634,18 @@
       "reviewTier": "T3",
       "aaCodingIndex": 60.8,
       "liveBench": null,
-      "releaseDate": null,
-      "contextWindow": null,
+      "releaseDate": "2026-08-24",
+      "contextWindow": 262000,
       "sources": [
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/aacodingindex"
         }
-      ]
+      ],
+      "metadataSource": {
+        "url": "https://benchlm.ai/models/apodex-1-1-mini",
+        "retrievedAt": "2026-10-11T00:00:00.000Z"
+      }
     },
     {
       "canonical": "mimo-v2-5-pro",
@@ -550,14 +653,18 @@
       "reviewTier": "T3",
       "aaCodingIndex": 60.2,
       "liveBench": null,
-      "releaseDate": null,
-      "contextWindow": null,
+      "releaseDate": "2026-04-22",
+      "contextWindow": 1000000,
       "sources": [
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/aacodingindex"
         }
-      ]
+      ],
+      "metadataSource": {
+        "url": "https://benchlm.ai/models/mimo-v2-5-pro",
+        "retrievedAt": "2026-10-11T00:00:00.000Z"
+      }
     },
     {
       "canonical": "minimax-m3",
@@ -565,8 +672,8 @@
       "reviewTier": "T3",
       "aaCodingIndex": 58.6,
       "liveBench": 67.3,
-      "releaseDate": null,
-      "contextWindow": null,
+      "releaseDate": "2026-06-01",
+      "contextWindow": 1000000,
       "sources": [
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
@@ -576,7 +683,11 @@
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/liveBench"
         }
-      ]
+      ],
+      "metadataSource": {
+        "url": "https://benchlm.ai/models/minimax-m3",
+        "retrievedAt": "2026-10-11T00:00:00.000Z"
+      }
     },
     {
       "canonical": "qwen3-7-plus",
@@ -584,14 +695,18 @@
       "reviewTier": "T3",
       "aaCodingIndex": 55.9,
       "liveBench": null,
-      "releaseDate": null,
-      "contextWindow": null,
+      "releaseDate": "2026-06-03",
+      "contextWindow": 1000000,
       "sources": [
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/aacodingindex"
         }
-      ]
+      ],
+      "metadataSource": {
+        "url": "https://benchlm.ai/models/qwen3-7-plus",
+        "retrievedAt": "2026-10-11T00:00:00.000Z"
+      }
     },
     {
       "canonical": "glm-5-1",
@@ -599,14 +714,18 @@
       "reviewTier": "T3",
       "aaCodingIndex": 55.8,
       "liveBench": null,
-      "releaseDate": null,
-      "contextWindow": null,
+      "releaseDate": "2026-04-07",
+      "contextWindow": 203000,
       "sources": [
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/aacodingindex"
         }
-      ]
+      ],
+      "metadataSource": {
+        "url": "https://benchlm.ai/models/glm-5-1",
+        "retrievedAt": "2026-10-11T00:00:00.000Z"
+      }
     },
     {
       "canonical": "qwen3-6-plus",
@@ -614,8 +733,8 @@
       "reviewTier": "T3",
       "aaCodingIndex": 54.5,
       "liveBench": 68.9,
-      "releaseDate": null,
-      "contextWindow": null,
+      "releaseDate": "2026-04-02",
+      "contextWindow": 1000000,
       "sources": [
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
@@ -625,7 +744,11 @@
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/liveBench"
         }
-      ]
+      ],
+      "metadataSource": {
+        "url": "https://benchlm.ai/models/qwen3-6-plus",
+        "retrievedAt": "2026-10-11T00:00:00.000Z"
+      }
     },
     {
       "canonical": "qwen3-6-27b",
@@ -633,8 +756,8 @@
       "reviewTier": "T3",
       "aaCodingIndex": 53.7,
       "liveBench": 64,
-      "releaseDate": null,
-      "contextWindow": null,
+      "releaseDate": "2026-04-21",
+      "contextWindow": 262000,
       "sources": [
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
@@ -644,7 +767,11 @@
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/liveBench"
         }
-      ]
+      ],
+      "metadataSource": {
+        "url": "https://benchlm.ai/models/qwen3-6-27b",
+        "retrievedAt": "2026-10-11T00:00:00.000Z"
+      }
     },
     {
       "canonical": "minimax-m2-7",
@@ -652,14 +779,18 @@
       "reviewTier": "T3",
       "aaCodingIndex": 52.6,
       "liveBench": null,
-      "releaseDate": null,
-      "contextWindow": null,
+      "releaseDate": "2026-03-18",
+      "contextWindow": 200000,
       "sources": [
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/aacodingindex"
         }
-      ]
+      ],
+      "metadataSource": {
+        "url": "https://benchlm.ai/models/minimax-m2-7",
+        "retrievedAt": "2026-10-11T00:00:00.000Z"
+      }
     },
     {
       "canonical": "ling-3-0-flash",
@@ -667,14 +798,18 @@
       "reviewTier": "T3",
       "aaCodingIndex": 50.6,
       "liveBench": null,
-      "releaseDate": null,
-      "contextWindow": null,
+      "releaseDate": "2026-07-23",
+      "contextWindow": 262000,
       "sources": [
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/aacodingindex"
         }
-      ]
+      ],
+      "metadataSource": {
+        "url": "https://benchlm.ai/models/ling-3-0-flash",
+        "retrievedAt": "2026-10-11T00:00:00.000Z"
+      }
     },
     {
       "canonical": "mimo-v2-flash",
@@ -682,14 +817,18 @@
       "reviewTier": "T4",
       "aaCodingIndex": 49.8,
       "liveBench": null,
-      "releaseDate": null,
-      "contextWindow": null,
+      "releaseDate": "2026-03-15",
+      "contextWindow": 256000,
       "sources": [
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/aacodingindex"
         }
-      ]
+      ],
+      "metadataSource": {
+        "url": "https://benchlm.ai/models/mimo-v2-flash",
+        "retrievedAt": "2026-10-11T00:00:00.000Z"
+      }
     },
     {
       "canonical": "nemotron-3-ultra",
@@ -716,14 +855,18 @@
       "reviewTier": "T4",
       "aaCodingIndex": 49,
       "liveBench": null,
-      "releaseDate": null,
-      "contextWindow": null,
+      "releaseDate": "2026-08-10",
+      "contextWindow": 131000,
       "sources": [
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/aacodingindex"
         }
-      ]
+      ],
+      "metadataSource": {
+        "url": "https://benchlm.ai/models/muse-glimmer-30b",
+        "retrievedAt": "2026-10-11T00:00:00.000Z"
+      }
     },
     {
       "canonical": "mistral-medium-3-5",
@@ -746,14 +889,18 @@
       "reviewTier": "T4",
       "aaCodingIndex": 46.8,
       "liveBench": null,
-      "releaseDate": null,
-      "contextWindow": null,
+      "releaseDate": "2026-02-01",
+      "contextWindow": 256000,
       "sources": [
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/aacodingindex"
         }
-      ]
+      ],
+      "metadataSource": {
+        "url": "https://benchlm.ai/models/kimi-k2-5",
+        "retrievedAt": "2026-10-11T00:00:00.000Z"
+      }
     },
     {
       "canonical": "qwen3-5-122b-a10b",
@@ -761,14 +908,18 @@
       "reviewTier": "T4",
       "aaCodingIndex": 45.7,
       "liveBench": null,
-      "releaseDate": null,
-      "contextWindow": null,
+      "releaseDate": "2026-03-04",
+      "contextWindow": 262000,
       "sources": [
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/aacodingindex"
         }
-      ]
+      ],
+      "metadataSource": {
+        "url": "https://benchlm.ai/models/qwen3-5-122b-a10b",
+        "retrievedAt": "2026-10-11T00:00:00.000Z"
+      }
     },
     {
       "canonical": "gemma4-31b",
@@ -791,14 +942,18 @@
       "reviewTier": "T4",
       "aaCodingIndex": 41.9,
       "liveBench": null,
-      "releaseDate": null,
-      "contextWindow": null,
+      "releaseDate": "2026-04-15",
+      "contextWindow": 262000,
       "sources": [
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/aacodingindex"
         }
-      ]
+      ],
+      "metadataSource": {
+        "url": "https://benchlm.ai/models/qwen3-6-35b-a3b",
+        "retrievedAt": "2026-10-11T00:00:00.000Z"
+      }
     },
     {
       "canonical": "nemotron-3-super",
@@ -821,14 +976,18 @@
       "reviewTier": "T4",
       "aaCodingIndex": 30.4,
       "liveBench": null,
-      "releaseDate": null,
-      "contextWindow": null,
+      "releaseDate": "2025-08-05",
+      "contextWindow": 128000,
       "sources": [
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/aacodingindex"
         }
-      ]
+      ],
+      "metadataSource": {
+        "url": "https://benchlm.ai/models/gpt-oss-120b",
+        "retrievedAt": "2026-10-11T00:00:00.000Z"
+      }
     },
     {
       "canonical": "command-a-plus",
@@ -836,14 +995,18 @@
       "reviewTier": "T4",
       "aaCodingIndex": 27.9,
       "liveBench": null,
-      "releaseDate": null,
-      "contextWindow": null,
+      "releaseDate": "2026-05-20",
+      "contextWindow": 128000,
       "sources": [
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/aacodingindex"
         }
-      ]
+      ],
+      "metadataSource": {
+        "url": "https://benchlm.ai/models/command-a-plus",
+        "retrievedAt": "2026-10-11T00:00:00.000Z"
+      }
     },
     {
       "canonical": "nemotron-3-5-lightning",
@@ -866,14 +1029,18 @@
       "reviewTier": "T4",
       "aaCodingIndex": 26.6,
       "liveBench": null,
-      "releaseDate": null,
-      "contextWindow": null,
+      "releaseDate": "2026-02-20",
+      "contextWindow": 256000,
       "sources": [
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/aacodingindex"
         }
-      ]
+      ],
+      "metadataSource": {
+        "url": "https://benchlm.ai/models/mistral-small-4",
+        "retrievedAt": "2026-10-11T00:00:00.000Z"
+      }
     },
     {
       "canonical": "gpt-oss-20b",
@@ -881,14 +1048,18 @@
       "reviewTier": "T4",
       "aaCodingIndex": 20.7,
       "liveBench": null,
-      "releaseDate": null,
-      "contextWindow": null,
+      "releaseDate": "2025-08-05",
+      "contextWindow": 128000,
       "sources": [
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/aacodingindex"
         }
-      ]
+      ],
+      "metadataSource": {
+        "url": "https://benchlm.ai/models/gpt-oss-20b",
+        "retrievedAt": "2026-10-11T00:00:00.000Z"
+      }
     },
     {
       "canonical": "mistral-large-3",
@@ -896,14 +1067,18 @@
       "reviewTier": "T4",
       "aaCodingIndex": 20.1,
       "liveBench": null,
-      "releaseDate": null,
-      "contextWindow": null,
+      "releaseDate": "2025-12-02",
+      "contextWindow": 128000,
       "sources": [
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/aacodingindex"
         }
-      ]
+      ],
+      "metadataSource": {
+        "url": "https://benchlm.ai/models/mistral-large-3",
+        "retrievedAt": "2026-10-11T00:00:00.000Z"
+      }
     },
     {
       "canonical": "lfm-2-5-2-6b",

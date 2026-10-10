@@ -49,11 +49,7 @@ function priorFor(candidate, role, priors, now) {
   const priorScore = Number.isFinite(Number(match.score))
     ? Number(match.score)
     : benchmarkScore(match);
-  const result = {
-    canonical: match.canonical,
-    tier,
-    bonus,
-  };
+  const result = { canonical: match.canonical, tier, bonus };
   if (Number.isFinite(priorScore)) {
     const sourceDates = (match.sources || []).map((source) => source && source.retrievedAt);
     result.stale =
@@ -63,7 +59,6 @@ function priorFor(candidate, role, priors, now) {
         : isStale(match.retrievedAt || (priors && priors.generatedAt), now));
     result.sources = match.sources || [];
     result.score = Math.round(Math.max(0, Math.min(100, priorScore)));
-    result.stale = result.stale === true;
     if (result.stale) result.bonus = 0;
   }
   return result;

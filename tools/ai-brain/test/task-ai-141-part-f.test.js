@@ -97,7 +97,7 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
     const strongRanked = result.ranking.find((item) => item.modelId === strong.modelId);
     assert.ok(strongRanked.score > withoutPrior.ranking[0].score);
     assert.equal(strongRanked.scoreBreakdown.prior.normalizedScore, 0.9);
-    assert.equal(strongRanked.scoreBreakdown.prior.weight, 1);
+    assert.equal(strongRanked.scoreBreakdown.prior.weight, 0.33);
     assert.equal(result.ranking[0].probation, true);
     assert.equal(strongRanked.scoreBreakdown.cost, 95);
     assert.match(
@@ -343,9 +343,17 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
   test('seeded priors include model metadata and per-model source provenance', () => {
     const document = priorsApi.loadPriors();
     assert.ok(document.ranking.length > 0);
+    const metadataSource = document.sources.find(
+      (source) => source.id === 'benchlm-model-metadata'
+    );
+    assert.ok(metadataSource);
     for (const model of document.ranking) {
-      assert.ok(Object.prototype.hasOwnProperty.call(model, 'releaseDate'));
-      assert.ok(Object.prototype.hasOwnProperty.call(model, 'contextWindow'));
+      if (model.releaseDate || model.contextWindow) {
+        assert.ok(model.releaseDate, `${model.canonical} has a release date`);
+        assert.ok(model.contextWindow > 0, `${model.canonical} has a context window`);
+        assert.equal(model.metadataSource.url, `https://benchlm.ai/models/${model.canonical}`);
+        assert.equal(model.metadataSource.retrievedAt, metadataSource.retrievedAt);
+      }
       assert.ok(
         Array.isArray(model.sources) && model.sources.length > 0,
         `${model.canonical} has sources`
