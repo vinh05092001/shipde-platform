@@ -1,0 +1,75 @@
+# Model ranking v3 (2026-10-06, normalization-only rebuild)
+
+**v3 supersedes `ranking-20261006-v2.json` for ranking use. v2 and the old draft (`ranking-20261006.json`) are left unchanged.**
+
+v3 adds name-format normalization only; router aliases remain unmapped.
+
+## Ranked canonical models (19)
+
+Ordered by tier, then AA Coding Index, then LiveBench coding. Scales are never mixed. `matchRule` records which rule produced each match (EXACT or N1..N4).
+
+| Rank | Canonical | Tier (source) | AA Coding | AA Intel | LiveBench overall / coding | SWE-bench Verified | matchRule | Alive as |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | `deepseek-v4-1-flash` | T1 (LiveBench overall (AA missing) 81.1) | not found | not found | 81.1 / 80 | not found | N2, N2+N4 | explabs `deepseek-v4.1-flash`; pgsgrove `deepseek-v4.1-flash`; tokenharbor `deepseek-v4.1-flash:free` |
+| 2 | `qwen3-8-flash-next` | T2 (AA Coding Index 73) | 73 | not found | 76.2 / 72.5 | not found | N1+N2 | amd-radeon `Qwen3.8-Flash-Next` |
+| 3 | `qwen3-8-max` | T2 (AA Coding Index 71.8) | 71.8 | not found | 78.5 / 72.9 | not found | N2+N3+N4 | xkiro `qwen/qwen3.8-max:free` |
+| 4 | `gpt-5-6-luna` | T2 (AA Coding Index 71.5) | 71.5 | not found | 73.6 / not found | not found | N2 | explabs `gpt-5.6-luna` |
+| 5 | `deepseek-v4-flash-0731` | T2 (AA Coding Index 69.1) | 69.1 | 34.3 | 74.2 / 75 | not found | N1+N3, EXACT | dahl `deepseek-ai/DeepSeek-V4-Flash-0731`; pgsgrove `deepseek-v4-flash-0731` |
+| 6 | `qwen3-8-27b` | T2 (AA Coding Index 68.1) | 68.1 | not found | 75.3 / 75.7 | not found | N1+N2, N2 | amd-radeon `Qwen3.8-27B`; explabs `qwen3.8-27b`; regolo `qwen3.8-27b` |
+| 7 | `qwen3-7-max` | T2 (AA Coding Index 66) | 66 | not found | 73.1 / 74.2 | not found | N2+N3+N4 | xkiro `qwen/qwen3.7-max:free` |
+| 8 | `deepseek-v4-flash-vision-exp` | T2 (LiveBench overall (AA missing) 76.8) | not found | not found | 76.8 / 68.2 | not found | N1 | amd-radeon `DeepSeek-V4-Flash-Vision-Exp` |
+| 9 | `qwen3-7-plus` | T3 (AA Coding Index 55.9) | 55.9 | not found | not found / not found | not found | N2+N3+N4 | xkiro `qwen/qwen3.7-plus:free` |
+| 10 | `qwen3-6-plus` | T3 (AA Coding Index 54.5) | 54.5 | not found | 68.9 / not found | not found | N2+N3+N4 | xkiro `qwen/qwen3.6-plus:free` |
+| 11 | `qwen3-6-27b` | T3 (AA Coding Index 53.7) | 53.7 | not found | 64 / 71.8 | not found | N2+N3+N4 | xkiro `qwen/qwen3.6-27b:free` |
+| 12 | `minimax-m2-7` | T3 (AA Coding Index 52.6) | 52.6 | not found | not found / not found | not found | N1+N2+N3 | dahl `MiniMaxAI/MiniMax-M2.7` |
+| 13 | `gpt-6-luna` | T3 (LiveBench overall (AA missing) 72) | not found | not found | 72 / 79 | not found | EXACT | explabs `gpt-6-luna` |
+| 14 | `glm-5-3-flash` | T3 (LiveBench overall (AA missing) 71.6) | not found | not found | 71.6 / 79 | not found | N1+N2, N1+N2+N3, N2 | amd-radeon `GLM-5.3-Flash`; dahl `zai-org/GLM-5.3-Flash`; pgsgrove `glm-5.3-flash` |
+| 15 | `mistral-medium-3-5` | T4 (AA Coding Index 46.9) | 46.9 | not found | not found / not found | not found | N2+N3 | xkiro `mistralai/mistral-medium-3.5` |
+| 16 | `gemma4-31b` | T4 (AA Coding Index 43.4) | 43.4 | 15 | not found / not found | not found | EXACT | regolo `gemma4-31b` |
+| 17 | `qwen3-6-35b-a3b` | T4 (AA Coding Index 41.9) | 41.9 | not found | not found / not found | not found | N2+N3+N4 | xkiro `qwen/qwen3.6-35b-a3b:free` |
+| 18 | `gpt-oss-120b` | T4 (AA Coding Index 30.4) | 30.4 | 12 | not found / not found | not found | EXACT | regolo `gpt-oss-120b` |
+| 19 | `gpt-oss-20b` | T4 (AA Coding Index 20.7) | 20.7 | 9 | not found / not found | not found | EXACT | regolo `gpt-oss-20b` |
+
+Tier rules (from `tools/ai-brain/data/external-model-priors.json`):
+- AA Coding Index: T1 >= 74, T2 >= 66, T3 >= 50, else T4.
+- LiveBench fallback (only when AA is missing): T1 >= 79, T2 >= 73, T3 >= 66, else T4.
+- SWE-bench Verified is stored per row but never converted to a tier.
+- "not found" means UNKNOWN, never 0.
+
+## Unranked alive rows (168, canonical UNKNOWN)
+
+By reason: ROUTER_ALIAS 71, PREFIX_NOT_ALLOWED 37, NO_NORMALIZED_MATCH 60. Full per-row reasons are in `ranking-20261006-v3.json`.
+
+- 9router (57): gh/copilot-search-a, gh/exec-agent-c, gh/gpt-3.5-turbo, gh/gpt-3.5-turbo-0613, gh/gpt-4-o-preview, gh/gpt-4.1, gh/gpt-4.1-2025-04-14, gh/gpt-4o, gh/gpt-4o-2024-05-13, gh/gpt-4o-2024-08-06, gh/gpt-4o-2024-11-20, gh/gpt-4o-mini, gh/gpt-4o-mini-2024-07-18, kr/auto, kr/auto-thinking, kr/claude-haiku-4.5, kr/claude-haiku-4.5-agentic, kr/claude-haiku-4.5-thinking, kr/claude-haiku-4.5-thinking-agentic, kr/claude-sonnet-4, kr/claude-sonnet-4-agentic, kr/claude-sonnet-4-thinking, kr/claude-sonnet-4-thinking-agentic, kr/claude-sonnet-4.5, kr/claude-sonnet-4.5-agentic, kr/claude-sonnet-4.5-thinking, kr/claude-sonnet-4.5-thinking-agentic, kr/deepseek-3.2, kr/deepseek-3.2-agentic, kr/deepseek-3.2-thinking, kr/deepseek-3.2-thinking-agentic, kr/glm-5, kr/glm-5-agentic, kr/glm-5-thinking, kr/glm-5-thinking-agentic, kr/minimax-m2.1, kr/minimax-m2.1-agentic, kr/minimax-m2.1-thinking, kr/minimax-m2.1-thinking-agentic, kr/minimax-m2.5, kr/minimax-m2.5-agentic, kr/minimax-m2.5-thinking, kr/minimax-m2.5-thinking-agentic, kr/qwen3-coder-next, kr/qwen3-coder-next-agentic, kr/qwen3-coder-next-thinking, kr/qwen3-coder-next-thinking-agentic, ocz/big-pickle, ocz/mimo-v2.5-free, ocz/mimo-v2.6-flash-free, ocz/muse-spark-1.2-contributor-free, ocz/muse-spark-1.3-contributor-free, ocz/nemotron-3-ultra-free, ocz/nemotron-3.5-lightning-free, ollama/gpt-oss:120b, qd/qfmodel, vinh
+- amd-radeon (3): DeepSeek-V4-Flash, MiMo-V2.6-Flash, MiniCPM5-2B
+- cohere (10): c4ai-aya-expanse-32b, c4ai-aya-vision-32b, command-a-03-2025, command-a-plus-05-2026, command-a-reasoning-08-2025, command-a-translate-08-2025, command-a-vision-07-2025, command-r-08-2024, command-r-plus-08-2024, command-r7b-12-2024
+- corti (6): corti-s1, corti-s1-instant, corti-s1-mini, corti-s1-mini-instant, corti-s1-tiny, corti-s1-tiny-instant
+- explabs (5): claude-opus-5.5, deepseek-v4-flash, glm-5.3-flash-abliterated, gpt-6-sol, mimo-v2.6-pro
+- inception (2): mercury-2, mercury-2.5
+- opencode-builtin (9): opencode/big-pickle, opencode/fledge-alpha-free, opencode/ling-3.1-flash-free, opencode/longcat-2.5-preview-free, opencode/mimo-v2.6-flash-free, opencode/muse-spark-1.3-contributor-free, opencode/nemotron-3-ultra-free, opencode/nemotron-3.5-lightning-free, opencode/space-bunny-free
+- pgsgrove (3): deepseek-v4-flash-0731-turbo, deepseek-v4.1-flash-turbo, mimo-v2.6-flash
+- regolo (7): apertus-70b, brick-complexity-pro, brick-v1-beta, glm5.2, mistral-small-4-119b, qwen3.5-122b, qwen3.5-9b
+- thegrid (17): agent-max, agent-prime, agent-standard, bytedance-pro-latest, claude-opus-latest, code-max, code-prime, code-standard, deepseek-pro-latest, gemini-pro-latest, glm-latest, gpt-sol-latest, kimi-latest, minimax-latest, text-max, text-prime, text-standard
+- tokenharbor (3): deepseek-v4-flash:free, mimo-v2.5:free, mimo-v2.6-flash:free
+- xkiro (46): apodex/apodex-1.1-mini:free, cohere/aya-expanse-32b, cohere/aya-vision-32b, cohere/command-a, cohere/command-a-plus, cohere/command-a-reasoning, cohere/command-a-translate, cohere/command-a-vision, cohere/command-r-08-2024, cohere/command-r-plus-08-2024, cohere/command-r7b-12-2024, cohere/north-mini-code, cohere/north-small-translate, cohere/tiny-aya-earth, cohere/tiny-aya-fire, cohere/tiny-aya-global, cohere/tiny-aya-water, dots-studio/dots-3-note-preview:free, inclusionai/ling-3.0-flash-sante:free, liquid/lfm-2.5-2.6b:free, meituan/longcat-2.0, meituan/longcat-2.5-preview:free, mistralai/codestral-2508, mistralai/devstral-medium, mistralai/ministral-14b, mistralai/ministral-3b, mistralai/ministral-8b, mistralai/mistral-large-2512, mistralai/mistral-small-2603, qwen/qwen-plus-2025-07-28:free, qwen/qwen3-coder-plus:free, qwen/qwen3-max:free, qwen/qwen3-omni-flash:free, qwen/qwen3-vl-plus:free, qwen/qwen3.5-397b-a17b:free, qwen/qwen3.5-flash:free, qwen/qwen3.5-omni-flash:free, qwen/qwen3.5-omni-plus:free, qwen/qwen3.5-plus:free, qwen/qwen3.6-max-preview:free, qwen/qwen3.7-flash:free, qwen/qwen3.8-omni-flash:free, sensenova/sensenova-6.7-flash-lite, sensenova/sensenova-6.8-flash-lite, stealth/big-pickle, stealth/space-bunny-alpha:free
+
+## Method
+
+1. Started from the 194 alive rows of `ranking-20261006-v2.json` (6 ranked canonicals + 188 unranked rows); liveness and probe evidence are unchanged.
+2. Carried the 6 v2 canonicals verbatim (scores, benchmarks, tiers). Their `matchRule` is EXACT except `deepseek-v4-flash-vision-exp`, whose member differs only by case (N1). The `dahl` row `deepseek-ai/DeepSeek-V4-Flash-0731` normalizes to the already-ranked `deepseek-v4-flash-0731` (N1+N3) and joins it as an extra member.
+3. For each remaining unranked row: router aliases (`kr/*`, `gh/*`, thegrid `*-latest`/`code-*`/`agent-*`/`text-*`, `copilot-*`, `ocz/*` non-real ids) stay UNKNOWN with no normalization attempted. All other rows were normalized with N1-N4 and compared for normalized-string equality against `tools/ai-brain/data/external-model-priors.json` names and the public benchmark tables (Artificial Analysis Coding/Intelligence pages and model-comparison pages, LiveBench release 2026-06-25 overall table plus its coding subscores, SWE-bench Verified mini-SWE-agent leaderboard). 20 rows matched 13 new canonicals (plus the 1 merge above).
+4. New canonical scores: AA Coding Index and LiveBench overall from `external-model-priors.json`; LiveBench coding subscores from the LiveBench release 2026-06-25 tables (overall table at https://livebench.ai/ cross-checked on its coding mirrors); AA Intelligence and SWE-bench Verified stored as not found (UNKNOWN) for the new rows in this run - none of the new canonicals has a confirmed SWE-bench Verified mini-SWE-agent score. Tier from AA Coding Index, else LiveBench overall; ordered by tier, AA Coding, LiveBench coding.
+5. N4 detail: `:free`/`-free` was stripped only where the stripped base equals a benchmark name (benchmarks never carry a free-tier suffix). No alive row ends with `-instruct`, so that branch is a no-op. Family base names (`deepseek-v4-flash`), `-turbo`/`-abliterated` variants, version mismatches (`mimo-v2.6-*` vs `mimo-v2-5-pro`), missing separators (`glm5.2`), and size-suffixed ids (`qwen3.5-122b` vs `qwen3-5-122b-a10b`, `mistral-small-4-119b` vs `mistral-small-4`) stay unmapped: versions and sizes are never stripped.
+
+## Data dates
+
+- Probes: 2026-10-06 04:04Z-05:45Z (unchanged from v2).
+- Priors thresholds/values: `external-model-priors.json` generated 2026-10-05 (AA release 2026-09, LiveBench release 2026-06-25).
+- Benchmark lookup: 2026-10-06 (LiveBench values are release 2026-06-25).
+
+## Known limitations
+
+- `glm-5-3-flash` is tiered T3 from LiveBench overall 71.6 (AA missing in priors); an AA mirror reports Coding 71.5 for GLM 5.3 Flash, but the official AA page fetch in this run did not confirm it, so AA stays UNKNOWN rather than 0 or an adopted mirror value.
+- `apodex/apodex-1.1-mini:free` and `liquid/lfm-2.5-2.6b:free` would match priors bases after prefix strip + N2/N4, but `apodex/` and `liquid/` are not in the N3 allowlist, so they stay unranked.
+- `cohere/command-a-plus` (xkiro) equals priors `command-a-plus` after a `cohere/` strip, but `cohere/` is not in the N3 allowlist, so it stays unranked.
+- Liveness is as of the probe times (2026-10-06 04:04Z-05:45Z). Ranking is a tie-break signal, not proof of fitness for ShipDe work.

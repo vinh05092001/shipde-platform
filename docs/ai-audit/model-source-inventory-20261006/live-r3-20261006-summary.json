@@ -1,0 +1,176 @@
+{
+ "generatedAt": "2026-10-06T07:24:35.815Z",
+ "part1": {
+  "file": ".inputs/live-r3-confirm.jsonl",
+  "confirmedCount": 21,
+  "confirmed": [
+   "bzl/auto:free",
+   "cf/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b",
+   "cf/@cf/meta/llama-3.1-70b-instruct-fp8-fast",
+   "cf/@cf/meta/llama-3.2-3b-instruct",
+   "cf/@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+   "cf/@cf/mistralai/mistral-small-3.1-24b-instruct",
+   "cf/@cf/qwen/qwen2.5-coder-32b-instruct",
+   "cf/@cf/qwen/qwq-32b",
+   "cf/@cf/zai-org/glm-4.7-flash",
+   "kgw/kilo-auto/free",
+   "kgw/nvidia/nemotron-3-super-120b-a12b:free",
+   "mistral/codestral-latest",
+   "openrouter/nvidia/nemotron-3.5-lightning:free",
+   "tokenrouter/anthropic/claude-haiku-4.5",
+   "tokenrouter/anthropic/claude-opus-4.8",
+   "tokenrouter/anthropic/claude-sonnet-4.6",
+   "tokenrouter/google/gemini-3.5-flash",
+   "tokenrouter/z-ai/glm-5.2",
+   "xmtp/mimo-v2.5",
+   "xmtp/mimo-v2.5-pro",
+   "xmtp/mimo-v2.5-pro-claude"
+  ]
+ },
+ "part2": {
+  "file": ".inputs/live-r3-quota.jsonl",
+  "exits": [
+   "9router exit=0 (done, 648 models + list)",
+   "baseten exit=0 (complete, 11 models + list)",
+   "tencent exit=0 (complete, 86 models + list)",
+   "bai exit=0",
+   "explabs exit=0",
+   "llmtr exit=0"
+  ],
+  "perSource": {
+   "9router": {
+    "reprobed": 725,
+    "alive": [
+     "tokenrouter/deepseek/deepseek-v4-flash",
+     "tokenrouter/deepseek/deepseek-v4-pro",
+     "tokenrouter/google/gemini-3.6-flash",
+     "tokenrouter/moonshotai/kimi-k2.7-code"
+    ],
+    "blocked": 721,
+    "results": {
+     "HTTP_503": 689,
+     "HTTP_400": 32,
+     "PASS": 4
+    },
+    "reset": "reset after 104h 13m 2s"
+   },
+   "tencent": {
+    "reprobed": 86,
+    "alive": [],
+    "blocked": 86,
+    "results": {
+     "HTTP_402": 86
+    },
+    "reset": "{\"error\":{\"type\":\"invalid_request_error\",\"code\":\"401006\",\"message\":\"The service ID does not exist, or the model does not"
+   },
+   "baseten": {
+    "reprobed": 11,
+    "alive": [],
+    "blocked": 11,
+    "results": {
+     "HTTP_402": 11
+    },
+    "reset": "{\"error\":\"please check your current payment status.\"}\n"
+   },
+   "bai#1": {
+    "reprobed": 59,
+    "alive": [],
+    "blocked": 59,
+    "results": {
+     "HTTP_403": 10,
+     "HTTP_429": 49
+    },
+    "reset": "{\"error\":{\"code\":\"access_denied\",\"message\":\"Access restricted. Deposit required to unlock premium models. (request id: 2"
+   },
+   "bai#2": {
+    "reprobed": 59,
+    "alive": [],
+    "blocked": 59,
+    "results": {
+     "HTTP_403": 10,
+     "HTTP_429": 49
+    },
+    "reset": "{\"error\":{\"code\":\"access_denied\",\"message\":\"Access restricted. Deposit required to unlock premium models. (request id: 2"
+   },
+   "bai#3": {
+    "reprobed": 59,
+    "alive": [],
+    "blocked": 59,
+    "results": {
+     "HTTP_403": 10,
+     "HTTP_429": 49
+    },
+    "reset": "{\"error\":{\"code\":\"access_denied\",\"message\":\"Access restricted. Deposit required to unlock premium models. (request id: 2"
+   },
+   "explabs": {
+    "reprobed": 111,
+    "alive": [],
+    "blocked": 111,
+    "results": {
+     "HTTP_429": 107,
+     "HTTP_503": 4
+    },
+    "reset": "{\"error\":{\"message\":\"model_requires_purchase: ministral-14b-2512 is locked on your account until you make a purchase. Bu"
+   },
+   "bai#4": {
+    "reprobed": 59,
+    "alive": [],
+    "blocked": 59,
+    "results": {
+     "HTTP_403": 11,
+     "HTTP_429": 48
+    },
+    "reset": "{\"error\":{\"code\":\"access_denied\",\"message\":\"Access restricted. Deposit required to unlock premium models. (request id: 2"
+   },
+   "llmtr": {
+    "reprobed": 328,
+    "alive": [
+     "agnes/agnes-2.5-flash",
+     "agnes/agnes-3.0-flash"
+    ],
+    "blocked": 326,
+    "results": {
+     "HTTP_402": 38,
+     "HTTP_400": 8,
+     "HTTP_403": 12,
+     "PASS": 2,
+     "HTTP_429": 268
+    },
+    "reset": "{\"error\":{\"message\":\"Insufficient credits. Please top up.\",\"type\":\"insufficient_credits\"}}"
+   },
+   "bai#5": {
+    "reprobed": 59,
+    "alive": [],
+    "blocked": 59,
+    "results": {
+     "HTTP_403": 10,
+     "HTTP_429": 49
+    },
+    "reset": "{\"error\":{\"code\":\"access_denied\",\"message\":\"Access restricted. Deposit required to unlock premium models. (request id: 2"
+   },
+   "bai#6": {
+    "reprobed": 59,
+    "alive": [],
+    "blocked": 59,
+    "results": {
+     "HTTP_403": 10,
+     "HTTP_429": 49
+    },
+    "reset": "{\"error\":{\"code\":\"access_denied\",\"message\":\"Access restricted. Deposit required to unlock premium models. (request id: 2"
+   },
+   "bai#7": {
+    "reprobed": 59,
+    "alive": [],
+    "blocked": 59,
+    "results": {
+     "HTTP_403": 10,
+     "HTTP_429": 49
+    },
+    "reset": "{\"error\":{\"code\":\"access_denied\",\"message\":\"Access restricted. Deposit required to unlock premium models. (request id: 2"
+   }
+  },
+  "notReached": {}
+ },
+ "totalAlive": 232,
+ "v4RankedCount": 19
+}
