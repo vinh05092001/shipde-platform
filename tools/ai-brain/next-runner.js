@@ -501,6 +501,7 @@ function findNextWorkItem(options, deps) {
 
   const skipped = [];
   let selected = null;
+  let planCandidate = null;
 
   for (const item of items) {
     const id = item.work_item_id;
@@ -569,9 +570,20 @@ function findNextWorkItem(options, deps) {
     // 4. Status check: READY_FOR_AUTHOR or BACKLOG (with all dependencies MERGED)
     const isReadyForAuthor = status === 'READY_FOR_AUTHOR';
     const isBacklog = status === 'BACKLOG';
-    if (isReadyForAuthor || isBacklog) {
+    if (isReadyForAuthor) {
       selected = item;
+      if (opts.loop || opts.planAhead === true) continue;
       break;
+    }
+    if (isBacklog) {
+      if (!opts.loop && opts.planAhead !== true) {
+        selected = item;
+        break;
+      }
+      const workItemPath = path.join(rootDir, 'docs', 'product-spec', 'work-items', id + '.md');
+      if (!fs.existsSync(workItemPath) && !planCandidate) planCandidate = item;
+      else skipped.push({ id, reason: 'BACKLOG is not an unplanned Work Item' });
+      continue;
     }
 
     skipped.push({
@@ -580,7 +592,7 @@ function findNextWorkItem(options, deps) {
     });
   }
 
-  return { item: selected, skipped };
+  return { item: selected || planCandidate, planCandidate, skipped };
 }
 
 async function awaitIntakeExecution(intakeResult) {
@@ -757,6 +769,48 @@ async function nextLoop(options, deps) {
       return { stopped: true, reason: 'NO_READY_ITEM', iteration, skipped: findResult.skipped };
     }
 
+    // Planning stays a separate lane. Schedule one item ahead while a ready
+    // author item runs, subject to the same implementation ceiling.
+    const planningItem = findResult.planCandidate;
+    let parallelPlanning = null;
+    if (planningItem) {
+      const ceiling = checkCeiling({ ...opts, now }, d);
+      const planning = require('./work-item-planner');
+      if (ceiling.allowed) {
+        const planningPromise = planning.planWorkItem(
+          planningItem.work_item_id,
+          { rootDir, run: true },
+          d.planningDeps || { runPlanning: d.runPlanning }
+        );
+        const authorItem = findResult.item;
+        if (authorItem && authorItem !== planningItem) {
+          // Keep the author lane moving without awaiting planner completion.
+          parallelPlanning = planningPromise;
+        } else {
+          try {
+            const result = await planningPromise;
+            terminalWorkItems.set(
+              planningItem.work_item_id,
+              result && result.status === 'READY_FOR_AUTHOR' ? 'planned' : 'planning-blocked'
+            );
+            if (iteration < maxIterations) {
+              await sleepFn(pollIntervalMs);
+              continue;
+            }
+            return { completed: true, iterations: iteration, planning: result };
+          } catch (err) {
+            terminalWorkItems.set(planningItem.work_item_id, 'planning-failed');
+            log(`Planning ${planningItem.work_item_id} failed: ${err.message}`);
+            return {
+              stopped: true,
+              reason: 'PLANNING_FAILED',
+              workItemId: planningItem.work_item_id,
+            };
+          }
+        }
+      }
+    }
+
     const item = findResult.item;
     log(`Next Work Item: ${item.work_item_id} (status: ${item.status})`);
 
@@ -894,6 +948,20 @@ async function nextLoop(options, deps) {
     const outcome = execResult.outcome || 'completed';
     terminalWorkItems.set(item.work_item_id, outcome);
     log(`Work Item ${item.work_item_id} ended with terminal state ${outcome}.`);
+
+    if (parallelPlanning) {
+      try {
+        const result = await parallelPlanning;
+        terminalWorkItems.set(
+          planningItem.work_item_id,
+          result && result.status === 'READY_FOR_AUTHOR' ? 'planned' : 'planning-blocked'
+        );
+        log(`Planning ${planningItem.work_item_id} completed in parallel.`);
+      } catch (err) {
+        terminalWorkItems.set(planningItem.work_item_id, 'planning-failed');
+        log(`Planning ${planningItem.work_item_id} failed: ${err.message}`);
+      }
+    }
 
     if (iteration < maxIterations) {
       await sleepFn(pollIntervalMs);

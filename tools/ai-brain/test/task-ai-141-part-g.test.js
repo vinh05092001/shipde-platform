@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { draftWorkItem, planWorkItem } = require('../work-item-planner');
 const { nextLoop } = require('../next-runner');
+const { findNextWorkItem } = require('../next-runner');
 const { planCommand } = require('../cli');
 
 function fixtureRoot(name) {
@@ -199,6 +200,10 @@ test('G3 next loop plans a dependency-ready backlog item when no author-ready it
         planningDeps: {
           runPlanning: async (planRequest) => {
             request = planRequest;
+            fs.writeFileSync(
+              path.join(root, 'docs', 'product-spec', 'work-items', 'FEAT-AUTH-07.md'),
+              '# independently reviewed draft\n'
+            );
             return {
               status: 'READY_FOR_AUTHOR',
               governed: true,
@@ -219,8 +224,11 @@ test('G3 next loop plans a dependency-ready backlog item when no author-ready it
     assert.equal(request.role, 'planner.default');
     assert.equal(result.completed, true);
     assert.equal(
-      fs.existsSync(path.join(root, 'docs', 'product-spec', 'work-items', 'FEAT-AUTH-07.md')),
-      false
+      fs.readFileSync(
+        path.join(root, 'docs', 'product-spec', 'work-items', 'FEAT-AUTH-07.md'),
+        'utf8'
+      ),
+      '# independently reviewed draft\n'
     );
   } finally {
     os.homedir = priorHome;
@@ -251,6 +259,22 @@ test('G3 refuses to draft or mark author-ready when the governed planner is unav
   }
 });
 
+test('G3 keeps the author lane selected and plans one dependency-ready item ahead', () => {
+  const root = fixtureRoot('plan-g3-parallel-');
+  try {
+    const ready = { work_item_id: 'FEAT-AUTH-06', status: 'READY_FOR_AUTHOR', dependencies: '' };
+    const backlog = { work_item_id: 'FEAT-AUTH-07', status: 'BACKLOG', dependencies: '' };
+    const result = findNextWorkItem(
+      { rootDir: root, loop: true },
+      { items: [ready, backlog], records: [] }
+    );
+    assert.equal(result.item, ready);
+    assert.equal(result.planCandidate, backlog);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('G4 source-limited drafting does not include uncited product claims', () => {
   const root = fixtureRoot('plan-g4-');
   try {
@@ -271,7 +295,16 @@ test('G4 source-limited drafting does not include uncited product claims', () =>
     );
     const draft = fs.readFileSync(result.target, 'utf8');
     assert.match(draft, /Approved behavior/);
-    assert.doesNotMatch(draft, /Automatically transfers money/);
+    const sourceText = fs.readFileSync(
+      path.join(root, 'docs', 'product-spec', 'docs', '01-product', 'MASTER-FEATURE-CATALOG.md'),
+      'utf8'
+    );
+    const featureClaims = draft.split(/\r?\n/).filter((line) => /^> /.test(line));
+    assert.ok(featureClaims.length > 0);
+    for (const line of featureClaims) {
+      const claim = line.slice(2).trim();
+      assert.ok(sourceText.includes(claim), 'uncited product claim: ' + claim);
+    }
     assert.equal(result.status, 'DRAFT');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

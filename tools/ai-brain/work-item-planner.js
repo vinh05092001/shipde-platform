@@ -33,10 +33,12 @@ const APPROVED_SOURCES = [
 ];
 const APPROVED_SPEC_DIRS = [
   path.join('docs', 'product-spec', 'docs', '02-business'),
+  path.join('docs', 'product-spec', 'docs', '02-business', 'state-machines'),
   path.join('docs', 'product-spec', 'docs', '03-ux'),
   path.join('docs', 'product-spec', 'docs', '04-data'),
   path.join('docs', 'product-spec', 'docs', '05-api-integrations'),
   path.join('docs', 'product-spec', 'docs', '08-testing'),
+  path.join('docs', 'product-spec', 'docs', '08-testing', 'acceptance'),
 ];
 
 function fail(code, message) {
