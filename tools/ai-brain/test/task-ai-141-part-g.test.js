@@ -132,6 +132,7 @@ test('G1 missing feature detail is explicitly blocked', () => {
 
 test('G2 planning and author lanes stay independent and governed run requires its executor', async () => {
   let received;
+  const calls = [];
   const result = await planWorkItem(
     'FEAT-AUTH-07',
     { run: true },
@@ -145,10 +146,10 @@ test('G2 planning and author lanes stay independent and governed run requires it
           merged: true,
         };
       },
-      rankPlanner: async () => ({ candidateKey: 'planner-candidate' }),
-      runIsolatedPlanner: async () => ({ isolated: true }),
-      reviewPlan: async () => ({ independent: true }),
-      mergePlan: async () => ({ governed: true }),
+      rankPlanner: async () => (calls.push('rank'), { candidateKey: 'planner-candidate' }),
+      runIsolatedPlanner: async () => (calls.push('write'), { isolated: true }),
+      reviewPlan: async () => (calls.push('review'), { verdict: 'PASS' }),
+      mergePlan: async () => (calls.push('merge'), { merged: true }),
     }
   );
   assert.equal(result.status, 'READY_FOR_AUTHOR');
@@ -157,7 +158,7 @@ test('G2 planning and author lanes stay independent and governed run requires it
   assert.equal(received.independentReviewer, true);
   assert.equal(received.docsOnly, true);
   assert.equal(received.governedMerge, true);
-  assert.equal(typeof received.rankPlanner, 'function');
+  assert.deepEqual(calls, ['rank', 'write', 'review', 'merge']);
   await assert.rejects(planWorkItem('FEAT-AUTH-07', { run: true }, {}), {
     code: 'PLAN_EXECUTOR_REQUIRED',
   });
@@ -174,9 +175,9 @@ test('G2 CLI plan --run wires its execution dependencies to the planner module',
         return { status: 'BLOCKED', reason: 'fixture gate' };
       },
       rankPlanner: async () => ({}),
-      runIsolatedPlanner: async () => ({}),
-      reviewPlan: async () => ({}),
-      mergePlan: async () => ({}),
+      runIsolatedPlanner: async () => ({ success: true }),
+      reviewPlan: async () => ({ verdict: 'PASS' }),
+      mergePlan: async () => ({ merged: true }),
     }
   );
   assert.equal(called, true);
@@ -187,16 +188,22 @@ test('G3 next loop plans a dependency-ready backlog item when no author-ready it
   const root = fixtureRoot('plan-g3-');
   const priorHome = os.homedir;
   let request;
+  let authorRuns = 0;
+  const register = [{ work_item_id: 'FEAT-AUTH-07', status: 'BACKLOG', dependencies: '' }];
   try {
     const result = await nextLoop(
       {
         rootDir: root,
-        maxIterations: 1,
+        maxIterations: 2,
         decisionDir: path.join(root, 'decisions'),
       },
       {
-        items: [{ work_item_id: 'FEAT-AUTH-07', status: 'BACKLOG', dependencies: '' }],
+        readRegister: () => register.map((item) => ({ ...item })),
         records: [],
+        runIntake: async () => {
+          authorRuns += 1;
+          return { status: 'completed' };
+        },
         planningDeps: {
           runPlanning: async (planRequest) => {
             request = planRequest;
@@ -213,8 +220,11 @@ test('G3 next loop plans a dependency-ready backlog item when no author-ready it
           },
           rankPlanner: async () => ({ candidateKey: 'planner-candidate' }),
           runIsolatedPlanner: async () => ({ isolated: true }),
-          reviewPlan: async () => ({ independent: true }),
-          mergePlan: async () => ({ governed: true }),
+          reviewPlan: async () => ({ verdict: 'PASS' }),
+          mergePlan: async () => {
+            register[0].status = 'READY_FOR_AUTHOR';
+            return { merged: true };
+          },
         },
         log: () => {},
         now: Date.now(),
@@ -223,6 +233,7 @@ test('G3 next loop plans a dependency-ready backlog item when no author-ready it
     assert.equal(request.workItemId, 'FEAT-AUTH-07');
     assert.equal(request.role, 'planner.default');
     assert.equal(result.completed, true);
+    assert.equal(authorRuns, 1);
     assert.equal(
       fs.readFileSync(
         path.join(root, 'docs', 'product-spec', 'work-items', 'FEAT-AUTH-07.md'),
@@ -270,6 +281,80 @@ test('G3 keeps the author lane selected and plans one dependency-ready item ahea
     );
     assert.equal(result.item, ready);
     assert.equal(result.planCandidate, backlog);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('G3 parallel planning promotes the merged backlog row before returning', async () => {
+  const root = fixtureRoot('plan-g3-parallel-run-');
+  const register = [
+    { work_item_id: 'FEAT-AUTH-06', status: 'READY_FOR_AUTHOR', dependencies: '' },
+    { work_item_id: 'FEAT-AUTH-07', status: 'BACKLOG', dependencies: '' },
+  ];
+  const logs = [];
+  try {
+    const result = await nextLoop(
+      { rootDir: root, maxIterations: 1, decisionDir: path.join(root, 'decisions') },
+      {
+        readRegister: () => register.map((item) => ({ ...item })),
+        records: [],
+        openWritersDetailed: () => ({ writers: [] }),
+        openReviewersDetailed: () => ({ reviewers: [] }),
+        runIntake: async () => ({ status: 'completed' }),
+        planningDeps: {
+          rankPlanner: async () => ({ candidateKey: 'planner' }),
+          runIsolatedPlanner: async () => ({ success: true }),
+          reviewPlan: async () => ({ verdict: 'PASS' }),
+          mergePlan: async () => {
+            register[1].status = 'READY_FOR_AUTHOR';
+            return { merged: true };
+          },
+          runPlanning: async () => ({
+            status: 'READY_FOR_AUTHOR',
+            governed: true,
+            independentReview: 'PASS',
+            merged: true,
+          }),
+        },
+        log: (message) => logs.push(message),
+      }
+    );
+    assert.equal(result.completed, true);
+    assert.equal(register[1].status, 'READY_FOR_AUTHOR', logs.join('\n'));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('G3 parallel planning failure stops the loop and records a failed decision', async () => {
+  const root = fixtureRoot('plan-g3-parallel-failure-');
+  try {
+    const result = await nextLoop(
+      { rootDir: root, maxIterations: 1, decisionDir: path.join(root, 'decisions') },
+      {
+        items: [
+          { work_item_id: 'FEAT-AUTH-06', status: 'READY_FOR_AUTHOR', dependencies: '' },
+          { work_item_id: 'FEAT-AUTH-07', status: 'BACKLOG', dependencies: '' },
+        ],
+        records: [],
+        openWritersDetailed: () => ({ writers: [] }),
+        openReviewersDetailed: () => ({ reviewers: [] }),
+        runIntake: async () => ({ status: 'completed' }),
+        planningDeps: {
+          runPlanning: async () => {
+            throw new Error('parallel planner failed');
+          },
+          rankPlanner: async () => ({ candidateKey: 'planner' }),
+          runIsolatedPlanner: async () => ({ success: true }),
+          reviewPlan: async () => ({ verdict: 'PASS' }),
+          mergePlan: async () => ({ merged: true }),
+        },
+        log: () => {},
+      }
+    );
+    assert.equal(result.stopped, true);
+    assert.equal(result.reason, 'PLANNING_FAILED');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

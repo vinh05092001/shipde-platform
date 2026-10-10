@@ -283,6 +283,50 @@ async function planWorkItem(id, options, deps) {
       'plan --run requires planner ranking, isolated execution, independent review, and governed merge services'
     );
   }
+  const ranked = await d.rankPlanner({ workItemId: id, role: 'planner.default' });
+  if (!ranked || ranked.eligible === false) {
+    return {
+      id,
+      status: 'BLOCKED',
+      reason: (ranked && ranked.reason) || 'No eligible planner candidate was ranked.',
+    };
+  }
+  const isolated = await d.runIsolatedPlanner({
+    workItemId: id,
+    role: 'planner.default',
+    candidate: ranked,
+    docsOnly: true,
+  });
+  if (!isolated || isolated.success === false) {
+    return {
+      id,
+      status: 'BLOCKED',
+      reason: (isolated && isolated.reason) || 'The isolated planner did not complete.',
+    };
+  }
+  const review = await d.reviewPlan({ workItemId: id, candidate: ranked, plan: isolated });
+  if (!review || review.verdict !== 'PASS') {
+    return {
+      id,
+      status: 'BLOCKED',
+      reason: (review && review.reason) || 'Independent planning review did not PASS.',
+      independentReview: review && review.verdict,
+    };
+  }
+  const merged = await d.mergePlan({
+    workItemId: id,
+    candidate: ranked,
+    plan: isolated,
+    review,
+    docsOnly: true,
+  });
+  if (!merged || merged.success === false || merged.merged !== true) {
+    return {
+      id,
+      status: 'BLOCKED',
+      reason: (merged && merged.reason) || 'Governed docs-only merge did not complete.',
+    };
+  }
   const result = await d.runPlanning({
     workItemId: id,
     role: 'planner.default',
@@ -290,10 +334,10 @@ async function planWorkItem(id, options, deps) {
     independentReviewer: true,
     docsOnly: true,
     governedMerge: true,
-    rankPlanner: d.rankPlanner,
-    runIsolatedPlanner: d.runIsolatedPlanner,
-    reviewPlan: d.reviewPlan,
-    mergePlan: d.mergePlan,
+    rankedPlanner: ranked,
+    isolatedPlan: isolated,
+    independentPlanReview: review,
+    governedPlanMerge: merged,
   });
   if (
     !result ||

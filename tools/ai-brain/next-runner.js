@@ -457,16 +457,9 @@ function checkCeiling(options, deps) {
   };
 }
 
-function findNextWorkItem(options, deps) {
-  const opts = options || {};
-  const d = deps || {};
-  const rootDir = path.resolve(opts.rootDir || process.cwd());
-  const now = typeof d.now === 'function' ? d.now() : d.now || opts.now || Date.now();
-  const decisionRecords = collectAllDecisionRecords(opts, d);
-  const terminalWorkItems = opts.terminalWorkItems || d.terminalWorkItems || new Map();
-
+function readRegisterItems(opts, d, rootDir, force) {
   let items = [];
-  if (Array.isArray(d.items)) {
+  if (!force && Array.isArray(d.items)) {
     items = d.items;
   } else if (typeof d.readRegister === 'function') {
     items = d.readRegister();
@@ -491,6 +484,17 @@ function findNextWorkItem(options, deps) {
       items = (reg && reg.data && reg.data.items) || [];
     }
   }
+  return items;
+}
+
+function findNextWorkItem(options, deps) {
+  const opts = options || {};
+  const d = deps || {};
+  const rootDir = path.resolve(opts.rootDir || process.cwd());
+  const now = typeof d.now === 'function' ? d.now() : d.now || opts.now || Date.now();
+  const decisionRecords = collectAllDecisionRecords(opts, d);
+  const terminalWorkItems = opts.terminalWorkItems || d.terminalWorkItems || new Map();
+  const items = readRegisterItems(opts, d, rootDir, opts.forceRegisterRead === true);
 
   const byId = new Map();
   for (const it of items) {
@@ -571,7 +575,7 @@ function findNextWorkItem(options, deps) {
     const isReadyForAuthor = status === 'READY_FOR_AUTHOR';
     const isBacklog = status === 'BACKLOG';
     if (isReadyForAuthor) {
-      selected = item;
+      if (!selected) selected = item;
       if (opts.loop || opts.planAhead === true) continue;
       break;
     }
@@ -581,8 +585,7 @@ function findNextWorkItem(options, deps) {
         break;
       }
       const workItemPath = path.join(rootDir, 'docs', 'product-spec', 'work-items', id + '.md');
-      if (!fs.existsSync(workItemPath) && !planCandidate) planCandidate = item;
-      else skipped.push({ id, reason: 'BACKLOG is not an unplanned Work Item' });
+      if (!planCandidate) planCandidate = item;
       continue;
     }
 
@@ -736,7 +739,7 @@ async function nextLoop(options, deps) {
     }
 
     // 2. Find next work item
-    const findResult = findNextWorkItem({ ...opts, now, terminalWorkItems }, d);
+    const findResult = findNextWorkItem({ ...opts, loop: true, now, terminalWorkItems }, d);
     for (const s of findResult.skipped) {
       log(`Skipped ${s.id}: ${s.reason}`);
     }
@@ -789,10 +792,9 @@ async function nextLoop(options, deps) {
         } else {
           try {
             const result = await planningPromise;
-            terminalWorkItems.set(
-              planningItem.work_item_id,
-              result && result.status === 'READY_FOR_AUTHOR' ? 'planned' : 'planning-blocked'
-            );
+            if (!result || result.status !== 'READY_FOR_AUTHOR') {
+              terminalWorkItems.set(planningItem.work_item_id, 'planning-blocked');
+            }
             if (iteration < maxIterations) {
               await sleepFn(pollIntervalMs);
               continue;
@@ -839,7 +841,7 @@ async function nextLoop(options, deps) {
           planned.independentReview === 'PASS' &&
           planned.merged === true;
         const outcome = governed ? 'planned' : 'blocked';
-        terminalWorkItems.set(item.work_item_id, outcome);
+        if (outcome !== 'planned') terminalWorkItems.set(item.work_item_id, outcome);
         decisions.recordDecision(
           {
             stage: outcome === 'planned' ? decisions.Stage.COMPLETED : decisions.Stage.REFUSED,
@@ -858,10 +860,34 @@ async function nextLoop(options, deps) {
           if (iteration < maxIterations) await sleepFn(pollIntervalMs);
           continue;
         }
-        // A governed merge makes the item author-ready in the same loop turn.
-        // Re-read the register through the regular selector so status and
-        // dependency gates remain authoritative before authoring.
-        item.status = 'READY_FOR_AUTHOR';
+        // A governed merge must update the durable register. Re-read it before
+        // authoring so the normal dependency and status gates remain authoritative.
+        const refreshed = findNextWorkItem(
+          { ...opts, now, terminalWorkItems, forceRegisterRead: true },
+          d
+        );
+        const refreshedItem = refreshed.item;
+        if (
+          !refreshedItem ||
+          refreshedItem.work_item_id !== item.work_item_id ||
+          String(refreshedItem.status || '').trim() !== 'READY_FOR_AUTHOR'
+        ) {
+          terminalWorkItems.set(item.work_item_id, 'planning-register-not-ready');
+          decisions.recordDecision(
+            {
+              stage: decisions.Stage.REFUSED,
+              workItemId: item.work_item_id,
+              detail: 'PLANNING_REGISTER_NOT_READY',
+            },
+            logOpts
+          );
+          return {
+            stopped: true,
+            reason: 'PLANNING_REGISTER_NOT_READY',
+            workItemId: item.work_item_id,
+          };
+        }
+        Object.assign(item, refreshedItem);
       } catch (err) {
         terminalWorkItems.set(item.work_item_id, 'planning-failed');
         decisions.recordDecision(
@@ -952,14 +978,47 @@ async function nextLoop(options, deps) {
     if (parallelPlanning) {
       try {
         const result = await parallelPlanning;
-        terminalWorkItems.set(
-          planningItem.work_item_id,
-          result && result.status === 'READY_FOR_AUTHOR' ? 'planned' : 'planning-blocked'
-        );
+        if (!result || result.status !== 'READY_FOR_AUTHOR') {
+          terminalWorkItems.set(planningItem.work_item_id, 'planning-blocked');
+        } else {
+          const plannedRow = readRegisterItems(opts, d, rootDir, true).find(
+            (row) => row.work_item_id === planningItem.work_item_id
+          );
+          if (!plannedRow || String(plannedRow.status || '').trim() !== 'READY_FOR_AUTHOR') {
+            terminalWorkItems.set(planningItem.work_item_id, 'planning-register-not-ready');
+            decisions.recordDecision(
+              {
+                stage: decisions.Stage.REFUSED,
+                workItemId: planningItem.work_item_id,
+                detail: 'PLANNING_REGISTER_NOT_READY',
+              },
+              logOpts
+            );
+            return {
+              stopped: true,
+              reason: 'PLANNING_REGISTER_NOT_READY',
+              workItemId: planningItem.work_item_id,
+            };
+          }
+        }
         log(`Planning ${planningItem.work_item_id} completed in parallel.`);
       } catch (err) {
         terminalWorkItems.set(planningItem.work_item_id, 'planning-failed');
+        decisions.recordDecision(
+          {
+            stage: decisions.Stage.FAILED,
+            workItemId: planningItem.work_item_id,
+            detail: err && err.code ? err.code : 'PLANNING_FAILED',
+            reason: err && err.message,
+          },
+          logOpts
+        );
         log(`Planning ${planningItem.work_item_id} failed: ${err.message}`);
+        return {
+          stopped: true,
+          reason: 'PLANNING_FAILED',
+          workItemId: planningItem.work_item_id,
+        };
       }
     }
 
