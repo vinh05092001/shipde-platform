@@ -46,6 +46,28 @@ function isWorkerPath(target) {
   return rel !== '' && !rel.startsWith('..') && !path.win32.isAbsolute(rel);
 }
 
+/** Read the current host isolation attestation and fail closed unless it is CLOSED. */
+function readClosedIsolationVerdict(options) {
+  const opts = options || {};
+  const verdictPath =
+    opts.verdictPath ||
+    path.join(process.env.LOCALAPPDATA || '', 'ShipDe', 'isolation-verdict.json');
+  if (!fs.existsSync(verdictPath)) throw new Error('CODEX_REQUIRES_ISOLATION');
+  let verdictData;
+  try {
+    const stat = fs.statSync(verdictPath);
+    if (Date.now() - stat.mtimeMs > 24 * 60 * 60 * 1000) {
+      throw new Error('CODEX_REQUIRES_ISOLATION');
+    }
+    const text = fs.readFileSync(verdictPath, 'utf8');
+    verdictData = JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
+  } catch {
+    throw new Error('CODEX_REQUIRES_ISOLATION');
+  }
+  if (verdictData.verdict !== 'CLOSED') throw new Error('CODEX_REQUIRES_ISOLATION');
+  return verdictData;
+}
+
 function getFolderHash(folder) {
   const files = [];
   function readDir(dir) {
@@ -268,6 +290,9 @@ function buildWorkerLaunchScript(options) {
   const workerTimeoutMs = options.workerTimeoutMs;
   const adapterId = options.adapterId;
   const isCodex = adapterId === 'codex';
+  if (isCodex && (!options.isolationVerdict || options.isolationVerdict.verdict !== 'CLOSED')) {
+    throw new Error('CODEX_REQUIRES_ISOLATION');
+  }
   const completionNonce = options.completionNonce || crypto.randomBytes(16).toString('hex');
   const markerPath = options.markerPath || path.join(workerRoot, 'run-target.complete.json');
   // Test-only seam. The generated host script normally impersonates the worker
@@ -1811,6 +1836,7 @@ function getIsolatedLauncher() {
       workerTimeoutMs,
       completionNonce,
       adapterId: adapter.id,
+      isolationVerdict: verdictData,
       rtkPathPrepend,
       credentialEnv: selectedCredentialEnv,
     });
@@ -1910,6 +1936,7 @@ module.exports = {
   buildWorkerLaunchScript,
   workerRootFor,
   isWorkerPath,
+  readClosedIsolationVerdict,
   appendGitInfoExclude,
   materialiseExercise,
   captureFailBefore,

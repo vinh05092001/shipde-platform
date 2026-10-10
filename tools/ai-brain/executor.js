@@ -401,6 +401,7 @@ function executePlan(plan, options) {
       base: opts.base || 'main',
       cwd: opts.cwd,
       isolatedWorker: Boolean(opts.isolatedWorker),
+      verdictPath: opts.verdictPath,
       usageFile: usageReportPath(opts, a),
       title: workerName(a.workItemId),
       labels: { workItem: a.workItemId, role: a.role || 'unknown', project },

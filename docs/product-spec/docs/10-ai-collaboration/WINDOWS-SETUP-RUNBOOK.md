@@ -223,6 +223,15 @@ codex login status
 
 The operator account's `~/.codex` files are never copied. The worker launch gives Codex a fresh HOME/USERPROFILE rooted in its isolated worktree. If `codex login status` fails, the Controller records `CODEX_NOT_LOGGED_IN` as a local candidate failure and continues with another candidate; authenticate the worker user before selecting Codex again.
 
+For an isolated Codex author session, sign in to Windows as the `ShipDeWorker` account (or open a PowerShell session with that account's credentials), install the approved Codex CLI for that user, and run:
+
+```powershell
+codex login
+codex login status
+```
+
+Complete the ChatGPT sign-in flow in that user's session. Do not copy, export, or read credentials from the operator profile. The isolated launcher sets `HOME` and `USERPROFILE` to the per-task worker root before it checks login status and launches `codex exec`; a missing, stale or non-CLOSED isolation verdict refuses the Codex launch.
+
 ## 9. Synchronize after human merge
 
 After squash-merging the passing PR, run:

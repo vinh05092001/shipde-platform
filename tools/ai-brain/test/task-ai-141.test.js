@@ -80,8 +80,25 @@ test('Codex harness requires an isolated worker and builds the guarded exec argv
     /CODEX_REQUIRES_ISOLATION/
   );
   const worker = path.join('C:\\ShipDeWorker', 'task-ai-141');
+  assert.throws(
+    () => codex.launch({ cwd: worker, isolatedWorker: true, verdictPath: 'missing-verdict.json' }),
+    /CODEX_REQUIRES_ISOLATION/
+  );
+  const verdictPath = path.join(fixtureRoot(), 'isolation-verdict.json');
+  fs.writeFileSync(verdictPath, JSON.stringify({ verdict: 'OPEN' }));
+  assert.throws(
+    () => codex.launch({ cwd: worker, isolatedWorker: true, verdictPath }),
+    /CODEX_REQUIRES_ISOLATION/
+  );
+  fs.writeFileSync(verdictPath, JSON.stringify({ verdict: 'CLOSED' }));
   assert.deepEqual(
-    codex.launch({ cwd: worker, isolatedWorker: true, model: 'codex-test', prompt: 'task' }),
+    codex.launch({
+      cwd: worker,
+      isolatedWorker: true,
+      verdictPath,
+      model: 'codex-test',
+      prompt: 'task',
+    }),
     ['exec', '--dangerously-bypass-approvals-and-sandbox', '--model', 'codex-test', 'task']
   );
 });
@@ -107,6 +124,7 @@ test('Codex bypass and worker login probe exist only in isolated launcher script
     workerTimeoutMs: 1000,
     completionNonce: 'nonce',
     adapterId: 'codex',
+    isolationVerdict: { verdict: 'CLOSED' },
     runAsCurrentUser: true,
   });
   assert.doesNotMatch(regular, /dangerously-bypass-approvals-and-sandbox|login status/);
@@ -115,6 +133,20 @@ test('Codex bypass and worker login probe exist only in isolated launcher script
   assert.match(codex, /\$env:HOME = "C:\\worker"/);
   assert.match(codex, /\$env:USERPROFILE = "C:\\worker"/);
   assert.doesNotMatch(codex, /\.codex.*credentials|credentials.*\.codex/i);
+  assert.throws(
+    () =>
+      isolation.buildWorkerLaunchScript({
+        credPath: 'worker.cred',
+        workerRoot: 'C:\\worker',
+        exeFile: 'codex.exe',
+        payloadArgsPath: 'args.json',
+        launchResultPath: 'result.json',
+        workerTimeoutMs: 1000,
+        adapterId: 'codex',
+        runAsCurrentUser: true,
+      }),
+    /CODEX_REQUIRES_ISOLATION/
+  );
 });
 
 test('Codex login failure is returned as a local failure so execution can continue', () => {
