@@ -598,7 +598,8 @@ test('intake pool writer inherits backend WORK_ITEM_PASS from blocked 9router ag
   const exhaustedTarget = Object.assign({}, poolCandidate, { headroomStatus: 'exhausted' });
   assert.equal(
     require('../routing').proofObservedWithSource(proofData, exhaustedTarget).level,
-    'WORK_ITEM_PASS'
+    null,
+    'an exhausted target cannot inherit proof for dispatch'
   );
   const blockedRank = rankForProfile(
     [Object.assign({}, poolCandidate)],
@@ -684,6 +685,167 @@ test('proof transfer requires exact normalized backend identity', () => {
   };
   const target = { ...distinct, modelId: 'unknown/gemini-model' };
   assert.equal(require('../routing').proofObservedWithSource(ambiguousData, target).level, null);
+});
+
+const proofModel = 'gemini-3.1-pro-low';
+
+/** The 9router ag path that earned the WORK_ITEM_PASS for the backend model. */
+function agSourcePath(suffix) {
+  const accountId = 'ninerouter-gemini' + (suffix || '');
+  return {
+    harness: 'paseo',
+    accessPath: 'http',
+    gateway: '9router',
+    upstream: 'ag',
+    accountId,
+    quotaScope: accountId,
+    modelId: 'ag/' + proofModel,
+    source: '9router',
+  };
+}
+
+/** One agy-pool writer that reaches the same backend model by a different route. */
+function poolTargetPath() {
+  return {
+    harness: 'agy-pool',
+    accessPath: 'ShipDe\\ShipDe-agy01',
+    gateway: '',
+    upstream: 'antigravity',
+    accountId: 'agy01',
+    quotaScope: 'agy01:gemini',
+    modelId: proofModel,
+    source: 'agy-pool',
+    kind: 'agent-cli',
+  };
+}
+
+/** A source path carrying a WORK_ITEM_PASS plus one quota timeout today. */
+function evidenceStore(root, source, failedItem) {
+  const dir = path.join(root, 'evidence');
+  evidence.recordProbe(dir, source, {
+    status: 'passed',
+    proofLevel: evidence.ProofLevel.WORK_ITEM_PASS,
+    workItemId: 'FIXTURE-AI-141',
+  });
+  evidence.recordProbe(dir, source, failedItem);
+  return evidence.loadEvidence(dir);
+}
+
+const QUOTA_TIMEOUT_TODAY = {
+  status: 'failed',
+  cause: 'QUOTA_EXHAUSTED',
+  scope: 'UPSTREAM',
+  httpStatus: 429,
+  body: 'weekly quota exhausted, request timed out',
+};
+
+test('a source path blocked by quota plus a timeout failure still transfers the proof', () => {
+  const root = fixtureRoot();
+  const source = agSourcePath();
+  const target = poolTargetPath();
+  const data = evidenceStore(root, source, QUOTA_TIMEOUT_TODAY);
+
+  const block = evidence.isCandidateBlocked(data, source);
+  assert.equal(block.blocked, true, 'the source path is really blocked today');
+  assert.match(String(block.reason), /quota/i);
+
+  const proof = require('../routing').proofObservedWithSource(data, target);
+  assert.equal(proof.level, 'WORK_ITEM_PASS');
+  assert.equal(proof.transferred, true);
+  assert.equal(proof.source, candidateKey(source));
+  assert.equal(proof.sourceModel, 'ag/' + proofModel);
+});
+
+test('classifier enum values recognize infrastructure and preserve model failures', () => {
+  const routing = require('../routing');
+  const source = agSourcePath('-classification');
+  const target = poolTargetPath();
+  const passed = { status: 'passed', proofLevel: 'WORK_ITEM_PASS' };
+
+  for (const [cause, scope] of [
+    ['TIMEOUT', 'UPSTREAM'],
+    ['LAUNCH_CONFIG', 'LOCAL'],
+    ['HARNESS_FAILED', 'HARNESS'],
+  ]) {
+    const data = {
+      combinations: [
+        {
+          ...source,
+          evidence: [passed, { status: 'failed', cause, scope }],
+        },
+      ],
+    };
+    const proof = routing.proofObservedWithSource(data, target);
+    assert.equal(proof.level, 'WORK_ITEM_PASS', `${cause}/${scope} should retain source proof`);
+    assert.equal(proof.transferred, true);
+  }
+
+  const modelFailure = {
+    combinations: [
+      {
+        ...source,
+        evidence: [passed, { status: 'failed', cause: 'MODEL_UNSUPPORTED', scope: 'MODEL' }],
+      },
+    ],
+  };
+  assert.equal(routing.proofObservedWithSource(modelFailure, target).level, null);
+});
+
+test('a model-quality failure on the source path disqualifies the proof transfer', () => {
+  const target = poolTargetPath();
+
+  // Control: the identical source whose only failure is infrastructure still
+  // lends its proof. This is the behaviour this task changes, so without it
+  // the quality assertion below cannot be told apart from origin/main.
+  const controlRoot = fixtureRoot();
+  const control = evidenceStore(controlRoot, agSourcePath('-control'), QUOTA_TIMEOUT_TODAY);
+  assert.equal(
+    require('../routing').proofObservedWithSource(control, target).transferred,
+    true,
+    'control: an infrastructure failure alone does not stop the transfer'
+  );
+
+  // A model-scope failure: the model itself did not serve, on a healthy path.
+  const modelRoot = fixtureRoot();
+  const modelData = evidenceStore(modelRoot, agSourcePath('-model'), {
+    status: 'failed',
+    httpStatus: 400,
+    body: 'model not supported',
+  });
+  const modelProof = require('../routing').proofObservedWithSource(modelData, target);
+  assert.equal(modelProof.level, null);
+  assert.equal(modelProof.transferred, false);
+
+  // A review verdict of CHANGES_REQUIRED is a quality failure even though the
+  // route itself answered.
+  const reviewRoot = fixtureRoot();
+  const reviewData = evidenceStore(reviewRoot, agSourcePath('-review'), {
+    status: 'failed',
+    verdict: 'CHANGES_REQUIRED',
+    body: 'review refused the work item',
+  });
+  const reviewProof = require('../routing').proofObservedWithSource(reviewData, target);
+  assert.equal(reviewProof.level, null);
+  assert.equal(reviewProof.transferred, false);
+});
+
+test('an exhausted target path never inherits the transferred proof', () => {
+  const root = fixtureRoot();
+  const source = agSourcePath();
+  const target = poolTargetPath();
+  const data = evidenceStore(root, source, QUOTA_TIMEOUT_TODAY);
+
+  // Control: the same source and the same target, before the headroom runs out.
+  assert.equal(
+    require('../routing').proofObservedWithSource(data, target).transferred,
+    true,
+    'control: the healthy target inherits the proof'
+  );
+
+  const exhausted = Object.assign({}, target, { headroomStatus: 'exhausted' });
+  const proof = require('../routing').proofObservedWithSource(data, exhausted);
+  assert.equal(proof.level, null);
+  assert.equal(proof.transferred, false);
 });
 
 test('intake supplies empty account options when none are configured', async () => {
