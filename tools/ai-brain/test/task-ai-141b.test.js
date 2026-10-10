@@ -4,7 +4,13 @@ const { test, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { eligibleCandidates, runAutomaticQualification } = require('../qualification-auto');
+const {
+  eligibleCandidates,
+  loadItems,
+  runAutomaticQualification,
+  runAutoCli,
+} = require('../qualification-auto');
+const { nextLoop } = require('../next-runner');
 
 const SHA = 'a'.repeat(40);
 const fixtures = [];
@@ -108,4 +114,83 @@ test('no product item and no mismatched review SHA can grant evidence', async ()
     });
     assert.equal(recorded, false);
   }
+});
+
+test('missing isolated reviewer fails closed with a ran qualification result', async () => {
+  const result = await runAutomaticQualification({ candidates: [CANDIDATE] });
+  assert.equal(result.reason, 'QUALIFICATION_RUNNER_UNAVAILABLE');
+  assert.equal(result.ran, true);
+  assert.deepEqual(result.qualified, []);
+});
+
+test('evidence module fallback records the exact candidate proof', async () => {
+  const f = fixture();
+  const proof = await runAutomaticQualification({
+    candidates: [CANDIDATE],
+    itemsFile: f.itemsFile,
+    usageFile: f.usageFile,
+    evidenceDir: f.dir,
+    runIsolatedReviewed: async () => ({
+      verdict: 'PASS',
+      sha: SHA,
+      reviewedSha: SHA,
+      reviewer: 'reviewer',
+      independent: true,
+    }),
+  });
+  assert.equal(proof.qualified.length, 1);
+  const evidence = require('../evidence');
+  const records = evidence.loadEvidence(f.dir);
+  assert.ok(
+    records.combinations.some((combo) =>
+      combo.evidence.some((record) => record.proofLevel === 'WORK_ITEM_PASS')
+    )
+  );
+});
+
+test('loadItems rejects malformed qualification definitions', () => {
+  const f = fixture();
+  fs.writeFileSync(f.itemsFile, JSON.stringify([{ id: 'bad', kind: 'product', risk: 'high' }]));
+  assert.throws(() => loadItems(f.itemsFile), /QUALIFICATION_ITEMS_INVALID/);
+});
+
+test('auto CLI accepts only exact --auto argv token', async () => {
+  const f = fixture();
+  const candidatesFile = path.join(f.dir, 'candidates.json');
+  fs.writeFileSync(candidatesFile, JSON.stringify([]));
+  assert.equal(await runAutoCli(['--auto-foo', '--candidates', candidatesFile], {}), 2);
+  assert.equal(
+    await runAutoCli(['--auto', '--candidates', candidatesFile, '--items', f.itemsFile], {
+      usageFile: f.usageFile,
+      runIsolatedReviewed: async () => null,
+      out: () => {},
+    }),
+    0
+  );
+});
+
+test('next loop accepts completed qualification slot when no product item is ready', async () => {
+  const logs = [];
+  const result = await nextLoop(
+    {
+      maxIterations: 1,
+      rootDir: process.cwd(),
+      records: [],
+      qualificationSlot: async () => ({
+        status: 'completed',
+        ran: true,
+        selected: 1,
+        qualified: [],
+      }),
+    },
+    {
+      existsSync: () => false,
+      items: [],
+      log: (line) => logs.push(line),
+      now: Date.parse('2026-10-10T12:00:00Z'),
+    }
+  );
+  assert.equal(result.qualification.ran, true);
+  assert.equal(result.completed, true);
+  assert.ok(logs.some((line) => line.includes('QUALIFICATION_SLOT')));
 });

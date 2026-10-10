@@ -3102,7 +3102,7 @@ function main() {
   // (QUALIFIED, ALREADY_QUALIFIED, NOT_QUALIFIED, RESULT_STALE,
   // RESULT_MISSING); exit 2 for bad argv.
   if (command === 'qualify') {
-    if (process.argv.slice(3).includes('--auto')) {
+    if (process.argv.slice(3).some((arg) => arg === '--auto')) {
       const { runAutoCli } = require('./qualification-auto');
       runAutoCli(process.argv.slice(3))
         .then((code) => {

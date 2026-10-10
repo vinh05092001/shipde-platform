@@ -56,9 +56,13 @@ function loadUsage(file) {
 
 async function runAutoCli(argv, deps) {
   const args = {};
+  let autoSeen = false;
   for (let i = 0; i < argv.length; i += 1) {
-    if (argv[i] === '--auto') args.auto = true;
-    else if (argv[i].startsWith('--') && argv[i + 1] && !argv[i + 1].startsWith('--')) {
+    if (argv[i] === '--auto') {
+      if (autoSeen) return 2;
+      args.auto = true;
+      autoSeen = true;
+    } else if (argv[i].startsWith('--') && argv[i + 1] && !argv[i + 1].startsWith('--')) {
       args[argv[i].slice(2)] = argv[++i];
     } else return 2;
   }
@@ -105,7 +109,13 @@ async function runAutomaticQualification(options) {
     throw new Error('QUALIFICATION_CAP_CONFIG_INVALID');
   }
   if (typeof opts.runIsolatedReviewed !== 'function') {
-    return { status: 'refused', reason: 'QUALIFICATION_RUNNER_UNAVAILABLE', qualified: [] };
+    return {
+      status: 'refused',
+      reason: 'QUALIFICATION_RUNNER_UNAVAILABLE',
+      ran: true,
+      selected: 0,
+      qualified: [],
+    };
   }
   const now = typeof opts.now === 'function' ? opts.now() : opts.now || Date.now();
   const day = new Date(now).toISOString().slice(0, 10);
@@ -147,12 +157,13 @@ async function runAutomaticQualification(options) {
     fs.mkdirSync(path.dirname(usageFile), { recursive: true });
     fs.writeFileSync(usageFile, JSON.stringify(usage, null, 2) + '\n', 'utf8');
   }
-  return { status: 'completed', selected: selected.length, qualified };
+  return { status: 'completed', ran: true, selected: selected.length, qualified };
 }
 
 module.exports = {
   DEFAULT_CONFIG,
   eligibleCandidates,
+  loadItems,
   independentPass,
   runAutomaticQualification,
   runAutoCli,
