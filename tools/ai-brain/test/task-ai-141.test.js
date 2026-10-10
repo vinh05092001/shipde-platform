@@ -76,6 +76,17 @@ test.after(() => {
 test('Codex harness and launcher require the fresh CLOSED verdict', () => {
   const codex = harnesses.getHarness('codex');
   assert.throws(() => codex.launch({ cwd: process.cwd() }), /CODEX_REQUIRES_ISOLATION/);
+  for (const invalid of [1, null, [], 'not-json', '{']) {
+    assert.throws(
+      () =>
+        codex.launch({
+          cwd: 'C:\\ShipDeWorker\\task',
+          isolatedWorker: true,
+          isolationVerdict: invalid,
+        }),
+      /CODEX_REQUIRES_ISOLATION/
+    );
+  }
   const root = fixtureRoot();
   const verdictPath = path.join(root, 'ShipDe', 'isolation-verdict.json');
   fs.mkdirSync(path.dirname(verdictPath), { recursive: true });
@@ -123,6 +134,45 @@ test('Codex harness and launcher require the fresh CLOSED verdict', () => {
   assert.match(worker, /CODEX_NOT_LOGGED_IN/);
   assert.match(worker, /`\$env:HOME = "C:\\worker"/);
   assert.match(worker, /`\$env:USERPROFILE = "C:\\worker"/);
+});
+
+test('Codex harness runs the fake CLI with the isolated worker arguments', () => {
+  const codex = harnesses.getHarness('codex');
+  const temp = fs.mkdtempSync(path.join(__dirname, 'codex-fake-'));
+  roots.push(temp);
+  const executable = path.join(temp, 'codex.js');
+  fs.writeFileSync(executable, "process.stdout.write(process.argv.slice(2).join(' '));\n");
+  const root = fixtureRoot();
+  const verdictPath = path.join(root, 'ShipDe', 'isolation-verdict.json');
+  fs.mkdirSync(path.dirname(verdictPath), { recursive: true });
+  fs.writeFileSync(verdictPath, JSON.stringify({ verdict: 'CLOSED' }));
+  const previous = process.env.LOCALAPPDATA;
+  process.env.LOCALAPPDATA = root;
+  try {
+    const args = codex.launch({
+      cwd: path.join('C:\\ShipDeWorker', 'task-ai-141'),
+      isolatedWorker: true,
+      isolationVerdict: { verdict: 'CLOSED' },
+      isolationVerdictPath: verdictPath,
+      model: 'codex-fixture-model',
+      prompt: 'fake prompt',
+    });
+    const result = require('node:child_process').spawnSync(
+      process.execPath,
+      [executable, ...args],
+      {
+        encoding: 'utf8',
+      }
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(
+      result.stdout,
+      /exec --dangerously-bypass-approvals-and-sandbox --model codex-fixture-model fake prompt/
+    );
+  } finally {
+    if (previous === undefined) delete process.env.LOCALAPPDATA;
+    else process.env.LOCALAPPDATA = previous;
+  }
 });
 
 test('Codex login failure is returned as a local failure so execution can continue', () => {

@@ -220,7 +220,12 @@ const codex = {
     } catch {
       throw new Error('CODEX_REQUIRES_ISOLATION');
     }
-    if (!verdictData || verdictData.verdict !== 'CLOSED') {
+    if (
+      !verdictData ||
+      typeof verdictData !== 'object' ||
+      Array.isArray(verdictData) ||
+      verdictData.verdict !== 'CLOSED'
+    ) {
       throw new Error('CODEX_REQUIRES_ISOLATION');
     }
     readClosedIsolationVerdict(
