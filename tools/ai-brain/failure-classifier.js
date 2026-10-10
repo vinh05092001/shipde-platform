@@ -167,7 +167,11 @@ function addRetryFields(result) {
   const retryable = causeRetryable(result.cause);
   result.retryable = retryable;
   if (result.retryAfterMs === undefined) {
-    result.retryAfterMs = result.resetTime ? Math.max(0, result.resetTime - Date.now()) : null;
+    result.retryAfterMs = result.resetTime
+      ? Number.isFinite(result.parsedResetMs)
+        ? result.parsedResetMs
+        : Math.max(0, result.resetTime - Date.now())
+      : null;
   }
   return result;
 }
@@ -452,6 +456,8 @@ function classifyFailure(input) {
   ]
     .filter(Boolean)
     .join('\n');
+  const parsedResetMs = parseResetTime(text);
+  const classificationNow = Date.now();
   const { scrubText } = require('./decisions');
   const scrubbedStdout = scrubText(String(stdout || input?.stdout || '')).slice(0, 500);
   const evidence = {
@@ -536,7 +542,8 @@ function classifyFailure(input) {
       cooldownMs: resetMs ?? DEFAULT_COOLDOWNS[Cause.QUOTA_EXHAUSTED],
       humanAction: HumanAction.NONE,
       evidence,
-      resetTime: resetMs ? Date.now() + resetMs : null,
+      resetTime: resetMs ? classificationNow + resetMs : null,
+      retryAfterMs: resetMs,
     });
   }
 
@@ -613,7 +620,8 @@ function classifyFailure(input) {
       cooldownMs: resetMs ?? DEFAULT_COOLDOWNS[Cause.UPSTREAM_MONTHLY_LIMIT],
       humanAction: HumanAction.NONE,
       evidence,
-      resetTime: resetMs ? Date.now() + resetMs : null,
+      resetTime: resetMs ? classificationNow + resetMs : null,
+      retryAfterMs: resetMs,
     });
   }
 
@@ -626,7 +634,8 @@ function classifyFailure(input) {
       cooldownMs: resetMs ?? DEFAULT_COOLDOWNS[Cause.UPSTREAM_CREDIT_EXHAUSTED],
       humanAction: HumanAction.NONE,
       evidence,
-      resetTime: resetMs ? Date.now() + resetMs : null,
+      resetTime: resetMs ? classificationNow + resetMs : null,
+      retryAfterMs: resetMs,
     });
   }
 
@@ -750,7 +759,8 @@ function classifyFailure(input) {
       cooldownMs: resetMs ?? DEFAULT_COOLDOWNS[Cause.EXHAUSTION_HIDING],
       humanAction: HumanAction.NONE,
       evidence,
-      resetTime: resetMs ? Date.now() + resetMs : null,
+      resetTime: resetMs ? classificationNow + resetMs : null,
+      retryAfterMs: resetMs,
     });
   }
 
@@ -787,7 +797,8 @@ function classifyFailure(input) {
       cooldownMs: resetMs ?? DEFAULT_COOLDOWNS[Cause.QUOTA_EXHAUSTED],
       humanAction: HumanAction.NONE,
       evidence,
-      resetTime: resetMs ? Date.now() + resetMs : null,
+      resetTime: resetMs ? classificationNow + resetMs : null,
+      retryAfterMs: resetMs,
     });
   }
 
@@ -803,7 +814,8 @@ function classifyFailure(input) {
       cooldownMs: resetMs ?? DEFAULT_COOLDOWNS[Cause.UPSTREAM_RATE_LIMIT],
       humanAction: HumanAction.NONE,
       evidence,
-      resetTime: resetMs ? Date.now() + resetMs : null,
+      resetTime: resetMs ? classificationNow + resetMs : null,
+      retryAfterMs: resetMs,
     });
   }
 
@@ -874,7 +886,8 @@ function classifyFailure(input) {
       cooldownMs: resetMs ?? DEFAULT_COOLDOWNS[Cause.ACCOUNT_QUOTA_EXHAUSTED],
       humanAction: HumanAction.NONE,
       evidence,
-      resetTime: resetMs ? Date.now() + resetMs : null,
+      resetTime: resetMs ? classificationNow + resetMs : null,
+      retryAfterMs: resetMs,
     });
   }
 
@@ -890,7 +903,8 @@ function classifyFailure(input) {
       cooldownMs: resetMs ?? DEFAULT_COOLDOWNS[Cause.GENUINE_CAPACITY],
       humanAction: HumanAction.NONE,
       evidence,
-      resetTime: resetMs ? Date.now() + resetMs : null,
+      resetTime: resetMs ? classificationNow + resetMs : null,
+      retryAfterMs: resetMs,
     });
   }
 

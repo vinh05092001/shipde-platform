@@ -2481,6 +2481,22 @@ function buildTaskProfile(item, options) {
   return buildProfile(item || {}, o, o.forbiddenFailureDomains || []);
 }
 
+function rtkPolicyForItem(requested, riskDomains, injectedRun) {
+  const domains = Array.isArray(riskDomains) ? riskDomains : [];
+  const enabled = Boolean(requested) && domains.length === 0 && !injectedRun;
+  return {
+    enabled,
+    reason: !requested
+      ? 'not_requested'
+      : injectedRun
+        ? 'injected_run_blocks_rtk'
+        : enabled
+          ? 'low_risk_item'
+          : 'risk_domains_block_rtk',
+    riskDomains: [...domains],
+  };
+}
+
 function expandForbiddenDomains(domains) {
   const out = new Set();
   for (const domain of domains || []) {
@@ -3024,19 +3040,14 @@ async function runOrchestration(goal, opts) {
     Number(o.progressTimeoutMs) > 0 ? Number(o.progressTimeoutMs) : budgetProgressMs;
   const controllerGate = o.hostGate || null;
   const quotaFailures = new Map();
-  const runRiskDomains = (o.specs || []).flatMap((item) => item.riskDomains || []);
   const riskDomainsByItem = new Map(
     (o.specs || []).map((item) => [
       item.id,
       Array.isArray(item.riskDomains) ? item.riskDomains : [],
     ])
   );
-  const rtkPermitted = Boolean(o.rtk) && runRiskDomains.length === 0 && !o.injectedRun;
-  log.rtk = {
-    enabled: rtkPermitted,
-    reason: !o.rtk ? 'not_requested' : rtkPermitted ? 'low_risk_item' : 'risk_domains_block_rtk',
-    riskDomains: [...new Set(runRiskDomains)],
-  };
+  log.rtk = { requested: Boolean(o.rtk), perWorkItem: {} };
+  log.rtkPerWorkItem = log.rtk.perWorkItem;
   let contextPack = null;
   if (o.isolatedWorker && o.enableContextPack) {
     try {
@@ -3593,6 +3604,22 @@ async function runOrchestration(goal, opts) {
       cause: null,
       outcome: null,
     };
+    const itemRiskDomains = riskDomainsByItem.get(item.id) || item.riskDomains || [];
+    const itemRtkDecision = rtkPolicyForItem(o.rtk, itemRiskDomains, o.injectedRun);
+    const itemRtkPermitted = itemRtkDecision.enabled;
+    log.rtk.perWorkItem[item.id] = itemRtkDecision;
+    if (o.rtk) {
+      decisions.recordDecision(
+        {
+          stage: decisions.Stage.WARNING,
+          workItemId: item.id,
+          warning: 'RTK_POLICY',
+          detail: log.rtk.perWorkItem[item.id].reason,
+          enabled: itemRtkPermitted,
+        },
+        logOpts
+      );
+    }
     if (!item.failedKeys || !(item.failedKeys instanceof Set)) {
       item.failedKeys = new Set(Array.isArray(item.failedKeys) ? item.failedKeys : []);
     }
@@ -3849,9 +3876,9 @@ async function runOrchestration(goal, opts) {
         labels: { workItem: String(item.id), role: roleOf(item) },
         exercise: o.exercise || null,
         workerTimeoutMs: o.workerTimeoutMs || null,
-        rtk: { enabled: rtkPermitted },
-        lowRisk: rtkPermitted,
-        riskDomains: riskDomainsByItem.get(item.id) || item.riskDomains || [],
+        rtk: { enabled: itemRtkPermitted },
+        lowRisk: itemRtkPermitted,
+        riskDomains: itemRiskDomains,
         tokenBudgetConfig: budgetConfig,
         tokenBudget:
           budgetConfig.byRole?.[roleOf(item)] ||
@@ -3883,7 +3910,7 @@ async function runOrchestration(goal, opts) {
         decisionDir: o.decisionDir || null,
         workItemId: item.id,
       };
-      if (rtkPermitted) {
+      if (itemRtkPermitted) {
         decisions.recordDecision(
           {
             stage: decisions.Stage.WARNING,
@@ -7469,6 +7496,7 @@ module.exports = {
   materialiseExercise,
   captureFailBefore,
   buildTaskProfile,
+  rtkPolicyForItem,
   buildCandidates,
   selectCandidateForProfile,
   repairRound,

@@ -20,8 +20,7 @@ const {
   buildWorkerLaunchScript,
   enforceTokenBudget,
 } = require('../isolation-launcher');
-const { runHostBrainGate } = require('../orchestrate');
-const { runOrchestration } = require('../orchestrate');
+const { runHostBrainGate, runOrchestration, rtkPolicyForItem } = require('../orchestrate');
 const { DEFAULT_TOKEN_BUDGETS } = require('../intake');
 const routing = require('../routing');
 
@@ -886,6 +885,18 @@ test('Part H: intake detects risk declared in Control and other sections before 
   assert.equal(result.argv.includes('--rtk'), false);
 });
 
+test('Part H: derived risk labels all block RTK and the exported detector is the live implementation', () => {
+  for (const [phrase, expected] of [
+    ['carrier create shipment', 'carrier side effects'],
+    ['PII recipient data', 'pii'],
+    ['database ownership and migration', 'database ownership'],
+  ]) {
+    const derived = intake.deriveRiskDomains('## Scope\n' + phrase);
+    assert.ok(derived.includes(expected), phrase + ' derives the expected policy label');
+    assert.ok(intake.RTK_RISK_DOMAINS.includes(expected), expected + ' blocks RTK');
+  }
+});
+
 test('Part H: orchestration records RTK enablement and risk-domain denial in decision log', async () => {
   const root = fixtureRoot();
   const decisionDir = path.join(root, 'decisions');
@@ -931,6 +942,20 @@ test('Part H: orchestration records RTK enablement and risk-domain denial in dec
     ),
     'the risk-domain policy denial is recorded in the decision log'
   );
+});
+
+test('Part H: RTK permission is computed independently for each work item', async () => {
+  assert.deepEqual(rtkPolicyForItem(true, [], false), {
+    enabled: true,
+    reason: 'low_risk_item',
+    riskDomains: [],
+  });
+  assert.deepEqual(rtkPolicyForItem(true, ['pii'], false), {
+    enabled: false,
+    reason: 'risk_domains_block_rtk',
+    riskDomains: ['pii'],
+  });
+  assert.equal(rtkPolicyForItem(true, [], true).reason, 'injected_run_blocks_rtk');
 });
 
 test('Part H: a stalled live session is stopped, recorded and checkpointed for recovery', async () => {
@@ -1103,7 +1128,7 @@ test('Part H: token usage report groups input, cache-read and output by model an
   );
 });
 
-test('Part H: launcher enforces per-session token budget and preserves bounded timeout', () => {
+test('Part H: launcher enforces per-session token budget live and preserves bounded timeout', () => {
   const script = buildWorkerLaunchScript({
     credPath: 'credential',
     workerRoot: 'C:\\worker',
@@ -1115,23 +1140,28 @@ test('Part H: launcher enforces per-session token budget and preserves bounded t
     progressTimeoutMs: 60000,
   });
   assert.match(script, /\$timeoutMs = 90000/);
+  assert.match(script, /\$tokenBudgetJson/);
+  assert.match(script, /Read-UsageTotal/);
+  assert.match(script, /Stop-WorkerTree/);
   assert.match(script, /12000/);
 });
 
-test('Part H: token budget fails closed when usage report is missing, empty, or malformed', () => {
+test('Part H: missing, empty, or malformed usage telemetry does not fail the provider run', () => {
   const root = fixtureRoot();
   const missing = enforceTokenBudget({ exitCode: 0, stderr: '' }, { maxTokens: 100 }, null);
-  assert.equal(missing.exitCode, 1);
-  assert.equal(missing.failureReason, 'TOKEN_USAGE_UNAVAILABLE');
+  assert.equal(missing.exitCode, 0);
+  assert.equal(missing.failureReason, undefined);
 
   const usageFile = path.join(root, 'usage.json');
   fs.writeFileSync(usageFile, '');
   const empty = enforceTokenBudget({ exitCode: 0, stderr: '' }, { maxTokens: 100 }, usageFile);
-  assert.equal(empty.failureReason, 'TOKEN_USAGE_UNAVAILABLE');
+  assert.equal(empty.exitCode, 0);
+  assert.equal(empty.failureReason, undefined);
 
   fs.writeFileSync(usageFile, JSON.stringify({}));
   const noUsage = enforceTokenBudget({ exitCode: 0, stderr: '' }, { maxTokens: 100 }, usageFile);
-  assert.equal(noUsage.failureReason, 'TOKEN_USAGE_UNAVAILABLE');
+  assert.equal(noUsage.exitCode, 0);
+  assert.equal(noUsage.failureReason, undefined);
 
   fs.writeFileSync(usageFile, JSON.stringify({ usage: { input_tokens: 80, output_tokens: 30 } }));
   const over = enforceTokenBudget({ exitCode: 0, stderr: '' }, { maxTokens: 100 }, usageFile);

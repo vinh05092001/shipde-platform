@@ -45,7 +45,9 @@ const RTK_RISK_DOMAINS = [
   'tenant isolation',
   'tenant_isolation',
   'tenancy',
-  'carrier',
+  'carrier side effects',
+  'pii',
+  'database ownership',
 ];
 
 const DEFAULT_TOKEN_BUDGETS = {
@@ -74,12 +76,19 @@ function deriveRiskDomains(text) {
         .split(/[,;|]/)
         .map((value) => stripTicks(value).toLowerCase())
         .filter(Boolean)
+        .map((value) =>
+          value === 'tenant' || value === 'tenancy'
+            ? 'tenant isolation'
+            : value === 'pii'
+              ? 'pii'
+              : value
+        )
     );
   const body = [
     String(text || ''),
     sectionBody(
       text,
-      /^##\s+(Scope|Allowed(?:\s+Paths)?|Acceptance(?:\s+Matrix)?|Business\s+Outcome|Outcome|Requirements?|Security|Data|API|Persistence)\b/i
+      /^##\s+(Scope|In\s+Scope|Allowed(?:\s+Paths)?|Acceptance(?:\s+Matrix)?|Business\s+Outcome|Outcome|Requirements?|Security|Data|API|Persistence)\b/i
     ),
   ]
     .join('\n')
@@ -89,12 +98,15 @@ function deriveRiskDomains(text) {
     ['security', /\bsecurity\b|\bsecret\b|\bcredential\b/],
     ['money', /\bmoney\b|\bpayment\b|\bsettlement\b|\bcod\b|\bfinancial\b/],
     ['tenant isolation', /\btenant\b|\bshop scope\b/],
-    ['PII', /\bpii\b|\bpersonal(?:ly identifiable)? data\b/],
+    ['pii', /\bpii\b|\bpersonal(?:ly identifiable)? data\b/],
     [
-      'carrier',
+      'carrier side effects',
       /\bcarrier\b.*\b(?:side effect|action|integration|create|cancel|redelivery|claim)\b|\bcreate (?:shipment|waybill)\b/,
     ],
-    ['database ownership', /\bdatabase ownership\b|\bschema ownership\b/],
+    [
+      'database ownership',
+      /\b(?:database|schema) ownership\b|\b(?:database|schema)\b.*\b(?:migration|ownership|write|persist|storage)\b|\bprisma\b/,
+    ],
   ];
   return rules.filter(([, pattern]) => pattern.test(body)).map(([name]) => name);
 }
@@ -274,21 +286,6 @@ const RISK_DOMAIN_PATTERNS = Object.freeze({
   'carrier side effects': /\b(?:carrier|waybill|shipment|redelivery|cancel|claim|pickup)\b/i,
   'database ownership': /\b(?:database|schema|migration|prisma|sql|persistence)\b/i,
 });
-
-function deriveRiskDomains(text) {
-  const explicit = controlValue(text, ['risk domains', 'risk domain']);
-  if (explicit) {
-    return Object.entries(RISK_DOMAIN_PATTERNS)
-      .filter(([, pattern]) => pattern.test(explicit))
-      .map(([domain]) => domain);
-  }
-  const scope = sectionBody(text, /^##\s+(?:In Scope|Scope|Acceptance Matrix|Acceptance)\b/i);
-  const acceptance = sectionBody(text, /^##\s+Acceptance(?: Matrix)?\b/i);
-  const evidence = [String(text || ''), scope, acceptance].filter(Boolean).join('\n');
-  return Object.entries(RISK_DOMAIN_PATTERNS)
-    .filter(([, pattern]) => pattern.test(evidence))
-    .map(([domain]) => domain);
-}
 
 function deriveComplexity(text, acceptanceCriteria, riskDomains, allowedPaths) {
   const acCount = acceptanceCriteria.length;

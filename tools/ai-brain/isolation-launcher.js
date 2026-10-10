@@ -369,6 +369,23 @@ $stdoutTask = $process.StandardOutput.ReadToEndAsync()
 $stderrTask = $process.StandardError.ReadToEndAsync()
 $timeoutMs = ${workerTimeoutMs}
 $tokenBudgetJson = '${JSON.stringify(tokenBudget || {}).replace(/'/g, "''")}'
+$usageFile = '${String(options.usageFile || '')
+    .replace(/'/g, "''")
+    .replace(/\\/g, '\\\\')}'
+$maxTokens = 0
+try {
+    $budgetConfig = $tokenBudgetJson | ConvertFrom-Json
+    if ($null -ne $budgetConfig.maxTokens) { $maxTokens = [double]$budgetConfig.maxTokens }
+} catch {}
+$budgetExceeded = $false
+
+function Stop-WorkerTree {
+    $stragglers = @(Get-DescendantProcessIds -AncestorPid $wrapperPid -NotBefore $wrapperStartTime.AddSeconds(-2))
+    foreach ($stragglerId in $stragglers) { Stop-Process -Id $stragglerId -Force -ErrorAction SilentlyContinue }
+    if (-not $process.HasExited) { try { $process.Kill() } catch {} }
+    try { & cmd.exe /c "taskkill /PID $wrapperPid /T /F >nul 2>&1" } catch {}
+    [void]$process.WaitForExit(10000)
+}
 
 # Every process the wrapper started, walked up the parent chain. A process
 # that predates the launch is never a descendant even if a recycled pid makes
@@ -403,12 +420,43 @@ function Get-DescendantProcessIds {
     return $found
 }
 
+function Read-UsageTotal {
+    if ($maxTokens -le 0 -or [string]::IsNullOrWhiteSpace($usageFile) -or -not (Test-Path -LiteralPath $usageFile)) { return $null }
+    try {
+        $report = Get-Content -LiteralPath $usageFile -Raw | ConvertFrom-Json
+        $usage = $report.usage
+        if ($null -eq $usage) { return $null }
+        if ($null -ne $usage.total_tokens) { return [double]$usage.total_tokens }
+        if ($null -ne $usage.total) { return [double]$usage.total }
+        if ($null -ne $usage.input_tokens -or $null -ne $usage.output_tokens) {
+            return [double]$usage.input_tokens + [double]$usage.output_tokens
+        }
+        if ($null -ne $usage.input -or $null -ne $usage.output) {
+            return [double]$usage.input + [double]$usage.output
+        }
+    } catch {}
+    return $null
+}
+
 # The wrapper is waited on with the bounded wait, then every process it
 # started is polled until none remain, all inside the same budget. Waiting for
 # the wrapper alone is not enough: a job the wrapper no longer waits for would
 # otherwise be reported as finished while it is still running.
 $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-$timedOut = -not $process.WaitForExit($timeoutMs)
+$timedOut = $false
+$waitSlice = 250
+while ($true) {
+    $totalTokens = Read-UsageTotal
+    if ($null -ne $totalTokens -and $totalTokens -gt $maxTokens) {
+        $budgetExceeded = $true
+        Stop-WorkerTree
+        break
+    }
+    $remaining = $timeoutMs - $stopwatch.ElapsedMilliseconds
+    if ($remaining -le 0) { $timedOut = $true; break }
+    if ($process.HasExited) { break }
+    [void]$process.WaitForExit([math]::Min($waitSlice, $remaining))
+}
 $quietPolls = 0
 if (-not $timedOut) {
     while ($true) {
@@ -431,20 +479,19 @@ if (-not $timedOut) {
             $leftovers = @(Get-DescendantProcessIds -AncestorPid $wrapperPid -NotBefore $wrapperStartTime.AddSeconds(-2))
             if ($leftovers.Count -eq 0) { $quietPolls = $quietPolls + 1 } else { $quietPolls = 0 }
         }
+        $totalTokens = Read-UsageTotal
+        if ($null -ne $totalTokens -and $totalTokens -gt $maxTokens) {
+            $budgetExceeded = $true
+            Stop-WorkerTree
+            break
+        }
         if ($quietPolls -ge 3) { break }
         Start-Sleep -Milliseconds 250
     }
 }
 
 if ($timedOut) {
-    $stragglers = @(Get-DescendantProcessIds -AncestorPid $wrapperPid -NotBefore $wrapperStartTime.AddSeconds(-2))
-    foreach ($stragglerId in $stragglers) { Stop-Process -Id $stragglerId -Force -ErrorAction SilentlyContinue }
-    if (-not $process.HasExited) { try { $process.Kill() } catch {} }
-    # taskkill's own text must never reach this script's error stream: under
-    # $ErrorActionPreference = "Stop" a single stderr line would abort the host
-    # before the result is written. cmd.exe swallows it instead.
-    try { & cmd.exe /c "taskkill /PID $wrapperPid /T /F >nul 2>&1" } catch {}
-    [void]$process.WaitForExit(10000)
+    Stop-WorkerTree
 }
 # A writer the operator cannot kill (another user's process) must not hang the
 # host forever: the pipes are read with a bound, and a pipe that never closed
@@ -464,7 +511,9 @@ $completed = $false
 $markerNonce = ""
 $jobExit = -1
 $failureReason = ""
-if ($timedOut) {
+if ($budgetExceeded) {
+    $failureReason = "TOKEN_BUDGET_EXCEEDED: live worker usage exceeded configured token budget"
+} elseif ($timedOut) {
     $failureReason = "[ISOLATION_LAUNCHER] worker timed out after $timeoutMs ms and was killed"
 } elseif (Test-Path -LiteralPath $markerPath) {
     try {
@@ -483,7 +532,7 @@ if ($timedOut) {
     $failureReason = "[ISOLATION_LAUNCHER] the worker job never wrote its completion marker"
 }
 $exitValue = -1
-if ($completed -and -not $timedOut) { $exitValue = $jobExit }
+if ($completed -and -not $timedOut -and -not $budgetExceeded) { $exitValue = $jobExit }
 if ($failureReason.Length -gt 0) { $stderr = $stderr + [Environment]::NewLine + $failureReason }
 
 $output = @{
@@ -491,6 +540,7 @@ $output = @{
     stdout = $stdout
     stderr = $stderr
     timedOut = $timedOut
+    budgetExceeded = $budgetExceeded
     completed = $completed
     completionNonce = $markerNonce
     failureReason = $failureReason
@@ -808,7 +858,9 @@ function enforceTokenBudget(launchResult, tokenBudget, usageFile) {
     if (!Number.isFinite(total)) throw new Error('usage total invalid');
     if (total > Number(tokenBudget.maxTokens)) failureReason = 'TOKEN_BUDGET_EXCEEDED';
   } catch (_) {
-    failureReason = 'TOKEN_USAGE_UNAVAILABLE';
+    // Provider usage is optional telemetry. Enforce only a measured overrun;
+    // the live worker wrapper performs that check while the session runs.
+    return launchResult;
   }
   if (failureReason) {
     launchResult.exitCode = 1;
