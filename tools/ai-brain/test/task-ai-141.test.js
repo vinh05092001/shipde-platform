@@ -80,27 +80,52 @@ test('Codex harness requires an isolated worker and builds the guarded exec argv
     /CODEX_REQUIRES_ISOLATION/
   );
   const worker = path.join('C:\\ShipDeWorker', 'task-ai-141');
-  assert.throws(
-    () => codex.launch({ cwd: worker, isolatedWorker: true, verdictPath: 'missing-verdict.json' }),
-    /CODEX_REQUIRES_ISOLATION/
-  );
-  const verdictPath = path.join(fixtureRoot(), 'isolation-verdict.json');
-  fs.writeFileSync(verdictPath, JSON.stringify({ verdict: 'OPEN' }));
-  assert.throws(
-    () => codex.launch({ cwd: worker, isolatedWorker: true, verdictPath }),
-    /CODEX_REQUIRES_ISOLATION/
-  );
-  fs.writeFileSync(verdictPath, JSON.stringify({ verdict: 'CLOSED' }));
-  assert.deepEqual(
-    codex.launch({
-      cwd: worker,
-      isolatedWorker: true,
-      verdictPath,
-      model: 'codex-test',
-      prompt: 'task',
-    }),
-    ['exec', '--dangerously-bypass-approvals-and-sandbox', '--model', 'codex-test', 'task']
-  );
+  const originalLocalAppData = process.env.LOCALAPPDATA;
+  const hostRoot = fixtureRoot();
+  const canonicalVerdictPath = path.join(hostRoot, 'ShipDe', 'isolation-verdict.json');
+  const forgedVerdictPath = path.join(hostRoot, 'forged-verdict.json');
+  fs.mkdirSync(path.dirname(canonicalVerdictPath), { recursive: true });
+  fs.writeFileSync(forgedVerdictPath, JSON.stringify({ verdict: 'CLOSED' }));
+  process.env.LOCALAPPDATA = hostRoot;
+  try {
+    assert.throws(
+      () =>
+        codex.launch({
+          cwd: worker,
+          isolatedWorker: true,
+          verdictPath: forgedVerdictPath,
+        }),
+      /CODEX_REQUIRES_ISOLATION/
+    );
+
+    fs.writeFileSync(canonicalVerdictPath, JSON.stringify({ verdict: 'CLOSED' }));
+    const staleTime = new Date(Date.now() - 25 * 60 * 60 * 1000);
+    fs.utimesSync(canonicalVerdictPath, staleTime, staleTime);
+    assert.throws(
+      () =>
+        codex.launch({
+          cwd: worker,
+          isolatedWorker: true,
+          verdictPath: forgedVerdictPath,
+        }),
+      /CODEX_REQUIRES_ISOLATION/
+    );
+
+    fs.utimesSync(canonicalVerdictPath, new Date(), new Date());
+    assert.deepEqual(
+      codex.launch({
+        cwd: worker,
+        isolatedWorker: true,
+        verdictPath: forgedVerdictPath,
+        model: 'codex-test',
+        prompt: 'task',
+      }),
+      ['exec', '--dangerously-bypass-approvals-and-sandbox', '--model', 'codex-test', 'task']
+    );
+  } finally {
+    if (originalLocalAppData === undefined) delete process.env.LOCALAPPDATA;
+    else process.env.LOCALAPPDATA = originalLocalAppData;
+  }
 });
 
 test('Codex bypass and worker login probe exist only in isolated launcher script', () => {

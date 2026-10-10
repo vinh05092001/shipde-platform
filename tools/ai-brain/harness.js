@@ -213,7 +213,7 @@ const codex = {
     if (!job || !job.isolatedWorker) throw new Error('CODEX_REQUIRES_ISOLATION');
     const { isWorkerPath, readClosedIsolationVerdict } = require('./isolation-launcher');
     if (!isWorkerPath(job.cwd)) throw new Error('CODEX_REQUIRES_ISOLATION');
-    readClosedIsolationVerdict({ verdictPath: job.verdictPath });
+    readClosedIsolationVerdict();
     const args = ['exec', '--dangerously-bypass-approvals-and-sandbox'];
     if (job.model) args.push('--model', job.model);
     args.push(job.prompt || '');

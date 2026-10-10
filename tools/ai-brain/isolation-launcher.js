@@ -14,6 +14,11 @@ const WORKER_USERNAME = 'ShipDeWorker';
 const WORKER_ROOT = 'C:\\ShipDeWorker';
 const DEFAULT_WORKER_TIMEOUT_MS = 30 * 60 * 1000;
 
+/** The operator-owned isolation attestation location; never supplied by a job. */
+function isolationVerdictPath() {
+  return path.join(process.env.LOCALAPPDATA || '', 'ShipDe', 'isolation-verdict.json');
+}
+
 /** The worker root for one job: the worker never sees the operator's leaf name. */
 function workerRootFor(hostCwd) {
   const jobName = path.win32.basename(String(hostCwd || '')) || 'default';
@@ -48,10 +53,7 @@ function isWorkerPath(target) {
 
 /** Read the current host isolation attestation and fail closed unless it is CLOSED. */
 function readClosedIsolationVerdict(options) {
-  const opts = options || {};
-  const verdictPath =
-    opts.verdictPath ||
-    path.join(process.env.LOCALAPPDATA || '', 'ShipDe', 'isolation-verdict.json');
+  const verdictPath = isolationVerdictPath();
   if (!fs.existsSync(verdictPath)) throw new Error('CODEX_REQUIRES_ISOLATION');
   let verdictData;
   try {
@@ -838,9 +840,7 @@ function getIsolatedLauncher() {
     // (LOCALAPPDATA\ShipDe\isolation-verdict.json); LOCALAPPDATA is unset on
     // non-Windows, so production there resolves to a relative path, exactly as
     // before this opt was added.
-    const verdictPath =
-      opts.verdictPath ||
-      path.join(process.env.LOCALAPPDATA || '', 'ShipDe', 'isolation-verdict.json');
+    const verdictPath = isolationVerdictPath();
     if (!fs.existsSync(verdictPath)) {
       throw new Error('ISOLATION_VERDICT_MISSING: Cannot find ' + verdictPath);
     }
