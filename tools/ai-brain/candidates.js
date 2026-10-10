@@ -535,7 +535,19 @@ function poolAccountCandidates(opts) {
     }
 
     const catalogue = o.catalogue || [];
+    const externalWorkers = o.externalWorkers || o['external-workers'];
+    const explicitlyEnabled = Array.isArray(externalWorkers)
+      ? externalWorkers.includes('agy-pool')
+      : typeof externalWorkers === 'string' &&
+        externalWorkers.split(',').some((worker) => worker.trim() === 'agy-pool');
     for (const c of catalogue) {
+      // Intake persists merged catalogue entries as plain model-id strings.
+      // Unprefixed models are pool candidates only when intake enabled the lane.
+      if (typeof c === 'string') {
+        const model = c.replace(/^(?:ag|antigravity)\//, '');
+        if (model !== c || (explicitlyEnabled && familyOf(model))) poolModels.add(model);
+        continue;
+      }
       if (typeof c === 'object' && c) {
         if (c.upstream === 'antigravity' || c.source === 'antigravity' || c.upstream === 'ag') {
           const m = c.modelId || c.model;
