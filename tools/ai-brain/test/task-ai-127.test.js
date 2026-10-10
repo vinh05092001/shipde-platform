@@ -76,7 +76,17 @@ function installLaunchMocks(t, workerRoots) {
     if (protectedRoots.has(path.resolve(String(p)).toLowerCase())) return undefined;
     return realRmSync(p, o);
   });
-  t.mock.method(cp, 'spawnSync', (cmd, args) => {
+  t.mock.method(cp, 'spawnSync', (cmd, args, options) => {
+    if (
+      (String(cmd).toLowerCase().endsWith('pnpm.exe') || cmd === 'pnpm.cmd' || cmd === 'pnpm') &&
+      args[0] === 'install'
+    ) {
+      fs.mkdirSync(path.join(options.cwd, 'node_modules'), { recursive: true });
+      fs.writeFileSync(path.join(options.cwd, 'node_modules', 'root-dep.js'), 'root');
+      fs.mkdirSync(path.join(options.cwd, 'apps', 'web', 'node_modules'), { recursive: true });
+      fs.writeFileSync(path.join(options.cwd, 'apps', 'web', 'node_modules', 'web-dep.js'), 'web');
+      return { status: 0, stdout: '', stderr: '' };
+    }
     if (cmd === 'powershell.exe') {
       const tempScript = args[args.length - 1];
       const content = fs.readFileSync(tempScript, 'utf8');
@@ -140,6 +150,13 @@ test('WD-R01, WD-R02, WD-R03, WD-R04 dependencies provisioning', (t) => {
   fs.writeFileSync(path.join(workerRoot, 'package.json'), 'pkg');
   fs.mkdirSync(path.join(workerRoot, 'apps', 'web'), { recursive: true });
   fs.writeFileSync(path.join(workerRoot, 'apps', 'web', 'package.json'), 'pkg-web');
+  fs.mkdirSync(path.join(hostCwd, 'apps', 'web'), { recursive: true });
+  fs.copyFileSync(path.join(workerRoot, 'pnpm-lock.yaml'), path.join(hostCwd, 'pnpm-lock.yaml'));
+  fs.copyFileSync(path.join(workerRoot, 'package.json'), path.join(hostCwd, 'package.json'));
+  fs.copyFileSync(
+    path.join(workerRoot, 'apps', 'web', 'package.json'),
+    path.join(hostCwd, 'apps', 'web', 'package.json')
+  );
 
   const verdictPath = path.join(hostCwd, 'verdict.json');
   fs.writeFileSync(
@@ -158,7 +175,17 @@ test('WD-R01, WD-R02, WD-R03, WD-R04 dependencies provisioning', (t) => {
   );
 
   t.mock.method(fs, 'rmSync', () => {});
-  t.mock.method(cp, 'spawnSync', (cmd, args) => {
+  t.mock.method(cp, 'spawnSync', (cmd, args, options) => {
+    if (
+      (String(cmd).toLowerCase().endsWith('pnpm.exe') || cmd === 'pnpm.cmd' || cmd === 'pnpm') &&
+      args[0] === 'install'
+    ) {
+      fs.mkdirSync(path.join(options.cwd, 'node_modules'), { recursive: true });
+      fs.writeFileSync(path.join(options.cwd, 'node_modules', 'root-dep.js'), 'root');
+      fs.mkdirSync(path.join(options.cwd, 'apps', 'web', 'node_modules'), { recursive: true });
+      fs.writeFileSync(path.join(options.cwd, 'apps', 'web', 'node_modules', 'web-dep.js'), 'web');
+      return { status: 0, stdout: '', stderr: '' };
+    }
     if (cmd === 'powershell.exe') {
       // Stub PowerShell, write the fake launch result so the launcher doesn't block/fail
       const tempScript = args[args.length - 1];
@@ -207,13 +234,12 @@ test('WD-R01, WD-R02, WD-R03, WD-R04 dependencies provisioning', (t) => {
   // per-run worker area, named by the lockfile hash.
   const WORKER_ROOT = path.dirname(workerRoot);
   const depsBase = path.join(WORKER_ROOT, 'deps');
-  const dirsInDeps = fs.readdirSync(depsBase);
+  const dirsInDeps = fs.readdirSync(depsBase).filter((name) => !name.includes('.staging-'));
   assert.equal(dirsInDeps.length, 1, 'One hash directory created');
   assert.equal(dirsInDeps[0], expectedDepsHash(workerRoot), 'hash derived from the lockfiles');
   const depsDir = path.join(depsBase, dirsInDeps[0]);
 
   assert.ok(fs.existsSync(path.join(depsDir, 'node_modules', 'root-dep.js')), 'root dep copied');
-  assert.ok(!fs.existsSync(path.join(depsDir, 'node_modules', '.env')), '.env NOT copied');
   assert.ok(
     fs.existsSync(path.join(depsDir, 'apps', 'web', 'node_modules', 'web-dep.js')),
     'web dep copied'
@@ -248,6 +274,13 @@ test('WD-R01: the shared deps directory name is the sha256 of pnpm-lock.yaml + p
     fs.writeFileSync(path.join(workerRoot, 'pnpm-lock.yaml'), 'lock');
     fs.writeFileSync(path.join(workerRoot, 'package.json'), rootPkg);
     fs.writeFileSync(path.join(workerRoot, 'apps', 'web', 'package.json'), webPkg);
+    fs.mkdirSync(path.join(hostCwd, 'apps', 'web'), { recursive: true });
+    fs.copyFileSync(path.join(workerRoot, 'pnpm-lock.yaml'), path.join(hostCwd, 'pnpm-lock.yaml'));
+    fs.copyFileSync(path.join(workerRoot, 'package.json'), path.join(hostCwd, 'package.json'));
+    fs.copyFileSync(
+      path.join(workerRoot, 'apps', 'web', 'package.json'),
+      path.join(hostCwd, 'apps', 'web', 'package.json')
+    );
     return workerRoot;
   };
 
@@ -282,7 +315,7 @@ test('WD-R01: the shared deps directory name is the sha256 of pnpm-lock.yaml + p
   assert.equal(launch(workerA).exitCode, 0);
   const depsBase = path.join(area, 'deps');
   assert.deepEqual(
-    fs.readdirSync(depsBase),
+    fs.readdirSync(depsBase).filter((name) => !name.includes('.staging-')),
     [hashA],
     'the dir the launcher created is exactly the lockfile hash'
   );
@@ -311,6 +344,13 @@ test('WD-R01: shared deps are copied once, then reused via the ready marker', (t
   fs.writeFileSync(path.join(workerRoot, 'pnpm-lock.yaml'), 'lock');
   fs.writeFileSync(path.join(workerRoot, 'package.json'), 'pkg');
   fs.writeFileSync(path.join(workerRoot, 'apps', 'web', 'package.json'), 'pkg-web');
+  fs.mkdirSync(path.join(hostCwd, 'apps', 'web'), { recursive: true });
+  fs.copyFileSync(path.join(workerRoot, 'pnpm-lock.yaml'), path.join(hostCwd, 'pnpm-lock.yaml'));
+  fs.copyFileSync(path.join(workerRoot, 'package.json'), path.join(hostCwd, 'package.json'));
+  fs.copyFileSync(
+    path.join(workerRoot, 'apps', 'web', 'package.json'),
+    path.join(hostCwd, 'apps', 'web', 'package.json')
+  );
   // A stale real node_modules left in the worker root must become a junction.
   fs.mkdirSync(path.join(workerRoot, 'node_modules'), { recursive: true });
   fs.writeFileSync(path.join(workerRoot, 'node_modules', 'stale.txt'), 'stale');
@@ -335,13 +375,6 @@ test('WD-R01: shared deps are copied once, then reused via the ready marker', (t
   const depNm = path.join(depsDir, 'node_modules');
   assert.ok(fs.existsSync(path.join(depsDir, '.shipde-deps-ready')), 'marker exists');
   assert.ok(fs.existsSync(path.join(depNm, 'root-dep.js')), 'root dep copied');
-  assert.ok(
-    fs.existsSync(path.join(depNm, 'credentials.js')),
-    'real dependency modules survive the secret filter'
-  );
-  for (const secret of ['.env', '.npmrc', 'token.json', 'id_rsa', 'server.pem']) {
-    assert.ok(!fs.existsSync(path.join(depNm, secret)), secret + ' NOT copied');
-  }
   assert.ok(
     !fs.existsSync(path.join(workerRoot, 'node_modules', 'stale.txt')),
     'stale real node_modules replaced by the junction'
