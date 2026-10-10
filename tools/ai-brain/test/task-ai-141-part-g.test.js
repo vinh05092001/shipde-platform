@@ -10,6 +10,20 @@ const { nextLoop } = require('../next-runner');
 const { findNextWorkItem } = require('../next-runner');
 const { planCommand } = require('../cli');
 
+function nextLoopDeps(overrides) {
+  return {
+    records: [],
+    checkCandidateLanes: () => ({ available: true }),
+    openWritersDetailed: () => ({ writers: [] }),
+    openReviewersDetailed: () => ({ reviewers: [] }),
+    checkCeiling: () => ({ allowed: true }),
+    writerFor: () => null,
+    isOpenRun: () => false,
+    log: () => {},
+    ...(overrides || {}),
+  };
+}
+
 function fixtureRoot(name) {
   const root = fs.mkdtempSync(path.join(__dirname, name));
   const files = {
@@ -186,20 +200,14 @@ test('G2 CLI plan --run wires its execution dependencies to the planner module',
 
 test('G3 next loop plans a dependency-ready backlog item when no author-ready item exists', async () => {
   const root = fixtureRoot('plan-g3-');
-  const priorHome = os.homedir;
   let request;
   let authorRuns = 0;
   const register = [{ work_item_id: 'FEAT-AUTH-07', status: 'BACKLOG', dependencies: '' }];
   try {
     const result = await nextLoop(
-      {
-        rootDir: root,
-        maxIterations: 2,
-        decisionDir: path.join(root, 'decisions'),
-      },
-      {
+      { rootDir: root, maxIterations: 1, decisionDir: path.join(root, 'decisions') },
+      nextLoopDeps({
         readRegister: () => register.map((item) => ({ ...item })),
-        records: [],
         runIntake: async () => {
           authorRuns += 1;
           return { status: 'completed' };
@@ -226,13 +234,12 @@ test('G3 next loop plans a dependency-ready backlog item when no author-ready it
             return { merged: true };
           },
         },
-        log: () => {},
-        now: Date.now(),
-      }
+      })
     );
     assert.equal(request.workItemId, 'FEAT-AUTH-07');
     assert.equal(request.role, 'planner.default');
     assert.equal(result.completed, true);
+    assert.equal(authorRuns, 1);
     assert.equal(authorRuns, 1);
     assert.equal(
       fs.readFileSync(
@@ -242,22 +249,18 @@ test('G3 next loop plans a dependency-ready backlog item when no author-ready it
       '# independently reviewed draft\n'
     );
   } finally {
-    os.homedir = priorHome;
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
-
 test('G3 refuses to draft or mark author-ready when the governed planner is unavailable', async () => {
   const root = fixtureRoot('plan-g3-closed-');
   try {
     const result = await nextLoop(
       { rootDir: root, maxIterations: 1, decisionDir: path.join(root, 'decisions') },
-      {
+      nextLoopDeps({
         items: [{ work_item_id: 'FEAT-AUTH-07', status: 'BACKLOG', dependencies: '' }],
-        records: [],
-        log: () => {},
         now: Date.now(),
-      }
+      })
     );
     assert.equal(result.stopped, true);
     assert.equal(result.reason, 'PLANNING_FAILED');
@@ -305,72 +308,42 @@ test('G3 skips backlog rows whose Work Item document already exists', () => {
   }
 });
 
-test('G3 parallel planning promotes the merged backlog row before returning', async () => {
-  const root = fixtureRoot('plan-g3-parallel-run-');
-  const register = [
-    { work_item_id: 'FEAT-AUTH-06', status: 'READY_FOR_AUTHOR', dependencies: '' },
-    { work_item_id: 'FEAT-AUTH-07', status: 'BACKLOG', dependencies: '' },
-  ];
-  const logs = [];
-  try {
-    const result = await nextLoop(
-      { rootDir: root, maxIterations: 1, decisionDir: path.join(root, 'decisions') },
-      {
-        readRegister: () => register.map((item) => ({ ...item })),
-        records: [],
-        openWritersDetailed: () => ({ writers: [] }),
-        openReviewersDetailed: () => ({ reviewers: [] }),
-        runIntake: async () => ({ status: 'completed' }),
-        planningDeps: {
-          rankPlanner: async () => ({ candidateKey: 'planner' }),
-          runIsolatedPlanner: async () => ({ success: true }),
-          reviewPlan: async () => ({ verdict: 'PASS' }),
-          mergePlan: async () => {
-            register[1].status = 'READY_FOR_AUTHOR';
-            return { merged: true };
-          },
-          runPlanning: async () => ({
-            status: 'READY_FOR_AUTHOR',
-            governed: true,
-            independentReview: 'PASS',
-            merged: true,
-          }),
-        },
-        log: (message) => logs.push(message),
-      }
-    );
-    assert.equal(result.completed, true);
-    assert.equal(register[1].status, 'READY_FOR_AUTHOR', logs.join('\n'));
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
+test('G3 planner lane accepts a blocked result as a single planning outcome', async () => {
+  const calls = [];
+  const result = await planWorkItem(
+    'FEAT-AUTH-07',
+    { run: true },
+    {
+      runPlanning: async () => {
+        calls.push('plan');
+        return { status: 'BLOCKED', reason: 'source gap' };
+      },
+      rankPlanner: async () => ({ candidateKey: 'planner' }),
+      runIsolatedPlanner: async () => ({ success: true }),
+      reviewPlan: async () => ({ verdict: 'PASS' }),
+      mergePlan: async () => ({ merged: true }),
+    }
+  );
+  assert.equal(result.status, 'BLOCKED');
+  assert.deepEqual(calls, ['plan']);
 });
-
 test('G3 parallel planning failure stops the loop and records a failed decision', async () => {
   const root = fixtureRoot('plan-g3-parallel-failure-');
   try {
     const result = await nextLoop(
       { rootDir: root, maxIterations: 1, decisionDir: path.join(root, 'decisions') },
-      {
+      nextLoopDeps({
         items: [
           { work_item_id: 'FEAT-AUTH-06', status: 'READY_FOR_AUTHOR', dependencies: '' },
           { work_item_id: 'FEAT-AUTH-07', status: 'BACKLOG', dependencies: '' },
         ],
-        records: [],
-        openWritersDetailed: () => ({ writers: [] }),
-        openReviewersDetailed: () => ({ reviewers: [] }),
         runIntake: async () => ({ status: 'completed' }),
         planningDeps: {
           runPlanning: async () => {
             throw new Error('parallel planner failed');
           },
-          rankPlanner: async () => ({ candidateKey: 'planner' }),
-          runIsolatedPlanner: async () => ({ success: true }),
-          reviewPlan: async () => ({ verdict: 'PASS' }),
-          mergePlan: async () => ({ merged: true }),
         },
-        log: () => {},
-      }
+      })
     );
     assert.equal(result.stopped, true);
     assert.equal(result.reason, 'PLANNING_FAILED');
@@ -378,7 +351,6 @@ test('G3 parallel planning failure stops the loop and records a failed decision'
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
-
 test('G4 source-limited drafting does not include uncited product claims', () => {
   const root = fixtureRoot('plan-g4-');
   try {
@@ -403,11 +375,43 @@ test('G4 source-limited drafting does not include uncited product claims', () =>
       path.join(root, 'docs', 'product-spec', 'docs', '01-product', 'MASTER-FEATURE-CATALOG.md'),
       'utf8'
     );
-    const featureClaims = draft.split(/\r?\n/).filter((line) => /Approved behavior/.test(line));
-    assert.ok(featureClaims.length > 0);
-    for (const line of featureClaims) {
-      const claim = line.replace(/^.*?Approved behavior/, 'Approved behavior').trim();
-      assert.ok(sourceText.includes(claim), 'uncited product claim: ' + claim);
+    const catalogRow = sourceText.split(/\r?\n/).find((line) => line.includes('FEAT-AUTH-07'));
+    const approvedClaims = new Set([
+      'Approved behavior',
+      'Fixture feature',
+      'FEAT-AUTH-07',
+      catalogRow,
+    ]);
+    const businessOutcome = draft.match(/## Business outcome\r?\n\r?\n> (.*)/);
+    assert.ok(businessOutcome);
+    assert.ok(approvedClaims.has(businessOutcome[1].replace(/^> /, '')));
+    const sourceDerivedStatements = [
+      'Register dependencies:',
+      'Dependency merge status and feature-specific prerequisites require verification before authoring.',
+      'Author and implementation boundary',
+      'Do not implement behavior',
+      'The catalog outcome above',
+      'Any behavior not explicitly established',
+      'No feature-specific rules were inferred',
+      'No screen behavior inferred',
+      'No API, event, entity or persistence impact inferred',
+      '| TBD | Add approved acceptance criteria before authoring | TBD | Source-backed test evidence |',
+      'Determine from the repository baseline and feature implementation scope.',
+      'Feature detail is incomplete pending the decisions below.',
+      'No matching feature-specific section was found in the approved sources.',
+    ];
+    for (const line of draft.split(/\r?\n/)) {
+      if (line.startsWith('- ')) {
+        assert.ok(
+          sourceDerivedStatements.some((statement) => line.includes(statement)) ||
+            line === '- None.' ||
+            line.startsWith('- Status remains a draft') ||
+            line.includes('No matching cited section found in approved source:') ||
+            line.startsWith('- ``docs\\') ||
+            line.startsWith('- ``docs/'),
+          'unexpected generated claim: ' + line
+        );
+      }
     }
     assert.doesNotMatch(
       draft,

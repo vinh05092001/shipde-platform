@@ -778,7 +778,13 @@ async function nextLoop(options, deps) {
 
     // Planning stays a separate lane. Schedule one item ahead while a ready
     // author item runs, subject to the same implementation ceiling.
-    const planningItem = findResult.planCandidate;
+    // With no author-ready item, findNextWorkItem exposes the backlog planner
+    // candidate as `item`; the sequential planning path below owns that run.
+    // Parallel planning is only for a distinct item while an author runs.
+    const planningItem =
+      findResult.item && findResult.item.status === 'READY_FOR_AUTHOR'
+        ? findResult.planCandidate
+        : null;
     let parallelPlanning = null;
     if (planningItem) {
       const ceiling = checkCeiling({ ...opts, now }, d);
@@ -984,6 +990,16 @@ async function nextLoop(options, deps) {
         const result = await parallelPlanning;
         if (!result || result.status !== 'READY_FOR_AUTHOR') {
           terminalWorkItems.set(planningItem.work_item_id, 'planning-blocked');
+          decisions.recordDecision(
+            {
+              stage: decisions.Stage.REFUSED,
+              workItemId: planningItem.work_item_id,
+              detail: 'PLANNING_BLOCKED',
+              status: 'BLOCKED',
+              reason: (result && result.reason) || 'Planning did not return READY_FOR_AUTHOR.',
+            },
+            logOpts
+          );
         } else {
           const plannedRow = readRegisterItems(opts, d, rootDir, true).find(
             (row) => row.work_item_id === planningItem.work_item_id
