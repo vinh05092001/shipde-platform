@@ -119,3 +119,7 @@ No API, persisted product data, or external side effects change. Candidate gener
 - Added same-model fallback ordering by prior evidence, per-path failure reporting, `route_fallback` and `route_restored` events, plus `cli.js probe --due` (capped at 20 checks per run). Successful rechecks restore eligibility without deleting the path record.
 - Gateway candidate generation now skips paths parked until their due time. Tests use fake responses for 451/402/429, alternate paths, all-path failure, restoration, persistence, and continuing backoff.
 - Intake now performs a capped, timed route-health refresh before candidate selection, including due parked routes, and gateway candidates require successful probe evidence. Remaining limitation: fallback discovery currently covers catalogue gateway routes; direct-source and harness-specific paths outside that catalogue are not enumerated.
+
+## Part D
+
+Intake derives risk domains and complexity from the Work Item scope, acceptance criteria, and allowed paths, and records the derivation in each run directory. JEV receives the resulting risk domains and complexity; the Controller enforces a `QUALITY_FIRST` floor for auth, security, money, or tenant-isolation work and records the override reason. Regressions cover a 15-AC MFA-like item and a docs-only item.
