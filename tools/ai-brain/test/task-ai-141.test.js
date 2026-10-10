@@ -12,6 +12,7 @@ const sources = require('../sources');
 const { candidateKey } = require('../discovery/identity');
 const evidence = require('../evidence');
 const accountsApi = require('../accounts');
+const routing = require('../routing');
 
 const roots = [];
 function fixtureRoot() {
@@ -70,6 +71,115 @@ test.after(() => {
   for (const root of roots) fs.rmSync(root, { recursive: true, force: true });
 });
 
+test('Part D derives high-risk complexity and enforces the JEV quality floor', async () => {
+  const root = fixtureRoot();
+  const rows = Array.from(
+    { length: 15 },
+    (_, i) => `| AC-${i + 1} | Authentication security | Verify session access |`
+  );
+  fs.writeFileSync(
+    path.join(root, 'docs', 'product-spec', 'work-items', 'FIXTURE-AI-141.md'),
+    [
+      '# MFA fixture',
+      '## Control',
+      '| Field | Value |',
+      '|---|---|',
+      '| Allowed paths | `src/api/auth.ts`; `src/ui/login.tsx`; `prisma/schema.prisma` |',
+      '| Complexity | standard |',
+      '## Business Outcome',
+      'Protect user authentication.',
+      '## In Scope',
+      'Authentication, security, database and API handling.',
+      '## Acceptance Matrix',
+      '| ID | Scenario | Expected |',
+      '|---|---|---|',
+      ...rows,
+      '## Verification Commands',
+      '- `node --test tools/ai-brain/test/task-ai-141.test.js`',
+    ].join('\n')
+  );
+  const derived = intake.deriveSpec({
+    id: 'FIXTURE-AI-141',
+    workItemText: fs.readFileSync(
+      path.join(root, 'docs', 'product-spec', 'work-items', 'FIXTURE-AI-141.md'),
+      'utf8'
+    ),
+    registerItem: { dependencies: '' },
+    root,
+    deps: {},
+  });
+  assert.equal(derived.complexity, 'complex');
+  assert.deepEqual(derived.riskDomains, ['auth', 'security', 'database ownership']);
+
+  const explicit = intake.deriveSpec({
+    id: 'EXPLICIT-AI-141',
+    workItemText: [
+      '## Control',
+      '| Field | Value |',
+      '|---|---|',
+      '| Complexity | complex |',
+      '| Risk Domains | tenant |',
+      '## In Scope',
+      'Update service behavior.',
+      '## Acceptance Matrix',
+      '| ID | Scenario | Expected |',
+      '|---|---|---|',
+      '| AC-1 | Update | Works |',
+    ].join('\n'),
+    registerItem: { dependencies: '' },
+    root,
+    deps: {},
+  });
+  assert.equal(explicit.complexity, 'complex');
+  assert.deepEqual(explicit.riskDomains, ['tenant isolation']);
+
+  let question;
+  const assessment = await routing.assessTask(
+    {
+      role: 'writer',
+      complexity: derived.complexity,
+      riskDomains: ['auth', 'security'],
+      latencyPriority: 'normal',
+    },
+    {
+      ask: async (q) => {
+        question = q;
+        return { outcome: 'DECIDED', choice: 'BALANCED', confidence: 0.9 };
+      },
+    }
+  );
+  assert.match(question.prompt, /complex/);
+  assert.match(question.prompt, /auth, security/);
+  assert.equal(assessment.weightProfile, 'QUALITY_FIRST');
+  assert.ok(assessment.reasonCodes.includes('QUALITY_FIRST_RISK_FLOOR_OVERRIDE'));
+});
+
+test('Part D keeps a docs-only item standard with no risk domains', () => {
+  const text = [
+    '## Control',
+    '| Field | Value |',
+    '|---|---|',
+    '| Allowed paths | `docs/guide.md` |',
+    '## Business Outcome',
+    'Clarify the onboarding guide.',
+    '## In Scope',
+    'Update wording and examples in the guide.',
+    '## Acceptance Matrix',
+    '| ID | Scenario | Expected |',
+    '|---|---|---|',
+    '| AC-1 | Read guide | Clear |',
+  ].join('\n');
+  const derived = intake.deriveSpec({
+    id: 'DOCS-1',
+    workItemText: text,
+    registerItem: { dependencies: '' },
+    root: process.cwd(),
+    deps: {},
+  });
+  assert.equal(derived.complexity, 'standard');
+  assert.deepEqual(derived.riskDomains, []);
+});
+
 test('intake catalogue and real account registry plus pool discovery produce candidates', async () => {
   const root = fixtureRoot();
   const backendModel = 'gemini-fixture-pro';
@@ -90,6 +200,13 @@ test('intake catalogue and real account registry plus pool discovery produce can
       readEvidenceModels: async () => ({ ok: true, models: [] }),
     }
   );
+
+  const derivation = JSON.parse(
+    fs.readFileSync(path.join(result.runDir, 'derivation.json'), 'utf8')
+  );
+  assert.equal(derivation.complexity, 'standard');
+  assert.deepEqual(derivation.riskDomains, []);
+  assert.equal(derivation.acceptanceCriteriaCount, 1);
 
   assert.deepEqual(result.catalogue, ['ag/' + backendModel]);
   assert.match(result.command, /--external-workers agy-pool/);
