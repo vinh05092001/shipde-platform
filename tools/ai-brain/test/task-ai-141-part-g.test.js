@@ -67,7 +67,7 @@ test('G1 creates a template-shaped draft with approved source citations and bloc
     );
     const draft = fs.readFileSync(result.target, 'utf8');
     assert.equal(result.status, 'BLOCKED');
-    assert.match(draft, /MASTER-FEATURE-CATALOG\.md — FEAT-AUTH-07/);
+    assert.match(draft, /MASTER-FEATURE-CATALOG\.md#line 1/);
     assert.match(draft, /## Acceptance matrix/);
     assert.match(draft, /## Open decisions/);
     assert.match(draft, /Status \| `BLOCKED`/);
@@ -85,7 +85,12 @@ test('G2 planning and author lanes stay independent and governed run requires it
     {
       runPlanning: async (request) => {
         received = request;
-        return { status: 'READY_FOR_AUTHOR' };
+        return {
+          status: 'READY_FOR_AUTHOR',
+          governed: true,
+          independentReview: 'PASS',
+          merged: true,
+        };
       },
     }
   );
@@ -114,9 +119,16 @@ test('G3 next loop plans a dependency-ready backlog item when no author-ready it
       {
         items: [{ work_item_id: 'FEAT-AUTH-07', status: 'BACKLOG', dependencies: '' }],
         records: [],
-        runPlanning: async (planRequest) => {
-          request = planRequest;
-          return { status: 'READY_FOR_AUTHOR' };
+        planningDeps: {
+          runPlanning: async (planRequest) => {
+            request = planRequest;
+            return {
+              status: 'READY_FOR_AUTHOR',
+              governed: true,
+              independentReview: 'PASS',
+              merged: true,
+            };
+          },
         },
         log: () => {},
         now: Date.now(),
@@ -131,6 +143,29 @@ test('G3 next loop plans a dependency-ready backlog item when no author-ready it
     );
   } finally {
     os.homedir = priorHome;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('G3 refuses to draft or mark author-ready when the governed planner is unavailable', async () => {
+  const root = fixtureRoot('plan-g3-closed-');
+  try {
+    const result = await nextLoop(
+      { rootDir: root, maxIterations: 1, decisionDir: path.join(root, 'decisions') },
+      {
+        items: [{ work_item_id: 'FEAT-AUTH-07', status: 'BACKLOG', dependencies: '' }],
+        records: [],
+        log: () => {},
+        now: Date.now(),
+      }
+    );
+    assert.equal(result.stopped, true);
+    assert.equal(result.reason, 'PLANNING_FAILED');
+    assert.equal(
+      fs.existsSync(path.join(root, 'docs', 'product-spec', 'work-items', 'FEAT-AUTH-07.md')),
+      false
+    );
+  } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });

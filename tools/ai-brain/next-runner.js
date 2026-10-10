@@ -759,18 +759,27 @@ async function nextLoop(options, deps) {
         const planning = require('./work-item-planner');
         const planned = await planning.planWorkItem(
           item.work_item_id,
-          { rootDir, run: Boolean(d.runPlanning), allowDraftOnMissingExecutor: true },
+          { rootDir, run: true },
           d.planningDeps || { runPlanning: d.runPlanning }
         );
-        const outcome = planned && planned.status === 'READY_FOR_AUTHOR' ? 'planned' : 'blocked';
+        const governed =
+          planned &&
+          planned.status === 'READY_FOR_AUTHOR' &&
+          planned.governed === true &&
+          planned.independentReview === 'PASS' &&
+          planned.merged === true;
+        const outcome = governed ? 'planned' : 'blocked';
         terminalWorkItems.set(item.work_item_id, outcome);
         decisions.recordDecision(
           {
             stage: outcome === 'planned' ? decisions.Stage.COMPLETED : decisions.Stage.REFUSED,
             workItemId: item.work_item_id,
             detail: outcome === 'planned' ? 'WORK_ITEM_PLANNED' : 'PLANNING_BLOCKED',
-            status: planned && planned.status,
-            reason: planned && planned.reason,
+            status: governed ? 'READY_FOR_AUTHOR' : 'BLOCKED',
+            reason: governed
+              ? undefined
+              : (planned && planned.reason) ||
+                'Planning did not return governed merge and exact independent PASS evidence.',
           },
           logOpts
         );

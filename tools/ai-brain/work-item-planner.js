@@ -31,6 +31,13 @@ const APPROVED_SOURCES = [
   path.join('docs', 'product-spec', 'docs', '01-product', 'PRODUCT-VISION-SCOPE.md'),
   CATALOG_REL,
 ];
+const APPROVED_SPEC_DIRS = [
+  path.join('docs', 'product-spec', 'docs', '02-business'),
+  path.join('docs', 'product-spec', 'docs', '03-ux'),
+  path.join('docs', 'product-spec', 'docs', '04-data'),
+  path.join('docs', 'product-spec', 'docs', '05-api-integrations'),
+  path.join('docs', 'product-spec', 'docs', '08-testing'),
+];
 
 function fail(code, message) {
   const error = new Error(message);
@@ -46,6 +53,22 @@ function sourceLine(text, id) {
   );
 }
 
+function sourceSection(text, id, terms) {
+  const lines = String(text).split(/\r?\n/);
+  const needles = [id, ...(terms || [])]
+    .filter(Boolean)
+    .map((value) => String(value).toLowerCase());
+  const index = lines.findIndex((line) =>
+    needles.some((needle) => line.toLowerCase().includes(needle))
+  );
+  if (index < 0) return null;
+  for (let i = index; i >= 0; i -= 1) {
+    const heading = lines[i].match(/^#{1,6}\s+(.+?)\s*#*$/);
+    if (heading) return heading[1];
+  }
+  return `line ${index + 1}`;
+}
+
 function getRegisterItem(rootDir, id, deps) {
   const rows =
     deps && Array.isArray(deps.items)
@@ -55,6 +78,22 @@ function getRegisterItem(rootDir, id, deps) {
           rootDir
         );
   return rows.find((row) => row.work_item_id === id) || null;
+}
+
+function listApprovedSpecSources(rootDir, deps) {
+  if (deps && Array.isArray(deps.approvedSpecSources)) return deps.approvedSpecSources;
+  if (deps && deps.readSource) return [];
+  const found = [];
+  for (const relDir of APPROVED_SPEC_DIRS) {
+    const absoluteDir = path.join(rootDir, relDir);
+    if (!fs.existsSync(absoluteDir)) continue;
+    for (const entry of fs.readdirSync(absoluteDir, { withFileTypes: true })) {
+      if (entry.isFile() && entry.name.toLowerCase().endsWith('.md')) {
+        found.push(path.join(relDir, entry.name));
+      }
+    }
+  }
+  return found.sort();
 }
 
 function draftWorkItem(id, options, deps) {
@@ -73,10 +112,18 @@ function draftWorkItem(id, options, deps) {
   const template = docs(TEMPLATE_REL);
   const catalog = docs(CATALOG_REL);
   const catalogLine = sourceLine(catalog, id);
-  const primarySources = APPROVED_SOURCES.map((rel) => ({ path: rel, text: docs(rel) }));
+  const specSources = listApprovedSpecSources(rootDir, d);
+  const primarySources = [...new Set([...APPROVED_SOURCES, ...specSources])].map((rel) => ({
+    path: rel,
+    text: docs(rel),
+  }));
+  const terms = [item.feature_name, item.feature_id, item.key_behavior].filter(Boolean);
   const approvedRefs = primarySources
-    .filter(({ path: rel, text }) => sourceLine(text, id) || rel === CATALOG_REL)
-    .map(({ path: rel }) => rel + (rel === CATALOG_REL && catalogLine ? ' — ' + id : ''));
+    .map(({ path: rel, text }) => {
+      const section = sourceSection(text, id, terms);
+      return section ? `\`${rel}#${section}\`` : null;
+    })
+    .filter(Boolean);
   const requiredSections = [
     'Business outcome',
     'Source references',
@@ -105,11 +152,13 @@ function draftWorkItem(id, options, deps) {
   const keyBehavior = String(item.key_behavior || '').trim();
   const featureName = String(item.feature_name || item.feature_id || id).trim();
   const hasDetailedFeatureSource = Boolean(catalogLine && catalogLine.includes('|'));
-  const blocking = !keyBehavior || !hasDetailedFeatureSource || !d.completeSources;
-  const status = blocking ? 'BLOCKED' : 'READY_FOR_AUTHOR';
-  const reason = blocking
-    ? 'Approved sources do not provide enough feature-specific behavior and acceptance detail to write a complete Work Item without inventing product meaning.'
-    : 'Draft is limited to the catalog outcome; feature-specific rules, contracts, screens and acceptance evidence require source verification.';
+  // A local draft is never an approval gate. Only a separately reviewed and
+  // governed docs-only merge may make the register item author-ready.
+  const status = 'BLOCKED';
+  const reason =
+    !keyBehavior || !hasDetailedFeatureSource
+      ? 'Approved sources do not provide enough feature-specific behavior and acceptance detail to write a complete Work Item without inventing product meaning.'
+      : 'This draft still requires isolated planning, an independent review, and a governed docs-only merge before it can become author-ready.';
   const text = [
     '# ' + id + ' — ' + featureName,
     '',
@@ -190,8 +239,11 @@ function draftWorkItem(id, options, deps) {
     '## Open decisions',
     '',
     '- ' + reason,
+    ...APPROVED_SOURCES.filter((rel) => !approvedRefs.some((ref) => ref.includes(rel))).map(
+      (rel) => `- No matching cited section found in approved source: \`${rel}\`.`
+    ),
     '',
-    ...(blocking ? ['- Status remains `BLOCKED` until approved sources resolve this gap.'] : []),
+    '- Status remains `BLOCKED` until the independent planning and governed merge gates complete.',
     '',
   ].join('\n');
 
@@ -200,7 +252,7 @@ function draftWorkItem(id, options, deps) {
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.writeFileSync(target, text, 'utf8');
   }
-  return { id, target, status, blocking, reason, approvedRefs };
+  return { id, target, status, blocking: true, reason, approvedRefs };
 }
 
 async function planWorkItem(id, options, deps) {
@@ -208,15 +260,12 @@ async function planWorkItem(id, options, deps) {
   const d = deps || {};
   if (!opts.run) return draftWorkItem(id, opts, d);
   if (typeof d.runPlanning !== 'function') {
-    if (opts.allowDraftOnMissingExecutor) {
-      return draftWorkItem(id, opts, d);
-    }
     fail(
       'PLAN_EXECUTOR_REQUIRED',
       'plan --run requires the isolated planner, independent reviewer, and governed docs-only merge executor'
     );
   }
-  return d.runPlanning({
+  const result = await d.runPlanning({
     workItemId: id,
     role: 'planner.default',
     isolatedWorker: true,
@@ -224,6 +273,29 @@ async function planWorkItem(id, options, deps) {
     docsOnly: true,
     governedMerge: true,
   });
+  if (
+    !result ||
+    result.status !== 'READY_FOR_AUTHOR' ||
+    result.governed !== true ||
+    result.independentReview !== 'PASS' ||
+    result.merged !== true
+  ) {
+    return {
+      ...(result || {}),
+      id,
+      status: 'BLOCKED',
+      reason:
+        (result && result.reason) ||
+        'Planning requires an exact independent PASS and completed governed docs-only merge.',
+    };
+  }
+  return result;
 }
 
-module.exports = { draftWorkItem, planWorkItem, APPROVED_SOURCES, TEMPLATE_REL };
+module.exports = {
+  draftWorkItem,
+  planWorkItem,
+  APPROVED_SOURCES,
+  APPROVED_SPEC_DIRS,
+  TEMPLATE_REL,
+};
