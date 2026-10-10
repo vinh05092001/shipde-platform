@@ -482,6 +482,8 @@ function evidenceStore(root, source, failedItem) {
 
 const QUOTA_TIMEOUT_TODAY = {
   status: 'failed',
+  cause: 'QUOTA_EXHAUSTED',
+  scope: 'UPSTREAM',
   httpStatus: 429,
   body: 'weekly quota exhausted, request timed out',
 };
@@ -501,6 +503,41 @@ test('a source path blocked by quota plus a timeout failure still transfers the 
   assert.equal(proof.transferred, true);
   assert.equal(proof.source, candidateKey(source));
   assert.equal(proof.sourceModel, 'ag/' + proofModel);
+});
+
+test('classifier enum values recognize infrastructure and preserve model failures', () => {
+  const routing = require('../routing');
+  const source = agSourcePath('-classification');
+  const target = poolTargetPath();
+  const passed = { status: 'passed', proofLevel: 'WORK_ITEM_PASS' };
+
+  for (const [cause, scope] of [
+    ['TIMEOUT', 'UPSTREAM'],
+    ['LAUNCH_CONFIG', 'LOCAL'],
+    ['HARNESS_FAILED', 'HARNESS'],
+  ]) {
+    const data = {
+      combinations: [
+        {
+          ...source,
+          evidence: [passed, { status: 'failed', cause, scope }],
+        },
+      ],
+    };
+    const proof = routing.proofObservedWithSource(data, target);
+    assert.equal(proof.level, 'WORK_ITEM_PASS', `${cause}/${scope} should retain source proof`);
+    assert.equal(proof.transferred, true);
+  }
+
+  const modelFailure = {
+    combinations: [
+      {
+        ...source,
+        evidence: [passed, { status: 'failed', cause: 'MODEL_UNSUPPORTED', scope: 'MODEL' }],
+      },
+    ],
+  };
+  assert.equal(routing.proofObservedWithSource(modelFailure, target).level, null);
 });
 
 test('a model-quality failure on the source path disqualifies the proof transfer', () => {

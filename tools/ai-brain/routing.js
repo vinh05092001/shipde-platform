@@ -508,29 +508,37 @@ function hasQuotaAccountReadings(home, storePath) {
  * expire on their own; the ability the model demonstrated does not expire with
  * them (TASK-AI-141 Part B).
  */
-const INFRASTRUCTURE_CAUSES = new Set([
-  Cause.QUOTA_EXHAUSTED,
-  Cause.UPSTREAM_CREDIT_EXHAUSTED,
-  Cause.UPSTREAM_MONTHLY_LIMIT,
-  Cause.UPSTREAM_RATE_LIMIT,
-  Cause.ACCOUNT_QUOTA_EXHAUSTED,
-  Cause.GENUINE_CAPACITY,
-  Cause.EXHAUSTION_HIDING,
-  Cause.TIMEOUT,
-  Cause.LAUNCH_CONFIG,
-  Cause.HARNESS_FAILED,
-]);
+const INFRASTRUCTURE_CAUSES = new Set(
+  [
+    Cause.QUOTA_EXHAUSTED,
+    Cause.UPSTREAM_CREDIT_EXHAUSTED,
+    Cause.UPSTREAM_MONTHLY_LIMIT,
+    Cause.UPSTREAM_RATE_LIMIT,
+    Cause.ACCOUNT_QUOTA_EXHAUSTED,
+    Cause.GENUINE_CAPACITY,
+    Cause.EXHAUSTION_HIDING,
+    Cause.TIMEOUT,
+    Cause.LAUNCH_CONFIG,
+    Cause.HARNESS_FAILED,
+  ].map(failureToken)
+);
 
 /**
  * Scopes that blame this machine or the transport — launch, harness and
  * network — rather than anything the model said or produced.
  */
-const INFRASTRUCTURE_SCOPES = new Set([Scope.LOCAL, Scope.HARNESS, Scope.GATEWAY]);
+const INFRASTRUCTURE_SCOPES = new Set(
+  [Scope.LOCAL, Scope.HARNESS, Scope.GATEWAY].map(failureToken)
+);
 
 /** A failure whose only meaning is that the model itself did not serve it. */
 function isModelScopeFailure(cause, scope) {
+  const normalizedCause = failureToken(cause);
+  const normalizedScope = failureToken(scope);
   return (
-    scope === Scope.MODEL || cause === Cause.MODEL_UNSUPPORTED || cause === Cause.ALIAS_MISMATCH
+    normalizedScope === failureToken(Scope.MODEL) ||
+    normalizedCause === failureToken(Cause.MODEL_UNSUPPORTED) ||
+    normalizedCause === failureToken(Cause.ALIAS_MISMATCH)
   );
 }
 
