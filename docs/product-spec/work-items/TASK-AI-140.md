@@ -43,7 +43,7 @@ If the repository formatter cannot parse the file or crashes, the existing repai
 ## Fail-Before / Pass-After
 
 - Fail-before: on `origin/main`, `task-ai-140.test.js` does not exist; the new four-proof suite fails there. Existing formatter findings are sent directly to model repair instead of first trying repo Prettier.
-- Pass-after: pending execution in this worktree; exact command results will be added before handoff.
+- Pass-after: `node --test tools/ai-brain/test/task-ai-140.test.js tools/ai-brain/test/task-ai-123.test.js tools/ai-brain/test/task-ai-129.test.js` passed (21 tests, 0 failures); `./node_modules/.bin/prettier --check` passed; `git diff --check` passed with 0 errors. Auto-fix correctly normalises Windows paths, handles file lists >5 without truncation, and fixes only the failing subset.
 
 ## Residual Limitations
 

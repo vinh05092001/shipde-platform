@@ -4649,12 +4649,19 @@ function changedPrettierFiles(workerRoot, baseSha, targetSha) {
   }
   const names = String(diff.stdout || '')
     .split(/\r?\n/)
-    .map((line) => line.trim())
+    .map((line) => line.trim().replace(/\\/g, '/'))
     .filter(Boolean);
   const files = names
     .filter((name) => PRETTIER_FILE.test(name) && fs.existsSync(path.join(workerRoot, name)))
     .map((name) => path.join(workerRoot, name));
   return { files, detail: null };
+}
+
+/** Normalise file path to repository-relative forward-slash path. */
+function toRepoRelative(workerRoot, file) {
+  if (!file) return '';
+  const abs = path.isAbsolute(file) ? file : path.resolve(workerRoot, file);
+  return path.relative(workerRoot, abs).replace(/\\/g, '/');
 }
 
 /** `prettier --check` over exactly these files, run from the host repository. */
@@ -4666,13 +4673,15 @@ function prettierCheck(files) {
     return { status: 'UNAVAILABLE', detail: 'prettier is not installed: ' + (err && err.message) };
   }
   if (!entry) return { status: 'UNAVAILABLE', detail: 'prettier has no executable entry point' };
+  const hostCwd = path.resolve(__dirname, '..', '..');
   const result = spawnSync(
     process.execPath,
     [entry, '--check', '--ignore-unknown', '--'].concat(files),
-    { cwd: path.resolve(__dirname, '..', '..'), encoding: 'utf8', windowsHide: true }
+    { cwd: hostCwd, encoding: 'utf8', windowsHide: true }
   );
   if (result.error) return { status: 'UNAVAILABLE', detail: String(result.error.message) };
-  const lines = stripAnsi(String(result.stderr || '') + String(result.stdout || ''))
+  const fullOutput = stripAnsi(String(result.stderr || '') + String(result.stdout || ''));
+  const lines = fullOutput
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
@@ -4680,16 +4689,40 @@ function prettierCheck(files) {
   if (/Cannot find module/.test(lines.join('\n'))) {
     return { status: 'UNAVAILABLE', detail: lines[0] || 'prettier could not be loaded' };
   }
-  if (result.status === 0) return { status: 'PASSED', detail: null };
+  if (result.status === 0) return { status: 'PASSED', detail: null, files: [] };
+
+  const failingFiles = [];
+  for (const rawLine of fullOutput.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    let m = line.match(/^\[warn\]\s+(.*)$/);
+    if (m) {
+      const candidate = m[1].trim();
+      if (/^Code style issues found/.test(candidate)) continue;
+      const abs = path.resolve(hostCwd, candidate).toLowerCase();
+      const matched = files.find((f) => path.resolve(hostCwd, f).toLowerCase() === abs);
+      if (matched && !failingFiles.includes(matched)) failingFiles.push(matched);
+      continue;
+    }
+    m = line.match(/^\[error\]\s+(.*?)(?::\s+.*)?$/);
+    if (m) {
+      const candidate = m[1].trim();
+      const abs = path.resolve(hostCwd, candidate).toLowerCase();
+      const matched = files.find((f) => path.resolve(hostCwd, f).toLowerCase() === abs);
+      if (matched && !failingFiles.includes(matched)) failingFiles.push(matched);
+      continue;
+    }
+  }
+  const failedSubset = failingFiles.length > 0 ? failingFiles : files;
   return {
     status: 'FAILED',
     detail: lines[0] || 'prettier --check exited with code ' + result.status,
+    files: failedSubset,
   };
 }
 
 /** Apply the repository formatter inside the worker checkout, then commit only its failing paths. */
 function autoFormatWorkerFiles(workerRoot, files, options) {
-  const paths = files.map((file) => path.relative(workerRoot, file));
+  const paths = files.map((file) => toRepoRelative(workerRoot, file));
   const status = spawnSync(
     'git',
     hardenedGitArgs(workerRoot).concat(['status', '--porcelain=v1', '--untracked-files=all']),
@@ -4712,22 +4745,26 @@ function autoFormatWorkerFiles(workerRoot, files, options) {
   const executable = candidates.find((candidate) => fs.existsSync(candidate));
   if (!executable) return { status: 'FAILED', reason: 'worker prettier executable is unavailable' };
   const prettierArgs = ['--write'].concat(paths);
-  const command =
-    process.platform === 'win32' && /\.cmd$/i.test(executable) ? 'powershell.exe' : executable;
-  const commandArgs =
-    command === 'powershell.exe'
-      ? [
-          '-NoProfile',
-          '-NonInteractive',
-          '-ExecutionPolicy',
-          'Bypass',
-          '-File',
-          fs.existsSync(executable.replace(/\.cmd$/i, '.ps1'))
-            ? executable.replace(/\.cmd$/i, '.ps1')
-            : executable,
-          '--write',
-        ].concat(paths)
-      : prettierArgs;
+  let command = executable;
+  let commandArgs = prettierArgs;
+  if (process.platform === 'win32' && /\.cmd$/i.test(executable)) {
+    const ps1 = executable.replace(/\.cmd$/i, '.ps1');
+    if (fs.existsSync(ps1)) {
+      command = 'powershell.exe';
+      commandArgs = [
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        ps1,
+        '--write',
+      ].concat(paths);
+    } else {
+      command = process.env.ComSpec || 'cmd.exe';
+      commandArgs = ['/d', '/s', '/c', executable, '--write'].concat(paths);
+    }
+  }
   const formatted = spawnSync(command, commandArgs, {
     cwd: workerRoot,
     encoding: 'utf8',
@@ -4773,21 +4810,26 @@ function autoFormatWorkerFiles(workerRoot, files, options) {
     return { status: 'FAILED', reason: 'unable to inspect formatter diff' };
   const changedPaths = String(changed.stdout || '')
     .split(/\r?\n/)
+    .map((line) => line.trim().replace(/\\/g, '/'))
     .filter(Boolean)
     .sort();
-  if (
-    changedPaths.some((file) => !paths.includes(file)) ||
-    paths.some((file) => !changedPaths.includes(file))
-  ) {
+  if (changedPaths.some((file) => !paths.includes(file))) {
     return { status: 'FAILED', reason: 'formatter changed paths outside the failing file list' };
   }
+  if (changedPaths.length === 0) {
+    return { status: 'FAILED', reason: 'formatter made no changes' };
+  }
 
-  const add = spawnSync('git', hardenedGitArgs(workerRoot).concat(['add', '--']).concat(paths), {
-    cwd: workerRoot,
-    encoding: 'utf8',
-    windowsHide: true,
-    env: hardenedGitEnv(),
-  });
+  const add = spawnSync(
+    'git',
+    hardenedGitArgs(workerRoot).concat(['add', '--']).concat(changedPaths),
+    {
+      cwd: workerRoot,
+      encoding: 'utf8',
+      windowsHide: true,
+      env: hardenedGitEnv(),
+    }
+  );
   if (!add || add.status !== 0)
     return { status: 'FAILED', reason: 'git add failed for formatter paths' };
   const staged = spawnSync(
@@ -4799,10 +4841,15 @@ function autoFormatWorkerFiles(workerRoot, files, options) {
     staged && staged.status === 0
       ? String(staged.stdout || '')
           .split(/\r?\n/)
+          .map((line) => line.trim().replace(/\\/g, '/'))
           .filter(Boolean)
           .sort()
       : [];
-  if (JSON.stringify(stagedPaths) !== JSON.stringify(paths.slice().sort())) {
+  if (
+    stagedPaths.length === 0 ||
+    stagedPaths.some((file) => !paths.includes(file)) ||
+    JSON.stringify(stagedPaths) !== JSON.stringify(changedPaths.slice().sort())
+  ) {
     return { status: 'FAILED', reason: 'staged paths differ from failing file list' };
   }
   const commit = spawnSync(
@@ -4829,7 +4876,7 @@ function autoFormatWorkerFiles(workerRoot, files, options) {
   });
   const sha = String((head && head.stdout) || '').trim();
   return SHA_40.test(sha)
-    ? { status: 'PASSED', sha, files: paths }
+    ? { status: 'PASSED', sha, files: stagedPaths }
     : { status: 'FAILED', reason: 'formatter commit has invalid HEAD' };
 }
 
@@ -4851,7 +4898,7 @@ function changedFileNames(workerRoot, baseSha, targetSha) {
   }
   const names = String(diff.stdout || '')
     .split(/\r?\n/)
-    .map((line) => line.trim())
+    .map((line) => line.trim().replace(/\\/g, '/'))
     .filter(Boolean);
   return { names, detail: null };
 }
@@ -5076,8 +5123,8 @@ async function runFormatGate(params) {
   const targetSha = params.targetSha;
   const repair = params.repair;
   const commitFormatFix = params.commitFormatFix || autoFormatWorkerFiles;
-  const namesOf = (files) =>
-    files.map((file) => path.relative(workerRoot, file) || file).slice(0, 5);
+  const repoNames = (files) =>
+    (files || []).map((file) => toRepoRelative(workerRoot, file) || file);
   const record = (status, entry) => {
     const value = Object.assign(
       { workItemId: item.id, status, baseSha: baseSha || null, sha: targetSha },
@@ -5099,26 +5146,30 @@ async function runFormatGate(params) {
 
   const first = prettierCheck(changed.files);
   if (first.status === 'UNAVAILABLE') {
-    record('UNAVAILABLE', { files: namesOf(changed.files), reason: first.detail });
+    record('UNAVAILABLE', { files: repoNames(changed.files), reason: first.detail });
     return { status: FormatGate.UNAVAILABLE, reason: first.detail };
   }
   if (first.status === 'PASSED') {
-    record('PASSED', { files: namesOf(changed.files) });
+    record('PASSED', { files: repoNames(changed.files) });
     return { status: FormatGate.PASSED, files: changed.files, sha: targetSha };
   }
 
-  record('FAILED', { files: namesOf(changed.files), reason: first.detail });
-  const formatted = await commitFormatFix(workerRoot, changed.files, {
+  // The failing subset of files that need formatting
+  const failingFiles = first.files && first.files.length > 0 ? first.files : changed.files;
+  const failingNames = repoNames(failingFiles);
+
+  record('FAILED', { files: failingNames, reason: first.detail });
+  const formatted = await commitFormatFix(workerRoot, failingFiles, {
     workItemId: item.id,
     expectedHead: targetSha,
   });
   if (formatted.status === 'REFUSED') {
     const reason = formatted.reason;
-    record('REFUSED', { files: namesOf(changed.files), reason });
-    return { status: FormatGate.REFUSED, reason, files: changed.files };
+    record('REFUSED', { files: failingNames, reason });
+    return { status: FormatGate.REFUSED, reason, files: failingFiles };
   }
   if (formatted.status === 'FAILED') {
-    record('FAILED', { files: namesOf(changed.files), reason: formatted.reason });
+    record('FAILED', { files: failingNames, reason: formatted.reason });
     if (typeof o.log === 'function') o.log('FORMAT_AUTOFIX_FAILED', { reason: formatted.reason });
   }
   if (
@@ -5130,7 +5181,7 @@ async function runFormatGate(params) {
   if (formatted.status === 'PASSED') {
     const verification = prettierCheck(changed.files);
     if (verification.status === 'PASSED') {
-      const names = namesOf(changed.files);
+      const fixedNames = formatted.files ? repoNames(formatted.files) : failingNames;
       decisions.recordDecision(
         {
           stage: 'format_autofixed',
@@ -5138,12 +5189,12 @@ async function runFormatGate(params) {
           role: roleOf(item),
           branch: (params.session && params.session.branch) || null,
           sha: formatted.sha,
-          files: names,
+          files: fixedNames,
           detail: 'Repository Prettier applied without a model repair.',
         },
         logOpts
       );
-      record('PASSED', { files: names, sha: formatted.sha, autoFixed: true });
+      record('PASSED', { files: fixedNames, sha: formatted.sha, autoFixed: true });
       return { status: FormatGate.PASSED, files: changed.files, sha: formatted.sha };
     }
   }
@@ -5153,15 +5204,15 @@ async function runFormatGate(params) {
       status: 'open',
       summary:
         'prettier --check failed on ' +
-        changed.files.length +
+        failingFiles.length +
         ' changed file(s): ' +
-        namesOf(changed.files).join(', '),
+        failingNames.slice(0, 5).join(', '),
       detail:
         'Run exactly `./node_modules/.bin/prettier --write ' +
-        namesOf(changed.files).join(' ') +
+        failingNames.join(' ') +
         '` in the worker checkout. This is a format-only repair: do not change behavior, logic, or any other content. The diff must contain formatting changes only.',
       formatOnly: true,
-      dirtyPaths: namesOf(changed.files),
+      dirtyPaths: failingNames,
       headSha: targetSha,
       baseSha,
     },
@@ -5170,25 +5221,25 @@ async function runFormatGate(params) {
   const repairedSha = repaired && repaired.sha ? String(repaired.sha) : '';
   if (!SHA_40.test(repairedSha)) {
     const reason = 'FORMAT_CHECK_FAILED: the repair round produced no reviewable commit';
-    record('REFUSED', { files: namesOf(changed.files), reason });
-    return { status: FormatGate.REFUSED, reason, files: changed.files };
+    record('REFUSED', { files: failingNames, reason });
+    return { status: FormatGate.REFUSED, reason, files: failingFiles };
   }
 
   const again = changedPrettierFiles(workerRoot, baseSha, repairedSha);
   if (again.detail) {
-    record('UNAVAILABLE', { files: namesOf(changed.files), reason: again.detail });
+    record('UNAVAILABLE', { files: failingNames, reason: again.detail });
     return { status: FormatGate.UNAVAILABLE, reason: again.detail };
   }
   const repairedNames = changedFileNames(workerRoot, targetSha, repairedSha);
-  const allowedNames = namesOf(changed.files);
+  const allowedNames = failingNames;
   if (repairedNames.detail || repairedNames.names.some((name) => !allowedNames.includes(name))) {
     const reason =
       'REPAIR_SCOPE_EXCEEDED: format-only repair changed files outside the failing file list';
-    record('REFUSED', { files: namesOf(again.files), reason, sha: repairedSha });
+    record('REFUSED', { files: repoNames(again.files), reason, sha: repairedSha });
     return { status: FormatGate.REFUSED, reason, files: again.files, sha: repairedSha };
   }
   let scopeExceeded = false;
-  for (const relative of namesOf(changed.files)) {
+  for (const relative of failingNames) {
     const before = runHardenedGit(workerRoot, ['show', targetSha + ':' + relative]);
     if (!before || before.status !== 0) continue;
     const formatResult = spawnSync(
@@ -5216,23 +5267,24 @@ async function runFormatGate(params) {
   if (scopeExceeded) {
     const reason =
       'REPAIR_SCOPE_EXCEEDED: format-only repair differs from the repository Prettier output';
-    record('REFUSED', { files: namesOf(again.files), reason, sha: repairedSha });
+    record('REFUSED', { files: repoNames(again.files), reason, sha: repairedSha });
     return { status: FormatGate.REFUSED, reason, files: again.files, sha: repairedSha };
   }
   const second =
     again.files.length === 0 ? { status: 'PASSED', detail: null } : prettierCheck(again.files);
   if (second.status === 'UNAVAILABLE') {
-    record('UNAVAILABLE', { files: namesOf(again.files), reason: second.detail });
+    record('UNAVAILABLE', { files: repoNames(again.files), reason: second.detail });
     return { status: FormatGate.UNAVAILABLE, reason: second.detail };
   }
   if (second.status === 'PASSED') {
-    record('PASSED', { files: namesOf(again.files), sha: repairedSha, repaired: true });
+    record('PASSED', { files: repoNames(again.files), sha: repairedSha, repaired: true });
     return { status: FormatGate.PASSED, files: again.files, sha: repairedSha };
   }
+  const againNames = repoNames(again.files);
   const reason =
     'FORMAT_CHECK_FAILED: prettier --check still fails after the repair round: ' +
-    namesOf(again.files).join(', ');
-  record('REFUSED', { files: namesOf(again.files), reason });
+    againNames.slice(0, 5).join(', ');
+  record('REFUSED', { files: againNames, reason });
   return { status: FormatGate.REFUSED, reason, files: again.files, sha: repairedSha };
 }
 

@@ -157,3 +157,163 @@ test('AF-R03: unrelated dirty worker changes refuse the formatter with WORKER_TR
   assert.equal(result.status, 'REFUSED');
   assert.match(result.reason, /WORKER_TREE_DIRTY/);
 });
+
+test('AF-R01: worker prettier .cmd launches correctly when .ps1 is absent', async () => {
+  if (process.platform !== 'win32') return;
+  const repo = tempRepo();
+  const ps1Launcher = path.join(repo.dir, 'node_modules', '.bin', 'prettier.ps1');
+  if (fs.existsSync(ps1Launcher)) {
+    fs.unlinkSync(ps1Launcher);
+  }
+  const { result } = await gate(repo);
+  assert.equal(result.status, 'PASSED', result.reason || JSON.stringify(result));
+  assert.equal(repo.git(['show', '--format=', '--name-only', 'HEAD']), 'src.js');
+});
+
+test('AF-R02: repair logic changes inside failing files are refused with REPAIR_SCOPE_EXCEEDED', async () => {
+  const repo = tempRepo();
+  const unformattedSha = (() => {
+    fs.writeFileSync(path.join(repo.dir, 'src.js'), 'const   val  =   "original" ;\n');
+    repo.git(['add', 'src.js']);
+    repo.git(['commit', '-q', '-m', 'unformatted file']);
+    return repo.git(['rev-parse', 'HEAD']);
+  })();
+  const { result } = await gate(
+    { ...repo, targetSha: unformattedSha },
+    {
+      commitFormatFix: async () => ({ status: 'FAILED', reason: 'prettier failed to auto-fix' }),
+      repair: async () => {
+        fs.writeFileSync(path.join(repo.dir, 'src.js'), 'const val = "tampered";\n');
+        repo.git(['add', 'src.js']);
+        repo.git(['commit', '-q', '-m', 'repair changed logic inside failing file']);
+        return { sha: repo.git(['rev-parse', 'HEAD']) };
+      },
+    }
+  );
+  assert.equal(result.status, 'REFUSED');
+  assert.match(
+    result.reason,
+    /REPAIR_SCOPE_EXCEEDED: format-only repair differs from the repository Prettier output/
+  );
+});
+
+test('AF-R01 / FEAT-AUTH-05: >5 failing files in nested dirs reported with backslashes auto-fix only failing subset', async () => {
+  const repo = tempRepo();
+  const subDirs = ['src/auth', 'src/settings/security', 'src/components', 'src/utils'];
+  for (const d of subDirs) {
+    fs.mkdirSync(path.join(repo.dir, d), { recursive: true });
+  }
+
+  const baseSha = repo.git(['rev-parse', 'HEAD']);
+
+  // More than 5 unformatted files under nested dirs
+  const unformattedFiles = [
+    'src/auth/mfa.controller.ts',
+    'src/auth/mfa.service.ts',
+    'src/auth/totp.util.ts',
+    'src/settings/security/page.tsx',
+    'src/components/LoginView.tsx',
+    'src/utils/token.ts',
+  ];
+  for (let i = 0; i < unformattedFiles.length; i++) {
+    fs.writeFileSync(
+      path.join(repo.dir, unformattedFiles[i]),
+      `export   const  item${i}  =  "val${i}" ;\n`
+    );
+  }
+
+  // Already formatted file in the commit (touches more files than the failing subset)
+  const formattedFile = 'src/auth/types.ts';
+  fs.writeFileSync(
+    path.join(repo.dir, formattedFile),
+    "export type MFAStatus = 'enabled' | 'disabled';\n"
+  );
+
+  for (const f of [...unformattedFiles, formattedFile]) {
+    repo.git(['add', f]);
+  }
+  repo.git(['commit', '-q', '-m', 'feat(auth): FEAT-AUTH-05 commit with >5 failing files']);
+  const multiSha = repo.git(['rev-parse', 'HEAD']);
+
+  let repairCalls = 0;
+  const { result } = await gate(
+    { ...repo, baseSha, targetSha: multiSha },
+    {
+      repair: async () => (repairCalls++, {}),
+    }
+  );
+
+  assert.equal(result.status, 'PASSED', result.reason || JSON.stringify(result));
+  assert.equal(repairCalls, 0);
+
+  // Auto-fix commit touched ONLY the 6 failing files, NOT the already formatted file
+  const headFiles = repo
+    .git(['show', '--format=', '--name-only', 'HEAD'])
+    .split(/\r?\n/)
+    .map((s) => s.trim().replace(/\\/g, '/'))
+    .filter(Boolean)
+    .sort();
+  assert.deepEqual(headFiles, unformattedFiles.slice().sort());
+  assert.ok(!headFiles.includes(formattedFile));
+
+  // Decision records show all 6 files with forward slashes (not truncated to 5)
+  const records = decisions.readDecisions({
+    dir: path.join(repo.dir, 'decisions'),
+    now: Date.parse('2026-10-10T12:00:00Z'),
+  });
+  const autoFixed = records.find((entry) => entry.stage === 'format_autofixed');
+  assert.ok(autoFixed, 'format_autofixed decision must exist');
+  assert.equal(autoFixed.files.length, 6);
+  for (const f of unformattedFiles) {
+    assert.ok(autoFixed.files.includes(f), `Decision must include ${f}`);
+  }
+});
+
+test('AF-R02 / FEAT-AUTH-05: repair fallback handles >5 files in nested dirs without truncation', async () => {
+  const repo = tempRepo();
+  const subDirs = ['src/auth', 'src/settings/security', 'src/components', 'src/utils'];
+  for (const d of subDirs) {
+    fs.mkdirSync(path.join(repo.dir, d), { recursive: true });
+  }
+
+  const baseSha = repo.git(['rev-parse', 'HEAD']);
+
+  const files = [
+    'src/auth/mfa.controller.ts',
+    'src/auth/mfa.service.ts',
+    'src/auth/totp.util.ts',
+    'src/settings/security/page.tsx',
+    'src/components/LoginView.tsx',
+    'src/utils/token.ts',
+  ];
+  for (let i = 0; i < files.length; i++) {
+    fs.writeFileSync(path.join(repo.dir, files[i]), `const   x${i}  =  ${i} ;\n`);
+    repo.git(['add', files[i]]);
+  }
+  repo.git(['commit', '-q', '-m', 'commit >5 unformatted files']);
+  const targetSha = repo.git(['rev-parse', 'HEAD']);
+
+  let receivedFinding;
+  const { result } = await gate(
+    { ...repo, baseSha, targetSha },
+    {
+      commitFormatFix: async () => ({ status: 'FAILED', reason: 'prettier failed' }),
+      repair: async (findings) => {
+        receivedFinding = findings[0];
+        for (let i = 0; i < files.length; i++) {
+          fs.writeFileSync(path.join(repo.dir, files[i]), `const x${i} = ${i};\n`);
+          repo.git(['add', files[i]]);
+        }
+        repo.git(['commit', '-q', '-m', 'repair format all 6 files']);
+        return { sha: repo.git(['rev-parse', 'HEAD']) };
+      },
+    }
+  );
+
+  assert.ok(receivedFinding, 'repair must have received findings');
+  for (const f of files) {
+    assert.ok(receivedFinding.detail.includes(f), `Repair command detail must include ${f}`);
+  }
+  assert.equal(receivedFinding.dirtyPaths.length, 6);
+  assert.equal(result.status, 'PASSED', result.reason || JSON.stringify(result));
+});
