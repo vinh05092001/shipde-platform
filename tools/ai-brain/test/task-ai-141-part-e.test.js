@@ -5,6 +5,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const routes = require('../route-health');
+const candidatesApi = require('../candidates');
+const cli = require('../cli');
+const intake = require('../intake');
 
 function temporaryStore(t) {
   const parent = path.join(__dirname, '..', '..', '..', '.upstream-tmp');
@@ -142,3 +145,354 @@ test('backoff grows and continues daily; failed models are parked, not removed',
   assert.equal(routes.normalizeModelId('model-y'), 'model-y');
   assert.equal(Object.keys(store.paths).length, 1);
 });
+
+test('gateway candidates use successful catalogue probes and honor hand exclusions', (t) => {
+  const registry = {
+    sources: [
+      { id: 'gateway-a', kind: 'router', endpoint: 'http://gateway' },
+      { id: 'vendor-a', kind: 'model-source', reachedVia: 'gateway-a' },
+    ],
+    dispatch: { providers: { 'vendor-a': { harness: 'paseo' } } },
+  };
+  const models = Array.from({ length: 50 }, (_, i) => ({
+    gateway: 'gateway-a',
+    upstream: 'vendor-a',
+    modelId: 'vendor-a/model-' + i,
+  }));
+  const accounts = [
+    { id: 'acct', provider: 'vendor-a', models: [{ model: 'vendor-a/model-0', exclude: true }] },
+  ];
+  const store = routes.loadStore(temporaryStore(t).file);
+  for (let i = 0; i < 50; i += 1)
+    routes.recordResult(
+      store,
+      models[i].modelId,
+      'gateway-a',
+      i < 30 ? { ok: true } : { ok: false, status: [451, 402, 429][(i - 30) % 3] },
+      1_800_000_000_000
+    );
+  const result = candidatesApi.gatewayAccountCandidates({
+    registry,
+    accounts,
+    catalogue: models,
+    routeHealth: store,
+    now: 1_800_000_000_001,
+  });
+  assert.equal(result.length, 29);
+  assert.ok(!result.some((row) => row.modelId === 'vendor-a/model-0'));
+});
+
+test('discovered same-model paths fall through 451 and 429 to success, recording fallback', async (t) => {
+  const { store } = temporaryStore(t);
+  const registry = {
+    sources: [
+      { id: 'ag', kind: 'router' },
+      { id: 'zd', kind: 'router' },
+      { id: 'cl', kind: 'router' },
+      { id: 'acct-a', kind: 'model-source', reachedVia: 'ag' },
+      { id: 'acct-b', kind: 'model-source', reachedVia: 'zd' },
+      { id: 'acct-c', kind: 'model-source', reachedVia: 'cl' },
+    ],
+    dispatch: {
+      providers: {
+        'acct-a': { harness: 'paseo' },
+        'acct-b': { harness: 'paseo' },
+        'acct-c': { harness: 'paseo' },
+      },
+    },
+  };
+  const catalogue = ['ag/claude-sonnet-4-6', 'zd/claude-sonnet-4-6', 'cl/claude-sonnet-4-6'].map(
+    (modelId) => ({ gateway: modelId.split('/')[0], modelId })
+  );
+  routes.recordResult(
+    store,
+    catalogue[0].modelId,
+    'ag',
+    { ok: false, status: 451 },
+    1_800_000_000_000
+  );
+  const called = [];
+  const result = await routes.routeFallbackDiscovered(
+    'claude-sonnet-4-6',
+    'ag',
+    registry,
+    [
+      { id: 'acct-a', provider: 'acct-a' },
+      { id: 'acct-b', provider: 'acct-b' },
+      { id: 'acct-c', provider: 'acct-c' },
+    ],
+    catalogue,
+    async (_model, route) => {
+      called.push(route.id);
+      return route.id === 'zd' ? { ok: false, status: 429 } : { ok: true };
+    },
+    store,
+    { now: 1_800_000_000_000 }
+  );
+  assert.deepEqual(called, ['zd', 'cl']);
+  assert.equal(result.route.id, 'cl');
+  assert.ok(
+    store.events.some(
+      (event) =>
+        event.type === 'route_fallback' && event.failedPath === 'ag' && event.chosenPath === 'cl'
+    )
+  );
+});
+
+test('intake assembly probes a bounded catalogue with a timeout and excludes failed routes', async (t) => {
+  const { file, store } = temporaryStore(t);
+  const registry = {
+    sources: [
+      { id: 'gateway-a', kind: 'router' },
+      { id: 'vendor-a', kind: 'model-source', reachedVia: 'gateway-a' },
+    ],
+    dispatch: { providers: { 'vendor-a': { harness: 'paseo' } } },
+  };
+  const catalogue = Array.from({ length: 50 }, (_, i) => ({
+    gateway: 'gateway-a',
+    upstream: 'vendor-a',
+    modelId: 'vendor-a/model-' + i,
+  }));
+  const counts = [];
+  const result = await cli.assembleForDispatch(
+    { candidates: catalogue },
+    [{ id: 'acct', provider: 'vendor-a' }],
+    registry,
+    {
+      routeHealth: store,
+      routeHealthFile: file,
+      refreshRoutes: true,
+      probeCap: 50,
+      probeTimeoutMs: 500,
+      now: 1_800_000_000_000,
+      probeRoute: async (_model, _route, opts) => {
+        assert.equal(opts.timeoutMs, 500);
+        const i = counts.length;
+        counts.push(i);
+        return i < 30 ? { ok: true } : { ok: false, status: [451, 402, 429][(i - 30) % 3] };
+      },
+    }
+  );
+  assert.equal(counts.length, 50);
+  assert.equal(result.length, 50, 'all catalogue rows are retained for explicit replay');
+  assert.equal(Object.keys(routes.loadStore(file).paths).length, 50);
+});
+
+test('intake persists bounded fake gateway probe results and reports per-account candidate counts', async (t) => {
+  const root = path.join(__dirname, '..', '..', '..', '.upstream-tmp');
+  fs.mkdirSync(root, { recursive: true });
+  const fixture = fs.mkdtempSync(path.join(root, 'ai141e-intake-'));
+  t.after(() => fs.rmSync(fixture, { recursive: true, force: true }));
+  const id = 'FIXTURE-E-INTAKE';
+  const itemDir = path.join(fixture, 'docs', 'product-spec', 'work-items');
+  fs.mkdirSync(itemDir, { recursive: true });
+  fs.writeFileSync(path.join(itemDir, id + '.md'), intakeFixture(id));
+  const registerDir = path.join(fixture, 'docs', 'product-spec', 'docs', '10-ai-collaboration');
+  fs.mkdirSync(registerDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(registerDir, 'FEATURE-DELIVERY-REGISTER.csv'),
+    'delivery_order,slice,group,work_item_id,feature_id,feature_name,key_behavior,status,dependencies,work_item_path,branch,pr,codex_verdict,merge_commit\n1,S00,AI,' +
+      id +
+      ',,fixture,fixture,READY_FOR_AUTHOR,,docs/product-spec/work-items/' +
+      id +
+      '.md,feat/fixture,,,,\n'
+  );
+  const registry = {
+    sources: [
+      { id: 'gateway-a', kind: 'router', endpoint: 'http://gateway' },
+      { id: 'vendor-a', kind: 'model-source', reachedVia: 'gateway-a' },
+    ],
+    dispatch: { providers: { 'vendor-a': { harness: 'paseo' } } },
+  };
+  const models = Array.from({ length: 50 }, (_, i) => ({
+    gateway: 'gateway-a',
+    upstream: 'vendor-a',
+    modelId: 'vendor-a/model-' + i,
+  }));
+  let probeCount = 0;
+  const perAccount = [];
+  const result = await intake.runIntake(
+    { workItem: id },
+    {
+      root: fixture,
+      baseSha: 'a'.repeat(40),
+      resolveDependencies: () => [],
+      buildCatalogue: () => models,
+      listAccounts: () => [{ id: 'acct', provider: 'vendor-a' }],
+      registry,
+      routeHealthFile: path.join(fixture, 'route-health.json'),
+      now: 1_800_000_000_000,
+      probeCap: 50,
+      probeTimeoutMs: 200,
+      persistRouteHealth: true,
+      probeRoute: async (_model, _route, options) => {
+        assert.equal(options.timeoutMs, 200);
+        const n = probeCount++;
+        return n < 30 ? { ok: true } : { ok: false, status: [451, 402, 429][(n - 30) % 3] };
+      },
+    }
+  );
+  assert.equal(probeCount, 50);
+  assert.equal(result.routeRefresh.count, 50);
+  assert.equal(
+    Object.keys(routes.loadStore(path.join(fixture, 'route-health.json')).paths).length,
+    50
+  );
+  const assembled = await cli.assembleForDispatch(
+    { candidates: models },
+    result.accounts,
+    registry,
+    {
+      routeHealth: routes.loadStore(path.join(fixture, 'route-health.json')),
+      refreshRoutes: false,
+      onAccountCount: (accountId, count) => perAccount.push({ accountId, count }),
+    }
+  );
+  assert.equal(assembled.length, 80);
+  assert.deepEqual(perAccount, [{ accountId: 'acct', count: 30 }]);
+});
+
+test('all failed routes emit an unavailable decision with every path reason', async (t) => {
+  const { store } = temporaryStore(t);
+  const now = 1_800_000_000_000;
+  routes.recordResult(store, 'model-z', 'p1', { ok: false, status: 451 }, now);
+  const result = await routes.routeFallback(
+    'model-z',
+    'p1',
+    [{ id: 'p2' }, { id: 'p3' }],
+    async (_model, route) => ({ ok: false, status: route.id === 'p2' ? 401 : 404 }),
+    store,
+    { now }
+  );
+  assert.equal(result.unavailable, true);
+  assert.deepEqual(store.events.at(-1).failures, [
+    { path: 'p2', reason: 'AUTH_NEEDED' },
+    { path: 'p3', reason: 'UNSUPPORTED' },
+  ]);
+  assert.ok(
+    store.events.some(
+      (event) => event.type === 'operator_action_required' && event.routeId === 'p2'
+    )
+  );
+});
+
+test('geo-blocked access class skips all paths marked geo-restricted', async (t) => {
+  const { store } = temporaryStore(t);
+  routes.recordResult(store, 'model-g', 'p1', { ok: false, status: 451 }, 1_800_000_000_000);
+  const probed = [];
+  const result = await routes.routeFallback(
+    'model-g',
+    'p1',
+    [{ id: 'p2', geoBlocked: true }, { id: 'p3' }],
+    async (_model, route) => {
+      probed.push(route.id);
+      return { ok: true };
+    },
+    store,
+    {
+      now: 1_800_000_000_000,
+      failureReason: 'GEO_BLOCKED',
+    }
+  );
+  assert.deepEqual(probed, ['p3']);
+  assert.equal(result.route.id, 'p3');
+});
+
+test('assembly performs due checks and bounded fresh probes before building live candidates', async (t) => {
+  const { file, store } = temporaryStore(t);
+  const registry = {
+    sources: [
+      { id: 'gateway-a', kind: 'router' },
+      { id: 'vendor-a', kind: 'model-source', reachedVia: 'gateway-a' },
+    ],
+    dispatch: { providers: { 'vendor-a': { harness: 'paseo' } } },
+  };
+  const model = { gateway: 'gateway-a', upstream: 'vendor-a', modelId: 'vendor-a/live-model' };
+  const health = routes.recordResult(
+    store,
+    model.modelId,
+    'gateway-a',
+    { ok: false, status: 402 },
+    1_800_000_000_000
+  );
+  store.paths[health.key].nextCheckAt = new Date(1_800_000_000_000).toISOString();
+  let calls = 0;
+  const candidates = await cli.assembleForDispatch(
+    { candidates: [model] },
+    [{ id: 'acct', provider: 'vendor-a' }],
+    registry,
+    {
+      routeHealth: store,
+      routeHealthFile: file,
+      refreshRoutes: true,
+      now: 1_800_000_000_001,
+      probeCap: 1,
+      probeRoute: async () => {
+        calls += 1;
+        return { ok: true };
+      },
+      offerings: [],
+      registryAccounts: [],
+    }
+  );
+  assert.equal(calls, 1);
+  assert.equal(routes.loadStore(file).paths[health.key].status, 'AVAILABLE');
+  assert.equal(candidates.length, 1, 'explicit candidate replay preserves the supplied row');
+});
+
+test('live assembly falls back from a parked alias to another same-model gateway', async (t) => {
+  const { file, store } = temporaryStore(t);
+  const now = 1_800_000_000_000;
+  const registry = {
+    sources: [
+      { id: 'ag', kind: 'router' },
+      { id: 'cl', kind: 'router' },
+      { id: 'acct-a', kind: 'model-source', reachedVia: 'ag' },
+      { id: 'acct-c', kind: 'model-source', reachedVia: 'cl' },
+    ],
+    dispatch: { providers: { 'acct-a': { harness: 'paseo' }, 'acct-c': { harness: 'paseo' } } },
+  };
+  const catalogue = [
+    { gateway: 'ag', upstream: 'acct-a', modelId: 'ag/model-fallback', evidence: 2 },
+    { gateway: 'cl', upstream: 'acct-c', modelId: 'cl/model-fallback', evidence: 1 },
+  ];
+  routes.recordResult(store, catalogue[0].modelId, 'ag', { ok: false, status: 451 }, now);
+  const counts = [];
+  const result = await cli.assembleForDispatch(
+    { candidates: catalogue },
+    [
+      { id: 'account-a', provider: 'acct-a' },
+      { id: 'account-c', provider: 'acct-c' },
+    ],
+    registry,
+    {
+      routeHealth: store,
+      routeHealthFile: file,
+      refreshRoutes: true,
+      now: now + 1,
+      probeCap: 2,
+      probeRoute: async (_model, route) => {
+        counts.push(route);
+        return { ok: route === 'cl' };
+      },
+      offerings: [],
+      registryAccounts: [],
+      onAccountCount: (accountId, count) => counts.push(`${accountId}:${count}`),
+    }
+  );
+  assert.ok(
+    result.some(
+      (candidate) => candidate.gateway === 'cl' && candidate.modelId === 'cl/model-fallback'
+    )
+  );
+  assert.ok(
+    store.events.some(
+      (event) =>
+        event.type === 'route_fallback' && event.failedPath === 'ag' && event.chosenPath === 'cl'
+    )
+  );
+});
+
+function intakeFixture(id) {
+  return `# ${id}\n\n## Control\n\n| Field | Value |\n|---|---|\n| Work Item ID | \`${id}\` |\n| Feature ID | \`N/A\` |\n| Status | \`READY_FOR_AUTHOR\` |\n| Dependencies | \`None\` |\n| Assigned author | \`GEMINI\` |\n| Risk | \`LOW\` |\n| Complexity | \`standard\` |\n| Allowed paths | \`tools/ai-brain/cli.js\` |\n| Branch | \`feat/fixture\` |\n\n## Business Outcome\n\nFixture business outcome.\n\n## Acceptance Matrix\n\n| AC/Test ID | Scenario | Expected result | Evidence required |\n|---|---|---|---|\n| FX-01 | Fixture | Fixture passes | Test |\n\n## Verification Commands\n\n- \`node --test\`\n`;
+}

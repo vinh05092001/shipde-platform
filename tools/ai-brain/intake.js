@@ -714,6 +714,31 @@ async function runIntake(opts, deps) {
     ? d.listAccounts(d.accountOptions || {})
     : accountsApi.listAccounts(d.accountOptions || {}));
 
+  const routeHealthApi = require('./route-health');
+  const routeHealthFile =
+    d.routeHealthFile || path.join(root, 'tools', 'ai-brain', 'data', 'model-route-health.json');
+  const routeHealth = d.routeHealth || routeHealthApi.loadStore(routeHealthFile);
+  const refreshedRoutes = await routeHealthApi.recheckBeforeSelection(
+    routeHealth,
+    d.probeRoute ||
+      ((modelId, routeId, probeOptions) =>
+        routeHealthApi.probeGatewayModel(
+          modelId,
+          routeId,
+          Object.assign({ registry: d.registry }, probeOptions)
+        )),
+    {
+      catalogue: catalogue.models,
+      registry: d.registry || sourcesApi.loadSources(),
+      accounts,
+      now,
+      cap: d.probeCap,
+      timeoutMs: d.probeTimeoutMs,
+    }
+  );
+  if (d.persistRouteHealth !== false) routeHealthApi.saveStore(routeHealthFile, routeHealth);
+  if (typeof d.onRouteRefresh === 'function') d.onRouteRefresh(refreshedRoutes);
+
   const repoRoot = path.resolve(root);
   const hasPoolQuota = Boolean(agyPoolHasQuota(d));
 
@@ -758,6 +783,7 @@ async function runIntake(opts, deps) {
     catalogue: catalogue.models,
     warnings: catalogue.warnings,
     sourceStatus: catalogue.sourceStatus,
+    routeRefresh: refreshedRoutes,
     accounts,
     baseSha,
     repoRoot,

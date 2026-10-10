@@ -24,7 +24,8 @@ function classifyFailure(status, message) {
   if (s === 451 || /geo.?block|unavailable in your location/.test(text)) return 'GEO_BLOCKED';
   if (s === 402 || /no.?credit|payment required|insufficient credit/.test(text)) return 'NO_CREDIT';
   if (s === 429 || /rate.?limit|too many requests/.test(text)) return 'RATE_LIMITED';
-  if (s === 401 || s === 403) return 'AUTH_NEEDED';
+  if (s === 401 || (s === 403 && !/unsupported model|model not found/.test(text)))
+    return 'AUTH_NEEDED';
   if (s === 404 || /unsupported model|model not found/.test(text)) return 'UNSUPPORTED';
   return 'UNAVAILABLE_NOW';
 }
@@ -99,6 +100,15 @@ function recordResult(store, modelId, routeId, result, now) {
     reason,
     at: lastCheckedAt,
   });
+  if (reason === 'AUTH_NEEDED') {
+    store.events.push({
+      type: 'operator_action_required',
+      modelId: normalizeModelId(modelId),
+      routeId,
+      action: 'check_account_authentication',
+      at: lastCheckedAt,
+    });
+  }
   return { key, eligible: false, reason };
 }
 
@@ -110,6 +120,9 @@ function isEligible(store, modelId, routeId, now) {
 async function routeFallback(modelId, failedPath, paths, probe, store, options) {
   const o = options || {};
   const now = Number(o.now) || Date.now();
+  const failedRecord = store.paths[normalizeModelId(modelId) + '|' + String(failedPath)];
+  const failureReason =
+    o.failureReason || (failedRecord && failedRecord.status) || 'UNAVAILABLE_NOW';
   const ordered = (paths || []).filter((p) => p && p.id !== failedPath).slice();
   ordered.sort((a, b) => Number(b.evidence || 0) - Number(a.evidence || 0));
   const failures = [];
@@ -119,6 +132,13 @@ async function routeFallback(modelId, failedPath, paths, probe, store, options) 
         path: route.id,
         reason: store.paths[normalizeModelId(modelId) + '|' + route.id].status,
       });
+      continue;
+    }
+    if (
+      (failureReason === 'GEO_BLOCKED' && route.geoBlocked === true) ||
+      route.geoBlocked === true
+    ) {
+      failures.push({ path: route.id, reason: 'GEO_BLOCKED' });
       continue;
     }
     let result;
@@ -133,7 +153,7 @@ async function routeFallback(modelId, failedPath, paths, probe, store, options) 
         type: 'route_fallback',
         modelId: normalizeModelId(modelId),
         failedPath,
-        reason: o.failureReason || 'UNAVAILABLE_NOW',
+        reason: failureReason,
         chosenPath: route.id,
         at: new Date(now).toISOString(),
       });
@@ -141,28 +161,157 @@ async function routeFallback(modelId, failedPath, paths, probe, store, options) 
     }
     failures.push({ path: route.id, reason: recorded.reason });
   }
-  return { ok: false, unavailable: true, modelId: normalizeModelId(modelId), failures };
+  store.events.push({
+    type: 'model_unavailable',
+    modelId: normalizeModelId(modelId),
+    failures: failures.map((failure) => ({ ...failure })),
+    at: new Date(now).toISOString(),
+  });
+  return {
+    ok: false,
+    unavailable: true,
+    modelId: normalizeModelId(modelId),
+    failures,
+  };
+}
+
+async function routeFallbackDiscovered(
+  modelId,
+  failedPath,
+  registry,
+  accounts,
+  catalogue,
+  probe,
+  store,
+  options
+) {
+  const paths = discoverModelPaths(modelId, registry, accounts, catalogue);
+  return routeFallback(modelId, failedPath, paths, probe, store, options);
+}
+
+function discoverModelPaths(modelId, registry, accounts, catalogue) {
+  const normalized = normalizeModelId(modelId);
+  const sources = new Map(((registry && registry.sources) || []).map((s) => [s.id, s]));
+  const providers = (registry && registry.dispatch && registry.dispatch.providers) || {};
+  const known = new Map();
+  for (const account of accounts || []) {
+    const source = sources.get(account && account.provider);
+    const dispatch = providers[String((account && account.provider) || '').toLowerCase()];
+    if (!account || account.enabled === false || !source || !dispatch) continue;
+    const gateway = source.kind === 'router' ? source.id : source.reachedVia || null;
+    if (!gateway) continue;
+    for (const model of catalogue || []) {
+      const id = model && (model.modelId || model.model);
+      if (!id || normalizeModelId(id) !== normalized) continue;
+      if (model.gateway !== gateway) continue;
+      known.set(gateway, {
+        id: gateway,
+        gateway,
+        accountId: account.id,
+        evidence: Number(model.evidence || 0),
+      });
+    }
+  }
+  for (const model of catalogue || []) {
+    const id = model && (model.modelId || model.model);
+    if (!id || normalizeModelId(id) !== normalized || !model.gateway) continue;
+    if (!known.has(model.gateway))
+      known.set(model.gateway, {
+        id: model.gateway,
+        gateway: model.gateway,
+        evidence: Number(model.evidence || 0),
+      });
+  }
+  return [...known.values()];
+}
+
+async function refreshCatalogueRoutes(catalogue, registry, accounts, store, probe, options) {
+  const o = options || {};
+  const cap = Math.max(0, Number(o.cap ?? 20));
+  const timeoutMs = Math.max(1, Number(o.timeoutMs) || 10000);
+  const now = Number(o.now) || Date.now();
+  const seen = new Set();
+  const checked = [];
+  for (const row of catalogue || []) {
+    const modelId = row && (row.modelId || row.model);
+    const routeId = row && row.gateway;
+    if (!modelId || !routeId) continue;
+    const key = normalizeModelId(modelId) + '|' + routeId;
+    if (
+      seen.has(key) ||
+      (o.skipKeys && o.skipKeys.has(key)) ||
+      !isEligible(store, modelId, routeId, now)
+    )
+      continue;
+    seen.add(key);
+    if (checked.length >= cap) break;
+    let result;
+    try {
+      result = await probe(modelId, routeId, { timeoutMs });
+    } catch (error) {
+      result = { ok: false, status: 0, error: String(error) };
+    }
+    const outcome = recordResult(store, modelId, routeId, result, now);
+    checked.push({ modelId, routeId, ...outcome });
+  }
+  return { checked, count: checked.length };
 }
 
 async function recheckDue(store, probe, options) {
   const o = options || {};
   const now = Number(o.now) || Date.now();
-  const cap = Math.max(0, Number(o.cap) || 20);
+  const cap = Math.max(0, Number(o.cap ?? 20));
   const due = Object.values(store.paths)
     .filter((row) => dueAt(row, now))
     .slice(0, cap);
+  const checkedKeys = due.map((row) => normalizeModelId(row.modelId) + '|' + row.routeId);
   const restored = [];
   for (const row of due) {
     let result;
     try {
-      result = await probe(row.modelId, row.routeId);
+      result = await probe(row.modelId, row.routeId, { timeoutMs: o.timeoutMs || 10000 });
     } catch (error) {
       result = { ok: false, error: String(error) };
     }
     const outcome = recordResult(store, row.modelId, row.routeId, result, now);
     if (outcome.eligible) restored.push(row.modelId + '|' + row.routeId);
   }
-  return { checked: due.length, restored };
+  return { checked: due.length, checkedKeys, restored };
+}
+
+async function recheckBeforeSelection(store, probe, options) {
+  const o = options || {};
+  const now = Number(o.now) || Date.now();
+  const due = await recheckDue(store, probe, o);
+  const checkedDue = new Set(due.checkedKeys || []);
+  const freshCatalogue = (o.catalogue || []).filter((row) => {
+    const modelId = row && (row.modelId || row.model);
+    return !modelId || !checkedDue.has(normalizeModelId(modelId) + '|' + row.gateway);
+  });
+  const refreshed = await refreshCatalogueRoutes(
+    freshCatalogue,
+    o.registry,
+    o.accounts || [],
+    store,
+    probe,
+    Object.assign({}, o, {
+      cap: Math.max(0, Number(o.cap ?? 20) - due.checked),
+      skipKeys: new Set(checkedDue),
+    })
+  );
+  return {
+    checked: due.checked + refreshed.count,
+    count: due.checked + refreshed.count,
+    restored: due.restored,
+    refreshed: refreshed.count,
+  };
+}
+
+async function refreshDueFile(file, probe, options) {
+  const store = loadStore(file);
+  const result = await recheckDue(store, probe, options);
+  saveStore(file, store);
+  return { store, ...result };
 }
 
 async function probeGatewayModel(modelId, routeId, options) {
@@ -228,7 +377,12 @@ module.exports = {
   recordResult,
   isEligible,
   routeFallback,
+  routeFallbackDiscovered,
   recheckDue,
+  recheckBeforeSelection,
+  refreshDueFile,
+  discoverModelPaths,
+  refreshCatalogueRoutes,
   probeGatewayModel,
   runDueCli,
   BACKOFF_MS,

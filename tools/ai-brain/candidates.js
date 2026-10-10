@@ -812,6 +812,9 @@ function gatewayAccountCandidates(opts) {
   const accounts = o.accounts || [];
   const catalogue = o.catalogue || [];
   const routeHealth = o.routeHealth;
+  const normalizedHealth = routeHealth || { paths: {} };
+  const probeOk = o.probeOk;
+  const excluded = new Set((o.excludeModels || []).map((id) => String(id).toLowerCase()));
   const routeNow = Number(o.now) || Date.now();
   if (!registry || catalogue.length === 0) return [];
 
@@ -847,13 +850,35 @@ function gatewayAccountCandidates(opts) {
     const accessPath = accessPathOf(source, registry) || '';
     if (!harness || !accessPath) continue;
 
+    const accountModels = account.models;
+    const additions = new Set(
+      (Array.isArray(accountModels) ? accountModels : [])
+        .filter((entry) => typeof entry === 'string' || (entry && entry.exclude !== true))
+        .map((entry) => String(typeof entry === 'string' ? entry : entry.model || '').toLowerCase())
+        .filter(Boolean)
+    );
+    const excludes = new Set(
+      (Array.isArray(accountModels) ? accountModels : [])
+        .filter((entry) => entry && typeof entry === 'object' && entry.exclude === true)
+        .map((entry) => String(entry.model || '').toLowerCase())
+    );
+    let contributed = 0;
     for (const row of catalogue) {
       if (!row || row.gateway !== gateway) continue;
       const upstream = row.upstream || '';
       const modelId = row.modelId || row.model || '';
+      if (!modelId || excluded.has(modelId.toLowerCase()) || excludes.has(modelId.toLowerCase()))
+        continue;
       if (routeHealth) {
         const health = require('./route-health');
-        if (!health.isEligible(routeHealth, modelId, gateway, routeNow)) continue;
+        const normalized = health.normalizeModelId(modelId);
+        const routeRecord = routeHealth.paths[normalized + '|' + gateway];
+        const available = routeRecord
+          ? health.isEligible(routeHealth, modelId, gateway, routeNow)
+          : Boolean(probeOk && probeOk(modelId, gateway));
+        if (!available) continue;
+      } else if (probeOk && !probeOk(modelId, gateway)) {
+        continue;
       }
       // An alias is the prefix the model id itself carries. A row whose id
       // does not begin with its own upstream names no reachable alias, and
@@ -879,7 +904,9 @@ function gatewayAccountCandidates(opts) {
         cost: undefined,
         sharedQuota: 'unknown',
       });
+      contributed += 1;
     }
+    if (typeof o.onAccountCount === 'function') o.onAccountCount(account.id, contributed);
   }
 
   return out;
