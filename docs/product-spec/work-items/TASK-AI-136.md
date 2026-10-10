@@ -103,4 +103,3 @@ Not applicable. This Work Item changes operator-side worker provisioning and its
 ## Residual limitations
 
 - Existing TASK-AI-127 cache-key and stale-ready-marker limitations remain unchanged. Only pnpm offline/store-miss errors trigger the frozen-lockfile online fallback; provisioning warns and never blocks if installation still fails.
-
