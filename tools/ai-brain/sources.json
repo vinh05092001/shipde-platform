@@ -62,7 +62,7 @@
       "harness": "direct-http",
       "accessPath": "direct",
       "endpoint": "https://chat.intern-ai.org.cn/api/v1",
-      "credential": { "type": "sso-api-key", "env": "INTERNLM_API_KEY" },
+      "credential": { "type": "api-key", "env": "INTERNLM_API_KEY" },
       "verify": { "method": "models-list", "path": "/models" },
       "comment": "OpenAI-compatible models API and base URL: https://internlm.intern-ai.org.cn/docEn/docs/Models/."
     },
