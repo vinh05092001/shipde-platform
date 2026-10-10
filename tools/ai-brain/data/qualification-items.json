@@ -1,0 +1,11 @@
+[
+  {
+    "id": "QUALIFY-CODE-REVIEW-01",
+    "kind": "qualification",
+    "risk": "low",
+    "acceptanceCriteria": [
+      "Inspect the assigned change and report concrete correctness issues.",
+      "Return a structured PASS or CHANGES_REQUIRED verdict bound to the reviewed commit."
+    ]
+  }
+]
