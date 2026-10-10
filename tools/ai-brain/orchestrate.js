@@ -2928,6 +2928,23 @@ async function runOrchestration(goal, opts) {
     return refuseRun(log, 'DECISION_LOG_DIR_MISSING: a live run must be able to write its trace');
   }
 
+  if (log.plan.errors.length > 0) {
+    const reason = 'PLANNER_REFUSED: ' + log.plan.errors.join('; ');
+    log.publication = { status: PublicationStatus.REFUSED, reason };
+    for (const error of log.plan.errors) {
+      decisions.recordDecision(
+        {
+          stage: decisions.Stage.REFUSED,
+          workItemId: (error.match(/^[A-Z_]+: ([^ ]+)/) || [])[1] || null,
+          detail: error,
+          reason: error,
+        },
+        logOpts
+      );
+    }
+    return refuseRun(log, reason);
+  }
+
   // TASK-AI-121 LF-R03: the worker timeout every launch (writer, reviewer and
   // repair) starts with, in milliseconds. The CLI flag's unit is minutes
   // (--worker-timeout-min, 1..240, default 30); this is its run-log form.

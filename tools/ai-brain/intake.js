@@ -279,6 +279,76 @@ function readRegisterRow(root, id, deps) {
   }
 }
 
+function readRegisterRows(root, deps) {
+  if (typeof deps.readRegisterRows === 'function') return deps.readRegisterRows();
+  const content = fs.readFileSync(path.join(root, REGISTER_REL), 'utf8');
+  const adapter = require('../ai-dashboard/register-adapter');
+  return adapter.parseRegisterCsv(content, root) || [];
+}
+
+function dependencyHistory(root, baseSha, deps) {
+  if (typeof deps.readHistory === 'function') return deps.readHistory(baseSha);
+  return cp
+    .execFileSync('git', ['log', '--format=%H%x09%s', baseSha], {
+      cwd: root,
+      encoding: 'utf8',
+    })
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => {
+      const tab = line.indexOf('\t');
+      return { sha: line.slice(0, tab), subject: line.slice(tab + 1) };
+    });
+}
+
+function resolveDependencies(root, baseSha, dependencies, deps) {
+  const registerRows = readRegisterRows(root, deps);
+  let history;
+  const getHistory = () => {
+    if (!history) history = dependencyHistory(root, baseSha, deps);
+    return history;
+  };
+  const resolved = [];
+  const unmerged = [];
+  for (const id of dependencies) {
+    const row = registerRows.find((item) => item.work_item_id === id);
+    const registeredSha = row && String(row.merge_commit || '').trim();
+    const historical =
+      registeredSha ||
+      (row &&
+        String(row.status || '')
+          .trim()
+          .toUpperCase() !== 'MERGED')
+        ? null
+        : getHistory().find(
+            (entry) => entry.subject.includes('[' + id + ']') && /\(#\d+\)/.test(entry.subject)
+          );
+    if (
+      row &&
+      String(row.status || '')
+        .trim()
+        .toUpperCase() === 'MERGED'
+    ) {
+      const commitSha = String(row.merge_commit || '').trim() || (historical && historical.sha);
+      if (!commitSha) {
+        unmerged.push(id + ' (MERGED register row has no merge commit SHA)');
+        continue;
+      }
+      resolved.push({ id, commitSha, source: 'register' });
+    } else if (historical) {
+      resolved.push({ id, commitSha: historical.sha, source: 'history' });
+    } else {
+      unmerged.push(id);
+    }
+  }
+  if (unmerged.length) {
+    throw intakeError('DEPENDENCY_NOT_MERGED', 'DEPENDENCY_NOT_MERGED: ' + unmerged.join(', '), {
+      dependencies: unmerged,
+    });
+  }
+  return resolved;
+}
+
 // ---------------------------------------------------------------------------
 // Live catalogue discovery (IN-R03). No model id literal appears above or
 // below: every id is read from a listing at run time.
@@ -613,12 +683,17 @@ async function runIntake(opts, deps) {
     );
   }
 
+  const baseSha = revParseOriginMain(root, d);
+  const resolvedDependencies = resolveDependencies(root, baseSha, derived.dependencies, d);
+  derived.specItem.dependencies = derived.dependencies.filter(
+    (dependency) => !resolvedDependencies.some((resolved) => resolved.id === dependency)
+  );
+
   const catalogue = await buildCatalogue(Object.assign({}, d, { root }));
   const accounts = await (typeof d.listAccounts === 'function'
     ? d.listAccounts()
     : accountsApi.listAccounts());
 
-  const baseSha = revParseOriginMain(root, d);
   const repoRoot = path.resolve(root);
   const hasPoolQuota = Boolean(agyPoolHasQuota(d));
 
@@ -637,6 +712,10 @@ async function runIntake(opts, deps) {
   }
   fs.writeFileSync(path.join(runDir, 'goal.txt'), derived.goal);
   fs.writeFileSync(path.join(runDir, 'specs.json'), JSON.stringify([derived.specItem], null, 2));
+  fs.writeFileSync(
+    path.join(runDir, 'resolved-dependencies.json'),
+    JSON.stringify(resolvedDependencies, null, 2)
+  );
   fs.writeFileSync(path.join(runDir, 'catalogue.json'), JSON.stringify(catalogue.models, null, 2));
   fs.writeFileSync(path.join(runDir, 'accounts.json'), JSON.stringify(accounts, null, 2));
 
@@ -655,6 +734,7 @@ async function runIntake(opts, deps) {
     runDir,
     goal: derived.goal,
     spec: derived.specItem,
+    resolvedDependencies,
     catalogue: catalogue.models,
     warnings: catalogue.warnings,
     sourceStatus: catalogue.sourceStatus,
@@ -704,6 +784,7 @@ async function runIntake(opts, deps) {
 module.exports = {
   runIntake,
   deriveSpec,
+  resolveDependencies,
   buildCatalogue,
   composeOrchestrateCommand,
   assertIsolationFresh,

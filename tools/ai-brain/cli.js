@@ -2917,6 +2917,8 @@ function orchestrateCommand(args, deps = {}) {
           {
             goal,
             status: result.status,
+            plan: result.plan,
+            refusal: result.refusal || null,
             reconciliation: result.reconciliation,
             publication: result.publication,
           },
