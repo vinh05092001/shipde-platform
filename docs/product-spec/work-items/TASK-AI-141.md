@@ -113,6 +113,14 @@ No API, persisted product data, or external side effects change. Candidate gener
 - Parts B to E and their acceptance criteria remain open follow-up work within TASK-AI-141, except proof transfer now included above by supervisor direction.
 - This change consumes the models already discovered by intake; it does not add live per-account pool probing.
 
+## Part B — bounded automatic qualification
+
+- Added `tools/ai-brain/qualification-auto.js` and the `qualify --auto --candidates <json>` CLI surface. Automatic qualification admits only rejected candidates whose sole reason is `PROOF_FLOOR_NOT_MET`; currently blocked candidates and candidates with any additional rejection are excluded.
+- Qualification work is selected only from `tools/ai-brain/data/qualification-items.json`, whose entries are explicitly `kind: qualification` and `risk: low`. The coordinator refuses malformed lists and refuses to grant evidence unless the isolated orchestration adapter returns an independent `PASS` whose `reviewedSha` exactly equals its 40-character commit SHA.
+- Successful runs record `WORK_ITEM_PASS` on the candidate's evidence identity. Per-run and per-day limits are configurable through the coordinator (`perRun`, `perDay`, defaults 1 and 3); usage is tracked by UTC day in `.shipde/qualification-usage.json`. Qualification output is never published or merged by this path.
+- `next --loop` offers an injected qualification slot only after the product register has no ready Work Item. The slot is bounded by the qualification coordinator and remains separate from product intake.
+- Added fake-driven tests for qualification candidate selection, caps, exact-SHA independent review, and rejection of product work. The normal isolated orchestration/reviewer implementation must be supplied as `runIsolatedReviewed`; without it, `qualify --auto` fails closed with `QUALIFICATION_RUNNER_UNAVAILABLE`.
+
 ## Part D
 
 Intake derives risk domains and complexity from the Work Item scope, acceptance criteria, and allowed paths, and records the derivation in each run directory. JEV receives the resulting risk domains and complexity; the Controller enforces a `QUALITY_FIRST` floor for auth, security, money, or tenant-isolation work and records the override reason. Regressions cover a 15-AC MFA-like item and a docs-only item.
