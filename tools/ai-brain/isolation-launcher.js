@@ -267,6 +267,7 @@ function buildWorkerLaunchScript(options) {
   const launchResultPath = options.launchResultPath;
   const workerTimeoutMs = options.workerTimeoutMs;
   const completionNonce = options.completionNonce || crypto.randomBytes(16).toString('hex');
+  const tokenBudget = options.tokenBudget || null;
   const markerPath = options.markerPath || path.join(workerRoot, 'run-target.complete.json');
   // Test-only seam. The generated host script normally impersonates the worker
   // with the DPAPI credential; a regression test executes the SAME generated
@@ -367,6 +368,7 @@ $wrapperStartTime = $process.StartTime
 $stdoutTask = $process.StandardOutput.ReadToEndAsync()
 $stderrTask = $process.StandardError.ReadToEndAsync()
 $timeoutMs = ${workerTimeoutMs}
+$tokenBudgetJson = '${JSON.stringify(tokenBudget || {}).replace(/'/g, "''")}'
 
 # Every process the wrapper started, walked up the parent chain. A process
 # that predates the launch is never a descendant even if a recycled pid makes
@@ -1746,6 +1748,9 @@ function getIsolatedLauncher() {
       Number.isFinite(Number(opts.workerTimeoutMs)) && Number(opts.workerTimeoutMs) > 0
         ? Number(opts.workerTimeoutMs)
         : DEFAULT_WORKER_TIMEOUT_MS;
+    const tokenBudget =
+      opts.tokenBudget && typeof opts.tokenBudget === 'object' ? opts.tokenBudget : null;
+    const budgetJson = tokenBudget ? JSON.stringify(tokenBudget) : '';
 
     // Bound to THIS launch: run-target.ps1 can only write a marker carrying
     // this nonce, so a leftover marker from an earlier job can never satisfy
@@ -1802,6 +1807,9 @@ function getIsolatedLauncher() {
       adapterId: adapter.id,
       rtkPathPrepend,
       credentialEnv: selectedCredentialEnv,
+      tokenBudget,
+      progressTimeoutMs: opts.progressTimeoutMs || null,
+      usageFile: opts.usageFile || null,
     });
 
     const tempScript = path.join(
@@ -1826,11 +1834,49 @@ function getIsolatedLauncher() {
     } catch (e) {}
 
     const launchResult = readLaunchResult(launchResultPath, completionNonce, hostRes);
+    if (opts.tokenBudget && opts.usageFile && Number(opts.tokenBudget.maxTokens) > 0) {
+      try {
+        const report = JSON.parse(fs.readFileSync(opts.usageFile, 'utf8'));
+        const usage = report.usage || {};
+        const total = Number(
+          usage.total_tokens ??
+            usage.total ??
+            Number(usage.input_tokens ?? usage.input ?? 0) +
+              Number(usage.output_tokens ?? usage.output ?? 0)
+        );
+        if (Number.isFinite(total) && total > Number(opts.tokenBudget.maxTokens)) {
+          launchResult.exitCode = 1;
+          launchResult.failureReason = 'TOKEN_BUDGET_EXCEEDED';
+          launchResult.stderr =
+            (launchResult.stderr || '') +
+            '\nTOKEN_BUDGET_EXCEEDED: session exceeded configured token budget';
+        }
+      } catch (_) {
+        /* Missing usage stays unknown rather than becoming an inferred overrun. */
+      }
+    }
     if (exerciseResult) {
       launchResult.exercise = exerciseResult;
       launchResult.failBefore = exerciseResult.failBefore;
     }
     launchResult.rtk = { provided: rtkEnabled, reason: rtkDecision };
+    if (opts.decisionDir) {
+      try {
+        require('./decisions').recordDecision(
+          {
+            stage: require('./decisions').Stage.WARNING,
+            workItemId: opts.workItemId || null,
+            warning: 'RTK_POLICY',
+            detail: rtkDecision,
+            enabled: rtkEnabled,
+          },
+          { dir: opts.decisionDir }
+        );
+      } catch (_) {
+        /* Telemetry failure must not alter the launch verdict. */
+      }
+    }
+    launchResult.tokenBudget = opts.tokenBudget || null;
     return launchResult;
   };
 }

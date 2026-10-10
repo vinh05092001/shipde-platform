@@ -12,6 +12,12 @@ const sources = require('../sources');
 const { candidateKey } = require('../discovery/identity');
 const evidence = require('../evidence');
 const accountsApi = require('../accounts');
+const promptCompiler = require('../prompt-compiler');
+const contextPack = require('../context-pack');
+const cli = require('../cli');
+const { buildWorkerLaunchScript } = require('../isolation-launcher');
+const { runHostBrainGate } = require('../orchestrate');
+const { DEFAULT_TOKEN_BUDGETS } = require('../intake');
 
 const roots = [];
 function fixtureRoot() {
@@ -457,4 +463,190 @@ test('intake supplies empty account options when none are configured', async () 
     }
   );
   assert.deepEqual(receivedOptions, {});
+});
+
+test('Part H: worker prompt requests focused concise tests and host-side full-suite gating', () => {
+  const prompt = promptCompiler.compilePrompt(
+    {
+      id: 'FIXTURE-AI-141',
+      allowedPaths: ['tools/ai-brain/cli.js'],
+      acceptanceCriteria: [],
+    },
+    { focusedTestsOnly: true, contextPack: '.shipde/context.md' }
+  );
+  assert.match(prompt, /Run only focused tests/);
+  assert.match(prompt, /grep -E/);
+  assert.match(prompt, /Controller runs that host-side gate/);
+  assert.match(prompt, /\.shipde\/context\.md/);
+});
+
+test('Part H: intake enables RTK for low risk and suppresses it for risk domains', async () => {
+  const root = fixtureRoot();
+  const low = await intake.runIntake(
+    { workItem: 'FIXTURE-AI-141' },
+    {
+      root,
+      baseSha: 'e'.repeat(40),
+      readRegisterRow: () => ({ dependencies: '' }),
+      readRegisterRows: () => [],
+      listAccounts: () => [],
+      read9routerModels: async () => ({ ok: true, models: ['gemini-fixture-pro'] }),
+      hasAgyPoolQuota: false,
+      readHistory: () => [],
+      isAncestorOf: () => true,
+    }
+  );
+  assert.equal(low.rtk.enabled, true);
+  assert.ok(low.argv.includes('--rtk'));
+  const riskRoot = fixtureRoot();
+  fs.writeFileSync(
+    path.join(riskRoot, 'docs', 'product-spec', 'work-items', 'FIXTURE-AI-141.md'),
+    [
+      '# FIXTURE-AI-141',
+      '',
+      '## Control',
+      '| Field | Value |',
+      '|---|---|',
+      '| Allowed paths | `tools/ai-brain/cli.js` |',
+      '',
+      '## Business Outcome',
+      'Authentication and security behavior.',
+      '',
+      '## Acceptance Matrix',
+      '| ID | Scenario | Expected |',
+      '|---|---|---|',
+      '| AC-1 | auth | protected |',
+      '',
+      '## Verification Commands',
+      '- `node --test tools/ai-brain/test/task-ai-141.test.js`',
+    ].join('\n')
+  );
+  const high = await intake.runIntake(
+    { workItem: 'FIXTURE-AI-141' },
+    {
+      root: riskRoot,
+      baseSha: 'f'.repeat(40),
+      readRegisterRow: () => ({ dependencies: '' }),
+      readRegisterRows: () => [],
+      listAccounts: () => [],
+      read9routerModels: async () => ({ ok: true, models: ['gemini-fixture-pro'] }),
+      hasAgyPoolQuota: false,
+      readHistory: () => [],
+      isAncestorOf: () => true,
+    }
+  );
+  assert.deepEqual(high.spec.riskDomains, ['auth', 'security']);
+  assert.equal(high.rtk.enabled, false);
+  assert.equal(high.argv.includes('--rtk'), false);
+});
+
+test('Part H: isolated launcher accepts RTK only for low risk and blocks repair and risk paths', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'isolation-launcher.js'), 'utf8');
+  assert.match(source, /repair_round_blocks_rtk/);
+  assert.match(source, /risk_domains_block_rtk/);
+  assert.match(source, /opts\.rtk/);
+  assert.match(source, /opts\.riskDomains/);
+});
+
+test('Part H: context pack includes allowed source files and rejects traversal', () => {
+  const root = fixtureRoot();
+  fs.mkdirSync(path.join(root, 'tools', 'ai-brain'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'tools', 'ai-brain', 'cli.js'), 'fixture source');
+  const result = contextPack.createContextPack(
+    [{ allowedPaths: ['tools/ai-brain/cli.js', '../outside.txt'] }],
+    {
+      root,
+      outputDir: path.join(root, 'pack-out'),
+    }
+  );
+  assert.deepEqual(result.files, ['tools/ai-brain/cli.js']);
+  assert.match(result.content, /fixture source/);
+  assert.equal(fs.existsSync(result.path), true);
+});
+
+test('Part H: context pack manifest records output path and included source allowlist', () => {
+  const manifest = fs.readFileSync(path.join(__dirname, '..', 'orchestrate.js'), 'utf8');
+  assert.match(manifest, /contextManifest/);
+  assert.match(manifest, /contextPack\.files/);
+  assert.match(
+    fs.readFileSync(path.join(__dirname, '..', 'intake.js'), 'utf8'),
+    /--context-manifest/
+  );
+});
+
+test('Part H: token usage report groups input, cache-read and output by model and Work Item', () => {
+  const root = fixtureRoot();
+  const usageDir = path.join(root, 'usage');
+  fs.mkdirSync(usageDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(usageDir, 'session.json'),
+    JSON.stringify({
+      workItemId: 'TASK-AI-X',
+      model: 'model-x',
+      usage: { input_tokens: 10, cache_read_tokens: 20, output_tokens: 3 },
+    })
+  );
+  const result = cli.tokenReportCommand({ dir: usageDir }, { log: () => {} });
+  assert.equal(result.records, 1);
+  assert.deepEqual(
+    result.totals.map((row) => [row.key, row.input, row.cacheRead, row.output]),
+    [
+      ['model-x', 10, 20, 3],
+      ['TASK-AI-X', 10, 20, 3],
+    ]
+  );
+});
+
+test('Part H: launcher enforces per-session token budget and preserves bounded timeout', () => {
+  const script = buildWorkerLaunchScript({
+    credPath: 'credential',
+    workerRoot: 'C:\\worker',
+    exeFile: 'agent.exe',
+    payloadArgsPath: 'args.json',
+    launchResultPath: 'result.json',
+    workerTimeoutMs: 90000,
+    tokenBudget: { maxTokens: 12000 },
+    progressTimeoutMs: 60000,
+  });
+  assert.match(script, /\$timeoutMs = 90000/);
+  assert.match(script, /12000/);
+});
+
+test('Part H: host brain gate hides suite output and returns only failing test names', () => {
+  let capturedEnv;
+  const result = runHostBrainGate(
+    {},
+    {
+      spawnSync: (_node, args, opts) => {
+        capturedEnv = opts.env;
+        assert.deepEqual(args, ['--test', 'tools/ai-brain/test/*.test.js']);
+        return {
+          status: 1,
+          stdout: 'not ok 1 - fixture failure\n  noisy detail\nℹ pass 9\nℹ fail 1\n',
+          stderr: '',
+        };
+      },
+    }
+  );
+  assert.equal(capturedEnv.NINEROUTER_API_KEY, undefined);
+  assert.deepEqual(result.failures, ['fixture failure']);
+  assert.deepEqual(result.summary, ['ℹ pass 9', 'ℹ fail 1']);
+});
+
+test('Part H: isolated runs receive role and complexity token caps from policy config', () => {
+  assert.equal(DEFAULT_TOKEN_BUDGETS.byComplexity.simple.maxTokens, 60000);
+  assert.equal(DEFAULT_TOKEN_BUDGETS.byComplexity.standard.maxTokens, 150000);
+  assert.equal(DEFAULT_TOKEN_BUDGETS.byComplexity.complex.maxTokens, 300000);
+  assert.equal(DEFAULT_TOKEN_BUDGETS.byRole.reviewer.maxTurns, 60);
+  const source = fs.readFileSync(path.join(__dirname, '..', 'cli.js'), 'utf8');
+  assert.match(source, /DEFAULT_TOKEN_BUDGETS/);
+});
+
+test('Part H: repeated quota failures reach a bounded fallback threshold', () => {
+  const root = path.join(__dirname, '..', 'isolation-launcher.js');
+  const source = fs.readFileSync(root, 'utf8');
+  const orchestration = fs.readFileSync(path.join(__dirname, '..', 'orchestrate.js'), 'utf8');
+  assert.match(orchestration, /maxQuotaFailures/);
+  assert.match(orchestration, /QUOTA_REPEATED/);
+  assert.match(source, /TOKEN_BUDGET_EXCEEDED/);
 });

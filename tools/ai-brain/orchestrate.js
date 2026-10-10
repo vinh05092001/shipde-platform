@@ -119,6 +119,7 @@ function buildDefaults() {
     isolation: null,
     // TASK-AI-121 LF-R03: the worker timeout this run launches with (ms).
     workerTimeoutMs: null,
+    tokenBudgets: null,
     // TASK-AI-121 LF-R02: set when a stale/missing isolation verdict stopped
     // the run — the reason and the operator action that clears it.
     isolationStop: null,
@@ -1508,6 +1509,40 @@ function writeUsageReportFromHarnessResult(job, res) {
   } catch (err) {
     return null;
   }
+}
+
+function readUsageReport(file) {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (_) {
+    return null;
+  }
+}
+
+function runHostBrainGate(job, options = {}) {
+  const root = options.hostCwd || options.cwd || process.cwd();
+  const node = options.nodeExecutable || process.execPath;
+  const suite = options.brainSuite || 'tools/ai-brain/test/*.test.js';
+  const command = 'node --test ' + suite;
+  const run = options.spawnSync || spawnSync;
+  const result = run(node, ['--test', ...String(suite).split(/\s+/)], {
+    cwd: root,
+    encoding: 'utf8',
+    timeout: options.brainGateTimeoutMs || 30 * 60 * 1000,
+    maxBuffer: 64 * 1024 * 1024,
+    env: Object.assign({}, process.env, { NINEROUTER_API_KEY: undefined }),
+  });
+  const output = String(result.stdout || '') + '\n' + String(result.stderr || '');
+  const failed = [...output.matchAll(/(?:not ok \d+ - |✖ )([^\r\n]+)/g)].map((match) =>
+    match[1].trim()
+  );
+  const summary = output.split(/\r?\n/).filter((line) => /^ℹ (?:pass|fail)\b|^✖ /.test(line));
+  const pass = result.status === 0 && failed.length === 0;
+  if (!pass) {
+    const repairDetails = options.onHostGateFailure ? options.onHostGateFailure(failed) : null;
+    return { pass: false, command, failures: failed, summary, repairDetails };
+  }
+  return { pass: true, command, failures: [], summary };
 }
 
 /** Progress markers, measured host-side from the worker's own worktree. */
@@ -2953,6 +2988,38 @@ async function runOrchestration(goal, opts) {
       ? Number(o.workerTimeoutMs)
       : 30 * 60 * 1000;
   log.workerTimeoutMs = o.workerTimeoutMs;
+  const budgetConfig = o.tokenBudgets || {};
+  const controllerGate = o.hostGate || null;
+  const quotaFailures = new Map();
+  const runRiskDomains = (o.specs || []).flatMap((item) => item.riskDomains || []);
+  const rtkPermitted = Boolean(o.rtk) && runRiskDomains.length === 0 && !o.injectedRun;
+  log.rtk = {
+    enabled: rtkPermitted,
+    reason: !o.rtk ? 'not_requested' : rtkPermitted ? 'low_risk_item' : 'risk_domains_block_rtk',
+  };
+  let contextPack = null;
+  if (o.isolatedWorker && o.enableContextPack) {
+    try {
+      const packer = require('./context-pack');
+      contextPack = packer.createContextPack(o.specs || [], {
+        root: hostCwd,
+        outputDir: o.contextPackDir,
+        sources: o.contextSources,
+      });
+      log.contextPack = { path: contextPack.path, files: contextPack.files.length };
+      if (typeof o.contextManifest === 'string' && o.contextManifest) {
+        fs.mkdirSync(path.dirname(o.contextManifest), { recursive: true });
+        fs.writeFileSync(
+          o.contextManifest,
+          JSON.stringify({ path: contextPack.path, files: contextPack.files }, null, 2) + '\n',
+          'utf8'
+        );
+      }
+    } catch (err) {
+      log.warnings.push('CONTEXT_PACK_UNAVAILABLE: ' + String(err.message || err));
+      contextPack = null;
+    }
+  }
 
   // 2. The worker boundary (AI-64-P03). The isolated launcher is obtained
   //    whenever the run asks for the boundary, whether or not a runner was
@@ -3650,6 +3717,20 @@ async function runOrchestration(goal, opts) {
         break;
       }
       const candidate = candidates.find((c) => candidateKey(c) === decision.chosen);
+      if (
+        attempt >
+        Number(
+          (
+            budgetConfig[roleOf(item)] ||
+            budgetConfig[item.complexity] ||
+            budgetConfig.default ||
+            {}
+          ).maxTurns || Infinity
+        )
+      ) {
+        launch.fallbackReason = 'TURN_BUDGET_EXCEEDED';
+        break;
+      }
       if (launch.firstChoice === null) launch.firstChoice = decision.chosen;
       launch.selected = decision.chosen;
       triedKeys.add(decision.chosen);
@@ -3677,6 +3758,8 @@ async function runOrchestration(goal, opts) {
         isolatedWorker: Boolean(o.isolatedWorker),
         recordTools: false,
         returnTools: true,
+        focusedTestsOnly: Boolean(o.isolatedWorker),
+        contextPack: contextPack && contextPack.path,
       });
       const prompt = compiledPrompt.prompt;
       const promptToolIds = compiledPrompt.tools;
@@ -3726,7 +3809,52 @@ async function runOrchestration(goal, opts) {
         labels: { workItem: String(item.id), role: roleOf(item) },
         exercise: o.exercise || null,
         workerTimeoutMs: o.workerTimeoutMs || null,
+        rtk: { enabled: rtkPermitted },
+        lowRisk: rtkPermitted,
+        riskDomains: item.riskDomains || [],
+        tokenBudgetConfig: budgetConfig,
+        tokenBudget:
+          budgetConfig.byRole?.[roleOf(item)] ||
+          budgetConfig.byComplexity?.[item.complexity] ||
+          budgetConfig[roleOf(item)] ||
+          budgetConfig[item.complexity] ||
+          budgetConfig.default ||
+          null,
+        maxTurns:
+          (
+            budgetConfig.byRole?.[roleOf(item)] ||
+            budgetConfig.byComplexity?.[item.complexity] ||
+            budgetConfig[roleOf(item)] ||
+            budgetConfig[item.complexity] ||
+            budgetConfig.default ||
+            {}
+          ).maxTurns || null,
+        maxQuotaFailures:
+          (
+            budgetConfig.byRole?.[roleOf(item)] ||
+            budgetConfig.byComplexity?.[item.complexity] ||
+            budgetConfig[roleOf(item)] ||
+            budgetConfig[item.complexity] ||
+            budgetConfig.default ||
+            {}
+          ).repeatedQuotaFailures || 3,
+        progressTimeoutMs: o.progressTimeoutMs || null,
+        hostGate: Boolean(controllerGate),
+        decisionDir: o.decisionDir || null,
+        workItemId: item.id,
       };
+      if (rtkPermitted) {
+        decisions.recordDecision(
+          {
+            stage: decisions.Stage.WARNING,
+            workItemId: item.id,
+            warning: 'RTK_POLICY',
+            detail: 'low_risk_item',
+            enabled: true,
+          },
+          logOpts
+        );
+      }
 
       // The exercise runner exists in the worker's own tree before the agent
       // starts, so the fail-before at the pinned base SHA is a real captured run
@@ -3849,6 +3977,47 @@ async function runOrchestration(goal, opts) {
           },
         });
       }
+      if (job.usageFile && !o.injectedRun) {
+        const report = readUsageReport(job.usageFile);
+        if (report) {
+          const usage = report.usage || report;
+          decisions.recordDecision(
+            {
+              stage: decisions.Stage.WARNING,
+              warning: 'TOKEN_USAGE',
+              workItemId: item.id,
+              role: roleOf(item),
+              model: job.model,
+              tokenUsage: {
+                input: Number(usage.input_tokens ?? usage.input ?? 0) || 0,
+                cacheRead:
+                  Number(usage.cache_read_tokens ?? usage.cacheRead ?? usage.cache_read ?? 0) || 0,
+                output: Number(usage.output_tokens ?? usage.output ?? 0) || 0,
+                total: Number(usage.total_tokens ?? usage.total ?? 0) || 0,
+              },
+            },
+            logOpts
+          );
+        }
+      }
+      if (controllerGate && res && res.exitCode === 0) {
+        const gate = await controllerGate(job);
+        log.hostGate = gate;
+        if (!gate.pass) {
+          if (gate.failures && gate.failures.length) {
+            const repair = candidates.find(
+              (candidate) => candidateKey(candidate) !== decision.chosen
+            );
+            if (repair && typeof o.hostGateRepair === 'function') {
+              await o.hostGateRepair({ job, failures: gate.failures, candidate: repair });
+            }
+          }
+          res = Object.assign({}, res, {
+            exitCode: 1,
+            stderr: (res.stderr || '') + '\nHOST_GATE_FAILED: ' + (gate.failures || []).join(', '),
+          });
+        }
+      }
 
       if (previousLaunch && previousLaunch.candidateKey === decision.chosen) {
         writeUsageReportFromHarnessResult(job, res);
@@ -3924,6 +4093,18 @@ async function runOrchestration(goal, opts) {
             accountId: candidate.accountId,
             timedOut: isLauncherTimedOut,
           });
+        const quotaLike = /quota_exhausted|\b429\b|rate limit/i.test(
+          String((res && res.stderr) || '') + ' ' + String((res && res.stdout) || '')
+        );
+        if (quotaLike) {
+          const domain = routing.canonicalFailureDomain(candidate);
+          const count = (quotaFailures.get(domain) || 0) + 1;
+          quotaFailures.set(domain, count);
+          if (count >= Number(job.maxQuotaFailures || 3)) {
+            classification.cause = 'QUOTA_REPEATED';
+            launch.fallbackReason = 'QUOTA_REPEATED';
+          }
+        }
         launch.scope = classification.scope;
         launch.cause = classification.cause;
         launch.outcome = 'failed';
@@ -7064,6 +7245,7 @@ function finish(log, statusOf, ctx) {
 }
 
 module.exports = {
+  runHostBrainGate,
   runOrchestration,
   runVerificationCommand,
   runFormatGateForTest,

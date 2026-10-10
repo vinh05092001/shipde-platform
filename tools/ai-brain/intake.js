@@ -38,6 +38,57 @@ const ROLE_DEFAULT = 'author.foundation';
 const COMPLEXITY_DEFAULT = 'standard';
 const REVIEW_BUDGET = '2';
 const WORKER_TIMEOUT_MIN = '60';
+const RTK_RISK_DOMAINS = [
+  'auth',
+  'security',
+  'money',
+  'tenant isolation',
+  'tenant_isolation',
+  'tenancy',
+  'carrier',
+];
+
+const DEFAULT_TOKEN_BUDGETS = {
+  default: { maxTokens: 150000, maxTurns: 80, noProgressMinutes: 10, repeatedQuotaFailures: 3 },
+  byRole: {
+    'author.foundation': {
+      maxTokens: 250000,
+      maxTurns: 100,
+      noProgressMinutes: 10,
+      repeatedQuotaFailures: 3,
+    },
+    reviewer: { maxTokens: 120000, maxTurns: 60, noProgressMinutes: 8, repeatedQuotaFailures: 3 },
+  },
+  byComplexity: {
+    simple: { maxTokens: 60000, maxTurns: 40, noProgressMinutes: 8, repeatedQuotaFailures: 3 },
+    standard: { maxTokens: 150000, maxTurns: 80, noProgressMinutes: 10, repeatedQuotaFailures: 3 },
+    complex: { maxTokens: 300000, maxTurns: 120, noProgressMinutes: 15, repeatedQuotaFailures: 3 },
+  },
+};
+
+function deriveRiskDomains(text) {
+  const explicit = controlValue(text, ['risk domains', 'riskdomains']);
+  if (explicit)
+    return unique(
+      explicit
+        .split(/[,;|]/)
+        .map((value) => stripTicks(value).toLowerCase())
+        .filter(Boolean)
+    );
+  const sections = String(text || '')
+    .split(/^##\s+/m)
+    .filter((section) => /^(In Scope|Scope|Acceptance|Business Outcome)\b/i.test(section));
+  const body = sections.join('\n').toLowerCase();
+  const rules = [
+    ['auth', /\bauth(?:entication|orization)?\b|\blogin\b/],
+    ['security', /\bsecurity\b|\bsecret\b|\bcredential\b/],
+    ['money', /\bmoney\b|\bpayment\b|\bsettlement\b|\bcod\b/],
+    ['tenant isolation', /\btenant\b|\bshop scope\b/],
+    ['carrier', /\bcarrier (?:side effect|action|integration)\b|\bcreate (?:shipment|waybill)\b/],
+  ];
+  return rules.filter(([, pattern]) => pattern.test(body)).map(([name]) => name);
+}
+
 const EXTERNAL_WORKERS_VALUE = 'agy-pool';
 const ISOLATION_VERDICT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
@@ -214,6 +265,7 @@ function deriveSpec({ id, workItemText, registerItem, root, deps }) {
   const namedRole = controlValue(workItemText, ['role']);
   const role = namedRole ? stripTicks(namedRole) : ROLE_DEFAULT;
 
+  const riskDomains = deriveRiskDomains(workItemText);
   const declaredComplexity = controlValue(workItemText, ['complexity']);
   const complexity =
     declaredComplexity && stripTicks(declaredComplexity)
@@ -247,6 +299,7 @@ function deriveSpec({ id, workItemText, registerItem, root, deps }) {
     dependencies: dependencies.slice(),
     acceptanceCriteria: acceptanceCriteria.slice(),
     verification,
+    riskDomains,
   };
 
   return {
@@ -559,6 +612,7 @@ function composeOrchestrateCommand({
   hasAgyPoolQuota,
   publish,
   decisionDir,
+  rtk = false,
 }) {
   const cli = path.join(root, 'tools', 'ai-brain', 'cli.js');
   const runFiles = {
@@ -568,7 +622,14 @@ function composeOrchestrateCommand({
     accounts: path.join(runDir, 'accounts.json'),
     checkpoint: path.join(runDir, 'checkpoint.json'),
     decisionDir: decisionDir || path.join(runDir, 'decisions'),
+    tokenBudgets: path.join(runDir, 'token-budgets.json'),
   };
+  fs.writeFileSync(
+    runFiles.tokenBudgets,
+    JSON.stringify(DEFAULT_TOKEN_BUDGETS, null, 2) + '\n',
+    'utf8'
+  );
+  runFiles.contextManifest = path.join(runDir, 'context-manifest.json');
   const argv = [
     'node',
     cli,
@@ -594,8 +655,13 @@ function composeOrchestrateCommand({
     runFiles.checkpoint,
     '--decision-dir',
     runFiles.decisionDir,
+    '--token-budgets',
+    runFiles.tokenBudgets,
+    '--context-manifest',
+    runFiles.contextManifest,
   ];
   if (hasAgyPoolQuota) argv.push('--external-workers', EXTERNAL_WORKERS_VALUE);
+  if (rtk) argv.push('--rtk');
   if (publish) argv.push('--publish');
   return { argv, command: argv.map(quoteArg).join(' '), runFiles };
 }
@@ -697,6 +763,10 @@ async function runIntake(opts, deps) {
 
   const repoRoot = path.resolve(root);
   const hasPoolQuota = Boolean(agyPoolHasQuota(d));
+  const riskDomains = Array.isArray(derived.specItem.riskDomains)
+    ? derived.specItem.riskDomains
+    : [];
+  const rtkEnabled = !RTK_RISK_DOMAINS.some((domain) => riskDomains.includes(domain));
 
   const runDir = path.join(
     root,
@@ -728,6 +798,7 @@ async function runIntake(opts, deps) {
     hasAgyPoolQuota: hasPoolQuota,
     publish: Boolean(o.publish),
     decisionDir: o.decisionDir || d.decisionDir,
+    rtk: rtkEnabled,
   });
 
   const result = {
@@ -735,6 +806,7 @@ async function runIntake(opts, deps) {
     runDir,
     goal: derived.goal,
     spec: derived.specItem,
+    rtk: { enabled: rtkEnabled, reason: rtkEnabled ? 'low_risk_item' : 'risk_domains_block_rtk' },
     resolvedDependencies,
     catalogue: catalogue.models,
     warnings: catalogue.warnings,
@@ -784,7 +856,9 @@ async function runIntake(opts, deps) {
 
 module.exports = {
   runIntake,
+  DEFAULT_TOKEN_BUDGETS,
   deriveSpec,
+  deriveRiskDomains,
   resolveDependencies,
   buildCatalogue,
   composeOrchestrateCommand,
@@ -797,6 +871,7 @@ module.exports = {
   COMPLEXITY_DEFAULT,
   REVIEW_BUDGET,
   WORKER_TIMEOUT_MIN,
+  RTK_RISK_DOMAINS,
   EXTERNAL_WORKERS_VALUE,
   ISOLATION_VERDICT_MAX_AGE_MS,
 };
