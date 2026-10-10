@@ -217,10 +217,9 @@ const RISK_DOMAIN_PATTERNS = Object.freeze({
 function deriveRiskDomains(text) {
   const explicit = controlValue(text, ['risk domains', 'risk domain']);
   if (explicit) {
-    const normalized = explicit.toLowerCase();
-    return Object.keys(RISK_DOMAIN_PATTERNS).filter((domain) =>
-      normalized.includes(domain.toLowerCase())
-    );
+    return Object.entries(RISK_DOMAIN_PATTERNS)
+      .filter(([, pattern]) => pattern.test(explicit))
+      .map(([domain]) => domain);
   }
   const scope = sectionBody(text, /^##\s+(?:In Scope|Scope|Acceptance Matrix|Acceptance)\b/i);
   const acceptance = sectionBody(text, /^##\s+Acceptance(?: Matrix)?\b/i);
@@ -234,7 +233,7 @@ function deriveComplexity(text, acceptanceCriteria, riskDomains, allowedPaths) {
   const acCount = acceptanceCriteria.length;
   const layers = new Set();
   const scope = sectionBody(text, /^##\s+(?:In Scope|Scope)\b/i);
-  const material = scope + '\n' + allowedPaths.join('\n');
+  const material = [scope, ...allowedPaths, ...acceptanceCriteria].join('\n');
   if (/\b(?:database|schema|migration|prisma|persistence|storage)\b/i.test(material))
     layers.add('database');
   if (/\b(?:api|endpoint|route|service|backend|controller)\b/i.test(material)) layers.add('api');
@@ -268,7 +267,23 @@ function deriveSpec({ id, workItemText, registerItem, root, deps }) {
   if (acceptanceCriteria.length === 0) missing.push('acceptanceCriteria');
 
   const riskDomains = deriveRiskDomains(workItemText);
-  const complexity = deriveComplexity(workItemText, acceptanceCriteria, riskDomains, allowedPaths);
+  const explicitComplexity = controlValue(workItemText, ['complexity']);
+  const derivedComplexity = deriveComplexity(
+    workItemText,
+    acceptanceCriteria,
+    riskDomains,
+    allowedPaths
+  );
+  const complexityRank = { standard: 0, large: 1, complex: 2 };
+  const normalizedExplicitComplexity = explicitComplexity
+    ? stripTicks(explicitComplexity).toLowerCase()
+    : null;
+  const complexity =
+    normalizedExplicitComplexity && complexityRank[normalizedExplicitComplexity]
+      ? complexityRank[normalizedExplicitComplexity] > complexityRank[derivedComplexity]
+        ? normalizedExplicitComplexity
+        : derivedComplexity
+      : derivedComplexity;
 
   let verificationCommands = deriveVerificationCommands(workItemText);
   if (verificationCommands.length === 0) verificationCommands = foundationCommands(root, deps);

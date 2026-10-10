@@ -85,6 +85,7 @@ test('Part D derives high-risk complexity and enforces the JEV quality floor', a
       '| Field | Value |',
       '|---|---|',
       '| Allowed paths | `src/api/auth.ts`; `src/ui/login.tsx`; `prisma/schema.prisma` |',
+      '| Complexity | standard |',
       '## Business Outcome',
       'Protect user authentication.',
       '## In Scope',
@@ -109,6 +110,28 @@ test('Part D derives high-risk complexity and enforces the JEV quality floor', a
   });
   assert.equal(derived.complexity, 'complex');
   assert.deepEqual(derived.riskDomains, ['auth', 'security', 'database ownership']);
+
+  const explicit = intake.deriveSpec({
+    id: 'EXPLICIT-AI-141',
+    workItemText: [
+      '## Control',
+      '| Field | Value |',
+      '|---|---|',
+      '| Complexity | complex |',
+      '| Risk Domains | tenant |',
+      '## In Scope',
+      'Update service behavior.',
+      '## Acceptance Matrix',
+      '| ID | Scenario | Expected |',
+      '|---|---|---|',
+      '| AC-1 | Update | Works |',
+    ].join('\n'),
+    registerItem: { dependencies: '' },
+    root,
+    deps: {},
+  });
+  assert.equal(explicit.complexity, 'complex');
+  assert.deepEqual(explicit.riskDomains, ['tenant isolation']);
 
   let question;
   const assessment = await routing.assessTask(
@@ -177,6 +200,13 @@ test('intake catalogue and real account registry plus pool discovery produce can
       readEvidenceModels: async () => ({ ok: true, models: [] }),
     }
   );
+
+  const derivation = JSON.parse(
+    fs.readFileSync(path.join(result.runDir, 'derivation.json'), 'utf8')
+  );
+  assert.equal(derivation.complexity, 'standard');
+  assert.deepEqual(derivation.riskDomains, []);
+  assert.equal(derivation.acceptanceCriteriaCount, 1);
 
   assert.deepEqual(result.catalogue, ['ag/' + backendModel]);
   assert.match(result.command, /--external-workers agy-pool/);
