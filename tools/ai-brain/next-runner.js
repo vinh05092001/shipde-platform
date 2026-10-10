@@ -744,6 +744,55 @@ async function nextLoop(options, deps) {
     const item = findResult.item;
     log(`Next Work Item: ${item.work_item_id} (status: ${item.status})`);
 
+    // TASK-AI-141 G: when the selected dependency-ready backlog item has no
+    // Work Item document, plan it before attempting author intake. Planning is
+    // a separate lane and is not counted against the implementation ceiling.
+    const workItemPath = path.join(
+      rootDir,
+      'docs',
+      'product-spec',
+      'work-items',
+      item.work_item_id + '.md'
+    );
+    if (String(item.status).trim() === 'BACKLOG' && !fs.existsSync(workItemPath)) {
+      try {
+        const planning = require('./work-item-planner');
+        const planned = await planning.planWorkItem(
+          item.work_item_id,
+          { rootDir, run: Boolean(d.runPlanning), allowDraftOnMissingExecutor: true },
+          d.planningDeps || { runPlanning: d.runPlanning }
+        );
+        const outcome = planned && planned.status === 'READY_FOR_AUTHOR' ? 'planned' : 'blocked';
+        terminalWorkItems.set(item.work_item_id, outcome);
+        decisions.recordDecision(
+          {
+            stage: outcome === 'planned' ? decisions.Stage.COMPLETED : decisions.Stage.REFUSED,
+            workItemId: item.work_item_id,
+            detail: outcome === 'planned' ? 'WORK_ITEM_PLANNED' : 'PLANNING_BLOCKED',
+            status: planned && planned.status,
+            reason: planned && planned.reason,
+          },
+          logOpts
+        );
+        log(`Planning ${item.work_item_id} ended with ${outcome}.`);
+        if (iteration < maxIterations) await sleepFn(pollIntervalMs);
+        continue;
+      } catch (err) {
+        terminalWorkItems.set(item.work_item_id, 'planning-failed');
+        decisions.recordDecision(
+          {
+            stage: decisions.Stage.FAILED,
+            workItemId: item.work_item_id,
+            detail: err && err.code ? err.code : 'PLANNING_FAILED',
+            reason: err && err.message,
+          },
+          logOpts
+        );
+        log(`Planning ${item.work_item_id} failed: ${err && err.message ? err.message : err}`);
+        return { stopped: true, reason: 'PLANNING_FAILED', workItemId: item.work_item_id };
+      }
+    }
+
     // 3. Check candidate lanes
     const laneStatus = checkCandidateLanes({ ...opts, now }, d);
     if (!laneStatus.available) {
@@ -964,6 +1013,8 @@ function nextCommand(args, deps) {
       stopFile,
       decisionDir,
       json,
+      runPlanning: deps && deps.runPlanning,
+      planningDeps: deps && deps.planningDeps,
       ...args,
     },
     deps

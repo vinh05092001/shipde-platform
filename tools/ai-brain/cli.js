@@ -3037,6 +3037,26 @@ function intakeCommand(args, deps = {}) {
     });
 }
 
+function planCommand(args, deps = {}) {
+  const id = args['work-item'] || args.workItem;
+  if (typeof id !== 'string' || !id.trim()) {
+    const error = new Error('plan requires --work-item <ID>');
+    error.code = 'PLAN_INVALID_ID';
+    return Promise.reject(error);
+  }
+  const planner = deps.planWorkItem ? deps : require('./work-item-planner');
+  return Promise.resolve(
+    planner.planWorkItem(
+      id.trim(),
+      {
+        rootDir: args.root || process.cwd(),
+        run: Boolean(args.run),
+      },
+      deps
+    )
+  );
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const command = args._[0] || 'reconcile';
@@ -3165,6 +3185,22 @@ function main() {
     return;
   }
 
+  // plan (TASK-AI-141 G): draft only from approved, cited repository sources.
+  if (command === 'plan') {
+    planCommand(args)
+      .then((result) => {
+        console.log(JSON.stringify(result, null, 2));
+        if (result && result.blocking) process.exitCode = 1;
+      })
+      .catch((err) => {
+        console.error(
+          (err && err.code ? err.code + ': ' : '') + (err && err.message ? err.message : err)
+        );
+        process.exitCode = 1;
+      });
+    return;
+  }
+
   // next (TASK-AI-132): pick the next dependency-ready Work Item and run through intake.
   if (command === 'next') {
     const { nextCommand } = require('./next-runner');
@@ -3193,7 +3229,7 @@ function main() {
 
   console.error('Lệnh không rõ: ' + command);
   console.error(
-    'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | discovery | account | probe | qualify | serena | evidence | review | orchestrate | intake | next | merge'
+    'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | discovery | account | probe | qualify | serena | evidence | review | orchestrate | intake | plan | next | merge'
   );
   process.exit(2);
 }
@@ -3221,6 +3257,7 @@ module.exports = {
   orchestrateCommand,
   mergeCommand,
   intakeCommand,
+  planCommand,
   nextCommand: (args, deps) => require('./next-runner').nextCommand(args, deps),
 };
 
