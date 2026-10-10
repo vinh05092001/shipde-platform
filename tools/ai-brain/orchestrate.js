@@ -1523,9 +1523,33 @@ function runHostBrainGate(job, options = {}) {
   const root = options.hostCwd || options.cwd || process.cwd();
   const node = options.nodeExecutable || process.execPath;
   const suite = options.brainSuite || 'tools/ai-brain/test/*.test.js';
-  const command = 'node --test ' + suite;
   const run = options.spawnSync || spawnSync;
-  const result = run(node, ['--test', ...String(suite).split(/\s+/)], {
+  const suiteFiles = String(suite)
+    .split(/\s+/)
+    .filter(Boolean)
+    .flatMap((pattern) => {
+      if (!pattern.includes('*')) return [pattern];
+      const normalized = pattern.replace(/\\/g, '/');
+      const slash = normalized.lastIndexOf('/');
+      const directory = slash < 0 ? '.' : normalized.slice(0, slash);
+      const basename = slash < 0 ? normalized : normalized.slice(slash + 1);
+      const escaped = basename.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
+      const matcher = new RegExp('^' + escaped + '$');
+      return fs
+        .readdirSync(path.resolve(root, directory), { withFileTypes: true })
+        .filter((entry) => entry.isFile() && matcher.test(entry.name))
+        .map((entry) => path.posix.join(directory.replace(/\\/g, '/'), entry.name));
+    });
+  if (suiteFiles.length === 0) {
+    return {
+      pass: false,
+      command: 'node --test ' + String(suite),
+      failures: ['NO_BRAIN_TEST_FILES'],
+      summary: [],
+    };
+  }
+  const command = 'node --test ' + suiteFiles.join(' ');
+  const result = run(node, ['--test', ...suiteFiles], {
     cwd: root,
     encoding: 'utf8',
     timeout: options.brainGateTimeoutMs || 30 * 60 * 1000,
@@ -2989,13 +3013,29 @@ async function runOrchestration(goal, opts) {
       : 30 * 60 * 1000;
   log.workerTimeoutMs = o.workerTimeoutMs;
   const budgetConfig = o.tokenBudgets || {};
+  const budgetProgressMs =
+    Number(
+      (budgetConfig.byRole?.['author.foundation'] || budgetConfig.default || {})
+        .noProgressMinutes || 0
+    ) *
+    60 *
+    1000;
+  o.progressTimeoutMs =
+    Number(o.progressTimeoutMs) > 0 ? Number(o.progressTimeoutMs) : budgetProgressMs;
   const controllerGate = o.hostGate || null;
   const quotaFailures = new Map();
   const runRiskDomains = (o.specs || []).flatMap((item) => item.riskDomains || []);
+  const riskDomainsByItem = new Map(
+    (o.specs || []).map((item) => [
+      item.id,
+      Array.isArray(item.riskDomains) ? item.riskDomains : [],
+    ])
+  );
   const rtkPermitted = Boolean(o.rtk) && runRiskDomains.length === 0 && !o.injectedRun;
   log.rtk = {
     enabled: rtkPermitted,
     reason: !o.rtk ? 'not_requested' : rtkPermitted ? 'low_risk_item' : 'risk_domains_block_rtk',
+    riskDomains: [...new Set(runRiskDomains)],
   };
   let contextPack = null;
   if (o.isolatedWorker && o.enableContextPack) {
@@ -3811,7 +3851,7 @@ async function runOrchestration(goal, opts) {
         workerTimeoutMs: o.workerTimeoutMs || null,
         rtk: { enabled: rtkPermitted },
         lowRisk: rtkPermitted,
-        riskDomains: item.riskDomains || [],
+        riskDomains: riskDomainsByItem.get(item.id) || item.riskDomains || [],
         tokenBudgetConfig: budgetConfig,
         tokenBudget:
           budgetConfig.byRole?.[roleOf(item)] ||
@@ -3851,6 +3891,17 @@ async function runOrchestration(goal, opts) {
             warning: 'RTK_POLICY',
             detail: 'low_risk_item',
             enabled: true,
+          },
+          logOpts
+        );
+      } else if (o.rtk) {
+        decisions.recordDecision(
+          {
+            stage: decisions.Stage.WARNING,
+            workItemId: item.id,
+            warning: 'RTK_POLICY',
+            detail: o.injectedRun ? 'injected_run_blocks_rtk' : 'risk_domains_block_rtk',
+            enabled: false,
           },
           logOpts
         );
@@ -3908,6 +3959,9 @@ async function runOrchestration(goal, opts) {
           res = { exitCode: -1, stdout: '', stderr: String((err && err.message) || err) };
         }
         if (res && res.exercise) job.exercise = res.exercise;
+        if (res && res.failureReason === 'TOKEN_BUDGET_EXCEEDED') {
+          res = Object.assign({}, res, { exitCode: 1 });
+        }
         writeUsageReportFromHarnessResult(job, res);
         const adapter = harnessFor({ harness: job.harness });
         const launchHandle = adapter
@@ -4070,7 +4124,65 @@ async function runOrchestration(goal, opts) {
       // for, because a live session past the stall window is STALLED and a live
       // session still working is still running.
       const exited = Boolean(res) && res.exitCode !== null && res.exitCode !== undefined;
-      if (!res || (exited && res.exitCode !== 0)) {
+      const progressSnapshot = res && !exited ? progressOf(o, res, now) : null;
+      const effectiveStallMs = Number(o.stallMs || o.progressTimeoutMs || 0);
+      const progressStalled = Boolean(
+        progressSnapshot &&
+        effectiveStallMs > 0 &&
+        classifySession(Object.assign({}, res, { progress: progressSnapshot }), {
+          now: Date.now(),
+          stallMs: effectiveStallMs,
+        }) === SessionStatus.STALLED
+      );
+      const budgetExceeded = Boolean(res && res.failureReason === 'TOKEN_BUDGET_EXCEEDED');
+      const launcherStalled = Boolean(res && res.failureReason === 'STALLED_NO_PROGRESS');
+      if (budgetExceeded) {
+        launch.fallbackReason = 'TOKEN_BUDGET_EXCEEDED';
+      }
+      if (progressStalled) launch.fallbackReason = 'STALLED_NO_PROGRESS';
+      if (launcherStalled) launch.fallbackReason = 'STALLED_NO_PROGRESS';
+      if (budgetExceeded || launcherStalled) res = Object.assign({}, res, { exitCode: 1 });
+      if (progressStalled || budgetExceeded || launcherStalled) {
+        launch.scope = 'local';
+        launch.cause =
+          progressStalled || launcherStalled ? 'STALLED_NO_PROGRESS' : 'TOKEN_BUDGET_EXCEEDED';
+        launch.outcome = 'failed';
+      }
+      if (budgetExceeded) {
+        failedKeys.add(decision.chosen);
+        const currentStep = liveSteps[item.id] || {};
+        const failureList = (currentStep.failures || []).slice();
+        if (!failureList.some((failure) => failure.failedCandidateKey === decision.chosen)) {
+          failureList.push({
+            failedCandidateKey: decision.chosen,
+            failureScope: 'local',
+            failureDomain: null,
+            forbiddenDomain: null,
+            cause: 'TOKEN_BUDGET_EXCEEDED',
+          });
+        }
+        persistStep(item.id, 'worker_launch_failed', { failures: failureList });
+        decisions.recordDecision(
+          {
+            stage: decisions.Stage.FAILED,
+            workItemId: item.id,
+            chosen: decision.chosen,
+            failureScope: 'local',
+            cause: 'TOKEN_BUDGET_EXCEEDED',
+            detail: 'worker exceeded configured token budget; stopping session',
+          },
+          logOpts
+        );
+      }
+      if (
+        !res ||
+        (exited && res.exitCode !== 0) ||
+        progressStalled ||
+        budgetExceeded ||
+        launcherStalled
+      ) {
+        if (progressStalled || budgetExceeded || launcherStalled)
+          res = Object.assign({}, res || {}, { exitCode: 1 });
         // The failure is classified by the shared classifier, and the replacement
         // is chosen by the Controller's failure-domain rule rather than by a scan
         // of this loop (AI-64-R11).
@@ -4096,6 +4208,24 @@ async function runOrchestration(goal, opts) {
         const quotaLike = /quota_exhausted|\b429\b|rate limit/i.test(
           String((res && res.stderr) || '') + ' ' + String((res && res.stdout) || '')
         );
+        if (res && res.failureReason === 'TOKEN_BUDGET_EXCEEDED') {
+          classification.scope = 'local';
+          classification.cause = 'TOKEN_BUDGET_EXCEEDED';
+          launch.fallbackReason = 'TOKEN_BUDGET_EXCEEDED';
+        }
+        if (res && res.failureReason === 'STALLED_NO_PROGRESS') {
+          classification.scope = 'local';
+          classification.cause = 'STALLED_NO_PROGRESS';
+          launch.fallbackReason = 'STALLED_NO_PROGRESS';
+        }
+        if (progressStalled) {
+          classification.scope = 'local';
+          classification.cause = 'STALLED_NO_PROGRESS';
+        }
+        if (launcherStalled) {
+          classification.scope = 'local';
+          classification.cause = 'STALLED_NO_PROGRESS';
+        }
         if (quotaLike) {
           const domain = routing.canonicalFailureDomain(candidate);
           const count = (quotaFailures.get(domain) || 0) + 1;
@@ -4142,6 +4272,12 @@ async function runOrchestration(goal, opts) {
           // A local failure is nobody's fault: it consumes no failure-domain
           // attempt budget either, so the same candidate key stays selectable.
           domainAttempts.set(candDomain, Math.max(0, (domainAttempts.get(candDomain) || 0) - 1));
+          if (
+            classification.cause === 'TOKEN_BUDGET_EXCEEDED' ||
+            classification.cause === 'STALLED_NO_PROGRESS'
+          ) {
+            failedKeys.add(decision.chosen);
+          }
         }
         // TASK-AI-121 LF-R01: a local launch infrastructure failure is not
         // evidence about the candidate — it sets no evidence cooldown.
@@ -4255,7 +4391,13 @@ async function runOrchestration(goal, opts) {
           break;
         }
         launch.fallbackReason =
-          'FIRST_CANDIDATE_FAILED: ' + classification.scope + ' (' + classification.cause + ')';
+          progressStalled || budgetExceeded
+            ? classification.cause
+            : 'FIRST_CANDIDATE_FAILED: ' + classification.scope + ' (' + classification.cause + ')';
+        launch.scope = classification.scope;
+        launch.cause = classification.cause;
+        launch.outcome = 'failed';
+        log.launches.push(launch);
         continue;
       }
 
@@ -4276,8 +4418,8 @@ async function runOrchestration(goal, opts) {
       const status = classifySession(
         Object.assign({}, res, { progress: progressOf(o, res, now) }),
         {
-          now,
-          stallMs: o.stallMs,
+          now: Date.now(),
+          stallMs: o.stallMs || o.progressTimeoutMs,
         }
       );
       session = {
@@ -4329,6 +4471,45 @@ async function runOrchestration(goal, opts) {
       );
 
       if (status !== SessionStatus.COMPLETED_WITH_ARTIFACT) {
+        if (status === SessionStatus.STALLED) {
+          const failureCause = 'STALLED_NO_PROGRESS';
+          launch.fallbackReason = failureCause;
+          launch.scope = 'local';
+          launch.cause = failureCause;
+          launch.outcome = 'failed';
+          failedKeys.add(decision.chosen);
+          decisions.recordDecision(
+            {
+              stage: decisions.Stage.FAILED,
+              workItemId: item.id,
+              chosen: decision.chosen,
+              failureScope: 'local',
+              cause: failureCause,
+              detail:
+                failureCause === 'STALLED_NO_PROGRESS'
+                  ? 'worker exceeded progress timeout without progress'
+                  : 'session exceeded configured token budget',
+            },
+            logOpts
+          );
+          log.launches[log.launches.length - 1] = launch;
+          blockedReason = failureCause;
+          break;
+        }
+        if (budgetExceeded) {
+          launch.fallbackReason = 'TOKEN_BUDGET_EXCEEDED';
+          launch.scope = 'local';
+          launch.cause = 'TOKEN_BUDGET_EXCEEDED';
+          launch.outcome = 'failed';
+          failedKeys.add(decision.chosen);
+          log.launches[log.launches.length - 1] = launch;
+          blockedReason = 'TOKEN_BUDGET_EXCEEDED';
+          outcome(item, ItemStatus.BLOCKED, blockedReason, {
+            cause: 'TOKEN_BUDGET_EXCEEDED',
+            reasonCode: 'TOKEN_BUDGET_EXCEEDED',
+          });
+          break;
+        }
         // COMPLETED_EMPTY, STALLED and FAILED all stop here: the run does not
         // review and does not publish, and the checkpoint is written for a human.
         blockedReason = status;
@@ -4337,6 +4518,9 @@ async function runOrchestration(goal, opts) {
       break;
     }
 
+    if (statusOf.get(item.id) === ItemStatus.BLOCKED) {
+      continue;
+    }
     if (!session) {
       const isNoAlt =
         failedKeys.size > 0 ||
@@ -4349,13 +4533,19 @@ async function runOrchestration(goal, opts) {
         (verdictStop && verdictStop.reason) || blockedReason || 'NO_LIVE_SESSION',
         Object.assign(
           {
-            reasonCode: verdictStop
-              ? verdictStop.reasonCode
-              : isNoAlt
-                ? 'NO_ALTERNATE_FAILURE_DOMAIN'
-                : undefined,
+            reasonCode:
+              blockedReason === 'TOKEN_BUDGET_EXCEEDED'
+                ? 'TOKEN_BUDGET_EXCEEDED'
+                : launch.cause === 'STALLED_NO_PROGRESS'
+                  ? 'STALLED_NO_PROGRESS'
+                  : verdictStop
+                    ? verdictStop.reasonCode
+                    : isNoAlt
+                      ? 'NO_ALTERNATE_FAILURE_DOMAIN'
+                      : undefined,
             triedKeys: Array.from(triedKeys),
             tried: Array.from(triedKeys),
+            cause: launch.cause || undefined,
           },
           verdictStop ? { humanAction: verdictStop.humanAction } : undefined,
           launch.cause ? { cause: launch.cause } : undefined
@@ -4390,6 +4580,7 @@ async function runOrchestration(goal, opts) {
           {
             triedKeys: Array.from(triedKeys),
             tried: Array.from(triedKeys),
+            cause: launch.cause || undefined,
           },
           log.isolationStop
             ? {
@@ -4477,6 +4668,7 @@ async function runOrchestration(goal, opts) {
         {
           triedKeys: Array.from(triedKeys),
           tried: Array.from(triedKeys),
+          cause: launch.cause || undefined,
         },
         verdictStop
           ? { reasonCode: verdictStop.reasonCode, humanAction: verdictStop.humanAction }

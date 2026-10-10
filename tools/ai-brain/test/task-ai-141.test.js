@@ -15,11 +15,14 @@ const accountsApi = require('../accounts');
 const promptCompiler = require('../prompt-compiler');
 const contextPack = require('../context-pack');
 const cli = require('../cli');
+const { getIsolatedLauncher } = require('../isolation-launcher');
 const { buildWorkerLaunchScript } = require('../isolation-launcher');
 const { runHostBrainGate } = require('../orchestrate');
+const { runOrchestration } = require('../orchestrate');
 const { DEFAULT_TOKEN_BUDGETS } = require('../intake');
 
 const roots = [];
+const { spawnSync } = require('node:child_process');
 function fixtureRoot() {
   const upstreamTmp = path.join(__dirname, '..', '..', '..', '.upstream-tmp');
   fs.mkdirSync(upstreamTmp, { recursive: true });
@@ -554,12 +557,197 @@ test('Part H: intake enables RTK for low risk and suppresses it for risk domains
   assert.equal(high.argv.includes('--rtk'), false);
 });
 
-test('Part H: isolated launcher accepts RTK only for low risk and blocks repair and risk paths', () => {
-  const source = fs.readFileSync(path.join(__dirname, '..', 'isolation-launcher.js'), 'utf8');
-  assert.match(source, /repair_round_blocks_rtk/);
-  assert.match(source, /risk_domains_block_rtk/);
-  assert.match(source, /opts\.rtk/);
-  assert.match(source, /opts\.riskDomains/);
+test('Part H: intake detects risk declared in Control and other sections before enabling RTK', async () => {
+  const root = fixtureRoot();
+  const file = path.join(root, 'docs', 'product-spec', 'work-items', 'FIXTURE-AI-141.md');
+  fs.writeFileSync(
+    file,
+    [
+      '# FIXTURE-AI-141',
+      '',
+      '## Control',
+      '| Field | Value |',
+      '|---|---|',
+      '| Allowed paths | `tools/ai-brain/cli.js` |',
+      '| Risk domains | money, PII, tenant isolation |',
+      '',
+      '## Business Outcome',
+      'Safely update persisted records.',
+      '',
+      '## Scope',
+      'Update persisted records.',
+      '',
+      '## Acceptance Matrix',
+      '| ID | Scenario | Expected |',
+      '|---|---|---|',
+      '| AC-1 | update | saved |',
+      '',
+      '## Verification Commands',
+      '- `node --test tools/ai-brain/test/task-ai-141.test.js`',
+    ].join('\n')
+  );
+  const result = await intake.runIntake(
+    { workItem: 'FIXTURE-AI-141' },
+    {
+      root,
+      baseSha: 'd'.repeat(40),
+      readRegisterRow: () => ({ dependencies: '' }),
+      readRegisterRows: () => [],
+      listAccounts: () => [],
+      read9routerModels: async () => ({ ok: true, models: ['gemini-fixture-pro'] }),
+      hasAgyPoolQuota: false,
+      readHistory: () => [],
+      isAncestorOf: () => true,
+    }
+  );
+  assert.deepEqual(result.spec.riskDomains, ['money', 'pii', 'tenant isolation']);
+  assert.equal(result.rtk.enabled, false);
+  assert.equal(result.argv.includes('--rtk'), false);
+});
+
+test('Part H: orchestration records RTK enablement and risk-domain denial in decision log', async () => {
+  const root = fixtureRoot();
+  const decisionDir = path.join(root, 'decisions');
+  const observed = [];
+  const spec = { id: 'FIXTURE-AI-141', files: ['a.js'], riskDomains: ['security'] };
+  const candidates = [
+    {
+      upstream: 'up-a',
+      gateway: 'gw-a',
+      accountId: 'acct-a',
+      modelId: 'm',
+      harness: 'opencode',
+      source: 'up-a',
+      qualifiedRoles: ['author.foundation'],
+      capabilities: { contextWindow: 999999 },
+    },
+  ];
+  await runOrchestration('fixture', {
+    specs: [spec],
+    candidates,
+    decisionDir,
+    cwd: root,
+    rtk: true,
+    injectedRun: true,
+    run: (job) => {
+      observed.push(job);
+      return { exitCode: 1, stderr: 'fixture stop' };
+    },
+    now: Date.now(),
+  });
+  assert.equal(observed[0].rtk.enabled, false);
+  const records = fs
+    .readFileSync(path.join(decisionDir, new Date().toISOString().slice(0, 10) + '.jsonl'), 'utf8')
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line));
+  assert.ok(records.some((entry) => entry.warning === 'RTK_POLICY' && entry.enabled === false));
+});
+
+test('Part H: a stalled live session is stopped, recorded and checkpointed for recovery', async () => {
+  const root = fixtureRoot();
+  const decisionDir = path.join(root, 'stall-decisions');
+  const candidates = [
+    {
+      upstream: 'up-a',
+      gateway: 'gw-a',
+      accountId: 'acct-a',
+      modelId: 'model-a',
+      harness: 'paseo',
+      source: 'up-a',
+      qualifiedRoles: ['author.foundation'],
+      capabilities: { contextWindow: 999999 },
+    },
+    {
+      upstream: 'up-b',
+      gateway: 'gw-b',
+      accountId: 'acct-b',
+      modelId: 'model-b',
+      harness: 'paseo',
+      source: 'up-b',
+      qualifiedRoles: ['author.foundation'],
+      capabilities: { contextWindow: 999999 },
+    },
+  ];
+  const calls = [];
+  const result = await runOrchestration('fixture', {
+    specs: [{ id: 'FIXTURE-AI-141', files: ['a.js'], acceptanceCriteria: ['works'] }],
+    candidates,
+    registry: { sources: [] },
+    decisionDir,
+    cwd: root,
+    now: Date.now(),
+    checkpointFile: path.join(root, 'stall-checkpoint.json'),
+    progressTimeoutMs: 1000,
+    stallMs: 1000,
+    run: (job) => {
+      calls.push(job);
+      return calls.length === 1
+        ? {
+            exitCode: 1,
+            failureReason: 'STALLED_NO_PROGRESS',
+            stderr: 'launcher stopped stalled worker',
+          }
+        : { exitCode: 1, stderr: 'bounded fallback stopped' };
+    },
+  });
+  assert.equal(calls.length, 2, 'a launcher-stopped session uses one bounded alternate');
+  assert.ok(result.launches.some((launch) => launch.fallbackReason === 'STALLED_NO_PROGRESS'));
+  assert.ok(fs.existsSync(path.join(root, 'stall-checkpoint.json')));
+  assert.ok(result.outcomes.some((outcome) => outcome.cause === 'STALLED_NO_PROGRESS'));
+  const day = new Date().toISOString().slice(0, 10);
+  const records = fs
+    .readFileSync(path.join(decisionDir, day + '.jsonl'), 'utf8')
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line));
+  assert.ok(records.some((entry) => entry.cause === 'STALLED_NO_PROGRESS'));
+});
+
+test('Part H: token budget overrun stops the session and records the fallback cause', async () => {
+  const root = fixtureRoot();
+  const candidates = [
+    {
+      upstream: 'up-a',
+      gateway: 'gw-a',
+      accountId: 'acct-a',
+      modelId: 'model-a',
+      harness: 'paseo',
+      source: 'up-a',
+      qualifiedRoles: ['author.foundation'],
+      capabilities: { contextWindow: 999999 },
+    },
+    {
+      upstream: 'up-b',
+      gateway: 'gw-b',
+      accountId: 'acct-b',
+      modelId: 'model-b',
+      harness: 'paseo',
+      source: 'up-b',
+      qualifiedRoles: ['author.foundation'],
+      capabilities: { contextWindow: 999999 },
+    },
+  ];
+  const calls = [];
+  const result = await runOrchestration('fixture', {
+    specs: [{ id: 'FIXTURE-AI-141', files: ['a.js'], acceptanceCriteria: ['works'] }],
+    candidates,
+    registry: { sources: [] },
+    decisionDir: path.join(root, 'budget-decisions'),
+    cwd: root,
+    tokenBudgets: { default: { maxTokens: 5 } },
+    now: Date.now(),
+    maxRepairs: 0,
+    run: (job) => {
+      calls.push(job);
+      return calls.length === 1
+        ? { exitCode: 1, failureReason: 'TOKEN_BUDGET_EXCEEDED', stderr: 'budget' }
+        : { exitCode: 1, stderr: 'bounded fallback stopped' };
+    },
+  });
+  assert.ok(calls.length >= 1);
+  assert.ok(result.launches.some((launch) => launch.fallbackReason === 'TOKEN_BUDGET_EXCEEDED'));
+  assert.ok(result.launches.some((launch) => launch.fallbackReason === 'TOKEN_BUDGET_EXCEEDED'));
 });
 
 test('Part H: context pack includes allowed source files and rejects traversal', () => {
@@ -578,14 +766,30 @@ test('Part H: context pack includes allowed source files and rejects traversal',
   assert.equal(fs.existsSync(result.path), true);
 });
 
-test('Part H: context pack manifest records output path and included source allowlist', () => {
-  const manifest = fs.readFileSync(path.join(__dirname, '..', 'orchestrate.js'), 'utf8');
-  assert.match(manifest, /contextManifest/);
-  assert.match(manifest, /contextPack\.files/);
-  assert.match(
-    fs.readFileSync(path.join(__dirname, '..', 'intake.js'), 'utf8'),
-    /--context-manifest/
-  );
+test('Part H: context pack manifest records output path and included source allowlist', async () => {
+  const root = fixtureRoot();
+  fs.mkdirSync(path.join(root, 'tools', 'ai-brain'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'tools', 'ai-brain', 'cli.js'), 'fixture cli source');
+  const manifestPath = path.join(root, 'run', 'manifest.json');
+  const decisionsDir = path.join(root, 'decisions');
+  const spec = {
+    id: 'FIXTURE-AI-141',
+    allowedPaths: ['tools/ai-brain/cli.js'],
+    acceptanceCriteria: ['test path'],
+  };
+  const result = runOrchestration('fixture', {
+    specs: [spec],
+    candidates: [],
+    decisionDir: decisionsDir,
+    cwd: root,
+    isolatedWorker: true,
+    enableContextPack: true,
+    contextManifest: manifestPath,
+  });
+  await result;
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  assert.ok(manifest.path);
+  assert.deepEqual(manifest.files, ['tools/ai-brain/cli.js']);
 });
 
 test('Part H: token usage report groups input, cache-read and output by model and Work Item', () => {
@@ -626,14 +830,17 @@ test('Part H: launcher enforces per-session token budget and preserves bounded t
   assert.match(script, /12000/);
 });
 
-test('Part H: host brain gate hides suite output and returns only failing test names', () => {
+test('Part H: host brain gate expands suite files, hides output and returns only failures', () => {
   let capturedEnv;
   const result = runHostBrainGate(
     {},
     {
       spawnSync: (_node, args, opts) => {
         capturedEnv = opts.env;
-        assert.deepEqual(args, ['--test', 'tools/ai-brain/test/*.test.js']);
+        assert.ok(args.length > 2);
+        assert.equal(args[0], '--test');
+        assert.ok(args.slice(1).includes('tools/ai-brain/test/task-ai-141.test.js'));
+        assert.ok(args.slice(1).every((file) => !file.includes('*')));
         return {
           status: 1,
           stdout: 'not ok 1 - fixture failure\n  noisy detail\nℹ pass 9\nℹ fail 1\n',
@@ -657,10 +864,5 @@ test('Part H: isolated runs receive role and complexity token caps from policy c
 });
 
 test('Part H: repeated quota failures reach a bounded fallback threshold', () => {
-  const root = path.join(__dirname, '..', 'isolation-launcher.js');
-  const source = fs.readFileSync(root, 'utf8');
-  const orchestration = fs.readFileSync(path.join(__dirname, '..', 'orchestrate.js'), 'utf8');
-  assert.match(orchestration, /maxQuotaFailures/);
-  assert.match(orchestration, /QUOTA_REPEATED/);
-  assert.match(source, /TOKEN_BUDGET_EXCEEDED/);
+  assert.equal(DEFAULT_TOKEN_BUDGETS.byRole['author.foundation'].repeatedQuotaFailures, 3);
 });

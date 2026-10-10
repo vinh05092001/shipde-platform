@@ -75,16 +75,26 @@ function deriveRiskDomains(text) {
         .map((value) => stripTicks(value).toLowerCase())
         .filter(Boolean)
     );
-  const sections = String(text || '')
-    .split(/^##\s+/m)
-    .filter((section) => /^(In Scope|Scope|Acceptance|Business Outcome)\b/i.test(section));
-  const body = sections.join('\n').toLowerCase();
+  const body = [
+    String(text || ''),
+    sectionBody(
+      text,
+      /^##\s+(Scope|Allowed(?:\s+Paths)?|Acceptance(?:\s+Matrix)?|Business\s+Outcome|Outcome|Requirements?|Security|Data|API|Persistence)\b/i
+    ),
+  ]
+    .join('\n')
+    .toLowerCase();
   const rules = [
     ['auth', /\bauth(?:entication|orization)?\b|\blogin\b/],
     ['security', /\bsecurity\b|\bsecret\b|\bcredential\b/],
-    ['money', /\bmoney\b|\bpayment\b|\bsettlement\b|\bcod\b/],
+    ['money', /\bmoney\b|\bpayment\b|\bsettlement\b|\bcod\b|\bfinancial\b/],
     ['tenant isolation', /\btenant\b|\bshop scope\b/],
-    ['carrier', /\bcarrier (?:side effect|action|integration)\b|\bcreate (?:shipment|waybill)\b/],
+    ['PII', /\bpii\b|\bpersonal(?:ly identifiable)? data\b/],
+    [
+      'carrier',
+      /\bcarrier\b.*\b(?:side effect|action|integration|create|cancel|redelivery|claim)\b|\bcreate (?:shipment|waybill)\b/,
+    ],
+    ['database ownership', /\bdatabase ownership\b|\bschema ownership\b/],
   ];
   return rules.filter(([, pattern]) => pattern.test(body)).map(([name]) => name);
 }
