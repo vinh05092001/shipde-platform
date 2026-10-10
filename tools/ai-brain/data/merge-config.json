@@ -1,0 +1,5 @@
+{
+  "version": 1,
+  "neverMerge": ["TASK-AI-61", "TASK-AI-64"],
+  "requiredChecks": ["contract", "application-gate"]
+}

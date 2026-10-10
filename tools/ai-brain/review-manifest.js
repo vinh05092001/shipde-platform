@@ -443,3 +443,27 @@ module.exports = {
   validateManifest,
   validateManifestFile,
 };
+
+if (require.main === module) {
+  const manifestPath = process.argv[2];
+  const repoCwd = process.argv[3] || process.cwd();
+  const commit = process.argv[4];
+  const workItemId = process.argv[5];
+  let artifactPath = process.argv[6];
+  if (!artifactPath && manifestPath) {
+    const dir = path.dirname(manifestPath);
+    const candidate = workItemId
+      ? path.join(dir, `review-artifact-${workItemId}.md`)
+      : path.join(dir, 'review-artifact.md');
+    if (fs.existsSync(candidate)) {
+      artifactPath = candidate;
+    }
+  }
+  const res = validateManifestFile(manifestPath, {
+    repoCwd,
+    expected: { commit, workItemId },
+    artifactPath,
+  });
+  process.stdout.write(JSON.stringify(res));
+  process.exit(res.ok ? 0 : 1);
+}
