@@ -681,6 +681,124 @@ function defaultVerdictPath() {
   return path.join(process.env.LOCALAPPDATA || '', 'ShipDe', 'isolation-verdict.json');
 }
 
+function assertIsolationClosed({ verdictPath, now, stat, readFile }) {
+  const p = verdictPath || defaultVerdictPath();
+  let st;
+  let verdict;
+  try {
+    st = (stat || ((file) => fs.statSync(file)))(p);
+    verdict = JSON.parse((readFile || ((file) => fs.readFileSync(file, 'utf8')))(p));
+  } catch {
+    throw intakeError('ISOLATION_VERDICT_MISSING', 'ISOLATION_VERDICT_MISSING: cannot read ' + p);
+  }
+  const at = now === undefined ? Date.now() : Number(now);
+  const mtimeMs =
+    st && typeof st.mtimeMs === 'number' ? st.mtimeMs : Date.parse((st && st.mtime) || 0);
+  if (!(mtimeMs >= 0) || at - mtimeMs > ISOLATION_VERDICT_MAX_AGE_MS || mtimeMs > at) {
+    throw intakeError('ISOLATION_VERDICT_STALE', 'ISOLATION_VERDICT_STALE: ' + p);
+  }
+  if (!verdict || verdict.verdict !== 'CLOSED') {
+    throw intakeError('ISOLATION_VERDICT_NOT_CLOSED', 'ISOLATION_VERDICT_NOT_CLOSED: ' + p);
+  }
+  return verdict;
+}
+
+function runIsolatedReviewed(options, deps) {
+  const o = options || {};
+  const d = deps || {};
+  const root = path.resolve(d.root || path.join(__dirname, '..', '..'));
+  const now = typeof d.now === 'function' ? d.now() : d.now || Date.now();
+  assertIsolationClosed({
+    verdictPath: d.verdictPath || defaultVerdictPath(),
+    now,
+    stat: d.stat,
+    readFile: d.readFile,
+  });
+  if (!o.item || o.item.kind !== 'qualification' || o.item.risk !== 'low') {
+    throw intakeError('QUALIFICATION_ITEM_INVALID', 'QUALIFICATION_ITEM_INVALID');
+  }
+  const candidate = o.candidate || {};
+  const candidateKey = o.candidateKey || candidate.candidateKey;
+  const candidates = Array.isArray(o.candidates) ? o.candidates : [candidate];
+  const reviewerKey = o.reviewerKey;
+  const expectedCommit = o.expectedCommit;
+  if (!/^[a-f0-9]{40}$/i.test(String(expectedCommit || ''))) {
+    throw intakeError('QUALIFICATION_COMMIT_INVALID', 'QUALIFICATION_COMMIT_INVALID');
+  }
+  const runDir = path.join(
+    root,
+    'tools',
+    'ai-brain',
+    'data',
+    'qualification-runs',
+    String(o.item.id)
+  );
+  fs.mkdirSync(runDir, { recursive: true });
+  const decisionDir = path.join(runDir, 'decisions');
+  fs.mkdirSync(decisionDir, { recursive: true });
+  const spec = Object.assign({}, o.item, {
+    id: o.item.id,
+    title: 'Bounded qualification: ' + o.item.id,
+    role: 'reviewer',
+    proofFloor: 'NONE',
+    complexity: 'standard',
+    allowedPaths: o.item.allowedPaths || [],
+    verification: o.item.verification || null,
+    exploration: true,
+    kind: 'qualification',
+  });
+  const { runOrchestration } = require('./orchestrate');
+  const { listAccounts } = require('./accounts');
+  const sources = require('./sources');
+  const registry = d.registry || sources.loadSources();
+  const accountList = Array.isArray(d.accounts) ? d.accounts : listAccounts() || [];
+  const run = d.runOrchestration || runOrchestration;
+  return Promise.resolve(
+    run('Bounded model qualification', {
+      specs: [spec],
+      specText: JSON.stringify(spec),
+      candidates,
+      accounts: accountList,
+      registry,
+      evidenceDir: d.evidenceDir || path.join(__dirname, 'data', 'evidence'),
+      run: d.run,
+      tests: d.tests,
+      reviewer: d.reviewer,
+      isolatedWorker: true,
+      enforceProofFloors: false,
+      decisionDir,
+      cwd: root,
+      baseSha: expectedCommit,
+      sha: expectedCommit,
+      workerRoot: d.workerRoot,
+      reviewerIdentity: reviewerKey,
+      now,
+      publication: null,
+      autoMerge: false,
+      merge: false,
+      mergeAfterPublish: false,
+      checkpointFile: path.join(runDir, 'checkpoint.json'),
+    })
+  ).then((result) => {
+    const checkpoint = result && result.checkpoint;
+    const receipt =
+      checkpoint && (checkpoint.reviews || []).find((entry) => entry.workItemId === o.item.id);
+    if (!receipt || result.status !== 'COMPLETED') return { verdict: 'REFUSED' };
+    const routing = require('./routing');
+    const writerDomain = routing.canonicalFailureDomain(candidate);
+    const reviewerDomain = routing.canonicalFailureDomain(receipt.reviewer);
+    return {
+      verdict: receipt.verdict,
+      sha: receipt.sha,
+      reviewedSha: receipt.sha,
+      reviewer: receipt.reviewer,
+      independent: Boolean(reviewerDomain && writerDomain && reviewerDomain !== writerDomain),
+      productItem: false,
+      workItemId: receipt.workItemId,
+    };
+  });
+}
+
 /**
  * Read-only isolation pre-flight: the verdict must be fresh (24h) and the
  * pinned base must be contained in local main. This never changes an ACL or a
@@ -882,6 +1000,8 @@ module.exports = {
   buildCatalogue,
   composeOrchestrateCommand,
   assertIsolationFresh,
+  assertIsolationClosed,
+  runIsolatedReviewed,
   parseModelListing,
   extractModelIds,
   readingHasQuota,
