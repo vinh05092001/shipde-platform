@@ -81,16 +81,45 @@ test('Codex harness delegates fresh verdict enforcement to the isolated launcher
     /CODEX_REQUIRES_ISOLATION/
   );
   const worker = path.join('C:\\ShipDeWorker', 'task-ai-141');
-  assert.deepEqual(
-    codex.launch({
-      cwd: worker,
-      isolatedWorker: true,
-      verdictPath: path.join(fixtureRoot(), 'forged-verdict.json'),
-      model: 'codex-test',
-      prompt: 'task',
-    }),
-    ['exec', '--dangerously-bypass-approvals-and-sandbox', '--model', 'codex-test', 'task']
-  );
+  const root = fixtureRoot();
+  const verdictPath = path.join(root, 'isolation-verdict.json');
+  const priorLocalAppData = process.env.LOCALAPPDATA;
+  process.env.LOCALAPPDATA = root;
+  try {
+    const localDataPath = path.join(root, 'ShipDe');
+    fs.mkdirSync(localDataPath, { recursive: true });
+    const operatorVerdictPath = path.join(localDataPath, 'isolation-verdict.json');
+    assert.throws(
+      () =>
+        codex.launch({
+          cwd: worker,
+          isolatedWorker: true,
+          verdictPath,
+          model: 'codex-test',
+          prompt: 'task',
+        }),
+      /CODEX_REQUIRES_ISOLATION/
+    );
+    fs.writeFileSync(operatorVerdictPath, JSON.stringify({ verdict: 'OPEN' }));
+    assert.throws(
+      () => codex.launch({ cwd: worker, isolatedWorker: true }),
+      /CODEX_REQUIRES_ISOLATION/
+    );
+    fs.writeFileSync(operatorVerdictPath, JSON.stringify({ verdict: 'CLOSED' }));
+    assert.deepEqual(
+      codex.launch({
+        cwd: worker,
+        isolatedWorker: true,
+        verdictPath,
+        model: 'codex-test',
+        prompt: 'task',
+      }),
+      ['exec', '--dangerously-bypass-approvals-and-sandbox', '--model', 'codex-test', 'task']
+    );
+  } finally {
+    if (priorLocalAppData === undefined) delete process.env.LOCALAPPDATA;
+    else process.env.LOCALAPPDATA = priorLocalAppData;
+  }
 });
 
 test('Codex bypass and worker login probe exist only in isolated launcher script', () => {

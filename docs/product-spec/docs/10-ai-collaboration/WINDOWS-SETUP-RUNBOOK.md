@@ -232,6 +232,8 @@ codex login status
 
 Complete the ChatGPT sign-in flow in that user's session. Do not copy, export, or read credentials from the operator profile. The isolated launcher sets `HOME` and `USERPROFILE` to the per-task worker root before it checks login status and launches `codex exec`; a missing, stale or non-CLOSED isolation verdict refuses the Codex launch.
 
+The launcher reads the operator-owned attestation at `%LOCALAPPDATA%\ShipDe\isolation-verdict.json` before preparing the worker. Codex execution requires a fresh `CLOSED` verdict bound to the current host worktree; a verdict supplied by the job is ignored. Re-run the isolation check to refresh the attestation before retrying a refused launch.
+
 ## 9. Synchronize after human merge
 
 After squash-merging the passing PR, run:
