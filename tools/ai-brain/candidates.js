@@ -517,7 +517,17 @@ function poolAccountCandidates(opts) {
   const poolModels = new Set();
   if (o.discoverPool === false) {
     if (Array.isArray(o.models) && o.models.length > 0) {
-      for (const m of o.models) if (m) poolModels.add(String(m));
+      for (const m of o.models) {
+        if (!m) continue;
+        const model = String(m).replace(/^(?:ag|antigravity)\//, '');
+        if (model && familyOf(model)) poolModels.add(model);
+        else if (Array.isArray(o.candidateGenerationRejections)) {
+          o.candidateGenerationRejections.push({
+            modelId: model,
+            reasonCode: model ? 'UNKNOWN_MODEL_FAMILY' : 'EMPTY_MODEL_ID',
+          });
+        }
+      }
     }
   } else {
     if (Array.isArray(o.models) && o.models.length > 0) {
@@ -545,13 +555,30 @@ function poolAccountCandidates(opts) {
       // Unprefixed models are pool candidates only when intake enabled the lane.
       if (typeof c === 'string') {
         const model = c.replace(/^(?:ag|antigravity)\//, '');
-        if (model !== c || (explicitlyEnabled && familyOf(model))) poolModels.add(model);
+        if (model && familyOf(model) && (model !== c || explicitlyEnabled)) poolModels.add(model);
+        else if (
+          model !== c &&
+          !familyOf(model) &&
+          Array.isArray(o.candidateGenerationRejections)
+        ) {
+          o.candidateGenerationRejections.push({
+            modelId: model,
+            reasonCode: model ? 'UNKNOWN_MODEL_FAMILY' : 'EMPTY_MODEL_ID',
+          });
+        }
         continue;
       }
       if (typeof c === 'object' && c) {
         if (c.upstream === 'antigravity' || c.source === 'antigravity' || c.upstream === 'ag') {
           const m = c.modelId || c.model;
-          if (m) poolModels.add(m.replace(/^(ag|antigravity)\//, ''));
+          const model = m ? m.replace(/^(ag|antigravity)\//, '') : '';
+          if (model && familyOf(model)) poolModels.add(model);
+          else if (Array.isArray(o.candidateGenerationRejections)) {
+            o.candidateGenerationRejections.push({
+              modelId: model,
+              reasonCode: model ? 'UNKNOWN_MODEL_FAMILY' : 'EMPTY_MODEL_ID',
+            });
+          }
         }
       }
     }
@@ -564,7 +591,14 @@ function poolAccountCandidates(opts) {
           combo.upstream === 'ag'
         ) {
           const m = combo.modelId || combo.model;
-          if (m) poolModels.add(m.replace(/^(ag|antigravity)\//, ''));
+          const model = m ? m.replace(/^(ag|antigravity)\//, '') : '';
+          if (model && familyOf(model)) poolModels.add(model);
+          else if (Array.isArray(o.candidateGenerationRejections)) {
+            o.candidateGenerationRejections.push({
+              modelId: model,
+              reasonCode: model ? 'UNKNOWN_MODEL_FAMILY' : 'EMPTY_MODEL_ID',
+            });
+          }
         }
       }
     }

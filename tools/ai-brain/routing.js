@@ -529,8 +529,17 @@ function proofObservedWithSource(evidenceData, candidate) {
   // highest proof tier, and only when both model ids normalize to a known,
   // non-empty backend id under registry-declared route prefixes.
   const targetModel = candidate && (candidate.modelId || candidate.model);
-  const targetBase = backendModelBase(targetModel, BACKEND_MODEL_PREFIXES, candidate);
-  if (!targetBase) {
+  const targetModelId = normalizedBackendModel(targetModel, BACKEND_MODEL_PREFIXES, candidate);
+  const ownBlocked = evidence.isCandidateBlocked(evidenceData, candidate).blocked;
+  const ownFailed = (items || []).some((item) => item.status === 'failed');
+  const quotaExhausted =
+    candidate &&
+    (candidate.headroomStatus === 'exhausted' ||
+      candidate.quotaStatus === 'exhausted' ||
+      candidate.remainingPercent === 0 ||
+      candidate.remainingPercent === '0' ||
+      candidate.headroom === 'exhausted');
+  if (!targetModelId || ownBlocked || ownFailed || quotaExhausted) {
     return { level: null, source: null, transferred: false };
   }
   let best = null;
@@ -544,8 +553,14 @@ function proofObservedWithSource(evidenceData, candidate) {
       quotaScope: combo.quotaScope,
       modelId: combo.modelId || combo.model,
     };
-    const sourceBase = backendModelBase(parsed.modelId, BACKEND_MODEL_PREFIXES, parsed);
-    if (!sourceBase || sourceBase !== targetBase) continue;
+    const sourceModelId = normalizedBackendModel(parsed.modelId, BACKEND_MODEL_PREFIXES, parsed);
+    if (!sourceModelId || sourceModelId !== targetModelId) continue;
+    // An unprefixed historical model name does not identify which provider
+    // route produced it. Keep that proof path-scoped; transfer only when the
+    // recorded source model explicitly carries its own upstream alias.
+    if (!parsed.upstream || !parsed.modelId.startsWith(parsed.upstream + '/')) continue;
+    if (evidence.isCandidateBlocked(evidenceData, parsed).blocked) continue;
+    if ((combo.evidence || []).some((item) => item.status === 'failed')) continue;
     const level = evidence.proofLevelOf(
       (combo.evidence || []).filter((e) => e.status === 'passed')
     );
@@ -555,6 +570,23 @@ function proofObservedWithSource(evidenceData, candidate) {
   return best
     ? { level: best.level, source: best.source, sourceModel: best.sourceModel, transferred: true }
     : { level: null, source: null, transferred: false };
+}
+
+function normalizedBackendModel(modelId, prefixes, identity) {
+  if (typeof modelId !== 'string' || !modelId.trim() || modelId.includes('*')) return '';
+  let normalized = modelId.trim().replace(/\r$/, '');
+  const routePrefix = (identity && identity.upstream ? identity.upstream + '/' : '') || '';
+  if (routePrefix && normalized.startsWith(routePrefix)) {
+    normalized = normalized.slice(routePrefix.length);
+  }
+  const declaredPrefix = (prefixes || []).find((prefix) => normalized.startsWith(prefix));
+  if (declaredPrefix) {
+    if (routePrefix && !declaredPrefix.startsWith(routePrefix)) return '';
+    if (!routePrefix && identity && identity.gateway) return '';
+    normalized = normalized.slice(declaredPrefix.length);
+  }
+  if (!normalized || normalized.includes('*') || !/[a-z0-9]/i.test(normalized)) return '';
+  return normalized.toLowerCase();
 }
 
 function backendModelBase(modelId, prefixes, identity) {
@@ -880,6 +912,16 @@ function rankForProfile(candidates, profile, assessment, ctx) {
       continue;
     }
 
+    const headroom = ranking.resolveCandidateHeadroom(c, context);
+    c.headroomStatus = headroom.status;
+    if (headroom.status === 'exhausted' || headroom.status === 'cooling') {
+      reject(
+        headroom.status === 'exhausted' ? 'QUOTA_EXHAUSTED' : 'COOLDOWN_ACTIVE',
+        c.accountId && c.accountId !== '*' ? 'account' : 'quotaScope'
+      );
+      continue;
+    }
+
     if (profile.proofFloor !== 'NONE') {
       const observedProof = proofObservedWithSource(context.evidenceData, c);
       const observed = observedProof.level;
@@ -890,15 +932,6 @@ function rankForProfile(candidates, profile, assessment, ctx) {
       }
     }
 
-    const headroom = ranking.resolveCandidateHeadroom(c, context);
-    c.headroomStatus = headroom.status;
-    if (headroom.status === 'exhausted' || headroom.status === 'cooling') {
-      reject(
-        headroom.status === 'exhausted' ? 'QUOTA_EXHAUSTED' : 'COOLDOWN_ACTIVE',
-        c.accountId && c.accountId !== '*' ? 'account' : 'quotaScope'
-      );
-      continue;
-    }
     if (headroom.status === 'unknown') {
       if (context.enforceKnownQuota === true && quotaUnknownAdmitted >= explorationBudget) {
         reject('QUOTA_UNKNOWN_NO_EXPLORATION_BUDGET', 'quotaScope');

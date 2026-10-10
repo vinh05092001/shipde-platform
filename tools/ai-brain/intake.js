@@ -693,7 +693,7 @@ async function runIntake(opts, deps) {
   const catalogue = await buildCatalogue(Object.assign({}, d, { root }));
   const accounts = await (typeof d.listAccounts === 'function'
     ? d.listAccounts()
-    : accountsApi.listAccounts());
+    : accountsApi.listAccounts(d.accountOptions));
 
   const repoRoot = path.resolve(root);
   const hasPoolQuota = Boolean(agyPoolHasQuota(d));

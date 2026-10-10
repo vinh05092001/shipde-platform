@@ -11,6 +11,7 @@ const { rankForProfile } = require('../routing');
 const sources = require('../sources');
 const { candidateKey } = require('../discovery/identity');
 const evidence = require('../evidence');
+const accountsApi = require('../accounts');
 
 const roots = [];
 function fixtureRoot() {
@@ -45,13 +46,34 @@ function fixtureRoot() {
   return root;
 }
 
+function intakeAccounts(root) {
+  const accountOptions = {
+    registryFile: path.join(root, 'accounts.registry.json'),
+    secretsFile: path.join(root, 'accounts.secrets.enc'),
+  };
+  accountsApi.saveRegistry(
+    Array.from({ length: 7 }, (_, index) => ({
+      id: 'agy' + String(index + 1).padStart(2, '0'),
+      provider: 'agy-pool',
+      model: 'gemini-fixture-pro',
+      capabilities: { contextWindow: 1000 },
+      tier: 1,
+      enabled: true,
+    })),
+    accountOptions
+  );
+  fs.writeFileSync(accountOptions.secretsFile, '{}');
+  return accountOptions;
+}
+
 test.after(() => {
   for (const root of roots) fs.rmSync(root, { recursive: true, force: true });
 });
 
-test('intake catalogue strings plus --external-workers agy-pool produce pool candidates', async () => {
+test('intake catalogue and real account registry plus pool discovery produce candidates', async () => {
   const root = fixtureRoot();
   const backendModel = 'gemini-fixture-pro';
+  const accountOptions = intakeAccounts(root);
   const result = await intake.runIntake(
     { workItem: 'FIXTURE-AI-141' },
     {
@@ -59,17 +81,17 @@ test('intake catalogue strings plus --external-workers agy-pool produce pool can
       baseSha: 'b'.repeat(40),
       readRegisterRow: () => ({ dependencies: '' }),
       readRegisterRows: () => [],
-      listAccounts: () => [],
+      accountOptions,
       hasAgyPoolQuota: true,
       readHistory: () => [],
       isAncestorOf: () => true,
-      read9routerModels: async () => ({ ok: true, models: [backendModel] }),
+      read9routerModels: async () => ({ ok: true, models: ['ag/' + backendModel] }),
       readAgyModels: async () => ({ ok: true, models: [] }),
       readEvidenceModels: async () => ({ ok: true, models: [] }),
     }
   );
 
-  assert.deepEqual(result.catalogue, [backendModel]);
+  assert.deepEqual(result.catalogue, ['ag/' + backendModel]);
   assert.match(result.command, /--external-workers agy-pool/);
 
   const runsDir = path.join(root, 'pool-runs');
@@ -93,6 +115,27 @@ test('intake catalogue strings plus --external-workers agy-pool produce pool can
     (candidate) => candidate.source === 'agy-pool' && candidate.modelId === backendModel
   );
   assert.equal(poolCandidates.length, 7, 'the intake model is offered by all seven pool accounts');
+  const unknownRejections = [];
+  const unknownCandidates = generateCandidates({
+    registry: sources.loadSources(),
+    catalogue: ['ag/not-a-known-family'],
+    accounts: JSON.parse(fs.readFileSync(path.join(result.runDir, 'accounts.json'), 'utf8')),
+    externalWorkers: 'agy-pool',
+    fakeRunsDir: runsDir,
+    platform: 'win32',
+    spawnSync: () => ({ status: 0, stdout: '', stderr: '' }),
+    cacheFile: null,
+    candidateGenerationRejections: unknownRejections,
+  });
+  assert.equal(
+    unknownCandidates.filter(
+      (candidate) => candidate.source === 'agy-pool' && candidate.modelId === 'not-a-known-family'
+    ).length,
+    0
+  );
+  assert.deepEqual(unknownRejections, [
+    { modelId: 'not-a-known-family', reasonCode: 'UNKNOWN_MODEL_FAMILY' },
+  ]);
   const profile = {
     taskId: 'FIXTURE-AI-141',
     role: 'author.foundation',
@@ -123,6 +166,24 @@ test('intake catalogue strings plus --external-workers agy-pool produce pool can
   assert.ok(decision.rejected.every((row) => row.reasonCode.startsWith('PROOF_FLOOR_NOT_MET')));
 });
 
+test('candidate generation rejects unknown aliased models with a named reason', () => {
+  const rejections = [];
+  const candidates = generateCandidates({
+    registry: sources.loadSources(),
+    catalogue: ['ag/not-a-known-family', 'ag/'],
+    accounts: [],
+    externalWorkers: 'agy-pool',
+    discoverPool: false,
+    models: ['ag/not-a-known-family', 'ag/'],
+    candidateGenerationRejections: rejections,
+  });
+  assert.equal(candidates.filter((candidate) => candidate.source === 'agy-pool').length, 0);
+  assert.deepEqual(rejections, [
+    { modelId: 'not-a-known-family', reasonCode: 'UNKNOWN_MODEL_FAMILY' },
+    { modelId: '', reasonCode: 'EMPTY_MODEL_ID' },
+  ]);
+});
+
 test('intake pool writer inherits backend WORK_ITEM_PASS from blocked 9router ag path', async () => {
   const root = fixtureRoot();
   const backendModel = 'gemini-3.1-pro-low';
@@ -149,13 +210,7 @@ test('intake pool writer inherits backend WORK_ITEM_PASS from blocked 9router ag
     proofLevel: evidence.ProofLevel.WORK_ITEM_PASS,
     workItemId: 'FIXTURE-AI-141',
   });
-  evidence.recordProbe(path.join(root, 'evidence'), agCandidate, {
-    status: 'failed',
-    httpStatus: 429,
-    body: 'rate limited on the 9router ag path',
-  });
   const proofData = evidence.loadEvidence(path.join(root, 'evidence'));
-  assert.equal(evidence.isCandidateBlocked(proofData, agCandidate).blocked, true);
 
   const result = await intake.runIntake(
     { workItem: 'FIXTURE-AI-141' },
@@ -164,7 +219,7 @@ test('intake pool writer inherits backend WORK_ITEM_PASS from blocked 9router ag
       baseSha: 'c'.repeat(40),
       readRegisterRow: () => ({ dependencies: '' }),
       readRegisterRows: () => [],
-      listAccounts: () => [],
+      accountOptions: intakeAccounts(root),
       hasAgyPoolQuota: true,
       readHistory: () => [],
       isAncestorOf: () => true,
@@ -256,8 +311,61 @@ test('intake pool writer inherits backend WORK_ITEM_PASS from blocked 9router ag
     modelId: 'ag/' + backendModel,
   });
 
+  const failedTarget = Object.assign({}, poolCandidate, { headroomStatus: 'open' });
+  evidence.recordProbe(path.join(root, 'evidence'), failedTarget, {
+    status: 'failed',
+    httpStatus: 429,
+    body: 'pool path rate limited',
+  });
+  const failedData = evidence.loadEvidence(path.join(root, 'evidence'));
+  assert.equal(require('../routing').proofObservedWithSource(failedData, failedTarget).level, null);
+  const exhaustedTarget = Object.assign({}, poolCandidate, { headroomStatus: 'exhausted' });
+  assert.equal(
+    require('../routing').proofObservedWithSource(proofData, exhaustedTarget).level,
+    null
+  );
+  const blockedRank = rankForProfile(
+    [Object.assign({}, poolCandidate)],
+    profile,
+    { weightProfile: 'BALANCED', weights: { latency: 34, quality: 33, cost: 33 } },
+    {
+      now: Date.now(),
+      evidenceData: failedData,
+      priors: {},
+      headrooms: { agy01: { status: 'open' } },
+      useStoredQuota: false,
+    }
+  );
+  assert.equal(blockedRank.ranking.length, 0);
+  assert.equal(blockedRank.rejected[0].reasonCode, 'COOLDOWN_ACTIVE');
+
   const unknown = Object.assign({}, poolCandidate, {
     modelId: 'unrecognized-route/' + backendModel,
   });
   assert.equal(require('../routing').proofObservedWithSource(proofData, unknown).level, null);
+});
+
+test('proof transfer requires exact normalized backend identity', () => {
+  const source = {
+    harness: 'paseo',
+    accessPath: 'http',
+    gateway: '9router',
+    upstream: 'ag',
+    accountId: 'router-one',
+    quotaScope: 'router-one',
+    modelId: 'ag/gemini-model-2026-10-10',
+  };
+  const data = {
+    combinations: [{ ...source, evidence: [{ status: 'passed', proofLevel: 'WORK_ITEM_PASS' }] }],
+  };
+  const distinct = {
+    harness: 'agy-pool',
+    accessPath: 'cli',
+    gateway: '',
+    upstream: 'antigravity',
+    accountId: 'agy01',
+    quotaScope: 'agy01:gemini',
+    modelId: 'gemini-model-2026-10-11',
+  };
+  assert.equal(require('../routing').proofObservedWithSource(data, distinct).level, null);
 });
