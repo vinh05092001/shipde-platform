@@ -45,6 +45,7 @@ const {
 const sourceRegistry = require('./sources');
 const BACKEND_MODEL_PREFIXES = registryPrefixes(sourceRegistry.loadSources());
 const { contextRefusal } = require('./harness');
+const { Cause, Scope, classifyFailure } = require('./failure-classifier');
 
 /** Task roles a profile may name. Planner stays out: Codex plans, it is not routed. */
 const TASK_ROLES = Object.freeze([
@@ -502,6 +503,133 @@ function hasQuotaAccountReadings(home, storePath) {
 }
 
 /**
+ * Failure causes that name the *route*, never the model. Quota exhaustion,
+ * rate limits, timeouts, launch/harness configuration and a live cooldown all
+ * expire on their own; the ability the model demonstrated does not expire with
+ * them (TASK-AI-141 Part B).
+ */
+const INFRASTRUCTURE_CAUSES = new Set([
+  Cause.QUOTA_EXHAUSTED,
+  Cause.UPSTREAM_CREDIT_EXHAUSTED,
+  Cause.UPSTREAM_MONTHLY_LIMIT,
+  Cause.UPSTREAM_RATE_LIMIT,
+  Cause.ACCOUNT_QUOTA_EXHAUSTED,
+  Cause.GENUINE_CAPACITY,
+  Cause.EXHAUSTION_HIDING,
+  Cause.TIMEOUT,
+  Cause.LAUNCH_CONFIG,
+  Cause.HARNESS_FAILED,
+]);
+
+/**
+ * Scopes that blame this machine or the transport — launch, harness and
+ * network — rather than anything the model said or produced.
+ */
+const INFRASTRUCTURE_SCOPES = new Set([Scope.LOCAL, Scope.HARNESS, Scope.GATEWAY]);
+
+/** A failure whose only meaning is that the model itself did not serve it. */
+function isModelScopeFailure(cause, scope) {
+  return (
+    scope === Scope.MODEL || cause === Cause.MODEL_UNSUPPORTED || cause === Cause.ALIAS_MISMATCH
+  );
+}
+
+/** Free text that can only have come from quota, rate, timeout or network. */
+const INFRASTRUCTURE_TEXT =
+  /quota|rate[\s_-]*limit|too many requests|\b429\b|cooldown|exhaust|capacity|timed?\s*out|timeout|econnrefused|etimedout|network|unavailable/i;
+
+/** Review verdicts and proof states that are about quality, not availability. */
+const QUALITY_VERDICTS = new Set(['changes_required', 'refused', 'refuse', 'rejected', 'reject']);
+
+/** Normalize a cause, scope, status or block reason to its classification token. */
+function failureToken(value) {
+  if (typeof value !== 'string' || !value.trim()) return '';
+  return value
+    .trim()
+    .split('(')[0]
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+}
+
+/** Everything an evidence item says about why it failed, as one text. */
+function failureText(item) {
+  return [item && item.cause, item && item.body, item && item.message, item && item.error]
+    .filter(Boolean)
+    .join(' ');
+}
+
+/**
+ * The classifier's answer for one failed evidence item: the stored cause and
+ * scope when the recorder wrote them, otherwise the classification the item's
+ * own signals produce. An unclassified failure is never assumed to be benign.
+ */
+function itemClassification(item) {
+  const cause = failureToken(item.cause);
+  const scope = failureToken(item.scope);
+  if (cause || scope) return { cause, scope };
+  const classification = classifyFailure({
+    exitCode: item.exitCode,
+    httpStatus: item.httpStatus,
+    body: item.body || item.message || (typeof item.error === 'string' ? item.error : ''),
+    stderr: item.stderr || '',
+    accountId: item.accountId,
+  });
+  return { cause: failureToken(classification.cause), scope: failureToken(classification.scope) };
+}
+
+/**
+ * Is this failure purely infrastructure? Fail closed: anything that is not
+ * recognizably quota, rate limit, timeout, launch/harness/network/local scope
+ * or an open cooldown does not clear the source path.
+ */
+function isInfrastructureFailure(cause, scope, text) {
+  const c = failureToken(cause);
+  const s = failureToken(scope);
+  if (isModelScopeFailure(c, s)) return false;
+  if (INFRASTRUCTURE_CAUSES.has(c)) return true;
+  if (INFRASTRUCTURE_SCOPES.has(s)) return true;
+  return INFRASTRUCTURE_TEXT.test(String(text || ''));
+}
+
+/** Is this blocked source path out of the way for infrastructure reasons only? */
+function isInfrastructureBlock(block) {
+  if (!block || !block.blocked) return true;
+  return isInfrastructureFailure(block.cause, block.scope, [block.reason, block.cause].join(' '));
+}
+
+/** Did this evidence item record a quality outcome rather than an outage? */
+function isQualityVerdict(item) {
+  if (!item) return false;
+  if (item.revoked === true || failureToken(item.status) === 'revoked') return true;
+  for (const field of ['verdict', 'review', 'reviewVerdict', 'reviewStatus', 'decision']) {
+    if (QUALITY_VERDICTS.has(failureToken(item[field]))) return true;
+  }
+  const status = failureToken(item.status);
+  return status === 'changes_required' || status === 'refused';
+}
+
+/**
+ * May this source path lend its WORK_ITEM_PASS to another candidate?
+ *
+ * A path blocked or failed for infrastructure reasons — quota exhausted, rate
+ * limited, timed out, launch/harness/network/local scope, open cooldown — has
+ * lost the route, not the model's ability, so the proof still transfers. Only
+ * a quality failure disqualifies it: a review that came back CHANGES_REQUIRED
+ * or refused, a model-scope failure, or a revoked proof.
+ */
+function sourcePathLendsProof(evidenceData, combo, parsed) {
+  if (!isInfrastructureBlock(evidence.isCandidateBlocked(evidenceData, parsed))) return false;
+  for (const item of combo.evidence || []) {
+    if (isQualityVerdict(item)) return false;
+    if (failureToken(item.status) !== 'failed') continue;
+    const { cause, scope } = itemClassification(item);
+    if (!isInfrastructureFailure(cause, scope, failureText(item))) return false;
+  }
+  return true;
+}
+
+/**
  * The strongest proof level a candidate has *passed*. Failed evidence carries a
  * proofLevel too, and counting it would let a candidate that just failed pose
  * as proven, so only passed items are considered.
@@ -539,7 +667,9 @@ function proofObservedWithSource(evidenceData, candidate) {
   // Proof describes the backend model's ability; quota, cooldown and failures
   // remain attached to the candidate identity above. Transfer only the
   // highest proof tier, and only when both model ids normalize to a known,
-  // non-empty backend id under registry-declared route prefixes.
+  // non-empty backend id under registry-declared route prefixes. A source
+  // path that is out of quota or otherwise blocked for infrastructure reasons
+  // keeps its proof; only a quality failure on that path takes it away.
   const targetModel = candidate && (candidate.modelId || candidate.model);
   const targetModelId = normalizedBackendModel(targetModel, BACKEND_MODEL_PREFIXES, candidate);
   if (!targetModelId) {
@@ -562,8 +692,7 @@ function proofObservedWithSource(evidenceData, candidate) {
     // route produced it. Keep that proof path-scoped; transfer only when the
     // recorded source model explicitly carries its own upstream alias.
     if (!parsed.upstream || !parsed.modelId.startsWith(parsed.upstream + '/')) continue;
-    if (evidence.isCandidateBlocked(evidenceData, parsed).blocked) continue;
-    if ((combo.evidence || []).some((item) => item.status === 'failed')) continue;
+    if (!sourcePathLendsProof(evidenceData, combo, parsed)) continue;
     const level = evidence.proofLevelOf(
       (combo.evidence || []).filter((e) => e.status === 'passed')
     );
