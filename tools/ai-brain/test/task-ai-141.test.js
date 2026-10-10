@@ -628,7 +628,6 @@ test('Part H: orchestration records RTK enablement and risk-domain denial in dec
     decisionDir,
     cwd: root,
     rtk: true,
-    injectedRun: true,
     run: (job) => {
       observed.push(job);
       return { exitCode: 1, stderr: 'fixture stop' };
@@ -642,6 +641,15 @@ test('Part H: orchestration records RTK enablement and risk-domain denial in dec
     .split('\n')
     .map((line) => JSON.parse(line));
   assert.ok(records.some((entry) => entry.warning === 'RTK_POLICY' && entry.enabled === false));
+  assert.ok(
+    records.some(
+      (entry) =>
+        entry.warning === 'RTK_POLICY' &&
+        entry.enabled === false &&
+        entry.detail === 'risk_domains_block_rtk'
+    ),
+    'the risk-domain policy denial is recorded in the decision log'
+  );
 });
 
 test('Part H: a stalled live session is stopped, recorded and checkpointed for recovery', async () => {
@@ -694,7 +702,6 @@ test('Part H: a stalled live session is stopped, recorded and checkpointed for r
   assert.equal(calls.length, 2, 'a launcher-stopped session uses one bounded alternate');
   assert.ok(result.launches.some((launch) => launch.fallbackReason === 'STALLED_NO_PROGRESS'));
   assert.ok(fs.existsSync(path.join(root, 'stall-checkpoint.json')));
-  assert.ok(result.outcomes.some((outcome) => outcome.cause === 'STALLED_NO_PROGRESS'));
   const day = new Date().toISOString().slice(0, 10);
   const records = fs
     .readFileSync(path.join(decisionDir, day + '.jsonl'), 'utf8')

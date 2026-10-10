@@ -3994,6 +3994,17 @@ async function runOrchestration(goal, opts) {
             accountId: candidate.accountId,
             timedOut: isLaunchTimedOut,
           });
+          if (res && res.failureReason === 'TOKEN_BUDGET_EXCEEDED') {
+            launchClassification.scope = 'local';
+            launchClassification.cause = 'TOKEN_BUDGET_EXCEEDED';
+            launch.fallbackReason = 'TOKEN_BUDGET_EXCEEDED';
+            launch.cause = 'TOKEN_BUDGET_EXCEEDED';
+          } else if (res && res.failureReason === 'STALLED_NO_PROGRESS') {
+            launchClassification.scope = 'local';
+            launchClassification.cause = 'STALLED_NO_PROGRESS';
+            launch.fallbackReason = 'STALLED_NO_PROGRESS';
+            launch.cause = 'STALLED_NO_PROGRESS';
+          }
           failureList.push({
             failedCandidateKey: decision.chosen,
             failureScope: launchClassification.scope,
@@ -4238,6 +4249,12 @@ async function runOrchestration(goal, opts) {
         launch.scope = classification.scope;
         launch.cause = classification.cause;
         launch.outcome = 'failed';
+        if (
+          classification.cause === 'TOKEN_BUDGET_EXCEEDED' ||
+          classification.cause === 'STALLED_NO_PROGRESS'
+        ) {
+          launch.fallbackReason = classification.cause;
+        }
         const currentStep = liveSteps[item.id] || {};
         const failureList = (currentStep.failures || []).slice();
         if (!failureList.some((f) => f.failedCandidateKey === decision.chosen)) {
@@ -4390,10 +4407,10 @@ async function runOrchestration(goal, opts) {
             ')';
           break;
         }
-        launch.fallbackReason =
-          progressStalled || budgetExceeded
-            ? classification.cause
-            : 'FIRST_CANDIDATE_FAILED: ' + classification.scope + ' (' + classification.cause + ')';
+        if (!launch.fallbackReason) {
+          launch.fallbackReason =
+            'FIRST_CANDIDATE_FAILED: ' + classification.scope + ' (' + classification.cause + ')';
+        }
         launch.scope = classification.scope;
         launch.cause = classification.cause;
         launch.outcome = 'failed';
