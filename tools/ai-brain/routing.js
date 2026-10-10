@@ -214,7 +214,11 @@ function jevQuestion(profile) {
     prompt:
       'Assess this task profile for live routing and choose the trade-off ' +
       'weighting profile. Answer with a weighting profile only, never a model, ' +
-      'provider or account.',
+      'provider or account. Task complexity: ' +
+      String(profile.complexity) +
+      '. Risk domains: ' +
+      ((profile.riskDomains || []).join(', ') || 'none declared') +
+      '.',
     evidence: JSON.stringify(profile),
     options: Object.keys(WEIGHT_PROFILES),
   };
@@ -263,9 +267,13 @@ async function assessTask(profile, opts) {
   });
 
   const jevDecided = result.handledBy === 'jev' && result.outcome === jev.Outcome.DECIDED;
-  const chosenProfile =
-    result.choice && WEIGHT_PROFILES[result.choice] ? result.choice : fallbackId;
-  const decidedBy = jevDecided ? 'jev' : 'controller';
+  let chosenProfile = result.choice && WEIGHT_PROFILES[result.choice] ? result.choice : fallbackId;
+  const highRisk = (profile.riskDomains || []).some((domain) =>
+    ['auth', 'security', 'money', 'tenant isolation'].includes(String(domain).toLowerCase())
+  );
+  const qualityOverride = highRisk && chosenProfile !== 'QUALITY_FIRST';
+  if (qualityOverride) chosenProfile = 'QUALITY_FIRST';
+  const decidedBy = qualityOverride ? 'controller' : jevDecided ? 'jev' : 'controller';
 
   const reasonCodes = [];
   if (jevDecided) reasonCodes.push('JEV_DECIDED');
@@ -274,6 +282,7 @@ async function assessTask(profile, opts) {
       'JEV_UNDECIDED:' + String((result.jev && result.jev.reason) || result.reason || 'UNKNOWN')
     );
   reasonCodes.push('WEIGHTS_' + chosenProfile + (jevDecided ? '' : '_CONTROLLER_FALLBACK'));
+  if (qualityOverride) reasonCodes.push('QUALITY_FIRST_RISK_FLOOR_OVERRIDE');
 
   const weights = WEIGHT_PROFILES[chosenProfile];
   const taskClass =
@@ -303,7 +312,9 @@ async function assessTask(profile, opts) {
     jevModel: jevDecided && result.jevModel ? result.jevModel : null,
     usage: jevDecided && result.usage ? result.usage : null,
     reasonCodes,
-    reason: (result.jev && result.jev.reason) || result.reason || null,
+    reason: qualityOverride
+      ? 'QUALITY_FIRST enforced for high-risk domains: ' + (profile.riskDomains || []).join(', ')
+      : (result.jev && result.jev.reason) || result.reason || null,
   };
 }
 
