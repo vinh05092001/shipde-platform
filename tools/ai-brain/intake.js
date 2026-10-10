@@ -313,16 +313,17 @@ function resolveDependencies(root, baseSha, dependencies, deps) {
   for (const id of dependencies) {
     const row = registerRows.find((item) => item.work_item_id === id);
     const registeredSha = row && String(row.merge_commit || '').trim();
-    const historical =
-      registeredSha ||
-      (row &&
-        String(row.status || '')
-          .trim()
-          .toUpperCase() !== 'MERGED')
-        ? null
-        : getHistory().find(
-            (entry) => entry.subject.includes('[' + id + ']') && /\(#\d+\)/.test(entry.subject)
-          );
+    const registerConfirmsMerged =
+      row &&
+      String(row.status || '')
+        .trim()
+        .toUpperCase() === 'MERGED' &&
+      registeredSha;
+    const historical = registerConfirmsMerged
+      ? null
+      : getHistory().find(
+          (entry) => entry.subject.includes('[' + id + ']') && /\(#\d+\)/.test(entry.subject)
+        );
     if (
       row &&
       String(row.status || '')

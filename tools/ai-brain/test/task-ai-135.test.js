@@ -150,6 +150,19 @@ test('DP-R01 resolves history-merged dependencies, removes them, and records the
   );
 });
 
+test('DP-R01 history overrides a stale READY_FOR_CODEX register status', async () => {
+  const root = makeGitRepo();
+  const dependencySha = commit(root, '(#247) [FIXTURE-DEP] merged dependency', 'dep');
+  writeFixture(root, 'FIXTURE-DEP', [row('FIXTURE-DEP', 'READY_FOR_CODEX')]);
+
+  const result = await intake.runIntake({ workItem: WORK_ITEM }, intakeDeps(root));
+
+  assert.deepEqual(result.spec.dependencies, []);
+  assert.deepEqual(result.resolvedDependencies, [
+    { id: 'FIXTURE-DEP', commitSha: dependencySha, source: 'history' },
+  ]);
+});
+
 test('DP-R01 removes dependencies declared MERGED in the register and records its SHA', async () => {
   const root = makeGitRepo();
   const dependencySha = commit(root, 'fixture merged item', 'dep');
