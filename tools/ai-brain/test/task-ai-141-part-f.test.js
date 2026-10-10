@@ -114,6 +114,54 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
     );
   });
 
+  test('prior bonus is not counted again after blending into quality', () => {
+    const untried = candidate('single-prior', {
+      evidence: [],
+      latencyMs: 0,
+      cost: 0,
+      headroomStatus: 'open',
+    });
+    const result = routing.rankForProfile([untried], profile(), assessment, {
+      now: Date.parse('2026-10-10T12:00:00Z'),
+      headrooms: { default: 'open' },
+      priors: {
+        ranking: [
+          {
+            canonical: 'single-prior',
+            codingTier: 'T1',
+            reviewTier: 'T1',
+            score: 50,
+            retrievedAt: '2026-10-09T00:00:00Z',
+          },
+        ],
+      },
+    });
+    assert.equal(result.ranking[0].scoreBreakdown.quality, 50);
+    assert.equal(result.ranking[0].scoreBreakdown.prior.contribution, 0);
+    assert.equal(result.ranking[0].score, 63);
+  });
+
+  test('measured latency and provider price data populate ranking and report fields', () => {
+    const measured = candidate('measured-model', {
+      latencyMs: undefined,
+      expectedDurationMs: undefined,
+      expectedLatencyMs: undefined,
+      evidence: [{ status: 'passed', proofLevel: 'API_PASS', latencyMs: 1250 }],
+      cost: { inputPerMillion: 10, outputPerMillion: 20 },
+      headroomStatus: 'open',
+    });
+    const result = routing.rankForProfile([measured], profile(), assessment, {
+      headrooms: { default: 'open' },
+      priors: { ranking: [] },
+    });
+    const ranked = result.ranking[0];
+    assert.equal(ranked.scoreBreakdown.latency, routing.latencyScoreOf(measured));
+    assert.equal(ranked.scoreBreakdown.cost, 81);
+    const rendered = routing.formatTopEntry(ranked, 1);
+    assert.match(rendered, /unknown/);
+    assert.match(rendered, /cost 12/);
+  });
+
   test('probation requires an independent strong reviewer for security, money, or tenant work', () => {
     const untried = candidate('new-model', { evidence: [] });
     const task = profile({ riskDomains: ['security'], proofFloor: 'NONE' });

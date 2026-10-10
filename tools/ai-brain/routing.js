@@ -997,11 +997,10 @@ function scoreForProfile(candidate, assessment, ctx) {
   const headroomPenalty =
     candidate.headroomStatus === 'unknown' ? 15 : candidate.headroomStatus === 'tight' ? 10 : 0;
   score = Math.max(0, score - busyPenalty - agePenalty - headroomPenalty);
-  const priorContribution = priorUsable ? prior.bonus : 0;
   const weightedPriorContribution =
     priorUsable && prior.score !== undefined
       ? Math.round((prior.bonus * priorQualityWeight * wQuality) / totalWeight)
-      : priorContribution;
+      : 0;
   if (weightedPriorContribution) score += weightedPriorContribution;
   if (prior) {
     if (prior.score !== undefined) {
