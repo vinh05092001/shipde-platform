@@ -98,6 +98,10 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
     assert.ok(strongRanked.score > withoutPrior.ranking[0].score);
     assert.equal(strongRanked.scoreBreakdown.prior.normalizedScore, 0.9);
     assert.equal(strongRanked.scoreBreakdown.prior.weight, 0.33);
+    assert.equal(
+      priorsApi.benchmarkScore({ contextWindow: 1000000, releaseDate: '2026-01-01' }),
+      null
+    );
     assert.equal(result.ranking[0].probation, true);
     assert.equal(strongRanked.scoreBreakdown.cost, 95);
     assert.match(
@@ -166,6 +170,7 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
     });
     assert.ok(question.options.includes(candidateKey(second)));
     assert.ok(!question.options.includes(candidateKey(outside)));
+    assert.match(question.evidence, /"quotaStatus":"unknown"/);
     assert.equal(result.chosen, candidateKey(second));
     const lowConfidence = await routing.adviseRankedModelChoice(
       routing.rankForProfile([first, second], profile(), assessment, {
@@ -189,31 +194,37 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
     const refreshed = await priorsApi.refreshPriors({
       now: Date.parse('2026-10-10T00:00:00Z'),
       file,
-      search: async () => [
-        {
-          sources: [
-            {
-              id: 'bench',
-              url: 'https://bench.example/results',
-              retrievedAt: '2026-10-09T00:00:00Z',
-            },
-          ],
-          models: [
-            {
-              modelId: 'gateway/Provider.New_Model',
-              releaseDate: '2026-09-01',
-              contextWindow: 200000,
-              benchmarks: {
-                sweBenchVerified: {
-                  score: 82,
-                  source: { url: 'https://bench.example/swe', retrievedAt: '2026-10-09T00:00:00Z' },
-                },
-                aiderPolyglot: 78,
+      search: async (query) => {
+        assert.equal(typeof query, 'string');
+        return [
+          {
+            sources: [
+              {
+                id: 'bench',
+                url: 'https://bench.example/results',
+                retrievedAt: '2026-10-09T00:00:00Z',
               },
-            },
-          ],
-        },
-      ],
+            ],
+            models: [
+              {
+                modelId: 'gateway/Provider.New_Model',
+                releaseDate: '2026-09-01',
+                contextWindow: 200000,
+                benchmarks: {
+                  sweBenchVerified: {
+                    score: 82,
+                    source: {
+                      url: 'https://bench.example/swe',
+                      retrievedAt: '2026-10-09T00:00:00Z',
+                    },
+                  },
+                  aiderPolyglot: 78,
+                },
+              },
+            ],
+          },
+        ];
+      },
       sourceId: 'fixture-search',
     });
     assert.equal(refreshed.ranking[0].canonical, 'provider-new-model');

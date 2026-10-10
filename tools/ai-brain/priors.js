@@ -46,9 +46,7 @@ function priorFor(candidate, role, priors, now) {
   const bonus = TIER_BONUSES[tier] ?? null;
   if (bonus === null) return null;
 
-  const priorScore = Number.isFinite(Number(match.score))
-    ? Number(match.score)
-    : benchmarkScore(match);
+  const priorScore = Number.isFinite(match.score) ? match.score : benchmarkScore(match);
   const result = { canonical: match.canonical, tier, bonus };
   if (Number.isFinite(priorScore)) {
     const sourceDates = (match.sources || []).map((source) => source && source.retrievedAt);
@@ -72,16 +70,17 @@ function isStale(retrievedAt, now) {
 function benchmarkScore(match) {
   const benchmarks =
     match && match.benchmarks && typeof match.benchmarks === 'object' ? match.benchmarks : match;
-  const values = Object.entries(benchmarks || {})
+  const entries = Array.isArray(benchmarks)
+    ? benchmarks.map((entry) => [entry && entry.name, entry && entry.score])
+    : Object.entries(benchmarks || {});
+  const values = entries
     .filter(
       ([key, value]) =>
-        key !== 'sources' &&
-        key !== 'source' &&
-        key !== 'benchmarks' &&
-        Number.isFinite(Number(value)) &&
-        (typeof value === 'number' || (typeof value === 'string' && value.trim() !== ''))
+        typeof key === 'string' &&
+        /bench|coding|swe|aider|terminal|live.?code|arena/i.test(key) &&
+        Number.isFinite(value)
     )
-    .map(([, value]) => Math.max(0, Math.min(100, Number(value))));
+    .map(([, value]) => Math.max(0, Math.min(100, value)));
   return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
 }
 
@@ -167,13 +166,11 @@ function mergePriorDocuments(documents, now) {
 async function refreshPriors(options) {
   const opts = options || {};
   if (typeof opts.search !== 'function') throw new Error('PRIORS_SEARCH_SOURCE_REQUIRED');
-  const results = await opts.search({
-    query:
-      opts.query ||
-      process.env.AI_BRAIN_PRIORS_QUERY ||
-      'coding agent model benchmarks SWE-bench Aider Terminal-Bench',
-    limit: opts.limit || 20,
-  });
+  const query =
+    opts.query ||
+    process.env.AI_BRAIN_PRIORS_QUERY ||
+    'coding agent model benchmarks SWE-bench Aider Terminal-Bench';
+  const results = await opts.search(query);
   if (!Array.isArray(results)) throw new Error('PRIORS_SEARCH_RESULT_INVALID');
   const document = mergePriorDocuments(results, opts.now);
   document.searchSource =

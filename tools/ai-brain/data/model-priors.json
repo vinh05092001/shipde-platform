@@ -46,7 +46,27 @@
       "metadataSource": {
         "url": "https://benchlm.ai/models/gpt-5-6-sol",
         "retrievedAt": "2026-10-11T00:00:00.000Z"
-      }
+      },
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 77.4,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        },
+        {
+          "name": "liveBench",
+          "score": 81.1,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/liveBench"
+          }
+        }
+      ],
+      "score": 79.3,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "gpt-6-astra",
@@ -69,7 +89,27 @@
       "metadataSource": {
         "url": "https://benchlm.ai/models/gpt-6-astra",
         "retrievedAt": "2026-10-11T00:00:00.000Z"
-      }
+      },
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 76.9,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        },
+        {
+          "name": "liveBench",
+          "score": 82.2,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/liveBench"
+          }
+        }
+      ],
+      "score": 79.6,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "grok-4-6",
@@ -92,7 +132,27 @@
       "metadataSource": {
         "url": "https://benchlm.ai/models/grok-4-6",
         "retrievedAt": "2026-10-11T00:00:00.000Z"
-      }
+      },
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 76.8,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        },
+        {
+          "name": "liveBench",
+          "score": 78,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/liveBench"
+          }
+        }
+      ],
+      "score": 77.4,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "gpt-5-6-terra",
@@ -115,7 +175,27 @@
       "metadataSource": {
         "url": "https://benchlm.ai/models/gpt-5-6-terra",
         "retrievedAt": "2026-10-11T00:00:00.000Z"
-      }
+      },
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 76.7,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        },
+        {
+          "name": "liveBench",
+          "score": 77.9,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/liveBench"
+          }
+        }
+      ],
+      "score": 77.3,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "gemini-3-8-flash",
@@ -138,7 +218,27 @@
       "metadataSource": {
         "url": "https://benchlm.ai/models/gemini-3-8-flash",
         "retrievedAt": "2026-10-11T00:00:00.000Z"
-      }
+      },
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 76.3,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        },
+        {
+          "name": "liveBench",
+          "score": 75.8,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/liveBench"
+          }
+        }
+      ],
+      "score": 76.1,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "kimi-k3",
@@ -157,7 +257,27 @@
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/liveBench"
         }
-      ]
+      ],
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 76.2,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        },
+        {
+          "name": "liveBench",
+          "score": 79.2,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/liveBench"
+          }
+        }
+      ],
+      "score": 77.7,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "gemini-3-7-flash",
@@ -180,7 +300,27 @@
       "metadataSource": {
         "url": "https://benchlm.ai/models/gemini-3-7-flash",
         "retrievedAt": "2026-10-11T00:00:00.000Z"
-      }
+      },
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 76.1,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        },
+        {
+          "name": "liveBench",
+          "score": 78.8,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/liveBench"
+          }
+        }
+      ],
+      "score": 77.4,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "deepseek-v4-1-flash",
@@ -199,7 +339,19 @@
       "metadataSource": {
         "url": "https://benchlm.ai/models/deepseek-v4-1-flash",
         "retrievedAt": "2026-10-11T00:00:00.000Z"
-      }
+      },
+      "benchmarks": [
+        {
+          "name": "liveBench",
+          "score": 81.1,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/liveBench"
+          }
+        }
+      ],
+      "score": 81.1,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "muse-spark-1-3",
@@ -222,7 +374,27 @@
       "metadataSource": {
         "url": "https://benchlm.ai/models/muse-spark-1-3",
         "retrievedAt": "2026-10-11T00:00:00.000Z"
-      }
+      },
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 75.8,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        },
+        {
+          "name": "liveBench",
+          "score": 81.6,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/liveBench"
+          }
+        }
+      ],
+      "score": 78.7,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "gpt-5-5",
@@ -245,7 +417,27 @@
       "metadataSource": {
         "url": "https://benchlm.ai/models/gpt-5-5",
         "retrievedAt": "2026-10-11T00:00:00.000Z"
-      }
+      },
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 74.9,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        },
+        {
+          "name": "liveBench",
+          "score": 80.2,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/liveBench"
+          }
+        }
+      ],
+      "score": 77.6,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "glm-5-3",
@@ -268,7 +460,27 @@
       "metadataSource": {
         "url": "https://benchlm.ai/models/glm-5-3",
         "retrievedAt": "2026-10-11T00:00:00.000Z"
-      }
+      },
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 74.8,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        },
+        {
+          "name": "liveBench",
+          "score": 76.1,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/liveBench"
+          }
+        }
+      ],
+      "score": 75.4,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "qwen3-8-flash-next",
@@ -291,7 +503,27 @@
       "metadataSource": {
         "url": "https://benchlm.ai/models/qwen3-8-flash-next",
         "retrievedAt": "2026-10-11T00:00:00.000Z"
-      }
+      },
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 73,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        },
+        {
+          "name": "liveBench",
+          "score": 76.2,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/liveBench"
+          }
+        }
+      ],
+      "score": 74.6,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "grok-4-5",
@@ -310,7 +542,19 @@
       "metadataSource": {
         "url": "https://benchlm.ai/models/grok-4-5",
         "retrievedAt": "2026-10-11T00:00:00.000Z"
-      }
+      },
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 72.5,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        }
+      ],
+      "score": 72.5,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "grok-4-7",
@@ -329,7 +573,19 @@
       "metadataSource": {
         "url": "https://benchlm.ai/models/grok-4-7",
         "retrievedAt": "2026-10-11T00:00:00.000Z"
-      }
+      },
+      "benchmarks": [
+        {
+          "name": "liveBench",
+          "score": 77.4,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/liveBench"
+          }
+        }
+      ],
+      "score": 77.4,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "muse-spark-1-2",
@@ -348,7 +604,19 @@
       "metadataSource": {
         "url": "https://benchlm.ai/models/muse-spark-1-2",
         "retrievedAt": "2026-10-11T00:00:00.000Z"
-      }
+      },
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 72.2,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        }
+      ],
+      "score": 72.2,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "qwen3-8-max",
@@ -371,7 +639,27 @@
       "metadataSource": {
         "url": "https://benchlm.ai/models/qwen3-8-max",
         "retrievedAt": "2026-10-11T00:00:00.000Z"
-      }
+      },
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 71.8,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        },
+        {
+          "name": "liveBench",
+          "score": 78.5,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/liveBench"
+          }
+        }
+      ],
+      "score": 75.2,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "deepseek-v4-flash-vision-exp",
@@ -386,7 +674,19 @@
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/liveBench"
         }
-      ]
+      ],
+      "benchmarks": [
+        {
+          "name": "liveBench",
+          "score": 76.8,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/liveBench"
+          }
+        }
+      ],
+      "score": 76.8,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "gpt-5-6-luna",
@@ -409,7 +709,27 @@
       "metadataSource": {
         "url": "https://benchlm.ai/models/gpt-5-6-luna",
         "retrievedAt": "2026-10-11T00:00:00.000Z"
-      }
+      },
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 71.5,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        },
+        {
+          "name": "liveBench",
+          "score": 73.6,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/liveBench"
+          }
+        }
+      ],
+      "score": 72.6,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "muse-spark-1-1",
@@ -428,7 +748,19 @@
       "metadataSource": {
         "url": "https://benchlm.ai/models/muse-spark-1-1",
         "retrievedAt": "2026-10-11T00:00:00.000Z"
-      }
+      },
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 71.3,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        }
+      ],
+      "score": 71.3,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "gpt-5-4",
@@ -447,7 +779,19 @@
       "metadataSource": {
         "url": "https://benchlm.ai/models/gpt-5-4",
         "retrievedAt": "2026-10-11T00:00:00.000Z"
-      }
+      },
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 71,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        }
+      ],
+      "score": 71,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "deepseek-v4-flash-0731",
@@ -466,7 +810,27 @@
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/liveBench"
         }
-      ]
+      ],
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 69.1,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        },
+        {
+          "name": "liveBench",
+          "score": 74.2,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/liveBench"
+          }
+        }
+      ],
+      "score": 71.7,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "deepseek-v4-pro",
@@ -481,7 +845,19 @@
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/aacodingindex"
         }
-      ]
+      ],
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 68.8,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        }
+      ],
+      "score": 68.8,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "glm-5-2",
@@ -504,7 +880,27 @@
       "metadataSource": {
         "url": "https://benchlm.ai/models/glm-5-2",
         "retrievedAt": "2026-10-11T00:00:00.000Z"
-      }
+      },
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 68.8,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        },
+        {
+          "name": "liveBench",
+          "score": 73.2,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/liveBench"
+          }
+        }
+      ],
+      "score": 71,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "qwen3-8-27b",
@@ -527,7 +923,27 @@
       "metadataSource": {
         "url": "https://benchlm.ai/models/qwen3-8-27b",
         "retrievedAt": "2026-10-11T00:00:00.000Z"
-      }
+      },
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 68.1,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        },
+        {
+          "name": "liveBench",
+          "score": 75.3,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/liveBench"
+          }
+        }
+      ],
+      "score": 71.7,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "gpt-6-luna",
@@ -546,7 +962,19 @@
       "metadataSource": {
         "url": "https://benchlm.ai/models/gpt-6-luna",
         "retrievedAt": "2026-10-11T00:00:00.000Z"
-      }
+      },
+      "benchmarks": [
+        {
+          "name": "liveBench",
+          "score": 72,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/liveBench"
+          }
+        }
+      ],
+      "score": 72,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "glm-5-3-flash",
@@ -565,7 +993,19 @@
       "metadataSource": {
         "url": "https://benchlm.ai/models/glm-5-3-flash",
         "retrievedAt": "2026-10-11T00:00:00.000Z"
-      }
+      },
+      "benchmarks": [
+        {
+          "name": "liveBench",
+          "score": 71.6,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/liveBench"
+          }
+        }
+      ],
+      "score": 71.6,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "qwen3-7-max",
@@ -588,7 +1028,27 @@
       "metadataSource": {
         "url": "https://benchlm.ai/models/qwen3-7-max",
         "retrievedAt": "2026-10-11T00:00:00.000Z"
-      }
+      },
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 66,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        },
+        {
+          "name": "liveBench",
+          "score": 73.1,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/liveBench"
+          }
+        }
+      ],
+      "score": 69.6,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "kimi-k2-6",
@@ -607,7 +1067,27 @@
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/liveBench"
         }
-      ]
+      ],
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 61.8,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        },
+        {
+          "name": "liveBench",
+          "score": 70.5,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/liveBench"
+          }
+        }
+      ],
+      "score": 66.2,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "kimi-k2-7",
@@ -626,7 +1106,27 @@
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/liveBench"
         }
-      ]
+      ],
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 60.8,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        },
+        {
+          "name": "liveBench",
+          "score": 68.4,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/liveBench"
+          }
+        }
+      ],
+      "score": 64.6,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "apodex-1-1-mini",
@@ -645,7 +1145,19 @@
       "metadataSource": {
         "url": "https://benchlm.ai/models/apodex-1-1-mini",
         "retrievedAt": "2026-10-11T00:00:00.000Z"
-      }
+      },
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 60.8,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        }
+      ],
+      "score": 60.8,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "mimo-v2-5-pro",
@@ -664,7 +1176,19 @@
       "metadataSource": {
         "url": "https://benchlm.ai/models/mimo-v2-5-pro",
         "retrievedAt": "2026-10-11T00:00:00.000Z"
-      }
+      },
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 60.2,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        }
+      ],
+      "score": 60.2,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "minimax-m3",
@@ -687,7 +1211,27 @@
       "metadataSource": {
         "url": "https://benchlm.ai/models/minimax-m3",
         "retrievedAt": "2026-10-11T00:00:00.000Z"
-      }
+      },
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 58.6,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        },
+        {
+          "name": "liveBench",
+          "score": 67.3,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/liveBench"
+          }
+        }
+      ],
+      "score": 63,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "qwen3-7-plus",
@@ -706,7 +1250,19 @@
       "metadataSource": {
         "url": "https://benchlm.ai/models/qwen3-7-plus",
         "retrievedAt": "2026-10-11T00:00:00.000Z"
-      }
+      },
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 55.9,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        }
+      ],
+      "score": 55.9,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "glm-5-1",
@@ -725,7 +1281,19 @@
       "metadataSource": {
         "url": "https://benchlm.ai/models/glm-5-1",
         "retrievedAt": "2026-10-11T00:00:00.000Z"
-      }
+      },
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 55.8,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        }
+      ],
+      "score": 55.8,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "qwen3-6-plus",
@@ -748,7 +1316,27 @@
       "metadataSource": {
         "url": "https://benchlm.ai/models/qwen3-6-plus",
         "retrievedAt": "2026-10-11T00:00:00.000Z"
-      }
+      },
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 54.5,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        },
+        {
+          "name": "liveBench",
+          "score": 68.9,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/liveBench"
+          }
+        }
+      ],
+      "score": 61.7,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "qwen3-6-27b",
@@ -771,7 +1359,27 @@
       "metadataSource": {
         "url": "https://benchlm.ai/models/qwen3-6-27b",
         "retrievedAt": "2026-10-11T00:00:00.000Z"
-      }
+      },
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 53.7,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        },
+        {
+          "name": "liveBench",
+          "score": 64,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/liveBench"
+          }
+        }
+      ],
+      "score": 58.9,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "minimax-m2-7",
@@ -790,7 +1398,19 @@
       "metadataSource": {
         "url": "https://benchlm.ai/models/minimax-m2-7",
         "retrievedAt": "2026-10-11T00:00:00.000Z"
-      }
+      },
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 52.6,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        }
+      ],
+      "score": 52.6,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "ling-3-0-flash",
@@ -809,7 +1429,19 @@
       "metadataSource": {
         "url": "https://benchlm.ai/models/ling-3-0-flash",
         "retrievedAt": "2026-10-11T00:00:00.000Z"
-      }
+      },
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 50.6,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        }
+      ],
+      "score": 50.6,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "mimo-v2-flash",
@@ -828,7 +1460,19 @@
       "metadataSource": {
         "url": "https://benchlm.ai/models/mimo-v2-flash",
         "retrievedAt": "2026-10-11T00:00:00.000Z"
-      }
+      },
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 49.8,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        }
+      ],
+      "score": 49.8,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "nemotron-3-ultra",
@@ -847,7 +1491,27 @@
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/liveBench"
         }
-      ]
+      ],
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 49.3,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        },
+        {
+          "name": "liveBench",
+          "score": 67.4,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/liveBench"
+          }
+        }
+      ],
+      "score": 58.4,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "muse-glimmer-30b",
@@ -866,7 +1530,19 @@
       "metadataSource": {
         "url": "https://benchlm.ai/models/muse-glimmer-30b",
         "retrievedAt": "2026-10-11T00:00:00.000Z"
-      }
+      },
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 49,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        }
+      ],
+      "score": 49,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "mistral-medium-3-5",
@@ -881,7 +1557,19 @@
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/aacodingindex"
         }
-      ]
+      ],
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 46.9,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        }
+      ],
+      "score": 46.9,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "kimi-k2-5",
@@ -900,7 +1588,19 @@
       "metadataSource": {
         "url": "https://benchlm.ai/models/kimi-k2-5",
         "retrievedAt": "2026-10-11T00:00:00.000Z"
-      }
+      },
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 46.8,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        }
+      ],
+      "score": 46.8,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "qwen3-5-122b-a10b",
@@ -919,7 +1619,19 @@
       "metadataSource": {
         "url": "https://benchlm.ai/models/qwen3-5-122b-a10b",
         "retrievedAt": "2026-10-11T00:00:00.000Z"
-      }
+      },
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 45.7,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        }
+      ],
+      "score": 45.7,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "gemma4-31b",
@@ -934,7 +1646,19 @@
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/aacodingindex"
         }
-      ]
+      ],
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 43.4,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        }
+      ],
+      "score": 43.4,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "qwen3-6-35b-a3b",
@@ -953,7 +1677,19 @@
       "metadataSource": {
         "url": "https://benchlm.ai/models/qwen3-6-35b-a3b",
         "retrievedAt": "2026-10-11T00:00:00.000Z"
-      }
+      },
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 41.9,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        }
+      ],
+      "score": 41.9,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "nemotron-3-super",
@@ -968,7 +1704,19 @@
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/aacodingindex"
         }
-      ]
+      ],
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 37.7,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        }
+      ],
+      "score": 37.7,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "gpt-oss-120b",
@@ -987,7 +1735,19 @@
       "metadataSource": {
         "url": "https://benchlm.ai/models/gpt-oss-120b",
         "retrievedAt": "2026-10-11T00:00:00.000Z"
-      }
+      },
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 30.4,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        }
+      ],
+      "score": 30.4,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "command-a-plus",
@@ -1006,7 +1766,19 @@
       "metadataSource": {
         "url": "https://benchlm.ai/models/command-a-plus",
         "retrievedAt": "2026-10-11T00:00:00.000Z"
-      }
+      },
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 27.9,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        }
+      ],
+      "score": 27.9,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "nemotron-3-5-lightning",
@@ -1021,7 +1793,19 @@
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/aacodingindex"
         }
-      ]
+      ],
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 26.8,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        }
+      ],
+      "score": 26.8,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "mistral-small-4",
@@ -1040,7 +1824,19 @@
       "metadataSource": {
         "url": "https://benchlm.ai/models/mistral-small-4",
         "retrievedAt": "2026-10-11T00:00:00.000Z"
-      }
+      },
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 26.6,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        }
+      ],
+      "score": 26.6,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "gpt-oss-20b",
@@ -1059,7 +1855,19 @@
       "metadataSource": {
         "url": "https://benchlm.ai/models/gpt-oss-20b",
         "retrievedAt": "2026-10-11T00:00:00.000Z"
-      }
+      },
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 20.7,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        }
+      ],
+      "score": 20.7,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "mistral-large-3",
@@ -1078,7 +1886,19 @@
       "metadataSource": {
         "url": "https://benchlm.ai/models/mistral-large-3",
         "retrievedAt": "2026-10-11T00:00:00.000Z"
-      }
+      },
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 20.1,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        }
+      ],
+      "score": 20.1,
+      "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
       "canonical": "lfm-2-5-2-6b",
@@ -1093,7 +1913,20 @@
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/aacodingindex"
         }
-      ]
+      ],
+      "benchmarks": [
+        {
+          "name": "aaCodingIndex",
+          "score": 7.7,
+          "source": {
+            "retrievedAt": "2026-10-05T12:24:19.741Z",
+            "url": "https://benchlm.ai/benchmarks/aacodingindex"
+          }
+        }
+      ],
+      "score": 7.7,
+      "searchSource": "benchlm-curated-public-benchmarks"
     }
-  ]
+  ],
+  "searchSource": "benchlm-curated-public-benchmarks"
 }

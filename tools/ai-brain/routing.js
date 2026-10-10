@@ -226,11 +226,16 @@ function jevQuestion(profile) {
 
 function jevModelChoiceQuestion(profile, candidates) {
   const options = (candidates || []).map((candidate) => candidate.candidateKey);
+  const rankedCandidates = (candidates || []).map((candidate) =>
+    Object.assign({}, candidate, {
+      quotaStatus: candidate.headroomStatus || candidate.quotaStatus || 'unknown',
+    })
+  );
   return {
     kind: 'select-eligible-model',
     prompt:
       'Choose the best candidate from the eligible ranked options for this task. Return one option only.',
-    evidence: JSON.stringify({ profile, candidates }),
+    evidence: JSON.stringify({ profile, candidates: rankedCandidates }),
     options,
   };
 }
@@ -992,7 +997,7 @@ function scoreForProfile(candidate, assessment, ctx) {
   const headroomPenalty =
     candidate.headroomStatus === 'unknown' ? 15 : candidate.headroomStatus === 'tight' ? 10 : 0;
   score = Math.max(0, score - busyPenalty - agePenalty - headroomPenalty);
-  const priorContribution = priorUsable ? Math.round(prior.bonus * (1 - priorWeight)) : 0;
+  const priorContribution = priorUsable ? prior.bonus : 0;
   const weightedPriorContribution =
     priorUsable && prior.score !== undefined
       ? Math.round((prior.bonus * priorQualityWeight * wQuality) / totalWeight)
@@ -1669,6 +1674,7 @@ async function runProfileDispatch(args, deps) {
     chosen: result.chosen,
     reason: result.reason,
     reasonCode: result.reasonCode || null,
+    modelChoice: result.modelChoice || null,
   };
   decisions.recordDecision(decisionRecorded, {
     dir: args['decision-dir'] || d.decisionDir,
