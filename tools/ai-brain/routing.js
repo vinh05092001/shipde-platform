@@ -522,14 +522,6 @@ function proofObservedWithSource(evidenceData, candidate) {
   }
   const passed = (items || []).filter((e) => e.status === 'passed');
   const direct = evidence.proofLevelOf(passed);
-  if (direct) return { level: direct, source: proofSource, transferred: false };
-
-  // Proof describes the backend model's ability; quota, cooldown and failures
-  // remain attached to the candidate identity above. Transfer only the
-  // highest proof tier, and only when both model ids normalize to a known,
-  // non-empty backend id under registry-declared route prefixes.
-  const targetModel = candidate && (candidate.modelId || candidate.model);
-  const targetModelId = normalizedBackendModel(targetModel, BACKEND_MODEL_PREFIXES, candidate);
   const ownBlocked = evidence.isCandidateBlocked(evidenceData, candidate).blocked;
   const ownFailed = (items || []).some((item) => item.status === 'failed');
   const quotaExhausted =
@@ -539,7 +531,18 @@ function proofObservedWithSource(evidenceData, candidate) {
       candidate.remainingPercent === 0 ||
       candidate.remainingPercent === '0' ||
       candidate.headroom === 'exhausted');
-  if (!targetModelId || ownBlocked || ownFailed || quotaExhausted) {
+  if (ownBlocked || ownFailed || quotaExhausted) {
+    return { level: null, source: null, transferred: false };
+  }
+  if (direct) return { level: direct, source: proofSource, transferred: false };
+
+  // Proof describes the backend model's ability; quota, cooldown and failures
+  // remain attached to the candidate identity above. Transfer only the
+  // highest proof tier, and only when both model ids normalize to a known,
+  // non-empty backend id under registry-declared route prefixes.
+  const targetModel = candidate && (candidate.modelId || candidate.model);
+  const targetModelId = normalizedBackendModel(targetModel, BACKEND_MODEL_PREFIXES, candidate);
+  if (!targetModelId) {
     return { level: null, source: null, transferred: false };
   }
   let best = null;
@@ -586,28 +589,8 @@ function normalizedBackendModel(modelId, prefixes, identity) {
     normalized = normalized.slice(declaredPrefix.length);
   }
   if (!normalized || normalized.includes('*') || !/[a-z0-9]/i.test(normalized)) return '';
+  if (normalized.includes('/')) return '';
   return normalized.toLowerCase();
-}
-
-function backendModelBase(modelId, prefixes, identity) {
-  if (typeof modelId !== 'string' || !modelId.trim() || modelId.includes('*')) return '';
-  let base = modelBase(modelId, prefixes);
-  const routePrefix = (identity && identity.upstream ? identity.upstream + '/' : '') || '';
-  if (base.includes('/')) {
-    // A routed model id is transferable only when its leading alias agrees
-    // with the candidate's recorded upstream. Otherwise its backend identity
-    // is ambiguous and must remain path-specific.
-    if (!routePrefix || !base.startsWith(routePrefix)) return '';
-    base = base.slice(routePrefix.length);
-  } else if (identity && identity.gateway) {
-    // Gateway evidence without its route alias is not enough to prove which
-    // backend the gateway selected.
-    return '';
-  }
-  // An id beginning with an unrecognized route prefix is ambiguous. Only
-  // strip prefixes declared by sources.json, then accept a concrete model id.
-  if (!base || base === '*' || base.includes('*') || !/[a-z0-9]/i.test(base)) return '';
-  return base;
 }
 
 function proofObserved(evidenceData, candidate) {

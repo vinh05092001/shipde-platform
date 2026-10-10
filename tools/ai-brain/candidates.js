@@ -556,11 +556,7 @@ function poolAccountCandidates(opts) {
       if (typeof c === 'string') {
         const model = c.replace(/^(?:ag|antigravity)\//, '');
         if (model && familyOf(model) && (model !== c || explicitlyEnabled)) poolModels.add(model);
-        else if (
-          model !== c &&
-          !familyOf(model) &&
-          Array.isArray(o.candidateGenerationRejections)
-        ) {
+        else if (!familyOf(model) && Array.isArray(o.candidateGenerationRejections)) {
           o.candidateGenerationRejections.push({
             modelId: model,
             reasonCode: model ? 'UNKNOWN_MODEL_FAMILY' : 'EMPTY_MODEL_ID',

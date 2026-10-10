@@ -184,6 +184,33 @@ test('candidate generation rejects unknown aliased models with a named reason', 
   ]);
 });
 
+test('candidate generation names rejections for unprefixed unknown catalogue models when pool is enabled', () => {
+  const rejections = [];
+  const candidates = generateCandidates({
+    registry: sources.loadSources(),
+    catalogue: ['not-a-known-family'],
+    accounts: Array.from({ length: 7 }, (_, index) => ({
+      id: 'agy' + String(index + 1).padStart(2, '0'),
+      provider: 'agy-pool',
+      enabled: true,
+      model: 'gemini-3.1-pro',
+    })),
+    externalWorkers: 'agy-pool',
+    enablePool: true,
+    models: ['gemini-3.1-pro'],
+    candidateGenerationRejections: rejections,
+  });
+  assert.equal(
+    candidates.some(
+      (candidate) => candidate.source === 'agy-pool' && candidate.modelId === 'not-a-known-family'
+    ),
+    false
+  );
+  assert.deepEqual(rejections, [
+    { modelId: 'not-a-known-family', reasonCode: 'UNKNOWN_MODEL_FAMILY' },
+  ]);
+});
+
 test('intake pool writer inherits backend WORK_ITEM_PASS from blocked 9router ag path', async () => {
   const root = fixtureRoot();
   const backendModel = 'gemini-3.1-pro-low';
@@ -343,6 +370,37 @@ test('intake pool writer inherits backend WORK_ITEM_PASS from blocked 9router ag
     modelId: 'unrecognized-route/' + backendModel,
   });
   assert.equal(require('../routing').proofObservedWithSource(proofData, unknown).level, null);
+
+  const directProof = Object.assign({}, poolCandidate, {
+    evidence: [{ status: 'passed', proofLevel: 'WORK_ITEM_PASS' }],
+  });
+  assert.equal(
+    require('../routing').proofObservedWithSource(proofData, directProof).level,
+    'WORK_ITEM_PASS'
+  );
+  assert.equal(
+    require('../routing').proofObservedWithSource(proofData, {
+      ...directProof,
+      headroomStatus: 'exhausted',
+    }).level,
+    null
+  );
+  const blockedDirect = { ...directProof, accountId: 'agy-blocked', quotaScope: 'agy-blocked' };
+  const blockedData = {
+    combinations: [
+      {
+        ...blockedDirect,
+        evidence: [
+          { status: 'passed', proofLevel: 'WORK_ITEM_PASS' },
+          { status: 'failed', httpStatus: 429 },
+        ],
+      },
+    ],
+  };
+  assert.equal(
+    require('../routing').proofObservedWithSource(blockedData, blockedDirect).level,
+    null
+  );
 });
 
 test('proof transfer requires exact normalized backend identity', () => {
@@ -368,4 +426,35 @@ test('proof transfer requires exact normalized backend identity', () => {
     modelId: 'gemini-model-2026-10-11',
   };
   assert.equal(require('../routing').proofObservedWithSource(data, distinct).level, null);
+  const ambiguous = { ...source, modelId: 'ag/unknown/gemini-model' };
+  const ambiguousData = {
+    combinations: [
+      { ...ambiguous, evidence: [{ status: 'passed', proofLevel: 'WORK_ITEM_PASS' }] },
+    ],
+  };
+  const target = { ...distinct, modelId: 'unknown/gemini-model' };
+  assert.equal(require('../routing').proofObservedWithSource(ambiguousData, target).level, null);
+});
+
+test('intake supplies empty account options when none are configured', async () => {
+  const root = fixtureRoot();
+  let receivedOptions;
+  await intake.runIntake(
+    { workItem: 'FIXTURE-AI-141' },
+    {
+      root,
+      baseSha: 'd'.repeat(40),
+      readRegisterRow: () => ({ dependencies: '' }),
+      readRegisterRows: () => [],
+      listAccounts: (options) => {
+        receivedOptions = options;
+        return [];
+      },
+      buildCatalogue: async () => ['ag/gemini-fixture-pro'],
+      hasAgyPoolQuota: false,
+      readHistory: () => [],
+      isAncestorOf: () => true,
+    }
+  );
+  assert.deepEqual(receivedOptions, {});
 });
