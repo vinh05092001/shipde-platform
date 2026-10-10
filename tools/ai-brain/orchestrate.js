@@ -4687,6 +4687,152 @@ function prettierCheck(files) {
   };
 }
 
+/** Apply the repository formatter inside the worker checkout, then commit only its failing paths. */
+function autoFormatWorkerFiles(workerRoot, files, options) {
+  const paths = files.map((file) => path.relative(workerRoot, file));
+  const status = spawnSync(
+    'git',
+    hardenedGitArgs(workerRoot).concat(['status', '--porcelain=v1', '--untracked-files=all']),
+    { cwd: workerRoot, encoding: 'utf8', windowsHide: true, timeout: 30000, env: hardenedGitEnv() }
+  );
+  if (!status || status.status !== 0) {
+    return { status: 'REFUSED', reason: 'WORKER_TREE_DIRTY: unable to verify worker tree status' };
+  }
+  const dirtyEntries = String(status.stdout || '')
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .filter((line) => !/^\?\? node_modules(?:\/|\\|$)/.test(line));
+  if (dirtyEntries.length > 0) {
+    return { status: 'REFUSED', reason: 'WORKER_TREE_DIRTY' };
+  }
+
+  const bin = path.join(workerRoot, 'node_modules', '.bin', 'prettier');
+  const candidates =
+    process.platform === 'win32' ? [bin + '.cmd', bin + '.CMD', bin + '.exe', bin] : [bin];
+  const executable = candidates.find((candidate) => fs.existsSync(candidate));
+  if (!executable) return { status: 'FAILED', reason: 'worker prettier executable is unavailable' };
+  const prettierArgs = ['--write'].concat(paths);
+  const command =
+    process.platform === 'win32' && /\.cmd$/i.test(executable) ? 'powershell.exe' : executable;
+  const commandArgs =
+    command === 'powershell.exe'
+      ? [
+          '-NoProfile',
+          '-NonInteractive',
+          '-ExecutionPolicy',
+          'Bypass',
+          '-File',
+          fs.existsSync(executable.replace(/\.cmd$/i, '.ps1'))
+            ? executable.replace(/\.cmd$/i, '.ps1')
+            : executable,
+          '--write',
+        ].concat(paths)
+      : prettierArgs;
+  const formatted = spawnSync(command, commandArgs, {
+    cwd: workerRoot,
+    encoding: 'utf8',
+    windowsHide: true,
+    timeout: 120000,
+    env: process.env,
+  });
+  if (!formatted || formatted.error || formatted.status !== 0) {
+    return {
+      status: 'FAILED',
+      reason: String(
+        (formatted && (formatted.stderr || formatted.stdout)) ||
+          (formatted && formatted.error && formatted.error.message) ||
+          'prettier --write failed'
+      ).trim(),
+    };
+  }
+
+  const formatterHead = spawnSync(
+    'git',
+    hardenedGitArgs(workerRoot).concat(['rev-parse', 'HEAD']),
+    { cwd: workerRoot, encoding: 'utf8', windowsHide: true, env: hardenedGitEnv() }
+  );
+  const currentHead = String((formatterHead && formatterHead.stdout) || '').trim();
+  if (!SHA_40.test(currentHead))
+    return { status: 'FAILED', reason: 'formatter worker HEAD is unavailable' };
+
+  const check = prettierCheck(paths.map((file) => path.join(workerRoot, file)));
+  if (check.status !== 'PASSED')
+    return { status: 'FAILED', reason: check.detail || 'prettier --check failed after write' };
+
+  if (options.expectedHead && currentHead !== options.expectedHead) {
+    return { status: 'FAILED', reason: 'formatter worker HEAD does not match the reviewed commit' };
+  }
+
+  const changed = spawnSync('git', hardenedGitArgs(workerRoot).concat(['diff', '--name-only']), {
+    cwd: workerRoot,
+    encoding: 'utf8',
+    windowsHide: true,
+    env: hardenedGitEnv(),
+  });
+  if (!changed || changed.status !== 0)
+    return { status: 'FAILED', reason: 'unable to inspect formatter diff' };
+  const changedPaths = String(changed.stdout || '')
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .sort();
+  if (
+    changedPaths.some((file) => !paths.includes(file)) ||
+    paths.some((file) => !changedPaths.includes(file))
+  ) {
+    return { status: 'FAILED', reason: 'formatter changed paths outside the failing file list' };
+  }
+
+  const add = spawnSync('git', hardenedGitArgs(workerRoot).concat(['add', '--']).concat(paths), {
+    cwd: workerRoot,
+    encoding: 'utf8',
+    windowsHide: true,
+    env: hardenedGitEnv(),
+  });
+  if (!add || add.status !== 0)
+    return { status: 'FAILED', reason: 'git add failed for formatter paths' };
+  const staged = spawnSync(
+    'git',
+    hardenedGitArgs(workerRoot).concat(['diff', '--cached', '--name-only']),
+    { cwd: workerRoot, encoding: 'utf8', windowsHide: true, env: hardenedGitEnv() }
+  );
+  const stagedPaths =
+    staged && staged.status === 0
+      ? String(staged.stdout || '')
+          .split(/\r?\n/)
+          .filter(Boolean)
+          .sort()
+      : [];
+  if (JSON.stringify(stagedPaths) !== JSON.stringify(paths.slice().sort())) {
+    return { status: 'FAILED', reason: 'staged paths differ from failing file list' };
+  }
+  const commit = spawnSync(
+    'git',
+    hardenedGitArgs(workerRoot).concat([
+      'commit',
+      '-m',
+      '[' + (options.workItemId || 'TASK-AI-140') + '] Apply repo formatter (prettier --write)',
+    ]),
+    { cwd: workerRoot, encoding: 'utf8', windowsHide: true, env: hardenedGitEnv() }
+  );
+  if (!commit || commit.status !== 0)
+    return {
+      status: 'FAILED',
+      reason:
+        'formatter commit failed: ' +
+        String((commit && (commit.stderr || commit.stdout)) || '').trim(),
+    };
+  const head = spawnSync('git', hardenedGitArgs(workerRoot).concat(['rev-parse', 'HEAD']), {
+    cwd: workerRoot,
+    encoding: 'utf8',
+    windowsHide: true,
+    env: hardenedGitEnv(),
+  });
+  const sha = String((head && head.stdout) || '').trim();
+  return SHA_40.test(sha)
+    ? { status: 'PASSED', sha, files: paths }
+    : { status: 'FAILED', reason: 'formatter commit has invalid HEAD' };
+}
+
 /**
  * The worker's changed names between the handoff base and the commit under
  * review — the same host-side `git diff` the format gate judges, without the
@@ -4929,6 +5075,7 @@ async function runFormatGate(params) {
   const baseSha = params.baseSha;
   const targetSha = params.targetSha;
   const repair = params.repair;
+  const commitFormatFix = params.commitFormatFix || autoFormatWorkerFiles;
   const namesOf = (files) =>
     files.map((file) => path.relative(workerRoot, file) || file).slice(0, 5);
   const record = (status, entry) => {
@@ -4961,6 +5108,45 @@ async function runFormatGate(params) {
   }
 
   record('FAILED', { files: namesOf(changed.files), reason: first.detail });
+  const formatted = await commitFormatFix(workerRoot, changed.files, {
+    workItemId: item.id,
+    expectedHead: targetSha,
+  });
+  if (formatted.status === 'REFUSED') {
+    const reason = formatted.reason;
+    record('REFUSED', { files: namesOf(changed.files), reason });
+    return { status: FormatGate.REFUSED, reason, files: changed.files };
+  }
+  if (formatted.status === 'FAILED') {
+    record('FAILED', { files: namesOf(changed.files), reason: formatted.reason });
+    if (typeof o.log === 'function') o.log('FORMAT_AUTOFIX_FAILED', { reason: formatted.reason });
+  }
+  if (
+    formatted.status === 'FAILED' &&
+    formatted.reason === 'worker prettier executable is unavailable'
+  ) {
+    // Syntax/formatter failures can be handled by the existing repair lane.
+  }
+  if (formatted.status === 'PASSED') {
+    const verification = prettierCheck(changed.files);
+    if (verification.status === 'PASSED') {
+      const names = namesOf(changed.files);
+      decisions.recordDecision(
+        {
+          stage: 'format_autofixed',
+          workItemId: item.id,
+          role: roleOf(item),
+          branch: (params.session && params.session.branch) || null,
+          sha: formatted.sha,
+          files: names,
+          detail: 'Repository Prettier applied without a model repair.',
+        },
+        logOpts
+      );
+      record('PASSED', { files: names, sha: formatted.sha, autoFixed: true });
+      return { status: FormatGate.PASSED, files: changed.files, sha: formatted.sha };
+    }
+  }
   const findings = [
     {
       id: 'FORMAT_CHECK_FAILED',
@@ -4970,6 +5156,14 @@ async function runFormatGate(params) {
         changed.files.length +
         ' changed file(s): ' +
         namesOf(changed.files).join(', '),
+      detail:
+        'Run exactly `./node_modules/.bin/prettier --write ' +
+        namesOf(changed.files).join(' ') +
+        '` in the worker checkout. This is a format-only repair: do not change behavior, logic, or any other content. The diff must contain formatting changes only.',
+      formatOnly: true,
+      dirtyPaths: namesOf(changed.files),
+      headSha: targetSha,
+      baseSha,
     },
   ];
   const repaired = await repair(findings, targetSha);
@@ -4984,6 +5178,46 @@ async function runFormatGate(params) {
   if (again.detail) {
     record('UNAVAILABLE', { files: namesOf(changed.files), reason: again.detail });
     return { status: FormatGate.UNAVAILABLE, reason: again.detail };
+  }
+  const repairedNames = changedFileNames(workerRoot, targetSha, repairedSha);
+  const allowedNames = namesOf(changed.files);
+  if (repairedNames.detail || repairedNames.names.some((name) => !allowedNames.includes(name))) {
+    const reason =
+      'REPAIR_SCOPE_EXCEEDED: format-only repair changed files outside the failing file list';
+    record('REFUSED', { files: namesOf(again.files), reason, sha: repairedSha });
+    return { status: FormatGate.REFUSED, reason, files: again.files, sha: repairedSha };
+  }
+  let scopeExceeded = false;
+  for (const relative of namesOf(changed.files)) {
+    const before = runHardenedGit(workerRoot, ['show', targetSha + ':' + relative]);
+    if (!before || before.status !== 0) continue;
+    const formatResult = spawnSync(
+      process.execPath,
+      [prettierEntry(), '--write', '--stdin-filepath', relative],
+      {
+        cwd: path.resolve(__dirname, '..', '..'),
+        input: before.stdout,
+        encoding: 'utf8',
+        windowsHide: true,
+      }
+    );
+    if (!formatResult || formatResult.status !== 0) continue;
+    const after = runHardenedGit(workerRoot, ['show', repairedSha + ':' + relative]);
+    if (
+      !after ||
+      after.status !== 0 ||
+      String(after.stdout || '').replace(/\r\n/g, '\n') !==
+        String(formatResult.stdout || '').replace(/\r\n/g, '\n')
+    ) {
+      scopeExceeded = true;
+      break;
+    }
+  }
+  if (scopeExceeded) {
+    const reason =
+      'REPAIR_SCOPE_EXCEEDED: format-only repair differs from the repository Prettier output';
+    record('REFUSED', { files: namesOf(again.files), reason, sha: repairedSha });
+    return { status: FormatGate.REFUSED, reason, files: again.files, sha: repairedSha };
   }
   const second =
     again.files.length === 0 ? { status: 'PASSED', detail: null } : prettierCheck(again.files);
@@ -5000,6 +5234,30 @@ async function runFormatGate(params) {
     namesOf(again.files).join(', ');
   record('REFUSED', { files: namesOf(again.files), reason });
   return { status: FormatGate.REFUSED, reason, files: again.files, sha: repairedSha };
+}
+
+/** TASK-AI-140 test seam for the worker format gate. */
+async function runFormatGateForTest(params) {
+  const item = params.item || { id: 'TASK-AI-140', role: 'author.foundation' };
+  const log = params.log || { formatChecks: [] };
+  return runFormatGate(
+    Object.assign(
+      {
+        o: { log: () => {} },
+        item,
+        log,
+        logOpts: params.logOpts || {
+          dir: params.decisionDir,
+          now: Date.parse('2026-10-10T12:00:00Z'),
+        },
+        workerRoot: params.workerRoot,
+        baseSha: params.baseSha,
+        targetSha: params.targetSha,
+        repair: params.repair || (async () => ({})),
+      },
+      params
+    )
+  );
 }
 
 /** The review / repair stage for one completed session. */
@@ -5124,6 +5382,7 @@ async function reviewItem(
       workerRoot,
       baseSha: formatBaseSha,
       targetSha,
+      session,
       repair: repairWithFinding,
     });
     if (gate.status === FormatGate.REFUSED) {
@@ -6755,6 +7014,7 @@ function finish(log, statusOf, ctx) {
 module.exports = {
   runOrchestration,
   runVerificationCommand,
+  runFormatGateForTest,
   repairSpec,
   resolveLauncher,
   headShaOf,
