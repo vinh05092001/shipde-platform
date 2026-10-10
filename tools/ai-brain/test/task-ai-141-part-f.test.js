@@ -1,0 +1,221 @@
+'use strict';
+
+const { test, describe } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const priorsApi = require('../priors');
+const routing = require('../routing');
+const { candidateKey } = require('../discovery/identity');
+
+function candidate(modelId, overrides) {
+  return Object.assign(
+    {
+      harness: 'paseo',
+      accessPath: 'cli',
+      gateway: 'gateway-f',
+      upstream: 'provider',
+      accountId: modelId + '-account',
+      quotaScope: modelId + '-account',
+      modelId,
+      contextWindow: 100000,
+      latencyMs: 5000,
+      cost: 1,
+      evidence: [{ status: 'passed', proofLevel: 'HARNESS_PASS', ts: new Date().toISOString() }],
+    },
+    overrides || {}
+  );
+}
+
+function profile(overrides) {
+  return Object.assign(
+    {
+      taskId: 'TASK-AI-141-F',
+      role: 'writer',
+      complexity: 'standard',
+      requiredCapabilities: [],
+      proofFloor: 'NONE',
+      contextSize: 1000,
+      expectedDuration: 10000,
+      latencyPriority: 'normal',
+      qualityFloor: 0,
+      costCeiling: 100,
+      requiredHarness: null,
+      forbiddenFailureDomains: [],
+      resourceCeiling: 3,
+      currentWorkload: 0,
+      riskDomains: [],
+    },
+    overrides || {}
+  );
+}
+
+const assessment = { weightProfile: 'BALANCED', weights: { latency: 34, quality: 33, cost: 33 } };
+
+describe('TASK-AI-141 Part F external priors and model choice', () => {
+  test('prior promotes a strong untried model over weak model with old evidence', () => {
+    const strong = candidate('strong-new', {
+      evidence: [],
+      latencyMs: 5000,
+      cost: 1,
+      probation: true,
+    });
+    const weak = candidate('weak-old', {
+      evidence: [],
+      latencyMs: 5000,
+      cost: 1,
+    });
+    const withoutPrior = routing.rankForProfile([strong], profile(), assessment, {
+      now: Date.parse('2026-10-10T12:00:00Z'),
+      headrooms: { default: 'open' },
+      priors: { ranking: [] },
+    });
+    const result = routing.rankForProfile([weak, strong], profile(), assessment, {
+      now: Date.parse('2026-10-10T12:00:00Z'),
+      headrooms: { default: 'open' },
+      priors: {
+        ranking: [
+          {
+            canonical: 'strong-new',
+            codingTier: 'T1',
+            reviewTier: 'T1',
+            score: 90,
+            retrievedAt: '2026-10-09T00:00:00Z',
+            sources: [{ url: 'https://bench.example/strong', retrievedAt: '2026-10-09T00:00:00Z' }],
+          },
+          {
+            canonical: 'weak-old',
+            codingTier: 'T4',
+            reviewTier: 'T4',
+            score: 20,
+            retrievedAt: '2026-10-09T00:00:00Z',
+          },
+        ],
+      },
+    });
+    const strongRanked = result.ranking.find((item) => item.modelId === strong.modelId);
+    assert.ok(strongRanked.score > withoutPrior.ranking[0].score);
+    assert.ok(strongRanked.scoreBreakdown.prior.score >= 90);
+    assert.equal(result.ranking[0].probation, true);
+    assert.equal(strongRanked.scoreBreakdown.cost, 95);
+    assert.match(routing.formatTopEntry(strong, 1), /unknown/);
+  });
+
+  test('probation requires an independent strong reviewer for security, money, or tenant work', () => {
+    const untried = candidate('new-model', { evidence: [] });
+    const task = profile({ riskDomains: ['security'], proofFloor: 'NONE' });
+    const refused = routing.rankForProfile([untried], task, assessment, {
+      headrooms: { default: 'open' },
+      priors: {
+        ranking: [
+          {
+            canonical: 'new-model',
+            codingTier: 'T1',
+            reviewTier: 'T1',
+            score: 90,
+            retrievedAt: new Date().toISOString(),
+          },
+        ],
+      },
+    });
+    assert.equal(refused.ranking.length, 0);
+    assert.equal(refused.rejected[0].reasonCode, 'PROBATION_REQUIRES_INDEPENDENT_STRONG_REVIEWER');
+    const allowed = routing.rankForProfile([untried], task, assessment, {
+      headrooms: { default: 'open' },
+      priors: {
+        ranking: [
+          {
+            canonical: 'new-model',
+            codingTier: 'T1',
+            reviewTier: 'T1',
+            score: 90,
+            retrievedAt: new Date().toISOString(),
+          },
+        ],
+      },
+      independentStrongReviewerGuaranteed: true,
+    });
+    assert.equal(allowed.ranking[0].probation, true);
+    assert.equal(allowed.ranking[0].probationRequiresIndependentReview, true);
+  });
+
+  test('JEV can choose only eligible top candidates; low confidence keeps deterministic choice', async () => {
+    const first = candidate('provider/first');
+    const second = candidate('provider/second');
+    const outside = candidate('provider/blocked', { blocked: true });
+    let question;
+    const ranked = routing.rankForProfile([first, second, outside], profile(), assessment, {
+      headrooms: { default: 'open' },
+    });
+    const result = await routing.adviseRankedModelChoice(ranked, profile(), {
+      topN: 2,
+      minConfidence: 0.7,
+      ask: async (ask) => {
+        question = ask;
+        return { choice: candidateKey(second), confidence: 0.9 };
+      },
+    });
+    assert.ok(question.options.includes(candidateKey(second)));
+    assert.ok(!question.options.includes(candidateKey(outside)));
+    assert.equal(result.chosen, candidateKey(second));
+    const lowConfidence = await routing.adviseRankedModelChoice(
+      routing.rankForProfile([first, second], profile(), assessment, {
+        headrooms: { default: 'open' },
+      }),
+      profile(),
+      {
+        minConfidence: 0.95,
+        ask: async (ask) => ({ choice: ask.options[1], confidence: 0.8 }),
+      }
+    );
+    assert.equal(lowConfidence.chosen, lowConfidence.ranking[0].candidateKey);
+    assert.equal(lowConfidence.modelChoice.outcome, 'UNDECIDED');
+  });
+
+  test('pluggable research merges model benchmark sources and flags stale data', async () => {
+    const file = path.join(
+      fs.mkdtempSync(path.join(os.tmpdir(), 'ai141-priors-')),
+      'model-priors.json'
+    );
+    const refreshed = await priorsApi.refreshPriors({
+      now: Date.parse('2026-10-10T00:00:00Z'),
+      file,
+      search: async () => [
+        {
+          sources: [
+            {
+              id: 'bench',
+              url: 'https://bench.example/results',
+              retrievedAt: '2026-10-09T00:00:00Z',
+            },
+          ],
+          models: [
+            {
+              modelId: 'gateway/Provider.New_Model',
+              releaseDate: '2026-09-01',
+              contextWindow: 200000,
+              benchmarks: {
+                sweBenchVerified: {
+                  score: 82,
+                  source: { url: 'https://bench.example/swe', retrievedAt: '2026-10-09T00:00:00Z' },
+                },
+                aiderPolyglot: 78,
+              },
+            },
+          ],
+        },
+      ],
+    });
+    assert.equal(refreshed.ranking[0].canonical, 'provider-new-model');
+    assert.ok(
+      refreshed.ranking[0].sources.some((source) => source.url === 'https://bench.example/swe')
+    );
+    assert.equal(refreshed.ranking[0].stale, false);
+    assert.equal(priorsApi.loadPriors(file).ranking.length, 1);
+    assert.equal(
+      priorsApi.isStale('2026-08-01T00:00:00Z', Date.parse('2026-10-10T00:00:00Z')),
+      true
+    );
+  });
+});

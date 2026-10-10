@@ -219,6 +219,59 @@ function jevQuestion(profile) {
   };
 }
 
+function jevModelChoiceQuestion(profile, candidates) {
+  const options = (candidates || []).map((candidate) => candidate.candidateKey);
+  return {
+    kind: 'select-eligible-model',
+    prompt:
+      'Choose the best candidate from the eligible ranked options for this task. Return one option only.',
+    evidence: JSON.stringify({ profile, candidates }),
+    options,
+  };
+}
+
+function candidateIdentityKey(candidate) {
+  return candidateKey(candidate);
+}
+
+async function adviseModelChoice(result, profile, options) {
+  const opts = options || {};
+  const top = ((result && result.ranking) || []).slice(0, Math.max(1, Number(opts.topN) || 5));
+  const question = jevModelChoiceQuestion(profile, top);
+  const advised = await jev.adviseOrReason(question, {
+    ask: typeof opts.ask === 'function' ? opts.ask : undefined,
+    minConfidence: Number.isFinite(Number(opts.minConfidence))
+      ? Number(opts.minConfidence)
+      : undefined,
+    reasoningController: () => ({
+      outcome: jev.Outcome.UNDECIDED,
+      reason: 'DETERMINISTIC_RANKING_FALLBACK',
+    }),
+  });
+  const eligible = new Set(top.map((candidate) => candidate.candidateKey));
+  const chosen =
+    advised.handledBy === 'jev' &&
+    advised.outcome === jev.Outcome.DECIDED &&
+    eligible.has(advised.choice)
+      ? advised.choice
+      : result.chosen;
+  return {
+    chosen,
+    advice: {
+      outcome: chosen === advised.choice && advised.handledBy === 'jev' ? 'DECIDED' : 'UNDECIDED',
+      choice: chosen === advised.choice && advised.handledBy === 'jev' ? advised.choice : null,
+      confidence: advised.handledBy === 'jev' ? advised.confidence : 0,
+      reason:
+        chosen === advised.choice && advised.handledBy === 'jev'
+          ? advised.reason || 'JEV_MODEL_CHOICE'
+          : (advised.jev && advised.jev.reason) ||
+            advised.reason ||
+            'DETERMINISTIC_RANKING_FALLBACK',
+      topN: top.map((candidate) => candidate.candidateKey),
+    },
+  };
+}
+
 /**
  * The deterministic Controller reasoning used when JEV cannot advise. Latency
  * priority can only steer non-quality-critical roles; a security review never
@@ -249,7 +302,12 @@ async function assessTask(profile, opts) {
   const fallbackId = controllerFallbackProfile(profile);
 
   const result = await jev.adviseOrReason(question, {
-    ask: typeof options.ask === 'function' ? options.ask : undefined,
+    ask:
+      typeof options.weightingAsk === 'function'
+        ? options.weightingAsk
+        : typeof options.ask === 'function'
+          ? options.ask
+          : undefined,
     minConfidence: Number.isFinite(Number(options.minConfidence))
       ? Number(options.minConfidence)
       : undefined,
@@ -726,7 +784,11 @@ function scoreForProfile(candidate, assessment, ctx) {
   const now = (ctx && ctx.now) || Date.now();
   const prior = priorFor(candidate, ctx && ctx.role, ctx && ctx.priors);
   const latency = latencyScoreOf(candidate);
-  const quality = qualityScoreOf(candidate, now);
+  const internalQuality = qualityScoreOf(candidate, now);
+  const quality =
+    prior && prior.score !== undefined
+      ? Math.max(internalQuality || 0, prior.score)
+      : internalQuality;
   const reliability = reliabilityScoreOf(candidate);
   const cost = costScoreOf(candidate);
 
@@ -769,7 +831,7 @@ function scoreForProfile(candidate, assessment, ctx) {
   const headroomPenalty =
     candidate.headroomStatus === 'unknown' ? 15 : candidate.headroomStatus === 'tight' ? 10 : 0;
   score = Math.max(0, score - busyPenalty - agePenalty - headroomPenalty);
-  if (prior) score += prior.bonus;
+  if (prior && prior.score === undefined) score += prior.bonus;
 
   return {
     score,
@@ -809,6 +871,9 @@ function rankForProfile(candidates, profile, assessment, ctx) {
     : 0;
   const ranked = [];
   const rejected = [];
+  const probation = new Set(
+    (context.probationCandidateKeys || []).filter((key) => typeof key === 'string')
+  );
 
   if (Number(profile.currentWorkload) >= Number(profile.resourceCeiling)) {
     return {
@@ -905,14 +970,46 @@ function rankForProfile(candidates, profile, assessment, ctx) {
       continue;
     }
 
-    if (profile.proofFloor !== 'NONE') {
+    const probationPrior = priorFor(c, profile.role, priors);
+    const probationRequested =
+      probation.has(key) || c.probation === true || Boolean(probationPrior);
+    const probationAllowed =
+      probationRequested &&
+      Boolean(probationPrior && !probationPrior.stale && probationPrior.score >= 80) &&
+      (!['security', 'money', 'tenant'].some((risk) =>
+        (profile.riskDomains || []).includes(risk)
+      ) ||
+        context.independentStrongReviewerGuaranteed === true);
+    const riskCritical = ['security', 'money', 'tenant'].some((risk) =>
+      (profile.riskDomains || []).includes(risk)
+    );
+    const riskProbationRefused =
+      riskCritical &&
+      !proofObservedWithSource(context.evidenceData, c).level &&
+      probationPrior &&
+      !context.independentStrongReviewerGuaranteed;
+    if (riskProbationRefused) {
+      reject('PROBATION_REQUIRES_INDEPENDENT_STRONG_REVIEWER', 'candidate');
+      continue;
+    }
+    if (profile.proofFloor !== 'NONE' && !(probationAllowed && !riskProbationRefused)) {
       const observedProof = proofObservedWithSource(context.evidenceData, c);
       const observed = observedProof.level;
       const observedRank = observed ? evidence.ProofRank[observed] : 0;
       if (observedRank < evidence.ProofRank[profile.proofFloor]) {
-        reject('PROOF_FLOOR_NOT_MET:' + (observed || 'NONE'), 'candidate');
-        continue;
+        if (!probationAllowed || profile.proofFloor !== 'NONE') {
+          reject('PROOF_FLOOR_NOT_MET:' + (observed || 'NONE'), 'candidate');
+          continue;
+        }
+        c.probation = true;
+        c.probationRequiresIndependentReview = true;
+      } else if (!observed && probationAllowed && profile.proofFloor === 'NONE') {
+        c.probation = true;
+        c.probationRequiresIndependentReview = true;
       }
+    } else if (probationAllowed && profile.proofFloor === 'NONE') {
+      c.probation = true;
+      c.probationRequiresIndependentReview = true;
     }
 
     if (headroom.status === 'unknown') {
@@ -934,6 +1031,17 @@ function rankForProfile(candidates, profile, assessment, ctx) {
       priors,
     });
     const scored = scoreForProfile(c, assessment, scoreContext);
+    const hasPrior = Boolean(scored.breakdown.prior);
+    const probationAllowedForTask =
+      !['security', 'money', 'tenant'].some((risk) => (profile.riskDomains || []).includes(risk)) ||
+      context.independentStrongReviewerGuaranteed === true;
+    const probationary =
+      !proofObservedWithSource(context.evidenceData, c).level &&
+      hasPrior &&
+      scored.breakdown.prior.score >= 80 &&
+      !scored.breakdown.prior.stale &&
+      profile.proofFloor === 'NONE' &&
+      probationAllowedForTask;
     ranked.push(
       Object.assign({}, c, {
         candidateKey: key,
@@ -941,6 +1049,8 @@ function rankForProfile(candidates, profile, assessment, ctx) {
         scoreBreakdown: scored.breakdown,
         reservationsHeld: scored.reservationsHeld,
         headroomStatus: headroom.status,
+        probation: probationary,
+        probationRequiresIndependentReview: probationary,
       })
     );
   }
@@ -948,8 +1058,14 @@ function rankForProfile(candidates, profile, assessment, ctx) {
   ranked.sort((a, b) => {
     const aPriorBonus = a.scoreBreakdown.prior ? a.scoreBreakdown.prior.bonus : 0;
     const bPriorBonus = b.scoreBreakdown.prior ? b.scoreBreakdown.prior.bonus : 0;
-    const aBaseScore = a.score - aPriorBonus;
-    const bBaseScore = b.score - bPriorBonus;
+    const aBaseScore =
+      a.scoreBreakdown.prior && a.scoreBreakdown.prior.score !== undefined
+        ? a.score
+        : a.score - aPriorBonus;
+    const bBaseScore =
+      b.scoreBreakdown.prior && b.scoreBreakdown.prior.score !== undefined
+        ? b.score
+        : b.score - bPriorBonus;
     if (bBaseScore !== aBaseScore) return bBaseScore - aBaseScore;
     if (bPriorBonus !== aPriorBonus) return bPriorBonus - aPriorBonus;
     if (a.reservationsHeld !== b.reservationsHeld) return a.reservationsHeld - b.reservationsHeld;
@@ -962,7 +1078,8 @@ function rankForProfile(candidates, profile, assessment, ctx) {
       (c) => c.score - (c.scoreBreakdown.prior ? c.scoreBreakdown.prior.bonus : 0) === 0
     );
   const top3 = ranked.slice(0, 3);
-  const chosen = top3.length ? top3[0].candidateKey : null;
+  const deterministicChosen = top3.length ? top3[0].candidateKey : null;
+  const chosen = deterministicChosen;
   const reasonCode = allZero ? 'MODEL_SELECTION_NOT_PROVEN' : null;
   const reason = chosen
     ? 'fastest candidate meeting quality floor ' +
@@ -984,13 +1101,26 @@ function rankForProfile(candidates, profile, assessment, ctx) {
     refused: chosen ? null : 'NO_CANDIDATE_MEETS_PROFILE',
     reasonCode,
     reason,
+    modelChoice: {
+      outcome: 'UNDECIDED',
+      choice: null,
+      confidence: 0,
+      reason: 'NOT_CONFIGURED',
+      topN: [],
+    },
   };
+}
+
+async function adviseRankedModelChoice(result, profile, options) {
+  const advice = await adviseModelChoice(result, profile, options);
+  return Object.assign({}, result, { chosen: advice.chosen, modelChoice: advice.advice });
 }
 
 /** One line of the top-3 output the operator reads. */
 function formatTopEntry(entry, rank) {
   const duration = entry.expectedDurationMs || entry.latencyMs;
   const durationText = Number.isFinite(Number(duration)) ? Number(duration) + 'ms' : 'unknown';
+  const cost = blendedCost(entry);
   return (
     '  ' +
     rank +
@@ -998,6 +1128,8 @@ function formatTopEntry(entry, rank) {
     entry.candidateKey +
     ' | ' +
     durationText +
+    ' | cost ' +
+    (cost === null ? 'unknown' : cost) +
     ' | proof ' +
     (rankProofOf(entry) || 'unproven') +
     ' | quota ' +
@@ -1241,7 +1373,7 @@ async function runProfileDispatch(args, deps) {
   const profile = rawProfile;
 
   const assessment = await assessTask(profile, {
-    ask: d.ask,
+    ask: d.weightingAsk || d.ask,
     minConfidence: d.minConfidence,
   });
 
@@ -1275,6 +1407,15 @@ async function runProfileDispatch(args, deps) {
     enforceKnownQuota: args.execute === true && hasQuotaAccountReadings(d.home, d.storePath),
   };
   const result = rankForProfile(annotated, profile, assessment, rankCtx);
+  const advisedResult =
+    result.ranking.length && typeof d.modelChoiceAsk === 'function'
+      ? await adviseRankedModelChoice(result, profile, {
+          ask: d.modelChoiceAsk,
+          minConfidence: d.modelChoiceMinConfidence,
+          topN: d.modelChoiceTopN,
+        })
+      : result;
+  Object.assign(result, advisedResult);
   const execute = args.execute === true;
 
   if (result.reasonCode === 'MODEL_SELECTION_NOT_PROVEN' && execute) {
@@ -1644,6 +1785,10 @@ module.exports = {
   proofObserved,
   proofObservedWithSource,
   rankForProfile,
+  jevModelChoiceQuestion,
+  adviseRankedModelChoice,
+  candidateKey,
+  formatTopEntry,
   scoreForProfile,
   latencyScoreOf,
   qualityScoreOf,

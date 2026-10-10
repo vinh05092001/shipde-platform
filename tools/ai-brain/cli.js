@@ -3041,6 +3041,34 @@ function main() {
   const args = parseArgs(process.argv.slice(2));
   const command = args._[0] || 'reconcile';
 
+  if (command === 'priors' && args._[1] === 'refresh') {
+    const { refreshPriors } = require('./priors');
+    const sourceModule = args.source || process.env.AI_BRAIN_PRIORS_SOURCE;
+    if (!sourceModule) {
+      console.error(
+        'PRIORS_SEARCH_SOURCE_REQUIRED: set AI_BRAIN_PRIORS_SOURCE to a module exporting search(query)'
+      );
+      process.exitCode = 2;
+      return;
+    }
+    const provider = require(path.resolve(sourceModule));
+    refreshPriors({ search: provider.search, file: args.file || undefined })
+      .then((document) =>
+        console.log(
+          JSON.stringify({
+            models: document.ranking.length,
+            stale: document.ranking.filter((item) => item.stale).length,
+            file: args.file || 'default',
+          })
+        )
+      )
+      .catch((err) => {
+        console.error((err && err.message) || String(err));
+        process.exitCode = 1;
+      });
+    return;
+  }
+
   if (command === 'reconcile') return reconcileCommand(args);
   if (command === 'manifest') return manifestCommand(args);
   if (command === 'prove') return proveCommand(args);
@@ -3193,7 +3221,7 @@ function main() {
 
   console.error('Lệnh không rõ: ' + command);
   console.error(
-    'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | discovery | account | probe | qualify | serena | evidence | review | orchestrate | intake | next | merge'
+    'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | discovery | account | probe | qualify | serena | evidence | review | orchestrate | intake | next | merge | priors refresh'
   );
   process.exit(2);
 }
