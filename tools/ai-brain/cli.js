@@ -3059,7 +3059,18 @@ function main() {
       return;
     }
     const provider = require(resolvedSource);
-    refreshPriors({ search: provider.search, sourceId: path.relative(allowedRoots[0], resolvedSource), file: args.file || undefined })
+    const defaultPriorsFile = path.resolve(__dirname, 'data', 'model-priors.json');
+    const outputFile = args.file ? path.resolve(args.file) : defaultPriorsFile;
+    if (outputFile !== defaultPriorsFile) {
+      console.error('PRIORS_OUTPUT_OUTSIDE_ALLOWLIST');
+      process.exitCode = 2;
+      return;
+    }
+    refreshPriors({
+      search: provider.search,
+      sourceId: path.relative(allowedRoots[0], resolvedSource),
+      file: outputFile,
+    })
       .then((document) =>
         console.log(
           JSON.stringify({

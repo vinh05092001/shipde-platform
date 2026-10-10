@@ -791,7 +791,11 @@ function scoreForProfile(candidate, assessment, ctx) {
   ).length;
   const priorWeight = priorUsable ? 1 / (1 + evidenceCount) : 0;
   const quality = priorUsable
-    ? Math.round((internalQuality === null ? prior.score : internalQuality * (1 - priorWeight) + prior.score * priorWeight))
+    ? Math.round(
+        internalQuality === null
+          ? prior.score
+          : internalQuality * (1 - priorWeight) + prior.score * priorWeight
+      )
     : internalQuality;
   const reliability = reliabilityScoreOf(candidate);
   const cost = costScoreOf(candidate);
@@ -982,11 +986,12 @@ function rankForProfile(candidates, profile, assessment, ctx) {
 
     const probationPrior = priorFor(c, profile.role, priors, now);
     const probationRequested =
-      probation.has(key) || c.probation === true || Boolean(probationPrior);
+      probation.has(key) ||
+      c.probation === true ||
+      Boolean(probationPrior && !probationPrior.stale && probationPrior.score >= 80);
     const probationAllowed =
       probationRequested &&
       Boolean(probationPrior && !probationPrior.stale && probationPrior.score >= 80) &&
-      (profile.proofFloor === 'NONE' || context.independentStrongReviewerGuaranteed === true) &&
       (!['security', 'money', 'tenant'].some((risk) =>
         (profile.riskDomains || []).includes(risk)
       ) ||
@@ -995,8 +1000,11 @@ function rankForProfile(candidates, profile, assessment, ctx) {
       (profile.riskDomains || []).includes(risk)
     );
     const riskProbationRefused =
-      riskCritical && !proofObservedWithSource(context.evidenceData, c).level &&
-      probationPrior && !probationPrior.stale && probationPrior.score >= 80 &&
+      riskCritical &&
+      !proofObservedWithSource(context.evidenceData, c).level &&
+      probationPrior &&
+      !probationPrior.stale &&
+      probationPrior.score >= 80 &&
       !context.independentStrongReviewerGuaranteed;
     if (riskProbationRefused) {
       reject('PROBATION_REQUIRES_INDEPENDENT_STRONG_REVIEWER', 'candidate');
@@ -1007,7 +1015,7 @@ function rankForProfile(candidates, profile, assessment, ctx) {
       const observed = observedProof.level;
       const observedRank = observed ? evidence.ProofRank[observed] : 0;
       if (observedRank < evidence.ProofRank[profile.proofFloor]) {
-        if (!probationAllowed || profile.proofFloor !== 'NONE') {
+        if (!probationAllowed) {
           reject('PROOF_FLOOR_NOT_MET:' + (observed || 'NONE'), 'candidate');
           continue;
         }
@@ -1050,7 +1058,6 @@ function rankForProfile(candidates, profile, assessment, ctx) {
       hasPrior &&
       scored.breakdown.prior.score >= 80 &&
       !scored.breakdown.prior.stale &&
-      (profile.proofFloor === 'NONE' || context.independentStrongReviewerGuaranteed === true) &&
       probationAllowedForTask;
     ranked.push(
       Object.assign({}, c, {
@@ -1129,9 +1136,10 @@ async function adviseRankedModelChoice(result, profile, options) {
 /** One line of the top-3 output the operator reads. */
 function formatTopEntry(entry, rank) {
   const duration = entry.expectedDurationMs ?? entry.latencyMs;
-  const durationText = duration !== null && duration !== undefined && Number.isFinite(Number(duration))
-    ? Number(duration) + 'ms'
-    : 'unknown';
+  const durationText =
+    duration !== null && duration !== undefined && Number.isFinite(Number(duration))
+      ? Number(duration) + 'ms'
+      : 'unknown';
   const cost = blendedCost(entry);
   return (
     '  ' +

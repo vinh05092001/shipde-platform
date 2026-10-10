@@ -56,9 +56,11 @@ function priorFor(candidate, role, priors, now) {
   };
   if (Number.isFinite(priorScore)) {
     const sourceDates = (match.sources || []).map((source) => source && source.retrievedAt);
-    result.stale = match.stale === true || (sourceDates.length
-      ? sourceDates.some((date) => isStale(date, now))
-      : isStale(match.retrievedAt || (priors && priors.generatedAt), now));
+    result.stale =
+      match.stale === true ||
+      (sourceDates.length
+        ? sourceDates.some((date) => isStale(date, now))
+        : isStale(match.retrievedAt || (priors && priors.generatedAt), now));
     result.sources = match.sources || [];
     result.score = Math.round(Math.max(0, Math.min(100, priorScore)));
     result.stale = result.stale === true;
@@ -73,8 +75,17 @@ function isStale(retrievedAt, now) {
 }
 
 function benchmarkScore(match) {
-  const values = Object.entries(match || {})
-    .filter(([key, value]) => /score|bench/i.test(key) && Number.isFinite(Number(value)))
+  const benchmarks =
+    match && match.benchmarks && typeof match.benchmarks === 'object' ? match.benchmarks : match;
+  const values = Object.entries(benchmarks || {})
+    .filter(
+      ([key, value]) =>
+        key !== 'sources' &&
+        key !== 'source' &&
+        key !== 'benchmarks' &&
+        Number.isFinite(Number(value)) &&
+        (typeof value === 'number' || (typeof value === 'string' && value.trim() !== ''))
+    )
     .map(([, value]) => Math.max(0, Math.min(100, Number(value))));
   return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
 }
@@ -146,7 +157,8 @@ function mergePriorDocuments(documents, now) {
       score: score === null ? null : Math.round(score * 10) / 10,
       codingTier: tier,
       reviewTier: tier,
-      stale: row.sources.length === 0 || row.sources.some((source) => isStale(source.retrievedAt, now)),
+      stale:
+        row.sources.length === 0 || row.sources.some((source) => isStale(source.retrievedAt, now)),
     });
   });
   return {
@@ -161,12 +173,16 @@ async function refreshPriors(options) {
   const opts = options || {};
   if (typeof opts.search !== 'function') throw new Error('PRIORS_SEARCH_SOURCE_REQUIRED');
   const results = await opts.search({
-    query: 'coding agent model benchmarks SWE-bench Aider Terminal-Bench',
+    query:
+      opts.query ||
+      process.env.AI_BRAIN_PRIORS_QUERY ||
+      'coding agent model benchmarks SWE-bench Aider Terminal-Bench',
     limit: opts.limit || 20,
   });
   if (!Array.isArray(results)) throw new Error('PRIORS_SEARCH_RESULT_INVALID');
   const document = mergePriorDocuments(results, opts.now);
-  document.searchSource = opts.sourceId || opts.searchSource || opts.search.name || 'configured-search-provider';
+  document.searchSource =
+    opts.sourceId || opts.searchSource || opts.search.name || 'configured-search-provider';
   const output = opts.file || DEFAULT_PRIORS_FILE;
   fs.mkdirSync(path.dirname(output), { recursive: true });
   fs.writeFileSync(output, JSON.stringify(document, null, 2) + '\n', 'utf8');

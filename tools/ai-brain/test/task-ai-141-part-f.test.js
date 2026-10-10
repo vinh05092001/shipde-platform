@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 const priorsApi = require('../priors');
 const routing = require('../routing');
 const { candidateKey } = require('../discovery/identity');
@@ -99,8 +100,14 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
     assert.equal(strongRanked.scoreBreakdown.prior.weight, 1);
     assert.equal(result.ranking[0].probation, true);
     assert.equal(strongRanked.scoreBreakdown.cost, 95);
-    assert.match(routing.formatTopEntry(Object.assign({}, strong, { latencyMs: null }), 1), /unknown/);
-    assert.match(routing.formatTopEntry(Object.assign({}, strong, { latencyMs: 0 }), 1), /\| 0ms \|/);
+    assert.match(
+      routing.formatTopEntry(Object.assign({}, strong, { latencyMs: null }), 1),
+      /unknown/
+    );
+    assert.match(
+      routing.formatTopEntry(Object.assign({}, strong, { latencyMs: 0 }), 1),
+      /\| 0ms \|/
+    );
   });
 
   test('probation requires an independent strong reviewer for security, money, or tenant work', () => {
@@ -222,46 +229,178 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
     );
   });
 
-  test('default refresh persists to the curated model-priors file and every stale source flags the row', async () => {
-    const original = fs.existsSync(priorsApi.DEFAULT_PRIORS_FILE)
-      ? fs.readFileSync(priorsApi.DEFAULT_PRIORS_FILE)
-      : null;
-    try {
-      const doc = await priorsApi.refreshPriors({
-        now: Date.parse('2026-10-10T00:00:00Z'),
-        searchSource: 'default-test-provider',
-        search: async () => [{ retrievedAt: '2026-10-09T00:00:00Z', models: [{
-          modelId: 'fresh-and-stale', benchmarks: { swe: { score: 90, source: { url: 'https://fresh.example', retrievedAt: '2026-10-09T00:00:00Z' } }, aider: { score: 80, source: { url: 'https://stale.example', retrievedAt: '2026-08-01T00:00:00Z' } } },
-        }] }],
-      });
-      assert.equal(doc.searchSource, 'default-test-provider');
-      assert.equal(priorsApi.loadPriors().ranking[0].canonical, 'fresh-and-stale');
-      assert.equal(priorsApi.loadPriors().ranking[0].stale, true);
-    } finally {
-      if (original) fs.writeFileSync(priorsApi.DEFAULT_PRIORS_FILE, original);
-      else fs.rmSync(priorsApi.DEFAULT_PRIORS_FILE, { force: true });
-    }
+  test('refresh writes to its requested temporary file and every stale source flags the row', async () => {
+    const file = path.join(
+      fs.mkdtempSync(path.join(os.tmpdir(), 'ai141-priors-default-')),
+      'model-priors.json'
+    );
+    const doc = await priorsApi.refreshPriors({
+      now: Date.parse('2026-10-10T00:00:00Z'),
+      file,
+      searchSource: 'default-test-provider',
+      search: async () => [
+        {
+          retrievedAt: '2026-10-09T00:00:00Z',
+          models: [
+            {
+              modelId: 'fresh-and-stale',
+              benchmarks: {
+                swe: {
+                  score: 90,
+                  source: { url: 'https://fresh.example', retrievedAt: '2026-10-09T00:00:00Z' },
+                },
+                aider: {
+                  score: 80,
+                  source: { url: 'https://stale.example', retrievedAt: '2026-08-01T00:00:00Z' },
+                },
+              },
+            },
+          ],
+        },
+      ],
+    });
+    assert.equal(doc.searchSource, 'default-test-provider');
+    assert.equal(priorsApi.loadPriors(file).ranking[0].canonical, 'fresh-and-stale');
+    assert.equal(priorsApi.loadPriors(file).ranking[0].stale, true);
   });
 
   test('stale priors do not boost scores and probation is derived only for valid proof floors', () => {
     const untried = candidate('probation-model', { evidence: [] });
-    const priors = { ranking: [{ canonical: 'probation-model', codingTier: 'T1', reviewTier: 'T1', score: 95, retrievedAt: '2026-10-09T00:00:00Z' }] };
-    const baseline = routing.rankForProfile([untried], profile(), assessment, { now: Date.parse('2026-10-10T00:00:00Z'), headrooms: { default: 'open' }, priors: { ranking: [] } }).ranking[0];
-    const fresh = routing.rankForProfile([untried], profile({ proofFloor: 'API_PASS' }), assessment, { now: Date.parse('2026-10-10T00:00:00Z'), headrooms: { default: 'open' }, priors, independentStrongReviewerGuaranteed: true }).ranking[0];
+    const priors = {
+      ranking: [
+        {
+          canonical: 'probation-model',
+          codingTier: 'T1',
+          reviewTier: 'T1',
+          score: 95,
+          retrievedAt: '2026-10-09T00:00:00Z',
+        },
+      ],
+    };
+    const baseline = routing.rankForProfile([untried], profile(), assessment, {
+      now: Date.parse('2026-10-10T00:00:00Z'),
+      headrooms: { default: 'open' },
+      priors: { ranking: [] },
+    }).ranking[0];
+    const fresh = routing.rankForProfile(
+      [untried],
+      profile({ proofFloor: 'API_PASS' }),
+      assessment,
+      {
+        now: Date.parse('2026-10-10T00:00:00Z'),
+        headrooms: { default: 'open' },
+        priors,
+        independentStrongReviewerGuaranteed: true,
+      }
+    ).ranking[0];
     assert.equal(fresh.probation, true);
     assert.equal(fresh.probationRequiresIndependentReview, true);
-    const stale = routing.rankForProfile([untried], profile(), assessment, { now: Date.parse('2026-10-10T00:00:00Z'), headrooms: { default: 'open' }, priors: { ranking: [{ ...priors.ranking[0], retrievedAt: '2026-08-01T00:00:00Z' }] } }).ranking[0];
+    const stale = routing.rankForProfile([untried], profile(), assessment, {
+      now: Date.parse('2026-10-10T00:00:00Z'),
+      headrooms: { default: 'open' },
+      priors: { ranking: [{ ...priors.ranking[0], retrievedAt: '2026-08-01T00:00:00Z' }] },
+    }).ranking[0];
     assert.equal(stale.score, baseline.score);
     assert.equal(stale.probation, false);
     assert.equal(stale.scoreBreakdown.prior.normalizedScore, null);
   });
 
+  test('fresh strong prior transfers proof-floor admission to independently reviewed probation', () => {
+    const untried = candidate('proof-transfer-model', { evidence: [] });
+    const result = routing.rankForProfile(
+      [untried],
+      profile({ proofFloor: 'API_PASS' }),
+      assessment,
+      {
+        now: Date.parse('2026-10-10T00:00:00Z'),
+        headrooms: { default: 'open' },
+        priors: {
+          ranking: [
+            {
+              canonical: 'proof-transfer-model',
+              codingTier: 'T1',
+              reviewTier: 'T1',
+              score: 91,
+              retrievedAt: '2026-10-09T00:00:00Z',
+            },
+          ],
+        },
+      }
+    );
+    assert.equal(result.ranking.length, 1);
+    assert.equal(result.ranking[0].probation, true);
+    assert.equal(result.ranking[0].probationRequiresIndependentReview, true);
+  });
+
+  test('benchmark aliases contribute scores without score or bench in their names', () => {
+    assert.equal(
+      priorsApi.benchmarkScore({ benchmarks: { aaCodingIndex: 88, liveBench: 82 } }),
+      85
+    );
+    assert.equal(priorsApi.benchmarkScore({ aaCodingIndex: 88 }), 88);
+  });
+
+  test('seeded priors include model metadata and per-model source provenance', () => {
+    const document = priorsApi.loadPriors();
+    assert.ok(document.ranking.length > 0);
+    for (const model of document.ranking) {
+      assert.ok(Object.prototype.hasOwnProperty.call(model, 'releaseDate'));
+      assert.ok(Object.prototype.hasOwnProperty.call(model, 'contextWindow'));
+      assert.ok(
+        Array.isArray(model.sources) && model.sources.length > 0,
+        `${model.canonical} has sources`
+      );
+      for (const source of model.sources) {
+        assert.match(source.url, /^https:\/\//);
+        assert.ok(source.retrievedAt);
+      }
+    }
+  });
+
+  test('priors refresh CLI rejects arbitrary output paths', () => {
+    const cli = path.resolve(__dirname, '..', 'cli.js');
+    const sourceDir = path.resolve(__dirname, '..', 'priors-sources');
+    fs.mkdirSync(sourceDir, { recursive: true });
+    const source = path.join(sourceDir, 'test-provider.js');
+    fs.writeFileSync(
+      source,
+      'module.exports = { search: async () => [] };' + String.fromCharCode(10)
+    );
+    const outside = path.join(os.tmpdir(), 'ai141-priors-outside.json');
+    try {
+      const result = spawnSync(
+        process.execPath,
+        [cli, 'priors', 'refresh', '--source', source, '--file', outside],
+        { encoding: 'utf8' }
+      );
+      assert.equal(result.status, 2, result.stderr);
+      assert.match(result.stderr, /PRIORS_OUTPUT_OUTSIDE_ALLOWLIST/);
+    } finally {
+      fs.rmSync(sourceDir, { recursive: true, force: true });
+    }
+  });
+
   test('weak or stale prior on a critical task does not trigger the strong-prior reviewer guard', () => {
     const model = candidate('weak-risk-model', { evidence: [] });
-    const result = routing.rankForProfile([model], profile({ riskDomains: ['security'] }), assessment, {
-      headrooms: { default: 'open' },
-      priors: { ranking: [{ canonical: 'weak-risk-model', codingTier: 'T4', reviewTier: 'T4', score: 20, retrievedAt: '2026-08-01T00:00:00Z' }] },
-    });
+    const result = routing.rankForProfile(
+      [model],
+      profile({ riskDomains: ['security'] }),
+      assessment,
+      {
+        headrooms: { default: 'open' },
+        priors: {
+          ranking: [
+            {
+              canonical: 'weak-risk-model',
+              codingTier: 'T4',
+              reviewTier: 'T4',
+              score: 20,
+              retrievedAt: '2026-08-01T00:00:00Z',
+            },
+          ],
+        },
+      }
+    );
     assert.equal(result.rejected.length, 0);
     assert.equal(result.ranking[0].probation, false);
   });
