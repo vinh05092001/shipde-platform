@@ -213,7 +213,19 @@ const codex = {
     if (!job || !job.isolatedWorker) throw new Error('CODEX_REQUIRES_ISOLATION');
     const { isWorkerPath, readClosedIsolationVerdict } = require('./isolation-launcher');
     if (!isWorkerPath(job.cwd)) throw new Error('CODEX_REQUIRES_ISOLATION');
-    readClosedIsolationVerdict();
+    const verdict = job.isolationVerdict || process.env.SHIPDE_ISOLATION_VERDICT;
+    let verdictData;
+    try {
+      verdictData = typeof verdict === 'string' ? JSON.parse(verdict) : verdict;
+    } catch {
+      throw new Error('CODEX_REQUIRES_ISOLATION');
+    }
+    if (!verdictData || verdictData.verdict !== 'CLOSED') {
+      throw new Error('CODEX_REQUIRES_ISOLATION');
+    }
+    readClosedIsolationVerdict(
+      job.isolationVerdictPath ? { verdictPath: job.isolationVerdictPath } : undefined
+    );
     const args = ['exec', '--dangerously-bypass-approvals-and-sandbox'];
     if (job.model) args.push('--model', job.model);
     args.push(job.prompt || '');

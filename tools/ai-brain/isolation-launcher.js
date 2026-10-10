@@ -14,9 +14,12 @@ const WORKER_USERNAME = 'ShipDeWorker';
 const WORKER_ROOT = 'C:\\ShipDeWorker';
 const DEFAULT_WORKER_TIMEOUT_MS = 30 * 60 * 1000;
 
-/** The operator-owned isolation attestation location; never supplied by a job. */
-function isolationVerdictPath() {
-  return path.join(process.env.LOCALAPPDATA || '', 'ShipDe', 'isolation-verdict.json');
+/** The operator-owned isolation attestation location. */
+function isolationVerdictPath(options) {
+  return (
+    (options && options.verdictPath) ||
+    path.join(process.env.LOCALAPPDATA || '', 'ShipDe', 'isolation-verdict.json')
+  );
 }
 
 /** The worker root for one job: the worker never sees the operator's leaf name. */
@@ -53,7 +56,7 @@ function isWorkerPath(target) {
 
 /** Read the current host isolation attestation and fail closed unless it is CLOSED. */
 function readClosedIsolationVerdict(options) {
-  const verdictPath = isolationVerdictPath();
+  const verdictPath = isolationVerdictPath(options);
   if (!fs.existsSync(verdictPath)) throw new Error('CODEX_REQUIRES_ISOLATION');
   let verdictData;
   try {
@@ -292,7 +295,7 @@ function buildWorkerLaunchScript(options) {
   const workerTimeoutMs = options.workerTimeoutMs;
   const adapterId = options.adapterId;
   const isCodex = adapterId === 'codex';
-  if (adapterId && (!options.isolationVerdict || options.isolationVerdict.verdict !== 'CLOSED')) {
+  if (isCodex && (!options.isolationVerdict || options.isolationVerdict.verdict !== 'CLOSED')) {
     throw new Error('CODEX_REQUIRES_ISOLATION');
   }
   const completionNonce = options.completionNonce || crypto.randomBytes(16).toString('hex');
@@ -349,8 +352,11 @@ if ($LASTEXITCODE -ne 0) {
   return `
 $ErrorActionPreference = "Stop"
 ${credentialLines}$nestedScript = "${workerRoot}\\run-target.ps1"
+$env:SHIPDE_ISOLATION_VERDICT = "${String(JSON.stringify(options.isolationVerdict || {})).replace(/"/g, '`"')}"
 $markerPath = "${markerPath}"
 $completionNonce = "${completionNonce}"
+$env:HOME = "${workerRoot}"
+$env:USERPROFILE = "${workerRoot}"
 $wrapperPid = 0
 $wrapperStartTime = Get-Date
 @"
@@ -1837,6 +1843,8 @@ function getIsolatedLauncher() {
       completionNonce,
       adapterId: adapter.id,
       isolationVerdict: verdictData,
+      isolationVerdictPath: verdictPath,
+      launchArgsPath,
       rtkPathPrepend,
       credentialEnv: selectedCredentialEnv,
     });

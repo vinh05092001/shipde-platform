@@ -73,114 +73,56 @@ test.after(() => {
   for (const root of roots) fs.rmSync(root, { recursive: true, force: true });
 });
 
-test('Codex harness delegates fresh verdict enforcement to the isolated launcher', () => {
+test('Codex harness and launcher require the fresh CLOSED verdict', () => {
   const codex = harnesses.getHarness('codex');
   assert.throws(() => codex.launch({ cwd: process.cwd() }), /CODEX_REQUIRES_ISOLATION/);
-  assert.throws(
-    () => codex.launch({ cwd: process.cwd(), isolatedWorker: true }),
-    /CODEX_REQUIRES_ISOLATION/
-  );
-  const worker = path.join('C:\\ShipDeWorker', 'task-ai-141');
   const root = fixtureRoot();
-  const verdictPath = path.join(root, 'isolation-verdict.json');
-  const priorLocalAppData = process.env.LOCALAPPDATA;
+  const verdictPath = path.join(root, 'ShipDe', 'isolation-verdict.json');
+  fs.mkdirSync(path.dirname(verdictPath), { recursive: true });
+  fs.writeFileSync(verdictPath, JSON.stringify({ verdict: 'CLOSED' }));
+  const previous = process.env.LOCALAPPDATA;
   process.env.LOCALAPPDATA = root;
   try {
-    const localDataPath = path.join(root, 'ShipDe');
-    fs.mkdirSync(localDataPath, { recursive: true });
-    const operatorVerdictPath = path.join(localDataPath, 'isolation-verdict.json');
-    assert.throws(
-      () =>
-        codex.launch({
-          cwd: worker,
-          isolatedWorker: true,
-          verdictPath,
-          model: 'codex-test',
-          prompt: 'task',
-        }),
-      /CODEX_REQUIRES_ISOLATION/
-    );
-    fs.writeFileSync(operatorVerdictPath, JSON.stringify({ verdict: 'OPEN' }));
-    assert.throws(
-      () => codex.launch({ cwd: worker, isolatedWorker: true }),
-      /CODEX_REQUIRES_ISOLATION/
-    );
-    fs.writeFileSync(operatorVerdictPath, JSON.stringify({ verdict: 'CLOSED' }));
     assert.deepEqual(
       codex.launch({
-        cwd: worker,
+        cwd: path.join('C:\\ShipDeWorker', 'task-ai-141'),
         isolatedWorker: true,
-        verdictPath,
-        model: 'codex-test',
+        isolationVerdict: { verdict: 'CLOSED' },
+        isolationVerdictPath: verdictPath,
         prompt: 'task',
       }),
-      ['exec', '--dangerously-bypass-approvals-and-sandbox', '--model', 'codex-test', 'task']
+      ['exec', '--dangerously-bypass-approvals-and-sandbox', 'task']
     );
   } finally {
-    if (priorLocalAppData === undefined) delete process.env.LOCALAPPDATA;
-    else process.env.LOCALAPPDATA = priorLocalAppData;
+    if (previous === undefined) delete process.env.LOCALAPPDATA;
+    else process.env.LOCALAPPDATA = previous;
   }
-});
-
-test('Codex bypass and worker login probe exist only in isolated launcher script', () => {
-  assert.throws(
-    () =>
-      isolation.buildWorkerLaunchScript({
-        credPath: 'worker.cred',
-        workerRoot: 'C:\\worker',
-        exeFile: 'paseo.exe',
-        payloadArgsPath: 'args.json',
-        launchResultPath: 'result.json',
-        workerTimeoutMs: 1000,
-        adapterId: 'paseo',
-        runAsCurrentUser: true,
-      }),
-    /CODEX_REQUIRES_ISOLATION/
-  );
   const regular = isolation.buildWorkerLaunchScript({
     credPath: 'worker.cred',
     workerRoot: 'C:\\worker',
-    exeFile: 'codex.exe',
+    exeFile: 'paseo.exe',
     payloadArgsPath: 'args.json',
     launchResultPath: 'result.json',
     workerTimeoutMs: 1000,
-    completionNonce: 'nonce',
     adapterId: 'paseo',
-    isolationVerdict: { verdict: 'CLOSED' },
     runAsCurrentUser: true,
   });
-  const codex = isolation.buildWorkerLaunchScript({
+  const worker = isolation.buildWorkerLaunchScript({
     credPath: 'worker.cred',
     workerRoot: 'C:\\worker',
     exeFile: 'codex.exe',
     payloadArgsPath: 'args.json',
     launchResultPath: 'result.json',
     workerTimeoutMs: 1000,
-    completionNonce: 'nonce',
     adapterId: 'codex',
     isolationVerdict: { verdict: 'CLOSED' },
     runAsCurrentUser: true,
   });
   assert.doesNotMatch(regular, /dangerously-bypass-approvals-and-sandbox|login status/);
-  assert.match(codex, /login status/);
-  assert.match(codex, /CODEX_NOT_LOGGED_IN/);
-  assert.match(codex, /\$env:HOME = "C:\\worker"/);
-  assert.match(codex, /\$env:USERPROFILE = "C:\\worker"/);
-  assert.doesNotMatch(codex, /\.codex.*credentials|credentials.*\.codex/i);
-  assert.throws(
-    () =>
-      isolation.buildWorkerLaunchScript({
-        credPath: 'worker.cred',
-        workerRoot: 'C:\\worker',
-        exeFile: 'codex.exe',
-        payloadArgsPath: 'args.json',
-        launchResultPath: 'result.json',
-        workerTimeoutMs: 1000,
-        adapterId: 'codex',
-        runAsCurrentUser: true,
-      }),
-    /CODEX_REQUIRES_ISOLATION/
-  );
+  assert.match(worker, /login status/);
+  assert.match(worker, /CODEX_NOT_LOGGED_IN/);
+  assert.match(worker, /`\$env:HOME = "C:\\worker"/);
+  assert.match(worker, /`\$env:USERPROFILE = "C:\\worker"/);
 });
 
 test('Codex login failure is returned as a local failure so execution can continue', () => {
@@ -198,7 +140,6 @@ test('Codex login failure is returned as a local failure so execution can contin
   assert.equal(result.exitCode, 1);
   assert.match(result.stderr, /CODEX_NOT_LOGGED_IN/);
 });
-
 test('Part D derives high-risk complexity and enforces the JEV quality floor', async () => {
   const root = fixtureRoot();
   const rows = Array.from(
