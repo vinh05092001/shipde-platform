@@ -3044,7 +3044,7 @@ function planCommand(args, deps = {}) {
     error.code = 'PLAN_INVALID_ID';
     return Promise.reject(error);
   }
-  const planner = deps.planWorkItem ? deps : require('./work-item-planner');
+  const planner = require('./work-item-planner');
   return Promise.resolve(
     planner.planWorkItem(
       id.trim(),
@@ -3052,7 +3052,7 @@ function planCommand(args, deps = {}) {
         rootDir: args.root || process.cwd(),
         run: Boolean(args.run),
       },
-      deps
+      { ...deps, runPlanning: deps.runPlanning }
     )
   );
 }
@@ -3187,7 +3187,11 @@ function main() {
 
   // plan (TASK-AI-141 G): draft only from approved, cited repository sources.
   if (command === 'plan') {
-    planCommand(args)
+    const planningDeps = {
+      ...deps,
+      runPlanning: deps.runPlanning,
+    };
+    planCommand(args, planningDeps)
       .then((result) => {
         console.log(JSON.stringify(result, null, 2));
         if (result && result.blocking) process.exitCode = 1;

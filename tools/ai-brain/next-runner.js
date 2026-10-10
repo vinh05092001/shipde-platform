@@ -784,8 +784,14 @@ async function nextLoop(options, deps) {
           logOpts
         );
         log(`Planning ${item.work_item_id} ended with ${outcome}.`);
-        if (iteration < maxIterations) await sleepFn(pollIntervalMs);
-        continue;
+        if (!governed) {
+          if (iteration < maxIterations) await sleepFn(pollIntervalMs);
+          continue;
+        }
+        // A governed merge makes the item author-ready in the same loop turn.
+        // Re-read the register through the regular selector so status and
+        // dependency gates remain authoritative before authoring.
+        item.status = 'READY_FOR_AUTHOR';
       } catch (err) {
         terminalWorkItems.set(item.work_item_id, 'planning-failed');
         decisions.recordDecision(

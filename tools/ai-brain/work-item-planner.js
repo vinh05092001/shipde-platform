@@ -82,7 +82,6 @@ function getRegisterItem(rootDir, id, deps) {
 
 function listApprovedSpecSources(rootDir, deps) {
   if (deps && Array.isArray(deps.approvedSpecSources)) return deps.approvedSpecSources;
-  if (deps && deps.readSource) return [];
   const found = [];
   for (const relDir of APPROVED_SPEC_DIRS) {
     const absoluteDir = path.join(rootDir, relDir);
@@ -154,11 +153,17 @@ function draftWorkItem(id, options, deps) {
   const hasDetailedFeatureSource = Boolean(catalogLine && catalogLine.includes('|'));
   // A local draft is never an approval gate. Only a separately reviewed and
   // governed docs-only merge may make the register item author-ready.
-  const status = 'BLOCKED';
-  const reason =
-    !keyBehavior || !hasDetailedFeatureSource
-      ? 'Approved sources do not provide enough feature-specific behavior and acceptance detail to write a complete Work Item without inventing product meaning.'
-      : 'This draft still requires isolated planning, an independent review, and a governed docs-only merge before it can become author-ready.';
+  const openDecisions = [];
+  if (!keyBehavior || !hasDetailedFeatureSource) {
+    openDecisions.push(
+      'Approved sources do not provide enough feature-specific behavior and acceptance detail to write a complete Work Item without inventing product meaning.'
+    );
+  }
+  if (!approvedRefs.length) {
+    openDecisions.push('No matching feature-specific section was found in the approved sources.');
+  }
+  const status = openDecisions.length ? 'BLOCKED' : 'DRAFT';
+  const reason = openDecisions.join(' ');
   const text = [
     '# ' + id + ' — ' + featureName,
     '',
@@ -238,12 +243,12 @@ function draftWorkItem(id, options, deps) {
     '',
     '## Open decisions',
     '',
-    '- ' + reason,
+    ...(openDecisions.length ? openDecisions.map((decision) => '- ' + decision) : ['- None.']),
     ...APPROVED_SOURCES.filter((rel) => !approvedRefs.some((ref) => ref.includes(rel))).map(
       (rel) => `- No matching cited section found in approved source: \`${rel}\`.`
     ),
     '',
-    '- Status remains `BLOCKED` until the independent planning and governed merge gates complete.',
+    '- Status remains a draft until the independent planning and governed merge gates complete.',
     '',
   ].join('\n');
 
@@ -252,7 +257,7 @@ function draftWorkItem(id, options, deps) {
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.writeFileSync(target, text, 'utf8');
   }
-  return { id, target, status, blocking: true, reason, approvedRefs };
+  return { id, target, status, blocking: openDecisions.length > 0, reason, approvedRefs };
 }
 
 async function planWorkItem(id, options, deps) {
@@ -265,6 +270,17 @@ async function planWorkItem(id, options, deps) {
       'plan --run requires the isolated planner, independent reviewer, and governed docs-only merge executor'
     );
   }
+  if (
+    typeof d.rankPlanner !== 'function' ||
+    typeof d.runIsolatedPlanner !== 'function' ||
+    typeof d.reviewPlan !== 'function' ||
+    typeof d.mergePlan !== 'function'
+  ) {
+    fail(
+      'PLAN_EXECUTOR_INCOMPLETE',
+      'plan --run requires planner ranking, isolated execution, independent review, and governed merge services'
+    );
+  }
   const result = await d.runPlanning({
     workItemId: id,
     role: 'planner.default',
@@ -272,6 +288,10 @@ async function planWorkItem(id, options, deps) {
     independentReviewer: true,
     docsOnly: true,
     governedMerge: true,
+    rankPlanner: d.rankPlanner,
+    runIsolatedPlanner: d.runIsolatedPlanner,
+    reviewPlan: d.reviewPlan,
+    mergePlan: d.mergePlan,
   });
   if (
     !result ||
