@@ -730,6 +730,22 @@ async function nextLoop(options, deps) {
     }
 
     if (!findResult.item) {
+      // TASK-AI-141 Part B: qualification is a separate, bounded controller
+      // slot. It is offered only when the product register has no ready item;
+      // the slot callback owns the isolated worker/reviewer path and cannot
+      // turn a qualification run into a product Work Item.
+      const qualificationSlot = opts.qualificationSlot || d.qualificationSlot;
+      if (typeof qualificationSlot === 'function') {
+        const qualification = await qualificationSlot({ now, iteration });
+        if (qualification && qualification.ran === true) {
+          log('QUALIFICATION_SLOT: ' + (qualification.status || 'completed'));
+          if (iteration < maxIterations) {
+            await sleepFn(pollIntervalMs);
+            continue;
+          }
+          return { completed: true, iterations: iteration, qualification };
+        }
+      }
       decisions.recordDecision(
         {
           stage: decisions.Stage.REFUSED,
