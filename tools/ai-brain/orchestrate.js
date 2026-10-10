@@ -3608,18 +3608,6 @@ async function runOrchestration(goal, opts) {
     const itemRtkDecision = rtkPolicyForItem(o.rtk, itemRiskDomains, o.injectedRun);
     const itemRtkPermitted = itemRtkDecision.enabled;
     log.rtk.perWorkItem[item.id] = itemRtkDecision;
-    if (o.rtk) {
-      decisions.recordDecision(
-        {
-          stage: decisions.Stage.WARNING,
-          workItemId: item.id,
-          warning: 'RTK_POLICY',
-          detail: log.rtk.perWorkItem[item.id].reason,
-          enabled: itemRtkPermitted,
-        },
-        logOpts
-      );
-    }
     if (!item.failedKeys || !(item.failedKeys instanceof Set)) {
       item.failedKeys = new Set(Array.isArray(item.failedKeys) ? item.failedKeys : []);
     }
@@ -3916,7 +3904,7 @@ async function runOrchestration(goal, opts) {
             stage: decisions.Stage.WARNING,
             workItemId: item.id,
             warning: 'RTK_POLICY',
-            detail: 'low_risk_item',
+            detail: itemRtkDecision.reason,
             enabled: true,
           },
           logOpts
@@ -3927,7 +3915,7 @@ async function runOrchestration(goal, opts) {
             stage: decisions.Stage.WARNING,
             workItemId: item.id,
             warning: 'RTK_POLICY',
-            detail: o.injectedRun ? 'injected_run_blocks_rtk' : 'risk_domains_block_rtk',
+            detail: itemRtkDecision.reason,
             enabled: false,
           },
           logOpts
@@ -3986,7 +3974,10 @@ async function runOrchestration(goal, opts) {
           res = { exitCode: -1, stdout: '', stderr: String((err && err.message) || err) };
         }
         if (res && res.exercise) job.exercise = res.exercise;
-        if (res && res.failureReason === 'TOKEN_BUDGET_EXCEEDED') {
+        if (
+          res &&
+          ['TOKEN_BUDGET_EXCEEDED', 'TOKEN_BUDGET_UNVERIFIED'].includes(res.failureReason)
+        ) {
           res = Object.assign({}, res, { exitCode: 1 });
         }
         writeUsageReportFromHarnessResult(job, res);
@@ -4021,10 +4012,13 @@ async function runOrchestration(goal, opts) {
             accountId: candidate.accountId,
             timedOut: isLaunchTimedOut,
           });
-          if (res && res.failureReason === 'TOKEN_BUDGET_EXCEEDED') {
+          if (
+            res &&
+            ['TOKEN_BUDGET_EXCEEDED', 'TOKEN_BUDGET_UNVERIFIED'].includes(res.failureReason)
+          ) {
             launchClassification.scope = 'local';
-            launchClassification.cause = 'TOKEN_BUDGET_EXCEEDED';
-            launch.fallbackReason = 'TOKEN_BUDGET_EXCEEDED';
+            launchClassification.cause = res.failureReason;
+            launch.fallbackReason = res.failureReason;
             launch.cause = 'TOKEN_BUDGET_EXCEEDED';
           } else if (res && res.failureReason === 'STALLED_NO_PROGRESS') {
             launchClassification.scope = 'local';
@@ -4106,7 +4100,7 @@ async function runOrchestration(goal, opts) {
           }
           res = Object.assign({}, res, {
             exitCode: 1,
-            stderr: (res.stderr || '') + '\nHOST_GATE_FAILED: ' + (gate.failures || []).join(', '),
+            hostGateFailures: gate.failures || [],
           });
         }
       }
@@ -4172,21 +4166,25 @@ async function runOrchestration(goal, opts) {
           stallMs: effectiveStallMs,
         }) === SessionStatus.STALLED
       );
-      const budgetExceeded = Boolean(res && res.failureReason === 'TOKEN_BUDGET_EXCEEDED');
+      const budgetFailure = Boolean(
+        res && ['TOKEN_BUDGET_EXCEEDED', 'TOKEN_BUDGET_UNVERIFIED'].includes(res.failureReason)
+      );
       const launcherStalled = Boolean(res && res.failureReason === 'STALLED_NO_PROGRESS');
-      if (budgetExceeded) {
-        launch.fallbackReason = 'TOKEN_BUDGET_EXCEEDED';
+      if (budgetFailure) {
+        launch.fallbackReason = res.failureReason;
       }
       if (progressStalled) launch.fallbackReason = 'STALLED_NO_PROGRESS';
       if (launcherStalled) launch.fallbackReason = 'STALLED_NO_PROGRESS';
-      if (budgetExceeded || launcherStalled) res = Object.assign({}, res, { exitCode: 1 });
-      if (progressStalled || budgetExceeded || launcherStalled) {
+      if (budgetFailure || launcherStalled) res = Object.assign({}, res, { exitCode: 1 });
+      if (progressStalled || budgetFailure || launcherStalled) {
         launch.scope = 'local';
         launch.cause =
-          progressStalled || launcherStalled ? 'STALLED_NO_PROGRESS' : 'TOKEN_BUDGET_EXCEEDED';
+          progressStalled || launcherStalled
+            ? 'STALLED_NO_PROGRESS'
+            : res.failureReason || 'TOKEN_BUDGET_EXCEEDED';
         launch.outcome = 'failed';
       }
-      if (budgetExceeded) {
+      if (budgetFailure) {
         failedKeys.add(decision.chosen);
         const currentStep = liveSteps[item.id] || {};
         const failureList = (currentStep.failures || []).slice();
@@ -4196,7 +4194,7 @@ async function runOrchestration(goal, opts) {
             failureScope: 'local',
             failureDomain: null,
             forbiddenDomain: null,
-            cause: 'TOKEN_BUDGET_EXCEEDED',
+            cause: res.failureReason,
           });
         }
         persistStep(item.id, 'worker_launch_failed', { failures: failureList });
@@ -4206,8 +4204,11 @@ async function runOrchestration(goal, opts) {
             workItemId: item.id,
             chosen: decision.chosen,
             failureScope: 'local',
-            cause: 'TOKEN_BUDGET_EXCEEDED',
-            detail: 'worker exceeded configured token budget; stopping session',
+            cause: res.failureReason,
+            detail:
+              res.failureReason === 'TOKEN_BUDGET_UNVERIFIED'
+                ? 'configured token budget could not be verified; stopping session'
+                : 'worker exceeded configured token budget; stopping session',
           },
           logOpts
         );
@@ -4216,10 +4217,10 @@ async function runOrchestration(goal, opts) {
         !res ||
         (exited && res.exitCode !== 0) ||
         progressStalled ||
-        budgetExceeded ||
+        budgetFailure ||
         launcherStalled
       ) {
-        if (progressStalled || budgetExceeded || launcherStalled)
+        if (progressStalled || budgetFailure || launcherStalled)
           res = Object.assign({}, res || {}, { exitCode: 1 });
         // The failure is classified by the shared classifier, and the replacement
         // is chosen by the Controller's failure-domain rule rather than by a scan
@@ -4246,10 +4247,13 @@ async function runOrchestration(goal, opts) {
         const quotaLike = /quota_exhausted|\b429\b|rate limit/i.test(
           String((res && res.stderr) || '') + ' ' + String((res && res.stdout) || '')
         );
-        if (res && res.failureReason === 'TOKEN_BUDGET_EXCEEDED') {
+        if (
+          res &&
+          ['TOKEN_BUDGET_EXCEEDED', 'TOKEN_BUDGET_UNVERIFIED'].includes(res.failureReason)
+        ) {
           classification.scope = 'local';
-          classification.cause = 'TOKEN_BUDGET_EXCEEDED';
-          launch.fallbackReason = 'TOKEN_BUDGET_EXCEEDED';
+          classification.cause = res.failureReason;
+          launch.fallbackReason = res.failureReason;
         }
         if (res && res.failureReason === 'STALLED_NO_PROGRESS') {
           classification.scope = 'local';
@@ -4540,17 +4544,17 @@ async function runOrchestration(goal, opts) {
           blockedReason = failureCause;
           break;
         }
-        if (budgetExceeded) {
-          launch.fallbackReason = 'TOKEN_BUDGET_EXCEEDED';
+        if (budgetFailure) {
+          launch.fallbackReason = res.failureReason;
           launch.scope = 'local';
-          launch.cause = 'TOKEN_BUDGET_EXCEEDED';
+          launch.cause = res.failureReason;
           launch.outcome = 'failed';
           failedKeys.add(decision.chosen);
           log.launches[log.launches.length - 1] = launch;
-          blockedReason = 'TOKEN_BUDGET_EXCEEDED';
+          blockedReason = res.failureReason;
           outcome(item, ItemStatus.BLOCKED, blockedReason, {
-            cause: 'TOKEN_BUDGET_EXCEEDED',
-            reasonCode: 'TOKEN_BUDGET_EXCEEDED',
+            cause: res.failureReason,
+            reasonCode: res.failureReason,
           });
           break;
         }

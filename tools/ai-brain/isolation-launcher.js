@@ -373,6 +373,9 @@ $usageFile = '${String(options.usageFile || '')
     .replace(/'/g, "''")
     .replace(/\\/g, '\\\\')}'
 $maxTokens = 0
+$progressTimeoutMs = ${Number(options.progressTimeoutMs) > 0 ? Number(options.progressTimeoutMs) : 0}
+$lastProgressAt = [System.Diagnostics.Stopwatch]::GetTimestamp()
+$lastUsageSignature = ""
 try {
     $budgetConfig = $tokenBudgetJson | ConvertFrom-Json
     if ($null -ne $budgetConfig.maxTokens) { $maxTokens = [double]$budgetConfig.maxTokens }
@@ -444,6 +447,7 @@ function Read-UsageTotal {
 # otherwise be reported as finished while it is still running.
 $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 $timedOut = $false
+$stalled = $false
 $waitSlice = 250
 while ($true) {
     $totalTokens = Read-UsageTotal
@@ -451,6 +455,21 @@ while ($true) {
         $budgetExceeded = $true
         Stop-WorkerTree
         break
+    }
+    if ($progressTimeoutMs -gt 0) {
+        $usageSignature = ""
+        try {
+            $usageItem = Get-Item -LiteralPath $usageFile -ErrorAction Stop
+            $usageSignature = [string]$usageItem.Length + ':' + [string]$usageItem.LastWriteTimeUtc.Ticks
+        } catch {}
+        if ($usageSignature -ne $lastUsageSignature) {
+            $lastUsageSignature = $usageSignature
+            $lastProgressAt = [System.Diagnostics.Stopwatch]::GetTimestamp()
+        } elseif (([System.Diagnostics.Stopwatch]::GetTimestamp() - $lastProgressAt) * 1000 / [System.Diagnostics.Stopwatch]::Frequency -ge $progressTimeoutMs) {
+            $stalled = $true
+            Stop-WorkerTree
+            break
+        }
     }
     $remaining = $timeoutMs - $stopwatch.ElapsedMilliseconds
     if ($remaining -le 0) { $timedOut = $true; break }
@@ -493,17 +512,14 @@ if (-not $timedOut) {
 if ($timedOut) {
     Stop-WorkerTree
 }
+if ($stalled) { Stop-WorkerTree }
 # A writer the operator cannot kill (another user's process) must not hang the
 # host forever: the pipes are read with a bound, and a pipe that never closed
 # is itself reported as a failure.
 $stdout = ""
 $stderr = ""
 if ($stdoutTask.Wait(15000)) { $stdout = $stdoutTask.Result }
-if ($stderrTask.Wait(15000)) {
-    $stderr = $stderrTask.Result
-} else {
-    $stderr = "[ISOLATION_LAUNCHER] worker output pipes never closed"
-}
+if ($stderrTask.Wait(15000)) { $stderr = $stderrTask.Result } else { $stderr = "[ISOLATION_LAUNCHER] worker output pipes never closed" }
 
 # Positive evidence: the marker is written by run-target.ps1 after the payload
 # returned, so it can only exist for a job that really ran to its end.
@@ -515,6 +531,8 @@ if ($budgetExceeded) {
     $failureReason = "TOKEN_BUDGET_EXCEEDED: live worker usage exceeded configured token budget"
 } elseif ($timedOut) {
     $failureReason = "[ISOLATION_LAUNCHER] worker timed out after $timeoutMs ms and was killed"
+} elseif ($stalled) {
+    $failureReason = "STALLED_NO_PROGRESS: worker produced no output for $progressTimeoutMs ms and was killed"
 } elseif (Test-Path -LiteralPath $markerPath) {
     try {
         $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json
@@ -858,9 +876,7 @@ function enforceTokenBudget(launchResult, tokenBudget, usageFile) {
     if (!Number.isFinite(total)) throw new Error('usage total invalid');
     if (total > Number(tokenBudget.maxTokens)) failureReason = 'TOKEN_BUDGET_EXCEEDED';
   } catch (_) {
-    // Provider usage is optional telemetry. Enforce only a measured overrun;
-    // the live worker wrapper performs that check while the session runs.
-    return launchResult;
+    failureReason = 'TOKEN_BUDGET_UNVERIFIED';
   }
   if (failureReason) {
     launchResult.exitCode = 1;
@@ -1928,22 +1944,6 @@ function getIsolatedLauncher() {
       launchResult.failBefore = exerciseResult.failBefore;
     }
     launchResult.rtk = { provided: rtkEnabled, reason: rtkDecision };
-    if (opts.decisionDir) {
-      try {
-        require('./decisions').recordDecision(
-          {
-            stage: require('./decisions').Stage.WARNING,
-            workItemId: opts.workItemId || null,
-            warning: 'RTK_POLICY',
-            detail: rtkDecision,
-            enabled: rtkEnabled,
-          },
-          { dir: opts.decisionDir }
-        );
-      } catch (_) {
-        /* Telemetry failure must not alter the launch verdict. */
-      }
-    }
     launchResult.tokenBudget = opts.tokenBudget || null;
     return launchResult;
   };
