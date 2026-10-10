@@ -72,7 +72,7 @@ test.after(() => {
   for (const root of roots) fs.rmSync(root, { recursive: true, force: true });
 });
 
-test('Codex harness requires an isolated worker and builds the guarded exec argv', () => {
+test('Codex harness delegates fresh verdict enforcement to the isolated launcher', () => {
   const codex = harnesses.getHarness('codex');
   assert.throws(() => codex.launch({ cwd: process.cwd() }), /CODEX_REQUIRES_ISOLATION/);
   assert.throws(
@@ -80,55 +80,33 @@ test('Codex harness requires an isolated worker and builds the guarded exec argv
     /CODEX_REQUIRES_ISOLATION/
   );
   const worker = path.join('C:\\ShipDeWorker', 'task-ai-141');
-  const originalLocalAppData = process.env.LOCALAPPDATA;
-  const hostRoot = fixtureRoot();
-  const canonicalVerdictPath = path.join(hostRoot, 'ShipDe', 'isolation-verdict.json');
-  const forgedVerdictPath = path.join(hostRoot, 'forged-verdict.json');
-  fs.mkdirSync(path.dirname(canonicalVerdictPath), { recursive: true });
-  fs.writeFileSync(forgedVerdictPath, JSON.stringify({ verdict: 'CLOSED' }));
-  process.env.LOCALAPPDATA = hostRoot;
-  try {
-    assert.throws(
-      () =>
-        codex.launch({
-          cwd: worker,
-          isolatedWorker: true,
-          verdictPath: forgedVerdictPath,
-        }),
-      /CODEX_REQUIRES_ISOLATION/
-    );
-
-    fs.writeFileSync(canonicalVerdictPath, JSON.stringify({ verdict: 'CLOSED' }));
-    const staleTime = new Date(Date.now() - 25 * 60 * 60 * 1000);
-    fs.utimesSync(canonicalVerdictPath, staleTime, staleTime);
-    assert.throws(
-      () =>
-        codex.launch({
-          cwd: worker,
-          isolatedWorker: true,
-          verdictPath: forgedVerdictPath,
-        }),
-      /CODEX_REQUIRES_ISOLATION/
-    );
-
-    fs.utimesSync(canonicalVerdictPath, new Date(), new Date());
-    assert.deepEqual(
-      codex.launch({
-        cwd: worker,
-        isolatedWorker: true,
-        verdictPath: forgedVerdictPath,
-        model: 'codex-test',
-        prompt: 'task',
-      }),
-      ['exec', '--dangerously-bypass-approvals-and-sandbox', '--model', 'codex-test', 'task']
-    );
-  } finally {
-    if (originalLocalAppData === undefined) delete process.env.LOCALAPPDATA;
-    else process.env.LOCALAPPDATA = originalLocalAppData;
-  }
+  assert.deepEqual(
+    codex.launch({
+      cwd: worker,
+      isolatedWorker: true,
+      verdictPath: path.join(fixtureRoot(), 'forged-verdict.json'),
+      model: 'codex-test',
+      prompt: 'task',
+    }),
+    ['exec', '--dangerously-bypass-approvals-and-sandbox', '--model', 'codex-test', 'task']
+  );
 });
 
 test('Codex bypass and worker login probe exist only in isolated launcher script', () => {
+  assert.throws(
+    () =>
+      isolation.buildWorkerLaunchScript({
+        credPath: 'worker.cred',
+        workerRoot: 'C:\\worker',
+        exeFile: 'paseo.exe',
+        payloadArgsPath: 'args.json',
+        launchResultPath: 'result.json',
+        workerTimeoutMs: 1000,
+        adapterId: 'paseo',
+        runAsCurrentUser: true,
+      }),
+    /CODEX_REQUIRES_ISOLATION/
+  );
   const regular = isolation.buildWorkerLaunchScript({
     credPath: 'worker.cred',
     workerRoot: 'C:\\worker',
@@ -138,6 +116,7 @@ test('Codex bypass and worker login probe exist only in isolated launcher script
     workerTimeoutMs: 1000,
     completionNonce: 'nonce',
     adapterId: 'paseo',
+    isolationVerdict: { verdict: 'CLOSED' },
     runAsCurrentUser: true,
   });
   const codex = isolation.buildWorkerLaunchScript({
@@ -465,11 +444,15 @@ test('intake pool writer inherits backend WORK_ITEM_PASS from blocked 9router ag
     body: 'pool path rate limited',
   });
   const failedData = evidence.loadEvidence(path.join(root, 'evidence'));
-  assert.equal(require('../routing').proofObservedWithSource(failedData, failedTarget).level, null);
+  assert.equal(
+    require('../routing').proofObservedWithSource(failedData, failedTarget).level,
+    'WORK_ITEM_PASS',
+    'a temporary path failure does not revoke proof transferred from the same backend model'
+  );
   const exhaustedTarget = Object.assign({}, poolCandidate, { headroomStatus: 'exhausted' });
   assert.equal(
     require('../routing').proofObservedWithSource(proofData, exhaustedTarget).level,
-    null
+    'WORK_ITEM_PASS'
   );
   const blockedRank = rankForProfile(
     [Object.assign({}, poolCandidate)],
@@ -503,7 +486,7 @@ test('intake pool writer inherits backend WORK_ITEM_PASS from blocked 9router ag
       ...directProof,
       headroomStatus: 'exhausted',
     }).level,
-    null
+    'WORK_ITEM_PASS'
   );
   const blockedDirect = { ...directProof, accountId: 'agy-blocked', quotaScope: 'agy-blocked' };
   const blockedData = {
@@ -519,7 +502,8 @@ test('intake pool writer inherits backend WORK_ITEM_PASS from blocked 9router ag
   };
   assert.equal(
     require('../routing').proofObservedWithSource(blockedData, blockedDirect).level,
-    null
+    'WORK_ITEM_PASS',
+    'quota cooldown blocks execution separately from retained proof'
   );
 });
 

@@ -522,18 +522,6 @@ function proofObservedWithSource(evidenceData, candidate) {
   }
   const passed = (items || []).filter((e) => e.status === 'passed');
   const direct = evidence.proofLevelOf(passed);
-  const ownBlocked = evidence.isCandidateBlocked(evidenceData, candidate).blocked;
-  const ownFailed = (items || []).some((item) => item.status === 'failed');
-  const quotaExhausted =
-    candidate &&
-    (candidate.headroomStatus === 'exhausted' ||
-      candidate.quotaStatus === 'exhausted' ||
-      candidate.remainingPercent === 0 ||
-      candidate.remainingPercent === '0' ||
-      candidate.headroom === 'exhausted');
-  if (ownBlocked || ownFailed || quotaExhausted) {
-    return { level: null, source: null, transferred: false };
-  }
   if (direct) return { level: direct, source: proofSource, transferred: false };
 
   // Proof describes the backend model's ability; quota, cooldown and failures
@@ -562,8 +550,6 @@ function proofObservedWithSource(evidenceData, candidate) {
     // route produced it. Keep that proof path-scoped; transfer only when the
     // recorded source model explicitly carries its own upstream alias.
     if (!parsed.upstream || !parsed.modelId.startsWith(parsed.upstream + '/')) continue;
-    if (evidence.isCandidateBlocked(evidenceData, parsed).blocked) continue;
-    if ((combo.evidence || []).some((item) => item.status === 'failed')) continue;
     const level = evidence.proofLevelOf(
       (combo.evidence || []).filter((e) => e.status === 'passed')
     );

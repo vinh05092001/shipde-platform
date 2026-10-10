@@ -292,7 +292,7 @@ function buildWorkerLaunchScript(options) {
   const workerTimeoutMs = options.workerTimeoutMs;
   const adapterId = options.adapterId;
   const isCodex = adapterId === 'codex';
-  if (isCodex && (!options.isolationVerdict || options.isolationVerdict.verdict !== 'CLOSED')) {
+  if (adapterId && (!options.isolationVerdict || options.isolationVerdict.verdict !== 'CLOSED')) {
     throw new Error('CODEX_REQUIRES_ISOLATION');
   }
   const completionNonce = options.completionNonce || crypto.randomBytes(16).toString('hex');
