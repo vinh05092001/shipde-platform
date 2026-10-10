@@ -286,6 +286,25 @@ test('G3 keeps the author lane selected and plans one dependency-ready item ahea
   }
 });
 
+test('G3 skips backlog rows whose Work Item document already exists', () => {
+  const root = fixtureRoot('plan-g3-existing-');
+  try {
+    const workItemDir = path.join(root, 'docs', 'product-spec', 'work-items');
+    fs.writeFileSync(path.join(workItemDir, 'FEAT-AUTH-07.md'), '# existing\n');
+    const result = findNextWorkItem(
+      { rootDir: root, loop: true },
+      {
+        items: [{ work_item_id: 'FEAT-AUTH-07', status: 'BACKLOG', dependencies: '' }],
+        records: [],
+      }
+    );
+    assert.equal(result.planCandidate, null);
+    assert.match(result.skipped[0].reason, /document already exists/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('G3 parallel planning promotes the merged backlog row before returning', async () => {
   const root = fixtureRoot('plan-g3-parallel-run-');
   const register = [
@@ -384,12 +403,16 @@ test('G4 source-limited drafting does not include uncited product claims', () =>
       path.join(root, 'docs', 'product-spec', 'docs', '01-product', 'MASTER-FEATURE-CATALOG.md'),
       'utf8'
     );
-    const featureClaims = draft.split(/\r?\n/).filter((line) => /^> /.test(line));
+    const featureClaims = draft.split(/\r?\n/).filter((line) => /Approved behavior/.test(line));
     assert.ok(featureClaims.length > 0);
     for (const line of featureClaims) {
-      const claim = line.slice(2).trim();
+      const claim = line.replace(/^.*?Approved behavior/, 'Approved behavior').trim();
       assert.ok(sourceText.includes(claim), 'uncited product claim: ' + claim);
     }
+    assert.doesNotMatch(
+      draft,
+      /Assigned author \| `GEMINI`|Risk \| `UNASSESSED`|feat\/feat-auth-07-implementation/
+    );
     assert.equal(result.status, 'DRAFT');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

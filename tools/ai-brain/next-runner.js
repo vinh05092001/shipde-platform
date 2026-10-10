@@ -585,6 +585,10 @@ function findNextWorkItem(options, deps) {
         break;
       }
       const workItemPath = path.join(rootDir, 'docs', 'product-spec', 'work-items', id + '.md');
+      if (fs.existsSync(workItemPath)) {
+        skipped.push({ id, reason: 'Work Item document already exists' });
+        continue;
+      }
       if (!planCandidate) planCandidate = item;
       continue;
     }
@@ -783,7 +787,7 @@ async function nextLoop(options, deps) {
         const planningPromise = planning.planWorkItem(
           planningItem.work_item_id,
           { rootDir, run: true },
-          d.planningDeps || { runPlanning: d.runPlanning }
+          d.planningDeps || d
         );
         const authorItem = findResult.item;
         if (authorItem && authorItem !== planningItem) {
@@ -832,7 +836,7 @@ async function nextLoop(options, deps) {
         const planned = await planning.planWorkItem(
           item.work_item_id,
           { rootDir, run: true },
-          d.planningDeps || { runPlanning: d.runPlanning }
+          d.planningDeps || d
         );
         const governed =
           planned &&
