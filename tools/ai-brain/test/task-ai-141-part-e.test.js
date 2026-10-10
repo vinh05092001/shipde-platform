@@ -119,6 +119,23 @@ test('all route failures retain per-path reasons and a due 402 retry restores im
   );
 });
 
+test('an existing failed route keeps its retry schedule when fallback is entered', async (t) => {
+  const { store } = temporaryStore(t);
+  const now = 1_800_000_000_000;
+  routes.recordResult(
+    store,
+    'model-reset',
+    'p1',
+    { ok: false, status: 429, resetAt: new Date(now + 60000).toISOString() },
+    now
+  );
+  const expected = store.paths['model-reset|p1'].nextCheckAt;
+  await routes.routeFallback('model-reset', 'p1', [], async () => ({ ok: false }), store, {
+    now: now + 1000,
+  });
+  assert.equal(store.paths['model-reset|p1'].nextCheckAt, expected);
+});
+
 test('backoff grows and continues daily; failed models are parked, not removed', (t) => {
   const { store } = temporaryStore(t);
   let now = 1_800_000_000_000;
@@ -355,7 +372,7 @@ test('intake assembly probes a bounded catalogue with a timeout and excludes fai
     }
   );
   assert.equal(counts.length, 50);
-  assert.equal(result.length, 50, 'all catalogue rows are retained for explicit replay');
+  assert.equal(result.length, 50, 'explicit replay returns the caller-supplied catalogue');
   assert.equal(Object.keys(routes.loadStore(file).paths).length, 50);
 });
 
@@ -419,6 +436,14 @@ test('intake persists bounded fake gateway probe results and reports per-account
     Object.keys(routes.loadStore(path.join(fixture, 'route-health.json')).paths).length,
     50
   );
+  const contributionLog = JSON.parse(
+    fs.readFileSync(
+      path.join(result.runDir, 'decisions', 'gateway-account-contributions.json'),
+      'utf8'
+    )
+  );
+  assert.deepEqual(contributionLog.accounts, [{ accountId: 'acct', count: 30 }]);
+  assert.equal(contributionLog.candidateCount, 30);
   const assembled = await cli.assembleForDispatch(
     { candidates: models },
     result.accounts,
@@ -479,6 +504,39 @@ test('geo-blocked access class skips all paths marked geo-restricted', async (t)
   assert.equal(result.route.id, 'p3');
 });
 
+test('5xx fallback retries the failed path once with backoff before choosing another path', async (t) => {
+  const { store } = temporaryStore(t);
+  const attempts = [];
+  const sleeps = [];
+  const result = await routes.routeFallback(
+    'model-retry',
+    'p1',
+    [{ id: 'p2' }],
+    async (_model, route, options) => {
+      attempts.push([route.id, options.attempt]);
+      return options.attempt === 0 ? { ok: false, status: 503 } : { ok: true };
+    },
+    store,
+    { now: 1_800_000_000_000, sleep: async (ms) => sleeps.push(ms), retryBackoffMs: 25 }
+  );
+  assert.equal(result.route.id, 'p2');
+  assert.deepEqual(attempts, [
+    ['p2', 0],
+    ['p2', 1],
+  ]);
+  assert.deepEqual(sleeps, [25]);
+});
+
+test('due parked routes stay ineligible until a successful recheck', async (t) => {
+  const { store } = temporaryStore(t);
+  const now = 1_800_000_000_000;
+  routes.recordResult(store, 'model-due', 'gateway', { ok: false, status: 429 }, now);
+  store.paths['model-due|gateway'].nextCheckAt = new Date(now).toISOString();
+  assert.equal(routes.isEligible(store, 'model-due', 'gateway', now + 1), false);
+  await routes.recheckDue(store, async () => ({ ok: true }), { now: now + 1 });
+  assert.equal(routes.isEligible(store, 'model-due', 'gateway', now + 2), true);
+});
+
 test('assembly performs due checks and bounded fresh probes before building live candidates', async (t) => {
   const { file, store } = temporaryStore(t);
   const registry = {
@@ -534,8 +592,8 @@ test('live assembly falls back from a parked alias to another same-model gateway
     dispatch: { providers: { 'acct-a': { harness: 'paseo' }, 'acct-c': { harness: 'paseo' } } },
   };
   const catalogue = [
-    { gateway: 'ag', upstream: 'acct-a', modelId: 'ag/model-fallback', evidence: 2 },
-    { gateway: 'cl', upstream: 'acct-c', modelId: 'cl/model-fallback', evidence: 1 },
+    { gateway: 'ag', upstream: 'ag', modelId: 'ag/model-fallback', evidence: 2 },
+    { gateway: 'cl', upstream: 'cl', modelId: 'cl/model-fallback', evidence: 1 },
   ];
   routes.recordResult(store, catalogue[0].modelId, 'ag', { ok: false, status: 451 }, now);
   const counts = [];

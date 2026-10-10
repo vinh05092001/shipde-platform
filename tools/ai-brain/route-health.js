@@ -114,7 +114,9 @@ function recordResult(store, modelId, routeId, result, now) {
 
 function isEligible(store, modelId, routeId, now) {
   const record = store.paths[normalizeModelId(modelId) + '|' + String(routeId)];
-  return !record || record.status === 'AVAILABLE' || dueAt(record, now);
+  // A due route is eligible only after a successful probe changes its status
+  // back to AVAILABLE. Selection must never become the implicit re-check.
+  return !record || record.status === 'AVAILABLE';
 }
 
 async function routeFallback(modelId, failedPath, paths, probe, store, options) {
@@ -134,18 +136,28 @@ async function routeFallback(modelId, failedPath, paths, probe, store, options) 
       });
       continue;
     }
-    if (
-      (failureReason === 'GEO_BLOCKED' && route.geoBlocked === true) ||
-      route.geoBlocked === true
-    ) {
+    if (route.geoBlocked === true) {
       failures.push({ path: route.id, reason: 'GEO_BLOCKED' });
       continue;
     }
     let result;
-    try {
-      result = await probe(modelId, route);
-    } catch (error) {
-      result = { ok: false, error: String(error) };
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        result = await probe(modelId, route, {
+          attempt,
+          backoffMs: attempt ? (o.retryBackoffMs ?? 1000) : 0,
+        });
+      } catch (error) {
+        result = { ok: false, error: String(error) };
+      }
+      if (result && result.ok) break;
+      const retryReason = classifyFailure(
+        result && result.status,
+        result && (result.message || result.error)
+      );
+      if (attempt !== 0 || !['UNAVAILABLE_NOW'].includes(retryReason)) break;
+      if (o.sleep) await o.sleep(o.retryBackoffMs ?? 1000);
+      else await new Promise((resolve) => setTimeout(resolve, o.retryBackoffMs ?? 1000));
     }
     const recorded = recordResult(store, modelId, route.id, result, now);
     if (recorded.eligible) {
@@ -205,7 +217,17 @@ function discoverModelPaths(modelId, registry, accounts, catalogue) {
       providers[String((account && account.provider) || (source && source.id) || '').toLowerCase()];
     const routeId = String(id);
     const key = routeId;
-    if (known.has(key)) return;
+    if (known.has(key)) {
+      const existing = known.get(key);
+      existing.evidence = Math.max(existing.evidence, Number(evidence || 0));
+      if (account && !existing.accountId) {
+        existing.accountId = account.id;
+        existing.harness = (dispatch && dispatch.harness) || existing.harness;
+        existing.accessPath =
+          (source && (source.accessPath || source.endpoint)) || existing.accessPath;
+      }
+      return;
+    }
     known.set(key, {
       id: routeId,
       gateway: (source && (source.kind === 'router' ? source.id : source.reachedVia)) || routeId,
@@ -213,6 +235,7 @@ function discoverModelPaths(modelId, registry, accounts, catalogue) {
       harness: (dispatch && dispatch.harness) || (source && source.harness) || null,
       accessPath: (source && (source.accessPath || source.endpoint)) || routeId,
       evidence: Number(evidence || 0),
+      geoBlocked: Boolean(source && source.geoBlocked),
     });
   };
   for (const account of accounts || []) {
@@ -223,7 +246,12 @@ function discoverModelPaths(modelId, registry, accounts, catalogue) {
     for (const model of catalogue || []) {
       const id = model && (model.modelId || model.model);
       if (!id || normalizeModelId(id) !== normalized) continue;
-      if (gateway && model.gateway === gateway) addPath(gateway, source, account, model.evidence);
+      if (gateway && model.gateway === gateway) {
+        const geoBlocked = model.geoBlocked === true || model.status === 'GEO_BLOCKED';
+        addPath(gateway, source, account, model.evidence);
+        const route = known.get(gateway);
+        if (route && geoBlocked) route.geoBlocked = true;
+      }
       if (!gateway && source.servesModels !== false)
         addPath(source.id, source, account, model.evidence);
     }
@@ -254,6 +282,25 @@ function discoverModelPaths(modelId, registry, accounts, catalogue) {
       })
     );
     if (declared) for (const account of accountsForSource) addPath(source.id, source, account, 0);
+  }
+  // Harness-specific and CLI routes are represented by the same registry
+  // sources/accounts as gateway paths. Include declared models from each
+  // enabled account so opencode, agy CLI, codex, paseo, and future harnesses
+  // participate without hard-coded harness names.
+  for (const account of accounts || []) {
+    if (!account || account.enabled === false) continue;
+    const source = sources.get(account.provider);
+    if (
+      !source ||
+      sourcesApi.isRetired(source.id, registry) ||
+      sourcesApi.isDeferred(source.id, registry)
+    )
+      continue;
+    const declared = (Array.isArray(account.models) ? account.models : []).some((entry) => {
+      const id = typeof entry === 'string' ? entry : entry && entry.model;
+      return id && normalizeModelId(id) === normalized && !(entry && entry.exclude === true);
+    });
+    if (declared) addPath(source.id, source, account, account.evidence);
   }
   return [...known.values()];
 }

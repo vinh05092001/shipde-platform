@@ -812,7 +812,6 @@ function gatewayAccountCandidates(opts) {
   const accounts = o.accounts || [];
   const catalogue = o.catalogue || [];
   const routeHealth = o.routeHealth;
-  const normalizedHealth = routeHealth || { paths: {} };
   const probeOk = o.probeOk;
   const excluded = new Set((o.excludeModels || []).map((id) => String(id).toLowerCase()));
   const routeNow = Number(o.now) || Date.now();
@@ -868,6 +867,11 @@ function gatewayAccountCandidates(opts) {
       catalogueRows.map((row) => [String(row.modelId || row.model || '').toLowerCase(), row])
     );
     const eligibleRows = catalogueRows.slice();
+    const malformedRowCount = eligibleRows.filter((row) => {
+      const id = String(row.modelId || row.model || '');
+      return !row.upstream || !id.startsWith(String(row.upstream) + '/');
+    }).length;
+    if (malformedRowCount) continue;
     for (const modelId of additions) {
       if (!rowsByModel.has(modelId) && !excludes.has(modelId)) {
         const prefix = parsePrefix(modelId);
@@ -910,7 +914,7 @@ function gatewayAccountCandidates(opts) {
       // An alias is the prefix the model id itself carries. A row whose id
       // does not begin with its own upstream names no reachable alias, and
       // inventing one is exactly how a candidate that can never run is planned.
-      if (!upstream || (!row.handAdded && !modelId.startsWith(upstream + '/'))) continue;
+      if (!upstream || !modelId.startsWith(upstream + '/')) continue;
 
       out.push({
         harness,

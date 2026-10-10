@@ -671,6 +671,8 @@ function assembleCandidates(
   for (const dc of discCands) {
     const accountId = dc.accountId || dc.account || '*';
     const modelId = dc.modelId || dc.model;
+    const upstream = dc.upstream;
+    if (upstream && !String(modelId || '').startsWith(upstream + '/')) continue;
     const c = {
       ...dc,
       accountId,
@@ -915,24 +917,34 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
 
   const buildCandidates = () =>
     assembleCandidates(discoveryCat, offs, resolvedRegistry, accounts, null, [
-      ...candidatesApi.generateCandidates({
-        registry: resolvedRegistry,
-        accounts: accounts || [],
-        openCodeIds: (accounts || []).flatMap((account) =>
-          ((account && account.models) || [])
-            .map((model) => (typeof model === 'string' ? model : model && model.model))
-            .filter(Boolean)
-        ),
-        catalogue: ((discoveryCat && discoveryCat.candidates) || [])
-          .map((row) => row && (row.modelId || row.model))
-          .filter(Boolean),
-        evidenceData: opts.evidenceData,
-        fakeRunsDir: opts.fakeRunsDir,
-        home: opts.home,
-        discoverPool: opts.discoverPool !== false,
-        adapterScript: opts.adapterScript,
-        platform: opts.platform,
-      }),
+      ...candidatesApi
+        .generateCandidates({
+          registry: resolvedRegistry,
+          accounts: accounts || [],
+          openCodeIds: (accounts || []).flatMap((account) =>
+            ((account && account.models) || [])
+              .map((model) => (typeof model === 'string' ? model : model && model.model))
+              .filter(Boolean)
+          ),
+          catalogue: ((discoveryCat && discoveryCat.candidates) || [])
+            .map((row) => row && (row.modelId || row.model))
+            .filter(Boolean),
+          evidenceData: opts.evidenceData,
+          fakeRunsDir: opts.fakeRunsDir,
+          home: opts.home,
+          discoverPool: opts.discoverPool !== false,
+          adapterScript: opts.adapterScript,
+          platform: opts.platform,
+        })
+        .filter((candidate) => {
+          const modelId = candidate && candidate.modelId;
+          const gateway = candidate && candidate.gateway;
+          return (
+            !modelId ||
+            !gateway ||
+            routeHealthApi.isEligible(routeHealth, modelId, gateway, opts.now)
+          );
+        }),
       ...candidatesApi.gatewayAccountCandidates({
         registry: resolvedRegistry,
         accounts: accounts || [],
