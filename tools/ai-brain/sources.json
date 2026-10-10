@@ -43,6 +43,30 @@
       "verify": { "method": "completion" }
     },
     {
+      "id": "poolside",
+      "label": "Poolside",
+      "kind": "model-source",
+      "servesModels": true,
+      "harness": "direct-http",
+      "accessPath": "direct",
+      "endpoint": "https://inference.poolside.ai/v1",
+      "credential": { "type": "api-key", "env": "POOLSIDE_API_KEY" },
+      "verify": { "method": "models-list", "path": "/models" },
+      "comment": "OpenAI-compatible models API: https://docs.poolside.ai/openai-api/models/list-models; base URL documented at https://github.com/poolsideai/pool."
+    },
+    {
+      "id": "internlm",
+      "label": "InternLM",
+      "kind": "model-source",
+      "servesModels": true,
+      "harness": "direct-http",
+      "accessPath": "direct",
+      "endpoint": "https://chat.intern-ai.org.cn/api/v1",
+      "credential": { "type": "api-key", "env": "INTERNLM_API_KEY" },
+      "verify": { "method": "models-list", "path": "/models" },
+      "comment": "OpenAI-compatible models API and base URL: https://internlm.intern-ai.org.cn/docEn/docs/Models/."
+    },
+    {
       "id": "agy-local",
       "label": "agy (local)",
       "kind": "agent-cli",
