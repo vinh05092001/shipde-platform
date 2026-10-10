@@ -96,6 +96,29 @@ test('qualification respects run and daily caps and records only exact-SHA indep
   assert.equal(JSON.parse(fs.readFileSync(f.usageFile, 'utf8'))['2026-10-10'].length, 1);
 });
 
+test('qualification receipt is matched to the selected configured item id', async () => {
+  const f = fixture();
+  const evidence = [];
+  const result = await runAutomaticQualification({
+    candidates: [CANDIDATE],
+    itemsFile: f.itemsFile,
+    usageFile: f.usageFile,
+    now: Date.parse('2026-10-10T12:00:00Z'),
+    isolationVerdict: { verdict: 'CLOSED' },
+    recordEvidence: (...args) => evidence.push(args),
+    runIsolatedReviewed: async () => ({
+      verdict: 'PASS',
+      sha: SHA,
+      reviewedSha: SHA,
+      reviewer: 'independent-reviewer',
+      independent: true,
+      workItemId: 'QUALIFY-01',
+    }),
+  });
+  assert.equal(result.qualified.length, 1);
+  assert.equal(evidence.length, 1);
+});
+
 test('no product item and no mismatched review SHA can grant evidence', async () => {
   const f = fixture();
   for (const receipt of [
@@ -513,6 +536,32 @@ test('next loop tries qualification only after PROOF_FLOOR_NOT_MET intake refusa
   assert.ok(result.qualification);
 });
 
+test('next loop does not start a qualification slot when the controller ceiling is reached', async () => {
+  let qualifications = 0;
+  const result = await nextLoop(
+    { maxIterations: 1, rootDir: process.cwd(), records: [] },
+    {
+      existsSync: () => false,
+      items: [{ work_item_id: 'FEAT-AUTH-01', status: 'READY_FOR_AUTHOR', dependencies: '' }],
+      runIntake: async () => {
+        const error = new Error('proof floor');
+        error.code = 'PROOF_FLOOR_NOT_MET';
+        throw error;
+      },
+      qualificationSlot: async () => {
+        qualifications += 1;
+        return { ran: true, status: 'completed' };
+      },
+      checkCandidateLanes: () => ({ available: true }),
+      checkCeiling: () => ({ allowed: false, reason: 'WRITER_CEILING_REACHED' }),
+      log: () => {},
+      now: Date.now(),
+    }
+  );
+  assert.equal(qualifications, 0);
+  assert.equal(result.completed, true);
+});
+
 test('next loop does not qualify for unrelated intake errors and prioritizes FEAT items', async () => {
   const { findNextWorkItem } = require('../next-runner');
   const choice = findNextWorkItem(
@@ -554,11 +603,13 @@ test('nextCommand injects a production qualification slot by default', async () 
   const { nextCommand: cliNext } = require('../cli');
   const original = require('../qualification-auto').runAutoCli;
   let called = false;
+  let qualificationConfig;
   require('../qualification-auto').runAutoCli = async (argv, deps) => {
     called =
       argv.includes('--auto') &&
       typeof deps.runIsolatedReviewed === 'function' &&
       typeof deps.buildCandidates === 'function';
+    qualificationConfig = deps.config;
     return 0;
   };
   try {
@@ -580,6 +631,7 @@ test('nextCommand injects a production qualification slot by default', async () 
       }
     );
     assert.equal(called, true);
+    assert.deepEqual(qualificationConfig, {});
     assert.ok(result.qualification);
   } finally {
     require('../qualification-auto').runAutoCli = original;

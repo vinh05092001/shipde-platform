@@ -188,10 +188,7 @@ async function runAutomaticQualification(options) {
       item,
     });
     attempted.push({ candidateKey: key, itemId: item.id, at: new Date(now).toISOString() });
-    if (
-      !independentPass(receipt, candidate, expectedCommit) ||
-      receipt.workItemId !== (opts.itemId || item.id)
-    )
+    if (!independentPass(receipt, candidate, expectedCommit) || receipt.workItemId !== item.id)
       continue;
     const proof = {
       status: 'passed',

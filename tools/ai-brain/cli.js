@@ -3327,13 +3327,14 @@ module.exports = {
       nextDeps.qualificationSlot = async () => {
         const { runAutoCli } = require('./qualification-auto');
         const rootDir = args.root || process.cwd();
+        const { loadConfig } = require('./next-runner');
         const code = await runAutoCli(['--auto'], {
           runIsolatedReviewed: (input) =>
             require('./intake').runIsolatedReviewed(input, { root: rootDir }),
           assertIsolationClosed: () => require('./intake').assertIsolationClosed({}),
-          itemId: 'QUALIFY-CODE-REVIEW-01',
           buildCandidates: () => buildQualificationCandidates(rootDir),
           evidenceDir: path.join(rootDir, 'tools', 'ai-brain', 'data', 'evidence'),
+          config: loadConfig(rootDir).qualification || {},
         });
         return { ran: true, status: code === 0 ? 'completed' : 'refused' };
       };

@@ -842,11 +842,20 @@ async function nextLoop(options, deps) {
     if (proofFloorRefusal) {
       const qualificationSlot = opts.qualificationSlot || d.qualificationSlot;
       if (typeof qualificationSlot === 'function') {
+        const qualificationCeiling =
+          typeof d.checkCeiling === 'function'
+            ? d.checkCeiling({ ...opts, now }, d)
+            : checkCeiling({ ...opts, now }, d);
+        if (!qualificationCeiling.allowed) {
+          log(`Qualification slot skipped: ${qualificationCeiling.reason}.`);
+          continue;
+        }
         const qualification = await qualificationSlot({
           now,
           iteration,
           workItem: item,
           reason: 'PROOF_FLOOR_NOT_MET',
+          ceiling: qualificationCeiling,
         });
         if (qualification && qualification.ran === true) {
           log('QUALIFICATION_SLOT: ' + (qualification.status || 'completed'));
