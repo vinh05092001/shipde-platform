@@ -158,7 +158,7 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
     assert.equal(ranked.scoreBreakdown.latency, routing.latencyScoreOf(measured));
     assert.equal(ranked.scoreBreakdown.cost, 81);
     const rendered = routing.formatTopEntry(ranked, 1);
-    assert.match(rendered, /unknown/);
+    assert.match(rendered, /\| 1250ms \|/);
     assert.match(rendered, /cost 12/);
   });
 
@@ -389,6 +389,7 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
     assert.equal(result.ranking.length, 1);
     assert.equal(result.ranking[0].probation, true);
     assert.equal(result.ranking[0].probationRequiresIndependentReview, true);
+    assert.equal(result.ranking[0].scoreBreakdown.prior.score, 91);
   });
 
   test('benchmark aliases contribute scores without score or bench in their names', () => {

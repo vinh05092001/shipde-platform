@@ -1000,7 +1000,9 @@ function scoreForProfile(candidate, assessment, ctx) {
   const weightedPriorContribution =
     priorUsable && prior.score !== undefined
       ? Math.round((prior.bonus * priorQualityWeight * wQuality) / totalWeight)
-      : 0;
+      : priorUsable
+        ? prior.bonus
+        : 0;
   if (weightedPriorContribution) score += weightedPriorContribution;
   if (prior) {
     if (prior.score !== undefined) {
@@ -1173,22 +1175,26 @@ function rankForProfile(candidates, profile, assessment, ctx) {
       reject('PROBATION_REQUIRES_INDEPENDENT_STRONG_REVIEWER', 'candidate');
       continue;
     }
-    if (profile.proofFloor !== 'NONE' && !(probationAllowed && !riskProbationRefused)) {
+    let admittedOnProbation = false;
+    if (profile.proofFloor !== 'NONE') {
       const observedProof = proofObservedWithSource(ctx.evidenceData, c);
       const observed = observedProof.level;
       const observedRank = observed ? evidence.ProofRank[observed] : 0;
       if (observedRank < evidence.ProofRank[profile.proofFloor]) {
-        if (!probationAllowed) {
+        if (!probationAllowed || riskProbationRefused) {
           reject('PROOF_FLOOR_NOT_MET:' + (observed || 'NONE'), 'candidate');
           continue;
         }
-        c.probation = true;
-        c.probationRequiresIndependentReview = true;
-      } else if (!observed && probationAllowed && profile.proofFloor === 'NONE') {
+        admittedOnProbation = true;
         c.probation = true;
         c.probationRequiresIndependentReview = true;
       }
-    } else if (probationAllowed && profile.proofFloor === 'NONE') {
+    } else if (
+      profile.proofFloor === 'NONE' &&
+      probationAllowed &&
+      !proofObservedWithSource(ctx.evidenceData, c).level
+    ) {
+      admittedOnProbation = true;
       c.probation = true;
       c.probationRequiresIndependentReview = true;
     }
@@ -1212,16 +1218,6 @@ function rankForProfile(candidates, profile, assessment, ctx) {
       priors,
     });
     const scored = scoreForProfile(c, assessment, scoreContext);
-    const hasPrior = Boolean(scored.breakdown.prior);
-    const probationAllowedForTask =
-      !['security', 'money', 'tenant'].some((risk) => (profile.riskDomains || []).includes(risk)) ||
-      ctx.independentStrongReviewerGuaranteed === true;
-    const probationary =
-      !proofObservedWithSource(ctx.evidenceData, c).level &&
-      hasPrior &&
-      scored.breakdown.prior.score >= 80 &&
-      !scored.breakdown.prior.stale &&
-      probationAllowedForTask;
     ranked.push(
       Object.assign({}, c, {
         candidateKey: key,
@@ -1229,15 +1225,19 @@ function rankForProfile(candidates, profile, assessment, ctx) {
         scoreBreakdown: scored.breakdown,
         reservationsHeld: scored.reservationsHeld,
         headroomStatus: headroom.status,
-        probation: probationary,
-        probationRequiresIndependentReview: probationary,
+        probation: admittedOnProbation,
+        probationRequiresIndependentReview: admittedOnProbation,
       })
     );
   }
 
   ranked.sort((a, b) => {
-    const aPriorBonus = a.scoreBreakdown.prior ? a.scoreBreakdown.prior.contribution || 0 : 0;
-    const bPriorBonus = b.scoreBreakdown.prior ? b.scoreBreakdown.prior.contribution || 0 : 0;
+    const aPriorBonus = a.scoreBreakdown.prior
+      ? (a.scoreBreakdown.prior.contribution ?? a.scoreBreakdown.prior.bonus ?? 0)
+      : 0;
+    const bPriorBonus = b.scoreBreakdown.prior
+      ? (b.scoreBreakdown.prior.contribution ?? b.scoreBreakdown.prior.bonus ?? 0)
+      : 0;
     const aBaseScore = a.score - aPriorBonus;
     const bBaseScore = b.score - bPriorBonus;
     if (bBaseScore !== aBaseScore) return bBaseScore - aBaseScore;
@@ -1292,7 +1292,11 @@ async function adviseRankedModelChoice(result, profile, options) {
 
 /** One line of the top-3 output the operator reads. */
 function formatTopEntry(entry, rank) {
-  const duration = entry.expectedDurationMs ?? entry.latencyMs;
+  const measuredLatency =
+    Array.isArray(entry.evidence) &&
+    entry.evidence.find((item) => item && Number.isFinite(Number(item.latencyMs)));
+  const duration =
+    entry.expectedDurationMs ?? entry.latencyMs ?? (measuredLatency && measuredLatency.latencyMs);
   const durationText =
     duration !== null && duration !== undefined && Number.isFinite(Number(duration))
       ? Number(duration) + 'ms'
