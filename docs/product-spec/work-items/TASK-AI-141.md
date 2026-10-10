@@ -112,3 +112,10 @@ No API, persisted product data, or external side effects change. Candidate gener
 
 - Parts B to E and their acceptance criteria remain open follow-up work within TASK-AI-141, except proof transfer now included above by supervisor direction.
 - This change consumes the models already discovered by intake; it does not add live per-account pool probing.
+
+## Part E
+
+- Added persistent path-scoped model health in `tools/ai-brain/data/model-route-health.json`; failed routes keep their model identity and receive a reason, last-check time, and retry time with bounded escalating backoff. GEO_BLOCKED and AUTH_NEEDED use daily rechecks; provider reset hints take precedence.
+- Added same-model fallback ordering by prior evidence, per-path failure reporting, `route_fallback` and `route_restored` events, plus `cli.js probe --due` (capped at 20 checks per run). Successful rechecks restore eligibility without deleting the path record.
+- Gateway candidate generation now skips paths parked until their due time. Tests use fake responses for 451/402/429, alternate paths, all-path failure, restoration, persistence, and continuing backoff.
+- Limitation: intake does not yet automatically probe every live catalogue model or direct/account-specific harness path; Part E's full E1/E2 intake refresh and all-harness fallback coverage remain incomplete.

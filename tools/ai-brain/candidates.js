@@ -811,6 +811,8 @@ function gatewayAccountCandidates(opts) {
   const registry = o.registry;
   const accounts = o.accounts || [];
   const catalogue = o.catalogue || [];
+  const routeHealth = o.routeHealth;
+  const routeNow = Number(o.now) || Date.now();
   if (!registry || catalogue.length === 0) return [];
 
   const sourceById = new Map();
@@ -849,6 +851,10 @@ function gatewayAccountCandidates(opts) {
       if (!row || row.gateway !== gateway) continue;
       const upstream = row.upstream || '';
       const modelId = row.modelId || row.model || '';
+      if (routeHealth) {
+        const health = require('./route-health');
+        if (!health.isEligible(routeHealth, modelId, gateway, routeNow)) continue;
+      }
       // An alias is the prefix the model id itself carries. A row whose id
       // does not begin with its own upstream names no reachable alias, and
       // inventing one is exactly how a candidate that can never run is planned.

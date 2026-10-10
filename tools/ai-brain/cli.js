@@ -847,6 +847,9 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
   const opts = options || {};
 
   const resolvedRegistry = registry || require('./sources').loadSources();
+  const routeHealth =
+    opts.routeHealth ||
+    require('./route-health').loadStore(path.join(__dirname, 'data', 'model-route-health.json'));
 
   if (Array.isArray(opts.candidates)) {
     return assembleCandidates(discoveryCat, [], resolvedRegistry, accounts, opts.candidates);
@@ -891,6 +894,8 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
       registry: resolvedRegistry,
       accounts: accounts || [],
       catalogue: (discoveryCat && discoveryCat.candidates) || [],
+      routeHealth,
+      now: opts.now,
     }),
     ...candidatesApi.poolAccountCandidates({
       registry: resolvedRegistry,
@@ -3085,6 +3090,18 @@ function main() {
   // refused, fail or timeout outcome still exits 0: the record is the
   // committed outcome either way, and exit 2 is reserved for bad argv.
   if (command === 'probe') {
+    if (process.argv.slice(3).includes('--due')) {
+      require('./route-health')
+        .runDueCli()
+        .then((code) => {
+          process.exitCode = code;
+        })
+        .catch((e) => {
+          console.error('Probe due lỗi: ' + (e && e.message ? e.message : e));
+          process.exitCode = 1;
+        });
+      return;
+    }
     const { runProbeCli } = require('./qualification');
     runProbeCli(process.argv.slice(3))
       .then((code) => {
