@@ -50,18 +50,16 @@ This Work Item is assigned to GEMINI. Codex independently reviews the resulting 
 
 The supervisor explicitly directed that proof transfer be handled in Part A. This supersedes the original scope note that placed transfer solely in Part B.
 
-## Follow-up Within This Work Item — Parts B to E
+## Follow-up Within This Work Item — Parts C to E
 
 These spec parts remain follow-up scope under TASK-AI-141 and are not implemented in this revision:
-
-- **Part B:** bounded automatic qualification of candidates that lack proof, with caps and exact-SHA independent review.
 - **Part C:** isolated Codex worker lane and worker login-state handling.
 - **Part D:** intake risk-domain and complexity derivation plus the QUALITY_FIRST safety floor.
 - **Part E and addenda:** live gateway model discovery/probing, same-model alternate-path fallback, temporary parking and due rechecks.
 
 ## Out of Scope for This Revision
 
-- Automatic qualification, Codex worker lane, intake risk/complexity derivation, and live gateway discovery/fallback/rechecks (Parts B to E), except the supervisor-directed proof transfer above.
+- Codex worker lane, intake risk/complexity derivation, and live gateway discovery/fallback/rechecks (Parts C to E), except the supervisor-directed proof transfer above.
 - Product Work Item execution as qualification, automatic merge, or reading/copying Codex credentials.
 - Live account probing or changes to agy-pool quota policy.
 
@@ -110,16 +108,27 @@ No API, persisted product data, or external side effects change. Candidate gener
 
 ## Residual Limitations
 
-- Parts B to E and their acceptance criteria remain open follow-up work within TASK-AI-141, except proof transfer now included above by supervisor direction.
+- Parts C to E and their acceptance criteria remain open follow-up work within TASK-AI-141, except proof transfer now included above by supervisor direction.
 - This change consumes the models already discovered by intake; it does not add live per-account pool probing.
+
+## Part B — bounded automatic qualification
+
+- Added `tools/ai-brain/qualification-auto.js` and the `qualify --auto --candidates <json>` CLI surface. Automatic qualification admits only rejected candidates whose sole reason is `PROOF_FLOOR_NOT_MET`; currently blocked candidates and candidates with any additional rejection are excluded.
+- Qualification work is selected only from `tools/ai-brain/data/qualification-items.json`, whose entries are explicitly `kind: qualification` and `risk: low`. The coordinator refuses malformed lists and refuses to grant evidence unless the isolated orchestration adapter returns an independent `PASS` whose `reviewedSha` exactly equals its 40-character commit SHA.
+- Successful runs record `WORK_ITEM_PASS` on the candidate's evidence identity. Per-run and per-day limits are configurable through the coordinator (`perRun`, `perDay`, defaults 1 and 3); usage is tracked by UTC day in `.shipde/qualification-usage.json`. Qualification output is never published or merged by this path.
+- `next --loop` offers an injected qualification slot only after the product register has no ready Work Item. The slot is bounded by the qualification coordinator and remains separate from product intake.
+- Added fake-driven tests for qualification candidate selection, caps, exact-SHA independent review, and rejection of product work. The normal isolated orchestration/reviewer implementation must be supplied as `runIsolatedReviewed`; without it, `qualify --auto` fails closed with `QUALIFICATION_RUNNER_UNAVAILABLE`.
+
+## Part D
+
+Intake derives risk domains and complexity from the Work Item scope, acceptance criteria, and allowed paths, and records the derivation in each run directory. JEV receives the resulting risk domains and complexity; the Controller enforces a `QUALITY_FIRST` floor for auth, security, money, or tenant-isolation work and records the override reason. Regressions cover a 15-AC MFA-like item and a docs-only item.
+
+### Part A follow-up: infrastructure failures do not revoke proof transfer
+
+`tools/ai-brain/routing.js` now preserves a source path's `WORK_ITEM_PASS` when that path is blocked or has failed evidence due to infrastructure conditions such as quota exhaustion, rate limits, timeouts, or launch/harness failures. Transfer still requires exact normalized backend model identity and a viable target path; model-scope failures, quality outcomes such as `CHANGES_REQUIRED`, and revoked proof disqualify the source. Three regressions cover infrastructure enum classification while preserving model failures, model/quality failures disqualifying transfer, and exhausted target paths not inheriting proof (`classifier enum values recognize infrastructure and preserve model failures`, `a model-quality failure on the source path disqualifies the proof transfer`, `an exhausted target path never inherits the transferred proof`).
 
 ## Part F
 
 - Added a pluggable benchmark-prior refresh command (`cli.js priors refresh`) with per-model benchmark/source metadata and a 30-day staleness flag.
 - Routing exposes prior scores, probation metadata, model-choice JEV advice limited to ranked eligible candidates, and explicit unknown latency/cost in reports.
 - Verification: see `task-ai-141-part-f.test.js`; research provider remains configured by the operator through `AI_BRAIN_PRIORS_SOURCE`.
-
-
-## Part D
-
-Intake derives risk domains and complexity from the Work Item scope, acceptance criteria, and allowed paths, and records the derivation in each run directory. JEV receives the resulting risk domains and complexity; the Controller enforces a `QUALITY_FIRST` floor for auth, security, money, or tenant-isolation work and records the override reason. Regressions cover a 15-AC MFA-like item and a docs-only item.
