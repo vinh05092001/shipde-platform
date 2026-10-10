@@ -146,7 +146,7 @@ test('backoff grows and continues daily; failed models are parked, not removed',
   assert.equal(Object.keys(store.paths).length, 1);
 });
 
-test('gateway candidates use successful catalogue probes and honor hand exclusions', (t) => {
+test('gateway candidates retain successful probes, apply hand additions and honor exclusions', (t) => {
   const registry = {
     sources: [
       { id: 'gateway-a', kind: 'router', endpoint: 'http://gateway' },
@@ -160,9 +160,14 @@ test('gateway candidates use successful catalogue probes and honor hand exclusio
     modelId: 'vendor-a/model-' + i,
   }));
   const accounts = [
-    { id: 'acct', provider: 'vendor-a', models: [{ model: 'vendor-a/model-0', exclude: true }] },
+    {
+      id: 'acct',
+      provider: 'vendor-a',
+      models: [{ model: 'vendor-a/model-0', exclude: true }, 'vendor-a/model-extra'],
+    },
   ];
   const store = routes.loadStore(temporaryStore(t).file);
+  routes.recordResult(store, 'vendor-a/model-extra', 'gateway-a', { ok: true }, 1_800_000_000_000);
   for (let i = 0; i < 50; i += 1)
     routes.recordResult(
       store,
@@ -178,8 +183,30 @@ test('gateway candidates use successful catalogue probes and honor hand exclusio
     routeHealth: store,
     now: 1_800_000_000_001,
   });
-  assert.equal(result.length, 29);
+  assert.equal(result.length, 30);
   assert.ok(!result.some((row) => row.modelId === 'vendor-a/model-0'));
+  assert.ok(result.some((row) => row.modelId === 'vendor-a/model-extra'));
+});
+
+test('candidate assembly uses existing probe evidence when a route health record is absent', () => {
+  const registry = {
+    sources: [
+      { id: 'gateway-a', kind: 'router', endpoint: 'http://gateway' },
+      { id: 'vendor-a', kind: 'model-source', reachedVia: 'gateway-a' },
+    ],
+    dispatch: { providers: { 'vendor-a': { harness: 'paseo' } } },
+  };
+  const model = { gateway: 'gateway-a', upstream: 'vendor-a', modelId: 'vendor-a/model-live' };
+  const assembled = cli.assembleForDispatch(
+    { candidates: [model] },
+    [{ id: 'acct', provider: 'vendor-a' }],
+    registry,
+    {
+      routeHealth: { version: 1, paths: {}, events: [] },
+      probeEvidence: (modelId, gateway) => modelId === model.modelId && gateway === 'gateway-a',
+    }
+  );
+  assert.ok(assembled.some((candidate) => candidate.modelId === model.modelId));
 });
 
 test('discovered same-model paths fall through 451 and 429 to success, recording fallback', async (t) => {
@@ -237,6 +264,60 @@ test('discovered same-model paths fall through 451 and 429 to success, recording
         event.type === 'route_fallback' && event.failedPath === 'ag' && event.chosenPath === 'cl'
     )
   );
+});
+
+test('fallback discovery includes direct sources and declared account paths', () => {
+  const registry = {
+    sources: [
+      { id: 'gateway-a', kind: 'router' },
+      { id: 'vendor-a', kind: 'model-source', reachedVia: 'gateway-a' },
+      {
+        id: 'direct-vendor',
+        kind: 'model-source',
+        servesModels: true,
+        harness: 'direct-http',
+        accessPath: 'direct',
+      },
+      {
+        id: 'agy-pool',
+        kind: 'agent-cli',
+        servesModels: true,
+        harness: 'agy-pool',
+        accessPath: 'cli',
+      },
+      {
+        id: 'opencode',
+        kind: 'agent-cli',
+        servesModels: false,
+        harness: 'opencode',
+        accessPath: 'cli',
+      },
+    ],
+    dispatch: {
+      providers: {
+        'vendor-a': { harness: 'paseo' },
+        'direct-vendor': { harness: 'direct-http' },
+        'agy-pool': { harness: 'agy-pool' },
+      },
+    },
+  };
+  const paths = routes.discoverModelPaths(
+    'claude-sonnet-4-6',
+    registry,
+    [
+      { id: 'router-account', provider: 'vendor-a' },
+      { id: 'direct-account', provider: 'direct-vendor', models: ['claude-sonnet-4-6'] },
+      { id: 'pool-account', provider: 'agy-pool', models: ['claude-sonnet-4-6'] },
+    ],
+    [{ gateway: 'gateway-a', modelId: 'ag/claude-sonnet-4-6', evidence: 4 }]
+  );
+  assert.deepEqual(paths.map((route) => route.id).sort(), [
+    'agy-pool',
+    'direct-vendor',
+    'gateway-a',
+  ]);
+  assert.equal(paths.find((route) => route.id === 'direct-vendor').harness, 'direct-http');
+  assert.equal(paths.find((route) => route.id === 'agy-pool').accessPath, 'cli');
 });
 
 test('intake assembly probes a bounded catalogue with a timeout and excludes failed routes', async (t) => {

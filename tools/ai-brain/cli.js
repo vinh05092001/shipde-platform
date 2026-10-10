@@ -938,6 +938,7 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
         accounts: accounts || [],
         catalogue: (discoveryCat && discoveryCat.candidates) || [],
         routeHealth,
+        probeEvidence: opts.probeEvidence,
         now: opts.now,
         onAccountCount: opts.onAccountCount,
       }),

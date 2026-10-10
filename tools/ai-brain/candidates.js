@@ -851,20 +851,39 @@ function gatewayAccountCandidates(opts) {
     if (!harness || !accessPath) continue;
 
     const accountModels = account.models;
-    const additions = new Set(
-      (Array.isArray(accountModels) ? accountModels : [])
-        .filter((entry) => typeof entry === 'string' || (entry && entry.exclude !== true))
-        .map((entry) => String(typeof entry === 'string' ? entry : entry.model || '').toLowerCase())
-        .filter(Boolean)
-    );
     const excludes = new Set(
       (Array.isArray(accountModels) ? accountModels : [])
         .filter((entry) => entry && typeof entry === 'object' && entry.exclude === true)
         .map((entry) => String(entry.model || '').toLowerCase())
     );
+    const additions = new Set(
+      (Array.isArray(accountModels) ? accountModels : [])
+        .filter((entry) => typeof entry === 'string' || (entry && entry.exclude !== true))
+        .map((entry) => String(typeof entry === 'string' ? entry : entry.model || '').toLowerCase())
+        .filter((modelId) => modelId && !excludes.has(modelId))
+    );
     let contributed = 0;
-    for (const row of catalogue) {
-      if (!row || row.gateway !== gateway) continue;
+    const catalogueRows = catalogue.filter((row) => row && row.gateway === gateway);
+    const rowsByModel = new Map(
+      catalogueRows.map((row) => [String(row.modelId || row.model || '').toLowerCase(), row])
+    );
+    const eligibleRows = catalogueRows.slice();
+    for (const modelId of additions) {
+      if (!rowsByModel.has(modelId) && !excludes.has(modelId)) {
+        const prefix = parsePrefix(modelId);
+        if (!prefix) continue;
+        const addition = {
+          gateway,
+          upstream: prefix.upstream,
+          modelId,
+          handAdded: true,
+        };
+        rowsByModel.set(modelId, addition);
+        eligibleRows.push(addition);
+      }
+    }
+    for (const row of eligibleRows) {
+      if (!row) continue;
       const upstream = row.upstream || '';
       const modelId = row.modelId || row.model || '';
       if (!modelId || excluded.has(modelId.toLowerCase()) || excludes.has(modelId.toLowerCase()))
@@ -875,7 +894,15 @@ function gatewayAccountCandidates(opts) {
         const routeRecord = routeHealth.paths[normalized + '|' + gateway];
         const available = routeRecord
           ? health.isEligible(routeHealth, modelId, gateway, routeNow)
-          : Boolean(probeOk && probeOk(modelId, gateway));
+          : row.handAdded
+            ? Boolean(
+                (probeOk && probeOk(modelId, gateway)) ||
+                (o.probeEvidence && o.probeEvidence(modelId, gateway))
+              )
+            : Boolean(
+                (probeOk && probeOk(modelId, gateway)) ||
+                (o.probeEvidence && o.probeEvidence(modelId, gateway))
+              );
         if (!available) continue;
       } else if (probeOk && !probeOk(modelId, gateway)) {
         continue;
@@ -883,7 +910,7 @@ function gatewayAccountCandidates(opts) {
       // An alias is the prefix the model id itself carries. A row whose id
       // does not begin with its own upstream names no reachable alias, and
       // inventing one is exactly how a candidate that can never run is planned.
-      if (!upstream || !modelId.startsWith(upstream + '/')) continue;
+      if (!upstream || (!row.handAdded && !modelId.startsWith(upstream + '/'))) continue;
 
       out.push({
         harness,

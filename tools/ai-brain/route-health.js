@@ -194,33 +194,66 @@ function discoverModelPaths(modelId, registry, accounts, catalogue) {
   const sources = new Map(((registry && registry.sources) || []).map((s) => [s.id, s]));
   const providers = (registry && registry.dispatch && registry.dispatch.providers) || {};
   const known = new Map();
+  const addPath = (id, source, account, evidence) => {
+    if (
+      !id ||
+      (source &&
+        (sourcesApi.isRetired(source.id, registry) || sourcesApi.isDeferred(source.id, registry)))
+    )
+      return;
+    const dispatch =
+      providers[String((account && account.provider) || (source && source.id) || '').toLowerCase()];
+    const routeId = String(id);
+    const key = routeId;
+    if (known.has(key)) return;
+    known.set(key, {
+      id: routeId,
+      gateway: (source && (source.kind === 'router' ? source.id : source.reachedVia)) || routeId,
+      accountId: account && account.id,
+      harness: (dispatch && dispatch.harness) || (source && source.harness) || null,
+      accessPath: (source && (source.accessPath || source.endpoint)) || routeId,
+      evidence: Number(evidence || 0),
+    });
+  };
   for (const account of accounts || []) {
     const source = sources.get(account && account.provider);
     const dispatch = providers[String((account && account.provider) || '').toLowerCase()];
     if (!account || account.enabled === false || !source || !dispatch) continue;
     const gateway = source.kind === 'router' ? source.id : source.reachedVia || null;
-    if (!gateway) continue;
     for (const model of catalogue || []) {
       const id = model && (model.modelId || model.model);
       if (!id || normalizeModelId(id) !== normalized) continue;
-      if (model.gateway !== gateway) continue;
-      known.set(gateway, {
-        id: gateway,
-        gateway,
-        accountId: account.id,
-        evidence: Number(model.evidence || 0),
-      });
+      if (gateway && model.gateway === gateway) addPath(gateway, source, account, model.evidence);
+      if (!gateway && source.servesModels !== false)
+        addPath(source.id, source, account, model.evidence);
     }
   }
   for (const model of catalogue || []) {
     const id = model && (model.modelId || model.model);
     if (!id || normalizeModelId(id) !== normalized || !model.gateway) continue;
-    if (!known.has(model.gateway))
-      known.set(model.gateway, {
-        id: model.gateway,
-        gateway: model.gateway,
-        evidence: Number(model.evidence || 0),
-      });
+    const routeKey = model.gateway + '|';
+    if (!known.has(routeKey))
+      addPath(model.gateway, sources.get(model.gateway), null, model.evidence);
+  }
+  for (const source of (registry && registry.sources) || []) {
+    if (
+      !source ||
+      source.servesModels === false ||
+      sourcesApi.isRetired(source.id, registry) ||
+      sourcesApi.isDeferred(source.id, registry)
+    )
+      continue;
+    const accountsForSource = (accounts || []).filter(
+      (account) => account && account.enabled !== false && account.provider === source.id
+    );
+    if (!accountsForSource.length) continue;
+    const declared = accountsForSource.some((account) =>
+      (Array.isArray(account.models) ? account.models : []).some((entry) => {
+        const id = typeof entry === 'string' ? entry : entry && entry.model;
+        return id && normalizeModelId(id) === normalized;
+      })
+    );
+    if (declared) for (const account of accountsForSource) addPath(source.id, source, account, 0);
   }
   return [...known.values()];
 }
