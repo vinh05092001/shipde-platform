@@ -789,6 +789,42 @@ function offlineStoreMiss(error) {
   );
 }
 
+function enforceTokenBudget(launchResult, tokenBudget, usageFile) {
+  if (!tokenBudget || Number(tokenBudget.maxTokens) <= 0) return launchResult;
+  let failureReason = null;
+  let total = null;
+  try {
+    if (!usageFile || !fs.existsSync(usageFile)) throw new Error('usage report missing');
+    const report = JSON.parse(fs.readFileSync(usageFile, 'utf8'));
+    const usage = report.usage || {};
+    const hasTotal = usage.total_tokens != null || usage.total != null;
+    const hasInput = usage.input_tokens != null || usage.input != null;
+    const hasOutput = usage.output_tokens != null || usage.output != null;
+    if (!hasTotal && !hasInput && !hasOutput) throw new Error('usage total missing');
+    total = hasTotal
+      ? Number(usage.total_tokens ?? usage.total)
+      : Number(usage.input_tokens ?? usage.input ?? 0) +
+        Number(usage.output_tokens ?? usage.output ?? 0);
+    if (!Number.isFinite(total)) throw new Error('usage total invalid');
+    if (total > Number(tokenBudget.maxTokens)) failureReason = 'TOKEN_BUDGET_EXCEEDED';
+  } catch (_) {
+    failureReason = 'TOKEN_USAGE_UNAVAILABLE';
+  }
+  if (failureReason) {
+    launchResult.exitCode = 1;
+    launchResult.failureReason = failureReason;
+    launchResult.stderr =
+      (launchResult.stderr || '') +
+      '\n' +
+      failureReason +
+      ': ' +
+      (failureReason === 'TOKEN_BUDGET_EXCEEDED'
+        ? 'session exceeded configured token budget'
+        : 'configured token budget could not be verified');
+  }
+  return launchResult;
+}
+
 function getIsolatedLauncher() {
   return function isolatedLauncher(adapter, args, options) {
     if (args && !Array.isArray(args)) {
@@ -1834,27 +1870,7 @@ function getIsolatedLauncher() {
     } catch (e) {}
 
     const launchResult = readLaunchResult(launchResultPath, completionNonce, hostRes);
-    if (opts.tokenBudget && opts.usageFile && Number(opts.tokenBudget.maxTokens) > 0) {
-      try {
-        const report = JSON.parse(fs.readFileSync(opts.usageFile, 'utf8'));
-        const usage = report.usage || {};
-        const total = Number(
-          usage.total_tokens ??
-            usage.total ??
-            Number(usage.input_tokens ?? usage.input ?? 0) +
-              Number(usage.output_tokens ?? usage.output ?? 0)
-        );
-        if (Number.isFinite(total) && total > Number(opts.tokenBudget.maxTokens)) {
-          launchResult.exitCode = 1;
-          launchResult.failureReason = 'TOKEN_BUDGET_EXCEEDED';
-          launchResult.stderr =
-            (launchResult.stderr || '') +
-            '\nTOKEN_BUDGET_EXCEEDED: session exceeded configured token budget';
-        }
-      } catch (_) {
-        /* Missing usage stays unknown rather than becoming an inferred overrun. */
-      }
-    }
+    enforceTokenBudget(launchResult, opts.tokenBudget, opts.usageFile);
     if (exerciseResult) {
       launchResult.exercise = exerciseResult;
       launchResult.failBefore = exerciseResult.failBefore;
@@ -1951,4 +1967,5 @@ module.exports = {
   readLaunchResult,
   EXPECTED_FIREWALL_RULES,
   DEFAULT_WORKER_TIMEOUT_MS,
+  enforceTokenBudget,
 };

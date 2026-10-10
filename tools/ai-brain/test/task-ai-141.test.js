@@ -15,8 +15,11 @@ const accountsApi = require('../accounts');
 const promptCompiler = require('../prompt-compiler');
 const contextPack = require('../context-pack');
 const cli = require('../cli');
-const { getIsolatedLauncher } = require('../isolation-launcher');
-const { buildWorkerLaunchScript } = require('../isolation-launcher');
+const {
+  getIsolatedLauncher,
+  buildWorkerLaunchScript,
+  enforceTokenBudget,
+} = require('../isolation-launcher');
 const { runHostBrainGate } = require('../orchestrate');
 const { runOrchestration } = require('../orchestrate');
 const { DEFAULT_TOKEN_BUDGETS } = require('../intake');
@@ -1113,6 +1116,31 @@ test('Part H: launcher enforces per-session token budget and preserves bounded t
   });
   assert.match(script, /\$timeoutMs = 90000/);
   assert.match(script, /12000/);
+});
+
+test('Part H: token budget fails closed when usage report is missing, empty, or malformed', () => {
+  const root = fixtureRoot();
+  const missing = enforceTokenBudget({ exitCode: 0, stderr: '' }, { maxTokens: 100 }, null);
+  assert.equal(missing.exitCode, 1);
+  assert.equal(missing.failureReason, 'TOKEN_USAGE_UNAVAILABLE');
+
+  const usageFile = path.join(root, 'usage.json');
+  fs.writeFileSync(usageFile, '');
+  const empty = enforceTokenBudget({ exitCode: 0, stderr: '' }, { maxTokens: 100 }, usageFile);
+  assert.equal(empty.failureReason, 'TOKEN_USAGE_UNAVAILABLE');
+
+  fs.writeFileSync(usageFile, JSON.stringify({}));
+  const noUsage = enforceTokenBudget({ exitCode: 0, stderr: '' }, { maxTokens: 100 }, usageFile);
+  assert.equal(noUsage.failureReason, 'TOKEN_USAGE_UNAVAILABLE');
+
+  fs.writeFileSync(usageFile, JSON.stringify({ usage: { input_tokens: 80, output_tokens: 30 } }));
+  const over = enforceTokenBudget({ exitCode: 0, stderr: '' }, { maxTokens: 100 }, usageFile);
+  assert.equal(over.failureReason, 'TOKEN_BUDGET_EXCEEDED');
+
+  fs.writeFileSync(usageFile, JSON.stringify({ usage: { input_tokens: 20, output_tokens: 30 } }));
+  const within = enforceTokenBudget({ exitCode: 0, stderr: '' }, { maxTokens: 100 }, usageFile);
+  assert.equal(within.exitCode, 0);
+  assert.equal(within.failureReason, undefined);
 });
 
 test('Part H: host brain gate expands suite files, hides output and returns only failures', () => {
