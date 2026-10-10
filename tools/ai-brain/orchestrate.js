@@ -882,14 +882,43 @@ function reviewLane(
         ? require('./executor').readSessionId(adapter, reviewJob, res).id
         : null;
       if (handle) {
+        const { getOrCreateSigningKey, signReviewLaunchPayload } = require('./governed-merge');
+        const signingOpts = {
+          signingKeyPath:
+            (opts && (opts.signingKeyPath || opts.keyPath)) ||
+            (logOpts && (logOpts.signingKeyPath || logOpts.keyPath)) ||
+            (o && (o.signingKeyPath || o.keyPath)),
+          decisionDir: (logOpts && logOpts.dir) || (o && o.decisionDir),
+        };
+        const signingKey = getOrCreateSigningKey(signingOpts);
+        const baseWorkItemId = String(
+          (item && item.id) || (session && session.workItemId) || (o && o.workItemId) || 'item'
+        ).trim();
+        const recordAt =
+          logOpts && logOpts.now ? new Date(logOpts.now).toISOString() : new Date().toISOString();
+        let signature = '';
+        if (signingKey) {
+          const payload = {
+            workItemId: baseWorkItemId,
+            sha: targetSha,
+            reviewerKey: reviewerIdentity,
+            sessionId: handle,
+            stage: decisions.Stage.REVIEW_LAUNCH || 'review-launch',
+            at: recordAt,
+          };
+          signature = signReviewLaunchPayload(payload, signingKey);
+        }
         decisions.recordDecision(
           {
             stage: decisions.Stage.REVIEW_LAUNCH || 'review-launch',
             workItemId: (item ? item.id : 'item') + '-review',
+            reviewOf: baseWorkItemId,
             role: 'reviewer',
             attempt: opts && opts.attempt,
             attemptNumber: opts && opts.attempt,
             chosen: reviewerIdentity,
+            reviewerKey: reviewerIdentity,
+            reviewerCandidateKey: reviewerIdentity,
             harness: reviewJob.harness,
             branch: reviewJob.branch,
             sessionId: handle,
@@ -897,6 +926,8 @@ function reviewLane(
             worktree: reviewWorkerRoot,
             reviewedSha: targetSha,
             sha: targetSha,
+            at: recordAt,
+            signature,
           },
           logOpts
         );

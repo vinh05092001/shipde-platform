@@ -24,6 +24,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const cp = require('child_process');
+const crypto = require('crypto');
 
 const reviewManifest = require('./review-manifest');
 const publisher = require('./publisher');
@@ -460,7 +461,157 @@ function getWritersFromDecisionLog(workItemId, decisionDir) {
   return Array.from(writers);
 }
 
-function getReviewersFromDecisionLog(workItemId, reviewedSha, decisionDir) {
+function getControllerSigningKeyPath(options) {
+  const o = options || {};
+  if (o.signingKeyPath && typeof o.signingKeyPath === 'string' && o.signingKeyPath.trim()) {
+    return o.signingKeyPath.trim();
+  }
+  if (o.keyPath && typeof o.keyPath === 'string' && o.keyPath.trim()) {
+    return o.keyPath.trim();
+  }
+  if (process.env.CONTROLLER_SIGNING_KEY_PATH && process.env.CONTROLLER_SIGNING_KEY_PATH.trim()) {
+    return process.env.CONTROLLER_SIGNING_KEY_PATH.trim();
+  }
+  if (process.env.SHIPDE_SIGNING_KEY_PATH && process.env.SHIPDE_SIGNING_KEY_PATH.trim()) {
+    return process.env.SHIPDE_SIGNING_KEY_PATH.trim();
+  }
+  if (
+    o.decisionDir &&
+    typeof o.decisionDir === 'string' &&
+    fs.existsSync(path.join(o.decisionDir, 'controller-signing.key'))
+  ) {
+    return path.join(o.decisionDir, 'controller-signing.key');
+  }
+  const localAppData =
+    process.env.LOCALAPPDATA ||
+    (process.platform === 'win32'
+      ? path.join(os.homedir(), 'AppData', 'Local')
+      : path.join(os.homedir(), '.local', 'share'));
+  return path.join(localAppData, 'ShipDe', 'controller-signing.key');
+}
+
+function getSigningKey(options) {
+  const keyPath = getControllerSigningKeyPath(options);
+  if (!fs.existsSync(keyPath)) {
+    return null;
+  }
+  try {
+    const raw = fs.readFileSync(keyPath);
+    if (!raw || raw.length === 0) return null;
+    return raw;
+  } catch {
+    return null;
+  }
+}
+
+function getOrCreateSigningKey(options) {
+  const keyPath = getControllerSigningKeyPath(options);
+  if (!fs.existsSync(keyPath)) {
+    fs.mkdirSync(path.dirname(keyPath), { recursive: true });
+    const key = crypto.randomBytes(32);
+    fs.writeFileSync(keyPath, key);
+    return key;
+  }
+  try {
+    const raw = fs.readFileSync(keyPath);
+    if (!raw || raw.length === 0) {
+      const key = crypto.randomBytes(32);
+      fs.writeFileSync(keyPath, key);
+      return key;
+    }
+    return raw;
+  } catch {
+    return null;
+  }
+}
+
+function timingSafeCompare(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const bufA = Buffer.from(a, 'utf8');
+  const bufB = Buffer.from(b, 'utf8');
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
+function canonicalReviewLaunchPayload({ workItemId, sha, reviewerKey, sessionId, stage, at }) {
+  return JSON.stringify({
+    workItemId: String(workItemId || ''),
+    sha: String(sha || '').toLowerCase(),
+    reviewerKey: String(reviewerKey || ''),
+    sessionId: String(sessionId || ''),
+    stage: String(stage || ''),
+    at: String(at || ''),
+  });
+}
+
+function signReviewLaunchPayload(payload, key) {
+  if (!key) throw new Error('signing key required');
+  const canonical = canonicalReviewLaunchPayload(payload);
+  return crypto.createHmac('sha256', key).update(canonical).digest('hex');
+}
+
+function verifyReviewLaunchSignature(payload, expectedSig, key) {
+  if (!expectedSig || typeof expectedSig !== 'string' || !key) return false;
+  const canonical = canonicalReviewLaunchPayload(payload);
+  const actualSig = crypto.createHmac('sha256', key).update(canonical).digest('hex');
+  return timingSafeCompare(actualSig, expectedSig.trim());
+}
+
+function verifyRecordSignature(r, key, normId, targetSha) {
+  const sig = r.signature || r.sig || r.launchSignature;
+  if (!sig || typeof sig !== 'string' || !sig.trim()) {
+    return false;
+  }
+  const revKey = String(
+    r.reviewerKey ||
+      r.chosen ||
+      r.chosenKey ||
+      r.reviewerCandidateKey ||
+      r.candidateKey ||
+      r.reviewer ||
+      ''
+  ).trim();
+  const sha = String(r.reviewedSha || r.sha || r.targetSha || targetSha || '')
+    .trim()
+    .toLowerCase();
+  const sessionId = String(r.sessionId || '').trim();
+  const stage = String(r.stage || '').trim();
+  const at = String(r.at || '').trim();
+
+  if (!revKey || !sha || !sessionId || !stage || !at) {
+    return false;
+  }
+
+  const rId = String(r.workItemId || '').trim();
+  const rOf = String((r.labels && r.labels.reviewOf) || r.reviewOf || '').trim();
+  const candidateIds = new Set(
+    [
+      normId,
+      rId,
+      rOf,
+      rId.replace(/-review$/i, ''),
+      normId.toLowerCase(),
+      rId.toLowerCase(),
+    ].filter(Boolean)
+  );
+
+  for (const candId of candidateIds) {
+    const payload = {
+      workItemId: candId,
+      sha,
+      reviewerKey: revKey,
+      sessionId,
+      stage,
+      at,
+    };
+    if (verifyReviewLaunchSignature(payload, sig.trim(), key)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function getReviewersFromDecisionLog(workItemId, reviewedSha, decisionDir, options) {
   const normId = String(workItemId).trim().toUpperCase();
   const targetSha = String(reviewedSha || '')
     .trim()
@@ -470,6 +621,10 @@ function getReviewersFromDecisionLog(workItemId, reviewedSha, decisionDir) {
     const err = new Error('decision log unreadable: ' + (detail.damaged || []).join('; '));
     err.code = 'DECISION_LOG_UNREADABLE';
     throw err;
+  }
+  const key = getSigningKey(Object.assign({}, options, { decisionDir }));
+  if (!key) {
+    return [];
   }
   const reviewers = new Set();
   for (const r of detail.records) {
@@ -499,15 +654,22 @@ function getReviewersFromDecisionLog(workItemId, reviewedSha, decisionDir) {
     if (!shaMatches) continue;
 
     const cand =
+      r.reviewerKey ||
       r.chosen ||
       r.chosenKey ||
       r.reviewerCandidateKey ||
       r.candidateKey ||
       r.offeringId ||
       r.reviewer;
-    if (cand && typeof cand === 'string' && cand.trim()) {
-      reviewers.add(cand.trim());
+    if (!cand || typeof cand !== 'string' || !cand.trim()) {
+      continue;
     }
+
+    if (!verifyRecordSignature(r, key, normId, targetSha)) {
+      continue;
+    }
+
+    reviewers.add(cand.trim());
   }
   return Array.from(reviewers);
 }
@@ -518,7 +680,8 @@ function hasReviewProofForSha(
   manifestPath,
   repoCwd,
   decisionDir,
-  options
+  options,
+  reviewerKey
 ) {
   const normId = String(workItemId || '')
     .trim()
@@ -526,11 +689,13 @@ function hasReviewProofForSha(
   const targetSha = String(reviewedSha || '')
     .trim()
     .toLowerCase();
+  const o = options || {};
+  const targetReviewer = String(reviewerKey || o.reviewerCandidateKey || o.reviewerKey || '')
+    .trim()
+    .toLowerCase();
   if (!targetSha || !normId) return false;
 
-  const o = options || {};
-
-  // 1. Review file for that SHA
+  // 1. Review file for that SHA bound to workItemId and reviewer key
   const artifactPath = findReviewArtifact(workItemId, manifestPath, repoCwd, decisionDir, o);
   const potentialReviewFiles = [
     artifactPath,
@@ -550,7 +715,11 @@ function hasReviewProofForSha(
       try {
         const text = fs.readFileSync(rf, 'utf8').toLowerCase();
         if (text.includes(targetSha)) {
-          return true;
+          const itemMatches = text.includes(normId.toLowerCase());
+          const reviewerMatches = targetReviewer ? text.includes(targetReviewer) : true;
+          if (itemMatches && reviewerMatches) {
+            return true;
+          }
         }
       } catch {
         // ignore read errors
@@ -558,15 +727,48 @@ function hasReviewProofForSha(
     }
   }
 
+  // Helper to match imported evidence
+  function evidenceMatches(ev, combo) {
+    const evSha = String(ev.sha || ev.commitSha || ev.reviewedSha || '')
+      .trim()
+      .toLowerCase();
+    if (evSha !== targetSha) return false;
+
+    // Check workItemId binding
+    const evWorkItem = String(ev.workItem || ev.workItemId || ev.item || '')
+      .trim()
+      .toUpperCase();
+    if (evWorkItem && evWorkItem !== normId) return false;
+    if (!evWorkItem) {
+      const detailText = String(ev.detail || ev.summary || '').toUpperCase();
+      if (!detailText.includes(normId)) return false;
+    }
+
+    // Check reviewer binding
+    if (targetReviewer) {
+      const evReviewer = String(ev.reviewer || ev.reviewerCandidateKey || ev.candidateKey || '')
+        .trim()
+        .toLowerCase();
+      const comboCandidate = combo
+        ? String(combo.candidateKey || combo.reviewerCandidateKey || '')
+            .trim()
+            .toLowerCase()
+        : '';
+      const revMatches =
+        (evReviewer && evReviewer === targetReviewer) ||
+        (comboCandidate && comboCandidate === targetReviewer);
+      if (!revMatches) return false;
+    }
+
+    return true;
+  }
+
   // 2. Imported review evidence entry for that SHA
   if (o.evidence && typeof o.evidence === 'object') {
     const combos = Array.isArray(o.evidence.combinations) ? o.evidence.combinations : [];
     for (const combo of combos) {
       for (const ev of combo.evidence || []) {
-        const evSha = String(ev.sha || ev.commitSha || ev.reviewedSha || '')
-          .trim()
-          .toLowerCase();
-        if (evSha === targetSha) {
+        if (evidenceMatches(ev, combo)) {
           return true;
         }
       }
@@ -588,10 +790,7 @@ function hasReviewProofForSha(
         const combos = Array.isArray(data.combinations) ? data.combinations : [];
         for (const combo of combos) {
           for (const ev of combo.evidence || []) {
-            const evSha = String(ev.sha || ev.commitSha || ev.reviewedSha || '')
-              .trim()
-              .toLowerCase();
-            if (evSha === targetSha) {
+            if (evidenceMatches(ev, combo)) {
               return true;
             }
           }
@@ -732,12 +931,21 @@ async function governedMerge(options) {
     .trim()
     .toLowerCase();
 
+  // Check host signing key fail-closed
+  const signingKey = getSigningKey(Object.assign({}, o, { decisionDir }));
+  if (!signingKey) {
+    return refuse(
+      RefusalCode.REVIEWER_NOT_RECORDED,
+      'controller signing key is missing or unreadable'
+    );
+  }
+
   // Reviewer independence against all writers from decision log, options, and manifest
   let logWriters = [];
   let logReviewers = [];
   try {
     logWriters = getWritersFromDecisionLog(workItemId, decisionDir);
-    logReviewers = getReviewersFromDecisionLog(workItemId, reviewedSha, decisionDir);
+    logReviewers = getReviewersFromDecisionLog(workItemId, reviewedSha, decisionDir, o);
   } catch (err) {
     return refuse(
       RefusalCode.REVIEWER_NOT_INDEPENDENT,
@@ -745,19 +953,20 @@ async function governedMerge(options) {
     );
   }
 
-  // (d) Must be matched by an imported review evidence entry or review file for that SHA
+  // (d) Must be matched by an imported review evidence entry or review file for that SHA bound to workItemId and reviewer
   const hasProof = hasReviewProofForSha(
     workItemId,
     reviewedSha,
     manifestPath,
     repoCwd,
     decisionDir,
-    o
+    o,
+    manifest.reviewerCandidateKey
   );
   if (!hasProof) {
     return refuse(
       RefusalCode.REVIEWER_NOT_RECORDED,
-      `no review file or imported review evidence entry matches reviewed commit SHA ${reviewedSha}`
+      `no review file or imported review evidence entry matches reviewed commit SHA ${reviewedSha} bound to work item ${workItemId} and reviewer ${manifest.reviewerCandidateKey}`
     );
   }
 
@@ -768,7 +977,7 @@ async function governedMerge(options) {
   ) {
     return refuse(
       RefusalCode.REVIEWER_NOT_RECORDED,
-      `manifest reviewer candidate key was not recorded in the decision log for this work item and commit SHA`
+      `manifest reviewer candidate key was not recorded in the decision log for this work item and commit SHA with a valid signature`
     );
   }
 
@@ -1169,4 +1378,11 @@ module.exports = {
   hasReviewProofForSha,
   governedMerge,
   isEligibleForMerge,
+  getControllerSigningKeyPath,
+  getSigningKey,
+  getOrCreateSigningKey,
+  timingSafeCompare,
+  canonicalReviewLaunchPayload,
+  signReviewLaunchPayload,
+  verifyReviewLaunchSignature,
 };

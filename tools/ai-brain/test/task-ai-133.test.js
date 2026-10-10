@@ -28,7 +28,12 @@ const {
   checkByteIdenticalMerge,
   extractChangeLines,
   hasBinaryOrModeChanges,
+  getOrCreateSigningKey,
+  signReviewLaunchPayload,
+  verifyReviewLaunchSignature,
+  getControllerSigningKeyPath,
 } = require('../governed-merge');
+const crypto = require('node:crypto');
 const cli = require('../cli');
 const reviewManifestApi = require('../review-manifest');
 const orchestrate = require('../orchestrate');
@@ -80,12 +85,15 @@ function createManifestAndArtifact(dir, workItemId, baseSha, reviewedSha, option
   const artifactPath = path.join(dir, `review-artifact-${workItemId}.md`);
   const manifestPath = path.join(dir, `review-manifest-${workItemId}.json`);
 
+  const reviewerCandidateKey = o.reviewerCandidateKey || SAMPLE_REVIEWER_KEY;
+
   const markdownContent =
     typeof o.markdownContent === 'string'
       ? o.markdownContent
       : [
           `# Review for ${workItemId}`,
           `- **Commit**: ${reviewedSha}`,
+          `- **Reviewer**: ${reviewerCandidateKey}`,
           `- **Verdict**: ${o.verdict || 'PASS'}`,
           '',
           '## Findings',
@@ -100,7 +108,7 @@ function createManifestAndArtifact(dir, workItemId, baseSha, reviewedSha, option
     baseSha,
     reviewedSha,
     writerCandidateKey: o.writerCandidateKey || SAMPLE_WRITER_KEY,
-    reviewerCandidateKey: o.reviewerCandidateKey || SAMPLE_REVIEWER_KEY,
+    reviewerCandidateKey,
     verdict: o.verdict || 'PASS',
     findings: o.findings || [],
     tests: [{ command: 'pnpm test', result: 'pass', summary: 'ok' }],
@@ -110,6 +118,21 @@ function createManifestAndArtifact(dir, workItemId, baseSha, reviewedSha, option
   fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
 
   if (o.writeDecisionLog !== false) {
+    const keyPath = o.signingKeyPath || (dir && path.join(dir, 'controller-signing.key'));
+    const signingKey = getOrCreateSigningKey({ signingKeyPath: keyPath });
+    const at = o.at || new Date().toISOString();
+    const sessionId = o.sessionId || `sess-review-${Date.now()}`;
+    const payload = {
+      workItemId,
+      sha: reviewedSha,
+      reviewerKey: reviewerCandidateKey,
+      sessionId,
+      stage: 'review-launch',
+      at,
+    };
+    const signature =
+      o.signature !== undefined ? o.signature : signReviewLaunchPayload(payload, signingKey);
+
     const logContent =
       JSON.stringify({
         workItemId,
@@ -120,13 +143,17 @@ function createManifestAndArtifact(dir, workItemId, baseSha, reviewedSha, option
       '\n' +
       JSON.stringify({
         workItemId: `${workItemId}-review`,
+        reviewOf: workItemId,
         stage: 'review-launch',
         role: 'reviewer',
-        sessionId: o.sessionId || `sess-review-${Date.now()}`,
-        chosen: o.reviewerCandidateKey || SAMPLE_REVIEWER_KEY,
-        reviewerCandidateKey: o.reviewerCandidateKey || SAMPLE_REVIEWER_KEY,
+        sessionId,
+        chosen: reviewerCandidateKey,
+        reviewerKey: reviewerCandidateKey,
+        reviewerCandidateKey,
         reviewedSha,
         sha: reviewedSha,
+        at,
+        signature,
         detail: `REVIEW_LANE: reviews ${workItemId} at ${reviewedSha}`,
       }) +
       '\n';
@@ -1891,4 +1918,390 @@ test('GM-R07: docs/product-spec/work-items/TASK-AI-133.md and register row 245 e
   assert.strictEqual(cols.length, 14, '14-column quoted format');
   assert.strictEqual(cols[0], '"245"');
   assert.strictEqual(cols[3], '"TASK-AI-133"');
+});
+
+test('GM-R01: a hand-written record with no signature or a wrong signature is refused', async () => {
+  const testDir = createUniqueSubdir('handwritten-sig-refusal');
+  const { repoDir, baseSha } = initGitRepo(path.join(testDir, 'repo'));
+  const reviewedSha = createReviewedCommit(repoDir, 'feat.txt', 'feature\n');
+  const decisionDir = path.join(testDir, 'decisions');
+  const workItemId = 'TASK-AI-133';
+  const keyPath = path.join(testDir, 'controller-signing.key');
+  getOrCreateSigningKey({ signingKeyPath: keyPath });
+
+  createManifestAndArtifact(decisionDir, workItemId, baseSha, reviewedSha, {
+    repoCwd: repoDir,
+    verdict: 'PASS',
+    writeDecisionLog: false,
+    signingKeyPath: keyPath,
+  });
+
+  const fakeGhClient = {
+    getPullRequest: async () => ({
+      title: `[${workItemId}] Governed merge`,
+      id: 'PR_1',
+      number: 1,
+      isDraft: false,
+      headRefOid: reviewedSha,
+      statusCheckRollup: [
+        { name: 'ci', status: 'COMPLETED', conclusion: 'SUCCESS', headSha: reviewedSha },
+      ],
+      unresolvedThreadsCount: 0,
+    }),
+  };
+
+  const todayFile = path.join(decisionDir, new Date().toISOString().slice(0, 10) + '.jsonl');
+
+  // Case 1: Hand-written record with NO signature
+  const recordNoSig =
+    JSON.stringify({
+      workItemId,
+      stage: 'writer',
+      role: 'writer',
+      writerCandidateKey: SAMPLE_WRITER_KEY,
+    }) +
+    '\n' +
+    JSON.stringify({
+      workItemId: `${workItemId}-review`,
+      stage: 'review-launch',
+      role: 'reviewer',
+      sessionId: 'sess-fake-no-sig',
+      chosen: SAMPLE_REVIEWER_KEY,
+      reviewerCandidateKey: SAMPLE_REVIEWER_KEY,
+      reviewedSha,
+      sha: reviewedSha,
+      at: new Date().toISOString(),
+      detail: `REVIEW_LANE: reviews ${workItemId} at ${reviewedSha}`,
+    }) +
+    '\n';
+  fs.writeFileSync(todayFile, recordNoSig, 'utf8');
+
+  const resNoSig = await governedMerge({
+    workItemId,
+    repoCwd: repoDir,
+    decisionDir,
+    signingKeyPath: keyPath,
+    config: { neverMerge: [], requiredChecks: ['ci'] },
+    ghClient: fakeGhClient,
+  });
+
+  assert.strictEqual(resNoSig.ok, false);
+  assert.strictEqual(resNoSig.refusal, RefusalCode.REVIEWER_NOT_RECORDED);
+
+  // Case 2: Hand-written record with WRONG signature
+  const recordWrongSig =
+    JSON.stringify({
+      workItemId,
+      stage: 'writer',
+      role: 'writer',
+      writerCandidateKey: SAMPLE_WRITER_KEY,
+    }) +
+    '\n' +
+    JSON.stringify({
+      workItemId: `${workItemId}-review`,
+      stage: 'review-launch',
+      role: 'reviewer',
+      sessionId: 'sess-fake-wrong-sig',
+      chosen: SAMPLE_REVIEWER_KEY,
+      reviewerCandidateKey: SAMPLE_REVIEWER_KEY,
+      reviewedSha,
+      sha: reviewedSha,
+      at: new Date().toISOString(),
+      signature: 'deadbeef0123456789abcdef0123456789abcdef0123456789abcdef01234567',
+      detail: `REVIEW_LANE: reviews ${workItemId} at ${reviewedSha}`,
+    }) +
+    '\n';
+  fs.writeFileSync(todayFile, recordWrongSig, 'utf8');
+
+  const resWrongSig = await governedMerge({
+    workItemId,
+    repoCwd: repoDir,
+    decisionDir,
+    signingKeyPath: keyPath,
+    config: { neverMerge: [], requiredChecks: ['ci'] },
+    ghClient: fakeGhClient,
+  });
+
+  assert.strictEqual(resWrongSig.ok, false);
+  assert.strictEqual(resWrongSig.refusal, RefusalCode.REVIEWER_NOT_RECORDED);
+
+  // Case 3: Missing signing key on host
+  const missingKeyPath = path.join(testDir, 'missing-signing.key');
+  const resMissingKey = await governedMerge({
+    workItemId,
+    repoCwd: repoDir,
+    decisionDir,
+    signingKeyPath: missingKeyPath,
+    config: { neverMerge: [], requiredChecks: ['ci'] },
+    ghClient: fakeGhClient,
+  });
+
+  assert.strictEqual(resMissingKey.ok, false);
+  assert.strictEqual(resMissingKey.refusal, RefusalCode.REVIEWER_NOT_RECORDED);
+});
+
+test('GM-R01: a record written by the real orchestrate path is accepted', async () => {
+  const testDir = createUniqueSubdir('real-orchestrate-accepted');
+  const { repoDir, baseSha } = initGitRepo(path.join(testDir, 'repo'));
+  const reviewedSha = createReviewedCommit(repoDir, 'feat.txt', 'feature\n');
+  const decisionDir = path.join(testDir, 'decisions');
+  const workItemId = 'TASK-AI-133';
+  const keyPath = path.join(testDir, 'controller-signing.key');
+
+  const reviewerKey = 'hermes::local::direct::google::acc-reviewer::scope::gemini-2.5-pro';
+
+  // Record writer first
+  const writerEntry = {
+    workItemId,
+    stage: 'writer',
+    role: 'writer',
+    writerCandidateKey: SAMPLE_WRITER_KEY,
+  };
+  const todayFile = path.join(decisionDir, new Date().toISOString().slice(0, 10) + '.jsonl');
+  fs.mkdirSync(decisionDir, { recursive: true });
+  fs.writeFileSync(todayFile, JSON.stringify(writerEntry) + '\n', 'utf8');
+
+  // Invoke real orchestrate.reviewLane
+  const runner = orchestrate.reviewLane(
+    {
+      reviewerIdentity: reviewerKey,
+      cwd: repoDir,
+      sha: reviewedSha,
+      signingKeyPath: keyPath,
+      decisionDir,
+    },
+    { id: workItemId },
+    { candidateKey: SAMPLE_WRITER_KEY, worktree: repoDir, branch: 'feat/test' },
+    { prompts: [] },
+    { dir: decisionDir, now: Date.now() },
+    async (reviewJob) => {
+      // Write verdict in worker root so review passes
+      const vFile = reviewJob.verdictFile;
+      fs.mkdirSync(path.dirname(vFile), { recursive: true });
+      fs.writeFileSync(vFile, JSON.stringify({ verdict: 'PASS', sha: reviewedSha, findings: [] }));
+      // Write usage report with session_id
+      if (reviewJob.usageFile) {
+        fs.mkdirSync(path.dirname(reviewJob.usageFile), { recursive: true });
+        fs.writeFileSync(
+          reviewJob.usageFile,
+          JSON.stringify({ session_id: 'sess-orchestrate-real-123' })
+        );
+      }
+      return { exitCode: 0, stdout: JSON.stringify({ session_id: 'sess-orchestrate-real-123' }) };
+    },
+    path.join(testDir, 'usage'),
+    Date.now(),
+    [
+      {
+        offeringId: reviewerKey,
+        candidateKey: reviewerKey,
+        accountId: 'acc-reviewer',
+        harness: 'hermes',
+        upstream: 'google',
+        gateway: 'direct',
+      },
+    ],
+    null,
+    null,
+    { attempt: 1, signingKeyPath: keyPath }
+  );
+
+  const reviewOutcome = await runner(reviewedSha);
+  assert.strictEqual(reviewOutcome.pass, true);
+
+  // Now create manifest and artifact matching this review
+  createManifestAndArtifact(decisionDir, workItemId, baseSha, reviewedSha, {
+    repoCwd: repoDir,
+    verdict: 'PASS',
+    reviewerCandidateKey: reviewerKey,
+    writeDecisionLog: false,
+    signingKeyPath: keyPath,
+  });
+
+  let mergeCalled = false;
+  const fakeGhClient = {
+    getPullRequest: async () => ({
+      title: `[${workItemId}] Governed merge`,
+      id: 'PR_1',
+      number: 1,
+      isDraft: false,
+      headRefOid: reviewedSha,
+      statusCheckRollup: [
+        { name: 'ci', status: 'COMPLETED', conclusion: 'SUCCESS', headSha: reviewedSha },
+      ],
+      unresolvedThreadsCount: 0,
+    }),
+    mergePullRequest: async () => {
+      mergeCalled = true;
+      return { merged: true, mergeCommitOid: 'b'.repeat(40) };
+    },
+  };
+
+  const res = await governedMerge({
+    workItemId,
+    repoCwd: repoDir,
+    decisionDir,
+    signingKeyPath: keyPath,
+    config: { neverMerge: [], requiredChecks: ['ci'] },
+    ghClient: fakeGhClient,
+  });
+
+  assert.strictEqual(res.ok, true);
+  assert.strictEqual(res.status, 'merged');
+  assert.strictEqual(mergeCalled, true);
+});
+
+test('GM-R01: a review file for another item or reviewer is refused', async () => {
+  const testDir = createUniqueSubdir('proof-binding-refusal');
+  const { repoDir, baseSha } = initGitRepo(path.join(testDir, 'repo'));
+  const reviewedSha = createReviewedCommit(repoDir, 'feat.txt', 'feature\n');
+  const decisionDir = path.join(testDir, 'decisions');
+  const workItemId = 'TASK-AI-133';
+  const keyPath = path.join(testDir, 'controller-signing.key');
+
+  const fakeGhClient = {
+    getPullRequest: async () => ({
+      title: `[${workItemId}] Governed merge`,
+      id: 'PR_1',
+      number: 1,
+      isDraft: false,
+      headRefOid: reviewedSha,
+      statusCheckRollup: [
+        { name: 'ci', status: 'COMPLETED', conclusion: 'SUCCESS', headSha: reviewedSha },
+      ],
+      unresolvedThreadsCount: 0,
+    }),
+  };
+
+  // Subcase A: review file mentions reviewedSha and manifest reviewer, but for another item (TASK-AI-999)
+  const dirItemMismatch = path.join(testDir, 'item-mismatch');
+  createManifestAndArtifact(dirItemMismatch, workItemId, baseSha, reviewedSha, {
+    repoCwd: repoDir,
+    verdict: 'PASS',
+    signingKeyPath: keyPath,
+    markdownContent: [
+      '# Review for TASK-AI-999',
+      `- **Commit**: ${reviewedSha}`,
+      `- **Reviewer**: ${SAMPLE_REVIEWER_KEY}`,
+      '- **Verdict**: PASS',
+      '',
+      '## Findings',
+      'None',
+    ].join('\n'),
+  });
+
+  const resItemMismatch = await governedMerge({
+    workItemId,
+    repoCwd: repoDir,
+    decisionDir: dirItemMismatch,
+    signingKeyPath: keyPath,
+    config: { neverMerge: [], requiredChecks: ['ci'] },
+    ghClient: fakeGhClient,
+  });
+
+  assert.strictEqual(resItemMismatch.ok, false);
+  assert.strictEqual(resItemMismatch.refusal, RefusalCode.REVIEWER_NOT_RECORDED);
+
+  // Subcase B: review file mentions reviewedSha and workItemId, but names another reviewer
+  const dirRevMismatch = path.join(testDir, 'rev-mismatch');
+  createManifestAndArtifact(dirRevMismatch, workItemId, baseSha, reviewedSha, {
+    repoCwd: repoDir,
+    verdict: 'PASS',
+    signingKeyPath: keyPath,
+    markdownContent: [
+      `# Review for ${workItemId}`,
+      `- **Commit**: ${reviewedSha}`,
+      '- **Reviewer**: other-reviewer::domain::model',
+      '- **Verdict**: PASS',
+      '',
+      '## Findings',
+      'None',
+    ].join('\n'),
+  });
+
+  const resRevMismatch = await governedMerge({
+    workItemId,
+    repoCwd: repoDir,
+    decisionDir: dirRevMismatch,
+    signingKeyPath: keyPath,
+    config: { neverMerge: [], requiredChecks: ['ci'] },
+    ghClient: fakeGhClient,
+  });
+
+  assert.strictEqual(resRevMismatch.ok, false);
+  assert.strictEqual(resRevMismatch.refusal, RefusalCode.REVIEWER_NOT_RECORDED);
+});
+
+test('GM-R01: the key never appears in decisions or output', async () => {
+  const testDir = createUniqueSubdir('key-never-leaks');
+  const { repoDir, baseSha } = initGitRepo(path.join(testDir, 'repo'));
+  const reviewedSha = createReviewedCommit(repoDir, 'feat.txt', 'feature\n');
+  const decisionDir = path.join(testDir, 'decisions');
+  const workItemId = 'TASK-AI-133';
+
+  // Generate a distinct random key
+  const secretKey = crypto.randomBytes(32);
+  const keyPath = path.join(testDir, 'controller-signing.key');
+  fs.writeFileSync(keyPath, secretKey);
+
+  const secretHex = secretKey.toString('hex');
+  const secretB64 = secretKey.toString('base64');
+
+  const { manifestPath, artifactPath } = createManifestAndArtifact(
+    decisionDir,
+    workItemId,
+    baseSha,
+    reviewedSha,
+    {
+      repoCwd: repoDir,
+      verdict: 'PASS',
+      signingKeyPath: keyPath,
+    }
+  );
+
+  const fakeGhClient = {
+    getPullRequest: async () => ({
+      title: `[${workItemId}] Governed merge`,
+      id: 'PR_1',
+      number: 1,
+      isDraft: false,
+      headRefOid: reviewedSha,
+      statusCheckRollup: [
+        { name: 'ci', status: 'COMPLETED', conclusion: 'SUCCESS', headSha: reviewedSha },
+      ],
+      unresolvedThreadsCount: 0,
+    }),
+    mergePullRequest: async () => ({ merged: true, mergeCommitOid: 'c'.repeat(40) }),
+  };
+
+  const res = await governedMerge({
+    workItemId,
+    repoCwd: repoDir,
+    decisionDir,
+    signingKeyPath: keyPath,
+    config: { neverMerge: [], requiredChecks: ['ci'] },
+    ghClient: fakeGhClient,
+  });
+
+  assert.strictEqual(res.ok, true);
+
+  // Assert secret key never appears in merge result object
+  const resStr = JSON.stringify(res);
+  assert.ok(!resStr.includes(secretHex), 'secret hex must not appear in merge result');
+  assert.ok(!resStr.includes(secretB64), 'secret b64 must not appear in merge result');
+
+  // Assert secret key never appears in decision log
+  const decisionFiles = fs.readdirSync(decisionDir).filter((f) => f.endsWith('.jsonl'));
+  assert.ok(decisionFiles.length > 0, 'decision files must exist');
+  for (const df of decisionFiles) {
+    const content = fs.readFileSync(path.join(decisionDir, df), 'utf8');
+    assert.ok(!content.includes(secretHex), `secret hex must not appear in decision log ${df}`);
+    assert.ok(!content.includes(secretB64), `secret b64 must not appear in decision log ${df}`);
+  }
+
+  // Assert secret key never appears in manifest or artifact
+  const manifestContent = fs.readFileSync(manifestPath, 'utf8');
+  assert.ok(!manifestContent.includes(secretHex), 'secret hex must not appear in manifest');
+  const artifactContent = fs.readFileSync(artifactPath, 'utf8');
+  assert.ok(!artifactContent.includes(secretHex), 'secret hex must not appear in artifact');
 });
