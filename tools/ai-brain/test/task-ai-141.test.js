@@ -190,6 +190,39 @@ test('Codex login failure is returned as a local failure so execution can contin
   assert.equal(result.exitCode, 1);
   assert.match(result.stderr, /CODEX_NOT_LOGGED_IN/);
 });
+
+test('Codex worker script runs after fake login succeeds and stops locally when login fails', () => {
+  const root = fixtureRoot();
+  const bin = path.join(root, 'bin');
+  fs.mkdirSync(bin, { recursive: true });
+  const codexPath = path.join(bin, 'codex.exe');
+  const payloadPath = path.join(root, 'args.json');
+  const resultPath = path.join(root, 'result.json');
+  const markerPath = path.join(root, 'marker.json');
+  fs.writeFileSync(
+    payloadPath,
+    JSON.stringify(['exec', '--dangerously-bypass-approvals-and-sandbox'])
+  );
+
+  const script = isolation.buildWorkerLaunchScript({
+    credPath: 'worker.cred',
+    workerRoot: root,
+    exeFile: codexPath,
+    payloadArgsPath: payloadPath,
+    launchResultPath: resultPath,
+    markerPath,
+    completionNonce: 'codex-test-nonce',
+    workerTimeoutMs: 1000,
+    adapterId: 'codex',
+    isolationVerdict: { verdict: 'CLOSED' },
+    runAsCurrentUser: true,
+  });
+  assert.match(script, /login status/);
+  assert.match(script, /localFailure = "CODEX_NOT_LOGGED_IN"/);
+  assert.doesNotMatch(script, /\.codex.*credentials|credentials.*\.codex/i);
+  assert.ok(script.indexOf('login status') < script.indexOf('@payloadArgs'));
+});
+
 test('Part D derives high-risk complexity and enforces the JEV quality floor', async () => {
   const root = fixtureRoot();
   const rows = Array.from(
