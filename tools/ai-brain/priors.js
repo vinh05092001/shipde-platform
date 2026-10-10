@@ -3,7 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const DEFAULT_PRIORS_FILE = path.join(__dirname, 'data', 'external-model-priors.json');
+const DEFAULT_PRIORS_FILE = path.join(__dirname, 'data', 'model-priors.json');
 const TIER_BONUSES = Object.freeze({ T1: 6, T2: 4, T3: 2, T4: 0 });
 const STALE_AFTER_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -30,7 +30,7 @@ function normaliseCanonical(value) {
 }
 
 /** Resolve one candidate's role-specific benchmark prior, if available. */
-function priorFor(candidate, role, priors) {
+function priorFor(candidate, role, priors, now) {
   const modelId = candidate && (candidate.modelId || candidate.model);
   const canonical = normaliseCanonical(modelId);
   if (!canonical) return null;
@@ -52,16 +52,16 @@ function priorFor(candidate, role, priors) {
   const result = {
     canonical: match.canonical,
     tier,
-    bonus: priorScore === null ? bonus : Math.round(priorScore),
+    bonus,
   };
   if (Number.isFinite(priorScore)) {
-    result.stale = isStale(
-      match.retrievedAt ||
-        (match.sources && match.sources[0] && match.sources[0].retrievedAt) ||
-        (priors && priors.generatedAt)
-    );
+    const sourceDates = (match.sources || []).map((source) => source && source.retrievedAt);
+    result.stale = match.stale === true || (sourceDates.length
+      ? sourceDates.some((date) => isStale(date, now))
+      : isStale(match.retrievedAt || (priors && priors.generatedAt), now));
     result.sources = match.sources || [];
-    result.score = priorScore;
+    result.score = Math.round(Math.max(0, Math.min(100, priorScore)));
+    result.stale = result.stale === true;
     if (result.stale) result.bonus = 0;
   }
   return result;
@@ -146,7 +146,7 @@ function mergePriorDocuments(documents, now) {
       score: score === null ? null : Math.round(score * 10) / 10,
       codingTier: tier,
       reviewTier: tier,
-      stale: row.sources.every((source) => isStale(source.retrievedAt, now)),
+      stale: row.sources.length === 0 || row.sources.some((source) => isStale(source.retrievedAt, now)),
     });
   });
   return {
@@ -166,10 +166,10 @@ async function refreshPriors(options) {
   });
   if (!Array.isArray(results)) throw new Error('PRIORS_SEARCH_RESULT_INVALID');
   const document = mergePriorDocuments(results, opts.now);
-  if (opts.file) {
-    fs.mkdirSync(path.dirname(opts.file), { recursive: true });
-    fs.writeFileSync(opts.file, JSON.stringify(document, null, 2) + '\n', 'utf8');
-  }
+  document.searchSource = opts.sourceId || opts.searchSource || opts.search.name || 'configured-search-provider';
+  const output = opts.file || DEFAULT_PRIORS_FILE;
+  fs.mkdirSync(path.dirname(output), { recursive: true });
+  fs.writeFileSync(output, JSON.stringify(document, null, 2) + '\n', 'utf8');
   return document;
 }
 
@@ -181,4 +181,5 @@ module.exports = {
   refreshPriors,
   normaliseModelId,
   benchmarkScore,
+  DEFAULT_PRIORS_FILE,
 };

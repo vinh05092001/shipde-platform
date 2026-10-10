@@ -1,0 +1,400 @@
+{
+  "label": "EXTERNAL_PRIOR",
+  "generatedAt": "2026-10-05T12:24:19.740Z",
+  "sources": [
+    {
+      "id": "aa-coding-index",
+      "release": "2026-09",
+      "url": "https://benchlm.ai/benchmarks/aacodingindex",
+      "retrievedAt": "2026-10-05T12:24:19.741Z",
+      "tierRule": "T1>=74,T2>=66,T3>=50,else T4"
+    },
+    {
+      "id": "livebench",
+      "release": "2026-06-25",
+      "url": "https://benchlm.ai/benchmarks/liveBench",
+      "retrievedAt": "2026-10-05T12:24:19.741Z",
+      "tierRule": "used only without AA: T1>=79,T2>=73,T3>=66,else T4"
+    }
+  ],
+  "ranking": [
+    {
+      "canonical": "gpt-5-6-sol",
+      "codingTier": "T1",
+      "reviewTier": "T1",
+      "aaCodingIndex": 77.4,
+      "liveBench": 81.1
+    },
+    {
+      "canonical": "gpt-6-astra",
+      "codingTier": "T1",
+      "reviewTier": "T1",
+      "aaCodingIndex": 76.9,
+      "liveBench": 82.2
+    },
+    {
+      "canonical": "grok-4-6",
+      "codingTier": "T1",
+      "reviewTier": "T1",
+      "aaCodingIndex": 76.8,
+      "liveBench": 78
+    },
+    {
+      "canonical": "gpt-5-6-terra",
+      "codingTier": "T1",
+      "reviewTier": "T1",
+      "aaCodingIndex": 76.7,
+      "liveBench": 77.9
+    },
+    {
+      "canonical": "gemini-3-8-flash",
+      "codingTier": "T1",
+      "reviewTier": "T1",
+      "aaCodingIndex": 76.3,
+      "liveBench": 75.8
+    },
+    {
+      "canonical": "kimi-k3",
+      "codingTier": "T1",
+      "reviewTier": "T1",
+      "aaCodingIndex": 76.2,
+      "liveBench": 79.2
+    },
+    {
+      "canonical": "gemini-3-7-flash",
+      "codingTier": "T1",
+      "reviewTier": "T1",
+      "aaCodingIndex": 76.1,
+      "liveBench": 78.8
+    },
+    {
+      "canonical": "deepseek-v4-1-flash",
+      "codingTier": "T1",
+      "reviewTier": "T1",
+      "aaCodingIndex": null,
+      "liveBench": 81.1
+    },
+    {
+      "canonical": "muse-spark-1-3",
+      "codingTier": "T1",
+      "reviewTier": "T1",
+      "aaCodingIndex": 75.8,
+      "liveBench": 81.6
+    },
+    {
+      "canonical": "gpt-5-5",
+      "codingTier": "T1",
+      "reviewTier": "T1",
+      "aaCodingIndex": 74.9,
+      "liveBench": 80.2
+    },
+    {
+      "canonical": "glm-5-3",
+      "codingTier": "T1",
+      "reviewTier": "T1",
+      "aaCodingIndex": 74.8,
+      "liveBench": 76.1
+    },
+    {
+      "canonical": "qwen3-8-flash-next",
+      "codingTier": "T2",
+      "reviewTier": "T2",
+      "aaCodingIndex": 73,
+      "liveBench": 76.2
+    },
+    {
+      "canonical": "grok-4-5",
+      "codingTier": "T2",
+      "reviewTier": "T2",
+      "aaCodingIndex": 72.5,
+      "liveBench": null
+    },
+    {
+      "canonical": "grok-4-7",
+      "codingTier": "T2",
+      "reviewTier": "T2",
+      "aaCodingIndex": null,
+      "liveBench": 77.4
+    },
+    {
+      "canonical": "muse-spark-1-2",
+      "codingTier": "T2",
+      "reviewTier": "T2",
+      "aaCodingIndex": 72.2,
+      "liveBench": null
+    },
+    {
+      "canonical": "qwen3-8-max",
+      "codingTier": "T2",
+      "reviewTier": "T2",
+      "aaCodingIndex": 71.8,
+      "liveBench": 78.5
+    },
+    {
+      "canonical": "deepseek-v4-flash-vision-exp",
+      "codingTier": "T2",
+      "reviewTier": "T2",
+      "aaCodingIndex": null,
+      "liveBench": 76.8
+    },
+    {
+      "canonical": "gpt-5-6-luna",
+      "codingTier": "T2",
+      "reviewTier": "T2",
+      "aaCodingIndex": 71.5,
+      "liveBench": 73.6
+    },
+    {
+      "canonical": "muse-spark-1-1",
+      "codingTier": "T2",
+      "reviewTier": "T2",
+      "aaCodingIndex": 71.3,
+      "liveBench": null
+    },
+    {
+      "canonical": "gpt-5-4",
+      "codingTier": "T2",
+      "reviewTier": "T2",
+      "aaCodingIndex": 71,
+      "liveBench": null
+    },
+    {
+      "canonical": "deepseek-v4-flash-0731",
+      "codingTier": "T2",
+      "reviewTier": "T2",
+      "aaCodingIndex": 69.1,
+      "liveBench": 74.2
+    },
+    {
+      "canonical": "deepseek-v4-pro",
+      "codingTier": "T2",
+      "reviewTier": "T2",
+      "aaCodingIndex": 68.8,
+      "liveBench": null
+    },
+    {
+      "canonical": "glm-5-2",
+      "codingTier": "T2",
+      "reviewTier": "T2",
+      "aaCodingIndex": 68.8,
+      "liveBench": 73.2
+    },
+    {
+      "canonical": "qwen3-8-27b",
+      "codingTier": "T2",
+      "reviewTier": "T2",
+      "aaCodingIndex": 68.1,
+      "liveBench": 75.3
+    },
+    {
+      "canonical": "gpt-6-luna",
+      "codingTier": "T3",
+      "reviewTier": "T3",
+      "aaCodingIndex": null,
+      "liveBench": 72
+    },
+    {
+      "canonical": "glm-5-3-flash",
+      "codingTier": "T3",
+      "reviewTier": "T3",
+      "aaCodingIndex": null,
+      "liveBench": 71.6
+    },
+    {
+      "canonical": "qwen3-7-max",
+      "codingTier": "T2",
+      "reviewTier": "T2",
+      "aaCodingIndex": 66,
+      "liveBench": 73.1
+    },
+    {
+      "canonical": "kimi-k2-6",
+      "codingTier": "T3",
+      "reviewTier": "T3",
+      "aaCodingIndex": 61.8,
+      "liveBench": 70.5
+    },
+    {
+      "canonical": "kimi-k2-7",
+      "codingTier": "T3",
+      "reviewTier": "T3",
+      "aaCodingIndex": 60.8,
+      "liveBench": 68.4
+    },
+    {
+      "canonical": "apodex-1-1-mini",
+      "codingTier": "T3",
+      "reviewTier": "T3",
+      "aaCodingIndex": 60.8,
+      "liveBench": null
+    },
+    {
+      "canonical": "mimo-v2-5-pro",
+      "codingTier": "T3",
+      "reviewTier": "T3",
+      "aaCodingIndex": 60.2,
+      "liveBench": null
+    },
+    {
+      "canonical": "minimax-m3",
+      "codingTier": "T3",
+      "reviewTier": "T3",
+      "aaCodingIndex": 58.6,
+      "liveBench": 67.3
+    },
+    {
+      "canonical": "qwen3-7-plus",
+      "codingTier": "T3",
+      "reviewTier": "T3",
+      "aaCodingIndex": 55.9,
+      "liveBench": null
+    },
+    {
+      "canonical": "glm-5-1",
+      "codingTier": "T3",
+      "reviewTier": "T3",
+      "aaCodingIndex": 55.8,
+      "liveBench": null
+    },
+    {
+      "canonical": "qwen3-6-plus",
+      "codingTier": "T3",
+      "reviewTier": "T3",
+      "aaCodingIndex": 54.5,
+      "liveBench": 68.9
+    },
+    {
+      "canonical": "qwen3-6-27b",
+      "codingTier": "T3",
+      "reviewTier": "T3",
+      "aaCodingIndex": 53.7,
+      "liveBench": 64
+    },
+    {
+      "canonical": "minimax-m2-7",
+      "codingTier": "T3",
+      "reviewTier": "T3",
+      "aaCodingIndex": 52.6,
+      "liveBench": null
+    },
+    {
+      "canonical": "ling-3-0-flash",
+      "codingTier": "T3",
+      "reviewTier": "T3",
+      "aaCodingIndex": 50.6,
+      "liveBench": null
+    },
+    {
+      "canonical": "mimo-v2-flash",
+      "codingTier": "T4",
+      "reviewTier": "T4",
+      "aaCodingIndex": 49.8,
+      "liveBench": null
+    },
+    {
+      "canonical": "nemotron-3-ultra",
+      "codingTier": "T4",
+      "reviewTier": "T4",
+      "aaCodingIndex": 49.3,
+      "liveBench": 67.4
+    },
+    {
+      "canonical": "muse-glimmer-30b",
+      "codingTier": "T4",
+      "reviewTier": "T4",
+      "aaCodingIndex": 49,
+      "liveBench": null
+    },
+    {
+      "canonical": "mistral-medium-3-5",
+      "codingTier": "T4",
+      "reviewTier": "T4",
+      "aaCodingIndex": 46.9,
+      "liveBench": null
+    },
+    {
+      "canonical": "kimi-k2-5",
+      "codingTier": "T4",
+      "reviewTier": "T4",
+      "aaCodingIndex": 46.8,
+      "liveBench": null
+    },
+    {
+      "canonical": "qwen3-5-122b-a10b",
+      "codingTier": "T4",
+      "reviewTier": "T4",
+      "aaCodingIndex": 45.7,
+      "liveBench": null
+    },
+    {
+      "canonical": "gemma4-31b",
+      "codingTier": "T4",
+      "reviewTier": "T4",
+      "aaCodingIndex": 43.4,
+      "liveBench": null
+    },
+    {
+      "canonical": "qwen3-6-35b-a3b",
+      "codingTier": "T4",
+      "reviewTier": "T4",
+      "aaCodingIndex": 41.9,
+      "liveBench": null
+    },
+    {
+      "canonical": "nemotron-3-super",
+      "codingTier": "T4",
+      "reviewTier": "T4",
+      "aaCodingIndex": 37.7,
+      "liveBench": null
+    },
+    {
+      "canonical": "gpt-oss-120b",
+      "codingTier": "T4",
+      "reviewTier": "T4",
+      "aaCodingIndex": 30.4,
+      "liveBench": null
+    },
+    {
+      "canonical": "command-a-plus",
+      "codingTier": "T4",
+      "reviewTier": "T4",
+      "aaCodingIndex": 27.9,
+      "liveBench": null
+    },
+    {
+      "canonical": "nemotron-3-5-lightning",
+      "codingTier": "T4",
+      "reviewTier": "T4",
+      "aaCodingIndex": 26.8,
+      "liveBench": null
+    },
+    {
+      "canonical": "mistral-small-4",
+      "codingTier": "T4",
+      "reviewTier": "T4",
+      "aaCodingIndex": 26.6,
+      "liveBench": null
+    },
+    {
+      "canonical": "gpt-oss-20b",
+      "codingTier": "T4",
+      "reviewTier": "T4",
+      "aaCodingIndex": 20.7,
+      "liveBench": null
+    },
+    {
+      "canonical": "mistral-large-3",
+      "codingTier": "T4",
+      "reviewTier": "T4",
+      "aaCodingIndex": 20.1,
+      "liveBench": null
+    },
+    {
+      "canonical": "lfm-2-5-2-6b",
+      "codingTier": "T4",
+      "reviewTier": "T4",
+      "aaCodingIndex": 7.7,
+      "liveBench": null
+    }
+  ]
+}

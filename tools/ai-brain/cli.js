@@ -3051,8 +3051,15 @@ function main() {
       process.exitCode = 2;
       return;
     }
-    const provider = require(path.resolve(sourceModule));
-    refreshPriors({ search: provider.search, file: args.file || undefined })
+    const resolvedSource = path.resolve(sourceModule);
+    const allowedRoots = [path.resolve(__dirname, 'priors-sources')];
+    if (!allowedRoots.some((root) => resolvedSource.startsWith(root + path.sep))) {
+      console.error('PRIORS_SEARCH_SOURCE_OUTSIDE_ALLOWLIST');
+      process.exitCode = 2;
+      return;
+    }
+    const provider = require(resolvedSource);
+    refreshPriors({ search: provider.search, sourceId: path.relative(allowedRoots[0], resolvedSource), file: args.file || undefined })
       .then((document) =>
         console.log(
           JSON.stringify({

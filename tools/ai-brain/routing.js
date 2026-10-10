@@ -782,13 +782,17 @@ function evidenceAgePenalty(candidate, now) {
  */
 function scoreForProfile(candidate, assessment, ctx) {
   const now = (ctx && ctx.now) || Date.now();
-  const prior = priorFor(candidate, ctx && ctx.role, ctx && ctx.priors);
+  const prior = priorFor(candidate, ctx && ctx.role, ctx && ctx.priors, now);
   const latency = latencyScoreOf(candidate);
   const internalQuality = qualityScoreOf(candidate, now);
-  const quality =
-    prior && prior.score !== undefined
-      ? Math.max(internalQuality || 0, prior.score)
-      : internalQuality;
+  const priorUsable = prior && !prior.stale && prior.score !== undefined;
+  const evidenceCount = ((candidate && candidate.evidence) || []).filter(
+    (item) => item && item.status === 'passed'
+  ).length;
+  const priorWeight = priorUsable ? 1 / (1 + evidenceCount) : 0;
+  const quality = priorUsable
+    ? Math.round((internalQuality === null ? prior.score : internalQuality * (1 - priorWeight) + prior.score * priorWeight))
+    : internalQuality;
   const reliability = reliabilityScoreOf(candidate);
   const cost = costScoreOf(candidate);
 
@@ -831,7 +835,13 @@ function scoreForProfile(candidate, assessment, ctx) {
   const headroomPenalty =
     candidate.headroomStatus === 'unknown' ? 15 : candidate.headroomStatus === 'tight' ? 10 : 0;
   score = Math.max(0, score - busyPenalty - agePenalty - headroomPenalty);
-  if (prior && prior.score === undefined) score += prior.bonus;
+  const priorContribution = priorUsable ? Math.round(prior.bonus * (1 - priorWeight)) : 0;
+  if (priorContribution) score += priorContribution;
+  if (prior) {
+    prior.normalizedScore = priorUsable ? prior.score / 100 : null;
+    prior.weight = priorWeight;
+    prior.contribution = priorContribution;
+  }
 
   return {
     score,
@@ -970,12 +980,13 @@ function rankForProfile(candidates, profile, assessment, ctx) {
       continue;
     }
 
-    const probationPrior = priorFor(c, profile.role, priors);
+    const probationPrior = priorFor(c, profile.role, priors, now);
     const probationRequested =
       probation.has(key) || c.probation === true || Boolean(probationPrior);
     const probationAllowed =
       probationRequested &&
       Boolean(probationPrior && !probationPrior.stale && probationPrior.score >= 80) &&
+      (profile.proofFloor === 'NONE' || context.independentStrongReviewerGuaranteed === true) &&
       (!['security', 'money', 'tenant'].some((risk) =>
         (profile.riskDomains || []).includes(risk)
       ) ||
@@ -984,9 +995,8 @@ function rankForProfile(candidates, profile, assessment, ctx) {
       (profile.riskDomains || []).includes(risk)
     );
     const riskProbationRefused =
-      riskCritical &&
-      !proofObservedWithSource(context.evidenceData, c).level &&
-      probationPrior &&
+      riskCritical && !proofObservedWithSource(context.evidenceData, c).level &&
+      probationPrior && !probationPrior.stale && probationPrior.score >= 80 &&
       !context.independentStrongReviewerGuaranteed;
     if (riskProbationRefused) {
       reject('PROBATION_REQUIRES_INDEPENDENT_STRONG_REVIEWER', 'candidate');
@@ -1040,7 +1050,7 @@ function rankForProfile(candidates, profile, assessment, ctx) {
       hasPrior &&
       scored.breakdown.prior.score >= 80 &&
       !scored.breakdown.prior.stale &&
-      profile.proofFloor === 'NONE' &&
+      (profile.proofFloor === 'NONE' || context.independentStrongReviewerGuaranteed === true) &&
       probationAllowedForTask;
     ranked.push(
       Object.assign({}, c, {
@@ -1056,8 +1066,8 @@ function rankForProfile(candidates, profile, assessment, ctx) {
   }
 
   ranked.sort((a, b) => {
-    const aPriorBonus = a.scoreBreakdown.prior ? a.scoreBreakdown.prior.bonus : 0;
-    const bPriorBonus = b.scoreBreakdown.prior ? b.scoreBreakdown.prior.bonus : 0;
+    const aPriorBonus = a.scoreBreakdown.prior ? a.scoreBreakdown.prior.contribution || 0 : 0;
+    const bPriorBonus = b.scoreBreakdown.prior ? b.scoreBreakdown.prior.contribution || 0 : 0;
     const aBaseScore =
       a.scoreBreakdown.prior && a.scoreBreakdown.prior.score !== undefined
         ? a.score
@@ -1118,8 +1128,10 @@ async function adviseRankedModelChoice(result, profile, options) {
 
 /** One line of the top-3 output the operator reads. */
 function formatTopEntry(entry, rank) {
-  const duration = entry.expectedDurationMs || entry.latencyMs;
-  const durationText = Number.isFinite(Number(duration)) ? Number(duration) + 'ms' : 'unknown';
+  const duration = entry.expectedDurationMs ?? entry.latencyMs;
+  const durationText = duration !== null && duration !== undefined && Number.isFinite(Number(duration))
+    ? Number(duration) + 'ms'
+    : 'unknown';
   const cost = blendedCost(entry);
   return (
     '  ' +
