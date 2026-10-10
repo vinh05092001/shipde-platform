@@ -137,7 +137,14 @@ async function routeFallback(modelId, failedPath, paths, probe, store, options) 
   const failedRecord = store.paths[normalizeModelId(modelId) + '|' + String(failedPath)];
   const failureReason =
     o.failureReason || (failedRecord && failedRecord.status) || 'UNAVAILABLE_NOW';
-  const ordered = (paths || []).filter((p) => p && p.id !== failedPath).slice();
+  const retryFailedPath =
+    failureReason === 'UNAVAILABLE' &&
+    failedRecord &&
+    failedRecord.status === 'UNAVAILABLE_NOW' &&
+    !isEligible(store, modelId, failedPath, now);
+  const ordered = (paths || [])
+    .filter((p) => p && (p.id !== failedPath || retryFailedPath))
+    .slice();
   ordered.sort((a, b) => Number(b.evidence || 0) - Number(a.evidence || 0));
   const failures = [];
   for (const route of ordered) {
@@ -153,7 +160,8 @@ async function routeFallback(modelId, failedPath, paths, probe, store, options) 
       continue;
     }
     let result;
-    for (let attempt = 0; attempt < 2; attempt += 1) {
+    const attempts = route.id === failedPath ? 1 : 2;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
       try {
         result = await probe(modelId, route, {
           attempt,
@@ -493,14 +501,23 @@ async function refreshFailedFallbacks(store, probe, options, now) {
         });
       }
     }
-    checked += 1;
+    const probePaths = [...paths.values()].filter(
+      (route) => route.id !== failed.gateway && isEligible(store, normalized, route.id, now)
+    );
+    if (checked + probePaths.length > cap) continue;
+    checked += probePaths.length;
     await routeFallback(
       normalized,
       failed.gateway,
       [...paths.values()],
       (modelId, route) => probe(modelId, route.id, { timeoutMs: o.timeoutMs || 10000 }),
       store,
-      { now, failureReason: store.paths[normalized + '|' + failed.gateway].status, sleep: o.sleep }
+      {
+        now,
+        failureReason: store.paths[normalized + '|' + failed.gateway].status,
+        sleep: o.sleep,
+        retryBackoffMs: o.retryBackoffMs,
+      }
     );
   }
   return { checked };

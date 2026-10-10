@@ -789,7 +789,7 @@ async function runIntake(opts, deps) {
     {
       catalogue: catalogue.models,
       fallbackCatalogue: catalogue.models,
-      skipFallbackDiscovery: true,
+      skipFallbackDiscovery: false,
       registry: d.registry || sourcesApi.loadSources(),
       accounts,
       now,

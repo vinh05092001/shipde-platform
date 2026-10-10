@@ -916,10 +916,7 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
           const modelId = candidate && candidate.modelId;
           const gateway = candidate && candidate.gateway;
           return Boolean(
-            modelId &&
-            gateway &&
-            (routeHealthApi.isEligible(routeHealth, modelId, gateway, opts.now) ||
-              routeHealthApi.isDue(routeHealth, modelId, gateway, opts.now))
+            modelId && gateway && routeHealthApi.isEligible(routeHealth, modelId, gateway, opts.now)
           );
         }
       );

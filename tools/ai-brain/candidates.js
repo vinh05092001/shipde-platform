@@ -703,13 +703,7 @@ function poolAccountCandidates(opts) {
         const modelRows = catalogue.filter((entry) => {
           if (!entry || typeof entry !== 'object') return false;
           const entryModel = entry.modelId || entry.model || entry.id || '';
-          return (
-            entryModel === model ||
-            entryModel === 'ag/' + model ||
-            entryModel === 'antigravity/' + model ||
-            ((entry.upstream === 'ag' || entry.upstream === 'antigravity') &&
-              entryModel.replace(/^(ag|antigravity)\//, '') === model)
-          );
+          return health.normalizeModelId(entryModel) === normalized;
         });
         if (
           modelRows.length === 0 ||
