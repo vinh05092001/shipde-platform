@@ -439,6 +439,7 @@ test('proof transfer requires exact normalized backend identity', () => {
 test('intake supplies empty account options when none are configured', async () => {
   const root = fixtureRoot();
   let receivedOptions;
+  let catalogueBuilds = 0;
   await intake.runIntake(
     { workItem: 'FIXTURE-AI-141' },
     {
@@ -450,11 +451,24 @@ test('intake supplies empty account options when none are configured', async () 
         receivedOptions = options;
         return [];
       },
-      buildCatalogue: async () => ['ag/gemini-fixture-pro'],
+      buildCatalogue: async () => {
+        catalogueBuilds += 1;
+        return ['ag/gemini-fixture-pro'];
+      },
+      read9routerModels: async () => {
+        throw new Error('live 9router listing must not be used by this test');
+      },
+      readAgyModels: async () => {
+        throw new Error('live agy listing must not be used by this test');
+      },
+      readEvidenceModels: async () => {
+        throw new Error('live evidence listing must not be used by this test');
+      },
       hasAgyPoolQuota: false,
       readHistory: () => [],
       isAncestorOf: () => true,
     }
   );
+  assert.equal(catalogueBuilds, 1, 'the injected catalogue builder replaces the live listing');
   assert.deepEqual(receivedOptions, {});
 });

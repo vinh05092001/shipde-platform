@@ -489,14 +489,33 @@ async function buildCatalogue(deps) {
       warnings.push({ source: collector.name, error: (result && result.error) || 'unavailable' });
     }
   }
-  const list = [...models].sort();
+  return normalizeCatalogue([...models], warnings, sourceStatus);
+}
+
+function normalizeCatalogue(models, warnings, sourceStatus) {
+  const list = [...new Set(models.filter((model) => model))].sort();
   if (list.length === 0) {
     throw intakeError(
       'CATALOGUE_UNAVAILABLE',
       'CATALOGUE_UNAVAILABLE: no live model listing source produced any model'
     );
   }
-  return { models: list, warnings, sourceStatus };
+  return { models: list, warnings: warnings || [], sourceStatus: sourceStatus || {} };
+}
+
+/**
+ * Build the catalogue, honouring an injected builder so hermetic callers never
+ * reach a live model listing. The injected builder may return either a model
+ * array or the same `{ models, warnings, sourceStatus }` shape this module
+ * produces; both are normalised here and an empty catalogue still refuses with
+ * CATALOGUE_UNAVAILABLE.
+ */
+async function resolveCatalogue(deps) {
+  if (typeof deps.buildCatalogue !== 'function') return buildCatalogue(deps);
+  const injected = await deps.buildCatalogue(deps);
+  if (Array.isArray(injected)) return normalizeCatalogue(injected, [], {});
+  const value = injected || {};
+  return normalizeCatalogue(value.models || [], value.warnings, value.sourceStatus);
 }
 
 // ---------------------------------------------------------------------------
@@ -690,7 +709,7 @@ async function runIntake(opts, deps) {
     (dependency) => !resolvedDependencies.some((resolved) => resolved.id === dependency)
   );
 
-  const catalogue = await buildCatalogue(Object.assign({}, d, { root }));
+  const catalogue = await resolveCatalogue(Object.assign({}, d, { root }));
   const accounts = await (typeof d.listAccounts === 'function'
     ? d.listAccounts(d.accountOptions || {})
     : accountsApi.listAccounts(d.accountOptions || {}));
