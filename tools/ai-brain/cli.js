@@ -679,6 +679,7 @@ function assembleCandidates(
       quotaScope: dc.quotaScope || (accountId !== '*' ? accountId : dc.upstream || ''),
       modelId,
     };
+    if (dc.probeOk === false || (dc.probeStatus && Number(dc.probeStatus) >= 400)) continue;
     const off = offeringMap.get(`${accountId}::${modelId}`) || offeringMap.get(modelId);
     if (off) {
       if (c.qualifiedRoles === undefined && off.qualifiedRoles !== undefined) {
@@ -718,6 +719,7 @@ function assembleCandidates(
   // limits, and the advertised row only proves the route exists.
   const advertised = gatewayCandidates || [];
   for (const off of advertised) {
+    if (off.probeOk === false || (off.probeStatus && Number(off.probeStatus) >= 400)) continue;
     const key = candidatesApi.candidateKey(off);
     const c = Object.assign({}, off, { key });
     if (!seenKeys.has(key)) {
@@ -875,6 +877,8 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
           now: opts.now,
           cap: opts.probeCap,
           timeoutMs: opts.probeTimeoutMs,
+          probeEvidence: opts.probeEvidence,
+          allowUnprobed: true,
         })
       : null;
   const refreshedHealth = routeHealth;
@@ -886,7 +890,12 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
           catalogueRows,
           probeRoute,
           routeHealthApi,
-          opts
+          Object.assign({}, opts, {
+            registry: resolvedRegistry,
+            accounts: accounts || [],
+            checkedBeforeFallback: Number((result && result.checked) || 0),
+            preResolvedFallback: true,
+          })
         ).then(() => {
           if (opts.onRouteRefresh) opts.onRouteRefresh(result);
           if (opts.persistRouteHealth !== false) routeHealthApi.saveStore(healthFile, routeHealth);
@@ -901,6 +910,7 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
     const buildExplicit = () =>
       assembleCandidates(discoveryCat, [], resolvedRegistry, accounts, opts.candidates).filter(
         (candidate) => {
+          if (opts.refreshRoutes === true) return true;
           const modelId = candidate && candidate.modelId;
           const gateway = candidate && candidate.gateway;
           return Boolean(
@@ -952,10 +962,8 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
         .filter((candidate) => {
           const modelId = candidate && candidate.modelId;
           const gateway = candidate && candidate.gateway;
-          return (
-            !modelId ||
-            !gateway ||
-            routeHealthApi.isEligible(routeHealth, modelId, gateway, opts.now)
+          return Boolean(
+            modelId && gateway && routeHealthApi.isEligible(routeHealth, modelId, gateway, opts.now)
           );
         }),
       ...candidatesApi.gatewayAccountCandidates({
@@ -987,7 +995,22 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
           if (c.legacy) return false;
           return Array.isArray(c.evidence) && c.evidence.some((e) => e && e.status === 'passed');
         }),
-    ]);
+    ]).filter((candidate) => {
+      const modelId = candidate && candidate.modelId;
+      const gateway = candidate && candidate.gateway;
+      if (!modelId || !gateway) return false;
+      const key = routeHealthApi.normalizeModelId(modelId) + '|' + gateway;
+      const record = routeHealth.paths[key];
+      return record
+        ? routeHealthApi.isEligible(routeHealth, modelId, gateway, opts.now)
+        : Boolean(
+            (opts.probeEvidence && opts.probeEvidence(modelId, gateway)) ||
+            ((opts.trustCatalogueProbe === true || opts.refreshRoutes === true) &&
+              catalogueRows.some(
+                (row) => (row.modelId || row.model) === modelId && row.gateway === gateway
+              ))
+          );
+    });
   if (!refresh) return buildCandidates();
   return Promise.resolve(persistHealth()).then(buildCandidates);
 }
@@ -999,6 +1022,9 @@ async function resolveFallbackRoutes(store, catalogue, probe, routeHealthApi, op
   );
   let checked = 0;
   const pathsByModel = new Map();
+  const registry = options && options.registry;
+  const accounts = options && options.accounts;
+  const preResolved = options && options.preResolvedFallback === true;
   for (const row of catalogue || []) {
     const modelId = row && (row.modelId || row.model);
     if (!modelId || !row.gateway) continue;
@@ -1011,6 +1037,22 @@ async function resolveFallbackRoutes(store, catalogue, probe, routeHealthApi, op
       geoBlocked: row.geoBlocked === true,
     });
   }
+  for (const normalized of pathsByModel.keys()) {
+    const discovered = routeHealthApi.discoverModelPaths(normalized, registry, accounts, catalogue);
+    const merged = new Map(pathsByModel.get(normalized).map((route) => [route.id, route]));
+    for (const route of discovered) {
+      const previous = merged.get(route.id);
+      merged.set(
+        route.id,
+        previous
+          ? Object.assign({}, route, {
+              evidence: Math.max(previous.evidence || 0, route.evidence || 0),
+            })
+          : route
+      );
+    }
+    pathsByModel.set(normalized, [...merged.values()]);
+  }
   const now = Number(options && options.now) || Date.now();
   for (const [normalized, paths] of pathsByModel) {
     for (const failed of paths) {
@@ -1021,6 +1063,7 @@ async function resolveFallbackRoutes(store, catalogue, probe, routeHealthApi, op
         routeHealthApi.isEligible(store, normalized, failed.id, now)
       )
         continue;
+      if (preResolved) continue;
       if (checked >= cap) return { checked, capped: true };
       checked += 1;
       await routeHealthApi.routeFallback(

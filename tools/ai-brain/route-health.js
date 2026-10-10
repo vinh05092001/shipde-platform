@@ -286,7 +286,8 @@ function discoverModelPaths(modelId, registry, accounts, catalogue) {
         return id && normalizeModelId(id) === normalized;
       })
     );
-    if (declared) for (const account of accountsForSource) addPath(source.id, source, account, 0);
+    if (declared || source.servesModels === true)
+      for (const account of accountsForSource) addPath(source.id, source, account, 0);
   }
   // Harness-specific and CLI routes are represented by the same registry
   // sources/accounts as gateway paths. Include declared models from each
@@ -303,9 +304,14 @@ function discoverModelPaths(modelId, registry, accounts, catalogue) {
       continue;
     const declared = (Array.isArray(account.models) ? account.models : []).some((entry) => {
       const id = typeof entry === 'string' ? entry : entry && entry.model;
-      return id && normalizeModelId(id) === normalized && !(entry && entry.exclude === true);
+      return id && normalizeModelId(id) === normalized;
     });
-    if (declared) addPath(source.id, source, account, account.evidence);
+    const excluded = (Array.isArray(account.models) ? account.models : []).some((entry) => {
+      const id = typeof entry === 'string' ? entry : entry && entry.model;
+      return id && normalizeModelId(id) === normalized && entry && entry.exclude === true;
+    });
+    if ((declared && !excluded) || source.servesModels === true)
+      addPath(source.id, source, account, account.evidence);
   }
   // A gateway catalogue route can also be used by another enabled account
   // whose dispatch provider rides that gateway. Keep each account route
@@ -347,10 +353,13 @@ async function refreshCatalogueRoutes(catalogue, registry, accounts, store, prob
     const routeId = row && row.gateway;
     if (!modelId || !routeId) continue;
     const key = normalizeModelId(modelId) + '|' + routeId;
+    if (seen.has(key) || (o.skipKeys && o.skipKeys.has(key))) continue;
+    const record = store.paths[key];
+    if (record && !isEligible(store, modelId, routeId, now)) continue;
     if (
-      seen.has(key) ||
-      (o.skipKeys && o.skipKeys.has(key)) ||
-      !isEligible(store, modelId, routeId, now)
+      !record &&
+      o.allowUnprobed !== true &&
+      !(o.probeEvidence && o.probeEvidence(modelId, routeId))
     )
       continue;
     seen.add(key);
@@ -409,12 +418,74 @@ async function recheckBeforeSelection(store, probe, options) {
       skipKeys: new Set(checkedDue),
     })
   );
+  const fallback =
+    o.skipFallbackDiscovery || !o.registry
+      ? { checked: 0 }
+      : await refreshFailedFallbacks(store, probe, o, now);
   return {
-    checked: due.checked + refreshed.count,
-    count: due.checked + refreshed.count,
+    checked: due.checked + refreshed.count + fallback.checked,
+    count: due.checked + refreshed.count + fallback.checked,
     restored: due.restored,
     refreshed: refreshed.count,
+    fallback: fallback.checked,
   };
+}
+
+async function refreshFailedFallbacks(store, probe, options, now) {
+  const o = options || {};
+  const catalogue = o.fallbackCatalogue || o.catalogue || [];
+  const byModel = new Map();
+  for (const row of catalogue) {
+    const id = row && (row.modelId || row.model);
+    if (!id) continue;
+    const normalized = normalizeModelId(id);
+    if (!byModel.has(normalized)) byModel.set(normalized, []);
+    byModel.get(normalized).push(row);
+  }
+  const models = new Set(byModel.keys());
+  for (const [key, record] of Object.entries(store.paths || {})) {
+    if (record && record.modelId) models.add(normalizeModelId(record.modelId));
+  }
+  for (const normalized of models) {
+    if (byModel.has(normalized)) continue;
+    const record = Object.values(store.paths || {}).find(
+      (row) => row && normalizeModelId(row.modelId) === normalized && row.status !== 'AVAILABLE'
+    );
+    if (record) byModel.set(normalized, [{ modelId: record.modelId, gateway: record.routeId }]);
+  }
+  let checked = 0;
+  const cap = Math.max(
+    0,
+    Number(o.fallbackProbeCap ?? o.cap ?? 20) - Number(o.checkedBeforeFallback || 0)
+  );
+  for (const [normalized, rows] of byModel) {
+    const failed = rows.find((row) => {
+      const record = row.gateway && store.paths[normalized + '|' + row.gateway];
+      return record && record.status !== 'AVAILABLE' && !dueAt(record, now);
+    });
+    if (!failed || checked >= cap) continue;
+    const discovered = discoverModelPaths(normalized, o.registry, o.accounts || [], catalogue);
+    const paths = new Map(discovered.map((route) => [route.id, route]));
+    for (const row of rows) {
+      if (row.gateway && !paths.has(row.gateway)) {
+        paths.set(row.gateway, {
+          id: row.gateway,
+          evidence: Number(row.evidence || 0),
+          geoBlocked: row.geoBlocked === true,
+        });
+      }
+    }
+    checked += 1;
+    await routeFallback(
+      normalized,
+      failed.gateway,
+      [...paths.values()],
+      (modelId, route) => probe(modelId, route.id, { timeoutMs: o.timeoutMs || 10000 }),
+      store,
+      { now, failureReason: store.paths[normalized + '|' + failed.gateway].status, sleep: o.sleep }
+    );
+  }
+  return { checked };
 }
 
 async function refreshDueFile(file, probe, options) {

@@ -236,6 +236,24 @@ test('candidate assembly uses existing probe evidence when a route health record
   assert.ok(assembled.some((candidate) => candidate.modelId === model.modelId));
 });
 
+test('normal candidate assembly excludes routes without probe evidence', () => {
+  const registry = {
+    sources: [
+      { id: 'gateway-a', kind: 'router' },
+      { id: 'vendor-a', kind: 'model-source', reachedVia: 'gateway-a' },
+    ],
+    dispatch: { providers: { 'vendor-a': { harness: 'paseo' } } },
+  };
+  const model = { gateway: 'gateway-a', upstream: 'vendor-a', modelId: 'vendor-a/unprobed' };
+  const assembled = cli.assembleForDispatch(
+    { candidates: [model] },
+    [{ id: 'acct', provider: 'vendor-a' }],
+    registry,
+    { routeHealth: { version: 1, paths: {}, events: [] }, offerings: [], registryAccounts: [] }
+  );
+  assert.deepEqual(assembled, []);
+});
+
 test('discovered same-model paths fall through 451 and 429 to success, recording fallback', async (t) => {
   const { store } = temporaryStore(t);
   const registry = {
@@ -382,7 +400,7 @@ test('intake assembly probes a bounded catalogue with a timeout and excludes fai
     }
   );
   assert.equal(counts.length, 50);
-  assert.equal(result.length, 50, 'explicit replay preserves the caller-supplied candidates');
+  assert.equal(result.length, 30, 'parked probe failures are excluded from explicit candidates');
   assert.equal(Object.keys(routes.loadStore(file).paths).length, 50);
 });
 
@@ -461,10 +479,11 @@ test('intake persists bounded fake gateway probe results and reports per-account
     {
       routeHealth: routes.loadStore(path.join(fixture, 'route-health.json')),
       refreshRoutes: false,
+      trustCatalogueProbe: true,
       onAccountCount: (accountId, count) => perAccount.push({ accountId, count }),
     }
   );
-  assert.equal(assembled.length, 80);
+  assert.equal(assembled.length, 60, 'parked probe failures stay excluded from live candidates');
   assert.deepEqual(perAccount, [{ accountId: 'acct', count: 30 }]);
 });
 
@@ -589,29 +608,27 @@ test('assembly performs due checks and bounded fresh probes before building live
   assert.equal(candidates.length, 1, 'explicit candidate replay preserves the supplied row');
 });
 
-test('live assembly falls back from a parked alias to another same-model gateway', async (t) => {
+test('live assembly fallback discovers account paths outside the catalogue', async (t) => {
   const { file, store } = temporaryStore(t);
   const now = 1_800_000_000_000;
   const registry = {
     sources: [
       { id: 'ag', kind: 'router' },
-      { id: 'cl', kind: 'router' },
+      { id: 'direct-vendor', kind: 'model-source', servesModels: true, endpoint: 'direct' },
       { id: 'acct-a', kind: 'model-source', reachedVia: 'ag' },
-      { id: 'acct-c', kind: 'model-source', reachedVia: 'cl' },
     ],
-    dispatch: { providers: { 'acct-a': { harness: 'paseo' }, 'acct-c': { harness: 'paseo' } } },
+    dispatch: {
+      providers: { 'acct-a': { harness: 'paseo' }, 'direct-vendor': { harness: 'direct' } },
+    },
   };
-  const catalogue = [
-    { gateway: 'ag', upstream: 'ag', modelId: 'ag/model-fallback', evidence: 2 },
-    { gateway: 'cl', upstream: 'cl', modelId: 'cl/model-fallback', evidence: 1 },
-  ];
+  const catalogue = [{ gateway: 'ag', upstream: 'ag', modelId: 'ag/model-fallback', evidence: 2 }];
   routes.recordResult(store, catalogue[0].modelId, 'ag', { ok: false, status: 451 }, now);
   const counts = [];
   const result = await cli.assembleForDispatch(
     { candidates: catalogue },
     [
       { id: 'account-a', provider: 'acct-a' },
-      { id: 'account-c', provider: 'acct-c' },
+      { id: 'account-direct', provider: 'direct-vendor', models: ['model-fallback'] },
     ],
     registry,
     {
@@ -622,22 +639,68 @@ test('live assembly falls back from a parked alias to another same-model gateway
       probeCap: 2,
       probeRoute: async (_model, route) => {
         counts.push(route);
-        return { ok: route === 'cl' };
+        return { ok: route === 'direct-vendor' };
       },
       offerings: [],
       registryAccounts: [],
       onAccountCount: (accountId, count) => counts.push(`${accountId}:${count}`),
     }
   );
-  assert.ok(
-    result.some(
-      (candidate) => candidate.gateway === 'cl' && candidate.modelId === 'cl/model-fallback'
-    )
-  );
+  assert.ok(!result.some((candidate) => candidate.gateway === 'ag'));
   assert.ok(
     store.events.some(
       (event) =>
-        event.type === 'route_fallback' && event.failedPath === 'ag' && event.chosenPath === 'cl'
+        event.type === 'route_fallback' &&
+        event.failedPath === 'ag' &&
+        event.chosenPath === 'direct-vendor'
+    )
+  );
+});
+
+test('fallback assembly probes every discovered direct and harness path', async (t) => {
+  const { file, store } = temporaryStore(t);
+  const now = 1_800_000_000_000;
+  const registry = {
+    sources: [
+      { id: 'ag', kind: 'router' },
+      { id: 'vendor-a', kind: 'model-source', reachedVia: 'ag' },
+      { id: 'direct-vendor', kind: 'model-source', servesModels: true },
+    ],
+    dispatch: {
+      providers: {
+        'vendor-a': { harness: 'paseo' },
+        'direct-vendor': { harness: 'direct' },
+      },
+    },
+  };
+  const catalogue = [{ gateway: 'ag', upstream: 'ag', modelId: 'ag/model-every-path' }];
+  routes.recordResult(store, catalogue[0].modelId, 'ag', { ok: false, status: 451 }, now);
+  const attempted = [];
+  await cli.assembleForDispatch(
+    { candidates: catalogue },
+    [{ id: 'direct-account', provider: 'direct-vendor' }],
+    registry,
+    {
+      routeHealth: store,
+      routeHealthFile: file,
+      refreshRoutes: true,
+      now: now + 1,
+      probeCap: 4,
+      probeRoute: async (_model, route) => {
+        attempted.push(route);
+        return { ok: route === 'direct-vendor' };
+      },
+      offerings: [],
+      registryAccounts: [],
+    }
+  );
+  assert.deepEqual(attempted, ['direct-vendor']);
+  assert.ok(
+    store.events.some(
+      (event) =>
+        event.type === 'route_fallback' &&
+        event.failedPath === 'ag' &&
+        event.chosenPath === 'direct-vendor'
     )
   );
 });

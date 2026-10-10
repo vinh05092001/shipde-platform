@@ -712,10 +712,11 @@ function poolAccountCandidates(opts) {
           );
         });
         if (
-          modelRows.length > 0 &&
-          !modelRows.some((entry) =>
-            health.isEligible(routeHealth, model, entry.gateway || entry.upstream, o.now)
-          )
+          modelRows.length === 0 ||
+          !modelRows.some((entry) => {
+            const routeId = entry.gateway || entry.upstream;
+            return routeId && health.isEligible(routeHealth, model, routeId, o.now);
+          })
         )
           continue;
       }
@@ -933,15 +934,10 @@ function gatewayAccountCandidates(opts) {
         const routeRecord = routeHealth.paths[normalized + '|' + gateway];
         const available = routeRecord
           ? health.isEligible(routeHealth, modelId, gateway, routeNow)
-          : row.handAdded
-            ? Boolean(
-                (probeOk && probeOk(modelId, gateway)) ||
-                (o.probeEvidence && o.probeEvidence(modelId, gateway))
-              )
-            : Boolean(
-                (probeOk && probeOk(modelId, gateway)) ||
-                (o.probeEvidence && o.probeEvidence(modelId, gateway))
-              );
+          : Boolean(
+              (probeOk && probeOk(modelId, gateway)) ||
+              (o.probeEvidence && o.probeEvidence(modelId, gateway))
+            );
         if (!available) continue;
       } else if (probeOk && !probeOk(modelId, gateway)) {
         continue;

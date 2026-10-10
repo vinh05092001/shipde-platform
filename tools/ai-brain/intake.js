@@ -788,11 +788,14 @@ async function runIntake(opts, deps) {
         )),
     {
       catalogue: catalogue.models,
+      fallbackCatalogue: catalogue.models,
+      skipFallbackDiscovery: true,
       registry: d.registry || sourcesApi.loadSources(),
       accounts,
       now,
       cap: d.probeCap,
       timeoutMs: d.probeTimeoutMs,
+      allowUnprobed: true,
     }
   );
   if (d.persistRouteHealth !== false) routeHealthApi.saveStore(routeHealthFile, routeHealth);
