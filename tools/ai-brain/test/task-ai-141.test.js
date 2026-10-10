@@ -10,6 +10,7 @@ const { generateCandidates } = require('../candidates');
 const { rankForProfile } = require('../routing');
 const sources = require('../sources');
 const { candidateKey } = require('../discovery/identity');
+const evidence = require('../evidence');
 
 const roots = [];
 function fixtureRoot() {
@@ -120,4 +121,143 @@ test('intake catalogue strings plus --external-workers agy-pool produce pool can
   }
   assert.equal(decision.rejected.length, 7);
   assert.ok(decision.rejected.every((row) => row.reasonCode.startsWith('PROOF_FLOOR_NOT_MET')));
+});
+
+test('intake pool writer inherits backend WORK_ITEM_PASS from blocked 9router ag path', async () => {
+  const root = fixtureRoot();
+  const backendModel = 'gemini-3.1-pro-low';
+  const agCandidate = {
+    harness: 'paseo',
+    accessPath: 'http',
+    gateway: '9router',
+    upstream: 'ag',
+    accountId: 'ninerouter-gemini',
+    quotaScope: 'ninerouter-gemini',
+    modelId: 'ag/' + backendModel,
+    source: '9router',
+  };
+  const runsDir = path.join(root, 'pool-runs');
+  const accountDir = path.join(runsDir, 'agy01');
+  fs.mkdirSync(accountDir, { recursive: true });
+  fs.writeFileSync(path.join(accountDir, 'result.json'), JSON.stringify({ state: 'completed' }));
+  fs.writeFileSync(
+    path.join(accountDir, 'out.txt'),
+    'Gemini Models\tWeekly Limit Remaining\t80%\nGemini Models\tFive Hour Limit Remaining\t80%\n'
+  );
+  evidence.recordProbe(path.join(root, 'evidence'), agCandidate, {
+    status: 'passed',
+    proofLevel: evidence.ProofLevel.WORK_ITEM_PASS,
+    workItemId: 'FIXTURE-AI-141',
+  });
+  evidence.recordProbe(path.join(root, 'evidence'), agCandidate, {
+    status: 'failed',
+    httpStatus: 429,
+    body: 'rate limited on the 9router ag path',
+  });
+  const proofData = evidence.loadEvidence(path.join(root, 'evidence'));
+  assert.equal(evidence.isCandidateBlocked(proofData, agCandidate).blocked, true);
+
+  const result = await intake.runIntake(
+    { workItem: 'FIXTURE-AI-141' },
+    {
+      root,
+      baseSha: 'c'.repeat(40),
+      readRegisterRow: () => ({ dependencies: '' }),
+      readRegisterRows: () => [],
+      listAccounts: () => [],
+      hasAgyPoolQuota: true,
+      readHistory: () => [],
+      isAncestorOf: () => true,
+      read9routerModels: async () => ({ ok: true, models: [backendModel] }),
+      readAgyModels: async () => ({ ok: true, models: [] }),
+      readEvidenceModels: async () => ({ ok: true, models: [] }),
+    }
+  );
+  const candidates = generateCandidates({
+    registry: sources.loadSources(),
+    catalogue: JSON.parse(fs.readFileSync(path.join(result.runDir, 'catalogue.json'), 'utf8')),
+    accounts: JSON.parse(fs.readFileSync(path.join(result.runDir, 'accounts.json'), 'utf8')),
+    externalWorkers: 'agy-pool',
+    fakeRunsDir: runsDir,
+    platform: 'win32',
+    spawnSync: () => ({ status: 0, stdout: '', stderr: '' }),
+    cacheFile: null,
+    evidenceData: proofData,
+  });
+  const poolCandidate = candidates.find(
+    (candidate) => candidate.source === 'agy-pool' && candidate.modelId === backendModel
+  );
+  assert.ok(poolCandidate, 'intake discovered the pool backend model');
+  const profile = {
+    taskId: 'FIXTURE-AI-141',
+    role: 'writer',
+    complexity: 'standard',
+    expectedDuration: 60000,
+    latencyPriority: 'normal',
+    requiredCapabilities: [],
+    contextSize: 1,
+    proofFloor: 'WORK_ITEM_PASS',
+    qualityFloor: 0,
+    costCeiling: 1000000,
+    currentWorkload: 0,
+    resourceCeiling: 4,
+    forbiddenFailureDomains: [],
+  };
+  const decision = rankForProfile(
+    [poolCandidate],
+    profile,
+    { weightProfile: 'BALANCED', weights: { latency: 34, quality: 33, cost: 33 } },
+    {
+      now: Date.now(),
+      evidenceData: proofData,
+      priors: {},
+      headrooms: { agy01: { status: 'available' } },
+      useStoredQuota: false,
+    }
+  );
+
+  assert.equal(decision.chosen, candidateKey(poolCandidate));
+  assert.equal(decision.ranking[0].source, 'agy-pool');
+  const proof = require('../routing').proofObservedWithSource(proofData, poolCandidate);
+  assert.equal(proof.level, 'WORK_ITEM_PASS');
+  assert.equal(proof.transferred, true);
+  assert.equal(proof.source, candidateKey(agCandidate));
+  assert.equal(proof.sourceModel, 'ag/' + backendModel);
+
+  const profileFile = path.join(root, 'profile.json');
+  const decisionDir = path.join(root, 'decisions');
+  fs.mkdirSync(decisionDir, { recursive: true });
+  fs.writeFileSync(profileFile, JSON.stringify(profile));
+  const { runProfileDispatch } = require('../routing');
+  const dispatched = await runProfileDispatch(
+    { profile: profileFile, root, 'decision-dir': decisionDir },
+    {
+      rootDir: root,
+      candidates: [poolCandidate],
+      evidenceDir: path.join(root, 'evidence'),
+      decisionDir,
+      now: Date.now(),
+      priors: {},
+      headrooms: { agy01: { status: 'open' } },
+      useStoredQuota: false,
+      log: () => {},
+      error: () => {},
+      exit: () => {},
+    }
+  );
+  assert.equal(dispatched.pinnedCandidateKey, candidateKey(poolCandidate));
+  const logFile = fs.readdirSync(decisionDir).find((file) => file.endsWith('.jsonl'));
+  const logRow = JSON.parse(fs.readFileSync(path.join(decisionDir, logFile), 'utf8').trim());
+  const selectedRow = logRow.ranking.find(
+    (row) => row.candidateKey === candidateKey(poolCandidate)
+  );
+  assert.deepEqual(selectedRow.proofSource, {
+    candidateKey: candidateKey(agCandidate),
+    modelId: 'ag/' + backendModel,
+  });
+
+  const unknown = Object.assign({}, poolCandidate, {
+    modelId: 'unrecognized-route/' + backendModel,
+  });
+  assert.equal(require('../routing').proofObservedWithSource(proofData, unknown).level, null);
 });

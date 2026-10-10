@@ -36,7 +36,14 @@ const ranking = require('./ranking');
 const quotaStore = require('./quota-store');
 const candidatesApi = require('./candidates');
 const { loadPriors, priorFor } = require('./priors');
-const { candidateKey, parseCandidateKey } = require('./discovery/identity');
+const {
+  candidateKey,
+  parseCandidateKey,
+  registryPrefixes,
+  modelBase,
+} = require('./discovery/identity');
+const sourceRegistry = require('./sources');
+const BACKEND_MODEL_PREFIXES = registryPrefixes(sourceRegistry.loadSources());
 const { contextRefusal } = require('./harness');
 
 /** Task roles a profile may name. Planner stays out: Codex plans, it is not routed. */
@@ -499,17 +506,80 @@ function hasQuotaAccountReadings(home, storePath) {
  * proofLevel too, and counting it would let a candidate that just failed pose
  * as proven, so only passed items are considered.
  */
-function proofObserved(evidenceData, candidate) {
+function proofObservedWithSource(evidenceData, candidate) {
   let items = evidence.getEvidence(evidenceData, candidate) || [];
+  let proofSource = items.length > 0 ? candidateKey(candidate) : null;
   if (items.length === 0 && evidenceData && candidate) {
     const keyed = evidenceData[candidateKey(candidate)];
-    if (Array.isArray(keyed)) items = keyed;
+    if (Array.isArray(keyed)) {
+      items = keyed;
+      if (items.length > 0) proofSource = candidateKey(candidate);
+    }
   }
   if (items.length === 0 && Array.isArray(candidate && candidate.evidence)) {
     items = candidate.evidence;
+    if (items.length > 0) proofSource = candidateKey(candidate);
   }
   const passed = (items || []).filter((e) => e.status === 'passed');
-  return evidence.proofLevelOf(passed);
+  const direct = evidence.proofLevelOf(passed);
+  if (direct) return { level: direct, source: proofSource, transferred: false };
+
+  // Proof describes the backend model's ability; quota, cooldown and failures
+  // remain attached to the candidate identity above. Transfer only the
+  // highest proof tier, and only when both model ids normalize to a known,
+  // non-empty backend id under registry-declared route prefixes.
+  const targetModel = candidate && (candidate.modelId || candidate.model);
+  const targetBase = backendModelBase(targetModel, BACKEND_MODEL_PREFIXES, candidate);
+  if (!targetBase) {
+    return { level: null, source: null, transferred: false };
+  }
+  let best = null;
+  for (const combo of (evidenceData && evidenceData.combinations) || []) {
+    const parsed = {
+      harness: combo.harness,
+      accessPath: combo.accessPath,
+      gateway: combo.gateway,
+      upstream: combo.upstream,
+      account: combo.accountId,
+      quotaScope: combo.quotaScope,
+      modelId: combo.modelId || combo.model,
+    };
+    const sourceBase = backendModelBase(parsed.modelId, BACKEND_MODEL_PREFIXES, parsed);
+    if (!sourceBase || sourceBase !== targetBase) continue;
+    const level = evidence.proofLevelOf(
+      (combo.evidence || []).filter((e) => e.status === 'passed')
+    );
+    if (level !== evidence.ProofLevel.WORK_ITEM_PASS) continue;
+    if (!best) best = { level, source: candidateKey(parsed), sourceModel: parsed.modelId };
+  }
+  return best
+    ? { level: best.level, source: best.source, sourceModel: best.sourceModel, transferred: true }
+    : { level: null, source: null, transferred: false };
+}
+
+function backendModelBase(modelId, prefixes, identity) {
+  if (typeof modelId !== 'string' || !modelId.trim() || modelId.includes('*')) return '';
+  let base = modelBase(modelId, prefixes);
+  const routePrefix = (identity && identity.upstream ? identity.upstream + '/' : '') || '';
+  if (base.includes('/')) {
+    // A routed model id is transferable only when its leading alias agrees
+    // with the candidate's recorded upstream. Otherwise its backend identity
+    // is ambiguous and must remain path-specific.
+    if (!routePrefix || !base.startsWith(routePrefix)) return '';
+    base = base.slice(routePrefix.length);
+  } else if (identity && identity.gateway) {
+    // Gateway evidence without its route alias is not enough to prove which
+    // backend the gateway selected.
+    return '';
+  }
+  // An id beginning with an unrecognized route prefix is ambiguous. Only
+  // strip prefixes declared by sources.json, then accept a concrete model id.
+  if (!base || base === '*' || base.includes('*') || !/[a-z0-9]/i.test(base)) return '';
+  return base;
+}
+
+function proofObserved(evidenceData, candidate) {
+  return proofObservedWithSource(evidenceData, candidate).level;
 }
 
 function candidateContextWindow(candidate) {
@@ -811,7 +881,8 @@ function rankForProfile(candidates, profile, assessment, ctx) {
     }
 
     if (profile.proofFloor !== 'NONE') {
-      const observed = proofObserved(context.evidenceData, c);
+      const observedProof = proofObservedWithSource(context.evidenceData, c);
+      const observed = observedProof.level;
       const observedRank = observed ? evidence.ProofRank[observed] : 0;
       if (observedRank < evidence.ProofRank[profile.proofFloor]) {
         reject('PROOF_FLOOR_NOT_MET:' + (observed || 'NONE'), 'candidate');
@@ -1255,6 +1326,12 @@ async function runProfileDispatch(args, deps) {
       reservationsHeld: c.reservationsHeld || 0,
       quotaReasonCode: c.quotaReasonCode || null,
       proof: proofObserved(evidenceData, c) || 'NONE',
+      proofSource: (() => {
+        const proof = proofObservedWithSource(evidenceData, c);
+        return proof.transferred
+          ? { candidateKey: proof.source, modelId: proof.sourceModel }
+          : null;
+      })(),
       capabilityEvidence: c.capabilities || {},
     })),
     rejected: jsonRejectedSlice(result, profile),
@@ -1549,6 +1626,7 @@ module.exports = {
   sameFailureDomain,
   matchesForbiddenDomain,
   proofObserved,
+  proofObservedWithSource,
   rankForProfile,
   scoreForProfile,
   latencyScoreOf,
