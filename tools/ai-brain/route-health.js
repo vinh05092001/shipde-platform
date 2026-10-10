@@ -307,6 +307,31 @@ function discoverModelPaths(modelId, registry, accounts, catalogue) {
     });
     if (declared) addPath(source.id, source, account, account.evidence);
   }
+  // A gateway catalogue route can also be used by another enabled account
+  // whose dispatch provider rides that gateway. Keep each account route
+  // distinct so quota, harness and retry health remain path scoped.
+  for (const account of accounts || []) {
+    if (!account || account.enabled === false) continue;
+    const source = sources.get(account.provider);
+    const dispatch = providers[String(account.provider || '').toLowerCase()];
+    if (
+      !source ||
+      !dispatch ||
+      sourcesApi.isRetired(source.id, registry) ||
+      sourcesApi.isDeferred(source.id, registry)
+    )
+      continue;
+    const gateway = source.kind === 'router' ? source.id : source.reachedVia || null;
+    if (!gateway) continue;
+    const routeCatalogue = (catalogue || []).filter((row) => {
+      const id = row && (row.modelId || row.model);
+      return id && normalizeModelId(id) === normalized && row.gateway === gateway;
+    });
+    if (routeCatalogue.length) {
+      const gatewaySource = sources.get(gateway);
+      addPath(gateway, gatewaySource || source, account, routeCatalogue[0].evidence);
+    }
+  }
   return [...known.values()];
 }
 

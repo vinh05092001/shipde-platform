@@ -879,7 +879,7 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
       : null;
   const refreshedHealth = routeHealth;
   const persistHealth = () => {
-    if (opts.persistRouteHealth !== false && refresh) {
+    if (refresh) {
       return Promise.resolve(refresh).then((result) => {
         return resolveFallbackRoutes(
           routeHealth,
@@ -889,7 +889,7 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
           opts
         ).then(() => {
           if (opts.onRouteRefresh) opts.onRouteRefresh(result);
-          routeHealthApi.saveStore(healthFile, routeHealth);
+          if (opts.persistRouteHealth !== false) routeHealthApi.saveStore(healthFile, routeHealth);
           return routeHealth;
         });
       });
@@ -971,6 +971,9 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
         registry: resolvedRegistry,
         accounts: accounts || [],
         catalogue: (discoveryCat && discoveryCat.candidates) || [],
+        routeHealth,
+        now: opts.now,
+        probeEvidence: opts.probeEvidence,
         evidenceData: opts.evidenceData,
         fakeRunsDir: opts.fakeRunsDir,
         home: opts.home,

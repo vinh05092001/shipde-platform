@@ -344,15 +344,15 @@ function planDispatch(items, accounts, context) {
     });
 
     for (const item of queue) {
+      if (totalLoad >= limits.maxTotal) {
+        deferred.push(waiting(item, 'TOTAL_LIMIT', 'đã đạt trần ' + limits.maxTotal + ' phiên'));
+        continue;
+      }
+
       // The invariant, checked before anything else so it can never be traded
       // away by a later condition.
       if (busyWorkItems.has(item.workItemId)) {
         deferred.push(waiting(item, 'WORK_ITEM_ALREADY_WRITING', 'đầu mục này đã có writer'));
-        continue;
-      }
-
-      if (totalLoad >= limits.maxTotal) {
-        deferred.push(waiting(item, 'TOTAL_LIMIT', 'đã đạt trần ' + limits.maxTotal + ' phiên'));
         continue;
       }
 

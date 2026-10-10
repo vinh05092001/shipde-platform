@@ -696,6 +696,29 @@ function poolAccountCandidates(opts) {
     }
 
     for (const model of poolModels) {
+      const routeHealth = o.routeHealth;
+      if (routeHealth) {
+        const health = require('./route-health');
+        const normalized = health.normalizeModelId(model);
+        const modelRows = catalogue.filter((entry) => {
+          if (!entry || typeof entry !== 'object') return false;
+          const entryModel = entry.modelId || entry.model || entry.id || '';
+          return (
+            entryModel === model ||
+            entryModel === 'ag/' + model ||
+            entryModel === 'antigravity/' + model ||
+            ((entry.upstream === 'ag' || entry.upstream === 'antigravity') &&
+              entryModel.replace(/^(ag|antigravity)\//, '') === model)
+          );
+        });
+        if (
+          modelRows.length > 0 &&
+          !modelRows.some((entry) =>
+            health.isEligible(routeHealth, model, entry.gateway || entry.upstream, o.now)
+          )
+        )
+          continue;
+      }
       const family =
         familyOf(model) ||
         (model.includes('gemini')
@@ -810,12 +833,18 @@ function gatewayAccountCandidates(opts) {
   const o = opts || {};
   const registry = o.registry;
   const accounts = o.accounts || [];
-  const catalogue = o.catalogue || [];
+  const catalogueInput = o.catalogue || [];
   const routeHealth = o.routeHealth;
   const probeOk = o.probeOk;
   const excluded = new Set((o.excludeModels || []).map((id) => String(id).toLowerCase()));
   const routeNow = Number(o.now) || Date.now();
-  if (!registry || catalogue.length === 0) return [];
+  if (!registry || catalogueInput.length === 0) return [];
+  const catalogue = catalogueInput.filter((row) => {
+    const modelId = typeof row === 'string' ? row : row && (row.modelId || row.model);
+    const upstream = row && typeof row === 'object' ? row.upstream : null;
+    const parsed = parsePrefix(modelId);
+    return Boolean(parsed && (!upstream || upstream === parsed.upstream));
+  });
 
   const sourceById = new Map();
   for (const s of registry.sources || []) sourceById.set(s.id, s);
@@ -863,12 +892,22 @@ function gatewayAccountCandidates(opts) {
     );
     let contributed = 0;
     const catalogueRows = catalogue.filter((row) => row && row.gateway === gateway);
+    if (
+      catalogueRows.some(
+        (row) => !row.upstream || !(row.modelId || row.model || '').startsWith(row.upstream + '/')
+      )
+    ) {
+      continue;
+    }
+    const catalogueModelIds = new Set(
+      catalogueRows.map((row) => String(row.modelId || row.model || '').toLowerCase())
+    );
     const rowsByModel = new Map(
       catalogueRows.map((row) => [String(row.modelId || row.model || '').toLowerCase(), row])
     );
     const eligibleRows = catalogueRows.slice();
     for (const modelId of additions) {
-      if (!rowsByModel.has(modelId) && !excludes.has(modelId)) {
+      if (!catalogueModelIds.has(modelId) && !excludes.has(modelId)) {
         const prefix = parsePrefix(modelId);
         if (!prefix) continue;
         const addition = {
@@ -887,6 +926,7 @@ function gatewayAccountCandidates(opts) {
       const modelId = row.modelId || row.model || '';
       if (!modelId || excluded.has(modelId.toLowerCase()) || excludes.has(modelId.toLowerCase()))
         continue;
+      if (!upstream || !modelId.startsWith(upstream + '/')) continue;
       if (routeHealth) {
         const health = require('./route-health');
         const normalized = health.normalizeModelId(modelId);
@@ -909,8 +949,6 @@ function gatewayAccountCandidates(opts) {
       // An alias is the prefix the model id itself carries. A row whose id
       // does not begin with its own upstream names no reachable alias, and
       // inventing one is exactly how a candidate that can never run is planned.
-      if (!upstream || !modelId.startsWith(upstream + '/')) continue;
-
       out.push({
         harness,
         accessPath,
