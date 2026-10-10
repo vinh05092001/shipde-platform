@@ -1068,15 +1068,8 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
       const key = routeHealthApi.normalizeModelId(modelId) + '|' + gateway;
       const record = routeHealth.paths[key];
       return record
-        ? routeHealthApi.isEligible(routeHealth, modelId, gateway, opts.now) ||
-            routeHealthApi.isDue(routeHealth, modelId, gateway, opts.now)
-        : Boolean(
-            (opts.probeEvidence && opts.probeEvidence(modelId, gateway)) ||
-            ((opts.trustCatalogueProbe === true || opts.refreshRoutes === true) &&
-              catalogueRows.some(
-                (row) => (row.modelId || row.model) === modelId && row.gateway === gateway
-              ))
-          );
+        ? routeHealthApi.isEligible(routeHealth, modelId, gateway, opts.now)
+        : Boolean(opts.probeEvidence && opts.probeEvidence(modelId, gateway));
     });
   };
   if (!refresh) return buildCandidates();

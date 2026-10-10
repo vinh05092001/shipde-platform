@@ -715,7 +715,11 @@ function poolAccountCandidates(opts) {
           modelRows.length === 0 ||
           !modelRows.some((entry) => {
             const routeId = entry.gateway;
-            return routeId && health.isEligible(routeHealth, model, routeId, o.now);
+            const record = routeId && routeHealth.paths[normalized + '|' + routeId];
+            return Boolean(
+              (record && health.isEligible(routeHealth, model, routeId, o.now)) ||
+              (!record && o.probeEvidence && o.probeEvidence(model, routeId))
+            );
           })
         )
           continue;
@@ -893,13 +897,6 @@ function gatewayAccountCandidates(opts) {
     );
     let contributed = 0;
     const catalogueRows = catalogue.filter((row) => row && row.gateway === gateway);
-    if (
-      catalogueRows.some(
-        (row) => !row.upstream || !(row.modelId || row.model || '').startsWith(row.upstream + '/')
-      )
-    ) {
-      continue;
-    }
     const catalogueModelIds = new Set(
       catalogueRows.map((row) => String(row.modelId || row.model || '').toLowerCase())
     );

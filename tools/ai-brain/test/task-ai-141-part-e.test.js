@@ -106,15 +106,16 @@ test('all route failures retain per-path reasons and a due 402 retry restores im
     { path: 'p3', reason: 'UNAVAILABLE' },
   ]);
   const retryAt = Date.parse(store.paths['model-x|p2'].nextCheckAt);
-  store.paths['model-x|p2'].nextCheckAt = new Date(now).toISOString();
+  const retryResponse = { ok: true };
   let called = 0;
   const checked = await routes.recheckDue(
     store,
-    async () => {
+    async (_model, routeId) => {
       called += 1;
-      return { ok: true };
+      assert.equal(routeId, 'p2');
+      return retryResponse;
     },
-    { now: now + 1, cap: 1 }
+    { now: retryAt + 1, cap: 1 }
   );
   assert.equal(called, 1);
   assert.equal(checked.restored.length, 1);

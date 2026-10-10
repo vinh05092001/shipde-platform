@@ -167,7 +167,7 @@ async function routeFallback(modelId, failedPath, paths, probe, store, options) 
         result && result.status,
         result && (result.message || result.error)
       );
-      if (attempt !== 0 || !['UNAVAILABLE'].includes(retryReason)) break;
+      if (attempt !== 0 || retryReason !== 'UNAVAILABLE') break;
       if (o.sleep) await o.sleep(o.retryBackoffMs ?? 1000);
       else await new Promise((resolve) => setTimeout(resolve, o.retryBackoffMs ?? 1000));
     }
