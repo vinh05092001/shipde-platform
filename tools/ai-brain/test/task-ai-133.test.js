@@ -38,6 +38,8 @@ const cli = require('../cli');
 const reviewManifestApi = require('../review-manifest');
 const orchestrate = require('../orchestrate');
 
+const PS_BIN = process.platform === 'win32' ? 'powershell.exe' : 'pwsh';
+
 // Use .upstream-tmp instead of /tmp or os.tmpdir()
 const BASE_TEST_DIR = path.join(__dirname, '..', '..', '..', '.upstream-tmp', 'task-ai-133');
 if (!fs.existsSync(BASE_TEST_DIR)) {
@@ -868,7 +870,7 @@ test('GM-R04: control.ps1 verdict source accepts valid manifest and rejects open
   try {
     stdout = cp
       .execSync(
-        `powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${ps1Script}"`,
+        `${PS_BIN} -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${ps1Script}"`,
         { encoding: 'utf8' }
       )
       .trim();
@@ -896,7 +898,7 @@ test('GM-R04: control.ps1 verdict source accepts valid manifest and rejects open
   try {
     stdout2 = cp
       .execSync(
-        `powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${ps1Script}"`,
+        `${PS_BIN} -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${ps1Script}"`,
         { encoding: 'utf8' }
       )
       .trim();
@@ -1688,10 +1690,13 @@ test('GM-R04: control.ps1 fails closed when node is missing or unavailable', asy
 
   let stdout = '';
   try {
-    stdout = cp.execSync(`powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${ps1Script}"`, {
-      encoding: 'utf8',
-      timeout: 30000,
-    });
+    stdout = cp.execSync(
+      `${PS_BIN} -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${ps1Script}"`,
+      {
+        encoding: 'utf8',
+        timeout: 30000,
+      }
+    );
   } catch (e) {
     stdout = e.stdout || '';
   }

@@ -955,9 +955,9 @@ function Get-ShipDePromptForItem {
 
     $workspace = if ($Item.Author -eq "GEMINI") { $script:Paths.Gemini } elseif ($Item.Author -eq "CLAUDE") { $script:Paths.Claude } else { $script:Paths.Dsh }
     $promptName = if ($Item.Author -eq "GEMINI") { "GEMINI-START-PROMPT.md" } elseif ($Item.Author -eq "CLAUDE") { "CLAUDE-START-PROMPT.md" } else { "NINEROUTER-START-PROMPT.md" }
-    $promptPath = Join-Path $workspace "docs\product-spec\docs\10-ai-collaboration\$promptName"
+    $promptPath = Join-Path $workspace "docs/product-spec/docs/10-ai-collaboration/$promptName"
     if (-not (Test-Path $promptPath)) {
-        $promptPath = Join-Path $workspace "docs\product-spec\docs\10-ai-collaboration\GEMINI-START-PROMPT.md"
+        $promptPath = Join-Path $workspace "docs/product-spec/docs/10-ai-collaboration/GEMINI-START-PROMPT.md"
     }
     if (-not (Test-Path $promptPath)) {
         throw "Author prompt is missing after branch checkout: $promptPath"
@@ -1438,7 +1438,7 @@ function Start-ShipDeFixRound {
     Invoke-ShipDeGit -Path $workspace -Arguments @("merge", "--ff-only", "origin/$($Item.Branch)") | Out-Null
 
     $promptName = if ($Item.Author -eq "GEMINI") { "GEMINI-START-PROMPT.md" } else { "NINEROUTER-START-PROMPT.md" }
-    $promptPath = Join-Path $workspace "docs\product-spec\docs\10-ai-collaboration\$promptName"
+    $promptPath = Join-Path $workspace "docs/product-spec/docs/10-ai-collaboration/$promptName"
     $text = Get-Content $promptPath -Raw -Encoding UTF8
     $section = ($text -split "## Review-fix prompt", 2)[1]
     if ([string]::IsNullOrWhiteSpace($section)) {
@@ -2781,7 +2781,7 @@ function Get-ShipDeExactHeadReviewManifestVerdict {
     }
     $userHome = if (-not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) { $env:USERPROFILE } elseif (-not [string]::IsNullOrWhiteSpace($env:HOME)) { $env:HOME } else { "" }
     if (-not [string]::IsNullOrWhiteSpace($userHome)) {
-        $candidates += (Join-Path $userHome ".shipde\decisions")
+        $candidates += ([System.IO.Path]::Combine($userHome, ".shipde", "decisions"))
     }
 
     $expectedWorkItemId = $null
@@ -2800,12 +2800,17 @@ function Get-ShipDeExactHeadReviewManifestVerdict {
         return $null
     }
 
-    if ([string]::IsNullOrWhiteSpace($RepoDir)) {
-        $RepoDir = Join-Path $PSScriptRoot "..\.."
+    $repoRootFallback = if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
+        Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
+    } else {
+        (Get-Location).Path
     }
-    $reviewManifestJs = Join-Path $RepoDir "tools\ai-brain\review-manifest.js"
+    if ([string]::IsNullOrWhiteSpace($RepoDir)) {
+        $RepoDir = $repoRootFallback
+    }
+    $reviewManifestJs = [System.IO.Path]::Combine($RepoDir, "tools", "ai-brain", "review-manifest.js")
     if (-not (Test-Path -LiteralPath $reviewManifestJs -PathType Leaf)) {
-        $reviewManifestJs = Join-Path (Join-Path $PSScriptRoot "..\..") "tools\ai-brain\review-manifest.js"
+        $reviewManifestJs = [System.IO.Path]::Combine($repoRootFallback, "tools", "ai-brain", "review-manifest.js")
     }
 
     foreach ($dir in $candidates) {
@@ -2925,11 +2930,13 @@ function Get-ShipDeExactHeadReviewManifestVerdict {
 
                 # Condition (d): matched by an imported review evidence entry or review file for that SHA
                 $hasReviewProof = $false
+                $matchingArtifactPath = $null
                 $artifactCandidates = @(
-                    (Join-Path $dir "review-artifact-$targetWorkItemId.md"),
+                    (Join-Path $dir ("review-artifact-{0}.md" -f $targetWorkItemId)),
                     (Join-Path $dir "review-artifact.md"),
-                    (Join-Path $RepoDir "review-artifact-$targetWorkItemId.md"),
-                    (Join-Path $RepoDir "docs\product-spec\work-items\$targetWorkItemId.md")
+                    (Join-Path $RepoDir ("review-artifact-{0}.md" -f $targetWorkItemId)),
+                    ([System.IO.Path]::Combine($RepoDir, "docs", "product-spec", "work-items", ("{0}.md" -f $targetWorkItemId))),
+                    ([System.IO.Path]::Combine($repoRootFallback, "docs", "product-spec", "work-items", ("{0}.md" -f $targetWorkItemId)))
                 )
                 foreach ($artPath in $artifactCandidates) {
                     if (Test-Path -LiteralPath $artPath -PathType Leaf) {
@@ -2937,13 +2944,17 @@ function Get-ShipDeExactHeadReviewManifestVerdict {
                             $artText = Get-Content -LiteralPath $artPath -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
                             if ($artText -and $artText.ToLowerInvariant().Contains($HeadSha.ToLowerInvariant())) {
                                 $hasReviewProof = $true
+                                $matchingArtifactPath = $artPath
                                 break
                             }
                         } catch { }
                     }
                 }
                 if (-not $hasReviewProof) {
-                    $evidenceJson = Join-Path $RepoDir "tools\ai-brain\data\evidence\evidence.json"
+                    $evidenceJson = [System.IO.Path]::Combine($RepoDir, "tools", "ai-brain", "data", "evidence", "evidence.json")
+                    if (-not (Test-Path -LiteralPath $evidenceJson -PathType Leaf)) {
+                        $evidenceJson = [System.IO.Path]::Combine($repoRootFallback, "tools", "ai-brain", "data", "evidence", "evidence.json")
+                    }
                     if (Test-Path -LiteralPath $evidenceJson -PathType Leaf) {
                         try {
                             $evText = Get-Content -LiteralPath $evidenceJson -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
@@ -3008,6 +3019,9 @@ function Get-ShipDeExactHeadReviewManifestVerdict {
                 $artifactCandidate = Join-Path $file.DirectoryName ("review-artifact-{0}.md" -f $targetWorkItemId)
                 if (-not (Test-Path -LiteralPath $artifactCandidate -PathType Leaf)) {
                     $artifactCandidate = Join-Path $file.DirectoryName "review-artifact.md"
+                }
+                if (-not (Test-Path -LiteralPath $artifactCandidate -PathType Leaf) -and -not [string]::IsNullOrWhiteSpace($matchingArtifactPath)) {
+                    $artifactCandidate = $matchingArtifactPath
                 }
                 $nodeOut = & node $reviewManifestJs $file.FullName $RepoDir $HeadSha $targetWorkItemId $artifactCandidate 2>$null
                 if ($LASTEXITCODE -ne 0) {
@@ -3288,7 +3302,7 @@ $script:AoRouterRuntimeFile = Join-Path $script:HandoffRoot "ao-router-runtime.j
 # SHIPDE_NINEROUTER_PROFILE override.
 $script:NineRouterProfile = Get-ShipDeNineRouterProfilePath -ProfilePath $NineRouterProfilePath
 $script:NineRouterPort = 20128
-$script:ExpectedAoVersion = Get-ShipDePinnedAoVersion
+$script:ExpectedAoVersion = Get-ShipDePinnedAoVersion -ManifestPath ([System.IO.Path]::Combine((Split-Path (Split-Path $PSScriptRoot -Parent) -Parent), "tools", "ecosystem-manifest.json"))
 $script:AoExecutablePath = $null
 
 function Assert-ShipDeAoCommand {
@@ -9228,7 +9242,11 @@ Full review comments:
         }
     }
 
-    $scriptRepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+    $scriptRepoRoot = if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
+        Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
+    } else {
+        (Get-Location).Path
+    }
     $aiToolchainPath = Join-Path $scriptRepoRoot "docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md"
     if (Test-Path $aiToolchainPath) {
         $aiToolchainContent = Get-Content $aiToolchainPath -Raw -Encoding UTF8
