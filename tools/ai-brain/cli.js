@@ -3102,16 +3102,21 @@ function main() {
   // (QUALIFIED, ALREADY_QUALIFIED, NOT_QUALIFIED, RESULT_STALE,
   // RESULT_MISSING); exit 2 for bad argv.
   if (command === 'qualify') {
-    if (process.argv.slice(3).some((arg) => arg === '--auto')) {
+    if (process.argv[3] === '--auto') {
       const { runAutoCli } = require('./qualification-auto');
       runAutoCli(process.argv.slice(3))
         .then((code) => {
           process.exitCode = code;
         })
         .catch((e) => {
-          console.error('Qualify lỗi: ' + (e && e.message ? e.message : e));
+          console.error('Qualify failed: ' + (e && e.message ? e.message : e));
           process.exitCode = 1;
         });
+      return;
+    }
+    if (process.argv.slice(3).some((arg) => arg === '--auto')) {
+      console.error('Invalid qualify argv: --auto must be the first option');
+      process.exitCode = 2;
       return;
     }
     const { runQualifyCli } = require('./qualification-gate');
