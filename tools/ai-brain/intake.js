@@ -775,7 +775,8 @@ async function runIntake(opts, deps) {
   const routeHealthApi = require('./route-health');
   const routeHealthFile =
     d.routeHealthFile || path.join(root, 'tools', 'ai-brain', 'data', 'model-route-health.json');
-  const routeHealth = d.routeHealth || routeHealthApi.loadStore(routeHealthFile);
+  const routeHealth =
+    d.routeHealth || routeHealthApi.loadStore(routeHealthFile, { allowMissing: true });
   const refreshedRoutes = await routeHealthApi.recheckBeforeSelection(
     routeHealth,
     d.probeRoute ||

@@ -852,7 +852,9 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
   const routeHealthApi = require('./route-health');
   const routeHealth =
     opts.routeHealth ||
-    routeHealthApi.loadStore(path.join(__dirname, 'data', 'model-route-health.json'));
+    routeHealthApi.loadStore(path.join(__dirname, 'data', 'model-route-health.json'), {
+      allowMissing: true,
+    });
   const healthFile =
     opts.routeHealthFile || path.join(__dirname, 'data', 'model-route-health.json');
   const catalogueRows = (discoveryCat && discoveryCat.candidates) || [];
@@ -896,7 +898,18 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
   };
 
   if (Array.isArray(opts.candidates)) {
-    return assembleCandidates(discoveryCat, [], resolvedRegistry, accounts, opts.candidates);
+    const buildExplicit = () =>
+      assembleCandidates(discoveryCat, [], resolvedRegistry, accounts, opts.candidates).filter(
+        (candidate) => {
+          const modelId = candidate && candidate.modelId;
+          const gateway = candidate && candidate.gateway;
+          return Boolean(
+            modelId && gateway && routeHealthApi.isEligible(routeHealth, modelId, gateway, opts.now)
+          );
+        }
+      );
+    if (!refresh) return buildExplicit();
+    return Promise.resolve(persistHealth()).then(buildExplicit);
   }
 
   let offs = opts.offerings;
@@ -977,6 +990,11 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
 }
 
 async function resolveFallbackRoutes(store, catalogue, probe, routeHealthApi, options) {
+  const cap = Math.max(
+    0,
+    Number((options && options.fallbackProbeCap) ?? (options && options.probeCap) ?? 20)
+  );
+  let checked = 0;
   const pathsByModel = new Map();
   for (const row of catalogue || []) {
     const modelId = row && (row.modelId || row.model);
@@ -1000,6 +1018,8 @@ async function resolveFallbackRoutes(store, catalogue, probe, routeHealthApi, op
         routeHealthApi.isEligible(store, normalized, failed.id, now)
       )
         continue;
+      if (checked >= cap) return { checked, capped: true };
+      checked += 1;
       await routeHealthApi.routeFallback(
         normalized,
         failed.id,
@@ -1010,6 +1030,7 @@ async function resolveFallbackRoutes(store, catalogue, probe, routeHealthApi, op
       );
     }
   }
+  return { checked, capped: false };
 }
 
 function readCheckpoint(file) {
@@ -1457,7 +1478,8 @@ function dispatchCommand(args, deps = {}) {
     const healthFile =
       deps.routeHealthFile || path.join(__dirname, 'data', 'model-route-health.json');
     const registryForProbe = deps.registry || require('./sources').loadSources();
-    const healthStore = deps.routeHealth || routeHealthApi.loadStore(healthFile);
+    const healthStore =
+      deps.routeHealth || routeHealthApi.loadStore(healthFile, { allowMissing: true });
     return routeHealthApi
       .recheckBeforeSelection(
         healthStore,
@@ -3004,7 +3026,7 @@ async function orchestrateCommand(args, deps = {}) {
   if (d.refreshRoutes === true) {
     const healthFile =
       args['route-health'] || path.join(__dirname, 'data', 'model-route-health.json');
-    const healthStore = require('./route-health').loadStore(healthFile);
+    const healthStore = require('./route-health').loadStore(healthFile, { allowMissing: true });
     const routeHealthApi = require('./route-health');
     const probeRoute =
       d.probeRoute ||

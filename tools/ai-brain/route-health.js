@@ -27,15 +27,18 @@ function classifyFailure(status, message) {
   if (s === 401 || (s === 403 && !/unsupported model|model not found/.test(text)))
     return 'AUTH_NEEDED';
   if (s === 404 || /unsupported model|model not found/.test(text)) return 'UNSUPPORTED';
-  return 'UNAVAILABLE_NOW';
+  return 'UNAVAILABLE';
 }
 
-function loadStore(file) {
+function loadStore(file, options) {
   try {
     const data = JSON.parse(fs.readFileSync(file, 'utf8'));
-    return data && data.version === 1 && data.paths ? data : { version: 1, paths: {}, events: [] };
-  } catch {
-    return { version: 1, paths: {}, events: [] };
+    if (data && data.version === 1 && data.paths) return data;
+    throw new Error('invalid model route health store');
+  } catch (error) {
+    if (options && options.allowMissing === true && error && error.code === 'ENOENT')
+      return { version: 1, paths: {}, events: [] };
+    throw new Error('cannot load model route health store: ' + file, { cause: error });
   }
 }
 
@@ -82,7 +85,9 @@ function recordResult(store, modelId, routeId, result, now) {
   const explicit = result && (result.resetAt || result.retryAt);
   let delay = BACKOFF_MS[Math.min(failures - 1, BACKOFF_MS.length - 1)];
   if (reason === 'GEO_BLOCKED' || reason === 'AUTH_NEEDED') delay = 24 * 60 * 60e3;
-  const nextCheck = explicit ? Date.parse(explicit) : now + delay;
+  const operatorChange =
+    result && (result.networkChanged === true || result.credentialsChanged === true);
+  const nextCheck = operatorChange ? now : explicit ? Date.parse(explicit) : now + delay;
   store.paths[key] = {
     modelId: String(modelId),
     normalizedModelId: normalizeModelId(modelId),
@@ -155,7 +160,7 @@ async function routeFallback(modelId, failedPath, paths, probe, store, options) 
         result && result.status,
         result && (result.message || result.error)
       );
-      if (attempt !== 0 || !['UNAVAILABLE_NOW'].includes(retryReason)) break;
+      if (attempt !== 0 || !['UNAVAILABLE'].includes(retryReason)) break;
       if (o.sleep) await o.sleep(o.retryBackoffMs ?? 1000);
       else await new Promise((resolve) => setTimeout(resolve, o.retryBackoffMs ?? 1000));
     }

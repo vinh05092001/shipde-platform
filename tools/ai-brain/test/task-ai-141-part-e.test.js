@@ -15,7 +15,7 @@ function temporaryStore(t) {
   const dir = fs.mkdtempSync(path.join(parent, 'ai141e-'));
   const file = path.join(dir, 'health.json');
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  return { dir, file, store: routes.loadStore(file) };
+  return { dir, file, store: routes.loadStore(file, { allowMissing: true }) };
 }
 
 test('route health normalizes aliases and classifies provider failures', () => {
@@ -23,8 +23,18 @@ test('route health normalizes aliases and classifies provider failures', () => {
   assert.equal(routes.normalizeModelId('antigravity/gemini-3.1-pro'), 'gemini-3.1-pro');
   assert.deepEqual(
     [451, 402, 429, 403, 503].map((status) => routes.classifyFailure(status)),
-    ['GEO_BLOCKED', 'NO_CREDIT', 'RATE_LIMITED', 'AUTH_NEEDED', 'UNAVAILABLE_NOW']
+    ['GEO_BLOCKED', 'NO_CREDIT', 'RATE_LIMITED', 'AUTH_NEEDED', 'UNAVAILABLE']
   );
+});
+
+test('missing health stores require an explicit bootstrap option', (t) => {
+  const { file } = temporaryStore(t);
+  assert.throws(() => routes.loadStore(file), /cannot load model route health store/);
+  assert.deepEqual(routes.loadStore(file, { allowMissing: true }), {
+    version: 1,
+    paths: {},
+    events: [],
+  });
 });
 
 test('50 listed models retain only the 30 successful route probes and named failures', async (t) => {
@@ -93,7 +103,7 @@ test('all route failures retain per-path reasons and a due 402 retry restores im
   assert.equal(failed.unavailable, true);
   assert.deepEqual(failed.failures, [
     { path: 'p2', reason: 'NO_CREDIT' },
-    { path: 'p3', reason: 'UNAVAILABLE_NOW' },
+    { path: 'p3', reason: 'UNAVAILABLE' },
   ]);
   const retryAt = Date.parse(store.paths['model-x|p2'].nextCheckAt);
   store.paths['model-x|p2'].nextCheckAt = new Date(now).toISOString();
@@ -111,7 +121,7 @@ test('all route failures retain per-path reasons and a due 402 retry restores im
   assert.ok(store.events.some((row) => row.type === 'route_restored'));
   assert.ok(retryAt > now);
   routes.saveStore(file, store);
-  const loaded = routes.loadStore(file);
+  const loaded = routes.loadStore(file, { allowMissing: true });
   assert.equal(
     Object.keys(loaded.paths).length,
     3,
@@ -183,7 +193,7 @@ test('gateway candidates retain successful probes, apply hand additions and hono
       models: [{ model: 'vendor-a/model-0', exclude: true }, 'vendor-a/model-extra'],
     },
   ];
-  const store = routes.loadStore(temporaryStore(t).file);
+  const store = routes.loadStore(temporaryStore(t).file, { allowMissing: true });
   routes.recordResult(store, 'vendor-a/model-extra', 'gateway-a', { ok: true }, 1_800_000_000_000);
   for (let i = 0; i < 50; i += 1)
     routes.recordResult(
@@ -372,7 +382,7 @@ test('intake assembly probes a bounded catalogue with a timeout and excludes fai
     }
   );
   assert.equal(counts.length, 50);
-  assert.equal(result.length, 50, 'explicit replay returns the caller-supplied catalogue');
+  assert.equal(result.length, 50, 'explicit replay preserves the caller-supplied candidates');
   assert.equal(Object.keys(routes.loadStore(file).paths).length, 50);
 });
 

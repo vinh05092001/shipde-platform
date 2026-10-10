@@ -867,11 +867,6 @@ function gatewayAccountCandidates(opts) {
       catalogueRows.map((row) => [String(row.modelId || row.model || '').toLowerCase(), row])
     );
     const eligibleRows = catalogueRows.slice();
-    const malformedRowCount = eligibleRows.filter((row) => {
-      const id = String(row.modelId || row.model || '');
-      return !row.upstream || !id.startsWith(String(row.upstream) + '/');
-    }).length;
-    if (malformedRowCount) continue;
     for (const modelId of additions) {
       if (!rowsByModel.has(modelId) && !excludes.has(modelId)) {
         const prefix = parsePrefix(modelId);
@@ -887,7 +882,7 @@ function gatewayAccountCandidates(opts) {
       }
     }
     for (const row of eligibleRows) {
-      if (!row) continue;
+      if (!row || !row.upstream) continue;
       const upstream = row.upstream || '';
       const modelId = row.modelId || row.model || '';
       if (!modelId || excluded.has(modelId.toLowerCase()) || excludes.has(modelId.toLowerCase()))
