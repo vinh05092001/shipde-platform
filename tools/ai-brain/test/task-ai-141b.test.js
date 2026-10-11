@@ -1,4 +1,4 @@
-'use strict';
+﻿'use strict';
 
 const { test, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
@@ -387,6 +387,7 @@ test('default isolated qualification adapter uses isolated orchestration and exa
   const { runIsolatedReviewed } = require('../intake');
   const f = fixture();
   const reviewed = [];
+  const now = Date.parse('2026-10-10T12:00:00Z');
   const result = await runIsolatedReviewed(
     {
       candidate: CANDIDATE,
@@ -401,9 +402,9 @@ test('default isolated qualification adapter uses isolated orchestration and exa
     },
     {
       root: f.dir,
-      now: 1791720000000,
+      now,
       verdictPath: path.join(f.dir, 'verdict.json'),
-      stat: () => ({ mtimeMs: 1791720000000 }),
+      stat: () => ({ mtimeMs: now }),
       readFile: () => '{"verdict":"CLOSED"}',
       accounts: [],
       registry: {},
@@ -442,6 +443,7 @@ test('default isolated qualification adapter uses isolated orchestration and exa
 test('isolated qualification refuses a reviewer receipt for a different SHA', async () => {
   const { runIsolatedReviewed } = require('../intake');
   const f = fixture();
+  const now = Date.now();
   const result = await runIsolatedReviewed(
     {
       candidate: CANDIDATE,
@@ -455,9 +457,9 @@ test('isolated qualification refuses a reviewer receipt for a different SHA', as
     },
     {
       root: f.dir,
-      now: Date.now(),
+      now,
       verdictPath: path.join(f.dir, 'verdict.json'),
-      stat: () => ({ mtimeMs: Date.now() }),
+      stat: () => ({ mtimeMs: now }),
       readFile: () => '{"verdict":"CLOSED"}',
       accounts: [],
       registry: {},

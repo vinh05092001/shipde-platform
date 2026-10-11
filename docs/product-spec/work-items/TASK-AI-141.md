@@ -1,4 +1,4 @@
-# TASK-AI-141 — The Controller uses every source
+﻿# TASK-AI-141 — The Controller uses every source
 
 ## Control
 
@@ -198,3 +198,4 @@ Verification in `tools/ai-brain/test/task-ai-141.test.js` covers:
 - `Part H: deriveRiskDomains distinguishes benign prisma queries from schema ownership`
 - `Part H: RTK_POLICY decision is recorded once per work item across multiple candidate attempts`
 - `Part H: cli orchestrate handles malformed token-budgets without uncaught throw`
+- Qualification test fixtures now write a fresh `CLOSED` isolation verdict consistent with the injected clock, so Linux CI no longer reports `ISOLATION_VERDICT_STALE`.
