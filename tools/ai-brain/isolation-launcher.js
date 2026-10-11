@@ -14,6 +14,14 @@ const WORKER_USERNAME = 'ShipDeWorker';
 const WORKER_ROOT = 'C:\\ShipDeWorker';
 const DEFAULT_WORKER_TIMEOUT_MS = 30 * 60 * 1000;
 
+/** The operator-owned isolation attestation location. */
+function isolationVerdictPath(options) {
+  return (
+    (options && options.verdictPath) ||
+    path.join(process.env.LOCALAPPDATA || '', 'ShipDe', 'isolation-verdict.json')
+  );
+}
+
 /** The worker root for one job: the worker never sees the operator's leaf name. */
 function workerRootFor(hostCwd) {
   const jobName = path.win32.basename(String(hostCwd || '')) || 'default';
@@ -44,6 +52,25 @@ function isWorkerPath(target) {
   if (full.toLowerCase() === root.toLowerCase()) return true;
   const rel = path.win32.relative(root, full);
   return rel !== '' && !rel.startsWith('..') && !path.win32.isAbsolute(rel);
+}
+
+/** Read the current host isolation attestation and fail closed unless it is CLOSED. */
+function readClosedIsolationVerdict(options) {
+  const verdictPath = isolationVerdictPath(options);
+  if (!fs.existsSync(verdictPath)) throw new Error('CODEX_REQUIRES_ISOLATION');
+  let verdictData;
+  try {
+    const stat = fs.statSync(verdictPath);
+    if (Date.now() - stat.mtimeMs > 24 * 60 * 60 * 1000) {
+      throw new Error('CODEX_REQUIRES_ISOLATION');
+    }
+    const text = fs.readFileSync(verdictPath, 'utf8');
+    verdictData = JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
+  } catch {
+    throw new Error('CODEX_REQUIRES_ISOLATION');
+  }
+  if (verdictData.verdict !== 'CLOSED') throw new Error('CODEX_REQUIRES_ISOLATION');
+  return verdictData;
 }
 
 function getFolderHash(folder) {
@@ -266,6 +293,11 @@ function buildWorkerLaunchScript(options) {
   const payloadArgsPath = options.payloadArgsPath;
   const launchResultPath = options.launchResultPath;
   const workerTimeoutMs = options.workerTimeoutMs;
+  const adapterId = options.adapterId;
+  const isCodex = adapterId === 'codex';
+  if (isCodex && (!options.isolationVerdict || options.isolationVerdict.verdict !== 'CLOSED')) {
+    throw new Error('CODEX_REQUIRES_ISOLATION');
+  }
   const completionNonce = options.completionNonce || crypto.randomBytes(16).toString('hex');
   const markerPath = options.markerPath || path.join(workerRoot, 'run-target.complete.json');
   // Test-only seam. The generated host script normally impersonates the worker
@@ -287,6 +319,22 @@ $psi.Password = $sec
 
   const safeWorkerRootForGit = workerRoot.replace(/\\/g, '/');
   const rtkPathPrepend = options.rtkPathPrepend || null;
+  const codexLoginProbe = isCodex
+    ? `if (-not (Test-Path -LiteralPath "${exeFile}")) {
+  @{ nonce = "${completionNonce}"; exitCode = 1; completed = $true; localFailure = "CODEX_NOT_LOGGED_IN"; completedAt = (Get-Date).ToString('o') } | ConvertTo-Json -Depth 5 | Out-File "${markerPath}" -Encoding UTF8
+  exit 0
+}
+& "${exeFile}" login status *> \`$null
+if (-not \`$?) {
+  @{ nonce = "${completionNonce}"; exitCode = 1; completed = $true; localFailure = "CODEX_NOT_LOGGED_IN"; completedAt = (Get-Date).ToString('o') } | ConvertTo-Json -Depth 5 | Out-File "${markerPath}" -Encoding UTF8
+  exit 0
+}
+if (\`$LASTEXITCODE -ne 0) {
+  @{ nonce = "${completionNonce}"; exitCode = 1; completed = $true; localFailure = "CODEX_NOT_LOGGED_IN"; completedAt = (Get-Date).ToString('o') } | ConvertTo-Json -Depth 5 | Out-File "${markerPath}" -Encoding UTF8
+  exit 0
+}
+`
+    : '';
 
   const envAllowed = [
     'PATH',
@@ -309,11 +357,18 @@ $psi.Password = $sec
   }
   const allowedArray = '@(' + envAllowed.map((k) => `"${k}"`).join(', ') + ')';
 
+  const verdictJson = JSON.stringify(options.isolationVerdict || {});
+  const verdictBase64 = Buffer.from(verdictJson, 'utf8').toString('base64');
+
   return `
 $ErrorActionPreference = "Stop"
 ${credentialLines}$nestedScript = "${workerRoot}\\run-target.ps1"
+$verdictBytes = [Convert]::FromBase64String("${verdictBase64}")
+$env:SHIPDE_ISOLATION_VERDICT = [Text.Encoding]::UTF8.GetString($verdictBytes)
 $markerPath = "${markerPath}"
 $completionNonce = "${completionNonce}"
+$env:HOME = "${workerRoot}"
+$env:USERPROFILE = "${workerRoot}"
 $wrapperPid = 0
 $wrapperStartTime = Get-Date
 @"
@@ -330,6 +385,7 @@ $wrapperStartTime = Get-Date
 if (-not (Test-Path "${workerRoot}\\temp")) { New-Item -ItemType Directory -Path "${workerRoot}\\temp" | Out-Null }
 Set-Location -Path "${workerRoot}"
 \`$env:SHIPDE_RUN_TARGET_PID = "\`$PID"
+${codexLoginProbe}
 \`$payloadArgs = @(Get-Content -LiteralPath "${payloadArgsPath}" -Raw | ConvertFrom-Json)
 & "${exeFile}" @payloadArgs
 \`$jobExit = \`$LASTEXITCODE
@@ -462,6 +518,7 @@ $completed = $false
 $markerNonce = ""
 $jobExit = -1
 $failureReason = ""
+$localFailure = ""
 if ($timedOut) {
     $failureReason = "[ISOLATION_LAUNCHER] worker timed out after $timeoutMs ms and was killed"
 } elseif (Test-Path -LiteralPath $markerPath) {
@@ -471,6 +528,7 @@ if ($timedOut) {
             $completed = $true
             $markerNonce = [string]$marker.nonce
             $jobExit = [int]$marker.exitCode
+            if ($null -ne $marker.localFailure) { $localFailure = [string]$marker.localFailure }
         } else {
             $failureReason = "[ISOLATION_LAUNCHER] completion marker does not belong to this launch"
         }
@@ -492,6 +550,7 @@ $output = @{
     completed = $completed
     completionNonce = $markerNonce
     failureReason = $failureReason
+    localFailure = $localFailure
 }
 $output | ConvertTo-Json -Depth 10 | Out-File "${launchResultPath}" -Encoding UTF8
 `;
@@ -802,9 +861,7 @@ function getIsolatedLauncher() {
     // (LOCALAPPDATA\ShipDe\isolation-verdict.json); LOCALAPPDATA is unset on
     // non-Windows, so production there resolves to a relative path, exactly as
     // before this opt was added.
-    const verdictPath =
-      opts.verdictPath ||
-      path.join(process.env.LOCALAPPDATA || '', 'ShipDe', 'isolation-verdict.json');
+    const verdictPath = isolationVerdictPath(opts);
     if (!fs.existsSync(verdictPath)) {
       throw new Error('ISOLATION_VERDICT_MISSING: Cannot find ' + verdictPath);
     }
@@ -1800,6 +1857,8 @@ function getIsolatedLauncher() {
       workerTimeoutMs,
       completionNonce,
       adapterId: adapter.id,
+      isolationVerdict: verdictData,
+      isolationVerdictPath: verdictPath,
       rtkPathPrepend,
       credentialEnv: selectedCredentialEnv,
     });
@@ -1881,9 +1940,12 @@ function readLaunchResult(launchResultPath, completionNonce, hostRes) {
   }
 
   return {
-    exitCode: jobExit,
+    exitCode: resJson.localFailure ? 1 : jobExit,
     stdout: String(resJson.stdout || ''),
-    stderr: String(resJson.stderr || ''),
+    stderr: [String(resJson.localFailure || ''), String(resJson.stderr || '')]
+      .filter(Boolean)
+      .join('\n'),
+    localFailure: resJson.localFailure ? String(resJson.localFailure) : null,
     timedOut: false,
     completionNonce: resJson.completionNonce,
   };
@@ -1897,6 +1959,7 @@ module.exports = {
   buildWorkerLaunchScript,
   workerRootFor,
   isWorkerPath,
+  readClosedIsolationVerdict,
   appendGitInfoExclude,
   materialiseExercise,
   captureFailBefore,

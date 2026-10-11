@@ -212,6 +212,19 @@ From durable Git/GitHub state the controller performs exactly one next safe tran
 
 The human pastes a prepared prompt when an interactive client opens, approves posting a review comment, resolves material product choices and performs the merge (or relies on governed exact-HEAD auto-merge under TASK-AI-13). The controller never invents a product decision, bypasses red CI or resets a dirty worktree.
 
+### Codex isolated-worker login
+
+The Codex lane uses the separate `ShipDeWorker` Windows account. Install the approved Codex CLI for that user and complete the ChatGPT sign-in flow in a PowerShell session running as that user:
+
+```powershell
+codex login
+codex login status
+```
+
+The operator account's `~/.codex` files are never copied, exported, or read. The isolated launcher sets `HOME` and `USERPROFILE` to the per-task worker root before checking login status and launching `codex exec`. If `codex login status` fails or the CLI is missing, the Controller records `CODEX_NOT_LOGGED_IN` as a local candidate failure and continues with another candidate. Authenticate the worker user before selecting Codex again.
+
+The launcher reads the operator-owned attestation at `%LOCALAPPDATA%\ShipDe\isolation-verdict.json` before preparing the worker. Codex execution requires a `CLOSED` verdict; a verdict supplied by the job is not sufficient. Re-run the isolation check to refresh the attestation before retrying a refused launch.
+
 ## 9. Synchronize after human merge
 
 After squash-merging the passing PR, run:
@@ -244,3 +257,4 @@ This parks and fast-forwards every clean worktree. Then choose **Continue pipeli
 - GitHub `main` rejects direct/force pushes and requires `contract` plus `application-gate`.
 - PR #1 is merged only after an independent Codex `PASS`.
 - `TASK-FOUND-01` is the next and only implementation item.
+- If an isolated Codex probe reports `CODEX_NOT_LOGGED_IN`, sign in as `ShipDeWorker` and confirm `codex login status` succeeds there. A missing CLI or failed status check is a local failure, and the Controller continues to another candidate.
