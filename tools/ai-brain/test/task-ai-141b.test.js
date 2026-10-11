@@ -866,7 +866,7 @@ test('targeted loop does not report completion when only a qualification slot ra
     },
     {
       existsSync: () => false,
-      items: [{ work_item_id: 'TASK-AI-141', status: 'BACKLOG', dependencies: '' }],
+      items: [{ work_item_id: 'TASK-AI-141', status: 'READY_FOR_AUTHOR', dependencies: '' }],
       runIntake: async () => {
         intakeRuns += 1;
         if (intakeRuns > 1) return { exitCode: 0, status: 'completed' };
@@ -923,7 +923,7 @@ test('loop ignores stale decision sessions and logs which records were ignored',
     },
     {
       existsSync: () => false,
-      items: [{ work_item_id: 'NEXT', status: 'BACKLOG', dependencies: '' }],
+      items: [{ work_item_id: 'NEXT', status: 'READY_FOR_AUTHOR', dependencies: '' }],
       now,
       log: (line) => logs.push(line),
       checkCandidateLanes: () => ({ available: true }),

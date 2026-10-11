@@ -163,6 +163,7 @@ Intake derives risk domains and complexity from the Work Item scope, acceptance 
 
 `tools/ai-brain/routing.js` now preserves a source path's `WORK_ITEM_PASS` when that path is blocked or has failed evidence due to infrastructure conditions such as quota exhaustion, rate limits, timeouts, or launch/harness failures. Transfer still requires exact normalized backend model identity and a viable target path; model-scope failures, quality outcomes such as `CHANGES_REQUIRED`, and revoked proof disqualify the source. Three regressions cover infrastructure enum classification while preserving model failures, model/quality failures disqualifying transfer, and exhausted target paths not inheriting proof (`classifier enum values recognize infrastructure and preserve model failures`, `a model-quality failure on the source path disqualifies the proof transfer`, `an exhausted target path never inherits the transferred proof`).
 - The standalone `qualify --auto` isolation assertion now receives caller options and the selected `--root`, matching the root used by its isolated runner.
+- Qualification test fixtures now write a fresh CLOSED isolation verdict consistent with the injected clock, so Linux CI no longer reports ISOLATION_VERDICT_STALE.
 - Qualification runs pin `origin/main` as the isolated worker's base SHA. The worker's resulting commit is returned as `sha`, and evidence is granted only when the independent review's `reviewedSha` exactly matches that worker head; no candidate commit is required before the worker runs. Reviewer SHA mismatches are refused, and qualification output remains non-publishable and never merged.
 - Targeted `next --loop --work-item <ID>` retries after a successful qualification slot when iteration budget remains; if the budget ends first, it returns `stopped: true` with `WORK_ITEM_NOT_EXECUTED`. Qualification alone never reports the requested product item complete.
 - Isolation verdict UTF-8 BOM tolerance: `Test-WorkerIsolation.ps1` writes UTF-8 without BOM via `[System.IO.File]::WriteAllText` with `[System.Text.UTF8Encoding]::new($false)`, and readers in `tools/ai-brain` (`intake.assertIsolationClosed`, `isolation-launcher.readClosedIsolationVerdict`) strip any leading BOM before `JSON.parse`.
@@ -199,3 +200,30 @@ Verification in `tools/ai-brain/test/task-ai-141.test.js` covers:
 - `Part H: RTK_POLICY decision is recorded once per work item across multiple candidate attempts`
 - `Part H: cli orchestrate handles malformed token-budgets without uncaught throw`
 - Qualification test fixtures now write a fresh `CLOSED` isolation verdict consistent with the injected clock, so Linux CI no longer reports `ISOLATION_VERDICT_STALE`.
+
+### Part G: the Controller plans the next Work Item
+
+Part G implements source-bound Work Item drafting and governed planning in `tools/ai-brain`:
+
+- **Work Item planner module (`tools/ai-brain/work-item-planner.js`):**
+  - `draftWorkItem`: drafts template-compliant Work Items (`WORK-ITEM-TEMPLATE.md`) for dependency-ready register entries using approved sources (`BASELINE-AND-DECISIONS.md`, `PRODUCT-VISION-SCOPE.md`, `MASTER-FEATURE-CATALOG.md`) and spec directories (`02-business`, `03-ux`, `04-data`, `05-api-integrations`, `08-testing`, etc.). When required feature behavior, citations, or source-backed outcomes are missing, the draft is marked `BLOCKED` with explicit open decisions instead of inferring product meaning.
+  - `validateDraftAgainstSources`: validates worker drafts against approved sources by checking that citations target approved locations without directory traversal, statements/claims are grounded in source tokens (rejecting ungrounded claims or substring illusions), the draft status is not `BLOCKED`, and blocking open decisions are resolved before governed merge.
+  - `planWorkItem`: orchestrates planning with register membership validation and target collision handling (`reviewExisting`). Under `--run`, coordinates planner candidate ranking (`rankPlanner` under the `planner.default` profile with quality and proof floors), isolated worker execution (`runIsolatedPlanner` / `launchPlanner` with `docsOnly: true`), draft source validation, independent review (`reviewPlan` requiring an exact `PASS`), and governed docs-only merge (`mergePlan`), returning `READY_FOR_AUTHOR`. Failed or blocked attempts clean up ungoverned drafts.
+  - `defaultPlanningDeps`: provides default wiring for ranking, isolated execution launcher, independent review, and governed merge with fail-closed gates for unconfigured services.
+
+- **Next runner loop integration (`tools/ai-brain/next-runner.js`):**
+  - `findNextWorkItem`: detects dependency-ready `BACKLOG` items as planning candidates (`planCandidate`) alongside `READY_FOR_AUTHOR` items, prioritizing `FEAT-*` items over `TASK-AI-*` and recognizing draft-backed backlog rows for governed planning.
+  - `nextLoop`: runs governed planning sequentially when no author-ready item exists. When an author-ready item is active, runs governed planning in parallel for the next dependency-ready backlog item (`parallelPlanning`), keeping planner and author lanes independent. Parallel planning promises are safely joined and awaited on early exit or loop completion, recording `PLANNING_BLOCKED` or `PLANNING_FAILED` decisions, managing terminal session states, and re-reading the register to transition items to author intake only after governed merge and exact independent review pass.
+
+- **CLI integration (`tools/ai-brain/cli.js`):**
+  - Exposes `planCommand` (`plan --work-item <ID> [--run] [--root <dir>]`) wired to default planning dependencies.
+  - Passes planning dependencies to `next --loop` (`nextDeps.planningDeps`) and supports planner candidate visibility via `discovery candidates --view planner`.
+
+- **Verification:**
+  - `tools/ai-brain/test/task-ai-141-part-g.test.js` (34 tests):
+    - G1: template-shaped source-complete drafting, approved business and screen spec loading, explicit blocking on missing feature detail, traversal citation rejection, worker draft rejection for uncited product claims or substring-only matches, and single-code citation formatting.
+    - G2: `planner.default` candidate ranking with proof/quality floors, lane independence between planner and author, register membership and target collision validation in `plan --run`, CLI dependency wiring and child-process execution without ReferenceErrors, fail-closed behavior at missing external gates, and worker draft source validation before governed merge.
+    - G3: `next --loop` sequential backlog planning when no author item exists, refusal to mark author-ready without a governed planner, 1-step-ahead parallel planning while an author runs, selection of ungoverned doc-backed backlog rows, handling of blocked planning and parallel failures, joining parallel promises on loop early exit, and independence from implementation worker ceilings.
+    - G4: source-limited drafting omitting unsourced register business outcomes and blocking drafts.
+  - `tools/ai-brain/test/task-ai-141.test.js`: confirms planning and infrastructure failures do not revoke transferred model proofs.
+  - `tools/ai-brain/test/task-ai-141b.test.js`: verifies `next --loop` targeting and claim expirations with planner-compatible register statuses.

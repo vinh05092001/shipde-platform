@@ -467,16 +467,9 @@ function checkCeiling(options, deps) {
   };
 }
 
-function findNextWorkItem(options, deps) {
-  const opts = options || {};
-  const d = deps || {};
-  const rootDir = path.resolve(opts.rootDir || process.cwd());
-  const now = typeof d.now === 'function' ? d.now() : d.now || opts.now || Date.now();
-  const decisionRecords = collectAllDecisionRecords(opts, d);
-  const terminalWorkItems = opts.terminalWorkItems || d.terminalWorkItems || new Map();
-
+function readRegisterItems(opts, d, rootDir, force) {
   let items = [];
-  if (Array.isArray(d.items)) {
+  if (!force && Array.isArray(d.items)) {
     items = d.items;
   } else if (typeof d.readRegister === 'function') {
     items = d.readRegister();
@@ -501,6 +494,17 @@ function findNextWorkItem(options, deps) {
       items = (reg && reg.data && reg.data.items) || [];
     }
   }
+  return items;
+}
+
+function findNextWorkItem(options, deps) {
+  const opts = options || {};
+  const d = deps || {};
+  const rootDir = path.resolve(opts.rootDir || process.cwd());
+  const now = typeof d.now === 'function' ? d.now() : d.now || opts.now || Date.now();
+  const decisionRecords = collectAllDecisionRecords(opts, d);
+  const terminalWorkItems = opts.terminalWorkItems || d.terminalWorkItems || new Map();
+  const items = readRegisterItems(opts, d, rootDir, opts.forceRegisterRead === true);
 
   const byId = new Map();
   for (const it of items) {
@@ -511,6 +515,7 @@ function findNextWorkItem(options, deps) {
 
   const skipped = [];
   let selected = null;
+  let planCandidate = null;
   const priority = (item) =>
     /^FEAT-/.test(String(item.work_item_id || ''))
       ? 0
@@ -588,9 +593,23 @@ function findNextWorkItem(options, deps) {
     // 4. Status check: READY_FOR_AUTHOR or BACKLOG (with all dependencies MERGED)
     const isReadyForAuthor = status === 'READY_FOR_AUTHOR';
     const isBacklog = status === 'BACKLOG';
-    if (isReadyForAuthor || isBacklog) {
-      selected = item;
+    if (isReadyForAuthor) {
+      if (!selected) selected = item;
+      if (opts.loop || opts.planAhead === true) continue;
       break;
+    }
+    if (isBacklog) {
+      if (!opts.loop && opts.planAhead !== true) {
+        selected = item;
+        break;
+      }
+      const workItemPath = path.join(rootDir, 'docs', 'product-spec', 'work-items', id + '.md');
+      if (fs.existsSync(workItemPath)) {
+        if (!planCandidate) planCandidate = item;
+        break;
+      }
+      if (!planCandidate) planCandidate = item;
+      continue;
     }
 
     skipped.push({
@@ -599,7 +618,7 @@ function findNextWorkItem(options, deps) {
     });
   }
 
-  return { item: selected, skipped };
+  return { item: selected || planCandidate, planCandidate, skipped };
 }
 
 async function awaitIntakeExecution(intakeResult) {
@@ -744,7 +763,7 @@ async function nextLoop(options, deps) {
     }
 
     // 2. Find next work item
-    const findResult = findNextWorkItem({ ...opts, now, terminalWorkItems }, d);
+    const findResult = findNextWorkItem({ ...opts, loop: true, now, terminalWorkItems }, d);
     for (const s of findResult.skipped) {
       log(`Skipped ${s.id}: ${s.reason}`);
     }
@@ -787,154 +806,358 @@ async function nextLoop(options, deps) {
       return { stopped: true, reason: 'NO_READY_ITEM', iteration, skipped: findResult.skipped };
     }
 
-    const item = findResult.item;
-    log(`Next Work Item: ${item.work_item_id} (status: ${item.status})`);
-
-    // 3. Check candidate lanes
-    const laneStatus = checkCandidateLanes({ ...opts, now }, d);
-    if (!laneStatus.available) {
-      decisions.recordDecision(
-        {
-          stage: decisions.Stage.COOLED,
-          detail: 'ALL_LANES_UNAVAILABLE',
-          earliestResetTime: laneStatus.earliestResetTime,
-          workItemId: item.work_item_id,
-        },
-        logOpts
+    // Planning stays a separate lane. Schedule one item ahead while a ready
+    // author item runs, independently of the implementation ceiling.
+    // With no author-ready item, findNextWorkItem exposes the backlog planner
+    // candidate as `item`; the sequential planning path below owns that run.
+    // Parallel planning is only for a distinct item while an author runs.
+    const planningItem =
+      findResult.item && findResult.item.status === 'READY_FOR_AUTHOR'
+        ? findResult.planCandidate
+        : null;
+    let parallelPlanning = null;
+    if (planningItem) {
+      const planning = require('./work-item-planner');
+      const planningPromise = planning.planWorkItem(
+        planningItem.work_item_id,
+        { rootDir, run: true },
+        d.planningDeps || d
       );
-      log(
-        `ALL_LANES_UNAVAILABLE: waiting until earliest reset time ${laneStatus.earliestResetTime}`
-      );
-      const waitMs =
-        laneStatus.earliestResetTime && laneStatus.earliestResetTime > now
-          ? laneStatus.earliestResetTime - now
-          : pollIntervalMs;
-      await sleepFn(waitMs);
-      return {
-        stopped: true,
-        reason: 'ALL_LANES_UNAVAILABLE',
-        earliestResetTime: laneStatus.earliestResetTime,
-        waitMs,
-        iteration,
-      };
-    }
-
-    // 4. Check ceiling
-    const ceilingStatus = checkCeiling({ ...opts, now }, d);
-    if (!ceilingStatus.allowed) {
-      decisions.recordDecision(
-        {
-          stage: decisions.Stage.REFUSED,
-          detail: ceilingStatus.reason,
-          workItemId: item.work_item_id,
-        },
-        logOpts
-      );
-      log(`Ceiling reached: ${ceilingStatus.detail}. Waiting.`);
-      await sleepFn(pollIntervalMs);
-      if (maxIterations <= 1) {
-        return {
-          stopped: true,
-          reason: ceilingStatus.reason,
-          detail: ceilingStatus.detail,
-          iteration,
-        };
-      }
-      if (opts.workItem || opts['work-item']) {
-        return {
-          stopped: true,
-          reason: ceilingStatus.reason,
-          detail: ceilingStatus.detail,
-          iteration,
-        };
-      }
-      continue;
-    }
-
-    // 5. Run item through intake --run
-    decisions.recordDecision(
-      {
-        stage: decisions.Stage.SELECTED,
-        workItemId: item.work_item_id,
-      },
-      logOpts
-    );
-
-    const execResult = await executeIntakeForItem(item, opts, d, {
-      dir: opts.decisionDir || d.decisionDir || decisions.DEFAULT_DIR,
-      now: getNow(),
-    });
-
-    const proofFloorRefusal = Boolean(
-      (execResult.error &&
-        (execResult.error.code === 'PROOF_FLOOR_NOT_MET' ||
-          /PROOF_FLOOR_NOT_MET/.test(String(execResult.error.message || '')))) ||
-      (execResult.intakeResult &&
-        (execResult.intakeResult.reason === 'PROOF_FLOOR_NOT_MET' ||
-          /PROOF_FLOOR_NOT_MET/.test(JSON.stringify(execResult.intakeResult))))
-    );
-    if (proofFloorRefusal) {
-      const qualificationSlot = opts.qualificationSlot || d.qualificationSlot;
-      if (typeof qualificationSlot === 'function') {
-        const qualificationCeiling =
-          typeof d.checkCeiling === 'function'
-            ? d.checkCeiling({ ...opts, now }, d)
-            : checkCeiling({ ...opts, now }, d);
-        if (!qualificationCeiling.allowed) {
-          log(`Qualification slot skipped: ${qualificationCeiling.reason}.`);
-          if (opts.workItem || opts['work-item']) {
-            return {
-              stopped: true,
-              reason: qualificationCeiling.reason,
-              workItemId: item.work_item_id,
-              iteration,
-            };
-          }
-          continue;
-        }
-        const qualification = await qualificationSlot({
-          now,
-          iteration,
-          workItem: item,
-          reason: 'PROOF_FLOOR_NOT_MET',
-          ceiling: qualificationCeiling,
-        });
-        if (qualification && qualification.ran === true) {
-          log('QUALIFICATION_SLOT: ' + (qualification.status || 'completed'));
-          if (opts.workItem || opts['work-item']) {
-            if (iteration < maxIterations) {
-              await sleepFn(pollIntervalMs);
-              continue;
-            }
-            return {
-              stopped: true,
-              reason: 'WORK_ITEM_NOT_EXECUTED',
-              workItemId: item.work_item_id,
-              iteration,
-              qualification,
-            };
+      const authorItem = findResult.item;
+      if (authorItem && authorItem !== planningItem) {
+        // Keep the author lane moving without awaiting planner completion.
+        parallelPlanning = planningPromise;
+      } else {
+        try {
+          const result = await planningPromise;
+          if (!result || result.status !== 'READY_FOR_AUTHOR') {
+            terminalWorkItems.set(planningItem.work_item_id, 'planning-blocked');
           }
           if (iteration < maxIterations) {
             await sleepFn(pollIntervalMs);
             continue;
           }
-          return { completed: true, iterations: iteration, qualification };
+          return { completed: true, iterations: iteration, planning: result };
+        } catch (err) {
+          terminalWorkItems.set(planningItem.work_item_id, 'planning-failed');
+          log(`Planning ${planningItem.work_item_id} failed: ${err.message}`);
+          return {
+            stopped: true,
+            reason: 'PLANNING_FAILED',
+            workItemId: planningItem.work_item_id,
+          };
         }
       }
     }
 
-    const outcome = execResult.outcome || 'completed';
-    terminalWorkItems.set(item.work_item_id, outcome);
-    log(`Work Item ${item.work_item_id} ended with terminal state ${outcome}.`);
+    const item = findResult.item;
+    log(`Next Work Item: ${item.work_item_id} (status: ${item.status})`);
 
-    if (opts.workItem || opts['work-item']) {
-      return {
-        completed: true,
-        iterations: iteration,
-        workItemId: item.work_item_id,
-        outcome,
-        execution: execResult,
-      };
+    // TASK-AI-141 G: when the selected dependency-ready backlog item has no
+    // Work Item document, plan it before attempting author intake. Planning is
+    // a separate lane and is not counted against the implementation ceiling.
+    const workItemPath = path.join(
+      rootDir,
+      'docs',
+      'product-spec',
+      'work-items',
+      item.work_item_id + '.md'
+    );
+    if (String(item.status).trim() === 'BACKLOG') {
+      try {
+        const planning = require('./work-item-planner');
+        const planned = await planning.planWorkItem(
+          item.work_item_id,
+          { rootDir, run: true, reviewExisting: fs.existsSync(workItemPath) },
+          d.planningDeps || d
+        );
+        const governed =
+          planned &&
+          planned.status === 'READY_FOR_AUTHOR' &&
+          planned.governed === true &&
+          planned.independentReview === 'PASS' &&
+          planned.merged === true;
+        const outcome = governed ? 'planned' : 'blocked';
+        if (outcome !== 'planned') terminalWorkItems.set(item.work_item_id, outcome);
+        decisions.recordDecision(
+          {
+            stage: outcome === 'planned' ? decisions.Stage.COMPLETED : decisions.Stage.REFUSED,
+            workItemId: item.work_item_id,
+            detail: outcome === 'planned' ? 'WORK_ITEM_PLANNED' : 'PLANNING_BLOCKED',
+            status: governed ? 'READY_FOR_AUTHOR' : 'BLOCKED',
+            reason: governed
+              ? undefined
+              : (planned && planned.reason) ||
+                'Planning did not return governed merge and exact independent PASS evidence.',
+          },
+          logOpts
+        );
+        log(`Planning ${item.work_item_id} ended with ${outcome}.`);
+        if (!governed) {
+          if (iteration < maxIterations) await sleepFn(pollIntervalMs);
+          continue;
+        }
+        // A governed merge must update the durable register. Re-read it before
+        // authoring so the normal dependency and status gates remain authoritative.
+        const refreshed = findNextWorkItem(
+          { ...opts, loop: true, now, terminalWorkItems, forceRegisterRead: true },
+          d
+        );
+        const refreshedItem = refreshed.item;
+        if (
+          !refreshedItem ||
+          refreshedItem.work_item_id !== item.work_item_id ||
+          String(refreshedItem.status || '').trim() !== 'READY_FOR_AUTHOR'
+        ) {
+          terminalWorkItems.set(item.work_item_id, 'planning-register-not-ready');
+          decisions.recordDecision(
+            {
+              stage: decisions.Stage.REFUSED,
+              workItemId: item.work_item_id,
+              detail: 'PLANNING_REGISTER_NOT_READY',
+            },
+            logOpts
+          );
+          return {
+            stopped: true,
+            reason: 'PLANNING_REGISTER_NOT_READY',
+            workItemId: item.work_item_id,
+          };
+        }
+        // Keep the re-read row local; the register snapshot remains immutable.
+        findResult.item = refreshedItem;
+      } catch (err) {
+        terminalWorkItems.set(item.work_item_id, 'planning-failed');
+        decisions.recordDecision(
+          {
+            stage: decisions.Stage.FAILED,
+            workItemId: item.work_item_id,
+            detail: err && err.code ? err.code : 'PLANNING_FAILED',
+            reason: err && err.message,
+          },
+          logOpts
+        );
+        log(`Planning ${item.work_item_id} failed: ${err && err.message ? err.message : err}`);
+        return { stopped: true, reason: 'PLANNING_FAILED', workItemId: item.work_item_id };
+      }
+    }
+
+    // Helper to join parallel planning on any loop exit path
+    async function joinParallelPlanning() {
+      if (!parallelPlanning) return null;
+      try {
+        const result = await parallelPlanning;
+        parallelPlanning = null;
+        if (!result || result.status !== 'READY_FOR_AUTHOR') {
+          terminalWorkItems.set(planningItem.work_item_id, 'planning-blocked');
+          decisions.recordDecision(
+            {
+              stage: decisions.Stage.REFUSED,
+              workItemId: planningItem.work_item_id,
+              detail: 'PLANNING_BLOCKED',
+              status: 'BLOCKED',
+              reason: (result && result.reason) || 'Planning did not return READY_FOR_AUTHOR.',
+            },
+            logOpts
+          );
+        } else {
+          const plannedRow = readRegisterItems(opts, d, rootDir, true).find(
+            (row) => row.work_item_id === planningItem.work_item_id
+          );
+          if (!plannedRow || String(plannedRow.status || '').trim() !== 'READY_FOR_AUTHOR') {
+            terminalWorkItems.set(planningItem.work_item_id, 'planning-register-not-ready');
+            decisions.recordDecision(
+              {
+                stage: decisions.Stage.REFUSED,
+                workItemId: planningItem.work_item_id,
+                detail: 'PLANNING_REGISTER_NOT_READY',
+              },
+              logOpts
+            );
+            return {
+              stopped: true,
+              reason: 'PLANNING_REGISTER_NOT_READY',
+              workItemId: planningItem.work_item_id,
+            };
+          }
+        }
+        log(`Planning ${planningItem.work_item_id} completed in parallel.`);
+        return { ok: true, result };
+      } catch (err) {
+        parallelPlanning = null;
+        terminalWorkItems.set(planningItem.work_item_id, 'planning-failed');
+        decisions.recordDecision(
+          {
+            stage: decisions.Stage.FAILED,
+            workItemId: planningItem.work_item_id,
+            detail: err && err.code ? err.code : 'PLANNING_FAILED',
+            reason: err && err.message,
+          },
+          logOpts
+        );
+        log(`Planning ${planningItem.work_item_id} failed: ${err.message}`);
+        return {
+          stopped: true,
+          reason: 'PLANNING_FAILED',
+          workItemId: planningItem.work_item_id,
+        };
+      }
+    }
+
+    try {
+      // 3. Check candidate lanes
+      const laneStatus = checkCandidateLanes({ ...opts, now }, d);
+      if (!laneStatus.available) {
+        decisions.recordDecision(
+          {
+            stage: decisions.Stage.COOLED,
+            detail: 'ALL_LANES_UNAVAILABLE',
+            earliestResetTime: laneStatus.earliestResetTime,
+            workItemId: item.work_item_id,
+          },
+          logOpts
+        );
+        log(
+          `ALL_LANES_UNAVAILABLE: waiting until earliest reset time ${laneStatus.earliestResetTime}`
+        );
+        const waitMs =
+          laneStatus.earliestResetTime && laneStatus.earliestResetTime > now
+            ? laneStatus.earliestResetTime - now
+            : pollIntervalMs;
+        await sleepFn(waitMs);
+        return {
+          stopped: true,
+          reason: 'ALL_LANES_UNAVAILABLE',
+          earliestResetTime: laneStatus.earliestResetTime,
+          waitMs,
+          iteration,
+        };
+      }
+
+      // 4. Check ceiling
+      const ceilingStatus = checkCeiling({ ...opts, now }, d);
+      if (!ceilingStatus.allowed) {
+        decisions.recordDecision(
+          {
+            stage: decisions.Stage.REFUSED,
+            detail: ceilingStatus.reason,
+            workItemId: item.work_item_id,
+          },
+          logOpts
+        );
+        log(`Ceiling reached: ${ceilingStatus.detail}. Waiting.`);
+        await sleepFn(pollIntervalMs);
+        if (maxIterations <= 1) {
+          return {
+            stopped: true,
+            reason: ceilingStatus.reason,
+            detail: ceilingStatus.detail,
+            iteration,
+          };
+        }
+        if (opts.workItem || opts['work-item']) {
+          return {
+            stopped: true,
+            reason: ceilingStatus.reason,
+            detail: ceilingStatus.detail,
+            iteration,
+          };
+        }
+        continue;
+      }
+
+      // 5. Run item through intake --run
+      decisions.recordDecision(
+        {
+          stage: decisions.Stage.SELECTED,
+          workItemId: item.work_item_id,
+        },
+        logOpts
+      );
+
+      const execResult = await executeIntakeForItem(item, opts, d, {
+        dir: opts.decisionDir || d.decisionDir || decisions.DEFAULT_DIR,
+        now: getNow(),
+      });
+
+      const proofFloorRefusal = Boolean(
+        (execResult.error &&
+          (execResult.error.code === 'PROOF_FLOOR_NOT_MET' ||
+            /PROOF_FLOOR_NOT_MET/.test(String(execResult.error.message || '')))) ||
+        (execResult.intakeResult &&
+          (execResult.intakeResult.reason === 'PROOF_FLOOR_NOT_MET' ||
+            /PROOF_FLOOR_NOT_MET/.test(JSON.stringify(execResult.intakeResult))))
+      );
+      if (proofFloorRefusal) {
+        const qualificationSlot = opts.qualificationSlot || d.qualificationSlot;
+        if (typeof qualificationSlot === 'function') {
+          const qualificationCeiling =
+            typeof d.checkCeiling === 'function'
+              ? d.checkCeiling({ ...opts, now }, d)
+              : checkCeiling({ ...opts, now }, d);
+          if (!qualificationCeiling.allowed) {
+            log(`Qualification slot skipped: ${qualificationCeiling.reason}.`);
+            if (opts.workItem || opts['work-item']) {
+              return {
+                stopped: true,
+                reason: qualificationCeiling.reason,
+                workItemId: item.work_item_id,
+                iteration,
+              };
+            }
+            continue;
+          }
+          const qualification = await qualificationSlot({
+            now,
+            iteration,
+            workItem: item,
+            reason: 'PROOF_FLOOR_NOT_MET',
+            ceiling: qualificationCeiling,
+          });
+          if (qualification && qualification.ran === true) {
+            log('QUALIFICATION_SLOT: ' + (qualification.status || 'completed'));
+            if (opts.workItem || opts['work-item']) {
+              if (iteration < maxIterations) {
+                await sleepFn(pollIntervalMs);
+                continue;
+              }
+              return {
+                stopped: true,
+                reason: 'WORK_ITEM_NOT_EXECUTED',
+                workItemId: item.work_item_id,
+                iteration,
+                qualification,
+              };
+            }
+            if (iteration < maxIterations) {
+              await sleepFn(pollIntervalMs);
+              continue;
+            }
+            return { completed: true, iterations: iteration, qualification };
+          }
+        }
+      }
+
+      const outcome = execResult.outcome || 'completed';
+      terminalWorkItems.set(item.work_item_id, outcome);
+      log(`Work Item ${item.work_item_id} ended with terminal state ${outcome}.`);
+
+      if (opts.workItem || opts['work-item']) {
+        return {
+          completed: true,
+          iterations: iteration,
+          workItemId: item.work_item_id,
+          outcome,
+          execution: execResult,
+        };
+      }
+    } finally {
+      if (parallelPlanning) {
+        const planOutcome = await joinParallelPlanning();
+        if (planOutcome && planOutcome.stopped) {
+          return planOutcome;
+        }
+      }
     }
 
     if (iteration < maxIterations) {
@@ -1088,6 +1311,8 @@ function nextCommand(args, deps) {
       stopFile,
       decisionDir,
       json,
+      runPlanning: deps && deps.runPlanning,
+      planningDeps: deps && deps.planningDeps,
       ...args,
     },
     deps
