@@ -145,6 +145,19 @@ function compilePrompt(item, ctx) {
       (command || '(none declared: a work item with no verification command is not dispatchable)')
   );
   if (command) lines.push('Expected result: ' + (i.verification.expect || '(exit code 0)'));
+  if (c.focusedTestsOnly) {
+    lines.push(
+      "Run only focused tests for this change. Print concise test output only: node --test ... 2>&1 | grep -E '^ℹ (pass|fail)|^✖ ' (or an equivalent concise reporter). Do not run or print the full brain suite; the Controller runs that host-side gate and returns failing test names only."
+    );
+  }
+  if (Array.isArray(c.hostGateFailures) && c.hostGateFailures.length > 0) {
+    lines.push('Host-side verification failures to repair (failing test names only):');
+    for (const failure of c.hostGateFailures) lines.push('- ' + String(failure));
+  }
+  if (c.contextPack) {
+    lines.push('Focused context pack: read ' + c.contextPack + ' before exploring files.');
+    lines.push('Use the pack for orientation and read only additional files under Allowed files.');
+  }
   if (c.isolatedWorker) lines.push(ISOLATED_WORKER_VERIFICATION_NOTE);
   lines.push('Evidence to submit: test output, the diff, and the acceptance matrix.');
   lines.push('Checkpoint: ' + (i.checkpointPolicy || 'resume-by-work-item'));

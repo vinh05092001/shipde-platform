@@ -104,8 +104,18 @@ function writePayloadArgs(dir, args) {
  * 5.1 writes a UTF-8 BOM), plus everything needed to re-read it the way the
  * launcher does.
  */
-function runGeneratedHost({ targetLines, workerTimeoutMs, workerUsername, payloadArgs, env }) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-launch-host-'));
+function runGeneratedHost({
+  targetLines,
+  workerTimeoutMs,
+  workerUsername,
+  payloadArgs,
+  env,
+  tokenBudget,
+  usageFile,
+  progressTimeoutMs,
+  tempRoot,
+}) {
+  const dir = fs.mkdtempSync(path.join(tempRoot || os.tmpdir(), 'shipde-launch-host-'));
   const targetPath = path.join(dir, 'target.ps1');
   fs.writeFileSync(targetPath, targetLines.join('\r\n') + '\r\n', 'utf8');
   const args =
@@ -125,6 +135,9 @@ function runGeneratedHost({ targetLines, workerTimeoutMs, workerUsername, payloa
     workerTimeoutMs,
     completionNonce,
     runAsCurrentUser: true,
+    tokenBudget,
+    usageFile,
+    progressTimeoutMs,
   });
   const hostPath = path.join(dir, 'host.ps1');
   fs.writeFileSync(hostPath, script, 'utf8');
@@ -154,6 +167,98 @@ function runGeneratedHost({ targetLines, workerTimeoutMs, workerUsername, payloa
     readIt: () => readLaunchResult(launchResultPath, completionNonce, hostRes),
   };
 }
+
+test(
+  'live token usage stops a worker before it exits when its budget is exceeded',
+  windowsSkip,
+  () => {
+    const tempRoot = path.join(__dirname, '..', '..', '..', '.upstream-tmp');
+    fs.mkdirSync(tempRoot, { recursive: true });
+    const usageFile = path.join(tempRoot, 'task-ai-141-live-usage.json');
+    fs.rmSync(usageFile, { force: true });
+    const { hostRes, raw } = runGeneratedHost({
+      workerTimeoutMs: 30000,
+      tokenBudget: { maxTokens: 50 },
+      usageFile,
+      tempRoot,
+      targetLines: [
+        '$ErrorActionPreference = "Stop"',
+        'Write-Output \'{"tokens":{"input":100,"output":0,"total":100}}\'',
+        'Start-Sleep -Seconds 10',
+        'exit 0',
+      ],
+    });
+
+    assert.equal(hostRes.status, 0, String(hostRes.stderr || hostRes.stdout || ''));
+    assert.equal(raw.budgetExceeded, true);
+    assert.match(raw.failureReason, /TOKEN_BUDGET_EXCEEDED/);
+    assert.equal(JSON.parse(fs.readFileSync(usageFile, 'utf8')).usage.total, 100);
+    fs.rmSync(usageFile, { force: true });
+  }
+);
+
+test(
+  'stall detection stops a hung worker that already logged tokens when no further progress occurs',
+  windowsSkip,
+  () => {
+    const tempRoot = path.join(__dirname, '..', '..', '..', '.upstream-tmp');
+    fs.mkdirSync(tempRoot, { recursive: true });
+    const usageFile = path.join(tempRoot, 'task-ai-141-stall-usage.json');
+    fs.rmSync(usageFile, { force: true });
+    const startedAt = Date.now();
+    const { hostRes, raw } = runGeneratedHost({
+      workerTimeoutMs: 30000,
+      progressTimeoutMs: 1200,
+      usageFile,
+      tempRoot,
+      targetLines: [
+        '$ErrorActionPreference = "Stop"',
+        'Write-Output \'{"tokens":{"input":100,"output":0,"total":100}}\'',
+        'Start-Sleep -Seconds 15',
+        'exit 0',
+      ],
+    });
+    const elapsedMs = Date.now() - startedAt;
+
+    assert.equal(hostRes.status, 0, String(hostRes.stderr || hostRes.stdout || ''));
+    assert.match(raw.failureReason, /STALLED_NO_PROGRESS/);
+    assert.ok(elapsedMs < 10000, `expected stall stop before 10s, took ${elapsedMs}ms`);
+    fs.rmSync(usageFile, { force: true });
+  }
+);
+
+test(
+  'live usage snapshot captures nested tokens.cache.read and enforces token budget',
+  windowsSkip,
+  () => {
+    const tempRoot = path.join(__dirname, '..', '..', '..', '.upstream-tmp');
+    fs.mkdirSync(tempRoot, { recursive: true });
+    const usageFile = path.join(tempRoot, 'task-ai-141-cache-usage.json');
+    fs.rmSync(usageFile, { force: true });
+    const { hostRes, raw } = runGeneratedHost({
+      workerTimeoutMs: 30000,
+      tokenBudget: { maxTokens: 200 },
+      usageFile,
+      tempRoot,
+      targetLines: [
+        '$ErrorActionPreference = "Stop"',
+        'Write-Output \'{"tokens":{"input":50,"output":20,"total":70,"cache":{"read":500}}}\'',
+        'Start-Sleep -Seconds 10',
+        'exit 0',
+      ],
+    });
+
+    assert.equal(hostRes.status, 0, String(hostRes.stderr || hostRes.stdout || ''));
+    assert.equal(raw.budgetExceeded, true);
+    assert.match(raw.failureReason, /TOKEN_BUDGET_EXCEEDED/);
+    const saved = JSON.parse(fs.readFileSync(usageFile, 'utf8'));
+    assert.equal(saved.usage.input, 50);
+    assert.equal(saved.usage.cacheRead, 500);
+    assert.equal(saved.usage.output, 20);
+    assert.ok(saved.usage.total >= 570);
+    fs.rmSync(usageFile, { force: true });
+  }
+);
 
 test(
   'the generated host script runs as the current user without the worker credential',

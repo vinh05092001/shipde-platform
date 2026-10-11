@@ -3910,6 +3910,7 @@ describe('TASK-AI-64 isolated route covers the opencode harness (DEFECT L)', () 
       result = await safeRun(
         baseOpts({
           isolatedWorker: true,
+          hostGate: () => ({ pass: true, failures: [] }),
           cwd: hostRepo.dir,
           baseSha: hostRepo.sha,
           sha: hostRepo.sha,

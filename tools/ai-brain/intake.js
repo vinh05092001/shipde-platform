@@ -38,6 +38,88 @@ const ROLE_DEFAULT = 'author.foundation';
 const COMPLEXITY_DEFAULT = 'standard';
 const REVIEW_BUDGET = '2';
 const WORKER_TIMEOUT_MIN = '60';
+const RTK_RISK_DOMAINS = [
+  'auth',
+  'authentication',
+  'security',
+  'money',
+  'payment',
+  'payments',
+  'tenant isolation',
+  'tenant_isolation',
+  'tenancy',
+  'carrier side effects',
+  'pii',
+  'database ownership',
+];
+
+const DEFAULT_TOKEN_BUDGETS = {
+  default: { maxTokens: 150000, maxTurns: 80, noProgressMinutes: 10, repeatedQuotaFailures: 3 },
+  byRole: {
+    'author.foundation': {
+      maxTokens: 250000,
+      maxTurns: 100,
+      noProgressMinutes: 10,
+      repeatedQuotaFailures: 3,
+    },
+    reviewer: { maxTokens: 120000, maxTurns: 60, noProgressMinutes: 8, repeatedQuotaFailures: 3 },
+  },
+  byComplexity: {
+    simple: { maxTokens: 60000, maxTurns: 40, noProgressMinutes: 8, repeatedQuotaFailures: 3 },
+    standard: { maxTokens: 150000, maxTurns: 80, noProgressMinutes: 10, repeatedQuotaFailures: 3 },
+    complex: { maxTokens: 300000, maxTurns: 120, noProgressMinutes: 15, repeatedQuotaFailures: 3 },
+  },
+};
+
+function deriveRiskDomains(text) {
+  const explicit = controlValue(text, ['risk domains', 'riskdomains']);
+  if (explicit)
+    return unique(
+      explicit
+        .split(/[,;|]/)
+        .map((value) => stripTicks(value).toLowerCase())
+        .filter(Boolean)
+        .map((value) =>
+          value === 'tenant' || value === 'tenancy'
+            ? 'tenant isolation'
+            : value === 'pii'
+              ? 'pii'
+              : value
+        )
+    );
+  const body = [
+    String(text || ''),
+    sectionBody(
+      text,
+      /^##\s+(Scope|In\s+Scope|Allowed(?:\s+Paths)?|Acceptance(?:\s+Matrix)?|Business\s+Outcome|Outcome|Requirements?|Security|Data|API|Persistence)\b/i
+    ),
+  ]
+    .join('\n')
+    .toLowerCase();
+  const rules = [
+    [
+      'auth',
+      /\bauth(?:entication|orization)?\b|\blogin\b|\bpasswords?\b|\bsessions?\b|\bmfa\b|\baccess control\b/,
+    ],
+    ['security', /\bsecurity\b|\bsecret\b|\bcredential\b|\bencryption\b/],
+    [
+      'money',
+      /\bmoney\b|\bpayment\b|\bsettlement\b|\bcod\b|\bfinancial\b|\brefunds?\b|\bbilling\b/,
+    ],
+    ['tenant isolation', /\btenant\b|\bshop scope\b/],
+    ['pii', /\bpii\b|\bpersonal(?:ly identifiable)? data\b|\bphone\b|\bemail\b/],
+    [
+      'carrier side effects',
+      /\bcarrier\b.*\b(?:side effect|action|integration|create|cancel|redelivery|claim)\b|\bcreate (?:shipment|waybill)\b|\b(?:shipment|waybill)s?\b/,
+    ],
+    [
+      'database ownership',
+      /\b(?:database|schema)\s+ownership\b|\b(?:database|schema)\b.*\b(?:migration|schema\s+change)\b|\b(?:database|schema)\s+migration\b|\bmigrat(?:e|ion)\b|\bschema\.prisma\b|\bprisma[\s/]+schema\b|\bprisma\s+migrate\b/,
+    ],
+  ];
+  return rules.filter(([, pattern]) => pattern.test(body)).map(([name]) => name);
+}
+
 const EXTERNAL_WORKERS_VALUE = 'agy-pool';
 const ISOLATION_VERDICT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
@@ -208,26 +290,11 @@ const RISK_DOMAIN_PATTERNS = Object.freeze({
   auth: /\b(?:auth(?:entication|orization)?|login|password|session|mfa|credential)\b/i,
   security: /\b(?:security|secret|encryption|vulnerability|threat|permission|access control)\b/i,
   money: /\b(?:money|payment|financial|settlement|cod|refund|billing|price|amount|bank)\b/i,
+  pii: /\b(?:pii|personal data|personal information|recipient data|phone number|email address)\b/i,
   'tenant isolation': /\b(?:tenant|multi-tenant|cross-tenant|shop isolation)\b/i,
-  PII: /\b(?:pii|personal data|personal information|recipient data|phone number|email address)\b/i,
   'carrier side effects': /\b(?:carrier|waybill|shipment|redelivery|cancel|claim|pickup)\b/i,
   'database ownership': /\b(?:database|schema|migration|prisma|sql|persistence)\b/i,
 });
-
-function deriveRiskDomains(text) {
-  const explicit = controlValue(text, ['risk domains', 'risk domain']);
-  if (explicit) {
-    return Object.entries(RISK_DOMAIN_PATTERNS)
-      .filter(([, pattern]) => pattern.test(explicit))
-      .map(([domain]) => domain);
-  }
-  const scope = sectionBody(text, /^##\s+(?:In Scope|Scope|Acceptance Matrix|Acceptance)\b/i);
-  const acceptance = sectionBody(text, /^##\s+Acceptance(?: Matrix)?\b/i);
-  const evidence = [scope, acceptance].filter(Boolean).join('\n');
-  return Object.entries(RISK_DOMAIN_PATTERNS)
-    .filter(([, pattern]) => pattern.test(evidence))
-    .map(([domain]) => domain);
-}
 
 function deriveComplexity(text, acceptanceCriteria, riskDomains, allowedPaths) {
   const acCount = acceptanceCriteria.length;
@@ -304,6 +371,7 @@ function deriveSpec({ id, workItemText, registerItem, root, deps }) {
     dependencies: dependencies.slice(),
     acceptanceCriteria: acceptanceCriteria.slice(),
     verification,
+    riskDomains,
   };
 
   return {
@@ -688,6 +756,7 @@ function composeOrchestrateCommand({
   hasAgyPoolQuota,
   publish,
   decisionDir,
+  rtk = false,
 }) {
   const cli = path.join(root, 'tools', 'ai-brain', 'cli.js');
   const runFiles = {
@@ -697,7 +766,14 @@ function composeOrchestrateCommand({
     accounts: path.join(runDir, 'accounts.json'),
     checkpoint: path.join(runDir, 'checkpoint.json'),
     decisionDir: decisionDir || path.join(runDir, 'decisions'),
+    tokenBudgets: path.join(runDir, 'token-budgets.json'),
   };
+  fs.writeFileSync(
+    runFiles.tokenBudgets,
+    JSON.stringify(DEFAULT_TOKEN_BUDGETS, null, 2) + '\n',
+    'utf8'
+  );
+  runFiles.contextManifest = path.join(runDir, 'context-manifest.json');
   const argv = [
     'node',
     cli,
@@ -723,14 +799,23 @@ function composeOrchestrateCommand({
     runFiles.checkpoint,
     '--decision-dir',
     runFiles.decisionDir,
+    '--token-budgets',
+    runFiles.tokenBudgets,
+    '--context-manifest',
+    runFiles.contextManifest,
   ];
   if (hasAgyPoolQuota) argv.push('--external-workers', EXTERNAL_WORKERS_VALUE);
+  const rtkRequested =
+    typeof rtk === 'object' && rtk !== null ? Boolean(rtk.enabled) : Boolean(rtk);
+  if (rtkRequested) argv.push('--rtk');
   if (publish) argv.push('--publish');
   return { argv, command: argv.map(quoteArg).join(' '), runFiles };
 }
 
 function defaultVerdictPath() {
-  return path.join(process.env.LOCALAPPDATA || '', 'ShipDe', 'isolation-verdict.json');
+  const base =
+    process.env.LOCALAPPDATA || process.env.XDG_CONFIG_HOME || process.env.HOME || os.homedir();
+  return path.join(base, 'ShipDe', 'isolation-verdict.json');
 }
 
 function assertIsolationClosed({ verdictPath, now, stat, readFile }) {
@@ -1000,6 +1085,10 @@ async function runIntake(opts, deps) {
 
   const repoRoot = path.resolve(root);
   const hasPoolQuota = Boolean(agyPoolHasQuota(d));
+  const riskDomains = Array.isArray(derived.specItem.riskDomains)
+    ? derived.specItem.riskDomains
+    : [];
+  const rtkEnabled = !RTK_RISK_DOMAINS.some((domain) => riskDomains.includes(domain));
 
   const runDir = path.join(
     root,
@@ -1060,6 +1149,11 @@ async function runIntake(opts, deps) {
     )
   );
 
+  const rtkDecision = {
+    enabled: rtkEnabled,
+    reason: rtkEnabled ? 'low_risk_item' : 'risk_domains_block_rtk',
+  };
+
   const { argv, command, runFiles } = composeOrchestrateCommand({
     root,
     runDir,
@@ -1068,6 +1162,7 @@ async function runIntake(opts, deps) {
     hasAgyPoolQuota: hasPoolQuota,
     publish: Boolean(o.publish),
     decisionDir: o.decisionDir || d.decisionDir,
+    rtk: rtkDecision,
   });
 
   const result = {
@@ -1075,6 +1170,7 @@ async function runIntake(opts, deps) {
     runDir,
     goal: derived.goal,
     spec: derived.specItem,
+    rtk: rtkDecision,
     resolvedDependencies,
     catalogue: catalogue.models,
     warnings: catalogue.warnings,
@@ -1126,7 +1222,9 @@ async function runIntake(opts, deps) {
 
 module.exports = {
   runIntake,
+  DEFAULT_TOKEN_BUDGETS,
   deriveSpec,
+  deriveRiskDomains,
   resolveDependencies,
   buildCatalogue,
   mergeDiscoveredSources,
@@ -1143,6 +1241,7 @@ module.exports = {
   COMPLEXITY_DEFAULT,
   REVIEW_BUDGET,
   WORKER_TIMEOUT_MIN,
+  RTK_RISK_DOMAINS,
   EXTERNAL_WORKERS_VALUE,
   ISOLATION_VERDICT_MAX_AGE_MS,
 };
