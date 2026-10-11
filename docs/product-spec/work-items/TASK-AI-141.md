@@ -59,6 +59,14 @@ These spec parts remain follow-up scope under TASK-AI-141 and are not implemente
 - **Part D:** intake risk-domain and complexity derivation plus the QUALITY_FIRST safety floor.
 - **Part E and addenda:** live gateway model discovery/probing, same-model alternate-path fallback, temporary parking and due rechecks.
 
+## Source discovery — operator requirement (2026-10-11)
+
+The Controller discovers configured model sources from OpenCode provider configuration, `*_API_KEY` / `*_TOKEN` environment variable names, the local models.dev cache, and endpoint/model metadata in Cline, Codex, Qwen, Gemini, Continue, Kiro, OpenClaw, Hermes and 9router local configuration. Discovery persists `tools/ai-brain/data/sources.json` with endpoint, model IDs, credential location, status, probe time, recheck time and reason. Credential values are never persisted, returned in discovery records, logged or placed in fixtures; a probe may read a value in memory for its request. Persisted endpoints redact userinfo, query strings and secret or project path values. HTTP 401, 402, 403, 429 and 451 park a source with a reason and recheck time. Only a successfully probed `available` source with a routable environment credential may become a selectable candidate. Discovered, unprobed, unavailable, parked and non-routable sources remain visible in intake account inventory with a reason and `nextCheckAt`. Tencent TokenHub must use its `-intl` endpoint when configured.
+
+CLI: `node tools/ai-brain/cli.js sources --discover [--probe] [--json]`.
+
+Verification: fake HOME/config trees and fake fetch behavior in `tools/ai-brain/test/source-discovery.test.js`.
+
 ## Part C — Codex lane inside the isolated worker
 
 The Codex harness runs `codex exec --dangerously-bypass-approvals-and-sandbox` only through the isolated launcher. Direct harness use and attempts outside a worker path fail with `CODEX_REQUIRES_ISOLATION`. The launcher probes `codex login status` under the worker account before execution; a missing login is returned as the local failure `CODEX_NOT_LOGGED_IN`, allowing orchestration to continue to another candidate. The worker uses its own HOME and USERPROFILE and no host `~/.codex` credential file is read or copied.
@@ -136,6 +144,8 @@ The production `qualify --auto` command builds candidates from intake catalogue 
 - Added fake-driven tests for qualification candidate selection, caps, exact-SHA independent review, and rejection of product work. The normal isolated orchestration/reviewer implementation must be supplied as `runIsolatedReviewed`; without it, `qualify --auto` fails closed with `QUALIFICATION_RUNNER_UNAVAILABLE`.
 
 ## Controller start-up fixes
+
+- The `qualify --auto` CLI referenced `intake.revParseOriginMain`, but `intake.js` did not export that helper. Exported it and added a child-process regression that runs the CLI against a fake root and confirms it does not fail with a missing function. The other intake helpers used by the CLI (`runIsolatedReviewed` and `assertIsolationClosed`) were already exported.
 
 - The standalone `qualify --auto` CLI now supplies the same isolated-review runner, closed-isolation assertion, candidate builder and qualification configuration as the qualification slot created by `next`.
 - Reviewer fixture selection and failed-key unit tests write only to temporary decision directories. Regression coverage runs both affected selection paths and verifies that today's default decision log is unchanged.

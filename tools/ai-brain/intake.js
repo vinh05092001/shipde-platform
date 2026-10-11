@@ -547,6 +547,28 @@ async function buildCatalogue(deps) {
       warnings.push({ source: collector.name, error: (result && result.error) || 'unavailable' });
     }
   }
+  const discoveryFile = path.join(
+    deps.root || path.join(__dirname, '..', '..'),
+    'tools',
+    'ai-brain',
+    'data',
+    'sources.json'
+  );
+  let discovered = [];
+  try {
+    discovered = JSON.parse(fs.readFileSync(discoveryFile, 'utf8')).sources || [];
+  } catch {}
+  for (const source of discovered) {
+    if (!source) continue;
+    sourceStatus['discovered:' + source.id] = source.status || 'discovered';
+    if (source.status === 'parked' || source.status === 'unavailable')
+      warnings.push({ source: source.id, error: source.reason || source.status });
+    const routableCredential =
+      source.credential && source.credential.type === 'env' && source.credential.name;
+    if (source.status !== 'available' || !routableCredential || !Array.isArray(source.models))
+      continue;
+    for (const model of source.models) if (model) models.add(String(model));
+  }
   return normalizeCatalogue([...models], warnings, sourceStatus);
 }
 
@@ -559,6 +581,36 @@ function normalizeCatalogue(models, warnings, sourceStatus) {
     );
   }
   return { models: list, warnings: warnings || [], sourceStatus: sourceStatus || {} };
+}
+
+function mergeDiscoveredSources(accounts, discoveredSources) {
+  const inventory = (discoveredSources || [])
+    .filter((source) => source && (source.endpoint || Array.isArray(source.models)))
+    .map((source) => {
+      const routableCredential =
+        source.credential && source.credential.type === 'env' && source.credential.name;
+      const available = source.status === 'available';
+      return {
+        id: 'source-' + String(source.id).replace(/[^a-z0-9._-]/gi, '-'),
+        sourceId: source.id,
+        provider: source.id,
+        endpoint: source.endpoint,
+        credentialLocation:
+          (source.credential &&
+            (source.credential.name || source.credential.path + ':' + source.credential.field)) ||
+          null,
+        models: Array.isArray(source.models) ? source.models : [],
+        status: source.status || 'discovered',
+        enabled: Boolean(available && routableCredential),
+        reason: !available
+          ? source.reason || source.status || 'not probed successfully'
+          : routableCredential
+            ? null
+            : 'credential is not routable from an environment variable',
+        nextCheckAt: source.nextCheckAt || null,
+      };
+    });
+  return (accounts || []).concat(inventory);
 }
 
 /**
@@ -906,6 +958,16 @@ async function runIntake(opts, deps) {
   const accounts = await (typeof d.listAccounts === 'function'
     ? d.listAccounts(d.accountOptions || {})
     : accountsApi.listAccounts(d.accountOptions || {}));
+  let discoveredSources = [];
+  try {
+    discoveredSources =
+      JSON.parse(
+        fs.readFileSync(path.join(root, 'tools', 'ai-brain', 'data', 'sources.json'), 'utf8')
+      ).sources || [];
+  } catch {
+    discoveredSources = [];
+  }
+  const allAccounts = mergeDiscoveredSources(accounts, discoveredSources);
 
   const routeHealthApi = require('./route-health');
   const routeHealthFile =
@@ -975,7 +1037,7 @@ async function runIntake(opts, deps) {
     JSON.stringify(resolvedDependencies, null, 2)
   );
   fs.writeFileSync(path.join(runDir, 'catalogue.json'), JSON.stringify(catalogue.models, null, 2));
-  fs.writeFileSync(path.join(runDir, 'accounts.json'), JSON.stringify(accounts, null, 2));
+  fs.writeFileSync(path.join(runDir, 'accounts.json'), JSON.stringify(allAccounts, null, 2));
   const accountContributions = [];
   const intakeCandidates = require('./candidates').gatewayAccountCandidates({
     registry: d.registry || sourcesApi.loadSources(),
@@ -1019,7 +1081,7 @@ async function runIntake(opts, deps) {
     sourceStatus: catalogue.sourceStatus,
     routeRefresh: refreshedRoutes,
     accountContributions,
-    accounts,
+    accounts: allAccounts,
     baseSha,
     repoRoot,
     hasAgyPoolQuota: hasPoolQuota,
@@ -1067,10 +1129,12 @@ module.exports = {
   deriveSpec,
   resolveDependencies,
   buildCatalogue,
+  mergeDiscoveredSources,
   composeOrchestrateCommand,
   assertIsolationFresh,
   assertIsolationClosed,
   runIsolatedReviewed,
+  revParseOriginMain,
   parseModelListing,
   extractModelIds,
   readingHasQuota,
