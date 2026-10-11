@@ -3199,33 +3199,51 @@ function buildQualificationCandidates(rootDir) {
     path.join(rootDir, 'tools', 'ai-brain', 'data', 'evidence')
   );
   const annotated = candidatesApi.annotateCandidates(candidates, evidenceData, { now: Date.now() });
-  const decision = require('./ranking').rankAndRecord(annotated, {
-    workItemId: 'TASK-AI-141-QUALIFICATION',
-    role: 'author.foundation',
-    kind: 'author.foundation',
-    registry,
-    evidenceData,
-    dryRun: true,
-    explorationBudget: annotated.length,
-    accounts,
-    now: Date.now(),
-  });
-  const rejectedByKey = new Map();
-  const rankedByKey = new Map(
-    (decision.ranking || []).map((row, index) => [
-      row.offeringId,
-      row.score === undefined ? -index : row.score,
-    ])
+  const profile = {
+    taskId: 'TASK-AI-141-QUALIFICATION',
+    role: 'writer',
+    complexity: 'complex',
+    requiredCapabilities: [],
+    proofFloor: 'WORK_ITEM_PASS',
+    contextSize: 32000,
+    expectedDuration: 1,
+    latencyPriority: 'normal',
+    qualityFloor: 0,
+    costCeiling: 1000000000,
+    requiredHarness: null,
+    forbiddenFailureDomains: [],
+    resourceCeiling: Number.MAX_SAFE_INTEGER,
+    currentWorkload: 0,
+  };
+  const decision = require('./routing').rankForProfile(
+    annotated,
+    profile,
+    {},
+    {
+      workItemId: 'TASK-AI-141-QUALIFICATION',
+      registry,
+      evidenceData,
+      explorationBudget: annotated.length,
+      accounts,
+      now: Date.now(),
+      useStoredQuota: true,
+    }
   );
+  const rejectedByKey = new Map();
+  const rankedByKey = new Map((decision.ranking || []).map((row) => [row.candidateKey, row.score]));
   for (const row of decision.rejected || []) {
-    const list = rejectedByKey.get(row.offeringId) || [];
-    list.push(row.reasonCode || String(row.reason || '').split(':')[0]);
-    rejectedByKey.set(row.offeringId, list);
+    const key = row.candidateKey;
+    const list = rejectedByKey.get(key) || [];
+    list.push(String(row.reasonCode || row.reason || '').split(':')[0]);
+    rejectedByKey.set(key, list);
   }
   return annotated
     .map((candidate) => {
       const key = candidatesApi.candidateKey(candidate);
       const reasons = rejectedByKey.get(key) || [];
+      if (candidate.blocked === true && !reasons.includes('CANDIDATE_BLOCKED')) {
+        reasons.push('CANDIDATE_BLOCKED');
+      }
       return Object.assign({}, candidate, {
         candidateKey: key,
         status: reasons.length ? 'rejected' : 'ranked',
@@ -3234,7 +3252,20 @@ function buildQualificationCandidates(rootDir) {
         blocked: candidate.blocked === true,
       });
     })
-    .sort((a, b) => (b.controllerRank || 0) - (a.controllerRank || 0));
+    .filter(
+      (candidate) =>
+        !candidate.blocked &&
+        candidate.rejectionReasons.length === 1 &&
+        candidate.rejectionReasons[0] === 'PROOF_FLOOR_NOT_MET'
+    )
+    .sort((a, b) => {
+      const rankDiff = (b.controllerRank || 0) - (a.controllerRank || 0);
+      if (rankDiff !== 0) return rankDiff;
+      return (
+        (Date.parse(b.lastUpdated || b.updatedAt || b.createdAt || 0) || 0) -
+        (Date.parse(a.lastUpdated || a.updatedAt || a.createdAt || 0) || 0)
+      );
+    });
 }
 
 function main() {

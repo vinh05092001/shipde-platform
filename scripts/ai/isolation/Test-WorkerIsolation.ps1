@@ -288,7 +288,7 @@ $Output = @{
     policyHash = $policyHash
 }
 
-$Output | ConvertTo-Json | Out-File $VerdictPath -Encoding UTF8
+[System.IO.File]::WriteAllText($VerdictPath, ($Output | ConvertTo-Json), [System.Text.UTF8Encoding]::new($false))
 
 $Output | ConvertTo-Json
 

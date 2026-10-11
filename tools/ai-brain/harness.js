@@ -216,7 +216,10 @@ const codex = {
     const verdict = job.isolationVerdict || process.env.SHIPDE_ISOLATION_VERDICT;
     let verdictData;
     try {
-      verdictData = typeof verdict === 'string' ? JSON.parse(verdict) : verdict;
+      verdictData =
+        typeof verdict === 'string'
+          ? JSON.parse(verdict.charCodeAt(0) === 0xfeff ? verdict.slice(1) : verdict)
+          : verdict;
     } catch {
       throw new Error('CODEX_REQUIRES_ISOLATION');
     }
