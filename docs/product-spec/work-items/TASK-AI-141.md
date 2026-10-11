@@ -50,7 +50,6 @@ This Work Item is assigned to GEMINI. Codex independently reviews the resulting 
 
 The supervisor explicitly directed that proof transfer be handled in Part A. This supersedes the original scope note that placed transfer solely in Part B.
 
-
 ## Follow-up Within This Work Item — Parts B to E
 
 These spec parts remain follow-up scope under TASK-AI-141 and are not implemented in this revision:
@@ -131,3 +130,7 @@ No API, persisted product data, or external side effects change. Candidate gener
 ## Part D
 
 Intake derives risk domains and complexity from the Work Item scope, acceptance criteria, and allowed paths, and records the derivation in each run directory. JEV receives the resulting risk domains and complexity; the Controller enforces a `QUALITY_FIRST` floor for auth, security, money, or tenant-isolation work and records the override reason. Regressions cover a 15-AC MFA-like item and a docs-only item.
+
+### Part A follow-up: infrastructure failures do not revoke proof transfer
+
+`tools/ai-brain/routing.js` now preserves a source path's `WORK_ITEM_PASS` when that path is blocked or has failed evidence due to infrastructure conditions such as quota exhaustion, rate limits, timeouts, or launch/harness failures. Transfer still requires exact normalized backend model identity and a viable target path; model-scope failures, quality outcomes such as `CHANGES_REQUIRED`, and revoked proof disqualify the source. Three regressions cover infrastructure enum classification while preserving model failures, model/quality failures disqualifying transfer, and exhausted target paths not inheriting proof (`classifier enum values recognize infrastructure and preserve model failures`, `a model-quality failure on the source path disqualifies the proof transfer`, `an exhausted target path never inherits the transferred proof`).

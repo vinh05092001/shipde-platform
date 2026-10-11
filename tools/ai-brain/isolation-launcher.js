@@ -320,7 +320,11 @@ $psi.Password = $sec
   const safeWorkerRootForGit = workerRoot.replace(/\\/g, '/');
   const rtkPathPrepend = options.rtkPathPrepend || null;
   const codexLoginProbe = isCodex
-    ? `& "${exeFile}" login status *> \`$null
+    ? `if (-not (Test-Path -LiteralPath "${exeFile}")) {
+  @{ nonce = "${completionNonce}"; exitCode = 1; completed = $true; localFailure = "CODEX_NOT_LOGGED_IN"; completedAt = (Get-Date).ToString('o') } | ConvertTo-Json -Depth 5 | Out-File "${markerPath}" -Encoding UTF8
+  exit 0
+}
+& "${exeFile}" login status *> \`$null
 if (-not \`$?) {
   @{ nonce = "${completionNonce}"; exitCode = 1; completed = $true; localFailure = "CODEX_NOT_LOGGED_IN"; completedAt = (Get-Date).ToString('o') } | ConvertTo-Json -Depth 5 | Out-File "${markerPath}" -Encoding UTF8
   exit 0
