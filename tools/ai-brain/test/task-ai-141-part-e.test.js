@@ -148,19 +148,96 @@ test('account scoped due probe resolves gateway source and restores the same rou
 
 test('probeGatewayModel accepts account scoped route keys', async () => {
   let called = false;
+  let redirectMode;
   const result = await routes.probeGatewayModel(
     'gw/model',
     { id: 'gw', accountId: 'acct-a' },
     {
       registry: { sources: [{ id: 'gw', endpoint: 'http://gateway' }] },
-      fetch: async (url) => {
+      fetch: async (url, options) => {
         called = url === 'http://gateway/chat/completions';
+        redirectMode = options.redirect;
         return { ok: true, status: 200, text: async () => 'ok', headers: { get: () => null } };
       },
     }
   );
   assert.equal(result.ok, true);
   assert.equal(called, true);
+  assert.equal(redirectMode, 'error', 'probes must not forward credentials through redirects');
+});
+
+test('credentialed probes reject non-HTTPS registry endpoints before sending credentials', async () => {
+  let calls = 0;
+  const result = await routes.probeGatewayModel('gw/model', 'gw', {
+    registry: {
+      sources: [
+        {
+          id: 'gw',
+          endpoint: 'http://attacker.example/v1',
+          credential: { type: 'api-key', env: 'TASK_AI_141_PROBE_TOKEN' },
+        },
+      ],
+    },
+    fetch: async () => {
+      calls += 1;
+      return { ok: true, status: 200, text: async () => 'ok', headers: { get: () => null } };
+    },
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.error, /HTTPS/);
+  assert.equal(calls, 0);
+});
+
+test('AUTH_NEEDED tries another account on the failed gateway first', async () => {
+  const store = { version: 1, paths: {}, events: [] };
+  const failed = { id: 'gw', accountId: 'acct-a' };
+  routes.recordResult(store, 'model', failed, { ok: false, status: 403 }, 1000);
+  const attempts = [];
+  const result = await routes.routeFallback(
+    'model',
+    failed,
+    [
+      { id: 'other-gw', accountId: 'acct-c', evidence: 100 },
+      { id: 'gw', accountId: 'acct-b', evidence: 1 },
+    ],
+    async (_model, route) => {
+      attempts.push(route);
+      if (route.id !== 'gw') return { ok: false, status: 500 };
+      return { ok: true };
+    },
+    store,
+    { now: 1000 }
+  );
+  assert.equal(result.ok, true);
+  assert.deepEqual(attempts, [{ id: 'gw', accountId: 'acct-b', evidence: 1 }]);
+  assert.equal(store.events.at(-1).type, 'route_fallback');
+});
+
+test('default production dispatch requires route health even when the health store is empty', () => {
+  const healthFile = path.join(__dirname, `.ai141-empty-health-${process.pid}.json`);
+  const registry = {
+    sources: [
+      { id: 'gw', kind: 'router', servesModels: true, harness: 'paseo' },
+      { id: 'vendor', kind: 'model-source', reachedVia: 'gw' },
+    ],
+    dispatch: { providers: { vendor: { harness: 'paseo', accessPath: 'paseo' } } },
+  };
+  const candidate = { gateway: 'gw', upstream: 'vendor', modelId: 'vendor/model' };
+  try {
+    const assembled = cli.assembleForDispatch(
+      { candidates: [candidate] },
+      [{ id: 'acct', provider: 'vendor' }],
+      registry,
+      {
+        routeHealthFile: healthFile,
+        candidates: [candidate],
+        routeHealth: routes.loadStore(healthFile, { allowMissing: true }),
+      }
+    );
+    assert.ok(!assembled.some((row) => row.modelId === candidate.modelId));
+  } finally {
+    fs.rmSync(healthFile, { force: true });
+  }
 });
 
 test('normal next loop refreshes the default route health store before selection', async (t) => {
@@ -1059,7 +1136,7 @@ test('resolveFallbackRoutes with preResolvedFallback picks probed OK path matchi
   assert.notEqual(resolved[0].route.id, 'gw-unprobed', 'unprobed sibling must never be selected');
 });
 
-test('production defaults work without injected deps and fail closed on missing records', () => {
+test('production defaults require health while explicit candidates can opt out', () => {
   const registry = {
     sources: [
       { id: 'gateway-prod', kind: 'router' },
@@ -1072,15 +1149,23 @@ test('production defaults work without injected deps and fail closed on missing 
     upstream: 'vendor-prod',
     modelId: 'vendor-prod/model-unprobed',
   };
-  // Without routeHealth, old flows pass through (backward compatibility).
+  // Production candidates without injected route health are rejected by default.
   const withoutHealth = cli.assembleForDispatch(
     { candidates: [model] },
     [{ id: 'prod-acct', provider: 'vendor-prod' }],
-    registry
+    registry,
+    { offerings: [{ provider: 'vendor-prod', accountId: 'prod-acct', model: model.modelId }] }
   );
   assert.ok(Array.isArray(withoutHealth));
-  // Old callers get candidates even without route health data.
-  assert.ok(withoutHealth.length > 0, 'old callers without routeHealth get candidates');
+  assert.ok(!withoutHealth.some((c) => c.modelId === model.modelId));
+
+  const explicitFixture = cli.assembleForDispatch(
+    { candidates: [model] },
+    [{ id: 'prod-acct', provider: 'vendor-prod' }],
+    registry,
+    { candidates: [model] }
+  );
+  assert.ok(explicitFixture.some((c) => c.modelId === model.modelId));
 
   // With explicit routeHealth, unprobed candidates are rejected (fail closed).
   const assembled = cli.assembleForDispatch(

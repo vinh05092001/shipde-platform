@@ -193,10 +193,24 @@ async function routeFallback(modelId, failedPath, paths, probe, store, options) 
     failedRecord.status === 'UNAVAILABLE_NOW' &&
     !isEligible(store, modelId, failedPath, now);
   const failedAccountId = failedRecord && failedRecord.routeId && failedRecord.routeId.accountId;
+  const sameGatewayAccounts =
+    failureReason === 'AUTH_NEEDED' && failedAccountId
+      ? (paths || []).filter(
+          (route) =>
+            route &&
+            route.id === failedRecord.routeId.id &&
+            route.accountId &&
+            route.accountId !== failedAccountId
+        )
+      : [];
   const ordered = (paths || [])
     .filter((p) => p && (p.id !== failedPath || retryFailedPath || Boolean(p.accountId)))
     .slice();
   ordered.sort((a, b) => Number(b.evidence || 0) - Number(a.evidence || 0));
+  if (sameGatewayAccounts.length) {
+    const otherPaths = ordered.filter((route) => !sameGatewayAccounts.includes(route));
+    ordered.splice(0, ordered.length, ...sameGatewayAccounts, ...otherPaths);
+  }
   const failures = [];
   for (const route of ordered) {
     const accountPath = route;
@@ -633,15 +647,24 @@ async function probeGatewayModel(modelId, routeId, options) {
   const source = (registry.sources || []).find((row) => row.id === routeKey.id);
   if (!source || !source.endpoint)
     return { ok: false, status: 0, error: 'route has no probe endpoint' };
-  const envName = source.credential && source.credential.env;
+  const envName = source.credential && (source.credential.env || source.credential.name);
+  let configuredUrl;
+  try {
+    configuredUrl = new URL(source.endpoint);
+  } catch {
+    return { ok: false, status: 0, error: 'route endpoint is invalid' };
+  }
+  if (envName && configuredUrl.protocol !== 'https:')
+    return { ok: false, status: 0, error: 'credentialed probe endpoint must use HTTPS' };
   const token = envName && process.env[envName];
   if (envName && !token) return { ok: false, status: 401, error: 'route credential unavailable' };
-  const endpoint = String(source.endpoint).replace(/\/+$/, '') + '/chat/completions';
+  const endpoint = configuredUrl.toString().replace(/\/+$/, '') + '/chat/completions';
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), o.timeoutMs || 10000);
   try {
     const response = await (o.fetch || fetch)(endpoint, {
       method: 'POST',
+      redirect: 'error',
       signal: controller.signal,
       headers: {
         'content-type': 'application/json',

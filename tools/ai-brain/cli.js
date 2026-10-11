@@ -831,6 +831,7 @@ function mergeEvidenceAccounts(inputAccounts, registryAccounts) {
 }
 
 function isCandidateRouteEligible(routeHealth, candidate, options, routeHealthApi, isExplicit) {
+  if (options && options.allowUnprobedCandidates === true) return true;
   if (!routeHealth) return true;
   const modelId = candidate && candidate.modelId;
   const gateway = candidate && candidate.gateway;
@@ -870,19 +871,21 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
   const resolvedRegistry = registry || require('./sources').loadSources();
   const routeHealthApi = require('./route-health');
   const routeHealthExplicit = opts.routeHealth !== undefined;
-  const requireRouteHealth = opts.requireRouteHealth === true;
+  const requireRouteHealth = opts.requireRouteHealth === true || !Array.isArray(opts.candidates);
+  const healthFile =
+    opts.routeHealthFile || path.join(__dirname, 'data', 'model-route-health.json');
   const routeHealth = routeHealthExplicit
     ? opts.routeHealth
-    : routeHealthApi.loadStore(path.join(__dirname, 'data', 'model-route-health.json'), {
+    : routeHealthApi.loadStore(healthFile, {
         allowMissing: true,
       });
   const enforceMissingHealth =
-    routeHealthExplicit ||
-    requireRouteHealth ||
-    Boolean(routeHealth && Object.keys(routeHealth.paths || {}).length > 0);
+    opts.allowUnprobedCandidates === true
+      ? false
+      : routeHealthExplicit ||
+        requireRouteHealth ||
+        Boolean(routeHealth && Object.keys(routeHealth.paths || {}).length > 0);
   const enforceEmptyHealth = routeHealthExplicit || requireRouteHealth;
-  const healthFile =
-    opts.routeHealthFile || path.join(__dirname, 'data', 'model-route-health.json');
   const catalogueRows = (discoveryCat && discoveryCat.candidates) || [];
   const resolvedFallbackRoutes = [];
   const probeRoute =
@@ -994,15 +997,21 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
           platform: opts.platform,
         })
         .filter((candidate) =>
-          isCandidateRouteEligible(routeHealth, candidate, opts, routeHealthApi)
+          isCandidateRouteEligible(
+            routeHealth,
+            candidate,
+            Object.assign({}, opts, { requireRouteHealth: enforceMissingHealth }),
+            routeHealthApi
+          )
         ),
       ...candidatesApi.gatewayAccountCandidates({
         registry: resolvedRegistry,
         accounts: accounts || [],
         catalogue: (discoveryCat && discoveryCat.candidates) || [],
         routeHealth,
-        probeEvidence: opts.probeEvidence,
+        routeHealthExplicit,
         requireRouteHealth: enforceMissingHealth,
+        probeEvidence: opts.probeEvidence,
         now: opts.now,
         onAccountCount: opts.onAccountCount,
       }),
@@ -1011,6 +1020,7 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
         accounts: accounts || [],
         catalogue: (discoveryCat && discoveryCat.candidates) || [],
         routeHealth,
+        allowUnprobedCandidates: opts.allowUnprobedCandidates,
         now: opts.now,
         probeEvidence: opts.probeEvidence,
         requireRouteHealth: enforceMissingHealth,
@@ -1533,6 +1543,7 @@ async function dispatchProfileCommand(args, deps) {
   }
   const optsWithEvidence = Object.assign({}, deps, {
     evidenceData,
+    routeHealthFile: (deps && deps.routeHealthFile) || args['route-health'] || undefined,
     discoveryDataDir: (deps && deps.discoveryDataDir) || args['discovery-dir'] || undefined,
     fakeRunsDir:
       (deps && deps.fakeRunsDir) ||
@@ -1825,7 +1836,9 @@ function dispatchCommand(args, deps = {}) {
     discCat,
     accounts,
     registry,
-    Array.isArray(deps.candidates) ? deps : Object.assign({}, deps, { requireRouteHealth: true })
+    Array.isArray(deps.candidates) || deps.allowUnprobedCandidates === true
+      ? deps
+      : Object.assign({}, deps, { requireRouteHealth: true })
   );
 
   // Filter by explicit pins (--model, --account, --harness)

@@ -248,6 +248,7 @@ describe('TASK-AI-87: Evidence-only candidate capabilities', () => {
 
       const assembled = assembleForDispatch({ candidates: [] }, accountsList, fakeRegistry, {
         evidenceData: testEvidenceData,
+        allowUnprobedCandidates: true,
       });
 
       const cand = assembled.find((c) => c.accountId === 'xkiro');

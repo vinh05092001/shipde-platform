@@ -145,6 +145,8 @@ function generateCandidates(opts) {
           typeof item === 'string' ? item : (item && (item.modelId || item.model || item.id)) || '';
         const parsed = parsePrefix(fullId);
         if (!parsed) continue;
+        if (item && typeof item === 'object' && item.upstream && item.upstream !== parsed.upstream)
+          continue;
         if (sharedArc) {
           candidates.push({
             harness,
@@ -697,7 +699,7 @@ function poolAccountCandidates(opts) {
 
     for (const model of poolModels) {
       const routeHealth = o.routeHealth;
-      if (routeHealth && routeHealth.paths && Object.keys(routeHealth.paths).length > 0) {
+      if (routeHealth && !o.allowUnprobedCandidates) {
         const health = require('./route-health');
         const normalized = health.normalizeModelId(model);
         const modelRows = catalogue.filter((entry) => {
@@ -706,15 +708,15 @@ function poolAccountCandidates(opts) {
           return health.normalizeModelId(entryModel) === normalized;
         });
         if (
-          modelRows.length > 0 &&
           !modelRows.some((entry) => {
             const routeId = entry.gateway;
             const record =
               routeId &&
               health.getPathRecord(routeHealth, model, { id: routeId, accountId: acc.id });
-            return (
-              !record ||
-              health.isEligible(routeHealth, model, { id: routeId, accountId: acc.id }, o.now)
+            return Boolean(
+              (record &&
+                health.isEligible(routeHealth, model, { id: routeId, accountId: acc.id }, o.now)) ||
+              (o.probeEvidence && o.probeEvidence(model, { id: routeId, accountId: acc.id }))
             );
           })
         )
@@ -887,12 +889,12 @@ function gatewayAccountCandidates(opts) {
         .filter((modelId) => modelId && !excludes.has(modelId))
     );
     let contributed = 0;
-    const catalogueRows = catalogue.filter(
-        (row) =>
-          row &&
-          row.gateway === gateway &&
-          (Boolean(parsePrefix(row.modelId || row.model)) || !row.upstream)
-      );
+    const catalogueRows = catalogue.filter((row) => {
+      if (!row || row.gateway !== gateway) return false;
+      const modelId = row.modelId || row.model || '';
+      const parsed = parsePrefix(modelId);
+      return Boolean(parsed && (!row.upstream || row.upstream === parsed.upstream));
+    });
     const catalogueModelIds = new Set(
       catalogueRows.map((row) => String(row.modelId || row.model || '').toLowerCase())
     );
@@ -908,8 +910,7 @@ function gatewayAccountCandidates(opts) {
         const probed = Boolean(
           (record && health.isEligible(routeHealth, modelId, routePath, routeNow)) ||
           (probeOk && probeOk(modelId, gateway)) ||
-          (o.probeEvidence && o.probeEvidence(modelId, gateway)) ||
-          (!routeHealth && !probeOk && !o.probeEvidence)
+          (o.probeEvidence && o.probeEvidence(modelId, gateway))
         );
         if (!probed) continue;
         const prefix = parsePrefix(modelId);
@@ -938,8 +939,12 @@ function gatewayAccountCandidates(opts) {
           ? health.isEligible(routeHealth, modelId, routePath, routeNow)
           : Boolean(
               (probeOk && probeOk(modelId, gateway)) ||
-                (o.probeEvidence && o.probeEvidence(modelId, routePath)) ||
-                (!o.requireRouteHealth && !probeOk && !o.probeEvidence)
+              (o.probeEvidence && o.probeEvidence(modelId, routePath)) ||
+              (!o.requireRouteHealth &&
+                !o.routeHealthExplicit &&
+                !o.routeHealth &&
+                !probeOk &&
+                !o.probeEvidence)
             );
         if (!available) continue;
       } else if (probeOk && !probeOk(modelId, gateway)) {
