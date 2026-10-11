@@ -159,13 +159,15 @@ test('no product item and no mismatched review SHA can grant evidence', async ()
   }
 });
 
-test('qualification evidence is bound to candidate commit and exact candidate key', async () => {
+test('qualification evidence is bound to worker commit and exact candidate key', async () => {
   const f = fixture();
-  const candidate = { ...CANDIDATE, commit: 'c'.repeat(40) };
+  const candidate = { ...CANDIDATE };
+  const workerHead = 'c'.repeat(40);
   let recordedKey;
   let runnerArgs;
   await runAutomaticQualification({
     candidates: [candidate],
+    baseSha: SHA,
     itemsFile: f.itemsFile,
     usageFile: f.usageFile,
     now: Date.parse('2026-10-10T12:00:00Z'),
@@ -173,21 +175,23 @@ test('qualification evidence is bound to candidate commit and exact candidate ke
     recordEvidence: (key, item, proof) => {
       recordedKey = key;
       assert.equal(item, candidate);
-      assert.equal(proof.commit, candidate.commit);
+      assert.equal(proof.commit, workerHead);
     },
     runIsolatedReviewed: async (args) => {
       runnerArgs = args;
       return {
         verdict: 'PASS',
-        sha: candidate.commit,
-        reviewedSha: candidate.commit,
+        sha: workerHead,
+        reviewedSha: workerHead,
         reviewer: 'reviewer',
         independent: true,
         workItemId: 'QUALIFY-01',
       };
     },
   });
-  assert.equal(runnerArgs.expectedCommit, candidate.commit);
+  assert.equal(Object.hasOwn(runnerArgs, 'expectedCommit'), false);
+  assert.equal(runnerArgs.candidate.commit, SHA);
+  assert.equal(runnerArgs.baseSha, SHA);
   assert.equal(recordedKey, candidate.candidateKey);
 
   let recorded = false;
@@ -387,7 +391,7 @@ test('default isolated qualification adapter uses isolated orchestration and exa
     {
       candidate: CANDIDATE,
       candidateKey: CANDIDATE.candidateKey,
-      expectedCommit: SHA,
+      baseSha: SHA,
       item: {
         id: 'QUALIFY-TEST',
         kind: 'qualification',
@@ -424,6 +428,7 @@ test('default isolated qualification adapter uses isolated orchestration and exa
   assert.equal(result.verdict, 'PASS');
   assert.equal(result.sha, SHA);
   assert.equal(result.reviewedSha, SHA);
+  assert.equal(reviewed[0].options.baseSha, SHA);
   assert.equal(result.independent, true);
   assert.equal(reviewed[0].options.isolatedWorker, true);
   assert.equal(reviewed[0].options.autoMerge, false);
@@ -432,6 +437,47 @@ test('default isolated qualification adapter uses isolated orchestration and exa
   assert.equal(reviewed[0].options.reviewerIdentity, undefined);
   assert.equal(reviewed[0].options.specs[0].allowedPaths.length, 0);
   assert.equal(reviewed[0].options.specs[0].verification, null);
+});
+
+test('isolated qualification refuses a reviewer receipt for a different SHA', async () => {
+  const { runIsolatedReviewed } = require('../intake');
+  const f = fixture();
+  const result = await runIsolatedReviewed(
+    {
+      candidate: CANDIDATE,
+      item: {
+        id: 'QUALIFY-MISMATCH',
+        kind: 'qualification',
+        risk: 'low',
+        acceptanceCriteria: ['review'],
+      },
+      baseSha: SHA,
+    },
+    {
+      root: f.dir,
+      now: Date.now(),
+      verdictPath: path.join(f.dir, 'verdict.json'),
+      stat: () => ({ mtimeMs: Date.now() }),
+      readFile: () => '{"verdict":"CLOSED"}',
+      accounts: [],
+      registry: {},
+      runOrchestration: async () => ({
+        status: 'COMPLETED',
+        checkpoint: {
+          reviews: [
+            {
+              workItemId: 'QUALIFY-MISMATCH',
+              verdict: 'PASS',
+              sha: 'b'.repeat(40),
+              workerHead: SHA,
+              reviewer: 'reviewer',
+            },
+          ],
+        },
+      }),
+    }
+  );
+  assert.equal(result.verdict, 'REFUSED');
 });
 
 test('production candidate builder uses intake catalogue/accounts and Controller ranking', () => {
