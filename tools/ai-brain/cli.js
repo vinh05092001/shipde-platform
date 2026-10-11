@@ -1515,11 +1515,12 @@ async function dispatchProfileCommand(args, deps) {
   const rootDir = args.root || (deps && deps.rootDir) || process.cwd();
   const sourcesApi = require('./sources');
   const jev = require('./jev');
-  const { listAccounts } = require('./accounts');
   const { readDiscoveryCatalogue } = require('./discovery/read');
 
   let discCat;
-  if (!(deps && Array.isArray(deps.candidates))) {
+  if (Array.isArray(deps && deps.discoveryCatalogue)) {
+    discCat = deps.discoveryCatalogue;
+  } else if (!(deps && Array.isArray(deps.candidates))) {
     try {
       discCat = readDiscoveryCatalogue({
         dataDir:
@@ -1531,7 +1532,9 @@ async function dispatchProfileCommand(args, deps) {
       discCat = { candidates: [] };
     }
   }
-  const accounts = listAccounts() || [];
+  const accounts = Array.isArray(deps && deps.accounts)
+    ? deps.accounts
+    : require('./accounts').listAccounts() || [];
 
   const evidenceDir =
     (deps && deps.evidenceDir) || args['evidence-dir'] || path.join(__dirname, 'data', 'evidence');
@@ -1564,9 +1567,20 @@ async function dispatchProfileCommand(args, deps) {
     adapterScript: (deps && deps.adapterScript) || process.env.AGY_POOL_ADAPTER_SCRIPT || undefined,
     platform: (deps && deps.platform) || undefined,
   });
+  if (Array.isArray(deps && deps.candidates)) {
+    optsWithEvidence.allowUnprobedCandidates = true;
+  }
+  if (!discCat && Array.isArray(deps && deps.candidates)) discCat = { candidates: [] };
 
   const registry = (deps && deps.registry) || sourcesApi.loadSources();
-  const candidateList = assembleForDispatch(discCat, accounts, registry, optsWithEvidence);
+  const candidateList = assembleForDispatch(
+    discCat,
+    accounts,
+    registry,
+    Array.isArray(deps && deps.candidates) || (deps && deps.allowUnprobedCandidates === true)
+      ? optsWithEvidence
+      : Object.assign({}, optsWithEvidence, { requireRouteHealth: true })
+  );
   const jevSource = sourcesApi.getSource('jev', registry);
   const jevAsk =
     (deps && deps.ask) ||
@@ -3945,6 +3959,7 @@ module.exports = {
   orchestrateCommand,
   mergeCommand,
   intakeCommand,
+  dispatchProfileCommand,
   tokenReportCommand,
   planCommand,
   nextCommand: (args, deps) => {
