@@ -33,6 +33,34 @@ function idOf(value) {
     .slice(0, 70);
 }
 
+// Persist only a routable host and ordinary API prefix. Inline credentials,
+// query parameters, and common secret/project path values are removed.
+function sanitizeEndpoint(value) {
+  if (typeof value !== 'string') return null;
+  try {
+    const url = new URL(value);
+    if (!/^https?:$/.test(url.protocol)) return null;
+    if (url.username || url.password) {
+      url.username = 'REDACTED';
+      url.password = '';
+    }
+    url.search = '';
+    url.hash = '';
+    const parts = url.pathname.split('/');
+    for (let i = 0; i < parts.length; i += 1) {
+      if (/^(?:token|api[_-]?key|secret|credential|project|projects)$/i.test(parts[i])) {
+        if (parts[i + 1]) parts[i + 1] = '[REDACTED]';
+      } else if (/^(?:sk-|key-|tok_)[a-z0-9._~-]{8,}$/i.test(parts[i])) {
+        parts[i] = '[REDACTED]';
+      }
+    }
+    url.pathname = parts.join('/').replace(/\/$/, '');
+    return url.toString().replace(/\/$/, '');
+  } catch {
+    return null;
+  }
+}
+
 function discoverNineRouterDb(options, add) {
   const env = options.env || process.env;
   const appData = env.APPDATA || path.join(options.home || os.homedir(), 'AppData', 'Roaming');
@@ -99,8 +127,9 @@ function discoverSources(options = {}) {
   const local = options.localAppData || env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
   const result = new Map();
   const add = (source) => {
-    if (source.endpoint && !/^https?:\/\//i.test(source.endpoint)) return;
-    const key = source.id + '|' + source.endpoint;
+    const endpoint = source.endpoint ? sanitizeEndpoint(source.endpoint) : null;
+    if (source.endpoint && !endpoint) return;
+    const key = source.id + '|' + endpoint;
     const old = result.get(key);
     if (old) {
       old.models = [...new Set([...old.models, ...(source.models || [])])];
@@ -110,7 +139,8 @@ function discoverSources(options = {}) {
     result.set(key, {
       id: source.id,
       name: source.name || source.id,
-      endpoint: source.endpoint ? source.endpoint.replace(/\/$/, '') : null,
+      kind: source.kind || 'model-source',
+      endpoint,
       models: [...new Set(source.models || [])],
       credential: source.credential || null,
       status: 'discovered',
@@ -335,7 +365,14 @@ async function discover(options = {}) {
   try {
     prior = JSON.parse(fs.readFileSync(file, 'utf8')).sources || [];
   } catch {}
-  const current = options.sources || discoverSources(options);
+  const current = (options.sources || discoverSources(options)).map((source) => ({
+    ...source,
+    endpoint: source.endpoint ? sanitizeEndpoint(source.endpoint) : null,
+  }));
+  prior = prior.map((source) => ({
+    ...source,
+    endpoint: source.endpoint ? sanitizeEndpoint(source.endpoint) : null,
+  }));
   const keyed = new Map(prior.map((entry) => [entry.id + '|' + entry.endpoint, entry]));
   const sources = current.map((entry) => {
     const old = keyed.get(entry.id + '|' + entry.endpoint);
@@ -365,4 +402,4 @@ async function discover(options = {}) {
   return { version: 1, updatedAt: now.toISOString(), sources: probed };
 }
 
-module.exports = { discoverSources, probeSource, discover, modelIds };
+module.exports = { discoverSources, probeSource, discover, modelIds, sanitizeEndpoint };

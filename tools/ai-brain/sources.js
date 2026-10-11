@@ -85,17 +85,23 @@ function loadSources(options) {
       const credential =
         entry.credential && entry.credential.type === 'env' ? entry.credential : null;
       if (!credential || !credential.name) continue;
+      const sourceKind = entry.kind || Kind.MODEL_SOURCE;
       sources.push({
         id: entry.id,
         label: entry.name || entry.id,
-        kind: Kind.MODEL_SOURCE,
-        servesModels: entry.status !== 'parked' && entry.status !== 'unavailable',
-        harness: 'opencode',
+        kind: sourceKind,
+        servesModels: entry.status === 'available',
+        // Discovered rows are model sources, so they use the direct HTTP
+        // adapter. Keep this derived from the source kind rather than the
+        // discovery tool that happened to find the endpoint.
+        harness: sourceKind === Kind.MODEL_SOURCE ? 'direct-http' : null,
         accessPath: 'direct',
         endpoint: entry.endpoint,
         credential: { type: 'api-key', env: credential.name },
         discovered: true,
         discoveryStatus: entry.status || 'discovered',
+        reason: entry.reason || null,
+        nextCheckAt: entry.nextCheckAt || null,
       });
     }
   } catch {
