@@ -18,6 +18,8 @@ const decisions = require('../decisions');
 
 const SHA = 'a'.repeat(40);
 const fixtures = [];
+const successDecisionDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-141-success-'));
+fixtures.push(successDecisionDir);
 const CANDIDATE = {
   candidateKey: 'hermes::cli::gw::up::acct::acct::model',
   commit: SHA,
@@ -746,7 +748,6 @@ test('loop ignores stale decision sessions and logs which records were ignored',
     {
       stage: 'reviewer-selection',
       workItemId: 'OLD-REVIEW',
-      role: 'reviewer',
       sessionId: 'old-session',
       at: new Date(now - 7 * 60 * 60 * 1000).toISOString(),
     },
@@ -781,6 +782,48 @@ test('loop ignores stale decision sessions and logs which records were ignored',
   assert.ok(logs.some((line) => line.includes('Ignoring stale writer OLD-WRITER')));
   assert.equal(decisions.openReviewersDetailed({ records, now }).reviewers.length, 0);
   assert.equal(decisions.openWritersDetailed({ records, now }).writers.length, 0);
+});
+
+test('fresh reviewer-selection records without a role still count against reviewer ceiling', () => {
+  const now = Date.parse('2026-10-10T12:00:00Z');
+  const detail = decisions.openReviewersDetailed({
+    records: [
+      {
+        stage: 'reviewer-selection',
+        workItemId: 'SELECTING-REVIEW',
+        sessionId: 'selection-session',
+        at: new Date(now - 1000).toISOString(),
+      },
+    ],
+    now,
+  });
+  assert.equal(detail.reviewers.length, 1);
+  assert.equal(detail.reviewers[0].role, 'reviewer');
+});
+
+test('targeted loop reports successful execution as completed', async () => {
+  const result = await nextLoop(
+    {
+      maxIterations: 1,
+      rootDir: process.cwd(),
+      records: [],
+      workItem: 'TASK-AI-141',
+      decisionDir: successDecisionDir,
+    },
+    {
+      existsSync: () => false,
+      items: [{ work_item_id: 'TASK-AI-141', status: 'READY_FOR_AUTHOR', dependencies: '' }],
+      runIntake: async () => ({ exitCode: 0, status: 'completed' }),
+      checkCandidateLanes: () => ({ available: true }),
+      checkCeiling: () => ({ allowed: true }),
+      writerFor: () => null,
+      isOpenRun: () => false,
+      log: () => {},
+      now: Date.parse('2026-10-10T12:00:00Z'),
+    }
+  );
+  assert.equal(result.completed, true);
+  assert.equal(result.outcome, 'completed');
 });
 
 test('the two known fixture selection paths do not change decisions.DEFAULT_DIR', async () => {

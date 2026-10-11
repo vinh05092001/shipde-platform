@@ -136,6 +136,8 @@ The production `qualify --auto` command builds candidates from intake catalogue 
 - The standalone `qualify --auto` CLI now supplies the same isolated-review runner, closed-isolation assertion, candidate builder and qualification configuration as the qualification slot created by `next`.
 - Reviewer fixture selection and failed-key unit tests write only to temporary decision directories. Regression coverage runs both affected selection paths and verifies that today's default decision log is unchanged.
 - Open reviewer and writer claims expire after six hours without newer activity by default. Callers can configure reviewer expiry with `staleWindowMs` (or `ttlMs`) and writer expiry with `ttlMs`; the loop logs stale claims it ignores. Writer filesystem heartbeats continue to refresh activity.
+- The stale ceiling window is separate from the existing four-hour reviewer/writer claim TTL. Fresh `reviewer-selection` records count as reviewer claims even when the record omits an explicit role.
+- A targeted `next --loop --work-item <ID>` run reports `completed: true` after successful execution of that item.
 - `next --loop --work-item <ID>` scopes selection to the named item, while retaining dependency, active-claim, candidate-lane, ceiling and proof-floor qualification checks. A targeted loop exits after that item reaches an outcome rather than selecting a different item.
 - Verification: fake-driven coverage in `task-ai-141b.test.js`, `decisions.test.js`, and the hermeticity fixes in `task-ai-64.test.js` and `task-ai-91.test.js`.
 

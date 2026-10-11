@@ -252,7 +252,7 @@ function openWritersDetailed(options) {
     }
   }
 
-  const ttlMs = (options && (options.staleWindowMs || options.ttlMs)) || 6 * 60 * 60 * 1000;
+  const ttlMs = (options && (options.staleWindowMs || options.ttlMs)) || 4 * 60 * 60 * 1000;
   const now = (options && options.now) || Date.now();
   const fs = require('fs');
 
@@ -320,6 +320,7 @@ function openReviewersDetailed(options) {
   for (const r of records) {
     if (!r || !r.workItemId) continue;
     const isReview =
+      r.stage === Stage.REVIEWER_SELECTION ||
       r.stage === Stage.REVIEW ||
       r.stage === Stage.REVIEW_LAUNCH ||
       r.role === 'reviewer' ||
@@ -382,7 +383,7 @@ function openReviewersDetailed(options) {
     }
   }
 
-  const ttlMs = (options && (options.staleWindowMs || options.ttlMs)) || 6 * 60 * 60 * 1000;
+  const ttlMs = (options && (options.staleWindowMs || options.ttlMs)) || 4 * 60 * 60 * 1000;
   const now = (options && options.now) || Date.now();
   const activeReviewers = [];
   const staleReviewers = [];

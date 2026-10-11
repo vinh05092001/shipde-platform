@@ -917,16 +917,6 @@ async function nextLoop(options, deps) {
       }
     }
 
-    if (opts.workItem || opts['work-item']) {
-      return {
-        completed: false,
-        stopped: true,
-        reason: proofFloorRefusal ? 'PROOF_FLOOR_NOT_MET' : execResult.outcome || 'failed',
-        workItemId: item.work_item_id,
-        execution: execResult,
-      };
-    }
-
     const outcome = execResult.outcome || 'completed';
     terminalWorkItems.set(item.work_item_id, outcome);
     log(`Work Item ${item.work_item_id} ended with terminal state ${outcome}.`);
