@@ -151,4 +151,3 @@ Intake derives risk domains and complexity from the Work Item scope, acceptance 
 - The standalone `qualify --auto` isolation assertion now receives caller options and the selected `--root`, matching the root used by its isolated runner.
 - Targeted `next --loop --work-item <ID>` retries after a successful qualification slot when iteration budget remains; if the budget ends first, it returns `stopped: true` with `WORK_ITEM_NOT_EXECUTED`. Qualification alone never reports the requested product item complete.
 - Isolation verdict UTF-8 BOM tolerance: `Test-WorkerIsolation.ps1` writes UTF-8 without BOM via `[System.IO.File]::WriteAllText` with `[System.Text.UTF8Encoding]::new($false)`, and readers in `tools/ai-brain` (`intake.assertIsolationClosed`, `isolation-launcher.readClosedIsolationVerdict`) strip any leading BOM before `JSON.parse`.
-
