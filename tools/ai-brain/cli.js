@@ -3289,7 +3289,10 @@ function main() {
       const { loadConfig } = require('./next-runner');
       runAutoCli(process.argv.slice(3), {
         runIsolatedReviewed: (input) =>
-          require('./intake').runIsolatedReviewed(input, { root: rootDir }),
+          require('./intake').runIsolatedReviewed(input, {
+            root: rootDir,
+            baseSha: require('./intake').revParseOriginMain(rootDir, {}),
+          }),
         assertIsolationClosed: (options) =>
           require('./intake').assertIsolationClosed({ ...options, root: rootDir }),
         buildCandidates: () => buildQualificationCandidates(rootDir),
@@ -3327,6 +3330,27 @@ function main() {
   if (command === 'serena') {
     const { runSerenaCli } = require('./serena');
     process.exit(runSerenaCli(process.argv.slice(3)));
+  }
+
+  // sources --discover [--probe] [--json]: inventory local provider endpoints
+  // and persist only endpoint/model metadata and credential locations.
+  if (command === 'sources') {
+    const discovery = require('./source-discovery');
+    if (!args.discover) {
+      console.error('Dùng: sources --discover [--probe] [--json]');
+      process.exit(2);
+    }
+    discovery
+      .discover({ probe: Boolean(args.probe), root: path.join(__dirname) })
+      .then((result) => {
+        if (args.json) console.log(JSON.stringify(result, null, 2));
+        else console.log('Discovered ' + result.sources.length + ' configured model sources.');
+      })
+      .catch((err) => {
+        console.error('Source discovery failed: ' + String((err && err.message) || 'error'));
+        process.exitCode = 1;
+      });
+    return;
   }
 
   // orchestrate (TASK-AI-64): the live autonomous loop —
@@ -3402,7 +3426,7 @@ function main() {
 
   console.error('Lệnh không rõ: ' + command);
   console.error(
-    'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | discovery | account | probe | qualify | serena | evidence | review | orchestrate | intake | next | merge | priors refresh'
+    'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | discovery | account | probe | qualify | serena | sources | evidence | review | orchestrate | intake | next | merge | priors refresh'
   );
   process.exit(2);
 }
@@ -3439,7 +3463,10 @@ module.exports = {
         const { loadConfig } = require('./next-runner');
         const code = await runAutoCli(['--auto'], {
           runIsolatedReviewed: (input) =>
-            require('./intake').runIsolatedReviewed(input, { root: rootDir }),
+            require('./intake').runIsolatedReviewed(input, {
+              root: rootDir,
+              baseSha: require('./intake').revParseOriginMain(rootDir, {}),
+            }),
           assertIsolationClosed: (options) =>
             require('./intake').assertIsolationClosed({ ...options, root: rootDir }),
           buildCandidates: () => buildQualificationCandidates(rootDir),
