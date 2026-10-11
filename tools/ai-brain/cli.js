@@ -1534,7 +1534,7 @@ async function dispatchProfileCommand(args, deps) {
   }
   const accounts = Array.isArray(deps && deps.accounts)
     ? deps.accounts
-    : listAccounts() || [];
+    : require('./accounts').listAccounts() || [];
 
   const evidenceDir =
     (deps && deps.evidenceDir) || args['evidence-dir'] || path.join(__dirname, 'data', 'evidence');
