@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const childProcess = require('node:child_process');
 
 const intake = require('../intake');
 const { generateCandidates } = require('../candidates');
@@ -15,6 +16,16 @@ const accountsApi = require('../accounts');
 const harnesses = require('../harness');
 const isolation = require('../isolation-launcher');
 const routing = require('../routing');
+
+test('qualify --auto CLI intake helpers are exported', () => {
+  const root = fixtureRoot();
+  const result = childProcess.spawnSync(
+    process.execPath,
+    [path.join(__dirname, '..', '..', 'cli.js'), 'qualify', '--auto', '--root', root],
+    { cwd: root, encoding: 'utf8' }
+  );
+  assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /is not a function/);
+});
 
 const roots = [];
 function fixtureRoot() {
