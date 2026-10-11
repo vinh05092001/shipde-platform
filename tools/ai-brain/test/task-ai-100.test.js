@@ -64,6 +64,16 @@ function rank(candidates, taskProfile, priors) {
     now: NOW,
     priors,
     headrooms: { default: 'open' },
+    independentReviewerCandidates: [
+      candidate({
+        modelId: 'independent-reviewer',
+        gateway: 'independent-gateway',
+        upstream: 'independent-upstream',
+        qualifiedRoles: ['reviewer.primary'],
+        reservationStatus: 'reserved',
+        strong: true,
+      }),
+    ],
   });
 }
 

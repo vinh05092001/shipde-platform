@@ -1130,7 +1130,8 @@ function rankForProfile(candidates, profile, assessment, ctx) {
     };
   }
 
-  for (const c of candidates || []) {
+  for (const candidate of candidates || []) {
+    const c = Object.assign({}, candidate);
     const key = candidateKey(c);
     const reject = (reasonCode, scope) =>
       rejected.push({
@@ -1324,6 +1325,9 @@ function rankForProfile(candidates, profile, assessment, ctx) {
 
   ranked.sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;
+    const aPriorBonus = Number(a.scoreBreakdown.prior && a.scoreBreakdown.prior.bonus) || 0;
+    const bPriorBonus = Number(b.scoreBreakdown.prior && b.scoreBreakdown.prior.bonus) || 0;
+    if (bPriorBonus !== aPriorBonus) return bPriorBonus - aPriorBonus;
     if (a.reservationsHeld !== b.reservationsHeld) return a.reservationsHeld - b.reservationsHeld;
     return a.candidateKey.localeCompare(b.candidateKey);
   });
@@ -1657,7 +1661,30 @@ async function runProfileDispatch(args, deps) {
     { now }
   );
 
-  const independentReviewerCandidates = d.candidates || [];
+  const independentReviewerCandidates = annotated.filter((candidate) => {
+    if (
+      !candidate ||
+      candidate.blocked ||
+      candidate.parked ||
+      candidate.status === 'blocked' ||
+      ['UNAVAILABLE_NOW', 'GEO_BLOCKED', 'NO_CREDIT', 'RATE_LIMITED', 'AUTH_NEEDED'].includes(
+        candidate.status
+      ) ||
+      evidence.isCandidateBlocked(evidenceData, candidate).blocked
+    ) {
+      return false;
+    }
+    const reviewerHeadroom = ranking.resolveCandidateHeadroom(candidate, {
+      now,
+      headrooms: d.headrooms,
+      reservations: d.reservations,
+      accounts: d.accounts,
+      useStoredQuota: d.useStoredQuota !== false,
+      home: d.home,
+      storePath: d.storePath,
+    });
+    return reviewerHeadroom.status !== 'exhausted' && reviewerHeadroom.status !== 'cooling';
+  });
   const rankCtx = {
     now,
     priors: d.priors,

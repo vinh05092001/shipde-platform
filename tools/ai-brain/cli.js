@@ -3370,11 +3370,25 @@ function main(argv = process.argv.slice(2), deps = {}) {
         const token = process.env[provider.authEnv];
         if (token) headers.authorization = `Bearer ${token}`;
       }
-      const response = await fetch(provider.endpoint, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ query }),
-      });
+      const timeoutMs = Number.isFinite(Number(provider.timeoutMs))
+        ? Math.max(100, Math.min(30000, Number(provider.timeoutMs)))
+        : 10000;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
+      let response;
+      try {
+        response = await fetch(provider.endpoint, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ query }),
+          signal: controller.signal,
+        });
+      } catch (error) {
+        if (controller.signal.aborted) throw new Error('PRIORS_SEARCH_TIMEOUT');
+        throw error;
+      } finally {
+        clearTimeout(timeout);
+      }
       if (!response.ok) throw new Error('PRIORS_SEARCH_HTTP_' + response.status);
       return response.json();
     };

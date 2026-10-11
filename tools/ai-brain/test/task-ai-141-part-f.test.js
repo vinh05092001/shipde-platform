@@ -55,6 +55,69 @@ function profile(overrides) {
 const assessment = { weightProfile: 'BALANCED', weights: { latency: 34, quality: 33, cost: 33 } };
 
 describe('TASK-AI-141 Part F external priors and model choice', () => {
+  test('probation admission never mutates shared candidate inputs', () => {
+    const untried = candidate('shared-untried', { evidence: [] });
+    const reviewer = candidate('shared-reviewer', {
+      gateway: 'review-gateway',
+      upstream: 'review-provider',
+      qualifiedRoles: ['reviewer.primary'],
+      strong: true,
+      reservationStatus: 'reserved',
+    });
+    const priors = {
+      ranking: [
+        {
+          canonical: 'shared-untried',
+          codingTier: 'T1',
+          reviewTier: 'T1',
+          score: 90,
+          retrievedAt: new Date().toISOString(),
+        },
+      ],
+    };
+    routing.rankForProfile([untried], profile({ proofFloor: 'WORK_ITEM_PASS' }), assessment, {
+      priors,
+      headrooms: { default: 'open' },
+      independentReviewerCandidates: [reviewer],
+    });
+    assert.equal(untried.probation, undefined);
+    assert.equal(untried.probationRequiresIndependentReview, undefined);
+  });
+
+  test('refresh rejects prior rows without dated URL provenance before writing', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai141-prior-provenance-'));
+    const file = path.join(dir, 'model-priors.json');
+    await assert.rejects(
+      priorsApi.refreshPriors({
+        file,
+        search: async () => [{ models: [{ modelId: 'unproven', benchmarks: { swe: 80 } }] }],
+      }),
+      /PRIORS_SOURCE_PROVENANCE_REQUIRED/
+    );
+    assert.equal(fs.existsSync(file), false);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('prior bonus breaks otherwise equal ranking scores', () => {
+    const priorCandidate = candidate('prior-tie', { latencyMs: 1000, cost: 1, quality: 50 });
+    const plainCandidate = candidate('plain-tie', { latencyMs: 1000, cost: 1, quality: 50 });
+    const result = routing.rankForProfile([plainCandidate, priorCandidate], profile(), assessment, {
+      now: Date.now(),
+      headrooms: { default: 'open' },
+      priors: {
+        ranking: [
+          {
+            canonical: 'prior-tie',
+            codingTier: 'T1',
+            reviewTier: 'T1',
+            retrievedAt: new Date().toISOString(),
+          },
+        ],
+      },
+    });
+    assert.equal(result.ranking[0].modelId, priorCandidate.modelId);
+  });
+
   test('prior promotes a strong untried model over weak model with old evidence', () => {
     const strong = candidate('strong-new', {
       evidence: [],
@@ -760,6 +823,8 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
     const source = path.join(sourceDir, 'header-filter-test.json');
     const preload = path.join(sourceDir, 'header-filter-preload.js');
     const output = path.join(sourceDir, 'header-filter-output.json');
+    const priorFile = path.resolve(__dirname, '..', 'data', 'model-priors.json');
+    const originalPriorFile = fs.readFileSync(priorFile);
     const priorToken = process.env.PRIORS_TEST_TOKEN;
     fs.mkdirSync(sourceDir, { recursive: true });
     fs.writeFileSync(
@@ -806,6 +871,7 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
       fs.rmSync(preload, { force: true });
       fs.rmSync(output, { force: true });
       fs.rmSync(path.join(sourceDir, 'header-filter-output-priors.json'), { force: true });
+      fs.writeFileSync(priorFile, originalPriorFile);
     }
   });
 

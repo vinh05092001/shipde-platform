@@ -185,6 +185,29 @@ async function refreshPriors(options) {
   const results = await opts.search(query);
   if (!Array.isArray(results)) throw new Error('PRIORS_SEARCH_RESULT_INVALID');
   const document = mergePriorDocuments(results, opts.now);
+  const provenanceValid = document.ranking.every(
+    (entry) =>
+      entry.sources.length > 0 &&
+      entry.sources.every(
+        (source) =>
+          typeof source.url === 'string' &&
+          /^https?:\/\//i.test(source.url) &&
+          typeof source.retrievedAt === 'string' &&
+          Number.isFinite(Date.parse(source.retrievedAt))
+      ) &&
+      entry.benchmarks.every((benchmark) => {
+        if (!benchmark.source) {
+          benchmark.source = entry.sources[0];
+        }
+        return (
+          typeof benchmark.source.url === 'string' &&
+          /^https?:\/\//i.test(benchmark.source.url) &&
+          typeof benchmark.source.retrievedAt === 'string' &&
+          Number.isFinite(Date.parse(benchmark.source.retrievedAt))
+        );
+      })
+  );
+  if (!provenanceValid) throw new Error('PRIORS_SOURCE_PROVENANCE_REQUIRED');
   document.searchSource =
     opts.sourceId || opts.searchSource || opts.search.name || 'configured-search-provider';
   const output = opts.file || DEFAULT_PRIORS_FILE;
