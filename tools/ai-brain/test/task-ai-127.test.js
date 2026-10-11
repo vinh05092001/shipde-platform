@@ -553,6 +553,7 @@ test('WD-R04: isolated worker prompts carry the runnable commands (author, repai
     specs: [item],
     candidates: [authorCandidate],
     isolatedWorker: true,
+    hostGate: () => ({ pass: true, failures: [] }),
     cwd: path.join(area, 'ai127-host'),
     decisionDir: path.join(area, 'orch-decisions'),
   });

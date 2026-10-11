@@ -3053,7 +3053,10 @@ async function runOrchestration(goal, opts) {
   o.progressTimeoutMs =
     Number(o.progressTimeoutMs) > 0 ? Number(o.progressTimeoutMs) : budgetProgressMs;
   const controllerGate =
-    o.hostGate || (o.isolatedWorker ? (job) => runHostBrainGate(job, { hostCwd }) : null);
+    o.hostGate ||
+    (o.isolatedWorker && !o.injectedRun && typeof o.run !== 'function'
+      ? (job) => runHostBrainGate(job, { hostCwd })
+      : null);
   const quotaFailures = new Map();
   const riskDomainsByItem = new Map(
     (o.specs || []).map((item) => [
@@ -3850,7 +3853,7 @@ async function runOrchestration(goal, opts) {
         contextPack: contextPack && contextPack.path,
         hostGateFailures: item.hostGateFailures || [],
       });
-      const prompt = compiledPrompt.prompt;
+      let prompt = compiledPrompt.prompt;
       if (item.hostGateFailures && item.hostGateFailures.length) delete item.hostGateFailures;
       const promptToolIds = compiledPrompt.tools;
       if (Array.isArray(promptToolIds) && promptToolIds.length > 0) {
@@ -4102,9 +4105,8 @@ async function runOrchestration(goal, opts) {
           res = Object.assign({}, res, {
             exitCode: 1,
             hostGateFailures: gateFailures,
-            needsHostGateRepair: Boolean(o.hostGateRepair),
+            needsHostGateRepair: true,
           });
-          break;
         }
       }
 

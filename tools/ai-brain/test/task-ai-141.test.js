@@ -1629,6 +1629,7 @@ test('Part H regressions: default orchestration gates success and builds context
 
 test('Part H: host gate failure names are passed into the next repair prompt', async () => {
   const root = fixtureRoot();
+  let launchCalls = 0;
   const candidate = (index) => ({
     upstream: 'up-' + index,
     gateway: 'gw-' + index,
@@ -1653,6 +1654,7 @@ test('Part H: host gate failure names are passed into the next repair prompt', a
     cwd: root,
     decisionDir: path.join(root, 'gate-decisions'),
     maxRepairs: 0,
+    maxAttempts: 2,
     hostCwd: root,
     hostGateRepair: ({ job, failures }) => {
       assert.deepEqual(failures, ['named behavioral regression']);
@@ -1664,11 +1666,29 @@ test('Part H: host gate failure names are passed into the next repair prompt', a
       assert.match(prompt, /failing test names only/);
       assert.equal(job.workItemId, 'GATE-ITEM');
     },
-    run: () => ({ exitCode: 0, stdout: 'worker done' }),
-    hostGate: () => ({ pass: false, failures: ['named behavioral regression'] }),
+    run: (() => {
+      const prompts = [];
+      return (job) => {
+        launchCalls++;
+        prompts.push(job.prompt);
+        if (prompts.length === 2) {
+          assert.match(job.prompt, /named behavioral regression/);
+          assert.match(job.prompt, /failing test names only/);
+        }
+        return { exitCode: 0, stdout: 'worker done' };
+      };
+    })(),
+    hostGate: (() => {
+      let calls = 0;
+      return () =>
+        ++calls === 1
+          ? { pass: false, failures: ['named behavioral regression'] }
+          : { pass: true, failures: [] };
+    })(),
   });
   assert.ok(result, JSON.stringify(result));
-  assert.ok(result.hostGate.failures.includes('named behavioral regression'));
+  assert.equal(launchCalls, 2, 'failed host gate must relaunch a repair worker');
+  assert.equal(result.hostGate.pass, true, 'the repaired worker must pass the host gate');
 });
 
 test('Part H regressions: launcher progress watchdog observes worker output independently of usage', () => {
@@ -1684,6 +1704,9 @@ test('Part H regressions: launcher progress watchdog observes worker output inde
   });
   assert.match(script, /Get-ChildItem -LiteralPath \$workerRoot -File -Recurse/);
   assert.match(script, /lastOutputSignature/);
+  assert.match(script, /Tee-Object -FilePath .*worker-output-/);
+  assert.match(script, /Write-LiveUsage/);
+  assert.match(script, /Read-UsageTotal/);
   const source = fs.readFileSync(path.join(__dirname, '..', 'isolation-launcher.js'), 'utf8');
   assert.match(source, /writeUsageReportFromHarnessResult\(job, launchResult\)/);
 });

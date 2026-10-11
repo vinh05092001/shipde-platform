@@ -301,6 +301,9 @@ function buildWorkerLaunchScript(options) {
   const completionNonce = options.completionNonce || crypto.randomBytes(16).toString('hex');
   const tokenBudget = options.tokenBudget || null;
   const markerPath = options.markerPath || path.join(workerRoot, 'run-target.complete.json');
+  const usageLogPath =
+    options.usageLogPath ||
+    path.join(workerRoot, '.shipde', 'worker-output-' + completionNonce + '.log');
   // Test-only seam. The generated host script normally impersonates the worker
   // with the DPAPI credential; a regression test executes the SAME generated
   // script end to end as the current user, so this option drops only the
@@ -368,6 +371,7 @@ $verdictBytes = [Convert]::FromBase64String("${verdictBase64}")
 $env:SHIPDE_ISOLATION_VERDICT = [Text.Encoding]::UTF8.GetString($verdictBytes)
 $markerPath = "${markerPath}"
 $completionNonce = "${completionNonce}"
+$usageLogPath = "${workerRoot}\.shipde\worker-output-${completionNonce}.log"
 $env:HOME = "${workerRoot}"
 $env:USERPROFILE = "${workerRoot}"
 $wrapperPid = 0
@@ -384,11 +388,12 @@ $wrapperStartTime = Get-Date
 \`$env:TEMP = "${workerRoot}\\temp"
 \`$env:TMP = "${workerRoot}\\temp"
 if (-not (Test-Path "${workerRoot}\\temp")) { New-Item -ItemType Directory -Path "${workerRoot}\\temp" | Out-Null }
+if (-not (Test-Path "${workerRoot}\\.shipde")) { New-Item -ItemType Directory -Path "${workerRoot}\\.shipde" | Out-Null }
 Set-Location -Path "${workerRoot}"
 \`$env:SHIPDE_RUN_TARGET_PID = "\`$PID"
 ${codexLoginProbe}
 \`$payloadArgs = @(Get-Content -LiteralPath "${payloadArgsPath}" -Raw | ConvertFrom-Json)
-& "${exeFile}" @payloadArgs
+& "${exeFile}" @payloadArgs | Tee-Object -FilePath "${workerRoot}\\.shipde\\worker-output-${completionNonce}.log"
 \`$jobExit = \`$LASTEXITCODE
 if (\`$null -eq \`$jobExit) { exit 1 }
 @{ nonce = "${completionNonce}"; exitCode = [int]\`$jobExit; completedAt = (Get-Date).ToString('o') } | ConvertTo-Json -Depth 5 | Out-File "${markerPath}" -Encoding UTF8
@@ -421,11 +426,44 @@ ${rtkPathPrepend ? `$psi.EnvironmentVariables["PATH"] = "${rtkPathPrepend.replac
 $process = [System.Diagnostics.Process]::Start($psi)
 $wrapperPid = $process.Id
 $wrapperStartTime = $process.StartTime
+$usageFile = '${String(options.usageFile || '').replace(/'/g, "''")}'
+$usageLogPath = '${String(usageLogPath).replace(/'/g, "''")}'
+$usageModel = '${String(options.model || '').replace(/'/g, "''")}'
+$usageProvider = '${String(options.upstream || '').replace(/'/g, "''")}'
+function Write-LiveUsage {
+    if ([string]::IsNullOrWhiteSpace($usageFile)) { return }
+    try {
+        if (-not (Test-Path -LiteralPath $usageLogPath)) { return }
+        $events = @(Get-Content -LiteralPath $usageLogPath -Tail 100 -ErrorAction Stop)
+        $report = $null
+        foreach ($line in $events) {
+            try {
+                $event = $line | ConvertFrom-Json
+                $tokens = $event.tokens
+                if ($null -eq $tokens -and $null -ne $event.part) { $tokens = $event.part.tokens }
+                if ($null -eq $tokens) { continue }
+                $inputTokens = [double]$tokens.input
+                $outputTokens = [double]$tokens.output
+                $totalTokens = [double]$tokens.total
+                $report = @{
+                    session_id = $(if ($event.sessionID) { $event.sessionID } elseif ($event.sessionId) { $event.sessionId } else { $null })
+                    model = $usageModel
+                    provider = $usageProvider
+                    usage = @{ input = $inputTokens; output = $outputTokens; total = [math]::Max($totalTokens, $inputTokens + $outputTokens) }
+                } | ConvertTo-Json -Depth 5 -Compress
+            } catch {}
+        }
+        if ($null -eq $report) { return }
+        $temporary = $usageFile + '.live-' + $PID
+        [System.IO.File]::WriteAllText($temporary, $report, [System.Text.UTF8Encoding]::new($false))
+        Move-Item -LiteralPath $temporary -Destination $usageFile -Force
+    } catch {}
+}
 $stdoutTask = $process.StandardOutput.ReadToEndAsync()
 $stderrTask = $process.StandardError.ReadToEndAsync()
 $timeoutMs = ${workerTimeoutMs}
 $tokenBudgetJson = '${JSON.stringify(tokenBudget || {}).replace(/'/g, "''")}'
-$usageFile = '${String(options.usageFile || '').replace(/'/g, "''")}'
+$usageFile = $script:usageFile
 $maxTokens = 0
 $progressTimeoutMs = ${Number(options.progressTimeoutMs) > 0 ? Number(options.progressTimeoutMs) : 0}
 $lastProgressAt = [System.Diagnostics.Stopwatch]::GetTimestamp()
@@ -513,6 +551,7 @@ $timedOut = $false
 $stalled = $false
 $waitSlice = 250
 while ($true) {
+    Write-LiveUsage
     $totalTokens = Read-UsageTotal
     if ($null -ne $totalTokens -and $totalTokens -gt $maxTokens) {
         $budgetExceeded = $true
@@ -548,6 +587,7 @@ while ($true) {
 $quietPolls = 0
 if (-not $timedOut) {
     while ($true) {
+        Write-LiveUsage
         $remaining = $timeoutMs - $stopwatch.ElapsedMilliseconds
         if ($remaining -le 0) { $timedOut = $true; break }
         $pidRecycled = $false
@@ -1986,6 +2026,8 @@ function getIsolatedLauncher() {
       workerTimeoutMs,
       completionNonce,
       adapterId: adapter.id,
+      model: opts.model || null,
+      upstream: opts.upstream || null,
       isolationVerdict: verdictData,
       isolationVerdictPath: verdictPath,
       rtkPathPrepend,
