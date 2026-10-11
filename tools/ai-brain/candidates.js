@@ -911,7 +911,7 @@ function gatewayAccountCandidates(opts) {
           (probeOk && probeOk(modelId, gateway)) ||
           (o.probeEvidence && o.probeEvidence(modelId, gateway))
         );
-        if (record && !probed) continue;
+        if (!probed) continue;
         const prefix = parsePrefix(modelId);
         if (!prefix) continue;
         const addition = {

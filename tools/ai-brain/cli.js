@@ -834,7 +834,8 @@ function mergeEvidenceAccounts(inputAccounts, registryAccounts) {
   return [...Array.from(map.values()), ...noId];
 }
 
-function isCandidateRouteEligible(routeHealth, candidate, options, routeHealthApi) {
+function isCandidateRouteEligible(routeHealth, candidate, options, routeHealthApi, isExplicit) {
+  if (!routeHealth) return true;
   const modelId = candidate && candidate.modelId;
   const gateway = candidate && candidate.gateway;
   if (!modelId || !gateway) return Boolean(modelId);
@@ -842,7 +843,12 @@ function isCandidateRouteEligible(routeHealth, candidate, options, routeHealthAp
   const routePath = isWildcard ? gateway : { id: gateway, accountId: candidate.accountId };
   const rec = routeHealthApi.getPathRecord(routeHealth, modelId, routePath);
   if (rec) return rec.status === 'AVAILABLE';
-  return !options || !options.probeEvidence || Boolean(options.probeEvidence(modelId, routePath));
+  const explicit =
+    isExplicit !== undefined ? isExplicit : Boolean(options && options.routeHealth !== undefined);
+  if (explicit) {
+    return Boolean(options && options.probeEvidence && options.probeEvidence(modelId, routePath));
+  }
+  return true;
 }
 
 /**
@@ -863,11 +869,12 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
 
   const resolvedRegistry = registry || require('./sources').loadSources();
   const routeHealthApi = require('./route-health');
-  const routeHealth =
-    opts.routeHealth ||
-    routeHealthApi.loadStore(path.join(__dirname, 'data', 'model-route-health.json'), {
-      allowMissing: true,
-    });
+  const routeHealthExplicit = opts.routeHealth !== undefined;
+  const routeHealth = routeHealthExplicit
+    ? opts.routeHealth
+    : routeHealthApi.loadStore(path.join(__dirname, 'data', 'model-route-health.json'), {
+        allowMissing: true,
+      });
   const healthFile =
     opts.routeHealthFile || path.join(__dirname, 'data', 'model-route-health.json');
   const catalogueRows = (discoveryCat && discoveryCat.candidates) || [];
@@ -924,6 +931,7 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
     const buildExplicit = () =>
       assembleCandidates(discoveryCat, [], resolvedRegistry, accounts, opts.candidates).filter(
         (candidate) => {
+          if (!routeHealth) return true;
           const modelId = candidate && candidate.modelId;
           const gateway = candidate && candidate.gateway;
           if (!modelId || !gateway) return Boolean(modelId);
@@ -932,7 +940,10 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
             : gateway;
           const rec = routeHealthApi.getPathRecord(routeHealth, modelId, routePath);
           if (rec) return rec.status === 'AVAILABLE';
-          return !opts.probeEvidence || Boolean(opts.probeEvidence(modelId, routePath));
+          if (routeHealthExplicit) {
+            return Boolean(opts.probeEvidence && opts.probeEvidence(modelId, routePath));
+          }
+          return true;
         }
       );
     if (!refresh) return buildExplicit();

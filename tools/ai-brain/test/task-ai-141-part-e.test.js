@@ -1072,11 +1072,22 @@ test('production defaults work without injected deps and fail closed on missing 
     upstream: 'vendor-prod',
     modelId: 'vendor-prod/model-unprobed',
   };
-  // Production default: call assembleForDispatch without options (opts is undefined)
-  const assembled = cli.assembleForDispatch(
+  // Without routeHealth, old flows pass through (backward compatibility).
+  const withoutHealth = cli.assembleForDispatch(
     { candidates: [model] },
     [{ id: 'prod-acct', provider: 'vendor-prod' }],
     registry
+  );
+  assert.ok(Array.isArray(withoutHealth));
+  // Old callers get candidates even without route health data.
+  assert.ok(withoutHealth.length > 0, 'old callers without routeHealth get candidates');
+
+  // With explicit routeHealth, unprobed candidates are rejected (fail closed).
+  const assembled = cli.assembleForDispatch(
+    { candidates: [model] },
+    [{ id: 'prod-acct', provider: 'vendor-prod' }],
+    registry,
+    { routeHealth: { version: 1, paths: { 'other|gw': { status: 'AVAILABLE' } }, events: [] } }
   );
   assert.ok(Array.isArray(assembled));
   // Both wildcard and account-bound candidates require recorded probe evidence.
