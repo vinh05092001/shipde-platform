@@ -402,6 +402,31 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
         },
       ]);
 
+      const candidates = [
+        {
+          gateway: 'ninerouter',
+          upstream: 'ninerouter',
+          modelId: 'ninerouter/fast-model',
+          harness: 'opencode',
+          accessPath: 'cli',
+          accountId: 'acc-dual',
+          quotaScope: 'acc-dual',
+          quality: 60,
+          latencyMs: 50,
+        },
+        {
+          gateway: 'ninerouter',
+          upstream: 'ninerouter',
+          modelId: 'ninerouter/quality-model',
+          harness: 'opencode',
+          accessPath: 'cli',
+          accountId: 'acc-dual',
+          quotaScope: 'acc-dual',
+          quality: 95,
+          latencyMs: 2000,
+        },
+      ];
+
       const profileFile = path.join(tempHome, 'profile.json');
       writeJson(profileFile, {
         taskId: 'TASK-AI-73-REV-ORDER',
@@ -427,11 +452,29 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
         JEV_ENDPOINT: `http://127.0.0.1:${port}/v1/systemone`,
       });
 
-      const res = await spawnCli(['dispatch', '--profile', profileFile, '--json'], {
-        cwd: REPO_ROOT,
-        env,
-        timeout: 10000,
-      });
+      const output = [];
+      const result = await require('../cli').dispatchProfileCommand(
+        { profile: profileFile, json: true },
+        {
+          home: tempHome,
+          env,
+          accounts: [{ id: 'acc-dual', provider: 'oc', enabled: true }],
+          candidates,
+          ask: jev.buildJevAsk(
+            {
+              id: 'jev',
+              kind: 'decision-service',
+              endpoint: `http://127.0.0.1:${port}/v1/systemone`,
+              model: 'jev-latest',
+              credential: { type: 'api-key', env: 'TYPESAFE_API_KEY' },
+            },
+            { env }
+          ),
+          log: (line) => output.push(line),
+          error: () => {},
+          exit: () => {},
+        }
+      );
 
       assert.ok(
         serverRequests.length > 0,
@@ -439,7 +482,7 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
       );
       assertSystemOneRequest(serverRequests[0].body);
 
-      const parsed = parseJsonOutput(res.stdout);
+      const parsed = parseJsonOutput(output.join('\n'));
       assert.ok(parsed && parsed.assessment, 'Live CLI must return JSON assessment');
       assert.equal(
         parsed.assessment.weightProfile,

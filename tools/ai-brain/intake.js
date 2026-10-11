@@ -1054,6 +1054,35 @@ async function runIntake(opts, deps) {
   }
   const allAccounts = mergeDiscoveredSources(accounts, discoveredSources);
 
+  const routeHealthApi = require('./route-health');
+  const routeHealthFile =
+    d.routeHealthFile || path.join(root, 'tools', 'ai-brain', 'data', 'model-route-health.json');
+  const routeHealth =
+    d.routeHealth || routeHealthApi.loadStore(routeHealthFile, { allowMissing: true });
+  const refreshedRoutes = await routeHealthApi.recheckBeforeSelection(
+    routeHealth,
+    d.probeRoute ||
+      ((modelId, routeId, probeOptions) =>
+        routeHealthApi.probeGatewayModel(
+          modelId,
+          routeId,
+          Object.assign({ registry: d.registry }, probeOptions)
+        )),
+    {
+      catalogue: catalogue.models,
+      fallbackCatalogue: catalogue.models,
+      skipFallbackDiscovery: false,
+      registry: d.registry || sourcesApi.loadSources(),
+      accounts,
+      now,
+      cap: d.probeCap,
+      timeoutMs: d.probeTimeoutMs,
+      allowUnprobed: true,
+    }
+  );
+  if (d.persistRouteHealth !== false) routeHealthApi.saveStore(routeHealthFile, routeHealth);
+  if (typeof d.onRouteRefresh === 'function') d.onRouteRefresh(refreshedRoutes);
+
   const repoRoot = path.resolve(root);
   const hasPoolQuota = Boolean(agyPoolHasQuota(d));
   const riskDomains = Array.isArray(derived.specItem.riskDomains)
@@ -1098,6 +1127,27 @@ async function runIntake(opts, deps) {
   );
   fs.writeFileSync(path.join(runDir, 'catalogue.json'), JSON.stringify(catalogue.models, null, 2));
   fs.writeFileSync(path.join(runDir, 'accounts.json'), JSON.stringify(allAccounts, null, 2));
+  const accountContributions = [];
+  const intakeCandidates = require('./candidates').gatewayAccountCandidates({
+    registry: d.registry || sourcesApi.loadSources(),
+    accounts,
+    catalogue: catalogue.models,
+    routeHealth,
+    now,
+    onAccountCount: (accountId, count) => accountContributions.push({ accountId, count }),
+  });
+  fs.writeFileSync(
+    path.join(runDir, 'decisions', 'gateway-account-contributions.json'),
+    JSON.stringify(
+      {
+        type: 'gateway_account_contributions',
+        candidateCount: intakeCandidates.length,
+        accounts: accountContributions,
+      },
+      null,
+      2
+    )
+  );
 
   const rtkDecision = {
     enabled: rtkEnabled,
@@ -1125,6 +1175,8 @@ async function runIntake(opts, deps) {
     catalogue: catalogue.models,
     warnings: catalogue.warnings,
     sourceStatus: catalogue.sourceStatus,
+    routeRefresh: refreshedRoutes,
+    accountContributions,
     accounts: allAccounts,
     baseSha,
     repoRoot,

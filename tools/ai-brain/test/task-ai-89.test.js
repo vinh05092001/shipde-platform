@@ -239,6 +239,7 @@ describe('TASK-AI-89: Live capability lookup uses official account registry', ()
       const assembled = cli.assembleForDispatch({ candidates: [] }, inputAccounts, fakeRegistry, {
         evidenceData: evData,
         registryAccounts: injectedRegistry,
+        allowUnprobedCandidates: true,
       });
 
       const xkiroCand = assembled.find((c) => c.accountId === 'xkiro');

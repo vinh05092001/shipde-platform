@@ -830,6 +830,28 @@ function mergeEvidenceAccounts(inputAccounts, registryAccounts) {
   return [...Array.from(map.values()), ...noId];
 }
 
+function isCandidateRouteEligible(routeHealth, candidate, options, routeHealthApi, isExplicit) {
+  if (options && options.allowUnprobedCandidates === true) return true;
+  if (!routeHealth) return true;
+  const modelId = candidate && candidate.modelId;
+  const gateway = candidate && candidate.gateway;
+  if (!modelId || !gateway) return Boolean(modelId);
+  const isWildcard = !candidate.accountId || candidate.accountId === '*';
+  const routePath = isWildcard ? gateway : { id: gateway, accountId: candidate.accountId };
+  const rec = routeHealthApi.getPathRecord(routeHealth, modelId, routePath);
+  if (rec) return rec.status === 'AVAILABLE';
+  const explicit =
+    isExplicit !== undefined ? isExplicit : Boolean(options && options.routeHealth !== undefined);
+  if (
+    explicit ||
+    (options && options.requireRouteHealth === true) ||
+    Object.keys(routeHealth.paths || {}).length > 0
+  ) {
+    return Boolean(options && options.probeEvidence && options.probeEvidence(modelId, routePath));
+  }
+  return true;
+}
+
 /**
  * Assemble candidates for a live dispatch run.
  *
@@ -847,9 +869,94 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
   const opts = options || {};
 
   const resolvedRegistry = registry || require('./sources').loadSources();
+  const routeHealthApi = require('./route-health');
+  const routeHealthExplicit = opts.routeHealth !== undefined;
+  const requireRouteHealth = opts.requireRouteHealth === true || !Array.isArray(opts.candidates);
+  const healthFile =
+    opts.routeHealthFile || path.join(__dirname, 'data', 'model-route-health.json');
+  const routeHealth = routeHealthExplicit
+    ? opts.routeHealth
+    : routeHealthApi.loadStore(healthFile, {
+        allowMissing: true,
+      });
+  const enforceMissingHealth =
+    opts.allowUnprobedCandidates === true
+      ? false
+      : routeHealthExplicit ||
+        requireRouteHealth ||
+        Boolean(routeHealth && Object.keys(routeHealth.paths || {}).length > 0);
+  const enforceEmptyHealth = routeHealthExplicit || requireRouteHealth;
+  const catalogueRows = (discoveryCat && discoveryCat.candidates) || [];
+  const resolvedFallbackRoutes = [];
+  const probeRoute =
+    opts.probeRoute ||
+    ((modelId, routeId, probeOptions) =>
+      routeHealthApi.probeGatewayModel(
+        modelId,
+        routeId,
+        Object.assign({ registry }, probeOptions)
+      ));
+  const refresh =
+    opts.refreshRoutes === true
+      ? routeHealthApi.recheckBeforeSelection(routeHealth, probeRoute, {
+          registry: resolvedRegistry,
+          accounts: accounts || [],
+          catalogue: (discoveryCat && discoveryCat.candidates) || [],
+          now: opts.now,
+          cap: opts.probeCap,
+          timeoutMs: opts.probeTimeoutMs,
+          probeEvidence: opts.probeEvidence,
+          allowUnprobed: true,
+        })
+      : null;
+  const fallbackAlreadyRefreshed = opts.refreshRoutes === true;
+  const refreshedHealth = routeHealth;
+  const persistHealth = () => {
+    if (refresh) {
+      return Promise.resolve(refresh).then((result) => {
+        return resolveFallbackRoutes(
+          routeHealth,
+          catalogueRows,
+          probeRoute,
+          routeHealthApi,
+          Object.assign({}, opts, {
+            registry: resolvedRegistry,
+            accounts: accounts || [],
+            checkedBeforeFallback: Number((result && result.checked) || 0),
+            preResolvedFallback: fallbackAlreadyRefreshed,
+            resolvedRoutes: resolvedFallbackRoutes,
+          })
+        ).then(() => {
+          if (opts.onRouteRefresh) opts.onRouteRefresh(result);
+          if (opts.persistRouteHealth !== false) routeHealthApi.saveStore(healthFile, routeHealth);
+          return routeHealth;
+        });
+      });
+    }
+    return Promise.resolve(refreshedHealth);
+  };
 
   if (Array.isArray(opts.candidates)) {
-    return assembleCandidates(discoveryCat, [], resolvedRegistry, accounts, opts.candidates);
+    const buildExplicit = () =>
+      assembleCandidates(discoveryCat, [], resolvedRegistry, accounts, opts.candidates).filter(
+        (candidate) => {
+          if (!routeHealth) return true;
+          const modelId = candidate && candidate.modelId;
+          const gateway = candidate && candidate.gateway;
+          if (!modelId || !gateway) return Boolean(modelId);
+          const routePath = candidate.accountId
+            ? { id: gateway, accountId: candidate.accountId }
+            : gateway;
+          const rec = routeHealthApi.getPathRecord(routeHealth, modelId, routePath);
+          if (rec) return rec.status === 'AVAILABLE';
+          if (enforceEmptyHealth) {
+            return Boolean(opts.probeEvidence && opts.probeEvidence(modelId, routePath));
+          }
+          return true;
+        }
+      );
+    if (!refresh) return buildExplicit();
+    return Promise.resolve(persistHealth()).then(buildExplicit);
   }
 
   let offs = opts.offerings;
@@ -868,48 +975,256 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
       : require('./accounts').listAccounts();
   const evidenceAccounts = mergeEvidenceAccounts(accounts, registryAccounts);
 
-  return assembleCandidates(discoveryCat, offs, resolvedRegistry, accounts, null, [
-    ...candidatesApi.generateCandidates({
-      registry: resolvedRegistry,
-      accounts: accounts || [],
-      openCodeIds: (accounts || []).flatMap((account) =>
-        ((account && account.models) || [])
-          .map((model) => (typeof model === 'string' ? model : model && model.model))
-          .filter(Boolean)
-      ),
-      catalogue: ((discoveryCat && discoveryCat.candidates) || [])
-        .map((row) => row && (row.modelId || row.model))
-        .filter(Boolean),
-      evidenceData: opts.evidenceData,
-      fakeRunsDir: opts.fakeRunsDir,
-      home: opts.home,
-      discoverPool: opts.discoverPool !== false,
-      adapterScript: opts.adapterScript,
-      platform: opts.platform,
-    }),
-    ...candidatesApi.gatewayAccountCandidates({
-      registry: resolvedRegistry,
-      accounts: accounts || [],
-      catalogue: (discoveryCat && discoveryCat.candidates) || [],
-    }),
-    ...candidatesApi.poolAccountCandidates({
-      registry: resolvedRegistry,
-      accounts: accounts || [],
-      catalogue: (discoveryCat && discoveryCat.candidates) || [],
-      evidenceData: opts.evidenceData,
-      fakeRunsDir: opts.fakeRunsDir,
-      home: opts.home,
-      discoverPool: opts.discoverPool !== false,
-      adapterScript: opts.adapterScript,
-      platform: opts.platform,
-    }),
-    ...candidatesApi
-      .candidatesFromEvidence(opts.evidenceData, { accounts: evidenceAccounts })
-      .filter((c) => {
-        if (c.legacy) return false;
-        return Array.isArray(c.evidence) && c.evidence.some((e) => e && e.status === 'passed');
+  const buildCandidates = () => {
+    const assembled = assembleCandidates(discoveryCat, offs, resolvedRegistry, accounts, null, [
+      ...candidatesApi
+        .generateCandidates({
+          registry: resolvedRegistry,
+          accounts: accounts || [],
+          openCodeIds: (accounts || []).flatMap((account) =>
+            ((account && account.models) || [])
+              .map((model) => (typeof model === 'string' ? model : model && model.model))
+              .filter(Boolean)
+          ),
+          catalogue: ((discoveryCat && discoveryCat.candidates) || [])
+            .map((row) => row && (row.modelId || row.model))
+            .filter(Boolean),
+          evidenceData: opts.evidenceData,
+          fakeRunsDir: opts.fakeRunsDir,
+          home: opts.home,
+          discoverPool: opts.discoverPool !== false,
+          adapterScript: opts.adapterScript,
+          platform: opts.platform,
+        })
+        .filter((candidate) =>
+          isCandidateRouteEligible(
+            routeHealth,
+            candidate,
+            Object.assign({}, opts, { requireRouteHealth: enforceMissingHealth }),
+            routeHealthApi
+          )
+        ),
+      ...candidatesApi.gatewayAccountCandidates({
+        registry: resolvedRegistry,
+        accounts: accounts || [],
+        catalogue: (discoveryCat && discoveryCat.candidates) || [],
+        routeHealth,
+        routeHealthExplicit,
+        requireRouteHealth: enforceMissingHealth,
+        probeEvidence: opts.probeEvidence,
+        now: opts.now,
+        onAccountCount: opts.onAccountCount,
       }),
-  ]);
+      ...candidatesApi.poolAccountCandidates({
+        registry: resolvedRegistry,
+        accounts: accounts || [],
+        catalogue: (discoveryCat && discoveryCat.candidates) || [],
+        routeHealth,
+        allowUnprobedCandidates: opts.allowUnprobedCandidates,
+        now: opts.now,
+        probeEvidence: opts.probeEvidence,
+        requireRouteHealth: enforceMissingHealth,
+        evidenceData: opts.evidenceData,
+        fakeRunsDir: opts.fakeRunsDir,
+        home: opts.home,
+        discoverPool: opts.discoverPool !== false,
+        adapterScript: opts.adapterScript,
+        platform: opts.platform,
+      }),
+      ...candidatesApi
+        .candidatesFromEvidence(opts.evidenceData, { accounts: evidenceAccounts })
+        .filter((c) => {
+          if (c.legacy) return false;
+          return Array.isArray(c.evidence) && c.evidence.some((e) => e && e.status === 'passed');
+        }),
+    ]);
+    for (const fallback of resolvedFallbackRoutes) {
+      const route = fallback.route;
+      if (!route) continue;
+      const matching = catalogueRows.find(
+        (row) =>
+          route.gateway &&
+          row.gateway === route.gateway &&
+          routeHealthApi.normalizeModelId(row.modelId || row.model) === fallback.modelId
+      );
+      if (matching) {
+        assembled.push(
+          ...assembleCandidates(
+            { candidates: [matching] },
+            offs,
+            resolvedRegistry,
+            accounts,
+            null,
+            []
+          )
+        );
+        continue;
+      }
+      const source = (resolvedRegistry.sources || []).find((item) => item.id === route.id);
+      if (!source) continue;
+      const generated = candidatesApi.generateCandidates({
+        registry: resolvedRegistry,
+        accounts: accounts || [],
+        openCodeIds: [fallback.modelId],
+        catalogue: [],
+        discoverPool: opts.discoverPool !== false,
+        home: opts.home,
+      });
+      const directCandidates = generated.filter((candidate) => candidate.gateway === route.id);
+      if (directCandidates.length === 0) {
+        const source = (resolvedRegistry.sources || []).find((item) => item.id === route.id);
+        const dispatch =
+          resolvedRegistry.dispatch && resolvedRegistry.dispatch.providers
+            ? resolvedRegistry.dispatch.providers[String(route.id).toLowerCase()]
+            : null;
+        const boundAccounts = (accounts || []).filter(
+          (account) => account && (account.provider === route.id || account.sourceId === route.id)
+        );
+        for (const account of boundAccounts) {
+          directCandidates.push({
+            harness: route.harness || (dispatch && dispatch.harness) || (source && source.harness),
+            accessPath: route.accessPath || (source && (source.accessPath || source.endpoint)),
+            gateway: route.gateway || route.id,
+            upstream: route.upstream || route.id,
+            accountId: account.id,
+            quotaScope: account.id,
+            modelId: fallback.modelId,
+            source: route.id,
+            kind: source && source.kind,
+            capabilities: account.capabilities || {},
+            sharedQuota: 'unknown',
+          });
+        }
+      }
+      assembled.push(...directCandidates);
+    }
+    return assembled.filter((candidate) =>
+      isCandidateRouteEligible(
+        routeHealth,
+        candidate,
+        Object.assign({}, opts, { requireRouteHealth: enforceMissingHealth }),
+        routeHealthApi
+      )
+    );
+  };
+  if (!refresh) return buildCandidates();
+  return Promise.resolve(persistHealth()).then(buildCandidates);
+}
+
+async function resolveFallbackRoutes(store, catalogue, probe, routeHealthApi, options) {
+  const cap = Math.max(
+    0,
+    Number((options && options.fallbackProbeCap) ?? (options && options.probeCap) ?? 20)
+  );
+  let checked = 0;
+  const pathsByModel = new Map();
+  const registry = options && options.registry;
+  const accounts = options && options.accounts;
+  const preResolved = options && options.preResolvedFallback === true;
+  for (const row of catalogue || []) {
+    const modelId = row && (row.modelId || row.model);
+    if (!modelId || !row.gateway) continue;
+    const normalized = routeHealthApi.normalizeModelId(modelId);
+    if (!pathsByModel.has(normalized)) pathsByModel.set(normalized, []);
+    pathsByModel.get(normalized).push({
+      id: row.gateway,
+      gateway: row.gateway,
+      evidence: Number(row.evidence || 0),
+      geoBlocked: row.geoBlocked === true,
+    });
+  }
+  for (const normalized of pathsByModel.keys()) {
+    const discovered = routeHealthApi.discoverModelPaths(normalized, registry, accounts, catalogue);
+    const merged = new Map(pathsByModel.get(normalized).map((route) => [route.id, route]));
+    for (const route of discovered) {
+      const previous = merged.get(route.id);
+      merged.set(
+        route.id,
+        previous
+          ? Object.assign({}, route, {
+              evidence: Math.max(previous.evidence || 0, route.evidence || 0),
+            })
+          : route
+      );
+    }
+    pathsByModel.set(normalized, [...merged.values()]);
+  }
+  const now = Number(options && options.now) || Date.now();
+  const resolvedRoutes = [];
+  for (const [normalized, paths] of pathsByModel) {
+    for (const failed of paths) {
+      const health = routeHealthApi.getPathRecord(store, normalized, failed);
+      if (
+        !health ||
+        health.status === 'AVAILABLE' ||
+        routeHealthApi.isEligible(store, normalized, failed, now)
+      )
+        continue;
+      if (preResolved) {
+        const fallbackEvent = (store.events || [])
+          .slice()
+          .reverse()
+          .find(
+            (e) =>
+              e &&
+              e.type === 'route_fallback' &&
+              e.modelId === normalized &&
+              (e.failedPath === failed.id || e.from === failed.id)
+          );
+        let successful = null;
+        if (fallbackEvent) {
+          const chosenId = fallbackEvent.chosenPath || fallbackEvent.to;
+          successful = paths.find(
+            (route) =>
+              (route.id === chosenId || route.gateway === chosenId) &&
+              routeHealthApi.isEligible(store, normalized, route, now)
+          );
+        }
+        if (!successful) {
+          const ordered = paths
+            .filter((route) => route.id !== failed.id)
+            .sort((a, b) => Number(b.evidence || 0) - Number(a.evidence || 0));
+          successful = ordered.find((route) =>
+            routeHealthApi.isEligible(store, normalized, route, now)
+          );
+        }
+        if (successful)
+          resolvedRoutes.push({
+            modelId: normalized,
+            failedPath: failed.id,
+            reason: (fallbackEvent && fallbackEvent.reason) || health.status,
+            route: successful,
+          });
+        continue;
+      }
+      if (checked >= cap) {
+        if (options && Array.isArray(options.resolvedRoutes))
+          options.resolvedRoutes.push(...resolvedRoutes);
+        return { checked, capped: true, resolvedRoutes };
+      }
+      checked += 1;
+      const fallback = await routeHealthApi.routeFallbackDiscovered(
+        normalized,
+        failed.id,
+        registry,
+        accounts,
+        catalogue,
+        (model, route) => probe(model, route.id, { timeoutMs: options.probeTimeoutMs }),
+        store,
+        { now, failureReason: health.status, registry }
+      );
+      if (fallback.ok)
+        resolvedRoutes.push({
+          modelId: normalized,
+          failedPath: failed.id,
+          reason: fallback.reason,
+          route: fallback.route,
+        });
+    }
+  }
+  if (options && Array.isArray(options.resolvedRoutes))
+    options.resolvedRoutes.push(...resolvedRoutes);
+  return { checked, capped: false, resolvedRoutes };
 }
 
 function readCheckpoint(file) {
@@ -1196,15 +1511,16 @@ function buildDryRunLog(parts) {
  * profile-ranked candidate and an item-ranked candidate are the same kind of
  * object with the same seven-part identity.
  */
-function dispatchProfileCommand(args, deps) {
+async function dispatchProfileCommand(args, deps) {
   const rootDir = args.root || (deps && deps.rootDir) || process.cwd();
   const sourcesApi = require('./sources');
   const jev = require('./jev');
-  const { listAccounts } = require('./accounts');
   const { readDiscoveryCatalogue } = require('./discovery/read');
 
   let discCat;
-  if (!(deps && Array.isArray(deps.candidates))) {
+  if (Array.isArray(deps && deps.discoveryCatalogue)) {
+    discCat = deps.discoveryCatalogue;
+  } else if (!(deps && Array.isArray(deps.candidates))) {
     try {
       discCat = readDiscoveryCatalogue({
         dataDir:
@@ -1216,7 +1532,9 @@ function dispatchProfileCommand(args, deps) {
       discCat = { candidates: [] };
     }
   }
-  const accounts = (deps && Array.isArray(deps.accounts) ? deps.accounts : listAccounts()) || [];
+  const accounts = Array.isArray(deps && deps.accounts)
+    ? deps.accounts
+    : listAccounts() || [];
 
   const evidenceDir =
     (deps && deps.evidenceDir) || args['evidence-dir'] || path.join(__dirname, 'data', 'evidence');
@@ -1228,6 +1546,7 @@ function dispatchProfileCommand(args, deps) {
   }
   const optsWithEvidence = Object.assign({}, deps, {
     evidenceData,
+    routeHealthFile: (deps && deps.routeHealthFile) || args['route-health'] || undefined,
     accounts,
     discoveryDataDir: (deps && deps.discoveryDataDir) || args['discovery-dir'] || undefined,
     fakeRunsDir:
@@ -1249,9 +1568,20 @@ function dispatchProfileCommand(args, deps) {
     adapterScript: (deps && deps.adapterScript) || process.env.AGY_POOL_ADAPTER_SCRIPT || undefined,
     platform: (deps && deps.platform) || undefined,
   });
+  if (Array.isArray(deps && deps.candidates)) {
+    optsWithEvidence.allowUnprobedCandidates = true;
+  }
+  if (!discCat && Array.isArray(deps && deps.candidates)) discCat = { candidates: [] };
 
   const registry = (deps && deps.registry) || sourcesApi.loadSources();
-  const candidateList = assembleForDispatch(discCat, accounts, registry, optsWithEvidence);
+  const candidateList = assembleForDispatch(
+    discCat,
+    accounts,
+    registry,
+    Array.isArray(deps && deps.candidates) || (deps && deps.allowUnprobedCandidates === true)
+      ? optsWithEvidence
+      : Object.assign({}, optsWithEvidence, { requireRouteHealth: true })
+  );
   const jevSource = sourcesApi.getSource('jev', registry);
   const jevAsk =
     (deps && deps.jevAsk) ||
@@ -1355,6 +1685,46 @@ function dispatchCommand(args, deps = {}) {
   // JEV advisory is.
   if (typeof args.profile === 'string') {
     return dispatchProfileCommand(args, deps);
+  }
+
+  if (deps && deps.refreshRoutes === true && !Array.isArray(deps.candidates)) {
+    const routeHealthApi = require('./route-health');
+    const healthFile =
+      deps.routeHealthFile || path.join(__dirname, 'data', 'model-route-health.json');
+    const registryForProbe = deps.registry || require('./sources').loadSources();
+    const healthStore =
+      deps.routeHealth || routeHealthApi.loadStore(healthFile, { allowMissing: true });
+    return routeHealthApi
+      .recheckBeforeSelection(
+        healthStore,
+        deps.probeRoute ||
+          ((model, route, probeOptions) =>
+            routeHealthApi.probeGatewayModel(
+              model,
+              route,
+              Object.assign({ registry: registryForProbe }, probeOptions)
+            )),
+        {
+          now: deps.now,
+          cap: deps.probeCap,
+          timeoutMs: deps.probeTimeoutMs,
+          catalogue: (deps.discoveryCatalogue && deps.discoveryCatalogue.candidates) || [],
+          registry: registryForProbe,
+          accounts: deps.accounts || [],
+        }
+      )
+      .then((result) => {
+        routeHealthApi.saveStore(healthFile, healthStore);
+        if (deps.onRouteRefresh) deps.onRouteRefresh(result);
+        return dispatchCommand(
+          Object.assign({}, args, { 'route-health-refreshed': true }),
+          Object.assign({}, deps, {
+            refreshRoutes: false,
+            routeHealth: healthStore,
+            registry: registryForProbe,
+          })
+        );
+      });
   }
 
   const isDryRun = dryRunFlag || !execute;
@@ -1480,7 +1850,15 @@ function dispatchCommand(args, deps = {}) {
   }
 
   const accounts = deps && deps.accounts !== undefined ? deps.accounts : listAccounts() || [];
-  const candidateList = assembleForDispatch(discCat, accounts, registry, deps);
+  const routeHealthApi = require('./route-health');
+  const candidateList = assembleForDispatch(
+    discCat,
+    accounts,
+    registry,
+    Array.isArray(deps.candidates) || deps.allowUnprobedCandidates === true
+      ? deps
+      : Object.assign({}, deps, { requireRouteHealth: true })
+  );
 
   // Filter by explicit pins (--model, --account, --harness)
   const pinModel = args.model || (deps && deps.model);
@@ -2778,7 +3156,7 @@ function reviewCommand(args, deps) {
  *     [--isolated-worker --base-sha <40-hex>] [--checkpoint <file>] [--out <file>]
  *     [--evidence-dir <dir>] [--worker-timeout-min <1..240>]
  */
-function orchestrateCommand(args, deps = {}) {
+async function orchestrateCommand(args, deps = {}) {
   const d = deps || {};
   const { runOrchestration } = d.runOrchestration ? d : require('./orchestrate');
   const { generateCandidates } = require('./candidates');
@@ -2866,6 +3244,26 @@ function orchestrateCommand(args, deps = {}) {
       ? d.listAccounts()
       : require('./accounts').listAccounts();
   const evidenceAccounts = mergeEvidenceAccounts(inputAccounts, registryAccounts);
+  if (d.refreshRoutes === true) {
+    const healthFile =
+      args['route-health'] || path.join(__dirname, 'data', 'model-route-health.json');
+    const healthStore = require('./route-health').loadStore(healthFile, { allowMissing: true });
+    const routeHealthApi = require('./route-health');
+    const probeRoute =
+      d.probeRoute ||
+      ((model, route, probeOptions) =>
+        routeHealthApi.probeGatewayModel(model, route, Object.assign({ registry }, probeOptions)));
+    await routeHealthApi.recheckBeforeSelection(healthStore, probeRoute, {
+      now: d.now,
+      cap: d.probeCap,
+      timeoutMs: d.probeTimeoutMs,
+      catalogue: readJsonArg(args.catalogue) || [],
+      registry,
+      accounts: inputAccounts,
+    });
+    routeHealthApi.saveStore(healthFile, healthStore);
+    d.refreshRoutes = false;
+  }
   let tokenBudgets = null;
   if (typeof args['token-budgets'] === 'string') {
     try {
@@ -3458,6 +3856,18 @@ function main(argv = process.argv.slice(2), deps = {}) {
   // refused, fail or timeout outcome still exits 0: the record is the
   // committed outcome either way, and exit 2 is reserved for bad argv.
   if (command === 'probe') {
+    if (process.argv.slice(3).includes('--due')) {
+      require('./route-health')
+        .runDueCli()
+        .then((code) => {
+          process.exitCode = code;
+        })
+        .catch((e) => {
+          console.error('Probe due lỗi: ' + (e && e.message ? e.message : e));
+          process.exitCode = 1;
+        });
+      return;
+    }
     const { runProbeCli } = require('./qualification');
     runProbeCli(process.argv.slice(3))
       .then((code) => {
@@ -3667,6 +4077,7 @@ module.exports = {
   orchestrateCommand,
   mergeCommand,
   intakeCommand,
+  dispatchProfileCommand,
   tokenReportCommand,
   planCommand,
   nextCommand: (args, deps) => {
@@ -3696,9 +4107,46 @@ module.exports = {
         return { ran: true, status: code === 0 ? 'completed' : 'refused' };
       };
     }
+    if (args.loop && !nextDeps.refreshRouteHealth) {
+      nextDeps.refreshRouteHealth = async ({ now }) => {
+        const routeHealthApi = require('./route-health');
+        const healthFile =
+          args['route-health'] || path.join(__dirname, 'data', 'model-route-health.json');
+        const registry = nextDeps.registry || require('./sources').loadSources();
+        const store = routeHealthApi.loadStore(healthFile, { allowMissing: true });
+        let catalogue = [];
+        if (args.catalogue) {
+          const cataloguePath = path.resolve(args.catalogue);
+          if (fs.existsSync(cataloguePath))
+            catalogue = JSON.parse(fs.readFileSync(cataloguePath, 'utf8')).candidates || [];
+        }
+        const accounts = nextDeps.accounts || require('./accounts').listAccounts();
+        const probe =
+          nextDeps.probeRoute ||
+          ((model, route, probeOptions) =>
+            routeHealthApi.probeGatewayModel(
+              model,
+              route,
+              Object.assign({ registry }, probeOptions)
+            ));
+        const result = await routeHealthApi.recheckBeforeSelection(store, probe, {
+          now,
+          cap: nextDeps.probeCap,
+          timeoutMs: nextDeps.probeTimeoutMs,
+          catalogue,
+          registry,
+          accounts,
+          allowUnprobed: true,
+        });
+        routeHealthApi.saveStore(healthFile, store);
+        if (nextDeps.onRouteRefresh) nextDeps.onRouteRefresh(result);
+        return result;
+      };
+    }
     return require('./next-runner').nextCommand(args, nextDeps);
   },
   _buildQualificationCandidates: buildQualificationCandidates,
+  _resolveFallbackRoutes: resolveFallbackRoutes,
 };
 
 if (require.main === module) {

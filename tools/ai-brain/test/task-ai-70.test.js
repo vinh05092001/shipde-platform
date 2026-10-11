@@ -25,6 +25,7 @@ const {
 } = require('../discovery/catalogue-import');
 const { readDiscoveryCatalogue } = require('../discovery/read');
 const sourcesApi = require('../sources');
+const routeHealthApi = require('../route-health');
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
 const CLI = path.join(__dirname, '..', 'cli.js');
@@ -212,6 +213,7 @@ function scenario(prefix) {
   const discoveryDir = path.join(root, 'discovery');
   const evidenceDir = path.join(root, 'evidence');
   const decisionDir = path.join(root, 'decisions');
+  const routeHealthFile = path.join(root, 'route-health.json');
   // An empty pool runtime, so a candidate set never depends on whether the host
   // happens to have agy accounts. Nothing here reaches a scheduled task.
   const poolRunsDir = path.join(root, 'pool-runs');
@@ -224,9 +226,10 @@ function scenario(prefix) {
     discoveryDir,
     evidenceDir,
     decisionDir,
+    routeHealthFile,
     poolRunsDir,
     import(extra) {
-      return runCli(
+      const result = runCli(
         [
           'discovery',
           'import',
@@ -239,6 +242,22 @@ function scenario(prefix) {
         ].concat(extra || []),
         home
       );
+      if (result.status === 0) {
+        const catalogue = readDiscoveryCatalogue({ dataDir: discoveryDir });
+        const health = routeHealthApi.loadStore(routeHealthFile, { allowMissing: true });
+        for (const row of catalogue.candidates) {
+          if (!row || !row.gateway || !(row.modelId || row.model)) continue;
+          routeHealthApi.recordResult(
+            health,
+            row.modelId || row.model,
+            { id: row.gateway, accountId: 'gw-local' },
+            { ok: true },
+            Date.parse(row.ts || '2026-10-10T00:00:00.000Z')
+          );
+        }
+        routeHealthApi.saveStore(routeHealthFile, health);
+      }
+      return result;
     },
     dispatchJson(profileOverrides) {
       const profile = profileFile(root, profileOverrides);
@@ -256,6 +275,8 @@ function scenario(prefix) {
           decisionDir,
           '--pool-runtime-dir',
           poolRunsDir,
+          '--route-health',
+          routeHealthFile,
           '--json',
         ],
         home
