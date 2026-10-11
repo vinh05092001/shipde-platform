@@ -252,44 +252,49 @@ describe('an unreadable log is unknown, not empty', () => {
     assert.equal(state.writers.length, 1);
   });
 
-  test('writer and reviewer sessions expire after six hours without newer activity', () => {
+  test('writer and reviewer claims expire after four hours without newer activity', () => {
     const now = Date.parse('2026-10-10T12:00:00Z');
     const records = [
       {
         stage: Stage.LAUNCHED,
-        workItemId: 'OLD-WRITER',
+        workItemId: 'FRESH-WRITER',
         sessionId: 'w1',
-        at: new Date(now - 7 * 60 * 60 * 1000).toISOString(),
+        at: new Date(now - (3 * 60 + 59) * 60 * 1000).toISOString(),
+      },
+      {
+        stage: Stage.LAUNCHED,
+        workItemId: 'OLD-WRITER',
+        sessionId: 'w2',
+        at: new Date(now - (4 * 60 + 1) * 60 * 1000).toISOString(),
+      },
+      {
+        stage: Stage.REVIEWER_SELECTION,
+        workItemId: 'FRESH-REVIEW',
+        sessionId: 'r1',
+        role: 'reviewer',
+        at: new Date(now - (3 * 60 + 59) * 60 * 1000).toISOString(),
       },
       {
         stage: Stage.REVIEWER_SELECTION,
         workItemId: 'OLD-REVIEW',
-        sessionId: 'r1',
-        role: 'reviewer',
-        at: new Date(now - 7 * 60 * 60 * 1000).toISOString(),
-      },
-      {
-        stage: Stage.REVIEW_LAUNCH,
-        workItemId: 'ACTIVE-REVIEW',
         sessionId: 'r2',
         role: 'reviewer',
-        at: new Date(now - 7 * 60 * 60 * 1000).toISOString(),
-      },
-      {
-        stage: Stage.WARNING,
-        workItemId: 'ACTIVE-REVIEW',
-        sessionId: 'r2',
-        role: 'reviewer',
-        at: new Date(now - 60 * 60 * 1000).toISOString(),
+        at: new Date(now - (4 * 60 + 1) * 60 * 1000).toISOString(),
       },
     ];
     const writers = openWritersDetailed({ records, now });
     const reviewers = openReviewersDetailed({ records, now });
-    assert.deepEqual(writers.writers, []);
-    assert.equal(writers.stale[0].workItemId, 'OLD-WRITER');
+    assert.deepEqual(
+      writers.writers.map((writer) => writer.workItemId),
+      ['FRESH-WRITER']
+    );
+    assert.deepEqual(
+      writers.stale.map((writer) => writer.workItemId),
+      ['OLD-WRITER']
+    );
     assert.deepEqual(
       reviewers.reviewers.map((r) => r.workItemId),
-      ['ACTIVE-REVIEW']
+      ['FRESH-REVIEW']
     );
     assert.deepEqual(
       reviewers.stale.map((r) => r.workItemId),
