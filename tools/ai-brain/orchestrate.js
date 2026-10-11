@@ -3949,8 +3949,10 @@ async function runOrchestration(goal, opts) {
       // For isolated worker launches, the runner is materialised inside the
       // isolated launcher AFTER the worker root is provisioned so git clone does
       // not overwrite it. For non-isolated or injected runners, materialise here.
-      if (o.exercise && job.cwd && (!o.isolatedWorker || typeof o.run === 'function')) {
-        job.exercise = materialiseExercise(job.cwd, o);
+      const exerciseRoot =
+        o.isolatedWorker && typeof o.run === 'function' ? isolatedWorkerRoot : job.cwd;
+      if (o.exercise && exerciseRoot && (!o.isolatedWorker || typeof o.run === 'function')) {
+        job.exercise = materialiseExercise(exerciseRoot, o);
         if (job.exercise && job.exercise.failBefore) {
           job.failBefore = job.exercise.failBefore;
         }
