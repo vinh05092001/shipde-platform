@@ -393,6 +393,7 @@ function validateDraftAgainstSources(draftText, id, rootDir, deps) {
     'feature detail is incomplete pending the decisions below.',
   ]);
   const citedText = citedSources.join('\n').toLowerCase();
+  const citedTokens = new Set(citedText.match(/[a-z0-9]+(?:['’-][a-z0-9]+)*/g) || []);
   let currentSection = '';
   for (const line of draftText.split(/\r?\n/)) {
     const heading = line.match(/^##\s+(.+)$/);
@@ -409,7 +410,8 @@ function validateDraftAgainstSources(draftText, id, rootDir, deps) {
     }
     const claim = line.slice(2).trim().replace(/[`*_]/g, '').toLowerCase();
     if (standardStatements.has(claim) || claim.startsWith('register dependencies:')) continue;
-    if (!citedText.includes(claim)) {
+    const claimTokens = claim.match(/[a-z0-9]+(?:['’-][a-z0-9]+)*/g) || [];
+    if (claimTokens.some((token) => !citedTokens.has(token))) {
       return {
         valid: false,
         reason:

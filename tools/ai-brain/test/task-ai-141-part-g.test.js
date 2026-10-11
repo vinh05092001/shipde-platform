@@ -251,6 +251,48 @@ test('G1 worker drafts cannot pass governed review with uncited product claims',
   }
 });
 
+test('G1 source validation rejects claims supported only by a substring', () => {
+  const root = fixtureRoot('plan-g1-substring-');
+  try {
+    const draft = [
+      '# FEAT-AUTH-07 — Fixture feature',
+      '',
+      '## Business outcome',
+      '',
+      '> Approved behavior',
+      '',
+      '## Source references',
+      '',
+      '- `docs/product-spec/docs/01-product/MASTER-FEATURE-CATALOG.md#Feature`',
+      '',
+      ...[
+        'Preconditions and dependencies',
+        'Author boundary',
+        'In scope',
+        'Out of scope',
+        'Business rules and edge cases',
+        'UI states',
+        'API, event and data impact',
+        'Acceptance matrix',
+        'Verification commands',
+        'Codex review record',
+        'Residual limitations',
+      ].flatMap((heading) => ['## ' + heading, '', '- auth', '']),
+      '## Open decisions',
+      '',
+      '- None.',
+    ].join('\n');
+    const validation = validateDraftAgainstSources(draft, 'FEAT-AUTH-07', root, {
+      readSource: () => '| FEAT-AUTH-07 | Fixture feature | Authentication | Approved behavior |',
+      approvedSpecSources: [],
+    });
+    assert.equal(validation.valid, false);
+    assert.match(validation.reason, /not supported by its cited approved sources/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('G1 citations use template-compatible single code formatting', () => {
   const root = fixtureRoot('plan-g1-citations-');
   try {

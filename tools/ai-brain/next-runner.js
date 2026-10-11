@@ -924,7 +924,8 @@ async function nextLoop(options, deps) {
             workItemId: item.work_item_id,
           };
         }
-        Object.assign(item, refreshedItem);
+        // Keep the re-read row local; the register snapshot remains immutable.
+        findResult.item = refreshedItem;
       } catch (err) {
         terminalWorkItems.set(item.work_item_id, 'planning-failed');
         decisions.recordDecision(

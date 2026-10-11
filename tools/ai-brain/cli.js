@@ -3354,10 +3354,11 @@ function main(argv = process.argv.slice(2), deps = {}) {
 
   // plan (TASK-AI-141 G): draft only from approved, cited repository sources.
   if (command === 'plan') {
-    const planningDeps = {
-      ...deps,
-      runPlanning: deps.runPlanning,
-    };
+    const rootDir = args.root || process.cwd();
+    const planningDeps = require('./work-item-planner').defaultPlanningDeps(
+      rootDir,
+      deps.planningDeps || deps
+    );
     planCommand(args, planningDeps)
       .then((result) => {
         console.log(JSON.stringify(result, null, 2));
