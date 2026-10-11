@@ -1,4 +1,4 @@
-﻿# TASK-AI-141 — The Controller uses every source
+# TASK-AI-141 — The Controller uses every source
 
 ## Control
 
