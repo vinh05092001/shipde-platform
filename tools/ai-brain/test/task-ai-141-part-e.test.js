@@ -23,7 +23,7 @@ test('route health normalizes aliases and classifies provider failures', () => {
   assert.equal(routes.normalizeModelId('antigravity/gemini-3.1-pro'), 'gemini-3.1-pro');
   assert.deepEqual(
     [451, 402, 429, 403, 503].map((status) => routes.classifyFailure(status)),
-    ['GEO_BLOCKED', 'NO_CREDIT', 'RATE_LIMITED', 'AUTH_NEEDED', 'UNAVAILABLE']
+    ['GEO_BLOCKED', 'NO_CREDIT', 'RATE_LIMITED', 'AUTH_NEEDED', 'UNAVAILABLE_NOW']
   );
 });
 
@@ -103,7 +103,7 @@ test('all route failures retain per-path reasons and a due 402 retry restores im
   assert.equal(failed.unavailable, true);
   assert.deepEqual(failed.failures, [
     { path: 'p2', reason: 'NO_CREDIT' },
-    { path: 'p3', reason: 'UNAVAILABLE' },
+    { path: 'p3', reason: 'UNAVAILABLE_NOW' },
   ]);
   const retryAt = Date.parse(store.paths['model-x|p2'].nextCheckAt);
   const retryResponse = { ok: true };
@@ -237,7 +237,7 @@ test('candidate assembly uses existing probe evidence when a route health record
   assert.ok(assembled.some((candidate) => candidate.modelId === model.modelId));
 });
 
-test('normal candidate assembly excludes routes without probe evidence', () => {
+test('unprobed catalogue rows remain visible without creating a bound route', () => {
   const registry = {
     sources: [
       { id: 'gateway-a', kind: 'router' },
@@ -252,7 +252,8 @@ test('normal candidate assembly excludes routes without probe evidence', () => {
     registry,
     { routeHealth: { version: 1, paths: {}, events: [] }, offerings: [], registryAccounts: [] }
   );
-  assert.deepEqual(assembled, []);
+  assert.ok(assembled.some((candidate) => candidate.modelId === model.modelId));
+  assert.ok(!assembled.some((candidate) => candidate.accountId === 'acct'));
 });
 
 test('discovered same-model paths fall through 451 and 429 to success, recording fallback', async (t) => {

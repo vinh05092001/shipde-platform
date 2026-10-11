@@ -916,7 +916,8 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
           const modelId = candidate && candidate.modelId;
           const gateway = candidate && candidate.gateway;
           return Boolean(
-            modelId && gateway && routeHealthApi.isEligible(routeHealth, modelId, gateway, opts.now)
+            modelId &&
+            (!gateway || routeHealthApi.isEligible(routeHealth, modelId, gateway, opts.now))
           );
         }
       );
@@ -965,7 +966,8 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
           const modelId = candidate && candidate.modelId;
           const gateway = candidate && candidate.gateway;
           return Boolean(
-            modelId && gateway && routeHealthApi.isEligible(routeHealth, modelId, gateway, opts.now)
+            modelId &&
+            (!gateway || routeHealthApi.isEligible(routeHealth, modelId, gateway, opts.now))
           );
         }),
       ...candidatesApi.gatewayAccountCandidates({
@@ -1061,12 +1063,8 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
     return assembled.filter((candidate) => {
       const modelId = candidate && candidate.modelId;
       const gateway = candidate && candidate.gateway;
-      if (!modelId || !gateway) return false;
-      const key = routeHealthApi.normalizeModelId(modelId) + '|' + gateway;
-      const record = routeHealth.paths[key];
-      return record
-        ? routeHealthApi.isEligible(routeHealth, modelId, gateway, opts.now)
-        : Boolean(opts.probeEvidence && opts.probeEvidence(modelId, gateway));
+      if (!modelId || !gateway) return Boolean(modelId);
+      return routeHealthApi.isEligible(routeHealth, modelId, gateway, opts.now);
     });
   };
   if (!refresh) return buildCandidates();

@@ -27,7 +27,7 @@ function classifyFailure(status, message) {
   if (s === 401 || (s === 403 && !/unsupported model|model not found/.test(text)))
     return 'AUTH_NEEDED';
   if (s === 404 || /unsupported model|model not found/.test(text)) return 'UNSUPPORTED';
-  return 'UNAVAILABLE';
+  return 'UNAVAILABLE_NOW';
 }
 
 function loadStore(file, options) {
@@ -138,7 +138,7 @@ async function routeFallback(modelId, failedPath, paths, probe, store, options) 
   const failureReason =
     o.failureReason || (failedRecord && failedRecord.status) || 'UNAVAILABLE_NOW';
   const retryFailedPath =
-    failureReason === 'UNAVAILABLE' &&
+    failureReason === 'UNAVAILABLE_NOW' &&
     failedRecord &&
     failedRecord.status === 'UNAVAILABLE_NOW' &&
     !isEligible(store, modelId, failedPath, now);
@@ -175,7 +175,7 @@ async function routeFallback(modelId, failedPath, paths, probe, store, options) 
         result && result.status,
         result && (result.message || result.error)
       );
-      if (attempt !== 0 || retryReason !== 'UNAVAILABLE') break;
+      if (attempt !== 0 || retryReason !== 'UNAVAILABLE_NOW') break;
       if (o.sleep) await o.sleep(o.retryBackoffMs ?? 1000);
       else await new Promise((resolve) => setTimeout(resolve, o.retryBackoffMs ?? 1000));
     }

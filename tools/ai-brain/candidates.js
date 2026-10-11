@@ -900,6 +900,15 @@ function gatewayAccountCandidates(opts) {
     const eligibleRows = catalogueRows.slice();
     for (const modelId of additions) {
       if (!catalogueModelIds.has(modelId) && !excludes.has(modelId)) {
+        const health = routeHealth && require('./route-health');
+        const normalized = health && health.normalizeModelId(modelId);
+        const record = health && routeHealth.paths[normalized + '|' + gateway];
+        const probed = Boolean(
+          (record && health.isEligible(routeHealth, modelId, gateway, routeNow)) ||
+          (probeOk && probeOk(modelId, gateway)) ||
+          (o.probeEvidence && o.probeEvidence(modelId, gateway))
+        );
+        if (!probed) continue;
         const prefix = parsePrefix(modelId);
         if (!prefix) continue;
         const addition = {
