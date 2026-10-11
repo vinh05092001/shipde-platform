@@ -17,12 +17,12 @@ function readJson(file) {
   }
 }
 
-function walk(node, visit, prefix = []) {
+function walk(node, visit, prefix = [], parentNode = null, parentKey = null) {
   if (!node || typeof node !== 'object') return;
   for (const [key, value] of Object.entries(node)) {
     const fields = prefix.concat(key);
-    visit(key, value, fields, node);
-    if (value && typeof value === 'object') walk(value, visit, fields);
+    visit(key, value, fields, node, parentNode, parentKey);
+    if (value && typeof value === 'object') walk(value, visit, fields, node, key);
   }
 }
 
@@ -33,6 +33,15 @@ function idOf(value) {
     .slice(0, 70);
 }
 
+function isTencentTokenHub(hostname) {
+  if (typeof hostname !== 'string') return false;
+  const host = hostname.toLowerCase();
+  return (
+    /(?:^|\.)tokenhub.*tencentcloud(?:maas)?\.com$/.test(host) ||
+    /(?:^|\.)(?:api\.)?tencentcloudmaas\.com$/.test(host)
+  );
+}
+
 // Persist only a routable host and ordinary API prefix. Inline credentials,
 // query parameters, and common secret/project path values are removed.
 function sanitizeEndpoint(value) {
@@ -40,6 +49,10 @@ function sanitizeEndpoint(value) {
   try {
     const url = new URL(value);
     if (!/^https?:$/.test(url.protocol)) return null;
+    if (isTencentTokenHub(url.hostname)) {
+      url.protocol = 'https:';
+      url.hostname = 'tokenhub-intl.tencentcloudmaas.com';
+    }
     if (url.username || url.password) {
       url.username = 'REDACTED';
       url.password = '';
@@ -59,6 +72,28 @@ function sanitizeEndpoint(value) {
   } catch {
     return null;
   }
+}
+
+function extractCredentialFromObject(obj, basePath, file) {
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
+  for (const [k, v] of Object.entries(obj)) {
+    if (SECRET_KEY.test(k) && typeof v === 'string') {
+      const match = v.match(/\{env:([A-Z0-9_]+)\}/i);
+      if (match) return { type: 'env', name: match[1] };
+    }
+  }
+  // Never treat an arbitrary {env:...} field as authorization. It must be
+  // attached to an auth-shaped field on this endpoint's own options object.
+  for (const [k, v] of Object.entries(obj)) {
+    if (SECRET_KEY.test(k) && typeof v === 'string' && v.trim()) {
+      return {
+        type: 'file-field',
+        path: file,
+        field: basePath ? `${basePath}.${k}` : k,
+      };
+    }
+  }
+  return null;
 }
 
 function discoverNineRouterDb(options, add) {
@@ -129,7 +164,18 @@ function discoverSources(options = {}) {
   const add = (source) => {
     const endpoint = source.endpoint ? sanitizeEndpoint(source.endpoint) : null;
     if (source.endpoint && !endpoint) return;
-    const key = source.id + '|' + endpoint;
+    // Endpoint identity matters when one provider id exposes multiple URLs.
+    const baseId = idOf(source.id);
+    const collision = [...result.values()].some(
+      (entry) => entry.id === baseId && entry.endpoint !== endpoint
+    );
+    const id =
+      collision && endpoint
+        ? baseId +
+          '-' +
+          require('crypto').createHash('sha1').update(endpoint).digest('hex').slice(0, 10)
+        : baseId;
+    const key = id + '|' + endpoint;
     const old = result.get(key);
     if (old) {
       old.models = [...new Set([...old.models, ...(source.models || [])])];
@@ -137,7 +183,7 @@ function discoverSources(options = {}) {
       return;
     }
     result.set(key, {
-      id: source.id,
+      id,
       name: source.name || source.id,
       kind: source.kind || 'model-source',
       endpoint,
@@ -152,17 +198,31 @@ function discoverSources(options = {}) {
   const scanConfig = (file, label) => {
     const data = readJson(file);
     if (!data) return;
-    walk(data, (key, value, fields, parent) => {
-      if (key === 'baseURL' || key === 'baseUrl' || key === 'base_url' || key === 'url') {
+    walk(data, (key, value, fields, node, parentNode, parentKey) => {
+      if (/^(?:base[_-]?url|endpoint|api[_-]?base(?:url)?|url)$/i.test(key)) {
         if (typeof value !== 'string' || !/^https?:\/\//i.test(value)) return;
-        const providerName = fields.find((part) => data.provider && data.provider[part]);
-        const provider = (providerName && data.provider[providerName]) || parent;
-        const envRef = JSON.stringify(provider).match(/\{env:([A-Z0-9_]+)\}/i);
-        const credKey = Object.keys(provider).find(
-          (k) => SECRET_KEY.test(k) && typeof provider[k] === 'string'
-        );
+        // Generic URLs describe MCP servers, docs, icons and webhooks too.
+        // Only API-shaped fields or entries with explicit model metadata are
+        // eligible to be model sources.
+        const modelHint =
+          node.models || node.model || (parentNode && (parentNode.models || parentNode.model));
+        if (/^url$/i.test(key) && !modelHint) return;
+        let credential = extractCredentialFromObject(node, fields.slice(0, -1).join('.'), file);
+        if (!credential && parentKey === 'options' && parentNode) {
+          credential = extractCredentialFromObject(parentNode, fields.slice(0, -2).join('.'), file);
+        }
+        if (!credential && node && node.options && typeof node.options === 'object') {
+          credential = extractCredentialFromObject(
+            node.options,
+            fields.slice(0, -1).concat('options').join('.'),
+            file
+          );
+        }
         const modelIds = [];
-        const modelsNode = provider.models || provider.model;
+        const modelsNode =
+          node.models ||
+          node.model ||
+          (parentKey === 'options' && parentNode && (parentNode.models || parentNode.model));
         if (Array.isArray(modelsNode))
           modelIds.push(
             ...modelsNode
@@ -176,15 +236,7 @@ function discoverSources(options = {}) {
           name: label,
           endpoint: value,
           models: modelIds,
-          credential: envRef
-            ? { type: 'env', name: envRef[1] }
-            : credKey
-              ? {
-                  type: 'file-field',
-                  path: file,
-                  field: fields.slice(0, -1).concat(credKey).join('.'),
-                }
-              : null,
+          credential,
         });
       }
     });
@@ -316,16 +368,14 @@ async function probeSource(source, options = {}) {
   const credential = source.credential || {};
   let secret = null;
   if (credential.type === 'env') secret = (options.env || process.env)[credential.name] || null;
-  if (credential.type === 'file-field') {
-    const config = readJson(credential.path);
-    secret =
-      credential.field.split('.').reduce((value, key) => value && value[key], config) || null;
-  }
+  // File-backed values are inventory-only. Reading arbitrary config fields
+  // as bearer tokens can leak credentials to unrelated endpoints.
   const record = { ...source, lastProbeAt: now.toISOString() };
   if (!fetcher)
     return { ...record, status: 'unavailable', reason: 'fetch unavailable', nextCheckAt: null };
+  const targetEndpoint = (source.endpoint && sanitizeEndpoint(source.endpoint)) || source.endpoint;
   try {
-    const response = await fetcher(source.endpoint.replace(/\/$/, '') + '/models', {
+    const response = await fetcher(targetEndpoint.replace(/\/$/, '') + '/models', {
       headers: secret ? { Authorization: 'Bearer ' + secret } : {},
     });
     if (!response.ok) {
@@ -381,10 +431,11 @@ async function discover(options = {}) {
     return {
       ...entry,
       models: [...new Set([...(old.models || []), ...(entry.models || [])])],
-      status: old.status || entry.status,
-      lastProbeAt: old.lastProbeAt || null,
-      nextCheckAt: old.nextCheckAt || null,
-      reason: old.reason || null,
+      // A fresh discovery invalidates old availability until a new probe.
+      status: 'discovered',
+      lastProbeAt: null,
+      nextCheckAt: null,
+      reason: null,
     };
   });
   for (const old of keyed.values()) sources.push(old);
