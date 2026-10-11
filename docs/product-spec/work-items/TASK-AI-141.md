@@ -131,6 +131,16 @@ The production `qualify --auto` command builds candidates from intake catalogue 
 - `next --loop` offers an injected qualification slot only after the product register has no ready Work Item. The slot is bounded by the qualification coordinator and remains separate from product intake.
 - Added fake-driven tests for qualification candidate selection, caps, exact-SHA independent review, and rejection of product work. The normal isolated orchestration/reviewer implementation must be supplied as `runIsolatedReviewed`; without it, `qualify --auto` fails closed with `QUALIFICATION_RUNNER_UNAVAILABLE`.
 
+## Controller start-up fixes
+
+- The standalone `qualify --auto` CLI now supplies the same isolated-review runner, closed-isolation assertion, candidate builder and qualification configuration as the qualification slot created by `next`.
+- Reviewer fixture selection and failed-key unit tests write only to temporary decision directories. Regression coverage runs both affected selection paths and verifies that today's default decision log is unchanged.
+- Open reviewer and writer claims expire after four hours without newer activity by default. Callers can configure reviewer expiry with `staleWindowMs` (or `ttlMs`) and writer expiry with `ttlMs`; the loop logs stale claims it ignores. Writer filesystem heartbeats continue to refresh activity.
+- The stale ceiling window is separate from the existing four-hour reviewer/writer claim TTL. Fresh `reviewer-selection` records count as reviewer claims even when the record omits an explicit role.
+- A targeted `next --loop --work-item <ID>` run reports `completed: true` after successful execution of that item.
+- `next --loop --work-item <ID>` scopes selection to the named item, while retaining dependency, active-claim, candidate-lane, ceiling and proof-floor qualification checks. A targeted loop exits after that item reaches an outcome rather than selecting a different item.
+- Verification: fake-driven coverage in `task-ai-141b.test.js`, `decisions.test.js`, and the hermeticity fixes in `task-ai-64.test.js` and `task-ai-91.test.js`.
+
 ## Part D
 
 Intake derives risk domains and complexity from the Work Item scope, acceptance criteria, and allowed paths, and records the derivation in each run directory. JEV receives the resulting risk domains and complexity; the Controller enforces a `QUALITY_FIRST` floor for auth, security, money, or tenant-isolation work and records the override reason. Regressions cover a 15-AC MFA-like item and a docs-only item.
@@ -138,3 +148,5 @@ Intake derives risk domains and complexity from the Work Item scope, acceptance 
 ### Part A follow-up: infrastructure failures do not revoke proof transfer
 
 `tools/ai-brain/routing.js` now preserves a source path's `WORK_ITEM_PASS` when that path is blocked or has failed evidence due to infrastructure conditions such as quota exhaustion, rate limits, timeouts, or launch/harness failures. Transfer still requires exact normalized backend model identity and a viable target path; model-scope failures, quality outcomes such as `CHANGES_REQUIRED`, and revoked proof disqualify the source. Three regressions cover infrastructure enum classification while preserving model failures, model/quality failures disqualifying transfer, and exhausted target paths not inheriting proof (`classifier enum values recognize infrastructure and preserve model failures`, `a model-quality failure on the source path disqualifies the proof transfer`, `an exhausted target path never inherits the transferred proof`).
+- The standalone `qualify --auto` isolation assertion now receives caller options and the selected `--root`, matching the root used by its isolated runner.
+- Targeted `next --loop --work-item <ID>` retries after a successful qualification slot when iteration budget remains; if the budget ends first, it returns `stopped: true` with `WORK_ITEM_NOT_EXECUTED`. Qualification alone never reports the requested product item complete.
