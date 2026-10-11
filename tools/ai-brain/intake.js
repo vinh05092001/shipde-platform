@@ -1019,6 +1019,7 @@ module.exports = {
   assertIsolationFresh,
   assertIsolationClosed,
   runIsolatedReviewed,
+  revParseOriginMain,
   parseModelListing,
   extractModelIds,
   readingHasQuota,
