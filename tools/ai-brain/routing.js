@@ -997,18 +997,22 @@ function scoreForProfile(candidate, assessment, ctx) {
   const headroomPenalty =
     candidate.headroomStatus === 'unknown' ? 15 : candidate.headroomStatus === 'tight' ? 10 : 0;
   score = Math.max(0, score - busyPenalty - agePenalty - headroomPenalty);
+  // A scored prior is already blended into quality above. Only legacy priors
+  // without a numeric score retain the standalone tier bonus.
   const weightedPriorContribution =
     priorUsable && prior.score !== undefined
       ? Math.round((prior.bonus * priorQualityWeight * wQuality) / totalWeight)
       : priorUsable
         ? prior.bonus
         : 0;
-  if (weightedPriorContribution) score += weightedPriorContribution;
+  const priorScoreIsBlended = priorUsable && prior.score !== undefined;
+  const scorePriorContribution = priorScoreIsBlended ? 0 : weightedPriorContribution;
+  if (scorePriorContribution) score += scorePriorContribution;
   if (prior) {
     if (prior.score !== undefined) {
       prior.normalizedScore = priorUsable ? prior.score / 100 : null;
       prior.weight = effectivePriorWeight;
-      prior.contribution = weightedPriorContribution;
+      prior.contribution = scorePriorContribution;
     }
   }
 
@@ -1246,11 +1250,7 @@ function rankForProfile(candidates, profile, assessment, ctx) {
     return a.candidateKey.localeCompare(b.candidateKey);
   });
 
-  const allZero =
-    ranked.length > 0 &&
-    ranked.every(
-      (c) => c.score - (c.scoreBreakdown.prior ? c.scoreBreakdown.prior.bonus : 0) === 0
-    );
+  const allZero = ranked.length > 0 && ranked.every((c) => c.score === 0);
   const top3 = ranked.slice(0, 3);
   const deterministicChosen = top3.length ? top3[0].candidateKey : null;
   const chosen = deterministicChosen;
