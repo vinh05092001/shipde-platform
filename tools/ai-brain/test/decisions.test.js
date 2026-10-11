@@ -14,6 +14,7 @@ const {
   writerFor,
   closeWriter,
   openWritersDetailed,
+  openReviewersDetailed,
   scrub,
   Stage,
 } = require('../decisions');
@@ -249,6 +250,60 @@ describe('an unreadable log is unknown, not empty', () => {
     const state = openWritersDetailed({ dir });
     assert.equal(state.readable, true);
     assert.equal(state.writers.length, 1);
+  });
+
+  test('writer and reviewer claims expire after four hours without newer activity', () => {
+    const now = Date.parse('2026-10-10T12:00:00Z');
+    const records = [
+      {
+        stage: Stage.LAUNCHED,
+        workItemId: 'FRESH-WRITER',
+        sessionId: 'w1',
+        at: new Date(now - (3 * 60 + 59) * 60 * 1000).toISOString(),
+      },
+      {
+        stage: Stage.LAUNCHED,
+        workItemId: 'OLD-WRITER',
+        sessionId: 'w2',
+        at: new Date(now - (4 * 60 + 1) * 60 * 1000).toISOString(),
+      },
+      {
+        stage: Stage.REVIEWER_SELECTION,
+        workItemId: 'FRESH-REVIEW',
+        sessionId: 'r1',
+        role: 'reviewer',
+        at: new Date(now - (3 * 60 + 59) * 60 * 1000).toISOString(),
+      },
+      {
+        stage: Stage.REVIEWER_SELECTION,
+        workItemId: 'OLD-REVIEW',
+        sessionId: 'r2',
+        role: 'reviewer',
+        at: new Date(now - (4 * 60 + 1) * 60 * 1000).toISOString(),
+      },
+    ];
+    const writers = openWritersDetailed({ records, now });
+    const reviewers = openReviewersDetailed({ records, now });
+    assert.deepEqual(
+      writers.writers.map((writer) => writer.workItemId),
+      ['FRESH-WRITER']
+    );
+    assert.deepEqual(
+      writers.stale.map((writer) => writer.workItemId),
+      ['OLD-WRITER']
+    );
+    assert.deepEqual(
+      reviewers.reviewers.map((r) => r.workItemId),
+      ['FRESH-REVIEW']
+    );
+    assert.deepEqual(
+      reviewers.stale.map((r) => r.workItemId),
+      ['OLD-REVIEW']
+    );
+    assert.equal(
+      openReviewersDetailed({ records, now, staleWindowMs: 30 * 60 * 1000 }).reviewers.length,
+      0
+    );
   });
 
   test('the executor refuses to write when the log cannot be trusted', () => {

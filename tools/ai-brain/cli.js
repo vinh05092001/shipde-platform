@@ -3208,7 +3208,18 @@ function main(argv = process.argv.slice(2), deps = {}) {
   if (command === 'qualify') {
     if (process.argv[3] === '--auto') {
       const { runAutoCli } = require('./qualification-auto');
-      runAutoCli(process.argv.slice(3))
+      const rootDir = parseArgs(process.argv.slice(3)).root || process.cwd();
+      const { loadConfig } = require('./next-runner');
+      runAutoCli(process.argv.slice(3), {
+        runIsolatedReviewed: (input) =>
+          require('./intake').runIsolatedReviewed(input, { root: rootDir }),
+        assertIsolationClosed: (options) =>
+          require('./intake').assertIsolationClosed({ ...options, root: rootDir }),
+        buildCandidates: () => buildQualificationCandidates(rootDir),
+        evidenceDir: path.join(rootDir, 'tools', 'ai-brain', 'data', 'evidence'),
+        config: loadConfig(rootDir).qualification || {},
+        usageFile: path.join(rootDir, '.shipde', 'qualification-usage.json'),
+      })
         .then((code) => {
           process.exitCode = code;
         })
@@ -3378,7 +3389,8 @@ module.exports = {
         const code = await runAutoCli(['--auto'], {
           runIsolatedReviewed: (input) =>
             require('./intake').runIsolatedReviewed(input, { root: rootDir }),
-          assertIsolationClosed: () => require('./intake').assertIsolationClosed({}),
+          assertIsolationClosed: (options) =>
+            require('./intake').assertIsolationClosed({ ...options, root: rootDir }),
           buildCandidates: () => buildQualificationCandidates(rootDir),
           evidenceDir: path.join(rootDir, 'tools', 'ai-brain', 'data', 'evidence'),
           config: loadConfig(rootDir).qualification || {},
