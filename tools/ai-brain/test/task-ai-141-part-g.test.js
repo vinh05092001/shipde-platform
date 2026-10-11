@@ -183,15 +183,17 @@ test('G2 CLI plan --run wires its execution dependencies to the planner module',
   const response = await planCommand(
     { 'work-item': 'FEAT-AUTH-07', run: true },
     {
-      runPlanning: async (request) => {
-        called = true;
-        assert.equal(request.workItemId, 'FEAT-AUTH-07');
-        return { status: 'BLOCKED', reason: 'fixture gate' };
+      planningDeps: {
+        runPlanning: async (request) => {
+          called = true;
+          assert.equal(request.workItemId, 'FEAT-AUTH-07');
+          return { status: 'BLOCKED', reason: 'fixture gate' };
+        },
+        rankPlanner: async () => ({}),
+        runIsolatedPlanner: async () => ({ success: true }),
+        reviewPlan: async () => ({ verdict: 'PASS' }),
+        mergePlan: async () => ({ merged: true }),
       },
-      rankPlanner: async () => ({}),
-      runIsolatedPlanner: async () => ({ success: true }),
-      reviewPlan: async () => ({ verdict: 'PASS' }),
-      mergePlan: async () => ({ merged: true }),
     }
   );
   assert.equal(called, true);

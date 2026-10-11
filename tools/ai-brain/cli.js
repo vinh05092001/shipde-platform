@@ -3052,7 +3052,7 @@ function planCommand(args, deps = {}) {
         rootDir: args.root || process.cwd(),
         run: Boolean(args.run),
       },
-      { ...deps, runPlanning: deps.runPlanning }
+      deps.planningDeps || deps
     )
   );
 }
