@@ -783,7 +783,7 @@ test('loop ignores stale decision sessions and logs which records were ignored',
   assert.equal(decisions.openWritersDetailed({ records, now }).writers.length, 0);
 });
 
-test('the two known fixture selection paths do not change decisions.DEFAULT_DIR', () => {
+test('the two known fixture selection paths do not change decisions.DEFAULT_DIR', async () => {
   const file = path.join(decisions.DEFAULT_DIR, new Date().toISOString().slice(0, 10) + '.jsonl');
   const before = fs.existsSync(file) ? fs.readFileSync(file) : null;
   const a = { gateway: 'g', upstream: 'a', accountId: 'a', modelId: 'm-a', quality: 90 };
@@ -797,16 +797,18 @@ test('the two known fixture selection paths do not change decisions.DEFAULT_DIR'
     for (const id of ['ITEM-91-R01-UNIT', 'TASK-AI-64-review']) {
       const decisionDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai141-guard-'));
       tempDirs.push(decisionDir);
-      select(
+      await select(
         { id, roleRequirement: { role: 'reviewer' }, failedKeys: [a.candidateKey] },
         [a, b],
         [],
         null,
         {},
-        null,
+        { dir: decisionDir, now: Date.now() },
         Date.now(),
         { failedKeys: [a.candidateKey], decisionDir }
       );
+      const selectedRecords = decisions.readDecisions({ dir: decisionDir });
+      assert.ok(selectedRecords.some((record) => record.workItemId === id));
     }
     after = fs.existsSync(file) ? fs.readFileSync(file) : null;
   } finally {
