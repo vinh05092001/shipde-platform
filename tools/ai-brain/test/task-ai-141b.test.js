@@ -159,13 +159,15 @@ test('no product item and no mismatched review SHA can grant evidence', async ()
   }
 });
 
-test('qualification evidence is bound to candidate commit and exact candidate key', async () => {
+test('qualification evidence is bound to worker commit and exact candidate key', async () => {
   const f = fixture();
-  const candidate = { ...CANDIDATE, commit: 'c'.repeat(40) };
+  const candidate = { ...CANDIDATE };
+  const workerHead = 'c'.repeat(40);
   let recordedKey;
   let runnerArgs;
   await runAutomaticQualification({
     candidates: [candidate],
+    baseSha: SHA,
     itemsFile: f.itemsFile,
     usageFile: f.usageFile,
     now: Date.parse('2026-10-10T12:00:00Z'),
@@ -173,21 +175,23 @@ test('qualification evidence is bound to candidate commit and exact candidate ke
     recordEvidence: (key, item, proof) => {
       recordedKey = key;
       assert.equal(item, candidate);
-      assert.equal(proof.commit, candidate.commit);
+      assert.equal(proof.commit, workerHead);
     },
     runIsolatedReviewed: async (args) => {
       runnerArgs = args;
       return {
         verdict: 'PASS',
-        sha: candidate.commit,
-        reviewedSha: candidate.commit,
+        sha: workerHead,
+        reviewedSha: workerHead,
         reviewer: 'reviewer',
         independent: true,
         workItemId: 'QUALIFY-01',
       };
     },
   });
-  assert.equal(runnerArgs.expectedCommit, candidate.commit);
+  assert.equal(Object.hasOwn(runnerArgs, 'expectedCommit'), false);
+  assert.equal(runnerArgs.candidate.commit, SHA);
+  assert.equal(runnerArgs.baseSha, SHA);
   assert.equal(recordedKey, candidate.candidateKey);
 
   let recorded = false;
@@ -387,7 +391,7 @@ test('default isolated qualification adapter uses isolated orchestration and exa
     {
       candidate: CANDIDATE,
       candidateKey: CANDIDATE.candidateKey,
-      expectedCommit: SHA,
+      baseSha: SHA,
       item: {
         id: 'QUALIFY-TEST',
         kind: 'qualification',
@@ -424,6 +428,7 @@ test('default isolated qualification adapter uses isolated orchestration and exa
   assert.equal(result.verdict, 'PASS');
   assert.equal(result.sha, SHA);
   assert.equal(result.reviewedSha, SHA);
+  assert.equal(reviewed[0].options.baseSha, SHA);
   assert.equal(result.independent, true);
   assert.equal(reviewed[0].options.isolatedWorker, true);
   assert.equal(reviewed[0].options.autoMerge, false);
@@ -432,6 +437,47 @@ test('default isolated qualification adapter uses isolated orchestration and exa
   assert.equal(reviewed[0].options.reviewerIdentity, undefined);
   assert.equal(reviewed[0].options.specs[0].allowedPaths.length, 0);
   assert.equal(reviewed[0].options.specs[0].verification, null);
+});
+
+test('isolated qualification refuses a reviewer receipt for a different SHA', async () => {
+  const { runIsolatedReviewed } = require('../intake');
+  const f = fixture();
+  const result = await runIsolatedReviewed(
+    {
+      candidate: CANDIDATE,
+      item: {
+        id: 'QUALIFY-MISMATCH',
+        kind: 'qualification',
+        risk: 'low',
+        acceptanceCriteria: ['review'],
+      },
+      baseSha: SHA,
+    },
+    {
+      root: f.dir,
+      now: Date.now(),
+      verdictPath: path.join(f.dir, 'verdict.json'),
+      stat: () => ({ mtimeMs: Date.now() }),
+      readFile: () => '{"verdict":"CLOSED"}',
+      accounts: [],
+      registry: {},
+      runOrchestration: async () => ({
+        status: 'COMPLETED',
+        checkpoint: {
+          reviews: [
+            {
+              workItemId: 'QUALIFY-MISMATCH',
+              verdict: 'PASS',
+              sha: 'b'.repeat(40),
+              workerHead: SHA,
+              reviewer: 'reviewer',
+            },
+          ],
+        },
+      }),
+    }
+  );
+  assert.equal(result.verdict, 'REFUSED');
 });
 
 test('production candidate builder uses intake catalogue/accounts and Controller ranking', () => {
@@ -451,7 +497,6 @@ test('production candidate builder uses intake catalogue/accounts and Controller
   const oldGenerate = require('../candidates').generateCandidates;
   const oldAnnotate = require('../candidates').annotateCandidates;
   const oldEvidence = require('../evidence').loadEvidence;
-  const oldRank = require('../ranking').rankAndRecord;
   let inputs;
   try {
     require('../accounts').listAccounts = () => [
@@ -464,10 +509,6 @@ test('production candidate builder uses intake catalogue/accounts and Controller
     };
     require('../candidates').annotateCandidates = (rows) => rows;
     require('../evidence').loadEvidence = () => ({});
-    require('../ranking').rankAndRecord = () => ({
-      rejected: [{ offeringId: CANDIDATE.candidateKey, reasonCode: 'PROOF_FLOOR_NOT_MET' }],
-      ranking: [],
-    });
     const candidates = cli._buildQualificationCandidates
       ? cli._buildQualificationCandidates(root)
       : null;
@@ -475,16 +516,99 @@ test('production candidate builder uses intake catalogue/accounts and Controller
     assert.equal(inputs.catalogue[0], 'ag/gemini-test-model');
     assert.ok(inputs.accounts.some((account) => account.id === 'agy-pool-2'));
     assert.equal(inputs.externalWorkers, 'agy-pool');
-    assert.equal(candidates[0].status, 'rejected');
-    assert.deepEqual(candidates[0].rejectionReasons, ['PROOF_FLOOR_NOT_MET']);
+    assert.equal(candidates.length, 0);
   } finally {
     require('../accounts').listAccounts = oldListAccounts;
     require('../sources').loadSources = oldLoadSources;
     require('../candidates').generateCandidates = oldGenerate;
     require('../candidates').annotateCandidates = oldAnnotate;
     require('../evidence').loadEvidence = oldEvidence;
-    require('../ranking').rankAndRecord = oldRank;
     fsx.rmSync(runDir, { recursive: true, force: true });
+  }
+});
+
+test('qualify auto selects unproven candidates from fake intake catalogue', async () => {
+  const fsx = require('fs');
+  const path = require('path');
+  const root = fs.mkdtempSync(path.join(process.cwd(), '.qualification-auto-catalogue-'));
+  fixtures.push(root);
+  const intakeRoot = path.join(root, 'tools', 'ai-brain', 'data', 'intake', 'fixture');
+  fsx.mkdirSync(intakeRoot, { recursive: true });
+  fsx.writeFileSync(path.join(intakeRoot, 'catalogue.json'), JSON.stringify(['fake/model-a']));
+  fsx.writeFileSync(path.join(intakeRoot, 'accounts.json'), JSON.stringify([]));
+  const f = fixture();
+  const saved = {};
+  for (const [mod, key] of [
+    ['accounts', 'listAccounts'],
+    ['sources', 'loadSources'],
+    ['candidates', 'generateCandidates'],
+    ['candidates', 'annotateCandidates'],
+    ['evidence', 'loadEvidence'],
+  ]) {
+    saved[mod + '.' + key] = require('../' + mod)[key];
+  }
+  try {
+    require('../accounts').listAccounts = () => [];
+    require('../sources').loadSources = () => ({ sources: [] });
+    require('../candidates').generateCandidates = () => [
+      {
+        ...CANDIDATE,
+        candidateKey: undefined,
+        modelId: 'model-a',
+        upstream: 'up-a',
+        harness: 'codex',
+        capabilities: { contextWindow: 200000 },
+      },
+      {
+        ...CANDIDATE,
+        candidateKey: undefined,
+        modelId: 'model-b',
+        upstream: 'up-b',
+        accountId: 'acct-b',
+        quotaScope: 'acct-b',
+        harness: 'codex',
+        capabilities: { contextWindow: 200000 },
+      },
+      {
+        ...CANDIDATE,
+        candidateKey: undefined,
+        modelId: 'model-blocked',
+        upstream: 'up-blocked',
+        blocked: true,
+      },
+    ];
+    require('../candidates').annotateCandidates = (rows) => rows;
+    require('../evidence').loadEvidence = () => ({});
+    const resultBox = [];
+    const code = await runAutoCli(['--auto', '--items', f.itemsFile], {
+      usageFile: f.usageFile,
+      config: { perRun: 2, perDay: 2 },
+      buildCandidates: () => cli._buildQualificationCandidates(root),
+      assertIsolationClosed: () => ({ verdict: 'CLOSED' }),
+      runIsolatedReviewed: async ({ candidate }) => ({
+        verdict: 'FAIL',
+        sha: candidate.commit,
+        reviewedSha: candidate.commit,
+      }),
+      out: (line) => resultBox.push(JSON.parse(line)),
+    });
+    assert.equal(code, 0);
+    assert.equal(resultBox[0].selected, 2);
+    assert.deepEqual(
+      resultBox[0].qualified,
+      [],
+      'fake non-PASS reviews must not add WORK_ITEM_PASS evidence'
+    );
+    const built = cli._buildQualificationCandidates(root);
+    assert.equal(built.length, 2);
+    assert.ok(built.every((candidate) => candidate.status === 'rejected'));
+    assert.ok(built.every((candidate) => candidate.rejectionReasons[0] === 'PROOF_FLOOR_NOT_MET'));
+    assert.ok(built.every((candidate) => !candidate.qualifiedRoles?.includes('author.foundation')));
+  } finally {
+    for (const [entry, value] of Object.entries(saved)) {
+      const [mod, key] = entry.split('.');
+      require('../' + mod)[key] = value;
+    }
   }
 });
 

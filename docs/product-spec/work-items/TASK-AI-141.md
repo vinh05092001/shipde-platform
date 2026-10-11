@@ -59,6 +59,14 @@ These spec parts remain follow-up scope under TASK-AI-141 and are not implemente
 - **Part D:** intake risk-domain and complexity derivation plus the QUALITY_FIRST safety floor.
 - **Part E and addenda:** live gateway model discovery/probing, same-model alternate-path fallback, temporary parking and due rechecks.
 
+## Source discovery — operator requirement (2026-10-11)
+
+The Controller discovers configured model sources from OpenCode provider configuration, `*_API_KEY` / `*_TOKEN` environment variable names, the local models.dev cache, and endpoint/model metadata in Cline, Codex, Qwen, Gemini, Continue, Kiro, OpenClaw, Hermes and 9router local configuration. Discovery persists `tools/ai-brain/data/sources.json` with endpoint, model IDs, credential location, status, probe time, recheck time and reason. Credential values are never persisted, returned in discovery records, logged or placed in fixtures; a probe may read a value in memory for its request. Persisted endpoints redact userinfo, query strings and secret or project path values. HTTP 401, 402, 403, 429 and 451 park a source with a reason and recheck time. Only a successfully probed `available` source with a routable environment credential may become a selectable candidate. Discovered, unprobed, unavailable, parked and non-routable sources remain visible in intake account inventory with a reason and `nextCheckAt`. Tencent TokenHub must use its `-intl` endpoint when configured.
+
+CLI: `node tools/ai-brain/cli.js sources --discover [--probe] [--json]`.
+
+Verification: fake HOME/config trees and fake fetch behavior in `tools/ai-brain/test/source-discovery.test.js`.
+
 ## Part C — Codex lane inside the isolated worker
 
 The Codex harness runs `codex exec --dangerously-bypass-approvals-and-sandbox` only through the isolated launcher. Direct harness use and attempts outside a worker path fail with `CODEX_REQUIRES_ISOLATION`. The launcher probes `codex login status` under the worker account before execution; a missing login is returned as the local failure `CODEX_NOT_LOGGED_IN`, allowing orchestration to continue to another candidate. The worker uses its own HOME and USERPROFILE and no host `~/.codex` credential file is read or copied.
@@ -121,6 +129,10 @@ No API, persisted product data, or external side effects change. Candidate gener
 
 ## Part B — bounded automatic qualification
 
+### Qualification proof-floor selection repair (supervisor-directed)
+
+`qualify --auto` now builds its candidates through the same writer routing profile used by intake, including the `WORK_ITEM_PASS` proof floor. Candidates rejected only by `PROOF_FLOOR_NOT_MET` are passed to bounded qualification, ordered by Controller strength and then newest available candidate timestamp; blocked, entitlement-failed, and other rejected candidates are excluded. Existing per-run and per-day caps remain in force. A fake-catalogue behavioral regression exercises the builder and auto selector with no `WORK_ITEM_PASS` evidence and verifies that eligible candidates are selected while a blocked one is omitted.
+
 ### Part B wiring
 
 The production `qualify --auto` command builds candidates from intake catalogue and account snapshots merged with current registry accounts, including agy-pool. The Controller annotates and ranks the set before the bounded coordinator considers candidates rejected only by the proof floor. The isolated orchestration adapter requires a fresh `CLOSED` isolation verdict and accepts only the exact-SHA Controller review receipt. `next --loop` prefers ready `FEAT-*` items over backlog `TASK-AI-*` work and invokes one qualification slot only after product intake returns `PROOF_FLOOR_NOT_MET` (or when no product item is ready). Qualification never publishes or auto-merges.
@@ -149,4 +161,6 @@ Intake derives risk domains and complexity from the Work Item scope, acceptance 
 
 `tools/ai-brain/routing.js` now preserves a source path's `WORK_ITEM_PASS` when that path is blocked or has failed evidence due to infrastructure conditions such as quota exhaustion, rate limits, timeouts, or launch/harness failures. Transfer still requires exact normalized backend model identity and a viable target path; model-scope failures, quality outcomes such as `CHANGES_REQUIRED`, and revoked proof disqualify the source. Three regressions cover infrastructure enum classification while preserving model failures, model/quality failures disqualifying transfer, and exhausted target paths not inheriting proof (`classifier enum values recognize infrastructure and preserve model failures`, `a model-quality failure on the source path disqualifies the proof transfer`, `an exhausted target path never inherits the transferred proof`).
 - The standalone `qualify --auto` isolation assertion now receives caller options and the selected `--root`, matching the root used by its isolated runner.
+- Qualification runs pin `origin/main` as the isolated worker's base SHA. The worker's resulting commit is returned as `sha`, and evidence is granted only when the independent review's `reviewedSha` exactly matches that worker head; no candidate commit is required before the worker runs. Reviewer SHA mismatches are refused, and qualification output remains non-publishable and never merged.
 - Targeted `next --loop --work-item <ID>` retries after a successful qualification slot when iteration budget remains; if the budget ends first, it returns `stopped: true` with `WORK_ITEM_NOT_EXECUTED`. Qualification alone never reports the requested product item complete.
+- Isolation verdict UTF-8 BOM tolerance: `Test-WorkerIsolation.ps1` writes UTF-8 without BOM via `[System.IO.File]::WriteAllText` with `[System.Text.UTF8Encoding]::new($false)`, and readers in `tools/ai-brain` (`intake.assertIsolationClosed`, `isolation-launcher.readClosedIsolationVerdict`) strip any leading BOM before `JSON.parse`.

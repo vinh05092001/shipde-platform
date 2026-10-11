@@ -1016,3 +1016,41 @@ test('an exhausted target path never inherits the transferred proof', () => {
   assert.equal(proof.level, null);
   assert.equal(proof.transferred, false);
 });
+
+test('a BOM-prefixed CLOSED verdict is accepted and a BOM-prefixed PARTIAL is still refused', () => {
+  const now = Date.now();
+  const stat = () => ({ mtimeMs: now });
+  const bomClosed = '\uFEFF{"verdict":"CLOSED"}';
+  const bomPartial = '\uFEFF{"verdict":"PARTIAL"}';
+
+  // In-memory reader assertion
+  const accepted = intake.assertIsolationClosed({ now, stat, readFile: () => bomClosed });
+  assert.equal(accepted.verdict, 'CLOSED');
+
+  assert.throws(
+    () => intake.assertIsolationClosed({ now, stat, readFile: () => bomPartial }),
+    /ISOLATION_VERDICT_NOT_CLOSED/
+  );
+
+  // File-on-disk assertion for both assertIsolationClosed and readClosedIsolationVerdict
+  const root = fixtureRoot();
+  const verdictPath = path.join(root, 'ShipDe', 'isolation-verdict.json');
+  fs.mkdirSync(path.dirname(verdictPath), { recursive: true });
+
+  fs.writeFileSync(verdictPath, '\uFEFF' + JSON.stringify({ verdict: 'CLOSED' }), 'utf8');
+  const fileVerdict = intake.assertIsolationClosed({ verdictPath, now: Date.now() + 1000 });
+  assert.equal(fileVerdict.verdict, 'CLOSED');
+
+  const launcherVerdict = isolation.readClosedIsolationVerdict({ verdictPath });
+  assert.equal(launcherVerdict.verdict, 'CLOSED');
+
+  fs.writeFileSync(verdictPath, '\uFEFF' + JSON.stringify({ verdict: 'PARTIAL' }), 'utf8');
+  assert.throws(
+    () => intake.assertIsolationClosed({ verdictPath, now: Date.now() + 1000 }),
+    /ISOLATION_VERDICT_NOT_CLOSED/
+  );
+  assert.throws(
+    () => isolation.readClosedIsolationVerdict({ verdictPath }),
+    /CODEX_REQUIRES_ISOLATION/
+  );
+});

@@ -67,6 +67,46 @@ function loadSources(options) {
   const doc = readJson(file);
   const sources = Array.isArray(doc.sources) ? doc.sources : [];
   const retired = Array.isArray(doc.retired) ? doc.retired : [];
+  // Locally discovered direct API sources enter the same candidate pipeline as
+  // reviewed registry sources. Only env-addressable credentials can be routed;
+  // file-field credentials remain inventory metadata until a safe adapter is
+  // available. Parked sources remain visible but cannot be selected.
+  const discoveredFile = opts.discoveredFile || path.join(__dirname, 'data', 'sources.json');
+  try {
+    const discovered = readJson(discoveredFile);
+    for (const entry of discovered.sources || []) {
+      if (
+        !entry ||
+        !entry.id ||
+        !entry.endpoint ||
+        sources.some((source) => source.id === entry.id)
+      )
+        continue;
+      const credential =
+        entry.credential && entry.credential.type === 'env' ? entry.credential : null;
+      if (!credential || !credential.name) continue;
+      const sourceKind = entry.kind || Kind.MODEL_SOURCE;
+      sources.push({
+        id: entry.id,
+        label: entry.name || entry.id,
+        kind: sourceKind,
+        servesModels: entry.status === 'available',
+        // Discovered rows are model sources, so they use the direct HTTP
+        // adapter. Keep this derived from the source kind rather than the
+        // discovery tool that happened to find the endpoint.
+        harness: sourceKind === Kind.MODEL_SOURCE ? 'direct-http' : null,
+        accessPath: 'direct',
+        endpoint: entry.endpoint,
+        credential: { type: 'api-key', env: credential.name },
+        discovered: true,
+        discoveryStatus: entry.status || 'discovered',
+        reason: entry.reason || null,
+        nextCheckAt: entry.nextCheckAt || null,
+      });
+    }
+  } catch {
+    // Discovery is optional; the reviewed static registry remains usable.
+  }
 
   for (const source of sources) {
     if (!source || !source.id) throw new Error('sources.json: an entry has no id');
