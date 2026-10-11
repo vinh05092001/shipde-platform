@@ -3220,6 +3220,27 @@ function main() {
     process.exit(runSerenaCli(process.argv.slice(3)));
   }
 
+  // sources --discover [--probe] [--json]: inventory local provider endpoints
+  // and persist only endpoint/model metadata and credential locations.
+  if (command === 'sources') {
+    const discovery = require('./source-discovery');
+    if (!args.discover) {
+      console.error('Dùng: sources --discover [--probe] [--json]');
+      process.exit(2);
+    }
+    discovery
+      .discover({ probe: Boolean(args.probe), root: path.join(__dirname) })
+      .then((result) => {
+        if (args.json) console.log(JSON.stringify(result, null, 2));
+        else console.log('Discovered ' + result.sources.length + ' configured model sources.');
+      })
+      .catch((err) => {
+        console.error('Source discovery failed: ' + String((err && err.message) || 'error'));
+        process.exitCode = 1;
+      });
+    return;
+  }
+
   // orchestrate (TASK-AI-64): the live autonomous loop —
   //   node tools/ai-brain/cli.js orchestrate --goal <text|file> --specs <file>
   //     [--isolated-worker --base-sha <40-hex>] [--checkpoint <file>] [--out <file>]
@@ -3293,7 +3314,7 @@ function main() {
 
   console.error('Lệnh không rõ: ' + command);
   console.error(
-    'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | discovery | account | probe | qualify | serena | evidence | review | orchestrate | intake | next | merge'
+    'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | discovery | account | probe | qualify | serena | sources | evidence | review | orchestrate | intake | next | merge'
   );
   process.exit(2);
 }

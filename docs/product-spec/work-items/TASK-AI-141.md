@@ -59,6 +59,14 @@ These spec parts remain follow-up scope under TASK-AI-141 and are not implemente
 - **Part D:** intake risk-domain and complexity derivation plus the QUALITY_FIRST safety floor.
 - **Part E and addenda:** live gateway model discovery/probing, same-model alternate-path fallback, temporary parking and due rechecks.
 
+## Source discovery — operator requirement (2026-10-11)
+
+The Controller discovers configured model sources from OpenCode provider configuration, `*_API_KEY` / `*_TOKEN` environment variable names, the local models.dev cache, and endpoint/model metadata in Cline, Codex, Qwen, Gemini, Continue, Kiro, OpenClaw, Hermes and 9router local configuration. Discovery persists `tools/ai-brain/data/sources.json` with endpoint, model IDs, credential location, status, probe time, recheck time and reason. Credential values are never persisted, returned in discovery records, logged or placed in fixtures; a probe may read a value in memory for its request. HTTP 401, 402, 403, 429 and 451 park a source with a reason and recheck time. Intake merges discovered model IDs and source account metadata into its catalogue and account snapshots. Tencent TokenHub must use its `-intl` endpoint when configured.
+
+CLI: `node tools/ai-brain/cli.js sources --discover [--probe] [--json]`.
+
+Verification: fake HOME/config trees and fake fetch behavior in `tools/ai-brain/test/source-discovery.test.js`.
+
 ## Part C — Codex lane inside the isolated worker
 
 The Codex harness runs `codex exec --dangerously-bypass-approvals-and-sandbox` only through the isolated launcher. Direct harness use and attempts outside a worker path fail with `CODEX_REQUIRES_ISOLATION`. The launcher probes `codex login status` under the worker account before execution; a missing login is returned as the local failure `CODEX_NOT_LOGGED_IN`, allowing orchestration to continue to another candidate. The worker uses its own HOME and USERPROFILE and no host `~/.codex` credential file is read or copied.

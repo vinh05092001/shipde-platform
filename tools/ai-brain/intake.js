@@ -547,6 +547,24 @@ async function buildCatalogue(deps) {
       warnings.push({ source: collector.name, error: (result && result.error) || 'unavailable' });
     }
   }
+  const discoveryFile = path.join(
+    deps.root || path.join(__dirname, '..', '..'),
+    'tools',
+    'ai-brain',
+    'data',
+    'sources.json'
+  );
+  let discovered = [];
+  try {
+    discovered = JSON.parse(fs.readFileSync(discoveryFile, 'utf8')).sources || [];
+  } catch {}
+  for (const source of discovered) {
+    if (!source || !Array.isArray(source.models)) continue;
+    for (const model of source.models) if (model) models.add(String(model));
+    sourceStatus['discovered:' + source.id] = source.status || 'discovered';
+    if (source.status === 'parked' || source.status === 'unavailable')
+      warnings.push({ source: source.id, error: source.reason || source.status });
+  }
   return normalizeCatalogue([...models], warnings, sourceStatus);
 }
 
@@ -889,6 +907,35 @@ async function runIntake(opts, deps) {
   const accounts = await (typeof d.listAccounts === 'function'
     ? d.listAccounts(d.accountOptions || {})
     : accountsApi.listAccounts(d.accountOptions || {}));
+  let discoveredSources = [];
+  try {
+    discoveredSources =
+      JSON.parse(
+        fs.readFileSync(path.join(root, 'tools', 'ai-brain', 'data', 'sources.json'), 'utf8')
+      ).sources || [];
+  } catch {
+    discoveredSources = [];
+  }
+  const allAccounts = accounts.concat(
+    discoveredSources
+      .filter(
+        (source) =>
+          source && source.endpoint && Array.isArray(source.models) && source.models.length
+      )
+      .map((source) => ({
+        id: 'source-' + String(source.id).replace(/[^a-z0-9._-]/gi, '-'),
+        sourceId: source.id,
+        provider: source.id,
+        endpoint: source.endpoint,
+        credentialLocation:
+          (source.credential &&
+            (source.credential.name || source.credential.path + ':' + source.credential.field)) ||
+          null,
+        models: source.models,
+        status: source.status || 'discovered',
+        enabled: source.status !== 'parked',
+      }))
+  );
 
   const repoRoot = path.resolve(root);
   const hasPoolQuota = Boolean(agyPoolHasQuota(d));
@@ -929,7 +976,7 @@ async function runIntake(opts, deps) {
     JSON.stringify(resolvedDependencies, null, 2)
   );
   fs.writeFileSync(path.join(runDir, 'catalogue.json'), JSON.stringify(catalogue.models, null, 2));
-  fs.writeFileSync(path.join(runDir, 'accounts.json'), JSON.stringify(accounts, null, 2));
+  fs.writeFileSync(path.join(runDir, 'accounts.json'), JSON.stringify(allAccounts, null, 2));
 
   const { argv, command, runFiles } = composeOrchestrateCommand({
     root,
@@ -950,7 +997,7 @@ async function runIntake(opts, deps) {
     catalogue: catalogue.models,
     warnings: catalogue.warnings,
     sourceStatus: catalogue.sourceStatus,
-    accounts,
+    accounts: allAccounts,
     baseSha,
     repoRoot,
     hasAgyPoolQuota: hasPoolQuota,

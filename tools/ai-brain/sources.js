@@ -67,6 +67,40 @@ function loadSources(options) {
   const doc = readJson(file);
   const sources = Array.isArray(doc.sources) ? doc.sources : [];
   const retired = Array.isArray(doc.retired) ? doc.retired : [];
+  // Locally discovered direct API sources enter the same candidate pipeline as
+  // reviewed registry sources. Only env-addressable credentials can be routed;
+  // file-field credentials remain inventory metadata until a safe adapter is
+  // available. Parked sources remain visible but cannot be selected.
+  const discoveredFile = opts.discoveredFile || path.join(__dirname, 'data', 'sources.json');
+  try {
+    const discovered = readJson(discoveredFile);
+    for (const entry of discovered.sources || []) {
+      if (
+        !entry ||
+        !entry.id ||
+        !entry.endpoint ||
+        sources.some((source) => source.id === entry.id)
+      )
+        continue;
+      const credential =
+        entry.credential && entry.credential.type === 'env' ? entry.credential : null;
+      if (!credential || !credential.name) continue;
+      sources.push({
+        id: entry.id,
+        label: entry.name || entry.id,
+        kind: Kind.MODEL_SOURCE,
+        servesModels: entry.status !== 'parked' && entry.status !== 'unavailable',
+        harness: 'opencode',
+        accessPath: 'direct',
+        endpoint: entry.endpoint,
+        credential: { type: 'api-key', env: credential.name },
+        discovered: true,
+        discoveryStatus: entry.status || 'discovered',
+      });
+    }
+  } catch {
+    // Discovery is optional; the reviewed static registry remains usable.
+  }
 
   for (const source of sources) {
     if (!source || !source.id) throw new Error('sources.json: an entry has no id');
