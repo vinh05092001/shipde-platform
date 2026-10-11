@@ -321,6 +321,10 @@ $psi.Password = $sec
   const rtkPathPrepend = options.rtkPathPrepend || null;
   const codexLoginProbe = isCodex
     ? `& "${exeFile}" login status *> $null
+if (-not $?) {
+  @{ nonce = "${completionNonce}"; exitCode = 1; completed = $true; localFailure = "CODEX_NOT_LOGGED_IN"; completedAt = (Get-Date).ToString('o') } | ConvertTo-Json -Depth 5 | Out-File "${markerPath}" -Encoding UTF8
+  exit 0
+}
 if ($LASTEXITCODE -ne 0) {
   @{ nonce = "${completionNonce}"; exitCode = 1; completed = $true; localFailure = "CODEX_NOT_LOGGED_IN"; completedAt = (Get-Date).ToString('o') } | ConvertTo-Json -Depth 5 | Out-File "${markerPath}" -Encoding UTF8
   exit 0
@@ -349,10 +353,14 @@ if ($LASTEXITCODE -ne 0) {
   }
   const allowedArray = '@(' + envAllowed.map((k) => `"${k}"`).join(', ') + ')';
 
+  const verdictJson = JSON.stringify(options.isolationVerdict || {});
+  const verdictBase64 = Buffer.from(verdictJson, 'utf8').toString('base64');
+
   return `
 $ErrorActionPreference = "Stop"
 ${credentialLines}$nestedScript = "${workerRoot}\\run-target.ps1"
-$env:SHIPDE_ISOLATION_VERDICT = "${String(JSON.stringify(options.isolationVerdict || {})).replace(/"/g, '`"')}"
+$verdictBytes = [Convert]::FromBase64String("${verdictBase64}")
+$env:SHIPDE_ISOLATION_VERDICT = [Text.Encoding]::UTF8.GetString($verdictBytes)
 $markerPath = "${markerPath}"
 $completionNonce = "${completionNonce}"
 $env:HOME = "${workerRoot}"

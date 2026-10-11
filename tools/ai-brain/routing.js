@@ -638,6 +638,7 @@ function isQualityVerdict(item) {
  * or refused, a model-scope failure, or a revoked proof.
  */
 function sourcePathLendsProof(evidenceData, combo, parsed) {
+  if (!isInfrastructureBlock(evidence.isCandidateBlocked(evidenceData, parsed))) return false;
   for (const item of combo.evidence || []) {
     if (isQualityVerdict(item)) return false;
     if (failureToken(item.status) !== 'failed') continue;
@@ -654,26 +655,22 @@ function sourcePathLendsProof(evidenceData, combo, parsed) {
  */
 function proofObservedWithSource(evidenceData, candidate) {
   let items = evidence.getEvidence(evidenceData, candidate) || [];
-  let proofSource = items.some((item) => item.status === 'passed') ? candidateKey(candidate) : null;
+  let proofSource = items.length > 0 ? candidateKey(candidate) : null;
   if (items.length === 0 && evidenceData && candidate) {
     const keyed = evidenceData[candidateKey(candidate)];
     if (Array.isArray(keyed)) {
       items = keyed;
-      if (items.some((item) => item.status === 'passed')) proofSource = candidateKey(candidate);
+      if (items.length > 0) proofSource = candidateKey(candidate);
     }
   }
   if (items.length === 0 && Array.isArray(candidate && candidate.evidence)) {
     items = candidate.evidence;
-    if (items.some((item) => item.status === 'passed')) proofSource = candidateKey(candidate);
+    if (items.length > 0) proofSource = candidateKey(candidate);
   }
   const passed = (items || []).filter((e) => e.status === 'passed');
   const direct = evidence.proofLevelOf(passed);
-  const ownFailed = (items || []).some((item) => {
-    if (item.status !== 'failed') return false;
-    if (isQualityVerdict(item)) return true;
-    const { cause, scope } = itemClassification(item);
-    return !isInfrastructureFailure(cause, scope, failureText(item));
-  });
+  const ownBlocked = evidence.isCandidateBlocked(evidenceData, candidate).blocked;
+  const ownFailed = (items || []).some((item) => item.status === 'failed');
   const quotaExhausted =
     candidate &&
     (candidate.headroomStatus === 'exhausted' ||
@@ -681,11 +678,10 @@ function proofObservedWithSource(evidenceData, candidate) {
       candidate.remainingPercent === 0 ||
       candidate.remainingPercent === '0' ||
       candidate.headroom === 'exhausted');
-  if (direct && ownFailed) {
+  if (ownBlocked || ownFailed || quotaExhausted) {
     return { level: null, source: null, transferred: false };
   }
   if (direct) return { level: direct, source: proofSource, transferred: false };
-  if (quotaExhausted && !ownFailed) return { level: null, source: null, transferred: false };
 
   // Proof describes the backend model's ability; quota, cooldown and failures
   // remain attached to the candidate identity above. Transfer only the
@@ -733,15 +729,6 @@ function normalizedBackendModel(modelId, prefixes, identity) {
   const routePrefix = (identity && identity.upstream ? identity.upstream + '/' : '') || '';
   if (routePrefix && normalized.startsWith(routePrefix)) {
     normalized = normalized.slice(routePrefix.length);
-  }
-  if (routePrefix && (routePrefix === 'ag/' || routePrefix === 'antigravity/')) {
-    const aliasPrefix = (prefixes || []).find((prefix) =>
-      prefix.startsWith('ninerouter/' + routePrefix)
-    );
-    if (aliasPrefix) {
-      const alias = aliasPrefix.slice('ninerouter/'.length);
-      if (normalized.startsWith(alias)) normalized = normalized.slice(alias.length);
-    }
   }
   const declaredPrefix = (prefixes || []).find((prefix) => normalized.startsWith(prefix));
   if (declaredPrefix) {

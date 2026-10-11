@@ -228,9 +228,10 @@ const codex = {
     ) {
       throw new Error('CODEX_REQUIRES_ISOLATION');
     }
-    readClosedIsolationVerdict(
+    const currentVerdict = readClosedIsolationVerdict(
       job.isolationVerdictPath ? { verdictPath: job.isolationVerdictPath } : undefined
     );
+    if (currentVerdict.verdict !== 'CLOSED') throw new Error('CODEX_REQUIRES_ISOLATION');
     const args = ['exec', '--dangerously-bypass-approvals-and-sandbox'];
     if (job.model) args.push('--model', job.model);
     args.push(job.prompt || '');

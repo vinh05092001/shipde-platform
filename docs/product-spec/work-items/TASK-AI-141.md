@@ -40,15 +40,13 @@ Intake persists catalogue model IDs as strings. Candidate generation receives th
 
 This Work Item is assigned to GEMINI. Codex independently reviews the resulting commit and does not approve or merge the author’s work.
 
-## In Scope — Part A and supervisor-directed proof transfer
+## In Scope — Part A
 
 - Recognize supported backend model IDs and `ag/` or `antigravity/` aliases from intake’s string catalogue in agy-pool candidate generation.
 - Reject aliased models outside the supported family policy and empty normalized IDs; report unknown family models with a named generation rejection.
 - Add an intake-built-input regression using accounts read from an actual temporary account registry plus discovered pool run directories. Check that each generated model candidate is ranked or rejected with a named reason.
-- Allow proof transfer only for an exact normalized backend model identity when both source evidence and the candidate's own path remain valid. Candidate path failures, active blocks and exhausted quota prevent transfer.
 - Record the proven root cause and verification evidence in this Work Item.
 
-The supervisor explicitly directed that proof transfer be handled in Part A. This supersedes the original scope note that placed transfer solely in Part B.
 
 ## Follow-up Within This Work Item — Parts B to E
 
@@ -66,7 +64,7 @@ Verification: focused Part C tests cover the isolation requirement, flag placeme
 
 ## Out of Scope for This Revision
 
-- Automatic qualification, intake risk/complexity derivation, and live gateway discovery/fallback/rechecks (Parts B, D and E), except the supervisor-directed proof transfer above.
+- Automatic qualification, intake risk/complexity derivation, and live gateway discovery/fallback/rechecks (Parts B, D and E).
 - Product Work Item execution as qualification, automatic merge, or reading/copying Codex credentials.
 - Live account probing or changes to agy-pool quota policy.
 
@@ -90,7 +88,6 @@ No API, persisted product data, or external side effects change. Candidate gener
 |---|---|---|---|
 | A1 | Intake-built string catalogue plus `--external-workers agy-pool` | The discovered backend model yields candidates for pool accounts; each is ranked or rejected with a named reason | `task-ai-141.test.js` |
 | A2 | Aliased unknown or empty model | No candidate with an empty/unknown model is admitted; unknown family is reported by name | `task-ai-141.test.js` |
-| A3 | Proof transfer across routes | Only exact normalized model identity and currently valid source/candidate evidence can transfer; blocked, failed or exhausted target path cannot inherit proof | `task-ai-141.test.js` |
 
 ## Verification Commands
 
@@ -115,7 +112,7 @@ No API, persisted product data, or external side effects change. Candidate gener
 
 ## Residual Limitations
 
-- Parts B and D to E and their acceptance criteria remain open follow-up work within TASK-AI-141, except proof transfer now included above by supervisor direction.
+- Parts B and D to E and their acceptance criteria remain open follow-up work within TASK-AI-141.
 - This change consumes the models already discovered by intake; it does not add live per-account pool probing.
 
 ## Part B — bounded automatic qualification
@@ -129,7 +126,3 @@ No API, persisted product data, or external side effects change. Candidate gener
 ## Part D
 
 Intake derives risk domains and complexity from the Work Item scope, acceptance criteria, and allowed paths, and records the derivation in each run directory. JEV receives the resulting risk domains and complexity; the Controller enforces a `QUALITY_FIRST` floor for auth, security, money, or tenant-isolation work and records the override reason. Regressions cover a 15-AC MFA-like item and a docs-only item.
-
-### Part A follow-up: infrastructure failures do not revoke proof transfer
-
-`tools/ai-brain/routing.js` now preserves a source path's `WORK_ITEM_PASS` when that path is blocked or has failed evidence due to infrastructure conditions such as quota exhaustion, rate limits, timeouts, or launch/harness failures. Transfer still requires exact normalized backend model identity and a viable target path; model-scope failures, quality outcomes such as `CHANGES_REQUIRED`, and revoked proof disqualify the source. Three regressions cover infrastructure enum classification while preserving model failures, model/quality failures disqualifying transfer, and exhausted target paths not inheriting proof (`classifier enum values recognize infrastructure and preserve model failures`, `a model-quality failure on the source path disqualifies the proof transfer`, `an exhausted target path never inherits the transferred proof`).
