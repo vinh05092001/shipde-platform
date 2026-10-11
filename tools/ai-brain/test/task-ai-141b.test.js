@@ -387,6 +387,7 @@ test('default isolated qualification adapter uses isolated orchestration and exa
   const { runIsolatedReviewed } = require('../intake');
   const f = fixture();
   const reviewed = [];
+  const now = Date.parse('2026-10-10T12:00:00Z');
   const result = await runIsolatedReviewed(
     {
       candidate: CANDIDATE,
@@ -401,9 +402,9 @@ test('default isolated qualification adapter uses isolated orchestration and exa
     },
     {
       root: f.dir,
-      now: Date.now(),
+      now,
       verdictPath: path.join(f.dir, 'verdict.json'),
-      stat: () => ({ mtimeMs: Date.parse('2026-10-10T12:00:00Z') }),
+      stat: () => ({ mtimeMs: now }),
       readFile: () => '{"verdict":"CLOSED"}',
       accounts: [],
       registry: {},
@@ -442,6 +443,7 @@ test('default isolated qualification adapter uses isolated orchestration and exa
 test('isolated qualification refuses a reviewer receipt for a different SHA', async () => {
   const { runIsolatedReviewed } = require('../intake');
   const f = fixture();
+  const now = Date.now();
   const result = await runIsolatedReviewed(
     {
       candidate: CANDIDATE,
@@ -455,9 +457,9 @@ test('isolated qualification refuses a reviewer receipt for a different SHA', as
     },
     {
       root: f.dir,
-      now: Date.now(),
+      now,
       verdictPath: path.join(f.dir, 'verdict.json'),
-      stat: () => ({ mtimeMs: Date.now() }),
+      stat: () => ({ mtimeMs: now }),
       readFile: () => '{"verdict":"CLOSED"}',
       accounts: [],
       registry: {},
@@ -864,7 +866,7 @@ test('targeted loop does not report completion when only a qualification slot ra
     },
     {
       existsSync: () => false,
-      items: [{ work_item_id: 'TASK-AI-141', status: 'BACKLOG', dependencies: '' }],
+      items: [{ work_item_id: 'TASK-AI-141', status: 'READY_FOR_AUTHOR', dependencies: '' }],
       runIntake: async () => {
         intakeRuns += 1;
         if (intakeRuns > 1) return { exitCode: 0, status: 'completed' };
@@ -921,7 +923,7 @@ test('loop ignores stale decision sessions and logs which records were ignored',
     },
     {
       existsSync: () => false,
-      items: [{ work_item_id: 'NEXT', status: 'BACKLOG', dependencies: '' }],
+      items: [{ work_item_id: 'NEXT', status: 'READY_FOR_AUTHOR', dependencies: '' }],
       now,
       log: (line) => logs.push(line),
       checkCandidateLanes: () => ({ available: true }),

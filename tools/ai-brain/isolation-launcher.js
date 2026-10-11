@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const cp = require('child_process');
 const { executableFor } = require('./harness');
 const crypto = require('crypto');
@@ -16,10 +17,9 @@ const DEFAULT_WORKER_TIMEOUT_MS = 30 * 60 * 1000;
 
 /** The operator-owned isolation attestation location. */
 function isolationVerdictPath(options) {
-  return (
-    (options && options.verdictPath) ||
-    path.join(process.env.LOCALAPPDATA || '', 'ShipDe', 'isolation-verdict.json')
-  );
+  const base =
+    process.env.LOCALAPPDATA || process.env.XDG_CONFIG_HOME || process.env.HOME || os.homedir();
+  return (options && options.verdictPath) || path.join(base, 'ShipDe', 'isolation-verdict.json');
 }
 
 /** The worker root for one job: the worker never sees the operator's leaf name. */
@@ -299,7 +299,11 @@ function buildWorkerLaunchScript(options) {
     throw new Error('CODEX_REQUIRES_ISOLATION');
   }
   const completionNonce = options.completionNonce || crypto.randomBytes(16).toString('hex');
+  const tokenBudget = options.tokenBudget || null;
   const markerPath = options.markerPath || path.join(workerRoot, 'run-target.complete.json');
+  const usageLogPath =
+    options.usageLogPath ||
+    path.join(workerRoot, '.shipde', 'worker-output-' + completionNonce + '.log');
   // Test-only seam. The generated host script normally impersonates the worker
   // with the DPAPI credential; a regression test executes the SAME generated
   // script end to end as the current user, so this option drops only the
@@ -367,6 +371,7 @@ $verdictBytes = [Convert]::FromBase64String("${verdictBase64}")
 $env:SHIPDE_ISOLATION_VERDICT = [Text.Encoding]::UTF8.GetString($verdictBytes)
 $markerPath = "${markerPath}"
 $completionNonce = "${completionNonce}"
+$usageLogPath = '${String(usageLogPath).replace(/'/g, "''")}'
 $env:HOME = "${workerRoot}"
 $env:USERPROFILE = "${workerRoot}"
 $wrapperPid = 0
@@ -383,11 +388,12 @@ $wrapperStartTime = Get-Date
 \`$env:TEMP = "${workerRoot}\\temp"
 \`$env:TMP = "${workerRoot}\\temp"
 if (-not (Test-Path "${workerRoot}\\temp")) { New-Item -ItemType Directory -Path "${workerRoot}\\temp" | Out-Null }
+if (-not (Test-Path "${workerRoot}\\.shipde")) { New-Item -ItemType Directory -Path "${workerRoot}\\.shipde" | Out-Null }
 Set-Location -Path "${workerRoot}"
 \`$env:SHIPDE_RUN_TARGET_PID = "\`$PID"
 ${codexLoginProbe}
 \`$payloadArgs = @(Get-Content -LiteralPath "${payloadArgsPath}" -Raw | ConvertFrom-Json)
-& "${exeFile}" @payloadArgs
+& "${exeFile}" @payloadArgs | Tee-Object -FilePath "${workerRoot}\\.shipde\\worker-output-${completionNonce}.log"
 \`$jobExit = \`$LASTEXITCODE
 if (\`$null -eq \`$jobExit) { exit 1 }
 @{ nonce = "${completionNonce}"; exitCode = [int]\`$jobExit; completedAt = (Get-Date).ToString('o') } | ConvertTo-Json -Depth 5 | Out-File "${markerPath}" -Encoding UTF8
@@ -420,9 +426,85 @@ ${rtkPathPrepend ? `$psi.EnvironmentVariables["PATH"] = "${rtkPathPrepend.replac
 $process = [System.Diagnostics.Process]::Start($psi)
 $wrapperPid = $process.Id
 $wrapperStartTime = $process.StartTime
+$usageFile = '${String(options.usageFile || '').replace(/'/g, "''")}'
+$usageLogPath = '${String(usageLogPath).replace(/'/g, "''")}'
+$usageModel = '${String(options.model || '').replace(/'/g, "''")}'
+$usageProvider = '${String(options.upstream || '').replace(/'/g, "''")}'
+$script:lastLiveUsageJson = ""
+function Write-LiveUsage {
+    if ([string]::IsNullOrWhiteSpace($usageFile)) { return }
+    try {
+        if (-not (Test-Path -LiteralPath $usageLogPath)) { return }
+        $events = @(Get-Content -LiteralPath $usageLogPath -Tail 100 -ErrorAction Stop)
+        $report = $null
+        foreach ($line in $events) {
+            try {
+                $event = $line | ConvertFrom-Json
+                $tokens = $event.tokens
+                if ($null -eq $tokens -and $null -ne $event.part) { $tokens = $event.part.tokens }
+                if ($null -eq $tokens) { continue }
+                $inputTokens = [double]$tokens.input
+                $outputTokens = [double]$tokens.output
+                $totalTokens = [double]$tokens.total
+                $cacheReadTokens = 0
+                if ($null -ne $tokens.cache -and $null -ne $tokens.cache.read) {
+                    $cacheReadTokens = [double]$tokens.cache.read
+                } elseif ($null -ne $tokens.cache -and $null -ne $tokens.cache.read_tokens) {
+                    $cacheReadTokens = [double]$tokens.cache.read_tokens
+                } elseif ($null -ne $tokens.cacheRead) {
+                    $cacheReadTokens = [double]$tokens.cacheRead
+                } elseif ($null -ne $tokens.cache_read) {
+                    $cacheReadTokens = [double]$tokens.cache_read
+                } elseif ($null -ne $tokens.cache_read_tokens) {
+                    $cacheReadTokens = [double]$tokens.cache_read_tokens
+                }
+                $accounted = $inputTokens + $cacheReadTokens + $outputTokens
+                $effectiveTotal = [math]::Max($totalTokens, $accounted)
+                $report = @{
+                    session_id = $(if ($event.sessionID) { $event.sessionID } elseif ($event.sessionId) { $event.sessionId } else { $null })
+                    model = $usageModel
+                    provider = $usageProvider
+                    usage = @{
+                        input = $inputTokens
+                        cacheRead = $cacheReadTokens
+                        cache_read = $cacheReadTokens
+                        cache_read_tokens = $cacheReadTokens
+                        output = $outputTokens
+                        total = $effectiveTotal
+                    }
+                } | ConvertTo-Json -Depth 5 -Compress
+            } catch {}
+        }
+        if ($null -eq $report) { return }
+        if ($script:lastLiveUsageJson -eq $report) { return }
+        $script:lastLiveUsageJson = $report
+        $temporary = $usageFile + '.live-' + $PID
+        [System.IO.File]::WriteAllText($temporary, $report, [System.Text.UTF8Encoding]::new($false))
+        Move-Item -LiteralPath $temporary -Destination $usageFile -Force
+    } catch {}
+}
 $stdoutTask = $process.StandardOutput.ReadToEndAsync()
 $stderrTask = $process.StandardError.ReadToEndAsync()
 $timeoutMs = ${workerTimeoutMs}
+$tokenBudgetJson = '${JSON.stringify(tokenBudget || {}).replace(/'/g, "''")}'
+$maxTokens = 0
+$progressTimeoutMs = ${Number(options.progressTimeoutMs) > 0 ? Number(options.progressTimeoutMs) : 0}
+$lastProgressAt = [System.Diagnostics.Stopwatch]::GetTimestamp()
+$lastTotalTokens = $null
+$lastOutputSignature = ""
+try {
+    $budgetConfig = $tokenBudgetJson | ConvertFrom-Json
+    if ($null -ne $budgetConfig.maxTokens) { $maxTokens = [double]$budgetConfig.maxTokens }
+} catch {}
+$budgetExceeded = $false
+
+function Stop-WorkerTree {
+    $stragglers = @(Get-DescendantProcessIds -AncestorPid $wrapperPid -NotBefore $wrapperStartTime.AddSeconds(-2))
+    foreach ($stragglerId in $stragglers) { Stop-Process -Id $stragglerId -Force -ErrorAction SilentlyContinue }
+    if (-not $process.HasExited) { try { $process.Kill() } catch {} }
+    try { & cmd.exe /c "taskkill /PID $wrapperPid /T /F >nul 2>&1" } catch {}
+    [void]$process.WaitForExit(10000)
+}
 
 # Every process the wrapper started, walked up the parent chain. A process
 # that predates the launch is never a descendant even if a recycled pid makes
@@ -457,15 +539,80 @@ function Get-DescendantProcessIds {
     return $found
 }
 
+function Read-UsageTotal {
+    if ([string]::IsNullOrWhiteSpace($usageFile) -or -not (Test-Path -LiteralPath $usageFile)) { return $null }
+    try {
+        $report = Get-Content -LiteralPath $usageFile -Raw | ConvertFrom-Json
+        $usage = $report.usage
+        if ($null -eq $usage) { return $null }
+        $reportedTotal = $null
+        if ($null -ne $usage.total_tokens) { $reportedTotal = [double]$usage.total_tokens }
+        elseif ($null -ne $usage.total) { $reportedTotal = [double]$usage.total }
+        if ($null -ne $usage.input_tokens -or $null -ne $usage.cache_read_tokens -or $null -ne $usage.output_tokens) {
+            $accounted = [double]$usage.input_tokens + [double]$usage.cache_read_tokens + [double]$usage.output_tokens
+            if ($null -ne $reportedTotal) { return [math]::Max($reportedTotal, $accounted) }
+            return $accounted
+        }
+        if ($null -ne $usage.input -or $null -ne $usage.cacheRead -or $null -ne $usage.cache_read -or $null -ne $usage.output) {
+            $cacheRead = $usage.cacheRead
+            if ($null -eq $cacheRead) { $cacheRead = $usage.cache_read }
+            $accounted = [double]$usage.input + [double]$cacheRead + [double]$usage.output
+            if ($null -ne $reportedTotal) { return [math]::Max($reportedTotal, $accounted) }
+            return $accounted
+        }
+        if ($null -ne $reportedTotal) { return $reportedTotal }
+    } catch {}
+    return $null
+}
+
 # The wrapper is waited on with the bounded wait, then every process it
 # started is polled until none remain, all inside the same budget. Waiting for
 # the wrapper alone is not enough: a job the wrapper no longer waits for would
 # otherwise be reported as finished while it is still running.
 $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-$timedOut = -not $process.WaitForExit($timeoutMs)
+$timedOut = $false
+$stalled = $false
+$waitSlice = 250
+while ($true) {
+    Write-LiveUsage
+    $totalTokens = Read-UsageTotal
+    if ($null -ne $totalTokens -and $maxTokens -gt 0 -and $totalTokens -gt $maxTokens) {
+        $budgetExceeded = $true
+        Stop-WorkerTree
+        break
+    }
+        if ($progressTimeoutMs -gt 0) {
+        $outputSignature = ""
+        try {
+            $outputFiles = @(Get-ChildItem -LiteralPath $workerRoot -File -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -notmatch '[\\/](\.git|node_modules|\.shipde)[\\/]' } | Sort-Object FullName)
+            if ($outputFiles.Count -gt 0) { $outputSignature = ($outputFiles | ForEach-Object { $_.FullName + ':' + $_.Length + ':' + $_.LastWriteTimeUtc.Ticks }) -join '|' }
+        } catch {}
+        $madeProgress = $false
+        if ($outputSignature -ne $lastOutputSignature) {
+            $lastOutputSignature = $outputSignature
+            $madeProgress = $true
+        }
+        if ($null -ne $totalTokens -and ($null -eq $lastTotalTokens -or $totalTokens -gt $lastTotalTokens)) {
+            $lastTotalTokens = $totalTokens
+            $madeProgress = $true
+        }
+        if ($madeProgress) {
+            $lastProgressAt = [System.Diagnostics.Stopwatch]::GetTimestamp()
+        } elseif (([System.Diagnostics.Stopwatch]::GetTimestamp() - $lastProgressAt) * 1000 / [System.Diagnostics.Stopwatch]::Frequency -ge $progressTimeoutMs) {
+            $stalled = $true
+            Stop-WorkerTree
+            break
+        }
+    }
+    $remaining = $timeoutMs - $stopwatch.ElapsedMilliseconds
+    if ($remaining -le 0) { $timedOut = $true; break }
+    if ($process.HasExited) { break }
+    [void]$process.WaitForExit([math]::Min($waitSlice, $remaining))
+}
 $quietPolls = 0
-if (-not $timedOut) {
+if (-not $timedOut -and -not $stalled -and -not $budgetExceeded) {
     while ($true) {
+        Write-LiveUsage
         $remaining = $timeoutMs - $stopwatch.ElapsedMilliseconds
         if ($remaining -le 0) { $timedOut = $true; break }
         $pidRecycled = $false
@@ -485,32 +632,28 @@ if (-not $timedOut) {
             $leftovers = @(Get-DescendantProcessIds -AncestorPid $wrapperPid -NotBefore $wrapperStartTime.AddSeconds(-2))
             if ($leftovers.Count -eq 0) { $quietPolls = $quietPolls + 1 } else { $quietPolls = 0 }
         }
+        $totalTokens = Read-UsageTotal
+        if ($null -ne $totalTokens -and $maxTokens -gt 0 -and $totalTokens -gt $maxTokens) {
+            $budgetExceeded = $true
+            Stop-WorkerTree
+            break
+        }
         if ($quietPolls -ge 3) { break }
         Start-Sleep -Milliseconds 250
     }
 }
 
 if ($timedOut) {
-    $stragglers = @(Get-DescendantProcessIds -AncestorPid $wrapperPid -NotBefore $wrapperStartTime.AddSeconds(-2))
-    foreach ($stragglerId in $stragglers) { Stop-Process -Id $stragglerId -Force -ErrorAction SilentlyContinue }
-    if (-not $process.HasExited) { try { $process.Kill() } catch {} }
-    # taskkill's own text must never reach this script's error stream: under
-    # $ErrorActionPreference = "Stop" a single stderr line would abort the host
-    # before the result is written. cmd.exe swallows it instead.
-    try { & cmd.exe /c "taskkill /PID $wrapperPid /T /F >nul 2>&1" } catch {}
-    [void]$process.WaitForExit(10000)
+    Stop-WorkerTree
 }
+if ($stalled) { Stop-WorkerTree }
 # A writer the operator cannot kill (another user's process) must not hang the
 # host forever: the pipes are read with a bound, and a pipe that never closed
 # is itself reported as a failure.
 $stdout = ""
 $stderr = ""
 if ($stdoutTask.Wait(15000)) { $stdout = $stdoutTask.Result }
-if ($stderrTask.Wait(15000)) {
-    $stderr = $stderrTask.Result
-} else {
-    $stderr = "[ISOLATION_LAUNCHER] worker output pipes never closed"
-}
+if ($stderrTask.Wait(15000)) { $stderr = $stderrTask.Result } else { $stderr = "[ISOLATION_LAUNCHER] worker output pipes never closed" }
 
 # Positive evidence: the marker is written by run-target.ps1 after the payload
 # returned, so it can only exist for a job that really ran to its end.
@@ -519,8 +662,12 @@ $markerNonce = ""
 $jobExit = -1
 $failureReason = ""
 $localFailure = ""
-if ($timedOut) {
+if ($budgetExceeded) {
+    $failureReason = "TOKEN_BUDGET_EXCEEDED: live worker usage exceeded configured token budget"
+} elseif ($timedOut) {
     $failureReason = "[ISOLATION_LAUNCHER] worker timed out after $timeoutMs ms and was killed"
+} elseif ($stalled) {
+    $failureReason = "STALLED_NO_PROGRESS: worker produced no output for $progressTimeoutMs ms and was killed"
 } elseif (Test-Path -LiteralPath $markerPath) {
     try {
         $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json
@@ -539,7 +686,7 @@ if ($timedOut) {
     $failureReason = "[ISOLATION_LAUNCHER] the worker job never wrote its completion marker"
 }
 $exitValue = -1
-if ($completed -and -not $timedOut) { $exitValue = $jobExit }
+if ($completed -and -not $timedOut -and -not $budgetExceeded) { $exitValue = $jobExit }
 if ($failureReason.Length -gt 0) { $stderr = $stderr + [Environment]::NewLine + $failureReason }
 
 $output = @{
@@ -547,6 +694,7 @@ $output = @{
     stdout = $stdout
     stderr = $stderr
     timedOut = $timedOut
+    budgetExceeded = $budgetExceeded
     completed = $completed
     completionNonce = $markerNonce
     failureReason = $failureReason
@@ -844,6 +992,49 @@ function offlineStoreMiss(error) {
   return /offline|no matching version|not found in.*store|missing.*store|store.*missing/.test(
     message
   );
+}
+
+function enforceTokenBudget(launchResult, tokenBudget, usageFile) {
+  if (!tokenBudget || Number(tokenBudget.maxTokens) <= 0) return launchResult;
+  if (launchResult && launchResult.failureReason) return launchResult;
+  let failureReason = null;
+  let total = null;
+  try {
+    if (!usageFile || !fs.existsSync(usageFile)) throw new Error('usage report missing');
+    const report = JSON.parse(fs.readFileSync(usageFile, 'utf8'));
+    const usage = report.usage || {};
+    const hasTotal = usage.total_tokens != null || usage.total != null;
+    const hasInput = usage.input_tokens != null || usage.input != null;
+    const hasCacheRead =
+      usage.cache_read_tokens != null || usage.cacheRead != null || usage.cache_read != null;
+    const hasOutput = usage.output_tokens != null || usage.output != null;
+    if (!hasTotal && !hasInput && !hasCacheRead && !hasOutput)
+      throw new Error('usage total missing');
+    const accountedTotal =
+      Number(usage.input_tokens ?? usage.input ?? 0) +
+      Number(usage.cache_read_tokens ?? usage.cacheRead ?? usage.cache_read ?? 0) +
+      Number(usage.output_tokens ?? usage.output ?? 0);
+    total = hasTotal
+      ? Math.max(Number(usage.total_tokens ?? usage.total), accountedTotal)
+      : accountedTotal;
+    if (!Number.isFinite(total)) throw new Error('usage total invalid');
+    if (total > Number(tokenBudget.maxTokens)) failureReason = 'TOKEN_BUDGET_EXCEEDED';
+  } catch (_) {
+    failureReason = 'TOKEN_BUDGET_UNVERIFIED';
+  }
+  if (failureReason) {
+    launchResult.exitCode = 1;
+    launchResult.failureReason = failureReason;
+    launchResult.stderr =
+      (launchResult.stderr || '') +
+      '\n' +
+      failureReason +
+      ': ' +
+      (failureReason === 'TOKEN_BUDGET_EXCEEDED'
+        ? 'session exceeded configured token budget'
+        : 'configured token budget could not be verified');
+  }
+  return launchResult;
 }
 
 function getIsolatedLauncher() {
@@ -1803,6 +1994,9 @@ function getIsolatedLauncher() {
       Number.isFinite(Number(opts.workerTimeoutMs)) && Number(opts.workerTimeoutMs) > 0
         ? Number(opts.workerTimeoutMs)
         : DEFAULT_WORKER_TIMEOUT_MS;
+    const tokenBudget =
+      opts.tokenBudget && typeof opts.tokenBudget === 'object' ? opts.tokenBudget : null;
+    const budgetJson = tokenBudget ? JSON.stringify(tokenBudget) : '';
 
     // Bound to THIS launch: run-target.ps1 can only write a marker carrying
     // this nonce, so a leftover marker from an earlier job can never satisfy
@@ -1857,10 +2051,15 @@ function getIsolatedLauncher() {
       workerTimeoutMs,
       completionNonce,
       adapterId: adapter.id,
+      model: opts.model || null,
+      upstream: opts.upstream || null,
       isolationVerdict: verdictData,
       isolationVerdictPath: verdictPath,
       rtkPathPrepend,
       credentialEnv: selectedCredentialEnv,
+      tokenBudget,
+      progressTimeoutMs: opts.progressTimeoutMs || null,
+      usageFile: opts.usageFile || null,
     });
 
     const tempScript = path.join(
@@ -1885,11 +2084,16 @@ function getIsolatedLauncher() {
     } catch (e) {}
 
     const launchResult = readLaunchResult(launchResultPath, completionNonce, hostRes);
+    if (opts.usageFile && !fs.existsSync(opts.usageFile)) {
+      writeUsageReportFromHarnessResult(job, launchResult);
+    }
+    enforceTokenBudget(launchResult, opts.tokenBudget, opts.usageFile);
     if (exerciseResult) {
       launchResult.exercise = exerciseResult;
       launchResult.failBefore = exerciseResult.failBefore;
     }
     launchResult.rtk = { provided: rtkEnabled, reason: rtkDecision };
+    launchResult.tokenBudget = opts.tokenBudget || null;
     return launchResult;
   };
 }
@@ -1925,6 +2129,19 @@ function readLaunchResult(launchResultPath, completionNonce, hostRes) {
   }
 
   const jobExit = Number(resJson.exitCode);
+  let failureReason = undefined;
+  if (typeof resJson.failureReason === 'string') {
+    if (resJson.failureReason.startsWith('STALLED_NO_PROGRESS')) {
+      failureReason = 'STALLED_NO_PROGRESS';
+    } else if (resJson.failureReason.startsWith('TOKEN_BUDGET_EXCEEDED')) {
+      failureReason = 'TOKEN_BUDGET_EXCEEDED';
+    } else if (resJson.failureReason.length > 0) {
+      failureReason = resJson.failureReason;
+    }
+  } else if (resJson.budgetExceeded) {
+    failureReason = 'TOKEN_BUDGET_EXCEEDED';
+  }
+
   if (
     resJson.timedOut === true ||
     resJson.completed !== true ||
@@ -1936,6 +2153,7 @@ function readLaunchResult(launchResultPath, completionNonce, hostRes) {
       stdout: String(resJson.stdout || ''),
       stderr: String(resJson.stderr || ''),
       timedOut: resJson.timedOut === true,
+      ...(failureReason ? { failureReason } : {}),
     };
   }
 
@@ -1948,6 +2166,7 @@ function readLaunchResult(launchResultPath, completionNonce, hostRes) {
     localFailure: resJson.localFailure ? String(resJson.localFailure) : null,
     timedOut: false,
     completionNonce: resJson.completionNonce,
+    ...(failureReason ? { failureReason } : {}),
   };
 }
 
@@ -1968,4 +2187,5 @@ module.exports = {
   readLaunchResult,
   EXPECTED_FIREWALL_RULES,
   DEFAULT_WORKER_TIMEOUT_MS,
+  enforceTokenBudget,
 };

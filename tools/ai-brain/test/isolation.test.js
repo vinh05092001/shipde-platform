@@ -1062,7 +1062,8 @@ test(
 );
 test('launcher bounds the worker wait with a timeout and kills on expiry (P6)', () => {
   const src = launcherSource();
-  assert.match(src, /WaitForExit\(\$timeoutMs\)/);
+  assert.match(src, /WaitForExit\(\[math\]::Min\(\$waitSlice, \$remaining\)\)/);
+  assert.match(src, /Read-UsageTotal/);
   assert.match(src, /\.Kill\(\)/);
   assert.match(src, /timedOut/);
   assert.match(src, /workerTimeoutMs/);

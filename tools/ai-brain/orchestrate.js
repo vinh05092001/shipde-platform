@@ -119,6 +119,7 @@ function buildDefaults() {
     isolation: null,
     // TASK-AI-121 LF-R03: the worker timeout this run launches with (ms).
     workerTimeoutMs: null,
+    tokenBudgets: null,
     // TASK-AI-121 LF-R02: set when a stale/missing isolation verdict stopped
     // the run — the reason and the operator action that clears it.
     isolationStop: null,
@@ -240,6 +241,14 @@ function resolveLauncher(o, isolatedLauncher) {
       onProvisioned: typeof o.onProvisioned === 'function' ? o.onProvisioned : undefined,
       candidateKey: job.candidateKey || null,
       gateway: job.gateway || null,
+      model: job.model || null,
+      upstream: job.upstream || null,
+      usageFile: job.usageFile || null,
+      tokenBudget: job.tokenBudget || null,
+      progressTimeoutMs: job.progressTimeoutMs || o.progressTimeoutMs || null,
+      rtk: job.rtk || null,
+      riskDomains: job.riskDomains || null,
+      lowRisk: job.lowRisk === true,
       // TASK-AI-121 LF-R03: the worker timeout the run was given, for writer,
       // reviewer and repair launches alike.
       workerTimeoutMs: o.workerTimeoutMs || job.workerTimeoutMs || undefined,
@@ -1450,7 +1459,8 @@ function writeUsageReportFromHarnessResult(job, res) {
   if (typeof job.run === 'function' && job.harness !== 'opencode-direct') return null;
 
   let sessionId = null;
-  let tokens = { input: 0, output: 0, total: 0 };
+  let tokens = { input: 0, cacheRead: 0, output: 0, total: 0 };
+  let sawTokens = false;
 
   const stdout = String((res && res.stdout) || '');
   if (stdout) {
@@ -1465,14 +1475,20 @@ function writeUsageReportFromHarnessResult(job, res) {
           if (parsed.sessionID || parsed.sessionId || parsed.session_id) {
             sessionId = parsed.sessionID || parsed.sessionId || parsed.session_id;
           }
-          if (parsed.tokens) {
-            tokens.input = Number(parsed.tokens.input) || tokens.input;
-            tokens.output = Number(parsed.tokens.output) || tokens.output;
-            tokens.total = Number(parsed.tokens.total) || tokens.total;
-          } else if (parsed.part && parsed.part.tokens) {
-            tokens.input = Number(parsed.part.tokens.input) || tokens.input;
-            tokens.output = Number(parsed.part.tokens.output) || tokens.output;
-            tokens.total = Number(parsed.part.tokens.total) || tokens.total;
+          const t = parsed.tokens || (parsed.part && parsed.part.tokens);
+          if (t) {
+            sawTokens = true;
+            tokens.input = Number(t.input) || tokens.input;
+            tokens.output = Number(t.output) || tokens.output;
+            tokens.total = Number(t.total) || tokens.total;
+            const cr =
+              (t.cache && (t.cache.read ?? t.cache.read_tokens)) ??
+              t.cacheRead ??
+              t.cache_read ??
+              t.cache_read_tokens;
+            if (cr != null) {
+              tokens.cacheRead = Number(cr) || 0;
+            }
           }
         } catch (e) {
           // ignore non-json line
@@ -1484,21 +1500,29 @@ function writeUsageReportFromHarnessResult(job, res) {
   if (!sessionId && res && res.completionNonce) {
     sessionId = res.completionNonce;
   }
-
+  if (!sawTokens && !sessionId && (!res || res.exitCode === 0 || res.exitCode == null)) {
+    return null;
+  }
   // A failed launch reports session_id: null per AC-AI-64-23 / TASK-AI-63
   if (res && res.exitCode !== 0 && res.exitCode !== null && res.exitCode !== undefined) {
     sessionId = null;
   }
 
+  const accountedTotal = tokens.input + (Number(tokens.cacheRead) || 0) + tokens.output;
   const report = {
     session_id: sessionId,
     model: job.model || (job.candidate && job.candidate.model) || null,
     provider: job.upstream || job.provider || (job.candidate && job.candidate.provider) || null,
-    usage: {
-      input: tokens.input,
-      output: tokens.output,
-      total: tokens.total || tokens.input + tokens.output,
-    },
+    usage: sawTokens
+      ? {
+          input: tokens.input,
+          cacheRead: tokens.cacheRead || 0,
+          cache_read: tokens.cacheRead || 0,
+          cache_read_tokens: tokens.cacheRead || 0,
+          output: tokens.output,
+          total: tokens.total ? Math.max(tokens.total, accountedTotal) : accountedTotal,
+        }
+      : {},
   };
 
   try {
@@ -1508,6 +1532,69 @@ function writeUsageReportFromHarnessResult(job, res) {
   } catch (err) {
     return null;
   }
+}
+
+function readUsageReport(file) {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (_) {
+    return null;
+  }
+}
+
+function runHostBrainGate(job, options = {}) {
+  const requestedRoot = options.hostCwd || options.cwd || process.cwd();
+  const root =
+    (options.platform || process.platform) !== 'win32' &&
+    /^[a-z]:[\\/]/i.test(String(requestedRoot))
+      ? path.resolve(__dirname, '..', '..')
+      : requestedRoot;
+  const node = options.nodeExecutable || process.execPath;
+  const suite = options.brainSuite || 'tools/ai-brain/test/*.test.js';
+  const run = options.spawnSync || spawnSync;
+  const suiteFiles = String(suite)
+    .split(/\s+/)
+    .filter(Boolean)
+    .flatMap((pattern) => {
+      if (!pattern.includes('*')) return [pattern];
+      const normalized = pattern.replace(/\\/g, '/');
+      const slash = normalized.lastIndexOf('/');
+      const directory = slash < 0 ? '.' : normalized.slice(0, slash);
+      const basename = slash < 0 ? normalized : normalized.slice(slash + 1);
+      const escaped = basename.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
+      const matcher = new RegExp('^' + escaped + '$');
+      return fs
+        .readdirSync(path.resolve(root, directory), { withFileTypes: true })
+        .filter((entry) => entry.isFile() && matcher.test(entry.name))
+        .map((entry) => path.posix.join(directory.replace(/\\/g, '/'), entry.name));
+    });
+  if (suiteFiles.length === 0) {
+    return {
+      pass: false,
+      command: 'node --test ' + String(suite),
+      failures: ['NO_BRAIN_TEST_FILES'],
+      summary: [],
+    };
+  }
+  const command = 'node --test ' + suiteFiles.join(' ');
+  const result = run(node, ['--test', ...suiteFiles], {
+    cwd: root,
+    encoding: 'utf8',
+    timeout: options.brainGateTimeoutMs || 30 * 60 * 1000,
+    maxBuffer: 64 * 1024 * 1024,
+    env: Object.assign({}, process.env, { NINEROUTER_API_KEY: undefined }),
+  });
+  const output = String(result.stdout || '') + '\n' + String(result.stderr || '');
+  const failed = [...output.matchAll(/(?:not ok \d+ - |✖ )([^\r\n]+)/g)].map((match) =>
+    match[1].trim()
+  );
+  const summary = output.split(/\r?\n/).filter((line) => /^ℹ (?:pass|fail)\b|^✖ /.test(line));
+  const pass = result.status === 0 && failed.length === 0;
+  if (!pass) {
+    const repairDetails = options.onHostGateFailure ? options.onHostGateFailure(failed) : null;
+    return { pass: false, command, failures: failed, summary, repairDetails };
+  }
+  return { pass: true, command, failures: [], summary };
 }
 
 /** Progress markers, measured host-side from the worker's own worktree. */
@@ -2422,6 +2509,26 @@ function buildTaskProfile(item, options) {
   return buildProfile(item || {}, o, o.forbiddenFailureDomains || []);
 }
 
+function rtkPolicyForItem(requested, riskDomains, injectedRun) {
+  const isRequested =
+    typeof requested === 'object' && requested !== null
+      ? Boolean(requested.enabled)
+      : Boolean(requested);
+  const domains = Array.isArray(riskDomains) ? riskDomains : [];
+  const enabled = isRequested && domains.length === 0 && !injectedRun;
+  return {
+    enabled,
+    reason: !isRequested
+      ? 'not_requested'
+      : injectedRun
+        ? 'injected_run_blocks_rtk'
+        : enabled
+          ? 'low_risk_item'
+          : 'risk_domains_block_rtk',
+    riskDomains: [...domains],
+  };
+}
+
 function expandForbiddenDomains(domains) {
   const out = new Set();
   for (const domain of domains || []) {
@@ -2953,6 +3060,62 @@ async function runOrchestration(goal, opts) {
       ? Number(o.workerTimeoutMs)
       : 30 * 60 * 1000;
   log.workerTimeoutMs = o.workerTimeoutMs;
+  const budgetConfig = o.tokenBudgets || {};
+  const budgetForItem = (item) => ({
+    ...(budgetConfig.default || {}),
+    ...(budgetConfig.byComplexity?.[item.complexity] || {}),
+    ...(budgetConfig[roleOf(item)] || {}),
+    ...(budgetConfig.byRole?.[roleOf(item)] || {}),
+  });
+  const budgetProgressMs =
+    Number(
+      (o.specs || [])
+        .map((item) => budgetForItem(item).noProgressMinutes)
+        .find((n) => Number(n) > 0) ||
+        budgetConfig.default?.noProgressMinutes ||
+        0
+    ) *
+    60 *
+    1000;
+  o.progressTimeoutMs =
+    Number(o.progressTimeoutMs) > 0 ? Number(o.progressTimeoutMs) : budgetProgressMs;
+  const controllerGate =
+    o.hostGate ||
+    (o.isolatedWorker && !o.injectedRun && typeof o.run !== 'function'
+      ? (job) => runHostBrainGate(job, { hostCwd })
+      : null);
+  const quotaFailures = new Map();
+  const riskDomainsByItem = new Map(
+    (o.specs || []).map((item) => [
+      item.id,
+      Array.isArray(item.riskDomains) ? item.riskDomains : [],
+    ])
+  );
+  log.rtk = { requested: Boolean(o.rtk), perWorkItem: {} };
+  log.rtkPerWorkItem = log.rtk.perWorkItem;
+  let contextPack = null;
+  if (o.enableContextPack || o.contextManifest) {
+    try {
+      const packer = require('./context-pack');
+      contextPack = await packer.createContextPackAsync(o.specs || [], {
+        root: hostCwd,
+        outputDir: o.contextPackDir,
+        sources: o.contextSources,
+      });
+      log.contextPack = { path: contextPack.path, files: contextPack.files.length };
+      if (typeof o.contextManifest === 'string' && o.contextManifest) {
+        fs.mkdirSync(path.dirname(o.contextManifest), { recursive: true });
+        fs.writeFileSync(
+          o.contextManifest,
+          JSON.stringify({ path: contextPack.path, files: contextPack.files }, null, 2) + '\n',
+          'utf8'
+        );
+      }
+    } catch (err) {
+      log.warnings.push('CONTEXT_PACK_UNAVAILABLE: ' + String(err.message || err));
+      return refuseRun(log, 'CONTEXT_PACK_UNAVAILABLE');
+    }
+  }
 
   // 2. The worker boundary (AI-64-P03). The isolated launcher is obtained
   //    whenever the run asks for the boundary, whether or not a runner was
@@ -3486,6 +3649,22 @@ async function runOrchestration(goal, opts) {
       cause: null,
       outcome: null,
     };
+    const itemRiskDomains = riskDomainsByItem.get(item.id) || item.riskDomains || [];
+    const itemRtkDecision = rtkPolicyForItem(o.rtk, itemRiskDomains, o.injectedRun);
+    const itemRtkPermitted = itemRtkDecision.enabled;
+    log.rtk.perWorkItem[item.id] = itemRtkDecision;
+    if (o.rtk) {
+      decisions.recordDecision(
+        {
+          stage: decisions.Stage.WARNING,
+          workItemId: item.id,
+          warning: 'RTK_POLICY',
+          detail: itemRtkDecision.reason,
+          enabled: itemRtkPermitted,
+        },
+        logOpts
+      );
+    }
     if (!item.failedKeys || !(item.failedKeys instanceof Set)) {
       item.failedKeys = new Set(Array.isArray(item.failedKeys) ? item.failedKeys : []);
     }
@@ -3649,7 +3828,27 @@ async function runOrchestration(goal, opts) {
         }
         break;
       }
+      if (item.hostGateFailures && item.hostGateFailures.length) {
+        log.prompts.push({
+          workItemId: item.id,
+          attempt,
+          candidateKey: decision.chosen,
+          prompt: compilePrompt(item, {
+            goal,
+            specText: o.specText,
+            candidateKey: decision.chosen,
+            branch: o.branch || 'feat/' + String(item.id).toLowerCase(),
+            focusedTestsOnly: true,
+            contextPack: contextPack && contextPack.path,
+            hostGateFailures: item.hostGateFailures,
+          }),
+        });
+      }
       const candidate = candidates.find((c) => candidateKey(c) === decision.chosen);
+      if (attempt > Number(budgetForItem(item).maxTurns || Infinity)) {
+        launch.fallbackReason = 'TURN_BUDGET_EXCEEDED';
+        break;
+      }
       if (launch.firstChoice === null) launch.firstChoice = decision.chosen;
       launch.selected = decision.chosen;
       triedKeys.add(decision.chosen);
@@ -3677,8 +3876,12 @@ async function runOrchestration(goal, opts) {
         isolatedWorker: Boolean(o.isolatedWorker),
         recordTools: false,
         returnTools: true,
+        focusedTestsOnly: true,
+        contextPack: contextPack && contextPack.path,
+        hostGateFailures: item.hostGateFailures || [],
       });
-      const prompt = compiledPrompt.prompt;
+      let prompt = compiledPrompt.prompt;
+      if (item.hostGateFailures && item.hostGateFailures.length) delete item.hostGateFailures;
       const promptToolIds = compiledPrompt.tools;
       if (Array.isArray(promptToolIds) && promptToolIds.length > 0) {
         decisions.recordDecision(
@@ -3726,6 +3929,23 @@ async function runOrchestration(goal, opts) {
         labels: { workItem: String(item.id), role: roleOf(item) },
         exercise: o.exercise || null,
         workerTimeoutMs: o.workerTimeoutMs || null,
+        rtk: {
+          enabled: itemRtkPermitted,
+          sourcePath: o.rtk && typeof o.rtk === 'object' ? o.rtk.sourcePath : undefined,
+        },
+        lowRisk: itemRtkPermitted,
+        riskDomains: itemRiskDomains,
+        tokenBudgetConfig: budgetConfig,
+        tokenBudget: budgetForItem(item),
+        maxTurns: budgetForItem(item).maxTurns || null,
+        maxQuotaFailures: budgetForItem(item).repeatedQuotaFailures || 3,
+        progressTimeoutMs:
+          (Number(budgetForItem(item).noProgressMinutes) || 0) * 60 * 1000 ||
+          o.progressTimeoutMs ||
+          null,
+        hostGate: Boolean(controllerGate),
+        decisionDir: o.decisionDir || null,
+        workItemId: item.id,
       };
 
       // The exercise runner exists in the worker's own tree before the agent
@@ -3734,8 +3954,10 @@ async function runOrchestration(goal, opts) {
       // For isolated worker launches, the runner is materialised inside the
       // isolated launcher AFTER the worker root is provisioned so git clone does
       // not overwrite it. For non-isolated or injected runners, materialise here.
-      if (o.exercise && job.cwd && (!o.isolatedWorker || typeof o.run === 'function')) {
-        job.exercise = materialiseExercise(job.cwd, o);
+      const exerciseRoot =
+        o.isolatedWorker && typeof o.run === 'function' ? isolatedWorkerRoot : job.cwd;
+      if (o.exercise && exerciseRoot && (!o.isolatedWorker || typeof o.run === 'function')) {
+        job.exercise = materialiseExercise(exerciseRoot, o);
         if (job.exercise && job.exercise.failBefore) {
           job.failBefore = job.exercise.failBefore;
         }
@@ -3780,6 +4002,12 @@ async function runOrchestration(goal, opts) {
           res = { exitCode: -1, stdout: '', stderr: String((err && err.message) || err) };
         }
         if (res && res.exercise) job.exercise = res.exercise;
+        if (
+          res &&
+          ['TOKEN_BUDGET_EXCEEDED', 'TOKEN_BUDGET_UNVERIFIED'].includes(res.failureReason)
+        ) {
+          res = Object.assign({}, res, { exitCode: 1 });
+        }
         writeUsageReportFromHarnessResult(job, res);
         const adapter = harnessFor({ harness: job.harness });
         const launchHandle = adapter
@@ -3812,6 +4040,26 @@ async function runOrchestration(goal, opts) {
             accountId: candidate.accountId,
             timedOut: isLaunchTimedOut,
           });
+          if (
+            res &&
+            ['TOKEN_BUDGET_EXCEEDED', 'TOKEN_BUDGET_UNVERIFIED'].includes(res.failureReason)
+          ) {
+            launchClassification.scope = 'local';
+            launchClassification.cause = res.failureReason;
+            launch.fallbackReason = res.failureReason;
+            launch.cause = 'TOKEN_BUDGET_EXCEEDED';
+          } else if (res && res.failureReason === 'STALLED_NO_PROGRESS') {
+            launchClassification.scope = 'local';
+            launchClassification.cause = 'STALLED_NO_PROGRESS';
+            launch.fallbackReason = 'STALLED_NO_PROGRESS';
+            launch.cause = 'STALLED_NO_PROGRESS';
+          }
+          if (res && Array.isArray(res.hostGateFailures)) {
+            launchClassification.scope = 'local';
+            launchClassification.cause = 'HOST_GATE_FAILED';
+            launch.fallbackReason = 'HOST_GATE_FAILED';
+            launch.cause = 'HOST_GATE_FAILED';
+          }
           failureList.push({
             failedCandidateKey: decision.chosen,
             failureScope: launchClassification.scope,
@@ -3848,6 +4096,122 @@ async function runOrchestration(goal, opts) {
             baseFrom: dependencyBase ? dependencyBase.baseFrom : null,
           },
         });
+      }
+      if (job.usageFile && !o.injectedRun) {
+        const report = readUsageReport(job.usageFile);
+        if (report) {
+          const usage = report.usage || report;
+          decisions.recordDecision(
+            {
+              stage: decisions.Stage.WARNING,
+              warning: 'TOKEN_USAGE',
+              workItemId: item.id,
+              role: roleOf(item),
+              model: job.model,
+              tokenUsage: {
+                input: Number(usage.input_tokens ?? usage.input ?? 0) || 0,
+                cacheRead:
+                  Number(usage.cache_read_tokens ?? usage.cacheRead ?? usage.cache_read ?? 0) || 0,
+                output: Number(usage.output_tokens ?? usage.output ?? 0) || 0,
+                total: Number(usage.total_tokens ?? usage.total ?? 0) || 0,
+              },
+            },
+            logOpts
+          );
+        }
+      }
+      if (controllerGate && res && res.exitCode === 0) {
+        const gate = await controllerGate(job);
+        log.hostGate = gate;
+        if (!gate.pass) {
+          if (gate.failures && gate.failures.length && typeof o.hostGateRepair === 'function') {
+            const repair = candidates.find(
+              (candidate) => candidateKey(candidate) !== decision.chosen
+            );
+            if (repair) {
+              await o.hostGateRepair({ job, failures: gate.failures, candidate: repair });
+            }
+          }
+          const gateFailures = gate.failures || [];
+          item.hostGateFailures = gateFailures;
+          res = Object.assign({}, res, {
+            exitCode: 1,
+            hostGateFailures: gateFailures,
+            needsHostGateRepair: true,
+          });
+        }
+      }
+
+      if (res && Array.isArray(res.hostGateFailures) && res.needsHostGateRepair) {
+        item.hostGateFailures = res.hostGateFailures;
+        job.prompt = compilePrompt(item, {
+          goal,
+          specText: o.specText,
+          candidateKey: decision.chosen,
+          branch,
+          usageFile,
+          isolatedWorker: Boolean(o.isolatedWorker),
+          focusedTestsOnly: true,
+          contextPack: contextPack && contextPack.path,
+          hostGateFailures: res.hostGateFailures,
+        });
+        prompt = job.prompt;
+        const promptRecord = log.prompts.find(
+          (entry) => entry.workItemId === item.id && entry.attempt === attempt
+        );
+        if (promptRecord) promptRecord.prompt = job.prompt;
+        log.prompts.push({
+          workItemId: item.id,
+          attempt,
+          candidateKey: decision.chosen,
+          prompt: job.prompt,
+        });
+        const gateRepairResult = launcher(job);
+        if (!gateRepairResult || gateRepairResult.exitCode !== 0) {
+          item.hostGateFailures = res.hostGateFailures;
+          res = Object.assign({}, gateRepairResult || {}, { exitCode: 1 });
+          break;
+        }
+        res = gateRepairResult;
+        const repairedGate = await controllerGate(job);
+        log.hostGate = repairedGate;
+        if (!repairedGate.pass) {
+          item.hostGateFailures = repairedGate.failures || res.hostGateFailures;
+          res = Object.assign({}, res, {
+            exitCode: 1,
+            hostGateFailures: item.hostGateFailures,
+          });
+          break;
+        }
+        delete item.hostGateFailures;
+        log.prompts.push({
+          workItemId: item.id,
+          attempt: attempt + 1,
+          candidateKey: decision.chosen,
+          prompt: job.prompt,
+        });
+      }
+
+      if (res && Array.isArray(res.hostGateFailures)) {
+        decisions.recordDecision(
+          {
+            stage: decisions.Stage.FAILED,
+            workItemId: item.id,
+            role: roleOf(item),
+            chosen: decision.chosen,
+            failureScope: 'local',
+            cause: 'HOST_GATE_FAILED',
+            detail: res.hostGateFailures.join(', '),
+          },
+          logOpts
+        );
+        launch.scope = 'local';
+        launch.cause = 'HOST_GATE_FAILED';
+        launch.fallbackReason = 'HOST_GATE_FAILED';
+        launch.outcome = 'failed';
+        log.launches.push(launch);
+        blockedReason = 'HOST_GATE_FAILED';
+        continue;
       }
 
       if (previousLaunch && previousLaunch.candidateKey === decision.chosen) {
@@ -3901,7 +4265,72 @@ async function runOrchestration(goal, opts) {
       // for, because a live session past the stall window is STALLED and a live
       // session still working is still running.
       const exited = Boolean(res) && res.exitCode !== null && res.exitCode !== undefined;
-      if (!res || (exited && res.exitCode !== 0)) {
+      const progressSnapshot = res && !exited ? progressOf(o, res, now) : null;
+      const effectiveStallMs = Number(o.stallMs || o.progressTimeoutMs || 0);
+      const progressStalled = Boolean(
+        progressSnapshot &&
+        effectiveStallMs > 0 &&
+        classifySession(Object.assign({}, res, { progress: progressSnapshot }), {
+          now: Date.now(),
+          stallMs: effectiveStallMs,
+        }) === SessionStatus.STALLED
+      );
+      const budgetFailure = Boolean(
+        res && ['TOKEN_BUDGET_EXCEEDED', 'TOKEN_BUDGET_UNVERIFIED'].includes(res.failureReason)
+      );
+      const launcherStalled = Boolean(res && res.failureReason === 'STALLED_NO_PROGRESS');
+      if (budgetFailure) {
+        launch.fallbackReason = res.failureReason;
+      }
+      if (progressStalled) launch.fallbackReason = 'STALLED_NO_PROGRESS';
+      if (launcherStalled) launch.fallbackReason = 'STALLED_NO_PROGRESS';
+      if (budgetFailure || launcherStalled) res = Object.assign({}, res, { exitCode: 1 });
+      if (progressStalled || budgetFailure || launcherStalled) {
+        launch.scope = 'local';
+        launch.cause =
+          progressStalled || launcherStalled
+            ? 'STALLED_NO_PROGRESS'
+            : res.failureReason || 'TOKEN_BUDGET_EXCEEDED';
+        launch.outcome = 'failed';
+      }
+      if (budgetFailure) {
+        failedKeys.add(decision.chosen);
+        const currentStep = liveSteps[item.id] || {};
+        const failureList = (currentStep.failures || []).slice();
+        if (!failureList.some((failure) => failure.failedCandidateKey === decision.chosen)) {
+          failureList.push({
+            failedCandidateKey: decision.chosen,
+            failureScope: 'local',
+            failureDomain: null,
+            forbiddenDomain: null,
+            cause: res.failureReason,
+          });
+        }
+        persistStep(item.id, 'worker_launch_failed', { failures: failureList });
+        decisions.recordDecision(
+          {
+            stage: decisions.Stage.FAILED,
+            workItemId: item.id,
+            chosen: decision.chosen,
+            failureScope: 'local',
+            cause: res.failureReason,
+            detail:
+              res.failureReason === 'TOKEN_BUDGET_UNVERIFIED'
+                ? 'configured token budget could not be verified; stopping session'
+                : 'worker exceeded configured token budget; stopping session',
+          },
+          logOpts
+        );
+      }
+      if (
+        !res ||
+        (exited && res.exitCode !== 0) ||
+        progressStalled ||
+        budgetFailure ||
+        launcherStalled
+      ) {
+        if (progressStalled || budgetFailure || launcherStalled)
+          res = Object.assign({}, res || {}, { exitCode: 1 });
         // The failure is classified by the shared classifier, and the replacement
         // is chosen by the Controller's failure-domain rule rather than by a scan
         // of this loop (AI-64-R11).
@@ -3924,9 +4353,55 @@ async function runOrchestration(goal, opts) {
             accountId: candidate.accountId,
             timedOut: isLauncherTimedOut,
           });
+        const quotaLike = /quota_exhausted|\b429\b|rate limit/i.test(
+          String((res && res.stderr) || '') + ' ' + String((res && res.stdout) || '')
+        );
+        if (
+          res &&
+          ['TOKEN_BUDGET_EXCEEDED', 'TOKEN_BUDGET_UNVERIFIED'].includes(res.failureReason)
+        ) {
+          classification.scope = 'local';
+          classification.cause = res.failureReason;
+          launch.fallbackReason = res.failureReason;
+        }
+        if (res && res.failureReason === 'STALLED_NO_PROGRESS') {
+          classification.scope = 'local';
+          classification.cause = 'STALLED_NO_PROGRESS';
+          launch.fallbackReason = 'STALLED_NO_PROGRESS';
+        }
+        if (progressStalled) {
+          classification.scope = 'local';
+          classification.cause = 'STALLED_NO_PROGRESS';
+        }
+        if (launcherStalled) {
+          classification.scope = 'local';
+          classification.cause = 'STALLED_NO_PROGRESS';
+        }
+        if (quotaLike) {
+          const domain = routing.canonicalFailureDomain(candidate);
+          const count = (quotaFailures.get(domain) || 0) + 1;
+          quotaFailures.set(domain, count);
+          if (count >= Number(job.maxQuotaFailures || 3)) {
+            classification.cause = 'QUOTA_REPEATED';
+            launch.fallbackReason = 'QUOTA_REPEATED';
+            failedKeys.add(decision.chosen);
+          }
+        }
+        if (res && Array.isArray(res.hostGateFailures)) {
+          classification.scope = 'local';
+          classification.cause = 'HOST_GATE_FAILED';
+          launch.fallbackReason = 'HOST_GATE_FAILED';
+          launch.cause = 'HOST_GATE_FAILED';
+        }
         launch.scope = classification.scope;
         launch.cause = classification.cause;
         launch.outcome = 'failed';
+        if (
+          classification.cause === 'TOKEN_BUDGET_EXCEEDED' ||
+          classification.cause === 'STALLED_NO_PROGRESS'
+        ) {
+          launch.fallbackReason = classification.cause;
+        }
         const currentStep = liveSteps[item.id] || {};
         const failureList = (currentStep.failures || []).slice();
         if (!failureList.some((f) => f.failedCandidateKey === decision.chosen)) {
@@ -3961,6 +4436,12 @@ async function runOrchestration(goal, opts) {
           // A local failure is nobody's fault: it consumes no failure-domain
           // attempt budget either, so the same candidate key stays selectable.
           domainAttempts.set(candDomain, Math.max(0, (domainAttempts.get(candDomain) || 0) - 1));
+          if (
+            classification.cause === 'TOKEN_BUDGET_EXCEEDED' ||
+            classification.cause === 'STALLED_NO_PROGRESS'
+          ) {
+            failedKeys.add(decision.chosen);
+          }
         }
         // TASK-AI-121 LF-R01: a local launch infrastructure failure is not
         // evidence about the candidate — it sets no evidence cooldown.
@@ -4064,6 +4545,13 @@ async function runOrchestration(goal, opts) {
             return false;
           return true;
         });
+        if (
+          classification.cause === 'QUOTA_REPEATED' ||
+          classification.cause === 'HOST_GATE_FAILED'
+        ) {
+          blockedReason = classification.cause;
+          break;
+        }
         if (!alternate) {
           blockedReason =
             'NO_ALTERNATE_FAILURE_DOMAIN: ' +
@@ -4073,8 +4561,14 @@ async function runOrchestration(goal, opts) {
             ')';
           break;
         }
-        launch.fallbackReason =
-          'FIRST_CANDIDATE_FAILED: ' + classification.scope + ' (' + classification.cause + ')';
+        if (!launch.fallbackReason) {
+          launch.fallbackReason =
+            'FIRST_CANDIDATE_FAILED: ' + classification.scope + ' (' + classification.cause + ')';
+        }
+        launch.scope = classification.scope;
+        launch.cause = classification.cause;
+        launch.outcome = 'failed';
+        log.launches.push(launch);
         continue;
       }
 
@@ -4095,8 +4589,8 @@ async function runOrchestration(goal, opts) {
       const status = classifySession(
         Object.assign({}, res, { progress: progressOf(o, res, now) }),
         {
-          now,
-          stallMs: o.stallMs,
+          now: Date.now(),
+          stallMs: o.stallMs || o.progressTimeoutMs,
         }
       );
       session = {
@@ -4148,6 +4642,45 @@ async function runOrchestration(goal, opts) {
       );
 
       if (status !== SessionStatus.COMPLETED_WITH_ARTIFACT) {
+        if (status === SessionStatus.STALLED) {
+          const failureCause = 'STALLED_NO_PROGRESS';
+          launch.fallbackReason = failureCause;
+          launch.scope = 'local';
+          launch.cause = failureCause;
+          launch.outcome = 'failed';
+          failedKeys.add(decision.chosen);
+          decisions.recordDecision(
+            {
+              stage: decisions.Stage.FAILED,
+              workItemId: item.id,
+              chosen: decision.chosen,
+              failureScope: 'local',
+              cause: failureCause,
+              detail:
+                failureCause === 'STALLED_NO_PROGRESS'
+                  ? 'worker exceeded progress timeout without progress'
+                  : 'session exceeded configured token budget',
+            },
+            logOpts
+          );
+          log.launches[log.launches.length - 1] = launch;
+          blockedReason = failureCause;
+          break;
+        }
+        if (budgetFailure) {
+          launch.fallbackReason = res.failureReason;
+          launch.scope = 'local';
+          launch.cause = res.failureReason;
+          launch.outcome = 'failed';
+          failedKeys.add(decision.chosen);
+          log.launches[log.launches.length - 1] = launch;
+          blockedReason = res.failureReason;
+          outcome(item, ItemStatus.BLOCKED, blockedReason, {
+            cause: res.failureReason,
+            reasonCode: res.failureReason,
+          });
+          break;
+        }
         // COMPLETED_EMPTY, STALLED and FAILED all stop here: the run does not
         // review and does not publish, and the checkpoint is written for a human.
         blockedReason = status;
@@ -4156,6 +4689,9 @@ async function runOrchestration(goal, opts) {
       break;
     }
 
+    if (statusOf.get(item.id) === ItemStatus.BLOCKED) {
+      continue;
+    }
     if (!session) {
       const isNoAlt =
         failedKeys.size > 0 ||
@@ -4168,13 +4704,19 @@ async function runOrchestration(goal, opts) {
         (verdictStop && verdictStop.reason) || blockedReason || 'NO_LIVE_SESSION',
         Object.assign(
           {
-            reasonCode: verdictStop
-              ? verdictStop.reasonCode
-              : isNoAlt
-                ? 'NO_ALTERNATE_FAILURE_DOMAIN'
-                : undefined,
+            reasonCode:
+              blockedReason === 'TOKEN_BUDGET_EXCEEDED'
+                ? 'TOKEN_BUDGET_EXCEEDED'
+                : launch.cause === 'STALLED_NO_PROGRESS'
+                  ? 'STALLED_NO_PROGRESS'
+                  : verdictStop
+                    ? verdictStop.reasonCode
+                    : isNoAlt
+                      ? 'NO_ALTERNATE_FAILURE_DOMAIN'
+                      : undefined,
             triedKeys: Array.from(triedKeys),
             tried: Array.from(triedKeys),
+            cause: launch.cause || undefined,
           },
           verdictStop ? { humanAction: verdictStop.humanAction } : undefined,
           launch.cause ? { cause: launch.cause } : undefined
@@ -4209,6 +4751,7 @@ async function runOrchestration(goal, opts) {
           {
             triedKeys: Array.from(triedKeys),
             tried: Array.from(triedKeys),
+            cause: launch.cause || undefined,
           },
           log.isolationStop
             ? {
@@ -4296,6 +4839,7 @@ async function runOrchestration(goal, opts) {
         {
           triedKeys: Array.from(triedKeys),
           tried: Array.from(triedKeys),
+          cause: launch.cause || undefined,
         },
         verdictStop
           ? { reasonCode: verdictStop.reasonCode, humanAction: verdictStop.humanAction }
@@ -7068,6 +7612,7 @@ function finish(log, statusOf, ctx) {
 }
 
 module.exports = {
+  runHostBrainGate,
   runOrchestration,
   runVerificationCommand,
   runFormatGateForTest,
@@ -7082,6 +7627,7 @@ module.exports = {
   materialiseExercise,
   captureFailBefore,
   buildTaskProfile,
+  rtkPolicyForItem,
   buildCandidates,
   selectCandidateForProfile,
   repairRound,

@@ -458,7 +458,7 @@
     "roles": ["author", "analyst"],
     "triggers": ["**/*"],
     "gate": false,
-    "command": null,
+    "command": "node tools/ai-brain/context-pack.js --spec <work-item.json> --output <contextPack>",
     "installed": "UNKNOWN",
     "evidenceRef": null
   }
