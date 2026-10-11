@@ -471,7 +471,14 @@ function generateCandidates(opts) {
 
 function isPoolEnabled(options) {
   const o = options || {};
-  if (o.discoverPool === false && (!Array.isArray(o.models) || o.models.length === 0)) {
+  const hasAliasedCatalogueModel = Array.isArray(o.catalogue)
+    ? o.catalogue.some((model) => typeof model === 'string' && /^(?:ag|antigravity)\//.test(model))
+    : false;
+  if (
+    o.discoverPool === false &&
+    (!Array.isArray(o.models) || o.models.length === 0) &&
+    !hasAliasedCatalogueModel
+  ) {
     return false;
   }
   if (o.enablePool === true || o.poolEnabled === true || o.pool === true) return true;
@@ -524,6 +531,20 @@ function poolAccountCandidates(opts) {
 
   // 1. Discover models (AC-R01)
   const poolModels = new Set();
+  const needsAliasValidation = (o.catalogue || []).some(
+    (model) => typeof model === 'string' && /^(?:ag|antigravity)\//.test(model)
+  );
+  const needsModelValidation =
+    o.discoverPool !== false && Array.isArray(o.models) && o.models.length > 0;
+  const discoveredPoolModels = new Set(
+    !needsAliasValidation && !needsModelValidation
+      ? []
+      : pool.discoverPoolModels(
+          o.discoverPool === false
+            ? { ...o, discoverPool: true, models: undefined, cacheFile: null }
+            : o
+        )
+  );
   if (o.discoverPool === false) {
     if (Array.isArray(o.models) && o.models.length > 0) {
       for (const m of o.models) {
@@ -548,10 +569,27 @@ function poolAccountCandidates(opts) {
     }
   } else {
     if (Array.isArray(o.models) && o.models.length > 0) {
-      for (const m of o.models)
-        if (m) poolModels.add(String(m).replace(/^(?:ag|antigravity)\//, ''));
+      for (const m of o.models) {
+        if (!m) continue;
+        const model = String(m);
+        if (/^(?:ag|antigravity)\/$/.test(model)) {
+          if (Array.isArray(o.candidateGenerationRejections)) {
+            o.candidateGenerationRejections.push({ modelId: '', reasonCode: 'EMPTY_MODEL_ID' });
+          }
+        } else if (/^(?:ag|antigravity)\//.test(model)) {
+          if (Array.isArray(o.candidateGenerationRejections)) {
+            o.candidateGenerationRejections.push({ modelId: model, reasonCode: 'ALIAS_MISMATCH' });
+          }
+        } else if (familyOf(model) && discoveredPoolModels.has(model)) poolModels.add(model);
+        else if (Array.isArray(o.candidateGenerationRejections)) {
+          o.candidateGenerationRejections.push({
+            modelId: model,
+            reasonCode: model && familyOf(model) ? 'AGY_MODEL_ID_UNMAPPED' : 'UNKNOWN_MODEL_FAMILY',
+          });
+        }
+      }
     } else {
-      for (const m of pool.discoverPoolModels(o)) {
+      for (const m of discoveredPoolModels) {
         if (m) poolModels.add(m);
       }
     }
@@ -576,8 +614,7 @@ function poolAccountCandidates(opts) {
         if (model && familyOf(model) && /^(?:ag|antigravity)\//.test(c)) {
           // Gateway aliases identify backend models; they are not agy CLI model ids.
           // Accept only when agy discovery independently advertises the same id.
-          const agyIds = new Set(pool.discoverPoolModels(o));
-          if (agyIds.has(model)) poolModels.add(model);
+          if (discoveredPoolModels.has(model)) poolModels.add(model);
           else if (Array.isArray(o.candidateGenerationRejections)) {
             o.candidateGenerationRejections.push({
               modelId: model,
@@ -627,7 +664,16 @@ function poolAccountCandidates(opts) {
       }
     }
 
-    for (const modelId of pool.modelIdsFromRuntime(o)) poolModels.add(modelId);
+    for (const modelId of pool.modelIdsFromRuntime(o)) {
+      const runtimeModelId = String(modelId);
+      if (familyOf(runtimeModelId)) poolModels.add(runtimeModelId);
+      else if (Array.isArray(o.candidateGenerationRejections)) {
+        o.candidateGenerationRejections.push({
+          modelId: runtimeModelId,
+          reasonCode: 'ALIAS_MISMATCH',
+        });
+      }
+    }
   }
 
   if (poolModels.size === 0) return [];

@@ -61,6 +61,82 @@ test('agy pool ignores 9router aliases unless the exact model is advertised by a
   assert.ok(rejections.some((item) => item.reasonCode === 'AGY_MODEL_ID_UNMAPPED'));
 });
 
+test('agy pool rejects unmapped prefixed catalogue aliases before model normalization', () => {
+  const run = (advertisedModels) => {
+    const rejections = [];
+    const candidates = generateCandidates({
+      registry: sources.loadSources(),
+      catalogue: ['ag/gemini-3.7-flash', 'antigravity/gemini-3.8-flash-high'],
+      accounts: [{ id: 'agy01', provider: 'agy-pool' }],
+      externalWorkers: 'agy-pool',
+      discoverPool: true,
+      fakeRunsDir: path.join(process.cwd(), '.upstream-tmp', 'missing-ai141-alias-pool'),
+      platform: 'win32',
+      spawnSync: (_bin, args) =>
+        args[0] === 'models'
+          ? { status: 0, stdout: advertisedModels.join('\n') + '\n', stderr: '' }
+          : { status: 0, stdout: '', stderr: '' },
+      cacheFile: null,
+      candidateGenerationRejections: rejections,
+    });
+    return { candidates, rejections };
+  };
+
+  const unmatched = run(['gemini-3.8-flash-high']);
+  assert.equal(
+    unmatched.candidates.some((candidate) => candidate.modelId === 'gemini-3.7-flash'),
+    false
+  );
+  assert.ok(
+    unmatched.rejections.some(
+      (item) => item.modelId === 'gemini-3.7-flash' && item.reasonCode === 'AGY_MODEL_ID_UNMAPPED'
+    )
+  );
+});
+
+test('agy pool accepts an advertised unprefixed model supplied with discoverPool enabled', () => {
+  const rejections = [];
+  const candidates = generateCandidates({
+    registry: sources.loadSources(),
+    catalogue: [],
+    accounts: [{ id: 'agy01', provider: 'agy-pool' }],
+    externalWorkers: 'agy-pool',
+    discoverPool: true,
+    models: ['gemini-3.7-flash'],
+    spawnSync: (_bin, args) =>
+      args[0] === 'models'
+        ? { status: 0, stdout: 'gemini-3.7-flash\n', stderr: '' }
+        : { status: 0, stdout: '', stderr: '' },
+    cacheFile: null,
+    candidateGenerationRejections: rejections,
+  });
+
+  assert.ok(candidates.some((candidate) => candidate.modelId === 'gemini-3.7-flash'));
+  assert.deepEqual(rejections, []);
+});
+
+test('agy pool runtime models admit only IDs valid for the agy harness', () => {
+  const rejections = [];
+  const candidates = generateCandidates({
+    registry: sources.loadSources(),
+    catalogue: [],
+    accounts: [{ id: 'agy01', provider: 'agy-pool' }],
+    externalWorkers: 'agy-pool',
+    discoverPool: false,
+    models: ['gemini-3.7-flash'],
+    fakeRunsDir: path.join(process.cwd(), '.upstream-tmp', 'missing-ai141-runtime-alias-pool'),
+    platform: 'win32',
+    candidateGenerationRejections: rejections,
+  });
+
+  assert.ok(candidates.some((candidate) => candidate.modelId === 'gemini-3.7-flash'));
+  assert.equal(
+    candidates.some((candidate) => candidate.modelId === 'ag/not-a-known-family'),
+    false
+  );
+  assert.deepEqual(rejections, []);
+});
+
 test('launch HTTP failures classify to parkable account causes and scopes', () => {
   const cases = [
     [402, Cause.UPSTREAM_CREDIT_EXHAUSTED, Scope.UPSTREAM],
