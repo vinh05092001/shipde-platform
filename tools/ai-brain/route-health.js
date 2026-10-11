@@ -71,12 +71,13 @@ function recordResult(store, modelId, routeId, result, now) {
       lastCheckedAt,
       nextCheckAt: null,
     };
-    store.events.push({
-      type: 'route_restored',
-      modelId: normalizeModelId(modelId),
-      routeId,
-      at: lastCheckedAt,
-    });
+    if (previous.status && previous.status !== 'AVAILABLE')
+      store.events.push({
+        type: 'route_restored',
+        modelId: normalizeModelId(modelId),
+        routeId,
+        at: lastCheckedAt,
+      });
     return { key, eligible: true };
   }
   const status = Number(result && result.status) || 0;
@@ -144,28 +145,49 @@ function getPathRecord(store, modelId, routeId) {
   const related = Object.entries(store.paths).filter(([key]) => key.startsWith(prefix));
   if (routeId && typeof routeId === 'object' && routeId.accountId)
     return related.find(([key]) => key === prefix + routeId.accountId)?.[1];
-  return related.length === 1 ? related[0][1] : undefined;
+  return undefined;
 }
 
 function isEligible(store, modelId, routeId, now) {
-  const exact = store.paths[healthKey(modelId, routeId)];
-  const record =
-    exact ||
-    (routeId && typeof routeId === 'object' && routeId.accountId
-      ? store.paths[healthKey(modelId, routeId.id)]
-      : undefined);
+  const record = getPathRecord(store, modelId, routeId);
   if (record) return record.status === 'AVAILABLE';
-  return true;
+  if (!routeId || typeof routeId !== 'object' || !routeId.accountId) return false;
+  return Object.values(store.paths || {}).some(
+    (row) =>
+      row &&
+      normalizeModelId(row.modelId) === normalizeModelId(modelId) &&
+      row.routeId &&
+      (row.routeId.accountId === routeId.accountId || row.routeId.id === routeId.id) &&
+      row.status === 'AVAILABLE'
+  );
+}
+
+function isRouteHealthy(store, modelId, routeId) {
+  const exact = store.paths[healthKey(modelId, routeId)];
+  if (exact) return exact.status === 'AVAILABLE';
+  const id = routeId && typeof routeId === 'object' ? routeId.id : routeId;
+  const rows = Object.entries(store.paths || {}).filter(([key]) =>
+    key.startsWith(normalizeModelId(modelId) + '|' + id + '@')
+  );
+  return Boolean(rows.length === 1 && rows[0][1].status === 'AVAILABLE');
+}
+
+function hasProbeEvidence(store, modelId, routeId, options) {
+  return Boolean(
+    getPathRecord(store, modelId, routeId) ||
+    (options && options.probeEvidence && options.probeEvidence(modelId, routeId.id || routeId))
+  );
+}
+
+function isSelectable(store, modelId, routeId, now) {
+  const record = getPathRecord(store, modelId, routeId);
+  return !record || record.status === 'AVAILABLE';
 }
 
 async function routeFallback(modelId, failedPath, paths, probe, store, options) {
   const o = options || {};
   const now = Number(o.now) || Date.now();
-  const failedRecord =
-    store.paths[healthKey(modelId, failedPath)] ||
-    Object.entries(store.paths).find(([key]) =>
-      key.startsWith(normalizeModelId(modelId) + '|' + failedPath + '@')
-    )?.[1];
+  const failedRecord = getPathRecord(store, modelId, failedPath);
   const failureReason =
     o.failureReason || (failedRecord && failedRecord.status) || 'UNAVAILABLE_NOW';
   const retryFailedPath =
@@ -189,12 +211,10 @@ async function routeFallback(modelId, failedPath, paths, probe, store, options) 
       failures.push({ path: route.id, reason: failedRecord.status });
       continue;
     }
-    if (!isEligible(store, modelId, accountPath, now)) {
+    if (!isSelectable(store, modelId, accountPath, now)) {
       failures.push({
         path: route.id,
-        reason:
-          store.paths[healthKey(modelId, accountPath)]?.status ||
-          store.paths[healthKey(modelId, route.id)]?.status,
+        reason: getPathRecord(store, modelId, accountPath)?.status,
       });
       continue;
     }
@@ -203,7 +223,7 @@ async function routeFallback(modelId, failedPath, paths, probe, store, options) 
       continue;
     }
     let result;
-    const attempts = route.id === failedPath && !route.accountId ? 1 : 2;
+    const attempts = 2;
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       try {
         result = await probe(modelId, route, {
@@ -218,12 +238,7 @@ async function routeFallback(modelId, failedPath, paths, probe, store, options) 
         result && result.status,
         result && (result.message || result.error)
       );
-      if (
-        attempt !== 0 ||
-        retryReason !== 'UNAVAILABLE_NOW' ||
-        (route.id === failedPath && !route.accountId)
-      )
-        break;
+      if (attempt !== 0 || retryReason !== 'UNAVAILABLE_NOW') break;
       if (o.sleep) await o.sleep(o.retryBackoffMs ?? 1000);
       else await new Promise((resolve) => setTimeout(resolve, o.retryBackoffMs ?? 1000));
     }
@@ -247,6 +262,11 @@ async function routeFallback(modelId, failedPath, paths, probe, store, options) 
     }
     failures.push({ path: route.id, reason: recorded.reason });
   }
+  if (
+    failedRecord &&
+    (paths || []).some((route) => healthKey(modelId, route) === healthKey(modelId, failedPath))
+  )
+    failures.unshift({ path: failedPath, reason: failedRecord.status });
   store.events.push({
     type: 'model_unavailable',
     modelId: normalizeModelId(modelId),
@@ -446,21 +466,21 @@ async function refreshCatalogueRoutes(catalogue, registry, accounts, store, prob
   const checked = [];
   for (const row of catalogue || []) {
     const modelId = row && (row.modelId || row.model);
-    const routeId = row && row.gateway;
+    const routeId = row && { id: row.gateway, accountId: row.accountId };
     if (!modelId || !routeId) continue;
     const key = healthKey(modelId, routeId);
     if (seen.has(key) || (o.skipKeys && o.skipKeys.has(key))) continue;
-    const record = store.paths[key];
+    const record = store.paths[key] || getPathRecord(store, modelId, routeId);
     if (record && record.status === 'AVAILABLE') continue;
     if (record && !isDue(store, modelId, routeId, now)) continue;
     if (record && record.status !== 'AVAILABLE' && !isDue(store, modelId, routeId, now)) continue;
-    if (o.allowUnprobed !== true && !(o.probeEvidence && o.probeEvidence(modelId, routeId)))
+    if (o.allowUnprobed !== true && !(o.probeEvidence && o.probeEvidence(modelId, routeId.id)))
       continue;
     seen.add(key);
     if (checked.length >= cap) break;
     let result;
     try {
-      result = await probe(modelId, routeId, { timeoutMs });
+      result = await probe(modelId, routeId, { timeoutMs, registry });
     } catch (error) {
       result = { ok: false, status: 0, error: String(error) };
     }
@@ -482,7 +502,10 @@ async function recheckDue(store, probe, options) {
   for (const row of due) {
     let result;
     try {
-      result = await probe(row.modelId, row.routeId, { timeoutMs: o.timeoutMs || 10000 });
+      result = await probe(row.modelId, row.routeId, {
+        timeoutMs: o.timeoutMs || 10000,
+        registry: o.registry,
+      });
     } catch (error) {
       result = { ok: false, error: String(error) };
     }
@@ -499,7 +522,9 @@ async function recheckBeforeSelection(store, probe, options) {
   const checkedDue = new Set(due.checkedKeys || []);
   const freshCatalogue = (o.catalogue || []).filter((row) => {
     const modelId = row && (row.modelId || row.model);
-    return !modelId || !checkedDue.has(healthKey(modelId, row.gateway));
+    return (
+      !modelId || !checkedDue.has(healthKey(modelId, { id: row.gateway, accountId: row.accountId }))
+    );
   });
   const refreshed = await refreshCatalogueRoutes(
     freshCatalogue,
@@ -554,35 +579,45 @@ async function refreshFailedFallbacks(store, probe, options, now) {
   );
   for (const [normalized, rows] of byModel) {
     const failed = rows.find((row) => {
-      const record = row.gateway && getPathRecord(store, normalized, row.gateway);
+      const record =
+        row.gateway &&
+        getPathRecord(store, normalized, { id: row.gateway, accountId: row.accountId });
       return record && record.status !== 'AVAILABLE' && !dueAt(record, now);
     });
     if (!failed || checked >= cap) continue;
     const discovered = discoverModelPaths(normalized, o.registry, o.accounts || [], catalogue);
-    const paths = new Map(discovered.map((route) => [route.id, route]));
+    const paths = new Map(discovered.map((route) => [healthKey(normalized, route), route]));
     for (const row of rows) {
-      if (row.gateway && !paths.has(row.gateway)) {
-        paths.set(row.gateway, {
+      const rowPath = { id: row.gateway, accountId: row.accountId };
+      const rowKey = healthKey(normalized, rowPath);
+      if (row.gateway && !paths.has(rowKey)) {
+        paths.set(rowKey, {
           id: row.gateway,
+          accountId: row.accountId,
           evidence: Number(row.evidence || 0),
           geoBlocked: row.geoBlocked === true,
         });
       }
     }
     const probePaths = [...paths.values()].filter(
-      (route) => route.id !== failed.gateway && isEligible(store, normalized, route, now)
+      (route) => route.id !== failed.gateway && isSelectable(store, normalized, route, now)
     );
-    if (checked + probePaths.length > cap) continue;
-    checked += probePaths.length;
+    const boundedPaths = probePaths.slice(0, Math.max(0, cap - checked));
+    if (!boundedPaths.length) break;
+    checked += boundedPaths.length;
     await routeFallback(
       normalized,
       failed.gateway,
-      [...paths.values()],
-      (modelId, route) => probe(modelId, route.id, { timeoutMs: o.timeoutMs || 10000 }),
+      boundedPaths,
+      (modelId, route) =>
+        probe(modelId, route.id, { timeoutMs: o.timeoutMs || 10000, registry: o.registry }),
       store,
       {
         now,
-        failureReason: getPathRecord(store, normalized, failed.gateway).status,
+        failureReason: getPathRecord(store, normalized, {
+          id: failed.gateway,
+          accountId: failed.accountId,
+        }).status,
         sleep: o.sleep,
         retryBackoffMs: o.retryBackoffMs,
       }
@@ -601,7 +636,8 @@ async function refreshDueFile(file, probe, options) {
 async function probeGatewayModel(modelId, routeId, options) {
   const o = options || {};
   const registry = o.registry || sourcesApi.loadSources();
-  const source = (registry.sources || []).find((row) => row.id === routeId);
+  const routeKey = routeId && typeof routeId === 'object' ? routeId : { id: routeId };
+  const source = (registry.sources || []).find((row) => row.id === routeKey.id);
   if (!source || !source.endpoint)
     return { ok: false, status: 0, error: 'route has no probe endpoint' };
   const envName = source.credential && source.credential.env;
@@ -646,7 +682,7 @@ async function runDueCli(options) {
   const result = await recheckDue(
     store,
     o.probe || ((modelId, routeId) => probeGatewayModel(modelId, routeId)),
-    { cap: o.cap || 20 }
+    { cap: o.cap || 20, registry: o.registry }
   );
   saveStore(file, store);
   (o.log || console.log)(JSON.stringify(result));
@@ -662,6 +698,9 @@ module.exports = {
   healthKey,
   getPathRecord,
   isEligible,
+  isRouteHealthy,
+  isSelectable,
+  hasProbeEvidence,
   isDue,
   routeFallback,
   routeFallbackDiscovered,

@@ -66,7 +66,8 @@ test('discovery preserves separate account paths on one gateway', () => {
   const { store } = { store: { version: 1, paths: {}, events: [] } };
   routes.recordResult(store, 'model', paths[0], { ok: false, status: 429 }, 1_800_000_000_000);
   routes.recordResult(store, 'model', paths[1], { ok: true }, 1_800_000_000_000);
-  assert.equal(routes.isEligible(store, 'vendor/model', paths[1]), true);
+  assert.equal(routes.isEligible(store, 'vendor/model', paths[1]), false);
+  assert.equal(routes.isEligible(store, 'vendor/model', paths[0]), false);
 });
 
 test('account-scoped parks stay ineligible when another account on the gateway is healthy', () => {
@@ -83,6 +84,78 @@ test('account-scoped parks stay ineligible when another account on the gateway i
   );
   assert.equal(routes.isEligible(store, 'model', { id: 'gw', accountId: 'account-b' }), true);
   assert.equal(routes.isEligible(store, 'model', { id: 'gw', accountId: 'account-a' }), false);
+});
+
+test('unknown routes cannot dispatch and exact account parks honor reset time', () => {
+  const store = { version: 1, paths: {}, events: [] };
+  const route = { id: 'gw', accountId: 'acct-a' };
+  assert.equal(routes.isEligible(store, 'model', route), false);
+  routes.recordResult(
+    store,
+    'model',
+    route,
+    { ok: false, status: 429, resetAt: new Date(2000).toISOString() },
+    1000
+  );
+  assert.equal(routes.isEligible(store, 'model', route, 1999), false);
+  assert.equal(routes.isDue(store, 'model', route, 2000), true);
+  assert.equal(routes.isEligible(store, 'model', route, 2000), false);
+});
+
+test('string gateway lookup cannot inherit a healthy account while another account is parked', () => {
+  const store = { version: 1, paths: {}, events: [] };
+  routes.recordResult(
+    store,
+    'model',
+    { id: 'gw', accountId: 'acct-a' },
+    { ok: false, status: 451 },
+    1000
+  );
+  routes.recordResult(store, 'model', { id: 'gw', accountId: 'acct-b' }, { ok: true }, 1000);
+  assert.equal(routes.isEligible(store, 'model', 'gw', 1000), false);
+  assert.equal(routes.isEligible(store, 'model', { id: 'gw', accountId: 'acct-a' }, 1000), false);
+  assert.equal(routes.isEligible(store, 'model', { id: 'gw', accountId: 'acct-b' }, 1000), true);
+});
+
+test('account scoped due probe resolves gateway source and restores the same route key', async () => {
+  const store = { version: 1, paths: {}, events: [] };
+  const route = { id: 'gw', accountId: 'acct-a' };
+  const now = 1_800_000_000_000;
+  routes.recordResult(store, 'model', route, { ok: false, status: 402 }, now - 1000);
+  store.paths[routes.healthKey('model', route)].nextCheckAt = new Date(now).toISOString();
+  const seen = [];
+  await routes.recheckDue(
+    store,
+    async (_model, routeId, opts) => {
+      seen.push([routeId, opts.registry]);
+      return { ok: true };
+    },
+    { now, registry: { sources: [{ id: 'gw' }] } }
+  );
+  assert.deepEqual(seen, [[route, { sources: [{ id: 'gw' }] }]]);
+  assert.equal(routes.isEligible(store, 'model', route, now), true);
+  assert.ok(
+    store.events.some(
+      (event) => event.type === 'route_restored' && event.routeId.accountId === 'acct-a'
+    )
+  );
+});
+
+test('probeGatewayModel accepts account scoped route keys', async () => {
+  let called = false;
+  const result = await routes.probeGatewayModel(
+    'gw/model',
+    { id: 'gw', accountId: 'acct-a' },
+    {
+      registry: { sources: [{ id: 'gw', endpoint: 'http://gateway' }] },
+      fetch: async (url) => {
+        called = url === 'http://gateway/chat/completions';
+        return { ok: true, status: 200, text: async () => 'ok', headers: { get: () => null } };
+      },
+    }
+  );
+  assert.equal(result.ok, true);
+  assert.equal(called, true);
 });
 
 test('normal next loop refreshes the default route health store before selection', async (t) => {

@@ -917,7 +917,16 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
           const gateway = candidate && candidate.gateway;
           return Boolean(
             modelId &&
-            (!gateway || routeHealthApi.isEligible(routeHealth, modelId, gateway, opts.now))
+            (!gateway ||
+              routeHealthApi.isEligible(
+                routeHealth,
+                modelId,
+                { id: gateway, accountId: candidate.accountId },
+                opts.now
+              ) ||
+              Boolean(opts.probeEvidence && opts.probeEvidence(modelId, gateway)) ||
+              (!candidate.accountId &&
+                !routeHealthApi.getPathRecord(routeHealth, modelId, gateway)))
           );
         }
       );
@@ -967,7 +976,14 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
           const gateway = candidate && candidate.gateway;
           return Boolean(
             modelId &&
-            (!gateway || routeHealthApi.isEligible(routeHealth, modelId, gateway, opts.now))
+            (!gateway ||
+              routeHealthApi.isEligible(
+                routeHealth,
+                modelId,
+                { id: gateway, accountId: candidate.accountId },
+                opts.now
+              ) ||
+              Boolean(opts.probeEvidence && opts.probeEvidence(modelId, gateway)))
           );
         }),
       ...candidatesApi.gatewayAccountCandidates({
@@ -1064,7 +1080,12 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
       const modelId = candidate && candidate.modelId;
       const gateway = candidate && candidate.gateway;
       if (!modelId || !gateway) return Boolean(modelId);
-      return routeHealthApi.isEligible(routeHealth, modelId, gateway, opts.now);
+      return routeHealthApi.isEligible(
+        routeHealth,
+        modelId,
+        { id: gateway, accountId: candidate.accountId },
+        opts.now
+      );
     });
   };
   if (!refresh) return buildCandidates();
@@ -1117,13 +1138,13 @@ async function resolveFallbackRoutes(store, catalogue, probe, routeHealthApi, op
       if (
         !health ||
         health.status === 'AVAILABLE' ||
-        routeHealthApi.isEligible(store, normalized, failed.id, now)
+        routeHealthApi.isEligible(store, normalized, failed, now)
       )
         continue;
       if (preResolved) {
         const successful = paths.find(
           (route) =>
-            route.id !== failed.id && routeHealthApi.isEligible(store, normalized, route, now)
+            route.id !== failed.id && routeHealthApi.isSelectable(store, normalized, route, now)
         );
         if (successful)
           resolvedRoutes.push({
@@ -1148,7 +1169,7 @@ async function resolveFallbackRoutes(store, catalogue, probe, routeHealthApi, op
         catalogue,
         (model, route) => probe(model, route.id, { timeoutMs: options.probeTimeoutMs }),
         store,
-        { now, failureReason: health.status }
+        { now, failureReason: health.status, registry }
       );
       if (fallback.ok)
         resolvedRoutes.push({
