@@ -1451,7 +1451,7 @@ function writeUsageReportFromHarnessResult(job, res) {
   if (typeof job.run === 'function' && job.harness !== 'opencode-direct') return null;
 
   let sessionId = null;
-  let tokens = { input: 0, output: 0, total: 0 };
+  let tokens = { input: 0, cacheRead: 0, output: 0, total: 0 };
 
   const stdout = String((res && res.stdout) || '');
   if (stdout) {
@@ -1466,14 +1466,19 @@ function writeUsageReportFromHarnessResult(job, res) {
           if (parsed.sessionID || parsed.sessionId || parsed.session_id) {
             sessionId = parsed.sessionID || parsed.sessionId || parsed.session_id;
           }
-          if (parsed.tokens) {
-            tokens.input = Number(parsed.tokens.input) || tokens.input;
-            tokens.output = Number(parsed.tokens.output) || tokens.output;
-            tokens.total = Number(parsed.tokens.total) || tokens.total;
-          } else if (parsed.part && parsed.part.tokens) {
-            tokens.input = Number(parsed.part.tokens.input) || tokens.input;
-            tokens.output = Number(parsed.part.tokens.output) || tokens.output;
-            tokens.total = Number(parsed.part.tokens.total) || tokens.total;
+          const t = parsed.tokens || (parsed.part && parsed.part.tokens);
+          if (t) {
+            tokens.input = Number(t.input) || tokens.input;
+            tokens.output = Number(t.output) || tokens.output;
+            tokens.total = Number(t.total) || tokens.total;
+            const cr =
+              (t.cache && (t.cache.read ?? t.cache.read_tokens)) ??
+              t.cacheRead ??
+              t.cache_read ??
+              t.cache_read_tokens;
+            if (cr != null) {
+              tokens.cacheRead = Number(cr) || 0;
+            }
           }
         } catch (e) {
           // ignore non-json line
@@ -1491,14 +1496,18 @@ function writeUsageReportFromHarnessResult(job, res) {
     sessionId = null;
   }
 
+  const accountedTotal = tokens.input + (Number(tokens.cacheRead) || 0) + tokens.output;
   const report = {
     session_id: sessionId,
     model: job.model || (job.candidate && job.candidate.model) || null,
     provider: job.upstream || job.provider || (job.candidate && job.candidate.provider) || null,
     usage: {
       input: tokens.input,
+      cacheRead: tokens.cacheRead || 0,
+      cache_read: tokens.cacheRead || 0,
+      cache_read_tokens: tokens.cacheRead || 0,
       output: tokens.output,
-      total: tokens.total || tokens.input + tokens.output,
+      total: tokens.total ? Math.max(tokens.total, accountedTotal) : accountedTotal,
     },
   };
 

@@ -23,7 +23,12 @@ const {
   enforceTokenBudget,
   readLaunchResult,
 } = require('../isolation-launcher');
-const { runHostBrainGate, runOrchestration, rtkPolicyForItem } = require('../orchestrate');
+const {
+  runHostBrainGate,
+  runOrchestration,
+  rtkPolicyForItem,
+  writeUsageReportFromHarnessResult,
+} = require('../orchestrate');
 const { DEFAULT_TOKEN_BUDGETS } = require('../intake');
 const routing = require('../routing');
 
@@ -1707,8 +1712,31 @@ test('Part H regressions: launcher progress watchdog observes worker output inde
   assert.match(script, /Tee-Object -FilePath .*worker-output-/);
   assert.match(script, /Write-LiveUsage/);
   assert.match(script, /Read-UsageTotal/);
+  assert.match(script, /tokens\.cache\.read/);
+  assert.match(script, /lastTotalTokens/);
+  assert.ok(
+    !script.includes('$usageItem.LastWriteTimeUtc'),
+    'stall check must not key off usage file modification time'
+  );
   const source = fs.readFileSync(path.join(__dirname, '..', 'isolation-launcher.js'), 'utf8');
   assert.match(source, /writeUsageReportFromHarnessResult\(job, launchResult\)/);
+});
+
+test('Part H: writeUsageReportFromHarnessResult preserves nested tokens.cache.read', () => {
+  const root = fixtureRoot();
+  const usageFile = path.join(root, 'usage.json');
+  const job = { usageFile, harness: 'opencode-direct', model: 'm', upstream: 'u' };
+  const res = {
+    exitCode: 0,
+    stdout: '{"sessionID":"s1","tokens":{"input":10,"output":5,"cache":{"read":100}}}',
+  };
+  writeUsageReportFromHarnessResult(job, res);
+  assert.ok(fs.existsSync(usageFile));
+  const report = JSON.parse(fs.readFileSync(usageFile, 'utf8'));
+  assert.equal(report.usage.input, 10);
+  assert.equal(report.usage.cacheRead, 100);
+  assert.equal(report.usage.output, 5);
+  assert.equal(report.usage.total, 115);
 });
 
 test('Part H: readLaunchResult propagates failureReason and enforceTokenBudget preserves it', () => {

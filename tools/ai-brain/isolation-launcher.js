@@ -430,6 +430,7 @@ $usageFile = '${String(options.usageFile || '').replace(/'/g, "''")}'
 $usageLogPath = '${String(usageLogPath).replace(/'/g, "''")}'
 $usageModel = '${String(options.model || '').replace(/'/g, "''")}'
 $usageProvider = '${String(options.upstream || '').replace(/'/g, "''")}'
+$script:lastLiveUsageJson = ""
 function Write-LiveUsage {
     if ([string]::IsNullOrWhiteSpace($usageFile)) { return }
     try {
@@ -445,15 +446,38 @@ function Write-LiveUsage {
                 $inputTokens = [double]$tokens.input
                 $outputTokens = [double]$tokens.output
                 $totalTokens = [double]$tokens.total
+                $cacheReadTokens = 0
+                if ($null -ne $tokens.cache -and $null -ne $tokens.cache.read) {
+                    $cacheReadTokens = [double]$tokens.cache.read
+                } elseif ($null -ne $tokens.cache -and $null -ne $tokens.cache.read_tokens) {
+                    $cacheReadTokens = [double]$tokens.cache.read_tokens
+                } elseif ($null -ne $tokens.cacheRead) {
+                    $cacheReadTokens = [double]$tokens.cacheRead
+                } elseif ($null -ne $tokens.cache_read) {
+                    $cacheReadTokens = [double]$tokens.cache_read
+                } elseif ($null -ne $tokens.cache_read_tokens) {
+                    $cacheReadTokens = [double]$tokens.cache_read_tokens
+                }
+                $accounted = $inputTokens + $cacheReadTokens + $outputTokens
+                $effectiveTotal = [math]::Max($totalTokens, $accounted)
                 $report = @{
                     session_id = $(if ($event.sessionID) { $event.sessionID } elseif ($event.sessionId) { $event.sessionId } else { $null })
                     model = $usageModel
                     provider = $usageProvider
-                    usage = @{ input = $inputTokens; output = $outputTokens; total = [math]::Max($totalTokens, $inputTokens + $outputTokens) }
+                    usage = @{
+                        input = $inputTokens
+                        cacheRead = $cacheReadTokens
+                        cache_read = $cacheReadTokens
+                        cache_read_tokens = $cacheReadTokens
+                        output = $outputTokens
+                        total = $effectiveTotal
+                    }
                 } | ConvertTo-Json -Depth 5 -Compress
             } catch {}
         }
         if ($null -eq $report) { return }
+        if ($script:lastLiveUsageJson -eq $report) { return }
+        $script:lastLiveUsageJson = $report
         $temporary = $usageFile + '.live-' + $PID
         [System.IO.File]::WriteAllText($temporary, $report, [System.Text.UTF8Encoding]::new($false))
         Move-Item -LiteralPath $temporary -Destination $usageFile -Force
@@ -467,7 +491,7 @@ $usageFile = $script:usageFile
 $maxTokens = 0
 $progressTimeoutMs = ${Number(options.progressTimeoutMs) > 0 ? Number(options.progressTimeoutMs) : 0}
 $lastProgressAt = [System.Diagnostics.Stopwatch]::GetTimestamp()
-$lastUsageSignature = ""
+$lastTotalTokens = $null
 $lastOutputSignature = ""
 try {
     $budgetConfig = $tokenBudgetJson | ConvertFrom-Json
@@ -517,7 +541,7 @@ function Get-DescendantProcessIds {
 }
 
 function Read-UsageTotal {
-    if ($maxTokens -le 0 -or [string]::IsNullOrWhiteSpace($usageFile) -or -not (Test-Path -LiteralPath $usageFile)) { return $null }
+    if ([string]::IsNullOrWhiteSpace($usageFile) -or -not (Test-Path -LiteralPath $usageFile)) { return $null }
     try {
         $report = Get-Content -LiteralPath $usageFile -Raw | ConvertFrom-Json
         $usage = $report.usage
@@ -553,7 +577,7 @@ $waitSlice = 250
 while ($true) {
     Write-LiveUsage
     $totalTokens = Read-UsageTotal
-    if ($null -ne $totalTokens -and $totalTokens -gt $maxTokens) {
+    if ($null -ne $totalTokens -and $maxTokens -gt 0 -and $totalTokens -gt $maxTokens) {
         $budgetExceeded = $true
         Stop-WorkerTree
         break
@@ -564,14 +588,22 @@ while ($true) {
             $outputFiles = @(Get-ChildItem -LiteralPath $workerRoot -File -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -notmatch '[\\/](\.git|node_modules|\.shipde)[\\/]' } | Sort-Object FullName)
             if ($outputFiles.Count -gt 0) { $outputSignature = ($outputFiles | ForEach-Object { $_.FullName + ':' + $_.Length + ':' + $_.LastWriteTimeUtc.Ticks }) -join '|' }
         } catch {}
-        if ($outputSignature -ne $lastOutputSignature) { $lastOutputSignature = $outputSignature; $lastProgressAt = [System.Diagnostics.Stopwatch]::GetTimestamp() }
-        $usageSignature = ""
         try {
-            $usageItem = Get-Item -LiteralPath $usageFile -ErrorAction Stop
-            $usageSignature = [string]$usageItem.Length + ':' + [string]$usageItem.LastWriteTimeUtc.Ticks
+            if (Test-Path -LiteralPath $usageLogPath) {
+                $logItem = Get-Item -LiteralPath $usageLogPath -ErrorAction Stop
+                $outputSignature += '|log:' + [string]$logItem.Length
+            }
         } catch {}
-        if ($usageSignature -ne $lastUsageSignature) {
-            $lastUsageSignature = $usageSignature
+        $madeProgress = $false
+        if ($outputSignature -ne $lastOutputSignature) {
+            $lastOutputSignature = $outputSignature
+            $madeProgress = $true
+        }
+        if ($null -ne $totalTokens -and $totalTokens -ne $lastTotalTokens) {
+            $lastTotalTokens = $totalTokens
+            $madeProgress = $true
+        }
+        if ($madeProgress) {
             $lastProgressAt = [System.Diagnostics.Stopwatch]::GetTimestamp()
         } elseif (([System.Diagnostics.Stopwatch]::GetTimestamp() - $lastProgressAt) * 1000 / [System.Diagnostics.Stopwatch]::Frequency -ge $progressTimeoutMs) {
             $stalled = $true
@@ -585,7 +617,7 @@ while ($true) {
     [void]$process.WaitForExit([math]::Min($waitSlice, $remaining))
 }
 $quietPolls = 0
-if (-not $timedOut) {
+if (-not $timedOut -and -not $stalled -and -not $budgetExceeded) {
     while ($true) {
         Write-LiveUsage
         $remaining = $timeoutMs - $stopwatch.ElapsedMilliseconds
@@ -608,7 +640,7 @@ if (-not $timedOut) {
             if ($leftovers.Count -eq 0) { $quietPolls = $quietPolls + 1 } else { $quietPolls = 0 }
         }
         $totalTokens = Read-UsageTotal
-        if ($null -ne $totalTokens -and $totalTokens -gt $maxTokens) {
+        if ($null -ne $totalTokens -and $maxTokens -gt 0 -and $totalTokens -gt $maxTokens) {
             $budgetExceeded = $true
             Stop-WorkerTree
             break
