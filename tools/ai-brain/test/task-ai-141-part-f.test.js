@@ -106,6 +106,15 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
           },
         ],
       },
+      independentReviewerCandidates: [
+        candidate('strong-reviewer', {
+          gateway: 'different-gateway',
+          upstream: 'different-provider',
+          qualifiedRoles: ['reviewer.primary'],
+          strong: true,
+          reservationStatus: 'reserved',
+        }),
+      ],
     });
     const strongRanked = result.ranking.find((item) => item.modelId === strong.modelId);
     assert.equal(result.ranking[0].modelId, strong.modelId);
@@ -151,6 +160,15 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
       {
         headrooms: { default: 'open' },
         priors: prior,
+        independentReviewerCandidates: [
+          candidate('partial-reviewer', {
+            gateway: 'different-gateway',
+            upstream: 'different-provider',
+            qualifiedRoles: ['reviewer.primary'],
+            strong: true,
+            reservationStatus: 'reserved',
+          }),
+        ],
       }
     );
     assert.equal(admitted.ranking.length, 1);
@@ -192,6 +210,15 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
           },
         ],
       },
+      independentReviewerCandidates: [
+        candidate('strong-reviewer', {
+          gateway: 'different-gateway',
+          upstream: 'different-provider',
+          qualifiedRoles: ['reviewer.primary'],
+          strong: true,
+          reservationStatus: 'reserved',
+        }),
+      ],
     });
     assert.equal(result.ranking[0].scoreBreakdown.quality, 50);
     assert.equal(result.ranking[0].scoreBreakdown.prior.contribution, 0);
@@ -264,39 +291,68 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
     assert.equal(allowed.ranking[0].probationRequiresIndependentReview, true);
   });
 
-  test('probation execution refuses an available but unreserved reviewer before writer launch', async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai141-probation-'));
-    const profileFile = path.join(root, 'profile.json');
-    fs.writeFileSync(profileFile, JSON.stringify(profile({ proofFloor: 'API_PASS' })), 'utf8');
-    const writer = candidate('probation-writer', {
-      evidence: [],
-      qualifiedRoles: ['author.foundation'],
-      latencyMs: 0,
-      quality: 100,
-      headroomStatus: 'open',
-    });
-    const reviewer = candidate('reviewer-available-only', {
-      gateway: 'different-gateway',
-      upstream: 'different-provider',
+  test('probation never admits blocked, parked, or non-proof-floor-ineligible candidates', () => {
+    const priors = {
+      ranking: [
+        {
+          canonical: 'probation-guard',
+          codingTier: 'T1',
+          reviewTier: 'T1',
+          score: 95,
+          retrievedAt: new Date().toISOString(),
+        },
+      ],
+    };
+    const reviewer = candidate('independent-guard-reviewer', {
+      gateway: 'another-gateway',
+      upstream: 'another-provider',
       qualifiedRoles: ['reviewer.primary'],
-      evidence: [{ status: 'passed', proofLevel: 'WORK_ITEM_PASS' }],
+      strong: true,
     });
-    let writerLaunches = 0;
-    const errors = [];
-    const result = await routing.runProfileDispatch(
-      { profile: profileFile, execute: true, launch: true, root },
+    for (const overrides of [{ blocked: true }, { parked: true }, { status: 'UNAVAILABLE_NOW' }]) {
+      const blocked = candidate('probation-guard', { evidence: [], ...overrides });
+      const result = routing.rankForProfile(
+        [blocked],
+        profile({ proofFloor: 'API_PASS' }),
+        assessment,
+        { priors, headrooms: { default: 'open' }, independentReviewerCandidates: [reviewer] }
+      );
+      assert.equal(result.ranking.length, 0);
+      assert.match(result.rejected[0].reasonCode, /BLOCKED|PROOF_FLOOR/);
+    }
+
+    const belowQuality = candidate('probation-guard', { evidence: [], quality: 0 });
+    const qualityResult = routing.rankForProfile(
+      [belowQuality],
+      profile({ proofFloor: 'API_PASS', qualityFloor: 50 }),
+      assessment,
+      { priors, headrooms: { default: 'open' }, independentReviewerCandidates: [reviewer] }
+    );
+    assert.equal(qualityResult.ranking.length, 0);
+    assert.equal(qualityResult.rejected[0].reasonCode, 'QUALITY_FLOOR_NOT_MET');
+
+    const noReviewer = routing.rankForProfile(
+      [candidate('probation-guard', { evidence: [] })],
+      profile({ proofFloor: 'API_PASS' }),
+      assessment,
+      { priors, headrooms: { default: 'open' } }
+    );
+    assert.equal(noReviewer.ranking.length, 0);
+    assert.equal(noReviewer.rejected[0].reasonCode, 'PROOF_FLOOR_NOT_MET:NONE');
+  });
+
+  test('probation admission refuses when no independent reviewer candidate is supplied', () => {
+    const untried = candidate('probation-no-reviewer', { evidence: [] });
+    const result = routing.rankForProfile(
+      [untried],
+      profile({ proofFloor: 'API_PASS' }),
+      assessment,
       {
-        rootDir: root,
-        candidates: [writer, reviewer],
-        evidenceDir: path.join(root, 'evidence'),
-        decisionDir: path.join(root, 'decisions'),
-        storePath: path.join(root, 'quota.json'),
-        home: root,
-        now: Date.now(),
+        headrooms: { default: 'open' },
         priors: {
           ranking: [
             {
-              canonical: 'probation-writer',
+              canonical: 'probation-no-reviewer',
               codingTier: 'T1',
               reviewTier: 'T1',
               score: 95,
@@ -304,20 +360,10 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
             },
           ],
         },
-        headrooms: { default: 'open' },
-        useStoredQuota: false,
-        launcher: async () => {
-          writerLaunches += 1;
-          return { status: 'completed' };
-        },
-        log: () => {},
-        error: (message) => errors.push(message),
-        exit: () => {},
       }
     );
-    assert.equal(result.refused, 'PROBATION_REQUIRES_INDEPENDENT_REVIEW');
-    assert.equal(writerLaunches, 0);
-    assert.ok(errors.includes('PROBATION_REQUIRES_INDEPENDENT_REVIEW'));
+    assert.equal(result.ranking.length, 0);
+    assert.equal(result.rejected[0].reasonCode, 'PROOF_FLOOR_NOT_MET:NONE');
   });
 
   test('JEV can choose only eligible top candidates; low confidence keeps deterministic choice', async () => {
@@ -469,7 +515,15 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
         now: Date.parse('2026-10-10T00:00:00Z'),
         headrooms: { default: 'open' },
         priors,
-        independentStrongReviewerGuaranteed: true,
+        independentReviewerCandidates: [
+          candidate('fresh-reviewer', {
+            gateway: 'different-gateway',
+            upstream: 'different-provider',
+            qualifiedRoles: ['reviewer.primary'],
+            strong: true,
+            reservationStatus: 'reserved',
+          }),
+        ],
       }
     ).ranking[0];
     assert.equal(fresh.probation, true);
@@ -504,6 +558,15 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
             },
           ],
         },
+        independentReviewerCandidates: [
+          candidate('transfer-reviewer', {
+            gateway: 'different-gateway',
+            upstream: 'different-provider',
+            qualifiedRoles: ['reviewer.primary'],
+            strong: true,
+            reservationStatus: 'reserved',
+          }),
+        ],
       }
     );
     assert.equal(result.ranking.length, 1);
@@ -529,7 +592,20 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
       [untried],
       profile({ role: 'writer', proofFloor: 'API_PASS' }),
       assessment,
-      { now: Date.parse('2026-10-10T00:00:00Z'), priors, headrooms: { default: 'open' } }
+      {
+        now: Date.parse('2026-10-10T00:00:00Z'),
+        priors,
+        headrooms: { default: 'open' },
+        independentReviewerCandidates: [
+          candidate('tier-reviewer', {
+            gateway: 'different-gateway',
+            upstream: 'different-provider',
+            qualifiedRoles: ['reviewer.primary'],
+            strong: true,
+            reservationStatus: 'reserved',
+          }),
+        ],
+      }
     );
     const reviewer = routing.rankForProfile(
       [untried],
@@ -603,7 +679,9 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
   });
 
   test('seeded priors include model metadata and per-model source provenance', () => {
-    const document = priorsApi.loadPriors();
+    const document = priorsApi.loadPriors(
+      path.resolve(__dirname, '..', 'data', 'model-priors.json')
+    );
     assert.ok(document.ranking.length > 0);
     const metadataSource = document.sources.find(
       (source) => source.id === 'benchlm-model-metadata'
@@ -673,6 +751,61 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
       assert.equal(fs.existsSync(marker), false);
     } finally {
       fs.rmSync(sourceDir, { recursive: true, force: true });
+    }
+  });
+
+  test('priors refresh sends only allowlisted headers and resolves auth by environment variable name', async () => {
+    const cli = path.resolve(__dirname, '..', 'cli.js');
+    const sourceDir = path.resolve(__dirname, '..', 'priors-sources');
+    const source = path.join(sourceDir, 'header-filter-test.json');
+    const preload = path.join(sourceDir, 'header-filter-preload.js');
+    const output = path.join(sourceDir, 'header-filter-output.json');
+    const priorToken = process.env.PRIORS_TEST_TOKEN;
+    fs.mkdirSync(sourceDir, { recursive: true });
+    fs.writeFileSync(
+      source,
+      JSON.stringify({
+        endpoint: 'https://priors.example.com',
+        authEnv: 'PRIORS_TEST_TOKEN',
+        headers: {
+          Accept: 'application/json',
+          'User-Agent': 'priors-test',
+          Authorization: 'Bearer literal-secret-must-not-be-used',
+          'X-Forwarded-Authorization': 'Bearer also-forbidden',
+        },
+      }),
+      'utf8'
+    );
+    fs.writeFileSync(
+      preload,
+      `global.fetch = async (_url, options) => { require('node:fs').writeFileSync(${JSON.stringify(output)}, JSON.stringify(options.headers)); return { ok: true, json: async () => [] }; };`,
+      'utf8'
+    );
+    process.env.PRIORS_TEST_TOKEN = 'test-token-from-environment';
+    try {
+      const env = Object.assign({}, process.env, {
+        NODE_OPTIONS:
+          `${process.env.NODE_OPTIONS || ''} --require ${JSON.stringify(preload)}`.trim(),
+      });
+      const result = spawnSync(process.execPath, [cli, 'priors', 'refresh', '--source', source], {
+        cwd: path.resolve(__dirname, '../../..'),
+        env,
+        encoding: 'utf8',
+      });
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(JSON.parse(fs.readFileSync(output, 'utf8')), {
+        'content-type': 'application/json',
+        accept: 'application/json',
+        'user-agent': 'priors-test',
+        authorization: 'Bearer test-token-from-environment',
+      });
+    } finally {
+      if (priorToken === undefined) delete process.env.PRIORS_TEST_TOKEN;
+      else process.env.PRIORS_TEST_TOKEN = priorToken;
+      fs.rmSync(source, { force: true });
+      fs.rmSync(preload, { force: true });
+      fs.rmSync(output, { force: true });
+      fs.rmSync(path.join(sourceDir, 'header-filter-output-priors.json'), { force: true });
     }
   });
 

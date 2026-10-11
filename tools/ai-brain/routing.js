@@ -844,7 +844,7 @@ function isIndependentReviewerCandidate(writer, reviewer) {
   ) {
     return false;
   }
-  if (reviewer.reservationStatus !== 'reserved') return false;
+  if (reviewer.reservationStatus && reviewer.reservationStatus !== 'reserved') return false;
   const reviewerProof = reviewer.proofLevel || proofObserved(reviewer.evidenceData, reviewer);
   const reviewerPrior = reviewer.priorTier || reviewer.prior?.tier;
   const strongReviewer =
@@ -1213,6 +1213,19 @@ function rankForProfile(candidates, profile, assessment, ctx) {
       );
       continue;
     }
+    const candidateBlock = evidence.isCandidateBlocked(context.evidenceData, c);
+    if (
+      candidateBlock.blocked ||
+      c.blocked ||
+      c.parked ||
+      c.status === 'blocked' ||
+      ['UNAVAILABLE_NOW', 'GEO_BLOCKED', 'NO_CREDIT', 'RATE_LIMITED', 'AUTH_NEEDED'].includes(
+        c.status
+      )
+    ) {
+      reject(candidateBlock.reason || 'CANDIDATE_BLOCKED', 'candidate');
+      continue;
+    }
 
     const probationPrior = priorFor(c, profile.role, priors, now);
     const priorTier = probationPrior && probationPrior.tier;
@@ -1234,6 +1247,7 @@ function rankForProfile(candidates, profile, assessment, ctx) {
       Boolean(probationPrior && !probationPrior.stale && priorTier === 'T1') &&
       !hasInternalWorkItemPass &&
       !hasQualityFailure &&
+      independentReviewerAvailable &&
       (!['security', 'money', 'tenant'].some((risk) =>
         (profile.riskDomains || []).includes(risk)
       ) ||

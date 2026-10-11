@@ -3358,9 +3358,21 @@ function main(argv = process.argv.slice(2), deps = {}) {
       return;
     }
     const search = async (query) => {
+      const headers = { 'content-type': 'application/json' };
+      const allowedHeaders = new Set(['accept', 'user-agent']);
+      for (const [name, value] of Object.entries(provider.headers || {})) {
+        const lowerName = name.toLowerCase();
+        if (allowedHeaders.has(lowerName) && typeof value === 'string') {
+          headers[lowerName] = value;
+        }
+      }
+      if (typeof provider.authEnv === 'string' && /^[A-Z_][A-Z0-9_]*$/.test(provider.authEnv)) {
+        const token = process.env[provider.authEnv];
+        if (token) headers.authorization = `Bearer ${token}`;
+      }
       const response = await fetch(provider.endpoint, {
         method: 'POST',
-        headers: Object.assign({ 'content-type': 'application/json' }, provider.headers || {}),
+        headers,
         body: JSON.stringify({ query }),
       });
       if (!response.ok) throw new Error('PRIORS_SEARCH_HTTP_' + response.status);

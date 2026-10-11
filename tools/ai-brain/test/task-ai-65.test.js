@@ -329,7 +329,7 @@ describe('TASK-AI-65: live routing (profile -> JEV -> ranking -> pinned executio
       }
     );
     assert.equal(exitCode, 1);
-    assert.equal(result.refused, 'PROBATION_REQUIRES_INDEPENDENT_REVIEW');
+    assert.equal(result.refused, 'NO_CANDIDATE_MEETS_PROFILE');
     assert.equal(launchCount, 0);
   });
 
