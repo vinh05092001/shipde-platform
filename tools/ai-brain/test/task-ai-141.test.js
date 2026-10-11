@@ -19,6 +19,7 @@ const {
   getIsolatedLauncher,
   buildWorkerLaunchScript,
   enforceTokenBudget,
+  readLaunchResult,
 } = require('../isolation-launcher');
 const { runHostBrainGate, runOrchestration, rtkPolicyForItem } = require('../orchestrate');
 const { DEFAULT_TOKEN_BUDGETS } = require('../intake');
@@ -1090,14 +1091,25 @@ test('Part H: context pack manifest records output path and included source allo
     allowedPaths: ['tools/ai-brain/cli.js'],
     acceptanceCriteria: ['test path'],
   };
+  const candidate = {
+    upstream: 'up-a',
+    gateway: 'gw-a',
+    accountId: 'acct-a',
+    modelId: 'm',
+    harness: 'opencode',
+    source: 'up-a',
+    qualifiedRoles: ['author.foundation'],
+    capabilities: { contextWindow: 999999 },
+  };
   const result = runOrchestration('fixture', {
     specs: [spec],
-    candidates: [],
+    candidates: [candidate],
     decisionDir: decisionsDir,
     cwd: root,
     isolatedWorker: true,
     enableContextPack: true,
     contextManifest: manifestPath,
+    run: () => ({ exitCode: 0, stdout: 'ok' }),
   });
   await result;
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
@@ -1208,4 +1220,112 @@ test('Part H: isolated runs receive role and complexity token caps from policy c
 
 test('Part H: repeated quota failures reach a bounded fallback threshold', () => {
   assert.equal(DEFAULT_TOKEN_BUDGETS.byRole['author.foundation'].repeatedQuotaFailures, 3);
+});
+
+test('Part H: readLaunchResult propagates failureReason and enforceTokenBudget preserves it', () => {
+  const root = fixtureRoot();
+  const resultFile = path.join(root, 'launch-result.json');
+  fs.writeFileSync(
+    resultFile,
+    JSON.stringify({
+      exitCode: -1,
+      stdout: '',
+      stderr: 'stalled',
+      timedOut: false,
+      completed: false,
+      failureReason: 'STALLED_NO_PROGRESS: worker produced no output',
+    })
+  );
+  const parsed = readLaunchResult(resultFile, 'nonce', { stdout: '', stderr: '' });
+  assert.equal(parsed.failureReason, 'STALLED_NO_PROGRESS');
+  const budgetChecked = enforceTokenBudget(parsed, { maxTokens: 100 }, null);
+  assert.equal(budgetChecked.failureReason, 'STALLED_NO_PROGRESS');
+});
+
+test('Part H: deriveRiskDomains distinguishes benign prisma queries from schema ownership', () => {
+  const benign = intake.deriveRiskDomains('## Scope\nUse prisma client to read user preferences.');
+  assert.equal(benign.includes('database ownership'), false);
+
+  const schemaChange = intake.deriveRiskDomains('## Scope\nUpdate prisma/schema.prisma models.');
+  assert.equal(schemaChange.includes('database ownership'), true);
+
+  const migration = intake.deriveRiskDomains('## Scope\nRun database migration for auth tables.');
+  assert.equal(migration.includes('database ownership'), true);
+});
+
+test('Part H: RTK_POLICY decision is recorded once per work item across multiple candidate attempts', async () => {
+  const root = fixtureRoot();
+  const decisionDir = path.join(root, 'rtk-decisions');
+  const spec = { id: 'ITEM-RTK-ONCE', files: ['lib.js'], riskDomains: [] };
+  const candidates = [
+    {
+      upstream: 'up-1',
+      gateway: 'gw-1',
+      accountId: 'acct-1',
+      modelId: 'm1',
+      harness: 'opencode',
+      source: 'up-1',
+      qualifiedRoles: ['author.foundation'],
+      capabilities: { contextWindow: 999999 },
+    },
+    {
+      upstream: 'up-2',
+      gateway: 'gw-2',
+      accountId: 'acct-2',
+      modelId: 'm2',
+      harness: 'opencode',
+      source: 'up-2',
+      qualifiedRoles: ['author.foundation'],
+      capabilities: { contextWindow: 999999 },
+    },
+  ];
+  let callCount = 0;
+  await runOrchestration('test rtk once', {
+    specs: [spec],
+    candidates,
+    decisionDir,
+    cwd: root,
+    rtk: true,
+    run: () => {
+      callCount += 1;
+      return { exitCode: 1, stderr: 'attempt failed' };
+    },
+    now: Date.now(),
+  });
+  assert.ok(callCount >= 2);
+  const day = new Date().toISOString().slice(0, 10);
+  const records = fs
+    .readFileSync(path.join(decisionDir, day + '.jsonl'), 'utf8')
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line));
+  const rtkRecords = records.filter(
+    (r) => r.warning === 'RTK_POLICY' && r.workItemId === 'ITEM-RTK-ONCE'
+  );
+  assert.equal(rtkRecords.length, 1, 'RTK_POLICY is recorded exactly once for the work item');
+});
+
+test('Part H: cli orchestrate handles malformed token-budgets without uncaught throw', async () => {
+  const root = fixtureRoot();
+  const badBudget = path.join(root, 'bad-budgets.json');
+  fs.writeFileSync(badBudget, '{ malformed:');
+  const goalFile = path.join(root, 'goal.txt');
+  fs.writeFileSync(goalFile, 'goal');
+  const specsFile = path.join(root, 'specs.json');
+  fs.writeFileSync(specsFile, JSON.stringify([{ id: 'S1', files: [] }]));
+  let exitCode = null;
+  const res = await cli.orchestrateCommand(
+    {
+      goal: goalFile,
+      specs: specsFile,
+      'token-budgets': badBudget,
+    },
+    {
+      exit: (code) => {
+        exitCode = code;
+      },
+    }
+  );
+  assert.equal(exitCode, 2);
+  assert.equal(res.exitCode, 2);
 });

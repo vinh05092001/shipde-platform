@@ -2482,11 +2482,15 @@ function buildTaskProfile(item, options) {
 }
 
 function rtkPolicyForItem(requested, riskDomains, injectedRun) {
+  const isRequested =
+    typeof requested === 'object' && requested !== null
+      ? Boolean(requested.enabled)
+      : Boolean(requested);
   const domains = Array.isArray(riskDomains) ? riskDomains : [];
-  const enabled = Boolean(requested) && domains.length === 0 && !injectedRun;
+  const enabled = isRequested && domains.length === 0 && !injectedRun;
   return {
     enabled,
-    reason: !requested
+    reason: !isRequested
       ? 'not_requested'
       : injectedRun
         ? 'injected_run_blocks_rtk'
@@ -3608,6 +3612,18 @@ async function runOrchestration(goal, opts) {
     const itemRtkDecision = rtkPolicyForItem(o.rtk, itemRiskDomains, o.injectedRun);
     const itemRtkPermitted = itemRtkDecision.enabled;
     log.rtk.perWorkItem[item.id] = itemRtkDecision;
+    if (o.rtk) {
+      decisions.recordDecision(
+        {
+          stage: decisions.Stage.WARNING,
+          workItemId: item.id,
+          warning: 'RTK_POLICY',
+          detail: itemRtkDecision.reason,
+          enabled: itemRtkPermitted,
+        },
+        logOpts
+      );
+    }
     if (!item.failedKeys || !(item.failedKeys instanceof Set)) {
       item.failedKeys = new Set(Array.isArray(item.failedKeys) ? item.failedKeys : []);
     }
@@ -3898,29 +3914,6 @@ async function runOrchestration(goal, opts) {
         decisionDir: o.decisionDir || null,
         workItemId: item.id,
       };
-      if (itemRtkPermitted) {
-        decisions.recordDecision(
-          {
-            stage: decisions.Stage.WARNING,
-            workItemId: item.id,
-            warning: 'RTK_POLICY',
-            detail: itemRtkDecision.reason,
-            enabled: true,
-          },
-          logOpts
-        );
-      } else if (o.rtk) {
-        decisions.recordDecision(
-          {
-            stage: decisions.Stage.WARNING,
-            workItemId: item.id,
-            warning: 'RTK_POLICY',
-            detail: itemRtkDecision.reason,
-            enabled: false,
-          },
-          logOpts
-        );
-      }
 
       // The exercise runner exists in the worker's own tree before the agent
       // starts, so the fail-before at the pinned base SHA is a real captured run

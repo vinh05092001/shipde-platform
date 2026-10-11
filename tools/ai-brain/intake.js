@@ -105,7 +105,7 @@ function deriveRiskDomains(text) {
     ],
     [
       'database ownership',
-      /\b(?:database|schema) ownership\b|\b(?:database|schema)\b.*\b(?:migration|ownership|write|persist|storage)\b|\bprisma\b/,
+      /\b(?:database|schema)\s+ownership\b|\b(?:database|schema)\b.*\b(?:migration|schema\s+change)\b|\b(?:database|schema)\s+migration\b|\bmigrat(?:e|ion)\b|\bschema\.prisma\b|\bprisma[\s/]+schema\b|\bprisma\s+migrate\b/,
     ],
   ];
   return rules.filter(([, pattern]) => pattern.test(body)).map(([name]) => name);
@@ -744,7 +744,9 @@ function composeOrchestrateCommand({
     runFiles.contextManifest,
   ];
   if (hasAgyPoolQuota) argv.push('--external-workers', EXTERNAL_WORKERS_VALUE);
-  if (rtk) argv.push('--rtk');
+  const rtkRequested =
+    typeof rtk === 'object' && rtk !== null ? Boolean(rtk.enabled) : Boolean(rtk);
+  if (rtkRequested) argv.push('--rtk');
   if (publish) argv.push('--publish');
   return { argv, command: argv.map(quoteArg).join(' '), runFiles };
 }
@@ -889,6 +891,11 @@ async function runIntake(opts, deps) {
   fs.writeFileSync(path.join(runDir, 'catalogue.json'), JSON.stringify(catalogue.models, null, 2));
   fs.writeFileSync(path.join(runDir, 'accounts.json'), JSON.stringify(accounts, null, 2));
 
+  const rtkDecision = {
+    enabled: rtkEnabled,
+    reason: rtkEnabled ? 'low_risk_item' : 'risk_domains_block_rtk',
+  };
+
   const { argv, command, runFiles } = composeOrchestrateCommand({
     root,
     runDir,
@@ -897,7 +904,7 @@ async function runIntake(opts, deps) {
     hasAgyPoolQuota: hasPoolQuota,
     publish: Boolean(o.publish),
     decisionDir: o.decisionDir || d.decisionDir,
-    rtk: rtkEnabled,
+    rtk: rtkDecision,
   });
 
   const result = {
@@ -905,7 +912,7 @@ async function runIntake(opts, deps) {
     runDir,
     goal: derived.goal,
     spec: derived.specItem,
-    rtk: { enabled: rtkEnabled, reason: rtkEnabled ? 'low_risk_item' : 'risk_domains_block_rtk' },
+    rtk: rtkDecision,
     resolvedDependencies,
     catalogue: catalogue.models,
     warnings: catalogue.warnings,

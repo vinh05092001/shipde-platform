@@ -63,29 +63,26 @@ function createContextPack(items, options = {}) {
     JSON.stringify({ files: manifest, createdAt: new Date().toISOString() }, null, 2) + '\n',
     'utf8'
   );
+  const includeArg = manifest.join(',');
   const repomix = path.join(
     root,
     'node_modules',
     '.bin',
     process.platform === 'win32' ? 'repomix.cmd' : 'repomix'
   );
-  let content;
-  if (fs.existsSync(repomix)) {
-    const result = cp.spawnSync(repomix, ['--include', manifest.join(','), '--output', output], {
+  let content = null;
+  if (fs.existsSync(repomix) && includeArg.length <= 4000) {
+    const result = cp.spawnSync(repomix, ['--include', includeArg, '--output', output], {
       cwd: root,
       encoding: 'utf8',
       timeout: 120000,
       windowsHide: true,
     });
-    if (result.status !== 0 || !fs.existsSync(output))
-      throw new Error('REPOMIX_FAILED: ' + String(result.stderr || result.error || result.status));
-    fs.writeFileSync(
-      output + '.manifest.json',
-      JSON.stringify({ files: manifest, createdAt: new Date().toISOString() }, null, 2) + '\n',
-      'utf8'
-    );
-    content = fs.readFileSync(output, 'utf8');
-  } else {
+    if (result.status === 0 && fs.existsSync(output)) {
+      content = fs.readFileSync(output, 'utf8');
+    }
+  }
+  if (!content) {
     content =
       '# Focused context pack\n\n' +
       manifest
@@ -96,6 +93,11 @@ function createContextPack(items, options = {}) {
         .join('\n\n');
     fs.writeFileSync(output, content, 'utf8');
   }
+  fs.writeFileSync(
+    output + '.manifest.json',
+    JSON.stringify({ files: manifest, createdAt: new Date().toISOString() }, null, 2) + '\n',
+    'utf8'
+  );
   return { path: output, files: manifest, content };
 }
 

@@ -2861,12 +2861,20 @@ function orchestrateCommand(args, deps = {}) {
       ? d.listAccounts()
       : require('./accounts').listAccounts();
   const evidenceAccounts = mergeEvidenceAccounts(inputAccounts, registryAccounts);
-  const tokenBudgets =
-    typeof args['token-budgets'] === 'string'
-      ? JSON.parse(fsx.readFileSync(args['token-budgets'], 'utf8'))
-      : args['isolated-worker']
-        ? require('./intake').DEFAULT_TOKEN_BUDGETS
-        : null;
+  let tokenBudgets = null;
+  if (typeof args['token-budgets'] === 'string') {
+    try {
+      tokenBudgets = JSON.parse(fsx.readFileSync(args['token-budgets'], 'utf8'));
+    } catch (err) {
+      console.error(
+        `orchestrate: failed to parse token budgets from ${args['token-budgets']}: ${err.message}`
+      );
+      exit(2);
+      return Promise.resolve({ exitCode: 2 });
+    }
+  } else if (args['isolated-worker']) {
+    tokenBudgets = require('./intake').DEFAULT_TOKEN_BUDGETS;
+  }
   // The live loop is async (TASK-AI-65): the JEV assessment behind every
   // Controller selection returns a promise. An unhandled rejection would crash
   // silently, so it is caught here and turned into a non-zero exit instead.

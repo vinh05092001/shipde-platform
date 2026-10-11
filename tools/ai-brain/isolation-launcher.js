@@ -859,6 +859,7 @@ function offlineStoreMiss(error) {
 
 function enforceTokenBudget(launchResult, tokenBudget, usageFile) {
   if (!tokenBudget || Number(tokenBudget.maxTokens) <= 0) return launchResult;
+  if (launchResult && launchResult.failureReason) return launchResult;
   let failureReason = null;
   let total = null;
   try {
@@ -1980,6 +1981,19 @@ function readLaunchResult(launchResultPath, completionNonce, hostRes) {
   }
 
   const jobExit = Number(resJson.exitCode);
+  let failureReason = undefined;
+  if (typeof resJson.failureReason === 'string') {
+    if (resJson.failureReason.startsWith('STALLED_NO_PROGRESS')) {
+      failureReason = 'STALLED_NO_PROGRESS';
+    } else if (resJson.failureReason.startsWith('TOKEN_BUDGET_EXCEEDED')) {
+      failureReason = 'TOKEN_BUDGET_EXCEEDED';
+    } else if (resJson.failureReason.length > 0) {
+      failureReason = resJson.failureReason;
+    }
+  } else if (resJson.budgetExceeded) {
+    failureReason = 'TOKEN_BUDGET_EXCEEDED';
+  }
+
   if (
     resJson.timedOut === true ||
     resJson.completed !== true ||
@@ -1991,6 +2005,7 @@ function readLaunchResult(launchResultPath, completionNonce, hostRes) {
       stdout: String(resJson.stdout || ''),
       stderr: String(resJson.stderr || ''),
       timedOut: resJson.timedOut === true,
+      ...(failureReason ? { failureReason } : {}),
     };
   }
 
@@ -2000,6 +2015,7 @@ function readLaunchResult(launchResultPath, completionNonce, hostRes) {
     stderr: String(resJson.stderr || ''),
     timedOut: false,
     completionNonce: resJson.completionNonce,
+    ...(failureReason ? { failureReason } : {}),
   };
 }
 
