@@ -270,6 +270,133 @@ function draftWorkItem(id, options, deps) {
   return { id, target, status, blocking: openDecisions.length > 0, reason, approvedRefs };
 }
 
+function validateDraftAgainstSources(draftText, id, rootDir, deps) {
+  const d = deps || {};
+  if (!draftText || typeof draftText !== 'string' || !draftText.trim()) {
+    return { valid: false, reason: 'Worker draft is empty or missing.' };
+  }
+
+  const requiredSections = [
+    'Business outcome',
+    'Source references',
+    'Preconditions and dependencies',
+    'Author boundary',
+    'In scope',
+    'Out of scope',
+    'Business rules and edge cases',
+    'UI states',
+    'API, event and data impact',
+    'Acceptance matrix',
+    'Verification commands',
+    'Codex review record',
+    'Residual limitations',
+  ];
+  const missing = requiredSections.filter((h) => !draftText.includes('## ' + h));
+  if (missing.length > 0) {
+    return {
+      valid: false,
+      reason: 'Worker draft is missing required sections: ' + missing.join(', '),
+    };
+  }
+
+  const sourceSectionMatch = draftText.match(/## Source references\r?\n([\s\S]*?)(?=\r?\n## |$)/);
+  if (!sourceSectionMatch) {
+    return { valid: false, reason: 'Worker draft is missing Source references section.' };
+  }
+  const refLines = sourceSectionMatch[1]
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.startsWith('- '));
+  if (refLines.length === 0) {
+    return { valid: false, reason: 'Worker draft has no source references.' };
+  }
+
+  const docReader = d.readSource || ((rel) => fs.readFileSync(path.join(rootDir, rel), 'utf8'));
+  const specSources = listApprovedSpecSources(rootDir, d);
+  const approvedNorm = APPROVED_SOURCES.map((p) => p.replace(/\\/g, '/'));
+  const specNorm = specSources.map((p) => p.replace(/\\/g, '/'));
+  const approvedDirsNorm = APPROVED_SPEC_DIRS.map((dir) => dir.replace(/\\/g, '/'));
+
+  for (const line of refLines) {
+    const m = line.match(/`([^`]+)`/) || line.match(/^-\s+(.+)$/);
+    if (!m) continue;
+    const rawRef = m[1].trim();
+    const refPath = rawRef.split('#')[0].trim().replace(/\\/g, '/');
+    const isApproved =
+      approvedNorm.includes(refPath) ||
+      specNorm.includes(refPath) ||
+      approvedDirsNorm.some((dir) => refPath.startsWith(dir + '/'));
+    if (!isApproved) {
+      return { valid: false, reason: 'Worker draft cites unapproved source: ' + rawRef };
+    }
+    try {
+      docReader(refPath);
+    } catch {
+      try {
+        docReader(path.normalize(refPath));
+      } catch {
+        return { valid: false, reason: 'Worker draft cites missing source file: ' + refPath };
+      }
+    }
+  }
+
+  const outcomeMatch = draftText.match(/## Business outcome\r?\n\r?\n> (.*)/);
+  if (!outcomeMatch || !outcomeMatch[1].trim()) {
+    return { valid: false, reason: 'Worker draft business outcome is missing.' };
+  }
+  const outcomeText = outcomeMatch[1].trim().replace(/^> /, '');
+  if (outcomeText.includes('Not specified in the approved sources')) {
+    return {
+      valid: false,
+      reason: 'Worker draft business outcome is not specified in approved sources.',
+    };
+  }
+
+  const primarySources = [...new Set([...APPROVED_SOURCES, ...specSources])];
+  const sourceBacked = primarySources.some((rel) => {
+    try {
+      let content;
+      try {
+        content = docReader(rel);
+      } catch {
+        content = docReader(path.normalize(rel));
+      }
+      return content.includes(outcomeText);
+    } catch {
+      return false;
+    }
+  });
+  if (!sourceBacked) {
+    return {
+      valid: false,
+      reason: 'Worker draft business outcome is not present in approved sources: ' + outcomeText,
+    };
+  }
+
+  if (/\|\s*Status\s*\|\s*`BLOCKED`\s*\|/.test(draftText)) {
+    return { valid: false, reason: 'Worker draft status is marked BLOCKED.' };
+  }
+
+  const openDecisionsMatch = draftText.match(/## Open decisions\r?\n([\s\S]*?)(?=\r?\n## |$)/);
+  if (openDecisionsMatch) {
+    const decLines = openDecisionsMatch[1]
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => l.startsWith('- '));
+    const hasBlockingDecisions = decLines.some(
+      (l) =>
+        !l.startsWith('- None.') &&
+        !l.startsWith('- Status remains a draft') &&
+        !l.includes('No matching cited section found in approved source:')
+    );
+    if (hasBlockingDecisions) {
+      return { valid: false, reason: 'Worker draft contains unresolved open decisions.' };
+    }
+  }
+
+  return { valid: true };
+}
+
 async function planWorkItem(id, options, deps) {
   const opts = options || {};
   const d = deps || {};
@@ -278,74 +405,146 @@ async function planWorkItem(id, options, deps) {
   const rootDir = path.resolve(opts.rootDir || process.cwd());
   const hasRegisterSource =
     Array.isArray(d.items) || fs.existsSync(path.join(rootDir, REGISTER_REL));
-  if (opts.run && hasRegisterSource) {
+  if (hasRegisterSource) {
     const item = getRegisterItem(rootDir, id, d);
     if (!item) fail('PLAN_NOT_IN_REGISTER', 'No register item found for ' + id);
   }
   const target = path.join(rootDir, 'docs', 'product-spec', 'work-items', id + '.md');
   if (fs.existsSync(target)) fail('PLAN_ALREADY_EXISTS', 'Work Item already exists: ' + target);
-  if (!opts.run) return draftWorkItem(id, opts, d);
-  if (typeof d.runPlanning !== 'function') {
-    fail(
-      'PLAN_EXECUTOR_REQUIRED',
-      'plan --run requires the isolated planner, independent reviewer, and governed docs-only merge executor'
-    );
+
+  if (opts.run) {
+    if (typeof d.runPlanning !== 'function') {
+      fail(
+        'PLAN_EXECUTOR_REQUIRED',
+        'plan --run requires the isolated planner, independent reviewer, and governed docs-only merge executor'
+      );
+    }
+    if (
+      typeof d.rankPlanner !== 'function' ||
+      typeof d.runIsolatedPlanner !== 'function' ||
+      typeof d.reviewPlan !== 'function' ||
+      typeof d.mergePlan !== 'function'
+    ) {
+      fail(
+        'PLAN_EXECUTOR_INCOMPLETE',
+        'plan --run requires planner ranking, isolated execution, independent review, and governed merge services'
+      );
+    }
   }
-  if (
-    typeof d.rankPlanner !== 'function' ||
-    typeof d.runIsolatedPlanner !== 'function' ||
-    typeof d.reviewPlan !== 'function' ||
-    typeof d.mergePlan !== 'function'
-  ) {
-    fail(
-      'PLAN_EXECUTOR_INCOMPLETE',
-      'plan --run requires planner ranking, isolated execution, independent review, and governed merge services'
-    );
+
+  const draftFn = typeof d.draftWorkItem === 'function' ? d.draftWorkItem : draftWorkItem;
+  let draft;
+  let draftCreated = false;
+  try {
+    draft = await draftFn(id, opts, d);
+    draftCreated = true;
+  } catch (err) {
+    throw err;
   }
+
+  if (!opts.run) return draft;
+
+  function cleanupUngovernedDraft() {
+    if (draftCreated && fs.existsSync(target) && !d.writeFile) {
+      try {
+        fs.unlinkSync(target);
+      } catch {}
+    }
+  }
+
+  if (!draft || draft.status === 'BLOCKED' || draft.blocking) {
+    cleanupUngovernedDraft();
+    return {
+      id,
+      status: 'BLOCKED',
+      reason: (draft && draft.reason) || 'Draft has open decisions or lacks source backing.',
+      draft,
+    };
+  }
+
   const ranked = await d.rankPlanner({ workItemId: id, role: 'planner.default' });
   if (!ranked || ranked.eligible !== true) {
+    cleanupUngovernedDraft();
     return {
       id,
       status: 'BLOCKED',
       reason: (ranked && ranked.reason) || 'No eligible planner candidate was ranked.',
+      draft,
     };
   }
+
   const isolated = await d.runIsolatedPlanner({
     workItemId: id,
     role: 'planner.default',
     candidate: ranked,
     docsOnly: true,
+    draft,
   });
   if (!isolated || isolated.success !== true) {
+    cleanupUngovernedDraft();
     return {
       id,
       status: 'BLOCKED',
       reason: (isolated && isolated.reason) || 'The isolated planner did not complete.',
+      draft,
     };
   }
-  const review = await d.reviewPlan({ workItemId: id, candidate: ranked, plan: isolated });
+
+  const workerDraftText =
+    (isolated && (isolated.draftText || isolated.content || isolated.text)) ||
+    (d.readFile
+      ? d.readFile(target)
+      : fs.existsSync(target)
+        ? fs.readFileSync(target, 'utf8')
+        : (draft && draft.text) || null);
+
+  const validation = validateDraftAgainstSources(workerDraftText, id, rootDir, d);
+  if (!validation.valid) {
+    cleanupUngovernedDraft();
+    return {
+      id,
+      status: 'BLOCKED',
+      reason: validation.reason,
+      draft,
+      validation,
+    };
+  }
+
+  const review = await d.reviewPlan({
+    workItemId: id,
+    candidate: ranked,
+    plan: isolated,
+    draft: workerDraftText,
+  });
   if (!review || review.verdict !== 'PASS') {
+    cleanupUngovernedDraft();
     return {
       id,
       status: 'BLOCKED',
       reason: (review && review.reason) || 'Independent planning review did not PASS.',
       independentReview: review && review.verdict,
+      draft,
     };
   }
+
   const merged = await d.mergePlan({
     workItemId: id,
     candidate: ranked,
     plan: isolated,
     review,
     docsOnly: true,
+    draft: workerDraftText,
   });
   if (!merged || merged.success === false || merged.merged !== true) {
+    cleanupUngovernedDraft();
     return {
       id,
       status: 'BLOCKED',
       reason: (merged && merged.reason) || 'Governed docs-only merge did not complete.',
+      draft,
     };
   }
+
   const result = await d.runPlanning({
     workItemId: id,
     role: 'planner.default',
@@ -357,6 +556,7 @@ async function planWorkItem(id, options, deps) {
     isolatedPlan: isolated,
     independentPlanReview: review,
     governedPlanMerge: merged,
+    draft: workerDraftText,
   });
   if (
     !result ||
@@ -365,6 +565,7 @@ async function planWorkItem(id, options, deps) {
     result.independentReview !== 'PASS' ||
     result.merged !== true
   ) {
+    cleanupUngovernedDraft();
     return {
       ...(result || {}),
       id,
@@ -372,6 +573,7 @@ async function planWorkItem(id, options, deps) {
       reason:
         (result && result.reason) ||
         'Planning requires an exact independent PASS and completed governed docs-only merge.',
+      draft,
     };
   }
   return result;
@@ -463,10 +665,33 @@ function defaultPlanningDeps(rootDir, overrides) {
     }));
   d.runPlanning =
     d.runPlanning ||
-    (async () => ({
-      status: 'BLOCKED',
-      reason: 'Planning cannot become author-ready without independent review and governed merge.',
-    }));
+    (async (context) => {
+      if (
+        context &&
+        context.rankedPlanner &&
+        context.rankedPlanner.eligible &&
+        context.isolatedPlan &&
+        context.isolatedPlan.success &&
+        context.independentPlanReview &&
+        context.independentPlanReview.verdict === 'PASS' &&
+        context.governedPlanMerge &&
+        context.governedPlanMerge.merged === true
+      ) {
+        return {
+          status: 'READY_FOR_AUTHOR',
+          governed: true,
+          independentReview: 'PASS',
+          merged: true,
+        };
+      }
+      return {
+        status: 'BLOCKED',
+        reason:
+          (context && context.independentPlanReview && context.independentPlanReview.reason) ||
+          (context && context.governedPlanMerge && context.governedPlanMerge.reason) ||
+          'Planning cannot become author-ready without independent review and governed merge.',
+      };
+    });
   return d;
 }
 
@@ -474,6 +699,7 @@ module.exports = {
   draftWorkItem,
   planWorkItem,
   defaultPlanningDeps,
+  validateDraftAgainstSources,
   APPROVED_SOURCES,
   APPROVED_SPEC_DIRS,
   TEMPLATE_REL,

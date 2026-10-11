@@ -921,117 +921,12 @@ async function nextLoop(options, deps) {
       }
     }
 
-    // 3. Check candidate lanes
-    const laneStatus = checkCandidateLanes({ ...opts, now }, d);
-    if (!laneStatus.available) {
-      decisions.recordDecision(
-        {
-          stage: decisions.Stage.COOLED,
-          detail: 'ALL_LANES_UNAVAILABLE',
-          earliestResetTime: laneStatus.earliestResetTime,
-          workItemId: item.work_item_id,
-        },
-        logOpts
-      );
-      log(
-        `ALL_LANES_UNAVAILABLE: waiting until earliest reset time ${laneStatus.earliestResetTime}`
-      );
-      const waitMs =
-        laneStatus.earliestResetTime && laneStatus.earliestResetTime > now
-          ? laneStatus.earliestResetTime - now
-          : pollIntervalMs;
-      await sleepFn(waitMs);
-      return {
-        stopped: true,
-        reason: 'ALL_LANES_UNAVAILABLE',
-        earliestResetTime: laneStatus.earliestResetTime,
-        waitMs,
-        iteration,
-      };
-    }
-
-    // 4. Check ceiling
-    const ceilingStatus = checkCeiling({ ...opts, now }, d);
-    if (!ceilingStatus.allowed) {
-      decisions.recordDecision(
-        {
-          stage: decisions.Stage.REFUSED,
-          detail: ceilingStatus.reason,
-          workItemId: item.work_item_id,
-        },
-        logOpts
-      );
-      log(`Ceiling reached: ${ceilingStatus.detail}. Waiting.`);
-      await sleepFn(pollIntervalMs);
-      if (maxIterations <= 1) {
-        return {
-          stopped: true,
-          reason: ceilingStatus.reason,
-          detail: ceilingStatus.detail,
-          iteration,
-        };
-      }
-      continue;
-    }
-
-    // 5. Run item through intake --run
-    decisions.recordDecision(
-      {
-        stage: decisions.Stage.SELECTED,
-        workItemId: item.work_item_id,
-      },
-      logOpts
-    );
-
-    const execResult = await executeIntakeForItem(item, opts, d, {
-      dir: opts.decisionDir || d.decisionDir || decisions.DEFAULT_DIR,
-      now: getNow(),
-    });
-
-    const proofFloorRefusal = Boolean(
-      (execResult.error &&
-        (execResult.error.code === 'PROOF_FLOOR_NOT_MET' ||
-          /PROOF_FLOOR_NOT_MET/.test(String(execResult.error.message || '')))) ||
-      (execResult.intakeResult &&
-        (execResult.intakeResult.reason === 'PROOF_FLOOR_NOT_MET' ||
-          /PROOF_FLOOR_NOT_MET/.test(JSON.stringify(execResult.intakeResult))))
-    );
-    if (proofFloorRefusal) {
-      const qualificationSlot = opts.qualificationSlot || d.qualificationSlot;
-      if (typeof qualificationSlot === 'function') {
-        const qualificationCeiling =
-          typeof d.checkCeiling === 'function'
-            ? d.checkCeiling({ ...opts, now }, d)
-            : checkCeiling({ ...opts, now }, d);
-        if (!qualificationCeiling.allowed) {
-          log(`Qualification slot skipped: ${qualificationCeiling.reason}.`);
-          continue;
-        }
-        const qualification = await qualificationSlot({
-          now,
-          iteration,
-          workItem: item,
-          reason: 'PROOF_FLOOR_NOT_MET',
-          ceiling: qualificationCeiling,
-        });
-        if (qualification && qualification.ran === true) {
-          log('QUALIFICATION_SLOT: ' + (qualification.status || 'completed'));
-          if (iteration < maxIterations) {
-            await sleepFn(pollIntervalMs);
-            continue;
-          }
-          return { completed: true, iterations: iteration, qualification };
-        }
-      }
-    }
-
-    const outcome = execResult.outcome || 'completed';
-    terminalWorkItems.set(item.work_item_id, outcome);
-    log(`Work Item ${item.work_item_id} ended with terminal state ${outcome}.`);
-
-    if (parallelPlanning) {
+    // Helper to join parallel planning on any loop exit path
+    async function joinParallelPlanning() {
+      if (!parallelPlanning) return null;
       try {
         const result = await parallelPlanning;
+        parallelPlanning = null;
         if (!result || result.status !== 'READY_FOR_AUTHOR') {
           terminalWorkItems.set(planningItem.work_item_id, 'planning-blocked');
           decisions.recordDecision(
@@ -1066,7 +961,9 @@ async function nextLoop(options, deps) {
           }
         }
         log(`Planning ${planningItem.work_item_id} completed in parallel.`);
+        return { ok: true, result };
       } catch (err) {
+        parallelPlanning = null;
         terminalWorkItems.set(planningItem.work_item_id, 'planning-failed');
         decisions.recordDecision(
           {
@@ -1083,6 +980,123 @@ async function nextLoop(options, deps) {
           reason: 'PLANNING_FAILED',
           workItemId: planningItem.work_item_id,
         };
+      }
+    }
+
+    try {
+      // 3. Check candidate lanes
+      const laneStatus = checkCandidateLanes({ ...opts, now }, d);
+      if (!laneStatus.available) {
+        decisions.recordDecision(
+          {
+            stage: decisions.Stage.COOLED,
+            detail: 'ALL_LANES_UNAVAILABLE',
+            earliestResetTime: laneStatus.earliestResetTime,
+            workItemId: item.work_item_id,
+          },
+          logOpts
+        );
+        log(
+          `ALL_LANES_UNAVAILABLE: waiting until earliest reset time ${laneStatus.earliestResetTime}`
+        );
+        const waitMs =
+          laneStatus.earliestResetTime && laneStatus.earliestResetTime > now
+            ? laneStatus.earliestResetTime - now
+            : pollIntervalMs;
+        await sleepFn(waitMs);
+        return {
+          stopped: true,
+          reason: 'ALL_LANES_UNAVAILABLE',
+          earliestResetTime: laneStatus.earliestResetTime,
+          waitMs,
+          iteration,
+        };
+      }
+
+      // 4. Check ceiling
+      const ceilingStatus = checkCeiling({ ...opts, now }, d);
+      if (!ceilingStatus.allowed) {
+        decisions.recordDecision(
+          {
+            stage: decisions.Stage.REFUSED,
+            detail: ceilingStatus.reason,
+            workItemId: item.work_item_id,
+          },
+          logOpts
+        );
+        log(`Ceiling reached: ${ceilingStatus.detail}. Waiting.`);
+        await sleepFn(pollIntervalMs);
+        if (maxIterations <= 1) {
+          return {
+            stopped: true,
+            reason: ceilingStatus.reason,
+            detail: ceilingStatus.detail,
+            iteration,
+          };
+        }
+        continue;
+      }
+
+      // 5. Run item through intake --run
+      decisions.recordDecision(
+        {
+          stage: decisions.Stage.SELECTED,
+          workItemId: item.work_item_id,
+        },
+        logOpts
+      );
+
+      const execResult = await executeIntakeForItem(item, opts, d, {
+        dir: opts.decisionDir || d.decisionDir || decisions.DEFAULT_DIR,
+        now: getNow(),
+      });
+
+      const proofFloorRefusal = Boolean(
+        (execResult.error &&
+          (execResult.error.code === 'PROOF_FLOOR_NOT_MET' ||
+            /PROOF_FLOOR_NOT_MET/.test(String(execResult.error.message || '')))) ||
+        (execResult.intakeResult &&
+          (execResult.intakeResult.reason === 'PROOF_FLOOR_NOT_MET' ||
+            /PROOF_FLOOR_NOT_MET/.test(JSON.stringify(execResult.intakeResult))))
+      );
+      if (proofFloorRefusal) {
+        const qualificationSlot = opts.qualificationSlot || d.qualificationSlot;
+        if (typeof qualificationSlot === 'function') {
+          const qualificationCeiling =
+            typeof d.checkCeiling === 'function'
+              ? d.checkCeiling({ ...opts, now }, d)
+              : checkCeiling({ ...opts, now }, d);
+          if (!qualificationCeiling.allowed) {
+            log(`Qualification slot skipped: ${qualificationCeiling.reason}.`);
+            continue;
+          }
+          const qualification = await qualificationSlot({
+            now,
+            iteration,
+            workItem: item,
+            reason: 'PROOF_FLOOR_NOT_MET',
+            ceiling: qualificationCeiling,
+          });
+          if (qualification && qualification.ran === true) {
+            log('QUALIFICATION_SLOT: ' + (qualification.status || 'completed'));
+            if (iteration < maxIterations) {
+              await sleepFn(pollIntervalMs);
+              continue;
+            }
+            return { completed: true, iterations: iteration, qualification };
+          }
+        }
+      }
+
+      const outcome = execResult.outcome || 'completed';
+      terminalWorkItems.set(item.work_item_id, outcome);
+      log(`Work Item ${item.work_item_id} ended with terminal state ${outcome}.`);
+    } finally {
+      if (parallelPlanning) {
+        const planOutcome = await joinParallelPlanning();
+        if (planOutcome && planOutcome.stopped) {
+          return planOutcome;
+        }
       }
     }
 
