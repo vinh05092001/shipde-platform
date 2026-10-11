@@ -593,11 +593,8 @@ function findNextWorkItem(options, deps) {
       }
       const workItemPath = path.join(rootDir, 'docs', 'product-spec', 'work-items', id + '.md');
       if (fs.existsSync(workItemPath)) {
-        if (opts.loop) {
-          if (!selected) selected = item;
-          if (selected.work_item_id === id) continue;
-        } else skipped.push({ id, reason: 'Work Item document already exists' });
-        if (!opts.loop) continue;
+        skipped.push({ id, reason: 'Work Item document already exists' });
+        continue;
       }
       if (!planCandidate) planCandidate = item;
       continue;

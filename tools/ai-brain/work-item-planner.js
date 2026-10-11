@@ -105,7 +105,6 @@ function draftWorkItem(id, options, deps) {
     fail('PLAN_INVALID_ID', 'plan requires a valid --work-item ID');
   }
   const item = getRegisterItem(rootDir, id, d);
-  if (!item) fail('PLAN_NOT_IN_REGISTER', 'No register item found for ' + id);
   const target = path.join(rootDir, 'docs', 'product-spec', 'work-items', id + '.md');
   if (fs.existsSync(target)) fail('PLAN_ALREADY_EXISTS', 'Work Item already exists: ' + target);
 
@@ -274,6 +273,17 @@ function draftWorkItem(id, options, deps) {
 async function planWorkItem(id, options, deps) {
   const opts = options || {};
   const d = deps || {};
+  // Validate register membership and target availability before either drafting
+  // locally or starting the external isolated planning pipeline.
+  const rootDir = path.resolve(opts.rootDir || process.cwd());
+  const hasRegisterSource =
+    Array.isArray(d.items) || fs.existsSync(path.join(rootDir, REGISTER_REL));
+  if (opts.run && hasRegisterSource) {
+    const item = getRegisterItem(rootDir, id, d);
+    if (!item) fail('PLAN_NOT_IN_REGISTER', 'No register item found for ' + id);
+  }
+  const target = path.join(rootDir, 'docs', 'product-spec', 'work-items', id + '.md');
+  if (fs.existsSync(target)) fail('PLAN_ALREADY_EXISTS', 'Work Item already exists: ' + target);
   if (!opts.run) return draftWorkItem(id, opts, d);
   if (typeof d.runPlanning !== 'function') {
     fail(

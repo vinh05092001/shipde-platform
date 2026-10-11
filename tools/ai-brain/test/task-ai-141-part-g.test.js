@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 const { draftWorkItem, planWorkItem, defaultPlanningDeps } = require('../work-item-planner');
 const { nextLoop } = require('../next-runner');
 const { findNextWorkItem } = require('../next-runner');
@@ -27,6 +28,14 @@ function nextLoopDeps(overrides) {
 function fixtureRoot(name) {
   const root = fs.mkdtempSync(path.join(__dirname, name));
   const files = {
+    [path.join(
+      'docs',
+      'product-spec',
+      'docs',
+      '10-ai-collaboration',
+      'FEATURE-DELIVERY-REGISTER.csv'
+    )]:
+      'delivery_order,slice,group,work_item_id,feature_id,feature_name,key_behavior,status,dependencies,work_item_path,branch,pr,codex_verdict,merge_commit\n10,fixture,auth,FEAT-AUTH-07,FEAT-AUTH-07,Fixture feature,Approved behavior,BACKLOG,,,feat/fixture,,,,\n',
     [path.join('docs', 'product-spec', 'docs', '10-ai-collaboration', 'WORK-ITEM-TEMPLATE.md')]: [
       'Business outcome',
       'Source references',
@@ -151,6 +160,7 @@ test('G2 planning and author lanes stay independent and governed run requires it
     'FEAT-AUTH-07',
     { run: true },
     {
+      items: [{ work_item_id: 'FEAT-AUTH-07', status: 'BACKLOG' }],
       runPlanning: async (request) => {
         received = request;
         return {
@@ -173,9 +183,42 @@ test('G2 planning and author lanes stay independent and governed run requires it
   assert.equal(received.docsOnly, true);
   assert.equal(received.governedMerge, true);
   assert.deepEqual(calls, ['rank', 'write', 'review', 'merge']);
-  await assert.rejects(planWorkItem('FEAT-AUTH-07', { run: true }, {}), {
-    code: 'PLAN_EXECUTOR_REQUIRED',
-  });
+  await assert.rejects(
+    planWorkItem(
+      'FEAT-AUTH-07',
+      { run: true },
+      { items: [{ work_item_id: 'FEAT-AUTH-07', status: 'BACKLOG' }] }
+    ),
+    { code: 'PLAN_EXECUTOR_REQUIRED' }
+  );
+});
+
+test('G2 plan --run validates register membership and existing documents before ranking', async () => {
+  const root = fixtureRoot('plan-g2-guards-');
+  const calls = [];
+  const deps = {
+    items: [{ work_item_id: 'FEAT-AUTH-07', status: 'BACKLOG' }],
+    rankPlanner: async () => (calls.push('rank'), { candidateKey: 'planner' }),
+    runIsolatedPlanner: async () => (calls.push('write'), { success: true }),
+    reviewPlan: async () => (calls.push('review'), { verdict: 'PASS' }),
+    mergePlan: async () => (calls.push('merge'), { merged: true }),
+    runPlanning: async () => (calls.push('run'), { status: 'READY_FOR_AUTHOR' }),
+  };
+  try {
+    await assert.rejects(planWorkItem('FEAT-AUTH-99', { run: true, rootDir: root }, deps), {
+      code: 'PLAN_NOT_IN_REGISTER',
+    });
+    fs.writeFileSync(
+      path.join(root, 'docs', 'product-spec', 'work-items', 'FEAT-AUTH-07.md'),
+      '# already exists\n'
+    );
+    await assert.rejects(planWorkItem('FEAT-AUTH-07', { run: true, rootDir: root }, deps), {
+      code: 'PLAN_ALREADY_EXISTS',
+    });
+    assert.deepEqual(calls, []);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('G2 CLI plan --run wires its execution dependencies to the planner module', async () => {
@@ -184,6 +227,7 @@ test('G2 CLI plan --run wires its execution dependencies to the planner module',
     { 'work-item': 'FEAT-AUTH-07', run: true },
     {
       planningDeps: {
+        items: [{ work_item_id: 'FEAT-AUTH-07', status: 'BACKLOG' }],
         runPlanning: async (request) => {
           called = true;
           assert.equal(request.workItemId, 'FEAT-AUTH-07');
@@ -202,6 +246,7 @@ test('G2 CLI plan --run wires its execution dependencies to the planner module',
 
 test('G2 default planner services are present and fail closed at missing external gates', async () => {
   const deps = defaultPlanningDeps(process.cwd(), {
+    items: [{ work_item_id: 'FEAT-AUTH-07', status: 'BACKLOG' }],
     candidates: [],
     rankPlanner: async () => ({ eligible: true, candidateKey: 'planner-fake' }),
     runIsolatedPlanner: async () => ({ success: true }),
@@ -319,8 +364,68 @@ test('G3 skips backlog rows whose Work Item document already exists', () => {
       }
     );
     assert.equal(result.planCandidate, null);
-    assert.equal(result.item.work_item_id, 'FEAT-AUTH-07');
-    assert.equal(result.item.status, 'BACKLOG');
+    assert.equal(result.item, null);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('G3 loop plans the earlier no-doc backlog row around existing-doc backlog rows', () => {
+  const root = fixtureRoot('plan-g3-mixed-');
+  try {
+    const workItemDir = path.join(root, 'docs', 'product-spec', 'work-items');
+    fs.writeFileSync(path.join(workItemDir, 'FEAT-AUTH-06.md'), '# existing\n');
+    const existing = { work_item_id: 'FEAT-AUTH-06', status: 'BACKLOG', dependencies: '' };
+    const needsPlan = { work_item_id: 'FEAT-AUTH-07', status: 'BACKLOG', dependencies: '' };
+    const result = findNextWorkItem(
+      { rootDir: root, loop: true },
+      { items: [existing, needsPlan], records: [] }
+    );
+    assert.equal(result.item, needsPlan);
+    assert.equal(result.planCandidate, needsPlan);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('G3 READY author selection never starts planning an existing-doc BACKLOG row', () => {
+  const root = fixtureRoot('plan-g3-ready-mixed-');
+  try {
+    fs.writeFileSync(
+      path.join(root, 'docs', 'product-spec', 'work-items', 'FEAT-AUTH-07.md'),
+      '# existing\n'
+    );
+    const ready = { work_item_id: 'FEAT-AUTH-06', status: 'READY_FOR_AUTHOR', dependencies: '' };
+    const existing = { work_item_id: 'FEAT-AUTH-07', status: 'BACKLOG', dependencies: '' };
+    const next = { work_item_id: 'FEAT-AUTH-08', status: 'BACKLOG', dependencies: '' };
+    const result = findNextWorkItem(
+      { rootDir: root, loop: true },
+      { items: [ready, existing, next], records: [] }
+    );
+    assert.equal(result.item, ready);
+    assert.equal(result.planCandidate, next);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('G2 real CLI plan command runs as a child process without a deps ReferenceError', () => {
+  const root = fixtureRoot('plan-cli-child-');
+  const cli = path.resolve(__dirname, '..', 'cli.js');
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [cli, 'plan', '--work-item', 'FEAT-AUTH-07', '--root', root],
+      { cwd: root, encoding: 'utf8' }
+    );
+    assert.equal(result.error, undefined);
+    assert.equal(result.status, 0, result.stderr);
+    assert.doesNotMatch(result.stderr, /ReferenceError|deps is not defined/);
+    assert.match(result.stdout, /"id": "FEAT-AUTH-07"/);
+    assert.equal(
+      fs.existsSync(path.join(root, 'docs', 'product-spec', 'work-items', 'FEAT-AUTH-07.md')),
+      true
+    );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -332,6 +437,7 @@ test('G3 planner lane accepts a blocked result as a single planning outcome', as
     'FEAT-AUTH-07',
     { run: true },
     {
+      items: [{ work_item_id: 'FEAT-AUTH-07', status: 'BACKLOG' }],
       runPlanning: async () => {
         calls.push('plan');
         return { status: 'BLOCKED', reason: 'source gap' };

@@ -3141,8 +3141,8 @@ function buildQualificationCandidates(rootDir) {
     })
     .sort((a, b) => (b.controllerRank || 0) - (a.controllerRank || 0));
 }
-function main() {
-  const args = parseArgs(process.argv.slice(2));
+function main(argv = process.argv.slice(2), deps = {}) {
+  const args = parseArgs(argv);
   const command = args._[0] || 'reconcile';
 
   if (command === 'reconcile') return reconcileCommand(args);
@@ -3295,7 +3295,7 @@ function main() {
     planCommand(args, planningDeps)
       .then((result) => {
         console.log(JSON.stringify(result, null, 2));
-        if (result && result.blocking) process.exitCode = 1;
+        if (result && (result.blocking || result.status === 'BLOCKED')) process.exitCode = 1;
       })
       .catch((err) => {
         console.error(
