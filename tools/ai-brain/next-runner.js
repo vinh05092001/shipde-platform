@@ -605,10 +605,7 @@ function findNextWorkItem(options, deps) {
       }
       const workItemPath = path.join(rootDir, 'docs', 'product-spec', 'work-items', id + '.md');
       if (fs.existsSync(workItemPath)) {
-        skipped.push({
-          id,
-          reason: 'Work Item document exists but register is not READY_FOR_AUTHOR',
-        });
+        if (!planCandidate) planCandidate = item;
         continue;
       }
       if (!planCandidate) planCandidate = item;
@@ -810,7 +807,7 @@ async function nextLoop(options, deps) {
     }
 
     // Planning stays a separate lane. Schedule one item ahead while a ready
-    // author item runs, subject to the same implementation ceiling.
+    // author item runs, independently of the implementation ceiling.
     // With no author-ready item, findNextWorkItem exposes the backlog planner
     // candidate as `item`; the sequential planning path below owns that run.
     // Parallel planning is only for a distinct item while an author runs.
@@ -820,38 +817,35 @@ async function nextLoop(options, deps) {
         : null;
     let parallelPlanning = null;
     if (planningItem) {
-      const ceiling = checkCeiling({ ...opts, now }, d);
       const planning = require('./work-item-planner');
-      if (ceiling.allowed) {
-        const planningPromise = planning.planWorkItem(
-          planningItem.work_item_id,
-          { rootDir, run: true },
-          d.planningDeps || d
-        );
-        const authorItem = findResult.item;
-        if (authorItem && authorItem !== planningItem) {
-          // Keep the author lane moving without awaiting planner completion.
-          parallelPlanning = planningPromise;
-        } else {
-          try {
-            const result = await planningPromise;
-            if (!result || result.status !== 'READY_FOR_AUTHOR') {
-              terminalWorkItems.set(planningItem.work_item_id, 'planning-blocked');
-            }
-            if (iteration < maxIterations) {
-              await sleepFn(pollIntervalMs);
-              continue;
-            }
-            return { completed: true, iterations: iteration, planning: result };
-          } catch (err) {
-            terminalWorkItems.set(planningItem.work_item_id, 'planning-failed');
-            log(`Planning ${planningItem.work_item_id} failed: ${err.message}`);
-            return {
-              stopped: true,
-              reason: 'PLANNING_FAILED',
-              workItemId: planningItem.work_item_id,
-            };
+      const planningPromise = planning.planWorkItem(
+        planningItem.work_item_id,
+        { rootDir, run: true },
+        d.planningDeps || d
+      );
+      const authorItem = findResult.item;
+      if (authorItem && authorItem !== planningItem) {
+        // Keep the author lane moving without awaiting planner completion.
+        parallelPlanning = planningPromise;
+      } else {
+        try {
+          const result = await planningPromise;
+          if (!result || result.status !== 'READY_FOR_AUTHOR') {
+            terminalWorkItems.set(planningItem.work_item_id, 'planning-blocked');
           }
+          if (iteration < maxIterations) {
+            await sleepFn(pollIntervalMs);
+            continue;
+          }
+          return { completed: true, iterations: iteration, planning: result };
+        } catch (err) {
+          terminalWorkItems.set(planningItem.work_item_id, 'planning-failed');
+          log(`Planning ${planningItem.work_item_id} failed: ${err.message}`);
+          return {
+            stopped: true,
+            reason: 'PLANNING_FAILED',
+            workItemId: planningItem.work_item_id,
+          };
         }
       }
     }
@@ -874,7 +868,7 @@ async function nextLoop(options, deps) {
         const planning = require('./work-item-planner');
         const planned = await planning.planWorkItem(
           item.work_item_id,
-          { rootDir, run: true },
+          { rootDir, run: true, reviewExisting: fs.existsSync(workItemPath) },
           d.planningDeps || d
         );
         const governed =

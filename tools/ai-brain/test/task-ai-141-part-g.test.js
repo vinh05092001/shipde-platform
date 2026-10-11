@@ -6,7 +6,12 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { draftWorkItem, planWorkItem, defaultPlanningDeps } = require('../work-item-planner');
+const {
+  draftWorkItem,
+  planWorkItem,
+  defaultPlanningDeps,
+  validateDraftAgainstSources,
+} = require('../work-item-planner');
 const { nextLoop } = require('../next-runner');
 const { findNextWorkItem } = require('../next-runner');
 const { planCommand } = require('../cli');
@@ -148,6 +153,146 @@ test('G1 missing feature detail is explicitly blocked', () => {
     assert.equal(result.status, 'BLOCKED');
     assert.equal(result.blocking, true);
     assert.match(fs.readFileSync(result.target, 'utf8'), /## Open decisions[\s\S]*\n- /);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('G1 rejects traversal citations before the source reader can access outside files', () => {
+  const root = fixtureRoot('plan-g1-traversal-');
+  try {
+    const draft = [
+      '# FEAT-AUTH-07 — Fixture feature',
+      '',
+      '## Business outcome',
+      '',
+      '> Approved behavior',
+      '',
+      '## Source references',
+      '',
+      '- `docs/product-spec/docs/02-business/../../../../../../secrets.txt#Secret`',
+      '',
+      ...[
+        'Preconditions and dependencies',
+        'Author boundary',
+        'In scope',
+        'Out of scope',
+        'Business rules and edge cases',
+        'UI states',
+        'API, event and data impact',
+        'Acceptance matrix',
+        'Verification commands',
+        'Codex review record',
+        'Residual limitations',
+      ].flatMap((heading) => ['## ' + heading, '', '- Fixture', '']),
+      '## Open decisions',
+      '',
+      '- None.',
+    ].join('\n');
+    const reads = [];
+    const validation = validateDraftAgainstSources(draft, 'FEAT-AUTH-07', root, {
+      readSource: (rel) => {
+        reads.push(rel);
+        if (rel.includes('secrets')) throw new Error('outside source read attempted');
+        return 'Approved behavior';
+      },
+      approvedSpecSources: [],
+    });
+    assert.equal(validation.valid, false);
+    assert.match(validation.reason, /unapproved source/);
+    assert.deepEqual(reads, []);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('G1 worker drafts cannot pass governed review with uncited product claims', () => {
+  const root = fixtureRoot('plan-g1-uncited-');
+  try {
+    const draft = [
+      '# FEAT-AUTH-07 — Fixture feature',
+      '',
+      '## Business outcome',
+      '',
+      '> Approved behavior',
+      '',
+      '## Source references',
+      '',
+      '- `docs/product-spec/docs/01-product/MASTER-FEATURE-CATALOG.md#Feature`',
+      '',
+      '## In scope',
+      '',
+      '- The system automatically refunds every delayed parcel.',
+      '',
+      ...[
+        'Preconditions and dependencies',
+        'Author boundary',
+        'Out of scope',
+        'Business rules and edge cases',
+        'UI states',
+        'API, event and data impact',
+        'Acceptance matrix',
+        'Verification commands',
+        'Codex review record',
+        'Residual limitations',
+      ].flatMap((heading) => ['## ' + heading, '', '- none', '']),
+      '## Open decisions',
+      '',
+      '- None.',
+    ].join('\n');
+    const validation = validateDraftAgainstSources(draft, 'FEAT-AUTH-07', root, {
+      readSource: () => '| FEAT-AUTH-07 | Fixture feature | Approved behavior |',
+      approvedSpecSources: [],
+    });
+    assert.equal(validation.valid, false);
+    assert.match(validation.reason, /not supported by its cited approved sources/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('G1 citations use template-compatible single code formatting', () => {
+  const root = fixtureRoot('plan-g1-citations-');
+  try {
+    const result = draftWorkItem(
+      'FEAT-AUTH-07',
+      { rootDir: root },
+      {
+        items: [
+          {
+            work_item_id: 'FEAT-AUTH-07',
+            feature_name: 'Fixture feature',
+            key_behavior: 'Approved behavior',
+          },
+        ],
+      }
+    );
+    const draft = fs.readFileSync(result.target, 'utf8');
+    assert.match(
+      draft,
+      /- `docs[\\/]product-spec[\\/]docs[\\/]01-product[\\/]MASTER-FEATURE-CATALOG\.md#line 1`/
+    );
+    assert.doesNotMatch(draft, /- ``docs[\\/]product-spec/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('G2 default planner ranking applies the planner.default proof and quality floors', async () => {
+  const root = fixtureRoot('plan-g2-floors-');
+  try {
+    let profile;
+    const deps = defaultPlanningDeps(root, {
+      items: [],
+      rankForProfile: (...args) => {
+        profile = args[1];
+        return { ranking: [], chosen: null };
+      },
+    });
+    await deps.rankPlanner({ workItemId: 'FEAT-AUTH-07', role: 'planner.default' });
+    assert.equal(profile.proofFloor, 'WORK_ITEM_PASS');
+    assert.equal(profile.qualityFloor, 80);
+    assert.equal(profile.costCeiling, 5000);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -367,6 +512,7 @@ test('G3 refuses to draft or mark author-ready when the governed planner is unav
     const result = await nextLoop(
       { rootDir: root, maxIterations: 1, decisionDir: path.join(root, 'decisions') },
       nextLoopDeps({
+        ceiling: { maxWriters: 2, maxReviewers: 2 },
         items: [{ work_item_id: 'FEAT-AUTH-07', status: 'BACKLOG', dependencies: '' }],
         now: Date.now(),
       })
@@ -398,7 +544,7 @@ test('G3 keeps the author lane selected and plans one dependency-ready item ahea
   }
 });
 
-test('G3 does not treat a draft-backed BACKLOG row as approved for authoring', () => {
+test('G3 sends a draft-backed BACKLOG row through planning, not authoring', () => {
   const root = fixtureRoot('plan-g3-existing-');
   try {
     const workItemDir = path.join(root, 'docs', 'product-spec', 'work-items');
@@ -410,15 +556,14 @@ test('G3 does not treat a draft-backed BACKLOG row as approved for authoring', (
         records: [],
       }
     );
-    assert.equal(result.item, null);
-    assert.equal(result.planCandidate, null);
-    assert.match(result.skipped[0].reason, /not READY_FOR_AUTHOR/);
+    assert.equal(result.item, result.planCandidate);
+    assert.equal(result.item.work_item_id, 'FEAT-AUTH-07');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('G3 skips an earlier ungoverned doc-backed backlog row and plans a later row', () => {
+test('G3 selects the earliest ungoverned doc-backed backlog row for planning', () => {
   const root = fixtureRoot('plan-g3-mixed-');
   try {
     const workItemDir = path.join(root, 'docs', 'product-spec', 'work-items');
@@ -429,14 +574,30 @@ test('G3 skips an earlier ungoverned doc-backed backlog row and plans a later ro
       { rootDir: root, loop: true },
       { items: [existing, needsPlan], records: [] }
     );
-    assert.equal(result.item, needsPlan);
-    assert.equal(result.planCandidate, needsPlan);
+    assert.equal(result.item, existing);
+    assert.equal(result.planCandidate, existing);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('G3 next loop does not run intake for an ungoverned doc-backed BACKLOG row', async () => {
+test('G3 selects a doc-backed BACKLOG row for governed planning instead of stalling', () => {
+  const root = fixtureRoot('plan-g3-doc-backed-selected-');
+  try {
+    fs.writeFileSync(
+      path.join(root, 'docs', 'product-spec', 'work-items', 'FEAT-AUTH-07.md'),
+      '# Existing ungoverned Work Item\n'
+    );
+    const row = { work_item_id: 'FEAT-AUTH-07', status: 'BACKLOG', dependencies: '' };
+    const result = findNextWorkItem({ rootDir: root, loop: true }, { items: [row], records: [] });
+    assert.equal(result.item, row);
+    assert.equal(result.planCandidate, row);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('G3 next loop runs governed planning for an ungoverned doc-backed BACKLOG row', async () => {
   const root = fixtureRoot('plan-g3-doc-backed-author-');
   const workItemPath = path.join(root, 'docs', 'product-spec', 'work-items', 'FEAT-AUTH-07.md');
   fs.writeFileSync(workItemPath, '# Existing Work Item\n');
@@ -445,8 +606,18 @@ test('G3 next loop does not run intake for an ungoverned doc-backed BACKLOG row'
     const result = await nextLoop(
       { rootDir: root, maxIterations: 1, decisionDir: path.join(root, 'decisions') },
       nextLoopDeps({
+        ceiling: { maxWriters: 0, maxReviewers: 1 },
         items: [{ work_item_id: 'FEAT-AUTH-07', status: 'BACKLOG', dependencies: '' }],
         planningDeps: {
+          items: [
+            {
+              work_item_id: 'FEAT-AUTH-07',
+              feature_id: 'FEAT-AUTH-07',
+              feature_name: 'Fixture feature',
+              key_behavior: 'Approved behavior',
+            },
+          ],
+          draftWorkItem: async () => ({ status: 'BLOCKED', reason: 'existing draft needs review' }),
           runPlanning: async () => {
             calls.push('planning');
             throw new Error('draft must go through governed planning');
@@ -460,13 +631,13 @@ test('G3 next loop does not run intake for an ungoverned doc-backed BACKLOG row'
     );
     assert.deepEqual(calls, []);
     assert.equal(result.stopped, true);
-    assert.equal(result.reason, 'NO_READY_ITEM');
+    assert.equal(result.reason, 'PLANNING_FAILED');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('G3 READY author selection never starts planning an existing-doc BACKLOG row', () => {
+test('G3 READY author selection plans the earliest existing-doc BACKLOG row', () => {
   const root = fixtureRoot('plan-g3-ready-mixed-');
   try {
     fs.writeFileSync(
@@ -481,7 +652,7 @@ test('G3 READY author selection never starts planning an existing-doc BACKLOG ro
       { items: [ready, existing, next], records: [] }
     );
     assert.equal(result.item, ready);
-    assert.equal(result.planCandidate, next);
+    assert.equal(result.planCandidate, existing);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -630,8 +801,8 @@ test('G4 source-limited drafting does not include uncited product claims', () =>
             line === '- None.' ||
             line.startsWith('- Status remains a draft') ||
             line.includes('No matching cited section found in approved source:') ||
-            line.startsWith('- ``docs\\') ||
-            line.startsWith('- ``docs/'),
+            line.startsWith('- `docs\\') ||
+            line.startsWith('- `docs/'),
           'unexpected generated claim: ' + line
         );
       }
@@ -792,7 +963,7 @@ test('G3 parallel planning rejection on early exit is handled and records PLANNI
   }
 });
 
-test('G3 loop iteration ceiling continuation does not re-plan the same item twice', async () => {
+test('G3 planner runs independently of the implementation ceiling and does not duplicate work', async () => {
   const root = fixtureRoot('plan-g3-no-replan-');
   try {
     let planCount = 0;

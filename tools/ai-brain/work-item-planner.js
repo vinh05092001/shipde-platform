@@ -121,7 +121,7 @@ function draftWorkItem(id, options, deps) {
   const approvedRefs = primarySources
     .map(({ path: rel, text }) => {
       const section = sourceSection(text, id, terms);
-      return section ? `\`${rel}#${section}\`` : null;
+      return section ? `${rel}#${section}` : null;
     })
     .filter(Boolean);
   const requiredSections = [
@@ -317,25 +317,43 @@ function validateDraftAgainstSources(draftText, id, rootDir, deps) {
   const specNorm = specSources.map((p) => p.replace(/\\/g, '/'));
   const approvedDirsNorm = APPROVED_SPEC_DIRS.map((dir) => dir.replace(/\\/g, '/'));
 
+  function resolveApprovedRef(refPath) {
+    const portable = refPath.replace(/\\/g, '/');
+    const segments = portable.split('/');
+    if (segments.some((segment) => segment === '..' || segment === '.' || !segment)) return null;
+    const normalized = path.posix.normalize(portable);
+    if (
+      normalized.startsWith('../') ||
+      normalized === '..' ||
+      normalized.startsWith('/') ||
+      /^[a-z]:\//i.test(normalized)
+    ) {
+      return null;
+    }
+    const isApproved =
+      approvedNorm.includes(normalized) ||
+      specNorm.includes(normalized) ||
+      approvedDirsNorm.some((dir) => normalized.startsWith(dir + '/'));
+    return isApproved ? normalized : null;
+  }
+
+  const citedSources = [];
   for (const line of refLines) {
     const m = line.match(/`([^`]+)`/) || line.match(/^-\s+(.+)$/);
     if (!m) continue;
     const rawRef = m[1].trim();
     const refPath = rawRef.split('#')[0].trim().replace(/\\/g, '/');
-    const isApproved =
-      approvedNorm.includes(refPath) ||
-      specNorm.includes(refPath) ||
-      approvedDirsNorm.some((dir) => refPath.startsWith(dir + '/'));
-    if (!isApproved) {
+    const approvedRef = resolveApprovedRef(refPath);
+    if (!approvedRef) {
       return { valid: false, reason: 'Worker draft cites unapproved source: ' + rawRef };
     }
     try {
-      docReader(refPath);
+      citedSources.push(String(docReader(approvedRef)));
     } catch {
       try {
-        docReader(path.normalize(refPath));
+        citedSources.push(String(docReader(path.normalize(approvedRef))));
       } catch {
-        return { valid: false, reason: 'Worker draft cites missing source file: ' + refPath };
+        return { valid: false, reason: 'Worker draft cites missing source file: ' + approvedRef };
       }
     }
   }
@@ -352,25 +370,53 @@ function validateDraftAgainstSources(draftText, id, rootDir, deps) {
     };
   }
 
-  const primarySources = [...new Set([...APPROVED_SOURCES, ...specSources])];
-  const sourceBacked = primarySources.some((rel) => {
-    try {
-      let content;
-      try {
-        content = docReader(rel);
-      } catch {
-        content = docReader(path.normalize(rel));
-      }
-      return content.includes(outcomeText);
-    } catch {
-      return false;
-    }
-  });
+  const sourceBacked = citedSources.some((content) => content.includes(outcomeText));
   if (!sourceBacked) {
     return {
       valid: false,
       reason: 'Worker draft business outcome is not present in approved sources: ' + outcomeText,
     };
+  }
+
+  const standardStatements = new Set([
+    'none',
+    'none recorded',
+    'dependency merge status and feature-specific prerequisites require verification before authoring.',
+    'author and implementation boundary require assignment after source-backed scope and risk review.',
+    'do not implement behavior beyond the cited approved sources.',
+    'the catalog outcome above, subject to approval of detailed requirements.',
+    'any behavior not explicitly established by approved source sections.',
+    'no feature-specific rules were inferred. add only rules found in approved source sections.',
+    'no screen behavior inferred; cite the applicable screen specification before authoring.',
+    'no api, event, entity or persistence impact inferred; cite the applicable approved contracts.',
+    'determine from the repository baseline and feature implementation scope.',
+    'feature detail is incomplete pending the decisions below.',
+  ]);
+  const citedText = citedSources.join('\n').toLowerCase();
+  let currentSection = '';
+  for (const line of draftText.split(/\r?\n/)) {
+    const heading = line.match(/^##\s+(.+)$/);
+    if (heading) {
+      currentSection = heading[1].trim().toLowerCase();
+      continue;
+    }
+    if (
+      !line.startsWith('- ') ||
+      currentSection === 'source references' ||
+      currentSection === 'open decisions'
+    ) {
+      continue;
+    }
+    const claim = line.slice(2).trim().replace(/[`*_]/g, '').toLowerCase();
+    if (standardStatements.has(claim) || claim.startsWith('register dependencies:')) continue;
+    if (!citedText.includes(claim)) {
+      return {
+        valid: false,
+        reason:
+          'Worker draft contains a statement not supported by its cited approved sources: ' +
+          line.slice(2).trim(),
+      };
+    }
   }
 
   if (/\|\s*Status\s*\|\s*`BLOCKED`\s*\|/.test(draftText)) {
@@ -410,7 +456,10 @@ async function planWorkItem(id, options, deps) {
     if (!item) fail('PLAN_NOT_IN_REGISTER', 'No register item found for ' + id);
   }
   const target = path.join(rootDir, 'docs', 'product-spec', 'work-items', id + '.md');
-  if (fs.existsSync(target)) fail('PLAN_ALREADY_EXISTS', 'Work Item already exists: ' + target);
+  const existingTarget = fs.existsSync(target);
+  if (existingTarget && !opts.reviewExisting) {
+    fail('PLAN_ALREADY_EXISTS', 'Work Item already exists: ' + target);
+  }
 
   if (opts.run) {
     if (typeof d.runPlanning !== 'function') {
@@ -436,8 +485,19 @@ async function planWorkItem(id, options, deps) {
   let draft;
   let draftCreated = false;
   try {
-    draft = await draftFn(id, opts, d);
-    draftCreated = true;
+    if (existingTarget && opts.reviewExisting) {
+      draft = {
+        id,
+        target,
+        status: 'DRAFT',
+        blocking: false,
+        text: d.readFile ? d.readFile(target) : fs.readFileSync(target, 'utf8'),
+        existing: true,
+      };
+    } else {
+      draft = await draftFn(id, opts, d);
+      draftCreated = true;
+    }
   } catch (err) {
     throw err;
   }
@@ -607,16 +667,16 @@ function defaultPlanningDeps(rootDir, overrides) {
         role,
         complexity: 'complex',
         riskDomains: ['documentation'],
-        qualityFloor: 0,
-        proofFloor: 'NONE',
+        qualityFloor: 80,
+        proofFloor: 'WORK_ITEM_PASS',
         contextSize: 0,
-        costCeiling: Number.MAX_SAFE_INTEGER,
+        costCeiling: 5000,
         currentWorkload: 0,
         resourceCeiling: 100,
         forbiddenFailureDomains: [],
         requiredCapabilities: [],
       };
-      const result = routing.rankForProfile(
+      const result = (d.rankForProfile || routing.rankForProfile)(
         annotated,
         profile,
         { weightProfile: 'QUALITY_FIRST' },
