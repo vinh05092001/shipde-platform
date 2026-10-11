@@ -206,6 +206,45 @@ const opencodeDirect = {
   writesUsageReport: true,
 };
 
+const codex = {
+  id: 'codex',
+  command: 'codex',
+  launch(job) {
+    if (!job || !job.isolatedWorker) throw new Error('CODEX_REQUIRES_ISOLATION');
+    const { isWorkerPath, readClosedIsolationVerdict } = require('./isolation-launcher');
+    if (!isWorkerPath(job.cwd)) throw new Error('CODEX_REQUIRES_ISOLATION');
+    const verdict = job.isolationVerdict || process.env.SHIPDE_ISOLATION_VERDICT;
+    let verdictData;
+    try {
+      verdictData = typeof verdict === 'string' ? JSON.parse(verdict) : verdict;
+    } catch {
+      throw new Error('CODEX_REQUIRES_ISOLATION');
+    }
+    if (
+      !verdictData ||
+      typeof verdictData !== 'object' ||
+      Array.isArray(verdictData) ||
+      verdictData.verdict !== 'CLOSED'
+    ) {
+      throw new Error('CODEX_REQUIRES_ISOLATION');
+    }
+    const currentVerdict = readClosedIsolationVerdict(
+      job.isolationVerdictPath ? { verdictPath: job.isolationVerdictPath } : undefined
+    );
+    if (currentVerdict.verdict !== 'CLOSED') throw new Error('CODEX_REQUIRES_ISOLATION');
+    const args = ['exec', '--dangerously-bypass-approvals-and-sandbox'];
+    if (job.model) args.push('--model', job.model);
+    args.push(job.prompt || '');
+    return args;
+  },
+  resume() {
+    throw new Error('CODEX_REQUIRES_ISOLATION');
+  },
+  sessionIdFrom() {
+    return null;
+  },
+};
+
 const MIN_CONTEXT = Object.freeze({ hermes: 32000 });
 
 function contextRefusal(harnessName, contextWindow) {
@@ -397,6 +436,7 @@ const HARNESSES = Object.freeze({
   paseo,
   cline,
   hermes,
+  codex,
   'opencode-direct': opencodeDirect,
   'agy-pool': agyPool,
   autoclaw: {
