@@ -425,9 +425,7 @@ $stdoutTask = $process.StandardOutput.ReadToEndAsync()
 $stderrTask = $process.StandardError.ReadToEndAsync()
 $timeoutMs = ${workerTimeoutMs}
 $tokenBudgetJson = '${JSON.stringify(tokenBudget || {}).replace(/'/g, "''")}'
-$usageFile = '${String(options.usageFile || '')
-    .replace(/'/g, "''")
-    .replace(/\\/g, '\\\\')}'
+$usageFile = '${String(options.usageFile || '').replace(/'/g, "''")}'
 $maxTokens = 0
 $progressTimeoutMs = ${Number(options.progressTimeoutMs) > 0 ? Number(options.progressTimeoutMs) : 0}
 $lastProgressAt = [System.Diagnostics.Stopwatch]::GetTimestamp()
@@ -486,14 +484,22 @@ function Read-UsageTotal {
         $report = Get-Content -LiteralPath $usageFile -Raw | ConvertFrom-Json
         $usage = $report.usage
         if ($null -eq $usage) { return $null }
-        if ($null -ne $usage.total_tokens) { return [double]$usage.total_tokens }
-        if ($null -ne $usage.total) { return [double]$usage.total }
-        if ($null -ne $usage.input_tokens -or $null -ne $usage.output_tokens) {
-            return [double]$usage.input_tokens + [double]$usage.output_tokens
+        $reportedTotal = $null
+        if ($null -ne $usage.total_tokens) { $reportedTotal = [double]$usage.total_tokens }
+        elseif ($null -ne $usage.total) { $reportedTotal = [double]$usage.total }
+        if ($null -ne $usage.input_tokens -or $null -ne $usage.cache_read_tokens -or $null -ne $usage.output_tokens) {
+            $accounted = [double]$usage.input_tokens + [double]$usage.cache_read_tokens + [double]$usage.output_tokens
+            if ($null -ne $reportedTotal) { return [math]::Max($reportedTotal, $accounted) }
+            return $accounted
         }
-        if ($null -ne $usage.input -or $null -ne $usage.output) {
-            return [double]$usage.input + [double]$usage.output
+        if ($null -ne $usage.input -or $null -ne $usage.cacheRead -or $null -ne $usage.cache_read -or $null -ne $usage.output) {
+            $cacheRead = $usage.cacheRead
+            if ($null -eq $cacheRead) { $cacheRead = $usage.cache_read }
+            $accounted = [double]$usage.input + [double]$cacheRead + [double]$usage.output
+            if ($null -ne $reportedTotal) { return [math]::Max($reportedTotal, $accounted) }
+            return $accounted
         }
+        if ($null -ne $reportedTotal) { return $reportedTotal }
     } catch {}
     return $null
 }
@@ -934,12 +940,18 @@ function enforceTokenBudget(launchResult, tokenBudget, usageFile) {
     const usage = report.usage || {};
     const hasTotal = usage.total_tokens != null || usage.total != null;
     const hasInput = usage.input_tokens != null || usage.input != null;
+    const hasCacheRead =
+      usage.cache_read_tokens != null || usage.cacheRead != null || usage.cache_read != null;
     const hasOutput = usage.output_tokens != null || usage.output != null;
-    if (!hasTotal && !hasInput && !hasOutput) throw new Error('usage total missing');
+    if (!hasTotal && !hasInput && !hasCacheRead && !hasOutput)
+      throw new Error('usage total missing');
+    const accountedTotal =
+      Number(usage.input_tokens ?? usage.input ?? 0) +
+      Number(usage.cache_read_tokens ?? usage.cacheRead ?? usage.cache_read ?? 0) +
+      Number(usage.output_tokens ?? usage.output ?? 0);
     total = hasTotal
-      ? Number(usage.total_tokens ?? usage.total)
-      : Number(usage.input_tokens ?? usage.input ?? 0) +
-        Number(usage.output_tokens ?? usage.output ?? 0);
+      ? Math.max(Number(usage.total_tokens ?? usage.total), accountedTotal)
+      : accountedTotal;
     if (!Number.isFinite(total)) throw new Error('usage total invalid');
     if (total > Number(tokenBudget.maxTokens)) failureReason = 'TOKEN_BUDGET_EXCEEDED';
   } catch (_) {

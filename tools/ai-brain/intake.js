@@ -40,8 +40,11 @@ const REVIEW_BUDGET = '2';
 const WORKER_TIMEOUT_MIN = '60';
 const RTK_RISK_DOMAINS = [
   'auth',
+  'authentication',
   'security',
   'money',
+  'payment',
+  'payments',
   'tenant isolation',
   'tenant_isolation',
   'tenancy',

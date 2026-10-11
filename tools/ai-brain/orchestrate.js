@@ -3033,10 +3033,20 @@ async function runOrchestration(goal, opts) {
       : 30 * 60 * 1000;
   log.workerTimeoutMs = o.workerTimeoutMs;
   const budgetConfig = o.tokenBudgets || {};
+  const budgetForItem = (item) =>
+    budgetConfig.byRole?.[roleOf(item)] ||
+    budgetConfig.byComplexity?.[item.complexity] ||
+    budgetConfig[roleOf(item)] ||
+    budgetConfig[item.complexity] ||
+    budgetConfig.default ||
+    {};
   const budgetProgressMs =
     Number(
-      (budgetConfig.byRole?.['author.foundation'] || budgetConfig.default || {})
-        .noProgressMinutes || 0
+      (o.specs || [])
+        .map((item) => budgetForItem(item).noProgressMinutes)
+        .find((n) => Number(n) > 0) ||
+        budgetConfig.default?.noProgressMinutes ||
+        0
     ) *
     60 *
     1000;
@@ -3788,20 +3798,24 @@ async function runOrchestration(goal, opts) {
         }
         break;
       }
+      if (item.hostGateFailures && item.hostGateFailures.length) {
+        log.prompts.push({
+          workItemId: item.id,
+          attempt,
+          candidateKey: decision.chosen,
+          prompt: compilePrompt(item, {
+            goal,
+            specText: o.specText,
+            candidateKey: decision.chosen,
+            branch: o.branch || 'feat/' + String(item.id).toLowerCase(),
+            focusedTestsOnly: true,
+            contextPack: contextPack && contextPack.path,
+            hostGateFailures: item.hostGateFailures,
+          }),
+        });
+      }
       const candidate = candidates.find((c) => candidateKey(c) === decision.chosen);
-      if (
-        attempt >
-        Number(
-          (
-            budgetConfig.byRole?.[roleOf(item)] ||
-            budgetConfig.byComplexity?.[item.complexity] ||
-            budgetConfig[roleOf(item)] ||
-            budgetConfig[item.complexity] ||
-            budgetConfig.default ||
-            {}
-          ).maxTurns || Infinity
-        )
-      ) {
+      if (attempt > Number(budgetForItem(item).maxTurns || Infinity)) {
         launch.fallbackReason = 'TURN_BUDGET_EXCEEDED';
         break;
       }
@@ -3834,8 +3848,10 @@ async function runOrchestration(goal, opts) {
         returnTools: true,
         focusedTestsOnly: true,
         contextPack: contextPack && contextPack.path,
+        hostGateFailures: item.hostGateFailures || [],
       });
       const prompt = compiledPrompt.prompt;
+      if (item.hostGateFailures && item.hostGateFailures.length) delete item.hostGateFailures;
       const promptToolIds = compiledPrompt.tools;
       if (Array.isArray(promptToolIds) && promptToolIds.length > 0) {
         decisions.recordDecision(
@@ -3887,32 +3903,13 @@ async function runOrchestration(goal, opts) {
         lowRisk: itemRtkPermitted,
         riskDomains: itemRiskDomains,
         tokenBudgetConfig: budgetConfig,
-        tokenBudget:
-          budgetConfig.byRole?.[roleOf(item)] ||
-          budgetConfig.byComplexity?.[item.complexity] ||
-          budgetConfig[roleOf(item)] ||
-          budgetConfig[item.complexity] ||
-          budgetConfig.default ||
+        tokenBudget: budgetForItem(item),
+        maxTurns: budgetForItem(item).maxTurns || null,
+        maxQuotaFailures: budgetForItem(item).repeatedQuotaFailures || 3,
+        progressTimeoutMs:
+          (Number(budgetForItem(item).noProgressMinutes) || 0) * 60 * 1000 ||
+          o.progressTimeoutMs ||
           null,
-        maxTurns:
-          (
-            budgetConfig.byRole?.[roleOf(item)] ||
-            budgetConfig.byComplexity?.[item.complexity] ||
-            budgetConfig[roleOf(item)] ||
-            budgetConfig[item.complexity] ||
-            budgetConfig.default ||
-            {}
-          ).maxTurns || null,
-        maxQuotaFailures:
-          (
-            budgetConfig.byRole?.[roleOf(item)] ||
-            budgetConfig.byComplexity?.[item.complexity] ||
-            budgetConfig[roleOf(item)] ||
-            budgetConfig[item.complexity] ||
-            budgetConfig.default ||
-            {}
-          ).repeatedQuotaFailures || 3,
-        progressTimeoutMs: o.progressTimeoutMs || null,
         hostGate: Boolean(controllerGate),
         decisionDir: o.decisionDir || null,
         workItemId: item.id,
@@ -4022,6 +4019,12 @@ async function runOrchestration(goal, opts) {
             launch.fallbackReason = 'STALLED_NO_PROGRESS';
             launch.cause = 'STALLED_NO_PROGRESS';
           }
+          if (res && Array.isArray(res.hostGateFailures)) {
+            launchClassification.scope = 'local';
+            launchClassification.cause = 'HOST_GATE_FAILED';
+            launch.fallbackReason = 'HOST_GATE_FAILED';
+            launch.cause = 'HOST_GATE_FAILED';
+          }
           failureList.push({
             failedCandidateKey: decision.chosen,
             failureScope: launchClassification.scope,
@@ -4086,19 +4089,95 @@ async function runOrchestration(goal, opts) {
         const gate = await controllerGate(job);
         log.hostGate = gate;
         if (!gate.pass) {
-          if (gate.failures && gate.failures.length) {
+          if (gate.failures && gate.failures.length && typeof o.hostGateRepair === 'function') {
             const repair = candidates.find(
               (candidate) => candidateKey(candidate) !== decision.chosen
             );
-            if (repair && typeof o.hostGateRepair === 'function') {
+            if (repair) {
               await o.hostGateRepair({ job, failures: gate.failures, candidate: repair });
             }
           }
+          const gateFailures = gate.failures || [];
+          item.hostGateFailures = gateFailures;
           res = Object.assign({}, res, {
             exitCode: 1,
-            hostGateFailures: gate.failures || [],
+            hostGateFailures: gateFailures,
+            needsHostGateRepair: Boolean(o.hostGateRepair),
           });
+          break;
         }
+      }
+
+      if (res && Array.isArray(res.hostGateFailures) && res.needsHostGateRepair) {
+        item.hostGateFailures = res.hostGateFailures;
+        job.prompt = compilePrompt(item, {
+          goal,
+          specText: o.specText,
+          candidateKey: decision.chosen,
+          branch,
+          usageFile,
+          isolatedWorker: Boolean(o.isolatedWorker),
+          focusedTestsOnly: true,
+          contextPack: contextPack && contextPack.path,
+          hostGateFailures: res.hostGateFailures,
+        });
+        prompt = job.prompt;
+        const promptRecord = log.prompts.find(
+          (entry) => entry.workItemId === item.id && entry.attempt === attempt
+        );
+        if (promptRecord) promptRecord.prompt = job.prompt;
+        log.prompts.push({
+          workItemId: item.id,
+          attempt,
+          candidateKey: decision.chosen,
+          prompt: job.prompt,
+        });
+        const gateRepairResult = launcher(job);
+        if (!gateRepairResult || gateRepairResult.exitCode !== 0) {
+          item.hostGateFailures = res.hostGateFailures;
+          res = Object.assign({}, gateRepairResult || {}, { exitCode: 1 });
+          break;
+        }
+        res = gateRepairResult;
+        const repairedGate = await controllerGate(job);
+        log.hostGate = repairedGate;
+        if (!repairedGate.pass) {
+          item.hostGateFailures = repairedGate.failures || res.hostGateFailures;
+          res = Object.assign({}, res, {
+            exitCode: 1,
+            hostGateFailures: item.hostGateFailures,
+          });
+          break;
+        }
+        delete item.hostGateFailures;
+        log.prompts.push({
+          workItemId: item.id,
+          attempt: attempt + 1,
+          candidateKey: decision.chosen,
+          prompt: job.prompt,
+        });
+      }
+
+      if (res && Array.isArray(res.hostGateFailures)) {
+        decisions.recordDecision(
+          {
+            stage: decisions.Stage.FAILED,
+            workItemId: item.id,
+            role: roleOf(item),
+            chosen: decision.chosen,
+            failureScope: 'local',
+            cause: 'HOST_GATE_FAILED',
+            detail: res.hostGateFailures.join(', '),
+          },
+          logOpts
+        );
+        launch.scope = 'local';
+        launch.cause = 'HOST_GATE_FAILED';
+        launch.fallbackReason = 'HOST_GATE_FAILED';
+        launch.outcome = 'failed';
+        log.launches.push(launch);
+        blockedReason = 'HOST_GATE_FAILED';
+        continue;
       }
 
       if (previousLaunch && previousLaunch.candidateKey === decision.chosen) {
@@ -4271,7 +4350,14 @@ async function runOrchestration(goal, opts) {
           if (count >= Number(job.maxQuotaFailures || 3)) {
             classification.cause = 'QUOTA_REPEATED';
             launch.fallbackReason = 'QUOTA_REPEATED';
+            failedKeys.add(decision.chosen);
           }
+        }
+        if (res && Array.isArray(res.hostGateFailures)) {
+          classification.scope = 'local';
+          classification.cause = 'HOST_GATE_FAILED';
+          launch.fallbackReason = 'HOST_GATE_FAILED';
+          launch.cause = 'HOST_GATE_FAILED';
         }
         launch.scope = classification.scope;
         launch.cause = classification.cause;
@@ -4425,6 +4511,13 @@ async function runOrchestration(goal, opts) {
             return false;
           return true;
         });
+        if (
+          classification.cause === 'QUOTA_REPEATED' ||
+          classification.cause === 'HOST_GATE_FAILED'
+        ) {
+          blockedReason = classification.cause;
+          break;
+        }
         if (!alternate) {
           blockedReason =
             'NO_ALTERNATE_FAILURE_DOMAIN: ' +

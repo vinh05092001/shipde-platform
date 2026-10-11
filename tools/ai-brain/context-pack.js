@@ -8,7 +8,12 @@ function safeRelative(file) {
   const value = String(file || '')
     .replace(/\\/g, '/')
     .replace(/^\.\//, '');
-  return value && !path.posix.isAbsolute(value) && !value.split('/').includes('..') ? value : null;
+  return value &&
+    !path.posix.isAbsolute(value) &&
+    !/^[a-zA-Z]:/.test(value) &&
+    !value.split('/').includes('..')
+    ? value
+    : null;
 }
 
 function createContextPack(items, options = {}) {

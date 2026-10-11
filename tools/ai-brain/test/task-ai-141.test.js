@@ -1181,6 +1181,9 @@ test('Part H: orchestration records RTK enablement and risk-domain denial in dec
     rtk: true,
     hostGate: () => ({ pass: true, failures: [] }),
     run: (job) => {
+      process.stderr.write(
+        'RUN_GATE_PROMPT=' + job.prompt.includes('named behavioral regression') + '\n'
+      );
       observed.push(job);
       return { exitCode: 1, stderr: 'fixture stop' };
     },
@@ -1324,12 +1327,21 @@ test('Part H: token budget overrun stops the session and records the fallback ca
   assert.ok(result.launches.some((launch) => launch.fallbackReason === 'TOKEN_BUDGET_EXCEEDED'));
 });
 
-test('Part H: context pack includes allowed source files and rejects traversal', () => {
+test('Part H: context pack includes allowed source files and rejects traversal and drive paths', () => {
   const root = fixtureRoot();
   fs.mkdirSync(path.join(root, 'tools', 'ai-brain'), { recursive: true });
   fs.writeFileSync(path.join(root, 'tools', 'ai-brain', 'cli.js'), 'fixture source');
   const result = contextPack.createContextPack(
-    [{ allowedPaths: ['tools/ai-brain/cli.js', '../outside.txt'] }],
+    [
+      {
+        allowedPaths: [
+          'tools/ai-brain/cli.js',
+          '../outside.txt',
+          'C:/outside.txt',
+          'D:relative.txt',
+        ],
+      },
+    ],
     {
       root,
       outputDir: path.join(root, 'pack-out'),
@@ -1411,12 +1423,15 @@ test('Part H: launcher enforces per-session token budget live and preserves boun
     workerTimeoutMs: 90000,
     tokenBudget: { maxTokens: 12000 },
     progressTimeoutMs: 60000,
+    usageFile: 'C:\\worker\\usage.json',
   });
   assert.match(script, /\$timeoutMs = 90000/);
   assert.match(script, /\$tokenBudgetJson/);
   assert.match(script, /Read-UsageTotal/);
   assert.match(script, /Stop-WorkerTree/);
   assert.match(script, /12000/);
+  assert.match(script, /cache_read_tokens/);
+  assert.match(script, /\$usageFile = 'C:\\worker\\usage\.json'/);
 });
 
 test('Part H: missing, empty, or malformed usage telemetry fails closed when a budget is configured', () => {
@@ -1439,6 +1454,26 @@ test('Part H: missing, empty, or malformed usage telemetry fails closed when a b
   fs.writeFileSync(usageFile, JSON.stringify({ usage: { input_tokens: 80, output_tokens: 30 } }));
   const over = enforceTokenBudget({ exitCode: 0, stderr: '' }, { maxTokens: 100 }, usageFile);
   assert.equal(over.failureReason, 'TOKEN_BUDGET_EXCEEDED');
+
+  fs.writeFileSync(
+    usageFile,
+    JSON.stringify({ usage: { input_tokens: 20, cache_read_tokens: 90, output_tokens: 1 } })
+  );
+  const cacheOver = enforceTokenBudget({ exitCode: 0, stderr: '' }, { maxTokens: 100 }, usageFile);
+  assert.equal(cacheOver.failureReason, 'TOKEN_BUDGET_EXCEEDED');
+
+  fs.writeFileSync(
+    usageFile,
+    JSON.stringify({
+      usage: { total_tokens: 10, input_tokens: 20, cache_read_tokens: 90, output_tokens: 1 },
+    })
+  );
+  const inconsistentTotal = enforceTokenBudget(
+    { exitCode: 0, stderr: '' },
+    { maxTokens: 100 },
+    usageFile
+  );
+  assert.equal(inconsistentTotal.failureReason, 'TOKEN_BUDGET_EXCEEDED');
 
   fs.writeFileSync(usageFile, JSON.stringify({ usage: { input_tokens: 20, output_tokens: 30 } }));
   const within = enforceTokenBudget({ exitCode: 0, stderr: '' }, { maxTokens: 100 }, usageFile);
@@ -1479,8 +1514,32 @@ test('Part H: isolated runs receive role and complexity token caps from policy c
   assert.match(source, /DEFAULT_TOKEN_BUDGETS/);
 });
 
-test('Part H: repeated quota failures reach a bounded fallback threshold', () => {
+test('Part H: repeated quota failures reach a bounded fallback threshold', async () => {
   assert.equal(DEFAULT_TOKEN_BUDGETS.byRole['author.foundation'].repeatedQuotaFailures, 3);
+  const root = fixtureRoot();
+  const calls = [];
+  const candidate = (accountId) => ({
+    upstream: 'up',
+    gateway: 'gw-' + accountId,
+    accountId,
+    modelId: accountId,
+    harness: 'opencode',
+    source: 'up',
+    qualifiedRoles: ['author.foundation'],
+    capabilities: { contextWindow: 999999 },
+  });
+  await runOrchestration('quota', {
+    specs: [{ id: 'QUOTA-ITEM', complexity: 'simple', riskDomains: [] }],
+    candidates: [candidate('a'), candidate('b')],
+    cwd: root,
+    decisionDir: path.join(root, 'quota-decisions'),
+    tokenBudgets: { byRole: { 'author.foundation': { repeatedQuotaFailures: 1 } } },
+    run: (job) => {
+      calls.push(job);
+      return { exitCode: 1, stderr: 'quota_exhausted' };
+    },
+  });
+  assert.equal(calls.length, 1, 'quota threshold stops the candidate loop');
 });
 
 test('Part H regressions: restored risk keywords deny RTK and nested max-turn policy reaches launch', async () => {
@@ -1514,13 +1573,20 @@ test('Part H regressions: restored risk keywords deny RTK and nested max-turn po
     ],
     cwd: root,
     decisionDir: path.join(root, 'turn-decisions'),
-    tokenBudgets: { byComplexity: { simple: { maxTurns: 1 } } },
+    tokenBudgets: {
+      byComplexity: {
+        simple: { maxTurns: 1, maxTokens: 1234, noProgressMinutes: 2, repeatedQuotaFailures: 1 },
+      },
+    },
     run: (job) => {
       calls.push(job);
       return { exitCode: 1, stderr: 'fail' };
     },
   });
   assert.equal(calls.length, 1, 'simple maxTurns=1 prevents a second launch');
+  assert.equal(calls[0].tokenBudget.maxTokens, 1234);
+  assert.equal(calls[0].progressTimeoutMs, 120000);
+  assert.equal(calls[0].maxQuotaFailures, 1);
 });
 
 test('Part H regressions: default orchestration gates success and builds context from manifest', async () => {
@@ -1559,6 +1625,50 @@ test('Part H regressions: default orchestration gates success and builds context
   });
   assert.equal(hostCalls, 1);
   assert.deepEqual(JSON.parse(fs.readFileSync(manifest, 'utf8')).files, ['tools/ai-brain/cli.js']);
+});
+
+test('Part H: host gate failure names are passed into the next repair prompt', async () => {
+  const root = fixtureRoot();
+  const candidate = (index) => ({
+    upstream: 'up-' + index,
+    gateway: 'gw-' + index,
+    accountId: 'acct-' + index,
+    modelId: 'model-' + index,
+    harness: 'opencode',
+    source: 'up-' + index,
+    qualifiedRoles: ['author.foundation'],
+    capabilities: { contextWindow: 999999 },
+  });
+  const result = await runOrchestration('gate repair', {
+    specs: [
+      {
+        id: 'GATE-ITEM',
+        complexity: 'simple',
+        riskDomains: [],
+        files: [],
+        verification: { command: 'node --test focused.test.js' },
+      },
+    ],
+    candidates: [candidate(0), candidate(1), candidate(2)],
+    cwd: root,
+    decisionDir: path.join(root, 'gate-decisions'),
+    maxRepairs: 0,
+    hostCwd: root,
+    hostGateRepair: ({ job, failures }) => {
+      assert.deepEqual(failures, ['named behavioral regression']);
+      const prompt = promptCompiler.compilePrompt(
+        { id: 'GATE-ITEM', files: [], acceptanceCriteria: [] },
+        { hostGateFailures: failures, focusedTestsOnly: true }
+      );
+      assert.match(prompt, /named behavioral regression/);
+      assert.match(prompt, /failing test names only/);
+      assert.equal(job.workItemId, 'GATE-ITEM');
+    },
+    run: () => ({ exitCode: 0, stdout: 'worker done' }),
+    hostGate: () => ({ pass: false, failures: ['named behavioral regression'] }),
+  });
+  assert.ok(result, JSON.stringify(result));
+  assert.ok(result.hostGate.failures.includes('named behavioral regression'));
 });
 
 test('Part H regressions: launcher progress watchdog observes worker output independently of usage', () => {

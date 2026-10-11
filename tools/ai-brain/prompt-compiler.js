@@ -150,6 +150,10 @@ function compilePrompt(item, ctx) {
       "Run only focused tests for this change. Print concise test output only: node --test ... 2>&1 | grep -E '^ℹ (pass|fail)|^✖ ' (or an equivalent concise reporter). Do not run or print the full brain suite; the Controller runs that host-side gate and returns failing test names only."
     );
   }
+  if (Array.isArray(c.hostGateFailures) && c.hostGateFailures.length > 0) {
+    lines.push('Host-side verification failures to repair (failing test names only):');
+    for (const failure of c.hostGateFailures) lines.push('- ' + String(failure));
+  }
   if (c.contextPack) {
     lines.push('Focused context pack: read ' + c.contextPack + ' before exploring files.');
     lines.push('Use the pack for orientation and read only additional files under Allowed files.');
