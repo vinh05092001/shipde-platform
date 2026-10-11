@@ -214,25 +214,16 @@ The human pastes a prepared prompt when an interactive client opens, approves po
 
 ### Codex isolated-worker login
 
-The Codex lane uses a separate Windows worker account. Sign in as that account, install the Codex CLI for that user, then complete and verify login from a PowerShell session running as that user:
+The Codex lane uses the separate `ShipDeWorker` Windows account. Install the approved Codex CLI for that user and complete the ChatGPT sign-in flow in a PowerShell session running as that user:
 
 ```powershell
 codex login
 codex login status
 ```
 
-The operator account's `~/.codex` files are never copied. The worker launch gives Codex a fresh HOME/USERPROFILE rooted in its isolated worktree. If `codex login status` fails, the Controller records `CODEX_NOT_LOGGED_IN` as a local candidate failure and continues with another candidate; authenticate the worker user before selecting Codex again.
+The operator account's `~/.codex` files are never copied, exported, or read. The isolated launcher sets `HOME` and `USERPROFILE` to the per-task worker root before checking login status and launching `codex exec`. If `codex login status` fails or the CLI is missing, the Controller records `CODEX_NOT_LOGGED_IN` as a local candidate failure and continues with another candidate. Authenticate the worker user before selecting Codex again.
 
-For an isolated Codex author session, sign in to Windows as the `ShipDeWorker` account (or open a PowerShell session with that account's credentials), install the approved Codex CLI for that user, and run:
-
-```powershell
-codex login
-codex login status
-```
-
-Complete the ChatGPT sign-in flow in that user's session. Do not copy, export, or read credentials from the operator profile. The isolated launcher sets `HOME` and `USERPROFILE` to the per-task worker root before it checks login status and launches `codex exec`; a missing, stale or non-CLOSED isolation verdict refuses the Codex launch.
-
-The launcher reads the operator-owned attestation at `%LOCALAPPDATA%\ShipDe\isolation-verdict.json` before preparing the worker. Codex execution requires a fresh `CLOSED` verdict bound to the current host worktree; a verdict supplied by the job is ignored. Re-run the isolation check to refresh the attestation before retrying a refused launch.
+The launcher reads the operator-owned attestation at `%LOCALAPPDATA%\ShipDe\isolation-verdict.json` before preparing the worker. Codex execution requires a `CLOSED` verdict; a verdict supplied by the job is not sufficient. Re-run the isolation check to refresh the attestation before retrying a refused launch.
 
 ## 9. Synchronize after human merge
 
@@ -266,4 +257,4 @@ This parks and fast-forwards every clean worktree. Then choose **Continue pipeli
 - GitHub `main` rejects direct/force pushes and requires `contract` plus `application-gate`.
 - PR #1 is merged only after an independent Codex `PASS`.
 - `TASK-FOUND-01` is the next and only implementation item.
-- If an isolated Codex probe reports `CODEX_NOT_LOGGED_IN`, sign in as the worker account and confirm `codex login status` succeeds there. The Controller records either a failed native invocation or nonzero exit as a local failure and continues to another candidate.
+- If an isolated Codex probe reports `CODEX_NOT_LOGGED_IN`, sign in as `ShipDeWorker` and confirm `codex login status` succeeds there. A missing CLI or failed status check is a local failure, and the Controller continues to another candidate.
