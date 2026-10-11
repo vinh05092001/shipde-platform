@@ -1547,6 +1547,7 @@ async function dispatchProfileCommand(args, deps) {
   const optsWithEvidence = Object.assign({}, deps, {
     evidenceData,
     routeHealthFile: (deps && deps.routeHealthFile) || args['route-health'] || undefined,
+    accounts,
     discoveryDataDir: (deps && deps.discoveryDataDir) || args['discovery-dir'] || undefined,
     fakeRunsDir:
       (deps && deps.fakeRunsDir) ||
@@ -1583,7 +1584,6 @@ async function dispatchProfileCommand(args, deps) {
   );
   const jevSource = sourcesApi.getSource('jev', registry);
   const jevAsk =
-    (deps && deps.ask) ||
     (deps && deps.jevAsk) ||
     jev.buildAskFromSource(jevSource, {
       home: optsWithEvidence.home,
@@ -1597,8 +1597,13 @@ async function dispatchProfileCommand(args, deps) {
     Object.assign({}, deps, {
       candidates: candidateList,
       rootDir,
-      ask: jevAsk,
+      ask: (deps && deps.ask) || jevAsk,
       minConfidence: jevSource && jevSource.minConfidence,
+      modelChoiceAsk: (deps && (deps.modelChoiceAsk || deps.ask)) || jevAsk,
+      modelChoiceMinConfidence:
+        (deps && (deps.modelChoiceMinConfidence || deps.minConfidence)) ||
+        (jevSource && jevSource.minConfidence),
+      modelChoiceTopN: (deps && deps.modelChoiceTopN) || 5,
       explorationBudget:
         args['exploration-budget'] !== undefined ? Number(args['exploration-budget']) : 0,
       home: optsWithEvidence.home,
@@ -3693,6 +3698,119 @@ function main(argv = process.argv.slice(2), deps = {}) {
   const args = parseArgs(argv);
   const command = args._[0] || 'reconcile';
 
+  if (command === 'priors' && args._[1] === 'refresh') {
+    const { refreshPriors } = require('./priors');
+    const sourceFile = args.source || process.env.AI_BRAIN_PRIORS_SOURCE;
+    if (!sourceFile) {
+      console.error(
+        'PRIORS_SEARCH_SOURCE_REQUIRED: set AI_BRAIN_PRIORS_SOURCE to a JSON source descriptor'
+      );
+      process.exitCode = 2;
+      return;
+    }
+    const resolvedSource = path.resolve(sourceFile);
+    let realSource = null;
+    try {
+      realSource = require('fs').realpathSync(resolvedSource);
+    } catch {
+      console.error('PRIORS_SEARCH_SOURCE_NOT_FOUND');
+      process.exitCode = 2;
+      return;
+    }
+    const allowedRoots = [path.resolve(__dirname, 'priors-sources')];
+    if (
+      !allowedRoots.some((root) => {
+        let realRoot = root;
+        try {
+          realRoot = require('fs').realpathSync(root);
+        } catch {}
+        return realSource.startsWith(realRoot + path.sep);
+      })
+    ) {
+      console.error('PRIORS_SEARCH_SOURCE_OUTSIDE_ALLOWLIST');
+      process.exitCode = 2;
+      return;
+    }
+    let provider;
+    try {
+      provider = JSON.parse(require('fs').readFileSync(realSource, 'utf8'));
+    } catch {
+      console.error('PRIORS_SEARCH_SOURCE_INVALID_JSON');
+      process.exitCode = 2;
+      return;
+    }
+    if (
+      !provider ||
+      typeof provider.endpoint !== 'string' ||
+      !/^https:\/\//i.test(provider.endpoint)
+    ) {
+      console.error('PRIORS_SEARCH_SOURCE_INVALID_DESCRIPTOR');
+      process.exitCode = 2;
+      return;
+    }
+    const defaultPriorsFile = path.resolve(__dirname, 'data', 'model-priors.json');
+    const outputFile = args.file ? path.resolve(args.file) : defaultPriorsFile;
+    if (outputFile !== defaultPriorsFile) {
+      console.error('PRIORS_OUTPUT_OUTSIDE_ALLOWLIST');
+      process.exitCode = 2;
+      return;
+    }
+    const search = async (query) => {
+      const headers = { 'content-type': 'application/json' };
+      const allowedHeaders = new Set(['accept', 'user-agent']);
+      for (const [name, value] of Object.entries(provider.headers || {})) {
+        const lowerName = name.toLowerCase();
+        if (allowedHeaders.has(lowerName) && typeof value === 'string') {
+          headers[lowerName] = value;
+        }
+      }
+      if (typeof provider.authEnv === 'string' && /^[A-Z_][A-Z0-9_]*$/.test(provider.authEnv)) {
+        const token = process.env[provider.authEnv];
+        if (token) headers.authorization = `Bearer ${token}`;
+      }
+      const timeoutMs = Number.isFinite(Number(provider.timeoutMs))
+        ? Math.max(100, Math.min(30000, Number(provider.timeoutMs)))
+        : 10000;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
+      let response;
+      try {
+        response = await fetch(provider.endpoint, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ query }),
+          signal: controller.signal,
+        });
+      } catch (error) {
+        if (controller.signal.aborted) throw new Error('PRIORS_SEARCH_TIMEOUT');
+        throw error;
+      } finally {
+        clearTimeout(timeout);
+      }
+      if (!response.ok) throw new Error('PRIORS_SEARCH_HTTP_' + response.status);
+      return response.json();
+    };
+    refreshPriors({
+      search,
+      sourceId: path.relative(allowedRoots[0], resolvedSource),
+      file: outputFile,
+    })
+      .then((document) =>
+        console.log(
+          JSON.stringify({
+            models: document.ranking.length,
+            stale: document.ranking.filter((item) => item.stale).length,
+            file: args.file || 'default',
+          })
+        )
+      )
+      .catch((err) => {
+        console.error((err && err.message) || String(err));
+        process.exitCode = 1;
+      });
+    return;
+  }
+
   if (command === 'reconcile') return reconcileCommand(args);
   if (command === 'report' && args._[1] === 'tokens') return tokenReportCommand(args);
   if (command === 'manifest') return manifestCommand(args);
@@ -3931,7 +4049,7 @@ function main(argv = process.argv.slice(2), deps = {}) {
 
   console.error('Lệnh không rõ: ' + command);
   console.error(
-    'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | discovery | account | probe | qualify | serena | sources | evidence | review | orchestrate | intake | plan | next | merge'
+    'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | discovery | account | probe | qualify | serena | sources | evidence | review | orchestrate | intake | plan | next | merge | priors refresh'
   );
   process.exit(2);
 }
