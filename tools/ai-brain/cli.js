@@ -2900,7 +2900,7 @@ function orchestrateCommand(args, deps = {}) {
     ...(typeof args['context-manifest'] === 'string'
       ? { contextManifest: args['context-manifest'] }
       : {}),
-    ...(args['isolated-worker'] ? { enableContextPack: true } : {}),
+    ...(args['isolated-worker'] || args['context-manifest'] ? { enableContextPack: true } : {}),
     ...(typeof d.run === 'function' ? { injectedRun: true } : {}),
     decisionDir: args['decision-dir'] || decisionsApi.DEFAULT_DIR,
     checkpointFile: typeof args.checkpoint === 'string' ? args.checkpoint : null,

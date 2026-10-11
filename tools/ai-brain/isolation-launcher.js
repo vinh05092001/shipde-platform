@@ -432,6 +432,7 @@ $maxTokens = 0
 $progressTimeoutMs = ${Number(options.progressTimeoutMs) > 0 ? Number(options.progressTimeoutMs) : 0}
 $lastProgressAt = [System.Diagnostics.Stopwatch]::GetTimestamp()
 $lastUsageSignature = ""
+$lastOutputSignature = ""
 try {
     $budgetConfig = $tokenBudgetJson | ConvertFrom-Json
     if ($null -ne $budgetConfig.maxTokens) { $maxTokens = [double]$budgetConfig.maxTokens }
@@ -513,6 +514,12 @@ while ($true) {
         break
     }
     if ($progressTimeoutMs -gt 0) {
+        $outputSignature = ""
+        try {
+            $outputFiles = @(Get-ChildItem -LiteralPath $workerRoot -File -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -notmatch '[\\/](\.git|node_modules|\.shipde)[\\/]' } | Sort-Object FullName)
+            if ($outputFiles.Count -gt 0) { $outputSignature = ($outputFiles | ForEach-Object { $_.FullName + ':' + $_.Length + ':' + $_.LastWriteTimeUtc.Ticks }) -join '|' }
+        } catch {}
+        if ($outputSignature -ne $lastOutputSignature) { $lastOutputSignature = $outputSignature; $lastProgressAt = [System.Diagnostics.Stopwatch]::GetTimestamp() }
         $usageSignature = ""
         try {
             $usageItem = Get-Item -LiteralPath $usageFile -ErrorAction Stop
@@ -1998,6 +2005,9 @@ function getIsolatedLauncher() {
     } catch (e) {}
 
     const launchResult = readLaunchResult(launchResultPath, completionNonce, hostRes);
+    if (opts.usageFile && !fs.existsSync(opts.usageFile)) {
+      writeUsageReportFromHarnessResult(job, launchResult);
+    }
     enforceTokenBudget(launchResult, opts.tokenBudget, opts.usageFile);
     if (exerciseResult) {
       launchResult.exercise = exerciseResult;

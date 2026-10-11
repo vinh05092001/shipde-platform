@@ -94,14 +94,20 @@ function deriveRiskDomains(text) {
     .join('\n')
     .toLowerCase();
   const rules = [
-    ['auth', /\bauth(?:entication|orization)?\b|\blogin\b/],
-    ['security', /\bsecurity\b|\bsecret\b|\bcredential\b/],
-    ['money', /\bmoney\b|\bpayment\b|\bsettlement\b|\bcod\b|\bfinancial\b/],
+    [
+      'auth',
+      /\bauth(?:entication|orization)?\b|\blogin\b|\bpasswords?\b|\bsessions?\b|\bmfa\b|\baccess control\b/,
+    ],
+    ['security', /\bsecurity\b|\bsecret\b|\bcredential\b|\bencryption\b/],
+    [
+      'money',
+      /\bmoney\b|\bpayment\b|\bsettlement\b|\bcod\b|\bfinancial\b|\brefunds?\b|\bbilling\b/,
+    ],
     ['tenant isolation', /\btenant\b|\bshop scope\b/],
-    ['pii', /\bpii\b|\bpersonal(?:ly identifiable)? data\b/],
+    ['pii', /\bpii\b|\bpersonal(?:ly identifiable)? data\b|\bphone\b|\bemail\b/],
     [
       'carrier side effects',
-      /\bcarrier\b.*\b(?:side effect|action|integration|create|cancel|redelivery|claim)\b|\bcreate (?:shipment|waybill)\b/,
+      /\bcarrier\b.*\b(?:side effect|action|integration|create|cancel|redelivery|claim)\b|\bcreate (?:shipment|waybill)\b|\b(?:shipment|waybill)s?\b/,
     ],
     [
       'database ownership',

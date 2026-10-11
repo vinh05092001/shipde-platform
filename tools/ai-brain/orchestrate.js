@@ -3042,7 +3042,8 @@ async function runOrchestration(goal, opts) {
     1000;
   o.progressTimeoutMs =
     Number(o.progressTimeoutMs) > 0 ? Number(o.progressTimeoutMs) : budgetProgressMs;
-  const controllerGate = o.hostGate || null;
+  const controllerGate =
+    o.hostGate || (o.isolatedWorker ? (job) => runHostBrainGate(job, { hostCwd }) : null);
   const quotaFailures = new Map();
   const riskDomainsByItem = new Map(
     (o.specs || []).map((item) => [
@@ -3053,7 +3054,7 @@ async function runOrchestration(goal, opts) {
   log.rtk = { requested: Boolean(o.rtk), perWorkItem: {} };
   log.rtkPerWorkItem = log.rtk.perWorkItem;
   let contextPack = null;
-  if (o.isolatedWorker && o.enableContextPack) {
+  if (o.enableContextPack || o.contextManifest) {
     try {
       const packer = require('./context-pack');
       contextPack = packer.createContextPack(o.specs || [], {
@@ -3792,6 +3793,8 @@ async function runOrchestration(goal, opts) {
         attempt >
         Number(
           (
+            budgetConfig.byRole?.[roleOf(item)] ||
+            budgetConfig.byComplexity?.[item.complexity] ||
             budgetConfig[roleOf(item)] ||
             budgetConfig[item.complexity] ||
             budgetConfig.default ||
@@ -3829,7 +3832,7 @@ async function runOrchestration(goal, opts) {
         isolatedWorker: Boolean(o.isolatedWorker),
         recordTools: false,
         returnTools: true,
-        focusedTestsOnly: Boolean(o.isolatedWorker),
+        focusedTestsOnly: true,
         contextPack: contextPack && contextPack.path,
       });
       const prompt = compiledPrompt.prompt;

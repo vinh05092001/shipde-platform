@@ -1179,6 +1179,7 @@ test('Part H: orchestration records RTK enablement and risk-domain denial in dec
     decisionDir,
     cwd: root,
     rtk: true,
+    hostGate: () => ({ pass: true, failures: [] }),
     run: (job) => {
       observed.push(job);
       return { exitCode: 1, stderr: 'fixture stop' };
@@ -1253,6 +1254,7 @@ test('Part H: a stalled live session is stopped, recorded and checkpointed for r
     checkpointFile: path.join(root, 'stall-checkpoint.json'),
     progressTimeoutMs: 1000,
     stallMs: 1000,
+    hostGate: () => ({ pass: true, failures: [] }),
     run: (job) => {
       calls.push(job);
       return calls.length === 1
@@ -1367,6 +1369,7 @@ test('Part H: context pack manifest records output path and included source allo
     isolatedWorker: true,
     enableContextPack: true,
     contextManifest: manifestPath,
+    hostGate: () => ({ pass: true, failures: [] }),
     run: () => ({ exitCode: 0, stdout: 'ok' }),
   });
   await result;
@@ -1478,6 +1481,101 @@ test('Part H: isolated runs receive role and complexity token caps from policy c
 
 test('Part H: repeated quota failures reach a bounded fallback threshold', () => {
   assert.equal(DEFAULT_TOKEN_BUDGETS.byRole['author.foundation'].repeatedQuotaFailures, 3);
+});
+
+test('Part H regressions: restored risk keywords deny RTK and nested max-turn policy reaches launch', async () => {
+  for (const text of [
+    'password reset',
+    'session renewal',
+    'MFA setup',
+    'encryption keys',
+    'access control',
+    'refund billing',
+    'phone email',
+    'shipment waybill',
+  ]) {
+    assert.ok(intake.deriveRiskDomains('## Scope\n' + text).length > 0, text);
+  }
+  const root = fixtureRoot();
+  const calls = [];
+  await runOrchestration('turns', {
+    specs: [{ id: 'TURN-ITEM', files: [], complexity: 'simple' }],
+    candidates: [
+      {
+        upstream: 'u',
+        gateway: 'g',
+        accountId: 'a',
+        modelId: 'm',
+        harness: 'opencode',
+        source: 'u',
+        qualifiedRoles: ['author.foundation'],
+        capabilities: { contextWindow: 999999 },
+      },
+    ],
+    cwd: root,
+    decisionDir: path.join(root, 'turn-decisions'),
+    tokenBudgets: { byComplexity: { simple: { maxTurns: 1 } } },
+    run: (job) => {
+      calls.push(job);
+      return { exitCode: 1, stderr: 'fail' };
+    },
+  });
+  assert.equal(calls.length, 1, 'simple maxTurns=1 prevents a second launch');
+});
+
+test('Part H regressions: default orchestration gates success and builds context from manifest', async () => {
+  const root = fixtureRoot();
+  fs.mkdirSync(path.join(root, 'tools', 'ai-brain'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'tools', 'ai-brain', 'cli.js'), 'pack source');
+  const manifest = path.join(root, 'manifest.json');
+  let hostCalls = 0;
+  await runOrchestration('default path', {
+    specs: [
+      { id: 'DEFAULT-ITEM', allowedPaths: ['tools/ai-brain/cli.js'], acceptanceCriteria: [] },
+    ],
+    candidates: [
+      {
+        upstream: 'u',
+        gateway: 'g',
+        accountId: 'a',
+        modelId: 'm',
+        harness: 'opencode',
+        source: 'u',
+        qualifiedRoles: ['author.foundation'],
+        capabilities: { contextWindow: 999999 },
+      },
+    ],
+    cwd: root,
+    decisionDir: path.join(root, 'default-decisions'),
+    contextManifest: manifest,
+    maxRepairs: 0,
+    isolatedWorker: true,
+    run: () => ({ exitCode: 0, stdout: 'done' }),
+    hostGate: (job) => {
+      hostCalls++;
+      assert.match(job.prompt, /Run only focused tests/);
+      return { pass: true, failures: [] };
+    },
+  });
+  assert.equal(hostCalls, 1);
+  assert.deepEqual(JSON.parse(fs.readFileSync(manifest, 'utf8')).files, ['tools/ai-brain/cli.js']);
+});
+
+test('Part H regressions: launcher progress watchdog observes worker output independently of usage', () => {
+  const script = buildWorkerLaunchScript({
+    credPath: 'credential',
+    workerRoot: 'C:\\worker',
+    exeFile: 'agent.exe',
+    payloadArgsPath: 'args.json',
+    launchResultPath: 'result.json',
+    workerTimeoutMs: 90000,
+    progressTimeoutMs: 60000,
+    usageFile: 'usage.json',
+  });
+  assert.match(script, /Get-ChildItem -LiteralPath \$workerRoot -File -Recurse/);
+  assert.match(script, /lastOutputSignature/);
+  const source = fs.readFileSync(path.join(__dirname, '..', 'isolation-launcher.js'), 'utf8');
+  assert.match(source, /writeUsageReportFromHarnessResult\(job, launchResult\)/);
 });
 
 test('Part H: readLaunchResult propagates failureReason and enforceTokenBudget preserves it', () => {
