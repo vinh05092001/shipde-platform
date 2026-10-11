@@ -261,6 +261,9 @@ async function adviseModelChoice(result, profile, options) {
     eligible.has(advised.choice)
       ? advised.choice
       : result.chosen;
+  const providerFailure =
+    advised.handledBy !== 'jev' &&
+    (advised.reason === 'UNREACHABLE' || advised.reason === 'TIMEOUT');
   return {
     chosen,
     advice: {
@@ -270,9 +273,11 @@ async function adviseModelChoice(result, profile, options) {
       reason:
         chosen === advised.choice && advised.handledBy === 'jev'
           ? advised.reason || 'JEV_MODEL_CHOICE'
-          : (advised.jev && advised.jev.reason) ||
-            advised.reason ||
-            'DETERMINISTIC_RANKING_FALLBACK',
+          : providerFailure
+            ? 'JEV_PROVIDER_FAILED'
+            : (advised.jev && advised.jev.reason) ||
+              advised.reason ||
+              'DETERMINISTIC_RANKING_FALLBACK',
       topN: top.map((candidate) => candidate.candidateKey),
     },
   };
@@ -382,6 +387,19 @@ function claudeFamilyExclusion(role, modelId) {
   if (!WORKER_REVIEWER_ROLES.has(role)) return null;
   if (!CLAUDE_FAMILY_PATTERN.test(String(modelId || ''))) return null;
   return CLAUDE_FAMILY_REASON;
+}
+
+/**
+ * True when a candidate declares qualified roles but none of them belong to the
+ * worker lane for the profile role. A review-only candidate must never be
+ * ranked — let alone quota-pinned — as a writer, and vice versa. Absent or
+ * wildcard-qualified candidates stay unproven rather than refused.
+ */
+function roleLaneMismatch(role, qualifiedRoles) {
+  if (!Array.isArray(qualifiedRoles) || qualifiedRoles.length === 0) return false;
+  if (qualifiedRoles.includes('*')) return false;
+  const lane = role === 'writer' ? /^(author|writer)[.:]/i : /^(review|security)/i;
+  return !qualifiedRoles.some((r) => lane.test(String(r)));
 }
 
 const publisher = require('./publisher');
@@ -814,27 +832,42 @@ function candidateContextWindow(candidate) {
   );
 }
 
+function isIndependentReviewerCandidate(writer, reviewer) {
+  if (!writer || !reviewer) return false;
+  const writerKey = candidateKey(writer);
+  const writerDomain = canonicalFailureDomain(writer);
+  const reviewerKey = candidateKey(reviewer);
+  const reviewerDomain = canonicalFailureDomain(reviewer);
+  if (!writerKey || !writerDomain || writerDomain === 'unknown') return false;
+  if (!reviewerKey || !reviewerDomain || reviewerDomain === 'unknown') return false;
+  if (reviewerKey === writerKey) return false;
+  if (reviewerDomain === writerDomain) return false;
+  if (
+    !Array.isArray(reviewer.qualifiedRoles) ||
+    !reviewer.qualifiedRoles.some((role) => /review/i.test(role))
+  ) {
+    return false;
+  }
+  if (reviewer.reservationStatus !== 'reserved') return false;
+  const reviewerProof = reviewer.proofLevel || proofObserved(reviewer.evidenceData, reviewer);
+  const reviewerPrior = reviewer.priorTier || reviewer.prior?.tier;
+  const strongReviewer =
+    (reviewerProof && evidence.ProofRank[reviewerProof] >= evidence.ProofRank.WORK_ITEM_PASS) ||
+    reviewer.strong === true ||
+    reviewerPrior === 'T1';
+  return Boolean(strongReviewer);
+}
+
+function findIndependentReviewerCandidate(candidate, reviewers) {
+  if (!candidate) return null;
+  return (
+    (reviewers || []).find((reviewer) => isIndependentReviewerCandidate(candidate, reviewer)) ||
+    null
+  );
+}
+
 function hasIndependentReviewerCandidate(candidate, reviewers) {
-  const writerKey = candidateKey(candidate);
-  const writerDomain = canonicalFailureDomain(candidate);
-  if (!writerKey || !writerDomain) return false;
-  return (reviewers || []).some((reviewer) => {
-    if (!reviewer || !Array.isArray(reviewer.qualifiedRoles)) return false;
-    if (!reviewer.qualifiedRoles.some((role) => /review/i.test(role))) return false;
-    if (reviewer.reservationStatus !== 'reserved') return false;
-    const reviewerProof = reviewer.proofLevel || proofObserved(reviewer.evidenceData, reviewer);
-    const reviewerPrior = reviewer.priorTier || reviewer.prior?.tier;
-    const strongReviewer =
-      (reviewerProof && evidence.ProofRank[reviewerProof] >= evidence.ProofRank.WORK_ITEM_PASS) ||
-      reviewer.strong === true ||
-      reviewerPrior === 'T1';
-    if (!strongReviewer) return false;
-    return (
-      candidateKey(reviewer) !== writerKey &&
-      canonicalFailureDomain(reviewer) !== null &&
-      canonicalFailureDomain(reviewer) !== writerDomain
-    );
-  });
+  return Boolean(findIndependentReviewerCandidate(candidate, reviewers));
 }
 
 /** Blended per-million cost, accepting the numeric or the offering object form. */
@@ -1145,6 +1178,10 @@ function rankForProfile(candidates, profile, assessment, ctx) {
     }
     if (!c.accountId || c.accountId === '*') {
       reject('WILDCARD_ACCOUNT', 'account');
+      continue;
+    }
+    if (roleLaneMismatch(profile.role, c.qualifiedRoles)) {
+      reject('ROLE_LANE_MISMATCH:' + profile.role, 'role');
       continue;
     }
 
@@ -1627,13 +1664,20 @@ async function runProfileDispatch(args, deps) {
     independentReviewerCandidates,
   };
   const result = rankForProfile(annotated, profile, assessment, rankCtx);
-  if (result.ranking.length && typeof d.modelChoiceAsk === 'function') {
+  const askForModelChoice =
+    typeof d.modelChoiceAsk === 'function'
+      ? d.modelChoiceAsk
+      : typeof d.ask === 'function'
+        ? d.ask
+        : undefined;
+  if (result.ranking.length && typeof askForModelChoice === 'function') {
     try {
       Object.assign(
         result,
         await adviseRankedModelChoice(result, profile, {
-          ask: d.modelChoiceAsk,
-          minConfidence: d.modelChoiceMinConfidence,
+          ask: askForModelChoice,
+          minConfidence:
+            d.modelChoiceMinConfidence !== undefined ? d.modelChoiceMinConfidence : d.minConfidence,
           topN: d.modelChoiceTopN,
         })
       );
@@ -1693,26 +1737,11 @@ async function runProfileDispatch(args, deps) {
   // real even when the launch is not (AI-64-R03's standard, applied here).
   const selectedForGuarantee =
     result.ranking.find((candidate) => candidate.candidateKey === result.chosen) || null;
-  const selectedHasIndependentReviewer = hasIndependentReviewerCandidate(
+  const selectedIndependentReviewer = findIndependentReviewerCandidate(
     selectedForGuarantee,
     independentReviewerCandidates
   );
-  const selectedIndependentReviewer = selectedHasIndependentReviewer
-    ? independentReviewerCandidates.find((reviewer) => {
-        if (!reviewer || !Array.isArray(reviewer.qualifiedRoles)) return false;
-        if (!reviewer.qualifiedRoles.some((role) => /review/i.test(role))) return false;
-        if (reviewer.reservationStatus !== 'reserved') return false;
-        const proof = reviewer.proofLevel || proofObserved(reviewer.evidenceData, reviewer);
-        return (
-          ((proof && evidence.ProofRank[proof] >= evidence.ProofRank.WORK_ITEM_PASS) ||
-            reviewer.strong === true ||
-            reviewer.priorTier === 'T1' ||
-            reviewer.prior?.tier === 'T1') &&
-          candidateKey(reviewer) !== candidateKey(selectedForGuarantee) &&
-          canonicalFailureDomain(reviewer) !== canonicalFailureDomain(selectedForGuarantee)
-        );
-      })
-    : null;
+  const selectedHasIndependentReviewer = Boolean(selectedIndependentReviewer);
   const decisionRecorded = {
     stage: decisions.Stage.SELECTED,
     workItemId: profile.taskId,
@@ -2025,6 +2054,8 @@ async function runProfileDispatch(args, deps) {
     ranking: result.ranking,
     top3: result.top3,
     rejected: result.rejected,
+    chosen: result.chosen,
+    modelChoice: result.modelChoice,
     pinnedCandidateKey: pinned,
     reserved,
     reservationId,
@@ -2083,6 +2114,9 @@ module.exports = {
   proofObserved,
   proofObservedWithSource,
   rankForProfile,
+  hasIndependentReviewerCandidate,
+  isIndependentReviewerCandidate,
+  findIndependentReviewerCandidate,
   jevModelChoiceQuestion,
   adviseRankedModelChoice,
   candidateKey,

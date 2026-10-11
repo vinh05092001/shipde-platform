@@ -1269,6 +1269,11 @@ function dispatchProfileCommand(args, deps) {
       rootDir,
       ask: jevAsk,
       minConfidence: jevSource && jevSource.minConfidence,
+      modelChoiceAsk: (deps && (deps.modelChoiceAsk || deps.ask)) || jevAsk,
+      modelChoiceMinConfidence:
+        (deps && (deps.modelChoiceMinConfidence || deps.minConfidence)) ||
+        (jevSource && jevSource.minConfidence),
+      modelChoiceTopN: (deps && deps.modelChoiceTopN) || 5,
       explorationBudget:
         args['exploration-budget'] !== undefined ? Number(args['exploration-budget']) : 0,
       home: optsWithEvidence.home,
@@ -3135,8 +3140,24 @@ function main() {
       return;
     }
     const resolvedSource = path.resolve(sourceModule);
+    let realSource = null;
+    try {
+      realSource = require('fs').realpathSync(resolvedSource);
+    } catch {
+      console.error('PRIORS_SEARCH_SOURCE_NOT_FOUND');
+      process.exitCode = 2;
+      return;
+    }
     const allowedRoots = [path.resolve(__dirname, 'priors-sources')];
-    if (!allowedRoots.some((root) => resolvedSource.startsWith(root + path.sep))) {
+    if (
+      !allowedRoots.some((root) => {
+        let realRoot = root;
+        try {
+          realRoot = require('fs').realpathSync(root);
+        } catch {}
+        return realSource.startsWith(realRoot + path.sep);
+      })
+    ) {
       console.error('PRIORS_SEARCH_SOURCE_OUTSIDE_ALLOWLIST');
       process.exitCode = 2;
       return;

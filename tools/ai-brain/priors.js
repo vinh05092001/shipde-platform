@@ -47,24 +47,37 @@ function priorFor(candidate, role, priors, now) {
   if (bonus === null) return null;
 
   const priorScore = Number.isFinite(match.score) ? match.score : benchmarkScore(match);
-  const result = { canonical: match.canonical, tier, bonus };
+  const sourceDates = (match.sources || [])
+    .map((source) => source && source.retrievedAt)
+    .filter(Boolean);
+  const retrievalDate = match.retrievedAt || (priors && priors.generatedAt);
+  const stale =
+    match.stale === true ||
+    (sourceDates.length > 0
+      ? sourceDates.some((date) => isStale(date, now))
+      : isStale(retrievalDate, now));
+
+  const result = {
+    canonical: match.canonical,
+    tier,
+    bonus: stale ? 0 : bonus,
+    stale,
+    sources: match.sources || [],
+  };
   if (Number.isFinite(priorScore)) {
-    const sourceDates = (match.sources || []).map((source) => source && source.retrievedAt);
-    result.stale =
-      match.stale === true ||
-      (sourceDates.length
-        ? sourceDates.some((date) => isStale(date, now))
-        : isStale(match.retrievedAt || (priors && priors.generatedAt), now));
-    result.sources = match.sources || [];
     result.score = Math.round(Math.max(0, Math.min(100, priorScore)));
-    if (result.stale) result.bonus = 0;
   }
   return result;
 }
 
 function isStale(retrievedAt, now) {
   const timestamp = Date.parse(retrievedAt || '');
-  return !Number.isFinite(timestamp) || (now || Date.now()) - timestamp > STALE_AFTER_MS;
+  const currentTime = now || Date.now();
+  return (
+    !Number.isFinite(timestamp) ||
+    timestamp > currentTime ||
+    currentTime - timestamp > STALE_AFTER_MS
+  );
 }
 
 function benchmarkScore(match) {
@@ -146,7 +159,7 @@ function mergePriorDocuments(documents, now) {
       ? scores.reduce((sum, value) => sum + value, 0) / scores.length
       : null;
     const tier =
-      score === null ? null : score >= 80 ? 'T1' : score >= 70 ? 'T2' : score >= 55 ? 'T3' : 'T4';
+      score === null ? null : score >= 74 ? 'T1' : score >= 66 ? 'T2' : score >= 50 ? 'T3' : 'T4';
     return Object.assign(row, {
       score: score === null ? null : Math.round(score * 10) / 10,
       codingTier: tier,

@@ -58,30 +58,32 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
   test('prior promotes a strong untried model over weak model with old evidence', () => {
     const strong = candidate('strong-new', {
       evidence: [],
-      latencyMs: 0,
+      latencyMs: 2000,
       cost: 1,
-      quality: 100,
       headroomStatus: 'open',
     });
     const weak = candidate('weak-old', {
       evidence: [
         {
           status: 'passed',
-          proofLevel: 'WORK_ITEM_PASS',
-          quality: 20,
-          ts: '2026-10-01T00:00:00.000Z',
+          proofLevel: 'API_PASS',
+          quality: 50,
+          ts: '2026-09-01T00:00:00.000Z',
         },
       ],
-      latencyMs: 5000,
+      latencyMs: 2000,
       cost: 1,
-      quality: 20,
+      quality: 50,
       headroomStatus: 'open',
     });
-    const withoutPrior = routing.rankForProfile([strong], profile(), assessment, {
+    const withoutPrior = routing.rankForProfile([weak, strong], profile(), assessment, {
       now: Date.parse('2026-10-10T12:00:00Z'),
       headrooms: { default: 'open' },
       priors: { ranking: [] },
     });
+    assert.equal(withoutPrior.ranking[0].modelId, weak.modelId);
+    assert.equal(withoutPrior.chosen, candidateKey(weak));
+
     const result = routing.rankForProfile([weak, strong], profile(), assessment, {
       now: Date.parse('2026-10-10T12:00:00Z'),
       headrooms: { default: 'open' },
@@ -629,5 +631,327 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
     );
     assert.equal(result.rejected.length, 0);
     assert.equal(result.ranking[0].probation, false);
+  });
+
+  test('P1 priors staleness fails closed for tier-only and undated or future priors', () => {
+    const NOW = Date.parse('2026-10-10T12:00:00Z');
+    // Tier-only prior (no score) with missing retrieval date
+    const undatedTierOnly = priorsApi.priorFor(
+      { modelId: 'undated-tier-model' },
+      'writer',
+      {
+        ranking: [
+          {
+            canonical: 'undated-tier-model',
+            codingTier: 'T1',
+            reviewTier: 'T1',
+          },
+        ],
+      },
+      NOW
+    );
+    assert.equal(undatedTierOnly.stale, true);
+    assert.equal(undatedTierOnly.bonus, 0);
+
+    // Prior with future retrieval date
+    const futurePrior = priorsApi.priorFor(
+      { modelId: 'future-model' },
+      'writer',
+      {
+        ranking: [
+          {
+            canonical: 'future-model',
+            codingTier: 'T1',
+            reviewTier: 'T1',
+            score: 90,
+            retrievedAt: '2026-10-15T00:00:00Z',
+          },
+        ],
+      },
+      NOW
+    );
+    assert.equal(futurePrior.stale, true);
+    assert.equal(futurePrior.bonus, 0);
+
+    // Prior with missing source retrieval dates
+    const missingDatePrior = priorsApi.priorFor(
+      { modelId: 'missing-date-model' },
+      'writer',
+      {
+        ranking: [
+          {
+            canonical: 'missing-date-model',
+            codingTier: 'T1',
+            reviewTier: 'T1',
+            score: 85,
+            sources: [{ url: 'https://bench.example/foo' }],
+          },
+        ],
+      },
+      NOW
+    );
+    assert.equal(missingDatePrior.stale, true);
+    assert.equal(missingDatePrior.bonus, 0);
+
+    // Undated T1 prior fails closed and cannot bypass proof floor on probation
+    const undatedCand = candidate('undated-tier-model', { evidence: [] });
+    const rankResult = routing.rankForProfile(
+      [undatedCand],
+      profile({ proofFloor: 'WORK_ITEM_PASS' }),
+      assessment,
+      {
+        now: NOW,
+        headrooms: { default: 'open' },
+        priors: {
+          ranking: [
+            {
+              canonical: 'undated-tier-model',
+              codingTier: 'T1',
+              reviewTier: 'T1',
+            },
+          ],
+        },
+      }
+    );
+    assert.equal(rankResult.ranking.length, 0);
+    assert.equal(rankResult.rejected[0].reasonCode, 'PROOF_FLOOR_NOT_MET:NONE');
+  });
+
+  test('P1 independent reviewer isolation rejects unknown domain at admission and pin time', () => {
+    const writer = candidate('writer-cand', {
+      gateway: 'gw-writer',
+      upstream: 'up-writer',
+    });
+    const reviewerUnknownDomain = candidate('reviewer-unknown', {
+      gateway: null,
+      upstream: null,
+      qualifiedRoles: ['reviewer.primary'],
+      reservationStatus: 'reserved',
+      strong: true,
+    });
+    const reviewerIndependent = candidate('reviewer-independent', {
+      gateway: 'gw-reviewer',
+      upstream: 'up-reviewer',
+      qualifiedRoles: ['reviewer.primary'],
+      reservationStatus: 'reserved',
+      strong: true,
+    });
+
+    // Unknown domain cannot be an independent reviewer candidate
+    assert.equal(routing.isIndependentReviewerCandidate(writer, reviewerUnknownDomain), false);
+    assert.equal(routing.isIndependentReviewerCandidate(writer, reviewerIndependent), true);
+
+    // When reviewer with unknown domain appears before independent reviewer,
+    // findIndependentReviewerCandidate skips the unknown domain and chooses the independent one
+    const chosenReviewer = routing.findIndependentReviewerCandidate(writer, [
+      reviewerUnknownDomain,
+      reviewerIndependent,
+    ]);
+    assert.equal(chosenReviewer.modelId, reviewerIndependent.modelId);
+  });
+
+  test('P1 execution with reserved independent reviewer launches writer and records review guarantee', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai141-review-exec-'));
+    const profileFile = path.join(root, 'profile.json');
+    fs.writeFileSync(profileFile, JSON.stringify(profile({ proofFloor: 'NONE' })), 'utf8');
+    const writer = candidate('exec-writer', {
+      evidence: [],
+      qualifiedRoles: ['author.foundation'],
+      latencyMs: 1000,
+      cost: 1,
+      headroomStatus: 'open',
+    });
+    const reviewer = candidate('exec-reviewer', {
+      gateway: 'gw-isolated-rev',
+      upstream: 'up-isolated-rev',
+      qualifiedRoles: ['reviewer.primary'],
+      reservationStatus: 'reserved',
+      strong: true,
+      proofLevel: 'WORK_ITEM_PASS',
+    });
+    let launchedRequest = null;
+    const errors = [];
+    const result = await routing.runProfileDispatch(
+      { profile: profileFile, execute: true, launch: true, root },
+      {
+        rootDir: root,
+        candidates: [writer, reviewer],
+        evidenceDir: path.join(root, 'evidence'),
+        decisionDir: path.join(root, 'decisions'),
+        storePath: path.join(root, 'quota.json'),
+        home: root,
+        now: Date.now(),
+        priors: {
+          ranking: [
+            {
+              canonical: 'exec-writer',
+              codingTier: 'T1',
+              reviewTier: 'T1',
+              score: 95,
+              retrievedAt: new Date().toISOString(),
+            },
+          ],
+        },
+        headrooms: { default: 'open' },
+        useStoredQuota: false,
+        launcher: async (req) => {
+          launchedRequest = req;
+          return { status: 'completed' };
+        },
+        log: () => {},
+        error: (message) => errors.push(message),
+        exit: () => {},
+      }
+    );
+
+    assert.equal(result.exitCode, 0);
+    assert.ok(launchedRequest);
+    assert.equal(launchedRequest.candidateKey, candidateKey(writer));
+    assert.ok(launchedRequest.independentReviewer);
+    assert.equal(launchedRequest.independentReviewer.candidateKey, candidateKey(reviewer));
+    assert.equal(
+      launchedRequest.independentReviewer.failureDomain,
+      routing.canonicalFailureDomain(reviewer)
+    );
+  });
+
+  test('P1 JEV model choice on operator path consults JEV and falls back when ask is omitted', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai141-jev-choice-'));
+    const profileFile = path.join(root, 'profile.json');
+    fs.writeFileSync(profileFile, JSON.stringify(profile()), 'utf8');
+
+    const first = candidate('candidate-first', { latencyMs: 1000, quality: 90 });
+    const second = candidate('candidate-second', { latencyMs: 2000, quality: 85 });
+
+    let modelChoiceCalled = false;
+    // Operator path: deps has ask (weighting and model choice) but no modelChoiceAsk
+    const operatorResult = await routing.runProfileDispatch(
+      { profile: profileFile, root },
+      {
+        rootDir: root,
+        candidates: [first, second],
+        evidenceDir: path.join(root, 'evidence'),
+        decisionDir: path.join(root, 'decisions'),
+        home: root,
+        now: Date.now(),
+        headrooms: { default: 'open' },
+        useStoredQuota: false,
+        ask: async (question) => {
+          if (question.kind === 'select-eligible-model') {
+            modelChoiceCalled = true;
+            return { choice: candidateKey(second), confidence: 0.95 };
+          }
+          return { choice: 'BALANCED', confidence: 0.9 };
+        },
+        log: () => {},
+        error: () => {},
+        exit: () => {},
+      }
+    );
+
+    assert.equal(modelChoiceCalled, true);
+    assert.equal(operatorResult.chosen, candidateKey(second));
+    assert.equal(operatorResult.modelChoice.outcome, 'DECIDED');
+    assert.equal(operatorResult.modelChoice.choice, candidateKey(second));
+    assert.equal(operatorResult.modelChoice.confidence, 0.95);
+
+    // Production defaults without injected deps: runs cleanly and records UNDECIDED
+    const defaultResult = await routing.runProfileDispatch(
+      { profile: profileFile, root },
+      {
+        rootDir: root,
+        candidates: [first, second],
+        evidenceDir: path.join(root, 'evidence'),
+        decisionDir: path.join(root, 'decisions'),
+        home: root,
+        now: Date.now(),
+        headrooms: { default: 'open' },
+        useStoredQuota: false,
+        log: () => {},
+        error: () => {},
+        exit: () => {},
+      }
+    );
+
+    assert.equal(defaultResult.exitCode, 0);
+    assert.equal(defaultResult.chosen, candidateKey(first));
+    assert.equal(defaultResult.modelChoice.outcome, 'UNDECIDED');
+    assert.equal(defaultResult.modelChoice.reason, 'NOT_CONFIGURED');
+  });
+
+  test('P1 JEV model choice fails closed on ineligible choice, exception, and low confidence', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai141-jev-fallback-'));
+    const profileFile = path.join(root, 'profile.json');
+    fs.writeFileSync(profileFile, JSON.stringify(profile()), 'utf8');
+
+    const first = candidate('candidate-a', { latencyMs: 1000, quality: 90 });
+    const second = candidate('candidate-b', { latencyMs: 2000, quality: 85 });
+
+    // Ineligible choice: JEV returns an unknown key
+    const ineligibleResult = await routing.runProfileDispatch(
+      { profile: profileFile, root },
+      {
+        rootDir: root,
+        candidates: [first, second],
+        evidenceDir: path.join(root, 'evidence'),
+        decisionDir: path.join(root, 'decisions'),
+        home: root,
+        now: Date.now(),
+        headrooms: { default: 'open' },
+        useStoredQuota: false,
+        modelChoiceAsk: async () => ({ choice: 'unknown::candidate::key', confidence: 0.95 }),
+        log: () => {},
+        error: () => {},
+        exit: () => {},
+      }
+    );
+    assert.equal(ineligibleResult.chosen, candidateKey(first));
+    assert.equal(ineligibleResult.modelChoice.outcome, 'UNDECIDED');
+
+    // JEV throws error: falls closed to deterministic choice
+    const errorResult = await routing.runProfileDispatch(
+      { profile: profileFile, root },
+      {
+        rootDir: root,
+        candidates: [first, second],
+        evidenceDir: path.join(root, 'evidence'),
+        decisionDir: path.join(root, 'decisions'),
+        home: root,
+        now: Date.now(),
+        headrooms: { default: 'open' },
+        useStoredQuota: false,
+        modelChoiceAsk: async () => {
+          throw new Error('JEV_NETWORK_DOWN');
+        },
+        log: () => {},
+        error: () => {},
+        exit: () => {},
+      }
+    );
+    assert.equal(errorResult.chosen, candidateKey(first));
+    assert.equal(errorResult.modelChoice.outcome, 'UNDECIDED');
+    assert.match(errorResult.modelChoice.reason, /JEV_PROVIDER_FAILED/);
+
+    // Low confidence: falls closed to deterministic choice
+    const lowConfResult = await routing.runProfileDispatch(
+      { profile: profileFile, root },
+      {
+        rootDir: root,
+        candidates: [first, second],
+        evidenceDir: path.join(root, 'evidence'),
+        decisionDir: path.join(root, 'decisions'),
+        home: root,
+        now: Date.now(),
+        headrooms: { default: 'open' },
+        useStoredQuota: false,
+        modelChoiceAsk: async () => ({ choice: candidateKey(second), confidence: 0.2 }),
+        modelChoiceMinConfidence: 0.7,
+        log: () => {},
+        error: () => {},
+        exit: () => {},
+      }
+    );
+    assert.equal(lowConfResult.chosen, candidateKey(first));
+    assert.equal(lowConfResult.modelChoice.outcome, 'UNDECIDED');
   });
 });
