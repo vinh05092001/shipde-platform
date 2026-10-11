@@ -80,7 +80,14 @@ describe('TASK-AI-100 external benchmark priors', () => {
       modelId: 'provider/other-model',
     });
     const priors = {
-      ranking: [{ canonical: 'gpt-6-luna', codingTier: 'T1', reviewTier: 'T2' }],
+      ranking: [
+        {
+          canonical: 'gpt-6-luna',
+          codingTier: 'T1',
+          reviewTier: 'T2',
+          retrievedAt: new Date(NOW).toISOString(),
+        },
+      ],
     };
 
     const result = rank([other, strong], profile(), priors);
@@ -100,7 +107,14 @@ describe('TASK-AI-100 external benchmark priors', () => {
       evidence: [],
     });
     const result = rank([unproven], profile({ proofFloor: 'WORK_ITEM_PASS' }), {
-      ranking: [{ canonical: 'gpt-6-luna', codingTier: 'T1', reviewTier: 'T1' }],
+      ranking: [
+        {
+          canonical: 'gpt-6-luna',
+          codingTier: 'T1',
+          reviewTier: 'T1',
+          retrievedAt: new Date(NOW).toISOString(),
+        },
+      ],
     });
 
     assert.ok(result.chosen);
@@ -123,7 +137,14 @@ describe('TASK-AI-100 external benchmark priors', () => {
   test('review roles use reviewTier, while other roles use codingTier', () => {
     const model = candidate({ modelId: 'provider/gpt-6-luna' });
     const priors = {
-      ranking: [{ canonical: 'gpt-6-luna', codingTier: 'T4', reviewTier: 'T1' }],
+      ranking: [
+        {
+          canonical: 'gpt-6-luna',
+          codingTier: 'T4',
+          reviewTier: 'T1',
+          retrievedAt: new Date(NOW).toISOString(),
+        },
+      ],
     };
 
     assert.deepEqual(priorFor(model, 'writer', priors), {

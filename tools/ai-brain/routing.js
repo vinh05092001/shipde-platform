@@ -389,17 +389,13 @@ function claudeFamilyExclusion(role, modelId) {
   return CLAUDE_FAMILY_REASON;
 }
 
-/**
- * True when a candidate declares qualified roles but none of them belong to the
- * worker lane for the profile role. A review-only candidate must never be
- * ranked — let alone quota-pinned — as a writer, and vice versa. Absent or
- * wildcard-qualified candidates stay unproven rather than refused.
- */
 function roleLaneMismatch(role, qualifiedRoles) {
   if (!Array.isArray(qualifiedRoles) || qualifiedRoles.length === 0) return false;
   if (qualifiedRoles.includes('*')) return false;
-  const lane = role === 'writer' ? /^(author|writer)[.:]/i : /^(review|security)/i;
-  return !qualifiedRoles.some((r) => lane.test(String(r)));
+  if (role === 'writer') {
+    return !qualifiedRoles.some((r) => /^(author|writer)[.:]/i.test(String(r)));
+  }
+  return false;
 }
 
 const publisher = require('./publisher');
@@ -1226,13 +1222,18 @@ function rankForProfile(candidates, profile, assessment, ctx) {
     );
     const probationRequested =
       probation.has(key) || c.probation === true || Boolean(priorTier === 'T1');
+    const candidateEvidence = evidence.getEvidence(context.evidenceData, c) || [];
+    const legacyEvidence = Array.isArray(c.evidence) ? c.evidence : [];
+    const allCandidateEvidence = candidateEvidence.concat(legacyEvidence);
+    const hasQualityFailure = allCandidateEvidence.some((item) => item && item.status === 'failed');
+    const hasInternalWorkItemPass = allCandidateEvidence.some(
+      (item) => item && item.status === 'passed' && item.proofLevel === 'WORK_ITEM_PASS'
+    );
     const probationAllowed =
       probationRequested &&
       Boolean(probationPrior && !probationPrior.stale && priorTier === 'T1') &&
-      !(
-        (evidence.getEvidence(context.evidenceData, c) || []).length ||
-        (c.evidence || []).length > 0
-      ) &&
+      !hasInternalWorkItemPass &&
+      !hasQualityFailure &&
       (!['security', 'money', 'tenant'].some((risk) =>
         (profile.riskDomains || []).includes(risk)
       ) ||
@@ -1672,15 +1673,14 @@ async function runProfileDispatch(args, deps) {
         : undefined;
   if (result.ranking.length && typeof askForModelChoice === 'function') {
     try {
-      Object.assign(
-        result,
-        await adviseRankedModelChoice(result, profile, {
-          ask: askForModelChoice,
-          minConfidence:
-            d.modelChoiceMinConfidence !== undefined ? d.modelChoiceMinConfidence : d.minConfidence,
-          topN: d.modelChoiceTopN,
-        })
-      );
+      const advice = await adviseModelChoice(result, profile, {
+        ask: askForModelChoice,
+        minConfidence:
+          d.modelChoiceMinConfidence !== undefined ? d.modelChoiceMinConfidence : d.minConfidence,
+        topN: d.modelChoiceTopN,
+      });
+      result.chosen = advice.chosen;
+      result.modelChoice = advice.advice;
     } catch (err) {
       result.modelChoice = {
         outcome: 'UNDECIDED',

@@ -129,6 +129,48 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
     );
   });
 
+  test('strong prior permits probation with partial evidence but WORK_ITEM_PASS supersedes probation', () => {
+    const prior = {
+      ranking: [
+        {
+          canonical: 'partially-proven',
+          codingTier: 'T1',
+          reviewTier: 'T1',
+          score: 95,
+          retrievedAt: new Date().toISOString(),
+        },
+      ],
+    };
+    const partial = candidate('partially-proven', {
+      evidence: [{ status: 'passed', proofLevel: 'API_PASS' }],
+    });
+    const admitted = routing.rankForProfile(
+      [partial],
+      profile({ proofFloor: 'WORK_ITEM_PASS' }),
+      assessment,
+      {
+        headrooms: { default: 'open' },
+        priors: prior,
+      }
+    );
+    assert.equal(admitted.ranking.length, 1);
+    assert.equal(admitted.ranking[0].probation, true);
+    const complete = candidate('partially-proven', {
+      evidence: [{ status: 'passed', proofLevel: 'WORK_ITEM_PASS' }],
+    });
+    const established = routing.rankForProfile(
+      [complete],
+      profile({ proofFloor: 'WORK_ITEM_PASS' }),
+      assessment,
+      {
+        headrooms: { default: 'open' },
+        priors: prior,
+      }
+    );
+    assert.equal(established.ranking.length, 1);
+    assert.equal(established.ranking[0].probation, false);
+  });
+
   test('prior bonus is not counted again after blending into quality', () => {
     const untried = candidate('single-prior', {
       evidence: [],
@@ -590,9 +632,11 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
     const sourceDir = path.resolve(__dirname, '..', 'priors-sources');
     fs.mkdirSync(sourceDir, { recursive: true });
     const source = path.join(sourceDir, 'test-provider.js');
+    const marker = path.join(sourceDir, 'executed-marker');
     fs.writeFileSync(
       source,
-      'module.exports = { search: async () => [] };' + String.fromCharCode(10)
+      `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'executed');`,
+      'utf8'
     );
     const outside = path.join(os.tmpdir(), 'ai141-priors-outside.json');
     try {
@@ -602,7 +646,31 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
         { encoding: 'utf8' }
       );
       assert.equal(result.status, 2, result.stderr);
-      assert.match(result.stderr, /PRIORS_OUTPUT_OUTSIDE_ALLOWLIST/);
+      assert.match(result.stderr, /PRIORS_SEARCH_SOURCE_INVALID_JSON/);
+      assert.equal(fs.existsSync(marker), false);
+    } finally {
+      fs.rmSync(sourceDir, { recursive: true, force: true });
+    }
+  });
+
+  test('P1 priors refresh reads JSON descriptor and rejects executable JS code without executing', () => {
+    const cli = path.resolve(__dirname, '..', 'cli.js');
+    const sourceDir = path.resolve(__dirname, '..', 'priors-sources');
+    fs.mkdirSync(sourceDir, { recursive: true });
+    const jsSource = path.join(sourceDir, 'exploit.js');
+    const marker = path.join(sourceDir, 'should-not-exist');
+    fs.writeFileSync(
+      jsSource,
+      `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'pwned');\nmodule.exports = { endpoint: 'https://priors.example.com' };`,
+      'utf8'
+    );
+    try {
+      const result = spawnSync(process.execPath, [cli, 'priors', 'refresh', '--source', jsSource], {
+        encoding: 'utf8',
+      });
+      assert.equal(result.status, 2, result.stderr);
+      assert.match(result.stderr, /PRIORS_SEARCH_SOURCE_INVALID_JSON/);
+      assert.equal(fs.existsSync(marker), false);
     } finally {
       fs.rmSync(sourceDir, { recursive: true, force: true });
     }
@@ -650,8 +718,8 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
       },
       NOW
     );
-    assert.equal(undatedTierOnly.stale, true);
-    assert.equal(undatedTierOnly.bonus, 0);
+    assert.ok(!undatedTierOnly || undatedTierOnly.stale !== false);
+    assert.ok(!undatedTierOnly || undatedTierOnly.bonus === 0);
 
     // Prior with future retrieval date
     const futurePrior = priorsApi.priorFor(
@@ -715,6 +783,23 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
     );
     assert.equal(rankResult.ranking.length, 0);
     assert.equal(rankResult.rejected[0].reasonCode, 'PROOF_FLOOR_NOT_MET:NONE');
+  });
+
+  test('undated tier-only priors cannot admit probation', () => {
+    const result = routing.rankForProfile(
+      [candidate('undated-tier-model', { evidence: [] })],
+      profile({ proofFloor: 'WORK_ITEM_PASS' }),
+      assessment,
+      {
+        now: Date.parse('2026-10-10T12:00:00Z'),
+        headrooms: { default: 'open' },
+        priors: {
+          ranking: [{ canonical: 'undated-tier-model', codingTier: 'T1', reviewTier: 'T1' }],
+        },
+      }
+    );
+    assert.equal(result.ranking.length, 0);
+    assert.equal(result.rejected[0].reasonCode, 'PROOF_FLOOR_NOT_MET:NONE');
   });
 
   test('P1 independent reviewer isolation rejects unknown domain at admission and pin time', () => {

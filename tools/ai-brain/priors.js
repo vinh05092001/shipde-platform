@@ -50,20 +50,19 @@ function priorFor(candidate, role, priors, now) {
   const sourceDates = (match.sources || [])
     .map((source) => source && source.retrievedAt)
     .filter(Boolean);
-  const retrievalDate = match.retrievedAt || (priors && priors.generatedAt);
+  const retrievalDate =
+    match.retrievedAt ||
+    (priors && priors.generatedAt) ||
+    (match.sources && match.sources.length ? match.sources[0].retrievedAt : null);
   const stale =
     match.stale === true ||
     (sourceDates.length > 0
       ? sourceDates.some((date) => isStale(date, now))
       : isStale(retrievalDate, now));
 
-  const result = {
-    canonical: match.canonical,
-    tier,
-    bonus: stale ? 0 : bonus,
-    stale,
-    sources: match.sources || [],
-  };
+  const result = { canonical: match.canonical, tier, bonus: stale ? 0 : bonus };
+  if (stale) result.stale = true;
+  if (match.sources && match.sources.length) result.sources = match.sources;
   if (Number.isFinite(priorScore)) {
     result.score = Math.round(Math.max(0, Math.min(100, priorScore)));
   }

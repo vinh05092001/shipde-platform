@@ -1216,7 +1216,7 @@ function dispatchProfileCommand(args, deps) {
       discCat = { candidates: [] };
     }
   }
-  const accounts = listAccounts() || [];
+  const accounts = (deps && Array.isArray(deps.accounts) ? deps.accounts : listAccounts()) || [];
 
   const evidenceDir =
     (deps && deps.evidenceDir) || args['evidence-dir'] || path.join(__dirname, 'data', 'evidence');
@@ -1228,6 +1228,7 @@ function dispatchProfileCommand(args, deps) {
   }
   const optsWithEvidence = Object.assign({}, deps, {
     evidenceData,
+    accounts,
     discoveryDataDir: (deps && deps.discoveryDataDir) || args['discovery-dir'] || undefined,
     fakeRunsDir:
       (deps && deps.fakeRunsDir) ||
@@ -1253,7 +1254,6 @@ function dispatchProfileCommand(args, deps) {
   const candidateList = assembleForDispatch(discCat, accounts, registry, optsWithEvidence);
   const jevSource = sourcesApi.getSource('jev', registry);
   const jevAsk =
-    (deps && deps.ask) ||
     (deps && deps.jevAsk) ||
     jev.buildAskFromSource(jevSource, {
       home: optsWithEvidence.home,
@@ -1267,7 +1267,7 @@ function dispatchProfileCommand(args, deps) {
     Object.assign({}, deps, {
       candidates: candidateList,
       rootDir,
-      ask: jevAsk,
+      ask: (deps && deps.ask) || jevAsk,
       minConfidence: jevSource && jevSource.minConfidence,
       modelChoiceAsk: (deps && (deps.modelChoiceAsk || deps.ask)) || jevAsk,
       modelChoiceMinConfidence:
@@ -3162,15 +3162,15 @@ function main() {
 
   if (command === 'priors' && args._[1] === 'refresh') {
     const { refreshPriors } = require('./priors');
-    const sourceModule = args.source || process.env.AI_BRAIN_PRIORS_SOURCE;
-    if (!sourceModule) {
+    const sourceFile = args.source || process.env.AI_BRAIN_PRIORS_SOURCE;
+    if (!sourceFile) {
       console.error(
-        'PRIORS_SEARCH_SOURCE_REQUIRED: set AI_BRAIN_PRIORS_SOURCE to a module exporting search(query)'
+        'PRIORS_SEARCH_SOURCE_REQUIRED: set AI_BRAIN_PRIORS_SOURCE to a JSON source descriptor'
       );
       process.exitCode = 2;
       return;
     }
-    const resolvedSource = path.resolve(sourceModule);
+    const resolvedSource = path.resolve(sourceFile);
     let realSource = null;
     try {
       realSource = require('fs').realpathSync(resolvedSource);
@@ -3193,7 +3193,23 @@ function main() {
       process.exitCode = 2;
       return;
     }
-    const provider = require(resolvedSource);
+    let provider;
+    try {
+      provider = JSON.parse(require('fs').readFileSync(realSource, 'utf8'));
+    } catch {
+      console.error('PRIORS_SEARCH_SOURCE_INVALID_JSON');
+      process.exitCode = 2;
+      return;
+    }
+    if (
+      !provider ||
+      typeof provider.endpoint !== 'string' ||
+      !/^https:\/\//i.test(provider.endpoint)
+    ) {
+      console.error('PRIORS_SEARCH_SOURCE_INVALID_DESCRIPTOR');
+      process.exitCode = 2;
+      return;
+    }
     const defaultPriorsFile = path.resolve(__dirname, 'data', 'model-priors.json');
     const outputFile = args.file ? path.resolve(args.file) : defaultPriorsFile;
     if (outputFile !== defaultPriorsFile) {
@@ -3201,8 +3217,17 @@ function main() {
       process.exitCode = 2;
       return;
     }
+    const search = async (query) => {
+      const response = await fetch(provider.endpoint, {
+        method: 'POST',
+        headers: Object.assign({ 'content-type': 'application/json' }, provider.headers || {}),
+        body: JSON.stringify({ query }),
+      });
+      if (!response.ok) throw new Error('PRIORS_SEARCH_HTTP_' + response.status);
+      return response.json();
+    };
     refreshPriors({
-      search: provider.search,
+      search,
       sourceId: path.relative(allowedRoots[0], resolvedSource),
       file: outputFile,
     })
