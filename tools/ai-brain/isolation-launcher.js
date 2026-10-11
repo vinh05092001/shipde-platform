@@ -487,7 +487,6 @@ $stdoutTask = $process.StandardOutput.ReadToEndAsync()
 $stderrTask = $process.StandardError.ReadToEndAsync()
 $timeoutMs = ${workerTimeoutMs}
 $tokenBudgetJson = '${JSON.stringify(tokenBudget || {}).replace(/'/g, "''")}'
-$usageFile = $script:usageFile
 $maxTokens = 0
 $progressTimeoutMs = ${Number(options.progressTimeoutMs) > 0 ? Number(options.progressTimeoutMs) : 0}
 $lastProgressAt = [System.Diagnostics.Stopwatch]::GetTimestamp()
@@ -582,24 +581,18 @@ while ($true) {
         Stop-WorkerTree
         break
     }
-    if ($progressTimeoutMs -gt 0) {
+        if ($progressTimeoutMs -gt 0) {
         $outputSignature = ""
         try {
             $outputFiles = @(Get-ChildItem -LiteralPath $workerRoot -File -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -notmatch '[\\/](\.git|node_modules|\.shipde)[\\/]' } | Sort-Object FullName)
             if ($outputFiles.Count -gt 0) { $outputSignature = ($outputFiles | ForEach-Object { $_.FullName + ':' + $_.Length + ':' + $_.LastWriteTimeUtc.Ticks }) -join '|' }
-        } catch {}
-        try {
-            if (Test-Path -LiteralPath $usageLogPath) {
-                $logItem = Get-Item -LiteralPath $usageLogPath -ErrorAction Stop
-                $outputSignature += '|log:' + [string]$logItem.Length
-            }
         } catch {}
         $madeProgress = $false
         if ($outputSignature -ne $lastOutputSignature) {
             $lastOutputSignature = $outputSignature
             $madeProgress = $true
         }
-        if ($null -ne $totalTokens -and $totalTokens -ne $lastTotalTokens) {
+        if ($null -ne $totalTokens -and ($null -eq $lastTotalTokens -or $totalTokens -gt $lastTotalTokens)) {
             $lastTotalTokens = $totalTokens
             $madeProgress = $true
         }

@@ -18,8 +18,11 @@ function safeRelative(file) {
 
 function createContextPack(items, options = {}) {
   const root = path.resolve(options.root || process.cwd());
+  const requestedOutput = options.output ? path.resolve(options.output) : null;
   const outputDir = path.resolve(
-    options.outputDir || path.join(root, 'tools', 'ai-brain', 'data', 'context-packs')
+    options.outputDir ||
+      (requestedOutput && path.dirname(requestedOutput)) ||
+      path.join(root, 'tools', 'ai-brain', 'data', 'context-packs')
   );
   const files = new Set();
   for (const item of items || []) {
@@ -50,19 +53,11 @@ function createContextPack(items, options = {}) {
         referenced.add(relative);
       }
     }
-    if (referenced.size === 0) {
-      for (const fallback of [
-        'docs/product-spec/docs/00-control/BASELINE-AND-DECISIONS.md',
-        'docs/product-spec/docs/01-product/PRODUCT-VISION-SCOPE.md',
-        'docs/product-spec/docs/01-product/MASTER-FEATURE-CATALOG.md',
-      ]) {
-        if (fs.existsSync(path.join(root, fallback))) files.add(fallback);
-      }
-    }
   }
   const manifest = [...files].sort();
   fs.mkdirSync(outputDir, { recursive: true });
-  const output = path.join(outputDir, 'context-' + Date.now() + '-' + process.pid + '.md');
+  const output =
+    requestedOutput || path.join(outputDir, 'context-' + Date.now() + '-' + process.pid + '.md');
   fs.writeFileSync(
     output + '.manifest.json',
     JSON.stringify({ files: manifest, createdAt: new Date().toISOString() }, null, 2) + '\n',
@@ -119,9 +114,10 @@ if (require.main === module) {
     process.exitCode = 2;
   } else {
     const item = JSON.parse(fs.readFileSync(args[specIndex + 1], 'utf8'));
+    const output = path.resolve(args[outIndex + 1]);
     const result = createContextPack(Array.isArray(item) ? item : [item], {
       root: process.cwd(),
-      outputDir: path.dirname(path.resolve(args[outIndex + 1])),
+      output,
     });
     process.stdout.write(result.path + '\n');
   }

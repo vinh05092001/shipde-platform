@@ -241,6 +241,14 @@ function resolveLauncher(o, isolatedLauncher) {
       onProvisioned: typeof o.onProvisioned === 'function' ? o.onProvisioned : undefined,
       candidateKey: job.candidateKey || null,
       gateway: job.gateway || null,
+      model: job.model || null,
+      upstream: job.upstream || null,
+      usageFile: job.usageFile || null,
+      tokenBudget: job.tokenBudget || null,
+      progressTimeoutMs: job.progressTimeoutMs || o.progressTimeoutMs || null,
+      rtk: job.rtk || null,
+      riskDomains: job.riskDomains || null,
+      lowRisk: job.lowRisk === true,
       // TASK-AI-121 LF-R03: the worker timeout the run was given, for writer,
       // reviewer and repair launches alike.
       workerTimeoutMs: o.workerTimeoutMs || job.workerTimeoutMs || undefined,
@@ -1452,6 +1460,7 @@ function writeUsageReportFromHarnessResult(job, res) {
 
   let sessionId = null;
   let tokens = { input: 0, cacheRead: 0, output: 0, total: 0 };
+  let sawTokens = false;
 
   const stdout = String((res && res.stdout) || '');
   if (stdout) {
@@ -1468,6 +1477,7 @@ function writeUsageReportFromHarnessResult(job, res) {
           }
           const t = parsed.tokens || (parsed.part && parsed.part.tokens);
           if (t) {
+            sawTokens = true;
             tokens.input = Number(t.input) || tokens.input;
             tokens.output = Number(t.output) || tokens.output;
             tokens.total = Number(t.total) || tokens.total;
@@ -1490,6 +1500,7 @@ function writeUsageReportFromHarnessResult(job, res) {
   if (!sessionId && res && res.completionNonce) {
     sessionId = res.completionNonce;
   }
+  if (!sawTokens) return null;
 
   // A failed launch reports session_id: null per AC-AI-64-23 / TASK-AI-63
   if (res && res.exitCode !== 0 && res.exitCode !== null && res.exitCode !== undefined) {
@@ -1529,7 +1540,11 @@ function readUsageReport(file) {
 }
 
 function runHostBrainGate(job, options = {}) {
-  const root = options.hostCwd || options.cwd || process.cwd();
+  const root =
+    (job && (job.cwd || job.workerRoot || job.isolatedWorkerRoot)) ||
+    options.hostCwd ||
+    options.cwd ||
+    process.cwd();
   const node = options.nodeExecutable || process.execPath;
   const suite = options.brainSuite || 'tools/ai-brain/test/*.test.js';
   const run = options.spawnSync || spawnSync;
@@ -3042,13 +3057,13 @@ async function runOrchestration(goal, opts) {
       : 30 * 60 * 1000;
   log.workerTimeoutMs = o.workerTimeoutMs;
   const budgetConfig = o.tokenBudgets || {};
-  const budgetForItem = (item) =>
-    budgetConfig.byRole?.[roleOf(item)] ||
-    budgetConfig.byComplexity?.[item.complexity] ||
-    budgetConfig[roleOf(item)] ||
-    budgetConfig[item.complexity] ||
-    budgetConfig.default ||
-    {};
+  const budgetForItem = (item) => ({
+    ...(budgetConfig.default || {}),
+    ...(budgetConfig[item.complexity] || {}),
+    ...(budgetConfig.byComplexity?.[item.complexity] || {}),
+    ...(budgetConfig[roleOf(item)] || {}),
+    ...(budgetConfig.byRole?.[roleOf(item)] || {}),
+  });
   const budgetProgressMs =
     Number(
       (o.specs || [])
@@ -3911,7 +3926,10 @@ async function runOrchestration(goal, opts) {
         labels: { workItem: String(item.id), role: roleOf(item) },
         exercise: o.exercise || null,
         workerTimeoutMs: o.workerTimeoutMs || null,
-        rtk: { enabled: itemRtkPermitted },
+        rtk: {
+          enabled: itemRtkPermitted,
+          sourcePath: o.rtk && typeof o.rtk === 'object' ? o.rtk.sourcePath : undefined,
+        },
         lowRisk: itemRtkPermitted,
         riskDomains: itemRiskDomains,
         tokenBudgetConfig: budgetConfig,

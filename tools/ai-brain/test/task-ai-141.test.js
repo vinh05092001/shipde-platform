@@ -27,6 +27,7 @@ const {
   runHostBrainGate,
   runOrchestration,
   rtkPolicyForItem,
+  resolveLauncher,
   writeUsageReportFromHarnessResult,
 } = require('../orchestrate');
 const { DEFAULT_TOKEN_BUDGETS } = require('../intake');
@@ -1251,6 +1252,11 @@ test('Part H: a stalled live session is stopped, recorded and checkpointed for r
       capabilities: { contextWindow: 999999 },
     },
   ];
+  const ev = (candidate) => ({
+    ...candidate,
+    evidence: [{ status: 'passed', kind: 'WORK_ITEM_PASS', proofLevel: 'WORK_ITEM_PASS' }],
+  });
+  candidates.splice(0, candidates.length, ...candidates.map(ev));
   const calls = [];
   const result = await runOrchestration('fixture', {
     specs: [{ id: 'FIXTURE-AI-141', files: ['a.js'], acceptanceCriteria: ['works'] }],
@@ -1327,7 +1333,8 @@ test('Part H: token budget overrun stops the session and records the fallback ca
         : { exitCode: 1, stderr: 'bounded fallback stopped' };
     },
   });
-  assert.ok(calls.length >= 1);
+  assert.equal(calls.length, 2, 'a budget overrun must fall back to the next candidate');
+  assert.notEqual(calls[0].candidateKey, calls[1].candidateKey);
   assert.ok(result.launches.some((launch) => launch.fallbackReason === 'TOKEN_BUDGET_EXCEEDED'));
   assert.ok(result.launches.some((launch) => launch.fallbackReason === 'TOKEN_BUDGET_EXCEEDED'));
 });
@@ -1393,6 +1400,69 @@ test('Part H: context pack manifest records output path and included source allo
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
   assert.ok(manifest.path);
   assert.deepEqual(manifest.files, ['tools/ai-brain/cli.js']);
+});
+
+test('Part H: context pack command writes to the exact requested output path', () => {
+  const root = fixtureRoot();
+  const specFile = path.join(root, 'item.json');
+  const output = path.join(root, 'exact-context.md');
+  fs.writeFileSync(specFile, JSON.stringify({ allowedPaths: [] }));
+  const result = spawnSync(
+    process.execPath,
+    [path.join(__dirname, '..', 'context-pack.js'), '--spec', specFile, '--output', output],
+    { cwd: root, encoding: 'utf8' }
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), output);
+  assert.equal(fs.existsSync(output), true);
+});
+
+test('Part H: context pack never includes implicit sources outside allowed paths', () => {
+  const root = fixtureRoot();
+  fs.mkdirSync(path.join(root, 'docs', 'product-spec', 'docs', '00-control'), { recursive: true });
+  fs.writeFileSync(
+    path.join(root, 'docs', 'product-spec', 'docs', '00-control', 'BASELINE-AND-DECISIONS.md'),
+    'unrequested source'
+  );
+  const result = contextPack.createContextPack([{ allowedPaths: [] }], {
+    root,
+    outputDir: path.join(root, 'packs'),
+  });
+  assert.deepEqual(result.files, []);
+  assert.doesNotMatch(result.content, /unrequested source/);
+});
+
+test('Part H: complexity budget layers apply even when a role budget exists', async () => {
+  const root = fixtureRoot();
+  let captured;
+  await runOrchestration('budget precedence', {
+    specs: [{ id: 'BUDGET-COMPLEX', complexity: 'complex', files: [] }],
+    candidates: [
+      {
+        upstream: 'u',
+        gateway: 'g',
+        accountId: 'a',
+        modelId: 'm',
+        harness: 'opencode',
+        source: 'u',
+        evidence: [{ status: 'passed', kind: 'WORK_ITEM_PASS', proofLevel: 'WORK_ITEM_PASS' }],
+        qualifiedRoles: ['author.foundation'],
+        capabilities: { contextWindow: 999999 },
+      },
+    ],
+    cwd: root,
+    decisionDir: path.join(root, 'budget-precedence'),
+    tokenBudgets: {
+      byRole: { 'author.foundation': { maxTurns: 5 } },
+      byComplexity: { complex: { maxTokens: 4321 } },
+    },
+    run: (job) => {
+      captured = job.tokenBudget;
+      return { exitCode: 1, stderr: 'stop' };
+    },
+  });
+  assert.equal(captured.maxTurns, 5);
+  assert.equal(captured.maxTokens, 4321);
 });
 
 test('Part H: token usage report groups input, cache-read and output by model and Work Item', () => {
@@ -1780,7 +1850,7 @@ test('Part H: RTK_POLICY decision is recorded once per work item across multiple
       gateway: 'gw-1',
       accountId: 'acct-1',
       modelId: 'm1',
-      harness: 'opencode',
+      harness: 'paseo',
       source: 'up-1',
       qualifiedRoles: ['author.foundation'],
       capabilities: { contextWindow: 999999 },
@@ -1820,6 +1890,87 @@ test('Part H: RTK_POLICY decision is recorded once per work item across multiple
     (r) => r.warning === 'RTK_POLICY' && r.workItemId === 'ITEM-RTK-ONCE'
   );
   assert.equal(rtkRecords.length, 1, 'RTK_POLICY is recorded exactly once for the work item');
+});
+
+test('Part H: isolated launcher resolves RTK and budget policy from the dispatched job', () => {
+  let received;
+  const launch = resolveLauncher({}, (_adapter, _args, options) => {
+    received = options;
+    return { exitCode: 0 };
+  });
+  launch(
+    {
+      harness: 'paseo',
+      cwd: process.cwd(),
+      candidateKey: 'candidate',
+      rtk: { enabled: true, sourcePath: 'C:\\rtk.exe' },
+      tokenBudget: { maxTokens: 123 },
+      riskDomains: [],
+      lowRisk: true,
+      upstream: 'gateway',
+      model: 'model',
+      usageFile: 'usage.json',
+    },
+    {}
+  );
+  assert.deepEqual(received.rtk, { enabled: true, sourcePath: 'C:\\rtk.exe' });
+  assert.equal(received.tokenBudget.maxTokens, 123);
+  assert.equal(received.lowRisk, true);
+  assert.equal(received.model, 'model');
+  assert.equal(received.upstream, 'gateway');
+});
+
+test('Part H: live budget watch keeps the usage file assigned before the loop', () => {
+  const script = buildWorkerLaunchScript({
+    credPath: 'credential',
+    workerRoot: 'C:\\worker',
+    exeFile: 'agent.exe',
+    payloadArgsPath: 'args.json',
+    launchResultPath: 'result.json',
+    workerTimeoutMs: 90000,
+    tokenBudget: { maxTokens: 50 },
+    usageFile: 'C:\\usage\\live.json',
+    completionNonce: 'abc',
+  });
+  const assigned = script.indexOf("$usageFile = 'C:\\usage\\live.json'");
+  const wiped = script.indexOf('$usageFile = $script:usageFile');
+  assert.ok(assigned > 0, 'the host script must assign the configured usage file');
+  assert.equal(wiped, -1, 'a later assignment must not wipe the usage file before the watch loop');
+  const watch = script.indexOf('while ($true)');
+  assert.ok(watch > assigned, 'the usage file is still assigned when the watch loop starts');
+});
+
+test('Part H: missing usage telemetry is not replaced by a zeroed report', () => {
+  const root = fixtureRoot();
+  const usageFile = path.join(root, 'missing-usage.json');
+  const job = { usageFile, harness: 'opencode-direct', model: 'm', upstream: 'u' };
+  const written = writeUsageReportFromHarnessResult(job, {
+    exitCode: 0,
+    stdout: 'worker finished without token events',
+  });
+  assert.equal(written, null);
+  assert.equal(fs.existsSync(usageFile), false);
+  const checked = enforceTokenBudget({ exitCode: 0, stderr: '' }, { maxTokens: 100 }, usageFile);
+  assert.equal(checked.failureReason, 'TOKEN_BUDGET_UNVERIFIED');
+});
+
+test('Part H: host brain gate tests the isolated worker tree, not the controller checkout', () => {
+  const workerRoot = path.join(fixtureRoot(), 'worker');
+  const hostCwd = path.join(fixtureRoot(), 'controller');
+  fs.mkdirSync(path.join(workerRoot, 'tools', 'ai-brain', 'test'), { recursive: true });
+  fs.writeFileSync(path.join(workerRoot, 'tools', 'ai-brain', 'test', 'worker.test.js'), '');
+  let capturedCwd = null;
+  runHostBrainGate(
+    { cwd: workerRoot, workerRoot },
+    {
+      hostCwd,
+      spawnSync: (_node, _args, opts) => {
+        capturedCwd = opts.cwd;
+        return { status: 0, stdout: 'ℹ pass 1\n', stderr: '' };
+      },
+    }
+  );
+  assert.equal(capturedCwd, workerRoot);
 });
 
 test('Part H: cli orchestrate handles malformed token-budgets without uncaught throw', async () => {
