@@ -712,6 +712,10 @@ async function nextLoop(options, deps) {
     const now = getNow();
     const logOpts = { dir: opts.decisionDir || d.decisionDir || decisions.DEFAULT_DIR, now };
 
+    if (typeof d.refreshRouteHealth === 'function') {
+      await d.refreshRouteHealth({ now, iteration });
+    }
+
     // 1. Check stop file
     const stopFilePath = opts.stopFile
       ? path.resolve(rootDir, opts.stopFile)

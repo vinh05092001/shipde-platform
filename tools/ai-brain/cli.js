@@ -3664,6 +3664,42 @@ module.exports = {
         return { ran: true, status: code === 0 ? 'completed' : 'refused' };
       };
     }
+    if (args.loop && !nextDeps.refreshRouteHealth && (args.catalogue || nextDeps.routeHealthFile)) {
+      nextDeps.refreshRouteHealth = async ({ now }) => {
+        const routeHealthApi = require('./route-health');
+        const healthFile =
+          args['route-health'] || path.join(__dirname, 'data', 'model-route-health.json');
+        const registry = nextDeps.registry || require('./sources').loadSources();
+        const store = routeHealthApi.loadStore(healthFile, { allowMissing: true });
+        let catalogue = [];
+        if (args.catalogue) {
+          const cataloguePath = path.resolve(args.catalogue);
+          if (fs.existsSync(cataloguePath))
+            catalogue = JSON.parse(fs.readFileSync(cataloguePath, 'utf8')).candidates || [];
+        }
+        const accounts = nextDeps.accounts || require('./accounts').listAccounts();
+        const probe =
+          nextDeps.probeRoute ||
+          ((model, route, probeOptions) =>
+            routeHealthApi.probeGatewayModel(
+              model,
+              route,
+              Object.assign({ registry }, probeOptions)
+            ));
+        const result = await routeHealthApi.recheckBeforeSelection(store, probe, {
+          now,
+          cap: nextDeps.probeCap,
+          timeoutMs: nextDeps.probeTimeoutMs,
+          catalogue,
+          registry,
+          accounts,
+          allowUnprobed: true,
+        });
+        routeHealthApi.saveStore(healthFile, store);
+        if (nextDeps.onRouteRefresh) nextDeps.onRouteRefresh(result);
+        return result;
+      };
+    }
     return require('./next-runner').nextCommand(args, nextDeps);
   },
   _buildQualificationCandidates: buildQualificationCandidates,

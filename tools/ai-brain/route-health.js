@@ -58,7 +58,7 @@ function dueAt(record, now) {
 }
 
 function recordResult(store, modelId, routeId, result, now) {
-  const key = normalizeModelId(modelId) + '|' + String(routeId);
+  const key = healthKey(modelId, routeId);
   const previous = store.paths[key] || { failures: 0 };
   const lastCheckedAt = new Date(now).toISOString();
   if (result && result.ok) {
@@ -117,15 +117,23 @@ function recordResult(store, modelId, routeId, result, now) {
   return { key, eligible: false, reason };
 }
 
+function healthKey(modelId, routeId) {
+  const pathId =
+    routeId && typeof routeId === 'object'
+      ? String(routeId.id) + (routeId.accountId ? '@' + routeId.accountId : '')
+      : String(routeId);
+  return normalizeModelId(modelId) + '|' + pathId;
+}
+
 function isEligible(store, modelId, routeId, now) {
-  const record = store.paths[normalizeModelId(modelId) + '|' + String(routeId)];
+  const record = store.paths[healthKey(modelId, routeId)];
   // Due indicates the controller must re-check before selection; it is not
   // itself evidence that the route is healthy.
   return !record || record.status === 'AVAILABLE';
 }
 
 function isDue(store, modelId, routeId, now) {
-  const record = store.paths[normalizeModelId(modelId) + '|' + String(routeId)];
+  const record = store.paths[healthKey(modelId, routeId)];
   return Boolean(
     record && record.status !== 'AVAILABLE' && dueAt(record, Number(now) || Date.now())
   );
@@ -134,7 +142,7 @@ function isDue(store, modelId, routeId, now) {
 async function routeFallback(modelId, failedPath, paths, probe, store, options) {
   const o = options || {};
   const now = Number(o.now) || Date.now();
-  const failedRecord = store.paths[normalizeModelId(modelId) + '|' + String(failedPath)];
+  const failedRecord = store.paths[healthKey(modelId, failedPath)];
   const failureReason =
     o.failureReason || (failedRecord && failedRecord.status) || 'UNAVAILABLE_NOW';
   const retryFailedPath =
@@ -143,7 +151,7 @@ async function routeFallback(modelId, failedPath, paths, probe, store, options) 
     failedRecord.status === 'UNAVAILABLE_NOW' &&
     !isEligible(store, modelId, failedPath, now);
   const ordered = (paths || [])
-    .filter((p) => p && (p.id !== failedPath || retryFailedPath))
+    .filter((p) => p && (p.id !== failedPath || retryFailedPath || p.accountId))
     .slice();
   ordered.sort((a, b) => Number(b.evidence || 0) - Number(a.evidence || 0));
   const failures = [];
@@ -151,7 +159,9 @@ async function routeFallback(modelId, failedPath, paths, probe, store, options) 
     if (!isEligible(store, modelId, route.id, now)) {
       failures.push({
         path: route.id,
-        reason: store.paths[normalizeModelId(modelId) + '|' + route.id].status,
+        reason:
+          store.paths[healthKey(modelId, route)]?.status ||
+          store.paths[healthKey(modelId, route.id)]?.status,
       });
       continue;
     }
@@ -160,7 +170,7 @@ async function routeFallback(modelId, failedPath, paths, probe, store, options) 
       continue;
     }
     let result;
-    const attempts = route.id === failedPath ? 1 : 2;
+    const attempts = route.id === failedPath && !route.accountId ? 1 : 2;
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       try {
         result = await probe(modelId, route, {
@@ -175,11 +185,22 @@ async function routeFallback(modelId, failedPath, paths, probe, store, options) 
         result && result.status,
         result && (result.message || result.error)
       );
-      if (attempt !== 0 || retryReason !== 'UNAVAILABLE_NOW') break;
+      if (
+        attempt !== 0 ||
+        retryReason !== 'UNAVAILABLE_NOW' ||
+        (route.id === failedPath && !route.accountId)
+      )
+        break;
       if (o.sleep) await o.sleep(o.retryBackoffMs ?? 1000);
       else await new Promise((resolve) => setTimeout(resolve, o.retryBackoffMs ?? 1000));
     }
-    const recorded = recordResult(store, modelId, route.id, result, now);
+    const recorded = recordResult(
+      store,
+      modelId,
+      route.accountId ? { id: route.id, accountId: route.accountId } : route.id,
+      result,
+      now
+    );
     if (recorded.eligible) {
       store.events.push({
         type: 'route_fallback',
@@ -247,7 +268,10 @@ function discoverModelPaths(modelId, registry, accounts, catalogue) {
     const dispatch =
       providers[String((account && account.provider) || (source && source.id) || '').toLowerCase()];
     const routeId = String(id);
-    const key = routeId;
+    const key =
+      account && account.id && (id === source?.id || id === source?.reachedVia)
+        ? routeId + '@' + account.id
+        : routeId;
     if (known.has(key)) {
       const existing = known.get(key);
       existing.evidence = Math.max(existing.evidence, Number(evidence || 0));
@@ -280,7 +304,7 @@ function discoverModelPaths(modelId, registry, accounts, catalogue) {
       if (gateway && model.gateway === gateway) {
         const geoBlocked = model.geoBlocked === true || model.status === 'GEO_BLOCKED';
         addPath(gateway, source, account, model.evidence);
-        const route = known.get(gateway);
+        const route = known.get(account && account.id ? gateway + '@' + account.id : gateway);
         if (route && geoBlocked) route.geoBlocked = true;
       }
       if (!gateway && source.servesModels !== false)
@@ -290,8 +314,8 @@ function discoverModelPaths(modelId, registry, accounts, catalogue) {
   for (const model of catalogue || []) {
     const id = model && (model.modelId || model.model);
     if (!id || normalizeModelId(id) !== normalized || !model.gateway) continue;
-    const routeKey = model.gateway + '|';
-    if (!known.has(routeKey))
+    const routeKey = model.gateway;
+    if (![...known.keys()].some((key) => key === routeKey || key.startsWith(routeKey + '@')))
       addPath(model.gateway, sources.get(model.gateway), null, model.evidence);
   }
   for (const source of (registry && registry.sources) || []) {
@@ -361,7 +385,20 @@ function discoverModelPaths(modelId, registry, accounts, catalogue) {
     });
     if (routeCatalogue.length) {
       const gatewaySource = sources.get(gateway);
-      addPath(gateway, gatewaySource || source, account, routeCatalogue[0].evidence);
+      const routeKey = gateway + '@' + account.id;
+      const hasRoute =
+        known.has(routeKey) || (known.has(gateway) && known.get(gateway).accountId === account.id);
+      if (!hasRoute) {
+        known.set(routeKey, {
+          id: gateway,
+          gateway,
+          accountId: account.id,
+          harness: dispatch.harness || source.harness || null,
+          accessPath: source.accessPath || source.endpoint || gateway,
+          evidence: Number(routeCatalogue[0].evidence || 0),
+          geoBlocked: false,
+        });
+      }
     }
   }
   return [...known.values()];
@@ -378,15 +415,13 @@ async function refreshCatalogueRoutes(catalogue, registry, accounts, store, prob
     const modelId = row && (row.modelId || row.model);
     const routeId = row && row.gateway;
     if (!modelId || !routeId) continue;
-    const key = normalizeModelId(modelId) + '|' + routeId;
+    const key = healthKey(modelId, routeId);
     if (seen.has(key) || (o.skipKeys && o.skipKeys.has(key))) continue;
     const record = store.paths[key];
-    if (record && !isEligible(store, modelId, routeId, now)) continue;
-    if (
-      !record &&
-      o.allowUnprobed !== true &&
-      !(o.probeEvidence && o.probeEvidence(modelId, routeId))
-    )
+    if (record && record.status === 'AVAILABLE') continue;
+    if (record && !isDue(store, modelId, routeId, now)) continue;
+    if (record && record.status !== 'AVAILABLE' && !isDue(store, modelId, routeId, now)) continue;
+    if (o.allowUnprobed !== true && !(o.probeEvidence && o.probeEvidence(modelId, routeId)))
       continue;
     seen.add(key);
     if (checked.length >= cap) break;
@@ -409,7 +444,7 @@ async function recheckDue(store, probe, options) {
   const due = Object.values(store.paths)
     .filter((row) => dueAt(row, now))
     .slice(0, cap);
-  const checkedKeys = due.map((row) => normalizeModelId(row.modelId) + '|' + row.routeId);
+  const checkedKeys = due.map((row) => healthKey(row.modelId, row.routeId));
   const restored = [];
   for (const row of due) {
     let result;
@@ -431,7 +466,7 @@ async function recheckBeforeSelection(store, probe, options) {
   const checkedDue = new Set(due.checkedKeys || []);
   const freshCatalogue = (o.catalogue || []).filter((row) => {
     const modelId = row && (row.modelId || row.model);
-    return !modelId || !checkedDue.has(normalizeModelId(modelId) + '|' + row.gateway);
+    return !modelId || !checkedDue.has(healthKey(modelId, row.gateway));
   });
   const refreshed = await refreshCatalogueRoutes(
     freshCatalogue,

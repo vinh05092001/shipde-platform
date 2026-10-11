@@ -8,6 +8,97 @@ const routes = require('../route-health');
 const candidatesApi = require('../candidates');
 const cli = require('../cli');
 const intake = require('../intake');
+const nextRunner = require('../next-runner');
+
+test('refresh cap advances past routes that were already probed successfully', async (t) => {
+  const { store } = temporaryStore(t);
+  const catalogue = Array.from({ length: 5 }, (_, i) => ({
+    modelId: `vendor/m${i}`,
+    gateway: 'gw',
+  }));
+  let calls = 0;
+  await routes.refreshCatalogueRoutes(
+    catalogue,
+    {},
+    [],
+    store,
+    async () => {
+      calls += 1;
+      return { ok: true };
+    },
+    { allowUnprobed: true, cap: 2, now: 1_800_000_000_000 }
+  );
+  const second = await routes.refreshCatalogueRoutes(
+    catalogue,
+    {},
+    [],
+    store,
+    async () => {
+      calls += 1;
+      return { ok: true };
+    },
+    { allowUnprobed: true, cap: 2, now: 1_800_000_000_001 }
+  );
+  assert.equal(calls, 4);
+  assert.equal(second.count, 2);
+  assert.ok(store.paths['vendor/m2|gw']);
+});
+
+test('discovery preserves separate account paths on one gateway', () => {
+  const registry = {
+    sources: [
+      { id: 'gw', kind: 'router' },
+      { id: 'acct-a', kind: 'model-source', reachedVia: 'gw' },
+      { id: 'acct-b', kind: 'model-source', reachedVia: 'gw' },
+    ],
+    dispatch: { providers: { 'acct-a': { harness: 'h-a' }, 'acct-b': { harness: 'h-b' } } },
+  };
+  const paths = routes.discoverModelPaths(
+    'model',
+    registry,
+    [
+      { id: 'account-a', provider: 'acct-a' },
+      { id: 'account-b', provider: 'acct-b' },
+    ],
+    [{ modelId: 'model', gateway: 'gw' }]
+  );
+  assert.deepEqual(paths.map((route) => route.accountId).sort(), ['account-a', 'account-b']);
+  const { store } = { store: { version: 1, paths: {}, events: [] } };
+  routes.recordResult(store, 'model', paths[0].id, { ok: false, status: 429 }, 1_800_000_000_000);
+  assert.equal(routes.isEligible(store, 'vendor/model', paths[1]), true);
+});
+
+test('next loop invokes route due rechecks before selecting a work item', async (t) => {
+  const { dir } = temporaryStore(t);
+  const order = [];
+  const registerPath = path.join(dir, 'register.csv');
+  fs.writeFileSync(
+    registerPath,
+    'delivery_order,slice,group,work_item_id,feature_id,feature_name,key_behavior,status,dependencies,work_item_path,branch,pr,codex_verdict,merge_commit\n1,,,,,,,READY_FOR_AUTHOR,,,,,,\n'
+  );
+  const result = await nextRunner.nextLoop(
+    {
+      rootDir: dir,
+      registerPath,
+      loop: true,
+      maxIterations: 1,
+      decisionDir: path.join(dir, 'decisions'),
+    },
+    {
+      existsSync: () => false,
+      refreshRouteHealth: async () => order.push('refresh'),
+      findNextWorkItem: () => {
+        order.push('select');
+        return { item: null, skipped: [] };
+      },
+      qualificationSlot: async () => ({ ran: false }),
+      log: () => {},
+      now: 1_800_000_000_000,
+    }
+  );
+  assert.equal(result.reason, 'NO_READY_ITEM');
+  assert.equal(order[0], 'refresh');
+});
 
 function temporaryStore(t) {
   const parent = path.join(__dirname, '..', '..', '..', '.upstream-tmp');
