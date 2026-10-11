@@ -351,7 +351,7 @@ test('G3 keeps the author lane selected and plans one dependency-ready item ahea
   }
 });
 
-test('G3 skips backlog rows whose Work Item document already exists', () => {
+test('G3 selects a doc-backed BACKLOG row for authoring, not planning', () => {
   const root = fixtureRoot('plan-g3-existing-');
   try {
     const workItemDir = path.join(root, 'docs', 'product-spec', 'work-items');
@@ -363,14 +363,14 @@ test('G3 skips backlog rows whose Work Item document already exists', () => {
         records: [],
       }
     );
+    assert.equal(result.item.work_item_id, 'FEAT-AUTH-07');
     assert.equal(result.planCandidate, null);
-    assert.equal(result.item, null);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('G3 loop plans the earlier no-doc backlog row around existing-doc backlog rows', () => {
+test('G3 author selection prefers an earlier doc-backed backlog row over planning', () => {
   const root = fixtureRoot('plan-g3-mixed-');
   try {
     const workItemDir = path.join(root, 'docs', 'product-spec', 'work-items');
@@ -381,8 +381,37 @@ test('G3 loop plans the earlier no-doc backlog row around existing-doc backlog r
       { rootDir: root, loop: true },
       { items: [existing, needsPlan], records: [] }
     );
-    assert.equal(result.item, needsPlan);
+    assert.equal(result.item, existing);
     assert.equal(result.planCandidate, needsPlan);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('G3 next loop runs intake for a doc-backed BACKLOG row without invoking planning', async () => {
+  const root = fixtureRoot('plan-g3-doc-backed-author-');
+  const workItemPath = path.join(root, 'docs', 'product-spec', 'work-items', 'FEAT-AUTH-07.md');
+  fs.writeFileSync(workItemPath, '# Existing Work Item\n');
+  const calls = [];
+  try {
+    const result = await nextLoop(
+      { rootDir: root, maxIterations: 1, decisionDir: path.join(root, 'decisions') },
+      nextLoopDeps({
+        items: [{ work_item_id: 'FEAT-AUTH-07', status: 'BACKLOG', dependencies: '' }],
+        planningDeps: {
+          runPlanning: async () => {
+            calls.push('planning');
+            throw new Error('existing Work Item must go to author intake');
+          },
+        },
+        runIntake: async (options) => {
+          calls.push(`intake:${options.workItem}`);
+          return { status: 'launched' };
+        },
+      })
+    );
+    assert.deepEqual(calls, ['intake:FEAT-AUTH-07']);
+    assert.equal(result.stopped, undefined);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
