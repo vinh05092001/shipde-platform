@@ -320,12 +320,12 @@ $psi.Password = $sec
   const safeWorkerRootForGit = workerRoot.replace(/\\/g, '/');
   const rtkPathPrepend = options.rtkPathPrepend || null;
   const codexLoginProbe = isCodex
-    ? `& "${exeFile}" login status *> $null
-if (-not $?) {
+    ? `& "${exeFile}" login status *> \`$null
+if (-not \`$?) {
   @{ nonce = "${completionNonce}"; exitCode = 1; completed = $true; localFailure = "CODEX_NOT_LOGGED_IN"; completedAt = (Get-Date).ToString('o') } | ConvertTo-Json -Depth 5 | Out-File "${markerPath}" -Encoding UTF8
   exit 0
 }
-if ($LASTEXITCODE -ne 0) {
+if (\`$LASTEXITCODE -ne 0) {
   @{ nonce = "${completionNonce}"; exitCode = 1; completed = $true; localFailure = "CODEX_NOT_LOGGED_IN"; completedAt = (Get-Date).ToString('o') } | ConvertTo-Json -Depth 5 | Out-File "${markerPath}" -Encoding UTF8
   exit 0
 }
@@ -514,6 +514,7 @@ $completed = $false
 $markerNonce = ""
 $jobExit = -1
 $failureReason = ""
+$localFailure = ""
 if ($timedOut) {
     $failureReason = "[ISOLATION_LAUNCHER] worker timed out after $timeoutMs ms and was killed"
 } elseif (Test-Path -LiteralPath $markerPath) {
@@ -523,6 +524,7 @@ if ($timedOut) {
             $completed = $true
             $markerNonce = [string]$marker.nonce
             $jobExit = [int]$marker.exitCode
+            if ($null -ne $marker.localFailure) { $localFailure = [string]$marker.localFailure }
         } else {
             $failureReason = "[ISOLATION_LAUNCHER] completion marker does not belong to this launch"
         }
@@ -544,6 +546,7 @@ $output = @{
     completed = $completed
     completionNonce = $markerNonce
     failureReason = $failureReason
+    localFailure = $localFailure
 }
 $output | ConvertTo-Json -Depth 10 | Out-File "${launchResultPath}" -Encoding UTF8
 `;
@@ -1938,6 +1941,7 @@ function readLaunchResult(launchResultPath, completionNonce, hostRes) {
     stderr: [String(resJson.localFailure || ''), String(resJson.stderr || '')]
       .filter(Boolean)
       .join('\n'),
+    localFailure: resJson.localFailure ? String(resJson.localFailure) : null,
     timedOut: false,
     completionNonce: resJson.completionNonce,
   };

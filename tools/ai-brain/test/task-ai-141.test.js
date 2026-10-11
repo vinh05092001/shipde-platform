@@ -188,6 +188,7 @@ test('Codex login failure is returned as a local failure so execution can contin
   );
   const result = isolation.readLaunchResult(resultPath, 'nonce', { status: 0 });
   assert.equal(result.exitCode, 1);
+  assert.equal(result.localFailure, 'CODEX_NOT_LOGGED_IN');
   assert.match(result.stderr, /CODEX_NOT_LOGGED_IN/);
 });
 
@@ -221,6 +222,53 @@ test('Codex worker script runs after fake login succeeds and stops locally when 
   assert.match(script, /localFailure = "CODEX_NOT_LOGGED_IN"/);
   assert.doesNotMatch(script, /\.codex.*credentials|credentials.*\.codex/i);
   assert.ok(script.indexOf('login status') < script.indexOf('@payloadArgs'));
+});
+
+test('a fake Codex CLI login failure writes a structured local failure marker', () => {
+  const root = fixtureRoot();
+  const codexPath = path.join(root, 'codex.ps1');
+  const payloadPath = path.join(root, 'args.json');
+  const resultPath = path.join(root, 'result.json');
+  const markerPath = path.join(root, 'marker.json');
+  fs.writeFileSync(codexPath, 'exit 1\n');
+  fs.writeFileSync(
+    payloadPath,
+    JSON.stringify(['exec', '--dangerously-bypass-approvals-and-sandbox'])
+  );
+
+  const script = isolation.buildWorkerLaunchScript({
+    credPath: 'worker.cred',
+    workerRoot: root,
+    exeFile: codexPath,
+    payloadArgsPath: payloadPath,
+    launchResultPath: resultPath,
+    markerPath,
+    completionNonce: 'codex-login-failure-nonce',
+    workerTimeoutMs: 10000,
+    adapterId: 'codex',
+    isolationVerdict: { verdict: 'CLOSED' },
+    runAsCurrentUser: true,
+  });
+  const scriptPath = path.join(root, 'launch.ps1');
+  fs.writeFileSync(scriptPath, script, 'utf8');
+  const execution = require('node:child_process').spawnSync(
+    'powershell.exe',
+    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath],
+    { cwd: root, encoding: 'utf8', timeout: 30000, windowsHide: true }
+  );
+
+  assert.equal(execution.status, 0, execution.stderr || execution.stdout);
+  const launchResult = JSON.parse(fs.readFileSync(resultPath, 'utf8').replace(/^\uFEFF/, ''));
+  assert.equal(launchResult.localFailure, 'CODEX_NOT_LOGGED_IN', JSON.stringify(launchResult));
+  assert.equal(
+    fs.existsSync(markerPath),
+    true,
+    'the local failure marker proves login was checked'
+  );
+  assert.equal(
+    isolation.readLaunchResult(resultPath, 'codex-login-failure-nonce', {}).localFailure,
+    'CODEX_NOT_LOGGED_IN'
+  );
 });
 
 test('Part D derives high-risk complexity and enforces the JEV quality floor', async () => {
