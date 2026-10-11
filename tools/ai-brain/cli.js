@@ -842,7 +842,7 @@ function isCandidateRouteEligible(routeHealth, candidate, options, routeHealthAp
   const routePath = isWildcard ? gateway : { id: gateway, accountId: candidate.accountId };
   const rec = routeHealthApi.getPathRecord(routeHealth, modelId, routePath);
   if (rec) return rec.status === 'AVAILABLE';
-  return Boolean(options && options.probeEvidence && options.probeEvidence(modelId, routePath));
+  return !options || !options.probeEvidence || Boolean(options.probeEvidence(modelId, routePath));
 }
 
 /**
@@ -932,7 +932,7 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
             : gateway;
           const rec = routeHealthApi.getPathRecord(routeHealth, modelId, routePath);
           if (rec) return rec.status === 'AVAILABLE';
-          return Boolean(opts.probeEvidence && opts.probeEvidence(modelId, routePath));
+          return !opts.probeEvidence || Boolean(opts.probeEvidence(modelId, routePath));
         }
       );
     if (!refresh) return buildExplicit();

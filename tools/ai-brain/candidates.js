@@ -697,7 +697,7 @@ function poolAccountCandidates(opts) {
 
     for (const model of poolModels) {
       const routeHealth = o.routeHealth;
-      if (routeHealth) {
+      if (routeHealth && routeHealth.paths && Object.keys(routeHealth.paths).length > 0) {
         const health = require('./route-health');
         const normalized = health.normalizeModelId(model);
         const modelRows = catalogue.filter((entry) => {
@@ -706,16 +706,15 @@ function poolAccountCandidates(opts) {
           return health.normalizeModelId(entryModel) === normalized;
         });
         if (
-          modelRows.length === 0 ||
+          modelRows.length > 0 &&
           !modelRows.some((entry) => {
             const routeId = entry.gateway;
             const record =
               routeId &&
               health.getPathRecord(routeHealth, model, { id: routeId, accountId: acc.id });
-            return Boolean(
-              (record &&
-                health.isEligible(routeHealth, model, { id: routeId, accountId: acc.id }, o.now)) ||
-              (!record && o.probeEvidence && o.probeEvidence(model, routeId))
+            return (
+              !record ||
+              health.isEligible(routeHealth, model, { id: routeId, accountId: acc.id }, o.now)
             );
           })
         )
@@ -912,7 +911,7 @@ function gatewayAccountCandidates(opts) {
           (probeOk && probeOk(modelId, gateway)) ||
           (o.probeEvidence && o.probeEvidence(modelId, gateway))
         );
-        if (!probed) continue;
+        if (record && !probed) continue;
         const prefix = parsePrefix(modelId);
         if (!prefix) continue;
         const addition = {
@@ -939,10 +938,7 @@ function gatewayAccountCandidates(opts) {
         const routeRecord = health.getPathRecord(routeHealth, modelId, routePath);
         const available = routeRecord
           ? health.isEligible(routeHealth, modelId, routePath, routeNow)
-          : Boolean(
-              (probeOk && probeOk(modelId, gateway)) ||
-              (o.probeEvidence && o.probeEvidence(modelId, gateway))
-            );
+          : true;
         if (!available) continue;
       } else if (probeOk && !probeOk(modelId, gateway)) {
         continue;
