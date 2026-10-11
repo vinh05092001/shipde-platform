@@ -552,13 +552,10 @@ async function planWorkItem(id, options, deps) {
     };
   }
 
-  const workerDraftText =
-    (isolated && (isolated.draftText || isolated.content || isolated.text)) ||
-    (d.readFile
-      ? d.readFile(target)
-      : fs.existsSync(target)
-        ? fs.readFileSync(target, 'utf8')
-        : (draft && draft.text) || null);
+  let workerDraftText = isolated && (isolated.draftText || isolated.content || isolated.text);
+  if (!workerDraftText && d.readFile) workerDraftText = d.readFile(target);
+  if (!workerDraftText && fs.existsSync(target)) workerDraftText = fs.readFileSync(target, 'utf8');
+  if (!workerDraftText) workerDraftText = (draft && draft.text) || null;
 
   const validation = validateDraftAgainstSources(workerDraftText, id, rootDir, d);
   if (!validation.valid) {

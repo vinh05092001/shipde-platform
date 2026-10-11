@@ -606,7 +606,7 @@ function findNextWorkItem(options, deps) {
       const workItemPath = path.join(rootDir, 'docs', 'product-spec', 'work-items', id + '.md');
       if (fs.existsSync(workItemPath)) {
         if (!planCandidate) planCandidate = item;
-        continue;
+        break;
       }
       if (!planCandidate) planCandidate = item;
       continue;

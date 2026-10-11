@@ -465,6 +465,44 @@ test('G2 CLI plan --run wires its execution dependencies to the planner module',
   }
 });
 
+test('G2 CLI main passes already-built planning dependencies through planCommand', async () => {
+  const root = fixtureRoot('plan-cli-main-');
+  const originalLog = console.log;
+  const originalError = console.error;
+  try {
+    console.log = () => {};
+    console.error = (message) => assert.fail(String(message));
+    const cli = require('../cli');
+    cli.main(['plan', '--work-item', 'FEAT-AUTH-07', '--root', root], {
+      planningDeps: {
+        items: [
+          {
+            work_item_id: 'FEAT-AUTH-07',
+            feature_id: 'FEAT-AUTH-07',
+            feature_name: 'Fixture feature',
+            key_behavior: 'Approved behavior',
+            status: 'BACKLOG',
+          },
+        ],
+        draftWorkItem: async () => {
+          const target = path.join(root, 'docs', 'product-spec', 'work-items', 'FEAT-AUTH-07.md');
+          fs.writeFileSync(target, '# fixture draft\n');
+          return { status: 'DRAFTED', target };
+        },
+      },
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(
+      fs.existsSync(path.join(root, 'docs', 'product-spec', 'work-items', 'FEAT-AUTH-07.md')),
+      true
+    );
+  } finally {
+    console.log = originalLog;
+    console.error = originalError;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('G2 default planner services are present and fail closed at missing external gates', async () => {
   const root = fixtureRoot('plan-g2-default-');
   try {
@@ -1153,6 +1191,76 @@ test('G2 plan --run validates worker draft against approved sources and blocks b
     );
     assert.equal(result.status, 'BLOCKED');
     assert.match(result.reason, /approved sources|source/i);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('G2 planner validates worker draft content returned by injected readFile', async () => {
+  const root = fixtureRoot('plan-read-file-');
+  const target = path.join(root, 'docs', 'product-spec', 'work-items', 'FEAT-AUTH-07.md');
+  const workerDraft = [
+    '# FEAT-AUTH-07 — Fixture feature',
+    '',
+    '## Business outcome',
+    '',
+    '> Approved behavior',
+    '',
+    '## Source references',
+    '',
+    '- `docs/product-spec/docs/01-product/MASTER-FEATURE-CATALOG.md#Feature`',
+    '',
+    ...[
+      'Preconditions and dependencies',
+      'Author boundary',
+      'In scope',
+      'Out of scope',
+      'Business rules and edge cases',
+      'UI states',
+      'API, event and data impact',
+      'Acceptance matrix',
+      'Verification commands',
+      'Codex review record',
+      'Residual limitations',
+    ].flatMap((heading) => ['## ' + heading, '', '- none', '']),
+    '## Open decisions',
+    '',
+    '- None.',
+  ].join('\n');
+  let mergedDraft;
+  try {
+    const result = await planWorkItem(
+      'FEAT-AUTH-07',
+      { run: true, rootDir: root },
+      {
+        items: [
+          {
+            work_item_id: 'FEAT-AUTH-07',
+            feature_id: 'FEAT-AUTH-07',
+            feature_name: 'Fixture feature',
+            key_behavior: 'Approved behavior',
+            status: 'BACKLOG',
+          },
+        ],
+        readFile: () => workerDraft,
+        draftWorkItem: async () => ({ target, text: workerDraft }),
+        rankPlanner: async () => ({ eligible: true, candidateKey: 'planner-fixture' }),
+        runIsolatedPlanner: async () => ({ success: true }),
+        reviewPlan: async ({ draft }) => {
+          mergedDraft = draft;
+          return { verdict: 'PASS' };
+        },
+        mergePlan: async () => ({ success: true, merged: true }),
+        runPlanning: async ({ independentPlanReview, governedPlanMerge }) => ({
+          status: 'READY_FOR_AUTHOR',
+          governed: true,
+          independentReview: independentPlanReview.verdict,
+          merged: governedPlanMerge.merged,
+        }),
+      }
+    );
+    assert.equal(result.status, 'READY_FOR_AUTHOR');
+    assert.equal(mergedDraft, workerDraft);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

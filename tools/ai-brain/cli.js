@@ -3046,7 +3046,9 @@ function planCommand(args, deps = {}) {
   }
   const planner = require('./work-item-planner');
   const rootDir = args.root || process.cwd();
-  const planningDeps = planner.defaultPlanningDeps(rootDir, deps.planningDeps || deps);
+  const planningDeps = deps.__planningDepsReady
+    ? deps
+    : planner.defaultPlanningDeps(rootDir, deps.planningDeps || deps);
   return Promise.resolve(
     planner.planWorkItem(
       id.trim(),
@@ -3359,7 +3361,7 @@ function main(argv = process.argv.slice(2), deps = {}) {
       rootDir,
       deps.planningDeps || deps
     );
-    planCommand(args, planningDeps)
+    planCommand(args, Object.assign({}, planningDeps, { __planningDepsReady: true }))
       .then((result) => {
         console.log(JSON.stringify(result, null, 2));
         if (result && (result.blocking || result.status === 'BLOCKED')) process.exitCode = 1;
