@@ -671,15 +671,12 @@ function assembleCandidates(
   for (const dc of discCands) {
     const accountId = dc.accountId || dc.account || '*';
     const modelId = dc.modelId || dc.model;
-    const upstream = dc.upstream;
-    if (upstream && !String(modelId || '').startsWith(upstream + '/')) continue;
     const c = {
       ...dc,
       accountId,
       quotaScope: dc.quotaScope || (accountId !== '*' ? accountId : dc.upstream || ''),
       modelId,
     };
-    if (dc.probeOk === false || (dc.probeStatus && Number(dc.probeStatus) >= 400)) continue;
     const off = offeringMap.get(`${accountId}::${modelId}`) || offeringMap.get(modelId);
     if (off) {
       if (c.qualifiedRoles === undefined && off.qualifiedRoles !== undefined) {
@@ -719,7 +716,6 @@ function assembleCandidates(
   // limits, and the advertised row only proves the route exists.
   const advertised = gatewayCandidates || [];
   for (const off of advertised) {
-    if (off.probeOk === false || (off.probeStatus && Number(off.probeStatus) >= 400)) continue;
     const key = candidatesApi.candidateKey(off);
     const c = Object.assign({}, off, { key });
     if (!seenKeys.has(key)) {
@@ -845,7 +841,11 @@ function isCandidateRouteEligible(routeHealth, candidate, options, routeHealthAp
   if (rec) return rec.status === 'AVAILABLE';
   const explicit =
     isExplicit !== undefined ? isExplicit : Boolean(options && options.routeHealth !== undefined);
-  if (explicit) {
+  if (
+    explicit ||
+    (options && options.requireRouteHealth === true) ||
+    Object.keys(routeHealth.paths || {}).length > 0
+  ) {
     return Boolean(options && options.probeEvidence && options.probeEvidence(modelId, routePath));
   }
   return true;
@@ -870,11 +870,17 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
   const resolvedRegistry = registry || require('./sources').loadSources();
   const routeHealthApi = require('./route-health');
   const routeHealthExplicit = opts.routeHealth !== undefined;
+  const requireRouteHealth = opts.requireRouteHealth === true;
   const routeHealth = routeHealthExplicit
     ? opts.routeHealth
     : routeHealthApi.loadStore(path.join(__dirname, 'data', 'model-route-health.json'), {
         allowMissing: true,
       });
+  const enforceMissingHealth =
+    routeHealthExplicit ||
+    requireRouteHealth ||
+    Boolean(routeHealth && Object.keys(routeHealth.paths || {}).length > 0);
+  const enforceEmptyHealth = routeHealthExplicit || requireRouteHealth;
   const healthFile =
     opts.routeHealthFile || path.join(__dirname, 'data', 'model-route-health.json');
   const catalogueRows = (discoveryCat && discoveryCat.candidates) || [];
@@ -940,7 +946,7 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
             : gateway;
           const rec = routeHealthApi.getPathRecord(routeHealth, modelId, routePath);
           if (rec) return rec.status === 'AVAILABLE';
-          if (routeHealthExplicit) {
+          if (enforceEmptyHealth) {
             return Boolean(opts.probeEvidence && opts.probeEvidence(modelId, routePath));
           }
           return true;
@@ -996,6 +1002,7 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
         catalogue: (discoveryCat && discoveryCat.candidates) || [],
         routeHealth,
         probeEvidence: opts.probeEvidence,
+        requireRouteHealth: enforceMissingHealth,
         now: opts.now,
         onAccountCount: opts.onAccountCount,
       }),
@@ -1006,6 +1013,7 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
         routeHealth,
         now: opts.now,
         probeEvidence: opts.probeEvidence,
+        requireRouteHealth: enforceMissingHealth,
         evidenceData: opts.evidenceData,
         fakeRunsDir: opts.fakeRunsDir,
         home: opts.home,
@@ -1081,7 +1089,12 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
       assembled.push(...directCandidates);
     }
     return assembled.filter((candidate) =>
-      isCandidateRouteEligible(routeHealth, candidate, opts, routeHealthApi)
+      isCandidateRouteEligible(
+        routeHealth,
+        candidate,
+        Object.assign({}, opts, { requireRouteHealth: enforceMissingHealth }),
+        routeHealthApi
+      )
     );
   };
   if (!refresh) return buildCandidates();
@@ -1808,7 +1821,12 @@ function dispatchCommand(args, deps = {}) {
 
   const accounts = deps && deps.accounts !== undefined ? deps.accounts : listAccounts() || [];
   const routeHealthApi = require('./route-health');
-  const candidateList = assembleForDispatch(discCat, accounts, registry, deps);
+  const candidateList = assembleForDispatch(
+    discCat,
+    accounts,
+    registry,
+    Array.isArray(deps.candidates) ? deps : Object.assign({}, deps, { requireRouteHealth: true })
+  );
 
   // Filter by explicit pins (--model, --account, --harness)
   const pinModel = args.model || (deps && deps.model);

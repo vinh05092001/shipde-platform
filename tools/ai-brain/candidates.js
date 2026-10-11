@@ -840,12 +840,7 @@ function gatewayAccountCandidates(opts) {
   const excluded = new Set((o.excludeModels || []).map((id) => String(id).toLowerCase()));
   const routeNow = Number(o.now) || Date.now();
   if (!registry || catalogueInput.length === 0) return [];
-  const catalogue = catalogueInput.filter((row) => {
-    const modelId = typeof row === 'string' ? row : row && (row.modelId || row.model);
-    const upstream = row && typeof row === 'object' ? row.upstream : null;
-    const parsed = parsePrefix(modelId);
-    return Boolean(parsed && (!upstream || upstream === parsed.upstream));
-  });
+  const catalogue = catalogueInput;
 
   const sourceById = new Map();
   for (const s of registry.sources || []) sourceById.set(s.id, s);
@@ -892,7 +887,12 @@ function gatewayAccountCandidates(opts) {
         .filter((modelId) => modelId && !excludes.has(modelId))
     );
     let contributed = 0;
-    const catalogueRows = catalogue.filter((row) => row && row.gateway === gateway);
+    const catalogueRows = catalogue.filter(
+        (row) =>
+          row &&
+          row.gateway === gateway &&
+          (Boolean(parsePrefix(row.modelId || row.model)) || !row.upstream)
+      );
     const catalogueModelIds = new Set(
       catalogueRows.map((row) => String(row.modelId || row.model || '').toLowerCase())
     );
@@ -903,13 +903,13 @@ function gatewayAccountCandidates(opts) {
     for (const modelId of additions) {
       if (!catalogueModelIds.has(modelId) && !excludes.has(modelId)) {
         const health = routeHealth && require('./route-health');
-        const normalized = health && health.normalizeModelId(modelId);
         const routePath = { id: gateway, accountId: account.id };
         const record = health && health.getPathRecord(routeHealth, modelId, routePath);
         const probed = Boolean(
           (record && health.isEligible(routeHealth, modelId, routePath, routeNow)) ||
           (probeOk && probeOk(modelId, gateway)) ||
-          (o.probeEvidence && o.probeEvidence(modelId, gateway))
+          (o.probeEvidence && o.probeEvidence(modelId, gateway)) ||
+          (!routeHealth && !probeOk && !o.probeEvidence)
         );
         if (!probed) continue;
         const prefix = parsePrefix(modelId);
@@ -925,20 +925,22 @@ function gatewayAccountCandidates(opts) {
       }
     }
     for (const row of eligibleRows) {
-      if (!row || !row.upstream) continue;
+      if (!row) continue;
       const upstream = row.upstream || '';
       const modelId = row.modelId || row.model || '';
       if (!modelId || excluded.has(modelId.toLowerCase()) || excludes.has(modelId.toLowerCase()))
         continue;
-      if (!upstream || !modelId.startsWith(upstream + '/')) continue;
       if (routeHealth) {
         const health = require('./route-health');
-        const normalized = health.normalizeModelId(modelId);
         const routePath = { id: gateway, accountId: account.id };
         const routeRecord = health.getPathRecord(routeHealth, modelId, routePath);
         const available = routeRecord
           ? health.isEligible(routeHealth, modelId, routePath, routeNow)
-          : true;
+          : Boolean(
+              (probeOk && probeOk(modelId, gateway)) ||
+                (o.probeEvidence && o.probeEvidence(modelId, routePath)) ||
+                (!o.requireRouteHealth && !probeOk && !o.probeEvidence)
+            );
         if (!available) continue;
       } else if (probeOk && !probeOk(modelId, gateway)) {
         continue;
@@ -946,11 +948,14 @@ function gatewayAccountCandidates(opts) {
       // An alias is the prefix the model id itself carries. A row whose id
       // does not begin with its own upstream names no reachable alias, and
       // inventing one is exactly how a candidate that can never run is planned.
+      if (!upstream || !modelId.startsWith(upstream + '/')) continue;
+      if (!parsePrefix(modelId)) continue;
+      const candidateUpstream = upstream;
       out.push({
         harness,
         accessPath,
         gateway,
-        upstream,
+        upstream: candidateUpstream,
         accountId: account.id,
         quotaScope: account.id,
         modelId,
