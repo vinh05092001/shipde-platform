@@ -2895,7 +2895,7 @@ function orchestrateCommand(args, deps = {}) {
     isolatedWorker: Boolean(args['isolated-worker']),
     externalWorkers: args['external-workers'],
     workerTimeoutMs,
-    ...(args.rtk ? { rtk: true } : {}),
+    ...(args.rtk ? { rtk: args.rtk } : {}),
     ...(tokenBudgets ? { tokenBudgets } : {}),
     ...(typeof args['context-manifest'] === 'string'
       ? { contextManifest: args['context-manifest'] }

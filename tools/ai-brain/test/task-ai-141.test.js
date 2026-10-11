@@ -1954,11 +1954,13 @@ test('Part H: missing usage telemetry is not replaced by a zeroed report', () =>
   assert.equal(checked.failureReason, 'TOKEN_BUDGET_UNVERIFIED');
 });
 
-test('Part H: host brain gate tests the isolated worker tree, not the controller checkout', () => {
+test('Part H: host brain gate tests the controller checkout, not the isolated worker tree', () => {
   const workerRoot = path.join(fixtureRoot(), 'worker');
   const hostCwd = path.join(fixtureRoot(), 'controller');
   fs.mkdirSync(path.join(workerRoot, 'tools', 'ai-brain', 'test'), { recursive: true });
   fs.writeFileSync(path.join(workerRoot, 'tools', 'ai-brain', 'test', 'worker.test.js'), '');
+  fs.mkdirSync(path.join(hostCwd, 'tools', 'ai-brain', 'test'), { recursive: true });
+  fs.writeFileSync(path.join(hostCwd, 'tools', 'ai-brain', 'test', 'controller.test.js'), '');
   let capturedCwd = null;
   runHostBrainGate(
     { cwd: workerRoot, workerRoot },
@@ -1970,7 +1972,7 @@ test('Part H: host brain gate tests the isolated worker tree, not the controller
       },
     }
   );
-  assert.equal(capturedCwd, workerRoot);
+  assert.equal(capturedCwd, hostCwd);
 });
 
 test('Part H: cli orchestrate handles malformed token-budgets without uncaught throw', async () => {

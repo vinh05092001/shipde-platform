@@ -4,6 +4,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const cp = require('node:child_process');
 
+const DEFAULT_MAX_FILE_BYTES = 2 * 1024 * 1024;
+const DEFAULT_MAX_TOTAL_BYTES = 8 * 1024 * 1024;
+
 function safeRelative(file) {
   const value = String(file || '')
     .replace(/\\/g, '/')
@@ -16,18 +19,10 @@ function safeRelative(file) {
     : null;
 }
 
-function createContextPack(items, options = {}) {
-  const root = path.resolve(options.root || process.cwd());
-  const requestedOutput = options.output ? path.resolve(options.output) : null;
-  const outputDir = path.resolve(
-    options.outputDir ||
-      (requestedOutput && path.dirname(requestedOutput)) ||
-      path.join(root, 'tools', 'ai-brain', 'data', 'context-packs')
-  );
+function collectManifest(items, root, sources) {
   const files = new Set();
   for (const item of items || []) {
-    const referenced = new Set();
-    for (const candidate of [...(item.allowedPaths || []), ...(options.sources || [])]) {
+    for (const candidate of [...(item.allowedPaths || []), ...(sources || [])]) {
       const relative = safeRelative(candidate);
       if (
         relative &&
@@ -35,7 +30,6 @@ function createContextPack(items, options = {}) {
         fs.statSync(path.join(root, relative)).isFile()
       ) {
         files.add(relative);
-        referenced.add(relative);
       }
     }
     const specText = String(item.specText || item.sourceText || '');
@@ -50,11 +44,34 @@ function createContextPack(items, options = {}) {
         fs.statSync(path.join(root, relative)).isFile()
       ) {
         files.add(relative);
-        referenced.add(relative);
       }
     }
   }
-  const manifest = [...files].sort();
+  return [...files].sort();
+}
+
+function assertPackSize(files, root, options = {}) {
+  const maxFileBytes = Number(options.maxFileBytes) || DEFAULT_MAX_FILE_BYTES;
+  const maxTotalBytes = Number(options.maxTotalBytes) || DEFAULT_MAX_TOTAL_BYTES;
+  let totalBytes = 0;
+  for (const file of files) {
+    const size = fs.statSync(path.join(root, file)).size;
+    if (size > maxFileBytes) throw new Error('CONTEXT_FILE_TOO_LARGE: ' + file);
+    totalBytes += size;
+    if (totalBytes > maxTotalBytes) throw new Error('CONTEXT_PACK_TOO_LARGE');
+  }
+}
+
+function createContextPack(items, options = {}) {
+  const root = path.resolve(options.root || process.cwd());
+  const requestedOutput = options.output ? path.resolve(options.output) : null;
+  const outputDir = path.resolve(
+    options.outputDir ||
+      (requestedOutput && path.dirname(requestedOutput)) ||
+      path.join(root, 'tools', 'ai-brain', 'data', 'context-packs')
+  );
+  const manifest = collectManifest(items, root, options.sources);
+  assertPackSize(manifest, root, options);
   fs.mkdirSync(outputDir, { recursive: true });
   const output =
     requestedOutput || path.join(outputDir, 'context-' + Date.now() + '-' + process.pid + '.md');
@@ -101,7 +118,79 @@ function createContextPack(items, options = {}) {
   return { path: output, files: manifest, content };
 }
 
-module.exports = { createContextPack, safeRelative };
+async function createContextPackAsync(items, options = {}) {
+  const root = path.resolve(options.root || process.cwd());
+  const requestedOutput = options.output ? path.resolve(options.output) : null;
+  const outputDir = path.resolve(
+    options.outputDir ||
+      (requestedOutput && path.dirname(requestedOutput)) ||
+      path.join(root, 'tools', 'ai-brain', 'data', 'context-packs')
+  );
+  const manifest = collectManifest(items, root, options.sources);
+  assertPackSize(manifest, root, options);
+  await fs.promises.mkdir(outputDir, { recursive: true });
+  const output =
+    requestedOutput || path.join(outputDir, 'context-' + Date.now() + '-' + process.pid + '.md');
+  const manifestPath = output + '.manifest.json';
+  await fs.promises.writeFile(
+    manifestPath,
+    JSON.stringify({ files: manifest, createdAt: new Date().toISOString() }, null, 2) + '\n',
+    'utf8'
+  );
+  const includeArg = manifest.join(',');
+  const repomix = path.join(
+    root,
+    'node_modules',
+    '.bin',
+    process.platform === 'win32' ? 'repomix.cmd' : 'repomix'
+  );
+  let content = null;
+  if (fs.existsSync(repomix) && includeArg.length <= 4000) {
+    const timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : 120000;
+    const completed = await new Promise((resolve) => {
+      let settled = false;
+      const finish = (result) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(result);
+      };
+      const child = cp.spawn(repomix, ['--include', includeArg, '--output', output], {
+        cwd: root,
+        stdio: 'ignore',
+        windowsHide: true,
+        shell: process.platform === 'win32',
+      });
+      const timer = setTimeout(() => {
+        child.kill();
+        finish(false);
+      }, timeoutMs);
+      child.once('error', () => finish(false));
+      child.once('close', (code) => finish(code === 0));
+    });
+    if (completed && fs.existsSync(output)) {
+      const outputStat = await fs.promises.stat(output);
+      const maxTotalBytes = Number(options.maxTotalBytes) || DEFAULT_MAX_TOTAL_BYTES;
+      if (outputStat.size > maxTotalBytes) throw new Error('CONTEXT_PACK_TOO_LARGE');
+      content = await fs.promises.readFile(output, 'utf8');
+    }
+  }
+  if (!content) {
+    const sections = [];
+    for (const file of manifest) {
+      const source = await fs.promises.readFile(path.join(root, file));
+      if (source.length > (Number(options.maxFileBytes) || DEFAULT_MAX_FILE_BYTES)) {
+        throw new Error('CONTEXT_FILE_TOO_LARGE: ' + file);
+      }
+      sections.push('## ' + file + '\n\n```\n' + source.toString('utf8') + '\n```');
+    }
+    content = '# Focused context pack\n\n' + sections.join('\n\n');
+    await fs.promises.writeFile(output, content, 'utf8');
+  }
+  return { path: output, files: manifest, content };
+}
+
+module.exports = { createContextPack, createContextPackAsync, safeRelative };
 
 if (require.main === module) {
   const args = process.argv.slice(2);

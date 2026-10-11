@@ -1500,8 +1500,9 @@ function writeUsageReportFromHarnessResult(job, res) {
   if (!sessionId && res && res.completionNonce) {
     sessionId = res.completionNonce;
   }
-  if (!sawTokens) return null;
-
+  if (!sawTokens && !sessionId && (!res || res.exitCode === 0 || res.exitCode == null)) {
+    return null;
+  }
   // A failed launch reports session_id: null per AC-AI-64-23 / TASK-AI-63
   if (res && res.exitCode !== 0 && res.exitCode !== null && res.exitCode !== undefined) {
     sessionId = null;
@@ -1512,14 +1513,16 @@ function writeUsageReportFromHarnessResult(job, res) {
     session_id: sessionId,
     model: job.model || (job.candidate && job.candidate.model) || null,
     provider: job.upstream || job.provider || (job.candidate && job.candidate.provider) || null,
-    usage: {
-      input: tokens.input,
-      cacheRead: tokens.cacheRead || 0,
-      cache_read: tokens.cacheRead || 0,
-      cache_read_tokens: tokens.cacheRead || 0,
-      output: tokens.output,
-      total: tokens.total ? Math.max(tokens.total, accountedTotal) : accountedTotal,
-    },
+    usage: sawTokens
+      ? {
+          input: tokens.input,
+          cacheRead: tokens.cacheRead || 0,
+          cache_read: tokens.cacheRead || 0,
+          cache_read_tokens: tokens.cacheRead || 0,
+          output: tokens.output,
+          total: tokens.total ? Math.max(tokens.total, accountedTotal) : accountedTotal,
+        }
+      : {},
   };
 
   try {
@@ -1540,11 +1543,7 @@ function readUsageReport(file) {
 }
 
 function runHostBrainGate(job, options = {}) {
-  const root =
-    (job && (job.cwd || job.workerRoot || job.isolatedWorkerRoot)) ||
-    options.hostCwd ||
-    options.cwd ||
-    process.cwd();
+  const root = options.hostCwd || options.cwd || process.cwd();
   const node = options.nodeExecutable || process.execPath;
   const suite = options.brainSuite || 'tools/ai-brain/test/*.test.js';
   const run = options.spawnSync || spawnSync;
@@ -3059,7 +3058,6 @@ async function runOrchestration(goal, opts) {
   const budgetConfig = o.tokenBudgets || {};
   const budgetForItem = (item) => ({
     ...(budgetConfig.default || {}),
-    ...(budgetConfig[item.complexity] || {}),
     ...(budgetConfig.byComplexity?.[item.complexity] || {}),
     ...(budgetConfig[roleOf(item)] || {}),
     ...(budgetConfig.byRole?.[roleOf(item)] || {}),
@@ -3094,7 +3092,7 @@ async function runOrchestration(goal, opts) {
   if (o.enableContextPack || o.contextManifest) {
     try {
       const packer = require('./context-pack');
-      contextPack = packer.createContextPack(o.specs || [], {
+      contextPack = await packer.createContextPackAsync(o.specs || [], {
         root: hostCwd,
         outputDir: o.contextPackDir,
         sources: o.contextSources,
@@ -3110,7 +3108,7 @@ async function runOrchestration(goal, opts) {
       }
     } catch (err) {
       log.warnings.push('CONTEXT_PACK_UNAVAILABLE: ' + String(err.message || err));
-      contextPack = null;
+      return refuseRun(log, 'CONTEXT_PACK_UNAVAILABLE');
     }
   }
 
