@@ -138,3 +138,35 @@ Intake derives risk domains and complexity from the Work Item scope, acceptance 
 ### Part A follow-up: infrastructure failures do not revoke proof transfer
 
 `tools/ai-brain/routing.js` now preserves a source path's `WORK_ITEM_PASS` when that path is blocked or has failed evidence due to infrastructure conditions such as quota exhaustion, rate limits, timeouts, or launch/harness failures. Transfer still requires exact normalized backend model identity and a viable target path; model-scope failures, quality outcomes such as `CHANGES_REQUIRED`, and revoked proof disqualify the source. Three regressions cover infrastructure enum classification while preserving model failures, model/quality failures disqualifying transfer, and exhausted target paths not inheriting proof (`classifier enum values recognize infrastructure and preserve model failures`, `a model-quality failure on the source path disqualifies the proof transfer`, `an exhausted target path never inherits the transferred proof`).
+
+### Part H: token budget and leaner context
+
+This branch implements per-session token budgets, live budget enforcement, leaner context packing, host-side test gating, and RTK policy governance:
+
+- **Token budgets and live enforcement:** `DEFAULT_TOKEN_BUDGETS` defines role- and complexity-based token limits (`simple`: 60,000, `standard`: 150,000, `complex`: 300,000 tokens). `isolation-launcher.js` monitors token usage live in the PowerShell wrapper, terminating workers with `TOKEN_BUDGET_EXCEEDED` when exceeded. Post-execution `enforceTokenBudget` fails closed (`TOKEN_BUDGET_UNVERIFIED`) if usage telemetry is missing, empty, or invalid. The CLI supports `--token-budgets` with non-zero exit on malformed inputs and provides `report tokens` (`tokenReportCommand`) grouping input, cache-read, and output tokens by model and Work Item.
+- **Leaner context packs and prompt tuning:** `context-pack.js` compiles focused context packs (`createContextPack`) restricted to allowed paths and cited specifications, rejecting directory traversal and recording manifest files. `prompt-compiler.js` instructs workers to run only concise focused tests and consult the context pack, leaving full-suite gating to the host.
+- **Host-side brain gate:** `runHostBrainGate` runs the full brain test suite host-side with `NINEROUTER_API_KEY` stripped, expanding globbed test files, suppressing noisy logs, and returning only failures and summary counts.
+- **RTK governance and risk domain derivation:** `deriveRiskDomains` detects high-risk categories (differentiating benign Prisma client usage from database ownership / migrations). Intake and orchestration suppress RTK on risk domains and log the `RTK_POLICY` decision once per Work Item.
+- **Stall and quota fallback:** Unresponsive workers trigger `STALLED_NO_PROGRESS`, saving recovery checkpoints and attempting bounded fallback candidates. Repeated quota failures trigger `QUOTA_REPEATED` bounded fallback.
+
+Verification in `tools/ai-brain/test/task-ai-141.test.js` covers:
+- `Part H: worker prompt requests focused concise tests and host-side full-suite gating`
+- `Part H: intake enables RTK for low risk and suppresses it for risk domains`
+- `Part H: intake detects risk declared in Control and other sections before enabling RTK`
+- `Part H: derived risk labels all block RTK and the exported detector is the live implementation`
+- `Part H: orchestration records RTK enablement and risk-domain denial in decision log`
+- `Part H: RTK permission is computed independently for each work item`
+- `Part H: a stalled live session is stopped, recorded and checkpointed for recovery`
+- `Part H: token budget overrun stops the session and records the fallback cause`
+- `Part H: context pack includes allowed source files and rejects traversal`
+- `Part H: context pack manifest records output path and included source allowlist`
+- `Part H: token usage report groups input, cache-read and output by model and Work Item`
+- `Part H: launcher enforces per-session token budget live and preserves bounded timeout`
+- `Part H: missing, empty, or malformed usage telemetry fails closed when a budget is configured`
+- `Part H: host brain gate expands suite files, hides output and returns only failures`
+- `Part H: isolated runs receive role and complexity token caps from policy config`
+- `Part H: repeated quota failures reach a bounded fallback threshold`
+- `Part H: readLaunchResult propagates failureReason and enforceTokenBudget preserves it`
+- `Part H: deriveRiskDomains distinguishes benign prisma queries from schema ownership`
+- `Part H: RTK_POLICY decision is recorded once per work item across multiple candidate attempts`
+- `Part H: cli orchestrate handles malformed token-budgets without uncaught throw`
