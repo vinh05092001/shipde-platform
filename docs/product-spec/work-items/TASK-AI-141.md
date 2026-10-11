@@ -143,6 +143,8 @@ The production `qualify --auto` command builds candidates from intake catalogue 
 
 ## Controller start-up fixes
 
+- The `qualify --auto` CLI referenced `intake.revParseOriginMain`, but `intake.js` did not export that helper. Exported it and added a child-process regression that runs the CLI against a fake root and confirms it does not fail with a missing function. The other intake helpers used by the CLI (`runIsolatedReviewed` and `assertIsolationClosed`) were already exported.
+
 - The standalone `qualify --auto` CLI now supplies the same isolated-review runner, closed-isolation assertion, candidate builder and qualification configuration as the qualification slot created by `next`.
 - Reviewer fixture selection and failed-key unit tests write only to temporary decision directories. Regression coverage runs both affected selection paths and verifies that today's default decision log is unchanged.
 - Open reviewer and writer claims expire after four hours without newer activity by default. Callers can configure reviewer expiry with `staleWindowMs` (or `ttlMs`) and writer expiry with `ttlMs`; the loop logs stale claims it ignores. Writer filesystem heartbeats continue to refresh activity.
