@@ -453,7 +453,7 @@ test('candidate assembly uses existing probe evidence when a route health record
   assert.ok(assembled.some((candidate) => candidate.modelId === model.modelId));
 });
 
-test('unprobed catalogue rows remain visible without creating a bound route', () => {
+test('unprobed catalogue rows remain visible without becoming dispatch candidates', () => {
   const registry = {
     sources: [
       { id: 'gateway-a', kind: 'router' },
@@ -468,8 +468,31 @@ test('unprobed catalogue rows remain visible without creating a bound route', ()
     registry,
     { routeHealth: { version: 1, paths: {}, events: [] }, offerings: [], registryAccounts: [] }
   );
-  assert.ok(assembled.some((candidate) => candidate.modelId === model.modelId));
+  assert.ok(!assembled.some((candidate) => candidate.modelId === model.modelId));
   assert.ok(!assembled.some((candidate) => candidate.accountId === 'acct'));
+});
+
+test('explicit candidates also require route health or explicit probe evidence', () => {
+  const registry = { sources: [{ id: 'gateway-a', kind: 'router' }] };
+  const candidate = {
+    modelId: 'vendor-a/model-unprobed',
+    gateway: 'gateway-a',
+    accountId: 'acct-a',
+  };
+  const options = { routeHealth: { version: 1, paths: {}, events: [] } };
+  const excluded = cli.assembleForDispatch({}, [], registry, {
+    ...options,
+    candidates: [candidate],
+  });
+  assert.deepEqual(excluded, []);
+
+  const included = cli.assembleForDispatch({}, [], registry, {
+    ...options,
+    candidates: [candidate],
+    probeEvidence: (modelId, route) =>
+      modelId === candidate.modelId && route.id === 'gateway-a' && route.accountId === 'acct-a',
+  });
+  assert.ok(included.some((row) => row.modelId === candidate.modelId));
 });
 
 test('discovered same-model paths fall through 451 and 429 to success, recording fallback', async (t) => {
@@ -1056,10 +1079,36 @@ test('production defaults work without injected deps and fail closed on missing 
     registry
   );
   assert.ok(Array.isArray(assembled));
-  // Wildcard candidate remains visible for ranking proof-floor refusal
-  assert.ok(assembled.some((c) => c.modelId === model.modelId && c.accountId === '*'));
-  // Unprobed account-bound candidate fails closed
+  // Both wildcard and account-bound candidates require recorded probe evidence.
+  assert.ok(!assembled.some((c) => c.modelId === model.modelId));
   assert.ok(!assembled.some((c) => c.accountId === 'prod-acct'));
+});
+
+test('explicit-candidate build failures reject from the promised health path', async () => {
+  const routeHealth = { version: 1, paths: {}, events: [] };
+  const original = routes.getPathRecord;
+  routes.getPathRecord = () => {
+    throw new Error('candidate build failed');
+  };
+  try {
+    await assert.rejects(
+      cli.assembleForDispatch(
+        {},
+        [],
+        { sources: [] },
+        {
+          candidates: [{ modelId: 'vendor/model', gateway: 'gw' }],
+          routeHealth,
+          refreshRoutes: true,
+          probeRoute: async () => ({ ok: true }),
+          persistRouteHealth: false,
+        }
+      ),
+      /candidate build failed/
+    );
+  } finally {
+    routes.getPathRecord = original;
+  }
 });
 
 function intakeFixture(id) {
