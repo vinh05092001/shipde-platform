@@ -170,9 +170,9 @@ describe('TASK-AI-91: failed candidate not re-selected & bounded fallback', () =
       [],
       null,
       {},
-      null,
+      { dir: decisionDir, now: NOW },
       NOW,
-      { failedKeys: [candA.candidateKey] }
+      { failedKeys: [candA.candidateKey], decisionDir }
     );
     assert.notEqual(
       profileDecision.chosen,

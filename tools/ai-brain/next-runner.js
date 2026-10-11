@@ -378,6 +378,7 @@ function checkCeiling(options, deps) {
 
   const now = typeof d.now === 'function' ? d.now() : d.now || opts.now || Date.now();
   const decisionRecords = collectAllDecisionRecords(opts, d);
+  const log = d.log || console.log;
 
   const writersDetailed =
     typeof d.openWritersDetailed === 'function'
@@ -404,6 +405,15 @@ function checkCeiling(options, deps) {
           readable: decisionRecords.readable,
           now,
         });
+
+  for (const stale of (writersDetailed && writersDetailed.stale) || []) {
+    log(`Ignoring stale writer ${stale.workItemId} (last activity ${stale.since}).`);
+  }
+  for (const stale of (reviewersDetailed && reviewersDetailed.stale) || []) {
+    log(
+      `Ignoring stale reviewer ${stale.workItemId} (${stale.sessionId || stale.reviewer || stale.role || 'unknown'}; last activity ${stale.lastActivity}).`
+    );
+  }
 
   const writersCount =
     (writersDetailed && writersDetailed.writers && writersDetailed.writers.length) || 0;
@@ -509,9 +519,11 @@ function findNextWorkItem(options, deps) {
         : 1;
   const orderedItems = items.slice().sort((a, b) => priority(a) - priority(b));
 
+  const requestedId = opts.workItem || opts['work-item'];
   for (const item of orderedItems) {
     const id = item.work_item_id;
     if (!id) continue;
+    if (requestedId && id !== requestedId) continue;
     const status = String(item.status || '').trim();
 
     // Already merged items are completed
@@ -738,11 +750,25 @@ async function nextLoop(options, deps) {
     }
 
     if (!findResult.item) {
+      const requestedId = opts.workItem || opts['work-item'];
+      if (requestedId) {
+        log(`NO_READY_ITEM: requested Work Item ${requestedId} is unavailable or blocked.`);
+        return { stopped: true, reason: 'NO_READY_ITEM', workItemId: requestedId, iteration };
+      }
       const qualificationSlot = opts.qualificationSlot || d.qualificationSlot;
       if (typeof qualificationSlot === 'function') {
         const qualification = await qualificationSlot({ now, iteration, reason: 'NO_READY_ITEM' });
         if (qualification && qualification.ran === true) {
           log('QUALIFICATION_SLOT: ' + (qualification.status || 'completed'));
+          if (opts.workItem || opts['work-item']) {
+            return {
+              stopped: true,
+              reason: 'WORK_ITEM_NOT_EXECUTED',
+              workItemId: requestedId,
+              iteration,
+              qualification,
+            };
+          }
           if (iteration < maxIterations) {
             await sleepFn(pollIntervalMs);
             continue;
@@ -814,6 +840,14 @@ async function nextLoop(options, deps) {
           iteration,
         };
       }
+      if (opts.workItem || opts['work-item']) {
+        return {
+          stopped: true,
+          reason: ceilingStatus.reason,
+          detail: ceilingStatus.detail,
+          iteration,
+        };
+      }
       continue;
     }
 
@@ -848,6 +882,14 @@ async function nextLoop(options, deps) {
             : checkCeiling({ ...opts, now }, d);
         if (!qualificationCeiling.allowed) {
           log(`Qualification slot skipped: ${qualificationCeiling.reason}.`);
+          if (opts.workItem || opts['work-item']) {
+            return {
+              stopped: true,
+              reason: qualificationCeiling.reason,
+              workItemId: item.work_item_id,
+              iteration,
+            };
+          }
           continue;
         }
         const qualification = await qualificationSlot({
@@ -859,6 +901,19 @@ async function nextLoop(options, deps) {
         });
         if (qualification && qualification.ran === true) {
           log('QUALIFICATION_SLOT: ' + (qualification.status || 'completed'));
+          if (opts.workItem || opts['work-item']) {
+            if (iteration < maxIterations) {
+              await sleepFn(pollIntervalMs);
+              continue;
+            }
+            return {
+              stopped: true,
+              reason: 'WORK_ITEM_NOT_EXECUTED',
+              workItemId: item.work_item_id,
+              iteration,
+              qualification,
+            };
+          }
           if (iteration < maxIterations) {
             await sleepFn(pollIntervalMs);
             continue;
@@ -871,6 +926,16 @@ async function nextLoop(options, deps) {
     const outcome = execResult.outcome || 'completed';
     terminalWorkItems.set(item.work_item_id, outcome);
     log(`Work Item ${item.work_item_id} ended with terminal state ${outcome}.`);
+
+    if (opts.workItem || opts['work-item']) {
+      return {
+        completed: true,
+        iterations: iteration,
+        workItemId: item.work_item_id,
+        outcome,
+        execution: execResult,
+      };
+    }
 
     if (iteration < maxIterations) {
       await sleepFn(pollIntervalMs);
@@ -1008,6 +1073,7 @@ function nextCommand(args, deps) {
       );
   const run = Boolean(args.run);
   const loop = Boolean(args.loop);
+  const workItem = args['work-item'] || args.workItem;
   const stopFile = args['stop-file'] || args.stopFile;
   const decisionDir = args['decision-dir'] || args.decisionDir;
   const json = Boolean(args.json);
@@ -1018,6 +1084,7 @@ function nextCommand(args, deps) {
       registerPath,
       run,
       loop,
+      workItem,
       stopFile,
       decisionDir,
       json,
