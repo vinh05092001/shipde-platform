@@ -30,3 +30,4 @@ test-results/
 __pycache__/
 *.pyc
 tools/ai-brain/data/evidence/
+tools/ai-brain/data/context-packs/

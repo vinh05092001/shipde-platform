@@ -14,7 +14,24 @@ const { candidateKey } = require('../discovery/identity');
 const evidence = require('../evidence');
 const accountsApi = require('../accounts');
 const harnesses = require('../harness');
+const promptCompiler = require('../prompt-compiler');
+const contextPack = require('../context-pack');
+const cli = require('../cli');
 const isolation = require('../isolation-launcher');
+const {
+  getIsolatedLauncher,
+  buildWorkerLaunchScript,
+  enforceTokenBudget,
+  readLaunchResult,
+} = require('../isolation-launcher');
+const {
+  runHostBrainGate,
+  runOrchestration,
+  rtkPolicyForItem,
+  resolveLauncher,
+  writeUsageReportFromHarnessResult,
+} = require('../orchestrate');
+const { DEFAULT_TOKEN_BUDGETS } = require('../intake');
 const routing = require('../routing');
 
 test('qualify --auto CLI intake helpers are exported', () => {
@@ -28,6 +45,7 @@ test('qualify --auto CLI intake helpers are exported', () => {
 });
 
 const roots = [];
+const { spawnSync } = require('node:child_process');
 function fixtureRoot() {
   const upstreamTmp = path.join(__dirname, '..', '..', '..', '.upstream-tmp');
   fs.mkdirSync(upstreamTmp, { recursive: true });
@@ -1026,6 +1044,997 @@ test('an exhausted target path never inherits the transferred proof', () => {
   const proof = require('../routing').proofObservedWithSource(data, exhausted);
   assert.equal(proof.level, null);
   assert.equal(proof.transferred, false);
+});
+
+test('Part H: worker prompt requests focused concise tests and host-side full-suite gating', () => {
+  const prompt = promptCompiler.compilePrompt(
+    {
+      id: 'FIXTURE-AI-141',
+      allowedPaths: ['tools/ai-brain/cli.js'],
+      acceptanceCriteria: [],
+    },
+    { focusedTestsOnly: true, contextPack: '.shipde/context.md' }
+  );
+  assert.match(prompt, /Run only focused tests/);
+  assert.match(prompt, /grep -E/);
+  assert.match(prompt, /Controller runs that host-side gate/);
+  assert.match(prompt, /\.shipde\/context\.md/);
+});
+
+test('Part H: intake enables RTK for low risk and suppresses it for risk domains', async () => {
+  const root = fixtureRoot();
+  const low = await intake.runIntake(
+    { workItem: 'FIXTURE-AI-141' },
+    {
+      root,
+      baseSha: 'e'.repeat(40),
+      readRegisterRow: () => ({ dependencies: '' }),
+      readRegisterRows: () => [],
+      listAccounts: () => [],
+      read9routerModels: async () => ({ ok: true, models: ['gemini-fixture-pro'] }),
+      hasAgyPoolQuota: false,
+      readHistory: () => [],
+      isAncestorOf: () => true,
+    }
+  );
+  assert.equal(low.rtk.enabled, true);
+  assert.ok(low.argv.includes('--rtk'));
+  const riskRoot = fixtureRoot();
+  fs.writeFileSync(
+    path.join(riskRoot, 'docs', 'product-spec', 'work-items', 'FIXTURE-AI-141.md'),
+    [
+      '# FIXTURE-AI-141',
+      '',
+      '## Control',
+      '| Field | Value |',
+      '|---|---|',
+      '| Allowed paths | `tools/ai-brain/cli.js` |',
+      '',
+      '## Business Outcome',
+      'Authentication and security behavior.',
+      '',
+      '## Acceptance Matrix',
+      '| ID | Scenario | Expected |',
+      '|---|---|---|',
+      '| AC-1 | auth | protected |',
+      '',
+      '## Verification Commands',
+      '- `node --test tools/ai-brain/test/task-ai-141.test.js`',
+    ].join('\n')
+  );
+  const high = await intake.runIntake(
+    { workItem: 'FIXTURE-AI-141' },
+    {
+      root: riskRoot,
+      baseSha: 'f'.repeat(40),
+      readRegisterRow: () => ({ dependencies: '' }),
+      readRegisterRows: () => [],
+      listAccounts: () => [],
+      read9routerModels: async () => ({ ok: true, models: ['gemini-fixture-pro'] }),
+      hasAgyPoolQuota: false,
+      readHistory: () => [],
+      isAncestorOf: () => true,
+    }
+  );
+  assert.deepEqual(high.spec.riskDomains, ['auth', 'security']);
+  assert.equal(high.rtk.enabled, false);
+  assert.equal(high.argv.includes('--rtk'), false);
+});
+
+test('Part H: intake detects risk declared in Control and other sections before enabling RTK', async () => {
+  const root = fixtureRoot();
+  const file = path.join(root, 'docs', 'product-spec', 'work-items', 'FIXTURE-AI-141.md');
+  fs.writeFileSync(
+    file,
+    [
+      '# FIXTURE-AI-141',
+      '',
+      '## Control',
+      '| Field | Value |',
+      '|---|---|',
+      '| Allowed paths | `tools/ai-brain/cli.js` |',
+      '| Risk domains | money, PII, tenant isolation |',
+      '',
+      '## Business Outcome',
+      'Safely update persisted records.',
+      '',
+      '## Scope',
+      'Update persisted records.',
+      '',
+      '## Acceptance Matrix',
+      '| ID | Scenario | Expected |',
+      '|---|---|---|',
+      '| AC-1 | update | saved |',
+      '',
+      '## Verification Commands',
+      '- `node --test tools/ai-brain/test/task-ai-141.test.js`',
+    ].join('\n')
+  );
+  const result = await intake.runIntake(
+    { workItem: 'FIXTURE-AI-141' },
+    {
+      root,
+      baseSha: 'd'.repeat(40),
+      readRegisterRow: () => ({ dependencies: '' }),
+      readRegisterRows: () => [],
+      listAccounts: () => [],
+      read9routerModels: async () => ({ ok: true, models: ['gemini-fixture-pro'] }),
+      hasAgyPoolQuota: false,
+      readHistory: () => [],
+      isAncestorOf: () => true,
+    }
+  );
+  assert.deepEqual(result.spec.riskDomains, ['money', 'pii', 'tenant isolation']);
+  assert.equal(result.rtk.enabled, false);
+  assert.equal(result.argv.includes('--rtk'), false);
+});
+
+test('Part H: derived risk labels all block RTK and the exported detector is the live implementation', () => {
+  for (const [phrase, expected] of [
+    ['carrier create shipment', 'carrier side effects'],
+    ['PII recipient data', 'pii'],
+    ['database ownership and migration', 'database ownership'],
+  ]) {
+    const derived = intake.deriveRiskDomains('## Scope\n' + phrase);
+    assert.ok(derived.includes(expected), phrase + ' derives the expected policy label');
+    assert.ok(intake.RTK_RISK_DOMAINS.includes(expected), expected + ' blocks RTK');
+  }
+});
+
+test('Part H: orchestration records RTK enablement and risk-domain denial in decision log', async () => {
+  const root = fixtureRoot();
+  const decisionDir = path.join(root, 'decisions');
+  const observed = [];
+  const spec = { id: 'FIXTURE-AI-141', files: ['a.js'], riskDomains: ['security'] };
+  const candidates = [
+    {
+      upstream: 'up-a',
+      gateway: 'gw-a',
+      accountId: 'acct-a',
+      modelId: 'm',
+      harness: 'opencode',
+      source: 'up-a',
+      qualifiedRoles: ['author.foundation'],
+      capabilities: { contextWindow: 999999 },
+    },
+  ];
+  await runOrchestration('fixture', {
+    specs: [spec],
+    candidates,
+    decisionDir,
+    cwd: root,
+    rtk: true,
+    hostGate: () => ({ pass: true, failures: [] }),
+    run: (job) => {
+      process.stderr.write(
+        'RUN_GATE_PROMPT=' + job.prompt.includes('named behavioral regression') + '\n'
+      );
+      observed.push(job);
+      return { exitCode: 1, stderr: 'fixture stop' };
+    },
+    now: Date.now(),
+  });
+  assert.equal(observed[0].rtk.enabled, false);
+  const records = fs
+    .readFileSync(path.join(decisionDir, new Date().toISOString().slice(0, 10) + '.jsonl'), 'utf8')
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line));
+  assert.ok(records.some((entry) => entry.warning === 'RTK_POLICY' && entry.enabled === false));
+  assert.ok(
+    records.some(
+      (entry) =>
+        entry.warning === 'RTK_POLICY' &&
+        entry.enabled === false &&
+        entry.detail === 'risk_domains_block_rtk'
+    ),
+    'the risk-domain policy denial is recorded in the decision log'
+  );
+});
+
+test('Part H: RTK permission is computed independently for each work item', async () => {
+  assert.deepEqual(rtkPolicyForItem(true, [], false), {
+    enabled: true,
+    reason: 'low_risk_item',
+    riskDomains: [],
+  });
+  assert.deepEqual(rtkPolicyForItem(true, ['pii'], false), {
+    enabled: false,
+    reason: 'risk_domains_block_rtk',
+    riskDomains: ['pii'],
+  });
+  assert.equal(rtkPolicyForItem(true, [], true).reason, 'injected_run_blocks_rtk');
+});
+
+test('Part H: a stalled live session is stopped, recorded and checkpointed for recovery', async () => {
+  const root = fixtureRoot();
+  const decisionDir = path.join(root, 'stall-decisions');
+  const candidates = [
+    {
+      upstream: 'up-a',
+      gateway: 'gw-a',
+      accountId: 'acct-a',
+      modelId: 'model-a',
+      harness: 'paseo',
+      source: 'up-a',
+      qualifiedRoles: ['author.foundation'],
+      capabilities: { contextWindow: 999999 },
+    },
+    {
+      upstream: 'up-b',
+      gateway: 'gw-b',
+      accountId: 'acct-b',
+      modelId: 'model-b',
+      harness: 'paseo',
+      source: 'up-b',
+      qualifiedRoles: ['author.foundation'],
+      capabilities: { contextWindow: 999999 },
+    },
+  ];
+  const ev = (candidate) => ({
+    ...candidate,
+    evidence: [{ status: 'passed', kind: 'WORK_ITEM_PASS', proofLevel: 'WORK_ITEM_PASS' }],
+  });
+  candidates.splice(0, candidates.length, ...candidates.map(ev));
+  const calls = [];
+  const result = await runOrchestration('fixture', {
+    specs: [{ id: 'FIXTURE-AI-141', files: ['a.js'], acceptanceCriteria: ['works'] }],
+    candidates,
+    registry: { sources: [] },
+    decisionDir,
+    cwd: root,
+    now: Date.now(),
+    checkpointFile: path.join(root, 'stall-checkpoint.json'),
+    progressTimeoutMs: 1000,
+    stallMs: 1000,
+    hostGate: () => ({ pass: true, failures: [] }),
+    run: (job) => {
+      calls.push(job);
+      return calls.length === 1
+        ? {
+            exitCode: 1,
+            failureReason: 'STALLED_NO_PROGRESS',
+            stderr: 'launcher stopped stalled worker',
+          }
+        : { exitCode: 1, stderr: 'bounded fallback stopped' };
+    },
+  });
+  assert.equal(calls.length, 2, 'a launcher-stopped session uses one bounded alternate');
+  assert.ok(result.launches.some((launch) => launch.fallbackReason === 'STALLED_NO_PROGRESS'));
+  assert.ok(fs.existsSync(path.join(root, 'stall-checkpoint.json')));
+  const day = new Date().toISOString().slice(0, 10);
+  const records = fs
+    .readFileSync(path.join(decisionDir, day + '.jsonl'), 'utf8')
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line));
+  assert.ok(records.some((entry) => entry.cause === 'STALLED_NO_PROGRESS'));
+});
+
+test('Part H: token budget overrun stops the session and records the fallback cause', async () => {
+  const root = fixtureRoot();
+  const candidates = [
+    {
+      upstream: 'up-a',
+      gateway: 'gw-a',
+      accountId: 'acct-a',
+      modelId: 'model-a',
+      harness: 'paseo',
+      source: 'up-a',
+      qualifiedRoles: ['author.foundation'],
+      capabilities: { contextWindow: 999999 },
+    },
+    {
+      upstream: 'up-b',
+      gateway: 'gw-b',
+      accountId: 'acct-b',
+      modelId: 'model-b',
+      harness: 'paseo',
+      source: 'up-b',
+      qualifiedRoles: ['author.foundation'],
+      capabilities: { contextWindow: 999999 },
+    },
+  ];
+  const calls = [];
+  const result = await runOrchestration('fixture', {
+    specs: [{ id: 'FIXTURE-AI-141', files: ['a.js'], acceptanceCriteria: ['works'] }],
+    candidates,
+    registry: { sources: [] },
+    decisionDir: path.join(root, 'budget-decisions'),
+    cwd: root,
+    tokenBudgets: { default: { maxTokens: 5 } },
+    now: Date.now(),
+    maxRepairs: 0,
+    run: (job) => {
+      calls.push(job);
+      return calls.length === 1
+        ? { exitCode: 1, failureReason: 'TOKEN_BUDGET_EXCEEDED', stderr: 'budget' }
+        : { exitCode: 1, stderr: 'bounded fallback stopped' };
+    },
+  });
+  assert.equal(calls.length, 2, 'a budget overrun must fall back to the next candidate');
+  assert.notEqual(calls[0].candidateKey, calls[1].candidateKey);
+  assert.ok(result.launches.some((launch) => launch.fallbackReason === 'TOKEN_BUDGET_EXCEEDED'));
+  assert.ok(result.launches.some((launch) => launch.fallbackReason === 'TOKEN_BUDGET_EXCEEDED'));
+});
+
+test('Part H: context pack includes allowed source files and rejects traversal and drive paths', () => {
+  const root = fixtureRoot();
+  fs.mkdirSync(path.join(root, 'tools', 'ai-brain'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'tools', 'ai-brain', 'cli.js'), 'fixture source');
+  const result = contextPack.createContextPack(
+    [
+      {
+        allowedPaths: [
+          'tools/ai-brain/cli.js',
+          '../outside.txt',
+          'C:/outside.txt',
+          'D:relative.txt',
+        ],
+      },
+    ],
+    {
+      root,
+      outputDir: path.join(root, 'pack-out'),
+    }
+  );
+  assert.deepEqual(result.files, ['tools/ai-brain/cli.js']);
+  assert.match(result.content, /fixture source/);
+  assert.equal(fs.existsSync(result.path), true);
+});
+
+test('Part H: context pack manifest records output path and included source allowlist', async () => {
+  const root = fixtureRoot();
+  fs.mkdirSync(path.join(root, 'tools', 'ai-brain'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'tools', 'ai-brain', 'cli.js'), 'fixture cli source');
+  const manifestPath = path.join(root, 'run', 'manifest.json');
+  const decisionsDir = path.join(root, 'decisions');
+  const spec = {
+    id: 'FIXTURE-AI-141',
+    allowedPaths: ['tools/ai-brain/cli.js'],
+    acceptanceCriteria: ['test path'],
+  };
+  const candidate = {
+    upstream: 'up-a',
+    gateway: 'gw-a',
+    accountId: 'acct-a',
+    modelId: 'm',
+    harness: 'opencode',
+    source: 'up-a',
+    qualifiedRoles: ['author.foundation'],
+    capabilities: { contextWindow: 999999 },
+  };
+  const result = runOrchestration('fixture', {
+    specs: [spec],
+    candidates: [candidate],
+    decisionDir: decisionsDir,
+    cwd: root,
+    isolatedWorker: true,
+    enableContextPack: true,
+    contextManifest: manifestPath,
+    hostGate: () => ({ pass: true, failures: [] }),
+    run: () => ({ exitCode: 0, stdout: 'ok' }),
+  });
+  await result;
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  assert.ok(manifest.path);
+  assert.deepEqual(manifest.files, ['tools/ai-brain/cli.js']);
+});
+
+test('Part H: context pack command writes to the exact requested output path', () => {
+  const root = fixtureRoot();
+  const specFile = path.join(root, 'item.json');
+  const output = path.join(root, 'exact-context.md');
+  fs.writeFileSync(specFile, JSON.stringify({ allowedPaths: [] }));
+  const result = spawnSync(
+    process.execPath,
+    [path.join(__dirname, '..', 'context-pack.js'), '--spec', specFile, '--output', output],
+    { cwd: root, encoding: 'utf8' }
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), output);
+  assert.equal(fs.existsSync(output), true);
+});
+
+test('Part H: context pack never includes implicit sources outside allowed paths', () => {
+  const root = fixtureRoot();
+  fs.mkdirSync(path.join(root, 'docs', 'product-spec', 'docs', '00-control'), { recursive: true });
+  fs.writeFileSync(
+    path.join(root, 'docs', 'product-spec', 'docs', '00-control', 'BASELINE-AND-DECISIONS.md'),
+    'unrequested source'
+  );
+  const result = contextPack.createContextPack([{ allowedPaths: [] }], {
+    root,
+    outputDir: path.join(root, 'packs'),
+  });
+  assert.deepEqual(result.files, []);
+  assert.doesNotMatch(result.content, /unrequested source/);
+});
+
+test('Part H: complexity budget layers apply even when a role budget exists', async () => {
+  const root = fixtureRoot();
+  let captured;
+  await runOrchestration('budget precedence', {
+    specs: [{ id: 'BUDGET-COMPLEX', complexity: 'complex', files: [] }],
+    candidates: [
+      {
+        upstream: 'u',
+        gateway: 'g',
+        accountId: 'a',
+        modelId: 'm',
+        harness: 'opencode',
+        source: 'u',
+        evidence: [{ status: 'passed', kind: 'WORK_ITEM_PASS', proofLevel: 'WORK_ITEM_PASS' }],
+        qualifiedRoles: ['author.foundation'],
+        capabilities: { contextWindow: 999999 },
+      },
+    ],
+    cwd: root,
+    decisionDir: path.join(root, 'budget-precedence'),
+    tokenBudgets: {
+      byRole: { 'author.foundation': { maxTurns: 5 } },
+      byComplexity: { complex: { maxTokens: 4321 } },
+    },
+    run: (job) => {
+      captured = job.tokenBudget;
+      return { exitCode: 1, stderr: 'stop' };
+    },
+  });
+  assert.equal(captured.maxTurns, 5);
+  assert.equal(captured.maxTokens, 4321);
+});
+
+test('Part H: token usage report groups input, cache-read and output by model and Work Item', () => {
+  const root = fixtureRoot();
+  const usageDir = path.join(root, 'usage');
+  fs.mkdirSync(usageDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(usageDir, 'session.json'),
+    JSON.stringify({
+      workItemId: 'TASK-AI-X',
+      model: 'model-x',
+      usage: { input_tokens: 10, cache_read_tokens: 20, output_tokens: 3 },
+    })
+  );
+  const result = cli.tokenReportCommand({ dir: usageDir }, { log: () => {} });
+  assert.equal(result.records, 1);
+  assert.deepEqual(
+    result.totals.map((row) => [row.key, row.input, row.cacheRead, row.output]),
+    [
+      ['model-x', 10, 20, 3],
+      ['TASK-AI-X', 10, 20, 3],
+    ]
+  );
+});
+
+test('Part H: launcher enforces per-session token budget live and preserves bounded timeout', () => {
+  const script = buildWorkerLaunchScript({
+    credPath: 'credential',
+    workerRoot: 'C:\\worker',
+    exeFile: 'agent.exe',
+    payloadArgsPath: 'args.json',
+    launchResultPath: 'result.json',
+    workerTimeoutMs: 90000,
+    tokenBudget: { maxTokens: 12000 },
+    progressTimeoutMs: 60000,
+    usageFile: 'C:\\worker\\usage.json',
+  });
+  assert.match(script, /\$timeoutMs = 90000/);
+  assert.match(script, /\$tokenBudgetJson/);
+  assert.match(script, /Read-UsageTotal/);
+  assert.match(script, /Stop-WorkerTree/);
+  assert.match(script, /12000/);
+  assert.match(script, /cache_read_tokens/);
+  assert.match(script, /\$usageFile = 'C:\\worker\\usage\.json'/);
+});
+
+test('Part H: missing, empty, or malformed usage telemetry fails closed when a budget is configured', () => {
+  const root = fixtureRoot();
+  const missing = enforceTokenBudget({ exitCode: 0, stderr: '' }, { maxTokens: 100 }, null);
+  assert.equal(missing.exitCode, 1);
+  assert.equal(missing.failureReason, 'TOKEN_BUDGET_UNVERIFIED');
+
+  const usageFile = path.join(root, 'usage.json');
+  fs.writeFileSync(usageFile, '');
+  const empty = enforceTokenBudget({ exitCode: 0, stderr: '' }, { maxTokens: 100 }, usageFile);
+  assert.equal(empty.exitCode, 1);
+  assert.equal(empty.failureReason, 'TOKEN_BUDGET_UNVERIFIED');
+
+  fs.writeFileSync(usageFile, JSON.stringify({}));
+  const noUsage = enforceTokenBudget({ exitCode: 0, stderr: '' }, { maxTokens: 100 }, usageFile);
+  assert.equal(noUsage.exitCode, 1);
+  assert.equal(noUsage.failureReason, 'TOKEN_BUDGET_UNVERIFIED');
+
+  fs.writeFileSync(usageFile, JSON.stringify({ usage: { input_tokens: 80, output_tokens: 30 } }));
+  const over = enforceTokenBudget({ exitCode: 0, stderr: '' }, { maxTokens: 100 }, usageFile);
+  assert.equal(over.failureReason, 'TOKEN_BUDGET_EXCEEDED');
+
+  fs.writeFileSync(
+    usageFile,
+    JSON.stringify({ usage: { input_tokens: 20, cache_read_tokens: 90, output_tokens: 1 } })
+  );
+  const cacheOver = enforceTokenBudget({ exitCode: 0, stderr: '' }, { maxTokens: 100 }, usageFile);
+  assert.equal(cacheOver.failureReason, 'TOKEN_BUDGET_EXCEEDED');
+
+  fs.writeFileSync(
+    usageFile,
+    JSON.stringify({
+      usage: { total_tokens: 10, input_tokens: 20, cache_read_tokens: 90, output_tokens: 1 },
+    })
+  );
+  const inconsistentTotal = enforceTokenBudget(
+    { exitCode: 0, stderr: '' },
+    { maxTokens: 100 },
+    usageFile
+  );
+  assert.equal(inconsistentTotal.failureReason, 'TOKEN_BUDGET_EXCEEDED');
+
+  fs.writeFileSync(usageFile, JSON.stringify({ usage: { input_tokens: 20, output_tokens: 30 } }));
+  const within = enforceTokenBudget({ exitCode: 0, stderr: '' }, { maxTokens: 100 }, usageFile);
+  assert.equal(within.exitCode, 0);
+  assert.equal(within.failureReason, undefined);
+});
+
+test('Part H: host brain gate expands suite files, hides output and returns only failures', () => {
+  let capturedEnv;
+  const result = runHostBrainGate(
+    {},
+    {
+      spawnSync: (_node, args, opts) => {
+        capturedEnv = opts.env;
+        assert.ok(args.length > 2);
+        assert.equal(args[0], '--test');
+        assert.ok(args.slice(1).includes('tools/ai-brain/test/task-ai-141.test.js'));
+        assert.ok(args.slice(1).every((file) => !file.includes('*')));
+        return {
+          status: 1,
+          stdout: 'not ok 1 - fixture failure\n  noisy detail\nℹ pass 9\nℹ fail 1\n',
+          stderr: '',
+        };
+      },
+    }
+  );
+  assert.equal(capturedEnv.NINEROUTER_API_KEY, undefined);
+  assert.deepEqual(result.failures, ['fixture failure']);
+  assert.deepEqual(result.summary, ['ℹ pass 9', 'ℹ fail 1']);
+});
+
+test('Part H: isolated runs receive role and complexity token caps from policy config', () => {
+  assert.equal(DEFAULT_TOKEN_BUDGETS.byComplexity.simple.maxTokens, 60000);
+  assert.equal(DEFAULT_TOKEN_BUDGETS.byComplexity.standard.maxTokens, 150000);
+  assert.equal(DEFAULT_TOKEN_BUDGETS.byComplexity.complex.maxTokens, 300000);
+  assert.equal(DEFAULT_TOKEN_BUDGETS.byRole.reviewer.maxTurns, 60);
+  const source = fs.readFileSync(path.join(__dirname, '..', 'cli.js'), 'utf8');
+  assert.match(source, /DEFAULT_TOKEN_BUDGETS/);
+});
+
+test('Part H: repeated quota failures reach a bounded fallback threshold', async () => {
+  assert.equal(DEFAULT_TOKEN_BUDGETS.byRole['author.foundation'].repeatedQuotaFailures, 3);
+  const root = fixtureRoot();
+  const calls = [];
+  const candidate = (accountId) => ({
+    upstream: 'up',
+    gateway: 'gw-' + accountId,
+    accountId,
+    modelId: accountId,
+    harness: 'opencode',
+    source: 'up',
+    qualifiedRoles: ['author.foundation'],
+    capabilities: { contextWindow: 999999 },
+  });
+  await runOrchestration('quota', {
+    specs: [{ id: 'QUOTA-ITEM', complexity: 'simple', riskDomains: [] }],
+    candidates: [candidate('a'), candidate('b')],
+    cwd: root,
+    decisionDir: path.join(root, 'quota-decisions'),
+    tokenBudgets: { byRole: { 'author.foundation': { repeatedQuotaFailures: 1 } } },
+    run: (job) => {
+      calls.push(job);
+      return { exitCode: 1, stderr: 'quota_exhausted' };
+    },
+  });
+  assert.equal(calls.length, 1, 'quota threshold stops the candidate loop');
+});
+
+test('Part H regressions: restored risk keywords deny RTK and nested max-turn policy reaches launch', async () => {
+  for (const text of [
+    'password reset',
+    'session renewal',
+    'MFA setup',
+    'encryption keys',
+    'access control',
+    'refund billing',
+    'phone email',
+    'shipment waybill',
+  ]) {
+    assert.ok(intake.deriveRiskDomains('## Scope\n' + text).length > 0, text);
+  }
+  const root = fixtureRoot();
+  const calls = [];
+  await runOrchestration('turns', {
+    specs: [{ id: 'TURN-ITEM', files: [], complexity: 'simple' }],
+    candidates: [
+      {
+        upstream: 'u',
+        gateway: 'g',
+        accountId: 'a',
+        modelId: 'm',
+        harness: 'opencode',
+        source: 'u',
+        qualifiedRoles: ['author.foundation'],
+        capabilities: { contextWindow: 999999 },
+      },
+    ],
+    cwd: root,
+    decisionDir: path.join(root, 'turn-decisions'),
+    tokenBudgets: {
+      byComplexity: {
+        simple: { maxTurns: 1, maxTokens: 1234, noProgressMinutes: 2, repeatedQuotaFailures: 1 },
+      },
+    },
+    run: (job) => {
+      calls.push(job);
+      return { exitCode: 1, stderr: 'fail' };
+    },
+  });
+  assert.equal(calls.length, 1, 'simple maxTurns=1 prevents a second launch');
+  assert.equal(calls[0].tokenBudget.maxTokens, 1234);
+  assert.equal(calls[0].progressTimeoutMs, 120000);
+  assert.equal(calls[0].maxQuotaFailures, 1);
+});
+
+test('Part H regressions: default orchestration gates success and builds context from manifest', async () => {
+  const root = fixtureRoot();
+  fs.mkdirSync(path.join(root, 'tools', 'ai-brain'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'tools', 'ai-brain', 'cli.js'), 'pack source');
+  const manifest = path.join(root, 'manifest.json');
+  let hostCalls = 0;
+  await runOrchestration('default path', {
+    specs: [
+      { id: 'DEFAULT-ITEM', allowedPaths: ['tools/ai-brain/cli.js'], acceptanceCriteria: [] },
+    ],
+    candidates: [
+      {
+        upstream: 'u',
+        gateway: 'g',
+        accountId: 'a',
+        modelId: 'm',
+        harness: 'opencode',
+        source: 'u',
+        qualifiedRoles: ['author.foundation'],
+        capabilities: { contextWindow: 999999 },
+      },
+    ],
+    cwd: root,
+    decisionDir: path.join(root, 'default-decisions'),
+    contextManifest: manifest,
+    maxRepairs: 0,
+    isolatedWorker: true,
+    run: () => ({ exitCode: 0, stdout: 'done' }),
+    hostGate: (job) => {
+      hostCalls++;
+      assert.match(job.prompt, /Run only focused tests/);
+      return { pass: true, failures: [] };
+    },
+  });
+  assert.equal(hostCalls, 1);
+  assert.deepEqual(JSON.parse(fs.readFileSync(manifest, 'utf8')).files, ['tools/ai-brain/cli.js']);
+});
+
+test('Part H: host gate failure names are passed into the next repair prompt', async () => {
+  const root = fixtureRoot();
+  let launchCalls = 0;
+  const candidate = (index) => ({
+    upstream: 'up-' + index,
+    gateway: 'gw-' + index,
+    accountId: 'acct-' + index,
+    modelId: 'model-' + index,
+    harness: 'opencode',
+    source: 'up-' + index,
+    qualifiedRoles: ['author.foundation'],
+    capabilities: { contextWindow: 999999 },
+  });
+  const result = await runOrchestration('gate repair', {
+    specs: [
+      {
+        id: 'GATE-ITEM',
+        complexity: 'simple',
+        riskDomains: [],
+        files: [],
+        verification: { command: 'node --test focused.test.js' },
+      },
+    ],
+    candidates: [candidate(0), candidate(1), candidate(2)],
+    cwd: root,
+    decisionDir: path.join(root, 'gate-decisions'),
+    maxRepairs: 0,
+    maxAttempts: 2,
+    hostCwd: root,
+    hostGateRepair: ({ job, failures }) => {
+      assert.deepEqual(failures, ['named behavioral regression']);
+      const prompt = promptCompiler.compilePrompt(
+        { id: 'GATE-ITEM', files: [], acceptanceCriteria: [] },
+        { hostGateFailures: failures, focusedTestsOnly: true }
+      );
+      assert.match(prompt, /named behavioral regression/);
+      assert.match(prompt, /failing test names only/);
+      assert.equal(job.workItemId, 'GATE-ITEM');
+    },
+    run: (() => {
+      const prompts = [];
+      return (job) => {
+        launchCalls++;
+        prompts.push(job.prompt);
+        if (prompts.length === 2) {
+          assert.match(job.prompt, /named behavioral regression/);
+          assert.match(job.prompt, /failing test names only/);
+        }
+        return { exitCode: 0, stdout: 'worker done' };
+      };
+    })(),
+    hostGate: (() => {
+      let calls = 0;
+      return () =>
+        ++calls === 1
+          ? { pass: false, failures: ['named behavioral regression'] }
+          : { pass: true, failures: [] };
+    })(),
+  });
+  assert.ok(result, JSON.stringify(result));
+  assert.equal(launchCalls, 2, 'failed host gate must relaunch a repair worker');
+  assert.equal(result.hostGate.pass, true, 'the repaired worker must pass the host gate');
+});
+
+test('Part H regressions: launcher progress watchdog observes worker output independently of usage', () => {
+  const script = buildWorkerLaunchScript({
+    credPath: 'credential',
+    workerRoot: 'C:\\worker',
+    exeFile: 'agent.exe',
+    payloadArgsPath: 'args.json',
+    launchResultPath: 'result.json',
+    workerTimeoutMs: 90000,
+    progressTimeoutMs: 60000,
+    usageFile: 'usage.json',
+  });
+  assert.match(script, /Get-ChildItem -LiteralPath \$workerRoot -File -Recurse/);
+  assert.match(script, /lastOutputSignature/);
+  assert.match(script, /Tee-Object -FilePath .*worker-output-/);
+  assert.match(script, /Write-LiveUsage/);
+  assert.match(script, /Read-UsageTotal/);
+  assert.match(script, /tokens\.cache\.read/);
+  assert.match(script, /lastTotalTokens/);
+  assert.ok(
+    !script.includes('$usageItem.LastWriteTimeUtc'),
+    'stall check must not key off usage file modification time'
+  );
+  const source = fs.readFileSync(path.join(__dirname, '..', 'isolation-launcher.js'), 'utf8');
+  assert.match(source, /writeUsageReportFromHarnessResult\(job, launchResult\)/);
+});
+
+test('Part H: writeUsageReportFromHarnessResult preserves nested tokens.cache.read', () => {
+  const root = fixtureRoot();
+  const usageFile = path.join(root, 'usage.json');
+  const job = { usageFile, harness: 'opencode-direct', model: 'm', upstream: 'u' };
+  const res = {
+    exitCode: 0,
+    stdout: '{"sessionID":"s1","tokens":{"input":10,"output":5,"cache":{"read":100}}}',
+  };
+  writeUsageReportFromHarnessResult(job, res);
+  assert.ok(fs.existsSync(usageFile));
+  const report = JSON.parse(fs.readFileSync(usageFile, 'utf8'));
+  assert.equal(report.usage.input, 10);
+  assert.equal(report.usage.cacheRead, 100);
+  assert.equal(report.usage.output, 5);
+  assert.equal(report.usage.total, 115);
+});
+
+test('Part H: readLaunchResult propagates failureReason and enforceTokenBudget preserves it', () => {
+  const root = fixtureRoot();
+  const resultFile = path.join(root, 'launch-result.json');
+  fs.writeFileSync(
+    resultFile,
+    JSON.stringify({
+      exitCode: -1,
+      stdout: '',
+      stderr: 'stalled',
+      timedOut: false,
+      completed: false,
+      failureReason: 'STALLED_NO_PROGRESS: worker produced no output',
+    })
+  );
+  const parsed = readLaunchResult(resultFile, 'nonce', { stdout: '', stderr: '' });
+  assert.equal(parsed.failureReason, 'STALLED_NO_PROGRESS');
+  const budgetChecked = enforceTokenBudget(parsed, { maxTokens: 100 }, null);
+  assert.equal(budgetChecked.failureReason, 'STALLED_NO_PROGRESS');
+});
+
+test('Part H: deriveRiskDomains distinguishes benign prisma queries from schema ownership', () => {
+  const benign = intake.deriveRiskDomains('## Scope\nUse prisma client to read user preferences.');
+  assert.equal(benign.includes('database ownership'), false);
+
+  const schemaChange = intake.deriveRiskDomains('## Scope\nUpdate prisma/schema.prisma models.');
+  assert.equal(schemaChange.includes('database ownership'), true);
+
+  const migration = intake.deriveRiskDomains('## Scope\nRun database migration for auth tables.');
+  assert.equal(migration.includes('database ownership'), true);
+});
+
+test('Part H: RTK_POLICY decision is recorded once per work item across multiple candidate attempts', async () => {
+  const root = fixtureRoot();
+  const decisionDir = path.join(root, 'rtk-decisions');
+  const spec = { id: 'ITEM-RTK-ONCE', files: ['lib.js'], riskDomains: [] };
+  const candidates = [
+    {
+      upstream: 'up-1',
+      gateway: 'gw-1',
+      accountId: 'acct-1',
+      modelId: 'm1',
+      harness: 'paseo',
+      source: 'up-1',
+      qualifiedRoles: ['author.foundation'],
+      capabilities: { contextWindow: 999999 },
+    },
+    {
+      upstream: 'up-2',
+      gateway: 'gw-2',
+      accountId: 'acct-2',
+      modelId: 'm2',
+      harness: 'opencode',
+      source: 'up-2',
+      qualifiedRoles: ['author.foundation'],
+      capabilities: { contextWindow: 999999 },
+    },
+  ];
+  let callCount = 0;
+  await runOrchestration('test rtk once', {
+    specs: [spec],
+    candidates,
+    decisionDir,
+    cwd: root,
+    rtk: true,
+    run: () => {
+      callCount += 1;
+      return { exitCode: 1, stderr: 'attempt failed' };
+    },
+    now: Date.now(),
+  });
+  assert.ok(callCount >= 2);
+  const day = new Date().toISOString().slice(0, 10);
+  const records = fs
+    .readFileSync(path.join(decisionDir, day + '.jsonl'), 'utf8')
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line));
+  const rtkRecords = records.filter(
+    (r) => r.warning === 'RTK_POLICY' && r.workItemId === 'ITEM-RTK-ONCE'
+  );
+  assert.equal(rtkRecords.length, 1, 'RTK_POLICY is recorded exactly once for the work item');
+});
+
+test('Part H: isolated launcher resolves RTK and budget policy from the dispatched job', () => {
+  let received;
+  const launch = resolveLauncher({}, (_adapter, _args, options) => {
+    received = options;
+    return { exitCode: 0 };
+  });
+  launch(
+    {
+      harness: 'paseo',
+      cwd: process.cwd(),
+      candidateKey: 'candidate',
+      rtk: { enabled: true, sourcePath: 'C:\\rtk.exe' },
+      tokenBudget: { maxTokens: 123 },
+      riskDomains: [],
+      lowRisk: true,
+      upstream: 'gateway',
+      model: 'model',
+      usageFile: 'usage.json',
+    },
+    {}
+  );
+  assert.deepEqual(received.rtk, { enabled: true, sourcePath: 'C:\\rtk.exe' });
+  assert.equal(received.tokenBudget.maxTokens, 123);
+  assert.equal(received.lowRisk, true);
+  assert.equal(received.model, 'model');
+  assert.equal(received.upstream, 'gateway');
+});
+
+test('Part H: live budget watch keeps the usage file assigned before the loop', () => {
+  const script = buildWorkerLaunchScript({
+    credPath: 'credential',
+    workerRoot: 'C:\\worker',
+    exeFile: 'agent.exe',
+    payloadArgsPath: 'args.json',
+    launchResultPath: 'result.json',
+    workerTimeoutMs: 90000,
+    tokenBudget: { maxTokens: 50 },
+    usageFile: 'C:\\usage\\live.json',
+    completionNonce: 'abc',
+  });
+  const assigned = script.indexOf("$usageFile = 'C:\\usage\\live.json'");
+  const wiped = script.indexOf('$usageFile = $script:usageFile');
+  assert.ok(assigned > 0, 'the host script must assign the configured usage file');
+  assert.equal(wiped, -1, 'a later assignment must not wipe the usage file before the watch loop');
+  const watch = script.indexOf('while ($true)');
+  assert.ok(watch > assigned, 'the usage file is still assigned when the watch loop starts');
+});
+
+test('Part H: missing usage telemetry is not replaced by a zeroed report', () => {
+  const root = fixtureRoot();
+  const usageFile = path.join(root, 'missing-usage.json');
+  const job = { usageFile, harness: 'opencode-direct', model: 'm', upstream: 'u' };
+  const written = writeUsageReportFromHarnessResult(job, {
+    exitCode: 0,
+    stdout: 'worker finished without token events',
+  });
+  assert.equal(written, null);
+  assert.equal(fs.existsSync(usageFile), false);
+  const checked = enforceTokenBudget({ exitCode: 0, stderr: '' }, { maxTokens: 100 }, usageFile);
+  assert.equal(checked.failureReason, 'TOKEN_BUDGET_UNVERIFIED');
+});
+
+test('Part H: host brain gate tests the controller checkout, not the isolated worker tree', () => {
+  const workerRoot = path.join(fixtureRoot(), 'worker');
+  const hostCwd = path.join(fixtureRoot(), 'controller');
+  fs.mkdirSync(path.join(workerRoot, 'tools', 'ai-brain', 'test'), { recursive: true });
+  fs.writeFileSync(path.join(workerRoot, 'tools', 'ai-brain', 'test', 'worker.test.js'), '');
+  fs.mkdirSync(path.join(hostCwd, 'tools', 'ai-brain', 'test'), { recursive: true });
+  fs.writeFileSync(path.join(hostCwd, 'tools', 'ai-brain', 'test', 'controller.test.js'), '');
+  let capturedCwd = null;
+  runHostBrainGate(
+    { cwd: workerRoot, workerRoot },
+    {
+      hostCwd,
+      spawnSync: (_node, _args, opts) => {
+        capturedCwd = opts.cwd;
+        return { status: 0, stdout: 'ℹ pass 1\n', stderr: '' };
+      },
+    }
+  );
+  assert.equal(capturedCwd, hostCwd);
+});
+
+test('Part H: host brain gate resolves injected Windows roots with host path semantics', () => {
+  let capturedCwd = null;
+  const controllerRoot = path.resolve(__dirname, '..', '..', '..');
+  const result = runHostBrainGate(
+    {},
+    {
+      hostCwd: 'C:\\Users\\gumac\\AI\\shipde-platform\\.worktrees\\ai64launch',
+      platform: 'linux',
+      spawnSync: (_node, _args, opts) => {
+        capturedCwd = opts.cwd;
+        return { status: 0, stdout: 'ℹ pass 1\n', stderr: '' };
+      },
+    }
+  );
+  assert.equal(result.pass, true);
+  assert.equal(capturedCwd, controllerRoot);
+});
+
+test('Part H: cli orchestrate handles malformed token-budgets without uncaught throw', async () => {
+  const root = fixtureRoot();
+  const badBudget = path.join(root, 'bad-budgets.json');
+  fs.writeFileSync(badBudget, '{ malformed:');
+  const goalFile = path.join(root, 'goal.txt');
+  fs.writeFileSync(goalFile, 'goal');
+  const specsFile = path.join(root, 'specs.json');
+  fs.writeFileSync(specsFile, JSON.stringify([{ id: 'S1', files: [] }]));
+  let exitCode = null;
+  const res = await cli.orchestrateCommand(
+    {
+      goal: goalFile,
+      specs: specsFile,
+      'token-budgets': badBudget,
+    },
+    {
+      exit: (code) => {
+        exitCode = code;
+      },
+    }
+  );
+  assert.equal(exitCode, 2);
+  assert.equal(res.exitCode, 2);
 });
 
 test('a BOM-prefixed CLOSED verdict is accepted and a BOM-prefixed PARTIAL is still refused', () => {

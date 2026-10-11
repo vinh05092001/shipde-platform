@@ -2861,6 +2861,20 @@ function orchestrateCommand(args, deps = {}) {
       ? d.listAccounts()
       : require('./accounts').listAccounts();
   const evidenceAccounts = mergeEvidenceAccounts(inputAccounts, registryAccounts);
+  let tokenBudgets = null;
+  if (typeof args['token-budgets'] === 'string') {
+    try {
+      tokenBudgets = JSON.parse(fsx.readFileSync(args['token-budgets'], 'utf8'));
+    } catch (err) {
+      console.error(
+        `orchestrate: failed to parse token budgets from ${args['token-budgets']}: ${err.message}`
+      );
+      exit(2);
+      return Promise.resolve({ exitCode: 2 });
+    }
+  } else if (args['isolated-worker']) {
+    tokenBudgets = require('./intake').DEFAULT_TOKEN_BUDGETS;
+  }
   // The live loop is async (TASK-AI-65): the JEV assessment behind every
   // Controller selection returns a promise. An unhandled rejection would crash
   // silently, so it is caught here and turned into a non-zero exit instead.
@@ -2881,6 +2895,13 @@ function orchestrateCommand(args, deps = {}) {
     isolatedWorker: Boolean(args['isolated-worker']),
     externalWorkers: args['external-workers'],
     workerTimeoutMs,
+    ...(args.rtk ? { rtk: args.rtk } : {}),
+    ...(tokenBudgets ? { tokenBudgets } : {}),
+    ...(typeof args['context-manifest'] === 'string'
+      ? { contextManifest: args['context-manifest'] }
+      : {}),
+    ...(args['isolated-worker'] || args['context-manifest'] ? { enableContextPack: true } : {}),
+    ...(typeof d.run === 'function' ? { injectedRun: true } : {}),
     decisionDir: args['decision-dir'] || decisionsApi.DEFAULT_DIR,
     checkpointFile: typeof args.checkpoint === 'string' ? args.checkpoint : null,
     usageDir: typeof args['usage-dir'] === 'string' ? args['usage-dir'] : null,
@@ -2940,6 +2961,102 @@ function orchestrateCommand(args, deps = {}) {
       exit(1);
       return { exitCode: 1, error: err };
     });
+}
+
+function tokenReportCommand(args, deps = {}) {
+  const fsx = (deps && deps.fs) || require('fs');
+  const dir = typeof args.dir === 'string' ? args.dir : path.join(__dirname, 'data', 'usage');
+  const records = [];
+  const decisionsDir = typeof args['decision-dir'] === 'string' ? args['decision-dir'] : null;
+  if (decisionsDir && fsx.existsSync(decisionsDir)) {
+    for (const name of fsx.readdirSync(decisionsDir)) {
+      if (!name.endsWith('.jsonl')) continue;
+      for (const line of fsx.readFileSync(path.join(decisionsDir, name), 'utf8').split(/\r?\n/)) {
+        try {
+          const row = JSON.parse(line);
+          if (!row.tokenUsage) continue;
+          records.push({
+            workItem: row.workItemId || 'unknown',
+            model: row.model || 'unknown',
+            input: Number(row.tokenUsage.input || 0),
+            cacheRead: Number(row.tokenUsage.cacheRead || 0),
+            output: Number(row.tokenUsage.output || 0),
+          });
+        } catch (_) {
+          /* Ignore a truncated final line. */
+        }
+      }
+    }
+  }
+  function visit(folder) {
+    if (!fsx.existsSync(folder)) return;
+    for (const name of fsx.readdirSync(folder)) {
+      const file = path.join(folder, name);
+      let stat;
+      try {
+        stat = fsx.statSync(file);
+      } catch (_) {
+        continue;
+      }
+      if (stat.isDirectory()) visit(file);
+      else if (name.endsWith('.json')) {
+        try {
+          const row = JSON.parse(fsx.readFileSync(file, 'utf8'));
+          const usage = row.usage || row;
+          records.push({
+            workItem: row.workItemId || row.work_item_id || name.replace(/-\\d+.*$/, ''),
+            model: row.model || row.modelId || 'unknown',
+            input: Number(usage.input_tokens ?? usage.input ?? 0) || 0,
+            cacheRead:
+              Number(usage.cache_read_tokens ?? usage.cacheRead ?? usage.cache_read ?? 0) || 0,
+            output: Number(usage.output_tokens ?? usage.output ?? 0) || 0,
+          });
+        } catch (_) {
+          /* Ignore incomplete session exports. */
+        }
+      }
+    }
+  }
+  visit(dir);
+  const totals = new Map();
+  for (const row of records) {
+    for (const group of ['model', 'workItem']) {
+      const key = row[group];
+      const current = totals.get(group + ':' + key) || {
+        group,
+        key,
+        input: 0,
+        cacheRead: 0,
+        output: 0,
+        sessions: 0,
+      };
+      current.input += row.input;
+      current.cacheRead += row.cacheRead;
+      current.output += row.output;
+      current.sessions += 1;
+      totals.set(group + ':' + key, current);
+    }
+  }
+  const report = { records: records.length, totals: [...totals.values()] };
+  if (args.json) (deps.log || console.log)(JSON.stringify(report, null, 2));
+  else {
+    (deps.log || console.log)('Token usage (' + records.length + ' sessions)');
+    for (const row of report.totals)
+      (deps.log || console.log)(
+        row.group +
+          ' ' +
+          row.key +
+          ': input=' +
+          row.input +
+          ' cache-read=' +
+          row.cacheRead +
+          ' output=' +
+          row.output +
+          ' sessions=' +
+          row.sessions
+      );
+  }
+  return report;
 }
 
 async function mergeCommand(args) {
@@ -3179,6 +3296,7 @@ function main(argv = process.argv.slice(2), deps = {}) {
   const command = args._[0] || 'reconcile';
 
   if (command === 'reconcile') return reconcileCommand(args);
+  if (command === 'report' && args._[1] === 'tokens') return tokenReportCommand(args);
   if (command === 'manifest') return manifestCommand(args);
   if (command === 'prove') return proveCommand(args);
   if (command === 'quota') return quotaCommand(args);
@@ -3431,6 +3549,7 @@ module.exports = {
   orchestrateCommand,
   mergeCommand,
   intakeCommand,
+  tokenReportCommand,
   planCommand,
   nextCommand: (args, deps) => {
     const nextDeps = Object.assign({}, deps || {});
