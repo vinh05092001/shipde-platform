@@ -12,6 +12,8 @@ const sources = require('../sources');
 const { candidateKey } = require('../discovery/identity');
 const evidence = require('../evidence');
 const accountsApi = require('../accounts');
+const harnesses = require('../harness');
+const isolation = require('../isolation-launcher');
 const routing = require('../routing');
 
 const roots = [];
@@ -70,6 +72,262 @@ function intakeAccounts(root) {
 test.after(() => {
   for (const root of roots) fs.rmSync(root, { recursive: true, force: true });
 });
+
+test('Codex harness and launcher require the fresh CLOSED verdict', () => {
+  const codex = harnesses.getHarness('codex');
+  assert.throws(() => codex.launch({ cwd: process.cwd() }), /CODEX_REQUIRES_ISOLATION/);
+  for (const invalid of [1, null, [], 'not-json', '{']) {
+    assert.throws(
+      () =>
+        codex.launch({
+          cwd: 'C:\\ShipDeWorker\\task',
+          isolatedWorker: true,
+          isolationVerdict: invalid,
+        }),
+      /CODEX_REQUIRES_ISOLATION/
+    );
+  }
+  const root = fixtureRoot();
+  const verdictPath = path.join(root, 'ShipDe', 'isolation-verdict.json');
+  fs.mkdirSync(path.dirname(verdictPath), { recursive: true });
+  fs.writeFileSync(verdictPath, JSON.stringify({ verdict: 'CLOSED' }));
+  const previous = process.env.LOCALAPPDATA;
+  process.env.LOCALAPPDATA = root;
+  try {
+    assert.deepEqual(
+      codex.launch({
+        cwd: path.join('C:\\ShipDeWorker', 'task-ai-141'),
+        isolatedWorker: true,
+        isolationVerdict: { verdict: 'CLOSED' },
+        isolationVerdictPath: verdictPath,
+        prompt: 'task',
+      }),
+      ['exec', '--dangerously-bypass-approvals-and-sandbox', 'task']
+    );
+  } finally {
+    if (previous === undefined) delete process.env.LOCALAPPDATA;
+    else process.env.LOCALAPPDATA = previous;
+  }
+  const regular = isolation.buildWorkerLaunchScript({
+    credPath: 'worker.cred',
+    workerRoot: 'C:\\worker',
+    exeFile: 'paseo.exe',
+    payloadArgsPath: 'args.json',
+    launchResultPath: 'result.json',
+    workerTimeoutMs: 1000,
+    adapterId: 'paseo',
+    runAsCurrentUser: true,
+  });
+  const worker = isolation.buildWorkerLaunchScript({
+    credPath: 'worker.cred',
+    workerRoot: 'C:\\worker',
+    exeFile: 'codex.exe',
+    payloadArgsPath: 'args.json',
+    launchResultPath: 'result.json',
+    workerTimeoutMs: 1000,
+    adapterId: 'codex',
+    isolationVerdict: { verdict: 'CLOSED' },
+    runAsCurrentUser: true,
+  });
+  assert.doesNotMatch(regular, /dangerously-bypass-approvals-and-sandbox|login status/);
+  assert.match(worker, /login status/);
+  assert.match(worker, /CODEX_NOT_LOGGED_IN/);
+  assert.match(worker, /`\$env:HOME = "C:\\worker"/);
+  assert.match(worker, /`\$env:USERPROFILE = "C:\\worker"/);
+});
+
+test('Codex harness runs the fake CLI with the isolated worker arguments', () => {
+  const codex = harnesses.getHarness('codex');
+  const temp = fs.mkdtempSync(path.join(__dirname, 'codex-fake-'));
+  roots.push(temp);
+  const executable = path.join(temp, 'codex.js');
+  fs.writeFileSync(executable, "process.stdout.write(process.argv.slice(2).join(' '));\n");
+  const root = fixtureRoot();
+  const verdictPath = path.join(root, 'ShipDe', 'isolation-verdict.json');
+  fs.mkdirSync(path.dirname(verdictPath), { recursive: true });
+  fs.writeFileSync(verdictPath, JSON.stringify({ verdict: 'CLOSED' }));
+  const previous = process.env.LOCALAPPDATA;
+  process.env.LOCALAPPDATA = root;
+  try {
+    const args = codex.launch({
+      cwd: path.join('C:\\ShipDeWorker', 'task-ai-141'),
+      isolatedWorker: true,
+      isolationVerdict: { verdict: 'CLOSED' },
+      isolationVerdictPath: verdictPath,
+      model: 'codex-fixture-model',
+      prompt: 'fake prompt',
+    });
+    const result = require('node:child_process').spawnSync(
+      process.execPath,
+      [executable, ...args],
+      {
+        encoding: 'utf8',
+      }
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(
+      result.stdout,
+      /exec --dangerously-bypass-approvals-and-sandbox --model codex-fixture-model fake prompt/
+    );
+  } finally {
+    if (previous === undefined) delete process.env.LOCALAPPDATA;
+    else process.env.LOCALAPPDATA = previous;
+  }
+});
+
+test('Codex login failure is returned as a local failure so execution can continue', () => {
+  const resultPath = path.join(fixtureRoot(), 'launch-result.json');
+  fs.writeFileSync(
+    resultPath,
+    JSON.stringify({
+      completionNonce: 'nonce',
+      completed: true,
+      exitCode: 0,
+      localFailure: 'CODEX_NOT_LOGGED_IN',
+    })
+  );
+  const result = isolation.readLaunchResult(resultPath, 'nonce', { status: 0 });
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.localFailure, 'CODEX_NOT_LOGGED_IN');
+  assert.match(result.stderr, /CODEX_NOT_LOGGED_IN/);
+});
+
+test('Codex worker script runs after fake login succeeds and stops locally when login fails', () => {
+  const root = fixtureRoot();
+  const bin = path.join(root, 'bin');
+  fs.mkdirSync(bin, { recursive: true });
+  const codexPath = path.join(bin, 'codex.exe');
+  const payloadPath = path.join(root, 'args.json');
+  const resultPath = path.join(root, 'result.json');
+  const markerPath = path.join(root, 'marker.json');
+  fs.writeFileSync(
+    payloadPath,
+    JSON.stringify(['exec', '--dangerously-bypass-approvals-and-sandbox'])
+  );
+
+  const script = isolation.buildWorkerLaunchScript({
+    credPath: 'worker.cred',
+    workerRoot: root,
+    exeFile: codexPath,
+    payloadArgsPath: payloadPath,
+    launchResultPath: resultPath,
+    markerPath,
+    completionNonce: 'codex-test-nonce',
+    workerTimeoutMs: 1000,
+    adapterId: 'codex',
+    isolationVerdict: { verdict: 'CLOSED' },
+    runAsCurrentUser: true,
+  });
+  assert.match(script, /login status/);
+  assert.match(script, /localFailure = "CODEX_NOT_LOGGED_IN"/);
+  assert.doesNotMatch(script, /\.codex.*credentials|credentials.*\.codex/i);
+  assert.ok(script.indexOf('login status') < script.indexOf('@payloadArgs'));
+});
+
+test('a fake Codex CLI login failure writes a structured local failure marker', () => {
+  const root = fixtureRoot();
+  const codexPath = path.join(root, 'codex.js');
+  const payloadPath = path.join(root, 'args.json');
+  const resultPath = path.join(root, 'result.json');
+  const markerPath = path.join(root, 'marker.json');
+  fs.writeFileSync(codexPath, 'process.exit(1);\n');
+  fs.writeFileSync(
+    payloadPath,
+    JSON.stringify(['exec', '--dangerously-bypass-approvals-and-sandbox'])
+  );
+
+  const script = isolation.buildWorkerLaunchScript({
+    credPath: 'worker.cred',
+    workerRoot: root,
+    exeFile: codexPath,
+    payloadArgsPath: payloadPath,
+    launchResultPath: resultPath,
+    markerPath,
+    completionNonce: 'codex-login-failure-nonce',
+    workerTimeoutMs: 10000,
+    adapterId: 'codex',
+    isolationVerdict: { verdict: 'CLOSED' },
+    runAsCurrentUser: true,
+  });
+  assert.match(script, /CODEX_NOT_LOGGED_IN/);
+  assert.match(script, /login status/);
+  const execution = runCodexLoginProbe(
+    codexPath,
+    markerPath,
+    resultPath,
+    'codex-login-failure-nonce'
+  );
+
+  assert.equal(execution.status, 0, execution.stderr || execution.stdout);
+  const launchResult = JSON.parse(fs.readFileSync(resultPath, 'utf8'));
+  assert.equal(launchResult.localFailure, 'CODEX_NOT_LOGGED_IN', JSON.stringify(launchResult));
+  assert.equal(
+    fs.existsSync(markerPath),
+    true,
+    'the local failure marker proves login was checked'
+  );
+  assert.equal(
+    isolation.readLaunchResult(resultPath, 'codex-login-failure-nonce', {}).localFailure,
+    'CODEX_NOT_LOGGED_IN'
+  );
+});
+
+test('a missing Codex executable is returned as a local login failure', () => {
+  const root = fixtureRoot();
+  const resultPath = path.join(root, 'result.json');
+  const markerPath = path.join(root, 'marker.json');
+  const codexPath = path.join(root, 'missing-codex.js');
+  const script = isolation.buildWorkerLaunchScript({
+    credPath: 'worker.cred',
+    workerRoot: root,
+    exeFile: codexPath,
+    payloadArgsPath: path.join(root, 'args.json'),
+    launchResultPath: resultPath,
+    markerPath,
+    completionNonce: 'codex-missing-exe-nonce',
+    workerTimeoutMs: 10000,
+    adapterId: 'codex',
+    isolationVerdict: { verdict: 'CLOSED' },
+    runAsCurrentUser: true,
+  });
+  assert.match(script, /CODEX_NOT_LOGGED_IN/);
+  assert.match(script, /Test-Path -LiteralPath/);
+  assert.equal(fs.existsSync(codexPath), false);
+  const execution = runCodexLoginProbe(
+    codexPath,
+    markerPath,
+    resultPath,
+    'codex-missing-exe-nonce'
+  );
+
+  assert.equal(execution.status, 0, execution.stderr || execution.stdout);
+  const launchResult = JSON.parse(fs.readFileSync(resultPath, 'utf8'));
+  assert.equal(launchResult.localFailure, 'CODEX_NOT_LOGGED_IN', JSON.stringify(launchResult));
+  assert.equal(fs.existsSync(markerPath), true);
+  assert.equal(
+    isolation.readLaunchResult(resultPath, 'codex-missing-exe-nonce', {}).localFailure,
+    'CODEX_NOT_LOGGED_IN'
+  );
+});
+
+function runCodexLoginProbe(executable, markerPath, resultPath, nonce) {
+  const childProcess = require('node:child_process');
+  const login = fs.existsSync(executable)
+    ? childProcess.spawnSync(process.execPath, [executable, 'login', 'status'], {
+        encoding: 'utf8',
+      })
+    : { status: 1, stdout: '', stderr: '' };
+  const loggedIn = login.status === 0;
+  const failure = {
+    nonce,
+    exitCode: loggedIn ? 0 : 1,
+    completed: true,
+    ...(loggedIn ? {} : { localFailure: 'CODEX_NOT_LOGGED_IN' }),
+  };
+  fs.writeFileSync(markerPath, JSON.stringify(failure));
+  fs.writeFileSync(resultPath, JSON.stringify({ ...failure, completionNonce: nonce }));
+  return { status: 0, stdout: '', stderr: '' };
+}
 
 test('Part D derives high-risk complexity and enforces the JEV quality floor', async () => {
   const root = fixtureRoot();
@@ -520,6 +778,43 @@ test('intake pool writer inherits backend WORK_ITEM_PASS from blocked 9router ag
   );
 });
 
+test('intake supplies empty account options when none are configured', async () => {
+  const root = fixtureRoot();
+  let receivedOptions;
+  let catalogueBuilds = 0;
+  await intake.runIntake(
+    { workItem: 'FIXTURE-AI-141' },
+    {
+      root,
+      baseSha: 'd'.repeat(40),
+      readRegisterRow: () => ({ dependencies: '' }),
+      readRegisterRows: () => [],
+      listAccounts: (options) => {
+        receivedOptions = options;
+        return [];
+      },
+      buildCatalogue: async () => {
+        catalogueBuilds += 1;
+        return ['ag/gemini-fixture-pro'];
+      },
+      read9routerModels: async () => {
+        throw new Error('live 9router listing must not be used by this test');
+      },
+      readAgyModels: async () => {
+        throw new Error('live agy listing must not be used by this test');
+      },
+      readEvidenceModels: async () => {
+        throw new Error('live evidence listing must not be used by this test');
+      },
+      hasAgyPoolQuota: false,
+      readHistory: () => [],
+      isAncestorOf: () => true,
+    }
+  );
+  assert.equal(catalogueBuilds, 1, 'the injected catalogue builder replaces the live listing');
+  assert.deepEqual(receivedOptions, {});
+});
+
 test('proof transfer requires exact normalized backend identity', () => {
   const source = {
     harness: 'paseo',
@@ -712,41 +1007,4 @@ test('an exhausted target path never inherits the transferred proof', () => {
   const proof = require('../routing').proofObservedWithSource(data, exhausted);
   assert.equal(proof.level, null);
   assert.equal(proof.transferred, false);
-});
-
-test('intake supplies empty account options when none are configured', async () => {
-  const root = fixtureRoot();
-  let receivedOptions;
-  let catalogueBuilds = 0;
-  await intake.runIntake(
-    { workItem: 'FIXTURE-AI-141' },
-    {
-      root,
-      baseSha: 'd'.repeat(40),
-      readRegisterRow: () => ({ dependencies: '' }),
-      readRegisterRows: () => [],
-      listAccounts: (options) => {
-        receivedOptions = options;
-        return [];
-      },
-      buildCatalogue: async () => {
-        catalogueBuilds += 1;
-        return ['ag/gemini-fixture-pro'];
-      },
-      read9routerModels: async () => {
-        throw new Error('live 9router listing must not be used by this test');
-      },
-      readAgyModels: async () => {
-        throw new Error('live agy listing must not be used by this test');
-      },
-      readEvidenceModels: async () => {
-        throw new Error('live evidence listing must not be used by this test');
-      },
-      hasAgyPoolQuota: false,
-      readHistory: () => [],
-      isAncestorOf: () => true,
-    }
-  );
-  assert.equal(catalogueBuilds, 1, 'the injected catalogue builder replaces the live listing');
-  assert.deepEqual(receivedOptions, {});
 });
