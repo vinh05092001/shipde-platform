@@ -266,4 +266,4 @@ This parks and fast-forwards every clean worktree. Then choose **Continue pipeli
 - GitHub `main` rejects direct/force pushes and requires `contract` plus `application-gate`.
 - PR #1 is merged only after an independent Codex `PASS`.
 - `TASK-FOUND-01` is the next and only implementation item.
-`n`nIf the isolated Codex probe reports CODEX_NOT_LOGGED_IN, sign in as the worker account and confirm codex login status succeeds there. The Controller treats either a failed native command invocation or a nonzero Codex exit code as a local failure and continues to another candidate.`n`nIf the isolated Codex probe reports CODEX_NOT_LOGGED_IN, sign in as the worker account and confirm codex login status succeeds there. The Controller treats either a failed native command invocation or a nonzero Codex exit code as a local failure and continues to another candidate.
+- If an isolated Codex probe reports `CODEX_NOT_LOGGED_IN`, sign in as the worker account and confirm `codex login status` succeeds there. The Controller records either a failed native invocation or nonzero exit as a local failure and continues to another candidate.
