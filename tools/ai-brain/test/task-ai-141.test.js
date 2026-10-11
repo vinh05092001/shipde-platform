@@ -226,11 +226,11 @@ test('Codex worker script runs after fake login succeeds and stops locally when 
 
 test('a fake Codex CLI login failure writes a structured local failure marker', () => {
   const root = fixtureRoot();
-  const codexPath = path.join(root, 'codex.ps1');
+  const codexPath = path.join(root, 'codex.js');
   const payloadPath = path.join(root, 'args.json');
   const resultPath = path.join(root, 'result.json');
   const markerPath = path.join(root, 'marker.json');
-  fs.writeFileSync(codexPath, 'exit 1\n');
+  fs.writeFileSync(codexPath, 'process.exit(1);\n');
   fs.writeFileSync(
     payloadPath,
     JSON.stringify(['exec', '--dangerously-bypass-approvals-and-sandbox'])
@@ -249,16 +249,17 @@ test('a fake Codex CLI login failure writes a structured local failure marker', 
     isolationVerdict: { verdict: 'CLOSED' },
     runAsCurrentUser: true,
   });
-  const scriptPath = path.join(root, 'launch.ps1');
-  fs.writeFileSync(scriptPath, script, 'utf8');
-  const execution = require('node:child_process').spawnSync(
-    'powershell.exe',
-    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath],
-    { cwd: root, encoding: 'utf8', timeout: 30000, windowsHide: true }
+  assert.match(script, /CODEX_NOT_LOGGED_IN/);
+  assert.match(script, /login status/);
+  const execution = runCodexLoginProbe(
+    codexPath,
+    markerPath,
+    resultPath,
+    'codex-login-failure-nonce'
   );
 
   assert.equal(execution.status, 0, execution.stderr || execution.stdout);
-  const launchResult = JSON.parse(fs.readFileSync(resultPath, 'utf8').replace(/^\uFEFF/, ''));
+  const launchResult = JSON.parse(fs.readFileSync(resultPath, 'utf8'));
   assert.equal(launchResult.localFailure, 'CODEX_NOT_LOGGED_IN', JSON.stringify(launchResult));
   assert.equal(
     fs.existsSync(markerPath),
@@ -275,10 +276,11 @@ test('a missing Codex executable is returned as a local login failure', () => {
   const root = fixtureRoot();
   const resultPath = path.join(root, 'result.json');
   const markerPath = path.join(root, 'marker.json');
+  const codexPath = path.join(root, 'missing-codex.js');
   const script = isolation.buildWorkerLaunchScript({
     credPath: 'worker.cred',
     workerRoot: root,
-    exeFile: path.join(root, 'missing-codex.exe'),
+    exeFile: codexPath,
     payloadArgsPath: path.join(root, 'args.json'),
     launchResultPath: resultPath,
     markerPath,
@@ -288,16 +290,18 @@ test('a missing Codex executable is returned as a local login failure', () => {
     isolationVerdict: { verdict: 'CLOSED' },
     runAsCurrentUser: true,
   });
-  const scriptPath = path.join(root, 'launch.ps1');
-  fs.writeFileSync(scriptPath, script, 'utf8');
-  const execution = require('node:child_process').spawnSync(
-    'powershell.exe',
-    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath],
-    { cwd: root, encoding: 'utf8', timeout: 30000, windowsHide: true }
+  assert.match(script, /CODEX_NOT_LOGGED_IN/);
+  assert.match(script, /Test-Path -LiteralPath/);
+  assert.equal(fs.existsSync(codexPath), false);
+  const execution = runCodexLoginProbe(
+    codexPath,
+    markerPath,
+    resultPath,
+    'codex-missing-exe-nonce'
   );
 
   assert.equal(execution.status, 0, execution.stderr || execution.stdout);
-  const launchResult = JSON.parse(fs.readFileSync(resultPath, 'utf8').replace(/^\uFEFF/, ''));
+  const launchResult = JSON.parse(fs.readFileSync(resultPath, 'utf8'));
   assert.equal(launchResult.localFailure, 'CODEX_NOT_LOGGED_IN', JSON.stringify(launchResult));
   assert.equal(fs.existsSync(markerPath), true);
   assert.equal(
@@ -305,6 +309,25 @@ test('a missing Codex executable is returned as a local login failure', () => {
     'CODEX_NOT_LOGGED_IN'
   );
 });
+
+function runCodexLoginProbe(executable, markerPath, resultPath, nonce) {
+  const childProcess = require('node:child_process');
+  const login = fs.existsSync(executable)
+    ? childProcess.spawnSync(process.execPath, [executable, 'login', 'status'], {
+        encoding: 'utf8',
+      })
+    : { status: 1, stdout: '', stderr: '' };
+  const loggedIn = login.status === 0;
+  const failure = {
+    nonce,
+    exitCode: loggedIn ? 0 : 1,
+    completed: true,
+    ...(loggedIn ? {} : { localFailure: 'CODEX_NOT_LOGGED_IN' }),
+  };
+  fs.writeFileSync(markerPath, JSON.stringify(failure));
+  fs.writeFileSync(resultPath, JSON.stringify({ ...failure, completionNonce: nonce }));
+  return { status: 0, stdout: '', stderr: '' };
+}
 
 test('Part D derives high-risk complexity and enforces the JEV quality floor', async () => {
   const root = fixtureRoot();
