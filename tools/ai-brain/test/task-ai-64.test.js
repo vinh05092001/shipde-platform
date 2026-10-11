@@ -3438,7 +3438,7 @@ describe('TASK-AI-64 repair keeps worker commit and reviewer uses gateway+upstre
       forbiddenDomains,
       {},
       {},
-      {},
+      { dir: tmpDir('task-ai-64-direct-review-'), now: Date.now() },
       Date.now()
     );
 
