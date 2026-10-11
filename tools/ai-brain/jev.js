@@ -177,13 +177,15 @@ function buildJevAsk(source, options) {
       const value = String(option);
       criteria[value] = 'Choose ' + value + ' when it best fits the supplied state.';
     }
+    const questionKey =
+      question.kind === 'select-eligible-model' ? 'eligibleModel' : 'weightProfile';
     const raw = await postJson(
       endpoint,
       {
         model: source.model,
         state: question.evidence,
         questions: {
-          weightProfile: {
+          [questionKey]: {
             type: 'choice',
             instructions: question.prompt,
             criteria,

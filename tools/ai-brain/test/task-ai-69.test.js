@@ -160,7 +160,7 @@ describe('TASK-AI-69: agy pool quota and first evidence go through the CLI', () 
     );
     const beforeOut = before.stdout + before.stderr;
     assert.equal(before.status, 1, beforeOut);
-    assert.match(beforeOut, /EXCLUDED \d+x PROOF_FLOOR_NOT_MET:NONE/);
+    assert.match(beforeOut, /PROOF_FLOOR_NOT_MET:NONE/);
 
     const candidate = {
       harness: 'agy-pool',

@@ -224,6 +224,65 @@ function jevQuestion(profile) {
   };
 }
 
+function jevModelChoiceQuestion(profile, candidates) {
+  const options = (candidates || []).map((candidate) => candidate.candidateKey);
+  const rankedCandidates = (candidates || []).map((candidate) =>
+    Object.assign({}, candidate, {
+      quotaStatus: candidate.headroomStatus || candidate.quotaStatus || 'unknown',
+    })
+  );
+  return {
+    kind: 'select-eligible-model',
+    prompt:
+      'Choose the best candidate from the eligible ranked options for this task. Return one option only.',
+    evidence: JSON.stringify({ profile, candidates: rankedCandidates }),
+    options,
+  };
+}
+
+function candidateIdentityKey(candidate) {
+  return candidateKey(candidate);
+}
+
+async function adviseModelChoice(result, profile, options) {
+  const opts = options || {};
+  const top = ((result && result.ranking) || []).slice(0, Math.max(1, Number(opts.topN) || 5));
+  const question = jevModelChoiceQuestion(profile, top);
+  const advised = await jev.adviseOrReason(question, {
+    ask: typeof opts.ask === 'function' ? opts.ask : undefined,
+    minConfidence: Number.isFinite(Number(opts.minConfidence))
+      ? Number(opts.minConfidence)
+      : undefined,
+  });
+  const eligible = new Set(top.map((candidate) => candidate.candidateKey));
+  const chosen =
+    advised.handledBy === 'jev' &&
+    advised.outcome === jev.Outcome.DECIDED &&
+    eligible.has(advised.choice)
+      ? advised.choice
+      : result.chosen;
+  const providerFailure =
+    advised.handledBy !== 'jev' &&
+    (advised.reason === 'UNREACHABLE' || advised.reason === 'TIMEOUT');
+  return {
+    chosen,
+    advice: {
+      outcome: chosen === advised.choice && advised.handledBy === 'jev' ? 'DECIDED' : 'UNDECIDED',
+      choice: chosen === advised.choice && advised.handledBy === 'jev' ? advised.choice : null,
+      confidence: advised.handledBy === 'jev' ? advised.confidence : 0,
+      reason:
+        chosen === advised.choice && advised.handledBy === 'jev'
+          ? advised.reason || 'JEV_MODEL_CHOICE'
+          : providerFailure
+            ? 'JEV_PROVIDER_FAILED'
+            : (advised.jev && advised.jev.reason) ||
+              advised.reason ||
+              'DETERMINISTIC_RANKING_FALLBACK',
+      topN: top.map((candidate) => candidate.candidateKey),
+    },
+  };
+}
+
 /**
  * The deterministic Controller reasoning used when JEV cannot advise. Latency
  * priority can only steer non-quality-critical roles; a security review never
@@ -254,7 +313,12 @@ async function assessTask(profile, opts) {
   const fallbackId = controllerFallbackProfile(profile);
 
   const result = await jev.adviseOrReason(question, {
-    ask: typeof options.ask === 'function' ? options.ask : undefined,
+    ask:
+      typeof options.weightingAsk === 'function'
+        ? options.weightingAsk
+        : typeof options.ask === 'function'
+          ? options.ask
+          : undefined,
     minConfidence: Number.isFinite(Number(options.minConfidence))
       ? Number(options.minConfidence)
       : undefined,
@@ -323,6 +387,15 @@ function claudeFamilyExclusion(role, modelId) {
   if (!WORKER_REVIEWER_ROLES.has(role)) return null;
   if (!CLAUDE_FAMILY_PATTERN.test(String(modelId || ''))) return null;
   return CLAUDE_FAMILY_REASON;
+}
+
+function roleLaneMismatch(role, qualifiedRoles) {
+  if (!Array.isArray(qualifiedRoles) || qualifiedRoles.length === 0) return false;
+  if (qualifiedRoles.includes('*')) return false;
+  if (role === 'writer') {
+    return !qualifiedRoles.some((r) => /^(author|writer)[.:]/i.test(String(r)));
+  }
+  return false;
 }
 
 const publisher = require('./publisher');
@@ -755,6 +828,44 @@ function candidateContextWindow(candidate) {
   );
 }
 
+function isIndependentReviewerCandidate(writer, reviewer) {
+  if (!writer || !reviewer) return false;
+  const writerKey = candidateKey(writer);
+  const writerDomain = canonicalFailureDomain(writer);
+  const reviewerKey = candidateKey(reviewer);
+  const reviewerDomain = canonicalFailureDomain(reviewer);
+  if (!writerKey || !writerDomain || writerDomain === 'unknown') return false;
+  if (!reviewerKey || !reviewerDomain || reviewerDomain === 'unknown') return false;
+  if (reviewerKey === writerKey) return false;
+  if (reviewerDomain === writerDomain) return false;
+  if (
+    !Array.isArray(reviewer.qualifiedRoles) ||
+    !reviewer.qualifiedRoles.some((role) => /review/i.test(role))
+  ) {
+    return false;
+  }
+  if (reviewer.reservationStatus && reviewer.reservationStatus !== 'reserved') return false;
+  const reviewerProof = reviewer.proofLevel || proofObserved(reviewer.evidenceData, reviewer);
+  const reviewerPrior = reviewer.priorTier || reviewer.prior?.tier;
+  const strongReviewer =
+    (reviewerProof && evidence.ProofRank[reviewerProof] >= evidence.ProofRank.WORK_ITEM_PASS) ||
+    reviewer.strong === true ||
+    reviewerPrior === 'T1';
+  return Boolean(strongReviewer);
+}
+
+function findIndependentReviewerCandidate(candidate, reviewers) {
+  if (!candidate) return null;
+  return (
+    (reviewers || []).find((reviewer) => isIndependentReviewerCandidate(candidate, reviewer)) ||
+    null
+  );
+}
+
+function hasIndependentReviewerCandidate(candidate, reviewers) {
+  return Boolean(findIndependentReviewerCandidate(candidate, reviewers));
+}
+
 /** Blended per-million cost, accepting the numeric or the offering object form. */
 function blendedCost(candidate) {
   const c = candidate && candidate.cost;
@@ -872,9 +983,35 @@ function evidenceAgePenalty(candidate, now) {
  */
 function scoreForProfile(candidate, assessment, ctx) {
   const now = (ctx && ctx.now) || Date.now();
-  const prior = priorFor(candidate, ctx && ctx.role, ctx && ctx.priors);
+  const prior = priorFor(candidate, ctx && ctx.role, ctx && ctx.priors, now);
   const latency = latencyScoreOf(candidate);
-  const quality = qualityScoreOf(candidate, now);
+  const internalQuality = qualityScoreOf(candidate, now);
+  const priorUsable = prior && !prior.stale;
+  const storedEvidence = evidence.getEvidence(ctx && ctx.evidenceData, candidate) || [];
+  const internalEvidence =
+    storedEvidence.length > 0 ? storedEvidence : (candidate && candidate.evidence) || [];
+  const evidenceCount = internalEvidence.filter((item) => item && item.status === 'passed').length;
+  const hasQualityFailure = internalEvidence.some((item) => item && item.status === 'failed');
+  const qualityWeight = Number(
+    assessment && assessment.weights && assessment.weights.quality !== undefined
+      ? assessment.weights.quality
+      : 33
+  );
+  const priorQualityWeight = Math.max(0, Math.min(100, qualityWeight)) / 100;
+  const effectivePriorUsable = Boolean(priorUsable && !hasQualityFailure);
+  const priorWeight = effectivePriorUsable ? 1 / (1 + evidenceCount) : 0;
+  const effectivePriorWeight =
+    prior && prior.score !== undefined && effectivePriorUsable
+      ? priorWeight * priorQualityWeight
+      : 0;
+  const quality =
+    effectivePriorUsable && prior.score !== undefined
+      ? Math.round(
+          internalQuality === null
+            ? prior.score
+            : internalQuality * (1 - effectivePriorWeight) + prior.score * effectivePriorWeight
+        )
+      : internalQuality;
   const reliability = reliabilityScoreOf(candidate);
   const cost = costScoreOf(candidate);
 
@@ -917,7 +1054,24 @@ function scoreForProfile(candidate, assessment, ctx) {
   const headroomPenalty =
     candidate.headroomStatus === 'unknown' ? 15 : candidate.headroomStatus === 'tight' ? 10 : 0;
   score = Math.max(0, score - busyPenalty - agePenalty - headroomPenalty);
-  if (prior) score += prior.bonus;
+  // A scored prior is already blended into quality above. Only legacy priors
+  // without a numeric score retain the standalone tier bonus.
+  const weightedPriorContribution =
+    effectivePriorUsable && prior.score !== undefined
+      ? Math.round((prior.bonus * priorQualityWeight * wQuality) / totalWeight)
+      : effectivePriorUsable
+        ? prior.bonus
+        : 0;
+  const priorScoreIsBlended = effectivePriorUsable && prior.score !== undefined;
+  const scorePriorContribution = priorScoreIsBlended ? 0 : weightedPriorContribution;
+  if (scorePriorContribution) score += scorePriorContribution;
+  if (prior) {
+    if (prior.score !== undefined) {
+      prior.contribution = scorePriorContribution;
+      prior.normalizedScore = priorUsable ? prior.score / 100 : null;
+      prior.weight = effectivePriorWeight;
+    }
+  }
 
   return {
     score,
@@ -957,6 +1111,9 @@ function rankForProfile(candidates, profile, assessment, ctx) {
     : 0;
   const ranked = [];
   const rejected = [];
+  const probationKeys =
+    (ctx && ctx.probationCandidateKeys) || (context && context.probationCandidateKeys) || [];
+  const probation = new Set(probationKeys.filter((key) => typeof key === 'string'));
 
   if (Number(profile.currentWorkload) >= Number(profile.resourceCeiling)) {
     return {
@@ -973,7 +1130,8 @@ function rankForProfile(candidates, profile, assessment, ctx) {
     };
   }
 
-  for (const c of candidates || []) {
+  for (const candidate of candidates || []) {
+    const c = Object.assign({}, candidate);
     const key = candidateKey(c);
     const reject = (reasonCode, scope) =>
       rejected.push({
@@ -1019,6 +1177,10 @@ function rankForProfile(candidates, profile, assessment, ctx) {
       reject('WILDCARD_ACCOUNT', 'account');
       continue;
     }
+    if (roleLaneMismatch(profile.role, c.qualifiedRoles)) {
+      reject('ROLE_LANE_MISMATCH:' + profile.role, 'role');
+      continue;
+    }
 
     const caps = c.capabilities || {};
     const missingCapability = (profile.requiredCapabilities || []).find((cap) => !caps[cap]);
@@ -1052,15 +1214,81 @@ function rankForProfile(candidates, profile, assessment, ctx) {
       );
       continue;
     }
+    const candidateBlock = evidence.isCandidateBlocked(context.evidenceData, c);
+    if (
+      candidateBlock.blocked ||
+      c.blocked ||
+      c.parked ||
+      c.status === 'blocked' ||
+      ['UNAVAILABLE_NOW', 'GEO_BLOCKED', 'NO_CREDIT', 'RATE_LIMITED', 'AUTH_NEEDED'].includes(
+        c.status
+      )
+    ) {
+      reject(candidateBlock.reason || 'CANDIDATE_BLOCKED', 'candidate');
+      continue;
+    }
 
+    const probationPrior = priorFor(c, profile.role, priors, now);
+    const priorTier = probationPrior && probationPrior.tier;
+    const independentReviewerAvailable = hasIndependentReviewerCandidate(
+      c,
+      context.independentReviewerCandidates
+    );
+    const probationRequested =
+      probation.has(key) || c.probation === true || Boolean(priorTier === 'T1');
+    const candidateEvidence = evidence.getEvidence(context.evidenceData, c) || [];
+    const legacyEvidence = Array.isArray(c.evidence) ? c.evidence : [];
+    const allCandidateEvidence = candidateEvidence.concat(legacyEvidence);
+    const hasQualityFailure = allCandidateEvidence.some((item) => item && item.status === 'failed');
+    const hasInternalWorkItemPass = allCandidateEvidence.some(
+      (item) => item && item.status === 'passed' && item.proofLevel === 'WORK_ITEM_PASS'
+    );
+    const probationAllowed =
+      probationRequested &&
+      Boolean(probationPrior && !probationPrior.stale && priorTier === 'T1') &&
+      !hasInternalWorkItemPass &&
+      !hasQualityFailure &&
+      independentReviewerAvailable &&
+      (!['security', 'money', 'tenant'].some((risk) =>
+        (profile.riskDomains || []).includes(risk)
+      ) ||
+        independentReviewerAvailable);
+    const riskCritical = ['security', 'money', 'tenant'].some((risk) =>
+      (profile.riskDomains || []).includes(risk)
+    );
+    const riskProbationRefused =
+      riskCritical &&
+      !proofObservedWithSource(context.evidenceData, c).level &&
+      probationPrior &&
+      !probationPrior.stale &&
+      priorTier === 'T1' &&
+      !independentReviewerAvailable;
+    if (riskProbationRefused) {
+      reject('PROBATION_REQUIRES_INDEPENDENT_STRONG_REVIEWER', 'candidate');
+      continue;
+    }
+    let admittedOnProbation = false;
     if (profile.proofFloor !== 'NONE') {
       const observedProof = proofObservedWithSource(context.evidenceData, c);
       const observed = observedProof.level;
       const observedRank = observed ? evidence.ProofRank[observed] : 0;
       if (observedRank < evidence.ProofRank[profile.proofFloor]) {
-        reject('PROOF_FLOOR_NOT_MET:' + (observed || 'NONE'), 'candidate');
-        continue;
+        if (!probationAllowed || riskProbationRefused) {
+          reject('PROOF_FLOOR_NOT_MET:' + (observed || 'NONE'), 'candidate');
+          continue;
+        }
+        admittedOnProbation = true;
+        c.probation = true;
+        c.probationRequiresIndependentReview = true;
       }
+    } else if (
+      profile.proofFloor === 'NONE' &&
+      probationAllowed &&
+      !proofObservedWithSource(context.evidenceData, c).level
+    ) {
+      admittedOnProbation = true;
+      c.probation = true;
+      c.probationRequiresIndependentReview = true;
     }
 
     if (headroom.status === 'unknown') {
@@ -1089,16 +1317,16 @@ function rankForProfile(candidates, profile, assessment, ctx) {
         scoreBreakdown: scored.breakdown,
         reservationsHeld: scored.reservationsHeld,
         headroomStatus: headroom.status,
+        probation: admittedOnProbation,
+        probationRequiresIndependentReview: admittedOnProbation,
       })
     );
   }
 
   ranked.sort((a, b) => {
-    const aPriorBonus = a.scoreBreakdown.prior ? a.scoreBreakdown.prior.bonus : 0;
-    const bPriorBonus = b.scoreBreakdown.prior ? b.scoreBreakdown.prior.bonus : 0;
-    const aBaseScore = a.score - aPriorBonus;
-    const bBaseScore = b.score - bPriorBonus;
-    if (bBaseScore !== aBaseScore) return bBaseScore - aBaseScore;
+    if (b.score !== a.score) return b.score - a.score;
+    const aPriorBonus = Number(a.scoreBreakdown.prior && a.scoreBreakdown.prior.bonus) || 0;
+    const bPriorBonus = Number(b.scoreBreakdown.prior && b.scoreBreakdown.prior.bonus) || 0;
     if (bPriorBonus !== aPriorBonus) return bPriorBonus - aPriorBonus;
     if (a.reservationsHeld !== b.reservationsHeld) return a.reservationsHeld - b.reservationsHeld;
     return a.candidateKey.localeCompare(b.candidateKey);
@@ -1106,11 +1334,19 @@ function rankForProfile(candidates, profile, assessment, ctx) {
 
   const allZero =
     ranked.length > 0 &&
-    ranked.every(
-      (c) => c.score - (c.scoreBreakdown.prior ? c.scoreBreakdown.prior.bonus : 0) === 0
-    );
+    ranked.every((c) => {
+      const priorData = c.scoreBreakdown.prior;
+      const priorContribution =
+        priorData && priorData.contribution !== undefined
+          ? priorData.contribution
+          : priorData && priorData.score === undefined
+            ? priorData.bonus
+            : 0;
+      return c.score - (Number(priorContribution) || 0) === 0;
+    });
   const top3 = ranked.slice(0, 3);
-  const chosen = top3.length ? top3[0].candidateKey : null;
+  const deterministicChosen = top3.length ? top3[0].candidateKey : null;
+  const chosen = deterministicChosen;
   const reasonCode = allZero ? 'MODEL_SELECTION_NOT_PROVEN' : null;
   const reason = chosen
     ? 'fastest candidate meeting quality floor ' +
@@ -1132,13 +1368,33 @@ function rankForProfile(candidates, profile, assessment, ctx) {
     refused: chosen ? null : 'NO_CANDIDATE_MEETS_PROFILE',
     reasonCode,
     reason,
+    modelChoice: {
+      outcome: 'UNDECIDED',
+      choice: null,
+      confidence: 0,
+      reason: 'NOT_CONFIGURED',
+      topN: [],
+    },
   };
+}
+
+async function adviseRankedModelChoice(result, profile, options) {
+  const advice = await adviseModelChoice(result, profile, options);
+  return Object.assign({}, result, { chosen: advice.chosen, modelChoice: advice.advice });
 }
 
 /** One line of the top-3 output the operator reads. */
 function formatTopEntry(entry, rank) {
-  const duration = entry.expectedDurationMs || entry.latencyMs;
-  const durationText = Number.isFinite(Number(duration)) ? Number(duration) + 'ms' : 'unknown';
+  const measuredLatency =
+    Array.isArray(entry.evidence) &&
+    entry.evidence.find((item) => item && Number.isFinite(Number(item.latencyMs)));
+  const duration =
+    entry.expectedDurationMs ?? entry.latencyMs ?? (measuredLatency && measuredLatency.latencyMs);
+  const durationText =
+    duration !== null && duration !== undefined && Number.isFinite(Number(duration))
+      ? Number(duration) + 'ms'
+      : 'unknown';
+  const cost = blendedCost(entry);
   return (
     '  ' +
     rank +
@@ -1146,6 +1402,8 @@ function formatTopEntry(entry, rank) {
     entry.candidateKey +
     ' | ' +
     durationText +
+    ' | cost ' +
+    (cost === null ? 'unknown' : cost) +
     ' | proof ' +
     (rankProofOf(entry) || 'unproven') +
     ' | quota ' +
@@ -1389,7 +1647,7 @@ async function runProfileDispatch(args, deps) {
   const profile = rawProfile;
 
   const assessment = await assessTask(profile, {
-    ask: d.ask,
+    ask: d.weightingAsk || d.ask,
     minConfidence: d.minConfidence,
   });
 
@@ -1403,6 +1661,30 @@ async function runProfileDispatch(args, deps) {
     { now }
   );
 
+  const independentReviewerCandidates = annotated.filter((candidate) => {
+    if (
+      !candidate ||
+      candidate.blocked ||
+      candidate.parked ||
+      candidate.status === 'blocked' ||
+      ['UNAVAILABLE_NOW', 'GEO_BLOCKED', 'NO_CREDIT', 'RATE_LIMITED', 'AUTH_NEEDED'].includes(
+        candidate.status
+      ) ||
+      evidence.isCandidateBlocked(evidenceData, candidate).blocked
+    ) {
+      return false;
+    }
+    const reviewerHeadroom = ranking.resolveCandidateHeadroom(candidate, {
+      now,
+      headrooms: d.headrooms,
+      reservations: d.reservations,
+      accounts: d.accounts,
+      useStoredQuota: d.useStoredQuota !== false,
+      home: d.home,
+      storePath: d.storePath,
+    });
+    return reviewerHeadroom.status !== 'exhausted' && reviewerHeadroom.status !== 'cooling';
+  });
   const rankCtx = {
     now,
     priors: d.priors,
@@ -1421,8 +1703,35 @@ async function runProfileDispatch(args, deps) {
           ? Number(args['exploration-budget'])
           : 0,
     enforceKnownQuota: args.execute === true && hasQuotaAccountReadings(d.home, d.storePath),
+    independentReviewerCandidates,
   };
   const result = rankForProfile(annotated, profile, assessment, rankCtx);
+  const askForModelChoice =
+    typeof d.modelChoiceAsk === 'function'
+      ? d.modelChoiceAsk
+      : typeof d.ask === 'function'
+        ? d.ask
+        : undefined;
+  if (result.ranking.length && typeof askForModelChoice === 'function') {
+    try {
+      const advice = await adviseModelChoice(result, profile, {
+        ask: askForModelChoice,
+        minConfidence:
+          d.modelChoiceMinConfidence !== undefined ? d.modelChoiceMinConfidence : d.minConfidence,
+        topN: d.modelChoiceTopN,
+      });
+      result.chosen = advice.chosen;
+      result.modelChoice = advice.advice;
+    } catch (err) {
+      result.modelChoice = {
+        outcome: 'UNDECIDED',
+        choice: null,
+        confidence: 0,
+        reason: 'JEV_PROVIDER_FAILED: ' + ((err && err.message) || String(err)),
+        topN: result.ranking.slice(0, d.modelChoiceTopN || 5).map((entry) => entry.candidateKey),
+      };
+    }
+  }
   const execute = args.execute === true;
 
   if (result.reasonCode === 'MODEL_SELECTION_NOT_PROVEN' && execute) {
@@ -1467,6 +1776,13 @@ async function runProfileDispatch(args, deps) {
   // The decision log is the trace: profile, JEV result, full ranking, final
   // candidate — written even in a dry run, because the ranking decision is
   // real even when the launch is not (AI-64-R03's standard, applied here).
+  const selectedForGuarantee =
+    result.ranking.find((candidate) => candidate.candidateKey === result.chosen) || null;
+  const selectedIndependentReviewer = findIndependentReviewerCandidate(
+    selectedForGuarantee,
+    independentReviewerCandidates
+  );
+  const selectedHasIndependentReviewer = Boolean(selectedIndependentReviewer);
   const decisionRecorded = {
     stage: decisions.Stage.SELECTED,
     workItemId: profile.taskId,
@@ -1503,6 +1819,16 @@ async function runProfileDispatch(args, deps) {
     chosen: result.chosen,
     reason: result.reason,
     reasonCode: result.reasonCode || null,
+    modelChoice: result.modelChoice || null,
+    probationReviewGuarantee: {
+      established: selectedHasIndependentReviewer,
+      source: selectedHasIndependentReviewer
+        ? 'reserved strong reviewer in a different failure domain'
+        : null,
+      reviewerCandidateKey: selectedIndependentReviewer
+        ? candidateKey(selectedIndependentReviewer)
+        : null,
+    },
   };
   decisions.recordDecision(decisionRecorded, {
     dir: args['decision-dir'] || d.decisionDir,
@@ -1571,6 +1897,18 @@ async function runProfileDispatch(args, deps) {
 
   if (execute) {
     const chosenCandidate = result.ranking.find((c) => c.candidateKey === result.chosen) || {};
+    const independentReviewerAvailable = selectedHasIndependentReviewer;
+    if (chosenCandidate.probationRequiresIndependentReview && !independentReviewerAvailable) {
+      error('PROBATION_REQUIRES_INDEPENDENT_REVIEW');
+      exit(1);
+      return {
+        exitCode: 1,
+        profile,
+        refused: 'PROBATION_REQUIRES_INDEPENDENT_REVIEW',
+        ranking: result.ranking,
+      };
+    }
+    const reservedReviewer = selectedIndependentReviewer;
     const parsedKey = parseCandidateKey(result.chosen) || {};
     const harness = chosenCandidate.harness || parsedKey.harness;
     const accessPath = chosenCandidate.accessPath || parsedKey.accessPath;
@@ -1584,6 +1922,22 @@ async function runProfileDispatch(args, deps) {
     const modelId = chosenCandidate.modelId || parsedKey.modelId;
     reservationId = `${profile.taskId}::${result.chosen}`;
 
+    if (chosenCandidate.probationRequiresIndependentReview) {
+      const reviewerKey = candidateKey(reservedReviewer);
+      const reviewerAccount = reservedReviewer.accountId || 'UNPINNED';
+      const reviewerReservationId = `${profile.taskId}::${reviewerKey}`;
+      quotaStore.recordReservation(
+        profile.taskId,
+        'reviewer',
+        reviewerAccount,
+        reviewerKey,
+        100000,
+        { home: d.home, path: d.storePath, now }
+      );
+      reservedReviewer.reservationStatus = 'reserved';
+      reservedReviewer.reservationId = reviewerReservationId;
+    }
+
     launchRequest = {
       candidateKey: result.chosen,
       harness,
@@ -1593,6 +1947,13 @@ async function runProfileDispatch(args, deps) {
       account,
       modelId,
       reservationId,
+      independentReviewer: reservedReviewer
+        ? {
+            candidateKey: candidateKey(reservedReviewer),
+            failureDomain: canonicalFailureDomain(reservedReviewer),
+            reservationId: reservedReviewer.reservationId || null,
+          }
+        : null,
     };
 
     quotaStore.recordReservation(profile.taskId, profile.role, account, result.chosen, 100000, {
@@ -1734,6 +2095,8 @@ async function runProfileDispatch(args, deps) {
     ranking: result.ranking,
     top3: result.top3,
     rejected: result.rejected,
+    chosen: result.chosen,
+    modelChoice: result.modelChoice,
     pinnedCandidateKey: pinned,
     reserved,
     reservationId,
@@ -1792,6 +2155,13 @@ module.exports = {
   proofObserved,
   proofObservedWithSource,
   rankForProfile,
+  hasIndependentReviewerCandidate,
+  isIndependentReviewerCandidate,
+  findIndependentReviewerCandidate,
+  jevModelChoiceQuestion,
+  adviseRankedModelChoice,
+  candidateKey,
+  formatTopEntry,
   scoreForProfile,
   latencyScoreOf,
   qualityScoreOf,

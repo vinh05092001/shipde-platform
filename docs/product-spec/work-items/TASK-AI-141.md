@@ -53,8 +53,7 @@ The supervisor explicitly directed that proof transfer be handled in Part A. Thi
 ## Follow-up Within This Work Item — Parts B to E
 
 These spec parts remain follow-up scope under TASK-AI-141 and are not implemented in this revision:
-
-- **Part B:** bounded automatic qualification of candidates that lack proof, with caps and exact-SHA independent review.
+- **Part B:** automatic qualification for candidates that fail only the proof floor.
 - **Part C:** isolated Codex worker lane and worker login-state handling.
 - **Part D:** intake risk-domain and complexity derivation plus the QUALITY_FIRST safety floor.
 - **Part E and addenda:** live gateway model discovery/probing, same-model alternate-path fallback, temporary parking and due rechecks.
@@ -75,7 +74,7 @@ Verification: focused Part C tests cover the isolation requirement, flag placeme
 
 ## Out of Scope for This Revision
 
-- Automatic qualification, intake risk/complexity derivation, and live gateway discovery/fallback/rechecks (Parts B to E), except the supervisor-directed proof transfer above.
+- Intake risk/complexity derivation, and live gateway discovery/fallback/rechecks (Parts D to E), except the supervisor-directed proof transfer above.
 - Product Work Item execution as qualification, automatic merge, or reading/copying Codex credentials.
 - Live account probing or changes to agy-pool quota policy.
 
@@ -124,7 +123,7 @@ No API, persisted product data, or external side effects change. Candidate gener
 
 ## Residual Limitations
 
-- Parts B and D to E and their acceptance criteria remain open follow-up work within TASK-AI-141, except proof transfer now included above by supervisor direction.
+- Parts B, D to E and their acceptance criteria remain open follow-up work within TASK-AI-141, except proof transfer now included above by supervisor direction.
 - This change consumes the models already discovered by intake; it does not add live per-account pool probing.
 
 ## Part B — bounded automatic qualification
@@ -174,6 +173,11 @@ Intake derives risk domains and complexity from the Work Item scope, acceptance 
 - Qualification runs pin `origin/main` as the isolated worker's base SHA. The worker's resulting commit is returned as `sha`, and evidence is granted only when the independent review's `reviewedSha` exactly matches that worker head; no candidate commit is required before the worker runs. Reviewer SHA mismatches are refused, and qualification output remains non-publishable and never merged.
 - Targeted `next --loop --work-item <ID>` retries after a successful qualification slot when iteration budget remains; if the budget ends first, it returns `stopped: true` with `WORK_ITEM_NOT_EXECUTED`. Qualification alone never reports the requested product item complete.
 - Isolation verdict UTF-8 BOM tolerance: `Test-WorkerIsolation.ps1` writes UTF-8 without BOM via `[System.IO.File]::WriteAllText` with `[System.Text.UTF8Encoding]::new($false)`, and readers in `tools/ai-brain` (`intake.assertIsolationClosed`, `isolation-launcher.readClosedIsolationVerdict`) strip any leading BOM before `JSON.parse`.
+## Part F
+
+- Added a pluggable benchmark-prior refresh command (`cli.js priors refresh`) with per-model benchmark/source metadata and a 30-day staleness flag.
+- Routing exposes prior scores, probation metadata, model-choice JEV advice limited to ranked eligible candidates, and explicit unknown latency/cost in reports.
+- Verification: see `task-ai-141-part-f.test.js`; research provider remains configured by the operator through `AI_BRAIN_PRIORS_SOURCE`.
 
 ### Part H: token budget and leaner context
 

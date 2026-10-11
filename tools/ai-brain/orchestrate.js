@@ -5908,7 +5908,11 @@ async function reviewItem(
   // TASK-AI-117 (RS-R01): the review reads the commit the launch recorded —
   // the checkpoint's exact workerSha — and only falls back to the worktree head
   // when no such commit was ever recorded.
-  const workerHead = (session && session.headSha) || (workerRoot && headShaOf(workerRoot)) || null;
+  const observedWorkerHead = workerRoot && headShaOf(workerRoot);
+  const workerHead =
+    (session && session.headSha) ||
+    (observedWorkerHead && SHA_40.test(observedWorkerHead) ? observedWorkerHead : null) ||
+    null;
   let targetSha =
     workerHead && SHA_40.test(workerHead)
       ? workerHead

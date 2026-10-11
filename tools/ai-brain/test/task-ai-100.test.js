@@ -64,6 +64,16 @@ function rank(candidates, taskProfile, priors) {
     now: NOW,
     priors,
     headrooms: { default: 'open' },
+    independentReviewerCandidates: [
+      candidate({
+        modelId: 'independent-reviewer',
+        gateway: 'independent-gateway',
+        upstream: 'independent-upstream',
+        qualifiedRoles: ['reviewer.primary'],
+        reservationStatus: 'reserved',
+        strong: true,
+      }),
+    ],
   });
 }
 
@@ -80,7 +90,14 @@ describe('TASK-AI-100 external benchmark priors', () => {
       modelId: 'provider/other-model',
     });
     const priors = {
-      ranking: [{ canonical: 'gpt-6-luna', codingTier: 'T1', reviewTier: 'T2' }],
+      ranking: [
+        {
+          canonical: 'gpt-6-luna',
+          codingTier: 'T1',
+          reviewTier: 'T2',
+          retrievedAt: new Date(NOW).toISOString(),
+        },
+      ],
     };
 
     const result = rank([other, strong], profile(), priors);
@@ -94,17 +111,25 @@ describe('TASK-AI-100 external benchmark priors', () => {
     assert.equal(result.ranking[0].score, result.ranking[1].score + 6);
   });
 
-  test('a T1 prior cannot make a candidate pass the proof floor', () => {
+  test('a role-specific T1 prior admits a never-tried candidate on probation', () => {
     const unproven = candidate({
       modelId: 'provider/gpt-6-luna',
       evidence: [],
     });
     const result = rank([unproven], profile({ proofFloor: 'WORK_ITEM_PASS' }), {
-      ranking: [{ canonical: 'gpt-6-luna', codingTier: 'T1', reviewTier: 'T1' }],
+      ranking: [
+        {
+          canonical: 'gpt-6-luna',
+          codingTier: 'T1',
+          reviewTier: 'T1',
+          retrievedAt: new Date(NOW).toISOString(),
+        },
+      ],
     });
 
-    assert.equal(result.chosen, null);
-    assert.equal(result.rejected[0].reasonCode, 'PROOF_FLOOR_NOT_MET:NONE');
+    assert.ok(result.chosen);
+    assert.equal(result.ranking[0].probation, true);
+    assert.equal(result.ranking[0].probationRequiresIndependentReview, true);
   });
 
   test('unknown models have no prior and retain their score', () => {
@@ -122,7 +147,14 @@ describe('TASK-AI-100 external benchmark priors', () => {
   test('review roles use reviewTier, while other roles use codingTier', () => {
     const model = candidate({ modelId: 'provider/gpt-6-luna' });
     const priors = {
-      ranking: [{ canonical: 'gpt-6-luna', codingTier: 'T4', reviewTier: 'T1' }],
+      ranking: [
+        {
+          canonical: 'gpt-6-luna',
+          codingTier: 'T4',
+          reviewTier: 'T1',
+          retrievedAt: new Date(NOW).toISOString(),
+        },
+      ],
     };
 
     assert.deepEqual(priorFor(model, 'writer', priors), {
