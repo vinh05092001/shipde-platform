@@ -155,6 +155,13 @@ The production `qualify --auto` command builds candidates from intake catalogue 
 - `next --loop --work-item <ID>` scopes selection to the named item, while retaining dependency, active-claim, candidate-lane, ceiling and proof-floor qualification checks. A targeted loop exits after that item reaches an outcome rather than selecting a different item.
 - Verification: fake-driven coverage in `task-ai-141b.test.js`, `decisions.test.js`, and the hermeticity fixes in `task-ai-64.test.js` and `task-ai-91.test.js`.
 
+## Part E
+
+- Added persistent path-scoped model health in `tools/ai-brain/data/model-route-health.json`; failed routes keep their model identity and receive a reason, last-check time, and retry time with bounded escalating backoff. GEO_BLOCKED and AUTH_NEEDED use daily rechecks; provider reset hints take precedence.
+- Added same-model fallback ordering by prior evidence, per-path failure reporting, `route_fallback` and `route_restored` events, plus `cli.js probe --due` (capped at 20 checks per run). Successful rechecks restore eligibility without deleting the path record.
+- Gateway candidate generation now skips paths parked until their due time. Tests use fake responses for 451/402/429, alternate paths, all-path failure, restoration, persistence, and continuing backoff.
+- Intake now performs a capped, timed route-health refresh before candidate selection, including due parked routes, and gateway candidates require successful probe evidence. Fallback discovery uses `discoverModelPaths` to include direct-source and harness-specific paths declared by enabled accounts, alongside catalogue gateway routes.
+
 ## Part D
 
 Intake derives risk domains and complexity from the Work Item scope, acceptance criteria, and allowed paths, and records the derivation in each run directory. JEV receives the resulting risk domains and complexity; the Controller enforces a `QUALITY_FIRST` floor for auth, security, money, or tenant-isolation work and records the override reason. Regressions cover a 15-AC MFA-like item and a docs-only item.

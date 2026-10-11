@@ -141,6 +141,7 @@ describe('TASK-AI-80 Controller selector contract tests', () => {
         evidenceDir,
         decisionDir,
         discoveryDataDir: path.join(tempRoot, 'empty-discovery'),
+        allowUnprobedCandidates: true,
         now: NOW,
         log: (s) => lines.push(String(s)),
         error: (s) => lines.push('ERR: ' + String(s)),

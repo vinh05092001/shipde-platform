@@ -145,6 +145,8 @@ function generateCandidates(opts) {
           typeof item === 'string' ? item : (item && (item.modelId || item.model || item.id)) || '';
         const parsed = parsePrefix(fullId);
         if (!parsed) continue;
+        if (item && typeof item === 'object' && item.upstream && item.upstream !== parsed.upstream)
+          continue;
         if (sharedArc) {
           candidates.push({
             harness,
@@ -696,6 +698,30 @@ function poolAccountCandidates(opts) {
     }
 
     for (const model of poolModels) {
+      const routeHealth = o.routeHealth;
+      if (routeHealth && !o.allowUnprobedCandidates) {
+        const health = require('./route-health');
+        const normalized = health.normalizeModelId(model);
+        const modelRows = catalogue.filter((entry) => {
+          if (!entry || typeof entry !== 'object') return false;
+          const entryModel = entry.modelId || entry.model || entry.id || '';
+          return health.normalizeModelId(entryModel) === normalized;
+        });
+        if (
+          !modelRows.some((entry) => {
+            const routeId = entry.gateway;
+            const record =
+              routeId &&
+              health.getPathRecord(routeHealth, model, { id: routeId, accountId: acc.id });
+            return Boolean(
+              (record &&
+                health.isEligible(routeHealth, model, { id: routeId, accountId: acc.id }, o.now)) ||
+              (o.probeEvidence && o.probeEvidence(model, { id: routeId, accountId: acc.id }))
+            );
+          })
+        )
+          continue;
+      }
       const family =
         familyOf(model) ||
         (model.includes('gemini')
@@ -810,8 +836,13 @@ function gatewayAccountCandidates(opts) {
   const o = opts || {};
   const registry = o.registry;
   const accounts = o.accounts || [];
-  const catalogue = o.catalogue || [];
-  if (!registry || catalogue.length === 0) return [];
+  const catalogueInput = o.catalogue || [];
+  const routeHealth = o.routeHealth;
+  const probeOk = o.probeOk;
+  const excluded = new Set((o.excludeModels || []).map((id) => String(id).toLowerCase()));
+  const routeNow = Number(o.now) || Date.now();
+  if (!registry || catalogueInput.length === 0) return [];
+  const catalogue = catalogueInput;
 
   const sourceById = new Map();
   for (const s of registry.sources || []) sourceById.set(s.id, s);
@@ -845,20 +876,91 @@ function gatewayAccountCandidates(opts) {
     const accessPath = accessPathOf(source, registry) || '';
     if (!harness || !accessPath) continue;
 
-    for (const row of catalogue) {
-      if (!row || row.gateway !== gateway) continue;
+    const accountModels = account.models;
+    const excludes = new Set(
+      (Array.isArray(accountModels) ? accountModels : [])
+        .filter((entry) => entry && typeof entry === 'object' && entry.exclude === true)
+        .map((entry) => String(entry.model || '').toLowerCase())
+    );
+    const additions = new Set(
+      (Array.isArray(accountModels) ? accountModels : [])
+        .filter((entry) => typeof entry === 'string' || (entry && entry.exclude !== true))
+        .map((entry) => String(typeof entry === 'string' ? entry : entry.model || '').toLowerCase())
+        .filter((modelId) => modelId && !excludes.has(modelId))
+    );
+    let contributed = 0;
+    const catalogueRows = catalogue.filter((row) => {
+      if (!row || row.gateway !== gateway) return false;
+      const modelId = row.modelId || row.model || '';
+      const parsed = parsePrefix(modelId);
+      return Boolean(parsed && (!row.upstream || row.upstream === parsed.upstream));
+    });
+    const catalogueModelIds = new Set(
+      catalogueRows.map((row) => String(row.modelId || row.model || '').toLowerCase())
+    );
+    const rowsByModel = new Map(
+      catalogueRows.map((row) => [String(row.modelId || row.model || '').toLowerCase(), row])
+    );
+    const eligibleRows = catalogueRows.slice();
+    for (const modelId of additions) {
+      if (!catalogueModelIds.has(modelId) && !excludes.has(modelId)) {
+        const health = routeHealth && require('./route-health');
+        const routePath = { id: gateway, accountId: account.id };
+        const record = health && health.getPathRecord(routeHealth, modelId, routePath);
+        const probed = Boolean(
+          (record && health.isEligible(routeHealth, modelId, routePath, routeNow)) ||
+          (probeOk && probeOk(modelId, gateway)) ||
+          (o.probeEvidence && o.probeEvidence(modelId, gateway))
+        );
+        if (!probed) continue;
+        const prefix = parsePrefix(modelId);
+        if (!prefix) continue;
+        const addition = {
+          gateway,
+          upstream: prefix.upstream,
+          modelId,
+          handAdded: true,
+        };
+        rowsByModel.set(modelId, addition);
+        eligibleRows.push(addition);
+      }
+    }
+    for (const row of eligibleRows) {
+      if (!row) continue;
       const upstream = row.upstream || '';
       const modelId = row.modelId || row.model || '';
+      if (!modelId || excluded.has(modelId.toLowerCase()) || excludes.has(modelId.toLowerCase()))
+        continue;
+      if (routeHealth) {
+        const health = require('./route-health');
+        const routePath = { id: gateway, accountId: account.id };
+        const routeRecord = health.getPathRecord(routeHealth, modelId, routePath);
+        const available = routeRecord
+          ? health.isEligible(routeHealth, modelId, routePath, routeNow)
+          : Boolean(
+              (probeOk && probeOk(modelId, gateway)) ||
+              (o.probeEvidence && o.probeEvidence(modelId, routePath)) ||
+              (!o.requireRouteHealth &&
+                !o.routeHealthExplicit &&
+                !o.routeHealth &&
+                !probeOk &&
+                !o.probeEvidence)
+            );
+        if (!available) continue;
+      } else if (probeOk && !probeOk(modelId, gateway)) {
+        continue;
+      }
       // An alias is the prefix the model id itself carries. A row whose id
       // does not begin with its own upstream names no reachable alias, and
       // inventing one is exactly how a candidate that can never run is planned.
       if (!upstream || !modelId.startsWith(upstream + '/')) continue;
-
+      if (!parsePrefix(modelId)) continue;
+      const candidateUpstream = upstream;
       out.push({
         harness,
         accessPath,
         gateway,
-        upstream,
+        upstream: candidateUpstream,
         accountId: account.id,
         quotaScope: account.id,
         modelId,
@@ -873,7 +975,9 @@ function gatewayAccountCandidates(opts) {
         cost: undefined,
         sharedQuota: 'unknown',
       });
+      contributed += 1;
     }
+    if (typeof o.onAccountCount === 'function') o.onAccountCount(account.id, contributed);
   }
 
   return out;
