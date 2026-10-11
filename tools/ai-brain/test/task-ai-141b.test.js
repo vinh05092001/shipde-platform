@@ -4,6 +4,7 @@ const { test, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
 const {
   eligibleCandidates,
   loadItems,
@@ -13,9 +14,12 @@ const {
 const { nextLoop } = require('../next-runner');
 const { assertIsolationClosed } = require('../intake');
 const cli = require('../cli');
+const decisions = require('../decisions');
 
 const SHA = 'a'.repeat(40);
 const fixtures = [];
+const successDecisionDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-141-success-'));
+fixtures.push(successDecisionDir);
 const CANDIDATE = {
   candidateKey: 'hermes::cli::gw::up::acct::acct::model',
   commit: SHA,
@@ -447,7 +451,6 @@ test('production candidate builder uses intake catalogue/accounts and Controller
   const oldGenerate = require('../candidates').generateCandidates;
   const oldAnnotate = require('../candidates').annotateCandidates;
   const oldEvidence = require('../evidence').loadEvidence;
-  const oldRank = require('../ranking').rankAndRecord;
   let inputs;
   try {
     require('../accounts').listAccounts = () => [
@@ -460,10 +463,6 @@ test('production candidate builder uses intake catalogue/accounts and Controller
     };
     require('../candidates').annotateCandidates = (rows) => rows;
     require('../evidence').loadEvidence = () => ({});
-    require('../ranking').rankAndRecord = () => ({
-      rejected: [{ offeringId: CANDIDATE.candidateKey, reasonCode: 'PROOF_FLOOR_NOT_MET' }],
-      ranking: [],
-    });
     const candidates = cli._buildQualificationCandidates
       ? cli._buildQualificationCandidates(root)
       : null;
@@ -471,16 +470,99 @@ test('production candidate builder uses intake catalogue/accounts and Controller
     assert.equal(inputs.catalogue[0], 'ag/gemini-test-model');
     assert.ok(inputs.accounts.some((account) => account.id === 'agy-pool-2'));
     assert.equal(inputs.externalWorkers, 'agy-pool');
-    assert.equal(candidates[0].status, 'rejected');
-    assert.deepEqual(candidates[0].rejectionReasons, ['PROOF_FLOOR_NOT_MET']);
+    assert.equal(candidates.length, 0);
   } finally {
     require('../accounts').listAccounts = oldListAccounts;
     require('../sources').loadSources = oldLoadSources;
     require('../candidates').generateCandidates = oldGenerate;
     require('../candidates').annotateCandidates = oldAnnotate;
     require('../evidence').loadEvidence = oldEvidence;
-    require('../ranking').rankAndRecord = oldRank;
     fsx.rmSync(runDir, { recursive: true, force: true });
+  }
+});
+
+test('qualify auto selects unproven candidates from fake intake catalogue', async () => {
+  const fsx = require('fs');
+  const path = require('path');
+  const root = fs.mkdtempSync(path.join(process.cwd(), '.qualification-auto-catalogue-'));
+  fixtures.push(root);
+  const intakeRoot = path.join(root, 'tools', 'ai-brain', 'data', 'intake', 'fixture');
+  fsx.mkdirSync(intakeRoot, { recursive: true });
+  fsx.writeFileSync(path.join(intakeRoot, 'catalogue.json'), JSON.stringify(['fake/model-a']));
+  fsx.writeFileSync(path.join(intakeRoot, 'accounts.json'), JSON.stringify([]));
+  const f = fixture();
+  const saved = {};
+  for (const [mod, key] of [
+    ['accounts', 'listAccounts'],
+    ['sources', 'loadSources'],
+    ['candidates', 'generateCandidates'],
+    ['candidates', 'annotateCandidates'],
+    ['evidence', 'loadEvidence'],
+  ]) {
+    saved[mod + '.' + key] = require('../' + mod)[key];
+  }
+  try {
+    require('../accounts').listAccounts = () => [];
+    require('../sources').loadSources = () => ({ sources: [] });
+    require('../candidates').generateCandidates = () => [
+      {
+        ...CANDIDATE,
+        candidateKey: undefined,
+        modelId: 'model-a',
+        upstream: 'up-a',
+        harness: 'codex',
+        capabilities: { contextWindow: 200000 },
+      },
+      {
+        ...CANDIDATE,
+        candidateKey: undefined,
+        modelId: 'model-b',
+        upstream: 'up-b',
+        accountId: 'acct-b',
+        quotaScope: 'acct-b',
+        harness: 'codex',
+        capabilities: { contextWindow: 200000 },
+      },
+      {
+        ...CANDIDATE,
+        candidateKey: undefined,
+        modelId: 'model-blocked',
+        upstream: 'up-blocked',
+        blocked: true,
+      },
+    ];
+    require('../candidates').annotateCandidates = (rows) => rows;
+    require('../evidence').loadEvidence = () => ({});
+    const resultBox = [];
+    const code = await runAutoCli(['--auto', '--items', f.itemsFile], {
+      usageFile: f.usageFile,
+      config: { perRun: 2, perDay: 2 },
+      buildCandidates: () => cli._buildQualificationCandidates(root),
+      assertIsolationClosed: () => ({ verdict: 'CLOSED' }),
+      runIsolatedReviewed: async ({ candidate }) => ({
+        verdict: 'FAIL',
+        sha: candidate.commit,
+        reviewedSha: candidate.commit,
+      }),
+      out: (line) => resultBox.push(JSON.parse(line)),
+    });
+    assert.equal(code, 0);
+    assert.equal(resultBox[0].selected, 2);
+    assert.deepEqual(
+      resultBox[0].qualified,
+      [],
+      'fake non-PASS reviews must not add WORK_ITEM_PASS evidence'
+    );
+    const built = cli._buildQualificationCandidates(root);
+    assert.equal(built.length, 2);
+    assert.ok(built.every((candidate) => candidate.status === 'rejected'));
+    assert.ok(built.every((candidate) => candidate.rejectionReasons[0] === 'PROOF_FLOOR_NOT_MET'));
+    assert.ok(built.every((candidate) => !candidate.qualifiedRoles?.includes('author.foundation')));
+  } finally {
+    for (const [entry, value] of Object.entries(saved)) {
+      const [mod, key] = entry.split('.');
+      require('../' + mod)[key] = value;
+    }
   }
 });
 
@@ -636,4 +718,250 @@ test('nextCommand injects a production qualification slot by default', async () 
   } finally {
     require('../qualification-auto').runAutoCli = original;
   }
+});
+
+test('qualify --auto CLI passes its selected root to the isolation gate', async () => {
+  const original = require('../qualification-auto').runAutoCli;
+  let received;
+  require('../qualification-auto').runAutoCli = async (_argv, deps) => {
+    received = deps;
+    return 0;
+  };
+  const oldArgv = process.argv;
+  try {
+    const f = fixture();
+    process.argv = [
+      process.execPath,
+      require.resolve('../cli'),
+      'qualify',
+      '--auto',
+      '--root',
+      f.dir,
+    ];
+    cli.main();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(typeof received.runIsolatedReviewed, 'function');
+    assert.equal(typeof received.assertIsolationClosed, 'function');
+    assert.equal(typeof received.buildCandidates, 'function');
+    const intake = require('../intake');
+    const originalAssert = intake.assertIsolationClosed;
+    let isolationOptions;
+    intake.assertIsolationClosed = (options) => {
+      isolationOptions = options;
+      return { verdict: 'CLOSED' };
+    };
+    try {
+      received.assertIsolationClosed({ verdictPath: path.join(f.dir, 'isolation.json') });
+    } finally {
+      intake.assertIsolationClosed = originalAssert;
+    }
+    assert.equal(isolationOptions.root, f.dir);
+    assert.equal(isolationOptions.verdictPath, path.join(f.dir, 'isolation.json'));
+  } finally {
+    process.argv = oldArgv;
+    require('../qualification-auto').runAutoCli = original;
+  }
+});
+
+test('next loop runs only the named Work Item and still enforces dependency checks', async () => {
+  const decisionDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-141-target-'));
+  fixtures.push(decisionDir);
+  const base = {
+    maxIterations: 1,
+    rootDir: process.cwd(),
+    records: [],
+    workItem: 'TASK-AI-141',
+    decisionDir,
+  };
+  const items = [
+    { work_item_id: 'FEAT-AUTH-02', status: 'BACKLOG', dependencies: '' },
+    { work_item_id: 'TASK-AI-141', status: 'READY_FOR_AUTHOR', dependencies: '' },
+  ];
+  let ran = null;
+  const deps = {
+    existsSync: () => false,
+    items,
+    runIntake: async (options) => {
+      ran = options.workItem;
+      return { exitCode: 0, status: 'completed' };
+    },
+    checkCandidateLanes: () => ({ available: true }),
+    checkCeiling: () => ({ allowed: true }),
+    writerFor: () => null,
+    isOpenRun: () => false,
+    log: () => {},
+    now: Date.parse('2026-10-10T12:00:00Z'),
+  };
+  const result = await nextLoop(base, deps);
+  assert.equal(ran, 'TASK-AI-141');
+  assert.equal(result.workItemId, 'TASK-AI-141');
+
+  ran = null;
+  items[1].dependencies = 'TASK-AI-130';
+  const blocked = await nextLoop(base, { ...deps, items });
+  assert.equal(ran, null);
+  assert.equal(blocked.reason, 'NO_READY_ITEM');
+});
+
+test('targeted loop does not report completion when only a qualification slot ran', async () => {
+  const decisionDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-141-target-proof-'));
+  fixtures.push(decisionDir);
+  let qualifiedFor = null;
+  let intakeRuns = 0;
+  const result = await nextLoop(
+    {
+      maxIterations: 2,
+      rootDir: process.cwd(),
+      records: [],
+      workItem: 'TASK-AI-141',
+      decisionDir,
+    },
+    {
+      existsSync: () => false,
+      items: [{ work_item_id: 'TASK-AI-141', status: 'BACKLOG', dependencies: '' }],
+      runIntake: async () => {
+        intakeRuns += 1;
+        if (intakeRuns > 1) return { exitCode: 0, status: 'completed' };
+        const error = new Error('proof floor');
+        error.code = 'PROOF_FLOOR_NOT_MET';
+        throw error;
+      },
+      qualificationSlot: async ({ workItem }) => {
+        qualifiedFor = workItem.work_item_id;
+        return { ran: true, status: 'completed' };
+      },
+      checkCandidateLanes: () => ({ available: true }),
+      checkCeiling: () => ({ allowed: true }),
+      sleep: async () => {},
+      writerFor: () => null,
+      isOpenRun: () => false,
+      log: () => {},
+      now: Date.parse('2026-10-10T12:00:00Z'),
+    }
+  );
+  assert.equal(qualifiedFor, 'TASK-AI-141');
+  assert.equal(intakeRuns, 2);
+  assert.equal(result.completed, true);
+  assert.equal(result.execution.outcome, 'completed');
+  assert.equal(result.workItemId, 'TASK-AI-141');
+});
+
+test('loop ignores stale decision sessions and logs which records were ignored', async () => {
+  const now = Date.parse('2026-10-10T12:00:00Z');
+  const decisionDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-141-stale-'));
+  fixtures.push(decisionDir);
+  const records = [
+    {
+      stage: 'reviewer-selection',
+      workItemId: 'OLD-REVIEW',
+      sessionId: 'old-session',
+      at: new Date(now - 7 * 60 * 60 * 1000).toISOString(),
+    },
+    {
+      stage: 'launched',
+      workItemId: 'OLD-WRITER',
+      sessionId: 'old-writer',
+      at: new Date(now - 7 * 60 * 60 * 1000).toISOString(),
+    },
+  ];
+  const logs = [];
+  const result = await nextLoop(
+    {
+      maxIterations: 1,
+      rootDir: process.cwd(),
+      records,
+      decisionDir,
+      now,
+    },
+    {
+      existsSync: () => false,
+      items: [{ work_item_id: 'NEXT', status: 'BACKLOG', dependencies: '' }],
+      now,
+      log: (line) => logs.push(line),
+      checkCandidateLanes: () => ({ available: true }),
+      ceiling: { maxWriters: 0, maxReviewers: 0 },
+      sleep: async () => {},
+    }
+  );
+  assert.equal(result.reason, 'WRITER_CEILING_REACHED');
+  assert.ok(logs.some((line) => line.includes('Ignoring stale reviewer OLD-REVIEW')));
+  assert.ok(logs.some((line) => line.includes('Ignoring stale writer OLD-WRITER')));
+  assert.equal(decisions.openReviewersDetailed({ records, now }).reviewers.length, 0);
+  assert.equal(decisions.openWritersDetailed({ records, now }).writers.length, 0);
+});
+
+test('fresh reviewer-selection records without a role still count against reviewer ceiling', () => {
+  const now = Date.parse('2026-10-10T12:00:00Z');
+  const detail = decisions.openReviewersDetailed({
+    records: [
+      {
+        stage: 'reviewer-selection',
+        workItemId: 'SELECTING-REVIEW',
+        sessionId: 'selection-session',
+        at: new Date(now - 1000).toISOString(),
+      },
+    ],
+    now,
+  });
+  assert.equal(detail.reviewers.length, 1);
+  assert.equal(detail.reviewers[0].role, 'reviewer');
+});
+
+test('targeted loop reports successful execution as completed', async () => {
+  const result = await nextLoop(
+    {
+      maxIterations: 1,
+      rootDir: process.cwd(),
+      records: [],
+      workItem: 'TASK-AI-141',
+      decisionDir: successDecisionDir,
+    },
+    {
+      existsSync: () => false,
+      items: [{ work_item_id: 'TASK-AI-141', status: 'READY_FOR_AUTHOR', dependencies: '' }],
+      runIntake: async () => ({ exitCode: 0, status: 'completed' }),
+      checkCandidateLanes: () => ({ available: true }),
+      checkCeiling: () => ({ allowed: true }),
+      writerFor: () => null,
+      isOpenRun: () => false,
+      log: () => {},
+      now: Date.parse('2026-10-10T12:00:00Z'),
+    }
+  );
+  assert.equal(result.completed, true);
+  assert.equal(result.outcome, 'completed');
+});
+
+test('the two known fixture selection paths do not change decisions.DEFAULT_DIR', async () => {
+  const file = path.join(decisions.DEFAULT_DIR, new Date().toISOString().slice(0, 10) + '.jsonl');
+  const before = fs.existsSync(file) ? fs.readFileSync(file) : null;
+  const a = { gateway: 'g', upstream: 'a', accountId: 'a', modelId: 'm-a', quality: 90 };
+  const b = { gateway: 'g', upstream: 'b', accountId: 'b', modelId: 'm-b', quality: 80 };
+  a.candidateKey = require('../candidates').candidateKey(a);
+  b.candidateKey = require('../candidates').candidateKey(b);
+  const select = require('../orchestrate').selectCandidateForProfile;
+  const tempDirs = [];
+  let after;
+  try {
+    for (const id of ['ITEM-91-R01-UNIT', 'TASK-AI-64-review']) {
+      const decisionDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai141-guard-'));
+      tempDirs.push(decisionDir);
+      await select(
+        { id, roleRequirement: { role: 'reviewer' }, failedKeys: [a.candidateKey] },
+        [a, b],
+        [],
+        null,
+        {},
+        { dir: decisionDir, now: Date.now() },
+        Date.now(),
+        { failedKeys: [a.candidateKey], decisionDir }
+      );
+      const selectedRecords = decisions.readDecisions({ dir: decisionDir });
+      assert.ok(selectedRecords.some((record) => record.workItemId === id));
+    }
+    after = fs.existsSync(file) ? fs.readFileSync(file) : null;
+  } finally {
+    for (const dir of tempDirs) fs.rmSync(dir, { recursive: true, force: true });
+  }
+  assert.deepEqual(after, before);
 });

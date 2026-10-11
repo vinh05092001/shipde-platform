@@ -14,27 +14,31 @@ test('F1: upstream 503 with gateway unreachable in body is NOT gateway-scoped', 
 });
 
 test('F2: writer claim expiry', () => {
-  const now = Date.now();
+  const now = Date.parse('2026-10-10T12:00:00Z');
   const records = [
     {
       stage: 'launched',
-      workItemId: 'item-1',
+      workItemId: 'fresh-item',
       sessionId: 'sess-1',
-      at: new Date(now - 5 * 3600 * 1000).toISOString(),
-    }, // 5 hours ago
+      at: new Date(now - (3 * 60 + 59) * 60 * 1000).toISOString(),
+    }, // 3h59m ago: still active under the four-hour default
     {
       stage: 'launched',
-      workItemId: 'item-2',
+      workItemId: 'expired-item',
       sessionId: 'sess-2',
-      at: new Date(now - 1 * 3600 * 1000).toISOString(),
-    }, // 1 hour ago
+      at: new Date(now - (4 * 60 + 1) * 60 * 1000).toISOString(),
+    }, // 4h01m ago: expired under the four-hour default
   ];
 
   const detail = openWritersDetailed({ records, now });
   const activeWriters = detail.writers;
 
   assert.equal(activeWriters.length, 1);
-  assert.equal(activeWriters[0].workItemId, 'item-2');
+  assert.equal(activeWriters[0].workItemId, 'fresh-item');
+  assert.deepEqual(
+    detail.stale.map((writer) => writer.workItemId),
+    ['expired-item']
+  );
 });
 
 test('F3: sameFailureDomain excludes based on quotaScope for upstream failures', () => {
