@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const cp = require('child_process');
 const { executableFor } = require('./harness');
 const crypto = require('crypto');
@@ -16,10 +17,9 @@ const DEFAULT_WORKER_TIMEOUT_MS = 30 * 60 * 1000;
 
 /** The operator-owned isolation attestation location. */
 function isolationVerdictPath(options) {
-  return (
-    (options && options.verdictPath) ||
-    path.join(process.env.LOCALAPPDATA || '', 'ShipDe', 'isolation-verdict.json')
-  );
+  const base =
+    process.env.LOCALAPPDATA || process.env.XDG_CONFIG_HOME || process.env.HOME || os.homedir();
+  return (options && options.verdictPath) || path.join(base, 'ShipDe', 'isolation-verdict.json');
 }
 
 /** The worker root for one job: the worker never sees the operator's leaf name. */

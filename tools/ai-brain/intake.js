@@ -813,7 +813,9 @@ function composeOrchestrateCommand({
 }
 
 function defaultVerdictPath() {
-  return path.join(process.env.LOCALAPPDATA || '', 'ShipDe', 'isolation-verdict.json');
+  const base =
+    process.env.LOCALAPPDATA || process.env.XDG_CONFIG_HOME || process.env.HOME || os.homedir();
+  return path.join(base, 'ShipDe', 'isolation-verdict.json');
 }
 
 function assertIsolationClosed({ verdictPath, now, stat, readFile }) {

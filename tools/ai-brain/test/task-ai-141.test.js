@@ -1986,6 +1986,24 @@ test('Part H: host brain gate tests the controller checkout, not the isolated wo
   assert.equal(capturedCwd, hostCwd);
 });
 
+test('Part H: host brain gate resolves injected Windows roots with host path semantics', () => {
+  let capturedCwd = null;
+  const controllerRoot = path.resolve(__dirname, '..', '..', '..');
+  const result = runHostBrainGate(
+    {},
+    {
+      hostCwd: 'C:\\Users\\gumac\\AI\\shipde-platform\\.worktrees\\ai64launch',
+      platform: 'linux',
+      spawnSync: (_node, _args, opts) => {
+        capturedCwd = opts.cwd;
+        return { status: 0, stdout: 'ℹ pass 1\n', stderr: '' };
+      },
+    }
+  );
+  assert.equal(result.pass, true);
+  assert.equal(capturedCwd, controllerRoot);
+});
+
 test('Part H: cli orchestrate handles malformed token-budgets without uncaught throw', async () => {
   const root = fixtureRoot();
   const badBudget = path.join(root, 'bad-budgets.json');

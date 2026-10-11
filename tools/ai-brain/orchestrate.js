@@ -1543,7 +1543,12 @@ function readUsageReport(file) {
 }
 
 function runHostBrainGate(job, options = {}) {
-  const root = options.hostCwd || options.cwd || process.cwd();
+  const requestedRoot = options.hostCwd || options.cwd || process.cwd();
+  const root =
+    (options.platform || process.platform) !== 'win32' &&
+    /^[a-z]:[\\/]/i.test(String(requestedRoot))
+      ? path.resolve(__dirname, '..', '..')
+      : requestedRoot;
   const node = options.nodeExecutable || process.execPath;
   const suite = options.brainSuite || 'tools/ai-brain/test/*.test.js';
   const run = options.spawnSync || spawnSync;

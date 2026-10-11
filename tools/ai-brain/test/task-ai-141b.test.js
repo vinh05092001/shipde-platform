@@ -401,9 +401,9 @@ test('default isolated qualification adapter uses isolated orchestration and exa
     },
     {
       root: f.dir,
-      now: Date.now(),
+      now: 1791720000000,
       verdictPath: path.join(f.dir, 'verdict.json'),
-      stat: () => ({ mtimeMs: Date.parse('2026-10-10T12:00:00Z') }),
+      stat: () => ({ mtimeMs: 1791720000000 }),
       readFile: () => '{"verdict":"CLOSED"}',
       accounts: [],
       registry: {},
