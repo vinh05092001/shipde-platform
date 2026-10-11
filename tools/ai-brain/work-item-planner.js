@@ -303,7 +303,7 @@ async function planWorkItem(id, options, deps) {
     );
   }
   const ranked = await d.rankPlanner({ workItemId: id, role: 'planner.default' });
-  if (!ranked || ranked.eligible === false) {
+  if (!ranked || ranked.eligible !== true) {
     return {
       id,
       status: 'BLOCKED',
@@ -316,7 +316,7 @@ async function planWorkItem(id, options, deps) {
     candidate: ranked,
     docsOnly: true,
   });
-  if (!isolated || isolated.success === false) {
+  if (!isolated || isolated.success !== true) {
     return {
       id,
       status: 'BLOCKED',

@@ -170,8 +170,11 @@ test('G2 planning and author lanes stay independent and governed run requires it
           merged: true,
         };
       },
-      rankPlanner: async () => (calls.push('rank'), { candidateKey: 'planner-candidate' }),
-      runIsolatedPlanner: async () => (calls.push('write'), { isolated: true }),
+      rankPlanner: async () => (
+        calls.push('rank'),
+        { eligible: true, candidateKey: 'planner-candidate' }
+      ),
+      runIsolatedPlanner: async () => (calls.push('write'), { success: true }),
       reviewPlan: async () => (calls.push('review'), { verdict: 'PASS' }),
       mergePlan: async () => (calls.push('merge'), { merged: true }),
     }
@@ -233,7 +236,7 @@ test('G2 CLI plan --run wires its execution dependencies to the planner module',
           assert.equal(request.workItemId, 'FEAT-AUTH-07');
           return { status: 'BLOCKED', reason: 'fixture gate' };
         },
-        rankPlanner: async () => ({}),
+        rankPlanner: async () => ({ eligible: true, candidateKey: 'planner-fixture' }),
         runIsolatedPlanner: async () => ({ success: true }),
         reviewPlan: async () => ({ verdict: 'PASS' }),
         mergePlan: async () => ({ merged: true }),
@@ -289,8 +292,8 @@ test('G3 next loop plans a dependency-ready backlog item when no author-ready it
               merged: true,
             };
           },
-          rankPlanner: async () => ({ candidateKey: 'planner-candidate' }),
-          runIsolatedPlanner: async () => ({ isolated: true }),
+          rankPlanner: async () => ({ eligible: true, candidateKey: 'planner-candidate' }),
+          runIsolatedPlanner: async () => ({ success: true }),
           reviewPlan: async () => ({ verdict: 'PASS' }),
           mergePlan: async () => {
             register[0].status = 'READY_FOR_AUTHOR';
@@ -351,7 +354,7 @@ test('G3 keeps the author lane selected and plans one dependency-ready item ahea
   }
 });
 
-test('G3 selects a doc-backed BACKLOG row for authoring, not planning', () => {
+test('G3 does not treat a draft-backed BACKLOG row as approved for authoring', () => {
   const root = fixtureRoot('plan-g3-existing-');
   try {
     const workItemDir = path.join(root, 'docs', 'product-spec', 'work-items');
@@ -363,14 +366,15 @@ test('G3 selects a doc-backed BACKLOG row for authoring, not planning', () => {
         records: [],
       }
     );
-    assert.equal(result.item.work_item_id, 'FEAT-AUTH-07');
+    assert.equal(result.item, null);
     assert.equal(result.planCandidate, null);
+    assert.match(result.skipped[0].reason, /not READY_FOR_AUTHOR/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('G3 author selection prefers an earlier doc-backed backlog row over planning', () => {
+test('G3 skips an earlier ungoverned doc-backed backlog row and plans a later row', () => {
   const root = fixtureRoot('plan-g3-mixed-');
   try {
     const workItemDir = path.join(root, 'docs', 'product-spec', 'work-items');
@@ -381,14 +385,14 @@ test('G3 author selection prefers an earlier doc-backed backlog row over plannin
       { rootDir: root, loop: true },
       { items: [existing, needsPlan], records: [] }
     );
-    assert.equal(result.item, existing);
+    assert.equal(result.item, needsPlan);
     assert.equal(result.planCandidate, needsPlan);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('G3 next loop runs intake for a doc-backed BACKLOG row without invoking planning', async () => {
+test('G3 next loop does not run intake for an ungoverned doc-backed BACKLOG row', async () => {
   const root = fixtureRoot('plan-g3-doc-backed-author-');
   const workItemPath = path.join(root, 'docs', 'product-spec', 'work-items', 'FEAT-AUTH-07.md');
   fs.writeFileSync(workItemPath, '# Existing Work Item\n');
@@ -401,7 +405,7 @@ test('G3 next loop runs intake for a doc-backed BACKLOG row without invoking pla
         planningDeps: {
           runPlanning: async () => {
             calls.push('planning');
-            throw new Error('existing Work Item must go to author intake');
+            throw new Error('draft must go through governed planning');
           },
         },
         runIntake: async (options) => {
@@ -410,8 +414,9 @@ test('G3 next loop runs intake for a doc-backed BACKLOG row without invoking pla
         },
       })
     );
-    assert.deepEqual(calls, ['intake:FEAT-AUTH-07']);
-    assert.equal(result.stopped, undefined);
+    assert.deepEqual(calls, []);
+    assert.equal(result.stopped, true);
+    assert.equal(result.reason, 'NO_READY_ITEM');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -471,7 +476,7 @@ test('G3 planner lane accepts a blocked result as a single planning outcome', as
         calls.push('plan');
         return { status: 'BLOCKED', reason: 'source gap' };
       },
-      rankPlanner: async () => ({ candidateKey: 'planner' }),
+      rankPlanner: async () => ({ eligible: true, candidateKey: 'planner' }),
       runIsolatedPlanner: async () => ({ success: true }),
       reviewPlan: async () => ({ verdict: 'PASS' }),
       mergePlan: async () => ({ merged: true }),
@@ -494,7 +499,16 @@ test('G3 parallel planning failure stops the loop and records a failed decision'
           runPlanning: async () => {
             throw new Error('parallel planner failed');
           },
+          rankPlanner: async () => ({ eligible: true, candidateKey: 'planner' }),
+          runIsolatedPlanner: async () => ({ success: true }),
+          reviewPlan: async () => ({ verdict: 'PASS' }),
+          mergePlan: async () => ({ success: true, merged: true }),
         },
+        readRegister: () => [
+          { work_item_id: 'FEAT-AUTH-06', status: 'READY_FOR_AUTHOR', dependencies: '' },
+          { work_item_id: 'FEAT-AUTH-07', status: 'BACKLOG', dependencies: '' },
+        ],
+        runIntake: async () => ({ status: 'completed' }),
       })
     );
     assert.equal(result.stopped, true);

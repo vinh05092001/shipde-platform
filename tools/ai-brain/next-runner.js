@@ -593,7 +593,10 @@ function findNextWorkItem(options, deps) {
       }
       const workItemPath = path.join(rootDir, 'docs', 'product-spec', 'work-items', id + '.md');
       if (fs.existsSync(workItemPath)) {
-        if (!selected) selected = item;
+        skipped.push({
+          id,
+          reason: 'Work Item document exists but register is not READY_FOR_AUTHOR',
+        });
         continue;
       }
       if (!planCandidate) planCandidate = item;
@@ -840,7 +843,7 @@ async function nextLoop(options, deps) {
       'work-items',
       item.work_item_id + '.md'
     );
-    if (String(item.status).trim() === 'BACKLOG' && !fs.existsSync(workItemPath)) {
+    if (String(item.status).trim() === 'BACKLOG') {
       try {
         const planning = require('./work-item-planner');
         const planned = await planning.planWorkItem(
