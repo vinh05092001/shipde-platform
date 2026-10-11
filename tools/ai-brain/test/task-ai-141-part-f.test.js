@@ -58,13 +58,24 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
   test('prior promotes a strong untried model over weak model with old evidence', () => {
     const strong = candidate('strong-new', {
       evidence: [],
-      latencyMs: 5000,
+      latencyMs: 0,
       cost: 1,
+      quality: 100,
+      headroomStatus: 'open',
     });
     const weak = candidate('weak-old', {
-      evidence: [],
+      evidence: [
+        {
+          status: 'passed',
+          proofLevel: 'WORK_ITEM_PASS',
+          quality: 20,
+          ts: '2026-10-01T00:00:00.000Z',
+        },
+      ],
       latencyMs: 5000,
       cost: 1,
+      quality: 20,
+      headroomStatus: 'open',
     });
     const withoutPrior = routing.rankForProfile([strong], profile(), assessment, {
       now: Date.parse('2026-10-10T12:00:00Z'),
@@ -95,7 +106,9 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
       },
     });
     const strongRanked = result.ranking.find((item) => item.modelId === strong.modelId);
-    assert.ok(strongRanked.score > withoutPrior.ranking[0].score);
+    assert.equal(result.ranking[0].modelId, strong.modelId);
+    assert.equal(result.chosen, strongRanked.candidateKey);
+    assert.ok(strongRanked.score > 0);
     assert.equal(strongRanked.scoreBreakdown.prior.normalizedScore, 0.9);
     assert.equal(strongRanked.scoreBreakdown.prior.weight, 0.33);
     assert.equal(
@@ -185,6 +198,8 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
       gateway: 'different-gateway',
       upstream: 'different-provider',
       qualifiedRoles: ['reviewer.primary'],
+      reservationStatus: 'reserved',
+      strong: true,
     });
     const allowed = routing.rankForProfile([untried], task, assessment, {
       headrooms: { default: 'open' },
@@ -203,6 +218,62 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
     });
     assert.equal(allowed.ranking[0].probation, true);
     assert.equal(allowed.ranking[0].probationRequiresIndependentReview, true);
+  });
+
+  test('probation execution refuses an available but unreserved reviewer before writer launch', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai141-probation-'));
+    const profileFile = path.join(root, 'profile.json');
+    fs.writeFileSync(profileFile, JSON.stringify(profile({ proofFloor: 'API_PASS' })), 'utf8');
+    const writer = candidate('probation-writer', {
+      evidence: [],
+      qualifiedRoles: ['author.foundation'],
+      latencyMs: 0,
+      quality: 100,
+      headroomStatus: 'open',
+    });
+    const reviewer = candidate('reviewer-available-only', {
+      gateway: 'different-gateway',
+      upstream: 'different-provider',
+      qualifiedRoles: ['reviewer.primary'],
+      evidence: [{ status: 'passed', proofLevel: 'WORK_ITEM_PASS' }],
+    });
+    let writerLaunches = 0;
+    const errors = [];
+    const result = await routing.runProfileDispatch(
+      { profile: profileFile, execute: true, launch: true, root },
+      {
+        rootDir: root,
+        candidates: [writer, reviewer],
+        evidenceDir: path.join(root, 'evidence'),
+        decisionDir: path.join(root, 'decisions'),
+        storePath: path.join(root, 'quota.json'),
+        home: root,
+        now: Date.now(),
+        priors: {
+          ranking: [
+            {
+              canonical: 'probation-writer',
+              codingTier: 'T1',
+              reviewTier: 'T1',
+              score: 95,
+              retrievedAt: new Date().toISOString(),
+            },
+          ],
+        },
+        headrooms: { default: 'open' },
+        useStoredQuota: false,
+        launcher: async () => {
+          writerLaunches += 1;
+          return { status: 'completed' };
+        },
+        log: () => {},
+        error: (message) => errors.push(message),
+        exit: () => {},
+      }
+    );
+    assert.equal(result.refused, 'PROBATION_REQUIRES_INDEPENDENT_REVIEW');
+    assert.equal(writerLaunches, 0);
+    assert.ok(errors.includes('PROBATION_REQUIRES_INDEPENDENT_REVIEW'));
   });
 
   test('JEV can choose only eligible top candidates; low confidence keeps deterministic choice', async () => {

@@ -821,6 +821,14 @@ function hasIndependentReviewerCandidate(candidate, reviewers) {
   return (reviewers || []).some((reviewer) => {
     if (!reviewer || !Array.isArray(reviewer.qualifiedRoles)) return false;
     if (!reviewer.qualifiedRoles.some((role) => /review/i.test(role))) return false;
+    if (reviewer.reservationStatus !== 'reserved') return false;
+    const reviewerProof = reviewer.proofLevel || proofObserved(reviewer.evidenceData, reviewer);
+    const reviewerPrior = reviewer.priorTier || reviewer.prior?.tier;
+    const strongReviewer =
+      (reviewerProof && evidence.ProofRank[reviewerProof] >= evidence.ProofRank.WORK_ITEM_PASS) ||
+      reviewer.strong === true ||
+      reviewerPrior === 'T1';
+    if (!strongReviewer) return false;
     return (
       candidateKey(reviewer) !== writerKey &&
       canonicalFailureDomain(reviewer) !== null &&
@@ -1263,17 +1271,7 @@ function rankForProfile(candidates, profile, assessment, ctx) {
   }
 
   ranked.sort((a, b) => {
-    if (a.probation !== b.probation) return a.probation ? 1 : -1;
-    const aPriorBonus = a.scoreBreakdown.prior
-      ? (a.scoreBreakdown.prior.contribution ?? a.scoreBreakdown.prior.bonus ?? 0)
-      : 0;
-    const bPriorBonus = b.scoreBreakdown.prior
-      ? (b.scoreBreakdown.prior.contribution ?? b.scoreBreakdown.prior.bonus ?? 0)
-      : 0;
-    const aBaseScore = a.score - aPriorBonus;
-    const bBaseScore = b.score - bPriorBonus;
-    if (bBaseScore !== aBaseScore) return bBaseScore - aBaseScore;
-    if (bPriorBonus !== aPriorBonus) return bPriorBonus - aPriorBonus;
+    if (b.score !== a.score) return b.score - a.score;
     if (a.reservationsHeld !== b.reservationsHeld) return a.reservationsHeld - b.reservationsHeld;
     return a.candidateKey.localeCompare(b.candidateKey);
   });
@@ -1699,6 +1697,22 @@ async function runProfileDispatch(args, deps) {
     selectedForGuarantee,
     independentReviewerCandidates
   );
+  const selectedIndependentReviewer = selectedHasIndependentReviewer
+    ? independentReviewerCandidates.find((reviewer) => {
+        if (!reviewer || !Array.isArray(reviewer.qualifiedRoles)) return false;
+        if (!reviewer.qualifiedRoles.some((role) => /review/i.test(role))) return false;
+        if (reviewer.reservationStatus !== 'reserved') return false;
+        const proof = reviewer.proofLevel || proofObserved(reviewer.evidenceData, reviewer);
+        return (
+          ((proof && evidence.ProofRank[proof] >= evidence.ProofRank.WORK_ITEM_PASS) ||
+            reviewer.strong === true ||
+            reviewer.priorTier === 'T1' ||
+            reviewer.prior?.tier === 'T1') &&
+          candidateKey(reviewer) !== candidateKey(selectedForGuarantee) &&
+          canonicalFailureDomain(reviewer) !== canonicalFailureDomain(selectedForGuarantee)
+        );
+      })
+    : null;
   const decisionRecorded = {
     stage: decisions.Stage.SELECTED,
     workItemId: profile.taskId,
@@ -1739,7 +1753,10 @@ async function runProfileDispatch(args, deps) {
     probationReviewGuarantee: {
       established: selectedHasIndependentReviewer,
       source: selectedHasIndependentReviewer
-        ? 'qualified reviewer candidate in a different failure domain'
+        ? 'reserved strong reviewer in a different failure domain'
+        : null,
+      reviewerCandidateKey: selectedIndependentReviewer
+        ? candidateKey(selectedIndependentReviewer)
         : null,
     },
   };
@@ -1821,6 +1838,7 @@ async function runProfileDispatch(args, deps) {
         ranking: result.ranking,
       };
     }
+    const reservedReviewer = selectedIndependentReviewer;
     const parsedKey = parseCandidateKey(result.chosen) || {};
     const harness = chosenCandidate.harness || parsedKey.harness;
     const accessPath = chosenCandidate.accessPath || parsedKey.accessPath;
@@ -1834,6 +1852,22 @@ async function runProfileDispatch(args, deps) {
     const modelId = chosenCandidate.modelId || parsedKey.modelId;
     reservationId = `${profile.taskId}::${result.chosen}`;
 
+    if (chosenCandidate.probationRequiresIndependentReview) {
+      const reviewerKey = candidateKey(reservedReviewer);
+      const reviewerAccount = reservedReviewer.accountId || 'UNPINNED';
+      const reviewerReservationId = `${profile.taskId}::${reviewerKey}`;
+      quotaStore.recordReservation(
+        profile.taskId,
+        'reviewer',
+        reviewerAccount,
+        reviewerKey,
+        100000,
+        { home: d.home, path: d.storePath, now }
+      );
+      reservedReviewer.reservationStatus = 'reserved';
+      reservedReviewer.reservationId = reviewerReservationId;
+    }
+
     launchRequest = {
       candidateKey: result.chosen,
       harness,
@@ -1843,6 +1877,13 @@ async function runProfileDispatch(args, deps) {
       account,
       modelId,
       reservationId,
+      independentReviewer: reservedReviewer
+        ? {
+            candidateKey: candidateKey(reservedReviewer),
+            failureDomain: canonicalFailureDomain(reservedReviewer),
+            reservationId: reservedReviewer.reservationId || null,
+          }
+        : null,
     };
 
     quotaStore.recordReservation(profile.taskId, profile.role, account, result.chosen, 100000, {
