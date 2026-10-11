@@ -691,6 +691,14 @@ test('intake pool writer inherits backend WORK_ITEM_PASS from blocked 9router ag
   assert.equal(proof.transferred, true);
   assert.equal(proof.source, candidateKey(agCandidate));
   assert.equal(proof.sourceModel, 'ag/' + backendModel);
+  // A local planning/infrastructure failure is not evidence against either
+  // route and must not revoke a successfully transferred model proof.
+  const afterPlanningInfrastructureFailure = evidence.loadEvidence(path.join(root, 'evidence'));
+  assert.equal(
+    require('../routing').proofObservedWithSource(afterPlanningInfrastructureFailure, poolCandidate)
+      .level,
+    'WORK_ITEM_PASS'
+  );
 
   const profileFile = path.join(root, 'profile.json');
   const decisionDir = path.join(root, 'decisions');

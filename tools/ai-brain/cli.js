@@ -3037,6 +3037,30 @@ function intakeCommand(args, deps = {}) {
     });
 }
 
+function planCommand(args, deps = {}) {
+  const id = args['work-item'] || args.workItem;
+  if (typeof id !== 'string' || !id.trim()) {
+    const error = new Error('plan requires --work-item <ID>');
+    error.code = 'PLAN_INVALID_ID';
+    return Promise.reject(error);
+  }
+  const planner = require('./work-item-planner');
+  const rootDir = args.root || process.cwd();
+  const planningDeps = deps.__planningDepsReady
+    ? deps
+    : planner.defaultPlanningDeps(rootDir, deps.planningDeps || deps);
+  return Promise.resolve(
+    planner.planWorkItem(
+      id.trim(),
+      {
+        rootDir,
+        run: Boolean(args.run),
+      },
+      planningDeps
+    )
+  );
+}
+
 function buildQualificationCandidates(rootDir) {
   const fsx = require('fs');
   const intakeRoot = path.join(rootDir, 'tools', 'ai-brain', 'data', 'intake');
@@ -3150,9 +3174,8 @@ function buildQualificationCandidates(rootDir) {
       );
     });
 }
-
-function main() {
-  const args = parseArgs(process.argv.slice(2));
+function main(argv = process.argv.slice(2), deps = {}) {
+  const args = parseArgs(argv);
   const command = args._[0] || 'reconcile';
 
   if (command === 'reconcile') return reconcileCommand(args);
@@ -3331,6 +3354,27 @@ function main() {
     return;
   }
 
+  // plan (TASK-AI-141 G): draft only from approved, cited repository sources.
+  if (command === 'plan') {
+    const rootDir = args.root || process.cwd();
+    const planningDeps = require('./work-item-planner').defaultPlanningDeps(
+      rootDir,
+      deps.planningDeps || deps
+    );
+    planCommand(args, Object.assign({}, planningDeps, { __planningDepsReady: true }))
+      .then((result) => {
+        console.log(JSON.stringify(result, null, 2));
+        if (result && (result.blocking || result.status === 'BLOCKED')) process.exitCode = 1;
+      })
+      .catch((err) => {
+        console.error(
+          (err && err.code ? err.code + ': ' : '') + (err && err.message ? err.message : err)
+        );
+        process.exitCode = 1;
+      });
+    return;
+  }
+
   // next (TASK-AI-132): pick the next dependency-ready Work Item and run through intake.
   if (command === 'next') {
     const { nextCommand } = require('./next-runner');
@@ -3359,7 +3403,7 @@ function main() {
 
   console.error('Lệnh không rõ: ' + command);
   console.error(
-    'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | discovery | account | probe | qualify | serena | sources | evidence | review | orchestrate | intake | next | merge'
+    'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | discovery | account | probe | qualify | serena | sources | evidence | review | orchestrate | intake | plan | next | merge'
   );
   process.exit(2);
 }
@@ -3387,8 +3431,14 @@ module.exports = {
   orchestrateCommand,
   mergeCommand,
   intakeCommand,
+  planCommand,
   nextCommand: (args, deps) => {
     const nextDeps = Object.assign({}, deps || {});
+    const rootDir = args.root || process.cwd();
+    nextDeps.planningDeps = require('./work-item-planner').defaultPlanningDeps(
+      rootDir,
+      nextDeps.planningDeps || nextDeps
+    );
     if (!nextDeps.qualificationSlot) {
       nextDeps.qualificationSlot = async () => {
         const { runAutoCli } = require('./qualification-auto');
