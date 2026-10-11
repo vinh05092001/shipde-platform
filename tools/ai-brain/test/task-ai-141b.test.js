@@ -451,7 +451,6 @@ test('production candidate builder uses intake catalogue/accounts and Controller
   const oldGenerate = require('../candidates').generateCandidates;
   const oldAnnotate = require('../candidates').annotateCandidates;
   const oldEvidence = require('../evidence').loadEvidence;
-  const oldRank = require('../ranking').rankAndRecord;
   let inputs;
   try {
     require('../accounts').listAccounts = () => [
@@ -464,10 +463,6 @@ test('production candidate builder uses intake catalogue/accounts and Controller
     };
     require('../candidates').annotateCandidates = (rows) => rows;
     require('../evidence').loadEvidence = () => ({});
-    require('../ranking').rankAndRecord = () => ({
-      rejected: [{ offeringId: CANDIDATE.candidateKey, reasonCode: 'PROOF_FLOOR_NOT_MET' }],
-      ranking: [],
-    });
     const candidates = cli._buildQualificationCandidates
       ? cli._buildQualificationCandidates(root)
       : null;
@@ -475,16 +470,99 @@ test('production candidate builder uses intake catalogue/accounts and Controller
     assert.equal(inputs.catalogue[0], 'ag/gemini-test-model');
     assert.ok(inputs.accounts.some((account) => account.id === 'agy-pool-2'));
     assert.equal(inputs.externalWorkers, 'agy-pool');
-    assert.equal(candidates[0].status, 'rejected');
-    assert.deepEqual(candidates[0].rejectionReasons, ['PROOF_FLOOR_NOT_MET']);
+    assert.equal(candidates.length, 0);
   } finally {
     require('../accounts').listAccounts = oldListAccounts;
     require('../sources').loadSources = oldLoadSources;
     require('../candidates').generateCandidates = oldGenerate;
     require('../candidates').annotateCandidates = oldAnnotate;
     require('../evidence').loadEvidence = oldEvidence;
-    require('../ranking').rankAndRecord = oldRank;
     fsx.rmSync(runDir, { recursive: true, force: true });
+  }
+});
+
+test('qualify auto selects unproven candidates from fake intake catalogue', async () => {
+  const fsx = require('fs');
+  const path = require('path');
+  const root = fs.mkdtempSync(path.join(process.cwd(), '.qualification-auto-catalogue-'));
+  fixtures.push(root);
+  const intakeRoot = path.join(root, 'tools', 'ai-brain', 'data', 'intake', 'fixture');
+  fsx.mkdirSync(intakeRoot, { recursive: true });
+  fsx.writeFileSync(path.join(intakeRoot, 'catalogue.json'), JSON.stringify(['fake/model-a']));
+  fsx.writeFileSync(path.join(intakeRoot, 'accounts.json'), JSON.stringify([]));
+  const f = fixture();
+  const saved = {};
+  for (const [mod, key] of [
+    ['accounts', 'listAccounts'],
+    ['sources', 'loadSources'],
+    ['candidates', 'generateCandidates'],
+    ['candidates', 'annotateCandidates'],
+    ['evidence', 'loadEvidence'],
+  ]) {
+    saved[mod + '.' + key] = require('../' + mod)[key];
+  }
+  try {
+    require('../accounts').listAccounts = () => [];
+    require('../sources').loadSources = () => ({ sources: [] });
+    require('../candidates').generateCandidates = () => [
+      {
+        ...CANDIDATE,
+        candidateKey: undefined,
+        modelId: 'model-a',
+        upstream: 'up-a',
+        harness: 'codex',
+        capabilities: { contextWindow: 200000 },
+      },
+      {
+        ...CANDIDATE,
+        candidateKey: undefined,
+        modelId: 'model-b',
+        upstream: 'up-b',
+        accountId: 'acct-b',
+        quotaScope: 'acct-b',
+        harness: 'codex',
+        capabilities: { contextWindow: 200000 },
+      },
+      {
+        ...CANDIDATE,
+        candidateKey: undefined,
+        modelId: 'model-blocked',
+        upstream: 'up-blocked',
+        blocked: true,
+      },
+    ];
+    require('../candidates').annotateCandidates = (rows) => rows;
+    require('../evidence').loadEvidence = () => ({});
+    const resultBox = [];
+    const code = await runAutoCli(['--auto', '--items', f.itemsFile], {
+      usageFile: f.usageFile,
+      config: { perRun: 2, perDay: 2 },
+      buildCandidates: () => cli._buildQualificationCandidates(root),
+      assertIsolationClosed: () => ({ verdict: 'CLOSED' }),
+      runIsolatedReviewed: async ({ candidate }) => ({
+        verdict: 'FAIL',
+        sha: candidate.commit,
+        reviewedSha: candidate.commit,
+      }),
+      out: (line) => resultBox.push(JSON.parse(line)),
+    });
+    assert.equal(code, 0);
+    assert.equal(resultBox[0].selected, 2);
+    assert.deepEqual(
+      resultBox[0].qualified,
+      [],
+      'fake non-PASS reviews must not add WORK_ITEM_PASS evidence'
+    );
+    const built = cli._buildQualificationCandidates(root);
+    assert.equal(built.length, 2);
+    assert.ok(built.every((candidate) => candidate.status === 'rejected'));
+    assert.ok(built.every((candidate) => candidate.rejectionReasons[0] === 'PROOF_FLOOR_NOT_MET'));
+    assert.ok(built.every((candidate) => !candidate.qualifiedRoles?.includes('author.foundation')));
+  } finally {
+    for (const [entry, value] of Object.entries(saved)) {
+      const [mod, key] = entry.split('.');
+      require('../' + mod)[key] = value;
+    }
   }
 });
 
