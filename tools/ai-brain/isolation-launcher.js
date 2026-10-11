@@ -854,7 +854,7 @@ function getIsolatedLauncher() {
     // (LOCALAPPDATA\ShipDe\isolation-verdict.json); LOCALAPPDATA is unset on
     // non-Windows, so production there resolves to a relative path, exactly as
     // before this opt was added.
-    const verdictPath = isolationVerdictPath();
+    const verdictPath = isolationVerdictPath(opts);
     if (!fs.existsSync(verdictPath)) {
       throw new Error('ISOLATION_VERDICT_MISSING: Cannot find ' + verdictPath);
     }
@@ -1852,7 +1852,6 @@ function getIsolatedLauncher() {
       adapterId: adapter.id,
       isolationVerdict: verdictData,
       isolationVerdictPath: verdictPath,
-      launchArgsPath,
       rtkPathPrepend,
       credentialEnv: selectedCredentialEnv,
     });
