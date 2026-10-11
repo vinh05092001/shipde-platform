@@ -1050,9 +1050,9 @@ function rankForProfile(candidates, profile, assessment, ctx) {
     : 0;
   const ranked = [];
   const rejected = [];
-  const probation = new Set(
-    (context.probationCandidateKeys || []).filter((key) => typeof key === 'string')
-  );
+  const probationKeys =
+    (ctx && ctx.probationCandidateKeys) || (context && context.probationCandidateKeys) || [];
+  const probation = new Set(probationKeys.filter((key) => typeof key === 'string'));
 
   if (Number(profile.currentWorkload) >= Number(profile.resourceCeiling)) {
     return {
@@ -1160,24 +1160,24 @@ function rankForProfile(candidates, profile, assessment, ctx) {
       (!['security', 'money', 'tenant'].some((risk) =>
         (profile.riskDomains || []).includes(risk)
       ) ||
-        ctx.independentStrongReviewerGuaranteed === true);
+        context.independentStrongReviewerGuaranteed === true);
     const riskCritical = ['security', 'money', 'tenant'].some((risk) =>
       (profile.riskDomains || []).includes(risk)
     );
     const riskProbationRefused =
       riskCritical &&
-      !proofObservedWithSource(ctx.evidenceData, c).level &&
+      !proofObservedWithSource(context.evidenceData, c).level &&
       probationPrior &&
       !probationPrior.stale &&
       probationPrior.score >= 80 &&
-      !ctx.independentStrongReviewerGuaranteed;
+      !context.independentStrongReviewerGuaranteed;
     if (riskProbationRefused) {
       reject('PROBATION_REQUIRES_INDEPENDENT_STRONG_REVIEWER', 'candidate');
       continue;
     }
     let admittedOnProbation = false;
     if (profile.proofFloor !== 'NONE') {
-      const observedProof = proofObservedWithSource(ctx.evidenceData, c);
+      const observedProof = proofObservedWithSource(context.evidenceData, c);
       const observed = observedProof.level;
       const observedRank = observed ? evidence.ProofRank[observed] : 0;
       if (observedRank < evidence.ProofRank[profile.proofFloor]) {
@@ -1192,7 +1192,7 @@ function rankForProfile(candidates, profile, assessment, ctx) {
     } else if (
       profile.proofFloor === 'NONE' &&
       probationAllowed &&
-      !proofObservedWithSource(ctx.evidenceData, c).level
+      !proofObservedWithSource(context.evidenceData, c).level
     ) {
       admittedOnProbation = true;
       c.probation = true;
@@ -1588,15 +1588,26 @@ async function runProfileDispatch(args, deps) {
     enforceKnownQuota: args.execute === true && hasQuotaAccountReadings(d.home, d.storePath),
   };
   const result = rankForProfile(annotated, profile, assessment, rankCtx);
-  const advisedResult =
-    result.ranking.length && typeof d.modelChoiceAsk === 'function'
-      ? await adviseRankedModelChoice(result, profile, {
+  if (result.ranking.length && typeof d.modelChoiceAsk === 'function') {
+    try {
+      Object.assign(
+        result,
+        await adviseRankedModelChoice(result, profile, {
           ask: d.modelChoiceAsk,
           minConfidence: d.modelChoiceMinConfidence,
           topN: d.modelChoiceTopN,
         })
-      : result;
-  Object.assign(result, advisedResult);
+      );
+    } catch (err) {
+      result.modelChoice = {
+        outcome: 'UNDECIDED',
+        choice: null,
+        confidence: 0,
+        reason: 'JEV_PROVIDER_FAILED: ' + ((err && err.message) || String(err)),
+        topN: result.ranking.slice(0, d.modelChoiceTopN || 5).map((entry) => entry.candidateKey),
+      };
+    }
+  }
   const execute = args.execute === true;
 
   if (result.reasonCode === 'MODEL_SELECTION_NOT_PROVEN' && execute) {
