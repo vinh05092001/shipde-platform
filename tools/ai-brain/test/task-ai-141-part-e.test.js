@@ -64,8 +64,54 @@ test('discovery preserves separate account paths on one gateway', () => {
   );
   assert.deepEqual(paths.map((route) => route.accountId).sort(), ['account-a', 'account-b']);
   const { store } = { store: { version: 1, paths: {}, events: [] } };
-  routes.recordResult(store, 'model', paths[0].id, { ok: false, status: 429 }, 1_800_000_000_000);
+  routes.recordResult(store, 'model', paths[0], { ok: false, status: 429 }, 1_800_000_000_000);
+  routes.recordResult(store, 'model', paths[1], { ok: true }, 1_800_000_000_000);
   assert.equal(routes.isEligible(store, 'vendor/model', paths[1]), true);
+});
+
+test('account-scoped parks stay ineligible when another account on the gateway is healthy', () => {
+  const store = { version: 1, paths: {}, events: [] };
+  const route = { id: 'gw', accountId: 'account-a' };
+  routes.recordResult(store, 'model', route, { ok: false, status: 451 }, 1_800_000_000_000);
+  assert.equal(routes.isEligible(store, 'model', route), false);
+  routes.recordResult(
+    store,
+    'model',
+    { id: 'gw', accountId: 'account-b' },
+    { ok: true },
+    1_800_000_000_000
+  );
+  assert.equal(routes.isEligible(store, 'model', { id: 'gw', accountId: 'account-b' }), true);
+  assert.equal(routes.isEligible(store, 'model', { id: 'gw', accountId: 'account-a' }), false);
+});
+
+test('normal next loop refreshes the default route health store before selection', async (t) => {
+  const { dir } = temporaryStore(t);
+  const order = [];
+  const registerPath = path.join(dir, 'register.csv');
+  fs.writeFileSync(
+    registerPath,
+    'delivery_order,slice,group,work_item_id,feature_id,feature_name,key_behavior,status,dependencies,work_item_path,branch,pr,codex_verdict,merge_commit\\n1,,,,,,,READY_FOR_AUTHOR,,,,,,\\n'
+  );
+  const defaultHealthFile = path.join(dir, 'data', 'model-route-health.json');
+  const result = await cli.nextCommand(
+    { loop: true, maxIterations: 1, root: dir, 'decision-dir': path.join(dir, 'decisions') },
+    {
+      routeHealthFile: defaultHealthFile,
+      probeRoute: async () => {
+        order.push('probe');
+        return { ok: true };
+      },
+      onRouteRefresh: () => order.push('refresh'),
+      qualificationSlot: async () => ({ ran: false }),
+      log: () => {},
+      now: 1_800_000_000_000,
+      registry: { sources: [], dispatch: { providers: {} } },
+      accounts: [],
+    }
+  );
+  assert.equal(result.reason, 'NO_READY_ITEM');
+  assert.ok(order.includes('refresh'));
 });
 
 test('next loop invokes route due rechecks before selecting a work item', async (t) => {
@@ -285,7 +331,7 @@ test('gateway candidates retain successful probes, apply hand additions and hono
       models: [{ model: 'vendor-a/model-0', exclude: true }, 'vendor-a/model-extra'],
     },
   ];
-  const store = routes.loadStore(temporaryStore(t).file, { allowMissing: true });
+  const { store } = temporaryStore(t);
   routes.recordResult(store, 'vendor-a/model-extra', 'gateway-a', { ok: true }, 1_800_000_000_000);
   for (let i = 0; i < 50; i += 1)
     routes.recordResult(
@@ -749,7 +795,7 @@ test('live assembly fallback discovers account paths outside the catalogue', asy
       probeCap: 2,
       probeRoute: async (_model, route) => {
         counts.push(route);
-        return { ok: route === 'direct-vendor' };
+        return { ok: route === 'direct-vendor' || route === 'acct-a' };
       },
       offerings: [],
       registryAccounts: [],
@@ -804,7 +850,7 @@ test('fallback assembly probes every discovered direct and harness path', async 
       probeCap: 4,
       probeRoute: async (_model, route) => {
         attempted.push(route);
-        return { ok: route === 'direct-vendor' };
+        return { ok: route === 'direct-vendor' || route === 'vendor-a' };
       },
       offerings: [],
       registryAccounts: [],

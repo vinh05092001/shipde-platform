@@ -1113,7 +1113,7 @@ async function resolveFallbackRoutes(store, catalogue, probe, routeHealthApi, op
   const resolvedRoutes = [];
   for (const [normalized, paths] of pathsByModel) {
     for (const failed of paths) {
-      const health = store.paths[normalized + '|' + failed.id];
+      const health = routeHealthApi.getPathRecord(store, normalized, failed);
       if (
         !health ||
         health.status === 'AVAILABLE' ||
@@ -1123,7 +1123,7 @@ async function resolveFallbackRoutes(store, catalogue, probe, routeHealthApi, op
       if (preResolved) {
         const successful = paths.find(
           (route) =>
-            route.id !== failed.id && routeHealthApi.isEligible(store, normalized, route.id, now)
+            route.id !== failed.id && routeHealthApi.isEligible(store, normalized, route, now)
         );
         if (successful)
           resolvedRoutes.push({
@@ -3664,7 +3664,7 @@ module.exports = {
         return { ran: true, status: code === 0 ? 'completed' : 'refused' };
       };
     }
-    if (args.loop && !nextDeps.refreshRouteHealth && (args.catalogue || nextDeps.routeHealthFile)) {
+    if (args.loop && !nextDeps.refreshRouteHealth) {
       nextDeps.refreshRouteHealth = async ({ now }) => {
         const routeHealthApi = require('./route-health');
         const healthFile =

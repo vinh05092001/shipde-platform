@@ -125,24 +125,47 @@ function healthKey(modelId, routeId) {
   return normalizeModelId(modelId) + '|' + pathId;
 }
 
-function isEligible(store, modelId, routeId, now) {
-  const record = store.paths[healthKey(modelId, routeId)];
-  // Due indicates the controller must re-check before selection; it is not
-  // itself evidence that the route is healthy.
-  return !record || record.status === 'AVAILABLE';
-}
-
 function isDue(store, modelId, routeId, now) {
-  const record = store.paths[healthKey(modelId, routeId)];
+  const record = getPathRecord(store, modelId, routeId);
   return Boolean(
     record && record.status !== 'AVAILABLE' && dueAt(record, Number(now) || Date.now())
   );
 }
 
+function getPathRecord(store, modelId, routeId) {
+  const exact = store.paths[healthKey(modelId, routeId)];
+  if (exact) return exact;
+  if (routeId && typeof routeId === 'object' && routeId.accountId) {
+    const gatewayRecord = store.paths[healthKey(modelId, routeId.id)];
+    if (gatewayRecord) return gatewayRecord;
+  }
+  const id = routeId && typeof routeId === 'object' ? String(routeId.id) : String(routeId);
+  const prefix = normalizeModelId(modelId) + '|' + id + '@';
+  const related = Object.entries(store.paths).filter(([key]) => key.startsWith(prefix));
+  if (routeId && typeof routeId === 'object' && routeId.accountId)
+    return related.find(([key]) => key === prefix + routeId.accountId)?.[1];
+  return related.length === 1 ? related[0][1] : undefined;
+}
+
+function isEligible(store, modelId, routeId, now) {
+  const exact = store.paths[healthKey(modelId, routeId)];
+  const record =
+    exact ||
+    (routeId && typeof routeId === 'object' && routeId.accountId
+      ? store.paths[healthKey(modelId, routeId.id)]
+      : undefined);
+  if (record) return record.status === 'AVAILABLE';
+  return true;
+}
+
 async function routeFallback(modelId, failedPath, paths, probe, store, options) {
   const o = options || {};
   const now = Number(o.now) || Date.now();
-  const failedRecord = store.paths[healthKey(modelId, failedPath)];
+  const failedRecord =
+    store.paths[healthKey(modelId, failedPath)] ||
+    Object.entries(store.paths).find(([key]) =>
+      key.startsWith(normalizeModelId(modelId) + '|' + failedPath + '@')
+    )?.[1];
   const failureReason =
     o.failureReason || (failedRecord && failedRecord.status) || 'UNAVAILABLE_NOW';
   const retryFailedPath =
@@ -150,17 +173,27 @@ async function routeFallback(modelId, failedPath, paths, probe, store, options) 
     failedRecord &&
     failedRecord.status === 'UNAVAILABLE_NOW' &&
     !isEligible(store, modelId, failedPath, now);
+  const failedAccountId = failedRecord && failedRecord.routeId && failedRecord.routeId.accountId;
   const ordered = (paths || [])
-    .filter((p) => p && (p.id !== failedPath || retryFailedPath || p.accountId))
+    .filter((p) => p && (p.id !== failedPath || retryFailedPath || Boolean(p.accountId)))
     .slice();
   ordered.sort((a, b) => Number(b.evidence || 0) - Number(a.evidence || 0));
   const failures = [];
   for (const route of ordered) {
-    if (!isEligible(store, modelId, route.id, now)) {
+    const accountPath = route;
+    if (route.id === failedPath && route.accountId && failedAccountId === route.accountId) {
+      failures.push({ path: route.id, reason: failedRecord && failedRecord.status });
+      continue;
+    }
+    if (route.id === failedPath && failedRecord && !failedAccountId) {
+      failures.push({ path: route.id, reason: failedRecord.status });
+      continue;
+    }
+    if (!isEligible(store, modelId, accountPath, now)) {
       failures.push({
         path: route.id,
         reason:
-          store.paths[healthKey(modelId, route)]?.status ||
+          store.paths[healthKey(modelId, accountPath)]?.status ||
           store.paths[healthKey(modelId, route.id)]?.status,
       });
       continue;
@@ -521,7 +554,7 @@ async function refreshFailedFallbacks(store, probe, options, now) {
   );
   for (const [normalized, rows] of byModel) {
     const failed = rows.find((row) => {
-      const record = row.gateway && store.paths[normalized + '|' + row.gateway];
+      const record = row.gateway && getPathRecord(store, normalized, row.gateway);
       return record && record.status !== 'AVAILABLE' && !dueAt(record, now);
     });
     if (!failed || checked >= cap) continue;
@@ -537,7 +570,7 @@ async function refreshFailedFallbacks(store, probe, options, now) {
       }
     }
     const probePaths = [...paths.values()].filter(
-      (route) => route.id !== failed.gateway && isEligible(store, normalized, route.id, now)
+      (route) => route.id !== failed.gateway && isEligible(store, normalized, route, now)
     );
     if (checked + probePaths.length > cap) continue;
     checked += probePaths.length;
@@ -549,7 +582,7 @@ async function refreshFailedFallbacks(store, probe, options, now) {
       store,
       {
         now,
-        failureReason: store.paths[normalized + '|' + failed.gateway].status,
+        failureReason: getPathRecord(store, normalized, failed.gateway).status,
         sleep: o.sleep,
         retryBackoffMs: o.retryBackoffMs,
       }
@@ -626,6 +659,8 @@ module.exports = {
   loadStore,
   saveStore,
   recordResult,
+  healthKey,
+  getPathRecord,
   isEligible,
   isDue,
   routeFallback,

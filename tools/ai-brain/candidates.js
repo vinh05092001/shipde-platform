@@ -709,9 +709,12 @@ function poolAccountCandidates(opts) {
           modelRows.length === 0 ||
           !modelRows.some((entry) => {
             const routeId = entry.gateway;
-            const record = routeId && routeHealth.paths[normalized + '|' + routeId];
+            const record =
+              routeId &&
+              health.getPathRecord(routeHealth, model, { id: routeId, accountId: acc.id });
             return Boolean(
-              (record && health.isEligible(routeHealth, model, routeId, o.now)) ||
+              (record &&
+                health.isEligible(routeHealth, model, { id: routeId, accountId: acc.id }, o.now)) ||
               (!record && o.probeEvidence && o.probeEvidence(model, routeId))
             );
           })
@@ -902,9 +905,10 @@ function gatewayAccountCandidates(opts) {
       if (!catalogueModelIds.has(modelId) && !excludes.has(modelId)) {
         const health = routeHealth && require('./route-health');
         const normalized = health && health.normalizeModelId(modelId);
-        const record = health && routeHealth.paths[normalized + '|' + gateway];
+        const routePath = { id: gateway, accountId: account.id };
+        const record = health && health.getPathRecord(routeHealth, modelId, routePath);
         const probed = Boolean(
-          (record && health.isEligible(routeHealth, modelId, gateway, routeNow)) ||
+          (record && health.isEligible(routeHealth, modelId, routePath, routeNow)) ||
           (probeOk && probeOk(modelId, gateway)) ||
           (o.probeEvidence && o.probeEvidence(modelId, gateway))
         );
@@ -931,9 +935,10 @@ function gatewayAccountCandidates(opts) {
       if (routeHealth) {
         const health = require('./route-health');
         const normalized = health.normalizeModelId(modelId);
-        const routeRecord = routeHealth.paths[normalized + '|' + gateway];
+        const routePath = { id: gateway, accountId: account.id };
+        const routeRecord = health.getPathRecord(routeHealth, modelId, routePath);
         const available = routeRecord
-          ? health.isEligible(routeHealth, modelId, gateway, routeNow)
+          ? health.isEligible(routeHealth, modelId, routePath, routeNow)
           : Boolean(
               (probeOk && probeOk(modelId, gateway)) ||
               (o.probeEvidence && o.probeEvidence(modelId, gateway))
