@@ -156,9 +156,16 @@ function draftWorkItem(id, options, deps) {
   // A local draft is never an approval gate. Only a separately reviewed and
   // governed docs-only merge may make the register item author-ready.
   const openDecisions = [];
-  if (!keyBehavior || !hasDetailedFeatureSource) {
+  const sourceBackedOutcome = primarySources.some(({ text }) =>
+    String(text)
+      .split(/\r?\n/)
+      .some((line) => line.includes(keyBehavior) && keyBehavior.length > 0)
+  );
+  if (!keyBehavior || !hasDetailedFeatureSource || !sourceBackedOutcome) {
     openDecisions.push(
-      'Approved sources do not provide enough feature-specific behavior and acceptance detail to write a complete Work Item without inventing product meaning.'
+      !sourceBackedOutcome && keyBehavior
+        ? 'The register business outcome is not present in approved sources and cannot be stated as product meaning.'
+        : 'Approved sources do not provide enough feature-specific behavior and acceptance detail to write a complete Work Item without inventing product meaning.'
     );
   }
   if (!approvedRefs.length) {
@@ -187,7 +194,7 @@ function draftWorkItem(id, options, deps) {
     '',
     '## Business outcome',
     '',
-    keyBehavior ? '> ' + keyBehavior : '> Not specified in the approved sources.',
+    sourceBackedOutcome ? '> ' + keyBehavior : '> Not specified in the approved sources.',
     '',
     '## Source references',
     '',
@@ -205,7 +212,9 @@ function draftWorkItem(id, options, deps) {
     '',
     '## In scope',
     '',
-    '- The catalog outcome above, subject to approval of detailed requirements.',
+    sourceBackedOutcome
+      ? '- The catalog outcome above, subject to approval of detailed requirements.'
+      : '- No feature-specific product behavior is stated because approved sources do not establish it.',
     '',
     '## Out of scope',
     '',
@@ -358,9 +367,103 @@ async function planWorkItem(id, options, deps) {
   return result;
 }
 
+function defaultPlanningDeps(rootDir, overrides) {
+  const d = Object.assign({}, overrides || {});
+  const root = path.resolve(rootDir || process.cwd());
+  if (!d.rankPlanner) {
+    d.rankPlanner = async ({ workItemId, role }) => {
+      const sources = require('./sources');
+      const evidence = require('./evidence');
+      const candidatesApi = require('./candidates');
+      const routing = require('./routing');
+      const { readDiscoveryCatalogue } = require('./discovery/read');
+      const registry = sources.loadSources();
+      const accounts = require('./accounts').listAccounts() || [];
+      let discovery = { candidates: [] };
+      try {
+        discovery = readDiscoveryCatalogue({ dataDir: path.join(__dirname, 'data', 'discovery') });
+      } catch {}
+      const evidenceData = evidence.loadEvidence(path.join(__dirname, 'data', 'evidence'));
+      const candidates = require('./cli').assembleForDispatch(discovery, accounts, registry, {
+        evidenceData,
+      });
+      const annotated = candidatesApi.annotateCandidates(candidates, evidenceData, {
+        now: Date.now(),
+      });
+      const profile = {
+        taskId: workItemId,
+        role,
+        complexity: 'complex',
+        riskDomains: ['documentation'],
+        qualityFloor: 0,
+        proofFloor: 'NONE',
+        contextSize: 0,
+        costCeiling: Number.MAX_SAFE_INTEGER,
+        currentWorkload: 0,
+        resourceCeiling: 100,
+        forbiddenFailureDomains: [],
+        requiredCapabilities: [],
+      };
+      const result = routing.rankForProfile(
+        annotated,
+        profile,
+        { weightProfile: 'QUALITY_FIRST' },
+        {
+          now: Date.now(),
+          evidenceData,
+          accounts,
+          useStoredQuota: true,
+        }
+      );
+      const chosen = result.ranking.find((candidate) => candidate.candidateKey === result.chosen);
+      return chosen
+        ? Object.assign({ eligible: true }, chosen)
+        : {
+            eligible: false,
+            reason: result.reason || 'No eligible planner candidate was ranked.',
+          };
+    };
+  }
+  if (!d.runIsolatedPlanner) {
+    d.runIsolatedPlanner = async ({ workItemId, candidate }) => {
+      if (typeof d.launchPlanner !== 'function') {
+        return { success: false, reason: 'No isolated planner launcher is configured.' };
+      }
+      return d.launchPlanner({
+        rootDir: root,
+        workItemId,
+        candidate,
+        role: 'planner.default',
+        docsOnly: true,
+        isolationLauncher: require('./isolation-launcher').getIsolatedLauncher(),
+      });
+    };
+  }
+  d.reviewPlan =
+    d.reviewPlan ||
+    (async () => ({
+      verdict: 'BLOCKED',
+      reason: 'Independent planner review service is not configured.',
+    }));
+  d.mergePlan =
+    d.mergePlan ||
+    (async () => ({
+      merged: false,
+      reason: 'Governed docs-only merge service is not configured.',
+    }));
+  d.runPlanning =
+    d.runPlanning ||
+    (async () => ({
+      status: 'BLOCKED',
+      reason: 'Planning cannot become author-ready without independent review and governed merge.',
+    }));
+  return d;
+}
+
 module.exports = {
   draftWorkItem,
   planWorkItem,
+  defaultPlanningDeps,
   APPROVED_SOURCES,
   APPROVED_SPEC_DIRS,
   TEMPLATE_REL,

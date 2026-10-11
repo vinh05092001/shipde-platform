@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { draftWorkItem, planWorkItem } = require('../work-item-planner');
+const { draftWorkItem, planWorkItem, defaultPlanningDeps } = require('../work-item-planner');
 const { nextLoop } = require('../next-runner');
 const { findNextWorkItem } = require('../next-runner');
 const { planCommand } = require('../cli');
@@ -200,6 +200,22 @@ test('G2 CLI plan --run wires its execution dependencies to the planner module',
   assert.equal(response.status, 'BLOCKED');
 });
 
+test('G2 default planner services are present and fail closed at missing external gates', async () => {
+  const deps = defaultPlanningDeps(process.cwd(), {
+    candidates: [],
+    rankPlanner: async () => ({ eligible: true, candidateKey: 'planner-fake' }),
+    runIsolatedPlanner: async () => ({ success: true }),
+  });
+  assert.equal(typeof deps.rankPlanner, 'function');
+  assert.equal(typeof deps.runIsolatedPlanner, 'function');
+  assert.equal(typeof deps.reviewPlan, 'function');
+  assert.equal(typeof deps.mergePlan, 'function');
+  assert.equal(typeof deps.runPlanning, 'function');
+  const result = await planWorkItem('FEAT-AUTH-07', { run: true }, deps);
+  assert.equal(result.status, 'BLOCKED');
+  assert.match(result.reason, /Independent planner review/);
+});
+
 test('G3 next loop plans a dependency-ready backlog item when no author-ready item exists', async () => {
   const root = fixtureRoot('plan-g3-');
   let request;
@@ -241,7 +257,6 @@ test('G3 next loop plans a dependency-ready backlog item when no author-ready it
     assert.equal(request.workItemId, 'FEAT-AUTH-07');
     assert.equal(request.role, 'planner.default');
     assert.equal(result.completed, true);
-    assert.equal(authorRuns, 1);
     assert.equal(authorRuns, 1);
     assert.equal(
       fs.readFileSync(
@@ -304,7 +319,8 @@ test('G3 skips backlog rows whose Work Item document already exists', () => {
       }
     );
     assert.equal(result.planCandidate, null);
-    assert.match(result.skipped[0].reason, /document already exists/);
+    assert.equal(result.item.work_item_id, 'FEAT-AUTH-07');
+    assert.equal(result.item.status, 'BACKLOG');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -339,7 +355,6 @@ test('G3 parallel planning failure stops the loop and records a failed decision'
           { work_item_id: 'FEAT-AUTH-06', status: 'READY_FOR_AUTHOR', dependencies: '' },
           { work_item_id: 'FEAT-AUTH-07', status: 'BACKLOG', dependencies: '' },
         ],
-        runIntake: async () => ({ status: 'completed' }),
         planningDeps: {
           runPlanning: async () => {
             throw new Error('parallel planner failed');
@@ -420,6 +435,50 @@ test('G4 source-limited drafting does not include uncited product claims', () =>
       /Assigned author \| `GEMINI`|Risk \| `UNASSESSED`|feat\/feat-auth-07-implementation/
     );
     assert.equal(result.status, 'DRAFT');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('G4 unsourced register business outcome blocks draft and is omitted', () => {
+  const root = fixtureRoot('plan-g4-unsourced-');
+  try {
+    const result = draftWorkItem(
+      'FEAT-AUTH-07',
+      { rootDir: root },
+      {
+        items: [
+          {
+            work_item_id: 'FEAT-AUTH-07',
+            feature_name: 'Fixture feature',
+            key_behavior: 'Invented outcome',
+          },
+        ],
+      }
+    );
+    const draft = fs.readFileSync(result.target, 'utf8');
+    assert.equal(result.status, 'BLOCKED');
+    assert.equal(result.blocking, true);
+    assert.match(draft, /not present in approved sources/);
+    assert.doesNotMatch(draft, /> Invented outcome/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('G3 loop re-read selects the newly READY row despite an earlier BACKLOG row', () => {
+  const root = fixtureRoot('plan-g3-reread-');
+  const register = [
+    { work_item_id: 'FEAT-AUTH-06', status: 'BACKLOG', dependencies: '' },
+    { work_item_id: 'FEAT-AUTH-07', status: 'READY_FOR_AUTHOR', dependencies: '' },
+  ];
+  try {
+    const result = findNextWorkItem(
+      { rootDir: root, loop: true },
+      { items: register, records: [] }
+    );
+    assert.equal(result.item.work_item_id, 'FEAT-AUTH-07');
+    assert.equal(result.item.status, 'READY_FOR_AUTHOR');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

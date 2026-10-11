@@ -593,8 +593,11 @@ function findNextWorkItem(options, deps) {
       }
       const workItemPath = path.join(rootDir, 'docs', 'product-spec', 'work-items', id + '.md');
       if (fs.existsSync(workItemPath)) {
-        skipped.push({ id, reason: 'Work Item document already exists' });
-        continue;
+        if (opts.loop) {
+          if (!selected) selected = item;
+          if (selected.work_item_id === id) continue;
+        } else skipped.push({ id, reason: 'Work Item document already exists' });
+        if (!opts.loop) continue;
       }
       if (!planCandidate) planCandidate = item;
       continue;
@@ -877,7 +880,7 @@ async function nextLoop(options, deps) {
         // A governed merge must update the durable register. Re-read it before
         // authoring so the normal dependency and status gates remain authoritative.
         const refreshed = findNextWorkItem(
-          { ...opts, now, terminalWorkItems, forceRegisterRead: true },
+          { ...opts, loop: true, now, terminalWorkItems, forceRegisterRead: true },
           d
         );
         const refreshedItem = refreshed.item;

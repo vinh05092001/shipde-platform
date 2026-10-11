@@ -3045,14 +3045,16 @@ function planCommand(args, deps = {}) {
     return Promise.reject(error);
   }
   const planner = require('./work-item-planner');
+  const rootDir = args.root || process.cwd();
+  const planningDeps = planner.defaultPlanningDeps(rootDir, deps.planningDeps || deps);
   return Promise.resolve(
     planner.planWorkItem(
       id.trim(),
       {
-        rootDir: args.root || process.cwd(),
+        rootDir,
         run: Boolean(args.run),
       },
-      deps.planningDeps || deps
+      planningDeps
     )
   );
 }
@@ -3363,6 +3365,11 @@ module.exports = {
   planCommand,
   nextCommand: (args, deps) => {
     const nextDeps = Object.assign({}, deps || {});
+    const rootDir = args.root || process.cwd();
+    nextDeps.planningDeps = require('./work-item-planner').defaultPlanningDeps(
+      rootDir,
+      nextDeps.planningDeps || nextDeps
+    );
     if (!nextDeps.qualificationSlot) {
       nextDeps.qualificationSlot = async () => {
         const { runAutoCli } = require('./qualification-auto');
