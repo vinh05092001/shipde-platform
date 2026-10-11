@@ -230,11 +230,11 @@ function openWritersDetailed(options) {
   for (const r of records) {
     if (!r || !r.workItemId) continue;
     const isReview =
+      r.stage === Stage.REVIEW_LAUNCH ||
       r.stage === Stage.REVIEW ||
       r.stage === Stage.REVIEWER_SELECTION ||
-      r.stage === Stage.REVIEW_LAUNCH ||
       r.role === 'reviewer' ||
-      (typeof r.role === 'string' && (r.role.startsWith('reviewer.') || r.role === 'reviewer'));
+      (typeof r.role === 'string' && r.role.startsWith('reviewer.'));
     if (isReview) continue;
     if (r.stage === Stage.LAUNCHED || r.stage === Stage.RESUMED) {
       state.set(r.workItemId, {
@@ -252,11 +252,12 @@ function openWritersDetailed(options) {
     }
   }
 
-  const ttlMs = (options && options.ttlMs) || 4 * 60 * 60 * 1000;
+  const ttlMs = (options && (options.staleWindowMs || options.ttlMs)) || 6 * 60 * 60 * 1000;
   const now = (options && options.now) || Date.now();
   const fs = require('fs');
 
   const activeWriters = [];
+  const staleWriters = [];
   for (const w of state.values()) {
     let lastActivity = new Date(w.since).getTime();
     if (w.worktree) {
@@ -279,6 +280,8 @@ function openWritersDetailed(options) {
     const elapsed = now - lastActivity;
     if (elapsed <= ttlMs) {
       activeWriters.push(w);
+    } else {
+      staleWriters.push({ ...w, staleForMs: elapsed });
     }
   }
 
@@ -298,6 +301,7 @@ function openWritersDetailed(options) {
 
   return {
     writers: filtered,
+    stale: staleWriters,
     readable: detail.readable,
     damaged: detail.damaged,
   };
@@ -317,10 +321,9 @@ function openReviewersDetailed(options) {
     if (!r || !r.workItemId) continue;
     const isReview =
       r.stage === Stage.REVIEW ||
-      r.stage === Stage.REVIEWER_SELECTION ||
       r.stage === Stage.REVIEW_LAUNCH ||
       r.role === 'reviewer' ||
-      (typeof r.role === 'string' && (r.role.startsWith('reviewer.') || r.role === 'reviewer'));
+      (typeof r.role === 'string' && r.role.startsWith('reviewer.'));
 
     if (isReview) {
       const isTerminal =
@@ -360,12 +363,14 @@ function openReviewersDetailed(options) {
           }
         }
       } else {
+        const previous = state.get(revKey);
         state.set(revKey, {
           workItemId: r.workItemId,
           sessionId: r.sessionId || null,
           role: r.role || 'reviewer',
           reviewer: r.reviewer || null,
-          since: r.at,
+          since: previous ? previous.since : r.at,
+          lastActivity: new Date(r.at).getTime(),
         });
       }
     } else if (r.stage === Stage.COMPLETED || r.stage === Stage.FAILED) {
@@ -377,18 +382,22 @@ function openReviewersDetailed(options) {
     }
   }
 
-  const ttlMs = (options && options.ttlMs) || 4 * 60 * 60 * 1000;
+  const ttlMs = (options && (options.staleWindowMs || options.ttlMs)) || 6 * 60 * 60 * 1000;
   const now = (options && options.now) || Date.now();
   const activeReviewers = [];
+  const staleReviewers = [];
   for (const rev of state.values()) {
-    const elapsed = now - new Date(rev.since).getTime();
+    const elapsed = now - rev.lastActivity;
     if (elapsed <= ttlMs) {
       activeReviewers.push(rev);
+    } else {
+      staleReviewers.push({ ...rev, staleForMs: elapsed });
     }
   }
 
   return {
     reviewers: activeReviewers,
+    stale: staleReviewers,
     readable: detail.readable,
     damaged: detail.damaged,
   };

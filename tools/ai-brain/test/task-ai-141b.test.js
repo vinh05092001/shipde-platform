@@ -4,6 +4,7 @@ const { test, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
 const {
   eligibleCandidates,
   loadItems,
@@ -13,6 +14,7 @@ const {
 const { nextLoop } = require('../next-runner');
 const { assertIsolationClosed } = require('../intake');
 const cli = require('../cli');
+const decisions = require('../decisions');
 
 const SHA = 'a'.repeat(40);
 const fixtures = [];
@@ -636,4 +638,179 @@ test('nextCommand injects a production qualification slot by default', async () 
   } finally {
     require('../qualification-auto').runAutoCli = original;
   }
+});
+
+test('qualify --auto CLI supplies the default isolated reviewed runner', async () => {
+  const original = require('../qualification-auto').runAutoCli;
+  let received;
+  require('../qualification-auto').runAutoCli = async (_argv, deps) => {
+    received = deps;
+    return 0;
+  };
+  const oldArgv = process.argv;
+  try {
+    process.argv = [process.execPath, require.resolve('../cli'), 'qualify', '--auto'];
+    cli.main();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(typeof received.runIsolatedReviewed, 'function');
+    assert.equal(typeof received.assertIsolationClosed, 'function');
+    assert.equal(typeof received.buildCandidates, 'function');
+  } finally {
+    process.argv = oldArgv;
+    require('../qualification-auto').runAutoCli = original;
+  }
+});
+
+test('next loop runs only the named Work Item and still enforces dependency checks', async () => {
+  const decisionDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-141-target-'));
+  fixtures.push(decisionDir);
+  const base = {
+    maxIterations: 1,
+    rootDir: process.cwd(),
+    records: [],
+    workItem: 'TASK-AI-141',
+    decisionDir,
+  };
+  const items = [
+    { work_item_id: 'FEAT-AUTH-02', status: 'BACKLOG', dependencies: '' },
+    { work_item_id: 'TASK-AI-141', status: 'READY_FOR_AUTHOR', dependencies: '' },
+  ];
+  let ran = null;
+  const deps = {
+    existsSync: () => false,
+    items,
+    runIntake: async (options) => {
+      ran = options.workItem;
+      return { exitCode: 0, status: 'completed' };
+    },
+    checkCandidateLanes: () => ({ available: true }),
+    checkCeiling: () => ({ allowed: true }),
+    writerFor: () => null,
+    isOpenRun: () => false,
+    log: () => {},
+    now: Date.parse('2026-10-10T12:00:00Z'),
+  };
+  const result = await nextLoop(base, deps);
+  assert.equal(ran, 'TASK-AI-141');
+  assert.equal(result.workItemId, 'TASK-AI-141');
+
+  ran = null;
+  items[1].dependencies = 'TASK-AI-130';
+  const blocked = await nextLoop(base, { ...deps, items });
+  assert.equal(ran, null);
+  assert.equal(blocked.reason, 'NO_READY_ITEM');
+});
+
+test('targeted loop still invokes bounded qualification after the requested item hits proof floor', async () => {
+  const decisionDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-141-target-proof-'));
+  fixtures.push(decisionDir);
+  let qualifiedFor = null;
+  const result = await nextLoop(
+    {
+      maxIterations: 1,
+      rootDir: process.cwd(),
+      records: [],
+      workItem: 'TASK-AI-141',
+      decisionDir,
+    },
+    {
+      existsSync: () => false,
+      items: [{ work_item_id: 'TASK-AI-141', status: 'BACKLOG', dependencies: '' }],
+      runIntake: async () => {
+        const error = new Error('proof floor');
+        error.code = 'PROOF_FLOOR_NOT_MET';
+        throw error;
+      },
+      qualificationSlot: async ({ workItem }) => {
+        qualifiedFor = workItem.work_item_id;
+        return { ran: true, status: 'completed' };
+      },
+      checkCandidateLanes: () => ({ available: true }),
+      checkCeiling: () => ({ allowed: true }),
+      writerFor: () => null,
+      isOpenRun: () => false,
+      log: () => {},
+      now: Date.parse('2026-10-10T12:00:00Z'),
+    }
+  );
+  assert.equal(qualifiedFor, 'TASK-AI-141');
+  assert.equal(result.qualification.ran, true);
+  assert.equal(result.workItemId, 'TASK-AI-141');
+});
+
+test('loop ignores stale decision sessions and logs which records were ignored', async () => {
+  const now = Date.parse('2026-10-10T12:00:00Z');
+  const decisionDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-141-stale-'));
+  fixtures.push(decisionDir);
+  const records = [
+    {
+      stage: 'reviewer-selection',
+      workItemId: 'OLD-REVIEW',
+      role: 'reviewer',
+      sessionId: 'old-session',
+      at: new Date(now - 7 * 60 * 60 * 1000).toISOString(),
+    },
+    {
+      stage: 'launched',
+      workItemId: 'OLD-WRITER',
+      sessionId: 'old-writer',
+      at: new Date(now - 7 * 60 * 60 * 1000).toISOString(),
+    },
+  ];
+  const logs = [];
+  const result = await nextLoop(
+    {
+      maxIterations: 1,
+      rootDir: process.cwd(),
+      records,
+      decisionDir,
+      now,
+    },
+    {
+      existsSync: () => false,
+      items: [{ work_item_id: 'NEXT', status: 'BACKLOG', dependencies: '' }],
+      now,
+      log: (line) => logs.push(line),
+      checkCandidateLanes: () => ({ available: true }),
+      ceiling: { maxWriters: 0, maxReviewers: 0 },
+      sleep: async () => {},
+    }
+  );
+  assert.equal(result.reason, 'WRITER_CEILING_REACHED');
+  assert.ok(logs.some((line) => line.includes('Ignoring stale reviewer OLD-REVIEW')));
+  assert.ok(logs.some((line) => line.includes('Ignoring stale writer OLD-WRITER')));
+  assert.equal(decisions.openReviewersDetailed({ records, now }).reviewers.length, 0);
+  assert.equal(decisions.openWritersDetailed({ records, now }).writers.length, 0);
+});
+
+test('the two known fixture selection paths do not change decisions.DEFAULT_DIR', () => {
+  const file = path.join(decisions.DEFAULT_DIR, new Date().toISOString().slice(0, 10) + '.jsonl');
+  const before = fs.existsSync(file) ? fs.readFileSync(file) : null;
+  const a = { gateway: 'g', upstream: 'a', accountId: 'a', modelId: 'm-a', quality: 90 };
+  const b = { gateway: 'g', upstream: 'b', accountId: 'b', modelId: 'm-b', quality: 80 };
+  a.candidateKey = require('../candidates').candidateKey(a);
+  b.candidateKey = require('../candidates').candidateKey(b);
+  const select = require('../orchestrate').selectCandidateForProfile;
+  const tempDirs = [];
+  let after;
+  try {
+    for (const id of ['ITEM-91-R01-UNIT', 'TASK-AI-64-review']) {
+      const decisionDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai141-guard-'));
+      tempDirs.push(decisionDir);
+      select(
+        { id, roleRequirement: { role: 'reviewer' }, failedKeys: [a.candidateKey] },
+        [a, b],
+        [],
+        null,
+        {},
+        null,
+        Date.now(),
+        { failedKeys: [a.candidateKey], decisionDir }
+      );
+    }
+    after = fs.existsSync(file) ? fs.readFileSync(file) : null;
+  } finally {
+    for (const dir of tempDirs) fs.rmSync(dir, { recursive: true, force: true });
+  }
+  assert.deepEqual(after, before);
 });

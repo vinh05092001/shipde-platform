@@ -20,8 +20,8 @@ test('F2: writer claim expiry', () => {
       stage: 'launched',
       workItemId: 'item-1',
       sessionId: 'sess-1',
-      at: new Date(now - 5 * 3600 * 1000).toISOString(),
-    }, // 5 hours ago
+      at: new Date(now - 7 * 3600 * 1000).toISOString(),
+    }, // 7 hours ago: expired under the six-hour default
     {
       stage: 'launched',
       workItemId: 'item-2',
