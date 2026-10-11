@@ -57,9 +57,15 @@ These spec parts remain follow-up scope under TASK-AI-141 and are not implemente
 - **Part D:** intake risk-domain and complexity derivation plus the QUALITY_FIRST safety floor.
 - **Part E and addenda:** live gateway model discovery/probing, same-model alternate-path fallback, temporary parking and due rechecks.
 
+## Part C — Codex lane inside the isolated worker
+
+The Codex harness runs `codex exec --dangerously-bypass-approvals-and-sandbox` only through the isolated launcher. Direct harness use and attempts outside a worker path fail with `CODEX_REQUIRES_ISOLATION`. The launcher probes `codex login status` under the worker account before execution; a missing login is returned as the local failure `CODEX_NOT_LOGGED_IN`, allowing orchestration to continue to another candidate. The worker uses its own HOME and USERPROFILE and no host `~/.codex` credential file is read or copied.
+
+Verification: focused Part C tests cover the isolation requirement, flag placement, worker-scoped login probe, credential non-copying, and local login failure result. The operator login steps are in `docs/product-spec/docs/10-ai-collaboration/WINDOWS-SETUP-RUNBOOK.md`.
+
 ## Out of Scope for This Revision
 
-- Codex worker lane, intake risk/complexity derivation, and live gateway discovery/fallback/rechecks (Parts C to E), except the supervisor-directed proof transfer above.
+- Intake risk/complexity derivation, and live gateway discovery/fallback/rechecks (Parts D to E), except the supervisor-directed proof transfer above.
 - Product Work Item execution as qualification, automatic merge, or reading/copying Codex credentials.
 - Live account probing or changes to agy-pool quota policy.
 
@@ -108,10 +114,14 @@ No API, persisted product data, or external side effects change. Candidate gener
 
 ## Residual Limitations
 
-- Parts C to E and their acceptance criteria remain open follow-up work within TASK-AI-141, except proof transfer now included above by supervisor direction.
+- Parts D to E and their acceptance criteria remain open follow-up work within TASK-AI-141, except proof transfer now included above by supervisor direction.
 - This change consumes the models already discovered by intake; it does not add live per-account pool probing.
 
 ## Part B — bounded automatic qualification
+
+### Part B wiring
+
+The production `qualify --auto` command builds candidates from intake catalogue and account snapshots merged with current registry accounts, including agy-pool. The Controller annotates and ranks the set before the bounded coordinator considers candidates rejected only by the proof floor. The isolated orchestration adapter requires a fresh `CLOSED` isolation verdict and accepts only the exact-SHA Controller review receipt. `next --loop` prefers ready `FEAT-*` items over backlog `TASK-AI-*` work and invokes one qualification slot only after product intake returns `PROOF_FLOOR_NOT_MET` (or when no product item is ready). Qualification never publishes or auto-merges.
 
 - Added `tools/ai-brain/qualification-auto.js` and the `qualify --auto --candidates <json>` CLI surface. Automatic qualification admits only rejected candidates whose sole reason is `PROOF_FLOOR_NOT_MET`; currently blocked candidates and candidates with any additional rejection are excluded.
 - Qualification work is selected only from `tools/ai-brain/data/qualification-items.json`, whose entries are explicitly `kind: qualification` and `risk: low`. The coordinator refuses malformed lists and refuses to grant evidence unless the isolated orchestration adapter returns an independent `PASS` whose `reviewedSha` exactly equals its 40-character commit SHA.
