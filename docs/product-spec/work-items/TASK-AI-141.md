@@ -50,9 +50,10 @@ This Work Item is assigned to GEMINI. Codex independently reviews the resulting 
 
 The supervisor explicitly directed that proof transfer be handled in Part A. This supersedes the original scope note that placed transfer solely in Part B.
 
-## Follow-up Within This Work Item — Parts C to E
+## Follow-up Within This Work Item — Parts B to E
 
 These spec parts remain follow-up scope under TASK-AI-141 and are not implemented in this revision:
+- **Part B:** automatic qualification for candidates that fail only the proof floor.
 - **Part C:** isolated Codex worker lane and worker login-state handling.
 - **Part D:** intake risk-domain and complexity derivation plus the QUALITY_FIRST safety floor.
 - **Part E and addenda:** live gateway model discovery/probing, same-model alternate-path fallback, temporary parking and due rechecks.
