@@ -642,7 +642,7 @@ test('nextCommand injects a production qualification slot by default', async () 
   }
 });
 
-test('qualify --auto CLI supplies the default isolated reviewed runner', async () => {
+test('qualify --auto CLI passes its selected root to the isolation gate', async () => {
   const original = require('../qualification-auto').runAutoCli;
   let received;
   require('../qualification-auto').runAutoCli = async (_argv, deps) => {
@@ -651,12 +651,34 @@ test('qualify --auto CLI supplies the default isolated reviewed runner', async (
   };
   const oldArgv = process.argv;
   try {
-    process.argv = [process.execPath, require.resolve('../cli'), 'qualify', '--auto'];
+    const f = fixture();
+    process.argv = [
+      process.execPath,
+      require.resolve('../cli'),
+      'qualify',
+      '--auto',
+      '--root',
+      f.dir,
+    ];
     cli.main();
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(typeof received.runIsolatedReviewed, 'function');
     assert.equal(typeof received.assertIsolationClosed, 'function');
     assert.equal(typeof received.buildCandidates, 'function');
+    const intake = require('../intake');
+    const originalAssert = intake.assertIsolationClosed;
+    let isolationOptions;
+    intake.assertIsolationClosed = (options) => {
+      isolationOptions = options;
+      return { verdict: 'CLOSED' };
+    };
+    try {
+      received.assertIsolationClosed({ verdictPath: path.join(f.dir, 'isolation.json') });
+    } finally {
+      intake.assertIsolationClosed = originalAssert;
+    }
+    assert.equal(isolationOptions.root, f.dir);
+    assert.equal(isolationOptions.verdictPath, path.join(f.dir, 'isolation.json'));
   } finally {
     process.argv = oldArgv;
     require('../qualification-auto').runAutoCli = original;
@@ -703,13 +725,14 @@ test('next loop runs only the named Work Item and still enforces dependency chec
   assert.equal(blocked.reason, 'NO_READY_ITEM');
 });
 
-test('targeted loop still invokes bounded qualification after the requested item hits proof floor', async () => {
+test('targeted loop does not report completion when only a qualification slot ran', async () => {
   const decisionDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-141-target-proof-'));
   fixtures.push(decisionDir);
   let qualifiedFor = null;
+  let intakeRuns = 0;
   const result = await nextLoop(
     {
-      maxIterations: 1,
+      maxIterations: 2,
       rootDir: process.cwd(),
       records: [],
       workItem: 'TASK-AI-141',
@@ -719,6 +742,8 @@ test('targeted loop still invokes bounded qualification after the requested item
       existsSync: () => false,
       items: [{ work_item_id: 'TASK-AI-141', status: 'BACKLOG', dependencies: '' }],
       runIntake: async () => {
+        intakeRuns += 1;
+        if (intakeRuns > 1) return { exitCode: 0, status: 'completed' };
         const error = new Error('proof floor');
         error.code = 'PROOF_FLOOR_NOT_MET';
         throw error;
@@ -729,6 +754,7 @@ test('targeted loop still invokes bounded qualification after the requested item
       },
       checkCandidateLanes: () => ({ available: true }),
       checkCeiling: () => ({ allowed: true }),
+      sleep: async () => {},
       writerFor: () => null,
       isOpenRun: () => false,
       log: () => {},
@@ -736,7 +762,9 @@ test('targeted loop still invokes bounded qualification after the requested item
     }
   );
   assert.equal(qualifiedFor, 'TASK-AI-141');
-  assert.equal(result.qualification.ran, true);
+  assert.equal(intakeRuns, 2);
+  assert.equal(result.completed, true);
+  assert.equal(result.execution.outcome, 'completed');
   assert.equal(result.workItemId, 'TASK-AI-141');
 });
 

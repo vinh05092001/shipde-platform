@@ -3192,7 +3192,8 @@ function main() {
       runAutoCli(process.argv.slice(3), {
         runIsolatedReviewed: (input) =>
           require('./intake').runIsolatedReviewed(input, { root: rootDir }),
-        assertIsolationClosed: () => require('./intake').assertIsolationClosed({}),
+        assertIsolationClosed: (options) =>
+          require('./intake').assertIsolationClosed({ ...options, root: rootDir }),
         buildCandidates: () => buildQualificationCandidates(rootDir),
         evidenceDir: path.join(rootDir, 'tools', 'ai-brain', 'data', 'evidence'),
         config: loadConfig(rootDir).qualification || {},
@@ -3341,7 +3342,8 @@ module.exports = {
         const code = await runAutoCli(['--auto'], {
           runIsolatedReviewed: (input) =>
             require('./intake').runIsolatedReviewed(input, { root: rootDir }),
-          assertIsolationClosed: () => require('./intake').assertIsolationClosed({}),
+          assertIsolationClosed: (options) =>
+            require('./intake').assertIsolationClosed({ ...options, root: rootDir }),
           buildCandidates: () => buildQualificationCandidates(rootDir),
           evidenceDir: path.join(rootDir, 'tools', 'ai-brain', 'data', 'evidence'),
           config: loadConfig(rootDir).qualification || {},

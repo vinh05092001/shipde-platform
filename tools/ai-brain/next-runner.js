@@ -762,9 +762,10 @@ async function nextLoop(options, deps) {
           log('QUALIFICATION_SLOT: ' + (qualification.status || 'completed'));
           if (opts.workItem || opts['work-item']) {
             return {
-              completed: true,
-              iterations: iteration,
-              workItemId: item.work_item_id,
+              stopped: true,
+              reason: 'WORK_ITEM_NOT_EXECUTED',
+              workItemId: requestedId,
+              iteration,
               qualification,
             };
           }
@@ -901,10 +902,15 @@ async function nextLoop(options, deps) {
         if (qualification && qualification.ran === true) {
           log('QUALIFICATION_SLOT: ' + (qualification.status || 'completed'));
           if (opts.workItem || opts['work-item']) {
+            if (iteration < maxIterations) {
+              await sleepFn(pollIntervalMs);
+              continue;
+            }
             return {
-              completed: true,
-              iterations: iteration,
+              stopped: true,
+              reason: 'WORK_ITEM_NOT_EXECUTED',
               workItemId: item.work_item_id,
+              iteration,
               qualification,
             };
           }
