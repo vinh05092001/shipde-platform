@@ -615,6 +615,28 @@ async function buildCatalogue(deps) {
       warnings.push({ source: collector.name, error: (result && result.error) || 'unavailable' });
     }
   }
+  const discoveryFile = path.join(
+    deps.root || path.join(__dirname, '..', '..'),
+    'tools',
+    'ai-brain',
+    'data',
+    'sources.json'
+  );
+  let discovered = [];
+  try {
+    discovered = JSON.parse(fs.readFileSync(discoveryFile, 'utf8')).sources || [];
+  } catch {}
+  for (const source of discovered) {
+    if (!source) continue;
+    sourceStatus['discovered:' + source.id] = source.status || 'discovered';
+    if (source.status === 'parked' || source.status === 'unavailable')
+      warnings.push({ source: source.id, error: source.reason || source.status });
+    const routableCredential =
+      source.credential && source.credential.type === 'env' && source.credential.name;
+    if (source.status !== 'available' || !routableCredential || !Array.isArray(source.models))
+      continue;
+    for (const model of source.models) if (model) models.add(String(model));
+  }
   return normalizeCatalogue([...models], warnings, sourceStatus);
 }
 
@@ -627,6 +649,36 @@ function normalizeCatalogue(models, warnings, sourceStatus) {
     );
   }
   return { models: list, warnings: warnings || [], sourceStatus: sourceStatus || {} };
+}
+
+function mergeDiscoveredSources(accounts, discoveredSources) {
+  const inventory = (discoveredSources || [])
+    .filter((source) => source && (source.endpoint || Array.isArray(source.models)))
+    .map((source) => {
+      const routableCredential =
+        source.credential && source.credential.type === 'env' && source.credential.name;
+      const available = source.status === 'available';
+      return {
+        id: 'source-' + String(source.id).replace(/[^a-z0-9._-]/gi, '-'),
+        sourceId: source.id,
+        provider: source.id,
+        endpoint: source.endpoint,
+        credentialLocation:
+          (source.credential &&
+            (source.credential.name || source.credential.path + ':' + source.credential.field)) ||
+          null,
+        models: Array.isArray(source.models) ? source.models : [],
+        status: source.status || 'discovered',
+        enabled: Boolean(available && routableCredential),
+        reason: !available
+          ? source.reason || source.status || 'not probed successfully'
+          : routableCredential
+            ? null
+            : 'credential is not routable from an environment variable',
+        nextCheckAt: source.nextCheckAt || null,
+      };
+    });
+  return (accounts || []).concat(inventory);
 }
 
 /**
@@ -807,9 +859,9 @@ function runIsolatedReviewed(options, deps) {
   const candidateKey = o.candidateKey || candidate.candidateKey;
   const candidates = Array.isArray(o.candidates) ? o.candidates : [candidate];
   const reviewerKey = o.reviewerKey;
-  const expectedCommit = o.expectedCommit;
-  if (!/^[a-f0-9]{40}$/i.test(String(expectedCommit || ''))) {
-    throw intakeError('QUALIFICATION_COMMIT_INVALID', 'QUALIFICATION_COMMIT_INVALID');
+  const baseSha = o.baseSha || (typeof d.baseSha === 'function' ? d.baseSha() : d.baseSha);
+  if (!/^[a-f0-9]{40}$/i.test(String(baseSha || ''))) {
+    throw intakeError('QUALIFICATION_BASE_INVALID', 'QUALIFICATION_BASE_INVALID');
   }
   const runDir = path.join(
     root,
@@ -854,8 +906,8 @@ function runIsolatedReviewed(options, deps) {
       enforceProofFloors: false,
       decisionDir,
       cwd: root,
-      baseSha: expectedCommit,
-      sha: expectedCommit,
+      baseSha,
+      sha: null,
       workerRoot: d.workerRoot,
       reviewerIdentity: reviewerKey,
       now,
@@ -867,16 +919,30 @@ function runIsolatedReviewed(options, deps) {
     })
   ).then((result) => {
     const checkpoint = result && result.checkpoint;
-    const receipt =
+    const rawReceipt =
       checkpoint && (checkpoint.reviews || []).find((entry) => entry.workItemId === o.item.id);
-    if (!receipt || result.status !== 'COMPLETED') return { verdict: 'REFUSED' };
+    const receipt = rawReceipt && {
+      ...rawReceipt,
+      sha: rawReceipt.sha || rawReceipt.reviewedSha,
+      reviewedSha: rawReceipt.reviewedSha || rawReceipt.sha,
+      workerHead: rawReceipt.workerHead || rawReceipt.headSha || null,
+    };
+    if (
+      !receipt ||
+      result.status !== 'COMPLETED' ||
+      !/^[a-f0-9]{40}$/i.test(String(receipt.reviewedSha || receipt.sha || '')) ||
+      (receipt.workerHead && receipt.reviewedSha !== receipt.workerHead) ||
+      (receipt.reviewedSha && receipt.reviewedSha !== receipt.sha)
+    )
+      return { verdict: 'REFUSED' };
     const routing = require('./routing');
     const writerDomain = routing.canonicalFailureDomain(candidate);
     const reviewerDomain = routing.canonicalFailureDomain(receipt.reviewer);
     return {
       verdict: receipt.verdict,
-      sha: receipt.sha,
-      reviewedSha: receipt.sha,
+      sha: receipt.sha || receipt.reviewedSha,
+      reviewedSha: receipt.reviewedSha || receipt.sha,
+      workerHead: receipt.workerHead || receipt.headSha || receipt.sha,
       reviewer: receipt.reviewer,
       independent: Boolean(reviewerDomain && writerDomain && reviewerDomain !== writerDomain),
       productItem: false,
@@ -975,6 +1041,16 @@ async function runIntake(opts, deps) {
   const accounts = await (typeof d.listAccounts === 'function'
     ? d.listAccounts(d.accountOptions || {})
     : accountsApi.listAccounts(d.accountOptions || {}));
+  let discoveredSources = [];
+  try {
+    discoveredSources =
+      JSON.parse(
+        fs.readFileSync(path.join(root, 'tools', 'ai-brain', 'data', 'sources.json'), 'utf8')
+      ).sources || [];
+  } catch {
+    discoveredSources = [];
+  }
+  const allAccounts = mergeDiscoveredSources(accounts, discoveredSources);
 
   const repoRoot = path.resolve(root);
   const hasPoolQuota = Boolean(agyPoolHasQuota(d));
@@ -1019,7 +1095,7 @@ async function runIntake(opts, deps) {
     JSON.stringify(resolvedDependencies, null, 2)
   );
   fs.writeFileSync(path.join(runDir, 'catalogue.json'), JSON.stringify(catalogue.models, null, 2));
-  fs.writeFileSync(path.join(runDir, 'accounts.json'), JSON.stringify(accounts, null, 2));
+  fs.writeFileSync(path.join(runDir, 'accounts.json'), JSON.stringify(allAccounts, null, 2));
 
   const rtkDecision = {
     enabled: rtkEnabled,
@@ -1047,7 +1123,7 @@ async function runIntake(opts, deps) {
     catalogue: catalogue.models,
     warnings: catalogue.warnings,
     sourceStatus: catalogue.sourceStatus,
-    accounts,
+    accounts: allAccounts,
     baseSha,
     repoRoot,
     hasAgyPoolQuota: hasPoolQuota,
@@ -1097,6 +1173,7 @@ module.exports = {
   deriveRiskDomains,
   resolveDependencies,
   buildCatalogue,
+  mergeDiscoveredSources,
   composeOrchestrateCommand,
   assertIsolationFresh,
   assertIsolationClosed,

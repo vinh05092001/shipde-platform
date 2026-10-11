@@ -118,13 +118,11 @@ async function runAutoCli(argv, deps) {
   return result.status === 'refused' ? 1 : 0;
 }
 
-function independentPass(result, candidate, expectedCommit) {
+function independentPass(result, candidate) {
   return Boolean(
     result &&
     result.verdict === 'PASS' &&
     /^[a-f0-9]{40}$/i.test(result.sha || '') &&
-    /^[a-f0-9]{40}$/i.test(expectedCommit || '') &&
-    result.sha === expectedCommit &&
     result.reviewedSha === result.sha &&
     result.reviewer &&
     result.reviewer !== candidate.candidateKey &&
@@ -179,17 +177,15 @@ async function runAutomaticQualification(options) {
     const item = items[index % items.length];
     if (!item) break;
     const key = candidate.candidateKey || candidateKey(candidate);
-    const expectedCommit = candidate.commit || candidate.headSha || candidate.candidateCommit;
     const receipt = await opts.runIsolatedReviewed({
       candidate,
       candidates: Array.isArray(opts.candidates) ? opts.candidates : [candidate],
       candidateKey: key,
-      expectedCommit,
+      baseSha: opts.baseSha,
       item,
     });
     attempted.push({ candidateKey: key, itemId: item.id, at: new Date(now).toISOString() });
-    if (!independentPass(receipt, candidate, expectedCommit) || receipt.workItemId !== item.id)
-      continue;
+    if (!independentPass(receipt, candidate) || receipt.workItemId !== item.id) continue;
     const proof = {
       status: 'passed',
       proofLevel: 'WORK_ITEM_PASS',
@@ -212,8 +208,8 @@ async function runAutomaticQualification(options) {
           (entry) =>
             entry.proofLevel === 'WORK_ITEM_PASS' &&
             entry.qualificationItemId === item.id &&
-            entry.commit === expectedCommit &&
-            entry.reviewedSha === expectedCommit
+            entry.commit === receipt.sha &&
+            entry.reviewedSha === receipt.sha
         )
       ) {
         throw new Error('QUALIFICATION_EVIDENCE_KEY_MISMATCH');
