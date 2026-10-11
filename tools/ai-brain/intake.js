@@ -724,9 +724,9 @@ function runIsolatedReviewed(options, deps) {
   const candidateKey = o.candidateKey || candidate.candidateKey;
   const candidates = Array.isArray(o.candidates) ? o.candidates : [candidate];
   const reviewerKey = o.reviewerKey;
-  const expectedCommit = o.expectedCommit;
-  if (!/^[a-f0-9]{40}$/i.test(String(expectedCommit || ''))) {
-    throw intakeError('QUALIFICATION_COMMIT_INVALID', 'QUALIFICATION_COMMIT_INVALID');
+  const baseSha = o.baseSha || (typeof d.baseSha === 'function' ? d.baseSha() : d.baseSha);
+  if (!/^[a-f0-9]{40}$/i.test(String(baseSha || ''))) {
+    throw intakeError('QUALIFICATION_BASE_INVALID', 'QUALIFICATION_BASE_INVALID');
   }
   const runDir = path.join(
     root,
@@ -771,8 +771,8 @@ function runIsolatedReviewed(options, deps) {
       enforceProofFloors: false,
       decisionDir,
       cwd: root,
-      baseSha: expectedCommit,
-      sha: expectedCommit,
+      baseSha,
+      sha: null,
       workerRoot: d.workerRoot,
       reviewerIdentity: reviewerKey,
       now,
@@ -784,16 +784,30 @@ function runIsolatedReviewed(options, deps) {
     })
   ).then((result) => {
     const checkpoint = result && result.checkpoint;
-    const receipt =
+    const rawReceipt =
       checkpoint && (checkpoint.reviews || []).find((entry) => entry.workItemId === o.item.id);
-    if (!receipt || result.status !== 'COMPLETED') return { verdict: 'REFUSED' };
+    const receipt = rawReceipt && {
+      ...rawReceipt,
+      sha: rawReceipt.sha || rawReceipt.reviewedSha,
+      reviewedSha: rawReceipt.reviewedSha || rawReceipt.sha,
+      workerHead: rawReceipt.workerHead || rawReceipt.headSha || null,
+    };
+    if (
+      !receipt ||
+      result.status !== 'COMPLETED' ||
+      !/^[a-f0-9]{40}$/i.test(String(receipt.reviewedSha || receipt.sha || '')) ||
+      (receipt.workerHead && receipt.reviewedSha !== receipt.workerHead) ||
+      (receipt.reviewedSha && receipt.reviewedSha !== receipt.sha)
+    )
+      return { verdict: 'REFUSED' };
     const routing = require('./routing');
     const writerDomain = routing.canonicalFailureDomain(candidate);
     const reviewerDomain = routing.canonicalFailureDomain(receipt.reviewer);
     return {
       verdict: receipt.verdict,
-      sha: receipt.sha,
-      reviewedSha: receipt.sha,
+      sha: receipt.sha || receipt.reviewedSha,
+      reviewedSha: receipt.reviewedSha || receipt.sha,
+      workerHead: receipt.workerHead || receipt.headSha || receipt.sha,
       reviewer: receipt.reviewer,
       independent: Boolean(reviewerDomain && writerDomain && reviewerDomain !== writerDomain),
       productItem: false,
