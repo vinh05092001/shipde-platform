@@ -151,15 +151,12 @@ function getPathRecord(store, modelId, routeId) {
 function isEligible(store, modelId, routeId, now) {
   const record = getPathRecord(store, modelId, routeId);
   if (record) return record.status === 'AVAILABLE';
-  if (!routeId || typeof routeId !== 'object' || !routeId.accountId) return false;
-  return Object.values(store.paths || {}).some(
-    (row) =>
-      row &&
-      normalizeModelId(row.modelId) === normalizeModelId(modelId) &&
-      row.routeId &&
-      (row.routeId.accountId === routeId.accountId || row.routeId.id === routeId.id) &&
-      row.status === 'AVAILABLE'
+  if (routeId && typeof routeId === 'object' && routeId.accountId) return false;
+  const id = routeId && typeof routeId === 'object' ? routeId.id : routeId;
+  const accountRows = Object.entries(store.paths || {}).filter(([key]) =>
+    key.startsWith(normalizeModelId(modelId) + '|' + id + '@')
   );
+  return accountRows.length === 1 && accountRows[0][1].status === 'AVAILABLE';
 }
 
 function isRouteHealthy(store, modelId, routeId) {
@@ -262,11 +259,7 @@ async function routeFallback(modelId, failedPath, paths, probe, store, options) 
     }
     failures.push({ path: route.id, reason: recorded.reason });
   }
-  if (
-    failedRecord &&
-    (paths || []).some((route) => healthKey(modelId, route) === healthKey(modelId, failedPath))
-  )
-    failures.unshift({ path: failedPath, reason: failedRecord.status });
+  if (failedRecord) failures.unshift({ path: failedRecord.routeId, reason: failedRecord.status });
   store.events.push({
     type: 'model_unavailable',
     modelId: normalizeModelId(modelId),
@@ -603,7 +596,7 @@ async function refreshFailedFallbacks(store, probe, options, now) {
       (route) => route.id !== failed.gateway && isSelectable(store, normalized, route, now)
     );
     const boundedPaths = probePaths.slice(0, Math.max(0, cap - checked));
-    if (!boundedPaths.length) break;
+    if (!boundedPaths.length) continue;
     checked += boundedPaths.length;
     await routeFallback(
       normalized,

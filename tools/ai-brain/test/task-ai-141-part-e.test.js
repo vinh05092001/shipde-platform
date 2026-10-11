@@ -66,8 +66,13 @@ test('discovery preserves separate account paths on one gateway', () => {
   const { store } = { store: { version: 1, paths: {}, events: [] } };
   routes.recordResult(store, 'model', paths[0], { ok: false, status: 429 }, 1_800_000_000_000);
   routes.recordResult(store, 'model', paths[1], { ok: true }, 1_800_000_000_000);
-  assert.equal(routes.isEligible(store, 'vendor/model', paths[1]), false);
-  assert.equal(routes.isEligible(store, 'vendor/model', paths[0]), false);
+  assert.equal(routes.isEligible(store, 'model', paths[1]), true);
+  assert.equal(routes.isEligible(store, 'model', paths[0]), false);
+  assert.equal(
+    routes.isEligible(store, 'model', { id: 'gw', accountId: 'account-unprobed' }),
+    false,
+    'unprobed account must fail closed'
+  );
 });
 
 test('account-scoped parks stay ineligible when another account on the gateway is healthy', () => {
@@ -312,6 +317,7 @@ test('all route failures retain per-path reasons and a due 402 retry restores im
   );
   assert.equal(failed.unavailable, true);
   assert.deepEqual(failed.failures, [
+    { path: 'p1', reason: 'GEO_BLOCKED' },
     { path: 'p2', reason: 'NO_CREDIT' },
     { path: 'p3', reason: 'UNAVAILABLE_NOW' },
   ]);
@@ -713,6 +719,7 @@ test('all failed routes emit an unavailable decision with every path reason', as
   );
   assert.equal(result.unavailable, true);
   assert.deepEqual(store.events.at(-1).failures, [
+    { path: 'p1', reason: 'GEO_BLOCKED' },
     { path: 'p2', reason: 'AUTH_NEEDED' },
     { path: 'p3', reason: 'UNSUPPORTED' },
   ]);
@@ -938,6 +945,121 @@ test('fallback assembly probes every discovered direct and harness path', async 
         event.chosenPath === 'direct-vendor'
     )
   );
+});
+
+test('isEligible fails closed across accounts when unprobed', () => {
+  const store = { version: 1, paths: {}, events: [] };
+  const routeA = { id: 'gw-shared', accountId: 'account-probed' };
+  const routeB = { id: 'gw-shared', accountId: 'account-unprobed' };
+  routes.recordResult(store, 'model-x', routeA, { ok: true }, 1_800_000_000_000);
+  assert.equal(routes.isEligible(store, 'model-x', routeA), true);
+  assert.equal(
+    routes.isEligible(store, 'model-x', routeB),
+    false,
+    'unprobed account must fail closed'
+  );
+  assert.equal(
+    routes.isEligible(store, 'model-x', 'gw-shared'),
+    true,
+    'one unambiguously healthy account path can support gateway lookup'
+  );
+});
+
+test('string gateway eligibility requires an unambiguous healthy account path', () => {
+  const store = { version: 1, paths: {}, events: [] };
+  routes.recordResult(store, 'model-x', { id: 'gw', accountId: 'acct-a' }, { ok: true }, 1000);
+  assert.equal(routes.isEligible(store, 'model-x', 'gw', 1000), true);
+  routes.recordResult(
+    store,
+    'model-x',
+    { id: 'gw', accountId: 'acct-b' },
+    { ok: false, status: 429 },
+    1000
+  );
+  assert.equal(routes.isEligible(store, 'model-x', 'gw', 1000), false);
+});
+
+test('unavailable report includes account-scoped originating path', async () => {
+  const store = { version: 1, paths: {}, events: [] };
+  const failed = { id: 'gw-a', accountId: 'acct-a' };
+  routes.recordResult(store, 'model-y', failed, { ok: false, status: 451 }, 1000);
+  const result = await routes.routeFallback(
+    'model-y',
+    failed,
+    [{ id: 'gw-b' }],
+    async () => ({ ok: false, status: 402 }),
+    store,
+    { now: 1000, sleep: async () => {} }
+  );
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.failures.some((row) => row.path.accountId === 'acct-a' && row.reason === 'GEO_BLOCKED')
+  );
+});
+
+test('resolveFallbackRoutes with preResolvedFallback picks probed OK path matching route_fallback and rejects unprobed sibling', async () => {
+  const store = {
+    version: 1,
+    paths: {
+      'model-fb|gw-failed': { status: 'GEO_BLOCKED', routeId: { id: 'gw-failed' } },
+      'model-fb|gw-probed-ok': { status: 'AVAILABLE', routeId: { id: 'gw-probed-ok' } },
+      // 'gw-unprobed' has NO record in store.paths
+    },
+    events: [
+      {
+        type: 'route_fallback',
+        modelId: 'model-fb',
+        failedPath: 'gw-failed',
+        chosenPath: 'gw-probed-ok',
+        reason: 'GEO_BLOCKED',
+      },
+    ],
+  };
+  const catalogue = [
+    { modelId: 'model-fb', gateway: 'gw-failed' },
+    { modelId: 'model-fb', gateway: 'gw-unprobed' },
+    { modelId: 'model-fb', gateway: 'gw-probed-ok' },
+  ];
+  const resolved = [];
+  await cli._resolveFallbackRoutes(store, catalogue, null, routes, {
+    preResolvedFallback: true,
+    resolvedRoutes: resolved,
+    registry: { sources: [{ id: 'gw-failed' }, { id: 'gw-unprobed' }, { id: 'gw-probed-ok' }] },
+    accounts: [],
+  });
+  assert.equal(resolved.length, 1);
+  assert.equal(
+    resolved[0].route.id,
+    'gw-probed-ok',
+    'must select probed OK route, not unprobed sibling'
+  );
+  assert.notEqual(resolved[0].route.id, 'gw-unprobed', 'unprobed sibling must never be selected');
+});
+
+test('production defaults work without injected deps and fail closed on missing records', () => {
+  const registry = {
+    sources: [
+      { id: 'gateway-prod', kind: 'router' },
+      { id: 'vendor-prod', kind: 'model-source', reachedVia: 'gateway-prod' },
+    ],
+    dispatch: { providers: { 'vendor-prod': { harness: 'paseo' } } },
+  };
+  const model = {
+    gateway: 'gateway-prod',
+    upstream: 'vendor-prod',
+    modelId: 'vendor-prod/model-unprobed',
+  };
+  // Production default: call assembleForDispatch without options (opts is undefined)
+  const assembled = cli.assembleForDispatch(
+    { candidates: [model] },
+    [{ id: 'prod-acct', provider: 'vendor-prod' }],
+    registry
+  );
+  assert.ok(Array.isArray(assembled));
+  // Wildcard candidate remains visible for ranking proof-floor refusal
+  assert.ok(assembled.some((c) => c.modelId === model.modelId && c.accountId === '*'));
+  // Unprobed account-bound candidate fails closed
+  assert.ok(!assembled.some((c) => c.accountId === 'prod-acct'));
 });
 
 function intakeFixture(id) {
