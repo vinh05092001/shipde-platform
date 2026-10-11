@@ -76,9 +76,28 @@ async function runAutoCli(argv, deps) {
       args[option.slice(2)] = argv[++i];
     } else return 2;
   }
-  if (!args.auto || !args.candidates) return 2;
+  if (!args.auto) return 2;
   const d = deps || {};
-  const candidates = JSON.parse(fs.readFileSync(args.candidates, 'utf8'));
+  let isolationVerdict;
+  try {
+    isolationVerdict =
+      typeof d.assertIsolationClosed === 'function' ? d.assertIsolationClosed() : null;
+  } catch (error) {
+    const result = {
+      status: 'refused',
+      reason: (error && error.code) || 'ISOLATION_VERDICT_INVALID',
+      ran: true,
+      selected: 0,
+      qualified: [],
+    };
+    (d.out || console.log)(JSON.stringify(result));
+    return 1;
+  }
+  const candidates = args.candidates
+    ? JSON.parse(fs.readFileSync(args.candidates, 'utf8'))
+    : typeof d.buildCandidates === 'function'
+      ? await d.buildCandidates()
+      : [];
   const result = await runAutomaticQualification({
     candidates,
     itemsFile:
@@ -91,6 +110,9 @@ async function runAutoCli(argv, deps) {
     config: args.config ? JSON.parse(fs.readFileSync(args.config, 'utf8')) : d.config || {},
     runIsolatedReviewed: d.runIsolatedReviewed,
     recordEvidence: d.recordEvidence,
+    now: d.now,
+    isolationVerdict,
+    itemId: d.itemId,
   });
   (d.out || console.log)(JSON.stringify(result));
   return result.status === 'refused' ? 1 : 0;
@@ -131,6 +153,15 @@ async function runAutomaticQualification(options) {
       qualified: [],
     };
   }
+  if (!opts.isolationVerdict || opts.isolationVerdict.verdict !== 'CLOSED') {
+    return {
+      status: 'refused',
+      reason: 'ISOLATION_VERDICT_NOT_CLOSED',
+      ran: true,
+      selected: 0,
+      qualified: [],
+    };
+  }
   const now = typeof opts.now === 'function' ? opts.now() : opts.now || Date.now();
   const day = new Date(now).toISOString().slice(0, 10);
   const usageFile =
@@ -151,12 +182,14 @@ async function runAutomaticQualification(options) {
     const expectedCommit = candidate.commit || candidate.headSha || candidate.candidateCommit;
     const receipt = await opts.runIsolatedReviewed({
       candidate,
+      candidates: Array.isArray(opts.candidates) ? opts.candidates : [candidate],
       candidateKey: key,
       expectedCommit,
       item,
     });
     attempted.push({ candidateKey: key, itemId: item.id, at: new Date(now).toISOString() });
-    if (!independentPass(receipt, candidate, expectedCommit)) continue;
+    if (!independentPass(receipt, candidate, expectedCommit) || receipt.workItemId !== item.id)
+      continue;
     const proof = {
       status: 'passed',
       proofLevel: 'WORK_ITEM_PASS',

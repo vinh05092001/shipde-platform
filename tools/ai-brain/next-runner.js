@@ -501,8 +501,15 @@ function findNextWorkItem(options, deps) {
 
   const skipped = [];
   let selected = null;
+  const priority = (item) =>
+    /^FEAT-/.test(String(item.work_item_id || ''))
+      ? 0
+      : /^TASK-AI-/.test(String(item.work_item_id || ''))
+        ? 2
+        : 1;
+  const orderedItems = items.slice().sort((a, b) => priority(a) - priority(b));
 
-  for (const item of items) {
+  for (const item of orderedItems) {
     const id = item.work_item_id;
     if (!id) continue;
     const status = String(item.status || '').trim();
@@ -667,6 +674,7 @@ async function executeIntakeForItem(item, options, deps, logOpts) {
     const isRefusal =
       err &&
       (err.code === 'INTAKE_INCOMPLETE' ||
+        err.code === 'PROOF_FLOOR_NOT_MET' ||
         String(err.code || '').startsWith('ISOLATION_') ||
         err.code === 'BASE_SHA_NOT_IN_LOCAL_MAIN');
     const outcome = isRefusal ? 'refused' : 'failed';
@@ -730,13 +738,9 @@ async function nextLoop(options, deps) {
     }
 
     if (!findResult.item) {
-      // TASK-AI-141 Part B: qualification is a separate, bounded controller
-      // slot. It is offered only when the product register has no ready item;
-      // the slot callback owns the isolated worker/reviewer path and cannot
-      // turn a qualification run into a product Work Item.
       const qualificationSlot = opts.qualificationSlot || d.qualificationSlot;
       if (typeof qualificationSlot === 'function') {
-        const qualification = await qualificationSlot({ now, iteration });
+        const qualification = await qualificationSlot({ now, iteration, reason: 'NO_READY_ITEM' });
         if (qualification && qualification.ran === true) {
           log('QUALIFICATION_SLOT: ' + (qualification.status || 'completed'));
           if (iteration < maxIterations) {
@@ -826,6 +830,43 @@ async function nextLoop(options, deps) {
       dir: opts.decisionDir || d.decisionDir || decisions.DEFAULT_DIR,
       now: getNow(),
     });
+
+    const proofFloorRefusal = Boolean(
+      (execResult.error &&
+        (execResult.error.code === 'PROOF_FLOOR_NOT_MET' ||
+          /PROOF_FLOOR_NOT_MET/.test(String(execResult.error.message || '')))) ||
+      (execResult.intakeResult &&
+        (execResult.intakeResult.reason === 'PROOF_FLOOR_NOT_MET' ||
+          /PROOF_FLOOR_NOT_MET/.test(JSON.stringify(execResult.intakeResult))))
+    );
+    if (proofFloorRefusal) {
+      const qualificationSlot = opts.qualificationSlot || d.qualificationSlot;
+      if (typeof qualificationSlot === 'function') {
+        const qualificationCeiling =
+          typeof d.checkCeiling === 'function'
+            ? d.checkCeiling({ ...opts, now }, d)
+            : checkCeiling({ ...opts, now }, d);
+        if (!qualificationCeiling.allowed) {
+          log(`Qualification slot skipped: ${qualificationCeiling.reason}.`);
+          continue;
+        }
+        const qualification = await qualificationSlot({
+          now,
+          iteration,
+          workItem: item,
+          reason: 'PROOF_FLOOR_NOT_MET',
+          ceiling: qualificationCeiling,
+        });
+        if (qualification && qualification.ran === true) {
+          log('QUALIFICATION_SLOT: ' + (qualification.status || 'completed'));
+          if (iteration < maxIterations) {
+            await sleepFn(pollIntervalMs);
+            continue;
+          }
+          return { completed: true, iterations: iteration, qualification };
+        }
+      }
+    }
 
     const outcome = execResult.outcome || 'completed';
     terminalWorkItems.set(item.work_item_id, outcome);

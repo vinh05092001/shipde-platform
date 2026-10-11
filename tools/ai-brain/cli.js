@@ -3037,6 +3037,89 @@ function intakeCommand(args, deps = {}) {
     });
 }
 
+function buildQualificationCandidates(rootDir) {
+  const fsx = require('fs');
+  const intakeRoot = path.join(rootDir, 'tools', 'ai-brain', 'data', 'intake');
+  if (!fsx.existsSync(intakeRoot)) return [];
+  const intakeRuns = fsx
+    .readdirSync(intakeRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => ({
+      name: entry.name,
+      mtimeMs: fsx.statSync(path.join(intakeRoot, entry.name)).mtimeMs,
+    }))
+    .sort((a, b) => b.mtimeMs - a.mtimeMs);
+  if (intakeRuns.length === 0) return [];
+  const catalogue = [];
+  const inputAccounts = [];
+  for (const intakeRun of intakeRuns) {
+    const runDir = path.join(intakeRoot, intakeRun.name);
+    try {
+      catalogue.push(...JSON.parse(fsx.readFileSync(path.join(runDir, 'catalogue.json'), 'utf8')));
+      inputAccounts.push(
+        ...JSON.parse(fsx.readFileSync(path.join(runDir, 'accounts.json'), 'utf8'))
+      );
+    } catch {
+      // A partial or damaged intake run contributes nothing; other snapshots remain usable.
+    }
+  }
+  const registryAccounts = require('./accounts').listAccounts() || [];
+  const accounts = mergeEvidenceAccounts(inputAccounts, registryAccounts);
+  const registry = require('./sources').loadSources();
+  const candidatesApi = require('./candidates');
+  const candidates = candidatesApi.generateCandidates({
+    registry,
+    catalogue,
+    accounts,
+    externalWorkers: 'agy-pool',
+    openCodeIds: accounts.flatMap((account) =>
+      (account.models || [])
+        .map((model) => (typeof model === 'string' ? model : model.model))
+        .filter(Boolean)
+    ),
+  });
+  const evidenceData = require('./evidence').loadEvidence(
+    path.join(rootDir, 'tools', 'ai-brain', 'data', 'evidence')
+  );
+  const annotated = candidatesApi.annotateCandidates(candidates, evidenceData, { now: Date.now() });
+  const decision = require('./ranking').rankAndRecord(annotated, {
+    workItemId: 'TASK-AI-141-QUALIFICATION',
+    role: 'author.foundation',
+    kind: 'author.foundation',
+    registry,
+    evidenceData,
+    dryRun: true,
+    explorationBudget: annotated.length,
+    accounts,
+    now: Date.now(),
+  });
+  const rejectedByKey = new Map();
+  const rankedByKey = new Map(
+    (decision.ranking || []).map((row, index) => [
+      row.offeringId,
+      row.score === undefined ? -index : row.score,
+    ])
+  );
+  for (const row of decision.rejected || []) {
+    const list = rejectedByKey.get(row.offeringId) || [];
+    list.push(row.reasonCode || String(row.reason || '').split(':')[0]);
+    rejectedByKey.set(row.offeringId, list);
+  }
+  return annotated
+    .map((candidate) => {
+      const key = candidatesApi.candidateKey(candidate);
+      const reasons = rejectedByKey.get(key) || [];
+      return Object.assign({}, candidate, {
+        candidateKey: key,
+        status: reasons.length ? 'rejected' : 'ranked',
+        rejectionReasons: reasons,
+        controllerRank: rankedByKey.get(key),
+        blocked: candidate.blocked === true,
+      });
+    })
+    .sort((a, b) => (b.controllerRank || 0) - (a.controllerRank || 0));
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const command = args._[0] || 'reconcile';
@@ -3238,7 +3321,27 @@ module.exports = {
   orchestrateCommand,
   mergeCommand,
   intakeCommand,
-  nextCommand: (args, deps) => require('./next-runner').nextCommand(args, deps),
+  nextCommand: (args, deps) => {
+    const nextDeps = Object.assign({}, deps || {});
+    if (!nextDeps.qualificationSlot) {
+      nextDeps.qualificationSlot = async () => {
+        const { runAutoCli } = require('./qualification-auto');
+        const rootDir = args.root || process.cwd();
+        const { loadConfig } = require('./next-runner');
+        const code = await runAutoCli(['--auto'], {
+          runIsolatedReviewed: (input) =>
+            require('./intake').runIsolatedReviewed(input, { root: rootDir }),
+          assertIsolationClosed: () => require('./intake').assertIsolationClosed({}),
+          buildCandidates: () => buildQualificationCandidates(rootDir),
+          evidenceDir: path.join(rootDir, 'tools', 'ai-brain', 'data', 'evidence'),
+          config: loadConfig(rootDir).qualification || {},
+        });
+        return { ran: true, status: code === 0 ? 'completed' : 'refused' };
+      };
+    }
+    return require('./next-runner').nextCommand(args, nextDeps);
+  },
+  _buildQualificationCandidates: buildQualificationCandidates,
 };
 
 if (require.main === module) {
