@@ -687,7 +687,10 @@ function assertIsolationClosed({ verdictPath, now, stat, readFile }) {
   let verdict;
   try {
     st = (stat || ((file) => fs.statSync(file)))(p);
-    verdict = JSON.parse((readFile || ((file) => fs.readFileSync(file, 'utf8')))(p));
+    const raw = (readFile || ((file) => fs.readFileSync(file, 'utf8')))(p);
+    const text =
+      typeof raw === 'string' ? (raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw) : raw;
+    verdict = JSON.parse(text);
   } catch {
     throw intakeError('ISOLATION_VERDICT_MISSING', 'ISOLATION_VERDICT_MISSING: cannot read ' + p);
   }
