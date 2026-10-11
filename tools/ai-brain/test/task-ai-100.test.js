@@ -94,7 +94,7 @@ describe('TASK-AI-100 external benchmark priors', () => {
     assert.equal(result.ranking[0].score, result.ranking[1].score + 6);
   });
 
-  test('a T1 prior cannot make a candidate pass the proof floor', () => {
+  test('a role-specific T1 prior admits a never-tried candidate on probation', () => {
     const unproven = candidate({
       modelId: 'provider/gpt-6-luna',
       evidence: [],
@@ -103,8 +103,9 @@ describe('TASK-AI-100 external benchmark priors', () => {
       ranking: [{ canonical: 'gpt-6-luna', codingTier: 'T1', reviewTier: 'T1' }],
     });
 
-    assert.equal(result.chosen, null);
-    assert.equal(result.rejected[0].reasonCode, 'PROOF_FLOOR_NOT_MET:NONE');
+    assert.ok(result.chosen);
+    assert.equal(result.ranking[0].probation, true);
+    assert.equal(result.ranking[0].probationRequiresIndependentReview, true);
   });
 
   test('unknown models have no prior and retain their score', () => {

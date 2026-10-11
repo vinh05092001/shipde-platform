@@ -133,7 +133,12 @@ async function runDispatch(p, candidates, dirs, over) {
     over || {}
   );
   const result = await dispatchCommand(
-    { profile: profileFile, 'dry-run': !deps.execute, execute: !!deps.execute },
+    {
+      profile: profileFile,
+      'dry-run': !deps.execute,
+      execute: !!deps.execute,
+      launch: !!deps.launch,
+    },
     deps
   );
   return { result, lines, exitCode, deps, profileFile };
@@ -292,6 +297,40 @@ describe('TASK-AI-65: live routing (profile -> JEV -> ranking -> pinned executio
           r.reasonCode === 'CLAUDE_FAMILY_EXCLUDED_BY_POLICY'
       )
     );
+  });
+
+  test('probation execution refuses before launch without an independent reviewer candidate', async () => {
+    const untried = cand({ modelId: 'up-65-a/model-65-probation', qualifiedRoles: [] });
+    let launchCount = 0;
+    const { result, exitCode } = await runDispatch(
+      profile({
+        proofFloor: 'API_PASS',
+      }),
+      [untried],
+      dirs,
+      {
+        execute: true,
+        launch: true,
+        launcher: async () => {
+          launchCount += 1;
+          return { status: 'completed' };
+        },
+        priors: {
+          ranking: [
+            {
+              canonical: 'model-65-probation',
+              codingTier: 'T1',
+              reviewTier: 'T1',
+              score: 92,
+              retrievedAt: iso(NOW),
+            },
+          ],
+        },
+      }
+    );
+    assert.equal(exitCode, 1);
+    assert.equal(result.refused, 'PROBATION_REQUIRES_INDEPENDENT_REVIEW');
+    assert.equal(launchCount, 0);
   });
 
   test('65-03: a quota-exhausted candidate is never chosen', async () => {

@@ -176,7 +176,7 @@ function isLiveCompletion(result, workItemId) {
 }
 
 function baseOpts(extra) {
-  return Object.assign(
+  const options = Object.assign(
     {
       specs: [{ id: 'A', files: ['a.js'], acceptanceCriteria: ['a works'] }],
       candidates: [cand()],
@@ -189,6 +189,8 @@ function baseOpts(extra) {
     },
     extra || {}
   );
+  options.ranking = Object.assign({ priors: { ranking: [] } }, (extra && extra.ranking) || {});
+  return options;
 }
 
 function makeTempRepo() {
@@ -4416,6 +4418,7 @@ describe('TASK-AI-64 worker timeout and upstream quota fallback (DEFECT M)', () 
           sha: hostRepo.sha,
           decisionDir,
           evidenceDir,
+          ranking: { priors: { ranking: [] } },
           candidates: [candCl, candGh],
           specs: [
             {

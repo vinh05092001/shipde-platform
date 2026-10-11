@@ -814,6 +814,21 @@ function candidateContextWindow(candidate) {
   );
 }
 
+function hasIndependentReviewerCandidate(candidate, reviewers) {
+  const writerKey = candidateKey(candidate);
+  const writerDomain = canonicalFailureDomain(candidate);
+  if (!writerKey || !writerDomain) return false;
+  return (reviewers || []).some((reviewer) => {
+    if (!reviewer || !Array.isArray(reviewer.qualifiedRoles)) return false;
+    if (!reviewer.qualifiedRoles.some((role) => /review/i.test(role))) return false;
+    return (
+      candidateKey(reviewer) !== writerKey &&
+      canonicalFailureDomain(reviewer) !== null &&
+      canonicalFailureDomain(reviewer) !== writerDomain
+    );
+  });
+}
+
 /** Blended per-million cost, accepting the numeric or the offering object form. */
 function blendedCost(candidate) {
   const c = candidate && candidate.cost;
@@ -935,20 +950,25 @@ function scoreForProfile(candidate, assessment, ctx) {
   const latency = latencyScoreOf(candidate);
   const internalQuality = qualityScoreOf(candidate, now);
   const priorUsable = prior && !prior.stale;
-  const evidenceCount = ((candidate && candidate.evidence) || []).filter(
-    (item) => item && item.status === 'passed'
-  ).length;
+  const storedEvidence = evidence.getEvidence(ctx && ctx.evidenceData, candidate) || [];
+  const internalEvidence =
+    storedEvidence.length > 0 ? storedEvidence : (candidate && candidate.evidence) || [];
+  const evidenceCount = internalEvidence.filter((item) => item && item.status === 'passed').length;
+  const hasQualityFailure = internalEvidence.some((item) => item && item.status === 'failed');
   const qualityWeight = Number(
     assessment && assessment.weights && assessment.weights.quality !== undefined
       ? assessment.weights.quality
       : 33
   );
   const priorQualityWeight = Math.max(0, Math.min(100, qualityWeight)) / 100;
-  const priorWeight = priorUsable ? 1 / (1 + evidenceCount) : 0;
+  const effectivePriorUsable = Boolean(priorUsable && !hasQualityFailure);
+  const priorWeight = effectivePriorUsable ? 1 / (1 + evidenceCount) : 0;
   const effectivePriorWeight =
-    prior && prior.score !== undefined ? priorWeight * priorQualityWeight : 0;
+    prior && prior.score !== undefined && effectivePriorUsable
+      ? priorWeight * priorQualityWeight
+      : 0;
   const quality =
-    priorUsable && prior.score !== undefined
+    effectivePriorUsable && prior.score !== undefined
       ? Math.round(
           internalQuality === null
             ? prior.score
@@ -1000,19 +1020,19 @@ function scoreForProfile(candidate, assessment, ctx) {
   // A scored prior is already blended into quality above. Only legacy priors
   // without a numeric score retain the standalone tier bonus.
   const weightedPriorContribution =
-    priorUsable && prior.score !== undefined
+    effectivePriorUsable && prior.score !== undefined
       ? Math.round((prior.bonus * priorQualityWeight * wQuality) / totalWeight)
-      : priorUsable
+      : effectivePriorUsable
         ? prior.bonus
         : 0;
-  const priorScoreIsBlended = priorUsable && prior.score !== undefined;
+  const priorScoreIsBlended = effectivePriorUsable && prior.score !== undefined;
   const scorePriorContribution = priorScoreIsBlended ? 0 : weightedPriorContribution;
   if (scorePriorContribution) score += scorePriorContribution;
   if (prior) {
     if (prior.score !== undefined) {
+      prior.contribution = scorePriorContribution;
       prior.normalizedScore = priorUsable ? prior.score / 100 : null;
       prior.weight = effectivePriorWeight;
-      prior.contribution = scorePriorContribution;
     }
   }
 
@@ -1154,17 +1174,24 @@ function rankForProfile(candidates, profile, assessment, ctx) {
     }
 
     const probationPrior = priorFor(c, profile.role, priors, now);
+    const priorTier = probationPrior && probationPrior.tier;
+    const independentReviewerAvailable = hasIndependentReviewerCandidate(
+      c,
+      context.independentReviewerCandidates
+    );
     const probationRequested =
-      probation.has(key) ||
-      c.probation === true ||
-      Boolean(probationPrior && !probationPrior.stale && probationPrior.score >= 80);
+      probation.has(key) || c.probation === true || Boolean(priorTier === 'T1');
     const probationAllowed =
       probationRequested &&
-      Boolean(probationPrior && !probationPrior.stale && probationPrior.score >= 80) &&
+      Boolean(probationPrior && !probationPrior.stale && priorTier === 'T1') &&
+      !(
+        (evidence.getEvidence(context.evidenceData, c) || []).length ||
+        (c.evidence || []).length > 0
+      ) &&
       (!['security', 'money', 'tenant'].some((risk) =>
         (profile.riskDomains || []).includes(risk)
       ) ||
-        context.independentStrongReviewerGuaranteed === true);
+        independentReviewerAvailable);
     const riskCritical = ['security', 'money', 'tenant'].some((risk) =>
       (profile.riskDomains || []).includes(risk)
     );
@@ -1173,8 +1200,8 @@ function rankForProfile(candidates, profile, assessment, ctx) {
       !proofObservedWithSource(context.evidenceData, c).level &&
       probationPrior &&
       !probationPrior.stale &&
-      probationPrior.score >= 80 &&
-      !context.independentStrongReviewerGuaranteed;
+      priorTier === 'T1' &&
+      !independentReviewerAvailable;
     if (riskProbationRefused) {
       reject('PROBATION_REQUIRES_INDEPENDENT_STRONG_REVIEWER', 'candidate');
       continue;
@@ -1236,6 +1263,7 @@ function rankForProfile(candidates, profile, assessment, ctx) {
   }
 
   ranked.sort((a, b) => {
+    if (a.probation !== b.probation) return a.probation ? 1 : -1;
     const aPriorBonus = a.scoreBreakdown.prior
       ? (a.scoreBreakdown.prior.contribution ?? a.scoreBreakdown.prior.bonus ?? 0)
       : 0;
@@ -1250,7 +1278,18 @@ function rankForProfile(candidates, profile, assessment, ctx) {
     return a.candidateKey.localeCompare(b.candidateKey);
   });
 
-  const allZero = ranked.length > 0 && ranked.every((c) => c.score === 0);
+  const allZero =
+    ranked.length > 0 &&
+    ranked.every((c) => {
+      const priorData = c.scoreBreakdown.prior;
+      const priorContribution =
+        priorData && priorData.contribution !== undefined
+          ? priorData.contribution
+          : priorData && priorData.score === undefined
+            ? priorData.bonus
+            : 0;
+      return c.score - (Number(priorContribution) || 0) === 0;
+    });
   const top3 = ranked.slice(0, 3);
   const deterministicChosen = top3.length ? top3[0].candidateKey : null;
   const chosen = deterministicChosen;
@@ -1568,6 +1607,7 @@ async function runProfileDispatch(args, deps) {
     { now }
   );
 
+  const independentReviewerCandidates = d.candidates || [];
   const rankCtx = {
     now,
     priors: d.priors,
@@ -1586,6 +1626,7 @@ async function runProfileDispatch(args, deps) {
           ? Number(args['exploration-budget'])
           : 0,
     enforceKnownQuota: args.execute === true && hasQuotaAccountReadings(d.home, d.storePath),
+    independentReviewerCandidates,
   };
   const result = rankForProfile(annotated, profile, assessment, rankCtx);
   if (result.ranking.length && typeof d.modelChoiceAsk === 'function') {
@@ -1652,6 +1693,12 @@ async function runProfileDispatch(args, deps) {
   // The decision log is the trace: profile, JEV result, full ranking, final
   // candidate — written even in a dry run, because the ranking decision is
   // real even when the launch is not (AI-64-R03's standard, applied here).
+  const selectedForGuarantee =
+    result.ranking.find((candidate) => candidate.candidateKey === result.chosen) || null;
+  const selectedHasIndependentReviewer = hasIndependentReviewerCandidate(
+    selectedForGuarantee,
+    independentReviewerCandidates
+  );
   const decisionRecorded = {
     stage: decisions.Stage.SELECTED,
     workItemId: profile.taskId,
@@ -1689,6 +1736,12 @@ async function runProfileDispatch(args, deps) {
     reason: result.reason,
     reasonCode: result.reasonCode || null,
     modelChoice: result.modelChoice || null,
+    probationReviewGuarantee: {
+      established: selectedHasIndependentReviewer,
+      source: selectedHasIndependentReviewer
+        ? 'qualified reviewer candidate in a different failure domain'
+        : null,
+    },
   };
   decisions.recordDecision(decisionRecorded, {
     dir: args['decision-dir'] || d.decisionDir,
@@ -1757,6 +1810,17 @@ async function runProfileDispatch(args, deps) {
 
   if (execute) {
     const chosenCandidate = result.ranking.find((c) => c.candidateKey === result.chosen) || {};
+    const independentReviewerAvailable = selectedHasIndependentReviewer;
+    if (chosenCandidate.probationRequiresIndependentReview && !independentReviewerAvailable) {
+      error('PROBATION_REQUIRES_INDEPENDENT_REVIEW');
+      exit(1);
+      return {
+        exitCode: 1,
+        profile,
+        refused: 'PROBATION_REQUIRES_INDEPENDENT_REVIEW',
+        ranking: result.ranking,
+      };
+    }
     const parsedKey = parseCandidateKey(result.chosen) || {};
     const harness = chosenCandidate.harness || parsedKey.harness;
     const accessPath = chosenCandidate.accessPath || parsedKey.accessPath;

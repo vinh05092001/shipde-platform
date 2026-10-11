@@ -102,7 +102,7 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
       priorsApi.benchmarkScore({ contextWindow: 1000000, releaseDate: '2026-01-01' }),
       null
     );
-    assert.equal(result.ranking[0].probation, true);
+    assert.equal(strongRanked.probation, true);
     assert.equal(strongRanked.scoreBreakdown.cost, 95);
     assert.match(
       routing.formatTopEntry(Object.assign({}, strong, { latencyMs: null }), 1),
@@ -181,6 +181,11 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
     });
     assert.equal(refused.ranking.length, 0);
     assert.equal(refused.rejected[0].reasonCode, 'PROBATION_REQUIRES_INDEPENDENT_STRONG_REVIEWER');
+    const reviewer = candidate('independent-reviewer', {
+      gateway: 'different-gateway',
+      upstream: 'different-provider',
+      qualifiedRoles: ['reviewer.primary'],
+    });
     const allowed = routing.rankForProfile([untried], task, assessment, {
       headrooms: { default: 'open' },
       priors: {
@@ -194,7 +199,7 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
           },
         ],
       },
-      independentStrongReviewerGuaranteed: true,
+      independentReviewerCandidates: [reviewer],
     });
     assert.equal(allowed.ranking[0].probation, true);
     assert.equal(allowed.ranking[0].probationRequiresIndependentReview, true);
@@ -390,6 +395,88 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
     assert.equal(result.ranking[0].probation, true);
     assert.equal(result.ranking[0].probationRequiresIndependentReview, true);
     assert.equal(result.ranking[0].scoreBreakdown.prior.score, 91);
+  });
+
+  test('only the role-specific T1 tier admits a never-tried model on probation', () => {
+    const untried = candidate('tier-boundary-model', { evidence: [] });
+    const priors = {
+      ranking: [
+        {
+          canonical: 'tier-boundary-model',
+          codingTier: 'T1',
+          reviewTier: 'T2',
+          score: 76,
+          retrievedAt: '2026-10-09T00:00:00Z',
+        },
+      ],
+    };
+    const writer = routing.rankForProfile(
+      [untried],
+      profile({ role: 'writer', proofFloor: 'API_PASS' }),
+      assessment,
+      { now: Date.parse('2026-10-10T00:00:00Z'), priors, headrooms: { default: 'open' } }
+    );
+    const reviewer = routing.rankForProfile(
+      [untried],
+      profile({ role: 'reviewer', proofFloor: 'API_PASS' }),
+      assessment,
+      { now: Date.parse('2026-10-10T00:00:00Z'), priors, headrooms: { default: 'open' } }
+    );
+    assert.equal(writer.ranking[0].probation, true);
+    assert.equal(reviewer.ranking.length, 0);
+    assert.equal(reviewer.rejected[0].reasonCode, 'PROOF_FLOOR_NOT_MET:NONE');
+  });
+
+  test('failed internal evidence cannot be waived by a strong prior', () => {
+    const failed = candidate('failed-prior-model', {
+      evidence: [{ status: 'failed', proofLevel: 'WORK_ITEM_PASS' }],
+      quality: undefined,
+    });
+    const result = routing.rankForProfile(
+      [failed],
+      profile({ proofFloor: 'API_PASS' }),
+      assessment,
+      {
+        now: Date.parse('2026-10-10T00:00:00Z'),
+        priors: {
+          ranking: [
+            {
+              canonical: 'failed-prior-model',
+              codingTier: 'T1',
+              reviewTier: 'T1',
+              score: 99,
+              retrievedAt: '2026-10-09T00:00:00Z',
+            },
+          ],
+        },
+        headrooms: { default: 'open' },
+      }
+    );
+    assert.equal(result.ranking.length, 0);
+    assert.equal(result.rejected[0].reasonCode, 'PROOF_FLOOR_NOT_MET:NONE');
+  });
+
+  test('a legacy tier bonus alone remains unproven', () => {
+    const noMeasurements = candidate('legacy-tier-only', {
+      evidence: [],
+      quality: undefined,
+      latencyMs: undefined,
+      cost: undefined,
+    });
+    const result = routing.rankForProfile([noMeasurements], profile(), assessment, {
+      headrooms: { default: 'open' },
+      priors: {
+        ranking: [
+          {
+            canonical: 'legacy-tier-only',
+            codingTier: 'T1',
+            reviewTier: 'T1',
+            retrievedAt: new Date().toISOString(),
+          },
+        ],
+      },
+    });
+    assert.equal(result.reasonCode, 'MODEL_SELECTION_NOT_PROVEN');
   });
 
   test('benchmark aliases contribute scores without score or bench in their names', () => {
