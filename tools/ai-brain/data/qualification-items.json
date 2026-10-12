@@ -1,11 +1,21 @@
 [
   {
     "id": "QUALIFY-CODE-REVIEW-01",
+    "title": "Implement a deterministic review finding summary",
     "kind": "qualification",
     "risk": "low",
+    "role": "author.foundation",
+    "complexity": "simple",
+    "proofFloor": "NONE",
     "acceptanceCriteria": [
-      "Inspect the assigned change and report concrete correctness issues.",
-      "Return a structured PASS or CHANGES_REQUIRED verdict bound to the reviewed commit."
-    ]
+      "Create the allowed exercise module and export summarizeFindings(findings).",
+      "Return totalFindings and openFindings counts from the input array.",
+      "Return CHANGES_REQUIRED when any finding is open and PASS otherwise.",
+      "Pass the declared focused node:test verification command."
+    ],
+    "allowedPaths": ["tools/ai-brain/qualification-exercises/QUALIFY-CODE-REVIEW-01.js"],
+    "verification": {
+      "command": "node --import ./tools/ai-brain/test/qualification-exercise-enable.js --test tools/ai-brain/test/qualification-exercise.test.js"
+    }
   }
 ]

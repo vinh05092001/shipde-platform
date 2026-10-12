@@ -865,23 +865,25 @@ function runIsolatedReviewed(options, deps) {
   if (!/^[a-f0-9]{40}$/i.test(String(baseSha || ''))) {
     throw intakeError('QUALIFICATION_BASE_INVALID', 'QUALIFICATION_BASE_INVALID');
   }
+  const runStamp = new Date(now).toISOString().replace(/[:.]/g, '-');
   const runDir = path.join(
     root,
     'tools',
     'ai-brain',
     'data',
     'qualification-runs',
-    String(o.item.id)
+    String(o.item.id),
+    runStamp + '-' + require('crypto').randomBytes(6).toString('hex')
   );
   fs.mkdirSync(runDir, { recursive: true });
   const decisionDir = path.join(runDir, 'decisions');
   fs.mkdirSync(decisionDir, { recursive: true });
   const spec = Object.assign({}, o.item, {
     id: o.item.id,
-    title: 'Bounded qualification: ' + o.item.id,
-    role: 'reviewer',
-    proofFloor: 'NONE',
-    complexity: 'standard',
+    title: o.item.title || 'Bounded qualification: ' + o.item.id,
+    role: o.item.role || 'author.foundation',
+    proofFloor: o.item.proofFloor || 'NONE',
+    complexity: o.item.complexity || 'standard',
     allowedPaths: o.item.allowedPaths || [],
     verification: o.item.verification || null,
     exploration: true,
