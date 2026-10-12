@@ -617,3 +617,434 @@ test('H2-14: TASK-AI-142.md has H2 open questions documented for supervisor veri
   assert.ok(docText.includes('Provider config format'), 'Mentions provider config format');
   assert.ok(docText.includes('Environment variable'), 'Mentions env var name question');
 });
+
+test('H2-15: candidate selection enforces route-health gates on production discovery path and fails closed with NO_REASONING_CANDIDATE', async () => {
+  const root = fixtureRoot('hermes-health-gates-');
+  try {
+    let assembleOptions = null;
+    const fakeAssemble = (discovery, accounts, registry, options) => {
+      assembleOptions = options;
+      return []; // No candidates pass route health
+    };
+
+    const res = selectReasoningCandidate(
+      { rootDir: root, skipDecisionLog: true },
+      {
+        readDiscoveryCatalogue: () => ({ candidates: [{ id: 'unprobed-1' }] }),
+        assembleForDispatch: fakeAssemble,
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+      }
+    );
+
+    assert.ok(assembleOptions, 'assembleForDispatch must be called');
+    assert.equal(assembleOptions.requireRouteHealth, true, 'requireRouteHealth must be true');
+    assert.equal(
+      assembleOptions.allowUnprobedCandidates,
+      undefined,
+      'allowUnprobedCandidates must not be true'
+    );
+    assert.equal(res.chosen, null, 'Must fail closed when no candidate qualifies');
+    assert.equal(res.candidate, null);
+    assert.equal(res.refused, 'NO_REASONING_CANDIDATE');
+    assert.ok(res.reason.includes('NO_REASONING_CANDIDATE'));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('H2-16: discovery read errors are refusals and not swallowed', async () => {
+  const root = fixtureRoot('hermes-disc-err-');
+  try {
+    const res = selectReasoningCandidate(
+      { rootDir: root, skipDecisionLog: true },
+      {
+        readDiscoveryCatalogue: () => {
+          throw new Error('EACCES: catalogue read error');
+        },
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+      }
+    );
+
+    assert.equal(res.chosen, null);
+    assert.equal(res.candidate, null);
+    assert.equal(res.refused, 'DISCOVERY_READ_ERROR');
+    assert.ok(res.reason.includes('DISCOVERY_READ_ERROR'));
+    assert.ok(res.reason.includes('EACCES: catalogue read error'));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('H2-17: candidate with unknown or too-small context is rejected without flooring or inventing contextWindow', async () => {
+  const root = fixtureRoot('hermes-context-floor-');
+  try {
+    const cSmall = sampleCandidate({
+      upstream: 'kr',
+      modelId: 'kr/small-context',
+      contextWindow: 16000,
+      capabilities: { contextWindow: 16000 },
+    });
+    const cMissing = sampleCandidate({
+      upstream: 'rq',
+      modelId: 'rq/missing-context',
+      contextWindow: undefined,
+      capabilities: {},
+    });
+
+    const res = selectReasoningCandidate(
+      { rootDir: root, skipDecisionLog: true },
+      {
+        candidates: [cSmall, cMissing],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+      }
+    );
+
+    assert.equal(res.chosen, null, 'No candidate with < 32k or missing context may be chosen');
+    assert.equal(res.candidate, null);
+    assert.equal(res.refused, 'NO_REASONING_CANDIDATE');
+
+    const rejectedSmall = res.rejected.find((r) => r.candidateKey.includes('small-context'));
+    assert.ok(rejectedSmall, 'cSmall must be in rejected');
+    assert.ok(
+      rejectedSmall.reasonCode.includes('CONTEXT_TOO_SMALL'),
+      'cSmall must be rejected for CONTEXT_TOO_SMALL'
+    );
+
+    const rejectedMissing = res.rejected.find((r) => r.candidateKey.includes('missing-context'));
+    assert.ok(rejectedMissing, 'cMissing must be in rejected');
+    assert.ok(
+      rejectedMissing.reasonCode.includes('CONTEXT_WINDOW_UNVERIFIED'),
+      'cMissing must be rejected for CONTEXT_WINDOW_UNVERIFIED'
+    );
+
+    // If a candidate with valid context >= 32000 is present, it is selected over cSmall
+    const cValid = sampleCandidate({
+      upstream: 'kr',
+      modelId: 'kr/valid-context',
+      contextWindow: 32000,
+      capabilities: { contextWindow: 32000 },
+      quality: 85,
+    });
+    const resWithValid = selectReasoningCandidate(
+      { rootDir: root, skipDecisionLog: true },
+      {
+        candidates: [cSmall, cValid],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+      }
+    );
+    assert.equal(resWithValid.candidate.modelId, 'kr/valid-context');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('H2-18: excludedCandidates excludes candidates by their final post-adaptation candidateKey', async () => {
+  const root = fixtureRoot('hermes-exclude-final-');
+  try {
+    const c1 = sampleCandidate({
+      harness: 'cli',
+      accessPath: 'cli',
+      gateway: '9router',
+      upstream: 'kr',
+      modelId: 'kr/gemini-2.5-pro',
+      quality: 95,
+    });
+    const c2 = sampleCandidate({
+      harness: 'cli',
+      accessPath: 'cli',
+      gateway: 'rqsty',
+      upstream: 'rq',
+      modelId: 'rq/gpt-4o',
+      quality: 85,
+    });
+
+    const c1FinalKey =
+      'hermes::http://127.0.0.1:20128/v1::9router::kr::acc-1::acc-1::kr/gemini-2.5-pro';
+
+    const res = selectReasoningCandidate(
+      {
+        rootDir: root,
+        excludedCandidates: [c1FinalKey],
+        forbiddenFailureDomains: [],
+        skipDecisionLog: true,
+      },
+      {
+        candidates: [c1, c2],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+      }
+    );
+
+    assert.ok(res.chosen, 'Candidate must be chosen');
+    assert.equal(
+      res.chosen.includes('rq/gpt-4o'),
+      true,
+      'c1 must be excluded by its post-adaptation key even without forbidden domains'
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('H2-19: stored candidate binding is reused when reselect is false and candidate is still usable', async () => {
+  const root = fixtureRoot('hermes-reuse-binding-');
+  try {
+    const c1 = sampleCandidate({
+      upstream: 'kr',
+      modelId: 'kr/gemini-2.5-pro',
+      latencyMs: 5000,
+      cost: 20,
+    });
+    const c2 = sampleCandidate({
+      upstream: 'rq',
+      modelId: 'rq/gpt-4o',
+      latencyMs: 200,
+      cost: 1,
+    });
+
+    // Save initial session binding to c1
+    saveSession(
+      {
+        sessionId: 'hermes_reuse_test_sess',
+        candidateKey: c1.candidateKey,
+        goalIds: ['GOAL-REUSE'],
+      },
+      { rootDir: root }
+    );
+
+    const calls = [];
+    const fakeSpawn = async (cmd, args) => {
+      calls.push({ cmd, args });
+      return { exitCode: 0, status: 0 };
+    };
+
+    // First launch with reselect: false (default)
+    const res1 = await launchHermesSession(
+      { rootDir: root, reselect: false, skipDecisionLog: true },
+      {
+        candidates: [c1, c2],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+        spawn: fakeSpawn,
+      }
+    );
+
+    assert.equal(
+      res1.candidateKey,
+      c1.candidateKey,
+      'Stored binding c1 must be reused when still usable and reselect is false'
+    );
+    const session1 = loadSession({ rootDir: root });
+    assert.equal(session1.candidateKey, c1.candidateKey, 'Session file maintains binding to c1');
+
+    // Second launch with explicit reselect: true -> switches to higher-quality c2
+    const res2 = await launchHermesSession(
+      { rootDir: root, reselect: true, skipDecisionLog: true },
+      {
+        candidates: [c1, c2],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+        spawn: fakeSpawn,
+      }
+    );
+
+    assert.equal(res2.candidateKey, c2.candidateKey, 'reselect: true selects new candidate c2');
+    const session2 = loadSession({ rootDir: root });
+    assert.equal(session2.candidateKey, c2.candidateKey, 'Session file updated to c2 on reselect');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('H2-20: decision-log write failure fails the selection', async () => {
+  const root = fixtureRoot('hermes-dec-fail-');
+  try {
+    const candidate = sampleCandidate();
+    const mockDecisions = {
+      Stage: decisions.Stage,
+      recordDecision: () => {
+        const err = new Error('ENOSPC: no space left on device');
+        err.code = 'ENOSPC';
+        throw err;
+      },
+    };
+
+    let thrown = null;
+    try {
+      selectReasoningCandidate(
+        { rootDir: root, skipDecisionLog: false },
+        {
+          candidates: [candidate],
+          registry: sampleRegistry(),
+          priorsData: { ranking: [] },
+          decisions: mockDecisions,
+        }
+      );
+    } catch (e) {
+      thrown = e;
+    }
+
+    assert.ok(thrown, 'Must throw when decision log write fails');
+    assert.equal(thrown.code, 'DECISION_LOG_WRITE_FAILURE');
+    assert.ok(thrown.message.includes('ENOSPC'));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('H2-21: unknown endpoints and unknown API key env vars refuse, and YAML values are validated and escaped', async () => {
+  const root = fixtureRoot('hermes-unknown-ep-');
+  try {
+    const emptyRegistry = { version: 2, sources: [] };
+
+    // 1. Unknown endpoint: candidate has no accessPath and registry has no source
+    assert.throws(
+      () => {
+        writeProvidersConfig(
+          { gateway: 'unknown-gw', upstream: 'unknown-up' },
+          { rootDir: root },
+          { registry: emptyRegistry }
+        );
+      },
+      (err) => err.code === 'UNKNOWN_ENDPOINT'
+    );
+
+    // 2. Source exists with endpoint, but NO credential env var configured: refuse without guessing
+    const noCredRegistry = {
+      version: 2,
+      sources: [
+        {
+          id: 'test-gw',
+          endpoint: 'https://api.testgw.ai/v1',
+          accessPath: 'https://api.testgw.ai/v1',
+        },
+      ],
+    };
+    assert.throws(
+      () => {
+        writeProvidersConfig(
+          { gateway: 'test-gw', accessPath: 'https://api.testgw.ai/v1' },
+          { rootDir: root },
+          { registry: noCredRegistry }
+        );
+      },
+      (err) => err.code === 'UNKNOWN_CREDENTIAL_ENV'
+    );
+
+    // 3. Invalid provider name with illegal characters
+    const validCredRegistry = {
+      version: 2,
+      sources: [
+        {
+          id: 'bad gw!',
+          endpoint: 'https://api.testgw.ai/v1',
+          credential: { env: 'TEST_KEY' },
+        },
+      ],
+    };
+    assert.throws(
+      () => {
+        writeProvidersConfig(
+          { gateway: 'bad gw!', accessPath: 'https://api.testgw.ai/v1' },
+          { rootDir: root },
+          { registry: validCredRegistry }
+        );
+      },
+      (err) => err.code === 'INVALID_PROVIDER_NAME'
+    );
+
+    // 4. Safe YAML value escaping: quotes in URL are escaped via JSON.stringify
+    const quoteRegistry = {
+      version: 2,
+      sources: [
+        {
+          id: 'quote-gw',
+          endpoint: 'https://api.testgw.ai/v1?arg="quoted"',
+          credential: { env: 'QUOTE_KEY' },
+        },
+      ],
+    };
+    const res = writeProvidersConfig(
+      { gateway: 'quote-gw', accessPath: 'https://api.testgw.ai/v1?arg="quoted"' },
+      { rootDir: root },
+      { registry: quoteRegistry }
+    );
+    const content = fs.readFileSync(res.configPath, 'utf8');
+    assert.ok(content.includes('\\"quoted\\"'), 'Quotes in URL must be escaped in YAML');
+
+    // 5. Unsafe newline in baseUrl throws YAML_VALUE_UNSAFE
+    const nlRegistry = {
+      version: 2,
+      sources: [
+        {
+          id: 'nl-gw',
+          endpoint: 'https://api.testgw.ai/v1\ninjected: true',
+          credential: { env: 'NL_KEY' },
+        },
+      ],
+    };
+    assert.throws(() => {
+      writeProvidersConfig(
+        { gateway: 'nl-gw', accessPath: 'https://api.testgw.ai/v1\ninjected: true' },
+        { rootDir: root },
+        { registry: nlRegistry }
+      );
+    }, /YAML_VALUE_UNSAFE|UNKNOWN_ENDPOINT/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('H2-22: explorationBudget defaults to 0 ensuring deterministic ranking', async () => {
+  const root = fixtureRoot('hermes-explor-');
+  try {
+    let capturedRankCtx = null;
+    const mockRank = (annotated, profile, assessment, rankCtx) => {
+      capturedRankCtx = rankCtx;
+      return {
+        chosen: annotated[0]?.candidateKey || null,
+        ranking: annotated,
+        top3: annotated.slice(0, 3),
+        rejected: [],
+        refused: null,
+        reason: 'ok',
+      };
+    };
+
+    const c = sampleCandidate();
+    selectReasoningCandidate(
+      { rootDir: root, skipDecisionLog: true },
+      {
+        candidates: [c],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+        rankForProfile: mockRank,
+      }
+    );
+
+    assert.ok(capturedRankCtx, 'rankForProfile must be called');
+    assert.equal(
+      capturedRankCtx.explorationBudget,
+      0,
+      'Default explorationBudget must be 0 for deterministic ranking'
+    );
+
+    // Explicit explorationBudget override is respected when provided
+    selectReasoningCandidate(
+      { rootDir: root, skipDecisionLog: true, explorationBudget: 3 },
+      {
+        candidates: [c],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+        rankForProfile: mockRank,
+      }
+    );
+    assert.equal(capturedRankCtx.explorationBudget, 3);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

@@ -160,16 +160,37 @@ function selectReasoningCandidate(options, deps) {
   } else if (Array.isArray(d.candidates)) {
     poolCandidates = d.candidates;
   } else {
-    let discovery = { candidates: [] };
+    let discovery;
+    const readDiscoveryCatalogue =
+      (d.discovery && d.discovery.readDiscoveryCatalogue) ||
+      (d.discoveryRead && d.discoveryRead.readDiscoveryCatalogue) ||
+      d.readDiscoveryCatalogue ||
+      require('./discovery/read').readDiscoveryCatalogue;
+    const discoveryDir =
+      opts.discoveryDir || d.discoveryDir || path.join(__dirname, 'data', 'discovery');
     try {
-      const { readDiscoveryCatalogue } = require('./discovery/read');
-      discovery = readDiscoveryCatalogue({ dataDir: path.join(__dirname, 'data', 'discovery') });
-    } catch {}
-    const cliApi = require('./cli');
-    poolCandidates = cliApi.assembleForDispatch(discovery, accounts, registry, {
+      discovery = readDiscoveryCatalogue({ dataDir: discoveryDir });
+    } catch (readErr) {
+      const reason = 'DISCOVERY_READ_ERROR: ' + (readErr.message || String(readErr));
+      return {
+        chosen: null,
+        candidate: null,
+        ranking: [],
+        top3: [],
+        rejected: [],
+        refused: 'DISCOVERY_READ_ERROR',
+        reason,
+        decisionRecord: null,
+      };
+    }
+
+    const cliApi = d.cli || require('./cli');
+    const assembleFn = d.assembleForDispatch || cliApi.assembleForDispatch;
+    poolCandidates = assembleFn(discovery, accounts, registry, {
       evidenceData,
-      allowUnprobedCandidates: true,
-      requireRouteHealth: false,
+      requireRouteHealth: true,
+      routeHealth: d.routeHealth,
+      routeHealthFile: opts.routeHealthFile || d.routeHealthFile,
     });
   }
 
@@ -177,32 +198,56 @@ function selectReasoningCandidate(options, deps) {
 
   // Adapt candidates for Hermes harness: set harness=hermes, verify contextWindow >= 32000
   const hermesCandidates = poolCandidates
-    .filter((c) => !excluded.has(c.candidateKey))
     .map((c) => {
       const candidate = Object.assign({}, c);
+      const preRewriteKey = candidate.candidateKey || candidateKey(candidate);
       candidate.harness = 'hermes';
 
-      const contextWin =
-        candidate.contextWindow ||
-        (candidate.capabilities && candidate.capabilities.contextWindow) ||
-        128000;
-      candidate.contextWindow = Math.max(contextWin, HERMES_MIN_CONTEXT);
-      candidate.capabilities = Object.assign(
-        { contextWindow: candidate.contextWindow },
-        candidate.capabilities || {}
-      );
+      const rawContext =
+        candidate.contextWindow !== undefined
+          ? candidate.contextWindow
+          : candidate.context_window !== undefined
+            ? candidate.context_window
+            : candidate.capabilities && candidate.capabilities.contextWindow !== undefined
+              ? candidate.capabilities.contextWindow
+              : candidate.capabilities && candidate.capabilities.context_window !== undefined
+                ? candidate.capabilities.context_window
+                : candidate.capabilities && candidate.capabilities.contextTokens !== undefined
+                  ? candidate.capabilities.contextTokens
+                  : undefined;
 
-      if (!candidate.accessPath || candidate.accessPath === 'cli') {
-        const src = registry.sources.find(
-          (s) => s.id === candidate.gateway || s.id === candidate.upstream
-        );
-        candidate.accessPath =
-          (src && (src.accessPath || src.endpoint)) || 'http://127.0.0.1:20128/v1';
+      candidate.contextWindow = rawContext;
+      if (candidate.capabilities) {
+        candidate.capabilities = Object.assign({}, candidate.capabilities, {
+          contextWindow: rawContext,
+        });
+      }
+
+      if (
+        !candidate.accessPath ||
+        candidate.accessPath === 'cli' ||
+        candidate.accessPath.startsWith('cli-') ||
+        candidate.accessPath === '*'
+      ) {
+        let src =
+          (registry &&
+            registry.sources &&
+            registry.sources.find(
+              (s) => s.id === candidate.gateway || s.id === candidate.upstream
+            )) ||
+          null;
+        if (src && !src.endpoint && !src.accessPath && src.reachedVia) {
+          const gw = registry.sources.find((s) => s.id === src.reachedVia);
+          if (gw) src = gw;
+        }
+        candidate.accessPath = (src && (src.accessPath || src.endpoint)) || null;
       }
 
       candidate.candidateKey = candidateKey(candidate);
+      candidate._preRewriteKey = preRewriteKey;
       return candidate;
-    });
+    })
+    .filter((c) => !excluded.has(c.candidateKey) && !excluded.has(c._preRewriteKey));
 
   const annotated = candidatesMod.annotateCandidates(hermesCandidates, evidenceData, { now });
 
@@ -229,7 +274,8 @@ function selectReasoningCandidate(options, deps) {
     evidenceData,
     accounts,
     useStoredQuota: true,
-    explorationBudget: opts.explorationBudget !== undefined ? opts.explorationBudget : 5,
+    explorationBudget: opts.explorationBudget !== undefined ? Number(opts.explorationBudget) : 0,
+    enforceKnownQuota: opts.enforceKnownQuota,
   };
 
   const rankResult = (d.rankForProfile || routingMod.rankForProfile)(
@@ -239,10 +285,31 @@ function selectReasoningCandidate(options, deps) {
     rankCtx
   );
 
-  const chosenKey = rankResult.chosen;
+  let chosenKey = rankResult.chosen;
+  if (opts.preferredCandidateKey) {
+    const preferred = rankResult.ranking.find((c) => c.candidateKey === opts.preferredCandidateKey);
+    if (preferred) {
+      chosenKey = preferred.candidateKey;
+    }
+  }
+
   const chosenCandidate = chosenKey
     ? rankResult.ranking.find((c) => c.candidateKey === chosenKey) || null
     : null;
+
+  const isChosen = Boolean(chosenCandidate);
+  const refused = isChosen ? null : 'NO_REASONING_CANDIDATE';
+  let reason = isChosen ? rankResult.reason : null;
+  if (!isChosen) {
+    if (rankResult.rejected && rankResult.rejected.length > 0) {
+      reason =
+        'NO_REASONING_CANDIDATE: ' +
+        rankResult.rejected.map((r) => `${r.candidateKey}: ${r.reason || r.reasonCode}`).join('; ');
+    } else {
+      reason =
+        'NO_REASONING_CANDIDATE: ' + (rankResult.reason || 'no candidate meets requirements');
+    }
+  }
 
   // Record decision record Linking candidates, reasons, prior scores and source links
   const decisionDir =
@@ -268,23 +335,32 @@ function selectReasoningCandidate(options, deps) {
       reasonCode: r.reasonCode,
       reason: r.reason || r.reasonCode,
     })),
-    detail: opts.decisionDetail || 'HERMES_REASONING_SELECTION',
+    detail:
+      opts.decisionDetail ||
+      (opts.preferredCandidateKey && chosenKey === opts.preferredCandidateKey
+        ? 'HERMES_REASONING_REUSE_STORED_BINDING'
+        : 'HERMES_REASONING_SELECTION'),
   };
 
   if (!opts.skipDecisionLog) {
     try {
       decisionsMod.recordDecision(decisionRecord, { dir: decisionDir, now });
-    } catch {}
+    } catch (logErr) {
+      const err = new Error('DECISION_LOG_WRITE_FAILURE: ' + (logErr.message || String(logErr)));
+      err.code = 'DECISION_LOG_WRITE_FAILURE';
+      err.cause = logErr;
+      throw err;
+    }
   }
 
   return {
-    chosen: chosenKey,
+    chosen: chosenCandidate ? chosenKey : null,
     candidate: chosenCandidate,
     ranking: rankResult.ranking,
     top3: rankResult.top3,
     rejected: rankResult.rejected,
-    refused: rankResult.refused,
-    reason: rankResult.reason,
+    refused,
+    reason,
     decisionRecord,
   };
 }
@@ -313,21 +389,61 @@ function writeProvidersConfig(candidate, options, deps) {
   let providerName = gateway && gateway !== '*' ? gateway : upstream;
   if (!providerName || providerName === '*') providerName = 'custom';
 
-  let baseUrl = (candidate && candidate.accessPath) || (parsed && parsed.accessPath) || '';
-  const src = registry.sources.find(
-    (s) => s.id === gateway || s.id === upstream || s.id === (candidate && candidate.source)
-  );
-
-  if (!baseUrl || baseUrl === 'cli' || baseUrl.startsWith('cli-')) {
-    baseUrl = (src && (src.accessPath || src.endpoint)) || 'http://127.0.0.1:20128/v1';
+  if (!/^[a-zA-Z0-9_.-]+$/.test(providerName)) {
+    const err = new Error('INVALID_PROVIDER_NAME: ' + providerName);
+    err.code = 'INVALID_PROVIDER_NAME';
+    throw err;
   }
 
-  // Resolve the NAME of the key env var from the registry source — NEVER a key value.
+  let src =
+    (registry &&
+      registry.sources &&
+      registry.sources.find(
+        (s) => s.id === gateway || s.id === upstream || s.id === (candidate && candidate.source)
+      )) ||
+    null;
+
+  if (src && !src.endpoint && !src.accessPath && src.reachedVia) {
+    const gatewaySrc = registry.sources.find((s) => s.id === src.reachedVia);
+    if (gatewaySrc) {
+      src = Object.assign({}, src, {
+        endpoint: gatewaySrc.endpoint,
+        accessPath: gatewaySrc.accessPath,
+        credential: src.credential || gatewaySrc.credential,
+      });
+    }
+  }
+
+  let baseUrl = (candidate && candidate.accessPath) || (parsed && parsed.accessPath) || '';
+  if (!baseUrl || baseUrl === 'cli' || baseUrl.startsWith('cli-') || baseUrl === '*') {
+    baseUrl = (src && (src.accessPath || src.endpoint)) || '';
+  }
+
+  // Refusal on unknown or missing endpoint — NEVER fall back to 9router http://127.0.0.1:20128/v1
+  if (!baseUrl || !/^https?:\/\/[^\s\r\n]+$/i.test(baseUrl)) {
+    const err = new Error(
+      'UNKNOWN_ENDPOINT: Unknown or invalid endpoint for provider ' + providerName + ': ' + baseUrl
+    );
+    err.code = 'UNKNOWN_ENDPOINT';
+    throw err;
+  }
+
+  // Resolve the NAME of the key env var from the registry source — NEVER guess *_API_KEY.
   let apiKeyEnv = (src && src.credential && src.credential.env) || null;
-  if (!apiKeyEnv) {
-    if (providerName.toLowerCase().includes('9router')) apiKeyEnv = 'NINEROUTER_API_KEY';
-    else if (providerName.toLowerCase().includes('requesty')) apiKeyEnv = 'REQUESTY_API_KEY';
-    else apiKeyEnv = `${providerName.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_API_KEY`;
+  if (!apiKeyEnv || !/^[A-Za-z0-9_]+$/.test(apiKeyEnv)) {
+    const err = new Error(
+      'UNKNOWN_CREDENTIAL_ENV: Unknown credential env var for provider ' + providerName
+    );
+    err.code = 'UNKNOWN_CREDENTIAL_ENV';
+    throw err;
+  }
+
+  function escapeYamlString(val) {
+    const str = String(val);
+    if (/[\r\n\0]/.test(str)) {
+      throw new Error('YAML_VALUE_UNSAFE: contains newline or control character');
+    }
+    return JSON.stringify(str);
   }
 
   const yamlContent = [
@@ -335,8 +451,8 @@ function writeProvidersConfig(candidate, options, deps) {
     '# Generated by Ship De Controller — do not put secrets here',
     'providers:',
     `  ${providerName}:`,
-    `    base_url: "${baseUrl}"`,
-    `    api_key_env: "${apiKeyEnv}"`,
+    `    base_url: ${escapeYamlString(baseUrl)}`,
+    `    api_key_env: ${escapeYamlString(apiKeyEnv)}`,
     '',
   ].join('\n');
 
@@ -437,40 +553,31 @@ async function launchHermesSession(options, deps) {
   while (attempt < maxAttempts) {
     attempt += 1;
 
-    let selection;
-    if (!session.candidateKey || opts.reselect || attempt > 1) {
-      selection = selectReasoningCandidate(
-        Object.assign({}, opts, {
-          sessionId: session.sessionId,
-          forbiddenFailureDomains: forbiddenDomains,
-          excludedCandidates,
-        }),
-        d
+    const isRetry = attempt > 1;
+    const shouldReselect = Boolean(opts.reselect) || isRetry || !session.candidateKey;
+    const preferredCandidateKey = shouldReselect ? null : session.candidateKey;
+
+    const selection = selectReasoningCandidate(
+      Object.assign({}, opts, {
+        sessionId: session.sessionId,
+        forbiddenFailureDomains: forbiddenDomains,
+        excludedCandidates,
+        preferredCandidateKey,
+      }),
+      d
+    );
+
+    if (!selection || !selection.candidate) {
+      const err = new Error(
+        (selection && (selection.reason || selection.refused)) || 'NO_REASONING_CANDIDATE'
       );
-      if (!selection || !selection.candidate) {
-        const err = new Error((selection && selection.reason) || 'NO_CANDIDATE_MEETS_PROFILE');
-        err.code = 'NO_CANDIDATE_MEETS_PROFILE';
-        throw err;
-      }
-      session.candidateKey = selection.chosen;
-      saveSession(session, opts, d);
-    } else {
-      selection = selectReasoningCandidate(
-        Object.assign({}, opts, {
-          sessionId: session.sessionId,
-          forbiddenFailureDomains: forbiddenDomains,
-          excludedCandidates,
-        }),
-        d
-      );
-      if (!selection || !selection.candidate) {
-        const err = new Error('NO_CANDIDATE_MEETS_PROFILE');
-        err.code = 'NO_CANDIDATE_MEETS_PROFILE';
-        throw err;
-      }
-      session.candidateKey = selection.chosen;
-      saveSession(session, opts, d);
+      err.code = (selection && selection.refused) || 'NO_REASONING_CANDIDATE';
+      err.reasons = (selection && selection.rejected) || [];
+      throw err;
     }
+
+    session.candidateKey = selection.chosen;
+    saveSession(session, opts, d);
 
     const candidate = selection.candidate;
     const configResult = writeProvidersConfig(candidate, opts, d);
@@ -603,31 +710,34 @@ async function goalSessionCommand(args, deps) {
 
   try {
     let session = loadSession(opts, d);
-    if (!session || opts.reselect || !session.candidateKey) {
-      const selection = selectReasoningCandidate(opts, d);
-      if (!selection.candidate) {
-        const out = {
-          status: 'refused',
-          refusal: selection.refused || 'NO_CANDIDATE_MEETS_PROFILE',
-          reason: selection.reason,
-        };
-        console.log(JSON.stringify(out, null, 2));
-        return { exitCode: 1, result: out };
-      }
-      session = {
-        sessionId: (session && session.sessionId) || opts.session || generateSessionId(),
-        candidateKey: selection.chosen,
-        goalIds: (session && session.goalIds) || (opts.goal ? [String(opts.goal)] : []),
+    const shouldReselect = !session || Boolean(opts.reselect) || !session.candidateKey;
+    const preferredCandidateKey = shouldReselect ? null : session.candidateKey;
+
+    const selection = selectReasoningCandidate(
+      Object.assign({}, opts, { preferredCandidateKey }),
+      d
+    );
+    if (!selection.candidate) {
+      const out = {
+        status: 'refused',
+        refusal: selection.refused || 'NO_REASONING_CANDIDATE',
+        reason: selection.reason,
+        reasons: selection.rejected || [],
       };
-      if (opts.goal && !session.goalIds.includes(String(opts.goal))) {
-        session.goalIds.push(String(opts.goal));
-      }
-      saveSession(session, opts, d);
-      writeProvidersConfig(selection.candidate, opts, d);
-    } else if (opts.goal && !session.goalIds.includes(String(opts.goal))) {
-      session.goalIds.push(String(opts.goal));
-      saveSession(session, opts, d);
+      console.log(JSON.stringify(out, null, 2));
+      return { exitCode: 1, result: out };
     }
+
+    session = {
+      sessionId: (session && session.sessionId) || opts.session || generateSessionId(),
+      candidateKey: selection.chosen,
+      goalIds: (session && session.goalIds) || (opts.goal ? [String(opts.goal)] : []),
+    };
+    if (opts.goal && !session.goalIds.includes(String(opts.goal))) {
+      session.goalIds.push(String(opts.goal));
+    }
+    saveSession(session, opts, d);
+    writeProvidersConfig(selection.candidate, opts, d);
 
     const parsed = parseCandidateKey(session.candidateKey) || {};
     const rootDir = resolveRootDir(opts, d);
