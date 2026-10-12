@@ -406,7 +406,10 @@ function selectReasoningCandidate(options, deps) {
       candidate._preRewriteKey = preRewriteKey;
       return candidate;
     })
-    .filter((c) => !excluded.has(c.candidateKey) && !excluded.has(c._preRewriteKey));
+    .filter((c) => !excluded.has(c.candidateKey) && !excluded.has(c._preRewriteKey))
+    // Hermes reaches a model only through an OpenAI-compatible base_url; an
+    // account reached through a CLI (agy, claude-code) has no endpoint to bind.
+    .filter((c) => typeof c.accessPath === 'string' && /^https?:\/\//i.test(c.accessPath));
 
   const annotated = candidatesMod.annotateCandidates(hermesCandidates, evidenceData, { now });
 
@@ -416,7 +419,9 @@ function selectReasoningCandidate(options, deps) {
     complexity: 'complex',
     riskDomains: opts.riskDomains || ['reasoning', 'planning'],
     qualityFloor: opts.qualityFloor !== undefined ? opts.qualityFloor : 80,
-    proofFloor: opts.proofFloor || 'WORK_ITEM_PASS',
+    // Operator decision 2026-10-12: drop the proof floor for model selection;
+    // the output gates (independent exact-SHA review and CI) stay.
+    proofFloor: opts.proofFloor || 'NONE',
     contextSize: opts.contextSize !== undefined ? opts.contextSize : HERMES_MIN_CONTEXT,
     costCeiling: opts.costCeiling !== undefined ? opts.costCeiling : 5000,
     currentWorkload: 0,

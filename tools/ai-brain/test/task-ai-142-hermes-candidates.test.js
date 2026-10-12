@@ -351,3 +351,42 @@ test('TASK-AI-142 H3: hermes candidates never receive accountId "*"', () => {
     assert.equal(c.accountId, 'unbound-source', 'Unbound candidate uses source.id as accountId');
   }
 });
+
+test('TASK-AI-142 H3: a CLI-only account candidate (no http endpoint) is never selected for Hermes', () => {
+  const fakeRegistry = {
+    version: 2,
+    sources: [
+      {
+        id: 'router-a',
+        kind: 'model-source',
+        endpoint: 'http://127.0.0.1:40128/v1',
+        credential: { type: 'env', name: 'ROUTER_A_KEY' },
+        modelMeta: {
+          'r/model-a': { contextWindow: 200000, contextSource: 'provider-models-endpoint' },
+        },
+      },
+    ],
+  };
+  const http = candidatesApi
+    .generateCandidates({ harness: 'hermes', registry: fakeRegistry })
+    .find((c) => c.modelId === 'r/model-a');
+  assert.ok(http, 'router candidate must exist');
+  const cliOnly = {
+    harness: 'hermes',
+    accessPath: 'cli',
+    gateway: '',
+    upstream: 'antigravity',
+    accountId: 'agy-native-a',
+    quotaScope: 'agy-native-a',
+    modelId: 'claude-opus-4-6-thinking',
+    kind: 'agent-cli',
+    contextWindow: 200000,
+    capabilities: { contextWindow: 200000 },
+  };
+  const selection = hermesSessionApi.selectReasoningCandidate(
+    { skipDecisionLog: true, qualityFloor: 0 },
+    { candidates: [cliOnly], registry: fakeRegistry, priorsData: { ranking: [] } }
+  );
+  assert.equal(selection.chosen, null);
+  assert.equal(selection.refused, 'NO_REASONING_CANDIDATE');
+});
