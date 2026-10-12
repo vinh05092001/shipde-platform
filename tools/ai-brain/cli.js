@@ -32,6 +32,7 @@ const path = require('path');
 const { reconcileRegister, planReconciliation, applyStatusMutations } = require('./reconcile');
 const { auditManifest } = require('./manifest-audit');
 const { runCheck, currentBranch, headSha } = require('./facts');
+const { toPositiveInteger } = require('./source-discovery');
 
 const SEVERITY_LABEL = { error: 'LỖI ', warn: 'CẢNH', info: 'GHI ' };
 
@@ -639,6 +640,29 @@ function quotaCommand(args) {
   console.log('');
 }
 
+function resolveModelContextMeta(modelId, gateway, ...args) {
+  if (!modelId || !gateway) return null;
+  let registry = null;
+  for (const arg of args) {
+    if (arg && Array.isArray(arg.sources)) {
+      registry = arg;
+      break;
+    }
+  }
+  const sources = (registry && registry.sources) || [];
+  const src = sources.find((s) => s && s.id === gateway);
+  if (!src || !src.modelMeta) return null;
+  const m = src.modelMeta[modelId];
+  if (!m || typeof m !== 'object') return null;
+  const cw = toPositiveInteger(m.contextWindow);
+  if (cw === undefined) return null;
+  return {
+    ...m,
+    contextWindow: cw,
+    maxOutputTokens: toPositiveInteger(m.maxOutputTokens),
+  };
+}
+
 function assembleCandidates(
   discoveryCat,
   offerings,
@@ -702,6 +726,41 @@ function assembleCandidates(
         c.cost = acc.cost;
       }
     }
+    if (c.contextWindow !== undefined) {
+      c.contextWindow = toPositiveInteger(c.contextWindow);
+      if (c.capabilities && c.contextWindow !== undefined) {
+        c.capabilities = Object.assign({}, c.capabilities, { contextWindow: c.contextWindow });
+      } else if (c.capabilities) {
+        delete c.capabilities.contextWindow;
+      }
+    } else if (dc.contextWindow !== undefined) {
+      c.contextWindow = toPositiveInteger(dc.contextWindow);
+      if (c.capabilities && c.contextWindow !== undefined) {
+        c.capabilities = Object.assign({}, c.capabilities, { contextWindow: c.contextWindow });
+      } else if (c.capabilities) {
+        delete c.capabilities.contextWindow;
+      }
+    }
+    if (c.contextWindow === undefined) {
+      const routingSourceId = c.gateway || c.source || c.provider;
+      const m = resolveModelContextMeta(modelId, routingSourceId, registry);
+      if (m && m.contextWindow !== undefined) {
+        c.contextWindow = m.contextWindow;
+        if (c.capabilities) {
+          c.capabilities = Object.assign({}, c.capabilities, {
+            contextWindow: m.contextWindow,
+          });
+        } else {
+          c.capabilities = { contextWindow: m.contextWindow };
+        }
+        if (m.maxOutputTokens !== undefined && c.maxOutputTokens === undefined) {
+          c.maxOutputTokens = m.maxOutputTokens;
+        }
+        if (m.contextSource && !c.contextSource) {
+          c.contextSource = m.contextSource;
+        }
+      }
+    }
     const key = candidatesApi.candidateKey(c);
     c.key = key;
     if (!seenKeys.has(key)) {
@@ -716,6 +775,29 @@ function assembleCandidates(
   // limits, and the advertised row only proves the route exists.
   const advertised = gatewayCandidates || [];
   for (const off of advertised) {
+    if (off && off.contextWindow === undefined) {
+      const routingSourceId = off.gateway || off.source || off.provider;
+      const m = resolveModelContextMeta(off.modelId, routingSourceId, registry);
+      if (m && m.contextWindow !== undefined) {
+        off.contextWindow = m.contextWindow;
+        if (off.capabilities) {
+          off.capabilities = Object.assign({}, off.capabilities, {
+            contextWindow: m.contextWindow,
+          });
+        } else {
+          off.capabilities = { contextWindow: m.contextWindow };
+        }
+      }
+    } else if (off && off.contextWindow !== undefined) {
+      off.contextWindow = toPositiveInteger(off.contextWindow);
+      if (off.capabilities && off.contextWindow !== undefined) {
+        off.capabilities = Object.assign({}, off.capabilities, {
+          contextWindow: off.contextWindow,
+        });
+      } else if (off.capabilities) {
+        delete off.capabilities.contextWindow;
+      }
+    }
     const key = candidatesApi.candidateKey(off);
     const c = Object.assign({}, off, { key });
     if (!seenKeys.has(key)) {
@@ -771,6 +853,27 @@ function assembleCandidates(
       quality: off.quality,
       source: off.provider,
     };
+    if (c.contextWindow === undefined) {
+      const routingSourceId = gateway || off.provider || off.source;
+      const m = resolveModelContextMeta(off.model, routingSourceId, registry);
+      if (m && m.contextWindow !== undefined) {
+        c.contextWindow = m.contextWindow;
+        if (c.capabilities) {
+          c.capabilities = Object.assign({}, c.capabilities, {
+            contextWindow: m.contextWindow,
+          });
+        } else {
+          c.capabilities = { contextWindow: m.contextWindow };
+        }
+      }
+    } else {
+      c.contextWindow = toPositiveInteger(c.contextWindow);
+      if (c.capabilities && c.contextWindow !== undefined) {
+        c.capabilities = Object.assign({}, c.capabilities, { contextWindow: c.contextWindow });
+      } else if (c.capabilities) {
+        delete c.capabilities.contextWindow;
+      }
+    }
     const key = candidatesApi.candidateKey(c);
     c.key = key;
     if (!seenKeys.has(key)) {
@@ -886,7 +989,49 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
         requireRouteHealth ||
         Boolean(routeHealth && Object.keys(routeHealth.paths || {}).length > 0);
   const enforceEmptyHealth = routeHealthExplicit || requireRouteHealth;
-  const catalogueRows = (discoveryCat && discoveryCat.candidates) || [];
+  const rawCatalogueRows = (discoveryCat && discoveryCat.candidates) || [];
+  const catalogueRows = rawCatalogueRows.map((raw) => {
+    if (!raw || typeof raw !== 'object') return raw;
+    const row = Object.assign({}, raw);
+    if (raw.capabilities && typeof raw.capabilities === 'object') {
+      row.capabilities = Object.assign({}, raw.capabilities);
+    }
+    if (row.contextWindow === undefined) {
+      const routingSourceId = row.gateway || row.source || row.provider;
+      const m = resolveModelContextMeta(
+        row.modelId || row.model,
+        routingSourceId,
+        resolvedRegistry
+      );
+      if (m && m.contextWindow !== undefined) {
+        row.contextWindow = m.contextWindow;
+        if (row.capabilities) {
+          row.capabilities = Object.assign({}, row.capabilities, {
+            contextWindow: m.contextWindow,
+          });
+        } else {
+          row.capabilities = { contextWindow: m.contextWindow };
+        }
+        if (m.maxOutputTokens !== undefined && row.maxOutputTokens === undefined) {
+          row.maxOutputTokens = m.maxOutputTokens;
+        }
+        if (m.contextSource && !row.contextSource) {
+          row.contextSource = m.contextSource;
+        }
+      }
+    } else {
+      const valid = toPositiveInteger(row.contextWindow);
+      row.contextWindow = valid;
+      if (row.capabilities) {
+        if (valid !== undefined) {
+          row.capabilities = Object.assign({}, row.capabilities, { contextWindow: valid });
+        } else {
+          delete row.capabilities.contextWindow;
+        }
+      }
+    }
+    return row;
+  });
   const resolvedFallbackRoutes = [];
   const probeRoute =
     opts.probeRoute ||
@@ -986,9 +1131,10 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
               .map((model) => (typeof model === 'string' ? model : model && model.model))
               .filter(Boolean)
           ),
-          catalogue: ((discoveryCat && discoveryCat.candidates) || [])
-            .map((row) => row && (row.modelId || row.model))
-            .filter(Boolean),
+          catalogue:
+            catalogueRows.length > 0
+              ? catalogueRows
+              : (discoveryCat && discoveryCat.candidates) || [],
           evidenceData: opts.evidenceData,
           fakeRunsDir: opts.fakeRunsDir,
           home: opts.home,

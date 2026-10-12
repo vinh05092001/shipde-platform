@@ -225,3 +225,7 @@ Decision log entries link `goalId -> workItemId -> candidateKey -> session -> co
 
 - Part H2 Hermes session selection, custom config binding, and `shipde-controller` skill file are delivered in Part H2.
 - Live acceptance across chat and controller runs in Part H3 following merge of H1 and H2.
+
+## Part H3 live finding: context window (2026-10-13)
+
+On main d479a48d, `goal session` refused all 591 Hermes candidates; 575 with CONTEXT_WINDOW_UNVERIFIED. Provider /models endpoints report `context_length` (the local 9router for all 918 models) but discovery kept only ids. Fix: keep the provider-reported context window per model and use it only for candidates routed through that same source; anything else stays unverified.
