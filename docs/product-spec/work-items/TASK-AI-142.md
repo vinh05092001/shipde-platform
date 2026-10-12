@@ -64,17 +64,18 @@ The operator chats directly with Hermes. Hermes understands goals, plans, and re
 
 ## H2 open questions
 
-The following points must be verified against the real Hermes v0.21.4 binary during Part H3 live acceptance:
+The following points were verified against the real Hermes v0.21.4 binary during review:
 
 1. **Provider config format:**
-   - How Hermes v0.21.4 loads custom OpenAI-compatible endpoints when `--ignore-user-config` is used.
-   - Whether Hermes supports custom config file path via CLI flag (e.g. `--config`, `-c`, or `--profile`) or reads from a local directory or environment variable.
-   - Exact structure of `providers:` in Hermes YAML (e.g., keys `base_url`, `api_key_env`, `model_list`, etc.).
+   - The `HERMES_HOME` environment variable selects Hermes' home dir (`config.yaml`, `sessions`, `state.db`). Launching Hermes with `HERMES_HOME=<repo>/tools/ai-brain/data/hermes/home` ensures Controller-owned configuration and persistent sessions.
+   - `--ignore-user-config` / `HERMES_IGNORE_USER_CONFIG=1` makes Hermes skip `config.yaml` entirely; it must NOT be passed on the chat path.
+   - In `config.yaml`, a custom provider entry supports fields: `name`, `base_url`, `key_env`, `api_mode`, `model`, `models`, `context_length`, etc. `key_env` is the name of the environment variable holding the key (never `api_key`). Selected via `hermes chat --provider <name> -m <modelId>`.
 2. **Environment variable for provider credentials:**
-   - Exact environment variable Hermes v0.21.4 expects for custom provider API keys (e.g. `OPENAI_API_KEY`, `<PROVIDER>_API_KEY`, or custom variable defined in the provider record).
-3. **Session resumption semantics:**
-   - Whether `hermes chat --resume <sessionId>` requires an already-existing session on disk or whether passing a fresh session ID initializes that session directly.
-   - Verification of `--in <cwd>` alongside `--resume`.
+   - Hermes v0.21.4 supports `key_env` naming the environment variable holding the key (never `api_key`).
+3. **Interactive command:**
+   - Interactive chat command: `hermes chat [-m MODEL] [--provider P] [--resume SESSION_ID] [-s SKILLS]`. The `chat` subcommand is standard.
+4. **Session resumption semantics:**
+   - Sessions persist under `$HERMES_HOME/sessions`. Passing `--resume <sessionId>` connects to the persistent session state.
 
 ## Acceptance matrix
 

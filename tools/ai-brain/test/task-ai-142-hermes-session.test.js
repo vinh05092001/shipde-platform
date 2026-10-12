@@ -20,6 +20,8 @@ const {
   configFilePath,
   skillFilePath,
   generateSessionId,
+  defaultSpawn,
+  getHermesHomeDir,
   HERMES_MIN_CONTEXT,
 } = require('../hermes-session');
 const { candidateKey } = require('../discovery/identity');
@@ -227,7 +229,7 @@ test('H2-04: writeProvidersConfig writes data/hermes/config.yaml with base_url a
 
     assert.ok(content.includes('providers:'));
     assert.ok(content.includes('base_url: "http://127.0.0.1:20128/v1"'));
-    assert.ok(content.includes('api_key_env: "NINEROUTER_API_KEY"'));
+    assert.ok(content.includes('key_env: "NINEROUTER_API_KEY"'));
 
     // Crucial security verification: MUST NOT contain any actual key value or secret
     assert.equal(content.includes('sk-'), false, 'Never contain key values');
@@ -237,13 +239,13 @@ test('H2-04: writeProvidersConfig writes data/hermes/config.yaml with base_url a
     assert.ok(fs.existsSync(jsonPath), 'providers.json must also exist');
     const parsed = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
     assert.equal(parsed.providers['9router'].base_url, 'http://127.0.0.1:20128/v1');
-    assert.equal(parsed.providers['9router'].api_key_env, 'NINEROUTER_API_KEY');
+    assert.equal(parsed.providers['9router'].key_env, 'NINEROUTER_API_KEY');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('H2-05: buildHermesArgv builds correct Hermes CLI arguments including -m, --provider, --resume, and -s', async () => {
+test('H2-05: buildHermesArgv builds correct Hermes CLI arguments including chat, -m, --provider, --resume, and -s', async () => {
   const root = fixtureRoot('hermes-argv-');
   try {
     const candidate = sampleCandidate({
@@ -254,7 +256,8 @@ test('H2-05: buildHermesArgv builds correct Hermes CLI arguments including -m, -
 
     const argv = buildHermesArgv(candidate, session, { rootDir: root });
 
-    assert.deepEqual(argv.slice(0, 6), [
+    assert.equal(argv[0], 'chat', 'chat subcommand must be included by default');
+    assert.deepEqual(argv.slice(1, 7), [
       '-m',
       'kr/gemini-2.5-pro',
       '--provider',
@@ -263,15 +266,14 @@ test('H2-05: buildHermesArgv builds correct Hermes CLI arguments including -m, -
       'hermes_session_test_123',
     ]);
 
-    assert.equal(argv[6], '-s');
-    assert.ok(argv[7].endsWith('SKILL.md'));
+    assert.equal(argv[7], '-s');
+    assert.ok(argv[8].endsWith('SKILL.md'));
 
-    const argvWithChat = buildHermesArgv(candidate, session, {
+    const argvNoChat = buildHermesArgv(candidate, session, {
       rootDir: root,
-      includeChatCommand: true,
+      includeChatCommand: false,
     });
-    assert.equal(argvWithChat[0], 'chat');
-    assert.equal(argvWithChat[1], '-m');
+    assert.equal(argvNoChat[0], '-m');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -550,29 +552,24 @@ test('H2-12: cli.js dispatches chat and goal session commands', async () => {
     console.log = (msg) => stdoutLines.push(msg);
 
     try {
-      // Test goal session
-      main(['goal', 'session', '--goal', 'GOAL-CLI', '--root', root], {
+      // Test goal session by awaiting main's returned promise
+      await main(['goal', 'session', '--goal', 'GOAL-CLI', '--root', root], {
         candidates: [candidate],
         registry: sampleRegistry(),
         priorsData: { ranking: [] },
       });
-
-      // Give event loop tick for promise resolution
-      await new Promise((r) => setTimeout(r, 50));
 
       assert.ok(stdoutLines.length > 0);
       const goalOut = JSON.parse(stdoutLines[stdoutLines.length - 1]);
       assert.equal(goalOut.status, 'active');
       assert.deepEqual(goalOut.goalIds, ['GOAL-CLI']);
 
-      // Test chat --dry-run
-      main(['chat', '--dry-run', '--root', root, '--json'], {
+      // Test chat --dry-run by awaiting main's returned promise
+      await main(['chat', '--dry-run', '--root', root, '--json'], {
         candidates: [candidate],
         registry: sampleRegistry(),
         priorsData: { ranking: [] },
       });
-
-      await new Promise((r) => setTimeout(r, 50));
 
       const chatOut = JSON.parse(stdoutLines[stdoutLines.length - 1]);
       assert.equal(chatOut.status, 'dry_run');
@@ -1369,6 +1366,253 @@ test('H2-29: candidate selection uses HERMES_MIN_CONTEXT in profile contextSize'
       'profile.contextSize must use HERMES_MIN_CONTEXT (32000)'
     );
     assert.equal(HERMES_MIN_CONTEXT, 32000);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('H2-30: defaultSpawn pipes and tees stderr to process.stderr while buffering chunks', async () => {
+  const origStderrWrite = process.stderr.write;
+  const forwarded = [];
+  process.stderr.write = (chunk) => {
+    forwarded.push(Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk));
+    return true;
+  };
+  try {
+    const res = await defaultSpawn(
+      process.execPath,
+      [
+        '-e',
+        "process.stderr.write('chunk-alpha\\n'); process.stderr.write('chunk-beta\\n'); process.exit(0);",
+      ],
+      { stdio: ['inherit', 'inherit', 'pipe'] }
+    );
+
+    assert.equal(res.exitCode, 0);
+    assert.ok(res.stderr.includes('chunk-alpha'));
+    assert.ok(res.stderr.includes('chunk-beta'));
+    const combined = forwarded.join('');
+    assert.ok(combined.includes('chunk-alpha'), 'Stderr chunk must be forwarded live');
+    assert.ok(combined.includes('chunk-beta'), 'Stderr chunk must be forwarded live');
+  } finally {
+    process.stderr.write = origStderrWrite;
+  }
+});
+
+test('H2-31: defaultSpawn keeps at most the last 64 KB in stderr buffer', async () => {
+  const origStderrWrite = process.stderr.write;
+  process.stderr.write = () => true;
+  try {
+    const script = "process.stderr.write('X'.repeat(70000) + 'TAIL_TOKEN'); process.exit(0);";
+    const res = await defaultSpawn(process.execPath, ['-e', script], {
+      stdio: ['inherit', 'inherit', 'pipe'],
+    });
+
+    assert.equal(res.exitCode, 0);
+    assert.ok(Buffer.byteLength(res.stderr, 'utf8') <= 64 * 1024);
+    assert.ok(res.stderr.includes('TAIL_TOKEN'), 'Tail of buffer must be preserved');
+  } finally {
+    process.stderr.write = origStderrWrite;
+  }
+});
+
+test('H2-32: route/quota relaunch uses piped stderr and classifies failure to trigger retry', async () => {
+  const root = fixtureRoot('hermes-tee-retry-');
+  try {
+    const c1 = sampleCandidate({
+      gateway: '9router',
+      upstream: 'kr',
+      modelId: 'kr/gemini-2.5-pro',
+    });
+    const c2 = sampleCandidate({ gateway: 'rqsty', upstream: 'rq', modelId: 'rq/gpt-4o' });
+
+    let calls = 0;
+    const fakeSpawn = async (cmd, args, options) => {
+      calls += 1;
+      assert.deepEqual(
+        options.stdio,
+        ['inherit', 'inherit', 'pipe'],
+        'Default stdio must pipe stderr for live teeing and failure classification'
+      );
+      if (calls === 1) {
+        return {
+          exitCode: 1,
+          status: 1,
+          stderr: 'HTTP 429 Too Many Requests: upstream_rate_limit for model kr/gemini-2.5-pro',
+        };
+      }
+      return { exitCode: 0, status: 0, stdout: 'OK', stderr: '' };
+    };
+
+    const res = await launchHermesSession(
+      { rootDir: root, skipDecisionLog: true },
+      {
+        candidates: [c1, c2],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+        spawn: fakeSpawn,
+      }
+    );
+
+    assert.equal(res.status, 'completed');
+    assert.equal(calls, 2, 'Relaunch must trigger on second candidate');
+    const session = loadSession({ rootDir: root });
+    assert.equal(session.candidateKey, c2.candidateKey);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('H2-33: HERMES_HOME is passed in spawn env, HERMES_IGNORE_USER_CONFIG is removed, and config is written to HERMES_HOME', async () => {
+  const root = fixtureRoot('hermes-home-env-');
+  try {
+    const candidate = sampleCandidate();
+    let capturedOptions = null;
+    const fakeSpawn = async (cmd, args, options) => {
+      capturedOptions = options;
+      return { exitCode: 0, status: 0, stdout: '', stderr: '' };
+    };
+
+    const res = await launchHermesSession(
+      { rootDir: root, skipDecisionLog: true },
+      {
+        candidates: [candidate],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+        env: { HERMES_IGNORE_USER_CONFIG: '1' },
+        spawn: fakeSpawn,
+      }
+    );
+
+    assert.equal(res.status, 'completed');
+    const expectedHome = path.join(root, 'tools', 'ai-brain', 'data', 'hermes', 'home');
+    assert.equal(
+      capturedOptions.env.HERMES_HOME,
+      expectedHome,
+      'HERMES_HOME must point to tools/ai-brain/data/hermes/home'
+    );
+    assert.equal(
+      capturedOptions.env.HERMES_IGNORE_USER_CONFIG,
+      undefined,
+      'HERMES_IGNORE_USER_CONFIG must be unset so Hermes loads config.yaml'
+    );
+    assert.ok(
+      fs.existsSync(path.join(expectedHome, 'config.yaml')),
+      'config.yaml must exist under HERMES_HOME'
+    );
+    const yaml = fs.readFileSync(path.join(expectedHome, 'config.yaml'), 'utf8');
+    assert.ok(yaml.includes('key_env:'), 'config.yaml must use key_env per Fact 2');
+    assert.equal(yaml.includes('api_key:'), false, 'Never write secret api_key');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('H2-34: writeProvidersConfig rejects userinfo and embedded secrets in endpoint URL', () => {
+  const root = fixtureRoot('hermes-userinfo-');
+  try {
+    const candidateWithUserinfo = sampleCandidate({
+      accessPath: 'http://user:secret123@127.0.0.1:20128/v1',
+    });
+
+    assert.throws(
+      () => {
+        writeProvidersConfig(
+          candidateWithUserinfo,
+          { rootDir: root },
+          { registry: sampleRegistry() }
+        );
+      },
+      (err) => {
+        assert.equal(err.code, 'ENDPOINT_USERINFO_FORBIDDEN');
+        return true;
+      }
+    );
+
+    // Verify config file was NOT written
+    assert.equal(fs.existsSync(path.join(root, 'data', 'hermes', 'config.yaml')), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('H2-35: corrupt session.json fails closed with SESSION_FILE_CORRUPT without minting a new id', async () => {
+  const root = fixtureRoot('hermes-corrupt-');
+  try {
+    const sessionDir = path.join(root, 'data', 'hermes');
+    fs.mkdirSync(sessionDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(sessionDir, 'session.json'),
+      '{ "sessionId": "torn-write...',
+      'utf8'
+    );
+
+    // 1. loadSession throws SESSION_FILE_CORRUPT
+    assert.throws(
+      () => {
+        loadSession({ rootDir: root });
+      },
+      (err) => {
+        assert.equal(err.code, 'SESSION_FILE_CORRUPT');
+        return true;
+      }
+    );
+
+    // 2. launchHermesSession fails closed rather than minting a new session
+    const candidate = sampleCandidate();
+    await assert.rejects(
+      async () => {
+        await launchHermesSession(
+          { rootDir: root, skipDecisionLog: true },
+          {
+            candidates: [candidate],
+            registry: sampleRegistry(),
+            priorsData: { ranking: [] },
+          }
+        );
+      },
+      (err) => {
+        assert.equal(err.code, 'SESSION_FILE_CORRUPT');
+        return true;
+      }
+    );
+
+    // 3. saveSession writes atomically via temp file rename
+    const saved = saveSession(
+      { sessionId: 'valid-sess-42', candidateKey: candidate.candidateKey, goalIds: ['G1'] },
+      { rootDir: root }
+    );
+    assert.equal(saved.sessionId, 'valid-sess-42');
+    const loaded = loadSession({ rootDir: root });
+    assert.equal(loaded.sessionId, 'valid-sess-42');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('H2-36: chatCommand always outputs JSON status to stdout even without --json', async () => {
+  const root = fixtureRoot('hermes-chat-json-');
+  try {
+    const candidate = sampleCandidate();
+    const stdoutLines = [];
+    const origLog = console.log;
+    console.log = (msg) => stdoutLines.push(msg);
+    try {
+      const res = await chatCommand(
+        { rootDir: root, dryRun: true },
+        {
+          candidates: [candidate],
+          registry: sampleRegistry(),
+          priorsData: { ranking: [] },
+        }
+      );
+      assert.equal(res.exitCode, 0);
+      assert.ok(stdoutLines.length > 0, 'stdout must have JSON output');
+      const parsed = JSON.parse(stdoutLines[stdoutLines.length - 1]);
+      assert.equal(parsed.status, 'dry_run');
+    } finally {
+      console.log = origLog;
+    }
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

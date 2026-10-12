@@ -4064,7 +4064,7 @@ function main(argv = process.argv.slice(2), deps = {}) {
         }
       );
     }
-    return;
+    return result;
   }
 
   // goal (TASK-AI-142 H1/H2): goal store and session management
@@ -4091,7 +4091,7 @@ function main(argv = process.argv.slice(2), deps = {}) {
           }
         );
       }
-      return;
+      return result;
     }
     let goals;
     try {

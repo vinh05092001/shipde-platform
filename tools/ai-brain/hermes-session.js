@@ -15,30 +15,82 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { spawnSync } = require('child_process');
+const { spawn } = require('child_process');
 
 function defaultSpawn(cmd, argv, spawnOpts) {
-  const res = spawnSync(cmd, argv, spawnOpts);
-  if (res.error) {
-    throw res.error;
-  }
-  const code =
-    res.status !== null
-      ? res.status
-      : res.signal === 'SIGINT'
-        ? 130
-        : res.signal === 'SIGTERM'
-          ? 143
-          : res.signal
-            ? 1
-            : 0;
-  return {
-    exitCode: code,
-    status: code,
-    stdout: res.stdout ? res.stdout.toString() : '',
-    stderr: res.stderr ? res.stderr.toString() : '',
-    signal: res.signal,
-  };
+  return new Promise((resolve, reject) => {
+    let cp;
+    try {
+      cp = spawn(cmd, argv, spawnOpts);
+    } catch (err) {
+      return reject(err);
+    }
+
+    cp.on('error', (err) => {
+      reject(err);
+    });
+
+    const MAX_STDERR_BYTES = 64 * 1024;
+    const stderrChunks = [];
+    let stderrBytes = 0;
+
+    if (cp.stderr) {
+      cp.stderr.on('data', (chunk) => {
+        try {
+          process.stderr.write(chunk);
+        } catch {}
+        stderrChunks.push(chunk);
+        stderrBytes += chunk.length;
+        while (stderrBytes > MAX_STDERR_BYTES && stderrChunks.length > 1) {
+          const removed = stderrChunks.shift();
+          stderrBytes -= removed.length;
+        }
+      });
+    }
+
+    const stdoutChunks = [];
+    if (cp.stdout) {
+      cp.stdout.on('data', (chunk) => {
+        stdoutChunks.push(chunk);
+      });
+    }
+
+    cp.on('close', (code, signal) => {
+      let finalStderr = '';
+      if (stderrChunks.length > 0) {
+        const fullBuf = Buffer.concat(stderrChunks);
+        if (fullBuf.length > MAX_STDERR_BYTES) {
+          finalStderr = fullBuf.subarray(fullBuf.length - MAX_STDERR_BYTES).toString('utf8');
+        } else {
+          finalStderr = fullBuf.toString('utf8');
+        }
+      }
+
+      let finalStdout = '';
+      if (stdoutChunks.length > 0) {
+        finalStdout = Buffer.concat(stdoutChunks).toString('utf8');
+      }
+
+      const exitCode =
+        code !== null
+          ? code
+          : signal === 'SIGINT'
+            ? 130
+            : signal === 'SIGTERM'
+              ? 143
+              : signal
+                ? 1
+                : 0;
+
+      resolve({
+        exitCode,
+        status: exitCode,
+        stdout: finalStdout,
+        stderr: finalStderr,
+        signal,
+      });
+    });
+  });
 }
 
 const sourcesApi = require('./sources');
@@ -57,11 +109,26 @@ function getHermesDir(rootDir) {
   return path.join(path.resolve(rootDir || process.cwd()), 'data', 'hermes');
 }
 
+function getHermesHomeDir(rootDir) {
+  return path.join(
+    path.resolve(rootDir || process.cwd()),
+    'tools',
+    'ai-brain',
+    'data',
+    'hermes',
+    'home'
+  );
+}
+
 function sessionFilePath(rootDir) {
   return path.join(getHermesDir(rootDir), 'session.json');
 }
 
 function configFilePath(rootDir) {
+  return path.join(getHermesHomeDir(rootDir), 'config.yaml');
+}
+
+function legacyConfigFilePath(rootDir) {
   return path.join(getHermesDir(rootDir), 'config.yaml');
 }
 
@@ -90,7 +157,8 @@ function generateSessionId() {
 
 /**
  * Loads stored Hermes session from data/hermes/session.json.
- * Returns null if file does not exist or cannot be parsed.
+ * Returns null if file does not exist.
+ * Fails closed with SESSION_FILE_CORRUPT if file is corrupt or invalid.
  */
 function loadSession(options, deps) {
   const d = deps || {};
@@ -99,22 +167,50 @@ function loadSession(options, deps) {
   const file = sessionFilePath(rootDir);
 
   if (!fsApi.existsSync(file)) return null;
+
+  let raw;
   try {
-    const raw = fsApi.readFileSync(file, 'utf8');
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object') return null;
-    return {
-      sessionId: parsed.sessionId ? String(parsed.sessionId) : null,
-      candidateKey: parsed.candidateKey ? String(parsed.candidateKey) : null,
-      goalIds: Array.isArray(parsed.goalIds) ? parsed.goalIds.map(String) : [],
-    };
-  } catch {
-    return null;
+    raw = fsApi.readFileSync(file, 'utf8');
+  } catch (readErr) {
+    const err = new Error('SESSION_FILE_CORRUPT: Failed to read session file: ' + readErr.message);
+    err.code = 'SESSION_FILE_CORRUPT';
+    err.cause = readErr;
+    throw err;
   }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (parseErr) {
+    const err = new Error(
+      'SESSION_FILE_CORRUPT: Failed to parse session file JSON: ' + parseErr.message
+    );
+    err.code = 'SESSION_FILE_CORRUPT';
+    err.cause = parseErr;
+    throw err;
+  }
+
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    const err = new Error('SESSION_FILE_CORRUPT: Session data is not an object');
+    err.code = 'SESSION_FILE_CORRUPT';
+    throw err;
+  }
+
+  if (!parsed.sessionId || typeof parsed.sessionId !== 'string') {
+    const err = new Error('SESSION_FILE_CORRUPT: Session file missing valid sessionId');
+    err.code = 'SESSION_FILE_CORRUPT';
+    throw err;
+  }
+
+  return {
+    sessionId: String(parsed.sessionId),
+    candidateKey: parsed.candidateKey ? String(parsed.candidateKey) : null,
+    goalIds: Array.isArray(parsed.goalIds) ? parsed.goalIds.map(String) : [],
+  };
 }
 
 /**
- * Persists Hermes session to data/hermes/session.json.
+ * Persists Hermes session to data/hermes/session.json atomically.
  * Sanitizes fields to ensure no credentials or secrets are written.
  */
 function saveSession(session, options, deps) {
@@ -131,7 +227,19 @@ function saveSession(session, options, deps) {
     goalIds: Array.isArray(session && session.goalIds) ? session.goalIds.map(String) : [],
   };
 
-  fsApi.writeFileSync(sessionFilePath(rootDir), JSON.stringify(record, null, 2), 'utf8');
+  const targetPath = sessionFilePath(rootDir);
+  const nonce = crypto.randomBytes(4).toString('hex');
+  const tempPath = path.join(dir, `.session.${process.pid}.${Date.now()}.${nonce}.tmp`);
+
+  fsApi.writeFileSync(tempPath, JSON.stringify(record, null, 2), 'utf8');
+  try {
+    fsApi.renameSync(tempPath, targetPath);
+  } catch (renameErr) {
+    try {
+      if (fsApi.existsSync(tempPath)) fsApi.unlinkSync(tempPath);
+    } catch {}
+    throw renameErr;
+  }
   return record;
 }
 
@@ -447,11 +555,47 @@ function writeProvidersConfig(candidate, options, deps) {
   }
 
   // Refusal on unknown or missing endpoint — NEVER fall back to 9router http://127.0.0.1:20128/v1
-  if (!baseUrl || !/^https?:\/\/[^\s\r\n]+$/i.test(baseUrl)) {
+  if (!baseUrl || typeof baseUrl !== 'string') {
     const err = new Error(
       'UNKNOWN_ENDPOINT: Unknown or invalid endpoint for provider ' + providerName + ': ' + baseUrl
     );
     err.code = 'UNKNOWN_ENDPOINT';
+    throw err;
+  }
+
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(baseUrl);
+  } catch {
+    const err = new Error(
+      'UNKNOWN_ENDPOINT: Unknown or invalid endpoint for provider ' + providerName + ': ' + baseUrl
+    );
+    err.code = 'UNKNOWN_ENDPOINT';
+    throw err;
+  }
+
+  if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+    const err = new Error(
+      'UNKNOWN_ENDPOINT: Unknown or invalid endpoint protocol for provider ' +
+        providerName +
+        ': ' +
+        baseUrl
+    );
+    err.code = 'UNKNOWN_ENDPOINT';
+    throw err;
+  }
+
+  if (
+    parsedUrl.username ||
+    parsedUrl.password ||
+    /@/.test(baseUrl.split('?')[0]) ||
+    /(?:key|token|secret|password)=/i.test(parsedUrl.search)
+  ) {
+    const err = new Error(
+      'ENDPOINT_USERINFO_FORBIDDEN: Endpoint must not contain embedded userinfo or credentials: ' +
+        providerName
+    );
+    err.code = 'ENDPOINT_USERINFO_FORBIDDEN';
     throw err;
   }
 
@@ -478,23 +622,47 @@ function writeProvidersConfig(candidate, options, deps) {
     '# Generated by Ship De Controller — do not put secrets here',
     'providers:',
     `  ${providerName}:`,
+    `    name: ${escapeYamlString(providerName)}`,
     `    base_url: ${escapeYamlString(baseUrl)}`,
-    `    api_key_env: ${escapeYamlString(apiKeyEnv)}`,
+    `    key_env: ${escapeYamlString(apiKeyEnv)}`,
+    'custom_providers:',
+    `  - name: ${escapeYamlString(providerName)}`,
+    `    base_url: ${escapeYamlString(baseUrl)}`,
+    `    key_env: ${escapeYamlString(apiKeyEnv)}`,
     '',
   ].join('\n');
 
-  const confPath = configFilePath(rootDir);
-  fsApi.writeFileSync(confPath, yamlContent, 'utf8');
+  const homeDir = getHermesHomeDir(rootDir);
+  fsApi.mkdirSync(homeDir, { recursive: true });
+  const homeConfPath = path.join(homeDir, 'config.yaml');
+  fsApi.writeFileSync(homeConfPath, yamlContent, 'utf8');
 
-  // Also write JSON representation for tooling convenience
+  // Also write legacy paths for backward compatibility with tooling
+  const legacyConfPath = path.join(dir, 'config.yaml');
+  fsApi.writeFileSync(legacyConfPath, yamlContent, 'utf8');
+
   const jsonContent = {
     providers: {
       [providerName]: {
+        name: providerName,
         base_url: baseUrl,
-        api_key_env: apiKeyEnv,
+        key_env: apiKeyEnv,
       },
     },
+    custom_providers: [
+      {
+        name: providerName,
+        base_url: baseUrl,
+        key_env: apiKeyEnv,
+      },
+    ],
   };
+
+  fsApi.writeFileSync(
+    path.join(homeDir, 'providers.json'),
+    JSON.stringify(jsonContent, null, 2),
+    'utf8'
+  );
   fsApi.writeFileSync(
     path.join(dir, 'providers.json'),
     JSON.stringify(jsonContent, null, 2),
@@ -502,7 +670,9 @@ function writeProvidersConfig(candidate, options, deps) {
   );
 
   return {
-    configPath: confPath,
+    configPath: homeConfPath,
+    legacyConfigPath: legacyConfPath,
+    hermesHome: homeDir,
     providerName,
     baseUrl,
     apiKeyEnv,
@@ -511,7 +681,7 @@ function writeProvidersConfig(candidate, options, deps) {
 
 /**
  * Builds the Hermes command arguments:
- * '-m <modelId> --provider <provider-name> --resume <sessionId>' plus skill file.
+ * 'chat -m <modelId> --provider <provider-name> --resume <sessionId>' plus skill file.
  */
 function buildHermesArgv(candidate, session, options) {
   const opts = options || {};
@@ -530,7 +700,7 @@ function buildHermesArgv(candidate, session, options) {
   const skillPath = opts.skillPath || skillFilePath(rootDir);
 
   const args = [];
-  if (opts.includeChatCommand) {
+  if (opts.omitChatCommand !== true && opts.includeChatCommand !== false) {
     args.push('chat');
   }
 
@@ -557,40 +727,49 @@ async function launchHermesSession(options, deps) {
   const d = deps || {};
   const opts = options || {};
   const rootDir = resolveRootDir(opts, d);
-  const env = Object.assign({}, process.env, d.env || {});
+  const hermesHome = opts.hermesHome || d.hermesHome || getHermesHomeDir(rootDir);
+  const env = Object.assign({}, process.env, d.env || {}, {
+    HERMES_HOME: hermesHome,
+  });
+  // Verified Fact 3: --ignore-user-config (and HERMES_IGNORE_USER_CONFIG=1) makes Hermes skip config.yaml
+  delete env.HERMES_IGNORE_USER_CONFIG;
+
   const spawnFn = d.spawn || defaultSpawn;
   const classifier = d.failureClassifier || failureClassifier;
 
-  let session = loadSession(opts, d);
+  let session = null;
   if (opts.newSession) {
     session = {
       sessionId: opts.session || generateSessionId(),
       candidateKey: null,
       goalIds: opts.goal ? [String(opts.goal)] : [],
     };
-  } else if (opts.session) {
-    if (session && session.sessionId === opts.session) {
-      session.goalIds = Array.isArray(session.goalIds) ? session.goalIds : [];
-      if (opts.goal && !session.goalIds.includes(String(opts.goal))) {
-        session.goalIds.push(String(opts.goal));
+  } else {
+    session = loadSession(opts, d);
+    if (opts.session) {
+      if (session && session.sessionId === opts.session) {
+        session.goalIds = Array.isArray(session.goalIds) ? session.goalIds : [];
+        if (opts.goal && !session.goalIds.includes(String(opts.goal))) {
+          session.goalIds.push(String(opts.goal));
+        }
+      } else {
+        session = {
+          sessionId: opts.session,
+          candidateKey: null,
+          goalIds: opts.goal ? [String(opts.goal)] : [],
+        };
       }
-    } else {
+    } else if (!session) {
       session = {
-        sessionId: opts.session,
+        sessionId: generateSessionId(),
         candidateKey: null,
         goalIds: opts.goal ? [String(opts.goal)] : [],
       };
-    }
-  } else if (!session) {
-    session = {
-      sessionId: generateSessionId(),
-      candidateKey: null,
-      goalIds: opts.goal ? [String(opts.goal)] : [],
-    };
-  } else if (opts.goal) {
-    session.goalIds = Array.isArray(session.goalIds) ? session.goalIds : [];
-    if (!session.goalIds.includes(String(opts.goal))) {
-      session.goalIds.push(String(opts.goal));
+    } else if (opts.goal) {
+      session.goalIds = Array.isArray(session.goalIds) ? session.goalIds : [];
+      if (!session.goalIds.includes(String(opts.goal))) {
+        session.goalIds.push(String(opts.goal));
+      }
     }
   }
 
@@ -635,6 +814,7 @@ async function launchHermesSession(options, deps) {
       rootDir,
       providerName: configResult.providerName,
       includeChatCommand: opts.includeChatCommand,
+      omitChatCommand: opts.omitChatCommand,
       extraArgs: opts.extraArgs,
       skillPath: opts.skillPath,
       skill: opts.skill,
@@ -648,6 +828,7 @@ async function launchHermesSession(options, deps) {
         candidate,
         argv,
         configResult,
+        hermesHome,
       };
     }
 
@@ -656,7 +837,7 @@ async function launchHermesSession(options, deps) {
       spawnResult = await spawnFn('hermes', argv, {
         cwd: rootDir,
         env,
-        stdio: opts.stdio || 'inherit',
+        stdio: opts.stdio || ['inherit', 'inherit', 'pipe'],
       });
     } catch (spawnErr) {
       // Local launch failure: binary missing, bad arguments, spawn error
@@ -688,6 +869,7 @@ async function launchHermesSession(options, deps) {
         argv,
         configResult,
         spawnResult,
+        hermesHome,
       };
     }
 
@@ -696,11 +878,19 @@ async function launchHermesSession(options, deps) {
     const stdout = (spawnResult && spawnResult.stdout) || '';
     const body = [stderr, stdout].filter(Boolean).join('\n');
 
+    let httpStatus = spawnResult && spawnResult.httpStatus;
+    if (!httpStatus) {
+      const match =
+        stderr.match(/\b(?:HTTP\s+|status\s*:\s*)(\d{3})\b/i) ||
+        stderr.match(/\bstatus[_\s]+code[:\s]+(\d{3})\b/i);
+      if (match) httpStatus = parseInt(match[1], 10);
+    }
+
     const classification = classifier.classifyFailure({
       exitCode,
       stderr,
       body,
-      httpStatus: spawnResult && spawnResult.httpStatus,
+      httpStatus,
       candidateKey: candidate.candidateKey,
       accountId: candidate.accountId,
     });
@@ -740,6 +930,7 @@ async function launchHermesSession(options, deps) {
         configResult,
         spawnResult,
         classification,
+        hermesHome,
       };
     }
 
@@ -838,6 +1029,7 @@ async function goalSessionCommand(args, deps) {
 
 /**
  * CLI entry for `node tools/ai-brain/cli.js chat`.
+ * Always outputs JSON status line.
  */
 async function chatCommand(args, deps) {
   const d = deps || {};
@@ -852,9 +1044,7 @@ async function chatCommand(args, deps) {
 
   try {
     const result = await launchHermesSession(opts, d);
-    if (args.json) {
-      console.log(JSON.stringify(result, null, 2));
-    }
+    console.log(JSON.stringify(result, null, 2));
     const exitCode =
       typeof result.exitCode === 'number'
         ? result.exitCode
@@ -863,17 +1053,13 @@ async function chatCommand(args, deps) {
           : 1;
     return { exitCode, result };
   } catch (err) {
-    if (args.json) {
-      console.log(
-        JSON.stringify(
-          { status: 'failed', error: err.message, code: err.code || 'CHAT_ERROR' },
-          null,
-          2
-        )
-      );
-    } else {
-      console.error('Chat error: ' + (err.message || String(err)));
-    }
+    console.log(
+      JSON.stringify(
+        { status: 'failed', error: err.message, code: err.code || 'CHAT_ERROR' },
+        null,
+        2
+      )
+    );
     const exitCode = typeof err.exitCode === 'number' ? err.exitCode : 1;
     return { exitCode, error: err };
   }
@@ -881,8 +1067,10 @@ async function chatCommand(args, deps) {
 
 module.exports = {
   getHermesDir,
+  getHermesHomeDir,
   sessionFilePath,
   configFilePath,
+  legacyConfigFilePath,
   skillFilePath,
   generateSessionId,
   loadSession,
@@ -894,5 +1082,6 @@ module.exports = {
   launchHermesSession,
   goalSessionCommand,
   chatCommand,
+  defaultSpawn,
   HERMES_MIN_CONTEXT,
 };
