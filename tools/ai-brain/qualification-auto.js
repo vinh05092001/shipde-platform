@@ -27,19 +27,30 @@ function eligibleCandidates(candidates) {
 
 function loadItems(file) {
   const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
-  if (
-    !Array.isArray(parsed) ||
-    parsed.some(
-      (item) =>
-        !item ||
-        typeof item.id !== 'string' ||
-        item.kind !== 'qualification' ||
-        item.risk !== 'low' ||
-        !Array.isArray(item.acceptanceCriteria) ||
-        item.acceptanceCriteria.length === 0
+  if (!Array.isArray(parsed)) throw new Error('QUALIFICATION_ITEMS_INVALID');
+  for (const item of parsed) {
+    if (
+      !item ||
+      typeof item.id !== 'string' ||
+      item.kind !== 'qualification' ||
+      item.risk !== 'low' ||
+      !Array.isArray(item.acceptanceCriteria) ||
+      item.acceptanceCriteria.length === 0 ||
+      !Array.isArray(item.allowedPaths) ||
+      item.allowedPaths.length === 0 ||
+      item.allowedPaths.some((allowedPath) => typeof allowedPath !== 'string' || !allowedPath)
     )
-  )
-    throw new Error('QUALIFICATION_ITEMS_INVALID');
+      throw new Error('QUALIFICATION_ITEMS_INVALID');
+    if (
+      !item.verification ||
+      typeof item.verification.command !== 'string' ||
+      !item.verification.command.trim()
+    ) {
+      const err = new Error('QUALIFICATION_ITEM_VERIFICATION_COMMAND_MISSING:' + item.id);
+      err.code = 'VERIFICATION_COMMAND_MISSING';
+      throw err;
+    }
+  }
   return parsed;
 }
 
