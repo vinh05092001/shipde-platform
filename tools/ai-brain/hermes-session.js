@@ -318,6 +318,7 @@ function selectReasoningCandidate(options, deps) {
     const cliApi = d.cli || require('./cli');
     const assembleFn = d.assembleForDispatch || cliApi.assembleForDispatch;
     poolCandidates = assembleFn(discovery, accounts, registry, {
+      harness: 'hermes',
       evidenceData,
       requireRouteHealth: true,
       routeHealth: d.routeHealth,
@@ -334,7 +335,7 @@ function selectReasoningCandidate(options, deps) {
       const preRewriteKey = candidate.candidateKey || candidateKey(candidate);
       candidate.harness = 'hermes';
 
-      const rawContext =
+      let rawContext =
         candidate.contextWindow !== undefined
           ? candidate.contextWindow
           : candidate.context_window !== undefined
@@ -347,11 +348,28 @@ function selectReasoningCandidate(options, deps) {
                   ? candidate.capabilities.contextTokens
                   : undefined;
 
+      if (rawContext === undefined) {
+        const meta = candidatesMod.resolveCandidateContextMeta
+          ? candidatesMod.resolveCandidateContextMeta(candidate, registry)
+          : null;
+        if (meta && meta.contextWindow !== undefined) {
+          rawContext = meta.contextWindow;
+          if (meta.maxOutputTokens !== undefined && candidate.maxOutputTokens === undefined) {
+            candidate.maxOutputTokens = meta.maxOutputTokens;
+          }
+          if (meta.contextSource && !candidate.contextSource) {
+            candidate.contextSource = meta.contextSource;
+          }
+        }
+      }
+
       candidate.contextWindow = rawContext;
       if (candidate.capabilities) {
         candidate.capabilities = Object.assign({}, candidate.capabilities, {
           contextWindow: rawContext,
         });
+      } else if (rawContext !== undefined) {
+        candidate.capabilities = { contextWindow: rawContext };
       }
 
       if (
@@ -360,25 +378,38 @@ function selectReasoningCandidate(options, deps) {
         candidate.accessPath.startsWith('cli-') ||
         candidate.accessPath === '*'
       ) {
-        let src =
-          (registry &&
-            registry.sources &&
-            registry.sources.find(
-              (s) => s.id === candidate.gateway || s.id === candidate.upstream
-            )) ||
-          null;
+        let src = null;
+        const srcId = candidate.sourceId || candidate.source;
+        if (srcId && registry && registry.sources) {
+          src = registry.sources.find((s) => s.id === srcId);
+        }
+        if (!src && candidate.sourceEndpoint && registry && registry.sources) {
+          src = registry.sources.find((s) => s.endpoint === candidate.sourceEndpoint);
+        }
+        if (!src && registry && registry.sources) {
+          src = registry.sources.find(
+            (s) => s.id === candidate.gateway || s.id === candidate.upstream
+          );
+        }
         if (src && !src.endpoint && !src.accessPath && src.reachedVia) {
           const gw = registry.sources.find((s) => s.id === src.reachedVia);
           if (gw) src = gw;
         }
-        candidate.accessPath = (src && (src.accessPath || src.endpoint)) || null;
+        candidate.accessPath =
+          (src && (src.accessPath || src.endpoint)) ||
+          candidate.sourceEndpoint ||
+          candidate.endpoint ||
+          null;
       }
 
       candidate.candidateKey = candidateKey(candidate);
       candidate._preRewriteKey = preRewriteKey;
       return candidate;
     })
-    .filter((c) => !excluded.has(c.candidateKey) && !excluded.has(c._preRewriteKey));
+    .filter((c) => !excluded.has(c.candidateKey) && !excluded.has(c._preRewriteKey))
+    // Hermes reaches a model only through an OpenAI-compatible base_url; an
+    // account reached through a CLI (agy, claude-code) has no endpoint to bind.
+    .filter((c) => typeof c.accessPath === 'string' && /^https?:\/\//i.test(c.accessPath));
 
   const annotated = candidatesMod.annotateCandidates(hermesCandidates, evidenceData, { now });
 
@@ -388,7 +419,9 @@ function selectReasoningCandidate(options, deps) {
     complexity: 'complex',
     riskDomains: opts.riskDomains || ['reasoning', 'planning'],
     qualityFloor: opts.qualityFloor !== undefined ? opts.qualityFloor : 80,
-    proofFloor: opts.proofFloor || 'WORK_ITEM_PASS',
+    // Operator decision 2026-10-12: drop the proof floor for model selection;
+    // the output gates (independent exact-SHA review and CI) stay.
+    proofFloor: opts.proofFloor || 'NONE',
     contextSize: opts.contextSize !== undefined ? opts.contextSize : HERMES_MIN_CONTEXT,
     costCeiling: opts.costCeiling !== undefined ? opts.costCeiling : 5000,
     currentWorkload: 0,

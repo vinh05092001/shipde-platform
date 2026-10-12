@@ -742,8 +742,10 @@ function assembleCandidates(
       }
     }
     if (c.contextWindow === undefined) {
-      const routingSourceId = c.gateway || c.source || c.provider;
-      const m = resolveModelContextMeta(modelId, routingSourceId, registry);
+      const routingSourceId = c.sourceId || c.source || c.gateway || c.provider;
+      const m = candidatesApi.resolveCandidateContextMeta
+        ? candidatesApi.resolveCandidateContextMeta(c, registry)
+        : resolveModelContextMeta(modelId, routingSourceId, registry);
       if (m && m.contextWindow !== undefined) {
         c.contextWindow = m.contextWindow;
         if (c.capabilities) {
@@ -776,8 +778,10 @@ function assembleCandidates(
   const advertised = gatewayCandidates || [];
   for (const off of advertised) {
     if (off && off.contextWindow === undefined) {
-      const routingSourceId = off.gateway || off.source || off.provider;
-      const m = resolveModelContextMeta(off.modelId, routingSourceId, registry);
+      const routingSourceId = off.sourceId || off.source || off.gateway || off.provider;
+      const m = candidatesApi.resolveCandidateContextMeta
+        ? candidatesApi.resolveCandidateContextMeta(off, registry)
+        : resolveModelContextMeta(off.modelId, routingSourceId, registry);
       if (m && m.contextWindow !== undefined) {
         off.contextWindow = m.contextWindow;
         if (off.capabilities) {
@@ -855,7 +859,9 @@ function assembleCandidates(
     };
     if (c.contextWindow === undefined) {
       const routingSourceId = gateway || off.provider || off.source;
-      const m = resolveModelContextMeta(off.model, routingSourceId, registry);
+      const m = candidatesApi.resolveCandidateContextMeta
+        ? candidatesApi.resolveCandidateContextMeta(c, registry)
+        : resolveModelContextMeta(off.model, routingSourceId, registry);
       if (m && m.contextWindow !== undefined) {
         c.contextWindow = m.contextWindow;
         if (c.capabilities) {
@@ -997,12 +1003,10 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
       row.capabilities = Object.assign({}, raw.capabilities);
     }
     if (row.contextWindow === undefined) {
-      const routingSourceId = row.gateway || row.source || row.provider;
-      const m = resolveModelContextMeta(
-        row.modelId || row.model,
-        routingSourceId,
-        resolvedRegistry
-      );
+      const routingSourceId = row.sourceId || row.source || row.gateway || row.provider;
+      const m = candidatesApi.resolveCandidateContextMeta
+        ? candidatesApi.resolveCandidateContextMeta(row, resolvedRegistry)
+        : resolveModelContextMeta(row.modelId || row.model, routingSourceId, resolvedRegistry);
       if (m && m.contextWindow !== undefined) {
         row.contextWindow = m.contextWindow;
         if (row.capabilities) {
@@ -1124,6 +1128,7 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
     const assembled = assembleCandidates(discoveryCat, offs, resolvedRegistry, accounts, null, [
       ...candidatesApi
         .generateCandidates({
+          harness: opts.harness,
           registry: resolvedRegistry,
           accounts: accounts || [],
           openCodeIds: (accounts || []).flatMap((account) =>
@@ -4349,6 +4354,7 @@ module.exports = {
   // TASK-AI-70: one candidate assembly for both dispatch paths and for the
   // read-only `discovery candidates` listing, so what is listed is what dispatch
   // would rank.
+  assembleCandidates,
   assembleForDispatch,
   discoveryCommand,
   evidenceCommand,

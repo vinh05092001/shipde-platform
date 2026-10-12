@@ -104,6 +104,243 @@ function accountModelRow(account, model) {
   return declared.find((m) => m && typeof m === 'object' && m.model === model) || null;
 }
 
+function isOpenAiCompatibleSource(source, registry) {
+  if (!source || typeof source !== 'object') return false;
+  if (sourcesApi.isRetired(source.id, registry)) return false;
+  if (sourcesApi.isDeferred(source.id, registry)) return false;
+  if (source.servesModels === false) return false;
+  if (source.status === 'parked' || source.discoveryStatus === 'parked') return false;
+
+  const endpoint =
+    source.endpoint ||
+    (source.accessPath && /^https?:\/\//i.test(source.accessPath) ? source.accessPath : null);
+  if (!endpoint || typeof endpoint !== 'string') return false;
+  try {
+    const url = new URL(endpoint);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
+  } catch {
+    return false;
+  }
+
+  const cred = source.credential;
+  let envKey = null;
+  if (typeof cred === 'string') envKey = cred;
+  else if (cred && typeof cred === 'object') {
+    if (cred.env && typeof cred.env === 'string') envKey = cred.env;
+    else if (cred.type === 'env' && cred.name && typeof cred.name === 'string') envKey = cred.name;
+    else if (cred.name && typeof cred.name === 'string') envKey = cred.name;
+  }
+  if (!envKey && source.apiKeyEnv && typeof source.apiKeyEnv === 'string')
+    envKey = source.apiKeyEnv;
+  if (!envKey || !/^[A-Za-z0-9_]+$/.test(envKey)) return false;
+
+  return true;
+}
+
+function resolveCandidateContextMeta(candidate, registry) {
+  if (!candidate) return null;
+  const modelId = candidate.modelId || candidate.model;
+  if (!modelId) return null;
+
+  const sources = (registry && registry.sources) || [];
+  let src = null;
+  const srcId = candidate.sourceId || candidate.source;
+  const endpoint = candidate.sourceEndpoint || candidate.endpoint;
+
+  if (srcId) {
+    src = sources.find((s) => s && s.id === srcId) || null;
+  } else if (endpoint) {
+    src = sources.find((s) => s && s.endpoint === endpoint) || null;
+  } else if (candidate.gateway) {
+    src = sources.find((s) => s && s.id === candidate.gateway) || null;
+  }
+  if (!src || !src.modelMeta) return null;
+  const m = src.modelMeta[modelId];
+  if (!m || typeof m !== 'object') return null;
+  const cw = toPositiveInteger(m.contextWindow);
+  if (cw === undefined) return null;
+  return {
+    ...m,
+    contextWindow: cw,
+    maxOutputTokens: toPositiveInteger(m.maxOutputTokens),
+  };
+}
+
+function openAiCompatibleCandidates(opts) {
+  const o = opts || {};
+  const registry = o.registry || sourcesApi.loadSources(o.sourceOpts);
+  if (!registry || !Array.isArray(registry.sources)) return [];
+
+  const accounts = o.accounts || [];
+  const catalogue = o.catalogue || [];
+  const harness = o.harness || 'hermes';
+  const out = [];
+
+  for (const source of registry.sources) {
+    if (!isOpenAiCompatibleSource(source, registry)) continue;
+
+    const endpoint =
+      source.endpoint ||
+      (source.accessPath && /^https?:\/\//i.test(source.accessPath) ? source.accessPath : null);
+
+    const gateway =
+      source.kind === sourcesApi.Kind.ROUTER
+        ? source.id
+        : source.reachedVia || source.gateway || '';
+
+    const modelSet = new Set();
+    if (source.modelMeta && typeof source.modelMeta === 'object') {
+      for (const m of Object.keys(source.modelMeta)) {
+        if (m) modelSet.add(m);
+      }
+    }
+    if (Array.isArray(source.models)) {
+      for (const m of source.models) {
+        const id = typeof m === 'string' ? m : m && m.model;
+        if (id) modelSet.add(id);
+      }
+    }
+    if (source.kind === 'router' && source.servesModels !== false) {
+      if (Array.isArray(catalogue)) {
+        for (const item of catalogue) {
+          const id =
+            typeof item === 'string' ? item : item && (item.modelId || item.model || item.id);
+          if (!id) continue;
+          const parsed = parsePrefix(id);
+          if (!parsed) continue;
+          if (
+            item &&
+            typeof item === 'object' &&
+            item.upstream &&
+            item.upstream !== parsed.upstream
+          )
+            continue;
+          modelSet.add(id);
+        }
+      }
+    } else if (source.kind === 'model-source' && source.servesModels !== false) {
+      if (source.reachedVia && source.routerAlias) {
+        const prefix = source.routerAlias + '/';
+        if (Array.isArray(catalogue)) {
+          for (const item of catalogue) {
+            const id =
+              typeof item === 'string' ? item : item && (item.modelId || item.model || item.id);
+            if (!id || !id.startsWith(prefix)) continue;
+            modelSet.add(id);
+          }
+        }
+      } else if (Array.isArray(catalogue)) {
+        for (const item of catalogue) {
+          if (
+            item &&
+            typeof item === 'object' &&
+            (item.source === source.id || item.gateway === source.id)
+          ) {
+            const id = item.modelId || item.model || item.id;
+            if (id) modelSet.add(id);
+          }
+        }
+      }
+    }
+
+    if (modelSet.size === 0) continue;
+
+    let bound = accountsFor(accounts, source.id).filter((a) => a && a.id && a.id !== '*');
+    if (bound.length === 0 && source.reachedVia) {
+      bound = accountsFor(accounts, source.reachedVia).filter((a) => a && a.id && a.id !== '*');
+    }
+
+    const defaultUpstream =
+      source.upstream ||
+      source.routerAlias ||
+      (gateway && gateway !== source.id ? gateway : '') ||
+      String(source.id)
+        .replace(/^opencode-provider-/, '')
+        .replace(/-options$/, '');
+
+    for (const modelId of modelSet) {
+      const parsed = parsePrefix(modelId);
+      const upstream = (parsed && parsed.upstream) || defaultUpstream || source.id;
+
+      let contextWindow = undefined;
+      let maxOutputTokens = undefined;
+      let contextSource = undefined;
+      if (source.modelMeta && source.modelMeta[modelId]) {
+        const meta = source.modelMeta[modelId];
+        contextWindow = toPositiveInteger(meta.contextWindow);
+        maxOutputTokens = toPositiveInteger(meta.maxOutputTokens);
+        contextSource = meta.contextSource || 'provider-models-endpoint';
+      }
+
+      const caps = {};
+      if (contextWindow !== undefined) {
+        caps.contextWindow = contextWindow;
+      }
+
+      if (bound.length > 0) {
+        for (const acc of bound) {
+          const accCaps = Object.assign({}, acc.capabilities || {}, caps);
+          const c = {
+            harness,
+            accessPath: endpoint,
+            gateway,
+            upstream,
+            accountId: acc.id,
+            quotaScope: acc.id,
+            modelId,
+            source: source.id,
+            sourceId: source.id,
+            endpoint,
+            sourceEndpoint: endpoint,
+            kind: source.kind,
+            capabilities: accCaps,
+            cost: acc.cost,
+            contextWindow,
+            maxOutputTokens,
+            contextSource,
+            sharedQuota: 'unknown',
+          };
+          c.candidateKey = candidateKey(c);
+          out.push(c);
+        }
+      } else {
+        const c = {
+          harness,
+          accessPath: endpoint,
+          gateway,
+          upstream,
+          accountId: source.id,
+          quotaScope: source.id,
+          modelId,
+          source: source.id,
+          sourceId: source.id,
+          endpoint,
+          sourceEndpoint: endpoint,
+          kind: source.kind,
+          capabilities: Object.assign({}, caps),
+          contextWindow,
+          maxOutputTokens,
+          contextSource,
+          sharedQuota: 'unknown',
+        };
+        c.candidateKey = candidateKey(c);
+        out.push(c);
+      }
+    }
+  }
+
+  const seen = new Set();
+  const deduped = [];
+  for (const c of out) {
+    if (!seen.has(c.candidateKey)) {
+      seen.add(c.candidateKey);
+      deduped.push(c);
+    }
+  }
+
+  return deduped;
+}
+
 /**
  * Generate candidates.
  *
@@ -124,6 +361,10 @@ function generateCandidates(opts) {
   const openCodeIds = o.openCodeIds || [];
   const accounts = o.accounts || [];
   const candidates = [];
+
+  if (o.harness === 'hermes') {
+    return openAiCompatibleCandidates(o);
+  }
 
   for (const source of registry.sources) {
     if (sourcesApi.isRetired(source.id, registry)) continue;
@@ -158,6 +399,9 @@ function generateCandidates(opts) {
             quotaScope: parsed.upstream,
             modelId: fullId,
             source: source.id,
+            sourceId: source.id,
+            endpoint: source.endpoint,
+            sourceEndpoint: source.endpoint,
             kind: source.kind,
             sharedQuota: 'unknown',
           });
@@ -172,6 +416,9 @@ function generateCandidates(opts) {
               quotaScope: acc.id,
               modelId: fullId,
               source: source.id,
+              sourceId: source.id,
+              endpoint: source.endpoint,
+              sourceEndpoint: source.endpoint,
               kind: source.kind,
               capabilities: acc.capabilities || {},
               cost: acc.cost,
@@ -207,6 +454,9 @@ function generateCandidates(opts) {
               quotaScope: source.routerAlias,
               modelId: fullId,
               source: source.id,
+              sourceId: source.id,
+              endpoint: source.endpoint,
+              sourceEndpoint: source.endpoint,
               kind: source.kind,
               reachedVia: source.reachedVia,
               sharedQuota: 'unknown',
@@ -222,6 +472,9 @@ function generateCandidates(opts) {
                 quotaScope: acc.id,
                 modelId: fullId,
                 source: source.id,
+                sourceId: source.id,
+                endpoint: source.endpoint,
+                sourceEndpoint: source.endpoint,
                 kind: source.kind,
                 reachedVia: source.reachedVia,
                 capabilities: acc.capabilities || {},
@@ -290,6 +543,9 @@ function generateCandidates(opts) {
               quotaScope: acc.id,
               modelId: model,
               source: source.id,
+              sourceId: source.id,
+              endpoint: source.endpoint,
+              sourceEndpoint: source.endpoint,
               kind: source.kind,
               capabilities: caps,
               contextWindow,
@@ -1126,6 +1382,11 @@ function gatewayAccountCandidates(opts) {
         quotaScope: account.id,
         modelId,
         source: gateway,
+        sourceId: gatewaySource ? gatewaySource.id : gateway,
+        endpoint: gatewaySource ? gatewaySource.endpoint || gatewaySource.accessPath : undefined,
+        sourceEndpoint: gatewaySource
+          ? gatewaySource.endpoint || gatewaySource.accessPath
+          : undefined,
         kind: gatewaySource.kind,
         advertised: true,
         capabilities: candidateCapabilities,
@@ -1277,4 +1538,7 @@ module.exports = {
   candidatesFromEvidence,
   mergeCandidates,
   annotateCandidates,
+  isOpenAiCompatibleSource,
+  openAiCompatibleCandidates,
+  resolveCandidateContextMeta,
 };
