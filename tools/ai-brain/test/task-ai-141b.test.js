@@ -47,6 +47,8 @@ function fixture() {
         kind: 'qualification',
         risk: 'low',
         acceptanceCriteria: ['review'],
+        allowedPaths: ['tools/ai-brain/qualification-exercises/QUALIFY-01.js'],
+        verification: { command: 'node --test tools/ai-brain/test/qualification-exercise.test.js' },
       },
     ])
   );
@@ -283,6 +285,30 @@ test('loadItems rejects malformed qualification definitions', () => {
   assert.throws(() => loadItems(f.itemsFile), /QUALIFICATION_ITEMS_INVALID/);
 });
 
+test('loadItems rejects an item without verification.command using its id', () => {
+  const f = fixture();
+  fs.writeFileSync(
+    f.itemsFile,
+    JSON.stringify([
+      {
+        id: 'QUALIFY-MISSING-COMMAND',
+        kind: 'qualification',
+        risk: 'low',
+        acceptanceCriteria: ['complete the deterministic exercise'],
+        allowedPaths: ['tools/ai-brain/qualification-exercises/example.js'],
+      },
+    ])
+  );
+  assert.throws(
+    () => loadItems(f.itemsFile),
+    /QUALIFICATION_ITEM_VERIFICATION_COMMAND_MISSING:QUALIFY-MISSING-COMMAND/
+  );
+  assert.throws(
+    () => loadItems(f.itemsFile),
+    (err) => err.code === 'VERIFICATION_COMMAND_MISSING'
+  );
+});
+
 test('auto CLI accepts only exact --auto argv token', async () => {
   const f = fixture();
   const candidatesFile = path.join(f.dir, 'candidates.json');
@@ -438,6 +464,128 @@ test('default isolated qualification adapter uses isolated orchestration and exa
   assert.equal(reviewed[0].options.reviewerIdentity, undefined);
   assert.equal(reviewed[0].options.specs[0].allowedPaths.length, 0);
   assert.equal(reviewed[0].options.specs[0].verification, null);
+});
+
+test('each isolated qualification run creates a fresh timestamped checkpoint directory', async () => {
+  const { runIsolatedReviewed } = require('../intake');
+  const f = fixture();
+  const now = Date.parse('2026-10-10T12:00:00Z');
+  const checkpointFiles = [];
+  const options = {
+    candidate: CANDIDATE,
+    baseSha: SHA,
+    item: {
+      id: 'QUALIFY-FRESH-RUN',
+      kind: 'qualification',
+      risk: 'low',
+      acceptanceCriteria: ['complete the deterministic exercise'],
+      allowedPaths: ['tools/ai-brain/qualification-exercises/example.js'],
+      verification: { command: 'node --test tools/ai-brain/test/qualification-exercise.test.js' },
+    },
+  };
+  const deps = {
+    root: f.dir,
+    now,
+    verdictPath: path.join(f.dir, 'verdict.json'),
+    stat: () => ({ mtimeMs: now }),
+    readFile: () => '{"verdict":"CLOSED"}',
+    accounts: [],
+    registry: {},
+    runOrchestration: async (_goal, orchestrationOptions) => {
+      checkpointFiles.push(orchestrationOptions.checkpointFile);
+      return { status: 'BLOCKED', checkpoint: { reviews: [] } };
+    },
+  };
+
+  await runIsolatedReviewed(options, deps);
+  await runIsolatedReviewed(options, deps);
+
+  assert.equal(checkpointFiles.length, 2);
+  assert.notEqual(checkpointFiles[0], checkpointFiles[1]);
+  for (const checkpointFile of checkpointFiles) {
+    assert.match(
+      checkpointFile,
+      /qualification-runs[\\/]QUALIFY-FRESH-RUN[\\/]2026-10-10T12-00-00-000Z-[a-f0-9]{12}[\\/]checkpoint\.json$/
+    );
+    assert.ok(fs.existsSync(path.dirname(checkpointFile)));
+  }
+});
+
+test('review manifest carries a real git patch-id for a worker commit', () => {
+  const { buildManifest, validateManifest } = require('../review-manifest');
+  const tempRepo = fs.mkdtempSync(path.join(process.cwd(), '.task-ai-141b-repo-'));
+  fixtures.push(tempRepo);
+  const git = (args) =>
+    require('node:child_process').spawnSync(
+      'git',
+      [
+        '-c',
+        'user.name=Test',
+        '-c',
+        'user.email=test@example.com',
+        '-c',
+        'commit.gpgsign=false',
+      ].concat(args),
+      {
+        cwd: tempRepo,
+        encoding: 'utf8',
+      }
+    );
+  git(['init', '-q']);
+  fs.writeFileSync(path.join(tempRepo, 'file.txt'), 'initial\n', 'utf8');
+  git(['add', 'file.txt']);
+  git(['commit', '-q', '-m', 'base commit']);
+  const baseSha = git(['rev-parse', 'HEAD']).stdout.trim();
+  fs.writeFileSync(path.join(tempRepo, 'file.txt'), 'worker change\n', 'utf8');
+  git(['add', 'file.txt']);
+  git(['commit', '-q', '-m', 'worker commit']);
+  const workerSha = git(['rev-parse', 'HEAD']).stdout.trim();
+
+  const reviewPath = path.join(tempRepo, 'review.md');
+  fs.writeFileSync(reviewPath, '# Review\nPASS\n', 'utf8');
+
+  // Case 1: explicit baseSha
+  const manifest1 = buildManifest({
+    repoCwd: tempRepo,
+    workItemId: 'QUALIFY-01',
+    baseSha,
+    reviewedSha: workerSha,
+    writerCandidateKey: CANDIDATE.candidateKey,
+    reviewerCandidateKey: 'codex::cli::gw2::up2::acct2::acct2::model2',
+    verdict: 'PASS',
+    findings: [],
+    tests: [{ command: 'node --test', result: 'pass', summary: 'pass' }],
+    artifactPath: reviewPath,
+  });
+  assert.match(manifest1.reviewedPatchId, /^[0-9a-f]{32,40}$/i);
+  const validated1 = validateManifest(manifest1, {
+    repoCwd: tempRepo,
+    expected: { workItemId: 'QUALIFY-01', commit: workerSha },
+    artifactPath: reviewPath,
+  });
+  assert.equal(validated1.ok, true);
+
+  // Case 2: baseSha equal to workerSha or omitted - falls back to commit parent
+  const manifest2 = buildManifest({
+    repoCwd: tempRepo,
+    workItemId: 'QUALIFY-01',
+    baseSha: workerSha,
+    reviewedSha: workerSha,
+    writerCandidateKey: CANDIDATE.candidateKey,
+    reviewerCandidateKey: 'codex::cli::gw2::up2::acct2::acct2::model2',
+    verdict: 'PASS',
+    findings: [],
+    tests: [{ command: 'node --test', result: 'pass', summary: 'pass' }],
+    artifactPath: reviewPath,
+  });
+  assert.match(manifest2.reviewedPatchId, /^[0-9a-f]{32,40}$/i);
+  assert.equal(manifest2.reviewedPatchId, manifest1.reviewedPatchId);
+  const validated2 = validateManifest(manifest2, {
+    repoCwd: tempRepo,
+    expected: { workItemId: 'QUALIFY-01', commit: workerSha },
+    artifactPath: reviewPath,
+  });
+  assert.equal(validated2.ok, true);
 });
 
 test('isolated qualification refuses a reviewer receipt for a different SHA', async () => {

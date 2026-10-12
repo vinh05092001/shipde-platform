@@ -247,7 +247,9 @@ function validateManifest(manifest, options) {
   if (!tree || tree !== norm(manifest.reviewedTree)) {
     return refusal('TREE_MISMATCH', 'reviewed tree is not the tree git has for ' + resolved);
   }
-  const patchId = computePatchId(o.repoCwd, manifest.reviewedBase, resolved);
+  const patchId =
+    computePatchId(o.repoCwd, manifest.reviewedBase, resolved) ||
+    commitPatchId(o.repoCwd, resolved);
   if (!patchId || patchId !== norm(manifest.reviewedPatchId)) {
     return refusal('PATCH_MISMATCH', 'reviewed patch-id is not the patch git has for ' + resolved);
   }
@@ -377,12 +379,16 @@ function buildManifest(options) {
       : repoCwd && reviewedSha
         ? computeReviewedTree(repoCwd, reviewedSha)
         : null;
+  const effectiveBase =
+    baseSha && baseSha !== reviewedSha && repoCwd && resolveCommit(repoCwd, baseSha)
+      ? baseSha
+      : (repoCwd && reviewedSha && resolveCommit(repoCwd, reviewedSha + '^')) || baseSha;
   const reviewedPatchId =
     o.reviewedPatchId !== undefined
       ? o.reviewedPatchId
-      : repoCwd && baseSha && reviewedSha
-        ? computePatchId(repoCwd, baseSha, reviewedSha)
-        : null;
+      : (repoCwd && effectiveBase && reviewedSha
+          ? computePatchId(repoCwd, effectiveBase, reviewedSha)
+          : null) || (repoCwd && reviewedSha ? commitPatchId(repoCwd, reviewedSha) : null);
   const artifactSha256 =
     o.artifactSha256 !== undefined
       ? o.artifactSha256
@@ -407,7 +413,7 @@ function buildManifest(options) {
     schemaVersion: o.schemaVersion !== undefined ? o.schemaVersion : SCHEMA_VERSION,
     workItemId: o.workItemId,
     reviewedCommit: reviewedSha,
-    reviewedBase: baseSha,
+    reviewedBase: effectiveBase,
     reviewedTree,
     reviewedPatchId,
     reviewerCandidateKey,

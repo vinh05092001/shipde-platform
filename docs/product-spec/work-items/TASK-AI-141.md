@@ -132,6 +132,13 @@ No API, persisted product data, or external side effects change. Candidate gener
 
 ## Part B — bounded automatic qualification
 
+### Qualification run reliability repair
+
+- Every configured qualification item now declares a bounded `allowedPaths` scope and a real `verification.command` that runs a focused `node --test` exercise. The exercise asks the worker to implement a small finding-summary helper without touching product code.
+- `loadItems` rejects missing verification commands with an item-specific error, and qualification runs write checkpoints under fresh timestamped run directories so stale failures cannot accumulate across attempts.
+- Qualification manifests derive their reviewed patch identity from the isolated worker's reviewed base and commit; a real worker change is required for a valid review manifest.
+- Behavioral coverage verifies the missing-command error and distinct timestamped checkpoint directories.
+
 ### Qualification proof-floor selection repair (supervisor-directed)
 
 `qualify --auto` now builds its candidates through the same writer routing profile used by intake, including the `WORK_ITEM_PASS` proof floor. Candidates rejected only by `PROOF_FLOOR_NOT_MET` are passed to bounded qualification, ordered by Controller strength and then newest available candidate timestamp; blocked, entitlement-failed, and other rejected candidates are excluded. Existing per-run and per-day caps remain in force. A fake-catalogue behavioral regression exercises the builder and auto selector with no `WORK_ITEM_PASS` evidence and verifies that eligible candidates are selected while a blocked one is omitted.
