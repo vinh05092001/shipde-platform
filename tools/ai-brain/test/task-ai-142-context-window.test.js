@@ -353,3 +353,269 @@ test('TASK-AI-142: assembleForDispatch propagates contextWindow and keeps unveri
       .includes('CONTEXT_WINDOW_UNVERIFIED')
   );
 });
+
+test('TASK-AI-142: sources.js does not widen configured model list on id collision, only attaches modelMeta', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sources-collision-'));
+  const dataDir = path.join(root, 'data');
+  fs.mkdirSync(dataDir, { recursive: true });
+
+  const staticSourcesFile = path.join(dataDir, 'static-sources.json');
+  const discoveredFile = path.join(dataDir, 'discovered-sources.json');
+
+  fs.writeFileSync(
+    staticSourcesFile,
+    JSON.stringify({
+      version: 1,
+      sources: [
+        {
+          id: 'configured-provider',
+          kind: 'model-source',
+          endpoint: 'http://127.0.0.1:8000/v1',
+          models: ['model-a'],
+          modelMeta: { 'model-a': { contextWindow: 32000 } },
+        },
+      ],
+    })
+  );
+
+  fs.writeFileSync(
+    discoveredFile,
+    JSON.stringify({
+      version: 1,
+      sources: [
+        {
+          id: 'configured-provider',
+          kind: 'model-source',
+          endpoint: 'http://127.0.0.1:8000/v1',
+          models: ['model-a', 'unroutable-discovered-model-b'],
+          modelMeta: {
+            'model-a': { contextWindow: 32000 },
+            'unroutable-discovered-model-b': { contextWindow: 64000 },
+          },
+        },
+      ],
+    })
+  );
+
+  const res = sourcesApi.loadSources({
+    file: staticSourcesFile,
+    discoveredFile,
+  });
+
+  const src = res.sources.find((s) => s.id === 'configured-provider');
+  assert.ok(src);
+  // Must NOT widen configured models array!
+  assert.deepEqual(src.models, ['model-a']);
+  // But attaches modelMeta:
+  assert.equal(src.modelMeta['unroutable-discovered-model-b']?.contextWindow, 64000);
+
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('TASK-AI-142: poolAccountCandidates does not match foreign catalogue row sharing base', () => {
+  const fakeRegistry = {
+    version: 2,
+    sources: [
+      {
+        id: 'agy-pool',
+        kind: 'agent-cli',
+        capabilities: {},
+      },
+    ],
+  };
+
+  const catalogue = [
+    {
+      gateway: '9router',
+      upstream: 'kr',
+      modelId: 'kr/claude-3-5-sonnet',
+      base: 'claude-3-5-sonnet',
+      capabilities: { foreignCapability: true },
+      contextWindow: 200000,
+    },
+  ];
+
+  const poolCandidates = candidatesApi.poolAccountCandidates({
+    registry: fakeRegistry,
+    catalogue,
+    accounts: [
+      {
+        id: 'agy01',
+        provider: 'antigravity',
+        models: ['claude-3-5-sonnet'],
+        enabled: true,
+      },
+    ],
+    discoverPool: false,
+    models: ['claude-3-5-sonnet'],
+    allowUnprobedCandidates: true,
+  });
+
+  const cand = poolCandidates.find((c) => c.modelId === 'claude-3-5-sonnet');
+  assert.ok(cand, 'Pool candidate must exist');
+  // Foreign row from kr must NOT supply capabilities or contextWindow!
+  assert.equal(cand.capabilities.foreignCapability, undefined);
+  assert.equal(cand.contextWindow, undefined);
+  assert.equal(cand.capabilities.contextWindow, undefined);
+});
+
+test('TASK-AI-142: resolveModelContextMeta does not inherit contextWindow across sources, prefixes, or base', () => {
+  const fakeRegistry = {
+    version: 2,
+    sources: [
+      {
+        id: '9router',
+        kind: 'router',
+        modelMeta: {
+          'kr/gemini-2.5-pro': {
+            contextWindow: undefined,
+          },
+        },
+      },
+      {
+        id: 'other-source',
+        kind: 'model-source',
+        modelMeta: {
+          'kr/gemini-2.5-pro': {
+            contextWindow: 128000,
+          },
+          'gemini-2.5-pro': {
+            contextWindow: 128000,
+          },
+          'ag/gemini-2.5-pro': {
+            contextWindow: 128000,
+          },
+        },
+      },
+    ],
+  };
+
+  const discoveryCat = {
+    candidates: [
+      {
+        gateway: '9router',
+        upstream: 'kr',
+        accountId: 'acc-1',
+        modelId: 'kr/gemini-2.5-pro',
+        base: 'gemini-2.5-pro',
+      },
+    ],
+  };
+
+  const candidates = cliApi.assembleForDispatch(
+    discoveryCat,
+    [{ id: 'acc-1', provider: 'kr', enabled: true }],
+    fakeRegistry,
+    {
+      requireRouteHealth: false,
+      allowUnprobedCandidates: true,
+    }
+  );
+
+  const cand = candidates.find((c) => c.modelId === 'kr/gemini-2.5-pro');
+  assert.ok(cand);
+  // Must NOT inherit other-source's contextWindow!
+  assert.equal(cand.contextWindow, undefined);
+  assert.equal(cand.capabilities?.contextWindow, undefined);
+});
+
+test('TASK-AI-142: gatewayAccountCandidates rejects non-positive integer contextWindow (0, negative, float, string)', () => {
+  const fakeRegistry = {
+    version: 2,
+    sources: [
+      {
+        id: '9router',
+        kind: 'router',
+        endpoint: 'http://127.0.0.1:20128/v1',
+        accessPath: 'http://127.0.0.1:20128/v1',
+        servesModels: true,
+        modelMeta: {
+          'kr/zero-ctx': { contextWindow: 0 },
+          'kr/neg-ctx': { contextWindow: -500 },
+          'kr/float-ctx': { contextWindow: 128000.5 },
+          'kr/str-ctx': { contextWindow: 'not-an-int' },
+        },
+      },
+      {
+        id: 'kr',
+        kind: 'model-source',
+        reachedVia: '9router',
+        servesModels: true,
+      },
+    ],
+    dispatch: {
+      providers: {
+        kr: { harness: 'hermes' },
+      },
+    },
+  };
+
+  const accounts = [{ id: 'acc-1', provider: 'kr', enabled: true }];
+  const catalogue = [
+    { gateway: '9router', upstream: 'kr', modelId: 'kr/zero-ctx', contextWindow: 0 },
+    { gateway: '9router', upstream: 'kr', modelId: 'kr/neg-ctx', contextWindow: -500 },
+    { gateway: '9router', upstream: 'kr', modelId: 'kr/float-ctx', contextWindow: 128000.5 },
+    { gateway: '9router', upstream: 'kr', modelId: 'kr/str-ctx', contextWindow: 'not-an-int' },
+  ];
+
+  const cands = candidatesApi.gatewayAccountCandidates({
+    registry: fakeRegistry,
+    accounts,
+    catalogue,
+  });
+
+  for (const modelId of ['kr/zero-ctx', 'kr/neg-ctx', 'kr/float-ctx', 'kr/str-ctx']) {
+    const c = cands.find((x) => x.modelId === modelId);
+    assert.ok(c, `${modelId} candidate must exist`);
+    assert.equal(c.contextWindow, undefined, `${modelId} contextWindow must be undefined`);
+    assert.equal(
+      c.capabilities.contextWindow,
+      undefined,
+      `${modelId} capabilities.contextWindow must be undefined`
+    );
+  }
+});
+
+test('TASK-AI-142: assembleForDispatch does not mutate caller catalogue rows in place', () => {
+  const fakeRegistry = {
+    version: 2,
+    sources: [
+      {
+        id: '9router',
+        kind: 'router',
+        modelMeta: {
+          'kr/gemini-2.5-pro': { contextWindow: 128000 },
+        },
+      },
+    ],
+  };
+
+  const callerCatalogueRow = {
+    gateway: '9router',
+    upstream: 'kr',
+    accountId: 'acc-1',
+    modelId: 'kr/gemini-2.5-pro',
+  };
+
+  const discoveryCat = {
+    candidates: [callerCatalogueRow],
+  };
+
+  const candidates = cliApi.assembleForDispatch(
+    discoveryCat,
+    [{ id: 'acc-1', provider: 'kr', enabled: true }],
+    fakeRegistry,
+    {
+      requireRouteHealth: false,
+      allowUnprobedCandidates: true,
+    }
+  );
+
+  const cand = candidates.find((c) => c.modelId === 'kr/gemini-2.5-pro');
+  assert.ok(cand);
+  assert.equal(cand.contextWindow, 128000);
+
+  // Caller input row must NOT be mutated!
+  assert.equal(callerCatalogueRow.contextWindow, undefined);
+  assert.equal(callerCatalogueRow.capabilities, undefined);
+});

@@ -34,6 +34,7 @@ const fs = require('fs');
 const path = require('path');
 const sourcesApi = require('./sources');
 const evidence = require('./evidence');
+const { toPositiveInteger } = require('./source-discovery');
 
 /**
  * Parse upstream prefix from a gateway model id.
@@ -253,18 +254,32 @@ function generateCandidates(opts) {
             const row = accountModelRow(acc, model) || {};
             let contextWindow = undefined;
             const catEntry = catalogue.find(
-              (e) => typeof e === 'object' && e && (e.modelId || e.model || e.id) === model
+              (e) =>
+                typeof e === 'object' &&
+                e &&
+                (e.modelId || e.model || e.id) === model &&
+                (!e.gateway || e.gateway === source.id) &&
+                (!e.source || e.source === source.id)
             );
-            if (catEntry && catEntry.contextWindow !== undefined) {
-              contextWindow = catEntry.contextWindow;
-            } else if (source.modelMeta && source.modelMeta[model]) {
-              contextWindow = source.modelMeta[model].contextWindow;
-            } else if (acc.modelMeta && acc.modelMeta[model]) {
-              contextWindow = acc.modelMeta[model].contextWindow;
+            if (
+              catEntry &&
+              (catEntry.contextWindow !== undefined ||
+                (catEntry.capabilities && catEntry.capabilities.contextWindow !== undefined))
+            ) {
+              contextWindow = toPositiveInteger(
+                catEntry.contextWindow !== undefined
+                  ? catEntry.contextWindow
+                  : catEntry.capabilities.contextWindow
+              );
+            }
+            if (contextWindow === undefined && source.modelMeta && source.modelMeta[model]) {
+              contextWindow = toPositiveInteger(source.modelMeta[model].contextWindow);
             }
             const caps = Object.assign({}, acc.capabilities || {});
             if (contextWindow !== undefined) {
               caps.contextWindow = contextWindow;
+            } else {
+              delete caps.contextWindow;
             }
             candidates.push({
               harness,
@@ -840,45 +855,51 @@ function poolAccountCandidates(opts) {
         for (const entry of catalogue) {
           if (!entry || typeof entry !== 'object') continue;
           const entryModel = entry.modelId || entry.model || entry.id || '';
-          const matchBackend =
-            entryModel === model ||
-            entryModel === 'ag/' + model ||
-            entryModel === 'antigravity/' + model ||
-            ((entry.upstream === 'ag' || entry.upstream === 'antigravity') &&
-              entryModel.replace(/^(ag|antigravity)\//, '') === model) ||
-            (entry.base && entry.base === model);
+          const isAgScoped =
+            entry.upstream === 'ag' ||
+            entry.upstream === 'antigravity' ||
+            entryModel.startsWith('ag/') ||
+            entryModel.startsWith('antigravity/');
+          const matchBackend = isAgScoped
+            ? entryModel === model ||
+              entryModel === 'ag/' + model ||
+              entryModel === 'antigravity/' + model ||
+              entryModel.replace(/^(ag|antigravity)\//, '') === model ||
+              (entry.base && entry.base === model)
+            : !entry.upstream &&
+              (entryModel === model ||
+                entryModel === 'ag/' + model ||
+                entryModel === 'antigravity/' + model);
           if (matchBackend) {
             if (entry.capabilities && Object.keys(entry.capabilities).length > 0) {
               modelCapabilities = Object.assign({}, entry.capabilities);
             }
-            if (entry.contextWindow !== undefined) {
-              contextWindow = entry.contextWindow;
-            } else if (entry.capabilities && entry.capabilities.contextWindow !== undefined) {
-              contextWindow = entry.capabilities.contextWindow;
+            if (
+              (entry.gateway === 'agy-pool' ||
+                entry.gateway === 'agy' ||
+                entry.gateway === 'antigravity' ||
+                (!entry.gateway &&
+                  (!entry.upstream ||
+                    entry.upstream === 'ag' ||
+                    entry.upstream === 'antigravity'))) &&
+              (entryModel === model || entryModel.replace(/^(ag|antigravity)\//, '') === model)
+            ) {
+              const cw = toPositiveInteger(
+                entry.contextWindow !== undefined
+                  ? entry.contextWindow
+                  : entry.capabilities && entry.capabilities.contextWindow
+              );
+              if (cw !== undefined) contextWindow = cw;
             }
             break;
           }
         }
       }
 
-      if (contextWindow === undefined) {
-        const catMeta = catalogue && catalogue.modelMeta;
-        const oMeta = o.modelMeta;
-        const regSources = (o.registry && o.registry.sources) || [];
-        const check = (metaMap) => {
-          if (!metaMap || typeof metaMap !== 'object') return undefined;
-          const m = metaMap[model] || metaMap['ag/' + model] || metaMap['antigravity/' + model];
-          return m && m.contextWindow !== undefined ? m.contextWindow : undefined;
-        };
-        contextWindow = check(catMeta) ?? check(oMeta);
-        if (contextWindow === undefined) {
-          for (const s of regSources) {
-            const cw = check(s && s.modelMeta);
-            if (cw !== undefined) {
-              contextWindow = cw;
-              break;
-            }
-          }
+      if (contextWindow === undefined && agySource && agySource.modelMeta) {
+        const meta = agySource.modelMeta[model];
+        if (meta && meta.contextWindow !== undefined) {
+          contextWindow = toPositiveInteger(meta.contextWindow);
         }
       }
 
@@ -895,6 +916,12 @@ function poolAccountCandidates(opts) {
         }
       }
 
+      if (contextWindow !== undefined) {
+        effectiveCapabilities.contextWindow = contextWindow;
+      } else {
+        delete effectiveCapabilities.contextWindow;
+      }
+
       candidates.push({
         harness: 'agy-pool',
         accessPath: `ShipDe\\ShipDe-${acc}`,
@@ -906,8 +933,7 @@ function poolAccountCandidates(opts) {
         source: 'agy-pool',
         kind: 'agent-cli',
         capabilities: effectiveCapabilities,
-        contextWindow:
-          contextWindow !== undefined ? contextWindow : effectiveCapabilities.contextWindow,
+        contextWindow,
         cost: native && native.cost,
         sharedQuota: 'unknown',
       });
@@ -1069,32 +1095,27 @@ function gatewayAccountCandidates(opts) {
       if (!parsePrefix(modelId)) continue;
       const candidateUpstream = upstream;
       const candidateCapabilities = Object.assign({}, account.capabilities || {});
-      let contextWindow =
-        row.contextWindow !== undefined
-          ? row.contextWindow
-          : row.capabilities && row.capabilities.contextWindow !== undefined
-            ? row.capabilities.contextWindow
-            : undefined;
-      if (contextWindow === undefined && gatewaySource && gatewaySource.modelMeta) {
-        const meta =
-          gatewaySource.modelMeta[modelId] ||
-          gatewaySource.modelMeta[row.model] ||
-          (row.base && gatewaySource.modelMeta[row.base]);
-        if (meta && meta.contextWindow !== undefined) {
-          contextWindow = meta.contextWindow;
-        }
+      let contextWindow = undefined;
+      if (
+        row.contextWindow !== undefined ||
+        (row.capabilities && row.capabilities.contextWindow !== undefined)
+      ) {
+        contextWindow = toPositiveInteger(
+          row.contextWindow !== undefined
+            ? row.contextWindow
+            : row.capabilities && row.capabilities.contextWindow
+        );
       }
-      if (contextWindow === undefined && account && account.modelMeta) {
-        const meta =
-          account.modelMeta[modelId] ||
-          account.modelMeta[row.model] ||
-          (row.base && account.modelMeta[row.base]);
+      if (contextWindow === undefined && gatewaySource && gatewaySource.modelMeta) {
+        const meta = gatewaySource.modelMeta[modelId];
         if (meta && meta.contextWindow !== undefined) {
-          contextWindow = meta.contextWindow;
+          contextWindow = toPositiveInteger(meta.contextWindow);
         }
       }
       if (contextWindow !== undefined) {
         candidateCapabilities.contextWindow = contextWindow;
+      } else {
+        delete candidateCapabilities.contextWindow;
       }
       out.push({
         harness,

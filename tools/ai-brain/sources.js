@@ -81,9 +81,6 @@ function loadSources(options) {
         if (entry.modelMeta && typeof entry.modelMeta === 'object') {
           existing.modelMeta = Object.assign({}, existing.modelMeta || {}, entry.modelMeta);
         }
-        if (Array.isArray(entry.models)) {
-          existing.models = [...new Set([...(existing.models || []), ...entry.models])];
-        }
         continue;
       }
       if (!entry.endpoint) continue;

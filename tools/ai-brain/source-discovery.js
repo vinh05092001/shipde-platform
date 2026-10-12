@@ -528,4 +528,5 @@ module.exports = {
   modelMeta,
   modelMetadata: modelMeta,
   sanitizeEndpoint,
+  toPositiveInteger,
 };
