@@ -245,3 +245,10 @@ Live evidence on the real Hermes v0.21.4 binary verified:
 2. When writing the Controller-owned Hermes home, the Controller installs (copies) the skill file to `<hermesHome>/skills/shipde-controller/SKILL.md` (overwriting each launch so it stays in sync with the repository).
 3. `buildHermesArgv` passes `-s shipde-controller` (the skill name), never a path.
 4. `config.yaml` includes a `model:` section with `default: <modelId>` and `provider: <providerName>` matching the providers entry (values validated/escaped as the existing YAML writer does; no secrets), preventing Hermes from warning that custom_providers is defined but no model section is present.
+
+## Part H3 Windows launch (2026-10-13)
+
+Live evidence on Windows verified that `node tools/ai-brain/cli.js chat` fails with `LOCAL_LAUNCH_FAILURE: spawn hermes ENOENT`. When installed via npm on Windows, `hermes` on PATH is a `.cmd` shim (`hermes.cmd`) that cannot be spawned directly without a shell. Because `child_process.spawn` must never use `shell: true` (to prevent shell interpretation of arguments), Hermes launch resolves:
+1. `HERMES_BIN` environment variable if set (launching `process.execPath` + `[HERMES_BIN, ...argv]` if `.js`, else `HERMES_BIN` + `argv`).
+2. On `win32`, searching each PATH directory for `hermes.cmd` and `<dir>/node_modules/hermes-agent/bin/hermes.js`, launching `process.execPath` with `[thatJs, ...argv]`.
+3. Otherwise falling back to `'hermes'`.

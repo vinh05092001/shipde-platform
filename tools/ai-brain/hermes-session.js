@@ -833,6 +833,77 @@ function buildHermesArgv(candidate, session, options) {
 }
 
 /**
+ * Resolves the Hermes launch command and arguments.
+ * Order:
+ * 1. env HERMES_BIN if set (if it ends with .js, launch as process.execPath + [HERMES_BIN, ...argv]; else HERMES_BIN + argv)
+ * 2. on win32, search each PATH dir for hermes.cmd; if found and <dir>/node_modules/hermes-agent/bin/hermes.js exists, launch process.execPath with [thatJs, ...argv]
+ * 3. otherwise 'hermes' with argv.
+ * Never uses shell:true (argv must not be shell-interpreted).
+ */
+function resolveHermesLaunchCommand(argv, options, deps) {
+  let opts = options || {};
+  let d = deps || {};
+  if (!deps && options && (options.env || options.platform || options.fs || options.execPath)) {
+    d = options;
+    opts = {};
+  }
+  const envApi = d.env || opts.env || process.env;
+  const platformApi = d.platform || opts.platform || process.platform;
+  const fsApi = d.fs || opts.fs || fs;
+  const execPath = d.execPath || opts.execPath || process.execPath;
+  const chatArgv = Array.isArray(argv) ? argv : [];
+
+  const hermesBin = envApi.HERMES_BIN || envApi.hermes_bin;
+  if (hermesBin && typeof hermesBin === 'string' && hermesBin.trim()) {
+    const trimmedBin = hermesBin.trim();
+    let isDir = false;
+    try {
+      if (fsApi.existsSync(trimmedBin) && fsApi.statSync(trimmedBin).isDirectory()) {
+        isDir = true;
+      }
+    } catch {}
+    if (!isDir) {
+      if (trimmedBin.toLowerCase().endsWith('.js')) {
+        return {
+          command: execPath,
+          args: [trimmedBin, ...chatArgv],
+        };
+      }
+      return {
+        command: trimmedBin,
+        args: [...chatArgv],
+      };
+    }
+  }
+
+  if (platformApi === 'win32') {
+    const rawPath = envApi.PATH || envApi.Path || envApi.path || '';
+    const pathDirs = rawPath
+      .split(';')
+      .map((p) => p.trim().replace(/^["']|["']$/g, ''))
+      .filter(Boolean);
+
+    for (const dir of pathDirs) {
+      const cmdPath = path.join(dir, 'hermes.cmd');
+      if (fsApi.existsSync(cmdPath)) {
+        const jsPath = path.join(dir, 'node_modules', 'hermes-agent', 'bin', 'hermes.js');
+        if (fsApi.existsSync(jsPath)) {
+          return {
+            command: execPath,
+            args: [jsPath, ...chatArgv],
+          };
+        }
+      }
+    }
+  }
+
+  return {
+    command: 'hermes',
+    args: [...chatArgv],
+  };
+}
+
+/**
  * Launches an interactive Hermes chat session bound to a Controller-selected candidate.
  * Handles failure classification, candidate reselection, and resume relaunching.
  */
@@ -841,14 +912,36 @@ async function launchHermesSession(options, deps) {
   const opts = options || {};
   const rootDir = resolveRootDir(opts, d);
   const hermesHome = opts.hermesHome || d.hermesHome || getHermesHomeDir(rootDir);
-  const env = Object.assign({}, process.env, d.env || {}, {
+
+  const injectedEnv = Object.assign({}, opts.env || {}, d.env || {});
+  const env = Object.assign({}, process.env, injectedEnv, {
     HERMES_HOME: hermesHome,
   });
+
+  const injectedPathKey = Object.keys(injectedEnv).find((k) => k.toLowerCase() === 'path');
+  if (injectedPathKey) {
+    const targetVal = injectedEnv[injectedPathKey];
+    delete env.PATH;
+    delete env.Path;
+    delete env.path;
+    env[injectedPathKey] = targetVal;
+  }
+
+  const injectedBinKey = Object.keys(injectedEnv).find((k) => k.toLowerCase() === 'hermes_bin');
+  if (injectedBinKey) {
+    const targetVal = injectedEnv[injectedBinKey];
+    delete env.HERMES_BIN;
+    delete env.hermes_bin;
+    if (targetVal) {
+      env[injectedBinKey] = targetVal;
+    }
+  }
+
   // Verified Fact 3: --ignore-user-config (and HERMES_IGNORE_USER_CONFIG=1) makes Hermes skip config.yaml
   delete env.HERMES_IGNORE_USER_CONFIG;
 
-  const spawnFn = d.spawn || defaultSpawn;
-  const classifier = d.failureClassifier || failureClassifier;
+  const spawnFn = d.spawn || opts.spawn || defaultSpawn;
+  const classifier = d.failureClassifier || opts.failureClassifier || failureClassifier;
 
   let session = null;
   if (opts.newSession) {
@@ -933,12 +1026,67 @@ async function launchHermesSession(options, deps) {
       skill: opts.skill,
     });
 
+    const resolverInput = Object.assign(
+      {
+        env,
+        platform: opts.platform || d.platform || process.platform,
+        fs: opts.fs || d.fs || fs,
+        execPath: opts.execPath || d.execPath || process.execPath,
+      },
+      d,
+      { env }
+    );
+
+    let resolved;
+    const resolverFn =
+      typeof opts.resolveHermesCommand === 'function'
+        ? opts.resolveHermesCommand
+        : typeof d.resolveHermesCommand === 'function'
+          ? d.resolveHermesCommand
+          : typeof opts.resolveHermesLaunch === 'function'
+            ? opts.resolveHermesLaunch
+            : typeof d.resolveHermesLaunch === 'function'
+              ? d.resolveHermesLaunch
+              : null;
+
+    if (resolverFn) {
+      resolved = resolverFn(argv, opts, resolverInput);
+    } else if (
+      opts.resolveHermesCommand &&
+      typeof opts.resolveHermesCommand === 'object' &&
+      opts.resolveHermesCommand.command
+    ) {
+      resolved = {
+        command: opts.resolveHermesCommand.command,
+        args: Array.isArray(opts.resolveHermesCommand.args)
+          ? opts.resolveHermesCommand.args
+          : [...argv],
+      };
+    } else if (
+      d.resolveHermesCommand &&
+      typeof d.resolveHermesCommand === 'object' &&
+      d.resolveHermesCommand.command
+    ) {
+      resolved = {
+        command: d.resolveHermesCommand.command,
+        args: Array.isArray(d.resolveHermesCommand.args) ? d.resolveHermesCommand.args : [...argv],
+      };
+    } else {
+      const resolverOpts =
+        opts.resolveHermesCommand && typeof opts.resolveHermesCommand === 'object'
+          ? Object.assign({}, opts, opts.resolveHermesCommand)
+          : opts;
+      resolved = resolveHermesLaunchCommand(argv, resolverOpts, resolverInput);
+    }
+
     if (opts.dryRun) {
       return {
         status: 'dry_run',
         sessionId: session.sessionId,
         candidateKey: session.candidateKey,
         candidate,
+        command: resolved.command,
+        args: resolved.args,
         argv,
         configResult,
         hermesHome,
@@ -947,7 +1095,7 @@ async function launchHermesSession(options, deps) {
 
     let spawnResult;
     try {
-      spawnResult = await spawnFn('hermes', argv, {
+      spawnResult = await spawnFn(resolved.command, resolved.args, {
         cwd: rootDir,
         env,
         stdio: opts.stdio || ['inherit', 'inherit', 'pipe'],
@@ -979,6 +1127,8 @@ async function launchHermesSession(options, deps) {
         sessionId: session.sessionId,
         candidateKey: session.candidateKey,
         candidate,
+        command: resolved.command,
+        args: resolved.args,
         argv,
         configResult,
         spawnResult,
@@ -1039,6 +1189,8 @@ async function launchHermesSession(options, deps) {
         sessionId: session.sessionId,
         candidateKey: session.candidateKey,
         candidate,
+        command: resolved.command,
+        args: resolved.args,
         argv,
         configResult,
         spawnResult,
@@ -1154,6 +1306,12 @@ async function chatCommand(args, deps) {
   if (args['decision-dir'] || args.decisionDir)
     opts.decisionDir = args['decision-dir'] || args.decisionDir;
   if (args['skip-decision-log'] || args.skipDecisionLog) opts.skipDecisionLog = true;
+  if (args.env) opts.env = args.env;
+  if (args.platform) opts.platform = args.platform;
+  if (args.fs) opts.fs = args.fs;
+  if (args.execPath) opts.execPath = args.execPath;
+  if (args.resolveHermesCommand) opts.resolveHermesCommand = args.resolveHermesCommand;
+  if (args.resolveHermesLaunch) opts.resolveHermesLaunch = args.resolveHermesLaunch;
 
   try {
     const result = await launchHermesSession(opts, d);
@@ -1195,6 +1353,9 @@ module.exports = {
   selectReasoningCandidate,
   writeProvidersConfig,
   buildHermesArgv,
+  resolveHermesLaunchCommand,
+  resolveHermesLaunch: resolveHermesLaunchCommand,
+  resolveHermesCommand: resolveHermesLaunchCommand,
   launchHermesSession,
   goalSessionCommand,
   chatCommand,
