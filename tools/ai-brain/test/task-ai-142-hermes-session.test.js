@@ -355,6 +355,7 @@ test('H2-06: session persistence stores sessionId, candidateKey, and goalIds wit
 
 test('H2-07: launchHermesSession executes fake spawn and returns completed status', async () => {
   const root = fixtureRoot('hermes-launch-');
+  const emptyDir = fixtureRoot('hermes-empty-path-');
   try {
     const candidate = sampleCandidate();
     let spawnCalledWith = null;
@@ -374,6 +375,7 @@ test('H2-07: launchHermesSession executes fake spawn and returns completed statu
         registry: sampleRegistry(),
         priorsData: { ranking: [] },
         spawn: fakeSpawn,
+        env: { PATH: emptyDir, HERMES_BIN: emptyDir },
       }
     );
 
@@ -392,6 +394,7 @@ test('H2-07: launchHermesSession executes fake spawn and returns completed statu
     assert.equal(session.candidateKey, candidate.candidateKey);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(emptyDir, { recursive: true, force: true });
   }
 });
 
@@ -1086,6 +1089,7 @@ test('H2-22: explorationBudget defaults to 0 ensuring deterministic ranking', as
 
 test('H2-23: default non-injected launch path attempts real spawnSync of hermes and chatCommand returns Hermes exit code', async () => {
   const root = fixtureRoot('hermes-default-spawn-');
+  const emptyDir = fixtureRoot('hermes-empty-spawn-');
   try {
     const candidate = sampleCandidate();
 
@@ -1099,6 +1103,7 @@ test('H2-23: default non-injected launch path attempts real spawnSync of hermes 
             candidates: [candidate],
             registry: sampleRegistry(),
             priorsData: { ranking: [] },
+            env: { PATH: emptyDir, HERMES_BIN: emptyDir },
           }
         );
       },
@@ -1111,25 +1116,28 @@ test('H2-23: default non-injected launch path attempts real spawnSync of hermes 
       }
     );
 
-    // 2. chatCommand returns Hermes exit code directly
-    const mockSpawn = async () => ({
-      exitCode: 42,
-      status: 42,
-      stderr: 'non-quota exit',
-    });
+    // 2. Default non-injected spawn path propagates Hermes exit code
+    // Uses HERMES_BIN pointing to a tiny temp .js that exits with a known code (42)
+    const fakeHermesJs = path.join(root, 'fake-hermes-exit.js');
+    fs.writeFileSync(
+      fakeHermesJs,
+      'process.stderr.write("non-quota exit\\n"); process.exit(42);\n',
+      'utf8'
+    );
     const chatRes = await chatCommand(
       { rootDir: root, skipDecisionLog: true },
       {
         candidates: [candidate],
         registry: sampleRegistry(),
         priorsData: { ranking: [] },
-        spawn: mockSpawn,
+        env: { PATH: emptyDir, HERMES_BIN: fakeHermesJs },
       }
     );
     assert.equal(chatRes.exitCode, 42, 'chatCommand must return Hermes exit code 42');
     assert.equal(chatRes.result.status, 'exited');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(emptyDir, { recursive: true, force: true });
   }
 });
 
@@ -1939,7 +1947,7 @@ test('H3-06: launchHermesSession uses resolved command and args in spawn and rep
         registry: sampleRegistry(),
         priorsData: { ranking: [] },
         platform: 'win32',
-        env: { PATH: root },
+        env: { PATH: root, HERMES_BIN: '' },
       }
     );
     assert.equal(dryRes.status, 'dry_run');
@@ -1961,7 +1969,7 @@ test('H3-06: launchHermesSession uses resolved command and args in spawn and rep
         registry: sampleRegistry(),
         priorsData: { ranking: [] },
         platform: 'win32',
-        env: { PATH: root },
+        env: { PATH: root, HERMES_BIN: '' },
         spawn: fakeSpawn,
       }
     );
@@ -1972,6 +1980,90 @@ test('H3-06: launchHermesSession uses resolved command and args in spawn and rep
     assert.ok(spawnCaptured.args.includes('--continue'));
     assert.equal(runRes.command, process.execPath);
     assert.equal(runRes.args[0], jsEntry);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('H3-07: launchHermesSession and chatCommand accept injected resolver input and resolveHermesCommand option', async () => {
+  const root = fixtureRoot('hermes-injected-resolver-');
+  try {
+    const candidate = sampleCandidate();
+
+    // 1. Injected resolver function in deps
+    const customResolver = (argv) => ({
+      command: 'custom-hermes-runner',
+      args: ['--custom-flag', ...argv],
+    });
+    const dryResFn = await launchHermesSession(
+      { rootDir: root, dryRun: true, skipDecisionLog: true },
+      {
+        candidates: [candidate],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+        resolveHermesCommand: customResolver,
+      }
+    );
+    assert.equal(dryResFn.command, 'custom-hermes-runner');
+    assert.equal(dryResFn.args[0], '--custom-flag');
+
+    // 2. Injected resolver object in options
+    const dryResObj = await launchHermesSession(
+      {
+        rootDir: root,
+        dryRun: true,
+        skipDecisionLog: true,
+        resolveHermesCommand: { command: 'object-bin', args: ['--obj-flag'] },
+      },
+      {
+        candidates: [candidate],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+      }
+    );
+    assert.equal(dryResObj.command, 'object-bin');
+    assert.deepEqual(dryResObj.args, ['--obj-flag']);
+
+    // 3. chatCommand forwards resolveHermesCommand option
+    const chatRes = await chatCommand(
+      {
+        rootDir: root,
+        dryRun: true,
+        skipDecisionLog: true,
+        resolveHermesCommand: (argv) => ({ command: 'chat-custom-bin', args: argv }),
+      },
+      {
+        candidates: [candidate],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+      }
+    );
+    assert.equal(chatRes.exitCode, 0);
+    assert.equal(chatRes.result.command, 'chat-custom-bin');
+
+    // 4. Injected resolver receives injected env, platform, and fs
+    let capturedResolverDeps = null;
+    await launchHermesSession(
+      {
+        rootDir: root,
+        dryRun: true,
+        skipDecisionLog: true,
+      },
+      {
+        candidates: [candidate],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+        platform: 'custom-os',
+        env: { PATH: '/custom/path', HERMES_BIN: '' },
+        resolveHermesCommand: (argv, opts, deps) => {
+          capturedResolverDeps = deps;
+          return { command: 'hermes', args: argv };
+        },
+      }
+    );
+    assert.ok(capturedResolverDeps);
+    assert.equal(capturedResolverDeps.platform, 'custom-os');
+    assert.equal(capturedResolverDeps.env.PATH, '/custom/path');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

@@ -856,16 +856,24 @@ function resolveHermesLaunchCommand(argv, options, deps) {
   const hermesBin = envApi.HERMES_BIN || envApi.hermes_bin;
   if (hermesBin && typeof hermesBin === 'string' && hermesBin.trim()) {
     const trimmedBin = hermesBin.trim();
-    if (trimmedBin.toLowerCase().endsWith('.js')) {
+    let isDir = false;
+    try {
+      if (fsApi.existsSync(trimmedBin) && fsApi.statSync(trimmedBin).isDirectory()) {
+        isDir = true;
+      }
+    } catch {}
+    if (!isDir) {
+      if (trimmedBin.toLowerCase().endsWith('.js')) {
+        return {
+          command: execPath,
+          args: [trimmedBin, ...chatArgv],
+        };
+      }
       return {
-        command: execPath,
-        args: [trimmedBin, ...chatArgv],
+        command: trimmedBin,
+        args: [...chatArgv],
       };
     }
-    return {
-      command: trimmedBin,
-      args: [...chatArgv],
-    };
   }
 
   if (platformApi === 'win32') {
@@ -904,14 +912,36 @@ async function launchHermesSession(options, deps) {
   const opts = options || {};
   const rootDir = resolveRootDir(opts, d);
   const hermesHome = opts.hermesHome || d.hermesHome || getHermesHomeDir(rootDir);
-  const env = Object.assign({}, process.env, d.env || {}, {
+
+  const injectedEnv = Object.assign({}, opts.env || {}, d.env || {});
+  const env = Object.assign({}, process.env, injectedEnv, {
     HERMES_HOME: hermesHome,
   });
+
+  const injectedPathKey = Object.keys(injectedEnv).find((k) => k.toLowerCase() === 'path');
+  if (injectedPathKey) {
+    const targetVal = injectedEnv[injectedPathKey];
+    delete env.PATH;
+    delete env.Path;
+    delete env.path;
+    env[injectedPathKey] = targetVal;
+  }
+
+  const injectedBinKey = Object.keys(injectedEnv).find((k) => k.toLowerCase() === 'hermes_bin');
+  if (injectedBinKey) {
+    const targetVal = injectedEnv[injectedBinKey];
+    delete env.HERMES_BIN;
+    delete env.hermes_bin;
+    if (targetVal) {
+      env[injectedBinKey] = targetVal;
+    }
+  }
+
   // Verified Fact 3: --ignore-user-config (and HERMES_IGNORE_USER_CONFIG=1) makes Hermes skip config.yaml
   delete env.HERMES_IGNORE_USER_CONFIG;
 
-  const spawnFn = d.spawn || defaultSpawn;
-  const classifier = d.failureClassifier || failureClassifier;
+  const spawnFn = d.spawn || opts.spawn || defaultSpawn;
+  const classifier = d.failureClassifier || opts.failureClassifier || failureClassifier;
 
   let session = null;
   if (opts.newSession) {
@@ -996,7 +1026,58 @@ async function launchHermesSession(options, deps) {
       skill: opts.skill,
     });
 
-    const resolved = resolveHermesLaunchCommand(argv, opts, Object.assign({}, d, { env }));
+    const resolverInput = Object.assign(
+      {
+        env,
+        platform: opts.platform || d.platform || process.platform,
+        fs: opts.fs || d.fs || fs,
+        execPath: opts.execPath || d.execPath || process.execPath,
+      },
+      d,
+      { env }
+    );
+
+    let resolved;
+    const resolverFn =
+      typeof opts.resolveHermesCommand === 'function'
+        ? opts.resolveHermesCommand
+        : typeof d.resolveHermesCommand === 'function'
+          ? d.resolveHermesCommand
+          : typeof opts.resolveHermesLaunch === 'function'
+            ? opts.resolveHermesLaunch
+            : typeof d.resolveHermesLaunch === 'function'
+              ? d.resolveHermesLaunch
+              : null;
+
+    if (resolverFn) {
+      resolved = resolverFn(argv, opts, resolverInput);
+    } else if (
+      opts.resolveHermesCommand &&
+      typeof opts.resolveHermesCommand === 'object' &&
+      opts.resolveHermesCommand.command
+    ) {
+      resolved = {
+        command: opts.resolveHermesCommand.command,
+        args: Array.isArray(opts.resolveHermesCommand.args)
+          ? opts.resolveHermesCommand.args
+          : [...argv],
+      };
+    } else if (
+      d.resolveHermesCommand &&
+      typeof d.resolveHermesCommand === 'object' &&
+      d.resolveHermesCommand.command
+    ) {
+      resolved = {
+        command: d.resolveHermesCommand.command,
+        args: Array.isArray(d.resolveHermesCommand.args) ? d.resolveHermesCommand.args : [...argv],
+      };
+    } else {
+      const resolverOpts =
+        opts.resolveHermesCommand && typeof opts.resolveHermesCommand === 'object'
+          ? Object.assign({}, opts, opts.resolveHermesCommand)
+          : opts;
+      resolved = resolveHermesLaunchCommand(argv, resolverOpts, resolverInput);
+    }
 
     if (opts.dryRun) {
       return {
@@ -1225,6 +1306,12 @@ async function chatCommand(args, deps) {
   if (args['decision-dir'] || args.decisionDir)
     opts.decisionDir = args['decision-dir'] || args.decisionDir;
   if (args['skip-decision-log'] || args.skipDecisionLog) opts.skipDecisionLog = true;
+  if (args.env) opts.env = args.env;
+  if (args.platform) opts.platform = args.platform;
+  if (args.fs) opts.fs = args.fs;
+  if (args.execPath) opts.execPath = args.execPath;
+  if (args.resolveHermesCommand) opts.resolveHermesCommand = args.resolveHermesCommand;
+  if (args.resolveHermesLaunch) opts.resolveHermesLaunch = args.resolveHermesLaunch;
 
   try {
     const result = await launchHermesSession(opts, d);
