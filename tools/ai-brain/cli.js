@@ -4047,15 +4047,120 @@ function main(argv = process.argv.slice(2), deps = {}) {
     return;
   }
 
-  // goal (TASK-AI-142 Part H1): Goal store and Controller contract
+  // chat (TASK-AI-142 H2): interactive Hermes chat session bound to Controller-selected candidate
+  if (command === 'chat') {
+    const { chatCommand } = require('./hermes-session');
+    const result = chatCommand(args, deps);
+    if (result && typeof result.then === 'function') {
+      result.then(
+        (res) => {
+          if (res && typeof res.exitCode === 'number' && res.exitCode !== 0) {
+            process.exitCode = res.exitCode;
+          }
+        },
+        (err) => {
+          console.error('Chat error: ' + (err && err.message ? err.message : err));
+          process.exitCode = 1;
+        }
+      );
+    }
+    return result;
+  }
+
+  // goal (TASK-AI-142 H1/H2): goal store and session management
   if (command === 'goal') {
-    const { runGoalCli } = require('./goals');
-    return runGoalCli(args, deps);
+    const sub = args._[1];
+    if (sub === 'session') {
+      const { goalSessionCommand } = require('./hermes-session');
+      const result = goalSessionCommand(args, deps);
+      if (result && typeof result.then === 'function') {
+        result.then(
+          (res) => {
+            if (res && typeof res.exitCode === 'number' && res.exitCode !== 0) {
+              process.exitCode = res.exitCode;
+            }
+          },
+          (err) => {
+            console.error(
+              JSON.stringify({
+                status: 'error',
+                error: err && err.message ? err.message : String(err),
+              })
+            );
+            process.exitCode = 1;
+          }
+        );
+      }
+      return result;
+    }
+    let goals;
+    try {
+      if (deps && deps.loadGoals) {
+        goals = deps.loadGoals();
+      } else if (deps && deps.goals !== undefined) {
+        goals = deps.goals;
+        if (goals instanceof Error) throw goals;
+      } else {
+        goals = require('./goals');
+      }
+    } catch (loadErr) {
+      console.error(
+        JSON.stringify({
+          status: 'error',
+          error:
+            'GOAL_MODULE_UNAVAILABLE: ' +
+            (loadErr && loadErr.message ? loadErr.message : String(loadErr)),
+        })
+      );
+      process.exitCode = 1;
+      return;
+    }
+    if (goals && typeof (goals.goalCommand || goals.runGoalCli) === 'function') {
+      try {
+        const result = (goals.goalCommand || goals.runGoalCli)(args, deps);
+        if (result && typeof result.then === 'function') {
+          result.then(
+            (res) => {
+              if (res && typeof res.exitCode === 'number' && res.exitCode !== 0) {
+                process.exitCode = res.exitCode;
+              }
+            },
+            (err) => {
+              console.error(
+                JSON.stringify({
+                  status: 'error',
+                  error: err && err.message ? err.message : String(err),
+                })
+              );
+              process.exitCode = 1;
+            }
+          );
+        }
+        return;
+      } catch (cmdErr) {
+        console.error(
+          JSON.stringify({
+            status: 'error',
+            error: cmdErr && cmdErr.message ? cmdErr.message : String(cmdErr),
+          })
+        );
+        process.exitCode = 1;
+        return;
+      }
+    }
+    console.error(
+      JSON.stringify({
+        status: 'error',
+        error: 'UNKNOWN_GOAL_SUBCOMMAND: ' + (sub || 'missing subcommand'),
+      })
+    );
+    process.exitCode = 1;
+    return;
   }
 
   console.error('Lệnh không rõ: ' + command);
   console.error(
-    'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | discovery | account | probe | qualify | serena | sources | evidence | review | orchestrate | intake | plan | next | merge | goal | priors refresh'
+    'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | discovery | account | probe | qualify | serena | sources | evidence | review | orchestrate | intake | plan | next | merge | goal | priors refresh | chat | goal session'
   );
   process.exit(2);
 }
@@ -4154,6 +4259,8 @@ module.exports = {
   goalCommand: (args, deps) => require('./goals').runGoalCli(args, deps),
   _buildQualificationCandidates: buildQualificationCandidates,
   _resolveFallbackRoutes: resolveFallbackRoutes,
+  chatCommand: (args, deps) => require('./hermes-session').chatCommand(args, deps),
+  goalSessionCommand: (args, deps) => require('./hermes-session').goalSessionCommand(args, deps),
 };
 
 if (require.main === module) {

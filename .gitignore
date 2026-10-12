@@ -31,3 +31,5 @@ __pycache__/
 *.pyc
 tools/ai-brain/data/evidence/
 tools/ai-brain/data/context-packs/
+tools/ai-brain/data/hermes/
+data/hermes/
