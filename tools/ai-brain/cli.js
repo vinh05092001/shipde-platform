@@ -639,6 +639,55 @@ function quotaCommand(args) {
   console.log('');
 }
 
+function resolveModelContextMeta(modelId, gateway, base, registry, accounts, discoveryCat) {
+  if (!modelId) return null;
+  const sources = (registry && registry.sources) || [];
+  for (const src of sources) {
+    if (!src || !src.modelMeta) continue;
+    const matches =
+      !gateway || src.id === gateway || src.id === src.reachedVia || src.reachedVia === gateway;
+    if (matches) {
+      const m =
+        src.modelMeta[modelId] ||
+        (base && src.modelMeta[base]) ||
+        src.modelMeta['ag/' + modelId] ||
+        src.modelMeta['antigravity/' + modelId] ||
+        src.modelMeta['kr/' + modelId];
+      if (m && m.contextWindow !== undefined) return m;
+    }
+  }
+  for (const src of sources) {
+    if (!src || !src.modelMeta) continue;
+    const m =
+      src.modelMeta[modelId] ||
+      (base && src.modelMeta[base]) ||
+      src.modelMeta['ag/' + modelId] ||
+      src.modelMeta['antigravity/' + modelId] ||
+      src.modelMeta['kr/' + modelId];
+    if (m && m.contextWindow !== undefined) return m;
+  }
+  if (discoveryCat && discoveryCat.modelMeta) {
+    const m =
+      discoveryCat.modelMeta[modelId] ||
+      (base && discoveryCat.modelMeta[base]) ||
+      discoveryCat.modelMeta['ag/' + modelId] ||
+      discoveryCat.modelMeta['kr/' + modelId];
+    if (m && m.contextWindow !== undefined) return m;
+  }
+  if (Array.isArray(accounts)) {
+    for (const acc of accounts) {
+      if (!acc || !acc.modelMeta) continue;
+      const m =
+        acc.modelMeta[modelId] ||
+        (base && acc.modelMeta[base]) ||
+        acc.modelMeta['ag/' + modelId] ||
+        acc.modelMeta['kr/' + modelId];
+      if (m && m.contextWindow !== undefined) return m;
+    }
+  }
+  return null;
+}
+
 function assembleCandidates(
   discoveryCat,
   offerings,
@@ -702,6 +751,35 @@ function assembleCandidates(
         c.cost = acc.cost;
       }
     }
+    if (c.contextWindow === undefined && dc.contextWindow !== undefined) {
+      c.contextWindow = dc.contextWindow;
+    }
+    if (c.contextWindow === undefined) {
+      const m = resolveModelContextMeta(
+        modelId,
+        c.gateway,
+        c.base,
+        registry,
+        accounts,
+        discoveryCat
+      );
+      if (m && m.contextWindow !== undefined) {
+        c.contextWindow = m.contextWindow;
+        if (c.capabilities) {
+          c.capabilities = Object.assign({}, c.capabilities, {
+            contextWindow: m.contextWindow,
+          });
+        } else {
+          c.capabilities = { contextWindow: m.contextWindow };
+        }
+        if (m.maxOutputTokens !== undefined && c.maxOutputTokens === undefined) {
+          c.maxOutputTokens = m.maxOutputTokens;
+        }
+        if (m.contextSource && !c.contextSource) {
+          c.contextSource = m.contextSource;
+        }
+      }
+    }
     const key = candidatesApi.candidateKey(c);
     c.key = key;
     if (!seenKeys.has(key)) {
@@ -716,6 +794,26 @@ function assembleCandidates(
   // limits, and the advertised row only proves the route exists.
   const advertised = gatewayCandidates || [];
   for (const off of advertised) {
+    if (off && off.contextWindow === undefined) {
+      const m = resolveModelContextMeta(
+        off.modelId,
+        off.gateway,
+        off.base,
+        registry,
+        accounts,
+        discoveryCat
+      );
+      if (m && m.contextWindow !== undefined) {
+        off.contextWindow = m.contextWindow;
+        if (off.capabilities) {
+          off.capabilities = Object.assign({}, off.capabilities, {
+            contextWindow: m.contextWindow,
+          });
+        } else {
+          off.capabilities = { contextWindow: m.contextWindow };
+        }
+      }
+    }
     const key = candidatesApi.candidateKey(off);
     const c = Object.assign({}, off, { key });
     if (!seenKeys.has(key)) {
@@ -771,6 +869,19 @@ function assembleCandidates(
       quality: off.quality,
       source: off.provider,
     };
+    if (c.contextWindow === undefined) {
+      const m = resolveModelContextMeta(off.model, gateway, null, registry, accounts, discoveryCat);
+      if (m && m.contextWindow !== undefined) {
+        c.contextWindow = m.contextWindow;
+        if (c.capabilities) {
+          c.capabilities = Object.assign({}, c.capabilities, {
+            contextWindow: m.contextWindow,
+          });
+        } else {
+          c.capabilities = { contextWindow: m.contextWindow };
+        }
+      }
+    }
     const key = candidatesApi.candidateKey(c);
     c.key = key;
     if (!seenKeys.has(key)) {
@@ -887,6 +998,34 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
         Boolean(routeHealth && Object.keys(routeHealth.paths || {}).length > 0);
   const enforceEmptyHealth = routeHealthExplicit || requireRouteHealth;
   const catalogueRows = (discoveryCat && discoveryCat.candidates) || [];
+  for (const row of catalogueRows) {
+    if (row && typeof row === 'object' && row.contextWindow === undefined) {
+      const m = resolveModelContextMeta(
+        row.modelId || row.model,
+        row.gateway,
+        row.base,
+        resolvedRegistry,
+        accounts,
+        discoveryCat
+      );
+      if (m && m.contextWindow !== undefined) {
+        row.contextWindow = m.contextWindow;
+        if (row.capabilities) {
+          row.capabilities = Object.assign({}, row.capabilities, {
+            contextWindow: m.contextWindow,
+          });
+        } else {
+          row.capabilities = { contextWindow: m.contextWindow };
+        }
+        if (m.maxOutputTokens !== undefined && row.maxOutputTokens === undefined) {
+          row.maxOutputTokens = m.maxOutputTokens;
+        }
+        if (m.contextSource && !row.contextSource) {
+          row.contextSource = m.contextSource;
+        }
+      }
+    }
+  }
   const resolvedFallbackRoutes = [];
   const probeRoute =
     opts.probeRoute ||
@@ -986,9 +1125,10 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
               .map((model) => (typeof model === 'string' ? model : model && model.model))
               .filter(Boolean)
           ),
-          catalogue: ((discoveryCat && discoveryCat.candidates) || [])
-            .map((row) => row && (row.modelId || row.model))
-            .filter(Boolean),
+          catalogue:
+            catalogueRows.length > 0
+              ? catalogueRows
+              : (discoveryCat && discoveryCat.candidates) || [],
           evidenceData: opts.evidenceData,
           fakeRunsDir: opts.fakeRunsDir,
           home: opts.home,

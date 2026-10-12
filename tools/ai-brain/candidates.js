@@ -240,11 +240,32 @@ function generateCandidates(opts) {
           (route && route.accessPath) || source.accessPath || source.endpoint || null;
         if (!harness || !accessPath) continue;
         for (const acc of bound) {
+          const catalogueModelIds = new Set(
+            catalogue
+              .map((e) => (typeof e === 'string' ? e : e && (e.modelId || e.model || e.id)))
+              .filter(Boolean)
+          );
           const models = accountModels(acc).filter(
-            (model) => catalogue.length === 0 || catalogue.includes(model)
+            (model) =>
+              catalogue.length === 0 || catalogue.includes(model) || catalogueModelIds.has(model)
           );
           for (const model of models) {
             const row = accountModelRow(acc, model) || {};
+            let contextWindow = undefined;
+            const catEntry = catalogue.find(
+              (e) => typeof e === 'object' && e && (e.modelId || e.model || e.id) === model
+            );
+            if (catEntry && catEntry.contextWindow !== undefined) {
+              contextWindow = catEntry.contextWindow;
+            } else if (source.modelMeta && source.modelMeta[model]) {
+              contextWindow = source.modelMeta[model].contextWindow;
+            } else if (acc.modelMeta && acc.modelMeta[model]) {
+              contextWindow = acc.modelMeta[model].contextWindow;
+            }
+            const caps = Object.assign({}, acc.capabilities || {});
+            if (contextWindow !== undefined) {
+              caps.contextWindow = contextWindow;
+            }
             candidates.push({
               harness,
               accessPath,
@@ -255,7 +276,8 @@ function generateCandidates(opts) {
               modelId: model,
               source: source.id,
               kind: source.kind,
-              capabilities: acc.capabilities || {},
+              capabilities: caps,
+              contextWindow,
               quality: row.quality,
               cost: acc.cost,
               sharedQuota: 'unknown',
@@ -823,7 +845,8 @@ function poolAccountCandidates(opts) {
             entryModel === 'ag/' + model ||
             entryModel === 'antigravity/' + model ||
             ((entry.upstream === 'ag' || entry.upstream === 'antigravity') &&
-              entryModel.replace(/^(ag|antigravity)\//, '') === model);
+              entryModel.replace(/^(ag|antigravity)\//, '') === model) ||
+            (entry.base && entry.base === model);
           if (matchBackend) {
             if (entry.capabilities && Object.keys(entry.capabilities).length > 0) {
               modelCapabilities = Object.assign({}, entry.capabilities);
@@ -834,6 +857,27 @@ function poolAccountCandidates(opts) {
               contextWindow = entry.capabilities.contextWindow;
             }
             break;
+          }
+        }
+      }
+
+      if (contextWindow === undefined) {
+        const catMeta = catalogue && catalogue.modelMeta;
+        const oMeta = o.modelMeta;
+        const regSources = (o.registry && o.registry.sources) || [];
+        const check = (metaMap) => {
+          if (!metaMap || typeof metaMap !== 'object') return undefined;
+          const m = metaMap[model] || metaMap['ag/' + model] || metaMap['antigravity/' + model];
+          return m && m.contextWindow !== undefined ? m.contextWindow : undefined;
+        };
+        contextWindow = check(catMeta) ?? check(oMeta);
+        if (contextWindow === undefined) {
+          for (const s of regSources) {
+            const cw = check(s && s.modelMeta);
+            if (cw !== undefined) {
+              contextWindow = cw;
+              break;
+            }
           }
         }
       }
@@ -1024,6 +1068,34 @@ function gatewayAccountCandidates(opts) {
       if (!upstream || !modelId.startsWith(upstream + '/')) continue;
       if (!parsePrefix(modelId)) continue;
       const candidateUpstream = upstream;
+      const candidateCapabilities = Object.assign({}, account.capabilities || {});
+      let contextWindow =
+        row.contextWindow !== undefined
+          ? row.contextWindow
+          : row.capabilities && row.capabilities.contextWindow !== undefined
+            ? row.capabilities.contextWindow
+            : undefined;
+      if (contextWindow === undefined && gatewaySource && gatewaySource.modelMeta) {
+        const meta =
+          gatewaySource.modelMeta[modelId] ||
+          gatewaySource.modelMeta[row.model] ||
+          (row.base && gatewaySource.modelMeta[row.base]);
+        if (meta && meta.contextWindow !== undefined) {
+          contextWindow = meta.contextWindow;
+        }
+      }
+      if (contextWindow === undefined && account && account.modelMeta) {
+        const meta =
+          account.modelMeta[modelId] ||
+          account.modelMeta[row.model] ||
+          (row.base && account.modelMeta[row.base]);
+        if (meta && meta.contextWindow !== undefined) {
+          contextWindow = meta.contextWindow;
+        }
+      }
+      if (contextWindow !== undefined) {
+        candidateCapabilities.contextWindow = contextWindow;
+      }
       out.push({
         harness,
         accessPath,
@@ -1035,7 +1107,8 @@ function gatewayAccountCandidates(opts) {
         source: gateway,
         kind: gatewaySource.kind,
         advertised: true,
-        capabilities: account.capabilities || {},
+        capabilities: candidateCapabilities,
+        contextWindow,
         // A gateway catalogue proves a route exists, never that the account may
         // use it. Quality and cost stay undeclared until evidence supplies them,
         // so an advertised model is never scored as if it were measured.

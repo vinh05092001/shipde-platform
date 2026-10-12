@@ -181,6 +181,9 @@ function discoverSources(options = {}) {
     const old = result.get(key);
     if (old) {
       old.models = [...new Set([...old.models, ...(source.models || [])])];
+      if (source.modelMeta) {
+        old.modelMeta = Object.assign({}, old.modelMeta || {}, source.modelMeta);
+      }
       if (!old.credential && source.credential) old.credential = source.credential;
       return;
     }
@@ -190,6 +193,7 @@ function discoverSources(options = {}) {
       kind: source.kind || 'model-source',
       endpoint,
       models: [...new Set(source.models || [])],
+      modelMeta: source.modelMeta ? { ...source.modelMeta } : {},
       credential: source.credential || null,
       status: 'discovered',
       lastProbeAt: null,
@@ -374,6 +378,40 @@ function dropUncredentialedDuplicates(sources) {
   );
 }
 
+function toPositiveInteger(value) {
+  if (value === null || value === undefined || typeof value === 'boolean') return undefined;
+  if (typeof value === 'object') return undefined;
+  if (typeof value === 'string' && !/^\s*\d+\s*$/.test(value)) return undefined;
+  const num = Number(value);
+  if (Number.isInteger(num) && num > 0) return num;
+  return undefined;
+}
+
+function modelMeta(body) {
+  const rows = body && (body.data || body.models || body.items || body);
+  if (!Array.isArray(rows)) return {};
+  const meta = {};
+  for (const row of rows) {
+    const id = typeof row === 'string' ? row : row && (row.id || row.name);
+    if (typeof id !== 'string' || !id) continue;
+    const contextWindow =
+      row && typeof row === 'object'
+        ? (toPositiveInteger(row.context_length) ??
+          toPositiveInteger(row.context_window) ??
+          toPositiveInteger(row.max_context_length))
+        : undefined;
+    const maxOutputTokens =
+      row && typeof row === 'object' ? toPositiveInteger(row.max_completion_tokens) : undefined;
+    const existing = meta[id];
+    meta[id] = {
+      contextWindow: contextWindow !== undefined ? contextWindow : existing?.contextWindow,
+      maxOutputTokens: maxOutputTokens !== undefined ? maxOutputTokens : existing?.maxOutputTokens,
+      contextSource: 'provider-models-endpoint',
+    };
+  }
+  return meta;
+}
+
 function modelIds(body) {
   const rows = body && (body.data || body.models || body.items || body);
   return Array.isArray(rows)
@@ -419,6 +457,7 @@ async function probeSource(source, options = {}) {
     return {
       ...record,
       models: [...new Set([...record.models, ...modelIds(body)])],
+      modelMeta: Object.assign({}, record.modelMeta || {}, modelMeta(body)),
       status: 'available',
       reason: null,
       nextCheckAt: null,
@@ -458,6 +497,7 @@ async function discover(options = {}) {
     return {
       ...entry,
       models: [...new Set([...(old.models || []), ...(entry.models || [])])],
+      modelMeta: Object.assign({}, old.modelMeta || {}, entry.modelMeta || {}),
       // A fresh discovery invalidates old availability until a new probe.
       status: 'discovered',
       lastProbeAt: null,
@@ -480,4 +520,12 @@ async function discover(options = {}) {
   return { version: 1, updatedAt: now.toISOString(), sources: probed };
 }
 
-module.exports = { discoverSources, probeSource, discover, modelIds, sanitizeEndpoint };
+module.exports = {
+  discoverSources,
+  probeSource,
+  discover,
+  modelIds,
+  modelMeta,
+  modelMetadata: modelMeta,
+  sanitizeEndpoint,
+};

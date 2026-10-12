@@ -75,13 +75,18 @@ function loadSources(options) {
   try {
     const discovered = readJson(discoveredFile);
     for (const entry of discovered.sources || []) {
-      if (
-        !entry ||
-        !entry.id ||
-        !entry.endpoint ||
-        sources.some((source) => source.id === entry.id)
-      )
+      if (!entry || !entry.id) continue;
+      const existing = sources.find((source) => source.id === entry.id);
+      if (existing) {
+        if (entry.modelMeta && typeof entry.modelMeta === 'object') {
+          existing.modelMeta = Object.assign({}, existing.modelMeta || {}, entry.modelMeta);
+        }
+        if (Array.isArray(entry.models)) {
+          existing.models = [...new Set([...(existing.models || []), ...entry.models])];
+        }
         continue;
+      }
+      if (!entry.endpoint) continue;
       const credential =
         entry.credential && entry.credential.type === 'env' ? entry.credential : null;
       if (!credential || !credential.name) continue;
@@ -98,6 +103,8 @@ function loadSources(options) {
         accessPath: 'direct',
         endpoint: entry.endpoint,
         credential: { type: 'api-key', env: credential.name },
+        models: Array.isArray(entry.models) ? entry.models : [],
+        modelMeta: entry.modelMeta && typeof entry.modelMeta === 'object' ? entry.modelMeta : {},
         discovered: true,
         discoveryStatus: entry.status || 'discovered',
         reason: entry.reason || null,
@@ -115,6 +122,9 @@ function loadSources(options) {
       // model-source is exactly the error this file exists to stop, and it
       // would be invisible until the scheduler over-planned against it.
       throw new Error('sources.json: ' + source.id + ' has unknown kind "' + source.kind + '"');
+    }
+    if (!source.modelMeta || typeof source.modelMeta !== 'object') {
+      source.modelMeta = {};
     }
   }
   return { version: doc.version || 0, sources, retired, dispatch: doc.dispatch || {}, file };

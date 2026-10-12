@@ -545,7 +545,9 @@ async function realRead9routerModels(deps) {
     }
     const data = res.parsed.data;
     if (!Array.isArray(data)) return { ok: false, error: 'models listing had no data array' };
-    return { ok: true, models: extractModelIds(data) };
+    const { modelMeta } = require('./source-discovery');
+    const meta = modelMeta(res.parsed);
+    return { ok: true, models: extractModelIds(data), modelMeta: meta };
   } catch (err) {
     return { ok: false, error: String((err && err.message) || err) };
   }
@@ -600,6 +602,7 @@ async function buildCatalogue(deps) {
   const warnings = [];
   const sourceStatus = {};
   const models = new Set();
+  const metaByModelId = {};
   for (const collector of collectors) {
     let result;
     try {
@@ -610,6 +613,9 @@ async function buildCatalogue(deps) {
     if (result && result.ok) {
       sourceStatus[collector.name] = 'ok';
       for (const model of result.models || []) if (model) models.add(model);
+      if (result.modelMeta && typeof result.modelMeta === 'object') {
+        Object.assign(metaByModelId, result.modelMeta);
+      }
     } else {
       sourceStatus[collector.name] = 'failed';
       warnings.push({ source: collector.name, error: (result && result.error) || 'unavailable' });
@@ -635,12 +641,15 @@ async function buildCatalogue(deps) {
       source.credential && source.credential.type === 'env' && source.credential.name;
     if (source.status !== 'available' || !routableCredential || !Array.isArray(source.models))
       continue;
+    if (source.modelMeta && typeof source.modelMeta === 'object') {
+      Object.assign(metaByModelId, source.modelMeta);
+    }
     for (const model of source.models) if (model) models.add(String(model));
   }
-  return normalizeCatalogue([...models], warnings, sourceStatus);
+  return normalizeCatalogue([...models], warnings, sourceStatus, metaByModelId);
 }
 
-function normalizeCatalogue(models, warnings, sourceStatus) {
+function normalizeCatalogue(models, warnings, sourceStatus, modelMeta) {
   const list = [...new Set(models.filter((model) => model))].sort();
   if (list.length === 0) {
     throw intakeError(
@@ -648,7 +657,24 @@ function normalizeCatalogue(models, warnings, sourceStatus) {
       'CATALOGUE_UNAVAILABLE: no live model listing source produced any model'
     );
   }
-  return { models: list, warnings: warnings || [], sourceStatus: sourceStatus || {} };
+  const meta = modelMeta && typeof modelMeta === 'object' ? modelMeta : {};
+  const candidates = list.map((id) => {
+    const m = meta[id] || {};
+    return {
+      modelId: id,
+      contextWindow: m.contextWindow,
+      maxOutputTokens: m.maxOutputTokens,
+      contextSource: m.contextSource,
+      capabilities: m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {},
+    };
+  });
+  return {
+    models: list,
+    candidates,
+    modelMeta: meta,
+    warnings: warnings || [],
+    sourceStatus: sourceStatus || {},
+  };
 }
 
 function mergeDiscoveredSources(accounts, discoveredSources) {
@@ -668,6 +694,7 @@ function mergeDiscoveredSources(accounts, discoveredSources) {
             (source.credential.name || source.credential.path + ':' + source.credential.field)) ||
           null,
         models: Array.isArray(source.models) ? source.models : [],
+        modelMeta: source.modelMeta && typeof source.modelMeta === 'object' ? source.modelMeta : {},
         status: source.status || 'discovered',
         enabled: Boolean(available && routableCredential),
         reason: !available
@@ -693,7 +720,12 @@ async function resolveCatalogue(deps) {
   const injected = await deps.buildCatalogue(deps);
   if (Array.isArray(injected)) return normalizeCatalogue(injected, [], {});
   const value = injected || {};
-  return normalizeCatalogue(value.models || [], value.warnings, value.sourceStatus);
+  return normalizeCatalogue(
+    value.models || [],
+    value.warnings,
+    value.sourceStatus,
+    value.modelMeta
+  );
 }
 
 // ---------------------------------------------------------------------------
