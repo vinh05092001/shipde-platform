@@ -534,16 +534,12 @@ function poolAccountCandidates(opts) {
   const needsAliasValidation = (o.catalogue || []).some(
     (model) => typeof model === 'string' && /^(?:ag|antigravity)\//.test(model)
   );
-  const needsModelValidation =
-    o.discoverPool !== false && Array.isArray(o.models) && o.models.length > 0;
   const discoveredPoolModels = new Set(
-    !needsAliasValidation && !needsModelValidation
-      ? []
-      : pool.discoverPoolModels(
-          o.discoverPool === false
-            ? { ...o, discoverPool: true, models: undefined, cacheFile: null }
-            : o
-        )
+    o.discoverPool === false
+      ? needsAliasValidation
+        ? pool.discoverPoolModels({ ...o, discoverPool: true, models: undefined, cacheFile: null })
+        : []
+      : pool.discoverPoolModels(o)
   );
   if (o.discoverPool === false) {
     if (Array.isArray(o.models) && o.models.length > 0) {
