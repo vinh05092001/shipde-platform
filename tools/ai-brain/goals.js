@@ -48,7 +48,29 @@ function resolveGoalsDir(rootDir, options) {
   return path.join(rootDir, 'data', 'goals');
 }
 
+const VALID_GOAL_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
+
+function isValidGoalId(goalId) {
+  if (typeof goalId !== 'string') return false;
+  if (!VALID_GOAL_ID_PATTERN.test(goalId)) return false;
+  if (goalId.includes('..') || goalId.includes('/') || goalId.includes('\\')) return false;
+  return true;
+}
+
+function invalidGoalIdRefusal(goalId) {
+  return {
+    error: 'INVALID_GOAL_ID',
+    message: `Invalid goalId: "${goalId}". Goal ID must contain only alphanumeric characters, underscores, and hyphens [A-Za-z0-9_-], and cannot contain path separators or "..".`,
+    refusal: true,
+  };
+}
+
 function resolveGoalDir(goalsDir, goalId) {
+  if (!isValidGoalId(goalId)) {
+    throw new Error(
+      `Invalid goalId: "${goalId}". Goal ID must contain only [A-Za-z0-9_-] and cannot contain path separators or "..".`
+    );
+  }
   return path.join(goalsDir, String(goalId));
 }
 
@@ -171,8 +193,10 @@ function startGoal(options, deps) {
   }
 
   let goalId = opts.id || opts.goalId;
-  if (typeof goalId === 'string' && goalId.trim()) {
-    goalId = goalId.trim();
+  if (goalId !== undefined && goalId !== null) {
+    if (typeof goalId !== 'string' || !isValidGoalId(goalId)) {
+      return invalidGoalIdRefusal(goalId);
+    }
   } else {
     // Generate clean unique goal ID
     const hash = crypto
@@ -218,6 +242,9 @@ function amendGoal(goalId, options, deps) {
       message: 'Goal amend requires <goalId>',
       refusal: true,
     };
+  }
+  if (!isValidGoalId(goalId)) {
+    return invalidGoalIdRefusal(goalId);
   }
 
   const rawText = opts.text !== undefined ? opts.text : opts._text;
@@ -332,23 +359,34 @@ function extractObjectiveFromLines(lines, headingTitle) {
  * Generate Work Item markdown document following WORK-ITEM-TEMPLATE.md
  */
 function generateWorkItemDoc(spec, goalId, goalText) {
-  const criteriaRows = (spec.acceptanceCriteria || []).map((crit, idx) => {
-    return `| AC-${idx + 1} | ${crit} | PASS | Verified by automated check |`;
-  });
-  if (criteriaRows.length === 0) {
-    criteriaRows.push('| AC-1 | Verification command passes | PASS | Clean test run |');
+  if (!spec.acceptanceCriteria || spec.acceptanceCriteria.length === 0) {
+    throw new Error(
+      `Work item spec ${spec.id} is missing acceptance criteria; never default values.`
+    );
+  }
+  if (!spec.sourceRefs || spec.sourceRefs.length === 0) {
+    throw new Error(
+      `Work item spec ${spec.id} is missing source references; never default values.`
+    );
+  }
+  if (!spec.allowedPaths || spec.allowedPaths.length === 0) {
+    throw new Error(`Work item spec ${spec.id} is missing allowed paths; never default values.`);
+  }
+  if (!spec.verification || !spec.verification.command) {
+    throw new Error(
+      `Work item spec ${spec.id} is missing verification command; never default values.`
+    );
   }
 
-  const sourcesList =
-    spec.sourceRefs && spec.sourceRefs.length > 0
-      ? spec.sourceRefs.map((s) => `- \`${s}\``).join('\n')
-      : `- \`docs/product-spec/docs/01-product/MASTER-FEATURE-CATALOG.md\``;
+  const criteriaRows = spec.acceptanceCriteria.map((crit, idx) => {
+    return `| AC-${idx + 1} | ${crit} | Passes automated verification | Automated check passes |`;
+  });
 
-  const allowedPathsList =
-    (spec.allowedPaths || []).map((p) => '`' + p + '`').join(', ') || '`tools/ai-brain/*`';
+  const sourcesList = spec.sourceRefs.map((s) => `- \`${s}\``).join('\n');
+  const allowedPathsList = spec.allowedPaths.map((p) => '`' + p + '`').join(', ');
   const depList =
     spec.dependencies && spec.dependencies.length > 0 ? spec.dependencies.join(', ') : 'None';
-  const verifyCmd = (spec.verification && spec.verification.command) || 'npm test';
+  const verifyCmd = spec.verification.command;
 
   return [
     `# ${spec.id} — ${spec.title || 'Goal task'}`,
@@ -513,6 +551,9 @@ function planGoal(goalId, options, deps) {
       refusal: true,
     };
   }
+  if (!isValidGoalId(goalId)) {
+    return invalidGoalIdRefusal(goalId);
+  }
 
   const goalFile = resolveGoalFile(goalsDir, goalId);
   const goal = readJsonSafe(goalFile);
@@ -621,6 +662,20 @@ function planGoal(goalId, options, deps) {
     }
   }
 
+  // If initial task validation failed: status BLOCKED immediately
+  if (questions.length > 0) {
+    goal.status = 'BLOCKED';
+    goal.questions = questions;
+    goal.updatedAt = (d.now ? new Date(d.now()) : new Date()).toISOString();
+    writeJsonAtomic(goalFile, goal);
+    return {
+      status: 'BLOCKED',
+      goalId,
+      questions,
+      refusal: true,
+    };
+  }
+
   // Run planner cycle check and convert to work item specs
   let specs = [];
   const idPrefix = `GOAL-${goalId.toUpperCase()}`;
@@ -630,12 +685,50 @@ function planGoal(goalId, options, deps) {
         idPrefix,
         role: opts.role || 'author.foundation',
       });
-      // Attach extracted sources and objectives to specs
+      // Copy validated files/criteria/commands onto the spec
       for (const s of specs) {
         const matchingTask = parsedPlan.tasks.find((t) => s.id === `${idPrefix}-${t.number}`);
         if (matchingTask) {
-          s.sourceRefs = matchingTask.sourceRefs || [];
+          s.sourceRefs = (matchingTask.sourceRefs || []).slice();
           s.businessOutcome = matchingTask.objective || matchingTask.title;
+          s.allowedPaths = (matchingTask.files || []).slice();
+          if (!Array.isArray(s.files)) {
+            s.files = (matchingTask.files || []).slice();
+          }
+          s.criteria = (matchingTask.criteria || []).slice();
+          s.acceptanceCriteria = (matchingTask.criteria || []).slice();
+          if (matchingTask.tests && matchingTask.tests.length > 0) {
+            for (const test of matchingTask.tests) {
+              const tc = 'Test passes: ' + test;
+              if (!s.acceptanceCriteria.includes(tc)) s.acceptanceCriteria.push(tc);
+            }
+          }
+          s.commands = (matchingTask.commands || []).slice();
+          if (matchingTask.commands && matchingTask.commands.length > 0) {
+            s.verification = { command: matchingTask.commands[0] };
+          }
+        }
+
+        // Fail-closed checks on spec fields (never default values)
+        if (!s.sourceRefs || s.sourceRefs.length === 0) {
+          questions.push(
+            `Task ${s.id} is missing source references. Which approved source specifies this task?`
+          );
+        }
+        if (!s.allowedPaths || s.allowedPaths.length === 0) {
+          questions.push(
+            `Task ${s.id} has no allowed paths or files. Which files are owned or modified by this task?`
+          );
+        }
+        if (!s.acceptanceCriteria || s.acceptanceCriteria.length === 0) {
+          questions.push(
+            `Task ${s.id} declares no acceptance criteria. What are the acceptance criteria for this task?`
+          );
+        }
+        if (!s.verification || !s.verification.command) {
+          questions.push(
+            `Task ${s.id} declares no test or verification command. What command proves this task?`
+          );
         }
       }
     } catch (err) {
@@ -764,6 +857,9 @@ function runGoal(goalId, options, deps) {
       message: 'Goal run requires <goalId>',
       refusal: true,
     };
+  }
+  if (!isValidGoalId(goalId)) {
+    return invalidGoalIdRefusal(goalId);
   }
 
   const goalFile = resolveGoalFile(goalsDir, goalId);
@@ -894,7 +990,7 @@ function runGoal(goalId, options, deps) {
 /**
  * Helper to inspect item status from register, checkpoints, and decision records
  */
-function inspectItemStatus(itemId, goalId, rootDir, goalsDir, d) {
+function inspectItemStatus(itemId, goalId, rootDir, goalsDir, d, options) {
   let state = 'BACKLOG';
   let candidateKey = null;
   let branch = null;
@@ -904,7 +1000,12 @@ function inspectItemStatus(itemId, goalId, rootDir, goalsDir, d) {
   let lastDecisionId = null;
 
   // 1. Check register row
-  const regPath = path.join(rootDir, REGISTER_REL);
+  const regPath =
+    options && options.registerPath
+      ? path.resolve(rootDir, options.registerPath)
+      : d && d.registerPath
+        ? path.resolve(rootDir, d.registerPath)
+        : path.join(rootDir, REGISTER_REL);
   const rows = readRegisterCsvRows(regPath);
   const row = rows.find((r) => r[3] === itemId);
   if (row) {
@@ -913,6 +1014,24 @@ function inspectItemStatus(itemId, goalId, rootDir, goalsDir, d) {
     reviewVerdict = row[12] || reviewVerdict;
     commitSha = row[13] || commitSha;
   }
+
+  // 1b. Check goal-scoped register row
+  try {
+    const goalRegPath = resolveGoalRegisterFile(goalsDir, goalId);
+    if (fs.existsSync(goalRegPath)) {
+      const goalRows = readRegisterCsvRows(goalRegPath);
+      const grow = goalRows.find((r) => r[3] === itemId);
+      if (grow) {
+        const isDone = (s) => s === 'MERGED' || s === 'PASSED' || s === 'COMPLETED';
+        if (isDone(grow[7]) || !isDone(state)) {
+          state = grow[7] || state;
+        }
+        if (grow[10]) branch = grow[10] || branch;
+        if (grow[12]) reviewVerdict = grow[12] || reviewVerdict;
+        if (grow[13]) commitSha = grow[13] || commitSha;
+      }
+    }
+  } catch {}
 
   // 2. Check decision records
   const decisionDir = (d && d.decisionDir) || decisions.DEFAULT_DIR;
@@ -940,16 +1059,18 @@ function inspectItemStatus(itemId, goalId, rootDir, goalsDir, d) {
   } catch {}
 
   // 3. Check checkpoints under intake or goal dir
-  const goalDir = resolveGoalDir(goalsDir, goalId);
-  const ckptPath = path.join(goalDir, 'checkpoint.json');
-  const ckpt = readJsonSafe(ckptPath);
-  if (ckpt && ckpt.items && ckpt.items[itemId]) {
-    const it = ckpt.items[itemId];
-    testResult = it.testResult || testResult;
-    reviewVerdict = it.reviewVerdict || reviewVerdict;
-    commitSha = it.commitSha || commitSha;
-    if (it.state) state = it.state;
-  }
+  try {
+    const goalDir = resolveGoalDir(goalsDir, goalId);
+    const ckptPath = path.join(goalDir, 'checkpoint.json');
+    const ckpt = readJsonSafe(ckptPath);
+    if (ckpt && ckpt.items && ckpt.items[itemId]) {
+      const it = ckpt.items[itemId];
+      testResult = it.testResult || testResult;
+      reviewVerdict = it.reviewVerdict || reviewVerdict;
+      commitSha = it.commitSha || commitSha;
+      if (it.state) state = it.state;
+    }
+  } catch {}
 
   return {
     workItemId: itemId,
@@ -980,6 +1101,9 @@ function statusGoal(goalId, options, deps) {
       refusal: true,
     };
   }
+  if (!isValidGoalId(goalId)) {
+    return invalidGoalIdRefusal(goalId);
+  }
 
   const goalFile = resolveGoalFile(goalsDir, goalId);
   const goal = readJsonSafe(goalFile);
@@ -1004,7 +1128,7 @@ function statusGoal(goalId, options, deps) {
   }
 
   const items = (goal.items || []).map((itemId) =>
-    inspectItemStatus(itemId, goalId, rootDir, goalsDir, d)
+    inspectItemStatus(itemId, goalId, rootDir, goalsDir, d, opts)
   );
 
   return {
@@ -1032,6 +1156,9 @@ function stopGoal(goalId, options, deps) {
       message: 'Goal stop requires <goalId>',
       refusal: true,
     };
+  }
+  if (!isValidGoalId(goalId)) {
+    return invalidGoalIdRefusal(goalId);
   }
 
   const goalFile = resolveGoalFile(goalsDir, goalId);
@@ -1083,6 +1210,17 @@ function stopGoal(goalId, options, deps) {
   };
 }
 
+function isItemDone(info) {
+  if (!info) return false;
+  return (
+    info.state === 'PASSED' ||
+    info.state === 'MERGED' ||
+    info.state === 'COMPLETED' ||
+    info.reviewVerdict === 'PASS' ||
+    info.reviewVerdict === 'FALLBACK_PASS'
+  );
+}
+
 /**
  * goal resume <goalId>
  * Uses existing checkpoints; resume skips items already PASSED/MERGED.
@@ -1099,6 +1237,9 @@ function resumeGoal(goalId, options, deps) {
       message: 'Goal resume requires <goalId>',
       refusal: true,
     };
+  }
+  if (!isValidGoalId(goalId)) {
+    return invalidGoalIdRefusal(goalId);
   }
 
   const goalFile = resolveGoalFile(goalsDir, goalId);
@@ -1139,20 +1280,58 @@ function resumeGoal(goalId, options, deps) {
   const items = goal.items || [];
   const skipped = [];
   const remaining = [];
+  const itemStatusMap = new Map();
 
   for (const itemId of items) {
-    const info = inspectItemStatus(itemId, goalId, rootDir, goalsDir, d);
-    if (
-      info.state === 'MERGED' ||
-      info.state === 'COMPLETED' ||
-      info.reviewVerdict === 'PASS' ||
-      info.reviewVerdict === 'FALLBACK_PASS'
-    ) {
+    const info = inspectItemStatus(itemId, goalId, rootDir, goalsDir, d, opts);
+    itemStatusMap.set(itemId, info);
+    if (isItemDone(info)) {
       skipped.push(itemId);
     } else {
       remaining.push(itemId);
     }
   }
+
+  // Update goal register so PASSED/MERGED/COMPLETED items are not runnable
+  const goalRegisterPath = resolveGoalRegisterFile(goalsDir, goalId);
+  let goalRows = [];
+  if (fs.existsSync(goalRegisterPath)) {
+    goalRows = readRegisterCsvRows(goalRegisterPath);
+  } else {
+    const mainRegPath = opts.registerPath
+      ? path.resolve(rootDir, opts.registerPath)
+      : path.join(rootDir, REGISTER_REL);
+    const mainRows = readRegisterCsvRows(mainRegPath);
+    const goalItemSet = new Set(items);
+    goalRows = mainRows.filter((r) => goalItemSet.has(r[3]));
+  }
+
+  for (const row of goalRows) {
+    const itemId = row[3];
+    if (skipped.includes(itemId)) {
+      const info = itemStatusMap.get(itemId) || {};
+      const doneStatus =
+        info.state === 'PASSED'
+          ? 'PASSED'
+          : info.state === 'COMPLETED'
+            ? 'COMPLETED'
+            : info.state === 'MERGED'
+              ? 'MERGED'
+              : info.reviewVerdict === 'PASS' || info.reviewVerdict === 'FALLBACK_PASS'
+                ? 'PASSED'
+                : 'MERGED';
+      row[7] = doneStatus;
+      if (info.reviewVerdict) row[12] = info.reviewVerdict;
+      if (info.commitSha) row[13] = info.commitSha;
+    }
+  }
+
+  fs.mkdirSync(path.dirname(goalRegisterPath), { recursive: true });
+  let updatedCsv = serializeCsvRow(REGISTER_COLUMNS) + '\n';
+  for (const row of goalRows) {
+    updatedCsv += serializeCsvRow(row) + '\n';
+  }
+  fs.writeFileSync(goalRegisterPath, updatedCsv, 'utf8');
 
   if (remaining.length === 0) {
     goal.status = 'COMPLETED';
@@ -1169,6 +1348,31 @@ function resumeGoal(goalId, options, deps) {
 
   // Launch runner for remaining items
   const runResult = runGoal(goalId, options, deps);
+
+  if (runResult && (runResult.error || runResult.refusal || runResult.status === 'BLOCKED')) {
+    return {
+      status: 'RESUME_FAILED',
+      goalId,
+      error: runResult.error || 'RESUME_FAILED',
+      message: runResult.message || 'Failed to resume goal runner',
+      refusal: true,
+      skipped,
+      remaining,
+      runResult,
+    };
+  }
+
+  if (runResult && runResult.status === 'ALREADY_RUNNING') {
+    return {
+      status: 'ALREADY_RUNNING',
+      goalId,
+      pid: runResult.pid,
+      running: true,
+      message: runResult.message,
+      skipped,
+      remaining,
+    };
+  }
 
   return {
     status: 'RESUMED',
@@ -1258,4 +1462,6 @@ module.exports = {
   resolveLockFile,
   resolveStopFile,
   isPidAlive,
+  generateWorkItemDoc,
+  isValidGoalId,
 };
