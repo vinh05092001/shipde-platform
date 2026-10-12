@@ -1144,7 +1144,9 @@ function rankForProfile(candidates, profile, assessment, ctx) {
     if (c.blocked) {
       rejected.push({
         candidateKey: key,
-        reasonCode: 'CANDIDATE_BLOCKED',
+        reasonCode: String(c.blockReason || '').startsWith('QUOTA_EXHAUSTED')
+          ? 'QUOTA_EXHAUSTED'
+          : 'CANDIDATE_BLOCKED',
         reason: String(c.blockReason || 'upstream/candidate blocked'),
         scope: c.blockScope || 'candidate',
         upstream: c.upstream,
