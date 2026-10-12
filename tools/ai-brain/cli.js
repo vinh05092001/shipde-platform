@@ -4047,9 +4047,15 @@ function main(argv = process.argv.slice(2), deps = {}) {
     return;
   }
 
+  // goal (TASK-AI-142 Part H1): Goal store and Controller contract
+  if (command === 'goal') {
+    const { runGoalCli } = require('./goals');
+    return runGoalCli(args, deps);
+  }
+
   console.error('Lệnh không rõ: ' + command);
   console.error(
-    'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | discovery | account | probe | qualify | serena | sources | evidence | review | orchestrate | intake | plan | next | merge | priors refresh'
+    'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | discovery | account | probe | qualify | serena | sources | evidence | review | orchestrate | intake | plan | next | merge | goal | priors refresh'
   );
   process.exit(2);
 }
@@ -4145,6 +4151,7 @@ module.exports = {
     }
     return require('./next-runner').nextCommand(args, nextDeps);
   },
+  goalCommand: (args, deps) => require('./goals').runGoalCli(args, deps),
   _buildQualificationCandidates: buildQualificationCandidates,
   _resolveFallbackRoutes: resolveFallbackRoutes,
 };
