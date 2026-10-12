@@ -164,6 +164,8 @@ function discoverSources(options = {}) {
   const add = (source) => {
     const endpoint = source.endpoint ? sanitizeEndpoint(source.endpoint) : null;
     if (source.endpoint && !endpoint) return;
+    // Repository and web links found in session metadata are not model APIs.
+    if (endpoint && NON_API_ENDPOINT.test(endpoint)) return;
     // Endpoint identity matters when one provider id exposes multiple URLs.
     const baseId = idOf(source.id);
     const collision = [...result.values()].some(
@@ -297,8 +299,11 @@ function discoverSources(options = {}) {
       }
       for (const child of children) {
         const target = path.join(dir, child.name);
-        if (child.isDirectory()) visit(target, depth + 1);
-        else if (/\.json$/i.test(child.name))
+        if (child.isDirectory()) {
+          // Session history, agent scratch and caches hold copies of URLs, not
+          // configured providers.
+          if (!NON_CONFIG_DIR.test(child.name)) visit(target, depth + 1);
+        } else if (/\.json$/i.test(child.name))
           scanConfig(target, entry + '-' + path.relative(base, target));
       }
     };
@@ -344,7 +349,29 @@ function discoverSources(options = {}) {
       });
   }
   discoverNineRouterDb(options, add);
-  return [...result.values()];
+  return dropUncredentialedDuplicates([...result.values()]);
+}
+
+const NON_API_ENDPOINT =
+  /^https?:\/\/(?:[^/]*\.)?(?:github\.com|gitlab\.com|bitbucket\.org)(?:[/:]|$)|\.git$/i;
+const NON_CONFIG_DIR =
+  /^(?:sessions|tasks|brain|scratch|conversations|history|cache|caches|logs?|checkpoints|workspaceStorage|globalStorage|node_modules|tmp|temp)$/i;
+
+// A copy of an endpoint found in a file carries no usable credential. When the
+// same endpoint is already known with an env credential, the copy only adds a
+// guaranteed 401, so it is dropped.
+function dropUncredentialedDuplicates(sources) {
+  const credentialed = new Set(
+    sources
+      .filter((source) => source.endpoint && source.credential && source.credential.type === 'env')
+      .map((source) => source.endpoint.replace(/\/+$/, '').toLowerCase())
+  );
+  return sources.filter(
+    (source) =>
+      !source.endpoint ||
+      (source.credential && source.credential.type === 'env') ||
+      !credentialed.has(source.endpoint.replace(/\/+$/, '').toLowerCase())
+  );
 }
 
 function modelIds(body) {
