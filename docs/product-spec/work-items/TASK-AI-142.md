@@ -49,8 +49,8 @@ The operator chats directly with Hermes. Hermes understands goals, plans, and re
   - Decision logging via `decisions.recordDecision`.
   - Providers config file generated under `data/hermes/` containing only `base_url` and env var NAME (no secrets).
   - Session persistence in `data/hermes/session.json` (`sessionId`, `candidateKey`, `goalIds`).
-  - Hermes argv construction: `-m <modelId> --provider <provider-name> --resume <sessionId>` plus skill `-s`.
-  - Relaunch loop with same `--resume <sessionId>` on route/quota/model failure; local failure does not cool down model.
+  - Hermes argv construction: `-m <modelId> --provider <provider-name> --continue <sessionId> --create-if-missing` plus skill `-s`.
+  - Relaunch loop with same `--continue <sessionId>` on route/quota/model failure; local failure does not cool down model.
   - Skill file `tools/ai-brain/skills/shipde-controller/SKILL.md` forbidding self-model-picking, subagent spawning, and claiming completion without evidence.
   - CLI `chat` and `goal session` commands in `tools/ai-brain/cli.js`.
   - Operator script `scripts/ai/hermes-chat.ps1`.
@@ -73,9 +73,9 @@ The following points were verified against the real Hermes v0.21.4 binary during
 2. **Environment variable for provider credentials:**
    - Hermes v0.21.4 supports `key_env` naming the environment variable holding the key (never `api_key`).
 3. **Interactive command:**
-   - Interactive chat command: `hermes chat [-m MODEL] [--provider P] [--resume SESSION_ID] [-s SKILLS]`. The `chat` subcommand is standard.
+   - Interactive chat command: `hermes chat [-m MODEL] [--provider P] [--continue SESSION_NAME --create-if-missing] [-s SKILLS]`. The `chat` subcommand is standard.
 4. **Session resumption semantics:**
-   - Sessions persist under `$HERMES_HOME/sessions`. Passing `--resume <sessionId>` connects to the persistent session state.
+   - Sessions persist under `$HERMES_HOME/sessions`. Passing `--continue <sessionId> --create-if-missing` connects to or creates the persistent named session.
 
 ## Acceptance matrix
 
@@ -83,9 +83,9 @@ The following points were verified against the real Hermes v0.21.4 binary during
 |---|---|---|---|
 | `AC-AI-142-H2-01` | Candidate selection for reasoning | 7-part key with `harness=hermes`, ranked by quality/priors, decision recorded | `tools/ai-brain/test/task-ai-142-hermes-session.test.js` |
 | `AC-AI-142-H2-02` | Provider config generation | Written under `data/hermes/`, contains base_url and key env var NAME, zero secrets | `tools/ai-brain/test/task-ai-142-hermes-session.test.js` |
-| `AC-AI-142-H2-03` | Hermes argv construction | Emits `-m <modelId> --provider <provider-name> --resume <sessionId>` and `-s` | `tools/ai-brain/test/task-ai-142-hermes-session.test.js` |
+| `AC-AI-142-H2-03` | Hermes argv construction | Emits `-m <modelId> --provider <provider-name> --continue <sessionId> --create-if-missing` and `-s` | `tools/ai-brain/test/task-ai-142-hermes-session.test.js` |
 | `AC-AI-142-H2-04` | Session persistence | Stored in `data/hermes/session.json` with `{sessionId, candidateKey, goalIds}` | `tools/ai-brain/test/task-ai-142-hermes-session.test.js` |
-| `AC-AI-142-H2-05` | Route/model failure recovery | Reselects candidate and relaunches with same `--resume <sessionId>` | `tools/ai-brain/test/task-ai-142-hermes-session.test.js` |
+| `AC-AI-142-H2-05` | Route/model failure recovery | Reselects candidate and relaunches with same `--continue <sessionId>` | `tools/ai-brain/test/task-ai-142-hermes-session.test.js` |
 | `AC-AI-142-H2-06` | Local failure handling | Local environment failure does not cool down or exclude the model | `tools/ai-brain/test/task-ai-142-hermes-session.test.js` |
 | `AC-AI-142-H2-07` | CLI entries | `chat` and `goal session` commands work and output JSON | `tools/ai-brain/test/task-ai-142-hermes-session.test.js` |
 | `AC-AI-142-H2-08` | Skill & script integration | Skill forbids unauthorized behaviors; powershell entry point forwards to CLI | `tools/ai-brain/test/task-ai-142-hermes-session.test.js` |
@@ -233,3 +233,7 @@ On main d479a48d, `goal session` refused all 591 Hermes candidates; 575 with CON
 ## Part H3 candidate wiring: OpenAI-compatible sources & context window (2026-10-13)
 
 Every available OpenAI-compatible source with an endpoint and an env credential (9router via NINEROUTER_API_KEY, TokenHarbor, Cohere, B.AI, llmtr, etc.) yields Hermes candidates carrying their own `sourceId`, `endpoint`, and `contextWindow` from that source's `modelMeta`. Context window resolution is bound to the producing source object rather than gateway name guessing, keeping unverified sources as `CONTEXT_WINDOW_UNVERIFIED` and ensuring a model in source A never receives context from source B.
+
+## Part H3 named Hermes session (2026-10-13)
+
+Live evidence on the real Hermes v0.21.4 binary verified that invoking `hermes chat --resume <id>` with a Controller-minted ID fails with "session not found" on first launch. Replacing `--resume <sessionId>` with `--continue <sessionId> --create-if-missing` in `buildHermesArgv` allows Hermes to create the named session on first use (using the Controller-minted sessionId as the session title) and continue that exact session across subsequent turns and failover relaunches while preserving history.
