@@ -318,6 +318,7 @@ function selectReasoningCandidate(options, deps) {
     const cliApi = d.cli || require('./cli');
     const assembleFn = d.assembleForDispatch || cliApi.assembleForDispatch;
     poolCandidates = assembleFn(discovery, accounts, registry, {
+      harness: 'hermes',
       evidenceData,
       requireRouteHealth: true,
       routeHealth: d.routeHealth,
@@ -334,7 +335,7 @@ function selectReasoningCandidate(options, deps) {
       const preRewriteKey = candidate.candidateKey || candidateKey(candidate);
       candidate.harness = 'hermes';
 
-      const rawContext =
+      let rawContext =
         candidate.contextWindow !== undefined
           ? candidate.contextWindow
           : candidate.context_window !== undefined
@@ -347,11 +348,28 @@ function selectReasoningCandidate(options, deps) {
                   ? candidate.capabilities.contextTokens
                   : undefined;
 
+      if (rawContext === undefined) {
+        const meta = candidatesMod.resolveCandidateContextMeta
+          ? candidatesMod.resolveCandidateContextMeta(candidate, registry)
+          : null;
+        if (meta && meta.contextWindow !== undefined) {
+          rawContext = meta.contextWindow;
+          if (meta.maxOutputTokens !== undefined && candidate.maxOutputTokens === undefined) {
+            candidate.maxOutputTokens = meta.maxOutputTokens;
+          }
+          if (meta.contextSource && !candidate.contextSource) {
+            candidate.contextSource = meta.contextSource;
+          }
+        }
+      }
+
       candidate.contextWindow = rawContext;
       if (candidate.capabilities) {
         candidate.capabilities = Object.assign({}, candidate.capabilities, {
           contextWindow: rawContext,
         });
+      } else if (rawContext !== undefined) {
+        candidate.capabilities = { contextWindow: rawContext };
       }
 
       if (
@@ -360,18 +378,28 @@ function selectReasoningCandidate(options, deps) {
         candidate.accessPath.startsWith('cli-') ||
         candidate.accessPath === '*'
       ) {
-        let src =
-          (registry &&
-            registry.sources &&
-            registry.sources.find(
-              (s) => s.id === candidate.gateway || s.id === candidate.upstream
-            )) ||
-          null;
+        let src = null;
+        const srcId = candidate.sourceId || candidate.source;
+        if (srcId && registry && registry.sources) {
+          src = registry.sources.find((s) => s.id === srcId);
+        }
+        if (!src && candidate.sourceEndpoint && registry && registry.sources) {
+          src = registry.sources.find((s) => s.endpoint === candidate.sourceEndpoint);
+        }
+        if (!src && registry && registry.sources) {
+          src = registry.sources.find(
+            (s) => s.id === candidate.gateway || s.id === candidate.upstream
+          );
+        }
         if (src && !src.endpoint && !src.accessPath && src.reachedVia) {
           const gw = registry.sources.find((s) => s.id === src.reachedVia);
           if (gw) src = gw;
         }
-        candidate.accessPath = (src && (src.accessPath || src.endpoint)) || null;
+        candidate.accessPath =
+          (src && (src.accessPath || src.endpoint)) ||
+          candidate.sourceEndpoint ||
+          candidate.endpoint ||
+          null;
       }
 
       candidate.candidateKey = candidateKey(candidate);

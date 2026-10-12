@@ -229,3 +229,7 @@ Decision log entries link `goalId -> workItemId -> candidateKey -> session -> co
 ## Part H3 live finding: context window (2026-10-13)
 
 On main d479a48d, `goal session` refused all 591 Hermes candidates; 575 with CONTEXT_WINDOW_UNVERIFIED. Provider /models endpoints report `context_length` (the local 9router for all 918 models) but discovery kept only ids. Fix: keep the provider-reported context window per model and use it only for candidates routed through that same source; anything else stays unverified.
+
+## Part H3 candidate wiring: OpenAI-compatible sources & context window (2026-10-13)
+
+Every available OpenAI-compatible source with an endpoint and an env credential (9router via NINEROUTER_API_KEY, TokenHarbor, Cohere, B.AI, llmtr, etc.) yields Hermes candidates carrying their own `sourceId`, `endpoint`, and `contextWindow` from that source's `modelMeta`. Context window resolution is bound to the producing source object rather than gateway name guessing, keeping unverified sources as `CONTEXT_WINDOW_UNVERIFIED` and ensuring a model in source A never receives context from source B.
