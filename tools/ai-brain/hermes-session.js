@@ -714,7 +714,7 @@ function writeProvidersConfig(candidate, options, deps) {
 
 /**
  * Builds the Hermes command arguments:
- * 'chat -m <modelId> --provider <provider-name> --resume <sessionId>' plus skill file.
+ * 'chat -m <modelId> --provider <provider-name> --continue <sessionId> --create-if-missing' plus skill file.
  */
 function buildHermesArgv(candidate, session, options) {
   const opts = options || {};
@@ -739,7 +739,7 @@ function buildHermesArgv(candidate, session, options) {
 
   args.push('-m', String(modelId));
   args.push('--provider', String(providerName));
-  args.push('--resume', String(sessionId));
+  args.push('--continue', String(sessionId), '--create-if-missing');
 
   if (opts.skill !== false) {
     args.push('-s', skillPath);

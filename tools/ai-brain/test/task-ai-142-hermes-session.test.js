@@ -245,7 +245,7 @@ test('H2-04: writeProvidersConfig writes data/hermes/config.yaml with base_url a
   }
 });
 
-test('H2-05: buildHermesArgv builds correct Hermes CLI arguments including chat, -m, --provider, --resume, and -s', async () => {
+test('H2-05: buildHermesArgv builds correct Hermes CLI arguments including chat, -m, --provider, --continue, --create-if-missing, and -s', async () => {
   const root = fixtureRoot('hermes-argv-');
   try {
     const candidate = sampleCandidate({
@@ -257,17 +257,18 @@ test('H2-05: buildHermesArgv builds correct Hermes CLI arguments including chat,
     const argv = buildHermesArgv(candidate, session, { rootDir: root });
 
     assert.equal(argv[0], 'chat', 'chat subcommand must be included by default');
-    assert.deepEqual(argv.slice(1, 7), [
+    assert.deepEqual(argv.slice(1, 8), [
       '-m',
       'kr/gemini-2.5-pro',
       '--provider',
       '9router',
-      '--resume',
+      '--continue',
       'hermes_session_test_123',
+      '--create-if-missing',
     ]);
 
-    assert.equal(argv[7], '-s');
-    assert.ok(argv[8].endsWith('SKILL.md'));
+    assert.equal(argv[8], '-s');
+    assert.ok(argv[9].endsWith('SKILL.md'));
 
     const argvNoChat = buildHermesArgv(candidate, session, {
       rootDir: root,
@@ -350,7 +351,8 @@ test('H2-07: launchHermesSession executes fake spawn and returns completed statu
     assert.ok(spawnCalledWith, 'spawn was called');
     assert.equal(spawnCalledWith.cmd, 'hermes');
     assert.ok(spawnCalledWith.args.includes('-m'));
-    assert.ok(spawnCalledWith.args.includes('--resume'));
+    assert.ok(spawnCalledWith.args.includes('--continue'));
+    assert.ok(spawnCalledWith.args.includes('--create-if-missing'));
     assert.equal(spawnCalledWith.options.cwd, root);
 
     // Verify session was persisted
@@ -416,9 +418,13 @@ test('H2-08: route/quota failure triggers reselection and relaunches with the sa
     assert.ok(calls[1].args.includes('rq/gpt-4o'));
 
     // Both attempts used the EXACT SAME sessionId
-    const resumeIndex0 = calls[0].args.indexOf('--resume');
-    const resumeIndex1 = calls[1].args.indexOf('--resume');
-    assert.equal(calls[0].args[resumeIndex0 + 1], calls[1].args[resumeIndex1 + 1]);
+    const continueIndex0 = calls[0].args.indexOf('--continue');
+    const continueIndex1 = calls[1].args.indexOf('--continue');
+    assert.notEqual(continueIndex0, -1);
+    assert.notEqual(continueIndex1, -1);
+    assert.equal(calls[0].args[continueIndex0 + 1], calls[1].args[continueIndex1 + 1]);
+    assert.ok(calls[0].args.includes('--create-if-missing'));
+    assert.ok(calls[1].args.includes('--create-if-missing'));
 
     // Session file now points to the reselected candidate
     const session = loadSession({ rootDir: root });
@@ -536,7 +542,8 @@ test('H2-11: chat CLI command with --dry-run prints launch plan without spawning
 
     assert.equal(res.exitCode, 0);
     assert.equal(res.result.status, 'dry_run');
-    assert.ok(res.result.argv.includes('--resume'));
+    assert.ok(res.result.argv.includes('--continue'));
+    assert.ok(res.result.argv.includes('--create-if-missing'));
     assert.ok(res.result.argv.includes('kr/gemini-2.5-pro'));
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -1614,6 +1621,82 @@ test('H2-36: chatCommand always outputs JSON status to stdout even without --jso
     } finally {
       console.log = origLog;
     }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('H3-01: Hermes chat passes --continue <id> --create-if-missing on first launch and on relaunch', async () => {
+  const root = fixtureRoot('hermes-continue-named-');
+  try {
+    const c1 = sampleCandidate({
+      gateway: '9router',
+      upstream: 'kr',
+      modelId: 'kr/gemini-2.5-pro',
+      quality: 95,
+    });
+    const c2 = sampleCandidate({
+      gateway: 'rqsty',
+      upstream: 'rq',
+      modelId: 'rq/gpt-4o',
+      quality: 85,
+    });
+
+    const calls = [];
+    const fakeSpawn = async (cmd, args, options) => {
+      calls.push({ cmd, args, options });
+      if (calls.length === 1) {
+        return {
+          exitCode: 1,
+          status: 1,
+          stderr: 'HTTP 429 Too Many Requests: upstream_rate_limit for model kr/gemini-2.5-pro',
+          httpStatus: 429,
+        };
+      }
+      return { exitCode: 0, status: 0, stdout: 'Session continued', stderr: '' };
+    };
+
+    const res = await launchHermesSession(
+      {
+        rootDir: root,
+        skipDecisionLog: true,
+      },
+      {
+        candidates: [c1, c2],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+        spawn: fakeSpawn,
+      }
+    );
+
+    assert.equal(res.status, 'completed');
+    assert.equal(calls.length, 2, 'Relaunched after failure');
+
+    // First launch (call 0)
+    const cIdx0 = calls[0].args.indexOf('--continue');
+    assert.notEqual(cIdx0, -1, 'First launch must include --continue');
+    const sessionId0 = calls[0].args[cIdx0 + 1];
+    assert.ok(sessionId0, 'Session ID must follow --continue');
+    assert.equal(
+      calls[0].args[cIdx0 + 2],
+      '--create-if-missing',
+      'First launch must include --create-if-missing immediately after session ID'
+    );
+
+    // Relaunch (call 1)
+    const cIdx1 = calls[1].args.indexOf('--continue');
+    assert.notEqual(cIdx1, -1, 'Relaunch must include --continue');
+    const sessionId1 = calls[1].args[cIdx1 + 1];
+    assert.equal(
+      sessionId1,
+      sessionId0,
+      'Relaunch must use the exact same session ID to preserve history'
+    );
+    assert.equal(
+      calls[1].args[cIdx1 + 2],
+      '--create-if-missing',
+      'Relaunch must include --create-if-missing'
+    );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
