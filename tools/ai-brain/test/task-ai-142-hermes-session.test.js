@@ -1302,8 +1302,9 @@ test('H2-27: cli.js reports GOAL_MODULE_UNAVAILABLE on H1 load/sync failures wit
     );
     assert.ok(!lastErr.error.includes('UNKNOWN_GOAL_SUBCOMMAND'));
 
-    // 2. Direct require of nonexistent goals module also reports GOAL_MODULE_UNAVAILABLE
-    main(['goal', 'start', '--text', 'test']);
+    // 2. An injected goals module that failed to load also reports GOAL_MODULE_UNAVAILABLE
+    // (goals.js now exists on main, so the failure is injected instead of required).
+    main(['goal', 'start', '--text', 'test'], { goals: new Error('goals.js failed to load') });
     assert.ok(errOutput.length > 1);
     const directRequireErr = JSON.parse(errOutput[errOutput.length - 1]);
     assert.equal(directRequireErr.status, 'error');

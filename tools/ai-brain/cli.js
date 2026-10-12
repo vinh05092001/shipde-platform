@@ -4115,6 +4115,28 @@ function main(argv = process.argv.slice(2), deps = {}) {
       process.exitCode = 1;
       return;
     }
+    // H1 runGoalCli prints its own JSON document and returns the exit code; it
+    // is terminal, so its number must become the process exit code untouched.
+    if (
+      goals &&
+      typeof goals.goalCommand !== 'function' &&
+      typeof goals.runGoalCli === 'function'
+    ) {
+      try {
+        const code = goals.runGoalCli(args, deps);
+        if (typeof code === 'number') process.exitCode = code;
+        return code;
+      } catch (cmdErr) {
+        console.error(
+          JSON.stringify({
+            status: 'error',
+            error: cmdErr && cmdErr.message ? cmdErr.message : String(cmdErr),
+          })
+        );
+        process.exitCode = 1;
+        return;
+      }
+    }
     if (goals && typeof goals.goalCommand === 'function') {
       try {
         const result = goals.goalCommand(args, deps);
@@ -4160,7 +4182,7 @@ function main(argv = process.argv.slice(2), deps = {}) {
 
   console.error('Lệnh không rõ: ' + command);
   console.error(
-    'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | discovery | account | probe | qualify | serena | sources | evidence | review | orchestrate | intake | plan | next | merge | priors refresh | chat | goal session'
+    'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | discovery | account | probe | qualify | serena | sources | evidence | review | orchestrate | intake | plan | next | merge | goal | priors refresh | chat | goal session'
   );
   process.exit(2);
 }
@@ -4256,6 +4278,7 @@ module.exports = {
     }
     return require('./next-runner').nextCommand(args, nextDeps);
   },
+  goalCommand: (args, deps) => require('./goals').runGoalCli(args, deps),
   _buildQualificationCandidates: buildQualificationCandidates,
   _resolveFallbackRoutes: resolveFallbackRoutes,
   chatCommand: (args, deps) => require('./hermes-session').chatCommand(args, deps),
