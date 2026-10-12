@@ -4115,9 +4115,31 @@ function main(argv = process.argv.slice(2), deps = {}) {
       process.exitCode = 1;
       return;
     }
-    if (goals && typeof (goals.goalCommand || goals.runGoalCli) === 'function') {
+    // H1 runGoalCli prints its own JSON document and returns the exit code; it
+    // is terminal, so its number must become the process exit code untouched.
+    if (
+      goals &&
+      typeof goals.goalCommand !== 'function' &&
+      typeof goals.runGoalCli === 'function'
+    ) {
       try {
-        const result = (goals.goalCommand || goals.runGoalCli)(args, deps);
+        const code = goals.runGoalCli(args, deps);
+        if (typeof code === 'number') process.exitCode = code;
+        return code;
+      } catch (cmdErr) {
+        console.error(
+          JSON.stringify({
+            status: 'error',
+            error: cmdErr && cmdErr.message ? cmdErr.message : String(cmdErr),
+          })
+        );
+        process.exitCode = 1;
+        return;
+      }
+    }
+    if (goals && typeof goals.goalCommand === 'function') {
+      try {
+        const result = goals.goalCommand(args, deps);
         if (result && typeof result.then === 'function') {
           result.then(
             (res) => {

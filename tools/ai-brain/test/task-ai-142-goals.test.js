@@ -963,3 +963,14 @@ describe('TASK-AI-142 Part H1 — Goal store and Controller contract', () => {
     assert.ok(validDoc.includes('node --test custom.test.js'));
   });
 });
+
+test('H1-CLI: the cli.js goal dispatcher keeps runGoalCli stdout and exit code (refusal exits non-zero)', () => {
+  const { spawnSync } = require('node:child_process');
+  const cli = path.resolve(__dirname, '..', 'cli.js');
+  const res = spawnSync(process.execPath, [cli, 'goal', 'status', 'no-such-goal-h1cli'], {
+    encoding: 'utf8',
+  });
+  assert.equal(res.status, 1);
+  const doc = JSON.parse(res.stdout);
+  assert.equal(doc.error, 'GOAL_NOT_FOUND');
+});
