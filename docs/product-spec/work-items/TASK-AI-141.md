@@ -78,6 +78,10 @@ Verification: focused Part C tests cover the isolation requirement, flag placeme
 - Product Work Item execution as qualification, automatic merge, or reading/copying Codex credentials.
 - Live account probing or changes to agy-pool quota policy.
 
+## Supervisor-directed repair note (2026-10-11)
+
+Qualification evidence showed reviewer selection repeatedly launching invalid candidate IDs. The agy-pool path accepts an `ag/` catalogue backend only when that exact model ID is independently advertised by `agy models`; unmatched entries receive `AGY_MODEL_ID_UNMAPPED`, and explicit gateway aliases passed as agy IDs receive `ALIAS_MISMATCH`. OpenCode CLI IDs must start with its configured 9Router `modelPrefix`; invalid or unprefixed IDs receive `ALIAS_MISMATCH`. Launch status regressions verify HTTP 402/429/401/403 produce classified quota, rate-limit or auth/entitlement causes with known upstream or account scopes, so parking can exclude the affected route. Exact mappings between differently named backend offerings and agy model IDs are not inferred; they must be advertised by agy.
+
 ## Business Rules and Edge Cases
 
 - Only model IDs accepted by the existing agy-pool family policy are candidates.

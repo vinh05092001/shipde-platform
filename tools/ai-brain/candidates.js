@@ -274,8 +274,16 @@ function generateCandidates(opts) {
       if (source.reachedVia) {
         // OpenCode reaches 9Router models via ninerouter/ prefix.
         // Its own namespace is in openCodeIds.
+        const mp =
+          source.modelPrefix || registry.dispatch?.providers?.[source.id]?.modelPrefix || '';
         for (const ocId of openCodeIds) {
           const parsed = parsePrefix(ocId);
+          if (!mp || !String(ocId).startsWith(mp) || !parsed) {
+            if (Array.isArray(o.candidateGenerationRejections)) {
+              o.candidateGenerationRejections.push({ modelId: ocId, reasonCode: 'ALIAS_MISMATCH' });
+            }
+            continue;
+          }
           if (sharedArc) {
             candidates.push({
               harness,
@@ -313,15 +321,14 @@ function generateCandidates(opts) {
         }
         // Also the ninerouter/ models from the HTTP catalogue, accessible
         // through OpenCode's ninerouter/ prefix.
-        const mp =
-          source.modelPrefix || registry.dispatch?.providers?.[source.id]?.modelPrefix || '';
         if (mp) {
           for (const item of catalogue) {
             const fullId =
               typeof item === 'string'
                 ? item
                 : (item && (item.modelId || item.model || item.id)) || '';
-            const prefixed = mp + fullId;
+            const prefix = mp.endsWith('/') ? mp : mp + '/';
+            const prefixed = fullId.startsWith(prefix) ? fullId : prefix + fullId;
             if (sharedArc) {
               candidates.push({
                 harness,
@@ -464,7 +471,14 @@ function generateCandidates(opts) {
 
 function isPoolEnabled(options) {
   const o = options || {};
-  if (o.discoverPool === false && (!Array.isArray(o.models) || o.models.length === 0)) {
+  const hasAliasedCatalogueModel = Array.isArray(o.catalogue)
+    ? o.catalogue.some((model) => typeof model === 'string' && /^(?:ag|antigravity)\//.test(model))
+    : false;
+  if (
+    o.discoverPool === false &&
+    (!Array.isArray(o.models) || o.models.length === 0) &&
+    !hasAliasedCatalogueModel
+  ) {
     return false;
   }
   if (o.enablePool === true || o.poolEnabled === true || o.pool === true) return true;
@@ -517,12 +531,30 @@ function poolAccountCandidates(opts) {
 
   // 1. Discover models (AC-R01)
   const poolModels = new Set();
+  const needsAliasValidation = (o.catalogue || []).some(
+    (model) => typeof model === 'string' && /^(?:ag|antigravity)\//.test(model)
+  );
+  const discoveredPoolModels = new Set(
+    o.discoverPool === false
+      ? needsAliasValidation
+        ? pool.discoverPoolModels({ ...o, discoverPool: true, models: undefined, cacheFile: null })
+        : []
+      : pool.discoverPoolModels(o)
+  );
   if (o.discoverPool === false) {
     if (Array.isArray(o.models) && o.models.length > 0) {
       for (const m of o.models) {
         if (!m) continue;
-        const model = String(m).replace(/^(?:ag|antigravity)\//, '');
-        if (model && familyOf(model)) poolModels.add(model);
+        const model = String(m);
+        if (/^(?:ag|antigravity)\/$/.test(model)) {
+          if (Array.isArray(o.candidateGenerationRejections)) {
+            o.candidateGenerationRejections.push({ modelId: '', reasonCode: 'EMPTY_MODEL_ID' });
+          }
+        } else if (/^(?:ag|antigravity)\//.test(model)) {
+          if (Array.isArray(o.candidateGenerationRejections)) {
+            o.candidateGenerationRejections.push({ modelId: model, reasonCode: 'ALIAS_MISMATCH' });
+          }
+        } else if (model && familyOf(model)) poolModels.add(model);
         else if (Array.isArray(o.candidateGenerationRejections)) {
           o.candidateGenerationRejections.push({
             modelId: model,
@@ -533,9 +565,27 @@ function poolAccountCandidates(opts) {
     }
   } else {
     if (Array.isArray(o.models) && o.models.length > 0) {
-      for (const m of o.models) if (m) poolModels.add(String(m));
+      for (const m of o.models) {
+        if (!m) continue;
+        const model = String(m);
+        if (/^(?:ag|antigravity)\/$/.test(model)) {
+          if (Array.isArray(o.candidateGenerationRejections)) {
+            o.candidateGenerationRejections.push({ modelId: '', reasonCode: 'EMPTY_MODEL_ID' });
+          }
+        } else if (/^(?:ag|antigravity)\//.test(model)) {
+          if (Array.isArray(o.candidateGenerationRejections)) {
+            o.candidateGenerationRejections.push({ modelId: model, reasonCode: 'ALIAS_MISMATCH' });
+          }
+        } else if (familyOf(model) && discoveredPoolModels.has(model)) poolModels.add(model);
+        else if (Array.isArray(o.candidateGenerationRejections)) {
+          o.candidateGenerationRejections.push({
+            modelId: model,
+            reasonCode: model && familyOf(model) ? 'AGY_MODEL_ID_UNMAPPED' : 'UNKNOWN_MODEL_FAMILY',
+          });
+        }
+      }
     } else {
-      for (const m of pool.discoverPoolModels(o)) {
+      for (const m of discoveredPoolModels) {
         if (m) poolModels.add(m);
       }
     }
@@ -557,8 +607,17 @@ function poolAccountCandidates(opts) {
       // Unprefixed models are pool candidates only when intake enabled the lane.
       if (typeof c === 'string') {
         const model = c.replace(/^(?:ag|antigravity)\//, '');
-        if (model && familyOf(model) && (model !== c || explicitlyEnabled)) poolModels.add(model);
-        else if (!familyOf(model) && Array.isArray(o.candidateGenerationRejections)) {
+        if (model && familyOf(model) && /^(?:ag|antigravity)\//.test(c)) {
+          // Gateway aliases identify backend models; they are not agy CLI model ids.
+          // Accept only when agy discovery independently advertises the same id.
+          if (discoveredPoolModels.has(model)) poolModels.add(model);
+          else if (Array.isArray(o.candidateGenerationRejections)) {
+            o.candidateGenerationRejections.push({
+              modelId: model,
+              reasonCode: 'AGY_MODEL_ID_UNMAPPED',
+            });
+          }
+        } else if (!familyOf(model) && Array.isArray(o.candidateGenerationRejections)) {
           o.candidateGenerationRejections.push({
             modelId: model,
             reasonCode: model ? 'UNKNOWN_MODEL_FAMILY' : 'EMPTY_MODEL_ID',
@@ -601,7 +660,16 @@ function poolAccountCandidates(opts) {
       }
     }
 
-    for (const modelId of pool.modelIdsFromRuntime(o)) poolModels.add(modelId);
+    for (const modelId of pool.modelIdsFromRuntime(o)) {
+      const runtimeModelId = String(modelId);
+      if (familyOf(runtimeModelId)) poolModels.add(runtimeModelId);
+      else if (Array.isArray(o.candidateGenerationRejections)) {
+        o.candidateGenerationRejections.push({
+          modelId: runtimeModelId,
+          reasonCode: 'ALIAS_MISMATCH',
+        });
+      }
+    }
   }
 
   if (poolModels.size === 0) return [];

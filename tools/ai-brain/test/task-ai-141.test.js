@@ -33,6 +33,123 @@ const {
 } = require('../orchestrate');
 const { DEFAULT_TOKEN_BUDGETS } = require('../intake');
 const routing = require('../routing');
+const { classifyFailure, Cause, Scope } = require('../failure-classifier');
+
+test('agy pool ignores 9router aliases unless the exact model is advertised by agy', () => {
+  const rejections = [];
+  const candidates = generateCandidates({
+    registry: sources.loadSources(),
+    catalogue: ['ag/gemini-3.7-flash'],
+    accounts: [{ id: 'agy01', provider: 'agy-pool' }],
+    externalWorkers: 'agy-pool',
+    discoverPool: true,
+    fakeRunsDir: path.join(process.cwd(), '.upstream-tmp', 'missing-ai141-pool'),
+    platform: 'win32',
+    spawnSync: (_bin, args) =>
+      args[0] === 'models'
+        ? { status: 0, stdout: 'gemini-3.8-flash-high\n', stderr: '' }
+        : { status: 0, stdout: '', stderr: '' },
+    cacheFile: null,
+    candidateGenerationRejections: rejections,
+  });
+  assert.equal(
+    candidates.some(
+      (candidate) => candidate.source === 'agy-pool' && candidate.modelId === 'ag/gemini-3.7-flash'
+    ),
+    false
+  );
+  assert.ok(rejections.some((item) => item.reasonCode === 'AGY_MODEL_ID_UNMAPPED'));
+});
+
+test('agy pool rejects unmapped prefixed catalogue aliases before model normalization', () => {
+  const run = (advertisedModels) => {
+    const rejections = [];
+    const candidates = generateCandidates({
+      registry: sources.loadSources(),
+      catalogue: ['ag/gemini-3.7-flash', 'antigravity/gemini-3.8-flash-high'],
+      accounts: [{ id: 'agy01', provider: 'agy-pool' }],
+      externalWorkers: 'agy-pool',
+      discoverPool: true,
+      fakeRunsDir: path.join(process.cwd(), '.upstream-tmp', 'missing-ai141-alias-pool'),
+      platform: 'win32',
+      spawnSync: (_bin, args) =>
+        args[0] === 'models'
+          ? { status: 0, stdout: advertisedModels.join('\n') + '\n', stderr: '' }
+          : { status: 0, stdout: '', stderr: '' },
+      cacheFile: null,
+      candidateGenerationRejections: rejections,
+    });
+    return { candidates, rejections };
+  };
+
+  const unmatched = run(['gemini-3.8-flash-high']);
+  assert.equal(
+    unmatched.candidates.some((candidate) => candidate.modelId === 'gemini-3.7-flash'),
+    false
+  );
+  assert.ok(
+    unmatched.rejections.some(
+      (item) => item.modelId === 'gemini-3.7-flash' && item.reasonCode === 'AGY_MODEL_ID_UNMAPPED'
+    )
+  );
+});
+
+test('agy pool accepts an advertised unprefixed model supplied with discoverPool enabled', () => {
+  const rejections = [];
+  const candidates = generateCandidates({
+    registry: sources.loadSources(),
+    catalogue: [],
+    accounts: [{ id: 'agy01', provider: 'agy-pool' }],
+    externalWorkers: 'agy-pool',
+    discoverPool: true,
+    models: ['gemini-3.7-flash'],
+    spawnSync: (_bin, args) =>
+      args[0] === 'models'
+        ? { status: 0, stdout: 'gemini-3.7-flash\n', stderr: '' }
+        : { status: 0, stdout: '', stderr: '' },
+    cacheFile: null,
+    candidateGenerationRejections: rejections,
+  });
+
+  assert.ok(candidates.some((candidate) => candidate.modelId === 'gemini-3.7-flash'));
+  assert.deepEqual(rejections, []);
+});
+
+test('agy pool runtime models admit only IDs valid for the agy harness', () => {
+  const rejections = [];
+  const candidates = generateCandidates({
+    registry: sources.loadSources(),
+    catalogue: [],
+    accounts: [{ id: 'agy01', provider: 'agy-pool' }],
+    externalWorkers: 'agy-pool',
+    discoverPool: false,
+    models: ['gemini-3.7-flash'],
+    fakeRunsDir: path.join(process.cwd(), '.upstream-tmp', 'missing-ai141-runtime-alias-pool'),
+    platform: 'win32',
+    candidateGenerationRejections: rejections,
+  });
+
+  assert.ok(candidates.some((candidate) => candidate.modelId === 'gemini-3.7-flash'));
+  assert.equal(
+    candidates.some((candidate) => candidate.modelId === 'ag/not-a-known-family'),
+    false
+  );
+  assert.deepEqual(rejections, []);
+});
+
+test('launch HTTP failures classify to parkable account causes and scopes', () => {
+  const cases = [
+    [402, Cause.UPSTREAM_CREDIT_EXHAUSTED, Scope.UPSTREAM],
+    [429, Cause.UPSTREAM_RATE_LIMIT, Scope.UPSTREAM],
+    [401, Cause.ACCOUNT_AUTH_FAILED, Scope.ACCOUNT],
+    [403, Cause.UPSTREAM_ENTITLEMENT, Scope.UPSTREAM],
+  ];
+  for (const [httpStatus, cause, scope] of cases) {
+    const result = classifyFailure({ httpStatus, accountId: 'kimchi', body: `HTTP ${httpStatus}` });
+    assert.equal(result.cause, cause);
+    assert.equal(result.scope, scope);
+  }
+});
 
 test('qualify --auto CLI intake helpers are exported', () => {
   const root = fixtureRoot();
@@ -499,6 +616,7 @@ test('intake catalogue and real account registry plus pool discovery produce can
   assert.match(result.command, /--external-workers agy-pool/);
 
   const runsDir = path.join(root, 'pool-runs');
+  require('../agy-pool-runtime').resetPoolDiscoveryCache();
   for (let i = 1; i <= 7; i++) {
     const accountDir = path.join(runsDir, 'agy' + String(i).padStart(2, '0'));
     fs.mkdirSync(accountDir, { recursive: true });
@@ -512,7 +630,7 @@ test('intake catalogue and real account registry plus pool discovery produce can
     externalWorkers: 'agy-pool',
     fakeRunsDir: runsDir,
     platform: 'win32',
-    spawnSync: () => ({ status: 0, stdout: '', stderr: '' }),
+    spawnSync: () => ({ status: 0, stdout: backendModel + '\n', stderr: '' }),
     cacheFile: null,
   });
   const poolCandidates = candidates.filter(
@@ -527,7 +645,7 @@ test('intake catalogue and real account registry plus pool discovery produce can
     externalWorkers: 'agy-pool',
     fakeRunsDir: runsDir,
     platform: 'win32',
-    spawnSync: () => ({ status: 0, stdout: '', stderr: '' }),
+    spawnSync: () => ({ status: 0, stdout: backendModel + '\n', stderr: '' }),
     cacheFile: null,
     candidateGenerationRejections: unknownRejections,
   });
@@ -583,7 +701,7 @@ test('candidate generation rejects unknown aliased models with a named reason', 
   });
   assert.equal(candidates.filter((candidate) => candidate.source === 'agy-pool').length, 0);
   assert.deepEqual(rejections, [
-    { modelId: 'not-a-known-family', reasonCode: 'UNKNOWN_MODEL_FAMILY' },
+    { modelId: 'ag/not-a-known-family', reasonCode: 'ALIAS_MISMATCH' },
     { modelId: '', reasonCode: 'EMPTY_MODEL_ID' },
   ]);
 });
@@ -666,7 +784,7 @@ test('intake pool writer inherits backend WORK_ITEM_PASS from blocked 9router ag
     externalWorkers: 'agy-pool',
     fakeRunsDir: runsDir,
     platform: 'win32',
-    spawnSync: () => ({ status: 0, stdout: '', stderr: '' }),
+    spawnSync: () => ({ status: 0, stdout: backendModel + '\n', stderr: '' }),
     cacheFile: null,
     evidenceData: proofData,
   });
