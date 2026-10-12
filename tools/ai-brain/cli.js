@@ -4093,9 +4093,30 @@ function main(argv = process.argv.slice(2), deps = {}) {
       }
       return;
     }
+    let goals;
     try {
-      const goals = require('./goals');
-      if (typeof goals.goalCommand === 'function') {
+      if (deps && deps.loadGoals) {
+        goals = deps.loadGoals();
+      } else if (deps && deps.goals !== undefined) {
+        goals = deps.goals;
+        if (goals instanceof Error) throw goals;
+      } else {
+        goals = require('./goals');
+      }
+    } catch (loadErr) {
+      console.error(
+        JSON.stringify({
+          status: 'error',
+          error:
+            'GOAL_MODULE_UNAVAILABLE: ' +
+            (loadErr && loadErr.message ? loadErr.message : String(loadErr)),
+        })
+      );
+      process.exitCode = 1;
+      return;
+    }
+    if (goals && typeof goals.goalCommand === 'function') {
+      try {
         const result = goals.goalCommand(args, deps);
         if (result && typeof result.then === 'function') {
           result.then(
@@ -4116,8 +4137,17 @@ function main(argv = process.argv.slice(2), deps = {}) {
           );
         }
         return;
+      } catch (cmdErr) {
+        console.error(
+          JSON.stringify({
+            status: 'error',
+            error: cmdErr && cmdErr.message ? cmdErr.message : String(cmdErr),
+          })
+        );
+        process.exitCode = 1;
+        return;
       }
-    } catch (_) {}
+    }
     console.error(
       JSON.stringify({
         status: 'error',

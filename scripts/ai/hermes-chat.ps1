@@ -14,5 +14,6 @@ if (-not (Test-Path -LiteralPath $cliPath)) {
     throw "Ship De Brain CLI not found at '$cliPath'"
 }
 
+Set-Location -LiteralPath $repoRoot
 & node $cliPath chat @RemainingArgs
 exit $LASTEXITCODE

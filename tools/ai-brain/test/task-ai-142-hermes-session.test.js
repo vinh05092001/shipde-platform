@@ -1048,3 +1048,328 @@ test('H2-22: explorationBudget defaults to 0 ensuring deterministic ranking', as
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('H2-23: default non-injected launch path attempts real spawnSync of hermes and chatCommand returns Hermes exit code', async () => {
+  const root = fixtureRoot('hermes-default-spawn-');
+  try {
+    const candidate = sampleCandidate();
+
+    // 1. Calling launchHermesSession without deps.spawn attempts real spawn
+    // When hermes binary is absent or invalid, it throws LOCAL_LAUNCH_FAILURE (never returns { status: 'ready' })
+    await assert.rejects(
+      async () => {
+        await launchHermesSession(
+          { rootDir: root, skipDecisionLog: true },
+          {
+            candidates: [candidate],
+            registry: sampleRegistry(),
+            priorsData: { ranking: [] },
+          }
+        );
+      },
+      (err) => {
+        assert.ok(
+          err.code === 'LOCAL_LAUNCH_FAILURE',
+          'Must attempt real spawn and fail with LOCAL_LAUNCH_FAILURE when hermes not found'
+        );
+        return true;
+      }
+    );
+
+    // 2. chatCommand returns Hermes exit code directly
+    const mockSpawn = async () => ({
+      exitCode: 42,
+      status: 42,
+      stderr: 'non-quota exit',
+    });
+    const chatRes = await chatCommand(
+      { rootDir: root, skipDecisionLog: true },
+      {
+        candidates: [candidate],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+        spawn: mockSpawn,
+      }
+    );
+    assert.equal(chatRes.exitCode, 42, 'chatCommand must return Hermes exit code 42');
+    assert.equal(chatRes.result.status, 'exited');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('H2-24: unclassified and user-exit failures stop immediately with exit code and do not rotate candidates', async () => {
+  const root = fixtureRoot('hermes-unclassified-exit-');
+  try {
+    const c1 = sampleCandidate({ modelId: 'kr/gemini-2.5-pro' });
+    const c2 = sampleCandidate({ modelId: 'rq/gpt-4o' });
+
+    let spawnCalls = 0;
+    const fakeSpawnSigint = async () => {
+      spawnCalls += 1;
+      return { exitCode: 130, status: 130, stderr: '' };
+    };
+
+    // User exit (SIGINT 130) stops with exitCode 130 without rotating models
+    const resSigint = await launchHermesSession(
+      { rootDir: root, skipDecisionLog: true },
+      {
+        candidates: [c1, c2],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+        spawn: fakeSpawnSigint,
+      }
+    );
+
+    assert.equal(resSigint.status, 'exited');
+    assert.equal(resSigint.exitCode, 130);
+    assert.equal(spawnCalls, 1, 'Must NOT retry or rotate candidates on user exit');
+
+    // Unclassified exit (e.g. 42 with unknown stderr) also stops without rotating models
+    let spawnCalls42 = 0;
+    const fakeSpawn42 = async () => {
+      spawnCalls42 += 1;
+      return { exitCode: 42, status: 42, stderr: 'unclassified internal error' };
+    };
+
+    const res42 = await launchHermesSession(
+      { rootDir: root, skipDecisionLog: true },
+      {
+        candidates: [c1, c2],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+        spawn: fakeSpawn42,
+      }
+    );
+
+    assert.equal(res42.status, 'exited');
+    assert.equal(res42.exitCode, 42);
+    assert.equal(spawnCalls42, 1, 'Must NOT retry or rotate candidates on unclassified failure');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('H2-25: explicit --session keeps stored candidateKey and goalIds', async () => {
+  const root = fixtureRoot('hermes-session-keep-');
+  try {
+    const candidate = sampleCandidate();
+    const sessionId = 'hermes-keep-stored-100';
+
+    // Seed session in data/hermes/session.json
+    saveSession(
+      {
+        sessionId,
+        candidateKey: candidate.candidateKey,
+        goalIds: ['GOAL-1', 'GOAL-2'],
+      },
+      { rootDir: root }
+    );
+
+    // Call launchHermesSession with explicit --session matching stored session
+    const res = await launchHermesSession(
+      {
+        rootDir: root,
+        session: sessionId,
+        dryRun: true,
+      },
+      {
+        candidates: [candidate],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+      }
+    );
+
+    assert.equal(res.sessionId, sessionId);
+    assert.equal(
+      res.candidateKey,
+      candidate.candidateKey,
+      'Stored candidateKey must NOT be dropped'
+    );
+
+    // Verify stored session maintains goalIds
+    const loaded = loadSession({ rootDir: root });
+    assert.deepEqual(loaded.goalIds, ['GOAL-1', 'GOAL-2'], 'Stored goalIds must NOT be dropped');
+
+    // Adding goal updates goalIds while preserving candidateKey
+    const resWithGoal = await launchHermesSession(
+      {
+        rootDir: root,
+        session: sessionId,
+        goal: 'GOAL-3',
+        dryRun: true,
+      },
+      {
+        candidates: [candidate],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+      }
+    );
+    assert.equal(resWithGoal.candidateKey, candidate.candidateKey);
+    const loadedAfterGoal = loadSession({ rootDir: root });
+    assert.deepEqual(loadedAfterGoal.goalIds, ['GOAL-1', 'GOAL-2', 'GOAL-3']);
+
+    // goalSessionCommand also preserves candidateKey and goalIds with explicit session
+    const origLog = console.log;
+    console.log = () => {};
+    let goalRes;
+    try {
+      goalRes = await goalSessionCommand(
+        {
+          rootDir: root,
+          session: sessionId,
+          goal: 'GOAL-4',
+        },
+        {
+          candidates: [candidate],
+          registry: sampleRegistry(),
+          priorsData: { ranking: [] },
+        }
+      );
+    } finally {
+      console.log = origLog;
+    }
+    assert.equal(goalRes.exitCode, 0);
+    assert.deepEqual(goalRes.result.goalIds, ['GOAL-1', 'GOAL-2', 'GOAL-3', 'GOAL-4']);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('H2-26: decision log defaults to tools/ai-brain/data/decisions, never ~/.shipde', async () => {
+  const root = fixtureRoot('hermes-decision-dir-');
+  try {
+    const candidate = sampleCandidate();
+
+    // selectReasoningCandidate without decisionDir or skipDecisionLog writes under root
+    const sel = selectReasoningCandidate(
+      { rootDir: root },
+      {
+        candidates: [candidate],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+      }
+    );
+
+    assert.ok(sel.chosen);
+    const expectedDir = path.join(root, 'tools', 'ai-brain', 'data', 'decisions');
+    assert.ok(fs.existsSync(expectedDir), 'Decision dir under rootDir must be created');
+    const files = fs.readdirSync(expectedDir);
+    assert.ok(
+      files.length > 0,
+      'Decision file must be written under rootDir/tools/ai-brain/data/decisions'
+    );
+
+    // goalSessionCommand also defaults to decisionDir under rootDir
+    const origLog = console.log;
+    console.log = () => {};
+    let goalRes;
+    try {
+      goalRes = await goalSessionCommand(
+        { rootDir: root, goal: 'GOAL-NO-HOME' },
+        {
+          candidates: [candidate],
+          registry: sampleRegistry(),
+          priorsData: { ranking: [] },
+        }
+      );
+    } finally {
+      console.log = origLog;
+    }
+    assert.equal(goalRes.exitCode, 0);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('H2-27: cli.js reports GOAL_MODULE_UNAVAILABLE on H1 load/sync failures without swallowing', async () => {
+  const errOutput = [];
+  const origErr = console.error;
+  const origExitCode = process.exitCode;
+  console.error = (msg) => errOutput.push(msg);
+
+  try {
+    // 1. Injected failing loadGoals throws error
+    main(['goal', 'start', '--text', 'test'], {
+      loadGoals: () => {
+        throw new Error('Simulated H1 goals.js failure');
+      },
+    });
+
+    assert.ok(errOutput.length > 0);
+    const lastErr = JSON.parse(errOutput[errOutput.length - 1]);
+    assert.equal(lastErr.status, 'error');
+    assert.ok(
+      lastErr.error.includes('GOAL_MODULE_UNAVAILABLE: Simulated H1 goals.js failure'),
+      'Must report GOAL_MODULE_UNAVAILABLE on load failure'
+    );
+    assert.ok(!lastErr.error.includes('UNKNOWN_GOAL_SUBCOMMAND'));
+
+    // 2. Direct require of nonexistent goals module also reports GOAL_MODULE_UNAVAILABLE
+    main(['goal', 'start', '--text', 'test']);
+    assert.ok(errOutput.length > 1);
+    const directRequireErr = JSON.parse(errOutput[errOutput.length - 1]);
+    assert.equal(directRequireErr.status, 'error');
+    assert.ok(
+      directRequireErr.error.includes('GOAL_MODULE_UNAVAILABLE'),
+      'Direct require must report GOAL_MODULE_UNAVAILABLE'
+    );
+  } finally {
+    console.error = origErr;
+    process.exitCode = origExitCode;
+  }
+});
+
+test('H2-28: scripts/ai/hermes-chat.ps1 executes Set-Location to repo root before running node', async () => {
+  const scriptPath = path.resolve(__dirname, '../../../scripts/ai/hermes-chat.ps1');
+  const content = fs.readFileSync(scriptPath, 'utf8');
+
+  assert.ok(
+    content.includes('Set-Location -LiteralPath $repoRoot'),
+    'hermes-chat.ps1 must include Set-Location -LiteralPath $repoRoot'
+  );
+
+  const setLocationIndex = content.indexOf('Set-Location -LiteralPath $repoRoot');
+  const nodeIndex = content.indexOf('& node $cliPath chat');
+  assert.ok(setLocationIndex > 0, 'Set-Location must be present');
+  assert.ok(nodeIndex > setLocationIndex, 'Set-Location must occur before invoking node');
+});
+
+test('H2-29: candidate selection uses HERMES_MIN_CONTEXT in profile contextSize', async () => {
+  const root = fixtureRoot('hermes-min-ctx-');
+  try {
+    let capturedProfile = null;
+    const mockRank = (annotated, profile) => {
+      capturedProfile = profile;
+      return {
+        chosen: annotated[0]?.candidateKey || null,
+        ranking: annotated,
+        top3: annotated.slice(0, 3),
+        rejected: [],
+        refused: null,
+        reason: 'ok',
+      };
+    };
+
+    const c = sampleCandidate();
+    selectReasoningCandidate(
+      { rootDir: root, skipDecisionLog: true },
+      {
+        candidates: [c],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+        rankForProfile: mockRank,
+      }
+    );
+
+    assert.ok(capturedProfile, 'Profile must be captured');
+    assert.equal(
+      capturedProfile.contextSize,
+      HERMES_MIN_CONTEXT,
+      'profile.contextSize must use HERMES_MIN_CONTEXT (32000)'
+    );
+    assert.equal(HERMES_MIN_CONTEXT, 32000);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

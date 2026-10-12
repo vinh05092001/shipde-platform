@@ -13,10 +13,33 @@
  */
 
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { spawnSync } = require('child_process');
+
+function defaultSpawn(cmd, argv, spawnOpts) {
+  const res = spawnSync(cmd, argv, spawnOpts);
+  if (res.error) {
+    throw res.error;
+  }
+  const code =
+    res.status !== null
+      ? res.status
+      : res.signal === 'SIGINT'
+        ? 130
+        : res.signal === 'SIGTERM'
+          ? 143
+          : res.signal
+            ? 1
+            : 0;
+  return {
+    exitCode: code,
+    status: code,
+    stdout: res.stdout ? res.stdout.toString() : '',
+    stderr: res.stderr ? res.stderr.toString() : '',
+    signal: res.signal,
+  };
+}
 
 const sourcesApi = require('./sources');
 const evidenceApi = require('./evidence');
@@ -258,7 +281,7 @@ function selectReasoningCandidate(options, deps) {
     riskDomains: opts.riskDomains || ['reasoning', 'planning'],
     qualityFloor: opts.qualityFloor !== undefined ? opts.qualityFloor : 80,
     proofFloor: opts.proofFloor || 'WORK_ITEM_PASS',
-    contextSize: 0,
+    contextSize: opts.contextSize !== undefined ? opts.contextSize : HERMES_MIN_CONTEXT,
     costCeiling: opts.costCeiling !== undefined ? opts.costCeiling : 5000,
     currentWorkload: 0,
     resourceCeiling: 100,
@@ -313,7 +336,11 @@ function selectReasoningCandidate(options, deps) {
 
   // Record decision record Linking candidates, reasons, prior scores and source links
   const decisionDir =
-    opts.decisionDir || d.decisionDir || path.join(os.homedir(), '.shipde', 'decisions');
+    opts.decisionDir ||
+    d.decisionDir ||
+    (opts.rootDir || d.rootDir || opts.root || d.root
+      ? path.join(resolveRootDir(opts, d), 'tools', 'ai-brain', 'data', 'decisions')
+      : path.join(__dirname, 'data', 'decisions'));
   const decisionRecord = {
     stage: decisionsMod.Stage.SELECTED,
     workItemId: profile.taskId,
@@ -531,18 +558,40 @@ async function launchHermesSession(options, deps) {
   const opts = options || {};
   const rootDir = resolveRootDir(opts, d);
   const env = Object.assign({}, process.env, d.env || {});
-  const spawnFn = d.spawn;
+  const spawnFn = d.spawn || defaultSpawn;
   const classifier = d.failureClassifier || failureClassifier;
 
   let session = loadSession(opts, d);
-  if (!session || opts.newSession || opts.session) {
+  if (opts.newSession) {
     session = {
       sessionId: opts.session || generateSessionId(),
       candidateKey: null,
       goalIds: opts.goal ? [String(opts.goal)] : [],
     };
-  } else if (opts.goal && !session.goalIds.includes(String(opts.goal))) {
-    session.goalIds.push(String(opts.goal));
+  } else if (opts.session) {
+    if (session && session.sessionId === opts.session) {
+      session.goalIds = Array.isArray(session.goalIds) ? session.goalIds : [];
+      if (opts.goal && !session.goalIds.includes(String(opts.goal))) {
+        session.goalIds.push(String(opts.goal));
+      }
+    } else {
+      session = {
+        sessionId: opts.session,
+        candidateKey: null,
+        goalIds: opts.goal ? [String(opts.goal)] : [],
+      };
+    }
+  } else if (!session) {
+    session = {
+      sessionId: generateSessionId(),
+      candidateKey: null,
+      goalIds: opts.goal ? [String(opts.goal)] : [],
+    };
+  } else if (opts.goal) {
+    session.goalIds = Array.isArray(session.goalIds) ? session.goalIds : [];
+    if (!session.goalIds.includes(String(opts.goal))) {
+      session.goalIds.push(String(opts.goal));
+    }
   }
 
   const forbiddenDomains = [...(opts.forbiddenFailureDomains || [])];
@@ -594,17 +643,6 @@ async function launchHermesSession(options, deps) {
     if (opts.dryRun) {
       return {
         status: 'dry_run',
-        sessionId: session.sessionId,
-        candidateKey: session.candidateKey,
-        candidate,
-        argv,
-        configResult,
-      };
-    }
-
-    if (typeof spawnFn !== 'function') {
-      return {
-        status: 'ready',
         sessionId: session.sessionId,
         candidateKey: session.candidateKey,
         candidate,
@@ -683,6 +721,28 @@ async function launchHermesSession(options, deps) {
       throw err;
     }
 
+    const isRouteQuotaModel =
+      classification.scope === classifier.Scope.MODEL ||
+      classification.scope === classifier.Scope.UPSTREAM ||
+      classification.scope === classifier.Scope.GATEWAY ||
+      classification.scope === classifier.Scope.ACCESS_PATH ||
+      classification.scope === classifier.Scope.ACCOUNT;
+
+    if (!isRouteQuotaModel) {
+      // Unclassified or user-exit (e.g. SIGINT 130) failures fail closed and stop with the exit code
+      return {
+        status: 'exited',
+        exitCode,
+        sessionId: session.sessionId,
+        candidateKey: session.candidateKey,
+        candidate,
+        argv,
+        configResult,
+        spawnResult,
+        classification,
+      };
+    }
+
     // Route/model/quota failure: exclude failed route and reselect
     excludedCandidates.push(candidate.candidateKey);
     const domain =
@@ -707,14 +767,25 @@ async function goalSessionCommand(args, deps) {
   if (args.session) opts.session = args.session;
   if (args.goal) opts.goal = args.goal;
   if (args.reselect) opts.reselect = true;
+  if (args['decision-dir'] || args.decisionDir)
+    opts.decisionDir = args['decision-dir'] || args.decisionDir;
+  if (args['skip-decision-log'] || args.skipDecisionLog) opts.skipDecisionLog = true;
 
   try {
     let session = loadSession(opts, d);
+    if (opts.newSession) {
+      session = null;
+    } else if (session && opts.session && session.sessionId !== opts.session) {
+      session = null;
+    }
     const shouldReselect = !session || Boolean(opts.reselect) || !session.candidateKey;
     const preferredCandidateKey = shouldReselect ? null : session.candidateKey;
 
     const selection = selectReasoningCandidate(
-      Object.assign({}, opts, { preferredCandidateKey }),
+      Object.assign({}, opts, {
+        sessionId: (session && session.sessionId) || opts.session || undefined,
+        preferredCandidateKey,
+      }),
       d
     );
     if (!selection.candidate) {
@@ -731,7 +802,9 @@ async function goalSessionCommand(args, deps) {
     session = {
       sessionId: (session && session.sessionId) || opts.session || generateSessionId(),
       candidateKey: selection.chosen,
-      goalIds: (session && session.goalIds) || (opts.goal ? [String(opts.goal)] : []),
+      goalIds:
+        (session && Array.isArray(session.goalIds) ? session.goalIds : null) ||
+        (opts.goal ? [String(opts.goal)] : []),
     };
     if (opts.goal && !session.goalIds.includes(String(opts.goal))) {
       session.goalIds.push(String(opts.goal));
@@ -773,13 +846,22 @@ async function chatCommand(args, deps) {
   if (args.goal) opts.goal = args.goal;
   if (args.reselect) opts.reselect = true;
   if (args['dry-run'] || args.dryRun) opts.dryRun = true;
+  if (args['decision-dir'] || args.decisionDir)
+    opts.decisionDir = args['decision-dir'] || args.decisionDir;
+  if (args['skip-decision-log'] || args.skipDecisionLog) opts.skipDecisionLog = true;
 
   try {
     const result = await launchHermesSession(opts, d);
     if (args.json) {
       console.log(JSON.stringify(result, null, 2));
     }
-    return { exitCode: 0, result };
+    const exitCode =
+      typeof result.exitCode === 'number'
+        ? result.exitCode
+        : result.status === 'completed' || result.status === 'dry_run'
+          ? 0
+          : 1;
+    return { exitCode, result };
   } catch (err) {
     if (args.json) {
       console.log(
@@ -792,7 +874,8 @@ async function chatCommand(args, deps) {
     } else {
       console.error('Chat error: ' + (err.message || String(err)));
     }
-    return { exitCode: 1, error: err };
+    const exitCode = typeof err.exitCode === 'number' ? err.exitCode : 1;
+    return { exitCode, error: err };
   }
 }
 
