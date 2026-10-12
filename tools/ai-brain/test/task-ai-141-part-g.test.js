@@ -320,7 +320,7 @@ test('G1 citations use template-compatible single code formatting', () => {
   }
 });
 
-test('G2 default planner ranking applies the planner.default proof and quality floors', async () => {
+test('G2 Operator decision 2026-10-12: default planner ranking has no proof entry floor', async () => {
   const root = fixtureRoot('plan-g2-floors-');
   try {
     let profile;
@@ -332,7 +332,7 @@ test('G2 default planner ranking applies the planner.default proof and quality f
       },
     });
     await deps.rankPlanner({ workItemId: 'FEAT-AUTH-07', role: 'planner.default' });
-    assert.equal(profile.proofFloor, 'WORK_ITEM_PASS');
+    assert.equal(profile.proofFloor, 'NONE');
     assert.equal(profile.qualityFloor, 80);
     assert.equal(profile.costCeiling, 5000);
   } finally {

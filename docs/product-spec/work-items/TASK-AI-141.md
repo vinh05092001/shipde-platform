@@ -1,5 +1,9 @@
 # TASK-AI-141 — The Controller uses every source
 
+## Operator decision 2026-10-12: writer proof floor NONE, no Claude-family exclusion
+
+Writer and author selection uses `proofFloor: NONE`; candidate ranking chooses the strongest live candidate using score, benchmark priors, JEV and route health, with proof contributing to score rather than acting as an entry gate. Claude-family candidates are eligible for every role. Probation and independent-review requirements remain, and merge still requires an independent reviewer from a different failure domain with an exact-SHA `PASS` and green CI.
+
 ## Control
 
 | Field | Value |

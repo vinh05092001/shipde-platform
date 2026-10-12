@@ -584,7 +584,7 @@ test('Part D keeps a docs-only item standard with no risk domains', () => {
   assert.deepEqual(derived.riskDomains, []);
 });
 
-test('intake catalogue and real account registry plus pool discovery produce candidates', async () => {
+test('Operator decision 2026-10-12: FEAT-like intake ranks a candidate without WORK_ITEM_PASS', async () => {
   const root = fixtureRoot();
   const backendModel = 'gemini-fixture-pro';
   const accountOptions = intakeAccounts(root);
@@ -663,7 +663,7 @@ test('intake catalogue and real account registry plus pool discovery produce can
     role: 'author.foundation',
     requiredCapabilities: [],
     contextSize: 1,
-    proofFloor: 'WORK_ITEM_PASS',
+    proofFloor: 'NONE',
     qualityFloor: 0,
     costCeiling: 1000000,
     currentWorkload: 0,
@@ -684,8 +684,9 @@ test('intake catalogue and real account registry plus pool discovery produce can
     assert.ok(ranked || rejectedKeys.has(key), 'pool candidate is ranked or rejected');
     if (rejected) assert.ok(rejected.reasonCode, 'rejection carries a named reason');
   }
-  assert.equal(decision.rejected.length, 7);
-  assert.ok(decision.rejected.every((row) => row.reasonCode.startsWith('PROOF_FLOOR_NOT_MET')));
+  assert.equal(decision.rejected.length, 0);
+  assert.ok(decision.ranking.length > 0, 'a candidate without WORK_ITEM_PASS is ranked');
+  assert.equal(decision.chosen, decision.ranking[0].candidateKey);
 });
 
 test('candidate generation rejects unknown aliased models with a named reason', () => {
@@ -800,7 +801,7 @@ test('intake pool writer inherits backend WORK_ITEM_PASS from blocked 9router ag
     latencyPriority: 'normal',
     requiredCapabilities: [],
     contextSize: 1,
-    proofFloor: 'WORK_ITEM_PASS',
+    proofFloor: 'NONE',
     qualityFloor: 0,
     costCeiling: 1000000,
     currentWorkload: 0,

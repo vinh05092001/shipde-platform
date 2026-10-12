@@ -3631,7 +3631,7 @@ function buildQualificationCandidates(rootDir) {
     role: 'writer',
     complexity: 'complex',
     requiredCapabilities: [],
-    proofFloor: 'WORK_ITEM_PASS',
+    proofFloor: 'NONE',
     contextSize: 32000,
     expectedDuration: 1,
     latencyPriority: 'normal',

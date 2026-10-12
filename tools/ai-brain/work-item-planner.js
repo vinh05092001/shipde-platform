@@ -667,7 +667,7 @@ function defaultPlanningDeps(rootDir, overrides) {
         complexity: 'complex',
         riskDomains: ['documentation'],
         qualityFloor: 80,
-        proofFloor: 'WORK_ITEM_PASS',
+        proofFloor: 'NONE',
         contextSize: 0,
         costCeiling: 5000,
         currentWorkload: 0,
