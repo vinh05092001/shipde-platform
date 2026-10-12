@@ -237,3 +237,11 @@ Every available OpenAI-compatible source with an endpoint and an env credential 
 ## Part H3 named Hermes session (2026-10-13)
 
 Live evidence on the real Hermes v0.21.4 binary verified that invoking `hermes chat --resume <id>` with a Controller-minted ID fails with "session not found" on first launch. Replacing `--resume <sessionId>` with `--continue <sessionId> --create-if-missing` in `buildHermesArgv` allows Hermes to create the named session on first use (using the Controller-minted sessionId as the session title) and continue that exact session across subsequent turns and failover relaunches while preserving history.
+
+## Part H3 skill install (2026-10-13)
+
+Live evidence on the real Hermes v0.21.4 binary verified:
+1. `hermes chat ... -s <absolute path to SKILL.md>` fails with "Unknown skill(s)" because Hermes `-s` takes skill names installed under `<HERMES_HOME>/skills/<name>/SKILL.md`.
+2. When writing the Controller-owned Hermes home, the Controller installs (copies) the skill file to `<hermesHome>/skills/shipde-controller/SKILL.md` (overwriting each launch so it stays in sync with the repository).
+3. `buildHermesArgv` passes `-s shipde-controller` (the skill name), never a path.
+4. `config.yaml` includes a `model:` section with `default: <modelId>` and `provider: <providerName>` matching the providers entry (values validated/escaped as the existing YAML writer does; no secrets), preventing Hermes from warning that custom_providers is defined but no model section is present.

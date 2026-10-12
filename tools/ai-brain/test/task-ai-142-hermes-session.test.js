@@ -19,6 +19,9 @@ const {
   sessionFilePath,
   configFilePath,
   skillFilePath,
+  installedSkillFilePath,
+  CONTROLLER_SKILL_NAME,
+  installSkillFile,
   generateSessionId,
   defaultSpawn,
   getHermesHomeDir,
@@ -227,6 +230,12 @@ test('H2-04: writeProvidersConfig writes data/hermes/config.yaml with base_url a
     assert.ok(fs.existsSync(res.configPath), 'config.yaml must exist');
     const content = fs.readFileSync(res.configPath, 'utf8');
 
+    assert.ok(content.includes('model:'), 'config.yaml must contain model: section');
+    assert.ok(content.includes('default: "kr/gemini-2.5-pro"'), 'model: section has default model');
+    assert.ok(
+      content.includes('provider: "9router"'),
+      'model: section has provider matching providers'
+    );
     assert.ok(content.includes('providers:'));
     assert.ok(content.includes('base_url: "http://127.0.0.1:20128/v1"'));
     assert.ok(content.includes('key_env: "NINEROUTER_API_KEY"'));
@@ -240,6 +249,25 @@ test('H2-04: writeProvidersConfig writes data/hermes/config.yaml with base_url a
     const parsed = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
     assert.equal(parsed.providers['9router'].base_url, 'http://127.0.0.1:20128/v1');
     assert.equal(parsed.providers['9router'].key_env, 'NINEROUTER_API_KEY');
+    assert.deepEqual(parsed.model, {
+      default: 'kr/gemini-2.5-pro',
+      provider: '9router',
+    });
+
+    const installedSkill = path.join(
+      root,
+      'tools',
+      'ai-brain',
+      'data',
+      'hermes',
+      'home',
+      'skills',
+      'shipde-controller',
+      'SKILL.md'
+    );
+    assert.ok(fs.existsSync(installedSkill), 'skill file must be installed under hermes home');
+    const skillContent = fs.readFileSync(installedSkill, 'utf8');
+    assert.ok(skillContent.includes('NEVER pick your own model'));
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -268,7 +296,7 @@ test('H2-05: buildHermesArgv builds correct Hermes CLI arguments including chat,
     ]);
 
     assert.equal(argv[8], '-s');
-    assert.ok(argv[9].endsWith('SKILL.md'));
+    assert.equal(argv[9], 'shipde-controller', 'passes skill by name, never a path');
 
     const argvNoChat = buildHermesArgv(candidate, session, {
       rootDir: root,
@@ -1511,6 +1539,11 @@ test('H2-33: HERMES_HOME is passed in spawn env, HERMES_IGNORE_USER_CONFIG is re
     const yaml = fs.readFileSync(path.join(expectedHome, 'config.yaml'), 'utf8');
     assert.ok(yaml.includes('key_env:'), 'config.yaml must use key_env per Fact 2');
     assert.equal(yaml.includes('api_key:'), false, 'Never write secret api_key');
+    assert.ok(yaml.includes('model:'), 'config.yaml must include model section');
+    assert.ok(yaml.includes('default:'), 'model section must include default model');
+    assert.ok(yaml.includes('provider:'), 'model section must include provider');
+    const installedSkill = path.join(expectedHome, 'skills', 'shipde-controller', 'SKILL.md');
+    assert.ok(fs.existsSync(installedSkill), 'skill file must be installed under HERMES_HOME');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -1696,6 +1729,82 @@ test('H3-01: Hermes chat passes --continue <id> --create-if-missing on first lau
       calls[1].args[cIdx1 + 2],
       '--create-if-missing',
       'Relaunch must include --create-if-missing'
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('H3-02: Controller installs skill by name under hermesHome/skills/shipde-controller/SKILL.md, argv passes -s shipde-controller, and config.yaml contains model section', async () => {
+  const root = fixtureRoot('hermes-skill-install-');
+  try {
+    const candidate = sampleCandidate({
+      gateway: '9router',
+      modelId: 'kr/gemini-2.5-pro',
+    });
+    const session = { sessionId: 'hermes_skill_test_session' };
+
+    // 1. buildHermesArgv passes -s shipde-controller (the skill name), never a path
+    const argv = buildHermesArgv(candidate, session, { rootDir: root });
+    const sIndex = argv.indexOf('-s');
+    assert.notEqual(sIndex, -1, 'argv must include -s');
+    assert.equal(argv[sIndex + 1], 'shipde-controller', 'must pass skill name, never a path');
+    assert.equal(
+      argv.some(
+        (arg) =>
+          typeof arg === 'string' &&
+          (arg.includes('SKILL.md') || arg.includes('\\skills\\') || arg.includes('/skills/'))
+      ),
+      false,
+      'argv must never contain a path to SKILL.md'
+    );
+
+    // 2. writeProvidersConfig installs (copies) skill to <hermesHome>/skills/shipde-controller/SKILL.md
+    const cfgRes = writeProvidersConfig(
+      candidate,
+      { rootDir: root },
+      { registry: sampleRegistry() }
+    );
+    const expectedSkillPath = path.join(
+      root,
+      'tools',
+      'ai-brain',
+      'data',
+      'hermes',
+      'home',
+      'skills',
+      'shipde-controller',
+      'SKILL.md'
+    );
+    assert.ok(
+      fs.existsSync(expectedSkillPath),
+      'skill must be written under hermesHome/skills/shipde-controller/SKILL.md'
+    );
+    const installedText = fs.readFileSync(expectedSkillPath, 'utf8');
+    assert.ok(
+      installedText.includes('Ship Dễ — Hermes Chat Brain & Controller Operating Contract') ||
+        installedText.includes('Ship D')
+    );
+    assert.ok(installedText.includes('NEVER pick your own model'));
+
+    // 3. config.yaml has model section with default and provider matching providers entry
+    const yaml = fs.readFileSync(cfgRes.configPath, 'utf8');
+    assert.ok(yaml.includes('model:'), 'config.yaml must have model: section');
+    assert.ok(yaml.includes('default: "kr/gemini-2.5-pro"'), 'model: has default modelId');
+    assert.ok(yaml.includes('provider: "9router"'), 'model: has provider matching providers entry');
+
+    // Overwrite test: simulate an out-of-sync skill in hermes home and verify it is overwritten
+    fs.writeFileSync(expectedSkillPath, 'OUTDATED STALE SKILL CONTENT', 'utf8');
+    writeProvidersConfig(candidate, { rootDir: root }, { registry: sampleRegistry() });
+    const refreshedText = fs.readFileSync(expectedSkillPath, 'utf8');
+    assert.equal(
+      refreshedText.includes('OUTDATED STALE SKILL CONTENT'),
+      false,
+      'must overwrite each launch/write'
+    );
+    assert.ok(
+      refreshedText.includes('NEVER pick your own model'),
+      'refreshed content restored from repo'
     );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
