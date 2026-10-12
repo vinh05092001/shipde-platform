@@ -13,6 +13,9 @@ const {
   selectReasoningCandidate,
   writeProvidersConfig,
   buildHermesArgv,
+  resolveHermesLaunchCommand,
+  resolveHermesLaunch,
+  resolveHermesCommand,
   launchHermesSession,
   goalSessionCommand,
   chatCommand,
@@ -1806,6 +1809,169 @@ test('H3-02: Controller installs skill by name under hermesHome/skills/shipde-co
       refreshedText.includes('NEVER pick your own model'),
       'refreshed content restored from repo'
     );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('H3-03: resolveHermesLaunchCommand on win32 resolves to process.execPath with node_modules entry js when hermes.cmd and hermes.js exist in PATH', async () => {
+  const root = fixtureRoot('hermes-win-spawn-');
+  try {
+    const cmdShim = path.join(root, 'hermes.cmd');
+    fs.writeFileSync(
+      cmdShim,
+      '@echo off\r\nnode "%~dp0\\node_modules\\hermes-agent\\bin\\hermes.js" %*\r\n'
+    );
+    const jsDir = path.join(root, 'node_modules', 'hermes-agent', 'bin');
+    fs.mkdirSync(jsDir, { recursive: true });
+    const jsEntry = path.join(jsDir, 'hermes.js');
+    fs.writeFileSync(jsEntry, '// hermes agent entry');
+
+    const chatArgv = ['chat', '-m', 'kr/gemini-2.5-pro', '--provider', '9router'];
+    const resolved = resolveHermesLaunchCommand(chatArgv, {
+      platform: 'win32',
+      env: { PATH: root },
+    });
+
+    assert.equal(
+      resolved.command,
+      process.execPath,
+      'command must be process.execPath on win32 npm shim'
+    );
+    assert.equal(resolved.args[0], jsEntry, 'args[0] must be the npm entry hermes.js');
+    assert.deepEqual(resolved.args.slice(1), chatArgv, 'remaining args must be the chat argv');
+
+    // Also verify aliases export
+    const alias1 = resolveHermesLaunch(chatArgv, { platform: 'win32', env: { PATH: root } });
+    const alias2 = resolveHermesCommand(chatArgv, { platform: 'win32', env: { PATH: root } });
+    assert.deepEqual(alias1, resolved);
+    assert.deepEqual(alias2, resolved);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('H3-04: resolveHermesLaunchCommand HERMES_BIN override wins over PATH discovery and win32 shim', async () => {
+  const root = fixtureRoot('hermes-override-');
+  try {
+    // Setup win32 shim in PATH that would match if override didn't win
+    fs.writeFileSync(path.join(root, 'hermes.cmd'), '@echo off\r\n');
+    const jsDir = path.join(root, 'node_modules', 'hermes-agent', 'bin');
+    fs.mkdirSync(jsDir, { recursive: true });
+    fs.writeFileSync(path.join(jsDir, 'hermes.js'), '// shim js');
+
+    const chatArgv = ['chat', '-m', 'kr/gemini-2.5-pro'];
+
+    // 1. HERMES_BIN ending in .js launches via process.execPath
+    const customJs = path.join(root, 'my-hermes.js');
+    fs.writeFileSync(customJs, '// custom');
+    const resJs = resolveHermesLaunchCommand(chatArgv, {
+      platform: 'win32',
+      env: { PATH: root, HERMES_BIN: customJs },
+    });
+    assert.equal(resJs.command, process.execPath);
+    assert.equal(resJs.args[0], customJs);
+    assert.deepEqual(resJs.args.slice(1), chatArgv);
+
+    // 2. HERMES_BIN not ending in .js launches as binary directly
+    const customBin = 'C:\\custom\\hermes.exe';
+    const resBin = resolveHermesLaunchCommand(chatArgv, {
+      platform: 'win32',
+      env: { PATH: root, HERMES_BIN: customBin },
+    });
+    assert.equal(resBin.command, customBin);
+    assert.deepEqual(resBin.args, chatArgv);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('H3-05: resolveHermesLaunchCommand falls back to hermes when no shim or override exists', async () => {
+  const root = fixtureRoot('hermes-fallback-');
+  try {
+    const chatArgv = ['chat', '-m', 'kr/gemini-2.5-pro'];
+
+    // 1. win32 but directory has no hermes.cmd
+    const resNoShim = resolveHermesLaunchCommand(chatArgv, {
+      platform: 'win32',
+      env: { PATH: root },
+    });
+    assert.equal(resNoShim.command, 'hermes');
+    assert.deepEqual(resNoShim.args, chatArgv);
+
+    // 2. win32 has hermes.cmd but node_modules/hermes-agent/bin/hermes.js is missing
+    fs.writeFileSync(path.join(root, 'hermes.cmd'), '@echo off\r\n');
+    const resMissingJs = resolveHermesLaunchCommand(chatArgv, {
+      platform: 'win32',
+      env: { PATH: root },
+    });
+    assert.equal(resMissingJs.command, 'hermes');
+    assert.deepEqual(resMissingJs.args, chatArgv);
+
+    // 3. non-win32 platform without HERMES_BIN
+    const resLinux = resolveHermesLaunchCommand(chatArgv, {
+      platform: 'linux',
+      env: { PATH: root },
+    });
+    assert.equal(resLinux.command, 'hermes');
+    assert.deepEqual(resLinux.args, chatArgv);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('H3-06: launchHermesSession uses resolved command and args in spawn and reports command in dryRun output', async () => {
+  const root = fixtureRoot('hermes-launch-spawn-win-');
+  try {
+    const candidate = sampleCandidate();
+    const cmdShim = path.join(root, 'hermes.cmd');
+    fs.writeFileSync(cmdShim, '@echo off\r\n');
+    const jsDir = path.join(root, 'node_modules', 'hermes-agent', 'bin');
+    fs.mkdirSync(jsDir, { recursive: true });
+    const jsEntry = path.join(jsDir, 'hermes.js');
+    fs.writeFileSync(jsEntry, '// hermes agent entry');
+
+    // 1. dryRun output reports resolved command
+    const dryRes = await launchHermesSession(
+      { rootDir: root, dryRun: true, skipDecisionLog: true },
+      {
+        candidates: [candidate],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+        platform: 'win32',
+        env: { PATH: root },
+      }
+    );
+    assert.equal(dryRes.status, 'dry_run');
+    assert.equal(dryRes.command, process.execPath);
+    assert.equal(dryRes.args[0], jsEntry);
+    assert.ok(dryRes.argv.includes('--continue'));
+
+    // 2. spawn is called with resolved command and args
+    let spawnCaptured = null;
+    const fakeSpawn = async (cmd, args, options) => {
+      spawnCaptured = { cmd, args, options };
+      return { exitCode: 0, stdout: 'started', stderr: '' };
+    };
+
+    const runRes = await launchHermesSession(
+      { rootDir: root, skipDecisionLog: true },
+      {
+        candidates: [candidate],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+        platform: 'win32',
+        env: { PATH: root },
+        spawn: fakeSpawn,
+      }
+    );
+    assert.equal(runRes.status, 'completed');
+    assert.ok(spawnCaptured, 'spawn was called');
+    assert.equal(spawnCaptured.cmd, process.execPath);
+    assert.equal(spawnCaptured.args[0], jsEntry);
+    assert.ok(spawnCaptured.args.includes('--continue'));
+    assert.equal(runRes.command, process.execPath);
+    assert.equal(runRes.args[0], jsEntry);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
