@@ -183,21 +183,10 @@ function openAiCompatibleCandidates(opts) {
       source.endpoint ||
       (source.accessPath && /^https?:\/\//i.test(source.accessPath) ? source.accessPath : null);
 
-    let gateway = '';
-    if (
-      source.id === '9router' ||
-      String(source.id).includes('9router') ||
-      String(source.id).includes('ninerouter') ||
-      (endpoint && endpoint.includes(':20128'))
-    ) {
-      gateway = '9router';
-    } else if (source.kind === sourcesApi.Kind.ROUTER) {
-      gateway = source.id;
-    } else if (source.reachedVia) {
-      gateway = source.reachedVia;
-    } else {
-      gateway = source.gateway || '';
-    }
+    const gateway =
+      source.kind === sourcesApi.Kind.ROUTER
+        ? source.id
+        : source.reachedVia || source.gateway || '';
 
     const modelSet = new Set();
     if (source.modelMeta && typeof source.modelMeta === 'object') {
@@ -211,26 +200,54 @@ function openAiCompatibleCandidates(opts) {
         if (id) modelSet.add(id);
       }
     }
-    if (Array.isArray(catalogue)) {
-      for (const item of catalogue) {
-        const id =
-          typeof item === 'string' ? item : item && (item.modelId || item.model || item.id);
-        if (!id) continue;
-        if (
-          item.gateway === source.id ||
-          item.source === source.id ||
-          (gateway === '9router' && item.gateway === '9router')
-        ) {
+    if (source.kind === 'router' && source.servesModels !== false) {
+      if (Array.isArray(catalogue)) {
+        for (const item of catalogue) {
+          const id =
+            typeof item === 'string' ? item : item && (item.modelId || item.model || item.id);
+          if (!id) continue;
+          const parsed = parsePrefix(id);
+          if (!parsed) continue;
+          if (
+            item &&
+            typeof item === 'object' &&
+            item.upstream &&
+            item.upstream !== parsed.upstream
+          )
+            continue;
           modelSet.add(id);
+        }
+      }
+    } else if (source.kind === 'model-source' && source.servesModels !== false) {
+      if (source.reachedVia && source.routerAlias) {
+        const prefix = source.routerAlias + '/';
+        if (Array.isArray(catalogue)) {
+          for (const item of catalogue) {
+            const id =
+              typeof item === 'string' ? item : item && (item.modelId || item.model || item.id);
+            if (!id || !id.startsWith(prefix)) continue;
+            modelSet.add(id);
+          }
+        }
+      } else if (Array.isArray(catalogue)) {
+        for (const item of catalogue) {
+          if (
+            item &&
+            typeof item === 'object' &&
+            (item.source === source.id || item.gateway === source.id)
+          ) {
+            const id = item.modelId || item.model || item.id;
+            if (id) modelSet.add(id);
+          }
         }
       }
     }
 
     if (modelSet.size === 0) continue;
 
-    let bound = accountsFor(accounts, source.id);
-    if (bound.length === 0 && gateway && gateway !== source.id) {
-      bound = accountsFor(accounts, gateway);
+    let bound = accountsFor(accounts, source.id).filter((a) => a && a.id && a.id !== '*');
+    if (bound.length === 0 && source.reachedVia) {
+      bound = accountsFor(accounts, source.reachedVia).filter((a) => a && a.id && a.id !== '*');
     }
 
     const defaultUpstream =
@@ -292,8 +309,8 @@ function openAiCompatibleCandidates(opts) {
           accessPath: endpoint,
           gateway,
           upstream,
-          accountId: '*',
-          quotaScope: upstream,
+          accountId: source.id,
+          quotaScope: source.id,
           modelId,
           source: source.id,
           sourceId: source.id,
@@ -312,7 +329,16 @@ function openAiCompatibleCandidates(opts) {
     }
   }
 
-  return out;
+  const seen = new Set();
+  const deduped = [];
+  for (const c of out) {
+    if (!seen.has(c.candidateKey)) {
+      seen.add(c.candidateKey);
+      deduped.push(c);
+    }
+  }
+
+  return deduped;
 }
 
 /**
@@ -337,7 +363,7 @@ function generateCandidates(opts) {
   const candidates = [];
 
   if (o.harness === 'hermes') {
-    candidates.push(...openAiCompatibleCandidates(o));
+    return openAiCompatibleCandidates(o);
   }
 
   for (const source of registry.sources) {

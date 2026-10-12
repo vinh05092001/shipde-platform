@@ -11,15 +11,16 @@ const cliApi = require('../cli');
 const hermesSessionApi = require('../hermes-session');
 const harnessApi = require('../harness');
 
-test('TASK-AI-142 H3: 9router-like source with modelMeta yields hermes candidates with contextWindow from that source', () => {
+test('TASK-AI-142 H3: router source with modelMeta yields hermes candidates with contextWindow from that source', () => {
   const fakeRegistry = {
     version: 2,
     sources: [
       {
-        id: 'opencode-provider-ninerouter-options',
+        id: 'opencode-provider-mock-router-options',
         kind: 'model-source',
-        endpoint: 'http://127.0.0.1:20128/v1',
-        credential: { type: 'env', name: 'NINEROUTER_API_KEY' },
+        endpoint: 'http://127.0.0.1:40128/v1',
+        credential: { type: 'env', name: 'ROUTER_API_KEY' },
+        gateway: 'mock-router',
         modelMeta: {
           'kimchi/glm-5.3-flash': {
             contextWindow: 1048576,
@@ -41,14 +42,16 @@ test('TASK-AI-142 H3: 9router-like source with modelMeta yields hermes candidate
     registry: fakeRegistry,
   });
 
-  assert.ok(candidates.length >= 2, 'Must yield at least 2 candidates');
+  assert.equal(candidates.length, 2, 'Must yield exactly 2 candidates without duplicates');
 
   const flash = candidates.find((c) => c.modelId === 'kimchi/glm-5.3-flash');
   assert.ok(flash, 'Candidate for kimchi/glm-5.3-flash must exist');
   assert.equal(flash.harness, 'hermes');
-  assert.equal(flash.gateway, '9router');
-  assert.equal(flash.accessPath, 'http://127.0.0.1:20128/v1');
-  assert.equal(flash.sourceId, 'opencode-provider-ninerouter-options');
+  assert.equal(flash.gateway, 'mock-router');
+  assert.equal(flash.accessPath, 'http://127.0.0.1:40128/v1');
+  assert.equal(flash.sourceId, 'opencode-provider-mock-router-options');
+  assert.equal(flash.accountId, 'opencode-provider-mock-router-options');
+  assert.notEqual(flash.accountId, '*');
   assert.equal(flash.contextWindow, 1048576);
   assert.equal(flash.maxOutputTokens, 131072);
   assert.equal(flash.capabilities.contextWindow, 1048576);
@@ -56,7 +59,9 @@ test('TASK-AI-142 H3: 9router-like source with modelMeta yields hermes candidate
   const k3 = candidates.find((c) => c.modelId === 'kimchi/kimi-k3');
   assert.ok(k3, 'Candidate for kimchi/kimi-k3 must exist');
   assert.equal(k3.harness, 'hermes');
-  assert.equal(k3.gateway, '9router');
+  assert.equal(k3.gateway, 'mock-router');
+  assert.equal(k3.accountId, 'opencode-provider-mock-router-options');
+  assert.notEqual(k3.accountId, '*');
   assert.equal(k3.contextWindow, 262144);
   assert.equal(k3.maxOutputTokens, 60000);
 });
@@ -220,4 +225,129 @@ test('TASK-AI-142 H3: OpenAI-compatible sources (Cohere, TokenHarbor, B.AI, llmt
   assert.ok(llmtr);
   assert.equal(llmtr.contextWindow, 32768);
   assert.equal(llmtr.accessPath, 'https://llmtr.com/v1');
+});
+
+test('TASK-AI-142 H3: assembleCandidates and assembleForDispatch dedupe hermes candidates and keep verified contextWindow', () => {
+  const fakeRegistry = {
+    version: 2,
+    sources: [
+      {
+        id: 'opencode-provider-source-x',
+        kind: 'model-source',
+        endpoint: 'https://api.source-x.com/v1',
+        credential: { type: 'env', name: 'SOURCE_X_KEY' },
+        modelMeta: {
+          'provider-x/model-1': {
+            contextWindow: 131072,
+            maxOutputTokens: 8192,
+            contextSource: 'provider-models-endpoint',
+          },
+        },
+      },
+    ],
+  };
+
+  const generated = candidatesApi.generateCandidates({
+    harness: 'hermes',
+    registry: fakeRegistry,
+  });
+
+  // Exactly 1 candidate emitted
+  assert.equal(generated.length, 1);
+  assert.equal(generated[0].contextWindow, 131072);
+  assert.equal(generated[0].accountId, 'opencode-provider-source-x');
+
+  // assembleCandidates with this gateway candidate
+  const assembled = cliApi.assembleCandidates(null, [], fakeRegistry, [], null, generated);
+
+  assert.equal(assembled.length, 1, 'assembleCandidates must deduplicate to 1 entry');
+  assert.equal(assembled[0].contextWindow, 131072, 'Must carry verified contextWindow');
+  assert.equal(assembled[0].capabilities?.contextWindow, 131072);
+
+  // assembleForDispatch for hermes
+  const dispatched = cliApi.assembleForDispatch({ candidates: [] }, [], fakeRegistry, {
+    harness: 'hermes',
+    requireRouteHealth: false,
+    allowUnprobedCandidates: true,
+  });
+
+  const matched = dispatched.filter((c) => c.modelId === 'provider-x/model-1');
+  assert.equal(matched.length, 1, 'Dispatched pool must contain exactly 1 entry for this model');
+  assert.equal(matched[0].contextWindow, 131072, 'Dispatched candidate retains verified window');
+});
+
+test('TASK-AI-142 H3: assembleCandidates keeps source-bound miss unverified (no cross-source fallback)', () => {
+  const fakeRegistry = {
+    version: 2,
+    sources: [
+      {
+        id: 'source-unverified',
+        kind: 'model-source',
+        endpoint: 'https://api.unverified.com/v1',
+        credential: { type: 'env', name: 'UNVERIFIED_KEY' },
+        models: ['shared/common-model'],
+      },
+      {
+        id: 'source-with-meta',
+        kind: 'model-source',
+        endpoint: 'https://api.meta.com/v1',
+        credential: { type: 'env', name: 'META_KEY' },
+        models: ['shared/common-model'],
+        modelMeta: {
+          'shared/common-model': {
+            contextWindow: 65536,
+          },
+        },
+      },
+    ],
+  };
+
+  const discoveryCat = {
+    candidates: [
+      {
+        sourceId: 'source-unverified',
+        sourceEndpoint: 'https://api.unverified.com/v1',
+        modelId: 'shared/common-model',
+        harness: 'hermes',
+      },
+    ],
+  };
+
+  const assembled = cliApi.assembleCandidates(discoveryCat, [], fakeRegistry, [], null, []);
+
+  const cand = assembled.find((c) => c.sourceId === 'source-unverified');
+  assert.ok(cand, 'Candidate for source-unverified must exist');
+  // It must NOT borrow source-with-meta's contextWindow!
+  assert.equal(cand.contextWindow, undefined, 'Source-bound miss must stay undefined');
+  assert.equal(cand.capabilities?.contextWindow, undefined);
+});
+
+test('TASK-AI-142 H3: hermes candidates never receive accountId "*"', () => {
+  const fakeRegistry = {
+    version: 2,
+    sources: [
+      {
+        id: 'unbound-source',
+        kind: 'model-source',
+        endpoint: 'https://api.unbound.com/v1',
+        credential: { type: 'env', name: 'UNBOUND_KEY' },
+        models: ['unbound/model-1'],
+        modelMeta: {
+          'unbound/model-1': { contextWindow: 32000 },
+        },
+      },
+    ],
+  };
+
+  const candidates = candidatesApi.generateCandidates({
+    harness: 'hermes',
+    registry: fakeRegistry,
+    accounts: [], // No accounts bound
+  });
+
+  assert.ok(candidates.length > 0);
+  for (const c of candidates) {
+    assert.notEqual(c.accountId, '*', `Candidate ${c.candidateKey} must not have accountId '*'`);
+    assert.equal(c.accountId, 'unbound-source', 'Unbound candidate uses source.id as accountId');
+  }
 });
