@@ -106,7 +106,7 @@ function recordResult(store, modelId, routeId, result, now) {
       body: result && (result.body || result.message || result.error),
     });
     store.paths[key].candidateKey = previous.candidateKey;
-    store.paths[key].probeCause = cause;
+    store.paths[key].probeCause = require('./route-probe').failureReason(cause);
     store.paths[key].nextCheckAt = new Date(now + probeCooldownMs(cause)).toISOString();
   }
   store.events.push({

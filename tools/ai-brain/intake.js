@@ -687,6 +687,7 @@ function mergeDiscoveredSources(accounts, discoveredSources) {
       const routableCredential =
         source.credential && source.credential.type === 'env' && source.credential.name;
       const available = source.status === 'available';
+      const localCli = source.kind === 'agent-cli' && !source.reachedVia;
       return {
         id: 'source-' + String(source.id).replace(/[^a-z0-9._-]/gi, '-'),
         sourceId: source.id,
@@ -699,10 +700,10 @@ function mergeDiscoveredSources(accounts, discoveredSources) {
         models: Array.isArray(source.models) ? source.models : [],
         modelMeta: source.modelMeta && typeof source.modelMeta === 'object' ? source.modelMeta : {},
         status: source.status || 'discovered',
-        enabled: Boolean(available && routableCredential),
+        enabled: Boolean(available && (routableCredential || localCli)),
         reason: !available
           ? source.reason || source.status || 'not probed successfully'
-          : routableCredential
+          : routableCredential || localCli
             ? null
             : 'credential is not routable from an environment variable',
         nextCheckAt: source.nextCheckAt || null,

@@ -134,7 +134,10 @@ test('H3 intake keeps configured agy pool even without aggregate quota; launcher
   const candidates = require('../candidates').generateCandidates({
     registry: require('../sources').loadSources(),
     catalogue: [],
-    accounts: [{ id: 'agy01', provider: 'agy-pool' }],
+    accounts: [
+      { id: 'agy01', provider: 'agy-pool' },
+      { id: 'codex-fixture', provider: 'codex', models: ['configured-codex-model'] },
+    ],
     externalWorkers: built.argv[built.argv.indexOf('--external-workers') + 1],
     discoverPool: true,
     models: ['gemini-3.8-flash-high'],
@@ -148,6 +151,9 @@ test('H3 intake keeps configured agy pool even without aggregate quota; launcher
   });
   assert.ok(
     candidates.some((c) => c.harness === 'agy-pool' && c.modelId === 'gemini-3.8-flash-high')
+  );
+  assert.ok(
+    candidates.some((c) => c.harness === 'codex' && c.modelId === 'configured-codex-model')
   );
   assert.equal(
     health.probeCooldown(
