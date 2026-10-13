@@ -164,6 +164,8 @@ function discoverSources(options = {}) {
   const add = (source) => {
     const endpoint = source.endpoint ? sanitizeEndpoint(source.endpoint) : null;
     if (source.endpoint && !endpoint) return;
+    // Repository and web links found in session metadata are not model APIs.
+    if (endpoint && NON_API_ENDPOINT.test(endpoint)) return;
     // Endpoint identity matters when one provider id exposes multiple URLs.
     const baseId = idOf(source.id);
     const collision = [...result.values()].some(
@@ -179,6 +181,9 @@ function discoverSources(options = {}) {
     const old = result.get(key);
     if (old) {
       old.models = [...new Set([...old.models, ...(source.models || [])])];
+      if (source.modelMeta) {
+        old.modelMeta = Object.assign({}, old.modelMeta || {}, source.modelMeta);
+      }
       if (!old.credential && source.credential) old.credential = source.credential;
       return;
     }
@@ -188,6 +193,7 @@ function discoverSources(options = {}) {
       kind: source.kind || 'model-source',
       endpoint,
       models: [...new Set(source.models || [])],
+      modelMeta: source.modelMeta ? { ...source.modelMeta } : {},
       credential: source.credential || null,
       status: 'discovered',
       lastProbeAt: null,
@@ -297,8 +303,11 @@ function discoverSources(options = {}) {
       }
       for (const child of children) {
         const target = path.join(dir, child.name);
-        if (child.isDirectory()) visit(target, depth + 1);
-        else if (/\.json$/i.test(child.name))
+        if (child.isDirectory()) {
+          // Session history, agent scratch and caches hold copies of URLs, not
+          // configured providers.
+          if (!NON_CONFIG_DIR.test(child.name)) visit(target, depth + 1);
+        } else if (/\.json$/i.test(child.name))
           scanConfig(target, entry + '-' + path.relative(base, target));
       }
     };
@@ -344,7 +353,63 @@ function discoverSources(options = {}) {
       });
   }
   discoverNineRouterDb(options, add);
-  return [...result.values()];
+  return dropUncredentialedDuplicates([...result.values()]);
+}
+
+const NON_API_ENDPOINT =
+  /^https?:\/\/(?:[^/]*\.)?(?:github\.com|gitlab\.com|bitbucket\.org)(?:[/:]|$)|\.git$/i;
+const NON_CONFIG_DIR =
+  /^(?:sessions|tasks|brain|scratch|conversations|history|cache|caches|logs?|checkpoints|workspaceStorage|globalStorage|node_modules|tmp|temp)$/i;
+
+// A copy of an endpoint found in a file carries no usable credential. When the
+// same endpoint is already known with an env credential, the copy only adds a
+// guaranteed 401, so it is dropped.
+function dropUncredentialedDuplicates(sources) {
+  const credentialed = new Set(
+    sources
+      .filter((source) => source.endpoint && source.credential && source.credential.type === 'env')
+      .map((source) => source.endpoint.replace(/\/+$/, '').toLowerCase())
+  );
+  return sources.filter(
+    (source) =>
+      !source.endpoint ||
+      (source.credential && source.credential.type === 'env') ||
+      !credentialed.has(source.endpoint.replace(/\/+$/, '').toLowerCase())
+  );
+}
+
+function toPositiveInteger(value) {
+  if (value === null || value === undefined || typeof value === 'boolean') return undefined;
+  if (typeof value === 'object') return undefined;
+  if (typeof value === 'string' && !/^\s*\d+\s*$/.test(value)) return undefined;
+  const num = Number(value);
+  if (Number.isInteger(num) && num > 0) return num;
+  return undefined;
+}
+
+function modelMeta(body) {
+  const rows = body && (body.data || body.models || body.items || body);
+  if (!Array.isArray(rows)) return {};
+  const meta = {};
+  for (const row of rows) {
+    const id = typeof row === 'string' ? row : row && (row.id || row.name);
+    if (typeof id !== 'string' || !id) continue;
+    const contextWindow =
+      row && typeof row === 'object'
+        ? (toPositiveInteger(row.context_length) ??
+          toPositiveInteger(row.context_window) ??
+          toPositiveInteger(row.max_context_length))
+        : undefined;
+    const maxOutputTokens =
+      row && typeof row === 'object' ? toPositiveInteger(row.max_completion_tokens) : undefined;
+    const existing = meta[id];
+    meta[id] = {
+      contextWindow: contextWindow !== undefined ? contextWindow : existing?.contextWindow,
+      maxOutputTokens: maxOutputTokens !== undefined ? maxOutputTokens : existing?.maxOutputTokens,
+      contextSource: 'provider-models-endpoint',
+    };
+  }
+  return meta;
 }
 
 function modelIds(body) {
@@ -392,6 +457,7 @@ async function probeSource(source, options = {}) {
     return {
       ...record,
       models: [...new Set([...record.models, ...modelIds(body)])],
+      modelMeta: Object.assign({}, record.modelMeta || {}, modelMeta(body)),
       status: 'available',
       reason: null,
       nextCheckAt: null,
@@ -431,6 +497,7 @@ async function discover(options = {}) {
     return {
       ...entry,
       models: [...new Set([...(old.models || []), ...(entry.models || [])])],
+      modelMeta: Object.assign({}, old.modelMeta || {}, entry.modelMeta || {}),
       // A fresh discovery invalidates old availability until a new probe.
       status: 'discovered',
       lastProbeAt: null,
@@ -453,4 +520,13 @@ async function discover(options = {}) {
   return { version: 1, updatedAt: now.toISOString(), sources: probed };
 }
 
-module.exports = { discoverSources, probeSource, discover, modelIds, sanitizeEndpoint };
+module.exports = {
+  discoverSources,
+  probeSource,
+  discover,
+  modelIds,
+  modelMeta,
+  modelMetadata: modelMeta,
+  sanitizeEndpoint,
+  toPositiveInteger,
+};

@@ -253,3 +253,6 @@ Part G implements source-bound Work Item drafting and governed planning in `tool
     - G4: source-limited drafting omitting unsourced register business outcomes and blocking drafts.
   - `tools/ai-brain/test/task-ai-141.test.js`: confirms planning and infrastructure failures do not revoke transferred model proofs.
   - `tools/ai-brain/test/task-ai-141b.test.js`: verifies `next --loop` targeting and claim expirations with planner-compatible register statuses.
+
+### Discovery noise fix (2026-10-12)
+Source discovery no longer treats session history, agent scratch or repository links as model sources, and drops credential-less file copies of an endpoint already known with an env credential. Measured on the operator machine: 364 discovered sources with 268 false HTTP 404 became 80 sources with 1 HTTP 404 (AutoClaw proxy path).
