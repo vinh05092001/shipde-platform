@@ -3450,6 +3450,7 @@ async function orchestrateCommand(args, deps = {}) {
     enforceProofFloors: true,
     isolatedWorker: Boolean(args['isolated-worker']),
     externalWorkers: args['external-workers'],
+    routeHealthFile: args['route-health'] || d.routeHealthFile,
     workerTimeoutMs,
     ...(args.rtk ? { rtk: args.rtk } : {}),
     ...(tokenBudgets ? { tokenBudgets } : {}),

@@ -3160,6 +3160,14 @@ function orderDependenciesFirst(items) {
 async function runOrchestration(goal, opts) {
   const o = Object.assign({ goal }, opts || {});
   const now = o.now || Date.now();
+  if (!o.routeHealthFile && (o.cwd || o.root))
+    o.routeHealthFile = path.join(
+      o.cwd || o.root,
+      'tools',
+      'ai-brain',
+      'data',
+      'model-route-health.json'
+    );
   const log = buildDefaults();
   log.goal = goal || null;
 
@@ -3950,6 +3958,21 @@ async function runOrchestration(goal, opts) {
       //    launch, with the ranking inputs it was made from (AI-64-R03).
       const currentItemStep = liveSteps[item.id] || savedStep;
       const failedForSelection = new Set(failedKeys);
+      for (const offered of candidates) {
+        const reason = require('./route-health').probeCooldown(offered, o);
+        if (reason) {
+          failedForSelection.add(candidateKey(offered));
+          decisions.recordDecision(
+            {
+              stage: decisions.Stage.REFUSED,
+              workItemId: item.id,
+              rejected: [{ candidateKey: candidateKey(offered), reason }],
+              detail: reason,
+            },
+            logOpts
+          );
+        }
+      }
       const excludedForSelection = new Set(excludedDomains);
       const selectedCheckpoint =
         attempt === 1 &&
@@ -3957,7 +3980,8 @@ async function runOrchestration(goal, opts) {
         currentItemStep.selection &&
         !(currentItemStep.failures || []).some(
           (failure) => failure.failedCandidateKey === currentItemStep.selection.candidateKey
-        )
+        ) &&
+        !failedForSelection.has(currentItemStep.selection.candidateKey)
           ? currentItemStep.selection
           : null;
       const decision = selectedCheckpoint
@@ -4158,6 +4182,7 @@ async function runOrchestration(goal, opts) {
             { timeoutMs, fetch: o.fetch }
           );
         }
+        require('./route-health').rememberProbe(candidate, probeResult, o);
         if (!probeResult || probeResult.ok !== true) {
           const reasonCode = sharedRouteProbe.classifyProbeFailure(probeResult);
           const reason = 'WRITER_ROUTE_PROBE_FAILED ' + reasonCode;

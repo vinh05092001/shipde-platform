@@ -262,6 +262,57 @@ for (const scenario of ['checkpoint', 'missing-checkpoint', 'refused', 'signal']
   });
 }
 
+test('H3 writer reloads durable cooldown before probing and selects the next route', async () => {
+  const repo = makeTempRepo();
+  const dir = tmpDir('h3-writer-memory-');
+  const health = require('../route-health');
+  const dead = cand({
+    harness: 'opencode',
+    accessPath: 'cli',
+    source: 'oc',
+    gateway: '9router',
+    modelId: 'ninerouter/openai/dead',
+    quality: 100,
+  });
+  const live = cand({ ...dead, modelId: 'ninerouter/openai/live', quality: 90 });
+  const routeHealthFile = path.join(dir, 'health.json');
+  const probed = [];
+  try {
+    health.rememberProbe(dead, { ok: false, status: 404 }, { routeHealthFile, now: Date.now() });
+    const result = await safeRun(
+      baseOpts({
+        candidates: [dead, live],
+        isolatedWorker: true,
+        cwd: repo.dir,
+        baseSha: repo.sha,
+        sha: repo.sha,
+        decisionDir: dir,
+        evidenceDir: path.join(dir, 'evidence'),
+        routeHealthFile,
+        registry: {
+          sources: [
+            { id: '9router', endpoint: 'https://gateway.example/v1', credential: { env: 'KEY' } },
+          ],
+          dispatch: { providers: { oc: { provider: 'opencode', modelPrefix: 'ninerouter/' } } },
+        },
+        routeProbe: async (c) => {
+          probed.push(c.modelId);
+          return { ok: true, status: 200 };
+        },
+        hostGate: () => ({ pass: true, failures: [] }),
+        run: liveLaunch(),
+        reviewer: () => ({ pass: true, sha: repo.sha, verdict: 'PASS', findings: [] }),
+      })
+    );
+    assert.equal(result.refusal, null);
+    assert.deepEqual(probed, ['openai/live']);
+    assert.match(decisionText(dir), /PROBE_COOLDOWN.*HTTP_404/);
+  } finally {
+    fs.rmSync(repo.dir, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 for (const scenario of ['success', 'failure', 'throw', 'budget', 'post-select-error']) {
   test('H3 no silent post-select failure: ' + scenario, async (t) => {
     const repo = makeTempRepo();

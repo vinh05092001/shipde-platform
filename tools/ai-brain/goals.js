@@ -948,6 +948,9 @@ function runGoal(goalId, options, deps) {
         rootDir,
         '--stop-file',
         stopFilePath,
+        ...(opts.externalWorkers || opts['external-workers']
+          ? ['--external-workers', String(opts.externalWorkers || opts['external-workers'])]
+          : []),
       ],
       {
         detached: true,

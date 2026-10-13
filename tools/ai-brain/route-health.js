@@ -99,6 +99,16 @@ function recordResult(store, modelId, routeId, result, now) {
     lastCheckedAt,
     nextCheckAt: new Date(Number.isFinite(nextCheck) ? nextCheck : now + delay).toISOString(),
   };
+  // Due refreshes must retain the same cause-based policy as live preflight.
+  if (previous.probeCause) {
+    const cause = require('./route-probe').classifyProbeFailure({
+      ...result,
+      body: result && (result.body || result.message || result.error),
+    });
+    store.paths[key].candidateKey = previous.candidateKey;
+    store.paths[key].probeCause = cause;
+    store.paths[key].nextCheckAt = new Date(now + probeCooldownMs(cause)).toISOString();
+  }
   store.events.push({
     type: 'route_parked',
     modelId: normalizeModelId(modelId),
@@ -116,6 +126,60 @@ function recordResult(store, modelId, routeId, result, now) {
     });
   }
   return { key, eligible: false, reason };
+}
+
+function probeMemoryFile(o) {
+  return o.routeHealthFile || path.join(__dirname, 'data', 'model-route-health.json');
+}
+function probeIdentity(c) {
+  return {
+    model: String(c.modelId || c.model || '').replace(/^ninerouter\//i, ''),
+    route: { id: c.gateway || c.sourceId || c.source, accountId: c.accountId },
+  };
+}
+function probeCooldown(candidate, options) {
+  const o = options || {};
+  if (candidate.harness === 'agy-pool') return null;
+  const store = o.routeHealth || loadStore(probeMemoryFile(o), { allowMissing: true });
+  const identity = probeIdentity(candidate);
+  const record = getPathRecord(store, identity.model, identity.route);
+  if (!record || !record.probeCause || record.status === 'AVAILABLE') return null;
+  if (Date.parse(record.nextCheckAt) <= (o.now ?? Date.now())) return null;
+  return `PROBE_COOLDOWN: ${record.probeCause} until ${record.nextCheckAt}`;
+}
+function probeCooldownMs(cause) {
+  const hours = /CREDIT|QUOTA|ENTITLEMENT|AUTH|FORBIDDEN|HTTP_40[123]|RATE_LIMITED/.test(cause)
+    ? 6
+    : /HTTP_404|ALIAS|ROUTE_UNAVAILABLE/.test(cause)
+      ? 24
+      : 0.5;
+  return hours * 3600000;
+}
+
+function rememberProbe(candidate, result, options) {
+  const o = options || {};
+  const cause = result && result.ok ? null : require('./route-probe').classifyProbeFailure(result);
+  if (cause === 'PROBE_BUDGET_EXHAUSTED' || cause === 'PROBE_ROUTE_CONFIGURATION_UNAVAILABLE')
+    return;
+  const file = probeMemoryFile(o);
+  const store = o.routeHealth || loadStore(file, { allowMissing: true });
+  const identity = probeIdentity(candidate);
+  const now = o.now ?? Date.now();
+  const recorded = recordResult(
+    store,
+    identity.model,
+    identity.route,
+    { ok: result && result.ok, status: result && result.status },
+    now
+  );
+  const record = store.paths[recorded.key];
+  record.candidateKey = candidate.candidateKey || null;
+  record.probeCause = cause;
+  if (cause) {
+    record.nextCheckAt = new Date(now + probeCooldownMs(cause)).toISOString();
+  }
+  if (o.persistRouteHealth !== false) saveStore(file, store);
+  return record;
 }
 
 function healthKey(modelId, routeId) {
@@ -150,7 +214,11 @@ function getPathRecord(store, modelId, routeId) {
 
 function isEligible(store, modelId, routeId, now) {
   const record = getPathRecord(store, modelId, routeId);
-  if (record) return record.status === 'AVAILABLE';
+  if (record)
+    return (
+      record.status === 'AVAILABLE' ||
+      Boolean(record.probeCause && dueAt(record, now ?? Date.now()))
+    );
   if (routeId && typeof routeId === 'object' && routeId.accountId) return false;
   const id = routeId && typeof routeId === 'object' ? routeId.id : routeId;
   const accountRows = Object.entries(store.paths || {}).filter(([key]) =>
@@ -706,6 +774,8 @@ async function runDueCli(options) {
 }
 
 module.exports = {
+  probeCooldown,
+  rememberProbe,
   normalizeModelId,
   classifyFailure,
   loadStore,

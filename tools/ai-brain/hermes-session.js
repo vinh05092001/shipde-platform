@@ -426,10 +426,30 @@ function selectReasoningCandidate(options, deps) {
       evidenceData,
       requireRouteHealth: true,
       routeHealth: d.routeHealth,
-      routeHealthFile: opts.routeHealthFile || d.routeHealthFile,
+      routeHealthFile:
+        opts.routeHealthFile ||
+        d.routeHealthFile ||
+        path.join(resolveRootDir(opts, d), 'tools', 'ai-brain', 'data', 'model-route-health.json'),
     });
   }
 
+  const cooldownRejected = [];
+  poolCandidates = poolCandidates.filter((candidate) => {
+    const reason = require('./route-health').probeCooldown(candidate, {
+      ...opts,
+      routeHealth: d.routeHealth,
+      routeHealthFile:
+        opts.routeHealthFile ||
+        d.routeHealthFile ||
+        path.join(resolveRootDir(opts, d), 'tools', 'ai-brain', 'data', 'model-route-health.json'),
+    });
+    if (reason)
+      cooldownRejected.push({
+        candidateKey: candidate.candidateKey || candidateKey(candidate),
+        reason,
+      });
+    return !reason;
+  });
   const excluded = new Set(opts.excludedCandidates || []);
   const excludedModels = new Set(opts.excludedModels || []);
 
@@ -559,6 +579,7 @@ function selectReasoningCandidate(options, deps) {
     rankCtx
   );
 
+  rankResult.rejected = [...(rankResult.rejected || []), ...cooldownRejected];
   let chosenKey = rankResult.chosen;
   if (opts.preferredCandidateKey) {
     const preferred = rankResult.ranking.find((c) => c.candidateKey === opts.preferredCandidateKey);
@@ -1205,6 +1226,20 @@ async function launchHermesSession(options, deps) {
         }),
       ]);
       clearTimeout(timeoutHandle);
+      require('./route-health').rememberProbe(candidate, probeResult, {
+        ...opts,
+        routeHealth: d.routeHealth,
+        routeHealthFile:
+          opts.routeHealthFile ||
+          d.routeHealthFile ||
+          path.join(
+            resolveRootDir(opts, d),
+            'tools',
+            'ai-brain',
+            'data',
+            'model-route-health.json'
+          ),
+      });
       if (!probeResult || probeResult.ok !== true) {
         const status = Number(probeResult && probeResult.status) || 0;
         const body = String((probeResult && probeResult.body) || 'Probe failed');
