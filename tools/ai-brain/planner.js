@@ -103,17 +103,21 @@ function plan(goal, opts) {
   const workItems = [];
   if (errors.length === 0) {
     for (const spec of specs) {
+      const roleRequirement = roleRequirementFor(spec);
+      const role = String(
+        (roleRequirement && roleRequirement.role) || spec.role || 'author.foundation'
+      );
       workItems.push({
         id: spec.id,
         title: spec.title || null,
         businessOutcome: spec.businessOutcome || spec.outcome || null,
-        roleRequirement: roleRequirementFor(spec),
+        roleRequirement,
         dependencies: (spec.dependencies || []).slice(),
         allowedPaths: (spec.allowedPaths || spec.files || []).slice(),
         fileOwnership: (spec.files || []).slice(),
         acceptanceCriteria: (spec.acceptanceCriteria || []).slice(),
         complexity: spec.complexity || 'standard',
-        proofFloor: spec.proofFloor || null,
+        proofFloor: spec.proofFloor || (/review/i.test(role) ? 'WORK_ITEM_PASS' : 'NONE'),
         contextSize: spec.contextSize || null,
         expectedDuration: spec.expectedDuration || spec.expectedDurationMs || null,
         latencyPriority: spec.latencyPriority || null,

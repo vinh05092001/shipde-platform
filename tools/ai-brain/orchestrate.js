@@ -2435,11 +2435,13 @@ function buildProfile(item, o, forbiddenFailureDomains) {
   const proofFloor =
     item && item.proofFloor
       ? item.proofFloor
-      : explicitExploration
-        ? 'HARNESS_PASS'
-        : codingOrReview && strictProfile
-          ? 'WORK_ITEM_PASS'
-          : 'NONE';
+      : role === 'writer'
+        ? 'NONE'
+        : explicitExploration
+          ? 'HARNESS_PASS'
+          : (role === 'reviewer' || role === 'security-review') && strictProfile
+            ? 'WORK_ITEM_PASS'
+            : 'NONE';
   return {
     taskId: item.id,
     role,

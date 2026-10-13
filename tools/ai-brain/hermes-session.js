@@ -37,6 +37,7 @@ function defaultSpawn(cmd, argv, spawnOpts) {
     let stdoutBytes = 0;
     let routeFailure = null;
     let failureScan = '';
+    const ansiPattern = /\u001b\[[0-?]*[ -/]*[@-~]/g;
     const redact = (value) => {
       let text = String(value);
       for (const [key, secret] of Object.entries((spawnOpts && spawnOpts.env) || {})) {
@@ -52,18 +53,22 @@ function defaultSpawn(cmd, argv, spawnOpts) {
     };
     const observe = (stream, chunk) => {
       const safe = Buffer.from(redact(chunk.toString('utf8')));
-      const text = safe.toString('utf8');
+      const text = safe.toString('utf8').replace(ansiPattern, '');
       failureScan = (failureScan + text).slice(-8192);
-      const routeSignal =
-        /(?:\b(?:HTTP\s*)?(?:402|403|429)\b|insufficient[_ ]user[_ ]quota|insufficient[_ ]quota|quota[_ ](?:exceeded|exhausted)|\b(?:402|403|429)\s+(?:payment|required|forbidden|too many)|API call failed \(attempt[^\n]{0,120}\b5\d\d\b)/i;
-      if (!routeFailure && routeSignal.test(failureScan)) {
-        routeFailure =
-          failureScan.match(
-            /.{0,160}(?:insufficient[_ ]user[_ ]quota|insufficient[_ ]quota|quota[_ ](?:exceeded|exhausted)|API call failed \(attempt[^\n]{0,120}\b5\d\d\b|(?:HTTP\s*)?(?:402|403|429)).{0,200}/i
-          )?.[0] || 'Hermes route failure';
-        try {
-          cp.kill('SIGTERM');
-        } catch {}
+      const apiFailure =
+        /(?:API call failed \(attempt[^\r\n]*|Streaming failed before delivery[^\r\n]*)/i;
+      const errorCode = /Error code:\s*(\d{3})\b/i;
+      const lines = failureScan.split(/\r?\n/);
+      const apiLine = lines.find((line) => apiFailure.test(line));
+      const statusLine = lines.find((line) => errorCode.test(line));
+      if (!routeFailure && apiLine && statusLine) {
+        const status = Number(statusLine.match(errorCode)[1]);
+        if ([402, 403, 429].includes(status) || status >= 500) {
+          routeFailure = `${apiLine} ${statusLine}`.slice(-400);
+          try {
+            cp.kill('SIGTERM');
+          } catch {}
+        }
       }
       if (stream === 'stderr') {
         try {
@@ -1093,7 +1098,11 @@ async function launchHermesSession(options, deps) {
         String(other.upstream || '') === String(candidate.upstream || '') &&
         String(other.accountId || '') === String(candidate.accountId || '')
     );
-  const maxAttempts = Math.min(Number(opts.maxAttempts) || 20, 20);
+  const requestedAttempts = Number(opts.maxAttempts);
+  const maxAttempts =
+    Number.isFinite(requestedAttempts) && requestedAttempts > 0
+      ? Math.min(Math.floor(requestedAttempts), 20)
+      : 20;
   const probeTimeoutMs = Math.min(Number(opts.probeTimeoutMs) || 8000, 8000);
   const probeBudgetMs = Math.min(Number(opts.probeBudgetMs) || 180000, 180000);
   const probeDeadline = Date.now() + probeBudgetMs;

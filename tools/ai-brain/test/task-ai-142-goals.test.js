@@ -14,6 +14,8 @@ const { spawnSync } = require('node:child_process');
 
 const goals = require('../goals');
 const decisions = require('../decisions');
+const orchestrate = require('../orchestrate');
+const routing = require('../routing');
 
 function createTempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-142-test-'));
@@ -59,6 +61,45 @@ describe('TASK-AI-142 Part H1 — Goal store and Controller contract', () => {
       '"merge_commit"',
     ].join(',');
     fs.writeFileSync(registerPath, header + '\n', 'utf8');
+  });
+
+  test('goal-generated author.foundation profiles without proofFloor use NONE', () => {
+    const profile = orchestrate.buildTaskProfile(
+      { id: 'GOAL-AUTOCLAW-REPOS-1', role: 'author.foundation', proofFloor: null },
+      { enforceProofFloors: true }
+    );
+    assert.equal(profile.proofFloor, 'NONE');
+
+    const candidate = {
+      harness: 'paseo',
+      accessPath: 'cli',
+      gateway: 'router',
+      upstream: 'provider',
+      accountId: 'account',
+      quotaScope: 'account',
+      modelId: 'provider/model-without-work-item-pass',
+      quality: 90,
+      latencyMs: 500,
+      cost: 1,
+      capabilities: {},
+      evidence: [],
+    };
+    const ranked = routing.rankForProfile(
+      [candidate],
+      profile,
+      { weightProfile: 'BALANCED' },
+      { now: Date.now(), evidenceData: {} }
+    );
+    assert.ok(
+      ranked.ranking.some((entry) => entry.modelId === candidate.modelId),
+      'goal-generated author.foundation profile ranks a candidate with no WORK_ITEM_PASS evidence'
+    );
+
+    const reviewer = orchestrate.buildTaskProfile(
+      { id: 'GOAL-REVIEW-1', role: 'reviewer', proofFloor: null },
+      { enforceProofFloors: true }
+    );
+    assert.equal(reviewer.proofFloor, 'WORK_ITEM_PASS');
   });
 
   afterEach(() => {

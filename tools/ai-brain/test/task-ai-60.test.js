@@ -83,6 +83,19 @@ test('15 planner makes a valid DAG', () => {
   assert.equal(result.workItems.length, 2);
   assert.deepEqual(result.workItems[1].dependencies, ['A']);
   assert.equal(result.workItems[0].roleRequirement.role, 'author.foundation');
+  assert.equal(result.workItems[0].proofFloor, 'NONE');
+});
+
+test('goal planner defaults missing proof floors to NONE for authors and keeps reviewer gates', () => {
+  const result = plan('g', {
+    specs: [
+      { id: 'AUTHOR', role: 'author.foundation', files: ['a.js'], acceptanceCriteria: ['a'] },
+      { id: 'REVIEW', role: 'reviewer', files: ['b.js'], acceptanceCriteria: ['b'] },
+    ],
+  });
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.workItems[0].proofFloor, 'NONE');
+  assert.equal(result.workItems[1].proofFloor, 'WORK_ITEM_PASS');
 });
 
 test('16 dependency cycle rejected', () => {

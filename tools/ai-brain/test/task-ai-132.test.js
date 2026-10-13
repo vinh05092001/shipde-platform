@@ -591,6 +591,7 @@ describe('TASK-AI-132: Controller next runner', () => {
 
     let runsCount = 0;
     const attemptedItems = [];
+    const logs = [];
 
     const fakeIntake = async (opts) => {
       runsCount += 1;
@@ -598,6 +599,11 @@ describe('TASK-AI-132: Controller next runner', () => {
       if (opts.workItem === 'TASK-FAIL-1') {
         const err = new Error('INTAKE_INCOMPLETE: work item invalid');
         err.code = 'INTAKE_INCOMPLETE';
+        err.reasons = [
+          { reasonCode: 'PROOF_FLOOR_NOT_MET' },
+          { reasonCode: 'PROOF_FLOOR_NOT_MET' },
+          { reasonCode: 'NO_ELIGIBLE_CANDIDATE' },
+        ];
         throw err;
       }
       return { id: opts.workItem, ran: true, status: 'completed' };
@@ -612,6 +618,7 @@ describe('TASK-AI-132: Controller next runner', () => {
       {
         runIntake: fakeIntake,
         sleep: async () => {},
+        log: (line) => logs.push(line),
       }
     );
 
@@ -620,6 +627,10 @@ describe('TASK-AI-132: Controller next runner', () => {
     // Iteration 3 sees both done/terminal and stops cleanly on NO_READY_ITEM.
     assert.equal(runsCount, 2, 'must not busy loop on failed item');
     assert.deepEqual(attemptedItems, ['TASK-FAIL-1', 'TASK-OK-2']);
+    assert.ok(
+      logs.some((line) => /PROOF_FLOOR_NOT_MET \(2\).*NO_ELIGIBLE_CANDIDATE \(1\)/.test(line)),
+      'terminal refusal log must report rejected reason counts'
+    );
     assert.equal(res.stopped, true);
     assert.equal(res.reason, 'NO_READY_ITEM');
 

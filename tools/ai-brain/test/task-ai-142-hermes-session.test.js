@@ -342,6 +342,42 @@ test('H3-20: credit failure excludes the canonical model and probes the next ran
   }
 });
 
+test('H3 probe attempt budget is configurable up to 20 routes', async () => {
+  const root = fixtureRoot('hermes-probe-attempt-budget-');
+  try {
+    const candidates = Array.from({ length: 5 }, (_, index) =>
+      sampleCandidate({
+        gateway: index % 2 ? 'rqsty' : '9router',
+        upstream: `upstream-${index}`,
+        accountId: `account-${index}`,
+        modelId: `model-${index}/reasoner`,
+        accessPath: `https://route-${index}.example/v1`,
+        quality: 100 - index,
+      })
+    );
+    let probes = 0;
+    await assert.rejects(
+      launchHermesSession(
+        { rootDir: root, skipDecisionLog: true, maxAttempts: 1 },
+        {
+          candidates,
+          registry: sampleRegistry(),
+          priorsData: { ranking: [] },
+          probe: async () => {
+            probes += 1;
+            return { ok: false, status: 429, body: 'rate limited' };
+          },
+          spawn: async () => ({ exitCode: 0 }),
+        }
+      ),
+      /NO_REASONING_CANDIDATE/
+    );
+    assert.equal(probes, 1);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('H3-21: probe timeout fails closed with NO_REASONING_CANDIDATE', async () => {
   const root = fixtureRoot('hermes-probe-budget-');
   try {
@@ -1726,7 +1762,7 @@ test('H2-30: defaultSpawn pipes and tees stderr to process.stderr while bufferin
   }
 });
 
-test('defaultSpawn terminates Hermes promptly when a live quota failure reaches stderr', async () => {
+test('defaultSpawn ignores model quota text and recognizes Hermes API failure lines', async () => {
   const origStderrWrite = process.stderr.write;
   process.stderr.write = () => true;
   try {
@@ -1735,20 +1771,25 @@ test('defaultSpawn terminates Hermes promptly when a live quota failure reaches 
       process.execPath,
       [
         '-e',
-        "process.stderr.write('HTTP 403 insufficient_user_quota ' + process.env.SECRET_KEY + '\\n'); setInterval(() => {}, 1000);",
+        "process.stdout.write('Thinking: QUOTA_EXHAUSTED reason; insufficient quota is only an example\\n'); setTimeout(() => process.exit(0), 30);",
       ],
       {
-        env: { ...process.env, SECRET_KEY: 'runtime-never-log-secret' },
         stdio: ['inherit', 'pipe', 'pipe'],
       }
     );
-    assert.ok(
-      Date.now() - started < 3000,
-      'route failure must stop a retrying process immediately'
+    assert.equal(res.exitCode, 0);
+    assert.equal(res.routeFailure, null, 'model generated text is not route evidence');
+
+    const apiFailure = await defaultSpawn(
+      process.execPath,
+      [
+        '-e',
+        "process.stderr.write('\\u001b[31mAPI call failed (attempt 1/1): Error code: 403 insufficient_user_quota\\u001b[0m\\n'); setInterval(() => {}, 1000);",
+      ],
+      { stdio: ['inherit', 'pipe', 'pipe'] }
     );
-    assert.match(res.routeFailure, /403|quota/i);
-    assert.notEqual(res.exitCode, 0);
-    assert.doesNotMatch(res.stderr, /runtime-never-log-secret/);
+    assert.match(apiFailure.routeFailure, /API call failed.*403.*insufficient_user_quota/i);
+    assert.notEqual(apiFailure.exitCode, 0);
   } finally {
     process.stderr.write = origStderrWrite;
   }
