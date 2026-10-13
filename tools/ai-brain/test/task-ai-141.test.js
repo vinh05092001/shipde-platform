@@ -1662,22 +1662,22 @@ test('Part H: launcher enforces per-session token budget live and preserves boun
   assert.match(script, /\$usageFile = 'C:\\worker\\usage\.json'/);
 });
 
-test('Part H: missing, empty, or malformed usage telemetry fails closed when a budget is configured', () => {
+test('Part H: missing, empty, or malformed usage telemetry warns without failing a successful run', () => {
   const root = fixtureRoot();
   const missing = enforceTokenBudget({ exitCode: 0, stderr: '' }, { maxTokens: 100 }, null);
-  assert.equal(missing.exitCode, 1);
-  assert.equal(missing.failureReason, 'TOKEN_BUDGET_UNVERIFIED');
+  assert.equal(missing.exitCode, 0);
+  assert.equal(missing.budgetWarning, 'TOKEN_BUDGET_UNVERIFIED');
 
   const usageFile = path.join(root, 'usage.json');
   fs.writeFileSync(usageFile, '');
   const empty = enforceTokenBudget({ exitCode: 0, stderr: '' }, { maxTokens: 100 }, usageFile);
-  assert.equal(empty.exitCode, 1);
-  assert.equal(empty.failureReason, 'TOKEN_BUDGET_UNVERIFIED');
+  assert.equal(empty.exitCode, 0);
+  assert.equal(empty.budgetWarning, 'TOKEN_BUDGET_UNVERIFIED');
 
   fs.writeFileSync(usageFile, JSON.stringify({}));
   const noUsage = enforceTokenBudget({ exitCode: 0, stderr: '' }, { maxTokens: 100 }, usageFile);
-  assert.equal(noUsage.exitCode, 1);
-  assert.equal(noUsage.failureReason, 'TOKEN_BUDGET_UNVERIFIED');
+  assert.equal(noUsage.exitCode, 0);
+  assert.equal(noUsage.budgetWarning, 'TOKEN_BUDGET_UNVERIFIED');
 
   fs.writeFileSync(usageFile, JSON.stringify({ usage: { input_tokens: 80, output_tokens: 30 } }));
   const over = enforceTokenBudget({ exitCode: 0, stderr: '' }, { maxTokens: 100 }, usageFile);
@@ -2104,7 +2104,8 @@ test('Part H: missing usage telemetry is not replaced by a zeroed report', () =>
   assert.equal(written, null);
   assert.equal(fs.existsSync(usageFile), false);
   const checked = enforceTokenBudget({ exitCode: 0, stderr: '' }, { maxTokens: 100 }, usageFile);
-  assert.equal(checked.failureReason, 'TOKEN_BUDGET_UNVERIFIED');
+  assert.equal(checked.exitCode, 0);
+  assert.equal(checked.budgetWarning, 'TOKEN_BUDGET_UNVERIFIED');
 });
 
 test('Part H: host brain gate tests the controller checkout, not the isolated worker tree', () => {
