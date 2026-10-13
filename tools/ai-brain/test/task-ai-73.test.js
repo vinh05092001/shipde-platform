@@ -377,7 +377,7 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
   test('3 valid JEV advisory changes the weight profile and ranking order', async () => {
     // Expected contract:
     // In live CLI dispatch, a valid JEV advisory returned over the live path
-    // must change the weightProfile (e.g. from default QUALITY_FIRST to LATENCY_FIRST for reviewer)
+    // must change the weightProfile for a role without a QUALITY_FIRST policy
     // and flip the candidate ranking order so that Candidate Fast outranks Candidate Quality.
     // At base, live CLI does not supply jevAsk, so assessment is always UNDECIDED
     // and weightProfile remains the default fallback (QUALITY_FIRST for reviewer).
@@ -446,7 +446,7 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
       const profileFile = path.join(tempHome, 'profile.json');
       writeJson(profileFile, {
         taskId: 'TASK-AI-73-REV-ORDER',
-        role: 'reviewer',
+        role: 'writer',
         complexity: 'standard',
         requiredCapabilities: [],
         proofFloor: 'NONE',

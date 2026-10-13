@@ -407,7 +407,9 @@ async function assessTask(profile, opts) {
   const highRisk = (profile.riskDomains || []).some((domain) =>
     ['auth', 'security', 'money', 'tenant isolation'].includes(String(domain).toLowerCase())
   );
-  const qualityOverride = highRisk && chosenProfile !== 'QUALITY_FIRST';
+  const qualityFirstRole = profile.role === 'reviewer' || profile.role === 'security-review';
+  const riskQualityOverride = highRisk && chosenProfile !== 'QUALITY_FIRST';
+  const qualityOverride = qualityFirstRole || riskQualityOverride;
   if (qualityOverride) {
     chosenProfile = 'QUALITY_FIRST';
     weights = WEIGHT_PROFILES.QUALITY_FIRST;
@@ -426,7 +428,8 @@ async function assessTask(profile, opts) {
       ? 'WEIGHTS_JEV_SCORE'
       : 'WEIGHTS_' + chosenProfile + '_CONTROLLER_FALLBACK'
   );
-  if (qualityOverride) reasonCodes.push('QUALITY_FIRST_RISK_FLOOR_OVERRIDE');
+  if (riskQualityOverride) reasonCodes.push('QUALITY_FIRST_RISK_FLOOR_OVERRIDE');
+  if (qualityFirstRole) reasonCodes.push('QUALITY_FIRST_ROLE_POLICY');
 
   const taskClass =
     profile.complexity === 'complex' || profile.complexity === 'large'
@@ -466,9 +469,11 @@ async function assessTask(profile, opts) {
     jevModel: jevDecided && result.jevModel ? result.jevModel : null,
     usage: jevDecided && result.usage ? result.usage : null,
     reasonCodes,
-    reason: qualityOverride
-      ? 'QUALITY_FIRST enforced for high-risk domains: ' + (profile.riskDomains || []).join(', ')
-      : (result.jev && result.jev.reason) || result.reason || null,
+    reason: qualityFirstRole
+      ? 'QUALITY_FIRST_ROLE_POLICY'
+      : qualityOverride
+        ? 'QUALITY_FIRST enforced for high-risk domains: ' + (profile.riskDomains || []).join(', ')
+        : (result.jev && result.jev.reason) || result.reason || null,
   };
 }
 

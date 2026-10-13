@@ -113,6 +113,28 @@ test('JEV scores convert to direct weights and the Controller uses them for rank
   assert.equal(JSON.stringify(request[1]).includes(secret), false);
 });
 
+test('reviewer roles always retain QUALITY_FIRST when JEV returns confident scores', async () => {
+  for (const role of ['reviewer', 'security-review']) {
+    const assessment = await routing.assessTask(profile({ role, riskDomains: [] }), {
+      ask: async () => ({
+        scores: {
+          qualityImportance: { score: 1, confidence: 0.99 },
+          latencyImportance: { score: 10, confidence: 0.99 },
+          costImportance: { score: 1, confidence: 0.99 },
+        },
+        choice: 'LATENCY_FIRST',
+        confidence: 0.99,
+      }),
+    });
+
+    assert.equal(assessment.weightProfile, 'QUALITY_FIRST', role);
+    assert.equal(assessment.weightSource, 'preset:QUALITY_FIRST', role);
+    assert.deepEqual(assessment.weights, { quality: 65, latency: 10, cost: 25 }, role);
+    assert.equal(assessment.reason, 'QUALITY_FIRST_ROLE_POLICY', role);
+    assert.ok(assessment.reasonCodes.includes('QUALITY_FIRST_ROLE_POLICY'), role);
+  }
+});
+
 test('low confidence scores fall back to a preset with a reason', async () => {
   const assessment = await routing.assessTask(profile(), {
     ask: async () => ({
