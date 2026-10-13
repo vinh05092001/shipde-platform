@@ -1840,6 +1840,14 @@ test('Part H regressions: default orchestration gates success and builds context
       },
     ],
     cwd: root,
+    registry: {
+      sources: [
+        { id: 'g', endpoint: 'https://gateway.example/v1', credential: { env: 'GW_API_KEY' } },
+      ],
+      dispatch: { providers: {} },
+    },
+    env: { GW_API_KEY: 'test-key' },
+    routeProbe: async () => ({ ok: true, status: 200, body: 'OK' }),
     decisionDir: path.join(root, 'default-decisions'),
     contextManifest: manifest,
     maxRepairs: 0,

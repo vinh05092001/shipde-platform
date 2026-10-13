@@ -65,6 +65,10 @@ const {
   ISOLATION_VERDICT_HUMAN_ACTION,
 } = require('./failure-classifier');
 const { materialiseExercise, captureFailBefore } = require('./isolation-launcher');
+const sharedRouteProbe = require('./route-probe');
+const MAX_ROUTES_PER_MODEL = 2;
+const PROBE_ATTEMPT_LIMIT = 20;
+const PROBE_BUDGET_MS = 180000;
 
 const ItemStatus = Object.freeze({
   COMPLETED: 'completed',
@@ -323,6 +327,54 @@ function resolveLaunchRoute(candidate, options, registry) {
     { isolatedWorker: Boolean(options && options.isolatedWorker) },
     registry
   );
+}
+
+function routeProbeCandidate(candidate, route, registry, allowModelFallback = true) {
+  const sources = (registry && registry.sources) || [];
+  const routeSource = [candidate.gateway, candidate.source, route && route.provider]
+    .map((id) => sources.find((entry) => entry.id === id))
+    .find(
+      (entry) => entry && (entry.endpoint || /^https?:\/\//i.test(String(entry.accessPath || '')))
+    );
+  const exactModel = String((route && route.model) || candidate.modelId || candidate.model || '');
+  const upstreamModel = exactModel.replace(/^ninerouter\//i, '');
+  const modelSource = sources.find(
+    (entry) =>
+      entry &&
+      (entry.endpoint || /^https?:\/\//i.test(String(entry.accessPath || ''))) &&
+      Array.isArray(entry.models) &&
+      (entry.models.includes(exactModel) || entry.models.includes(upstreamModel))
+  );
+  let source = routeSource || (allowModelFallback && modelSource) || null;
+  if (!source && candidate.upstream) {
+    source = sources.find(
+      (entry) =>
+        entry.id === candidate.upstream &&
+        (entry.endpoint || /^https?:\/\//i.test(String(entry.accessPath || '')))
+    );
+  }
+  if (
+    source &&
+    !source.endpoint &&
+    !/^https?:\/\//i.test(String(source.accessPath || '')) &&
+    source.reachedVia
+  ) {
+    source = sources.find((entry) => entry.id === source.reachedVia) || source;
+  }
+  const accessPath =
+    (source &&
+      (source.endpoint ||
+        (/^https?:\/\//i.test(String(source.accessPath || '')) && source.accessPath))) ||
+    candidate.accessPath ||
+    candidate.sourceEndpoint;
+  const apiKeyEnv = source && source.credential && source.credential.env;
+  if (!accessPath || !apiKeyEnv || !/^[A-Za-z0-9_]+$/.test(apiKeyEnv)) return null;
+  return {
+    accessPath,
+    modelId: route.model,
+    maxOutputTokens: candidate.maxOutputTokens || candidate.max_output_tokens,
+    apiKeyEnv,
+  };
 }
 
 /**
@@ -605,6 +657,9 @@ function reviewLane(
   registry,
   opts
 ) {
+  const reviewerProbeCounts = new Map();
+  const reviewerProbeStartedAt = Date.now();
+  let reviewerProbeAttempts = 0;
   const writerKey =
     typeof itemOrWriterKey === 'string'
       ? itemOrWriterKey
@@ -721,6 +776,82 @@ function reviewLane(
           },
         ],
       };
+    }
+
+    const probeCandidate = routeProbeCandidate(candidate, route, registry, false);
+    if (!probeCandidate) {
+      // CLI-only reviewers remain eligible; skipping HTTP preflight with a WARNING
+      // preserves valid CLI reviewers that would otherwise be excluded.
+      decisions.recordDecision(
+        {
+          stage: decisions.Stage.WARNING,
+          workItemId: (item ? item.id : 'item') + '-review',
+          role: 'reviewer',
+          candidateKey: reviewerIdentity,
+          detail: 'REVIEWER_ROUTE_PROBE_SKIPPED: NO_HTTP_ROUTE_OR_PROBE_CREDENTIAL_CONFIG',
+        },
+        logOpts
+      );
+    } else {
+      // The two-route cap is per canonical model across providers, not per gateway.
+      const modelId = String(route.model || '')
+        .toLowerCase()
+        .split('/')
+        .pop()
+        .replace(/@[^@:]+$/, '')
+        .replace(/:free$/, '');
+      const count = (reviewerProbeCounts.get(modelId) || 0) + 1;
+      reviewerProbeCounts.set(modelId, count);
+      let result = { ok: false, status: 0, body: 'Probe route configuration unavailable' };
+      if (
+        probeCandidate &&
+        count <= MAX_ROUTES_PER_MODEL &&
+        reviewerProbeAttempts < PROBE_ATTEMPT_LIMIT &&
+        Date.now() - reviewerProbeStartedAt < PROBE_BUDGET_MS
+      ) {
+        reviewerProbeAttempts += 1;
+        // Invoke the caller-provided probe directly through the timeout wrapper.
+        result = await sharedRouteProbe.boundedProbe(
+          o.routeProbe || sharedRouteProbe.probeRoute,
+          probeCandidate,
+          probeCandidate.apiKeyEnv,
+          Object.assign({}, process.env, o.env || {}),
+          { timeoutMs: 8000, fetch: o.fetch }
+        );
+      } else if (
+        reviewerProbeAttempts >= PROBE_ATTEMPT_LIMIT ||
+        Date.now() - reviewerProbeStartedAt >= PROBE_BUDGET_MS
+      ) {
+        result = { ok: false, status: 0, body: 'Probe budget exhausted' };
+      }
+      if (!result || result.ok !== true) {
+        const reasonCode = sharedRouteProbe.classifyProbeFailure(result);
+        const failure = {
+          exitCode: 1,
+          stderr: 'REVIEWER_ROUTE_PROBE_FAILED ' + reasonCode,
+          failureReason: 'REVIEWER_ROUTE_PROBE_FAILED',
+        };
+        decisions.recordDecision(
+          {
+            stage: decisions.Stage.REFUSED,
+            workItemId: (item ? item.id : 'item') + '-review',
+            role: 'reviewer',
+            rejected: [{ candidateKey: reviewerIdentity, reason: reasonCode }],
+            detail: failure.stderr,
+          },
+          logOpts
+        );
+        if (opts && typeof opts.onReviewerLaunchFailure === 'function')
+          opts.onReviewerLaunchFailure(failure, candidate, opts.attempt);
+        return {
+          pass: false,
+          sha: targetSha,
+          cause: 'REVIEWER_ROUTE_PROBE_FAILED',
+          verdict: 'REFUSED',
+          reviewer: reviewerIdentity,
+          findings: [{ id: 'REVIEWER_ROUTE_PROBE_FAILED', open: true, detail: reasonCode }],
+        };
+      }
     }
 
     const hostWorktree = o.cwd || process.cwd();
@@ -3804,7 +3935,14 @@ async function runOrchestration(goal, opts) {
       log.failBefore = session.failBefore;
     }
 
-    for (let attempt = 1; !session && attempt <= candidates.length + 1; attempt += 1) {
+    const writerProbeCounts = new Map();
+    const writerProbeStartedAt = Date.now();
+    let writerProbeAttempts = 0;
+    for (
+      let attempt = 1;
+      !session && attempt <= Math.min(candidates.length + 1, 20);
+      attempt += 1
+    ) {
       // 5. The Controller chooses every candidate (AI-64-P01). This is a live
       //    decision, not a dry run: it is written to the decision log before the
       //    launch, with the ranking inputs it was made from (AI-64-R03).
@@ -3873,8 +4011,6 @@ async function runOrchestration(goal, opts) {
       if (launch.firstChoice === null) launch.firstChoice = decision.chosen;
       launch.selected = decision.chosen;
       triedKeys.add(decision.chosen);
-      const candDomain = routing.canonicalFailureDomain(candidate);
-      domainAttempts.set(candDomain, (domainAttempts.get(candDomain) || 0) + 1);
       if (!selectedCheckpoint) {
         const currentStep = liveSteps[item.id] || savedStep;
         persistStep(item.id, 'candidate_selected', {
@@ -3919,11 +4055,79 @@ async function runOrchestration(goal, opts) {
       }
       log.prompts.push({ workItemId: item.id, attempt, candidateKey: decision.chosen, prompt });
 
+      const previousLaunch = currentItemStep && currentItemStep.launch;
+      const replayedLaunch = Boolean(
+        previousLaunch && previousLaunch.candidateKey === decision.chosen
+      );
       const route = resolveLaunchRoute(candidate, o, registry);
       if (!route) {
         blockedReason = 'HARNESS_UNKNOWN: no dispatch route for ' + String(decision.chosen);
         break;
       }
+      if (o.isolatedWorker && route.harnessName === 'opencode-direct' && !replayedLaunch) {
+        const modelId = String(route.model || '')
+          .toLowerCase()
+          .split('/')
+          .pop()
+          .replace(/@[^@:]+$/, '')
+          .replace(/:free$/, '');
+        const count = (writerProbeCounts.get(modelId) || 0) + 1;
+        writerProbeCounts.set(modelId, count);
+        const routeCandidate = routeProbeCandidate(candidate, route, registry);
+        const remainingMs = PROBE_BUDGET_MS - (Date.now() - writerProbeStartedAt);
+        let probeResult = { ok: false, status: 0, body: 'Probe route configuration unavailable' };
+        if (routeCandidate && writerProbeAttempts < PROBE_ATTEMPT_LIMIT && remainingMs > 0) {
+          writerProbeAttempts += 1;
+          const timeoutMs = Math.min(8000, remainingMs);
+          // Invoke the caller-provided probe directly through the timeout wrapper.
+          probeResult = await sharedRouteProbe.boundedProbe(
+            o.routeProbe || sharedRouteProbe.probeRoute,
+            routeCandidate,
+            routeCandidate.apiKeyEnv,
+            Object.assign({}, process.env, o.env || {}),
+            { timeoutMs, fetch: o.fetch }
+          );
+        }
+        if (!probeResult || probeResult.ok !== true) {
+          const reasonCode = sharedRouteProbe.classifyProbeFailure(probeResult);
+          const reason = 'WRITER_ROUTE_PROBE_FAILED ' + reasonCode;
+          failedKeys.add(decision.chosen);
+          if (count >= MAX_ROUTES_PER_MODEL) {
+            for (const other of candidates) {
+              const otherModel = String(other.modelId || other.model || '')
+                .toLowerCase()
+                .split('/')
+                .pop()
+                .replace(/@[^@:]+$/, '')
+                .replace(/:free$/, '');
+              if (otherModel === modelId) failedKeys.add(candidateKey(other));
+            }
+          }
+          decisions.recordDecision(
+            {
+              stage: decisions.Stage.REFUSED,
+              workItemId: item.id,
+              role: roleOf(item),
+              chosen: null,
+              rejected: [{ candidateKey: decision.chosen, reason: reasonCode }],
+              detail: reason,
+            },
+            logOpts
+          );
+          launch.fallbackReason = reasonCode;
+          launch.cause = reasonCode;
+          if (
+            writerProbeAttempts >= PROBE_ATTEMPT_LIMIT ||
+            Date.now() - writerProbeStartedAt >= PROBE_BUDGET_MS
+          ) {
+            blockedReason = 'NO_ELIGIBLE_CANDIDATE: writer route probe budget exhausted';
+            break;
+          }
+          continue;
+        }
+      }
+      const candDomain = routing.canonicalFailureDomain(candidate);
+      domainAttempts.set(candDomain, (domainAttempts.get(candDomain) || 0) + 1);
       const job = {
         workItemId: item.id,
         candidateKey: decision.chosen,
@@ -3984,13 +4188,9 @@ async function runOrchestration(goal, opts) {
         }
       }
 
-      const previousLaunch = currentItemStep && currentItemStep.launch;
       // TASK-AI-120 RI-R03: the blame decision must use the classification this
       // attempt earned. A replayed launch carries its recorded classification;
       // a fresh failure is classified from its own signals below.
-      const replayedLaunch = Boolean(
-        previousLaunch && previousLaunch.candidateKey === decision.chosen
-      );
       let launchClassification = null;
       let res = null;
       if (replayedLaunch) {

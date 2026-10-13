@@ -142,6 +142,7 @@ const candidatesApi = require('./candidates');
 const routingApi = require('./routing');
 const decisionsApi = require('./decisions');
 const failureClassifier = require('./failure-classifier');
+const routeProbe = require('./route-probe');
 const { candidateKey, parseCandidateKey } = require('./discovery/identity');
 
 const HERMES_MIN_CONTEXT = 32000;
@@ -844,45 +845,7 @@ function writeProvidersConfig(candidate, options, deps) {
 
 /** Sends a realistic-cost OpenAI-compatible request without exposing the credential. */
 async function probeHermesCandidate(candidate, apiKeyEnv, env, options) {
-  const opts = options || {};
-  const apiKey = env && env[apiKeyEnv];
-  if (!apiKey) return { ok: false, status: 0, body: 'Missing provider credential' };
-  const baseUrl = String(candidate.accessPath).replace(/\/+$/, '');
-  const url = /\/chat\/completions$/i.test(baseUrl) ? baseUrl : `${baseUrl}/chat/completions`;
-  const controller = new AbortController();
-  const onAbort = () => controller.abort();
-  if (opts.signal) {
-    if (opts.signal.aborted) controller.abort();
-    else opts.signal.addEventListener('abort', onAbort, { once: true });
-  }
-  const timeout = setTimeout(() => controller.abort(), opts.timeoutMs || 30000);
-  try {
-    const response = await (opts.fetch || globalThis.fetch)(url, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
-      body: JSON.stringify({
-        model: candidate.modelId,
-        messages: [
-          {
-            role: 'user',
-            content: `Reply only OK. The following reference context is filler for estimating a normal Controller request size:\n${'The shipment planning reference contains operational context, constraints, dependencies, and acceptance evidence. '.repeat(130)}`,
-          },
-        ],
-        max_tokens: Number(candidate.maxOutputTokens || candidate.max_output_tokens || 8192),
-      }),
-      signal: controller.signal,
-    });
-    return { ok: response.ok, status: response.status, body: await response.text() };
-  } catch (error) {
-    return {
-      ok: false,
-      status: 0,
-      body: error && error.name === 'AbortError' ? 'Request timeout' : 'Probe request failed',
-    };
-  } finally {
-    clearTimeout(timeout);
-    if (opts.signal) opts.signal.removeEventListener('abort', onAbort);
-  }
+  return routeProbe.probeRoute(candidate, apiKeyEnv, env, options);
 }
 
 /**

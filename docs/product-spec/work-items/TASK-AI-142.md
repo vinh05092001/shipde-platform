@@ -276,3 +276,11 @@ On 2026-10-13, JEV was changed to score quality, latency, and cost directly; the
 ## H3 isolated usage budget (2026-10-13)
 
 Isolated OpenCode results now synthesize the usage report from token JSON in stdout or a launch-result `usage` field before budget enforcement. A proven overrun fails with `TOKEN_BUDGET_EXCEEDED`; missing/unreadable usage records `TOKEN_BUDGET_UNVERIFIED` as a warning while preserving the worker's actual outcome. `STALLED_NO_PROGRESS` details include the detector's measured file-signature and token-usage signals; stdout is explicitly identified as outside that detector.
+
+## H3 writer route probe (2026-10-13)
+
+Before launching an isolated writer, the Controller probes the resolved gateway with the exact upstream model id and a realistic request. Failed routes are logged and excluded before launch, with bounded time and attempt budgets and no credential values in logs. Hermes and isolated dispatch share the OpenAI-compatible probe implementation.
+
+## H3 route probe review repair (2026-10-13)
+
+Bounded probes pass an AbortController signal to the injected `routeProbe` and HTTP client, aborting timed-out requests. Writer and reviewer paths invoke the caller-provided probe directly. Named limits are `MAX_ROUTES_PER_MODEL = 2`, `PROBE_ATTEMPT_LIMIT = 20`, and `PROBE_BUDGET_MS = 180000`. CLI-only reviewers remain eligible and record a WARNING explaining skipped HTTP preflight. Regression coverage checks timeout cancellation and injected probes on both dispatch paths.

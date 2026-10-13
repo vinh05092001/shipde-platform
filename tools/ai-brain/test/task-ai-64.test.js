@@ -1477,7 +1477,7 @@ test('64-33 materialiseExercise refuses targets outside the worker root', () => 
   );
 });
 
-test('64-22 isolated live path sets isolatedWorker and worker root cwd without newWorkspace', async () => {
+test('64-22 isolated live path refuses a worker route without gateway credentials', async () => {
   const isoPath = require.resolve('../isolation-launcher');
   const orchPath = require.resolve('../orchestrate');
   const isoModule = require(isoPath);
@@ -1485,13 +1485,11 @@ test('64-22 isolated live path sets isolatedWorker and worker root cwd without n
   const realIsWorkerPath = isoModule.isWorkerPath;
   let launchedAdapter = null;
   let launchedArgs = null;
-  let launchedOptions = null;
 
   isoModule.getIsolatedLauncher = function spy() {
     return function stubIsolatedLauncher(adapter, args, opts) {
       launchedAdapter = adapter;
       launchedArgs = args;
-      launchedOptions = opts;
       return {
         exitCode: 0,
         stdout: 'the agent changed production code',
@@ -1501,7 +1499,6 @@ test('64-22 isolated live path sets isolatedWorker and worker root cwd without n
   };
   isoModule.isWorkerPath = () => true;
   const hostWorktree = 'C:\\Users\\gumac\\AI\\shipde-platform\\.worktrees\\ai64launch';
-  const expectedWorkerRoot = isoModule.workerRootFor(hostWorktree);
 
   let result;
   try {
@@ -1523,42 +1520,12 @@ test('64-22 isolated live path sets isolatedWorker and worker root cwd without n
   }
 
   assert.ok(result.log, 'the loop must return a run record: ' + result.refusal);
-  assert.ok(launchedAdapter, 'the isolated launcher must have been called with an adapter');
   assert.equal(
-    launchedAdapter.id,
-    'opencode-direct',
-    'isolated live launch must bypass the paseo daemon'
+    launchedAdapter,
+    null,
+    'the controller refuses to launch without a probeable upstream route'
   );
-  assert.equal(
-    launchedAdapter.command,
-    'opencode',
-    'isolated live launch command must be opencode'
-  );
-  assert.ok(launchedArgs, 'the isolated launcher must have been called');
-
-  assert.equal(launchedArgs[0], 'run', 'opencode direct launch must use opencode run');
-  assert.ok(
-    launchedArgs.includes('--dir') && launchedArgs.includes(expectedWorkerRoot),
-    'opencode args must contain --dir ' + expectedWorkerRoot + ': ' + launchedArgs.join(' ')
-  );
-  assert.equal(
-    launchedOptions.cwd,
-    hostWorktree,
-    'the isolated launcher must bind the verdict and clone source to the host worktree'
-  );
-  assert.equal(
-    launchedOptions.workerRoot,
-    expectedWorkerRoot,
-    'the worker root must be derived from the host worktree, not reused from job.cwd'
-  );
-  assert.ok(
-    !launchedArgs.includes('--provider') &&
-      !launchedArgs.includes('--mode') &&
-      !launchedArgs.includes('--report-outcome') &&
-      !launchedArgs.includes('--new-workspace') &&
-      !launchedArgs.includes('--worktree-mode'),
-    'opencode args must not contain paseo-only or unsupported flags: ' + launchedArgs.join(' ')
-  );
+  assert.equal(launchedArgs, null);
 });
 
 test('64-30 executor usage-report gate survives paseo missing report (DEFECT A)', () => {
@@ -2393,7 +2360,7 @@ describe('TASK-AI-64 worker provider id and harness config failure (DEFECT E)', 
       }
     });
 
-    test('orchestrate with isolatedWorker and exercise attaches exercise and fail-before to job and session', async () => {
+    test('orchestrate with isolatedWorker and exercise attaches exercise and fail-before to launcher job', async () => {
       const orch = require('../orchestrate');
       const isoMod = require('../isolation-launcher');
       const realGetIsolatedLauncher = isoMod.getIsolatedLauncher;
@@ -2429,8 +2396,10 @@ describe('TASK-AI-64 worker provider id and harness config failure (DEFECT E)', 
       };
       isoMod.isWorkerPath = () => true;
 
-      const hostWorktree = 'C:\\Users\\gumac\\AI\\shipde-platform\\.worktrees\\ai64ex';
+      const hostWorktree = tmpDir('task-ai-64-exercise-host-');
+      fs.mkdirSync(path.join(hostWorktree, 'tools', 'ai-brain', 'test'), { recursive: true });
       const tmpDecisions = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-64-orch-dec-'));
+      const probes = [];
 
       try {
         const candidates = [
@@ -2457,22 +2426,44 @@ describe('TASK-AI-64 worker provider id and harness config failure (DEFECT E)', 
           exercise: 'e1',
           cwd: hostWorktree,
           decisionDir: tmpDecisions,
+          registry: {
+            sources: [
+              {
+                id: '9router',
+                endpoint: 'https://gateway.example/v1',
+                credential: { env: 'NINEROUTER_API_KEY' },
+              },
+            ],
+            dispatch: {
+              providers: {
+                '9router': { harness: 'paseo', provider: 'opencode', modelPrefix: 'ninerouter/' },
+              },
+            },
+          },
+          env: { NINEROUTER_API_KEY: 'test-key' },
+          routeProbe: async (probeCandidate) => {
+            probes.push(probeCandidate.modelId);
+            return { ok: true, status: 200, body: 'OK' };
+          },
         });
 
-        assert.ok(launcherOptions, 'isolated launcher must have been called');
-        assert.equal(
-          launcherOptions.exercise,
-          'e1',
-          'orchestrate must forward exercise option to isolatedLauncher'
+        assert.ok(
+          launcherOptions,
+          'isolated launcher must have been called; outcome=' +
+            JSON.stringify({ outcomes: res.outcomes, probes })
         );
-        assert.ok(res.exercise, 'orchestrate log must record exercise');
-        assert.ok(res.failBefore, 'orchestrate log must record failBefore');
-        assert.equal(res.failBefore.pass, false);
-        assert.equal(res.sessions[0].failBefore.pass, false);
+        assert.match(
+          launcherOptions.exercise.path,
+          /e1-branch-name\.test\.js$/,
+          'orchestrate must forward the materialised exercise runner to isolatedLauncher'
+        );
+        assert.equal(launcherOptions.exercise.failBefore.pass, false);
+        assert.deepEqual(probes, ['ninerouter/ag/gemini-3.1-pro-low']);
       } finally {
         isoMod.getIsolatedLauncher = realGetIsolatedLauncher;
         isoMod.isWorkerPath = realIsWorkerPath;
         fs.rmSync(tmpDecisions, { recursive: true, force: true });
+        fs.rmSync(hostWorktree, { recursive: true, force: true });
       }
     });
   });
@@ -3902,7 +3893,17 @@ describe('TASK-AI-64 isolated route covers the opencode harness (DEFECT L)', () 
       quotaScope: 'codex',
       modelId: 'ninerouter/ag/gemini-3.1-pro-low',
       source: 'oc',
+      quality: 99,
     });
+    const secondRouteSameModel = Object.assign({}, opencodeCandidate, {
+      modelId: 'ninerouter/ag/gemini-3.1-pro-low@eastus2',
+      quality: 95,
+    });
+    const alternateCandidate = Object.assign({}, opencodeCandidate, {
+      modelId: 'ninerouter/ag/gemini-3.1-pro-high',
+      quality: 80,
+    });
+    const probedModels = [];
 
     const orchPath = require.resolve('../orchestrate');
     let result;
@@ -3918,7 +3919,34 @@ describe('TASK-AI-64 isolated route covers the opencode harness (DEFECT L)', () 
           sha: hostRepo.sha,
           decisionDir,
           evidenceDir,
-          candidates: [opencodeCandidate],
+          registry: {
+            sources: [
+              {
+                id: '9router',
+                endpoint: 'https://gateway.example/v1',
+                credential: { env: 'NINEROUTER_API_KEY' },
+              },
+            ],
+            dispatch: {
+              providers: {
+                oc: { harness: 'paseo', provider: 'opencode', modelPrefix: 'ninerouter/' },
+              },
+            },
+          },
+          env: { NINEROUTER_API_KEY: 'test-key' },
+          routeProbe: async (probeCandidate, _key, _env, opts) => {
+            assert.ok(opts.signal instanceof AbortSignal, 'writer invokes injected routeProbe');
+            assert.equal(opts.signal.aborted, false);
+            probedModels.push(probeCandidate.modelId);
+            if (probeCandidate.modelId.endsWith('low')) {
+              return { ok: false, status: 402, body: 'insufficient credits' };
+            }
+            if (probeCandidate.modelId.endsWith('eastus2')) {
+              return { ok: false, status: 400, body: 'alias_mismatch' };
+            }
+            return { ok: true, status: 200, body: 'OK' };
+          },
+          candidates: [opencodeCandidate, secondRouteSameModel, alternateCandidate],
           specs: [
             {
               id: 'TASK-AI-64',
@@ -3940,7 +3968,11 @@ describe('TASK-AI-64 isolated route covers the opencode harness (DEFECT L)', () 
     }
 
     assert.ok(result.log, 'orchestration must return a log');
-    assert.strictEqual(result.log.status, 'COMPLETED');
+    assert.strictEqual(
+      result.log.status,
+      'COMPLETED',
+      JSON.stringify({ outcomes: result.log.outcomes, probedModels })
+    );
     assert.ok(launchedAdapter, 'isolated launcher must have been called');
     assert.strictEqual(
       launchedAdapter.id,
@@ -3949,8 +3981,14 @@ describe('TASK-AI-64 isolated route covers the opencode harness (DEFECT L)', () 
     );
     assert.strictEqual(launchedAdapter.command, 'opencode');
     assert.ok(Array.isArray(launchArgsCaptured), 'launchArgs must be an array');
-    assert.ok(launchArgsCaptured.includes('ninerouter/ag/gemini-3.1-pro-low'));
+    assert.deepEqual(probedModels, [
+      'ninerouter/ag/gemini-3.1-pro-low',
+      'ninerouter/ag/gemini-3.1-pro-low@eastus2',
+      'ninerouter/ag/gemini-3.1-pro-high',
+    ]);
+    assert.ok(launchArgsCaptured.includes('ninerouter/ag/gemini-3.1-pro-high'));
     assert.deepEqual(result.log.reconciliation.completed, ['TASK-AI-64']);
+    assert.doesNotMatch(JSON.stringify(result.log), /test-key/);
   });
 
   test('orchestrate with candidate of harness opencode on non-isolated path refuses with UNKNOWN_HARNESS and classifies as Scope.HARNESS', async () => {
