@@ -73,8 +73,10 @@ function priorFor(candidate, role, priors, now) {
       : isStale(retrievalDate, now));
 
   const result = { canonical: match.canonical, tier, bonus: stale ? 0 : bonus };
-  result.coverage = weighted.coverage;
-  if (weighted.coverage < 0.5) result.evidence = 'INDIRECT';
+  if (weighted.coverage > 0) {
+    result.coverage = weighted.coverage;
+    if (weighted.coverage < 0.5) result.evidence = 'INDIRECT';
+  }
   const liveBench = benchmarkValue(match, 'liveBench');
   if (liveBench !== null) result.liveBench = liveBench;
   if (stale) result.stale = true;
