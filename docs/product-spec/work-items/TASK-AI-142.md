@@ -295,4 +295,8 @@ Writer and Hermes probes share durable gateway/model/account health. Credit, quo
 
 Goal runners forward configured external worker pools through next and intake. Intake also discovers agy runtime accounts when aggregate quota evidence is absent. Agy candidates retain their own quota qualification and isolated launcher, without HTTP probing.
 
+## H3 provider-wide exclusion (2026-10-13)
+
+When an upstream probe failure indicates missing or unconfigured credentials for an entire provider (such as HTTP 404 with "No active credentials for provider"), the route failure is classified as `PROVIDER_UNAVAILABLE`. The Controller applies a 6-hour provider-level cooldown scoped to that gateway and provider, excluding sibling models under the same provider from probing and selection without wasting probe budget. Successful probes clear the provider cooldown for that gateway. Route health persistence preserves explicit bootstrap semantics when the health store file is missing.
+
 Verification (2026-10-13): sequential `node --test --test-concurrency=1` groups passed: `task-ai-141*` 199/199; `task-ai-142*` 118/118; `task-ai-64*` 129/129; `task-ai-85*` 5/5; `task-ai-130*` 12/12. Sequential focused LF-R01, RT-R01 and V-R03 checks passed 3/3, 1/1 and 2/2. Changed JavaScript files pass Prettier and ESLint (including no-undef); `git diff --check` passes. Live goal execution is not claimed. Runtime data is excluded from the commit.

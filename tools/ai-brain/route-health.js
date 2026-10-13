@@ -33,14 +33,11 @@ function classifyFailure(status, message) {
 function loadStore(file, options) {
   try {
     const data = JSON.parse(fs.readFileSync(file, 'utf8'));
-    if (data && data.version === 1 && data.paths) {
-      if (!data.providers) data.providers = {};
-      return data;
-    }
+    if (data && data.version === 1 && data.paths) return data;
     throw new Error('invalid model route health store');
   } catch (error) {
     if (options && options.allowMissing === true && error && error.code === 'ENOENT')
-      return { version: 1, paths: {}, providers: {}, events: [] };
+      return { version: 1, paths: {}, events: [] };
     throw new Error('cannot load model route health store: ' + file, { cause: error });
   }
 }
