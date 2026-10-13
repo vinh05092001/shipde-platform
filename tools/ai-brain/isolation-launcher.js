@@ -572,6 +572,7 @@ function Read-UsageTotal {
 $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 $timedOut = $false
 $stalled = $false
+$progressDetail = ""
 $waitSlice = 250
 while ($true) {
     Write-LiveUsage
@@ -600,6 +601,9 @@ while ($true) {
             $lastProgressAt = [System.Diagnostics.Stopwatch]::GetTimestamp()
         } elseif (([System.Diagnostics.Stopwatch]::GetTimestamp() - $lastProgressAt) * 1000 / [System.Diagnostics.Stopwatch]::Frequency -ge $progressTimeoutMs) {
             $stalled = $true
+            $fileCount = $outputFiles.Count
+            $usageState = if ($null -eq $totalTokens) { "unavailable" } else { [string]$totalTokens }
+            $progressDetail = "stall detector observed no worker file signature change ($fileCount tracked files) and no token usage increase (usage=$usageState) for $progressTimeoutMs ms; stdout is not a detector signal"
             Stop-WorkerTree
             break
         }
@@ -667,7 +671,7 @@ if ($budgetExceeded) {
 } elseif ($timedOut) {
     $failureReason = "[ISOLATION_LAUNCHER] worker timed out after $timeoutMs ms and was killed"
 } elseif ($stalled) {
-    $failureReason = "STALLED_NO_PROGRESS: worker produced no output for $progressTimeoutMs ms and was killed"
+    $failureReason = "STALLED_NO_PROGRESS: $progressDetail; worker was killed"
 } elseif (Test-Path -LiteralPath $markerPath) {
     try {
         $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json
@@ -698,6 +702,7 @@ $output = @{
     completed = $completed
     completionNonce = $markerNonce
     failureReason = $failureReason
+    progressDetail = $progressDetail
     localFailure = $localFailure
 }
 $output | ConvertTo-Json -Depth 10 | Out-File "${launchResultPath}" -Encoding UTF8
@@ -998,6 +1003,7 @@ function enforceTokenBudget(launchResult, tokenBudget, usageFile) {
   if (!tokenBudget || Number(tokenBudget.maxTokens) <= 0) return launchResult;
   if (launchResult && launchResult.failureReason) return launchResult;
   let failureReason = null;
+  let budgetWarning = null;
   let total = null;
   try {
     if (!usageFile || !fs.existsSync(usageFile)) throw new Error('usage report missing');
@@ -1020,7 +1026,16 @@ function enforceTokenBudget(launchResult, tokenBudget, usageFile) {
     if (!Number.isFinite(total)) throw new Error('usage total invalid');
     if (total > Number(tokenBudget.maxTokens)) failureReason = 'TOKEN_BUDGET_EXCEEDED';
   } catch (_) {
-    failureReason = 'TOKEN_BUDGET_UNVERIFIED';
+    budgetWarning = 'TOKEN_BUDGET_UNVERIFIED';
+  }
+  if (budgetWarning) {
+    launchResult.budgetWarning = budgetWarning;
+    launchResult.budgetVerified = false;
+    launchResult.stderr =
+      (launchResult.stderr || '') +
+      '\n' +
+      budgetWarning +
+      ': configured token budget could not be verified';
   }
   if (failureReason) {
     launchResult.exitCode = 1;
@@ -2086,7 +2101,11 @@ function getIsolatedLauncher() {
     const launchResult = readLaunchResult(launchResultPath, completionNonce, hostRes);
     if (opts.usageFile && !fs.existsSync(opts.usageFile)) {
       const { writeUsageReportFromHarnessResult } = require('./orchestrate');
-      const job = Object.assign({ harness: adapter && adapter.id }, opts, opts.job);
+      const job = Object.assign({}, opts, opts.job, {
+        harness: (adapter && adapter.id) || (opts.job && opts.job.harness),
+        usageFile: opts.usageFile || (opts.job && opts.job.usageFile),
+      });
+      delete job.run;
       writeUsageReportFromHarnessResult(job, launchResult);
     }
     enforceTokenBudget(launchResult, opts.tokenBudget, opts.usageFile);
@@ -2155,6 +2174,7 @@ function readLaunchResult(launchResultPath, completionNonce, hostRes) {
       stdout: String(resJson.stdout || ''),
       stderr: String(resJson.stderr || ''),
       timedOut: resJson.timedOut === true,
+      ...(resJson.progressDetail ? { progressDetail: String(resJson.progressDetail) } : {}),
       ...(failureReason ? { failureReason } : {}),
     };
   }
@@ -2168,6 +2188,8 @@ function readLaunchResult(launchResultPath, completionNonce, hostRes) {
     localFailure: resJson.localFailure ? String(resJson.localFailure) : null,
     timedOut: false,
     completionNonce: resJson.completionNonce,
+    ...(resJson.usage ? { usage: resJson.usage } : {}),
+    ...(resJson.progressDetail ? { progressDetail: String(resJson.progressDetail) } : {}),
     ...(failureReason ? { failureReason } : {}),
   };
 }

@@ -39,7 +39,7 @@ function writeVerdict(hostCwd) {
   return verdictPath;
 }
 
-function installLaunchMocks(t, workerRoot, stdoutTelemetry) {
+function installLaunchMocks(t, workerRoot, stdoutTelemetry, usage) {
   const protectedRoot = path.resolve(workerRoot).toLowerCase();
   const realRmSync = fs.rmSync.bind(fs);
   t.mock.method(fs, 'rmSync', (target, options) => {
@@ -65,6 +65,7 @@ function installLaunchMocks(t, workerRoot, stdoutTelemetry) {
             timedOut: false,
             completed: true,
             completionNonce: nonce,
+            ...(usage ? { usage } : {}),
           }),
           'utf8'
         );
@@ -106,6 +107,7 @@ test('TASK-AI-142 H3: isolated launcher lazily imports writeUsageReportFromHarne
     getWorkerSid: () => 'mock-sid',
     verifyBoundary: () => true,
     usageFile,
+    tokenBudget: { maxTokens: 200 },
     model: 'opencode/test-model',
     upstream: 'test-upstream',
   });
@@ -122,6 +124,100 @@ test('TASK-AI-142 H3: isolated launcher lazily imports writeUsageReportFromHarne
   assert.strictEqual(report.usage.total, 165);
 
   // Clean up
+  try {
+    fs.rmSync(area, { recursive: true, force: true });
+  } catch (_) {}
+});
+
+test('TASK-AI-142 H3: isolated run without usage preserves success and reports an unverified budget warning', (t) => {
+  const area = tmpDir('h3-no-usage');
+  const hostCwd = path.join(area, 'host');
+  const workerRoot = path.join(area, 'worker');
+  const usageFile = path.join(area, 'reports', 'usage.json');
+  fs.mkdirSync(hostCwd, { recursive: true });
+  fs.mkdirSync(workerRoot, { recursive: true });
+  installLaunchMocks(t, workerRoot, 'completed without telemetry');
+  const verdictPath = writeVerdict(hostCwd);
+
+  const res = getIsolatedLauncher()({ id: 'opencode-direct', command: 'opencode' }, [], {
+    verdictPath,
+    cwd: hostCwd,
+    workerRoot,
+    baseSha: BASE_SHA,
+    getWorkerSid: () => 'mock-sid',
+    verifyBoundary: () => true,
+    usageFile,
+    tokenBudget: { maxTokens: 200 },
+  });
+
+  assert.strictEqual(res.exitCode, 0);
+  assert.strictEqual(res.budgetWarning, 'TOKEN_BUDGET_UNVERIFIED');
+  assert.strictEqual(res.failureReason, undefined);
+  try {
+    fs.rmSync(area, { recursive: true, force: true });
+  } catch (_) {}
+});
+
+test('TASK-AI-142 H3: isolated run fails only when reported usage exceeds the configured budget', (t) => {
+  const area = tmpDir('h3-over-budget');
+  const hostCwd = path.join(area, 'host');
+  const workerRoot = path.join(area, 'worker');
+  const usageFile = path.join(area, 'reports', 'usage.json');
+  fs.mkdirSync(hostCwd, { recursive: true });
+  fs.mkdirSync(workerRoot, { recursive: true });
+  const stdout = JSON.stringify({
+    sessionID: 'session-over',
+    tokens: { input: 180, output: 40, total: 220 },
+  });
+  installLaunchMocks(t, workerRoot, stdout);
+  const verdictPath = writeVerdict(hostCwd);
+
+  const res = getIsolatedLauncher()({ id: 'opencode-direct', command: 'opencode' }, [], {
+    verdictPath,
+    cwd: hostCwd,
+    workerRoot,
+    baseSha: BASE_SHA,
+    getWorkerSid: () => 'mock-sid',
+    verifyBoundary: () => true,
+    usageFile,
+    tokenBudget: { maxTokens: 200 },
+  });
+
+  assert.strictEqual(res.exitCode, 1);
+  assert.strictEqual(res.failureReason, 'TOKEN_BUDGET_EXCEEDED');
+  assert.strictEqual(fs.existsSync(usageFile), true);
+  try {
+    fs.rmSync(area, { recursive: true, force: true });
+  } catch (_) {}
+});
+
+test('TASK-AI-142 H3: isolated launch result usage field is written before budget enforcement', (t) => {
+  const area = tmpDir('h3-result-usage');
+  const hostCwd = path.join(area, 'host');
+  const workerRoot = path.join(area, 'worker');
+  const usageFile = path.join(area, 'reports', 'usage.json');
+  fs.mkdirSync(hostCwd, { recursive: true });
+  fs.mkdirSync(workerRoot, { recursive: true });
+  installLaunchMocks(t, workerRoot, 'completed without token events', {
+    input_tokens: 90,
+    output_tokens: 35,
+    total_tokens: 125,
+  });
+  const verdictPath = writeVerdict(hostCwd);
+
+  const res = getIsolatedLauncher()({ id: 'opencode-direct', command: 'opencode' }, [], {
+    verdictPath,
+    cwd: hostCwd,
+    workerRoot,
+    baseSha: BASE_SHA,
+    getWorkerSid: () => 'mock-sid',
+    verifyBoundary: () => true,
+    usageFile,
+    tokenBudget: { maxTokens: 100 },
+  });
+
+  assert.strictEqual(res.failureReason, 'TOKEN_BUDGET_EXCEEDED');
+  assert.strictEqual(JSON.parse(fs.readFileSync(usageFile, 'utf8')).usage.total, 125);
   try {
     fs.rmSync(area, { recursive: true, force: true });
   } catch (_) {}

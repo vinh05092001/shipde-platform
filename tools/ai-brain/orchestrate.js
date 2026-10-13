@@ -1462,8 +1462,22 @@ function writeUsageReportFromHarnessResult(job, res) {
   let tokens = { input: 0, cacheRead: 0, output: 0, total: 0 };
   let sawTokens = false;
 
+  const directUsage = res && res.usage;
+  if (directUsage && typeof directUsage === 'object') {
+    const input = Number(directUsage.input_tokens ?? directUsage.input ?? 0);
+    const output = Number(directUsage.output_tokens ?? directUsage.output ?? 0);
+    const cacheRead = Number(
+      directUsage.cache_read_tokens ?? directUsage.cacheRead ?? directUsage.cache_read ?? 0
+    );
+    const total = Number(directUsage.total_tokens ?? directUsage.total ?? 0);
+    if ([input, output, cacheRead, total].some((value) => Number.isFinite(value) && value > 0)) {
+      tokens = { input, output, cacheRead, total };
+      sawTokens = true;
+    }
+  }
+
   const stdout = String((res && res.stdout) || '');
-  if (stdout) {
+  if (stdout && !sawTokens) {
     const lines = stdout
       .split(/\r?\n/)
       .map((l) => l.trim())
@@ -4009,13 +4023,24 @@ async function runOrchestration(goal, opts) {
           res = { exitCode: -1, stdout: '', stderr: String((err && err.message) || err) };
         }
         if (res && res.exercise) job.exercise = res.exercise;
-        if (
-          res &&
-          ['TOKEN_BUDGET_EXCEEDED', 'TOKEN_BUDGET_UNVERIFIED'].includes(res.failureReason)
-        ) {
+        if (res && res.failureReason === 'TOKEN_BUDGET_EXCEEDED') {
           res = Object.assign({}, res, { exitCode: 1 });
         }
         writeUsageReportFromHarnessResult(job, res);
+        if (res && res.budgetWarning === 'TOKEN_BUDGET_UNVERIFIED') {
+          decisions.recordDecision(
+            {
+              stage: decisions.Stage.WARNING,
+              warning: 'TOKEN_BUDGET_UNVERIFIED',
+              workItemId: item.id,
+              role: roleOf(item),
+              model: job.model,
+              detail:
+                'run outcome preserved; token usage was unavailable, so the configured budget could not be verified',
+            },
+            logOpts
+          );
+        }
         const adapter = harnessFor({ harness: job.harness });
         const launchHandle = adapter
           ? require('./executor').readSessionId(adapter, job, res).id
@@ -4047,10 +4072,7 @@ async function runOrchestration(goal, opts) {
             accountId: candidate.accountId,
             timedOut: isLaunchTimedOut,
           });
-          if (
-            res &&
-            ['TOKEN_BUDGET_EXCEEDED', 'TOKEN_BUDGET_UNVERIFIED'].includes(res.failureReason)
-          ) {
+          if (res && res.failureReason === 'TOKEN_BUDGET_EXCEEDED') {
             launchClassification.scope = 'local';
             launchClassification.cause = res.failureReason;
             launch.fallbackReason = res.failureReason;
@@ -4282,9 +4304,7 @@ async function runOrchestration(goal, opts) {
           stallMs: effectiveStallMs,
         }) === SessionStatus.STALLED
       );
-      const budgetFailure = Boolean(
-        res && ['TOKEN_BUDGET_EXCEEDED', 'TOKEN_BUDGET_UNVERIFIED'].includes(res.failureReason)
-      );
+      const budgetFailure = Boolean(res && res.failureReason === 'TOKEN_BUDGET_EXCEEDED');
       const launcherStalled = Boolean(res && res.failureReason === 'STALLED_NO_PROGRESS');
       if (budgetFailure) {
         launch.fallbackReason = res.failureReason;
@@ -4321,10 +4341,7 @@ async function runOrchestration(goal, opts) {
             chosen: decision.chosen,
             failureScope: 'local',
             cause: res.failureReason,
-            detail:
-              res.failureReason === 'TOKEN_BUDGET_UNVERIFIED'
-                ? 'configured token budget could not be verified; stopping session'
-                : 'worker exceeded configured token budget; stopping session',
+            detail: 'worker exceeded configured token budget; stopping session',
           },
           logOpts
         );
@@ -4363,10 +4380,7 @@ async function runOrchestration(goal, opts) {
         const quotaLike = /quota_exhausted|\b429\b|rate limit/i.test(
           String((res && res.stderr) || '') + ' ' + String((res && res.stdout) || '')
         );
-        if (
-          res &&
-          ['TOKEN_BUDGET_EXCEEDED', 'TOKEN_BUDGET_UNVERIFIED'].includes(res.failureReason)
-        ) {
+        if (res && res.failureReason === 'TOKEN_BUDGET_EXCEEDED') {
           classification.scope = 'local';
           classification.cause = res.failureReason;
           launch.fallbackReason = res.failureReason;
