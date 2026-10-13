@@ -633,8 +633,11 @@ async function awaitIntakeExecution(intakeResult) {
         }
       };
       intakeResult.child.on('close', (code) => done(code));
-      intakeResult.child.on('exit', (code) => done(code));
-      intakeResult.child.on('error', () => done(1));
+      if (!intakeResult.child.stderr) intakeResult.child.on('exit', (code) => done(code));
+      intakeResult.child.on('error', (err) => {
+        intakeResult.reason = decisions.scrubText(String(err.message || err));
+        done(1);
+      });
     });
   } else if (intakeResult && typeof intakeResult.exitCode === 'number') {
     childExitCode = intakeResult.exitCode;
@@ -684,8 +687,7 @@ async function executeIntakeForItem(item, options, deps, logOpts) {
     let reason =
       intakeResult && (intakeResult.reason || intakeResult.message || intakeResult.error);
     if (outcome !== 'completed' && outcome !== 'published') {
-      // The child inherits stdio; recover its durable reason rather than losing
-      // it when the parent only observes the process exit code.
+      reason = intakeResult.stderrTail || reason;
       const checkpointFile =
         intakeResult && intakeResult.runFiles && intakeResult.runFiles.checkpoint;
       if (!reason && checkpointFile) {
@@ -695,6 +697,12 @@ async function executeIntakeForItem(item, options, deps, logOpts) {
           const failures = (step && step.failures) || [];
           const failure = failures[failures.length - 1];
           reason = (step && step.reason) || (failure && (failure.reason || failure.cause));
+          if (!reason) {
+            const itemOutcome = (checkpoint.outcomes || []).find(
+              (entry) => entry.workItemId === item.work_item_id
+            );
+            reason = itemOutcome && itemOutcome.reason;
+          }
         } catch (_) {
           /* A missing checkpoint still gets a named exit reason. */
         }
@@ -703,7 +711,7 @@ async function executeIntakeForItem(item, options, deps, logOpts) {
         .scrubText(
           String(reason || `INTAKE_${String(outcome).toUpperCase()}: child exit code ${exitCode}`)
         )
-        .slice(0, 500);
+        .slice(-16000);
     }
 
     const stage =
@@ -720,6 +728,7 @@ async function executeIntakeForItem(item, options, deps, logOpts) {
         outcome,
         exitCode,
         detail: reason || undefined,
+        stderrTail: intakeResult.stderrTail || undefined,
       },
       logOpts
     );
@@ -730,6 +739,7 @@ async function executeIntakeForItem(item, options, deps, logOpts) {
       exitCode,
       intakeResult,
       reason: reason || null,
+      stderrTail: intakeResult.stderrTail || null,
     };
   } catch (err) {
     const isRefusal =

@@ -80,6 +80,7 @@ describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
       {
         candidates: [candA, candB],
         run,
+        routeHealthFile: path.join(tmpDir, 'route-health.json'),
         evidenceDir,
         home,
         exit,
@@ -143,6 +144,7 @@ describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
       {
         candidates: [cand1, cand2],
         run,
+        routeHealthFile: path.join(tmpDir, 'route-health.json'),
         evidenceDir,
         home,
         exit,
@@ -221,6 +223,7 @@ describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
       {
         candidates: [cand1, cand2],
         run,
+        routeHealthFile: path.join(tmpDir, 'route-health.json'),
         evidenceDir,
         home,
         exit,
@@ -258,6 +261,7 @@ describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
         {
           candidates: [candSuccess],
           run: runSuccess,
+          routeHealthFile: path.join(tmpDir, 'route-health.json'),
           evidenceDir,
           home,
           exit: () => {},
@@ -292,6 +296,7 @@ describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
         {
           candidates: [candFail],
           run: runFailure,
+          routeHealthFile: path.join(tmpDir, 'route-health.json'),
           evidenceDir,
           home,
           exit: () => {},
@@ -325,6 +330,7 @@ describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
         {
           candidates: [candThrow],
           run: runThrow,
+          routeHealthFile: path.join(tmpDir, 'route-health.json'),
           evidenceDir,
           home,
           exit: () => {},
@@ -365,6 +371,7 @@ describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
       {
         candidates: [cand],
         run,
+        routeHealthFile: path.join(tmpDir, 'route-health.json'),
         evidenceDir,
         home,
         exit,
@@ -420,6 +427,7 @@ describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
       {
         candidates: [cand1, cand2],
         run,
+        routeHealthFile: path.join(tmpDir, 'route-health.json'),
         evidenceDir,
         home,
         exit: () => {},
@@ -454,6 +462,7 @@ describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
       {
         candidates: [cand1, cand2],
         run,
+        routeHealthFile: path.join(tmpDir, 'route-health.json'),
         evidenceDir,
         home,
         exit: () => {},
@@ -501,6 +510,7 @@ describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
       {
         candidates: [candA, candB],
         run,
+        routeHealthFile: path.join(tmpDir, 'route-health.json'),
         evidenceDir,
         home,
         exit,

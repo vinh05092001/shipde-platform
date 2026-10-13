@@ -7951,6 +7951,10 @@ function finish(log, statusOf, ctx) {
     completed: allCompleted,
     blocked,
     deferred,
+    outcomes: log.outcomes.map((entry) => ({
+      ...decisions.scrub(entry),
+      reason: entry.reason ? decisions.scrubText(entry.reason) : entry.reason,
+    })),
     sessions:
       log.sessions.length > 0
         ? log.sessions.map((s) => ({

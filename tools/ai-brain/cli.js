@@ -3490,6 +3490,12 @@ async function orchestrateCommand(args, deps = {}) {
     now: (d && d.now) || Date.now(),
   })
     .then((result) => {
+      if (result.status !== 'COMPLETED' && result.status !== 'PUBLISHED_DRAFT') {
+        for (const entry of result.outcomes || []) {
+          if (entry.reason)
+            console.error(decisionsApi.scrubText(`${entry.workItemId}: ${entry.reason}`));
+        }
+      }
       log(
         JSON.stringify(
           {

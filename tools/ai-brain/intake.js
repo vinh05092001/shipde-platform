@@ -1027,8 +1027,47 @@ function formatRunTimestamp(now) {
   return new Date(now).toISOString().replace(/[:.]/g, '-');
 }
 
+function captureIntakeStderr(result) {
+  result.stderrTail = '';
+  if (result.child && result.child.stderr) {
+    const { StringDecoder } = require('node:string_decoder');
+    const decoder = new StringDecoder('utf8');
+    let pending = '';
+    const retain = (line) => {
+      let safe = require('./decisions').scrubText(line);
+      for (const [name, value] of Object.entries(process.env)) {
+        if (/key|token|secret|password|credential/i.test(name) && value && value.length >= 4)
+          safe = safe.split(value).join('[REDACTED_SECRET]');
+      }
+      safe = safe.replace(
+        /((?:api[_-]?key|token|secret|password|authorization)["']?\s*[=:]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi,
+        '$1[REDACTED_SECRET]'
+      );
+      result.stderrTail = (result.stderrTail + safe + '\n')
+        .split('\n')
+        .slice(-41)
+        .join('\n')
+        .slice(-16000);
+    };
+    result.child.stderr.on('data', (chunk) => {
+      pending += decoder.write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      let newline;
+      while ((newline = pending.indexOf('\n')) !== -1) {
+        retain(pending.slice(0, newline));
+        pending = pending.slice(newline + 1);
+      }
+      // Bound even a child that never emits a newline.
+      if (pending.length > 32000) pending = pending.slice(-32000);
+    });
+    result.child.stderr.on('end', () => {
+      pending += decoder.end();
+      if (pending) retain(pending);
+    });
+  }
+}
+
 function defaultSpawn(argv, root) {
-  return cp.spawn(argv[0], argv.slice(1), { stdio: 'inherit', cwd: root });
+  return cp.spawn(argv[0], argv.slice(1), { stdio: ['inherit', 'inherit', 'pipe'], cwd: root });
 }
 
 /**
@@ -1235,6 +1274,7 @@ async function runIntake(opts, deps) {
       root,
     });
     result.child = (d.spawnCommand || defaultSpawn)(argv, root);
+    captureIntakeStderr(result);
     result.ran = true;
     if (o.wait && result.child && typeof result.child.on === 'function') {
       const exitCode = await new Promise((resolve) => {
@@ -1246,7 +1286,7 @@ async function runIntake(opts, deps) {
           }
         };
         result.child.on('close', (c) => done(c));
-        result.child.on('exit', (c) => done(c));
+        if (!result.child.stderr) result.child.on('exit', (c) => done(c));
         result.child.on('error', () => done(1));
       });
       result.exitCode = exitCode;
@@ -1258,6 +1298,7 @@ async function runIntake(opts, deps) {
 }
 
 module.exports = {
+  captureIntakeStderr,
   runIntake,
   DEFAULT_TOKEN_BUDGETS,
   deriveSpec,
