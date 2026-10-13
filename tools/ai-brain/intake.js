@@ -680,14 +680,15 @@ function normalizeCatalogue(models, warnings, sourceStatus, modelMeta) {
   };
 }
 
-function mergeDiscoveredSources(accounts, discoveredSources) {
+function mergeDiscoveredSources(accounts, discoveredSources, registry) {
   const inventory = (discoveredSources || [])
     .filter((source) => source && (source.endpoint || Array.isArray(source.models)))
     .map((source) => {
       const routableCredential =
         source.credential && source.credential.type === 'env' && source.credential.name;
       const available = source.status === 'available';
-      const localCli = source.kind === 'agent-cli' && !source.reachedVia;
+      const declared = registry?.sources?.find((s) => s.id === source.id) || source;
+      const localCli = declared.kind === 'agent-cli' && !declared.reachedVia;
       return {
         id: 'source-' + String(source.id).replace(/[^a-z0-9._-]/gi, '-'),
         sourceId: source.id,
@@ -755,7 +756,13 @@ function agyPoolHasQuota(deps) {
   try {
     const pool = require('./agy-pool-runtime');
     const quotaStore = require('./quota-store');
-    const store = quotaStore.loadStore(deps.quotaStoreOpts);
+    let store;
+    try {
+      store = quotaStore.loadStore(deps.quotaStoreOpts);
+    } catch {
+      // Missing aggregate evidence must not suppress runtime account discovery.
+      store = null;
+    }
     const entries = Object.entries((store && store.accounts) || {});
     for (const [accountId, reading] of entries) {
       if (!pool.isValidAccountId(accountId)) continue;
@@ -1124,7 +1131,11 @@ async function runIntake(opts, deps) {
   } catch {
     discoveredSources = [];
   }
-  const allAccounts = mergeDiscoveredSources(accounts, discoveredSources);
+  const allAccounts = mergeDiscoveredSources(
+    accounts,
+    discoveredSources,
+    d.registry || sourcesApi.loadSources()
+  );
 
   const routeHealthApi = require('./route-health');
   const routeHealthFile =
@@ -1311,6 +1322,7 @@ module.exports = {
   parseModelListing,
   extractModelIds,
   readingHasQuota,
+  agyPoolHasQuota,
   intakeError,
   ROLE_DEFAULT,
   COMPLEXITY_DEFAULT,

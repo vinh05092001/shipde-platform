@@ -3,10 +3,47 @@
 const health = require('./route-health');
 const { candidateKey } = require('./discovery/identity');
 
+// Availability is shared by a gateway/upstream route, not by a harness key.
+// This is a probe-order hint only; account eligibility remains independently gated.
+function recentRouteSuccess(candidate, store, options) {
+  const o = options || {};
+  const sources = o.registry?.sources || [];
+  const endpoint = (id) => {
+    const source = sources.find((s) => s.id === id);
+    const value = source?.endpoint || source?.sourceEndpoint;
+    if (!value) return null;
+    try {
+      const url = new URL(value);
+      if (url.hostname === 'localhost') url.hostname = '127.0.0.1';
+      return url.href.replace(/\/$/, '');
+    } catch {
+      return null;
+    }
+  };
+  const gateway = candidate.gateway || candidate.sourceId || candidate.source;
+  const upstreamModel = (value) =>
+    String(value || '')
+      .trim()
+      .replace(/^ninerouter\//i, '')
+      .toLowerCase();
+  const model = upstreamModel(candidate.modelId || candidate.model);
+  const rows = Object.values(store.paths || {}).filter((record) => {
+    const route = typeof record.routeId === 'object' ? record.routeId.id : record.routeId;
+    return (
+      upstreamModel(record.modelId) === model &&
+      (route === gateway || (endpoint(gateway) && endpoint(route) === endpoint(gateway)))
+    );
+  });
+  // A newer failure supersedes older success for the same upstream route.
+  rows.sort((a, b) => Date.parse(b.lastCheckedAt) - Date.parse(a.lastCheckedAt));
+  const record = rows[0];
+  const age = (o.now ?? Date.now()) - Date.parse(record?.lastCheckedAt);
+  return record?.status === 'AVAILABLE' && age >= 0 && age <= 24 * 3600000;
+}
+
 // Only reorder the ranking returned by the quality/eligibility gates.
 function preferKnownGood(result, candidates, options) {
   const o = options || {};
-  if (!result.chosen || !result.ranking?.length) return result;
   const now = o.now ?? Date.now();
   const store =
     o.routeHealth ||
@@ -14,17 +51,21 @@ function preferKnownGood(result, candidates, options) {
       o.routeHealthFile || require('path').join(__dirname, 'data', 'model-route-health.json'),
       { allowMissing: true }
     );
+  const byKey = new Map(candidates.map((c) => [candidateKey(c), c]));
+  result.knownGoodRejected = (result.rejected || []).filter((row) => {
+    const c = byKey.get(row.candidateKey);
+    return c && recentRouteSuccess(c, store, { ...o, now });
+  });
+  result.isolatedLaneRejected = (result.rejected || []).filter((row) => {
+    const c = byKey.get(row.candidateKey);
+    return c && ['agy-pool', 'codex'].includes(c.harness);
+  });
+  if (!result.chosen || !result.ranking?.length) return result;
   const priority = (row) => {
-    const c = candidates.find((candidate) => candidateKey(candidate) === row.candidateKey) || row;
+    const c = byKey.get(row.candidateKey) || row;
     // Isolated CLI lanes qualify through their launcher/quota, never HTTP.
     if (['agy-pool', 'codex'].includes(c.harness)) return -1;
-    const record = health.getPathRecord(
-      store,
-      String(c.modelId || c.model || '').replace(/^ninerouter\//i, ''),
-      { id: c.gateway || c.sourceId || c.source, accountId: c.accountId }
-    );
-    const age = now - Date.parse(record?.lastCheckedAt);
-    return record?.status === 'AVAILABLE' && age >= 0 && age <= 24 * 3600000 ? 0 : 1;
+    return recentRouteSuccess(c, store, { ...o, now }) ? 0 : 1;
   };
   result.ranking = result.ranking
     .map((row, index) => ({ row, index, priority: priority(row) }))
@@ -37,4 +78,4 @@ function preferKnownGood(result, candidates, options) {
   return result;
 }
 
-module.exports = { preferKnownGood };
+module.exports = { preferKnownGood, recentRouteSuccess };
