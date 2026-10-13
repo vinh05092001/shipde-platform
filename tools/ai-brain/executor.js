@@ -156,6 +156,18 @@ function inspectVerdict(res) {
  * a value that is not a session cannot be resumed.
  */
 function readSessionId(adapter, job, res) {
+  const isIsolated = Boolean(
+    (job && job.isolatedWorker) || (res && (res.isolatedWorker || res.workerRoot))
+  );
+  if (isIsolated && res) {
+    const isoId = res.sessionId || res.launchHandle;
+    if (isoId !== undefined && isoId !== null && String(isoId).trim() !== '') {
+      return { id: String(isoId).trim(), cause: null };
+    }
+  }
+  if (!adapter) {
+    return { id: null, cause: isIsolated ? 'HARNESS_NO_SESSION_ID' : 'HARNESS_UNKNOWN' };
+  }
   const reportPath = job && typeof job.usageFile === 'string' ? job.usageFile : null;
   if (reportPath && adapter.writesUsageReport) {
     const fs = require('fs');
@@ -167,14 +179,17 @@ function readSessionId(adapter, job, res) {
     } catch (err) {
       return { id: null, cause: 'HARNESS_USAGE_REPORT_INVALID' };
     }
-    return { id: adapter.sessionIdFrom(report) || null, cause: 'HARNESS_NO_SESSION_ID' };
+    const id = adapter.sessionIdFrom(report) || null;
+    return { id, cause: id ? null : 'HARNESS_NO_SESSION_ID' };
   }
   if (adapter.id === 'opencode-direct') {
-    return { id: res.completionNonce || null, cause: 'HARNESS_NO_SESSION_ID' };
+    const id = (res && res.completionNonce) || null;
+    return { id, cause: id ? null : 'HARNESS_NO_SESSION_ID' };
   }
-  const parsed = parseLastJson(res.stdout);
+  const parsed = res && res.stdout ? parseLastJson(res.stdout) : null;
   if (!parsed) return { id: null, cause: 'HARNESS_INVALID_JSON' };
-  return { id: adapter.sessionIdFrom(parsed) || null, cause: 'HARNESS_NO_SESSION_ID' };
+  const id = adapter.sessionIdFrom(parsed) || null;
+  return { id, cause: id ? null : 'HARNESS_NO_SESSION_ID' };
 }
 
 /**

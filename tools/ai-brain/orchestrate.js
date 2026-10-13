@@ -858,9 +858,7 @@ function reviewLane(
     }
 
     const hostWorktree = o.cwd || process.cwd();
-    const isolatedWorkerRoot = o.isolatedWorker
-      ? require('./isolation-launcher').workerRootFor(hostWorktree)
-      : null;
+    const isolatedWorkerRoot = resolveIsolatedWorkerRoot(o, hostWorktree);
     const workerRoot =
       (o.isolatedWorker ? isolatedWorkerRoot : o.workerRoot) ||
       (session && session.worktree) ||
@@ -1293,6 +1291,44 @@ function headShaOf(cwd, options) {
       Object.assign({ workerWritable: true }, options)
     );
   } catch (err) {
+    return null;
+  }
+}
+
+function verifyCommitSha(cwd, sha, options) {
+  if (!cwd || !sha || !fs.existsSync(path.join(cwd, '.git'))) return null;
+  const shaStr = String(sha).trim();
+  if (!/^[0-9a-f]{40}$/i.test(shaStr)) return null;
+  const { withCleanGitEnv, safeGit } = require('./supervisor');
+  try {
+    return withCleanGitEnv(
+      cwd,
+      (tmpDir) => {
+        const res = safeGit(
+          tmpDir,
+          cwd,
+          ['rev-parse', '--verify', '--quiet', shaStr + '^{commit}'],
+          20000,
+          options
+        );
+        if (!res || res.status !== 0) return null;
+        const out = String(res.stdout || '').trim();
+        return out.toLowerCase() === shaStr.toLowerCase() ? out : null;
+      },
+      Object.assign({ workerWritable: true }, options)
+    );
+  } catch (err) {
+    return null;
+  }
+}
+
+function resolveIsolatedWorkerRoot(o, hostWorktree) {
+  if (!o || !o.isolatedWorker) return null;
+  if (o.isolatedWorkerRoot) return o.isolatedWorkerRoot;
+  if (o.workerRoot) return o.workerRoot;
+  try {
+    return require('./isolation-launcher').workerRootFor(hostWorktree);
+  } catch {
     return null;
   }
 }
@@ -3294,9 +3330,7 @@ async function runOrchestration(goal, opts) {
     isolatedLauncher = require('./isolation-launcher').getIsolatedLauncher();
   }
   const hostWorktree = o.cwd || process.cwd();
-  const isolatedWorkerRoot = o.isolatedWorker
-    ? require('./isolation-launcher').workerRootFor(hostWorktree)
-    : null;
+  const isolatedWorkerRoot = resolveIsolatedWorkerRoot(o, hostWorktree);
   const launcher = resolveLauncher(o, isolatedLauncher);
   log.isolation = {
     requested: Boolean(o.isolatedWorker),
@@ -4348,9 +4382,7 @@ async function runOrchestration(goal, opts) {
           );
         }
         const adapter = harnessFor({ harness: job.harness });
-        const launchHandle = adapter
-          ? require('./executor').readSessionId(adapter, job, res).id
-          : null;
+        const launchHandle = require('./executor').readSessionId(adapter, job, res).id;
         const launchFailed =
           !res || (res.exitCode !== null && res.exitCode !== undefined && res.exitCode !== 0);
         const currentSavedStep = liveSteps[item.id] || savedStep;
@@ -4411,6 +4443,35 @@ async function runOrchestration(goal, opts) {
             cause: launchClassification.cause,
           });
         }
+        const isIsolated = Boolean(
+          o.isolatedWorker || (job && job.isolatedWorker) || (res && res.isolatedWorker)
+        );
+        const workerClone = isIsolated
+          ? isolatedWorkerRoot || (res && res.retainedWorkerRoot) || null
+          : job.cwd;
+
+        let verifiedWorkerSha = null;
+        let workerShaUnverified = false;
+        if (isIsolated) {
+          const candidateSha =
+            (res && (res.workerSha || res.retainedHeadSha)) ||
+            (workerClone ? headShaOf(workerClone) : null);
+          if (workerClone && candidateSha && verifyCommitSha(workerClone, candidateSha)) {
+            verifiedWorkerSha = candidateSha;
+          } else if (workerClone) {
+            const cloneHead = headShaOf(workerClone);
+            if (cloneHead && verifyCommitSha(workerClone, cloneHead)) {
+              verifiedWorkerSha = cloneHead;
+            } else {
+              workerShaUnverified = true;
+            }
+          } else {
+            workerShaUnverified = true;
+          }
+        } else {
+          verifiedWorkerSha = headShaOf(job.cwd) || o.sha || null;
+        }
+
         persistStep(item.id, 'worker_launch_finished', {
           failures: failureList,
           launch: {
@@ -4422,7 +4483,10 @@ async function runOrchestration(goal, opts) {
             // TASK-AI-121 LF-R01: the real launcher message (scrubbed, capped)
             // so a replayed attempt records it instead of losing it.
             failureMessage: launchFailed ? failureMessageOf(res) : null,
-            workerSha: headShaOf(job.cwd) || o.sha || null,
+            workerSha: verifiedWorkerSha || null,
+            ...(workerShaUnverified
+              ? { reason: 'WORKER_SHA_UNVERIFIED', workerShaReason: 'WORKER_SHA_UNVERIFIED' }
+              : {}),
             failBefore: null,
             // TASK-AI-114 R03: the commit this launch starts from and where it
             // came from: the dependency id for a dependent, the global
@@ -4431,6 +4495,18 @@ async function runOrchestration(goal, opts) {
             baseFrom: dependencyBase ? dependencyBase.baseFrom : null,
           },
         });
+        if (workerShaUnverified) {
+          decisions.recordDecision(
+            {
+              stage: decisions.Stage.WARNING,
+              warning: 'WORKER_SHA_UNVERIFIED',
+              workItemId: item.id,
+              role: roleOf(item),
+              detail: 'worker SHA could not be verified in worker clone: ' + workerClone,
+            },
+            logOpts
+          );
+        }
       }
       if (job.usageFile && !o.injectedRun) {
         const report = readUsageReport(job.usageFile);
@@ -4906,12 +4982,12 @@ async function runOrchestration(goal, opts) {
       // or unparsable report means this was not a live run and nothing is recorded
       // as launched (AI-64-R04, AI-64-P08).
       const adapter = harnessFor({ harness: job.harness });
-      const reported = adapter
-        ? require('./executor').readSessionId(adapter, job, res)
-        : { id: null, cause: 'HARNESS_UNKNOWN' };
+      const reported = require('./executor').readSessionId(adapter, job, res);
       if (!reported.id) {
         launch.outcome = 'not_a_live_run';
-        blockedReason = reported.cause;
+        blockedReason = reported.cause || 'HARNESS_NO_SESSION_ID';
+        launch.fallbackReason = blockedReason;
+        launch.cause = blockedReason;
         break;
       }
 
@@ -4923,6 +4999,12 @@ async function runOrchestration(goal, opts) {
           stallMs: o.stallMs || o.progressTimeoutMs,
         }
       );
+      const isIsolated = Boolean(
+        o.isolatedWorker || (job && job.isolatedWorker) || (res && res.isolatedWorker)
+      );
+      const workerClone = isIsolated
+        ? isolatedWorkerRoot || (res && res.retainedWorkerRoot) || null
+        : job.cwd;
       session = {
         workItemId: item.id,
         attempt,
@@ -4940,11 +5022,22 @@ async function runOrchestration(goal, opts) {
         startedAt: res.startedAt || null,
         exercise: job.exercise || null,
         failBefore: job.failBefore || (job.exercise && job.exercise.failBefore) || null,
-        worktree: job.cwd || null,
+        worktree: isIsolated ? workerClone : job.cwd || null,
       };
-      const workerHead = headShaOf(job.cwd);
+      const candidateWorkerHead = isIsolated
+        ? (res && (res.workerSha || res.retainedHeadSha)) ||
+          (workerClone ? headShaOf(workerClone) : null)
+        : headShaOf(job.cwd);
+      const workerHead = isIsolated
+        ? workerClone && candidateWorkerHead && verifyCommitSha(workerClone, candidateWorkerHead)
+          ? candidateWorkerHead
+          : null
+        : candidateWorkerHead;
       if (workerHead) {
         session.headSha = workerHead;
+      } else if (isIsolated) {
+        session.workerShaReason = 'WORKER_SHA_UNVERIFIED';
+        launch.workerShaReason = 'WORKER_SHA_UNVERIFIED';
       }
       log.sessions.push(session);
       log.launches.push(launch);
@@ -4962,7 +5055,13 @@ async function runOrchestration(goal, opts) {
           branch: job.branch,
           sessionId: reported.id,
           detail: 'DURABLE_SESSION_ID',
-          worktree: job.cwd || null,
+          worktree: isIsolated ? workerClone : job.cwd || null,
+          sha: session.headSha || null,
+          ...(session.headSha
+            ? {}
+            : isIsolated
+              ? { reason: 'WORKER_SHA_UNVERIFIED', workerShaReason: 'WORKER_SHA_UNVERIFIED' }
+              : {}),
           // TASK-AI-114 R03: the handoff commit, with the dependency it came
           // from when this work item is a dependent.
           baseSha: job.baseSha || null,
@@ -4970,6 +5069,15 @@ async function runOrchestration(goal, opts) {
         },
         logOpts
       );
+
+      if (isIsolated && !workerHead) {
+        launch.outcome = 'failed';
+        launch.cause = 'WORKER_SHA_UNVERIFIED';
+        launch.fallbackReason = 'WORKER_SHA_UNVERIFIED';
+        failedKeys.add(decision.chosen);
+        blockedReason = 'WORKER_SHA_UNVERIFIED';
+        break;
+      }
 
       if (status !== SessionStatus.COMPLETED_WITH_ARTIFACT) {
         if (status === SessionStatus.STALLED) {
@@ -6271,9 +6379,7 @@ async function reviewItem(
   if (item && !(item.excludedDomains instanceof Set)) item.excludedDomains = excludedDomainSet;
   const evidenceDir = resolveEvidenceDir(options, o);
   const hostWorktree = o.cwd || process.cwd();
-  const isolatedWorkerRoot = o.isolatedWorker
-    ? require('./isolation-launcher').workerRootFor(hostWorktree)
-    : null;
+  const isolatedWorkerRoot = resolveIsolatedWorkerRoot(o, hostWorktree);
   const workerRoot =
     (o.isolatedWorker ? isolatedWorkerRoot : o.workerRoot) || session.worktree || null;
   // TASK-AI-117 (RS-R01): the review reads the commit the launch recorded —
@@ -7260,9 +7366,7 @@ function repairRound(
 
   return async (findings, sha) => {
     const hostWorktree = o.cwd || process.cwd();
-    const isolatedWorkerRoot = o.isolatedWorker
-      ? require('./isolation-launcher').workerRootFor(hostWorktree)
-      : null;
+    const isolatedWorkerRoot = resolveIsolatedWorkerRoot(o, hostWorktree);
     repairAttemptCounter += 1;
     const round =
       options.attempt !== undefined
@@ -7994,6 +8098,7 @@ module.exports = {
   repairSpec,
   resolveLauncher,
   headShaOf,
+  verifyCommitSha,
   measureFailBefore,
   isTreeDirty,
   getTreeStatus,
