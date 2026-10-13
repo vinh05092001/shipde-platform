@@ -2085,6 +2085,8 @@ function getIsolatedLauncher() {
 
     const launchResult = readLaunchResult(launchResultPath, completionNonce, hostRes);
     if (opts.usageFile && !fs.existsSync(opts.usageFile)) {
+      const { writeUsageReportFromHarnessResult } = require('./orchestrate');
+      const job = Object.assign({ harness: adapter && adapter.id }, opts, opts.job);
       writeUsageReportFromHarnessResult(job, launchResult);
     }
     enforceTokenBudget(launchResult, opts.tokenBudget, opts.usageFile);

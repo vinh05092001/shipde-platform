@@ -265,3 +265,7 @@ Runtime route fallback is triggered only by Hermes agent API-failure log lines t
 ## Part H3 realistic probe
 
 H3 realistic probe sizes route preflight to candidate max-output metadata (8192-token fallback) and a roughly 2k-token context prompt, while requesting a short OK response. Hermes retry controls are set using verified v0.21.4 config keys (`api_max_retries: 1`, `auto_recovery_cycles: 0`). Runtime quota and route errors terminate the active Hermes process, record the reason, and reselect while preserving the named session.
+
+## H3 isolated usage import (2026-10-13)
+
+Live evidence from goal runs dispatching isolated opencode writers revealed a ReferenceError at `tools/ai-brain/isolation-launcher.js:2088` ("writeUsageReportFromHarnessResult is not defined"), which caused the Controller to treat successful worker runs as failures and rotate candidates. `writeUsageReportFromHarnessResult` is now lazily imported from `./orchestrate` at call time (avoiding circular dependency) and invoked with a normalized `job` object derived from launch options and adapter id, ensuring token budget enforcement and usage file synthesis function reliably in isolated runs.
