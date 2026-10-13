@@ -3858,6 +3858,7 @@ async function runOrchestration(goal, opts) {
     }
     let blockedReason = null;
     let session = null;
+    const recordedWriterFailures = new Set();
 
     // TASK-AI-117 (RS-R01/RS-R02): a checkpoint whose launch already completed
     // (a worker commit and exit 0) has nothing to relaunch and nothing to
@@ -4038,6 +4039,7 @@ async function runOrchestration(goal, opts) {
             },
           ],
         });
+        recordedWriterFailures.add(decision.chosen);
         decisions.recordDecision(
           {
             stage: decisions.Stage.FAILED,
@@ -4492,6 +4494,7 @@ async function runOrchestration(goal, opts) {
       }
 
       if (res && Array.isArray(res.hostGateFailures)) {
+        recordedWriterFailures.add(decision.chosen);
         decisions.recordDecision(
           {
             stage: decisions.Stage.FAILED,
@@ -4604,6 +4607,7 @@ async function runOrchestration(goal, opts) {
           });
         }
         persistStep(item.id, 'worker_launch_failed', { failures: failureList });
+        recordedWriterFailures.add(decision.chosen);
         decisions.recordDecision(
           {
             stage: decisions.Stage.FAILED,
@@ -4788,6 +4792,7 @@ async function runOrchestration(goal, opts) {
         for (const d of excludedDomains) {
           allFailedExcluded.add(d);
         }
+        recordedWriterFailures.add(decision.chosen);
         decisions.recordDecision(
           {
             stage: decisions.Stage.FAILED,
@@ -4940,6 +4945,7 @@ async function runOrchestration(goal, opts) {
           launch.cause = failureCause;
           launch.outcome = 'failed';
           failedKeys.add(decision.chosen);
+          recordedWriterFailures.add(decision.chosen);
           decisions.recordDecision(
             {
               stage: decisions.Stage.FAILED,
@@ -4999,15 +5005,23 @@ async function runOrchestration(goal, opts) {
               },
             ],
       });
-      decisions.recordDecision(
-        {
-          stage: decisions.Stage.FAILED,
-          workItemId: item.id,
-          chosen: launch.selected,
-          detail: terminalReason,
-        },
-        logOpts
-      );
+      // Existing launch failures already carry the scrubbed launcher detail and
+      // classification. Keep that record while wrapping its checkpoint reason.
+      if (!recordedWriterFailures.has(launch.selected)) {
+        decisions.recordDecision(
+          {
+            stage: decisions.Stage.FAILED,
+            workItemId: item.id,
+            chosen: launch.selected,
+            detail: terminalReason,
+            cause: launch.cause || terminalReason,
+            failureScope: launch.scope || 'local',
+            retryable: false,
+            retryAfterMs: null,
+          },
+          logOpts
+        );
+      }
       const isNoAlt =
         failedKeys.size > 0 ||
         triedKeys.size > 0 ||
