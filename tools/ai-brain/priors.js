@@ -7,6 +7,12 @@ const DEFAULT_PRIORS_FILE = path.join(__dirname, 'data', 'model-priors.json');
 const TIER_BONUSES = Object.freeze({ T1: 6, T2: 4, T3: 2, T4: 0 });
 const STALE_AFTER_MS = 30 * 24 * 60 * 60 * 1000;
 
+const ROLE_BENCHMARK_WEIGHTS = Object.freeze({
+  planner: Object.freeze({ intelligenceIndex: 0.5, aaAgenticIndex: 0.3, aaCodingIndex: 0.2 }),
+  writer: Object.freeze({ aaCodingIndex: 0.6, aaAgenticIndex: 0.25, intelligenceIndex: 0.15 }),
+  reviewer: Object.freeze({ intelligenceIndex: 0.5, aaCodingIndex: 0.5 }),
+});
+
 /** Load the local, curated prior file. Priors are optional and never block routing. */
 function loadPriors(file) {
   try {
@@ -46,7 +52,13 @@ function priorFor(candidate, role, priors, now) {
   const bonus = TIER_BONUSES[tier] ?? null;
   if (bonus === null) return null;
 
-  const priorScore = benchmarkScore(match) ?? (Number.isFinite(match.score) ? match.score : null);
+  const profile = roleBenchmarkProfile(role);
+  const rankingMaxima = benchmarkMaxima(ranking);
+  const weighted = weightedBenchmarkScore(match, profile, rankingMaxima);
+  const priorScore =
+    weighted.coverage > 0
+      ? weighted.score
+      : (benchmarkScore(match) ?? (Number.isFinite(match.score) ? match.score : null));
   const sourceDates = (match.sources || [])
     .map((source) => source && source.retrievedAt)
     .filter(Boolean);
@@ -61,6 +73,10 @@ function priorFor(candidate, role, priors, now) {
       : isStale(retrievalDate, now));
 
   const result = { canonical: match.canonical, tier, bonus: stale ? 0 : bonus };
+  result.coverage = weighted.coverage;
+  if (weighted.coverage < 0.5) result.evidence = 'INDIRECT';
+  const liveBench = benchmarkValue(match, 'liveBench');
+  if (liveBench !== null) result.liveBench = liveBench;
   if (stale) result.stale = true;
   if (match.sources && match.sources.length) result.sources = match.sources;
   if (Number.isFinite(priorScore)) {
@@ -103,6 +119,49 @@ function benchmarkScore(match) {
     )
     .map(([, value]) => Math.max(0, Math.min(100, value)));
   return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+}
+
+function roleBenchmarkProfile(role) {
+  if (role === 'planner' || role === 'planner.default') return ROLE_BENCHMARK_WEIGHTS.planner;
+  if (role === 'reviewer' || role === 'security-review') return ROLE_BENCHMARK_WEIGHTS.reviewer;
+  if (role === 'writer' || (typeof role === 'string' && role.startsWith('author.')))
+    return ROLE_BENCHMARK_WEIGHTS.writer;
+  return ROLE_BENCHMARK_WEIGHTS.writer;
+}
+
+function benchmarkValue(match, name) {
+  const benchmarks = match && match.benchmarks;
+  const value = Array.isArray(benchmarks)
+    ? benchmarks.find((entry) => entry && entry.name === name)?.score
+    : benchmarks && benchmarks[name] !== undefined
+      ? benchmarks[name]
+      : match && match[name];
+  const score = Number(value && typeof value === 'object' ? value.score : value);
+  return Number.isFinite(score) ? score : null;
+}
+
+function benchmarkMaxima(ranking) {
+  const maxima = {};
+  for (const row of ranking) {
+    for (const name of Object.keys(ROLE_BENCHMARK_WEIGHTS.planner)) {
+      const score = benchmarkValue(row, name);
+      if (score !== null) maxima[name] = Math.max(maxima[name] || 0, score);
+    }
+  }
+  return maxima;
+}
+
+function weightedBenchmarkScore(match, weights, maxima) {
+  let score = 0;
+  let coverage = 0;
+  for (const [name, weight] of Object.entries(weights)) {
+    const value = benchmarkValue(match, name);
+    const max = maxima[name];
+    if (value === null || !max) continue;
+    score += (value / max) * weight;
+    coverage += weight;
+  }
+  return { score: Math.round(100 * score), coverage: Math.round(coverage * 1000) / 1000 };
 }
 
 function normaliseModelId(value) {
@@ -233,5 +292,8 @@ module.exports = {
   refreshPriors,
   normaliseModelId,
   benchmarkScore,
+  ROLE_BENCHMARK_WEIGHTS,
+  roleBenchmarkProfile,
+  weightedBenchmarkScore,
   DEFAULT_PRIORS_FILE,
 };
