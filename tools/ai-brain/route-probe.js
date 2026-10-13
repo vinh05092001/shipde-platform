@@ -108,4 +108,10 @@ async function boundedProbe(probeFn, candidate, apiKeyEnv, env, options) {
   }
 }
 
-module.exports = { probeRoute, classifyProbeFailure, boundedProbe };
+function failureReason(cause) {
+  if (cause && typeof cause === 'object')
+    return failureReason(cause.reasonCode || cause.reason || cause.cause || 'PROBE_FAILED');
+  return String(cause || 'PROBE_FAILED');
+}
+
+module.exports = { probeRoute, classifyProbeFailure, boundedProbe, failureReason };

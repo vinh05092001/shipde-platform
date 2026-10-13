@@ -826,7 +826,9 @@ function reviewLane(
         result = { ok: false, status: 0, body: 'Probe budget exhausted' };
       }
       if (!result || result.ok !== true) {
-        const reasonCode = sharedRouteProbe.classifyProbeFailure(result);
+        const reasonCode = sharedRouteProbe.failureReason(
+          sharedRouteProbe.classifyProbeFailure(result)
+        );
         const failure = {
           exitCode: 1,
           stderr: 'REVIEWER_ROUTE_PROBE_FAILED ' + reasonCode,
@@ -2979,6 +2981,9 @@ async function selectCandidateForProfile(
   };
 
   const result = routing.rankForProfile(candidates, profile, assessment, rankCtx);
+  if (o.isolatedWorker && profile.role !== 'reviewer') {
+    require('./probe-order').preferKnownGood(result, candidates, { ...o, now });
+  }
 
   if (result.chosen) {
     if (failedKeySet.has(result.chosen)) {
@@ -4184,7 +4189,9 @@ async function runOrchestration(goal, opts) {
         }
         require('./route-health').rememberProbe(candidate, probeResult, o);
         if (!probeResult || probeResult.ok !== true) {
-          const reasonCode = sharedRouteProbe.classifyProbeFailure(probeResult);
+          const reasonCode = sharedRouteProbe.failureReason(
+            sharedRouteProbe.classifyProbeFailure(probeResult)
+          );
           const reason = 'WRITER_ROUTE_PROBE_FAILED ' + reasonCode;
           recordPostSelectFailure(reason, reasonCode, 'gateway');
           failedKeys.add(decision.chosen);

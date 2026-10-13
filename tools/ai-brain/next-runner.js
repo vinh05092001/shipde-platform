@@ -712,7 +712,9 @@ async function executeIntakeForItem(item, options, deps, logOpts) {
       }
       reason = decisions
         .scrubText(
-          String(reason || `INTAKE_${String(outcome).toUpperCase()}: child exit code ${exitCode}`)
+          require('./route-probe').failureReason(
+            reason || `INTAKE_${String(outcome).toUpperCase()}: child exit code ${exitCode}`
+          )
         )
         .slice(0, 500);
     }
