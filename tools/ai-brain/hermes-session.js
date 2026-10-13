@@ -806,6 +806,11 @@ async function probeHermesCandidate(candidate, apiKeyEnv, env, options) {
   const baseUrl = String(candidate.accessPath).replace(/\/+$/, '');
   const url = /\/chat\/completions$/i.test(baseUrl) ? baseUrl : `${baseUrl}/chat/completions`;
   const controller = new AbortController();
+  const onAbort = () => controller.abort();
+  if (opts.signal) {
+    if (opts.signal.aborted) controller.abort();
+    else opts.signal.addEventListener('abort', onAbort, { once: true });
+  }
   const timeout = setTimeout(() => controller.abort(), opts.timeoutMs || 30000);
   try {
     const response = await (opts.fetch || globalThis.fetch)(url, {
@@ -827,6 +832,7 @@ async function probeHermesCandidate(candidate, apiKeyEnv, env, options) {
     };
   } finally {
     clearTimeout(timeout);
+    if (opts.signal) opts.signal.removeEventListener('abort', onAbort);
   }
 }
 
@@ -1050,6 +1056,7 @@ async function launchHermesSession(options, deps) {
   let attempt = 0;
 
   const recordProbeRefusal = (candidate, reason) => {
+    if (opts.skipDecisionLog) return null;
     try {
       (d.decisions || decisionsApi).recordDecision(
         {
@@ -1070,7 +1077,7 @@ async function launchHermesSession(options, deps) {
     } catch (logErr) {
       const err = new Error('DECISION_LOG_WRITE_FAILURE: ' + (logErr.message || String(logErr)));
       err.code = 'DECISION_LOG_WRITE_FAILURE';
-      throw err;
+      return err;
     }
   };
 
@@ -1136,7 +1143,10 @@ async function launchHermesSession(options, deps) {
       probeReasons.push(`${candidate.candidateKey}: ${reason}`);
       excludedCandidates.push(candidate.candidateKey);
       if (modelProbeCount >= 2) excludedModels.add(modelId);
-      recordProbeRefusal(candidate, reason);
+      const decisionLogError = recordProbeRefusal(candidate, reason);
+      if (decisionLogError) {
+        probeReasons.push(`${candidate.candidateKey}: ${decisionLogError.message}`);
+      }
       session.candidateKey = null;
       saveSession(session, opts, d);
       if (attempt >= maxAttempts) {
@@ -1160,19 +1170,22 @@ async function launchHermesSession(options, deps) {
         err.reasons = probeReasons.slice();
         throw err;
       }
+      const probeController = new AbortController();
+      const timeoutMs = Math.min(probeTimeoutMs, Math.max(1, probeDeadline - Date.now()));
       let timeoutHandle;
       const probeResult = await Promise.race([
         Promise.resolve().then(() =>
           probeFn(candidate, configResult.apiKeyEnv, env, {
-            timeoutMs: Math.min(probeTimeoutMs, Math.max(1, probeDeadline - Date.now())),
+            timeoutMs,
             fetch: d.fetch || opts.fetch,
+            signal: probeController.signal,
           })
         ),
         new Promise((resolve) => {
-          timeoutHandle = setTimeout(
-            () => resolve({ ok: false, status: 0, body: 'Probe request timed out' }),
-            Math.min(probeTimeoutMs, Math.max(1, probeDeadline - Date.now()))
-          );
+          timeoutHandle = setTimeout(() => {
+            probeController.abort();
+            resolve({ ok: false, status: 0, body: 'Probe request timed out' });
+          }, timeoutMs);
         }),
       ]);
       clearTimeout(timeoutHandle);
@@ -1217,7 +1230,10 @@ async function launchHermesSession(options, deps) {
         ) {
           excludedModels.add(modelId);
         }
-        recordProbeRefusal(candidate, reason);
+        const decisionLogError = recordProbeRefusal(candidate, reason);
+        if (decisionLogError) {
+          probeReasons.push(`${candidate.candidateKey}: ${decisionLogError.message}`);
+        }
         session.candidateKey = null;
         saveSession(session, opts, d);
         if (attempt >= maxAttempts || Date.now() >= probeDeadline) {
@@ -1305,6 +1321,7 @@ async function launchHermesSession(options, deps) {
         argv,
         configResult,
         hermesHome,
+        refusalReasons: probeReasons.slice(),
       };
     }
 
@@ -1348,6 +1365,7 @@ async function launchHermesSession(options, deps) {
         configResult,
         spawnResult,
         hermesHome,
+        refusalReasons: probeReasons.slice(),
       };
     }
 
@@ -1411,6 +1429,7 @@ async function launchHermesSession(options, deps) {
         spawnResult,
         classification,
         hermesHome,
+        refusalReasons: probeReasons.slice(),
       };
     }
 

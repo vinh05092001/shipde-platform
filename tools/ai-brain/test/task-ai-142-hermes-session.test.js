@@ -203,6 +203,51 @@ test('H3-08: route probe excludes quota failure and launches the next candidate 
   }
 });
 
+test('route probe decision-log failure is reported but does not block fallback', async () => {
+  const root = fixtureRoot('hermes-probe-log-fallback-');
+  const c1 = sampleCandidate({
+    gateway: '9router',
+    upstream: 'kr',
+    modelId: 'kr/first',
+    quality: 99,
+  });
+  const c2 = sampleCandidate({
+    gateway: 'rqsty',
+    upstream: 'rq',
+    modelId: 'rq/second',
+    quality: 90,
+  });
+  const probed = [];
+  try {
+    const res = await launchHermesSession(
+      { rootDir: root, decisionDir: path.join(root, 'missing', 'decisions') },
+      {
+        candidates: [c1, c2],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+        decisions: {
+          Stage: { SELECTED: 'SELECTED', REFUSED: 'REFUSED' },
+          recordDecision(record) {
+            if (record.stage === 'refused') throw new Error('read-only decision directory');
+          },
+        },
+        probe: async (candidate) => {
+          probed.push(candidate.candidateKey);
+          return candidate.candidateKey === c1.candidateKey
+            ? { ok: false, status: 429, body: 'rate limited' }
+            : { ok: true, status: 200, body: '{}' };
+        },
+        spawn: async () => ({ exitCode: 0 }),
+      }
+    );
+    assert.equal(res.candidateKey, c2.candidateKey);
+    assert.ok(res.refusalReasons.some((reason) => /DECISION_LOG_WRITE_FAILURE/.test(reason)));
+    assert.deepEqual(probed, [c1.candidateKey, c2.candidateKey]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('H3-09: all route probes failing refuse with NO_REASONING_CANDIDATE and reasons', async () => {
   const root = fixtureRoot('hermes-probe-refused-');
   try {
@@ -277,24 +322,53 @@ test('H3-20: credit failure excludes the canonical model and probes the next ran
   }
 });
 
-test('H3-21: probe time budget exhaustion fails closed with NO_REASONING_CANDIDATE', async () => {
+test('H3-21: probe timeout fails closed with NO_REASONING_CANDIDATE', async () => {
   const root = fixtureRoot('hermes-probe-budget-');
   try {
     await assert.rejects(
       launchHermesSession(
-        { rootDir: root, skipDecisionLog: true, probeBudgetMs: 20, probeTimeoutMs: 10 },
+        { rootDir: root, skipDecisionLog: true, probeBudgetMs: 5000, probeTimeoutMs: 20 },
         {
           candidates: [sampleCandidate()],
           registry: sampleRegistry(),
           priorsData: { ranking: [] },
-          probe: async () => new Promise((resolve) => setTimeout(() => resolve({ ok: true }), 40)),
+          probe: async () => new Promise(() => {}),
           spawn: async () => {
             throw new Error('Hermes must not launch');
           },
         }
       ),
-      (err) => err.code === 'NO_REASONING_CANDIDATE' && /budget exhausted/.test(err.message)
+      (err) => err.code === 'NO_REASONING_CANDIDATE' && /timeout/.test(err.message)
     );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('timed-out route probe receives an aborted signal', async () => {
+  const root = fixtureRoot('hermes-probe-abort-');
+  let signal;
+  try {
+    await assert.rejects(
+      launchHermesSession(
+        { rootDir: root, skipDecisionLog: true, probeBudgetMs: 5000, probeTimeoutMs: 20 },
+        {
+          candidates: [sampleCandidate()],
+          registry: sampleRegistry(),
+          priorsData: { ranking: [] },
+          probe: async (_candidate, _envName, _env, options) => {
+            signal = options.signal;
+            return new Promise(() => {});
+          },
+          spawn: async () => {
+            throw new Error('Hermes must not launch');
+          },
+        }
+      ),
+      (err) => err.code === 'NO_REASONING_CANDIDATE'
+    );
+    assert.ok(signal);
+    assert.equal(signal.aborted, true);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
