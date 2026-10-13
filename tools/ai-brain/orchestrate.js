@@ -2817,6 +2817,7 @@ async function selectCandidateForProfile(
   // weighting profiles, never a model, provider, account or gateway.
   const assessment = await routing.assessTask(profile, {
     ask: jevAsk,
+    source: jevSource,
     minConfidence: jevSource && jevSource.minConfidence,
   });
 
@@ -2926,6 +2927,10 @@ async function selectCandidateForProfile(
     taskProfile: profile,
     jev: assessment,
     weightProfile: assessment.weightProfile,
+    weightSource: assessment.weightSource,
+    scores: assessment.scores,
+    dimensionConfidences: assessment.dimensionConfidences,
+    weights: assessment.weights,
     jevModel: assessment.jevModel || null,
     confidence: assessment.confidence !== undefined ? assessment.confidence : null,
     probabilities: assessment.probabilities || null,

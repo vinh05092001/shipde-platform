@@ -209,18 +209,39 @@ function validateTaskProfile(profile) {
 
 /** The closed question JEV is asked about a task profile. */
 function jevQuestion(profile) {
+  const taskClass =
+    profile.complexity === 'complex' || profile.complexity === 'large'
+      ? 'long-form'
+      : profile.complexity === 'short' || profile.complexity === 'trivial'
+        ? 'short-form'
+        : 'standard';
   return {
     kind: 'assess-task-profile',
     prompt:
-      'Assess this task profile for live routing and choose the trade-off ' +
-      'weighting profile. Answer with a weighting profile only, never a model, ' +
-      'provider or account. Task complexity: ' +
+      'Assess this task profile for live routing and score quality, latency, and cost priorities. Keep the legacy choice as fallback. Never choose a model, provider or account. Task class: ' +
+      taskClass +
+      '. Difficulty: ' +
       String(profile.complexity) +
       '. Risk domains: ' +
       ((profile.riskDomains || []).join(', ') || 'none declared') +
       '.',
     evidence: JSON.stringify(profile),
     options: Object.keys(WEIGHT_PROFILES),
+    state: Object.assign({}, profile, { taskClass, difficulty: String(profile.complexity) }),
+    scoreDimensions: [
+      {
+        name: 'qualityImportance',
+        instructions: 'Score quality importance from 0 (minimal) to 10 (critical).',
+      },
+      {
+        name: 'latencyImportance',
+        instructions: 'Score low latency importance from 0 (minimal) to 10 (critical).',
+      },
+      {
+        name: 'costImportance',
+        instructions: 'Score low cost importance from 0 (minimal) to 10 (critical).',
+      },
+    ],
   };
 }
 
@@ -311,32 +332,96 @@ async function assessTask(profile, opts) {
   const options = opts || {};
   const question = jevQuestion(profile);
   const fallbackId = controllerFallbackProfile(profile);
-
-  const result = await jev.adviseOrReason(question, {
-    ask:
-      typeof options.weightingAsk === 'function'
-        ? options.weightingAsk
-        : typeof options.ask === 'function'
-          ? options.ask
-          : undefined,
-    minConfidence: Number.isFinite(Number(options.minConfidence))
-      ? Number(options.minConfidence)
-      : undefined,
-    reasoningController: () => ({
+  const ask =
+    typeof options.weightingAsk === 'function'
+      ? options.weightingAsk
+      : typeof options.ask === 'function'
+        ? options.ask
+        : undefined;
+  const minConfidence =
+    options.source &&
+    options.source.minConfidence !== null &&
+    options.source.minConfidence !== undefined &&
+    Number.isFinite(Number(options.source.minConfidence))
+      ? Number(options.source.minConfidence)
+      : options.minConfidence !== null &&
+          options.minConfidence !== undefined &&
+          Number.isFinite(Number(options.minConfidence))
+        ? Number(options.minConfidence)
+        : undefined;
+  let result;
+  try {
+    result = await jev.adviseOrReason(question, {
+      ask,
+      minConfidence,
+      reasoningController: () => ({
+        outcome: jev.Outcome.DECIDED,
+        choice: fallbackId,
+        confidence: 0,
+        reason: 'CONTROLLER_DETERMINISTIC_FALLBACK',
+      }),
+    });
+  } catch (err) {
+    result = {
       outcome: jev.Outcome.DECIDED,
       choice: fallbackId,
       confidence: 0,
+      handledBy: 'reasoning-controller',
       reason: 'CONTROLLER_DETERMINISTIC_FALLBACK',
-    }),
-  });
-
-  const jevDecided = result.handledBy === 'jev' && result.outcome === jev.Outcome.DECIDED;
+      jev: { reason: 'UNREACHABLE' },
+    };
+  }
+  const advisoryResult = result.jev || result;
+  const scoreDecided = Boolean(
+    advisoryResult.scores &&
+    result.handledBy === 'jev' &&
+    advisoryResult.outcome === jev.Outcome.DECIDED
+  );
+  const jevDecided =
+    scoreDecided ||
+    Boolean(
+      result.handledBy === 'jev' &&
+      result.outcome === jev.Outcome.DECIDED &&
+      WEIGHT_PROFILES[result.choice]
+    );
   let chosenProfile = result.choice && WEIGHT_PROFILES[result.choice] ? result.choice : fallbackId;
+  let weights = WEIGHT_PROFILES[chosenProfile];
+  let weightSource = 'preset:' + chosenProfile;
+  if (scoreDecided) {
+    const values = [
+      advisoryResult.scores.qualityImportance.score,
+      advisoryResult.scores.latencyImportance.score,
+      advisoryResult.scores.costImportance.score,
+    ];
+    const sum = values.reduce((a, b) => a + b, 0);
+    if (sum > 0) {
+      const exact = values.map((value) => (value * 100) / sum);
+      const rounded = exact.map(Math.floor);
+      const fractions = exact
+        .map((value, index) => ({ index, fraction: value - rounded[index] }))
+        .sort((a, b) => b.fraction - a.fraction);
+      for (
+        let remainder = 100 - rounded.reduce((a, b) => a + b, 0), i = 0;
+        remainder > 0;
+        remainder -= 1, i += 1
+      )
+        rounded[fractions[i].index] += 1;
+      weights = { quality: rounded[0], latency: rounded[1], cost: rounded[2] };
+      weightSource = 'jev-score';
+      chosenProfile = null;
+    }
+  }
   const highRisk = (profile.riskDomains || []).some((domain) =>
     ['auth', 'security', 'money', 'tenant isolation'].includes(String(domain).toLowerCase())
   );
-  const qualityOverride = highRisk && chosenProfile !== 'QUALITY_FIRST';
-  if (qualityOverride) chosenProfile = 'QUALITY_FIRST';
+  const qualityFirstRole = profile.role === 'reviewer' || profile.role === 'security-review';
+  const riskQualityOverride = highRisk && chosenProfile !== 'QUALITY_FIRST';
+  const qualityOverride = qualityFirstRole || riskQualityOverride;
+  if (qualityOverride) {
+    chosenProfile = 'QUALITY_FIRST';
+    weights = WEIGHT_PROFILES.QUALITY_FIRST;
+    weightSource = 'preset:QUALITY_FIRST';
+  }
   const decidedBy = qualityOverride ? 'controller' : jevDecided ? 'jev' : 'controller';
 
   const reasonCodes = [];
@@ -345,10 +430,14 @@ async function assessTask(profile, opts) {
     reasonCodes.push(
       'JEV_UNDECIDED:' + String((result.jev && result.jev.reason) || result.reason || 'UNKNOWN')
     );
-  reasonCodes.push('WEIGHTS_' + chosenProfile + (jevDecided ? '' : '_CONTROLLER_FALLBACK'));
-  if (qualityOverride) reasonCodes.push('QUALITY_FIRST_RISK_FLOOR_OVERRIDE');
+  if (weightSource === 'jev-score') {
+    reasonCodes.push('WEIGHTS_JEV_SCORE');
+  } else {
+    reasonCodes.push('WEIGHTS_' + chosenProfile + (jevDecided ? '' : '_CONTROLLER_FALLBACK'));
+  }
+  if (riskQualityOverride) reasonCodes.push('QUALITY_FIRST_RISK_FLOOR_OVERRIDE');
+  if (qualityFirstRole) reasonCodes.push('QUALITY_FIRST_ROLE_POLICY');
 
-  const weights = WEIGHT_PROFILES[chosenProfile];
   const taskClass =
     profile.complexity === 'complex' || profile.complexity === 'large'
       ? 'long-form'
@@ -367,6 +456,17 @@ async function assessTask(profile, opts) {
     decidedBy,
     weightProfile: chosenProfile,
     weights,
+    weightSource,
+    scores: advisoryResult.scores
+      ? Object.fromEntries(
+          Object.entries(advisoryResult.scores).map(([name, item]) => [name, item.score])
+        )
+      : null,
+    dimensionConfidences: advisoryResult.scores
+      ? Object.fromEntries(
+          Object.entries(advisoryResult.scores).map(([name, item]) => [name, item.confidence])
+        )
+      : null,
     taskClass,
     difficulty: String(profile.complexity),
     latencyPriority: profile.latencyPriority,
@@ -376,9 +476,11 @@ async function assessTask(profile, opts) {
     jevModel: jevDecided && result.jevModel ? result.jevModel : null,
     usage: jevDecided && result.usage ? result.usage : null,
     reasonCodes,
-    reason: qualityOverride
-      ? 'QUALITY_FIRST enforced for high-risk domains: ' + (profile.riskDomains || []).join(', ')
-      : (result.jev && result.jev.reason) || result.reason || null,
+    reason: qualityFirstRole
+      ? 'QUALITY_FIRST_ROLE_POLICY'
+      : qualityOverride
+        ? 'QUALITY_FIRST enforced for high-risk domains: ' + (profile.riskDomains || []).join(', ')
+        : (result.jev && result.jev.reason) || result.reason || null,
   };
 }
 
@@ -1788,6 +1890,10 @@ async function runProfileDispatch(args, deps) {
     taskProfile: profile,
     jev: assessment,
     weightProfile: assessment.weightProfile,
+    weightSource: assessment.weightSource,
+    scores: assessment.scores,
+    dimensionConfidences: assessment.dimensionConfidences,
+    weights: assessment.weights,
     jevModel: assessment.jevModel || null,
     confidence: assessment.confidence !== undefined ? assessment.confidence : null,
     probabilities: assessment.probabilities || null,

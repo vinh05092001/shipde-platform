@@ -159,6 +159,18 @@ function systemOneChoice(choice, confidence, probabilities) {
   };
 }
 
+function systemOneScores(quality, latency, cost, confidence) {
+  return {
+    model: 'jev-latest',
+    answers: {
+      qualityImportance: { type: 'score', score: quality, distribution: {}, confidence },
+      latencyImportance: { type: 'score', score: latency, distribution: {}, confidence },
+      costImportance: { type: 'score', score: cost, distribution: {}, confidence },
+      weightProfile: { type: 'choice', choice: 'BALANCED', confidence },
+    },
+  };
+}
+
 function assertSystemOneRequest(body) {
   assert.equal(body.model, 'jev-latest', 'JEV model must come from source data');
   assert.ok(body.state, 'TypeSafe request must include state');
@@ -170,6 +182,10 @@ function assertSystemOneRequest(body) {
     ['BALANCED', 'LATENCY_FIRST', 'QUALITY_FIRST'].sort(),
     'criteria must carry exactly the closed weighting-profile choices'
   );
+  for (const key of ['qualityImportance', 'latencyImportance', 'costImportance']) {
+    assert.equal(body.questions[key].type, 'score');
+    assert.equal(body.questions[key].levels.length, 11);
+  }
   assert.equal(body.kind, undefined, 'legacy kind field must not be sent');
   assert.equal(body.prompt, undefined, 'legacy prompt field must not be sent');
   assert.equal(body.evidence, undefined, 'legacy evidence field must not be sent');
@@ -361,7 +377,7 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
   test('3 valid JEV advisory changes the weight profile and ranking order', async () => {
     // Expected contract:
     // In live CLI dispatch, a valid JEV advisory returned over the live path
-    // must change the weightProfile (e.g. from default QUALITY_FIRST to LATENCY_FIRST for reviewer)
+    // must change the weightProfile for a role without a QUALITY_FIRST policy
     // and flip the candidate ranking order so that Candidate Fast outranks Candidate Quality.
     // At base, live CLI does not supply jevAsk, so assessment is always UNDECIDED
     // and weightProfile remains the default fallback (QUALITY_FIRST for reviewer).
@@ -380,7 +396,7 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
           body: body ? JSON.parse(body) : null,
         });
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(systemOneChoice('LATENCY_FIRST', 0.95)));
+        res.end(JSON.stringify(systemOneScores(2, 9, 1, 0.95)));
       });
     });
 
@@ -430,7 +446,7 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
       const profileFile = path.join(tempHome, 'profile.json');
       writeJson(profileFile, {
         taskId: 'TASK-AI-73-REV-ORDER',
-        role: 'reviewer',
+        role: 'writer',
         complexity: 'standard',
         requiredCapabilities: [],
         proofFloor: 'NONE',
@@ -485,9 +501,9 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
       const parsed = parseJsonOutput(output.join('\n'));
       assert.ok(parsed && parsed.assessment, 'Live CLI must return JSON assessment');
       assert.equal(
-        parsed.assessment.weightProfile,
-        'LATENCY_FIRST',
-        'Valid JEV advisory must change weightProfile to LATENCY_FIRST in live CLI output'
+        parsed.assessment.weightSource,
+        'jev-score',
+        'Valid JEV score advisory must supply direct weights in live CLI output'
       );
       assert.equal(
         parsed.assessment.decidedBy,
@@ -496,7 +512,7 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
       );
       assert.ok(
         parsed.pinned && parsed.pinned.includes('fast-model'),
-        'Candidate Fast must be pinned when JEV advises LATENCY_FIRST, got: ' + parsed.pinned
+        'Candidate Fast must be pinned when JEV scores prioritize latency, got: ' + parsed.pinned
       );
     } finally {
       server.close();
