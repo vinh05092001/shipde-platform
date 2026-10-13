@@ -2115,6 +2115,36 @@ function getIsolatedLauncher() {
     }
     launchResult.rtk = { provided: rtkEnabled, reason: rtkDecision };
     launchResult.tokenBudget = opts.tokenBudget || null;
+    launchResult.workerRoot = launchResult.workerRoot || workerRoot;
+    launchResult.worktree = launchResult.worktree || workerRoot;
+    if (
+      !launchResult.workerSha &&
+      fs.existsSync(workerRoot) &&
+      fs.existsSync(path.join(workerRoot, '.git'))
+    ) {
+      try {
+        const { withCleanGitEnv, safeGit } = require('./supervisor');
+        const headSha = withCleanGitEnv(
+          workerRoot,
+          (safeGitDir) => {
+            const curHeadRes = safeGit(
+              safeGitDir,
+              workerRoot,
+              ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'],
+              20000
+            );
+            return curHeadRes && curHeadRes.status === 0 && curHeadRes.stdout
+              ? curHeadRes.stdout.trim()
+              : null;
+          },
+          { workerWritable: true }
+        );
+        if (headSha) {
+          launchResult.workerSha = headSha;
+          launchResult.retainedHeadSha = headSha;
+        }
+      } catch {}
+    }
     return launchResult;
   };
 }
@@ -2188,6 +2218,10 @@ function readLaunchResult(launchResultPath, completionNonce, hostRes) {
     localFailure: resJson.localFailure ? String(resJson.localFailure) : null,
     timedOut: false,
     completionNonce: resJson.completionNonce,
+    ...(resJson.sessionId ? { sessionId: resJson.sessionId } : {}),
+    ...(resJson.launchHandle ? { launchHandle: resJson.launchHandle } : {}),
+    ...(resJson.workerSha ? { workerSha: resJson.workerSha } : {}),
+    ...(resJson.workerRoot ? { workerRoot: resJson.workerRoot } : {}),
     ...(resJson.usage ? { usage: resJson.usage } : {}),
     ...(resJson.progressDetail ? { progressDetail: String(resJson.progressDetail) } : {}),
     ...(failureReason ? { failureReason } : {}),
