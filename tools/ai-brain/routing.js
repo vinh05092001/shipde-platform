@@ -338,32 +338,53 @@ async function assessTask(profile, opts) {
       : typeof options.ask === 'function'
         ? options.ask
         : undefined;
-  const protectedRole = profile.role === 'reviewer' || profile.role === 'security-review';
-  const result = protectedRole
-    ? {
-        outcome: jev.Outcome.UNDECIDED,
-        choice: null,
-        confidence: 0,
-        reason: 'QUALITY_FIRST_ROLE_POLICY',
-      }
-    : await jev.advise(question, {
-        ask,
-        minConfidence: Number.isFinite(Number(options.minConfidence))
+  let result;
+  try {
+    result = await jev.adviseOrReason(question, {
+      ask,
+      minConfidence: Number.isFinite(Number(options.source && options.source.minConfidence))
+        ? Number(options.source.minConfidence)
+        : Number.isFinite(Number(options.minConfidence))
           ? Number(options.minConfidence)
-          : undefined,
-      });
-  const scoreDecided = Boolean(result.scores && result.outcome === jev.Outcome.DECIDED);
+          : jev.DEFAULT_MIN_CONFIDENCE,
+      reasoningController: () => ({
+        outcome: jev.Outcome.DECIDED,
+        choice: fallbackId,
+        confidence: 0,
+        reason: 'CONTROLLER_DETERMINISTIC_FALLBACK',
+      }),
+    });
+  } catch (err) {
+    result = {
+      outcome: jev.Outcome.DECIDED,
+      choice: fallbackId,
+      confidence: 0,
+      handledBy: 'reasoning-controller',
+      reason: 'CONTROLLER_DETERMINISTIC_FALLBACK',
+      jev: { reason: 'UNREACHABLE' },
+    };
+  }
+  const advisoryResult = result.jev || result;
+  const scoreDecided = Boolean(
+    advisoryResult.scores &&
+    result.handledBy === 'jev' &&
+    advisoryResult.outcome === jev.Outcome.DECIDED
+  );
   const jevDecided =
     scoreDecided ||
-    Boolean(result.outcome === jev.Outcome.DECIDED && WEIGHT_PROFILES[result.choice]);
+    Boolean(
+      result.handledBy === 'jev' &&
+      result.outcome === jev.Outcome.DECIDED &&
+      WEIGHT_PROFILES[result.choice]
+    );
   let chosenProfile = result.choice && WEIGHT_PROFILES[result.choice] ? result.choice : fallbackId;
   let weights = WEIGHT_PROFILES[chosenProfile];
   let weightSource = 'preset:' + chosenProfile;
   if (scoreDecided) {
     const values = [
-      result.scores.qualityImportance.score,
-      result.scores.latencyImportance.score,
-      result.scores.costImportance.score,
+      advisoryResult.scores.qualityImportance.score,
+      advisoryResult.scores.latencyImportance.score,
+      advisoryResult.scores.costImportance.score,
     ];
     const sum = values.reduce((a, b) => a + b, 0);
     if (sum > 0) {
@@ -387,7 +408,7 @@ async function assessTask(profile, opts) {
     ['auth', 'security', 'money', 'tenant isolation'].includes(String(domain).toLowerCase())
   );
   const qualityOverride = highRisk && chosenProfile !== 'QUALITY_FIRST';
-  if (qualityOverride || protectedRole) {
+  if (qualityOverride) {
     chosenProfile = 'QUALITY_FIRST';
     weights = WEIGHT_PROFILES.QUALITY_FIRST;
     weightSource = 'preset:QUALITY_FIRST';
@@ -426,12 +447,14 @@ async function assessTask(profile, opts) {
     weightProfile: chosenProfile,
     weights,
     weightSource,
-    scores: result.scores
-      ? Object.fromEntries(Object.entries(result.scores).map(([name, item]) => [name, item.score]))
-      : null,
-    dimensionConfidences: result.scores
+    scores: advisoryResult.scores
       ? Object.fromEntries(
-          Object.entries(result.scores).map(([name, item]) => [name, item.confidence])
+          Object.entries(advisoryResult.scores).map(([name, item]) => [name, item.score])
+        )
+      : null,
+    dimensionConfidences: advisoryResult.scores
+      ? Object.fromEntries(
+          Object.entries(advisoryResult.scores).map(([name, item]) => [name, item.confidence])
         )
       : null,
     taskClass,

@@ -2803,6 +2803,7 @@ async function selectCandidateForProfile(
   // weighting profiles, never a model, provider, account or gateway.
   const assessment = await routing.assessTask(profile, {
     ask: jevAsk,
+    source: jevSource,
     minConfidence: jevSource && jevSource.minConfidence,
   });
 

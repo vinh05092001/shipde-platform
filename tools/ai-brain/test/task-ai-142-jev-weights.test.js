@@ -160,3 +160,62 @@ test('JEV failure falls back to a preset', async () => {
   assert.ok(assessment.reasonCodes.some((code) => code.includes('TIMEOUT')));
   assert.equal(JSON.stringify(assessment).includes(secret), false);
 });
+
+test('dispatch ranking proceeds when JEV scores, has low confidence, or throws', async () => {
+  const route = {
+    harness: 'paseo',
+    accessPath: 'cli',
+    gateway: 'gateway-a',
+    upstream: 'provider-a',
+    accountId: 'account-a',
+    modelId: 'model-a',
+    contextWindow: 10000,
+    quality: 80,
+    latencyMs: 500,
+    cost: 2,
+    evidence: [],
+  };
+  const cases = [
+    {
+      name: 'scores',
+      ask: async () => ({
+        scores: {
+          qualityImportance: { score: 8, confidence: 0.9 },
+          latencyImportance: { score: 3, confidence: 0.9 },
+          costImportance: { score: 4, confidence: 0.9 },
+        },
+        choice: 'BALANCED',
+      }),
+    },
+    {
+      name: 'low confidence',
+      ask: async () => ({
+        scores: {
+          qualityImportance: { score: 8, confidence: 0.4 },
+          latencyImportance: { score: 3, confidence: 0.4 },
+          costImportance: { score: 4, confidence: 0.4 },
+        },
+        choice: 'BALANCED',
+      }),
+    },
+    {
+      name: 'throw',
+      ask: async () => {
+        throw new Error('JEV_UNAVAILABLE');
+      },
+    },
+  ];
+
+  for (const scenario of cases) {
+    const assessment = await routing.assessTask(profile(), { ask: scenario.ask });
+    const result = routing.rankForProfile([route], profile(), assessment, {
+      headrooms: { default: 'open' },
+    });
+    assert.equal(
+      result.ranking.length,
+      1,
+      `${scenario.name}: candidate should remain dispatchable`
+    );
+    assert.equal(result.chosen, routing.candidateKey(route));
+  }
+});

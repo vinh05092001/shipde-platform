@@ -330,7 +330,7 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
 
       const profile = {
         taskId: 'TASK-AI-73-TIMEOUT',
-        role: 'writer',
+        role: 'reviewer',
         complexity: 'standard',
         requiredCapabilities: [],
         proofFloor: 'NONE',
@@ -363,7 +363,7 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
       );
       assert.equal(
         assessment.weightProfile,
-        routing.ROLE_FALLBACK_PROFILE.writer,
+        routing.ROLE_FALLBACK_PROFILE.reviewer,
         'Controller fallback profile must be applied upon timeout'
       );
     } finally {
@@ -446,7 +446,7 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
       const profileFile = path.join(tempHome, 'profile.json');
       writeJson(profileFile, {
         taskId: 'TASK-AI-73-REV-ORDER',
-        role: 'writer',
+        role: 'reviewer',
         complexity: 'standard',
         requiredCapabilities: [],
         proofFloor: 'NONE',
