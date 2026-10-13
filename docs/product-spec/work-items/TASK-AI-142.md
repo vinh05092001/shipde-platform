@@ -273,3 +273,7 @@ Live evidence from goal runs dispatching isolated opencode writers revealed a Re
 ## H3 isolated usage budget (2026-10-13)
 
 Isolated OpenCode results now synthesize the usage report from token JSON in stdout or a launch-result `usage` field before budget enforcement. A proven overrun fails with `TOKEN_BUDGET_EXCEEDED`; missing/unreadable usage records `TOKEN_BUDGET_UNVERIFIED` as a warning while preserving the worker's actual outcome. `STALLED_NO_PROGRESS` details include the detector's measured file-signature and token-usage signals; stdout is explicitly identified as outside that detector.
+
+## H3 writer route probe (2026-10-13)
+
+Before launching an isolated writer, the Controller probes the resolved gateway with the exact upstream model id and a realistic request. Failed routes are logged and excluded before launch, with bounded time and attempt budgets and no credential values in logs. Hermes and isolated dispatch share the OpenAI-compatible probe implementation.
