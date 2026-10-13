@@ -3101,6 +3101,8 @@ async function selectCandidateForProfile(
       reservationsHeld: c.reservationsHeld || 0,
     })),
     rejected: result.rejected.slice(0, 50),
+    knownGoodRejected: result.knownGoodRejected || [],
+    isolatedLaneRejected: result.isolatedLaneRejected || [],
     rejectedCount: result.rejected.length,
     fallbackSequence: [],
     firstChoice: result.top3[0] ? result.top3[0].candidateKey : null,
