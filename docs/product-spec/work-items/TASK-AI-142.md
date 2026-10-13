@@ -269,3 +269,7 @@ H3 realistic probe sizes route preflight to candidate max-output metadata (8192-
 ## H3 isolated usage import (2026-10-13)
 
 Live evidence from goal runs dispatching isolated opencode writers revealed a ReferenceError at `tools/ai-brain/isolation-launcher.js:2088` ("writeUsageReportFromHarnessResult is not defined"), which caused the Controller to treat successful worker runs as failures and rotate candidates. `writeUsageReportFromHarnessResult` is now lazily imported from `./orchestrate` at call time (avoiding circular dependency) and invoked with a normalized `job` object derived from launch options and adapter id, ensuring token budget enforcement and usage file synthesis function reliably in isolated runs.
+
+## H3 isolated usage budget (2026-10-13)
+
+Isolated OpenCode results now synthesize the usage report from token JSON in stdout or a launch-result `usage` field before budget enforcement. A proven overrun fails with `TOKEN_BUDGET_EXCEEDED`; missing/unreadable usage records `TOKEN_BUDGET_UNVERIFIED` as a warning while preserving the worker's actual outcome. `STALLED_NO_PROGRESS` details include the detector's measured file-signature and token-usage signals; stdout is explicitly identified as outside that detector.
