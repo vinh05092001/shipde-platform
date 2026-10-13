@@ -110,6 +110,29 @@ function normalizeAdvice(raw) {
   if (!raw || typeof raw !== 'object') return raw;
   if (raw.choice !== undefined || raw.confidence !== undefined) return raw;
   if (raw.answers && typeof raw.answers === 'object') {
+    const dimensions = ['qualityImportance', 'latencyImportance', 'costImportance'];
+    const scores = {};
+    for (const name of dimensions) {
+      const answer = raw.answers[name];
+      if (answer && answer.type === 'score') {
+        scores[name] = {
+          score: answer.score,
+          distribution: answer.distribution,
+          confidence: answer.confidence,
+        };
+      }
+    }
+    if (Object.keys(scores).length) {
+      const legacy = raw.answers.weightProfile;
+      return {
+        scores,
+        choice: legacy && legacy.choice,
+        confidence: legacy && legacy.confidence,
+        probabilities: legacy && legacy.probabilities,
+        jevModel: raw.model || null,
+        usage: raw.usage || null,
+      };
+    }
     const answer =
       raw.answers.weightProfile ||
       raw.answers.advisory ||
@@ -179,18 +202,48 @@ function buildJevAsk(source, options) {
     }
     const questionKey =
       question.kind === 'select-eligible-model' ? 'eligibleModel' : 'weightProfile';
+    const questions = {
+      [questionKey]: {
+        type: 'choice',
+        instructions: question.prompt,
+        criteria,
+      },
+    };
+    if (question.kind === 'assess-task-profile') {
+      for (const dimension of question.scoreDimensions || []) {
+        const name = dimension.name;
+        const state = question.state || {};
+        const levels = Array.from({ length: 11 }, (_, score) => {
+          const emphasis = score <= 3 ? 'low' : score <= 7 ? 'moderate' : 'high';
+          return (
+            score +
+            ': ' +
+            emphasis +
+            ' priority for ' +
+            name.replace('Importance', '') +
+            ' given task class ' +
+            String(state.taskClass || 'unknown') +
+            ', difficulty ' +
+            String(state.difficulty || 'unknown') +
+            ', risks ' +
+            ((state.riskDomains || []).join(', ') || 'none') +
+            ', deadline priority ' +
+            String(state.latencyPriority || 'normal') +
+            ', deadline/expected duration ' +
+            String(state.deadline || state.expectedDuration || 'unspecified') +
+            ', budget ' +
+            String(state.costCeiling === undefined ? 'unspecified' : state.costCeiling)
+          );
+        });
+        questions[name] = { type: 'score', instructions: dimension.instructions, levels };
+      }
+    }
     const raw = await postJson(
       endpoint,
       {
         model: source.model,
         state: question.evidence,
-        questions: {
-          [questionKey]: {
-            type: 'choice',
-            instructions: question.prompt,
-            criteria,
-          },
-        },
+        questions,
       },
       { authorization: 'Bearer ' + credential.value },
       options
@@ -233,6 +286,8 @@ async function advise(question, options) {
       prompt: String(question.prompt || ''),
       evidence: String(question.evidence),
       options: question.options.slice(),
+      state: question.state,
+      scoreDimensions: question.scoreDimensions,
     });
   } catch (err) {
     return undecided(err && err.message === 'JEV_TIMEOUT' ? 'TIMEOUT' : 'UNREACHABLE');
@@ -240,6 +295,41 @@ async function advise(question, options) {
 
   if (!raw || typeof raw !== 'object') return undecided('MALFORMED_OUTPUT');
   if (advisoryNamesIdentity(raw)) return undecided('IDENTITY_PROHIBITED');
+  if (raw.scores && typeof raw.scores === 'object') {
+    const scoreNames = ['qualityImportance', 'latencyImportance', 'costImportance'];
+    const scores = {};
+    let lowConfidence = false;
+    for (const name of scoreNames) {
+      const item = raw.scores[name];
+      const score = Number(item && item.score);
+      const confidence = Number(item && item.confidence);
+      if (!Number.isFinite(score) || score < 0 || score > 10 || !Number.isFinite(confidence)) {
+        return Object.assign(undecided('MALFORMED_OUTPUT'), {
+          choice: raw.choice || null,
+          scores: Object.keys(scores).length ? scores : null,
+        });
+      }
+      if (confidence < minConfidence) lowConfidence = true;
+      scores[name] = { score, confidence, distribution: item.distribution || null };
+    }
+    if (lowConfidence) {
+      return Object.assign(undecided('LOW_CONFIDENCE'), {
+        choice: raw.choice || null,
+        confidence: Math.min(...scoreNames.map((name) => scores[name].confidence)),
+        scores,
+        jevModel: raw.jevModel || null,
+        usage: raw.usage || null,
+      });
+    }
+    return {
+      outcome: Outcome.DECIDED,
+      choice: raw.choice || null,
+      confidence: Math.min(...scoreNames.map((name) => scores[name].confidence)),
+      scores,
+      jevModel: raw.jevModel || null,
+      usage: raw.usage || null,
+    };
+  }
   const choice = raw.choice === undefined ? null : String(raw.choice);
   const confidence = Number(raw.confidence);
   if (!question.options.includes(choice)) return undecided('MALFORMED_OUTPUT');
@@ -307,4 +397,5 @@ module.exports = {
   adviseOrReason,
   roleQuestion,
   transcriptQuestion,
+  normalizeAdvice,
 };
