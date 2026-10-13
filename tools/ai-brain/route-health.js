@@ -33,11 +33,14 @@ function classifyFailure(status, message) {
 function loadStore(file, options) {
   try {
     const data = JSON.parse(fs.readFileSync(file, 'utf8'));
-    if (data && data.version === 1 && data.paths) return data;
+    if (data && data.version === 1 && data.paths) {
+      if (!data.providers) data.providers = {};
+      return data;
+    }
     throw new Error('invalid model route health store');
   } catch (error) {
     if (options && options.allowMissing === true && error && error.code === 'ENOENT')
-      return { version: 1, paths: {}, events: [] };
+      return { version: 1, paths: {}, providers: {}, events: [] };
     throw new Error('cannot load model route health store: ' + file, { cause: error });
   }
 }
@@ -137,22 +140,132 @@ function probeIdentity(c) {
     route: { id: c.gateway || c.sourceId || c.source, accountId: c.accountId },
   };
 }
+
+function extractProvider(modelId) {
+  const stripped = String(modelId || '')
+    .trim()
+    .replace(/^ninerouter\//i, '')
+    .replace(/^\/+/, '');
+  const slash = stripped.indexOf('/');
+  return slash > 0 ? stripped.slice(0, slash) : '';
+}
+
+function setProviderRecord(store, gateway, provider, entry) {
+  if (!store.providers) store.providers = {};
+  const g = String(gateway || '')
+    .toLowerCase()
+    .trim();
+  const p = String(provider || '')
+    .toLowerCase()
+    .trim();
+  const rawG = String(gateway || '').trim();
+  const rawP = String(provider || '').trim();
+  const keys = new Set([
+    `${g}:${p}`,
+    `${g}|${p}`,
+    `${g}/${p}`,
+    `${g}+${p}`,
+    `${g}${p}`,
+    `${rawG}:${rawP}`,
+    `${rawG}|${rawP}`,
+    `${rawG}/${rawP}`,
+    `${rawG}+${rawP}`,
+    `${rawG}${rawP}`,
+  ]);
+  for (const k of keys) {
+    store.providers[k] = entry;
+  }
+}
+
+function deleteProviderRecord(store, gateway, provider) {
+  if (!store || !store.providers) return;
+  const g = String(gateway || '')
+    .toLowerCase()
+    .trim();
+  const p = String(provider || '')
+    .toLowerCase()
+    .trim();
+  const rawG = String(gateway || '').trim();
+  const rawP = String(provider || '').trim();
+  const keys = [
+    `${g}:${p}`,
+    `${g}|${p}`,
+    `${g}/${p}`,
+    `${g}+${p}`,
+    `${g}${p}`,
+    `${rawG}:${rawP}`,
+    `${rawG}|${rawP}`,
+    `${rawG}/${rawP}`,
+    `${rawG}+${rawP}`,
+    `${rawG}${rawP}`,
+  ];
+  for (const k of keys) {
+    delete store.providers[k];
+  }
+}
+
+function getProviderRecord(store, gateway, provider) {
+  if (!store || !store.providers) return null;
+  const g = String(gateway || '')
+    .toLowerCase()
+    .trim();
+  const p = String(provider || '')
+    .toLowerCase()
+    .trim();
+  const rawG = String(gateway || '').trim();
+  const rawP = String(provider || '').trim();
+  return (
+    store.providers[`${g}:${p}`] ||
+    store.providers[`${g}|${p}`] ||
+    store.providers[`${g}/${p}`] ||
+    store.providers[`${g}+${p}`] ||
+    store.providers[`${g}${p}`] ||
+    store.providers[`${rawG}:${rawP}`] ||
+    store.providers[`${rawG}|${rawP}`] ||
+    store.providers[`${rawG}/${rawP}`] ||
+    store.providers[`${rawG}+${rawP}`] ||
+    store.providers[`${rawG}${rawP}`] ||
+    null
+  );
+}
+
 function probeCooldown(candidate, options) {
   const o = options || {};
   if (candidate.harness === 'agy-pool') return null;
   const store = o.routeHealth || loadStore(probeMemoryFile(o), { allowMissing: true });
+  const now = o.now ?? Date.now();
   const identity = probeIdentity(candidate);
+  const gateway = identity.route?.id || candidate.gateway || candidate.sourceId || candidate.source;
+  const provider = extractProvider(identity.model);
+  if (gateway && provider) {
+    const providerRecord = getProviderRecord(store, gateway, provider);
+    if (
+      providerRecord &&
+      providerRecord.nextCheckAt &&
+      Date.parse(providerRecord.nextCheckAt) > now
+    ) {
+      return `PROBE_COOLDOWN: PROVIDER_UNAVAILABLE until ${providerRecord.nextCheckAt}`;
+    }
+  }
   const record = getPathRecord(store, identity.model, identity.route);
   if (!record || !record.probeCause || record.status === 'AVAILABLE') return null;
-  if (Date.parse(record.nextCheckAt) <= (o.now ?? Date.now())) return null;
+  if (Date.parse(record.nextCheckAt) <= now) return null;
   return `PROBE_COOLDOWN: ${record.probeCause} until ${record.nextCheckAt}`;
 }
+
 function probeCooldownMs(cause) {
-  const hours = /CREDIT|QUOTA|ENTITLEMENT|AUTH|FORBIDDEN|HTTP_40[123]|RATE_LIMITED/.test(cause)
-    ? 6
-    : /HTTP_404|ALIAS|ROUTE_UNAVAILABLE/.test(cause)
-      ? 24
-      : 0.5;
+  const causeStr =
+    typeof cause === 'object' && cause !== null
+      ? cause.reason || cause.reasonCode || ''
+      : String(cause || '');
+  const hours =
+    /PROVIDER_UNAVAILABLE|CREDIT|QUOTA|ENTITLEMENT|AUTH|FORBIDDEN|HTTP_40[123]|RATE_LIMITED/.test(
+      causeStr
+    )
+      ? 6
+      : /HTTP_404|ALIAS|ROUTE_UNAVAILABLE/.test(causeStr)
+        ? 24
+        : 0.5;
   return hours * 3600000;
 }
 
@@ -174,9 +287,31 @@ function rememberProbe(candidate, result, options) {
   );
   const record = store.paths[recorded.key];
   record.candidateKey = candidate.candidateKey || null;
-  record.probeCause = cause;
+  const causeCode =
+    typeof cause === 'object' && cause !== null ? cause.reason || cause.reasonCode : cause;
+  record.probeCause = causeCode;
   if (cause) {
     record.nextCheckAt = new Date(now + probeCooldownMs(cause)).toISOString();
+  }
+  const gateway = identity.route?.id || candidate.gateway || candidate.sourceId || candidate.source;
+  const provider =
+    (typeof cause === 'object' && cause?.provider) || extractProvider(identity.model);
+  if (result && result.ok) {
+    if (gateway && provider && store.providers) {
+      deleteProviderRecord(store, gateway, provider);
+    }
+  } else if (causeCode === 'PROVIDER_UNAVAILABLE') {
+    if (gateway && provider) {
+      record.status = 'PROVIDER_UNAVAILABLE';
+      setProviderRecord(store, gateway, provider, {
+        gateway,
+        provider,
+        status: 'PROVIDER_UNAVAILABLE',
+        probeCause: 'PROVIDER_UNAVAILABLE',
+        lastCheckedAt: new Date(now).toISOString(),
+        nextCheckAt: new Date(now + 6 * 3600000).toISOString(),
+      });
+    }
   }
   if (o.persistRouteHealth !== false) saveStore(file, store);
   return record;
@@ -213,6 +348,18 @@ function getPathRecord(store, modelId, routeId) {
 }
 
 function isEligible(store, modelId, routeId, now) {
+  const gateway = routeId && typeof routeId === 'object' ? routeId.id : routeId;
+  const provider = extractProvider(modelId);
+  if (gateway && provider) {
+    const providerRecord = getProviderRecord(store, gateway, provider);
+    if (
+      providerRecord &&
+      providerRecord.nextCheckAt &&
+      Date.parse(providerRecord.nextCheckAt) > (now ?? Date.now())
+    ) {
+      return false;
+    }
+  }
   const record = getPathRecord(store, modelId, routeId);
   if (record)
     return (
@@ -228,6 +375,18 @@ function isEligible(store, modelId, routeId, now) {
 }
 
 function isRouteHealthy(store, modelId, routeId) {
+  const gateway = routeId && typeof routeId === 'object' ? routeId.id : routeId;
+  const provider = extractProvider(modelId);
+  if (gateway && provider) {
+    const providerRecord = getProviderRecord(store, gateway, provider);
+    if (
+      providerRecord &&
+      providerRecord.nextCheckAt &&
+      Date.parse(providerRecord.nextCheckAt) > Date.now()
+    ) {
+      return false;
+    }
+  }
   const exact = store.paths[healthKey(modelId, routeId)];
   if (exact) return exact.status === 'AVAILABLE';
   const id = routeId && typeof routeId === 'object' ? routeId.id : routeId;
@@ -245,6 +404,18 @@ function hasProbeEvidence(store, modelId, routeId, options) {
 }
 
 function isSelectable(store, modelId, routeId, now) {
+  const gateway = routeId && typeof routeId === 'object' ? routeId.id : routeId;
+  const provider = extractProvider(modelId);
+  if (gateway && provider) {
+    const providerRecord = getProviderRecord(store, gateway, provider);
+    if (
+      providerRecord &&
+      providerRecord.nextCheckAt &&
+      Date.parse(providerRecord.nextCheckAt) > (now ?? Date.now())
+    ) {
+      return false;
+    }
+  }
   const record = getPathRecord(store, modelId, routeId);
   return !record || record.status === 'AVAILABLE';
 }
@@ -798,4 +969,6 @@ module.exports = {
   probeGatewayModel,
   runDueCli,
   BACKOFF_MS,
+  getProviderRecord,
+  extractProvider,
 };

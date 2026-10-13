@@ -49,6 +49,17 @@ async function probeRoute(candidate, apiKeyEnv, env, options) {
 function classifyProbeFailure(result) {
   const status = Number(result && result.status) || 0;
   const body = String((result && result.body) || 'Probe failed');
+  const providerMatch = body.match(/No active credentials for provider:\s*([\w.-]+)/i);
+  if (providerMatch) {
+    const obj = { reason: 'PROVIDER_UNAVAILABLE', provider: providerMatch[1] };
+    Object.defineProperty(obj, 'toString', {
+      value() {
+        return this.reason;
+      },
+      enumerable: false,
+    });
+    return obj;
+  }
   if (result && result.reasonCode) return result.reasonCode;
   if (/probe budget exhausted/i.test(body)) return 'PROBE_BUDGET_EXHAUSTED';
   if (/entitlement|not entitled|subscription required/i.test(body)) return 'ENTITLEMENT_REQUIRED';
