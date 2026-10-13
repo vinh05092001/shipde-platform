@@ -232,6 +232,74 @@ test('H3-09: all route probes failing refuse with NO_REASONING_CANDIDATE and rea
   }
 });
 
+test('H3-20: credit failure excludes the canonical model and probes the next ranked model', async () => {
+  const root = fixtureRoot('hermes-probe-model-diversity-');
+  try {
+    const modelAliases = ['cl/openai/gpt-6-astra', 'ocz/gpt-6-astra', 'azure/gpt-6-astra@eastus2'];
+    const sameModelRoutes = ['9router', 'rqsty', '9router'].map((gateway, index) =>
+      sampleCandidate({
+        gateway,
+        upstream: 'shared-upstream',
+        accountId: 'shared-account',
+        modelId: modelAliases[index],
+        accessPath: `https://route-${index}.example/v1`,
+        quality: 99 - index,
+      })
+    );
+    const nextModel = sampleCandidate({
+      gateway: 'rqsty',
+      upstream: 'other-upstream',
+      modelId: 'other/gpt-6-sonnet',
+      accessPath: 'https://other-provider.example/v1',
+      quality: 90,
+    });
+    const probed = [];
+    const res = await launchHermesSession(
+      { rootDir: root, skipDecisionLog: true, maxAttempts: 20 },
+      {
+        candidates: [...sameModelRoutes, nextModel],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+        probe: async (candidate) => {
+          probed.push(candidate.modelId);
+          return modelAliases.includes(candidate.modelId)
+            ? { ok: false, status: 402, body: 'upstream_credit_exhausted' }
+            : { ok: true, status: 200, body: '{}' };
+        },
+        spawn: async () => ({ exitCode: 0 }),
+      }
+    );
+    assert.equal(res.candidateKey, nextModel.candidateKey);
+    assert.ok(probed.includes(nextModel.modelId));
+    assert.ok(probed.filter((model) => modelAliases.includes(model)).length <= 2);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('H3-21: probe time budget exhaustion fails closed with NO_REASONING_CANDIDATE', async () => {
+  const root = fixtureRoot('hermes-probe-budget-');
+  try {
+    await assert.rejects(
+      launchHermesSession(
+        { rootDir: root, skipDecisionLog: true, probeBudgetMs: 20, probeTimeoutMs: 10 },
+        {
+          candidates: [sampleCandidate()],
+          registry: sampleRegistry(),
+          priorsData: { ranking: [] },
+          probe: async () => new Promise((resolve) => setTimeout(() => resolve({ ok: true }), 40)),
+          spawn: async () => {
+            throw new Error('Hermes must not launch');
+          },
+        }
+      ),
+      (err) => err.code === 'NO_REASONING_CANDIDATE' && /budget exhausted/.test(err.message)
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('H3-10: dry-run does not probe unless probe is explicitly requested', async () => {
   const root = fixtureRoot('hermes-probe-dry-run-');
   try {
