@@ -5056,7 +5056,7 @@ async function runOrchestration(goal, opts) {
       if (workerHead) {
         session.headSha = workerHead;
         const step = liveSteps[item.id] || {};
-        persistStep(item.id, 'worker_launch_finished', {
+        persistStep(item.id, step.stage || 'worker_launch_finished', {
           launch: Object.assign({}, step.launch, {
             sessionId: reported.id,
             workerSha: workerHead,
