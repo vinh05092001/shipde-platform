@@ -27,6 +27,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { StringDecoder } = require('node:string_decoder');
 
 const DEFAULT_DIR = path.join(os.homedir(), '.shipde', 'decisions');
 
@@ -149,28 +150,46 @@ function readDecisionsDetailed(options) {
   const out = [];
   const damaged = [];
   for (const file of files.sort()) {
-    let raw;
+    let lineNumber = 0;
     try {
-      raw = fs.readFileSync(path.join(dir, file), 'utf8');
+      for (const { line, final } of decisionLines(path.join(dir, file), opts.reader || fs)) {
+        lineNumber += 1;
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          out.push(JSON.parse(trimmed));
+        } catch (_) {
+          if (!final) damaged.push(file + ': unparsable line ' + lineNumber);
+        }
+      }
     } catch (err) {
       damaged.push(file + ': ' + (err && err.code ? err.code : 'unreadable'));
-      continue;
-    }
-    const lines = raw.split('\n');
-    for (let i = 0; i < lines.length; i += 1) {
-      const trimmed = lines[i].trim();
-      if (!trimmed) continue;
-      try {
-        out.push(JSON.parse(trimmed));
-      } catch (_) {
-        // Only the final line may be half-written; a broken line anywhere else
-        // means the file was damaged rather than interrupted.
-        const isLast = lines.slice(i + 1).every((l) => l.trim() === '');
-        if (!isLast) damaged.push(file + ': unparsable line ' + (i + 1));
-      }
     }
   }
   return { records: out, damaged, readable: damaged.length === 0 };
+}
+
+// A day's log can exceed V8's maximum string size. Decode one chunk at a time.
+function* decisionLines(file, reader) {
+  const decoder = new StringDecoder('utf8');
+  const buffer = Buffer.alloc(64 * 1024);
+  const fd = reader.openSync(file, 'r');
+  let pending = '';
+  try {
+    let count;
+    while ((count = reader.readSync(fd, buffer, 0, buffer.length, null)) > 0) {
+      pending += decoder.write(buffer.subarray(0, count));
+      let newline;
+      while ((newline = pending.indexOf('\n')) !== -1) {
+        yield { line: pending.slice(0, newline), final: false };
+        pending = pending.slice(newline + 1);
+      }
+    }
+    pending += decoder.end();
+    if (pending) yield { line: pending, final: true };
+  } finally {
+    reader.closeSync(fd);
+  }
 }
 
 /** The records alone, for callers that only want the history.
@@ -452,6 +471,30 @@ function scrubText(text) {
   );
 }
 
+/** Compile literal credential values once per capture. */
+function createSecretRedactor(env) {
+  const values = [
+    ...new Set(
+      Object.entries(env || {})
+        .filter(
+          ([name, value]) =>
+            /KEY|TOKEN|SECRET|PASS|AUTH/i.test(name) &&
+            typeof value === 'string' &&
+            value.length >= 8
+        )
+        .map(([, value]) => value)
+    ),
+  ].sort((a, b) => b.length - a.length);
+  const pattern = values.length
+    ? new RegExp(values.map((value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'g')
+    : null;
+  return (text) =>
+    scrubText(pattern ? String(text).replace(pattern, '[REDACTED_SECRET]') : String(text)).replace(
+      /((?:api[_-]?key|token|secret|password|authorization)["']?\s*[=:]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi,
+      '$1[REDACTED_SECRET]'
+    );
+}
+
 module.exports = {
   Stage,
   DEFAULT_DIR,
@@ -467,4 +510,5 @@ module.exports = {
   closeWriter,
   scrub,
   scrubText,
+  createSecretRedactor,
 };
