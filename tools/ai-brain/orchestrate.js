@@ -5008,11 +5008,19 @@ async function runOrchestration(goal, opts) {
       // Existing launch failures already carry the scrubbed launcher detail and
       // classification. Keep that record while wrapping its checkpoint reason.
       if (!recordedWriterFailures.has(launch.selected)) {
+        const selectedDecision = log.selections
+          .slice()
+          .reverse()
+          .find(
+            (entry) => entry.workItemId === item.id && entry.decision.chosen === launch.selected
+          );
         decisions.recordDecision(
           {
             stage: decisions.Stage.FAILED,
             workItemId: item.id,
             chosen: launch.selected,
+            ranking:
+              (selectedDecision && selectedDecision.decision.decisionRecorded?.ranking) || [],
             detail: terminalReason,
             cause: launch.cause || terminalReason,
             failureScope: launch.scope || 'local',
