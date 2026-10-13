@@ -11,6 +11,8 @@ const { runOrchestration, headShaOf, verifyCommitSha, ItemStatus } = require('..
 const { readSessionId } = require('../executor');
 const { candidateKey } = require('../candidates');
 const { getHarness } = require('../harness');
+const { readLaunchResult } = require('../isolation-launcher');
+const { provisionReviewRoot } = require('../orchestrate');
 
 function tmpDir(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix || 'task-ai-142-post-launch-'));
@@ -76,6 +78,102 @@ function sampleRegistry() {
       },
     },
   };
+}
+
+for (const gatePass of [true, false, 'repair-refused', 'repair-throw']) {
+  test(`H3 post-launch live path: real launcher result, repair gate ${gatePass}`, async () => {
+    const host = makeTempRepo();
+    const worker = makeTempRepo();
+    const checkpointFile = path.join(tmpDir(), 'checkpoint.json');
+    let launches = 0;
+    let gates = 0;
+    let finalSha;
+    let repairHead;
+    let initialSha;
+    let reviewed;
+    const options = {
+      isolatedWorker: true,
+      cwd: host.dir,
+      workerRoot: worker.dir,
+      baseSha: worker.sha,
+      checkpointFile,
+      decisionDir: tmpDir(),
+      evidenceDir: tmpDir(),
+      candidates: [sampleCandidate()],
+      registry: sampleRegistry(),
+      specs: [{ id: 'H3-LIVE', files: ['a.js'], acceptanceCriteria: ['complete'] }],
+      routeProbe: async () => ({ ok: true, status: 200 }),
+      hostGate: () => ({ pass: ++gates > 1 && gatePass === true, failures: ['brain gate'] }),
+      run: (job) => {
+        if (launches++) repairHead = job.retainWorkerHead;
+        if (launches === 2 && gatePass === 'repair-throw') {
+          throw new Error('WORKER_HEAD_MISMATCH: dirty tree');
+        }
+        if (launches === 2 && gatePass === 'repair-refused') {
+          const file = path.join(tmpDir(), 'refused.json');
+          fs.writeFileSync(
+            file,
+            JSON.stringify({
+              completed: true,
+              completionNonce: 'nonce',
+              exitCode: 1,
+              stderr: 'WORKER_HEAD_MISMATCH: dirty tree',
+            })
+          );
+          return readLaunchResult(file, 'nonce', { status: 0 });
+        }
+        finalSha = addCommit(worker.dir, `launch ${launches}`);
+        if (launches === 1) initialSha = finalSha;
+        const file = path.join(tmpDir(), 'launch.json');
+        fs.writeFileSync(
+          file,
+          JSON.stringify({
+            completed: true,
+            completionNonce: 'nonce',
+            exitCode: 0,
+            stdout: JSON.stringify({
+              type: 'step_finish',
+              sessionID: `ses_live_${launches}`,
+              part: {
+                tokens: { input: 10, output: 5 },
+              },
+            }),
+          })
+        );
+        // Use the production isolated launch result parser, including its
+        // absent artifact/isolation flags, rather than inventing a result.
+        return readLaunchResult(file, 'nonce', { status: 0 });
+      },
+      tests: () => ({ pass: true }),
+      reviewer: (arg) => {
+        const sha = typeof arg === 'string' ? arg : arg.sha;
+        reviewed = sha;
+        const reviewRoot = path.join(tmpDir(), 'review');
+        provisionReviewRoot(worker.dir, reviewRoot, sha);
+        assert.equal(headShaOf(reviewRoot, { workerWritable: false }), sha);
+        return { pass: true, sha, verdict: 'PASS', findings: [] };
+      },
+    };
+    const result = await runOrchestration('live shape', options);
+    assert.equal(launches, 2);
+    assert.equal(
+      result.sessions[0].sessionId,
+      typeof gatePass === 'string' ? 'ses_live_1' : 'ses_live_2'
+    );
+    assert.equal(result.sessions[0].headSha, finalSha);
+    assert.equal(repairHead, initialSha);
+    const step = JSON.parse(fs.readFileSync(checkpointFile)).liveSteps['H3-LIVE'];
+    assert.equal(step.launch.workerSha, finalSha);
+    assert.equal(verifyCommitSha(worker.dir, finalSha), finalSha);
+    if (gatePass === true) assert.equal(reviewed, finalSha);
+    else {
+      assert.equal(reviewed, undefined);
+      assert.equal(step.reason, 'HOST_GATE_FAILED');
+      await runOrchestration('live shape', options);
+      assert.equal(launches, 2, 'a failed host gate must not relaunch or enter review on resume');
+      assert.equal(reviewed, undefined);
+    }
+  });
 }
 
 test('TASK-AI-142 Fix 1: readSessionId accepts isolated launch result sessionId and handles null adapter', () => {
