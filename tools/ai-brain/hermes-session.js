@@ -32,27 +32,63 @@ function defaultSpawn(cmd, argv, spawnOpts) {
 
     const MAX_STDERR_BYTES = 64 * 1024;
     const stderrChunks = [];
+    const stdoutChunks = [];
     let stderrBytes = 0;
+    let stdoutBytes = 0;
+    let routeFailure = null;
+    let failureScan = '';
+    const redact = (value) => {
+      let text = String(value);
+      for (const [key, secret] of Object.entries((spawnOpts && spawnOpts.env) || {})) {
+        if (
+          /(?:KEY|TOKEN|SECRET|PASSWORD)/i.test(key) &&
+          typeof secret === 'string' &&
+          secret.length >= 4
+        ) {
+          text = text.split(secret).join('[REDACTED]');
+        }
+      }
+      return text.replace(/(Bearer\s+)[^\s"']+/gi, '$1[REDACTED]');
+    };
+    const observe = (stream, chunk) => {
+      const safe = Buffer.from(redact(chunk.toString('utf8')));
+      const text = safe.toString('utf8');
+      failureScan = (failureScan + text).slice(-8192);
+      const routeSignal =
+        /(?:\b(?:HTTP\s*)?(?:402|403|429)\b|insufficient[_ ]user[_ ]quota|insufficient[_ ]quota|quota[_ ](?:exceeded|exhausted)|\b(?:402|403|429)\s+(?:payment|required|forbidden|too many)|API call failed \(attempt[^\n]{0,120}\b5\d\d\b)/i;
+      if (!routeFailure && routeSignal.test(failureScan)) {
+        routeFailure =
+          failureScan.match(
+            /.{0,160}(?:insufficient[_ ]user[_ ]quota|insufficient[_ ]quota|quota[_ ](?:exceeded|exhausted)|API call failed \(attempt[^\n]{0,120}\b5\d\d\b|(?:HTTP\s*)?(?:402|403|429)).{0,200}/i
+          )?.[0] || 'Hermes route failure';
+        try {
+          cp.kill('SIGTERM');
+        } catch {}
+      }
+      if (stream === 'stderr') {
+        try {
+          process.stderr.write(safe);
+        } catch {}
+        stderrChunks.push(safe);
+        stderrBytes += safe.length;
+        while (stderrBytes > MAX_STDERR_BYTES && stderrChunks.length > 1)
+          stderrBytes -= stderrChunks.shift().length;
+      } else {
+        try {
+          process.stdout.write(safe);
+        } catch {}
+        stdoutChunks.push(safe);
+        stdoutBytes += safe.length;
+        while (stdoutBytes > MAX_STDERR_BYTES && stdoutChunks.length > 1)
+          stdoutBytes -= stdoutChunks.shift().length;
+      }
+    };
 
     if (cp.stderr) {
-      cp.stderr.on('data', (chunk) => {
-        try {
-          process.stderr.write(chunk);
-        } catch {}
-        stderrChunks.push(chunk);
-        stderrBytes += chunk.length;
-        while (stderrBytes > MAX_STDERR_BYTES && stderrChunks.length > 1) {
-          const removed = stderrChunks.shift();
-          stderrBytes -= removed.length;
-        }
-      });
+      cp.stderr.on('data', (chunk) => observe('stderr', chunk));
     }
-
-    const stdoutChunks = [];
     if (cp.stdout) {
-      cp.stdout.on('data', (chunk) => {
-        stdoutChunks.push(chunk);
-      });
+      cp.stdout.on('data', (chunk) => observe('stdout', chunk));
     }
 
     cp.on('close', (code, signal) => {
@@ -88,6 +124,7 @@ function defaultSpawn(cmd, argv, spawnOpts) {
         stdout: finalStdout,
         stderr: finalStderr,
         signal,
+        routeFailure,
       });
     });
   });
@@ -729,6 +766,8 @@ function writeProvidersConfig(candidate, options, deps) {
     'model:',
     `  default: ${escapeYamlString(modelId)}`,
     `  provider: ${escapeYamlString(providerName)}`,
+    'api_max_retries: 1',
+    'auto_recovery_cycles: 0',
     'providers:',
     `  ${providerName}:`,
     `    name: ${escapeYamlString(providerName)}`,
@@ -798,7 +837,7 @@ function writeProvidersConfig(candidate, options, deps) {
   };
 }
 
-/** Sends a minimal OpenAI-compatible request without exposing the credential. */
+/** Sends a realistic-cost OpenAI-compatible request without exposing the credential. */
 async function probeHermesCandidate(candidate, apiKeyEnv, env, options) {
   const opts = options || {};
   const apiKey = env && env[apiKeyEnv];
@@ -818,8 +857,13 @@ async function probeHermesCandidate(candidate, apiKeyEnv, env, options) {
       headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
       body: JSON.stringify({
         model: candidate.modelId,
-        messages: [{ role: 'user', content: 'x' }],
-        max_tokens: 1,
+        messages: [
+          {
+            role: 'user',
+            content: `Reply only OK. The following reference context is filler for estimating a normal Controller request size:\n${'The shipment planning reference contains operational context, constraints, dependencies, and acceptance evidence. '.repeat(130)}`,
+          },
+        ],
+        max_tokens: Number(candidate.maxOutputTokens || candidate.max_output_tokens || 8192),
       }),
       signal: controller.signal,
     });
@@ -1330,7 +1374,7 @@ async function launchHermesSession(options, deps) {
       spawnResult = await spawnFn(resolved.command, resolved.args, {
         cwd: rootDir,
         env,
-        stdio: opts.stdio || ['inherit', 'inherit', 'pipe'],
+        stdio: opts.stdio || ['inherit', 'pipe', 'pipe'],
       });
     } catch (spawnErr) {
       // Local launch failure: binary missing, bad arguments, spawn error
@@ -1346,13 +1390,17 @@ async function launchHermesSession(options, deps) {
     }
 
     const exitCode =
-      spawnResult && typeof spawnResult.exitCode === 'number'
-        ? spawnResult.exitCode
-        : spawnResult && typeof spawnResult.status === 'number'
-          ? spawnResult.status
-          : 0;
+      spawnResult && spawnResult.routeFailure
+        ? spawnResult.exitCode === 0
+          ? 1
+          : spawnResult.exitCode
+        : spawnResult && typeof spawnResult.exitCode === 'number'
+          ? spawnResult.exitCode
+          : spawnResult && typeof spawnResult.status === 'number'
+            ? spawnResult.status
+            : 0;
 
-    if (exitCode === 0) {
+    if (exitCode === 0 && !(spawnResult && spawnResult.routeFailure)) {
       return {
         status: 'completed',
         exitCode: 0,
@@ -1382,6 +1430,7 @@ async function launchHermesSession(options, deps) {
       if (match) httpStatus = parseInt(match[1], 10);
     }
 
+    const liveRouteFailure = spawnResult && spawnResult.routeFailure;
     const classification = classifier.classifyFailure({
       exitCode,
       stderr,
@@ -1408,6 +1457,7 @@ async function launchHermesSession(options, deps) {
     }
 
     const isRouteQuotaModel =
+      Boolean(liveRouteFailure) ||
       classification.scope === classifier.Scope.MODEL ||
       classification.scope === classifier.Scope.UPSTREAM ||
       classification.scope === classifier.Scope.GATEWAY ||
@@ -1435,6 +1485,11 @@ async function launchHermesSession(options, deps) {
 
     // Route/model/quota failure: exclude failed route and reselect
     excludedCandidates.push(candidate.candidateKey);
+    const runtimeReason = liveRouteFailure
+      ? `HERMES_RUNTIME_ROUTE_FAILURE ${liveRouteFailure}`
+      : classification.reason || classification.cause;
+    probeReasons.push(`${candidate.candidateKey}: ${runtimeReason}`);
+    recordProbeRefusal(candidate, runtimeReason);
     const domain =
       candidate.gateway && candidate.gateway !== '*' ? candidate.gateway : candidate.upstream;
     if (domain && domain !== '*') forbiddenDomains.push(domain);
@@ -1588,6 +1643,7 @@ module.exports = {
   selectReasoningCandidate,
   writeProvidersConfig,
   buildHermesArgv,
+  probeHermesCandidate,
   resolveHermesLaunchCommand,
   resolveHermesLaunch: resolveHermesLaunchCommand,
   resolveHermesCommand: resolveHermesLaunchCommand,

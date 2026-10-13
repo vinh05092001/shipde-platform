@@ -258,3 +258,7 @@ Artificial Analysis intelligenceIndex is the primary prior for the selected reas
 
 ## Part H3 route probe (2026-10-13)
 Before launching Hermes or reusing a stored binding, the Controller sends a minimal OpenAI-compatible chat completion to the selected route. Classified quota, rate-limit, timeout and availability failures exclude that candidate, are recorded in the decision log, and trigger bounded reselection (up to eight candidates). Dry-run skips live probes unless --probe is supplied. The probe reads the provider key using the registry-declared environment variable name; credentials are never recorded.
+
+## Part H3 realistic probe
+
+H3 realistic probe sizes route preflight to candidate max-output metadata (8192-token fallback) and a roughly 2k-token context prompt, while requesting a short OK response. Hermes retry controls are set using verified v0.21.4 config keys (`api_max_retries: 1`, `auto_recovery_cycles: 0`). Runtime quota and route errors terminate the active Hermes process, record the reason, and reselect while preserving the named session.

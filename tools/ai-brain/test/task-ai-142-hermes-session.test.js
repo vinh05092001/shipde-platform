@@ -27,6 +27,7 @@ const {
   installSkillFile,
   generateSessionId,
   defaultSpawn,
+  probeHermesCandidate,
   getHermesHomeDir,
   HERMES_MIN_CONTEXT,
 } = require('../hermes-session');
@@ -201,6 +202,25 @@ test('H3-08: route probe excludes quota failure and launches the next candidate 
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('H3 realistic probe uses the candidate output limit and a substantial prompt', async () => {
+  let request;
+  const result = await probeHermesCandidate(
+    Object.assign(sampleCandidate(), { maxOutputTokens: 4096 }),
+    'NINEROUTER_API_KEY',
+    { NINEROUTER_API_KEY: 'probe-secret-value' },
+    {
+      fetch: async (_url, init) => {
+        request = JSON.parse(init.body);
+        return { ok: true, status: 200, text: async () => 'OK' };
+      },
+    }
+  );
+  assert.equal(result.ok, true);
+  assert.equal(request.max_tokens, 4096);
+  assert.ok(request.messages[0].content.length >= 8000);
+  assert.match(request.messages[0].content, /^Reply only OK/);
 });
 
 test('route probe decision-log failure is reported but does not block fallback', async () => {
@@ -491,6 +511,8 @@ test('H2-04: writeProvidersConfig writes data/hermes/config.yaml with base_url a
     assert.ok(content.includes('providers:'));
     assert.ok(content.includes('base_url: "http://127.0.0.1:20128/v1"'));
     assert.ok(content.includes('key_env: "NINEROUTER_API_KEY"'));
+    assert.ok(content.includes('api_max_retries: 1'));
+    assert.ok(content.includes('auto_recovery_cycles: 0'));
 
     // Crucial security verification: MUST NOT contain any actual key value or secret
     assert.equal(content.includes('sk-'), false, 'Never contain key values');
@@ -1704,6 +1726,34 @@ test('H2-30: defaultSpawn pipes and tees stderr to process.stderr while bufferin
   }
 });
 
+test('defaultSpawn terminates Hermes promptly when a live quota failure reaches stderr', async () => {
+  const origStderrWrite = process.stderr.write;
+  process.stderr.write = () => true;
+  try {
+    const started = Date.now();
+    const res = await defaultSpawn(
+      process.execPath,
+      [
+        '-e',
+        "process.stderr.write('HTTP 403 insufficient_user_quota ' + process.env.SECRET_KEY + '\\n'); setInterval(() => {}, 1000);",
+      ],
+      {
+        env: { ...process.env, SECRET_KEY: 'runtime-never-log-secret' },
+        stdio: ['inherit', 'pipe', 'pipe'],
+      }
+    );
+    assert.ok(
+      Date.now() - started < 3000,
+      'route failure must stop a retrying process immediately'
+    );
+    assert.match(res.routeFailure, /403|quota/i);
+    assert.notEqual(res.exitCode, 0);
+    assert.doesNotMatch(res.stderr, /runtime-never-log-secret/);
+  } finally {
+    process.stderr.write = origStderrWrite;
+  }
+});
+
 test('H2-31: defaultSpawn keeps at most the last 64 KB in stderr buffer', async () => {
   const origStderrWrite = process.stderr.write;
   process.stderr.write = () => true;
@@ -1736,7 +1786,7 @@ test('H2-32: route/quota relaunch uses piped stderr and classifies failure to tr
       calls += 1;
       assert.deepEqual(
         options.stdio,
-        ['inherit', 'inherit', 'pipe'],
+        ['inherit', 'pipe', 'pipe'],
         'Default stdio must pipe stderr for live teeing and failure classification'
       );
       if (calls === 1) {
@@ -1764,6 +1814,56 @@ test('H2-32: route/quota relaunch uses piped stderr and classifies failure to tr
     assert.equal(calls, 2, 'Relaunch must trigger on second candidate');
     const session = loadSession({ rootDir: root });
     assert.equal(session.candidateKey, c2.candidateKey);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('H3 runtime 403 insufficient_user_quota stops and relaunches with the same session id', async () => {
+  const root = fixtureRoot('hermes-runtime-quota-');
+  try {
+    const secret = 'runtime-secret-never-log';
+    const c1 = sampleCandidate({
+      gateway: '9router',
+      upstream: 'kr',
+      modelId: 'kr/first',
+      quality: 99,
+    });
+    const c2 = sampleCandidate({
+      gateway: 'rqsty',
+      upstream: 'rq',
+      modelId: 'rq/second',
+      quality: 90,
+    });
+    const launched = [];
+    const result = await launchHermesSession(
+      {
+        rootDir: root,
+        skipDecisionLog: true,
+        env: { NINEROUTER_API_KEY: secret, REQUESTY_API_KEY: secret },
+      },
+      {
+        candidates: [c1, c2],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+        probe: async () => ({ ok: true }),
+        spawn: async (_cmd, args) => {
+          launched.push(args);
+          return launched.length === 1
+            ? {
+                exitCode: 1,
+                stderr: 'HTTP 403 insufficient_user_quota: remaining eligible quota $0.000000',
+              }
+            : { exitCode: 0, stdout: 'continued', stderr: '' };
+        },
+      }
+    );
+    assert.equal(result.status, 'completed');
+    assert.equal(launched.length, 2);
+    const sessionArgs = launched.map((args) => args[args.indexOf('--continue') + 1]);
+    assert.equal(sessionArgs[0], sessionArgs[1]);
+    assert.ok(launched[1].includes('rq/second'));
+    assert.doesNotMatch(JSON.stringify(result), new RegExp(secret));
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
