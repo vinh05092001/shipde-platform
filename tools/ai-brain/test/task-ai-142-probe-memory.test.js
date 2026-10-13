@@ -197,3 +197,80 @@ test('H3 due refresh keeps cause cooldown and success clears memory', async (t) 
   });
   assert.equal(health.probeCooldown(c, { routeHealth: store, now: due }), null);
 });
+
+test('H3 404 missing provider credentials excludes azure/model-b without probing it, and probes a different provider', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'h3-provider-wide-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const file = path.join(root, 'health.json');
+  const azureA = candidate('azure/model-a');
+  const azureB = candidate('azure/model-b');
+  const otherC = candidate('openai/model-c');
+  const now = Date.now();
+
+  const probed = [];
+  const deps = {
+    candidates: [azureA, azureB, otherC],
+    registry: {
+      sources: [
+        {
+          id: 'fixture',
+          endpoint: 'https://fixture.example/v1',
+          credential: { env: 'FIXTURE_KEY' },
+        },
+      ],
+    },
+    accountList: [],
+    priorsData: { ranking: [] },
+    evidenceData: {},
+    rankForProfile: (rows) => ({
+      chosen: rows[0]?.candidateKey,
+      ranking: rows,
+      top3: rows,
+      rejected: [],
+    }),
+    probe: async (c) => {
+      probed.push(c.modelId);
+      if (c.modelId === 'azure/model-a') {
+        return { ok: false, status: 404, body: 'No active credentials for provider: azure' };
+      }
+      return { ok: true, status: 200 };
+    },
+    spawn: async () => ({ exitCode: 0 }),
+  };
+  const options = { rootDir: root, routeHealthFile: file, skipDecisionLog: true, now };
+
+  await hermes.launchHermesSession(options, deps);
+
+  // A 404 body "No active credentials for provider: azure" for azure/model-a
+  // excludes azure/model-b without probing it, and a different provider is still probed.
+  assert.deepEqual(probed, ['azure/model-a', 'openai/model-c']);
+  assert.ok(!probed.includes('azure/model-b'));
+
+  // azure/model-b is in cooldown with reason PROVIDER_UNAVAILABLE
+  const cooldownReason = health.probeCooldown(azureB, { routeHealthFile: file, now });
+  assert.ok(cooldownReason);
+  assert.match(cooldownReason, /PROVIDER_UNAVAILABLE/);
+
+  // Candidate with leading ninerouter/ prefix is also excluded
+  const ninerouterAzureB = candidate('ninerouter/azure/model-b');
+  assert.match(
+    health.probeCooldown(ninerouterAzureB, { routeHealthFile: file, now }),
+    /PROVIDER_UNAVAILABLE/
+  );
+
+  // A different provider is NOT in cooldown
+  assert.equal(health.probeCooldown(otherC, { routeHealthFile: file, now }), null);
+
+  // Candidate selection records PROVIDER_UNAVAILABLE rejection for azure/model-b
+  const selection = hermes.selectReasoningCandidate(options, deps);
+  assert.equal(selection.chosen, otherC.candidateKey);
+  const rejectedAzureB = selection.rejected.find((r) => r.candidateKey === azureB.candidateKey);
+  assert.ok(rejectedAzureB);
+  assert.match(rejectedAzureB.reason, /PROVIDER_UNAVAILABLE/);
+
+  // 6 hour cooldown expiration
+  assert.equal(
+    health.probeCooldown(azureB, { routeHealthFile: file, now: now + 6 * 3600000 + 1 }),
+    null
+  );
+});

@@ -210,6 +210,13 @@ test('shared route probe classifies quota and alias failures without preserving 
     'ALIAS_MISMATCH'
   );
   assert.equal(classifyProbeFailure({ status: 429, body: 'rate limited' }), 'RATE_LIMITED');
+  assert.deepEqual(
+    classifyProbeFailure({
+      status: 404,
+      body: 'No active credentials for provider: azure',
+    }),
+    { reason: 'PROVIDER_UNAVAILABLE', provider: 'azure' }
+  );
 });
 
 test('bounded probe aborts the signal received by a timed-out injected probe', async () => {
