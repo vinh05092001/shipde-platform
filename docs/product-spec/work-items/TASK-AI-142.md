@@ -257,7 +257,10 @@ Live evidence on Windows verified that `node tools/ai-brain/cli.js chat` fails w
 Artificial Analysis intelligenceIndex is the primary prior for the selected reasoning models; each benchmark value records its source URL and retrieval timestamp. The embedded leaderboard includes selected `aaAgenticIndex` values sourced from benchlm.ai; coding-index coverage remains separate and is present only where collected.
 
 ## Part H3 route probe (2026-10-13)
-Before launching Hermes or reusing a stored binding, the Controller sends a minimal OpenAI-compatible chat completion to the selected route. Classified quota, rate-limit, timeout and availability failures exclude that candidate, are recorded in the decision log, and trigger bounded reselection (up to eight candidates). Dry-run skips live probes unless --probe is supplied. The probe reads the provider key using the registry-declared environment variable name; credentials are never recorded.
+Before launching Hermes or reusing a stored binding, the Controller sends a minimal OpenAI-compatible chat completion to the selected route. Classified quota, rate-limit, timeout and availability failures exclude that candidate, are recorded in the decision log, and trigger bounded reselection (up to 20 route attempts, at most two per model). Dry-run skips live probes unless --probe is supplied. The probe reads the provider key using the registry-declared environment variable name; credentials are never recorded.
+
+## H3 runtime gates (2026-10-13)
+Runtime route fallback is triggered only by Hermes agent API-failure log lines that include an HTTP error code; ANSI escapes are removed before classification, and model-generated reasoning or answer text is never treated as route evidence. Route probing defaults to a configurable 20-attempt ceiling within the three-minute budget, while retaining the maximum of two routes per model. Goal-generated writer/planner profiles with no declared proof floor use `NONE`; reviewer proof floors remain enforced. Terminal goal-run logs include refusal reasons and counts where available.
 
 ## Part H3 realistic probe
 

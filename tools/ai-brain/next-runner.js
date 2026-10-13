@@ -1144,7 +1144,25 @@ async function nextLoop(options, deps) {
 
       const outcome = execResult.outcome || 'completed';
       terminalWorkItems.set(item.work_item_id, outcome);
-      log(`Work Item ${item.work_item_id} ended with terminal state ${outcome}.`);
+      const refusal = execResult.error || execResult.intakeResult || {};
+      const refusalReasons = Array.isArray(refusal.reasons)
+        ? refusal.reasons
+        : Array.isArray(refusal.rejected)
+          ? refusal.rejected
+          : [];
+      const reasonCounts = new Map();
+      for (const rejected of refusalReasons) {
+        const reason = String(
+          (rejected && (rejected.reasonCode || rejected.reason || rejected.code)) || rejected
+        );
+        reasonCounts.set(reason, (reasonCounts.get(reason) || 0) + 1);
+      }
+      const reasonSummary = reasonCounts.size
+        ? `; refusal reasons: ${Array.from(reasonCounts, ([reason, count]) => `${reason} (${count})`).join(', ')}`
+        : refusal.message || refusal.error || refusal.reason || '';
+      log(
+        `Work Item ${item.work_item_id} ended with terminal state ${outcome}${reasonSummary ? `; ${reasonSummary}` : ''}.`
+      );
 
       if (opts.workItem || opts['work-item']) {
         return {

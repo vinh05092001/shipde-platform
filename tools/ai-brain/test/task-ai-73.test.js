@@ -689,6 +689,7 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
       roleRequirement: { role: 'writer' },
       complexity: 'complex',
       capabilities: ['tools', 'workspace-edit'],
+      proofFloor: 'WORK_ITEM_PASS',
     };
 
     const evidenceData = {
@@ -982,6 +983,7 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
       roleRequirement: { role: 'writer' },
       complexity: 'complex',
       capabilities: ['tools', 'workspace-edit'],
+      proofFloor: 'WORK_ITEM_PASS',
     };
 
     const evidenceData = {
@@ -1564,6 +1566,8 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
 
     // 1. buildTaskProfile sets contextSize to 200000 and excludes minContext from requiredCapabilities
     const profile = orchestrate.buildTaskProfile(workItem);
+    // This case explicitly exercises the gate; author.foundation defaults to NONE.
+    profile.proofFloor = 'WORK_ITEM_PASS';
     assert.strictEqual(
       profile.contextSize,
       200000,
