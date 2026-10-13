@@ -2594,6 +2594,8 @@ describe('TASK-AI-64 worker provider id and harness config failure (DEFECT E)', 
       };
       isoMod.isWorkerPath = () => true;
 
+      // Host-gate repair requires a verified HEAD in the isolated worker repo.
+      const workerRepo = makeTempRepo();
       const hostWorktree = tmpDir('task-ai-64-exercise-host-');
       fs.mkdirSync(path.join(hostWorktree, 'tools', 'ai-brain', 'test'), { recursive: true });
       const tmpDecisions = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-64-orch-dec-'));
@@ -2621,6 +2623,7 @@ describe('TASK-AI-64 worker provider id and harness config failure (DEFECT E)', 
           ],
           candidates,
           isolatedWorker: true,
+          workerRoot: workerRepo.dir,
           exercise: 'e1',
           cwd: hostWorktree,
           decisionDir: tmpDecisions,
@@ -2662,6 +2665,7 @@ describe('TASK-AI-64 worker provider id and harness config failure (DEFECT E)', 
         isoMod.isWorkerPath = realIsWorkerPath;
         fs.rmSync(tmpDecisions, { recursive: true, force: true });
         fs.rmSync(hostWorktree, { recursive: true, force: true });
+        fs.rmSync(workerRepo.dir, { recursive: true, force: true });
       }
     });
   });

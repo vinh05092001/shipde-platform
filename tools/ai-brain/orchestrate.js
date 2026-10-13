@@ -3920,6 +3920,10 @@ async function runOrchestration(goal, opts) {
     // incomplete and keeps the launch/reattach path below (RS-R03).
     const recordedLaunch = savedStep && savedStep.launch ? savedStep.launch : null;
     const recordedLaunchExit = recordedLaunch ? recordedLaunch.exitCode : null;
+    if (recordedLaunch && recordedLaunch.hostGatePass === false) {
+      outcome(item, ItemStatus.BLOCKED, 'HOST_GATE_FAILED');
+      continue;
+    }
 
     // TASK-AI-128 P2: resume must read step.repair.sha so the next resume asks for the repair SHA.
     const resumedWorkerSha =
@@ -4448,15 +4452,13 @@ async function runOrchestration(goal, opts) {
           o.isolatedWorker || (job && job.isolatedWorker) || (res && res.isolatedWorker)
         );
         const workerClone = isIsolated
-          ? isolatedWorkerRoot || (res && res.retainedWorkerRoot) || null
+          ? isolatedWorkerRoot || (res && (res.workerRoot || res.retainedWorkerRoot)) || null
           : job.cwd;
 
         let verifiedWorkerSha = null;
         let workerShaUnverified = false;
         if (isIsolated) {
-          const candidateSha =
-            (res && (res.workerSha || res.retainedHeadSha)) ||
-            (workerClone ? headShaOf(workerClone) : null);
+          const candidateSha = workerClone ? headShaOf(workerClone) : null;
           if (workerClone && candidateSha && verifyCommitSha(workerClone, candidateSha)) {
             verifiedWorkerSha = candidateSha;
           } else if (workerClone) {
@@ -4556,55 +4558,108 @@ async function runOrchestration(goal, opts) {
 
       if (res && Array.isArray(res.hostGateFailures) && res.needsHostGateRepair) {
         item.hostGateFailures = res.hostGateFailures;
-        job.prompt = compilePrompt(item, {
+        const isolatedRepair = Boolean(
+          o.isolatedWorker || job.isolatedWorker || res.isolatedWorker
+        );
+        const retainedRoot = isolatedRepair ? job.workerRoot : job.workerRoot || job.cwd;
+        const retainedHead = retainedRoot ? headShaOf(retainedRoot) : null;
+        if (isolatedRepair && (!retainedHead || !verifyCommitSha(retainedRoot, retainedHead))) {
+          blockedReason = 'WORKER_SHA_UNVERIFIED';
+          launch.cause = blockedReason;
+          launch.fallbackReason = blockedReason;
+          launch.outcome = 'failed';
+          log.launches.push(launch);
+          const step = liveSteps[item.id] || {};
+          persistStep(item.id, 'worker_sha_unverified', {
+            reason: blockedReason,
+            launch: Object.assign({}, step.launch, {
+              workerSha: null,
+              reason: blockedReason,
+              workerShaReason: blockedReason,
+            }),
+          });
+          decisions.recordDecision(
+            {
+              stage: decisions.Stage.FAILED,
+              workItemId: item.id,
+              role: roleOf(item),
+              chosen: decision.chosen,
+              failureScope: 'local',
+              cause: blockedReason,
+              reason: blockedReason,
+            },
+            logOpts
+          );
+          break;
+        }
+        // Keep the completed run's report path intact while the repair writes
+        // its own report. Only a successful repair replaces the active job.
+        const repairJob = Object.assign({}, job);
+        if (repairJob.usageFile) {
+          repairJob.usageFile = prepareUsageReport(
+            path.dirname(repairJob.usageFile),
+            path.basename(repairJob.usageFile, '.json') + '-host-gate-repair'
+          );
+        }
+        repairJob.prompt = compilePrompt(item, {
           goal,
           specText: o.specText,
           candidateKey: decision.chosen,
           branch,
-          usageFile,
+          usageFile: repairJob.usageFile,
           isolatedWorker: Boolean(o.isolatedWorker),
           focusedTestsOnly: true,
           contextPack: contextPack && contextPack.path,
           hostGateFailures: res.hostGateFailures,
         });
-        prompt = job.prompt;
+        prompt = repairJob.prompt;
         const promptRecord = log.prompts.find(
           (entry) => entry.workItemId === item.id && entry.attempt === attempt
         );
-        if (promptRecord) promptRecord.prompt = job.prompt;
+        if (promptRecord) promptRecord.prompt = repairJob.prompt;
         log.prompts.push({
           workItemId: item.id,
           attempt,
           candidateKey: decision.chosen,
-          prompt: job.prompt,
+          prompt: repairJob.prompt,
         });
-        const gateRepairResult = launcher(job);
+        // Repair the completed run in place. A fresh provision here discards
+        // its commit while the checkpoint still names that deleted object.
+        repairJob.retainWorkerHead = retainedHead;
+        let gateRepairResult;
+        try {
+          gateRepairResult = launcher(repairJob);
+        } catch (err) {
+          gateRepairResult = { exitCode: -1, stderr: String((err && err.message) || err) };
+        }
+        writeUsageReportFromHarnessResult(repairJob, gateRepairResult);
         if (!gateRepairResult || gateRepairResult.exitCode !== 0) {
           item.hostGateFailures = res.hostGateFailures;
-          res = Object.assign({}, gateRepairResult || {}, { exitCode: 1 });
-          break;
+          // The repair refusal cannot erase the successful writer session.
+          // Its original report remains the evidence; the host gate still blocks review.
+          res = Object.assign({}, res, { exitCode: 0 });
+          log.hostGate.repairFailure = failureMessageOf(gateRepairResult);
+        } else {
+          Object.assign(job, repairJob);
+          res = gateRepairResult;
+          const repairedGate = await controllerGate(repairJob);
+          log.hostGate = repairedGate;
+          if (!repairedGate.pass) {
+            item.hostGateFailures = repairedGate.failures || [];
+            res = Object.assign({}, res, { hostGateFailures: item.hostGateFailures });
+          } else {
+            delete item.hostGateFailures;
+          }
         }
-        res = gateRepairResult;
-        const repairedGate = await controllerGate(job);
-        log.hostGate = repairedGate;
-        if (!repairedGate.pass) {
-          item.hostGateFailures = repairedGate.failures || res.hostGateFailures;
-          res = Object.assign({}, res, {
-            exitCode: 1,
-            hostGateFailures: item.hostGateFailures,
-          });
-          break;
-        }
-        delete item.hostGateFailures;
         log.prompts.push({
           workItemId: item.id,
           attempt: attempt + 1,
           candidateKey: decision.chosen,
-          prompt: job.prompt,
+          prompt: repairJob.prompt,
         });
       }
 
-      if (res && Array.isArray(res.hostGateFailures)) {
+      if (res && Array.isArray(res.hostGateFailures) && res.exitCode !== 0) {
         recordedWriterFailures.add(decision.chosen);
         decisions.recordDecision(
           {
@@ -5004,7 +5059,7 @@ async function runOrchestration(goal, opts) {
         o.isolatedWorker || (job && job.isolatedWorker) || (res && res.isolatedWorker)
       );
       const workerClone = isIsolated
-        ? isolatedWorkerRoot || (res && res.retainedWorkerRoot) || null
+        ? isolatedWorkerRoot || (res && (res.workerRoot || res.retainedWorkerRoot)) || null
         : job.cwd;
       session = {
         workItemId: item.id,
@@ -5026,8 +5081,9 @@ async function runOrchestration(goal, opts) {
         worktree: isIsolated ? workerClone : job.cwd || null,
       };
       const candidateWorkerHead = isIsolated
-        ? (res && (res.workerSha || res.retainedHeadSha)) ||
-          (workerClone ? headShaOf(workerClone) : null)
+        ? workerClone
+          ? headShaOf(workerClone)
+          : null
         : headShaOf(job.cwd);
       const workerHead = isIsolated
         ? workerClone && candidateWorkerHead && verifyCommitSha(workerClone, candidateWorkerHead)
@@ -5036,6 +5092,13 @@ async function runOrchestration(goal, opts) {
         : candidateWorkerHead;
       if (workerHead) {
         session.headSha = workerHead;
+        const step = liveSteps[item.id] || {};
+        persistStep(item.id, step.stage || 'worker_launch_finished', {
+          launch: Object.assign({}, step.launch, {
+            sessionId: reported.id,
+            workerSha: workerHead,
+          }),
+        });
       } else if (isIsolated) {
         session.workerShaReason = 'WORKER_SHA_UNVERIFIED';
         launch.workerShaReason = 'WORKER_SHA_UNVERIFIED';
@@ -5045,6 +5108,20 @@ async function runOrchestration(goal, opts) {
       log.exercise = session.exercise;
       log.failBefore = session.failBefore;
       launch.outcome = 'launched';
+
+      // Preserve a successful worker's real session even when the independent
+      // host gate rejects it. Review remains blocked by the gate.
+      if (Array.isArray(res.hostGateFailures)) {
+        blockedReason = 'HOST_GATE_FAILED';
+        launch.cause = blockedReason;
+        launch.outcome = 'failed';
+        const step = liveSteps[item.id] || {};
+        persistStep(item.id, 'host_gate_failed', {
+          reason: blockedReason,
+          launch: Object.assign({}, step.launch, { hostGatePass: false }),
+        });
+        break;
+      }
 
       decisions.recordDecision(
         {
