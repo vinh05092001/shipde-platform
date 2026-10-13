@@ -7,7 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
-const { runOrchestration, headShaOf, verifyCommitSha } = require('../orchestrate');
+const { runOrchestration, headShaOf, verifyCommitSha, ItemStatus } = require('../orchestrate');
 const { readSessionId } = require('../executor');
 const { candidateKey } = require('../candidates');
 const { getHarness } = require('../harness');
@@ -126,6 +126,7 @@ test('TASK-AI-142 Acceptance: isolated result with sessionId and commit in temp 
   const result = await runOrchestration('test goal for task-ai-142', {
     isolatedWorker: true,
     cwd: hostRepo.dir,
+    workerRoot: workerRepo.dir,
     baseSha: hostRepo.sha,
     sha: hostRepo.sha,
     decisionDir,
@@ -193,10 +194,12 @@ test('TASK-AI-142 Fix 2: isolated launch where worker SHA cannot be verified rec
   const candidate = sampleCandidate();
 
   const wrongHostSha = hostRepo.sha;
+  let reviewerCalled = false;
 
   await runOrchestration('test goal with unverified worker SHA', {
     isolatedWorker: true,
     cwd: hostRepo.dir,
+    workerRoot: emptyWorkerDir,
     baseSha: hostRepo.sha,
     sha: wrongHostSha,
     decisionDir,
@@ -216,7 +219,10 @@ test('TASK-AI-142 Fix 2: isolated launch where worker SHA cannot be verified rec
       workerRoot: emptyWorkerDir,
     }),
     tests: () => ({ pass: false }),
-    reviewer: () => ({ pass: false, verdict: 'BLOCKED' }),
+    reviewer: () => {
+      reviewerCalled = true;
+      return { pass: false, verdict: 'BLOCKED' };
+    },
   });
 
   const ckpt = JSON.parse(fs.readFileSync(checkpointFile, 'utf8'));
@@ -226,6 +232,74 @@ test('TASK-AI-142 Fix 2: isolated launch where worker SHA cannot be verified rec
   assert.notStrictEqual(step.launch.workerSha, wrongHostSha, 'must not record wrong host SHA');
   assert.strictEqual(step.launch.workerSha, null, 'workerSha must be null when unverified');
   assert.strictEqual(step.launch.reason, 'WORKER_SHA_UNVERIFIED');
+  assert.strictEqual(
+    reviewerCalled,
+    false,
+    'must not proceed to review when worker SHA is unverified'
+  );
+});
+
+test('TASK-AI-142 Review finding: isolated launch with no resolvable clone -> WORKER_SHA_UNVERIFIED, no job.cwd SHA recorded', async () => {
+  const hostRepo = makeTempRepo();
+  const decisionDir = tmpDir('decision-');
+  const checkpointFile = path.join(tmpDir('ckpt-'), 'checkpoint.json');
+  const candidate = sampleCandidate();
+
+  let reviewCalled = false;
+
+  const result = await runOrchestration('test goal with unresolvable worker clone', {
+    isolatedWorker: true,
+    cwd: hostRepo.dir,
+    baseSha: hostRepo.sha,
+    sha: hostRepo.sha,
+    // Unresolvable worker clone: points to a non-existent directory
+    workerRoot: path.join(tmpDir('nonexistent-clone-'), 'missing'),
+    decisionDir,
+    checkpointFile,
+    candidates: [candidate],
+    registry: sampleRegistry(),
+    specs: [
+      { id: 'TASK-AI-142-NO-CLONE', files: ['a.js'], acceptanceCriteria: ['item completes'] },
+    ],
+    hostGate: () => ({ pass: true, failures: [] }),
+    routeProbe: async () => ({ ok: true, status: 200, body: 'OK' }),
+    run: (job) => ({
+      exitCode: 0,
+      stdout: 'worker ran but clone cannot be resolved',
+      stderr: '',
+      sessionId: 'ses_mock_no_clone',
+      // Untrusted launch-result fields attempting to override must be ignored
+      workerRoot: hostRepo.dir,
+      workerSha: hostRepo.sha,
+    }),
+    tests: () => ({ pass: true }),
+    reviewer: () => {
+      reviewCalled = true;
+      return { pass: true, verdict: 'PASS' };
+    },
+  });
+
+  const ckpt = JSON.parse(fs.readFileSync(checkpointFile, 'utf8'));
+  const step = ckpt.liveSteps['TASK-AI-142-NO-CLONE'];
+  assert.ok(step && step.launch, 'checkpoint must have launch step');
+  assert.strictEqual(step.launch.workerSha, null, 'workerSha must be null');
+  assert.strictEqual(step.launch.reason, 'WORKER_SHA_UNVERIFIED');
+  assert.notStrictEqual(step.launch.workerSha, hostRepo.sha, 'must never record job.cwd SHA');
+
+  // Verify session does not record hostRepo.sha / job.cwd SHA
+  const sess = result.sessions && result.sessions[0];
+  assert.ok(sess, 'session must be recorded');
+  assert.strictEqual(sess.headSha, undefined);
+  assert.strictEqual(sess.workerShaReason, 'WORKER_SHA_UNVERIFIED');
+
+  // Must not proceed to review
+  assert.strictEqual(reviewCalled, false, 'must not proceed to review');
+
+  // Outcome must be BLOCKED with WORKER_SHA_UNVERIFIED
+  const itemOutcome = result.outcomes.find((o) => o.workItemId === 'TASK-AI-142-NO-CLONE');
+  assert.ok(itemOutcome, 'outcome must be recorded');
+  assert.strictEqual(itemOutcome.status, ItemStatus.BLOCKED);
+  assert.strictEqual(itemOutcome.reason, 'WORKER_SHA_UNVERIFIED');
 });
 
 test('TASK-AI-142 Fix 1: isolated launch with missing session ID records named cause and never generic NO_LIVE_SESSION', async () => {

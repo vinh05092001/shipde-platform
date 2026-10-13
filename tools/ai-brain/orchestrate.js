@@ -858,9 +858,7 @@ function reviewLane(
     }
 
     const hostWorktree = o.cwd || process.cwd();
-    const isolatedWorkerRoot = o.isolatedWorker
-      ? require('./isolation-launcher').workerRootFor(hostWorktree)
-      : null;
+    const isolatedWorkerRoot = resolveIsolatedWorkerRoot(o, hostWorktree);
     const workerRoot =
       (o.isolatedWorker ? isolatedWorkerRoot : o.workerRoot) ||
       (session && session.worktree) ||
@@ -1320,6 +1318,17 @@ function verifyCommitSha(cwd, sha, options) {
       Object.assign({ workerWritable: true }, options)
     );
   } catch (err) {
+    return null;
+  }
+}
+
+function resolveIsolatedWorkerRoot(o, hostWorktree) {
+  if (!o || !o.isolatedWorker) return null;
+  if (o.isolatedWorkerRoot) return o.isolatedWorkerRoot;
+  if (o.workerRoot) return o.workerRoot;
+  try {
+    return require('./isolation-launcher').workerRootFor(hostWorktree);
+  } catch {
     return null;
   }
 }
@@ -3321,9 +3330,7 @@ async function runOrchestration(goal, opts) {
     isolatedLauncher = require('./isolation-launcher').getIsolatedLauncher();
   }
   const hostWorktree = o.cwd || process.cwd();
-  const isolatedWorkerRoot = o.isolatedWorker
-    ? require('./isolation-launcher').workerRootFor(hostWorktree)
-    : null;
+  const isolatedWorkerRoot = resolveIsolatedWorkerRoot(o, hostWorktree);
   const launcher = resolveLauncher(o, isolatedLauncher);
   log.isolation = {
     requested: Boolean(o.isolatedWorker),
@@ -4440,10 +4447,7 @@ async function runOrchestration(goal, opts) {
           o.isolatedWorker || (job && job.isolatedWorker) || (res && res.isolatedWorker)
         );
         const workerClone = isIsolated
-          ? (res && (res.workerRoot || res.worktree || res.clonePath)) ||
-            isolatedWorkerRoot ||
-            (job && job.workerRoot) ||
-            job.cwd
+          ? isolatedWorkerRoot || (res && res.retainedWorkerRoot) || null
           : job.cwd;
 
         let verifiedWorkerSha = null;
@@ -4452,7 +4456,7 @@ async function runOrchestration(goal, opts) {
           const candidateSha =
             (res && (res.workerSha || res.retainedHeadSha)) ||
             (workerClone ? headShaOf(workerClone) : null);
-          if (candidateSha && verifyCommitSha(workerClone, candidateSha)) {
+          if (workerClone && candidateSha && verifyCommitSha(workerClone, candidateSha)) {
             verifiedWorkerSha = candidateSha;
           } else if (workerClone) {
             const cloneHead = headShaOf(workerClone);
@@ -4999,10 +5003,7 @@ async function runOrchestration(goal, opts) {
         o.isolatedWorker || (job && job.isolatedWorker) || (res && res.isolatedWorker)
       );
       const workerClone = isIsolated
-        ? (res && (res.workerRoot || res.worktree || res.clonePath)) ||
-          isolatedWorkerRoot ||
-          (job && job.workerRoot) ||
-          job.cwd
+        ? isolatedWorkerRoot || (res && res.retainedWorkerRoot) || null
         : job.cwd;
       session = {
         workItemId: item.id,
@@ -5028,7 +5029,7 @@ async function runOrchestration(goal, opts) {
           (workerClone ? headShaOf(workerClone) : null)
         : headShaOf(job.cwd);
       const workerHead = isIsolated
-        ? candidateWorkerHead && verifyCommitSha(workerClone, candidateWorkerHead)
+        ? workerClone && candidateWorkerHead && verifyCommitSha(workerClone, candidateWorkerHead)
           ? candidateWorkerHead
           : null
         : candidateWorkerHead;
@@ -5068,6 +5069,15 @@ async function runOrchestration(goal, opts) {
         },
         logOpts
       );
+
+      if (isIsolated && !workerHead) {
+        launch.outcome = 'failed';
+        launch.cause = 'WORKER_SHA_UNVERIFIED';
+        launch.fallbackReason = 'WORKER_SHA_UNVERIFIED';
+        failedKeys.add(decision.chosen);
+        blockedReason = 'WORKER_SHA_UNVERIFIED';
+        break;
+      }
 
       if (status !== SessionStatus.COMPLETED_WITH_ARTIFACT) {
         if (status === SessionStatus.STALLED) {
@@ -6369,9 +6379,7 @@ async function reviewItem(
   if (item && !(item.excludedDomains instanceof Set)) item.excludedDomains = excludedDomainSet;
   const evidenceDir = resolveEvidenceDir(options, o);
   const hostWorktree = o.cwd || process.cwd();
-  const isolatedWorkerRoot = o.isolatedWorker
-    ? require('./isolation-launcher').workerRootFor(hostWorktree)
-    : null;
+  const isolatedWorkerRoot = resolveIsolatedWorkerRoot(o, hostWorktree);
   const workerRoot =
     (o.isolatedWorker ? isolatedWorkerRoot : o.workerRoot) || session.worktree || null;
   // TASK-AI-117 (RS-R01): the review reads the commit the launch recorded —
@@ -7358,9 +7366,7 @@ function repairRound(
 
   return async (findings, sha) => {
     const hostWorktree = o.cwd || process.cwd();
-    const isolatedWorkerRoot = o.isolatedWorker
-      ? require('./isolation-launcher').workerRootFor(hostWorktree)
-      : null;
+    const isolatedWorkerRoot = resolveIsolatedWorkerRoot(o, hostWorktree);
     repairAttemptCounter += 1;
     const round =
       options.attempt !== undefined

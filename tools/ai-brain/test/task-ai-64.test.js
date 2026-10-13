@@ -1398,16 +1398,21 @@ test('64-24 runOrchestration selects API_PASS candidate, isolates reviewer domai
   );
 
   let reviewLaneWriterDomain = null;
+  const repo = makeTempRepo();
   const o = {
     decisionDir: dir,
     evidenceDir,
     now: NOW,
     isolatedWorker: true,
+    cwd: repo.dir,
+    workerRoot: repo.dir,
+    baseSha: repo.sha,
+    sha: repo.sha,
     run: (job) => {
       // Must write usage file to be considered a durable session
       if (job.usageFile)
         fs.writeFileSync(job.usageFile, JSON.stringify({ session_id: 'test-session-1' }));
-      return { exitCode: 0, stdout: 'Generated artifact', stderr: '' };
+      return { exitCode: 0, stdout: 'Generated artifact', stderr: '', workerSha: repo.sha };
     },
     candidates: [passedCandidate, quotaCandidate, reviewerCandidate],
     ranking: {
@@ -1417,8 +1422,8 @@ test('64-24 runOrchestration selects API_PASS candidate, isolates reviewer domai
         'acct-reviewer': { status: 'available' },
       },
     },
-    sha: SHA_A,
-    reviewer: () => ({ pass: true, sha: SHA_A, verdict: 'PASS', findings: [] }),
+    sha: repo.sha,
+    reviewer: () => ({ pass: true, sha: repo.sha, verdict: 'PASS', findings: [] }),
     specs: [{ id: 'TEST-1', roleRequirement: { role: 'author.foundation' }, files: [] }],
   };
 
@@ -4072,6 +4077,7 @@ describe('TASK-AI-64 isolated route covers the opencode harness (DEFECT L)', () 
             'the agent changed production code\n{"sessionID":"session-defect-l","tokens":{"input":10,"output":20,"total":30}}',
           stderr: '',
           completionNonce: 'nonce-defect-l',
+          workerSha: hostRepo.sha,
         };
       };
     };
@@ -4106,6 +4112,7 @@ describe('TASK-AI-64 isolated route covers the opencode harness (DEFECT L)', () 
       result = await safeRun(
         baseOpts({
           isolatedWorker: true,
+          workerRoot: hostRepo.dir,
           hostGate: () => ({ pass: true, failures: [] }),
           cwd: hostRepo.dir,
           baseSha: hostRepo.sha,
