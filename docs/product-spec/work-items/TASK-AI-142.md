@@ -254,4 +254,4 @@ Live evidence on Windows verified that `node tools/ai-brain/cli.js chat` fails w
 3. Otherwise falling back to `'hermes'`.
 
 ## H3 AA priors
-Artificial Analysis intelligenceIndex is the primary prior for the selected reasoning models; each benchmark value records the AA leaderboard URL and retrieval timestamp. The current embedded leaderboard has no coding-index or agentic-index fields.
+Artificial Analysis intelligenceIndex is the primary prior for the selected reasoning models; each benchmark value records its source URL and retrieval timestamp. The embedded leaderboard includes selected `aaAgenticIndex` values sourced from benchlm.ai; coding-index coverage remains separate and is present only where collected.

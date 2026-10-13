@@ -3,7 +3,13 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { test } = require('node:test');
-const { loadPriors, benchmarkScore, priorFor, weightedBenchmarkScore } = require('../priors');
+const {
+  loadPriors,
+  benchmarkScore,
+  priorFor,
+  weightedBenchmarkScore,
+  roleBenchmarkProfile,
+} = require('../priors');
 const document = loadPriors(path.join(__dirname, '..', 'data', 'model-priors.json'));
 const sourceUrl = 'https://artificialanalysis.ai/leaderboards/models';
 const expected = new Map([
@@ -93,6 +99,41 @@ test('writer profile weights coding more heavily than intelligence', () => {
   );
   assert.equal(codingHeavy.score, 60);
   assert.equal(intelligenceHeavy.score, 15);
+});
+
+test('reviewer profile weights intelligence and coding equally, without agentic weight', () => {
+  assert.deepEqual(roleBenchmarkProfile('reviewer'), {
+    intelligenceIndex: 0.5,
+    aaCodingIndex: 0.5,
+  });
+});
+
+test('zero role-profile coverage scores zero and cannot inherit aggregate or legacy scores', () => {
+  const prior = priorFor(
+    { modelId: 'no-role-coverage' },
+    'planner',
+    {
+      ranking: [
+        {
+          canonical: 'no-role-coverage',
+          codingTier: 'T1',
+          reviewTier: 'T1',
+          score: 91,
+          benchmarks: [{ name: 'sweBench', score: 95 }],
+          retrievedAt: '2026-10-13T00:00:00Z',
+        },
+        {
+          canonical: 'benchmark-max',
+          benchmarks: [{ name: 'intelligenceIndex', score: 100 }],
+        },
+      ],
+    },
+    Date.parse('2026-10-13T12:00:00Z')
+  );
+  assert.equal(prior.score, 0);
+  assert.equal(prior.coverage, undefined);
+  assert.equal(prior.tier, 'T1');
+  assert.equal(prior.bonus, 6);
 });
 
 test('prior reports coverage and marks low coverage as INDIRECT', () => {

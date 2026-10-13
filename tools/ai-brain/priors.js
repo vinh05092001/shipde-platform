@@ -55,10 +55,9 @@ function priorFor(candidate, role, priors, now) {
   const profile = roleBenchmarkProfile(role);
   const rankingMaxima = benchmarkMaxima(ranking);
   const weighted = weightedBenchmarkScore(match, profile, rankingMaxima);
-  const priorScore =
-    weighted.coverage > 0
-      ? weighted.score
-      : (benchmarkScore(match) ?? (Number.isFinite(match.score) ? match.score : null));
+  // Missing role-profile benchmarks contribute zero. Aggregate and legacy scores
+  // use different scales and must never be substituted into this weighted score.
+  const priorScore = weighted.score;
   const sourceDates = (match.sources || [])
     .map((source) => source && source.retrievedAt)
     .filter(Boolean);
@@ -81,7 +80,10 @@ function priorFor(candidate, role, priors, now) {
   if (liveBench !== null) result.liveBench = liveBench;
   if (stale) result.stale = true;
   if (match.sources && match.sources.length) result.sources = match.sources;
-  if (Number.isFinite(priorScore)) {
+  if (
+    Number.isFinite(priorScore) &&
+    (weighted.coverage > 0 || match.benchmarks || Number.isFinite(match.score))
+  ) {
     result.score = Math.round(Math.max(0, Math.min(100, priorScore)));
   }
   return result;

@@ -156,7 +156,7 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
             canonical: 'strong-new',
             codingTier: 'T1',
             reviewTier: 'T1',
-            score: 90,
+            benchmarks: [{ name: 'aaCodingIndex', score: 90 }],
             retrievedAt: '2026-10-09T00:00:00Z',
             sources: [{ url: 'https://bench.example/strong', retrievedAt: '2026-10-09T00:00:00Z' }],
           },
@@ -164,8 +164,12 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
             canonical: 'weak-old',
             codingTier: 'T4',
             reviewTier: 'T4',
-            score: 20,
+            benchmarks: [{ name: 'aaCodingIndex', score: 20 }],
             retrievedAt: '2026-10-09T00:00:00Z',
+          },
+          {
+            canonical: 'benchmark-max',
+            benchmarks: [{ name: 'aaCodingIndex', score: 100 }],
           },
         ],
       },
@@ -183,7 +187,7 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
     assert.equal(result.ranking[0].modelId, strong.modelId);
     assert.equal(result.chosen, strongRanked.candidateKey);
     assert.ok(strongRanked.score > 0);
-    assert.equal(strongRanked.scoreBreakdown.prior.normalizedScore, 0.9);
+    assert.equal(strongRanked.scoreBreakdown.prior.normalizedScore, 0.54);
     assert.equal(strongRanked.scoreBreakdown.prior.weight, 0.33);
     assert.equal(
       priorsApi.benchmarkScore({ contextWindow: 1000000, releaseDate: '2026-01-01' }),
@@ -268,8 +272,12 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
             canonical: 'single-prior',
             codingTier: 'T1',
             reviewTier: 'T1',
-            score: 50,
+            benchmarks: [{ name: 'aaCodingIndex', score: 50 }],
             retrievedAt: '2026-10-09T00:00:00Z',
+          },
+          {
+            canonical: 'benchmark-max',
+            benchmarks: [{ name: 'aaCodingIndex', score: 100 }],
           },
         ],
       },
@@ -283,9 +291,9 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
         }),
       ],
     });
-    assert.equal(result.ranking[0].scoreBreakdown.quality, 50);
+    assert.equal(result.ranking[0].scoreBreakdown.quality, 30);
     assert.equal(result.ranking[0].scoreBreakdown.prior.contribution, 0);
-    assert.equal(result.ranking[0].score, 63);
+    assert.equal(result.ranking[0].score, 58);
   });
 
   test('measured latency and provider price data populate ranking and report fields', () => {
@@ -635,7 +643,7 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
     assert.equal(result.ranking.length, 1);
     assert.equal(result.ranking[0].probation, true);
     assert.equal(result.ranking[0].probationRequiresIndependentReview, true);
-    assert.equal(result.ranking[0].scoreBreakdown.prior.score, 91);
+    assert.equal(result.ranking[0].scoreBreakdown.prior.score, 0);
   });
 
   test('only the role-specific T1 tier admits a never-tried model on probation', () => {
