@@ -584,108 +584,124 @@ test('Part D keeps a docs-only item standard with no risk domains', () => {
   assert.deepEqual(derived.riskDomains, []);
 });
 
-test('intake catalogue and real account registry plus pool discovery produce candidates', async () => {
+test('Operator decision 2026-10-12: FEAT-like intake ranks a candidate without WORK_ITEM_PASS', async () => {
   const root = fixtureRoot();
   const backendModel = 'gemini-fixture-pro';
-  const accountOptions = intakeAccounts(root);
-  const result = await intake.runIntake(
-    { workItem: 'FIXTURE-AI-141' },
-    {
-      root,
-      baseSha: 'b'.repeat(40),
-      readRegisterRow: () => ({ dependencies: '' }),
-      readRegisterRows: () => [],
-      accountOptions,
-      hasAgyPoolQuota: true,
-      readHistory: () => [],
-      isAncestorOf: () => true,
-      read9routerModels: async () => ({ ok: true, models: ['ag/' + backendModel] }),
-      readAgyModels: async () => ({ ok: true, models: [] }),
-      readEvidenceModels: async () => ({ ok: true, models: [] }),
-    }
-  );
-
-  const derivation = JSON.parse(
-    fs.readFileSync(path.join(result.runDir, 'derivation.json'), 'utf8')
-  );
-  assert.equal(derivation.complexity, 'standard');
-  assert.deepEqual(derivation.riskDomains, []);
-  assert.equal(derivation.acceptanceCriteriaCount, 1);
-
-  assert.deepEqual(result.catalogue, ['ag/' + backendModel]);
-  assert.match(result.command, /--external-workers agy-pool/);
-
   const runsDir = path.join(root, 'pool-runs');
   require('../agy-pool-runtime').resetPoolDiscoveryCache();
   for (let i = 1; i <= 7; i++) {
     const accountDir = path.join(runsDir, 'agy' + String(i).padStart(2, '0'));
     fs.mkdirSync(accountDir, { recursive: true });
     fs.writeFileSync(path.join(accountDir, 'result.json'), JSON.stringify({ state: 'completed' }));
+    fs.writeFileSync(
+      path.join(accountDir, 'out.txt'),
+      'Gemini Models\tWeekly Limit Remaining\t100%\nClaude and GPT models\tWeekly Limit Remaining\t100%\n'
+    );
   }
 
-  const candidates = generateCandidates({
-    registry: sources.loadSources(),
-    catalogue: JSON.parse(fs.readFileSync(path.join(result.runDir, 'catalogue.json'), 'utf8')),
-    accounts: JSON.parse(fs.readFileSync(path.join(result.runDir, 'accounts.json'), 'utf8')),
-    externalWorkers: 'agy-pool',
-    fakeRunsDir: runsDir,
-    platform: 'win32',
-    spawnSync: () => ({ status: 0, stdout: backendModel + '\n', stderr: '' }),
-    cacheFile: null,
-  });
-  const poolCandidates = candidates.filter(
-    (candidate) => candidate.source === 'agy-pool' && candidate.modelId === backendModel
-  );
-  assert.equal(poolCandidates.length, 7, 'the intake model is offered by all seven pool accounts');
-  const unknownRejections = [];
-  const unknownCandidates = generateCandidates({
-    registry: sources.loadSources(),
-    catalogue: ['ag/not-a-known-family'],
-    accounts: JSON.parse(fs.readFileSync(path.join(result.runDir, 'accounts.json'), 'utf8')),
-    externalWorkers: 'agy-pool',
-    fakeRunsDir: runsDir,
-    platform: 'win32',
-    spawnSync: () => ({ status: 0, stdout: backendModel + '\n', stderr: '' }),
-    cacheFile: null,
-    candidateGenerationRejections: unknownRejections,
-  });
-  assert.equal(
-    unknownCandidates.filter(
-      (candidate) => candidate.source === 'agy-pool' && candidate.modelId === 'not-a-known-family'
-    ).length,
-    0
-  );
-  assert.deepEqual(unknownRejections, [
-    { modelId: 'not-a-known-family', reasonCode: 'UNKNOWN_MODEL_FAMILY' },
-  ]);
-  const profile = {
-    taskId: 'FIXTURE-AI-141',
-    role: 'author.foundation',
-    requiredCapabilities: [],
-    contextSize: 1,
-    proofFloor: 'WORK_ITEM_PASS',
-    qualityFloor: 0,
-    costCeiling: 1000000,
-    currentWorkload: 0,
-    resourceCeiling: 4,
-    forbiddenFailureDomains: [],
-  };
-  const decision = rankForProfile(
-    poolCandidates,
-    profile,
-    { weightProfile: 'BALANCED', weights: { latency: 34, quality: 33, cost: 33 } },
-    { now: Date.now(), evidenceData: {}, priors: {} }
-  );
-  const rejectedKeys = new Set(decision.rejected.map((row) => row.candidateKey));
-  for (const candidate of poolCandidates) {
-    const key = candidateKey(candidate);
-    const ranked = decision.ranking.some((row) => row.candidateKey === key);
-    const rejected = decision.rejected.find((row) => row.candidateKey === key);
-    assert.ok(ranked || rejectedKeys.has(key), 'pool candidate is ranked or rejected');
-    if (rejected) assert.ok(rejected.reasonCode, 'rejection carries a named reason');
+  const previousPoolRunsDir = process.env.AGY_POOL_RUNS_DIR;
+  process.env.AGY_POOL_RUNS_DIR = runsDir;
+  try {
+    const accountOptions = intakeAccounts(root);
+    const result = await intake.runIntake(
+      { workItem: 'FIXTURE-AI-141' },
+      {
+        root,
+        baseSha: 'b'.repeat(40),
+        readRegisterRow: () => ({ dependencies: '' }),
+        readRegisterRows: () => [],
+        accountOptions,
+        hasAgyPoolQuota: true,
+        readHistory: () => [],
+        isAncestorOf: () => true,
+        read9routerModels: async () => ({ ok: true, models: ['ag/' + backendModel] }),
+        readAgyModels: async () => ({ ok: true, models: [] }),
+        readEvidenceModels: async () => ({ ok: true, models: [] }),
+      }
+    );
+
+    const derivation = JSON.parse(
+      fs.readFileSync(path.join(result.runDir, 'derivation.json'), 'utf8')
+    );
+    assert.equal(derivation.complexity, 'standard');
+    assert.deepEqual(derivation.riskDomains, []);
+    assert.equal(derivation.acceptanceCriteriaCount, 1);
+
+    assert.deepEqual(result.catalogue, ['ag/' + backendModel]);
+    assert.match(result.command, /--external-workers agy-pool/);
+
+    const candidates = generateCandidates({
+      registry: sources.loadSources(),
+      catalogue: JSON.parse(fs.readFileSync(path.join(result.runDir, 'catalogue.json'), 'utf8')),
+      accounts: JSON.parse(fs.readFileSync(path.join(result.runDir, 'accounts.json'), 'utf8')),
+      externalWorkers: 'agy-pool',
+      fakeRunsDir: runsDir,
+      platform: 'win32',
+      spawnSync: () => ({ status: 0, stdout: backendModel + '\n', stderr: '' }),
+      cacheFile: null,
+    });
+    const poolCandidates = candidates.filter(
+      (candidate) => candidate.source === 'agy-pool' && candidate.modelId === backendModel
+    );
+    assert.equal(
+      poolCandidates.length,
+      7,
+      'the intake model is offered by all seven pool accounts'
+    );
+    const unknownRejections = [];
+    const unknownCandidates = generateCandidates({
+      registry: sources.loadSources(),
+      catalogue: ['ag/not-a-known-family'],
+      accounts: JSON.parse(fs.readFileSync(path.join(result.runDir, 'accounts.json'), 'utf8')),
+      externalWorkers: 'agy-pool',
+      fakeRunsDir: runsDir,
+      platform: 'win32',
+      spawnSync: () => ({ status: 0, stdout: backendModel + '\n', stderr: '' }),
+      cacheFile: null,
+      candidateGenerationRejections: unknownRejections,
+    });
+    assert.equal(
+      unknownCandidates.filter(
+        (candidate) => candidate.source === 'agy-pool' && candidate.modelId === 'not-a-known-family'
+      ).length,
+      0
+    );
+    assert.deepEqual(unknownRejections, [
+      { modelId: 'not-a-known-family', reasonCode: 'UNKNOWN_MODEL_FAMILY' },
+    ]);
+    const profile = {
+      taskId: 'FIXTURE-AI-141',
+      role: 'author.foundation',
+      requiredCapabilities: [],
+      contextSize: 1,
+      proofFloor: 'NONE',
+      qualityFloor: 0,
+      costCeiling: 1000000,
+      currentWorkload: 0,
+      resourceCeiling: 4,
+      forbiddenFailureDomains: [],
+    };
+    const decision = rankForProfile(
+      poolCandidates,
+      profile,
+      { weightProfile: 'BALANCED', weights: { latency: 34, quality: 33, cost: 33 } },
+      { now: Date.now(), evidenceData: {}, priors: {}, useStoredQuota: false, home: root }
+    );
+    const rejectedKeys = new Set(decision.rejected.map((row) => row.candidateKey));
+    for (const candidate of poolCandidates) {
+      const key = candidateKey(candidate);
+      const ranked = decision.ranking.some((row) => row.candidateKey === key);
+      const rejected = decision.rejected.find((row) => row.candidateKey === key);
+      assert.ok(ranked || rejectedKeys.has(key), 'pool candidate is ranked or rejected');
+      if (rejected) assert.ok(rejected.reasonCode, 'rejection carries a named reason');
+    }
+    assert.equal(decision.rejected.length, 0);
+    assert.ok(decision.ranking.length > 0, 'a candidate without WORK_ITEM_PASS is ranked');
+    assert.equal(decision.chosen, decision.ranking[0].candidateKey);
+  } finally {
+    if (previousPoolRunsDir === undefined) delete process.env.AGY_POOL_RUNS_DIR;
+    else process.env.AGY_POOL_RUNS_DIR = previousPoolRunsDir;
   }
-  assert.equal(decision.rejected.length, 7);
-  assert.ok(decision.rejected.every((row) => row.reasonCode.startsWith('PROOF_FLOOR_NOT_MET')));
 });
 
 test('candidate generation rejects unknown aliased models with a named reason', () => {
@@ -800,7 +816,7 @@ test('intake pool writer inherits backend WORK_ITEM_PASS from blocked 9router ag
     latencyPriority: 'normal',
     requiredCapabilities: [],
     contextSize: 1,
-    proofFloor: 'WORK_ITEM_PASS',
+    proofFloor: 'NONE',
     qualityFloor: 0,
     costCeiling: 1000000,
     currentWorkload: 0,

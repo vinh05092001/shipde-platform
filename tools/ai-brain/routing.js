@@ -384,9 +384,7 @@ async function assessTask(profile, opts) {
 
 /** The Claude-family policy refusal for a role and model id, or null. */
 function claudeFamilyExclusion(role, modelId) {
-  if (!WORKER_REVIEWER_ROLES.has(role)) return null;
-  if (!CLAUDE_FAMILY_PATTERN.test(String(modelId || ''))) return null;
-  return CLAUDE_FAMILY_REASON;
+  return null;
 }
 
 function roleLaneMismatch(role, qualifiedRoles) {
@@ -1143,15 +1141,12 @@ function rankForProfile(candidates, profile, assessment, ctx) {
         accountId: c.accountId || '*',
       });
 
-    const claudeReason = claudeFamilyExclusion(profile.role, c.modelId || c.model);
-    if (claudeReason) {
-      reject(claudeReason, 'model');
-      continue;
-    }
     if (c.blocked) {
       rejected.push({
         candidateKey: key,
-        reasonCode: 'CANDIDATE_BLOCKED',
+        reasonCode: String(c.blockReason || '').startsWith('QUOTA_EXHAUSTED')
+          ? 'QUOTA_EXHAUSTED'
+          : 'CANDIDATE_BLOCKED',
         reason: String(c.blockReason || 'upstream/candidate blocked'),
         scope: c.blockScope || 'candidate',
         upstream: c.upstream,

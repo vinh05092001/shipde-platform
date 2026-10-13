@@ -677,7 +677,7 @@ test('production candidate builder uses intake catalogue/accounts and Controller
   }
 });
 
-test('qualify auto selects unproven candidates from fake intake catalogue', async () => {
+test('Operator decision 2026-10-12: qualify auto skips candidates now eligible without proof', async () => {
   const fsx = require('fs');
   const path = require('path');
   const root = fs.mkdtempSync(path.join(process.cwd(), '.qualification-auto-catalogue-'));
@@ -743,17 +743,14 @@ test('qualify auto selects unproven candidates from fake intake catalogue', asyn
       out: (line) => resultBox.push(JSON.parse(line)),
     });
     assert.equal(code, 0);
-    assert.equal(resultBox[0].selected, 2);
+    assert.equal(resultBox[0].selected, 0);
     assert.deepEqual(
       resultBox[0].qualified,
       [],
       'fake non-PASS reviews must not add WORK_ITEM_PASS evidence'
     );
     const built = cli._buildQualificationCandidates(root);
-    assert.equal(built.length, 2);
-    assert.ok(built.every((candidate) => candidate.status === 'rejected'));
-    assert.ok(built.every((candidate) => candidate.rejectionReasons[0] === 'PROOF_FLOOR_NOT_MET'));
-    assert.ok(built.every((candidate) => !candidate.qualifiedRoles?.includes('author.foundation')));
+    assert.equal(built.length, 0, 'proofless writers are eligible for ranking, not qualification');
   } finally {
     for (const [entry, value] of Object.entries(saved)) {
       const [mod, key] = entry.split('.');

@@ -150,7 +150,7 @@ test('H2-01: candidate selection uses existing routing/ranking with 7-part key a
   }
 });
 
-test('H2-02: candidate selection excludes Claude family from worker/reviewer lanes per policy', async () => {
+test('H2-02: Operator decision 2026-10-12: candidate selection keeps Claude family eligible for worker/reviewer lanes', async () => {
   const root = fixtureRoot('hermes-claude-');
   try {
     const cClaude = sampleCandidate({
@@ -175,10 +175,9 @@ test('H2-02: candidate selection excludes Claude family from worker/reviewer lan
       }
     );
 
-    assert.equal(result.chosen, cGemini.candidateKey);
+    assert.equal(result.chosen, cClaude.candidateKey);
     const rejectedClaude = result.rejected.find((r) => r.candidateKey.includes('claude'));
-    assert.ok(rejectedClaude, 'Claude candidate must be rejected for worker lane');
-    assert.equal(rejectedClaude.reasonCode, 'CLAUDE_FAMILY_EXCLUDED_BY_POLICY');
+    assert.equal(rejectedClaude, undefined, 'Claude candidate must not be rejected by policy');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

@@ -1146,6 +1146,7 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
           discoverPool: opts.discoverPool !== false,
           adapterScript: opts.adapterScript,
           platform: opts.platform,
+          keepExhausted: true,
         })
         .filter((candidate) =>
           isCandidateRouteEligible(
@@ -1181,6 +1182,7 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
         discoverPool: opts.discoverPool !== false,
         adapterScript: opts.adapterScript,
         platform: opts.platform,
+        keepExhausted: true,
       }),
       ...candidatesApi
         .candidatesFromEvidence(opts.evidenceData, { accounts: evidenceAccounts })
@@ -3782,7 +3784,7 @@ function buildQualificationCandidates(rootDir) {
     role: 'writer',
     complexity: 'complex',
     requiredCapabilities: [],
-    proofFloor: 'WORK_ITEM_PASS',
+    proofFloor: 'NONE',
     contextSize: 32000,
     expectedDuration: 1,
     latencyPriority: 'normal',

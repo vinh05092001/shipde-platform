@@ -136,8 +136,18 @@ describe('TASK-AI-68: pool candidates reach the live ranking', () => {
     assert.match(out, /Pinned.*:\s+agy-pool::.*::agy01/, 'agy01 should be pinned');
     assert.doesNotMatch(out, /Pinned.*:\s+agy-pool::.*::agy02/, 'agy02 should NOT be pinned');
 
-    // Check that agy02 is in the rejected list or ranked low
-    assert.match(out, /agy02/, 'agy02 should appear in the output (e.g. rejected for quota)');
+    const jsonStart = out.lastIndexOf('\n{');
+    assert.notEqual(jsonStart, -1, 'dispatch should include its structured JSON decision');
+    const decision = JSON.parse(out.slice(jsonStart + 1));
+    assert.match(decision.pinned, /agy01/, 'healthy agy01 should be selected');
+    assert.doesNotMatch(decision.pinned, /agy02/, 'quota-exhausted agy02 must not be selected');
+    assert.ok(
+      decision.rejected.some(
+        (candidate) =>
+          /agy02/.test(candidate.candidateKey) && /QUOTA|EXHAUST/.test(candidate.reasonCode)
+      ),
+      'agy02 should be recorded as excluded for quota'
+    );
   });
 
   test('agyPool.quota reads quota via adapter and returns parsed reading', () => {

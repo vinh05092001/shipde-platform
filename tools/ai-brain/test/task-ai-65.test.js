@@ -223,7 +223,7 @@ describe('TASK-AI-65: live routing (profile -> JEV -> ranking -> pinned executio
     assert.match(lines.join('\n'), /Pinned \(dry run, no reservation\)/);
   });
 
-  test('65-02: a security review meets the quality floor and lands outside the writer failure domain', async () => {
+  test('65-02 Operator decision 2026-10-12: a security review ranks Claude candidates by quality and failure domain', async () => {
     const writerDomain = { gateway: 'gw-65-writer', upstream: 'up-65-writer' };
     const onWriterDomain = cand(
       Object.assign({ modelId: 'up-65-writer/model-65-hq', quality: 96 }, writerDomain)
@@ -262,7 +262,7 @@ describe('TASK-AI-65: live routing (profile -> JEV -> ranking -> pinned executio
 
     assert.equal(exitCode, 0);
     const pinned = result.pinnedCandidateKey;
-    assert.equal(pinned, candidateKey(highQualityElsewhere));
+    assert.equal(pinned, candidateKey(claudeElsewhere));
     const pinnedEntry = result.top3.find((c) => c.candidateKey === pinned);
     assert.notEqual(
       pinnedEntry.gateway,
@@ -291,11 +291,8 @@ describe('TASK-AI-65: live routing (profile -> JEV -> ranking -> pinned executio
       )
     );
     assert.ok(
-      rejects.some(
-        (r) =>
-          r.candidateKey === candidateKey(claudeElsewhere) &&
-          r.reasonCode === 'CLAUDE_FAMILY_EXCLUDED_BY_POLICY'
-      )
+      result.ranking.some((r) => r.candidateKey === candidateKey(claudeElsewhere)),
+      'the Claude-family candidate remains eligible under the operator decision'
     );
   });
 
@@ -576,19 +573,10 @@ describe('TASK-AI-65: live routing (profile -> JEV -> ranking -> pinned executio
     assert.ok(entry.reason.includes('fastest candidate meeting'));
   });
 
-  test('65-09: the Claude family is excluded from worker and reviewer roles by policy, and allowed on analyst lanes', () => {
-    assert.equal(
-      routing.claudeFamilyExclusion('writer', 'cc/claude-opus-5'),
-      'CLAUDE_FAMILY_EXCLUDED_BY_POLICY'
-    );
-    assert.equal(
-      routing.claudeFamilyExclusion('reviewer', 'claude-sonnet-4-6'),
-      'CLAUDE_FAMILY_EXCLUDED_BY_POLICY'
-    );
-    assert.equal(
-      routing.claudeFamilyExclusion('security-review', 'kr/claude-haiku-4-5'),
-      'CLAUDE_FAMILY_EXCLUDED_BY_POLICY'
-    );
+  test('65-09 Operator decision 2026-10-12: Claude-family candidates are eligible for every role', () => {
+    assert.equal(routing.claudeFamilyExclusion('writer', 'cc/claude-opus-5'), null);
+    assert.equal(routing.claudeFamilyExclusion('reviewer', 'claude-sonnet-4-6'), null);
+    assert.equal(routing.claudeFamilyExclusion('security-review', 'kr/claude-haiku-4-5'), null);
     assert.equal(routing.claudeFamilyExclusion('scanner', 'cc/claude-opus-5'), null);
     assert.equal(routing.claudeFamilyExclusion('researcher', 'claude-sonnet-4-6'), null);
     assert.equal(routing.claudeFamilyExclusion('integrator', 'claude-haiku-4-5'), null);

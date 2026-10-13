@@ -1092,14 +1092,19 @@ function poolAccountCandidates(opts) {
             : null);
       if (!family) continue;
 
-      // Exclude if family quota is 0%
+      // Keep exhausted routes in the candidate set so Controller can record
+      // the quota rejection in the structured dispatch decision.
+      let quotaExhausted = false;
       if (hasRunsDir && quotaReading && Array.isArray(quotaReading.rows)) {
         const familyRows = quotaReading.rows.filter((r) => r.family === family);
         if (familyRows.length > 0) {
           const isZero = familyRows.some(
             (r) => r.remainingPercent === 0 || r.remainingPercent <= 0 || r.disabled === true
           );
-          if (isZero) continue;
+          if (isZero) {
+            if (!o.keepExhausted) continue;
+            quotaExhausted = true;
+          }
         }
       }
 
@@ -1188,6 +1193,9 @@ function poolAccountCandidates(opts) {
         modelId: model,
         source: 'agy-pool',
         kind: 'agent-cli',
+        blocked: quotaExhausted,
+        blockReason: quotaExhausted ? 'QUOTA_EXHAUSTED' : undefined,
+        blockScope: quotaExhausted ? 'account' : undefined,
         capabilities: effectiveCapabilities,
         contextWindow,
         cost: native && native.cost,
