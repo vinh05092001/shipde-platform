@@ -150,6 +150,256 @@ test('H2-01: candidate selection uses existing routing/ranking with 7-part key a
   }
 });
 
+test('H3-08: route probe excludes quota failure and launches the next candidate without logging credentials', async () => {
+  const root = fixtureRoot('hermes-probe-fallback-');
+  const secret = 'test-secret-never-log';
+  const decisionDir = path.join(root, 'decisions');
+  try {
+    const c1 = sampleCandidate({
+      gateway: '9router',
+      upstream: 'kr',
+      modelId: 'kr/first',
+      quality: 99,
+    });
+    const c2 = sampleCandidate({
+      gateway: 'rqsty',
+      upstream: 'rq',
+      modelId: 'rq/second',
+      quality: 90,
+    });
+    const launched = [];
+    const res = await launchHermesSession(
+      {
+        rootDir: root,
+        decisionDir,
+        env: { NINEROUTER_API_KEY: secret, REQUESTY_API_KEY: secret },
+      },
+      {
+        candidates: [c1, c2],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+        probe: async (candidate, envName, env) => {
+          assert.equal(env[envName], secret);
+          return candidate.candidateKey === c1.candidateKey
+            ? { ok: false, status: 503, body: '{"error":{"message":"402 insufficient_credits"}}' }
+            : { ok: true, status: 200, body: '{}' };
+        },
+        spawn: async (cmd, args) => {
+          launched.push(args);
+          return { exitCode: 0 };
+        },
+      }
+    );
+    assert.equal(res.candidateKey, c2.candidateKey);
+    assert.equal(launched.length, 1);
+    const logs = fs
+      .readdirSync(decisionDir)
+      .map((file) => fs.readFileSync(path.join(decisionDir, file), 'utf8'))
+      .join('\n');
+    assert.match(logs, /HERMES_ROUTE_PROBE_FAILED/);
+    assert.doesNotMatch(JSON.stringify(res) + logs, new RegExp(secret));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('route probe decision-log failure is reported but does not block fallback', async () => {
+  const root = fixtureRoot('hermes-probe-log-fallback-');
+  const c1 = sampleCandidate({
+    gateway: '9router',
+    upstream: 'kr',
+    modelId: 'kr/first',
+    quality: 99,
+  });
+  const c2 = sampleCandidate({
+    gateway: 'rqsty',
+    upstream: 'rq',
+    modelId: 'rq/second',
+    quality: 90,
+  });
+  const probed = [];
+  try {
+    const res = await launchHermesSession(
+      { rootDir: root, decisionDir: path.join(root, 'missing', 'decisions') },
+      {
+        candidates: [c1, c2],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+        decisions: {
+          Stage: { SELECTED: 'SELECTED', REFUSED: 'REFUSED' },
+          recordDecision(record) {
+            if (record.stage === 'refused') throw new Error('read-only decision directory');
+          },
+        },
+        probe: async (candidate) => {
+          probed.push(candidate.candidateKey);
+          return candidate.candidateKey === c1.candidateKey
+            ? { ok: false, status: 429, body: 'rate limited' }
+            : { ok: true, status: 200, body: '{}' };
+        },
+        spawn: async () => ({ exitCode: 0 }),
+      }
+    );
+    assert.equal(res.candidateKey, c2.candidateKey);
+    assert.ok(res.refusalReasons.some((reason) => /DECISION_LOG_WRITE_FAILURE/.test(reason)));
+    assert.deepEqual(probed, [c1.candidateKey, c2.candidateKey]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('H3-09: all route probes failing refuse with NO_REASONING_CANDIDATE and reasons', async () => {
+  const root = fixtureRoot('hermes-probe-refused-');
+  try {
+    const candidates = [
+      sampleCandidate({ gateway: '9router', upstream: 'kr', modelId: 'kr/first', quality: 99 }),
+      sampleCandidate({ gateway: 'rqsty', upstream: 'rq', modelId: 'rq/second', quality: 90 }),
+    ];
+    await assert.rejects(
+      launchHermesSession(
+        { rootDir: root, skipDecisionLog: true },
+        {
+          candidates,
+          registry: sampleRegistry(),
+          priorsData: { ranking: [] },
+          probe: async () => ({ ok: false, status: 402, body: 'insufficient_credits' }),
+          spawn: async () => {
+            throw new Error('Hermes must not launch');
+          },
+        }
+      ),
+      (err) =>
+        err.code === 'NO_REASONING_CANDIDATE' &&
+        /insufficient_credits|upstream_credit_exhausted/.test(err.message)
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('H3-20: credit failure excludes the canonical model and probes the next ranked model', async () => {
+  const root = fixtureRoot('hermes-probe-model-diversity-');
+  try {
+    const modelAliases = ['cl/openai/gpt-6-astra', 'ocz/gpt-6-astra', 'azure/gpt-6-astra@eastus2'];
+    const sameModelRoutes = ['9router', 'rqsty', '9router'].map((gateway, index) =>
+      sampleCandidate({
+        gateway,
+        upstream: 'shared-upstream',
+        accountId: 'shared-account',
+        modelId: modelAliases[index],
+        accessPath: `https://route-${index}.example/v1`,
+        quality: 99 - index,
+      })
+    );
+    const nextModel = sampleCandidate({
+      gateway: 'rqsty',
+      upstream: 'other-upstream',
+      modelId: 'other/gpt-6-sonnet',
+      accessPath: 'https://other-provider.example/v1',
+      quality: 90,
+    });
+    const probed = [];
+    const res = await launchHermesSession(
+      { rootDir: root, skipDecisionLog: true, maxAttempts: 20 },
+      {
+        candidates: [...sameModelRoutes, nextModel],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+        probe: async (candidate) => {
+          probed.push(candidate.modelId);
+          return modelAliases.includes(candidate.modelId)
+            ? { ok: false, status: 402, body: 'upstream_credit_exhausted' }
+            : { ok: true, status: 200, body: '{}' };
+        },
+        spawn: async () => ({ exitCode: 0 }),
+      }
+    );
+    assert.equal(res.candidateKey, nextModel.candidateKey);
+    assert.ok(probed.includes(nextModel.modelId));
+    assert.ok(probed.filter((model) => modelAliases.includes(model)).length <= 2);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('H3-21: probe timeout fails closed with NO_REASONING_CANDIDATE', async () => {
+  const root = fixtureRoot('hermes-probe-budget-');
+  try {
+    await assert.rejects(
+      launchHermesSession(
+        { rootDir: root, skipDecisionLog: true, probeBudgetMs: 5000, probeTimeoutMs: 20 },
+        {
+          candidates: [sampleCandidate()],
+          registry: sampleRegistry(),
+          priorsData: { ranking: [] },
+          probe: async () => new Promise(() => {}),
+          spawn: async () => {
+            throw new Error('Hermes must not launch');
+          },
+        }
+      ),
+      (err) => err.code === 'NO_REASONING_CANDIDATE' && /timeout/.test(err.message)
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('timed-out route probe receives an aborted signal', async () => {
+  const root = fixtureRoot('hermes-probe-abort-');
+  let signal;
+  try {
+    await assert.rejects(
+      launchHermesSession(
+        { rootDir: root, skipDecisionLog: true, probeBudgetMs: 5000, probeTimeoutMs: 20 },
+        {
+          candidates: [sampleCandidate()],
+          registry: sampleRegistry(),
+          priorsData: { ranking: [] },
+          probe: async (_candidate, _envName, _env, options) => {
+            signal = options.signal;
+            return new Promise(() => {});
+          },
+          spawn: async () => {
+            throw new Error('Hermes must not launch');
+          },
+        }
+      ),
+      (err) => err.code === 'NO_REASONING_CANDIDATE'
+    );
+    assert.ok(signal);
+    assert.equal(signal.aborted, true);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('H3-10: dry-run does not probe unless probe is explicitly requested', async () => {
+  const root = fixtureRoot('hermes-probe-dry-run-');
+  try {
+    const candidate = sampleCandidate();
+    let calls = 0;
+    const deps = {
+      candidates: [candidate],
+      registry: sampleRegistry(),
+      priorsData: { ranking: [] },
+      probe: async () => {
+        calls += 1;
+        return { ok: true };
+      },
+    };
+    await launchHermesSession({ rootDir: root, dryRun: true, skipDecisionLog: true }, deps);
+    assert.equal(calls, 0);
+    await launchHermesSession(
+      { rootDir: root, dryRun: true, probe: true, skipDecisionLog: true },
+      deps
+    );
+    assert.equal(calls, 1);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('H2-02: Operator decision 2026-10-12: candidate selection keeps Claude family eligible for worker/reviewer lanes', async () => {
   const root = fixtureRoot('hermes-claude-');
   try {
@@ -374,6 +624,7 @@ test('H2-07: launchHermesSession executes fake spawn and returns completed statu
         registry: sampleRegistry(),
         priorsData: { ranking: [] },
         spawn: fakeSpawn,
+        probe: async () => ({ ok: true }),
         env: { PATH: emptyDir, HERMES_BIN: emptyDir },
       }
     );
@@ -439,6 +690,7 @@ test('H2-08: route/quota failure triggers reselection and relaunches with the sa
         registry: sampleRegistry(),
         priorsData: { ranking: [] },
         spawn: fakeSpawn,
+        probe: async () => ({ ok: true }),
       }
     );
 
@@ -490,6 +742,7 @@ test('H2-09: local launch failure throws immediately without cooling down or exc
           registry: sampleRegistry(),
           priorsData: { ranking: [] },
           spawn: fakeSpawn,
+          probe: async () => ({ ok: true }),
         }
       );
     } catch (e) {
@@ -867,6 +1120,7 @@ test('H2-19: stored candidate binding is reused when reselect is false and candi
         registry: sampleRegistry(),
         priorsData: { ranking: [] },
         spawn: fakeSpawn,
+        probe: async () => ({ ok: true }),
       }
     );
 
@@ -886,6 +1140,7 @@ test('H2-19: stored candidate binding is reused when reselect is false and candi
         registry: sampleRegistry(),
         priorsData: { ranking: [] },
         spawn: fakeSpawn,
+        probe: async () => ({ ok: true }),
       }
     );
 
@@ -1102,6 +1357,7 @@ test('H2-23: default non-injected launch path attempts real spawnSync of hermes 
             candidates: [candidate],
             registry: sampleRegistry(),
             priorsData: { ranking: [] },
+            probe: async () => ({ ok: true }),
             env: { PATH: emptyDir, HERMES_BIN: emptyDir },
           }
         );
@@ -1129,6 +1385,7 @@ test('H2-23: default non-injected launch path attempts real spawnSync of hermes 
         candidates: [candidate],
         registry: sampleRegistry(),
         priorsData: { ranking: [] },
+        probe: async () => ({ ok: true }),
         env: { PATH: emptyDir, HERMES_BIN: fakeHermesJs },
       }
     );
@@ -1159,6 +1416,7 @@ test('H2-24: unclassified and user-exit failures stop immediately with exit code
         candidates: [c1, c2],
         registry: sampleRegistry(),
         priorsData: { ranking: [] },
+        probe: async () => ({ ok: true }),
         spawn: fakeSpawnSigint,
       }
     );
@@ -1180,6 +1438,7 @@ test('H2-24: unclassified and user-exit failures stop immediately with exit code
         candidates: [c1, c2],
         registry: sampleRegistry(),
         priorsData: { ranking: [] },
+        probe: async () => ({ ok: true }),
         spawn: fakeSpawn42,
       }
     );
@@ -1497,6 +1756,7 @@ test('H2-32: route/quota relaunch uses piped stderr and classifies failure to tr
         registry: sampleRegistry(),
         priorsData: { ranking: [] },
         spawn: fakeSpawn,
+        probe: async () => ({ ok: true }),
       }
     );
 
@@ -1527,6 +1787,7 @@ test('H2-33: HERMES_HOME is passed in spawn env, HERMES_IGNORE_USER_CONFIG is re
         priorsData: { ranking: [] },
         env: { HERMES_IGNORE_USER_CONFIG: '1' },
         spawn: fakeSpawn,
+        probe: async () => ({ ok: true }),
       }
     );
 
@@ -1709,6 +1970,7 @@ test('H3-01: Hermes chat passes --continue <id> --create-if-missing on first lau
         registry: sampleRegistry(),
         priorsData: { ranking: [] },
         spawn: fakeSpawn,
+        probe: async () => ({ ok: true }),
       }
     );
 
@@ -1970,6 +2232,7 @@ test('H3-06: launchHermesSession uses resolved command and args in spawn and rep
         platform: 'win32',
         env: { PATH: root, HERMES_BIN: '' },
         spawn: fakeSpawn,
+        probe: async () => ({ ok: true }),
       }
     );
     assert.equal(runRes.status, 'completed');
