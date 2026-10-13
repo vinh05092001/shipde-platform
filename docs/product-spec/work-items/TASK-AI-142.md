@@ -288,3 +288,11 @@ Bounded probes pass an AbortController signal to the injected `routeProbe` and H
 ## H3 no silent post-select failure
 
 Writer probe rejection, exceptions, missing route configuration and exhausted budgets record named reasons in checkpoint failures and decisions before reselection. Prompt and route-resolution exceptions become `POST_SELECTION_ERROR`. Successful probes proceed to launch; gateway requests remove the local OpenCode `ninerouter/` prefix while retaining the exact upstream model and region. Terminal intake failures recover the checkpoint reason for goal-run output, with a named child-exit fallback when no checkpoint is available. Deterministic orchestration regressions cover success, failure, thrown probes, budget exhaustion and post-selection exceptions; live checkpoint evidence remains read-only.
+
+## H3 probe health memory
+
+Writer and Hermes probes share durable gateway/model/account health. Credit, quota, entitlement and authentication failures cool down 6 hours; missing routes and aliases 24 hours; transient failures 30 minutes. Selection records cooldown reasons before probe budget use. Expiry permits re-probing; success clears cooldown. Budget exhaustion is not route evidence. No response bodies or credentials are stored.
+
+Goal runners forward configured external worker pools through next and intake. Intake also discovers agy runtime accounts when aggregate quota evidence is absent. Agy candidates retain their own quota qualification and isolated launcher, without HTTP probing.
+
+Verification (2026-10-13): sequential `node --test --test-concurrency=1` groups passed: `task-ai-141*` 199/199; `task-ai-142*` 118/118; `task-ai-64*` 129/129; `task-ai-85*` 5/5; `task-ai-130*` 12/12. Sequential focused LF-R01, RT-R01 and V-R03 checks passed 3/3, 1/1 and 2/2. Changed JavaScript files pass Prettier and ESLint (including no-undef); `git diff --check` passes. Live goal execution is not claimed. Runtime data is excluded from the commit.

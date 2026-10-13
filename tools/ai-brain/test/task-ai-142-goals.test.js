@@ -560,7 +560,7 @@ describe('TASK-AI-142 Part H1 — Goal store and Controller contract', () => {
     let spawnedArgs = null;
     const resumeRes = goals.resumeGoal(
       'G8',
-      { rootDir: tempDir, goalsDir },
+      { rootDir: tempDir, goalsDir, externalWorkers: 'agy-pool' },
       {
         isPidAlive: () => false,
         spawn: (_bin, args) => {
@@ -579,6 +579,7 @@ describe('TASK-AI-142 Part H1 — Goal store and Controller contract', () => {
     assert.ok(Array.isArray(spawnedArgs), 'Runner must be spawned with args');
     assert.ok(spawnedArgs.includes('--loop'), 'Runner args must include --loop');
     assert.ok(spawnedArgs.includes('--run'), 'Runner args must include --run');
+    assert.equal(spawnedArgs[spawnedArgs.indexOf('--external-workers') + 1], 'agy-pool');
     assert.ok(spawnedArgs.includes('--register'), 'Runner args must include --register');
     const goalRegPath = path.join(goalsDir, 'G8', 'register.csv');
     const regArgIdx = spawnedArgs.indexOf('--register');

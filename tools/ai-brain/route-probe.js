@@ -51,6 +51,9 @@ function classifyProbeFailure(result) {
   const body = String((result && result.body) || 'Probe failed');
   if (result && result.reasonCode) return result.reasonCode;
   if (/probe budget exhausted/i.test(body)) return 'PROBE_BUDGET_EXHAUSTED';
+  if (/entitlement|not entitled|subscription required/i.test(body)) return 'ENTITLEMENT_REQUIRED';
+  if (/missing provider credential|authentication required|invalid api.?key/i.test(body))
+    return 'AUTH_NEEDED';
   if (status === 402 || /insufficient[_ ]credits?|credit exhausted|quota/i.test(body))
     return 'UPSTREAM_CREDIT_OR_QUOTA';
   if (/alias.?mismatch|unknown model|model not found|no such model/i.test(body))
@@ -58,7 +61,7 @@ function classifyProbeFailure(result) {
   if (status === 403) return 'UPSTREAM_FORBIDDEN';
   if (status === 429) return 'RATE_LIMITED';
   if (status >= 500) return 'UPSTREAM_UNAVAILABLE';
-  if (status === 0) return /timeout/i.test(body) ? 'TIMEOUT' : 'ROUTE_UNAVAILABLE';
+  if (status === 0) return /timeout|timed out/i.test(body) ? 'TIMEOUT' : 'ROUTE_UNAVAILABLE';
   return `HTTP_${status}`;
 }
 

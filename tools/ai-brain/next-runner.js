@@ -671,6 +671,10 @@ async function executeIntakeForItem(item, options, deps, logOpts) {
         workItem: item.work_item_id,
         run: true,
         publish: opts.publish,
+        externalWorkers:
+          opts.externalWorkers ||
+          opts['external-workers'] ||
+          (d.config || opts.config || loadConfig(opts.rootDir)).externalWorkers,
         decisionDir: primaryDecisionDir,
       },
       intakeDeps

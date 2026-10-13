@@ -757,7 +757,7 @@ function agyPoolHasQuota(deps) {
       if (!pool.isValidAccountId(accountId)) continue;
       if (readingHasQuota(reading)) return true;
     }
-    return false;
+    return pool.discoverAccounts(deps.poolOptions).length > 0;
   } catch {
     return false;
   }
@@ -786,6 +786,7 @@ function composeOrchestrateCommand({
   baseSha,
   repoRoot,
   hasAgyPoolQuota,
+  externalWorkers,
   publish,
   decisionDir,
   rtk = false,
@@ -836,7 +837,8 @@ function composeOrchestrateCommand({
     '--context-manifest',
     runFiles.contextManifest,
   ];
-  if (hasAgyPoolQuota) argv.push('--external-workers', EXTERNAL_WORKERS_VALUE);
+  const pools = externalWorkers || (hasAgyPoolQuota ? EXTERNAL_WORKERS_VALUE : '');
+  if (pools) argv.push('--external-workers', Array.isArray(pools) ? pools.join(',') : pools);
   const rtkRequested =
     typeof rtk === 'object' && rtk !== null ? Boolean(rtk.enabled) : Boolean(rtk);
   if (rtkRequested) argv.push('--rtk');
@@ -1194,6 +1196,7 @@ async function runIntake(opts, deps) {
     baseSha,
     repoRoot,
     hasAgyPoolQuota: hasPoolQuota,
+    externalWorkers: o.externalWorkers || o['external-workers'] || d.externalWorkers,
     publish: Boolean(o.publish),
     decisionDir: o.decisionDir || d.decisionDir,
     rtk: rtkDecision,
