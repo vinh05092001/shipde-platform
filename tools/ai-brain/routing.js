@@ -338,15 +338,22 @@ async function assessTask(profile, opts) {
       : typeof options.ask === 'function'
         ? options.ask
         : undefined;
+  const minConfidence =
+    options.source &&
+    options.source.minConfidence !== null &&
+    options.source.minConfidence !== undefined &&
+    Number.isFinite(Number(options.source.minConfidence))
+      ? Number(options.source.minConfidence)
+      : options.minConfidence !== null &&
+          options.minConfidence !== undefined &&
+          Number.isFinite(Number(options.minConfidence))
+        ? Number(options.minConfidence)
+        : undefined;
   let result;
   try {
     result = await jev.adviseOrReason(question, {
       ask,
-      minConfidence: Number.isFinite(Number(options.source && options.source.minConfidence))
-        ? Number(options.source.minConfidence)
-        : Number.isFinite(Number(options.minConfidence))
-          ? Number(options.minConfidence)
-          : jev.DEFAULT_MIN_CONFIDENCE,
+      minConfidence,
       reasoningController: () => ({
         outcome: jev.Outcome.DECIDED,
         choice: fallbackId,
@@ -423,11 +430,11 @@ async function assessTask(profile, opts) {
     reasonCodes.push(
       'JEV_UNDECIDED:' + String((result.jev && result.jev.reason) || result.reason || 'UNKNOWN')
     );
-  reasonCodes.push(
-    weightSource === 'jev-score'
-      ? 'WEIGHTS_JEV_SCORE'
-      : 'WEIGHTS_' + chosenProfile + '_CONTROLLER_FALLBACK'
-  );
+  if (weightSource === 'jev-score') {
+    reasonCodes.push('WEIGHTS_JEV_SCORE');
+  } else {
+    reasonCodes.push('WEIGHTS_' + chosenProfile + (jevDecided ? '' : '_CONTROLLER_FALLBACK'));
+  }
   if (riskQualityOverride) reasonCodes.push('QUALITY_FIRST_RISK_FLOOR_OVERRIDE');
   if (qualityFirstRole) reasonCodes.push('QUALITY_FIRST_ROLE_POLICY');
 
