@@ -328,3 +328,11 @@ Live execution of an isolated worker (harness `opencode`, `isolatedWorker`) reve
 2. For isolated launches, worker commits occur inside the isolated worker clone reported by the isolated launcher rather than `job.cwd`. `orchestrate.js` now resolves the worker clone path and verifies the commit SHA exists in that repository via `git rev-parse --verify`. If unverified, reason `WORKER_SHA_UNVERIFIED` is recorded rather than recording an unverified or host-cwd SHA.
 
 Verification: `node --test tools/ai-brain/test/task-ai-142-*.test.js tools/ai-brain/test/task-ai-64.test.js` passed all tests. Changed files pass Prettier and `git diff --check`.
+
+## H3 decision log size
+
+
+Selection logs retain the full chosenCandidate, the existing chosen identity, top ten ranked candidates and score breakdown summaries, and rejection totals by reasonCode with ten examples. Full runtime routing arrays remain available for fallback. Daily logs roll at 50 MiB into date.N.jsonl; readers consume all parts in numeric order. `node tools/ai-brain/cli.js decisions compact --dir <dir>` incrementally writes capped copies named `<source>.compact-<timestamp>.jsonl`, preserving originals. Copies are excluded from daily history until the operator explicitly replaces originals; malformed input fails rather than silently dropping evidence. No live data is modified by this change.
+
+
+Verification: sequential TASK-AI-141 199/199, TASK-AI-142 136/136, TASK-AI-64 129/129, dispatch-wiring 7/7 and decisions 28/28 passed. Additional candidate/routing regressions passed 74/74. Changed JavaScript passes ESLint no-undef; changed files pass Prettier and git diff --check. Live logs remain untouched and runtime data is excluded from commits.

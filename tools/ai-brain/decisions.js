@@ -13,7 +13,7 @@
  * knew it. Without this file the honest answer is a guess, and a guess puts a
  * second agent on a branch that already has commits.
  *
- * Append-only JSONL, one file per day. Appending means a crashed writer loses
+ * Append-only JSONL, size-bounded parts per day. Appending means a crashed writer loses
  * at most its own line; rewriting a JSON document would risk the whole history
  * on every dispatch. Lines that fail to parse are skipped on read rather than
  * failing the read, because a truncated last line is the normal shape of a
@@ -81,6 +81,90 @@ function scrub(value, depth) {
   return out;
 }
 
+const CANDIDATE_LIMIT = 10;
+const DAILY_LIMIT_BYTES = 50 * 1024 * 1024;
+const PART_PATTERN = /^(\d{4}-\d{2}-\d{2})(?:\.(\d+))?\.jsonl$/;
+const identity = (c) =>
+  typeof c === 'string' ? c : c && (c.candidateKey || c.offeringId || c.key);
+
+function capDecision(entry) {
+  const out = { ...entry };
+  const chosen = identity(entry.chosen) || entry.chosenKey || entry.selected;
+  for (const field of ['candidates', 'ranking', 'top3']) {
+    if (!Array.isArray(entry[field])) continue;
+    const rows = entry[field];
+    out.chosenCandidate = out.chosenCandidate || rows.find((c) => identity(c) === chosen) || null;
+    out[field + 'Count'] = entry[field + 'Count'] ?? rows.length;
+    out[field] = rows.slice(0, field === 'top3' ? 3 : CANDIDATE_LIMIT).map((row) => {
+      if (!row || typeof row !== 'object') return row;
+      const summary = { ...row };
+      delete summary.prior;
+      delete summary.sources;
+      delete summary.sourceLinks;
+      if (summary.scoreBreakdown && typeof summary.scoreBreakdown === 'object') {
+        summary.scoreBreakdown = Object.fromEntries(
+          Object.entries(summary.scoreBreakdown).map(([k, v]) => [
+            k,
+            v && typeof v === 'object'
+              ? Object.fromEntries(
+                  Object.entries(v).filter(([, x]) => x === null || typeof x !== 'object')
+                )
+              : v,
+          ])
+        );
+      }
+      return summary;
+    });
+  }
+  for (const field of ['rejected', 'knownGoodRejected', 'isolatedLaneRejected']) {
+    if (!Array.isArray(entry[field])) continue;
+    out[field + 'Count'] = entry[field + 'Count'] ?? entry[field].length;
+    if (!entry[field + 'ByReasonCode']) {
+      const counts = Object.create(null);
+      for (const row of entry[field]) {
+        const reason = row.reasonCode || row.reason || 'UNKNOWN';
+        counts[reason] = (counts[reason] || 0) + 1;
+      }
+      out[field + 'ByReasonCode'] = counts;
+    }
+    out[field] = entry[field].slice(0, CANDIDATE_LIMIT);
+  }
+  return out;
+}
+
+function decisionFiles(dir) {
+  return fs
+    .readdirSync(dir)
+    .filter((f) => PART_PATTERN.test(f))
+    .sort((a, b) => {
+      const x = a.match(PART_PATTERN),
+        y = b.match(PART_PATTERN);
+      return x[1].localeCompare(y[1]) || Number(x[2] || 0) - Number(y[2] || 0);
+    });
+}
+
+// Output stays outside the daily reader namespace until operator replacement.
+function compactDecisions(options) {
+  const dir = options && options.dir;
+  if (!dir) throw new Error('decisions compact requires --dir');
+  return decisionFiles(dir).map((name) => {
+    const source = path.join(dir, name);
+    const output = source + '.compact-' + Date.now() + '.jsonl';
+    const fd = fs.openSync(output, 'wx');
+    let records = 0;
+    try {
+      for (const { line } of decisionLines(source, fs)) {
+        if (!line.trim()) continue;
+        fs.writeSync(fd, JSON.stringify(scrub(capDecision(JSON.parse(line)))) + '\n');
+        records += 1;
+      }
+    } finally {
+      fs.closeSync(fd);
+    }
+    return { source, output, records };
+  });
+}
+
 function dayFile(dir, now) {
   const stamp = new Date(now).toISOString().slice(0, 10);
   return path.join(dir, stamp + '.jsonl');
@@ -99,10 +183,23 @@ function recordDecision(entry, options) {
   const opts = options || {};
   const dir = opts.dir || DEFAULT_DIR;
   const now = opts.now || Date.now();
-  const record = Object.assign({ at: new Date(now).toISOString() }, scrub(entry || {}));
+  const record = Object.assign(
+    { at: new Date(now).toISOString() },
+    scrub(capDecision(entry || {}))
+  );
   if (!record.stage) record.stage = Stage.SELECTED;
   fs.mkdirSync(dir, { recursive: true });
-  fs.appendFileSync(dayFile(dir, now), JSON.stringify(record) + '\n', 'utf8');
+  const base = dayFile(dir, now);
+  const stamp = path.basename(base, '.jsonl');
+  const parts = decisionFiles(dir).filter((f) => f.startsWith(stamp));
+  let file = parts.length ? path.join(dir, parts[parts.length - 1]) : base;
+  const line = JSON.stringify(record) + '\n';
+  const size = fs.existsSync(file) ? fs.statSync(file).size : 0;
+  if (size > 0 && size + Buffer.byteLength(line) > (opts.maxFileBytes ?? DAILY_LIMIT_BYTES)) {
+    const part = Number(path.basename(file).match(PART_PATTERN)[2] || 0) + 1;
+    file = path.join(dir, stamp + '.' + part + '.jsonl');
+  }
+  fs.appendFileSync(file, line, 'utf8');
   return record;
 }
 
@@ -134,7 +231,7 @@ function readDecisionsDetailed(options) {
 
   let files;
   try {
-    files = fs.readdirSync(dir).filter((f) => f.endsWith('.jsonl') && wanted.has(f.slice(0, -6)));
+    files = decisionFiles(dir).filter((f) => wanted.has(f.slice(0, 10)));
   } catch (err) {
     // ENOENT is a history that has not started. Anything else — a permission
     // error, a broken mount — is a history we cannot see, which is not the
@@ -149,7 +246,7 @@ function readDecisionsDetailed(options) {
 
   const out = [];
   const damaged = [];
-  for (const file of files.sort()) {
+  for (const file of files) {
     let lineNumber = 0;
     try {
       for (const { line, final } of decisionLines(path.join(dir, file), opts.reader || fs)) {
@@ -497,6 +594,10 @@ function createSecretRedactor(env) {
 
 module.exports = {
   Stage,
+  decisionFiles,
+  decisionLines,
+  capDecision,
+  compactDecisions,
   DEFAULT_DIR,
   recordDecision,
   readDecisions,

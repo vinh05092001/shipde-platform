@@ -3124,6 +3124,7 @@ async function selectCandidateForProfile(
       reservationsHeld: c.reservationsHeld || 0,
       sessions: c.sessionsHeld || 0,
     })),
+    chosenCandidate: result.ranking.find((c) => c.candidateKey === result.chosen) || null,
     ranking: result.ranking.map((c) => ({
       candidateKey: c.candidateKey,
       score: c.score,
@@ -3136,7 +3137,7 @@ async function selectCandidateForProfile(
       account: normalizeAccount(c.accountId),
       reservationsHeld: c.reservationsHeld || 0,
     })),
-    rejected: result.rejected.slice(0, 50),
+    rejected: result.rejected,
     knownGoodRejected: result.knownGoodRejected || [],
     isolatedLaneRejected: result.isolatedLaneRejected || [],
     rejectedCount: result.rejected.length,
