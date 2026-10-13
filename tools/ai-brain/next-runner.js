@@ -684,6 +684,9 @@ async function executeIntakeForItem(item, options, deps, logOpts) {
     );
 
     const { exitCode, outcome } = await awaitIntakeExecution(intakeResult);
+    const stderrTail = intakeResult.stderrTail
+      ? decisions.scrubText(String(intakeResult.stderrTail)).slice(-16000)
+      : null;
     let reason =
       intakeResult && (intakeResult.reason || intakeResult.message || intakeResult.error);
     if (outcome !== 'completed' && outcome !== 'published') {
@@ -711,7 +714,7 @@ async function executeIntakeForItem(item, options, deps, logOpts) {
         .scrubText(
           String(reason || `INTAKE_${String(outcome).toUpperCase()}: child exit code ${exitCode}`)
         )
-        .slice(-16000);
+        .slice(0, 500);
     }
 
     const stage =
@@ -728,7 +731,7 @@ async function executeIntakeForItem(item, options, deps, logOpts) {
         outcome,
         exitCode,
         detail: reason || undefined,
-        stderrTail: intakeResult.stderrTail || undefined,
+        stderrTail: stderrTail || undefined,
       },
       logOpts
     );
@@ -739,7 +742,7 @@ async function executeIntakeForItem(item, options, deps, logOpts) {
       exitCode,
       intakeResult,
       reason: reason || null,
-      stderrTail: intakeResult.stderrTail || null,
+      stderrTail,
     };
   } catch (err) {
     const isRefusal =

@@ -23,8 +23,11 @@
  */
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const cp = require('child_process');
+const { StringDecoder } = require('node:string_decoder');
+const { createSecretRedactor } = require('./decisions');
 
 const sourcesApi = require('./sources');
 const evidenceApi = require('./evidence');
@@ -1030,19 +1033,11 @@ function formatRunTimestamp(now) {
 function captureIntakeStderr(result) {
   result.stderrTail = '';
   if (result.child && result.child.stderr) {
-    const { StringDecoder } = require('node:string_decoder');
+    const redact = createSecretRedactor(process.env);
     const decoder = new StringDecoder('utf8');
     let pending = '';
     const retain = (line) => {
-      let safe = require('./decisions').scrubText(line);
-      for (const [name, value] of Object.entries(process.env)) {
-        if (/key|token|secret|password|credential/i.test(name) && value && value.length >= 4)
-          safe = safe.split(value).join('[REDACTED_SECRET]');
-      }
-      safe = safe.replace(
-        /((?:api[_-]?key|token|secret|password|authorization)["']?\s*[=:]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi,
-        '$1[REDACTED_SECRET]'
-      );
+      const safe = line;
       result.stderrTail = (result.stderrTail + safe + '\n')
         .split('\n')
         .slice(-41)
@@ -1051,9 +1046,10 @@ function captureIntakeStderr(result) {
     };
     result.child.stderr.on('data', (chunk) => {
       pending += decoder.write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      let newline;
-      while ((newline = pending.indexOf('\n')) !== -1) {
-        retain(pending.slice(0, newline));
+      const newline = pending.lastIndexOf('\n');
+      if (newline !== -1) {
+        const safe = redact(pending.slice(0, newline));
+        for (const line of safe.split('\n')) retain(line);
         pending = pending.slice(newline + 1);
       }
       // Bound even a child that never emits a newline.
@@ -1061,7 +1057,7 @@ function captureIntakeStderr(result) {
     });
     result.child.stderr.on('end', () => {
       pending += decoder.end();
-      if (pending) retain(pending);
+      if (pending) retain(redact(pending));
     });
   }
 }

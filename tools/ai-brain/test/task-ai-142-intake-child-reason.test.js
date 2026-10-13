@@ -33,27 +33,30 @@ test('H3 decision reader never reads a whole daily file and preserves UTF-8 and 
   const file = path.join(root, '2026-10-13.jsonl');
   const entry = { stage: 'launched', workItemId: 'GOAL-H3', detail: 'x'.repeat(65500) + 'Ship Dễ' };
   fs.writeFileSync(file, JSON.stringify(entry) + '\n{"partial":');
-  const original = fs.readFileSync;
-  fs.readFileSync = (target, ...args) => {
-    assert.notEqual(target, file, 'daily log must be read incrementally');
-    return original(target, ...args);
+  let reads = 0;
+  const reader = {
+    openSync: fs.openSync,
+    closeSync: fs.closeSync,
+    readSync(...args) {
+      assert.ok(args[3] <= 65536);
+      reads += 1;
+      return fs.readSync(...args);
+    },
   };
-  try {
-    const options = { dir: root, now: Date.parse('2026-10-13'), days: 1 };
-    const read = decisions.readDecisionsDetailed(options);
-    assert.equal(read.readable, true);
-    assert.deepEqual(read.records, [entry]);
-    fs.appendFileSync(
-      file,
-      '\n' + JSON.stringify({ stage: 'failed', workItemId: 'GOAL-H3' }) + '\n'
-    );
-    assert.equal(decisions.readDecisionsDetailed(options).readable, false);
-  } finally {
-    fs.readFileSync = original;
-  }
+  const options = { dir: root, now: Date.parse('2026-10-13'), days: 1, reader };
+  const read = decisions.readDecisionsDetailed(options);
+  assert.equal(read.readable, true);
+  assert.deepEqual(read.records, [entry]);
+  assert.ok(reads >= 2);
+  fs.appendFileSync(file, '\n');
+  assert.deepEqual(decisions.readDecisionsDetailed(options).damaged, [
+    '2026-10-13.jsonl: unparsable line 2',
+  ]);
+  fs.appendFileSync(file, JSON.stringify({ stage: 'failed', workItemId: 'GOAL-H3' }) + '\n');
+  assert.equal(decisions.readDecisionsDetailed(options).readable, false);
 });
 
-for (const source of ['stderr', 'checkpoint', 'child']) {
+for (const source of ['stderr', 'checkpoint', 'child', 'long-stderr']) {
   test(`H3 next stores and logs the ${source} failure reason before writer selection`, async (t) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'h3-next-reason-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -63,7 +66,8 @@ for (const source of ['stderr', 'checkpoint', 'child']) {
       'delivery_order,work_item_id,status,dependencies\n1,GOAL-H3,READY_FOR_AUTHOR,\n'
     );
     const checkpoint = path.join(root, 'checkpoint.json');
-    const reason = 'DECISION_LOG_UNREADABLE: daily log';
+    const reason =
+      'DECISION_LOG_UNREADABLE: daily log' + (source === 'long-stderr' ? 'x'.repeat(20000) : '');
     fs.writeFileSync(checkpoint, JSON.stringify({ outcomes: [{ workItemId: 'GOAL-H3', reason }] }));
     const result = await require('../next-runner').runNext(
       { rootDir: root, registerPath, decisionDir: path.join(root, 'decisions'), run: true },
@@ -85,15 +89,38 @@ for (const source of ['stderr', 'checkpoint', 'child']) {
           return {
             status: 'failed',
             exitCode: 1,
-            stderrTail: source === 'stderr' ? reason : '',
+            stderrTail: source === 'stderr' || source === 'long-stderr' ? reason : '',
             runFiles: { checkpoint },
           };
         },
       }
     );
-    const expected = source === 'child' ? reason + '\n' : reason;
+    const expected = source === 'child' ? reason + '\n' : reason.slice(0, 500);
+
     assert.equal(result.reason, expected);
     const records = decisions.readDecisions({ dir: path.join(root, 'decisions') });
     assert.ok(records.some((entry) => entry.stage === 'failed' && entry.detail === expected));
+    if (source === 'long-stderr')
+      assert.equal(
+        records.find((entry) => entry.stage === 'failed').stderrTail,
+        reason.slice(-16000)
+      );
   });
 }
+
+test('H3 compiled redaction escapes secrets, preserves text and handles large stderr quickly', () => {
+  const redact = decisions.createSecretRedactor({
+    API_KEY: 'fixture.[key]+secret',
+    PATH: 'ordinary-path-text',
+    SHORT_TOKEN: 'tiny',
+  });
+  assert.equal(redact('fixture.[key]+secret'), '[REDACTED_SECRET]');
+  assert.equal(
+    redact('ordinary-path-text tiny fixtureXkeysecret'),
+    'ordinary-path-text tiny fixtureXkeysecret'
+  );
+  const input = 'normal stderr fixture.[key]+secret\n'.repeat(100000);
+  const start = performance.now();
+  assert.doesNotMatch(redact(input), /fixture/);
+  assert.ok(performance.now() - start < 2000);
+});
