@@ -1,6 +1,6 @@
 {
   "label": "EXTERNAL_PRIOR",
-  "generatedAt": "2026-10-05T12:24:19.740Z",
+  "generatedAt": "2026-10-13T00:00:00.000Z",
   "sources": [
     {
       "id": "aa-coding-index",
@@ -22,6 +22,16 @@
       "url": "https://benchlm.ai/data/models.json",
       "retrievedAt": "2026-10-11T00:00:00.000Z",
       "license": "CC BY-NC 4.0"
+    },
+    {
+      "id": "artificial-analysis-intelligence-index",
+      "url": "https://artificialanalysis.ai/leaderboards/models",
+      "retrievedAt": "2026-10-13T00:00:00.000Z"
+    },
+    {
+      "id": "benchlm-aa-agentic-index",
+      "url": "https://benchlm.ai/benchmarks/aaagenticindex",
+      "retrievedAt": "2026-10-12T00:00:00.000Z"
     }
   ],
   "ranking": [
@@ -41,6 +51,10 @@
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/liveBench"
+        },
+        {
+          "url": "https://benchlm.ai/benchmarks/aaagenticindex",
+          "retrievedAt": "2026-10-12T00:00:00.000Z"
         }
       ],
       "metadataSource": {
@@ -63,6 +77,14 @@
             "retrievedAt": "2026-10-05T12:24:19.741Z",
             "url": "https://benchlm.ai/benchmarks/liveBench"
           }
+        },
+        {
+          "name": "aaAgenticIndex",
+          "score": 50.5,
+          "source": {
+            "url": "https://benchlm.ai/benchmarks/aaagenticindex",
+            "retrievedAt": "2026-10-12T00:00:00.000Z"
+          }
         }
       ],
       "score": 79.3,
@@ -84,6 +106,14 @@
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/liveBench"
+        },
+        {
+          "url": "https://artificialanalysis.ai/leaderboards/models",
+          "retrievedAt": "2026-10-13T00:00:00.000Z"
+        },
+        {
+          "url": "https://benchlm.ai/benchmarks/aaagenticindex",
+          "retrievedAt": "2026-10-12T00:00:00.000Z"
         }
       ],
       "metadataSource": {
@@ -106,6 +136,22 @@
             "retrievedAt": "2026-10-05T12:24:19.741Z",
             "url": "https://benchlm.ai/benchmarks/liveBench"
           }
+        },
+        {
+          "name": "intelligenceIndex",
+          "score": 52.7,
+          "source": {
+            "url": "https://artificialanalysis.ai/leaderboards/models",
+            "retrievedAt": "2026-10-13T00:00:00.000Z"
+          }
+        },
+        {
+          "name": "aaAgenticIndex",
+          "score": 51.5,
+          "source": {
+            "url": "https://benchlm.ai/benchmarks/aaagenticindex",
+            "retrievedAt": "2026-10-12T00:00:00.000Z"
+          }
         }
       ],
       "score": 79.6,
@@ -127,6 +173,10 @@
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/liveBench"
+        },
+        {
+          "url": "https://benchlm.ai/benchmarks/aaagenticindex",
+          "retrievedAt": "2026-10-12T00:00:00.000Z"
         }
       ],
       "metadataSource": {
@@ -148,6 +198,14 @@
           "source": {
             "retrievedAt": "2026-10-05T12:24:19.741Z",
             "url": "https://benchlm.ai/benchmarks/liveBench"
+          }
+        },
+        {
+          "name": "aaAgenticIndex",
+          "score": 53.4,
+          "source": {
+            "url": "https://benchlm.ai/benchmarks/aaagenticindex",
+            "retrievedAt": "2026-10-12T00:00:00.000Z"
           }
         }
       ],
@@ -256,6 +314,10 @@
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/liveBench"
+        },
+        {
+          "url": "https://benchlm.ai/benchmarks/aaagenticindex",
+          "retrievedAt": "2026-10-12T00:00:00.000Z"
         }
       ],
       "benchmarks": [
@@ -273,6 +335,14 @@
           "source": {
             "retrievedAt": "2026-10-05T12:24:19.741Z",
             "url": "https://benchlm.ai/benchmarks/liveBench"
+          }
+        },
+        {
+          "name": "aaAgenticIndex",
+          "score": 50.6,
+          "source": {
+            "url": "https://benchlm.ai/benchmarks/aaagenticindex",
+            "retrievedAt": "2026-10-12T00:00:00.000Z"
           }
         }
       ],
@@ -334,6 +404,10 @@
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/liveBench"
+        },
+        {
+          "url": "https://artificialanalysis.ai/leaderboards/models",
+          "retrievedAt": "2026-10-13T00:00:00.000Z"
         }
       ],
       "metadataSource": {
@@ -347,6 +421,14 @@
           "source": {
             "retrievedAt": "2026-10-05T12:24:19.741Z",
             "url": "https://benchlm.ai/benchmarks/liveBench"
+          }
+        },
+        {
+          "name": "intelligenceIndex",
+          "score": 39.5,
+          "source": {
+            "url": "https://artificialanalysis.ai/leaderboards/models",
+            "retrievedAt": "2026-10-13T00:00:00.000Z"
           }
         }
       ],
@@ -369,6 +451,14 @@
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/liveBench"
+        },
+        {
+          "url": "https://artificialanalysis.ai/leaderboards/models",
+          "retrievedAt": "2026-10-13T00:00:00.000Z"
+        },
+        {
+          "url": "https://benchlm.ai/benchmarks/aaagenticindex",
+          "retrievedAt": "2026-10-12T00:00:00.000Z"
         }
       ],
       "metadataSource": {
@@ -390,6 +480,22 @@
           "source": {
             "retrievedAt": "2026-10-05T12:24:19.741Z",
             "url": "https://benchlm.ai/benchmarks/liveBench"
+          }
+        },
+        {
+          "name": "intelligenceIndex",
+          "score": 48.1,
+          "source": {
+            "url": "https://artificialanalysis.ai/leaderboards/models",
+            "retrievedAt": "2026-10-13T00:00:00.000Z"
+          }
+        },
+        {
+          "name": "aaAgenticIndex",
+          "score": 55.7,
+          "source": {
+            "url": "https://benchlm.ai/benchmarks/aaagenticindex",
+            "retrievedAt": "2026-10-12T00:00:00.000Z"
           }
         }
       ],
@@ -455,6 +561,10 @@
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/liveBench"
+        },
+        {
+          "url": "https://benchlm.ai/benchmarks/aaagenticindex",
+          "retrievedAt": "2026-10-12T00:00:00.000Z"
         }
       ],
       "metadataSource": {
@@ -476,6 +586,14 @@
           "source": {
             "retrievedAt": "2026-10-05T12:24:19.741Z",
             "url": "https://benchlm.ai/benchmarks/liveBench"
+          }
+        },
+        {
+          "name": "aaAgenticIndex",
+          "score": 53.4,
+          "source": {
+            "url": "https://benchlm.ai/benchmarks/aaagenticindex",
+            "retrievedAt": "2026-10-12T00:00:00.000Z"
           }
         }
       ],
@@ -568,6 +686,10 @@
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/liveBench"
+        },
+        {
+          "url": "https://artificialanalysis.ai/leaderboards/models",
+          "retrievedAt": "2026-10-13T00:00:00.000Z"
         }
       ],
       "metadataSource": {
@@ -581,6 +703,14 @@
           "source": {
             "retrievedAt": "2026-10-05T12:24:19.741Z",
             "url": "https://benchlm.ai/benchmarks/liveBench"
+          }
+        },
+        {
+          "name": "intelligenceIndex",
+          "score": 46.4,
+          "source": {
+            "url": "https://artificialanalysis.ai/leaderboards/models",
+            "retrievedAt": "2026-10-13T00:00:00.000Z"
           }
         }
       ],
@@ -634,6 +764,14 @@
         {
           "retrievedAt": "2026-10-05T12:24:19.741Z",
           "url": "https://benchlm.ai/benchmarks/liveBench"
+        },
+        {
+          "url": "https://artificialanalysis.ai/leaderboards/models",
+          "retrievedAt": "2026-10-13T00:00:00.000Z"
+        },
+        {
+          "url": "https://benchlm.ai/benchmarks/aaagenticindex",
+          "retrievedAt": "2026-10-12T00:00:00.000Z"
         }
       ],
       "metadataSource": {
@@ -655,6 +793,22 @@
           "source": {
             "retrievedAt": "2026-10-05T12:24:19.741Z",
             "url": "https://benchlm.ai/benchmarks/liveBench"
+          }
+        },
+        {
+          "name": "intelligenceIndex",
+          "score": 45.4,
+          "source": {
+            "url": "https://artificialanalysis.ai/leaderboards/models",
+            "retrievedAt": "2026-10-13T00:00:00.000Z"
+          }
+        },
+        {
+          "name": "aaAgenticIndex",
+          "score": 49.6,
+          "source": {
+            "url": "https://benchlm.ai/benchmarks/aaagenticindex",
+            "retrievedAt": "2026-10-12T00:00:00.000Z"
           }
         }
       ],
@@ -1926,6 +2080,153 @@
       ],
       "score": 7.7,
       "searchSource": "benchlm-curated-public-benchmarks"
+    },
+    {
+      "canonical": "claude-opus-5-5",
+      "benchmarks": [
+        {
+          "name": "intelligenceIndex",
+          "score": 57.6,
+          "source": {
+            "url": "https://artificialanalysis.ai/leaderboards/models",
+            "retrievedAt": "2026-10-13T00:00:00.000Z"
+          }
+        }
+      ],
+      "sources": [
+        {
+          "url": "https://artificialanalysis.ai/leaderboards/models",
+          "retrievedAt": "2026-10-13T00:00:00.000Z"
+        }
+      ],
+      "codingTier": "T3",
+      "reviewTier": "T3"
+    },
+    {
+      "canonical": "claude-sonnet-5-5",
+      "benchmarks": [
+        {
+          "name": "intelligenceIndex",
+          "score": 56,
+          "source": {
+            "url": "https://artificialanalysis.ai/leaderboards/models",
+            "retrievedAt": "2026-10-13T00:00:00.000Z"
+          }
+        }
+      ],
+      "sources": [
+        {
+          "url": "https://artificialanalysis.ai/leaderboards/models",
+          "retrievedAt": "2026-10-13T00:00:00.000Z"
+        }
+      ],
+      "codingTier": "T3",
+      "reviewTier": "T3"
+    },
+    {
+      "canonical": "muse-wonder",
+      "benchmarks": [
+        {
+          "name": "intelligenceIndex",
+          "score": 55.8,
+          "source": {
+            "url": "https://artificialanalysis.ai/leaderboards/models",
+            "retrievedAt": "2026-10-13T00:00:00.000Z"
+          }
+        }
+      ],
+      "sources": [
+        {
+          "url": "https://artificialanalysis.ai/leaderboards/models",
+          "retrievedAt": "2026-10-13T00:00:00.000Z"
+        }
+      ],
+      "codingTier": "T3",
+      "reviewTier": "T3"
+    },
+    {
+      "canonical": "claude-fable-5-1",
+      "benchmarks": [
+        {
+          "name": "intelligenceIndex",
+          "score": 53.4,
+          "source": {
+            "url": "https://artificialanalysis.ai/leaderboards/models",
+            "retrievedAt": "2026-10-13T00:00:00.000Z"
+          }
+        }
+      ],
+      "sources": [
+        {
+          "url": "https://artificialanalysis.ai/leaderboards/models",
+          "retrievedAt": "2026-10-13T00:00:00.000Z"
+        }
+      ],
+      "codingTier": "T3",
+      "reviewTier": "T3"
+    },
+    {
+      "canonical": "gemini-4-argon",
+      "benchmarks": [
+        {
+          "name": "intelligenceIndex",
+          "score": 52.6,
+          "source": {
+            "url": "https://artificialanalysis.ai/leaderboards/models",
+            "retrievedAt": "2026-10-13T00:00:00.000Z"
+          }
+        }
+      ],
+      "sources": [
+        {
+          "url": "https://artificialanalysis.ai/leaderboards/models",
+          "retrievedAt": "2026-10-13T00:00:00.000Z"
+        }
+      ],
+      "codingTier": "T3",
+      "reviewTier": "T3"
+    },
+    {
+      "canonical": "gpt-6-1-sol",
+      "benchmarks": [
+        {
+          "name": "intelligenceIndex",
+          "score": 51.8,
+          "source": {
+            "url": "https://artificialanalysis.ai/leaderboards/models",
+            "retrievedAt": "2026-10-13T00:00:00.000Z"
+          }
+        }
+      ],
+      "sources": [
+        {
+          "url": "https://artificialanalysis.ai/leaderboards/models",
+          "retrievedAt": "2026-10-13T00:00:00.000Z"
+        }
+      ],
+      "codingTier": "T3",
+      "reviewTier": "T3"
+    },
+    {
+      "canonical": "claude-opus-5",
+      "benchmarks": [
+        {
+          "name": "intelligenceIndex",
+          "score": 50.8,
+          "source": {
+            "url": "https://artificialanalysis.ai/leaderboards/models",
+            "retrievedAt": "2026-10-13T00:00:00.000Z"
+          }
+        }
+      ],
+      "sources": [
+        {
+          "url": "https://artificialanalysis.ai/leaderboards/models",
+          "retrievedAt": "2026-10-13T00:00:00.000Z"
+        }
+      ],
+      "codingTier": "T3",
+      "reviewTier": "T3"
     }
   ],
   "searchSource": "benchlm-curated-public-benchmarks"

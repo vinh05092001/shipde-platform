@@ -1328,6 +1328,9 @@ function rankForProfile(candidates, profile, assessment, ctx) {
     const aPriorBonus = Number(a.scoreBreakdown.prior && a.scoreBreakdown.prior.bonus) || 0;
     const bPriorBonus = Number(b.scoreBreakdown.prior && b.scoreBreakdown.prior.bonus) || 0;
     if (bPriorBonus !== aPriorBonus) return bPriorBonus - aPriorBonus;
+    const aLiveBench = Number(a.scoreBreakdown.prior && a.scoreBreakdown.prior.liveBench) || 0;
+    const bLiveBench = Number(b.scoreBreakdown.prior && b.scoreBreakdown.prior.liveBench) || 0;
+    if (bLiveBench !== aLiveBench) return bLiveBench - aLiveBench;
     if (a.reservationsHeld !== b.reservationsHeld) return a.reservationsHeld - b.reservationsHeld;
     return a.candidateKey.localeCompare(b.candidateKey);
   });
