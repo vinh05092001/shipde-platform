@@ -326,7 +326,7 @@ function resolveLaunchRoute(candidate, options, registry) {
   );
 }
 
-function routeProbeCandidate(candidate, route, registry) {
+function routeProbeCandidate(candidate, route, registry, allowModelFallback = true) {
   const sources = (registry && registry.sources) || [];
   const routeSource = [candidate.gateway, candidate.source, route && route.provider]
     .map((id) => sources.find((entry) => entry.id === id))
@@ -342,7 +342,7 @@ function routeProbeCandidate(candidate, route, registry) {
       Array.isArray(entry.models) &&
       (entry.models.includes(exactModel) || entry.models.includes(upstreamModel))
   );
-  let source = routeSource || modelSource || null;
+  let source = routeSource || (allowModelFallback && modelSource) || null;
   if (!source && candidate.upstream) {
     source = sources.find(
       (entry) =>
@@ -775,8 +775,20 @@ function reviewLane(
       };
     }
 
-    if (o.isolatedWorker && route.harnessName === 'opencode-direct') {
-      const probeCandidate = routeProbeCandidate(candidate, route, registry);
+    const probeCandidate = routeProbeCandidate(candidate, route, registry, false);
+    if (!probeCandidate) {
+      decisions.recordDecision(
+        {
+          stage: decisions.Stage.WARNING,
+          workItemId: (item ? item.id : 'item') + '-review',
+          role: 'reviewer',
+          candidateKey: reviewerIdentity,
+          detail: 'REVIEWER_ROUTE_PROBE_SKIPPED: NO_HTTP_ROUTE_OR_PROBE_CREDENTIAL_CONFIG',
+        },
+        logOpts
+      );
+    } else {
+      // The two-route cap is per canonical model across providers, not per gateway.
       const modelId = String(route.model || '')
         .toLowerCase()
         .split('/')

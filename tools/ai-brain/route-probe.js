@@ -26,6 +26,9 @@ async function probeRoute(candidate, apiKeyEnv, env, options) {
             content: `Reply only OK. ${'The shipment planning reference contains operational context, constraints, dependencies, and acceptance evidence. '.repeat(130)}`,
           },
         ],
+        // Operator-approved PR #288: prepaid gateways pre-deduct max_tokens;
+        // a 1-token probe passed while real requests failed 403. Keep a realistic
+        // budget; the one-word reply instruction keeps actual output spend tiny.
         max_tokens: Number(candidate.maxOutputTokens || candidate.max_output_tokens || 8192),
       }),
       signal: controller.signal,
