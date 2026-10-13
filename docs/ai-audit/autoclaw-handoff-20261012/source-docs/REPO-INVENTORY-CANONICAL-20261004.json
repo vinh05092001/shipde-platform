@@ -1,0 +1,2072 @@
+[
+  {
+    "canonicalUrl": "https://github.com/agentgateway/agentgateway",
+    "aliases": [
+      "https://github.com/agentgateway/agentgateway.git"
+    ],
+    "owner": "agentgateway",
+    "repo": "agentgateway",
+    "pinnedCommit": "dd7a4b32d352",
+    "latestCheckedCommit": "d078aa1202b0",
+    "tagOrRelease": null,
+    "license": "Apache-2.0",
+    "archived": false,
+    "lastActivityAt": "2026-09-29T11:23:27-05:00",
+    "language": "Rust",
+    "runtime": "rust",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": 35,
+    "currentDecision": "ADOPT_PATTERN",
+    "sourceReports": [
+      ".worktrees/logs/reuse-audit/WS2-FINAL-REPORT-20261001.md",
+      ".worktrees/logs/reuse-audit/reuse-decision-matrix.md",
+      ".worktrees/logs/night/WS2-C2-REVIEW-20261001.md"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/anchore/syft",
+    "aliases": [
+      "https://github.com/anchore/syft"
+    ],
+    "owner": "anchore",
+    "repo": "syft",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": null,
+    "license": "Apache-2.0",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "Go",
+    "runtime": "native",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "WATCH",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/anthropic-ai/claude-code",
+    "aliases": [
+      "https://github.com/anthropic-ai/claude-code"
+    ],
+    "owner": "anthropic-ai",
+    "repo": "claude-code",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "2.1.246",
+    "license": null,
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "TypeScript",
+    "runtime": "node",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "INSTALLED",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/aquasecurity/trivy",
+    "aliases": [
+      "https://github.com/aquasecurity/trivy"
+    ],
+    "owner": "aquasecurity",
+    "repo": "trivy",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "0.60.0",
+    "license": "Apache-2.0",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "Go",
+    "runtime": "native",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "PENDING",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/ast-grep/ast-grep",
+    "aliases": [
+      "https://github.com/ast-grep/ast-grep"
+    ],
+    "owner": "ast-grep",
+    "repo": "ast-grep",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": null,
+    "license": "MIT",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "Rust",
+    "runtime": "native",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "WATCH",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/automazeio/ccpm",
+    "aliases": [
+      "https://github.com/automazeio/ccpm.git"
+    ],
+    "owner": "automazeio",
+    "repo": "ccpm",
+    "pinnedCommit": "7d7e4623bc6d",
+    "latestCheckedCommit": "7d7e4623bc6d",
+    "tagOrRelease": null,
+    "license": "MIT",
+    "archived": false,
+    "lastActivityAt": "2026-09-28T09:12:00Z",
+    "language": "Shell",
+    "runtime": "native",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "REJECT",
+    "sourceReports": [
+      ".worktrees/logs/reuse-audit/WS2-FINAL-REPORT-20261001.md",
+      ".worktrees/logs/reuse-audit/reuse-decision-matrix.md",
+      ".worktrees/logs/night/WS2-C-REVIEW-20261001.md"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/berriai/litellm",
+    "aliases": [
+      "https://github.com/BerriAI/litellm.git"
+    ],
+    "owner": "berriai",
+    "repo": "litellm",
+    "pinnedCommit": "9dda4d895f16",
+    "latestCheckedCommit": "61a73c59b049",
+    "tagOrRelease": null,
+    "license": "MIT",
+    "archived": false,
+    "lastActivityAt": "2026-09-29T20:21:55-07:00",
+    "language": "Python",
+    "runtime": "python",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": 150,
+    "currentDecision": "EXTRACT_SMALL_COMPONENT",
+    "sourceReports": [
+      ".worktrees/logs/reuse-audit/WS2-FINAL-REPORT-20261001.md",
+      ".worktrees/logs/reuse-audit/reuse-decision-matrix.md",
+      ".worktrees/logs/night/WS2-C-REVIEW-20261001.md"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/bostonvex/claude-codex-orchestrator",
+    "aliases": [
+      "https://github.com/bostonvex/claude-codex-orchestrator.git"
+    ],
+    "owner": "bostonvex",
+    "repo": "claude-codex-orchestrator",
+    "pinnedCommit": "7f8ad4defbcc4e6864a2aee744407854b44d7da5",
+    "latestCheckedCommit": "7f8ad4defbcc4e6864a2aee744407854b44d7da5",
+    "tagOrRelease": null,
+    "license": null,
+    "archived": false,
+    "lastActivityAt": "2026-09-24T18:00:00Z",
+    "language": "TypeScript",
+    "runtime": "node",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "ADOPT_PATTERN",
+    "sourceReports": [
+      ".worktrees/logs/mvp/orchestrator-pattern-audit.md"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/chromedevtools/chrome-devtools-mcp",
+    "aliases": [
+      "https://github.com/chromedevtools/chrome-devtools-mcp"
+    ],
+    "owner": "chromedevtools",
+    "repo": "chrome-devtools-mcp",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "0.1.0",
+    "license": "Apache-2.0",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "TypeScript",
+    "runtime": "node",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "ADOPTED",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/cli/cli",
+    "aliases": [
+      "https://github.com/cli/cli"
+    ],
+    "owner": "cli",
+    "repo": "cli",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "2.98.0",
+    "license": "MIT",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "Go",
+    "runtime": "native",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "INSTALLED",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/cline/cline",
+    "aliases": [
+      "https://github.com/cline/cline.git"
+    ],
+    "owner": "cline",
+    "repo": "cline",
+    "pinnedCommit": "9fe17595de3b0c980d6c8291f7c42bf0b8cc94a3",
+    "latestCheckedCommit": "f58bc118bdee",
+    "tagOrRelease": null,
+    "license": "Apache-2.0",
+    "archived": false,
+    "lastActivityAt": "2026-09-30T16:41:57-07:00",
+    "language": "TypeScript",
+    "runtime": "node",
+    "daemonRequired": true,
+    "estimatedIdleRamMb": 100,
+    "currentDecision": "EXTRACT_SMALL_COMPONENT",
+    "sourceReports": [
+      ".worktrees/logs/reuse-audit/WS2-FINAL-REPORT-20261001.md",
+      ".worktrees/logs/reuse-audit/reuse-decision-matrix.md",
+      ".worktrees/logs/night/WS2-POC-ATOMIC-20261001.md"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/daytonaio/daytona",
+    "aliases": [
+      "https://github.com/daytonaio/daytona.git"
+    ],
+    "owner": "daytonaio",
+    "repo": "daytona",
+    "pinnedCommit": "ec4c21b2d597",
+    "latestCheckedCommit": "ec4c21b2d597",
+    "tagOrRelease": null,
+    "license": "Apache-2.0",
+    "archived": false,
+    "lastActivityAt": "2026-06-25T13:16:13+02:00",
+    "language": "Go",
+    "runtime": "native",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "REJECT",
+    "sourceReports": [
+      ".worktrees/logs/night/addendum-20260930-workstreams.md",
+      ".worktrees/logs/recovery/WS2A-pickle-log-1516.txt"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/decolua/9router",
+    "aliases": [
+      "https://github.com/decolua/9router"
+    ],
+    "owner": "decolua",
+    "repo": "9router",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "0.5.55",
+    "license": "MIT",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "TypeScript",
+    "runtime": "node",
+    "daemonRequired": true,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "INSTALLED",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/deepseek-ai/deepseek-harness",
+    "aliases": [
+      "https://github.com/deepseek-ai/deepseek-harness"
+    ],
+    "owner": "deepseek-ai",
+    "repo": "deepseek-harness",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "0.1.1-rc.2",
+    "license": "MIT",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "Python",
+    "runtime": "python",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "INSTALLED",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/dequelabs/axe-core",
+    "aliases": [
+      "https://github.com/dequelabs/axe-core"
+    ],
+    "owner": "dequelabs",
+    "repo": "axe-core",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "4.10.2",
+    "license": "MPL-2.0",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "JavaScript",
+    "runtime": "node",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "PENDING",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/dicklesworthstone/ntm",
+    "aliases": [
+      "https://github.com/Dicklesworthstone/ntm.git"
+    ],
+    "owner": "dicklesworthstone",
+    "repo": "ntm",
+    "pinnedCommit": "fe4cff595073",
+    "latestCheckedCommit": "fe4cff595073",
+    "tagOrRelease": null,
+    "license": "MIT",
+    "archived": false,
+    "lastActivityAt": "2026-09-29T15:30:00Z",
+    "language": "Go",
+    "runtime": "native",
+    "daemonRequired": true,
+    "estimatedIdleRamMb": 50,
+    "currentDecision": "REJECT",
+    "sourceReports": [
+      ".worktrees/logs/reuse-audit/WS2-FINAL-REPORT-20261001.md",
+      ".worktrees/logs/reuse-audit/reuse-decision-matrix.md",
+      ".worktrees/logs/night/WS2-C-REVIEW-20261001.md"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/docker/compose",
+    "aliases": [
+      "https://github.com/docker/compose"
+    ],
+    "owner": "docker",
+    "repo": "compose",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "5.4.0",
+    "license": "Apache-2.0",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "Go",
+    "runtime": "native",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "INSTALLED",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/e2b-dev/e2b",
+    "aliases": [
+      "https://github.com/e2b-dev/E2B.git"
+    ],
+    "owner": "e2b-dev",
+    "repo": "e2b",
+    "pinnedCommit": "03887ad7813a",
+    "latestCheckedCommit": "03887ad7813a",
+    "tagOrRelease": null,
+    "license": "Apache-2.0",
+    "archived": false,
+    "lastActivityAt": "2026-09-29T11:00:00Z",
+    "language": "TypeScript",
+    "runtime": "node",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": 50,
+    "currentDecision": "EXTRACT_SMALL_COMPONENT",
+    "sourceReports": [
+      ".worktrees/logs/reuse-audit/WS2-FINAL-REPORT-20261001.md",
+      ".worktrees/logs/reuse-audit/reuse-decision-matrix.md",
+      ".worktrees/logs/night/WS2-C-REVIEW-20261001.md"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/eslint/eslint",
+    "aliases": [
+      "https://github.com/eslint/eslint"
+    ],
+    "owner": "eslint",
+    "repo": "eslint",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "9.39.5",
+    "license": "MIT",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "JavaScript",
+    "runtime": "node",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "INSTALLED",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/evilmartians/lefthook",
+    "aliases": [
+      "https://github.com/evilmartians/lefthook"
+    ],
+    "owner": "evilmartians",
+    "repo": "lefthook",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "1.11.3",
+    "license": "MIT",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "Go",
+    "runtime": "native",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "ADOPTED",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/fission-ai/openspec",
+    "aliases": [
+      "https://github.com/fission-ai/openspec"
+    ],
+    "owner": "fission-ai",
+    "repo": "openspec",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "0.2.0",
+    "license": "MIT",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "TypeScript",
+    "runtime": "node",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "PENDING",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/forwardemail/supertest",
+    "aliases": [
+      "https://github.com/ladjs/supertest"
+    ],
+    "owner": "forwardemail",
+    "repo": "supertest",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "7.0.0",
+    "license": "MIT",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "JavaScript",
+    "runtime": "node",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "DEFERRED",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/gastownhall/beads",
+    "aliases": [
+      "https://github.com/gastownhall/beads"
+    ],
+    "owner": "gastownhall",
+    "repo": "beads",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "0.1.5",
+    "license": "MIT",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "Rust",
+    "runtime": "native",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "PENDING",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/generalaction/emdash",
+    "aliases": [
+      "https://github.com/generalaction/emdash.git"
+    ],
+    "owner": "generalaction",
+    "repo": "emdash",
+    "pinnedCommit": "b179913b8c80",
+    "latestCheckedCommit": "873a3e2067f4",
+    "tagOrRelease": null,
+    "license": "Apache-2.0",
+    "archived": false,
+    "lastActivityAt": "2026-09-27T10:37:38+02:00",
+    "language": "TypeScript",
+    "runtime": "node",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": 50,
+    "currentDecision": "EXTRACT_SMALL_COMPONENT",
+    "sourceReports": [
+      ".worktrees/logs/reuse-audit/WS2-FINAL-REPORT-20261001.md",
+      ".worktrees/logs/reuse-audit/reuse-decision-matrix.md",
+      ".worktrees/logs/night/WS2-C2-REVIEW-20261001.md"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/getnao/sylph",
+    "aliases": [
+      "https://github.com/getnao/sylph"
+    ],
+    "owner": "getnao",
+    "repo": "sylph",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "0.1.0",
+    "license": "MIT",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "TypeScript",
+    "runtime": "node",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "PENDING",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/git-for-windows/git",
+    "aliases": [
+      "https://github.com/git-for-windows/git"
+    ],
+    "owner": "git-for-windows",
+    "repo": "git",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "2.49.0",
+    "license": "GPL-2.0",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "C",
+    "runtime": "native",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "INSTALLED",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/github/spec-kit",
+    "aliases": [
+      "https://github.com/github/spec-kit"
+    ],
+    "owner": "github",
+    "repo": "spec-kit",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "0.1.0",
+    "license": "MIT",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "Ruby",
+    "runtime": "ruby",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "PENDING",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/gitleaks/gitleaks",
+    "aliases": [
+      "https://github.com/gitleaks/gitleaks"
+    ],
+    "owner": "gitleaks",
+    "repo": "gitleaks",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "8.24.0",
+    "license": "MIT",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "Go",
+    "runtime": "native",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "ADOPTED",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/google-gemini/gemini-cli",
+    "aliases": [
+      "https://github.com/google-gemini/gemini-cli"
+    ],
+    "owner": "google-gemini",
+    "repo": "gemini-cli",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "0.57.0",
+    "license": "Apache-2.0",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "TypeScript",
+    "runtime": "node",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "INSTALLED",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/google/antigravity",
+    "aliases": [
+      "https://github.com/google/antigravity"
+    ],
+    "owner": "google",
+    "repo": "antigravity",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "1.1.25",
+    "license": null,
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "Python",
+    "runtime": "python",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "INSTALLED",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/googlechrome/lighthouse-ci",
+    "aliases": [
+      "https://github.com/googlechrome/lighthouse-ci"
+    ],
+    "owner": "googlechrome",
+    "repo": "lighthouse-ci",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "0.14.0",
+    "license": "Apache-2.0",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "JavaScript",
+    "runtime": "node",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "PENDING",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/grafana/k6",
+    "aliases": [
+      "https://github.com/grafana/k6"
+    ],
+    "owner": "grafana",
+    "repo": "k6",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": null,
+    "license": "AGPL-3.0",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "Go",
+    "runtime": "native",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "WATCH",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/i-trytoohard/codex-startup-factory",
+    "aliases": [
+      "https://github.com/i-trytoohard/codex-startup-factory.git"
+    ],
+    "owner": "i-trytoohard",
+    "repo": "codex-startup-factory",
+    "pinnedCommit": "6e40df70f8ebd9d425243d9032abe0136b30bcd1",
+    "latestCheckedCommit": "6e40df70f8ebd9d425243d9032abe0136b30bcd1",
+    "tagOrRelease": null,
+    "license": "MIT",
+    "archived": false,
+    "lastActivityAt": "2026-09-25T12:00:00Z",
+    "language": "TypeScript",
+    "runtime": "node",
+    "daemonRequired": true,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "ADOPT_PATTERN",
+    "sourceReports": [
+      ".worktrees/logs/mvp/orchestrator-pattern-audit.md"
+    ],
+    "duplicateOf": "https://github.com/untrivial-ai/agent-orchestrator"
+  },
+  {
+    "canonicalUrl": "https://github.com/langchain-ai/deepagents",
+    "aliases": [
+      "https://github.com/langchain-ai/deepagents.git"
+    ],
+    "owner": "langchain-ai",
+    "repo": "deepagents",
+    "pinnedCommit": "5a21fbc597e9",
+    "latestCheckedCommit": "1756bbe1eb34",
+    "tagOrRelease": null,
+    "license": "MIT",
+    "archived": false,
+    "lastActivityAt": "2026-09-29T17:52:37-04:00",
+    "language": "Python",
+    "runtime": "python",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": 80,
+    "currentDecision": "REJECT",
+    "sourceReports": [
+      ".worktrees/logs/reuse-audit/WS2-FINAL-REPORT-20261001.md",
+      ".worktrees/logs/reuse-audit/reuse-decision-matrix.md",
+      ".worktrees/logs/night/WS2-C-REVIEW-20261001.md"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/langchain-ai/langgraph",
+    "aliases": [
+      "https://github.com/langchain-ai/langgraph.git"
+    ],
+    "owner": "langchain-ai",
+    "repo": "langgraph",
+    "pinnedCommit": "f5804a5bf583",
+    "latestCheckedCommit": "07b33185eab8",
+    "tagOrRelease": null,
+    "license": "MIT",
+    "archived": false,
+    "lastActivityAt": "2026-09-27T14:34:53-07:00",
+    "language": "Python",
+    "runtime": "python",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": 75,
+    "currentDecision": "EXTRACT_SMALL_COMPONENT",
+    "sourceReports": [
+      ".worktrees/logs/reuse-audit/WS2-FINAL-REPORT-20261001.md",
+      ".worktrees/logs/reuse-audit/reuse-decision-matrix.md",
+      ".worktrees/logs/night/WS2-C-REVIEW-20261001.md"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/langchain-ai/langgraph-supervisor-py",
+    "aliases": [
+      "https://github.com/langchain-ai/langgraph-supervisor",
+      "https://github.com/langchain-ai/langgraph-supervisor.git"
+    ],
+    "owner": "langchain-ai",
+    "repo": "langgraph-supervisor-py",
+    "pinnedCommit": "88859b34017a",
+    "latestCheckedCommit": "88859b34017a",
+    "tagOrRelease": null,
+    "license": "MIT",
+    "archived": false,
+    "lastActivityAt": "2026-07-14T23:32:51-07:00",
+    "language": "Python",
+    "runtime": "python",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "REJECT",
+    "sourceReports": [
+      ".worktrees/logs/night/addendum-20260930-workstreams.md",
+      ".worktrees/logs/recovery/WS2A-pickle-log-1516.txt"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/langchain-ai/open-swe",
+    "aliases": [
+      "https://github.com/langchain-ai/open-swe.git"
+    ],
+    "owner": "langchain-ai",
+    "repo": "open-swe",
+    "pinnedCommit": "9613f663bbff",
+    "latestCheckedCommit": "3acbb5f1cbf1",
+    "tagOrRelease": null,
+    "license": "MIT",
+    "archived": false,
+    "lastActivityAt": "2026-09-29T18:34:34-07:00",
+    "language": "Python",
+    "runtime": "python",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": 50,
+    "currentDecision": "ADOPT_PATTERN",
+    "sourceReports": [
+      ".worktrees/logs/reuse-audit/WS2-FINAL-REPORT-20261001.md",
+      ".worktrees/logs/reuse-audit/reuse-decision-matrix.md",
+      ".worktrees/logs/night/WS2-C2-REVIEW-20261001.md"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/manaflow-ai/cmux",
+    "aliases": [
+      "https://github.com/manaflow-ai/cmux.git"
+    ],
+    "owner": "manaflow-ai",
+    "repo": "cmux",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": null,
+    "license": "MIT",
+    "archived": false,
+    "lastActivityAt": null,
+    "language": "Go",
+    "runtime": "native",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "REJECT",
+    "sourceReports": [
+      ".worktrees/logs/night/addendum-20260930-workstreams.md",
+      ".worktrees/logs/recovery/WS2A-pickle-log-1516.txt"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/microsoft/agent-framework",
+    "aliases": [
+      "https://github.com/microsoft/agent-framework.git"
+    ],
+    "owner": "microsoft",
+    "repo": "agent-framework",
+    "pinnedCommit": "e15c6dce2d10",
+    "latestCheckedCommit": "e23f3c89f29e",
+    "tagOrRelease": null,
+    "license": "MIT",
+    "archived": false,
+    "lastActivityAt": "2026-09-29T19:10:56Z",
+    "language": "Python",
+    "runtime": "python",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": 60,
+    "currentDecision": "ADOPT_PATTERN",
+    "sourceReports": [
+      ".worktrees/logs/reuse-audit/WS2-FINAL-REPORT-20261001.md",
+      ".worktrees/logs/reuse-audit/reuse-decision-matrix.md",
+      ".worktrees/logs/night/WS2-C2-REVIEW-20261001.md"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/microsoft/llmlingua",
+    "aliases": [
+      "https://github.com/microsoft/llmlingua"
+    ],
+    "owner": "microsoft",
+    "repo": "llmlingua",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": null,
+    "license": "MIT",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "Python",
+    "runtime": "python",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "PILOT",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/microsoft/playwright",
+    "aliases": [
+      "https://github.com/microsoft/playwright"
+    ],
+    "owner": "microsoft",
+    "repo": "playwright",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "1.50.1",
+    "license": "Apache-2.0",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "TypeScript",
+    "runtime": "node",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "DEFERRED",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/microsoft/playwright-cli",
+    "aliases": [
+      "https://github.com/microsoft/playwright-cli"
+    ],
+    "owner": "microsoft",
+    "repo": "playwright-cli",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "0.1.2",
+    "license": "Apache-2.0",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "TypeScript",
+    "runtime": "node",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "ADOPTED",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/microsoft/playwright-mcp",
+    "aliases": [
+      "https://github.com/microsoft/playwright-mcp"
+    ],
+    "owner": "microsoft",
+    "repo": "playwright-mcp",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "0.0.32",
+    "license": "Apache-2.0",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "TypeScript",
+    "runtime": "node",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "ADOPTED",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/mswjs/msw",
+    "aliases": [
+      "https://github.com/mswjs/msw"
+    ],
+    "owner": "mswjs",
+    "repo": "msw",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "2.7.0",
+    "license": "MIT",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "TypeScript",
+    "runtime": "node",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "ADOPTED",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/mswjs/msw-storybook-addon",
+    "aliases": [
+      "https://github.com/mswjs/msw-storybook-addon"
+    ],
+    "owner": "mswjs",
+    "repo": "msw-storybook-addon",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "2.0.4",
+    "license": "MIT",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "TypeScript",
+    "runtime": "node",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "DEFERRED",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/nestjs/nest",
+    "aliases": [
+      "https://github.com/nestjs/nest"
+    ],
+    "owner": "nestjs",
+    "repo": "nest",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "11.0.0",
+    "license": "MIT",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "TypeScript",
+    "runtime": "node",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "DEFERRED",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/nock/nock",
+    "aliases": [
+      "https://github.com/nock/nock"
+    ],
+    "owner": "nock",
+    "repo": "nock",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": null,
+    "license": "MIT",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "JavaScript",
+    "runtime": "node",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "WATCH",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/nodejs/node",
+    "aliases": [
+      "https://github.com/nodejs/node"
+    ],
+    "owner": "nodejs",
+    "repo": "node",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "24.15.0",
+    "license": "MIT",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "C++",
+    "runtime": "native",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "INSTALLED",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/nousresearch/hermes-agent",
+    "aliases": [
+      "https://github.com/nousresearch/hermes-agent"
+    ],
+    "owner": "nousresearch",
+    "repo": "hermes-agent",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "0.2.0",
+    "license": "MIT",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "Python",
+    "runtime": "python",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "PENDING",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/nvidia/openshell",
+    "aliases": [
+      "https://github.com/nvidia/openshell.git"
+    ],
+    "owner": "nvidia",
+    "repo": "openshell",
+    "pinnedCommit": "2935e9731b97e89ae78aa7bc66867bc2281444ef",
+    "latestCheckedCommit": "252882f37f2d",
+    "tagOrRelease": null,
+    "license": "Apache-2.0",
+    "archived": false,
+    "lastActivityAt": "2026-10-01T00:09:08Z",
+    "language": "Rust",
+    "runtime": "rust",
+    "daemonRequired": true,
+    "estimatedIdleRamMb": 1024,
+    "currentDecision": "REJECT",
+    "sourceReports": [
+      ".worktrees/logs/reuse-audit/WS2-FINAL-REPORT-20261001.md",
+      ".worktrees/logs/reuse-audit/reuse-decision-matrix.md",
+      ".worktrees/logs/night/WS2-C2-REVIEW-20261001.md"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/open-policy-agent/opa",
+    "aliases": [
+      "https://github.com/open-policy-agent/opa"
+    ],
+    "owner": "open-policy-agent",
+    "repo": "opa",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": null,
+    "license": "Apache-2.0",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "Go",
+    "runtime": "native",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "WATCH",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/open-telemetry/opentelemetry-js",
+    "aliases": [
+      "https://github.com/open-telemetry/opentelemetry-js"
+    ],
+    "owner": "open-telemetry",
+    "repo": "opentelemetry-js",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "1.30.1",
+    "license": "Apache-2.0",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "TypeScript",
+    "runtime": "node",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "ADOPTED",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/openai/codex",
+    "aliases": [
+      "https://github.com/openai/codex"
+    ],
+    "owner": "openai",
+    "repo": "codex",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "0.151.0",
+    "license": null,
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "TypeScript",
+    "runtime": "node",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "INSTALLED",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/openai/openai-agents-python",
+    "aliases": [
+      "https://github.com/openai/openai-agents-python.git"
+    ],
+    "owner": "openai",
+    "repo": "openai-agents-python",
+    "pinnedCommit": "28e9f4fca26d",
+    "latestCheckedCommit": "3590e5d94963",
+    "tagOrRelease": null,
+    "license": "MIT",
+    "archived": false,
+    "lastActivityAt": "2026-09-29T17:15:24-07:00",
+    "language": "Python",
+    "runtime": "python",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": 60,
+    "currentDecision": "ADOPT_PATTERN",
+    "sourceReports": [
+      ".worktrees/logs/reuse-audit/WS2-FINAL-REPORT-20261001.md",
+      ".worktrees/logs/reuse-audit/reuse-decision-matrix.md",
+      ".worktrees/logs/night/WS2-C2-REVIEW-20261001.md"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/openapi-ts/openapi-typescript",
+    "aliases": [
+      "https://github.com/openapi-ts/openapi-typescript"
+    ],
+    "owner": "openapi-ts",
+    "repo": "openapi-typescript",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "7.6.1",
+    "license": "MIT",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "TypeScript",
+    "runtime": "node",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "ADOPTED",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/openhands/openhands",
+    "aliases": [
+      "https://github.com/OpenHands/OpenHands.git"
+    ],
+    "owner": "openhands",
+    "repo": "openhands",
+    "pinnedCommit": "29b0281bf085",
+    "latestCheckedCommit": "21cc5c6170fe",
+    "tagOrRelease": null,
+    "license": "MIT",
+    "archived": false,
+    "lastActivityAt": "2026-09-29T21:48:08-04:00",
+    "language": "Python",
+    "runtime": "python",
+    "daemonRequired": true,
+    "estimatedIdleRamMb": 300,
+    "currentDecision": "ADOPT_PATTERN",
+    "sourceReports": [
+      ".worktrees/logs/reuse-audit/WS2-FINAL-REPORT-20261001.md",
+      ".worktrees/logs/reuse-audit/reuse-decision-matrix.md",
+      ".worktrees/logs/night/WS2-C-REVIEW-20261001.md"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/openhands/software-agent-sdk",
+    "aliases": [
+      "https://github.com/OpenHands/software-agent-sdk.git"
+    ],
+    "owner": "openhands",
+    "repo": "software-agent-sdk",
+    "pinnedCommit": "d0f9500590c1",
+    "latestCheckedCommit": "01682f8c7d3c",
+    "tagOrRelease": null,
+    "license": "MIT",
+    "archived": false,
+    "lastActivityAt": "2026-09-29T23:28:35-04:00",
+    "language": "Python",
+    "runtime": "python",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": 45,
+    "currentDecision": "EXTRACT_SMALL_COMPONENT",
+    "sourceReports": [
+      ".worktrees/logs/reuse-audit/WS2-FINAL-REPORT-20261001.md",
+      ".worktrees/logs/reuse-audit/reuse-decision-matrix.md",
+      ".worktrees/logs/night/WS2-C-REVIEW-20261001.md"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/oraios/serena",
+    "aliases": [
+      "https://github.com/oraios/serena"
+    ],
+    "owner": "oraios",
+    "repo": "serena",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "0.1.0",
+    "license": "MIT",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "Python",
+    "runtime": "python",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "PENDING",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/pact-foundation/pact-js",
+    "aliases": [
+      "https://github.com/pact-foundation/pact-js"
+    ],
+    "owner": "pact-foundation",
+    "repo": "pact-js",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": null,
+    "license": "MIT",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "TypeScript",
+    "runtime": "node",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "PILOT",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/pnpm/pnpm",
+    "aliases": [
+      "https://github.com/pnpm/pnpm"
+    ],
+    "owner": "pnpm",
+    "repo": "pnpm",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "11.23.0",
+    "license": "MIT",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "TypeScript",
+    "runtime": "node",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "INSTALLED",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/prettier/prettier",
+    "aliases": [
+      "https://github.com/prettier/prettier"
+    ],
+    "owner": "prettier",
+    "repo": "prettier",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "3.9.6",
+    "license": "MIT",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "JavaScript",
+    "runtime": "node",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "INSTALLED",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/prisma/orm",
+    "aliases": [
+      "https://github.com/prisma/prisma"
+    ],
+    "owner": "prisma",
+    "repo": "orm",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "6.19.3",
+    "license": "Apache-2.0",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "TypeScript",
+    "runtime": "node",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "INSTALLED",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/promptfoo/promptfoo",
+    "aliases": [
+      "https://github.com/promptfoo/promptfoo"
+    ],
+    "owner": "promptfoo",
+    "repo": "promptfoo",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "0.122.2",
+    "license": "MIT",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "TypeScript",
+    "runtime": "node",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "ADOPTED",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/raine/workmux",
+    "aliases": [
+      "https://github.com/raine/workmux.git"
+    ],
+    "owner": "raine",
+    "repo": "workmux",
+    "pinnedCommit": "761ad3bfe3c9",
+    "latestCheckedCommit": "1d5e7da97bb3",
+    "tagOrRelease": null,
+    "license": "MIT",
+    "archived": false,
+    "lastActivityAt": "2026-09-26T11:20:26+03:00",
+    "language": "Rust",
+    "runtime": "native",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": 25,
+    "currentDecision": "EXTRACT_SMALL_COMPONENT",
+    "sourceReports": [
+      ".worktrees/logs/reuse-audit/WS2-FINAL-REPORT-20261001.md",
+      ".worktrees/logs/reuse-audit/reuse-decision-matrix.md",
+      ".worktrees/logs/night/WS2-C-REVIEW-20261001.md"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/renovatebot/renovate",
+    "aliases": [
+      "https://github.com/renovatebot/renovate"
+    ],
+    "owner": "renovatebot",
+    "repo": "renovate",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "39.191.0",
+    "license": "AGPL-3.0",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "TypeScript",
+    "runtime": "node",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "ADOPTED",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/ruvnet/ruflo",
+    "aliases": [
+      "https://github.com/ruvnet/ruflo.git"
+    ],
+    "owner": "ruvnet",
+    "repo": "ruflo",
+    "pinnedCommit": "a3dee4ff8b7c",
+    "latestCheckedCommit": "a3dee4ff8b7c",
+    "tagOrRelease": null,
+    "license": "MIT",
+    "archived": false,
+    "lastActivityAt": "2026-09-29T14:22:10Z",
+    "language": "TypeScript",
+    "runtime": "node",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": 120,
+    "currentDecision": "ADOPT_PATTERN",
+    "sourceReports": [
+      ".worktrees/logs/reuse-audit/WS2-FINAL-REPORT-20261001.md",
+      ".worktrees/logs/reuse-audit/reuse-decision-matrix.md",
+      ".worktrees/logs/night/WS2-C-REVIEW-20261001.md"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/semgrep/semgrep",
+    "aliases": [
+      "https://github.com/semgrep/semgrep"
+    ],
+    "owner": "semgrep",
+    "repo": "semgrep",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": null,
+    "license": "LGPL-2.1",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "OCaml",
+    "runtime": "native",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "PILOT",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/shopify/toxiproxy",
+    "aliases": [
+      "https://github.com/shopify/toxiproxy"
+    ],
+    "owner": "shopify",
+    "repo": "toxiproxy",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": null,
+    "license": "MIT",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "Go",
+    "runtime": "native",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "PILOT",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/smtg-ai/claude-squad",
+    "aliases": [
+      "https://github.com/smtg-ai/claude-squad.git"
+    ],
+    "owner": "smtg-ai",
+    "repo": "claude-squad",
+    "pinnedCommit": "ce1ffb4392b0",
+    "latestCheckedCommit": "ce1ffb4392b0",
+    "tagOrRelease": null,
+    "license": "AGPL-3.0",
+    "archived": false,
+    "lastActivityAt": "2026-08-20T01:09:45-04:00",
+    "language": "Go",
+    "runtime": "native",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": 40,
+    "currentDecision": "REJECT",
+    "sourceReports": [
+      ".worktrees/logs/reuse-audit/WS2-FINAL-REPORT-20261001.md",
+      ".worktrees/logs/reuse-audit/reuse-decision-matrix.md",
+      ".worktrees/logs/night/WS2-C-REVIEW-20261001.md"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/snyk/agent-scan",
+    "aliases": [
+      "https://github.com/snyk/agent-scan"
+    ],
+    "owner": "snyk",
+    "repo": "agent-scan",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "0.6.1",
+    "license": "Apache-2.0",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "TypeScript",
+    "runtime": "node",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "PENDING",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/spectolabs/hoverfly",
+    "aliases": [
+      "https://github.com/spectolabs/hoverfly"
+    ],
+    "owner": "spectolabs",
+    "repo": "hoverfly",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": null,
+    "license": "Apache-2.0",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "Go",
+    "runtime": "native",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "WATCH",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/stoplightio/prism",
+    "aliases": [
+      "https://github.com/stoplightio/prism"
+    ],
+    "owner": "stoplightio",
+    "repo": "prism",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "5.12.0",
+    "license": "Apache-2.0",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "TypeScript",
+    "runtime": "node",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "ADOPTED",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/storybookjs/addon-a11y",
+    "aliases": [
+      "https://github.com/storybookjs/addon-a11y"
+    ],
+    "owner": "storybookjs",
+    "repo": "addon-a11y",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "8.6.0",
+    "license": "MIT",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "TypeScript",
+    "runtime": "node",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "DEFERRED",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": "https://github.com/storybookjs/storybook"
+  },
+  {
+    "canonicalUrl": "https://github.com/storybookjs/storybook",
+    "aliases": [
+      "https://github.com/storybookjs/storybook"
+    ],
+    "owner": "storybookjs",
+    "repo": "storybook",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "8.6.0",
+    "license": "MIT",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "TypeScript",
+    "runtime": "node",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "PENDING",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/swe-agent/swe-agent",
+    "aliases": [
+      "https://github.com/princeton-nlp/swe-agent",
+      "https://github.com/princeton-nlp/swe-agent.git"
+    ],
+    "owner": "swe-agent",
+    "repo": "swe-agent",
+    "pinnedCommit": "3ea751c087f3",
+    "latestCheckedCommit": "3ea751c087f3",
+    "tagOrRelease": null,
+    "license": "MIT",
+    "archived": false,
+    "lastActivityAt": "2026-07-16T20:51:18+05:30",
+    "language": "Python",
+    "runtime": "python",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": 40,
+    "currentDecision": "REJECT",
+    "sourceReports": [
+      ".worktrees/logs/night/addendum-20260930-workstreams.md",
+      ".worktrees/logs/recovery/WS2A-pickle-log-1516.txt"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/swe-agent/swe-rex",
+    "aliases": [
+      "https://github.com/swe-agent/swe-rex.git"
+    ],
+    "owner": "swe-agent",
+    "repo": "swe-rex",
+    "pinnedCommit": "5c995c365dfb1fd5bc56fda688be5d8538f9931f",
+    "latestCheckedCommit": "5c995c365dfb1fd5bc56fda688be5d8538f9931f",
+    "tagOrRelease": null,
+    "license": "MIT",
+    "archived": false,
+    "lastActivityAt": "2026-03-02T17:43:36-05:00",
+    "language": "Python",
+    "runtime": "python",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": 35,
+    "currentDecision": "EXTRACT_SMALL_COMPONENT",
+    "sourceReports": [
+      ".worktrees/logs/reuse-audit/WS2-FINAL-REPORT-20261001.md",
+      ".worktrees/logs/reuse-audit/reuse-decision-matrix.md",
+      ".worktrees/logs/night/WS2-C2-REVIEW-20261001.md"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/taskforcesh/bullmq",
+    "aliases": [
+      "https://github.com/taskforcesh/bullmq"
+    ],
+    "owner": "taskforcesh",
+    "repo": "bullmq",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "5.41.0",
+    "license": "MIT",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "TypeScript",
+    "runtime": "node",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "DEFERRED",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/temporalio/sdk-typescript",
+    "aliases": [
+      "https://github.com/temporalio/sdk-typescript.git"
+    ],
+    "owner": "temporalio",
+    "repo": "sdk-typescript",
+    "pinnedCommit": "c973304f77a4",
+    "latestCheckedCommit": "c973304f77a4",
+    "tagOrRelease": null,
+    "license": "MIT",
+    "archived": false,
+    "lastActivityAt": "2026-09-29T13:53:49-07:00",
+    "language": "TypeScript",
+    "runtime": "node",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": 80,
+    "currentDecision": "EXTRACT_SMALL_COMPONENT",
+    "sourceReports": [
+      ".worktrees/logs/reuse-audit/WS2-FINAL-REPORT-20261001.md",
+      ".worktrees/logs/reuse-audit/reuse-decision-matrix.md",
+      ".worktrees/logs/night/WS2-C-REVIEW-20261001.md"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/thanglequoc/vietnamese-provinces-database",
+    "aliases": [
+      "https://github.com/thanglequoc/vietnamese-provinces-database"
+    ],
+    "owner": "thanglequoc",
+    "repo": "vietnamese-provinces-database",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "2.1.0",
+    "license": "MIT",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "SQL",
+    "runtime": "data",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "PENDING",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/untrivial-ai/agent-orchestrator",
+    "aliases": [
+      "https://github.com/untrivial-ai/agent-orchestrator"
+    ],
+    "owner": "untrivial-ai",
+    "repo": "agent-orchestrator",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "0.13.0",
+    "license": "MIT",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "TypeScript",
+    "runtime": "node",
+    "daemonRequired": true,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "INSTALLED",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/upstash/context7",
+    "aliases": [
+      "https://github.com/upstash/context7"
+    ],
+    "owner": "upstash",
+    "repo": "context7",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "0.5.9",
+    "license": "MIT",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "TypeScript",
+    "runtime": "node",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "ADOPTED",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/vercel-labs/agent-skills",
+    "aliases": [
+      "https://github.com/vercel-labs/agent-skills"
+    ],
+    "owner": "vercel-labs",
+    "repo": "agent-skills",
+    "pinnedCommit": "e74b3d8",
+    "latestCheckedCommit": null,
+    "tagOrRelease": null,
+    "license": "Apache-2.0",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "TypeScript",
+    "runtime": "node",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "PENDING",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/vercel/turborepo",
+    "aliases": [
+      "https://github.com/vercel/turborepo"
+    ],
+    "owner": "vercel",
+    "repo": "turborepo",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "2.10.12",
+    "license": "MPL-2.0",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "Rust",
+    "runtime": "native",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "INSTALLED",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/vinh05092001/shipde-brain",
+    "aliases": [
+      "https://github.com/vinh05092001/shipde-brain"
+    ],
+    "owner": "vinh05092001",
+    "repo": "shipde-brain",
+    "pinnedCommit": "711954f9b7ceba86e890001fce97786536ac02d4",
+    "latestCheckedCommit": null,
+    "tagOrRelease": null,
+    "license": null,
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "TypeScript",
+    "runtime": "node",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "PENDING",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/vinh05092001/shipde-platform",
+    "aliases": [
+      "https://github.com/vinh05092001/shipde-platform"
+    ],
+    "owner": "vinh05092001",
+    "repo": "shipde-platform",
+    "pinnedCommit": "09d9848a2e447829510dd65354e114a305e604c2",
+    "latestCheckedCommit": null,
+    "tagOrRelease": null,
+    "license": null,
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "TypeScript",
+    "runtime": "node",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "INTEGRATED",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/vitest-dev/vitest",
+    "aliases": [
+      "https://github.com/vitest-dev/vitest"
+    ],
+    "owner": "vitest-dev",
+    "repo": "vitest",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "3.0.7",
+    "license": "MIT",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "TypeScript",
+    "runtime": "node",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "DEFERRED",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/xiufengsun/tokentracker",
+    "aliases": [
+      "https://github.com/xiufengsun/tokentracker"
+    ],
+    "owner": "xiufengsun",
+    "repo": "tokentracker",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "1.0.1",
+    "license": "MIT",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "TypeScript",
+    "runtime": "node",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "PENDING",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  },
+  {
+    "canonicalUrl": "https://github.com/yamadashy/repomix",
+    "aliases": [
+      "https://github.com/yamadashy/repomix"
+    ],
+    "owner": "yamadashy",
+    "repo": "repomix",
+    "pinnedCommit": null,
+    "latestCheckedCommit": null,
+    "tagOrRelease": "0.3.3",
+    "license": "MIT",
+    "archived": null,
+    "lastActivityAt": null,
+    "language": "TypeScript",
+    "runtime": "node",
+    "daemonRequired": false,
+    "estimatedIdleRamMb": null,
+    "currentDecision": "ADOPTED",
+    "sourceReports": [
+      "tools/ecosystem-manifest.json"
+    ],
+    "duplicateOf": null
+  }
+]

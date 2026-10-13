@@ -1,0 +1,64 @@
+ADOPT_PATTERN	AUDIT_ONLY	agentgateway/agentgateway	https://github.com/agentgateway/agentgateway	ONBOARD
+ADOPT_PATTERN	AUDIT_ONLY	bostonvex/claude-codex-orchestrator	https://github.com/bostonvex/claude-codex-orchestrator	ORCH
+ADOPT_PATTERN	AUDIT_ONLY	i-trytoohard/codex-startup-factory	https://github.com/i-trytoohard/codex-startup-factory	PLAN ORCH REVIEW (fork of ComposioHQ/agent-orchestrator)
+ADOPT_PATTERN	AUDIT_ONLY	langchain-ai/open-swe	https://github.com/langchain-ai/open-swe	REVIEW
+ADOPT_PATTERN	AUDIT_ONLY	microsoft/agent-framework	https://github.com/microsoft/agent-framework	ORCH RECOVER
+ADOPT_PATTERN	AUDIT_ONLY	openai/openai-agents-python	https://github.com/openai/openai-agents-python	ORCH ROLE
+ADOPT_PATTERN	AUDIT_ONLY	openhands/openhands	https://github.com/openhands/openhands	ORCH CTX
+ADOPT_PATTERN	AUDIT_ONLY	ruvnet/ruflo	https://github.com/ruvnet/ruflo	ORCH ISO
+ADOPTED	AUDIT_ONLY	chromedevtools/chrome-devtools-mcp	https://github.com/chromedevtools/chrome-devtools-mcp	UI
+ADOPTED	AUDIT_ONLY	microsoft/playwright-cli	https://github.com/microsoft/playwright-cli	UI
+ADOPTED	AUDIT_ONLY	microsoft/playwright-mcp	https://github.com/microsoft/playwright-mcp	UI
+ADOPTED	AUDIT_ONLY	mswjs/msw	https://github.com/mswjs/msw	-
+ADOPTED	AUDIT_ONLY	openapi-ts/openapi-typescript	https://github.com/openapi-ts/openapi-typescript	-
+ADOPTED	AUDIT_ONLY	open-telemetry/opentelemetry-js	https://github.com/open-telemetry/opentelemetry-js	RES (telemetry)
+ADOPTED	AUDIT_ONLY	promptfoo/promptfoo	https://github.com/promptfoo/promptfoo	QUAL
+ADOPTED	AUDIT_ONLY	renovatebot/renovate	https://github.com/renovatebot/renovate	-
+ADOPTED	AUDIT_ONLY	stoplightio/prism	https://github.com/stoplightio/prism	-
+ADOPTED	AUDIT_ONLY	upstash/context7	https://github.com/upstash/context7	CTX
+ADOPTED	INSTALLED	evilmartians/lefthook	https://github.com/evilmartians/lefthook	-
+ADOPTED	INSTALLED	gitleaks/gitleaks	https://github.com/gitleaks/gitleaks	REVIEW
+EXTRACT_SMALL_COMPONENT	AUDIT_ONLY	berriai/litellm	https://github.com/berriai/litellm	ONBOARD RECOVER
+EXTRACT_SMALL_COMPONENT	AUDIT_ONLY	cline/cline	https://github.com/cline/cline	RECOVER ORCH
+EXTRACT_SMALL_COMPONENT	AUDIT_ONLY	e2b-dev/e2b	https://github.com/e2b-dev/e2b	RECOVER ISO
+EXTRACT_SMALL_COMPONENT	AUDIT_ONLY	generalaction/emdash	https://github.com/generalaction/emdash	ISO ORCH
+EXTRACT_SMALL_COMPONENT	AUDIT_ONLY	langchain-ai/langgraph	https://github.com/langchain-ai/langgraph	RECOVER
+EXTRACT_SMALL_COMPONENT	AUDIT_ONLY	openhands/software-agent-sdk	https://github.com/openhands/software-agent-sdk	ORCH MEM CTX SKILL REVIEW
+EXTRACT_SMALL_COMPONENT	AUDIT_ONLY	swe-agent/swe-rex	https://github.com/swe-agent/swe-rex	RECOVER ISO
+EXTRACT_SMALL_COMPONENT	AUDIT_ONLY	temporalio/sdk-typescript	https://github.com/temporalio/sdk-typescript	RECOVER
+EXTRACT_SMALL_COMPONENT	PATTERN_APPLIED	raine/workmux	https://github.com/raine/workmux	ISO ORCH
+INSTALLED	AUDIT_ONLY	untrivial-ai/agent-orchestrator	https://github.com/untrivial-ai/agent-orchestrator	PLAN ORCH REVIEW
+INSTALLED	INSTALLED	anthropic-ai/claude-code	https://github.com/anthropic-ai/claude-code	-
+INSTALLED	INSTALLED	deepseek-ai/deepseek-harness	https://github.com/deepseek-ai/deepseek-harness	ORCH (harness)
+INSTALLED	INSTALLED	docker/compose	https://github.com/docker/compose	-
+INSTALLED	INSTALLED	eslint/eslint	https://github.com/eslint/eslint	-
+INSTALLED	INSTALLED	git-for-windows/git	https://github.com/git-for-windows/git	-
+INSTALLED	INSTALLED	google/antigravity	https://github.com/google/antigravity	-
+INSTALLED	INSTALLED	google-gemini/gemini-cli	https://github.com/google-gemini/gemini-cli	-
+INSTALLED	INSTALLED	nodejs/node	https://github.com/nodejs/node	-
+INSTALLED	INSTALLED	openai/codex	https://github.com/openai/codex	-
+INSTALLED	INSTALLED	pnpm/pnpm	https://github.com/pnpm/pnpm	-
+INSTALLED	INSTALLED	prettier/prettier	https://github.com/prettier/prettier	-
+INSTALLED	INSTALLED	prisma/orm	https://github.com/prisma/orm	-
+INSTALLED	RUNTIME_INTEGRATED	cli/cli	https://github.com/cli/cli	PUBLISH
+INSTALLED	RUNTIME_INTEGRATED	decolua/9router	https://github.com/decolua/9router	ONBOARD ORCH
+INTEGRATED	RUNTIME_INTEGRATED	vinh05092001/shipde-platform	https://github.com/vinh05092001/shipde-platform	all (this repo)
+PENDING	AUDIT_ONLY	aquasecurity/trivy	https://github.com/aquasecurity/trivy	REVIEW
+PENDING	AUDIT_ONLY	dequelabs/axe-core	https://github.com/dequelabs/axe-core	UI
+PENDING	AUDIT_ONLY	fission-ai/openspec	https://github.com/fission-ai/openspec	PLAN ROLE
+PENDING	AUDIT_ONLY	gastownhall/beads	https://github.com/gastownhall/beads	MEM PLAN
+PENDING	AUDIT_ONLY	getnao/sylph	https://github.com/getnao/sylph	MEM SKILL
+PENDING	AUDIT_ONLY	github/spec-kit	https://github.com/github/spec-kit	PLAN ROLE
+PENDING	AUDIT_ONLY	googlechrome/lighthouse-ci	https://github.com/googlechrome/lighthouse-ci	UI
+PENDING	AUDIT_ONLY	snyk/agent-scan	https://github.com/snyk/agent-scan	SKILL (security scan of skills/MCP)
+PENDING	AUDIT_ONLY	storybookjs/storybook	https://github.com/storybookjs/storybook	UI
+PENDING	AUDIT_ONLY	thanglequoc/vietnamese-provinces-database	https://github.com/thanglequoc/vietnamese-provinces-database	-
+PENDING	AUDIT_ONLY	vercel-labs/agent-skills	https://github.com/vercel-labs/agent-skills	SKILL UI
+PENDING	AUDIT_ONLY	vinh05092001/shipde-brain	https://github.com/vinh05092001/shipde-brain	MEM ROLE (lessons, prompts)
+PENDING	AUDIT_ONLY	xiufengsun/tokentracker	https://github.com/xiufengsun/tokentracker	CTX (token telemetry)
+PENDING	POC_ONLY	oraios/serena	https://github.com/oraios/serena	CTX
+PENDING	RUNTIME_INTEGRATED	nousresearch/hermes-agent	https://github.com/nousresearch/hermes-agent	PLAN ORCH MEM CTX SKILL RECOVER RES ONBOARD
+PILOT	POC_ONLY	microsoft/llmlingua	https://github.com/microsoft/llmlingua	CTX
+PILOT	POC_ONLY	pact-foundation/pact-js	https://github.com/pact-foundation/pact-js	-
+PILOT	POC_ONLY	semgrep/semgrep	https://github.com/semgrep/semgrep	REVIEW
+PILOT	POC_ONLY	shopify/toxiproxy	https://github.com/shopify/toxiproxy	-
