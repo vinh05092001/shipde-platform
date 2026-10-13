@@ -37,6 +37,7 @@ const { publish } = require('../publisher');
 const { candidateKey } = require('../candidates');
 const { classifyFailure, Scope, Cause } = require('../failure-classifier');
 const routing = require('../routing');
+const decisions = require('../decisions');
 const { executableFor } = require('../harness');
 
 const FIXTURE_DIR = path.join(__dirname, 'fixtures', 'task-ai-64');
@@ -203,6 +204,147 @@ function makeTempRepo() {
   git(['add', '.']);
   git(['commit', '-q', '-m', 'init']);
   return { dir, sha: git(['rev-parse', 'HEAD']).stdout.trim() };
+}
+
+for (const scenario of ['checkpoint', 'missing-checkpoint', 'refused', 'signal']) {
+  test('H3 terminal goal-run output carries reason: ' + scenario, async () => {
+    const dir = tmpDir('h3-terminal-output-');
+    try {
+      const checkpoint = path.join(dir, 'checkpoint.json');
+      const registerPath = path.join(dir, 'register.csv');
+      fs.writeFileSync(
+        registerPath,
+        'delivery_order,work_item_id,status,dependencies,work_item_path\n1,A,READY_FOR_AUTHOR,,docs/A.md\n'
+      );
+      if (scenario === 'checkpoint')
+        fs.writeFileSync(
+          checkpoint,
+          JSON.stringify({
+            liveSteps: { A: { reason: 'WRITER_ROUTE_PROBE_FAILED PROBE_EXCEPTION', failures: [] } },
+          })
+        );
+      const lines = [];
+      await require('../next-runner').nextLoop(
+        {
+          rootDir: dir,
+          registerPath,
+          decisionDir: dir,
+          maxIterations: 1,
+        },
+        {
+          log: (line) => lines.push(line),
+          sleep: async () => {},
+          runIntake: async () => {
+            if (scenario === 'refused') return { status: 'refused' };
+            const child = new (require('node:events').EventEmitter)();
+            setImmediate(() => child.emit('close', scenario === 'signal' ? null : 1));
+            return { status: 'launched', child, runFiles: { checkpoint } };
+          },
+        }
+      );
+      const expected =
+        scenario === 'checkpoint'
+          ? 'WRITER_ROUTE_PROBE_FAILED PROBE_EXCEPTION'
+          : scenario === 'refused'
+            ? 'INTAKE_REFUSED'
+            : 'INTAKE_FAILED';
+      assert.match(lines.join('\n'), new RegExp('terminal state .*' + expected));
+      assert.match(
+        decisions
+          .readDecisions({ dir })
+          .map((r) => JSON.stringify(r))
+          .join('\n'),
+        new RegExp(expected)
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const scenario of ['success', 'failure', 'throw', 'budget', 'post-select-error']) {
+  test('H3 no silent post-select failure: ' + scenario, async (t) => {
+    const repo = makeTempRepo();
+    const dir = tmpDir('h3-post-select-');
+    const checkpointFile = path.join(dir, 'checkpoint.json');
+    let launches = 0;
+    let clock = Date.now();
+    if (scenario === 'budget') t.mock.method(Date, 'now', () => clock);
+    const candidate = cand({
+      harness: 'opencode',
+      accessPath: 'cli',
+      source: 'oc',
+      gateway: '9router',
+      modelId: 'ninerouter/azure/gpt-5.6-sol@francecentral',
+    });
+    try {
+      const result = await safeRun(
+        baseOpts({
+          candidates: [candidate],
+          isolatedWorker: true,
+          cwd: repo.dir,
+          baseSha: repo.sha,
+          sha: repo.sha,
+          checkpointFile,
+          decisionDir: dir,
+          evidenceDir: path.join(dir, 'evidence'),
+          registry: {
+            sources: [
+              { id: '9router', endpoint: 'https://gateway.example/v1', credential: { env: 'KEY' } },
+            ],
+            dispatch: { providers: { oc: { provider: 'opencode', modelPrefix: 'ninerouter/' } } },
+          },
+          routeProbe: async (c) => {
+            assert.equal(c.modelId, 'azure/gpt-5.6-sol@francecentral');
+            if (scenario === 'throw') throw new Error('fixture probe exception');
+            if (scenario === 'budget') clock += 180001;
+            return {
+              ok: scenario === 'success' || scenario === 'post-select-error',
+              status: 402,
+              body: 'quota',
+            };
+          },
+          hostGate: () => ({ pass: true, failures: [] }),
+          run: (job) => {
+            launches++;
+            return liveLaunch()(job);
+          },
+          reviewer: () => ({ pass: true, sha: repo.sha, verdict: 'PASS', findings: [] }),
+          // A synchronous route-resolution exception after candidate_selected.
+          ...(scenario === 'post-select-error'
+            ? {
+                registry: {
+                  sources: [],
+                  get dispatch() {
+                    throw new Error('fixture route resolution');
+                  },
+                },
+              }
+            : {}),
+        })
+      );
+      assert.equal(result.refusal, null, 'post-selection errors must become recorded outcomes');
+      if (scenario === 'success') {
+        assert.equal(launches, 1, 'successful probe must proceed to launch');
+      } else {
+        assert.equal(launches, 0);
+        const step = JSON.parse(fs.readFileSync(checkpointFile, 'utf8')).liveSteps.A;
+        assert.ok(step.failures.length > 0);
+        assert.ok(step.failures.every((f) => typeof f.reason === 'string' && f.reason.length));
+        const expected =
+          scenario === 'budget'
+            ? 'PROBE_BUDGET_EXHAUSTED'
+            : scenario === 'post-select-error'
+              ? 'POST_SELECTION_ERROR'
+              : 'WRITER_ROUTE_PROBE_FAILED';
+        assert.match(JSON.stringify(result.log.outcomes), new RegExp(expected));
+        assert.match(decisionText(dir), new RegExp(expected));
+      }
+    } finally {
+      fs.rmSync(repo.dir, { recursive: true, force: true });
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 }
 
 test('64-01 a simulated launch is never counted as a live run (AI-64-P08, AI-64-R04)', async () => {
@@ -2458,7 +2600,7 @@ describe('TASK-AI-64 worker provider id and harness config failure (DEFECT E)', 
           'orchestrate must forward the materialised exercise runner to isolatedLauncher'
         );
         assert.equal(launcherOptions.exercise.failBefore.pass, false);
-        assert.deepEqual(probes, ['ninerouter/ag/gemini-3.1-pro-low']);
+        assert.deepEqual(probes, ['ag/gemini-3.1-pro-low']);
       } finally {
         isoMod.getIsolatedLauncher = realGetIsolatedLauncher;
         isoMod.isWorkerPath = realIsWorkerPath;
@@ -3982,9 +4124,9 @@ describe('TASK-AI-64 isolated route covers the opencode harness (DEFECT L)', () 
     assert.strictEqual(launchedAdapter.command, 'opencode');
     assert.ok(Array.isArray(launchArgsCaptured), 'launchArgs must be an array');
     assert.deepEqual(probedModels, [
-      'ninerouter/ag/gemini-3.1-pro-low',
-      'ninerouter/ag/gemini-3.1-pro-low@eastus2',
-      'ninerouter/ag/gemini-3.1-pro-high',
+      'ag/gemini-3.1-pro-low',
+      'ag/gemini-3.1-pro-low@eastus2',
+      'ag/gemini-3.1-pro-high',
     ]);
     assert.ok(launchArgsCaptured.includes('ninerouter/ag/gemini-3.1-pro-high'));
     assert.deepEqual(result.log.reconciliation.completed, ['TASK-AI-64']);

@@ -49,6 +49,7 @@ async function probeRoute(candidate, apiKeyEnv, env, options) {
 function classifyProbeFailure(result) {
   const status = Number(result && result.status) || 0;
   const body = String((result && result.body) || 'Probe failed');
+  if (result && result.reasonCode) return result.reasonCode;
   if (/probe budget exhausted/i.test(body)) return 'PROBE_BUDGET_EXHAUSTED';
   if (status === 402 || /insufficient[_ ]credits?|credit exhausted|quota/i.test(body))
     return 'UPSTREAM_CREDIT_OR_QUOTA';
@@ -83,6 +84,10 @@ async function boundedProbe(probeFn, candidate, apiKeyEnv, env, options) {
         }, timeoutMs);
       }),
     ]);
+  } catch (_) {
+    // Injected probes can reject too. Never let an untrusted error body (which
+    // may contain credentials) escape into controller output.
+    return { ok: false, status: 0, body: 'Probe exception', reasonCode: 'PROBE_EXCEPTION' };
   } finally {
     clearTimeout(timer);
     if (opts.signal) opts.signal.removeEventListener('abort', onAbort);

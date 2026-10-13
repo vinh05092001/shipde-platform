@@ -629,7 +629,7 @@ async function awaitIntakeExecution(intakeResult) {
       const done = (code) => {
         if (!settled) {
           settled = true;
-          resolve(typeof code === 'number' ? code : 0);
+          resolve(typeof code === 'number' ? code : 1);
         }
       };
       intakeResult.child.on('close', (code) => done(code));
@@ -677,6 +677,30 @@ async function executeIntakeForItem(item, options, deps, logOpts) {
     );
 
     const { exitCode, outcome } = await awaitIntakeExecution(intakeResult);
+    let reason =
+      intakeResult && (intakeResult.reason || intakeResult.message || intakeResult.error);
+    if (outcome !== 'completed' && outcome !== 'published') {
+      // The child inherits stdio; recover its durable reason rather than losing
+      // it when the parent only observes the process exit code.
+      const checkpointFile =
+        intakeResult && intakeResult.runFiles && intakeResult.runFiles.checkpoint;
+      if (!reason && checkpointFile) {
+        try {
+          const checkpoint = JSON.parse(fs.readFileSync(checkpointFile, 'utf8'));
+          const step = checkpoint.liveSteps && checkpoint.liveSteps[item.work_item_id];
+          const failures = (step && step.failures) || [];
+          const failure = failures[failures.length - 1];
+          reason = (step && step.reason) || (failure && (failure.reason || failure.cause));
+        } catch (_) {
+          /* A missing checkpoint still gets a named exit reason. */
+        }
+      }
+      reason = decisions
+        .scrubText(
+          String(reason || `INTAKE_${String(outcome).toUpperCase()}: child exit code ${exitCode}`)
+        )
+        .slice(0, 500);
+    }
 
     const stage =
       outcome === 'completed' || outcome === 'published'
@@ -691,6 +715,7 @@ async function executeIntakeForItem(item, options, deps, logOpts) {
         workItemId: item.work_item_id,
         outcome,
         exitCode,
+        detail: reason || undefined,
       },
       logOpts
     );
@@ -700,6 +725,7 @@ async function executeIntakeForItem(item, options, deps, logOpts) {
       outcome,
       exitCode,
       intakeResult,
+      reason: reason || null,
     };
   } catch (err) {
     const isRefusal =
@@ -710,19 +736,22 @@ async function executeIntakeForItem(item, options, deps, logOpts) {
         err.code === 'BASE_SHA_NOT_IN_LOCAL_MAIN');
     const outcome = isRefusal ? 'refused' : 'failed';
     const stage = isRefusal ? decisions.Stage.REFUSED : decisions.Stage.FAILED;
+    const reason = decisions
+      .scrubText(String((err && (err.message || err.code)) || 'INTAKE_EXECUTION_ERROR'))
+      .slice(0, 500);
 
     decisions.recordDecision(
       {
         stage,
         workItemId: item.work_item_id,
         outcome,
-        detail: err && err.message,
+        detail: reason,
         code: err && err.code,
       },
       logOpts
     );
 
-    return { success: false, outcome, exitCode: 1, error: err };
+    return { success: false, outcome, exitCode: 1, error: err, reason };
   }
 }
 
@@ -1159,7 +1188,7 @@ async function nextLoop(options, deps) {
       }
       const reasonSummary = reasonCounts.size
         ? `; refusal reasons: ${Array.from(reasonCounts, ([reason, count]) => `${reason} (${count})`).join(', ')}`
-        : refusal.message || refusal.error || refusal.reason || '';
+        : execResult.reason || refusal.message || refusal.error || refusal.reason || '';
       log(
         `Work Item ${item.work_item_id} ended with terminal state ${outcome}${reasonSummary ? `; ${reasonSummary}` : ''}.`
       );
@@ -1301,6 +1330,7 @@ async function runNext(options, deps) {
   return {
     item,
     intakeResult: execResult.intakeResult,
+    reason: execResult.reason || (execResult.error && execResult.error.message) || null,
     ran: true,
     status: execResult.outcome,
     exitCode: execResult.exitCode,

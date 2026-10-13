@@ -284,3 +284,7 @@ Before launching an isolated writer, the Controller probes the resolved gateway 
 ## H3 route probe review repair (2026-10-13)
 
 Bounded probes pass an AbortController signal to the injected `routeProbe` and HTTP client, aborting timed-out requests. Writer and reviewer paths invoke the caller-provided probe directly. Named limits are `MAX_ROUTES_PER_MODEL = 2`, `PROBE_ATTEMPT_LIMIT = 20`, and `PROBE_BUDGET_MS = 180000`. CLI-only reviewers remain eligible and record a WARNING explaining skipped HTTP preflight. Regression coverage checks timeout cancellation and injected probes on both dispatch paths.
+
+## H3 no silent post-select failure
+
+Writer probe rejection, exceptions, missing route configuration and exhausted budgets record named reasons in checkpoint failures and decisions before reselection. Prompt and route-resolution exceptions become `POST_SELECTION_ERROR`. Successful probes proceed to launch; gateway requests remove the local OpenCode `ninerouter/` prefix while retaining the exact upstream model and region. Terminal intake failures recover the checkpoint reason for goal-run output, with a named child-exit fallback when no checkpoint is available. Deterministic orchestration regressions cover success, failure, thrown probes, budget exhaustion and post-selection exceptions; live checkpoint evidence remains read-only.

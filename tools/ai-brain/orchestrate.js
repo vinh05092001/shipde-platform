@@ -371,7 +371,8 @@ function routeProbeCandidate(candidate, route, registry, allowModelFallback = tr
   if (!accessPath || !apiKeyEnv || !/^[A-Za-z0-9_]+$/.test(apiKeyEnv)) return null;
   return {
     accessPath,
-    modelId: route.model,
+    // OpenCode's provider prefix is local configuration, not a gateway alias.
+    modelId: /^ninerouter\//i.test(exactModel) ? upstreamModel : exactModel,
     maxOutputTokens: candidate.maxOutputTokens || candidate.max_output_tokens,
     apiKeyEnv,
   };
@@ -3981,7 +3982,11 @@ async function runOrchestration(goal, opts) {
         if (failedKeys.size > 0) {
           blockedReason =
             'NO_ALTERNATE_FAILURE_DOMAIN' +
-            (launch.scope && launch.cause ? ': ' + launch.scope + ' (' + launch.cause + ')' : '');
+            (launch.fallbackReason
+              ? ': ' + launch.fallbackReason
+              : launch.scope && launch.cause
+                ? ': ' + launch.scope + ' (' + launch.cause + ')'
+                : '');
         } else {
           blockedReason = 'NO_ELIGIBLE_CANDIDATE: ' + (decision.reason || 'no candidate qualifies');
         }
@@ -4019,24 +4024,64 @@ async function runOrchestration(goal, opts) {
         });
       }
 
+      const recordPostSelectFailure = (reason, cause, scope = 'local') => {
+        const step = liveSteps[item.id] || {};
+        persistStep(item.id, 'writer_post_selection_failed', {
+          reason,
+          failures: [
+            ...(step.failures || []),
+            {
+              failedCandidateKey: decision.chosen,
+              reason,
+              cause,
+              failureScope: scope,
+            },
+          ],
+        });
+        decisions.recordDecision(
+          {
+            stage: decisions.Stage.FAILED,
+            workItemId: item.id,
+            role: roleOf(item),
+            chosen: decision.chosen,
+            cause,
+            failureScope: scope,
+            detail: reason,
+          },
+          logOpts
+        );
+        launch.fallbackReason = reason;
+        launch.cause = cause;
+        launch.scope = scope;
+      };
+
       const branch = o.branch || 'feat/' + String(item.id).toLowerCase();
       const usageFile = prepareUsageReport(usageDir, String(item.id) + '-' + now + '-a' + attempt);
 
       // The prompt carries the pinned key the Controller chose (AI-64-R02), so it
       // is compiled per attempt rather than once before any selection.
-      const compiledPrompt = compilePrompt(item, {
-        goal,
-        specText: o.specText,
-        candidateKey: decision.chosen,
-        branch,
-        usageFile,
-        isolatedWorker: Boolean(o.isolatedWorker),
-        recordTools: false,
-        returnTools: true,
-        focusedTestsOnly: true,
-        contextPack: contextPack && contextPack.path,
-        hostGateFailures: item.hostGateFailures || [],
-      });
+      let compiledPrompt;
+      try {
+        compiledPrompt = compilePrompt(item, {
+          goal,
+          specText: o.specText,
+          candidateKey: decision.chosen,
+          branch,
+          usageFile,
+          isolatedWorker: Boolean(o.isolatedWorker),
+          recordTools: false,
+          returnTools: true,
+          focusedTestsOnly: true,
+          contextPack: contextPack && contextPack.path,
+          hostGateFailures: item.hostGateFailures || [],
+        });
+      } catch (error) {
+        blockedReason =
+          'POST_SELECTION_ERROR: prompt compilation ' +
+          decisions.scrubText(String((error && error.message) || 'unknown error')).slice(0, 300);
+        recordPostSelectFailure(blockedReason, 'POST_SELECTION_ERROR');
+        break;
+      }
       let prompt = compiledPrompt.prompt;
       if (item.hostGateFailures && item.hostGateFailures.length) delete item.hostGateFailures;
       const promptToolIds = compiledPrompt.tools;
@@ -4059,9 +4104,19 @@ async function runOrchestration(goal, opts) {
       const replayedLaunch = Boolean(
         previousLaunch && previousLaunch.candidateKey === decision.chosen
       );
-      const route = resolveLaunchRoute(candidate, o, registry);
+      let route;
+      try {
+        route = resolveLaunchRoute(candidate, o, registry);
+      } catch (error) {
+        blockedReason =
+          'POST_SELECTION_ERROR: route resolution ' +
+          decisions.scrubText(String((error && error.message) || 'unknown error')).slice(0, 300);
+        recordPostSelectFailure(blockedReason, 'POST_SELECTION_ERROR');
+        break;
+      }
       if (!route) {
         blockedReason = 'HARNESS_UNKNOWN: no dispatch route for ' + String(decision.chosen);
+        recordPostSelectFailure(blockedReason, 'HARNESS_UNKNOWN');
         break;
       }
       if (o.isolatedWorker && route.harnessName === 'opencode-direct' && !replayedLaunch) {
@@ -4075,7 +4130,20 @@ async function runOrchestration(goal, opts) {
         writerProbeCounts.set(modelId, count);
         const routeCandidate = routeProbeCandidate(candidate, route, registry);
         const remainingMs = PROBE_BUDGET_MS - (Date.now() - writerProbeStartedAt);
-        let probeResult = { ok: false, status: 0, body: 'Probe route configuration unavailable' };
+        let probeResult = {
+          ok: false,
+          status: 0,
+          body: 'Probe route configuration unavailable',
+          reasonCode: 'PROBE_ROUTE_CONFIGURATION_UNAVAILABLE',
+        };
+        if (writerProbeAttempts >= PROBE_ATTEMPT_LIMIT || remainingMs <= 0) {
+          probeResult = {
+            ok: false,
+            status: 0,
+            body: 'Probe budget exhausted',
+            reasonCode: 'PROBE_BUDGET_EXHAUSTED',
+          };
+        }
         if (routeCandidate && writerProbeAttempts < PROBE_ATTEMPT_LIMIT && remainingMs > 0) {
           writerProbeAttempts += 1;
           const timeoutMs = Math.min(8000, remainingMs);
@@ -4091,6 +4159,7 @@ async function runOrchestration(goal, opts) {
         if (!probeResult || probeResult.ok !== true) {
           const reasonCode = sharedRouteProbe.classifyProbeFailure(probeResult);
           const reason = 'WRITER_ROUTE_PROBE_FAILED ' + reasonCode;
+          recordPostSelectFailure(reason, reasonCode, 'gateway');
           failedKeys.add(decision.chosen);
           if (count >= MAX_ROUTES_PER_MODEL) {
             for (const other of candidates) {
@@ -4114,13 +4183,14 @@ async function runOrchestration(goal, opts) {
             },
             logOpts
           );
-          launch.fallbackReason = reasonCode;
+          launch.fallbackReason = reason;
           launch.cause = reasonCode;
           if (
             writerProbeAttempts >= PROBE_ATTEMPT_LIMIT ||
             Date.now() - writerProbeStartedAt >= PROBE_BUDGET_MS
           ) {
-            blockedReason = 'NO_ELIGIBLE_CANDIDATE: writer route probe budget exhausted';
+            blockedReason = 'PROBE_BUDGET_EXHAUSTED: writer route probe budget exhausted';
+            recordPostSelectFailure(blockedReason, 'PROBE_BUDGET_EXHAUSTED', 'gateway');
             break;
           }
           continue;
@@ -4914,6 +4984,30 @@ async function runOrchestration(goal, opts) {
       continue;
     }
     if (!session) {
+      const terminalReason = blockedReason || launch.fallbackReason || 'NO_LIVE_SESSION';
+      const step = liveSteps[item.id] || {};
+      persistStep(item.id, 'writer_post_selection_failed', {
+        reason: terminalReason,
+        failures: (step.failures || []).length
+          ? step.failures
+          : [
+              {
+                failedCandidateKey: launch.selected,
+                reason: terminalReason,
+                cause: launch.cause || terminalReason,
+                failureScope: launch.scope || 'local',
+              },
+            ],
+      });
+      decisions.recordDecision(
+        {
+          stage: decisions.Stage.FAILED,
+          workItemId: item.id,
+          chosen: launch.selected,
+          detail: terminalReason,
+        },
+        logOpts
+      );
       const isNoAlt =
         failedKeys.size > 0 ||
         triedKeys.size > 0 ||
@@ -4922,7 +5016,7 @@ async function runOrchestration(goal, opts) {
       outcome(
         item,
         ItemStatus.BLOCKED,
-        (verdictStop && verdictStop.reason) || blockedReason || 'NO_LIVE_SESSION',
+        (verdictStop && verdictStop.reason) || terminalReason,
         Object.assign(
           {
             reasonCode:
