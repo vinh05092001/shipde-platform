@@ -46,7 +46,7 @@ function priorFor(candidate, role, priors, now) {
   const bonus = TIER_BONUSES[tier] ?? null;
   if (bonus === null) return null;
 
-  const priorScore = Number.isFinite(match.score) ? match.score : benchmarkScore(match);
+  const priorScore = benchmarkScore(match) ?? (Number.isFinite(match.score) ? match.score : null);
   const sourceDates = (match.sources || [])
     .map((source) => source && source.retrievedAt)
     .filter(Boolean);
@@ -82,6 +82,15 @@ function isStale(retrievedAt, now) {
 function benchmarkScore(match) {
   const benchmarks =
     match && match.benchmarks && typeof match.benchmarks === 'object' ? match.benchmarks : match;
+  const intelligenceIndex = Array.isArray(benchmarks)
+    ? benchmarks.find((entry) => entry && entry.name === 'intelligenceIndex')?.score
+    : benchmarks && benchmarks.intelligenceIndex;
+  const intelligenceScore = Number(
+    intelligenceIndex && typeof intelligenceIndex === 'object'
+      ? intelligenceIndex.score
+      : intelligenceIndex
+  );
+  if (Number.isFinite(intelligenceScore)) return intelligenceScore;
   const entries = Array.isArray(benchmarks)
     ? benchmarks.map((entry) => [entry && entry.name, entry && entry.score])
     : Object.entries(benchmarks || {});

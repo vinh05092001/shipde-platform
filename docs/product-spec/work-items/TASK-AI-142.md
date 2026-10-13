@@ -252,3 +252,6 @@ Live evidence on Windows verified that `node tools/ai-brain/cli.js chat` fails w
 1. `HERMES_BIN` environment variable if set (launching `process.execPath` + `[HERMES_BIN, ...argv]` if `.js`, else `HERMES_BIN` + `argv`).
 2. On `win32`, searching each PATH directory for `hermes.cmd` and `<dir>/node_modules/hermes-agent/bin/hermes.js`, launching `process.execPath` with `[thatJs, ...argv]`.
 3. Otherwise falling back to `'hermes'`.
+
+## H3 AA priors
+Artificial Analysis intelligenceIndex is the primary prior for the selected reasoning models; each benchmark value records the AA leaderboard URL and retrieval timestamp. The current embedded leaderboard has no coding-index or agentic-index fields.

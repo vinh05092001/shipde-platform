@@ -1,20 +1,11 @@
 {
   "label": "EXTERNAL_PRIOR",
-  "generatedAt": "2026-10-05T12:24:19.740Z",
+  "generatedAt": "2026-10-13T00:00:00.000Z",
   "sources": [
     {
-      "id": "aa-coding-index",
-      "release": "2026-09",
-      "url": "https://benchlm.ai/benchmarks/aacodingindex",
-      "retrievedAt": "2026-10-05T12:24:19.741Z",
-      "tierRule": "T1>=74,T2>=66,T3>=50,else T4"
-    },
-    {
-      "id": "livebench",
-      "release": "2026-06-25",
-      "url": "https://benchlm.ai/benchmarks/liveBench",
-      "retrievedAt": "2026-10-05T12:24:19.741Z",
-      "tierRule": "used only without AA: T1>=79,T2>=73,T3>=66,else T4"
+      "id": "artificial-analysis-intelligence-index",
+      "url": "https://artificialanalysis.ai/leaderboards/models",
+      "retrievedAt": "2026-10-13T00:00:00.000Z"
     },
     {
       "id": "benchlm-model-metadata",
@@ -25,6 +16,272 @@
     }
   ],
   "ranking": [
+    {
+      "canonical": "gpt-6-astra",
+      "codingTier": "T3",
+      "reviewTier": "T3",
+      "releaseDate": "2026-09-03",
+      "contextWindow": 1050000,
+      "sources": [
+        {
+          "url": "https://artificialanalysis.ai/leaderboards/models",
+          "retrievedAt": "2026-10-13T00:00:00.000Z"
+        }
+      ],
+      "metadataSource": {
+        "url": "https://benchlm.ai/models/gpt-6-astra",
+        "retrievedAt": "2026-10-11T00:00:00.000Z"
+      },
+      "benchmarks": [
+        {
+          "name": "intelligenceIndex",
+          "score": 52.7,
+          "source": {
+            "url": "https://artificialanalysis.ai/leaderboards/models",
+            "retrievedAt": "2026-10-13T00:00:00.000Z"
+          }
+        }
+      ],
+      "score": 52.7
+    },
+    {
+      "canonical": "muse-spark-1-3",
+      "codingTier": "T4",
+      "reviewTier": "T4",
+      "releaseDate": "2026-09-02",
+      "contextWindow": 1000000,
+      "sources": [
+        {
+          "url": "https://artificialanalysis.ai/leaderboards/models",
+          "retrievedAt": "2026-10-13T00:00:00.000Z"
+        }
+      ],
+      "metadataSource": {
+        "url": "https://benchlm.ai/models/muse-spark-1-3",
+        "retrievedAt": "2026-10-11T00:00:00.000Z"
+      },
+      "benchmarks": [
+        {
+          "name": "intelligenceIndex",
+          "score": 48.1,
+          "source": {
+            "url": "https://artificialanalysis.ai/leaderboards/models",
+            "retrievedAt": "2026-10-13T00:00:00.000Z"
+          }
+        }
+      ],
+      "score": 48.1
+    },
+    {
+      "canonical": "grok-4-7",
+      "codingTier": "T4",
+      "reviewTier": "T4",
+      "releaseDate": "2026-09-21",
+      "contextWindow": 500000,
+      "sources": [
+        {
+          "url": "https://artificialanalysis.ai/leaderboards/models",
+          "retrievedAt": "2026-10-13T00:00:00.000Z"
+        }
+      ],
+      "metadataSource": {
+        "url": "https://benchlm.ai/models/grok-4-7",
+        "retrievedAt": "2026-10-11T00:00:00.000Z"
+      },
+      "benchmarks": [
+        {
+          "name": "intelligenceIndex",
+          "score": 46.4,
+          "source": {
+            "url": "https://artificialanalysis.ai/leaderboards/models",
+            "retrievedAt": "2026-10-13T00:00:00.000Z"
+          }
+        }
+      ],
+      "score": 46.4
+    },
+    {
+      "canonical": "qwen3-8-max",
+      "codingTier": "T4",
+      "reviewTier": "T4",
+      "releaseDate": "2026-08-03",
+      "contextWindow": 1000000,
+      "sources": [
+        {
+          "url": "https://artificialanalysis.ai/leaderboards/models",
+          "retrievedAt": "2026-10-13T00:00:00.000Z"
+        }
+      ],
+      "metadataSource": {
+        "url": "https://benchlm.ai/models/qwen3-8-max",
+        "retrievedAt": "2026-10-11T00:00:00.000Z"
+      },
+      "benchmarks": [
+        {
+          "name": "intelligenceIndex",
+          "score": 45.4,
+          "source": {
+            "url": "https://artificialanalysis.ai/leaderboards/models",
+            "retrievedAt": "2026-10-13T00:00:00.000Z"
+          }
+        }
+      ],
+      "score": 45.4
+    },
+    {
+      "canonical": "claude-opus-5-5",
+      "benchmarks": [
+        {
+          "name": "intelligenceIndex",
+          "score": 57.6,
+          "source": {
+            "url": "https://artificialanalysis.ai/leaderboards/models",
+            "retrievedAt": "2026-10-13T00:00:00.000Z"
+          }
+        }
+      ],
+      "score": 57.6,
+      "codingTier": "T3",
+      "reviewTier": "T3",
+      "sources": [
+        {
+          "url": "https://artificialanalysis.ai/leaderboards/models",
+          "retrievedAt": "2026-10-13T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "canonical": "claude-sonnet-5-5",
+      "benchmarks": [
+        {
+          "name": "intelligenceIndex",
+          "score": 56,
+          "source": {
+            "url": "https://artificialanalysis.ai/leaderboards/models",
+            "retrievedAt": "2026-10-13T00:00:00.000Z"
+          }
+        }
+      ],
+      "score": 56,
+      "codingTier": "T3",
+      "reviewTier": "T3",
+      "sources": [
+        {
+          "url": "https://artificialanalysis.ai/leaderboards/models",
+          "retrievedAt": "2026-10-13T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "canonical": "muse-wonder",
+      "benchmarks": [
+        {
+          "name": "intelligenceIndex",
+          "score": 55.8,
+          "source": {
+            "url": "https://artificialanalysis.ai/leaderboards/models",
+            "retrievedAt": "2026-10-13T00:00:00.000Z"
+          }
+        }
+      ],
+      "score": 55.8,
+      "codingTier": "T3",
+      "reviewTier": "T3",
+      "sources": [
+        {
+          "url": "https://artificialanalysis.ai/leaderboards/models",
+          "retrievedAt": "2026-10-13T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "canonical": "claude-fable-5-1",
+      "benchmarks": [
+        {
+          "name": "intelligenceIndex",
+          "score": 53.4,
+          "source": {
+            "url": "https://artificialanalysis.ai/leaderboards/models",
+            "retrievedAt": "2026-10-13T00:00:00.000Z"
+          }
+        }
+      ],
+      "score": 53.4,
+      "codingTier": "T3",
+      "reviewTier": "T3",
+      "sources": [
+        {
+          "url": "https://artificialanalysis.ai/leaderboards/models",
+          "retrievedAt": "2026-10-13T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "canonical": "gemini-4-argon",
+      "benchmarks": [
+        {
+          "name": "intelligenceIndex",
+          "score": 52.6,
+          "source": {
+            "url": "https://artificialanalysis.ai/leaderboards/models",
+            "retrievedAt": "2026-10-13T00:00:00.000Z"
+          }
+        }
+      ],
+      "score": 52.6,
+      "codingTier": "T3",
+      "reviewTier": "T3",
+      "sources": [
+        {
+          "url": "https://artificialanalysis.ai/leaderboards/models",
+          "retrievedAt": "2026-10-13T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "canonical": "gpt-6-1-sol",
+      "benchmarks": [
+        {
+          "name": "intelligenceIndex",
+          "score": 51.8,
+          "source": {
+            "url": "https://artificialanalysis.ai/leaderboards/models",
+            "retrievedAt": "2026-10-13T00:00:00.000Z"
+          }
+        }
+      ],
+      "score": 51.8,
+      "codingTier": "T3",
+      "reviewTier": "T3",
+      "sources": [
+        {
+          "url": "https://artificialanalysis.ai/leaderboards/models",
+          "retrievedAt": "2026-10-13T00:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "canonical": "claude-opus-5",
+      "benchmarks": [
+        {
+          "name": "intelligenceIndex",
+          "score": 50.8,
+          "source": {
+            "url": "https://artificialanalysis.ai/leaderboards/models",
+            "retrievedAt": "2026-10-13T00:00:00.000Z"
+          }
+        }
+      ],
+      "score": 50.8,
+      "codingTier": "T3",
+      "reviewTier": "T3",
+      "sources": [
+        {
+          "url": "https://artificialanalysis.ai/leaderboards/models",
+          "retrievedAt": "2026-10-13T00:00:00.000Z"
+        }
+      ]
+    },
     {
       "canonical": "gpt-5-6-sol",
       "codingTier": "T1",
@@ -66,49 +323,6 @@
         }
       ],
       "score": 79.3,
-      "searchSource": "benchlm-curated-public-benchmarks"
-    },
-    {
-      "canonical": "gpt-6-astra",
-      "codingTier": "T1",
-      "reviewTier": "T1",
-      "aaCodingIndex": 76.9,
-      "liveBench": 82.2,
-      "releaseDate": "2026-09-03",
-      "contextWindow": 1050000,
-      "sources": [
-        {
-          "retrievedAt": "2026-10-05T12:24:19.741Z",
-          "url": "https://benchlm.ai/benchmarks/aacodingindex"
-        },
-        {
-          "retrievedAt": "2026-10-05T12:24:19.741Z",
-          "url": "https://benchlm.ai/benchmarks/liveBench"
-        }
-      ],
-      "metadataSource": {
-        "url": "https://benchlm.ai/models/gpt-6-astra",
-        "retrievedAt": "2026-10-11T00:00:00.000Z"
-      },
-      "benchmarks": [
-        {
-          "name": "aaCodingIndex",
-          "score": 76.9,
-          "source": {
-            "retrievedAt": "2026-10-05T12:24:19.741Z",
-            "url": "https://benchlm.ai/benchmarks/aacodingindex"
-          }
-        },
-        {
-          "name": "liveBench",
-          "score": 82.2,
-          "source": {
-            "retrievedAt": "2026-10-05T12:24:19.741Z",
-            "url": "https://benchlm.ai/benchmarks/liveBench"
-          }
-        }
-      ],
-      "score": 79.6,
       "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
@@ -324,16 +538,14 @@
     },
     {
       "canonical": "deepseek-v4-1-flash",
-      "codingTier": "T1",
-      "reviewTier": "T1",
-      "aaCodingIndex": null,
-      "liveBench": 81.1,
+      "codingTier": "T4",
+      "reviewTier": "T4",
       "releaseDate": "2026-09-10",
       "contextWindow": 1000000,
       "sources": [
         {
-          "retrievedAt": "2026-10-05T12:24:19.741Z",
-          "url": "https://benchlm.ai/benchmarks/liveBench"
+          "url": "https://artificialanalysis.ai/leaderboards/models",
+          "retrievedAt": "2026-10-13T00:00:00.000Z"
         }
       ],
       "metadataSource": {
@@ -342,59 +554,15 @@
       },
       "benchmarks": [
         {
-          "name": "liveBench",
-          "score": 81.1,
+          "name": "intelligenceIndex",
+          "score": 39.5,
           "source": {
-            "retrievedAt": "2026-10-05T12:24:19.741Z",
-            "url": "https://benchlm.ai/benchmarks/liveBench"
+            "url": "https://artificialanalysis.ai/leaderboards/models",
+            "retrievedAt": "2026-10-13T00:00:00.000Z"
           }
         }
       ],
-      "score": 81.1,
-      "searchSource": "benchlm-curated-public-benchmarks"
-    },
-    {
-      "canonical": "muse-spark-1-3",
-      "codingTier": "T1",
-      "reviewTier": "T1",
-      "aaCodingIndex": 75.8,
-      "liveBench": 81.6,
-      "releaseDate": "2026-09-02",
-      "contextWindow": 1000000,
-      "sources": [
-        {
-          "retrievedAt": "2026-10-05T12:24:19.741Z",
-          "url": "https://benchlm.ai/benchmarks/aacodingindex"
-        },
-        {
-          "retrievedAt": "2026-10-05T12:24:19.741Z",
-          "url": "https://benchlm.ai/benchmarks/liveBench"
-        }
-      ],
-      "metadataSource": {
-        "url": "https://benchlm.ai/models/muse-spark-1-3",
-        "retrievedAt": "2026-10-11T00:00:00.000Z"
-      },
-      "benchmarks": [
-        {
-          "name": "aaCodingIndex",
-          "score": 75.8,
-          "source": {
-            "retrievedAt": "2026-10-05T12:24:19.741Z",
-            "url": "https://benchlm.ai/benchmarks/aacodingindex"
-          }
-        },
-        {
-          "name": "liveBench",
-          "score": 81.6,
-          "source": {
-            "retrievedAt": "2026-10-05T12:24:19.741Z",
-            "url": "https://benchlm.ai/benchmarks/liveBench"
-          }
-        }
-      ],
-      "score": 78.7,
-      "searchSource": "benchlm-curated-public-benchmarks"
+      "score": 39.5
     },
     {
       "canonical": "gpt-5-5",
@@ -557,37 +725,6 @@
       "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
-      "canonical": "grok-4-7",
-      "codingTier": "T2",
-      "reviewTier": "T2",
-      "aaCodingIndex": null,
-      "liveBench": 77.4,
-      "releaseDate": "2026-09-21",
-      "contextWindow": 500000,
-      "sources": [
-        {
-          "retrievedAt": "2026-10-05T12:24:19.741Z",
-          "url": "https://benchlm.ai/benchmarks/liveBench"
-        }
-      ],
-      "metadataSource": {
-        "url": "https://benchlm.ai/models/grok-4-7",
-        "retrievedAt": "2026-10-11T00:00:00.000Z"
-      },
-      "benchmarks": [
-        {
-          "name": "liveBench",
-          "score": 77.4,
-          "source": {
-            "retrievedAt": "2026-10-05T12:24:19.741Z",
-            "url": "https://benchlm.ai/benchmarks/liveBench"
-          }
-        }
-      ],
-      "score": 77.4,
-      "searchSource": "benchlm-curated-public-benchmarks"
-    },
-    {
       "canonical": "muse-spark-1-2",
       "codingTier": "T2",
       "reviewTier": "T2",
@@ -616,49 +753,6 @@
         }
       ],
       "score": 72.2,
-      "searchSource": "benchlm-curated-public-benchmarks"
-    },
-    {
-      "canonical": "qwen3-8-max",
-      "codingTier": "T2",
-      "reviewTier": "T2",
-      "aaCodingIndex": 71.8,
-      "liveBench": 78.5,
-      "releaseDate": "2026-08-03",
-      "contextWindow": 1000000,
-      "sources": [
-        {
-          "retrievedAt": "2026-10-05T12:24:19.741Z",
-          "url": "https://benchlm.ai/benchmarks/aacodingindex"
-        },
-        {
-          "retrievedAt": "2026-10-05T12:24:19.741Z",
-          "url": "https://benchlm.ai/benchmarks/liveBench"
-        }
-      ],
-      "metadataSource": {
-        "url": "https://benchlm.ai/models/qwen3-8-max",
-        "retrievedAt": "2026-10-11T00:00:00.000Z"
-      },
-      "benchmarks": [
-        {
-          "name": "aaCodingIndex",
-          "score": 71.8,
-          "source": {
-            "retrievedAt": "2026-10-05T12:24:19.741Z",
-            "url": "https://benchlm.ai/benchmarks/aacodingindex"
-          }
-        },
-        {
-          "name": "liveBench",
-          "score": 78.5,
-          "source": {
-            "retrievedAt": "2026-10-05T12:24:19.741Z",
-            "url": "https://benchlm.ai/benchmarks/liveBench"
-          }
-        }
-      ],
-      "score": 75.2,
       "searchSource": "benchlm-curated-public-benchmarks"
     },
     {
