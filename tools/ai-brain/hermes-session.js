@@ -784,6 +784,38 @@ function writeProvidersConfig(candidate, options, deps) {
   };
 }
 
+/** Sends a minimal OpenAI-compatible request without exposing the credential. */
+async function probeHermesCandidate(candidate, apiKeyEnv, env, options) {
+  const opts = options || {};
+  const apiKey = env && env[apiKeyEnv];
+  if (!apiKey) return { ok: false, status: 0, body: 'Missing provider credential' };
+  const baseUrl = String(candidate.accessPath).replace(/\/+$/, '');
+  const url = /\/chat\/completions$/i.test(baseUrl) ? baseUrl : `${baseUrl}/chat/completions`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), opts.timeoutMs || 30000);
+  try {
+    const response = await (opts.fetch || globalThis.fetch)(url, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: candidate.modelId,
+        messages: [{ role: 'user', content: 'x' }],
+        max_tokens: 1,
+      }),
+      signal: controller.signal,
+    });
+    return { ok: response.ok, status: response.status, body: await response.text() };
+  } catch (error) {
+    return {
+      ok: false,
+      status: 0,
+      body: error && error.name === 'AbortError' ? 'Request timeout' : 'Probe request failed',
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 /**
  * Builds the Hermes command arguments:
  * 'chat -m <modelId> --provider <provider-name> --continue <sessionId> --create-if-missing' plus skill file.
@@ -981,7 +1013,8 @@ async function launchHermesSession(options, deps) {
 
   const forbiddenDomains = [...(opts.forbiddenFailureDomains || [])];
   const excludedCandidates = [...(opts.excludedCandidates || [])];
-  const maxAttempts = opts.maxAttempts || 3;
+  const probeReasons = [];
+  const maxAttempts = opts.maxAttempts || 8;
   let attempt = 0;
 
   while (attempt < maxAttempts) {
@@ -1002,11 +1035,13 @@ async function launchHermesSession(options, deps) {
     );
 
     if (!selection || !selection.candidate) {
+      const baseReason =
+        (selection && (selection.reason || selection.refused)) || 'NO_REASONING_CANDIDATE';
       const err = new Error(
-        (selection && (selection.reason || selection.refused)) || 'NO_REASONING_CANDIDATE'
+        probeReasons.length ? `NO_REASONING_CANDIDATE: ${probeReasons.join('; ')}` : baseReason
       );
       err.code = (selection && selection.refused) || 'NO_REASONING_CANDIDATE';
-      err.reasons = (selection && selection.rejected) || [];
+      err.reasons = [...((selection && selection.rejected) || []), ...probeReasons];
       throw err;
     }
 
@@ -1015,6 +1050,76 @@ async function launchHermesSession(options, deps) {
 
     const candidate = selection.candidate;
     const configResult = writeProvidersConfig(candidate, opts, d);
+
+    if (!opts.dryRun || opts.probe) {
+      const probeFn = d.probe || opts.probeFn || probeHermesCandidate;
+      const probeResult = await probeFn(candidate, configResult.apiKeyEnv, env, {
+        timeoutMs: opts.probeTimeoutMs || 30000,
+        fetch: d.fetch || opts.fetch,
+      });
+      if (!probeResult || probeResult.ok !== true) {
+        const status = Number(probeResult && probeResult.status) || 0;
+        const body = String((probeResult && probeResult.body) || 'Probe failed');
+        let classifierBody = body;
+        if (status >= 500 && status <= 599) classifierBody += ' transient service unavailable';
+        if (status === 503 && /insufficient[_ ]credits?|quota/i.test(body))
+          classifierBody = `[402] ${body}`;
+        const classification = classifier.classifyFailure({
+          httpStatus: status,
+          exitCode: status === 0 ? 1 : 0,
+          cause: status === 0 ? classifier.Cause.TIMEOUT : undefined,
+          body: classifierBody,
+          stderr: status === 0 ? 'timeout' : '',
+          candidateKey: candidate.candidateKey,
+          accountId: candidate.accountId,
+        });
+        const routeFailure =
+          status === 0 ||
+          status === 429 ||
+          status >= 500 ||
+          classification.scope === classifier.Scope.MODEL ||
+          classification.scope === classifier.Scope.UPSTREAM ||
+          classification.scope === classifier.Scope.GATEWAY ||
+          classification.scope === classifier.Scope.ACCESS_PATH ||
+          classification.scope === classifier.Scope.ACCOUNT;
+        if (!routeFailure) {
+          const err = new Error('HERMES_ROUTE_PROBE_FAILED: ' + classification.cause);
+          err.code = 'HERMES_ROUTE_PROBE_FAILED';
+          err.classification = classification;
+          throw err;
+        }
+        const reason = `HERMES_ROUTE_PROBE_FAILED ${classification.cause} status=${status || 'timeout'}`;
+        probeReasons.push(`${candidate.candidateKey}: ${reason}`);
+        excludedCandidates.push(candidate.candidateKey);
+        try {
+          (d.decisions || decisionsApi).recordDecision(
+            {
+              stage: decisionsApi.Stage.REFUSED,
+              workItemId: opts.taskId || 'hermes-reasoning-session',
+              harness: 'hermes',
+              chosen: null,
+              rejected: [{ candidateKey: candidate.candidateKey, reason }],
+              detail: reason,
+            },
+            {
+              dir:
+                opts.decisionDir ||
+                d.decisionDir ||
+                path.join(rootDir, 'tools', 'ai-brain', 'data', 'decisions'),
+            }
+          );
+        } catch (logErr) {
+          const err = new Error(
+            'DECISION_LOG_WRITE_FAILURE: ' + (logErr.message || String(logErr))
+          );
+          err.code = 'DECISION_LOG_WRITE_FAILURE';
+          throw err;
+        }
+        session.candidateKey = null;
+        saveSession(session, opts, d);
+        continue;
+      }
+    }
 
     const argv = buildHermesArgv(candidate, session, {
       rootDir,
@@ -1303,6 +1408,7 @@ async function chatCommand(args, deps) {
   if (args.goal) opts.goal = args.goal;
   if (args.reselect) opts.reselect = true;
   if (args['dry-run'] || args.dryRun) opts.dryRun = true;
+  if (args.probe) opts.probe = true;
   if (args['decision-dir'] || args.decisionDir)
     opts.decisionDir = args['decision-dir'] || args.decisionDir;
   if (args['skip-decision-log'] || args.skipDecisionLog) opts.skipDecisionLog = true;

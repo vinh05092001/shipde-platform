@@ -255,3 +255,6 @@ Live evidence on Windows verified that `node tools/ai-brain/cli.js chat` fails w
 
 ## H3 AA priors
 Artificial Analysis intelligenceIndex is the primary prior for the selected reasoning models; each benchmark value records its source URL and retrieval timestamp. The embedded leaderboard includes selected `aaAgenticIndex` values sourced from benchlm.ai; coding-index coverage remains separate and is present only where collected.
+
+## Part H3 route probe (2026-10-13)
+Before launching Hermes or reusing a stored binding, the Controller sends a minimal OpenAI-compatible chat completion to the selected route. Classified quota, rate-limit, timeout and availability failures exclude that candidate, are recorded in the decision log, and trigger bounded reselection (up to eight candidates). Dry-run skips live probes unless --probe is supplied. The probe reads the provider key using the registry-declared environment variable name; credentials are never recorded.
