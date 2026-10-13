@@ -494,10 +494,20 @@ describe('TASK-AI-70: catalogue import through the CLI', () => {
     const result = w.dispatchJson({ role: 'writer', proofFloor: 'NONE' });
     assert.equal(result.status, 0, result.text);
     const payload = parseJsonTail(result.text);
-    const claudeRanked = payload.top3.filter((r) =>
-      String(r.modelId).includes('test-claude-family')
+    const decisionFiles = fs
+      .readdirSync(w.decisionDir)
+      .filter((f) => f.endsWith('.jsonl') || f.endsWith('.json'));
+    assert.ok(decisionFiles.length > 0, 'decision file should be written');
+    const decisionContent = fs.readFileSync(path.join(w.decisionDir, decisionFiles[0]), 'utf8');
+    const decisionLog = JSON.parse(decisionContent.trim().split('\n')[0]);
+    const claudeRanked = (decisionLog.ranking || []).filter((r) =>
+      String(r.candidateKey).includes('test-claude-family')
     );
     assert.ok(claudeRanked.length > 0, 'the Claude-family row remains eligible for ranking');
+    const claudeRejected = (payload.rejected || []).filter((r) =>
+      String(r.candidateKey).includes('test-claude-family')
+    );
+    assert.equal(claudeRejected.length, 0, 'Claude-family row must not be rejected');
   });
 
   test('AC-AI-70-06: re-import is idempotent, unknown and deferred rows are skipped, malformed rows counted', (t) => {

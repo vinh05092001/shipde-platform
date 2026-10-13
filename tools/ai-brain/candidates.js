@@ -1098,9 +1098,13 @@ function poolAccountCandidates(opts) {
       if (hasRunsDir && quotaReading && Array.isArray(quotaReading.rows)) {
         const familyRows = quotaReading.rows.filter((r) => r.family === family);
         if (familyRows.length > 0) {
-          quotaExhausted = familyRows.some(
+          const isZero = familyRows.some(
             (r) => r.remainingPercent === 0 || r.remainingPercent <= 0 || r.disabled === true
           );
+          if (isZero) {
+            if (!o.keepExhausted) continue;
+            quotaExhausted = true;
+          }
         }
       }
 
