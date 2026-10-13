@@ -64,19 +64,28 @@ function classifyProbeFailure(result) {
 async function boundedProbe(probeFn, candidate, apiKeyEnv, env, options) {
   const opts = options || {};
   const timeoutMs = Math.max(1, Number(opts.timeoutMs) || 8000);
+  const controller = new AbortController();
+  const onAbort = () => controller.abort();
+  if (opts.signal) {
+    if (opts.signal.aborted) controller.abort();
+    else opts.signal.addEventListener('abort', onAbort, { once: true });
+  }
   let timer;
   try {
     return await Promise.race([
-      Promise.resolve().then(() => probeFn(candidate, apiKeyEnv, env, opts)),
+      Promise.resolve().then(() =>
+        probeFn(candidate, apiKeyEnv, env, { ...opts, signal: controller.signal })
+      ),
       new Promise((resolve) => {
-        timer = setTimeout(
-          () => resolve({ ok: false, status: 0, body: 'Probe request timed out' }),
-          timeoutMs
-        );
+        timer = setTimeout(() => {
+          controller.abort();
+          resolve({ ok: false, status: 0, body: 'Probe request timeout' });
+        }, timeoutMs);
       }),
     ]);
   } finally {
     clearTimeout(timer);
+    if (opts.signal) opts.signal.removeEventListener('abort', onAbort);
   }
 }
 

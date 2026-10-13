@@ -3934,7 +3934,9 @@ describe('TASK-AI-64 isolated route covers the opencode harness (DEFECT L)', () 
             },
           },
           env: { NINEROUTER_API_KEY: 'test-key' },
-          routeProbe: async (probeCandidate) => {
+          routeProbe: async (probeCandidate, _key, _env, opts) => {
+            assert.ok(opts.signal instanceof AbortSignal, 'writer invokes injected routeProbe');
+            assert.equal(opts.signal.aborted, false);
             probedModels.push(probeCandidate.modelId);
             if (probeCandidate.modelId.endsWith('low')) {
               return { ok: false, status: 402, body: 'insufficient credits' };

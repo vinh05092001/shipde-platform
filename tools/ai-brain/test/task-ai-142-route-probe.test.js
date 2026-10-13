@@ -2,7 +2,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { probeRoute, classifyProbeFailure } = require('../route-probe');
+const { probeRoute, classifyProbeFailure, boundedProbe } = require('../route-probe');
 
 test('shared route probe sends the worker model id and realistic request to its gateway', async () => {
   let request;
@@ -98,10 +98,16 @@ test('reviewer gateway routes are probed on every harness before launch', async 
   try {
     for (const harness of ['opencode', 'paseo', 'hermes', 'cline', 'codex']) {
       let probes = 0;
-      const { lane, options } = reviewerFixture(harness, dir, async () => {
-        probes++;
-        return { ok: false, status: 403 };
-      });
+      const { lane, options } = reviewerFixture(
+        harness,
+        dir,
+        async (_candidate, _key, _env, opts) => {
+          assert.ok(opts.signal instanceof AbortSignal);
+          assert.equal(opts.signal.aborted, false);
+          probes++;
+          return { ok: false, status: 403 };
+        }
+      );
       options.isolatedWorker = harness !== 'codex';
       const result = await lane('a'.repeat(40));
       assert.equal(result.cause, 'REVIEWER_ROUTE_PROBE_FAILED', harness);
@@ -204,4 +210,44 @@ test('shared route probe classifies quota and alias failures without preserving 
     'ALIAS_MISMATCH'
   );
   assert.equal(classifyProbeFailure({ status: 429, body: 'rate limited' }), 'RATE_LIMITED');
+});
+
+test('bounded probe aborts the signal received by a timed-out injected probe', async () => {
+  let signal;
+  const result = await boundedProbe(
+    async (_candidate, _key, _env, opts) => {
+      signal = opts.signal;
+      return new Promise(() => {});
+    },
+    {},
+    'KEY',
+    {},
+    { timeoutMs: 10 }
+  );
+  assert.equal(signal.aborted, true);
+  assert.equal(classifyProbeFailure(result), 'TIMEOUT');
+});
+
+test('bounded probe cancellation reaches the HTTP client', async () => {
+  let signal;
+  await boundedProbe(
+    probeRoute,
+    { endpoint: 'https://gateway.example/v1', modelId: 'model' },
+    'KEY',
+    { KEY: 'fixture' },
+    {
+      timeoutMs: 10,
+      fetch: async (_url, init) => {
+        signal = init.signal;
+        return new Promise((_resolve, reject) => {
+          signal.addEventListener(
+            'abort',
+            () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })),
+            { once: true }
+          );
+        });
+      },
+    }
+  );
+  assert.equal(signal.aborted, true);
 });

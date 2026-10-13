@@ -66,6 +66,9 @@ const {
 } = require('./failure-classifier');
 const { materialiseExercise, captureFailBefore } = require('./isolation-launcher');
 const sharedRouteProbe = require('./route-probe');
+const MAX_ROUTES_PER_MODEL = 2;
+const PROBE_ATTEMPT_LIMIT = 20;
+const PROBE_BUDGET_MS = 180000;
 
 const ItemStatus = Object.freeze({
   COMPLETED: 'completed',
@@ -777,6 +780,8 @@ function reviewLane(
 
     const probeCandidate = routeProbeCandidate(candidate, route, registry, false);
     if (!probeCandidate) {
+      // CLI-only reviewers remain eligible; skipping HTTP preflight with a WARNING
+      // preserves valid CLI reviewers that would otherwise be excluded.
       decisions.recordDecision(
         {
           stage: decisions.Stage.WARNING,
@@ -800,20 +805,23 @@ function reviewLane(
       let result = { ok: false, status: 0, body: 'Probe route configuration unavailable' };
       if (
         probeCandidate &&
-        count <= 2 &&
-        reviewerProbeAttempts < 20 &&
-        Date.now() - reviewerProbeStartedAt < 180000
+        count <= MAX_ROUTES_PER_MODEL &&
+        reviewerProbeAttempts < PROBE_ATTEMPT_LIMIT &&
+        Date.now() - reviewerProbeStartedAt < PROBE_BUDGET_MS
       ) {
         reviewerProbeAttempts += 1;
-        const probeFn = o.routeProbe || sharedRouteProbe.probeRoute;
+        // Invoke the caller-provided probe directly through the timeout wrapper.
         result = await sharedRouteProbe.boundedProbe(
-          probeFn,
+          o.routeProbe || sharedRouteProbe.probeRoute,
           probeCandidate,
           probeCandidate.apiKeyEnv,
           Object.assign({}, process.env, o.env || {}),
           { timeoutMs: 8000, fetch: o.fetch }
         );
-      } else if (reviewerProbeAttempts >= 20 || Date.now() - reviewerProbeStartedAt >= 180000) {
+      } else if (
+        reviewerProbeAttempts >= PROBE_ATTEMPT_LIMIT ||
+        Date.now() - reviewerProbeStartedAt >= PROBE_BUDGET_MS
+      ) {
         result = { ok: false, status: 0, body: 'Probe budget exhausted' };
       }
       if (!result || result.ok !== true) {
@@ -4066,14 +4074,14 @@ async function runOrchestration(goal, opts) {
         const count = (writerProbeCounts.get(modelId) || 0) + 1;
         writerProbeCounts.set(modelId, count);
         const routeCandidate = routeProbeCandidate(candidate, route, registry);
-        const remainingMs = 180000 - (Date.now() - writerProbeStartedAt);
+        const remainingMs = PROBE_BUDGET_MS - (Date.now() - writerProbeStartedAt);
         let probeResult = { ok: false, status: 0, body: 'Probe route configuration unavailable' };
-        if (routeCandidate && writerProbeAttempts < 20 && remainingMs > 0) {
+        if (routeCandidate && writerProbeAttempts < PROBE_ATTEMPT_LIMIT && remainingMs > 0) {
           writerProbeAttempts += 1;
           const timeoutMs = Math.min(8000, remainingMs);
-          const probeFn = o.routeProbe || sharedRouteProbe.probeRoute;
+          // Invoke the caller-provided probe directly through the timeout wrapper.
           probeResult = await sharedRouteProbe.boundedProbe(
-            probeFn,
+            o.routeProbe || sharedRouteProbe.probeRoute,
             routeCandidate,
             routeCandidate.apiKeyEnv,
             Object.assign({}, process.env, o.env || {}),
@@ -4084,7 +4092,7 @@ async function runOrchestration(goal, opts) {
           const reasonCode = sharedRouteProbe.classifyProbeFailure(probeResult);
           const reason = 'WRITER_ROUTE_PROBE_FAILED ' + reasonCode;
           failedKeys.add(decision.chosen);
-          if (count >= 2) {
+          if (count >= MAX_ROUTES_PER_MODEL) {
             for (const other of candidates) {
               const otherModel = String(other.modelId || other.model || '')
                 .toLowerCase()
@@ -4108,7 +4116,10 @@ async function runOrchestration(goal, opts) {
           );
           launch.fallbackReason = reasonCode;
           launch.cause = reasonCode;
-          if (writerProbeAttempts >= 20 || Date.now() - writerProbeStartedAt >= 180000) {
+          if (
+            writerProbeAttempts >= PROBE_ATTEMPT_LIMIT ||
+            Date.now() - writerProbeStartedAt >= PROBE_BUDGET_MS
+          ) {
             blockedReason = 'NO_ELIGIBLE_CANDIDATE: writer route probe budget exhausted';
             break;
           }
