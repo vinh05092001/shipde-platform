@@ -1897,6 +1897,7 @@ async function runProfileDispatch(args, deps) {
     jevModel: assessment.jevModel || null,
     confidence: assessment.confidence !== undefined ? assessment.confidence : null,
     probabilities: assessment.probabilities || null,
+    chosenCandidate: result.ranking.find((c) => c.candidateKey === result.chosen) || null,
     ranking: result.ranking.map((c) => ({
       candidateKey: c.candidateKey,
       score: c.score,
@@ -1918,7 +1919,7 @@ async function runProfileDispatch(args, deps) {
       })(),
       capabilityEvidence: c.capabilities || {},
     })),
-    rejected: jsonRejectedSlice(result, profile),
+    rejected: result.rejected,
     rejectedCount: result.rejected.length,
     chosen: result.chosen,
     reason: result.reason,

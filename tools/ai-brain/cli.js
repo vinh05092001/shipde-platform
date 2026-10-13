@@ -3532,9 +3532,9 @@ function tokenReportCommand(args, deps = {}) {
   const records = [];
   const decisionsDir = typeof args['decision-dir'] === 'string' ? args['decision-dir'] : null;
   if (decisionsDir && fsx.existsSync(decisionsDir)) {
-    for (const name of fsx.readdirSync(decisionsDir)) {
-      if (!name.endsWith('.jsonl')) continue;
-      for (const line of fsx.readFileSync(path.join(decisionsDir, name), 'utf8').split(/\r?\n/)) {
+    const decisionLog = require('./decisions');
+    for (const name of decisionLog.decisionFiles(decisionsDir)) {
+      for (const { line } of decisionLog.decisionLines(path.join(decisionsDir, name), fsx)) {
         try {
           const row = JSON.parse(line);
           if (!row.tokenUsage) continue;
@@ -4340,6 +4340,11 @@ function main(argv = process.argv.slice(2), deps = {}) {
     return;
   }
 
+  if (command === 'decisions' && args._[1] === 'compact') {
+    console.log(JSON.stringify(require('./decisions').compactDecisions({ dir: args.dir })));
+    return;
+  }
+
   console.error('Lệnh không rõ: ' + command);
   console.error(
     'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | discovery | account | probe | qualify | serena | sources | evidence | review | orchestrate | intake | plan | next | merge | goal | priors refresh | chat | goal session'
@@ -4402,6 +4407,7 @@ module.exports = {
       };
     }
     if (args.loop && !nextDeps.refreshRouteHealth) {
+      const fs = require('fs');
       nextDeps.refreshRouteHealth = async ({ now }) => {
         const routeHealthApi = require('./route-health');
         const healthFile =

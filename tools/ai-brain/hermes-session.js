@@ -618,6 +618,7 @@ function selectReasoningCandidate(options, deps) {
     workItemId: profile.taskId,
     role: profile.role,
     chosen: chosenKey,
+    chosenCandidate,
     harness: 'hermes',
     candidates: rankResult.ranking.map((c) => ({
       candidateKey: c.candidateKey,
