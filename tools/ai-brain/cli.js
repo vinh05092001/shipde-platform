@@ -3868,7 +3868,10 @@ function main(argv = process.argv.slice(2), deps = {}) {
 
   if (command === 'priors' && args._[1] === 'refresh') {
     const { refreshPriors } = require('./priors');
-    const sourceFile = args.source || process.env.AI_BRAIN_PRIORS_SOURCE;
+    const sourceFile =
+      args.source ||
+      process.env.AI_BRAIN_PRIORS_SOURCE ||
+      path.join(__dirname, 'priors-sources', 'public.json');
     if (!sourceFile) {
       console.error(
         'PRIORS_SEARCH_SOURCE_REQUIRED: set AI_BRAIN_PRIORS_SOURCE to a JSON source descriptor'
@@ -3924,6 +3927,8 @@ function main(argv = process.argv.slice(2), deps = {}) {
       return;
     }
     const search = async (query) => {
+      if (provider.kind === 'public-leaderboards')
+        return require('./priors-public').publicDocuments({ descriptor: provider });
       const headers = { 'content-type': 'application/json' };
       const allowedHeaders = new Set(['accept', 'user-agent']);
       for (const [name, value] of Object.entries(provider.headers || {})) {
@@ -3961,12 +3966,14 @@ function main(argv = process.argv.slice(2), deps = {}) {
     refreshPriors({
       search,
       sourceId: path.relative(allowedRoots[0], resolvedSource),
+      preserveHistory: true,
       file: outputFile,
     })
       .then((document) =>
         console.log(
           JSON.stringify({
             models: document.ranking.length,
+            unmatchedLiveModels: document.unmatchedLiveModels,
             stale: document.ranking.filter((item) => item.stale).length,
             file: args.file || 'default',
           })

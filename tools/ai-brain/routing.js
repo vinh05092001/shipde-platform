@@ -1084,9 +1084,10 @@ function evidenceAgePenalty(candidate, now) {
 function scoreForProfile(candidate, assessment, ctx) {
   const now = (ctx && ctx.now) || Date.now();
   const prior = priorFor(candidate, ctx && ctx.role, ctx && ctx.priors, now);
+  candidate.priorUnknown = Boolean(prior && prior.priorUnknown);
   const latency = latencyScoreOf(candidate);
   const internalQuality = qualityScoreOf(candidate, now);
-  const priorUsable = prior && !prior.stale;
+  const priorUsable = prior && !prior.stale && (!prior.priorUnknown || internalQuality === null);
   const storedEvidence = evidence.getEvidence(ctx && ctx.evidenceData, candidate) || [];
   const internalEvidence =
     storedEvidence.length > 0 ? storedEvidence : (candidate && candidate.evidence) || [];

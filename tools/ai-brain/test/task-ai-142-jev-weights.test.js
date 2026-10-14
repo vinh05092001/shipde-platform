@@ -288,7 +288,9 @@ test('quality-only reasoning scores retain known values and order despite unknow
 });
 
 test('healthy reasoning candidates use existing benchmark priors to choose the strongest', () => {
-  const priors = require('../priors').loadPriors();
+  const priors = require('../priors').loadPriors(
+    require('path').join(__dirname, 'fixtures', 'priors-20261013.json')
+  );
   const rows = ['deepseek-v4-1-flash', 'gpt-6-astra', 'claude-opus-5-5'].map((modelId) => ({
     harness: 'hermes',
     accessPath: 'https://example.test/v1',
