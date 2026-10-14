@@ -382,10 +382,16 @@ function canonicalHermesModelId(modelId) {
 async function refreshReasoningContext(options, deps) {
   const d = { ...deps };
   // Explicit candidate/registry fixtures remain offline unless a fetcher is supplied.
-  if (!d.fetchModels && (d.registry || d.candidateList || Array.isArray(d.candidates))) return d;
+  if (
+    !d.fetchModels &&
+    !d.fetch &&
+    !(options && options.fetch) &&
+    (d.registry || d.candidateList || Array.isArray(d.candidates))
+  )
+    return d;
   const registry = d.registry || (d.sources || sourcesApi).loadSources(d.sourceOpts);
   const { probeSource } = require('./source-discovery');
-  const fetcher = d.fetchModels || globalThis.fetch;
+  const fetcher = d.fetchModels || d.fetch || (options && options.fetch) || globalThis.fetch;
   const sources = await Promise.all(
     (registry.sources || []).map(async (source) => {
       if (!source.endpoint || source.servesModels === false || source.enabled === false)
@@ -410,38 +416,88 @@ async function refreshReasoningContext(options, deps) {
   return { ...d, registry: { ...registry, sources } };
 }
 
-function fileExists(filePath, fsApi) {
+let lastFsErrorReason = null;
+const fsCheckReasons = [];
+
+function recordFsCheckError(targetPath, err, context) {
+  const code = (err && err.code) || 'UNKNOWN';
+  const reason = `${code}: ${context} check failed for '${targetPath}'`;
+  lastFsErrorReason = reason;
+  fsCheckReasons.push({ path: targetPath, code, reason, timestamp: Date.now() });
+  return reason;
+}
+
+function getFsCheckReasons() {
+  return fsCheckReasons.slice();
+}
+
+function clearFsCheckReasons() {
+  fsCheckReasons.length = 0;
+  lastFsErrorReason = null;
+  fileExists.lastReason = null;
+  dirExists.lastReason = null;
+}
+
+function fileExists(filePath, fsApi, options) {
   const f = fsApi || fs;
   try {
-    if (typeof f.existsSync === 'function' && f.existsSync(filePath)) {
-      return true;
+    if (typeof f.existsSync === 'function') {
+      const exists = f.existsSync(filePath);
+      if (exists) {
+        if (typeof f.statSync === 'function') {
+          const st = f.statSync(filePath);
+          return Boolean(st && (typeof st.isFile === 'function' ? st.isFile() : true));
+        }
+        return true;
+      }
+      return false;
     }
     if (typeof f.statSync === 'function') {
-      f.statSync(filePath);
-      return true;
+      const st = f.statSync(filePath);
+      return Boolean(st && (typeof st.isFile === 'function' ? st.isFile() : true));
     }
   } catch (err) {
-    if (err && (err.code === 'EPERM' || err.code === 'EACCES')) {
-      return true;
+    const reason = recordFsCheckError(filePath, err, 'fileExists');
+    fileExists.lastReason = reason;
+    if (options && Array.isArray(options.reasons)) {
+      options.reasons.push(reason);
     }
+    if (typeof options === 'function') {
+      options(reason, err);
+    }
+    return false;
   }
   return false;
 }
 
-function dirExists(dirPath, fsApi) {
+function dirExists(dirPath, fsApi, options) {
   const f = fsApi || fs;
   try {
-    if (typeof f.existsSync === 'function' && f.existsSync(dirPath)) {
-      return true;
+    if (typeof f.existsSync === 'function') {
+      const exists = f.existsSync(dirPath);
+      if (exists) {
+        if (typeof f.statSync === 'function') {
+          const st = f.statSync(dirPath);
+          return Boolean(st && (typeof st.isDirectory === 'function' ? st.isDirectory() : true));
+        }
+        return true;
+      }
+      return false;
     }
     if (typeof f.statSync === 'function') {
       const st = f.statSync(dirPath);
-      return st && typeof st.isDirectory === 'function' ? st.isDirectory() : true;
+      return Boolean(st && (typeof st.isDirectory === 'function' ? st.isDirectory() : true));
     }
   } catch (err) {
-    if (err && (err.code === 'EPERM' || err.code === 'EACCES')) {
-      return true;
+    const reason = recordFsCheckError(dirPath, err, 'dirExists');
+    dirExists.lastReason = reason;
+    if (options && Array.isArray(options.reasons)) {
+      options.reasons.push(reason);
     }
+    if (typeof options === 'function') {
+      options(reason, err);
+    }
+    return false;
   }
   return false;
 }
@@ -461,11 +517,24 @@ function getCodexPaths(options, deps) {
       o.codexConfigFile ||
       d.codexConfigFile ||
       path.join(codexDir, 'config.toml');
-    const home = o.homeDir || d.homeDir || o.home || d.home || path.dirname(codexDir);
+    const home =
+      o.homeDir ||
+      d.homeDir ||
+      (typeof o.homedir === 'function' ? o.homedir() : o.homedir) ||
+      (typeof d.homedir === 'function' ? d.homedir() : d.homedir) ||
+      o.home ||
+      d.home ||
+      path.dirname(codexDir);
     return { home, codexDir, authFile, configFile };
   }
 
-  const explicitHome = o.homeDir || d.homeDir || o.home || d.home;
+  const explicitHome =
+    o.homeDir ||
+    d.homeDir ||
+    (typeof o.homedir === 'function' ? o.homedir() : o.homedir) ||
+    (typeof d.homedir === 'function' ? d.homedir() : d.homedir) ||
+    o.home ||
+    d.home;
   if (explicitHome) {
     const codexDir = o.codexDir || d.codexDir || path.join(explicitHome, '.codex');
     const authFile =
@@ -555,8 +624,9 @@ function hasCodexAuth(options, deps) {
   const fsApi = d.fs || o.fs || fs;
   const { authFile } = getCodexPaths(o, d);
   try {
-    return fileExists(authFile, fsApi);
-  } catch {
+    return fileExists(authFile, fsApi, d.reasons || o.reasons);
+  } catch (err) {
+    recordFsCheckError(authFile, err, 'hasCodexAuth');
     return false;
   }
 }
@@ -592,6 +662,36 @@ function readCodexConfigModels(options, deps) {
     }
   } catch {}
   return ['gpt-6.1-sol'];
+}
+
+function isCodexContextEligible(options, deps) {
+  const o = options || {};
+  const d = deps || {};
+  const cand = o.candidate || d.candidate;
+  const prov =
+    o.provider ||
+    d.provider ||
+    (cand && (cand.provider || cand.gateway || cand.sourceId || cand.source));
+  if (prov) {
+    return prov === 'openai-codex' || prov === 'codex-app-server' || prov === 'codex';
+  }
+  if (cand) {
+    return false;
+  }
+  return Boolean(
+    o.isCodex ||
+    d.isCodex ||
+    o.isCodexCandidate ||
+    d.isCodexCandidate ||
+    o.isOpenAiCodex ||
+    d.isOpenAiCodex ||
+    o.includeOpenAiCodex ||
+    d.includeOpenAiCodex ||
+    o.codexAuthPath ||
+    d.codexAuthPath ||
+    o.codexConfigPath ||
+    d.codexConfigPath
+  );
 }
 
 function resolveHermesContextWindow(modelId, options, deps) {
@@ -668,22 +768,26 @@ function resolveHermesContextWindow(modelId, options, deps) {
   }
 
   // 4. Same canonical model on other already-loaded provider catalogues.
+  // Allowed ONLY for openai-codex / codex-app-server candidates when catalogue/cache metadata is absent.
+  // For every other Hermes candidate, a model without window on its producing source stays unverified.
   // Keep the most conservative reported window; priors are not context evidence.
-  const { toPositiveInteger } = require('./source-discovery');
-  const reportedWindows = [];
-  for (const source of (registry && registry.sources) || []) {
-    for (const [id, meta] of Object.entries((source && source.modelMeta) || {})) {
-      if (!canonical || canonicalHermesModelId(id) !== canonical || !meta) continue;
-      const cw =
-        toPositiveInteger(meta.contextWindow) ??
-        toPositiveInteger(meta.capabilities?.contextWindow) ??
-        toPositiveInteger(meta.context_window) ??
-        toPositiveInteger(meta.context_length) ??
-        toPositiveInteger(meta.contextTokens);
-      if (cw !== undefined) reportedWindows.push(cw);
+  if (isCodexContextEligible(o, d)) {
+    const { toPositiveInteger } = require('./source-discovery');
+    const reportedWindows = [];
+    for (const source of (registry && registry.sources) || []) {
+      for (const [id, meta] of Object.entries((source && source.modelMeta) || {})) {
+        if (!canonical || canonicalHermesModelId(id) !== canonical || !meta) continue;
+        const cw =
+          toPositiveInteger(meta.contextWindow) ??
+          toPositiveInteger(meta.capabilities?.contextWindow) ??
+          toPositiveInteger(meta.context_window) ??
+          toPositiveInteger(meta.context_length) ??
+          toPositiveInteger(meta.contextTokens);
+        if (cw !== undefined) reportedWindows.push(cw);
+      }
     }
+    if (reportedWindows.length) return Math.min(...reportedWindows);
   }
-  if (reportedWindows.length) return Math.min(...reportedWindows);
 
   return undefined;
 }
@@ -699,7 +803,11 @@ function assembleOpenAiCodexCandidates(options, deps) {
   const candidates = [];
 
   for (const modelId of modelIds) {
-    const contextWindow = resolveHermesContextWindow(modelId, o, d);
+    const contextWindow = resolveHermesContextWindow(
+      modelId,
+      { ...o, provider: 'openai-codex' },
+      d
+    );
     const candidate = {
       harness: 'hermes',
       accessPath: 'openai-codex',
@@ -1096,7 +1204,7 @@ function selectReasoningCandidate(options, deps) {
     chosenRoute,
     reason,
     harness: 'hermes',
-    candidates: rankResult.ranking.map((c) => ({
+    candidates: rankResult.ranking.slice(0, 10).map((c) => ({
       candidateKey: c.candidateKey,
       score: c.score,
       scoreBreakdown: c.scoreBreakdown,
@@ -2266,4 +2374,10 @@ module.exports = {
   resolveHermesContextWindow,
   assembleOpenAiCodexCandidates,
   candidateAccountKey,
+  fileExists,
+  dirExists,
+  getFsCheckReasons,
+  clearFsCheckReasons,
+  isCodexContextEligible,
+  canonicalHermesModelId,
 };

@@ -1064,61 +1064,224 @@ test('TASK-AI-142 H3: probe skips HTTP probe for openai-codex by default, and a 
   );
 });
 
-test('TASK-AI-142 H3: default wiring with temp HOME/USERPROFILE includes openai-codex candidate on live path', async () => {
+test('TASK-AI-142 H3: default wiring with injected homedir/registry/fetch includes openai-codex candidate on live path', async (t) => {
   const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-live-default-test-'));
+  t.after(() => fs.rmSync(tempHome, { recursive: true, force: true }));
   const codexDir = path.join(tempHome, '.codex');
   fs.mkdirSync(codexDir, { recursive: true });
   fs.writeFileSync(path.join(codexDir, 'auth.json'), '{}');
   fs.writeFileSync(path.join(codexDir, 'config.toml'), 'model = "gpt-6.1-sol"\n');
 
-  const origHome = process.env.HOME;
-  const origUserProfile = process.env.USERPROFILE;
-  process.env.HOME = tempHome;
-  process.env.USERPROFILE = tempHome;
+  let authRead = false;
+  const injectedFs = {
+    ...fs,
+    readFileSync: (p, ...args) => {
+      if (typeof p === 'string' && p.endsWith('auth.json')) {
+        authRead = true;
+        throw new Error('SECURITY: auth.json must never be read');
+      }
+      return fs.readFileSync(p, ...args);
+    },
+  };
 
-  try {
-    // Default wiring: no candidateList injected, default chatCommand args
-    const resultWrap = await hermesSessionApi.chatCommand({
+  const registry = {
+    sources: [
+      {
+        id: '9router',
+        endpoint: 'http://fixture/v1',
+        credential: { type: 'env', env: 'FIXTURE_KEY', name: 'FIXTURE_KEY' },
+        modelMeta: {
+          'gpt-6.1-sol': { contextWindow: 128000 },
+        },
+      },
+    ],
+  };
+
+  const log = console.log;
+  console.log = () => {};
+  t.after(() => {
+    console.log = log;
+  });
+
+  // Default wiring: no candidateList injected, default chatCommand args
+  const resultWrap = await hermesSessionApi.chatCommand(
+    {
+      rootDir: tempHome,
+      homeDir: tempHome,
+      homedir: tempHome,
       reselect: true,
       dryRun: true,
       skipDecisionLog: true,
-      // Keep this presence assertion independent of live metadata and the top-ten cutoff.
-      hermesModelCatalogue: { 'gpt-6.1-sol': { contextWindow: 16000 } },
-    });
-    const serialized = JSON.stringify(resultWrap);
-    assert.ok(
-      serialized.includes('openai-codex'),
-      'openai-codex must appear on the live path (in ranking or rejected with explicit reason)'
-    );
-
-    const r = resultWrap && resultWrap.result;
-    assert.ok(r, 'chatCommand must return a result object');
-    const inRejected =
-      Array.isArray(r.rejected) &&
-      r.rejected.some(
-        (c) =>
-          String(c.candidateKey || '').includes('openai-codex') ||
-          (c.modelId === 'gpt-6.1-sol' && c.accountId === 'codex')
-      );
-    const inRanking =
-      Array.isArray(r.modelRanking) && r.modelRanking.some((m) => m.modelId === 'gpt-6.1-sol');
-    assert.ok(
-      inRejected || inRanking,
-      'openai-codex must appear either ranked or in rejected with an explicit reason'
-    );
-    if (inRejected) {
-      const entry = r.rejected.find(
-        (c) =>
-          String(c.candidateKey || '').includes('openai-codex') ||
-          (c.modelId === 'gpt-6.1-sol' && c.accountId === 'codex')
-      );
-      assert.ok(entry.reasonCode, 'Rejected candidate must have an explicit reasonCode');
+    },
+    {
+      fs: injectedFs,
+      sources: { loadSources: () => registry },
+      registry,
+      fetchModels: async () => ({
+        ok: true,
+        json: async () => ({ data: [] }),
+      }),
+      readDiscoveryCatalogue: () => ({ candidates: [] }),
+      assembleForDispatch: () => [],
+      accountList: [],
+      evidenceData: [],
+      priorsData: { ranking: [{ model: 'gpt-6.1-sol', score: 90 }] },
+      routeHealth: { version: 1, paths: {}, events: [] },
     }
-  } finally {
-    if (origHome === undefined) delete process.env.HOME;
-    else process.env.HOME = origHome;
-    if (origUserProfile === undefined) delete process.env.USERPROFILE;
-    else process.env.USERPROFILE = origUserProfile;
-    fs.rmSync(tempHome, { recursive: true, force: true });
-  }
+  );
+
+  assert.equal(authRead, false, 'auth.json must not be read');
+  assert.ok(resultWrap && resultWrap.result, 'chatCommand must return a result object');
+  const r = resultWrap.result;
+  assert.equal(r.status, 'dry_run');
+  assert.ok(r.candidate, 'Candidate must be chosen');
+  assert.equal(r.candidate.provider, 'openai-codex');
+  assert.equal(r.candidate.quotaGroup, 'codex-chatgpt');
+  assert.equal(r.candidate.contextWindow, 128000);
+  assert.equal(r.candidate.capabilities?.contextWindow, 128000);
+  assert.equal(r.chosenRoute.quotaGroup, 'codex-chatgpt');
+  assert.ok(
+    r.modelRanking.some(
+      (m) =>
+        m.modelId === 'gpt-6.1-sol' ||
+        m.modelId === 'gpt-6-1-sol' ||
+        hermesSessionApi.canonicalHermesModelId(m.modelId) === 'gpt-6-1-sol'
+    ),
+    'openai-codex model must appear in modelRanking'
+  );
+});
+
+test('TASK-AI-142 H3: cross-source context borrow applies only to openai-codex / codex-app-server candidates', () => {
+  const fakeRegistry = {
+    sources: [
+      {
+        id: 'opencode-provider-source-a',
+        modelMeta: {},
+      },
+      {
+        id: 'opencode-provider-source-b',
+        modelMeta: {
+          'shared/model-z': { contextWindow: 65536 },
+        },
+      },
+    ],
+  };
+
+  // 1. Non-codex candidate / provider does NOT borrow from source B
+  const nonCodex = hermesSessionApi.resolveHermesContextWindow(
+    'shared/model-z',
+    { provider: 'opencode-provider-source-a' },
+    { registry: fakeRegistry }
+  );
+  assert.equal(
+    nonCodex,
+    undefined,
+    'Non-codex provider must never borrow context from other sources'
+  );
+
+  const defaultNoProvider = hermesSessionApi.resolveHermesContextWindow(
+    'shared/model-z',
+    {},
+    { registry: fakeRegistry }
+  );
+  assert.equal(
+    defaultNoProvider,
+    undefined,
+    'Unspecified provider must not borrow context across sources'
+  );
+
+  // 2. openai-codex candidate DOES borrow conservative minimum
+  const codex = hermesSessionApi.resolveHermesContextWindow(
+    'shared/model-z',
+    { provider: 'openai-codex' },
+    { registry: fakeRegistry }
+  );
+  assert.equal(codex, 65536, 'openai-codex candidate must borrow context from registry sources');
+
+  // 3. codex-app-server candidate DOES borrow conservative minimum
+  const appServer = hermesSessionApi.resolveHermesContextWindow(
+    'shared/model-z',
+    { provider: 'codex-app-server' },
+    { registry: fakeRegistry }
+  );
+  assert.equal(
+    appServer,
+    65536,
+    'codex-app-server candidate must borrow context from registry sources'
+  );
+});
+
+test('TASK-AI-142 H3: fileExists, dirExists, and hasCodexAuth strictly reject on EPERM/EACCES with recorded reason', () => {
+  hermesSessionApi.clearFsCheckReasons();
+  const epermErr = new Error('EPERM: operation not permitted');
+  epermErr.code = 'EPERM';
+  const eaccesErr = new Error('EACCES: permission denied');
+  eaccesErr.code = 'EACCES';
+
+  const throwingFs = {
+    existsSync: (p) => {
+      if (String(p).includes('perm')) throw epermErr;
+      if (String(p).includes('acces')) throw eaccesErr;
+      return false;
+    },
+    statSync: (p) => {
+      if (String(p).includes('perm')) throw epermErr;
+      if (String(p).includes('acces')) throw eaccesErr;
+      throw new Error('ENOENT');
+    },
+  };
+
+  assert.equal(hermesSessionApi.fileExists('/fake/perm/auth.json', throwingFs), false);
+  assert.equal(hermesSessionApi.fileExists('/fake/acces/auth.json', throwingFs), false);
+  assert.equal(hermesSessionApi.dirExists('/fake/perm/.codex', throwingFs), false);
+  assert.equal(hermesSessionApi.dirExists('/fake/acces/.codex', throwingFs), false);
+
+  const reasons = hermesSessionApi.getFsCheckReasons();
+  assert.ok(reasons.length >= 4, 'Reasons must be recorded for each EPERM/EACCES');
+  assert.ok(reasons.some((r) => r.code === 'EPERM' && r.reason.includes('fileExists')));
+  assert.ok(reasons.some((r) => r.code === 'EACCES' && r.reason.includes('dirExists')));
+
+  // hasCodexAuth returns false strictly when auth.json throws EPERM/EACCES
+  const hasAuth = hermesSessionApi.hasCodexAuth(
+    { codexAuthPath: '/fake/perm/auth.json' },
+    { fs: throwingFs }
+  );
+  assert.equal(hasAuth, false, 'hasCodexAuth must be false when auth.json fails with EPERM');
+});
+
+test('TASK-AI-142 H3: persisted decision records retain top ten only while dry-run output contains full modelRanking', () => {
+  const stronger = Array.from({ length: 15 }, (_, i) => ({
+    harness: 'hermes',
+    accessPath: 'http://fixture/v1',
+    gateway: '9router',
+    upstream: 'fixture',
+    accountId: 'fixture',
+    quotaScope: 'fixture',
+    modelId: `ranked-model-${String(i).padStart(2, '0')}`,
+    quality: 90 - i,
+    contextWindow: 64000,
+  }));
+
+  const selection = hermesSessionApi.selectReasoningCandidate(
+    { dryRun: true, skipDecisionLog: true, qualityFloor: 50 },
+    {
+      candidateList: stronger,
+      priorsData: { ranking: stronger.map((c) => ({ model: c.modelId, score: c.quality })) },
+      routeHealth: { version: 1, paths: {}, events: [] },
+    }
+  );
+
+  // Dry-run return output has full ranking
+  assert.equal(selection.modelRanking.length, 15, 'dryRun payload must have full modelRanking');
+  // Persisted decision record keeps top ten only
+  assert.equal(
+    selection.decisionRecord.modelRanking.length,
+    10,
+    'decisionRecord.modelRanking must be capped at 10'
+  );
+  assert.equal(
+    selection.decisionRecord.candidates.length,
+    10,
+    'decisionRecord.candidates must be capped at 10'
+  );
 });
