@@ -348,3 +348,11 @@ Verification: sequential TASK-AI-141 199/199, TASK-AI-142 136/136, TASK-AI-64 12
 ### H3 live: Hermes brain context refresh (2026-10-14)
 
 Hermes could not start: the only reasoning candidate was refused with CONTEXT_WINDOW_UNVERIFIED because the source registry modelMeta and the discovery catalogue were stale, although 9router /v1/models reports the context window. chatCommand now refreshes provider-reported context windows from each OpenAI-compatible source before selecting the reasoning model; unknown context windows are still refused. Verification: context-window, hermes-candidates and hermes-session tests 73/73; live dry-run selects a verified candidate.
+
+### H3 Hermes context and computed ranking repair (2026-10-14)
+
+The shared /models parser now reads provider-reported capabilities.contextWindow as well as context_length, covering 9router and other compatible sources without inventing metadata. Hermes supplies actual QUALITY_FIRST weights and requests normalization over known score dimensions; unknown dimensions previously diluted quality before quota penalties clamped scores to zero. Existing writer/reviewer scoring stays compatible. No context, quality or benchmark values were added.
+
+Verification: TASK-AI-142 146/146 versus origin/main 142/142; full brain suite 2,095 pass, 1 skip, 0 fail (2,096 total), versus origin/main 2,091 pass, 1 skip, 0 fail (2,092 total), SHA 4e971e84. Four regressions cover context refresh, Hermes weights, unknown dimensions and strongest healthy reasoning selection using existing priors. Prettier, ESLint and git diff --check pass. Node 24 rejects the directory-form test command, so the full suite uses tools/ai-brain/test/*.test.js.
+
+Default local dry selection has three Mercury candidates with unknown quality, all score 0. A second dry selection reads the hermes-live discovery/evidence/source metadata snapshot: 9router/cbai/deepseek-v4.1-flash ranks first at 19 (quality 34), followed by Mercury 2, 2.5 and Decide at 0. Only four candidates qualify here; no fifth rank or interactive live success is claimed. Runtime data is excluded; no push or merge.

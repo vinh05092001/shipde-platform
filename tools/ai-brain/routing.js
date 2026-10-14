@@ -1136,7 +1136,15 @@ function scoreForProfile(candidate, assessment, ctx) {
       ? assessment.weights.cost
       : 33;
 
-  const totalWeight = wQuality + wReliability + wLatency + wCost;
+  // Hermes opts into known-dimension normalization; retain the established
+  // fixed-weight contract for existing writer/reviewer assessments.
+  const totalWeight =
+    assessment && assessment.renormalizeKnownScores
+      ? (quality !== null ? wQuality : 0) +
+        (reliability !== null ? wReliability : 0) +
+        (latency !== null ? wLatency : 0) +
+        (cost !== null ? wCost : 0)
+      : wQuality + wReliability + wLatency + wCost;
 
   let total = 0;
   if (quality !== null) total += wQuality * quality;

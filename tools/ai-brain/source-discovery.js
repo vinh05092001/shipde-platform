@@ -396,7 +396,8 @@ function modelMeta(body) {
     if (typeof id !== 'string' || !id) continue;
     const contextWindow =
       row && typeof row === 'object'
-        ? (toPositiveInteger(row.context_length) ??
+        ? (toPositiveInteger(row.capabilities?.contextWindow) ??
+          toPositiveInteger(row.context_length) ??
           toPositiveInteger(row.context_window) ??
           toPositiveInteger(row.max_context_length))
         : undefined;

@@ -592,7 +592,11 @@ function selectReasoningCandidate(options, deps) {
     requiredCapabilities: [],
   };
 
-  const assessment = { weightProfile: 'QUALITY_FIRST' };
+  const assessment = {
+    weightProfile: 'QUALITY_FIRST',
+    weights: routingApi.WEIGHT_PROFILES.QUALITY_FIRST,
+    renormalizeKnownScores: true,
+  };
   const rankCtx = {
     now,
     priors,

@@ -2471,3 +2471,21 @@ test('H3-07: launchHermesSession and chatCommand accept injected resolver input 
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('Hermes supplies the actual QUALITY_FIRST weights to ranking', () => {
+  let observed;
+  selectReasoningCandidate(
+    { skipDecisionLog: true },
+    {
+      registry: sampleRegistry(),
+      candidates: [],
+      priorsData: { ranking: [] },
+      rankForProfile: (rows, profile, assessment) => {
+        observed = assessment;
+        return { ranking: [], rejected: [], chosen: null };
+      },
+    }
+  );
+  assert.deepEqual(observed.weights, require('../routing').WEIGHT_PROFILES.QUALITY_FIRST);
+  assert.equal(observed.renormalizeKnownScores, true);
+});

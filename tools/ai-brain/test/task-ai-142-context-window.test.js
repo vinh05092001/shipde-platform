@@ -705,3 +705,35 @@ test('TASK-AI-142: live context refresh is source-scoped and feeds Hermes select
     null
   );
 });
+
+test('TASK-AI-142: 9router and compatible sources refresh nested context without inventing metadata', async () => {
+  const { refreshReasoningContext } = require('../hermes-session');
+  const sources = ['9router', 'other-compatible'].map((id, i) => ({
+    id,
+    endpoint: `http://127.0.0.1:${40128 + i}/v1`,
+    servesModels: true,
+  }));
+  const result = await refreshReasoningContext(
+    {},
+    {
+      registry: { sources },
+      fetchModels: async () => ({
+        ok: true,
+        json: async () => ({
+          data: [
+            { id: 'nested', capabilities: { contextWindow: 1048576 } },
+            { id: 'flat', context_length: 1000000 },
+            { id: 'invalid', capabilities: { contextWindow: -1 } },
+            { id: 'missing' },
+          ],
+        }),
+      }),
+    }
+  );
+  for (const source of result.registry.sources) {
+    assert.equal(source.modelMeta.nested.contextWindow, 1048576);
+    assert.equal(source.modelMeta.flat.contextWindow, 1000000);
+    assert.equal(source.modelMeta.invalid.contextWindow, undefined);
+    assert.equal(source.modelMeta.missing.contextWindow, undefined);
+  }
+});
