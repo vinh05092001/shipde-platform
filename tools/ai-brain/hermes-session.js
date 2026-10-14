@@ -792,13 +792,16 @@ function selectReasoningCandidate(options, deps) {
         d.routeHealthFile ||
         path.join(resolveRootDir(opts, d), 'tools', 'ai-brain', 'data', 'model-route-health.json'),
     });
-    const codexCandidates = assembleOpenAiCodexCandidates(opts, { ...d, registry });
-    if (codexCandidates.length > 0) {
-      poolCandidates = [...poolCandidates, ...codexCandidates];
-    }
   }
 
-  if (opts.includeOpenAiCodex || d.includeOpenAiCodex) {
+  // Assemble only with the selection registry, refreshed by the async entrypoints.
+  // Explicit candidate fixtures opt in; production discovery always includes Codex.
+  if (
+    (!Array.isArray(d.candidateList) && !Array.isArray(d.candidates)) ||
+    opts.includeOpenAiCodex ||
+    d.includeOpenAiCodex
+  ) {
+    poolCandidates = [...poolCandidates];
     const codexCandidates = assembleOpenAiCodexCandidates(opts, { ...d, registry });
     for (const cc of codexCandidates) {
       if (!poolCandidates.some((c) => c.candidateKey === cc.candidateKey)) {
@@ -1132,7 +1135,7 @@ function selectReasoningCandidate(options, deps) {
     candidate: chosenCandidate,
     ranking: rankResult.ranking,
     top3: modelRanking.slice(0, 3),
-    modelRanking: modelRanking.slice(0, 10),
+    modelRanking: opts.dryRun ? modelRanking : modelRanking.slice(0, 10),
     chosenRoute,
     rejected: rankResult.rejected,
     refused,

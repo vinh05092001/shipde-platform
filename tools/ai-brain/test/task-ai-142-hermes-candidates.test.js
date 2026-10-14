@@ -12,6 +12,74 @@ const hermesSessionApi = require('../hermes-session');
 const harnessApi = require('../harness');
 const healthApi = require('../route-health');
 
+test('TASK-AI-142 H3: chat refreshes empty provider metadata before Codex assembly and exposes ranks beyond ten', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-chat-refresh-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const codexDir = path.join(root, '.codex');
+  fs.mkdirSync(codexDir);
+  fs.writeFileSync(path.join(codexDir, 'auth.json'), '{}');
+  fs.writeFileSync(path.join(codexDir, 'config.toml'), 'model = "gpt-6-luna"');
+  const registry = {
+    sources: [
+      {
+        id: '9router',
+        endpoint: 'http://fixture/v1',
+        credential: { type: 'env', env: 'FIXTURE_KEY', name: 'FIXTURE_KEY' },
+      },
+    ],
+  };
+  let fetched = false;
+  const log = console.log;
+  console.log = () => {};
+  t.after(() => {
+    console.log = log;
+  });
+  const stronger = Array.from({ length: 11 }, (_, i) => ({
+    harness: 'hermes',
+    accessPath: 'http://fixture/v1',
+    gateway: '9router',
+    upstream: 'fixture',
+    accountId: 'fixture',
+    quotaScope: 'fixture',
+    modelId: `strong-${i}`,
+    quality: 85,
+    contextWindow: 64000,
+  }));
+  const wrapped = await hermesSessionApi.chatCommand(
+    { rootDir: root, homeDir: root, reselect: true, dryRun: true, skipDecisionLog: true },
+    {
+      sources: { loadSources: () => registry },
+      fetchModels: async () => {
+        fetched = true;
+        return {
+          ok: true,
+          json: async () => ({
+            data: [
+              { id: 'gh/gpt-6-luna', capabilities: { contextWindow: 1050000 } },
+              { id: 'cl/openai/gpt-6-luna', capabilities: { contextWindow: 1050000 } },
+            ],
+          }),
+        };
+      },
+      readDiscoveryCatalogue: () => ({ candidates: [] }),
+      assembleForDispatch: () => {
+        assert.ok(fetched);
+        return stronger;
+      },
+      accountList: [],
+      evidenceData: [],
+      priorsData: { ranking: stronger.map((c) => ({ model: c.modelId, score: 85 })) },
+      routeHealth: { version: 1, paths: {}, events: [] },
+    }
+  );
+  assert.ok(wrapped.result, wrapped.error?.message);
+  const { result } = wrapped;
+  assert.equal(result.status, 'dry_run');
+  assert.ok(result.modelRanking.findIndex((m) => m.modelId === 'gpt-6-luna') >= 10);
+  assert.ok(!result.rejected.some((r) => r.candidateKey.includes('openai-codex')));
+  assert.equal(registry.sources[0].modelMeta, undefined);
+});
+
 test('TASK-AI-142 H3: codex context fallback uses minimum same-model provider metadata and refuses missing evidence', async () => {
   const homeDir = path.join(os.tmpdir(), 'codex-provider-context-test');
   const authPath = path.join(homeDir, '.codex', 'auth.json');
