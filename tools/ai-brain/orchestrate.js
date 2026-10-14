@@ -185,6 +185,13 @@ function resolveLauncher(o, isolatedLauncher) {
   if (!isolatedLauncher && externalWorkers.length === 0) return null;
   const { getHarness } = require('./harness');
   return (job) => {
+    const writerSchema = require('./writer-schema');
+    if (['codex', 'agy-pool'].includes(job.harness) && !job.resultSchema) {
+      job = writerSchema.prepareJob(job);
+    }
+    if (job.harness === 'codex' && o.isolatedWorker) {
+      job.isolationVerdict = require('./isolation-launcher').readClosedIsolationVerdict();
+    }
     const adapter = getHarness(job.harness);
     if (!adapter) throw new Error('UNKNOWN_HARNESS: ' + String(job.harness));
     let launchArgs;
@@ -233,7 +240,7 @@ function resolveLauncher(o, isolatedLauncher) {
       throw new Error('LAUNCHER_MISSING: no isolated launcher for ' + adapter.id);
     }
 
-    return isolatedLauncher(adapter, launchArgs, {
+    const launched = isolatedLauncher(adapter, launchArgs, {
       cwd: job.hostWorktree || job.cwd,
       workerRoot: job.workerRoot,
       baseSha: job.baseSha,
@@ -242,7 +249,10 @@ function resolveLauncher(o, isolatedLauncher) {
       retainWorkerHead: job.retainWorkerHead || undefined,
       verdictPath: job.verdictPath,
       exercise: job.exercise || o.exercise || null,
-      onProvisioned: typeof o.onProvisioned === 'function' ? o.onProvisioned : undefined,
+      onProvisioned: (root, details) => {
+        if (job.resultSchema) writerSchema.materialise(job, root);
+        return typeof o.onProvisioned === 'function' ? o.onProvisioned(root, details) : undefined;
+      },
       candidateKey: job.candidateKey || null,
       gateway: job.gateway || null,
       model: job.model || null,
@@ -261,6 +271,17 @@ function resolveLauncher(o, isolatedLauncher) {
       decisionDir: o.decisionDir || undefined,
       checkpoint: o.checkpointFile || (typeof o.checkpoint === 'string' ? o.checkpoint : undefined),
     });
+    if (job.resultSchema && launched && launched.exitCode === 0) {
+      const checked = writerSchema.validate(launched.stdout, job.resultSchema);
+      if (!checked.ok || checked.value.status !== 'completed') {
+        return {
+          ...launched,
+          exitCode: 1,
+          failureReason: checked.reason || 'WRITER_RESULT_NOT_COMPLETED',
+        };
+      }
+    }
+    return launched;
   };
 }
 
@@ -1726,17 +1747,10 @@ function readUsageReport(file) {
   }
 }
 
-function runHostBrainGate(job, options = {}) {
-  const requestedRoot = options.hostCwd || options.cwd || process.cwd();
-  const root =
-    (options.platform || process.platform) !== 'win32' &&
-    /^[a-z]:[\\/]/i.test(String(requestedRoot))
-      ? path.resolve(__dirname, '..', '..')
-      : requestedRoot;
-  const node = options.nodeExecutable || process.execPath;
-  const suite = options.brainSuite || 'tools/ai-brain/test/*.test.js';
-  const run = options.spawnSync || spawnSync;
-  const suiteFiles = String(suite)
+const baseGateCache = new Map();
+
+function resolveSuiteFiles(rootDir, suite) {
+  return String(suite)
     .split(/\s+/)
     .filter(Boolean)
     .flatMap((pattern) => {
@@ -1747,17 +1761,34 @@ function runHostBrainGate(job, options = {}) {
       const basename = slash < 0 ? normalized : normalized.slice(slash + 1);
       const escaped = basename.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
       const matcher = new RegExp('^' + escaped + '$');
+      const targetDir = path.resolve(rootDir, directory);
+      if (!fs.existsSync(targetDir)) return [];
       return fs
-        .readdirSync(path.resolve(root, directory), { withFileTypes: true })
+        .readdirSync(targetDir, { withFileTypes: true })
         .filter((entry) => entry.isFile() && matcher.test(entry.name))
         .map((entry) => path.posix.join(directory.replace(/\\/g, '/'), entry.name));
     });
+}
+
+function runHostBrainGate(job, options = {}) {
+  const requestedRoot = options.hostCwd || options.cwd || process.cwd();
+  const root =
+    (options.platform || process.platform) !== 'win32' &&
+    /^[a-z]:[\\/]/i.test(String(requestedRoot))
+      ? path.resolve(__dirname, '..', '..')
+      : requestedRoot;
+  const node = options.nodeExecutable || process.execPath;
+  const suite = options.brainSuite || 'tools/ai-brain/test/*.test.js';
+  const run = options.spawnSync || spawnSync;
+  const suiteFiles = resolveSuiteFiles(root, suite);
   if (suiteFiles.length === 0) {
     return {
       pass: false,
       command: 'node --test ' + String(suite),
       failures: ['NO_BRAIN_TEST_FILES'],
       summary: [],
+      cleanupErrors: [],
+      cleanupError: null,
     };
   }
   const command = 'node --test ' + suiteFiles.join(' ');
@@ -1774,11 +1805,233 @@ function runHostBrainGate(job, options = {}) {
   );
   const summary = output.split(/\r?\n/).filter((line) => /^ℹ (?:pass|fail)\b|^✖ /.test(line));
   const pass = result.status === 0 && failed.length === 0;
-  if (!pass) {
-    const repairDetails = options.onHostGateFailure ? options.onHostGateFailure(failed) : null;
-    return { pass: false, command, failures: failed, summary, repairDetails };
+  if (pass) {
+    const hostGateFailures = Object.assign([], { newFailures: [], baselineFailures: [] });
+    return {
+      pass: true,
+      command,
+      failures: [],
+      hostGateFailures,
+      newFailures: [],
+      baselineFailures: [],
+      summary,
+      cleanupErrors: [],
+      cleanupError: null,
+    };
   }
-  return { pass: true, command, failures: [], summary };
+
+  if (failed.length === 0) {
+    const failures = ['UNPARSED_FAILURE'];
+    const hostGateFailures = Object.assign([...failures], {
+      newFailures: [...failures],
+      baselineFailures: [],
+    });
+    const repairDetails = options.onHostGateFailure ? options.onHostGateFailure(failures) : null;
+    return {
+      pass: false,
+      command,
+      reason: 'UNPARSED_FAILURE',
+      failures,
+      hostGateFailures,
+      newFailures: [...failures],
+      baselineFailures: [],
+      summary,
+      repairDetails,
+      cleanupErrors: [],
+      cleanupError: null,
+    };
+  }
+
+  const cache = options.baseCache || baseGateCache;
+  let baseFailed = null;
+  let baseSummary = [];
+  let baseRan = false;
+
+  const candidateBase =
+    options.baseSha ||
+    options.baseCommit ||
+    (job && (job.baseSha || job.baseCommit)) ||
+    options.base ||
+    (job && job.base) ||
+    (job && (job.workItemId || job.branch || job.workerRoot) ? 'origin/main' : null);
+
+  let baseSha = null;
+  const refStr = candidateBase ? String(candidateBase).trim() : '';
+  if (refStr) {
+    if (/^[0-9a-f]{40}$/i.test(refStr)) {
+      baseSha = refStr;
+    } else {
+      try {
+        const revRes = run('git', ['rev-parse', '--verify', refStr + '^{commit}'], {
+          cwd: root,
+          encoding: 'utf8',
+        });
+        if (revRes && revRes.status === 0 && revRes.stdout) {
+          baseSha = String(revRes.stdout).trim();
+        }
+      } catch (_) {
+        baseSha = null;
+      }
+    }
+  }
+
+  if (baseSha && cache.has(baseSha)) {
+    const cached = cache.get(baseSha);
+    baseFailed = cached.failed;
+    baseSummary = cached.summary;
+    baseRan = true;
+  }
+
+  const cleanupErrors = [];
+  const fileSystem = options.fs || fs;
+
+  if (!baseRan && baseSha) {
+    let tempDir = null;
+    let tempWorktree = null;
+    let worktreeAdded = false;
+    try {
+      tempDir = fileSystem.mkdtempSync(path.join(os.tmpdir(), 'host-gate-base-'));
+      tempWorktree = path.join(tempDir, 'wt');
+
+      const addRes = run('git', ['worktree', 'add', '--detach', tempWorktree, baseSha], {
+        cwd: root,
+        encoding: 'utf8',
+      });
+      if (addRes && addRes.status === 0) {
+        worktreeAdded = true;
+        const wtFiles = resolveSuiteFiles(tempWorktree, suite);
+        const filesToRun = wtFiles.length > 0 ? wtFiles : suiteFiles;
+        const nodeEnv = Object.assign({}, process.env, {
+          NINEROUTER_API_KEY: undefined,
+          NODE_PATH: [
+            path.join(tempWorktree, 'node_modules'),
+            path.join(root, 'node_modules'),
+            process.env.NODE_PATH,
+          ]
+            .filter(Boolean)
+            .join(path.delimiter),
+        });
+        const baseResult = run(node, ['--test', ...filesToRun], {
+          cwd: tempWorktree,
+          encoding: 'utf8',
+          timeout: options.brainGateTimeoutMs || 30 * 60 * 1000,
+          maxBuffer: 64 * 1024 * 1024,
+          env: nodeEnv,
+        });
+
+        if (baseResult && typeof baseResult.status === 'number' && !baseResult.error) {
+          const baseOutput =
+            String(baseResult.stdout || '') + '\n' + String(baseResult.stderr || '');
+          const parsedFailures = [...baseOutput.matchAll(/(?:not ok \d+ - |✖ )([^\r\n]+)/g)].map(
+            (match) => match[1].trim()
+          );
+
+          if (baseResult.status === 0 || parsedFailures.length > 0) {
+            baseFailed = parsedFailures;
+            baseSummary = baseOutput
+              .split(/\r?\n/)
+              .filter((line) => /^ℹ (?:pass|fail)\b|^✖ /.test(line));
+            baseRan = true;
+            cache.set(baseSha, { failed: baseFailed, summary: baseSummary });
+          }
+        }
+      }
+    } catch (_) {
+      // Base run cannot be executed; keep strict behavior
+    } finally {
+      if (worktreeAdded) {
+        try {
+          const removeRes = run('git', ['worktree', 'remove', '--force', tempWorktree], {
+            cwd: root,
+            encoding: 'utf8',
+          });
+          if (removeRes && (removeRes.status !== 0 || removeRes.error)) {
+            const err =
+              removeRes.error ||
+              new Error(
+                String(removeRes.stderr || removeRes.stdout || 'git worktree remove failed').trim()
+              );
+            cleanupErrors.push(err.message || String(err));
+            if (typeof options.onCleanupError === 'function') options.onCleanupError(err);
+          }
+        } catch (err) {
+          cleanupErrors.push(err.message || String(err));
+          if (typeof options.onCleanupError === 'function') options.onCleanupError(err);
+        }
+      }
+      if (tempDir) {
+        try {
+          fileSystem.rmSync(tempDir, { recursive: true, force: true });
+        } catch (err) {
+          cleanupErrors.push(err.message || String(err));
+          if (typeof options.onCleanupError === 'function') options.onCleanupError(err);
+        }
+      }
+    }
+  }
+
+  const cleanupMessages = cleanupErrors;
+  const cleanupError = cleanupErrors.length > 0 ? cleanupErrors[0] : null;
+
+  if (baseRan && Array.isArray(baseFailed)) {
+    const baseSet = new Set(baseFailed);
+    const newFailures = Array.from(new Set(failed.filter((name) => !baseSet.has(name))));
+    const baselineFailures = Array.from(new Set(baseFailed));
+
+    if (newFailures.length === 0) {
+      const hostGateFailures = Object.assign([], {
+        newFailures: [],
+        baselineFailures,
+      });
+      return {
+        pass: true,
+        command,
+        failures: [],
+        hostGateFailures,
+        newFailures: [],
+        baselineFailures,
+        summary,
+        cleanupErrors: cleanupMessages,
+        cleanupError,
+      };
+    }
+
+    const hostGateFailures = Object.assign([...newFailures], {
+      newFailures,
+      baselineFailures,
+    });
+    const repairDetails = options.onHostGateFailure ? options.onHostGateFailure(newFailures) : null;
+    return {
+      pass: false,
+      command,
+      failures: [...newFailures],
+      hostGateFailures,
+      newFailures,
+      baselineFailures,
+      summary,
+      repairDetails,
+      cleanupErrors: cleanupMessages,
+      cleanupError,
+    };
+  }
+
+  const hostGateFailures = Object.assign([...failed], {
+    newFailures: [...failed],
+    baselineFailures: [],
+  });
+  const repairDetails = options.onHostGateFailure ? options.onHostGateFailure(failed) : null;
+  return {
+    pass: false,
+    command,
+    failures: [...failed],
+    hostGateFailures,
+    newFailures: [...failed],
+    baselineFailures: [],
+    summary,
+    repairDetails,
+    cleanupErrors: cleanupMessages,
+    cleanupError,
+  };
 }
 
 /** Progress markers, measured host-side from the worker's own worktree. */
@@ -3016,6 +3269,51 @@ async function selectCandidateForProfile(
           : hasQuotaAccountReadings(o),
   };
 
+  if (profile.role === 'writer' && (profile.requiredCapabilities || []).includes('jsonSchema')) {
+    const schemaApi = require('./writer-schema');
+    const cache = o.writerSchemaEvidence || (o.writerSchemaEvidence = new Map());
+    const external = String(o.externalWorkers || '')
+      .split(',')
+      .includes('agy-pool');
+    for (const c of candidates) {
+      if (!['codex', 'agy-pool'].includes(c.harness)) continue;
+      const key = candidateKey(c);
+      let proof = cache.get(key);
+      if (!proof && !c.blocked && c.accountId && c.accountId !== '*') {
+        if (c.harness === 'agy-pool' && external) {
+          proof = await schemaApi.verify(c, o);
+        } else if (c.harness === 'codex' && o.isolatedWorker) {
+          const isolation = require('./isolation-launcher');
+          const root = resolveIsolatedWorkerRoot(o, o.cwd || process.cwd()) + '-schema-probe';
+          const run = resolveLauncher(
+            { ...o, exercise: null, onProvisioned: undefined, workerTimeoutMs: 60000 },
+            isolation.getIsolatedLauncher()
+          );
+          proof = await schemaApi.verify(c, {
+            ...o,
+            workerRoot: root,
+            run: (job) =>
+              run({
+                ...job,
+                isolatedWorker: true,
+                cwd: root,
+                workerRoot: root,
+                hostWorktree: o.cwd || process.cwd(),
+                baseSha: o.baseSha,
+                title: `${item.id}-schema-probe`,
+                workerTimeoutMs: 60000,
+                isolationVerdict: isolation.readClosedIsolationVerdict(),
+              }),
+          });
+        } else {
+          proof = { ok: false, reason: 'WRITER_SCHEMA_LAUNCH_NOT_AUTHORIZED' };
+        }
+        cache.set(key, proof);
+      }
+      c.capabilities = { ...c.capabilities, jsonSchema: Boolean(proof && proof.ok) };
+      c.jsonSchemaEvidence = proof || { ok: false, reason: 'WRITER_SCHEMA_UNVERIFIED' };
+    }
+  }
   const result = routing.rankForProfile(candidates, profile, assessment, rankCtx);
   if (o.isolatedWorker && profile.role !== 'reviewer') {
     require('./probe-order').preferKnownGood(result, candidates, { ...o, now });
@@ -3113,6 +3411,7 @@ async function selectCandidateForProfile(
       scoreBreakdown: c.scoreBreakdown,
       proof: routing.proofObserved(evData, c) || 'NONE',
       capabilityEvidence: c.capabilities || {},
+      jsonSchemaEvidence: c.jsonSchemaEvidence || null,
       account: normalizeAccount(c.accountId),
       quota: {
         headroom: c.headroomStatus || 'unknown',
@@ -3131,6 +3430,7 @@ async function selectCandidateForProfile(
       scoreBreakdown: c.scoreBreakdown,
       proof: routing.proofObserved(evData, c) || 'NONE',
       capabilityEvidence: c.capabilities || {},
+      jsonSchemaEvidence: c.jsonSchemaEvidence || null,
       headroom: c.headroomStatus || 'unknown',
       quotaReasonCode: c.quotaReasonCode || null,
       failureDomain: routing.failureDomainOf(c),
@@ -3287,7 +3587,7 @@ async function runOrchestration(goal, opts) {
   const controllerGate =
     o.hostGate ||
     (o.isolatedWorker && !o.injectedRun && typeof o.run !== 'function'
-      ? (job) => runHostBrainGate(job, { hostCwd })
+      ? (job) => runHostBrainGate(job, { hostCwd, baseSha: o.baseSha, base: o.base })
       : null);
   const quotaFailures = new Map();
   const riskDomainsByItem = new Map(
@@ -8169,6 +8469,7 @@ function finish(log, statusOf, ctx) {
 }
 
 module.exports = {
+  baseGateCache,
   runHostBrainGate,
   runOrchestration,
   runVerificationCommand,
