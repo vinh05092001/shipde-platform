@@ -13,6 +13,7 @@
  */
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
@@ -392,6 +393,184 @@ async function refreshReasoningContext(options, deps) {
   return { ...d, registry: { ...registry, sources } };
 }
 
+function getCodexPaths(options, deps) {
+  const o = options || {};
+  const d = deps || {};
+  const home = o.homeDir || d.homeDir || o.home || d.home || os.homedir();
+  const codexDir = o.codexDir || d.codexDir || path.join(home, '.codex');
+  const authFile =
+    o.codexAuthPath ||
+    d.codexAuthPath ||
+    o.codexAuthFile ||
+    d.codexAuthFile ||
+    path.join(codexDir, 'auth.json');
+  const configFile =
+    o.codexConfigPath ||
+    d.codexConfigPath ||
+    o.codexConfigFile ||
+    d.codexConfigFile ||
+    path.join(codexDir, 'config.toml');
+  return { home, codexDir, authFile, configFile };
+}
+
+function hasCodexAuth(options, deps) {
+  const o = options || {};
+  const d = deps || {};
+  const fsApi = d.fs || o.fs || fs;
+  const { authFile } = getCodexPaths(o, d);
+  try {
+    return Boolean(fsApi.existsSync(authFile));
+  } catch {
+    return false;
+  }
+}
+
+function parseCodexModelsFromToml(content) {
+  if (typeof content !== 'string') return ['gpt-6.1-sol'];
+  const match = content.match(/(?:^|\r?\n)\s*model\s*=\s*(\[[^\]]*\]|"[^"]*"|'[^']*')/);
+  if (!match) return ['gpt-6.1-sol'];
+  const raw = match[1].trim();
+  if (raw.startsWith('[') && raw.endsWith(']')) {
+    const items = [];
+    const itemRegex = /"([^"]+)"|'([^']+)'/g;
+    let m;
+    while ((m = itemRegex.exec(raw)) !== null) {
+      const val = (m[1] || m[2] || '').trim();
+      if (val) items.push(val);
+    }
+    return items.length > 0 ? items : ['gpt-6.1-sol'];
+  }
+  const str = raw.replace(/^["']|["']$/g, '').trim();
+  return str ? [str] : ['gpt-6.1-sol'];
+}
+
+function readCodexConfigModels(options, deps) {
+  const o = options || {};
+  const d = deps || {};
+  const fsApi = d.fs || o.fs || fs;
+  const { configFile } = getCodexPaths(o, d);
+  try {
+    if (fsApi.existsSync(configFile)) {
+      const content = fsApi.readFileSync(configFile, 'utf8');
+      return parseCodexModelsFromToml(content);
+    }
+  } catch {}
+  return ['gpt-6.1-sol'];
+}
+
+function resolveHermesContextWindow(modelId, options, deps) {
+  const o = options || {};
+  const d = deps || {};
+  const fsApi = d.fs || o.fs || fs;
+  const canonical = canonicalHermesModelId(modelId);
+
+  // 1. Injected hermesModelCatalogue
+  const cat =
+    d.hermesModelCatalogue || o.hermesModelCatalogue || d.hermesCatalogue || o.hermesCatalogue;
+  if (cat && typeof cat === 'object') {
+    const meta =
+      cat[modelId] ||
+      cat[canonical] ||
+      (cat.models && (cat.models[modelId] || cat.models[canonical]));
+    if (meta) {
+      const cw = Number(
+        typeof meta === 'number'
+          ? meta
+          : meta.contextWindow || meta.context_window || meta.context_length || meta.contextTokens
+      );
+      if (Number.isFinite(cw) && cw > 0) return cw;
+    }
+  }
+
+  // 2. models_dev_cache.json in Hermes local directories
+  const { home } = getCodexPaths(o, d);
+  const local =
+    o.localAppData ||
+    d.localAppData ||
+    process.env.LOCALAPPDATA ||
+    path.join(home, 'AppData', 'Local');
+  const hermesHome = o.hermesHome || d.hermesHome || getHermesHomeDir(resolveRootDir(o, d));
+  const candidateCacheFiles = [
+    path.join(local, 'hermes', 'models_dev_cache.json'),
+    path.join(hermesHome, 'models_dev_cache.json'),
+    path.join(home, '.hermes', 'models_dev_cache.json'),
+  ];
+
+  for (const cacheFile of candidateCacheFiles) {
+    try {
+      if (fsApi.existsSync(cacheFile)) {
+        const raw = fsApi.readFileSync(cacheFile, 'utf8');
+        const parsed = JSON.parse(raw);
+        const providers = (parsed && (parsed.providers || parsed)) || {};
+        for (const provKey of ['openai-codex', 'openai', 'codex']) {
+          const provider = providers[provKey];
+          if (provider && provider.models) {
+            const m = provider.models[modelId] || provider.models[canonical];
+            if (m) {
+              const cw = Number(
+                m.contextWindow || m.context_window || m.context_length || m.contextTokens
+              );
+              if (Number.isFinite(cw) && cw > 0) return cw;
+            }
+          }
+        }
+      }
+    } catch {}
+  }
+
+  // 3. Registry source modelMeta for openai-codex if declared
+  const registry = d.registry || (d.sources || sourcesApi).loadSources(d.sourceOpts);
+  if (registry && Array.isArray(registry.sources)) {
+    const src = registry.sources.find((s) => s && (s.id === 'openai-codex' || s.id === 'codex'));
+    if (src && src.modelMeta) {
+      const m = src.modelMeta[modelId] || src.modelMeta[canonical];
+      if (m) {
+        const cw = Number(m.contextWindow || m.context_window || m.context_length);
+        if (Number.isFinite(cw) && cw > 0) return cw;
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function assembleOpenAiCodexCandidates(options, deps) {
+  const o = options || {};
+  const d = deps || {};
+  if (!hasCodexAuth(o, d)) {
+    return [];
+  }
+
+  const modelIds = readCodexConfigModels(o, d);
+  const candidates = [];
+
+  for (const modelId of modelIds) {
+    const contextWindow = resolveHermesContextWindow(modelId, o, d);
+    const candidate = {
+      harness: 'hermes',
+      accessPath: 'openai-codex',
+      gateway: 'openai-codex',
+      upstream: 'openai',
+      accountId: 'codex',
+      quotaScope: 'codex-chatgpt',
+      quotaGroup: 'codex-chatgpt',
+      modelId,
+      provider: 'openai-codex',
+      sourceId: 'openai-codex',
+      source: 'openai-codex',
+      sharedQuota: 'codex-chatgpt',
+    };
+    if (contextWindow !== undefined) {
+      candidate.contextWindow = contextWindow;
+      candidate.capabilities = { contextWindow };
+    }
+    candidate.candidateKey = candidateKey(candidate);
+    candidates.push(candidate);
+  }
+
+  return candidates;
+}
+
 function selectReasoningCandidate(options, deps) {
   const d = deps || {};
   const opts = options || {};
@@ -459,6 +638,19 @@ function selectReasoningCandidate(options, deps) {
         d.routeHealthFile ||
         path.join(resolveRootDir(opts, d), 'tools', 'ai-brain', 'data', 'model-route-health.json'),
     });
+    const codexCandidates = assembleOpenAiCodexCandidates(opts, d);
+    if (codexCandidates.length > 0) {
+      poolCandidates = [...poolCandidates, ...codexCandidates];
+    }
+  }
+
+  if (opts.includeOpenAiCodex || d.includeOpenAiCodex) {
+    const codexCandidates = assembleOpenAiCodexCandidates(opts, d);
+    for (const cc of codexCandidates) {
+      if (!poolCandidates.some((c) => c.candidateKey === cc.candidateKey)) {
+        poolCandidates.push(cc);
+      }
+    }
   }
 
   const cooldownRejected = [];
@@ -527,6 +719,13 @@ function selectReasoningCandidate(options, deps) {
       }
 
       if (
+        candidate.gateway === 'openai-codex' ||
+        candidate.provider === 'openai-codex' ||
+        candidate.source === 'openai-codex' ||
+        candidate.sourceId === 'openai-codex'
+      ) {
+        candidate.accessPath = 'openai-codex';
+      } else if (
         !candidate.accessPath ||
         candidate.accessPath === 'cli' ||
         candidate.accessPath.startsWith('cli-') ||
@@ -566,9 +765,16 @@ function selectReasoningCandidate(options, deps) {
         !excluded.has(c._preRewriteKey) &&
         !excludedModels.has(canonicalHermesModelId(c.modelId || c.model))
     )
-    // Hermes reaches a model only through an OpenAI-compatible base_url; an
-    // account reached through a CLI (agy, claude-code) has no endpoint to bind.
-    .filter((c) => typeof c.accessPath === 'string' && /^https?:\/\//i.test(c.accessPath))
+    // Hermes reaches a model either through an OpenAI-compatible base_url or via
+    // the built-in openai-codex provider (hermes-agent 0.21.4 auth_codex.py).
+    .filter(
+      (c) =>
+        (typeof c.accessPath === 'string' && /^https?:\/\//i.test(c.accessPath)) ||
+        c.gateway === 'openai-codex' ||
+        c.provider === 'openai-codex' ||
+        c.source === 'openai-codex' ||
+        c.sourceId === 'openai-codex'
+    )
     // Discovery and generated routes can converge on the same seven-part key
     // after replacing the original harness/access path. Probe that route once.
     .filter((c) => {
@@ -695,6 +901,7 @@ function selectReasoningCandidate(options, deps) {
         modelId: chosenGroup.modelId,
         routeModelId: chosenCandidate.modelId,
         gateway: chosenCandidate.gateway || chosenCandidate.sourceId || null,
+        ...(chosenCandidate.quotaGroup ? { quotaGroup: chosenCandidate.quotaGroup } : {}),
         ...chosenCandidate.routeSelection,
         reason:
           'Highest ranked eligible model; routes ordered by live/known-good, known cost, known latency, quota, stored binding, then candidate key',
@@ -741,6 +948,7 @@ function selectReasoningCandidate(options, deps) {
       headroom: c.headroomStatus,
       reasons: c.quotaReasonCode ? [c.quotaReasonCode] : [],
       sourceLinks: c.source ? [c.source] : [],
+      ...(c.quotaGroup ? { quotaGroup: c.quotaGroup } : {}),
     })),
     rejected: rankResult.rejected.map((r) => ({
       candidateKey: r.candidateKey,
@@ -800,7 +1008,20 @@ function writeProvidersConfig(candidate, options, deps) {
   const gateway = (candidate && candidate.gateway) || (parsed && parsed.gateway) || 'openai';
   const upstream = (candidate && candidate.upstream) || (parsed && parsed.upstream) || gateway;
 
-  let providerName = gateway && gateway !== '*' ? gateway : upstream;
+  const isCodexProvider =
+    (candidate &&
+      (candidate.provider === 'openai-codex' ||
+        candidate.gateway === 'openai-codex' ||
+        candidate.source === 'openai-codex' ||
+        candidate.sourceId === 'openai-codex')) ||
+    gateway === 'openai-codex' ||
+    upstream === 'openai-codex';
+
+  let providerName = isCodexProvider
+    ? 'openai-codex'
+    : gateway && gateway !== '*'
+      ? gateway
+      : upstream;
   if (!providerName || providerName === '*') providerName = 'custom';
 
   if (!/^[a-zA-Z0-9_.-]+$/.test(providerName)) {
@@ -814,6 +1035,67 @@ function writeProvidersConfig(candidate, options, deps) {
     (candidate && (candidate.modelId || candidate.model)) ||
     (parsed && parsed.modelId) ||
     '';
+
+  function escapeYamlString(val) {
+    const str = String(val);
+    if (/[\r\n\0]/.test(str)) {
+      throw new Error('YAML_VALUE_UNSAFE: contains newline or control character');
+    }
+    return JSON.stringify(str);
+  }
+
+  const homeDir = opts.hermesHome || d.hermesHome || getHermesHomeDir(rootDir);
+  fsApi.mkdirSync(homeDir, { recursive: true });
+
+  if (isCodexProvider) {
+    const yamlContent = [
+      '# Controller-owned Hermes providers config',
+      '# Generated by Ship De Controller — do not put secrets here',
+      'model:',
+      `  default: ${escapeYamlString(modelId)}`,
+      `  provider: ${escapeYamlString(providerName)}`,
+      'api_max_retries: 1',
+      'auto_recovery_cycles: 0',
+      '',
+    ].join('\n');
+
+    const homeConfPath = path.join(homeDir, 'config.yaml');
+    fsApi.writeFileSync(homeConfPath, yamlContent, 'utf8');
+
+    const legacyConfPath = path.join(dir, 'config.yaml');
+    fsApi.writeFileSync(legacyConfPath, yamlContent, 'utf8');
+
+    const jsonContent = {
+      model: {
+        default: modelId,
+        provider: providerName,
+      },
+    };
+
+    fsApi.writeFileSync(
+      path.join(homeDir, 'providers.json'),
+      JSON.stringify(jsonContent, null, 2),
+      'utf8'
+    );
+    fsApi.writeFileSync(
+      path.join(dir, 'providers.json'),
+      JSON.stringify(jsonContent, null, 2),
+      'utf8'
+    );
+
+    const installedSkillPath = installSkillFile(homeDir, opts, d);
+
+    return {
+      configPath: homeConfPath,
+      legacyConfigPath: legacyConfPath,
+      hermesHome: homeDir,
+      providerName: 'openai-codex',
+      modelId,
+      baseUrl: null,
+      apiKeyEnv: null,
+      installedSkillPath,
+    };
+  }
 
   let src =
     (registry &&
@@ -894,14 +1176,6 @@ function writeProvidersConfig(candidate, options, deps) {
     throw err;
   }
 
-  function escapeYamlString(val) {
-    const str = String(val);
-    if (/[\r\n\0]/.test(str)) {
-      throw new Error('YAML_VALUE_UNSAFE: contains newline or control character');
-    }
-    return JSON.stringify(str);
-  }
-
   const yamlContent = [
     '# Controller-owned Hermes providers config',
     '# Generated by Ship De Controller — do not put secrets here',
@@ -922,8 +1196,6 @@ function writeProvidersConfig(candidate, options, deps) {
     '',
   ].join('\n');
 
-  const homeDir = opts.hermesHome || d.hermesHome || getHermesHomeDir(rootDir);
-  fsApi.mkdirSync(homeDir, { recursive: true });
   const homeConfPath = path.join(homeDir, 'config.yaml');
   fsApi.writeFileSync(homeConfPath, yamlContent, 'utf8');
 
@@ -996,11 +1268,21 @@ function buildHermesArgv(candidate, session, options) {
     candidate && candidate.candidateKey ? parseCandidateKey(candidate.candidateKey) : candidate;
   const modelId =
     (candidate && (candidate.modelId || candidate.model)) || (parsed && parsed.modelId);
+  const isCodexProvider =
+    (candidate &&
+      (candidate.provider === 'openai-codex' ||
+        candidate.gateway === 'openai-codex' ||
+        candidate.upstream === 'openai-codex' ||
+        candidate.source === 'openai-codex' ||
+        candidate.sourceId === 'openai-codex')) ||
+    (parsed && (parsed.gateway === 'openai-codex' || parsed.upstream === 'openai-codex'));
   const providerName =
     opts.providerName ||
-    (candidate && candidate.gateway && candidate.gateway !== '*'
-      ? candidate.gateway
-      : (candidate && candidate.upstream) || (parsed && parsed.gateway) || 'custom');
+    (isCodexProvider
+      ? 'openai-codex'
+      : candidate && candidate.gateway && candidate.gateway !== '*'
+        ? candidate.gateway
+        : (candidate && candidate.upstream) || (parsed && parsed.gateway) || 'custom');
   const sessionId = (session && session.sessionId) || generateSessionId();
 
   const args = [];
@@ -1318,14 +1600,26 @@ async function launchHermesSession(options, deps) {
       const probeController = new AbortController();
       const timeoutMs = probeTimeoutMs;
       let timeoutHandle;
+      const isCodexProvider =
+        (candidate &&
+          (candidate.provider === 'openai-codex' ||
+            candidate.gateway === 'openai-codex' ||
+            candidate.sourceId === 'openai-codex' ||
+            candidate.source === 'openai-codex')) ||
+        configResult.providerName === 'openai-codex';
+
       const probeResult = await Promise.race([
-        Promise.resolve().then(() =>
-          probeFn(candidate, configResult.apiKeyEnv, env, {
+        Promise.resolve().then(() => {
+          if (isCodexProvider && !d.probe && !opts.probeFn) {
+            // Built-in openai-codex provider: skip HTTP probe
+            return { ok: true, status: 200, body: 'openai-codex skip HTTP probe' };
+          }
+          return probeFn(candidate, configResult.apiKeyEnv, env, {
             timeoutMs,
             fetch: d.fetch || opts.fetch,
             signal: probeController.signal,
-          })
-        ),
+          });
+        }),
         new Promise((resolve) => {
           timeoutHandle = setTimeout(() => {
             probeController.abort();
@@ -1771,4 +2065,10 @@ module.exports = {
   chatCommand,
   defaultSpawn,
   HERMES_MIN_CONTEXT,
+  getCodexPaths,
+  hasCodexAuth,
+  parseCodexModelsFromToml,
+  readCodexConfigModels,
+  resolveHermesContextWindow,
+  assembleOpenAiCodexCandidates,
 };

@@ -609,3 +609,316 @@ test('TASK-AI-142 H3: a CLI-only account candidate (no http endpoint) is never s
   assert.equal(selection.chosen, null);
   assert.equal(selection.refused, 'NO_REASONING_CANDIDATE');
 });
+
+test('TASK-AI-142 H3: openai-codex candidate appears only when ~/.codex/auth.json exists, and auth.json is never read', () => {
+  const fakeHome = path.join(os.tmpdir(), 'codex-mock-auth-test');
+  const authPath = path.join(fakeHome, '.codex', 'auth.json');
+  let authReadAttempted = false;
+
+  const mockFs = {
+    existsSync: (p) => p === authPath,
+    readFileSync: (p) => {
+      if (p.includes('auth.json')) {
+        authReadAttempted = true;
+        throw new Error('SECURITY VIOLATION: auth.json must never be read!');
+      }
+      return '';
+    },
+    mkdirSync: () => {},
+    writeFileSync: () => {},
+  };
+
+  // 1. Without auth.json existing
+  const mockFsNoAuth = {
+    existsSync: () => false,
+    readFileSync: () => '',
+  };
+  const emptyCandidates = hermesSessionApi.assembleOpenAiCodexCandidates(
+    { homeDir: fakeHome },
+    { fs: mockFsNoAuth }
+  );
+  assert.equal(emptyCandidates.length, 0, 'No candidate when auth.json does not exist');
+
+  // 2. With auth.json existing
+  const candidates = hermesSessionApi.assembleOpenAiCodexCandidates(
+    { homeDir: fakeHome },
+    { fs: mockFs }
+  );
+  assert.equal(authReadAttempted, false, 'auth.json was never read');
+  assert.equal(candidates.length, 1, 'Exactly 1 candidate assembled for default model');
+  const cand = candidates[0];
+  assert.equal(cand.gateway, 'openai-codex');
+  assert.equal(cand.provider, 'openai-codex');
+  assert.equal(cand.upstream, 'openai');
+  assert.equal(cand.accountId, 'codex');
+  assert.equal(cand.quotaGroup, 'codex-chatgpt');
+  assert.equal(cand.quotaScope, 'codex-chatgpt');
+  assert.equal(cand.modelId, 'gpt-6.1-sol');
+  assert.equal(cand.accessPath, 'openai-codex');
+  assert.equal(
+    cand.candidateKey,
+    'hermes::openai-codex::openai-codex::openai::codex::codex-chatgpt::gpt-6.1-sol'
+  );
+});
+
+test('TASK-AI-142 H3: models read from ~/.codex/config.toml "model" if present, else default gpt-6.1-sol', () => {
+  const fakeHome = path.join(os.tmpdir(), 'codex-mock-models-test');
+  const authPath = path.join(fakeHome, '.codex', 'auth.json');
+  const configPath = path.join(fakeHome, '.codex', 'config.toml');
+
+  // Single model in config.toml
+  const mockFsSingle = {
+    existsSync: (p) => p === authPath || p === configPath,
+    readFileSync: (p) => (p === configPath ? 'model = "gpt-5-6-sol"\n' : ''),
+  };
+  const cSingle = hermesSessionApi.assembleOpenAiCodexCandidates(
+    { homeDir: fakeHome },
+    { fs: mockFsSingle }
+  );
+  assert.equal(cSingle.length, 1);
+  assert.equal(cSingle[0].modelId, 'gpt-5-6-sol');
+
+  // Array of models in config.toml
+  const mockFsArray = {
+    existsSync: (p) => p === authPath || p === configPath,
+    readFileSync: (p) => (p === configPath ? 'model = ["gpt-5-6-sol", "gpt-6.1-sol"]\n' : ''),
+  };
+  const cArray = hermesSessionApi.assembleOpenAiCodexCandidates(
+    { homeDir: fakeHome },
+    { fs: mockFsArray }
+  );
+  assert.equal(cArray.length, 2);
+  assert.deepEqual(
+    cArray.map((c) => c.modelId),
+    ['gpt-5-6-sol', 'gpt-6.1-sol']
+  );
+
+  // Missing config.toml defaults to gpt-6.1-sol
+  const mockFsMissing = {
+    existsSync: (p) => p === authPath,
+    readFileSync: () => '',
+  };
+  const cMissing = hermesSessionApi.assembleOpenAiCodexCandidates(
+    { homeDir: fakeHome },
+    { fs: mockFsMissing }
+  );
+  assert.equal(cMissing.length, 1);
+  assert.equal(cMissing[0].modelId, 'gpt-6.1-sol');
+});
+
+test('TASK-AI-142 H3: context window unknown without documented source in hermes catalogue, candidate is refused with CONTEXT_WINDOW_UNVERIFIED and reported', () => {
+  const fakeHome = path.join(os.tmpdir(), 'codex-context-test');
+  const authPath = path.join(fakeHome, '.codex', 'auth.json');
+  const mockFs = {
+    existsSync: (p) => p === authPath,
+    readFileSync: () => '',
+  };
+
+  // Undocumented context window: candidate has undefined contextWindow
+  const candidates = hermesSessionApi.assembleOpenAiCodexCandidates(
+    { homeDir: fakeHome },
+    { fs: mockFs }
+  );
+  assert.equal(candidates[0].contextWindow, undefined);
+
+  // When selected in selectReasoningCandidate, it is refused as CONTEXT_WINDOW_UNVERIFIED
+  const selection = hermesSessionApi.selectReasoningCandidate(
+    { skipDecisionLog: true, homeDir: fakeHome, includeOpenAiCodex: true },
+    {
+      fs: mockFs,
+      candidateList: candidates,
+      registry: { sources: [] },
+      priorsData: { ranking: [] },
+    }
+  );
+  assert.equal(selection.chosen, null);
+  assert.equal(selection.refused, 'NO_REASONING_CANDIDATE');
+  assert.ok(
+    selection.reason.includes('CONTEXT_WINDOW_UNVERIFIED'),
+    `Reason must report CONTEXT_WINDOW_UNVERIFIED: ${selection.reason}`
+  );
+
+  // When documented in hermes model catalogue, verified context window is attached
+  const documentedCandidates = hermesSessionApi.assembleOpenAiCodexCandidates(
+    {
+      homeDir: fakeHome,
+      hermesModelCatalogue: {
+        'gpt-6.1-sol': { contextWindow: 128000 },
+      },
+    },
+    { fs: mockFs }
+  );
+  assert.equal(documentedCandidates[0].contextWindow, 128000);
+});
+
+test('TASK-AI-142 H3: quotaGroup "codex-chatgpt" is reflected in ranking, chosenRoute, and decision records', () => {
+  const fakeHome = path.join(os.tmpdir(), 'codex-quotagroup-test');
+  const authPath = path.join(fakeHome, '.codex', 'auth.json');
+  const mockFs = {
+    existsSync: (p) => p === authPath,
+    readFileSync: () => '',
+  };
+
+  const documentedCandidates = hermesSessionApi.assembleOpenAiCodexCandidates(
+    {
+      homeDir: fakeHome,
+      hermesModelCatalogue: {
+        'gpt-6.1-sol': { contextWindow: 128000 },
+      },
+    },
+    { fs: mockFs }
+  );
+
+  const selection = hermesSessionApi.selectReasoningCandidate(
+    { skipDecisionLog: true, homeDir: fakeHome, qualityFloor: 0 },
+    {
+      fs: mockFs,
+      candidateList: documentedCandidates,
+      registry: { sources: [] },
+      priorsData: { ranking: [{ model: 'gpt-6.1-sol', score: 85 }] },
+      routeHealth: { version: 1, paths: {}, events: [] },
+    }
+  );
+
+  assert.equal(selection.candidate.quotaGroup, 'codex-chatgpt');
+  assert.equal(selection.chosenRoute.quotaGroup, 'codex-chatgpt');
+  assert.equal(selection.decisionRecord.candidates[0].quotaGroup, 'codex-chatgpt');
+  assert.equal(selection.ranking[0].quotaGroup, 'codex-chatgpt');
+});
+
+test('TASK-AI-142 H3: writeProvidersConfig and buildHermesArgv emit provider openai-codex', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-providers-cfg-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const candidate = {
+    harness: 'hermes',
+    gateway: 'openai-codex',
+    provider: 'openai-codex',
+    upstream: 'openai',
+    accountId: 'codex',
+    quotaScope: 'codex-chatgpt',
+    quotaGroup: 'codex-chatgpt',
+    modelId: 'gpt-6.1-sol',
+    contextWindow: 128000,
+    candidateKey: 'hermes::openai-codex::openai-codex::openai::codex::codex-chatgpt::gpt-6.1-sol',
+  };
+
+  const cfgRes = hermesSessionApi.writeProvidersConfig(candidate, { rootDir: root });
+  assert.equal(cfgRes.providerName, 'openai-codex');
+  assert.equal(cfgRes.modelId, 'gpt-6.1-sol');
+  assert.equal(cfgRes.baseUrl, null);
+  assert.equal(cfgRes.apiKeyEnv, null);
+
+  const written = fs.readFileSync(cfgRes.configPath, 'utf8');
+  assert.match(written, /provider:\s*"openai-codex"/);
+  assert.match(written, /default:\s*"gpt-6.1-sol"/);
+  assert.equal(written.includes('key_env'), false, 'Built-in provider must not write key_env');
+  assert.equal(
+    written.includes('custom_providers'),
+    false,
+    'Built-in provider must not write custom_providers'
+  );
+
+  const argv = hermesSessionApi.buildHermesArgv(candidate, { sessionId: 'ses_123' });
+  assert.ok(argv.includes('--provider'));
+  assert.equal(argv[argv.indexOf('--provider') + 1], 'openai-codex');
+  assert.ok(argv.includes('-m'));
+  assert.equal(argv[argv.indexOf('-m') + 1], 'gpt-6.1-sol');
+  assert.ok(argv.includes('--continue'));
+  assert.equal(argv[argv.indexOf('--continue') + 1], 'ses_123');
+});
+
+test('TASK-AI-142 H3: probe skips HTTP probe for openai-codex by default, and a failure (rate limit) falls through to next candidate', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-probe-failover-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const fakeHome = path.join(root, 'home');
+  const authPath = path.join(fakeHome, '.codex', 'auth.json');
+  fs.mkdirSync(path.join(fakeHome, '.codex'), { recursive: true });
+  fs.writeFileSync(authPath, '{}', 'utf8');
+
+  const codexCand = {
+    harness: 'hermes',
+    accessPath: 'openai-codex',
+    gateway: 'openai-codex',
+    provider: 'openai-codex',
+    upstream: 'openai',
+    accountId: 'codex',
+    quotaScope: 'codex-chatgpt',
+    quotaGroup: 'codex-chatgpt',
+    modelId: 'gpt-6.1-sol',
+    quality: 95,
+    contextWindow: 128000,
+    capabilities: { contextWindow: 128000 },
+    candidateKey: 'hermes::openai-codex::openai-codex::openai::codex::codex-chatgpt::gpt-6.1-sol',
+  };
+
+  const fallbackCand = {
+    harness: 'hermes',
+    accessPath: 'https://fallback.example/v1',
+    gateway: 'fixture',
+    upstream: 'fb',
+    accountId: 'account-fb',
+    quotaScope: 'account-fb',
+    modelId: 'fallback-model',
+    quality: 80,
+    contextWindow: 64000,
+    capabilities: { contextWindow: 64000 },
+    candidateKey:
+      'hermes::https://fallback.example/v1::fixture::fb::account-fb::account-fb::fallback-model',
+  };
+
+  const registry = {
+    sources: [
+      {
+        id: 'fixture',
+        endpoint: 'https://fallback.example/v1',
+        credential: { type: 'api-key', env: 'FB_KEY' },
+        modelMeta: { 'fallback-model': { contextWindow: 64000 } },
+      },
+    ],
+  };
+
+  const probed = [];
+  const spawned = [];
+  const deps = {
+    candidateList: [codexCand, fallbackCand],
+    registry,
+    evidenceData: {},
+    priorsData: { ranking: [] },
+    routeHealth: { version: 1, paths: {}, events: [] },
+    probe: async (c) => {
+      probed.push(c.candidateKey);
+      if (c.gateway === 'openai-codex') {
+        return { ok: false, status: 429, body: 'Rate limit exceeded' };
+      }
+      return { ok: true, status: 200 };
+    },
+    spawn: async (_cmd, args) => {
+      spawned.push(args);
+      return { exitCode: 0 };
+    },
+  };
+
+  const options = {
+    rootDir: root,
+    skipDecisionLog: true,
+    homeDir: fakeHome,
+    qualityFloor: 0,
+    probe: true,
+    env: { FB_KEY: 'test-key' },
+  };
+
+  await hermesSessionApi.launchHermesSession(options, deps);
+
+  // Probe tried openai-codex first, failed with 429, then probed fallbackCand
+  assert.equal(probed[0], codexCand.candidateKey);
+  assert.equal(probed[1], fallbackCand.candidateKey);
+
+  // Spawn launched with fallback-model, having fallen through from openai-codex
+  assert.equal(spawned.length, 1);
+  assert.ok(
+    spawned[0].includes('fallback-model'),
+    'Fallback model must be launched after rate limit'
+  );
+});
