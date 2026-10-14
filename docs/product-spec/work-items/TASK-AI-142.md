@@ -380,3 +380,14 @@ Offline/snapshot dry-run on `hermes-live` (10 distinct models with scores, route
 - Top 10 models: gpt-6-astra (93), muse-spark-1-3 (91), qwen3-8-max (85), claude-opus-5-5 (50), claude-sonnet-5-5 (49), grok-4-6 (49), glm-5-3 (48), muse-wonder (48), gpt-5-6-sol (47), kimi-k3 (47).
 - Chosen model: `gpt-6-astra` (score 93, 4 routes in active snapshot; 2 routes in stored session snapshot).
 - Chosen route: `hermes::http://127.0.0.1:20128/v1::9router::cl::9router::9router::cl/openai/gpt-6-astra` (reason: highest ranked eligible model; routes ordered by live/known-good, known cost, known latency, quota, stored binding, then candidate key). Stored session binding selects `hermes::https://router.requesty.ai/v1::rqsty::azure::rqsty::rqsty::azure/gpt-6-astra@eastus2`. Live usability remains unverified.
+
+### H3 Hermes reasoning candidate: openai-codex (2026-10-14)
+
+The Controller can offer the Hermes reasoning session a GPT model through the operator's ChatGPT plan via the built-in `openai-codex` provider in `hermes-agent` (v0.21.4):
+- **Candidate eligibility:** `openai-codex` candidates appear only when `~/.codex/auth.json` exists on disk (checked strictly with `fs.existsSync`; auth tokens are never read, printed, or logged).
+- **Model discovery:** Models are read from `~/.codex/config.toml` (`model` key) if present, defaulting to `gpt-6.1-sol`.
+- **Context window policy:** Context length is resolved only from documented entries in hermes-agent model catalogue or metadata. If undocumented, it remains `undefined` and candidate selection refuses it with `CONTEXT_WINDOW_UNVERIFIED`.
+- **Quota sharing:** Marked with `quotaGroup: "codex-chatgpt"` to reflect shared quota with the Codex CLI lane in candidate objects, ranking outputs, and decision records.
+- **Config & invocation:** `writeProvidersConfig` writes `config.yaml` with `model.default` and `model.provider: "openai-codex"`, avoiding dummy endpoints or env keys. `buildHermesArgv` passes `--provider openai-codex`.
+- **Probing & failover:** HTTP preflight probing is skipped for `openai-codex`, while probe or runtime failure (such as HTTP 429 rate limit) falls through to the next candidate.
+
