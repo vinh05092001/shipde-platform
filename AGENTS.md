@@ -129,6 +129,7 @@ Every Pull Request must contain:
 - Reject an implementation that covers only the happy path or only the screen while the Work Item requires backend, persistence, permission, state or tests.
 - Reject behavior that contradicts the feature's rule, state machine, actor or acceptance scenario even if the code is clean.
 - Reject completion claims based on simulation, hard-coded production behavior or client-only state.
+- Hardcoded model/score/provider data or attempt caps are rejected; data must come from live sources.
 
 ### Carrier integrations
 

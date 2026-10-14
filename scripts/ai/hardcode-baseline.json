@@ -1,0 +1,2082 @@
+{
+  "total": 346,
+  "generatedAt": "2026-10-14T09:28:54.832Z",
+  "violations": [
+    {
+      "file": "tools/ai-brain/acceptance/ac-16-02-ledger-activity.js",
+      "line": 24,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "claude-code"
+    },
+    {
+      "file": "tools/ai-brain/acceptance/ac-25-02-existing-gates.js",
+      "line": 43,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "claude-sonnet-5"
+    },
+    {
+      "file": "tools/ai-brain/acceptance/ac-25-03-narrow-on-evidence.js",
+      "line": 31,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "acct-a::claude-sonnet-5"
+    },
+    {
+      "file": "tools/ai-brain/acceptance/ac-25-06-single-failure-keeps-role.js",
+      "line": 27,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "acct-a::claude-sonnet-5"
+    },
+    {
+      "file": "tools/ai-brain/acceptance/ac-25-07-refusal-not-evidence.js",
+      "line": 28,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "acct-a::claude-sonnet-5"
+    },
+    {
+      "file": "tools/ai-brain/acceptance/ac-25-08-grant-refused.js",
+      "line": 27,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "acct-a::claude-sonnet-5"
+    },
+    {
+      "file": "tools/ai-brain/acceptance/ac-30-05-probe-rule.js",
+      "line": 36,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "claude-code"
+    },
+    {
+      "file": "tools/ai-brain/acceptance/ac-30-05-probe-rule.js",
+      "line": 37,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "claude-code"
+    },
+    {
+      "file": "tools/ai-brain/acceptance/ac-30-06-probe-rule-refused.js",
+      "line": 31,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "claude-code"
+    },
+    {
+      "file": "tools/ai-brain/acceptance/ac-30-06-probe-rule-refused.js",
+      "line": 32,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "claude-code"
+    },
+    {
+      "file": "tools/ai-brain/acceptance/ac-30-07-result-credential-free.js",
+      "line": 32,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "claude-haiku-4-5-20251001"
+    },
+    {
+      "file": "tools/ai-brain/acceptance/ac-30-08-credential-in-result.js",
+      "line": 27,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "claude-haiku-4-5-20251001"
+    },
+    {
+      "file": "tools/ai-brain/acceptance/ac-30-08-credential-in-result.js",
+      "line": 40,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "claude-haiku-4-5-20251001"
+    },
+    {
+      "file": "tools/ai-brain/acceptance/ac-42-07-governed-decision-effective.js",
+      "line": 21,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gemini-2.5-pro"
+    },
+    {
+      "file": "tools/ai-brain/acceptance/ac-42-07-governed-decision-effective.js",
+      "line": 30,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "claude-sonnet-4-6"
+    },
+    {
+      "file": "tools/ai-brain/acceptance/ac-42-08-invalid-decision-refused.js",
+      "line": 20,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gemini-2.5-pro"
+    },
+    {
+      "file": "tools/ai-brain/acceptance/ac-42-08-invalid-decision-refused.js",
+      "line": 29,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "claude-sonnet-4-6"
+    },
+    {
+      "file": "tools/ai-brain/acceptance/ac-46-04-access-separated-from-capability.js",
+      "line": 58,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gemini-pro"
+    },
+    {
+      "file": "tools/ai-brain/acceptance/ac-46-04-access-separated-from-capability.js",
+      "line": 58,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "gemini-pro -> score: 90"
+    },
+    {
+      "file": "tools/ai-brain/acceptance/ac-46-04-access-separated-from-capability.js",
+      "line": 58,
+      "rule": "NUMERIC_CAP",
+      "matched": "quality: 90"
+    },
+    {
+      "file": "tools/ai-brain/acceptance/ac-46-04-access-separated-from-capability.js",
+      "line": 65,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gemini-pro"
+    },
+    {
+      "file": "tools/ai-brain/acceptance/ac-46-04-access-separated-from-capability.js",
+      "line": 65,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "gemini-pro -> score: 90"
+    },
+    {
+      "file": "tools/ai-brain/acceptance/ac-46-04-access-separated-from-capability.js",
+      "line": 65,
+      "rule": "NUMERIC_CAP",
+      "matched": "quality: 90"
+    },
+    {
+      "file": "tools/ai-brain/acceptance/ac-46-04-access-separated-from-capability.js",
+      "line": 73,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "gemini-pro -> score: 90"
+    },
+    {
+      "file": "tools/ai-brain/acceptance/ac-46-04-access-separated-from-capability.js",
+      "line": 74,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gemini-pro"
+    },
+    {
+      "file": "tools/ai-brain/acceptance/ac-46-04-access-separated-from-capability.js",
+      "line": 76,
+      "rule": "NUMERIC_CAP",
+      "matched": "quality: 90"
+    },
+    {
+      "file": "tools/ai-brain/acceptance/lib/lesson-promotion.js",
+      "line": 39,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "claude-code"
+    },
+    {
+      "file": "tools/ai-brain/acceptance/lib/lesson-promotion.js",
+      "line": 47,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "chatgpt-codex-connector[bot]"
+    },
+    {
+      "file": "tools/ai-brain/agy-quota.js",
+      "line": 36,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "claude-gpt"
+    },
+    {
+      "file": "tools/ai-brain/benchmarks.json",
+      "line": 2,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "claude-opus-4-6-thinking -> score: 72.5"
+    },
+    {
+      "file": "tools/ai-brain/benchmarks.json",
+      "line": 3,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "claude-opus-4-6-thinking"
+    },
+    {
+      "file": "tools/ai-brain/benchmarks.json",
+      "line": 15,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "claude-sonnet-4-6 -> score: 65"
+    },
+    {
+      "file": "tools/ai-brain/benchmarks.json",
+      "line": 16,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "claude-sonnet-4-6"
+    },
+    {
+      "file": "tools/ai-brain/benchmarks.json",
+      "line": 28,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "gemini-3.1-pro-high -> score: 68"
+    },
+    {
+      "file": "tools/ai-brain/benchmarks.json",
+      "line": 29,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gemini-3.1-pro-high"
+    },
+    {
+      "file": "tools/ai-brain/benchmarks.json",
+      "line": 41,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "gemini-3.8-flash-high -> score: 55"
+    },
+    {
+      "file": "tools/ai-brain/benchmarks.json",
+      "line": 42,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gemini-3.8-flash-high"
+    },
+    {
+      "file": "tools/ai-brain/benchmarks.json",
+      "line": 54,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "gpt-oss-120b-medium -> score: 48"
+    },
+    {
+      "file": "tools/ai-brain/benchmarks.json",
+      "line": 55,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gpt-oss-120b-medium"
+    },
+    {
+      "file": "tools/ai-brain/benchmarks.json",
+      "line": 67,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "cc/claude-opus-5 -> score: 78"
+    },
+    {
+      "file": "tools/ai-brain/benchmarks.json",
+      "line": 68,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "cc/claude-opus-5"
+    },
+    {
+      "file": "tools/ai-brain/benchmarks.json",
+      "line": 80,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "cc/claude-sonnet-5 -> score: 67"
+    },
+    {
+      "file": "tools/ai-brain/benchmarks.json",
+      "line": 81,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "cc/claude-sonnet-5"
+    },
+    {
+      "file": "tools/ai-brain/candidates.js",
+      "line": 1091,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "claude-gpt"
+    },
+    {
+      "file": "tools/ai-brain/capabilities.js",
+      "line": 66,
+      "rule": "NUMERIC_CAP",
+      "matched": "maxAttempts: 2"
+    },
+    {
+      "file": "tools/ai-brain/claude-usage.js",
+      "line": 108,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "claude-code"
+    },
+    {
+      "file": "tools/ai-brain/claude-usage.js",
+      "line": 248,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "claude-code"
+    },
+    {
+      "file": "tools/ai-brain/cli.js",
+      "line": 2532,
+      "rule": "NUMERIC_CAP",
+      "matched": "maxAttempts: 1"
+    },
+    {
+      "file": "tools/ai-brain/cli.js",
+      "line": 3806,
+      "rule": "NUMERIC_CAP",
+      "matched": "qualityFloor: 0"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 21,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "gpt-5-6-sol -> score: 81.1"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 22,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gpt-5-6-sol"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 28,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "gpt-6-astra -> score: 82.2"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 29,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gpt-6-astra"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 35,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "grok-4-6 -> score: 78"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 36,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "grok-4-6"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 42,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "gpt-5-6-terra -> score: 77.9"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 43,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gpt-5-6-terra"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 49,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "gemini-3-8-flash -> score: 75.8"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 50,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gemini-3-8-flash"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 56,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "kimi-k3 -> score: 79.2"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 57,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "kimi-k3"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 63,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "gemini-3-7-flash -> score: 78.8"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 64,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gemini-3-7-flash"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 70,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "deepseek-v4-1-flash -> score: 81.1"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 71,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "deepseek-v4-1-flash"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 77,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "muse-spark-1-3 -> score: 81.6"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 78,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "muse-spark-1-3"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 84,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "gpt-5-5 -> score: 80.2"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 85,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gpt-5-5"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 91,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "glm-5-3 -> score: 76.1"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 92,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "glm-5-3"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 98,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "qwen3-8-flash-next -> score: 76.2"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 99,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "qwen3-8-flash-next"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 105,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "grok-4-5 -> score: 72.5"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 106,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "grok-4-5"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 112,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "grok-4-7 -> score: 77.4"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 113,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "grok-4-7"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 119,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "muse-spark-1-2 -> score: 72.2"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 120,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "muse-spark-1-2"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 126,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "qwen3-8-max -> score: 78.5"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 127,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "qwen3-8-max"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 133,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "deepseek-v4-flash-vision-exp -> score: 76.8"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 134,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "deepseek-v4-flash-vision-exp"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 140,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "gpt-5-6-luna -> score: 73.6"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 141,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gpt-5-6-luna"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 147,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "muse-spark-1-1 -> score: 71.3"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 148,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "muse-spark-1-1"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 154,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "gpt-5-4 -> score: 71"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 155,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gpt-5-4"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 161,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "deepseek-v4-flash-0731 -> score: 74.2"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 162,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "deepseek-v4-flash-0731"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 168,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "deepseek-v4-pro -> score: 68.8"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 169,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "deepseek-v4-pro"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 175,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "glm-5-2 -> score: 73.2"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 176,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "glm-5-2"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 182,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "qwen3-8-27b -> score: 75.3"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 183,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "qwen3-8-27b"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 189,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "gpt-6-luna -> score: 72"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 190,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gpt-6-luna"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 196,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "glm-5-3-flash -> score: 71.6"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 197,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "glm-5-3-flash"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 203,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "qwen3-7-max -> score: 73.1"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 204,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "qwen3-7-max"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 210,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "kimi-k2-6 -> score: 70.5"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 211,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "kimi-k2-6"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 217,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "kimi-k2-7 -> score: 68.4"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 218,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "kimi-k2-7"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 224,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "apodex-1-1-mini -> score: 60.8"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 231,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "mimo-v2-5-pro -> score: 60.2"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 238,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "minimax-m3 -> score: 67.3"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 245,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "qwen3-7-plus -> score: 55.9"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 246,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "qwen3-7-plus"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 252,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "glm-5-1 -> score: 55.8"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 253,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "glm-5-1"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 259,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "qwen3-6-plus -> score: 68.9"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 260,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "qwen3-6-plus"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 266,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "qwen3-6-27b -> score: 64"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 267,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "qwen3-6-27b"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 273,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "minimax-m2-7 -> score: 52.6"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 280,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "ling-3-0-flash -> score: 50.6"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 287,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "mimo-v2-flash -> score: 49.8"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 294,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "nemotron-3-ultra -> score: 67.4"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 301,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "muse-glimmer-30b -> score: 49"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 302,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "muse-glimmer-30b"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 308,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "mistral-medium-3-5 -> score: 46.9"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 309,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "mistral-medium-3-5"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 315,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "kimi-k2-5 -> score: 46.8"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 316,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "kimi-k2-5"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 322,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "qwen3-5-122b-a10b -> score: 45.7"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 323,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "qwen3-5-122b-a10b"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 329,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "gemma4-31b -> score: 43.4"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 336,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "qwen3-6-35b-a3b -> score: 41.9"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 337,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "qwen3-6-35b-a3b"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 343,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "nemotron-3-super -> score: 37.7"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 350,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "gpt-oss-120b -> score: 30.4"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 351,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gpt-oss-120b"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 357,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "command-a-plus -> score: 27.9"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 364,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "nemotron-3-5-lightning -> score: 26.8"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 371,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "mistral-small-4 -> score: 26.6"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 372,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "mistral-small-4"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 378,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "gpt-oss-20b -> score: 20.7"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 379,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gpt-oss-20b"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 385,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "mistral-large-3 -> score: 20.1"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 386,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "mistral-large-3"
+    },
+    {
+      "file": "tools/ai-brain/data/external-model-priors.json",
+      "line": 392,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "lfm-2-5-2-6b -> score: 7.7"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 38,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "gpt-5-6-sol -> score: 79.3"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 39,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gpt-5-6-sol"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 93,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "gpt-6-astra -> score: 79.6"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 94,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gpt-6-astra"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 160,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "grok-4-6 -> score: 77.4"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 161,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "grok-4-6"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 215,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "gpt-5-6-terra -> score: 77.3"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 216,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gpt-5-6-terra"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 258,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "gemini-3-8-flash -> score: 76.1"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 259,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gemini-3-8-flash"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 301,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "kimi-k3 -> score: 77.7"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 302,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "kimi-k3"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 352,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "gemini-3-7-flash -> score: 77.4"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 353,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gemini-3-7-flash"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 395,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "deepseek-v4-1-flash -> score: 81.1"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 396,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "deepseek-v4-1-flash"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 438,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "muse-spark-1-3 -> score: 78.7"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 439,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "muse-spark-1-3"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 505,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "gpt-5-5 -> score: 77.6"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 506,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gpt-5-5"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 548,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "glm-5-3 -> score: 75.4"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 549,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "glm-5-3"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 603,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "qwen3-8-flash-next -> score: 74.6"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 604,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "qwen3-8-flash-next"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 646,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "grok-4-5 -> score: 72.5"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 647,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "grok-4-5"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 677,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "grok-4-7 -> score: 77.4"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 678,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "grok-4-7"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 720,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "muse-spark-1-2 -> score: 72.2"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 721,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "muse-spark-1-2"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 751,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "qwen3-8-max -> score: 75.2"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 752,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "qwen3-8-max"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 818,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "deepseek-v4-flash-vision-exp -> score: 76.8"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 819,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "deepseek-v4-flash-vision-exp"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 845,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "gpt-5-6-luna -> score: 72.6"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 846,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gpt-5-6-luna"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 888,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "muse-spark-1-1 -> score: 71.3"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 889,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "muse-spark-1-1"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 919,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "gpt-5-4 -> score: 71"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 920,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gpt-5-4"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 950,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "deepseek-v4-flash-0731 -> score: 71.7"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 951,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "deepseek-v4-flash-0731"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 989,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "deepseek-v4-pro -> score: 68.8"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 990,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "deepseek-v4-pro"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1016,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "glm-5-2 -> score: 71"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1017,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "glm-5-2"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1059,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "qwen3-8-27b -> score: 71.7"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1060,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "qwen3-8-27b"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1102,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "gpt-6-luna -> score: 72"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1103,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gpt-6-luna"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1133,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "glm-5-3-flash -> score: 71.6"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1134,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "glm-5-3-flash"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1164,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "qwen3-7-max -> score: 69.6"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1165,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "qwen3-7-max"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1207,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "kimi-k2-6 -> score: 66.2"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1208,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "kimi-k2-6"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1246,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "kimi-k2-7 -> score: 64.6"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1247,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "kimi-k2-7"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1285,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "apodex-1-1-mini -> score: 60.8"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1316,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "mimo-v2-5-pro -> score: 60.2"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1347,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "minimax-m3 -> score: 63"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1390,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "qwen3-7-plus -> score: 55.9"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1391,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "qwen3-7-plus"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1421,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "glm-5-1 -> score: 55.8"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1422,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "glm-5-1"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1452,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "qwen3-6-plus -> score: 61.7"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1453,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "qwen3-6-plus"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1495,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "qwen3-6-27b -> score: 58.9"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1496,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "qwen3-6-27b"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1538,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "minimax-m2-7 -> score: 52.6"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1569,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "ling-3-0-flash -> score: 50.6"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1600,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "mimo-v2-flash -> score: 49.8"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1631,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "nemotron-3-ultra -> score: 58.4"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1670,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "muse-glimmer-30b -> score: 49"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1671,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "muse-glimmer-30b"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1701,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "mistral-medium-3-5 -> score: 46.9"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1702,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "mistral-medium-3-5"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1728,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "kimi-k2-5 -> score: 46.8"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1729,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "kimi-k2-5"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1759,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "qwen3-5-122b-a10b -> score: 45.7"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1760,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "qwen3-5-122b-a10b"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1790,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "gemma4-31b -> score: 43.4"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1817,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "qwen3-6-35b-a3b -> score: 41.9"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1818,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "qwen3-6-35b-a3b"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1848,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "nemotron-3-super -> score: 37.7"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1875,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "gpt-oss-120b -> score: 30.4"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1876,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gpt-oss-120b"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1906,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "command-a-plus -> score: 27.9"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1937,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "nemotron-3-5-lightning -> score: 26.8"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1964,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "mistral-small-4 -> score: 26.6"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1965,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "mistral-small-4"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1995,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "gpt-oss-20b -> score: 20.7"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 1996,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gpt-oss-20b"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 2026,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "mistral-large-3 -> score: 20.1"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 2027,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "mistral-large-3"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 2057,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "lfm-2-5-2-6b -> score: 7.7"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 2085,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "claude-opus-5-5"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 2106,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "claude-sonnet-5-5"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 2127,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "muse-wonder"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 2148,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "claude-fable-5-1"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 2169,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gemini-4-argon"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 2190,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gpt-6-1-sol"
+    },
+    {
+      "file": "tools/ai-brain/data/model-priors.json",
+      "line": 2211,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "claude-opus-5"
+    },
+    {
+      "file": "tools/ai-brain/data/tool-manifest.json",
+      "line": 14,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "claude-code"
+    },
+    {
+      "file": "tools/ai-brain/data/tool-manifest.json",
+      "line": 15,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "anthropic-ai/claude-code"
+    },
+    {
+      "file": "tools/ai-brain/data/tool-manifest.json",
+      "line": 124,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gemini-cli"
+    },
+    {
+      "file": "tools/ai-brain/data/tool-manifest.json",
+      "line": 125,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "google-gemini/gemini-cli"
+    },
+    {
+      "file": "tools/ai-brain/data/tool-manifest.json",
+      "line": 257,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "openai/codex"
+    },
+    {
+      "file": "tools/ai-brain/hermes-session.js",
+      "line": 489,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gpt-6.1-sol"
+    },
+    {
+      "file": "tools/ai-brain/hermes-session.js",
+      "line": 491,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gpt-6.1-sol"
+    },
+    {
+      "file": "tools/ai-brain/hermes-session.js",
+      "line": 501,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gpt-6.1-sol"
+    },
+    {
+      "file": "tools/ai-brain/hermes-session.js",
+      "line": 504,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gpt-6.1-sol"
+    },
+    {
+      "file": "tools/ai-brain/hermes-session.js",
+      "line": 518,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gpt-6.1-sol"
+    },
+    {
+      "file": "tools/ai-brain/manifest-audit.js",
+      "line": 30,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "claude-code"
+    },
+    {
+      "file": "tools/ai-brain/manifest-audit.js",
+      "line": 32,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gemini-cli"
+    },
+    {
+      "file": "tools/ai-brain/manifest-audit.js",
+      "line": 33,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "deepseek-harness"
+    },
+    {
+      "file": "tools/ai-brain/orchestrate.js",
+      "line": 70,
+      "rule": "NUMERIC_CAP",
+      "matched": "PROBE_ATTEMPT_LIMIT = 20"
+    },
+    {
+      "file": "tools/ai-brain/orchestrate.js",
+      "line": 71,
+      "rule": "NUMERIC_CAP",
+      "matched": "PROBE_BUDGET_MS = 180000"
+    },
+    {
+      "file": "tools/ai-brain/quota-store.js",
+      "line": 189,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "claude-code"
+    },
+    {
+      "file": "tools/ai-brain/refresh-quota.js",
+      "line": 71,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "claude-code"
+    },
+    {
+      "file": "tools/ai-brain/routing.js",
+      "line": 83,
+      "rule": "NUMERIC_CAP",
+      "matched": "quality: 20"
+    },
+    {
+      "file": "tools/ai-brain/routing.js",
+      "line": 84,
+      "rule": "NUMERIC_CAP",
+      "matched": "quality: 33"
+    },
+    {
+      "file": "tools/ai-brain/routing.js",
+      "line": 85,
+      "rule": "NUMERIC_CAP",
+      "matched": "quality: 65"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 39,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "gemini-3.8-flash-high -> score: 84"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 40,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gemini-3.8-flash-high"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 44,
+      "rule": "NUMERIC_CAP",
+      "matched": "quality: 84"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 46,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "gemini-3.8-flash-medium -> score: 76"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 47,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gemini-3.8-flash-medium"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 50,
+      "rule": "NUMERIC_CAP",
+      "matched": "quality: 76"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 52,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "gemini-3.8-flash-low -> score: 62"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 53,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gemini-3.8-flash-low"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 56,
+      "rule": "NUMERIC_CAP",
+      "matched": "quality: 62"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 58,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "gemini-3.7-flash-high -> score: 78"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 59,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gemini-3.7-flash-high"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 62,
+      "rule": "NUMERIC_CAP",
+      "matched": "quality: 78"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 64,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "gemini-3.7-flash-medium -> score: 72"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 65,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gemini-3.7-flash-medium"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 68,
+      "rule": "NUMERIC_CAP",
+      "matched": "quality: 72"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 70,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "gemini-3.7-flash-low -> score: 58"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 71,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gemini-3.7-flash-low"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 74,
+      "rule": "NUMERIC_CAP",
+      "matched": "quality: 58"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 76,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "gemini-3.6-flash-high -> score: 74"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 77,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gemini-3.6-flash-high"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 80,
+      "rule": "NUMERIC_CAP",
+      "matched": "quality: 74"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 82,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "gemini-3.6-flash-medium -> score: 68"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 83,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gemini-3.6-flash-medium"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 86,
+      "rule": "NUMERIC_CAP",
+      "matched": "quality: 68"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 88,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "gemini-3.6-flash-low -> score: 54"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 89,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gemini-3.6-flash-low"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 92,
+      "rule": "NUMERIC_CAP",
+      "matched": "quality: 54"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 95,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "gemini-3.1-pro-high -> score: 90"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 96,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gemini-3.1-pro-high"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 100,
+      "rule": "NUMERIC_CAP",
+      "matched": "quality: 90"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 102,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "gemini-3.1-pro-low -> score: 82"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 103,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gemini-3.1-pro-low"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 107,
+      "rule": "NUMERIC_CAP",
+      "matched": "quality: 82"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 110,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "claude-opus-4-6-thinking -> score: 94"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 111,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "claude-opus-4-6-thinking"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 115,
+      "rule": "NUMERIC_CAP",
+      "matched": "quality: 94"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 117,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "claude-sonnet-4-6 -> score: 86"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 118,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "claude-sonnet-4-6"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 122,
+      "rule": "NUMERIC_CAP",
+      "matched": "quality: 86"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 124,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gpt-oss-120b-medium"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 124,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "gpt-oss-120b-medium -> score: 70"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 124,
+      "rule": "NUMERIC_CAP",
+      "matched": "quality: 70"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 133,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "cc/claude-opus-5 -> score: 96"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 134,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "cc/claude-opus-5"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 138,
+      "rule": "NUMERIC_CAP",
+      "matched": "quality: 96"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 140,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "cc/claude-sonnet-5 -> score: 88"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 141,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "cc/claude-sonnet-5"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 145,
+      "rule": "NUMERIC_CAP",
+      "matched": "quality: 88"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 147,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "cc/claude-haiku-4-5-20251001 -> score: 60"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 148,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "cc/claude-haiku-4-5-20251001"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 151,
+      "rule": "NUMERIC_CAP",
+      "matched": "quality: 60"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 153,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "kimchi/glm-5.3"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 153,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "kimchi/glm-5.3 -> score: 72"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 153,
+      "rule": "NUMERIC_CAP",
+      "matched": "quality: 72"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 154,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "kimchi/glm-5.3-flash -> score: 58"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 155,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "kimchi/glm-5.3-flash"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 158,
+      "rule": "NUMERIC_CAP",
+      "matched": "quality: 58"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 160,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "kimchi/deepseek-v4-flash-0731 -> score: 74"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 161,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "kimchi/deepseek-v4-flash-0731"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 164,
+      "rule": "NUMERIC_CAP",
+      "matched": "quality: 74"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 166,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "kimchi/minimax-m3"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 166,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "kimchi/minimax-m3 -> score: 70"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 166,
+      "rule": "NUMERIC_CAP",
+      "matched": "quality: 70"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 167,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gh/gpt-5.3-codex"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 167,
+      "rule": "MODEL_SCORE_PAIR",
+      "matched": "gh/gpt-5.3-codex -> score: 84"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 167,
+      "rule": "NUMERIC_CAP",
+      "matched": "quality: 84"
+    },
+    {
+      "file": "tools/ai-brain/seed-accounts.js",
+      "line": 181,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "gemini-worker"
+    },
+    {
+      "file": "tools/ai-brain/source-discovery.js",
+      "line": 265,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": ".qwen"
+    },
+    {
+      "file": "tools/ai-brain/source-discovery.js",
+      "line": 265,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "qwen"
+    },
+    {
+      "file": "tools/ai-brain/sources.json",
+      "line": 85,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "claude-gpt"
+    },
+    {
+      "file": "tools/ai-brain/sources.json",
+      "line": 105,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "zai/zai_auto"
+    },
+    {
+      "file": "tools/ai-brain/sources.json",
+      "line": 105,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "zai/zai_glm-5.3-flash"
+    },
+    {
+      "file": "tools/ai-brain/sources.json",
+      "line": 200,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "qwen"
+    },
+    {
+      "file": "tools/ai-brain/sources.json",
+      "line": 201,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "Qwen"
+    },
+    {
+      "file": "tools/ai-brain/sources.json",
+      "line": 204,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "qwen"
+    },
+    {
+      "file": "tools/ai-brain/sources.json",
+      "line": 206,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "~/.qwen"
+    },
+    {
+      "file": "tools/ai-brain/sources.json",
+      "line": 295,
+      "rule": "MODEL_ID_LITERAL",
+      "matched": "claude-code"
+    },
+    {
+      "file": "tools/ai-brain/work-item-planner.js",
+      "line": 669,
+      "rule": "NUMERIC_CAP",
+      "matched": "qualityFloor: 80"
+    }
+  ]
+}
