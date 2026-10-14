@@ -424,3 +424,7 @@ Exhausted accounts cool down as a whole across model routes sharing the same acc
 ### H3 live: writer probe without count caps (2026-10-14)
 
 GOAL-AUTOCLAW-REPOS-1 failed with PROBE_BUDGET_EXHAUSTED because writer probing was capped at 20 attempts and 2 routes per model. Both caps are removed for writers; only the wall-clock budget remains, and candidates on an account that reported a provider-level failure are skipped without probing. Follow-up: the reviewer path still has a 2-route cap (REVIEWER_CANONICAL_MODEL_CAP).
+
+### H3 live: concurrent writer probing (2026-10-14)
+
+After #312 writer routes were still probed one at a time within the 180 s budget. Writer routes are now probed concurrently (up to 8 accounts, reusing the Hermes concurrent probe) before selection; failed routes are recorded with reasons in the intake decisions. A live dry-run with real keys selected live writers.

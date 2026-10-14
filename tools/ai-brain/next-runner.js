@@ -666,8 +666,6 @@ async function executeIntakeForItem(item, options, deps, logOpts) {
   const runIntakeFn = d.runIntake || intakeApi.runIntake;
   const intakeDeps = d.intakeDeps || {};
 
-  const primaryDecisionDir = opts.decisionDir || d.decisionDir || decisions.DEFAULT_DIR;
-
   try {
     const intakeResult = await runIntakeFn(
       {
@@ -678,7 +676,8 @@ async function executeIntakeForItem(item, options, deps, logOpts) {
           opts.externalWorkers ||
           opts['external-workers'] ||
           (d.config || opts.config || loadConfig(opts.rootDir)).externalWorkers,
-        decisionDir: primaryDecisionDir,
+        // Intake owns the brain decision stream for this run.
+        // Runner status decisions continue to use logOpts above.
       },
       intakeDeps
     );
