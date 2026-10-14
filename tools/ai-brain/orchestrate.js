@@ -4372,9 +4372,7 @@ async function runOrchestration(goal, opts) {
           const reasonCode = sharedRouteProbe.failureReason(
             sharedRouteProbe.classifyProbeFailure(result)
           );
-          // Without a winner, consume cached failures after selection so prompts
-          // and durable failure checkpoints still follow the normal path.
-          refuse(candidate, 'WRITER_ROUTE_PROBE_FAILED ' + reasonCode, false);
+          refuse(candidate, 'WRITER_ROUTE_PROBE_FAILED ' + reasonCode);
           const cause = String(result?.cause || result?.reasonCode || reasonCode)
             .toLowerCase()
             .trim();

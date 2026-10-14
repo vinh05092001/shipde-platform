@@ -1,4 +1,4 @@
-﻿'use strict';
+'use strict';
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -395,6 +395,91 @@ test('(c) one model with 3 routes, first 2 fail, 3rd live: the 3rd route is used
   );
   assert.equal(result.status, 'COMPLETED');
   assert.equal(result.sessions[0].candidateKey, candR3.candidateKey);
+});
+
+test('failed concurrent pre-probes are never selected when no route succeeds', async (t) => {
+  const repo = makeTempRepo();
+  const decisionDir = tmpDir('dec-c-');
+  const evidenceDir = tmpDir('evi-c-');
+  t.after(() => {
+    fs.rmSync(repo.dir, { recursive: true, force: true });
+    fs.rmSync(decisionDir, { recursive: true, force: true });
+    fs.rmSync(evidenceDir, { recursive: true, force: true });
+  });
+
+  const candidates = [createCandidate()];
+  const registry = {
+    sources: candidates.map((candidate) => ({
+      id: candidate.gateway,
+      endpoint: candidate.accessPath,
+      credential: { env: 'TEST_KEY' },
+    })),
+    dispatch: { providers: { oc: { harness: 'opencode-direct', provider: 'opencode' } } },
+  };
+
+  const probedAccounts = [];
+  const routeProbe = async (probeCandidate) => {
+    probedAccounts.push(probeCandidate.accessPath);
+    return { ok: false, status: 500, body: 'server error' };
+  };
+  let launches = 0;
+
+  const options = {
+    isolatedWorker: true,
+    cwd: repo.dir,
+    workerRoot: repo.dir,
+    baseSha: repo.sha,
+    sha: repo.sha,
+    decisionDir,
+    evidenceDir,
+    candidates,
+    registry,
+    specs: [{ id: 'TASK-AI-142', files: ['a.js'], acceptanceCriteria: ['done'] }],
+    routeProbe,
+    run: () => {
+      launches += 1;
+      throw new Error('A failed pre-probe route must never launch');
+    },
+    reviewer: () => ({ pass: true, sha: repo.sha, verdict: 'PASS', findings: [] }),
+    tests: () => ({ pass: true }),
+    hostGate: () => ({ pass: true, failures: [] }),
+    ranking: { priors: { ranking: [] } },
+  };
+
+  const result = await runOrchestration('test failed concurrent pre-probe exclusion', options);
+  assert.deepEqual(
+    probedAccounts,
+    candidates.map((candidate) => candidate.accessPath)
+  );
+  assert.equal(launches, 0);
+  assert.notEqual(result.status, 'COMPLETED');
+  const records = fs
+    .readdirSync(decisionDir)
+    .filter((name) => name.endsWith('.jsonl'))
+    .flatMap((name) =>
+      fs.readFileSync(path.join(decisionDir, name), 'utf8').trim().split('\n').map(JSON.parse)
+    );
+  for (const candidate of candidates) {
+    assert.ok(
+      records.some((record) =>
+        (record.rejected || []).some(
+          (entry) =>
+            entry.candidateKey === candidate.candidateKey &&
+            String(entry.reason).startsWith('WRITER_ROUTE_PROBE_FAILED')
+        )
+      )
+    );
+    const refusalIndex = records.findIndex((record) =>
+      (record.rejected || []).some(
+        (entry) =>
+          entry.candidateKey === candidate.candidateKey &&
+          String(entry.reason).startsWith('WRITER_ROUTE_PROBE_FAILED')
+      )
+    );
+    assert.ok(
+      records.slice(refusalIndex + 1).every((record) => record.chosen !== candidate.candidateKey)
+    );
+  }
 });
 
 test('(d) next keeps brain decisions in the intake run instead of forwarding its global decision dir', async (t) => {
