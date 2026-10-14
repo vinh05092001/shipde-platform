@@ -5,6 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 const sourcesApi = require('./sources');
+const { candidateKey } = require('./discovery/identity');
 
 const BACKOFF_MS = [30 * 60e3, 2 * 60 * 60e3, 6 * 60 * 60e3, 24 * 60 * 60e3];
 
@@ -226,6 +227,84 @@ function getProviderRecord(store, gateway, provider) {
   );
 }
 
+function extractAccountKey(candidate, options) {
+  if (!candidate) return null;
+  const key =
+    typeof candidate === 'string'
+      ? candidate
+      : candidate.candidateKey ||
+        (candidate.identity && candidate.identity.candidateKey) ||
+        (typeof candidateKey === 'function' ? candidateKey(candidate) : '');
+  if (key && typeof key === 'string' && key.includes('::')) {
+    const fields = key.split('::');
+    if (fields.length >= 4) {
+      let base = (fields[1] || '').replace(/\/+$/, '');
+      if (
+        (base === 'cli' || !base.startsWith('http')) &&
+        options &&
+        options.registry &&
+        options.registry.sources
+      ) {
+        const src = options.registry.sources.find((s) => s.id === fields[2] || s.id === fields[3]);
+        if (src && (src.endpoint || src.accessPath)) {
+          base = (src.accessPath || src.endpoint).replace(/\/+$/, '');
+        }
+      }
+      if (base === 'http://127.0.0.1:20128/v1' && fields[4]) {
+        return `${fields[2]}::${fields[3]}::${fields[4]}`;
+      }
+      return `${fields[2]}::${fields[3]}`;
+    }
+  }
+  const base = (candidate.accessPath || candidate.endpoint || '').replace(/\/+$/, '');
+  const gw = candidate.gateway || candidate.sourceId || candidate.source || '';
+  const up = candidate.upstream || '';
+  const acc = candidate.account !== undefined ? candidate.account : candidate.accountId || '';
+  if (base === 'http://127.0.0.1:20128/v1' && acc) {
+    return `${gw}::${up}::${acc}`;
+  }
+  return `${gw}::${up}`;
+}
+
+function setAccountRecord(store, account, entry) {
+  if (!store.accounts) store.accounts = {};
+  store.accounts[account] = entry;
+}
+
+function getAccountRecord(store, account) {
+  if (!store || !store.accounts || !account) return null;
+  return store.accounts[account] || null;
+}
+
+function deleteAccountRecord(store, account) {
+  if (!store || !store.accounts || !account) return;
+  delete store.accounts[account];
+}
+
+function rememberAccountCooldown(candidate, cause, expiryIso, options) {
+  const o = options || {};
+  const file = probeMemoryFile(o);
+  const store = o.routeHealth || loadStore(file, { allowMissing: true });
+  const now = o.now ?? Date.now();
+  const account = extractAccountKey(candidate, o);
+  if (!account) return null;
+  const causeStr =
+    typeof cause === 'string'
+      ? cause
+      : (cause && (cause.reason || cause.reasonCode)) || 'ACCOUNT_COOLDOWN';
+  const nextCheckAt = expiryIso || new Date(now + probeCooldownMs(causeStr)).toISOString();
+  const record = {
+    account,
+    status: causeStr,
+    probeCause: causeStr,
+    lastCheckedAt: new Date(now).toISOString(),
+    nextCheckAt,
+  };
+  setAccountRecord(store, account, record);
+  if (o.persistRouteHealth !== false) saveStore(file, store);
+  return record;
+}
+
 function probeCooldown(candidate, options) {
   const o = options || {};
   if (candidate.harness === 'agy-pool') return null;
@@ -244,6 +323,13 @@ function probeCooldown(candidate, options) {
       return `PROBE_COOLDOWN: PROVIDER_UNAVAILABLE until ${providerRecord.nextCheckAt}`;
     }
   }
+  const account = extractAccountKey(candidate, o);
+  if (account && store.accounts && store.accounts[account]) {
+    const accountRecord = store.accounts[account];
+    if (accountRecord && accountRecord.nextCheckAt && Date.parse(accountRecord.nextCheckAt) > now) {
+      return `PROBE_COOLDOWN_ACCOUNT: ${account} until ${accountRecord.nextCheckAt}`;
+    }
+  }
   const record = getPathRecord(store, identity.model, identity.route);
   if (!record || !record.probeCause || record.status === 'AVAILABLE') return null;
   if (Date.parse(record.nextCheckAt) <= now) return null;
@@ -256,11 +342,11 @@ function probeCooldownMs(cause) {
       ? cause.reason || cause.reasonCode || ''
       : String(cause || '');
   const hours =
-    /PROVIDER_UNAVAILABLE|CREDIT|QUOTA|ENTITLEMENT|AUTH|FORBIDDEN|HTTP_40[123]|RATE_LIMITED/.test(
+    /PROVIDER_UNAVAILABLE|CREDIT|QUOTA|ENTITLEMENT|AUTH|FORBIDDEN|HTTP_40[123]|RATE_LIMITED/i.test(
       causeStr
     )
       ? 6
-      : /HTTP_404|ALIAS|ROUTE_UNAVAILABLE/.test(causeStr)
+      : /HTTP_404|ALIAS|ROUTE_UNAVAILABLE/i.test(causeStr)
         ? 24
         : 0.5;
   return hours * 3600000;
@@ -297,6 +383,10 @@ function rememberProbe(candidate, result, options) {
     if (gateway && provider && store.providers) {
       deleteProviderRecord(store, gateway, provider);
     }
+    const acc = extractAccountKey(candidate, o);
+    if (acc && store.accounts) {
+      deleteAccountRecord(store, acc);
+    }
   } else if (causeCode === 'PROVIDER_UNAVAILABLE') {
     if (gateway && provider) {
       record.status = 'PROVIDER_UNAVAILABLE';
@@ -310,6 +400,38 @@ function rememberProbe(candidate, result, options) {
       });
     }
   }
+
+  const rawCause =
+    result && (result.cause || result.reasonCode || (typeof cause === 'string' ? cause : ''));
+  const bodyText = String((result && (result.body || result.message)) || '');
+  let matchedAccountCause = null;
+  const targetCauses = [
+    'upstream_credit_exhausted',
+    'quota_exhausted',
+    'account_auth_failed',
+    'upstream_entitlement',
+  ];
+  for (const tc of targetCauses) {
+    if (rawCause === tc || new RegExp(`\\b${tc}\\b`, 'i').test(bodyText)) {
+      matchedAccountCause = tc;
+      break;
+    }
+  }
+  if (matchedAccountCause) {
+    const account = extractAccountKey(candidate, o);
+    if (account) {
+      const expiryIso =
+        record.nextCheckAt || new Date(now + probeCooldownMs(matchedAccountCause)).toISOString();
+      setAccountRecord(store, account, {
+        account,
+        status: matchedAccountCause,
+        probeCause: matchedAccountCause,
+        lastCheckedAt: new Date(now).toISOString(),
+        nextCheckAt: expiryIso,
+      });
+    }
+  }
+
   if (o.persistRouteHealth !== false) saveStore(file, store);
   return record;
 }
@@ -968,4 +1090,9 @@ module.exports = {
   BACKOFF_MS,
   getProviderRecord,
   extractProvider,
+  extractAccountKey,
+  rememberAccountCooldown,
+  setAccountRecord,
+  getAccountRecord,
+  deleteAccountRecord,
 };

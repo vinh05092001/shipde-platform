@@ -657,7 +657,7 @@ function selectReasoningCandidate(options, deps) {
   poolCandidates = poolCandidates.filter((candidate) => {
     const reason = require('./route-health').probeCooldown(candidate, {
       ...opts,
-      routeHealth: d.routeHealth,
+      routeHealth: d.routeHealth || opts.routeHealth,
       routeHealthFile:
         opts.routeHealthFile ||
         d.routeHealthFile ||
@@ -1628,19 +1628,16 @@ async function launchHermesSession(options, deps) {
         }),
       ]);
       clearTimeout(timeoutHandle);
-      require('./route-health').rememberProbe(candidate, probeResult, {
+      const health = require('./route-health');
+      const routeHealthFile =
+        opts.routeHealthFile ||
+        d.routeHealthFile ||
+        path.join(resolveRootDir(opts, d), 'tools', 'ai-brain', 'data', 'model-route-health.json');
+      const routeHealthStore = d.routeHealth || opts.routeHealth;
+      const healthRecord = health.rememberProbe(candidate, probeResult, {
         ...opts,
-        routeHealth: d.routeHealth,
-        routeHealthFile:
-          opts.routeHealthFile ||
-          d.routeHealthFile ||
-          path.join(
-            resolveRootDir(opts, d),
-            'tools',
-            'ai-brain',
-            'data',
-            'model-route-health.json'
-          ),
+        routeHealth: routeHealthStore,
+        routeHealthFile,
       });
       if (!probeResult || probeResult.ok !== true) {
         const status = Number(probeResult && probeResult.status) || 0;
@@ -1658,6 +1655,24 @@ async function launchHermesSession(options, deps) {
           candidateKey: candidate.candidateKey,
           accountId: candidate.accountId,
         });
+        const accountCauses = new Set([
+          'upstream_credit_exhausted',
+          'quota_exhausted',
+          'account_auth_failed',
+          'upstream_entitlement',
+        ]);
+        if (accountCauses.has(classification.cause)) {
+          health.rememberAccountCooldown(
+            candidate,
+            classification.cause,
+            healthRecord && healthRecord.nextCheckAt ? healthRecord.nextCheckAt : null,
+            {
+              ...opts,
+              routeHealth: routeHealthStore,
+              routeHealthFile,
+            }
+          );
+        }
         const routeFailure =
           status === 0 ||
           status === 429 ||
