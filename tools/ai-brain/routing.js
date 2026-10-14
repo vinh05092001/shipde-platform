@@ -1291,6 +1291,9 @@ function rankForProfile(candidates, profile, assessment, ctx) {
     const missingCapability = (profile.requiredCapabilities || []).find((cap) => !caps[cap]);
     if (missingCapability) {
       reject('CAPABILITY_MISSING:' + missingCapability, 'capability');
+      if (missingCapability === 'jsonSchema' && c.jsonSchemaEvidence) {
+        rejected[rejected.length - 1].reason = c.jsonSchemaEvidence.reason;
+      }
       continue;
     }
     const contextWindow = Number(candidateContextWindow(c));

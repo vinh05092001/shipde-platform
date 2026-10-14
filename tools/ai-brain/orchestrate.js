@@ -185,6 +185,13 @@ function resolveLauncher(o, isolatedLauncher) {
   if (!isolatedLauncher && externalWorkers.length === 0) return null;
   const { getHarness } = require('./harness');
   return (job) => {
+    const writerSchema = require('./writer-schema');
+    if (['codex', 'agy-pool'].includes(job.harness) && !job.resultSchema) {
+      job = writerSchema.prepareJob(job);
+    }
+    if (job.harness === 'codex' && o.isolatedWorker) {
+      job.isolationVerdict = require('./isolation-launcher').readClosedIsolationVerdict();
+    }
     const adapter = getHarness(job.harness);
     if (!adapter) throw new Error('UNKNOWN_HARNESS: ' + String(job.harness));
     let launchArgs;
@@ -233,7 +240,7 @@ function resolveLauncher(o, isolatedLauncher) {
       throw new Error('LAUNCHER_MISSING: no isolated launcher for ' + adapter.id);
     }
 
-    return isolatedLauncher(adapter, launchArgs, {
+    const launched = isolatedLauncher(adapter, launchArgs, {
       cwd: job.hostWorktree || job.cwd,
       workerRoot: job.workerRoot,
       baseSha: job.baseSha,
@@ -242,7 +249,10 @@ function resolveLauncher(o, isolatedLauncher) {
       retainWorkerHead: job.retainWorkerHead || undefined,
       verdictPath: job.verdictPath,
       exercise: job.exercise || o.exercise || null,
-      onProvisioned: typeof o.onProvisioned === 'function' ? o.onProvisioned : undefined,
+      onProvisioned: (root, details) => {
+        if (job.resultSchema) writerSchema.materialise(job, root);
+        return typeof o.onProvisioned === 'function' ? o.onProvisioned(root, details) : undefined;
+      },
       candidateKey: job.candidateKey || null,
       gateway: job.gateway || null,
       model: job.model || null,
@@ -261,6 +271,17 @@ function resolveLauncher(o, isolatedLauncher) {
       decisionDir: o.decisionDir || undefined,
       checkpoint: o.checkpointFile || (typeof o.checkpoint === 'string' ? o.checkpoint : undefined),
     });
+    if (job.resultSchema && launched && launched.exitCode === 0) {
+      const checked = writerSchema.validate(launched.stdout, job.resultSchema);
+      if (!checked.ok || checked.value.status !== 'completed') {
+        return {
+          ...launched,
+          exitCode: 1,
+          failureReason: checked.reason || 'WRITER_RESULT_NOT_COMPLETED',
+        };
+      }
+    }
+    return launched;
   };
 }
 
@@ -3248,6 +3269,51 @@ async function selectCandidateForProfile(
           : hasQuotaAccountReadings(o),
   };
 
+  if (profile.role === 'writer' && (profile.requiredCapabilities || []).includes('jsonSchema')) {
+    const schemaApi = require('./writer-schema');
+    const cache = o.writerSchemaEvidence || (o.writerSchemaEvidence = new Map());
+    const external = String(o.externalWorkers || '')
+      .split(',')
+      .includes('agy-pool');
+    for (const c of candidates) {
+      if (!['codex', 'agy-pool'].includes(c.harness)) continue;
+      const key = candidateKey(c);
+      let proof = cache.get(key);
+      if (!proof && !c.blocked && c.accountId && c.accountId !== '*') {
+        if (c.harness === 'agy-pool' && external) {
+          proof = await schemaApi.verify(c, o);
+        } else if (c.harness === 'codex' && o.isolatedWorker) {
+          const isolation = require('./isolation-launcher');
+          const root = resolveIsolatedWorkerRoot(o, o.cwd || process.cwd()) + '-schema-probe';
+          const run = resolveLauncher(
+            { ...o, exercise: null, onProvisioned: undefined, workerTimeoutMs: 60000 },
+            isolation.getIsolatedLauncher()
+          );
+          proof = await schemaApi.verify(c, {
+            ...o,
+            workerRoot: root,
+            run: (job) =>
+              run({
+                ...job,
+                isolatedWorker: true,
+                cwd: root,
+                workerRoot: root,
+                hostWorktree: o.cwd || process.cwd(),
+                baseSha: o.baseSha,
+                title: `${item.id}-schema-probe`,
+                workerTimeoutMs: 60000,
+                isolationVerdict: isolation.readClosedIsolationVerdict(),
+              }),
+          });
+        } else {
+          proof = { ok: false, reason: 'WRITER_SCHEMA_LAUNCH_NOT_AUTHORIZED' };
+        }
+        cache.set(key, proof);
+      }
+      c.capabilities = { ...c.capabilities, jsonSchema: Boolean(proof && proof.ok) };
+      c.jsonSchemaEvidence = proof || { ok: false, reason: 'WRITER_SCHEMA_UNVERIFIED' };
+    }
+  }
   const result = routing.rankForProfile(candidates, profile, assessment, rankCtx);
   if (o.isolatedWorker && profile.role !== 'reviewer') {
     require('./probe-order').preferKnownGood(result, candidates, { ...o, now });
@@ -3345,6 +3411,7 @@ async function selectCandidateForProfile(
       scoreBreakdown: c.scoreBreakdown,
       proof: routing.proofObserved(evData, c) || 'NONE',
       capabilityEvidence: c.capabilities || {},
+      jsonSchemaEvidence: c.jsonSchemaEvidence || null,
       account: normalizeAccount(c.accountId),
       quota: {
         headroom: c.headroomStatus || 'unknown',
@@ -3363,6 +3430,7 @@ async function selectCandidateForProfile(
       scoreBreakdown: c.scoreBreakdown,
       proof: routing.proofObserved(evData, c) || 'NONE',
       capabilityEvidence: c.capabilities || {},
+      jsonSchemaEvidence: c.jsonSchemaEvidence || null,
       headroom: c.headroomStatus || 'unknown',
       quotaReasonCode: c.quotaReasonCode || null,
       failureDomain: routing.failureDomainOf(c),
