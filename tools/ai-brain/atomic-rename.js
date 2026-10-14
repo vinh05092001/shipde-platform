@@ -44,13 +44,8 @@ function removeLeftoverTmp(fsApi, tmpPath) {
 function atomicRenameSync(source, target, options) {
   const fsApi = (options && options.fs) || fs;
   const maxAttempts =
-    options && typeof options.maxAttempts === 'number'
-      ? options.maxAttempts
-      : DEFAULT_MAX_ATTEMPTS;
-  const delays =
-    options && Array.isArray(options.delays)
-      ? options.delays
-      : DEFAULT_DELAYS_MS;
+    options && typeof options.maxAttempts === 'number' ? options.maxAttempts : DEFAULT_MAX_ATTEMPTS;
+  const delays = options && Array.isArray(options.delays) ? options.delays : DEFAULT_DELAYS_MS;
 
   let originalError = null;
 
@@ -67,10 +62,7 @@ function atomicRenameSync(source, target, options) {
         removeLeftoverTmp(fsApi, source);
         throw originalError;
       }
-      const delay =
-        attempt - 1 < delays.length
-          ? delays[attempt - 1]
-          : delays[delays.length - 1];
+      const delay = attempt - 1 < delays.length ? delays[attempt - 1] : delays[delays.length - 1];
       if (options && typeof options.sleep === 'function') {
         options.sleep(delay);
       } else {

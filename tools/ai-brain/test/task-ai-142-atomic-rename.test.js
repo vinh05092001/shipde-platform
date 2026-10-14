@@ -89,7 +89,11 @@ describe('TASK-AI-142 — Atomic writes retry transient Windows rename errors', 
     assert.ok(caughtError, 'saveStore must throw when rename consistently fails');
     assert.equal(caughtError, persistentError, 'must throw the original error');
     assert.equal(renameCalls, 10, 'must attempt rename up to 10 times before failing');
-    assert.equal(fs.existsSync(tmpFile), false, 'leftover .tmp file must be removed on final failure');
+    assert.equal(
+      fs.existsSync(tmpFile),
+      false,
+      'leftover .tmp file must be removed on final failure'
+    );
   });
 
   test('atomicRenameSync with injected fs whose renameSync throws EPERM twice then succeeds (expect success, 3 calls)', () => {
@@ -203,7 +207,11 @@ describe('TASK-AI-142 — Atomic writes retry transient Windows rename errors', 
     assert.ok(caughtError);
     assert.equal(caughtError.code, 'ENOENT');
     assert.equal(renameCalls, 1, 'must fail immediately without retrying on non-retryable error');
-    assert.equal(fs.existsSync(tmpFile), false, 'must remove .tmp file even on non-retryable failure');
+    assert.equal(
+      fs.existsSync(tmpFile),
+      false,
+      'must remove .tmp file even on non-retryable failure'
+    );
   });
 
   test('atomicRenameSync works with default backoff schedule (no options.delays passed)', () => {
