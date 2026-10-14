@@ -306,7 +306,7 @@ test('H3-20: credit failure tries all canonical model routes and probes the next
     const sameModelRoutes = ['9router', 'rqsty', '9router'].map((gateway, index) =>
       sampleCandidate({
         gateway,
-        upstream: 'shared-upstream',
+        upstream: `shared-upstream-${index}`,
         accountId: 'shared-account',
         modelId: modelAliases[index],
         accessPath: `https://route-${index}.example/v1`,
@@ -3411,6 +3411,284 @@ test('TASK-AI-142: 503 with upstream_credential or upstream_monthly_limit suppre
     // cand2 on provider-x was skipped due to provider-level suppression!
     assert.ok(!probed.includes('provider-x/model-2'), 'Sibling candidate must be suppressed');
     assert.equal(result.candidateKey, cand3.candidateKey);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('TASK-AI-142: exhausted account on 9router (base http://127.0.0.1:20128/v1) cools down as a whole', async () => {
+  const root = fixtureRoot('hermes-account-cooldown-9router-');
+  try {
+    const c1 = sampleCandidate({
+      gateway: '9router',
+      upstream: 'kr',
+      accountId: 'acc-1',
+      quotaScope: 'acc-1',
+      modelId: 'kr/claude-3.5-sonnet',
+      quality: 95,
+    });
+    const c2 = sampleCandidate({
+      gateway: '9router',
+      upstream: 'kr',
+      accountId: 'acc-1',
+      quotaScope: 'acc-1',
+      modelId: 'kr/gemini-2.5-pro',
+      quality: 90,
+    });
+    const c3 = sampleCandidate({
+      gateway: '9router',
+      upstream: 'kr',
+      accountId: 'acc-2',
+      quotaScope: 'acc-2',
+      modelId: 'kr/gpt-4o',
+      quality: 85,
+    });
+
+    const probed = [];
+    const healthFile = path.join(root, 'tools', 'ai-brain', 'data', 'model-route-health.json');
+    const res = await launchHermesSession(
+      { rootDir: root, skipDecisionLog: true, maxAttempts: 10 },
+      {
+        candidates: [c1, c2, c3],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+        probe: async (c) => {
+          probed.push(c.modelId);
+          if (c.modelId === 'kr/claude-3.5-sonnet') {
+            return { ok: false, status: 402, body: 'upstream_credit_exhausted' };
+          }
+          return { ok: true, status: 200, body: '{}' };
+        },
+        spawn: async () => ({ exitCode: 0 }),
+      }
+    );
+
+    // c1 was probed and failed; c2 shares account 9router::kr::acc-1 and must be filtered before probing;
+    // c3 on account 9router::kr::acc-2 must be selected and probed
+    assert.deepEqual(probed, ['kr/claude-3.5-sonnet', 'kr/gpt-4o']);
+    assert.equal(res.candidateKey, c3.candidateKey);
+
+    // Health file must record the account-level cooldown
+    const store = JSON.parse(fs.readFileSync(healthFile, 'utf8'));
+    assert.ok(store.accounts && store.accounts['9router::kr::acc-1']);
+    const accRecord = store.accounts['9router::kr::acc-1'];
+    assert.equal(accRecord.account, '9router::kr::acc-1');
+    assert.equal(accRecord.probeCause, 'upstream_credit_exhausted');
+    assert.ok(Date.parse(accRecord.nextCheckAt) > Date.now());
+
+    // Subsequent selection must reject both c1 and c2 with PROBE_COOLDOWN_ACCOUNT
+    const selection = selectReasoningCandidate(
+      { rootDir: root, skipDecisionLog: true },
+      {
+        candidates: [c1, c2, c3],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+      }
+    );
+    assert.equal(selection.chosen, c3.candidateKey);
+    const c2Rejection = selection.rejected.find((r) => r.candidateKey === c2.candidateKey);
+    assert.ok(c2Rejection, 'c2 must be in rejected list');
+    assert.match(
+      c2Rejection.reason,
+      /^PROBE_COOLDOWN_ACCOUNT: 9router::kr::acc-1 until \d{4}-\d{2}-\d{2}T/
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('TASK-AI-142: exhausted account on non-9router gateway cools down as a whole (fields 2..3)', async () => {
+  const root = fixtureRoot('hermes-account-cooldown-non9router-');
+  try {
+    const c1 = sampleCandidate({
+      gateway: 'rqsty',
+      upstream: 'rq',
+      accountId: 'account-alpha',
+      modelId: 'rq/claude-3.5-sonnet',
+      accessPath: 'https://router.requesty.ai/v1',
+      quality: 95,
+    });
+    const c2 = sampleCandidate({
+      gateway: 'rqsty',
+      upstream: 'rq',
+      accountId: 'account-beta',
+      modelId: 'rq/gpt-4o',
+      accessPath: 'https://router.requesty.ai/v1',
+      quality: 90,
+    });
+    const c3 = sampleCandidate({
+      gateway: 'rqsty',
+      upstream: 'other-upstream',
+      accountId: 'account-gamma',
+      modelId: 'other/gemini',
+      accessPath: 'https://router.requesty.ai/v1',
+      quality: 85,
+    });
+
+    const probed = [];
+    const healthFile = path.join(root, 'tools', 'ai-brain', 'data', 'model-route-health.json');
+    const res = await launchHermesSession(
+      { rootDir: root, skipDecisionLog: true, maxAttempts: 10 },
+      {
+        candidates: [c1, c2, c3],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+        probe: async (c) => {
+          probed.push(c.modelId);
+          if (c.modelId === 'rq/claude-3.5-sonnet') {
+            return {
+              ok: false,
+              status: 429,
+              body: 'quota_exhausted: Daily free quota limit reached',
+            };
+          }
+          return { ok: true, status: 200, body: '{}' };
+        },
+        spawn: async () => ({ exitCode: 0 }),
+      }
+    );
+
+    // c1 was probed and failed; c2 shares account rqsty::rq and must be filtered before probing
+    assert.deepEqual(probed, ['rq/claude-3.5-sonnet', 'other/gemini']);
+    assert.equal(res.candidateKey, c3.candidateKey);
+
+    const store = JSON.parse(fs.readFileSync(healthFile, 'utf8'));
+    assert.ok(store.accounts && store.accounts['rqsty::rq']);
+    assert.equal(store.accounts['rqsty::rq'].probeCause, 'quota_exhausted');
+
+    const selection = selectReasoningCandidate(
+      { rootDir: root, skipDecisionLog: true },
+      {
+        candidates: [c1, c2, c3],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+      }
+    );
+    const c2Rejection = selection.rejected.find((r) => r.candidateKey === c2.candidateKey);
+    assert.ok(c2Rejection, 'c2 must be rejected by account cooldown');
+    assert.match(c2Rejection.reason, /^PROBE_COOLDOWN_ACCOUNT: rqsty::rq until /);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('TASK-AI-142: account_auth_failed and upstream_entitlement record account-level cooldown; transient does not', async () => {
+  const root = fixtureRoot('hermes-causes-account-cooldown-');
+  try {
+    const health = require('../route-health');
+    const healthFile = path.join(root, 'health.json');
+    const now = 1700000000000;
+
+    // 1. account_auth_failed
+    const cAuth = sampleCandidate({
+      gateway: '9router',
+      upstream: 'kr',
+      accountId: 'acc-auth',
+      modelId: 'kr/auth-fail',
+    });
+    health.rememberProbe(
+      cAuth,
+      { ok: false, status: 401, body: 'account_auth_failed: invalid api key' },
+      { routeHealthFile: healthFile, now }
+    );
+    const store1 = health.loadStore(healthFile);
+    assert.ok(store1.accounts && store1.accounts['9router::kr::acc-auth']);
+    assert.equal(store1.accounts['9router::kr::acc-auth'].probeCause, 'account_auth_failed');
+    const cooldownAuth = health.probeCooldown(cAuth, {
+      routeHealthFile: healthFile,
+      now: now + 1000,
+    });
+    assert.match(cooldownAuth, /^PROBE_COOLDOWN_ACCOUNT: 9router::kr::acc-auth until /);
+
+    // 2. upstream_entitlement
+    const cEnt = sampleCandidate({
+      gateway: 'rqsty',
+      upstream: 'ent-up',
+      accountId: 'acc-ent',
+      accessPath: 'https://router.requesty.ai/v1',
+      modelId: 'ent-up/model',
+    });
+    health.rememberProbe(
+      cEnt,
+      { ok: false, status: 403, body: 'upstream_entitlement: subscription required' },
+      { routeHealthFile: healthFile, now }
+    );
+    const store2 = health.loadStore(healthFile);
+    assert.ok(store2.accounts && store2.accounts['rqsty::ent-up']);
+    assert.equal(store2.accounts['rqsty::ent-up'].probeCause, 'upstream_entitlement');
+    const cooldownEnt = health.probeCooldown(cEnt, {
+      routeHealthFile: healthFile,
+      now: now + 1000,
+    });
+    assert.match(cooldownEnt, /^PROBE_COOLDOWN_ACCOUNT: rqsty::ent-up until /);
+
+    // 3. Transient error (e.g. 500 service unavailable or timeout) must NOT record an account cooldown
+    const cTransient = sampleCandidate({
+      gateway: '9router',
+      upstream: 'transient-up',
+      accountId: 'acc-transient',
+      modelId: 'kr/transient-model',
+    });
+    health.rememberProbe(
+      cTransient,
+      { ok: false, status: 500, body: 'Internal server error' },
+      { routeHealthFile: healthFile, now }
+    );
+    const store3 = health.loadStore(healthFile);
+    assert.equal(
+      store3.accounts && store3.accounts['9router::transient-up::acc-transient'],
+      undefined
+    );
+    const cooldownTransient = health.probeCooldown(cTransient, {
+      routeHealthFile: healthFile,
+      now: now + 1000,
+    });
+    // Cooldown is route-level only, NOT account-level
+    assert.ok(!cooldownTransient || !cooldownTransient.startsWith('PROBE_COOLDOWN_ACCOUNT:'));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('TASK-AI-142: account cooldown expires and re-allows candidate', () => {
+  const root = fixtureRoot('hermes-account-cooldown-expiry-');
+  try {
+    const health = require('../route-health');
+    const healthFile = path.join(root, 'health.json');
+    const now = 1700000000000;
+    const expiry = now + 6 * 3600000;
+
+    const c = sampleCandidate({
+      gateway: '9router',
+      upstream: 'kr',
+      accountId: 'acc-exp',
+      modelId: 'kr/exp-model',
+    });
+
+    health.rememberAccountCooldown(c, 'upstream_credit_exhausted', new Date(expiry).toISOString(), {
+      routeHealthFile: healthFile,
+      now,
+    });
+
+    // Before expiry: cooled down
+    const beforeExpiry = health.probeCooldown(c, {
+      routeHealthFile: healthFile,
+      now: expiry - 1000,
+    });
+    assert.equal(
+      beforeExpiry,
+      `PROBE_COOLDOWN_ACCOUNT: 9router::kr::acc-exp until ${new Date(expiry).toISOString()}`
+    );
+
+    // At or after expiry: no longer cooled down
+    const atExpiry = health.probeCooldown(c, { routeHealthFile: healthFile, now: expiry });
+    assert.equal(atExpiry, null);
+
+    const afterExpiry = health.probeCooldown(c, {
+      routeHealthFile: healthFile,
+      now: expiry + 1000,
+    });
+    assert.equal(afterExpiry, null);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
