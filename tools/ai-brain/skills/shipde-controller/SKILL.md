@@ -14,6 +14,8 @@ The Controller (`tools/ai-brain`) owns all model selection, account assignment, 
 
 ## 1. Absolute Prohibitions (Hard Bans)
 
+Never stop, kill or restart a goal run that is in progress; if no log for 90 min, report it and wait.
+
 1. **NEVER pick your own model, provider, or account:**
    The Controller selects all reasoning and execution candidates via deterministic multi-factor ranking (sources, benchmark priors, route health, quota). Do not configure or switch models on your own.
 2. **NEVER spawn subagents or workers directly:**
