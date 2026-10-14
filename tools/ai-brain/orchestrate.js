@@ -4299,6 +4299,38 @@ async function runOrchestration(goal, opts) {
       log.failBefore = session.failBefore;
     }
 
+    const recordWriterFailure = (key, reason, cause, scope = 'local') => {
+      const step = liveSteps[item.id] || {};
+      persistStep(item.id, 'writer_post_selection_failed', {
+        reason,
+        failures: [
+          ...(step.failures || []),
+          {
+            failedCandidateKey: key,
+            reason,
+            cause,
+            failureScope: scope,
+          },
+        ],
+      });
+      recordedWriterFailures.add(key);
+      decisions.recordDecision(
+        {
+          stage: decisions.Stage.FAILED,
+          workItemId: item.id,
+          role: roleOf(item),
+          chosen: key,
+          cause,
+          failureScope: scope,
+          detail: reason,
+        },
+        logOpts
+      );
+      launch.fallbackReason = reason;
+      launch.cause = cause;
+      launch.scope = scope;
+    };
+
     const writerProbeStartedAt = Date.now();
     const exhaustedAccountKeys = new Set();
     const writerProbeResults = new Map();
@@ -4372,7 +4404,27 @@ async function runOrchestration(goal, opts) {
           const reasonCode = sharedRouteProbe.failureReason(
             sharedRouteProbe.classifyProbeFailure(result)
           );
-          refuse(candidate, 'WRITER_ROUTE_PROBE_FAILED ' + reasonCode);
+          const key = candidateKey(candidate);
+          const reason =
+            Date.now() - writerProbeStartedAt >= PROBE_BUDGET_MS
+              ? 'PROBE_BUDGET_EXHAUSTED: writer route probe budget exhausted'
+              : 'WRITER_ROUTE_PROBE_FAILED ' + reasonCode;
+          recordWriterFailure(key, reason, reasonCode, 'gateway');
+          log.prompts.push({
+            workItemId: item.id,
+            candidateKey: key,
+            prompt: compilePrompt(item, {
+              goal,
+              specText: o.specText,
+              candidateKey: key,
+              branch: o.branch || 'feat/' + String(item.id).toLowerCase(),
+              isolatedWorker: true,
+              focusedTestsOnly: true,
+              contextPack: contextPack && contextPack.path,
+              hostGateFailures: item.hostGateFailures || [],
+            }),
+          });
+          refuse(candidate, reason);
           const cause = String(result?.cause || result?.reasonCode || reasonCode)
             .toLowerCase()
             .trim();
@@ -4501,37 +4553,8 @@ async function runOrchestration(goal, opts) {
         });
       }
 
-      const recordPostSelectFailure = (reason, cause, scope = 'local') => {
-        const step = liveSteps[item.id] || {};
-        persistStep(item.id, 'writer_post_selection_failed', {
-          reason,
-          failures: [
-            ...(step.failures || []),
-            {
-              failedCandidateKey: decision.chosen,
-              reason,
-              cause,
-              failureScope: scope,
-            },
-          ],
-        });
-        recordedWriterFailures.add(decision.chosen);
-        decisions.recordDecision(
-          {
-            stage: decisions.Stage.FAILED,
-            workItemId: item.id,
-            role: roleOf(item),
-            chosen: decision.chosen,
-            cause,
-            failureScope: scope,
-            detail: reason,
-          },
-          logOpts
-        );
-        launch.fallbackReason = reason;
-        launch.cause = cause;
-        launch.scope = scope;
-      };
+      const recordPostSelectFailure = (reason, cause, scope = 'local') =>
+        recordWriterFailure(decision.chosen, reason, cause, scope);
 
       const branch = o.branch || 'feat/' + String(item.id).toLowerCase();
       const usageFile = prepareUsageReport(usageDir, String(item.id) + '-' + now + '-a' + attempt);
