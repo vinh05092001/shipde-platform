@@ -1726,17 +1726,10 @@ function readUsageReport(file) {
   }
 }
 
-function runHostBrainGate(job, options = {}) {
-  const requestedRoot = options.hostCwd || options.cwd || process.cwd();
-  const root =
-    (options.platform || process.platform) !== 'win32' &&
-    /^[a-z]:[\\/]/i.test(String(requestedRoot))
-      ? path.resolve(__dirname, '..', '..')
-      : requestedRoot;
-  const node = options.nodeExecutable || process.execPath;
-  const suite = options.brainSuite || 'tools/ai-brain/test/*.test.js';
-  const run = options.spawnSync || spawnSync;
-  const suiteFiles = String(suite)
+const baseGateCache = new Map();
+
+function resolveSuiteFiles(rootDir, suite) {
+  return String(suite)
     .split(/\s+/)
     .filter(Boolean)
     .flatMap((pattern) => {
@@ -1747,11 +1740,26 @@ function runHostBrainGate(job, options = {}) {
       const basename = slash < 0 ? normalized : normalized.slice(slash + 1);
       const escaped = basename.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
       const matcher = new RegExp('^' + escaped + '$');
+      const targetDir = path.resolve(rootDir, directory);
+      if (!fs.existsSync(targetDir)) return [];
       return fs
-        .readdirSync(path.resolve(root, directory), { withFileTypes: true })
+        .readdirSync(targetDir, { withFileTypes: true })
         .filter((entry) => entry.isFile() && matcher.test(entry.name))
         .map((entry) => path.posix.join(directory.replace(/\\/g, '/'), entry.name));
     });
+}
+
+function runHostBrainGate(job, options = {}) {
+  const requestedRoot = options.hostCwd || options.cwd || process.cwd();
+  const root =
+    (options.platform || process.platform) !== 'win32' &&
+    /^[a-z]:[\\/]/i.test(String(requestedRoot))
+      ? path.resolve(__dirname, '..', '..')
+      : requestedRoot;
+  const node = options.nodeExecutable || process.execPath;
+  const suite = options.brainSuite || 'tools/ai-brain/test/*.test.js';
+  const run = options.spawnSync || spawnSync;
+  const suiteFiles = resolveSuiteFiles(root, suite);
   if (suiteFiles.length === 0) {
     return {
       pass: false,
@@ -1774,11 +1782,193 @@ function runHostBrainGate(job, options = {}) {
   );
   const summary = output.split(/\r?\n/).filter((line) => /^ℹ (?:pass|fail)\b|^✖ /.test(line));
   const pass = result.status === 0 && failed.length === 0;
-  if (!pass) {
-    const repairDetails = options.onHostGateFailure ? options.onHostGateFailure(failed) : null;
-    return { pass: false, command, failures: failed, summary, repairDetails };
+  if (pass) {
+    const hostGateFailures = Object.assign([], { newFailures: [], baselineFailures: [] });
+    return {
+      pass: true,
+      command,
+      failures: [],
+      hostGateFailures,
+      newFailures: [],
+      baselineFailures: [],
+      summary,
+    };
   }
-  return { pass: true, command, failures: [], summary };
+
+  const cache = options.baseCache || baseGateCache;
+  let baseFailed = null;
+  let baseSummary = [];
+  let baseRan = false;
+
+  const candidateBase =
+    options.baseSha ||
+    options.baseCommit ||
+    (job && (job.baseSha || job.baseCommit)) ||
+    options.base ||
+    (job && job.base) ||
+    (job && (job.workItemId || job.branch || job.workerRoot) ? 'origin/main' : null);
+
+  let baseSha = null;
+  const refStr = candidateBase ? String(candidateBase).trim() : '';
+  if (refStr) {
+    if (/^[0-9a-f]{40}$/i.test(refStr)) {
+      baseSha = refStr;
+    } else {
+      try {
+        const revRes = run('git', ['rev-parse', '--verify', refStr + '^{commit}'], {
+          cwd: root,
+          encoding: 'utf8',
+        });
+        if (revRes && revRes.status === 0 && revRes.stdout) {
+          baseSha = String(revRes.stdout).trim();
+        } else if (refStr === 'origin/main') {
+          const revMain = run('git', ['rev-parse', '--verify', 'main^{commit}'], {
+            cwd: root,
+            encoding: 'utf8',
+          });
+          if (revMain && revMain.status === 0 && revMain.stdout) {
+            baseSha = String(revMain.stdout).trim();
+          }
+        }
+      } catch (_) {
+        baseSha = null;
+      }
+    }
+  }
+  if (!baseSha && (options.baseSha || (job && job.baseSha))) {
+    baseSha = String(options.baseSha || job.baseSha).trim();
+  }
+
+  if (baseSha && cache.has(baseSha)) {
+    const cached = cache.get(baseSha);
+    baseFailed = cached.failed;
+    baseSummary = cached.summary;
+    baseRan = true;
+  }
+
+  if (!baseRan && baseSha) {
+    let tempDir = null;
+    let tempWorktree = null;
+    try {
+      tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'host-gate-base-'));
+      tempWorktree = path.join(tempDir, 'wt');
+
+      const addRes = run('git', ['worktree', 'add', '--detach', tempWorktree, baseSha], {
+        cwd: root,
+        encoding: 'utf8',
+      });
+      if (addRes && addRes.status === 0) {
+        const wtFiles = resolveSuiteFiles(tempWorktree, suite);
+        const filesToRun = wtFiles.length > 0 ? wtFiles : suiteFiles;
+        const nodeEnv = Object.assign({}, process.env, {
+          NINEROUTER_API_KEY: undefined,
+          NODE_PATH: [
+            path.join(tempWorktree, 'node_modules'),
+            path.join(root, 'node_modules'),
+            process.env.NODE_PATH,
+          ]
+            .filter(Boolean)
+            .join(path.delimiter),
+        });
+        const baseResult = run(node, ['--test', ...filesToRun], {
+          cwd: tempWorktree,
+          encoding: 'utf8',
+          timeout: options.brainGateTimeoutMs || 30 * 60 * 1000,
+          maxBuffer: 64 * 1024 * 1024,
+          env: nodeEnv,
+        });
+
+        if (baseResult && typeof baseResult.status === 'number' && !baseResult.error) {
+          const baseOutput =
+            String(baseResult.stdout || '') + '\n' + String(baseResult.stderr || '');
+          const parsedFailures = [
+            ...baseOutput.matchAll(/(?:not ok \d+ - |✖ )([^\r\n]+)/g),
+          ].map((match) => match[1].trim());
+
+          if (baseResult.status === 0 || parsedFailures.length > 0) {
+            baseFailed = parsedFailures;
+            baseSummary = baseOutput
+              .split(/\r?\n/)
+              .filter((line) => /^ℹ (?:pass|fail)\b|^✖ /.test(line));
+            baseRan = true;
+            cache.set(baseSha, { failed: baseFailed, summary: baseSummary });
+          }
+        }
+      }
+    } catch (_) {
+      // Base run cannot be executed; keep strict behavior
+    } finally {
+      if (tempWorktree) {
+        try {
+          run('git', ['worktree', 'remove', '--force', tempWorktree], {
+            cwd: root,
+            encoding: 'utf8',
+          });
+        } catch (_) {}
+      }
+      if (tempDir) {
+        try {
+          fs.rmSync(tempDir, { recursive: true, force: true });
+        } catch (_) {}
+      }
+    }
+  }
+
+  if (baseRan && Array.isArray(baseFailed)) {
+    const baseSet = new Set(baseFailed);
+    const newFailures = Array.from(new Set(failed.filter((name) => !baseSet.has(name))));
+    const baselineFailures = Array.from(new Set(baseFailed));
+
+    if (newFailures.length === 0) {
+      const hostGateFailures = Object.assign([], {
+        newFailures: [],
+        baselineFailures,
+      });
+      return {
+        pass: true,
+        command,
+        failures: [],
+        hostGateFailures,
+        newFailures: [],
+        baselineFailures,
+        summary,
+      };
+    }
+
+    const hostGateFailures = Object.assign([...newFailures], {
+      newFailures,
+      baselineFailures,
+    });
+    const repairDetails = options.onHostGateFailure
+      ? options.onHostGateFailure(newFailures)
+      : null;
+    return {
+      pass: false,
+      command,
+      failures: [...newFailures],
+      hostGateFailures,
+      newFailures,
+      baselineFailures,
+      summary,
+      repairDetails,
+    };
+  }
+
+  const hostGateFailures = Object.assign([...failed], {
+    newFailures: [...failed],
+    baselineFailures: [],
+  });
+  const repairDetails = options.onHostGateFailure ? options.onHostGateFailure(failed) : null;
+  return {
+    pass: false,
+    command,
+    failures: [...failed],
+    hostGateFailures,
+    newFailures: [...failed],
+    baselineFailures: [],
+    summary,
+    repairDetails,
+  };
 }
 
 /** Progress markers, measured host-side from the worker's own worktree. */
@@ -3287,7 +3477,7 @@ async function runOrchestration(goal, opts) {
   const controllerGate =
     o.hostGate ||
     (o.isolatedWorker && !o.injectedRun && typeof o.run !== 'function'
-      ? (job) => runHostBrainGate(job, { hostCwd })
+      ? (job) => runHostBrainGate(job, { hostCwd, baseSha: o.baseSha, base: o.base })
       : null);
   const quotaFailures = new Map();
   const riskDomainsByItem = new Map(
@@ -8169,6 +8359,7 @@ function finish(log, statusOf, ctx) {
 }
 
 module.exports = {
+  baseGateCache,
   runHostBrainGate,
   runOrchestration,
   runVerificationCommand,

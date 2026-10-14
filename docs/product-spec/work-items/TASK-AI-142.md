@@ -398,3 +398,7 @@ On Windows, atomic file updates via temporary file write and rename fail when an
 ### H3 live: skip exhausted accounts (2026-10-14)
 
 The Hermes reasoning probe spent its whole budget on one exhausted account (31 requesty routes returning 402). Once an account reports credit, quota, auth or entitlement failure, the remaining candidates on that account are skipped without spending an attempt. Verification: task-ai-142 tests 159/159; live probe dry-run chooses a live route.
+
+### H3 host brain gate baseline failure filtering (2026-10-14)
+
+When the worker full brain test suite encounters failures, `runHostBrainGate` runs the suite once on the base commit (`job.baseSha` or `origin/main`) inside a temporary detached git worktree, computes failing tests on both, and caches the base results per base SHA for the session. The gate blocks (`HOST_GATE_FAILED`) only when the worker has failures that are new against the baseline; pre-existing base failures are ignored for gating and recorded in `hostGateFailures` (`newFailures`, `baselineFailures`). If the base run itself cannot be executed, strict blocking behavior is preserved. Verification: `node --test tools/ai-brain/test/task-ai-142*.test.js` (163/163 pass).
