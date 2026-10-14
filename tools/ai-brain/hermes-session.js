@@ -717,7 +717,7 @@ function selectReasoningCandidate(options, deps) {
   poolCandidates = poolCandidates.filter((candidate) => {
     const reason = require('./route-health').probeCooldown(candidate, {
       ...opts,
-      routeHealth: d.routeHealth,
+      routeHealth: d.routeHealth || opts.routeHealth,
       routeHealthFile:
         opts.routeHealthFile ||
         d.routeHealthFile ||
@@ -1579,9 +1579,10 @@ async function launchHermesSession(options, deps) {
   const excludedCandidates = [...(opts.excludedCandidates || [])];
   const excludedModels = new Set();
   const failedAccountKeys = new Map();
+  const health = require('./route-health');
   const probeAccountKey = (candidate) =>
     candidate.gateway === '9router'
-      ? getCandidateProviderKey(candidate)
+      ? health.extractAccountKey(candidate, { ...opts, registry: d.registry || opts.registry })
       : candidateAccountKey(candidate);
   const probeReasons = [];
   const deadProviders = new Map();
@@ -1591,12 +1592,12 @@ async function launchHermesSession(options, deps) {
   const probeBudgetMs = Math.min(Number(opts.probeBudgetMs) || 180000, 180000);
   const probeDeadline = Date.now() + probeBudgetMs;
   let attempt = 0;
-  const health = require('./route-health');
   const routeHealthFile =
     opts.routeHealthFile ||
     d.routeHealthFile ||
     path.join(rootDir, 'tools', 'ai-brain', 'data', 'model-route-health.json');
-  const routeHealth = d.routeHealth || health.loadStore(routeHealthFile, { allowMissing: true });
+  const routeHealth =
+    d.routeHealth || opts.routeHealth || health.loadStore(routeHealthFile, { allowMissing: true });
 
   const recordProbeRefusal = (candidate, reason) => {
     if (opts.skipDecisionLog) return null;
@@ -1738,7 +1739,11 @@ async function launchHermesSession(options, deps) {
       } finally {
         clearTimeout(timer);
       }
-      health.rememberProbe(candidate, result, { ...opts, routeHealth, routeHealthFile });
+      const healthRecord = health.rememberProbe(candidate, result, {
+        ...opts,
+        routeHealth,
+        routeHealthFile,
+      });
       if (result?.ok === true) return true;
       const status = Number(result?.status) || 0;
       const body = String(result?.body || 'Probe failed');
@@ -1780,12 +1785,44 @@ async function launchHermesSession(options, deps) {
         error.classification = classification;
         throw error;
       }
+      const accountCauses = new Set([
+        'upstream_credit_exhausted',
+        'quota_exhausted',
+        'account_auth_failed',
+        'upstream_entitlement',
+      ]);
+      if (accountCauses.has(classification.cause)) {
+        health.rememberAccountCooldown(
+          candidate,
+          classification.cause,
+          healthRecord && healthRecord.nextCheckAt ? healthRecord.nextCheckAt : null,
+          {
+            ...opts,
+            routeHealth,
+            routeHealthFile,
+          }
+        );
+      }
       refusal(candidate, `HERMES_ROUTE_PROBE_FAILED ${cause} status=${status || 'timeout'}`);
-      if (isProviderLevelFailure(cause) || status === 402) {
-        const acc = probeAccountKey(candidate);
-        if (acc) failedAccountKeys.set(acc, cause);
+      if (
+        isProviderLevelFailure(cause) ||
+        status === 402 ||
+        accountCauses.has(classification.cause)
+      ) {
+        const specificAcc = health.extractAccountKey(candidate, {
+          ...opts,
+          registry: d.registry || opts.registry,
+        });
+        if (specificAcc) failedAccountKeys.set(specificAcc, cause);
+        if (
+          (status === 402 || cause === 'upstream_credit_exhausted') &&
+          candidate.gateway !== '9router'
+        ) {
+          const gwAcc = candidateAccountKey(candidate);
+          if (gwAcc) failedAccountKeys.set(gwAcc, cause);
+        }
         const provKey = getCandidateProviderKey(candidate);
-        if (provKey) deadProviders.set(provKey, { cause });
+        if (provKey) deadProviders.set(provKey, { cause, account: specificAcc });
       }
       return false;
     };
@@ -1796,14 +1833,31 @@ async function launchHermesSession(options, deps) {
           const route = ordered[index];
           if (outcomes.has(route.candidateKey) || inFlight.has(route.candidateKey)) continue;
           const account = probeAccountKey(route);
+          const specificAcc = health.extractAccountKey(route, {
+            ...opts,
+            registry: d.registry || opts.registry,
+          });
           const provKey = getCandidateProviderKey(route);
-          const dead = provKey ? deadProviders.get(provKey) : null;
+          const deadInfo = provKey ? deadProviders.get(provKey) : null;
+          const isHardProviderFailure =
+            deadInfo &&
+            (deadInfo.cause === 'upstream_credential' ||
+              deadInfo.cause === 'upstream_monthly_limit' ||
+              !deadInfo.account ||
+              !specificAcc ||
+              deadInfo.account === specificAcc);
+          const gwAcc = route.gateway !== '9router' ? candidateAccountKey(route) : null;
+          const matchedExhaustedKey =
+            (specificAcc && failedAccountKeys.has(specificAcc) && specificAcc) ||
+            (gwAcc && failedAccountKeys.has(gwAcc) && gwAcc) ||
+            null;
+          const isAccountExhausted = Boolean(matchedExhaustedKey);
           const cooldown = health.probeCooldown(route, { ...opts, routeHealth, routeHealthFile });
-          if (dead || (account && failedAccountKeys.has(account)) || cooldown) {
-            const reason = dead
-              ? `HERMES_ROUTE_PROBE_SKIPPED provider ${provKey} failed with ${dead.cause}`
-              : account && failedAccountKeys.has(account)
-                ? `HERMES_PROBE_SKIPPED_ACCOUNT_EXHAUSTED: ${account} failed with ${failedAccountKeys.get(account)}`
+          if (isHardProviderFailure || isAccountExhausted || cooldown) {
+            const reason = isHardProviderFailure
+              ? `HERMES_ROUTE_PROBE_SKIPPED provider ${provKey} failed with ${deadInfo.cause}`
+              : isAccountExhausted
+                ? `HERMES_PROBE_SKIPPED_ACCOUNT_EXHAUSTED: ${matchedExhaustedKey} failed with ${failedAccountKeys.get(matchedExhaustedKey)}`
                 : cooldown;
             refusal(route, reason);
             outcomes.set(route.candidateKey, false);
