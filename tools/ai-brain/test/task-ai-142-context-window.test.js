@@ -619,3 +619,89 @@ test('TASK-AI-142: assembleForDispatch does not mutate caller catalogue rows in 
   assert.equal(callerCatalogueRow.contextWindow, undefined);
   assert.equal(callerCatalogueRow.capabilities, undefined);
 });
+
+test('TASK-AI-142: live context refresh is source-scoped and feeds Hermes selection', async () => {
+  const hermes = require('../hermes-session');
+  const registry = {
+    sources: [
+      { id: 'router-a', endpoint: 'http://127.0.0.1:40128/v1', modelMeta: {} },
+      { id: 'router-b', endpoint: 'http://127.0.0.1:40129/v1', models: [], modelMeta: {} },
+    ],
+  };
+  const refreshed = await hermes.refreshReasoningContext(
+    {},
+    {
+      registry,
+      fetchModels: async (url) => ({
+        ok: true,
+        json: async () => ({
+          data: [
+            {
+              id: 'cbai/deepseek-v4.1-flash',
+              ...(url.includes(':40128/') ? { context_length: 1000000 } : {}),
+            },
+          ],
+        }),
+      }),
+    }
+  );
+  const candidate = {
+    sourceId: 'router-a',
+    accessPath: registry.sources[0].endpoint,
+    gateway: '9router',
+    upstream: 'cbai',
+    accountId: 'a',
+    quotaScope: 'a',
+    modelId: 'cbai/deepseek-v4.1-flash',
+    harness: 'hermes',
+  };
+  assert.equal(
+    candidatesApi.resolveCandidateContextMeta(candidate, refreshed.registry).contextWindow,
+    1000000
+  );
+  assert.equal(
+    candidatesApi.resolveCandidateContextMeta(
+      { ...candidate, sourceId: 'router-b' },
+      refreshed.registry
+    ),
+    null
+  );
+  assert.deepEqual(registry.sources[0].modelMeta, {}, 'refresh must not mutate registry');
+  let observed;
+  hermes.selectReasoningCandidate(
+    { skipDecisionLog: true },
+    {
+      ...refreshed,
+      candidates: [candidate],
+      priorsData: { ranking: [] },
+      candidatesApi: {
+        ...candidatesApi,
+        annotateCandidates: (rows) => {
+          observed = rows;
+          return [];
+        },
+      },
+    }
+  );
+  assert.equal(observed[0].contextWindow, 1000000);
+  const offline = await hermes.refreshReasoningContext(
+    {},
+    {
+      registry: refreshed.registry,
+      fetchModels: async () => {
+        throw new Error('offline');
+      },
+    }
+  );
+  assert.equal(
+    candidatesApi.resolveCandidateContextMeta(candidate, offline.registry).contextWindow,
+    1000000
+  );
+  assert.equal(
+    candidatesApi.resolveCandidateContextMeta(
+      { ...candidate, sourceId: 'router-b' },
+      offline.registry
+    ),
+    null
+  );
+});
