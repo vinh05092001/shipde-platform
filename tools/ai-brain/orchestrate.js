@@ -75,6 +75,13 @@ const {
 const REVIEWER_CANONICAL_MODEL_CAP = 2;
 const PROBE_BUDGET_MS = 180000;
 
+function providerFailureBodyMatches(body) {
+  return [...PROVIDER_LEVEL_FAILURE_CAUSES].some((cause) => {
+    const escaped = String(cause).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp('(?<!\\w)' + escaped + '(?!\\w)', 'i').test(String(body || ''));
+  });
+}
+
 const ItemStatus = Object.freeze({
   COMPLETED: 'completed',
   BLOCKED: 'blocked',
@@ -4313,8 +4320,8 @@ async function runOrchestration(goal, opts) {
           return false;
         }
       });
-      const refuse = (candidate, reason) => {
-        failedKeys.add(candidateKey(candidate));
+      const refuse = (candidate, reason, exclude = true) => {
+        if (exclude) failedKeys.add(candidateKey(candidate));
         decisions.recordDecision(
           {
             stage: decisions.Stage.REFUSED,
@@ -4347,30 +4354,44 @@ async function runOrchestration(goal, opts) {
                   Object.assign({}, process.env, o.env || {}),
                   { timeoutMs: Math.min(8000, remainingMs), fetch: o.fetch }
                 )
-              : { ok: false, status: 0, body: 'Probe route configuration unavailable' };
+              : {
+                  ok: false,
+                  status: 0,
+                  reasonCode:
+                    remainingMs <= 0
+                      ? 'PROBE_BUDGET_EXHAUSTED'
+                      : 'PROBE_ROUTE_CONFIGURATION_UNAVAILABLE',
+                  body:
+                    remainingMs <= 0
+                      ? 'Probe budget exhausted'
+                      : 'Probe route configuration unavailable',
+                };
           writerProbeResults.set(candidateKey(candidate), result);
           require('./route-health').rememberProbe(candidate, result, o);
           if (result?.ok === true) return true;
           const reasonCode = sharedRouteProbe.failureReason(
             sharedRouteProbe.classifyProbeFailure(result)
           );
-          refuse(candidate, 'WRITER_ROUTE_PROBE_FAILED ' + reasonCode);
+          // Without a winner, consume cached failures after selection so prompts
+          // and durable failure checkpoints still follow the normal path.
+          refuse(candidate, 'WRITER_ROUTE_PROBE_FAILED ' + reasonCode, false);
           const cause = String(result?.cause || result?.reasonCode || reasonCode)
             .toLowerCase()
             .trim();
           if (
             PROVIDER_LEVEL_FAILURE_CAUSES.has(cause) ||
-            [...PROVIDER_LEVEL_FAILURE_CAUSES].some((c) =>
-              String(result?.body || '')
-                .toLowerCase()
-                .includes(String(c).toLowerCase())
-            )
+            providerFailureBodyMatches(result?.body)
           ) {
             exhaustedAccountKeys.add(candidateAccountKey(candidate));
           }
           return false;
         },
       });
+      if (batch.winner) {
+        for (const [key, result] of writerProbeResults) {
+          if (result?.ok !== true) failedKeys.add(key);
+        }
+      }
       const winnerIndex = ordered.findIndex(
         (candidate) => candidateKey(candidate) === batch.winner?.candidateKey
       );
@@ -4390,7 +4411,9 @@ async function runOrchestration(goal, opts) {
       const currentItemStep = liveSteps[item.id] || savedStep;
       const failedForSelection = new Set(failedKeys);
       for (const offered of candidates) {
-        const reason = require('./route-health').probeCooldown(offered, o);
+        const reason = writerProbeResults.has(candidateKey(offered))
+          ? null
+          : require('./route-health').probeCooldown(offered, o);
         if (reason) {
           failedForSelection.add(candidateKey(offered));
           decisions.recordDecision(
@@ -4594,8 +4617,14 @@ async function runOrchestration(goal, opts) {
               : {
                   ok: false,
                   status: 0,
-                  reasonCode: 'PROBE_BUDGET_EXHAUSTED',
-                  body: 'Probe budget exhausted',
+                  reasonCode:
+                    remainingMs <= 0
+                      ? 'PROBE_BUDGET_EXHAUSTED'
+                      : 'PROBE_ROUTE_CONFIGURATION_UNAVAILABLE',
+                  body:
+                    remainingMs <= 0
+                      ? 'Probe budget exhausted'
+                      : 'Probe route configuration unavailable',
                 };
         }
         require('./route-health').rememberProbe(candidate, probeResult, o);
@@ -4612,11 +4641,7 @@ async function runOrchestration(goal, opts) {
           const isProviderLevel =
             (rawCause &&
               PROVIDER_LEVEL_FAILURE_CAUSES.has(String(rawCause).toLowerCase().trim())) ||
-            (probeResult &&
-              probeResult.body &&
-              [...PROVIDER_LEVEL_FAILURE_CAUSES].some((c) =>
-                String(probeResult.body).toLowerCase().includes(String(c).toLowerCase())
-              ));
+            (probeResult && probeResult.body && providerFailureBodyMatches(probeResult.body));
           if (isProviderLevel) {
             const accKey = candidateAccountKey(candidate);
             if (accKey) {
