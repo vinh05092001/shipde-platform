@@ -30,6 +30,8 @@ const {
   probeHermesCandidate,
   getHermesHomeDir,
   HERMES_MIN_CONTEXT,
+  getCandidateProviderKey,
+  isProviderLevelFailure,
 } = require('../hermes-session');
 const { candidateKey } = require('../discovery/identity');
 const decisions = require('../decisions');
@@ -342,7 +344,7 @@ test('H3-20: credit failure tries all canonical model routes and probes the next
   }
 });
 
-test('H3 probe attempt budget is configurable up to 20 routes', async () => {
+test('H3 legacy maxAttempts is ignored; only wall-clock budget limits routes', async () => {
   const root = fixtureRoot('hermes-probe-attempt-budget-');
   try {
     const candidates = Array.from({ length: 5 }, (_, index) =>
@@ -372,7 +374,7 @@ test('H3 probe attempt budget is configurable up to 20 routes', async () => {
       ),
       /NO_REASONING_CANDIDATE/
     );
-    assert.equal(probes, 1);
+    assert.equal(probes, 5);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -2620,9 +2622,9 @@ test('H3 model-first fixed maxAttempts does not cut top model routes short befor
       /NO_REASONING_CANDIDATE/
     );
     // All 5 routes of top-model were probed despite maxAttempts: 2
-    assert.equal(seen.length, 5);
-    // next-model was not probed because budget was exhausted once top-model finished
-    assert.ok(!seen.includes('next-model'));
+    assert.equal(seen.length, 6);
+    // The operator removed all fixed count limits, including caller maxAttempts.
+    assert.ok(seen.includes('next-model'));
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -2685,6 +2687,730 @@ test('H3 probe skips remaining candidates on an account that already reported ex
     assert.equal(probed[0], candA1.candidateKey);
     assert.equal(probed[1], candB.candidateKey);
     assert.equal(result.chosenRoute.candidateKey, candB.candidateKey);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('TASK-AI-142: getCandidateProviderKey and isProviderLevelFailure classify account/provider failures', () => {
+  assert.equal(
+    getCandidateProviderKey({ gateway: '9router', modelId: 'cl/openai/gpt-6-astra' }),
+    '9router::cl'
+  );
+  assert.equal(
+    getCandidateProviderKey({ gateway: '9router', modelId: 'ocz/gpt-6-astra' }),
+    '9router::ocz'
+  );
+  assert.equal(
+    getCandidateProviderKey({ gateway: '9router', modelId: 'ocg/qwen3.8-max' }),
+    '9router::ocg'
+  );
+  assert.equal(
+    getCandidateProviderKey({ gateway: '9router', modelId: 'ag/claude-opus-5-5' }),
+    '9router::ag'
+  );
+  assert.equal(
+    getCandidateProviderKey({ gateway: '9router', modelId: 'cc/claude-opus-5-5' }),
+    '9router::cc'
+  );
+  assert.equal(
+    getCandidateProviderKey({ gateway: 'thb', upstream: 'thb', modelId: 'claude-sonnet-5.5' }),
+    'thb::thb'
+  );
+
+  assert.equal(isProviderLevelFailure('upstream_credit_exhausted'), true);
+  assert.equal(isProviderLevelFailure('quota_exhausted'), true);
+  assert.equal(isProviderLevelFailure('account_auth_failed'), true);
+  assert.equal(isProviderLevelFailure('upstream_entitlement'), true);
+  assert.equal(isProviderLevelFailure('account_quota_exhausted'), true);
+  assert.equal(isProviderLevelFailure('timeout'), false);
+  assert.equal(isProviderLevelFailure('alias_mismatch'), false);
+  assert.equal(isProviderLevelFailure('model_unsupported'), false);
+});
+
+test('TASK-AI-142: route probe skipping: upstream provider credit/quota failure skips sibling and subsequent candidates on same gateway+upstream', async () => {
+  const root = fixtureRoot('hermes-dead-provider-');
+  try {
+    const c1 = sampleCandidate({
+      gateway: '9router',
+      upstream: 'cl',
+      modelId: 'cl/openai/gpt-6-astra',
+      evidence: [],
+      quality: 95,
+      contextWindow: 128000,
+      capabilities: { contextWindow: 128000 },
+    });
+    const c2 = sampleCandidate({
+      gateway: '9router',
+      upstream: 'cl',
+      modelId: 'cl/meta/muse-spark-1.3',
+      evidence: [],
+      quality: 94,
+      contextWindow: 128000,
+      capabilities: { contextWindow: 128000 },
+    });
+    const c3 = sampleCandidate({
+      gateway: '9router',
+      upstream: 'ocz',
+      modelId: 'ocz/gpt-6-astra',
+      evidence: [],
+      quality: 93,
+      contextWindow: 128000,
+      capabilities: { contextWindow: 128000 },
+    });
+    const c4 = sampleCandidate({
+      gateway: '9router',
+      upstream: 'cbai',
+      modelId: 'cbai/deepseek-v4.1-flash',
+      evidence: [],
+      quality: 92,
+      contextWindow: 128000,
+      capabilities: { contextWindow: 128000 },
+    });
+
+    const probed = [];
+    const recordedDecisions = [];
+    const res = await launchHermesSession(
+      { rootDir: root, dryRun: true, probe: true },
+      {
+        candidates: [c1, c2, c3, c4],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+        decisions: {
+          Stage: { SELECTED: 'SELECTED', REFUSED: 'REFUSED' },
+          recordDecision(record) {
+            recordedDecisions.push(record);
+          },
+        },
+        probe: async (candidate) => {
+          probed.push(candidate.modelId);
+          if (candidate.modelId === 'cl/openai/gpt-6-astra') {
+            return { ok: false, status: 503, body: 'upstream_credit_exhausted' };
+          }
+          if (candidate.modelId === 'ocz/gpt-6-astra') {
+            return { ok: false, status: 503, body: 'quota_exhausted' };
+          }
+          if (candidate.modelId === 'cbai/deepseek-v4.1-flash') {
+            return { ok: true, status: 200, body: '{}' };
+          }
+          return { ok: false, status: 500 };
+        },
+      }
+    );
+
+    // c1 was probed and failed
+    assert.ok(probed.includes('cl/openai/gpt-6-astra'));
+    // c2 shares 9router::cl and must be SKIPPED without probing
+    assert.ok(!probed.includes('cl/meta/muse-spark-1.3'), 'c2 must not be probed');
+    // c3 was probed and failed
+    assert.ok(probed.includes('ocz/gpt-6-astra'));
+    // c4 on 9router::cbai was probed and succeeded
+    assert.ok(probed.includes('cbai/deepseek-v4.1-flash'));
+    assert.equal(res.candidateKey, c4.candidateKey);
+
+    // Refusal for c2 was recorded with explicit dead provider reason
+    const c2Refusal = recordedDecisions.find(
+      (d) =>
+        d.stage === decisions.Stage.REFUSED &&
+        Array.isArray(d.rejected) &&
+        d.rejected.some((r) => r.candidateKey === c2.candidateKey)
+    );
+    assert.ok(c2Refusal, 'c2 refusal must be recorded in decisions');
+    assert.match(
+      c2Refusal.detail,
+      /HERMES_ROUTE_PROBE_SKIPPED provider 9router::cl failed with upstream_credit_exhausted/
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('TASK-AI-142: top model gpt-6-astra logs explicit reason per skipped route in decision records and decisionRecord.rejected', async () => {
+  const root = fixtureRoot('hermes-top-model-astra-');
+  try {
+    // 8 routes for gpt-6-astra:
+    // 2 viable routes
+    const cViable1 = sampleCandidate({
+      gateway: '9router',
+      upstream: 'cl',
+      modelId: 'cl/openai/gpt-6-astra',
+      evidence: [],
+      quality: 95,
+      contextWindow: 128000,
+      capabilities: { contextWindow: 128000 },
+    });
+    const cViable2 = sampleCandidate({
+      gateway: '9router',
+      upstream: 'ocz',
+      modelId: 'ocz/gpt-6-astra',
+      evidence: [],
+      quality: 94,
+      contextWindow: 128000,
+      capabilities: { contextWindow: 128000 },
+    });
+    // 1 route with cooldown
+    const cCooldown = sampleCandidate({
+      gateway: '9router',
+      upstream: 'requesty',
+      modelId: 'requesty/gpt-6-astra',
+      evidence: [],
+      quality: 93,
+      contextWindow: 128000,
+      capabilities: { contextWindow: 128000 },
+    });
+    // 5 routes with unverified/missing context
+    const cUnverified = [
+      'azure/gpt-6-astra@eastus2',
+      'openai/gpt-6-astra',
+      'thb/cl/openai/gpt-6-astra',
+      'thb/ocz/gpt-6-astra',
+      'thb/requesty/gpt-6-astra',
+    ].map((modelId, idx) =>
+      sampleCandidate({
+        gateway: 'rqsty',
+        upstream: 'rqsty',
+        modelId,
+        evidence: [],
+        quality: 90 - idx,
+        contextWindow: undefined,
+        context_window: undefined,
+        capabilities: undefined,
+      })
+    );
+    // Next model with viable route
+    const cNext = sampleCandidate({
+      gateway: '9router',
+      upstream: 'cbai',
+      modelId: 'cbai/deepseek-v4.1-flash',
+      evidence: [],
+      quality: 85,
+      contextWindow: 128000,
+      capabilities: { contextWindow: 128000 },
+    });
+
+    const routeHealthStore = {
+      version: 1,
+      paths: {
+        'requesty/gpt-6-astra|9router': {
+          modelId: 'requesty/gpt-6-astra',
+          routeId: '9router',
+          status: 'UNAVAILABLE_NOW',
+          probeCause: 'PROVIDER_UNAVAILABLE',
+          nextCheckAt: new Date(Date.now() + 3600000).toISOString(),
+        },
+      },
+      events: [],
+    };
+
+    const sel = selectReasoningCandidate(
+      { rootDir: root, skipDecisionLog: true },
+      {
+        candidates: [cViable1, cViable2, cCooldown, ...cUnverified, cNext],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+        routeHealth: routeHealthStore,
+      }
+    );
+
+    assert.equal(sel.modelRanking[0].modelId, 'gpt-6-astra');
+    assert.equal(sel.modelRanking[0].routeCount, 2);
+    // Top model skipped routes are prioritized at the top of rejected
+    assert.ok(sel.skippedRoutes.length >= 6);
+    assert.ok(
+      sel.skippedRoutes.some(
+        (r) => r.candidateKey === cCooldown.candidateKey && r.reason.includes('PROBE_COOLDOWN')
+      )
+    );
+    for (const unv of cUnverified) {
+      assert.ok(
+        sel.skippedRoutes.some(
+          (r) =>
+            r.candidateKey === unv.candidateKey && r.reason.includes('CONTEXT_WINDOW_UNVERIFIED')
+        )
+      );
+    }
+
+    // Now test that launchHermesSession logs explicit refusal decisions for each skipped route
+    const recordedDecisions = [];
+    const probed = [];
+    const launchRes = await launchHermesSession(
+      { rootDir: root, dryRun: true, probe: true },
+      {
+        candidates: [cViable1, cViable2, cCooldown, ...cUnverified, cNext],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+        routeHealth: routeHealthStore,
+        decisions: {
+          Stage: { SELECTED: 'SELECTED', REFUSED: 'REFUSED' },
+          recordDecision(record) {
+            recordedDecisions.push(record);
+          },
+        },
+        probe: async (candidate) => {
+          probed.push(candidate.modelId);
+          if (candidate.modelId.includes('gpt-6-astra')) {
+            return { ok: false, status: 503, body: 'upstream_credit_exhausted' };
+          }
+          return { ok: true, status: 200, body: '{}' };
+        },
+      }
+    );
+
+    // Only the 2 viable routes of gpt-6-astra were probed
+    assert.equal(probed.filter((m) => m.includes('gpt-6-astra')).length, 2);
+    // Next model was chosen
+    assert.equal(launchRes.candidateKey, cNext.candidateKey);
+
+    // Verify decision records have refusal entries for the skipped routes of gpt-6-astra
+    const refusedKeys = new Set(
+      recordedDecisions
+        .filter((d) => d.stage === decisions.Stage.REFUSED && Array.isArray(d.rejected))
+        .flatMap((d) => d.rejected.map((r) => r.candidateKey))
+    );
+    assert.ok(refusedKeys.has(cCooldown.candidateKey), 'Cooldown route must have refusal record');
+    for (const unv of cUnverified) {
+      assert.ok(
+        refusedKeys.has(unv.candidateKey),
+        `Unverified route ${unv.modelId} must have refusal record`
+      );
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('TASK-AI-142: time-based probe budget allows probing past 30 probes without a fixed count limit; skipped provider candidates cost nothing', async () => {
+  const root = fixtureRoot('hermes-time-budget-');
+  try {
+    // 26 candidates: 15 on cl, 10 on ocz, 1 on cbai (live)
+    const candidates = [];
+    for (let i = 0; i < 15; i++) {
+      candidates.push(
+        sampleCandidate({
+          gateway: '9router',
+          upstream: 'cl',
+          modelId: `cl/model-${i}`,
+          evidence: [],
+          quality: 90 - i,
+          contextWindow: 128000,
+          capabilities: { contextWindow: 128000 },
+        })
+      );
+    }
+    for (let i = 0; i < 10; i++) {
+      candidates.push(
+        sampleCandidate({
+          gateway: '9router',
+          upstream: 'ocz',
+          modelId: `ocz/model-${i}`,
+          evidence: [],
+          quality: 70 - i,
+          contextWindow: 128000,
+          capabilities: { contextWindow: 128000 },
+        })
+      );
+    }
+    const liveCandidate = sampleCandidate({
+      gateway: '9router',
+      upstream: 'cbai',
+      modelId: 'cbai/deepseek-v4.1-flash',
+      evidence: [],
+      quality: 50,
+      contextWindow: 128000,
+      capabilities: { contextWindow: 128000 },
+    });
+    candidates.push(liveCandidate);
+
+    const probed = [];
+    const res = await launchHermesSession(
+      { rootDir: root, dryRun: true, probe: true, skipDecisionLog: true, qualityFloor: 0 },
+      {
+        candidates,
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+        probe: async (candidate) => {
+          probed.push(candidate.modelId);
+          if (candidate.modelId.startsWith('cl/')) {
+            return { ok: false, status: 503, body: 'upstream_credit_exhausted' };
+          }
+          if (candidate.modelId.startsWith('ocz/')) {
+            return { ok: false, status: 503, body: 'account_auth_failed' };
+          }
+          if (candidate.modelId.startsWith('cbai/')) {
+            return { ok: true, status: 200, body: '{}' };
+          }
+          return { ok: false, status: 500 };
+        },
+      }
+    );
+
+    // Only 3 probes actually performed (1 for cl, 1 for ocz, 1 for cbai)!
+    assert.equal(probed.length, 3);
+    assert.deepEqual(probed, ['cl/model-0', 'ocz/model-0', 'cbai/deepseek-v4.1-flash']);
+    assert.equal(res.candidateKey, liveCandidate.candidateKey);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('TASK-AI-142: eight accounts overlap, serialize their routes, and choose rank over completion time', async () => {
+  const root = fixtureRoot('hermes-concurrent-');
+  try {
+    const candidates = Array.from({ length: 10 }, (_, index) =>
+      sampleCandidate({
+        upstream: `provider-${index}`,
+        modelId: `provider-${index}/model`,
+        quality: 99 - index,
+        evidence: [],
+      })
+    );
+    const active = new Set();
+    let peak = 0;
+    const finished = [];
+    const result = await launchHermesSession(
+      { rootDir: root, dryRun: true, probe: true, skipDecisionLog: true },
+      {
+        candidates,
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+        probe: async (candidate) => {
+          assert.ok(!active.has(candidate.upstream));
+          active.add(candidate.upstream);
+          peak = Math.max(peak, active.size);
+          await new Promise((resolve) =>
+            setTimeout(resolve, candidate.candidateKey === candidates[0].candidateKey ? 40 : 5)
+          );
+          active.delete(candidate.upstream);
+          finished.push(candidate.candidateKey);
+          return { ok: true, status: 200 };
+        },
+      }
+    );
+    assert.equal(peak, 8);
+    assert.notEqual(finished[0], candidates[0].candidateKey);
+    assert.equal(result.candidateKey, candidates[0].candidateKey);
+    assert.equal(active.size, 0);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('TASK-AI-142: a live route beyond one hundred failed probes ignores legacy maxAttempts', async () => {
+  const root = fixtureRoot('hermes-no-count-cap-');
+  try {
+    const candidates = Array.from({ length: 105 }, (_, index) =>
+      sampleCandidate({
+        modelId: `kr/model-${String(index).padStart(3, '0')}`,
+        quality: 99,
+        evidence: [],
+      })
+    );
+    let probes = 0;
+    let active = 0;
+    const result = await launchHermesSession(
+      { rootDir: root, dryRun: true, probe: true, skipDecisionLog: true, maxAttempts: 1 },
+      {
+        candidates,
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+        probe: async (candidate) => {
+          assert.equal(active, 0);
+          active += 1;
+          probes += 1;
+          await Promise.resolve();
+          active -= 1;
+          return { ok: candidate.candidateKey === candidates[104].candidateKey, status: 503 };
+        },
+      }
+    );
+    assert.equal(probes, 105);
+    assert.equal(result.candidateKey, candidates[104].candidateKey);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('TASK-AI-142: wall-clock deadline aborts concurrent probes and never launches', async () => {
+  const root = fixtureRoot('hermes-wall-clock-');
+  try {
+    const candidates = Array.from({ length: 20 }, (_, index) =>
+      sampleCandidate({
+        upstream: `provider-${index}`,
+        modelId: `provider-${index}/model`,
+        quality: 99,
+        evidence: [],
+      })
+    );
+    const signals = [];
+    let active = 0;
+    let peak = 0;
+    await assert.rejects(
+      launchHermesSession(
+        { rootDir: root, skipDecisionLog: true, probeBudgetMs: 200 },
+        {
+          candidates,
+          registry: sampleRegistry(),
+          priorsData: { ranking: [] },
+          probe: (_candidate, _key, _env, options) => {
+            signals.push(options.signal);
+            active += 1;
+            peak = Math.max(peak, active);
+            options.signal.addEventListener(
+              'abort',
+              () => {
+                active -= 1;
+              },
+              { once: true }
+            );
+            return new Promise(() => {});
+          },
+          spawn: () => assert.fail('failed or timed-out probes must never launch'),
+        }
+      ),
+      /NO_REASONING_CANDIDATE/
+    );
+    assert.ok(signals.length > 0);
+    assert.ok(peak <= 8);
+    assert.equal(active, 0);
+    assert.ok(signals.every((signal) => signal.aborted));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('TASK-AI-142: deadline preserves a completed live success while higher routes time out', async () => {
+  const root = fixtureRoot('hermes-deadline-success-');
+  try {
+    const candidates = [
+      sampleCandidate({ modelId: 'kr/top', quality: 99, evidence: [] }),
+      sampleCandidate({ modelId: 'kr/second', quality: 98, evidence: [] }),
+      sampleCandidate({ upstream: 'live', modelId: 'live/third', quality: 97, evidence: [] }),
+    ];
+    const result = await launchHermesSession(
+      { rootDir: root, dryRun: true, probe: true, skipDecisionLog: true, probeBudgetMs: 200 },
+      {
+        candidates,
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+        probe: (candidate) =>
+          candidate.upstream === 'live'
+            ? Promise.resolve({ ok: true, status: 200 })
+            : new Promise(() => {}),
+      }
+    );
+    assert.equal(result.candidateKey, candidates[2].candidateKey);
+    const healthFile = path.join(root, 'tools', 'ai-brain', 'data', 'model-route-health.json');
+    const store = JSON.parse(fs.readFileSync(healthFile, 'utf8'));
+    const paths = Object.values(store.paths);
+    assert.ok(paths.length > 0, 'live success must be recorded in store.paths');
+    assert.ok(paths.every((route) => route.status === 'AVAILABLE'));
+    assert.ok(paths.some((route) => route.candidateKey === candidates[2].candidateKey));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('TASK-AI-142: openai-codex candidate skips HTTP preflight without mock probe and does not fabricate route health', async () => {
+  const root = fixtureRoot('hermes-codex-skip-');
+  try {
+    const codexCand = sampleCandidate({
+      harness: 'hermes',
+      accessPath: 'openai-codex',
+      gateway: 'openai-codex',
+      provider: 'openai-codex',
+      sourceId: 'openai-codex',
+      source: 'openai-codex',
+      upstream: 'openai',
+      accountId: 'codex',
+      quotaScope: 'codex-chatgpt',
+      modelId: 'gpt-6.1-sol',
+      quality: 95,
+      contextWindow: 128000,
+      capabilities: { contextWindow: 128000 },
+      candidateKey: 'hermes::openai-codex::openai-codex::openai::codex::codex-chatgpt::gpt-6.1-sol',
+    });
+
+    const spawned = [];
+    const healthFile = path.join(root, 'tools', 'ai-brain', 'data', 'model-route-health.json');
+    const result = await launchHermesSession(
+      { rootDir: root, probe: true, skipDecisionLog: true, qualityFloor: 0 },
+      {
+        candidates: [codexCand],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+        routeHealthFile: healthFile,
+        spawn: async (_cmd, args) => {
+          spawned.push(args);
+          return { exitCode: 0 };
+        },
+      }
+    );
+
+    assert.equal(result.candidateKey, codexCand.candidateKey);
+    assert.equal(spawned.length, 1);
+    assert.ok(spawned[0].includes('openai-codex'));
+    if (fs.existsSync(healthFile)) {
+      const store = JSON.parse(fs.readFileSync(healthFile, 'utf8'));
+      const paths = Object.values(store.paths || {});
+      assert.ok(!paths.some((p) => p.candidateKey === codexCand.candidateKey));
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('TASK-AI-142: unprobed routes remain eligible upon runtime failure and runtime reselection keeps named session', async () => {
+  const root = fixtureRoot('hermes-runtime-reselect-');
+  try {
+    const cand1 = sampleCandidate({
+      upstream: 'provider-1',
+      modelId: 'provider-1/model-top',
+      quality: 95,
+      evidence: [],
+    });
+    cand1._preRewriteKey = 'legacy::provider-1::pre-cand1';
+
+    const cand2 = sampleCandidate({
+      gateway: 'rqsty',
+      upstream: 'provider-2',
+      accessPath: 'https://router.requesty.ai/v1',
+      endpoint: 'https://router.requesty.ai/v1',
+      modelId: 'provider-2/model-second',
+      quality: 85,
+      evidence: [],
+    });
+    cand2._preRewriteKey = 'legacy::provider-2::pre-cand2';
+
+    let spawnAttempts = 0;
+    const probed = [];
+    const launched = [];
+    const sessions = [];
+
+    const result = await launchHermesSession(
+      { rootDir: root, probe: true, skipDecisionLog: true, qualityFloor: 0 },
+      {
+        candidates: [cand1, cand2],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+        probe: async (c) => {
+          probed.push(c.candidateKey);
+          return { ok: true, status: 200 };
+        },
+        spawn: async (_cmd, args) => {
+          spawnAttempts += 1;
+          const sessionIdx = args.indexOf('--continue');
+          const sid = sessionIdx >= 0 ? args[sessionIdx + 1] : null;
+          sessions.push(sid);
+          if (spawnAttempts === 1) {
+            launched.push(cand1.candidateKey);
+            return {
+              exitCode: 1,
+              stderr: 'HTTP 429 rate limit exceeded',
+              status: 1,
+            };
+          }
+          launched.push(cand2.candidateKey);
+          return { exitCode: 0, status: 0 };
+        },
+      }
+    );
+
+    assert.equal(spawnAttempts, 2);
+    assert.equal(launched[0], cand1.candidateKey);
+    assert.equal(launched[1], cand2.candidateKey);
+    assert.ok(sessions[0], 'Session ID must exist');
+    assert.equal(sessions[0], sessions[1], 'Runtime reselection must keep the named session');
+    assert.equal(result.candidateKey, cand2.candidateKey);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('TASK-AI-142: non-route probe failure does not abort winner selection when a higher-ranked probe succeeds', async () => {
+  const root = fixtureRoot('hermes-non-route-race-');
+  try {
+    const candHigh = sampleCandidate({
+      upstream: 'prov-high',
+      modelId: 'prov-high/top-model',
+      quality: 95,
+      evidence: [],
+    });
+    const candLow = sampleCandidate({
+      upstream: 'prov-low',
+      modelId: 'prov-low/lower-model',
+      quality: 80,
+      evidence: [],
+    });
+
+    const result = await launchHermesSession(
+      { rootDir: root, probe: true, skipDecisionLog: true, qualityFloor: 0 },
+      {
+        candidates: [candHigh, candLow],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+        probe: async (c) => {
+          if (c.candidateKey === candLow.candidateKey) {
+            return { ok: false, status: 400, body: 'Bad Request' };
+          }
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          return { ok: true, status: 200 };
+        },
+        spawn: async () => ({ exitCode: 0 }),
+      }
+    );
+
+    assert.equal(result.candidateKey, candHigh.candidateKey);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('TASK-AI-142: 503 with upstream_credential or upstream_monthly_limit suppresses sibling gateway+upstream routes', async () => {
+  const root = fixtureRoot('hermes-prov-causes-');
+  try {
+    const cand1 = sampleCandidate({
+      gateway: '9router',
+      upstream: 'provider-x',
+      modelId: 'provider-x/model-1',
+      quality: 95,
+      evidence: [],
+    });
+    const cand2 = sampleCandidate({
+      gateway: '9router',
+      upstream: 'provider-x',
+      modelId: 'provider-x/model-2',
+      quality: 90,
+      evidence: [],
+    });
+    const cand3 = sampleCandidate({
+      gateway: '9router',
+      upstream: 'provider-y',
+      modelId: 'provider-y/model-3',
+      quality: 80,
+      evidence: [],
+    });
+
+    const probed = [];
+    const result = await launchHermesSession(
+      { rootDir: root, probe: true, skipDecisionLog: true, qualityFloor: 0 },
+      {
+        candidates: [cand1, cand2, cand3],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+        probe: async (c) => {
+          probed.push(c.modelId);
+          if (c.modelId === 'provider-x/model-1') {
+            return { ok: false, status: 503, body: 'failed with upstream_credential error' };
+          }
+          return { ok: true, status: 200 };
+        },
+        spawn: async () => ({ exitCode: 0 }),
+      }
+    );
+
+    // cand2 on provider-x was skipped due to provider-level suppression!
+    assert.ok(!probed.includes('provider-x/model-2'), 'Sibling candidate must be suppressed');
+    assert.equal(result.candidateKey, cand3.candidateKey);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
