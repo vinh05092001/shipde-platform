@@ -364,3 +364,19 @@ Default local dry selection has three Mercury candidates with unknown quality, a
 Read-only dry selection at 09:05 local uses `hermes-live` discovery/evidence/health plus provider `/models` context refreshed in memory. Diagnostic funnel (health gates separated from assembly for counting): discovered 1,906 -> assembled route/account rows 7,427 -> HTTP endpoint/Hermes identity 5,505 before / 4,728 after deduplication -> verified context 3,401 / 2,665 -> route health 4 / 2,665 -> cooldown 4 / 2,665 -> ranked 4 / 2,664 (one quality-floor rejection). Original production health-filtered assembly was 153 rows, yielding DeepSeek Flash 19 and three Mercury models 0; the new top ten score 78 (seven routes) and 76 (three routes). Baseten/AMD have no verified model metadata in this snapshot; discovered-only external source copies remain non-serving. These are probe candidates, not newly proven live routes.
 
 Verification: TASK-AI-142 plus candidates 201/201; related assembly tests 37/37; the same groups on `origin/main` 4e971e84 pass 194/194 and 37/37. Three added regressions fail on main and pass here: missing-record admission with failed/credential-less routes excluded, identity deduplication, and real ranking probing an untested stronger model before a healthy weaker route while never launching its failed probe. Changed-file Prettier, JavaScript no-undef and `git diff --check` pass. No full-suite run, live Hermes launch, push or merge.
+
+
+### H3 model-first Hermes ranking and exhaustive top-model route probing (2026-10-14)
+
+Hermes reasoning selection operates in two levels:
+1. Rank distinct models by model score using canonical model identity (`priors.normaliseModelId`). Route availability, price, latency and quota do not dilute or inflate model score.
+2. Within the top model, order its routes: live/known-good (available within 24h) first, followed by known cost, known latency, quota headroom, stored candidate binding, and deterministic candidate key.
+
+Operator order (no route cap): the per-model route limit is removed entirely. For the top-ranked model, Hermes probes ALL of its eligible routes in priority order, skipping only routes already proven unusable (active cooldown, missing credentials, recent failure records). Fixed attempt counts and global budgets do not cut a model short before all routes of the current top model are tried. Only when every route of that model has failed does selection advance to the next distinct model. Decision records and dry-run JSON report the top ten distinct models with scores and route counts, plus the chosen route with its selection reason.
+
+Focused verification: `node --test "tools/ai-brain/test/task-ai-142*.test.js"` passed 152/152. Running the same tests against `origin/main` (SHA 6edb33ef baseline) resulted in 7 failures covering model-first routing, credit/quota route exhaustiveness, and attempt budgets across multi-route models. Prettier, JavaScript no-undef and `git diff --check` pass.
+
+Offline/snapshot dry-run on `hermes-live` (10 distinct models with scores, route count for top model, and chosen route):
+- Top 10 models: gpt-6-astra (93), muse-spark-1-3 (91), qwen3-8-max (85), claude-opus-5-5 (50), claude-sonnet-5-5 (49), grok-4-6 (49), glm-5-3 (48), muse-wonder (48), gpt-5-6-sol (47), kimi-k3 (47).
+- Chosen model: `gpt-6-astra` (score 93, 4 routes in active snapshot; 2 routes in stored session snapshot).
+- Chosen route: `hermes::http://127.0.0.1:20128/v1::9router::cl::9router::9router::cl/openai/gpt-6-astra` (reason: highest ranked eligible model; routes ordered by live/known-good, known cost, known latency, quota, stored binding, then candidate key). Stored session binding selects `hermes::https://router.requesty.ai/v1::rqsty::azure::rqsty::rqsty::azure/gpt-6-astra@eastus2`. Live usability remains unverified.

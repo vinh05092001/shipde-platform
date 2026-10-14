@@ -297,7 +297,7 @@ test('H3-09: all route probes failing refuse with NO_REASONING_CANDIDATE and rea
   }
 });
 
-test('H3-20: credit failure excludes the canonical model and probes the next ranked model', async () => {
+test('H3-20: credit failure tries all canonical model routes and probes the next ranked model', async () => {
   const root = fixtureRoot('hermes-probe-model-diversity-');
   try {
     const modelAliases = ['cl/openai/gpt-6-astra', 'ocz/gpt-6-astra', 'azure/gpt-6-astra@eastus2'];
@@ -336,7 +336,7 @@ test('H3-20: credit failure excludes the canonical model and probes the next ran
     );
     assert.equal(res.candidateKey, nextModel.candidateKey);
     assert.ok(probed.includes(nextModel.modelId));
-    assert.ok(probed.filter((model) => modelAliases.includes(model)).length <= 2);
+    assert.equal(probed.filter((model) => modelAliases.includes(model)).length, 3);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -350,7 +350,7 @@ test('H3 probe attempt budget is configurable up to 20 routes', async () => {
         gateway: index % 2 ? 'rqsty' : '9router',
         upstream: `upstream-${index}`,
         accountId: `account-${index}`,
-        modelId: `model-${index}/reasoner`,
+        modelId: `reasoner-${index}`,
         accessPath: `https://route-${index}.example/v1`,
         quality: 100 - index,
       })
@@ -1190,7 +1190,7 @@ test('H2-19: stored candidate binding is reused when reselect is false and candi
     const session1 = loadSession({ rootDir: root });
     assert.equal(session1.candidateKey, c1.candidateKey, 'Session file maintains binding to c1');
 
-    // Second launch with explicit reselect: true -> switches to higher-quality c2
+    // Route price and latency cannot reorder equally scored distinct models.
     const res2 = await launchHermesSession(
       { rootDir: root, reselect: true, skipDecisionLog: true },
       {
@@ -1202,9 +1202,17 @@ test('H2-19: stored candidate binding is reused when reselect is false and candi
       }
     );
 
-    assert.equal(res2.candidateKey, c2.candidateKey, 'reselect: true selects new candidate c2');
+    assert.equal(
+      res2.candidateKey,
+      c1.candidateKey,
+      'Equal model scores use canonical model order, independent of route price'
+    );
     const session2 = loadSession({ rootDir: root });
-    assert.equal(session2.candidateKey, c2.candidateKey, 'Session file updated to c2 on reselect');
+    assert.equal(
+      session2.candidateKey,
+      c1.candidateKey,
+      'Session file retains the chosen model route'
+    );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -2488,4 +2496,134 @@ test('Hermes supplies the actual QUALITY_FIRST weights to ranking', () => {
   );
   assert.deepEqual(observed.weights, require('../routing').WEIGHT_PROFILES.QUALITY_FIRST);
   assert.equal(observed.renormalizeKnownScores, true);
+});
+
+test('H3 model-first: canonical aliases share a score and live route wins within the top model', () => {
+  const root = fixtureRoot();
+  try {
+    const rows = [
+      sampleCandidate({ modelId: 'vendor/top_model:free', quality: 95, evidence: [], cost: 0 }),
+      sampleCandidate({
+        modelId: 'TOP-MODEL@route',
+        gateway: 'rqsty',
+        accessPath: 'https://router.requesty.ai/v1',
+        quality: 95,
+        evidence: [],
+        cost: 50,
+      }),
+      sampleCandidate({ modelId: 'vendor/other', quality: 90, evidence: [], cost: 0 }),
+    ];
+    const health = require('../route-health');
+    const store = { version: 1, paths: {}, events: [] };
+    health.recordResult(
+      store,
+      rows[1].modelId,
+      { id: 'rqsty', accountId: rows[1].accountId },
+      { ok: true },
+      Date.now()
+    );
+    const result = selectReasoningCandidate(
+      { rootDir: root, skipDecisionLog: true },
+      {
+        candidates: rows,
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+        evidenceData: {},
+        accountList: [],
+        routeHealth: store,
+      }
+    );
+    assert.deepEqual(
+      result.modelRanking.map((r) => [r.modelId, r.score, r.routeCount]),
+      [
+        ['top-model', 95, 2],
+        ['other', 90, 1],
+      ]
+    );
+    assert.equal(result.chosen, rows[1].candidateKey);
+    assert.equal(result.chosenRoute.knownGood, true);
+    assert.deepEqual(result.decisionRecord.modelRanking, result.modelRanking);
+    assert.equal(result.decisionRecord.chosenRoute.candidateKey, result.chosen);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('H3 model-first probes all routes of the top model before reaching the next distinct model', async () => {
+  const root = fixtureRoot();
+  try {
+    const rows = Array.from({ length: 7 }, (_, i) =>
+      sampleCandidate({
+        modelId: i % 2 ? 'vendor/TOP_MODEL:free' : 'top-model@route',
+        accountId: 'route-' + i,
+        quotaScope: 'route-' + i,
+        quality: 95,
+        evidence: [],
+      })
+    );
+    rows.push(sampleCandidate({ modelId: 'next-model', quality: 90, evidence: [] }));
+    const seen = [];
+    const result = await launchHermesSession(
+      { rootDir: root, dryRun: true, probe: true, skipDecisionLog: true, reselect: true },
+      {
+        candidates: rows,
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+        evidenceData: {},
+        accountList: [],
+        probe: async (c) => {
+          seen.push(c.modelId);
+          return c.modelId === 'next-model'
+            ? { ok: true, status: 200 }
+            : { ok: false, status: 503 };
+        },
+      }
+    );
+    assert.equal(seen.length, 8);
+    assert.equal(seen[7], 'next-model');
+    assert.equal(result.modelRanking.length, 2);
+    assert.equal(result.chosenRoute.modelId, 'next-model');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('H3 model-first fixed maxAttempts does not cut top model routes short before all routes are tried', async () => {
+  const root = fixtureRoot();
+  try {
+    const rows = Array.from({ length: 5 }, (_, i) =>
+      sampleCandidate({
+        modelId: 'top-model@route',
+        accountId: 'route-' + i,
+        quotaScope: 'route-' + i,
+        quality: 95,
+        evidence: [],
+      })
+    );
+    rows.push(sampleCandidate({ modelId: 'next-model', quality: 90, evidence: [] }));
+    const seen = [];
+    await assert.rejects(
+      launchHermesSession(
+        { rootDir: root, dryRun: true, probe: true, skipDecisionLog: true, maxAttempts: 2 },
+        {
+          candidates: rows,
+          registry: sampleRegistry(),
+          priorsData: { ranking: [] },
+          evidenceData: {},
+          accountList: [],
+          probe: async (c) => {
+            seen.push(c.modelId);
+            return { ok: false, status: 503 };
+          },
+        }
+      ),
+      /NO_REASONING_CANDIDATE/
+    );
+    // All 5 routes of top-model were probed despite maxAttempts: 2
+    assert.equal(seen.length, 5);
+    // next-model was not probed because budget was exhausted once top-model finished
+    assert.ok(!seen.includes('next-model'));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

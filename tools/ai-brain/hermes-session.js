@@ -358,11 +358,7 @@ function linkGoalToSession(goalId, options, deps) {
  * Candidate key is 7-part: harness=hermes::accessPath::gateway::upstream::account::quotaScope::modelId.
  */
 function canonicalHermesModelId(modelId) {
-  const parts = String(modelId || '')
-    .trim()
-    .toLowerCase()
-    .split('/');
-  return (parts[parts.length - 1] || '').replace(/@[^@:]+$/, '').replace(/:free$/, '');
+  return priorsApi.normaliseModelId(modelId) || '';
 }
 
 async function refreshReasoningContext(options, deps) {
@@ -624,21 +620,90 @@ function selectReasoningCandidate(options, deps) {
   );
 
   rankResult.rejected = [...(rankResult.rejected || []), ...cooldownRejected];
-  let chosenKey = rankResult.chosen;
-  if (opts.preferredCandidateKey) {
-    const preferred = rankResult.ranking.find((c) => c.candidateKey === opts.preferredCandidateKey);
-    if (preferred) {
-      chosenKey = preferred.candidateKey;
+  // Model quality excludes route price, latency, quota and route count.
+  const health = require('./route-health');
+  const routeStore =
+    d.routeHealth ||
+    health.loadStore(
+      opts.routeHealthFile ||
+        d.routeHealthFile ||
+        path.join(rootDir, 'tools', 'ai-brain', 'data', 'model-route-health.json'),
+      { allowMissing: true }
+    );
+  const groups = new Map();
+  for (const c of rankResult.ranking) {
+    const model = canonicalHermesModelId(c.modelId || c.model);
+    let group = groups.get(model);
+    if (!group) {
+      group = { modelId: model, score: null, routes: [] };
+      groups.set(model, group);
     }
+    const quality = c.scoreBreakdown?.quality ?? routingApi.qualityScoreOf(c, now);
+    const prior = priorsMod.priorFor(c, profile.role, priors, now);
+    const modelScore = quality ?? (prior && !prior.stale ? prior.score : null);
+    if (Number.isFinite(modelScore)) group.score = Math.max(group.score ?? -Infinity, modelScore);
+    const record = health.getPathRecord(routeStore, c.modelId || c.model, {
+      id: c.gateway || c.sourceId || c.source,
+      accountId: c.accountId,
+    });
+    c.routeSelection = {
+      knownGood:
+        record?.status === 'AVAILABLE' &&
+        Number.isFinite(Date.parse(record.lastCheckedAt)) &&
+        now >= Date.parse(record.lastCheckedAt) &&
+        now - Date.parse(record.lastCheckedAt) <= 24 * 60 * 60 * 1000,
+      cost: c.scoreBreakdown?.cost ?? null,
+      latency: c.scoreBreakdown?.latency ?? null,
+      quota: c.headroomStatus || 'unknown',
+    };
+    group.routes.push(c);
   }
-
-  const chosenCandidate = chosenKey
-    ? rankResult.ranking.find((c) => c.candidateKey === chosenKey) || null
+  const compareKnown = (a, b) =>
+    Number.isFinite(a) && Number.isFinite(b)
+      ? b - a
+      : Number(Number.isFinite(b)) - Number(Number.isFinite(a));
+  const modelGroups = [...groups.values()].sort(
+    (a, b) => (b.score ?? -1) - (a.score ?? -1) || a.modelId.localeCompare(b.modelId)
+  );
+  for (const group of modelGroups) {
+    group.routes.sort((a, b) => {
+      const x = a.routeSelection,
+        y = b.routeSelection;
+      return (
+        Number(y.knownGood) - Number(x.knownGood) ||
+        compareKnown(x.cost, y.cost) ||
+        compareKnown(x.latency, y.latency) ||
+        ({ open: 2, tight: 1 }[y.quota] ?? 0) - ({ open: 2, tight: 1 }[x.quota] ?? 0) ||
+        Number(b.candidateKey === opts.preferredCandidateKey) -
+          Number(a.candidateKey === opts.preferredCandidateKey) ||
+        a.candidateKey.localeCompare(b.candidateKey)
+      );
+    });
+  }
+  const modelRanking = modelGroups.map((g) => ({
+    modelId: g.modelId,
+    score: g.score,
+    routeCount: g.routes.length,
+  }));
+  rankResult.ranking = modelGroups.flatMap((g) => g.routes);
+  const chosenGroup = modelGroups.find((g) => g.modelId === opts.probeModel) || modelGroups[0];
+  const chosenCandidate = rankResult.chosen ? chosenGroup?.routes[0] || null : null;
+  const chosenKey = chosenCandidate?.candidateKey || null;
+  const chosenRoute = chosenCandidate
+    ? {
+        candidateKey: chosenKey,
+        modelId: chosenGroup.modelId,
+        routeModelId: chosenCandidate.modelId,
+        gateway: chosenCandidate.gateway || chosenCandidate.sourceId || null,
+        ...chosenCandidate.routeSelection,
+        reason:
+          'Highest ranked eligible model; routes ordered by live/known-good, known cost, known latency, quota, stored binding, then candidate key',
+      }
     : null;
 
   const isChosen = Boolean(chosenCandidate);
   const refused = isChosen ? null : 'NO_REASONING_CANDIDATE';
-  let reason = isChosen ? rankResult.reason : null;
+  let reason = isChosen ? chosenRoute.reason : null;
   if (!isChosen) {
     if (rankResult.rejected && rankResult.rejected.length > 0) {
       reason =
@@ -663,6 +728,9 @@ function selectReasoningCandidate(options, deps) {
     role: profile.role,
     chosen: chosenKey,
     chosenCandidate,
+    modelRanking: modelRanking.slice(0, 10),
+    chosenRoute,
+    reason,
     harness: 'hermes',
     candidates: rankResult.ranking.map((c) => ({
       candidateKey: c.candidateKey,
@@ -701,7 +769,9 @@ function selectReasoningCandidate(options, deps) {
     chosen: chosenCandidate ? chosenKey : null,
     candidate: chosenCandidate,
     ranking: rankResult.ranking,
-    top3: rankResult.top3,
+    top3: modelRanking.slice(0, 3),
+    modelRanking: modelRanking.slice(0, 10),
+    chosenRoute,
     rejected: rankResult.rejected,
     refused,
     reason,
@@ -1114,24 +1184,14 @@ async function launchHermesSession(options, deps) {
   const excludedModels = new Set();
   const probesByModel = new Map();
   const probeReasons = [];
-  let knownCandidates = Array.isArray(d.candidateList)
-    ? d.candidateList
-    : Array.isArray(d.candidates)
-      ? d.candidates
-      : [];
-  const hasSharedUpstreamAccount = (candidate, modelId) =>
-    knownCandidates.some(
-      (other) =>
-        canonicalHermesModelId(other.modelId || other.model) === modelId &&
-        other.candidateKey !== candidate.candidateKey &&
-        String(other.upstream || '') === String(candidate.upstream || '') &&
-        String(other.accountId || '') === String(candidate.accountId || '')
-    );
   const requestedAttempts = Number(opts.maxAttempts);
   const maxAttempts =
     Number.isFinite(requestedAttempts) && requestedAttempts > 0
       ? Math.min(Math.floor(requestedAttempts), 20)
       : 20;
+  let initialModelRanking;
+  let probeModel;
+  let currentModelId = null;
   const probeTimeoutMs = Math.min(Number(opts.probeTimeoutMs) || 8000, 8000);
   const probeBudgetMs = Math.min(Number(opts.probeBudgetMs) || 180000, 180000);
   const probeDeadline = Date.now() + probeBudgetMs;
@@ -1163,17 +1223,8 @@ async function launchHermesSession(options, deps) {
     }
   };
 
-  while (attempt < maxAttempts) {
-    if (Date.now() >= probeDeadline && (!opts.dryRun || opts.probe)) {
-      probeReasons.push(`probe budget exhausted after ${attempt - 1} probes`);
-      const err = new Error(`NO_REASONING_CANDIDATE: ${probeReasons.join('; ')}`);
-      err.code = 'NO_REASONING_CANDIDATE';
-      err.reasons = probeReasons.slice();
-      throw err;
-    }
-    attempt += 1;
-
-    const isRetry = attempt > 1;
+  while (true) {
+    const isRetry = attempt > 0;
     const shouldReselect = Boolean(opts.reselect) || isRetry || !session.candidateKey;
     const preferredCandidateKey = shouldReselect ? null : session.candidateKey;
 
@@ -1184,6 +1235,7 @@ async function launchHermesSession(options, deps) {
         excludedCandidates,
         excludedModels: [...excludedModels],
         preferredCandidateKey,
+        probeModel,
       }),
       d
     );
@@ -1198,15 +1250,32 @@ async function launchHermesSession(options, deps) {
       err.reasons = [...((selection && selection.rejected) || []), ...probeReasons];
       throw err;
     }
-    if (knownCandidates.length === 0 && Array.isArray(selection.ranking)) {
-      knownCandidates = selection.ranking;
-    }
+    initialModelRanking ||= selection.modelRanking;
 
     session.candidateKey = selection.chosen;
     saveSession(session, opts, d);
 
     const candidate = selection.candidate;
     const modelId = canonicalHermesModelId(candidate.modelId || candidate.model);
+    probeModel = modelId;
+
+    if (currentModelId !== null && currentModelId !== modelId) {
+      if (attempt >= maxAttempts || (Date.now() >= probeDeadline && (!opts.dryRun || opts.probe))) {
+        probeReasons.push(`probe budget exhausted after ${attempt} probes`);
+        const err = new Error(`NO_REASONING_CANDIDATE: ${probeReasons.join('; ')}`);
+        err.code = 'NO_REASONING_CANDIDATE';
+        err.reasons = probeReasons.slice();
+        throw err;
+      }
+    }
+    currentModelId = modelId;
+
+    const remainingRoutesForModel = selection.ranking.filter(
+      (c) => canonicalHermesModelId(c.modelId || c.model) === modelId
+    ).length;
+    const hasMoreRoutesForCurrentModel = remainingRoutesForModel > 1;
+
+    attempt += 1;
     const modelProbeCount = (probesByModel.get(modelId) || 0) + 1;
     probesByModel.set(modelId, modelProbeCount);
     let configResult;
@@ -1224,14 +1293,17 @@ async function launchHermesSession(options, deps) {
       const reason = `HERMES_ROUTE_PROBE_FAILED ${configError.code}`;
       probeReasons.push(`${candidate.candidateKey}: ${reason}`);
       excludedCandidates.push(candidate.candidateKey);
-      if (modelProbeCount >= 2) excludedModels.add(modelId);
+      if (!hasMoreRoutesForCurrentModel) excludedModels.add(modelId);
       const decisionLogError = recordProbeRefusal(candidate, reason);
       if (decisionLogError) {
         probeReasons.push(`${candidate.candidateKey}: ${decisionLogError.message}`);
       }
       session.candidateKey = null;
       saveSession(session, opts, d);
-      if (attempt >= maxAttempts) {
+      if (
+        !hasMoreRoutesForCurrentModel &&
+        (attempt >= maxAttempts || (Date.now() >= probeDeadline && (!opts.dryRun || opts.probe)))
+      ) {
         probeReasons.push(`probe budget exhausted after ${attempt} route attempts`);
         const err = new Error(`NO_REASONING_CANDIDATE: ${probeReasons.join('; ')}`);
         err.code = 'NO_REASONING_CANDIDATE';
@@ -1243,17 +1315,8 @@ async function launchHermesSession(options, deps) {
 
     if (!opts.dryRun || opts.probe) {
       const probeFn = d.probe || opts.probeFn || probeHermesCandidate;
-      if (Date.now() >= probeDeadline || attempt > maxAttempts) {
-        probeReasons.push(
-          `probe budget exhausted after ${attempt - 1} probes across ${excludedModels.size} models`
-        );
-        const err = new Error(`NO_REASONING_CANDIDATE: ${probeReasons.join('; ')}`);
-        err.code = 'NO_REASONING_CANDIDATE';
-        err.reasons = probeReasons.slice();
-        throw err;
-      }
       const probeController = new AbortController();
-      const timeoutMs = Math.min(probeTimeoutMs, Math.max(1, probeDeadline - Date.now()));
+      const timeoutMs = probeTimeoutMs;
       let timeoutHandle;
       const probeResult = await Promise.race([
         Promise.resolve().then(() =>
@@ -1319,11 +1382,7 @@ async function launchHermesSession(options, deps) {
         const reason = `HERMES_ROUTE_PROBE_FAILED ${classification.cause} status=${status || 'timeout'}`;
         probeReasons.push(`${candidate.candidateKey}: ${reason}`);
         excludedCandidates.push(candidate.candidateKey);
-        const creditOrQuotaFailure = /credit|quota/i.test(String(classification.cause || ''));
-        if (
-          (creditOrQuotaFailure && hasSharedUpstreamAccount(candidate, modelId)) ||
-          modelProbeCount >= 2
-        ) {
+        if (!hasMoreRoutesForCurrentModel) {
           excludedModels.add(modelId);
         }
         const decisionLogError = recordProbeRefusal(candidate, reason);
@@ -1332,7 +1391,10 @@ async function launchHermesSession(options, deps) {
         }
         session.candidateKey = null;
         saveSession(session, opts, d);
-        if (attempt >= maxAttempts || Date.now() >= probeDeadline) {
+        if (
+          !hasMoreRoutesForCurrentModel &&
+          (attempt >= maxAttempts || Date.now() >= probeDeadline)
+        ) {
           probeReasons.push(`probe budget exhausted after ${attempt} probes`);
           const err = new Error(`NO_REASONING_CANDIDATE: ${probeReasons.join('; ')}`);
           err.code = 'NO_REASONING_CANDIDATE';
@@ -1409,6 +1471,8 @@ async function launchHermesSession(options, deps) {
     if (opts.dryRun) {
       return {
         status: 'dry_run',
+        modelRanking: initialModelRanking,
+        chosenRoute: selection.chosenRoute,
         sessionId: session.sessionId,
         candidateKey: session.candidateKey,
         candidate,
@@ -1613,6 +1677,8 @@ async function goalSessionCommand(args, deps) {
     const rootDir = resolveRootDir(opts, d);
     const out = {
       status: 'active',
+      modelRanking: selection.modelRanking,
+      chosenRoute: selection.chosenRoute,
       sessionId: session.sessionId,
       candidateKey: session.candidateKey,
       goalIds: session.goalIds,
