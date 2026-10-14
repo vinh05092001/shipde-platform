@@ -396,3 +396,11 @@ The Controller can offer the Hermes reasoning session a GPT model through the op
 When Hermes catalogue/cache metadata is absent, openai-codex now resolves context from the same canonical model in already-loaded registry modelMeta, including refreshed provider /models metadata. Multiple valid reports use the minimum; missing or invalid evidence still yields CONTEXT_WINDOW_UNVERIFIED. Priors never supply context. Focused coverage checks canonical aliases, refreshed metadata, conservative minimum, invalid values and refusal without same-model evidence.
 
 Verification: TASK-AI-142 tests 160/160; changed-file Prettier and git diff --check pass. chatCommand({reselect:true,dryRun:true}) with hermes-live discovery and refreshed provider metadata returns dry_run: hermes::openai-codex::openai-codex::openai::codex::codex-chatgpt::gpt-6-luna is ranked (route rank 420, score 0), contextWindow 1050000, with no rejection. The chosen route is 9router/cl/openai/gpt-6-astra. Runtime output is isolated under a temporary root; no interactive Hermes launch is claimed.
+
+### H3 atomic write Windows rename retry on transient lock (2026-10-14)
+
+On Windows, atomic file updates via temporary file write and rename fail when another process briefly holds the target file lock, raising `EPERM`, `EBUSY`, or `EACCES`. A shared `atomicRenameSync` helper (`tools/ai-brain/atomic-rename.js`) now retries transient rename failures up to 10 attempts with synchronous backoff (50ms growing to ~500ms via `Atomics.wait` on a `SharedArrayBuffer`). When all attempts fail, the leftover `.tmp` file is unlinked and the original error is rethrown. Wired into `route-health.js` (`model-route-health.json`), `cli.js` (`writeJsonFile`, rollback, csv), `goals.js` (`writeJsonAtomic`, register csv), `approval-registry.js`, and `hermes-session.js`. Focused verification: `node --test tools/ai-brain/test/task-ai-142*.test.js` passed 165/165.
+
+### H3 live: skip exhausted accounts (2026-10-14)
+
+The Hermes reasoning probe spent its whole budget on one exhausted account (31 requesty routes returning 402). Once an account reports credit, quota, auth or entitlement failure, the remaining candidates on that account are skipped without spending an attempt. Verification: task-ai-142 tests 159/159; live probe dry-run chooses a live route.

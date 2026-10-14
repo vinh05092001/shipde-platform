@@ -33,6 +33,7 @@ const { reconcileRegister, planReconciliation, applyStatusMutations } = require(
 const { auditManifest } = require('./manifest-audit');
 const { runCheck, currentBranch, headSha } = require('./facts');
 const { toPositiveInteger } = require('./source-discovery');
+const { atomicRenameSync } = require('./atomic-rename');
 
 const SEVERITY_LABEL = { error: 'LỖI ', warn: 'CẢNH', info: 'GHI ' };
 
@@ -207,7 +208,7 @@ function revertCommand(auditFile) {
 
   const tmp = target + '.tmp';
   fs.writeFileSync(tmp, restored);
-  fs.renameSync(tmp, target);
+  atomicRenameSync(tmp, target);
   console.log('  Reverted ' + target + ' to pre_hash_sha256 ' + audit.pre_hash_sha256.slice(0, 12));
   process.exit(0);
 }
@@ -334,7 +335,7 @@ function reconcileCommand(args) {
   const next = Buffer.from(applied.text, 'utf8');
   const tmp = csvPath + '.tmp';
   fs.writeFileSync(tmp, next);
-  fs.renameSync(tmp, csvPath);
+  atomicRenameSync(tmp, csvPath);
   const postHash = sha256(next);
 
   console.log('  Register updated: ' + applied.applied + ' mutation(s) applied');
@@ -1406,7 +1407,7 @@ function readCheckpoint(file) {
     }
     if (adopted && typeof adopted === 'object' && !Array.isArray(adopted)) {
       try {
-        fs.renameSync(tmp, file);
+        atomicRenameSync(tmp, file);
       } catch (err) {}
       return adopted;
     }
@@ -1418,13 +1419,13 @@ function readCheckpoint(file) {
   return JSON.parse(fs.readFileSync(file, 'utf8'));
 }
 
-function writeJsonFile(file, value) {
-  const fs = require('fs');
+function writeJsonFile(file, value, options) {
+  const fsApi = (options && options.fs) || require('fs');
   const path = require('path');
-  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fsApi.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = file + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n', 'utf8');
-  fs.renameSync(tmp, file);
+  fsApi.writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n', 'utf8');
+  atomicRenameSync(tmp, file, Object.assign({}, options, { fs: fsApi }));
 }
 
 /**

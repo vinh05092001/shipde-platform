@@ -32,6 +32,7 @@
 const fs = require('fs');
 const path = require('path');
 const { isWorkerPath } = require('./isolation-launcher');
+const { atomicRenameSync } = require('./atomic-rename');
 
 const State = Object.freeze({
   APPROVED: 'APPROVED',
@@ -183,7 +184,7 @@ function recordApproval(approval, options) {
   // half-written is an approval the publisher cannot read.
   const tmp = file + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(next, null, 2) + '\n', 'utf8');
-  fs.renameSync(tmp, file);
+  atomicRenameSync(tmp, file);
   return entry;
 }
 
