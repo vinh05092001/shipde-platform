@@ -36,14 +36,61 @@ test('effort names and provider ids share canonical ranking identity', () => {
   for (const id of ['GPT-6 Luna (max/high)', 'cl/openai/gpt-6-luna', 'gh/gpt-6-luna'])
     assert.equal(normaliseModelId(id), 'gpt-6-luna');
 });
-test('unknown prior is neutral median and explicitly flagged', () => {
+test('unknown prior has no invented score and is explicitly flagged', () => {
   const prior = priorFor({ modelId: 'unknown' }, 'planner', {
     ranking: [
       { canonical: 'a', benchmarks: { intelligenceIndex: 20 } },
       { canonical: 'b', benchmarks: { intelligenceIndex: 40 } },
     ],
   });
-  assert.equal(prior.score, 37.5);
+  assert.equal(prior.score, null);
+  assert.equal(prior.reason, 'NO_BENCHMARK_COVERAGE');
   assert.equal(prior.priorUnknown, true);
   assert.equal(prior.bonus, 0);
+});
+
+test('priors tiers follow score quartiles across different distributions', () => {
+  const { mergePriorDocuments } = require('../priors');
+  for (const values of [
+    [1, 2, 3, 4, 5, 6, 7, 8],
+    [21, 22, 23, 24, 25, 26, 27, 28],
+  ]) {
+    const result = mergePriorDocuments([
+      {
+        models: values.map((score, index) => ({
+          modelId: `fixture-${index}`,
+          benchmarks: { intelligenceIndex: score },
+        })),
+      },
+    ]);
+    assert.deepEqual(
+      result.ranking.map((row) => row.codingTier),
+      ['T4', 'T4', 'T3', 'T3', 'T2', 'T2', 'T1', 'T1']
+    );
+    assert.deepEqual(
+      result.ranking.map((row) => row.reviewTier),
+      result.ranking.map((row) => row.codingTier)
+    );
+  }
+});
+test('thinking and effort priors borrow the published base score', () => {
+  const now = Date.now();
+  const priors = {
+    ranking: [
+      {
+        canonical: 'claude-opus-4-6',
+        benchmarks: { intelligenceIndex: 42 },
+        codingTier: 'T1',
+        retrievedAt: new Date(now).toISOString(),
+      },
+    ],
+  };
+  const base = priorFor({ modelId: 'claude-opus-4-6' }, 'planner', priors, now);
+  for (const suffix of ['thinking', 'high', 'medium', 'low']) {
+    assert.ok(Number.isFinite(base.score));
+    assert.equal(
+      priorFor({ modelId: `claude-opus-4-6-${suffix}` }, 'planner', priors, now).score,
+      base.score
+    );
+  }
 });

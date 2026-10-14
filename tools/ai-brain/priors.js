@@ -52,7 +52,7 @@ function normaliseCanonical(value) {
  * Resolve one candidate's role-specific benchmark prior, if available.
  *
  * INVARIANT: For any candidate with a valid modelId, this function MUST return
- * an object — never null. Unknown or unscored models receive a neutral median
+ * an object — never null. Unknown or unscored models receive a null-score
  * prior with `priorUnknown: true`. The only null return is when the candidate
  * itself carries no modelId (a genuine caller error).
  */
@@ -64,12 +64,12 @@ function priorFor(candidate, role, priors, now) {
   const ranking = priors && Array.isArray(priors.ranking) ? priors.ranking : [];
   const resolved = matchModelPrior(modelId, ranking);
   const match = resolved && resolved.entry;
-  if (!match) return neutralPrior(canonical, role, ranking);
+  if (!match) return neutralPrior(canonical);
 
   const tier =
     role === 'reviewer' || role === 'security-review' ? match.reviewTier : match.codingTier;
   const bonus = TIER_BONUSES[tier] ?? null;
-  if (bonus === null) return neutralPrior(canonical, role, ranking);
+  if (bonus === null) return neutralPrior(canonical);
 
   const profile = roleBenchmarkProfile(role);
   const rankingMaxima = benchmarkMaxima(ranking);
@@ -79,7 +79,8 @@ function priorFor(candidate, role, priors, now) {
   // because aggregate scores use a different scale than the role-weighted profile.
   const usedAggregateFallback = weighted.coverage === 0;
   const priorScore = usedAggregateFallback ? benchmarkScore(match) : weighted.score;
-  if (priorScore === null) return neutralPrior(canonical, role, ranking);
+  if (priorScore === null && (match.benchmarks || match.score !== undefined))
+    return neutralPrior(canonical);
   const sourceDates = (match.sources || [])
     .map((source) => source && source.retrievedAt)
     .filter(Boolean);
@@ -101,7 +102,7 @@ function priorFor(candidate, role, priors, now) {
   if (weighted.coverage > 0) {
     result.coverage = weighted.coverage;
     if (weighted.coverage < 0.5) result.evidence = 'INDIRECT';
-  } else if (usedAggregateFallback) {
+  } else if (usedAggregateFallback && priorScore !== null) {
     result.evidence = 'INDIRECT';
   }
   const liveBench = benchmarkValue(match, 'liveBench');
@@ -117,25 +118,16 @@ function priorFor(candidate, role, priors, now) {
   return result;
 }
 
-function neutralPrior(canonical, role, ranking) {
-  const maxima = benchmarkMaxima(ranking);
-  const scores = ranking
-    .map((row) => weightedBenchmarkScore(row, roleBenchmarkProfile(role), maxima))
-    .filter((row) => row.coverage > 0)
-    .map((row) => row.score)
-    .sort((a, b) => a - b);
-  const mid = Math.floor(scores.length / 2);
+function neutralPrior(canonical) {
   return {
     canonical,
-    score: scores.length
-      ? scores.length % 2
-        ? scores[mid]
-        : (scores[mid - 1] + scores[mid]) / 2
-      : 50,
+    score: null,
     bonus: 0,
     priorUnknown: true,
+    reason: 'NO_BENCHMARK_COVERAGE',
   };
 }
+
 function isStale(retrievedAt, now) {
   const timestamp = Date.parse(retrievedAt || '');
   const currentTime = now || Date.now();
@@ -174,7 +166,11 @@ function benchmarkScore(match) {
         Number.isFinite(value)
     )
     .map(([, value]) => Math.max(0, Math.min(100, value)));
-  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+  return values.length
+    ? values.reduce((sum, value) => sum + value, 0) / values.length
+    : match && Number.isFinite(match.score)
+      ? match.score
+      : null;
 }
 
 function roleBenchmarkProfile(role) {
@@ -333,16 +329,29 @@ function mergePriorDocuments(documents, now) {
     const score = scores.length
       ? scores.reduce((sum, value) => sum + value, 0) / scores.length
       : null;
-    const tier =
-      score === null ? null : score >= 74 ? 'T1' : score >= 66 ? 'T2' : score >= 50 ? 'T3' : 'T4';
     return Object.assign(row, {
       score: score === null ? null : Math.round(score * 10) / 10,
-      codingTier: tier,
-      reviewTier: tier,
+      codingTier: null,
+      reviewTier: null,
       stale:
         row.sources.length === 0 || row.sources.some((source) => isStale(source.retrievedAt, now)),
     });
   });
+  const scores = rows
+    .map((row) => row.score)
+    .filter(Number.isFinite)
+    .sort((a, b) => a - b);
+  // Nearest-rank quartiles of the scored population; ties share a tier.
+  const tiers = ['T4', 'T3', 'T2', 'T1'];
+  const quartiles = tiers
+    .slice(1)
+    .map((_, index) => scores[Math.ceil(((index + 1) * scores.length) / tiers.length) - 1]);
+  for (const row of rows) {
+    if (row.score === null) continue;
+    const tier = tiers[quartiles.filter((threshold) => row.score > threshold).length];
+    row.codingTier = tier;
+    row.reviewTier = tier;
+  }
   return {
     label: 'EXTERNAL_PRIOR',
     generatedAt: new Date(now || Date.now()).toISOString(),

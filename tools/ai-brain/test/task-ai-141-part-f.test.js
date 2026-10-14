@@ -643,7 +643,7 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
     assert.equal(result.ranking.length, 1);
     assert.equal(result.ranking[0].probation, true);
     assert.equal(result.ranking[0].probationRequiresIndependentReview, true);
-    assert.equal(result.ranking[0].scoreBreakdown.prior.score, 0);
+    assert.equal(result.ranking[0].scoreBreakdown.prior.score, 91);
   });
 
   test('only the role-specific T1 tier admits a never-tried model on probation', () => {
@@ -798,7 +798,8 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
       assert.match(result.stderr, /PRIORS_SEARCH_SOURCE_INVALID_JSON/);
       assert.equal(fs.existsSync(marker), false);
     } finally {
-      fs.rmSync(sourceDir, { recursive: true, force: true });
+      for (const name of ['test-provider.js', 'executed-marker', 'exploit.js', 'should-not-exist'])
+        fs.rmSync(path.join(sourceDir, name), { force: true });
     }
   });
 
@@ -821,7 +822,8 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
       assert.match(result.stderr, /PRIORS_SEARCH_SOURCE_INVALID_JSON/);
       assert.equal(fs.existsSync(marker), false);
     } finally {
-      fs.rmSync(sourceDir, { recursive: true, force: true });
+      for (const name of ['test-provider.js', 'executed-marker', 'exploit.js', 'should-not-exist'])
+        fs.rmSync(path.join(sourceDir, name), { force: true });
     }
   });
 

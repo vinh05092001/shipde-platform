@@ -1087,7 +1087,11 @@ function scoreForProfile(candidate, assessment, ctx) {
   candidate.priorUnknown = Boolean(prior && prior.priorUnknown);
   const latency = latencyScoreOf(candidate);
   const internalQuality = qualityScoreOf(candidate, now);
-  const priorUsable = prior && !prior.stale && (!prior.priorUnknown || internalQuality === null);
+  const priorUsable =
+    prior &&
+    !prior.stale &&
+    prior.score !== null &&
+    (!prior.priorUnknown || internalQuality === null);
   const storedEvidence = evidence.getEvidence(ctx && ctx.evidenceData, candidate) || [];
   const internalEvidence =
     storedEvidence.length > 0 ? storedEvidence : (candidate && candidate.evidence) || [];
@@ -1433,6 +1437,9 @@ function rankForProfile(candidates, profile, assessment, ctx) {
   }
 
   ranked.sort((a, b) => {
+    const aKnown = Number.isFinite(a.scoreBreakdown.quality);
+    const bKnown = Number.isFinite(b.scoreBreakdown.quality);
+    if (aKnown !== bKnown) return Number(bKnown) - Number(aKnown);
     if (b.score !== a.score) return b.score - a.score;
     const aPriorBonus = Number(a.scoreBreakdown.prior && a.scoreBreakdown.prior.bonus) || 0;
     const bPriorBonus = Number(b.scoreBreakdown.prior && b.scoreBreakdown.prior.bonus) || 0;

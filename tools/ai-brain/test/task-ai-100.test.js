@@ -139,9 +139,10 @@ describe('TASK-AI-100 external benchmark priors', () => {
       ranking: [{ canonical: 'gpt-6-luna', codingTier: 'T1', reviewTier: 'T1' }],
     }).ranking[0];
 
-    assert.equal(withUnrelatedPrior.scoreBreakdown.prior, null);
+    assert.equal(withUnrelatedPrior.scoreBreakdown.prior.score, null);
+    assert.equal(withUnrelatedPrior.scoreBreakdown.prior.priorUnknown, true);
     assert.equal(withUnrelatedPrior.score, withoutPriors.score);
-    assert.equal(priorFor(unknown, 'writer', { ranking: [] }), null);
+    assert.equal(priorFor(unknown, 'writer', { ranking: [] }).score, null);
   });
 
   test('review roles use reviewTier, while other roles use codingTier', () => {
@@ -181,4 +182,24 @@ describe('TASK-AI-100 external benchmark priors', () => {
     );
     assert.deepEqual(loadPriors(__filename), { ranking: [] });
   });
+});
+
+test('priors without coverage stay present after scored candidates', () => {
+  const unknown = candidate({ modelId: 'fixture-unknown', evidence: [] });
+  const known = candidate({ modelId: 'fixture-known', evidence: [] });
+  const result = rank([unknown, known], profile({ proofFloor: 'NONE' }), {
+    ranking: [
+      {
+        canonical: 'fixture-known',
+        codingTier: 'T2',
+        benchmarks: { intelligenceIndex: 20 },
+        retrievedAt: new Date(NOW).toISOString(),
+      },
+    ],
+  });
+  assert.equal(result.ranking.length, 2);
+  assert.equal(result.ranking[0].modelId, 'fixture-known');
+  assert.equal(result.ranking[1].modelId, 'fixture-unknown');
+  assert.equal(result.ranking[1].scoreBreakdown.prior.score, null);
+  assert.equal(result.ranking[1].scoreBreakdown.quality, null);
 });
