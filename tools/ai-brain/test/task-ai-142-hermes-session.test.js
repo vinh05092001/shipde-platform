@@ -2627,3 +2627,65 @@ test('H3 model-first fixed maxAttempts does not cut top model routes short befor
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('H3 probe skips remaining candidates on an account that already reported exhausted credit', async () => {
+  const root = fixtureRoot('hermes-probe-account-exhausted-');
+  try {
+    const candA1 = sampleCandidate({
+      gateway: 'rqsty',
+      accessPath: 'https://router.requesty.ai/v1',
+      upstream: 'cl',
+      modelId: 'cl/model-1',
+      quality: 95,
+      evidence: [],
+    });
+    const candA2 = sampleCandidate({
+      gateway: 'rqsty',
+      accessPath: 'https://router.requesty.ai/v1',
+      upstream: 'ocz',
+      modelId: 'ocz/model-2',
+      quality: 94,
+      evidence: [],
+    });
+    const candA3 = sampleCandidate({
+      gateway: 'rqsty',
+      accessPath: 'https://router.requesty.ai/v1',
+      upstream: 'kr',
+      modelId: 'kr/model-3',
+      quality: 93,
+      evidence: [],
+    });
+    const candB = sampleCandidate({
+      gateway: '9router',
+      accessPath: 'http://127.0.0.1:20128/v1',
+      upstream: 'other',
+      modelId: 'other/model-4',
+      quality: 90,
+      evidence: [],
+    });
+    const probed = [];
+    const result = await launchHermesSession(
+      { rootDir: root, dryRun: true, probe: true, skipDecisionLog: true, reselect: true },
+      {
+        candidates: [candA1, candA2, candA3, candB],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+        evidenceData: {},
+        accountList: [],
+        probe: async (c) => {
+          probed.push(c.candidateKey);
+          if (c.candidateKey === candA1.candidateKey) {
+            return { ok: false, status: 402, body: 'upstream_credit_exhausted' };
+          }
+          return { ok: true, status: 200, body: '{}' };
+        },
+      }
+    );
+    assert.equal(probed.length, 2);
+    assert.equal(probed[0], candA1.candidateKey);
+    assert.equal(probed[1], candB.candidateKey);
+    assert.equal(result.chosenRoute.candidateKey, candB.candidateKey);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
