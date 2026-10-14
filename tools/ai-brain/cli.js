@@ -3919,16 +3919,18 @@ function main(argv = process.argv.slice(2), deps = {}) {
       process.exitCode = 2;
       return;
     }
-    const defaultPriorsFile = path.resolve(__dirname, 'data', 'model-priors.json');
-    const outputFile = args.file ? path.resolve(args.file) : defaultPriorsFile;
-    if (outputFile !== defaultPriorsFile) {
+    const livePriorsFile = path.resolve(__dirname, 'data', 'model-priors-live.json');
+    const outputFile = args.file ? path.resolve(args.file) : livePriorsFile;
+    if (outputFile !== livePriorsFile) {
       console.error('PRIORS_OUTPUT_OUTSIDE_ALLOWLIST');
       process.exitCode = 2;
       return;
     }
     const search = async (query) => {
-      if (provider.kind === 'public-leaderboards')
-        return require('./priors-public').publicDocuments({ descriptor: provider });
+      if (provider.kind === 'public-leaderboards') {
+        const docs = await require('./priors-public').publicDocuments({ descriptor: provider });
+        return require('./priors-public').validatePublicDocuments(docs);
+      }
       const headers = { 'content-type': 'application/json' };
       const allowedHeaders = new Set(['accept', 'user-agent']);
       for (const [name, value] of Object.entries(provider.headers || {})) {

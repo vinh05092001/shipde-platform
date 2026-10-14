@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 
 const DEFAULT_PRIORS_FILE = path.join(__dirname, 'data', 'model-priors.json');
+const LIVE_PRIORS_FILE = path.join(__dirname, 'data', 'model-priors-live.json');
 const TIER_BONUSES = Object.freeze({ T1: 6, T2: 4, T3: 2, T4: 0 });
 const STALE_AFTER_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -13,17 +14,24 @@ const ROLE_BENCHMARK_WEIGHTS = Object.freeze({
   reviewer: Object.freeze({ intelligenceIndex: 0.5, aaCodingIndex: 0.5 }),
 });
 
-/** Load the local, curated prior file. Priors are optional and never block routing. */
+/**
+ * Load priors. When no explicit file is given, prefer the live-fetched file
+ * (written by refreshPriors, gitignored) over the curated baseline (checked in).
+ * Priors are optional and never block routing.
+ */
 function loadPriors(file) {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(file || DEFAULT_PRIORS_FILE, 'utf8'));
-    if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.ranking)) {
-      return { ranking: [] };
+  const candidates = file ? [file] : [LIVE_PRIORS_FILE, DEFAULT_PRIORS_FILE];
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(candidate, 'utf8'));
+      if (parsed && typeof parsed === 'object' && Array.isArray(parsed.ranking)) {
+        return parsed;
+      }
+    } catch (_) {
+      /* try next candidate */
     }
-    return parsed;
-  } catch (_) {
-    return { ranking: [] };
   }
+  return { ranking: [] };
 }
 
 function normaliseCanonical(value) {
@@ -40,7 +48,14 @@ function normaliseCanonical(value) {
   return canonical || null;
 }
 
-/** Resolve one candidate's role-specific benchmark prior, if available. */
+/**
+ * Resolve one candidate's role-specific benchmark prior, if available.
+ *
+ * INVARIANT: For any candidate with a valid modelId, this function MUST return
+ * an object — never null. Unknown or unscored models receive a neutral median
+ * prior with `priorUnknown: true`. The only null return is when the candidate
+ * itself carries no modelId (a genuine caller error).
+ */
 function priorFor(candidate, role, priors, now) {
   const modelId = candidate && (candidate.modelId || candidate.model);
   const canonical = normaliseCanonical(modelId);
@@ -59,9 +74,11 @@ function priorFor(candidate, role, priors, now) {
   const profile = roleBenchmarkProfile(role);
   const rankingMaxima = benchmarkMaxima(ranking);
   const weighted = weightedBenchmarkScore(match, profile, rankingMaxima);
-  // Missing role-profile benchmarks contribute zero. Aggregate and legacy scores
-  // use different scales and must never be substituted into this weighted score.
-  const priorScore = weighted.coverage > 0 ? weighted.score : benchmarkScore(match);
+  // When none of the role-profile benchmarks are available (coverage === 0),
+  // fall back to the aggregate/intelligenceIndex score. This is marked INDIRECT
+  // because aggregate scores use a different scale than the role-weighted profile.
+  const usedAggregateFallback = weighted.coverage === 0;
+  const priorScore = usedAggregateFallback ? benchmarkScore(match) : weighted.score;
   if (priorScore === null) return neutralPrior(canonical, role, ranking);
   const sourceDates = (match.sources || [])
     .map((source) => source && source.retrievedAt)
@@ -84,6 +101,8 @@ function priorFor(candidate, role, priors, now) {
   if (weighted.coverage > 0) {
     result.coverage = weighted.coverage;
     if (weighted.coverage < 0.5) result.evidence = 'INDIRECT';
+  } else if (usedAggregateFallback) {
+    result.evidence = 'INDIRECT';
   }
   const liveBench = benchmarkValue(match, 'liveBench');
   if (liveBench !== null) result.liveBench = liveBench;
@@ -395,7 +414,7 @@ async function refreshPriors(options) {
   if (!provenanceValid) throw new Error('PRIORS_SOURCE_PROVENANCE_REQUIRED');
   document.searchSource =
     opts.sourceId || opts.searchSource || opts.search.name || 'configured-search-provider';
-  const output = opts.file || DEFAULT_PRIORS_FILE;
+  const output = opts.file || LIVE_PRIORS_FILE;
   fs.mkdirSync(path.dirname(output), { recursive: true });
   fs.writeFileSync(output, JSON.stringify(document, null, 2) + '\n', 'utf8');
   return document;
@@ -415,4 +434,5 @@ module.exports = {
   roleBenchmarkProfile,
   weightedBenchmarkScore,
   DEFAULT_PRIORS_FILE,
+  LIVE_PRIORS_FILE,
 };
