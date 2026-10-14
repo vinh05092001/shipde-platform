@@ -459,23 +459,58 @@ async function refreshReasoningContext(options, deps) {
   return { ...d, registry: { ...registry, sources } };
 }
 
+/**
+ * Creates an isolated fs-check-reasons tracker.
+ * Each tracker has its own reasons array and lastReason,
+ * so concurrent tests or sessions never share mutable state.
+ */
+function createFsCheckTracker() {
+  const reasons = [];
+  let lastReason = null;
+
+  function record(targetPath, err, context) {
+    const code = (err && err.code) || 'UNKNOWN';
+    const reason = `${code}: ${context} check failed for '${targetPath}'`;
+    lastReason = reason;
+    reasons.push({ path: targetPath, code, reason, timestamp: Date.now() });
+    return reason;
+  }
+
+  function get() {
+    return reasons.slice();
+  }
+
+  function clear() {
+    reasons.length = 0;
+    lastReason = null;
+  }
+
+  return {
+    record,
+    get,
+    clear,
+    get lastReason() {
+      return lastReason;
+    },
+  };
+}
+
+// Default module-level tracker — backward-compatible thin wrapper.
+const _defaultTracker = createFsCheckTracker();
 let lastFsErrorReason = null;
-const fsCheckReasons = [];
 
 function recordFsCheckError(targetPath, err, context) {
-  const code = (err && err.code) || 'UNKNOWN';
-  const reason = `${code}: ${context} check failed for '${targetPath}'`;
+  const reason = _defaultTracker.record(targetPath, err, context);
   lastFsErrorReason = reason;
-  fsCheckReasons.push({ path: targetPath, code, reason, timestamp: Date.now() });
   return reason;
 }
 
 function getFsCheckReasons() {
-  return fsCheckReasons.slice();
+  return _defaultTracker.get();
 }
 
 function clearFsCheckReasons() {
-  fsCheckReasons.length = 0;
+  _defaultTracker.clear();
   lastFsErrorReason = null;
   fileExists.lastReason = null;
   dirExists.lastReason = null;
@@ -711,30 +746,15 @@ function isCodexContextEligible(options, deps) {
   const o = options || {};
   const d = deps || {};
   const cand = o.candidate || d.candidate;
-  const prov =
-    o.provider ||
-    d.provider ||
-    (cand && (cand.provider || cand.gateway || cand.sourceId || cand.source));
-  if (prov) {
-    return prov === 'openai-codex' || prov === 'codex-app-server' || prov === 'codex';
-  }
   if (cand) {
-    return false;
+    return cand.provider === 'openai-codex' || cand.accessPath === 'openai-codex';
   }
-  return Boolean(
-    o.isCodex ||
-    d.isCodex ||
-    o.isCodexCandidate ||
-    d.isCodexCandidate ||
-    o.isOpenAiCodex ||
-    d.isOpenAiCodex ||
-    o.includeOpenAiCodex ||
-    d.includeOpenAiCodex ||
-    o.codexAuthPath ||
-    d.codexAuthPath ||
-    o.codexConfigPath ||
-    d.codexConfigPath
-  );
+  // Without a concrete provider or candidate identifying a codex source,
+  // session-wide flags (includeOpenAiCodex, codexAuthPath, isCodex, …) are
+  // NOT eligibility evidence — they describe session auth/config, not the
+  // model being resolved.  Borrowing another source's context window must
+  // stay limited to an actual openai-codex candidate.
+  return o.provider === 'openai-codex' || d.provider === 'openai-codex';
 }
 
 function resolveHermesContextWindow(modelId, options, deps) {
@@ -742,6 +762,24 @@ function resolveHermesContextWindow(modelId, options, deps) {
   const d = deps || {};
   const fsApi = d.fs || o.fs || fs;
   const canonical = canonicalHermesModelId(modelId);
+  const registry = d.registry || (d.sources || sourcesApi).loadSources(d.sourceOpts);
+  if (!isCodexContextEligible(o, d)) {
+    const candidate = o.candidate || d.candidate;
+    const sourceId =
+      (candidate && (candidate.sourceId || candidate.source || candidate.provider)) ||
+      o.provider ||
+      d.provider;
+    const source = ((registry && registry.sources) || []).find((s) => s.id === sourceId);
+    const meta = source && source.modelMeta && source.modelMeta[modelId];
+    const { toPositiveInteger } = require('./source-discovery');
+    return (
+      toPositiveInteger(meta?.contextWindow) ??
+      toPositiveInteger(meta?.capabilities?.contextWindow) ??
+      toPositiveInteger(meta?.context_window) ??
+      toPositiveInteger(meta?.context_length) ??
+      toPositiveInteger(meta?.contextTokens)
+    );
+  }
 
   // 1. Injected hermesModelCatalogue
   const cat =
@@ -798,7 +836,6 @@ function resolveHermesContextWindow(modelId, options, deps) {
   }
 
   // 3. Registry source modelMeta for openai-codex if declared
-  const registry = d.registry || (d.sources || sourcesApi).loadSources(d.sourceOpts);
   if (registry && Array.isArray(registry.sources)) {
     const src = registry.sources.find((s) => s && (s.id === 'openai-codex' || s.id === 'codex'));
     if (src && src.modelMeta) {
@@ -811,7 +848,7 @@ function resolveHermesContextWindow(modelId, options, deps) {
   }
 
   // 4. Same canonical model on other already-loaded provider catalogues.
-  // Allowed ONLY for openai-codex / codex-app-server candidates when catalogue/cache metadata is absent.
+  // Allowed ONLY for openai-codex candidates when catalogue/cache metadata is absent.
   // For every other Hermes candidate, a model without window on its producing source stays unverified.
   // Keep the most conservative reported window; priors are not context evidence.
   if (isCodexContextEligible(o, d)) {
@@ -1264,8 +1301,8 @@ function selectReasoningCandidate(options, deps) {
     (opts.rootDir || d.rootDir || opts.root || d.root
       ? path.join(resolveRootDir(opts, d), 'tools', 'ai-brain', 'data', 'decisions')
       : path.join(__dirname, 'data', 'decisions'));
-  // Prioritize rejected routes for models in modelRanking (especially top model) so capped decision records retain them
-  const topModelIds = new Set(modelRanking.slice(0, 5).map((m) => m.modelId));
+  // Retain rejected routes for every ranked model.
+  const topModelIds = new Set(modelRanking.map((m) => m.modelId));
   rankResult.rejected.sort((a, b) => {
     const aParsed = a.candidateKey ? parseCandidateKey(a.candidateKey) : null;
     const bParsed = b.candidateKey ? parseCandidateKey(b.candidateKey) : null;
@@ -1295,11 +1332,11 @@ function selectReasoningCandidate(options, deps) {
     role: profile.role,
     chosen: chosenKey,
     chosenCandidate,
-    modelRanking: modelRanking.slice(0, 10),
+    modelRanking: modelRanking,
     chosenRoute,
     reason,
     harness: 'hermes',
-    candidates: rankResult.ranking.slice(0, 10).map((c) => ({
+    candidates: rankResult.ranking.map((c) => ({
       candidateKey: c.candidateKey,
       score: c.score,
       scoreBreakdown: c.scoreBreakdown,
@@ -1325,7 +1362,40 @@ function selectReasoningCandidate(options, deps) {
 
   if (!opts.skipDecisionLog) {
     try {
-      decisionsMod.recordDecision(decisionRecord, { dir: decisionDir, now });
+      const rankingFile = path.join(decisionDir, `ranking-${crypto.randomUUID()}.json`);
+      fs.mkdirSync(decisionDir, { recursive: true });
+      fs.writeFileSync(
+        rankingFile,
+        JSON.stringify(
+          decisionsApi.scrub({
+            modelRanking,
+            candidates: decisionRecord.candidates,
+            rejected: decisionRecord.rejected,
+            skippedRoutes,
+          }),
+          null,
+          2
+        ),
+        { encoding: 'utf8', flag: 'wx' }
+      );
+      decisionRecord.rankingFile = rankingFile;
+      const {
+        modelRanking: models,
+        candidates,
+        rejected,
+        skippedRoutes: skipped,
+        ...summary
+      } = decisionRecord;
+      decisionsMod.recordDecision(
+        {
+          ...summary,
+          modelRankingCount: models.length,
+          candidatesCount: candidates.length,
+          rejectedCount: rejected.length,
+          skippedRoutesCount: skipped.length,
+        },
+        { dir: decisionDir, now }
+      );
     } catch (logErr) {
       const err = new Error('DECISION_LOG_WRITE_FAILURE: ' + (logErr.message || String(logErr)));
       err.code = 'DECISION_LOG_WRITE_FAILURE';
@@ -1338,8 +1408,8 @@ function selectReasoningCandidate(options, deps) {
     chosen: chosenCandidate ? chosenKey : null,
     candidate: chosenCandidate,
     ranking: rankResult.ranking,
-    top3: modelRanking.slice(0, 3),
-    modelRanking: opts.dryRun ? modelRanking : modelRanking.slice(0, 10),
+    top3: modelRanking,
+    modelRanking: modelRanking,
     chosenRoute,
     rejected: rankResult.rejected,
     skippedRoutes,
@@ -2553,6 +2623,7 @@ module.exports = {
   dirExists,
   getFsCheckReasons,
   clearFsCheckReasons,
+  createFsCheckTracker,
   isCodexContextEligible,
   canonicalHermesModelId,
   getCandidateProviderKey,

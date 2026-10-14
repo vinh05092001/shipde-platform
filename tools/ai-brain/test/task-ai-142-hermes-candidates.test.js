@@ -115,10 +115,14 @@ test('TASK-AI-142 H3: codex context fallback uses minimum same-model provider me
   assert.equal(candidates[0].contextWindow, 900000);
   assert.equal(candidates[0].capabilities.contextWindow, 900000);
   assert.equal(
-    hermesSessionApi.resolveHermesContextWindow('gpt-6-luna', options, {
-      ...refreshed,
-      registry: { sources: [refreshed.registry.sources[0]] },
-    }),
+    hermesSessionApi.resolveHermesContextWindow(
+      'gpt-6-luna',
+      { ...options, candidate: { accessPath: 'openai-codex' } },
+      {
+        ...refreshed,
+        registry: { sources: [refreshed.registry.sources[0]] },
+      }
+    ),
     1000000
   );
   const selection = hermesSessionApi.selectReasoningCandidate(options, {
@@ -1151,7 +1155,7 @@ test('TASK-AI-142 H3: default wiring with injected homedir/registry/fetch includ
   );
 });
 
-test('TASK-AI-142 H3: cross-source context borrow applies only to openai-codex / codex-app-server candidates', () => {
+test('TASK-AI-142 H3: cross-source context borrow applies only to openai-codex candidates', () => {
   const fakeRegistry = {
     sources: [
       {
@@ -1190,6 +1194,31 @@ test('TASK-AI-142 H3: cross-source context borrow applies only to openai-codex /
     'Unspecified provider must not borrow context across sources'
   );
 
+  const sharedFlags = {
+    includeOpenAiCodex: true,
+    isCodex: true,
+    codexAuthPath: 'fixture-auth',
+    codexConfigPath: 'fixture-config',
+    provider: 'openai-codex',
+    candidate: { provider: 'opencode-provider-source-a' },
+  };
+  assert.equal(
+    hermesSessionApi.resolveHermesContextWindow('shared/model-z', sharedFlags, {
+      ...sharedFlags,
+      registry: fakeRegistry,
+      hermesModelCatalogue: { 'shared/model-z': { contextWindow: 65536 } },
+    }),
+    undefined
+  );
+  fakeRegistry.sources[0].modelMeta['shared/model-z'] = { contextWindow: 32768 };
+  assert.equal(
+    hermesSessionApi.resolveHermesContextWindow('shared/model-z', sharedFlags, {
+      registry: fakeRegistry,
+    }),
+    32768
+  );
+  delete fakeRegistry.sources[0].modelMeta['shared/model-z'];
+
   // 2. openai-codex candidate DOES borrow conservative minimum
   const codex = hermesSessionApi.resolveHermesContextWindow(
     'shared/model-z',
@@ -1198,7 +1227,7 @@ test('TASK-AI-142 H3: cross-source context borrow applies only to openai-codex /
   );
   assert.equal(codex, 65536, 'openai-codex candidate must borrow context from registry sources');
 
-  // 3. codex-app-server candidate DOES borrow conservative minimum
+  // 3. codex-app-server alone is not openai-codex evidence
   const appServer = hermesSessionApi.resolveHermesContextWindow(
     'shared/model-z',
     { provider: 'codex-app-server' },
@@ -1206,8 +1235,8 @@ test('TASK-AI-142 H3: cross-source context borrow applies only to openai-codex /
   );
   assert.equal(
     appServer,
-    65536,
-    'codex-app-server candidate must borrow context from registry sources'
+    undefined,
+    'codex-app-server provider alone must not borrow context from registry sources'
   );
 });
 
@@ -1249,7 +1278,9 @@ test('TASK-AI-142 H3: fileExists, dirExists, and hasCodexAuth strictly reject on
   assert.equal(hasAuth, false, 'hasCodexAuth must be false when auth.json fails with EPERM');
 });
 
-test('TASK-AI-142 H3: persisted decision records retain top ten only while dry-run output contains full modelRanking', () => {
+test('TASK-AI-142 H3: persisted decision records reference full ranking files and dry-run output contains full modelRanking', (t) => {
+  const decisionDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-full-ranking-'));
+  t.after(() => fs.rmSync(decisionDir, { recursive: true, force: true }));
   const stronger = Array.from({ length: 15 }, (_, i) => ({
     harness: 'hermes',
     accessPath: 'http://fixture/v1',
@@ -1263,7 +1294,7 @@ test('TASK-AI-142 H3: persisted decision records retain top ten only while dry-r
   }));
 
   const selection = hermesSessionApi.selectReasoningCandidate(
-    { dryRun: true, skipDecisionLog: true, qualityFloor: 50 },
+    { dryRun: true, decisionDir, qualityFloor: 50 },
     {
       candidateList: stronger,
       priorsData: { ranking: stronger.map((c) => ({ model: c.modelId, score: c.quality })) },
@@ -1273,15 +1304,14 @@ test('TASK-AI-142 H3: persisted decision records retain top ten only while dry-r
 
   // Dry-run return output has full ranking
   assert.equal(selection.modelRanking.length, 15, 'dryRun payload must have full modelRanking');
-  // Persisted decision record keeps top ten only
-  assert.equal(
-    selection.decisionRecord.modelRanking.length,
-    10,
-    'decisionRecord.modelRanking must be capped at 10'
-  );
-  assert.equal(
-    selection.decisionRecord.candidates.length,
-    10,
-    'decisionRecord.candidates must be capped at 10'
-  );
+  assert.equal(selection.decisionRecord.modelRanking.length, stronger.length);
+  assert.equal(selection.decisionRecord.candidates.length, stronger.length);
+  const records = require('../decisions').readDecisions({ dir: decisionDir });
+  assert.equal(records.length, 1);
+  const record = records[0];
+  assert.equal(path.dirname(record.rankingFile), decisionDir);
+  assert.equal(record.modelRankingCount, stronger.length);
+  const ranking = JSON.parse(fs.readFileSync(record.rankingFile, 'utf8'));
+  assert.deepEqual(ranking.modelRanking, selection.modelRanking);
+  assert.deepEqual(ranking.candidates, selection.decisionRecord.candidates);
 });
