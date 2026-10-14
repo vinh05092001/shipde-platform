@@ -398,3 +398,9 @@ On Windows, atomic file updates via temporary file write and rename fail when an
 ### H3 live: skip exhausted accounts (2026-10-14)
 
 The Hermes reasoning probe spent its whole budget on one exhausted account (31 requesty routes returning 402). Once an account reports credit, quota, auth or entitlement failure, the remaining candidates on that account are skipped without spending an attempt. Verification: task-ai-142 tests 159/159; live probe dry-run chooses a live route.
+
+### H3 pool and Codex writer jsonSchema proof (2026-10-14)
+
+`jsonSchema` means a validated structured writer result, not JSON telemetry or a working model route. OpenCode currently inherits declared catalogue/account capabilities; its HTTP preflight does not verify a result schema. Pool/Codex writers now run a read-only, nonce-bound probe before selection, cache proof per seven-part candidate for that Controller run, and record precise refusals. Codex passes `--output-schema` inside the existing CLOSED isolation boundary using a separate probe worker; normal launches validate the final response too. Pool `result.json` is process telemetry; the worker answer in `out.txt.response` is validated against the contract supplied in `job.json`. Busy accounts, stale answers, wrong candidate bindings and malformed output never prove capability.
+
+Verification: TASK-AI-142 tests 173/173; related executor, TASK-AI-141, candidates, TASK-AI-126 and TASK-AI-130 tests 159/159. Installed `codex exec --help` confirms `--output-schema`; official reference: https://learn.chatgpt.com/docs/non-interactive-mode. Tests use injected harnesses; live account capability remains unverified until the Controller probe succeeds. Existing context, quota, isolation and proof-floor gates still apply.
