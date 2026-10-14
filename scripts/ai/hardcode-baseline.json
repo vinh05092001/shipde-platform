@@ -1,6 +1,6 @@
 {
-  "total": 346,
-  "generatedAt": "2026-10-14T09:28:54.832Z",
+  "total": 345,
+  "generatedAt": "2026-10-14T23:23:48.171Z",
   "violations": [
     {
       "file": "tools/ai-brain/acceptance/ac-16-02-ledger-activity.js",
@@ -1570,13 +1570,7 @@
     },
     {
       "file": "tools/ai-brain/orchestrate.js",
-      "line": 70,
-      "rule": "NUMERIC_CAP",
-      "matched": "PROBE_ATTEMPT_LIMIT = 20"
-    },
-    {
-      "file": "tools/ai-brain/orchestrate.js",
-      "line": 71,
+      "line": 76,
       "rule": "NUMERIC_CAP",
       "matched": "PROBE_BUDGET_MS = 180000"
     },

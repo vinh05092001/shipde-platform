@@ -2,20 +2,20 @@
 
 ## Control
 
-| Field | Value |
-|---|---|
-| Work Item ID | `TASK-AI-142` |
-| Feature ID | `N/A` |
-| Status | `IN_PROGRESS` |
-| Delivery order | `252` |
-| Dependencies | `TASK-AI-141; TASK-AI-132; TASK-AI-50` |
-| Assigned author | `GEMINI` |
-| Risk | `MEDIUM` |
-| Complexity | `standard` |
-| Allowed paths | `tools/ai-brain/hermes-session.js`; `tools/ai-brain/cli.js`; `tools/ai-brain/skills/shipde-controller/SKILL.md`; `scripts/ai/hermes-chat.ps1`; `tools/ai-brain/test/task-ai-142-hermes-session.test.js`; `docs/product-spec/work-items/TASK-AI-142.md` |
-| Reviewer | `Codex — fresh independent task` |
-| Branch | `feat/task-ai-142-hermes-session` |
-| Pull Request | `Pending` |
+| Field           | Value                                                                                                                                                                                                                                                  |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Work Item ID    | `TASK-AI-142`                                                                                                                                                                                                                                          |
+| Feature ID      | `N/A`                                                                                                                                                                                                                                                  |
+| Status          | `IN_PROGRESS`                                                                                                                                                                                                                                          |
+| Delivery order  | `252`                                                                                                                                                                                                                                                  |
+| Dependencies    | `TASK-AI-141; TASK-AI-132; TASK-AI-50`                                                                                                                                                                                                                 |
+| Assigned author | `GEMINI`                                                                                                                                                                                                                                               |
+| Risk            | `MEDIUM`                                                                                                                                                                                                                                               |
+| Complexity      | `standard`                                                                                                                                                                                                                                             |
+| Allowed paths   | `tools/ai-brain/hermes-session.js`; `tools/ai-brain/cli.js`; `tools/ai-brain/skills/shipde-controller/SKILL.md`; `scripts/ai/hermes-chat.ps1`; `tools/ai-brain/test/task-ai-142-hermes-session.test.js`; `docs/product-spec/work-items/TASK-AI-142.md` |
+| Reviewer        | `Codex — fresh independent task`                                                                                                                                                                                                                       |
+| Branch          | `feat/task-ai-142-hermes-session`                                                                                                                                                                                                                      |
+| Pull Request    | `Pending`                                                                                                                                                                                                                                              |
 
 ## Business outcome
 
@@ -79,16 +79,16 @@ The following points were verified against the real Hermes v0.21.4 binary during
 
 ## Acceptance matrix
 
-| AC/Test ID | Scenario | Expected result | Evidence required |
-|---|---|---|---|
-| `AC-AI-142-H2-01` | Candidate selection for reasoning | 7-part key with `harness=hermes`, ranked by quality/priors, decision recorded | `tools/ai-brain/test/task-ai-142-hermes-session.test.js` |
-| `AC-AI-142-H2-02` | Provider config generation | Written under `data/hermes/`, contains base_url and key env var NAME, zero secrets | `tools/ai-brain/test/task-ai-142-hermes-session.test.js` |
-| `AC-AI-142-H2-03` | Hermes argv construction | Emits `-m <modelId> --provider <provider-name> --continue <sessionId> --create-if-missing` and `-s` | `tools/ai-brain/test/task-ai-142-hermes-session.test.js` |
-| `AC-AI-142-H2-04` | Session persistence | Stored in `data/hermes/session.json` with `{sessionId, candidateKey, goalIds}` | `tools/ai-brain/test/task-ai-142-hermes-session.test.js` |
-| `AC-AI-142-H2-05` | Route/model failure recovery | Reselects candidate and relaunches with same `--continue <sessionId>` | `tools/ai-brain/test/task-ai-142-hermes-session.test.js` |
-| `AC-AI-142-H2-06` | Local failure handling | Local environment failure does not cool down or exclude the model | `tools/ai-brain/test/task-ai-142-hermes-session.test.js` |
-| `AC-AI-142-H2-07` | CLI entries | `chat` and `goal session` commands work and output JSON | `tools/ai-brain/test/task-ai-142-hermes-session.test.js` |
-| `AC-AI-142-H2-08` | Skill & script integration | Skill forbids unauthorized behaviors; powershell entry point forwards to CLI | `tools/ai-brain/test/task-ai-142-hermes-session.test.js` |
+| AC/Test ID        | Scenario                          | Expected result                                                                                     | Evidence required                                        |
+| ----------------- | --------------------------------- | --------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| `AC-AI-142-H2-01` | Candidate selection for reasoning | 7-part key with `harness=hermes`, ranked by quality/priors, decision recorded                       | `tools/ai-brain/test/task-ai-142-hermes-session.test.js` |
+| `AC-AI-142-H2-02` | Provider config generation        | Written under `data/hermes/`, contains base_url and key env var NAME, zero secrets                  | `tools/ai-brain/test/task-ai-142-hermes-session.test.js` |
+| `AC-AI-142-H2-03` | Hermes argv construction          | Emits `-m <modelId> --provider <provider-name> --continue <sessionId> --create-if-missing` and `-s` | `tools/ai-brain/test/task-ai-142-hermes-session.test.js` |
+| `AC-AI-142-H2-04` | Session persistence               | Stored in `data/hermes/session.json` with `{sessionId, candidateKey, goalIds}`                      | `tools/ai-brain/test/task-ai-142-hermes-session.test.js` |
+| `AC-AI-142-H2-05` | Route/model failure recovery      | Reselects candidate and relaunches with same `--continue <sessionId>`                               | `tools/ai-brain/test/task-ai-142-hermes-session.test.js` |
+| `AC-AI-142-H2-06` | Local failure handling            | Local environment failure does not cool down or exclude the model                                   | `tools/ai-brain/test/task-ai-142-hermes-session.test.js` |
+| `AC-AI-142-H2-07` | CLI entries                       | `chat` and `goal session` commands work and output JSON                                             | `tools/ai-brain/test/task-ai-142-hermes-session.test.js` |
+| `AC-AI-142-H2-08` | Skill & script integration        | Skill forbids unauthorized behaviors; powershell entry point forwards to CLI                        | `tools/ai-brain/test/task-ai-142-hermes-session.test.js` |
 
 ## Verification commands
 
@@ -104,19 +104,19 @@ The following points were verified against the real Hermes v0.21.4 binary during
 
 ### Control
 
-| Field | Value |
-|---|---|
-| Work Item ID | `TASK-AI-142` |
-| Feature ID | `N/A` |
-| Status | `IN_PROGRESS` |
-| Delivery order | `252` |
-| Dependencies | `TASK-AI-109`, `TASK-AI-132`, `TASK-AI-141` |
-| Assigned author | `GEMINI` |
-| Risk | `MEDIUM` |
-| Allowed paths | `tools/ai-brain/goals.js`; `tools/ai-brain/cli.js`; `tools/ai-brain/test/task-ai-142-goals.test.js`; `docs/product-spec/work-items/TASK-AI-142.md` |
-| Reviewer | `Codex — fresh independent task` |
-| Branch | `feat/task-ai-142-goal-contract` |
-| Pull Request | `Pending` |
+| Field           | Value                                                                                                                                              |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Work Item ID    | `TASK-AI-142`                                                                                                                                      |
+| Feature ID      | `N/A`                                                                                                                                              |
+| Status          | `IN_PROGRESS`                                                                                                                                      |
+| Delivery order  | `252`                                                                                                                                              |
+| Dependencies    | `TASK-AI-109`, `TASK-AI-132`, `TASK-AI-141`                                                                                                        |
+| Assigned author | `GEMINI`                                                                                                                                           |
+| Risk            | `MEDIUM`                                                                                                                                           |
+| Allowed paths   | `tools/ai-brain/goals.js`; `tools/ai-brain/cli.js`; `tools/ai-brain/test/task-ai-142-goals.test.js`; `docs/product-spec/work-items/TASK-AI-142.md` |
+| Reviewer        | `Codex — fresh independent task`                                                                                                                   |
+| Branch          | `feat/task-ai-142-goal-contract`                                                                                                                   |
+| Pull Request    | `Pending`                                                                                                                                          |
 
 ### Business outcome
 
@@ -203,17 +203,17 @@ Decision log entries link `goalId -> workItemId -> candidateKey -> session -> co
 
 ### Acceptance matrix
 
-| AC/Test ID | Scenario | Expected result | Evidence required |
-|---|---|---|---|
-| H1-R01 | `goal start --text "<goal>"` | Creates `data/goals/<goalId>/goal.json`; identical text is idempotent | `tools/ai-brain/test/task-ai-142-goals.test.js` |
-| H1-R02 | `goal amend <goalId> --text "<extra>"` | Appends constraint to `constraints[]`, updates `updatedAt`, no new run | `tools/ai-brain/test/task-ai-142-goals.test.js` |
-| H1-R03 | `goal plan` missing sources/verification/criteria | Returns `status: BLOCKED` with concrete questions in `questions[]` | `tools/ai-brain/test/task-ai-142-goals.test.js` |
-| H1-R04 | `goal plan` with valid plan | Writes Work Item docs and register rows; status `PLANNED` | `tools/ai-brain/test/task-ai-142-goals.test.js` |
-| H1-R05 | `goal run` single instance | Detached start creates `run.lock`; second call reports running pid | `tools/ai-brain/test/task-ai-142-goals.test.js` |
-| H1-R06 | `goal status` per item inspection | Returns state, candidate key, branch, commit SHA, test result, review verdict, last decision id | `tools/ai-brain/test/task-ai-142-goals.test.js` |
-| H1-R07 | `goal stop` and `goal resume` | Stops running pid, writes stop file; resume skips `PASSED`/`MERGED` items | `tools/ai-brain/test/task-ai-142-goals.test.js` |
-| H1-R08 | Decision log linking | Entries link `goalId -> workItemId -> candidateKey -> session -> commit -> review` | `tools/ai-brain/test/task-ai-142-goals.test.js` |
-| H1-R09 | CLI JSON output | All subcommands output JSON on stdout; non-zero exit code on refusal | `tools/ai-brain/test/task-ai-142-goals.test.js` |
+| AC/Test ID | Scenario                                          | Expected result                                                                                 | Evidence required                               |
+| ---------- | ------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| H1-R01     | `goal start --text "<goal>"`                      | Creates `data/goals/<goalId>/goal.json`; identical text is idempotent                           | `tools/ai-brain/test/task-ai-142-goals.test.js` |
+| H1-R02     | `goal amend <goalId> --text "<extra>"`            | Appends constraint to `constraints[]`, updates `updatedAt`, no new run                          | `tools/ai-brain/test/task-ai-142-goals.test.js` |
+| H1-R03     | `goal plan` missing sources/verification/criteria | Returns `status: BLOCKED` with concrete questions in `questions[]`                              | `tools/ai-brain/test/task-ai-142-goals.test.js` |
+| H1-R04     | `goal plan` with valid plan                       | Writes Work Item docs and register rows; status `PLANNED`                                       | `tools/ai-brain/test/task-ai-142-goals.test.js` |
+| H1-R05     | `goal run` single instance                        | Detached start creates `run.lock`; second call reports running pid                              | `tools/ai-brain/test/task-ai-142-goals.test.js` |
+| H1-R06     | `goal status` per item inspection                 | Returns state, candidate key, branch, commit SHA, test result, review verdict, last decision id | `tools/ai-brain/test/task-ai-142-goals.test.js` |
+| H1-R07     | `goal stop` and `goal resume`                     | Stops running pid, writes stop file; resume skips `PASSED`/`MERGED` items                       | `tools/ai-brain/test/task-ai-142-goals.test.js` |
+| H1-R08     | Decision log linking                              | Entries link `goalId -> workItemId -> candidateKey -> session -> commit -> review`              | `tools/ai-brain/test/task-ai-142-goals.test.js` |
+| H1-R09     | CLI JSON output                                   | All subcommands output JSON on stdout; non-zero exit code on refusal                            | `tools/ai-brain/test/task-ai-142-goals.test.js` |
 
 ### Verification commands
 
@@ -241,6 +241,7 @@ Live evidence on the real Hermes v0.21.4 binary verified that invoking `hermes c
 ## Part H3 skill install (2026-10-13)
 
 Live evidence on the real Hermes v0.21.4 binary verified:
+
 1. `hermes chat ... -s <absolute path to SKILL.md>` fails with "Unknown skill(s)" because Hermes `-s` takes skill names installed under `<HERMES_HOME>/skills/<name>/SKILL.md`.
 2. When writing the Controller-owned Hermes home, the Controller installs (copies) the skill file to `<hermesHome>/skills/shipde-controller/SKILL.md` (overwriting each launch so it stays in sync with the repository).
 3. `buildHermesArgv` passes `-s shipde-controller` (the skill name), never a path.
@@ -249,17 +250,21 @@ Live evidence on the real Hermes v0.21.4 binary verified:
 ## Part H3 Windows launch (2026-10-13)
 
 Live evidence on Windows verified that `node tools/ai-brain/cli.js chat` fails with `LOCAL_LAUNCH_FAILURE: spawn hermes ENOENT`. When installed via npm on Windows, `hermes` on PATH is a `.cmd` shim (`hermes.cmd`) that cannot be spawned directly without a shell. Because `child_process.spawn` must never use `shell: true` (to prevent shell interpretation of arguments), Hermes launch resolves:
+
 1. `HERMES_BIN` environment variable if set (launching `process.execPath` + `[HERMES_BIN, ...argv]` if `.js`, else `HERMES_BIN` + `argv`).
 2. On `win32`, searching each PATH directory for `hermes.cmd` and `<dir>/node_modules/hermes-agent/bin/hermes.js`, launching `process.execPath` with `[thatJs, ...argv]`.
 3. Otherwise falling back to `'hermes'`.
 
 ## H3 AA priors
+
 Artificial Analysis intelligenceIndex is the primary prior for the selected reasoning models; each benchmark value records its source URL and retrieval timestamp. The embedded leaderboard includes selected `aaAgenticIndex` values sourced from benchlm.ai; coding-index coverage remains separate and is present only where collected.
 
 ## Part H3 route probe (2026-10-13)
+
 Before launching Hermes or reusing a stored binding, the Controller sends a minimal OpenAI-compatible chat completion to the selected route. Classified quota, rate-limit, timeout and availability failures exclude that candidate, are recorded in the decision log, and trigger bounded reselection (up to 20 route attempts, at most two per model). Dry-run skips live probes unless --probe is supplied. The probe reads the provider key using the registry-declared environment variable name; credentials are never recorded.
 
 ## H3 runtime gates (2026-10-13)
+
 Runtime route fallback is triggered only by Hermes agent API-failure log lines that include an HTTP error code; ANSI escapes are removed before classification, and model-generated reasoning or answer text is never treated as route evidence. Route probing defaults to a configurable 20-attempt ceiling within the three-minute budget, while retaining the maximum of two routes per model. Goal-generated writer/planner profiles with no declared proof floor use `NONE`; reviewer proof floors remain enforced. Terminal goal-run logs include refusal reasons and counts where available.
 
 ## Part H3 realistic probe
@@ -269,6 +274,7 @@ H3 realistic probe sizes route preflight to candidate max-output metadata (8192-
 ## H3 isolated usage import (2026-10-13)
 
 Live evidence from goal runs dispatching isolated opencode writers revealed a ReferenceError at `tools/ai-brain/isolation-launcher.js:2088` ("writeUsageReportFromHarnessResult is not defined"), which caused the Controller to treat successful worker runs as failures and rotate candidates. `writeUsageReportFromHarnessResult` is now lazily imported from `./orchestrate` at call time (avoiding circular dependency) and invoked with a normalized `job` object derived from launch options and adapter id, ensuring token budget enforcement and usage file synthesis function reliably in isolated runs.
+
 ## Part H3 JEV direct weights
 
 On 2026-10-13, JEV was changed to score quality, latency, and cost directly; the Controller normalizes those scores into routing weights and records the scores, confidences, source, and final weights. Missing or low-confidence scores and JEV failures use the existing preset fallback. Reviewer and security-review roles retain QUALITY_FIRST. Hermes' session brain selection in hermes-session.js:543 remains fixed at QUALITY_FIRST.
@@ -324,6 +330,7 @@ Validation: sequential TASK-AI-141 199/199, TASK-AI-142 131/131, TASK-AI-64 129/
 ## H3 post-launch SHA and session (2026-10-14)
 
 Live execution of an isolated worker (harness `opencode`, `isolatedWorker`) revealed that:
+
 1. `readSessionId(adapter, job, res)` yielded no ID because the adapter looked exclusively in `--usage-file` reports or stdout rather than recognizing the isolated launch result's own `res.sessionId` / `launchHandle`. For isolated launches, `readSessionId` now accepts the isolated launch result's session ID directly, preserving existing behavior for non-isolated runs without inventing IDs. When a session ID is missing, a named cause (`HARNESS_NO_SESSION_ID` or adapter report error) is recorded so the item never fails with the generic `NO_LIVE_SESSION`.
 2. For isolated launches, worker commits occur inside the isolated worker clone reported by the isolated launcher rather than `job.cwd`. `orchestrate.js` now resolves the worker clone path and verifies the commit SHA exists in that repository via `git rev-parse --verify`. If unverified, reason `WORKER_SHA_UNVERIFIED` is recorded rather than recording an unverified or host-cwd SHA.
 
@@ -339,9 +346,7 @@ Verification (2026-10-14): sequential TASK-AI-141 199/199, TASK-AI-142 140/140, 
 
 ## H3 decision log size
 
-
 Selection logs retain the full chosenCandidate, the existing chosen identity, top ten ranked candidates and score breakdown summaries, and rejection totals by reasonCode with ten examples. Full runtime routing arrays remain available for fallback. Daily logs roll at 50 MiB into date.N.jsonl; readers consume all parts in numeric order. `node tools/ai-brain/cli.js decisions compact --dir <dir>` incrementally writes capped copies named `<source>.compact-<timestamp>.jsonl`, preserving originals. Copies are excluded from daily history until the operator explicitly replaces originals; malformed input fails rather than silently dropping evidence. No live data is modified by this change.
-
 
 Verification: sequential TASK-AI-141 199/199, TASK-AI-142 136/136, TASK-AI-64 129/129, dispatch-wiring 7/7 and decisions 28/28 passed. Additional candidate/routing regressions passed 74/74. Changed JavaScript passes ESLint no-undef; changed files pass Prettier and git diff --check. Live logs remain untouched and runtime data is excluded from commits.
 
@@ -365,10 +370,10 @@ Read-only dry selection at 09:05 local uses `hermes-live` discovery/evidence/hea
 
 Verification: TASK-AI-142 plus candidates 201/201; related assembly tests 37/37; the same groups on `origin/main` 4e971e84 pass 194/194 and 37/37. Three added regressions fail on main and pass here: missing-record admission with failed/credential-less routes excluded, identity deduplication, and real ranking probing an untested stronger model before a healthy weaker route while never launching its failed probe. Changed-file Prettier, JavaScript no-undef and `git diff --check` pass. No full-suite run, live Hermes launch, push or merge.
 
-
 ### H3 model-first Hermes ranking and exhaustive top-model route probing (2026-10-14)
 
 Hermes reasoning selection operates in two levels:
+
 1. Rank distinct models by model score using canonical model identity (`priors.normaliseModelId`). Route availability, price, latency and quota do not dilute or inflate model score.
 2. Within the top model, order its routes: live/known-good (available within 24h) first, followed by known cost, known latency, quota headroom, stored candidate binding, and deterministic candidate key.
 
@@ -377,6 +382,7 @@ Operator order (no route cap): the per-model route limit is removed entirely. Fo
 Focused verification: `node --test "tools/ai-brain/test/task-ai-142*.test.js"` passed 152/152. Running the same tests against `origin/main` (SHA 6edb33ef baseline) resulted in 7 failures covering model-first routing, credit/quota route exhaustiveness, and attempt budgets across multi-route models. Prettier, JavaScript no-undef and `git diff --check` pass.
 
 Offline/snapshot dry-run on `hermes-live` (10 distinct models with scores, route count for top model, and chosen route):
+
 - Top 10 models: gpt-6-astra (93), muse-spark-1-3 (91), qwen3-8-max (85), claude-opus-5-5 (50), claude-sonnet-5-5 (49), grok-4-6 (49), glm-5-3 (48), muse-wonder (48), gpt-5-6-sol (47), kimi-k3 (47).
 - Chosen model: `gpt-6-astra` (score 93, 4 routes in active snapshot; 2 routes in stored session snapshot).
 - Chosen route: `hermes::http://127.0.0.1:20128/v1::9router::cl::9router::9router::cl/openai/gpt-6-astra` (reason: highest ranked eligible model; routes ordered by live/known-good, known cost, known latency, quota, stored binding, then candidate key). Stored session binding selects `hermes::https://router.requesty.ai/v1::rqsty::azure::rqsty::rqsty::azure/gpt-6-astra@eastus2`. Live usability remains unverified.
@@ -384,6 +390,7 @@ Offline/snapshot dry-run on `hermes-live` (10 distinct models with scores, route
 ### H3 Hermes reasoning candidate: openai-codex (2026-10-14)
 
 The Controller can offer the Hermes reasoning session a GPT model through the operator's ChatGPT plan via the built-in `openai-codex` provider in `hermes-agent` (v0.21.4):
+
 - **Candidate eligibility:** `openai-codex` candidates appear only when `~/.codex/auth.json` exists on disk (checked strictly with `fs.existsSync`; auth tokens are never read, printed, or logged).
 - **Model discovery:** Models are read from `~/.codex/config.toml` (`model` key) if present, defaulting to `gpt-6.1-sol`.
 - **Context window policy:** Context length is resolved only from documented entries in hermes-agent model catalogue or metadata. If undocumented, it remains `undefined` and candidate selection refuses it with `CONTEXT_WINDOW_UNVERIFIED`.
@@ -419,10 +426,20 @@ Verification: TASK-AI-142 tests 173/173; related executor, TASK-AI-141, candidat
 
 ### H3 CI no-hardcode guard for models, scores and caps (2026-10-14)
 
-Operator rule strictly forbids hardcoded model IDs, model lists, benchmark/quality scores, provider/account lists, or numeric attempt/probe caps in the Controller; these must originate exclusively from live sources (provider `/models`, leaderboards, route health, config). An automated guard (`scripts/ai/check-no-hardcode.mjs`) scans changed files (`git diff --name-only origin/main...HEAD`, default) or all files (`--all`) under `tools/ai-brain` (excluding test/ and fixtures) and `tools/ai-brain/data/*.json`. The checker flags model ID string literals, model-score pairs in object/array literals, and numeric literals assigned to attempt/probe/budget/quality caps. Genuine safety invariants (atomic rename retry count, Hermes minimum context window) are explicitly tracked in `scripts/ai/hardcode-allowlist.json`. Pre-existing violations on main are captured in a baseline report (`scripts/ai/hardcode-baseline.json`, 346 violations) and CI fails on any violation not in the baseline or if the baseline grows. Wired as a required step in `.github/workflows/ai-brain-tests.yml` and pre-commit in `lefthook.yml`.
+Operator rule strictly forbids hardcoded model IDs, model lists, benchmark/quality scores, provider/account lists, or numeric attempt/probe caps in the Controller; these must originate exclusively from live sources (provider `/models`, leaderboards, route health, config). An automated guard (`scripts/ai/check-no-hardcode.mjs`) scans changed files (`git diff --name-only origin/main...HEAD`, default) or all files (`--all`) under `tools/ai-brain` (excluding test/ and fixtures) and `tools/ai-brain/data/*.json`. The checker flags model ID string literals, model-score pairs in object/array literals, and numeric literals assigned to attempt/probe/budget/quality caps. Genuine safety invariants (atomic rename retry count, Hermes minimum context window) are explicitly tracked in `scripts/ai/hardcode-allowlist.json`. Pre-existing violations on main are captured in a baseline report (`scripts/ai/hardcode-baseline.json`, 345 violations) and CI fails on any violation not in the baseline or if the baseline grows. Wired as a required step in `.github/workflows/ai-brain-tests.yml` and pre-push in `lefthook.yml`.
 
 Verification: sequential `tools/ai-brain/test/task-ai-142*.test.js` passed 190/190; checker test suite (`task-ai-142-no-hardcode.test.js`) passed 9/9 covering detection, allowlist filtering, baseline accounting, and CLI execution; `prettier --check` and `git diff --check` passed.
+
+### H3 account-level cooldown on exhaustion (2026-10-14)
+
+Exhausted accounts cool down as a whole across model routes sharing the same account key (`extractAccountKey`). When a Hermes probe encounters `upstream_credit_exhausted`, `quota_exhausted`, `account_auth_failed`, or `upstream_entitlement`, the account is cooled down in `model-route-health.json` (`store.accounts[accountKey]`). Subsequent selections reject candidates on the cooled-down account with `PROBE_COOLDOWN_ACCOUNT: <account> until <timestamp>`, avoiding wasteful probes against exhausted accounts.
 
 ### H3 live: writer probe without count caps (2026-10-14)
 
 GOAL-AUTOCLAW-REPOS-1 failed with PROBE_BUDGET_EXHAUSTED because writer probing was capped at 20 attempts and 2 routes per model. Both caps are removed for writers; only the wall-clock budget remains, and candidates on an account that reported a provider-level failure are skipped without probing. Follow-up: the reviewer path still has a 2-route cap (REVIEWER_CANONICAL_MODEL_CAP).
+
+### H3 live: concurrent writer probing (2026-10-14)
+
+After #312 writer routes were still probed one at a time within the 180 s budget. Writer routes are now probed concurrently (up to 8 accounts, reusing the Hermes concurrent probe) before selection; failed routes are recorded with reasons in the intake decisions. A live dry-run with real keys selected live writers.
+
+H3 review repair: the guard resolves the merge-base with the configured PR base (origin/main by default) and fails on Git, read or parse errors. Baselines must have a consistent total and can only remove entries compared by file, rule and snippet; a baseline introduced by this PR is explicitly validated. Full scans include JavaScript modules and cap detection includes parameter and destructuring defaults. Verification: `node --test tools/ai-brain/test/task-ai-142-no-hardcode.test.js` passed 20/20; `node scripts/ai/check-no-hardcode.mjs` passed with 4 files scanned, 6 baseline instances and 0 new violations. The CI step and pre-push hook invoke the guard, and AGENTS.md requires it.

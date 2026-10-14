@@ -24,6 +24,7 @@ jobs:
           node-version: '24'
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # TASK-AI-142: compare against the PR base branch.
       - name: Check no hardcode guard
         run: node scripts/ai/check-no-hardcode.mjs
       - name: Run AI Brain test suite

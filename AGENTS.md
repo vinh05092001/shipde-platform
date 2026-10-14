@@ -174,3 +174,5 @@ Every Pull Request must contain:
 - Repository and CLI manifest: `docs/product-spec/docs/10-ai-collaboration/REPOSITORY-CLI-MANIFEST.md`
 - Windows setup runbook: `docs/product-spec/docs/10-ai-collaboration/WINDOWS-SETUP-RUNBOOK.md`
 - Safe control scripts: `scripts/ai/README.md`
+
+No production hardcode: scripts/ai/check-no-hardcode.mjs must pass

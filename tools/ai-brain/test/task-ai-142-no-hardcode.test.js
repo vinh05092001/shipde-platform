@@ -245,3 +245,159 @@ test('TASK-AI-142: CLI execution exits 0 on clean code and 1 on new hardcode', (
     }
   );
 });
+
+const { spawnSync } = require('node:child_process');
+
+function withGuardRepo(run) {
+  const root = fs.mkdtempSync(
+    path.join(path.dirname(path.dirname(path.dirname(__dirname))), '.guard-test-')
+  );
+  const git = (...args) =>
+    execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: 'pipe' });
+  const write = (name, content) => {
+    const target = path.join(root, name);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, content);
+  };
+  const baseline = 'scripts/ai/hardcode-baseline.json';
+  try {
+    write('scripts/ai/check-no-hardcode.mjs', fs.readFileSync(CHECKER_PATH));
+    write('scripts/ai/hardcode-allowlist.json', '[]');
+    write(baseline, JSON.stringify({ total: 0, violations: [] }));
+    git('init');
+    git('config', 'user.email', 'guard-test@example.invalid');
+    git('config', 'user.name', 'Guard test');
+    git('add', '.');
+    git('-c', 'core.hooksPath=disabled-hooks', 'commit', '-m', 'fixture');
+    git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+    const cli = (args = [], env = {}) =>
+      spawnSync(process.execPath, [path.join(root, 'scripts/ai/check-no-hardcode.mjs'), ...args], {
+        cwd: root,
+        encoding: 'utf8',
+        env: { ...process.env, GITHUB_BASE_REF: '', ...env },
+      });
+    run({ root, git, write, cli, baseline });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test('TASK-AI-142: unresolvable base exits 1', () =>
+  withGuardRepo(({ cli }) => {
+    const out = cli([], { GITHUB_BASE_REF: 'missing-base' });
+    assert.equal(out.status, 1);
+    assert.match(out.stderr, /Git failed.*merge-base/);
+  }));
+
+test('TASK-AI-142: appended baseline entry with unchanged total exits 1', () =>
+  withGuardRepo(({ write, cli, baseline }) => {
+    write(
+      baseline,
+      JSON.stringify({
+        total: 0,
+        violations: [{ file: 'a.js', rule: 'NUMERIC_CAP', matched: 'quality = 3' }],
+      })
+    );
+    const out = cli();
+    assert.equal(out.status, 1);
+    assert.match(out.stderr, /total must equal/);
+  }));
+
+test('TASK-AI-142: baseline additions fail even with a consistent total', () =>
+  withGuardRepo(({ write, cli, baseline }) => {
+    write(
+      baseline,
+      JSON.stringify({
+        total: 1,
+        violations: [{ file: 'a.js', rule: 'NUMERIC_CAP', matched: 'quality = 3' }],
+      })
+    );
+    const out = cli();
+    assert.equal(out.status, 1);
+    assert.match(out.stderr, /only shrink/);
+  }));
+
+test('TASK-AI-142: parse errors exit 1 and identify file', () =>
+  withGuardRepo(({ write, cli }) => {
+    write('tools/ai-brain/broken.js', 'function {');
+    const out = cli(['--all']);
+    assert.equal(out.status, 1);
+    assert.match(out.stderr, /broken.js/);
+  }));
+
+test('TASK-AI-142: unreadable target exits 1 and identifies file', () =>
+  withGuardRepo(({ cli }) => {
+    const out = cli(['tools/ai-brain/missing.js']);
+    assert.equal(out.status, 1);
+    assert.match(out.stderr, /missing.js/);
+  }));
+
+test('TASK-AI-142: --all counts mjs and cjs files', () =>
+  withGuardRepo(({ write, cli }) => {
+    write('tools/ai-brain/module.mjs', 'export const value = process.env.VALUE;');
+    write('tools/ai-brain/module.cjs', 'module.exports = process.env.VALUE;');
+    const out = cli(['--all']);
+    assert.equal(out.status, 0, out.stderr);
+    assert.match(out.stdout, /2 files scanned/);
+  }));
+
+test('TASK-AI-142: parameter and destructuring default caps are flagged', () =>
+  withGuardRepo(({ write, cli }) => {
+    write('tools/ai-brain/defaults.js', 'function run(maxAttempts = 4, {probeBudget = 5} = {}) {}');
+    const out = cli(['--all']);
+    assert.equal(out.status, 1);
+    assert.match(out.stderr, /maxAttempts = 4/);
+    assert.match(out.stderr, /probeBudget = 5/);
+  }));
+
+test('TASK-AI-142: baseline comparison ignores lines but forbids replacement entries', async () => {
+  const { enforceBaselineShrink } = await getChecker();
+  const entry = {
+    file: 'tools/ai-brain/a.js',
+    rule: 'NUMERIC_CAP',
+    matched: 'quality = 3',
+    line: 1,
+  };
+  const previous = { total: 1, violations: [entry] };
+  assert.doesNotThrow(() =>
+    enforceBaselineShrink({ total: 1, violations: [{ ...entry, line: 2 }] }, previous)
+  );
+  assert.throws(
+    () =>
+      enforceBaselineShrink(
+        { total: 1, violations: [{ ...entry, matched: 'quality = 4' }] },
+        previous
+      ),
+    /only shrink/
+  );
+});
+
+test('TASK-AI-142: allowlist cannot hide an unrelated violation on the same line', async () => {
+  const checker = await getChecker();
+  assert.equal(
+    checker.isAllowlisted(
+      {
+        file: 'a.js',
+        matched: 'quality = 4',
+        lineText: 'const DEFAULT_MAX_ATTEMPTS = 10, quality = 4;',
+      },
+      [{ file: 'a.js', pattern: 'DEFAULT_MAX_ATTEMPTS', reason: 'rename safety invariant' }]
+    ),
+    false
+  );
+});
+
+test('TASK-AI-142: renamed destructuring default caps are flagged', () =>
+  withGuardRepo(({ write, cli }) => {
+    write('tools/ai-brain/defaults.js', 'function run({maxAttempts: attempts = 4} = {}) {}');
+    const out = cli(['--all']);
+    assert.equal(out.status, 1);
+    assert.match(out.stderr, /maxAttempts = 4/);
+  }));
+
+test('TASK-AI-142: missing baseline not added in this PR fails closed', () =>
+  withGuardRepo(({ cli }) => {
+    const out = cli(['--baseline', 'scripts/ai/missing.json']);
+    assert.equal(out.status, 1);
+    assert.match(out.stderr, /Cannot read baseline/);
+  }));

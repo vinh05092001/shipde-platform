@@ -39,3 +39,8 @@ pre-commit:
     # Model IDs, benchmark scores, and probe/attempt caps must come from live sources.
     no-hardcode:
       run: node scripts/ai/check-no-hardcode.mjs --staged
+
+pre-push:
+  commands:
+    no-hardcode:
+      run: node scripts/ai/check-no-hardcode.mjs

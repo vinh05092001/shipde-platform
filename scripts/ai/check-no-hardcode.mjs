@@ -15,21 +15,30 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import parser from '@typescript-eslint/parser';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 
-export const DEFAULT_BASELINE_PATH = path.join(REPO_ROOT, 'scripts', 'ai', 'hardcode-baseline.json');
-export const DEFAULT_ALLOWLIST_PATH = path.join(REPO_ROOT, 'scripts', 'ai', 'hardcode-allowlist.json');
+export const DEFAULT_BASELINE_PATH = path.join(
+  REPO_ROOT,
+  'scripts',
+  'ai',
+  'hardcode-baseline.json'
+);
+export const DEFAULT_ALLOWLIST_PATH = path.join(
+  REPO_ROOT,
+  'scripts',
+  'ai',
+  'hardcode-allowlist.json'
+);
 
 export const MODEL_FAMILY_RE =
   /gpt-|claude-|gemini-|deepseek|qwen|glm-|grok-|kimi|mistral|llama|mercury|muse-/i;
 
-export const CAP_NAME_RE =
-  /max_?(Attempts|Probes)|probe_?Budget|attempt(s)?_?Limit|quality/i;
+export const CAP_NAME_RE = /max_?(Attempts|Probes)|probe_?Budget|attempt(s)?_?Limit|quality/i;
 
 export const SCORE_KEY_RE =
   /score|quality|grade|index|rating|livebench|aacodingindex|aaagenticindex/i;
@@ -134,7 +143,10 @@ const NON_MODEL_EXTENSIONS = [
 export function normalizePath(p) {
   if (!p) return '';
   let rel = path.isAbsolute(p) ? path.relative(REPO_ROOT, p) : p;
-  return rel.split(path.sep).join('/').replace(/^[./]+/, '');
+  return rel
+    .split(path.sep)
+    .join('/')
+    .replace(/^[./]+/, '');
 }
 
 export function isTargetFile(relPath) {
@@ -224,7 +236,7 @@ function getNumericValue(node) {
 export function scanFile(filePath) {
   const normFile = normalizePath(filePath);
   const fullPath = path.isAbsolute(filePath) ? filePath : path.join(REPO_ROOT, filePath);
-  if (!fs.existsSync(fullPath)) return [];
+  if (!fs.existsSync(fullPath)) throw new Error(`Cannot read target file: ${normFile}`);
 
   const content = fs.readFileSync(fullPath, 'utf8');
   const lines = content.split('\n');
@@ -237,7 +249,7 @@ export function scanFile(filePath) {
       ecmaVersion: 'latest',
     });
   } catch (err) {
-    return [];
+    throw new Error(`Cannot parse target file ${normFile}: ${err.message}`);
   }
 
   const violations = [];
@@ -347,10 +359,9 @@ export function scanFile(filePath) {
       }
     }
 
-    if (node.type === 'AssignmentExpression') {
+    if (node.type === 'AssignmentExpression' || node.type === 'AssignmentPattern') {
       const targetName =
-        getPropertyName(node.left) ||
-        (node.left.property && getPropertyName(node.left.property));
+        getPropertyName(node.left) || (node.left.property && getPropertyName(node.left.property));
       if (targetName && CAP_NAME_RE.test(targetName) && isNumericLiteral(node.right)) {
         violations.push({
           file: normFile,
@@ -364,6 +375,21 @@ export function scanFile(filePath) {
 
     if (node.type === 'Property' && node.key) {
       const keyName = getPropertyName(node.key);
+      if (
+        keyName &&
+        CAP_NAME_RE.test(keyName) &&
+        node.value?.type === 'AssignmentPattern' &&
+        node.value.left.name !== keyName &&
+        isNumericLiteral(node.value.right)
+      ) {
+        violations.push({
+          file: normFile,
+          line: node.loc.start.line,
+          rule: 'NUMERIC_CAP',
+          matched: keyName + ' = ' + getNumericValue(node.value.right),
+          lineText: lines[node.loc.start.line - 1] || '',
+        });
+      }
       if (keyName && CAP_NAME_RE.test(keyName) && isNumericLiteral(node.value)) {
         violations.push({
           file: normFile,
@@ -397,8 +423,16 @@ export function loadAllowlist(allowlistPath = DEFAULT_ALLOWLIST_PATH) {
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
     for (const entry of parsed) {
-      if (!entry.file || !entry.pattern || !entry.reason || typeof entry.reason !== 'string' || !entry.reason.trim()) {
-        throw new Error(`Invalid allowlist entry: missing required reason, file, or pattern in ${JSON.stringify(entry)}`);
+      if (
+        !entry.file ||
+        !entry.pattern ||
+        !entry.reason ||
+        typeof entry.reason !== 'string' ||
+        !entry.reason.trim()
+      ) {
+        throw new Error(
+          `Invalid allowlist entry: missing required reason, file, or pattern in ${JSON.stringify(entry)}`
+        );
       }
     }
     return parsed;
@@ -408,11 +442,11 @@ export function loadAllowlist(allowlistPath = DEFAULT_ALLOWLIST_PATH) {
 }
 
 export function loadBaseline(baselinePath = DEFAULT_BASELINE_PATH) {
-  if (!fs.existsSync(baselinePath)) return { total: 0, violations: [] };
+  if (!fs.existsSync(baselinePath)) throw new Error(`Cannot read baseline: ${baselinePath}`);
   try {
     const raw = fs.readFileSync(baselinePath, 'utf8');
     const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object') return { total: 0, violations: [] };
+    validateBaseline(parsed);
     const violations = Array.isArray(parsed.violations) ? parsed.violations : [];
     return {
       total: typeof parsed.total === 'number' ? parsed.total : violations.length,
@@ -429,10 +463,7 @@ export function isAllowlisted(violation, allowlist) {
     const entryFile = normalizePath(entry.file);
     if (entryFile !== violation.file) return false;
     const re = new RegExp(entry.pattern, 'i');
-    return (
-      re.test(violation.matched) ||
-      (violation.lineText && re.test(violation.lineText))
-    );
+    return re.test(violation.matched);
   });
 }
 
@@ -461,7 +492,7 @@ export function getTargetFiles(baseDir = path.join(REPO_ROOT, 'tools', 'ai-brain
           continue;
         }
         collect(full);
-      } else if (ent.name.endsWith('.js') || ent.name.endsWith('.json')) {
+      } else if (/\.(?:js|mjs|cjs|json)$/.test(ent.name)) {
         result.push(full);
       }
     }
@@ -526,7 +557,11 @@ export function checkViolations(scannedViolations, allowlist, baseline) {
   };
 }
 
-export function generateBaseline(targetFiles, allowlistPath = DEFAULT_ALLOWLIST_PATH, outPath = DEFAULT_BASELINE_PATH) {
+export function generateBaseline(
+  targetFiles,
+  allowlistPath = DEFAULT_ALLOWLIST_PATH,
+  outPath = DEFAULT_BASELINE_PATH
+) {
   const allowlist = loadAllowlist(allowlistPath);
   const rawViolations = scanFiles(targetFiles);
   const unallowlisted = rawViolations
@@ -554,30 +589,59 @@ export function generateBaseline(targetFiles, allowlistPath = DEFAULT_ALLOWLIST_
   return report;
 }
 
-function getChangedFiles(mode) {
+function git(args) {
   try {
-    if (mode === 'staged') {
-      const out = execSync('git diff --cached --name-only', { encoding: 'utf8', cwd: REPO_ROOT });
-      return out.split('\n').map((s) => s.trim()).filter(Boolean);
-    }
-
-    // Default mode: diff origin/main...HEAD
-    try {
-      const out = execSync('git diff --name-only origin/main...HEAD', {
-        encoding: 'utf8',
-        cwd: REPO_ROOT,
-        stdio: ['pipe', 'pipe', 'ignore'],
-      });
-      return out.split('\n').map((s) => s.trim()).filter(Boolean);
-    } catch {
-      // Fallback if origin/main is not available
-      const out = execSync('git diff --name-only HEAD', { encoding: 'utf8', cwd: REPO_ROOT });
-      return out.split('\n').map((s) => s.trim()).filter(Boolean);
-    }
+    return execFileSync('git', args, {
+      encoding: 'utf8',
+      cwd: REPO_ROOT,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }).trim();
   } catch (err) {
-    console.warn(`[WARN] git diff failed: ${err.message}`);
-    return [];
+    throw new Error('Git failed (' + args.join(' ') + '): ' + (err.stderr || err.message));
   }
+}
+function baseRef() {
+  return 'origin/' + (process.env.GITHUB_BASE_REF || 'main');
+}
+function getChangedFiles(mode) {
+  const base = git(['merge-base', baseRef(), 'HEAD']);
+  return git(
+    mode === 'staged'
+      ? ['diff', '--cached', '--name-only', '--diff-filter=ACMR']
+      : ['diff', '--name-only', '--diff-filter=ACMR', base]
+  )
+    .split('\n')
+    .filter(Boolean);
+}
+function validateBaseline(parsed) {
+  if (!parsed || !Array.isArray(parsed.violations) || parsed.total !== parsed.violations.length)
+    throw new Error('Invalid baseline: total must equal violations.length');
+}
+export function enforceBaselineShrink(baseline, previous) {
+  validateBaseline(baseline);
+  validateBaseline(previous);
+  const key = (v) => JSON.stringify([normalizePath(v.file), v.rule, v.matched]);
+  const remaining = previous.violations.map(key);
+  for (const entry of baseline.violations) {
+    const index = remaining.indexOf(key(entry));
+    if (index === -1) throw new Error('Baseline can only shrink: added violation entry');
+    remaining.splice(index, 1);
+  }
+}
+function checkBaseBaseline(baseline, baselinePath) {
+  const ref = baseRef();
+  const base = git(['merge-base', ref, 'HEAD']);
+  const relative = normalizePath(baselinePath);
+  if (!git(['ls-tree', ref, '--', relative])) {
+    if (
+      git(['ls-tree', base, '--', relative]) ||
+      !git(['diff', '--name-only', '--diff-filter=A', base, '--', relative])
+    )
+      throw new Error('Cannot read base baseline: file is not new in this PR: ' + relative);
+    validateBaseline(baseline);
+    return;
+  }
+  enforceBaselineShrink(baseline, JSON.parse(git(['show', ref + ':' + relative])));
 }
 
 export async function runCli(argv = process.argv.slice(2)) {
@@ -620,7 +684,9 @@ export async function runCli(argv = process.argv.slice(2)) {
 
   if (isGenerateBaseline) {
     const report = generateBaseline(filesToScan, allowlistPath, baselinePath);
-    console.log(`[hardcode-guard] Baseline generated with ${report.total} violations: ${baselinePath}`);
+    console.log(
+      `[hardcode-guard] Baseline generated with ${report.total} violations: ${baselinePath}`
+    );
     if (isJson) {
       console.log(JSON.stringify(report, null, 2));
     }
@@ -629,25 +695,7 @@ export async function runCli(argv = process.argv.slice(2)) {
 
   const baseline = loadBaseline(baselinePath);
 
-  // Check if baseline file itself grew compared to origin/main
-  try {
-    const relBaseline = normalizePath(baselinePath);
-    const gitBaseline = execSync(`git show origin/main:${relBaseline}`, {
-      encoding: 'utf8',
-      cwd: REPO_ROOT,
-      stdio: ['pipe', 'pipe', 'ignore'],
-    });
-    const parsedGit = JSON.parse(gitBaseline);
-    const gitTotal = typeof parsedGit.total === 'number' ? parsedGit.total : (parsedGit.violations || []).length;
-    if (baseline.total > gitTotal) {
-      console.error(
-        `\x1b[31m[ERROR] Baseline file grew from ${gitTotal} on origin/main to ${baseline.total}! The baseline can only shrink.\x1b[0m`
-      );
-      return 1;
-    }
-  } catch (_) {
-    // origin/main:baseline does not exist yet or git show failed, which is expected before merge
-  }
+  checkBaseBaseline(baseline, baselinePath);
 
   const scannedViolations = scanFiles(filesToScan);
   const result = checkViolations(scannedViolations, allowlist, baseline);
@@ -690,7 +738,12 @@ export async function runCli(argv = process.argv.slice(2)) {
 
 // Run CLI when executed directly
 if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
-  runCli().then((code) => {
-    process.exit(code);
-  });
+  runCli()
+    .then((code) => {
+      process.exit(code);
+    })
+    .catch((err) => {
+      console.error(`[hardcode-guard] ERROR: ${err.message}`);
+      process.exit(1);
+    });
 }

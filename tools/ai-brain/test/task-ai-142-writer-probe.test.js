@@ -50,7 +50,7 @@ function createCandidate(overrides) {
   return c;
 }
 
-test('(a) 30 candidates on 30 different accounts all failing with a timeout-free failure, then 1 live candidate: the live one is chosen (proves no count cap of 20)', async (t) => {
+test('(a) 60 dead routes taking 8 seconds and a live route ranked last fit the 180 second concurrent budget', async (t) => {
   const repo = makeTempRepo();
   const decisionDir = tmpDir('dec-a-');
   const evidenceDir = tmpDir('evi-a-');
@@ -61,7 +61,7 @@ test('(a) 30 candidates on 30 different accounts all failing with a timeout-free
   });
 
   const candidates = [];
-  for (let i = 0; i < 30; i++) {
+  for (let i = 0; i < 60; i++) {
     candidates.push(
       createCandidate({
         accessPath: `https://gw-${i}.example/v1`,
@@ -79,7 +79,7 @@ test('(a) 30 candidates on 30 different accounts all failing with a timeout-free
     accountId: 'acc-live',
     quotaScope: 'acc-live',
     modelId: 'vendor/model-live',
-    quality: 80,
+    quality: 70,
   });
   candidates.push(liveCandidate);
 
@@ -109,7 +109,7 @@ test('(a) 30 candidates on 30 different accounts all failing with a timeout-free
     if (probeCandidate.modelId === 'vendor/model-live') {
       return { ok: true, status: 200, body: 'OK' };
     }
-    // Timeout-free failure
+    await new Promise((resolve) => setTimeout(resolve, 8000));
     return { ok: false, status: 400, body: 'alias_mismatch' };
   };
 
@@ -138,115 +138,164 @@ test('(a) 30 candidates on 30 different accounts all failing with a timeout-free
     ranking: { priors: { ranking: [] } },
   };
 
-  const result = await runOrchestration('test 30 candidates probe', options);
-  assert.equal(probedKeys.length, 31, 'must have probed 30 failed candidates + 1 live candidate');
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
+  const startedAt = Date.now();
+  let settled = false;
+  const pending = runOrchestration('test 60 delayed dead candidates', options);
+  pending.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    }
+  );
+  while (!settled && Date.now() - startedAt < 180000) {
+    await new Promise((resolve) => setImmediate(resolve));
+    t.mock.timers.tick(8000);
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.ok(settled, 'selection must finish inside the wall-clock budget');
+  const result = await pending;
+  assert.equal(probedKeys.length, 61, 'all 60 dead routes and the last live route are probed');
+  assert.ok(Date.now() - startedAt < 180000);
+  const records = fs
+    .readdirSync(decisionDir)
+    .filter((name) => name.endsWith('.jsonl'))
+    .flatMap((name) =>
+      fs.readFileSync(path.join(decisionDir, name), 'utf8').trim().split('\n').map(JSON.parse)
+    );
+  const rejections = records
+    .flatMap((record) => record.rejected || [])
+    .filter((entry) => String(entry.reason).startsWith('WRITER_ROUTE_PROBE_FAILED'));
+  assert.equal(rejections.length, 60, 'writer rejections land in the injected intake decision dir');
   assert.equal(result.status, 'COMPLETED');
   assert.equal(result.sessions[0].candidateKey, liveCandidate.candidateKey);
 });
 
-test("(b) 3 candidates on account A + 1 on account B; A's first probe returns cause upstream_credit_exhausted: exactly 2 probes happen and B is chosen", async (t) => {
-  const repo = makeTempRepo();
-  const decisionDir = tmpDir('dec-b-');
-  const evidenceDir = tmpDir('evi-b-');
-  t.after(() => {
-    fs.rmSync(repo.dir, { recursive: true, force: true });
-    fs.rmSync(decisionDir, { recursive: true, force: true });
-    fs.rmSync(evidenceDir, { recursive: true, force: true });
-  });
+for (const providerCause of ['upstream_credit_exhausted', '[credit.exhausted']) {
+  test(`(b) provider failure body ${providerCause} exhausts account A and chooses B`, async (t) => {
+    const { PROVIDER_LEVEL_FAILURE_CAUSES } = require('../hermes-session');
+    const addedCause = !PROVIDER_LEVEL_FAILURE_CAUSES.has(providerCause);
+    PROVIDER_LEVEL_FAILURE_CAUSES.add(providerCause);
+    t.after(() => {
+      if (addedCause) PROVIDER_LEVEL_FAILURE_CAUSES.delete(providerCause);
+    });
+    const health = require('../route-health');
+    const remembered = [];
+    const rememberProbe = health.rememberProbe;
+    t.mock.method(health, 'rememberProbe', (candidate, result, options) => {
+      remembered.push(candidate.candidateKey);
+      return rememberProbe(candidate, result, options);
+    });
+    const repo = makeTempRepo();
+    const decisionDir = tmpDir('dec-b-');
+    const evidenceDir = tmpDir('evi-b-');
+    t.after(() => {
+      fs.rmSync(repo.dir, { recursive: true, force: true });
+      fs.rmSync(decisionDir, { recursive: true, force: true });
+      fs.rmSync(evidenceDir, { recursive: true, force: true });
+    });
 
-  const candA1 = createCandidate({
-    accessPath: 'https://gw-a.example/v1',
-    gateway: 'gw-a',
-    accountId: 'acc-a',
-    quotaScope: 'acc-a',
-    modelId: 'vendor/model-a1',
-    quality: 99,
-  });
-  const candA2 = createCandidate({
-    accessPath: 'https://gw-a.example/v1',
-    gateway: 'gw-a',
-    accountId: 'acc-a',
-    quotaScope: 'acc-a',
-    modelId: 'vendor/model-a2',
-    quality: 98,
-  });
-  const candA3 = createCandidate({
-    accessPath: 'https://gw-a.example/v1',
-    gateway: 'gw-a',
-    accountId: 'acc-a',
-    quotaScope: 'acc-a',
-    modelId: 'vendor/model-a3',
-    quality: 97,
-  });
-  const candB = createCandidate({
-    accessPath: 'https://gw-b.example/v1',
-    gateway: 'gw-b',
-    accountId: 'acc-b',
-    quotaScope: 'acc-b',
-    modelId: 'vendor/model-b',
-    quality: 90,
-  });
+    const candA1 = createCandidate({
+      accessPath: 'https://gw-a.example/v1',
+      gateway: 'gw-a',
+      accountId: 'acc-a',
+      quotaScope: 'acc-a',
+      modelId: 'vendor/model-a1',
+      quality: 99,
+    });
+    const candA2 = createCandidate({
+      accessPath: 'https://gw-a.example/v1',
+      gateway: 'gw-a',
+      accountId: 'acc-a',
+      quotaScope: 'acc-a',
+      modelId: 'vendor/model-a2',
+      quality: 98,
+    });
+    const candA3 = createCandidate({
+      accessPath: 'https://gw-a.example/v1',
+      gateway: 'gw-a',
+      accountId: 'acc-a',
+      quotaScope: 'acc-a',
+      modelId: 'vendor/model-a3',
+      quality: 97,
+    });
+    const candB = createCandidate({
+      accessPath: 'https://gw-b.example/v1',
+      gateway: 'gw-b',
+      accountId: 'acc-b',
+      quotaScope: 'acc-b',
+      modelId: 'vendor/model-b',
+      quality: 90,
+    });
 
-  const candidates = [candA1, candA2, candA3, candB];
-  const registry = {
-    sources: [
-      { id: 'gw-a', endpoint: 'https://gw-a.example/v1', credential: { env: 'TEST_KEY' } },
-      { id: 'gw-b', endpoint: 'https://gw-b.example/v1', credential: { env: 'TEST_KEY' } },
-      { id: 'oc', endpoint: 'https://gateway.example/v1', credential: { env: 'TEST_KEY' } },
-    ],
-    dispatch: {
-      providers: {
-        oc: { harness: 'opencode-direct', provider: 'opencode' },
+    const candidates = [candA1, candA2, candA3, candB];
+    const registry = {
+      sources: [
+        { id: 'gw-a', endpoint: 'https://gw-a.example/v1', credential: { env: 'TEST_KEY' } },
+        { id: 'gw-b', endpoint: 'https://gw-b.example/v1', credential: { env: 'TEST_KEY' } },
+        { id: 'oc', endpoint: 'https://gateway.example/v1', credential: { env: 'TEST_KEY' } },
+      ],
+      dispatch: {
+        providers: {
+          oc: { harness: 'opencode-direct', provider: 'opencode' },
+        },
       },
-    },
-  };
+    };
 
-  const probedModels = [];
-  const routeProbe = async (probeCandidate) => {
-    probedModels.push(probeCandidate.modelId);
-    if (probeCandidate.modelId === 'vendor/model-a1') {
-      return { ok: false, cause: 'upstream_credit_exhausted', body: 'upstream_credit_exhausted' };
-    }
-    if (probeCandidate.modelId === 'vendor/model-b') {
-      return { ok: true, status: 200, body: 'OK' };
-    }
-    return { ok: false, status: 400, body: 'unexpected' };
-  };
+    const probedModels = [];
+    const routeProbe = async (probeCandidate) => {
+      probedModels.push(probeCandidate.modelId);
+      if (probeCandidate.modelId === 'vendor/model-a1') {
+        return { ok: false, body: `Provider failure: ${providerCause.toUpperCase()}` };
+      }
+      if (probeCandidate.modelId === 'vendor/model-b') {
+        return { ok: true, status: 200, body: 'OK' };
+      }
+      return { ok: false, status: 400, body: 'unexpected' };
+    };
 
-  const options = {
-    isolatedWorker: true,
-    cwd: repo.dir,
-    workerRoot: repo.dir,
-    baseSha: repo.sha,
-    sha: repo.sha,
-    decisionDir,
-    evidenceDir,
-    candidates,
-    registry,
-    specs: [{ id: 'TASK-AI-142', files: ['a.js'], acceptanceCriteria: ['done'] }],
-    routeProbe,
-    run: () => ({
-      exitCode: 0,
-      stdout: '{"sessionID":"ses_b","tokens":{"input":10,"output":5}}',
-      stderr: '',
-      completionNonce: 'nonce-b',
-      workerSha: repo.sha,
-    }),
-    reviewer: () => ({ pass: true, sha: repo.sha, verdict: 'PASS', findings: [] }),
-    tests: () => ({ pass: true }),
-    hostGate: () => ({ pass: true, failures: [] }),
-    ranking: { priors: { ranking: [] } },
-  };
+    const options = {
+      isolatedWorker: true,
+      cwd: repo.dir,
+      workerRoot: repo.dir,
+      baseSha: repo.sha,
+      sha: repo.sha,
+      decisionDir,
+      evidenceDir,
+      candidates,
+      registry,
+      specs: [{ id: 'TASK-AI-142', files: ['a.js'], acceptanceCriteria: ['done'] }],
+      routeProbe,
+      run: () => ({
+        exitCode: 0,
+        stdout: '{"sessionID":"ses_b","tokens":{"input":10,"output":5}}',
+        stderr: '',
+        completionNonce: 'nonce-b',
+        workerSha: repo.sha,
+      }),
+      reviewer: () => ({ pass: true, sha: repo.sha, verdict: 'PASS', findings: [] }),
+      tests: () => ({ pass: true }),
+      hostGate: () => ({ pass: true, failures: [] }),
+      ranking: { priors: { ranking: [] } },
+    };
 
-  const result = await runOrchestration('test exhausted account skipping', options);
-  assert.deepEqual(
-    probedModels,
-    ['vendor/model-a1', 'vendor/model-b'],
-    'exactly 2 probes must happen'
-  );
-  assert.equal(result.status, 'COMPLETED');
-  assert.equal(result.sessions[0].candidateKey, candB.candidateKey);
-});
+    const result = await runOrchestration('test exhausted account skipping', options);
+    assert.deepEqual(
+      probedModels,
+      ['vendor/model-a1', 'vendor/model-b'],
+      'exactly 2 probes must happen'
+    );
+    assert.equal(result.status, 'COMPLETED');
+    assert.equal(result.sessions[0].candidateKey, candB.candidateKey);
+    assert.equal(
+      remembered.filter((key) => key === candB.candidateKey).length,
+      2,
+      'both primary and cached fallback probe paths record route health'
+    );
+  });
+}
 
 test('(c) one model with 3 routes, first 2 fail, 3rd live: the 3rd route is used (proves no 2-routes-per-model cap)', async (t) => {
   const repo = makeTempRepo();
@@ -346,4 +395,125 @@ test('(c) one model with 3 routes, first 2 fail, 3rd live: the 3rd route is used
   );
   assert.equal(result.status, 'COMPLETED');
   assert.equal(result.sessions[0].candidateKey, candR3.candidateKey);
+});
+
+test('failed concurrent pre-probes are never selected when no route succeeds', async (t) => {
+  const repo = makeTempRepo();
+  const decisionDir = tmpDir('dec-c-');
+  const evidenceDir = tmpDir('evi-c-');
+  t.after(() => {
+    fs.rmSync(repo.dir, { recursive: true, force: true });
+    fs.rmSync(decisionDir, { recursive: true, force: true });
+    fs.rmSync(evidenceDir, { recursive: true, force: true });
+  });
+
+  const candidates = [createCandidate()];
+  const registry = {
+    sources: candidates.map((candidate) => ({
+      id: candidate.gateway,
+      endpoint: candidate.accessPath,
+      credential: { env: 'TEST_KEY' },
+    })),
+    dispatch: { providers: { oc: { harness: 'opencode-direct', provider: 'opencode' } } },
+  };
+
+  const probedAccounts = [];
+  const routeProbe = async (probeCandidate) => {
+    probedAccounts.push(probeCandidate.accessPath);
+    return { ok: false, status: 500, body: 'server error' };
+  };
+  let launches = 0;
+
+  const options = {
+    isolatedWorker: true,
+    cwd: repo.dir,
+    workerRoot: repo.dir,
+    baseSha: repo.sha,
+    sha: repo.sha,
+    decisionDir,
+    evidenceDir,
+    candidates,
+    registry,
+    specs: [{ id: 'TASK-AI-142', files: ['a.js'], acceptanceCriteria: ['done'] }],
+    routeProbe,
+    run: () => {
+      launches += 1;
+      throw new Error('A failed pre-probe route must never launch');
+    },
+    reviewer: () => ({ pass: true, sha: repo.sha, verdict: 'PASS', findings: [] }),
+    tests: () => ({ pass: true }),
+    hostGate: () => ({ pass: true, failures: [] }),
+    ranking: { priors: { ranking: [] } },
+  };
+
+  const result = await runOrchestration('test failed concurrent pre-probe exclusion', options);
+  assert.deepEqual(
+    probedAccounts,
+    candidates.map((candidate) => candidate.accessPath)
+  );
+  assert.equal(launches, 0);
+  assert.notEqual(result.status, 'COMPLETED');
+  const records = fs
+    .readdirSync(decisionDir)
+    .filter((name) => name.endsWith('.jsonl'))
+    .flatMap((name) =>
+      fs.readFileSync(path.join(decisionDir, name), 'utf8').trim().split('\n').map(JSON.parse)
+    );
+  for (const candidate of candidates) {
+    assert.ok(
+      records.some((record) =>
+        (record.rejected || []).some(
+          (entry) =>
+            entry.candidateKey === candidate.candidateKey &&
+            String(entry.reason).startsWith('WRITER_ROUTE_PROBE_FAILED')
+        )
+      )
+    );
+    const refusalIndex = records.findIndex((record) =>
+      (record.rejected || []).some(
+        (entry) =>
+          entry.candidateKey === candidate.candidateKey &&
+          String(entry.reason).startsWith('WRITER_ROUTE_PROBE_FAILED')
+      )
+    );
+    assert.ok(
+      records.slice(refusalIndex + 1).every((record) => record.chosen !== candidate.candidateKey)
+    );
+  }
+});
+
+test('(d) next keeps brain decisions in the intake run instead of forwarding its global decision dir', async (t) => {
+  const root = tmpDir('writer-intake-');
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const registerPath = path.join(root, 'register.csv');
+  const runDir = path.join(root, 'intake');
+  fs.mkdirSync(runDir);
+  fs.writeFileSync(
+    registerPath,
+    'delivery_order,work_item_id,status,dependencies\n1,GOAL-WRITER,READY_FOR_AUTHOR,\n'
+  );
+  let runFiles;
+  await require('../next-runner').runNext(
+    { rootDir: root, registerPath, decisionDir: path.join(root, 'runner-decisions'), run: true },
+    {
+      log: () => {},
+      config: {},
+      runIntake: async (options) => {
+        assert.equal(
+          options.decisionDir,
+          undefined,
+          'runner must not override the intake decision dir'
+        );
+        ({ runFiles } = require('../intake').composeOrchestrateCommand({
+          root,
+          runDir,
+          baseSha: 'a'.repeat(40),
+          repoRoot: root,
+          decisionDir: options.decisionDir,
+        }));
+        return { status: 'failed', exitCode: 1, reason: 'dry intake routing check', runFiles };
+      },
+    }
+  );
+  assert.equal(runFiles.decisionDir, path.join(runDir, 'decisions'));
 });
