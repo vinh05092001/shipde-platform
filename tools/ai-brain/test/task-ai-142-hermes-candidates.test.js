@@ -813,7 +813,11 @@ test('TASK-AI-142 H3: writeProvidersConfig and buildHermesArgv emit provider ope
   assert.match(written, /provider:\s*"openai-codex"/);
   assert.match(written, /default:\s*"gpt-6.1-sol"/);
   assert.equal(written.includes('key_env'), false, 'Built-in provider must not write key_env');
-  assert.equal(written.includes('custom_providers'), false, 'Built-in provider must not write custom_providers');
+  assert.equal(
+    written.includes('custom_providers'),
+    false,
+    'Built-in provider must not write custom_providers'
+  );
 
   const argv = hermesSessionApi.buildHermesArgv(candidate, { sessionId: 'ses_123' });
   assert.ok(argv.includes('--provider'));
@@ -860,7 +864,8 @@ test('TASK-AI-142 H3: probe skips HTTP probe for openai-codex by default, and a 
     quality: 80,
     contextWindow: 64000,
     capabilities: { contextWindow: 64000 },
-    candidateKey: 'hermes::https://fallback.example/v1::fixture::fb::account-fb::account-fb::fallback-model',
+    candidateKey:
+      'hermes::https://fallback.example/v1::fixture::fb::account-fb::account-fb::fallback-model',
   };
 
   const registry = {
@@ -912,5 +917,8 @@ test('TASK-AI-142 H3: probe skips HTTP probe for openai-codex by default, and a 
 
   // Spawn launched with fallback-model, having fallen through from openai-codex
   assert.equal(spawned.length, 1);
-  assert.ok(spawned[0].includes('fallback-model'), 'Fallback model must be launched after rate limit');
+  assert.ok(
+    spawned[0].includes('fallback-model'),
+    'Fallback model must be launched after rate limit'
+  );
 });
