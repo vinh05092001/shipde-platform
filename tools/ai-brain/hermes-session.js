@@ -456,6 +456,7 @@ function selectReasoningCandidate(options, deps) {
       harness: 'hermes',
       evidenceData,
       requireRouteHealth: true,
+      allowMissingRouteHealth: true,
       routeHealth: d.routeHealth,
       routeHealthFile:
         opts.routeHealthFile ||
@@ -483,6 +484,7 @@ function selectReasoningCandidate(options, deps) {
   });
   const excluded = new Set(opts.excludedCandidates || []);
   const excludedModels = new Set(opts.excludedModels || []);
+  const hermesKeys = new Set();
 
   // Adapt candidates for Hermes harness: set harness=hermes, verify contextWindow >= 32000
   const hermesCandidates = poolCandidates
@@ -570,7 +572,14 @@ function selectReasoningCandidate(options, deps) {
     )
     // Hermes reaches a model only through an OpenAI-compatible base_url; an
     // account reached through a CLI (agy, claude-code) has no endpoint to bind.
-    .filter((c) => typeof c.accessPath === 'string' && /^https?:\/\//i.test(c.accessPath));
+    .filter((c) => typeof c.accessPath === 'string' && /^https?:\/\//i.test(c.accessPath))
+    // Discovery and generated routes can converge on the same seven-part key
+    // after replacing the original harness/access path. Probe that route once.
+    .filter((c) => {
+      if (hermesKeys.has(c.candidateKey)) return false;
+      hermesKeys.add(c.candidateKey);
+      return true;
+    });
 
   const annotated = candidatesMod.annotateCandidates(hermesCandidates, evidenceData, { now });
 

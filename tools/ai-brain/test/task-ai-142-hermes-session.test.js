@@ -988,9 +988,9 @@ test('H2-15: candidate selection enforces route-health gates on production disco
     assert.ok(assembleOptions, 'assembleForDispatch must be called');
     assert.equal(assembleOptions.requireRouteHealth, true, 'requireRouteHealth must be true');
     assert.equal(
-      assembleOptions.allowUnprobedCandidates,
-      undefined,
-      'allowUnprobedCandidates must not be true'
+      assembleOptions.allowMissingRouteHealth,
+      true,
+      'missing health records must be admitted for the ranked live probe'
     );
     assert.equal(res.chosen, null, 'Must fail closed when no candidate qualifies');
     assert.equal(res.candidate, null);

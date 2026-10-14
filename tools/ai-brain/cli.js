@@ -943,12 +943,18 @@ function isCandidateRouteEligible(routeHealth, candidate, options, routeHealthAp
   if (options && options.allowUnprobedCandidates === true) return true;
   if (!routeHealth) return true;
   const modelId = candidate && candidate.modelId;
-  const gateway = candidate && candidate.gateway;
+  const gateway =
+    candidate &&
+    (candidate.gateway ||
+      (options && options.harness === 'hermes' && (candidate.sourceId || candidate.source)));
   if (!modelId || !gateway) return Boolean(modelId);
   const isWildcard = !candidate.accountId || candidate.accountId === '*';
   const routePath = isWildcard ? gateway : { id: gateway, accountId: candidate.accountId };
   const rec = routeHealthApi.getPathRecord(routeHealth, modelId, routePath);
   if (rec) return rec.status === 'AVAILABLE';
+  // Admission for a ranked live probe is not proof that the route is alive.
+  // Known failures above still fail closed; only a missing record may pass.
+  if (options && options.allowMissingRouteHealth === true) return true;
   const explicit =
     isExplicit !== undefined ? isExplicit : Boolean(options && options.routeHealth !== undefined);
   if (
@@ -1163,6 +1169,7 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
         routeHealth,
         routeHealthExplicit,
         requireRouteHealth: enforceMissingHealth,
+        allowMissingRouteHealth: opts.allowMissingRouteHealth,
         probeEvidence: opts.probeEvidence,
         now: opts.now,
         onAccountCount: opts.onAccountCount,
