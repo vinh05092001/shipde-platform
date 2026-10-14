@@ -2,6 +2,9 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const path = require('node:path');
+const os = require('node:os');
+const fs = require('node:fs');
 const { runHostBrainGate, baseGateCache } = require('../orchestrate');
 
 test('TASK-AI-142: (a) same failures on base -> pass', () => {
@@ -168,4 +171,167 @@ test('TASK-AI-142: (d) base result is cached per base SHA for the session', () =
   assert.deepEqual(result2.hostGateFailures.baselineFailures, [
     'AF-R01: worker prettier .cmd launches',
   ]);
+});
+
+test('TASK-AI-142: (e) worker suite non-zero exit with zero parsed names -> block UNPARSED_FAILURE without base run', () => {
+  const baseSha = 'e'.repeat(40);
+  const workerOutput = {
+    status: 1,
+    stdout: 'Fatal error: startup crash or syntax error\nProcess terminated unexpectedly\n',
+    stderr: 'Error: Cannot find module /some/path\n',
+  };
+
+  const spawnCalls = [];
+  const customCache = new Map();
+  const spawnSync = (cmd, args) => {
+    spawnCalls.push({ cmd, args });
+    return workerOutput;
+  };
+
+  const result = runHostBrainGate({ baseSha }, { spawnSync, baseCache: customCache });
+
+  assert.equal(result.pass, false);
+  assert.equal(result.reason, 'UNPARSED_FAILURE');
+  assert.deepEqual(result.failures, ['UNPARSED_FAILURE']);
+  assert.deepEqual(result.hostGateFailures.newFailures, ['UNPARSED_FAILURE']);
+  assert.deepEqual(result.hostGateFailures.baselineFailures, []);
+  assert.equal(spawnCalls.length, 1);
+  assert.equal(customCache.has(baseSha), false);
+});
+
+test('TASK-AI-142: (f) base run cleans up worktree and temp directory', () => {
+  const baseSha = 'f'.repeat(40);
+  const workerOutput = {
+    status: 1,
+    stdout: 'not ok 1 - AF-R01: worker prettier .cmd launches\nℹ pass 10\nℹ fail 1\n',
+  };
+  const baseOutput = {
+    status: 1,
+    stdout: 'not ok 1 - AF-R01: worker prettier .cmd launches\nℹ pass 10\nℹ fail 1\n',
+  };
+
+  const gitCalls = [];
+  const rmSyncCalls = [];
+  const customFs = {
+    mkdtempSync: () => {
+      const dir = path.join(os.tmpdir(), 'test-host-gate-clean-' + Date.now());
+      fs.mkdirSync(dir, { recursive: true });
+      return dir;
+    },
+    rmSync: (dir, opts) => {
+      rmSyncCalls.push({ dir, opts });
+      fs.rmSync(dir, opts);
+    },
+  };
+
+  let nodeCalls = 0;
+  const spawnSync = (cmd, args) => {
+    if (cmd === 'git') {
+      gitCalls.push({ args: [...args] });
+      if (args && args[0] === 'rev-parse') return { status: 0, stdout: baseSha + '\n', stderr: '' };
+      return { status: 0, stdout: '', stderr: '' };
+    }
+    nodeCalls++;
+    if (nodeCalls === 1) return workerOutput;
+    return baseOutput;
+  };
+
+  const result = runHostBrainGate({ baseSha }, { spawnSync, baseCache: new Map(), fs: customFs });
+
+  assert.equal(result.pass, true);
+  const removeCall = gitCalls.find(
+    (c) => c.args[0] === 'worktree' && c.args[1] === 'remove' && c.args[2] === '--force'
+  );
+  assert.ok(removeCall, 'git worktree remove --force must be called');
+  assert.ok(rmSyncCalls.length > 0, 'fs.rmSync must be called');
+  assert.equal(rmSyncCalls[0].opts.recursive, true);
+  assert.equal(rmSyncCalls[0].opts.force, true);
+  assert.deepEqual(result.cleanupErrors, []);
+  assert.equal(result.cleanupError, null);
+});
+
+test('TASK-AI-142: (g) cleanup failure is recorded, not swallowed silently', () => {
+  const baseSha = 'g'.repeat(40);
+  const workerOutput = {
+    status: 1,
+    stdout: 'not ok 1 - AF-R01: worker prettier .cmd launches\nℹ pass 10\nℹ fail 1\n',
+  };
+  const baseOutput = {
+    status: 1,
+    stdout: 'not ok 1 - AF-R01: worker prettier .cmd launches\nℹ pass 10\nℹ fail 1\n',
+  };
+
+  let nodeCalls = 0;
+  const reportedErrors = [];
+  const spawnSync = (cmd, args) => {
+    if (cmd === 'git') {
+      if (args && args[0] === 'rev-parse') return { status: 0, stdout: baseSha + '\n', stderr: '' };
+      if (args && args[0] === 'worktree' && args[1] === 'remove') {
+        return { status: 1, stdout: '', stderr: 'fatal: failed to remove worktree lock held' };
+      }
+      return { status: 0, stdout: '', stderr: '' };
+    }
+    nodeCalls++;
+    if (nodeCalls === 1) return workerOutput;
+    return baseOutput;
+  };
+
+  const customFs = {
+    mkdtempSync: () => {
+      const dir = path.join(os.tmpdir(), 'test-host-gate-fail-' + Date.now());
+      fs.mkdirSync(dir, { recursive: true });
+      return dir;
+    },
+    rmSync: () => {
+      throw new Error('EPERM: operation not permitted, unlink');
+    },
+  };
+
+  const result = runHostBrainGate(
+    { baseSha },
+    {
+      spawnSync,
+      baseCache: new Map(),
+      fs: customFs,
+      onCleanupError: (err) => reportedErrors.push(err.message || String(err)),
+    }
+  );
+
+  assert.equal(result.pass, true);
+  assert.ok(result.cleanupErrors.length >= 2, 'both worktree remove and rmSync failures recorded');
+  assert.match(result.cleanupErrors[0], /failed to remove worktree lock held/);
+  assert.match(result.cleanupErrors[1], /EPERM/);
+  assert.match(result.cleanupError, /failed to remove worktree lock held/);
+  assert.equal(reportedErrors.length >= 2, true);
+  assert.match(reportedErrors[0], /failed to remove worktree lock held/);
+  assert.match(reportedErrors[1], /EPERM/);
+});
+
+test('TASK-AI-142: (h) if origin/main cannot be resolved, stay strict instead of falling back to local main', () => {
+  const workerOutput = {
+    status: 1,
+    stdout: 'not ok 1 - failing worker test\nℹ pass 5\nℹ fail 1\n',
+  };
+
+  const gitRevParseCalls = [];
+  const spawnSync = (cmd, args) => {
+    if (cmd === 'git') {
+      if (args && args[0] === 'rev-parse') {
+        gitRevParseCalls.push(args[2]);
+        return { status: 1, stdout: '', stderr: 'fatal: Needed a single revision' };
+      }
+      return { status: 0, stdout: '', stderr: '' };
+    }
+    return workerOutput;
+  };
+
+  const result = runHostBrainGate(
+    { workItemId: 'TASK-AI-142' },
+    { spawnSync, baseCache: new Map() }
+  );
+
+  assert.equal(result.pass, false);
+  assert.deepEqual(result.failures, ['failing worker test']);
+  assert.ok(gitRevParseCalls.includes('origin/main^{commit}'));
+  assert.ok(!gitRevParseCalls.includes('main^{commit}'));
 });

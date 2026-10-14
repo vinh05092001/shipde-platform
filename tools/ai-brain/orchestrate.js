@@ -1766,6 +1766,8 @@ function runHostBrainGate(job, options = {}) {
       command: 'node --test ' + String(suite),
       failures: ['NO_BRAIN_TEST_FILES'],
       summary: [],
+      cleanupErrors: [],
+      cleanupError: null,
     };
   }
   const command = 'node --test ' + suiteFiles.join(' ');
@@ -1792,6 +1794,30 @@ function runHostBrainGate(job, options = {}) {
       newFailures: [],
       baselineFailures: [],
       summary,
+      cleanupErrors: [],
+      cleanupError: null,
+    };
+  }
+
+  if (failed.length === 0) {
+    const failures = ['UNPARSED_FAILURE'];
+    const hostGateFailures = Object.assign([...failures], {
+      newFailures: [...failures],
+      baselineFailures: [],
+    });
+    const repairDetails = options.onHostGateFailure ? options.onHostGateFailure(failures) : null;
+    return {
+      pass: false,
+      command,
+      reason: 'UNPARSED_FAILURE',
+      failures,
+      hostGateFailures,
+      newFailures: [...failures],
+      baselineFailures: [],
+      summary,
+      repairDetails,
+      cleanupErrors: [],
+      cleanupError: null,
     };
   }
 
@@ -1821,22 +1847,11 @@ function runHostBrainGate(job, options = {}) {
         });
         if (revRes && revRes.status === 0 && revRes.stdout) {
           baseSha = String(revRes.stdout).trim();
-        } else if (refStr === 'origin/main') {
-          const revMain = run('git', ['rev-parse', '--verify', 'main^{commit}'], {
-            cwd: root,
-            encoding: 'utf8',
-          });
-          if (revMain && revMain.status === 0 && revMain.stdout) {
-            baseSha = String(revMain.stdout).trim();
-          }
         }
       } catch (_) {
         baseSha = null;
       }
     }
-  }
-  if (!baseSha && (options.baseSha || (job && job.baseSha))) {
-    baseSha = String(options.baseSha || job.baseSha).trim();
   }
 
   if (baseSha && cache.has(baseSha)) {
@@ -1846,11 +1861,15 @@ function runHostBrainGate(job, options = {}) {
     baseRan = true;
   }
 
+  const cleanupErrors = [];
+  const fileSystem = options.fs || fs;
+
   if (!baseRan && baseSha) {
     let tempDir = null;
     let tempWorktree = null;
+    let worktreeAdded = false;
     try {
-      tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'host-gate-base-'));
+      tempDir = fileSystem.mkdtempSync(path.join(os.tmpdir(), 'host-gate-base-'));
       tempWorktree = path.join(tempDir, 'wt');
 
       const addRes = run('git', ['worktree', 'add', '--detach', tempWorktree, baseSha], {
@@ -1858,6 +1877,7 @@ function runHostBrainGate(job, options = {}) {
         encoding: 'utf8',
       });
       if (addRes && addRes.status === 0) {
+        worktreeAdded = true;
         const wtFiles = resolveSuiteFiles(tempWorktree, suite);
         const filesToRun = wtFiles.length > 0 ? wtFiles : suiteFiles;
         const nodeEnv = Object.assign({}, process.env, {
@@ -1898,21 +1918,39 @@ function runHostBrainGate(job, options = {}) {
     } catch (_) {
       // Base run cannot be executed; keep strict behavior
     } finally {
-      if (tempWorktree) {
+      if (worktreeAdded) {
         try {
-          run('git', ['worktree', 'remove', '--force', tempWorktree], {
+          const removeRes = run('git', ['worktree', 'remove', '--force', tempWorktree], {
             cwd: root,
             encoding: 'utf8',
           });
-        } catch (_) {}
+          if (removeRes && (removeRes.status !== 0 || removeRes.error)) {
+            const err =
+              removeRes.error ||
+              new Error(
+                String(removeRes.stderr || removeRes.stdout || 'git worktree remove failed').trim()
+              );
+            cleanupErrors.push(err.message || String(err));
+            if (typeof options.onCleanupError === 'function') options.onCleanupError(err);
+          }
+        } catch (err) {
+          cleanupErrors.push(err.message || String(err));
+          if (typeof options.onCleanupError === 'function') options.onCleanupError(err);
+        }
       }
       if (tempDir) {
         try {
-          fs.rmSync(tempDir, { recursive: true, force: true });
-        } catch (_) {}
+          fileSystem.rmSync(tempDir, { recursive: true, force: true });
+        } catch (err) {
+          cleanupErrors.push(err.message || String(err));
+          if (typeof options.onCleanupError === 'function') options.onCleanupError(err);
+        }
       }
     }
   }
+
+  const cleanupMessages = cleanupErrors;
+  const cleanupError = cleanupErrors.length > 0 ? cleanupErrors[0] : null;
 
   if (baseRan && Array.isArray(baseFailed)) {
     const baseSet = new Set(baseFailed);
@@ -1932,6 +1970,8 @@ function runHostBrainGate(job, options = {}) {
         newFailures: [],
         baselineFailures,
         summary,
+        cleanupErrors: cleanupMessages,
+        cleanupError,
       };
     }
 
@@ -1949,6 +1989,8 @@ function runHostBrainGate(job, options = {}) {
       baselineFailures,
       summary,
       repairDetails,
+      cleanupErrors: cleanupMessages,
+      cleanupError,
     };
   }
 
@@ -1966,6 +2008,8 @@ function runHostBrainGate(job, options = {}) {
     baselineFailures: [],
     summary,
     repairDetails,
+    cleanupErrors: cleanupMessages,
+    cleanupError,
   };
 }
 
