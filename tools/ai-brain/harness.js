@@ -237,6 +237,7 @@ const codex = {
     if (currentVerdict.verdict !== 'CLOSED') throw new Error('CODEX_REQUIRES_ISOLATION');
     const args = ['exec', '--dangerously-bypass-approvals-and-sandbox'];
     if (job.model) args.push('--model', job.model);
+    if (job.resultSchemaPath) args.push('--output-schema', job.resultSchemaPath);
     args.push(job.prompt || '');
     return args;
   },
@@ -357,6 +358,7 @@ const agyPool = {
       accountId: job.accountId,
       harness: 'agy-pool',
     };
+    if (job.resultSchema) payload.resultSchema = job.resultSchema;
 
     if (job.usageFile) {
       fs.writeFileSync(job.usageFile, JSON.stringify({ accountId: job.accountId }));
@@ -404,6 +406,34 @@ const agyPool = {
         { cause: 'CORRUPT_RESULT' },
         { status: 'failed' }
       );
+    }
+
+    // A process envelope saying ok cannot prove the writer's result contract.
+    let job;
+    try {
+      job = JSON.parse(
+        fs.readFileSync(path.join(pool.accountDir(accountId, opts), 'job.json'), 'utf8')
+      );
+    } catch {}
+    if (res.state === 'ok' && job && job.resultSchema) {
+      const schemaApi = require('./writer-schema');
+      const checked = schemaApi.validate(
+        schemaApi.poolResultText(pool.readOutText(accountId, opts)),
+        job.resultSchema
+      );
+      if (
+        !checked.ok ||
+        job.candidateKey !== candidateKey ||
+        checked.value.status !== 'completed'
+      ) {
+        const reason = !checked.ok ? checked.reason : 'WRITER_RESULT_NOT_COMPLETED';
+        return structuredOutcome(
+          candidateKey,
+          { exitCode: 1 },
+          { cause: reason },
+          { status: 'failed', reason }
+        );
+      }
     }
 
     if (res.state === 'ok') {

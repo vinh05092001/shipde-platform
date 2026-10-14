@@ -390,3 +390,33 @@ The Controller can offer the Hermes reasoning session a GPT model through the op
 - **Quota sharing:** Marked with `quotaGroup: "codex-chatgpt"` to reflect shared quota with the Codex CLI lane in candidate objects, ranking outputs, and decision records.
 - **Config & invocation:** `writeProvidersConfig` writes `config.yaml` with `model.default` and `model.provider: "openai-codex"`, avoiding dummy endpoints or env keys. `buildHermesArgv` passes `--provider openai-codex`.
 - **Probing & failover:** HTTP preflight probing is skipped for `openai-codex`, while probe or runtime failure (such as HTTP 429 rate limit) falls through to the next candidate.
+
+### H3 atomic write Windows rename retry on transient lock (2026-10-14)
+
+On Windows, atomic file updates via temporary file write and rename fail when another process briefly holds the target file lock, raising `EPERM`, `EBUSY`, or `EACCES`. A shared `atomicRenameSync` helper (`tools/ai-brain/atomic-rename.js`) now retries transient rename failures up to 10 attempts with synchronous backoff (50ms growing to ~500ms via `Atomics.wait` on a `SharedArrayBuffer`). When all attempts fail, the leftover `.tmp` file is unlinked and the original error is rethrown. Wired into `route-health.js` (`model-route-health.json`), `cli.js` (`writeJsonFile`, rollback, csv), `goals.js` (`writeJsonAtomic`, register csv), `approval-registry.js`, and `hermes-session.js`. Focused verification: `node --test tools/ai-brain/test/task-ai-142*.test.js` passed 165/165.
+
+### H3 live: skip exhausted accounts (2026-10-14)
+
+The Hermes reasoning probe spent its whole budget on one exhausted account (31 requesty routes returning 402). Once an account reports credit, quota, auth or entitlement failure, the remaining candidates on that account are skipped without spending an attempt. Verification: task-ai-142 tests 159/159; live probe dry-run chooses a live route.
+
+### H3 concurrent reasoning probes and dead-provider skips (2026-10-14)
+
+Rebased onto `origin/main` 11aa3640 (PR #306 account-skip behavior retained). Hermes reasoning probes now use only the 180 s wall-clock budget; caller `maxAttempts` no longer limits selection. At most eight account domains overlap, with one route per account at a time. Routes start in rank order and selection waits for higher-ranked routes before choosing a successful live probe. Credit/quota/auth/entitlement failures exclude the gateway+upstream prefix for the remaining selection; account and durable provider cooldowns stay excluded. Each eligibility/provider/account/budget skip has a refusal decision, and the final decision records the successful route. No successful HTTP probe is fabricated for `openai-codex`.
+
+`chat4-run.out` proves 30 probes and only two Astra probes. The old decision log capped rejected rows at ten, losing individual Astra exclusions among thousands of context refusals; the exact six historical exclusions cannot be reconstructed from that log. Current stored metadata lacks verified context for other Astra routes and records `requesty/gpt-6-astra` in provider cooldown, but is not the original in-memory refreshed snapshot. The retained eight-route regression demonstrates two eligible routes, five unverified-context refusals and one cooldown, without claiming those fixture counts as live evidence. Each rejected route is now also written as an individual refusal so capped summary records cannot hide it.
+
+Verification: `node --test tools/ai-brain/test/task-ai-142*.test.js` passed 174/174. Includes provider skips, eight-account overlap/rank priority, serialization, a successful 105th probe despite `maxAttempts: 1`, and deadline abort without launch. No live launch, push or merge.
+
+### H3 host brain gate baseline failure filtering (2026-10-14)
+
+When the worker full brain test suite encounters failures, `runHostBrainGate` runs the suite once on the base commit (`job.baseSha` or `origin/main`) inside a temporary detached git worktree, computes failing tests on both, and caches the base results per base SHA for the session. The gate blocks (`HOST_GATE_FAILED`) only when the worker has failures that are new against the baseline; pre-existing base failures are ignored for gating and recorded in `hostGateFailures` (`newFailures`, `baselineFailures`). If the base run itself cannot be executed, strict blocking behavior is preserved. Verification: `node --test tools/ai-brain/test/task-ai-142*.test.js` (163/163 pass).
+
+### H3 pool and Codex writer jsonSchema proof (2026-10-14)
+
+`jsonSchema` means a validated structured writer result, not JSON telemetry or a working model route. OpenCode currently inherits declared catalogue/account capabilities; its HTTP preflight does not verify a result schema. Pool/Codex writers now run a read-only, nonce-bound probe before selection, cache proof per seven-part candidate for that Controller run, and record precise refusals. Codex passes `--output-schema` inside the existing CLOSED isolation boundary using a separate probe worker; normal launches validate the final response too. Pool `result.json` is process telemetry; the worker answer in `out.txt.response` is validated against the contract supplied in `job.json`. Busy accounts, stale answers, wrong candidate bindings and malformed output never prove capability.
+
+Verification: TASK-AI-142 tests 173/173; related executor, TASK-AI-141, candidates, TASK-AI-126 and TASK-AI-130 tests 159/159. Installed `codex exec --help` confirms `--output-schema`; official reference: https://learn.chatgpt.com/docs/non-interactive-mode. Tests use injected harnesses; live account capability remains unverified until the Controller probe succeeds. Existing context, quota, isolation and proof-floor gates still apply.
+
+### H3 account-level cooldown on exhaustion (2026-10-14)
+
+Exhausted accounts cool down as a whole across model routes sharing the same account key (`extractAccountKey`). When a Hermes probe encounters `upstream_credit_exhausted`, `quota_exhausted`, `account_auth_failed`, or `upstream_entitlement`, the account is cooled down in `model-route-health.json` (`store.accounts[accountKey]`). Subsequent selections reject candidates on the cooled-down account with `PROBE_COOLDOWN_ACCOUNT: <account> until <timestamp>`, avoiding wasteful probes against exhausted accounts.
