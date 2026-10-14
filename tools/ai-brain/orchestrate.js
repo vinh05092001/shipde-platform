@@ -4361,7 +4361,9 @@ async function runOrchestration(goal, opts) {
           if (
             PROVIDER_LEVEL_FAILURE_CAUSES.has(cause) ||
             [...PROVIDER_LEVEL_FAILURE_CAUSES].some((c) =>
-              new RegExp(`\\b${c}\\b`, 'i').test(result?.body || '')
+              String(result?.body || '')
+                .toLowerCase()
+                .includes(String(c).toLowerCase())
             )
           ) {
             exhaustedAccountKeys.add(candidateAccountKey(candidate));
@@ -4595,8 +4597,8 @@ async function runOrchestration(goal, opts) {
                   reasonCode: 'PROBE_BUDGET_EXHAUSTED',
                   body: 'Probe budget exhausted',
                 };
-          require('./route-health').rememberProbe(candidate, probeResult, o);
         }
+        require('./route-health').rememberProbe(candidate, probeResult, o);
         if (!probeResult || probeResult.ok !== true) {
           const reasonCode = sharedRouteProbe.failureReason(
             sharedRouteProbe.classifyProbeFailure(probeResult)
@@ -4613,7 +4615,7 @@ async function runOrchestration(goal, opts) {
             (probeResult &&
               probeResult.body &&
               [...PROVIDER_LEVEL_FAILURE_CAUSES].some((c) =>
-                new RegExp(`\\b${c}\\b`, 'i').test(probeResult.body)
+                String(probeResult.body).toLowerCase().includes(String(c).toLowerCase())
               ));
           if (isProviderLevel) {
             const accKey = candidateAccountKey(candidate);

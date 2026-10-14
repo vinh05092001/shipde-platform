@@ -1504,13 +1504,14 @@ async function probeRankedRoutes(
   ordered,
   {
     runProbe,
-    accountKey = candidateAccountKey,
+    accountKey,
     skip = () => null,
     refusal = () => {},
     deadline = Infinity,
     now = Date.now,
   }
 ) {
+  if (accountKey === undefined) accountKey = candidateAccountKey;
   const outcomes = new Map();
   const inFlight = new Map();
   const busyAccounts = new Set();

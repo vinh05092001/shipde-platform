@@ -173,109 +173,129 @@ test('(a) 60 dead routes taking 8 seconds and a live route ranked last fit the 1
   assert.equal(result.sessions[0].candidateKey, liveCandidate.candidateKey);
 });
 
-test("(b) 3 candidates on account A + 1 on account B; A's first probe returns cause upstream_credit_exhausted: exactly 2 probes happen and B is chosen", async (t) => {
-  const repo = makeTempRepo();
-  const decisionDir = tmpDir('dec-b-');
-  const evidenceDir = tmpDir('evi-b-');
-  t.after(() => {
-    fs.rmSync(repo.dir, { recursive: true, force: true });
-    fs.rmSync(decisionDir, { recursive: true, force: true });
-    fs.rmSync(evidenceDir, { recursive: true, force: true });
-  });
+for (const providerCause of ['upstream_credit_exhausted', '[credit.exhausted']) {
+  test(`(b) provider failure body ${providerCause} exhausts account A and chooses B`, async (t) => {
+    const { PROVIDER_LEVEL_FAILURE_CAUSES } = require('../hermes-session');
+    const addedCause = !PROVIDER_LEVEL_FAILURE_CAUSES.has(providerCause);
+    PROVIDER_LEVEL_FAILURE_CAUSES.add(providerCause);
+    t.after(() => {
+      if (addedCause) PROVIDER_LEVEL_FAILURE_CAUSES.delete(providerCause);
+    });
+    const health = require('../route-health');
+    const remembered = [];
+    const rememberProbe = health.rememberProbe;
+    t.mock.method(health, 'rememberProbe', (candidate, result, options) => {
+      remembered.push(candidate.candidateKey);
+      return rememberProbe(candidate, result, options);
+    });
+    const repo = makeTempRepo();
+    const decisionDir = tmpDir('dec-b-');
+    const evidenceDir = tmpDir('evi-b-');
+    t.after(() => {
+      fs.rmSync(repo.dir, { recursive: true, force: true });
+      fs.rmSync(decisionDir, { recursive: true, force: true });
+      fs.rmSync(evidenceDir, { recursive: true, force: true });
+    });
 
-  const candA1 = createCandidate({
-    accessPath: 'https://gw-a.example/v1',
-    gateway: 'gw-a',
-    accountId: 'acc-a',
-    quotaScope: 'acc-a',
-    modelId: 'vendor/model-a1',
-    quality: 99,
-  });
-  const candA2 = createCandidate({
-    accessPath: 'https://gw-a.example/v1',
-    gateway: 'gw-a',
-    accountId: 'acc-a',
-    quotaScope: 'acc-a',
-    modelId: 'vendor/model-a2',
-    quality: 98,
-  });
-  const candA3 = createCandidate({
-    accessPath: 'https://gw-a.example/v1',
-    gateway: 'gw-a',
-    accountId: 'acc-a',
-    quotaScope: 'acc-a',
-    modelId: 'vendor/model-a3',
-    quality: 97,
-  });
-  const candB = createCandidate({
-    accessPath: 'https://gw-b.example/v1',
-    gateway: 'gw-b',
-    accountId: 'acc-b',
-    quotaScope: 'acc-b',
-    modelId: 'vendor/model-b',
-    quality: 90,
-  });
+    const candA1 = createCandidate({
+      accessPath: 'https://gw-a.example/v1',
+      gateway: 'gw-a',
+      accountId: 'acc-a',
+      quotaScope: 'acc-a',
+      modelId: 'vendor/model-a1',
+      quality: 99,
+    });
+    const candA2 = createCandidate({
+      accessPath: 'https://gw-a.example/v1',
+      gateway: 'gw-a',
+      accountId: 'acc-a',
+      quotaScope: 'acc-a',
+      modelId: 'vendor/model-a2',
+      quality: 98,
+    });
+    const candA3 = createCandidate({
+      accessPath: 'https://gw-a.example/v1',
+      gateway: 'gw-a',
+      accountId: 'acc-a',
+      quotaScope: 'acc-a',
+      modelId: 'vendor/model-a3',
+      quality: 97,
+    });
+    const candB = createCandidate({
+      accessPath: 'https://gw-b.example/v1',
+      gateway: 'gw-b',
+      accountId: 'acc-b',
+      quotaScope: 'acc-b',
+      modelId: 'vendor/model-b',
+      quality: 90,
+    });
 
-  const candidates = [candA1, candA2, candA3, candB];
-  const registry = {
-    sources: [
-      { id: 'gw-a', endpoint: 'https://gw-a.example/v1', credential: { env: 'TEST_KEY' } },
-      { id: 'gw-b', endpoint: 'https://gw-b.example/v1', credential: { env: 'TEST_KEY' } },
-      { id: 'oc', endpoint: 'https://gateway.example/v1', credential: { env: 'TEST_KEY' } },
-    ],
-    dispatch: {
-      providers: {
-        oc: { harness: 'opencode-direct', provider: 'opencode' },
+    const candidates = [candA1, candA2, candA3, candB];
+    const registry = {
+      sources: [
+        { id: 'gw-a', endpoint: 'https://gw-a.example/v1', credential: { env: 'TEST_KEY' } },
+        { id: 'gw-b', endpoint: 'https://gw-b.example/v1', credential: { env: 'TEST_KEY' } },
+        { id: 'oc', endpoint: 'https://gateway.example/v1', credential: { env: 'TEST_KEY' } },
+      ],
+      dispatch: {
+        providers: {
+          oc: { harness: 'opencode-direct', provider: 'opencode' },
+        },
       },
-    },
-  };
+    };
 
-  const probedModels = [];
-  const routeProbe = async (probeCandidate) => {
-    probedModels.push(probeCandidate.modelId);
-    if (probeCandidate.modelId === 'vendor/model-a1') {
-      return { ok: false, cause: 'upstream_credit_exhausted', body: 'upstream_credit_exhausted' };
-    }
-    if (probeCandidate.modelId === 'vendor/model-b') {
-      return { ok: true, status: 200, body: 'OK' };
-    }
-    return { ok: false, status: 400, body: 'unexpected' };
-  };
+    const probedModels = [];
+    const routeProbe = async (probeCandidate) => {
+      probedModels.push(probeCandidate.modelId);
+      if (probeCandidate.modelId === 'vendor/model-a1') {
+        return { ok: false, body: `Provider failure: ${providerCause.toUpperCase()}` };
+      }
+      if (probeCandidate.modelId === 'vendor/model-b') {
+        return { ok: true, status: 200, body: 'OK' };
+      }
+      return { ok: false, status: 400, body: 'unexpected' };
+    };
 
-  const options = {
-    isolatedWorker: true,
-    cwd: repo.dir,
-    workerRoot: repo.dir,
-    baseSha: repo.sha,
-    sha: repo.sha,
-    decisionDir,
-    evidenceDir,
-    candidates,
-    registry,
-    specs: [{ id: 'TASK-AI-142', files: ['a.js'], acceptanceCriteria: ['done'] }],
-    routeProbe,
-    run: () => ({
-      exitCode: 0,
-      stdout: '{"sessionID":"ses_b","tokens":{"input":10,"output":5}}',
-      stderr: '',
-      completionNonce: 'nonce-b',
-      workerSha: repo.sha,
-    }),
-    reviewer: () => ({ pass: true, sha: repo.sha, verdict: 'PASS', findings: [] }),
-    tests: () => ({ pass: true }),
-    hostGate: () => ({ pass: true, failures: [] }),
-    ranking: { priors: { ranking: [] } },
-  };
+    const options = {
+      isolatedWorker: true,
+      cwd: repo.dir,
+      workerRoot: repo.dir,
+      baseSha: repo.sha,
+      sha: repo.sha,
+      decisionDir,
+      evidenceDir,
+      candidates,
+      registry,
+      specs: [{ id: 'TASK-AI-142', files: ['a.js'], acceptanceCriteria: ['done'] }],
+      routeProbe,
+      run: () => ({
+        exitCode: 0,
+        stdout: '{"sessionID":"ses_b","tokens":{"input":10,"output":5}}',
+        stderr: '',
+        completionNonce: 'nonce-b',
+        workerSha: repo.sha,
+      }),
+      reviewer: () => ({ pass: true, sha: repo.sha, verdict: 'PASS', findings: [] }),
+      tests: () => ({ pass: true }),
+      hostGate: () => ({ pass: true, failures: [] }),
+      ranking: { priors: { ranking: [] } },
+    };
 
-  const result = await runOrchestration('test exhausted account skipping', options);
-  assert.deepEqual(
-    probedModels,
-    ['vendor/model-a1', 'vendor/model-b'],
-    'exactly 2 probes must happen'
-  );
-  assert.equal(result.status, 'COMPLETED');
-  assert.equal(result.sessions[0].candidateKey, candB.candidateKey);
-});
+    const result = await runOrchestration('test exhausted account skipping', options);
+    assert.deepEqual(
+      probedModels,
+      ['vendor/model-a1', 'vendor/model-b'],
+      'exactly 2 probes must happen'
+    );
+    assert.equal(result.status, 'COMPLETED');
+    assert.equal(result.sessions[0].candidateKey, candB.candidateKey);
+    assert.equal(
+      remembered.filter((key) => key === candB.candidateKey).length,
+      2,
+      'both primary and cached fallback probe paths record route health'
+    );
+  });
+}
 
 test('(c) one model with 3 routes, first 2 fail, 3rd live: the 3rd route is used (proves no 2-routes-per-model cap)', async (t) => {
   const repo = makeTempRepo();
