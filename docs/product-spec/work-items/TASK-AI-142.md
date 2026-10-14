@@ -417,6 +417,10 @@ When the worker full brain test suite encounters failures, `runHostBrainGate` ru
 
 Verification: TASK-AI-142 tests 173/173; related executor, TASK-AI-141, candidates, TASK-AI-126 and TASK-AI-130 tests 159/159. Installed `codex exec --help` confirms `--output-schema`; official reference: https://learn.chatgpt.com/docs/non-interactive-mode. Tests use injected harnesses; live account capability remains unverified until the Controller probe succeeds. Existing context, quota, isolation and proof-floor gates still apply.
 
+### H3 account-level cooldown on exhaustion (2026-10-14)
+
+Exhausted accounts cool down as a whole across model routes sharing the same account key (`extractAccountKey`). When a Hermes probe encounters `upstream_credit_exhausted`, `quota_exhausted`, `account_auth_failed`, or `upstream_entitlement`, the account is cooled down in `model-route-health.json` (`store.accounts[accountKey]`). Subsequent selections reject candidates on the cooled-down account with `PROBE_COOLDOWN_ACCOUNT: <account> until <timestamp>`, avoiding wasteful probes against exhausted accounts.
+
 ### H3 live: writer probe without count caps (2026-10-14)
 
 GOAL-AUTOCLAW-REPOS-1 failed with PROBE_BUDGET_EXHAUSTED because writer probing was capped at 20 attempts and 2 routes per model. Both caps are removed for writers; only the wall-clock budget remains, and candidates on an account that reported a provider-level failure are skipped without probing. Follow-up: the reviewer path still has a 2-route cap (REVIEWER_CANONICAL_MODEL_CAP).
