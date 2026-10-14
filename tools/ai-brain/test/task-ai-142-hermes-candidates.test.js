@@ -922,3 +922,60 @@ test('TASK-AI-142 H3: probe skips HTTP probe for openai-codex by default, and a 
     'Fallback model must be launched after rate limit'
   );
 });
+
+test('TASK-AI-142 H3: default wiring with temp HOME/USERPROFILE includes openai-codex candidate on live path', async () => {
+  const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-live-default-test-'));
+  const codexDir = path.join(tempHome, '.codex');
+  fs.mkdirSync(codexDir, { recursive: true });
+  fs.writeFileSync(path.join(codexDir, 'auth.json'), '{}');
+  fs.writeFileSync(path.join(codexDir, 'config.toml'), 'model = "gpt-6.1-sol"\n');
+
+  const origHome = process.env.HOME;
+  const origUserProfile = process.env.USERPROFILE;
+  process.env.HOME = tempHome;
+  process.env.USERPROFILE = tempHome;
+
+  try {
+    // Default wiring: no candidateList injected, default chatCommand args
+    const resultWrap = await hermesSessionApi.chatCommand({
+      reselect: true,
+      dryRun: true,
+      skipDecisionLog: true,
+    });
+    const serialized = JSON.stringify(resultWrap);
+    assert.ok(
+      serialized.includes('openai-codex'),
+      'openai-codex must appear on the live path (in ranking or rejected with explicit reason)'
+    );
+
+    const r = resultWrap && resultWrap.result;
+    assert.ok(r, 'chatCommand must return a result object');
+    const inRejected =
+      Array.isArray(r.rejected) &&
+      r.rejected.some(
+        (c) =>
+          String(c.candidateKey || '').includes('openai-codex') ||
+          (c.modelId === 'gpt-6.1-sol' && c.accountId === 'codex')
+      );
+    const inRanking =
+      Array.isArray(r.modelRanking) && r.modelRanking.some((m) => m.modelId === 'gpt-6.1-sol');
+    assert.ok(
+      inRejected || inRanking,
+      'openai-codex must appear either ranked or in rejected with an explicit reason'
+    );
+    if (inRejected) {
+      const entry = r.rejected.find(
+        (c) =>
+          String(c.candidateKey || '').includes('openai-codex') ||
+          (c.modelId === 'gpt-6.1-sol' && c.accountId === 'codex')
+      );
+      assert.ok(entry.reasonCode, 'Rejected candidate must have an explicit reasonCode');
+    }
+  } finally {
+    if (origHome === undefined) delete process.env.HOME;
+    else process.env.HOME = origHome;
+    if (origUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = origUserProfile;
+    fs.rmSync(tempHome, { recursive: true, force: true });
+  }
+});

@@ -393,11 +393,130 @@ async function refreshReasoningContext(options, deps) {
   return { ...d, registry: { ...registry, sources } };
 }
 
+function fileExists(filePath, fsApi) {
+  const f = fsApi || fs;
+  try {
+    if (typeof f.existsSync === 'function' && f.existsSync(filePath)) {
+      return true;
+    }
+    if (typeof f.statSync === 'function') {
+      f.statSync(filePath);
+      return true;
+    }
+  } catch (err) {
+    if (err && (err.code === 'EPERM' || err.code === 'EACCES')) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function dirExists(dirPath, fsApi) {
+  const f = fsApi || fs;
+  try {
+    if (typeof f.existsSync === 'function' && f.existsSync(dirPath)) {
+      return true;
+    }
+    if (typeof f.statSync === 'function') {
+      const st = f.statSync(dirPath);
+      return st && typeof st.isDirectory === 'function' ? st.isDirectory() : true;
+    }
+  } catch (err) {
+    if (err && (err.code === 'EPERM' || err.code === 'EACCES')) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function getCodexPaths(options, deps) {
   const o = options || {};
   const d = deps || {};
-  const home = o.homeDir || d.homeDir || o.home || d.home || os.homedir();
-  const codexDir = o.codexDir || d.codexDir || path.join(home, '.codex');
+  const fsApi = d.fs || o.fs || fs;
+  const env = Object.assign({}, process.env, d && d.env, o && o.env);
+
+  if (o.codexAuthPath || d.codexAuthPath || o.codexAuthFile || d.codexAuthFile) {
+    const authFile = o.codexAuthPath || d.codexAuthPath || o.codexAuthFile || d.codexAuthFile;
+    const codexDir = o.codexDir || d.codexDir || path.dirname(authFile);
+    const configFile =
+      o.codexConfigPath ||
+      d.codexConfigPath ||
+      o.codexConfigFile ||
+      d.codexConfigFile ||
+      path.join(codexDir, 'config.toml');
+    const home = o.homeDir || d.homeDir || o.home || d.home || path.dirname(codexDir);
+    return { home, codexDir, authFile, configFile };
+  }
+
+  const explicitHome = o.homeDir || d.homeDir || o.home || d.home;
+  if (explicitHome) {
+    const codexDir = o.codexDir || d.codexDir || path.join(explicitHome, '.codex');
+    const authFile =
+      o.codexAuthPath ||
+      d.codexAuthPath ||
+      o.codexAuthFile ||
+      d.codexAuthFile ||
+      path.join(codexDir, 'auth.json');
+    const configFile =
+      o.codexConfigPath ||
+      d.codexConfigPath ||
+      o.codexConfigFile ||
+      d.codexConfigFile ||
+      path.join(codexDir, 'config.toml');
+    return { home: explicitHome, codexDir, authFile, configFile };
+  }
+
+  const candidateHomes = [];
+  if (env.CODEX_HOME) {
+    candidateHomes.push(env.CODEX_HOME);
+  }
+  if (process.platform === 'win32') {
+    if (env.USERPROFILE) candidateHomes.push(env.USERPROFILE);
+    if (env.HOME) candidateHomes.push(env.HOME);
+    if (env.HOMEDRIVE && env.HOMEPATH) candidateHomes.push(path.join(env.HOMEDRIVE, env.HOMEPATH));
+  } else {
+    if (env.HOME) candidateHomes.push(env.HOME);
+    if (env.USERPROFILE) candidateHomes.push(env.USERPROFILE);
+  }
+  try {
+    const osHome = os.homedir();
+    if (osHome) candidateHomes.push(osHome);
+  } catch {}
+
+  if (process.platform === 'win32') {
+    const rootDir = resolveRootDir(o, d);
+    const userMatch = (rootDir || process.cwd()).match(/^[a-zA-Z]:[\\/]Users[\\/][^\\/]+/i);
+    if (userMatch && userMatch[0]) {
+      candidateHomes.push(userMatch[0]);
+    }
+  }
+
+  const seenHomes = new Set();
+  const uniqueHomes = candidateHomes.filter((h) => {
+    if (!h || typeof h !== 'string') return false;
+    const norm = path.normalize(h);
+    if (seenHomes.has(norm)) return false;
+    seenHomes.add(norm);
+    return true;
+  });
+
+  let selectedHome = uniqueHomes[0] || (typeof os.homedir === 'function' ? os.homedir() : '.');
+  let selectedCodexDir = o.codexDir || d.codexDir || null;
+
+  if (!selectedCodexDir) {
+    for (const h of uniqueHomes) {
+      const dir = path.basename(h).toLowerCase() === '.codex' ? h : path.join(h, '.codex');
+      const testAuth = path.join(dir, 'auth.json');
+      if (fileExists(testAuth, fsApi) || dirExists(dir, fsApi)) {
+        selectedHome = path.basename(h).toLowerCase() === '.codex' ? path.dirname(h) : h;
+        selectedCodexDir = dir;
+        break;
+      }
+    }
+  }
+
+  const home = selectedHome;
+  const codexDir = selectedCodexDir || path.join(home, '.codex');
   const authFile =
     o.codexAuthPath ||
     d.codexAuthPath ||
@@ -419,7 +538,7 @@ function hasCodexAuth(options, deps) {
   const fsApi = d.fs || o.fs || fs;
   const { authFile } = getCodexPaths(o, d);
   try {
-    return Boolean(fsApi.existsSync(authFile));
+    return fileExists(authFile, fsApi);
   } catch {
     return false;
   }
@@ -1472,6 +1591,7 @@ async function launchHermesSession(options, deps) {
       ? Math.min(Math.floor(requestedAttempts), 20)
       : 20;
   let initialModelRanking;
+  let initialRejected;
   let probeModel;
   let currentModelId = null;
   const probeTimeoutMs = Math.min(Number(opts.probeTimeoutMs) || 8000, 8000);
@@ -1533,6 +1653,7 @@ async function launchHermesSession(options, deps) {
       throw err;
     }
     initialModelRanking ||= selection.modelRanking;
+    initialRejected ||= selection.rejected;
 
     session.candidateKey = selection.chosen;
     saveSession(session, opts, d);
@@ -1776,6 +1897,7 @@ async function launchHermesSession(options, deps) {
         configResult,
         hermesHome,
         refusalReasons: probeReasons.slice(),
+        rejected: initialRejected || selection.rejected || [],
       };
     }
 
@@ -1824,6 +1946,7 @@ async function launchHermesSession(options, deps) {
         spawnResult,
         hermesHome,
         refusalReasons: probeReasons.slice(),
+        rejected: initialRejected || selection.rejected || [],
       };
     }
 
@@ -1890,6 +2013,7 @@ async function launchHermesSession(options, deps) {
         classification,
         hermesHome,
         refusalReasons: probeReasons.slice(),
+        rejected: initialRejected || selection.rejected || [],
       };
     }
 
