@@ -407,6 +407,10 @@ Rebased onto `origin/main` 11aa3640 (PR #306 account-skip behavior retained). He
 
 Verification: `node --test tools/ai-brain/test/task-ai-142*.test.js` passed 174/174. Includes provider skips, eight-account overlap/rank priority, serialization, a successful 105th probe despite `maxAttempts: 1`, and deadline abort without launch. No live launch, push or merge.
 
+### H3 host brain gate baseline failure filtering (2026-10-14)
+
+When the worker full brain test suite encounters failures, `runHostBrainGate` runs the suite once on the base commit (`job.baseSha` or `origin/main`) inside a temporary detached git worktree, computes failing tests on both, and caches the base results per base SHA for the session. The gate blocks (`HOST_GATE_FAILED`) only when the worker has failures that are new against the baseline; pre-existing base failures are ignored for gating and recorded in `hostGateFailures` (`newFailures`, `baselineFailures`). If the base run itself cannot be executed, strict blocking behavior is preserved. Verification: `node --test tools/ai-brain/test/task-ai-142*.test.js` (163/163 pass).
+
 ### H3 pool and Codex writer jsonSchema proof (2026-10-14)
 
 `jsonSchema` means a validated structured writer result, not JSON telemetry or a working model route. OpenCode currently inherits declared catalogue/account capabilities; its HTTP preflight does not verify a result schema. Pool/Codex writers now run a read-only, nonce-bound probe before selection, cache proof per seven-part candidate for that Controller run, and record precise refusals. Codex passes `--output-schema` inside the existing CLOSED isolation boundary using a separate probe worker; normal launches validate the final response too. Pool `result.json` is process telemetry; the worker answer in `out.txt.response` is validated against the contract supplied in `job.json`. Busy accounts, stale answers, wrong candidate bindings and malformed output never prove capability.
