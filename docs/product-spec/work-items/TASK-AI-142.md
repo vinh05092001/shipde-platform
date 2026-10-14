@@ -398,3 +398,11 @@ On Windows, atomic file updates via temporary file write and rename fail when an
 ### H3 live: skip exhausted accounts (2026-10-14)
 
 The Hermes reasoning probe spent its whole budget on one exhausted account (31 requesty routes returning 402). Once an account reports credit, quota, auth or entitlement failure, the remaining candidates on that account are skipped without spending an attempt. Verification: task-ai-142 tests 159/159; live probe dry-run chooses a live route.
+
+### H3 concurrent reasoning probes and dead-provider skips (2026-10-14)
+
+Rebased onto `origin/main` 11aa3640 (PR #306 account-skip behavior retained). Hermes reasoning probes now use only the 180 s wall-clock budget; caller `maxAttempts` no longer limits selection. At most eight account domains overlap, with one route per account at a time. Routes start in rank order and selection waits for higher-ranked routes before choosing a successful live probe. Credit/quota/auth/entitlement failures exclude the gateway+upstream prefix for the remaining selection; account and durable provider cooldowns stay excluded. Each eligibility/provider/account/budget skip has a refusal decision, and the final decision records the successful route. No successful HTTP probe is fabricated for `openai-codex`.
+
+`chat4-run.out` proves 30 probes and only two Astra probes. The old decision log capped rejected rows at ten, losing individual Astra exclusions among thousands of context refusals; the exact six historical exclusions cannot be reconstructed from that log. Current stored metadata lacks verified context for other Astra routes and records `requesty/gpt-6-astra` in provider cooldown, but is not the original in-memory refreshed snapshot. The retained eight-route regression demonstrates two eligible routes, five unverified-context refusals and one cooldown, without claiming those fixture counts as live evidence. Each rejected route is now also written as an individual refusal so capped summary records cannot hide it.
+
+Verification: `node --test tools/ai-brain/test/task-ai-142*.test.js` passed 174/174. Includes provider skips, eight-account overlap/rank priority, serialization, a successful 105th probe despite `maxAttempts: 1`, and deadline abort without launch. No live launch, push or merge.

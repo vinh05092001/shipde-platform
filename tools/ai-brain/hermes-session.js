@@ -375,6 +375,49 @@ function linkGoalToSession(goalId, options, deps) {
  * Selects the reasoning candidate using existing routing/ranking.
  * Candidate key is 7-part: harness=hermes::accessPath::gateway::upstream::account::quotaScope::modelId.
  */
+const PROVIDER_LEVEL_FAILURE_CAUSES = new Set([
+  'upstream_credit_exhausted',
+  'quota_exhausted',
+  'account_auth_failed',
+  'upstream_entitlement',
+  'account_quota_exhausted',
+  'upstream_monthly_limit',
+  'upstream_credential',
+]);
+
+function isProviderLevelFailure(cause) {
+  if (!cause) return false;
+  const c = String(cause).toLowerCase().trim();
+  return PROVIDER_LEVEL_FAILURE_CAUSES.has(c);
+}
+
+function getCandidateProviderKey(candidate) {
+  if (!candidate) return null;
+  const parsed =
+    candidate.candidateKey && typeof candidate.candidateKey === 'string'
+      ? parseCandidateKey(candidate.candidateKey)
+      : null;
+  const gateway =
+    candidate.gateway || (parsed && parsed.gateway) || candidate.sourceId || candidate.source || '';
+  let upstream = candidate.upstream || (parsed && parsed.upstream) || '';
+  const modelId = candidate.modelId || candidate.model || (parsed && parsed.modelId) || '';
+  const stripped = String(modelId)
+    .trim()
+    .replace(/^ninerouter\//i, '')
+    .replace(/^\/+/, '');
+  const slash = stripped.indexOf('/');
+  const modelPrefix = slash > 0 ? stripped.slice(0, slash) : '';
+
+  if (gateway === '9router' && modelPrefix) {
+    upstream = modelPrefix;
+  } else if (!upstream && modelPrefix) {
+    upstream = modelPrefix;
+  }
+
+  if (!gateway) return null;
+  return `${gateway}::${upstream || gateway}`;
+}
+
 function canonicalHermesModelId(modelId) {
   return priorsApi.normaliseModelId(modelId) || '';
 }
@@ -689,7 +732,9 @@ function selectReasoningCandidate(options, deps) {
   });
   const excluded = new Set(opts.excludedCandidates || []);
   const excludedModels = new Set(opts.excludedModels || []);
+  const deadProviders = opts.deadProviderPrefixes || opts.deadProviders || null;
   const hermesKeys = new Set();
+  const deadProviderRejected = [];
 
   // Adapt candidates for Hermes harness: set harness=hermes, verify contextWindow >= 32000
   const hermesCandidates = poolCandidates
@@ -782,6 +827,27 @@ function selectReasoningCandidate(options, deps) {
         !excluded.has(c._preRewriteKey) &&
         !excludedModels.has(canonicalHermesModelId(c.modelId || c.model))
     )
+    .filter((c) => {
+      const provKey = getCandidateProviderKey(c);
+      if (
+        provKey &&
+        deadProviders &&
+        (deadProviders instanceof Map
+          ? deadProviders.has(provKey)
+          : Object.prototype.hasOwnProperty.call(deadProviders, provKey))
+      ) {
+        const deadInfo =
+          deadProviders instanceof Map ? deadProviders.get(provKey) : deadProviders[provKey];
+        const cause = (deadInfo && deadInfo.cause) || 'exhausted';
+        deadProviderRejected.push({
+          candidateKey: c.candidateKey,
+          reasonCode: 'SKIPPED_DEAD_PROVIDER',
+          reason: `SKIPPED_DEAD_PROVIDER: provider ${provKey} failed with ${cause}`,
+        });
+        return false;
+      }
+      return true;
+    })
     // Hermes reaches a model either through an OpenAI-compatible base_url or via
     // the built-in openai-codex provider (hermes-agent 0.21.4 auth_codex.py).
     .filter(
@@ -842,7 +908,11 @@ function selectReasoningCandidate(options, deps) {
     rankCtx
   );
 
-  rankResult.rejected = [...(rankResult.rejected || []), ...cooldownRejected];
+  rankResult.rejected = [
+    ...(rankResult.rejected || []),
+    ...cooldownRejected,
+    ...deadProviderRejected,
+  ];
   // Model quality excludes route price, latency, quota and route count.
   const health = require('./route-health');
   const routeStore =
@@ -946,6 +1016,31 @@ function selectReasoningCandidate(options, deps) {
     (opts.rootDir || d.rootDir || opts.root || d.root
       ? path.join(resolveRootDir(opts, d), 'tools', 'ai-brain', 'data', 'decisions')
       : path.join(__dirname, 'data', 'decisions'));
+  // Prioritize rejected routes for models in modelRanking (especially top model) so capped decision records retain them
+  const topModelIds = new Set(modelRanking.slice(0, 5).map((m) => m.modelId));
+  rankResult.rejected.sort((a, b) => {
+    const aParsed = a.candidateKey ? parseCandidateKey(a.candidateKey) : null;
+    const bParsed = b.candidateKey ? parseCandidateKey(b.candidateKey) : null;
+    const aModel = canonicalHermesModelId((aParsed && aParsed.modelId) || a.modelId || '');
+    const bModel = canonicalHermesModelId((bParsed && bParsed.modelId) || b.modelId || '');
+    const aTop = topModelIds.has(aModel);
+    const bTop = topModelIds.has(bModel);
+    if (aTop && !bTop) return -1;
+    if (!aTop && bTop) return 1;
+    return 0;
+  });
+
+  const skippedRoutes = rankResult.rejected
+    .filter((r) => {
+      const parsed = r.candidateKey ? parseCandidateKey(r.candidateKey) : null;
+      const m = canonicalHermesModelId((parsed && parsed.modelId) || r.modelId || '');
+      return topModelIds.has(m);
+    })
+    .map((r) => ({
+      candidateKey: r.candidateKey,
+      reason: r.reason || r.reasonCode,
+    }));
+
   const decisionRecord = {
     stage: decisionsMod.Stage.SELECTED,
     workItemId: profile.taskId,
@@ -972,6 +1067,7 @@ function selectReasoningCandidate(options, deps) {
       reasonCode: r.reasonCode,
       reason: r.reason || r.reasonCode,
     })),
+    skippedRoutes,
     detail:
       opts.decisionDetail ||
       (opts.preferredCandidateKey && chosenKey === opts.preferredCandidateKey
@@ -998,6 +1094,7 @@ function selectReasoningCandidate(options, deps) {
     modelRanking: modelRanking.slice(0, 10),
     chosenRoute,
     rejected: rankResult.rejected,
+    skippedRoutes,
     refused,
     reason,
     decisionRecord,
@@ -1480,22 +1577,27 @@ async function launchHermesSession(options, deps) {
 
   const forbiddenDomains = [...(opts.forbiddenFailureDomains || [])];
   const excludedCandidates = [...(opts.excludedCandidates || [])];
+  const excludedCandidateSet = new Set(excludedCandidates);
   const excludedModels = new Set();
-  const failedAccountKeys = new Set();
-  const probesByModel = new Map();
+  const failedAccountKeys = new Map();
+  const probeAccountKey = (candidate) =>
+    candidate.gateway === '9router'
+      ? getCandidateProviderKey(candidate)
+      : candidateAccountKey(candidate);
   const probeReasons = [];
-  const requestedAttempts = Number(opts.maxAttempts);
-  const maxAttempts =
-    Number.isFinite(requestedAttempts) && requestedAttempts > 0
-      ? Math.min(Math.floor(requestedAttempts), 20)
-      : 20;
+  const deadProviders = new Map();
+  const recordedSkippedKeys = new Set();
   let initialModelRanking;
-  let probeModel;
-  let currentModelId = null;
   const probeTimeoutMs = Math.min(Number(opts.probeTimeoutMs) || 8000, 8000);
   const probeBudgetMs = Math.min(Number(opts.probeBudgetMs) || 180000, 180000);
   const probeDeadline = Date.now() + probeBudgetMs;
   let attempt = 0;
+  const health = require('./route-health');
+  const routeHealthFile =
+    opts.routeHealthFile ||
+    d.routeHealthFile ||
+    path.join(rootDir, 'tools', 'ai-brain', 'data', 'model-route-health.json');
+  const routeHealth = d.routeHealth || health.loadStore(routeHealthFile, { allowMissing: true });
 
   const recordProbeRefusal = (candidate, reason) => {
     if (opts.skipDecisionLog) return null;
@@ -1534,12 +1636,19 @@ async function launchHermesSession(options, deps) {
         forbiddenFailureDomains: forbiddenDomains,
         excludedCandidates,
         excludedModels: [...excludedModels],
+        deadProviderPrefixes: deadProviders,
         preferredCandidateKey,
-        probeModel,
       }),
       d
     );
 
+    for (const rejection of selection?.rejected || []) {
+      if (!recordedSkippedKeys.has(rejection.candidateKey)) {
+        recordedSkippedKeys.add(rejection.candidateKey);
+        const logError = recordProbeRefusal(rejection, rejection.reason || rejection.reasonCode);
+        if (logError) probeReasons.push(logError.message);
+      }
+    }
     if (!selection || !selection.candidate) {
       const baseReason =
         (selection && (selection.reason || selection.refused)) || 'NO_REASONING_CANDIDATE';
@@ -1552,201 +1661,228 @@ async function launchHermesSession(options, deps) {
     }
     initialModelRanking ||= selection.modelRanking;
 
-    const candidate = selection.candidate;
-    const candKey = candidate.candidateKey || candidateKey(candidate);
-    const accountKey = candidateAccountKey(candKey);
-    if (accountKey && failedAccountKeys.has(accountKey)) {
-      probeReasons.push(`SKIPPED_ACCOUNT_EXHAUSTED: ${accountKey}`);
-      excludedCandidates.push(candKey);
-      if (candidate._preRewriteKey) {
-        excludedCandidates.push(candidate._preRewriteKey);
-      }
-      session.candidateKey = null;
-      continue;
-    }
-
-    session.candidateKey = selection.chosen;
-    saveSession(session, opts, d);
-    const modelId = canonicalHermesModelId(candidate.modelId || candidate.model);
-    probeModel = modelId;
-
-    if (currentModelId !== null && currentModelId !== modelId) {
-      if (attempt >= maxAttempts || (Date.now() >= probeDeadline && (!opts.dryRun || opts.probe))) {
-        probeReasons.push(`probe budget exhausted after ${attempt} probes`);
-        const err = new Error(`NO_REASONING_CANDIDATE: ${probeReasons.join('; ')}`);
-        err.code = 'NO_REASONING_CANDIDATE';
-        err.reasons = probeReasons.slice();
-        throw err;
-      }
-    }
-    currentModelId = modelId;
-
-    const remainingRoutesForModel = selection.ranking.filter(
-      (c) => canonicalHermesModelId(c.modelId || c.model) === modelId
-    ).length;
-    const hasMoreRoutesForCurrentModel = remainingRoutesForModel > 1;
-
-    attempt += 1;
-    const modelProbeCount = (probesByModel.get(modelId) || 0) + 1;
-    probesByModel.set(modelId, modelProbeCount);
-    let configResult;
-    try {
-      configResult = writeProvidersConfig(candidate, opts, d);
-    } catch (configError) {
-      if (
-        (!opts.dryRun || opts.probe) &&
-        ['UNKNOWN_CREDENTIAL_ENV', 'UNKNOWN_ENDPOINT'].includes(configError.code)
-      ) {
-        // Missing route credentials are a route refusal, not permission to guess a key.
-      } else {
-        throw configError;
-      }
-      const reason = `HERMES_ROUTE_PROBE_FAILED ${configError.code}`;
-      probeReasons.push(`${candidate.candidateKey}: ${reason}`);
+    const ordered = [...selection.ranking];
+    const preferredIndex = ordered.findIndex((c) => c.candidateKey === selection.chosen);
+    if (preferredIndex > 0) ordered.unshift(...ordered.splice(preferredIndex, 1));
+    const outcomes = new Map();
+    const inFlight = new Map();
+    const busyAccounts = new Set();
+    let winner = null;
+    const refusal = (candidate, reason) => {
       excludedCandidates.push(candidate.candidateKey);
-      if (!hasMoreRoutesForCurrentModel) excludedModels.add(modelId);
-      const decisionLogError = recordProbeRefusal(candidate, reason);
-      if (decisionLogError) {
-        probeReasons.push(`${candidate.candidateKey}: ${decisionLogError.message}`);
-      }
-      session.candidateKey = null;
-      saveSession(session, opts, d);
-      if (
-        !hasMoreRoutesForCurrentModel &&
-        (attempt >= maxAttempts || (Date.now() >= probeDeadline && (!opts.dryRun || opts.probe)))
-      ) {
-        probeReasons.push(`probe budget exhausted after ${attempt} route attempts`);
-        const err = new Error(`NO_REASONING_CANDIDATE: ${probeReasons.join('; ')}`);
-        err.code = 'NO_REASONING_CANDIDATE';
-        err.reasons = probeReasons.slice();
-        throw err;
-      }
-      continue;
-    }
-
-    if (!opts.dryRun || opts.probe) {
-      const probeFn = d.probe || opts.probeFn || probeHermesCandidate;
-      const probeController = new AbortController();
-      const timeoutMs = probeTimeoutMs;
-      let timeoutHandle;
-      const isCodexProvider =
-        (candidate &&
-          (candidate.provider === 'openai-codex' ||
-            candidate.gateway === 'openai-codex' ||
-            candidate.sourceId === 'openai-codex' ||
-            candidate.source === 'openai-codex')) ||
-        configResult.providerName === 'openai-codex';
-
-      const probeResult = await Promise.race([
-        Promise.resolve().then(() => {
-          if (isCodexProvider && !d.probe && !opts.probeFn) {
-            // Built-in openai-codex provider: skip HTTP probe
-            return { ok: true, status: 200, body: 'openai-codex skip HTTP probe' };
-          }
-          return probeFn(candidate, configResult.apiKeyEnv, env, {
-            timeoutMs,
-            fetch: d.fetch || opts.fetch,
-            signal: probeController.signal,
-          });
-        }),
-        new Promise((resolve) => {
-          timeoutHandle = setTimeout(() => {
-            probeController.abort();
-            resolve({ ok: false, status: 0, body: 'Probe request timed out' });
-          }, timeoutMs);
-        }),
-      ]);
-      clearTimeout(timeoutHandle);
-      require('./route-health').rememberProbe(candidate, probeResult, {
-        ...opts,
-        routeHealth: d.routeHealth,
-        routeHealthFile:
-          opts.routeHealthFile ||
-          d.routeHealthFile ||
-          path.join(
-            resolveRootDir(opts, d),
-            'tools',
-            'ai-brain',
-            'data',
-            'model-route-health.json'
-          ),
-      });
-      if (!probeResult || probeResult.ok !== true) {
-        const status = Number(probeResult && probeResult.status) || 0;
-        const body = String((probeResult && probeResult.body) || 'Probe failed');
-        let classifierBody = body;
-        if (status >= 500 && status <= 599) classifierBody += ' transient service unavailable';
+      excludedCandidateSet.add(candidate.candidateKey);
+      probeReasons.push(`${candidate.candidateKey}: ${reason}`);
+      const logError = recordProbeRefusal(candidate, reason);
+      if (logError) probeReasons.push(logError.message);
+    };
+    const runProbe = async (candidate) => {
+      let config;
+      try {
+        config = writeProvidersConfig(candidate, opts, d);
+      } catch (error) {
         if (
-          (status === 503 && /insufficient[_ ]credits?|quota|credit_exhausted/i.test(body)) ||
-          /upstream_credit_exhausted/i.test(body)
+          (opts.dryRun && !opts.probe) ||
+          !['UNKNOWN_CREDENTIAL_ENV', 'UNKNOWN_ENDPOINT'].includes(error.code)
         )
-          classifierBody = `[402] ${body}`;
-        const classification = classifier.classifyFailure({
-          httpStatus: status,
-          exitCode: status === 0 ? 1 : 0,
-          cause: status === 0 ? classifier.Cause.TIMEOUT : undefined,
-          body: classifierBody,
-          stderr: status === 0 ? 'timeout' : '',
-          candidateKey: candidate.candidateKey,
-          accountId: candidate.accountId,
-        });
-        const routeFailure =
-          status === 0 ||
-          status === 429 ||
-          status >= 500 ||
-          classification.scope === classifier.Scope.MODEL ||
-          classification.scope === classifier.Scope.UPSTREAM ||
-          classification.scope === classifier.Scope.GATEWAY ||
-          classification.scope === classifier.Scope.ACCESS_PATH ||
-          classification.scope === classifier.Scope.ACCOUNT;
-        if (!routeFailure) {
-          const err = new Error('HERMES_ROUTE_PROBE_FAILED: ' + classification.cause);
-          err.code = 'HERMES_ROUTE_PROBE_FAILED';
-          err.classification = classification;
-          throw err;
-        }
-        const reason = `HERMES_ROUTE_PROBE_FAILED ${classification.cause} status=${status || 'timeout'}`;
-        probeReasons.push(`${candidate.candidateKey}: ${reason}`);
-        excludedCandidates.push(candidate.candidateKey);
-        const exhaustedReasons = new Set([
-          'upstream_credit_exhausted',
-          'quota_exhausted',
-          'account_quota_exhausted',
-          'account_auth_failed',
-          'upstream_entitlement',
+          throw error;
+        refusal(candidate, `HERMES_ROUTE_PROBE_FAILED ${error.code}`);
+        return false;
+      }
+      if (opts.dryRun && !opts.probe) return true;
+      const controller = new AbortController();
+      const remainingMs = probeDeadline - Date.now();
+      const budgetLimited = remainingMs < probeTimeoutMs;
+      const timeoutMs = Math.max(1, Math.min(probeTimeoutMs, remainingMs));
+      if (remainingMs <= 0) {
+        refusal(candidate, 'HERMES_ROUTE_PROBE_SKIPPED wall-clock budget exhausted');
+        return false;
+      }
+      let timer;
+      let result;
+      try {
+        result = await Promise.race([
+          Promise.resolve()
+            .then(() =>
+              (d.probe || opts.probeFn || probeHermesCandidate)(candidate, config.apiKeyEnv, env, {
+                timeoutMs,
+                fetch: d.fetch || opts.fetch,
+                signal: controller.signal,
+              })
+            )
+            .catch(() => ({ ok: false, status: 0, body: 'Probe transport failed' })),
+          new Promise((resolve) => {
+            timer = setTimeout(() => {
+              controller.abort();
+              resolve({
+                ok: false,
+                status: 0,
+                body: budgetLimited ? 'Probe budget exhausted' : 'Probe request timed out',
+              });
+            }, timeoutMs);
+          }),
         ]);
-        if (
-          exhaustedReasons.has(classification.cause) ||
-          status === 402 ||
-          /upstream_credit_exhausted|quota_exhausted|account_auth_failed|upstream_entitlement/i.test(
-            body
+      } finally {
+        clearTimeout(timer);
+      }
+      health.rememberProbe(candidate, result, { ...opts, routeHealth, routeHealthFile });
+      if (result?.ok === true) return true;
+      const status = Number(result?.status) || 0;
+      const body = String(result?.body || 'Probe failed');
+      // Explicit provider codes take precedence over generic 503 capacity classification.
+      const providerCause = body
+        .match(
+          /\b(upstream_credit_exhausted|account_quota_exhausted|quota_exhausted|account_auth_failed|upstream_entitlement)\b/i
+        )?.[1]
+        ?.toLowerCase();
+      const classification = classifier.classifyFailure({
+        httpStatus: status,
+        exitCode: status === 0 ? 1 : 0,
+        cause: status === 0 ? classifier.Cause.TIMEOUT : undefined,
+        body:
+          status === 503 && /insufficient[_ ]credits?|quota|credit_exhausted/i.test(body)
+            ? `[402] ${body}`
+            : body,
+        stderr: status === 0 ? 'timeout' : '',
+        candidateKey: candidate.candidateKey,
+        accountId: candidate.accountId,
+      });
+      const cause = providerCause || classification.cause;
+      if (!(
+        providerCause ||
+        status === 0 ||
+        status === 402 ||
+        status === 429 ||
+        status >= 500 ||
+        [
+          classifier.Scope.MODEL,
+          classifier.Scope.UPSTREAM,
+          classifier.Scope.GATEWAY,
+          classifier.Scope.ACCESS_PATH,
+          classifier.Scope.ACCOUNT,
+        ].includes(classification.scope)
+      )) {
+        const error = new Error(`HERMES_ROUTE_PROBE_FAILED: ${cause}`);
+        error.code = 'HERMES_ROUTE_PROBE_FAILED';
+        error.classification = classification;
+        throw error;
+      }
+      refusal(candidate, `HERMES_ROUTE_PROBE_FAILED ${cause} status=${status || 'timeout'}`);
+      if (isProviderLevelFailure(cause) || status === 402) {
+        failedAccountKeys.set(probeAccountKey(candidate), cause);
+        deadProviders.set(getCandidateProviderKey(candidate), { cause });
+      }
+      return false;
+    };
+    try {
+      while (!winner) {
+        let bestSuccess = ordered.findIndex((c) => outcomes.get(c.candidateKey) === true);
+        for (let index = 0; index < ordered.length; index += 1) {
+          const route = ordered[index];
+          if (outcomes.has(route.candidateKey) || inFlight.has(route.candidateKey)) continue;
+          const account = probeAccountKey(route);
+          const dead = deadProviders.get(getCandidateProviderKey(route));
+          const cooldown = health.probeCooldown(route, { ...opts, routeHealth, routeHealthFile });
+          if (dead || failedAccountKeys.has(account) || cooldown) {
+            const reason = dead
+              ? `HERMES_ROUTE_PROBE_SKIPPED provider ${getCandidateProviderKey(route)} failed with ${dead.cause}`
+              : failedAccountKeys.has(account)
+                ? `HERMES_PROBE_SKIPPED_ACCOUNT_EXHAUSTED: ${account} failed with ${failedAccountKeys.get(account)}`
+                : cooldown;
+            refusal(route, reason);
+            outcomes.set(route.candidateKey, false);
+            continue;
+          }
+          if (
+            (bestSuccess >= 0 && index > bestSuccess) ||
+            inFlight.size >= 8 ||
+            busyAccounts.has(account) ||
+            ((!opts.dryRun || opts.probe) && Date.now() >= probeDeadline)
           )
-        ) {
-          const accKey = candidateAccountKey(candidate);
-          if (accKey) failedAccountKeys.add(accKey);
+            continue;
+          busyAccounts.add(account);
+          const promise = runProbe(route).then((ok) => ({ route, account, ok }));
+          inFlight.set(route.candidateKey, promise);
         }
-        if (!hasMoreRoutesForCurrentModel) {
-          excludedModels.add(modelId);
-        }
-        const decisionLogError = recordProbeRefusal(candidate, reason);
-        if (decisionLogError) {
-          probeReasons.push(`${candidate.candidateKey}: ${decisionLogError.message}`);
-        }
-        session.candidateKey = null;
-        saveSession(session, opts, d);
+        bestSuccess = ordered.findIndex((c) => outcomes.get(c.candidateKey) === true);
         if (
-          !hasMoreRoutesForCurrentModel &&
-          (attempt >= maxAttempts || Date.now() >= probeDeadline)
+          bestSuccess >= 0 &&
+          ordered.slice(0, bestSuccess).every((c) => outcomes.has(c.candidateKey))
         ) {
-          probeReasons.push(`probe budget exhausted after ${attempt} probes`);
-          const err = new Error(`NO_REASONING_CANDIDATE: ${probeReasons.join('; ')}`);
-          err.code = 'NO_REASONING_CANDIDATE';
-          err.reasons = probeReasons.slice();
-          throw err;
+          winner = ordered[bestSuccess];
+          break;
         }
-        continue;
+        if (!inFlight.size) {
+          // The deadline may leave higher routes untested on a busy account.
+          // A completed live success remains usable; missing probes are never successes.
+          winner = bestSuccess >= 0 ? ordered[bestSuccess] : null;
+          break;
+        }
+        const finished = await Promise.race(inFlight.values());
+        inFlight.delete(finished.route.candidateKey);
+        busyAccounts.delete(finished.account);
+        outcomes.set(finished.route.candidateKey, finished.ok);
+      }
+    } finally {
+      // Settle started work, including on fatal errors, before another launch can bind config.
+      const remaining = await Promise.allSettled(inFlight.values());
+      for (const result of remaining) {
+        if (result.status === 'fulfilled') {
+          outcomes.set(result.value.route.candidateKey, result.value.ok);
+        }
       }
     }
+    for (const route of ordered) {
+      if (!outcomes.has(route.candidateKey)) {
+        refusal(
+          route,
+          winner && Date.now() < probeDeadline
+            ? 'HERMES_ROUTE_PROBE_SKIPPED higher-ranked route succeeded'
+            : 'HERMES_ROUTE_PROBE_SKIPPED wall-clock budget exhausted'
+        );
+      }
+    }
+    if (!winner) {
+      if (Date.now() >= probeDeadline) probeReasons.push('probe wall-clock budget exhausted');
+      const error = new Error(`NO_REASONING_CANDIDATE: ${probeReasons.join('; ')}`);
+      error.code = 'NO_REASONING_CANDIDATE';
+      error.reasons = probeReasons.slice();
+      throw error;
+    }
+    const candidate = winner;
+    selection.candidate = candidate;
+    selection.chosen = candidate.candidateKey;
+    selection.chosenRoute = {
+      ...selection.chosenRoute,
+      candidateKey: candidate.candidateKey,
+      modelId: canonicalHermesModelId(candidate.modelId),
+      routeModelId: candidate.modelId,
+      gateway: candidate.gateway,
+      ...candidate.routeSelection,
+    };
+    if (!opts.skipDecisionLog) {
+      (d.decisions || decisionsApi).recordDecision(
+        {
+          ...selection.decisionRecord,
+          chosen: selection.chosen,
+          chosenCandidate: candidate,
+          chosenRoute: selection.chosenRoute,
+          detail:
+            opts.dryRun && !opts.probe
+              ? 'HERMES_REASONING_DRY_RUN'
+              : 'HERMES_REASONING_LIVE_PROBE_SUCCEEDED',
+        },
+        {
+          dir:
+            opts.decisionDir ||
+            d.decisionDir ||
+            path.join(rootDir, 'tools', 'ai-brain', 'data', 'decisions'),
+        }
+      );
+    }
+    session.candidateKey = candidate.candidateKey;
+    saveSession(session, opts, d);
+    const configResult = writeProvidersConfig(candidate, opts, d);
+    attempt += 1;
 
     const argv = buildHermesArgv(candidate, session, {
       rootDir,
@@ -1955,10 +2091,6 @@ async function launchHermesSession(options, deps) {
 
     // Reselects on the next iteration with the SAME sessionId
   }
-
-  const err = new Error('HERMES_MAX_RETRIES_EXCEEDED');
-  err.code = 'HERMES_MAX_RETRIES_EXCEEDED';
-  throw err;
 }
 
 /**
@@ -2121,4 +2253,6 @@ module.exports = {
   resolveHermesContextWindow,
   assembleOpenAiCodexCandidates,
   candidateAccountKey,
+  getCandidateProviderKey,
+  isProviderLevelFailure,
 };
