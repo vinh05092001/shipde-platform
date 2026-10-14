@@ -365,6 +365,37 @@ function canonicalHermesModelId(modelId) {
   return (parts[parts.length - 1] || '').replace(/@[^@:]+$/, '').replace(/:free$/, '');
 }
 
+async function refreshReasoningContext(options, deps) {
+  const d = { ...deps };
+  // Explicit candidate/registry fixtures remain offline unless a fetcher is supplied.
+  if (!d.fetchModels && (d.registry || d.candidateList || Array.isArray(d.candidates))) return d;
+  const registry = d.registry || (d.sources || sourcesApi).loadSources(d.sourceOpts);
+  const { probeSource } = require('./source-discovery');
+  const fetcher = d.fetchModels || globalThis.fetch;
+  const sources = await Promise.all(
+    (registry.sources || []).map(async (source) => {
+      if (!source.endpoint || source.servesModels === false || source.enabled === false)
+        return source;
+      const credential = source.credential || {};
+      const probed = await probeSource(
+        {
+          ...source,
+          models: source.models || [],
+          credential:
+            credential.type === 'api-key' ? { type: 'env', name: credential.env } : credential,
+        },
+        {
+          env: { ...process.env, ...options.env, ...d.env },
+          fetch: (url, init) => fetcher(url, { ...init, signal: AbortSignal.timeout(5000) }),
+        }
+      );
+      // A failed listing keeps the most recent source-scoped discovery metadata.
+      return { ...source, modelMeta: probed.modelMeta || source.modelMeta || {} };
+    })
+  );
+  return { ...d, registry: { ...registry, sources } };
+}
+
 function selectReasoningCandidate(options, deps) {
   const d = deps || {};
   const opts = options || {};
@@ -994,8 +1025,8 @@ function resolveHermesLaunchCommand(argv, options, deps) {
  * Handles failure classification, candidate reselection, and resume relaunching.
  */
 async function launchHermesSession(options, deps) {
-  const d = deps || {};
   const opts = options || {};
+  const d = await refreshReasoningContext(opts, deps || {});
   const rootDir = resolveRootDir(opts, d);
   const hermesHome = opts.hermesHome || d.hermesHome || getHermesHomeDir(rootDir);
 
@@ -1515,7 +1546,6 @@ async function launchHermesSession(options, deps) {
  * Outputs JSON on stdout.
  */
 async function goalSessionCommand(args, deps) {
-  const d = deps || {};
   const opts = Object.assign({}, args);
   if (args.session) opts.session = args.session;
   if (args.goal) opts.goal = args.goal;
@@ -1525,6 +1555,7 @@ async function goalSessionCommand(args, deps) {
   if (args['skip-decision-log'] || args.skipDecisionLog) opts.skipDecisionLog = true;
 
   try {
+    const d = await refreshReasoningContext(opts, deps || {});
     let session = loadSession(opts, d);
     if (opts.newSession) {
       session = null;
@@ -1649,6 +1680,7 @@ module.exports = {
   saveSession,
   linkGoalToSession,
   selectReasoningCandidate,
+  refreshReasoningContext,
   writeProvidersConfig,
   buildHermesArgv,
   probeHermesCandidate,
