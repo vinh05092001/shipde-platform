@@ -1881,9 +1881,9 @@ function runHostBrainGate(job, options = {}) {
         if (baseResult && typeof baseResult.status === 'number' && !baseResult.error) {
           const baseOutput =
             String(baseResult.stdout || '') + '\n' + String(baseResult.stderr || '');
-          const parsedFailures = [
-            ...baseOutput.matchAll(/(?:not ok \d+ - |✖ )([^\r\n]+)/g),
-          ].map((match) => match[1].trim());
+          const parsedFailures = [...baseOutput.matchAll(/(?:not ok \d+ - |✖ )([^\r\n]+)/g)].map(
+            (match) => match[1].trim()
+          );
 
           if (baseResult.status === 0 || parsedFailures.length > 0) {
             baseFailed = parsedFailures;
@@ -1939,9 +1939,7 @@ function runHostBrainGate(job, options = {}) {
       newFailures,
       baselineFailures,
     });
-    const repairDetails = options.onHostGateFailure
-      ? options.onHostGateFailure(newFailures)
-      : null;
+    const repairDetails = options.onHostGateFailure ? options.onHostGateFailure(newFailures) : null;
     return {
       pass: false,
       command,

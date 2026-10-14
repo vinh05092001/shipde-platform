@@ -35,10 +35,7 @@ test('TASK-AI-142: (a) same failures on base -> pass', () => {
     return baseOutput;
   };
 
-  const result = runHostBrainGate(
-    { baseSha },
-    { spawnSync, baseCache: customCache }
-  );
+  const result = runHostBrainGate({ baseSha }, { spawnSync, baseCache: customCache });
 
   assert.equal(result.pass, true);
   assert.deepEqual(result.failures, []);
@@ -83,10 +80,7 @@ test('TASK-AI-142: (b) one extra failure -> HOST_GATE_FAILED listing it', () => 
     return baseOutput;
   };
 
-  const result = runHostBrainGate(
-    { baseSha },
-    { spawnSync, baseCache: customCache }
-  );
+  const result = runHostBrainGate({ baseSha }, { spawnSync, baseCache: customCache });
 
   assert.equal(result.pass, false);
   assert.deepEqual(result.failures, ['worker introduced regression']);
@@ -103,10 +97,7 @@ test('TASK-AI-142: (c) base run errors -> block', () => {
   const baseSha = 'c'.repeat(40);
   const workerOutput = {
     status: 1,
-    stdout:
-      'not ok 1 - failing worker test\n' +
-      'ℹ pass 5\n' +
-      'ℹ fail 1\n',
+    stdout: 'not ok 1 - failing worker test\n' + 'ℹ pass 5\n' + 'ℹ fail 1\n',
   };
 
   let nodeCalls = 0;
@@ -126,10 +117,7 @@ test('TASK-AI-142: (c) base run errors -> block', () => {
     };
   };
 
-  const result = runHostBrainGate(
-    { baseSha },
-    { spawnSync, baseCache: customCache }
-  );
+  const result = runHostBrainGate({ baseSha }, { spawnSync, baseCache: customCache });
 
   assert.equal(result.pass, false);
   assert.deepEqual(result.failures, ['failing worker test']);
@@ -142,17 +130,11 @@ test('TASK-AI-142: (d) base result is cached per base SHA for the session', () =
   const baseSha = 'd'.repeat(40);
   const workerOutput = {
     status: 1,
-    stdout:
-      'not ok 1 - AF-R01: worker prettier .cmd launches\n' +
-      'ℹ pass 10\n' +
-      'ℹ fail 1\n',
+    stdout: 'not ok 1 - AF-R01: worker prettier .cmd launches\n' + 'ℹ pass 10\n' + 'ℹ fail 1\n',
   };
   const baseOutput = {
     status: 1,
-    stdout:
-      'not ok 1 - AF-R01: worker prettier .cmd launches\n' +
-      'ℹ pass 10\n' +
-      'ℹ fail 1\n',
+    stdout: 'not ok 1 - AF-R01: worker prettier .cmd launches\n' + 'ℹ pass 10\n' + 'ℹ fail 1\n',
   };
 
   let baseRunCalls = 0;
@@ -172,19 +154,13 @@ test('TASK-AI-142: (d) base result is cached per base SHA for the session', () =
   };
 
   // First run: evaluates base and caches it
-  const result1 = runHostBrainGate(
-    { baseSha },
-    { spawnSync, baseCache: customCache }
-  );
+  const result1 = runHostBrainGate({ baseSha }, { spawnSync, baseCache: customCache });
   assert.equal(result1.pass, true);
   assert.equal(baseRunCalls, 1);
   assert.ok(customCache.has(baseSha));
 
   // Second run: same base SHA should hit cache and NOT re-run base suite
-  const result2 = runHostBrainGate(
-    { baseSha },
-    { spawnSync, baseCache: customCache }
-  );
+  const result2 = runHostBrainGate({ baseSha }, { spawnSync, baseCache: customCache });
   assert.equal(result2.pass, true);
   assert.equal(baseRunCalls, 1);
   assert.deepEqual(result2.failures, []);
