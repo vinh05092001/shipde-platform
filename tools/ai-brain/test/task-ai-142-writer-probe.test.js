@@ -1,0 +1,349 @@
+'use strict';
+
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
+
+const { runOrchestration } = require('../orchestrate');
+const { candidateKey } = require('../discovery/identity');
+
+function tmpDir(prefix) {
+  return fs.mkdtempSync(path.join(os.tmpdir(), prefix || 'task-ai-142-writer-probe-'));
+}
+
+function makeTempRepo() {
+  const dir = tmpDir('repo-');
+  const git = (args) => spawnSync('git', args, { cwd: dir, encoding: 'utf8', windowsHide: true });
+  git(['init', '-q']);
+  git(['config', 'user.email', 'worker@shipde.test']);
+  git(['config', 'user.name', 'Worker']);
+  fs.writeFileSync(path.join(dir, 'payload.txt'), 'base content\n');
+  git(['add', '.']);
+  git(['commit', '-q', '-m', 'init']);
+  return { dir, sha: git(['rev-parse', 'HEAD']).stdout.trim() };
+}
+
+function createCandidate(overrides) {
+  const c = Object.assign(
+    {
+      harness: 'opencode',
+      accessPath: 'https://gateway.example/v1',
+      gateway: 'oc',
+      upstream: 'vendor',
+      accountId: 'account-1',
+      quotaScope: 'account-1',
+      modelId: 'vendor/model-1',
+      source: 'oc',
+      kind: 'agent-cli',
+      qualifiedRoles: ['author.foundation'],
+      capabilities: { contextWindow: 64000 },
+      evidence: [{ status: 'passed', kind: 'WORK_ITEM_PASS', proofLevel: 'WORK_ITEM_PASS' }],
+      quality: 90,
+      cost: 1,
+    },
+    overrides || {}
+  );
+  c.candidateKey = candidateKey(c);
+  return c;
+}
+
+test('(a) 30 candidates on 30 different accounts all failing with a timeout-free failure, then 1 live candidate: the live one is chosen (proves no count cap of 20)', async (t) => {
+  const repo = makeTempRepo();
+  const decisionDir = tmpDir('dec-a-');
+  const evidenceDir = tmpDir('evi-a-');
+  t.after(() => {
+    fs.rmSync(repo.dir, { recursive: true, force: true });
+    fs.rmSync(decisionDir, { recursive: true, force: true });
+    fs.rmSync(evidenceDir, { recursive: true, force: true });
+  });
+
+  const candidates = [];
+  for (let i = 0; i < 30; i++) {
+    candidates.push(
+      createCandidate({
+        accessPath: `https://gw-${i}.example/v1`,
+        gateway: `gw-${i}`,
+        accountId: `acc-${i}`,
+        quotaScope: `acc-${i}`,
+        modelId: `vendor/model-${i}`,
+        quality: 100 - i * 0.5,
+      })
+    );
+  }
+  const liveCandidate = createCandidate({
+    accessPath: 'https://gw-live.example/v1',
+    gateway: 'gw-live',
+    accountId: 'acc-live',
+    quotaScope: 'acc-live',
+    modelId: 'vendor/model-live',
+    quality: 80,
+  });
+  candidates.push(liveCandidate);
+
+  const registry = {
+    sources: [
+      ...candidates.map((c) => ({
+        id: c.gateway,
+        endpoint: c.accessPath,
+        credential: { env: 'TEST_KEY' },
+      })),
+      {
+        id: 'oc',
+        endpoint: 'https://gateway.example/v1',
+        credential: { env: 'TEST_KEY' },
+      },
+    ],
+    dispatch: {
+      providers: {
+        oc: { harness: 'opencode-direct', provider: 'opencode' },
+      },
+    },
+  };
+
+  const probedKeys = [];
+  const routeProbe = async (probeCandidate) => {
+    probedKeys.push(probeCandidate.modelId);
+    if (probeCandidate.modelId === 'vendor/model-live') {
+      return { ok: true, status: 200, body: 'OK' };
+    }
+    // Timeout-free failure
+    return { ok: false, status: 400, body: 'alias_mismatch' };
+  };
+
+  const options = {
+    isolatedWorker: true,
+    cwd: repo.dir,
+    workerRoot: repo.dir,
+    baseSha: repo.sha,
+    sha: repo.sha,
+    decisionDir,
+    evidenceDir,
+    candidates,
+    registry,
+    specs: [{ id: 'TASK-AI-142', files: ['a.js'], acceptanceCriteria: ['done'], qualityFloor: 0 }],
+    routeProbe,
+    run: () => ({
+      exitCode: 0,
+      stdout: '{"sessionID":"ses_a","tokens":{"input":10,"output":5}}',
+      stderr: '',
+      completionNonce: 'nonce-a',
+      workerSha: repo.sha,
+    }),
+    reviewer: () => ({ pass: true, sha: repo.sha, verdict: 'PASS', findings: [] }),
+    tests: () => ({ pass: true }),
+    hostGate: () => ({ pass: true, failures: [] }),
+    ranking: { priors: { ranking: [] } },
+  };
+
+  const result = await runOrchestration('test 30 candidates probe', options);
+  assert.equal(probedKeys.length, 31, 'must have probed 30 failed candidates + 1 live candidate');
+  assert.equal(result.status, 'COMPLETED');
+  assert.equal(result.sessions[0].candidateKey, liveCandidate.candidateKey);
+});
+
+test("(b) 3 candidates on account A + 1 on account B; A's first probe returns cause upstream_credit_exhausted: exactly 2 probes happen and B is chosen", async (t) => {
+  const repo = makeTempRepo();
+  const decisionDir = tmpDir('dec-b-');
+  const evidenceDir = tmpDir('evi-b-');
+  t.after(() => {
+    fs.rmSync(repo.dir, { recursive: true, force: true });
+    fs.rmSync(decisionDir, { recursive: true, force: true });
+    fs.rmSync(evidenceDir, { recursive: true, force: true });
+  });
+
+  const candA1 = createCandidate({
+    accessPath: 'https://gw-a.example/v1',
+    gateway: 'gw-a',
+    accountId: 'acc-a',
+    quotaScope: 'acc-a',
+    modelId: 'vendor/model-a1',
+    quality: 99,
+  });
+  const candA2 = createCandidate({
+    accessPath: 'https://gw-a.example/v1',
+    gateway: 'gw-a',
+    accountId: 'acc-a',
+    quotaScope: 'acc-a',
+    modelId: 'vendor/model-a2',
+    quality: 98,
+  });
+  const candA3 = createCandidate({
+    accessPath: 'https://gw-a.example/v1',
+    gateway: 'gw-a',
+    accountId: 'acc-a',
+    quotaScope: 'acc-a',
+    modelId: 'vendor/model-a3',
+    quality: 97,
+  });
+  const candB = createCandidate({
+    accessPath: 'https://gw-b.example/v1',
+    gateway: 'gw-b',
+    accountId: 'acc-b',
+    quotaScope: 'acc-b',
+    modelId: 'vendor/model-b',
+    quality: 90,
+  });
+
+  const candidates = [candA1, candA2, candA3, candB];
+  const registry = {
+    sources: [
+      { id: 'gw-a', endpoint: 'https://gw-a.example/v1', credential: { env: 'TEST_KEY' } },
+      { id: 'gw-b', endpoint: 'https://gw-b.example/v1', credential: { env: 'TEST_KEY' } },
+      { id: 'oc', endpoint: 'https://gateway.example/v1', credential: { env: 'TEST_KEY' } },
+    ],
+    dispatch: {
+      providers: {
+        oc: { harness: 'opencode-direct', provider: 'opencode' },
+      },
+    },
+  };
+
+  const probedModels = [];
+  const routeProbe = async (probeCandidate) => {
+    probedModels.push(probeCandidate.modelId);
+    if (probeCandidate.modelId === 'vendor/model-a1') {
+      return { ok: false, cause: 'upstream_credit_exhausted', body: 'upstream_credit_exhausted' };
+    }
+    if (probeCandidate.modelId === 'vendor/model-b') {
+      return { ok: true, status: 200, body: 'OK' };
+    }
+    return { ok: false, status: 400, body: 'unexpected' };
+  };
+
+  const options = {
+    isolatedWorker: true,
+    cwd: repo.dir,
+    workerRoot: repo.dir,
+    baseSha: repo.sha,
+    sha: repo.sha,
+    decisionDir,
+    evidenceDir,
+    candidates,
+    registry,
+    specs: [{ id: 'TASK-AI-142', files: ['a.js'], acceptanceCriteria: ['done'] }],
+    routeProbe,
+    run: () => ({
+      exitCode: 0,
+      stdout: '{"sessionID":"ses_b","tokens":{"input":10,"output":5}}',
+      stderr: '',
+      completionNonce: 'nonce-b',
+      workerSha: repo.sha,
+    }),
+    reviewer: () => ({ pass: true, sha: repo.sha, verdict: 'PASS', findings: [] }),
+    tests: () => ({ pass: true }),
+    hostGate: () => ({ pass: true, failures: [] }),
+    ranking: { priors: { ranking: [] } },
+  };
+
+  const result = await runOrchestration('test exhausted account skipping', options);
+  assert.deepEqual(
+    probedModels,
+    ['vendor/model-a1', 'vendor/model-b'],
+    'exactly 2 probes must happen'
+  );
+  assert.equal(result.status, 'COMPLETED');
+  assert.equal(result.sessions[0].candidateKey, candB.candidateKey);
+});
+
+test('(c) one model with 3 routes, first 2 fail, 3rd live: the 3rd route is used (proves no 2-routes-per-model cap)', async (t) => {
+  const repo = makeTempRepo();
+  const decisionDir = tmpDir('dec-c-');
+  const evidenceDir = tmpDir('evi-c-');
+  t.after(() => {
+    fs.rmSync(repo.dir, { recursive: true, force: true });
+    fs.rmSync(decisionDir, { recursive: true, force: true });
+    fs.rmSync(evidenceDir, { recursive: true, force: true });
+  });
+
+  const candR1 = createCandidate({
+    accessPath: 'https://gw-1.example/v1',
+    gateway: 'gw-1',
+    accountId: 'acc-1',
+    quotaScope: 'acc-1',
+    modelId: 'shared-vendor/target-model',
+    quality: 99,
+  });
+  const candR2 = createCandidate({
+    accessPath: 'https://gw-2.example/v1',
+    gateway: 'gw-2',
+    accountId: 'acc-2',
+    quotaScope: 'acc-2',
+    modelId: 'shared-vendor/target-model',
+    quality: 98,
+  });
+  const candR3 = createCandidate({
+    accessPath: 'https://gw-3.example/v1',
+    gateway: 'gw-3',
+    accountId: 'acc-3',
+    quotaScope: 'acc-3',
+    modelId: 'shared-vendor/target-model',
+    quality: 97,
+  });
+
+  const candidates = [candR1, candR2, candR3];
+  const registry = {
+    sources: [
+      { id: 'gw-1', endpoint: 'https://gw-1.example/v1', credential: { env: 'TEST_KEY' } },
+      { id: 'gw-2', endpoint: 'https://gw-2.example/v1', credential: { env: 'TEST_KEY' } },
+      { id: 'gw-3', endpoint: 'https://gw-3.example/v1', credential: { env: 'TEST_KEY' } },
+      { id: 'oc', endpoint: 'https://gateway.example/v1', credential: { env: 'TEST_KEY' } },
+    ],
+    dispatch: {
+      providers: {
+        oc: { harness: 'opencode-direct', provider: 'opencode' },
+      },
+    },
+  };
+
+  const probedAccounts = [];
+  const routeProbe = async (probeCandidate) => {
+    probedAccounts.push(probeCandidate.accessPath);
+    if (probeCandidate.accessPath === 'https://gw-1.example/v1') {
+      return { ok: false, status: 500, body: 'server error' };
+    }
+    if (probeCandidate.accessPath === 'https://gw-2.example/v1') {
+      return { ok: false, status: 500, body: 'server error' };
+    }
+    if (probeCandidate.accessPath === 'https://gw-3.example/v1') {
+      return { ok: true, status: 200, body: 'OK' };
+    }
+    return { ok: false, status: 400, body: 'unexpected' };
+  };
+
+  const options = {
+    isolatedWorker: true,
+    cwd: repo.dir,
+    workerRoot: repo.dir,
+    baseSha: repo.sha,
+    sha: repo.sha,
+    decisionDir,
+    evidenceDir,
+    candidates,
+    registry,
+    specs: [{ id: 'TASK-AI-142', files: ['a.js'], acceptanceCriteria: ['done'] }],
+    routeProbe,
+    run: () => ({
+      exitCode: 0,
+      stdout: '{"sessionID":"ses_c","tokens":{"input":10,"output":5}}',
+      stderr: '',
+      completionNonce: 'nonce-c',
+      workerSha: repo.sha,
+    }),
+    reviewer: () => ({ pass: true, sha: repo.sha, verdict: 'PASS', findings: [] }),
+    tests: () => ({ pass: true }),
+    hostGate: () => ({ pass: true, failures: [] }),
+    ranking: { priors: { ranking: [] } },
+  };
+
+  const result = await runOrchestration('test 3 routes same model', options);
+  assert.deepEqual(
+    probedAccounts,
+    ['https://gw-1.example/v1', 'https://gw-2.example/v1', 'https://gw-3.example/v1'],
+    'all 3 routes of the model must be probed until success'
+  );
+  assert.equal(result.status, 'COMPLETED');
+  assert.equal(result.sessions[0].candidateKey, candR3.candidateKey);
+});

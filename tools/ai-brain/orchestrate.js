@@ -66,8 +66,9 @@ const {
 } = require('./failure-classifier');
 const { materialiseExercise, captureFailBefore } = require('./isolation-launcher');
 const sharedRouteProbe = require('./route-probe');
-const MAX_ROUTES_PER_MODEL = 2;
-const PROBE_ATTEMPT_LIMIT = 20;
+const { candidateAccountKey, PROVIDER_LEVEL_FAILURE_CAUSES } = require('./hermes-session');
+// Safety invariant: reviewer canonical-model probe cap
+const REVIEWER_CANONICAL_MODEL_CAP = 2;
 const PROBE_BUDGET_MS = 180000;
 
 const ItemStatus = Object.freeze({
@@ -827,8 +828,7 @@ function reviewLane(
       let result = { ok: false, status: 0, body: 'Probe route configuration unavailable' };
       if (
         probeCandidate &&
-        count <= MAX_ROUTES_PER_MODEL &&
-        reviewerProbeAttempts < PROBE_ATTEMPT_LIMIT &&
+        count <= REVIEWER_CANONICAL_MODEL_CAP &&
         Date.now() - reviewerProbeStartedAt < PROBE_BUDGET_MS
       ) {
         reviewerProbeAttempts += 1;
@@ -840,10 +840,7 @@ function reviewLane(
           Object.assign({}, process.env, o.env || {}),
           { timeoutMs: 8000, fetch: o.fetch }
         );
-      } else if (
-        reviewerProbeAttempts >= PROBE_ATTEMPT_LIMIT ||
-        Date.now() - reviewerProbeStartedAt >= PROBE_BUDGET_MS
-      ) {
+      } else if (Date.now() - reviewerProbeStartedAt >= PROBE_BUDGET_MS) {
         result = { ok: false, status: 0, body: 'Probe budget exhausted' };
       }
       if (!result || result.ok !== true) {
@@ -4294,11 +4291,8 @@ async function runOrchestration(goal, opts) {
     const writerProbeCounts = new Map();
     const writerProbeStartedAt = Date.now();
     let writerProbeAttempts = 0;
-    for (
-      let attempt = 1;
-      !session && attempt <= Math.min(candidates.length + 1, 20);
-      attempt += 1
-    ) {
+    const exhaustedAccountKeys = new Set();
+    for (let attempt = 1; !session && attempt <= candidates.length + 1; attempt += 1) {
       // 5. The Controller chooses every candidate (AI-64-P01). This is a live
       //    decision, not a dry run: it is written to the decision log before the
       //    launch, with the ranking inputs it was made from (AI-64-R03).
@@ -4508,7 +4502,7 @@ async function runOrchestration(goal, opts) {
           body: 'Probe route configuration unavailable',
           reasonCode: 'PROBE_ROUTE_CONFIGURATION_UNAVAILABLE',
         };
-        if (writerProbeAttempts >= PROBE_ATTEMPT_LIMIT || remainingMs <= 0) {
+        if (remainingMs <= 0) {
           probeResult = {
             ok: false,
             status: 0,
@@ -4516,7 +4510,7 @@ async function runOrchestration(goal, opts) {
             reasonCode: 'PROBE_BUDGET_EXHAUSTED',
           };
         }
-        if (routeCandidate && writerProbeAttempts < PROBE_ATTEMPT_LIMIT && remainingMs > 0) {
+        if (routeCandidate && remainingMs > 0) {
           writerProbeAttempts += 1;
           const timeoutMs = Math.min(8000, remainingMs);
           // Invoke the caller-provided probe directly through the timeout wrapper.
@@ -4536,17 +4530,29 @@ async function runOrchestration(goal, opts) {
           const reason = 'WRITER_ROUTE_PROBE_FAILED ' + reasonCode;
           recordPostSelectFailure(reason, reasonCode, 'gateway');
           failedKeys.add(decision.chosen);
-          if (count >= MAX_ROUTES_PER_MODEL) {
-            for (const other of candidates) {
-              const otherModel = String(other.modelId || other.model || '')
-                .toLowerCase()
-                .split('/')
-                .pop()
-                .replace(/@[^@:]+$/, '')
-                .replace(/:free$/, '');
-              if (otherModel === modelId) failedKeys.add(candidateKey(other));
+
+          const rawCause =
+            (probeResult && (probeResult.cause || probeResult.reasonCode)) || reasonCode;
+          const isProviderLevel =
+            (rawCause &&
+              PROVIDER_LEVEL_FAILURE_CAUSES.has(String(rawCause).toLowerCase().trim())) ||
+            (probeResult &&
+              probeResult.body &&
+              [...PROVIDER_LEVEL_FAILURE_CAUSES].some((c) =>
+                new RegExp(`\\b${c}\\b`, 'i').test(probeResult.body)
+              ));
+          if (isProviderLevel) {
+            const accKey = candidateAccountKey(candidate);
+            if (accKey) {
+              exhaustedAccountKeys.add(accKey);
+              for (const other of candidates) {
+                if (candidateAccountKey(other) === accKey) {
+                  failedKeys.add(candidateKey(other));
+                }
+              }
             }
           }
+
           decisions.recordDecision(
             {
               stage: decisions.Stage.REFUSED,
@@ -4560,10 +4566,7 @@ async function runOrchestration(goal, opts) {
           );
           launch.fallbackReason = reason;
           launch.cause = reasonCode;
-          if (
-            writerProbeAttempts >= PROBE_ATTEMPT_LIMIT ||
-            Date.now() - writerProbeStartedAt >= PROBE_BUDGET_MS
-          ) {
+          if (Date.now() - writerProbeStartedAt >= PROBE_BUDGET_MS) {
             blockedReason = 'PROBE_BUDGET_EXHAUSTED: writer route probe budget exhausted';
             recordPostSelectFailure(blockedReason, 'PROBE_BUDGET_EXHAUSTED', 'gateway');
             break;
