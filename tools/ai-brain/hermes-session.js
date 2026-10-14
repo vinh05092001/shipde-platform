@@ -1817,6 +1817,91 @@ function resolveHermesLaunchCommand(argv, options, deps) {
   };
 }
 
+// Eight concurrent accounts is the existing transport safety invariant, not an attempt cap.
+async function probeRankedRoutes(
+  ordered,
+  {
+    runProbe,
+    accountKey,
+    skip = () => null,
+    refusal = () => {},
+    deadline = Infinity,
+    now = Date.now,
+  }
+) {
+  if (accountKey === undefined) accountKey = candidateAccountKey;
+  const outcomes = new Map();
+  const inFlight = new Map();
+  const busyAccounts = new Set();
+  let winner = null;
+  let firstNonRouteError = null;
+  try {
+    while (!winner) {
+      let bestSuccess = ordered.findIndex((c) => outcomes.get(c.candidateKey) === true);
+      for (let index = 0; index < ordered.length; index += 1) {
+        const route = ordered[index];
+        if (outcomes.has(route.candidateKey) || inFlight.has(route.candidateKey)) continue;
+        const account = accountKey(route);
+        const reason = skip(route, account);
+        if (reason) {
+          refusal(route, reason);
+          outcomes.set(route.candidateKey, false);
+          continue;
+        }
+        if (
+          (bestSuccess >= 0 && index > bestSuccess) ||
+          inFlight.size >= 8 ||
+          busyAccounts.has(account) ||
+          now() >= deadline
+        )
+          continue;
+        busyAccounts.add(account);
+        const promise = runProbe(route)
+          .then((ok) => ({ route, account, ok }))
+          .catch((error) => ({ route, account, ok: false, error }));
+        inFlight.set(route.candidateKey, promise);
+      }
+      bestSuccess = ordered.findIndex((c) => outcomes.get(c.candidateKey) === true);
+      if (
+        bestSuccess >= 0 &&
+        ordered.slice(0, bestSuccess).every((c) => outcomes.has(c.candidateKey))
+      ) {
+        winner = ordered[bestSuccess];
+        break;
+      }
+      if (!inFlight.size) {
+        // The deadline may leave higher routes untested on a busy account.
+        // A completed live success remains usable; missing probes are never successes.
+        winner = bestSuccess >= 0 ? ordered[bestSuccess] : null;
+        break;
+      }
+      const finished = await Promise.race(inFlight.values());
+      inFlight.delete(finished.route.candidateKey);
+      busyAccounts.delete(finished.account);
+      outcomes.set(finished.route.candidateKey, finished.ok);
+      if (finished.error) {
+        firstNonRouteError ||= finished.error;
+        refusal(finished.route, finished.error.message || String(finished.error));
+      }
+    }
+  } finally {
+    // Settle started work, including on fatal errors, before another launch can bind config.
+    const remaining = await Promise.allSettled(inFlight.values());
+    for (const result of remaining) {
+      if (result.status === 'fulfilled') {
+        outcomes.set(result.value.route.candidateKey, result.value.ok);
+        if (result.value.error) {
+          firstNonRouteError ||= result.value.error;
+          refusal(result.value.route, result.value.error.message || String(result.value.error));
+        }
+      }
+    }
+  }
+
+  if (!winner) winner = ordered.find((c) => outcomes.get(c.candidateKey) === true) || null;
+  return { winner, outcomes, firstNonRouteError };
+}
+
 /**
  * Launches an interactive Hermes chat session bound to a Controller-selected candidate.
  * Handles failure classification, candidate reselection, and resume relaunching.
@@ -1985,8 +2070,6 @@ async function launchHermesSession(options, deps) {
     const preferredIndex = ordered.findIndex((c) => c.candidateKey === selection.chosen);
     if (preferredIndex > 0) ordered.unshift(...ordered.splice(preferredIndex, 1));
     const outcomes = new Map();
-    const inFlight = new Map();
-    const busyAccounts = new Set();
     let winner = null;
     let firstNonRouteError = null;
     const refusal = (candidate, reason, { exclude = true } = {}) => {
@@ -2146,92 +2229,42 @@ async function launchHermesSession(options, deps) {
       }
       return false;
     };
-    try {
-      while (!winner) {
-        let bestSuccess = ordered.findIndex((c) => outcomes.get(c.candidateKey) === true);
-        for (let index = 0; index < ordered.length; index += 1) {
-          const route = ordered[index];
-          if (outcomes.has(route.candidateKey) || inFlight.has(route.candidateKey)) continue;
-          const account = probeAccountKey(route);
-          const specificAcc = health.extractAccountKey(route, {
-            ...opts,
-            registry: d.registry || opts.registry,
-          });
-          const provKey = getCandidateProviderKey(route);
-          const deadInfo = provKey ? deadProviders.get(provKey) : null;
-          const isHardProviderFailure =
-            deadInfo &&
-            (deadInfo.cause === 'upstream_credential' ||
-              deadInfo.cause === 'upstream_monthly_limit' ||
-              !deadInfo.account ||
-              !specificAcc ||
-              deadInfo.account === specificAcc);
-          const gwAcc = route.gateway !== '9router' ? candidateAccountKey(route) : null;
-          const matchedExhaustedKey =
-            (specificAcc && failedAccountKeys.has(specificAcc) && specificAcc) ||
-            (gwAcc && failedAccountKeys.has(gwAcc) && gwAcc) ||
-            null;
-          const isAccountExhausted = Boolean(matchedExhaustedKey);
-          const cooldown = health.probeCooldown(route, { ...opts, routeHealth, routeHealthFile });
-          if (isHardProviderFailure || isAccountExhausted || cooldown) {
-            const reason = isHardProviderFailure
-              ? `HERMES_ROUTE_PROBE_SKIPPED provider ${provKey} failed with ${deadInfo.cause}`
-              : isAccountExhausted
-                ? `HERMES_PROBE_SKIPPED_ACCOUNT_EXHAUSTED: ${matchedExhaustedKey} failed with ${failedAccountKeys.get(matchedExhaustedKey)}`
-                : cooldown;
-            refusal(route, reason);
-            outcomes.set(route.candidateKey, false);
-            continue;
-          }
-          if (
-            (bestSuccess >= 0 && index > bestSuccess) ||
-            inFlight.size >= 8 ||
-            busyAccounts.has(account) ||
-            ((!opts.dryRun || opts.probe) && Date.now() >= probeDeadline)
-          )
-            continue;
-          busyAccounts.add(account);
-          const promise = runProbe(route)
-            .then((ok) => ({ route, account, ok }))
-            .catch((error) => ({ route, account, ok: false, error }));
-          inFlight.set(route.candidateKey, promise);
-        }
-        bestSuccess = ordered.findIndex((c) => outcomes.get(c.candidateKey) === true);
-        if (
-          bestSuccess >= 0 &&
-          ordered.slice(0, bestSuccess).every((c) => outcomes.has(c.candidateKey))
-        ) {
-          winner = ordered[bestSuccess];
-          break;
-        }
-        if (!inFlight.size) {
-          // The deadline may leave higher routes untested on a busy account.
-          // A completed live success remains usable; missing probes are never successes.
-          winner = bestSuccess >= 0 ? ordered[bestSuccess] : null;
-          break;
-        }
-        const finished = await Promise.race(inFlight.values());
-        inFlight.delete(finished.route.candidateKey);
-        busyAccounts.delete(finished.account);
-        outcomes.set(finished.route.candidateKey, finished.ok);
-        if (finished.error) {
-          firstNonRouteError ||= finished.error;
-          refusal(finished.route, finished.error.message || String(finished.error));
-        }
-      }
-    } finally {
-      // Settle started work, including on fatal errors, before another launch can bind config.
-      const remaining = await Promise.allSettled(inFlight.values());
-      for (const result of remaining) {
-        if (result.status === 'fulfilled') {
-          outcomes.set(result.value.route.candidateKey, result.value.ok);
-          if (result.value.error) {
-            firstNonRouteError ||= result.value.error;
-            refusal(result.value.route, result.value.error.message || String(result.value.error));
-          }
-        }
-      }
-    }
+    const probeBatch = await probeRankedRoutes(ordered, {
+      runProbe,
+      accountKey: probeAccountKey,
+      refusal,
+      deadline: opts.dryRun && !opts.probe ? Infinity : probeDeadline,
+      skip: (route, account) => {
+        const specificAcc = health.extractAccountKey(route, {
+          ...opts,
+          registry: d.registry || opts.registry,
+        });
+        const provKey = getCandidateProviderKey(route);
+        const deadInfo = provKey ? deadProviders.get(provKey) : null;
+        const isHardProviderFailure =
+          deadInfo &&
+          (deadInfo.cause === 'upstream_credential' ||
+            deadInfo.cause === 'upstream_monthly_limit' ||
+            !deadInfo.account ||
+            !specificAcc ||
+            deadInfo.account === specificAcc);
+        const gwAcc = route.gateway !== '9router' ? candidateAccountKey(route) : null;
+        const matchedExhaustedKey =
+          (specificAcc && failedAccountKeys.has(specificAcc) && specificAcc) ||
+          (gwAcc && failedAccountKeys.has(gwAcc) && gwAcc) ||
+          null;
+        const isAccountExhausted = Boolean(matchedExhaustedKey);
+        const cooldown = health.probeCooldown(route, { ...opts, routeHealth, routeHealthFile });
+        return isHardProviderFailure
+          ? `HERMES_ROUTE_PROBE_SKIPPED provider ${provKey} failed with ${deadInfo.cause}`
+          : isAccountExhausted
+            ? `HERMES_PROBE_SKIPPED_ACCOUNT_EXHAUSTED: ${matchedExhaustedKey} failed with ${failedAccountKeys.get(matchedExhaustedKey)}`
+            : cooldown;
+      },
+    });
+    winner = probeBatch.winner;
+    firstNonRouteError = probeBatch.firstNonRouteError;
+    for (const [key, ok] of probeBatch.outcomes) outcomes.set(key, ok);
     if (!winner) {
       const bestSuccess = ordered.findIndex((c) => outcomes.get(c.candidateKey) === true);
       if (bestSuccess >= 0) {
@@ -2640,6 +2673,7 @@ async function chatCommand(args, deps) {
 }
 
 module.exports = {
+  probeRankedRoutes,
   CONTROLLER_SKILL_NAME,
   installSkillFile,
   installedSkillFilePath,

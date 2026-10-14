@@ -66,10 +66,21 @@ const {
 } = require('./failure-classifier');
 const { materialiseExercise, captureFailBefore } = require('./isolation-launcher');
 const sharedRouteProbe = require('./route-probe');
-const { candidateAccountKey, PROVIDER_LEVEL_FAILURE_CAUSES } = require('./hermes-session');
+const {
+  probeRankedRoutes,
+  candidateAccountKey,
+  PROVIDER_LEVEL_FAILURE_CAUSES,
+} = require('./hermes-session');
 // Safety invariant: reviewer canonical-model probe cap
 const REVIEWER_CANONICAL_MODEL_CAP = 2;
 const PROBE_BUDGET_MS = 180000;
+
+function providerFailureBodyMatches(body) {
+  return [...PROVIDER_LEVEL_FAILURE_CAUSES].some((cause) => {
+    const escaped = String(cause).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp('(?<!\\w)' + escaped + '(?!\\w)', 'i').test(String(body || ''));
+  });
+}
 
 const ItemStatus = Object.freeze({
   COMPLETED: 'completed',
@@ -4288,10 +4299,161 @@ async function runOrchestration(goal, opts) {
       log.failBefore = session.failBefore;
     }
 
-    const writerProbeCounts = new Map();
+    const recordWriterFailure = (key, reason, cause, scope = 'local') => {
+      const step = liveSteps[item.id] || {};
+      persistStep(item.id, 'writer_post_selection_failed', {
+        reason,
+        failures: [
+          ...(step.failures || []),
+          {
+            failedCandidateKey: key,
+            reason,
+            cause,
+            failureScope: scope,
+          },
+        ],
+      });
+      recordedWriterFailures.add(key);
+      decisions.recordDecision(
+        {
+          stage: decisions.Stage.FAILED,
+          workItemId: item.id,
+          role: roleOf(item),
+          chosen: key,
+          cause,
+          failureScope: scope,
+          detail: reason,
+        },
+        logOpts
+      );
+      launch.fallbackReason = reason;
+      launch.cause = cause;
+      launch.scope = scope;
+    };
+
     const writerProbeStartedAt = Date.now();
-    let writerProbeAttempts = 0;
     const exhaustedAccountKeys = new Set();
+    const writerProbeResults = new Map();
+    if (!session && o.isolatedWorker) {
+      const ranked = await selectCandidateForProfile(
+        item,
+        candidates,
+        [...new Set(forbiddenDomains)],
+        evidenceData,
+        o,
+        logOpts,
+        now,
+        { failedKeys, excludedDomains, domainAttempts, attempt: 1 }
+      );
+      const ordered = ranked.result.ranking.filter((candidate) => {
+        try {
+          return resolveLaunchRoute(candidate, o, registry)?.harnessName === 'opencode-direct';
+        } catch {
+          return false;
+        }
+      });
+      const refuse = (candidate, reason, exclude = true) => {
+        if (exclude) failedKeys.add(candidateKey(candidate));
+        decisions.recordDecision(
+          {
+            stage: decisions.Stage.REFUSED,
+            workItemId: item.id,
+            role: roleOf(item),
+            chosen: null,
+            rejected: [{ candidateKey: candidateKey(candidate), reason }],
+            detail: reason,
+          },
+          logOpts
+        );
+      };
+      const batch = await probeRankedRoutes(ordered, {
+        deadline: writerProbeStartedAt + PROBE_BUDGET_MS,
+        skip: (candidate, account) =>
+          exhaustedAccountKeys.has(account)
+            ? 'WRITER_PROBE_SKIPPED_ACCOUNT_EXHAUSTED'
+            : require('./route-health').probeCooldown(candidate, o),
+        refusal: refuse,
+        runProbe: async (candidate) => {
+          const route = resolveLaunchRoute(candidate, o, registry);
+          const routeCandidate = routeProbeCandidate(candidate, route, registry);
+          const remainingMs = PROBE_BUDGET_MS - (Date.now() - writerProbeStartedAt);
+          const result =
+            routeCandidate && remainingMs > 0
+              ? await sharedRouteProbe.boundedProbe(
+                  o.routeProbe || sharedRouteProbe.probeRoute,
+                  routeCandidate,
+                  routeCandidate.apiKeyEnv,
+                  Object.assign({}, process.env, o.env || {}),
+                  { timeoutMs: Math.min(8000, remainingMs), fetch: o.fetch }
+                )
+              : {
+                  ok: false,
+                  status: 0,
+                  reasonCode:
+                    remainingMs <= 0
+                      ? 'PROBE_BUDGET_EXHAUSTED'
+                      : 'PROBE_ROUTE_CONFIGURATION_UNAVAILABLE',
+                  body:
+                    remainingMs <= 0
+                      ? 'Probe budget exhausted'
+                      : 'Probe route configuration unavailable',
+                };
+          writerProbeResults.set(candidateKey(candidate), result);
+          require('./route-health').rememberProbe(candidate, result, o);
+          if (result?.ok === true) return true;
+          const reasonCode = sharedRouteProbe.failureReason(
+            sharedRouteProbe.classifyProbeFailure(result)
+          );
+          const key = candidateKey(candidate);
+          const reason =
+            Date.now() - writerProbeStartedAt >= PROBE_BUDGET_MS
+              ? 'PROBE_BUDGET_EXHAUSTED: writer route probe budget exhausted'
+              : 'WRITER_ROUTE_PROBE_FAILED ' + reasonCode;
+          recordWriterFailure(key, reason, reasonCode, 'gateway');
+          log.prompts.push({
+            workItemId: item.id,
+            candidateKey: key,
+            prompt: compilePrompt(item, {
+              goal,
+              specText: o.specText,
+              candidateKey: key,
+              branch: o.branch || 'feat/' + String(item.id).toLowerCase(),
+              isolatedWorker: true,
+              focusedTestsOnly: true,
+              contextPack: contextPack && contextPack.path,
+              hostGateFailures: item.hostGateFailures || [],
+            }),
+          });
+          refuse(candidate, reason);
+          const cause = String(result?.cause || result?.reasonCode || reasonCode)
+            .toLowerCase()
+            .trim();
+          if (
+            PROVIDER_LEVEL_FAILURE_CAUSES.has(cause) ||
+            providerFailureBodyMatches(result?.body)
+          ) {
+            exhaustedAccountKeys.add(candidateAccountKey(candidate));
+          }
+          return false;
+        },
+      });
+      if (batch.winner) {
+        for (const [key, result] of writerProbeResults) {
+          if (result?.ok !== true) failedKeys.add(key);
+        }
+      }
+      const winnerIndex = ordered.findIndex(
+        (candidate) => candidateKey(candidate) === batch.winner?.candidateKey
+      );
+      for (const [index, candidate] of ordered.entries()) {
+        if (
+          !batch.outcomes.has(candidateKey(candidate)) &&
+          (winnerIndex < 0 || index < winnerIndex)
+        ) {
+          refuse(candidate, 'WRITER_ROUTE_PROBE_SKIPPED wall-clock budget exhausted');
+        }
+      }
+    }
     for (let attempt = 1; !session && attempt <= candidates.length + 1; attempt += 1) {
       // 5. The Controller chooses every candidate (AI-64-P01). This is a live
       //    decision, not a dry run: it is written to the decision log before the
@@ -4299,7 +4461,9 @@ async function runOrchestration(goal, opts) {
       const currentItemStep = liveSteps[item.id] || savedStep;
       const failedForSelection = new Set(failedKeys);
       for (const offered of candidates) {
-        const reason = require('./route-health').probeCooldown(offered, o);
+        const reason = writerProbeResults.has(candidateKey(offered))
+          ? null
+          : require('./route-health').probeCooldown(offered, o);
         if (reason) {
           failedForSelection.add(candidateKey(offered));
           decisions.recordDecision(
@@ -4389,37 +4553,8 @@ async function runOrchestration(goal, opts) {
         });
       }
 
-      const recordPostSelectFailure = (reason, cause, scope = 'local') => {
-        const step = liveSteps[item.id] || {};
-        persistStep(item.id, 'writer_post_selection_failed', {
-          reason,
-          failures: [
-            ...(step.failures || []),
-            {
-              failedCandidateKey: decision.chosen,
-              reason,
-              cause,
-              failureScope: scope,
-            },
-          ],
-        });
-        recordedWriterFailures.add(decision.chosen);
-        decisions.recordDecision(
-          {
-            stage: decisions.Stage.FAILED,
-            workItemId: item.id,
-            role: roleOf(item),
-            chosen: decision.chosen,
-            cause,
-            failureScope: scope,
-            detail: reason,
-          },
-          logOpts
-        );
-        launch.fallbackReason = reason;
-        launch.cause = cause;
-        launch.scope = scope;
-      };
+      const recordPostSelectFailure = (reason, cause, scope = 'local') =>
+        recordWriterFailure(decision.chosen, reason, cause, scope);
 
       const branch = o.branch || 'feat/' + String(item.id).toLowerCase();
       const usageFile = prepareUsageReport(usageDir, String(item.id) + '-' + now + '-a' + attempt);
@@ -4486,41 +4621,32 @@ async function runOrchestration(goal, opts) {
         break;
       }
       if (o.isolatedWorker && route.harnessName === 'opencode-direct' && !replayedLaunch) {
-        const modelId = String(route.model || '')
-          .toLowerCase()
-          .split('/')
-          .pop()
-          .replace(/@[^@:]+$/, '')
-          .replace(/:free$/, '');
-        const count = (writerProbeCounts.get(modelId) || 0) + 1;
-        writerProbeCounts.set(modelId, count);
-        const routeCandidate = routeProbeCandidate(candidate, route, registry);
-        const remainingMs = PROBE_BUDGET_MS - (Date.now() - writerProbeStartedAt);
-        let probeResult = {
-          ok: false,
-          status: 0,
-          body: 'Probe route configuration unavailable',
-          reasonCode: 'PROBE_ROUTE_CONFIGURATION_UNAVAILABLE',
-        };
-        if (remainingMs <= 0) {
-          probeResult = {
-            ok: false,
-            status: 0,
-            body: 'Probe budget exhausted',
-            reasonCode: 'PROBE_BUDGET_EXHAUSTED',
-          };
-        }
-        if (routeCandidate && remainingMs > 0) {
-          writerProbeAttempts += 1;
-          const timeoutMs = Math.min(8000, remainingMs);
-          // Invoke the caller-provided probe directly through the timeout wrapper.
-          probeResult = await sharedRouteProbe.boundedProbe(
-            o.routeProbe || sharedRouteProbe.probeRoute,
-            routeCandidate,
-            routeCandidate.apiKeyEnv,
-            Object.assign({}, process.env, o.env || {}),
-            { timeoutMs, fetch: o.fetch }
-          );
+        let probeResult = writerProbeResults.get(decision.chosen);
+        if (!probeResult) {
+          // Runtime fallback may reach a route below the pre-probe winner.
+          const routeCandidate = routeProbeCandidate(candidate, route, registry);
+          const remainingMs = PROBE_BUDGET_MS - (Date.now() - writerProbeStartedAt);
+          probeResult =
+            routeCandidate && remainingMs > 0
+              ? await sharedRouteProbe.boundedProbe(
+                  o.routeProbe || sharedRouteProbe.probeRoute,
+                  routeCandidate,
+                  routeCandidate.apiKeyEnv,
+                  Object.assign({}, process.env, o.env || {}),
+                  { timeoutMs: Math.min(8000, remainingMs), fetch: o.fetch }
+                )
+              : {
+                  ok: false,
+                  status: 0,
+                  reasonCode:
+                    remainingMs <= 0
+                      ? 'PROBE_BUDGET_EXHAUSTED'
+                      : 'PROBE_ROUTE_CONFIGURATION_UNAVAILABLE',
+                  body:
+                    remainingMs <= 0
+                      ? 'Probe budget exhausted'
+                      : 'Probe route configuration unavailable',
+                };
         }
         require('./route-health').rememberProbe(candidate, probeResult, o);
         if (!probeResult || probeResult.ok !== true) {
@@ -4536,11 +4662,7 @@ async function runOrchestration(goal, opts) {
           const isProviderLevel =
             (rawCause &&
               PROVIDER_LEVEL_FAILURE_CAUSES.has(String(rawCause).toLowerCase().trim())) ||
-            (probeResult &&
-              probeResult.body &&
-              [...PROVIDER_LEVEL_FAILURE_CAUSES].some((c) =>
-                new RegExp(`\\b${c}\\b`, 'i').test(probeResult.body)
-              ));
+            (probeResult && probeResult.body && providerFailureBodyMatches(probeResult.body));
           if (isProviderLevel) {
             const accKey = candidateAccountKey(candidate);
             if (accKey) {
