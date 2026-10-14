@@ -147,6 +147,29 @@ const failureClassifier = require('./failure-classifier');
 const routeProbe = require('./route-probe');
 const { candidateKey, parseCandidateKey } = require('./discovery/identity');
 
+/**
+ * Extracts an account key from a candidate or candidate key.
+ * Account key = candidateKey's 2nd and 3rd "::" fields (base URL + source id).
+ * For 9router (base http://127.0.0.1:20128/v1), also includes the 4th field (upstream prefix).
+ */
+function candidateAccountKey(candidateOrKey) {
+  const key =
+    typeof candidateOrKey === 'string'
+      ? candidateOrKey
+      : (candidateOrKey && candidateOrKey.candidateKey) || candidateKey(candidateOrKey);
+  if (!key || typeof key !== 'string') return '';
+  const parts = key.split('::');
+  const baseUrl = parts[1] || '';
+  const sourceId = parts[2] || '';
+  const is9router =
+    baseUrl === 'http://127.0.0.1:20128/v1' || baseUrl.includes('20128') || sourceId === '9router';
+  if (is9router) {
+    const upstream = parts[3] || '';
+    return `${baseUrl}::${sourceId}::${upstream}`;
+  }
+  return `${baseUrl}::${sourceId}`;
+}
+
 const HERMES_MIN_CONTEXT = 32000;
 const DEFAULT_HERMES_DIR = 'data/hermes';
 const CONTROLLER_SKILL_NAME = 'shipde-controller';
@@ -1458,6 +1481,7 @@ async function launchHermesSession(options, deps) {
   const forbiddenDomains = [...(opts.forbiddenFailureDomains || [])];
   const excludedCandidates = [...(opts.excludedCandidates || [])];
   const excludedModels = new Set();
+  const failedAccountKeys = new Set();
   const probesByModel = new Map();
   const probeReasons = [];
   const requestedAttempts = Number(opts.maxAttempts);
@@ -1528,10 +1552,21 @@ async function launchHermesSession(options, deps) {
     }
     initialModelRanking ||= selection.modelRanking;
 
+    const candidate = selection.candidate;
+    const candKey = candidate.candidateKey || candidateKey(candidate);
+    const accountKey = candidateAccountKey(candKey);
+    if (accountKey && failedAccountKeys.has(accountKey)) {
+      probeReasons.push(`SKIPPED_ACCOUNT_EXHAUSTED: ${accountKey}`);
+      excludedCandidates.push(candKey);
+      if (candidate._preRewriteKey) {
+        excludedCandidates.push(candidate._preRewriteKey);
+      }
+      session.candidateKey = null;
+      continue;
+    }
+
     session.candidateKey = selection.chosen;
     saveSession(session, opts, d);
-
-    const candidate = selection.candidate;
     const modelId = canonicalHermesModelId(candidate.modelId || candidate.model);
     probeModel = modelId;
 
@@ -1641,7 +1676,10 @@ async function launchHermesSession(options, deps) {
         const body = String((probeResult && probeResult.body) || 'Probe failed');
         let classifierBody = body;
         if (status >= 500 && status <= 599) classifierBody += ' transient service unavailable';
-        if (status === 503 && /insufficient[_ ]credits?|quota/i.test(body))
+        if (
+          (status === 503 && /insufficient[_ ]credits?|quota|credit_exhausted/i.test(body)) ||
+          /upstream_credit_exhausted/i.test(body)
+        )
           classifierBody = `[402] ${body}`;
         const classification = classifier.classifyFailure({
           httpStatus: status,
@@ -1670,6 +1708,23 @@ async function launchHermesSession(options, deps) {
         const reason = `HERMES_ROUTE_PROBE_FAILED ${classification.cause} status=${status || 'timeout'}`;
         probeReasons.push(`${candidate.candidateKey}: ${reason}`);
         excludedCandidates.push(candidate.candidateKey);
+        const exhaustedReasons = new Set([
+          'upstream_credit_exhausted',
+          'quota_exhausted',
+          'account_quota_exhausted',
+          'account_auth_failed',
+          'upstream_entitlement',
+        ]);
+        if (
+          exhaustedReasons.has(classification.cause) ||
+          status === 402 ||
+          /upstream_credit_exhausted|quota_exhausted|account_auth_failed|upstream_entitlement/i.test(
+            body
+          )
+        ) {
+          const accKey = candidateAccountKey(candidate);
+          if (accKey) failedAccountKeys.add(accKey);
+        }
         if (!hasMoreRoutesForCurrentModel) {
           excludedModels.add(modelId);
         }
@@ -2065,4 +2120,5 @@ module.exports = {
   readCodexConfigModels,
   resolveHermesContextWindow,
   assembleOpenAiCodexCandidates,
+  candidateAccountKey,
 };
