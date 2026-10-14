@@ -47,9 +47,8 @@ function priorFor(candidate, role, priors, now) {
   if (!canonical) return null;
 
   const ranking = priors && Array.isArray(priors.ranking) ? priors.ranking : [];
-  const match = ranking.find(
-    (entry) => entry && normaliseModelId(entry.canonical) === normaliseModelId(modelId)
-  );
+  const resolved = matchModelPrior(modelId, ranking);
+  const match = resolved && resolved.entry;
   if (!match) return neutralPrior(canonical, role, ranking);
 
   const tier =
@@ -78,6 +77,10 @@ function priorFor(candidate, role, priors, now) {
       : isStale(retrievalDate, now));
 
   const result = { canonical: match.canonical, tier, bonus: stale ? 0 : bonus };
+  if (resolved.matchedVia || match.matchedVia) {
+    result.matchedVia = resolved.matchedVia || match.matchedVia;
+    result.matchedBaseId = resolved.matchedBaseId || match.matchedBaseId;
+  }
   if (weighted.coverage > 0) {
     result.coverage = weighted.coverage;
     if (weighted.coverage < 0.5) result.evidence = 'INDIRECT';
@@ -205,6 +208,57 @@ function normaliseModelId(value) {
   return normaliseCanonical(parts.length > 1 ? parts.slice(-2).join('/') : value);
 }
 
+// Preserve effort labels for exact leaderboard lookup; routing identity stays compatible.
+function leaderboardModelId(value) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/\s*\(([^)]*)\)/g, (_, effort) => '-' + effort.replace(/[^a-z0-9]+/g, '-'))
+    .split('/')
+    .pop()
+    .split('@')[0]
+    .replace(/(?::free|-free)$/, '')
+    .replace(/[._\s]+/g, '-');
+}
+
+function matchModelPrior(modelId, ranking) {
+  const id = leaderboardModelId(modelId);
+  const byId = new Map(
+    ranking.filter(Boolean).map((row) => [leaderboardModelId(row.canonical), row])
+  );
+  if (byId.has(id)) return { entry: byId.get(id) };
+  const queue = [{ id, reasoning: false }];
+  const seen = new Set([id]);
+  for (const current of queue) {
+    if (!current.id) continue;
+    const deployment = current.id.replace(
+      /(?::(?:batch|flex|cloud)|-?\[\d+(?:-\d+)?[km]\]|-(?:fast|latest|volc|turbo|\d{4}-\d{2}-\d{2}|\d{8}|\d{6}|\d{4}))$/,
+      ''
+    );
+    const reasoning = current.id.replace(
+      /-(?:thinking|agentic|high|medium|low|minimal|max|xhigh|none|reasoning|non-reasoning)$/,
+      ''
+    );
+    for (const [base, effort] of [
+      [deployment, false],
+      [reasoning, true],
+    ]) {
+      if (base === current.id || seen.has(base)) continue;
+      seen.add(base);
+      const usedReasoning = current.reasoning || effort;
+      if (byId.has(base))
+        return {
+          entry: byId.get(base),
+          matchedVia: usedReasoning ? 'reasoning-variant' : 'variant-suffix',
+          matchedBaseId: byId.get(base).canonical,
+        };
+      queue.push({ id: base, reasoning: usedReasoning });
+    }
+  }
+  return null;
+}
+
 function mergePriorDocuments(documents, now) {
   const byCanonical = new Map();
   const sources = [];
@@ -213,7 +267,7 @@ function mergePriorDocuments(documents, now) {
       if (source && source.url) sources.push(Object.assign({}, source));
     }
     for (const item of (document && document.models) || (document && document.ranking) || []) {
-      const canonical = normaliseCanonical(item && (item.modelId || item.model || item.canonical));
+      const canonical = leaderboardModelId(item && (item.modelId || item.model || item.canonical));
       if (!canonical) continue;
       const row = byCanonical.get(canonical) || { canonical, benchmarks: [], sources: [] };
       const sourceRows = (item.sources || (item.source ? [item.source] : [])).filter(
@@ -302,9 +356,20 @@ async function refreshPriors(options) {
     }
   }
   const liveModels = opts.liveModels || require('./priors-public').liveModelIds();
-  document.unmatchedLiveModels = [...new Set(liveModels.map(normaliseModelId))]
-    .filter((id) => !document.ranking.some((row) => row.canonical === id))
-    .sort();
+  const scoredRows = document.ranking.filter((row) => !row.matchedVia);
+  document.ranking = scoredRows.slice();
+  document.unmatchedLiveModels = [];
+  for (const id of [...new Set(liveModels.map(leaderboardModelId))].filter(Boolean).sort()) {
+    const match = matchModelPrior(id, scoredRows);
+    if (!match) document.unmatchedLiveModels.push(id);
+    else if (match.matchedVia)
+      document.ranking.push({
+        ...match.entry,
+        canonical: id,
+        matchedVia: match.matchedVia,
+        matchedBaseId: match.matchedBaseId,
+      });
+  }
   const provenanceValid = document.ranking.every(
     (entry) =>
       entry.sources.length > 0 &&
@@ -343,6 +408,8 @@ module.exports = {
   mergePriorDocuments,
   refreshPriors,
   normaliseModelId,
+  leaderboardModelId,
+  matchModelPrior,
   benchmarkScore,
   ROLE_BENCHMARK_WEIGHTS,
   roleBenchmarkProfile,

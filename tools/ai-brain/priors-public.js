@@ -77,7 +77,7 @@ async function publicDocuments(options = {}) {
         };
       })
       .filter((row) => Object.keys(row.benchmarks).length);
-    // Effort variants retain their original names; canonical routing uses the highest published index.
+    // Preserve exact effort entries so matching can prefer published variant scores.
     models.sort(
       (a, b) => (b.benchmarks.intelligenceIndex || 0) - (a.benchmarks.intelligenceIndex || 0)
     );
@@ -86,7 +86,7 @@ async function publicDocuments(options = {}) {
       sources: [source],
       retrievedAt,
       models: models.filter((row) => {
-        const id = require('./priors').normaliseModelId(row.modelId);
+        const id = require('./priors').leaderboardModelId(row.modelId);
         if (seen.has(id)) return false;
         seen.add(id);
         return true;
