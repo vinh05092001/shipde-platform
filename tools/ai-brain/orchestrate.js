@@ -66,7 +66,11 @@ const {
 } = require('./failure-classifier');
 const { materialiseExercise, captureFailBefore } = require('./isolation-launcher');
 const sharedRouteProbe = require('./route-probe');
-const { candidateAccountKey, PROVIDER_LEVEL_FAILURE_CAUSES } = require('./hermes-session');
+const {
+  probeRankedRoutes,
+  candidateAccountKey,
+  PROVIDER_LEVEL_FAILURE_CAUSES,
+} = require('./hermes-session');
 // Safety invariant: reviewer canonical-model probe cap
 const REVIEWER_CANONICAL_MODEL_CAP = 2;
 const PROBE_BUDGET_MS = 180000;
@@ -4288,10 +4292,95 @@ async function runOrchestration(goal, opts) {
       log.failBefore = session.failBefore;
     }
 
-    const writerProbeCounts = new Map();
     const writerProbeStartedAt = Date.now();
-    let writerProbeAttempts = 0;
     const exhaustedAccountKeys = new Set();
+    const writerProbeResults = new Map();
+    if (!session && o.isolatedWorker) {
+      const ranked = await selectCandidateForProfile(
+        item,
+        candidates,
+        [...new Set(forbiddenDomains)],
+        evidenceData,
+        o,
+        logOpts,
+        now,
+        { failedKeys, excludedDomains, domainAttempts, attempt: 1 }
+      );
+      const ordered = ranked.result.ranking.filter((candidate) => {
+        try {
+          return resolveLaunchRoute(candidate, o, registry)?.harnessName === 'opencode-direct';
+        } catch {
+          return false;
+        }
+      });
+      const refuse = (candidate, reason) => {
+        failedKeys.add(candidateKey(candidate));
+        decisions.recordDecision(
+          {
+            stage: decisions.Stage.REFUSED,
+            workItemId: item.id,
+            role: roleOf(item),
+            chosen: null,
+            rejected: [{ candidateKey: candidateKey(candidate), reason }],
+            detail: reason,
+          },
+          logOpts
+        );
+      };
+      const batch = await probeRankedRoutes(ordered, {
+        deadline: writerProbeStartedAt + PROBE_BUDGET_MS,
+        skip: (candidate, account) =>
+          exhaustedAccountKeys.has(account)
+            ? 'WRITER_PROBE_SKIPPED_ACCOUNT_EXHAUSTED'
+            : require('./route-health').probeCooldown(candidate, o),
+        refusal: refuse,
+        runProbe: async (candidate) => {
+          const route = resolveLaunchRoute(candidate, o, registry);
+          const routeCandidate = routeProbeCandidate(candidate, route, registry);
+          const remainingMs = PROBE_BUDGET_MS - (Date.now() - writerProbeStartedAt);
+          const result =
+            routeCandidate && remainingMs > 0
+              ? await sharedRouteProbe.boundedProbe(
+                  o.routeProbe || sharedRouteProbe.probeRoute,
+                  routeCandidate,
+                  routeCandidate.apiKeyEnv,
+                  Object.assign({}, process.env, o.env || {}),
+                  { timeoutMs: Math.min(8000, remainingMs), fetch: o.fetch }
+                )
+              : { ok: false, status: 0, body: 'Probe route configuration unavailable' };
+          writerProbeResults.set(candidateKey(candidate), result);
+          require('./route-health').rememberProbe(candidate, result, o);
+          if (result?.ok === true) return true;
+          const reasonCode = sharedRouteProbe.failureReason(
+            sharedRouteProbe.classifyProbeFailure(result)
+          );
+          refuse(candidate, 'WRITER_ROUTE_PROBE_FAILED ' + reasonCode);
+          const cause = String(result?.cause || result?.reasonCode || reasonCode)
+            .toLowerCase()
+            .trim();
+          if (
+            PROVIDER_LEVEL_FAILURE_CAUSES.has(cause) ||
+            [...PROVIDER_LEVEL_FAILURE_CAUSES].some((c) =>
+              new RegExp(`\\b${c}\\b`, 'i').test(result?.body || '')
+            )
+          ) {
+            exhaustedAccountKeys.add(candidateAccountKey(candidate));
+          }
+          return false;
+        },
+      });
+      const winnerIndex = ordered.findIndex(
+        (candidate) => candidateKey(candidate) === batch.winner?.candidateKey
+      );
+      for (const [index, candidate] of ordered.entries()) {
+        if (
+          !batch.outcomes.has(candidateKey(candidate)) &&
+          (winnerIndex < 0 || index < winnerIndex)
+        ) {
+          refuse(candidate, 'WRITER_ROUTE_PROBE_SKIPPED wall-clock budget exhausted');
+        }
+      }
+    }
     for (let attempt = 1; !session && attempt <= candidates.length + 1; attempt += 1) {
       // 5. The Controller chooses every candidate (AI-64-P01). This is a live
       //    decision, not a dry run: it is written to the decision log before the
@@ -4486,43 +4575,28 @@ async function runOrchestration(goal, opts) {
         break;
       }
       if (o.isolatedWorker && route.harnessName === 'opencode-direct' && !replayedLaunch) {
-        const modelId = String(route.model || '')
-          .toLowerCase()
-          .split('/')
-          .pop()
-          .replace(/@[^@:]+$/, '')
-          .replace(/:free$/, '');
-        const count = (writerProbeCounts.get(modelId) || 0) + 1;
-        writerProbeCounts.set(modelId, count);
-        const routeCandidate = routeProbeCandidate(candidate, route, registry);
-        const remainingMs = PROBE_BUDGET_MS - (Date.now() - writerProbeStartedAt);
-        let probeResult = {
-          ok: false,
-          status: 0,
-          body: 'Probe route configuration unavailable',
-          reasonCode: 'PROBE_ROUTE_CONFIGURATION_UNAVAILABLE',
-        };
-        if (remainingMs <= 0) {
-          probeResult = {
-            ok: false,
-            status: 0,
-            body: 'Probe budget exhausted',
-            reasonCode: 'PROBE_BUDGET_EXHAUSTED',
-          };
+        let probeResult = writerProbeResults.get(decision.chosen);
+        if (!probeResult) {
+          // Runtime fallback may reach a route below the pre-probe winner.
+          const routeCandidate = routeProbeCandidate(candidate, route, registry);
+          const remainingMs = PROBE_BUDGET_MS - (Date.now() - writerProbeStartedAt);
+          probeResult =
+            routeCandidate && remainingMs > 0
+              ? await sharedRouteProbe.boundedProbe(
+                  o.routeProbe || sharedRouteProbe.probeRoute,
+                  routeCandidate,
+                  routeCandidate.apiKeyEnv,
+                  Object.assign({}, process.env, o.env || {}),
+                  { timeoutMs: Math.min(8000, remainingMs), fetch: o.fetch }
+                )
+              : {
+                  ok: false,
+                  status: 0,
+                  reasonCode: 'PROBE_BUDGET_EXHAUSTED',
+                  body: 'Probe budget exhausted',
+                };
+          require('./route-health').rememberProbe(candidate, probeResult, o);
         }
-        if (routeCandidate && remainingMs > 0) {
-          writerProbeAttempts += 1;
-          const timeoutMs = Math.min(8000, remainingMs);
-          // Invoke the caller-provided probe directly through the timeout wrapper.
-          probeResult = await sharedRouteProbe.boundedProbe(
-            o.routeProbe || sharedRouteProbe.probeRoute,
-            routeCandidate,
-            routeCandidate.apiKeyEnv,
-            Object.assign({}, process.env, o.env || {}),
-            { timeoutMs, fetch: o.fetch }
-          );
-        }
-        require('./route-health').rememberProbe(candidate, probeResult, o);
         if (!probeResult || probeResult.ok !== true) {
           const reasonCode = sharedRouteProbe.failureReason(
             sharedRouteProbe.classifyProbeFailure(probeResult)

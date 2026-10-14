@@ -1,4 +1,4 @@
-'use strict';
+﻿'use strict';
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -50,7 +50,7 @@ function createCandidate(overrides) {
   return c;
 }
 
-test('(a) 30 candidates on 30 different accounts all failing with a timeout-free failure, then 1 live candidate: the live one is chosen (proves no count cap of 20)', async (t) => {
+test('(a) 60 dead routes taking 8 seconds and a live route ranked last fit the 180 second concurrent budget', async (t) => {
   const repo = makeTempRepo();
   const decisionDir = tmpDir('dec-a-');
   const evidenceDir = tmpDir('evi-a-');
@@ -61,7 +61,7 @@ test('(a) 30 candidates on 30 different accounts all failing with a timeout-free
   });
 
   const candidates = [];
-  for (let i = 0; i < 30; i++) {
+  for (let i = 0; i < 60; i++) {
     candidates.push(
       createCandidate({
         accessPath: `https://gw-${i}.example/v1`,
@@ -79,7 +79,7 @@ test('(a) 30 candidates on 30 different accounts all failing with a timeout-free
     accountId: 'acc-live',
     quotaScope: 'acc-live',
     modelId: 'vendor/model-live',
-    quality: 80,
+    quality: 70,
   });
   candidates.push(liveCandidate);
 
@@ -109,7 +109,7 @@ test('(a) 30 candidates on 30 different accounts all failing with a timeout-free
     if (probeCandidate.modelId === 'vendor/model-live') {
       return { ok: true, status: 200, body: 'OK' };
     }
-    // Timeout-free failure
+    await new Promise((resolve) => setTimeout(resolve, 8000));
     return { ok: false, status: 400, body: 'alias_mismatch' };
   };
 
@@ -138,8 +138,37 @@ test('(a) 30 candidates on 30 different accounts all failing with a timeout-free
     ranking: { priors: { ranking: [] } },
   };
 
-  const result = await runOrchestration('test 30 candidates probe', options);
-  assert.equal(probedKeys.length, 31, 'must have probed 30 failed candidates + 1 live candidate');
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
+  const startedAt = Date.now();
+  let settled = false;
+  const pending = runOrchestration('test 60 delayed dead candidates', options);
+  pending.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    }
+  );
+  while (!settled && Date.now() - startedAt < 180000) {
+    await new Promise((resolve) => setImmediate(resolve));
+    t.mock.timers.tick(8000);
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.ok(settled, 'selection must finish inside the wall-clock budget');
+  const result = await pending;
+  assert.equal(probedKeys.length, 61, 'all 60 dead routes and the last live route are probed');
+  assert.ok(Date.now() - startedAt < 180000);
+  const records = fs
+    .readdirSync(decisionDir)
+    .filter((name) => name.endsWith('.jsonl'))
+    .flatMap((name) =>
+      fs.readFileSync(path.join(decisionDir, name), 'utf8').trim().split('\n').map(JSON.parse)
+    );
+  const rejections = records
+    .flatMap((record) => record.rejected || [])
+    .filter((entry) => String(entry.reason).startsWith('WRITER_ROUTE_PROBE_FAILED'));
+  assert.equal(rejections.length, 60, 'writer rejections land in the injected intake decision dir');
   assert.equal(result.status, 'COMPLETED');
   assert.equal(result.sessions[0].candidateKey, liveCandidate.candidateKey);
 });
@@ -346,4 +375,40 @@ test('(c) one model with 3 routes, first 2 fail, 3rd live: the 3rd route is used
   );
   assert.equal(result.status, 'COMPLETED');
   assert.equal(result.sessions[0].candidateKey, candR3.candidateKey);
+});
+
+test('(d) next keeps brain decisions in the intake run instead of forwarding its global decision dir', async (t) => {
+  const root = tmpDir('writer-intake-');
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const registerPath = path.join(root, 'register.csv');
+  const runDir = path.join(root, 'intake');
+  fs.mkdirSync(runDir);
+  fs.writeFileSync(
+    registerPath,
+    'delivery_order,work_item_id,status,dependencies\n1,GOAL-WRITER,READY_FOR_AUTHOR,\n'
+  );
+  let runFiles;
+  await require('../next-runner').runNext(
+    { rootDir: root, registerPath, decisionDir: path.join(root, 'runner-decisions'), run: true },
+    {
+      log: () => {},
+      config: {},
+      runIntake: async (options) => {
+        assert.equal(
+          options.decisionDir,
+          undefined,
+          'runner must not override the intake decision dir'
+        );
+        ({ runFiles } = require('../intake').composeOrchestrateCommand({
+          root,
+          runDir,
+          baseSha: 'a'.repeat(40),
+          repoRoot: root,
+          decisionDir: options.decisionDir,
+        }));
+        return { status: 'failed', exitCode: 1, reason: 'dry intake routing check', runFiles };
+      },
+    }
+  );
+  assert.equal(runFiles.decisionDir, path.join(runDir, 'decisions'));
 });
