@@ -5,6 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 const sourcesApi = require('./sources');
+const { atomicRenameSync } = require('./atomic-rename');
 
 const BACKOFF_MS = [30 * 60e3, 2 * 60 * 60e3, 6 * 60 * 60e3, 24 * 60 * 60e3];
 
@@ -42,11 +43,12 @@ function loadStore(file, options) {
   }
 }
 
-function saveStore(file, store) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
+function saveStore(file, store, options) {
+  const fsApi = (options && options.fs) || fs;
+  fsApi.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = file + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(store, null, 2) + '\n');
-  fs.renameSync(tmp, file);
+  fsApi.writeFileSync(tmp, JSON.stringify(store, null, 2) + '\n');
+  atomicRenameSync(tmp, file, Object.assign({}, options, { fs: fsApi }));
 }
 
 function dueAt(record, now) {
@@ -942,6 +944,7 @@ async function runDueCli(options) {
 }
 
 module.exports = {
+  atomicRenameSync,
   probeCooldown,
   rememberProbe,
   normalizeModelId,

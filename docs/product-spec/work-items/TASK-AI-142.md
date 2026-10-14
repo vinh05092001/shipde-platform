@@ -391,6 +391,10 @@ The Controller can offer the Hermes reasoning session a GPT model through the op
 - **Config & invocation:** `writeProvidersConfig` writes `config.yaml` with `model.default` and `model.provider: "openai-codex"`, avoiding dummy endpoints or env keys. `buildHermesArgv` passes `--provider openai-codex`.
 - **Probing & failover:** HTTP preflight probing is skipped for `openai-codex`, while probe or runtime failure (such as HTTP 429 rate limit) falls through to the next candidate.
 
+### H3 atomic write Windows rename retry on transient lock (2026-10-14)
+
+On Windows, atomic file updates via temporary file write and rename fail when another process briefly holds the target file lock, raising `EPERM`, `EBUSY`, or `EACCES`. A shared `atomicRenameSync` helper (`tools/ai-brain/atomic-rename.js`) now retries transient rename failures up to 10 attempts with synchronous backoff (50ms growing to ~500ms via `Atomics.wait` on a `SharedArrayBuffer`). When all attempts fail, the leftover `.tmp` file is unlinked and the original error is rethrown. Wired into `route-health.js` (`model-route-health.json`), `cli.js` (`writeJsonFile`, rollback, csv), `goals.js` (`writeJsonAtomic`, register csv), `approval-registry.js`, and `hermes-session.js`. Focused verification: `node --test tools/ai-brain/test/task-ai-142*.test.js` passed 165/165.
+
 ### H3 live: skip exhausted accounts (2026-10-14)
 
 The Hermes reasoning probe spent its whole budget on one exhausted account (31 requesty routes returning 402). Once an account reports credit, quota, auth or entitlement failure, the remaining candidates on that account are skipped without spending an attempt. Verification: task-ai-142 tests 159/159; live probe dry-run chooses a live route.

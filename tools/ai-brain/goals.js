@@ -20,6 +20,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
+const { atomicRenameSync } = require('./atomic-rename');
 
 const planAdapter = require('./plan-adapter');
 const planner = require('./planner');
@@ -100,11 +101,12 @@ function isPidAlive(pid) {
   }
 }
 
-function writeJsonAtomic(filePath, data) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+function writeJsonAtomic(filePath, data, options) {
+  const fsApi = (options && options.fs) || fs;
+  fsApi.mkdirSync(path.dirname(filePath), { recursive: true });
   const tmp = filePath + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2) + '\n', 'utf8');
-  fs.renameSync(tmp, filePath);
+  fsApi.writeFileSync(tmp, JSON.stringify(data, null, 2) + '\n', 'utf8');
+  atomicRenameSync(tmp, filePath, Object.assign({}, options, { fs: fsApi }));
 }
 
 function readJsonSafe(filePath) {
@@ -527,7 +529,7 @@ function appendRegisterRows(registerPath, newRows) {
   }
   const tmp = registerPath + '.tmp';
   fs.writeFileSync(tmp, content, 'utf8');
-  fs.renameSync(tmp, registerPath);
+  atomicRenameSync(tmp, registerPath);
 }
 
 /**

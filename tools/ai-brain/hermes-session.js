@@ -17,6 +17,7 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
+const { atomicRenameSync } = require('./atomic-rename');
 
 function defaultSpawn(cmd, argv, spawnOpts) {
   return new Promise((resolve, reject) => {
@@ -352,14 +353,7 @@ function saveSession(session, options, deps) {
   const tempPath = path.join(dir, `.session.${process.pid}.${Date.now()}.${nonce}.tmp`);
 
   fsApi.writeFileSync(tempPath, JSON.stringify(record, null, 2), 'utf8');
-  try {
-    fsApi.renameSync(tempPath, targetPath);
-  } catch (renameErr) {
-    try {
-      if (fsApi.existsSync(tempPath)) fsApi.unlinkSync(tempPath);
-    } catch {}
-    throw renameErr;
-  }
+  atomicRenameSync(tempPath, targetPath, { fs: fsApi });
   return record;
 }
 
