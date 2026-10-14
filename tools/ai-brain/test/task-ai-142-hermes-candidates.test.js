@@ -10,6 +10,225 @@ const candidatesApi = require('../candidates');
 const cliApi = require('../cli');
 const hermesSessionApi = require('../hermes-session');
 const harnessApi = require('../harness');
+const healthApi = require('../route-health');
+
+test('TASK-AI-142 H3: ranked probe admission includes missing health, never failed or credential-less routes', () => {
+  const registry = {
+    sources: [
+      {
+        id: 'fixture-router',
+        kind: 'router',
+        endpoint: 'https://fixture.example/v1',
+        credential: { type: 'env', name: 'FIXTURE_KEY' },
+        modelMeta: Object.fromEntries(
+          ['gh/strong', 'gh/dead', 'gh/weak'].map((model) => [model, { contextWindow: 64000 }])
+        ),
+      },
+      {
+        id: 'no-credential',
+        kind: 'model-source',
+        endpoint: 'https://none.example/v1',
+        modelMeta: { 'gh/credential-less': { contextWindow: 64000 } },
+      },
+      {
+        id: 'direct',
+        kind: 'model-source',
+        endpoint: 'https://direct.example/v1',
+        credential: { type: 'api-key', env: 'DIRECT_KEY' },
+        modelMeta: { 'gh/dead-direct': { contextWindow: 64000 } },
+      },
+      {
+        id: 'parked',
+        kind: 'model-source',
+        endpoint: 'https://parked.example/v1',
+        status: 'parked',
+        credential: { type: 'env', name: 'PARKED_KEY' },
+        modelMeta: { 'gh/parked': { contextWindow: 64000 } },
+      },
+    ],
+    dispatch: { providers: { 'fixture-router': { harness: 'opencode' } } },
+  };
+  const accounts = [{ id: 'account', provider: 'fixture-router', enabled: true }];
+  const discovery = {
+    candidates: ['gh/strong', 'gh/dead', 'gh/weak'].map((modelId) => ({
+      gateway: 'fixture-router',
+      upstream: 'gh',
+      accountId: 'account',
+      modelId,
+    })),
+  };
+  const routeHealth = { version: 1, paths: {}, events: [] };
+  healthApi.recordResult(
+    routeHealth,
+    'gh/dead',
+    { id: 'fixture-router', accountId: 'account' },
+    { ok: false, status: 401 },
+    1000
+  );
+  healthApi.recordResult(
+    routeHealth,
+    'gh/weak',
+    { id: 'fixture-router', accountId: 'account' },
+    { ok: true },
+    1000
+  );
+  healthApi.recordResult(
+    routeHealth,
+    'gh/dead-direct',
+    { id: 'direct', accountId: 'direct' },
+    { ok: false, status: 401 },
+    1000
+  );
+  const options = {
+    harness: 'hermes',
+    routeHealth,
+    requireRouteHealth: true,
+    offerings: [],
+    registryAccounts: [],
+  };
+  const strict = cliApi.assembleForDispatch(discovery, accounts, registry, options);
+  assert.ok(!strict.some((c) => c.modelId === 'gh/strong'));
+  const admitted = cliApi.assembleForDispatch(discovery, accounts, registry, {
+    ...options,
+    allowMissingRouteHealth: true,
+  });
+  assert.ok(admitted.some((c) => c.harness === 'hermes' && c.modelId === 'gh/strong'));
+  assert.ok(admitted.some((c) => c.modelId === 'gh/weak'));
+  assert.ok(!admitted.some((c) => /dead|credential-less|parked/.test(c.modelId)));
+  const gateway = candidatesApi.gatewayAccountCandidates({
+    ...options,
+    registry,
+    accounts,
+    catalogue: discovery.candidates,
+    allowMissingRouteHealth: true,
+  });
+  assert.deepEqual(gateway.map((c) => c.modelId).sort(), ['gh/strong', 'gh/weak']);
+  const selection = hermesSessionApi.selectReasoningCandidate(
+    { skipDecisionLog: true },
+    {
+      registry,
+      accountList: accounts,
+      readDiscoveryCatalogue: () => discovery,
+      routeHealth,
+      evidenceData: {},
+      priorsData: { ranking: [] },
+      assembleForDispatch: (d, a, r, o) =>
+        cliApi.assembleForDispatch(d, a, r, { ...o, offerings: [], registryAccounts: [] }),
+      rankForProfile: (rows) => {
+        assert.ok(rows.some((c) => c.modelId === 'gh/strong'));
+        assert.ok(!rows.some((c) => c.modelId === 'gh/dead'));
+        const ranked = rows
+          .filter((c) => c.accountId === 'account')
+          .sort(
+            (a, b) => (a.modelId === 'gh/strong' ? -1 : 1) - (b.modelId === 'gh/strong' ? -1 : 1)
+          );
+        return { chosen: ranked[0].candidateKey, ranking: ranked, top3: ranked, rejected: [] };
+      },
+    }
+  );
+  assert.equal(selection.candidate.modelId, 'gh/strong');
+  assert.equal(
+    Object.keys(routeHealth.paths).length,
+    3,
+    'admission must not fabricate health records'
+  );
+});
+
+test('TASK-AI-142 H3: original harnesses converging on one Hermes key are ranked once', () => {
+  const base = {
+    accessPath: 'https://fixture.example/v1',
+    gateway: 'fixture',
+    upstream: 'gh',
+    accountId: 'account',
+    quotaScope: 'account',
+    modelId: 'gh/strong',
+    contextWindow: 64000,
+  };
+  let count;
+  hermesSessionApi.selectReasoningCandidate(
+    { skipDecisionLog: true },
+    {
+      candidateList: [
+        { ...base, harness: 'opencode' },
+        { ...base, harness: 'hermes' },
+      ],
+      registry: { sources: [] },
+      accountList: [],
+      evidenceData: {},
+      priorsData: { ranking: [] },
+      routeHealth: { version: 1, paths: {}, events: [] },
+      rankForProfile: (rows) => {
+        count = rows.length;
+        return { chosen: rows[0].candidateKey, ranking: rows, top3: rows, rejected: [] };
+      },
+    }
+  );
+  assert.equal(count, 1);
+});
+
+test('TASK-AI-142 H3: production assembly probes an untested stronger model before a healthy weaker model', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-ranked-probe-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const models = ['cbai/deepseek-v4.1-flash', 'cl/openai/gpt-6-astra'];
+  const registry = {
+    sources: [
+      {
+        id: 'fixture',
+        kind: 'router',
+        endpoint: 'https://fixture.example/v1',
+        credential: { type: 'api-key', env: 'FIXTURE_KEY' },
+        modelMeta: Object.fromEntries(models.map((id) => [id, { contextWindow: 128000 }])),
+      },
+    ],
+  };
+  const accounts = [{ id: 'account', provider: 'fixture', enabled: true }];
+  const routeHealth = { version: 1, paths: {}, events: [] };
+  healthApi.recordResult(
+    routeHealth,
+    models[0],
+    { id: 'fixture', accountId: 'account' },
+    { ok: true },
+    Date.now()
+  );
+  const probed = [];
+  const spawned = [];
+  const deps = {
+    registry,
+    accountList: accounts,
+    readDiscoveryCatalogue: () => ({ candidates: [] }),
+    routeHealth,
+    evidenceData: {},
+    priorsData: require('../priors').loadPriors(),
+    assembleForDispatch: (d, a, r, o) =>
+      cliApi.assembleForDispatch(d, a, r, { ...o, offerings: [], registryAccounts: [] }),
+    probe: async (c) => {
+      probed.push(c.modelId);
+      return c.modelId === models[1]
+        ? { ok: false, status: 404, body: 'model not found' }
+        : { ok: true, status: 200 };
+    },
+    spawn: async (_command, args) => {
+      spawned.push(args);
+      return { exitCode: 0 };
+    },
+  };
+  const options = {
+    rootDir: root,
+    skipDecisionLog: true,
+    env: { FIXTURE_KEY: 'test-fixture-value' },
+  };
+  const selected = hermesSessionApi.selectReasoningCandidate(options, deps);
+  assert.equal(selected.candidate.modelId, models[1]);
+  assert.ok(selected.ranking[0].score > selected.ranking[1].score);
+  await hermesSessionApi.launchHermesSession(options, deps);
+  assert.deepEqual(probed, [models[1], models[0]]);
+  assert.equal(spawned.length, 1, 'failed untested model must never launch');
+  assert.ok(spawned[0].includes(models[0]));
+  assert.equal(
+    healthApi.getPathRecord(routeHealth, models[1], { id: 'fixture', accountId: 'account' }).status,
+    'UNSUPPORTED'
+  );
+});
 
 test('TASK-AI-142 H3: router source with modelMeta yields hermes candidates with contextWindow from that source', () => {
   const fakeRegistry = {

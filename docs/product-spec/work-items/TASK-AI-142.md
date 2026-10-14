@@ -348,3 +348,35 @@ Verification: sequential TASK-AI-141 199/199, TASK-AI-142 136/136, TASK-AI-64 12
 ### H3 live: Hermes brain context refresh (2026-10-14)
 
 Hermes could not start: the only reasoning candidate was refused with CONTEXT_WINDOW_UNVERIFIED because the source registry modelMeta and the discovery catalogue were stale, although 9router /v1/models reports the context window. chatCommand now refreshes provider-reported context windows from each OpenAI-compatible source before selecting the reasoning model; unknown context windows are still refused. Verification: context-window, hermes-candidates and hermes-session tests 73/73; live dry-run selects a verified candidate.
+
+### H3 Hermes context and computed ranking repair (2026-10-14)
+
+The shared /models parser now reads provider-reported capabilities.contextWindow as well as context_length, covering 9router and other compatible sources without inventing metadata. Hermes supplies actual QUALITY_FIRST weights and requests normalization over known score dimensions; unknown dimensions previously diluted quality before quota penalties clamped scores to zero. Existing writer/reviewer scoring stays compatible. No context, quality or benchmark values were added.
+
+Verification: TASK-AI-142 146/146 versus origin/main 142/142; full brain suite 2,095 pass, 1 skip, 0 fail (2,096 total), versus origin/main 2,091 pass, 1 skip, 0 fail (2,092 total), SHA 4e971e84. Four regressions cover context refresh, Hermes weights, unknown dimensions and strongest healthy reasoning selection using existing priors. Prettier, ESLint and git diff --check pass. Node 24 rejects the directory-form test command, so the full suite uses tools/ai-brain/test/*.test.js.
+
+Default local dry selection has three Mercury candidates with unknown quality, all score 0. A second dry selection reads the hermes-live discovery/evidence/source metadata snapshot: 9router/cbai/deepseek-v4.1-flash ranks first at 19 (quality 34), followed by Mercury 2, 2.5 and Decide at 0. Only four candidates qualify here; no fifth rank or interactive live success is claimed. Runtime data is excluded; no push or merge.
+
+### H3 ranked admission for unprobed Hermes routes (2026-10-14)
+
+`requireRouteHealth` excluded advertised, verified-context models without a prior path/account probe record. Hermes now admits only missing records for ranked live probing, retains known failure and cooldown exclusions (including direct sources without a gateway), and deduplicates converged seven-part Hermes keys. The existing probe loop still requires a successful probe before launch; no health, credential, context or quality evidence is fabricated.
+
+Read-only dry selection at 09:05 local uses `hermes-live` discovery/evidence/health plus provider `/models` context refreshed in memory. Diagnostic funnel (health gates separated from assembly for counting): discovered 1,906 -> assembled route/account rows 7,427 -> HTTP endpoint/Hermes identity 5,505 before / 4,728 after deduplication -> verified context 3,401 / 2,665 -> route health 4 / 2,665 -> cooldown 4 / 2,665 -> ranked 4 / 2,664 (one quality-floor rejection). Original production health-filtered assembly was 153 rows, yielding DeepSeek Flash 19 and three Mercury models 0; the new top ten score 78 (seven routes) and 76 (three routes). Baseten/AMD have no verified model metadata in this snapshot; discovered-only external source copies remain non-serving. These are probe candidates, not newly proven live routes.
+
+Verification: TASK-AI-142 plus candidates 201/201; related assembly tests 37/37; the same groups on `origin/main` 4e971e84 pass 194/194 and 37/37. Three added regressions fail on main and pass here: missing-record admission with failed/credential-less routes excluded, identity deduplication, and real ranking probing an untested stronger model before a healthy weaker route while never launching its failed probe. Changed-file Prettier, JavaScript no-undef and `git diff --check` pass. No full-suite run, live Hermes launch, push or merge.
+
+
+### H3 model-first Hermes ranking and exhaustive top-model route probing (2026-10-14)
+
+Hermes reasoning selection operates in two levels:
+1. Rank distinct models by model score using canonical model identity (`priors.normaliseModelId`). Route availability, price, latency and quota do not dilute or inflate model score.
+2. Within the top model, order its routes: live/known-good (available within 24h) first, followed by known cost, known latency, quota headroom, stored candidate binding, and deterministic candidate key.
+
+Operator order (no route cap): the per-model route limit is removed entirely. For the top-ranked model, Hermes probes ALL of its eligible routes in priority order, skipping only routes already proven unusable (active cooldown, missing credentials, recent failure records). Fixed attempt counts and global budgets do not cut a model short before all routes of the current top model are tried. Only when every route of that model has failed does selection advance to the next distinct model. Decision records and dry-run JSON report the top ten distinct models with scores and route counts, plus the chosen route with its selection reason.
+
+Focused verification: `node --test "tools/ai-brain/test/task-ai-142*.test.js"` passed 152/152. Running the same tests against `origin/main` (SHA 6edb33ef baseline) resulted in 7 failures covering model-first routing, credit/quota route exhaustiveness, and attempt budgets across multi-route models. Prettier, JavaScript no-undef and `git diff --check` pass.
+
+Offline/snapshot dry-run on `hermes-live` (10 distinct models with scores, route count for top model, and chosen route):
+- Top 10 models: gpt-6-astra (93), muse-spark-1-3 (91), qwen3-8-max (85), claude-opus-5-5 (50), claude-sonnet-5-5 (49), grok-4-6 (49), glm-5-3 (48), muse-wonder (48), gpt-5-6-sol (47), kimi-k3 (47).
+- Chosen model: `gpt-6-astra` (score 93, 4 routes in active snapshot; 2 routes in stored session snapshot).
+- Chosen route: `hermes::http://127.0.0.1:20128/v1::9router::cl::9router::9router::cl/openai/gpt-6-astra` (reason: highest ranked eligible model; routes ordered by live/known-good, known cost, known latency, quota, stored binding, then candidate key). Stored session binding selects `hermes::https://router.requesty.ai/v1::rqsty::azure::rqsty::rqsty::azure/gpt-6-astra@eastus2`. Live usability remains unverified.

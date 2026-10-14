@@ -1340,6 +1340,7 @@ function gatewayAccountCandidates(opts) {
         const available = routeRecord
           ? health.isEligible(routeHealth, modelId, routePath, routeNow)
           : Boolean(
+              o.allowMissingRouteHealth === true ||
               (probeOk && probeOk(modelId, gateway)) ||
               (o.probeEvidence && o.probeEvidence(modelId, routePath)) ||
               (!o.requireRouteHealth &&
