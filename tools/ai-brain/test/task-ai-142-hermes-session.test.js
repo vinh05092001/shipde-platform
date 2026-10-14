@@ -3201,7 +3201,216 @@ test('TASK-AI-142: deadline preserves a completed live success while higher rout
     assert.equal(result.candidateKey, candidates[2].candidateKey);
     const healthFile = path.join(root, 'tools', 'ai-brain', 'data', 'model-route-health.json');
     const store = JSON.parse(fs.readFileSync(healthFile, 'utf8'));
-    assert.ok(Object.values(store.paths).every((route) => route.status === 'AVAILABLE'));
+    const paths = Object.values(store.paths);
+    assert.ok(paths.length > 0, 'live success must be recorded in store.paths');
+    assert.ok(paths.every((route) => route.status === 'AVAILABLE'));
+    assert.ok(paths.some((route) => route.candidateKey === candidates[2].candidateKey));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('TASK-AI-142: openai-codex candidate skips HTTP preflight without mock probe and does not fabricate route health', async () => {
+  const root = fixtureRoot('hermes-codex-skip-');
+  try {
+    const codexCand = sampleCandidate({
+      harness: 'hermes',
+      accessPath: 'openai-codex',
+      gateway: 'openai-codex',
+      provider: 'openai-codex',
+      sourceId: 'openai-codex',
+      source: 'openai-codex',
+      upstream: 'openai',
+      accountId: 'codex',
+      quotaScope: 'codex-chatgpt',
+      modelId: 'gpt-6.1-sol',
+      quality: 95,
+      contextWindow: 128000,
+      capabilities: { contextWindow: 128000 },
+      candidateKey: 'hermes::openai-codex::openai-codex::openai::codex::codex-chatgpt::gpt-6.1-sol',
+    });
+
+    const spawned = [];
+    const healthFile = path.join(root, 'tools', 'ai-brain', 'data', 'model-route-health.json');
+    const result = await launchHermesSession(
+      { rootDir: root, probe: true, skipDecisionLog: true, qualityFloor: 0 },
+      {
+        candidates: [codexCand],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+        routeHealthFile: healthFile,
+        spawn: async (_cmd, args) => {
+          spawned.push(args);
+          return { exitCode: 0 };
+        },
+      }
+    );
+
+    assert.equal(result.candidateKey, codexCand.candidateKey);
+    assert.equal(spawned.length, 1);
+    assert.ok(spawned[0].includes('openai-codex'));
+    if (fs.existsSync(healthFile)) {
+      const store = JSON.parse(fs.readFileSync(healthFile, 'utf8'));
+      const paths = Object.values(store.paths || {});
+      assert.ok(!paths.some((p) => p.candidateKey === codexCand.candidateKey));
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('TASK-AI-142: unprobed routes remain eligible upon runtime failure and runtime reselection keeps named session', async () => {
+  const root = fixtureRoot('hermes-runtime-reselect-');
+  try {
+    const cand1 = sampleCandidate({
+      upstream: 'provider-1',
+      modelId: 'provider-1/model-top',
+      quality: 95,
+      evidence: [],
+    });
+    cand1._preRewriteKey = 'legacy::provider-1::pre-cand1';
+
+    const cand2 = sampleCandidate({
+      gateway: 'rqsty',
+      upstream: 'provider-2',
+      accessPath: 'https://router.requesty.ai/v1',
+      endpoint: 'https://router.requesty.ai/v1',
+      modelId: 'provider-2/model-second',
+      quality: 85,
+      evidence: [],
+    });
+    cand2._preRewriteKey = 'legacy::provider-2::pre-cand2';
+
+    let spawnAttempts = 0;
+    const probed = [];
+    const launched = [];
+    const sessions = [];
+
+    const result = await launchHermesSession(
+      { rootDir: root, probe: true, skipDecisionLog: true, qualityFloor: 0 },
+      {
+        candidates: [cand1, cand2],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+        probe: async (c) => {
+          probed.push(c.candidateKey);
+          return { ok: true, status: 200 };
+        },
+        spawn: async (_cmd, args) => {
+          spawnAttempts += 1;
+          const sessionIdx = args.indexOf('--continue');
+          const sid = sessionIdx >= 0 ? args[sessionIdx + 1] : null;
+          sessions.push(sid);
+          if (spawnAttempts === 1) {
+            launched.push(cand1.candidateKey);
+            return {
+              exitCode: 1,
+              stderr: 'HTTP 429 rate limit exceeded',
+              status: 1,
+            };
+          }
+          launched.push(cand2.candidateKey);
+          return { exitCode: 0, status: 0 };
+        },
+      }
+    );
+
+    assert.equal(spawnAttempts, 2);
+    assert.equal(launched[0], cand1.candidateKey);
+    assert.equal(launched[1], cand2.candidateKey);
+    assert.ok(sessions[0], 'Session ID must exist');
+    assert.equal(sessions[0], sessions[1], 'Runtime reselection must keep the named session');
+    assert.equal(result.candidateKey, cand2.candidateKey);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('TASK-AI-142: non-route probe failure does not abort winner selection when a higher-ranked probe succeeds', async () => {
+  const root = fixtureRoot('hermes-non-route-race-');
+  try {
+    const candHigh = sampleCandidate({
+      upstream: 'prov-high',
+      modelId: 'prov-high/top-model',
+      quality: 95,
+      evidence: [],
+    });
+    const candLow = sampleCandidate({
+      upstream: 'prov-low',
+      modelId: 'prov-low/lower-model',
+      quality: 80,
+      evidence: [],
+    });
+
+    const result = await launchHermesSession(
+      { rootDir: root, probe: true, skipDecisionLog: true, qualityFloor: 0 },
+      {
+        candidates: [candHigh, candLow],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+        probe: async (c) => {
+          if (c.candidateKey === candLow.candidateKey) {
+            return { ok: false, status: 400, body: 'Bad Request' };
+          }
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          return { ok: true, status: 200 };
+        },
+        spawn: async () => ({ exitCode: 0 }),
+      }
+    );
+
+    assert.equal(result.candidateKey, candHigh.candidateKey);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('TASK-AI-142: 503 with upstream_credential or upstream_monthly_limit suppresses sibling gateway+upstream routes', async () => {
+  const root = fixtureRoot('hermes-prov-causes-');
+  try {
+    const cand1 = sampleCandidate({
+      gateway: '9router',
+      upstream: 'provider-x',
+      modelId: 'provider-x/model-1',
+      quality: 95,
+      evidence: [],
+    });
+    const cand2 = sampleCandidate({
+      gateway: '9router',
+      upstream: 'provider-x',
+      modelId: 'provider-x/model-2',
+      quality: 90,
+      evidence: [],
+    });
+    const cand3 = sampleCandidate({
+      gateway: '9router',
+      upstream: 'provider-y',
+      modelId: 'provider-y/model-3',
+      quality: 80,
+      evidence: [],
+    });
+
+    const probed = [];
+    const result = await launchHermesSession(
+      { rootDir: root, probe: true, skipDecisionLog: true, qualityFloor: 0 },
+      {
+        candidates: [cand1, cand2, cand3],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+        probe: async (c) => {
+          probed.push(c.modelId);
+          if (c.modelId === 'provider-x/model-1') {
+            return { ok: false, status: 503, body: 'failed with upstream_credential error' };
+          }
+          return { ok: true, status: 200 };
+        },
+        spawn: async () => ({ exitCode: 0 }),
+      }
+    );
+
+    // cand2 on provider-x was skipped due to provider-level suppression!
+    assert.ok(!probed.includes('provider-x/model-2'), 'Sibling candidate must be suppressed');
+    assert.equal(result.candidateKey, cand3.candidateKey);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

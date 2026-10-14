@@ -1577,7 +1577,6 @@ async function launchHermesSession(options, deps) {
 
   const forbiddenDomains = [...(opts.forbiddenFailureDomains || [])];
   const excludedCandidates = [...(opts.excludedCandidates || [])];
-  const excludedCandidateSet = new Set(excludedCandidates);
   const excludedModels = new Set();
   const failedAccountKeys = new Map();
   const probeAccountKey = (candidate) =>
@@ -1668,9 +1667,14 @@ async function launchHermesSession(options, deps) {
     const inFlight = new Map();
     const busyAccounts = new Set();
     let winner = null;
-    const refusal = (candidate, reason) => {
-      excludedCandidates.push(candidate.candidateKey);
-      excludedCandidateSet.add(candidate.candidateKey);
+    let firstNonRouteError = null;
+    const refusal = (candidate, reason, { exclude = true } = {}) => {
+      if (exclude) {
+        excludedCandidates.push(candidate.candidateKey);
+        if (candidate._preRewriteKey) {
+          excludedCandidates.push(candidate._preRewriteKey);
+        }
+      }
       probeReasons.push(`${candidate.candidateKey}: ${reason}`);
       const logError = recordProbeRefusal(candidate, reason);
       if (logError) probeReasons.push(logError.message);
@@ -1689,6 +1693,16 @@ async function launchHermesSession(options, deps) {
         return false;
       }
       if (opts.dryRun && !opts.probe) return true;
+      const isCodexProvider =
+        (candidate &&
+          (candidate.provider === 'openai-codex' ||
+            candidate.gateway === 'openai-codex' ||
+            candidate.sourceId === 'openai-codex' ||
+            candidate.source === 'openai-codex')) ||
+        config.providerName === 'openai-codex';
+      if (isCodexProvider && !d.probe && !opts.probeFn) {
+        return true;
+      }
       const controller = new AbortController();
       const remainingMs = probeDeadline - Date.now();
       const budgetLimited = remainingMs < probeTimeoutMs;
@@ -1729,11 +1743,11 @@ async function launchHermesSession(options, deps) {
       const status = Number(result?.status) || 0;
       const body = String(result?.body || 'Probe failed');
       // Explicit provider codes take precedence over generic 503 capacity classification.
-      const providerCause = body
-        .match(
-          /\b(upstream_credit_exhausted|account_quota_exhausted|quota_exhausted|account_auth_failed|upstream_entitlement)\b/i
-        )?.[1]
-        ?.toLowerCase();
+      const providerCausesRegex = new RegExp(
+        `\\b(${[...PROVIDER_LEVEL_FAILURE_CAUSES].join('|')})\\b`,
+        'i'
+      );
+      const providerCause = body.match(providerCausesRegex)?.[1]?.toLowerCase();
       const classification = classifier.classifyFailure({
         httpStatus: status,
         exitCode: status === 0 ? 1 : 0,
@@ -1768,8 +1782,10 @@ async function launchHermesSession(options, deps) {
       }
       refusal(candidate, `HERMES_ROUTE_PROBE_FAILED ${cause} status=${status || 'timeout'}`);
       if (isProviderLevelFailure(cause) || status === 402) {
-        failedAccountKeys.set(probeAccountKey(candidate), cause);
-        deadProviders.set(getCandidateProviderKey(candidate), { cause });
+        const acc = probeAccountKey(candidate);
+        if (acc) failedAccountKeys.set(acc, cause);
+        const provKey = getCandidateProviderKey(candidate);
+        if (provKey) deadProviders.set(provKey, { cause });
       }
       return false;
     };
@@ -1780,12 +1796,13 @@ async function launchHermesSession(options, deps) {
           const route = ordered[index];
           if (outcomes.has(route.candidateKey) || inFlight.has(route.candidateKey)) continue;
           const account = probeAccountKey(route);
-          const dead = deadProviders.get(getCandidateProviderKey(route));
+          const provKey = getCandidateProviderKey(route);
+          const dead = provKey ? deadProviders.get(provKey) : null;
           const cooldown = health.probeCooldown(route, { ...opts, routeHealth, routeHealthFile });
-          if (dead || failedAccountKeys.has(account) || cooldown) {
+          if (dead || (account && failedAccountKeys.has(account)) || cooldown) {
             const reason = dead
-              ? `HERMES_ROUTE_PROBE_SKIPPED provider ${getCandidateProviderKey(route)} failed with ${dead.cause}`
-              : failedAccountKeys.has(account)
+              ? `HERMES_ROUTE_PROBE_SKIPPED provider ${provKey} failed with ${dead.cause}`
+              : account && failedAccountKeys.has(account)
                 ? `HERMES_PROBE_SKIPPED_ACCOUNT_EXHAUSTED: ${account} failed with ${failedAccountKeys.get(account)}`
                 : cooldown;
             refusal(route, reason);
@@ -1800,7 +1817,9 @@ async function launchHermesSession(options, deps) {
           )
             continue;
           busyAccounts.add(account);
-          const promise = runProbe(route).then((ok) => ({ route, account, ok }));
+          const promise = runProbe(route)
+            .then((ok) => ({ route, account, ok }))
+            .catch((error) => ({ route, account, ok: false, error }));
           inFlight.set(route.candidateKey, promise);
         }
         bestSuccess = ordered.findIndex((c) => outcomes.get(c.candidateKey) === true);
@@ -1821,6 +1840,10 @@ async function launchHermesSession(options, deps) {
         inFlight.delete(finished.route.candidateKey);
         busyAccounts.delete(finished.account);
         outcomes.set(finished.route.candidateKey, finished.ok);
+        if (finished.error) {
+          firstNonRouteError ||= finished.error;
+          refusal(finished.route, finished.error.message || String(finished.error));
+        }
       }
     } finally {
       // Settle started work, including on fatal errors, before another launch can bind config.
@@ -1828,20 +1851,33 @@ async function launchHermesSession(options, deps) {
       for (const result of remaining) {
         if (result.status === 'fulfilled') {
           outcomes.set(result.value.route.candidateKey, result.value.ok);
+          if (result.value.error) {
+            firstNonRouteError ||= result.value.error;
+            refusal(result.value.route, result.value.error.message || String(result.value.error));
+          }
         }
+      }
+    }
+    if (!winner) {
+      const bestSuccess = ordered.findIndex((c) => outcomes.get(c.candidateKey) === true);
+      if (bestSuccess >= 0) {
+        winner = ordered[bestSuccess];
       }
     }
     for (const route of ordered) {
       if (!outcomes.has(route.candidateKey)) {
+        const higherWon = Boolean(winner && Date.now() < probeDeadline);
         refusal(
           route,
-          winner && Date.now() < probeDeadline
+          higherWon
             ? 'HERMES_ROUTE_PROBE_SKIPPED higher-ranked route succeeded'
-            : 'HERMES_ROUTE_PROBE_SKIPPED wall-clock budget exhausted'
+            : 'HERMES_ROUTE_PROBE_SKIPPED wall-clock budget exhausted',
+          { exclude: !higherWon }
         );
       }
     }
     if (!winner) {
+      if (firstNonRouteError) throw firstNonRouteError;
       if (Date.now() >= probeDeadline) probeReasons.push('probe wall-clock budget exhausted');
       const error = new Error(`NO_REASONING_CANDIDATE: ${probeReasons.join('; ')}`);
       error.code = 'NO_REASONING_CANDIDATE';
@@ -2080,6 +2116,9 @@ async function launchHermesSession(options, deps) {
 
     // Route/model/quota failure: exclude failed route and reselect
     excludedCandidates.push(candidate.candidateKey);
+    if (candidate._preRewriteKey) {
+      excludedCandidates.push(candidate._preRewriteKey);
+    }
     const runtimeReason = liveRouteFailure
       ? `HERMES_RUNTIME_ROUTE_FAILURE ${liveRouteFailure}`
       : classification.reason || classification.cause;
@@ -2091,6 +2130,10 @@ async function launchHermesSession(options, deps) {
 
     // Reselects on the next iteration with the SAME sessionId
   }
+
+  const err = new Error('HERMES_MAX_RETRIES_EXCEEDED');
+  err.code = 'HERMES_MAX_RETRIES_EXCEEDED';
+  throw err;
 }
 
 /**
