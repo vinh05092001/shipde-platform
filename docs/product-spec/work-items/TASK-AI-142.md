@@ -424,3 +424,15 @@ Operator-authorized extension: priors refresh defaults to the checked-in public 
 Live refresh at 2026-10-14T08:14:57.542Z: scored canonical models 61 -> 544. AA indices: gpt-6-luna 38.1245186869738; mercury-2.5 12.3408453757638; gemini-3.8-flash 40.9262321765904; grok-4.7 46.4465506302286; deepseek-v4.1-flash 39.456167472527; gpt-6-astra 52.673669395513. JSON reports 572 unmatched advertised catalogue IDs; catalogue advertisement is not live-route proof. No invented benchmark values or model probes. Historical snapshot assertions use a frozen fixture so public refresh does not invalidate routing regressions.
 
 Verification: requested prior/TASK-AI-142 tests 176/176; injected fetch covers both payload formats, null scores and schema drift. Prettier and git diff --check pass. No push or merge.
+
+### H3 account-level cooldown on exhaustion (2026-10-14)
+
+Exhausted accounts cool down as a whole across model routes sharing the same account key (`extractAccountKey`). When a Hermes probe encounters `upstream_credit_exhausted`, `quota_exhausted`, `account_auth_failed`, or `upstream_entitlement`, the account is cooled down in `model-route-health.json` (`store.accounts[accountKey]`). Subsequent selections reject candidates on the cooled-down account with `PROBE_COOLDOWN_ACCOUNT: <account> until <timestamp>`, avoiding wasteful probes against exhausted accounts.
+
+### H3 live: writer probe without count caps (2026-10-14)
+
+GOAL-AUTOCLAW-REPOS-1 failed with PROBE_BUDGET_EXHAUSTED because writer probing was capped at 20 attempts and 2 routes per model. Both caps are removed for writers; only the wall-clock budget remains, and candidates on an account that reported a provider-level failure are skipped without probing. Follow-up: the reviewer path still has a 2-route cap (REVIEWER_CANONICAL_MODEL_CAP).
+
+### H3 live: concurrent writer probing (2026-10-14)
+
+After #312 writer routes were still probed one at a time within the 180 s budget. Writer routes are now probed concurrently (up to 8 accounts, reusing the Hermes concurrent probe) before selection; failed routes are recorded with reasons in the intake decisions. A live dry-run with real keys selected live writers.
