@@ -545,7 +545,11 @@ describe('TASK-AI-126', () => {
       const jobJson = JSON.parse(fs.readFileSync(path.join(runsDir, 'agy01', 'job.json'), 'utf8'));
       assert.equal(jobJson.harness, 'agy-pool');
       assert.equal(jobJson.accountId, 'agy01');
-      assert.equal(jobJson.prompt, 'pool prompt');
+      assert.ok(jobJson.prompt.startsWith('pool prompt\n'));
+      assert.equal(jobJson.resultSchema.type, 'object');
+      assert.equal(jobJson.resultSchema.additionalProperties, false);
+      assert.deepEqual(jobJson.resultSchema.properties.candidateKey.enum, [jobJson.candidateKey]);
+      assert.match(jobJson.resultSchema.properties.nonce.enum[0], /^[a-f0-9]{32}$/);
       assert.equal(jobJson.model, 'gemini-3.1-pro-low');
 
       // findings3 P2: this seam check is the fail-on-main instance of AL-R05 —
