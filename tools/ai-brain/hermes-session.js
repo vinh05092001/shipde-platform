@@ -650,6 +650,24 @@ function resolveHermesContextWindow(modelId, options, deps) {
     }
   }
 
+  // 4. Same canonical model on other already-loaded provider catalogues.
+  // Keep the most conservative reported window; priors are not context evidence.
+  const { toPositiveInteger } = require('./source-discovery');
+  const reportedWindows = [];
+  for (const source of (registry && registry.sources) || []) {
+    for (const [id, meta] of Object.entries((source && source.modelMeta) || {})) {
+      if (!canonical || canonicalHermesModelId(id) !== canonical || !meta) continue;
+      const cw =
+        toPositiveInteger(meta.contextWindow) ??
+        toPositiveInteger(meta.capabilities?.contextWindow) ??
+        toPositiveInteger(meta.context_window) ??
+        toPositiveInteger(meta.context_length) ??
+        toPositiveInteger(meta.contextTokens);
+      if (cw !== undefined) reportedWindows.push(cw);
+    }
+  }
+  if (reportedWindows.length) return Math.min(...reportedWindows);
+
   return undefined;
 }
 
@@ -757,14 +775,14 @@ function selectReasoningCandidate(options, deps) {
         d.routeHealthFile ||
         path.join(resolveRootDir(opts, d), 'tools', 'ai-brain', 'data', 'model-route-health.json'),
     });
-    const codexCandidates = assembleOpenAiCodexCandidates(opts, d);
+    const codexCandidates = assembleOpenAiCodexCandidates(opts, { ...d, registry });
     if (codexCandidates.length > 0) {
       poolCandidates = [...poolCandidates, ...codexCandidates];
     }
   }
 
   if (opts.includeOpenAiCodex || d.includeOpenAiCodex) {
-    const codexCandidates = assembleOpenAiCodexCandidates(opts, d);
+    const codexCandidates = assembleOpenAiCodexCandidates(opts, { ...d, registry });
     for (const cc of codexCandidates) {
       if (!poolCandidates.some((c) => c.candidateKey === cc.candidateKey)) {
         poolCandidates.push(cc);

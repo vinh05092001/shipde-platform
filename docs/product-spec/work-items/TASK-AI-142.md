@@ -390,3 +390,9 @@ The Controller can offer the Hermes reasoning session a GPT model through the op
 - **Quota sharing:** Marked with `quotaGroup: "codex-chatgpt"` to reflect shared quota with the Codex CLI lane in candidate objects, ranking outputs, and decision records.
 - **Config & invocation:** `writeProvidersConfig` writes `config.yaml` with `model.default` and `model.provider: "openai-codex"`, avoiding dummy endpoints or env keys. `buildHermesArgv` passes `--provider openai-codex`.
 - **Probing & failover:** HTTP preflight probing is skipped for `openai-codex`, while probe or runtime failure (such as HTTP 429 rate limit) falls through to the next candidate.
+
+### H3 openai-codex provider context fallback (2026-10-14)
+
+When Hermes catalogue/cache metadata is absent, openai-codex now resolves context from the same canonical model in already-loaded registry modelMeta, including refreshed provider /models metadata. Multiple valid reports use the minimum; missing or invalid evidence still yields CONTEXT_WINDOW_UNVERIFIED. Priors never supply context. Focused coverage checks canonical aliases, refreshed metadata, conservative minimum, invalid values and refusal without same-model evidence.
+
+Verification: TASK-AI-142 tests 160/160; changed-file Prettier and git diff --check pass. chatCommand({reselect:true,dryRun:true}) with hermes-live discovery and refreshed provider metadata returns dry_run: hermes::openai-codex::openai-codex::openai::codex::codex-chatgpt::gpt-6-luna is ranked (route rank 420, score 0), contextWindow 1050000, with no rejection. The chosen route is 9router/cl/openai/gpt-6-astra. Runtime output is isolated under a temporary root; no interactive Hermes launch is claimed.

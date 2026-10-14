@@ -12,6 +12,79 @@ const hermesSessionApi = require('../hermes-session');
 const harnessApi = require('../harness');
 const healthApi = require('../route-health');
 
+test('TASK-AI-142 H3: codex context fallback uses minimum same-model provider metadata and refuses missing evidence', async () => {
+  const homeDir = path.join(os.tmpdir(), 'codex-provider-context-test');
+  const authPath = path.join(homeDir, '.codex', 'auth.json');
+  const configPath = path.join(homeDir, '.codex', 'config.toml');
+  const deps = {
+    fs: {
+      existsSync: (p) => p === authPath || p === configPath,
+      readFileSync: (p) => {
+        assert.equal(p, configPath, 'auth tokens must never be read');
+        return 'model = "gpt-6-luna"';
+      },
+    },
+    registry: {
+      sources: [
+        { id: '9router', endpoint: 'http://fixture/v1', modelMeta: {} },
+        { id: 'other', modelMeta: { 'openai/gpt-6-luna': { contextWindow: 900000 } } },
+      ],
+    },
+    fetchModels: async () => ({
+      ok: true,
+      json: async () => ({
+        data: [
+          { id: 'gh/gpt-6-luna', capabilities: { contextWindow: 1050000 } },
+          { id: 'cl/openai/gpt-6-luna', capabilities: { contextWindow: 1000000 } },
+          { id: 'gh/gpt-6-astra', capabilities: { contextWindow: 32000 } },
+        ],
+      }),
+    }),
+  };
+  const options = { homeDir, skipDecisionLog: true, includeOpenAiCodex: true };
+  const refreshed = await hermesSessionApi.refreshReasoningContext(options, deps);
+  const candidates = hermesSessionApi.assembleOpenAiCodexCandidates(options, refreshed);
+  assert.equal(candidates[0].contextWindow, 900000);
+  assert.equal(candidates[0].capabilities.contextWindow, 900000);
+  assert.equal(
+    hermesSessionApi.resolveHermesContextWindow('gpt-6-luna', options, {
+      ...refreshed,
+      registry: { sources: [refreshed.registry.sources[0]] },
+    }),
+    1000000
+  );
+  const selection = hermesSessionApi.selectReasoningCandidate(options, {
+    ...refreshed,
+    candidateList: [],
+    priorsData: { ranking: [{ model: 'gpt-6-luna', score: 85 }] },
+    routeHealth: { version: 1, paths: {}, events: [] },
+  });
+  assert.equal(selection.candidate.provider, 'openai-codex');
+  assert.equal(selection.candidate.contextWindow, 900000);
+
+  const missing = hermesSessionApi.selectReasoningCandidate(options, {
+    ...deps,
+    candidateList: [],
+    registry: {
+      sources: [
+        {
+          id: 'other',
+          modelMeta: {
+            'gh/gpt-6-astra': { contextWindow: 1050000 },
+            'gh/gpt-6-luna': { contextWindow: true },
+            'cl/openai/gpt-6-luna': { contextWindow: -1 },
+            'openai/gpt-6-luna': { contextWindow: 128000.5 },
+          },
+        },
+      ],
+    },
+    priorsData: { ranking: [{ model: 'gpt-6-luna', score: 85, contextWindow: 1050000 }] },
+    routeHealth: { version: 1, paths: {}, events: [] },
+  });
+  assert.equal(missing.chosen, null);
+  assert.match(missing.reason, /CONTEXT_WINDOW_UNVERIFIED/);
+});
+
 test('TASK-AI-142 H3: ranked probe admission includes missing health, never failed or credential-less routes', () => {
   const registry = {
     sources: [
@@ -941,6 +1014,8 @@ test('TASK-AI-142 H3: default wiring with temp HOME/USERPROFILE includes openai-
       reselect: true,
       dryRun: true,
       skipDecisionLog: true,
+      // Keep this presence assertion independent of live metadata and the top-ten cutoff.
+      hermesModelCatalogue: { 'gpt-6.1-sol': { contextWindow: 16000 } },
     });
     const serialized = JSON.stringify(resultWrap);
     assert.ok(
