@@ -339,9 +339,7 @@ Verification (2026-10-14): sequential TASK-AI-141 199/199, TASK-AI-142 140/140, 
 
 ## H3 decision log size
 
-
 Selection logs retain the full chosenCandidate, the existing chosen identity, top ten ranked candidates and score breakdown summaries, and rejection totals by reasonCode with ten examples. Full runtime routing arrays remain available for fallback. Daily logs roll at 50 MiB into date.N.jsonl; readers consume all parts in numeric order. `node tools/ai-brain/cli.js decisions compact --dir <dir>` incrementally writes capped copies named `<source>.compact-<timestamp>.jsonl`, preserving originals. Copies are excluded from daily history until the operator explicitly replaces originals; malformed input fails rather than silently dropping evidence. No live data is modified by this change.
-
 
 Verification: sequential TASK-AI-141 199/199, TASK-AI-142 136/136, TASK-AI-64 129/129, dispatch-wiring 7/7 and decisions 28/28 passed. Additional candidate/routing regressions passed 74/74. Changed JavaScript passes ESLint no-undef; changed files pass Prettier and git diff --check. Live logs remain untouched and runtime data is excluded from commits.
 
@@ -364,7 +362,6 @@ Default local dry selection has three Mercury candidates with unknown quality, a
 Read-only dry selection at 09:05 local uses `hermes-live` discovery/evidence/health plus provider `/models` context refreshed in memory. Diagnostic funnel (health gates separated from assembly for counting): discovered 1,906 -> assembled route/account rows 7,427 -> HTTP endpoint/Hermes identity 5,505 before / 4,728 after deduplication -> verified context 3,401 / 2,665 -> route health 4 / 2,665 -> cooldown 4 / 2,665 -> ranked 4 / 2,664 (one quality-floor rejection). Original production health-filtered assembly was 153 rows, yielding DeepSeek Flash 19 and three Mercury models 0; the new top ten score 78 (seven routes) and 76 (three routes). Baseten/AMD have no verified model metadata in this snapshot; discovered-only external source copies remain non-serving. These are probe candidates, not newly proven live routes.
 
 Verification: TASK-AI-142 plus candidates 201/201; related assembly tests 37/37; the same groups on `origin/main` 4e971e84 pass 194/194 and 37/37. Three added regressions fail on main and pass here: missing-record admission with failed/credential-less routes excluded, identity deduplication, and real ranking probing an untested stronger model before a healthy weaker route while never launching its failed probe. Changed-file Prettier, JavaScript no-undef and `git diff --check` pass. No full-suite run, live Hermes launch, push or merge.
-
 
 ### H3 model-first Hermes ranking and exhaustive top-model route probing (2026-10-14)
 
@@ -434,3 +431,15 @@ GOAL-AUTOCLAW-REPOS-1 failed with PROBE_BUDGET_EXHAUSTED because writer probing 
 ### H3 live: concurrent writer probing (2026-10-14)
 
 After #312 writer routes were still probed one at a time within the 180 s budget. Writer routes are now probed concurrently (up to 8 accounts, reusing the Hermes concurrent probe) before selection; failed routes are recorded with reasons in the intake decisions. A live dry-run with real keys selected live writers.
+
+### H3 live: writer probes known-live routes first (2026-10-15)
+
+On 14/10 22:49 the concurrent pre-probe spent the 180 s budget on dead routes and live accounts were never reached; a failed launch of the probe winner ended NO_ALTERNATE_FAILURE_DOMAIN. Probe order now puts routes with a fresh ok route-health record first, then unprobed, then failed (rank kept inside each group; scores unchanged), and a failed launch continues to the next live route. The cause of the 22:49 ag/gemini-3.8-flash launch failure was not found in the stored artifacts.
+
+### H3 live: stale isolation verdict refreshed automatically (2026-10-15)
+
+A verdict older than 24h no longer waits for a human: intake and the isolation launcher run Test-WorkerIsolation.ps1 once, re-read and re-validate the verdict, and block with the original error plus exit code and stderr only if it is still stale, missing or not closed. Decisions ISOLATION_VERDICT_REFRESHED / _REFRESH_FAILED. Follow-up P2: a verifier that writes a valid verdict but exits non-zero still blocks.
+
+### H3 live: Controller refuses to abandon an active goal run (2026-10-15)
+
+Hermes stopped item runs that were still working (six abandoned item-1 runs on 13-14/10). goal stop now refuses with GOAL_RUN_ACTIVE while the run lock is live or the checkpoint shows activity within SHIPDE_GOAL_STALE_MIN (default 90 min); --operator bypasses; each refusal is a decision; the Hermes skill states the rule.

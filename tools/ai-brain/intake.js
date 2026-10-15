@@ -1001,11 +1001,36 @@ function runIsolatedReviewed(options, deps) {
 }
 
 /**
- * Read-only isolation pre-flight: the verdict must be fresh (24h) and the
+ * Isolation pre-flight: the verdict must be fresh (24h) and the
  * pinned base must be contained in local main. This never changes an ACL or a
- * policy; a stale verdict refuses and names the refresh command.
+ * policy; stale or missing evidence is refreshed once before refusing.
  */
-function assertIsolationFresh({ verdictPath, now, stat, baseSha, isAncestorOf, root }) {
+function assertIsolationFresh(options) {
+  const { verdictPath, now, stat, root, readFile } = options;
+  return require('./isolation-refresh').refreshIsolationVerdict({
+    cwd: root,
+    runner: options.refreshRunner,
+    timeoutMs: options.refreshTimeoutMs,
+    decisionDir: options.decisionDir,
+    validate: () => assertIsolationFreshWithoutRefresh(options),
+    validateRefreshed: () =>
+      assertIsolationClosed({
+        verdictPath,
+        now: Math.max(now, Date.now()),
+        stat,
+        readFile: readFile || ((p) => fs.readFileSync(p, 'utf8')),
+      }),
+  });
+}
+
+function assertIsolationFreshWithoutRefresh({
+  verdictPath,
+  now,
+  stat,
+  baseSha,
+  isAncestorOf,
+  root,
+}) {
   const p = verdictPath;
   let st;
   try {
@@ -1277,6 +1302,10 @@ async function runIntake(opts, deps) {
       verdictPath: d.verdictPath || defaultVerdictPath(),
       now,
       stat: d.stat || ((p) => fs.statSync(p)),
+      refreshRunner: d.refreshRunner,
+      refreshTimeoutMs: d.refreshTimeoutMs,
+      decisionDir: targetDecisionDir,
+      readFile: d.readFile,
       baseSha,
       isAncestorOf: d.isAncestorOf || ((sha, ref) => factsApi.isAncestorOf(sha, ref, root)),
       root,

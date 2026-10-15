@@ -141,6 +141,24 @@ function probeIdentity(c) {
   };
 }
 
+// Stable partition of ranked routes; health changes probe order, never scores.
+function orderProbeRoutes(ranked, options) {
+  const o = options || {};
+  const store = o.routeHealth || loadStore(probeMemoryFile(o), { allowMissing: true });
+  const now = o.now ?? Date.now();
+  const live = [],
+    unknown = [],
+    failed = [];
+  for (const candidate of ranked) {
+    const identity = probeIdentity(candidate);
+    const record = getPathRecord(store, identity.model, identity.route);
+    if (record && record.status === 'AVAILABLE' && !dueAt(record, now)) live.push(candidate);
+    else if (!record || record.status === 'AVAILABLE') unknown.push(candidate);
+    else failed.push(candidate);
+  }
+  return [...live, ...unknown, ...failed];
+}
+
 function extractProvider(modelId) {
   const stripped = String(modelId || '')
     .trim()
@@ -1069,6 +1087,7 @@ module.exports = {
   atomicRenameSync,
   probeCooldown,
   rememberProbe,
+  orderProbeRoutes,
   normalizeModelId,
   classifyFailure,
   loadStore,

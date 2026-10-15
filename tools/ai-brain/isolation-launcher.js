@@ -1068,69 +1068,79 @@ function getIsolatedLauncher() {
     // non-Windows, so production there resolves to a relative path, exactly as
     // before this opt was added.
     const verdictPath = isolationVerdictPath(opts);
-    if (!fs.existsSync(verdictPath)) {
-      throw new Error('ISOLATION_VERDICT_MISSING: Cannot find ' + verdictPath);
-    }
-    const stat = fs.statSync(verdictPath);
-    if (Date.now() - stat.mtimeMs > 24 * 60 * 60 * 1000) {
-      throw new Error('ISOLATION_VERDICT_STALE: ' + verdictPath + ' is older than 24h');
-    }
-    const verdictText = fs.readFileSync(verdictPath, 'utf8');
-    const verdictData = JSON.parse(
-      verdictText.charCodeAt(0) === 0xfeff ? verdictText.slice(1) : verdictText
-    );
-    if (verdictData.verdict !== 'CLOSED') {
-      throw new Error('ISOLATION_VERDICT_NOT_CLOSED: Last verdict was ' + verdictData.verdict);
-    }
-
     const hostCwd = opts.cwd || process.cwd();
     const jobName = path.basename(hostCwd) || 'default';
     const workerRoot = opts.workerRoot || workerRootFor(hostCwd);
+    let currentSid;
+    const verdictData = require('./isolation-refresh').refreshIsolationVerdict({
+      cwd: hostCwd,
+      runner: opts.refreshRunner,
+      timeoutMs: opts.refreshTimeoutMs,
+      decisionDir: opts.decisionDir,
+      validate: () => {
+        if (!fs.existsSync(verdictPath)) {
+          throw new Error('ISOLATION_VERDICT_MISSING: Cannot find ' + verdictPath);
+        }
+        const stat = fs.statSync(verdictPath);
+        if (Date.now() - stat.mtimeMs > 24 * 60 * 60 * 1000) {
+          throw new Error('ISOLATION_VERDICT_STALE: ' + verdictPath + ' is older than 24h');
+        }
+        const verdictText = fs.readFileSync(verdictPath, 'utf8');
+        const verdictData = JSON.parse(
+          verdictText.charCodeAt(0) === 0xfeff ? verdictText.slice(1) : verdictText
+        );
+        if (verdictData.verdict !== 'CLOSED') {
+          throw new Error('ISOLATION_VERDICT_NOT_CLOSED: Last verdict was ' + verdictData.verdict);
+        }
 
-    // P5: bind the FULL host worktree path, not just the worker-root leaf, so
-    // two jobs sharing a directory leaf cannot share one attestation.
-    if (
-      !verdictData.worktree ||
-      String(verdictData.worktree).toLowerCase() !== String(hostCwd).toLowerCase()
-    ) {
-      throw new Error(
-        'ISOLATION_VERDICT_INVALID: worktree mismatch or missing: ' +
-          verdictData.worktree +
-          ' vs ' +
-          hostCwd
-      );
-    }
-    if (!verdictData.timestamp || new Date(verdictData.timestamp).getTime() > Date.now()) {
-      throw new Error('ISOLATION_VERDICT_INVALID: timestamp in future or missing');
-    }
-    const policyHash = getFolderHash(path.join(hostCwd, 'scripts/ai/isolation'));
-    if (!verdictData.policyHash || verdictData.policyHash !== policyHash) {
-      throw new Error('ISOLATION_VERDICT_INVALID: policyHash mismatch or missing');
-    }
-    const getWorkerSid =
-      typeof opts.getWorkerSid === 'function' ? opts.getWorkerSid : queryWorkerSid;
-    const currentSid = getWorkerSid();
-    if (!verdictData.sid || verdictData.sid !== currentSid) {
-      throw new Error('ISOLATION_VERDICT_INVALID: SID mismatch or missing');
-    }
-    // P5: per-check granularity — the verdict must carry every isolation
-    // check's outcome and each one must be PASS, not just the summary verdict.
-    if (!verdictData.details || typeof verdictData.details !== 'object') {
-      throw new Error('ISOLATION_VERDICT_INVALID: details missing');
-    }
-    for (const [key, value] of Object.entries(verdictData.details)) {
-      if (!/^PASS/.test(String(value))) {
-        throw new Error('ISOLATION_VERDICT_INVALID: check ' + key + ' = ' + value);
-      }
-    }
-    // P5: re-verify the boundary is still physically present right now.
-    const verifyBoundary =
-      typeof opts.verifyBoundary === 'function' ? opts.verifyBoundary : defaultVerifyBoundary;
-    if (!verifyBoundary(currentSid, WORKER_USERNAME, opts)) {
-      throw new Error(
-        'ISOLATION_BOUNDARY_MISSING: firewall rules or operator-profile Deny ACL absent; rerun Set-WorkerFirewall.ps1/Set-WorkerAcl.ps1'
-      );
-    }
+        // P5: bind the FULL host worktree path, not just the worker-root leaf, so
+        // two jobs sharing a directory leaf cannot share one attestation.
+        if (
+          !verdictData.worktree ||
+          String(verdictData.worktree).toLowerCase() !== String(hostCwd).toLowerCase()
+        ) {
+          throw new Error(
+            'ISOLATION_VERDICT_INVALID: worktree mismatch or missing: ' +
+              verdictData.worktree +
+              ' vs ' +
+              hostCwd
+          );
+        }
+        if (!verdictData.timestamp || new Date(verdictData.timestamp).getTime() > Date.now()) {
+          throw new Error('ISOLATION_VERDICT_INVALID: timestamp in future or missing');
+        }
+        const policyHash = getFolderHash(path.join(hostCwd, 'scripts/ai/isolation'));
+        if (!verdictData.policyHash || verdictData.policyHash !== policyHash) {
+          throw new Error('ISOLATION_VERDICT_INVALID: policyHash mismatch or missing');
+        }
+        const getWorkerSid =
+          typeof opts.getWorkerSid === 'function' ? opts.getWorkerSid : queryWorkerSid;
+        currentSid = getWorkerSid();
+        if (!verdictData.sid || verdictData.sid !== currentSid) {
+          throw new Error('ISOLATION_VERDICT_INVALID: SID mismatch or missing');
+        }
+        // P5: per-check granularity — the verdict must carry every isolation
+        // check's outcome and each one must be PASS, not just the summary verdict.
+        if (!verdictData.details || typeof verdictData.details !== 'object') {
+          throw new Error('ISOLATION_VERDICT_INVALID: details missing');
+        }
+        for (const [key, value] of Object.entries(verdictData.details)) {
+          if (!/^PASS/.test(String(value))) {
+            throw new Error('ISOLATION_VERDICT_INVALID: check ' + key + ' = ' + value);
+          }
+        }
+        // P5: re-verify the boundary is still physically present right now.
+        const verifyBoundary =
+          typeof opts.verifyBoundary === 'function' ? opts.verifyBoundary : defaultVerifyBoundary;
+        if (!verifyBoundary(currentSid, WORKER_USERNAME, opts)) {
+          throw new Error(
+            'ISOLATION_BOUNDARY_MISSING: firewall rules or operator-profile Deny ACL absent; rerun Set-WorkerFirewall.ps1/Set-WorkerAcl.ps1'
+          );
+        }
+
+        return verdictData;
+      },
+    });
 
     // Provision worktree using a clean clone checked out at the caller's
     // pinned base SHA (AI-64-R15). The operator worktree's current HEAD is not

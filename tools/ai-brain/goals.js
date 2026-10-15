@@ -109,10 +109,10 @@ function writeJsonAtomic(filePath, data, options) {
   atomicRenameSync(tmp, filePath, Object.assign({}, options, { fs: fsApi }));
 }
 
-function readJsonSafe(filePath) {
+function readJsonSafe(filePath, fsApi = fs) {
   try {
-    if (!fs.existsSync(filePath)) return null;
-    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    if (!fsApi.existsSync(filePath)) return null;
+    return JSON.parse(fsApi.readFileSync(filePath, 'utf8'));
   } catch {
     return null;
   }
@@ -1152,6 +1152,7 @@ function statusGoal(goalId, options, deps) {
 function stopGoal(goalId, options, deps) {
   const opts = options || {};
   const d = deps || {};
+  const fsApi = d.fs || fs;
   const rootDir = resolveRootDir(opts);
   const goalsDir = resolveGoalsDir(rootDir, opts);
 
@@ -1167,7 +1168,7 @@ function stopGoal(goalId, options, deps) {
   }
 
   const goalFile = resolveGoalFile(goalsDir, goalId);
-  const goal = readJsonSafe(goalFile);
+  const goal = readJsonSafe(goalFile, fsApi);
   if (!goal) {
     return {
       error: 'GOAL_NOT_FOUND',
@@ -1178,6 +1179,45 @@ function stopGoal(goalId, options, deps) {
 
   const lockFile = resolveLockFile(goalsDir, goalId);
   const checkAlive = d.isPidAlive || isPidAlive;
+  const now = d.now ? Number(new Date(d.now())) : Date.now();
+  const env = d.env || process.env;
+  // Operator inactivity policy, configurable rather than an attempt/probe cap.
+  const configuredStaleMin = Number(env.SHIPDE_GOAL_STALE_MIN);
+  const staleMin =
+    configuredStaleMin > 0 && Number.isFinite(configuredStaleMin) ? configuredStaleMin : 90;
+  const staleMs = staleMin * 60 * 1000;
+  const lock = readJsonSafe(lockFile, fsApi);
+  const checkpointFiles = [path.join(resolveGoalDir(goalsDir, goalId), 'checkpoint.json')];
+  const intakeDir =
+    opts.intakeDir || d.intakeDir || path.join(rootDir, 'tools', 'ai-brain', 'data', 'intake');
+  if (fsApi.existsSync(intakeDir)) {
+    for (const entry of fsApi.readdirSync(intakeDir)) {
+      checkpointFiles.push(path.join(intakeDir, entry, 'checkpoint.json'));
+    }
+  }
+  const recentActivity = checkpointFiles.some((file, index) => {
+    const checkpoint = readJsonSafe(file, fsApi);
+    return Object.entries((checkpoint && checkpoint.liveSteps) || {}).some(([itemId, step]) => {
+      if (index !== 0 && !(goal.items || []).includes(itemId)) return false;
+      const updatedAt = Date.parse(step && step.updatedAt);
+      return Number.isFinite(updatedAt) && now - updatedAt < staleMs;
+    });
+  });
+  if (opts.operator !== true && ((lock && checkAlive(lock.pid)) || recentActivity)) {
+    recordGoalDecision(
+      { goalId, stage: decisions.Stage.REFUSED, reasonCode: 'GOAL_RUN_ACTIVE' },
+      {
+        dir: opts.decisionDir || opts['decision-dir'] || d.decisionDir || decisions.DEFAULT_DIR,
+        now,
+      }
+    );
+    return {
+      goalId,
+      error: 'GOAL_RUN_ACTIVE',
+      refusal: true,
+      message: 'Goal run is active; report its status and wait.',
+    };
+  }
   const killFn =
     d.killPid ||
     ((p) => {
@@ -1188,11 +1228,11 @@ function stopGoal(goalId, options, deps) {
 
   // Write stop file
   const stopFilePath = resolveStopFile(goalsDir, goalId);
-  fs.writeFileSync(stopFilePath, 'STOP\n', 'utf8');
+  fsApi.writeFileSync(stopFilePath, 'STOP\n', 'utf8');
 
   let stoppedPid = null;
-  if (fs.existsSync(lockFile)) {
-    const lock = readJsonSafe(lockFile);
+  if (fsApi.existsSync(lockFile)) {
+    const lock = readJsonSafe(lockFile, fsApi);
     if (lock && lock.pid) {
       stoppedPid = lock.pid;
       if (checkAlive(lock.pid)) {
@@ -1200,13 +1240,13 @@ function stopGoal(goalId, options, deps) {
       }
     }
     try {
-      fs.unlinkSync(lockFile);
+      fsApi.unlinkSync(lockFile);
     } catch {}
   }
 
   goal.status = 'STOPPED';
   goal.updatedAt = (d.now ? new Date(d.now()) : new Date()).toISOString();
-  writeJsonAtomic(goalFile, goal);
+  writeJsonAtomic(goalFile, goal, { fs: fsApi });
 
   return {
     status: 'STOPPED',
