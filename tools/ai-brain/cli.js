@@ -1712,7 +1712,7 @@ async function dispatchProfileCommand(args, deps) {
   }
   const optsWithEvidence = Object.assign({}, deps, {
     evidenceData,
-    routeHealthFile: (deps && deps.routeHealthFile) || args['route-health'] || undefined,
+    routeHealthFile: args['route-health'] || (deps && deps.routeHealthFile) || undefined,
     accounts,
     discoveryDataDir: (deps && deps.discoveryDataDir) || args['discovery-dir'] || undefined,
     fakeRunsDir:
@@ -1855,10 +1855,11 @@ function dispatchCommand(args, deps = {}) {
 
   if (deps && deps.refreshRoutes === true && !Array.isArray(deps.candidates)) {
     const routeHealthApi = require('./route-health');
+    // Same order as orchestrate and next: args, then deps, then root, then default.
     const healthFile =
+      (args && (args['route-health'] || args.routeHealthFile)) ||
       deps.routeHealthFile ||
       deps['route-health'] ||
-      (args && (args['route-health'] || args.routeHealthFile)) ||
       (args && args.root
         ? path.join(args.root, 'tools', 'ai-brain', 'data', 'model-route-health.json')
         : null) ||

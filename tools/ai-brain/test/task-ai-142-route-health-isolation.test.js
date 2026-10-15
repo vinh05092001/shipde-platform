@@ -308,3 +308,26 @@ describe('TASK-AI-142: Route health isolation and default store immutability', (
     assert.equal(fs.statSync(DEFAULT_HEALTH_PATH).mtimeMs, initialMtimeMs);
   });
 });
+
+test('dispatchCommand: an explicit args health file wins over deps', async (t) => {
+  const cli = require('../cli');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rh-order-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const argsFile = path.join(dir, 'args.json');
+  const depsFile = path.join(dir, 'deps.json');
+  const seen = [];
+  const rh = require('../route-health');
+  t.mock.method(rh, 'loadStore', (file) => {
+    seen.push(path.resolve(file));
+    throw new Error('stop after resolution');
+  });
+  await Promise.resolve()
+    .then(() =>
+      cli.dispatchCommand(
+        { 'route-health': argsFile },
+        { refreshRoutes: true, routeHealthFile: depsFile, registry: { sources: [] } }
+      )
+    )
+    .catch(() => {});
+  assert.equal(seen[0], path.resolve(argsFile));
+});
