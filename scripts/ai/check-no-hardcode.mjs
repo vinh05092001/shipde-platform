@@ -233,12 +233,23 @@ function getNumericValue(node) {
   return null;
 }
 
-export function scanFile(filePath) {
+export function scanFile(filePath, options = {}) {
   const normFile = normalizePath(filePath);
-  const fullPath = path.isAbsolute(filePath) ? filePath : path.join(REPO_ROOT, filePath);
-  if (!fs.existsSync(fullPath)) throw new Error(`Cannot read target file: ${normFile}`);
-
-  const content = fs.readFileSync(fullPath, 'utf8');
+  let content = options.content;
+  if (typeof content !== 'string') {
+    if (options.rev !== undefined && options.rev !== null) {
+      const gitRef = options.rev === '' ? `:${normFile}` : `${options.rev}:${normFile}`;
+      try {
+        content = git(['show', gitRef]);
+      } catch (err) {
+        throw new Error(`Cannot read target file from git (${gitRef}): ${err.message}`);
+      }
+    } else {
+      const fullPath = path.isAbsolute(filePath) ? filePath : path.join(REPO_ROOT, filePath);
+      if (!fs.existsSync(fullPath)) throw new Error(`Cannot read target file: ${normFile}`);
+      content = fs.readFileSync(fullPath, 'utf8');
+    }
+  }
   const lines = content.split('\n');
   let ast;
   try {
@@ -501,10 +512,13 @@ export function getTargetFiles(baseDir = path.join(REPO_ROOT, 'tools', 'ai-brain
   return result;
 }
 
-export function scanFiles(fileList) {
+export function scanFiles(fileList, options = {}) {
   const all = [];
   for (const f of fileList) {
-    const v = scanFile(f);
+    const v =
+      typeof f === 'object' && f !== null && f.file
+        ? scanFile(f.file, f)
+        : scanFile(f, options);
     all.push(...v);
   }
   return all;
@@ -608,7 +622,7 @@ function getChangedFiles(mode) {
   return git(
     mode === 'staged'
       ? ['diff', '--cached', '--name-only', '--diff-filter=ACMR']
-      : ['diff', '--name-only', '--diff-filter=ACMR', base]
+      : ['diff', '--name-only', '--diff-filter=ACMR', base, 'HEAD']
   )
     .split('\n')
     .filter(Boolean);
@@ -635,7 +649,7 @@ function checkBaseBaseline(baseline, baselinePath) {
   if (!git(['ls-tree', ref, '--', relative])) {
     if (
       git(['ls-tree', base, '--', relative]) ||
-      !git(['diff', '--name-only', '--diff-filter=A', base, '--', relative])
+      !git(['diff', '--name-only', '--diff-filter=A', base, 'HEAD', '--', relative])
     )
       throw new Error('Cannot read base baseline: file is not new in this PR: ' + relative);
     validateBaseline(baseline);
@@ -662,11 +676,18 @@ export async function runCli(argv = process.argv.slice(2)) {
     allowlistPath = path.resolve(process.cwd(), argv[aIndex + 1]);
   }
 
+  const rIndex = argv.indexOf('--rev');
+  let scanRev = null;
+  if (rIndex !== -1 && argv[rIndex + 1]) {
+    scanRev = argv[rIndex + 1];
+  }
+
   const explicitFiles = argv.filter(
     (arg) =>
       !arg.startsWith('--') &&
       (bIndex === -1 || arg !== argv[bIndex + 1]) &&
-      (aIndex === -1 || arg !== argv[aIndex + 1])
+      (aIndex === -1 || arg !== argv[aIndex + 1]) &&
+      (rIndex === -1 || arg !== argv[rIndex + 1])
   );
 
   let filesToScan = [];
@@ -676,8 +697,10 @@ export async function runCli(argv = process.argv.slice(2)) {
     filesToScan = explicitFiles;
   } else if (isStaged) {
     filesToScan = getChangedFiles('staged').filter(isTargetFile);
+    if (scanRev === null) scanRev = '';
   } else {
     filesToScan = getChangedFiles('default').filter(isTargetFile);
+    if (scanRev === null) scanRev = 'HEAD';
   }
 
   const allowlist = loadAllowlist(allowlistPath);
@@ -697,7 +720,7 @@ export async function runCli(argv = process.argv.slice(2)) {
 
   checkBaseBaseline(baseline, baselinePath);
 
-  const scannedViolations = scanFiles(filesToScan);
+  const scannedViolations = scanFiles(filesToScan, scanRev !== null ? { rev: scanRev } : {});
   const result = checkViolations(scannedViolations, allowlist, baseline);
 
   // In --all mode, also verify total violations count does not exceed baseline total

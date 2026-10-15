@@ -401,3 +401,35 @@ test('TASK-AI-142: missing baseline not added in this PR fails closed', () =>
     assert.equal(out.status, 1);
     assert.match(out.stderr, /Cannot read baseline/);
   }));
+
+test('TASK-AI-142: pre-push ignores uncommitted working tree hardcode when commit is clean', () =>
+  withGuardRepo(({ git, write, cli }) => {
+    git('checkout', '-b', 'feature-clean');
+    write('tools/ai-brain/clean.js', 'export const answer = process.env.ANSWER;');
+    git('add', 'tools/ai-brain/clean.js');
+    git('-c', 'core.hooksPath=disabled-hooks', 'commit', '-m', 'clean commit');
+
+    // Dirty working tree with hardcode
+    write('tools/ai-brain/clean.js', 'export const answer = "gpt-4o";');
+    write('tools/ai-brain/uncommitted-dirty.js', 'const quality = 99;');
+
+    const out = cli();
+    assert.equal(out.status, 0, out.stderr);
+    assert.match(out.stdout, /PASS/);
+  }));
+
+test('TASK-AI-142: pre-push blocks commit with hardcode even when working tree is cleaned up', () =>
+  withGuardRepo(({ git, write, cli }) => {
+    git('checkout', '-b', 'feature-dirty');
+    write('tools/ai-brain/dirty.js', 'export const model = "gpt-4o";');
+    git('add', 'tools/ai-brain/dirty.js');
+    git('-c', 'core.hooksPath=disabled-hooks', 'commit', '-m', 'commit with hardcode');
+
+    // Cleaned working tree (uncommitted)
+    write('tools/ai-brain/dirty.js', 'export const model = process.env.MODEL;');
+
+    const out = cli();
+    assert.equal(out.status, 1);
+    assert.match(out.stderr, /No-hardcode guard failed/);
+    assert.match(out.stderr, /gpt-4o/);
+  }));
