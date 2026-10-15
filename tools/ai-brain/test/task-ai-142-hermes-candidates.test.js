@@ -1208,7 +1208,7 @@ test('TASK-AI-142 H3: cross-source context borrow applies only to openai-codex c
       registry: fakeRegistry,
       hermesModelCatalogue: { 'shared/model-z': { contextWindow: 65536 } },
     }),
-    undefined
+    65536
   );
   fakeRegistry.sources[0].modelMeta['shared/model-z'] = { contextWindow: 32768 };
   assert.equal(
@@ -1218,6 +1218,22 @@ test('TASK-AI-142 H3: cross-source context borrow applies only to openai-codex c
     32768
   );
   delete fakeRegistry.sources[0].modelMeta['shared/model-z'];
+  assert.equal(
+    hermesSessionApi.resolveHermesContextWindow('shared/model-z', sharedFlags, {
+      registry: fakeRegistry,
+    }),
+    undefined,
+    'Non-codex candidate must never borrow context from other sources'
+  );
+  assert.equal(
+    hermesSessionApi.resolveHermesContextWindow(
+      'shared/model-z',
+      { candidate: { provider: 'opencode-provider-source-a' } },
+      { registry: fakeRegistry }
+    ),
+    undefined,
+    'Non-codex candidate must never take a context value from another provider source'
+  );
 
   // 2. openai-codex candidate DOES borrow conservative minimum
   const codex = hermesSessionApi.resolveHermesContextWindow(

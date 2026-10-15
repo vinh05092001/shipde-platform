@@ -763,6 +763,9 @@ function resolveHermesContextWindow(modelId, options, deps) {
   const fsApi = d.fs || o.fs || fs;
   const canonical = canonicalHermesModelId(modelId);
   const registry = d.registry || (d.sources || sourcesApi).loadSources(d.sourceOpts);
+
+  // 0. Own source modelMeta (non-codex candidates retain their own producing source context;
+  // openai-codex candidates participate in the cross-source conservative reducer below)
   if (!isCodexContextEligible(o, d)) {
     const candidate = o.candidate || d.candidate;
     const sourceId =
@@ -770,15 +773,29 @@ function resolveHermesContextWindow(modelId, options, deps) {
       o.provider ||
       d.provider;
     const source = ((registry && registry.sources) || []).find((s) => s.id === sourceId);
-    const meta = source && source.modelMeta && source.modelMeta[modelId];
-    const { toPositiveInteger } = require('./source-discovery');
-    return (
-      toPositiveInteger(meta?.contextWindow) ??
-      toPositiveInteger(meta?.capabilities?.contextWindow) ??
-      toPositiveInteger(meta?.context_window) ??
-      toPositiveInteger(meta?.context_length) ??
-      toPositiveInteger(meta?.contextTokens)
-    );
+    let meta =
+      source &&
+      source.modelMeta &&
+      (source.modelMeta[modelId] || (canonical && source.modelMeta[canonical]));
+    if (!meta && source && source.modelMeta && canonical) {
+      for (const [id, m] of Object.entries(source.modelMeta)) {
+        if (id === modelId || canonicalHermesModelId(id) === canonical) {
+          meta = m;
+          break;
+        }
+      }
+    }
+    if (meta) {
+      const { toPositiveInteger } = require('./source-discovery');
+      const cw =
+        toPositiveInteger(typeof meta === 'number' ? meta : undefined) ??
+        toPositiveInteger(meta.contextWindow) ??
+        toPositiveInteger(meta.capabilities?.contextWindow) ??
+        toPositiveInteger(meta.context_window) ??
+        toPositiveInteger(meta.context_length) ??
+        toPositiveInteger(meta.contextTokens);
+      if (cw !== undefined) return cw;
+    }
   }
 
   // 1. Injected hermesModelCatalogue
