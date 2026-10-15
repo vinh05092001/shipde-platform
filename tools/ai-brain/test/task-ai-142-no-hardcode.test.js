@@ -290,7 +290,7 @@ test('TASK-AI-142: unresolvable base exits 1', () =>
   }));
 
 test('TASK-AI-142: appended baseline entry with unchanged total exits 1', () =>
-  withGuardRepo(({ write, cli, baseline }) => {
+  withGuardRepo(({ git, write, cli, baseline }) => {
     write(
       baseline,
       JSON.stringify({
@@ -298,13 +298,16 @@ test('TASK-AI-142: appended baseline entry with unchanged total exits 1', () =>
         violations: [{ file: 'a.js', rule: 'NUMERIC_CAP', matched: 'quality = 3' }],
       })
     );
+    // The guard reads policy from the commit being pushed.
+    git('add', baseline);
+    git('-c', 'core.hooksPath=disabled-hooks', 'commit', '-m', 'baseline change');
     const out = cli();
     assert.equal(out.status, 1);
     assert.match(out.stderr, /total must equal/);
   }));
 
 test('TASK-AI-142: baseline additions fail even with a consistent total', () =>
-  withGuardRepo(({ write, cli, baseline }) => {
+  withGuardRepo(({ git, write, cli, baseline }) => {
     write(
       baseline,
       JSON.stringify({
@@ -312,6 +315,9 @@ test('TASK-AI-142: baseline additions fail even with a consistent total', () =>
         violations: [{ file: 'a.js', rule: 'NUMERIC_CAP', matched: 'quality = 3' }],
       })
     );
+    // The guard reads policy from the commit being pushed.
+    git('add', baseline);
+    git('-c', 'core.hooksPath=disabled-hooks', 'commit', '-m', 'baseline change');
     const out = cli();
     assert.equal(out.status, 1);
     assert.match(out.stderr, /only shrink/);
@@ -432,4 +438,36 @@ test('TASK-AI-142: pre-push blocks commit with hardcode even when working tree i
     assert.equal(out.status, 1);
     assert.match(out.stderr, /No-hardcode guard failed/);
     assert.match(out.stderr, /gpt-4o/);
+  }));
+
+test('TASK-AI-142: an uncommitted allowlist edit cannot exempt a committed violation', () =>
+  withGuardRepo(({ git, write, cli }) => {
+    git('checkout', '-b', 'feature-allowlist');
+    write('tools/ai-brain/exempt.js', 'export const model = "gpt-4o";');
+    git('add', 'tools/ai-brain/exempt.js');
+    git('-c', 'core.hooksPath=disabled-hooks', 'commit', '-m', 'commit with hardcode');
+    write(
+      'scripts/ai/hardcode-allowlist.json',
+      JSON.stringify([
+        { file: 'tools/ai-brain/exempt.js', pattern: 'gpt-4o', reason: 'uncommitted' },
+      ])
+    );
+    const out = cli();
+    assert.equal(out.status, 1, 'policy is read from the scanned commit, not the working tree');
+    assert.match(out.stderr, /gpt-4o/);
+  }));
+
+test('TASK-AI-142: --rev decides the files and content that are scanned', () =>
+  withGuardRepo(({ git, write, cli }) => {
+    git('checkout', '-b', 'feature-rev');
+    write('tools/ai-brain/rev.js', 'export const model = "gpt-4o";');
+    git('add', 'tools/ai-brain/rev.js');
+    git('-c', 'core.hooksPath=disabled-hooks', 'commit', '-m', 'commit with hardcode');
+    const dirty = git('rev-parse', 'HEAD').trim();
+    git('checkout', '-b', 'clean-head', 'main');
+    const out = cli(['--rev', dirty]);
+    assert.equal(out.status, 1, 'a clean HEAD must not hide the revision under check');
+    assert.match(out.stderr, /gpt-4o/);
+    const bad = cli(['--rev', 'no-such-revision']);
+    assert.equal(bad.status, 1, 'an unknown revision fails closed');
   }));

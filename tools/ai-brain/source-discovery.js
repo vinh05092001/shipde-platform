@@ -398,8 +398,9 @@ function discoverSources(options = {}) {
     if (!known) {
       const op = getOperatorEndpoint(name);
       add({
-        id: op ? op.id : idOf(name.replace(/(?:_API_KEY|_TOKEN)(?:_\d+)?$/i, '')),
-        name: op ? op.name : name.replace(/(?:_API_KEY|_TOKEN)(?:_\d+)?$/i, ''),
+        // Keep a numbered suffix: KEY_1 and KEY_2 are separate credentials.
+        id: op ? op.id : idOf(name.replace(/_(?:API_KEY|TOKEN)(_\d+)?$/i, '$1')),
+        name: op ? op.name : name.replace(/_(?:API_KEY|TOKEN)(_\d+)?$/i, '$1'),
         endpoint: op ? op.endpoint : null,
         credential: { type: 'env', name },
       });
