@@ -324,6 +324,33 @@ function failureMessageOf(res) {
   return decisions.scrubText(launchFailureText(res)).trim().slice(0, 300);
 }
 
+// Record actual writer invocations before downstream verification can fail.
+// A checkpoint replay is not a new invocation and must not duplicate this event.
+function recordWriterResult(job, result, kind, logOpts) {
+  const res = result || {};
+  const redact = decisions.createSecretRedactor(process.env);
+  const stderr = redact(launchFailureText(res));
+  return decisions.recordDecision(
+    {
+      stage: 'writer-launch-result',
+      runId: logOpts.runId,
+      workItemId: job.workItemId,
+      chosen: job.candidateKey,
+      kind,
+      model: job.model,
+      harness: job.harness,
+      usageFile: job.usageFile,
+      exitCode: res.exitCode ?? null,
+      timedOut: res.timedOut === true,
+      httpStatus: res.httpStatus ?? null,
+      sessionId: redact(require('./executor').readSessionId(harnessFor(job), job, res).id || ''),
+      stderr: stderr.slice(0, 4096),
+      stderrTruncated: stderr.length > 4096,
+    },
+    logOpts
+  );
+}
+
 function failedDecisionDetail(classification, res) {
   const message = failureMessageOf(res);
   if (classification.scope === 'local' && message) return message;
@@ -3537,7 +3564,12 @@ async function runOrchestration(goal, opts) {
   // happens to sit in.
   const hostCwd =
     o.hostCwd || o.cwd || o.workdir || (o && o.host && o.host.cwd) || (o && o.root) || null;
-  const logOpts = { dir: decisionDir, now, goal: o.goal };
+  const logOpts = {
+    dir: decisionDir,
+    now,
+    goal: o.goal,
+    runId: o.runId || `${now}-${process.pid}`,
+  };
   const checkpointFile =
     o.checkpointFile || (typeof o.checkpoint === 'string' ? o.checkpoint : null);
   const usageDir = o.usageDir || path.join(os.tmpdir(), 'shipde-usage');
@@ -3574,12 +3606,23 @@ async function runOrchestration(goal, opts) {
       : 30 * 60 * 1000;
   log.workerTimeoutMs = o.workerTimeoutMs;
   const budgetConfig = o.tokenBudgets || {};
-  const budgetForItem = (item) => ({
-    ...(budgetConfig.default || {}),
-    ...(budgetConfig.byComplexity?.[item.complexity] || {}),
-    ...(budgetConfig[roleOf(item)] || {}),
-    ...(budgetConfig.byRole?.[roleOf(item)] || {}),
-  });
+  const budgetForItem = (item) => {
+    const limits = [
+      budgetConfig.byComplexity?.[item.complexity],
+      budgetConfig[roleOf(item)],
+      budgetConfig.byRole?.[roleOf(item)],
+    ].filter(Boolean);
+    const budget = Object.assign({}, budgetConfig.default || {}, ...limits);
+    // Defaults fill missing fields. Explicit role and complexity ceilings must
+    // both hold: a larger role allowance must not inflate a small task's cap.
+    for (const field of ['maxTokens', 'maxTurns', 'noProgressMinutes', 'repeatedQuotaFailures']) {
+      const ceilings = limits
+        .map((limit) => Number(limit[field]))
+        .filter((value) => Number.isFinite(value) && value > 0);
+      if (ceilings.length) budget[field] = Math.min(...ceilings);
+    }
+    return budget;
+  };
   const budgetProgressMs =
     Number(
       (o.specs || [])
@@ -4331,6 +4374,30 @@ async function runOrchestration(goal, opts) {
       launch.scope = scope;
     };
 
+    const recordProbeSkip = (candidate, reasonCode) => {
+      // Exclude only in this invocation; no provider failure or cooldown was observed.
+      failedKeys.add(candidateKey(candidate));
+      const reason = 'WRITER_ROUTE_PROBE_SKIPPED ' + reasonCode;
+      decisions.recordDecision(
+        {
+          stage: decisions.Stage.REFUSED,
+          workItemId: item.id,
+          role: roleOf(item),
+          rejected: [{ candidateKey: candidateKey(candidate), reason }],
+          detail: reason,
+        },
+        logOpts
+      );
+      launch.fallbackReason = reason;
+    };
+    const unattemptedProbeReason = (result) => {
+      if (result?.ok === true) return null;
+      const reason = sharedRouteProbe.failureReason(sharedRouteProbe.classifyProbeFailure(result));
+      return ['PROBE_BUDGET_EXHAUSTED', 'PROBE_ROUTE_CONFIGURATION_UNAVAILABLE'].includes(reason)
+        ? reason
+        : null;
+    };
+
     const writerProbeStartedAt = Date.now();
     const exhaustedAccountKeys = new Set();
     const writerProbeResults = new Map();
@@ -4402,6 +4469,11 @@ async function runOrchestration(goal, opts) {
                       : 'Probe route configuration unavailable',
                 };
           writerProbeResults.set(candidateKey(candidate), result);
+          const skippedReason = unattemptedProbeReason(result);
+          if (skippedReason) {
+            recordProbeSkip(candidate, skippedReason);
+            return false;
+          }
           require('./route-health').rememberProbe(candidate, result, o);
           if (result?.ok === true) return true;
           const reasonCode = sharedRouteProbe.failureReason(
@@ -4665,6 +4737,15 @@ async function runOrchestration(goal, opts) {
                       : 'Probe route configuration unavailable',
                 };
         }
+        const skippedReason = unattemptedProbeReason(probeResult);
+        if (skippedReason) {
+          recordProbeSkip(candidate, skippedReason);
+          if (skippedReason === 'PROBE_BUDGET_EXHAUSTED') {
+            blockedReason = 'PROBE_BUDGET_EXHAUSTED: writer route probe budget exhausted';
+            break;
+          }
+          continue;
+        }
         writerProbeResults.set(decision.chosen, probeResult);
         require('./route-health').rememberProbe(candidate, probeResult, o);
         if (!probeResult || probeResult.ok !== true) {
@@ -4708,7 +4789,6 @@ async function runOrchestration(goal, opts) {
           launch.cause = reasonCode;
           if (Date.now() - writerProbeStartedAt >= PROBE_BUDGET_MS) {
             blockedReason = 'PROBE_BUDGET_EXHAUSTED: writer route probe budget exhausted';
-            recordPostSelectFailure(blockedReason, 'PROBE_BUDGET_EXHAUSTED', 'gateway');
             break;
           }
           continue;
@@ -4814,7 +4894,11 @@ async function runOrchestration(goal, opts) {
         if (res && res.failureReason === 'TOKEN_BUDGET_EXCEEDED') {
           res = Object.assign({}, res, { exitCode: 1 });
         }
-        writeUsageReportFromHarnessResult(job, res);
+        try {
+          writeUsageReportFromHarnessResult(job, res);
+        } finally {
+          recordWriterResult(job, res, 'writer', logOpts);
+        }
         if (res && res.budgetWarning === 'TOKEN_BUDGET_UNVERIFIED') {
           decisions.recordDecision(
             {
@@ -5075,7 +5159,11 @@ async function runOrchestration(goal, opts) {
         } catch (err) {
           gateRepairResult = { exitCode: -1, stderr: String((err && err.message) || err) };
         }
-        writeUsageReportFromHarnessResult(repairJob, gateRepairResult);
+        try {
+          writeUsageReportFromHarnessResult(repairJob, gateRepairResult);
+        } finally {
+          recordWriterResult(repairJob, gateRepairResult, 'host-gate-repair', logOpts);
+        }
         if (!gateRepairResult || gateRepairResult.exitCode !== 0) {
           item.hostGateFailures = res.hostGateFailures;
           // The repair refusal cannot erase the successful writer session.
@@ -8020,7 +8108,11 @@ function repairRound(
     } catch (err) {
       res = { exitCode: -1, stdout: '', stderr: String((err && err.message) || err) };
     }
-    writeUsageReportFromHarnessResult(repairJob, res);
+    try {
+      writeUsageReportFromHarnessResult(repairJob, res);
+    } finally {
+      recordWriterResult(repairJob, res, 'review-repair', logOpts);
+    }
     if (!res || res.exitCode !== 0) {
       triedKeySet.add(decision.chosen);
       if (options.triedKeys && options.triedKeys.add) options.triedKeys.add(decision.chosen);
