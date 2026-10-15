@@ -129,6 +129,7 @@ Every Pull Request must contain:
 - Reject an implementation that covers only the happy path or only the screen while the Work Item requires backend, persistence, permission, state or tests.
 - Reject behavior that contradicts the feature's rule, state machine, actor or acceptance scenario even if the code is clean.
 - Reject completion claims based on simulation, hard-coded production behavior or client-only state.
+- Hardcoded model/score/provider data or attempt caps are rejected; data must come from live sources.
 
 ### Carrier integrations
 
@@ -173,3 +174,5 @@ Every Pull Request must contain:
 - Repository and CLI manifest: `docs/product-spec/docs/10-ai-collaboration/REPOSITORY-CLI-MANIFEST.md`
 - Windows setup runbook: `docs/product-spec/docs/10-ai-collaboration/WINDOWS-SETUP-RUNBOOK.md`
 - Safe control scripts: `scripts/ai/README.md`
+
+No production hardcode: scripts/ai/check-no-hardcode.mjs must pass
