@@ -233,12 +233,23 @@ function getNumericValue(node) {
   return null;
 }
 
-export function scanFile(filePath) {
+export function scanFile(filePath, options = {}) {
   const normFile = normalizePath(filePath);
-  const fullPath = path.isAbsolute(filePath) ? filePath : path.join(REPO_ROOT, filePath);
-  if (!fs.existsSync(fullPath)) throw new Error(`Cannot read target file: ${normFile}`);
-
-  const content = fs.readFileSync(fullPath, 'utf8');
+  let content = options.content;
+  if (typeof content !== 'string') {
+    if (options.rev !== undefined && options.rev !== null) {
+      const gitRef = options.rev === '' ? `:${normFile}` : `${options.rev}:${normFile}`;
+      try {
+        content = git(['show', gitRef]);
+      } catch (err) {
+        throw new Error(`Cannot read target file from git (${gitRef}): ${err.message}`);
+      }
+    } else {
+      const fullPath = path.isAbsolute(filePath) ? filePath : path.join(REPO_ROOT, filePath);
+      if (!fs.existsSync(fullPath)) throw new Error(`Cannot read target file: ${normFile}`);
+      content = fs.readFileSync(fullPath, 'utf8');
+    }
+  }
   const lines = content.split('\n');
   let ast;
   try {
@@ -416,10 +427,26 @@ export function scanFile(filePath) {
   return violations;
 }
 
-export function loadAllowlist(allowlistPath = DEFAULT_ALLOWLIST_PATH) {
-  if (!fs.existsSync(allowlistPath)) return [];
+// Policy files (allowlist, baseline) are read from the same revision as the
+// scanned code, so an uncommitted edit cannot exempt a committed violation.
+function readPolicy(filePath, rev) {
+  if (rev === undefined || rev === null) {
+    return fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : null;
+  }
+  const rel = normalizePath(path.relative(REPO_ROOT, filePath));
+  const ref = rev === '' ? ':' + rel : rev + ':' + rel;
   try {
-    const raw = fs.readFileSync(allowlistPath, 'utf8');
+    execFileSync('git', ['cat-file', '-e', ref], { cwd: REPO_ROOT, stdio: 'ignore' });
+  } catch {
+    return null;
+  }
+  return git(['show', ref]);
+}
+
+export function loadAllowlist(allowlistPath = DEFAULT_ALLOWLIST_PATH, rev = null) {
+  const raw = readPolicy(allowlistPath, rev);
+  if (raw === null) return [];
+  try {
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
     for (const entry of parsed) {
@@ -441,10 +468,10 @@ export function loadAllowlist(allowlistPath = DEFAULT_ALLOWLIST_PATH) {
   }
 }
 
-export function loadBaseline(baselinePath = DEFAULT_BASELINE_PATH) {
-  if (!fs.existsSync(baselinePath)) throw new Error(`Cannot read baseline: ${baselinePath}`);
+export function loadBaseline(baselinePath = DEFAULT_BASELINE_PATH, rev = null) {
+  const raw = readPolicy(baselinePath, rev);
+  if (raw === null) throw new Error(`Cannot read baseline: ${baselinePath}`);
   try {
-    const raw = fs.readFileSync(baselinePath, 'utf8');
     const parsed = JSON.parse(raw);
     validateBaseline(parsed);
     const violations = Array.isArray(parsed.violations) ? parsed.violations : [];
@@ -501,10 +528,13 @@ export function getTargetFiles(baseDir = path.join(REPO_ROOT, 'tools', 'ai-brain
   return result;
 }
 
-export function scanFiles(fileList) {
+export function scanFiles(fileList, options = {}) {
   const all = [];
   for (const f of fileList) {
-    const v = scanFile(f);
+    const v =
+      typeof f === 'object' && f !== null && f.file
+        ? scanFile(f.file, f)
+        : scanFile(f, options);
     all.push(...v);
   }
   return all;
@@ -603,12 +633,16 @@ function git(args) {
 function baseRef() {
   return 'origin/' + (process.env.GITHUB_BASE_REF || 'main');
 }
-function getChangedFiles(mode) {
-  const base = git(['merge-base', baseRef(), 'HEAD']);
+function verifyRev(rev) {
+  git(['rev-parse', '--verify', '--quiet', rev + '^{commit}']);
+  return rev;
+}
+function getChangedFiles(mode, head = 'HEAD') {
+  const base = git(['merge-base', baseRef(), head]);
   return git(
     mode === 'staged'
       ? ['diff', '--cached', '--name-only', '--diff-filter=ACMR']
-      : ['diff', '--name-only', '--diff-filter=ACMR', base]
+      : ['diff', '--name-only', '--diff-filter=ACMR', base, head]
   )
     .split('\n')
     .filter(Boolean);
@@ -628,14 +662,14 @@ export function enforceBaselineShrink(baseline, previous) {
     remaining.splice(index, 1);
   }
 }
-function checkBaseBaseline(baseline, baselinePath) {
+function checkBaseBaseline(baseline, baselinePath, head = 'HEAD') {
   const ref = baseRef();
-  const base = git(['merge-base', ref, 'HEAD']);
+  const base = git(['merge-base', ref, head]);
   const relative = normalizePath(baselinePath);
   if (!git(['ls-tree', ref, '--', relative])) {
     if (
       git(['ls-tree', base, '--', relative]) ||
-      !git(['diff', '--name-only', '--diff-filter=A', base, '--', relative])
+      !git(['diff', '--name-only', '--diff-filter=A', base, head, '--', relative])
     )
       throw new Error('Cannot read base baseline: file is not new in this PR: ' + relative);
     validateBaseline(baseline);
@@ -662,13 +696,21 @@ export async function runCli(argv = process.argv.slice(2)) {
     allowlistPath = path.resolve(process.cwd(), argv[aIndex + 1]);
   }
 
+  const rIndex = argv.indexOf('--rev');
+  let scanRev = null;
+  if (rIndex !== -1 && argv[rIndex + 1]) {
+    scanRev = argv[rIndex + 1];
+  }
+
   const explicitFiles = argv.filter(
     (arg) =>
       !arg.startsWith('--') &&
       (bIndex === -1 || arg !== argv[bIndex + 1]) &&
-      (aIndex === -1 || arg !== argv[aIndex + 1])
+      (aIndex === -1 || arg !== argv[aIndex + 1]) &&
+      (rIndex === -1 || arg !== argv[rIndex + 1])
   );
 
+  if (scanRev) verifyRev(scanRev);
   let filesToScan = [];
   if (isAll || isGenerateBaseline) {
     filesToScan = getTargetFiles();
@@ -676,11 +718,13 @@ export async function runCli(argv = process.argv.slice(2)) {
     filesToScan = explicitFiles;
   } else if (isStaged) {
     filesToScan = getChangedFiles('staged').filter(isTargetFile);
+    if (scanRev === null) scanRev = '';
   } else {
-    filesToScan = getChangedFiles('default').filter(isTargetFile);
+    if (scanRev === null) scanRev = 'HEAD';
+    filesToScan = getChangedFiles('default', scanRev).filter(isTargetFile);
   }
 
-  const allowlist = loadAllowlist(allowlistPath);
+  const allowlist = loadAllowlist(allowlistPath, scanRev);
 
   if (isGenerateBaseline) {
     const report = generateBaseline(filesToScan, allowlistPath, baselinePath);
@@ -693,11 +737,11 @@ export async function runCli(argv = process.argv.slice(2)) {
     return 0;
   }
 
-  const baseline = loadBaseline(baselinePath);
+  const baseline = loadBaseline(baselinePath, scanRev);
 
-  checkBaseBaseline(baseline, baselinePath);
+  checkBaseBaseline(baseline, baselinePath, scanRev || 'HEAD');
 
-  const scannedViolations = scanFiles(filesToScan);
+  const scannedViolations = scanFiles(filesToScan, scanRev !== null ? { rev: scanRev } : {});
   const result = checkViolations(scannedViolations, allowlist, baseline);
 
   // In --all mode, also verify total violations count does not exceed baseline total

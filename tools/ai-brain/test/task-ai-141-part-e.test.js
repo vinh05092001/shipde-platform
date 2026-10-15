@@ -250,7 +250,13 @@ test('normal next loop refreshes the default route health store before selection
   );
   const defaultHealthFile = path.join(dir, 'data', 'model-route-health.json');
   const result = await cli.nextCommand(
-    { loop: true, maxIterations: 1, root: dir, 'decision-dir': path.join(dir, 'decisions') },
+    {
+      loop: true,
+      maxIterations: 1,
+      root: dir,
+      'decision-dir': path.join(dir, 'decisions'),
+      'route-health': defaultHealthFile,
+    },
     {
       routeHealthFile: defaultHealthFile,
       probeRoute: async () => {
