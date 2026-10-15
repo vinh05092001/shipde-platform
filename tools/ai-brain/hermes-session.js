@@ -835,19 +835,7 @@ function resolveHermesContextWindow(modelId, options, deps) {
     } catch {}
   }
 
-  // 3. Registry source modelMeta for openai-codex if declared
-  if (registry && Array.isArray(registry.sources)) {
-    const src = registry.sources.find((s) => s && (s.id === 'openai-codex' || s.id === 'codex'));
-    if (src && src.modelMeta) {
-      const m = src.modelMeta[modelId] || src.modelMeta[canonical];
-      if (m) {
-        const cw = Number(m.contextWindow || m.context_window || m.context_length);
-        if (Number.isFinite(cw) && cw > 0) return cw;
-      }
-    }
-  }
-
-  // 4. Same canonical model on other already-loaded provider catalogues.
+  // 3. Same canonical model on registered provider catalogues (codex source included).
   // Allowed ONLY for openai-codex candidates when catalogue/cache metadata is absent.
   // For every other Hermes candidate, a model without window on its producing source stays unverified.
   // Keep the most conservative reported window; priors are not context evidence.
@@ -856,8 +844,12 @@ function resolveHermesContextWindow(modelId, options, deps) {
     const reportedWindows = [];
     for (const source of (registry && registry.sources) || []) {
       for (const [id, meta] of Object.entries((source && source.modelMeta) || {})) {
-        if (!canonical || canonicalHermesModelId(id) !== canonical || !meta) continue;
+        const isSameModel =
+          id === modelId ||
+          (canonical && (id === canonical || canonicalHermesModelId(id) === canonical));
+        if (!isSameModel || !meta) continue;
         const cw =
+          toPositiveInteger(typeof meta === 'number' ? meta : undefined) ??
           toPositiveInteger(meta.contextWindow) ??
           toPositiveInteger(meta.capabilities?.contextWindow) ??
           toPositiveInteger(meta.context_window) ??
