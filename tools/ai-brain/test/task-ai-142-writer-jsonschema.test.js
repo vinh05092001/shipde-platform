@@ -241,3 +241,80 @@ test('Controller caches proof only for the same seven-part route, and refuses ba
   assert.equal(calls, 3);
   assert.equal(rejected.result.rejected[0].reason, 'WRITER_RESULT_CANDIDATE_MISMATCH');
 });
+
+test('a failing pool account is proven once, not once per model on it', async (t) => {
+  const root = temp(t);
+  const item = {
+    id: 'TASK-AI-142',
+    roleRequirement: { role: 'writer' },
+    requiredCapabilities: ['jsonSchema'],
+  };
+  const models = ['m-high', 'm-medium', 'm-low'].map((m) => candidate('agy-pool', m));
+  let calls = 0;
+  t.mock.method(schemaApi, 'verify', async () => {
+    calls++;
+    return { ok: false, reason: 'WRITER_SCHEMA_POOL_POOL_TIMEOUT' };
+  });
+  const decision = await selectCandidateForProfile(
+    item,
+    models,
+    [],
+    {},
+    { registry: { sources: [] }, externalWorkers: 'agy-pool' },
+    { dir: root },
+    Date.now()
+  );
+  assert.equal(calls, 1, 'one busy pool account must not launch a proof per model');
+  const reasons = decision.result.rejected
+    .filter((r) => r.reasonCode === 'CAPABILITY_MISSING:jsonSchema')
+    .map((r) => r.reason);
+  assert.deepEqual(reasons, Array(3).fill('WRITER_SCHEMA_POOL_POOL_TIMEOUT'));
+});
+
+test('schema proofs stop at the probe budget and leave the rest unverified, not failed', async (t) => {
+  const root = temp(t);
+  const item = {
+    id: 'TASK-AI-142',
+    roleRequirement: { role: 'writer' },
+    requiredCapabilities: ['jsonSchema'],
+  };
+  const first = candidate('agy-pool', 'm-first');
+  const second = Object.assign(candidate('agy-pool', 'm-second'), { accountId: 'agy02' });
+  let clock = 1_000_000;
+  t.mock.method(Date, 'now', () => clock);
+  let calls = 0;
+  t.mock.method(schemaApi, 'verify', async (_c, o) => {
+    calls++;
+    assert.ok(o.schemaTimeoutMs > 0, 'the proof gets the remaining budget');
+    clock += 10 * 60 * 1000;
+    return { ok: false, reason: 'WRITER_SCHEMA_POOL_POOL_TIMEOUT' };
+  });
+  const o = { registry: { sources: [] }, externalWorkers: 'agy-pool' };
+  const decision = await selectCandidateForProfile(
+    item,
+    [first, second],
+    [],
+    {},
+    o,
+    { dir: root },
+    clock
+  );
+  assert.equal(calls, 1);
+  const secondRejection = decision.result.rejected.find(
+    (r) => r.candidateKey === candidateKey(second)
+  );
+  assert.equal(secondRejection.reason, 'WRITER_SCHEMA_NOT_VERIFIED_BUDGET');
+  assert.equal(o.writerSchemaEvidence.has(candidateKey(second)), false, 'retried next selection');
+});
+
+test('pool proof timeout is bounded by the remaining budget', async (t) => {
+  let seen;
+  t.mock.method(pool, 'readResult', () => null);
+  t.mock.method(pool, 'submitJob', (_a, _j, o) => {
+    seen = o.timeoutMs;
+    return { state: 'error', reason: 'POOL_TIMEOUT' };
+  });
+  const proof = await schemaApi.verify(candidate('agy-pool'), { schemaTimeoutMs: 5000 });
+  assert.equal(seen, 5000);
+  assert.equal(proof.reason, 'WRITER_SCHEMA_POOL_POOL_TIMEOUT');
+});

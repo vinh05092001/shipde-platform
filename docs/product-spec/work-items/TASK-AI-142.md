@@ -398,6 +398,12 @@ The Controller can offer the Hermes reasoning session a GPT model through the op
 - **Config & invocation:** `writeProvidersConfig` writes `config.yaml` with `model.default` and `model.provider: "openai-codex"`, avoiding dummy endpoints or env keys. `buildHermesArgv` passes `--provider openai-codex`.
 - **Probing & failover:** HTTP preflight probing is skipped for `openai-codex`, while probe or runtime failure (such as HTTP 429 rate limit) falls through to the next candidate.
 
+### H3 openai-codex provider context fallback (2026-10-14)
+
+When Hermes catalogue/cache metadata is absent, openai-codex now resolves context from the same canonical model in already-loaded registry modelMeta, including refreshed provider /models metadata. Multiple valid reports use the minimum; missing or invalid evidence still yields CONTEXT_WINDOW_UNVERIFIED. Priors never supply context. Focused coverage checks canonical aliases, refreshed metadata, conservative minimum, invalid values and refusal without same-model evidence.
+
+Verification: TASK-AI-142 tests 160/160; changed-file Prettier and git diff --check pass. chatCommand({reselect:true,dryRun:true}) with hermes-live discovery and refreshed provider metadata returns dry_run: hermes::openai-codex::openai-codex::openai::codex::codex-chatgpt::gpt-6-luna is ranked (route rank 420, score 0), contextWindow 1050000, with no rejection. The chosen route is 9router/cl/openai/gpt-6-astra. Runtime output is isolated under a temporary root; no interactive Hermes launch is claimed.
+
 ### H3 atomic write Windows rename retry on transient lock (2026-10-14)
 
 On Windows, atomic file updates via temporary file write and rename fail when another process briefly holds the target file lock, raising `EPERM`, `EBUSY`, or `EACCES`. A shared `atomicRenameSync` helper (`tools/ai-brain/atomic-rename.js`) now retries transient rename failures up to 10 attempts with synchronous backoff (50ms growing to ~500ms via `Atomics.wait` on a `SharedArrayBuffer`). When all attempts fail, the leftover `.tmp` file is unlinked and the original error is rethrown. Wired into `route-health.js` (`model-route-health.json`), `cli.js` (`writeJsonFile`, rollback, csv), `goals.js` (`writeJsonAtomic`, register csv), `approval-registry.js`, and `hermes-session.js`. Focused verification: `node --test tools/ai-brain/test/task-ai-142*.test.js` passed 165/165.
@@ -463,6 +469,10 @@ A verdict older than 24h no longer waits for a human: intake and the isolation l
 ### H3 live: Controller refuses to abandon an active goal run (2026-10-15)
 
 Hermes stopped item runs that were still working (six abandoned item-1 runs on 13-14/10). goal stop now refuses with GOAL_RUN_ACTIVE while the run lock is live or the checkpoint shows activity within SHIPDE_GOAL_STALE_MIN (default 90 min); --operator bypasses; each refusal is a decision; the Hermes skill states the rule.
+
+### H3 live: writer jsonSchema proofs share the probe budget (2026-10-15)
+
+On 15/10 GOAL-AUTOCLAW-REPOS-1 spent 24 minutes before NO_ALTERNATE_FAILURE_DOMAIN: during writer selection every agy-pool model was proven one at a time with a real pool job and a blocking wait of up to 60 s, on pool accounts that were busy, so the writer probe budget ran out before the live 9Router route was reached. Proofs now share PROBE_BUDGET_MS (each pool proof waits at most the remaining budget); a pool account whose proof fails (busy, timeout, quota, login, error) is not proven again for its other models; routes left when the budget ends are WRITER_SCHEMA_NOT_VERIFIED_BUDGET and are not cached, so the next selection retries them.
 
 ### H3 live: resume, budget and writer launch results (2026-10-15)
 
