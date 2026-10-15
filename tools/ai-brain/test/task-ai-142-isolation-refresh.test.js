@@ -14,6 +14,7 @@ for (const scenario of [
   'missing-valid',
   'nonzero-valid',
   'nonzero-not-closed',
+  'verifier-missing',
 ]) {
   test(`isolation refresh: ${scenario}`, (t) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'isolation-refresh-'));
@@ -48,6 +49,8 @@ for (const scenario of [
         assert.equal(config.cwd, root);
         assert.ok(config.timeout > 0);
         if (scenario === 'runner-fails') return { status: 7, stderr: 'verifier refused' };
+        if (scenario === 'verifier-missing')
+          return { status: null, error: new Error('spawnSync powershell ENOENT') };
         if (scenario === 'nonzero-valid') {
           fs.writeFileSync(verdictPath, JSON.stringify({ verdict: 'CLOSED' }));
           fs.utimesSync(verdictPath, new Date(now), new Date(now));
@@ -66,7 +69,13 @@ for (const scenario of [
         return { status: 0, stderr: '' };
       },
     };
-    if (scenario === 'runner-fails') {
+    if (scenario === 'verifier-missing') {
+      assert.throws(
+        () => assertIsolationFresh(options),
+        (error) => error.code === 'ISOLATION_VERDICT_STALE' && /ENOENT/.test(error.message),
+        'a verifier that cannot run reports the original refusal'
+      );
+    } else if (scenario === 'runner-fails') {
       assert.throws(
         () => assertIsolationFresh(options),
         (error) =>
@@ -97,6 +106,7 @@ for (const scenario of [
         records,
         new RegExp(
           scenario === 'runner-fails' ||
+            scenario === 'verifier-missing' ||
             scenario === 'not-closed' ||
             scenario === 'nonzero-not-closed'
             ? 'ISOLATION_VERDICT_REFRESH_FAILED'

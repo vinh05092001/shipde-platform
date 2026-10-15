@@ -64,7 +64,9 @@ function refreshIsolationVerdict(options) {
       .slice(-20)
       .join('\n');
     const error =
-      !failure || /^ISOLATION_VERDICT_(STALE|MISSING)\b/.test(failure.code || failure.message)
+      // A verifier that could not run, or left the verdict stale or missing,
+      // reports the original refusal, which names the refresh command.
+      /^ISOLATION_VERDICT_(STALE|MISSING)\b/.test(failure.code || failure.message) || result?.error
         ? original
         : failure;
     error.message += `; isolation refresh exitCode=${exitCode}; stderr (last 20 lines):\n${stderr}`;
