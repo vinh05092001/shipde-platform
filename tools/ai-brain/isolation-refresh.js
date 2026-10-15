@@ -8,7 +8,7 @@ const { recordDecision, Stage, createSecretRedactor } = require('./decisions');
 const REFRESH_TIMEOUT_MS = 120000;
 
 function refreshIsolationVerdict(options) {
-  const { validate, validateRefreshed, cwd, runner = spawnSync } = options;
+  const { validate, validateRefreshed, cwd } = options;
   let original;
   try {
     return validate();
@@ -16,6 +16,11 @@ function refreshIsolationVerdict(options) {
     if (!/^ISOLATION_VERDICT_(STALE|MISSING)\b/.test(error.code || error.message)) throw error;
     original = error;
   }
+  // The real verifier rewrites the machine-wide verdict for its own worktree.
+  // A test run must never do that: it would point the live verdict at the test
+  // worktree and block every live launch. Tests inject a runner instead.
+  if (!options.runner && process.env.NODE_TEST_CONTEXT) throw original;
+  const runner = options.runner || spawnSync;
   let result;
   let value;
   let failure;
