@@ -282,9 +282,7 @@ async function adviseModelChoice(result, profile, options) {
     eligible.has(advised.choice)
       ? advised.choice
       : result.chosen;
-  const providerFailure =
-    advised.handledBy !== 'jev' &&
-    (advised.reason === 'UNREACHABLE' || advised.reason === 'TIMEOUT');
+  const providerFailure = advised.handledBy !== 'jev' && jev.isProviderFailure(advised.reason);
   return {
     chosen,
     advice: {
@@ -375,7 +373,7 @@ async function assessTask(profile, opts) {
       confidence: 0,
       handledBy: 'reasoning-controller',
       reason: 'CONTROLLER_DETERMINISTIC_FALLBACK',
-      jev: { reason: 'UNREACHABLE' },
+      jev: { reason: jev.failureReason(err) },
     };
   }
   const advisoryResult = result.jev || result;
