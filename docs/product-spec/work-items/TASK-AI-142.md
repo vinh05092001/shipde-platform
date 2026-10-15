@@ -428,3 +428,7 @@ GOAL-AUTOCLAW-REPOS-1 failed with PROBE_BUDGET_EXHAUSTED because writer probing 
 ### H3 live: concurrent writer probing (2026-10-14)
 
 After #312 writer routes were still probed one at a time within the 180 s budget. Writer routes are now probed concurrently (up to 8 accounts, reusing the Hermes concurrent probe) before selection; failed routes are recorded with reasons in the intake decisions. A live dry-run with real keys selected live writers.
+
+### H3 live: Controller refuses to abandon an active goal run (2026-10-15)
+
+Hermes stopped item runs that were still working (six abandoned item-1 runs on 13-14/10). goal stop now refuses with GOAL_RUN_ACTIVE while the run lock is live or the checkpoint shows activity within SHIPDE_GOAL_STALE_MIN (default 90 min); --operator bypasses; each refusal is a decision; the Hermes skill states the rule.
