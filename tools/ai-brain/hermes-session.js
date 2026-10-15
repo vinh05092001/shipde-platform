@@ -736,10 +736,12 @@ function readCodexConfigModels(options, deps) {
   try {
     if (fsApi.existsSync(configFile)) {
       const content = fsApi.readFileSync(configFile, 'utf8');
+      // strict: only ids the operator's config.toml actually names, no default.
+      if (o.strict && !/(?:^|\r?\n)\s*model\s*=/.test(String(content))) return [];
       return parseCodexModelsFromToml(content);
     }
   } catch {}
-  return ['gpt-6.1-sol'];
+  return o.strict ? [] : ['gpt-6.1-sol'];
 }
 
 function isCodexContextEligible(options, deps) {

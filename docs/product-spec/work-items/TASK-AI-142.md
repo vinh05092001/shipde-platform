@@ -517,6 +517,10 @@ Live run GOAL-AUTOCLAW-REPOS-1 (15/10) ended `NO_ALTERNATE_FAILURE_DOMAIN` with 
 - Routes left unprobed when the budget ends are recorded as `WRITER_ROUTE_PROBE_SKIPPED` but stay selectable as fallback instead of being excluded.
 - Evidence: `tools/ai-brain/test/task-ai-142-writer-probe-starvation.test.js` (fails before, passes after).
 
+### H3 live: logged-in Codex CLI is a writer candidate (2026-10-15)
+
+`candidates.js` `implicitCliLoginAccount` binds a source with `harness: codex` and `modelsFrom: account` to an implicit `codex-cli` account (`binding: cli-login`) when `~/.codex/auth.json` exists (existence only, never read) and no registry account is bound; model ids come only from `~/.codex/config.toml` through the Hermes reader in strict mode (no default id). Registry accounts still win. The isolated jsonSchema probe gate in `orchestrate.js` is unchanged. Live check: `codex::cli::::codex::codex-cli::codex-cli::gpt-6.1-sol`.
+
 ### H3 live: JEV failures name their cause (2026-10-15)
 
 Live run GOAL-AUTOCLAW-REPOS-1 (15/10) recorded every JEV assessment as `JEV_UNDECIDED:UNREACHABLE`, so the Controller fell back to BALANCED weights and ranked a fast, cheap writer first, while a direct JEV call returned QUALITY_FIRST. `advise` (`tools/ai-brain/jev.js`) and the routing catch (`tools/ai-brain/routing.js`) mapped every non-timeout error to `UNREACHABLE`, hiding the cause.
