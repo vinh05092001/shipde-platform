@@ -552,3 +552,7 @@ The dry-run listed the auto-bound codex-cli writer but every live run had no cod
 ### H3 live: JEV requests match the API schema (2026-10-15)
 
 On 15/10 the live Controller got HTTP 422 then 400 from JEV and fell back to BALANCED weights, which let a weak writer rank first. Score questions now send their rubric as `criteria` (not `levels`) and use at most the API limit of 10 levels. A live call through routing.assessTask now returns a JEV decision (LOW_CONFIDENCE for the GOAL-AUTOCLAW-REPOS-1 profile) instead of an HTTP error.
+
+### H3 live: worker token discipline (2026-10-15)
+
+The operator observed Codex using about 174k and agy 0.5-0.8M input tokens per task, versus 60-90k for disciplined agents, mostly from whole-file reads, unfiltered test output and repeated full-suite runs. Every compiled writer and repair prompt now carries a short token-discipline block (grep then read a line range, filtered test output, full suite at most once), and the manual worker contract carries the same rules.
