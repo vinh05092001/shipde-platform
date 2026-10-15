@@ -517,6 +517,10 @@ Live run GOAL-AUTOCLAW-REPOS-1 (15/10) ended `NO_ALTERNATE_FAILURE_DOMAIN` with 
 - Routes left unprobed when the budget ends are recorded as `WRITER_ROUTE_PROBE_SKIPPED` but stay selectable as fallback instead of being excluded.
 - Evidence: `tools/ai-brain/test/task-ai-142-writer-probe-starvation.test.js` (fails before, passes after).
 
+### H3 live: tests never rewrite the live isolation verdict (2026-10-15)
+
+Twice on 15/10 a full test run in another worktree triggered the stale-verdict refresh with the real verifier, which rewrote the machine-wide isolation verdict for that worktree; every live launch from hermes-live then failed ISOLATION_VERDICT_INVALID (worktree mismatch) until TURN_BUDGET_EXCEEDED. Inside node --test (NODE_TEST_CONTEXT set) the refresh now never spawns the real verifier unless a runner is injected; it reports the original refusal instead.
+
 ### H3 live: logged-in Codex CLI is a writer candidate (2026-10-15)
 
 `candidates.js` `implicitCliLoginAccount` binds a source with `harness: codex` and `modelsFrom: account` to an implicit `codex-cli` account (`binding: cli-login`) when `~/.codex/auth.json` exists (existence only, never read) and no registry account is bound; model ids come only from `~/.codex/config.toml` through the Hermes reader in strict mode (no default id). Registry accounts still win. The isolated jsonSchema probe gate in `orchestrate.js` is unchanged. Live check: `codex::cli::::codex::codex-cli::codex-cli::gpt-6.1-sol`.
