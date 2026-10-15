@@ -481,3 +481,7 @@ Resume skips only items in PASSED, MERGED or COMPLETED; an old PASS verdict no l
 ### H3 live: reviewer probing has no per-model route cap (2026-10-15)
 
 The reviewer lane probed at most 2 routes per canonical model (REVIEWER_CANONICAL_MODEL_CAP), so a model whose first two providers were down was never reached through a third. The cap is removed, as it was for writers in #312; only the wall-clock probe budget bounds reviewer probing.
+
+### H3 live: Hermes without Codex credentials reselects its brain (2026-10-15)
+
+After #311 the Controller chose openai-codex as the Hermes brain because the Codex CLI is logged in, but Hermes keeps its own credential store and exited with "No Codex credentials stored". That exit was classified unknown, so Hermes stopped instead of trying the next brain. The classifier now treats "No ... credentials stored" as account_auth_failed (account scope), so the candidate is excluded and the brain is reselected. No credential file is read.
