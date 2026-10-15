@@ -72,7 +72,6 @@ const {
   PROVIDER_LEVEL_FAILURE_CAUSES,
 } = require('./hermes-session');
 // Safety invariant: reviewer canonical-model probe cap
-const REVIEWER_CANONICAL_MODEL_CAP = 2;
 const PROBE_BUDGET_MS = 180000;
 
 function providerFailureBodyMatches(body) {
@@ -718,7 +717,6 @@ function reviewLane(
   registry,
   opts
 ) {
-  const reviewerProbeCounts = new Map();
   const reviewerProbeStartedAt = Date.now();
   let reviewerProbeAttempts = 0;
   const writerKey =
@@ -854,21 +852,9 @@ function reviewLane(
         logOpts
       );
     } else {
-      // The two-route cap is per canonical model across providers, not per gateway.
-      const modelId = String(route.model || '')
-        .toLowerCase()
-        .split('/')
-        .pop()
-        .replace(/@[^@:]+$/, '')
-        .replace(/:free$/, '');
-      const count = (reviewerProbeCounts.get(modelId) || 0) + 1;
-      reviewerProbeCounts.set(modelId, count);
+      // Every route of a model may be probed; only the wall-clock budget bounds it.
       let result = { ok: false, status: 0, body: 'Probe route configuration unavailable' };
-      if (
-        probeCandidate &&
-        count <= REVIEWER_CANONICAL_MODEL_CAP &&
-        Date.now() - reviewerProbeStartedAt < PROBE_BUDGET_MS
-      ) {
+      if (probeCandidate && Date.now() - reviewerProbeStartedAt < PROBE_BUDGET_MS) {
         reviewerProbeAttempts += 1;
         // Invoke the caller-provided probe directly through the timeout wrapper.
         result = await sharedRouteProbe.boundedProbe(
@@ -3310,13 +3296,29 @@ async function selectCandidateForProfile(
     const external = String(o.externalWorkers || '')
       .split(',')
       .includes('agy-pool');
+    // Each proof launches a real job and waits for it, so the proofs share the
+    // writer probe wall-clock budget. A pool account that is busy or failing
+    // fails every model on it; its other models are not launched again.
+    const schemaStartedAt = Date.now();
+    const failedSchemaAccounts = o.writerSchemaFailedAccounts || new Map();
+    o.writerSchemaFailedAccounts = failedSchemaAccounts;
     for (const c of candidates) {
       if (!['codex', 'agy-pool'].includes(c.harness)) continue;
       const key = candidateKey(c);
+      // The pool account itself, not the shared gateway key: agy01 and agy02 are separate.
+      const account = c.harness + '::' + c.accountId;
       let proof = cache.get(key);
-      if (!proof && !c.blocked && c.accountId && c.accountId !== '*') {
+      const remainingMs = PROBE_BUDGET_MS - (Date.now() - schemaStartedAt);
+      if (!proof && failedSchemaAccounts.has(account)) {
+        proof = failedSchemaAccounts.get(account);
+      } else if (!proof && remainingMs <= 0) {
+        // Not cached: an unverified route is retried by the next selection.
+        proof = { ok: false, reason: 'WRITER_SCHEMA_NOT_VERIFIED_BUDGET' };
+      } else if (!proof && !c.blocked && c.accountId && c.accountId !== '*') {
         if (c.harness === 'agy-pool' && external) {
-          proof = await schemaApi.verify(c, o);
+          proof = await schemaApi.verify(c, { ...o, schemaTimeoutMs: remainingMs });
+          if (proof && !proof.ok && /^WRITER_SCHEMA_POOL_/.test(String(proof.reason)))
+            failedSchemaAccounts.set(account, proof);
         } else if (c.harness === 'codex' && o.isolatedWorker) {
           const isolation = require('./isolation-launcher');
           const root = resolveIsolatedWorkerRoot(o, o.cwd || process.cwd()) + '-schema-probe';

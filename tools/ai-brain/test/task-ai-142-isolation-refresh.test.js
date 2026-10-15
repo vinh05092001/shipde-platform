@@ -6,7 +6,16 @@ const os = require('node:os');
 const path = require('node:path');
 const { assertIsolationFresh, ISOLATION_VERDICT_MAX_AGE_MS } = require('../intake');
 
-for (const scenario of ['stale-valid', 'runner-fails', 'not-closed', 'fresh', 'missing-valid']) {
+for (const scenario of [
+  'stale-valid',
+  'runner-fails',
+  'not-closed',
+  'fresh',
+  'missing-valid',
+  'nonzero-valid',
+  'nonzero-not-closed',
+  'verifier-missing',
+]) {
   test(`isolation refresh: ${scenario}`, (t) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'isolation-refresh-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -40,6 +49,18 @@ for (const scenario of ['stale-valid', 'runner-fails', 'not-closed', 'fresh', 'm
         assert.equal(config.cwd, root);
         assert.ok(config.timeout > 0);
         if (scenario === 'runner-fails') return { status: 7, stderr: 'verifier refused' };
+        if (scenario === 'verifier-missing')
+          return { status: null, error: new Error('spawnSync powershell ENOENT') };
+        if (scenario === 'nonzero-valid') {
+          fs.writeFileSync(verdictPath, JSON.stringify({ verdict: 'CLOSED' }));
+          fs.utimesSync(verdictPath, new Date(now), new Date(now));
+          return { status: 2, stderr: 'verifier warning exit' };
+        }
+        if (scenario === 'nonzero-not-closed') {
+          fs.writeFileSync(verdictPath, JSON.stringify({ verdict: 'PARTIAL' }));
+          fs.utimesSync(verdictPath, new Date(now), new Date(now));
+          return { status: 3, stderr: 'isolation check failed' };
+        }
         fs.writeFileSync(
           verdictPath,
           JSON.stringify({ verdict: scenario === 'not-closed' ? 'PARTIAL' : 'CLOSED' })
@@ -48,7 +69,13 @@ for (const scenario of ['stale-valid', 'runner-fails', 'not-closed', 'fresh', 'm
         return { status: 0, stderr: '' };
       },
     };
-    if (scenario === 'runner-fails') {
+    if (scenario === 'verifier-missing') {
+      assert.throws(
+        () => assertIsolationFresh(options),
+        (error) => error.code === 'ISOLATION_VERDICT_STALE' && /ENOENT/.test(error.message),
+        'a verifier that cannot run reports the original refusal'
+      );
+    } else if (scenario === 'runner-fails') {
       assert.throws(
         () => assertIsolationFresh(options),
         (error) =>
@@ -58,6 +85,14 @@ for (const scenario of ['stale-valid', 'runner-fails', 'not-closed', 'fresh', 'm
       );
     } else if (scenario === 'not-closed') {
       assert.throws(() => assertIsolationFresh(options), { code: 'ISOLATION_VERDICT_NOT_CLOSED' });
+    } else if (scenario === 'nonzero-not-closed') {
+      assert.throws(
+        () => assertIsolationFresh(options),
+        (error) =>
+          error.code === 'ISOLATION_VERDICT_NOT_CLOSED' &&
+          error.refreshExitCode === 3 &&
+          /isolation check failed/.test(error.message)
+      );
     } else {
       assert.doesNotThrow(() => assertIsolationFresh(options));
     }
@@ -70,11 +105,17 @@ for (const scenario of ['stale-valid', 'runner-fails', 'not-closed', 'fresh', 'm
       assert.match(
         records,
         new RegExp(
-          scenario === 'runner-fails' || scenario === 'not-closed'
+          scenario === 'runner-fails' ||
+            scenario === 'verifier-missing' ||
+            scenario === 'not-closed' ||
+            scenario === 'nonzero-not-closed'
             ? 'ISOLATION_VERDICT_REFRESH_FAILED'
             : 'ISOLATION_VERDICT_REFRESHED'
         )
       );
+      if (scenario === 'nonzero-valid') {
+        assert.match(records, /"exitCode":2/);
+      }
     }
   });
 }

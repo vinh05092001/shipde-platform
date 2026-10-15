@@ -91,7 +91,9 @@ async function verify(candidate, options) {
       const previous = pool.readResult(candidate.accountId, o);
       if (previous && previous.state === 'running')
         return { ok: false, reason: 'WRITER_SCHEMA_POOL_BUSY' };
-      result = pool.submitJob(candidate.accountId, job, { ...o, timeoutMs: 60000 });
+      const budgetMs = Number(o.schemaTimeoutMs);
+      const timeoutMs = budgetMs > 0 ? Math.min(60000, budgetMs) : 60000;
+      result = pool.submitJob(candidate.accountId, job, { ...o, timeoutMs });
       if (!result || result.state !== 'ok' || result.exitCode !== 0) {
         const known = [
           'POOL_TIMEOUT',

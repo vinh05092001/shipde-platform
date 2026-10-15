@@ -822,7 +822,9 @@ function classifyFailure(input) {
   // Account auth failure on 401 or auth text with account
   if (
     (effectiveStatus === 401 && accountId && accountId !== '*') ||
-    /authentication failed|login.required|not logged in|requires login/i.test(text)
+    /authentication failed|login.required|not logged in|requires login|no [a-z0-9 -]*credentials stored/i.test(
+      text
+    )
   ) {
     return addRetryFields({
       cause: Cause.ACCOUNT_AUTH_FAILED,
@@ -909,7 +911,11 @@ function classifyFailure(input) {
   }
 
   // Case 10: account auth failed (agy CLI "authentication failed" / "login required")
-  if (/authentication failed|login.required|not logged in|requires login/i.test(text)) {
+  if (
+    /authentication failed|login.required|not logged in|requires login|no [a-z0-9 -]*credentials stored/i.test(
+      text
+    )
+  ) {
     return addRetryFields({
       cause: Cause.ACCOUNT_AUTH_FAILED,
       scope: Scope.ACCOUNT,
