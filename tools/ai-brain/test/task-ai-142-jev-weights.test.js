@@ -69,8 +69,8 @@ test('JEV scores convert to direct weights and the Controller uses them for rank
   assert.equal(request[1].questions.latencyImportance.type, 'score');
   assert.equal(request[1].questions.costImportance.type, 'score');
   assert.equal(request[1].questions.weightProfile.type, 'choice');
-  assert.match(request[1].questions.qualityImportance.levels[0], /^0:/);
-  assert.match(request[1].questions.qualityImportance.levels[10], /^10:/);
+  assert.match(request[1].questions.qualityImportance.criteria[0], /^0:/);
+  assert.match(request[1].questions.qualityImportance.criteria[9], /^9:/);
   assert.equal(request[2].authorization, 'Bearer ' + secret);
 
   const candidates = [
