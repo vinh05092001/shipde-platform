@@ -108,7 +108,7 @@ test('reviewer profile weights intelligence and coding equally, without agentic 
   });
 });
 
-test('published scores outside the role profile remain usable', () => {
+test('zero role-profile coverage has no score and cannot inherit benchmarkScore', () => {
   const prior = priorFor(
     { modelId: 'no-role-coverage' },
     'planner',
@@ -130,7 +130,7 @@ test('published scores outside the role profile remain usable', () => {
     },
     Date.parse('2026-10-13T12:00:00Z')
   );
-  assert.equal(prior.score, 95);
+  assert.equal(prior.score, null);
   assert.equal(prior.coverage, undefined);
   assert.equal(prior.tier, 'T1');
   assert.equal(prior.bonus, 6);

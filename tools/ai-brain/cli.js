@@ -3921,7 +3921,8 @@ function main(argv = process.argv.slice(2), deps = {}) {
     }
     const livePriorsFile = path.resolve(__dirname, 'data', 'model-priors-live.json');
     const outputFile = args.file ? path.resolve(args.file) : livePriorsFile;
-    if (outputFile !== livePriorsFile) {
+    const isTempOutput = outputFile.startsWith(path.resolve(require('os').tmpdir()) + path.sep);
+    if (outputFile !== livePriorsFile && !isTempOutput) {
       console.error('PRIORS_OUTPUT_OUTSIDE_ALLOWLIST');
       process.exitCode = 2;
       return;

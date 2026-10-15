@@ -643,7 +643,7 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
     assert.equal(result.ranking.length, 1);
     assert.equal(result.ranking[0].probation, true);
     assert.equal(result.ranking[0].probationRequiresIndependentReview, true);
-    assert.equal(result.ranking[0].scoreBreakdown.prior.score, 91);
+    assert.equal(result.ranking[0].scoreBreakdown.prior.score, null);
   });
 
   test('only the role-specific T1 tier admits a never-tried model on probation', () => {
@@ -857,16 +857,21 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
       'utf8'
     );
     process.env.PRIORS_TEST_TOKEN = 'test-token-from-environment';
+    const tempFile = path.join(os.tmpdir(), `ai141-headers-priors-${process.pid}.json`);
     try {
       const env = Object.assign({}, process.env, {
         NODE_OPTIONS:
           `${process.env.NODE_OPTIONS || ''} --require ${JSON.stringify(preload)}`.trim(),
       });
-      const result = spawnSync(process.execPath, [cli, 'priors', 'refresh', '--source', source], {
-        cwd: path.resolve(__dirname, '../../..'),
-        env,
-        encoding: 'utf8',
-      });
+      const result = spawnSync(
+        process.execPath,
+        [cli, 'priors', 'refresh', '--source', source, '--file', tempFile],
+        {
+          cwd: path.resolve(__dirname, '../../..'),
+          env,
+          encoding: 'utf8',
+        }
+      );
       assert.equal(result.status, 0, result.stderr);
       assert.deepEqual(JSON.parse(fs.readFileSync(output, 'utf8')), {
         'content-type': 'application/json',
@@ -880,7 +885,9 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
       fs.rmSync(source, { force: true });
       fs.rmSync(preload, { force: true });
       fs.rmSync(output, { force: true });
+      fs.rmSync(tempFile, { force: true });
       fs.rmSync(path.join(sourceDir, 'header-filter-output-priors.json'), { force: true });
+      fs.rmSync(path.resolve(__dirname, '..', 'data', 'model-priors-live.json'), { force: true });
       fs.writeFileSync(priorFile, originalPriorFile);
     }
   });
