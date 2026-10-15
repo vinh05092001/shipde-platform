@@ -118,7 +118,7 @@ test('reviewer gateway routes are probed on every harness before launch', async 
   }
 });
 
-test('reviewer providers share the canonical-model cap; another model has its own cap', async () => {
+test('reviewer probes every provider route of a model; there is no per-model route cap', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'review-cap-'));
   try {
     const probed = [];
@@ -154,7 +154,12 @@ test('reviewer providers share the canonical-model cap; another model has its ow
       registry.sources[0].endpoint = 'https://' + prefix.split('/')[0] + '.example/v1';
       await retryLane('a'.repeat(40));
     }
-    assert.deepEqual(probed, ['provider-a/model', 'provider-b/model', 'provider-c/other-model']);
+    assert.deepEqual(probed, [
+      'provider-a/model',
+      'provider-b/model',
+      'provider-c/model',
+      'provider-c/other-model',
+    ]);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
