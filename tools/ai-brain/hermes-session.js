@@ -1871,9 +1871,19 @@ async function probeRankedRoutes(
         inFlight.set(route.candidateKey, promise);
       }
       bestSuccess = ordered.findIndex((c) => outcomes.get(c.candidateKey) === true);
+      // Each higher account gets its best-ranked probe before a lower success wins;
+      // its remaining routes cannot starve a live route on another account.
+      const resolvedAccounts = new Set(
+        ordered
+          .slice(0, Math.max(bestSuccess, 0))
+          .filter((c) => outcomes.has(c.candidateKey))
+          .map((c) => accountKey(c))
+      );
       if (
         bestSuccess >= 0 &&
-        ordered.slice(0, bestSuccess).every((c) => outcomes.has(c.candidateKey))
+        ordered
+          .slice(0, bestSuccess)
+          .every((c) => outcomes.has(c.candidateKey) || resolvedAccounts.has(accountKey(c)))
       ) {
         winner = ordered[bestSuccess];
         break;

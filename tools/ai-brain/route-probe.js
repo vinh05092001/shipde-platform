@@ -33,7 +33,26 @@ async function probeRoute(candidate, apiKeyEnv, env, options) {
       }),
       signal: controller.signal,
     });
-    return { ok: response.ok, status: response.status, body: await response.text() };
+    const remaining = {};
+    response.headers?.forEach((value, name) => {
+      if (/^x-ratelimit-remaining-/i.test(name) && /^\d+(?:\.\d+)?$/.test(value))
+        remaining[name.toLowerCase()] = Number(value);
+    });
+    return {
+      ok: response.ok,
+      status: response.status,
+      body: await response.text(),
+      quota: {
+        status: Object.keys(remaining).length
+          ? Object.values(remaining).some((n) => n === 0)
+            ? 'exhausted'
+            : 'open'
+          : 'unknown',
+        remaining,
+        source: 'probe-response-headers',
+        observedAt: new Date().toISOString(),
+      },
+    };
   } catch (error) {
     return {
       ok: false,

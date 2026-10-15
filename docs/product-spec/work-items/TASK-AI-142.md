@@ -1,5 +1,11 @@
 # TASK-AI-142 — Hermes chat brain wired to the Controller
 
+## Writer selection integration assignment (2026-10-15)
+
+The operator assigns Codex to finish `fix/task-ai-142-writer-selection-review`, integrate current main including #319–#323, run the full brain suite and required checks, and submit the resulting SHA through PR/CI and fresh independent review. An older Gemini PASS applies only to its reviewed SHA. The implementation author cannot supply the independent PASS. No additional model, provider request or live Hermes run is authorized in this assignment. The separate deadline investigation starts only after this writer selection PR merges, on a new branch from main.
+
+The implementation expands router inventory independently of OpenCode declarations, separates listed/configured/probed evidence, retains task/credential/route/quota gates, caches unchanged JEV assessments with deterministic failure fallback, and redacts worker-environment secrets in writer launch results. Fixture acceptance lives in `task-ai-142-writer-selection.test.js`, `task-ai-142-writer-probe.test.js`, and `task-ai-142-review-repair-result.test.js`. Source/key, isolation-refresh and pre-push guard repairs in `w-fix578` are excluded. Full validation and PR evidence are recorded in `WRITER-SELECTION-HANDOFF.md` and the PR body.
+
 ## Control
 
 | Field           | Value                                                                                                                                                                                                                                                  |
@@ -497,3 +503,16 @@ Several CLI paths (next --loop, dispatch, orchestrate, assembleForDispatch) and 
 ### H3 live: SovInfra source (2026-10-15)
 
 Operator key SOVINFRA_API_KEY maps to https://api.sovinfra.ai/v1. Live check on 15/10: GET /models listed sovapi, gemma-4-31b, qwen3.8-27b, qwen3-coder-next; chat completions on qwen3-coder-next and qwen3.8-27b answered. Model selection stays with the Controller (live probe and ranking).
+
+### H3 live: writer selection from the live router inventory (2026-10-15)
+
+Writer selection refreshes each enabled router's /models inventory once per orchestration and expands candidates independently of the OpenCode catalogue. Listed, configured and probed evidence stay separate: a listing never counts as a successful probe or benchmark. Credential, route, task and quota gates still apply; a reported zero quota excludes a route even after a successful probe, and missing quota stays unknown. Unchanged JEV assessments are cached per run with the deterministic Controller fallback on JEV failure. The inventory is attached to the selection decision record instead of a separate leading warning, and writer launch results redact injected worker-environment secrets.
+
+### H3 live: writer probing cannot be starved by one large account (2026-10-15)
+
+Live run GOAL-AUTOCLAW-REPOS-1 (15/10) ended `NO_ALTERNATE_FAILURE_DOMAIN` with no probe failing: `probeRankedRoutes` (`tools/ai-brain/hermes-session.js`) accepted a success only after every higher-ranked route had an outcome, and probes one route per account at a time, so a large higher-ranked account consumed the 180 s budget while the known-good route on a live account was never accepted. Ranking work before the pre-probe also started the writer budget early (`tools/ai-brain/orchestrate.js`).
+
+- A lower success now wins once each higher account has had its best-ranked probe resolved; the rest of that account's queue no longer blocks it.
+- The writer probe clock starts after ranking (jsonSchema proofs keep their own budget).
+- Routes left unprobed when the budget ends are recorded as `WRITER_ROUTE_PROBE_SKIPPED` but stay selectable as fallback instead of being excluded.
+- Evidence: `tools/ai-brain/test/task-ai-142-writer-probe-starvation.test.js` (fails before, passes after).

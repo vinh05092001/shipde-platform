@@ -325,9 +325,9 @@ function failureMessageOf(res) {
 
 // Record actual writer invocations before downstream verification can fail.
 // A checkpoint replay is not a new invocation and must not duplicate this event.
-function recordWriterResult(job, result, kind, logOpts) {
+function recordWriterResult(job, result, kind, logOpts, env) {
   const res = result || {};
-  const redact = decisions.createSecretRedactor(process.env);
+  const redact = decisions.createSecretRedactor({ ...process.env, ...env });
   const stderr = redact(launchFailureText(res));
   return decisions.recordDecision(
     {
@@ -2902,6 +2902,7 @@ function buildProfile(item, o, forbiddenFailureDomains) {
             : 'NONE';
   return {
     taskId: item.id,
+    description: item.objective || item.title || item.description || item.id,
     role,
     complexity: item.complexity || 'standard',
     requiredCapabilities,
@@ -3259,18 +3260,57 @@ async function selectCandidateForProfile(
   // The weighting assessment is the Controller's own, obtained through the real
   // JEV source declared in sources.json. The ask is closed and only about
   // weighting profiles, never a model, provider, account or gateway.
-  const assessment = await routing.assessTask(profile, {
-    ask: jevAsk,
-    source: jevSource,
-    minConfidence: jevSource && jevSource.minConfidence,
-  });
+  if (o.isolatedWorker && (o.refreshWriterModels === true || o.enforceCredentialCheck === true)) {
+    const env = { ...process.env, ...o.env };
+    const selectionApi = require('./writer-selection');
+    candidates = candidates.map((c) => {
+      if (c.blocked) return c;
+      let route;
+      try {
+        route = resolveLaunchRoute(c, o, registry);
+      } catch {
+        route = null;
+      }
+      if (!route)
+        return {
+          ...c,
+          blocked: true,
+          blockReason: 'ROUTE_CONFIGURATION_UNAVAILABLE',
+          routeEvidence: selectionApi.inventoryEvidence(c, registry, false),
+        };
+      if (route.harnessName !== 'opencode-direct') return c;
+      const configured = routeProbeCandidate(c, route, registry);
+      if (!configured || !env[configured.apiKeyEnv])
+        return {
+          ...c,
+          blocked: true,
+          blockReason: 'PROVIDER_CREDENTIAL_UNAVAILABLE',
+          routeEvidence: selectionApi.inventoryEvidence(c, registry, false),
+        };
+      return { ...c, routeEvidence: selectionApi.inventoryEvidence(c, registry, true) };
+    });
+  }
+  const assessment = await require('./writer-selection').assessOnce(
+    profile,
+    jevSource,
+    jevAsk,
+    o,
+    routing
+  );
 
   const rankCtx = {
     now,
     taskId: profile.taskId,
     evidenceData: evData,
     priors: o && o.ranking && o.ranking.priors,
-    headrooms: o && o.ranking && o.ranking.headrooms,
+    headrooms: {
+      ...Object.fromEntries(
+        candidates
+          .filter((c) => c.probeQuota && c.probeQuota.status !== 'unknown')
+          .map((c) => [candidateKey(c), c.probeQuota])
+      ),
+      ...(o && o.ranking && o.ranking.headrooms),
+    },
     reservations: o && o.ranking && o.ranking.reservations,
     accounts: o && o.ranking && o.ranking.accounts,
     useStoredQuota: true,
@@ -3427,6 +3467,7 @@ async function selectCandidateForProfile(
 
   const decisionRecorded = {
     stage,
+    inventory: o.writerInventory,
     workItemId: profile.taskId,
     role: roleOf(item),
     attempt: attemptNumber !== undefined ? attemptNumber : undefined,
@@ -3449,6 +3490,8 @@ async function selectCandidateForProfile(
       proof: routing.proofObserved(evData, c) || 'NONE',
       capabilityEvidence: c.capabilities || {},
       jsonSchemaEvidence: c.jsonSchemaEvidence || null,
+      routeEvidence: c.routeEvidence || null,
+      quotaEvidence: c.probeQuota || null,
       account: normalizeAccount(c.accountId),
       quota: {
         headroom: c.headroomStatus || 'unknown',
@@ -3468,6 +3511,8 @@ async function selectCandidateForProfile(
       proof: routing.proofObserved(evData, c) || 'NONE',
       capabilityEvidence: c.capabilities || {},
       jsonSchemaEvidence: c.jsonSchemaEvidence || null,
+      routeEvidence: c.routeEvidence || null,
+      quotaEvidence: c.probeQuota || null,
       headroom: c.headroomStatus || 'unknown',
       quotaReasonCode: c.quotaReasonCode || null,
       failureDomain: routing.failureDomainOf(c),
@@ -3809,6 +3854,29 @@ async function runOrchestration(goal, opts) {
       : evidenceDir
         ? evidence.loadEvidence(evidenceDir)
         : null;
+  // Opt-in: the CLI turns this on for real runs; a direct runOrchestration call
+  // (tests, embedded use) never reaches live /models with host credentials.
+  if (o.refreshWriterModels === true) {
+    o.registry = await require('./writer-selection').refreshWriterRegistry(
+      o.registry || sourcesApi.loadSources(),
+      o
+    );
+    o.candidates = candidatesApi.mergeCandidates(
+      o.candidates || [],
+      candidatesApi.generateCandidates({
+        ...o,
+        candidates: undefined,
+        catalogue: o.catalogue || [],
+        accounts: o.accounts || [],
+        registry: o.registry,
+      })
+    );
+    // Inventory describes this selection; do not insert a record ahead of the
+    // selection that existing decision-log consumers expect to read first.
+    o.writerInventory = o.registry.sources
+      .filter((s) => s.writerInventory)
+      .map((s) => ({ sourceId: s.id, ...s.writerInventory }));
+  }
   const rawCandidates = buildCandidates(o, evidenceData);
   const candidates = candidatesApi.annotateCandidates(
     rawCandidates.map((c) => Object.assign({}, c)),
@@ -4400,7 +4468,7 @@ async function runOrchestration(goal, opts) {
         : null;
     };
 
-    const writerProbeStartedAt = Date.now();
+    let writerProbeStartedAt = Date.now();
     const exhaustedAccountKeys = new Set();
     const writerProbeResults = new Map();
     if (!session && o.isolatedWorker) {
@@ -4424,6 +4492,8 @@ async function runOrchestration(goal, opts) {
         }),
         o
       );
+      // Ranking work (jsonSchema proofs share their own budget) must not spend the probe budget.
+      writerProbeStartedAt = Date.now();
       const refuse = (candidate, reason, exclude = true) => {
         if (exclude) failedKeys.add(candidateKey(candidate));
         decisions.recordDecision(
@@ -4493,9 +4563,17 @@ async function runOrchestration(goal, opts) {
             recordWriterPrompt(candidate);
             return false;
           }
+          require('./writer-selection').applyProbe(
+            candidates.find((c) => candidateKey(c) === candidateKey(candidate)) || candidate,
+            result
+          );
           writerProbeResults.set(candidateKey(candidate), result);
           require('./route-health').rememberProbe(candidate, result, o);
-          if (result?.ok === true) return true;
+          if (result?.ok === true && result?.quota?.status !== 'exhausted') return true;
+          if (result?.quota?.status === 'exhausted') {
+            refuse(candidate, 'QUOTA_EXHAUSTED: route probe');
+            return false;
+          }
           const reasonCode = sharedRouteProbe.failureReason(
             sharedRouteProbe.classifyProbeFailure(result)
           );
@@ -4528,7 +4606,8 @@ async function runOrchestration(goal, opts) {
       if (Date.now() - writerProbeStartedAt >= PROBE_BUDGET_MS) {
         for (const candidate of ordered) {
           if (!batch.outcomes.has(candidateKey(candidate))) {
-            refuse(candidate, 'WRITER_ROUTE_PROBE_SKIPPED wall-clock budget exhausted');
+            // Recorded only: an unprobed route is not a failed route and stays a fallback.
+            refuse(candidate, 'WRITER_ROUTE_PROBE_SKIPPED wall-clock budget exhausted', false);
           }
         }
       }
@@ -4753,7 +4832,13 @@ async function runOrchestration(goal, opts) {
           }
           continue;
         }
+        require('./writer-selection').applyProbe(candidate, probeResult);
         writerProbeResults.set(decision.chosen, probeResult);
+        if (probeResult?.quota?.status === 'exhausted') {
+          failedKeys.add(decision.chosen);
+          recordPostSelectFailure('QUOTA_EXHAUSTED: route probe', 'QUOTA_EXHAUSTED', 'candidate');
+          continue;
+        }
         require('./route-health').rememberProbe(candidate, probeResult, o);
         if (!probeResult || probeResult.ok !== true) {
           const reasonCode = sharedRouteProbe.failureReason(
@@ -4904,7 +4989,7 @@ async function runOrchestration(goal, opts) {
         try {
           writeUsageReportFromHarnessResult(job, res);
         } finally {
-          recordWriterResult(job, res, 'writer', logOpts);
+          recordWriterResult(job, res, 'writer', logOpts, o.env);
         }
         if (res && res.budgetWarning === 'TOKEN_BUDGET_UNVERIFIED') {
           decisions.recordDecision(
@@ -5169,7 +5254,7 @@ async function runOrchestration(goal, opts) {
         try {
           writeUsageReportFromHarnessResult(repairJob, gateRepairResult);
         } finally {
-          recordWriterResult(repairJob, gateRepairResult, 'host-gate-repair', logOpts);
+          recordWriterResult(repairJob, gateRepairResult, 'host-gate-repair', logOpts, o.env);
         }
         if (!gateRepairResult || gateRepairResult.exitCode !== 0) {
           item.hostGateFailures = res.hostGateFailures;
@@ -8118,7 +8203,7 @@ function repairRound(
     try {
       writeUsageReportFromHarnessResult(repairJob, res);
     } finally {
-      recordWriterResult(repairJob, res, 'review-repair', logOpts);
+      recordWriterResult(repairJob, res, 'review-repair', logOpts, o.env);
     }
     if (!res || res.exitCode !== 0) {
       triedKeySet.add(decision.chosen);

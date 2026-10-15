@@ -50,6 +50,95 @@ function createCandidate(overrides) {
   return c;
 }
 
+test('writer refreshes inventory once, skips a successful route with zero quota and reuses the JEV assessment', async (t) => {
+  const repo = makeTempRepo();
+  t.after(() => fs.rmSync(repo.dir, { recursive: true, force: true }));
+  const first = createCandidate({ modelId: 'vendor/first', quality: 99 });
+  const second = createCandidate({ modelId: 'vendor/second', quality: 90 });
+  const launched = [];
+  const probed = [];
+  let listings = 0;
+  const assessments = [];
+  const result = await runOrchestration('fixture inventory and quota', {
+    isolatedWorker: true,
+    cwd: repo.dir,
+    workerRoot: repo.dir,
+    baseSha: repo.sha,
+    sha: repo.sha,
+    decisionDir: path.join(repo.dir, 'decisions'),
+    evidenceDir: path.join(repo.dir, 'evidence'),
+    candidates: [first, second],
+    refreshWriterModels: true,
+    accounts: [{ id: 'account-1', provider: 'oc', capabilities: { contextWindow: 64000 } }],
+    env: { TEST_KEY: 'fixture-only' },
+    registry: {
+      sources: [
+        {
+          id: 'oc',
+          kind: 'router',
+          harness: 'opencode',
+          endpoint: 'https://gateway.example/v1',
+          credential: { type: 'api-key', env: 'TEST_KEY' },
+        },
+      ],
+      dispatch: { providers: { oc: { harness: 'opencode-direct', provider: 'opencode' } } },
+    },
+    fetchModels: async (url) => {
+      assert.equal(url, 'https://gateway.example/v1/models');
+      listings++;
+      return {
+        ok: true,
+        json: async () => ({
+          data: [{ id: 'vendor/first' }, { id: 'vendor/second' }, { id: 'vendor/new-listed' }],
+        }),
+      };
+    },
+    jevAsk: async (question) => {
+      assessments.push(question.state.role);
+      throw Error('fixture JEV unavailable');
+    },
+    specs: [{ id: 'TASK-AI-142', files: ['a.js'], acceptanceCriteria: ['done'], qualityFloor: 0 }],
+    routeProbe: async (c) => {
+      probed.push(c.modelId);
+      return {
+        ok: true,
+        status: 200,
+        quota: { status: c.modelId === 'vendor/first' ? 'exhausted' : 'unknown' },
+      };
+    },
+    run: (job) => {
+      launched.push(job.candidateKey);
+      return {
+        exitCode: 0,
+        stdout: '{"sessionID":"fixture-session","tokens":{"input":10,"output":5}}',
+        stderr: '',
+        completionNonce: 'fixture-nonce',
+        workerSha: repo.sha,
+      };
+    },
+    reviewer: () => ({ pass: true, sha: repo.sha, verdict: 'PASS', findings: [] }),
+    tests: () => ({ pass: true }),
+    hostGate: () => ({ pass: true, failures: [] }),
+    ranking: { priors: { ranking: [] } },
+  });
+  assert.equal(listings, 1);
+  assert.equal(assessments.filter((role) => role === 'writer').length, 1);
+  assert.deepEqual(probed, ['vendor/first', 'vendor/second']);
+  assert.deepEqual(launched, [second.candidateKey]);
+  assert.equal(result.status, 'COMPLETED');
+  const records = require('../decisions').readDecisionsSafe({
+    dir: path.join(repo.dir, 'decisions'),
+  });
+  assert.notEqual(
+    records[0].chosen,
+    undefined,
+    'inventory must not replace the first selection record'
+  );
+  const inventory = records.find((record) => Array.isArray(record.inventory))?.inventory;
+  assert.equal(inventory?.[0].listed, 3);
+  assert.equal(inventory?.[0].probeSucceeded, false, 'a listing is not inference proof');
+});
+
 test('(a) 60 dead routes taking 8 seconds and a live route ranked last fit the 180 second concurrent budget', async (t) => {
   const repo = makeTempRepo();
   const decisionDir = tmpDir('dec-a-');
