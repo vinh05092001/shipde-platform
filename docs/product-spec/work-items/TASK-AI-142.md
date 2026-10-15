@@ -445,3 +445,7 @@ A verdict older than 24h no longer waits for a human: intake and the isolation l
 ### H3 live: Controller refuses to abandon an active goal run (2026-10-15)
 
 Hermes stopped item runs that were still working (six abandoned item-1 runs on 13-14/10). goal stop now refuses with GOAL_RUN_ACTIVE while the run lock is live or the checkpoint shows activity within SHIPDE_GOAL_STALE_MIN (default 90 min); --operator bypasses; each refusal is a decision; the Hermes skill states the rule.
+
+### H3 live: writer jsonSchema proofs share the probe budget (2026-10-15)
+
+On 15/10 GOAL-AUTOCLAW-REPOS-1 spent 24 minutes before NO_ALTERNATE_FAILURE_DOMAIN: during writer selection every agy-pool model was proven one at a time with a real pool job and a blocking wait of up to 60 s, on pool accounts that were busy, so the writer probe budget ran out before the live 9Router route was reached. Proofs now share PROBE_BUDGET_MS (each pool proof waits at most the remaining budget); a pool account whose proof fails (busy, timeout, quota, login, error) is not proven again for its other models; routes left when the budget ends are WRITER_SCHEMA_NOT_VERIFIED_BUDGET and are not cached, so the next selection retries them.
