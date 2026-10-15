@@ -132,7 +132,15 @@ function recordResult(store, modelId, routeId, result, now) {
 }
 
 function probeMemoryFile(o) {
-  return o.routeHealthFile || path.join(__dirname, 'data', 'model-route-health.json');
+  const opts = o || {};
+  return (
+    opts.routeHealthFile ||
+    opts['route-health'] ||
+    (opts.cwd || opts.root
+      ? path.join(opts.cwd || opts.root, 'tools', 'ai-brain', 'data', 'model-route-health.json')
+      : null) ||
+    path.join(__dirname, 'data', 'model-route-health.json')
+  );
 }
 function probeIdentity(c) {
   return {
@@ -1071,7 +1079,14 @@ async function probeGatewayModel(modelId, routeId, options) {
 
 async function runDueCli(options) {
   const o = options || {};
-  const file = o.file || path.join(__dirname, 'data', 'model-route-health.json');
+  const file =
+    o.file ||
+    o.routeHealthFile ||
+    o['route-health'] ||
+    (o.cwd || o.root
+      ? path.join(o.cwd || o.root, 'tools', 'ai-brain', 'data', 'model-route-health.json')
+      : null) ||
+    path.join(__dirname, 'data', 'model-route-health.json');
   const store = loadStore(file);
   const result = await recheckDue(
     store,
@@ -1086,6 +1101,7 @@ async function runDueCli(options) {
 module.exports = {
   atomicRenameSync,
   probeCooldown,
+  probeMemoryFile,
   rememberProbe,
   orderProbeRoutes,
   normalizeModelId,

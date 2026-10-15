@@ -889,9 +889,17 @@ test('nextCommand injects a production qualification slot by default', async () 
   };
   try {
     const f = fixture();
+    const isolatedHealthFile = path.join(f.dir, 'model-route-health.json');
     const result = await cliNext(
-      { root: f.dir, loop: true, maxIterations: 1, records: [] },
       {
+        root: f.dir,
+        loop: true,
+        maxIterations: 1,
+        records: [],
+        'route-health': isolatedHealthFile,
+      },
+      {
+        routeHealthFile: isolatedHealthFile,
         existsSync: () => false,
         items: [{ work_item_id: 'FEAT-AUTH-01', status: 'READY_FOR_AUTHOR', dependencies: '' }],
         runIntake: async () => {
