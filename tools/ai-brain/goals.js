@@ -1257,13 +1257,9 @@ function stopGoal(goalId, options, deps) {
 
 function isItemDone(info) {
   if (!info) return false;
-  return (
-    info.state === 'PASSED' ||
-    info.state === 'MERGED' ||
-    info.state === 'COMPLETED' ||
-    info.reviewVerdict === 'PASS' ||
-    info.reviewVerdict === 'FALLBACK_PASS'
-  );
+  // A review verdict is evidence, not a lifecycle transition. It may belong
+  // to an earlier attempt whose item is now blocked or awaiting another gate.
+  return info.state === 'PASSED' || info.state === 'MERGED' || info.state === 'COMPLETED';
 }
 
 /**
@@ -1355,17 +1351,7 @@ function resumeGoal(goalId, options, deps) {
     const itemId = row[3];
     if (skipped.includes(itemId)) {
       const info = itemStatusMap.get(itemId) || {};
-      const doneStatus =
-        info.state === 'PASSED'
-          ? 'PASSED'
-          : info.state === 'COMPLETED'
-            ? 'COMPLETED'
-            : info.state === 'MERGED'
-              ? 'MERGED'
-              : info.reviewVerdict === 'PASS' || info.reviewVerdict === 'FALLBACK_PASS'
-                ? 'PASSED'
-                : 'MERGED';
-      row[7] = doneStatus;
+      row[7] = info.state;
       if (info.reviewVerdict) row[12] = info.reviewVerdict;
       if (info.commitSha) row[13] = info.commitSha;
     }

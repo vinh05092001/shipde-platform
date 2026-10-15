@@ -1618,6 +1618,145 @@ test('Part H: complexity budget layers apply even when a role budget exists', as
   assert.equal(captured.maxTokens, 4321);
 });
 
+for (const [name, complexity, policy, expected] of [
+  [
+    'simple foundation',
+    'simple',
+    DEFAULT_TOKEN_BUDGETS,
+    {
+      maxTokens: 60000,
+      maxTurns: 40,
+      noProgressMinutes: 8,
+      repeatedQuotaFailures: 3,
+    },
+  ],
+  [
+    'standard foundation',
+    'standard',
+    DEFAULT_TOKEN_BUDGETS,
+    {
+      maxTokens: 150000,
+      maxTurns: 80,
+      noProgressMinutes: 10,
+      repeatedQuotaFailures: 3,
+    },
+  ],
+  [
+    'complex foundation',
+    'complex',
+    DEFAULT_TOKEN_BUDGETS,
+    {
+      maxTokens: 250000,
+      maxTurns: 100,
+      noProgressMinutes: 10,
+      repeatedQuotaFailures: 3,
+    },
+  ],
+  [
+    'unknown complexity',
+    'unclassified',
+    DEFAULT_TOKEN_BUDGETS,
+    {
+      maxTokens: 250000,
+      maxTurns: 100,
+      noProgressMinutes: 10,
+      repeatedQuotaFailures: 3,
+    },
+  ],
+  [
+    'legacy role cap',
+    'simple',
+    {
+      default: { maxTokens: 9000 },
+      'author.foundation': { maxTokens: 1000 },
+      byRole: { 'author.foundation': { maxTokens: 3000 } },
+      byComplexity: { simple: { maxTokens: 2000 } },
+    },
+    { maxTokens: 1000 },
+  ],
+]) {
+  test(`Part H: budget intersection keeps the tightest explicit cap for ${name}`, async () => {
+    const root = fixtureRoot();
+    let captured;
+    await runOrchestration('budget intersection', {
+      specs: [{ id: 'BUDGET-INTERSECTION', complexity, files: [] }],
+      candidates: [
+        {
+          upstream: 'u',
+          gateway: 'g',
+          accountId: 'a',
+          modelId: 'm',
+          harness: 'opencode',
+          source: 'u',
+          evidence: [{ status: 'passed', kind: 'WORK_ITEM_PASS', proofLevel: 'WORK_ITEM_PASS' }],
+          qualifiedRoles: ['author.foundation'],
+          capabilities: { contextWindow: 999999 },
+        },
+      ],
+      cwd: root,
+      decisionDir: path.join(root, 'budget-intersection'),
+      tokenBudgets: policy,
+      run: (job) => {
+        captured = job.tokenBudget;
+        return { exitCode: 1, stderr: 'stop' };
+      },
+    });
+    assert.deepEqual(captured, expected);
+  });
+}
+
+for (const mode of ['failure', 'throw', 'success']) {
+  test(`writer result records ${mode} with bounded, redacted diagnostics`, async () => {
+    const root = fixtureRoot();
+    const decisionDir = path.join(root, 'writer-results');
+    await runOrchestration('writer diagnostics', {
+      runId: 'diagnostic-run',
+      specs: [{ id: 'DIAGNOSTIC', files: [] }],
+      candidates: [
+        {
+          upstream: 'u',
+          gateway: 'g',
+          accountId: 'a',
+          modelId: 'm',
+          harness: 'opencode',
+          source: 'u',
+          evidence: [{ status: 'passed', kind: 'WORK_ITEM_PASS', proofLevel: 'WORK_ITEM_PASS' }],
+          qualifiedRoles: ['author.foundation'],
+          capabilities: { contextWindow: 999999 },
+        },
+      ],
+      cwd: root,
+      decisionDir,
+      run: () => {
+        if (mode === 'throw') throw new Error('launch broke token=private-credential');
+        return {
+          exitCode: mode === 'success' ? 0 : 17,
+          stderr: 'Bearer private-credential token=another-credential ' + 'x'.repeat(5000),
+          timedOut: mode === 'failure',
+        };
+      },
+    });
+    const records = fs
+      .readdirSync(decisionDir)
+      .filter((f) => f.endsWith('.jsonl'))
+      .flatMap((f) => fs.readFileSync(path.join(decisionDir, f), 'utf8').trim().split('\n'))
+      .map((line) => JSON.parse(line))
+      .filter((row) => row.stage === 'writer-launch-result');
+    assert.equal(records.length, 1);
+    const row = records[0];
+    assert.equal(row.runId, 'diagnostic-run');
+    assert.equal(row.workItemId, 'DIAGNOSTIC');
+    assert.ok(row.chosen);
+    assert.equal(row.kind, 'writer');
+    assert.equal(row.exitCode, mode === 'throw' ? -1 : mode === 'success' ? 0 : 17);
+    assert.equal(row.timedOut, mode === 'failure');
+    assert.equal(row.stderrTruncated, mode !== 'throw');
+    assert.ok(row.stderr.length <= 4096);
+    assert.match(row.stderr, /REDACTED_SECRET/);
+    assert.doesNotMatch(row.stderr, /private-credential|another-credential/);
+  });
+}
+
 test('Part H: token usage report groups input, cache-read and output by model and Work Item', () => {
   const root = fixtureRoot();
   const usageDir = path.join(root, 'usage');

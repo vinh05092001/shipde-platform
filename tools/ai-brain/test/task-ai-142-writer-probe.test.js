@@ -695,3 +695,67 @@ test('probe ordering preserves rank inside each health group', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+for (const reasonCode of ['PROBE_BUDGET_EXHAUSTED', 'PROBE_ROUTE_CONFIGURATION_UNAVAILABLE']) {
+  test(`unattempted writer probe ${reasonCode} does not persist a gateway failure`, async (t) => {
+    const repo = makeTempRepo();
+    t.after(() => fs.rmSync(repo.dir, { recursive: true, force: true }));
+    const candidate = createCandidate();
+    const checkpointFile = path.join(repo.dir, 'checkpoint.json');
+    const decisionDir = path.join(repo.dir, 'decisions');
+    const healthFile = path.join(repo.dir, 'health.json');
+    let launches = 0;
+    const options = {
+      isolatedWorker: true,
+      cwd: repo.dir,
+      workerRoot: repo.dir,
+      baseSha: repo.sha,
+      checkpointFile,
+      decisionDir,
+      evidenceDir: path.join(repo.dir, 'evidence'),
+      routeHealthFile: healthFile,
+      candidates: [candidate],
+      registry: {
+        sources: [{ id: 'oc', endpoint: candidate.accessPath, credential: { env: 'TEST_KEY' } }],
+        dispatch: { providers: { oc: { harness: 'opencode-direct', provider: 'opencode' } } },
+      },
+      specs: [{ id: 'SKIPPED-PROBE', files: [], qualityFloor: 0 }],
+      routeProbe: async () => ({ ok: false, status: 0, reasonCode }),
+      run: () => {
+        launches += 1;
+        return { exitCode: 1 };
+      },
+      ranking: { priors: { ranking: [] } },
+    };
+    await runOrchestration('unattempted probe', options);
+    assert.equal(launches, 0);
+    const checkpoint = JSON.parse(fs.readFileSync(checkpointFile, 'utf8'));
+    assert.equal(
+      (checkpoint.liveSteps['SKIPPED-PROBE']?.failures || []).some(
+        (failure) => failure.failedCandidateKey === candidate.candidateKey
+      ),
+      false
+    );
+    assert.equal(fs.existsSync(healthFile), false);
+    const records = fs
+      .readdirSync(decisionDir)
+      .filter((f) => f.endsWith('.jsonl'))
+      .flatMap((f) => fs.readFileSync(path.join(decisionDir, f), 'utf8').trim().split('\n'))
+      .map((line) => JSON.parse(line));
+    assert.ok(records.some((row) => /WRITER_ROUTE_PROBE_SKIPPED/.test(row.detail || '')));
+    assert.equal(
+      records.some((row) => row.stage === 'failed' && row.chosen === candidate.candidateKey),
+      false
+    );
+    let retried = 0;
+    await runOrchestration('unattempted probe', {
+      ...options,
+      routeProbe: async () => {
+        retried += 1;
+        return { ok: true, status: 200 };
+      },
+    });
+    assert.equal(retried, 1, 'resume must probe the previously unattempted route');
+    assert.equal(launches, 1, 'a successful new probe may launch the writer');
+  });
+}
