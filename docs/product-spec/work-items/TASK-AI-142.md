@@ -536,3 +536,7 @@ Live run GOAL-AUTOCLAW-REPOS-1 (15/10) recorded every JEV assessment as `JEV_UND
 - Failures are now recorded as `CREDENTIAL_MISSING`, `TIMEOUT`, `HTTP_<status>`, `INVALID_RESPONSE` or `NETWORK_ERROR` (e.g. `JEV_UNDECIDED:HTTP_422`); no credential or response body is recorded.
 - The deterministic Controller fallback is unchanged and every named cause still counts as a provider failure.
 - Evidence: `tools/ai-brain/test/task-ai-142-jev-failure-reason.test.js`.
+
+### H3 live: a dead run no longer claims its Work Item (2026-10-15)
+
+next-runner treated every intake run without a terminal checkpoint as open for 4 h, so a killed Hermes run kept GOAL-AUTOCLAW-REPOS-1 "claimed by open run" and every goal resume skipped it. A run now counts as open only while its recorded process is alive; runs without a recorded pid keep the TTL behaviour.
