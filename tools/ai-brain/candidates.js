@@ -410,6 +410,11 @@ function generateCandidates(opts) {
     if (bound.length === 0 && source.reachedVia) {
       bound = accountsFor(accounts, source.reachedVia);
     }
+    // Disabled discovery inventory is not a bound CLI login. Intake snapshots
+    // can contain such a source without any account models.
+    if (source.kind === 'agent-cli' && source.modelsFrom === 'account') {
+      bound = bound.filter((a) => a.enabled !== false);
+    }
     const hasConcreteAccounts = (accounts || []).some((a) => a && a.id && a.id !== '*');
     let sharedArc = bound.length === 0 && !hasConcreteAccounts;
     if (bound.length === 0) {
