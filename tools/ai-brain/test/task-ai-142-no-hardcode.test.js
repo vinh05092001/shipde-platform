@@ -464,7 +464,7 @@ test('TASK-AI-142: --rev decides the files and content that are scanned', () =>
     git('add', 'tools/ai-brain/rev.js');
     git('-c', 'core.hooksPath=disabled-hooks', 'commit', '-m', 'commit with hardcode');
     const dirty = git('rev-parse', 'HEAD').trim();
-    git('checkout', '-b', 'clean-head', 'main');
+    git('checkout', '-b', 'clean-head', 'origin/main');
     const out = cli(['--rev', dirty]);
     assert.equal(out.status, 1, 'a clean HEAD must not hide the revision under check');
     assert.match(out.stderr, /gpt-4o/);
