@@ -493,3 +493,7 @@ After #311 the Controller chose openai-codex as the Hermes brain because the Cod
 ### H3 live: tests never write the real route-health store (2026-10-15)
 
 Several CLI paths (next --loop, dispatch, orchestrate, assembleForDispatch) and route-health helpers fell back to tools/ai-brain/data/model-route-health.json when a test passed root or deps but no explicit file, so test fixtures (some future-dated) polluted the live store the Controller reads. The health file now resolves from args, then deps, then the given root, and only then the default; the affected tests use isolated stores, and a new test proves the default file is untouched.
+
+### H3 live: SovInfra source (2026-10-15)
+
+Operator key SOVINFRA_API_KEY maps to https://api.sovinfra.ai/v1. Live check on 15/10: GET /models listed sovapi, gemma-4-31b, qwen3.8-27b, qwen3-coder-next; chat completions on qwen3-coder-next and qwen3.8-27b answered. Model selection stays with the Controller (live probe and ranking).

@@ -354,6 +354,7 @@ function discoverSources(options = {}) {
       endpoint: 'https://api.scaleway.ai/v1',
     },
     PGSGROVE_API_KEY: { id: 'pgsgrove', name: 'pgsgrove', endpoint: 'https://api.pgsgrove.com/v1' },
+    SOVINFRA_API_KEY: { id: 'sovinfra', name: 'sovinfra', endpoint: 'https://api.sovinfra.ai/v1' },
   };
 
   function getOperatorEndpoint(envName) {
