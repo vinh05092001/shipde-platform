@@ -4345,13 +4345,16 @@ async function runOrchestration(goal, opts) {
         now,
         { failedKeys, excludedDomains, domainAttempts, attempt: 1 }
       );
-      const ordered = ranked.result.ranking.filter((candidate) => {
-        try {
-          return resolveLaunchRoute(candidate, o, registry)?.harnessName === 'opencode-direct';
-        } catch {
-          return false;
-        }
-      });
+      const ordered = require('./route-health').orderProbeRoutes(
+        ranked.result.ranking.filter((candidate) => {
+          try {
+            return resolveLaunchRoute(candidate, o, registry)?.harnessName === 'opencode-direct';
+          } catch {
+            return false;
+          }
+        }),
+        o
+      );
       const refuse = (candidate, reason, exclude = true) => {
         if (exclude) failedKeys.add(candidateKey(candidate));
         decisions.recordDecision(
@@ -4442,15 +4445,12 @@ async function runOrchestration(goal, opts) {
           if (result?.ok !== true) failedKeys.add(key);
         }
       }
-      const winnerIndex = ordered.findIndex(
-        (candidate) => candidateKey(candidate) === batch.winner?.candidateKey
-      );
-      for (const [index, candidate] of ordered.entries()) {
-        if (
-          !batch.outcomes.has(candidateKey(candidate)) &&
-          (winnerIndex < 0 || index < winnerIndex)
-        ) {
-          refuse(candidate, 'WRITER_ROUTE_PROBE_SKIPPED wall-clock budget exhausted');
+      // Unstarted routes remain eligible for fallback while time remains.
+      if (Date.now() - writerProbeStartedAt >= PROBE_BUDGET_MS) {
+        for (const candidate of ordered) {
+          if (!batch.outcomes.has(candidateKey(candidate))) {
+            refuse(candidate, 'WRITER_ROUTE_PROBE_SKIPPED wall-clock budget exhausted');
+          }
         }
       }
     }
@@ -4475,6 +4475,23 @@ async function runOrchestration(goal, opts) {
             },
             logOpts
           );
+        }
+      }
+      // Prefer completed live probes, retaining Controller eligibility checks.
+      const liveKeys = candidates
+        .filter(
+          (offered) =>
+            !failedForSelection.has(candidateKey(offered)) &&
+            !excludedDomains.has(routing.canonicalFailureDomain(offered)) &&
+            !forbiddenDomains.includes(offered.gateway) &&
+            !forbiddenDomains.includes(offered.upstream) &&
+            writerProbeResults.get(candidateKey(offered))?.ok === true
+        )
+        .map(candidateKey);
+      if (liveKeys.length) {
+        for (const offered of candidates) {
+          if (!liveKeys.includes(candidateKey(offered)))
+            failedForSelection.add(candidateKey(offered));
         }
       }
       const excludedForSelection = new Set(excludedDomains);
@@ -4648,6 +4665,7 @@ async function runOrchestration(goal, opts) {
                       : 'Probe route configuration unavailable',
                 };
         }
+        writerProbeResults.set(decision.chosen, probeResult);
         require('./route-health').rememberProbe(candidate, probeResult, o);
         if (!probeResult || probeResult.ok !== true) {
           const reasonCode = sharedRouteProbe.failureReason(

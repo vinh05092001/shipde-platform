@@ -430,6 +430,16 @@ Operator rule strictly forbids hardcoded model IDs, model lists, benchmark/quali
 
 Verification: sequential `tools/ai-brain/test/task-ai-142*.test.js` passed 190/190; checker test suite (`task-ai-142-no-hardcode.test.js`) passed 9/9 covering detection, allowlist filtering, baseline accounting, and CLI execution; `prettier --check` and `git diff --check` passed.
 
+H3 review repair: the guard resolves the merge-base with the configured PR base (origin/main by default) and fails on Git, read or parse errors. Baselines must have a consistent total and can only remove entries compared by file, rule and snippet; a baseline introduced by this PR is explicitly validated. Full scans include JavaScript modules and cap detection includes parameter and destructuring defaults. Verification: `node --test tools/ai-brain/test/task-ai-142-no-hardcode.test.js` passed 20/20; `node scripts/ai/check-no-hardcode.mjs` passed with 4 files scanned, 6 baseline instances and 0 new violations. The CI step and pre-push hook invoke the guard, and AGENTS.md requires it.
+
+### H3 live public priors auto refresh (2026-10-14)
+
+Operator-authorized extension: priors refresh defaults to the checked-in public leaderboard descriptor. Artificial Analysis Next.js Flight JSON supplies Intelligence Index; BenchLM models.json supplies published displayScore and AA coding/agentic indices. Scores retain source URL and retrieval timestamp; effort variants use the highest published AA index per canonical model. Historical benchmarks remain after current observations. Unknown models receive a neutral role-score median with priorUnknown, without overriding measured internal quality.
+
+Live refresh at 2026-10-14T08:14:57.542Z: scored canonical models 61 -> 544. AA indices: gpt-6-luna 38.1245186869738; mercury-2.5 12.3408453757638; gemini-3.8-flash 40.9262321765904; grok-4.7 46.4465506302286; deepseek-v4.1-flash 39.456167472527; gpt-6-astra 52.673669395513. JSON reports 572 unmatched advertised catalogue IDs; catalogue advertisement is not live-route proof. No invented benchmark values or model probes. Historical snapshot assertions use a frozen fixture so public refresh does not invalidate routing regressions.
+
+Verification: requested prior/TASK-AI-142 tests 176/176; injected fetch covers both payload formats, null scores and schema drift. Prettier and git diff --check pass. No push or merge.
+
 ### H3 account-level cooldown on exhaustion (2026-10-14)
 
 Exhausted accounts cool down as a whole across model routes sharing the same account key (`extractAccountKey`). When a Hermes probe encounters `upstream_credit_exhausted`, `quota_exhausted`, `account_auth_failed`, or `upstream_entitlement`, the account is cooled down in `model-route-health.json` (`store.accounts[accountKey]`). Subsequent selections reject candidates on the cooled-down account with `PROBE_COOLDOWN_ACCOUNT: <account> until <timestamp>`, avoiding wasteful probes against exhausted accounts.
@@ -442,4 +452,14 @@ GOAL-AUTOCLAW-REPOS-1 failed with PROBE_BUDGET_EXHAUSTED because writer probing 
 
 After #312 writer routes were still probed one at a time within the 180 s budget. Writer routes are now probed concurrently (up to 8 accounts, reusing the Hermes concurrent probe) before selection; failed routes are recorded with reasons in the intake decisions. A live dry-run with real keys selected live writers.
 
-H3 review repair: the guard resolves the merge-base with the configured PR base (origin/main by default) and fails on Git, read or parse errors. Baselines must have a consistent total and can only remove entries compared by file, rule and snippet; a baseline introduced by this PR is explicitly validated. Full scans include JavaScript modules and cap detection includes parameter and destructuring defaults. Verification: `node --test tools/ai-brain/test/task-ai-142-no-hardcode.test.js` passed 20/20; `node scripts/ai/check-no-hardcode.mjs` passed with 4 files scanned, 6 baseline instances and 0 new violations. The CI step and pre-push hook invoke the guard, and AGENTS.md requires it.
+### H3 live: writer probes known-live routes first (2026-10-15)
+
+On 14/10 22:49 the concurrent pre-probe spent the 180 s budget on dead routes and live accounts were never reached; a failed launch of the probe winner ended NO_ALTERNATE_FAILURE_DOMAIN. Probe order now puts routes with a fresh ok route-health record first, then unprobed, then failed (rank kept inside each group; scores unchanged), and a failed launch continues to the next live route. The cause of the 22:49 ag/gemini-3.8-flash launch failure was not found in the stored artifacts.
+
+### H3 live: stale isolation verdict refreshed automatically (2026-10-15)
+
+A verdict older than 24h no longer waits for a human: intake and the isolation launcher run Test-WorkerIsolation.ps1 once, re-read and re-validate the verdict, and block with the original error plus exit code and stderr only if it is still stale, missing or not closed. Decisions ISOLATION_VERDICT_REFRESHED / _REFRESH_FAILED. Follow-up P2: a verifier that writes a valid verdict but exits non-zero still blocks.
+
+### H3 live: Controller refuses to abandon an active goal run (2026-10-15)
+
+Hermes stopped item runs that were still working (six abandoned item-1 runs on 13-14/10). goal stop now refuses with GOAL_RUN_ACTIVE while the run lock is live or the checkpoint shows activity within SHIPDE_GOAL_STALE_MIN (default 90 min); --operator bypasses; each refusal is a decision; the Hermes skill states the rule.

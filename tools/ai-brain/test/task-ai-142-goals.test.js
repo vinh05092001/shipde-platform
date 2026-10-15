@@ -533,7 +533,7 @@ describe('TASK-AI-142 Part H1 — Goal store and Controller contract', () => {
 
     const stopRes = goals.stopGoal(
       'G8',
-      { rootDir: tempDir, goalsDir },
+      { rootDir: tempDir, goalsDir, operator: true },
       {
         isPidAlive: (pid) => pid === 45678,
         killPid: (pid) => killedPids.push(pid),

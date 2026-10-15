@@ -1084,9 +1084,14 @@ function evidenceAgePenalty(candidate, now) {
 function scoreForProfile(candidate, assessment, ctx) {
   const now = (ctx && ctx.now) || Date.now();
   const prior = priorFor(candidate, ctx && ctx.role, ctx && ctx.priors, now);
+  candidate.priorUnknown = Boolean(prior && (prior.priorUnknown || prior.score === null));
   const latency = latencyScoreOf(candidate);
   const internalQuality = qualityScoreOf(candidate, now);
-  const priorUsable = prior && !prior.stale;
+  const priorUsable =
+    prior &&
+    !prior.stale &&
+    prior.score !== null &&
+    (!prior.priorUnknown || internalQuality === null);
   const storedEvidence = evidence.getEvidence(ctx && ctx.evidenceData, candidate) || [];
   const internalEvidence =
     storedEvidence.length > 0 ? storedEvidence : (candidate && candidate.evidence) || [];
@@ -1100,12 +1105,11 @@ function scoreForProfile(candidate, assessment, ctx) {
   const priorQualityWeight = Math.max(0, Math.min(100, qualityWeight)) / 100;
   const effectivePriorUsable = Boolean(priorUsable && !hasQualityFailure);
   const priorWeight = effectivePriorUsable ? 1 / (1 + evidenceCount) : 0;
+  const priorHasScore = Number.isFinite(prior && prior.score);
   const effectivePriorWeight =
-    prior && prior.score !== undefined && effectivePriorUsable
-      ? priorWeight * priorQualityWeight
-      : 0;
+    priorHasScore && effectivePriorUsable ? priorWeight * priorQualityWeight : 0;
   const quality =
-    effectivePriorUsable && prior.score !== undefined
+    effectivePriorUsable && priorHasScore
       ? Math.round(
           internalQuality === null
             ? prior.score
@@ -1165,18 +1169,18 @@ function scoreForProfile(candidate, assessment, ctx) {
   // A scored prior is already blended into quality above. Only legacy priors
   // without a numeric score retain the standalone tier bonus.
   const weightedPriorContribution =
-    effectivePriorUsable && prior.score !== undefined
+    effectivePriorUsable && priorHasScore
       ? Math.round((prior.bonus * priorQualityWeight * wQuality) / totalWeight)
       : effectivePriorUsable
         ? prior.bonus
         : 0;
-  const priorScoreIsBlended = effectivePriorUsable && prior.score !== undefined;
+  const priorScoreIsBlended = effectivePriorUsable && priorHasScore;
   const scorePriorContribution = priorScoreIsBlended ? 0 : weightedPriorContribution;
   if (scorePriorContribution) score += scorePriorContribution;
   if (prior) {
-    if (prior.score !== undefined) {
+    if (priorHasScore || prior.score === null) {
       prior.contribution = scorePriorContribution;
-      prior.normalizedScore = priorUsable ? prior.score / 100 : null;
+      prior.normalizedScore = priorUsable && priorHasScore ? prior.score / 100 : null;
       prior.weight = effectivePriorWeight;
     }
   }
@@ -1432,6 +1436,9 @@ function rankForProfile(candidates, profile, assessment, ctx) {
   }
 
   ranked.sort((a, b) => {
+    const aKnown = Number.isFinite(a.scoreBreakdown.quality);
+    const bKnown = Number.isFinite(b.scoreBreakdown.quality);
+    if (aKnown !== bKnown) return Number(bKnown) - Number(aKnown);
     if (b.score !== a.score) return b.score - a.score;
     const aPriorBonus = Number(a.scoreBreakdown.prior && a.scoreBreakdown.prior.bonus) || 0;
     const bPriorBonus = Number(b.scoreBreakdown.prior && b.scoreBreakdown.prior.bonus) || 0;

@@ -10,7 +10,7 @@ const {
   weightedBenchmarkScore,
   roleBenchmarkProfile,
 } = require('../priors');
-const document = loadPriors(path.join(__dirname, '..', 'data', 'model-priors.json'));
+const document = loadPriors(path.join(__dirname, 'fixtures', 'priors-20261013.json'));
 const sourceUrl = 'https://artificialanalysis.ai/leaderboards/models';
 const expected = new Map([
   ['claude-opus-5-5', 57.6],
@@ -108,7 +108,7 @@ test('reviewer profile weights intelligence and coding equally, without agentic 
   });
 });
 
-test('zero role-profile coverage scores zero and cannot inherit aggregate or legacy scores', () => {
+test('zero role-profile coverage has no score and cannot inherit benchmarkScore', () => {
   const prior = priorFor(
     { modelId: 'no-role-coverage' },
     'planner',
@@ -130,7 +130,7 @@ test('zero role-profile coverage scores zero and cannot inherit aggregate or leg
     },
     Date.parse('2026-10-13T12:00:00Z')
   );
-  assert.equal(prior.score, 0);
+  assert.equal(prior.score, null);
   assert.equal(prior.coverage, undefined);
   assert.equal(prior.tier, 'T1');
   assert.equal(prior.bonus, 6);
