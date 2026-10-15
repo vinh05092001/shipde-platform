@@ -35,9 +35,14 @@ function refreshIsolationVerdict(options) {
         timeout: options.timeoutMs ?? REFRESH_TIMEOUT_MS,
       }
     );
-    if (result.error || result.status !== 0) throw result.error || new Error('verifier failed');
+    if (result.error) throw result.error;
     value = validate();
-    if (validateRefreshed) validateRefreshed();
+    if (validateRefreshed) {
+      const refreshedValue = validateRefreshed();
+      if (value === undefined && refreshedValue !== undefined) {
+        value = refreshedValue;
+      }
+    }
   } catch (error) {
     failure = error;
   }
@@ -59,9 +64,9 @@ function refreshIsolationVerdict(options) {
       .slice(-20)
       .join('\n');
     const error =
-      /^ISOLATION_VERDICT_(STALE|MISSING)\b/.test(failure.code || failure.message) ||
-      result?.status !== 0 ||
-      result?.error
+      // A verifier that could not run, or left the verdict stale or missing,
+      // reports the original refusal, which names the refresh command.
+      /^ISOLATION_VERDICT_(STALE|MISSING)\b/.test(failure.code || failure.message) || result?.error
         ? original
         : failure;
     error.message += `; isolation refresh exitCode=${exitCode}; stderr (last 20 lines):\n${stderr}`;

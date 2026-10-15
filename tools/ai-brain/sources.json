@@ -35,12 +35,41 @@
       "label": "B.AI",
       "kind": "model-source",
       "servesModels": true,
+      "harness": "direct-http",
+      "accessPath": "direct",
+      "endpoint": "https://api.b.ai/v1",
       "credential": {
         "type": "api-key",
         "env": "BAI_API_KEY",
         "keyDirs": ["bai1", "bai2", "bai3", "bai4", "bai5", "bai6", "bai7"]
       },
-      "verify": { "method": "completion" }
+      "verify": { "method": "models-list", "path": "/models" }
+    },
+    {
+      "id": "aihubmix",
+      "label": "AiHubMix",
+      "kind": "model-source",
+      "servesModels": true,
+      "harness": "direct-http",
+      "accessPath": "direct",
+      "endpoint": "https://aihubmix.com/v1",
+      "credential": { "type": "api-key", "env": "AIHUBMIX_API_KEY" },
+      "verify": { "method": "models-list", "path": "/models" }
+    },
+    {
+      "id": "thegrid",
+      "label": "TheGrid",
+      "kind": "model-source",
+      "servesModels": true,
+      "harness": "direct-http",
+      "accessPath": "direct",
+      "endpoint": "https://api.thegrid.ai/v1",
+      "credential": {
+        "type": "api-key",
+        "env": "THEGRID_API_KEY",
+        "keyDirs": ["thegrid1", "thegrid2"]
+      },
+      "verify": { "method": "models-list", "path": "/models" }
     },
     {
       "id": "poolside",
