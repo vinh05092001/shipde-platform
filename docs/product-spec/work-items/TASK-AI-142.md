@@ -428,3 +428,7 @@ GOAL-AUTOCLAW-REPOS-1 failed with PROBE_BUDGET_EXHAUSTED because writer probing 
 ### H3 live: concurrent writer probing (2026-10-14)
 
 After #312 writer routes were still probed one at a time within the 180 s budget. Writer routes are now probed concurrently (up to 8 accounts, reusing the Hermes concurrent probe) before selection; failed routes are recorded with reasons in the intake decisions. A live dry-run with real keys selected live writers.
+
+### H3 live: stale isolation verdict refreshed automatically (2026-10-15)
+
+A verdict older than 24h no longer waits for a human: intake and the isolation launcher run Test-WorkerIsolation.ps1 once, re-read and re-validate the verdict, and block with the original error plus exit code and stderr only if it is still stale, missing or not closed. Decisions ISOLATION_VERDICT_REFRESHED / _REFRESH_FAILED. Follow-up P2: a verifier that writes a valid verdict but exits non-zero still blocks.
