@@ -103,7 +103,10 @@ async function runReviewLoop(state, deps) {
       }
       const rep = await repair(tests.findings || [], currentSha);
       const nextSha = rep && typeof rep.sha === 'string' && rep.sha.trim() !== '' ? rep.sha : null;
-      if (!nextSha || nextSha === currentSha) {
+      // A repair that never ran (refused, no candidate or route, failed launch) is
+      // not a no-progress repair: the next round may try another repairer.
+      const notAttempted = Boolean(rep && (rep.repairNotAttempted || rep.repairRefused));
+      if (!notAttempted && (!nextSha || nextSha === currentSha)) {
         rounds.push({
           round,
           stage: 'blocked',
@@ -119,7 +122,7 @@ async function runReviewLoop(state, deps) {
           findings: tests.findings || [],
         };
       }
-      currentSha = nextSha;
+      currentSha = nextSha || currentSha;
       tests = runTests();
       continue;
     }
@@ -206,7 +209,10 @@ async function runReviewLoop(state, deps) {
     }
     const rep = await repair(open, currentSha);
     const nextSha = rep && typeof rep.sha === 'string' && rep.sha.trim() !== '' ? rep.sha : null;
-    if (!nextSha || nextSha === currentSha) {
+    // A repair that never ran (refused, no candidate or route, failed launch) is
+    // not a no-progress repair: the next round may try another repairer.
+    const notAttempted = Boolean(rep && (rep.repairNotAttempted || rep.repairRefused));
+    if (!notAttempted && (!nextSha || nextSha === currentSha)) {
       rounds.push({
         round,
         stage: 'blocked',
@@ -226,7 +232,7 @@ async function runReviewLoop(state, deps) {
         findings: open,
       };
     }
-    currentSha = nextSha;
+    currentSha = nextSha || currentSha;
     tests = runTests();
   }
 
