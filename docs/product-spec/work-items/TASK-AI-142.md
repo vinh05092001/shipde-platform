@@ -449,3 +449,11 @@ Hermes stopped item runs that were still working (six abandoned item-1 runs on 1
 ### H3 live: writer jsonSchema proofs share the probe budget (2026-10-15)
 
 On 15/10 GOAL-AUTOCLAW-REPOS-1 spent 24 minutes before NO_ALTERNATE_FAILURE_DOMAIN: during writer selection every agy-pool model was proven one at a time with a real pool job and a blocking wait of up to 60 s, on pool accounts that were busy, so the writer probe budget ran out before the live 9Router route was reached. Proofs now share PROBE_BUDGET_MS (each pool proof waits at most the remaining budget); a pool account whose proof fails (busy, timeout, quota, login, error) is not proven again for its other models; routes left when the budget ends are WRITER_SCHEMA_NOT_VERIFIED_BUDGET and are not cached, so the next selection retries them.
+
+### H3 live: resume, budget and writer launch results (2026-10-15)
+
+Resume skips only items in PASSED, MERGED or COMPLETED; an old PASS verdict no longer hides a blocked item. Token budgets take the tightest of the complexity and role caps; defaults only fill missing fields. Every writer, host-gate repair and review repair invocation records a writer-launch-result decision (run id, candidate, exit code, session id, redacted stderr up to 4096 chars); replays are not recorded again. Probes not attempted because the budget ran out or the route had no configuration exclude the route only in that run and are retried on resume.
+
+### H3 live: reviewer probing has no per-model route cap (2026-10-15)
+
+The reviewer lane probed at most 2 routes per canonical model (REVIEWER_CANONICAL_MODEL_CAP), so a model whose first two providers were down was never reached through a third. The cap is removed, as it was for writers in #312; only the wall-clock probe budget bounds reviewer probing.

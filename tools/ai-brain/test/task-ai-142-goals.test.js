@@ -765,6 +765,63 @@ describe('TASK-AI-142 Part H1 — Goal store and Controller contract', () => {
     assert.ok(Array.isArray(spawnedArgs));
   });
 
+  for (const verdict of ['PASS', 'FALLBACK_PASS']) {
+    for (const state of ['BLOCKED', 'READY_FOR_CODEX', 'CHANGES_REQUIRED']) {
+      test(`goal resume keeps ${state} runnable despite an old ${verdict} verdict`, () => {
+        goals.startGoal({
+          text: 'Resume unfinished work',
+          rootDir: tempDir,
+          goalsDir,
+          id: 'G-PASS',
+        });
+        const goalFile = path.join(goalsDir, 'G-PASS', 'goal.json');
+        const goal = JSON.parse(fs.readFileSync(goalFile, 'utf8'));
+        const itemId = 'GOAL-G-PASS-1';
+        goal.items = [itemId];
+        fs.writeFileSync(goalFile, JSON.stringify(goal));
+        const row = [
+          '1',
+          'S00',
+          'AI workflow',
+          itemId,
+          '',
+          'Unfinished work',
+          '',
+          state,
+          '',
+          'docs/product-spec/work-items/' + itemId + '.md',
+          'feat/unfinished',
+          '',
+          verdict,
+          '',
+        ];
+        fs.appendFileSync(registerPath, row.map((value) => JSON.stringify(value)).join(',') + '\n');
+
+        let launches = 0;
+        const result = goals.resumeGoal(
+          'G-PASS',
+          { rootDir: tempDir, goalsDir, registerPath },
+          {
+            decisionDir: path.join(tempDir, 'decisions'),
+            isPidAlive: () => false,
+            spawn: () => {
+              launches++;
+              return { pid: 88888, unref() {} };
+            },
+          }
+        );
+
+        assert.equal(result.status, 'RESUMED');
+        assert.deepEqual(result.skipped, []);
+        assert.deepEqual(result.remaining, [itemId]);
+        assert.equal(launches, 1);
+        const register = fs.readFileSync(path.join(goalsDir, 'G-PASS', 'register.csv'), 'utf8');
+        assert.ok(register.includes(JSON.stringify(state)), 'resume preserves the lifecycle state');
+        assert.equal(JSON.parse(fs.readFileSync(goalFile, 'utf8')).status, 'RUNNING');
+      });
+    }
+  }
+
   test('goal resume propagates refusal/error on spawn failure and CLI exits non-zero', () => {
     goals.startGoal({
       text: 'Resume failure test',
