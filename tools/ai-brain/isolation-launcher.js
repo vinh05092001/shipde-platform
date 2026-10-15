@@ -23,6 +23,30 @@ function isolationVerdictPath(options) {
 }
 
 /** The worker root for one job: the worker never sees the operator's leaf name. */
+const CONTEXT_PACK_LINE = /^(Focused context pack: read )(.+?)( before exploring files.)$/m;
+
+/**
+ * Copies the context pack named in a prompt into the worker payload directory
+ * and points the prompt at the copy. A prompt without a readable pack is
+ * returned unchanged.
+ */
+function stageContextPack(prompt, payloadDir, nonce) {
+  const match = CONTEXT_PACK_LINE.exec(prompt);
+  if (!match) return prompt;
+  const source = match[2].trim();
+  if (!path.isAbsolute(source) || !fs.existsSync(source)) return prompt;
+  const name = 'context-' + nonce + '.md';
+  fs.copyFileSync(source, path.join(payloadDir, name));
+  return (
+    prompt.slice(0, match.index) +
+    match[1] +
+    '.shipde/' +
+    name +
+    match[3] +
+    prompt.slice(match.index + match[0].length)
+  );
+}
+
 function workerRootFor(hostCwd) {
   const jobName = path.win32.basename(String(hostCwd || '')) || 'default';
   if (
@@ -2048,7 +2072,11 @@ function getIsolatedLauncher() {
     // and hand the model a short instruction that points at the file. The
     // file is UTF-8 with no BOM and is covered by the `.shipde/` git exclude
     // added above.
-    let launchArgs = fullArgs;
+    // The isolated worker cannot read host paths, so the focused context pack
+    // the Controller wrote on the host travels into .shipde/ with the prompt.
+    let launchArgs = fullArgs.map((arg) =>
+      typeof arg === 'string' ? stageContextPack(arg, payloadDir, completionNonce) : arg
+    );
     if (adapter.id === 'opencode-direct' && launchArgs.length > 0) {
       const prompt = launchArgs[launchArgs.length - 1];
       if (typeof prompt === 'string' && prompt.length > 0) {
