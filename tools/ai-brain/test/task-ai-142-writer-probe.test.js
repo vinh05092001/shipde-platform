@@ -517,3 +517,181 @@ test('(d) next keeps brain decisions in the intake run instead of forwarding its
   );
   assert.equal(runFiles.decisionDir, path.join(runDir, 'decisions'));
 });
+
+for (const [failedLaunch, pending] of [
+  [false, false],
+  [true, false],
+  [true, true],
+]) {
+  test(`known-live probe priority and launch fallback: failed=${failedLaunch}, unprobed=${pending}`, async (t) => {
+    const repo = makeTempRepo();
+    const decisionDir = tmpDir('dec-a-');
+    const evidenceDir = tmpDir('evi-a-');
+    t.after(() => {
+      fs.rmSync(repo.dir, { recursive: true, force: true });
+      fs.rmSync(decisionDir, { recursive: true, force: true });
+      fs.rmSync(evidenceDir, { recursive: true, force: true });
+    });
+
+    const candidates = [];
+    for (let i = 0; i < (failedLaunch ? 1 : 500); i++) {
+      candidates.push(
+        createCandidate({
+          accessPath: `https://gw-${i}.example/v1`,
+          gateway: `gw-${i}`,
+          accountId: `acc-${i}`,
+          quotaScope: `acc-${i}`,
+          modelId: `vendor/model-${i}`,
+          quality: 100,
+        })
+      );
+    }
+    const liveCandidate = createCandidate({
+      accessPath: 'https://gw-live.example/v1',
+      gateway: 'gw-live',
+      accountId: 'acc-live',
+      quotaScope: 'acc-live',
+      modelId: 'vendor/model-live',
+      quality: 80,
+    });
+    candidates.push(liveCandidate);
+    const alternate = createCandidate({
+      accessPath: 'https://zz-alternate.example/v1',
+      gateway: 'zz-alternate-gateway',
+      upstream: 'alternate-vendor',
+      accountId: 'alternate-account',
+      quotaScope: 'alternate-account',
+      modelId: 'alternate-vendor/live',
+      quality: 70,
+    });
+    if (pending) {
+      Object.assign(alternate, {
+        accessPath: liveCandidate.accessPath,
+        gateway: liveCandidate.gateway,
+        upstream: liveCandidate.upstream,
+        accountId: liveCandidate.accountId,
+        quotaScope: liveCandidate.quotaScope,
+      });
+      alternate.candidateKey = candidateKey(alternate);
+    }
+    if (failedLaunch) candidates.push(alternate);
+    const routeHealth = { version: 1, paths: {}, events: [] };
+    const health = require('../route-health');
+    health.rememberProbe(
+      liveCandidate,
+      { ok: true, status: 200 },
+      { routeHealth, routeHealthFile: path.join(evidenceDir, 'health.json') }
+    );
+    if (failedLaunch && !pending)
+      health.rememberProbe(
+        alternate,
+        { ok: true, status: 200 },
+        { routeHealth, routeHealthFile: path.join(evidenceDir, 'health.json') }
+      );
+
+    const registry = {
+      sources: [
+        ...candidates.map((c) => ({
+          id: c.gateway,
+          endpoint: c.accessPath,
+          credential: { env: 'TEST_KEY' },
+        })),
+        {
+          id: 'oc',
+          endpoint: 'https://gateway.example/v1',
+          credential: { env: 'TEST_KEY' },
+        },
+      ],
+      dispatch: {
+        providers: {
+          oc: { harness: 'opencode-direct', provider: 'opencode' },
+        },
+      },
+    };
+
+    const probedKeys = [];
+    const routeProbe = async (probeCandidate) => {
+      probedKeys.push(probeCandidate.modelId);
+      if ([liveCandidate.modelId, alternate.modelId].includes(probeCandidate.modelId)) {
+        return { ok: true, status: 200, body: 'OK' };
+      }
+
+      return { ok: false, status: 400, body: 'alias_mismatch' };
+    };
+
+    const options = {
+      routeHealth,
+      routeHealthFile: path.join(evidenceDir, 'health.json'),
+      isolatedWorker: true,
+      cwd: repo.dir,
+      workerRoot: repo.dir,
+      baseSha: repo.sha,
+      sha: repo.sha,
+      decisionDir,
+      evidenceDir,
+      candidates,
+      registry,
+      specs: [
+        { id: 'TASK-AI-142', files: ['a.js'], acceptanceCriteria: ['done'], qualityFloor: 0 },
+      ],
+      routeProbe,
+      run: () => {
+        launched.push(true);
+        if (failedLaunch && launched.length === 1)
+          return { exitCode: 1, httpStatus: 404, stderr: 'unsupported model' };
+        return {
+          exitCode: 0,
+          stdout: '{"sessionID":"ses_a","tokens":{"input":10,"output":5}}',
+          stderr: '',
+          completionNonce: 'nonce-a',
+          workerSha: repo.sha,
+        };
+      },
+      reviewer: () => ({ pass: true, sha: repo.sha, verdict: 'PASS', findings: [] }),
+      tests: () => ({ pass: true }),
+      hostGate: () => ({ pass: true, failures: [] }),
+      ranking: { priors: { ranking: [] } },
+    };
+
+    const launched = [];
+    const result = await runOrchestration('known live ordering and launch fallback', options);
+    assert.equal(probedKeys[0], liveCandidate.modelId);
+    assert.equal(result.status, 'COMPLETED');
+    assert.equal(launched.length, failedLaunch ? 2 : 1);
+    assert.equal(
+      result.sessions[0].candidateKey,
+      failedLaunch ? alternate.candidateKey : liveCandidate.candidateKey
+    );
+  });
+}
+
+test('probe ordering preserves rank inside each health group', () => {
+  const health = require('../route-health');
+  const dir = tmpDir();
+  try {
+    const ranked = Array.from({ length: 6 }, (_, i) =>
+      createCandidate({ modelId: `fixture/model-${i}` })
+    );
+    const options = {
+      routeHealth: { version: 1, paths: {}, events: [] },
+      routeHealthFile: path.join(dir, 'health.json'),
+      now: Date.now(),
+    };
+    for (const i of [1, 4]) health.rememberProbe(ranked[i], { ok: true }, options);
+    for (const i of [0, 3]) health.rememberProbe(ranked[i], { ok: false, status: 404 }, options);
+    assert.deepEqual(health.orderProbeRoutes(ranked, options), [
+      ranked[1],
+      ranked[4],
+      ranked[2],
+      ranked[5],
+      ranked[0],
+      ranked[3],
+    ]);
+    assert.deepEqual(
+      ranked.map((c) => c.modelId),
+      Array.from({ length: 6 }, (_, i) => `fixture/model-${i}`)
+    );
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

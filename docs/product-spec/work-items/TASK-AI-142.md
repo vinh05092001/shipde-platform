@@ -426,6 +426,10 @@ GOAL-AUTOCLAW-REPOS-1 failed with PROBE_BUDGET_EXHAUSTED because writer probing 
 
 After #312 writer routes were still probed one at a time within the 180 s budget. Writer routes are now probed concurrently (up to 8 accounts, reusing the Hermes concurrent probe) before selection; failed routes are recorded with reasons in the intake decisions. A live dry-run with real keys selected live writers.
 
+### H3 live: writer probes known-live routes first (2026-10-15)
+
+On 14/10 22:49 the concurrent pre-probe spent the 180 s budget on dead routes and live accounts were never reached; a failed launch of the probe winner ended NO_ALTERNATE_FAILURE_DOMAIN. Probe order now puts routes with a fresh ok route-health record first, then unprobed, then failed (rank kept inside each group; scores unchanged), and a failed launch continues to the next live route. The cause of the 22:49 ag/gemini-3.8-flash launch failure was not found in the stored artifacts.
+
 ### H3 live: stale isolation verdict refreshed automatically (2026-10-15)
 
 A verdict older than 24h no longer waits for a human: intake and the isolation launcher run Test-WorkerIsolation.ps1 once, re-read and re-validate the verdict, and block with the original error plus exit code and stderr only if it is still stale, missing or not closed. Decisions ISOLATION_VERDICT_REFRESHED / _REFRESH_FAILED. Follow-up P2: a verifier that writes a valid verdict but exits non-zero still blocks.
