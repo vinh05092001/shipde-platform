@@ -4,6 +4,8 @@ const test = require('node:test');
 const assert = require('node:assert');
 const path = require('path');
 const { generateCandidates } = require('../candidates');
+const { buildCandidates } = require('../orchestrate');
+const { mergeDiscoveredSources } = require('../intake');
 
 const HOME = path.join(path.sep, 'fakehome');
 const AUTH = path.join(HOME, '.codex', 'auth.json');
@@ -80,4 +82,32 @@ test('registry codex account wins, no duplicate', () => {
 test('auth.json content is never read', () => {
   const stub = fakeFs({ auth: true, config: 'model = "op-model-x"\n' });
   assert.doesNotThrow(() => codexCands(stub));
+});
+
+test('intake snapshot disabled CLI inventory does not hide the logged-in Codex candidate', () => {
+  const source = registry.sources[0];
+  const accounts = mergeDiscoveredSources(
+    [],
+    [{ id: source.id, status: 'discovered', models: [] }],
+    registry
+  );
+  assert.strictEqual(accounts.length, 1);
+  assert.strictEqual(accounts[0].enabled, false);
+  const options = {
+    registry,
+    accounts: JSON.parse(JSON.stringify(accounts)),
+    catalogue: [],
+    discoverPool: false,
+    codexOpts: {
+      homeDir: HOME,
+      fs: fakeFs({ auth: true, config: 'model = "op-model-x"\n' }),
+      env: {},
+    },
+  };
+  const candidates = buildCandidates(options, null).filter((c) => c.source === source.id);
+  assert.deepStrictEqual(candidates, codexCands(options.codexOpts.fs));
+  assert.strictEqual(candidates.length, 1);
+  assert.strictEqual(candidates[0].binding, 'cli-login');
+  options.codexOpts.fs = fakeFs({ auth: false, config: 'model = "op-model-x"\n' });
+  assert.ok(buildCandidates(options, null).every((c) => c.binding !== 'cli-login'));
 });

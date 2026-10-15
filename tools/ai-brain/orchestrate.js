@@ -3074,6 +3074,7 @@ function buildCandidates(options, evidenceData) {
       poolRuntimeDir: o.poolRuntimeDir,
       discoverPool: o.discoverPool,
       openCodeIds: o.openCodeIds || [],
+      codexOpts: o.codexOpts,
     });
   }
   const testsInjectedCandidates = Array.isArray(o.candidates);
