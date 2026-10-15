@@ -99,6 +99,42 @@ function accountModels(account) {
   return declared.map((m) => (typeof m === 'string' ? m : m && m.model)).filter(Boolean);
 }
 
+/**
+ * A Codex CLI the operator is already logged into is a bound account without a
+ * registry entry: existence of ~/.codex/auth.json (never its content) proves the
+ * login and the model ids come only from ~/.codex/config.toml. The same helpers
+ * the Hermes brain uses decide both, so writer and brain see the same Codex.
+ * Registry-declared accounts take precedence (the caller only asks when none is bound).
+ */
+function implicitCliLoginAccount(source, registry, o) {
+  if (!source || source.kind !== 'agent-cli' || source.modelsFrom !== 'account') return null;
+  if (harnessOf(source, registry) !== 'codex') return null;
+  // Without injected options the login is looked up under the process home only
+  // (CODEX_HOME, else USERPROFILE/HOME), so an isolated HOME stays isolated.
+  const env = process.env;
+  const codexOpts =
+    o.codexOpts ||
+    (env.CODEX_HOME
+      ? { codexDir: env.CODEX_HOME }
+      : { homeDir: env.USERPROFILE || env.HOME || require('os').homedir() });
+  // Lazy: hermes-session requires this module.
+  const hermes = require('./hermes-session');
+  if (!hermes.hasCodexAuth(codexOpts, codexOpts)) return null;
+  const models = hermes.readCodexConfigModels(
+    Object.assign({}, codexOpts, { strict: true }),
+    codexOpts
+  );
+  if (!models.length) return null;
+  return {
+    id: `${source.id}-cli`,
+    sourceId: source.id,
+    models,
+    binding: 'cli-login',
+    evidence: 'cli-login',
+    quota: source.quota,
+  };
+}
+
 function accountModelRow(account, model) {
   const declared = (account && account.models) || [];
   return declared.find((m) => m && typeof m === 'object' && m.model === model) || null;
@@ -375,7 +411,14 @@ function generateCandidates(opts) {
       bound = accountsFor(accounts, source.reachedVia);
     }
     const hasConcreteAccounts = (accounts || []).some((a) => a && a.id && a.id !== '*');
-    const sharedArc = bound.length === 0 && !hasConcreteAccounts;
+    let sharedArc = bound.length === 0 && !hasConcreteAccounts;
+    if (bound.length === 0) {
+      const implicit = implicitCliLoginAccount(source, registry, o);
+      if (implicit) {
+        bound = [implicit];
+        sharedArc = false;
+      }
+    }
 
     if (source.kind === 'router' && source.servesModels !== false) {
       // Gateway: expand catalogue into (upstream, model) pairs.
@@ -771,6 +814,7 @@ function generateCandidates(opts) {
                 capabilities: acc.capabilities || {},
                 cost: acc.cost,
                 sharedQuota: 'unknown',
+                ...(acc.binding ? { binding: acc.binding, evidence: acc.evidence } : {}),
               });
             }
           }
