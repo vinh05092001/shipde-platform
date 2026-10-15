@@ -72,7 +72,6 @@ const {
   PROVIDER_LEVEL_FAILURE_CAUSES,
 } = require('./hermes-session');
 // Safety invariant: reviewer canonical-model probe cap
-const REVIEWER_CANONICAL_MODEL_CAP = 2;
 const PROBE_BUDGET_MS = 180000;
 
 function providerFailureBodyMatches(body) {
@@ -718,7 +717,6 @@ function reviewLane(
   registry,
   opts
 ) {
-  const reviewerProbeCounts = new Map();
   const reviewerProbeStartedAt = Date.now();
   let reviewerProbeAttempts = 0;
   const writerKey =
@@ -854,21 +852,9 @@ function reviewLane(
         logOpts
       );
     } else {
-      // The two-route cap is per canonical model across providers, not per gateway.
-      const modelId = String(route.model || '')
-        .toLowerCase()
-        .split('/')
-        .pop()
-        .replace(/@[^@:]+$/, '')
-        .replace(/:free$/, '');
-      const count = (reviewerProbeCounts.get(modelId) || 0) + 1;
-      reviewerProbeCounts.set(modelId, count);
+      // Every route of a model may be probed; only the wall-clock budget bounds it.
       let result = { ok: false, status: 0, body: 'Probe route configuration unavailable' };
-      if (
-        probeCandidate &&
-        count <= REVIEWER_CANONICAL_MODEL_CAP &&
-        Date.now() - reviewerProbeStartedAt < PROBE_BUDGET_MS
-      ) {
+      if (probeCandidate && Date.now() - reviewerProbeStartedAt < PROBE_BUDGET_MS) {
         reviewerProbeAttempts += 1;
         // Invoke the caller-provided probe directly through the timeout wrapper.
         result = await sharedRouteProbe.boundedProbe(

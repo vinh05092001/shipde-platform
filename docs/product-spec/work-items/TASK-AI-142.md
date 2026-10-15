@@ -455,3 +455,7 @@ Hermes stopped item runs that were still working (six abandoned item-1 runs on 1
 ### H3 live: resume, budget and writer launch results (2026-10-15)
 
 Resume skips only items in PASSED, MERGED or COMPLETED; an old PASS verdict no longer hides a blocked item. Token budgets take the tightest of the complexity and role caps; defaults only fill missing fields. Every writer, host-gate repair and review repair invocation records a writer-launch-result decision (run id, candidate, exit code, session id, redacted stderr up to 4096 chars); replays are not recorded again. Probes not attempted because the budget ran out or the route had no configuration exclude the route only in that run and are retried on resume.
+
+### H3 live: reviewer probing has no per-model route cap (2026-10-15)
+
+The reviewer lane probed at most 2 routes per canonical model (REVIEWER_CANONICAL_MODEL_CAP), so a model whose first two providers were down was never reached through a third. The cap is removed, as it was for writers in #312; only the wall-clock probe budget bounds reviewer probing.
