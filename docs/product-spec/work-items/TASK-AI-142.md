@@ -489,3 +489,7 @@ Operator keys AiHubMix, The Grid 1-2, b.ai 1-7, Scaleway 1-2 and PGSGrove map to
 ### H3 live: Hermes without Codex credentials reselects its brain (2026-10-15)
 
 After #311 the Controller chose openai-codex as the Hermes brain because the Codex CLI is logged in, but Hermes keeps its own credential store and exited with "No Codex credentials stored". That exit was classified unknown, so Hermes stopped instead of trying the next brain. The classifier now treats "No ... credentials stored" as account_auth_failed (account scope), so the candidate is excluded and the brain is reselected. No credential file is read.
+
+### H3 live: SovInfra source (2026-10-15)
+
+Operator key SOVINFRA_API_KEY maps to https://api.sovinfra.ai/v1. Live check on 15/10: GET /models listed sovapi, gemma-4-31b, qwen3.8-27b, qwen3-coder-next; chat completions on qwen3-coder-next and qwen3.8-27b answered. Model selection stays with the Controller (live probe and ranking).
