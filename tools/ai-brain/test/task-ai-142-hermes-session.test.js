@@ -3693,3 +3693,16 @@ test('TASK-AI-142: account cooldown expires and re-allows candidate', () => {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('Hermes exit "No Codex credentials stored" is an account auth failure, so the brain is reselected', () => {
+  const classifier = require('../failure-classifier');
+  const c = classifier.classifyFailure({
+    exitCode: 1,
+    stderr: '',
+    body: 'No Codex credentials stored. Run `hermes auth add openai-codex --type oauth` to authenticate.',
+    candidateKey: 'hermes::openai-codex::openai-codex::openai::codex::codex-chatgpt::m',
+    accountId: 'codex',
+  });
+  assert.equal(c.cause, classifier.Cause.ACCOUNT_AUTH_FAILED);
+  assert.equal(c.scope, classifier.Scope.ACCOUNT);
+});
