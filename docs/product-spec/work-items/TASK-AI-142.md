@@ -537,6 +537,10 @@ Live run GOAL-AUTOCLAW-REPOS-1 (15/10) recorded every JEV assessment as `JEV_UND
 - The deterministic Controller fallback is unchanged and every named cause still counts as a provider failure.
 - Evidence: `tools/ai-brain/test/task-ai-142-jev-failure-reason.test.js`.
 
+### H3 live: a Hermes brain without its login is reselected (2026-10-16)
+
+#323 classified "No Codex credentials stored" as an account failure, but Hermes prints it and exits 0, so the run counted as completed and the classifier never ran (live launch 16/10 06:03). The output scanner now treats that startup line as route evidence, so the run fails and the brain is reselected. No credential file is read.
+
 ### H3 live: the isolated writer receives its context pack (2026-10-16)
 
 The prompt told the writer to read the focused context pack at its host path, which the isolated worker cannot read (File not found), so the writer explored the repository instead and hit the 150k token budget before writing (live run 15/10 17:05, GOAL-AUTOCLAW-REPOS-1). The launcher now copies the pack into the worker's .shipde/ directory and points the prompt at the copy.
