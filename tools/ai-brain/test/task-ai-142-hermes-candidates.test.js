@@ -198,7 +198,9 @@ test('TASK-AI-142 H3: production assembly probes an untested stronger model befo
     readDiscoveryCatalogue: () => ({ candidates: [] }),
     routeHealth,
     evidenceData: {},
-    priorsData: require('../priors').loadPriors(),
+    priorsData: require('../priors').loadPriors(
+      path.join(__dirname, 'fixtures', 'priors-20261013.json')
+    ),
     assembleForDispatch: (d, a, r, o) =>
       cliApi.assembleForDispatch(d, a, r, { ...o, offerings: [], registryAccounts: [] }),
     probe: async (c) => {

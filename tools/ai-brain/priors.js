@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 
 const DEFAULT_PRIORS_FILE = path.join(__dirname, 'data', 'model-priors.json');
+const LIVE_PRIORS_FILE = path.join(__dirname, 'data', 'model-priors-live.json');
 const TIER_BONUSES = Object.freeze({ T1: 6, T2: 4, T3: 2, T4: 0 });
 const STALE_AFTER_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -13,51 +14,65 @@ const ROLE_BENCHMARK_WEIGHTS = Object.freeze({
   reviewer: Object.freeze({ intelligenceIndex: 0.5, aaCodingIndex: 0.5 }),
 });
 
-/** Load the local, curated prior file. Priors are optional and never block routing. */
+/**
+ * Load priors. Priors are optional and never block routing.
+ * When no explicit file is given, read the curated baseline deterministically.
+ */
 function loadPriors(file) {
+  const target = file || DEFAULT_PRIORS_FILE;
   try {
-    const parsed = JSON.parse(fs.readFileSync(file || DEFAULT_PRIORS_FILE, 'utf8'));
-    if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.ranking)) {
-      return { ranking: [] };
+    const parsed = JSON.parse(fs.readFileSync(target, 'utf8'));
+    if (parsed && typeof parsed === 'object' && Array.isArray(parsed.ranking)) {
+      return parsed;
     }
-    return parsed;
   } catch (_) {
-    return { ranking: [] };
+    /* ignore and return empty ranking */
   }
+  return { ranking: [] };
 }
 
 function normaliseCanonical(value) {
   if (typeof value !== 'string' || !value.trim()) return null;
-  let canonical = value.trim().toLowerCase().split('/').pop();
+  let canonical = value
+    .trim()
+    .toLowerCase()
+    .replace(/\s*\([^)]*\)/g, '')
+    .split('/')
+    .pop();
   canonical = canonical.split('@')[0];
   canonical = canonical.replace(/(?::free|-free)$/, '');
-  canonical = canonical.replace(/[._]/g, '-');
+  canonical = canonical.replace(/\s*\([^)]*\)/g, '').replace(/[._\s]+/g, '-');
   return canonical || null;
 }
 
-/** Resolve one candidate's role-specific benchmark prior, if available. */
+/**
+ * Resolve one candidate's role-specific benchmark prior, if available.
+ *
+ * INVARIANT: For any candidate with a valid modelId, this function MUST return
+ * an object — never null. Unknown or unscored models receive a null-score
+ * prior with `priorUnknown: true`. The only null return is when the candidate
+ * itself carries no modelId (a genuine caller error).
+ */
 function priorFor(candidate, role, priors, now) {
   const modelId = candidate && (candidate.modelId || candidate.model);
   const canonical = normaliseCanonical(modelId);
   if (!canonical) return null;
 
   const ranking = priors && Array.isArray(priors.ranking) ? priors.ranking : [];
-  const match = ranking.find(
-    (entry) => entry && normaliseModelId(entry.canonical) === normaliseModelId(modelId)
-  );
-  if (!match) return null;
+  const resolved = matchModelPrior(modelId, ranking);
+  const match = resolved && resolved.entry;
+  if (!match) return neutralPrior(canonical);
 
   const tier =
     role === 'reviewer' || role === 'security-review' ? match.reviewTier : match.codingTier;
   const bonus = TIER_BONUSES[tier] ?? null;
-  if (bonus === null) return null;
+  if (bonus === null) return neutralPrior(canonical);
 
   const profile = roleBenchmarkProfile(role);
   const rankingMaxima = benchmarkMaxima(ranking);
   const weighted = weightedBenchmarkScore(match, profile, rankingMaxima);
-  // Missing role-profile benchmarks contribute zero. Aggregate and legacy scores
-  // use different scales and must never be substituted into this weighted score.
-  const priorScore = weighted.score;
+  // Zero role coverage must NOT inherit benchmarkScore.
+  const priorScore = weighted.coverage > 0 ? weighted.score : null;
   const sourceDates = (match.sources || [])
     .map((source) => source && source.retrievedAt)
     .filter(Boolean);
@@ -72,6 +87,10 @@ function priorFor(candidate, role, priors, now) {
       : isStale(retrievalDate, now));
 
   const result = { canonical: match.canonical, tier, bonus: stale ? 0 : bonus };
+  if (resolved.matchedVia || match.matchedVia) {
+    result.matchedVia = resolved.matchedVia || match.matchedVia;
+    result.matchedBaseId = resolved.matchedBaseId || match.matchedBaseId;
+  }
   if (weighted.coverage > 0) {
     result.coverage = weighted.coverage;
     if (weighted.coverage < 0.5) result.evidence = 'INDIRECT';
@@ -80,13 +99,22 @@ function priorFor(candidate, role, priors, now) {
   if (liveBench !== null) result.liveBench = liveBench;
   if (stale) result.stale = true;
   if (match.sources && match.sources.length) result.sources = match.sources;
-  if (
-    Number.isFinite(priorScore) &&
-    (weighted.coverage > 0 || match.benchmarks || Number.isFinite(match.score))
-  ) {
+  if (Number.isFinite(priorScore)) {
     result.score = Math.round(Math.max(0, Math.min(100, priorScore)));
+  } else if (match.benchmarks || Number.isFinite(match.score) || match.score === null) {
+    result.score = null;
   }
   return result;
+}
+
+function neutralPrior(canonical) {
+  return {
+    canonical,
+    score: null,
+    bonus: 0,
+    priorUnknown: true,
+    reason: 'NO_BENCHMARK_COVERAGE',
+  };
 }
 
 function isStale(retrievedAt, now) {
@@ -110,7 +138,12 @@ function benchmarkScore(match) {
       ? intelligenceIndex.score
       : intelligenceIndex
   );
-  if (Number.isFinite(intelligenceScore)) return intelligenceScore;
+  if (
+    intelligenceIndex !== null &&
+    intelligenceIndex !== undefined &&
+    Number.isFinite(intelligenceScore)
+  )
+    return intelligenceScore;
   const entries = Array.isArray(benchmarks)
     ? benchmarks.map((entry) => [entry && entry.name, entry && entry.score])
     : Object.entries(benchmarks || {});
@@ -122,7 +155,11 @@ function benchmarkScore(match) {
         Number.isFinite(value)
     )
     .map(([, value]) => Math.max(0, Math.min(100, value)));
-  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+  return values.length
+    ? values.reduce((sum, value) => sum + value, 0) / values.length
+    : match && Number.isFinite(match.score)
+      ? match.score
+      : null;
 }
 
 function roleBenchmarkProfile(role) {
@@ -140,6 +177,7 @@ function benchmarkValue(match, name) {
     : benchmarks && benchmarks[name] !== undefined
       ? benchmarks[name]
       : match && match[name];
+  if (value === null || value === undefined) return null;
   const score = Number(value && typeof value === 'object' ? value.score : value);
   return Number.isFinite(score) ? score : null;
 }
@@ -174,6 +212,57 @@ function normaliseModelId(value) {
   return normaliseCanonical(parts.length > 1 ? parts.slice(-2).join('/') : value);
 }
 
+// Preserve effort labels for exact leaderboard lookup; routing identity stays compatible.
+function leaderboardModelId(value) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/\s*\(([^)]*)\)/g, (_, effort) => '-' + effort.replace(/[^a-z0-9]+/g, '-'))
+    .split('/')
+    .pop()
+    .split('@')[0]
+    .replace(/(?::free|-free)$/, '')
+    .replace(/[._\s]+/g, '-');
+}
+
+function matchModelPrior(modelId, ranking) {
+  const id = leaderboardModelId(modelId);
+  const byId = new Map(
+    ranking.filter(Boolean).map((row) => [leaderboardModelId(row.canonical), row])
+  );
+  if (byId.has(id)) return { entry: byId.get(id) };
+  const queue = [{ id, reasoning: false }];
+  const seen = new Set([id]);
+  for (const current of queue) {
+    if (!current.id) continue;
+    const deployment = current.id.replace(
+      /(?::(?:batch|flex|cloud)|-?\[\d+(?:-\d+)?[km]\]|-(?:fast|latest|volc|turbo|\d{4}-\d{2}-\d{2}|\d{8}|\d{6}|\d{4}))$/,
+      ''
+    );
+    const reasoning = current.id.replace(
+      /-(?:thinking|agentic|high|medium|low|minimal|max|xhigh|none|reasoning|non-reasoning)$/,
+      ''
+    );
+    for (const [base, effort] of [
+      [deployment, false],
+      [reasoning, true],
+    ]) {
+      if (base === current.id || seen.has(base)) continue;
+      seen.add(base);
+      const usedReasoning = current.reasoning || effort;
+      if (byId.has(base))
+        return {
+          entry: byId.get(base),
+          matchedVia: usedReasoning ? 'reasoning-variant' : 'variant-suffix',
+          matchedBaseId: byId.get(base).canonical,
+        };
+      queue.push({ id: base, reasoning: usedReasoning });
+    }
+  }
+  return null;
+}
+
 function mergePriorDocuments(documents, now) {
   const byCanonical = new Map();
   const sources = [];
@@ -182,7 +271,7 @@ function mergePriorDocuments(documents, now) {
       if (source && source.url) sources.push(Object.assign({}, source));
     }
     for (const item of (document && document.models) || (document && document.ranking) || []) {
-      const canonical = normaliseCanonical(item && (item.modelId || item.model || item.canonical));
+      const canonical = leaderboardModelId(item && (item.modelId || item.model || item.canonical));
       if (!canonical) continue;
       const row = byCanonical.get(canonical) || { canonical, benchmarks: [], sources: [] };
       const sourceRows = (item.sources || (item.source ? [item.source] : [])).filter(
@@ -229,16 +318,15 @@ function mergePriorDocuments(documents, now) {
     const score = scores.length
       ? scores.reduce((sum, value) => sum + value, 0) / scores.length
       : null;
-    const tier =
-      score === null ? null : score >= 74 ? 'T1' : score >= 66 ? 'T2' : score >= 50 ? 'T3' : 'T4';
     return Object.assign(row, {
       score: score === null ? null : Math.round(score * 10) / 10,
-      codingTier: tier,
-      reviewTier: tier,
+      codingTier: null,
+      reviewTier: null,
       stale:
         row.sources.length === 0 || row.sources.some((source) => isStale(source.retrievedAt, now)),
     });
   });
+  assignQuartileTiers(rows);
   return {
     label: 'EXTERNAL_PRIOR',
     generatedAt: new Date(now || Date.now()).toISOString(),
@@ -247,9 +335,44 @@ function mergePriorDocuments(documents, now) {
   };
 }
 
+function assignQuartileTiers(rows) {
+  const scores = rows
+    .map((row) => row.score)
+    .filter(Number.isFinite)
+    .sort((a, b) => a - b);
+  // Nearest-rank quartiles of the scored population; ties share a tier.
+  const tiers = ['T4', 'T3', 'T2', 'T1'];
+  const quartiles = tiers
+    .slice(1)
+    .map((_, index) => scores[Math.ceil(((index + 1) * scores.length) / tiers.length) - 1]);
+  for (const row of rows) {
+    if (row.score === null || !Number.isFinite(row.score)) {
+      row.codingTier = null;
+      row.reviewTier = null;
+      continue;
+    }
+    const tier = tiers[quartiles.filter((threshold) => row.score > threshold).length];
+    row.codingTier = tier;
+    row.reviewTier = tier;
+  }
+  return rows;
+}
+
 async function refreshPriors(options) {
   const opts = options || {};
-  if (typeof opts.search !== 'function') throw new Error('PRIORS_SEARCH_SOURCE_REQUIRED');
+  const output =
+    opts.file ||
+    (opts.root
+      ? fs.existsSync(path.join(opts.root, 'tools', 'ai-brain', 'data'))
+        ? path.join(opts.root, 'tools', 'ai-brain', 'data', 'model-priors-live.json')
+        : fs.existsSync(path.join(opts.root, 'data'))
+          ? path.join(opts.root, 'data', 'model-priors-live.json')
+          : path.join(opts.root, 'model-priors-live.json')
+      : null);
+  if (!output) throw new Error('PRIORS_OUTPUT_FILE_REQUIRED');
+
+  if (typeof opts.search !== 'function')
+    opts.search = () => require('./priors-public').publicDocuments(opts);
   const query =
     opts.query ||
     process.env.AI_BRAIN_PRIORS_QUERY ||
@@ -257,6 +380,41 @@ async function refreshPriors(options) {
   const results = await opts.search(query);
   if (!Array.isArray(results)) throw new Error('PRIORS_SEARCH_RESULT_INVALID');
   const document = mergePriorDocuments(results, opts.now);
+  if (opts.preserveHistory) {
+    for (const row of loadPriors(output).ranking) {
+      const fresh = document.ranking.find((item) => item.canonical === row.canonical);
+      if (!fresh) {
+        document.ranking.push(row);
+      } else {
+        const added = (row.benchmarks || []).filter(
+          (b) => !fresh.benchmarks.some((n) => JSON.stringify(n) === JSON.stringify(b))
+        );
+        if (added.length) {
+          fresh.benchmarks.push(...added);
+          const scores = fresh.benchmarks.map((b) => b.score).filter(Number.isFinite);
+          fresh.score = scores.length
+            ? Math.round((scores.reduce((sum, v) => sum + v, 0) / scores.length) * 10) / 10
+            : null;
+        }
+      }
+    }
+    assignQuartileTiers(document.ranking);
+  }
+  const liveModels = opts.liveModels || require('./priors-public').liveModelIds();
+  const scoredRows = document.ranking.filter((row) => !row.matchedVia);
+  document.ranking = scoredRows.slice();
+  document.unmatchedLiveModels = [];
+  for (const id of [...new Set(liveModels.map(leaderboardModelId))].filter(Boolean).sort()) {
+    const match = matchModelPrior(id, scoredRows);
+    if (!match) document.unmatchedLiveModels.push(id);
+    else if (match.matchedVia)
+      document.ranking.push({
+        ...match.entry,
+        canonical: id,
+        matchedVia: match.matchedVia,
+        matchedBaseId: match.matchedBaseId,
+      });
+  }
   const provenanceValid = document.ranking.every(
     (entry) =>
       entry.sources.length > 0 &&
@@ -282,7 +440,6 @@ async function refreshPriors(options) {
   if (!provenanceValid) throw new Error('PRIORS_SOURCE_PROVENANCE_REQUIRED');
   document.searchSource =
     opts.sourceId || opts.searchSource || opts.search.name || 'configured-search-provider';
-  const output = opts.file || DEFAULT_PRIORS_FILE;
   fs.mkdirSync(path.dirname(output), { recursive: true });
   fs.writeFileSync(output, JSON.stringify(document, null, 2) + '\n', 'utf8');
   return document;
@@ -295,9 +452,12 @@ module.exports = {
   mergePriorDocuments,
   refreshPriors,
   normaliseModelId,
+  leaderboardModelId,
+  matchModelPrior,
   benchmarkScore,
   ROLE_BENCHMARK_WEIGHTS,
   roleBenchmarkProfile,
   weightedBenchmarkScore,
   DEFAULT_PRIORS_FILE,
+  LIVE_PRIORS_FILE,
 };
