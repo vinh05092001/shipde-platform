@@ -312,6 +312,13 @@ async function adviseModelChoice(result, profile, options) {
 function controllerFallbackProfile(profile) {
   const roleDefault = ROLE_FALLBACK_PROFILE[profile.role] || 'BALANCED';
   const qualityCritical = profile.role === 'reviewer' || profile.role === 'security-review';
+  if (
+    ['complex', 'large', 'hard'].includes(profile.complexity) ||
+    (profile.riskDomains || []).some((r) => ['security', 'money', 'tenant'].includes(r))
+  )
+    return 'QUALITY_FIRST';
+  if (!qualityCritical && ['trivial', 'simple'].includes(profile.complexity))
+    return 'LATENCY_FIRST';
   if (profile.latencyPriority === 'high' && !qualityCritical) return 'LATENCY_FIRST';
   if (profile.latencyPriority === 'low' && qualityCritical) return 'BALANCED';
   return roleDefault;

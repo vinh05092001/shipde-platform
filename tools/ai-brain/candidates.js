@@ -367,6 +367,7 @@ function generateCandidates(opts) {
   }
 
   for (const source of registry.sources) {
+    if (source.enabled === false) continue;
     if (sourcesApi.isRetired(source.id, registry)) continue;
     if (sourcesApi.isDeferred(source.id, registry)) continue;
     let bound = accountsFor(accounts, source.id);
@@ -382,7 +383,28 @@ function generateCandidates(opts) {
       const harness = harnessOf(source, registry);
       const accessPath = accessPathOf(source, registry);
       if (!harness || !accessPath) continue;
-      for (const item of catalogue) {
+      // The router's own inventory is independent of the OpenCode CLI catalogue.
+      // Scope additions to this source; an ID listed by another gateway is no proof here.
+      const existingIds = new Set(
+        catalogue.map((item) =>
+          typeof item === 'string'
+            ? item
+            : item &&
+              (!item.gateway || item.gateway === source.id) &&
+              (item.modelId || item.model || item.id)
+        )
+      );
+      const routerCatalogue = catalogue.concat(
+        (source.models || [])
+          .map((model) => ({
+            modelId: typeof model === 'string' ? model : model && (model.id || model.model),
+            gateway: source.id,
+          }))
+          .filter((item) => item.modelId && !existingIds.has(item.modelId))
+      );
+      for (const item of routerCatalogue) {
+        if (item && typeof item === 'object' && item.gateway && item.gateway !== source.id)
+          continue;
         const fullId =
           typeof item === 'string' ? item : (item && (item.modelId || item.model || item.id)) || '';
         const parsed = parsePrefix(fullId);

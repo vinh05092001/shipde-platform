@@ -39,6 +39,7 @@ for (const outcome of ['success', 'error', 'exception']) {
   test(`review-repair emits exactly one redacted writer-launch-result: ${outcome}`, async (t) => {
     const dir = temp(t);
     const secret = 'fixture-private-value-932801';
+    const injectedSecret = 'fixture-injected-value-427819';
     const previous = process.env.FIXTURE_REPAIR_TOKEN;
     process.env.FIXTURE_REPAIR_TOKEN = secret;
     t.after(() => {
@@ -52,6 +53,7 @@ for (const outcome of ['success', 'error', 'exception']) {
     const repair = repairRound(
       {
         cwd: dir,
+        env: { FIXTURE_WORKER_KEY: injectedSecret },
         registry: { sources: [] },
         specs: [item],
         jevAsk: async () => {
@@ -64,11 +66,11 @@ for (const outcome of ['success', 'error', 'exception']) {
       logOpts,
       async () => {
         launches++;
-        if (outcome === 'exception') throw Error(`launcher failed ${secret}`);
+        if (outcome === 'exception') throw Error(`launcher failed ${secret} ${injectedSecret}`);
         return {
           exitCode: outcome === 'success' ? 0 : 1,
           stdout: '',
-          stderr: `fixture stderr ${secret}`,
+          stderr: `fixture stderr ${secret} ${injectedSecret}`,
           httpStatus: outcome === 'error' ? 503 : undefined,
         };
       },
@@ -87,6 +89,7 @@ for (const outcome of ['success', 'error', 'exception']) {
     assert.equal(results[0].chosen, c.candidateKey);
     assert.equal(results[0].exitCode, outcome === 'exception' ? -1 : outcome === 'error' ? 1 : 0);
     assert.ok(!JSON.stringify(records).includes(secret));
+    assert.ok(!JSON.stringify(results).includes(injectedSecret));
     assert.match(results[0].stderr, /REDACTED/i);
   });
 }

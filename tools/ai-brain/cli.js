@@ -3444,6 +3444,9 @@ async function orchestrateCommand(args, deps = {}) {
   // silently, so it is caught here and turned into a non-zero exit instead.
   return runOrchestration(goal, {
     specs,
+    refreshWriterModels: d.refreshWriterModels ?? (!Array.isArray(d.candidates) && !d.registry),
+    fetchModels: d.fetchModels,
+    env: d.env,
     specText: typeof args['spec-text'] === 'string' ? args['spec-text'] : null,
     candidates,
     accounts: evidenceAccounts,
