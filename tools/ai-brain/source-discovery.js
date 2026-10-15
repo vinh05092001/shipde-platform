@@ -339,18 +339,72 @@ function discoverSources(options = {}) {
         models: Object.keys(provider.models || {}),
       });
   }
+  const OPERATOR_ENDPOINTS = {
+    AIHUBMIX_API_KEY: { id: 'aihubmix', name: 'aihubmix', endpoint: 'https://aihubmix.com/v1' },
+    THEGRID_API_KEY: { id: 'thegrid', name: 'thegrid', endpoint: 'https://api.thegrid.ai/v1' },
+    THEGRID_API_KEY_2: {
+      id: 'thegrid-2',
+      name: 'thegrid-2',
+      endpoint: 'https://api.thegrid.ai/v1',
+    },
+    SCALEWAY_API_KEY: { id: 'scaleway', name: 'scaleway', endpoint: 'https://api.scaleway.ai/v1' },
+    SCALEWAY_API_KEY_2: {
+      id: 'scaleway-2',
+      name: 'scaleway-2',
+      endpoint: 'https://api.scaleway.ai/v1',
+    },
+    PGSGROVE_API_KEY: { id: 'pgsgrove', name: 'pgsgrove', endpoint: 'https://api.pgsgrove.com/v1' },
+  };
+
+  function getOperatorEndpoint(envName) {
+    if (OPERATOR_ENDPOINTS[envName]) return OPERATOR_ENDPOINTS[envName];
+    const baiMatch = envName.match(/^BAI_API_KEY(?:_([2-9]|\d{2,}))?$/i);
+    if (baiMatch) {
+      const suffix = baiMatch[1] ? `-${baiMatch[1]}` : '';
+      return { id: `bai${suffix}`, name: `bai${suffix}`, endpoint: 'https://api.b.ai/v1' };
+    }
+    const gridMatch = envName.match(/^THEGRID_API_KEY_(\d+)$/i);
+    if (gridMatch) {
+      return {
+        id: `thegrid-${gridMatch[1]}`,
+        name: `thegrid-${gridMatch[1]}`,
+        endpoint: 'https://api.thegrid.ai/v1',
+      };
+    }
+    const scwMatch = envName.match(/^SCALEWAY_API_KEY_(\d+)$/i);
+    if (scwMatch) {
+      return {
+        id: `scaleway-${scwMatch[1]}`,
+        name: `scaleway-${scwMatch[1]}`,
+        endpoint: 'https://api.scaleway.ai/v1',
+      };
+    }
+    const aihubMatch = envName.match(/^AIHUBMIX_API_KEY_(\d+)$/i);
+    if (aihubMatch) {
+      return {
+        id: `aihubmix-${aihubMatch[1]}`,
+        name: `aihubmix-${aihubMatch[1]}`,
+        endpoint: 'https://aihubmix.com/v1',
+      };
+    }
+    return null;
+  }
+
   for (const name of Object.keys(env)) {
-    if (!/(?:_API_KEY|_TOKEN)$/.test(name) || !env[name]) continue;
+    if (!/(?:_API_KEY|_TOKEN)(?:_\d+)?$/i.test(name) || !env[name]) continue;
     const known = [...result.values()].some(
       (source) => source.credential && source.credential.name === name
     );
-    if (!known)
+    if (!known) {
+      const op = getOperatorEndpoint(name);
       add({
-        id: idOf(name.replace(/(?:_API_KEY|_TOKEN)$/i, '')),
-        name: name.replace(/(?:_API_KEY|_TOKEN)$/i, ''),
-        endpoint: null,
+        // Keep a numbered suffix: KEY_1 and KEY_2 are separate credentials.
+        id: op ? op.id : idOf(name.replace(/_(?:API_KEY|TOKEN)(_\d+)?$/i, '$1')),
+        name: op ? op.name : name.replace(/_(?:API_KEY|TOKEN)(_\d+)?$/i, '$1'),
+        endpoint: op ? op.endpoint : null,
         credential: { type: 'env', name },
       });
+    }
   }
   discoverNineRouterDb(options, add);
   return dropUncredentialedDuplicates([...result.values()]);

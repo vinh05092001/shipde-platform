@@ -482,6 +482,10 @@ Resume skips only items in PASSED, MERGED or COMPLETED; an old PASS verdict no l
 
 The reviewer lane probed at most 2 routes per canonical model (REVIEWER_CANONICAL_MODEL_CAP), so a model whose first two providers were down was never reached through a third. The cap is removed, as it was for writers in #312; only the wall-clock probe budget bounds reviewer probing.
 
+### H3 live: operator sources, isolation verifier exit, pre-push revision (2026-10-15)
+
+Operator keys AiHubMix, The Grid 1-2, b.ai 1-7, Scaleway 1-2 and PGSGrove map to their vendor endpoints in source discovery; a GET /models 200 only lists models and does not prove inference or quota (b.ai needs a deposit, Scaleway returns 403, AgentRouter 401). Numbered keys without a known endpoint stay separate credentials with a null endpoint. The isolation verifier may exit non-zero while still writing a valid CLOSED verdict; that verdict is accepted, anything stale, missing or not closed still blocks. The no-hardcode guard reads code, allowlist and baseline from the same revision (HEAD for pre-push, the index for --staged, --rev when given), so neither an uncommitted fix nor an uncommitted exemption changes the result.
+
 ### H3 live: Hermes without Codex credentials reselects its brain (2026-10-15)
 
 After #311 the Controller chose openai-codex as the Hermes brain because the Codex CLI is logged in, but Hermes keeps its own credential store and exited with "No Codex credentials stored". That exit was classified unknown, so Hermes stopped instead of trying the next brain. The classifier now treats "No ... credentials stored" as account_auth_failed (account scope), so the candidate is excluded and the brain is reselected. No credential file is read.

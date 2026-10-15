@@ -536,3 +536,43 @@ test('rewrites Tencent TokenHub endpoints to the -intl host for scanned configs 
     'non-Tencent host is not rewritten'
   );
 });
+
+test('TASK-AI-142: operator environment keys resolve to vendor endpoints', () => {
+  const sources = discoverSources({
+    home: os.tmpdir(),
+    localAppData: os.tmpdir(),
+    env: {
+      AIHUBMIX_API_KEY: 'test-key',
+      THEGRID_API_KEY_2: 'test-key-2',
+      BAI_API_KEY_3: 'test-bai-3',
+      SCALEWAY_API_KEY: 'test-scw',
+      SCALEWAY_API_KEY_2: 'test-scw-2',
+      PGSGROVE_API_KEY: 'test-pgs',
+    },
+  });
+  const byEnv = new Map(sources.map((s) => [s.credential?.name, s]));
+  assert.equal(byEnv.get('AIHUBMIX_API_KEY')?.endpoint, 'https://aihubmix.com/v1');
+  assert.equal(byEnv.get('THEGRID_API_KEY_2')?.endpoint, 'https://api.thegrid.ai/v1');
+  assert.equal(byEnv.get('BAI_API_KEY_3')?.endpoint, 'https://api.b.ai/v1');
+  assert.equal(byEnv.get('SCALEWAY_API_KEY')?.endpoint, 'https://api.scaleway.ai/v1');
+  assert.equal(byEnv.get('SCALEWAY_API_KEY_2')?.endpoint, 'https://api.scaleway.ai/v1');
+  assert.equal(byEnv.get('PGSGROVE_API_KEY')?.endpoint, 'https://api.pgsgrove.com/v1');
+});
+
+test('TASK-AI-142: numbered keys without a known endpoint stay separate credentials', () => {
+  const sources = discoverSources({
+    home: os.tmpdir(),
+    localAppData: os.tmpdir(),
+    env: { UNKNOWN_API_KEY_1: 'test-1', UNKNOWN_API_KEY_2: 'test-2' },
+  });
+  const unknown = sources.filter((s) => /^UNKNOWN_API_KEY_\d$/.test(s.credential?.name || ''));
+  assert.deepEqual(unknown.map((s) => s.credential.name).sort(), [
+    'UNKNOWN_API_KEY_1',
+    'UNKNOWN_API_KEY_2',
+  ]);
+  assert.notEqual(unknown[0].id, unknown[1].id);
+  assert.ok(
+    unknown.every((s) => s.endpoint === null),
+    'an unknown endpoint is never guessed'
+  );
+});
