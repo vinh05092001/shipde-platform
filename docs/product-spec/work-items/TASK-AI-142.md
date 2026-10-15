@@ -520,3 +520,11 @@ Live run GOAL-AUTOCLAW-REPOS-1 (15/10) ended `NO_ALTERNATE_FAILURE_DOMAIN` with 
 ### H3 live: tests never rewrite the live isolation verdict (2026-10-15)
 
 Twice on 15/10 a full test run in another worktree triggered the stale-verdict refresh with the real verifier, which rewrote the machine-wide isolation verdict for that worktree; every live launch from hermes-live then failed ISOLATION_VERDICT_INVALID (worktree mismatch) until TURN_BUDGET_EXCEEDED. Inside node --test (NODE_TEST_CONTEXT set) the refresh now never spawns the real verifier unless a runner is injected; it reports the original refusal instead.
+
+### H3 live: JEV failures name their cause (2026-10-15)
+
+Live run GOAL-AUTOCLAW-REPOS-1 (15/10) recorded every JEV assessment as `JEV_UNDECIDED:UNREACHABLE`, so the Controller fell back to BALANCED weights and ranked a fast, cheap writer first, while a direct JEV call returned QUALITY_FIRST. `advise` (`tools/ai-brain/jev.js`) and the routing catch (`tools/ai-brain/routing.js`) mapped every non-timeout error to `UNREACHABLE`, hiding the cause.
+
+- Failures are now recorded as `CREDENTIAL_MISSING`, `TIMEOUT`, `HTTP_<status>`, `INVALID_RESPONSE` or `NETWORK_ERROR` (e.g. `JEV_UNDECIDED:HTTP_422`); no credential or response body is recorded.
+- The deterministic Controller fallback is unchanged and every named cause still counts as a provider failure.
+- Evidence: `tools/ai-brain/test/task-ai-142-jev-failure-reason.test.js`.
