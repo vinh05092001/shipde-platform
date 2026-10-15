@@ -548,6 +548,7 @@ test('TASK-AI-142: operator environment keys resolve to vendor endpoints', () =>
       SCALEWAY_API_KEY: 'test-scw',
       SCALEWAY_API_KEY_2: 'test-scw-2',
       PGSGROVE_API_KEY: 'test-pgs',
+      SOVINFRA_API_KEY: 'test-sov',
     },
   });
   const byEnv = new Map(sources.map((s) => [s.credential?.name, s]));
@@ -557,6 +558,7 @@ test('TASK-AI-142: operator environment keys resolve to vendor endpoints', () =>
   assert.equal(byEnv.get('SCALEWAY_API_KEY')?.endpoint, 'https://api.scaleway.ai/v1');
   assert.equal(byEnv.get('SCALEWAY_API_KEY_2')?.endpoint, 'https://api.scaleway.ai/v1');
   assert.equal(byEnv.get('PGSGROVE_API_KEY')?.endpoint, 'https://api.pgsgrove.com/v1');
+  assert.equal(byEnv.get('SOVINFRA_API_KEY')?.endpoint, 'https://api.sovinfra.ai/v1');
 });
 
 test('TASK-AI-142: numbered keys without a known endpoint stay separate credentials', () => {
