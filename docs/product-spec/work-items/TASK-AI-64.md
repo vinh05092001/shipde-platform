@@ -1469,3 +1469,7 @@ Evidence:
 
 Residual risk / known limitations:
 - None.
+
+## Repair without progress (2026-10-15)
+
+Operator decision under TASK-AI-60: `tools/ai-brain/review-loop.js` stops at once with status `BLOCKED` and cause `REPAIR_NO_PROGRESS` when a repair ran and returned no new commit SHA, or the same SHA. A repair that never ran (`repairNotAttempted` or `repairRefused` from `repairRound` in `tools/ai-brain/orchestrate.js`) does not trigger this stop, so another repairer can be tried. This supersedes the earlier expectation here that unchanged-SHA repairs keep looping until `REPAIR_BUDGET_EXHAUSTED`; that cause is now reached only when every repair makes progress and the budget runs out. Test 64-10 proves the finite budget with repairs that advance HEAD, and 64-10b proves the no-progress stop after exactly one repair.
