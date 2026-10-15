@@ -132,9 +132,126 @@ function collectAllDecisionRecords(options, deps) {
   return { records: allRecords, readable, damaged };
 }
 
+function parsePid(val) {
+  if (typeof val === 'number' && Number.isInteger(val) && val > 0) return val;
+  if (typeof val === 'string' && /^\d+$/.test(val.trim())) {
+    const num = parseInt(val.trim(), 10);
+    if (!Number.isNaN(num) && num > 0) return num;
+  }
+  return null;
+}
+
+let goalsApi = null;
+function getPidAliveHelper(deps) {
+  if (deps && typeof deps.isPidAlive === 'function') {
+    return deps.isPidAlive;
+  }
+  if (deps && typeof deps.checkAlive === 'function') {
+    return deps.checkAlive;
+  }
+  if (!goalsApi) {
+    try {
+      goalsApi = require('./goals');
+    } catch (_) {}
+  }
+  if (goalsApi && typeof goalsApi.isPidAlive === 'function') {
+    return goalsApi.isPidAlive;
+  }
+  return function defaultIsPidAlive(pid) {
+    if (!pid || typeof pid !== 'number') return false;
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (err) {
+      return err && err.code === 'EPERM';
+    }
+  };
+}
+
+function resolveRunPid(runDir, workItemId, rootDir, opts, d, fsApi = fs) {
+  // 1. Check run.lock inside runDir
+  const runLockFile = path.join(runDir, 'run.lock');
+  if (fsApi.existsSync(runLockFile)) {
+    try {
+      const content = fsApi.readFileSync(runLockFile, 'utf8').trim();
+      try {
+        const parsed = JSON.parse(content);
+        const pid = parsePid(parsed && (parsed.pid != null ? parsed.pid : parsed));
+        if (pid != null) return pid;
+      } catch (_) {
+        const pid = parsePid(content);
+        if (pid != null) return pid;
+      }
+    } catch (_) {}
+  }
+
+  // 2. Check checkpoint.json inside runDir
+  const checkpointFile = path.join(runDir, 'checkpoint.json');
+  if (fsApi.existsSync(checkpointFile)) {
+    try {
+      const ckpt = JSON.parse(fsApi.readFileSync(checkpointFile, 'utf8'));
+      const pid = parsePid(ckpt && ckpt.pid);
+      if (pid != null) return pid;
+    } catch (_) {}
+  }
+
+  // 3. Goal run lock in data/goals/<goalId>/run.lock
+  const goalsDir =
+    (opts && (opts.goalsDir || opts['goals-dir'])) ||
+    (d && (d.goalsDir || d['goals-dir'])) ||
+    path.join(rootDir, 'data', 'goals');
+
+  if (workItemId && typeof workItemId === 'string' && workItemId.startsWith('GOAL-')) {
+    const afterPrefix = workItemId.slice(5);
+    const lastDash = afterPrefix.lastIndexOf('-');
+    const goalId = lastDash > 0 ? afterPrefix.slice(0, lastDash) : afterPrefix;
+    if (goalId) {
+      const candidates = [
+        path.join(goalsDir, goalId, 'run.lock'),
+        path.join(goalsDir, goalId.toLowerCase(), 'run.lock'),
+        path.join(goalsDir, goalId.toUpperCase(), 'run.lock'),
+      ];
+      for (const cand of candidates) {
+        if (fsApi.existsSync(cand)) {
+          try {
+            const data = JSON.parse(fsApi.readFileSync(cand, 'utf8'));
+            const pid = parsePid(data && (data.pid != null ? data.pid : data));
+            if (pid != null) return pid;
+          } catch (_) {}
+        }
+      }
+    }
+  }
+
+  // 4. Scan goalsDir if workItemId is found in any goal.json
+  try {
+    if (fsApi.existsSync(goalsDir)) {
+      const gEntries = fsApi.readdirSync(goalsDir);
+      for (const g of gEntries) {
+        const lockPath = path.join(goalsDir, g, 'run.lock');
+        if (!fsApi.existsSync(lockPath)) continue;
+        const gJsonPath = path.join(goalsDir, g, 'goal.json');
+        if (fsApi.existsSync(gJsonPath)) {
+          try {
+            const gData = JSON.parse(fsApi.readFileSync(gJsonPath, 'utf8'));
+            if (Array.isArray(gData.items) && gData.items.includes(workItemId)) {
+              const lData = JSON.parse(fsApi.readFileSync(lockPath, 'utf8'));
+              const pid = parsePid(lData && (lData.pid != null ? lData.pid : lData));
+              if (pid != null) return pid;
+            }
+          } catch (_) {}
+        }
+      }
+    }
+  } catch (_) {}
+
+  return null;
+}
+
 function getOpenRuns(options, deps) {
   const opts = options || {};
   const d = deps || {};
+  const fsApi = (d && d.fs) || (opts && opts.fs) || fs;
   const rootDir = path.resolve(opts.rootDir || (d && d.rootDir) || process.cwd());
   const intakeBase =
     opts.intakeDir ||
@@ -142,16 +259,20 @@ function getOpenRuns(options, deps) {
     path.join(rootDir, 'tools', 'ai-brain', 'data', 'intake');
   const now = typeof d.now === 'function' ? d.now() : d.now || opts.now || Date.now();
   const ttlMs = opts.ttlMs || (d && d.ttlMs) || 4 * 60 * 60 * 1000;
+  const checkAlive =
+    (d && (d.isPidAlive || d.checkAlive)) ||
+    (opts && (opts.isPidAlive || opts.checkAlive)) ||
+    getPidAliveHelper(d);
 
   const openRuns = [];
   try {
-    if (!fs.existsSync(intakeBase)) return openRuns;
-    const entries = fs.readdirSync(intakeBase);
+    if (!fsApi.existsSync(intakeBase)) return openRuns;
+    const entries = fsApi.readdirSync(intakeBase);
     for (const entry of entries) {
       const runDir = path.join(intakeBase, entry);
       let stat;
       try {
-        stat = fs.statSync(runDir);
+        stat = fsApi.statSync(runDir);
       } catch (_) {
         continue;
       }
@@ -159,27 +280,39 @@ function getOpenRuns(options, deps) {
 
       let workItemId = null;
       const specsFile = path.join(runDir, 'specs.json');
-      if (fs.existsSync(specsFile)) {
+      if (fsApi.existsSync(specsFile)) {
         try {
-          const specs = JSON.parse(fs.readFileSync(specsFile, 'utf8'));
+          const specs = JSON.parse(fsApi.readFileSync(specsFile, 'utf8'));
           if (Array.isArray(specs) && specs[0] && specs[0].id) {
             workItemId = specs[0].id;
           }
         } catch (_) {}
       }
       if (!workItemId) {
-        const lastDash = entry.lastIndexOf('-');
-        if (lastDash > 0) {
-          workItemId = entry.slice(0, lastDash);
+        const match = entry.match(/^(.*)-\d{4}-\d{2}-\d{2}T/);
+        if (match) {
+          workItemId = match[1];
+        } else {
+          const lastDash = entry.lastIndexOf('-');
+          if (lastDash > 0) {
+            workItemId = entry.slice(0, lastDash);
+          }
         }
       }
       if (!workItemId) continue;
 
-      if (now - stat.mtimeMs > ttlMs) continue;
+      const pid = resolveRunPid(runDir, workItemId, rootDir, opts, d, fsApi);
+      if (pid != null) {
+        if (!checkAlive(pid)) {
+          continue;
+        }
+      } else {
+        if (now - stat.mtimeMs > ttlMs) continue;
+      }
 
       let terminal = false;
       const runDecDir = path.join(runDir, 'decisions');
-      if (fs.existsSync(runDecDir)) {
+      if (fsApi.existsSync(runDecDir)) {
         try {
           const detail = decisions.readDecisionsDetailed({ dir: runDecDir, now });
           const recs = detail.records || [];
@@ -198,9 +331,9 @@ function getOpenRuns(options, deps) {
       }
 
       const checkpointFile = path.join(runDir, 'checkpoint.json');
-      if (!terminal && fs.existsSync(checkpointFile)) {
+      if (!terminal && fsApi.existsSync(checkpointFile)) {
         try {
-          const ckpt = JSON.parse(fs.readFileSync(checkpointFile, 'utf8'));
+          const ckpt = JSON.parse(fsApi.readFileSync(checkpointFile, 'utf8'));
           if (
             ckpt &&
             (ckpt.completed ||
@@ -219,6 +352,7 @@ function getOpenRuns(options, deps) {
           runDir,
           entry,
           mtimeMs: stat.mtimeMs,
+          ...(pid != null ? { pid } : {}),
         });
       }
     }
