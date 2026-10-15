@@ -4436,6 +4436,23 @@ async function runOrchestration(goal, opts) {
           logOpts
         );
       };
+      const recordWriterPrompt = (candidate) => {
+        const key = candidateKey(candidate);
+        log.prompts.push({
+          workItemId: item.id,
+          candidateKey: key,
+          prompt: compilePrompt(item, {
+            goal,
+            specText: o.specText,
+            candidateKey: key,
+            branch: o.branch || 'feat/' + String(item.id).toLowerCase(),
+            isolatedWorker: true,
+            focusedTestsOnly: true,
+            contextPack: contextPack && contextPack.path,
+            hostGateFailures: item.hostGateFailures || [],
+          }),
+        });
+      };
       const batch = await probeRankedRoutes(ordered, {
         deadline: writerProbeStartedAt + PROBE_BUDGET_MS,
         skip: (candidate, account) =>
@@ -4468,12 +4485,13 @@ async function runOrchestration(goal, opts) {
                       ? 'Probe budget exhausted'
                       : 'Probe route configuration unavailable',
                 };
-          writerProbeResults.set(candidateKey(candidate), result);
           const skippedReason = unattemptedProbeReason(result);
           if (skippedReason) {
             recordProbeSkip(candidate, skippedReason);
+            recordWriterPrompt(candidate);
             return false;
           }
+          writerProbeResults.set(candidateKey(candidate), result);
           require('./route-health').rememberProbe(candidate, result, o);
           if (result?.ok === true) return true;
           const reasonCode = sharedRouteProbe.failureReason(
@@ -4485,20 +4503,7 @@ async function runOrchestration(goal, opts) {
               ? 'PROBE_BUDGET_EXHAUSTED: writer route probe budget exhausted'
               : 'WRITER_ROUTE_PROBE_FAILED ' + reasonCode;
           recordWriterFailure(key, reason, reasonCode, 'gateway');
-          log.prompts.push({
-            workItemId: item.id,
-            candidateKey: key,
-            prompt: compilePrompt(item, {
-              goal,
-              specText: o.specText,
-              candidateKey: key,
-              branch: o.branch || 'feat/' + String(item.id).toLowerCase(),
-              isolatedWorker: true,
-              focusedTestsOnly: true,
-              contextPack: contextPack && contextPack.path,
-              hostGateFailures: item.hostGateFailures || [],
-            }),
-          });
+          recordWriterPrompt(candidate);
           refuse(candidate, reason);
           const cause = String(result?.cause || result?.reasonCode || reasonCode)
             .toLowerCase()
