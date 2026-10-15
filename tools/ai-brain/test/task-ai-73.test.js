@@ -184,7 +184,7 @@ function assertSystemOneRequest(body) {
   );
   for (const key of ['qualityImportance', 'latencyImportance', 'costImportance']) {
     assert.equal(body.questions[key].type, 'score');
-    assert.equal(body.questions[key].levels.length, 11);
+    assert.equal(body.questions[key].criteria.length, 10);
   }
   assert.equal(body.kind, undefined, 'legacy kind field must not be sent');
   assert.equal(body.prompt, undefined, 'legacy prompt field must not be sent');
