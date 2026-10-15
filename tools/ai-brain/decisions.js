@@ -90,7 +90,7 @@ const identity = (c) =>
 function capDecision(entry) {
   const out = { ...entry };
   const chosen = identity(entry.chosen) || entry.chosenKey || entry.selected;
-  for (const field of ['candidates', 'ranking', 'top3']) {
+  for (const field of ['candidates', 'ranking', 'top3', 'modelRanking']) {
     if (!Array.isArray(entry[field])) continue;
     const rows = entry[field];
     out.chosenCandidate = out.chosenCandidate || rows.find((c) => identity(c) === chosen) || null;
