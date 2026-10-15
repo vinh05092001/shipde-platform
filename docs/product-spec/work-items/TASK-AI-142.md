@@ -540,3 +540,11 @@ Live run GOAL-AUTOCLAW-REPOS-1 (15/10) recorded every JEV assessment as `JEV_UND
 ### H3 live: a dead run no longer claims its Work Item (2026-10-15)
 
 next-runner treated every intake run without a terminal checkpoint as open for 4 h, so a killed Hermes run kept GOAL-AUTOCLAW-REPOS-1 "claimed by open run" and every goal resume skipped it. A run now counts as open only while its recorded process is alive; runs without a recorded pid keep the TTL behaviour.
+
+### H3 live: live writer selection offers the logged-in Codex CLI (2026-10-15)
+
+The dry-run listed the auto-bound codex-cli writer but every live run had no codex candidate: candidates.js treated the disabled Codex CLI inventory entry as an already-bound account and skipped the auto-bind. The disabled inventory binding no longer blocks it; the jsonSchema proof gate is unchanged.
+
+### H3 live: JEV requests match the API schema (2026-10-15)
+
+On 15/10 the live Controller got HTTP 422 then 400 from JEV and fell back to BALANCED weights, which let a weak writer rank first. Score questions now send their rubric as `criteria` (not `levels`) and use at most the API limit of 10 levels. A live call through routing.assessTask now returns a JEV decision (LOW_CONFIDENCE for the GOAL-AUTOCLAW-REPOS-1 profile) instead of an HTTP error.
