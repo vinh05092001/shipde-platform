@@ -1,0 +1,17 @@
+[
+  {
+    "file": "tools/ai-brain/atomic-rename.js",
+    "pattern": "DEFAULT_MAX_ATTEMPTS",
+    "reason": "Atomic file rename retry count for transient Windows filesystem locks (EPERM, EBUSY, EACCES) is an OS safety invariant"
+  },
+  {
+    "file": "tools/ai-brain/harness.js",
+    "pattern": "hermes.*32000",
+    "reason": "Hermes harness minimum context window requirement of 32000 tokens is a safety invariant"
+  },
+  {
+    "file": "tools/ai-brain/hermes-session.js",
+    "pattern": "HERMES_MIN_CONTEXT",
+    "reason": "Hermes session minimum context window requirement of 32000 tokens is a safety invariant"
+  }
+]
