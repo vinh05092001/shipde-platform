@@ -282,9 +282,16 @@ test('Codex harness and launcher require the fresh CLOSED verdict', () => {
   assert.match(worker, /`\$env:USERPROFILE = "C:\\worker"/);
 });
 
-test('Codex harness runs the fake CLI with the isolated worker arguments', () => {
+test('Codex harness runs the fake CLI with the isolated worker arguments', (t) => {
   const codex = harnesses.getHarness('codex');
   const temp = fs.mkdtempSync(path.join(__dirname, 'codex-fake-'));
+  if (t && typeof t.after === 'function') {
+    t.after(() => {
+      try {
+        fs.rmSync(temp, { recursive: true, force: true });
+      } catch {}
+    });
+  }
   roots.push(temp);
   const executable = path.join(temp, 'codex.js');
   fs.writeFileSync(executable, "process.stdout.write(process.argv.slice(2).join(' '));\n");
@@ -318,6 +325,9 @@ test('Codex harness runs the fake CLI with the isolated worker arguments', () =>
   } finally {
     if (previous === undefined) delete process.env.LOCALAPPDATA;
     else process.env.LOCALAPPDATA = previous;
+    try {
+      fs.rmSync(temp, { recursive: true, force: true });
+    } catch {}
   }
 });
 

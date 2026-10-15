@@ -737,3 +737,103 @@ test('TASK-AI-142: 9router and compatible sources refresh nested context without
     assert.equal(source.modelMeta.missing.contextWindow, undefined);
   }
 });
+
+test('TASK-AI-142: openai-codex context window takes conservative minimum of codex and provider evidence', () => {
+  const hermes = require('../hermes-session');
+
+  // (a) codex source 400000 + same-model provider 200000 -> 200000
+  const registryA = {
+    sources: [
+      {
+        id: 'openai-codex',
+        modelMeta: {
+          'gpt-6.1-sol': { contextWindow: 400000 },
+        },
+      },
+      {
+        id: 'provider-1',
+        modelMeta: {
+          'kr/gpt-6.1-sol': { contextWindow: 200000 },
+        },
+      },
+    ],
+  };
+  const cwA = hermes.resolveHermesContextWindow(
+    'gpt-6.1-sol',
+    { provider: 'openai-codex' },
+    { registry: registryA }
+  );
+  assert.equal(cwA, 200000);
+  assert.equal(harnessApi.contextRefusal('hermes', cwA), null);
+
+  // (b) codex source invalid ('abc') + provider 128000 -> 128000
+  const registryB = {
+    sources: [
+      {
+        id: 'openai-codex',
+        modelMeta: {
+          'gpt-6.1-sol': { contextWindow: 'abc' },
+        },
+      },
+      {
+        id: 'provider-1',
+        modelMeta: {
+          'kr/gpt-6.1-sol': { contextWindow: 128000 },
+        },
+      },
+    ],
+  };
+  const cwB = hermes.resolveHermesContextWindow(
+    'gpt-6.1-sol',
+    { provider: 'openai-codex' },
+    { registry: registryB }
+  );
+  assert.equal(cwB, 128000);
+  assert.equal(harnessApi.contextRefusal('hermes', cwB), null);
+
+  // (c) all invalid -> refused
+  const registryC = {
+    sources: [
+      {
+        id: 'openai-codex',
+        modelMeta: {
+          'gpt-6.1-sol': { contextWindow: 'abc' },
+        },
+      },
+      {
+        id: 'provider-1',
+        modelMeta: {
+          'kr/gpt-6.1-sol': { contextWindow: -500 },
+        },
+      },
+    ],
+  };
+  const cwC = hermes.resolveHermesContextWindow(
+    'gpt-6.1-sol',
+    { provider: 'openai-codex' },
+    { registry: registryC }
+  );
+  assert.equal(cwC, undefined);
+  const refusal = harnessApi.contextRefusal('hermes', cwC);
+  assert.ok(refusal && refusal.includes('CONTEXT_WINDOW_UNVERIFIED'));
+
+  const candidate = {
+    harness: 'hermes',
+    accessPath: 'openai-codex',
+    gateway: 'openai-codex',
+    provider: 'openai-codex',
+    modelId: 'gpt-6.1-sol',
+    contextWindow: cwC,
+  };
+  const selection = hermes.selectReasoningCandidate(
+    { skipDecisionLog: true, includeOpenAiCodex: true },
+    {
+      candidateList: [candidate],
+      registry: registryC,
+      priorsData: { ranking: [] },
+    }
+  );
+  assert.equal(selection.chosen, null);
+  assert.equal(selection.refused, 'NO_REASONING_CANDIDATE');
+  assert.ok(selection.reason.includes('CONTEXT_WINDOW_UNVERIFIED'));
+});
