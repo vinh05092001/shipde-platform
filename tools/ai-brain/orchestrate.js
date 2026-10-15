@@ -3260,12 +3260,7 @@ async function selectCandidateForProfile(
   // The weighting assessment is the Controller's own, obtained through the real
   // JEV source declared in sources.json. The ask is closed and only about
   // weighting profiles, never a model, provider, account or gateway.
-  if (
-    o.isolatedWorker &&
-    (!Array.isArray(o.candidates) ||
-      o.refreshWriterModels === true ||
-      o.enforceCredentialCheck === true)
-  ) {
+  if (o.isolatedWorker && (o.refreshWriterModels === true || o.enforceCredentialCheck === true)) {
     const env = { ...process.env, ...o.env };
     const selectionApi = require('./writer-selection');
     candidates = candidates.map((c) => {
@@ -3862,6 +3857,7 @@ async function runOrchestration(goal, opts) {
     o.refreshWriterModels === true ||
     (!testsInjectedCandidates && o.refreshWriterModels !== false)
   ) {
+    o.refreshWriterModels = true;
     o.registry = await require('./writer-selection').refreshWriterRegistry(
       o.registry || sourcesApi.loadSources(),
       o

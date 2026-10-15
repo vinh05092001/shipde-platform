@@ -1,5 +1,11 @@
 # TASK-AI-142 — Hermes chat brain wired to the Controller
 
+## Writer selection integration assignment (2026-10-15)
+
+The operator assigns Codex to finish `fix/task-ai-142-writer-selection-review`, integrate current main including #319–#323, run the full brain suite and required checks, and submit the resulting SHA through PR/CI and fresh independent review. An older Gemini PASS applies only to its reviewed SHA. The implementation author cannot supply the independent PASS. No additional model, provider request or live Hermes run is authorized in this assignment. The separate deadline investigation starts only after this writer selection PR merges, on a new branch from main.
+
+The implementation expands router inventory independently of OpenCode declarations, separates listed/configured/probed evidence, retains task/credential/route/quota gates, caches unchanged JEV assessments with deterministic failure fallback, and redacts worker-environment secrets in writer launch results. Fixture acceptance lives in `task-ai-142-writer-selection.test.js`, `task-ai-142-writer-probe.test.js`, and `task-ai-142-review-repair-result.test.js`. Source/key, isolation-refresh and pre-push guard repairs in `w-fix578` are excluded. Full validation and PR evidence are recorded in `WRITER-SELECTION-HANDOFF.md` and the PR body.
+
 ## Control
 
 | Field           | Value                                                                                                                                                                                                                                                  |

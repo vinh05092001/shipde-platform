@@ -38,3 +38,11 @@ Files owned here: `tools/ai-brain/{candidates,cli,orchestrate,route-probe,routin
 ## Remaining external evidence
 
 No real 9Router/JEV/provider calls, bulk probes, new agents, publishing, independent approval or merge were performed. Live inventory size, account quota and provider availability are unverified in this assignment. Claude must integrate this branch with Gemini's source/key work and the preserved `w-selectloop` draft before live acceptance.
+
+## Main integration follow-up (2026-10-15)
+
+- Entry HEAD was `329ab5327bd85d50128d9652e528d3dfd9648e96`, a clean worktree containing the earlier main integration. Main `9857ffc13caeb3e7398700874f16a33cbc1e1189` was merged without conflicts as `88a3b6603ef41d26559b6b5203da034012f0afda`; this includes #319–#323. The source/key, isolation and pre-push work in `w-fix578` remains untouched.
+- The full suite exposed WD-R04: implicit credential enforcement also blocked an offline repair fixture. Credential enforcement now follows explicit live refresh or explicit enforcement; a default live refresh marks that policy before selection. The unchanged WD-R04 fixture passes again; live credential refusal remains covered by the writer-selection fixture.
+- Full brain validation is being run with provider credential variables removed from the child environment and concurrency 4. Final counts, local application checks, CI and the final review SHA belong in the PR evidence; a running test is not a PASS.
+- Local `pnpm lint`, `pnpm typecheck`, `pnpm build`, baseline smoke 10/10, documentation validation and PowerShell supervisor behavioral tests passed. `pnpm test` is being completed sequentially after a `.next` lock collision. The native secret scan will be repeated on a clean checkout after active test fixtures stop changing.
+- The older Gemini PASS is invalid for the new SHA. Independent review remains pending and is not supplied by this author. No new model is called. The separate probe deadline task starts only after this PR is merged, on a new main-based branch.
