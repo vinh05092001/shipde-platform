@@ -94,3 +94,7 @@ The Controller (TASK-AI-58) selects a candidate and dispatches one Work Item. Wh
 - This is a dry-run loop; no live agent, daemon or external effect is executed.
 - The simulated fallback uses two synthetic candidates; the real Controller fallback remains TASK-AI-58.
 - The review loop consumes an injected review; the reviewer-differs-from-writer rule is enforced by the Controller, not re-implemented here.
+
+## Repair without progress (2026-10-15)
+
+A repair that returns no commit SHA, or the SHA under review, can never change the verdict. The review loop now stops at once with BLOCKED / REPAIR_NO_PROGRESS in both the failing-test and CHANGES_REQUIRED branches, keeping finalSha, findings and repairCount for diagnosis and calling no further reviewer or repair. A repair that produces a new SHA continues as before (re-test, re-review).
