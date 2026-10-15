@@ -1250,7 +1250,7 @@ function selectReasoningCandidate(options, deps) {
       ? b - a
       : Number(Number.isFinite(b)) - Number(Number.isFinite(a));
   const modelGroups = [...groups.values()].sort(
-    (a, b) => (b.score ?? -1) - (a.score ?? -1) || a.modelId.localeCompare(b.modelId)
+    (a, b) => compareKnown(a.score, b.score) || a.modelId.localeCompare(b.modelId)
   );
   for (const group of modelGroups) {
     group.routes.sort((a, b) => {

@@ -191,6 +191,25 @@ for (const gatePass of [true, false, 'repair-refused', 'repair-throw']) {
       assert.equal(launches, 2, 'a failed host gate must not relaunch or enter review on resume');
       assert.equal(reviewed, undefined);
     }
+    const outcomes = fs
+      .readdirSync(options.decisionDir)
+      .filter((file) => file.endsWith('.jsonl'))
+      .flatMap((file) =>
+        fs.readFileSync(path.join(options.decisionDir, file), 'utf8').trim().split('\n')
+      )
+      .map((line) => JSON.parse(line))
+      .filter((row) => row.stage === 'writer-launch-result');
+    assert.deepEqual(
+      outcomes.map((row) => row.kind),
+      ['writer', 'host-gate-repair']
+    );
+    assert.equal(outcomes[0].sessionId, 'ses_live_1');
+    assert.equal(
+      outcomes[1].exitCode,
+      gatePass === 'repair-throw' ? -1 : gatePass === 'repair-refused' ? 1 : 0
+    );
+    assert.equal(outcomes[0].runId, outcomes[1].runId);
+    if (gatePass === 'repair-throw') assert.match(outcomes[1].stderr, /WORKER_HEAD_MISMATCH/);
   });
 }
 

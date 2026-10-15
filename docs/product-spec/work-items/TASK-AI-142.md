@@ -420,6 +420,14 @@ When the worker full brain test suite encounters failures, `runHostBrainGate` ru
 
 Verification: TASK-AI-142 tests 173/173; related executor, TASK-AI-141, candidates, TASK-AI-126 and TASK-AI-130 tests 159/159. Installed `codex exec --help` confirms `--output-schema`; official reference: https://learn.chatgpt.com/docs/non-interactive-mode. Tests use injected harnesses; live account capability remains unverified until the Controller probe succeeds. Existing context, quota, isolation and proof-floor gates still apply.
 
+### H3 live public priors auto refresh (2026-10-14)
+
+Operator-authorized extension: priors refresh defaults to the checked-in public leaderboard descriptor. Artificial Analysis Next.js Flight JSON supplies Intelligence Index; BenchLM models.json supplies published displayScore and AA coding/agentic indices. Scores retain source URL and retrieval timestamp; effort variants use the highest published AA index per canonical model. Historical benchmarks remain after current observations. Unknown models receive a neutral role-score median with priorUnknown, without overriding measured internal quality.
+
+Live refresh at 2026-10-14T08:14:57.542Z: scored canonical models 61 -> 544. AA indices: gpt-6-luna 38.1245186869738; mercury-2.5 12.3408453757638; gemini-3.8-flash 40.9262321765904; grok-4.7 46.4465506302286; deepseek-v4.1-flash 39.456167472527; gpt-6-astra 52.673669395513. JSON reports 572 unmatched advertised catalogue IDs; catalogue advertisement is not live-route proof. No invented benchmark values or model probes. Historical snapshot assertions use a frozen fixture so public refresh does not invalidate routing regressions.
+
+Verification: requested prior/TASK-AI-142 tests 176/176; injected fetch covers both payload formats, null scores and schema drift. Prettier and git diff --check pass. No push or merge.
+
 ### H3 account-level cooldown on exhaustion (2026-10-14)
 
 Exhausted accounts cool down as a whole across model routes sharing the same account key (`extractAccountKey`). When a Hermes probe encounters `upstream_credit_exhausted`, `quota_exhausted`, `account_auth_failed`, or `upstream_entitlement`, the account is cooled down in `model-route-health.json` (`store.accounts[accountKey]`). Subsequent selections reject candidates on the cooled-down account with `PROBE_COOLDOWN_ACCOUNT: <account> until <timestamp>`, avoiding wasteful probes against exhausted accounts.
@@ -443,3 +451,7 @@ A verdict older than 24h no longer waits for a human: intake and the isolation l
 ### H3 live: Controller refuses to abandon an active goal run (2026-10-15)
 
 Hermes stopped item runs that were still working (six abandoned item-1 runs on 13-14/10). goal stop now refuses with GOAL_RUN_ACTIVE while the run lock is live or the checkpoint shows activity within SHIPDE_GOAL_STALE_MIN (default 90 min); --operator bypasses; each refusal is a decision; the Hermes skill states the rule.
+
+### H3 live: resume, budget and writer launch results (2026-10-15)
+
+Resume skips only items in PASSED, MERGED or COMPLETED; an old PASS verdict no longer hides a blocked item. Token budgets take the tightest of the complexity and role caps; defaults only fill missing fields. Every writer, host-gate repair and review repair invocation records a writer-launch-result decision (run id, candidate, exit code, session id, redacted stderr up to 4096 chars); replays are not recorded again. Probes not attempted because the budget ran out or the route had no configuration exclude the route only in that run and are retried on resume.
