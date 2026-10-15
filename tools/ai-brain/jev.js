@@ -1,5 +1,8 @@
 'use strict';
 
+// API contract (HTTP 400 "Too many score levels. Must have at most 10 levels."), not a tuning value.
+const JEV_MAX_SCORE_LEVELS = 10;
+
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -150,7 +153,7 @@ function normalizeAdvice(raw) {
       if (answer && answer.type === 'score') {
         scores[name] = {
           score: answer.score,
-          distribution: answer.distribution,
+          distribution: answer.distribution || answer.probabilities,
           confidence: answer.confidence,
         };
       }
@@ -246,8 +249,11 @@ function buildJevAsk(source, options) {
       for (const dimension of question.scoreDimensions || []) {
         const name = dimension.name;
         const state = question.state || {};
-        const levels = Array.from({ length: 11 }, (_, score) => {
-          const emphasis = score <= 3 ? 'low' : score <= 7 ? 'moderate' : 'high';
+        // The JEV API accepts at most JEV_MAX_SCORE_LEVELS levels; scores are only
+        // used as ratios between dimensions, so the scale itself carries no meaning.
+        const levels = Array.from({ length: JEV_MAX_SCORE_LEVELS }, (_, score) => {
+          const third = JEV_MAX_SCORE_LEVELS / 3;
+          const emphasis = score < third ? 'low' : score < 2 * third ? 'moderate' : 'high';
           return (
             score +
             ': ' +
@@ -268,7 +274,9 @@ function buildJevAsk(source, options) {
             String(state.costCeiling === undefined ? 'unspecified' : state.costCeiling)
           );
         });
-        questions[name] = { type: 'score', instructions: dimension.instructions, levels };
+        // The API's ScoreQuestion takes the ordered rubric as `criteria` (index = score);
+        // an unknown `levels` field leaves `criteria` missing and the API answers HTTP 422.
+        questions[name] = { type: 'score', instructions: dimension.instructions, criteria: levels };
       }
     }
     const raw = await postJson(
