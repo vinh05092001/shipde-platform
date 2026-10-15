@@ -3467,6 +3467,7 @@ async function selectCandidateForProfile(
 
   const decisionRecorded = {
     stage,
+    inventory: o.writerInventory,
     workItemId: profile.taskId,
     role: roleOf(item),
     attempt: attemptNumber !== undefined ? attemptNumber : undefined,
@@ -3872,16 +3873,11 @@ async function runOrchestration(goal, opts) {
         registry: o.registry,
       })
     );
-    decisions.recordDecision(
-      {
-        stage: decisions.Stage.WARNING,
-        detail: 'WRITER_MODEL_INVENTORY',
-        inventory: o.registry.sources
-          .filter((s) => s.writerInventory)
-          .map((s) => ({ sourceId: s.id, ...s.writerInventory })),
-      },
-      logOpts
-    );
+    // Inventory describes this selection; do not insert a record ahead of the
+    // selection that existing decision-log consumers expect to read first.
+    o.writerInventory = o.registry.sources
+      .filter((s) => s.writerInventory)
+      .map((s) => ({ sourceId: s.id, ...s.writerInventory }));
   }
   const rawCandidates = buildCandidates(o, evidenceData);
   const candidates = candidatesApi.annotateCandidates(

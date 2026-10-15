@@ -126,6 +126,17 @@ test('writer refreshes inventory once, skips a successful route with zero quota 
   assert.deepEqual(probed, ['vendor/first', 'vendor/second']);
   assert.deepEqual(launched, [second.candidateKey]);
   assert.equal(result.status, 'COMPLETED');
+  const records = require('../decisions').readDecisionsSafe({
+    dir: path.join(repo.dir, 'decisions'),
+  });
+  assert.notEqual(
+    records[0].chosen,
+    undefined,
+    'inventory must not replace the first selection record'
+  );
+  const inventory = records.find((record) => Array.isArray(record.inventory))?.inventory;
+  assert.equal(inventory?.[0].listed, 3);
+  assert.equal(inventory?.[0].probeSucceeded, false, 'a listing is not inference proof');
 });
 
 test('(a) 60 dead routes taking 8 seconds and a live route ranked last fit the 180 second concurrent budget', async (t) => {
