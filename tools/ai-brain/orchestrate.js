@@ -4470,7 +4470,7 @@ async function runOrchestration(goal, opts) {
         : null;
     };
 
-    const writerProbeStartedAt = Date.now();
+    let writerProbeStartedAt = Date.now();
     const exhaustedAccountKeys = new Set();
     const writerProbeResults = new Map();
     if (!session && o.isolatedWorker) {
@@ -4494,6 +4494,8 @@ async function runOrchestration(goal, opts) {
         }),
         o
       );
+      // Ranking work (jsonSchema proofs share their own budget) must not spend the probe budget.
+      writerProbeStartedAt = Date.now();
       const refuse = (candidate, reason, exclude = true) => {
         if (exclude) failedKeys.add(candidateKey(candidate));
         decisions.recordDecision(
@@ -4606,7 +4608,8 @@ async function runOrchestration(goal, opts) {
       if (Date.now() - writerProbeStartedAt >= PROBE_BUDGET_MS) {
         for (const candidate of ordered) {
           if (!batch.outcomes.has(candidateKey(candidate))) {
-            refuse(candidate, 'WRITER_ROUTE_PROBE_SKIPPED wall-clock budget exhausted');
+            // Recorded only: an unprobed route is not a failed route and stays a fallback.
+            refuse(candidate, 'WRITER_ROUTE_PROBE_SKIPPED wall-clock budget exhausted', false);
           }
         }
       }

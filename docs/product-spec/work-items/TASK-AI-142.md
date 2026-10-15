@@ -507,3 +507,12 @@ Operator key SOVINFRA_API_KEY maps to https://api.sovinfra.ai/v1. Live check on 
 ### H3 live: writer selection from the live router inventory (2026-10-15)
 
 Writer selection refreshes each enabled router's /models inventory once per orchestration and expands candidates independently of the OpenCode catalogue. Listed, configured and probed evidence stay separate: a listing never counts as a successful probe or benchmark. Credential, route, task and quota gates still apply; a reported zero quota excludes a route even after a successful probe, and missing quota stays unknown. Unchanged JEV assessments are cached per run with the deterministic Controller fallback on JEV failure. The inventory is attached to the selection decision record instead of a separate leading warning, and writer launch results redact injected worker-environment secrets.
+
+### H3 live: writer probing cannot be starved by one large account (2026-10-15)
+
+Live run GOAL-AUTOCLAW-REPOS-1 (15/10) ended `NO_ALTERNATE_FAILURE_DOMAIN` with no probe failing: `probeRankedRoutes` (`tools/ai-brain/hermes-session.js`) accepted a success only after every higher-ranked route had an outcome, and probes one route per account at a time, so a large higher-ranked account consumed the 180 s budget while the known-good route on a live account was never accepted. Ranking work before the pre-probe also started the writer budget early (`tools/ai-brain/orchestrate.js`).
+
+- A lower success now wins once each higher account has had its best-ranked probe resolved; the rest of that account's queue no longer blocks it.
+- The writer probe clock starts after ranking (jsonSchema proofs keep their own budget).
+- Routes left unprobed when the budget ends are recorded as `WRITER_ROUTE_PROBE_SKIPPED` but stay selectable as fallback instead of being excluded.
+- Evidence: `tools/ai-brain/test/task-ai-142-writer-probe-starvation.test.js` (fails before, passes after).
