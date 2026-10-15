@@ -503,3 +503,7 @@ Several CLI paths (next --loop, dispatch, orchestrate, assembleForDispatch) and 
 ### H3 live: SovInfra source (2026-10-15)
 
 Operator key SOVINFRA_API_KEY maps to https://api.sovinfra.ai/v1. Live check on 15/10: GET /models listed sovapi, gemma-4-31b, qwen3.8-27b, qwen3-coder-next; chat completions on qwen3-coder-next and qwen3.8-27b answered. Model selection stays with the Controller (live probe and ranking).
+
+### H3 live: writer selection from the live router inventory (2026-10-15)
+
+Writer selection refreshes each enabled router's /models inventory once per orchestration and expands candidates independently of the OpenCode catalogue. Listed, configured and probed evidence stay separate: a listing never counts as a successful probe or benchmark. Credential, route, task and quota gates still apply; a reported zero quota excludes a route even after a successful probe, and missing quota stays unknown. Unchanged JEV assessments are cached per run with the deterministic Controller fallback on JEV failure. The inventory is attached to the selection decision record instead of a separate leading warning, and writer launch results redact injected worker-environment secrets.
