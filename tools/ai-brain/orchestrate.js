@@ -3854,11 +3854,9 @@ async function runOrchestration(goal, opts) {
       : evidenceDir
         ? evidence.loadEvidence(evidenceDir)
         : null;
-  if (
-    o.refreshWriterModels === true ||
-    (!testsInjectedCandidates && o.refreshWriterModels !== false)
-  ) {
-    o.refreshWriterModels = true;
+  // Opt-in: the CLI turns this on for real runs; a direct runOrchestration call
+  // (tests, embedded use) never reaches live /models with host credentials.
+  if (o.refreshWriterModels === true) {
     o.registry = await require('./writer-selection').refreshWriterRegistry(
       o.registry || sourcesApi.loadSources(),
       o
