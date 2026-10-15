@@ -536,3 +536,7 @@ Live run GOAL-AUTOCLAW-REPOS-1 (15/10) recorded every JEV assessment as `JEV_UND
 - Failures are now recorded as `CREDENTIAL_MISSING`, `TIMEOUT`, `HTTP_<status>`, `INVALID_RESPONSE` or `NETWORK_ERROR` (e.g. `JEV_UNDECIDED:HTTP_422`); no credential or response body is recorded.
 - The deterministic Controller fallback is unchanged and every named cause still counts as a provider failure.
 - Evidence: `tools/ai-brain/test/task-ai-142-jev-failure-reason.test.js`.
+
+### H3 live: live writer selection offers the logged-in Codex CLI (2026-10-15)
+
+The dry-run listed the auto-bound codex-cli writer but every live run had no codex candidate: candidates.js treated the disabled Codex CLI inventory entry as an already-bound account and skipped the auto-bind. The disabled inventory binding no longer blocks it; the jsonSchema proof gate is unchanged.
