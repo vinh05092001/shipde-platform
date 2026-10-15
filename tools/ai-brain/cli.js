@@ -989,7 +989,12 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
   const routeHealthExplicit = opts.routeHealth !== undefined;
   const requireRouteHealth = opts.requireRouteHealth === true || !Array.isArray(opts.candidates);
   const healthFile =
-    opts.routeHealthFile || path.join(__dirname, 'data', 'model-route-health.json');
+    opts.routeHealthFile ||
+    opts['route-health'] ||
+    (opts.root
+      ? path.join(opts.root, 'tools', 'ai-brain', 'data', 'model-route-health.json')
+      : null) ||
+    path.join(__dirname, 'data', 'model-route-health.json');
   const routeHealth = routeHealthExplicit
     ? opts.routeHealth
     : routeHealthApi.loadStore(healthFile, {
@@ -1851,7 +1856,13 @@ function dispatchCommand(args, deps = {}) {
   if (deps && deps.refreshRoutes === true && !Array.isArray(deps.candidates)) {
     const routeHealthApi = require('./route-health');
     const healthFile =
-      deps.routeHealthFile || path.join(__dirname, 'data', 'model-route-health.json');
+      deps.routeHealthFile ||
+      deps['route-health'] ||
+      (args && (args['route-health'] || args.routeHealthFile)) ||
+      (args && args.root
+        ? path.join(args.root, 'tools', 'ai-brain', 'data', 'model-route-health.json')
+        : null) ||
+      path.join(__dirname, 'data', 'model-route-health.json');
     const registryForProbe = deps.registry || require('./sources').loadSources();
     const healthStore =
       deps.routeHealth || routeHealthApi.loadStore(healthFile, { allowMissing: true });
@@ -3407,7 +3418,14 @@ async function orchestrateCommand(args, deps = {}) {
   const evidenceAccounts = mergeEvidenceAccounts(inputAccounts, registryAccounts);
   if (d.refreshRoutes === true) {
     const healthFile =
-      args['route-health'] || path.join(__dirname, 'data', 'model-route-health.json');
+      args['route-health'] ||
+      args.routeHealthFile ||
+      d.routeHealthFile ||
+      d['route-health'] ||
+      (args.root
+        ? path.join(args.root, 'tools', 'ai-brain', 'data', 'model-route-health.json')
+        : null) ||
+      path.join(__dirname, 'data', 'model-route-health.json');
     const healthStore = require('./route-health').loadStore(healthFile, { allowMissing: true });
     const routeHealthApi = require('./route-health');
     const probeRoute =
@@ -4429,7 +4447,14 @@ module.exports = {
       nextDeps.refreshRouteHealth = async ({ now }) => {
         const routeHealthApi = require('./route-health');
         const healthFile =
-          args['route-health'] || path.join(__dirname, 'data', 'model-route-health.json');
+          args['route-health'] ||
+          args.routeHealthFile ||
+          nextDeps.routeHealthFile ||
+          nextDeps['route-health'] ||
+          (args.root
+            ? path.join(args.root, 'tools', 'ai-brain', 'data', 'model-route-health.json')
+            : null) ||
+          path.join(__dirname, 'data', 'model-route-health.json');
         const registry = nextDeps.registry || require('./sources').loadSources();
         const store = routeHealthApi.loadStore(healthFile, { allowMissing: true });
         let catalogue = [];
