@@ -319,3 +319,68 @@ test('healthy reasoning candidates use existing benchmark priors to choose the s
   assert.ok(result.ranking[0].score > result.ranking[1].score);
   assert.ok(result.ranking[1].score > result.ranking[2].score);
 });
+
+for (const minConfidence of [undefined, 0.5]) {
+  test(`per-dimension JEV confidence preserves evidence at threshold ${minConfidence ?? 'default'}`, async () => {
+    const scores = {
+      qualityImportance: { score: 4.11, confidence: 0.56 },
+      latencyImportance: { score: 1.98, confidence: 0.23 },
+      costImportance: { score: 1.08, confidence: 0.57 },
+    };
+    const assessment = await routing.assessTask(profile(), {
+      minConfidence,
+      ask: async () => ({ choice: 'BALANCED', scores }),
+    });
+    assert.equal(
+      assessment.confidence,
+      0.23,
+      'log the minimum observed confidence even on fallback'
+    );
+    assert.deepEqual(assessment.dimensionConfidences, {
+      qualityImportance: 0.56,
+      latencyImportance: 0.23,
+      costImportance: 0.57,
+    });
+    if (minConfidence === undefined) {
+      assert.equal(assessment.weightSource, 'preset:BALANCED');
+      assert.deepEqual(assessment.weights, routing.WEIGHT_PROFILES.BALANCED);
+    } else {
+      assert.equal(assessment.weightSource, 'mixed:jev-score+preset:BALANCED');
+      assert.deepEqual(assessment.dimensionWeightSources, {
+        quality: 'jev-score',
+        latency: 'preset:BALANCED',
+        cost: 'jev-score',
+      });
+      const preset = routing.WEIGHT_PROFILES.BALANCED;
+      assert.equal(assessment.weights.latency, preset.latency);
+      const trustedTotal = scores.qualityImportance.score + scores.costImportance.score;
+      const remaining = 100 - preset.latency;
+      assert.ok(
+        Math.abs(
+          assessment.weights.quality - (remaining * scores.qualityImportance.score) / trustedTotal
+        ) <= 1
+      );
+      assert.equal(
+        Object.values(assessment.weights).reduce((a, b) => a + b, 0),
+        100
+      );
+    }
+  });
+}
+
+test('mixed JEV weighting uses the default confidence threshold and retains risk policy', async () => {
+  const ask = async () => ({
+    scores: {
+      qualityImportance: { score: 4.11, confidence: 0.8 },
+      latencyImportance: { score: 1.98, confidence: 0.23 },
+      costImportance: { score: 1.08, confidence: 0.9 },
+    },
+  });
+  const result = await routing.assessTask(profile(), { ask });
+  assert.equal(result.weightSource, 'mixed:jev-score+preset:BALANCED');
+  assert.equal(result.confidence, 0.23);
+  assert.equal(result.weights.latency, routing.WEIGHT_PROFILES.BALANCED.latency);
+  const risky = await routing.assessTask(profile({ riskDomains: ['money'] }), { ask });
+  assert.deepEqual(risky.weights, routing.WEIGHT_PROFILES.QUALITY_FIRST);
+  assert.equal(risky.dimensionWeightSources, null);
+});

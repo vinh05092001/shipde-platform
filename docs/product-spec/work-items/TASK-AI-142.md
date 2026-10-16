@@ -537,6 +537,14 @@ Live run GOAL-AUTOCLAW-REPOS-1 (15/10) recorded every JEV assessment as `JEV_UND
 - The deterministic Controller fallback is unchanged and every named cause still counts as a provider failure.
 - Evidence: `tools/ai-brain/test/task-ai-142-jev-failure-reason.test.js`.
 
+### H3 live: JEV weights fall back per dimension (2026-10-16)
+
+- Base: origin/main `97d8d3d68036240dc97ff8ea4288d83571d413f8`.
+- A valid score response remains usable when at least one dimension meets the existing configurable confidence threshold. Low confidence dimensions retain their exact Controller preset weights; remaining weight is allocated by trusted JEV score ratios, with a mixed source record. Risk/role quality policy still overrides advice.
+- All-low responses keep deterministic preset fallback, but assessment confidence records the observed minimum instead of zero.
+- Prompt conflict: DEFAULT_MIN_CONFIDENCE and the configured JEV source are both 0.7, so 0.56/0.23/0.57 cannot yield mixed weights at that threshold. The exact example falls back with confidence 0.23 at default; an existing minConfidence override of 0.5 demonstrates mixed quality/cost with preset latency. No threshold was silently lowered.
+- Three new cases on unchanged main: pass 0/fail 3. After: `node --test tools/ai-brain/test/task-ai-142-jev-weights.test.js`: pass 10/fail 0. Offline stubs only. The contradictory example still requires specification clarification before acceptance against that literal DONE WHEN.
+
 ### H3 live: the isolated writer receives its context pack (2026-10-16)
 
 The prompt told the writer to read the focused context pack at its host path, which the isolated worker cannot read (File not found), so the writer explored the repository instead and hit the 150k token budget before writing (live run 15/10 17:05, GOAL-AUTOCLAW-REPOS-1). The launcher now copies the pack into the worker's .shipde/ directory and points the prompt at the copy.
