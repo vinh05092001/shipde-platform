@@ -190,6 +190,7 @@ test('Controller makes writers eligible only after proof and records precise rej
 });
 
 test('pool process states and schema failures never prove capability or leak error text', async (t) => {
+  t.mock.method(pool, 'readOutText', () => '');
   const original = pool.submitJob;
   const originalRead = pool.readResult;
   pool.readResult = () => null;
@@ -307,8 +308,55 @@ test('schema proofs stop at the probe budget and leave the rest unverified, not 
   assert.equal(o.writerSchemaEvidence.has(candidateKey(second)), false, 'retried next selection');
 });
 
+test('pool schema failure records redacted state, reason and output tail in rejection', async (t) => {
+  const secret = 'fixture-pool-credential-value';
+  const env = { FIXTURE_POOL_API_KEY: secret };
+  t.mock.method(pool, 'readResult', () => null);
+  t.mock.method(pool, 'submitJob', () => ({
+    state: 'error',
+    exitCode: 7,
+    reason: `adapter failed using ${secret}`,
+  }));
+  t.mock.method(pool, 'readOutText', () =>
+    [
+      'discard-this-old-line',
+      ...Array.from({ length: 20 }, (_, i) => `output ${i} ${secret}`),
+    ].join('\n')
+  );
+  const proof = await schemaApi.verify(candidate('agy-pool'), { env });
+  assert.equal(proof.reason, 'WRITER_SCHEMA_POOL_error');
+  assert.match(proof.detail, /state=error/);
+  assert.match(proof.detail, /exitCode=7/);
+  assert.match(proof.detail, /reason=adapter failed/);
+  assert.match(proof.detail, /output 19/);
+  assert.ok(!proof.detail.includes('discard-this-old-line'));
+  assert.ok(!proof.detail.includes(secret));
+  assert.match(proof.detail, /REDACTED_SECRET/);
+  const root = temp(t);
+  const selected = await selectCandidateForProfile(
+    {
+      id: 'TASK-AI-142',
+      roleRequirement: { role: 'writer' },
+      requiredCapabilities: ['jsonSchema'],
+    },
+    [candidate('agy-pool')],
+    [],
+    {},
+    { registry: { sources: [] }, externalWorkers: 'agy-pool', env },
+    { dir: root },
+    Date.now()
+  );
+  const rejection = selected.result.rejected.find(
+    (r) => r.reasonCode === 'CAPABILITY_MISSING:jsonSchema'
+  );
+  assert.equal(rejection.reason, proof.reason);
+  assert.equal(rejection.detail, proof.detail);
+  assert.ok(!JSON.stringify(selected).includes(secret));
+});
+
 test('pool proof timeout is bounded by the remaining budget', async (t) => {
   let seen;
+  t.mock.method(pool, 'readOutText', () => '');
   t.mock.method(pool, 'readResult', () => null);
   t.mock.method(pool, 'submitJob', (_a, _j, o) => {
     seen = o.timeoutMs;
