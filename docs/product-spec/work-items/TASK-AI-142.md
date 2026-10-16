@@ -364,6 +364,10 @@ On origin/main d9982a32, a fresh writer dispatch dry-run produced 147 pool candi
 
 When an upstream source declares headers (such as AgentRouter CLI User-Agent), `writeProvidersConfig` now writes `extra_headers` into `custom_providers` within `config.yaml` using proper YAML quoting. Hermes natively supports `extra_headers` on custom providers, passing them into the HTTP client `default_headers`. When no headers are declared, the generated YAML is unchanged and header values are never logged.
 
+### H3 live: a router only offers models it lists itself (2026-10-16)
+
+After operator keys were probed, the intake catalogue merged 3254 ids from many sources (for example azure/, bedrock/, vertex/, runware/ ids from Requesty), and the router branch turned every one into a 9router candidate. 9router serves none of those prefixes, so hundreds of writer probes timed out, PROBE_BUDGET_EXHAUSTED fired and GOAL-AUTOCLAW-REPOS-1 failed before any writer launched. A router now produces catalogue-derived candidates only for ids in its own listing (per-source `sourceModels` from intake, or its `source.models`); with no known listing it produces none and records `ROUTER_LISTING_UNKNOWN`.
+
 ### H3 live: a Hermes reselection gets its own probe window and a Hermes login failure is remembered (2026-10-16)
 
 The probe wall-clock deadline was computed once per launch, so after a runtime route failure (Hermes printing `No Codex credentials stored`) every remaining route was skipped and the launch ended NO_REASONING_CANDIDATE. Each selection round now recomputes the deadline with the same per-round cap. A Hermes-side missing login is also recorded as an account `account_auth_failed` cooldown in the route-health store (existing 6 hour cause cooldown), so the next launch skips that candidate without probing or spawning it.
