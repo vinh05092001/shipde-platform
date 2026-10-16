@@ -100,7 +100,8 @@ test('H3 cause cooldowns and account isolation; budget exhaustion is not route e
     ['HTTP_401', 6],
     ['UPSTREAM_FORBIDDEN', 6],
     ['ALIAS_MISMATCH', 24],
-    ['ROUTE_UNAVAILABLE', 24],
+    ['ROUTE_UNAVAILABLE', 0.5],
+    ['PROBE_NO_RESPONSE', 0.5],
     ['TIMEOUT', 0.5],
     ['UPSTREAM_UNAVAILABLE', 0.5],
   ]) {
