@@ -1856,6 +1856,9 @@ function getIsolatedLauncher() {
             options: {
               baseURL: selectedSource.endpoint,
               apiKey: `{env:${selectedSource.credential.env}}`,
+              ...(selectedSource.headers && typeof selectedSource.headers === 'object'
+                ? { headers: selectedSource.headers }
+                : {}),
             },
             models: modelsMap,
           },

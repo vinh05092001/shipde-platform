@@ -434,6 +434,7 @@ function routeProbeCandidate(candidate, route, registry, allowModelFallback = tr
     modelId: /^ninerouter\//i.test(exactModel) ? upstreamModel : exactModel,
     maxOutputTokens: candidate.maxOutputTokens || candidate.max_output_tokens,
     apiKeyEnv,
+    ...(source.headers && typeof source.headers === 'object' ? { headers: source.headers } : {}),
   };
 }
 
@@ -8808,6 +8809,7 @@ function finish(log, statusOf, ctx) {
 }
 
 module.exports = {
+  routeProbeCandidate,
   baseGateCache,
   runHostBrainGate,
   runOrchestration,
