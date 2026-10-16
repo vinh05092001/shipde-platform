@@ -42,6 +42,48 @@ function fixtureRoot(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix || 'hermes-session-test-'));
 }
 
+test('ACP Controller path binds selected model, writes status, and avoids the CLI chat launcher', async () => {
+  const rootDir = fixtureRoot('hermes-acp-controller-');
+  try {
+    const c = sampleCandidate();
+    const result = await launchHermesSession(
+      { rootDir, acp: true, prompt: 'private task', skipDecisionLog: true },
+      {
+        candidates: [c],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+        probe: async () => ({ ok: true, status: 200, body: '{}' }),
+        spawn: () => {
+          throw new Error('CLI chat must not run');
+        },
+        resolveHermesCommand: (argv) => {
+          assert.deepEqual(argv, ['acp']);
+          return { command: 'fake-hermes', args: argv };
+        },
+        runAcpTurn: async (command, args, options) => {
+          assert.equal(command, 'fake-hermes');
+          assert.deepEqual(args, ['acp']);
+          assert.equal(options.modelId, c.modelId);
+          assert.equal(options.providerName, '9router');
+          assert.match(options.prompt, /shipde-controller/);
+          assert.equal(options.env.HERMES_HOME, getHermesHomeDir(rootDir));
+          options.onStatus({ transport: 'acp', state: 'running', eventCount: 2 });
+          options.onStatus({ transport: 'acp', state: 'turn_ended', eventCount: 3 });
+          return { state: 'turn_ended', stopReason: 'end_turn' };
+        },
+      }
+    );
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.status, 'turn_ended');
+    const saved = JSON.parse(fs.readFileSync(result.statusPath, 'utf8'));
+    assert.equal(saved.state, 'turn_ended');
+    assert.equal(saved.sessionId, result.sessionId);
+    assert.equal(JSON.stringify(saved).includes('private task'), false);
+  } finally {
+    fs.rmSync(rootDir, { recursive: true, force: true });
+  }
+});
+
 function sampleRegistry() {
   return {
     version: 2,
