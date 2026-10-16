@@ -537,6 +537,17 @@ Live run GOAL-AUTOCLAW-REPOS-1 (15/10) recorded every JEV assessment as `JEV_UND
 - The deterministic Controller fallback is unchanged and every named cause still counts as a provider failure.
 - Evidence: `tools/ai-brain/test/task-ai-142-jev-failure-reason.test.js`.
 
+### H3 live: host-independent test fixtures (2026-10-16)
+
+- Base: origin/main `97d8d3d68036240dc97ff8ea4288d83571d413f8`.
+- TASK-AI-89 CLI fixtures previously defaulted to the host source registry, allowing a credential-backed JEV client despite injected accounts. Fixtures now inject empty source/candidate/account defaults and an empty environment; direct selection fixtures inject a deterministic unavailable advisory. Account-union and capability assertions are unchanged.
+- Three targeted TASK-AI-141 loop fixtures now use temporary roots and explicit empty config instead of the active host checkout and .shipde settings. Its default-decision-dir guard also injects a registry/advisory fixture instead of constructing live JEV advice.
+- New regression intercepts host source/account loaders and JEV client construction without reading secrets: unchanged main pass 0/fail 1 (`fixture must not read the host source or account registry`), fixed pass 1/fail 0.
+- The original 10 historical failures were not reproduced as a set: unchanged main passed the two affected non-Hermes files with a dummy NINEROUTER key (41/41). The fixture registry leak is independently reproduced; historical host-run causation is not claimed proven.
+- Earlier standalone validation: task-ai-141b.test.js, task-ai-89.test.js, task-ai-142-hermes-session.test.js. Windows User/Machine env loaded with logs/hermes-brain/load-win-env.js: NINEROUTER key present, pass 118/fail 0, exit 0. Same env with credential variables removed: key absent, pass 118/fail 0, exit 0. Values were never printed.
+- Final standalone recheck of the unchanged-main Hermes test exposed the independent Task 5 wall-clock flake: live env 118/0, without keys 117/1 (deadline test). Task 8 alone cannot guarantee that timer test under load. Integration overlay using Task 5 commit 341f689026d2338f9e478788427586e1eaed6c54 passes 118/0 with live env and 118/0 without keys; overlay files are restored afterward. The two fixture files alone pass 42/0 in each environment.
+- Host gate, production routing, and test assertions are not weakened. The separate deterministic deadline repair belongs to its own Task 5 worktree; this branch retains main's Hermes test.
+
 ### H3 live: the isolated writer receives its context pack (2026-10-16)
 
 The prompt told the writer to read the focused context pack at its host path, which the isolated worker cannot read (File not found), so the writer explored the repository instead and hit the 150k token budget before writing (live run 15/10 17:05, GOAL-AUTOCLAW-REPOS-1). The launcher now copies the pack into the worker's .shipde/ directory and points the prompt at the copy.
