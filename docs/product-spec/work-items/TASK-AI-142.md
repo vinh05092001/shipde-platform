@@ -622,3 +622,12 @@ Direct-route candidate keys (such as `codex::cli::::codex::codex-cli::codex-cli:
 ### H3 live: custom candidate without gateway uses upstream instead of openai (2026-10-16)
 
 When a candidate key had an empty gateway (e.g. `hermes::https://developer.amd.com.cn/radeon/api/v1::::amd-radeon::...`), `writeProvidersConfig` defaulted the gateway to `openai`. Hermes treated this as its built-in provider, reported "No Codex credentials stored", and exited 0. `writeProvidersConfig` now names the provider after the upstream route when the gateway is empty, and `custom` when neither is known.
+
+### H3 live: per-model capabilities derivation and no fake 200k on 9Router (2026-10-16)
+
+- Problem: Account `ninerouter` in `tools/ai-brain/seed-accounts.js` declared blanket capabilities `{ jsonSchema: true, tools: true, contextWindow: 200000 }`. In `tools/ai-brain/candidates.js`, candidate generation for router routes (`source.kind === 'router'`, `source.reachedVia`, and `openCodeIds`/`catalogue` loops for OpenCode) copied account capabilities wholesale onto generated candidates. Upstream models routed through 9Router (such as Groq GPT-OSS 120b with actual context 131k / 8k TPM limit) falsely inherited a 200k context window and tool capabilities, bypassing writer qualification and causing infinite 413 request loops.
+- Fix:
+  1. Removed blanket capabilities `{ jsonSchema: true, tools: true, contextWindow: 200000 }` from account `ninerouter` in `tools/ai-brain/seed-accounts.js`.
+  2. Implemented `resolveCandidateCapabilities(acc, modelId, opts)` in `tools/ai-brain/candidates.js`: for gateway/router routes, strips blanket `contextWindow` from gateway accounts and derives `contextWindow`, `tools`, and `jsonSchema` per-model from `item` (catalogue), `row` (account model row), or source/routerSource `modelMeta`. Unverified models retain `contextWindow: undefined`.
+  3. Integrated `resolveCandidateCapabilities` across router catalogue candidates, reachedVia model sources, and agent-cli (OpenCode) loops.
+- Verification: `tools/ai-brain/test/task-ai-142-capabilities.test.js` (pass 3/fail 0), plus all candidate and context window suites pass clean.

@@ -213,7 +213,7 @@ const ACCOUNTS = [
       baseUrl: 'http://127.0.0.1:20128/v1',
       note: 'Local gateway. Credential lives in the router, not here.',
     },
-    capabilities: { jsonSchema: true, tools: true, contextWindow: 200000 },
+    capabilities: {},
     cost: { inputPerMillion: 0, outputPerMillion: 0 },
     limits: {},
     models: NINEROUTER_MODELS,
