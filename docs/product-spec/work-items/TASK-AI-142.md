@@ -356,6 +356,10 @@ Selection logs retain the full chosenCandidate, the existing chosen identity, to
 
 Verification: sequential TASK-AI-141 199/199, TASK-AI-142 136/136, TASK-AI-64 129/129, dispatch-wiring 7/7 and decisions 28/28 passed. Additional candidate/routing regressions passed 74/74. Changed JavaScript passes ESLint no-undef; changed files pass Prettier and git diff --check. Live logs remain untouched and runtime data is excluded from commits.
 
+### H3 live: agy-pool inherits harness tools and pool schema failures record redacted detail (2026-10-16)
+
+When model-specific capabilities were empty or unlisted in the catalog, agy-pool candidates previously had their harness capabilities erased, causing writer candidates to be rejected with CAPABILITY_MISSING:tools. Model capabilities and harness capabilities are now merged such that harness tools capability is preserved unless explicitly false on the model. Additionally, when a pool jsonSchema probe fails (WRITER_SCHEMA_POOL_<state>), the exit state, reason, and redacted tail of the pool output are recorded as evidence detail in the capability rejection, keeping failures diagnosable without leaking secrets.
+
 ### H3 live: a Hermes reselection gets its own probe window and a Hermes login failure is remembered (2026-10-16)
 
 The probe wall-clock deadline was computed once per launch, so after a runtime route failure (Hermes printing `No Codex credentials stored`) every remaining route was skipped and the launch ended NO_REASONING_CANDIDATE. Each selection round now recomputes the deadline with the same per-round cap. A Hermes-side missing login is also recorded as an account `account_auth_failed` cooldown in the route-health store (existing 6 hour cause cooldown), so the next launch skips that candidate without probing or spawning it.

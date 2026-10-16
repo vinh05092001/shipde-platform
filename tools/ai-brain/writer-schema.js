@@ -84,6 +84,23 @@ function failureDetail(result, env) {
   return redact(`exitCode=${code}${tail ? '\n' + tail : ''}`);
 }
 
+// Pool state, reason and redacted output tail so pool failures stay diagnosable.
+function poolFailureDetail(result, outText, env) {
+  const redact = createSecretRedactor(env);
+  const state = result && result.state !== undefined ? result.state : 'unknown';
+  const reason = result && result.reason !== undefined ? String(result.reason) : '';
+  const rawOutput = outText || (result && (result.stderr || result.stdout)) || '';
+  const tail = String(rawOutput)
+    .split(/\r?\n/)
+    .filter((line) => line.trim())
+    .slice(-20)
+    .join('\n');
+  const lines = [`state=${state}`];
+  if (reason) lines.push(`reason=${reason}`);
+  if (tail) lines.push(tail);
+  return redact(lines.join('\n'));
+}
+
 async function verify(candidate, options) {
   const o = options || {};
   const key = candidateKey(candidate);
@@ -120,9 +137,11 @@ async function verify(candidate, options) {
           result && ['quota', 'login-required', 'error'].includes(result.state)
             ? result.state
             : 'NO_SUCCESS';
+        const outText = pool.readOutText(candidate.accountId, o);
         return {
           ok: false,
           reason: `WRITER_SCHEMA_POOL_${known.includes(adapterReason) ? adapterReason : state}`,
+          detail: poolFailureDetail(result, outText, o.env || process.env),
         };
       }
       text = poolResultText(pool.readOutText(candidate.accountId, o));

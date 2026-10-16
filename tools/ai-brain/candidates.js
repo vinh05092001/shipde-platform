@@ -1529,13 +1529,12 @@ function poolAccountCandidates(opts) {
       }
 
       // Effective capabilities: model AND harness (never override an explicit false)
-      let effectiveCapabilities = {};
-      if (modelCapabilities && Object.keys(modelCapabilities).length > 0) {
-        effectiveCapabilities = Object.assign({}, modelCapabilities);
-        for (const [k, v] of Object.entries(harnessCapabilities)) {
-          if (typeof modelCapabilities[k] === 'boolean' && typeof v === 'boolean') {
-            effectiveCapabilities[k] = modelCapabilities[k] && v;
-          } else if (modelCapabilities[k] === undefined) {
+      const effectiveCapabilities = Object.assign({}, harnessCapabilities);
+      if (modelCapabilities && typeof modelCapabilities === 'object') {
+        for (const [k, v] of Object.entries(modelCapabilities)) {
+          if (typeof effectiveCapabilities[k] === 'boolean' && typeof v === 'boolean') {
+            effectiveCapabilities[k] = effectiveCapabilities[k] && v;
+          } else {
             effectiveCapabilities[k] = v;
           }
         }

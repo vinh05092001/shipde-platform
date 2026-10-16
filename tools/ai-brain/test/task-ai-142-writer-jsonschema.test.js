@@ -363,3 +363,94 @@ test('A failed Codex schema proof keeps its reason and records redacted exit cod
   assert.match(rejection.detail, /boom unexpected failure/);
   assert.ok(!JSON.stringify(rejection).includes(secret));
 });
+
+test('agy-pool candidate inherits harness tools capability when model capabilities are empty', () => {
+  const sourcesApi = require('../sources');
+  const { generateCandidates } = require('../candidates');
+  const registry = sourcesApi.loadSources();
+  const root = temp({ after: () => {} });
+  fs.mkdirSync(path.join(root, 'agy01'));
+  fs.writeFileSync(
+    path.join(root, 'agy01', 'out.txt'),
+    JSON.stringify({
+      groups: [
+        {
+          id: 'gemini',
+          models: ['gemini-3.8-flash-high'],
+          weekly: { remaining: 0.8 },
+        },
+      ],
+    })
+  );
+  const accounts = [
+    {
+      id: 'agy-native-a',
+      provider: 'antigravity',
+      models: ['gemini-3.8-flash-high'],
+    },
+  ];
+  const candidatesList = generateCandidates({
+    registry,
+    accounts,
+    catalogue: [],
+    fakeRunsDir: root,
+  });
+  const poolCand = candidatesList.find(
+    (c) => c.source === 'agy-pool' && c.modelId === 'gemini-3.8-flash-high'
+  );
+  assert.ok(poolCand, 'has pool candidate');
+  assert.equal(poolCand.capabilities.tools, true);
+});
+
+test('A failed agy-pool schema proof records reason and redacted detail with state and output tail', async (t) => {
+  const root = temp(t);
+  fs.mkdirSync(path.join(root, 'agy01'));
+  const script = path.join(root, 'adapter.js');
+  const secret = 'fake-pool-secret-key-999';
+  const env = { FAKE_POOL_KEY: secret };
+  fs.writeFileSync(
+    script,
+    `const fs=require('fs');const path=require('path');
+fs.writeFileSync(path.join(process.argv[2],'result.json'),JSON.stringify({state:'error',exitCode:1,reason:'POOL_ADAPTER_ERROR'}));
+fs.writeFileSync(path.join(process.argv[2],'out.txt'),'unexpected pool error\\ncredential=${secret}\\nline end\\n');`
+  );
+  const cand = candidate('agy-pool', 'gemini-3.8-flash-high');
+  const proof = await schemaApi.verify(cand, { fakeRunsDir: root, adapterScript: script, env });
+  assert.equal(proof.ok, false);
+  assert.equal(proof.reason, 'WRITER_SCHEMA_POOL_error');
+  assert.ok(proof.detail, 'proof has detail');
+  assert.match(proof.detail, /state=error/);
+  assert.match(proof.detail, /reason=POOL_ADAPTER_ERROR/);
+  assert.match(proof.detail, /unexpected pool error/);
+  assert.ok(!proof.detail.includes(secret), 'secret is redacted');
+  assert.match(proof.detail, /REDACTED_SECRET/);
+
+  const item = {
+    id: 'TASK-AI-142',
+    roleRequirement: { role: 'writer' },
+    requiredCapabilities: ['jsonSchema'],
+  };
+  const selected = await selectCandidateForProfile(
+    item,
+    [cand],
+    [],
+    {},
+    {
+      registry: { sources: [] },
+      externalWorkers: 'agy-pool',
+      fakeRunsDir: root,
+      adapterScript: script,
+      env,
+    },
+    { dir: root },
+    Date.now()
+  );
+  const rejection = selected.result.rejected.find(
+    (r) => r.reasonCode === 'CAPABILITY_MISSING:jsonSchema'
+  );
+  assert.ok(rejection, 'has rejection');
+  assert.equal(rejection.reason, 'WRITER_SCHEMA_POOL_error');
+  assert.ok(rejection.detail, 'rejection has detail');
+  assert.match(rejection.detail, /unexpected pool error/);
+  assert.ok(!JSON.stringify(rejection).includes(secret), 'rejection detail redacts secret');
+});
