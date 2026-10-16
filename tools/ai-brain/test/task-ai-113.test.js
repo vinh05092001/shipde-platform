@@ -122,6 +122,10 @@ function runDirectLaunch(prompt) {
     for (const name of promptFiles) {
       promptBytes[name] = fs.readFileSync(path.join(shipdeDir, name));
     }
+    const contextBytes = {};
+    for (const name of listIn(shipdeDir, 'context-', '.md')) {
+      contextBytes[name] = fs.readFileSync(path.join(shipdeDir, name));
+    }
     let payload = null;
     if (argsFiles.length > 0) {
       payload = JSON.parse(fs.readFileSync(path.join(shipdeDir, argsFiles[0]), 'utf8'));
@@ -133,6 +137,7 @@ function runDirectLaunch(prompt) {
       argsFiles,
       payload,
       promptBytes,
+      contextBytes,
       capturedScript,
     };
   } finally {
@@ -144,6 +149,31 @@ function runDirectLaunch(prompt) {
 }
 
 describe('TASK-AI-113: long prompts travel through a file, not the command line', () => {
+  test('PF-R00: the host context pack is copied into .shipde and the prompt points at the copy', () => {
+    const packDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-113-pack-'));
+    const pack = path.join(packDir, 'context-1.md');
+    fs.writeFileSync(pack, '# Focused context pack\nbody\n');
+    try {
+      const prompt =
+        'x'.repeat(5000) +
+        '\nFocused context pack: read ' +
+        pack +
+        ' before exploring files.\nend\n';
+      const res = runDirectLaunch(prompt);
+      const nonce = res.promptFiles[0].slice('prompt-'.length, -'.md'.length);
+      const copy = 'context-' + nonce + '.md';
+      assert.deepEqual(Object.keys(res.contextBytes), [copy]);
+      assert.deepEqual(res.contextBytes[copy], fs.readFileSync(pack));
+      const staged = res.promptBytes[res.promptFiles[0]].toString('utf8');
+      assert.ok(
+        staged.includes('Focused context pack: read .shipde/' + copy + ' before exploring files.')
+      );
+      assert.ok(!staged.includes(pack), 'the host path no longer reaches the worker');
+    } finally {
+      fs.rmSync(packDir, { recursive: true, force: true });
+    }
+  });
+
   test('PF-R01: the full prompt is written to .shipde/prompt-<nonce>.md and the arg is a short instruction', () => {
     const prompt = 'x'.repeat(40000);
     const res = runDirectLaunch(prompt);

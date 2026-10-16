@@ -1,5 +1,11 @@
 # TASK-AI-142 — Hermes chat brain wired to the Controller
 
+## Writer selection integration assignment (2026-10-15)
+
+The operator assigns Codex to finish `fix/task-ai-142-writer-selection-review`, integrate current main including #319–#323, run the full brain suite and required checks, and submit the resulting SHA through PR/CI and fresh independent review. An older Gemini PASS applies only to its reviewed SHA. The implementation author cannot supply the independent PASS. No additional model, provider request or live Hermes run is authorized in this assignment. The separate deadline investigation starts only after this writer selection PR merges, on a new branch from main.
+
+The implementation expands router inventory independently of OpenCode declarations, separates listed/configured/probed evidence, retains task/credential/route/quota gates, caches unchanged JEV assessments with deterministic failure fallback, and redacts worker-environment secrets in writer launch results. Fixture acceptance lives in `task-ai-142-writer-selection.test.js`, `task-ai-142-writer-probe.test.js`, and `task-ai-142-review-repair-result.test.js`. Source/key, isolation-refresh and pre-push guard repairs in `w-fix578` are excluded. Full validation and PR evidence are recorded in `WRITER-SELECTION-HANDOFF.md` and the PR body.
+
 ## Control
 
 | Field           | Value                                                                                                                                                                                                                                                  |
@@ -350,6 +356,54 @@ Selection logs retain the full chosenCandidate, the existing chosen identity, to
 
 Verification: sequential TASK-AI-141 199/199, TASK-AI-142 136/136, TASK-AI-64 129/129, dispatch-wiring 7/7 and decisions 28/28 passed. Additional candidate/routing regressions passed 74/74. Changed JavaScript passes ESLint no-undef; changed files pass Prettier and git diff --check. Live logs remain untouched and runtime data is excluded from commits.
 
+### H3 live: a Hermes reselection gets its own probe window and a Hermes login failure is remembered (2026-10-16)
+
+The probe wall-clock deadline was computed once per launch, so after a runtime route failure (Hermes printing `No Codex credentials stored`) every remaining route was skipped and the launch ended NO_REASONING_CANDIDATE. Each selection round now recomputes the deadline with the same per-round cap. A Hermes-side missing login is also recorded as an account `account_auth_failed` cooldown in the route-health store (existing 6 hour cause cooldown), so the next launch skips that candidate without probing or spawning it.
+
+### H3 live: declared source headers reach run-time requests (2026-10-16)
+
+A header a source declares as data (for example the CLI user agent AgentRouter requires) now reaches the requests that actually call the provider: the shared route probe, the orchestrator route candidate, the opencode provider `options.headers` written for isolated workers, and the Hermes route probe. The Hermes `config.yaml` custom provider has no verified extra-header field, so Hermes runtime calls are not changed and only its probe sends the headers; no source id is hardcoded.
+
+### H3 live: the quota-fallback controller test is deterministic (2026-10-16)
+The test spawns a cold `cli.js dispatch` process (~5s alone) under a 15s `spawnSync` budget, so full-suite parallel load could kill it (status null) and fail the exit-code assertion; HOME, USERPROFILE and APPDATA were already per-test temp dirs. The budget is now a 180s ceiling with all assertions unchanged (not reproduced in 26 runs under load, so this is the identified wall-clock cause, not an observed failure).
+
+### H3 live: the probe learns a route's token-per-minute limit (2026-10-16)
+
+The writer probe passed `groq/openai/gpt-oss-120b` with a tiny request, then the real first request (about 9.2k tokens) failed HTTP 413 against a 8000 tokens-per-minute limit. The probe now records `tokensPerMinuteLimit` from the `x-ratelimit-limit-tokens` header or from a 413/429 body, and a real launch's TPM 413 records `requestedTokens`; both persist in route health. Writer selection refuses a route with `ROUTE_TPM_TOO_SMALL` when its known limit is below a request size it already refused, and never refuses when either value is unknown (no token count is hardcoded).
+
+### H3 live: the role budget wins and only writer launches count as attempts (2026-10-16)
+
+Live on GOAL-AUTOCLAW-REPOS-1 (role author.foundation, complexity standard) budgetForItem took the minimum of the role ceiling (250k) and the complexity ceiling (150k), so a 1M-context writer that had written 4 files and edited 3 was killed at 150.5k (TOKEN_BUDGET_EXCEEDED) before committing. The explicit role budget is the more specific rule and now wins for every field it sets; complexity fills the fields the role leaves unset and the default fills the rest. The same item also ended TURN_BUDGET_EXCEEDED at selection round 14 after only a few real launches, because maxTurns was compared with the selection-round counter; it now counts actual writer launches.
+
+### H3 live: a retry keeps the previous writer's work (2026-10-16)
+A retry used to delete the worker root and re-create the branch from main, so a writer's commit (389ee9e1 on GOAL-AUTOCLAW-REPOS-1) and another writer's uncommitted files were lost. The launcher now commits uncommitted changes as a WIP commit, keeps the branch under a private host ref, and merges it into the fresh checkout, recording `carriedOver` as `merged`, `conflict` or `none` and falling back to the plain base on any failure.
+
+### H3 live: native agy candidates use the live agy model list (2026-10-16)
+The native agy candidates take their model ids from the live `agy models` listing (the pool discovery and its cache) instead of the stale ids declared on the account: declared ids the listing lacks are dropped with reason `AGY_MODEL_NOT_LISTED`, and listed ids are added. When the listing is unavailable the declared ids are kept unchanged.
+
+### H3 live: a CLI login binding is not test evidence (2026-10-16)
+
+After the dry-run moved to rankForProfile (#343), the reviewer pick crashed (`evidence.filter is not a function`) because the auto-bound Codex CLI candidate carried the string `cli-login` in `evidence`, the list of test results. The binding stays in `binding`; `evidence` is no longer overwritten, so review-call gets a ranked reviewer again.
+
+### H3 live: every operator key reaches a probed source (2026-10-16)
+
+InternLM keys now resolve to the OpenAI-compatible endpoint https://chat.intern-ai.org.cn/api/v1, and TENCENT_TOKENHUB_BASE_URL (trailing slash stripped) is the endpoint of the Tencent TokenHub key. AgentRouter declares its required CLI User-Agent as data on the endpoint table entry, and the probe sends any declared source headers (carried into the registry source entry). Intake refreshes discovery plus probe automatically when the discovered file is missing or an env key that discovery maps to a source has no entry.
+
+### H3 live: a failed Codex schema proof records why (2026-10-16)
+
+When the Codex jsonSchema proof fails with a generic reason such as WRITER_SCHEMA_CODEX_LAUNCH_FAILED, the result now carries a `detail` field with the exit code and the last 20 stderr lines, redacted by the shared secret redactor, and the capability rejection in the logged decision copies it. A missing-login stderr ("No ... credentials stored") now maps to WRITER_SCHEMA_AUTH_NEEDED, so the next live run's decisions show the real cause instead of an opaque launch failure.
+
+### H3 live: the host gate baseline is the writer branch's merge-base (2026-10-16)
+
+On 16/10 the branch feat/goal-autoclaw-repos-1 was cut from main e037323e; main later fixed 9 environment-sensitive tests, so the gate's baseline at the new origin/main passed while the writer tree still failed them, and 9 pre-existing failures were reported as new (HOST_GATE_FAILED) that the repair writer could not fix. When the base is a ref, runHostBrainGate now baselines at `git merge-base HEAD <ref>` (falling back to the ref's rev-parse); an explicit 40-hex baseSha is unchanged.
+
+### H3 live: Hermes stops on a 401 route failure (2026-10-16)
+The live output scanner in `defaultSpawn` now treats `Error code: 401` on an API failure line as a route failure, so Hermes is stopped and the brain reselected instead of running until it exits. 400 stays excluded because a bad request is not a route failure.
+
+### H3 live: a failed JEV assessment is not cached (2026-10-16)
+
+`assessOnce` cached the in-flight Promise, so a transient JEV rejection stayed cached and every later call in the session got the same failure. The rejected entry is now removed (only if it is still the same entry), so the next call asks JEV again; resolved results are unchanged.
+
 ### H3 live: Hermes brain context refresh (2026-10-14)
 
 Hermes could not start: the only reasoning candidate was refused with CONTEXT_WINDOW_UNVERIFIED because the source registry modelMeta and the discovery catalogue were stale, although 9router /v1/models reports the context window. chatCommand now refreshes provider-reported context windows from each OpenAI-compatible source before selecting the reasoning model; unknown context windows are still refused. Verification: context-window, hermes-candidates and hermes-session tests 73/73; live dry-run selects a verified candidate.
@@ -497,3 +551,129 @@ Several CLI paths (next --loop, dispatch, orchestrate, assembleForDispatch) and 
 ### H3 live: SovInfra source (2026-10-15)
 
 Operator key SOVINFRA_API_KEY maps to https://api.sovinfra.ai/v1. Live check on 15/10: GET /models listed sovapi, gemma-4-31b, qwen3.8-27b, qwen3-coder-next; chat completions on qwen3-coder-next and qwen3.8-27b answered. Model selection stays with the Controller (live probe and ranking).
+
+### H3 live: writer selection from the live router inventory (2026-10-15)
+
+Writer selection refreshes each enabled router's /models inventory once per orchestration and expands candidates independently of the OpenCode catalogue. Listed, configured and probed evidence stay separate: a listing never counts as a successful probe or benchmark. Credential, route, task and quota gates still apply; a reported zero quota excludes a route even after a successful probe, and missing quota stays unknown. Unchanged JEV assessments are cached per run with the deterministic Controller fallback on JEV failure. The inventory is attached to the selection decision record instead of a separate leading warning, and writer launch results redact injected worker-environment secrets.
+
+### H3 live: writer probing cannot be starved by one large account (2026-10-15)
+
+Live run GOAL-AUTOCLAW-REPOS-1 (15/10) ended `NO_ALTERNATE_FAILURE_DOMAIN` with no probe failing: `probeRankedRoutes` (`tools/ai-brain/hermes-session.js`) accepted a success only after every higher-ranked route had an outcome, and probes one route per account at a time, so a large higher-ranked account consumed the 180 s budget while the known-good route on a live account was never accepted. Ranking work before the pre-probe also started the writer budget early (`tools/ai-brain/orchestrate.js`).
+
+- A lower success now wins once each higher account has had its best-ranked probe resolved; the rest of that account's queue no longer blocks it.
+- The writer probe clock starts after ranking (jsonSchema proofs keep their own budget).
+- Routes left unprobed when the budget ends are recorded as `WRITER_ROUTE_PROBE_SKIPPED` but stay selectable as fallback instead of being excluded.
+- Evidence: `tools/ai-brain/test/task-ai-142-writer-probe-starvation.test.js` (fails before, passes after).
+
+### H3 live: logged-in Codex CLI is a writer candidate (2026-10-15)
+
+`candidates.js` `implicitCliLoginAccount` binds a source with `harness: codex` and `modelsFrom: account` to an implicit `codex-cli` account (`binding: cli-login`) when `~/.codex/auth.json` exists (existence only, never read) and no registry account is bound; model ids come only from `~/.codex/config.toml` through the Hermes reader in strict mode (no default id). Registry accounts still win. The isolated jsonSchema probe gate in `orchestrate.js` is unchanged. Live check: `codex::cli::::codex::codex-cli::codex-cli::gpt-6.1-sol`.
+
+### H3 live: tests never rewrite the live isolation verdict (2026-10-15)
+
+Twice on 15/10 a full test run in another worktree triggered the stale-verdict refresh with the real verifier, which rewrote the machine-wide isolation verdict for that worktree; every live launch from hermes-live then failed ISOLATION_VERDICT_INVALID (worktree mismatch) until TURN_BUDGET_EXCEEDED. Inside node --test (NODE_TEST_CONTEXT set) the refresh now never spawns the real verifier unless a runner is injected; it reports the original refusal instead.
+
+### H3 live: logged-in Codex CLI is a writer candidate (2026-10-15)
+
+`candidates.js` `implicitCliLoginAccount` binds a source with `harness: codex` and `modelsFrom: account` to an implicit `codex-cli` account (`binding: cli-login`) when `~/.codex/auth.json` exists (existence only, never read) and no registry account is bound; model ids come only from `~/.codex/config.toml` through the Hermes reader in strict mode (no default id). Registry accounts still win. The isolated jsonSchema probe gate in `orchestrate.js` is unchanged. Live check: `codex::cli::::codex::codex-cli::codex-cli::gpt-6.1-sol`.
+
+### H3 live: JEV failures name their cause (2026-10-15)
+
+Live run GOAL-AUTOCLAW-REPOS-1 (15/10) recorded every JEV assessment as `JEV_UNDECIDED:UNREACHABLE`, so the Controller fell back to BALANCED weights and ranked a fast, cheap writer first, while a direct JEV call returned QUALITY_FIRST. `advise` (`tools/ai-brain/jev.js`) and the routing catch (`tools/ai-brain/routing.js`) mapped every non-timeout error to `UNREACHABLE`, hiding the cause.
+
+- Failures are now recorded as `CREDENTIAL_MISSING`, `TIMEOUT`, `HTTP_<status>`, `INVALID_RESPONSE` or `NETWORK_ERROR` (e.g. `JEV_UNDECIDED:HTTP_422`); no credential or response body is recorded.
+- The deterministic Controller fallback is unchanged and every named cause still counts as a provider failure.
+- Evidence: `tools/ai-brain/test/task-ai-142-jev-failure-reason.test.js`.
+
+### H3 live: host-independent test fixtures (2026-10-16)
+
+- Base: origin/main `97d8d3d68036240dc97ff8ea4288d83571d413f8`. Follow-up resolves the standalone validation gap at `e0164b1ab7c09c40f511de2b23f36f9bf1b3d26e`.
+- TASK-AI-89 fixtures inject source/candidate/account defaults and unavailable advisory stubs. Its missing-registry test still omits the registry argument and mocks only the default reader; capability and account-union assertions remain intact.
+- TASK-AI-141 loop fixtures use isolated roots/config. Qualification-builder fixtures now have unique temporary roots, preventing parallel runs from deleting each other's intake fixture. The default-decision-dir guard intercepts this process's append/write calls instead of comparing the live shared log before/after; attempted default writes fail and local decision records are still required.
+- Both 200 ms Hermes deadline tests use Node mock Date/timers. Time advances only after pending probes have started or the lower-ranked live result has settled. Abort, concurrency, no-launch, winner identity, and persisted route-health assertions remain enforced. No Hermes production change or Task 5 overlay is needed.
+- Before: new host-reader regression on unchanged main pass 0/fail 1; standalone original deadline flake 117/1. Parallel runs also reproduced shared-log snapshot and fixed-intake-directory races. After: named files task-ai-141b.test.js, task-ai-89.test.js, task-ai-142-hermes-session.test.js pass 118/fail 0/cancelled 0 in every run.
+- Final stress validation: 10 full named-file runs with Windows User/Machine env loaded (NINEROUTER key present) and 10 with credential variables removed (key absent), both groups concurrently; all 20 exit codes 0. Credential values are never printed.
+- Host gate and production routing are unchanged. The historical live run's exact ten failures are not claimed replayed; the isolated reader/timer/concurrent-fixture faults are directly reproduced and repaired.
+
+### H3 live: a Hermes brain without its login is reselected (2026-10-16)
+
+#323 classified "No Codex credentials stored" as an account failure, but Hermes prints it and exits 0, so the run counted as completed and the classifier never ran (live launch 16/10 06:03). The output scanner now treats that startup line as route evidence, so the run fails and the brain is reselected. No credential file is read.
+
+### H3 live: per-attempt writer probe budget (2026-10-16)
+
+- Base: origin/main `97d8d3d68036240dc97ff8ea4288d83571d413f8`.
+- Retry ranking starts a fresh probe window, excluding prior writer runtime. A probe budget stop after a launch preserves the last writer failure cause.
+- Regression: two injected-clock cases run a writer for 30 simulated minutes, then require a real fallback probe; both normal fallback and a later probe-budget stop retain TOKEN_BUDGET_EXCEEDED.
+- Before (new tests on unchanged base): pass 0, fail 2, assertion `retry must actually probe after the long writer`.
+- After: `node --test tools/ai-brain/test/task-ai-142-writer-probe.test.js`: pass 15, fail 0. Offline fixtures only; no live provider run.
+
+### H3 live: JEV weights fall back per dimension (2026-10-16)
+
+- Base: origin/main `97d8d3d68036240dc97ff8ea4288d83571d413f8`. Follow-up to `7239c5f0919f720dea764500f11a13b259f58199` separates numeric weighting confidence from closed-choice confidence.
+- `routing.assessTask` reads optional source.weightingMinConfidence for score dimensions; `jev.advise` applies it only to scores. Preset-only/other closed choices retain source.minConfidence or DEFAULT_MIN_CONFIDENCE. The existing default remains 0.7.
+- The exact live scores 4.11/1.98/1.08 and confidences 0.56/0.23/0.57 yield mixed quality/cost JEV plus preset latency with a source weighting threshold of 0.5: weights quality 52, latency 34, cost 14, logged confidence 0.23. Risk/role policy and all-low fallback remain intact. Zero trusted score mass retains preset weights/provenance.
+- Before follow-up: 1 pass/2 fail for the three new policy/provenance cases on the previous commit. After: weighting file pass 13/fail 0; weighting + request-schema + failure-reason files pass 21/fail 0. All advisory responses are offline stubs.
+- The operator authorized the sources.json extension on 2026-10-16. The committed JEV source now sets weightingMinConfidence: 0.5 while retaining minConfidence: 0.7 for choice answers; its policy comment distinguishes both.
+- Activation regression reads the committed source and passes a stubbed HTTP response through buildJevAsk and writer-selection.assessOnce. Before this configuration change: pass 0/fail 1 (`approved weighting policy must be active`). After: the exact live example returns mixed weights 52/34/14 and confidence 0.23. Weighting file pass 14/fail 0; the three named JEV files pass 22/fail 0. No real JEV/provider request was made.
+
+### H3 live: the isolated writer receives its context pack (2026-10-16)
+
+The prompt told the writer to read the focused context pack at its host path, which the isolated worker cannot read (File not found), so the writer explored the repository instead and hit the 150k token budget before writing (live run 15/10 17:05, GOAL-AUTOCLAW-REPOS-1). The launcher now copies the pack into the worker's .shipde/ directory and points the prompt at the copy.
+
+### H3 live: a dead run no longer claims its Work Item (2026-10-15)
+
+next-runner treated every intake run without a terminal checkpoint as open for 4 h, so a killed Hermes run kept GOAL-AUTOCLAW-REPOS-1 "claimed by open run" and every goal resume skipped it. A run now counts as open only while its recorded process is alive; runs without a recorded pid keep the TTL behaviour.
+
+### H3 live: live writer selection offers the logged-in Codex CLI (2026-10-15)
+
+The dry-run listed the auto-bound codex-cli writer but every live run had no codex candidate: candidates.js treated the disabled Codex CLI inventory entry as an already-bound account and skipped the auto-bind. The disabled inventory binding no longer blocks it; the jsonSchema proof gate is unchanged.
+
+### H3 live: JEV requests match the API schema (2026-10-15)
+
+On 15/10 the live Controller got HTTP 422 then 400 from JEV and fell back to BALANCED weights, which let a weak writer rank first. Score questions now send their rubric as `criteria` (not `levels`) and use at most the API limit of 10 levels. A live call through routing.assessTask now returns a JEV decision (LOW_CONFIDENCE for the GOAL-AUTOCLAW-REPOS-1 profile) instead of an HTTP error.
+
+### H3 live: worker token discipline (2026-10-15)
+
+The operator observed Codex using about 174k and agy 0.5-0.8M input tokens per task, versus 60-90k for disciplined agents, mostly from whole-file reads, unfiltered test output and repeated full-suite runs. Every compiled writer and repair prompt now carries a short token-discipline block (search first, then read only a line range with the read tool; run only the named tests and keep their summary and failure lines; the Controller runs the full suite). The rule names no POSIX-only command because the isolated worker shell is PowerShell; the live 15/10 17:05 writer read whole 50-56k-character files and hit the 150k budget.
+
+### H3 live: work-evidence W-R02 follows the canonical key shape (2026-10-16)
+
+Direct-route candidate keys (such as `codex::cli::::codex::codex-cli::codex-cli::<model>` for the auto-bound Codex CLI) have an empty gateway segment. `tools/ai-brain/work-evidence.js` W-R02 previously required every part to be non-empty, rejecting valid direct writer keys with `WRITER_KEY_INVALID` and preventing published work from being recorded. Writer validation now uses `parseCandidateKey` from `tools/ai-brain/discovery/identity.js`, requiring non-empty harness, accessPath, upstream, and modelId, while allowing gateway, account, and quotaScope to be empty per the canonical key contract.
+
+### H3 live: dispatch dry-run ranks via live task profile and priors (2026-10-16)
+
+`node tools/ai-brain/cli.js dispatch --dry-run` previously routed through legacy `ranking.rankAndRecord`, scoring every candidate 26 points and ignoring priors and profile dimensions. The dispatch dry-run now routes through `routing.rankForProfile`, matching the live writer ranking order, scores, and advisory JEV caching without side effects.
+
+### H3 live: custom candidate without gateway uses upstream instead of openai (2026-10-16)
+
+When a candidate key had an empty gateway (e.g. `hermes::https://developer.amd.com.cn/radeon/api/v1::::amd-radeon::...`), `writeProvidersConfig` defaulted the gateway to `openai`. Hermes treated this as its built-in provider, reported "No Codex credentials stored", and exited 0. `writeProvidersConfig` now names the provider after the upstream route when the gateway is empty, and `custom` when neither is known.
+
+### H3 live: transient probe failure (status 0) uses short cooldown instead of 24h lockout (2026-10-16)
+
+When an upstream probe got no response (httpStatus 0, e.g. network glitch, socket hangup, connection refused, or timeout), `route-probe.js` previously classified it as `ROUTE_UNAVAILABLE` when the error body did not contain "timeout", and `route-health.js` gave `ROUTE_UNAVAILABLE` a 24-hour cooldown. This locked routes for 24 hours due to a single transient glitch ("Không trả lời != route chết; khóa ngắn và chỉ đúng model").
+
+- `classifyProbeFailure` in `route-probe.js` now classifies status 0 failures as `TIMEOUT` (when body indicates timeout) or transient `PROBE_NO_RESPONSE`, never permanent `ROUTE_UNAVAILABLE`. Provider credentials regex check is bypassed when status is 0.
+- `probeCooldownMs` in `route-health.js` assigns short cooldown (0.5 hours / 30 min) to `ROUTE_UNAVAILABLE`, `TIMEOUT`, and `PROBE_NO_RESPONSE`. Only permanent non-existent models (`HTTP_404`, `ALIAS_MISMATCH`) receive 24 hours.
+- When status is 0 in `rememberProbe`, it is strictly scoped to that specific candidate route/model path record, never setting a provider-level or account-level cooldown.
+- Evidence: `tools/ai-brain/test/task-ai-142-probe-transient.test.js` and updated `task-ai-142-probe-memory.test.js`.
+
+### H3 live: detect 413 request loops and fix progress stall detection (2026-10-16)
+
+When a model route encountered HTTP 413 (Payload Too Large / context length exceeded) or tokens-per-minute (TPM) rate limits, the worker process previously remained unclassified or hung until the launcher timeout (30 minutes). The isolation launcher now monitors worker event streams and output for HTTP 413 / Request Too Large / TPM limit signals and aborts immediately with failure reason `REQUEST_TOO_LARGE` (mapped to model scope with 15-minute cooldown in `failure-classifier.js` and `orchestrate.js`), allowing the Controller to switch to an alternative model immediately. Furthermore, stall detection (`STALLED_NO_PROGRESS`) now counts progress only on genuine worktree file signature changes, verified tool use events (`tool_use`), or monotonically increasing cumulative token usage across the session, preventing fluctuating per-step token usage from resetting the progress timer.
+
+### H3 live: unknown cost does not penalize candidates against free models (2026-10-16)
+
+When an unpriced candidate has unknown cost (`cost: null`), `scoreForProfile` previously divided the total score by the full weight sum (e.g. 100) including `wCost` unless `assessment.renormalizeKnownScores` was explicitly set. Consequently, candidates with unpriced routes received 0 points for the cost dimension while free models (`cost: 0`) received 100 points, allowing lower quality free models to outscore higher quality unpriced models even under quality-focused JEV assessments. `scoreForProfile` now renormalizes over known dimensions unconditionally per its contract ("Unknown sub-scores are excluded and the total renormalised over the weights that are present"), ensuring missing cost data never scores as 0 or penalizes a candidate against known or free models. Unit tests in `tools/ai-brain/test/task-ai-142-unknown-cost-scoring.test.js` verify both score calculation and dispatch ranking.
+
+### H3 live: router candidate filtering strips gateway prefix and requires upstream (2026-10-16)
+
+Aggregator routers like 9Router require model IDs to carry an upstream provider prefix (`cl/...`, `ag/...`, `ocz/...`, `kr/...`, `gh/...`, `groq/...`). Bare model names (e.g. `ninerouter/gpt-6-astra`, `ninerouter/muse-spark-1-3`) resulted in 404 ("Model not found") from 9Router, and candidates for OpenCode reaching 9Router incorrectly inherited `upstream: ninerouter` instead of their true upstream failure domain (`cl`, `ag`). `resolveRouterModel` in `tools/ai-brain/candidates.js` strips router prefixes (`source.modelPrefix`, `source.id + '/'`, or dispatch modelPrefix), extracts the true upstream provider, and rejects bare models or recursive router names. Candidates for OpenCode, router catalogue, and Hermes OpenAI-compatible paths now carry the true upstream provider as their failure domain and filter out unroutable bare model names. Unit test: `tools/ai-brain/test/task-ai-142-router-model-prefix.test.js`.
+
+### H3 live: per-model capabilities derivation and no fake 200k on 9Router (2026-10-16)
+
+- Problem: Account `ninerouter` in `tools/ai-brain/seed-accounts.js` declared blanket capabilities `{ jsonSchema: true, tools: true, contextWindow: 200000 }`. In `tools/ai-brain/candidates.js`, candidate generation for router routes (`source.kind === 'router'`, `source.reachedVia`, and `openCodeIds`/`catalogue` loops for OpenCode) copied account capabilities wholesale onto generated candidates. Upstream models routed through 9Router (such as Groq GPT-OSS 120b with actual context 131k / 8k TPM limit) falsely inherited a 200k context window and tool capabilities, bypassing writer qualification and causing infinite 413 request loops.
+- Fix:
+  1. Removed blanket capabilities `{ jsonSchema: true, tools: true, contextWindow: 200000 }` from account `ninerouter` in `tools/ai-brain/seed-accounts.js`.
+  2. Implemented `resolveCandidateCapabilities(acc, modelId, opts)` in `tools/ai-brain/candidates.js`: for gateway/router routes, strips blanket `contextWindow` from gateway accounts and derives `contextWindow`, `tools`, and `jsonSchema` per-model from `item` (catalogue), `row` (account model row), or source/routerSource `modelMeta`. Unverified models retain `contextWindow: undefined`.
+  3. Integrated `resolveCandidateCapabilities` across router catalogue candidates, reachedVia model sources, and agent-cli (OpenCode) loops.
+- Verification: `tools/ai-brain/test/task-ai-142-capabilities.test.js` (pass 3/fail 0), plus all candidate and context window suites pass clean.

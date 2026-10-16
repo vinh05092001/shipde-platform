@@ -293,7 +293,10 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
     });
     assert.equal(result.ranking[0].scoreBreakdown.quality, 30);
     assert.equal(result.ranking[0].scoreBreakdown.prior.contribution, 0);
-    assert.equal(result.ranking[0].score, 58);
+    // Unknown reliability is excluded and the weights renormalised over the
+    // known dimensions (scoreForProfile contract, applied to every role since
+    // 16/10); the prior is still counted once, inside quality.
+    assert.equal(result.ranking[0].score, 68);
   });
 
   test('measured latency and provider price data populate ranking and report fields', () => {

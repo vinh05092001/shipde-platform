@@ -1,5 +1,8 @@
 'use strict';
 
+// API contract (HTTP 400 "Too many score levels. Must have at most 10 levels."), not a tuning value.
+const JEV_MAX_SCORE_LEVELS = 10;
+
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -12,6 +15,39 @@ const Outcome = Object.freeze({
 });
 
 const DEFAULT_MIN_CONFIDENCE = 0.7;
+
+// Reasons that mean the advisory provider could not answer (as opposed to answering badly).
+const PROVIDER_FAILURE_REASONS = Object.freeze([
+  'UNREACHABLE',
+  'TIMEOUT',
+  'CREDENTIAL_MISSING',
+  'INVALID_RESPONSE',
+  'NETWORK_ERROR',
+]);
+
+/**
+ * Name the real cause of a failed advisory call without echoing secrets or response bodies.
+ * Returns CREDENTIAL_MISSING, TIMEOUT, HTTP_<status>, INVALID_RESPONSE, NETWORK_ERROR,
+ * or UNREACHABLE when the error carries no recognisable cause.
+ */
+function failureReason(err) {
+  const message = String((err && err.message) || '');
+  if (message === 'JEV_CREDENTIAL_MISSING') return 'CREDENTIAL_MISSING';
+  if (message === 'JEV_TIMEOUT' || (err && err.code === 'ETIMEDOUT')) return 'TIMEOUT';
+  const status = /^JEV_HTTP_(\d{3})$/.exec(message);
+  if (status) return 'HTTP_' + status[1];
+  if (message === 'JEV_INVALID_RESPONSE' || (err && err.name === 'SyntaxError')) {
+    return 'INVALID_RESPONSE';
+  }
+  // Socket-level failures carry a Node error code (ECONNREFUSED, ENOTFOUND, ECONNRESET...).
+  if (err && typeof err.code === 'string' && err.code) return 'NETWORK_ERROR';
+  return 'UNREACHABLE';
+}
+
+function isProviderFailure(reason) {
+  const value = String(reason || '');
+  return PROVIDER_FAILURE_REASONS.includes(value) || /^HTTP_\d{3}$/.test(value);
+}
 
 function undecided(reason) {
   return {
@@ -93,8 +129,8 @@ function postJson(url, body, headers, options) {
           }
           try {
             resolve(JSON.parse(text));
-          } catch (err) {
-            reject(err);
+          } catch {
+            reject(new Error('JEV_INVALID_RESPONSE'));
           }
         });
       }
@@ -117,7 +153,7 @@ function normalizeAdvice(raw) {
       if (answer && answer.type === 'score') {
         scores[name] = {
           score: answer.score,
-          distribution: answer.distribution,
+          distribution: answer.distribution || answer.probabilities,
           confidence: answer.confidence,
         };
       }
@@ -213,8 +249,11 @@ function buildJevAsk(source, options) {
       for (const dimension of question.scoreDimensions || []) {
         const name = dimension.name;
         const state = question.state || {};
-        const levels = Array.from({ length: 11 }, (_, score) => {
-          const emphasis = score <= 3 ? 'low' : score <= 7 ? 'moderate' : 'high';
+        // The JEV API accepts at most JEV_MAX_SCORE_LEVELS levels; scores are only
+        // used as ratios between dimensions, so the scale itself carries no meaning.
+        const levels = Array.from({ length: JEV_MAX_SCORE_LEVELS }, (_, score) => {
+          const third = JEV_MAX_SCORE_LEVELS / 3;
+          const emphasis = score < third ? 'low' : score < 2 * third ? 'moderate' : 'high';
           return (
             score +
             ': ' +
@@ -235,7 +274,9 @@ function buildJevAsk(source, options) {
             String(state.costCeiling === undefined ? 'unspecified' : state.costCeiling)
           );
         });
-        questions[name] = { type: 'score', instructions: dimension.instructions, levels };
+        // The API's ScoreQuestion takes the ordered rubric as `criteria` (index = score);
+        // an unknown `levels` field leaves `criteria` missing and the API answers HTTP 422.
+        questions[name] = { type: 'score', instructions: dimension.instructions, criteria: levels };
       }
     }
     const raw = await postJson(
@@ -276,6 +317,9 @@ async function advise(question, options) {
   const minConfidence = Number.isFinite(Number(opts.minConfidence))
     ? Number(opts.minConfidence)
     : DEFAULT_MIN_CONFIDENCE;
+  const scoreMinConfidence = Number.isFinite(Number(opts.scoreMinConfidence))
+    ? Number(opts.scoreMinConfidence)
+    : minConfidence;
   const ask = opts.ask;
   if (typeof ask !== 'function') return undecided('UNREACHABLE');
 
@@ -290,7 +334,7 @@ async function advise(question, options) {
       scoreDimensions: question.scoreDimensions,
     });
   } catch (err) {
-    return undecided(err && err.message === 'JEV_TIMEOUT' ? 'TIMEOUT' : 'UNREACHABLE');
+    return undecided(failureReason(err));
   }
 
   if (!raw || typeof raw !== 'object') return undecided('MALFORMED_OUTPUT');
@@ -298,7 +342,7 @@ async function advise(question, options) {
   if (raw.scores && typeof raw.scores === 'object') {
     const scoreNames = ['qualityImportance', 'latencyImportance', 'costImportance'];
     const scores = {};
-    let lowConfidence = false;
+    let confidentDimensions = 0;
     for (const name of scoreNames) {
       const item = raw.scores[name];
       const score = Number(item && item.score);
@@ -309,10 +353,10 @@ async function advise(question, options) {
           scores: Object.keys(scores).length ? scores : null,
         });
       }
-      if (confidence < minConfidence) lowConfidence = true;
+      if (confidence >= scoreMinConfidence) confidentDimensions += 1;
       scores[name] = { score, confidence, distribution: item.distribution || null };
     }
-    if (lowConfidence) {
+    if (confidentDimensions === 0) {
       return Object.assign(undecided('LOW_CONFIDENCE'), {
         choice: raw.choice || null,
         confidence: Math.min(...scoreNames.map((name) => scores[name].confidence)),
@@ -390,6 +434,9 @@ function transcriptQuestion(transcript, states) {
 module.exports = {
   Outcome,
   DEFAULT_MIN_CONFIDENCE,
+  PROVIDER_FAILURE_REASONS,
+  failureReason,
+  isProviderFailure,
   readCredential,
   buildJevAsk,
   buildAskFromSource,

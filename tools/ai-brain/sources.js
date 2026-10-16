@@ -99,6 +99,7 @@ function loadSources(options) {
         harness: sourceKind === Kind.MODEL_SOURCE ? 'direct-http' : null,
         accessPath: 'direct',
         endpoint: entry.endpoint,
+        ...(entry.headers && typeof entry.headers === 'object' ? { headers: entry.headers } : {}),
         credential: { type: 'api-key', env: credential.name },
         models: Array.isArray(entry.models) ? entry.models : [],
         modelMeta: entry.modelMeta && typeof entry.modelMeta === 'object' ? entry.modelMeta : {},

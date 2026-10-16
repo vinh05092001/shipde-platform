@@ -633,7 +633,8 @@ test('isolated qualification refuses a reviewer receipt for a different SHA', as
 test('production candidate builder uses intake catalogue/accounts and Controller ranking', () => {
   const fsx = require('fs');
   const path = require('path');
-  const root = process.cwd();
+  const root = fsx.mkdtempSync(path.join(os.tmpdir(), 'qualification-builder-'));
+  fixtures.push(root);
   const intakeRoot = path.join(root, 'tools', 'ai-brain', 'data', 'intake');
   const runDir = path.join(intakeRoot, 'fixture-qualification-live');
   fsx.mkdirSync(runDir, { recursive: true });
@@ -969,7 +970,7 @@ test('next loop runs only the named Work Item and still enforces dependency chec
   fixtures.push(decisionDir);
   const base = {
     maxIterations: 1,
-    rootDir: process.cwd(),
+    rootDir: decisionDir,
     records: [],
     workItem: 'TASK-AI-141',
     decisionDir,
@@ -980,6 +981,7 @@ test('next loop runs only the named Work Item and still enforces dependency chec
   ];
   let ran = null;
   const deps = {
+    config: {},
     existsSync: () => false,
     items,
     runIntake: async (options) => {
@@ -1012,12 +1014,13 @@ test('targeted loop does not report completion when only a qualification slot ra
   const result = await nextLoop(
     {
       maxIterations: 2,
-      rootDir: process.cwd(),
+      rootDir: decisionDir,
       records: [],
       workItem: 'TASK-AI-141',
       decisionDir,
     },
     {
+      config: {},
       existsSync: () => false,
       items: [{ work_item_id: 'TASK-AI-141', status: 'READY_FOR_AUTHOR', dependencies: '' }],
       runIntake: async () => {
@@ -1112,12 +1115,13 @@ test('targeted loop reports successful execution as completed', async () => {
   const result = await nextLoop(
     {
       maxIterations: 1,
-      rootDir: process.cwd(),
+      rootDir: successDecisionDir,
       records: [],
       workItem: 'TASK-AI-141',
       decisionDir: successDecisionDir,
     },
     {
+      config: {},
       existsSync: () => false,
       items: [{ work_item_id: 'TASK-AI-141', status: 'READY_FOR_AUTHOR', dependencies: '' }],
       runIntake: async () => ({ exitCode: 0, status: 'completed' }),
@@ -1133,16 +1137,29 @@ test('targeted loop reports successful execution as completed', async () => {
   assert.equal(result.outcome, 'completed');
 });
 
-test('the two known fixture selection paths do not change decisions.DEFAULT_DIR', async () => {
-  const file = path.join(decisions.DEFAULT_DIR, new Date().toISOString().slice(0, 10) + '.jsonl');
-  const before = fs.existsSync(file) ? fs.readFileSync(file) : null;
+test('the two known fixture selection paths do not change decisions.DEFAULT_DIR', async (t) => {
+  const defaultRoot = path.resolve(decisions.DEFAULT_DIR);
+  const defaultWrites = [];
+  // Observe this process's writes, not concurrent activity in the host log.
+  for (const method of ['appendFileSync', 'writeFileSync']) {
+    const original = fs[method];
+    t.mock.method(fs, method, (target, ...args) => {
+      if (typeof target === 'string' || Buffer.isBuffer(target)) {
+        const relative = path.relative(defaultRoot, path.resolve(String(target)));
+        if (!relative || (!relative.startsWith('..' + path.sep) && !path.isAbsolute(relative))) {
+          defaultWrites.push(String(target));
+          assert.fail('fixture selection must not write to decisions.DEFAULT_DIR');
+        }
+      }
+      return original.call(fs, target, ...args);
+    });
+  }
   const a = { gateway: 'g', upstream: 'a', accountId: 'a', modelId: 'm-a', quality: 90 };
   const b = { gateway: 'g', upstream: 'b', accountId: 'b', modelId: 'm-b', quality: 80 };
   a.candidateKey = require('../candidates').candidateKey(a);
   b.candidateKey = require('../candidates').candidateKey(b);
   const select = require('../orchestrate').selectCandidateForProfile;
   const tempDirs = [];
-  let after;
   try {
     for (const id of ['ITEM-91-R01-UNIT', 'TASK-AI-64-review']) {
       const decisionDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai141-guard-'));
@@ -1152,7 +1169,12 @@ test('the two known fixture selection paths do not change decisions.DEFAULT_DIR'
         [a, b],
         [],
         null,
-        {},
+        {
+          registry: { sources: [] },
+          jevAsk: async () => {
+            throw new Error('fixture JEV unavailable');
+          },
+        },
         { dir: decisionDir, now: Date.now() },
         Date.now(),
         { failedKeys: [a.candidateKey], decisionDir }
@@ -1160,9 +1182,8 @@ test('the two known fixture selection paths do not change decisions.DEFAULT_DIR'
       const selectedRecords = decisions.readDecisions({ dir: decisionDir });
       assert.ok(selectedRecords.some((record) => record.workItemId === id));
     }
-    after = fs.existsSync(file) ? fs.readFileSync(file) : null;
   } finally {
     for (const dir of tempDirs) fs.rmSync(dir, { recursive: true, force: true });
   }
-  assert.deepEqual(after, before);
+  assert.deepEqual(defaultWrites, []);
 });

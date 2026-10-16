@@ -318,3 +318,48 @@ test('pool proof timeout is bounded by the remaining budget', async (t) => {
   assert.equal(seen, 5000);
   assert.equal(proof.reason, 'WRITER_SCHEMA_POOL_POOL_TIMEOUT');
 });
+
+test('A failed Codex schema proof keeps its reason and records redacted exit code and stderr tail', async (t) => {
+  const secret = 'fake-secret-value-123456';
+  const env = { FAKE_API_TOKEN: secret };
+  const run = () => ({
+    exitCode: 1,
+    stdout: '',
+    stderr: `boom unexpected failure\nusing credential ${secret} here\n`,
+  });
+  const proof = await schemaApi.verify(candidate(), { run, env });
+  assert.equal(proof.ok, false);
+  assert.equal(proof.reason, 'WRITER_SCHEMA_CODEX_LAUNCH_FAILED');
+  assert.match(proof.detail, /exitCode=1/);
+  assert.match(proof.detail, /boom unexpected failure/);
+  assert.ok(!proof.detail.includes(secret));
+  assert.match(proof.detail, /REDACTED_SECRET/);
+
+  const isolation = require('../isolation-launcher');
+  const oldRead = isolation.readClosedIsolationVerdict;
+  isolation.readClosedIsolationVerdict = () => ({ verdict: 'CLOSED' });
+  t.after(() => {
+    isolation.readClosedIsolationVerdict = oldRead;
+  });
+  const root = temp(t);
+  const item = {
+    id: 'TASK-AI-142',
+    roleRequirement: { role: 'writer' },
+    requiredCapabilities: ['jsonSchema'],
+  };
+  const selected = await selectCandidateForProfile(
+    item,
+    [candidate()],
+    [],
+    {},
+    { registry: { sources: [] }, isolatedWorker: true, run, env },
+    { dir: root },
+    Date.now()
+  );
+  const rejection = selected.result.rejected.find(
+    (r) => r.reasonCode === 'CAPABILITY_MISSING:jsonSchema'
+  );
+  assert.equal(rejection.reason, 'WRITER_SCHEMA_CODEX_LAUNCH_FAILED');
+  assert.match(rejection.detail, /boom unexpected failure/);
+  assert.ok(!JSON.stringify(rejection).includes(secret));
+});

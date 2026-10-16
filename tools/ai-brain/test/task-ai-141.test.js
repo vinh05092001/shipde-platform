@@ -1595,6 +1595,40 @@ test('Part H: context pack never includes implicit sources outside allowed paths
   assert.doesNotMatch(result.content, /unrequested source/);
 });
 
+test('Part H: role 250k beats complexity 150k and complexity fills fields the role leaves unset', async () => {
+  const root = fixtureRoot();
+  let captured;
+  await runOrchestration('role wins', {
+    specs: [{ id: 'ROLE-WINS', complexity: 'standard', files: [] }],
+    candidates: [
+      {
+        upstream: 'u',
+        gateway: 'g',
+        accountId: 'a',
+        modelId: 'm',
+        harness: 'opencode',
+        source: 'u',
+        evidence: [{ status: 'passed', kind: 'WORK_ITEM_PASS', proofLevel: 'WORK_ITEM_PASS' }],
+        qualifiedRoles: ['author.foundation'],
+        capabilities: { contextWindow: 999999 },
+      },
+    ],
+    cwd: root,
+    decisionDir: path.join(root, 'role-wins'),
+    tokenBudgets: {
+      byRole: { 'author.foundation': { maxTokens: 250000, maxTurns: 100 } },
+      byComplexity: { standard: { maxTokens: 150000, noProgressMinutes: 7 } },
+    },
+    run: (job) => {
+      captured = job.tokenBudget;
+      return { exitCode: 1, stderr: 'stop' };
+    },
+  });
+  assert.equal(captured.maxTokens, 250000);
+  assert.equal(captured.maxTurns, 100);
+  assert.equal(captured.noProgressMinutes, 7);
+});
+
 test('Part H: complexity budget layers apply even when a role budget exists', async () => {
   const root = fixtureRoot();
   let captured;
@@ -1634,9 +1668,9 @@ for (const [name, complexity, policy, expected] of [
     'simple',
     DEFAULT_TOKEN_BUDGETS,
     {
-      maxTokens: 60000,
-      maxTurns: 40,
-      noProgressMinutes: 8,
+      maxTokens: 250000,
+      maxTurns: 100,
+      noProgressMinutes: 10,
       repeatedQuotaFailures: 3,
     },
   ],
@@ -1645,8 +1679,8 @@ for (const [name, complexity, policy, expected] of [
     'standard',
     DEFAULT_TOKEN_BUDGETS,
     {
-      maxTokens: 150000,
-      maxTurns: 80,
+      maxTokens: 250000,
+      maxTurns: 100,
       noProgressMinutes: 10,
       repeatedQuotaFailures: 3,
     },
@@ -1685,7 +1719,7 @@ for (const [name, complexity, policy, expected] of [
     { maxTokens: 1000 },
   ],
 ]) {
-  test(`Part H: budget intersection keeps the tightest explicit cap for ${name}`, async () => {
+  test(`Part H: role budget wins over complexity for ${name}`, async () => {
     const root = fixtureRoot();
     let captured;
     await runOrchestration('budget intersection', {

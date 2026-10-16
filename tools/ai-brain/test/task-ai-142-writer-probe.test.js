@@ -50,6 +50,95 @@ function createCandidate(overrides) {
   return c;
 }
 
+test('writer refreshes inventory once, skips a successful route with zero quota and reuses the JEV assessment', async (t) => {
+  const repo = makeTempRepo();
+  t.after(() => fs.rmSync(repo.dir, { recursive: true, force: true }));
+  const first = createCandidate({ modelId: 'vendor/first', quality: 99 });
+  const second = createCandidate({ modelId: 'vendor/second', quality: 90 });
+  const launched = [];
+  const probed = [];
+  let listings = 0;
+  const assessments = [];
+  const result = await runOrchestration('fixture inventory and quota', {
+    isolatedWorker: true,
+    cwd: repo.dir,
+    workerRoot: repo.dir,
+    baseSha: repo.sha,
+    sha: repo.sha,
+    decisionDir: path.join(repo.dir, 'decisions'),
+    evidenceDir: path.join(repo.dir, 'evidence'),
+    candidates: [first, second],
+    refreshWriterModels: true,
+    accounts: [{ id: 'account-1', provider: 'oc', capabilities: { contextWindow: 64000 } }],
+    env: { TEST_KEY: 'fixture-only' },
+    registry: {
+      sources: [
+        {
+          id: 'oc',
+          kind: 'router',
+          harness: 'opencode',
+          endpoint: 'https://gateway.example/v1',
+          credential: { type: 'api-key', env: 'TEST_KEY' },
+        },
+      ],
+      dispatch: { providers: { oc: { harness: 'opencode-direct', provider: 'opencode' } } },
+    },
+    fetchModels: async (url) => {
+      assert.equal(url, 'https://gateway.example/v1/models');
+      listings++;
+      return {
+        ok: true,
+        json: async () => ({
+          data: [{ id: 'vendor/first' }, { id: 'vendor/second' }, { id: 'vendor/new-listed' }],
+        }),
+      };
+    },
+    jevAsk: async (question) => {
+      assessments.push(question.state.role);
+      throw Error('fixture JEV unavailable');
+    },
+    specs: [{ id: 'TASK-AI-142', files: ['a.js'], acceptanceCriteria: ['done'], qualityFloor: 0 }],
+    routeProbe: async (c) => {
+      probed.push(c.modelId);
+      return {
+        ok: true,
+        status: 200,
+        quota: { status: c.modelId === 'vendor/first' ? 'exhausted' : 'unknown' },
+      };
+    },
+    run: (job) => {
+      launched.push(job.candidateKey);
+      return {
+        exitCode: 0,
+        stdout: '{"sessionID":"fixture-session","tokens":{"input":10,"output":5}}',
+        stderr: '',
+        completionNonce: 'fixture-nonce',
+        workerSha: repo.sha,
+      };
+    },
+    reviewer: () => ({ pass: true, sha: repo.sha, verdict: 'PASS', findings: [] }),
+    tests: () => ({ pass: true }),
+    hostGate: () => ({ pass: true, failures: [] }),
+    ranking: { priors: { ranking: [] } },
+  });
+  assert.equal(listings, 1);
+  assert.equal(assessments.filter((role) => role === 'writer').length, 1);
+  assert.deepEqual(probed, ['vendor/first', 'vendor/second']);
+  assert.deepEqual(launched, [second.candidateKey]);
+  assert.equal(result.status, 'COMPLETED');
+  const records = require('../decisions').readDecisionsSafe({
+    dir: path.join(repo.dir, 'decisions'),
+  });
+  assert.notEqual(
+    records[0].chosen,
+    undefined,
+    'inventory must not replace the first selection record'
+  );
+  const inventory = records.find((record) => Array.isArray(record.inventory))?.inventory;
+  assert.equal(inventory?.[0].listed, 3);
+  assert.equal(inventory?.[0].probeSucceeded, false, 'a listing is not inference proof');
+});
+
 test('(a) 60 dead routes taking 8 seconds and a live route ranked last fit the 180 second concurrent budget', async (t) => {
   const repo = makeTempRepo();
   const decisionDir = tmpDir('dec-a-');
@@ -759,3 +848,120 @@ for (const reasonCode of ['PROBE_BUDGET_EXHAUSTED', 'PROBE_ROUTE_CONFIGURATION_U
     assert.equal(launches, 1, 'a successful new probe may launch the writer');
   });
 }
+
+for (const fallbackProbe of ['success', 'budget-exhausted']) {
+  test(`writer retry gets a fresh probe budget after a long launch: ${fallbackProbe}`, async (t) => {
+    const repo = makeTempRepo();
+    t.after(() => fs.rmSync(repo.dir, { recursive: true, force: true }));
+    let clock = Date.now();
+    t.mock.method(Date, 'now', () => clock);
+    const first = createCandidate({ modelId: 'vendor/first', quality: 99 });
+    const second = createCandidate({ modelId: 'vendor/second', quality: 80 });
+    const probed = [];
+    const launched = [];
+    const checkpointFile = path.join(repo.dir, 'checkpoint.json');
+    await runOrchestration('long writer retry', {
+      isolatedWorker: true,
+      cwd: repo.dir,
+      workerRoot: repo.dir,
+      baseSha: repo.sha,
+      checkpointFile,
+      decisionDir: path.join(repo.dir, 'decisions'),
+      evidenceDir: path.join(repo.dir, 'evidence'),
+      routeHealthFile: path.join(repo.dir, 'health.json'),
+      candidates: [first, second],
+      registry: {
+        sources: [{ id: 'oc', endpoint: first.accessPath, credential: { env: 'TEST_KEY' } }],
+        dispatch: { providers: { oc: { harness: 'opencode-direct', provider: 'opencode' } } },
+      },
+      specs: [{ id: 'LONG-WRITER', files: [], qualityFloor: 0 }],
+      routeProbe: async (candidate) => {
+        probed.push(candidate.modelId);
+        return candidate.modelId === second.modelId && fallbackProbe === 'budget-exhausted'
+          ? { ok: false, status: 0, reasonCode: 'PROBE_BUDGET_EXHAUSTED' }
+          : { ok: true, status: 200 };
+      },
+      run: (job) => {
+        launched.push(job.candidateKey);
+        clock += 30 * 60 * 1000;
+        return {
+          exitCode: 1,
+          failureReason: 'TOKEN_BUDGET_EXCEEDED',
+          stderr: 'token budget exceeded',
+        };
+      },
+      ranking: { priors: { ranking: [] } },
+    });
+    assert.deepEqual(
+      probed,
+      [first.modelId, second.modelId],
+      'retry must actually probe after the long writer'
+    );
+    assert.equal(launched.length, fallbackProbe === 'success' ? 2 : 1);
+    const checkpoint = JSON.parse(fs.readFileSync(checkpointFile, 'utf8'));
+    assert.match(checkpoint.liveSteps['LONG-WRITER'].reason, /TOKEN_BUDGET_EXCEEDED/);
+    assert.doesNotMatch(checkpoint.liveSteps['LONG-WRITER'].reason, /PROBE_BUDGET_EXHAUSTED/);
+  });
+}
+
+test('maxTurns counts writer launches: refused in-loop probe rounds do not end the item, launches beyond it do', async (t) => {
+  const repo = makeTempRepo();
+  const decisionDir = tmpDir('dec-turns-');
+  const evidenceDir = tmpDir('evi-turns-');
+  t.after(() => {
+    fs.rmSync(repo.dir, { recursive: true, force: true });
+    fs.rmSync(decisionDir, { recursive: true, force: true });
+    fs.rmSync(evidenceDir, { recursive: true, force: true });
+  });
+  const live = new Set([1, 5, 6, 7]);
+  const candidates = [1, 2, 3, 4, 5, 6, 7].map((n) =>
+    createCandidate({
+      accessPath: 'https://gw-' + n + '.example/v1',
+      gateway: 'gw-' + n,
+      accountId: 'acc-' + n,
+      quotaScope: 'acc-' + n,
+      modelId: 'vendor/model-' + n,
+      quality: 100 - n,
+    })
+  );
+  const registry = {
+    sources: candidates
+      .map((c) => ({ id: c.gateway, endpoint: c.accessPath, credential: { env: 'TEST_KEY' } }))
+      .concat([
+        { id: 'oc', endpoint: 'https://gateway.example/v1', credential: { env: 'TEST_KEY' } },
+      ]),
+    dispatch: { providers: { oc: { harness: 'opencode-direct', provider: 'opencode' } } },
+  };
+  const launches = [];
+  const result = await runOrchestration('turns count launches', {
+    isolatedWorker: true,
+    cwd: repo.dir,
+    workerRoot: repo.dir,
+    baseSha: repo.sha,
+    sha: repo.sha,
+    decisionDir,
+    evidenceDir,
+    candidates,
+    registry,
+    specs: [
+      { id: 'TASK-AI-142', complexity: 'simple', files: ['a.js'], acceptanceCriteria: ['done'] },
+    ],
+    tokenBudgets: { byComplexity: { simple: { maxTurns: 2 } } },
+    routeProbe: async (probeCandidate) => {
+      const n = Number(probeCandidate.accessPath.split('gw-')[1].split('.')[0]);
+      return live.has(n)
+        ? { ok: true, status: 200, body: 'OK' }
+        : { ok: false, status: 500, body: 'down' };
+    },
+    run: (job) => {
+      launches.push(job.candidateKey);
+      return { exitCode: 1, stdout: '', stderr: 'writer failed' };
+    },
+    reviewer: () => ({ pass: true, sha: repo.sha, verdict: 'PASS', findings: [] }),
+    tests: () => ({ pass: true }),
+    hostGate: () => ({ pass: true, failures: [] }),
+    ranking: { priors: { ranking: [] } },
+  });
+  assert.equal(launches.length, 2, 'two real launches fit maxTurns=2 across refused probe rounds');
+  assert.match(JSON.stringify(result), /TURN_BUDGET_EXCEEDED/);
+});

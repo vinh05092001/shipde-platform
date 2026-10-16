@@ -65,12 +65,21 @@ function defaultSpawn(cmd, argv, spawnOpts) {
       const statusLine = lines.find((line) => errorCode.test(line));
       if (!routeFailure && apiLine && statusLine) {
         const status = Number(statusLine.match(errorCode)[1]);
-        if ([402, 403, 429].includes(status) || status >= 500) {
+        if ([401, 402, 403, 429].includes(status) || status >= 500) {
           routeFailure = `${apiLine} ${statusLine}`.slice(-400);
           try {
             cp.kill('SIGTERM');
           } catch {}
         }
+      }
+      // Hermes prints a missing provider login at startup and still exits 0;
+      // without this the run counts as completed and the brain is never reselected.
+      const missingCredentials = /^No [a-z0-9 -]*credentials stored\b[^\r\n]*/im;
+      if (!routeFailure && missingCredentials.test(failureScan)) {
+        routeFailure = failureScan.match(missingCredentials)[0].slice(-400);
+        try {
+          cp.kill('SIGTERM');
+        } catch {}
       }
       if (stream === 'stderr') {
         try {
@@ -736,10 +745,12 @@ function readCodexConfigModels(options, deps) {
   try {
     if (fsApi.existsSync(configFile)) {
       const content = fsApi.readFileSync(configFile, 'utf8');
+      // strict: only ids the operator's config.toml actually names, no default.
+      if (o.strict && !/(?:^|\r?\n)\s*model\s*=/.test(String(content))) return [];
       return parseCodexModelsFromToml(content);
     }
   } catch {}
-  return ['gpt-6.1-sol'];
+  return o.strict ? [] : ['gpt-6.1-sol'];
 }
 
 function isCodexContextEligible(options, deps) {
@@ -1446,8 +1457,11 @@ function writeProvidersConfig(candidate, options, deps) {
 
   const parsed =
     candidate && candidate.candidateKey ? parseCandidateKey(candidate.candidateKey) : candidate;
-  const gateway = (candidate && candidate.gateway) || (parsed && parsed.gateway) || 'openai';
-  const upstream = (candidate && candidate.upstream) || (parsed && parsed.upstream) || gateway;
+  const gateway = (candidate && candidate.gateway) || (parsed && parsed.gateway) || '';
+  const upstream =
+    (candidate && candidate.upstream) ||
+    (parsed && parsed.upstream) ||
+    (gateway && gateway !== '*' ? gateway : '');
 
   const isCodexProvider =
     (candidate &&
@@ -1462,7 +1476,9 @@ function writeProvidersConfig(candidate, options, deps) {
     ? 'openai-codex'
     : gateway && gateway !== '*'
       ? gateway
-      : upstream;
+      : upstream && upstream !== '*'
+        ? upstream
+        : 'custom';
   if (!providerName || providerName === '*') providerName = 'custom';
 
   if (!/^[a-zA-Z0-9_.-]+$/.test(providerName)) {
@@ -1688,6 +1704,7 @@ function writeProvidersConfig(candidate, options, deps) {
     modelId,
     baseUrl,
     apiKeyEnv,
+    ...(src && src.headers && typeof src.headers === 'object' ? { headers: src.headers } : {}),
     installedSkillPath,
   };
 }
@@ -1871,9 +1888,19 @@ async function probeRankedRoutes(
         inFlight.set(route.candidateKey, promise);
       }
       bestSuccess = ordered.findIndex((c) => outcomes.get(c.candidateKey) === true);
+      // Each higher account gets its best-ranked probe before a lower success wins;
+      // its remaining routes cannot starve a live route on another account.
+      const resolvedAccounts = new Set(
+        ordered
+          .slice(0, Math.max(bestSuccess, 0))
+          .filter((c) => outcomes.has(c.candidateKey))
+          .map((c) => accountKey(c))
+      );
       if (
         bestSuccess >= 0 &&
-        ordered.slice(0, bestSuccess).every((c) => outcomes.has(c.candidateKey))
+        ordered
+          .slice(0, bestSuccess)
+          .every((c) => outcomes.has(c.candidateKey) || resolvedAccounts.has(accountKey(c)))
       ) {
         winner = ordered[bestSuccess];
         break;
@@ -2003,7 +2030,7 @@ async function launchHermesSession(options, deps) {
   let initialRejected;
   const probeTimeoutMs = Math.min(Number(opts.probeTimeoutMs) || 8000, 8000);
   const probeBudgetMs = Math.min(Number(opts.probeBudgetMs) || 180000, 180000);
-  const probeDeadline = Date.now() + probeBudgetMs;
+  let probeDeadline = Date.now() + probeBudgetMs;
   let attempt = 0;
   const routeHealthFile =
     opts.routeHealthFile ||
@@ -2039,6 +2066,8 @@ async function launchHermesSession(options, deps) {
   };
 
   while (true) {
+    // Each selection round (initial or after a runtime route failure) gets its own probe window.
+    probeDeadline = Date.now() + probeBudgetMs;
     const isRetry = attempt > 0;
     const shouldReselect = Boolean(opts.reselect) || isRetry || !session.candidateKey;
     const preferredCandidateKey = shouldReselect ? null : session.candidateKey;
@@ -2130,11 +2159,16 @@ async function launchHermesSession(options, deps) {
         result = await Promise.race([
           Promise.resolve()
             .then(() =>
-              (d.probe || opts.probeFn || probeHermesCandidate)(candidate, config.apiKeyEnv, env, {
-                timeoutMs,
-                fetch: d.fetch || opts.fetch,
-                signal: controller.signal,
-              })
+              (d.probe || opts.probeFn || probeHermesCandidate)(
+                config.headers ? { ...candidate, headers: config.headers } : candidate,
+                config.apiKeyEnv,
+                env,
+                {
+                  timeoutMs,
+                  fetch: d.fetch || opts.fetch,
+                  signal: controller.signal,
+                }
+              )
             )
             .catch(() => ({ ok: false, status: 0, body: 'Probe transport failed' })),
           new Promise((resolve) => {
@@ -2534,6 +2568,15 @@ async function launchHermesSession(options, deps) {
     }
 
     // Route/model/quota failure: exclude failed route and reselect
+    // A missing Hermes-side login is account-scoped: remember it so the next launch skips this candidate.
+    if (liveRouteFailure && /^No [a-z0-9 -]*credentials stored\b/i.test(String(liveRouteFailure))) {
+      health.rememberAccountCooldown(candidate, 'account_auth_failed', undefined, {
+        ...opts,
+        registry: d.registry || opts.registry,
+        routeHealth,
+        routeHealthFile,
+      });
+    }
     excludedCandidates.push(candidate.candidateKey);
     if (candidate._preRewriteKey) {
       excludedCandidates.push(candidate._preRewriteKey);

@@ -69,8 +69,8 @@ test('JEV scores convert to direct weights and the Controller uses them for rank
   assert.equal(request[1].questions.latencyImportance.type, 'score');
   assert.equal(request[1].questions.costImportance.type, 'score');
   assert.equal(request[1].questions.weightProfile.type, 'choice');
-  assert.match(request[1].questions.qualityImportance.levels[0], /^0:/);
-  assert.match(request[1].questions.qualityImportance.levels[10], /^10:/);
+  assert.match(request[1].questions.qualityImportance.criteria[0], /^0:/);
+  assert.match(request[1].questions.qualityImportance.criteria[9], /^9:/);
   assert.equal(request[2].authorization, 'Bearer ' + secret);
 
   const candidates = [
@@ -318,4 +318,166 @@ test('healthy reasoning candidates use existing benchmark priors to choose the s
   assert.equal(result.chosen, result.ranking[0].candidateKey);
   assert.ok(result.ranking[0].score > result.ranking[1].score);
   assert.ok(result.ranking[1].score > result.ranking[2].score);
+});
+
+for (const minConfidence of [undefined, 0.5]) {
+  test(`per-dimension JEV confidence preserves evidence at threshold ${minConfidence ?? 'default'}`, async () => {
+    const scores = {
+      qualityImportance: { score: 4.11, confidence: 0.56 },
+      latencyImportance: { score: 1.98, confidence: 0.23 },
+      costImportance: { score: 1.08, confidence: 0.57 },
+    };
+    const assessment = await routing.assessTask(profile(), {
+      minConfidence,
+      ask: async () => ({ choice: 'BALANCED', scores }),
+    });
+    assert.equal(
+      assessment.confidence,
+      0.23,
+      'log the minimum observed confidence even on fallback'
+    );
+    assert.deepEqual(assessment.dimensionConfidences, {
+      qualityImportance: 0.56,
+      latencyImportance: 0.23,
+      costImportance: 0.57,
+    });
+    if (minConfidence === undefined) {
+      assert.equal(assessment.weightSource, 'preset:BALANCED');
+      assert.deepEqual(assessment.weights, routing.WEIGHT_PROFILES.BALANCED);
+    } else {
+      assert.equal(assessment.weightSource, 'mixed:jev-score+preset:BALANCED');
+      assert.deepEqual(assessment.dimensionWeightSources, {
+        quality: 'jev-score',
+        latency: 'preset:BALANCED',
+        cost: 'jev-score',
+      });
+      const preset = routing.WEIGHT_PROFILES.BALANCED;
+      assert.equal(assessment.weights.latency, preset.latency);
+      const trustedTotal = scores.qualityImportance.score + scores.costImportance.score;
+      const remaining = 100 - preset.latency;
+      assert.ok(
+        Math.abs(
+          assessment.weights.quality - (remaining * scores.qualityImportance.score) / trustedTotal
+        ) <= 1
+      );
+      assert.equal(
+        Object.values(assessment.weights).reduce((a, b) => a + b, 0),
+        100
+      );
+    }
+  });
+}
+
+test('mixed JEV weighting uses the default confidence threshold and retains risk policy', async () => {
+  const ask = async () => ({
+    scores: {
+      qualityImportance: { score: 4.11, confidence: 0.8 },
+      latencyImportance: { score: 1.98, confidence: 0.23 },
+      costImportance: { score: 1.08, confidence: 0.9 },
+    },
+  });
+  const result = await routing.assessTask(profile(), { ask });
+  assert.equal(result.weightSource, 'mixed:jev-score+preset:BALANCED');
+  assert.equal(result.confidence, 0.23);
+  assert.equal(result.weights.latency, routing.WEIGHT_PROFILES.BALANCED.latency);
+  const risky = await routing.assessTask(profile({ riskDomains: ['money'] }), { ask });
+  assert.deepEqual(risky.weights, routing.WEIGHT_PROFILES.QUALITY_FIRST);
+  assert.equal(risky.dimensionWeightSources, null);
+});
+
+test('configured weighting confidence keeps the exact live quality and cost advice without lowering the choice threshold', async () => {
+  const source = { minConfidence: 0.7, weightingMinConfidence: 0.5 };
+  const scores = {
+    qualityImportance: { score: 4.11, confidence: 0.56 },
+    latencyImportance: { score: 1.98, confidence: 0.23 },
+    costImportance: { score: 1.08, confidence: 0.57 },
+  };
+  const result = await routing.assessTask(profile(), {
+    source,
+    ask: async () => ({ scores, choice: 'BALANCED' }),
+  });
+  assert.equal(result.weightSource, 'mixed:jev-score+preset:BALANCED');
+  assert.deepEqual(result.dimensionWeightSources, {
+    quality: 'jev-score',
+    latency: 'preset:BALANCED',
+    cost: 'jev-score',
+  });
+  assert.deepEqual(result.weights, { quality: 52, latency: 34, cost: 14 });
+  assert.equal(result.confidence, 0.23);
+  const closed = await jev.advise(
+    {
+      kind: 'advisory',
+      evidence: 'fixture evidence',
+      options: ['BALANCED', 'QUALITY_FIRST'],
+    },
+    {
+      minConfidence: source.minConfidence,
+      ask: async () => ({ choice: 'BALANCED', confidence: 0.56 }),
+    }
+  );
+  assert.equal(closed.outcome, jev.Outcome.UNDECIDED);
+  assert.equal(closed.reason, 'LOW_CONFIDENCE');
+});
+
+test('weighting threshold does not admit low confidence preset-only advice', async () => {
+  const result = await routing.assessTask(profile(), {
+    source: { minConfidence: 0.7, weightingMinConfidence: 0.5 },
+    ask: async () => ({ choice: 'QUALITY_FIRST', confidence: 0.56 }),
+  });
+  assert.equal(result.weightSource, 'preset:BALANCED');
+  assert.equal(result.jevOutcome, jev.Outcome.UNDECIDED);
+});
+
+test('zero trusted score mass keeps preset provenance instead of claiming mixed weights', async () => {
+  const result = await routing.assessTask(profile(), {
+    source: { minConfidence: 0.7, weightingMinConfidence: 0.5 },
+    ask: async () => ({
+      scores: {
+        qualityImportance: { score: 0, confidence: 0.8 },
+        latencyImportance: { score: 2, confidence: 0.23 },
+        costImportance: { score: 0, confidence: 0.9 },
+      },
+    }),
+  });
+  assert.equal(result.weightSource, 'preset:BALANCED');
+  assert.deepEqual(result.weights, routing.WEIGHT_PROFILES.BALANCED);
+  assert.equal(result.dimensionWeightSources, null);
+});
+
+test('committed JEV source activates the exact live mixed weighting through the writer assessment path', async () => {
+  const source = require('../sources.json').sources.find((entry) => entry.id === 'jev');
+  assert.equal(source.minConfidence, 0.7, 'closed-choice policy stays unchanged');
+  assert.equal(source.weightingMinConfidence, 0.5, 'approved weighting policy must be active');
+  const response = answers({
+    qualityImportance: 4.11,
+    latencyImportance: 1.98,
+    costImportance: 1.08,
+  });
+  response.answers.qualityImportance.confidence = 0.56;
+  response.answers.latencyImportance.confidence = 0.23;
+  response.answers.costImportance.confidence = 0.57;
+  let calls = 0;
+  const ask = jev.buildJevAsk(source, {
+    env: { [source.credential.env]: 'fixture-only' },
+    httpClient: clientFor(response, () => {
+      calls += 1;
+    }),
+  });
+  const options = { jevAsk: ask };
+  const assessment = await require('../writer-selection').assessOnce(
+    profile(),
+    source,
+    ask,
+    options,
+    routing
+  );
+  assert.equal(calls, 1);
+  assert.equal(assessment.weightSource, 'mixed:jev-score+preset:BALANCED');
+  assert.deepEqual(assessment.dimensionWeightSources, {
+    quality: 'jev-score',
+    latency: 'preset:BALANCED',
+    cost: 'jev-score',
+  });
+  assert.deepEqual(assessment.weights, { quality: 52, latency: 34, cost: 14 });
+  assert.equal(assessment.confidence, 0.23);
 });

@@ -182,7 +182,9 @@ describe('MVP Controller Contract (tools/ai-brain/cli.js dispatch)', () => {
         USERPROFILE: homeDir,
         APPDATA: appdataDir,
       },
-      timeout: 15000,
+      // Each dispatch is a cold node process (~5s); a 15s budget is only 3x headroom and
+      // spawnSync kills it (status null) under full-suite parallel load. Generous cap, not a bound.
+      timeout: 180000,
     });
   }
 

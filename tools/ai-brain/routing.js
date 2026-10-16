@@ -282,9 +282,7 @@ async function adviseModelChoice(result, profile, options) {
     eligible.has(advised.choice)
       ? advised.choice
       : result.chosen;
-  const providerFailure =
-    advised.handledBy !== 'jev' &&
-    (advised.reason === 'UNREACHABLE' || advised.reason === 'TIMEOUT');
+  const providerFailure = advised.handledBy !== 'jev' && jev.isProviderFailure(advised.reason);
   return {
     chosen,
     advice: {
@@ -312,6 +310,13 @@ async function adviseModelChoice(result, profile, options) {
 function controllerFallbackProfile(profile) {
   const roleDefault = ROLE_FALLBACK_PROFILE[profile.role] || 'BALANCED';
   const qualityCritical = profile.role === 'reviewer' || profile.role === 'security-review';
+  if (
+    ['complex', 'large', 'hard'].includes(profile.complexity) ||
+    (profile.riskDomains || []).some((r) => ['security', 'money', 'tenant'].includes(r))
+  )
+    return 'QUALITY_FIRST';
+  if (!qualityCritical && ['trivial', 'simple'].includes(profile.complexity))
+    return 'LATENCY_FIRST';
   if (profile.latencyPriority === 'high' && !qualityCritical) return 'LATENCY_FIRST';
   if (profile.latencyPriority === 'low' && qualityCritical) return 'BALANCED';
   return roleDefault;
@@ -349,11 +354,21 @@ async function assessTask(profile, opts) {
           Number.isFinite(Number(options.minConfidence))
         ? Number(options.minConfidence)
         : undefined;
+  // Numeric weight advice may use its own configured threshold. Choice answers
+  // still pass the existing source/default confidence policy.
+  const scoreMinConfidence =
+    options.source &&
+    options.source.weightingMinConfidence !== null &&
+    options.source.weightingMinConfidence !== undefined &&
+    Number.isFinite(Number(options.source.weightingMinConfidence))
+      ? Number(options.source.weightingMinConfidence)
+      : minConfidence;
   let result;
   try {
     result = await jev.adviseOrReason(question, {
       ask,
       minConfidence,
+      scoreMinConfidence,
       reasoningController: () => ({
         outcome: jev.Outcome.DECIDED,
         choice: fallbackId,
@@ -368,7 +383,7 @@ async function assessTask(profile, opts) {
       confidence: 0,
       handledBy: 'reasoning-controller',
       reason: 'CONTROLLER_DETERMINISTIC_FALLBACK',
-      jev: { reason: 'UNREACHABLE' },
+      jev: { reason: jev.failureReason(err) },
     };
   }
   const advisoryResult = result.jev || result;
@@ -387,12 +402,44 @@ async function assessTask(profile, opts) {
   let chosenProfile = result.choice && WEIGHT_PROFILES[result.choice] ? result.choice : fallbackId;
   let weights = WEIGHT_PROFILES[chosenProfile];
   let weightSource = 'preset:' + chosenProfile;
+  let dimensionWeightSources = null;
   if (scoreDecided) {
-    const values = [
+    let values = [
       advisoryResult.scores.qualityImportance.score,
       advisoryResult.scores.latencyImportance.score,
       advisoryResult.scores.costImportance.score,
     ];
+    const threshold = scoreMinConfidence ?? jev.DEFAULT_MIN_CONFIDENCE;
+    const dimensions = ['quality', 'latency', 'cost'];
+    const scoreNames = ['qualityImportance', 'latencyImportance', 'costImportance'];
+    const accepted = scoreNames.map((name) => advisoryResult.scores[name].confidence >= threshold);
+    if (accepted.some((value) => !value)) {
+      const acceptedTotal = values.reduce(
+        (sum, value, index) => sum + (accepted[index] ? value : 0),
+        0
+      );
+      const presetTotal = dimensions.reduce(
+        (sum, dimension, index) =>
+          sum + (accepted[index] ? 0 : WEIGHT_PROFILES[fallbackId][dimension]),
+        0
+      );
+      // Preserve each fallback dimension's preset weight exactly. Allocate the
+      // remaining weight among trusted JEV dimensions in their score ratio.
+      values =
+        acceptedTotal > 0
+          ? values.map((value, index) =>
+              accepted[index]
+                ? (value * (100 - presetTotal)) / acceptedTotal
+                : WEIGHT_PROFILES[fallbackId][dimensions[index]]
+            )
+          : values.map(() => 0);
+      dimensionWeightSources = Object.fromEntries(
+        dimensions.map((dimension, index) => [
+          dimension,
+          accepted[index] ? 'jev-score' : 'preset:' + fallbackId,
+        ])
+      );
+    }
     const sum = values.reduce((a, b) => a + b, 0);
     if (sum > 0) {
       const exact = values.map((value) => (value * 100) / sum);
@@ -407,8 +454,10 @@ async function assessTask(profile, opts) {
       )
         rounded[fractions[i].index] += 1;
       weights = { quality: rounded[0], latency: rounded[1], cost: rounded[2] };
-      weightSource = 'jev-score';
+      weightSource = dimensionWeightSources ? 'mixed:jev-score+preset:' + fallbackId : 'jev-score';
       chosenProfile = null;
+    } else {
+      dimensionWeightSources = null;
     }
   }
   const highRisk = (profile.riskDomains || []).some((domain) =>
@@ -421,6 +470,7 @@ async function assessTask(profile, opts) {
     chosenProfile = 'QUALITY_FIRST';
     weights = WEIGHT_PROFILES.QUALITY_FIRST;
     weightSource = 'preset:QUALITY_FIRST';
+    dimensionWeightSources = null;
   }
   const decidedBy = qualityOverride ? 'controller' : jevDecided ? 'jev' : 'controller';
 
@@ -430,7 +480,9 @@ async function assessTask(profile, opts) {
     reasonCodes.push(
       'JEV_UNDECIDED:' + String((result.jev && result.jev.reason) || result.reason || 'UNKNOWN')
     );
-  if (weightSource === 'jev-score') {
+  if (weightSource.startsWith('mixed:')) {
+    reasonCodes.push('WEIGHTS_JEV_MIXED');
+  } else if (weightSource === 'jev-score') {
     reasonCodes.push('WEIGHTS_JEV_SCORE');
   } else {
     reasonCodes.push('WEIGHTS_' + chosenProfile + (jevDecided ? '' : '_CONTROLLER_FALLBACK'));
@@ -457,6 +509,7 @@ async function assessTask(profile, opts) {
     weightProfile: chosenProfile,
     weights,
     weightSource,
+    dimensionWeightSources,
     scores: advisoryResult.scores
       ? Object.fromEntries(
           Object.entries(advisoryResult.scores).map(([name, item]) => [name, item.score])
@@ -471,7 +524,7 @@ async function assessTask(profile, opts) {
     difficulty: String(profile.complexity),
     latencyPriority: profile.latencyPriority,
     recommendedModelClass,
-    confidence: jevDecided ? result.confidence : 0,
+    confidence: advisoryResult.confidence ?? 0,
     probabilities: jevDecided && result.probabilities ? result.probabilities : null,
     jevModel: jevDecided && result.jevModel ? result.jevModel : null,
     usage: jevDecided && result.usage ? result.usage : null,
@@ -1140,15 +1193,14 @@ function scoreForProfile(candidate, assessment, ctx) {
       ? assessment.weights.cost
       : 33;
 
-  // Hermes opts into known-dimension normalization; retain the established
-  // fixed-weight contract for existing writer/reviewer assessments.
+  // Renormalize over known dimensions so unknown sub-scores (e.g. unpriced
+  // candidates or unmeasured latency) do not penalize candidates against
+  // known or free models.
   const totalWeight =
-    assessment && assessment.renormalizeKnownScores
-      ? (quality !== null ? wQuality : 0) +
-        (reliability !== null ? wReliability : 0) +
-        (latency !== null ? wLatency : 0) +
-        (cost !== null ? wCost : 0)
-      : wQuality + wReliability + wLatency + wCost;
+    (quality !== null ? wQuality : 0) +
+    (reliability !== null ? wReliability : 0) +
+    (latency !== null ? wLatency : 0) +
+    (cost !== null ? wCost : 0);
 
   let total = 0;
   if (quality !== null) total += wQuality * quality;
@@ -1169,7 +1221,7 @@ function scoreForProfile(candidate, assessment, ctx) {
   // A scored prior is already blended into quality above. Only legacy priors
   // without a numeric score retain the standalone tier bonus.
   const weightedPriorContribution =
-    effectivePriorUsable && priorHasScore
+    effectivePriorUsable && priorHasScore && totalWeight > 0
       ? Math.round((prior.bonus * priorQualityWeight * wQuality) / totalWeight)
       : effectivePriorUsable
         ? prior.bonus
@@ -1297,6 +1349,8 @@ function rankForProfile(candidates, profile, assessment, ctx) {
       reject('CAPABILITY_MISSING:' + missingCapability, 'capability');
       if (missingCapability === 'jsonSchema' && c.jsonSchemaEvidence) {
         rejected[rejected.length - 1].reason = c.jsonSchemaEvidence.reason;
+        if (c.jsonSchemaEvidence.detail)
+          rejected[rejected.length - 1].detail = c.jsonSchemaEvidence.detail;
       }
       continue;
     }

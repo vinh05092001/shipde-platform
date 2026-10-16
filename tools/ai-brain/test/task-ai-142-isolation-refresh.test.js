@@ -119,3 +119,28 @@ for (const scenario of [
     }
   });
 }
+
+test('isolation refresh never runs the real verifier inside a test run', () => {
+  const { refreshIsolationVerdict } = require('../isolation-refresh');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'isolation-guard-'));
+  try {
+    const stale = Object.assign(new Error('ISOLATION_VERDICT_STALE: fixture'), {
+      code: 'ISOLATION_VERDICT_STALE',
+    });
+    assert.ok(process.env.NODE_TEST_CONTEXT, 'node --test sets NODE_TEST_CONTEXT');
+    assert.throws(
+      () =>
+        refreshIsolationVerdict({
+          cwd: root,
+          decisionDir: path.join(root, 'decisions'),
+          validate: () => {
+            throw stale;
+          },
+        }),
+      (error) => error === stale && error.refreshExitCode === undefined
+    );
+    assert.equal(fs.existsSync(path.join(root, 'decisions')), false, 'no refresh was attempted');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

@@ -258,7 +258,8 @@
       "verify": { "method": "closed-question" },
       "mayWriteCode": false,
       "minConfidence": 0.7,
-      "comment": "Closed, checkable questions only — classify a task, filter lanes. Below minConfidence the answer is discarded and a reasoning model decides."
+      "weightingMinConfidence": 0.5,
+      "comment": "Closed choices retain minConfidence. Numeric weighting uses weightingMinConfidence per dimension; low-confidence dimensions fall back to Controller presets."
     },
     {
       "id": "cohere",

@@ -1800,6 +1800,28 @@ test('defaultSpawn ignores model quota text and recognizes Hermes API failure li
     );
     assert.match(apiFailure.routeFailure, /API call failed.*403.*insufficient_user_quota/i);
     assert.notEqual(apiFailure.exitCode, 0);
+
+    const authFailure = await defaultSpawn(
+      process.execPath,
+      [
+        '-e',
+        "process.stderr.write('API call failed (attempt 1/1): Error code: 401 invalid api key\n'); setInterval(() => {}, 1000);",
+      ],
+      { stdio: ['inherit', 'pipe', 'pipe'] }
+    );
+    assert.match(authFailure.routeFailure, /401/);
+    assert.notEqual(authFailure.exitCode, 0);
+
+    // Hermes reports a missing provider login and exits 0; that is route evidence.
+    const missingLogin = await defaultSpawn(
+      process.execPath,
+      [
+        '-e',
+        "process.stdout.write('\\u001b[1;31mNo Codex credentials stored. Run hermes auth add openai-codex to\\u001b[0m\\nGoodbye!\\n'); setTimeout(() => process.exit(0), 30);",
+      ],
+      { stdio: ['inherit', 'pipe', 'pipe'] }
+    );
+    assert.match(missingLogin.routeFailure, /^No Codex credentials stored/);
   } finally {
     process.stderr.write = origStderrWrite;
   }
@@ -3130,9 +3152,10 @@ test('TASK-AI-142: a live route beyond one hundred failed probes ignores legacy 
   }
 });
 
-test('TASK-AI-142: wall-clock deadline aborts concurrent probes and never launches', async () => {
+test('TASK-AI-142: wall-clock deadline aborts concurrent probes and never launches', async (t) => {
   const root = fixtureRoot('hermes-wall-clock-');
   try {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
     const candidates = Array.from({ length: 20 }, (_, index) =>
       sampleCandidate({
         upstream: `provider-${index}`,
@@ -3142,9 +3165,10 @@ test('TASK-AI-142: wall-clock deadline aborts concurrent probes and never launch
       })
     );
     const signals = [];
+    const started = Promise.withResolvers();
     let active = 0;
     let peak = 0;
-    await assert.rejects(
+    const rejected = assert.rejects(
       launchHermesSession(
         { rootDir: root, skipDecisionLog: true, probeBudgetMs: 200 },
         {
@@ -3155,6 +3179,7 @@ test('TASK-AI-142: wall-clock deadline aborts concurrent probes and never launch
             signals.push(options.signal);
             active += 1;
             peak = Math.max(peak, active);
+            if (signals.length === 8) started.resolve();
             options.signal.addEventListener(
               'abort',
               () => {
@@ -3169,8 +3194,11 @@ test('TASK-AI-142: wall-clock deadline aborts concurrent probes and never launch
       ),
       /NO_REASONING_CANDIDATE/
     );
-    assert.ok(signals.length > 0);
-    assert.ok(peak <= 8);
+    await started.promise;
+    t.mock.timers.tick(200);
+    await rejected;
+    assert.equal(signals.length, 8, 'the deadline prevents later probes');
+    assert.equal(peak, 8);
     assert.equal(active, 0);
     assert.ok(signals.every((signal) => signal.aborted));
   } finally {
@@ -3178,26 +3206,34 @@ test('TASK-AI-142: wall-clock deadline aborts concurrent probes and never launch
   }
 });
 
-test('TASK-AI-142: deadline preserves a completed live success while higher routes time out', async () => {
+test('TASK-AI-142: deadline preserves a completed live success while higher routes time out', async (t) => {
   const root = fixtureRoot('hermes-deadline-success-');
   try {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
+    const completed = Promise.withResolvers();
     const candidates = [
       sampleCandidate({ modelId: 'kr/top', quality: 99, evidence: [] }),
       sampleCandidate({ modelId: 'kr/second', quality: 98, evidence: [] }),
       sampleCandidate({ upstream: 'live', modelId: 'live/third', quality: 97, evidence: [] }),
     ];
-    const result = await launchHermesSession(
+    const pending = launchHermesSession(
       { rootDir: root, dryRun: true, probe: true, skipDecisionLog: true, probeBudgetMs: 200 },
       {
         candidates,
         registry: sampleRegistry(),
         priorsData: { ranking: [] },
-        probe: (candidate) =>
-          candidate.upstream === 'live'
-            ? Promise.resolve({ ok: true, status: 200 })
-            : new Promise(() => {}),
+        probe: (candidate) => {
+          if (candidate.upstream !== 'live') return new Promise(() => {});
+          completed.resolve();
+          return Promise.resolve({ ok: true, status: 200 });
+        },
       }
     );
+    await completed.promise;
+    // Drain the successful probe's microtasks before expiring the pending routes.
+    await new Promise((resolve) => setImmediate(resolve));
+    t.mock.timers.tick(200);
+    const result = await pending;
     assert.equal(result.candidateKey, candidates[2].candidateKey);
     const healthFile = path.join(root, 'tools', 'ai-brain', 'data', 'model-route-health.json');
     const store = JSON.parse(fs.readFileSync(healthFile, 'utf8'));
@@ -3705,4 +3741,119 @@ test('Hermes exit "No Codex credentials stored" is an account auth failure, so t
   });
   assert.equal(c.cause, classifier.Cause.ACCOUNT_AUTH_FAILED);
   assert.equal(c.scope, classifier.Scope.ACCOUNT);
+});
+
+test('writeProvidersConfig uses upstream when gateway is empty, avoiding builtin openai providerName', () => {
+  const root = fixtureRoot('hermes-cfg-empty-gw-');
+  try {
+    const candidate = {
+      candidateKey:
+        'hermes::https://developer.amd.com.cn/radeon/api/v1::::amd-radeon::*::deepseek-ai/deepseek-v3.1',
+      modelId: 'deepseek-ai/deepseek-v3.1',
+    };
+    const registry = {
+      sources: [
+        {
+          id: 'amd-radeon',
+          endpoint: 'https://developer.amd.com.cn/radeon/api/v1',
+          credential: { type: 'env', env: 'AMD_RADEON_API_KEY' },
+        },
+      ],
+    };
+    const res = writeProvidersConfig(candidate, { rootDir: root }, { registry });
+    assert.notEqual(
+      res.providerName,
+      'openai',
+      'candidate with empty gateway must not fall back to openai'
+    );
+    assert.equal(res.providerName, 'amd-radeon', 'candidate with empty gateway must use upstream');
+    const content = fs.readFileSync(res.configPath, 'utf8');
+    assert.ok(
+      !content.includes('provider: "openai"'),
+      'config.yaml must not contain provider: "openai"'
+    );
+    assert.ok(
+      content.includes('provider: "amd-radeon"'),
+      'config.yaml must configure upstream provider'
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('TASK-AI-142: a reselection round gets its own probe window and a Hermes login failure is remembered', async (t) => {
+  const root = fixtureRoot('hermes-reselect-window-');
+  try {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
+    const a = sampleCandidate({
+      upstream: 'pa',
+      modelId: 'pa/model',
+      accountId: 'acc-a',
+      quality: 99,
+      evidence: [],
+    });
+    const b = sampleCandidate({
+      gateway: 'rqsty',
+      accessPath: 'https://router.requesty.ai/v1',
+      upstream: 'pb',
+      modelId: 'pb/model',
+      accountId: 'acc-b',
+      quality: 90,
+      evidence: [],
+    });
+    const routeHealthFile = path.join(root, 'route-health.json');
+    const make = (spawn, probed) => [
+      {
+        rootDir: root,
+        skipDecisionLog: true,
+        probeBudgetMs: 200,
+        routeHealthFile,
+        env: { NINEROUTER_API_KEY: 'k', REQUESTY_API_KEY: 'k' },
+      },
+      {
+        candidates: [a, b],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+        probe: (candidate) => {
+          probed.push(candidate.upstream);
+          return Promise.resolve({ ok: true, status: 200 });
+        },
+        spawn,
+      },
+    ];
+    const probed1 = [];
+    const spawned1 = [];
+    const res = await launchHermesSession(
+      ...make(async (_cmd, args) => {
+        spawned1.push(args.join(' '));
+        if (spawned1.length === 1) {
+          t.mock.timers.tick(1000);
+          return { exitCode: 0, routeFailure: 'No Codex credentials stored. Run hermes auth add' };
+        }
+        return { exitCode: 0 };
+      }, probed1)
+    );
+    assert.equal(res.status, 'completed');
+    assert.equal(res.candidate.upstream, 'pb');
+    assert.equal(spawned1.length, 2);
+    assert.equal(
+      probed1.filter((u) => u === 'pb').length,
+      2,
+      'round 2 probes B again instead of skipping on the old clock'
+    );
+
+    const probed2 = [];
+    const spawned2 = [];
+    const res2 = await launchHermesSession(
+      ...make(async (_cmd, args) => {
+        spawned2.push(args.join(' '));
+        return { exitCode: 0 };
+      }, probed2)
+    );
+    assert.equal(res2.candidate.upstream, 'pb');
+    assert.ok(!probed2.includes('pa'), 'the remembered login failure skips A without probing');
+    assert.equal(spawned2.length, 1);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

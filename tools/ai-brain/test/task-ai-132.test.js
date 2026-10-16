@@ -294,6 +294,211 @@ describe('TASK-AI-132: Controller next runner', () => {
     );
   });
 
+  test('TASK-AI-142: dead pid in intake run is not open and does not claim item', () => {
+    const dir = makeTempDir('open-run-dead-pid-');
+    const csvPath = path.join(dir, 'register.csv');
+    const primaryDecDir = path.join(dir, 'primary-decisions');
+    const intakeBase = path.join(dir, 'tools', 'ai-brain', 'data', 'intake');
+    const runDir = path.join(intakeBase, 'TASK-DEAD-1-2026-10-15T12-00-00-000Z');
+    fs.mkdirSync(runDir, { recursive: true });
+
+    fs.writeFileSync(
+      path.join(runDir, 'specs.json'),
+      JSON.stringify([{ id: 'TASK-DEAD-1' }], null, 2),
+      'utf8'
+    );
+    // Write run.lock with dead pid
+    fs.writeFileSync(
+      path.join(runDir, 'run.lock'),
+      JSON.stringify({ pid: 99999 }, null, 2),
+      'utf8'
+    );
+
+    const content = [REGISTER_HEADER, row('1', 'TASK-DEAD-1', 'READY_FOR_AUTHOR', '')].join('\n');
+    fs.writeFileSync(csvPath, content, 'utf8');
+
+    const deps = { isPidAlive: (pid) => pid !== 99999 };
+
+    // 1. Direct getOpenRuns should exclude dead pid
+    const runs = getOpenRuns({ rootDir: dir, intakeDir: intakeBase }, deps);
+    assert.equal(runs.length, 0, 'dead pid must not be in open runs');
+
+    // 2. Direct isOpenRun should return false
+    assert.equal(
+      isOpenRun('TASK-DEAD-1', { rootDir: dir, intakeDir: intakeBase }, deps),
+      false,
+      'dead pid run must not be open'
+    );
+
+    // 3. findNextWorkItem picks TASK-DEAD-1 (not skipped with "claimed by open run")
+    const result = findNextWorkItem(
+      {
+        rootDir: dir,
+        registerPath: csvPath,
+        decisionDir: primaryDecDir,
+        intakeDir: intakeBase,
+      },
+      deps
+    );
+    assert.ok(result.item);
+    assert.equal(result.item.work_item_id, 'TASK-DEAD-1');
+  });
+
+  test('TASK-AI-142: live pid in intake run is open and claims item', () => {
+    const dir = makeTempDir('open-run-live-pid-');
+    const csvPath = path.join(dir, 'register.csv');
+    const primaryDecDir = path.join(dir, 'primary-decisions');
+    const intakeBase = path.join(dir, 'tools', 'ai-brain', 'data', 'intake');
+    const runDir = path.join(intakeBase, 'TASK-LIVE-1-2026-10-15T12-00-00-000Z');
+    fs.mkdirSync(runDir, { recursive: true });
+
+    fs.writeFileSync(
+      path.join(runDir, 'specs.json'),
+      JSON.stringify([{ id: 'TASK-LIVE-1' }], null, 2),
+      'utf8'
+    );
+    // Write run.lock with live pid
+    fs.writeFileSync(
+      path.join(runDir, 'run.lock'),
+      JSON.stringify({ pid: 12345 }, null, 2),
+      'utf8'
+    );
+
+    const content = [
+      REGISTER_HEADER,
+      row('1', 'TASK-LIVE-1', 'READY_FOR_AUTHOR', ''),
+      row('2', 'TASK-LIVE-2', 'READY_FOR_AUTHOR', ''),
+    ].join('\n');
+    fs.writeFileSync(csvPath, content, 'utf8');
+
+    const deps = { isPidAlive: (pid) => pid === 12345 };
+
+    // 1. Direct getOpenRuns should include live pid
+    const runs = getOpenRuns({ rootDir: dir, intakeDir: intakeBase }, deps);
+    assert.equal(runs.length, 1, 'live pid must be in open runs');
+    assert.equal(runs[0].workItemId, 'TASK-LIVE-1');
+
+    // 2. Direct isOpenRun should return true
+    assert.equal(
+      isOpenRun('TASK-LIVE-1', { rootDir: dir, intakeDir: intakeBase }, deps),
+      true,
+      'live pid run must be open'
+    );
+
+    // 3. findNextWorkItem skips TASK-LIVE-1 with "claimed by open run"
+    const result = findNextWorkItem(
+      {
+        rootDir: dir,
+        registerPath: csvPath,
+        decisionDir: primaryDecDir,
+        intakeDir: intakeBase,
+      },
+      deps
+    );
+    assert.ok(result.item);
+    assert.equal(result.item.work_item_id, 'TASK-LIVE-2');
+    const skipped = result.skipped.find((s) => s.id === 'TASK-LIVE-1');
+    assert.ok(skipped);
+    assert.equal(skipped.reason, 'claimed by open run');
+  });
+
+  test('TASK-AI-142: no pid retains TTL behaviour (open within TTL, closed after TTL)', () => {
+    const dir = makeTempDir('open-run-no-pid-');
+    const intakeBase = path.join(dir, 'tools', 'ai-brain', 'data', 'intake');
+    const runDir = path.join(intakeBase, 'TASK-NOPID-1-2026-10-15T12-00-00-000Z');
+    fs.mkdirSync(runDir, { recursive: true });
+
+    fs.writeFileSync(
+      path.join(runDir, 'specs.json'),
+      JSON.stringify([{ id: 'TASK-NOPID-1' }], null, 2),
+      'utf8'
+    );
+    // Explicitly NO run.lock or pid recorded
+
+    const stat = fs.statSync(runDir);
+    const ttlMs = 4 * 60 * 60 * 1000;
+
+    // Within TTL: open
+    const withinTtlRuns = getOpenRuns(
+      { rootDir: dir, intakeDir: intakeBase },
+      { now: () => stat.mtimeMs + 1000 }
+    );
+    assert.equal(withinTtlRuns.length, 1, 'within TTL must be open');
+    assert.equal(withinTtlRuns[0].workItemId, 'TASK-NOPID-1');
+    assert.equal(
+      isOpenRun(
+        'TASK-NOPID-1',
+        { rootDir: dir, intakeDir: intakeBase },
+        { now: () => stat.mtimeMs + 1000 }
+      ),
+      true
+    );
+
+    // Beyond TTL: closed (not open)
+    const beyondTtlRuns = getOpenRuns(
+      { rootDir: dir, intakeDir: intakeBase },
+      { now: () => stat.mtimeMs + ttlMs + 5000 }
+    );
+    assert.equal(beyondTtlRuns.length, 0, 'beyond TTL must not be open');
+    assert.equal(
+      isOpenRun(
+        'TASK-NOPID-1',
+        { rootDir: dir, intakeDir: intakeBase },
+        { now: () => stat.mtimeMs + ttlMs + 5000 }
+      ),
+      false
+    );
+  });
+
+  test('TASK-AI-142: goal run lock with dead pid does not claim goal item on resume', () => {
+    const dir = makeTempDir('open-run-goal-lock-');
+    const intakeBase = path.join(dir, 'tools', 'ai-brain', 'data', 'intake');
+    const goalsBase = path.join(dir, 'data', 'goals');
+    const goalDir = path.join(goalsBase, 'AUTOCLAW-REPOS');
+    const runDir = path.join(intakeBase, 'GOAL-AUTOCLAW-REPOS-1-2026-10-15T12-08-09-429Z');
+
+    fs.mkdirSync(goalDir, { recursive: true });
+    fs.mkdirSync(runDir, { recursive: true });
+
+    fs.writeFileSync(
+      path.join(runDir, 'specs.json'),
+      JSON.stringify([{ id: 'GOAL-AUTOCLAW-REPOS-1' }], null, 2),
+      'utf8'
+    );
+    // Goal run lock written by goals.js
+    fs.writeFileSync(
+      path.join(goalDir, 'run.lock'),
+      JSON.stringify(
+        { pid: 88888, goalId: 'AUTOCLAW-REPOS', startedAt: new Date().toISOString() },
+        null,
+        2
+      ),
+      'utf8'
+    );
+
+    // Dead pid -> not open
+    assert.equal(
+      isOpenRun(
+        'GOAL-AUTOCLAW-REPOS-1',
+        { rootDir: dir, intakeDir: intakeBase, goalsDir: goalsBase },
+        { isPidAlive: (pid) => pid !== 88888 }
+      ),
+      false,
+      'dead goal pid must not claim item as open run'
+    );
+
+    // Live pid -> open
+    assert.equal(
+      isOpenRun(
+        'GOAL-AUTOCLAW-REPOS-1',
+        { rootDir: dir, intakeDir: intakeBase, goalsDir: goalsBase },
+        { isPidAlive: (pid) => pid === 88888 }
+      ),
+      true,
+      'live goal pid must claim item as open run'
+    );
+  });
+
   test('NX-R02: the ceiling is read from existing ceiling data with governed decision clamp', async () => {
     const dir = makeTempDir('ceiling-');
     const decDir = path.join(dir, 'decisions');
