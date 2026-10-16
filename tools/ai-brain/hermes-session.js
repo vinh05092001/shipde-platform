@@ -72,6 +72,15 @@ function defaultSpawn(cmd, argv, spawnOpts) {
           } catch {}
         }
       }
+      // Hermes prints a missing provider login at startup and still exits 0;
+      // without this the run counts as completed and the brain is never reselected.
+      const missingCredentials = /^No [a-z0-9 -]*credentials stored\b[^\r\n]*/im;
+      if (!routeFailure && missingCredentials.test(failureScan)) {
+        routeFailure = failureScan.match(missingCredentials)[0].slice(-400);
+        try {
+          cp.kill('SIGTERM');
+        } catch {}
+      }
       if (stream === 'stderr') {
         try {
           process.stderr.write(safe);
