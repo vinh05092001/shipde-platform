@@ -680,6 +680,52 @@ function normalizeCatalogue(models, warnings, sourceStatus, modelMeta) {
   };
 }
 
+/**
+ * Read the discovered sources, refreshing discovery + probe first when the
+ * file is missing or an environment key that discovery maps to a source has no
+ * entry in it. Live discovery runs only when `deps.discover` is injected or
+ * `deps.liveDiscovery` is set (the CLI), so tests never reach providers.
+ */
+async function loadDiscoveredSources(root, deps) {
+  const d = deps || {};
+  const file = path.join(root, 'tools', 'ai-brain', 'data', 'sources.json');
+  const read = () => {
+    try {
+      return JSON.parse(fs.readFileSync(file, 'utf8')).sources || [];
+    } catch {
+      return null;
+    }
+  };
+  let sources = read();
+  const discover =
+    typeof d.discover === 'function'
+      ? d.discover
+      : d.liveDiscovery
+        ? require('./source-discovery').discover
+        : null;
+  if (!discover) return sources || [];
+  try {
+    let stale = sources === null;
+    if (!stale) {
+      const mapped =
+        typeof d.discoverSources === 'function'
+          ? d.discoverSources()
+          : require('./source-discovery').discoverSources();
+      const known = new Set(
+        sources.map((source) => source && source.credential && source.credential.name)
+      );
+      stale = mapped.some((source) => source.credential && !known.has(source.credential.name));
+    }
+    if (stale) {
+      const refreshed = await discover({ probe: true, output: file });
+      sources = (refreshed && refreshed.sources) || read() || [];
+    }
+  } catch {
+    // A failed refresh keeps the last known inventory.
+  }
+  return sources || [];
+}
+
 function mergeDiscoveredSources(accounts, discoveredSources, registry) {
   const inventory = (discoveredSources || [])
     .filter((source) => source && (source.endpoint || Array.isArray(source.models)))
@@ -1147,15 +1193,7 @@ async function runIntake(opts, deps) {
   const accounts = await (typeof d.listAccounts === 'function'
     ? d.listAccounts(d.accountOptions || {})
     : accountsApi.listAccounts(d.accountOptions || {}));
-  let discoveredSources = [];
-  try {
-    discoveredSources =
-      JSON.parse(
-        fs.readFileSync(path.join(root, 'tools', 'ai-brain', 'data', 'sources.json'), 'utf8')
-      ).sources || [];
-  } catch {
-    discoveredSources = [];
-  }
+  const discoveredSources = await loadDiscoveredSources(root, d);
   const allAccounts = mergeDiscoveredSources(
     accounts,
     discoveredSources,
@@ -1343,6 +1381,7 @@ module.exports = {
   resolveDependencies,
   buildCatalogue,
   mergeDiscoveredSources,
+  loadDiscoveredSources,
   composeOrchestrateCommand,
   assertIsolationFresh,
   assertIsolationClosed,

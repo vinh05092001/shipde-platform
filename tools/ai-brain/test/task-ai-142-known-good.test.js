@@ -246,3 +246,32 @@ Inspect writer candidates without launching models.
   assert.ok(rows.some((c) => c.harness === 'codex'));
   assert.ok(rows.some((c) => c.harness === 'agy-pool'));
 });
+
+test('TASK-AI-142: intake refreshes discovery only when an env key has no source', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { loadDiscoveredSources } = require('../intake');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'srckeys-'));
+  const dir = path.join(root, 'tools', 'ai-brain', 'data');
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, 'sources.json');
+  const mapped = [{ id: 'x', credential: { type: 'env', name: 'X_API_KEY' } }];
+  let calls = 0;
+  const discover = async () => {
+    calls += 1;
+    return { sources: mapped.map((s) => ({ ...s, status: 'available' })) };
+  };
+  const deps = { discover, discoverSources: () => mapped };
+  // Missing file refreshes.
+  await loadDiscoveredSources(root, deps);
+  assert.equal(calls, 1);
+  // Key has an entry: not refreshed.
+  fs.writeFileSync(file, JSON.stringify({ sources: mapped }));
+  await loadDiscoveredSources(root, deps);
+  assert.equal(calls, 1);
+  // A new env key with no entry refreshes once.
+  const more = [...mapped, { id: 'y', credential: { type: 'env', name: 'Y_API_KEY' } }];
+  await loadDiscoveredSources(root, { discover, discoverSources: () => more });
+  assert.equal(calls, 2);
+});

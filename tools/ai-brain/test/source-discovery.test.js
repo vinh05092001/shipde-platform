@@ -578,3 +578,47 @@ test('TASK-AI-142: numbered keys without a known endpoint stay separate credenti
     'an unknown endpoint is never guessed'
   );
 });
+
+test('TASK-AI-142: InternLM key resolves to its OpenAI-compatible endpoint', () => {
+  const sources = discoverSources({
+    home: os.tmpdir(),
+    localAppData: os.tmpdir(),
+    env: { INTERNLM_API_KEY: 'test-intern' },
+  });
+  const source = sources.find((s) => s.credential?.name === 'INTERNLM_API_KEY');
+  assert.equal(source?.endpoint, 'https://chat.intern-ai.org.cn/api/v1');
+});
+
+test('TASK-AI-142: TENCENT_TOKENHUB_BASE_URL is the endpoint of the Tencent key', () => {
+  const sources = discoverSources({
+    home: os.tmpdir(),
+    localAppData: os.tmpdir(),
+    env: {
+      TENCENT_TOKENHUB_API_KEY: 'test-tencent',
+      TENCENT_TOKENHUB_BASE_URL: 'https://tokenhub-intl.tencentcloudmaas.com/v1/',
+    },
+  });
+  const source = sources.find((s) => s.credential?.name === 'TENCENT_TOKENHUB_API_KEY');
+  assert.equal(source?.endpoint, 'https://tokenhub-intl.tencentcloudmaas.com/v1');
+});
+
+test('TASK-AI-142: probe sends the headers declared on the source', async () => {
+  const sources = discoverSources({
+    home: os.tmpdir(),
+    localAppData: os.tmpdir(),
+    env: { AGENTROUTER_API_KEY: 'test-ar' },
+  });
+  const source = sources.find((s) => s.credential?.name === 'AGENTROUTER_API_KEY');
+  assert.ok(source?.headers, 'declared headers are carried on the source');
+  let seen = null;
+  const probed = await probeSource(source, {
+    env: { AGENTROUTER_API_KEY: 'test-ar' },
+    fetch: async (url, init) => {
+      seen = init.headers;
+      return { ok: true, status: 200, json: async () => ({ data: [{ id: 'm1' }] }) };
+    },
+  });
+  assert.equal(seen['User-Agent'], source.headers['User-Agent']);
+  assert.equal(seen.Authorization, 'Bearer test-ar');
+  assert.equal(probed.status, 'available');
+});
