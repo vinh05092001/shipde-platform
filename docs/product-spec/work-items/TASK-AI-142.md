@@ -356,6 +356,9 @@ Selection logs retain the full chosenCandidate, the existing chosen identity, to
 
 Verification: sequential TASK-AI-141 199/199, TASK-AI-142 136/136, TASK-AI-64 129/129, dispatch-wiring 7/7 and decisions 28/28 passed. Additional candidate/routing regressions passed 74/74. Changed JavaScript passes ESLint no-undef; changed files pass Prettier and git diff --check. Live logs remain untouched and runtime data is excluded from commits.
 
+### H3 live: the quota-fallback controller test is deterministic (2026-10-16)
+The test spawns a cold `cli.js dispatch` process (~5s alone) under a 15s `spawnSync` budget, so full-suite parallel load could kill it (status null) and fail the exit-code assertion; HOME, USERPROFILE and APPDATA were already per-test temp dirs. The budget is now a 180s ceiling with all assertions unchanged (not reproduced in 26 runs under load, so this is the identified wall-clock cause, not an observed failure).
+
 ### H3 live: native agy candidates use the live agy model list (2026-10-16)
 The native agy candidates take their model ids from the live `agy models` listing (the pool discovery and its cache) instead of the stale ids declared on the account: declared ids the listing lacks are dropped with reason `AGY_MODEL_NOT_LISTED`, and listed ids are added. When the listing is unavailable the declared ids are kept unchanged.
 
