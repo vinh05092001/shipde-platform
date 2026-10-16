@@ -388,7 +388,7 @@ test('Controller offline end-to-end canary', { timeout: 170000 }, async (t) => {
     };
     await check(
       'agy 7: merge propagates MERGED to goal register',
-      { todo: 'Waiting for agy item 7 merge-to-register wiring' },
+      {},
       () => {
         const status = goals.statusGoal(goalId, options, { decisionDir, isPidAlive: () => false });
         assert.equal(status.items.find((item) => item.workItemId === id).state, 'MERGED');
@@ -397,7 +397,7 @@ test('Controller offline end-to-end canary', { timeout: 170000 }, async (t) => {
     );
     await check(
       'agy 8: canonical row is MERGED and next item opens',
-      { todo: 'Waiting for agy item 8 canonical register/next wiring' },
+      {},
       () => {
         assert.match(fs.readFileSync(registerPath, 'utf8'), /"GOAL-CANARY-1"[^\n]*"MERGED"/);
         assert.equal(resumed.status, 'RESUMED');
