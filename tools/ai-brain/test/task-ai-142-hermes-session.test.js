@@ -3706,3 +3706,41 @@ test('Hermes exit "No Codex credentials stored" is an account auth failure, so t
   assert.equal(c.cause, classifier.Cause.ACCOUNT_AUTH_FAILED);
   assert.equal(c.scope, classifier.Scope.ACCOUNT);
 });
+
+test('writeProvidersConfig uses upstream when gateway is empty, avoiding builtin openai providerName', () => {
+  const root = fixtureRoot('hermes-cfg-empty-gw-');
+  try {
+    const candidate = {
+      candidateKey:
+        'hermes::https://developer.amd.com.cn/radeon/api/v1::::amd-radeon::*::deepseek-ai/deepseek-v3.1',
+      modelId: 'deepseek-ai/deepseek-v3.1',
+    };
+    const registry = {
+      sources: [
+        {
+          id: 'amd-radeon',
+          endpoint: 'https://developer.amd.com.cn/radeon/api/v1',
+          credential: { type: 'env', env: 'AMD_RADEON_API_KEY' },
+        },
+      ],
+    };
+    const res = writeProvidersConfig(candidate, { rootDir: root }, { registry });
+    assert.notEqual(
+      res.providerName,
+      'openai',
+      'candidate with empty gateway must not fall back to openai'
+    );
+    assert.equal(res.providerName, 'amd-radeon', 'candidate with empty gateway must use upstream');
+    const content = fs.readFileSync(res.configPath, 'utf8');
+    assert.ok(
+      !content.includes('provider: "openai"'),
+      'config.yaml must not contain provider: "openai"'
+    );
+    assert.ok(
+      content.includes('provider: "amd-radeon"'),
+      'config.yaml must configure upstream provider'
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
