@@ -372,6 +372,10 @@ Selection logs retain the full chosenCandidate, the existing chosen identity, to
 
 Verification: sequential TASK-AI-141 199/199, TASK-AI-142 136/136, TASK-AI-64 129/129, dispatch-wiring 7/7 and decisions 28/28 passed. Additional candidate/routing regressions passed 74/74. Changed JavaScript passes ESLint no-undef; changed files pass Prettier and git diff --check. Live logs remain untouched and runtime data is excluded from commits.
 
+### H3 live: goal rows pass the documentation validator (2026-10-16)
+
+PR #356 [GOAL-AUTOCLAW-REPOS-1] failed CI validate/contract with `feature-register-extra: GOAL-AUTOCLAW-REPOS`: the delivery-register check treated Controller goal rows as product features missing from the catalogue. validate_docs.py now excludes GOAL-* feature ids from that check and validate_pr_contract.py counts docs/product-spec/work-items/GOAL-*.md as Work Item files (from the Antigravity item 8 change, split out so item 1 can merge).
+
 ### H3 live: the PR contract accepts Controller goal Work Items (2026-10-16)
 
 PR #356 [GOAL-AUTOCLAW-REPOS-1] (Hermes-coded, review PASS, ai-brain-tests green) failed the contract gate because the title rule only knew FEAT-*, TASK-FOUND-* and TASK-AI-*, so no goal item the Controller plans could ever be published. validate_pr_contract.py and AGENTS.md now also accept GOAL-<GOAL>-<n>.
