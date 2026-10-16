@@ -360,6 +360,10 @@ Verification: sequential TASK-AI-141 199/199, TASK-AI-142 136/136, TASK-AI-64 12
 
 When model-specific capabilities were empty or unlisted in the catalog, agy-pool candidates previously had their harness capabilities erased, causing writer candidates to be rejected with CAPABILITY_MISSING:tools. Model capabilities and harness capabilities are now merged such that harness tools capability is preserved unless explicitly false on the model. Additionally, when a pool jsonSchema probe fails (WRITER_SCHEMA_POOL_<state>), the exit state, reason, and redacted tail of the pool output are recorded as evidence detail in the capability rejection, keeping failures diagnosable without leaking secrets.
 
+### H3 live: source headers reach Hermes runtime custom_providers configuration (2026-10-16)
+
+When an upstream source declares headers (such as AgentRouter CLI User-Agent), `writeProvidersConfig` now writes `extra_headers` into `custom_providers` within `config.yaml` using proper YAML quoting. Hermes natively supports `extra_headers` on custom providers, passing them into the HTTP client `default_headers`. When no headers are declared, the generated YAML is unchanged and header values are never logged.
+
 ### H3 live: a Hermes reselection gets its own probe window and a Hermes login failure is remembered (2026-10-16)
 
 The probe wall-clock deadline was computed once per launch, so after a runtime route failure (Hermes printing `No Codex credentials stored`) every remaining route was skipped and the launch ended NO_REASONING_CANDIDATE. Each selection round now recomputes the deadline with the same per-round cap. A Hermes-side missing login is also recorded as an account `account_auth_failed` cooldown in the route-health store (existing 6 hour cause cooldown), so the next launch skips that candidate without probing or spawning it.
