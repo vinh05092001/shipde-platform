@@ -58,6 +58,8 @@ test('auth.json present + config.toml model -> auto-discovered codex writer cand
   assert.strictEqual(c[0].accountId, 'codex-cli');
   assert.strictEqual(c[0].harness, 'codex');
   assert.strictEqual(c[0].binding, 'cli-login');
+  // Live 16/10: a string evidence field crashed the reviewer dry-run ranking.
+  assert.ok(c[0].evidence === undefined || Array.isArray(c[0].evidence));
 });
 
 test('auth.json absent -> no concrete codex candidate', () => {
