@@ -356,6 +356,10 @@ Selection logs retain the full chosenCandidate, the existing chosen identity, to
 
 Verification: sequential TASK-AI-141 199/199, TASK-AI-142 136/136, TASK-AI-64 129/129, dispatch-wiring 7/7 and decisions 28/28 passed. Additional candidate/routing regressions passed 74/74. Changed JavaScript passes ESLint no-undef; changed files pass Prettier and git diff --check. Live logs remain untouched and runtime data is excluded from commits.
 
+### H3 live: the probe learns a route's token-per-minute limit (2026-10-16)
+
+The writer probe passed `groq/openai/gpt-oss-120b` with a tiny request, then the real first request (about 9.2k tokens) failed HTTP 413 against a 8000 tokens-per-minute limit. The probe now records `tokensPerMinuteLimit` from the `x-ratelimit-limit-tokens` header or from a 413/429 body, and a real launch's TPM 413 records `requestedTokens`; both persist in route health. Writer selection refuses a route with `ROUTE_TPM_TOO_SMALL` when its known limit is below a request size it already refused, and never refuses when either value is unknown (no token count is hardcoded).
+
 ### H3 live: native agy candidates use the live agy model list (2026-10-16)
 The native agy candidates take their model ids from the live `agy models` listing (the pool discovery and its cache) instead of the stale ids declared on the account: declared ids the listing lacks are dropped with reason `AGY_MODEL_NOT_LISTED`, and listed ids are added. When the listing is unavailable the declared ids are kept unchanged.
 

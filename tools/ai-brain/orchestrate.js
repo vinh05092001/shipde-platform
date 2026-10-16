@@ -4536,7 +4536,8 @@ async function runOrchestration(goal, opts) {
         skip: (candidate, account) =>
           exhaustedAccountKeys.has(account)
             ? 'WRITER_PROBE_SKIPPED_ACCOUNT_EXHAUSTED'
-            : require('./route-health').probeCooldown(candidate, o),
+            : require('./route-health').probeCooldown(candidate, o) ||
+              require('./route-health').tpmTooSmall(candidate, o),
         refusal: refuse,
         runProbe: async (candidate) => {
           const route = resolveLaunchRoute(candidate, o, registry);
@@ -4627,7 +4628,8 @@ async function runOrchestration(goal, opts) {
       for (const offered of candidates) {
         const reason = writerProbeResults.has(candidateKey(offered))
           ? null
-          : require('./route-health').probeCooldown(offered, o);
+          : require('./route-health').probeCooldown(offered, o) ||
+            require('./route-health').tpmTooSmall(offered, o);
         if (reason) {
           failedForSelection.add(candidateKey(offered));
           decisions.recordDecision(
@@ -5549,6 +5551,7 @@ async function runOrchestration(goal, opts) {
           );
         }
 
+        require('./route-health').rememberLaunchTpm(candidate, launchFailureText(res), o);
         const attemptsInDomain = domainAttempts.get(candDomain) || 0;
         const domainExhausted = attemptsInDomain >= 2;
         const scopeExcludesDomain =
