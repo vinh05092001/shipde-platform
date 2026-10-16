@@ -356,6 +356,9 @@ Selection logs retain the full chosenCandidate, the existing chosen identity, to
 
 Verification: sequential TASK-AI-141 199/199, TASK-AI-142 136/136, TASK-AI-64 129/129, dispatch-wiring 7/7 and decisions 28/28 passed. Additional candidate/routing regressions passed 74/74. Changed JavaScript passes ESLint no-undef; changed files pass Prettier and git diff --check. Live logs remain untouched and runtime data is excluded from commits.
 
+### H3 live: Hermes stops on a 401 route failure (2026-10-16)
+The live output scanner in `defaultSpawn` now treats `Error code: 401` on an API failure line as a route failure, so Hermes is stopped and the brain reselected instead of running until it exits. 400 stays excluded because a bad request is not a route failure.
+
 ### H3 live: Hermes brain context refresh (2026-10-14)
 
 Hermes could not start: the only reasoning candidate was refused with CONTEXT_WINDOW_UNVERIFIED because the source registry modelMeta and the discovery catalogue were stale, although 9router /v1/models reports the context window. chatCommand now refreshes provider-reported context windows from each OpenAI-compatible source before selecting the reasoning model; unknown context windows are still refused. Verification: context-window, hermes-candidates and hermes-session tests 73/73; live dry-run selects a verified candidate.
