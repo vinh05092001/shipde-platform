@@ -506,7 +506,11 @@ function runVerificationCommand(item, options) {
       ? require('./isolation-launcher').workerRootFor(o.cwd || process.cwd())
       : null) ||
     null;
-  const commitCheck = verifyWorkerCommit(workerRoot, o.baseSha, o);
+  const commitCheck = verifyWorkerCommit(
+    workerRoot,
+    o.baseSha,
+    Object.assign({ workItemId: (item && item.id) || o.workItemId }, o)
+  );
   if (!commitCheck.pass) {
     return {
       pass: false,
@@ -1518,9 +1522,26 @@ function getTreeStatus(cwd, options) {
           .split(/\r?\n/)
           .map((l) => l.trimEnd())
           .filter(Boolean);
+        const activeWorkItemId = options && (options.workItemId || options.workItem);
+        const filteredLines = lines.filter((line) => {
+          if (!activeWorkItemId) return true;
+          if (line.startsWith('??')) {
+            const pathPart = line.slice(3).trim();
+            if (
+              pathPart.startsWith('docs/product-spec/work-items/') ||
+              pathPart.startsWith('docs\\product-spec\\work-items\\')
+            ) {
+              const basename = path.basename(pathPart);
+              if (basename.endsWith('.md') && basename !== `${activeWorkItemId}.md`) {
+                return false;
+              }
+            }
+          }
+          return true;
+        });
         const dirtyPaths = [
           ...new Set(
-            lines.map((line) => {
+            filteredLines.map((line) => {
               let p = line.slice(3).trim();
               if (p.includes(' -> ')) {
                 p = p.split(' -> ')[1].trim();
@@ -1532,7 +1553,7 @@ function getTreeStatus(cwd, options) {
             })
           ),
         ];
-        return { isDirty: lines.length > 0, dirtyPaths, lines };
+        return { isDirty: filteredLines.length > 0, dirtyPaths, lines: filteredLines };
       },
       Object.assign({ workerWritable: true }, options)
     );
@@ -2478,7 +2499,15 @@ function importReviewedCommitForPublish(o, entry, request) {
     assertGitOk(
       runHardenedGit(
         tmpDir,
-        ['clone', '--no-local', '--no-hardlinks', '--no-tags', publishCwd, cloneDir],
+        [
+          'clone',
+          '--no-local',
+          '--no-hardlinks',
+          '--no-tags',
+          '--no-checkout',
+          publishCwd,
+          cloneDir,
+        ],
         [publishCwd]
       ),
       'PUBLISH_REFUSED: failed to create operator-side publish clone'
@@ -2503,13 +2532,12 @@ function importReviewedCommitForPublish(o, entry, request) {
       runHardenedGit(cloneDir, ['check-ref-format', '--branch', branch]),
       'PUBLISH_REFUSED: invalid publish branch'
     );
+    // Only the reviewed commit is needed locally. The publisher pushes that
+    // SHA to refs/heads/<branch>; it never needs to move or check out the
+    // destination branch, which may already be checked out in a worktree.
     assertGitOk(
-      runHardenedGit(cloneDir, ['branch', '-f', branch, reviewedSha]),
-      'PUBLISH_REFUSED: failed to point publish branch at reviewed commit'
-    );
-    assertGitOk(
-      runHardenedGit(cloneDir, ['checkout', '-f', branch]),
-      'PUBLISH_REFUSED: failed to checkout publish branch'
+      runHardenedGit(cloneDir, ['checkout', '--detach', reviewedSha]),
+      'PUBLISH_REFUSED: failed to checkout reviewed commit for publish'
     );
     const head = assertGitOk(
       runHardenedGit(cloneDir, ['rev-parse', 'HEAD']),

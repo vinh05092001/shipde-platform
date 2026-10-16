@@ -3115,6 +3115,7 @@ function Sync-ShipDeRegister {
         [string]$Workspace = $script:Paths.Main,
         [string]$RegisterRelativePath = $script:RegisterPath,
         [switch]$CheckOnly,
+        [switch]$Apply,
         [Parameter(Mandatory = $false)]
         [AllowEmptyCollection()]
         [object[]]$MergedPullRequests
@@ -3182,9 +3183,9 @@ function Sync-ShipDeRegister {
     }
 
     if ($modified) {
-        if ($isMainWorkspace -or $CheckOnly) {
+        if ($CheckOnly -or ($isMainWorkspace -and -not $Apply)) {
             Write-Warning "Register synchronization detected merge evidence, but protected main worktree is not edited directly to prevent dirty state."
-            Write-Host "Reconcile register changes through an author/planner worktree Pull Request."
+            Write-Host "Reconcile register changes through an author/planner worktree Pull Request, or use -Apply to synchronize."
         } else {
             $rawRows | Export-Csv -Path $fullRegisterPath -NoTypeInformation -Encoding UTF8
             Write-Host "Register synchronized from merged GitHub Pull Requests with verified review evidence."

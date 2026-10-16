@@ -638,6 +638,15 @@ function findNextWorkItem(options, deps) {
   const now = typeof d.now === 'function' ? d.now() : d.now || opts.now || Date.now();
   const decisionRecords = collectAllDecisionRecords(opts, d);
   const terminalWorkItems = opts.terminalWorkItems || d.terminalWorkItems || new Map();
+
+  // Auto-sync merged PRs from GitHub to register.csv unless explicitly disabled
+  if (opts.syncRegister !== false && d.syncRegister !== false) {
+    try {
+      const { syncMergedPullRequestsToRegister } = require('./reconcile');
+      syncMergedPullRequestsToRegister(opts, d);
+    } catch (_) {}
+  }
+
   const items = readRegisterItems(opts, d, rootDir, opts.forceRegisterRead === true);
 
   const byId = new Map();
