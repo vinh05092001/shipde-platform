@@ -53,6 +53,32 @@ describe('agy gateway', () => {
     assert.throws(() => createGateway({ pool: fakePool() }), /AGY_GATEWAY_TOKEN/);
   });
 
+  test('unwraps the agy JSON envelope into content and usage', () =>
+    withGateway(
+      fakePool({
+        out: JSON.stringify({
+          status: 'SUCCESS',
+          response: 'ok\n',
+          usage: {
+            input_tokens: 10,
+            cache_read_tokens: 2,
+            output_tokens: 1,
+            thinking_tokens: 3,
+            total_tokens: 16,
+          },
+        }),
+      }),
+      async (base) => {
+        const j = await (await call(base, chat)).json();
+        assert.strictEqual(j.choices[0].message.content, 'ok');
+        assert.deepStrictEqual(j.usage, {
+          prompt_tokens: 12,
+          completion_tokens: 4,
+          total_tokens: 16,
+        });
+      }
+    ));
+
   test('lists the pool models', () =>
     withGateway(fakePool(), async (base) => {
       const r = await fetch(`${base}/v1/models`, { headers: { authorization: `Bearer ${TOKEN}` } });

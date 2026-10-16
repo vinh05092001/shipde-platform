@@ -127,6 +127,30 @@ function extractJson(text) {
   return null;
 }
 
+// agy --output-format json wraps the answer: {"status":"SUCCESS","response":"...","usage":{...}}.
+// Return the answer text and an OpenAI usage object; plain text passes through.
+function unwrapAgyOutput(text) {
+  const raw = String(text || '');
+  let obj = null;
+  try {
+    obj = JSON.parse(raw.trim());
+  } catch {
+    return { text: raw, usage: null };
+  }
+  if (!obj || typeof obj !== 'object' || typeof obj.response !== 'string')
+    return { text: raw, usage: null };
+  const u = obj.usage && typeof obj.usage === 'object' ? obj.usage : null;
+  const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  const usage = u
+    ? {
+        prompt_tokens: num(u.input_tokens) + num(u.cache_read_tokens),
+        completion_tokens: num(u.output_tokens) + num(u.thinking_tokens),
+        total_tokens: num(u.total_tokens),
+      }
+    : null;
+  return { text: obj.response, usage };
+}
+
 function interpret(text, tools) {
   const names = new Set(toolList(tools).map((f) => f.name));
   if (names.size) {
@@ -231,7 +255,8 @@ function createGateway(opts) {
         }
         if (!result || result.state !== 'ok' || result.exitCode !== 0)
           return mapPoolFailure(result);
-        const picked = interpret(pool.readOut(account), req.tools);
+        const unwrapped = unwrapAgyOutput(pool.readOut(account));
+        const picked = interpret(unwrapped.text, req.tools);
         const message = picked.tool_calls
           ? { role: 'assistant', content: null, tool_calls: picked.tool_calls }
           : { role: 'assistant', content: picked.content };
@@ -245,6 +270,7 @@ function createGateway(opts) {
           ],
         };
         if (result.usage && typeof result.usage === 'object') body.usage = result.usage;
+        else if (unwrapped.usage) body.usage = unwrapped.usage;
         return { status: 200, body };
       } finally {
         busy.delete(account);
@@ -349,6 +375,7 @@ function startUnsafe(opts) {
 }
 
 module.exports = {
+  unwrapAgyOutput,
   createGateway,
   start,
   buildPrompt,
