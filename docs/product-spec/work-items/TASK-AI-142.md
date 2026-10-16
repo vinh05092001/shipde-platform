@@ -1,5 +1,21 @@
 # TASK-AI-142 — Hermes chat brain wired to the Controller
 
+## Operator ACP assignment (2026-10-16)
+
+Codex is assigned to let the Controller observe Hermes through structured ACP events.
+This extends allowed paths to `tools/ai-brain/hermes-acp.js` and
+`tools/ai-brain/test/task-ai-142-hermes-acp.test.js` alongside the existing session adapter.
+Use `node tools/ai-brain/cli.js chat --acp --prompt "..."` for one explicit turn.
+The selected candidate still supplies the Controller-owned config; ACP starts a fresh
+session and verifies the advertised model before sending the prompt. Existing CLI chat
+sessions cannot be passively monitored over ACP. ACP turns currently do not resume history
+or automatically retry/fail over: failures stop rather than replay a possibly applied tool.
+`data/hermes/acp-status.json` contains lifecycle metadata only, not prompts, reasoning,
+tool content or credentials. Unsupported host requests fail closed; permission requests
+are cancelled. A `turn_ended` result is transport evidence, never work-item completion.
+The default timeout is 120 seconds (`--acp-timeout-ms` overrides it). No ACP dependency installation or live provider call
+is authorized by this implementation; verification uses an offline JSON-RPC subprocess.
+
 ## Writer selection integration assignment (2026-10-15)
 
 The operator assigns Codex to finish `fix/task-ai-142-writer-selection-review`, integrate current main including #319–#323, run the full brain suite and required checks, and submit the resulting SHA through PR/CI and fresh independent review. An older Gemini PASS applies only to its reviewed SHA. The implementation author cannot supply the independent PASS. No additional model, provider request or live Hermes run is authorized in this assignment. The separate deadline investigation starts only after this writer selection PR merges, on a new branch from main.

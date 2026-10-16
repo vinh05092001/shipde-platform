@@ -1952,6 +1952,16 @@ async function probeRankedRoutes(
  */
 async function launchHermesSession(options, deps) {
   const opts = options || {};
+  if (opts.acp && (typeof opts.prompt !== 'string' || !opts.prompt.trim())) {
+    throw new Error('ACP_PROMPT_REQUIRED');
+  }
+  if (
+    opts.acp &&
+    opts.acpTimeoutMs !== undefined &&
+    (!Number.isFinite(opts.acpTimeoutMs) || opts.acpTimeoutMs <= 0)
+  ) {
+    throw new Error('ACP_INVALID_TIMEOUT');
+  }
   const d = await refreshReasoningContext(opts, deps || {});
   const rootDir = resolveRootDir(opts, d);
   const hermesHome = opts.hermesHome || d.hermesHome || getHermesHomeDir(rootDir);
@@ -2378,15 +2388,17 @@ async function launchHermesSession(options, deps) {
     const configResult = writeProvidersConfig(candidate, opts, d);
     attempt += 1;
 
-    const argv = buildHermesArgv(candidate, session, {
-      rootDir,
-      providerName: configResult.providerName,
-      includeChatCommand: opts.includeChatCommand,
-      omitChatCommand: opts.omitChatCommand,
-      extraArgs: opts.extraArgs,
-      skillName: opts.skillName,
-      skill: opts.skill,
-    });
+    const argv = opts.acp
+      ? ['acp']
+      : buildHermesArgv(candidate, session, {
+          rootDir,
+          providerName: configResult.providerName,
+          includeChatCommand: opts.includeChatCommand,
+          omitChatCommand: opts.omitChatCommand,
+          extraArgs: opts.extraArgs,
+          skillName: opts.skillName,
+          skill: opts.skill,
+        });
 
     const resolverInput = Object.assign(
       {
@@ -2456,6 +2468,41 @@ async function launchHermesSession(options, deps) {
         hermesHome,
         refusalReasons: probeReasons.slice(),
         rejected: initialRejected || selection.rejected || [],
+      };
+    }
+
+    if (opts.acp) {
+      const statusPath = path.join(getHermesDir(rootDir), 'acp-status.json');
+      const fsApi = opts.fs || d.fs || fs;
+      const acpStatus = await (d.runAcpTurn || require('./hermes-acp').runAcpTurn)(
+        resolved.command,
+        resolved.args,
+        {
+          cwd: rootDir,
+          env,
+          modelId: candidate.modelId,
+          providerName: configResult.providerName,
+          prompt: `Read and follow the ${CONTROLLER_SKILL_NAME} skill before acting.\n${opts.prompt}`,
+          timeoutMs: opts.acpTimeoutMs,
+          onStatus: (status) => {
+            fsApi.mkdirSync(path.dirname(statusPath), { recursive: true });
+            const temp = statusPath + '.tmp';
+            fsApi.writeFileSync(
+              temp,
+              JSON.stringify({ ...status, sessionId: session.sessionId }),
+              'utf8'
+            );
+            atomicRenameSync(temp, statusPath, { fs: fsApi });
+          },
+        },
+        d
+      );
+      return {
+        status: acpStatus.state,
+        exitCode: acpStatus.stopReason === 'end_turn' ? 0 : 1,
+        sessionId: session.sessionId,
+        acpStatus,
+        statusPath,
       };
     }
 
@@ -2694,6 +2741,7 @@ async function goalSessionCommand(args, deps) {
 async function chatCommand(args, deps) {
   const d = deps || {};
   const opts = Object.assign({}, args);
+  if (args['acp-timeout-ms'] !== undefined) opts.acpTimeoutMs = Number(args['acp-timeout-ms']);
   if (args.session) opts.session = args.session;
   if (args.goal) opts.goal = args.goal;
   if (args.reselect) opts.reselect = true;
