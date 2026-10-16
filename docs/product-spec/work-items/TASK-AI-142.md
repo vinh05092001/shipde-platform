@@ -360,6 +360,9 @@ Verification: sequential TASK-AI-141 199/199, TASK-AI-142 136/136, TASK-AI-64 12
 
 Live on GOAL-AUTOCLAW-REPOS-1 (role author.foundation, complexity standard) budgetForItem took the minimum of the role ceiling (250k) and the complexity ceiling (150k), so a 1M-context writer that had written 4 files and edited 3 was killed at 150.5k (TOKEN_BUDGET_EXCEEDED) before committing. The explicit role budget is the more specific rule and now wins for every field it sets; complexity fills the fields the role leaves unset and the default fills the rest. The same item also ended TURN_BUDGET_EXCEEDED at selection round 14 after only a few real launches, because maxTurns was compared with the selection-round counter; it now counts actual writer launches.
 
+### H3 live: a retry keeps the previous writer's work (2026-10-16)
+A retry used to delete the worker root and re-create the branch from main, so a writer's commit (389ee9e1 on GOAL-AUTOCLAW-REPOS-1) and another writer's uncommitted files were lost. The launcher now commits uncommitted changes as a WIP commit, keeps the branch under a private host ref, and merges it into the fresh checkout, recording `carriedOver` as `merged`, `conflict` or `none` and falling back to the plain base on any failure.
+
 ### H3 live: a CLI login binding is not test evidence (2026-10-16)
 
 After the dry-run moved to rankForProfile (#343), the reviewer pick crashed (`evidence.filter is not a function`) because the auto-bound Codex CLI candidate carried the string `cli-login` in `evidence`, the list of test results. The binding stays in `binding`; `evidence` is no longer overwritten, so review-call gets a ranked reviewer again.
