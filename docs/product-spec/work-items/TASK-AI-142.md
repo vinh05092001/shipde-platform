@@ -372,6 +372,10 @@ Selection logs retain the full chosenCandidate, the existing chosen identity, to
 
 Verification: sequential TASK-AI-141 199/199, TASK-AI-142 136/136, TASK-AI-64 129/129, dispatch-wiring 7/7 and decisions 28/28 passed. Additional candidate/routing regressions passed 74/74. Changed JavaScript passes ESLint no-undef; changed files pass Prettier and git diff --check. Live logs remain untouched and runtime data is excluded from commits.
 
+### H3 live: context windows come from the public model catalog when a route does not report them (2026-10-16)
+
+Live decisions at 16:35 rejected 5581 Hermes routes with `CONTEXT_WINDOW_UNVERIFIED: hermes requires verified context >= 32000` (for example `cc/claude-sonnet-5`, `gh/*`, `kimchi/*`). Higher-ranked models (gpt-6-astra 93, gpt-5.6-sol 47, gpt-6.1-sol 45) were unusable and deepseek-v4.1-flash (34) won. PR #348 correctly removed the blanket 200000 window from the 9router gateway account, and 9router's `/v1/models` reports no context, so most routed models had no context evidence. `resolveCandidateCapabilities` now falls back, only when source, row and catalogue metadata give no window, to the public models.dev catalog cached at `<hermes home>/models_dev_cache.json` (the same file Hermes reads). A model matches on its canonical leaf id (router and upstream prefixes dropped, `.`/`_` folded to `-`); where several providers list it, the smallest window wins. The candidate records `capabilities.contextEvidence = 'catalog:models.dev'`; tool_call and structured_output are copied only when every match reports them. A model absent from the catalog stays `CONTEXT_WINDOW_UNVERIFIED`. No model name or number is hard-coded.
+
 ### H3 live: the agy gateway returns the answer, not the agy envelope (2026-10-16)
 
 A live call through the gateway (16/10 16:45, gemini-3.8-flash-low via the pool, HTTP 200 in 17 s) returned the raw agy JSON envelope (`{"status":"SUCCESS","response":"ok\n",...}`) as the message content and no usage. The gateway now unwraps `response` as the content and maps the agy usage (input + cache read, output + thinking, total) to an OpenAI usage object; plain-text output passes through.
