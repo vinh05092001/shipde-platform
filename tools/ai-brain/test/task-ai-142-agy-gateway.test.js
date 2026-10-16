@@ -149,3 +149,91 @@ describe('agy gateway', () => {
       assert.ok(text.trim().endsWith('data: [DONE]'));
     }));
 });
+
+describe('agy pool cross-process lock', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const { spawn } = require('child_process');
+  const rt = require('../agy-pool-runtime');
+
+  const setup = () => {
+    const runsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agylock-'));
+    fs.mkdirSync(path.join(runsDir, 'agy01'));
+    return runsDir;
+  };
+
+  test('a lock held by another live process makes submitJob busy and leaves job.json alone', async () => {
+    const runsDir = setup();
+    const dir = path.join(runsDir, 'agy01');
+    fs.writeFileSync(path.join(dir, 'job.json'), '{"keep":true}');
+    const child = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { stdio: 'ignore' });
+    try {
+      fs.writeFileSync(
+        path.join(dir, 'job.lock'),
+        JSON.stringify({ pid: child.pid, startedAt: Date.now() })
+      );
+      const adapterScript = path.join(runsDir, 'noop.js');
+      fs.writeFileSync(adapterScript, '');
+      const r = rt.submitJob('agy01', { x: 1 }, { runsDir });
+      assert.deepStrictEqual(r, { state: 'busy', exitCode: 1, reason: 'POOL_ACCOUNT_BUSY' });
+      assert.strictEqual(fs.readFileSync(path.join(dir, 'job.json'), 'utf8'), '{"keep":true}');
+      assert.ok(fs.existsSync(path.join(dir, 'job.lock')));
+    } finally {
+      child.kill();
+    }
+  });
+
+  test('a lock whose pid is dead is taken over and released afterwards', async () => {
+    const runsDir = setup();
+    const dir = path.join(runsDir, 'agy01');
+    const child = spawn(process.execPath, ['-e', ''], { stdio: 'ignore' });
+    await new Promise((r) => child.on('close', r));
+    fs.writeFileSync(
+      path.join(dir, 'job.lock'),
+      JSON.stringify({ pid: child.pid, startedAt: Date.now() })
+    );
+    const r = rt.submitJob('agy01', { x: 1 }, { runsDir, timeoutMs: 100, adapterScript });
+    assert.notStrictEqual(r.state, 'busy');
+    assert.ok(fs.existsSync(path.join(dir, 'job.json')));
+    assert.ok(!fs.existsSync(path.join(dir, 'job.lock')));
+  });
+});
+
+describe('agy gateway quota source', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+
+  test('persisted store wins over out.txt and exhausted accounts are skipped', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agyq-'));
+    const rows = (p) => [{ family: 'gemini', window: 'weekly', remainingPercent: p, known: true }];
+    const file = path.join(dir, 'q.json');
+    fs.writeFileSync(
+      file,
+      JSON.stringify({ accounts: { agy01: { rows: rows(0) }, agy02: { rows: rows(40) } } })
+    );
+    for (const id of ['agy01', 'agy02']) fs.mkdirSync(path.join(dir, id));
+    const { createGateway: make } = require('../agy-gateway');
+    const gw = make({
+      token: TOKEN,
+      poolOptions: { runsDir: dir, quotaStore: { path: file }, models: ['gemini-x'] },
+    });
+    const picked = [];
+    gw.pool.submit = async (id) => (picked.push(id), { state: 'busy', exitCode: 1 });
+    const r = await gw.complete(chat);
+    assert.strictEqual(r.status, 429);
+    assert.deepStrictEqual(picked, ['agy02']); // agy01 is at 0% in the store
+  });
+
+  test('busy from another process makes the gateway try the next account', async () => {
+    const pool = fakePool();
+    const submit = pool.submit;
+    pool.submit = async (id, job, o) =>
+      id === 'agy01' ? { state: 'busy', exitCode: 1 } : submit(id, job, o);
+    const gw = createGateway({ token: TOKEN, pool });
+    const r = await gw.complete(chat);
+    assert.strictEqual(r.status, 200);
+    assert.deepStrictEqual(pool.used, ['agy02']);
+  });
+});

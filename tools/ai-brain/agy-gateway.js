@@ -27,7 +27,17 @@ function realPool(options) {
   return {
     accounts: () => rt.discoverAccounts(options),
     models: () => rt.discoverPoolModels(options),
-    quota: (id) => rt.quotaReading(id, options),
+    quota: (id) => {
+      // Prefer the Controller's persisted store; chat jobs overwrite out.txt.
+      const stored = require('./quota-store').loadStore(options && options.quotaStore).accounts[id];
+      if (stored && Array.isArray(stored.rows) && stored.rows.length)
+        return { available: true, rows: stored.rows };
+      return rt.quotaReading(id, options);
+    },
+    state: (id) => {
+      const r = rt.readResult(id, options);
+      return r && r.state;
+    },
     readOut: (id) => rt.readOutText(id, options),
     // submitJob blocks, so it runs in a child process to keep the server live.
     submit: (id, job, opts) =>
@@ -167,11 +177,14 @@ function createGateway(opts) {
 
   // Accounts with an unreadable quota are allowed but rank last, because the
   // pool's out.txt holds the latest job output rather than a quota table.
-  function pickAccount(model) {
+  function pickAccount(model, skipped) {
     const family = familyOf(model);
     let best = null;
     for (const id of pool.accounts()) {
-      if (busy.has(id)) continue;
+      if (busy.has(id) || (skipped && skipped.has(id))) continue;
+      try {
+        if (pool.state && pool.state(id) === 'running') continue;
+      } catch {}
       let remaining = null;
       try {
         const q = pool.quota(id);
@@ -195,35 +208,47 @@ function createGateway(opts) {
     const model = req.model;
     if (!model || !Array.isArray(req.messages))
       return errorBody(400, 'invalid_request', 'model and messages are required');
-    const account = pickAccount(model);
-    if (!account) return errorBody(429, 'quota_exceeded', 'no agy account is free with quota left');
-    try {
-      const timeoutMs = Number(req.timeout_ms) > 0 ? Number(req.timeout_ms) : defaultTimeout;
-      const job = {
-        candidateKey: 'agy-gateway',
-        harness: 'agy-pool',
-        accountId: account,
-        model,
-        cwd: workDir,
-        prompt: buildPrompt(req.messages, req.tools),
-      };
-      const result = await pool.submit(account, job, { timeoutMs });
-      if (!result || result.state !== 'ok' || result.exitCode !== 0) return mapPoolFailure(result);
-      const picked = interpret(pool.readOut(account), req.tools);
-      const message = picked.tool_calls
-        ? { role: 'assistant', content: null, tool_calls: picked.tool_calls }
-        : { role: 'assistant', content: picked.content };
-      const body = {
-        id: 'chatcmpl-' + crypto.randomBytes(8).toString('hex'),
-        object: 'chat.completion',
-        created: Math.floor(Date.now() / 1000),
-        model,
-        choices: [{ index: 0, message, finish_reason: picked.tool_calls ? 'tool_calls' : 'stop' }],
-      };
-      if (result.usage && typeof result.usage === 'object') body.usage = result.usage;
-      return { status: 200, body };
-    } finally {
-      busy.delete(account);
+    const timeoutMs = Number(req.timeout_ms) > 0 ? Number(req.timeout_ms) : defaultTimeout;
+    const prompt = buildPrompt(req.messages, req.tools);
+    const skipped = new Set();
+    for (;;) {
+      const account = pickAccount(model, skipped);
+      if (!account)
+        return errorBody(429, 'quota_exceeded', 'no agy account is free with quota left');
+      try {
+        const job = {
+          candidateKey: 'agy-gateway',
+          harness: 'agy-pool',
+          accountId: account,
+          model,
+          cwd: workDir,
+          prompt,
+        };
+        const result = await pool.submit(account, job, { timeoutMs });
+        if (result && result.state === 'busy') {
+          skipped.add(account); // another process holds it: try the next account
+          continue;
+        }
+        if (!result || result.state !== 'ok' || result.exitCode !== 0)
+          return mapPoolFailure(result);
+        const picked = interpret(pool.readOut(account), req.tools);
+        const message = picked.tool_calls
+          ? { role: 'assistant', content: null, tool_calls: picked.tool_calls }
+          : { role: 'assistant', content: picked.content };
+        const body = {
+          id: 'chatcmpl-' + crypto.randomBytes(8).toString('hex'),
+          object: 'chat.completion',
+          created: Math.floor(Date.now() / 1000),
+          model,
+          choices: [
+            { index: 0, message, finish_reason: picked.tool_calls ? 'tool_calls' : 'stop' },
+          ],
+        };
+        if (result.usage && typeof result.usage === 'object') body.usage = result.usage;
+        return { status: 200, body };
+      } finally {
+        busy.delete(account);
+      }
     }
   }
 
@@ -299,7 +324,7 @@ function createGateway(opts) {
     const e = errorBody(404, 'not_found', 'unknown route');
     return send(res, e.status, e.body);
   });
-  return { server, complete };
+  return { server, complete, pool };
 }
 
 function start(opts) {
