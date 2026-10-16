@@ -556,3 +556,7 @@ The dry-run listed the auto-bound codex-cli writer but every live run had no cod
 ### H3 live: JEV requests match the API schema (2026-10-15)
 
 On 15/10 the live Controller got HTTP 422 then 400 from JEV and fell back to BALANCED weights, which let a weak writer rank first. Score questions now send their rubric as `criteria` (not `levels`) and use at most the API limit of 10 levels. A live call through routing.assessTask now returns a JEV decision (LOW_CONFIDENCE for the GOAL-AUTOCLAW-REPOS-1 profile) instead of an HTTP error.
+
+### H3 live: custom candidate without gateway uses upstream instead of openai (2026-10-16)
+
+When a candidate key had an empty gateway (e.g. `hermes::https://developer.amd.com.cn/radeon/api/v1::::amd-radeon::...`), `writeProvidersConfig` defaulted the gateway to `openai`. Hermes treated this as its built-in provider, reported "No Codex credentials stored", and exited 0. `writeProvidersConfig` now names the provider after the upstream route when the gateway is empty, and `custom` when neither is known.
