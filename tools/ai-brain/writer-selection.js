@@ -76,7 +76,11 @@ async function assessOnce(profile, source, ask, options, routing) {
     source,
     minConfidence: source && source.minConfidence,
   });
-  cache.set(key, { ask: options.jevAsk, result });
+  const entry = { ask: options.jevAsk, result };
+  cache.set(key, entry);
+  result.catch(() => {
+    if (cache.get(key) === entry) cache.delete(key);
+  });
   return result;
 }
 
