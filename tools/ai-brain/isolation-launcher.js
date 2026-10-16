@@ -2064,7 +2064,18 @@ function getIsolatedLauncher() {
 
     if (adapter.id === 'opencode-direct') {
       const sourcesModule = require('./sources');
-      const sources = require('./sources.json');
+      const staticSources = require('./sources.json');
+      // Discovered (probed) direct sources are only in the merged registry.
+      const sources = {
+        ...staticSources,
+        sources: (staticSources.sources || []).concat(
+          sourcesModule
+            .loadSources()
+            .sources.filter(
+              (entry) => !(staticSources.sources || []).some((s) => s.id === entry.id)
+            )
+        ),
+      };
       const { parseCandidateKey } = require('./discovery/identity');
 
       // Extract pinned model id from args or options (the exact --model string opencode receives)
@@ -2129,7 +2140,7 @@ function getIsolatedLauncher() {
       const providerId =
         sourceId === '9router' && pinnedModel
           ? sourcesModule.providerFromPrefix(pinnedModel) || selectedSource.id
-          : selectedSource.id;
+          : selectedSource.opencodeProvider || selectedSource.id;
 
       if (pinnedModel && sourceId === '9router') {
         const derivedFromModel = sourcesModule.providerFromPrefix(pinnedModel);

@@ -1,5 +1,21 @@
 # TASK-AI-142 — Hermes chat brain wired to the Controller
 
+## Operator ACP assignment (2026-10-16)
+
+Codex is assigned to let the Controller observe Hermes through structured ACP events.
+This extends allowed paths to `tools/ai-brain/hermes-acp.js` and
+`tools/ai-brain/test/task-ai-142-hermes-acp.test.js` alongside the existing session adapter.
+Use `node tools/ai-brain/cli.js chat --acp --prompt "..."` for one explicit turn.
+The selected candidate still supplies the Controller-owned config; ACP starts a fresh
+session and verifies the advertised model before sending the prompt. Existing CLI chat
+sessions cannot be passively monitored over ACP. ACP turns currently do not resume history
+or automatically retry/fail over: failures stop rather than replay a possibly applied tool.
+`data/hermes/acp-status.json` contains lifecycle metadata only, not prompts, reasoning,
+tool content or credentials. Unsupported host requests fail closed; permission requests
+are cancelled. A `turn_ended` result is transport evidence, never work-item completion.
+The default timeout is 120 seconds (`--acp-timeout-ms` overrides it). No ACP dependency installation or live provider call
+is authorized by this implementation; verification uses an offline JSON-RPC subprocess.
+
 ## Writer selection integration assignment (2026-10-15)
 
 The operator assigns Codex to finish `fix/task-ai-142-writer-selection-review`, integrate current main including #319–#323, run the full brain suite and required checks, and submit the resulting SHA through PR/CI and fresh independent review. An older Gemini PASS applies only to its reviewed SHA. The implementation author cannot supply the independent PASS. No additional model, provider request or live Hermes run is authorized in this assignment. The separate deadline investigation starts only after this writer selection PR merges, on a new branch from main.
@@ -356,6 +372,30 @@ Selection logs retain the full chosenCandidate, the existing chosen identity, to
 
 Verification: sequential TASK-AI-141 199/199, TASK-AI-142 136/136, TASK-AI-64 129/129, dispatch-wiring 7/7 and decisions 28/28 passed. Additional candidate/routing regressions passed 74/74. Changed JavaScript passes ESLint no-undef; changed files pass Prettier and git diff --check. Live logs remain untouched and runtime data is excluded from commits.
 
+### H3 live: the agy gateway returns the answer, not the agy envelope (2026-10-16)
+
+A live call through the gateway (16/10 16:45, gemini-3.8-flash-low via the pool, HTTP 200 in 17 s) returned the raw agy JSON envelope (`{"status":"SUCCESS","response":"ok\n",...}`) as the message content and no usage. The gateway now unwraps `response` as the content and maps the agy usage (input + cache read, output + thinking, total) to an OpenAI usage object; plain-text output passes through.
+
+### H3 live: the agy pool serves Hermes through an OpenAI-compatible gateway (2026-10-16)
+
+`tools/ai-brain/agy-gateway.js` exposes `GET /v1/models` (the live pool model list) and `POST /v1/chat/completions` (including `stream: true` as a single SSE chunk then `[DONE]`) on 127.0.0.1 only. Each request runs one agy job on a free account (in-process lock per account) whose weekly quota for the model family is above zero, preferring the highest remaining; accounts with an unreadable quota rank last. No free account with quota returns 429; pool `quota`, `login-required` and timeouts map to 429, 401 and 504.
+
+Start it with `AGY_GATEWAY_TOKEN=<secret>` set (it refuses to start otherwise): `node tools/ai-brain/cli.js agy-gateway --port 20140` (default port 20140, or `AGY_GATEWAY_PORT`). Clients send `Authorization: Bearer <token>`. The source is declared as `agy-gateway` in `tools/ai-brain/sources.json` (harness `hermes`, credential env `AGY_GATEWAY_TOKEN`) so the Controller can rank it as a brain.
+
+Limitation: agy cannot run Hermes' tools, so tool calls are emulated. The prompt lists the offered tools and requires a JSON answer (`{"content": ...}` or `{"tool_calls": [...]}`); only calls naming an offered tool become OpenAI `tool_calls`. Each turn is a full agy session, so it is slower than a plain model API, and no token usage is reported unless the pool result carries it.
+
+### H3 live: Hermes loads only project skills and keeps a truthful memory (2026-10-16)
+
+Hermes injects the name and description of every enabled skill into each session's system prompt (agent/prompt_builder.py build_skills_system_prompt) and loads bodies on demand via skill_view; `skills.disabled` in config.yaml hides skills by name (agent/skill_utils.py get_disabled_skill_names). Live sessions only ever loaded the Controller skill, so writeProvidersConfig now disables every other installed skill by name, discovered from the Hermes home. memories/MEMORY.md is loaded into every session (agent/agent_init.py) and bounded by memory_char_limit (default 2200), so each launch replaces only the marked Controller block with goal status, item states and the last review/test outcome from the goal register, keeping user text and the limit.
+
+### H3 live: a scheduled task resumes the goal without a model call (2026-10-16)
+
+`schedule-task.ps1 -ControllerAction GoalResume -GoalId <id>` registers a Windows task that runs `scripts/ai/goal-resume.ps1` in the Controller worktree: it loads the user environment, runs `goal resume` (which refuses to start a second run while one is active) and appends `goal status` to `data/goals/<id>/scheduled-status.log`. No model is called. Operator command: `schedule-task.ps1 -Action Register -Trigger Periodic -IntervalMinutes 10 -ControllerAction GoalResume -GoalId AUTOCLAW-REPOS -WorkingDirectory <hermes-live> -TaskName ShipDe-Goal-Resume -Apply`.
+
+### H3 live: probed opencode providers become writer candidates (2026-10-16)
+
+Probed direct sources never reached the writer pool: the unbound-source branch of `generateCandidates` (`candidates.js`, the `for (const acc of bound)` loop after `harness = source.harness`) iterates bound accounts only, and discovered sources have none, so they produced zero candidates for any role. Discovery now records the OpenCode provider key (`opencodeProvider`, from `provider.<key>` in `opencode.json`), `loadSources` carries it, and `pushOpencodeProviderWriters` emits one `opencode-direct` candidate per model with `modelId` `<key>/<model>`, gateway the source id and capabilities only from per-model metadata. A source without the key yields nothing. The isolated launcher resolves discovered sources, uses the key as the opencode provider id (API key stays an env reference) and the route probe sends the wire id without the key. Existing sources need one `sources --discover --probe` run to record the key.
+
 ### H3 live: agy pool schema failures retain redacted diagnostics (2026-10-16)
 
 On origin/main d9982a32, a fresh writer dispatch dry-run produced 147 pool candidates, with no CAPABILITY_MISSING:tools rejection (36 quota exclusions and 111 NOT_SELECTED). Per the operator assignment, capability composition is unchanged. A failed pool schema probe now carries its state, reason, exit code and last 20 non-empty output lines through jsonSchemaEvidence.detail into the routing rejection, using createSecretRedactor. The new fixture failed on main with missing detail; the repaired writer-jsonschema suite passes 12/12. Dry-run snapshots are task4-before-decision.json and task4-after-decision.json under .worktrees/logs/night; live pool execution is not claimed.
@@ -367,6 +407,10 @@ When an upstream source declares headers (such as AgentRouter CLI User-Agent), `
 ### H3 live: a router only offers models it lists itself (2026-10-16)
 
 After operator keys were probed, the intake catalogue merged 3254 ids from many sources (for example azure/, bedrock/, vertex/, runware/ ids from Requesty), and the router branch turned every one into a 9router candidate. 9router serves none of those prefixes, so hundreds of writer probes timed out, PROBE_BUDGET_EXHAUSTED fired and GOAL-AUTOCLAW-REPOS-1 failed before any writer launched. A router now produces catalogue-derived candidates only for ids in its own listing (per-source `sourceModels` from intake, or its `source.models`); with no known listing it produces none and records `ROUTER_LISTING_UNKNOWN`.
+
+### H3 live: Windows Task Scheduler periodic trigger for goal resume (2026-10-16)
+
+`scripts/ai/schedule-task.ps1` previously supported only `Daily`, `Logon`, and `Hourly` triggers. It now supports `-Trigger Periodic` with `-IntervalMinutes` (default 10 minutes), allowing zero-RAM background execution of `control.ps1 -Action Resume` to periodically check and resume goals without needing a permanent daemon process. Tested and verified in `scripts/ai/schedule-task.Tests.ps1`.
 
 ### H3 live: a Hermes reselection gets its own probe window and a Hermes login failure is remembered (2026-10-16)
 

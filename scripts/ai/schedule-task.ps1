@@ -8,14 +8,16 @@ param(
 
     [string]$TaskPath = "\",
 
-    [ValidateSet("Daily", "Logon", "Hourly")]
+    [ValidateSet("Daily", "Logon", "Hourly", "Periodic")]
     [string]$Trigger = "Daily",
 
     [string]$Time = "09:00",
 
     [int]$IntervalHours = 1,
 
-    [ValidateSet("Resume", "Supervise", "Doctor", "Menu")]
+    [int]$IntervalMinutes = 10,
+
+    [ValidateSet("Resume", "Supervise", "Doctor", "Menu", "GoalResume")]
     [string]$ControllerAction = "Resume",
 
     [string]$AiRoot = (Join-Path $env:USERPROFILE "AI"),
@@ -23,6 +25,8 @@ param(
     [string]$WorkingDirectory = $null,
 
     [string]$TargetScript = $null,
+
+    [string]$GoalId = $null,
 
     [ValidateSet("Limited", "Highest")]
     [string]$RunLevel = "Limited",
@@ -54,11 +58,19 @@ if ([string]::IsNullOrWhiteSpace($WorkingDirectory)) {
     }
 }
 
-if ([string]::IsNullOrWhiteSpace($TargetScript)) {
-    $TargetScript = Join-Path $WorkingDirectory "scripts\ai\control.ps1"
+if ($ControllerAction -eq "GoalResume") {
+    # Resumes one goal through the Controller (no model call); see goal-resume.ps1.
+    if ([string]::IsNullOrWhiteSpace($GoalId)) { throw "-GoalId is required for -ControllerAction GoalResume" }
+    if ([string]::IsNullOrWhiteSpace($TargetScript)) {
+        $TargetScript = Join-Path $WorkingDirectory "scripts\ai\goal-resume.ps1"
+    }
+    $arguments = "-NonInteractive -ExecutionPolicy Bypass -File `"$TargetScript`" -GoalId $GoalId -WorkDir `"$WorkingDirectory`""
+} else {
+    if ([string]::IsNullOrWhiteSpace($TargetScript)) {
+        $TargetScript = Join-Path $WorkingDirectory "scripts\ai\control.ps1"
+    }
+    $arguments = "-NonInteractive -ExecutionPolicy Bypass -File `"$TargetScript`" -Action $ControllerAction"
 }
-
-$arguments = "-NonInteractive -ExecutionPolicy Bypass -File `"$TargetScript`" -Action $ControllerAction"
 
 function Get-ShipDeScheduledTaskStatus {
     param(
@@ -109,6 +121,7 @@ function Register-ShipDeScheduledTask {
         [string]$TriggerType,
         [string]$TriggerTime,
         [int]$TriggerIntervalHours,
+        [int]$TriggerIntervalMinutes = 10,
         [string]$Executable,
         [string]$ScriptArguments,
         [string]$WorkingDir,
@@ -124,6 +137,8 @@ function Register-ShipDeScheduledTask {
         Write-Host "Schedule Time    : $TriggerTime"
     } elseif ($TriggerType -eq "Hourly") {
         Write-Host "Interval Hours   : $TriggerIntervalHours"
+    } elseif ($TriggerType -eq "Periodic") {
+        Write-Host "Interval Minutes : $TriggerIntervalMinutes"
     }
     Write-Host "Run Level        : $Level"
     Write-Host "Target Executable: $Executable"
@@ -158,13 +173,19 @@ function Register-ShipDeScheduledTask {
         "Hourly" {
             New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Hours $TriggerIntervalHours)
         }
+        "Periodic" {
+            New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes $TriggerIntervalMinutes)
+        }
     }
 
+    # A goal run is bounded by the Controller's own worker timeouts; the scheduler
+    # must not kill it mid-run. Zero means no limit in Task Scheduler.
+    $executionLimit = if ($ControllerAction -eq "GoalResume") { [TimeSpan]::Zero } else { New-TimeSpan -Hours 2 }
     $taskSettings = New-ScheduledTaskSettingsSet `
         -AllowStartIfOnBatteries `
         -DontStopIfGoingOnBatteries `
         -StartWhenAvailable `
-        -ExecutionTimeLimit (New-TimeSpan -Hours 2)
+        -ExecutionTimeLimit $executionLimit
 
     $taskPrincipal = New-ScheduledTaskPrincipal `
         -UserId $env:USERNAME `
@@ -265,6 +286,7 @@ switch ($Action) {
             -TriggerType $Trigger `
             -TriggerTime $Time `
             -TriggerIntervalHours $IntervalHours `
+            -TriggerIntervalMinutes $IntervalMinutes `
             -Executable $powerShellPath `
             -ScriptArguments $arguments `
             -WorkingDir $WorkingDirectory `
