@@ -632,3 +632,12 @@ Direct-route candidate keys (such as `codex::cli::::codex::codex-cli::codex-cli:
 ### H3 live: custom candidate without gateway uses upstream instead of openai (2026-10-16)
 
 When a candidate key had an empty gateway (e.g. `hermes::https://developer.amd.com.cn/radeon/api/v1::::amd-radeon::...`), `writeProvidersConfig` defaulted the gateway to `openai`. Hermes treated this as its built-in provider, reported "No Codex credentials stored", and exited 0. `writeProvidersConfig` now names the provider after the upstream route when the gateway is empty, and `custom` when neither is known.
+
+### H3 live: transient probe failure (status 0) uses short cooldown instead of 24h lockout (2026-10-16)
+
+When an upstream probe got no response (httpStatus 0, e.g. network glitch, socket hangup, connection refused, or timeout), `route-probe.js` previously classified it as `ROUTE_UNAVAILABLE` when the error body did not contain "timeout", and `route-health.js` gave `ROUTE_UNAVAILABLE` a 24-hour cooldown. This locked routes for 24 hours due to a single transient glitch ("Không trả lời != route chết; khóa ngắn và chỉ đúng model").
+
+- `classifyProbeFailure` in `route-probe.js` now classifies status 0 failures as `TIMEOUT` (when body indicates timeout) or transient `PROBE_NO_RESPONSE`, never permanent `ROUTE_UNAVAILABLE`. Provider credentials regex check is bypassed when status is 0.
+- `probeCooldownMs` in `route-health.js` assigns short cooldown (0.5 hours / 30 min) to `ROUTE_UNAVAILABLE`, `TIMEOUT`, and `PROBE_NO_RESPONSE`. Only permanent non-existent models (`HTTP_404`, `ALIAS_MISMATCH`) receive 24 hours.
+- When status is 0 in `rememberProbe`, it is strictly scoped to that specific candidate route/model path record, never setting a provider-level or account-level cooldown.
+- Evidence: `tools/ai-brain/test/task-ai-142-probe-transient.test.js` and updated `task-ai-142-probe-memory.test.js`.
