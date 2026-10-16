@@ -356,6 +356,10 @@ Selection logs retain the full chosenCandidate, the existing chosen identity, to
 
 Verification: sequential TASK-AI-141 199/199, TASK-AI-142 136/136, TASK-AI-64 129/129, dispatch-wiring 7/7 and decisions 28/28 passed. Additional candidate/routing regressions passed 74/74. Changed JavaScript passes ESLint no-undef; changed files pass Prettier and git diff --check. Live logs remain untouched and runtime data is excluded from commits.
 
+### H3 live: a Hermes reselection gets its own probe window and a Hermes login failure is remembered (2026-10-16)
+
+The probe wall-clock deadline was computed once per launch, so after a runtime route failure (Hermes printing `No Codex credentials stored`) every remaining route was skipped and the launch ended NO_REASONING_CANDIDATE. Each selection round now recomputes the deadline with the same per-round cap. A Hermes-side missing login is also recorded as an account `account_auth_failed` cooldown in the route-health store (existing 6 hour cause cooldown), so the next launch skips that candidate without probing or spawning it.
+
 ### H3 live: declared source headers reach run-time requests (2026-10-16)
 
 A header a source declares as data (for example the CLI user agent AgentRouter requires) now reaches the requests that actually call the provider: the shared route probe, the orchestrator route candidate, the opencode provider `options.headers` written for isolated workers, and the Hermes route probe. The Hermes `config.yaml` custom provider has no verified extra-header field, so Hermes runtime calls are not changed and only its probe sends the headers; no source id is hardcoded.
@@ -643,6 +647,23 @@ Direct-route candidate keys (such as `codex::cli::::codex::codex-cli::codex-cli:
 ### H3 live: custom candidate without gateway uses upstream instead of openai (2026-10-16)
 
 When a candidate key had an empty gateway (e.g. `hermes::https://developer.amd.com.cn/radeon/api/v1::::amd-radeon::...`), `writeProvidersConfig` defaulted the gateway to `openai`. Hermes treated this as its built-in provider, reported "No Codex credentials stored", and exited 0. `writeProvidersConfig` now names the provider after the upstream route when the gateway is empty, and `custom` when neither is known.
+
+### H3 live: transient probe failure (status 0) uses short cooldown instead of 24h lockout (2026-10-16)
+
+When an upstream probe got no response (httpStatus 0, e.g. network glitch, socket hangup, connection refused, or timeout), `route-probe.js` previously classified it as `ROUTE_UNAVAILABLE` when the error body did not contain "timeout", and `route-health.js` gave `ROUTE_UNAVAILABLE` a 24-hour cooldown. This locked routes for 24 hours due to a single transient glitch ("Không trả lời != route chết; khóa ngắn và chỉ đúng model").
+
+- `classifyProbeFailure` in `route-probe.js` now classifies status 0 failures as `TIMEOUT` (when body indicates timeout) or transient `PROBE_NO_RESPONSE`, never permanent `ROUTE_UNAVAILABLE`. Provider credentials regex check is bypassed when status is 0.
+- `probeCooldownMs` in `route-health.js` assigns short cooldown (0.5 hours / 30 min) to `ROUTE_UNAVAILABLE`, `TIMEOUT`, and `PROBE_NO_RESPONSE`. Only permanent non-existent models (`HTTP_404`, `ALIAS_MISMATCH`) receive 24 hours.
+- When status is 0 in `rememberProbe`, it is strictly scoped to that specific candidate route/model path record, never setting a provider-level or account-level cooldown.
+- Evidence: `tools/ai-brain/test/task-ai-142-probe-transient.test.js` and updated `task-ai-142-probe-memory.test.js`.
+
+### H3 live: detect 413 request loops and fix progress stall detection (2026-10-16)
+
+When a model route encountered HTTP 413 (Payload Too Large / context length exceeded) or tokens-per-minute (TPM) rate limits, the worker process previously remained unclassified or hung until the launcher timeout (30 minutes). The isolation launcher now monitors worker event streams and output for HTTP 413 / Request Too Large / TPM limit signals and aborts immediately with failure reason `REQUEST_TOO_LARGE` (mapped to model scope with 15-minute cooldown in `failure-classifier.js` and `orchestrate.js`), allowing the Controller to switch to an alternative model immediately. Furthermore, stall detection (`STALLED_NO_PROGRESS`) now counts progress only on genuine worktree file signature changes, verified tool use events (`tool_use`), or monotonically increasing cumulative token usage across the session, preventing fluctuating per-step token usage from resetting the progress timer.
+
+### H3 live: unknown cost does not penalize candidates against free models (2026-10-16)
+
+When an unpriced candidate has unknown cost (`cost: null`), `scoreForProfile` previously divided the total score by the full weight sum (e.g. 100) including `wCost` unless `assessment.renormalizeKnownScores` was explicitly set. Consequently, candidates with unpriced routes received 0 points for the cost dimension while free models (`cost: 0`) received 100 points, allowing lower quality free models to outscore higher quality unpriced models even under quality-focused JEV assessments. `scoreForProfile` now renormalizes over known dimensions unconditionally per its contract ("Unknown sub-scores are excluded and the total renormalised over the weights that are present"), ensuring missing cost data never scores as 0 or penalizes a candidate against known or free models. Unit tests in `tools/ai-brain/test/task-ai-142-unknown-cost-scoring.test.js` verify both score calculation and dispatch ranking.
 
 ### H3 live: router candidate filtering strips gateway prefix and requires upstream (2026-10-16)
 

@@ -374,7 +374,7 @@ function probeCooldownMs(cause) {
       causeStr
     )
       ? 6
-      : /HTTP_404|ALIAS|ROUTE_UNAVAILABLE/i.test(causeStr)
+      : /HTTP_404|ALIAS/i.test(causeStr)
         ? 24
         : 0.5;
   return hours * 3600000;
@@ -452,7 +452,7 @@ function rememberProbe(candidate, result, options) {
     if (acc && store.accounts) {
       deleteAccountRecord(store, acc);
     }
-  } else if (causeCode === 'PROVIDER_UNAVAILABLE') {
+  } else if (causeCode === 'PROVIDER_UNAVAILABLE' && (!result || result.status !== 0)) {
     if (gateway && provider) {
       record.status = 'PROVIDER_UNAVAILABLE';
       setProviderRecord(store, gateway, provider, {
@@ -482,7 +482,7 @@ function rememberProbe(candidate, result, options) {
       break;
     }
   }
-  if (matchedAccountCause) {
+  if (matchedAccountCause && (!result || result.status !== 0)) {
     const account = extractAccountKey(candidate, o);
     if (account) {
       const expiryIso =
@@ -1172,4 +1172,5 @@ module.exports = {
   setAccountRecord,
   getAccountRecord,
   deleteAccountRecord,
+  probeCooldownMs,
 };

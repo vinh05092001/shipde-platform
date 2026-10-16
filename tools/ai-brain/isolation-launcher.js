@@ -416,8 +416,10 @@ if (-not (Test-Path "${workerRoot}\\.shipde")) { New-Item -ItemType Directory -P
 Set-Location -Path "${workerRoot}"
 \`$env:SHIPDE_RUN_TARGET_PID = "\`$PID"
 ${codexLoginProbe}
+\`$usageLogDir = [System.IO.Path]::GetDirectoryName("${usageLogPath.replace(/\\/g, '\\\\')}")
+if (-not (Test-Path \`$usageLogDir)) { New-Item -ItemType Directory -Path \`$usageLogDir | Out-Null }
 \`$payloadArgs = @(Get-Content -LiteralPath "${payloadArgsPath}" -Raw | ConvertFrom-Json)
-& "${exeFile}" @payloadArgs | Tee-Object -FilePath "${workerRoot}\\.shipde\\worker-output-${completionNonce}.log"
+& "${exeFile}" @payloadArgs | Tee-Object -FilePath "${usageLogPath.replace(/\\/g, '\\\\')}"
 \`$jobExit = \`$LASTEXITCODE
 if (\`$null -eq \`$jobExit) { exit 1 }
 @{ nonce = "${completionNonce}"; exitCode = [int]\`$jobExit; completedAt = (Get-Date).ToString('o') } | ConvertTo-Json -Depth 5 | Out-File "${markerPath}" -Encoding UTF8
@@ -515,7 +517,15 @@ $maxTokens = 0
 $progressTimeoutMs = ${Number(options.progressTimeoutMs) > 0 ? Number(options.progressTimeoutMs) : 0}
 $lastProgressAt = [System.Diagnostics.Stopwatch]::GetTimestamp()
 $lastTotalTokens = $null
+$lastCumulativeTokens = 0
+$lastToolCalls = 0
 $lastOutputSignature = ""
+try {
+    $initFiles = @(Get-ChildItem -LiteralPath $workerRoot -File -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -notmatch '[\\/](\.git|node_modules|\.shipde)[\\/]' } | Sort-Object FullName)
+    if ($initFiles.Count -gt 0) { $lastOutputSignature = ($initFiles | ForEach-Object { $_.FullName + ':' + $_.Length + ':' + $_.LastWriteTimeUtc.Ticks }) -join '|' }
+} catch {}
+$requestTooLarge = $false
+$requestTooLargeDetail = ""
 try {
     $budgetConfig = $tokenBudgetJson | ConvertFrom-Json
     if ($null -ne $budgetConfig.maxTokens) { $maxTokens = [double]$budgetConfig.maxTokens }
@@ -589,6 +599,119 @@ function Read-UsageTotal {
     return $null
 }
 
+function Update-SessionProgress {
+    if ($script:requestTooLarge) { return }
+    $script:sessionToolCalls = 0
+    $script:sessionCumTokens = 0
+    $script:sessionMonotonic = $true
+    if ([string]::IsNullOrWhiteSpace($usageLogPath) -or -not (Test-Path -LiteralPath $usageLogPath)) { return }
+    try {
+        $lines = @()
+        $readOk = $false
+        try {
+            $fs = [System.IO.File]::Open($usageLogPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+            try {
+                $sr = New-Object System.IO.StreamReader($fs, [System.Text.Encoding]::UTF8)
+                try {
+                    $rawContent = $sr.ReadToEnd()
+                    if (-not [string]::IsNullOrEmpty($rawContent)) {
+                        $lines = @($rawContent -split '\r?\n')
+                    }
+                    $readOk = $true
+                } finally {
+                    $sr.Dispose()
+                }
+            } finally {
+                $fs.Dispose()
+            }
+        } catch {}
+        if (-not $readOk) {
+            $lines = @(Get-Content -LiteralPath $usageLogPath -ErrorAction SilentlyContinue)
+        }
+        if ($lines.Count -eq 0) { return }
+        $toolCount = 0
+        $sumTokens = 0
+        $prevStepTokens = $null
+        $hasFluctuated = $false
+        $found413 = $false
+        $detail413 = ""
+        foreach ($line in $lines) {
+            $trimmed = $line.Trim()
+            if ([string]::IsNullOrWhiteSpace($trimmed)) { continue }
+            $is413 = $false
+            $matchText = ""
+            if ($trimmed.StartsWith('{') -and $trimmed.EndsWith('}')) {
+                try {
+                    $ev = $trimmed | ConvertFrom-Json
+                    if ($null -ne $ev) {
+                        if ($ev.type -eq "tool_use" -or ($null -ne $ev.part -and $ev.part.type -eq "tool")) {
+                            $toolCount++
+                        }
+                        $err = $null
+                        if ($ev.type -eq "error" -and $null -ne $ev.error) { $err = $ev.error }
+                        elseif ($null -ne $ev.error) { $err = $ev.error }
+                        if ($null -ne $err) {
+                            $code = $null
+                            if ($null -ne $err.data -and $null -ne $err.data.statusCode) { $code = [int]$err.data.statusCode }
+                            elseif ($null -ne $err.statusCode) { $code = [int]$err.statusCode }
+                            elseif ($null -ne $err.status) { $code = [int]$err.status }
+
+                            $msg = ""
+                            if ($null -ne $err.data -and $null -ne $err.data.message) { $msg = [string]$err.data.message }
+                            elseif ($null -ne $err.message) { $msg = [string]$err.message }
+                            if ($null -ne $err.data -and $null -ne $err.data.responseBody) {
+                                $msg = $msg + " " + [string]$err.data.responseBody
+                            }
+                            if ($code -eq 413 -or $msg -match '(?i)\b413\b|request.*too.*large|payload.*too.*large|entity.*too.*large|too.*large.*request|tokens?.*per.*minute|\bTPM\b.*limit|limit.*on.*TPM') {
+                                $is413 = $true
+                                $matchText = if ($msg) { $msg } else { "HTTP status 413" }
+                            }
+                        }
+                        if (-not $is413 -and $ev.type -ne "error" -and $null -eq $ev.error) {
+                            $t = $ev.tokens
+                            if ($null -eq $t -and $null -ne $ev.part) { $t = $ev.part.tokens }
+                            if ($null -ne $t) {
+                                $in = [double]$t.input
+                                $out = [double]$t.output
+                                $tot = [double]$t.total
+                                $cr = 0
+                                if ($null -ne $t.cache -and $null -ne $t.cache.read) { $cr = [double]$t.cache.read }
+                                elseif ($null -ne $t.cache -and $null -ne $t.cache.read_tokens) { $cr = [double]$t.cache.read_tokens }
+                                elseif ($null -ne $t.cacheRead) { $cr = [double]$t.cacheRead }
+                                elseif ($null -ne $t.cache_read) { $cr = [double]$t.cache_read }
+                                elseif ($null -ne $t.cache_read_tokens) { $cr = [double]$t.cache_read_tokens }
+                                $stepEffective = [math]::Max($tot, $in + $cr + $out)
+                                if ($null -ne $prevStepTokens -and $stepEffective -lt $prevStepTokens) {
+                                    $hasFluctuated = $true
+                                }
+                                $prevStepTokens = $stepEffective
+                                $sumTokens += $stepEffective
+                            }
+                        }
+                    }
+                } catch {}
+            }
+            if (-not $is413) {
+                if ($trimmed -match '(?i)\b413\b.*(?:request|payload|entity|too\s+large|tpm)|(?:request|payload|entity)\s+(?:is\s+)?too\s+large|\b413\s+Request|\b413\s+Payload|rate\s+limit.*tokens?\s+per\s+minute|\bTPM\b.*limit|limit.*on.*TPM') {
+                    $is413 = $true
+                    $matchText = $trimmed
+                }
+            }
+            if ($is413) {
+                $found413 = $true
+                $detail413 = $matchText
+            }
+        }
+        if ($found413) {
+            $script:requestTooLarge = $true
+            $script:requestTooLargeDetail = if ($detail413.Length -gt 250) { $detail413.Substring(0, 250) } else { $detail413 }
+        }
+        $script:sessionToolCalls = $toolCount
+        $script:sessionCumTokens = $sumTokens
+        $script:sessionMonotonic = (-not $hasFluctuated)
+    } catch {}
+}
+
 # The wrapper is waited on with the bounded wait, then every process it
 # started is polled until none remain, all inside the same budget. Waiting for
 # the wrapper alone is not enough: a job the wrapper no longer waits for would
@@ -606,7 +729,12 @@ while ($true) {
         Stop-WorkerTree
         break
     }
-        if ($progressTimeoutMs -gt 0) {
+    Update-SessionProgress
+    if ($script:requestTooLarge) {
+        Stop-WorkerTree
+        break
+    }
+    if ($progressTimeoutMs -gt 0) {
         $outputSignature = ""
         try {
             $outputFiles = @(Get-ChildItem -LiteralPath $workerRoot -File -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -notmatch '[\\/](\.git|node_modules|\.shipde)[\\/]' } | Sort-Object FullName)
@@ -617,8 +745,12 @@ while ($true) {
             $lastOutputSignature = $outputSignature
             $madeProgress = $true
         }
-        if ($null -ne $totalTokens -and ($null -eq $lastTotalTokens -or $totalTokens -gt $lastTotalTokens)) {
-            $lastTotalTokens = $totalTokens
+        if ($script:sessionToolCalls -gt $lastToolCalls) {
+            $lastToolCalls = $script:sessionToolCalls
+            $madeProgress = $true
+        }
+        if ($script:sessionMonotonic -and $script:sessionCumTokens -gt $lastCumulativeTokens) {
+            $lastCumulativeTokens = $script:sessionCumTokens
             $madeProgress = $true
         }
         if ($madeProgress) {
@@ -627,7 +759,7 @@ while ($true) {
             $stalled = $true
             $fileCount = $outputFiles.Count
             $usageState = if ($null -eq $totalTokens) { "unavailable" } else { [string]$totalTokens }
-            $progressDetail = "stall detector observed no worker file signature change ($fileCount tracked files) and no token usage increase (usage=$usageState) for $progressTimeoutMs ms; stdout is not a detector signal"
+            $progressDetail = "stall detector observed no worker file signature change ($fileCount tracked files), no verified tool progress ($lastToolCalls tool calls), and no monotonic token usage increase (usage=$usageState) for $progressTimeoutMs ms"
             Stop-WorkerTree
             break
         }
@@ -638,7 +770,7 @@ while ($true) {
     [void]$process.WaitForExit([math]::Min($waitSlice, $remaining))
 }
 $quietPolls = 0
-if (-not $timedOut -and -not $stalled -and -not $budgetExceeded) {
+if (-not $timedOut -and -not $stalled -and -not $budgetExceeded -and -not $requestTooLarge) {
     while ($true) {
         Write-LiveUsage
         $remaining = $timeoutMs - $stopwatch.ElapsedMilliseconds
@@ -666,6 +798,11 @@ if (-not $timedOut -and -not $stalled -and -not $budgetExceeded) {
             Stop-WorkerTree
             break
         }
+        Update-SessionProgress
+        if ($script:requestTooLarge) {
+            Stop-WorkerTree
+            break
+        }
         if ($quietPolls -ge 3) { break }
         Start-Sleep -Milliseconds 250
     }
@@ -675,6 +812,7 @@ if ($timedOut) {
     Stop-WorkerTree
 }
 if ($stalled) { Stop-WorkerTree }
+if ($script:requestTooLarge) { Stop-WorkerTree }
 # A writer the operator cannot kill (another user's process) must not hang the
 # host forever: the pipes are read with a bound, and a pipe that never closed
 # is itself reported as a failure.
@@ -682,6 +820,17 @@ $stdout = ""
 $stderr = ""
 if ($stdoutTask.Wait(15000)) { $stdout = $stdoutTask.Result }
 if ($stderrTask.Wait(15000)) { $stderr = $stderrTask.Result } else { $stderr = "[ISOLATION_LAUNCHER] worker output pipes never closed" }
+
+if (-not $script:requestTooLarge) {
+    Update-SessionProgress
+    if (-not $script:requestTooLarge) {
+        $combined = $stdout + [Environment]::NewLine + $stderr
+        if ($combined -match '(?i)\b413\b.*(?:request|payload|entity|too\s+large|tpm)|(?:request|payload|entity)\s+(?:is\s+)?too\s+large|\b413\s+Request|\b413\s+Payload|rate\s+limit.*tokens?\s+per\s+minute|\bTPM\b.*limit|limit.*on.*TPM') {
+            $script:requestTooLarge = $true
+            $script:requestTooLargeDetail = "worker output indicated 413 / request too large / TPM limit"
+        }
+    }
+}
 
 # Positive evidence: the marker is written by run-target.ps1 after the payload
 # returned, so it can only exist for a job that really ran to its end.
@@ -694,6 +843,8 @@ if ($budgetExceeded) {
     $failureReason = "TOKEN_BUDGET_EXCEEDED: live worker usage exceeded configured token budget"
 } elseif ($timedOut) {
     $failureReason = "[ISOLATION_LAUNCHER] worker timed out after $timeoutMs ms and was killed"
+} elseif ($script:requestTooLarge) {
+    $failureReason = "REQUEST_TOO_LARGE: $script:requestTooLargeDetail; worker was killed"
 } elseif ($stalled) {
     $failureReason = "STALLED_NO_PROGRESS: $progressDetail; worker was killed"
 } elseif (Test-Path -LiteralPath $markerPath) {
@@ -714,7 +865,7 @@ if ($budgetExceeded) {
     $failureReason = "[ISOLATION_LAUNCHER] the worker job never wrote its completion marker"
 }
 $exitValue = -1
-if ($completed -and -not $timedOut -and -not $budgetExceeded) { $exitValue = $jobExit }
+if ($completed -and -not $timedOut -and -not $budgetExceeded -and -not $script:requestTooLarge) { $exitValue = $jobExit }
 if ($failureReason.Length -gt 0) { $stderr = $stderr + [Environment]::NewLine + $failureReason }
 
 $output = @{
@@ -723,6 +874,7 @@ $output = @{
     stderr = $stderr
     timedOut = $timedOut
     budgetExceeded = $budgetExceeded
+    requestTooLarge = $script:requestTooLarge
     completed = $completed
     completionNonce = $markerNonce
     failureReason = $failureReason
@@ -2388,11 +2540,15 @@ function readLaunchResult(launchResultPath, completionNonce, hostRes) {
       failureReason = 'STALLED_NO_PROGRESS';
     } else if (resJson.failureReason.startsWith('TOKEN_BUDGET_EXCEEDED')) {
       failureReason = 'TOKEN_BUDGET_EXCEEDED';
+    } else if (resJson.failureReason.startsWith('REQUEST_TOO_LARGE')) {
+      failureReason = 'REQUEST_TOO_LARGE';
     } else if (resJson.failureReason.length > 0) {
       failureReason = resJson.failureReason;
     }
   } else if (resJson.budgetExceeded) {
     failureReason = 'TOKEN_BUDGET_EXCEEDED';
+  } else if (resJson.requestTooLarge) {
+    failureReason = 'REQUEST_TOO_LARGE';
   }
 
   if (

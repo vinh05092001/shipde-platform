@@ -3780,3 +3780,80 @@ test('writeProvidersConfig uses upstream when gateway is empty, avoiding builtin
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('TASK-AI-142: a reselection round gets its own probe window and a Hermes login failure is remembered', async (t) => {
+  const root = fixtureRoot('hermes-reselect-window-');
+  try {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
+    const a = sampleCandidate({
+      upstream: 'pa',
+      modelId: 'pa/model',
+      accountId: 'acc-a',
+      quality: 99,
+      evidence: [],
+    });
+    const b = sampleCandidate({
+      gateway: 'rqsty',
+      accessPath: 'https://router.requesty.ai/v1',
+      upstream: 'pb',
+      modelId: 'pb/model',
+      accountId: 'acc-b',
+      quality: 90,
+      evidence: [],
+    });
+    const routeHealthFile = path.join(root, 'route-health.json');
+    const make = (spawn, probed) => [
+      {
+        rootDir: root,
+        skipDecisionLog: true,
+        probeBudgetMs: 200,
+        routeHealthFile,
+        env: { NINEROUTER_API_KEY: 'k', REQUESTY_API_KEY: 'k' },
+      },
+      {
+        candidates: [a, b],
+        registry: sampleRegistry(),
+        priorsData: { ranking: [] },
+        probe: (candidate) => {
+          probed.push(candidate.upstream);
+          return Promise.resolve({ ok: true, status: 200 });
+        },
+        spawn,
+      },
+    ];
+    const probed1 = [];
+    const spawned1 = [];
+    const res = await launchHermesSession(
+      ...make(async (_cmd, args) => {
+        spawned1.push(args.join(' '));
+        if (spawned1.length === 1) {
+          t.mock.timers.tick(1000);
+          return { exitCode: 0, routeFailure: 'No Codex credentials stored. Run hermes auth add' };
+        }
+        return { exitCode: 0 };
+      }, probed1)
+    );
+    assert.equal(res.status, 'completed');
+    assert.equal(res.candidate.upstream, 'pb');
+    assert.equal(spawned1.length, 2);
+    assert.equal(
+      probed1.filter((u) => u === 'pb').length,
+      2,
+      'round 2 probes B again instead of skipping on the old clock'
+    );
+
+    const probed2 = [];
+    const spawned2 = [];
+    const res2 = await launchHermesSession(
+      ...make(async (_cmd, args) => {
+        spawned2.push(args.join(' '));
+        return { exitCode: 0 };
+      }, probed2)
+    );
+    assert.equal(res2.candidate.upstream, 'pb');
+    assert.ok(!probed2.includes('pa'), 'the remembered login failure skips A without probing');
+    assert.equal(spawned2.length, 1);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

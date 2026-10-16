@@ -96,16 +96,18 @@ function tokenLimitEvidence(headers, body) {
 function classifyProbeFailure(result) {
   const status = Number(result && result.status) || 0;
   const body = String((result && result.body) || 'Probe failed');
-  const providerMatch = body.match(/No active credentials for provider:\s*([\w.-]+)/i);
-  if (providerMatch) {
-    const obj = { reason: 'PROVIDER_UNAVAILABLE', provider: providerMatch[1] };
-    Object.defineProperty(obj, 'toString', {
-      value() {
-        return this.reason;
-      },
-      enumerable: false,
-    });
-    return obj;
+  if (status !== 0) {
+    const providerMatch = body.match(/No active credentials for provider:\s*([\w.-]+)/i);
+    if (providerMatch) {
+      const obj = { reason: 'PROVIDER_UNAVAILABLE', provider: providerMatch[1] };
+      Object.defineProperty(obj, 'toString', {
+        value() {
+          return this.reason;
+        },
+        enumerable: false,
+      });
+      return obj;
+    }
   }
   if (result && result.reasonCode) return result.reasonCode;
   if (/probe budget exhausted/i.test(body)) return 'PROBE_BUDGET_EXHAUSTED';
@@ -119,7 +121,7 @@ function classifyProbeFailure(result) {
   if (status === 403) return 'UPSTREAM_FORBIDDEN';
   if (status === 429) return 'RATE_LIMITED';
   if (status >= 500) return 'UPSTREAM_UNAVAILABLE';
-  if (status === 0) return /timeout|timed out/i.test(body) ? 'TIMEOUT' : 'ROUTE_UNAVAILABLE';
+  if (status === 0) return /timeout|timed out/i.test(body) ? 'TIMEOUT' : 'PROBE_NO_RESPONSE';
   return `HTTP_${status}`;
 }
 
