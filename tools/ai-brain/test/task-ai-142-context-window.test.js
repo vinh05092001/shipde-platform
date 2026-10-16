@@ -833,7 +833,7 @@ test('TASK-AI-142: openai-codex context window takes conservative minimum of cod
       priorsData: { ranking: [] },
     }
   );
-  assert.equal(selection.chosen, null);
-  assert.equal(selection.refused, 'NO_REASONING_CANDIDATE');
-  assert.ok(selection.reason.includes('CONTEXT_WINDOW_UNVERIFIED'));
+  // Strict gate names the gap; the selection keeps the route eligible.
+  assert.ok(selection.candidate);
+  assert.equal(selection.candidate.contextWindow, undefined);
 });

@@ -153,8 +153,9 @@ test('TASK-AI-142 H3: codex context fallback uses minimum same-model provider me
     priorsData: { ranking: [{ model: 'gpt-6-luna', score: 85, contextWindow: 1050000 }] },
     routeHealth: { version: 1, paths: {}, events: [] },
   });
-  assert.equal(missing.chosen, null);
-  assert.match(missing.reason, /CONTEXT_WINDOW_UNVERIFIED/);
+  // An unreported window no longer excludes the route; it is never invented.
+  assert.ok(missing.candidate);
+  assert.equal(missing.candidate.contextWindow, undefined);
 });
 
 test('TASK-AI-142 H3: ranked probe admission includes missing health, never failed or credential-less routes', () => {
@@ -361,6 +362,7 @@ test('TASK-AI-142 H3: production assembly probes an untested stronger model befo
   };
   const options = {
     rootDir: root,
+    homeDir: root, // hermetic: no host Codex login joins the pool
     skipDecisionLog: true,
     env: { FIXTURE_KEY: 'test-fixture-value' },
   };
@@ -432,7 +434,7 @@ test('TASK-AI-142 H3: router source with modelMeta yields hermes candidates with
   assert.equal(k3.maxOutputTokens, 60000);
 });
 
-test('TASK-AI-142 H3: source without meta stays CONTEXT_WINDOW_UNVERIFIED', () => {
+test('TASK-AI-142 H3: source without meta stays unverified yet eligible', () => {
   const fakeRegistry = {
     version: 2,
     sources: [
@@ -469,12 +471,8 @@ test('TASK-AI-142 H3: source without meta stays CONTEXT_WINDOW_UNVERIFIED', () =
       priorsData: { ranking: [] },
     }
   );
-  assert.equal(selection.chosen, null);
-  assert.equal(selection.refused, 'NO_REASONING_CANDIDATE');
-  assert.ok(
-    selection.reason.includes('CONTEXT_WINDOW_UNVERIFIED'),
-    `Reason must mention CONTEXT_WINDOW_UNVERIFIED: ${selection.reason}`
-  );
+  assert.ok(selection.candidate, 'unknown context stays eligible');
+  assert.equal(selection.candidate.contextWindow, undefined);
 });
 
 test('TASK-AI-142 H3: model in source A never gets context from source B', () => {
@@ -853,7 +851,7 @@ test('TASK-AI-142 H3: models read from ~/.codex/config.toml "model" if present, 
   assert.equal(cMissing[0].modelId, 'gpt-6.1-sol');
 });
 
-test('TASK-AI-142 H3: context window unknown without documented source in hermes catalogue, candidate is refused with CONTEXT_WINDOW_UNVERIFIED and reported', () => {
+test('TASK-AI-142 H3: context window unknown without documented source in hermes catalogue stays eligible and is not invented', () => {
   const fakeHome = path.join(os.tmpdir(), 'codex-context-test');
   const authPath = path.join(fakeHome, '.codex', 'auth.json');
   const mockFs = {
@@ -878,12 +876,8 @@ test('TASK-AI-142 H3: context window unknown without documented source in hermes
       priorsData: { ranking: [] },
     }
   );
-  assert.equal(selection.chosen, null);
-  assert.equal(selection.refused, 'NO_REASONING_CANDIDATE');
-  assert.ok(
-    selection.reason.includes('CONTEXT_WINDOW_UNVERIFIED'),
-    `Reason must report CONTEXT_WINDOW_UNVERIFIED: ${selection.reason}`
-  );
+  assert.ok(selection.candidate, 'unknown context stays eligible');
+  assert.equal(selection.candidate.contextWindow, undefined);
 
   // When documented in hermes model catalogue, verified context window is attached
   const documentedCandidates = hermesSessionApi.assembleOpenAiCodexCandidates(
