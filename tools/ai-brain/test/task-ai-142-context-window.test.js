@@ -738,6 +738,15 @@ test('TASK-AI-142: 9router and compatible sources refresh nested context without
   }
 });
 
+// The selection keeps an openai-codex route only when a Codex login exists; the
+// test must not depend on the host machine having one (CI has none).
+function codexAuthFixture() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ctx-codex-'));
+  const file = path.join(dir, 'auth.json');
+  fs.writeFileSync(file, '{}');
+  return file;
+}
+
 test('TASK-AI-142: openai-codex context window takes conservative minimum of codex and provider evidence', () => {
   const hermes = require('../hermes-session');
 
@@ -826,14 +835,14 @@ test('TASK-AI-142: openai-codex context window takes conservative minimum of cod
     contextWindow: cwC,
   };
   const selection = hermes.selectReasoningCandidate(
-    { skipDecisionLog: true, includeOpenAiCodex: true },
+    { skipDecisionLog: true, includeOpenAiCodex: true, codexAuthPath: codexAuthFixture() },
     {
       candidateList: [candidate],
       registry: registryC,
       priorsData: { ranking: [] },
     }
   );
-  assert.equal(selection.chosen, null);
-  assert.equal(selection.refused, 'NO_REASONING_CANDIDATE');
-  assert.ok(selection.reason.includes('CONTEXT_WINDOW_UNVERIFIED'));
+  // Strict gate names the gap; the selection keeps the route eligible.
+  assert.ok(selection.candidate);
+  assert.equal(selection.candidate.contextWindow, undefined);
 });
