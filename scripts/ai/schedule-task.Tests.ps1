@@ -119,6 +119,13 @@ try {
         $goalArgs = & $scriptUnderTest -TaskName $testTaskName -TaskPath $testTaskPath -Action Register -Trigger Periodic -IntervalMinutes 10 -ControllerAction GoalResume -GoalId TEST-GOAL -WorkingDirectory $goalWork *>&1 | Out-String -Width 4096
         Assert-Condition "GoalResume runs goal-resume.ps1 with the goal and working directory" ($goalArgs -match "goal-resume\.ps1" -and $goalArgs -match "-GoalId TEST-GOAL" -and $goalArgs.Contains($goalWork))
 
+        # 14b. A registered GoalResume task has no execution time limit (the Controller bounds its own runs)
+        $regGoal = & $scriptUnderTest -TaskName $testTaskName -TaskPath $testTaskPath -Action Register -Trigger Periodic -IntervalMinutes 10 -ControllerAction GoalResume -GoalId TEST-GOAL -WorkingDirectory $goalWork -Apply 6>$null
+        Assert-Condition "Registered GoalResume task" ($regGoal.Applied -eq $true)
+        $goalTask = Get-ScheduledTask -TaskName $testTaskName -TaskPath $testTaskPath
+        Assert-Condition "GoalResume task has no execution time limit" ($goalTask.Settings.ExecutionTimeLimit -eq "PT0S")
+        $null = & $scriptUnderTest -TaskName $testTaskName -TaskPath $testTaskPath -Action Unregister -Apply
+
         # 15. goal-resume.ps1 appends a status block using the injected node command
         $stub = Join-Path $goalWork "fake-node.cmd"
         Set-Content -LiteralPath $stub -Value "@echo stub %3 %4" -Encoding ASCII

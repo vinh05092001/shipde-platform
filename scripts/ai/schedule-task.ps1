@@ -178,11 +178,14 @@ function Register-ShipDeScheduledTask {
         }
     }
 
+    # A goal run is bounded by the Controller's own worker timeouts; the scheduler
+    # must not kill it mid-run. Zero means no limit in Task Scheduler.
+    $executionLimit = if ($ControllerAction -eq "GoalResume") { [TimeSpan]::Zero } else { New-TimeSpan -Hours 2 }
     $taskSettings = New-ScheduledTaskSettingsSet `
         -AllowStartIfOnBatteries `
         -DontStopIfGoingOnBatteries `
         -StartWhenAvailable `
-        -ExecutionTimeLimit (New-TimeSpan -Hours 2)
+        -ExecutionTimeLimit $executionLimit
 
     $taskPrincipal = New-ScheduledTaskPrincipal `
         -UserId $env:USERNAME `
