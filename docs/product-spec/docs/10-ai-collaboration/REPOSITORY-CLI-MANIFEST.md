@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This manifest is the complete inventory for preparing the Ship Dễ build environment. It separates source workspaces, machine-wide CLI tools, project dependencies, Docker services and agent guidance so that tools are installed once in the correct place and every agent sees the same repository state.
+This manifest is the complete inventory for preparing the Ship Dễ build environment. It separates source workspaces, machine-wide CLI tools, project dependencies, Docker services and agent guidance so that tools are installed once in the correct place and every agent sees the same repository state. Integration lifecycle states and the evidence each one requires follow the five-state contract in `REPO-INTEGRATION-EVIDENCE.md`; `tools/ai-brain/data/tool-manifest.json` is the machine-readable inventory that records, per tool, whether this repository can prove the tool is installed (`installed: true` with a real `evidenceRef`) or only declared (`installed: false`).
 
 ## Installation rule
 
@@ -109,4 +109,5 @@ Repository and CLI preparation is complete only when:
 3. `docker compose version`, `gh auth status`, Gemini/Antigravity sign-in, Codex ChatGPT sign-in and the Claude/AgentRouter launcher succeed;
 4. 9Router and DSH complete the approved `SHIPDE_OK` model smoke test without exposing the key;
 5. installed versions are recorded by `doctor.ps1`, and no CLI is auto-upgraded during an active Work Item;
-6. project-level repositories are introduced only by their assigned Foundation Pull Request with CI evidence.
+6. project-level repositories are introduced only by their assigned Foundation Pull Request with CI evidence;
+7. every adopted repository or tool is recorded in `tool-manifest.json` with a boolean `installed` and an `evidenceRef` naming a real repository file, and every gate (`gate: true`) either has a runnable command or is marked `blocked: true` with a reason, per the five-state contract in `REPO-INTEGRATION-EVIDENCE.md`.
