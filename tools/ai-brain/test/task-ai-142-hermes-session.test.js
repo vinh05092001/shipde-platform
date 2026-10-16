@@ -527,6 +527,42 @@ test('H2-03: candidate selection respects forbiddenFailureDomains and excludedCa
   }
 });
 
+test('H3 live: source headers reach Hermes custom_providers with YAML quoting', () => {
+  const root = fixtureRoot('hermes-headers-');
+  try {
+    const registry = sampleRegistry();
+    const headers = { 'User-Agent': 'fixture "cli": agent', 'X-Route': 'value # tag' };
+    registry.sources[0].headers = headers;
+    const res = writeProvidersConfig(sampleCandidate(), { rootDir: root }, { registry });
+    const content = fs.readFileSync(res.configPath, 'utf8');
+    const custom = content.slice(content.indexOf('custom_providers:'));
+    assert.ok(custom.includes('    extra_headers:\n'));
+    for (const [key, value] of Object.entries(headers)) {
+      assert.ok(custom.includes(`      ${JSON.stringify(key)}: ${JSON.stringify(value)}\n`));
+    }
+    assert.equal(fs.readFileSync(res.legacyConfigPath, 'utf8'), content);
+    assert.deepEqual(res.headers, headers);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('H3 live: absent or empty source headers leave YAML unchanged', () => {
+  const root = fixtureRoot('hermes-no-headers-');
+  try {
+    const registry = sampleRegistry();
+    const res = writeProvidersConfig(sampleCandidate(), { rootDir: root }, { registry });
+    const before = fs.readFileSync(res.configPath, 'utf8');
+    assert.ok(!before.includes('extra_headers'));
+    assert.ok(before.endsWith('    key_env: "NINEROUTER_API_KEY"\n'));
+    registry.sources[0].headers = {};
+    writeProvidersConfig(sampleCandidate(), { rootDir: root }, { registry });
+    assert.equal(fs.readFileSync(res.configPath, 'utf8'), before);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('H2-04: writeProvidersConfig writes data/hermes/config.yaml with base_url and env var NAME only (no secrets)', async () => {
   const root = fixtureRoot('hermes-cfg-');
   try {
