@@ -3845,9 +3845,20 @@ function buildQualificationCandidates(rootDir) {
     .sort((a, b) => b.mtimeMs - a.mtimeMs);
   if (intakeRuns.length === 0) return [];
   const catalogue = [];
+  const sourceModels = {};
   const inputAccounts = [];
   for (const intakeRun of intakeRuns) {
     const runDir = path.join(intakeRoot, intakeRun.name);
+    try {
+      const perSource = JSON.parse(
+        fsx.readFileSync(path.join(runDir, 'catalogue-sources.json'), 'utf8')
+      );
+      for (const [id, ids] of Object.entries(perSource || {})) {
+        if (Array.isArray(ids)) sourceModels[id] = (sourceModels[id] || []).concat(ids);
+      }
+    } catch {
+      // Older snapshots carry no per-source listing.
+    }
     try {
       catalogue.push(...JSON.parse(fsx.readFileSync(path.join(runDir, 'catalogue.json'), 'utf8')));
       inputAccounts.push(
@@ -3864,6 +3875,7 @@ function buildQualificationCandidates(rootDir) {
   const candidates = candidatesApi.generateCandidates({
     registry,
     catalogue,
+    sourceModels,
     accounts,
     externalWorkers: 'agy-pool',
     openCodeIds: accounts.flatMap((account) =>

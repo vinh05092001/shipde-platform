@@ -646,7 +646,32 @@ function generateCandidates(opts) {
               (item.modelId || item.model || item.id)
         )
       );
-      const routerCatalogue = catalogue.concat(
+      // A router only offers models it lists itself: its own live listing
+      // (options.sourceModels[id]) or its source.models. Without either, the
+      // merged catalogue is no proof, so no catalogue-derived candidate exists.
+      const ownIds = new Set();
+      const named = (m) => (typeof m === 'string' ? m : m && (m.id || m.model || m.modelId));
+      const perSource = o.sourceModels && o.sourceModels[source.id];
+      for (const m of [].concat(Array.isArray(perSource) ? perSource : [], source.models || [])) {
+        const id = named(m);
+        if (id) ownIds.add(id);
+      }
+      const ownCatalogue = catalogue.filter((item) => {
+        if (item && typeof item === 'object' && item.gateway) return item.gateway === source.id;
+        const id = named(item);
+        return Boolean(id) && ownIds.has(id);
+      });
+      const unlisted = catalogue.some(
+        (item) => !(item && typeof item === 'object' && item.gateway) && named(item)
+      );
+      if (ownIds.size === 0 && unlisted && Array.isArray(o.candidateGenerationRejections)) {
+        o.candidateGenerationRejections.push({
+          modelId: '',
+          sourceId: source.id,
+          reasonCode: 'ROUTER_LISTING_UNKNOWN',
+        });
+      }
+      const routerCatalogue = ownCatalogue.concat(
         (source.models || [])
           .map((model) => ({
             modelId: typeof model === 'string' ? model : model && (model.id || model.model),
