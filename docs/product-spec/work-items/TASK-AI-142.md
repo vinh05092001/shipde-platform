@@ -356,6 +356,10 @@ Selection logs retain the full chosenCandidate, the existing chosen identity, to
 
 Verification: sequential TASK-AI-141 199/199, TASK-AI-142 136/136, TASK-AI-64 129/129, dispatch-wiring 7/7 and decisions 28/28 passed. Additional candidate/routing regressions passed 74/74. Changed JavaScript passes ESLint no-undef; changed files pass Prettier and git diff --check. Live logs remain untouched and runtime data is excluded from commits.
 
+### H3 live: a CLI login binding is not test evidence (2026-10-16)
+
+After the dry-run moved to rankForProfile (#343), the reviewer pick crashed (`evidence.filter is not a function`) because the auto-bound Codex CLI candidate carried the string `cli-login` in `evidence`, the list of test results. The binding stays in `binding`; `evidence` is no longer overwritten, so review-call gets a ranked reviewer again.
+
 ### H3 live: every operator key reaches a probed source (2026-10-16)
 
 InternLM keys now resolve to the OpenAI-compatible endpoint https://chat.intern-ai.org.cn/api/v1, and TENCENT_TOKENHUB_BASE_URL (trailing slash stripped) is the endpoint of the Tencent TokenHub key. AgentRouter declares its required CLI User-Agent as data on the endpoint table entry, and the probe sends any declared source headers (carried into the registry source entry). Intake refreshes discovery plus probe automatically when the discovered file is missing or an env key that discovery maps to a source has no entry.

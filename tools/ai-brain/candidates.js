@@ -819,7 +819,8 @@ function generateCandidates(opts) {
                 capabilities: acc.capabilities || {},
                 cost: acc.cost,
                 sharedQuota: 'unknown',
-                ...(acc.binding ? { binding: acc.binding, evidence: acc.evidence } : {}),
+                // The binding is provenance; candidate.evidence is the list of test results.
+                ...(acc.binding ? { binding: acc.binding } : {}),
               });
             }
           }
