@@ -606,6 +606,7 @@ async function buildCatalogue(deps) {
   const sourceStatus = {};
   const models = new Set();
   const metaByModelId = {};
+  const sourceModels = {};
   for (const collector of collectors) {
     let result;
     try {
@@ -616,6 +617,7 @@ async function buildCatalogue(deps) {
     if (result && result.ok) {
       sourceStatus[collector.name] = 'ok';
       for (const model of result.models || []) if (model) models.add(model);
+      sourceModels[collector.name] = (result.models || []).filter(Boolean);
       if (result.modelMeta && typeof result.modelMeta === 'object') {
         Object.assign(metaByModelId, result.modelMeta);
       }
@@ -648,11 +650,12 @@ async function buildCatalogue(deps) {
       Object.assign(metaByModelId, source.modelMeta);
     }
     for (const model of source.models) if (model) models.add(String(model));
+    sourceModels[source.id] = source.models.filter(Boolean).map(String);
   }
-  return normalizeCatalogue([...models], warnings, sourceStatus, metaByModelId);
+  return normalizeCatalogue([...models], warnings, sourceStatus, metaByModelId, sourceModels);
 }
 
-function normalizeCatalogue(models, warnings, sourceStatus, modelMeta) {
+function normalizeCatalogue(models, warnings, sourceStatus, modelMeta, sourceModels) {
   const list = [...new Set(models.filter((model) => model))].sort();
   if (list.length === 0) {
     throw intakeError(
@@ -677,6 +680,8 @@ function normalizeCatalogue(models, warnings, sourceStatus, modelMeta) {
     modelMeta: meta,
     warnings: warnings || [],
     sourceStatus: sourceStatus || {},
+    // Each source's own listing, so a router never claims another gateway's ids.
+    sourceModels: sourceModels && typeof sourceModels === 'object' ? sourceModels : {},
   };
 }
 
@@ -775,7 +780,8 @@ async function resolveCatalogue(deps) {
     value.models || [],
     value.warnings,
     value.sourceStatus,
-    value.modelMeta
+    value.modelMeta,
+    value.sourceModels
   );
 }
 
@@ -1272,6 +1278,10 @@ async function runIntake(opts, deps) {
     JSON.stringify(resolvedDependencies, null, 2)
   );
   fs.writeFileSync(path.join(runDir, 'catalogue.json'), JSON.stringify(catalogue.models, null, 2));
+  fs.writeFileSync(
+    path.join(runDir, 'catalogue-sources.json'),
+    JSON.stringify(catalogue.sourceModels || {}, null, 2)
+  );
   fs.writeFileSync(path.join(runDir, 'accounts.json'), JSON.stringify(allAccounts, null, 2));
   const accountContributions = [];
   const intakeCandidates = require('./candidates').gatewayAccountCandidates({
