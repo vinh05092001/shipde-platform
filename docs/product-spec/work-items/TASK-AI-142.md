@@ -374,6 +374,10 @@ Selection logs retain the full chosenCandidate, the existing chosen identity, to
 
 Controller now automatically synchronizes merged GitHub Pull Requests into FEATURE-DELIVERY-REGISTER.csv on scheduling turns and control runs (`tools/ai-brain/reconcile.js`, `tools/ai-brain/next-runner.js`, `scripts/ai/control.ps1`), avoiding false dependency-blocked states without manual edits. Goal Work Item rows and specs are preserved across isolation boundaries (`tools/ai-brain/isolation-launcher.js`) and excluded from `validate_docs.py` core feature catalog audits, allowing goal PRs to satisfy single Work Item contracts. Pre-writer pinpointing (`tools/ai-brain/pinpoint.js`, `tools/ai-brain/prompt-compiler.js`) extracts explicit file:line targets and keyword clusters across allowed paths before dispatch, cutting codebase exploration tokens.
 
+### H3 live: goal rows pass the documentation validator (2026-10-16)
+
+PR #356 [GOAL-AUTOCLAW-REPOS-1] failed CI validate/contract with `feature-register-extra: GOAL-AUTOCLAW-REPOS`: the delivery-register check treated Controller goal rows as product features missing from the catalogue. validate_docs.py now excludes GOAL-* feature ids from that check and validate_pr_contract.py counts docs/product-spec/work-items/GOAL-*.md as Work Item files (from the Antigravity item 8 change, split out so item 1 can merge).
+
 ### H3 live: the PR contract accepts Controller goal Work Items (2026-10-16)
 
 PR #356 [GOAL-AUTOCLAW-REPOS-1] (Hermes-coded, review PASS, ai-brain-tests green) failed the contract gate because the title rule only knew FEAT-*, TASK-FOUND-* and TASK-AI-*, so no goal item the Controller plans could ever be published. validate_pr_contract.py and AGENTS.md now also accept GOAL-<GOAL>-<n>.
