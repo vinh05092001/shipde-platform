@@ -1193,15 +1193,14 @@ function scoreForProfile(candidate, assessment, ctx) {
       ? assessment.weights.cost
       : 33;
 
-  // Hermes opts into known-dimension normalization; retain the established
-  // fixed-weight contract for existing writer/reviewer assessments.
+  // Renormalize over known dimensions so unknown sub-scores (e.g. unpriced
+  // candidates or unmeasured latency) do not penalize candidates against
+  // known or free models.
   const totalWeight =
-    assessment && assessment.renormalizeKnownScores
-      ? (quality !== null ? wQuality : 0) +
-        (reliability !== null ? wReliability : 0) +
-        (latency !== null ? wLatency : 0) +
-        (cost !== null ? wCost : 0)
-      : wQuality + wReliability + wLatency + wCost;
+    (quality !== null ? wQuality : 0) +
+    (reliability !== null ? wReliability : 0) +
+    (latency !== null ? wLatency : 0) +
+    (cost !== null ? wCost : 0);
 
   let total = 0;
   if (quality !== null) total += wQuality * quality;
@@ -1222,7 +1221,7 @@ function scoreForProfile(candidate, assessment, ctx) {
   // A scored prior is already blended into quality above. Only legacy priors
   // without a numeric score retain the standalone tier bonus.
   const weightedPriorContribution =
-    effectivePriorUsable && priorHasScore
+    effectivePriorUsable && priorHasScore && totalWeight > 0
       ? Math.round((prior.bonus * priorQualityWeight * wQuality) / totalWeight)
       : effectivePriorUsable
         ? prior.bonus
