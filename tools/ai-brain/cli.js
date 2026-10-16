@@ -4083,6 +4083,19 @@ function main(argv = process.argv.slice(2), deps = {}) {
     return;
   }
 
+  if (command === 'agy-gateway') {
+    require('./agy-gateway')
+      .start({ port: args.port ? Number(args.port) : undefined })
+      .then((srv) =>
+        console.log(`agy-gateway listening on http://127.0.0.1:${srv.address().port}/v1`)
+      )
+      .catch((err) => {
+        console.error(err.message);
+        process.exitCode = 1;
+      });
+    return;
+  }
+
   if (command === 'reconcile') return reconcileCommand(args);
   if (command === 'report' && args._[1] === 'tokens') return tokenReportCommand(args);
   if (command === 'manifest') return manifestCommand(args);

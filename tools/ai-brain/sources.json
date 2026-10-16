@@ -161,6 +161,17 @@
       "verify": { "method": "none" }
     },
     {
+      "id": "agy-gateway",
+      "label": "Agy Pool Gateway",
+      "kind": "router",
+      "servesModels": true,
+      "harness": "hermes",
+      "endpoint": "http://127.0.0.1:20140/v1",
+      "credential": { "type": "api-key", "env": "AGY_GATEWAY_TOKEN" },
+      "verify": { "method": "models-list", "path": "/models" },
+      "comment": "OpenAI-compatible gateway over the agy pool (tools/ai-brain/agy-gateway.js). Its models are the live pool list; tool calls are emulated as JSON, one agy session per turn."
+    },
+    {
       "id": "paseo",
       "label": "Paseo",
       "kind": "orchestrator",

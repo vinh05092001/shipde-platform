@@ -170,6 +170,44 @@ function runAdapter(accountId, options) {
   };
 }
 
+function pidAlive(pid) {
+  if (!pid || typeof pid !== 'number') return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return Boolean(err && err.code === 'EPERM');
+  }
+}
+
+/** Atomic cross-process claim of one account. Returns a release fn, or null when held. */
+function acquireAccountLock(dir) {
+  const lockFile = path.join(dir, 'job.lock');
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const fd = fs.openSync(lockFile, 'wx');
+      fs.writeSync(fd, JSON.stringify({ pid: process.pid, startedAt: Date.now() }));
+      fs.closeSync(fd);
+      return () => {
+        try {
+          fs.unlinkSync(lockFile);
+        } catch {}
+      };
+    } catch (err) {
+      if (!err || err.code !== 'EEXIST') throw err;
+      let holder = null;
+      try {
+        holder = readJson(lockFile);
+      } catch {}
+      if (holder && pidAlive(holder.pid)) return null;
+      try {
+        fs.unlinkSync(lockFile); // stale: holder is dead or the file is unreadable
+      } catch {}
+    }
+  }
+  return null;
+}
+
 function submitJob(accountId, job, options) {
   if (!isValidAccountId(accountId)) {
     return { state: 'error', exitCode: 1, reason: 'INVALID_ACCOUNT_ID' };
@@ -177,6 +215,16 @@ function submitJob(accountId, job, options) {
   const opts = options || {};
   const dir = exp.accountDir(accountId, opts);
   fs.mkdirSync(dir, { recursive: true });
+  const release = acquireAccountLock(dir);
+  if (!release) return { state: 'busy', exitCode: 1, reason: 'POOL_ACCOUNT_BUSY' };
+  try {
+    return submitLocked(accountId, job, opts, dir);
+  } finally {
+    release();
+  }
+}
+
+function submitLocked(accountId, job, opts, dir) {
   const resultFile = path.join(dir, 'result.json');
   const startedAt = Date.now();
   fs.writeFileSync(path.join(dir, 'job.json'), JSON.stringify(job, null, 2), 'utf8');
