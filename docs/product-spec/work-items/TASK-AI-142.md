@@ -641,3 +641,8 @@ When an upstream probe got no response (httpStatus 0, e.g. network glitch, socke
 - `probeCooldownMs` in `route-health.js` assigns short cooldown (0.5 hours / 30 min) to `ROUTE_UNAVAILABLE`, `TIMEOUT`, and `PROBE_NO_RESPONSE`. Only permanent non-existent models (`HTTP_404`, `ALIAS_MISMATCH`) receive 24 hours.
 - When status is 0 in `rememberProbe`, it is strictly scoped to that specific candidate route/model path record, never setting a provider-level or account-level cooldown.
 - Evidence: `tools/ai-brain/test/task-ai-142-probe-transient.test.js` and updated `task-ai-142-probe-memory.test.js`.
+
+### H3 live: detect 413 request loops and fix progress stall detection (2026-10-16)
+
+When a model route encountered HTTP 413 (Payload Too Large / context length exceeded) or tokens-per-minute (TPM) rate limits, the worker process previously remained unclassified or hung until the launcher timeout (30 minutes). The isolation launcher now monitors worker event streams and output for HTTP 413 / Request Too Large / TPM limit signals and aborts immediately with failure reason `REQUEST_TOO_LARGE` (mapped to model scope with 15-minute cooldown in `failure-classifier.js` and `orchestrate.js`), allowing the Controller to switch to an alternative model immediately. Furthermore, stall detection (`STALLED_NO_PROGRESS`) now counts progress only on genuine worktree file signature changes, verified tool use events (`tool_use`), or monotonically increasing cumulative token usage across the session, preventing fluctuating per-step token usage from resetting the progress timer.
+

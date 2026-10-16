@@ -5052,6 +5052,11 @@ async function runOrchestration(goal, opts) {
             launchClassification.cause = 'STALLED_NO_PROGRESS';
             launch.fallbackReason = 'STALLED_NO_PROGRESS';
             launch.cause = 'STALLED_NO_PROGRESS';
+          } else if (res && res.failureReason === 'REQUEST_TOO_LARGE') {
+            launchClassification.scope = 'model';
+            launchClassification.cause = 'REQUEST_TOO_LARGE';
+            launch.fallbackReason = 'REQUEST_TOO_LARGE';
+            launch.cause = 'REQUEST_TOO_LARGE';
           }
           if (res && Array.isArray(res.hostGateFailures)) {
             launchClassification.scope = 'local';
@@ -5461,6 +5466,11 @@ async function runOrchestration(goal, opts) {
           classification.cause = 'STALLED_NO_PROGRESS';
           launch.fallbackReason = 'STALLED_NO_PROGRESS';
         }
+        if (res && res.failureReason === 'REQUEST_TOO_LARGE') {
+          classification.scope = 'model';
+          classification.cause = 'REQUEST_TOO_LARGE';
+          launch.fallbackReason = 'REQUEST_TOO_LARGE';
+        }
         if (progressStalled) {
           classification.scope = 'local';
           classification.cause = 'STALLED_NO_PROGRESS';
@@ -5491,7 +5501,8 @@ async function runOrchestration(goal, opts) {
         launch.outcome = 'failed';
         if (
           classification.cause === 'TOKEN_BUDGET_EXCEEDED' ||
-          classification.cause === 'STALLED_NO_PROGRESS'
+          classification.cause === 'STALLED_NO_PROGRESS' ||
+          classification.cause === 'REQUEST_TOO_LARGE'
         ) {
           launch.fallbackReason = classification.cause;
         }
