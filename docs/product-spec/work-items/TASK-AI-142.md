@@ -356,6 +356,10 @@ Selection logs retain the full chosenCandidate, the existing chosen identity, to
 
 Verification: sequential TASK-AI-141 199/199, TASK-AI-142 136/136, TASK-AI-64 129/129, dispatch-wiring 7/7 and decisions 28/28 passed. Additional candidate/routing regressions passed 74/74. Changed JavaScript passes ESLint no-undef; changed files pass Prettier and git diff --check. Live logs remain untouched and runtime data is excluded from commits.
 
+### H3 live: a scheduled task resumes the goal without a model call (2026-10-16)
+
+`schedule-task.ps1 -ControllerAction GoalResume -GoalId <id>` registers a Windows task that runs `scripts/ai/goal-resume.ps1` in the Controller worktree: it loads the user environment, runs `goal resume` (which refuses to start a second run while one is active) and appends `goal status` to `data/goals/<id>/scheduled-status.log`. No model is called. Operator command: `schedule-task.ps1 -Action Register -Trigger Periodic -IntervalMinutes 10 -ControllerAction GoalResume -GoalId AUTOCLAW-REPOS -WorkingDirectory <hermes-live> -TaskName ShipDe-Goal-Resume -Apply`.
+
 ### H3 live: agy pool schema failures retain redacted diagnostics (2026-10-16)
 
 On origin/main d9982a32, a fresh writer dispatch dry-run produced 147 pool candidates, with no CAPABILITY_MISSING:tools rejection (36 quota exclusions and 111 NOT_SELECTED). Per the operator assignment, capability composition is unchanged. A failed pool schema probe now carries its state, reason, exit code and last 20 non-empty output lines through jsonSchemaEvidence.detail into the routing rejection, using createSecretRedactor. The new fixture failed on main with missing detail; the repaired writer-jsonschema suite passes 12/12. Dry-run snapshots are task4-before-decision.json and task4-after-decision.json under .worktrees/logs/night; live pool execution is not claimed.

@@ -17,7 +17,7 @@ param(
 
     [int]$IntervalMinutes = 10,
 
-    [ValidateSet("Resume", "Supervise", "Doctor", "Menu")]
+    [ValidateSet("Resume", "Supervise", "Doctor", "Menu", "GoalResume")]
     [string]$ControllerAction = "Resume",
 
     [string]$AiRoot = (Join-Path $env:USERPROFILE "AI"),
@@ -25,6 +25,8 @@ param(
     [string]$WorkingDirectory = $null,
 
     [string]$TargetScript = $null,
+
+    [string]$GoalId = $null,
 
     [ValidateSet("Limited", "Highest")]
     [string]$RunLevel = "Limited",
@@ -56,11 +58,19 @@ if ([string]::IsNullOrWhiteSpace($WorkingDirectory)) {
     }
 }
 
-if ([string]::IsNullOrWhiteSpace($TargetScript)) {
-    $TargetScript = Join-Path $WorkingDirectory "scripts\ai\control.ps1"
+if ($ControllerAction -eq "GoalResume") {
+    # Resumes one goal through the Controller (no model call); see goal-resume.ps1.
+    if ([string]::IsNullOrWhiteSpace($GoalId)) { throw "-GoalId is required for -ControllerAction GoalResume" }
+    if ([string]::IsNullOrWhiteSpace($TargetScript)) {
+        $TargetScript = Join-Path $WorkingDirectory "scripts\ai\goal-resume.ps1"
+    }
+    $arguments = "-NonInteractive -ExecutionPolicy Bypass -File `"$TargetScript`" -GoalId $GoalId -WorkDir `"$WorkingDirectory`""
+} else {
+    if ([string]::IsNullOrWhiteSpace($TargetScript)) {
+        $TargetScript = Join-Path $WorkingDirectory "scripts\ai\control.ps1"
+    }
+    $arguments = "-NonInteractive -ExecutionPolicy Bypass -File `"$TargetScript`" -Action $ControllerAction"
 }
-
-$arguments = "-NonInteractive -ExecutionPolicy Bypass -File `"$TargetScript`" -Action $ControllerAction"
 
 function Get-ShipDeScheduledTaskStatus {
     param(
