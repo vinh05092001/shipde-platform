@@ -378,6 +378,10 @@ Live decisions at 16:35 rejected 5581 Hermes routes with `CONTEXT_WINDOW_UNVERIF
 
 An unreported context window no longer excludes a candidate. When neither source metadata nor the catalog gives a window, the Hermes gate and the writer ranking keep the route eligible (`contextRefusal(..., { allowUnknown: true })`) and ranking subtracts `UNKNOWN_EVIDENCE_PENALTY` (15, the value already used for unknown quota headroom, now one named constant) as `breakdown.contextPenalty`, so it ranks after an otherwise equal route with a known window. A KNOWN window below 32000 still refuses with `CONTEXT_TOO_SMALL`. When a launched run fails because the request exceeded the model context (`maximum context length`, `context_length_exceeded`, `too many tokens`, `prompt is too long`; the per-minute TPM 413 is excluded), `route-health` records `contextOverflowObserved` and any reported `observedContextLimit` on that model's path, and later Hermes brain and writer selections reject it with `CONTEXT_OVERFLOW_OBSERVED`.
 
+### H3 live: the PR contract accepts Controller goal Work Items (2026-10-16)
+
+PR #356 [GOAL-AUTOCLAW-REPOS-1] (Hermes-coded, review PASS, ai-brain-tests green) failed the contract gate because the title rule only knew FEAT-*, TASK-FOUND-* and TASK-AI-*, so no goal item the Controller plans could ever be published. validate_pr_contract.py and AGENTS.md now also accept GOAL-<GOAL>-<n>.
+
 ### H3 live: the agy gateway returns the answer, not the agy envelope (2026-10-16)
 
 A live call through the gateway (16/10 16:45, gemini-3.8-flash-low via the pool, HTTP 200 in 17 s) returned the raw agy JSON envelope (`{"status":"SUCCESS","response":"ok\n",...}`) as the message content and no usage. The gateway now unwraps `response` as the content and maps the agy usage (input + cache read, output + thinking, total) to an OpenAI usage object; plain-text output passes through.
