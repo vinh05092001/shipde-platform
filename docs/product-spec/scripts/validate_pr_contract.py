@@ -13,7 +13,10 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-WORK_ITEM_PATTERN = re.compile(r"\b(?:FEAT-[A-Z0-9-]+|TASK-FOUND-[0-9]+|TASK-AI-[0-9]+)\b")
+# GOAL-<GOAL>-<n> ids are the Work Items the Controller plans for a goal.
+WORK_ITEM_PATTERN = re.compile(
+    r"\b(?:FEAT-[A-Z0-9-]+|TASK-FOUND-[0-9]+|TASK-AI-[0-9]+|GOAL-[A-Z0-9]+(?:-[A-Z0-9]+)*-[0-9]+)\b"
+)
 REQUIRED_HEADINGS = [
     "## Work Item",
     "## Source requirements",
@@ -56,7 +59,7 @@ def main() -> int:
 
     title_ids = WORK_ITEM_PATTERN.findall(title)
     if len(title_ids) != 1:
-        errors.append("PR title must contain exactly one FEAT-*, TASK-FOUND-* or TASK-AI-* Work Item ID")
+        errors.append("PR title must contain exactly one FEAT-*, TASK-FOUND-*, TASK-AI-* or GOAL-*-N Work Item ID")
     work_item_id = title_ids[0] if len(title_ids) == 1 else ""
 
     for heading in REQUIRED_HEADINGS:

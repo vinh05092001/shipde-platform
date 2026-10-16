@@ -372,6 +372,10 @@ Selection logs retain the full chosenCandidate, the existing chosen identity, to
 
 Verification: sequential TASK-AI-141 199/199, TASK-AI-142 136/136, TASK-AI-64 129/129, dispatch-wiring 7/7 and decisions 28/28 passed. Additional candidate/routing regressions passed 74/74. Changed JavaScript passes ESLint no-undef; changed files pass Prettier and git diff --check. Live logs remain untouched and runtime data is excluded from commits.
 
+### H3 live: the PR contract accepts Controller goal Work Items (2026-10-16)
+
+PR #356 [GOAL-AUTOCLAW-REPOS-1] (Hermes-coded, review PASS, ai-brain-tests green) failed the contract gate because the title rule only knew FEAT-*, TASK-FOUND-* and TASK-AI-*, so no goal item the Controller plans could ever be published. validate_pr_contract.py and AGENTS.md now also accept GOAL-<GOAL>-<n>.
+
 ### H3 live: the agy gateway returns the answer, not the agy envelope (2026-10-16)
 
 A live call through the gateway (16/10 16:45, gemini-3.8-flash-low via the pool, HTTP 200 in 17 s) returned the raw agy JSON envelope (`{"status":"SUCCESS","response":"ok\n",...}`) as the message content and no usage. The gateway now unwraps `response` as the content and maps the agy usage (input + cache read, output + thinking, total) to an OpenAI usage object; plain-text output passes through.
