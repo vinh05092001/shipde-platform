@@ -293,6 +293,101 @@ function resolveCandidateContextMeta(candidate, registry) {
   };
 }
 
+/**
+ * Resolves per-model capabilities for a candidate.
+ * Router/gateway accounts cannot declare blanket capabilities (such as a 200k
+ * context window) for arbitrary upstream models. Capabilities derive from
+ * the model itself (modelMeta, catalogue entry, or account model row),
+ * preventing models with smaller context windows (e.g. Groq 120b) from falsely
+ * bypassing context requirements.
+ */
+function resolveCandidateCapabilities(acc, modelId, opts = {}) {
+  const { item, row, source, routerSource, innerId } = opts;
+  const isGatewayRoute = Boolean(
+    (source && source.kind === 'router') || (source && source.reachedVia)
+  );
+
+  const baseCaps = Object.assign({}, (acc && acc.capabilities) || {});
+  if (isGatewayRoute) {
+    // Gateway accounts cannot grant blanket context window to unverified models
+    delete baseCaps.contextWindow;
+  }
+
+  // 1. Model metadata from item (catalogue)
+  let contextWindow = undefined;
+  if (
+    item &&
+    typeof item === 'object' &&
+    (item.contextWindow !== undefined ||
+      (item.capabilities && item.capabilities.contextWindow !== undefined))
+  ) {
+    contextWindow = toPositiveInteger(
+      item.contextWindow !== undefined
+        ? item.contextWindow
+        : item.capabilities && item.capabilities.contextWindow
+    );
+  }
+
+  // 2. Model metadata from account row
+  if (contextWindow === undefined && row && typeof row === 'object') {
+    if (
+      row.contextWindow !== undefined ||
+      (row.capabilities && row.capabilities.contextWindow !== undefined)
+    ) {
+      contextWindow = toPositiveInteger(
+        row.contextWindow !== undefined
+          ? row.contextWindow
+          : row.capabilities && row.capabilities.contextWindow
+      );
+    }
+  }
+
+  // 3. Model metadata from source / routerSource modelMeta
+  const metaLookup = (src) => {
+    if (!src || !src.modelMeta) return null;
+    if (src.modelMeta[modelId]) return src.modelMeta[modelId];
+    if (innerId && src.modelMeta[innerId]) return src.modelMeta[innerId];
+    if (typeof modelId === 'string' && modelId.includes('/')) {
+      const stripped = modelId.slice(modelId.indexOf('/') + 1);
+      if (src.modelMeta[stripped]) return src.modelMeta[stripped];
+      if (stripped.includes('/')) {
+        const strippedAgain = stripped.slice(stripped.indexOf('/') + 1);
+        if (src.modelMeta[strippedAgain]) return src.modelMeta[strippedAgain];
+      }
+    }
+    return null;
+  };
+  const meta = metaLookup(source) || metaLookup(routerSource);
+  if (contextWindow === undefined && meta && meta.contextWindow !== undefined) {
+    contextWindow = toPositiveInteger(meta.contextWindow);
+  }
+
+  const finalCaps = Object.assign({}, baseCaps);
+  if (item && typeof item === 'object' && item.capabilities) {
+    Object.assign(finalCaps, item.capabilities);
+  }
+  if (row && typeof row === 'object' && row.capabilities) {
+    Object.assign(finalCaps, row.capabilities);
+  }
+  if (meta) {
+    if (meta.tools !== undefined) finalCaps.tools = meta.tools;
+    if (meta.jsonSchema !== undefined) finalCaps.jsonSchema = meta.jsonSchema;
+  }
+
+  if (contextWindow !== undefined) {
+    finalCaps.contextWindow = contextWindow;
+  } else if (isGatewayRoute) {
+    delete finalCaps.contextWindow;
+  }
+
+  return {
+    capabilities: finalCaps,
+    contextWindow,
+    maxOutputTokens: meta ? toPositiveInteger(meta.maxOutputTokens) : undefined,
+    contextSource: meta ? meta.contextSource : undefined,
+  };
+}
+
 function openAiCompatibleCandidates(opts) {
   const o = opts || {};
   const registry = o.registry || sourcesApi.loadSources(o.sourceOpts);
@@ -418,7 +513,13 @@ function openAiCompatibleCandidates(opts) {
 
       if (bound.length > 0) {
         for (const acc of bound) {
-          const accCaps = Object.assign({}, acc.capabilities || {}, caps);
+          const accCaps = Object.assign({}, acc.capabilities || {});
+          if (gateway || source.kind === 'router' || source.reachedVia) {
+            delete accCaps.contextWindow;
+          }
+          if (contextWindow !== undefined) {
+            accCaps.contextWindow = contextWindow;
+          }
           const c = {
             harness,
             accessPath: endpoint,
@@ -568,6 +669,11 @@ function generateCandidates(opts) {
         )
           continue;
         if (sharedArc) {
+          const { capabilities: caps, contextWindow } = resolveCandidateCapabilities(null, fullId, {
+            item,
+            source,
+            innerId: resolved.innerModelId,
+          });
           candidates.push({
             harness,
             accessPath,
@@ -581,10 +687,17 @@ function generateCandidates(opts) {
             endpoint: source.endpoint,
             sourceEndpoint: source.endpoint,
             kind: source.kind,
+            capabilities: caps,
+            contextWindow,
             sharedQuota: 'unknown',
           });
         } else {
           for (const acc of bound) {
+            const { capabilities: caps, contextWindow } = resolveCandidateCapabilities(
+              acc,
+              fullId,
+              { item, source, innerId: resolved.innerModelId }
+            );
             candidates.push({
               harness,
               accessPath,
@@ -598,7 +711,8 @@ function generateCandidates(opts) {
               endpoint: source.endpoint,
               sourceEndpoint: source.endpoint,
               kind: source.kind,
-              capabilities: acc.capabilities || {},
+              capabilities: caps,
+              contextWindow,
               cost: acc.cost,
               sharedQuota: 'unknown',
             });
@@ -616,6 +730,9 @@ function generateCandidates(opts) {
         const accessPath = accessPathOf(source, registry);
         if (!harness || !accessPath) continue;
         const prefix = source.routerAlias + '/';
+        const routerSource = source.reachedVia
+          ? registry.sources.find((s) => s.id === source.reachedVia)
+          : null;
         for (const item of catalogue) {
           const fullId =
             typeof item === 'string'
@@ -623,6 +740,11 @@ function generateCandidates(opts) {
               : (item && (item.modelId || item.model || item.id)) || '';
           if (!fullId.startsWith(prefix)) continue;
           if (sharedArc) {
+            const { capabilities: caps, contextWindow } = resolveCandidateCapabilities(
+              null,
+              fullId,
+              { item, source, routerSource }
+            );
             candidates.push({
               harness,
               accessPath,
@@ -637,10 +759,18 @@ function generateCandidates(opts) {
               sourceEndpoint: source.endpoint,
               kind: source.kind,
               reachedVia: source.reachedVia,
+              capabilities: caps,
+              contextWindow,
               sharedQuota: 'unknown',
             });
           } else {
             for (const acc of bound) {
+              const row = accountModelRow(acc, fullId) || {};
+              const { capabilities: caps, contextWindow } = resolveCandidateCapabilities(
+                acc,
+                fullId,
+                { item, row, source, routerSource }
+              );
               candidates.push({
                 harness,
                 accessPath,
@@ -655,7 +785,8 @@ function generateCandidates(opts) {
                 sourceEndpoint: source.endpoint,
                 kind: source.kind,
                 reachedVia: source.reachedVia,
-                capabilities: acc.capabilities || {},
+                capabilities: caps,
+                contextWindow,
                 cost: acc.cost,
                 sharedQuota: 'unknown',
               });
@@ -761,7 +892,20 @@ function generateCandidates(opts) {
             }
             continue;
           }
+          const innerId = String(ocId).startsWith(mp)
+            ? String(ocId).slice(mp.length)
+            : resolved.innerModelId;
+          const catItem = catalogue.find((ci) => {
+            const fid = typeof ci === 'string' ? ci : ci && (ci.modelId || ci.model || ci.id);
+            return fid === innerId || fid === ocId;
+          });
           if (sharedArc) {
+            const { capabilities: caps, contextWindow } = resolveCandidateCapabilities(null, ocId, {
+              item: catItem,
+              source,
+              routerSource,
+              innerId,
+            });
             candidates.push({
               harness,
               accessPath,
@@ -772,12 +916,19 @@ function generateCandidates(opts) {
               modelId: ocId,
               source: source.id,
               kind: source.kind,
+              capabilities: caps,
+              contextWindow,
               sharedQuota: 'unknown',
             });
           } else {
             for (const acc of bound) {
               const row =
                 accountModelRow(acc, ocId) || accountModelRow(acc, resolved.innerModelId) || {};
+              const { capabilities: caps, contextWindow } = resolveCandidateCapabilities(
+                acc,
+                ocId,
+                { item: catItem, row, source, routerSource, innerId }
+              );
               candidates.push({
                 harness,
                 accessPath,
@@ -788,7 +939,8 @@ function generateCandidates(opts) {
                 modelId: ocId,
                 source: source.id,
                 kind: source.kind,
-                capabilities: acc.capabilities || {},
+                capabilities: caps,
+                contextWindow,
                 quality: row.quality,
                 latencyMs: row.latencyMs,
                 cost: acc.cost,
@@ -801,6 +953,13 @@ function generateCandidates(opts) {
         // through OpenCode's ninerouter/ prefix.
         if (prefix) {
           for (const item of catalogue) {
+            if (
+              item &&
+              typeof item === 'object' &&
+              item.gateway &&
+              item.gateway !== source.reachedVia
+            )
+              continue;
             const fullId =
               typeof item === 'string'
                 ? item
@@ -809,6 +968,11 @@ function generateCandidates(opts) {
             if (!resolved) continue;
             const prefixed = prefix + resolved.innerModelId;
             if (sharedArc) {
+              const { capabilities: caps, contextWindow } = resolveCandidateCapabilities(
+                null,
+                prefixed,
+                { item, source, routerSource, innerId: fullId }
+              );
               candidates.push({
                 harness,
                 accessPath,
@@ -819,6 +983,8 @@ function generateCandidates(opts) {
                 modelId: prefixed,
                 source: source.id,
                 kind: source.kind,
+                capabilities: caps,
+                contextWindow,
                 sharedQuota: 'unknown',
               });
             } else {
@@ -828,6 +994,11 @@ function generateCandidates(opts) {
                   accountModelRow(acc, resolved.innerModelId) ||
                   accountModelRow(acc, fullId) ||
                   {};
+                const { capabilities: caps, contextWindow } = resolveCandidateCapabilities(
+                  acc,
+                  prefixed,
+                  { item, row, source, routerSource, innerId: fullId }
+                );
                 candidates.push({
                   harness,
                   accessPath,
@@ -838,7 +1009,8 @@ function generateCandidates(opts) {
                   modelId: prefixed,
                   source: source.id,
                   kind: source.kind,
-                  capabilities: acc.capabilities || {},
+                  capabilities: caps,
+                  contextWindow,
                   quality: row.quality,
                   latencyMs: row.latencyMs,
                   cost: acc.cost,
@@ -1743,4 +1915,5 @@ module.exports = {
   isOpenAiCompatibleSource,
   openAiCompatibleCandidates,
   resolveCandidateContextMeta,
+  resolveCandidateCapabilities,
 };
