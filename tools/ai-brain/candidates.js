@@ -293,6 +293,85 @@ function resolveCandidateContextMeta(candidate, registry) {
   };
 }
 
+// Public model catalog (models.dev) evidence. Used ONLY when the model's own
+// metadata reports no context window, so a route such as 9router, whose
+// /v1/models lists ids without limits, still gets documented evidence.
+const CATALOG_EVIDENCE = 'catalog:models.dev';
+let ambientModelCatalog;
+const catalogFileCache = new Map();
+const catalogIndexCache = new WeakMap();
+
+function catalogLeaf(id) {
+  if (typeof id !== 'string' || !id.trim()) return '';
+  const leaf = id.trim().toLowerCase().split('/').pop().split('@')[0];
+  return leaf.replace(/:[a-z0-9_-]+$/, '').replace(/[._\s]+/g, '-');
+}
+
+function loadModelCatalog(opts = {}) {
+  if (opts.modelCatalog && typeof opts.modelCatalog === 'object') return opts.modelCatalog;
+  if (ambientModelCatalog && typeof ambientModelCatalog === 'object') return ambientModelCatalog;
+  let file = opts.modelCatalogPath;
+  if (!file) {
+    try {
+      const home =
+        opts.hermesHome ||
+        require('./hermes-session').getHermesHomeDir(opts.rootDir || process.cwd());
+      file = path.join(home, 'models_dev_cache.json');
+    } catch {
+      return null;
+    }
+  }
+  try {
+    const mtime = fs.statSync(file).mtimeMs;
+    const hit = catalogFileCache.get(file);
+    if (hit && hit.mtime === mtime) return hit.data;
+    const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+    catalogFileCache.set(file, { mtime, data });
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+function catalogIndex(catalog) {
+  let index = catalogIndexCache.get(catalog);
+  if (index) return index;
+  index = new Map();
+  const providers = catalog.providers || catalog;
+  for (const provider of Object.values(providers)) {
+    const models = provider && typeof provider === 'object' ? provider.models : null;
+    if (!models || typeof models !== 'object') continue;
+    for (const [key, m] of Object.entries(models)) {
+      const leaf = catalogLeaf((m && m.id) || key);
+      if (!leaf || !m || typeof m !== 'object') continue;
+      const list = index.get(leaf) || [];
+      list.push(m);
+      index.set(leaf, list);
+    }
+  }
+  catalogIndexCache.set(catalog, index);
+  return index;
+}
+
+/**
+ * Looks a model up by its canonical leaf id (router/upstream prefixes dropped).
+ * Several providers list the same model; the most conservative window wins.
+ */
+function catalogEvidenceFor(modelId, catalog) {
+  if (!catalog || typeof catalog !== 'object') return null;
+  const matches = catalogIndex(catalog).get(catalogLeaf(modelId));
+  if (!matches) return null;
+  const windows = matches
+    .map((m) => toPositiveInteger(m.limit && m.limit.context))
+    .filter((v) => v !== undefined);
+  if (!windows.length) return null;
+  return {
+    contextWindow: Math.min(...windows),
+    tools: matches.every((m) => m.tool_call === true) ? true : undefined,
+    jsonSchema: matches.every((m) => m.structured_output === true) ? true : undefined,
+  };
+}
+
 /**
  * Resolves per-model capabilities for a candidate.
  * Router/gateway accounts cannot declare blanket capabilities (such as a 200k
@@ -362,6 +441,14 @@ function resolveCandidateCapabilities(acc, modelId, opts = {}) {
     contextWindow = toPositiveInteger(meta.contextWindow);
   }
 
+  let catalogHit = null;
+  if (contextWindow === undefined) {
+    const catalog = loadModelCatalog(opts);
+    catalogHit =
+      catalogEvidenceFor(modelId, catalog) || catalogEvidenceFor(innerId, catalog) || null;
+    if (catalogHit) contextWindow = catalogHit.contextWindow;
+  }
+
   const finalCaps = Object.assign({}, baseCaps);
   if (item && typeof item === 'object' && item.capabilities) {
     Object.assign(finalCaps, item.capabilities);
@@ -374,6 +461,14 @@ function resolveCandidateCapabilities(acc, modelId, opts = {}) {
     if (meta.jsonSchema !== undefined) finalCaps.jsonSchema = meta.jsonSchema;
   }
 
+  if (catalogHit) {
+    if (finalCaps.tools === undefined && catalogHit.tools !== undefined)
+      finalCaps.tools = catalogHit.tools;
+    if (finalCaps.jsonSchema === undefined && catalogHit.jsonSchema !== undefined)
+      finalCaps.jsonSchema = catalogHit.jsonSchema;
+    finalCaps.contextEvidence = CATALOG_EVIDENCE;
+  }
+
   if (contextWindow !== undefined) {
     finalCaps.contextWindow = contextWindow;
   } else if (isGatewayRoute) {
@@ -384,7 +479,7 @@ function resolveCandidateCapabilities(acc, modelId, opts = {}) {
     capabilities: finalCaps,
     contextWindow,
     maxOutputTokens: meta ? toPositiveInteger(meta.maxOutputTokens) : undefined,
-    contextSource: meta ? meta.contextSource : undefined,
+    contextSource: catalogHit ? CATALOG_EVIDENCE : meta ? meta.contextSource : undefined,
   };
 }
 
@@ -631,6 +726,16 @@ function pushOpencodeProviderWriters(out, source, o) {
 }
 
 function generateCandidates(opts) {
+  const previous = ambientModelCatalog;
+  ambientModelCatalog = (opts && opts.modelCatalog) || previous;
+  try {
+    return generateCandidatesWithCatalog(opts);
+  } finally {
+    ambientModelCatalog = previous;
+  }
+}
+
+function generateCandidatesWithCatalog(opts) {
   const o = opts || {};
   const registry = o.registry || sourcesApi.loadSources(o.sourceOpts);
   const catalogue = o.catalogue || [];
@@ -1978,4 +2083,5 @@ module.exports = {
   openAiCompatibleCandidates,
   resolveCandidateContextMeta,
   resolveCandidateCapabilities,
+  catalogEvidenceFor,
 };

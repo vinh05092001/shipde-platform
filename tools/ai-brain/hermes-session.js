@@ -1155,14 +1155,17 @@ function selectReasoningCandidate(options, deps) {
 
   const cooldownRejected = [];
   poolCandidates = poolCandidates.filter((candidate) => {
-    const reason = require('./route-health').probeCooldown(candidate, {
+    const healthOpts = {
       ...opts,
       routeHealth: d.routeHealth || opts.routeHealth,
       routeHealthFile:
         opts.routeHealthFile ||
         d.routeHealthFile ||
         path.join(resolveRootDir(opts, d), 'tools', 'ai-brain', 'data', 'model-route-health.json'),
-    });
+    };
+    const reason =
+      require('./route-health').probeCooldown(candidate, healthOpts) ||
+      require('./route-health').contextOverflowObserved(candidate, healthOpts);
     if (reason)
       cooldownRejected.push({
         candidateKey: candidate.candidateKey || candidateKey(candidate),

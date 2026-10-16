@@ -1114,7 +1114,7 @@ test('H2-15: candidate selection enforces route-health gates on production disco
     };
 
     const res = selectReasoningCandidate(
-      { rootDir: root, skipDecisionLog: true },
+      { rootDir: root, homeDir: root, skipDecisionLog: true },
       {
         readDiscoveryCatalogue: () => ({ candidates: [{ id: 'unprobed-1' }] }),
         assembleForDispatch: fakeAssemble,
@@ -1163,7 +1163,7 @@ test('H2-16: discovery read errors are refusals and not swallowed', async () => 
   }
 });
 
-test('H2-17: candidate with unknown or too-small context is rejected without flooring or inventing contextWindow', async () => {
+test('H2-17: a too-small context is rejected; an unknown one stays eligible without an invented contextWindow', async () => {
   const root = fixtureRoot('hermes-context-floor-');
   try {
     const cSmall = sampleCandidate({
@@ -1188,9 +1188,9 @@ test('H2-17: candidate with unknown or too-small context is rejected without flo
       }
     );
 
-    assert.equal(res.chosen, null, 'No candidate with < 32k or missing context may be chosen');
-    assert.equal(res.candidate, null);
-    assert.equal(res.refused, 'NO_REASONING_CANDIDATE');
+    assert.ok(res.candidate, 'an unknown context keeps the candidate eligible');
+    assert.equal(res.candidate.modelId, 'rq/missing-context');
+    assert.equal(res.candidate.contextWindow, undefined, 'contextWindow is never invented');
 
     const rejectedSmall = res.rejected.find((r) => r.candidateKey.includes('small-context'));
     assert.ok(rejectedSmall, 'cSmall must be in rejected');
@@ -1199,11 +1199,9 @@ test('H2-17: candidate with unknown or too-small context is rejected without flo
       'cSmall must be rejected for CONTEXT_TOO_SMALL'
     );
 
-    const rejectedMissing = res.rejected.find((r) => r.candidateKey.includes('missing-context'));
-    assert.ok(rejectedMissing, 'cMissing must be in rejected');
     assert.ok(
-      rejectedMissing.reasonCode.includes('CONTEXT_WINDOW_UNVERIFIED'),
-      'cMissing must be rejected for CONTEXT_WINDOW_UNVERIFIED'
+      !res.rejected.some((r) => r.candidateKey.includes('missing-context')),
+      'cMissing must not be rejected for an unknown context'
     );
 
     // If a candidate with valid context >= 32000 is present, it is selected over cSmall
@@ -3016,7 +3014,7 @@ test('TASK-AI-142: top model gpt-6-astra logs explicit reason per skipped route 
       contextWindow: 128000,
       capabilities: { contextWindow: 128000 },
     });
-    // 5 routes with unverified/missing context
+    // 5 routes whose KNOWN context is below the Hermes floor
     const cUnverified = [
       'azure/gpt-6-astra@eastus2',
       'openai/gpt-6-astra',
@@ -3030,9 +3028,8 @@ test('TASK-AI-142: top model gpt-6-astra logs explicit reason per skipped route 
         modelId,
         evidence: [],
         quality: 90 - idx,
-        contextWindow: undefined,
-        context_window: undefined,
-        capabilities: undefined,
+        contextWindow: 16000,
+        capabilities: { contextWindow: 16000 },
       })
     );
     // Next model with viable route
@@ -3082,8 +3079,7 @@ test('TASK-AI-142: top model gpt-6-astra logs explicit reason per skipped route 
     for (const unv of cUnverified) {
       assert.ok(
         sel.skippedRoutes.some(
-          (r) =>
-            r.candidateKey === unv.candidateKey && r.reason.includes('CONTEXT_WINDOW_UNVERIFIED')
+          (r) => r.candidateKey === unv.candidateKey && r.reason.includes('CONTEXT_TOO_SMALL')
         )
       );
     }

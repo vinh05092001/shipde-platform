@@ -1572,7 +1572,7 @@ function candidateContextWindow(candidate) {
 function applyHarnessVerification(candidates) {
   const { contextRefusal } = require('./harness');
   for (const c of candidates || []) {
-    const reason = contextRefusal(c.harness, candidateContextWindow(c));
+    const reason = contextRefusal(c.harness, candidateContextWindow(c), { allowUnknown: true });
     if (!reason) continue;
     c.blocked = true;
     c.blockReason = reason;

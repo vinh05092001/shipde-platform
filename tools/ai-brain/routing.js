@@ -111,6 +111,13 @@ const STALL_STRUCTURED_FAILURE_MS = 12 * 60 * 1000;
 /** A busy candidate loses this much score per reservation it already holds. */
 const BUSY_PENALTY_PER_RESERVATION = 20;
 
+/**
+ * Shared penalty for evidence that is absent rather than bad: unknown quota
+ * headroom and unknown context window both rank after candidates that are
+ * known to fit, without excluding them.
+ */
+const UNKNOWN_EVIDENCE_PENALTY = 15;
+
 /** Evidence older than 30 days loses trust linearly, up to this penalty. */
 const EVIDENCE_AGE_PENALTY_MAX = 15;
 const EVIDENCE_AGE_TRUST_MS = 30 * 24 * 60 * 60 * 1000;
@@ -1216,8 +1223,18 @@ function scoreForProfile(candidate, assessment, ctx) {
   const busyPenalty = busy * BUSY_PENALTY_PER_RESERVATION;
   const agePenalty = evidenceAgePenalty(candidate, now);
   const headroomPenalty =
-    candidate.headroomStatus === 'unknown' ? 15 : candidate.headroomStatus === 'tight' ? 10 : 0;
-  score = Math.max(0, score - busyPenalty - agePenalty - headroomPenalty);
+    candidate.headroomStatus === 'unknown'
+      ? UNKNOWN_EVIDENCE_PENALTY
+      : candidate.headroomStatus === 'tight'
+        ? 10
+        : 0;
+  const contextPenalty = require('./harness').contextUnknown(
+    candidate.harness,
+    candidateContextWindow(candidate)
+  )
+    ? UNKNOWN_EVIDENCE_PENALTY
+    : 0;
+  score = Math.max(0, score - busyPenalty - agePenalty - headroomPenalty - contextPenalty);
   // A scored prior is already blended into quality above. Only legacy priors
   // without a numeric score retain the standalone tier bonus.
   const weightedPriorContribution =
@@ -1247,6 +1264,7 @@ function scoreForProfile(candidate, assessment, ctx) {
       busyPenalty,
       evidenceAgePenalty: agePenalty,
       headroomPenalty,
+      contextPenalty,
       prior,
     },
     reservationsHeld: busy,
@@ -1321,7 +1339,9 @@ function rankForProfile(candidates, profile, assessment, ctx) {
       });
       continue;
     }
-    const contextRefusalReason = contextRefusal(c.harness, candidateContextWindow(c));
+    const contextRefusalReason = contextRefusal(c.harness, candidateContextWindow(c), {
+      allowUnknown: true,
+    });
     if (contextRefusalReason) {
       reject(contextRefusalReason, 'harness');
       continue;
