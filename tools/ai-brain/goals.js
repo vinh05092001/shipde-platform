@@ -1295,6 +1295,22 @@ function isItemDone(info) {
  * goal resume <goalId>
  * Uses existing checkpoints; resume skips items already PASSED/MERGED.
  */
+function promoteReadyGoalRows(rows, rootDir) {
+  const merged = new Set(rows.filter((r) => r[7] === 'MERGED').map((r) => r[3]));
+  let promoted = 0;
+  for (const row of rows) {
+    if (row[7] !== 'BACKLOG') continue;
+    const deps = String(row[8] || '')
+      .split(/[;,\s]+/)
+      .filter(Boolean);
+    if (!deps.every((dep) => merged.has(dep))) continue;
+    if (!row[9] || !fs.existsSync(path.join(rootDir, row[9]))) continue;
+    row[7] = 'READY_FOR_AUTHOR';
+    promoted += 1;
+  }
+  return promoted;
+}
+
 function resumeGoal(goalId, options, deps) {
   const opts = options || {};
   const d = deps || {};
@@ -1385,6 +1401,12 @@ function resumeGoal(goalId, options, deps) {
     }
   }
 
+  // A goal item whose dependencies have all merged and whose Work Item was
+  // written by goal plan is ready for an author. goal plan sets the initial
+  // status once; without this the next item stays BACKLOG after its
+  // dependency merges and the runner asks for a separate planner.
+  promoteReadyGoalRows(goalRows, rootDir);
+
   fs.mkdirSync(path.dirname(goalRegisterPath), { recursive: true });
   let updatedCsv = serializeCsvRow(REGISTER_COLUMNS) + '\n';
   for (const row of goalRows) {
@@ -1417,6 +1439,13 @@ function resumeGoal(goalId, options, deps) {
             mainModified = true;
           }
         }
+      }
+    }
+    const goalStatus = new Map(goalRows.map((r) => [r[3], r[7]]));
+    for (const row of mainRows) {
+      if (row[7] === 'BACKLOG' && goalStatus.get(row[3]) === 'READY_FOR_AUTHOR') {
+        row[7] = 'READY_FOR_AUTHOR';
+        mainModified = true;
       }
     }
     if (mainModified) {
@@ -1541,6 +1570,7 @@ function runGoalCli(args, deps) {
 }
 
 module.exports = {
+  promoteReadyGoalRows,
   startGoal,
   amendGoal,
   planGoal,
