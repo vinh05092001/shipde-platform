@@ -99,7 +99,8 @@ The Controller (TASK-AI-58) selects a candidate and dispatches one Work Item. Wh
 
 A repair that returns no commit SHA, or the SHA under review, can never change the verdict. The review loop now stops at once with BLOCKED / REPAIR_NO_PROGRESS in both the failing-test and CHANGES_REQUIRED branches, keeping finalSha, findings and repairCount for diagnosis and calling no further reviewer or repair. A repair that produces a new SHA continues as before (re-test, re-review).
 
-### Effect on TASK-AI-64 tests (2026-10-15)
-
+### H3 live: repair progress contract and PR 326 integration (2026-10-16)
 
 Operator decision under TASK-AI-60: `tools/ai-brain/review-loop.js` stops at once with status `BLOCKED` and cause `REPAIR_NO_PROGRESS` when a repair ran and returned no new commit SHA, or the same SHA. A repair that never ran (`repairNotAttempted` or `repairRefused` from `repairRound` in `tools/ai-brain/orchestrate.js`) does not trigger this stop, so another repairer can be tried. This supersedes the earlier expectation here that unchanged-SHA repairs keep looping until `REPAIR_BUDGET_EXHAUSTED`; that cause is now reached only when every repair makes progress and the budget runs out. Test 64-10 proves the finite budget with repairs that advance HEAD, and 64-10b proves the no-progress stop after exactly one repair.
+
+PR 326 repair restores TASK-AI-64.md to origin/main and keeps this contract note in TASK-AI-60.md only. Main d9982a32 was merged without conflicts, preserving both the no-progress stop and current selection behavior. With the PR's test files overlaid on main, five regressions fail (146 pass); the integrated branch passes all 161 tests in task-ai-60, task-ai-64 and task-ai-93. TASK-AI-93 also passes 10/10 on main, so the historical CI failure is not reproduced by the current local run. Evidence is under .worktrees/logs/night/task5-*.log. No push or merge to main was performed; fresh remote CI and independent exact-SHA review remain outstanding.
