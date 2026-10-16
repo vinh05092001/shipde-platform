@@ -919,7 +919,6 @@ function syncMergedPullRequestsToRegister(options = {}, deps = {}) {
       to: 'MERGED',
       evidence: {
         pr: prNumberStr,
-        codexVerdict: 'PASS',
         mergeCommit,
       },
     });

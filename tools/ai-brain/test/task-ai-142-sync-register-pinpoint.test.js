@@ -99,8 +99,8 @@ describe('TASK-AI-142: Register auto-sync, Goal registration, and Pinpointing', 
       const updatedCsv = fs.readFileSync(regPath, 'utf8');
       assert.ok(updatedCsv.includes('"TASK-AI-999"'));
       assert.ok(updatedCsv.includes('"MERGED"'));
-      assert.ok(updatedCsv.includes('"#400"'));
-      assert.ok(updatedCsv.includes('"PASS"'));
+      // A merge is not review evidence: the review verdict column is never invented.
+      assert.ok(!updatedCsv.includes('"PASS"'));
       assert.ok(updatedCsv.includes('"c0ffee1234567890abcdef1234567890abcdef12"'));
       // Dependent row unchanged
       assert.ok(updatedCsv.includes('"TASK-AI-1000"'));
