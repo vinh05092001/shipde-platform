@@ -372,6 +372,10 @@ Selection logs retain the full chosenCandidate, the existing chosen identity, to
 
 Verification: sequential TASK-AI-141 199/199, TASK-AI-142 136/136, TASK-AI-64 129/129, dispatch-wiring 7/7 and decisions 28/28 passed. Additional candidate/routing regressions passed 74/74. Changed JavaScript passes ESLint no-undef; changed files pass Prettier and git diff --check. Live logs remain untouched and runtime data is excluded from commits.
 
+### H3 live: the agy gateway returns the answer, not the agy envelope (2026-10-16)
+
+A live call through the gateway (16/10 16:45, gemini-3.8-flash-low via the pool, HTTP 200 in 17 s) returned the raw agy JSON envelope (`{"status":"SUCCESS","response":"ok\n",...}`) as the message content and no usage. The gateway now unwraps `response` as the content and maps the agy usage (input + cache read, output + thinking, total) to an OpenAI usage object; plain-text output passes through.
+
 ### H3 live: the agy pool serves Hermes through an OpenAI-compatible gateway (2026-10-16)
 
 `tools/ai-brain/agy-gateway.js` exposes `GET /v1/models` (the live pool model list) and `POST /v1/chat/completions` (including `stream: true` as a single SSE chunk then `[DONE]`) on 127.0.0.1 only. Each request runs one agy job on a free account (in-process lock per account) whose weekly quota for the model family is above zero, preferring the highest remaining; accounts with an unreadable quota rank last. No free account with quota returns 429; pool `quota`, `login-required` and timeouts map to 429, 401 and 504.
