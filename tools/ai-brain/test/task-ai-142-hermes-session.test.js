@@ -1801,6 +1801,17 @@ test('defaultSpawn ignores model quota text and recognizes Hermes API failure li
     assert.match(apiFailure.routeFailure, /API call failed.*403.*insufficient_user_quota/i);
     assert.notEqual(apiFailure.exitCode, 0);
 
+    const authFailure = await defaultSpawn(
+      process.execPath,
+      [
+        '-e',
+        "process.stderr.write('API call failed (attempt 1/1): Error code: 401 invalid api key\n'); setInterval(() => {}, 1000);",
+      ],
+      { stdio: ['inherit', 'pipe', 'pipe'] }
+    );
+    assert.match(authFailure.routeFailure, /401/);
+    assert.notEqual(authFailure.exitCode, 0);
+
     // Hermes reports a missing provider login and exits 0; that is route evidence.
     const missingLogin = await defaultSpawn(
       process.execPath,

@@ -2107,7 +2107,68 @@ function dispatchCommand(args, deps = {}) {
       accounts,
       now,
     };
-    const decision = ranking.rankAndRecord(annotated, rankingContext);
+    const routing = require('./routing');
+    const profile =
+      deps.taskProfile ||
+      require('./orchestrate').buildTaskProfile(
+        { ...item, id: item.workItemId },
+        { ...deps, enforceProofFloors: deps.enforceProofFloors === true }
+      );
+    // Production uses the same cached advisory assessment as the live writer.
+    // Injected candidate fixtures remain offline unless they provide an ask.
+    if (
+      !deps.assessment &&
+      (!Array.isArray(deps.candidates) || typeof deps.jevAsk === 'function')
+    ) {
+      const jevSource = sourcesApi.getSource('jev', registry);
+      const ask =
+        deps.jevAsk ||
+        require('./jev').buildJevAsk(jevSource, {
+          home: deps.home,
+          env: deps.env || process.env,
+          httpClient: deps.jevHttpClient,
+          timeoutMs: deps.jevTimeoutMs,
+        });
+      return require('./writer-selection')
+        .assessOnce(profile, jevSource, ask, deps, routing)
+        .then((assessment) =>
+          dispatchCommand(args, {
+            ...deps,
+            registry,
+            accounts,
+            candidates: candidateList,
+            assessment,
+          })
+        );
+    }
+    const fallbackProfile = routing.controllerFallbackProfile(profile);
+    const assessment = deps.assessment || {
+      weightProfile: fallbackProfile,
+      weights: routing.WEIGHT_PROFILES[fallbackProfile],
+    };
+    const rankDryRun = (offered) => {
+      const result = routing.rankForProfile(offered, profile, assessment, {
+        ...rankingContext,
+        ...(deps.ranking || {}),
+        priors: deps.priors === undefined ? deps.ranking?.priors : deps.priors,
+        useStoredQuota: true,
+      });
+      // Retain the dispatch CLI's existing output/checkpoint field names.
+      return {
+        ...result,
+        candidates: result.ranking.map((candidate) => ({
+          ...candidate,
+          offeringId: candidate.candidateKey,
+          headroom: candidate.headroomStatus,
+        })),
+        rejected: result.rejected.map((candidate) => ({
+          ...candidate,
+          offeringId: candidate.candidateKey,
+          reason: candidate.reason || candidate.reasonCode,
+        })),
+      };
+    };
+    const decision = rankDryRun(annotated);
     if (
       resumed &&
       checkpoint &&
@@ -2187,10 +2248,7 @@ function dispatchCommand(args, deps = {}) {
           classification,
           classification.scope !== 'candidate' && classification.scope !== 'model'
         );
-        let fallbackDecision = ranking.rankAndRecord(
-          fallbackAnnotated,
-          Object.assign({}, rankingContext, { dryRun: true })
-        );
+        let fallbackDecision = rankDryRun(fallbackAnnotated);
         let preferredDifferentFailureDomain = true;
         if (!fallbackDecision.chosen) {
           const exactOnlyAnnotated = candidatesApi.annotateCandidates(
@@ -2199,10 +2257,7 @@ function dispatchCommand(args, deps = {}) {
             { now }
           );
           applyDryRunBlocks(exactOnlyAnnotated, failedKeys, chosenCandidate, classification, false);
-          fallbackDecision = ranking.rankAndRecord(
-            exactOnlyAnnotated,
-            Object.assign({}, rankingContext, { dryRun: true })
-          );
+          fallbackDecision = rankDryRun(exactOnlyAnnotated);
           preferredDifferentFailureDomain = false;
         }
         fallback = {

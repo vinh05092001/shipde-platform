@@ -200,7 +200,7 @@ describe('TASK-AI-75: Work-evidence importer', () => {
     assert.equal(r4.code, 'SHA_INVALID');
   });
 
-  test('W-R02: writer must parse as a 7-part candidate key with non-empty parts, else WRITER_KEY_INVALID', () => {
+  test('W-R02: writer must parse as a canonical 7-part candidate key with non-empty harness, accessPath, upstream and modelId, else WRITER_KEY_INVALID', () => {
     const repo = createTestGitRepo();
     const evDir = tmpDir('ev-r02-');
     const sha = '1111111111111111111111111111111111111111';
@@ -234,10 +234,27 @@ describe('TASK-AI-75: Work-evidence importer', () => {
     assert.equal(r2.ok, false);
     assert.equal(r2.code, 'WRITER_KEY_INVALID');
 
-    // empty part (empty gateway)
+    // empty part (empty gateway) - valid canonical shape for direct routes / Codex CLI
+    const rCodex = importWorkItemPass({
+      sha,
+      writer: 'codex::cli::::codex::codex-cli::codex-cli::gpt-x',
+      review,
+      reviewer: 'codex-reviewer',
+      workItem: 'TASK-AI-75',
+      mainRef: 'main',
+      evidenceDir: evDir,
+      cwd: repo.dir,
+    });
+    assert.notEqual(
+      rCodex.code,
+      'WRITER_KEY_INVALID',
+      'Codex CLI writer with empty gateway must not be rejected with WRITER_KEY_INVALID'
+    );
+
+    // empty modelId is rejected
     const r3 = importWorkItemPass({
       sha,
-      writer: 'openclaw::opencode::::github::acc-1::scope-1::gpt-4.1',
+      writer: 'openclaw::opencode::router::github::acc-1::scope-1::',
       review,
       reviewer: 'codex-reviewer',
       workItem: 'TASK-AI-75',
@@ -248,10 +265,10 @@ describe('TASK-AI-75: Work-evidence importer', () => {
     assert.equal(r3.ok, false);
     assert.equal(r3.code, 'WRITER_KEY_INVALID');
 
-    // whitespace-only part
+    // whitespace-only modelId is rejected
     const r4 = importWorkItemPass({
       sha,
-      writer: 'openclaw::opencode::  ::github::acc-1::scope-1::gpt-4.1',
+      writer: 'openclaw::opencode::router::github::acc-1::scope-1::  ',
       review,
       reviewer: 'codex-reviewer',
       workItem: 'TASK-AI-75',

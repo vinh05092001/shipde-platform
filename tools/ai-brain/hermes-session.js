@@ -65,7 +65,7 @@ function defaultSpawn(cmd, argv, spawnOpts) {
       const statusLine = lines.find((line) => errorCode.test(line));
       if (!routeFailure && apiLine && statusLine) {
         const status = Number(statusLine.match(errorCode)[1]);
-        if ([402, 403, 429].includes(status) || status >= 500) {
+        if ([401, 402, 403, 429].includes(status) || status >= 500) {
           routeFailure = `${apiLine} ${statusLine}`.slice(-400);
           try {
             cp.kill('SIGTERM');
