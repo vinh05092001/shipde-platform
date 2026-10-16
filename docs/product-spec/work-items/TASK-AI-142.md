@@ -539,14 +539,13 @@ Live run GOAL-AUTOCLAW-REPOS-1 (15/10) recorded every JEV assessment as `JEV_UND
 
 ### H3 live: host-independent test fixtures (2026-10-16)
 
-- Base: origin/main `97d8d3d68036240dc97ff8ea4288d83571d413f8`.
-- TASK-AI-89 CLI fixtures previously defaulted to the host source registry, allowing a credential-backed JEV client despite injected accounts. Fixtures now inject empty source/candidate/account defaults and an empty environment; direct selection fixtures inject a deterministic unavailable advisory. Account-union and capability assertions are unchanged.
-- Three targeted TASK-AI-141 loop fixtures now use temporary roots and explicit empty config instead of the active host checkout and .shipde settings. Its default-decision-dir guard also injects a registry/advisory fixture instead of constructing live JEV advice.
-- New regression intercepts host source/account loaders and JEV client construction without reading secrets: unchanged main pass 0/fail 1 (`fixture must not read the host source or account registry`), fixed pass 1/fail 0.
-- The original 10 historical failures were not reproduced as a set: unchanged main passed the two affected non-Hermes files with a dummy NINEROUTER key (41/41). The fixture registry leak is independently reproduced; historical host-run causation is not claimed proven.
-- Earlier standalone validation: task-ai-141b.test.js, task-ai-89.test.js, task-ai-142-hermes-session.test.js. Windows User/Machine env loaded with logs/hermes-brain/load-win-env.js: NINEROUTER key present, pass 118/fail 0, exit 0. Same env with credential variables removed: key absent, pass 118/fail 0, exit 0. Values were never printed.
-- Final standalone recheck of the unchanged-main Hermes test exposed the independent Task 5 wall-clock flake: live env 118/0, without keys 117/1 (deadline test). Task 8 alone cannot guarantee that timer test under load. Integration overlay using Task 5 commit 341f689026d2338f9e478788427586e1eaed6c54 passes 118/0 with live env and 118/0 without keys; overlay files are restored afterward. The two fixture files alone pass 42/0 in each environment.
-- Host gate, production routing, and test assertions are not weakened. The separate deterministic deadline repair belongs to its own Task 5 worktree; this branch retains main's Hermes test.
+- Base: origin/main `97d8d3d68036240dc97ff8ea4288d83571d413f8`. Follow-up resolves the standalone validation gap at `e0164b1ab7c09c40f511de2b23f36f9bf1b3d26e`.
+- TASK-AI-89 fixtures inject source/candidate/account defaults and unavailable advisory stubs. Its missing-registry test still omits the registry argument and mocks only the default reader; capability and account-union assertions remain intact.
+- TASK-AI-141 loop fixtures use isolated roots/config. Qualification-builder fixtures now have unique temporary roots, preventing parallel runs from deleting each other's intake fixture. The default-decision-dir guard intercepts this process's append/write calls instead of comparing the live shared log before/after; attempted default writes fail and local decision records are still required.
+- Both 200 ms Hermes deadline tests use Node mock Date/timers. Time advances only after pending probes have started or the lower-ranked live result has settled. Abort, concurrency, no-launch, winner identity, and persisted route-health assertions remain enforced. No Hermes production change or Task 5 overlay is needed.
+- Before: new host-reader regression on unchanged main pass 0/fail 1; standalone original deadline flake 117/1. Parallel runs also reproduced shared-log snapshot and fixed-intake-directory races. After: named files task-ai-141b.test.js, task-ai-89.test.js, task-ai-142-hermes-session.test.js pass 118/fail 0/cancelled 0 in every run.
+- Final stress validation: 10 full named-file runs with Windows User/Machine env loaded (NINEROUTER key present) and 10 with credential variables removed (key absent), both groups concurrently; all 20 exit codes 0. Credential values are never printed.
+- Host gate and production routing are unchanged. The historical live run's exact ten failures are not claimed replayed; the isolated reader/timer/concurrent-fixture faults are directly reproduced and repaired.
 
 ### H3 live: the isolated writer receives its context pack (2026-10-16)
 

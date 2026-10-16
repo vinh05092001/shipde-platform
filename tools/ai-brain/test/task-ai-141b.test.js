@@ -633,7 +633,8 @@ test('isolated qualification refuses a reviewer receipt for a different SHA', as
 test('production candidate builder uses intake catalogue/accounts and Controller ranking', () => {
   const fsx = require('fs');
   const path = require('path');
-  const root = process.cwd();
+  const root = fsx.mkdtempSync(path.join(os.tmpdir(), 'qualification-builder-'));
+  fixtures.push(root);
   const intakeRoot = path.join(root, 'tools', 'ai-brain', 'data', 'intake');
   const runDir = path.join(intakeRoot, 'fixture-qualification-live');
   fsx.mkdirSync(runDir, { recursive: true });
@@ -1136,16 +1137,29 @@ test('targeted loop reports successful execution as completed', async () => {
   assert.equal(result.outcome, 'completed');
 });
 
-test('the two known fixture selection paths do not change decisions.DEFAULT_DIR', async () => {
-  const file = path.join(decisions.DEFAULT_DIR, new Date().toISOString().slice(0, 10) + '.jsonl');
-  const before = fs.existsSync(file) ? fs.readFileSync(file) : null;
+test('the two known fixture selection paths do not change decisions.DEFAULT_DIR', async (t) => {
+  const defaultRoot = path.resolve(decisions.DEFAULT_DIR);
+  const defaultWrites = [];
+  // Observe this process's writes, not concurrent activity in the host log.
+  for (const method of ['appendFileSync', 'writeFileSync']) {
+    const original = fs[method];
+    t.mock.method(fs, method, (target, ...args) => {
+      if (typeof target === 'string' || Buffer.isBuffer(target)) {
+        const relative = path.relative(defaultRoot, path.resolve(String(target)));
+        if (!relative || (!relative.startsWith('..' + path.sep) && !path.isAbsolute(relative))) {
+          defaultWrites.push(String(target));
+          assert.fail('fixture selection must not write to decisions.DEFAULT_DIR');
+        }
+      }
+      return original.call(fs, target, ...args);
+    });
+  }
   const a = { gateway: 'g', upstream: 'a', accountId: 'a', modelId: 'm-a', quality: 90 };
   const b = { gateway: 'g', upstream: 'b', accountId: 'b', modelId: 'm-b', quality: 80 };
   a.candidateKey = require('../candidates').candidateKey(a);
   b.candidateKey = require('../candidates').candidateKey(b);
   const select = require('../orchestrate').selectCandidateForProfile;
   const tempDirs = [];
-  let after;
   try {
     for (const id of ['ITEM-91-R01-UNIT', 'TASK-AI-64-review']) {
       const decisionDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai141-guard-'));
@@ -1168,9 +1182,8 @@ test('the two known fixture selection paths do not change decisions.DEFAULT_DIR'
       const selectedRecords = decisions.readDecisions({ dir: decisionDir });
       assert.ok(selectedRecords.some((record) => record.workItemId === id));
     }
-    after = fs.existsSync(file) ? fs.readFileSync(file) : null;
   } finally {
     for (const dir of tempDirs) fs.rmSync(dir, { recursive: true, force: true });
   }
-  assert.deepEqual(after, before);
+  assert.deepEqual(defaultWrites, []);
 });

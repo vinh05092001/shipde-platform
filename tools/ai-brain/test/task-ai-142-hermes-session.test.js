@@ -3130,9 +3130,10 @@ test('TASK-AI-142: a live route beyond one hundred failed probes ignores legacy 
   }
 });
 
-test('TASK-AI-142: wall-clock deadline aborts concurrent probes and never launches', async () => {
+test('TASK-AI-142: wall-clock deadline aborts concurrent probes and never launches', async (t) => {
   const root = fixtureRoot('hermes-wall-clock-');
   try {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
     const candidates = Array.from({ length: 20 }, (_, index) =>
       sampleCandidate({
         upstream: `provider-${index}`,
@@ -3142,9 +3143,10 @@ test('TASK-AI-142: wall-clock deadline aborts concurrent probes and never launch
       })
     );
     const signals = [];
+    const started = Promise.withResolvers();
     let active = 0;
     let peak = 0;
-    await assert.rejects(
+    const rejected = assert.rejects(
       launchHermesSession(
         { rootDir: root, skipDecisionLog: true, probeBudgetMs: 200 },
         {
@@ -3155,6 +3157,7 @@ test('TASK-AI-142: wall-clock deadline aborts concurrent probes and never launch
             signals.push(options.signal);
             active += 1;
             peak = Math.max(peak, active);
+            if (signals.length === 8) started.resolve();
             options.signal.addEventListener(
               'abort',
               () => {
@@ -3169,8 +3172,11 @@ test('TASK-AI-142: wall-clock deadline aborts concurrent probes and never launch
       ),
       /NO_REASONING_CANDIDATE/
     );
-    assert.ok(signals.length > 0);
-    assert.ok(peak <= 8);
+    await started.promise;
+    t.mock.timers.tick(200);
+    await rejected;
+    assert.equal(signals.length, 8, 'the deadline prevents later probes');
+    assert.equal(peak, 8);
     assert.equal(active, 0);
     assert.ok(signals.every((signal) => signal.aborted));
   } finally {
@@ -3178,26 +3184,34 @@ test('TASK-AI-142: wall-clock deadline aborts concurrent probes and never launch
   }
 });
 
-test('TASK-AI-142: deadline preserves a completed live success while higher routes time out', async () => {
+test('TASK-AI-142: deadline preserves a completed live success while higher routes time out', async (t) => {
   const root = fixtureRoot('hermes-deadline-success-');
   try {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
+    const completed = Promise.withResolvers();
     const candidates = [
       sampleCandidate({ modelId: 'kr/top', quality: 99, evidence: [] }),
       sampleCandidate({ modelId: 'kr/second', quality: 98, evidence: [] }),
       sampleCandidate({ upstream: 'live', modelId: 'live/third', quality: 97, evidence: [] }),
     ];
-    const result = await launchHermesSession(
+    const pending = launchHermesSession(
       { rootDir: root, dryRun: true, probe: true, skipDecisionLog: true, probeBudgetMs: 200 },
       {
         candidates,
         registry: sampleRegistry(),
         priorsData: { ranking: [] },
-        probe: (candidate) =>
-          candidate.upstream === 'live'
-            ? Promise.resolve({ ok: true, status: 200 })
-            : new Promise(() => {}),
+        probe: (candidate) => {
+          if (candidate.upstream !== 'live') return new Promise(() => {});
+          completed.resolve();
+          return Promise.resolve({ ok: true, status: 200 });
+        },
       }
     );
+    await completed.promise;
+    // Drain the successful probe's microtasks before expiring the pending routes.
+    await new Promise((resolve) => setImmediate(resolve));
+    t.mock.timers.tick(200);
+    const result = await pending;
     assert.equal(result.candidateKey, candidates[2].candidateKey);
     const healthFile = path.join(root, 'tools', 'ai-brain', 'data', 'model-route-health.json');
     const store = JSON.parse(fs.readFileSync(healthFile, 'utf8'));
