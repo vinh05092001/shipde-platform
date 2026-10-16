@@ -173,8 +173,6 @@ describe('agy pool cross-process lock', () => {
         path.join(dir, 'job.lock'),
         JSON.stringify({ pid: child.pid, startedAt: Date.now() })
       );
-      const adapterScript = path.join(runsDir, 'noop.js');
-      fs.writeFileSync(adapterScript, '');
       const r = rt.submitJob('agy01', { x: 1 }, { runsDir });
       assert.deepStrictEqual(r, { state: 'busy', exitCode: 1, reason: 'POOL_ACCOUNT_BUSY' });
       assert.strictEqual(fs.readFileSync(path.join(dir, 'job.json'), 'utf8'), '{"keep":true}');
@@ -193,6 +191,8 @@ describe('agy pool cross-process lock', () => {
       path.join(dir, 'job.lock'),
       JSON.stringify({ pid: child.pid, startedAt: Date.now() })
     );
+    const adapterScript = path.join(runsDir, 'noop.js');
+    fs.writeFileSync(adapterScript, '');
     const r = rt.submitJob('agy01', { x: 1 }, { runsDir, timeoutMs: 100, adapterScript });
     assert.notStrictEqual(r.state, 'busy');
     assert.ok(fs.existsSync(path.join(dir, 'job.json')));
