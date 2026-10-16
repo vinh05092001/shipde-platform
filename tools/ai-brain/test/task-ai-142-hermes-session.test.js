@@ -29,6 +29,7 @@ const {
   defaultSpawn,
   probeHermesCandidate,
   getHermesHomeDir,
+  syncControllerMemory,
   HERMES_MIN_CONTEXT,
   getCandidateProviderKey,
   isProviderLevelFailure,
@@ -542,6 +543,63 @@ test('H3 live: source headers reach Hermes custom_providers with YAML quoting', 
     }
     assert.equal(fs.readFileSync(res.legacyConfigPath, 'utf8'), content);
     assert.deepEqual(res.headers, headers);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('H3 live: config disables every installed skill except the Controller skill', () => {
+  const root = fixtureRoot('hermes-skills-');
+  try {
+    const home = getHermesHomeDir(root);
+    const mk = (rel, name) => {
+      const dir = path.join(home, 'skills', ...rel);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, 'SKILL.md'),
+        `---\nname: ${name}\ndescription: x\n---\nbody\n`
+      );
+    };
+    mk(['email', 'himalaya'], 'himalaya');
+    mk(['creative', 'ascii-art'], 'ascii-art');
+    mk(['shipde-controller'], 'shipde-controller');
+    const res = writeProvidersConfig(
+      sampleCandidate(),
+      { rootDir: root },
+      { registry: sampleRegistry() }
+    );
+    const content = fs.readFileSync(res.configPath, 'utf8');
+    assert.match(content, /skills:\n {2}disabled:\n {4}- "ascii-art"\n {4}- "himalaya"\n/);
+    assert.ok(!content.includes('"shipde-controller"'));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('H3 live: Controller memory block is replaced and user text outside markers is kept', () => {
+  const root = fixtureRoot('hermes-memory-');
+  try {
+    const home = getHermesHomeDir(root);
+    const memPath = path.join(home, 'memories', 'MEMORY.md');
+    fs.mkdirSync(path.dirname(memPath), { recursive: true });
+    fs.writeFileSync(memPath, 'user note A');
+    const state = (status) => ({
+      goalId: 'g1',
+      status,
+      lastOutcome: 'ITEM-1 review PASS tests ok',
+      items: [{ workItemId: 'ITEM-1', state: 'MERGED' }],
+    });
+    syncControllerMemory(home, state('RUNNING'), fs);
+    let text = fs.readFileSync(memPath, 'utf8');
+    assert.ok(text.startsWith('user note A\n§\n'));
+    assert.ok(text.includes('goal: g1 status RUNNING') && text.includes('ITEM-1: MERGED'));
+    fs.writeFileSync(memPath, text + '\nuser note B');
+    syncControllerMemory(home, state('COMPLETED'), fs);
+    text = fs.readFileSync(memPath, 'utf8');
+    assert.ok(text.includes('status COMPLETED') && !text.includes('status RUNNING'));
+    assert.ok(text.includes('user note A') && text.endsWith('user note B'));
+    assert.equal(text.split('shipde-controller:begin').length, 2);
+    assert.ok(text.length <= 2200);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
