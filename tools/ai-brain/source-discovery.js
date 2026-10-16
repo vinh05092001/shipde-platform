@@ -198,6 +198,8 @@ function discoverSources(options = {}) {
       }
       if (!old.credential && source.credential) old.credential = source.credential;
       if (source.headers && !old.headers) old.headers = { ...source.headers };
+      if (source.opencodeProvider && !old.opencodeProvider)
+        old.opencodeProvider = source.opencodeProvider;
       return;
     }
     result.set(key, {
@@ -209,6 +211,7 @@ function discoverSources(options = {}) {
       modelMeta: source.modelMeta ? { ...source.modelMeta } : {},
       credential: source.credential || null,
       ...(source.headers ? { headers: { ...source.headers } } : {}),
+      ...(source.opencodeProvider ? { opencodeProvider: source.opencodeProvider } : {}),
       status: 'discovered',
       lastProbeAt: null,
       nextCheckAt: null,
@@ -257,6 +260,11 @@ function discoverSources(options = {}) {
           endpoint: value,
           models: modelIds,
           credential,
+          // The provider key OpenCode itself addresses (`<key>/<model>`); the
+          // id above flattens it and cannot be reversed reliably.
+          ...(label === 'opencode' && fields[0] === 'provider' && fields.length > 2
+            ? { opencodeProvider: fields[1] }
+            : {}),
         });
       }
     });
