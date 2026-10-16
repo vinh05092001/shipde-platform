@@ -595,6 +595,10 @@ The operator observed Codex using about 174k and agy 0.5-0.8M input tokens per t
 
 Direct-route candidate keys (such as `codex::cli::::codex::codex-cli::codex-cli::<model>` for the auto-bound Codex CLI) have an empty gateway segment. `tools/ai-brain/work-evidence.js` W-R02 previously required every part to be non-empty, rejecting valid direct writer keys with `WRITER_KEY_INVALID` and preventing published work from being recorded. Writer validation now uses `parseCandidateKey` from `tools/ai-brain/discovery/identity.js`, requiring non-empty harness, accessPath, upstream, and modelId, while allowing gateway, account, and quotaScope to be empty per the canonical key contract.
 
+### H3 live: dispatch dry-run ranks via live task profile and priors (2026-10-16)
+
+`node tools/ai-brain/cli.js dispatch --dry-run` previously routed through legacy `ranking.rankAndRecord`, scoring every candidate 26 points and ignoring priors and profile dimensions. The dispatch dry-run now routes through `routing.rankForProfile`, matching the live writer ranking order, scores, and advisory JEV caching without side effects.
+
 ### H3 live: custom candidate without gateway uses upstream instead of openai (2026-10-16)
 
 When a candidate key had an empty gateway (e.g. `hermes::https://developer.amd.com.cn/radeon/api/v1::::amd-radeon::...`), `writeProvidersConfig` defaulted the gateway to `openai`. Hermes treated this as its built-in provider, reported "No Codex credentials stored", and exited 0. `writeProvidersConfig` now names the provider after the upstream route when the gateway is empty, and `custom` when neither is known.
