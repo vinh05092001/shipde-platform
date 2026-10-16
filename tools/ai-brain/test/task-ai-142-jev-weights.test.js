@@ -384,3 +384,62 @@ test('mixed JEV weighting uses the default confidence threshold and retains risk
   assert.deepEqual(risky.weights, routing.WEIGHT_PROFILES.QUALITY_FIRST);
   assert.equal(risky.dimensionWeightSources, null);
 });
+
+test('configured weighting confidence keeps the exact live quality and cost advice without lowering the choice threshold', async () => {
+  const source = { minConfidence: 0.7, weightingMinConfidence: 0.5 };
+  const scores = {
+    qualityImportance: { score: 4.11, confidence: 0.56 },
+    latencyImportance: { score: 1.98, confidence: 0.23 },
+    costImportance: { score: 1.08, confidence: 0.57 },
+  };
+  const result = await routing.assessTask(profile(), {
+    source,
+    ask: async () => ({ scores, choice: 'BALANCED' }),
+  });
+  assert.equal(result.weightSource, 'mixed:jev-score+preset:BALANCED');
+  assert.deepEqual(result.dimensionWeightSources, {
+    quality: 'jev-score',
+    latency: 'preset:BALANCED',
+    cost: 'jev-score',
+  });
+  assert.deepEqual(result.weights, { quality: 52, latency: 34, cost: 14 });
+  assert.equal(result.confidence, 0.23);
+  const closed = await jev.advise(
+    {
+      kind: 'advisory',
+      evidence: 'fixture evidence',
+      options: ['BALANCED', 'QUALITY_FIRST'],
+    },
+    {
+      minConfidence: source.minConfidence,
+      ask: async () => ({ choice: 'BALANCED', confidence: 0.56 }),
+    }
+  );
+  assert.equal(closed.outcome, jev.Outcome.UNDECIDED);
+  assert.equal(closed.reason, 'LOW_CONFIDENCE');
+});
+
+test('weighting threshold does not admit low confidence preset-only advice', async () => {
+  const result = await routing.assessTask(profile(), {
+    source: { minConfidence: 0.7, weightingMinConfidence: 0.5 },
+    ask: async () => ({ choice: 'QUALITY_FIRST', confidence: 0.56 }),
+  });
+  assert.equal(result.weightSource, 'preset:BALANCED');
+  assert.equal(result.jevOutcome, jev.Outcome.UNDECIDED);
+});
+
+test('zero trusted score mass keeps preset provenance instead of claiming mixed weights', async () => {
+  const result = await routing.assessTask(profile(), {
+    source: { minConfidence: 0.7, weightingMinConfidence: 0.5 },
+    ask: async () => ({
+      scores: {
+        qualityImportance: { score: 0, confidence: 0.8 },
+        latencyImportance: { score: 2, confidence: 0.23 },
+        costImportance: { score: 0, confidence: 0.9 },
+      },
+    }),
+  });
+  assert.equal(result.weightSource, 'preset:BALANCED');
+  assert.deepEqual(result.weights, routing.WEIGHT_PROFILES.BALANCED);
+  assert.equal(result.dimensionWeightSources, null);
+});

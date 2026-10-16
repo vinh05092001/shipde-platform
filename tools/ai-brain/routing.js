@@ -354,11 +354,21 @@ async function assessTask(profile, opts) {
           Number.isFinite(Number(options.minConfidence))
         ? Number(options.minConfidence)
         : undefined;
+  // Numeric weight advice may use its own configured threshold. Choice answers
+  // still pass the existing source/default confidence policy.
+  const scoreMinConfidence =
+    options.source &&
+    options.source.weightingMinConfidence !== null &&
+    options.source.weightingMinConfidence !== undefined &&
+    Number.isFinite(Number(options.source.weightingMinConfidence))
+      ? Number(options.source.weightingMinConfidence)
+      : minConfidence;
   let result;
   try {
     result = await jev.adviseOrReason(question, {
       ask,
       minConfidence,
+      scoreMinConfidence,
       reasoningController: () => ({
         outcome: jev.Outcome.DECIDED,
         choice: fallbackId,
@@ -399,7 +409,7 @@ async function assessTask(profile, opts) {
       advisoryResult.scores.latencyImportance.score,
       advisoryResult.scores.costImportance.score,
     ];
-    const threshold = minConfidence ?? jev.DEFAULT_MIN_CONFIDENCE;
+    const threshold = scoreMinConfidence ?? jev.DEFAULT_MIN_CONFIDENCE;
     const dimensions = ['quality', 'latency', 'cost'];
     const scoreNames = ['qualityImportance', 'latencyImportance', 'costImportance'];
     const accepted = scoreNames.map((name) => advisoryResult.scores[name].confidence >= threshold);
@@ -446,6 +456,8 @@ async function assessTask(profile, opts) {
       weights = { quality: rounded[0], latency: rounded[1], cost: rounded[2] };
       weightSource = dimensionWeightSources ? 'mixed:jev-score+preset:' + fallbackId : 'jev-score';
       chosenProfile = null;
+    } else {
+      dimensionWeightSources = null;
     }
   }
   const highRisk = (profile.riskDomains || []).some((domain) =>

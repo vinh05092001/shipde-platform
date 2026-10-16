@@ -539,11 +539,11 @@ Live run GOAL-AUTOCLAW-REPOS-1 (15/10) recorded every JEV assessment as `JEV_UND
 
 ### H3 live: JEV weights fall back per dimension (2026-10-16)
 
-- Base: origin/main `97d8d3d68036240dc97ff8ea4288d83571d413f8`.
-- A valid score response remains usable when at least one dimension meets the existing configurable confidence threshold. Low confidence dimensions retain their exact Controller preset weights; remaining weight is allocated by trusted JEV score ratios, with a mixed source record. Risk/role quality policy still overrides advice.
-- All-low responses keep deterministic preset fallback, but assessment confidence records the observed minimum instead of zero.
-- Prompt conflict: DEFAULT_MIN_CONFIDENCE and the configured JEV source are both 0.7, so 0.56/0.23/0.57 cannot yield mixed weights at that threshold. The exact example falls back with confidence 0.23 at default; an existing minConfidence override of 0.5 demonstrates mixed quality/cost with preset latency. No threshold was silently lowered.
-- Three new cases on unchanged main: pass 0/fail 3. After: `node --test tools/ai-brain/test/task-ai-142-jev-weights.test.js`: pass 10/fail 0. Offline stubs only. The contradictory example still requires specification clarification before acceptance against that literal DONE WHEN.
+- Base: origin/main `97d8d3d68036240dc97ff8ea4288d83571d413f8`. Follow-up to `7239c5f0919f720dea764500f11a13b259f58199` separates numeric weighting confidence from closed-choice confidence.
+- `routing.assessTask` reads optional source.weightingMinConfidence for score dimensions; `jev.advise` applies it only to scores. Preset-only/other closed choices retain source.minConfidence or DEFAULT_MIN_CONFIDENCE. The existing default remains 0.7.
+- The exact live scores 4.11/1.98/1.08 and confidences 0.56/0.23/0.57 yield mixed quality/cost JEV plus preset latency with a source weighting threshold of 0.5: weights quality 52, latency 34, cost 14, logged confidence 0.23. Risk/role policy and all-low fallback remain intact. Zero trusted score mass retains preset weights/provenance.
+- Before follow-up: 1 pass/2 fail for the three new policy/provenance cases on the previous commit. After: weighting file pass 13/fail 0; weighting + request-schema + failure-reason files pass 21/fail 0. All advisory responses are offline stubs.
+- Activation remains pending the operator's answer to the explicit file-scope question: adding weightingMinConfidence: 0.5 to the JEV source in tools/ai-brain/sources.json requires changing a file excluded by the original Task 7 allowlist. That file has not been changed. Production still uses its current 0.7 policy until this configuration change is authorized.
 
 ### H3 live: the isolated writer receives its context pack (2026-10-16)
 
