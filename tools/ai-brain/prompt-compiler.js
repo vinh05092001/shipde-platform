@@ -18,6 +18,12 @@ const PUBLISHER_BOUNDARY =
 const CLEAN_TREE_RULES =
   'Clean tree requirement: work only inside the allowed paths, do not create scratch/backup/test files outside them, delete any temporary file before finishing, finish with exactly one local commit and a clean git status (no untracked files).';
 
+// Token discipline for writer and repair prompts (TASK-AI-142 H3).
+const TOKEN_DISCIPLINE =
+  'Token discipline: before reading a file over about 300 lines (manifests, specs, logs), search it first (grep tool or rg -n) and read only the matching range (read tool with offset and limit, about 80 lines). ' +
+  'Run only the named test files and keep only their summary and failure lines (ℹ pass, ℹ fail, ✖, AssertionError, actual:, expected:); the Controller runs the full suite host-side. ' +
+  'Do not re-read files or repeat commands; never start a background job and wait on it; stop when the acceptance criteria are met.';
+
 // WD-R04: isolated workers share a provisioned dependency tree, so their
 // prompt must name the verification commands they can now run and the
 // supertest caveat. One constant for every prompt path — compilePrompt
@@ -150,6 +156,7 @@ function compilePrompt(item, ctx) {
       "Run only focused tests for this change. Print concise test output only: node --test ... 2>&1 | grep -E '^ℹ (pass|fail)|^✖ ' (or an equivalent concise reporter). Do not run or print the full brain suite; the Controller runs that host-side gate and returns failing test names only."
     );
   }
+  lines.push(TOKEN_DISCIPLINE);
   if (Array.isArray(c.hostGateFailures) && c.hostGateFailures.length > 0) {
     lines.push('Host-side verification failures to repair (failing test names only):');
     for (const failure of c.hostGateFailures) lines.push('- ' + String(failure));
