@@ -591,6 +591,10 @@ On 15/10 the live Controller got HTTP 422 then 400 from JEV and fell back to BAL
 
 The operator observed Codex using about 174k and agy 0.5-0.8M input tokens per task, versus 60-90k for disciplined agents, mostly from whole-file reads, unfiltered test output and repeated full-suite runs. Every compiled writer and repair prompt now carries a short token-discipline block (search first, then read only a line range with the read tool; run only the named tests and keep their summary and failure lines; the Controller runs the full suite). The rule names no POSIX-only command because the isolated worker shell is PowerShell; the live 15/10 17:05 writer read whole 50-56k-character files and hit the 150k budget.
 
+### H3 live: work-evidence W-R02 follows the canonical key shape (2026-10-16)
+
+Direct-route candidate keys (such as `codex::cli::::codex::codex-cli::codex-cli::<model>` for the auto-bound Codex CLI) have an empty gateway segment. `tools/ai-brain/work-evidence.js` W-R02 previously required every part to be non-empty, rejecting valid direct writer keys with `WRITER_KEY_INVALID` and preventing published work from being recorded. Writer validation now uses `parseCandidateKey` from `tools/ai-brain/discovery/identity.js`, requiring non-empty harness, accessPath, upstream, and modelId, while allowing gateway, account, and quotaScope to be empty per the canonical key contract.
+
 ### H3 live: custom candidate without gateway uses upstream instead of openai (2026-10-16)
 
 When a candidate key had an empty gateway (e.g. `hermes::https://developer.amd.com.cn/radeon/api/v1::::amd-radeon::...`), `writeProvidersConfig` defaulted the gateway to `openai`. Hermes treated this as its built-in provider, reported "No Codex credentials stored", and exited 0. `writeProvidersConfig` now names the provider after the upstream route when the gateway is empty, and `custom` when neither is known.

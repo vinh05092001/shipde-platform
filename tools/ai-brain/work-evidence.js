@@ -8,7 +8,8 @@
  *
  * Rules:
  *   W-R01 sha must be exactly 40 lowercase hex, else refuse SHA_INVALID.
- *   W-R02 writer must parse as a 7-part candidate key with non-empty parts, else WRITER_KEY_INVALID.
+ *   W-R02 writer must parse as a canonical 7-part candidate key with non-empty harness, accessPath,
+ *         upstream and modelId (gateway, account and quotaScope may be empty), else WRITER_KEY_INVALID.
  *   W-R03 the markdown review is the artifact the manifest binds: it must exist, name the
  *         reviewed sha on line 1 and carry exactly 'Review verdict: PASS' on line 2, else
  *         REVIEW_NOT_PASS (or REVIEW_SHA_MISMATCH when line 1 lacks the sha).
@@ -228,38 +229,49 @@ function importWorkItemPass(opts) {
     };
   }
 
-  // W-R02: writer must parse as a 7-part candidate key with non-empty parts, else WRITER_KEY_INVALID
+  // W-R02: writer must parse as a canonical 7-part candidate key with non-empty harness,
+  // accessPath, upstream and modelId (gateway, account and quotaScope may be empty, exactly
+  // as candidateKey() produces them), else WRITER_KEY_INVALID
   const writer = options.writer;
   if (typeof writer !== 'string') {
     return {
       ok: false,
       code: 'WRITER_KEY_INVALID',
-      reason: 'writer must parse as a 7-part candidate key with non-empty parts',
+      reason: 'writer must parse as a 7-part candidate key',
     };
   }
   const writerParts = writer.includes('::') ? writer.split('::') : writer.split('\u241f');
+  const parsed = writerParts.length === 7 ? parseCandidateKey(writer) : null;
   if (
-    writerParts.length !== 7 ||
-    writerParts.some((p) => typeof p !== 'string' || p.trim() === '')
+    !parsed ||
+    !parsed.harness ||
+    !parsed.harness.trim() ||
+    !parsed.accessPath ||
+    !parsed.accessPath.trim() ||
+    !parsed.upstream ||
+    !parsed.upstream.trim() ||
+    !parsed.modelId ||
+    !parsed.modelId.trim()
   ) {
     return {
       ok: false,
       code: 'WRITER_KEY_INVALID',
-      reason: 'writer must parse as a 7-part candidate key with non-empty parts',
+      reason:
+        'writer must parse as a 7-part candidate key with non-empty harness, accessPath, upstream and modelId',
     };
   }
 
   // Candidate representation for evidence store
   const candidate = {
-    harness: writerParts[0],
-    accessPath: writerParts[1],
-    gateway: writerParts[2],
-    upstream: writerParts[3],
-    account: writerParts[4],
-    accountId: writerParts[4],
-    quotaScope: writerParts[5],
-    model: writerParts[6],
-    modelId: writerParts[6],
+    harness: parsed.harness,
+    accessPath: parsed.accessPath,
+    gateway: parsed.gateway,
+    upstream: parsed.upstream,
+    account: parsed.account,
+    accountId: parsed.account,
+    quotaScope: parsed.quotaScope,
+    model: parsed.modelId,
+    modelId: parsed.modelId,
   };
   const normalizedWriterKey = candidateKey(candidate);
 
