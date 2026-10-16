@@ -4527,7 +4527,11 @@ async function runOrchestration(goal, opts) {
       const ordered = require('./route-health').orderProbeRoutes(
         ranked.result.ranking.filter((candidate) => {
           try {
-            return resolveLaunchRoute(candidate, o, registry)?.harnessName === 'opencode-direct';
+            const route = resolveLaunchRoute(candidate, o, registry);
+            return (
+              route?.harnessName === 'opencode-direct' ||
+              Boolean(route && routeProbeCandidate(candidate, route, registry, false))
+            );
           } catch {
             return false;
           }
@@ -4626,7 +4630,7 @@ async function runOrchestration(goal, opts) {
             Date.now() - writerProbeStartedAt >= PROBE_BUDGET_MS
               ? 'PROBE_BUDGET_EXHAUSTED: writer route probe budget exhausted'
               : 'WRITER_ROUTE_PROBE_FAILED ' + reasonCode;
-          recordWriterFailure(key, reason, reasonCode, 'gateway');
+          recordWriterFailure(key, reason, reasonCode, 'candidate');
           recordWriterPrompt(candidate);
           refuse(candidate, reason);
           const cause = String(result?.cause || result?.reasonCode || reasonCode)
@@ -4846,7 +4850,12 @@ async function runOrchestration(goal, opts) {
         recordPostSelectFailure(blockedReason, 'HARNESS_UNKNOWN');
         break;
       }
-      if (o.isolatedWorker && route.harnessName === 'opencode-direct' && !replayedLaunch) {
+      if (
+        o.isolatedWorker &&
+        !replayedLaunch &&
+        (route.harnessName === 'opencode-direct' ||
+          routeProbeCandidate(candidate, route, registry, false))
+      ) {
         let probeResult = writerProbeResults.get(decision.chosen);
         if (!probeResult) {
           // Runtime fallback may reach a route below the pre-probe winner.
@@ -4896,7 +4905,7 @@ async function runOrchestration(goal, opts) {
             sharedRouteProbe.classifyProbeFailure(probeResult)
           );
           const reason = 'WRITER_ROUTE_PROBE_FAILED ' + reasonCode;
-          recordPostSelectFailure(reason, reasonCode, 'gateway');
+          recordPostSelectFailure(reason, reasonCode, 'candidate');
           failedKeys.add(decision.chosen);
 
           const rawCause =

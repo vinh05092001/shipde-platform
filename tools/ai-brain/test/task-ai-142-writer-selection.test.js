@@ -313,3 +313,27 @@ test('selection rejects missing capabilities, low quality, exhausted quota and f
   assert.equal(result.result.rejected.length, 4);
   assert.equal(result.result.ranking[0].headroomStatus, 'unknown');
 });
+
+test('34 direct source inventories remain independent of the unrelated shared catalogue', () => {
+  const sources = Array.from({ length: 34 }, (_, i) => ({
+    id: `direct-${i}`,
+    kind: 'model-source',
+    harness: 'direct-http',
+    accessPath: 'direct',
+    endpoint: `https://direct-${i}.invalid/v1`,
+    models: [`local-model-${i}`],
+  }));
+  const generated = generateCandidates({
+    registry: { sources, dispatch: { providers: {} } },
+    accounts: sources.map((s) => ({ id: `account-${s.id}`, provider: s.id, models: s.models })),
+    catalogue: ['router/unrelated-model'],
+    discoverPool: false,
+  });
+  assert.equal(generated.length, 34);
+  for (const c of generated) {
+    const s = sources.find((s) => s.id === c.source);
+    assert.ok(s.models.includes(c.modelId));
+    assert.equal(c.harness, 'direct-http');
+    assert.equal(c.capabilities.jsonSchema, undefined, 'inventory never invents schema proof');
+  }
+});

@@ -160,7 +160,8 @@ function orderProbeRoutes(ranked, options) {
   for (const candidate of ranked) {
     const identity = probeIdentity(candidate);
     const record = getPathRecord(store, identity.model, identity.route);
-    if (record && record.status === 'AVAILABLE' && !dueAt(record, now)) live.push(candidate);
+    if (require('./probe-order').recentRouteSuccess(candidate, store, { ...o, now }))
+      live.push(candidate);
     else if (!record || record.status === 'AVAILABLE') unknown.push(candidate);
     else failed.push(candidate);
   }
@@ -374,7 +375,7 @@ function probeCooldownMs(cause) {
       causeStr
     )
       ? 6
-      : /HTTP_404|ALIAS/i.test(causeStr)
+      : /HTTP_404|ALIAS|GEO_BLOCKED/i.test(causeStr)
         ? 24
         : 0.5;
   return hours * 3600000;
