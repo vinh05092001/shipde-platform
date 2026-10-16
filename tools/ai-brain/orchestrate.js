@@ -506,7 +506,11 @@ function runVerificationCommand(item, options) {
       ? require('./isolation-launcher').workerRootFor(o.cwd || process.cwd())
       : null) ||
     null;
-  const commitCheck = verifyWorkerCommit(workerRoot, o.baseSha, o);
+  const commitCheck = verifyWorkerCommit(
+    workerRoot,
+    o.baseSha,
+    Object.assign({ workItemId: (item && item.id) || o.workItemId }, o)
+  );
   if (!commitCheck.pass) {
     return {
       pass: false,
@@ -1518,9 +1522,26 @@ function getTreeStatus(cwd, options) {
           .split(/\r?\n/)
           .map((l) => l.trimEnd())
           .filter(Boolean);
+        const activeWorkItemId = options && (options.workItemId || options.workItem);
+        const filteredLines = lines.filter((line) => {
+          if (!activeWorkItemId) return true;
+          if (line.startsWith('??')) {
+            const pathPart = line.slice(3).trim();
+            if (
+              pathPart.startsWith('docs/product-spec/work-items/') ||
+              pathPart.startsWith('docs\\product-spec\\work-items\\')
+            ) {
+              const basename = path.basename(pathPart);
+              if (basename.endsWith('.md') && basename !== `${activeWorkItemId}.md`) {
+                return false;
+              }
+            }
+          }
+          return true;
+        });
         const dirtyPaths = [
           ...new Set(
-            lines.map((line) => {
+            filteredLines.map((line) => {
               let p = line.slice(3).trim();
               if (p.includes(' -> ')) {
                 p = p.split(' -> ')[1].trim();
@@ -1532,7 +1553,7 @@ function getTreeStatus(cwd, options) {
             })
           ),
         ];
-        return { isDirty: lines.length > 0, dirtyPaths, lines };
+        return { isDirty: filteredLines.length > 0, dirtyPaths, lines: filteredLines };
       },
       Object.assign({ workerWritable: true }, options)
     );

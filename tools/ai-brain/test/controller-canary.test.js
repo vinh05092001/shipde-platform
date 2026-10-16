@@ -283,7 +283,14 @@ test('Controller offline end-to-end canary', { timeout: 170000 }, async (t) => {
             fs.writeFileSync(job.usageFile, JSON.stringify({ session_id: 'canary-writer' }));
           }
           write('README.md', 'after\n');
-          git(['add', 'README.md', 'docs/product-spec', 'data/goals', 'plan.md']);
+          git([
+            'add',
+            'README.md',
+            'docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv',
+            'docs/product-spec/work-items/' + (job.workItemId || id) + '.md',
+            'data/goals',
+            'plan.md',
+          ]);
           git(['commit', '-qm', 'canary writer']);
           return {
             exitCode: 0,
@@ -456,34 +463,26 @@ test('Controller offline end-to-end canary', { timeout: 170000 }, async (t) => {
         if (testOptions.todo) pending.push(name);
         await t.test(name, testOptions, fn);
       };
-      await check(
-        'agy 7: merge propagates MERGED to goal register',
-        {},
-        () => {
-          const status = goals.statusGoal(goalId, options, {
-            decisionDir,
-            isPidAlive: () => false,
-          });
-          assert.equal(status.items.find((item) => item.workItemId === id).state, 'MERGED');
-          assert.match(fs.readFileSync(scopedRegister, 'utf8'), /"GOAL-CANARY-1"[^\n]*"MERGED"/);
-        }
-      );
-      await check(
-        'agy 8: canonical row is MERGED and next item opens',
-        {},
-        () => {
-          assert.match(fs.readFileSync(registerPath, 'utf8'), /"GOAL-CANARY-1"[^\n]*"MERGED"/);
-          assert.equal(resumed.status, 'RESUMED');
-          assert.deepEqual(resumed.skipped, [id]);
-          assert.deepEqual(resumed.remaining, ['GOAL-CANARY-2']);
-          const selected = next.findNextWorkItem({
-            ...options,
-            decisionDir,
-            forceRegisterRead: true,
-          });
-          assert.equal(selected.item?.work_item_id, 'GOAL-CANARY-2');
-        }
-      );
+      await check('agy 7: merge propagates MERGED to goal register', {}, () => {
+        const status = goals.statusGoal(goalId, options, {
+          decisionDir,
+          isPidAlive: () => false,
+        });
+        assert.equal(status.items.find((item) => item.workItemId === id).state, 'MERGED');
+        assert.match(fs.readFileSync(scopedRegister, 'utf8'), /"GOAL-CANARY-1"[^\n]*"MERGED"/);
+      });
+      await check('agy 8: canonical row is MERGED and next item opens', {}, () => {
+        assert.match(fs.readFileSync(registerPath, 'utf8'), /"GOAL-CANARY-1"[^\n]*"MERGED"/);
+        assert.equal(resumed.status, 'RESUMED');
+        assert.deepEqual(resumed.skipped, [id]);
+        assert.deepEqual(resumed.remaining, ['GOAL-CANARY-2']);
+        const selected = next.findNextWorkItem({
+          ...options,
+          decisionDir,
+          forceRegisterRead: true,
+        });
+        assert.equal(selected.item?.work_item_id, 'GOAL-CANARY-2');
+      });
       assert.ok(Date.now() - started < 180000, 'canary exceeded three minutes');
       await t.test('no pending integration links before core merge', () => {
         assert.deepEqual(

@@ -898,30 +898,90 @@ function syncMergedPullRequestsToRegister(options = {}, deps = {}) {
     } catch (_) {}
   }
 
-  if (!Array.isArray(mergedPrs) || mergedPrs.length === 0) {
-    return { synced: false, updatedCount: 0 };
+  const text = fsApi.readFileSync(regPath, 'utf8');
+  const records = parseCsvRecords(text);
+  const cols = columnIndexes(records.length ? records[0].fields : [], options);
+  const mutations = [];
+  const handledIds = new Set();
+
+  if (Array.isArray(mergedPrs)) {
+    for (const pr of mergedPrs) {
+      if (!pr || !pr.title) continue;
+      const workItemId = extractWorkItemIdFromPrTitle(pr.title);
+      if (!workItemId) continue;
+
+      const mergeCommit =
+        (pr.mergeCommit && pr.mergeCommit.oid) || pr.mergeCommitOid || pr.merge_commit || '';
+      const prNumberStr = '#' + pr.number;
+
+      mutations.push({
+        workItemId,
+        to: 'MERGED',
+        evidence: {
+          pr: prNumberStr,
+          mergeCommit,
+        },
+      });
+      handledIds.add(workItemId);
+    }
   }
 
-  const text = fsApi.readFileSync(regPath, 'utf8');
-  const mutations = [];
+  // Also check local git ancestry and decision records for merged items
+  const mainRef = options.mainRef || deps.mainRef || 'origin/main';
+  const hasAncestor = deps.isAncestorOf || ((sha, ref) => isAncestorOf(sha, ref, rootDir));
+  let decisionRecords = [];
+  try {
+    const decisions = require('./decisions');
+    const dDir = options.decisionDir || (deps && deps.decisionDir) || decisions.DEFAULT_DIR;
+    const detail = decisions.readDecisionsDetailed({ dir: dDir, days: 7 });
+    decisionRecords = (detail && detail.records) || [];
+  } catch (_) {}
 
-  for (const pr of mergedPrs) {
-    if (!pr || !pr.title) continue;
-    const workItemId = extractWorkItemIdFromPrTitle(pr.title);
-    if (!workItemId) continue;
+  for (let idx = 1; idx < records.length; idx++) {
+    const r = records[idx];
+    const id = r.fields[cols.id];
+    const status = r.fields[cols.status];
+    if (!id || status === 'MERGED' || handledIds.has(id)) continue;
 
-    const mergeCommit =
-      (pr.mergeCommit && pr.mergeCommit.oid) || pr.mergeCommitOid || pr.merge_commit || '';
-    const prNumberStr = '#' + pr.number;
+    const itemDecisions = decisionRecords.filter((d) => d.workItemId === id);
+    const lastDec = itemDecisions.length > 0 ? itemDecisions[itemDecisions.length - 1] : null;
 
-    mutations.push({
-      workItemId,
-      to: 'MERGED',
-      evidence: {
-        pr: prNumberStr,
-        mergeCommit,
-      },
-    });
+    let candidateCommit =
+      (lastDec && (lastDec.mergeCommitOid || lastDec.headSha || lastDec.commit)) ||
+      r.fields[cols.commit];
+    let isMergedLocally = false;
+
+    if (candidateCommit) {
+      const baseRefs = [mainRef, 'origin/main', 'main', 'refs/remotes/origin/main'].filter(Boolean);
+      for (const bRef of baseRefs) {
+        try {
+          if (hasAncestor(candidateCommit, bRef)) {
+            isMergedLocally = true;
+            break;
+          }
+        } catch (_) {}
+      }
+    }
+
+    if (
+      !isMergedLocally &&
+      lastDec &&
+      (lastDec.status === 'merged' || lastDec.detail === 'GOVERNED_MERGE_SUCCESS')
+    ) {
+      isMergedLocally = true;
+    }
+
+    if (isMergedLocally) {
+      mutations.push({
+        workItemId: id,
+        to: 'MERGED',
+        evidence: {
+          mergeCommit: candidateCommit || '',
+          pr: (lastDec && lastDec.pr) || r.fields[cols.pr] || '',
+        },
+      });
+      handledIds.add(id);
+    }
   }
 
   if (mutations.length === 0) {
@@ -931,10 +991,32 @@ function syncMergedPullRequestsToRegister(options = {}, deps = {}) {
   const { text: newText, applied } = applyStatusMutations(text, mutations, options);
   if (applied > 0) {
     fsApi.writeFileSync(regPath, newText, 'utf8');
-    return { synced: true, updatedCount: applied, registerPath: regPath };
   }
 
-  return { synced: false, updatedCount: 0 };
+  // Also sync goal-specific registers
+  try {
+    const goalsDir =
+      options.goalsDir || (deps && deps.goalsDir) || path.join(rootDir, 'data', 'goals');
+    if (fsApi.existsSync(goalsDir)) {
+      const goalEntries = fsApi.readdirSync(goalsDir);
+      for (const entry of goalEntries) {
+        const goalReg = path.join(goalsDir, entry, 'register.csv');
+        if (fsApi.existsSync(goalReg)) {
+          const goalText = fsApi.readFileSync(goalReg, 'utf8');
+          const { text: newGoalText, applied: goalApplied } = applyStatusMutations(
+            goalText,
+            mutations,
+            options
+          );
+          if (goalApplied > 0) {
+            fsApi.writeFileSync(goalReg, newGoalText, 'utf8');
+          }
+        }
+      }
+    }
+  } catch (_) {}
+
+  return { synced: applied > 0, updatedCount: applied, registerPath: regPath };
 }
 
 module.exports = {

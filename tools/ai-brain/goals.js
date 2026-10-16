@@ -21,6 +21,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { atomicRenameSync } = require('./atomic-rename');
+const { isAncestorOf } = require('./facts');
 
 const planAdapter = require('./plan-adapter');
 const planner = require('./planner');
@@ -1054,14 +1055,42 @@ function inspectItemStatus(itemId, goalId, rootDir, goalsDir, d, options) {
         (last.candidates && last.candidates[0] && last.candidates[0].key) ||
         candidateKey;
       branch = last.branch || branch;
-      commitSha = last.commit || last.mergeCommit || last.head || commitSha;
+      commitSha =
+        last.commit ||
+        last.mergeCommit ||
+        last.head ||
+        last.headSha ||
+        last.mergeCommitOid ||
+        commitSha;
       reviewVerdict = last.review || last.verdict || last.codexVerdict || reviewVerdict;
       lastDecisionId = last.id || last.at || null;
       if (last.stage === decisions.Stage.COMPLETED) {
         state = 'COMPLETED';
       }
+      if (last.status === 'merged' || last.detail === 'GOVERNED_MERGE_SUCCESS') {
+        state = 'MERGED';
+      }
     }
   } catch {}
+
+  // 2b. Check git ancestry if commitSha is known and not already MERGED
+  if (state !== 'MERGED' && commitSha) {
+    const isAncestor = d.isAncestorOf || ((sha, ref) => isAncestorOf(sha, ref, rootDir));
+    const baseRefs = [
+      options && options.mainRef,
+      'origin/main',
+      'main',
+      'refs/remotes/origin/main',
+    ].filter(Boolean);
+    for (const bRef of baseRefs) {
+      try {
+        if (isAncestor(commitSha, bRef)) {
+          state = 'MERGED';
+          break;
+        }
+      } catch (_) {}
+    }
+  }
 
   // 3. Check checkpoints under intake or goal dir
   try {
@@ -1352,7 +1381,6 @@ function resumeGoal(goalId, options, deps) {
     if (skipped.includes(itemId)) {
       const info = itemStatusMap.get(itemId) || {};
       row[7] = info.state;
-      if (info.reviewVerdict) row[12] = info.reviewVerdict;
       if (info.commitSha) row[13] = info.commitSha;
     }
   }
@@ -1363,6 +1391,42 @@ function resumeGoal(goalId, options, deps) {
     updatedCsv += serializeCsvRow(row) + '\n';
   }
   fs.writeFileSync(goalRegisterPath, updatedCsv, 'utf8');
+
+  // Update canonical register as well
+  const mainRegPath = opts.registerPath
+    ? path.resolve(rootDir, opts.registerPath)
+    : path.join(rootDir, REGISTER_REL);
+  if (fs.existsSync(mainRegPath)) {
+    const mainRows = readRegisterCsvRows(mainRegPath);
+    let mainModified = false;
+    for (const row of mainRows) {
+      const itemId = row[3];
+      if (skipped.includes(itemId)) {
+        const info = itemStatusMap.get(itemId) || {};
+        if (info.state === 'MERGED') {
+          if (row[7] !== 'MERGED') {
+            row[7] = 'MERGED';
+            mainModified = true;
+          }
+          if (info.commitSha && row[13] !== info.commitSha) {
+            row[13] = info.commitSha;
+            mainModified = true;
+          }
+          if (info.pr && row[11] !== info.pr) {
+            row[11] = info.pr;
+            mainModified = true;
+          }
+        }
+      }
+    }
+    if (mainModified) {
+      let updatedMainCsv = serializeCsvRow(REGISTER_COLUMNS) + '\n';
+      for (const row of mainRows) {
+        updatedMainCsv += serializeCsvRow(row) + '\n';
+      }
+      fs.writeFileSync(mainRegPath, updatedMainCsv, 'utf8');
+    }
+  }
 
   if (remaining.length === 0) {
     goal.status = 'COMPLETED';
