@@ -4470,6 +4470,7 @@ async function runOrchestration(goal, opts) {
     };
 
     let writerProbeStartedAt = Date.now();
+    let lastWriterFailureReason = null;
     const exhaustedAccountKeys = new Set();
     const writerProbeResults = new Map();
     if (!session && o.isolatedWorker) {
@@ -4682,6 +4683,8 @@ async function runOrchestration(goal, opts) {
             }
           );
 
+      // Each retry owns a probe window; ranking and prior writer runtime are excluded.
+      if (attempt > 1) writerProbeStartedAt = Date.now();
       log.selections.push({ workItemId: item.id, attempt, decision });
       if (!decision.chosen) {
         if (failedKeys.size > 0) {
@@ -5480,6 +5483,7 @@ async function runOrchestration(goal, opts) {
         }
         launch.scope = classification.scope;
         launch.cause = classification.cause;
+        lastWriterFailureReason = classification.cause;
         launch.outcome = 'failed';
         if (
           classification.cause === 'TOKEN_BUDGET_EXCEEDED' ||
@@ -5834,7 +5838,10 @@ async function runOrchestration(goal, opts) {
       continue;
     }
     if (!session) {
-      const terminalReason = blockedReason || launch.fallbackReason || 'NO_LIVE_SESSION';
+      const terminalReason =
+        lastWriterFailureReason && blockedReason?.startsWith('PROBE_BUDGET_EXHAUSTED')
+          ? lastWriterFailureReason
+          : blockedReason || launch.fallbackReason || 'NO_LIVE_SESSION';
       const step = liveSteps[item.id] || {};
       persistStep(item.id, 'writer_post_selection_failed', {
         reason: terminalReason,

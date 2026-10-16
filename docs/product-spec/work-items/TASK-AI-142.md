@@ -537,6 +537,14 @@ Live run GOAL-AUTOCLAW-REPOS-1 (15/10) recorded every JEV assessment as `JEV_UND
 - The deterministic Controller fallback is unchanged and every named cause still counts as a provider failure.
 - Evidence: `tools/ai-brain/test/task-ai-142-jev-failure-reason.test.js`.
 
+### H3 live: per-attempt writer probe budget (2026-10-16)
+
+- Base: origin/main `97d8d3d68036240dc97ff8ea4288d83571d413f8`.
+- Retry ranking starts a fresh probe window, excluding prior writer runtime. A probe budget stop after a launch preserves the last writer failure cause.
+- Regression: two injected-clock cases run a writer for 30 simulated minutes, then require a real fallback probe; both normal fallback and a later probe-budget stop retain TOKEN_BUDGET_EXCEEDED.
+- Before (new tests on unchanged base): pass 0, fail 2, assertion `retry must actually probe after the long writer`.
+- After: `node --test tools/ai-brain/test/task-ai-142-writer-probe.test.js`: pass 15, fail 0. Offline fixtures only; no live provider run.
+
 ### H3 live: the isolated writer receives its context pack (2026-10-16)
 
 The prompt told the writer to read the focused context pack at its host path, which the isolated worker cannot read (File not found), so the writer explored the repository instead and hit the 150k token budget before writing (live run 15/10 17:05, GOAL-AUTOCLAW-REPOS-1). The launcher now copies the pack into the worker's .shipde/ directory and points the prompt at the copy.
