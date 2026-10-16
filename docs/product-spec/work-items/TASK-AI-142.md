@@ -363,6 +363,10 @@ A header a source declares as data (for example the CLI user agent AgentRouter r
 ### H3 live: the quota-fallback controller test is deterministic (2026-10-16)
 The test spawns a cold `cli.js dispatch` process (~5s alone) under a 15s `spawnSync` budget, so full-suite parallel load could kill it (status null) and fail the exit-code assertion; HOME, USERPROFILE and APPDATA were already per-test temp dirs. The budget is now a 180s ceiling with all assertions unchanged (not reproduced in 26 runs under load, so this is the identified wall-clock cause, not an observed failure).
 
+### H3 live: the probe learns a route's token-per-minute limit (2026-10-16)
+
+The writer probe passed `groq/openai/gpt-oss-120b` with a tiny request, then the real first request (about 9.2k tokens) failed HTTP 413 against a 8000 tokens-per-minute limit. The probe now records `tokensPerMinuteLimit` from the `x-ratelimit-limit-tokens` header or from a 413/429 body, and a real launch's TPM 413 records `requestedTokens`; both persist in route health. Writer selection refuses a route with `ROUTE_TPM_TOO_SMALL` when its known limit is below a request size it already refused, and never refuses when either value is unknown (no token count is hardcoded).
+
 ### H3 live: native agy candidates use the live agy model list (2026-10-16)
 The native agy candidates take their model ids from the live `agy models` listing (the pool discovery and its cache) instead of the stale ids declared on the account: declared ids the listing lacks are dropped with reason `AGY_MODEL_NOT_LISTED`, and listed ids are added. When the listing is unavailable the declared ids are kept unchanged.
 
