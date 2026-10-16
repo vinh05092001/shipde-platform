@@ -1637,6 +1637,7 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
       registry: fakeRegistry,
       accounts: fakeAccounts,
       catalogue: ['xmtp/mimo-v2.6-pro'],
+      sourceModels: { '9router': ['xmtp/mimo-v2.6-pro'] },
     });
 
     assert.ok(generated.length > 0, 'Candidates must be generated for xmtp/mimo-v2.6-pro');
@@ -1647,6 +1648,7 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
       },
       accounts: fakeAccounts,
       catalogue: ['xmtp/mimo-v2.6-pro'],
+      sourceModels: { '9router': ['xmtp/mimo-v2.6-pro'] },
     });
     assert.strictEqual(
       withoutMeta[0].capabilities.contextWindow,

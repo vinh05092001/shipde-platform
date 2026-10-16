@@ -35,6 +35,9 @@ const { DEFAULT_TOKEN_BUDGETS } = require('../intake');
 const routing = require('../routing');
 const { classifyFailure, Cause, Scope } = require('../failure-classifier');
 
+// Router listing rejections are asserted in task-ai-142-router-own-list.test.js.
+const agyRejections = (items) => items.filter((i) => i.reasonCode !== 'ROUTER_LISTING_UNKNOWN');
+
 test('agy pool ignores 9router aliases unless the exact model is advertised by agy', () => {
   const rejections = [];
   const candidates = generateCandidates({
@@ -676,7 +679,7 @@ test('Operator decision 2026-10-12: FEAT-like intake ranks a candidate without W
       ).length,
       0
     );
-    assert.deepEqual(unknownRejections, [
+    assert.deepEqual(agyRejections(unknownRejections), [
       { modelId: 'not-a-known-family', reasonCode: 'UNKNOWN_MODEL_FAMILY' },
     ]);
     const profile = {
@@ -726,7 +729,7 @@ test('candidate generation rejects unknown aliased models with a named reason', 
     candidateGenerationRejections: rejections,
   });
   assert.equal(candidates.filter((candidate) => candidate.source === 'agy-pool').length, 0);
-  assert.deepEqual(rejections, [
+  assert.deepEqual(agyRejections(rejections), [
     { modelId: 'ag/not-a-known-family', reasonCode: 'ALIAS_MISMATCH' },
     { modelId: '', reasonCode: 'EMPTY_MODEL_ID' },
   ]);
@@ -754,7 +757,7 @@ test('candidate generation names rejections for unprefixed unknown catalogue mod
     ),
     false
   );
-  assert.deepEqual(rejections, [
+  assert.deepEqual(agyRejections(rejections), [
     { modelId: 'not-a-known-family', reasonCode: 'UNKNOWN_MODEL_FAMILY' },
   ]);
 });

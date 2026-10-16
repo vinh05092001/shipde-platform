@@ -517,7 +517,12 @@ describe('candidate generation', () => {
     const catalogue = ['test-up/invented-model-v2'];
     const openCodeIds = ['ninerouter/test-up/invented-model'];
 
-    const result = candidates.generateCandidates({ registry, catalogue, openCodeIds });
+    const result = candidates.generateCandidates({
+      registry,
+      catalogue,
+      sourceModels: { '9router': catalogue },
+      openCodeIds,
+    });
 
     // The HTTP candidate.
     const httpCandidate = result.find(
@@ -1396,6 +1401,7 @@ describe('acceptance: seven-fix contract', () => {
     const result = candidates.generateCandidates({
       registry,
       catalogue: ['gh/invented-model'],
+      sourceModels: { '9router': ['gh/invented-model'] },
       accounts: [
         { id: 'acc-a', sourceId: '9router' },
         { id: 'acc-b', sourceId: '9router' },
@@ -1427,6 +1433,7 @@ describe('acceptance: seven-fix contract', () => {
     const result = candidates.generateCandidates({
       registry: customRegistry,
       catalogue: ['wz/invented-z'],
+      sourceModels: { weird: ['wz/invented-z'] },
     });
     const c = result.find((x) => x.upstream === 'wz');
     assert.ok(c, 'candidate produced against an unusual registry');
@@ -1701,6 +1708,7 @@ describe('acceptance: full ranking run', () => {
     const fromCatalogue = candidates.generateCandidates({
       registry,
       catalogue,
+      sourceModels: { '9router': catalogue },
       accounts: [
         { id: 'agy-main', sourceId: 'agy-local', models: ['invented-cli-model'] },
         { id: 'acc-router', sourceId: '9router' },

@@ -127,6 +127,7 @@ test('01 new source by data -> candidate appears', () => {
   const before = candidates.generateCandidates({
     registry: reg,
     catalogue: ['up-a/model-one'],
+    sourceModels: { 'gw-a': ['up-a/model-one'] },
     accounts: [],
   });
   assert.equal(
@@ -155,6 +156,7 @@ test('02 two accounts same upstream -> two independent keys', () => {
   const list = candidates.generateCandidates({
     registry: registry(),
     catalogue: ['up-a/model-one'],
+    sourceModels: { 'gw-a': ['up-a/model-one'] },
     accounts: [
       { id: 'acct-a', sourceId: 'gw-a' },
       { id: 'acct-b', sourceId: 'gw-a' },

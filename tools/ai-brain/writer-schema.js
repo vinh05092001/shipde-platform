@@ -123,6 +123,14 @@ async function verify(candidate, options) {
         return {
           ok: false,
           reason: `WRITER_SCHEMA_POOL_${known.includes(adapterReason) ? adapterReason : state}`,
+          detail: createSecretRedactor(o.env || process.env)(
+            `state=${result && result.state ? result.state : 'NO_SUCCESS'}\n` +
+              `reason=${(result && result.reason) || 'unknown'}\n` +
+              failureDetail(
+                { ...result, stderr: pool.readOutText(candidate.accountId, o) },
+                o.env || process.env
+              )
+          ),
         };
       }
       text = poolResultText(pool.readOutText(candidate.accountId, o));

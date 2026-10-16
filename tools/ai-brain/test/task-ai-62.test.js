@@ -283,6 +283,7 @@ describe('TASK-AI-62: candidate identity stays exact', () => {
     const generated = candidates.generateCandidates({
       registry,
       catalogue: ['up1/model-x'],
+      sourceModels: { gw: ['up1/model-x'] },
       accounts: [
         { id: 'acct-a', sourceId: 'gw' },
         { id: 'acct-b', sourceId: 'gw' },
