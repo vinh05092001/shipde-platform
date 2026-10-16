@@ -1350,6 +1350,8 @@ function rankForProfile(candidates, profile, assessment, ctx) {
       reject('CAPABILITY_MISSING:' + missingCapability, 'capability');
       if (missingCapability === 'jsonSchema' && c.jsonSchemaEvidence) {
         rejected[rejected.length - 1].reason = c.jsonSchemaEvidence.reason;
+        if (c.jsonSchemaEvidence.detail)
+          rejected[rejected.length - 1].detail = c.jsonSchemaEvidence.detail;
       }
       continue;
     }

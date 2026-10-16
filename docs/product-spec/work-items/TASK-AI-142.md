@@ -356,6 +356,18 @@ Selection logs retain the full chosenCandidate, the existing chosen identity, to
 
 Verification: sequential TASK-AI-141 199/199, TASK-AI-142 136/136, TASK-AI-64 129/129, dispatch-wiring 7/7 and decisions 28/28 passed. Additional candidate/routing regressions passed 74/74. Changed JavaScript passes ESLint no-undef; changed files pass Prettier and git diff --check. Live logs remain untouched and runtime data is excluded from commits.
 
+### H3 live: a CLI login binding is not test evidence (2026-10-16)
+
+After the dry-run moved to rankForProfile (#343), the reviewer pick crashed (`evidence.filter is not a function`) because the auto-bound Codex CLI candidate carried the string `cli-login` in `evidence`, the list of test results. The binding stays in `binding`; `evidence` is no longer overwritten, so review-call gets a ranked reviewer again.
+
+### H3 live: every operator key reaches a probed source (2026-10-16)
+
+InternLM keys now resolve to the OpenAI-compatible endpoint https://chat.intern-ai.org.cn/api/v1, and TENCENT_TOKENHUB_BASE_URL (trailing slash stripped) is the endpoint of the Tencent TokenHub key. AgentRouter declares its required CLI User-Agent as data on the endpoint table entry, and the probe sends any declared source headers (carried into the registry source entry). Intake refreshes discovery plus probe automatically when the discovered file is missing or an env key that discovery maps to a source has no entry.
+
+### H3 live: a failed Codex schema proof records why (2026-10-16)
+
+When the Codex jsonSchema proof fails with a generic reason such as WRITER_SCHEMA_CODEX_LAUNCH_FAILED, the result now carries a `detail` field with the exit code and the last 20 stderr lines, redacted by the shared secret redactor, and the capability rejection in the logged decision copies it. A missing-login stderr ("No ... credentials stored") now maps to WRITER_SCHEMA_AUTH_NEEDED, so the next live run's decisions show the real cause instead of an opaque launch failure.
+
 ### H3 live: the host gate baseline is the writer branch's merge-base (2026-10-16)
 
 On 16/10 the branch feat/goal-autoclaw-repos-1 was cut from main e037323e; main later fixed 9 environment-sensitive tests, so the gate's baseline at the new origin/main passed while the writer tree still failed them, and 9 pre-existing failures were reported as new (HOST_GATE_FAILED) that the repair writer could not fix. When the base is a ref, runHostBrainGate now baselines at `git merge-base HEAD <ref>` (falling back to the ref's rev-parse); an explicit 40-hex baseSha is unchanged.

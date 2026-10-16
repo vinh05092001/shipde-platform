@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { candidateKey } = require('./candidates');
+const { createSecretRedactor } = require('./decisions');
 
 // This is the writer's final result, not the pool's process-state envelope.
 function contract(key, nonce) {
@@ -71,6 +72,18 @@ function poolResultText(text) {
   return text;
 }
 
+// Exit code plus the redacted stderr tail, so a generic failure stays diagnosable.
+function failureDetail(result, env) {
+  const redact = createSecretRedactor(env);
+  const tail = String((result && result.stderr) || '')
+    .split(/\r?\n/)
+    .filter((line) => line.trim())
+    .slice(-20)
+    .join('\n');
+  const code = result && result.exitCode !== undefined ? result.exitCode : 'unknown';
+  return redact(`exitCode=${code}${tail ? '\n' + tail : ''}`);
+}
+
 async function verify(candidate, options) {
   const o = options || {};
   const key = candidateKey(candidate);
@@ -133,7 +146,11 @@ async function verify(candidate, options) {
           return { ok: false, reason: 'CODEX_REQUIRES_ISOLATION' };
         if (/unexpected argument.*--output-schema|unknown.*--output-schema/i.test(stderr))
           return { ok: false, reason: 'WRITER_SCHEMA_FLAG_UNSUPPORTED' };
-        if (/not logged in|login required|authentication required|unauthorized/i.test(stderr))
+        if (
+          /not logged in|login required|authentication required|unauthorized|no [a-z0-9 -]*credentials stored/i.test(
+            stderr
+          )
+        )
           return { ok: false, reason: 'WRITER_SCHEMA_AUTH_NEEDED' };
         if (/rate limit|quota|usage limit/i.test(stderr))
           return { ok: false, reason: 'WRITER_SCHEMA_QUOTA_UNAVAILABLE' };
@@ -146,6 +163,7 @@ async function verify(candidate, options) {
             : result && result.timedOut
               ? 'WRITER_SCHEMA_TIMEOUT'
               : 'WRITER_SCHEMA_CODEX_LAUNCH_FAILED',
+          detail: failureDetail(result, o.env || process.env),
         };
       }
       text = result.stdout;

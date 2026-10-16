@@ -156,12 +156,24 @@ function discoverNineRouterDb(options, add) {
   }
 }
 
+// Credential env name -> env var that overrides the base URL of its source.
+const BASE_URL_ENV_BY_CREDENTIAL = {
+  TENCENT_TOKENHUB_API_KEY: 'TENCENT_TOKENHUB_BASE_URL',
+};
+
 function discoverSources(options = {}) {
   const home = options.home || os.homedir();
   const env = options.env || process.env;
   const local = options.localAppData || env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
   const result = new Map();
   const add = (source) => {
+    const baseUrlEnv =
+      source.credential && source.credential.type === 'env'
+        ? BASE_URL_ENV_BY_CREDENTIAL[source.credential.name]
+        : null;
+    const override =
+      baseUrlEnv && env[baseUrlEnv] ? String(env[baseUrlEnv]).replace(/\/+$/, '') : null;
+    if (override) source = { ...source, endpoint: override };
     const endpoint = source.endpoint ? sanitizeEndpoint(source.endpoint) : null;
     if (source.endpoint && !endpoint) return;
     // Repository and web links found in session metadata are not model APIs.
@@ -185,6 +197,7 @@ function discoverSources(options = {}) {
         old.modelMeta = Object.assign({}, old.modelMeta || {}, source.modelMeta);
       }
       if (!old.credential && source.credential) old.credential = source.credential;
+      if (source.headers && !old.headers) old.headers = { ...source.headers };
       return;
     }
     result.set(key, {
@@ -195,6 +208,7 @@ function discoverSources(options = {}) {
       models: [...new Set(source.models || [])],
       modelMeta: source.modelMeta ? { ...source.modelMeta } : {},
       credential: source.credential || null,
+      ...(source.headers ? { headers: { ...source.headers } } : {}),
       status: 'discovered',
       lastProbeAt: null,
       nextCheckAt: null,
@@ -355,6 +369,17 @@ function discoverSources(options = {}) {
     },
     PGSGROVE_API_KEY: { id: 'pgsgrove', name: 'pgsgrove', endpoint: 'https://api.pgsgrove.com/v1' },
     SOVINFRA_API_KEY: { id: 'sovinfra', name: 'sovinfra', endpoint: 'https://api.sovinfra.ai/v1' },
+    INTERNLM_API_KEY: {
+      id: 'internlm',
+      name: 'internlm',
+      endpoint: 'https://chat.intern-ai.org.cn/api/v1',
+    },
+    AGENTROUTER_API_KEY: {
+      id: 'agentrouter',
+      name: 'agentrouter',
+      endpoint: 'https://agentrouter.org/v1',
+      headers: { 'User-Agent': 'claude-cli/1.0.0 (external, cli)' },
+    },
   };
 
   function getOperatorEndpoint(envName) {
@@ -403,6 +428,7 @@ function discoverSources(options = {}) {
         id: op ? op.id : idOf(name.replace(/_(?:API_KEY|TOKEN)(_\d+)?$/i, '$1')),
         name: op ? op.name : name.replace(/_(?:API_KEY|TOKEN)(_\d+)?$/i, '$1'),
         endpoint: op ? op.endpoint : null,
+        headers: op ? op.headers : undefined,
         credential: { type: 'env', name },
       });
     }
@@ -497,7 +523,10 @@ async function probeSource(source, options = {}) {
   const targetEndpoint = (source.endpoint && sanitizeEndpoint(source.endpoint)) || source.endpoint;
   try {
     const response = await fetcher(targetEndpoint.replace(/\/$/, '') + '/models', {
-      headers: secret ? { Authorization: 'Bearer ' + secret } : {},
+      headers: {
+        ...(source.headers && typeof source.headers === 'object' ? source.headers : {}),
+        ...(secret ? { Authorization: 'Bearer ' + secret } : {}),
+      },
     });
     if (!response.ok) {
       const status = response.status;

@@ -3784,7 +3784,7 @@ function intakeCommand(args, deps = {}) {
   const publish = Boolean(args.publish);
 
   return Promise.resolve()
-    .then(() => runIntake({ workItem, run, publish }, d))
+    .then(() => runIntake({ workItem, run, publish }, { liveDiscovery: true, ...d }))
     .then((result) => {
       for (const warning of result.warnings || []) {
         log('CẢNH catalogue source ' + warning.source + ': ' + warning.error);
