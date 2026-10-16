@@ -335,3 +335,33 @@ test('TASK-AI-142: (h) if origin/main cannot be resolved, stay strict instead of
   assert.ok(gitRevParseCalls.includes('origin/main^{commit}'));
   assert.ok(!gitRevParseCalls.includes('main^{commit}'));
 });
+
+test('TASK-AI-142: baseline runs at the merge-base of HEAD and the ref, not the moved ref', () => {
+  const shaA = 'a'.repeat(40);
+  const shaB = 'b'.repeat(40);
+  const addedAt = [];
+  let baselineDir = null;
+  const customCache = new Map();
+  const spawnSync = (cmd, args, opts = {}) => {
+    if (cmd === 'git') {
+      if (args[0] === 'rev-parse') return { status: 0, stdout: shaB + '\n', stderr: '' };
+      if (args[0] === 'merge-base') return { status: 0, stdout: shaA + '\n', stderr: '' };
+      if (args[0] === 'worktree' && args[1] === 'add') {
+        baselineDir = args[args.length - 2];
+        addedAt.push(args[args.length - 1]);
+      }
+      return { status: 0, stdout: '', stderr: '' };
+    }
+    const isBaseline = baselineDir !== null && opts.cwd === baselineDir;
+    // The env-sensitive test fails in the writer tree and at A, but passes at the moved B.
+    if (isBaseline && addedAt[0] === shaB) return { status: 0, stdout: 'ℹ pass 6\nℹ fail 0\n' };
+    return { status: 1, stdout: 'not ok 1 - env sensitive test\nℹ pass 5\nℹ fail 1\n' };
+  };
+
+  const result = runHostBrainGate({ workItemId: 'X' }, { spawnSync, baseCache: customCache });
+
+  assert.deepEqual(addedAt, [shaA]);
+  assert.deepEqual(result.hostGateFailures.newFailures, []);
+  assert.ok(customCache.has(shaA));
+  assert.ok(!customCache.has(shaB));
+});

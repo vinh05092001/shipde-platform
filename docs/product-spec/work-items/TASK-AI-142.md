@@ -356,6 +356,10 @@ Selection logs retain the full chosenCandidate, the existing chosen identity, to
 
 Verification: sequential TASK-AI-141 199/199, TASK-AI-142 136/136, TASK-AI-64 129/129, dispatch-wiring 7/7 and decisions 28/28 passed. Additional candidate/routing regressions passed 74/74. Changed JavaScript passes ESLint no-undef; changed files pass Prettier and git diff --check. Live logs remain untouched and runtime data is excluded from commits.
 
+### H3 live: the host gate baseline is the writer branch's merge-base (2026-10-16)
+
+On 16/10 the branch feat/goal-autoclaw-repos-1 was cut from main e037323e; main later fixed 9 environment-sensitive tests, so the gate's baseline at the new origin/main passed while the writer tree still failed them, and 9 pre-existing failures were reported as new (HOST_GATE_FAILED) that the repair writer could not fix. When the base is a ref, runHostBrainGate now baselines at `git merge-base HEAD <ref>` (falling back to the ref's rev-parse); an explicit 40-hex baseSha is unchanged.
+
 ### H3 live: a failed JEV assessment is not cached (2026-10-16)
 
 `assessOnce` cached the in-flight Promise, so a transient JEV rejection stayed cached and every later call in the session got the same failure. The rejected entry is now removed (only if it is still the same entry), so the next call asks JEV again; resolved results are unchanged.

@@ -1889,6 +1889,10 @@ function runHostBrainGate(job, options = {}) {
         });
         if (revRes && revRes.status === 0 && revRes.stdout) {
           baseSha = String(revRes.stdout).trim();
+          // The writer branched from an older main: gate against the common ancestor, not the moved ref.
+          const mbRes = run('git', ['merge-base', 'HEAD', refStr], { cwd: root, encoding: 'utf8' });
+          const mbSha = mbRes && mbRes.status === 0 ? String(mbRes.stdout || '').trim() : '';
+          if (/^[0-9a-f]{40}$/i.test(mbSha)) baseSha = mbSha;
         }
       } catch (_) {
         baseSha = null;
