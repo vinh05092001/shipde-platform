@@ -625,3 +625,8 @@ Direct-route candidate keys (such as `codex::cli::::codex::codex-cli::codex-cli:
 ### H3 live: custom candidate without gateway uses upstream instead of openai (2026-10-16)
 
 When a candidate key had an empty gateway (e.g. `hermes::https://developer.amd.com.cn/radeon/api/v1::::amd-radeon::...`), `writeProvidersConfig` defaulted the gateway to `openai`. Hermes treated this as its built-in provider, reported "No Codex credentials stored", and exited 0. `writeProvidersConfig` now names the provider after the upstream route when the gateway is empty, and `custom` when neither is known.
+
+### H3 live: detect 413 request loops and fix progress stall detection (2026-10-16)
+
+When a model route encountered HTTP 413 (Payload Too Large / context length exceeded) or tokens-per-minute (TPM) rate limits, the worker process previously remained unclassified or hung until the launcher timeout (30 minutes). The isolation launcher now monitors worker event streams and output for HTTP 413 / Request Too Large / TPM limit signals and aborts immediately with failure reason `REQUEST_TOO_LARGE` (mapped to model scope with 15-minute cooldown in `failure-classifier.js` and `orchestrate.js`), allowing the Controller to switch to an alternative model immediately. Furthermore, stall detection (`STALLED_NO_PROGRESS`) now counts progress only on genuine worktree file signature changes, verified tool use events (`tool_use`), or monotonically increasing cumulative token usage across the session, preventing fluctuating per-step token usage from resetting the progress timer.
+

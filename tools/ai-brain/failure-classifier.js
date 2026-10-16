@@ -32,6 +32,7 @@ const Cause = {
   UNKNOWN: 'unknown',
   TIMEOUT: 'timeout',
   QUOTA_EXHAUSTED: 'quota_exhausted',
+  REQUEST_TOO_LARGE: 'request_too_large',
 };
 
 /**
@@ -256,6 +257,7 @@ const DEFAULT_COOLDOWNS = {
   [Cause.UNKNOWN]: 5 * 60 * 1000, // 5 minutes
   [Cause.TIMEOUT]: 10 * 60 * 1000, // 10 minutes
   [Cause.QUOTA_EXHAUSTED]: 60 * 60 * 1000, // 1 hour
+  [Cause.REQUEST_TOO_LARGE]: 15 * 60 * 1000, // 15 minutes
 };
 
 /**
@@ -520,6 +522,26 @@ function classifyFailure(input) {
       cause: Cause.LAUNCH_CONFIG,
       scope: Scope.LOCAL,
       cooldownMs: DEFAULT_COOLDOWNS[Cause.LAUNCH_CONFIG],
+      humanAction: HumanAction.NONE,
+      evidence,
+      resetTime: null,
+    });
+  }
+
+  const isRequestTooLarge = Boolean(
+    input?.httpStatus === 413 ||
+    input?.failureReason === 'REQUEST_TOO_LARGE' ||
+    input?.cause === 'REQUEST_TOO_LARGE' ||
+    input?.cause === Cause.REQUEST_TOO_LARGE ||
+    /\b413\b.*(?:request|payload|entity|too\s+large|tpm)|(?:request|payload|entity)\s+(?:is\s+)?too\s+large|\b413\s+Request|\b413\s+Payload|rate\s+limit.*tokens?\s+per\s+minute|\bTPM\b.*limit|limit.*on.*TPM/i.test(
+      text
+    )
+  );
+  if (isRequestTooLarge) {
+    return addRetryFields({
+      cause: Cause.REQUEST_TOO_LARGE,
+      scope: Scope.MODEL,
+      cooldownMs: DEFAULT_COOLDOWNS[Cause.REQUEST_TOO_LARGE],
       humanAction: HumanAction.NONE,
       evidence,
       resetTime: null,
