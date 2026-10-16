@@ -469,6 +469,49 @@ describe('candidate generation', () => {
     assert.equal(poolCand.quotaScope, 'agy01:gemini');
   });
 
+  test('native agy candidates use the live agy model list, declared ids when it is unavailable', () => {
+    const registry = {
+      sources: [
+        {
+          id: 'antigravity',
+          kind: 'agent-cli',
+          modelsFrom: 'account',
+          harness: 'paseo',
+          accessPath: 'cli',
+        },
+      ],
+    };
+    const accounts = [
+      { id: 'agy-native-a', provider: 'antigravity', models: ['old-a', 'shared-b'] },
+    ];
+    const native = (list) =>
+      list.filter((c) => c.accountId === 'agy-native-a' && c.upstream === 'antigravity');
+    const ids = (list) =>
+      native(list)
+        .map((c) => c.modelId)
+        .sort();
+
+    const rejections = [];
+    const live = candidates.generateCandidates({
+      registry,
+      accounts,
+      models: ['shared-b', 'new-c'],
+      candidateGenerationRejections: rejections,
+    });
+    assert.deepEqual(
+      [...new Set(ids(live).filter((m) => ['old-a', 'shared-b', 'new-c'].includes(m)))],
+      ['new-c', 'shared-b']
+    );
+    assert.ok(!ids(live).includes('old-a'));
+    assert.ok(
+      rejections.some((r) => r.modelId === 'old-a' && r.reasonCode === 'AGY_MODEL_NOT_LISTED')
+    );
+
+    const declared = candidates.generateCandidates({ registry, accounts, discoverPool: false });
+    assert.ok(ids(declared).includes('old-a') && ids(declared).includes('shared-b'));
+    assert.ok(!ids(declared).includes('new-c'));
+  });
+
   test('OpenCode alias and HTTP id are separate candidates', () => {
     const registry = sourcesApi.loadSources();
     const catalogue = ['test-up/invented-model-v2'];
