@@ -45,6 +45,9 @@ describe('TASK-AI-89: Live capability lookup uses official account registry', ()
   let tempRoot, evidenceDir, decisionDir;
   let testEvidenceData;
   let registryAccountsList;
+  const offlineAdvisory = async () => {
+    throw new Error('fixture JEV unavailable');
+  };
 
   beforeEach(() => {
     tempRoot = tmpDir('task-ai-89-');
@@ -74,8 +77,52 @@ describe('TASK-AI-89: Live capability lookup uses official account registry', ()
         },
         args
       ),
-      Object.assign({ log: noop, exit: noop }, deps)
+      Object.assign(
+        {
+          log: noop,
+          exit: noop,
+          registry: { sources: [] },
+          candidates: [],
+          listAccounts: () => [],
+          env: {},
+        },
+        deps
+      )
     );
+
+  test('fixture CLI never constructs a host JEV client with provider keys present', async (t) => {
+    let hostReads = 0;
+    let hostClients = 0;
+    t.mock.method(require('../sources'), 'loadSources', () => {
+      hostReads += 1;
+      return { sources: [] };
+    });
+    t.mock.method(require('../accounts'), 'listAccounts', () => {
+      hostReads += 1;
+      return [];
+    });
+    t.mock.method(require('../jev'), 'buildJevAsk', (source) => {
+      if (source?.credential) hostClients += 1;
+      return async () => {
+        throw new Error('host advisory must be unreachable');
+      };
+    });
+    await runCli(
+      {},
+      {
+        candidates: [],
+        listAccounts: () => [],
+        now: NOW,
+        run: () => assert.fail('empty fixture must not launch'),
+      }
+    );
+    assert.equal(hostReads, 0, 'fixture must not read the host source or account registry');
+    assert.equal(
+      hostClients,
+      0,
+      'fixture must inject its advisory instead of reading host credentials'
+    );
+  });
 
   // G-R01: the live orchestrate CLI and dispatch pass, for evidence-candidate capability lookup,
   // the union of the --accounts input and accounts.listAccounts() (registry entries win on capabilities
@@ -262,7 +309,9 @@ describe('TASK-AI-89: Live capability lookup uses official account registry', ()
 
   // G-R02: hermetic runOrchestration calls that inject candidates and no registry still see no host registry.
   describe('G-R02: hermetic runOrchestration calls that inject candidates see no host registry', () => {
-    test('runOrchestration with injected candidates and no registry gives evidence candidate capabilities {}', async () => {
+    test('runOrchestration with injected candidates and no registry gives evidence candidate capabilities {}', async (t) => {
+      // Keep the no-registry call under test, while its default reader is a fixture.
+      t.mock.method(require('../sources'), 'loadSources', () => ({ sources: [] }));
       const item = {
         id: 'TASK-AI-89-ITEM',
         roleRequirement: { role: 'writer' },
@@ -273,6 +322,7 @@ describe('TASK-AI-89: Live capability lookup uses official account registry', ()
       // Injected candidates array without xkiro, and no registry passed
       const log = await orchestrate.runOrchestration('Goal for hermetic test', {
         specs: [item],
+        jevAsk: offlineAdvisory,
         candidates: [],
         evidenceData: testEvidenceData,
         run: () => ({ exitCode: 0, stdout: 'ok' }),
@@ -336,6 +386,8 @@ describe('TASK-AI-89: Live capability lookup uses official account registry', ()
         [],
         testEvidenceData,
         {
+          registry: { sources: [] },
+          jevAsk: offlineAdvisory,
           accounts: inputAccounts,
           registryAccounts: registryAccountsList,
           decisionDir,
@@ -371,6 +423,8 @@ describe('TASK-AI-89: Live capability lookup uses official account registry', ()
         [],
         testEvidenceData,
         {
+          registry: { sources: [] },
+          jevAsk: offlineAdvisory,
           accounts: inputAccounts,
           registryAccounts: [],
           decisionDir,

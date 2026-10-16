@@ -541,6 +541,16 @@ Live run GOAL-AUTOCLAW-REPOS-1 (15/10) recorded every JEV assessment as `JEV_UND
 - The deterministic Controller fallback is unchanged and every named cause still counts as a provider failure.
 - Evidence: `tools/ai-brain/test/task-ai-142-jev-failure-reason.test.js`.
 
+### H3 live: host-independent test fixtures (2026-10-16)
+
+- Base: origin/main `97d8d3d68036240dc97ff8ea4288d83571d413f8`. Follow-up resolves the standalone validation gap at `e0164b1ab7c09c40f511de2b23f36f9bf1b3d26e`.
+- TASK-AI-89 fixtures inject source/candidate/account defaults and unavailable advisory stubs. Its missing-registry test still omits the registry argument and mocks only the default reader; capability and account-union assertions remain intact.
+- TASK-AI-141 loop fixtures use isolated roots/config. Qualification-builder fixtures now have unique temporary roots, preventing parallel runs from deleting each other's intake fixture. The default-decision-dir guard intercepts this process's append/write calls instead of comparing the live shared log before/after; attempted default writes fail and local decision records are still required.
+- Both 200 ms Hermes deadline tests use Node mock Date/timers. Time advances only after pending probes have started or the lower-ranked live result has settled. Abort, concurrency, no-launch, winner identity, and persisted route-health assertions remain enforced. No Hermes production change or Task 5 overlay is needed.
+- Before: new host-reader regression on unchanged main pass 0/fail 1; standalone original deadline flake 117/1. Parallel runs also reproduced shared-log snapshot and fixed-intake-directory races. After: named files task-ai-141b.test.js, task-ai-89.test.js, task-ai-142-hermes-session.test.js pass 118/fail 0/cancelled 0 in every run.
+- Final stress validation: 10 full named-file runs with Windows User/Machine env loaded (NINEROUTER key present) and 10 with credential variables removed (key absent), both groups concurrently; all 20 exit codes 0. Credential values are never printed.
+- Host gate and production routing are unchanged. The historical live run's exact ten failures are not claimed replayed; the isolated reader/timer/concurrent-fixture faults are directly reproduced and repaired.
+
 ### H3 live: a Hermes brain without its login is reselected (2026-10-16)
 
 #323 classified "No Codex credentials stored" as an account failure, but Hermes prints it and exits 0, so the run counted as completed and the classifier never ran (live launch 16/10 06:03). The output scanner now treats that startup line as route evidence, so the run fails and the brain is reselected. No credential file is read.
