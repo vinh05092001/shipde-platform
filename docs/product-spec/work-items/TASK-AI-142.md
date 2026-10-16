@@ -356,6 +356,17 @@ Selection logs retain the full chosenCandidate, the existing chosen identity, to
 
 Verification: sequential TASK-AI-141 199/199, TASK-AI-142 136/136, TASK-AI-64 129/129, dispatch-wiring 7/7 and decisions 28/28 passed. Additional candidate/routing regressions passed 74/74. Changed JavaScript passes ESLint no-undef; changed files pass Prettier and git diff --check. Live logs remain untouched and runtime data is excluded from commits.
 
+### H3 live: declared source headers reach run-time requests (2026-10-16)
+
+A header a source declares as data (for example the CLI user agent AgentRouter requires) now reaches the requests that actually call the provider: the shared route probe, the orchestrator route candidate, the opencode provider `options.headers` written for isolated workers, and the Hermes route probe. The Hermes `config.yaml` custom provider has no verified extra-header field, so Hermes runtime calls are not changed and only its probe sends the headers; no source id is hardcoded.
+
+### H3 live: the quota-fallback controller test is deterministic (2026-10-16)
+The test spawns a cold `cli.js dispatch` process (~5s alone) under a 15s `spawnSync` budget, so full-suite parallel load could kill it (status null) and fail the exit-code assertion; HOME, USERPROFILE and APPDATA were already per-test temp dirs. The budget is now a 180s ceiling with all assertions unchanged (not reproduced in 26 runs under load, so this is the identified wall-clock cause, not an observed failure).
+
+### H3 live: the probe learns a route's token-per-minute limit (2026-10-16)
+
+The writer probe passed `groq/openai/gpt-oss-120b` with a tiny request, then the real first request (about 9.2k tokens) failed HTTP 413 against a 8000 tokens-per-minute limit. The probe now records `tokensPerMinuteLimit` from the `x-ratelimit-limit-tokens` header or from a 413/429 body, and a real launch's TPM 413 records `requestedTokens`; both persist in route health. Writer selection refuses a route with `ROUTE_TPM_TOO_SMALL` when its known limit is below a request size it already refused, and never refuses when either value is unknown (no token count is hardcoded).
+
 ### H3 live: the role budget wins and only writer launches count as attempts (2026-10-16)
 
 Live on GOAL-AUTOCLAW-REPOS-1 (role author.foundation, complexity standard) budgetForItem took the minimum of the role ceiling (250k) and the complexity ceiling (150k), so a 1M-context writer that had written 4 files and edited 3 was killed at 150.5k (TOKEN_BUDGET_EXCEEDED) before committing. The explicit role budget is the more specific rule and now wins for every field it sets; complexity fills the fields the role leaves unset and the default fills the rest. The same item also ended TURN_BUDGET_EXCEEDED at selection round 14 after only a few real launches, because maxTurns was compared with the selection-round counter; it now counts actual writer launches.
@@ -632,3 +643,16 @@ Direct-route candidate keys (such as `codex::cli::::codex::codex-cli::codex-cli:
 ### H3 live: custom candidate without gateway uses upstream instead of openai (2026-10-16)
 
 When a candidate key had an empty gateway (e.g. `hermes::https://developer.amd.com.cn/radeon/api/v1::::amd-radeon::...`), `writeProvidersConfig` defaulted the gateway to `openai`. Hermes treated this as its built-in provider, reported "No Codex credentials stored", and exited 0. `writeProvidersConfig` now names the provider after the upstream route when the gateway is empty, and `custom` when neither is known.
+
+### H3 live: router candidate filtering strips gateway prefix and requires upstream (2026-10-16)
+
+Aggregator routers like 9Router require model IDs to carry an upstream provider prefix (`cl/...`, `ag/...`, `ocz/...`, `kr/...`, `gh/...`, `groq/...`). Bare model names (e.g. `ninerouter/gpt-6-astra`, `ninerouter/muse-spark-1-3`) resulted in 404 ("Model not found") from 9Router, and candidates for OpenCode reaching 9Router incorrectly inherited `upstream: ninerouter` instead of their true upstream failure domain (`cl`, `ag`). `resolveRouterModel` in `tools/ai-brain/candidates.js` strips router prefixes (`source.modelPrefix`, `source.id + '/'`, or dispatch modelPrefix), extracts the true upstream provider, and rejects bare models or recursive router names. Candidates for OpenCode, router catalogue, and Hermes OpenAI-compatible paths now carry the true upstream provider as their failure domain and filter out unroutable bare model names. Unit test: `tools/ai-brain/test/task-ai-142-router-model-prefix.test.js`.
+
+### H3 live: per-model capabilities derivation and no fake 200k on 9Router (2026-10-16)
+
+- Problem: Account `ninerouter` in `tools/ai-brain/seed-accounts.js` declared blanket capabilities `{ jsonSchema: true, tools: true, contextWindow: 200000 }`. In `tools/ai-brain/candidates.js`, candidate generation for router routes (`source.kind === 'router'`, `source.reachedVia`, and `openCodeIds`/`catalogue` loops for OpenCode) copied account capabilities wholesale onto generated candidates. Upstream models routed through 9Router (such as Groq GPT-OSS 120b with actual context 131k / 8k TPM limit) falsely inherited a 200k context window and tool capabilities, bypassing writer qualification and causing infinite 413 request loops.
+- Fix:
+  1. Removed blanket capabilities `{ jsonSchema: true, tools: true, contextWindow: 200000 }` from account `ninerouter` in `tools/ai-brain/seed-accounts.js`.
+  2. Implemented `resolveCandidateCapabilities(acc, modelId, opts)` in `tools/ai-brain/candidates.js`: for gateway/router routes, strips blanket `contextWindow` from gateway accounts and derives `contextWindow`, `tools`, and `jsonSchema` per-model from `item` (catalogue), `row` (account model row), or source/routerSource `modelMeta`. Unverified models retain `contextWindow: undefined`.
+  3. Integrated `resolveCandidateCapabilities` across router catalogue candidates, reachedVia model sources, and agent-cli (OpenCode) loops.
+- Verification: `tools/ai-brain/test/task-ai-142-capabilities.test.js` (pass 3/fail 0), plus all candidate and context window suites pass clean.

@@ -50,6 +50,63 @@ function parsePrefix(modelId) {
   return { upstream: str.slice(0, idx), model: str.slice(idx + 1) };
 }
 
+/**
+ * Resolves a model ID against a router/gateway source.
+ * A router forwards requests to upstream providers, so every valid model
+ * reachable through a router MUST carry an upstream prefix (e.g. "cl/...", "ag/...").
+ *
+ * If the model ID starts with the router's prefix (from source.modelPrefix,
+ * source.id + '/', or dispatch table), that prefix is stripped to uncover
+ * the inner model ID.
+ *
+ * Returns { upstream, innerModelId } if valid, or null if the inner model has no
+ * upstream prefix (bare model, e.g. "gpt-6-astra", "muse-spark-1-3") or refers
+ * to the router itself as upstream.
+ */
+function resolveRouterModel(modelId, routerSource, registry, cliSource) {
+  if (!modelId) return null;
+  const raw =
+    typeof modelId === 'string'
+      ? modelId
+      : (modelId && (modelId.modelId || modelId.model || modelId.id)) || '';
+  if (!raw) return null;
+
+  const routerId = routerSource && routerSource.id;
+  const prefixes = new Set();
+  if (routerSource && routerSource.modelPrefix) prefixes.add(routerSource.modelPrefix);
+  if (cliSource && cliSource.modelPrefix) prefixes.add(cliSource.modelPrefix);
+  if (routerId) prefixes.add(routerId + '/');
+  if (cliSource && cliSource.id) prefixes.add(cliSource.id + '/');
+
+  const dispatch = (registry && registry.dispatch && registry.dispatch.providers) || {};
+  if (routerId && dispatch[routerId]?.modelPrefix) prefixes.add(dispatch[routerId].modelPrefix);
+  if (cliSource && cliSource.id && dispatch[cliSource.id]?.modelPrefix) {
+    prefixes.add(dispatch[cliSource.id].modelPrefix);
+  }
+
+  let inner = raw;
+  const sortedPrefixes = Array.from(prefixes).sort((a, b) => b.length - a.length);
+  for (const prefix of sortedPrefixes) {
+    const p = prefix.endsWith('/') ? prefix : prefix + '/';
+    if (inner.startsWith(p)) {
+      inner = inner.slice(p.length);
+      break;
+    }
+  }
+
+  const parsed = parsePrefix(inner);
+  if (!parsed) return null;
+
+  for (const prefix of sortedPrefixes) {
+    const clean = prefix.replace(/\/$/, '');
+    if (parsed.upstream === clean) return null;
+  }
+  if (routerId && parsed.upstream === routerId) return null;
+  if (cliSource && cliSource.id && parsed.upstream === cliSource.id) return null;
+
+  return { upstream: parsed.upstream, innerModelId: inner };
+}
+
 const { candidateKey } = require('./discovery/identity');
 
 /**
@@ -236,6 +293,101 @@ function resolveCandidateContextMeta(candidate, registry) {
   };
 }
 
+/**
+ * Resolves per-model capabilities for a candidate.
+ * Router/gateway accounts cannot declare blanket capabilities (such as a 200k
+ * context window) for arbitrary upstream models. Capabilities derive from
+ * the model itself (modelMeta, catalogue entry, or account model row),
+ * preventing models with smaller context windows (e.g. Groq 120b) from falsely
+ * bypassing context requirements.
+ */
+function resolveCandidateCapabilities(acc, modelId, opts = {}) {
+  const { item, row, source, routerSource, innerId } = opts;
+  const isGatewayRoute = Boolean(
+    (source && source.kind === 'router') || (source && source.reachedVia)
+  );
+
+  const baseCaps = Object.assign({}, (acc && acc.capabilities) || {});
+  if (isGatewayRoute) {
+    // Gateway accounts cannot grant blanket context window to unverified models
+    delete baseCaps.contextWindow;
+  }
+
+  // 1. Model metadata from item (catalogue)
+  let contextWindow = undefined;
+  if (
+    item &&
+    typeof item === 'object' &&
+    (item.contextWindow !== undefined ||
+      (item.capabilities && item.capabilities.contextWindow !== undefined))
+  ) {
+    contextWindow = toPositiveInteger(
+      item.contextWindow !== undefined
+        ? item.contextWindow
+        : item.capabilities && item.capabilities.contextWindow
+    );
+  }
+
+  // 2. Model metadata from account row
+  if (contextWindow === undefined && row && typeof row === 'object') {
+    if (
+      row.contextWindow !== undefined ||
+      (row.capabilities && row.capabilities.contextWindow !== undefined)
+    ) {
+      contextWindow = toPositiveInteger(
+        row.contextWindow !== undefined
+          ? row.contextWindow
+          : row.capabilities && row.capabilities.contextWindow
+      );
+    }
+  }
+
+  // 3. Model metadata from source / routerSource modelMeta
+  const metaLookup = (src) => {
+    if (!src || !src.modelMeta) return null;
+    if (src.modelMeta[modelId]) return src.modelMeta[modelId];
+    if (innerId && src.modelMeta[innerId]) return src.modelMeta[innerId];
+    if (typeof modelId === 'string' && modelId.includes('/')) {
+      const stripped = modelId.slice(modelId.indexOf('/') + 1);
+      if (src.modelMeta[stripped]) return src.modelMeta[stripped];
+      if (stripped.includes('/')) {
+        const strippedAgain = stripped.slice(stripped.indexOf('/') + 1);
+        if (src.modelMeta[strippedAgain]) return src.modelMeta[strippedAgain];
+      }
+    }
+    return null;
+  };
+  const meta = metaLookup(source) || metaLookup(routerSource);
+  if (contextWindow === undefined && meta && meta.contextWindow !== undefined) {
+    contextWindow = toPositiveInteger(meta.contextWindow);
+  }
+
+  const finalCaps = Object.assign({}, baseCaps);
+  if (item && typeof item === 'object' && item.capabilities) {
+    Object.assign(finalCaps, item.capabilities);
+  }
+  if (row && typeof row === 'object' && row.capabilities) {
+    Object.assign(finalCaps, row.capabilities);
+  }
+  if (meta) {
+    if (meta.tools !== undefined) finalCaps.tools = meta.tools;
+    if (meta.jsonSchema !== undefined) finalCaps.jsonSchema = meta.jsonSchema;
+  }
+
+  if (contextWindow !== undefined) {
+    finalCaps.contextWindow = contextWindow;
+  } else if (isGatewayRoute) {
+    delete finalCaps.contextWindow;
+  }
+
+  return {
+    capabilities: finalCaps,
+    contextWindow,
+    maxOutputTokens: meta ? toPositiveInteger(meta.maxOutputTokens) : undefined,
+    contextSource: meta ? meta.contextSource : undefined,
+  };
+}
+
 function openAiCompatibleCandidates(opts) {
   const o = opts || {};
   const registry = o.registry || sourcesApi.loadSources(o.sourceOpts);
@@ -261,13 +413,25 @@ function openAiCompatibleCandidates(opts) {
     const modelSet = new Set();
     if (source.modelMeta && typeof source.modelMeta === 'object') {
       for (const m of Object.keys(source.modelMeta)) {
-        if (m) modelSet.add(m);
+        if (!m) continue;
+        if (source.kind === 'router') {
+          const resolved = resolveRouterModel(m, source, registry);
+          if (resolved) modelSet.add(resolved.innerModelId);
+        } else {
+          modelSet.add(m);
+        }
       }
     }
     if (Array.isArray(source.models)) {
       for (const m of source.models) {
         const id = typeof m === 'string' ? m : m && m.model;
-        if (id) modelSet.add(id);
+        if (!id) continue;
+        if (source.kind === 'router') {
+          const resolved = resolveRouterModel(id, source, registry);
+          if (resolved) modelSet.add(resolved.innerModelId);
+        } else {
+          modelSet.add(id);
+        }
       }
     }
     if (source.kind === 'router' && source.servesModels !== false) {
@@ -276,16 +440,16 @@ function openAiCompatibleCandidates(opts) {
           const id =
             typeof item === 'string' ? item : item && (item.modelId || item.model || item.id);
           if (!id) continue;
-          const parsed = parsePrefix(id);
-          if (!parsed) continue;
+          const resolved = resolveRouterModel(id, source, registry);
+          if (!resolved) continue;
           if (
             item &&
             typeof item === 'object' &&
             item.upstream &&
-            item.upstream !== parsed.upstream
+            item.upstream !== resolved.upstream
           )
             continue;
-          modelSet.add(id);
+          modelSet.add(resolved.innerModelId);
         }
       }
     } else if (source.kind === 'model-source' && source.servesModels !== false) {
@@ -349,7 +513,13 @@ function openAiCompatibleCandidates(opts) {
 
       if (bound.length > 0) {
         for (const acc of bound) {
-          const accCaps = Object.assign({}, acc.capabilities || {}, caps);
+          const accCaps = Object.assign({}, acc.capabilities || {});
+          if (gateway || source.kind === 'router' || source.reachedVia) {
+            delete accCaps.contextWindow;
+          }
+          if (contextWindow !== undefined) {
+            accCaps.contextWindow = contextWindow;
+          }
           const c = {
             harness,
             accessPath: endpoint,
@@ -489,42 +659,60 @@ function generateCandidates(opts) {
           continue;
         const fullId =
           typeof item === 'string' ? item : (item && (item.modelId || item.model || item.id)) || '';
-        const parsed = parsePrefix(fullId);
-        if (!parsed) continue;
-        if (item && typeof item === 'object' && item.upstream && item.upstream !== parsed.upstream)
+        const resolved = resolveRouterModel(fullId, source, registry);
+        if (!resolved) continue;
+        if (
+          item &&
+          typeof item === 'object' &&
+          item.upstream &&
+          item.upstream !== resolved.upstream
+        )
           continue;
         if (sharedArc) {
+          const { capabilities: caps, contextWindow } = resolveCandidateCapabilities(null, fullId, {
+            item,
+            source,
+            innerId: resolved.innerModelId,
+          });
           candidates.push({
             harness,
             accessPath,
             gateway: source.id,
-            upstream: parsed.upstream,
+            upstream: resolved.upstream,
             accountId: '*',
-            quotaScope: parsed.upstream,
-            modelId: fullId,
+            quotaScope: resolved.upstream,
+            modelId: resolved.innerModelId,
             source: source.id,
             sourceId: source.id,
             endpoint: source.endpoint,
             sourceEndpoint: source.endpoint,
             kind: source.kind,
+            capabilities: caps,
+            contextWindow,
             sharedQuota: 'unknown',
           });
         } else {
           for (const acc of bound) {
+            const { capabilities: caps, contextWindow } = resolveCandidateCapabilities(
+              acc,
+              fullId,
+              { item, source, innerId: resolved.innerModelId }
+            );
             candidates.push({
               harness,
               accessPath,
               gateway: source.id,
-              upstream: parsed.upstream,
+              upstream: resolved.upstream,
               accountId: acc.id,
               quotaScope: acc.id,
-              modelId: fullId,
+              modelId: resolved.innerModelId,
               source: source.id,
               sourceId: source.id,
               endpoint: source.endpoint,
               sourceEndpoint: source.endpoint,
               kind: source.kind,
-              capabilities: acc.capabilities || {},
+              capabilities: caps,
+              contextWindow,
               cost: acc.cost,
               sharedQuota: 'unknown',
             });
@@ -542,6 +730,9 @@ function generateCandidates(opts) {
         const accessPath = accessPathOf(source, registry);
         if (!harness || !accessPath) continue;
         const prefix = source.routerAlias + '/';
+        const routerSource = source.reachedVia
+          ? registry.sources.find((s) => s.id === source.reachedVia)
+          : null;
         for (const item of catalogue) {
           const fullId =
             typeof item === 'string'
@@ -549,6 +740,11 @@ function generateCandidates(opts) {
               : (item && (item.modelId || item.model || item.id)) || '';
           if (!fullId.startsWith(prefix)) continue;
           if (sharedArc) {
+            const { capabilities: caps, contextWindow } = resolveCandidateCapabilities(
+              null,
+              fullId,
+              { item, source, routerSource }
+            );
             candidates.push({
               harness,
               accessPath,
@@ -563,10 +759,18 @@ function generateCandidates(opts) {
               sourceEndpoint: source.endpoint,
               kind: source.kind,
               reachedVia: source.reachedVia,
+              capabilities: caps,
+              contextWindow,
               sharedQuota: 'unknown',
             });
           } else {
             for (const acc of bound) {
+              const row = accountModelRow(acc, fullId) || {};
+              const { capabilities: caps, contextWindow } = resolveCandidateCapabilities(
+                acc,
+                fullId,
+                { item, row, source, routerSource }
+              );
               candidates.push({
                 harness,
                 accessPath,
@@ -581,7 +785,8 @@ function generateCandidates(opts) {
                 sourceEndpoint: source.endpoint,
                 kind: source.kind,
                 reachedVia: source.reachedVia,
-                capabilities: acc.capabilities || {},
+                capabilities: caps,
+                contextWindow,
                 cost: acc.cost,
                 sharedQuota: 'unknown',
               });
@@ -671,43 +876,71 @@ function generateCandidates(opts) {
       if (source.reachedVia) {
         // OpenCode reaches 9Router models via ninerouter/ prefix.
         // Its own namespace is in openCodeIds.
+        const routerSource = (registry.sources || []).find((s) => s && s.id === source.reachedVia);
         const mp =
-          source.modelPrefix || registry.dispatch?.providers?.[source.id]?.modelPrefix || '';
+          source.modelPrefix ||
+          (routerSource && routerSource.modelPrefix) ||
+          registry.dispatch?.providers?.[source.id]?.modelPrefix ||
+          registry.dispatch?.providers?.[source.reachedVia]?.modelPrefix ||
+          '';
+        const prefix = mp ? (mp.endsWith('/') ? mp : mp + '/') : '';
         for (const ocId of openCodeIds) {
-          const parsed = parsePrefix(ocId);
-          if (!mp || !String(ocId).startsWith(mp) || !parsed) {
+          const resolved = resolveRouterModel(ocId, routerSource, registry, source);
+          if (!resolved || (prefix && !String(ocId).startsWith(prefix))) {
             if (Array.isArray(o.candidateGenerationRejections)) {
               o.candidateGenerationRejections.push({ modelId: ocId, reasonCode: 'ALIAS_MISMATCH' });
             }
             continue;
           }
+          const innerId = String(ocId).startsWith(mp)
+            ? String(ocId).slice(mp.length)
+            : resolved.innerModelId;
+          const catItem = catalogue.find((ci) => {
+            const fid = typeof ci === 'string' ? ci : ci && (ci.modelId || ci.model || ci.id);
+            return fid === innerId || fid === ocId;
+          });
           if (sharedArc) {
+            const { capabilities: caps, contextWindow } = resolveCandidateCapabilities(null, ocId, {
+              item: catItem,
+              source,
+              routerSource,
+              innerId,
+            });
             candidates.push({
               harness,
               accessPath,
               gateway: source.reachedVia,
-              upstream: parsed ? parsed.upstream : source.id,
+              upstream: resolved.upstream,
               accountId: '*',
               quotaScope: source.id,
               modelId: ocId,
               source: source.id,
               kind: source.kind,
+              capabilities: caps,
+              contextWindow,
               sharedQuota: 'unknown',
             });
           } else {
             for (const acc of bound) {
-              const row = accountModelRow(acc, ocId) || {};
+              const row =
+                accountModelRow(acc, ocId) || accountModelRow(acc, resolved.innerModelId) || {};
+              const { capabilities: caps, contextWindow } = resolveCandidateCapabilities(
+                acc,
+                ocId,
+                { item: catItem, row, source, routerSource, innerId }
+              );
               candidates.push({
                 harness,
                 accessPath,
                 gateway: source.reachedVia,
-                upstream: parsed ? parsed.upstream : source.id,
+                upstream: resolved.upstream,
                 accountId: acc.id,
                 quotaScope: acc.id,
                 modelId: ocId,
                 source: source.id,
                 kind: source.kind,
-                capabilities: acc.capabilities || {},
+                capabilities: caps,
+                contextWindow,
                 quality: row.quality,
                 latencyMs: row.latencyMs,
                 cost: acc.cost,
@@ -718,41 +951,66 @@ function generateCandidates(opts) {
         }
         // Also the ninerouter/ models from the HTTP catalogue, accessible
         // through OpenCode's ninerouter/ prefix.
-        if (mp) {
+        if (prefix) {
           for (const item of catalogue) {
+            if (
+              item &&
+              typeof item === 'object' &&
+              item.gateway &&
+              item.gateway !== source.reachedVia
+            )
+              continue;
             const fullId =
               typeof item === 'string'
                 ? item
                 : (item && (item.modelId || item.model || item.id)) || '';
-            const prefix = mp.endsWith('/') ? mp : mp + '/';
-            const prefixed = fullId.startsWith(prefix) ? fullId : prefix + fullId;
+            const resolved = resolveRouterModel(fullId, routerSource, registry, source);
+            if (!resolved) continue;
+            const prefixed = prefix + resolved.innerModelId;
             if (sharedArc) {
+              const { capabilities: caps, contextWindow } = resolveCandidateCapabilities(
+                null,
+                prefixed,
+                { item, source, routerSource, innerId: fullId }
+              );
               candidates.push({
                 harness,
                 accessPath,
                 gateway: source.reachedVia,
-                upstream: parsePrefix(fullId)?.upstream || source.id,
+                upstream: resolved.upstream,
                 accountId: '*',
                 quotaScope: source.id,
                 modelId: prefixed,
                 source: source.id,
                 kind: source.kind,
+                capabilities: caps,
+                contextWindow,
                 sharedQuota: 'unknown',
               });
             } else {
               for (const acc of bound) {
-                const row = accountModelRow(acc, prefixed) || accountModelRow(acc, fullId) || {};
+                const row =
+                  accountModelRow(acc, prefixed) ||
+                  accountModelRow(acc, resolved.innerModelId) ||
+                  accountModelRow(acc, fullId) ||
+                  {};
+                const { capabilities: caps, contextWindow } = resolveCandidateCapabilities(
+                  acc,
+                  prefixed,
+                  { item, row, source, routerSource, innerId: fullId }
+                );
                 candidates.push({
                   harness,
                   accessPath,
                   gateway: source.reachedVia,
-                  upstream: parsePrefix(fullId)?.upstream || source.id,
+                  upstream: resolved.upstream,
                   accountId: acc.id,
                   quotaScope: acc.id,
                   modelId: prefixed,
                   source: source.id,
                   kind: source.kind,
-                  capabilities: acc.capabilities || {},
+                  capabilities: caps,
+                  contextWindow,
                   quality: row.quality,
                   latencyMs: row.latencyMs,
                   cost: acc.cost,
@@ -1644,6 +1902,7 @@ function annotateCandidates(candidates, evidenceData, opts) {
 
 module.exports = {
   parsePrefix,
+  resolveRouterModel,
   candidateKey,
   harnessOf,
   accessPathOf,
@@ -1656,4 +1915,5 @@ module.exports = {
   isOpenAiCompatibleSource,
   openAiCompatibleCandidates,
   resolveCandidateContextMeta,
+  resolveCandidateCapabilities,
 };
