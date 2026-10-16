@@ -965,3 +965,136 @@ test('maxTurns counts writer launches: refused in-loop probe rounds do not end t
   assert.equal(launches.length, 2, 'two real launches fit maxTurns=2 across refused probe rounds');
   assert.match(JSON.stringify(result), /TURN_BUDGET_EXCEEDED/);
 });
+
+for (const [status, expected] of [
+  [401, 'AUTH_NEEDED'],
+  [451, 'GEO_BLOCKED'],
+]) {
+  test(`HTTP ${status} probe keeps its cause and cause-specific cooldown`, () => {
+    const probe = require('../route-probe');
+    const health = require('../route-health');
+    assert.equal(
+      probe.classifyProbeFailure({ ok: false, status, body: 'upstream refused' }),
+      expected
+    );
+    assert.equal(health.probeCooldownMs(expected), status === 451 ? 24 * 3600000 : 6 * 3600000);
+  });
+}
+
+test('known-good ordering expires old successes and respects a newer provider failure', () => {
+  const health = require('../route-health');
+  const order = require('../probe-order');
+  const now = Date.now();
+  const stale = createCandidate({ modelId: 'vendor/stale' });
+  const fresh = createCandidate({ modelId: 'vendor/fresh' });
+  const unknown = createCandidate({ modelId: 'other/unknown' });
+  const routeHealth = { version: 1, paths: {}, events: [] };
+  const opts = { routeHealth, persistRouteHealth: false, now };
+  health.rememberProbe(stale, { ok: true, status: 200 }, { ...opts, now: now - 25 * 3600000 });
+  assert.deepEqual(health.orderProbeRoutes([unknown, stale], opts), [unknown, stale]);
+  health.rememberProbe(fresh, { ok: true, status: 200 }, { ...opts, now: now - 1000 });
+  health.rememberProbe(
+    createCandidate({ modelId: 'vendor/failed' }),
+    { ok: false, status: 503, body: 'No active credentials for provider: vendor' },
+    opts
+  );
+  assert.equal(order.recentRouteSuccess(fresh, routeHealth, opts), false);
+});
+
+for (const harness of ['paseo', 'direct-http']) {
+  test(`${harness} writer HTTP preflight preserves upstream errors before launching a harness`, async (t) => {
+    const repo = makeTempRepo();
+    t.after(() => fs.rmSync(repo.dir, { recursive: true, force: true }));
+    const candidate = createCandidate({ harness });
+    let requests = 0;
+    let launches = 0;
+    const options = {
+      isolatedWorker: true,
+      cwd: repo.dir,
+      workerRoot: repo.dir,
+      baseSha: repo.sha,
+      sha: repo.sha,
+      decisionDir: path.join(repo.dir, 'decisions'),
+      evidenceDir: path.join(repo.dir, 'evidence'),
+      candidates: [candidate],
+      env: { TEST_KEY: 'fixture' },
+      registry: {
+        sources: [{ id: 'oc', endpoint: candidate.accessPath, credential: { env: 'TEST_KEY' } }],
+        dispatch: { providers: {} },
+      },
+      specs: [
+        { id: 'TASK-AI-142', files: ['a.js'], acceptanceCriteria: ['done'], qualityFloor: 0 },
+      ],
+      routeHealth: { version: 1, paths: {}, events: [] },
+      persistRouteHealth: false,
+      fetch: async (_url, init) => {
+        requests++;
+        assert.equal(JSON.parse(init.body).model, candidate.modelId);
+        return { ok: false, status: 451, text: async () => 'region blocked' };
+      },
+      run: () => {
+        launches++;
+        return { exitCode: 1, stderr: 'harness timeout' };
+      },
+      jevAsk: async () => {
+        throw Error('offline');
+      },
+      ranking: { priors: { ranking: [] } },
+    };
+    await runOrchestration('HTTP writer preflight', options);
+    assert.equal(requests, 1, 'direct HTTP must run first');
+    assert.equal(launches, 0, 'a refused upstream must never launch the harness');
+    const records = require('../decisions').readDecisionsSafe({ dir: options.decisionDir });
+    assert.ok(records.some((r) => /GEO_BLOCKED/.test(r.detail || '')));
+    assert.ok(
+      records.some((r) => r.cause === 'GEO_BLOCKED' && r.failureScope === 'candidate'),
+      'a refused route must not blame every model on its gateway'
+    );
+  });
+}
+
+for (const status of [401, 403, 451, 503]) {
+  test(`HTTP ${status} response headers survive a stalled upstream error body`, async () => {
+    const { probeRoute } = require('../route-probe');
+    const result = await probeRoute(
+      { accessPath: 'https://fixture.example/v1', modelId: 'vendor/m' },
+      'KEY',
+      { KEY: 'fixture' },
+      {
+        fetch: async () => ({
+          ok: false,
+          status,
+          text: async () => {
+            throw Object.assign(Error('body interrupted'), { name: 'AbortError' });
+          },
+        }),
+      }
+    );
+    assert.equal(result.status, status);
+    assert.equal(result.ok, false);
+  });
+}
+
+test('HTTP refusal with a never-ending body returns before the outer probe deadline', async () => {
+  const probe = require('../route-probe');
+  const result = await probe.boundedProbe(
+    probe.probeRoute,
+    { accessPath: 'https://fixture.example/v1', modelId: 'vendor/m' },
+    'KEY',
+    { KEY: 'fixture' },
+    {
+      timeoutMs: 100,
+      fetch: async () => ({ ok: false, status: 503, text: () => new Promise(() => {}) }),
+    }
+  );
+  assert.equal(result.status, 503);
+});
+
+for (const [body, expected] of [
+  ['upstream returned 401: re-authenticate', 'AUTH_NEEDED'],
+  ['upstream returned 451: unavailable in your location', 'GEO_BLOCKED'],
+]) {
+  test(`gateway HTTP 503 preserves nested upstream cause ${expected}`, () => {
+    assert.equal(require('../route-probe').classifyProbeFailure({ status: 503, body }), expected);
+  });
+}

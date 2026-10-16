@@ -37,12 +37,42 @@ async function probeRoute(candidate, apiKeyEnv, env, options) {
       }),
       signal: controller.signal,
     });
+    if (!response.ok)
+      opts.onHttpFailure?.({
+        ok: false,
+        status: response.status,
+        body: 'Upstream error response body unavailable',
+      });
     const remaining = {};
     response.headers?.forEach((value, name) => {
       if (/^x-ratelimit-remaining-/i.test(name) && /^\d+(?:\.\d+)?$/.test(value))
         remaining[name.toLowerCase()] = Number(value);
     });
-    const body = await response.text();
+    // Headers already prove an upstream refusal. A broken error stream must
+    // not replace that HTTP cause with a transport timeout.
+    let body;
+    let bodyTimer;
+    try {
+      body = response.ok
+        ? await response.text()
+        : await Promise.race([
+            response.text(),
+            new Promise((resolve) => {
+              bodyTimer = setTimeout(
+                () => {
+                  controller.abort();
+                  resolve('Upstream error response body unavailable');
+                },
+                Math.min(250, Math.max(1, (opts.timeoutMs || 8000) / 2))
+              );
+            }),
+          ]);
+    } catch (error) {
+      if (response.ok) throw error;
+      body = 'Upstream error response body unavailable';
+    } finally {
+      clearTimeout(bodyTimer);
+    }
     const tpm = tokenLimitEvidence(response.headers, body);
     return {
       ok: response.ok,
@@ -118,6 +148,13 @@ function classifyProbeFailure(result) {
     return 'UPSTREAM_CREDIT_OR_QUOTA';
   if (/alias.?mismatch|unknown model|model not found|no such model/i.test(body))
     return 'ALIAS_MISMATCH';
+  if (status === 401 || (status >= 500 && /\b401\b[^\n]*re-?auth/i.test(body)))
+    return 'AUTH_NEEDED';
+  if (
+    status === 451 ||
+    (status >= 500 && /\b451\b[^\n]*(?:location|geo|region|country)/i.test(body))
+  )
+    return 'GEO_BLOCKED';
   if (status === 403) return 'UPSTREAM_FORBIDDEN';
   if (status === 429) return 'RATE_LIMITED';
   if (status >= 500) return 'UPSTREAM_UNAVAILABLE';
@@ -135,15 +172,22 @@ async function boundedProbe(probeFn, candidate, apiKeyEnv, env, options) {
     else opts.signal.addEventListener('abort', onAbort, { once: true });
   }
   let timer;
+  let httpFailure;
   try {
     return await Promise.race([
       Promise.resolve().then(() =>
-        probeFn(candidate, apiKeyEnv, env, { ...opts, signal: controller.signal })
+        probeFn(candidate, apiKeyEnv, env, {
+          ...opts,
+          signal: controller.signal,
+          onHttpFailure: (result) => {
+            httpFailure = result;
+          },
+        })
       ),
       new Promise((resolve) => {
         timer = setTimeout(() => {
           controller.abort();
-          resolve({ ok: false, status: 0, body: 'Probe request timeout' });
+          resolve(httpFailure || { ok: false, status: 0, body: 'Probe request timeout' });
         }, timeoutMs);
       }),
     ]);

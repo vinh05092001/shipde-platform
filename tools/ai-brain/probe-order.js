@@ -37,6 +37,8 @@ function recentRouteSuccess(candidate, store, options) {
   // A newer failure supersedes older success for the same upstream route.
   rows.sort((a, b) => Date.parse(b.lastCheckedAt) - Date.parse(a.lastCheckedAt));
   const record = rows[0];
+  // A route success cannot override a newer shared provider/account refusal.
+  if (health.probeCooldown(candidate, { ...o, routeHealth: store })) return false;
   const age = (o.now ?? Date.now()) - Date.parse(record?.lastCheckedAt);
   return record?.status === 'AVAILABLE' && age >= 0 && age <= 24 * 3600000;
 }

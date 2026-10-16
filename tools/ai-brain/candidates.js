@@ -977,7 +977,12 @@ function generateCandidatesWithCatalog(opts) {
           );
           const models = liveAgyAccountModels(acc, source, accountModels(acc), o).filter(
             (model) =>
-              catalogue.length === 0 || catalogue.includes(model) || catalogueModelIds.has(model)
+              // A direct source's own inventory is authoritative for its wire ids.
+              // Another gateway's catalogue may use entirely different aliases.
+              (Array.isArray(source.models) && source.models.includes(model)) ||
+              catalogue.length === 0 ||
+              catalogue.includes(model) ||
+              catalogueModelIds.has(model)
           );
           for (const model of models) {
             const row = accountModelRow(acc, model) || {};
