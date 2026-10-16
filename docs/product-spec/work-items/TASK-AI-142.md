@@ -360,6 +360,9 @@ Verification: sequential TASK-AI-141 199/199, TASK-AI-142 136/136, TASK-AI-64 12
 
 A header a source declares as data (for example the CLI user agent AgentRouter requires) now reaches the requests that actually call the provider: the shared route probe, the orchestrator route candidate, the opencode provider `options.headers` written for isolated workers, and the Hermes route probe. The Hermes `config.yaml` custom provider has no verified extra-header field, so Hermes runtime calls are not changed and only its probe sends the headers; no source id is hardcoded.
 
+### H3 live: the quota-fallback controller test is deterministic (2026-10-16)
+The test spawns a cold `cli.js dispatch` process (~5s alone) under a 15s `spawnSync` budget, so full-suite parallel load could kill it (status null) and fail the exit-code assertion; HOME, USERPROFILE and APPDATA were already per-test temp dirs. The budget is now a 180s ceiling with all assertions unchanged (not reproduced in 26 runs under load, so this is the identified wall-clock cause, not an observed failure).
+
 ### H3 live: native agy candidates use the live agy model list (2026-10-16)
 The native agy candidates take their model ids from the live `agy models` listing (the pool discovery and its cache) instead of the stale ids declared on the account: declared ids the listing lacks are dropped with reason `AGY_MODEL_NOT_LISTED`, and listed ids are added. When the listing is unavailable the declared ids are kept unchanged.
 
