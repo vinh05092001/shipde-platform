@@ -101,6 +101,9 @@ function loadSources(options) {
         endpoint: entry.endpoint,
         ...(entry.headers && typeof entry.headers === 'object' ? { headers: entry.headers } : {}),
         credential: { type: 'api-key', env: credential.name },
+        ...(typeof entry.opencodeProvider === 'string' && entry.opencodeProvider
+          ? { opencodeProvider: entry.opencodeProvider }
+          : {}),
         models: Array.isArray(entry.models) ? entry.models : [],
         modelMeta: entry.modelMeta && typeof entry.modelMeta === 'object' ? entry.modelMeta : {},
         discovered: true,
