@@ -443,3 +443,41 @@ test('zero trusted score mass keeps preset provenance instead of claiming mixed 
   assert.deepEqual(result.weights, routing.WEIGHT_PROFILES.BALANCED);
   assert.equal(result.dimensionWeightSources, null);
 });
+
+test('committed JEV source activates the exact live mixed weighting through the writer assessment path', async () => {
+  const source = require('../sources.json').sources.find((entry) => entry.id === 'jev');
+  assert.equal(source.minConfidence, 0.7, 'closed-choice policy stays unchanged');
+  assert.equal(source.weightingMinConfidence, 0.5, 'approved weighting policy must be active');
+  const response = answers({
+    qualityImportance: 4.11,
+    latencyImportance: 1.98,
+    costImportance: 1.08,
+  });
+  response.answers.qualityImportance.confidence = 0.56;
+  response.answers.latencyImportance.confidence = 0.23;
+  response.answers.costImportance.confidence = 0.57;
+  let calls = 0;
+  const ask = jev.buildJevAsk(source, {
+    env: { [source.credential.env]: 'fixture-only' },
+    httpClient: clientFor(response, () => {
+      calls += 1;
+    }),
+  });
+  const options = { jevAsk: ask };
+  const assessment = await require('../writer-selection').assessOnce(
+    profile(),
+    source,
+    ask,
+    options,
+    routing
+  );
+  assert.equal(calls, 1);
+  assert.equal(assessment.weightSource, 'mixed:jev-score+preset:BALANCED');
+  assert.deepEqual(assessment.dimensionWeightSources, {
+    quality: 'jev-score',
+    latency: 'preset:BALANCED',
+    cost: 'jev-score',
+  });
+  assert.deepEqual(assessment.weights, { quality: 52, latency: 34, cost: 14 });
+  assert.equal(assessment.confidence, 0.23);
+});
