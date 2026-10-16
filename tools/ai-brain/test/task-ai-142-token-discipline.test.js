@@ -12,9 +12,10 @@ const item = {
 
 test('compiled writer prompt carries token discipline rules', () => {
   const prompt = String(promptCompiler.compilePrompt(item, { goal: 'g' }));
-  assert.match(prompt, /do not read entire large files/);
-  assert.match(prompt, /grep -n/);
-  assert.match(prompt, /sed -n 'A,Bp'/);
-  assert.match(prompt, /\^ℹ \(tests\|pass\|fail\)/);
-  assert.match(prompt, /full tools\/ai-brain\/test suite at most once/);
+  assert.match(prompt, /search it first/);
+  assert.match(prompt, /read tool with offset and limit/);
+  assert.match(prompt, /Run only the named test files/);
+  // The isolated worker shell is PowerShell: the rule names no POSIX-only command.
+  const rule = prompt.slice(prompt.indexOf('Token discipline'));
+  assert.doesNotMatch(rule.split('\n')[0], /sed -n|\| grep -E/);
 });

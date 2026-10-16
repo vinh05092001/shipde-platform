@@ -20,10 +20,9 @@ const CLEAN_TREE_RULES =
 
 // Token discipline for writer and repair prompts (TASK-AI-142 H3).
 const TOKEN_DISCIPLINE =
-  "Token discipline: do not read entire large files (manifests, specs, logs); always grep -n / git grep -n first, then read only a line range (sed -n 'A,Bp' file, about 80 lines); never print a whole file over 300 lines. " +
-  "Run only the named test files and pipe output through grep -E '^ℹ (tests|pass|fail)|^✖|AssertionError|actual:|expected:'. " +
-  'Run the full tools/ai-brain/test suite at most once, at the end, filtered the same way. ' +
-  'Never start a background job and wait on it; do not re-read files or repeat commands; stop when the acceptance criteria are met.';
+  'Token discipline: before reading a file over about 300 lines (manifests, specs, logs), search it first (grep tool or rg -n) and read only the matching range (read tool with offset and limit, about 80 lines). ' +
+  'Run only the named test files and keep only their summary and failure lines (ℹ pass, ℹ fail, ✖, AssertionError, actual:, expected:); the Controller runs the full suite host-side. ' +
+  'Do not re-read files or repeat commands; never start a background job and wait on it; stop when the acceptance criteria are met.';
 
 // WD-R04: isolated workers share a provisioned dependency tree, so their
 // prompt must name the verification commands they can now run and the
