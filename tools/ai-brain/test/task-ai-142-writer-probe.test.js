@@ -903,3 +903,65 @@ for (const fallbackProbe of ['success', 'budget-exhausted']) {
     assert.doesNotMatch(checkpoint.liveSteps['LONG-WRITER'].reason, /PROBE_BUDGET_EXHAUSTED/);
   });
 }
+
+test('maxTurns counts writer launches: refused in-loop probe rounds do not end the item, launches beyond it do', async (t) => {
+  const repo = makeTempRepo();
+  const decisionDir = tmpDir('dec-turns-');
+  const evidenceDir = tmpDir('evi-turns-');
+  t.after(() => {
+    fs.rmSync(repo.dir, { recursive: true, force: true });
+    fs.rmSync(decisionDir, { recursive: true, force: true });
+    fs.rmSync(evidenceDir, { recursive: true, force: true });
+  });
+  const live = new Set([1, 5, 6, 7]);
+  const candidates = [1, 2, 3, 4, 5, 6, 7].map((n) =>
+    createCandidate({
+      accessPath: 'https://gw-' + n + '.example/v1',
+      gateway: 'gw-' + n,
+      accountId: 'acc-' + n,
+      quotaScope: 'acc-' + n,
+      modelId: 'vendor/model-' + n,
+      quality: 100 - n,
+    })
+  );
+  const registry = {
+    sources: candidates
+      .map((c) => ({ id: c.gateway, endpoint: c.accessPath, credential: { env: 'TEST_KEY' } }))
+      .concat([
+        { id: 'oc', endpoint: 'https://gateway.example/v1', credential: { env: 'TEST_KEY' } },
+      ]),
+    dispatch: { providers: { oc: { harness: 'opencode-direct', provider: 'opencode' } } },
+  };
+  const launches = [];
+  const result = await runOrchestration('turns count launches', {
+    isolatedWorker: true,
+    cwd: repo.dir,
+    workerRoot: repo.dir,
+    baseSha: repo.sha,
+    sha: repo.sha,
+    decisionDir,
+    evidenceDir,
+    candidates,
+    registry,
+    specs: [
+      { id: 'TASK-AI-142', complexity: 'simple', files: ['a.js'], acceptanceCriteria: ['done'] },
+    ],
+    tokenBudgets: { byComplexity: { simple: { maxTurns: 2 } } },
+    routeProbe: async (probeCandidate) => {
+      const n = Number(probeCandidate.accessPath.split('gw-')[1].split('.')[0]);
+      return live.has(n)
+        ? { ok: true, status: 200, body: 'OK' }
+        : { ok: false, status: 500, body: 'down' };
+    },
+    run: (job) => {
+      launches.push(job.candidateKey);
+      return { exitCode: 1, stdout: '', stderr: 'writer failed' };
+    },
+    reviewer: () => ({ pass: true, sha: repo.sha, verdict: 'PASS', findings: [] }),
+    tests: () => ({ pass: true }),
+    hostGate: () => ({ pass: true, failures: [] }),
+    ranking: { priors: { ranking: [] } },
+  });
+  assert.equal(launches.length, 2, 'two real launches fit maxTurns=2 across refused probe rounds');
+  assert.match(JSON.stringify(result), /TURN_BUDGET_EXCEEDED/);
+});
