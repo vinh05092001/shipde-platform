@@ -8,12 +8,14 @@ param(
 
     [string]$TaskPath = "\",
 
-    [ValidateSet("Daily", "Logon", "Hourly")]
+    [ValidateSet("Daily", "Logon", "Hourly", "Periodic")]
     [string]$Trigger = "Daily",
 
     [string]$Time = "09:00",
 
     [int]$IntervalHours = 1,
+
+    [int]$IntervalMinutes = 10,
 
     [ValidateSet("Resume", "Supervise", "Doctor", "Menu")]
     [string]$ControllerAction = "Resume",
@@ -109,6 +111,7 @@ function Register-ShipDeScheduledTask {
         [string]$TriggerType,
         [string]$TriggerTime,
         [int]$TriggerIntervalHours,
+        [int]$TriggerIntervalMinutes = 10,
         [string]$Executable,
         [string]$ScriptArguments,
         [string]$WorkingDir,
@@ -124,6 +127,8 @@ function Register-ShipDeScheduledTask {
         Write-Host "Schedule Time    : $TriggerTime"
     } elseif ($TriggerType -eq "Hourly") {
         Write-Host "Interval Hours   : $TriggerIntervalHours"
+    } elseif ($TriggerType -eq "Periodic") {
+        Write-Host "Interval Minutes : $TriggerIntervalMinutes"
     }
     Write-Host "Run Level        : $Level"
     Write-Host "Target Executable: $Executable"
@@ -157,6 +162,9 @@ function Register-ShipDeScheduledTask {
         }
         "Hourly" {
             New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Hours $TriggerIntervalHours)
+        }
+        "Periodic" {
+            New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes $TriggerIntervalMinutes)
         }
     }
 
@@ -265,6 +273,7 @@ switch ($Action) {
             -TriggerType $Trigger `
             -TriggerTime $Time `
             -TriggerIntervalHours $IntervalHours `
+            -TriggerIntervalMinutes $IntervalMinutes `
             -Executable $powerShellPath `
             -ScriptArguments $arguments `
             -WorkingDir $WorkingDirectory `

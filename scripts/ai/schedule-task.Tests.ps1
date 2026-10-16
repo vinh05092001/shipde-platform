@@ -102,6 +102,14 @@ try {
     $cleanHourly = & $scriptUnderTest -TaskName $testTaskName -TaskPath $testTaskPath -Action Unregister -Apply
     Assert-Condition "Cleaned up hourly task" ($cleanHourly.Status -eq "REMOVED")
 
+    # 13. Periodic trigger option (e.g. 10 minutes)
+    $regPeriodic = & $scriptUnderTest -TaskName $testTaskName -TaskPath $testTaskPath -Action Register -Trigger Periodic -IntervalMinutes 10 -Apply
+    Assert-Condition "Registered periodic task successfully" ($regPeriodic.Applied -eq $true)
+    $statusPeriodic = & $scriptUnderTest -TaskName $testTaskName -TaskPath $testTaskPath -Action Status
+    Assert-Condition "Status on periodic task returns State = 'Ready'" ($statusPeriodic.State -eq "Ready")
+    $cleanPeriodic = & $scriptUnderTest -TaskName $testTaskName -TaskPath $testTaskPath -Action Unregister -Apply
+    Assert-Condition "Cleaned up periodic task" ($cleanPeriodic.Status -eq "REMOVED")
+
     Write-Host "----------------------------------------------------------------"
     Write-Host "ALL $passed SCHEDULED TASK INTEGRATION TESTS PASSED" -ForegroundColor Green
     Write-Host "----------------------------------------------------------------"

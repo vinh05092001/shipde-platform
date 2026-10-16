@@ -368,6 +368,10 @@ When an upstream source declares headers (such as AgentRouter CLI User-Agent), `
 
 After operator keys were probed, the intake catalogue merged 3254 ids from many sources (for example azure/, bedrock/, vertex/, runware/ ids from Requesty), and the router branch turned every one into a 9router candidate. 9router serves none of those prefixes, so hundreds of writer probes timed out, PROBE_BUDGET_EXHAUSTED fired and GOAL-AUTOCLAW-REPOS-1 failed before any writer launched. A router now produces catalogue-derived candidates only for ids in its own listing (per-source `sourceModels` from intake, or its `source.models`); with no known listing it produces none and records `ROUTER_LISTING_UNKNOWN`.
 
+### H3 live: Windows Task Scheduler periodic trigger for goal resume (2026-10-16)
+
+`scripts/ai/schedule-task.ps1` previously supported only `Daily`, `Logon`, and `Hourly` triggers. It now supports `-Trigger Periodic` with `-IntervalMinutes` (default 10 minutes), allowing zero-RAM background execution of `control.ps1 -Action Resume` to periodically check and resume goals without needing a permanent daemon process. Tested and verified in `scripts/ai/schedule-task.Tests.ps1`.
+
 ### H3 live: a Hermes reselection gets its own probe window and a Hermes login failure is remembered (2026-10-16)
 
 The probe wall-clock deadline was computed once per launch, so after a runtime route failure (Hermes printing `No Codex credentials stored`) every remaining route was skipped and the launch ended NO_REASONING_CANDIDATE. Each selection round now recomputes the deadline with the same per-round cap. A Hermes-side missing login is also recorded as an account `account_auth_failed` cooldown in the route-health store (existing 6 hour cause cooldown), so the next launch skips that candidate without probing or spawning it.
