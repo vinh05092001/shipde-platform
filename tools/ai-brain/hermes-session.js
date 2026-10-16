@@ -247,6 +247,141 @@ function resolveSkillSourcePath(rootDir, options, deps) {
   return rootSkill;
 }
 
+/**
+ * Skills (Hermes agent/prompt_builder.py build_skills_system_prompt): every enabled skill's name and
+ * description is injected into the system prompt of every session; bodies load on demand through
+ * skill_view. Hermes lets config.yaml `skills.disabled` (agent/skill_utils.py get_disabled_skill_names)
+ * hide skills by name. Live session logs show only the Controller skill is ever loaded for this project,
+ * so every other skill found in the Hermes home is disabled by name (data-driven, nothing listed by hand).
+ */
+function listInstalledSkillNames(homeDir, fsApi) {
+  const names = new Set();
+  const walk = (dir, depth) => {
+    let entries = [];
+    try {
+      entries = fsApi.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    if (entries.some((e) => e.isFile() && e.name === 'SKILL.md')) {
+      let fmName = '';
+      try {
+        const text = String(fsApi.readFileSync(path.join(dir, 'SKILL.md'), 'utf8'));
+        const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
+        const n = m && /^name:\s*["']?([^"'\r\n]+?)["']?\s*$/m.exec(m[1]);
+        if (n) fmName = n[1];
+      } catch {}
+      names.add(fmName || path.basename(dir));
+      return;
+    }
+    if (depth > 4) return;
+    for (const e of entries) {
+      if (e.isDirectory()) walk(path.join(dir, e.name), depth + 1);
+    }
+  };
+  walk(path.join(homeDir, 'skills'), 0);
+  return [...names];
+}
+
+function skillsConfigLines(homeDir, fsApi) {
+  const disabled = listInstalledSkillNames(homeDir, fsApi)
+    .filter((n) => n !== CONTROLLER_SKILL_NAME)
+    .sort();
+  if (!disabled.length) return [];
+  return ['skills:', '  disabled:', ...disabled.map((n) => `    - ${JSON.stringify(n)}`)];
+}
+
+/**
+ * Memory (Hermes agent/agent_init.py + tools/memory_tool_store.py): memories/MEMORY.md is loaded into the
+ * system prompt every session; entries are separated by "\n§\n" and the file is bounded by
+ * memory.memory_char_limit (Hermes default 2200). The Controller owns only the marked block.
+ */
+const MEMORY_ENTRY_DELIMITER = '\n§\n';
+const HERMES_DEFAULT_MEMORY_CHAR_LIMIT = 2200;
+const MEMORY_BEGIN_MARKER = '<!-- shipde-controller:begin -->';
+const MEMORY_END_MARKER = '<!-- shipde-controller:end -->';
+
+function readMemoryCharLimit(homeDir, fsApi) {
+  try {
+    const text = String(fsApi.readFileSync(path.join(homeDir, 'config.yaml'), 'utf8'));
+    const m = /^\s+memory_char_limit:\s*(\d+)\s*$/m.exec(text);
+    if (m) return Number(m[1]);
+  } catch {}
+  return HERMES_DEFAULT_MEMORY_CHAR_LIMIT;
+}
+
+function buildControllerMemoryBlock(state, budget) {
+  const head = [
+    MEMORY_BEGIN_MARKER,
+    'Ship De Controller current state (auto-generated, do not edit):',
+  ];
+  const lines = [];
+  if (state.goalId) lines.push(`goal: ${state.goalId} status ${state.status || 'unknown'}`);
+  if (state.lastOutcome) lines.push(`last run: ${state.lastOutcome}`);
+  const items = state.items || [];
+  const render = (count) => {
+    const body = lines.concat(items.slice(0, count).map((i) => `${i.workItemId}: ${i.state}`));
+    if (count < items.length) body.push(`+${items.length - count} more items`);
+    return head.concat(body, [MEMORY_END_MARKER]).join('\n');
+  };
+  let count = items.length;
+  let text = render(count);
+  while (count > 0 && text.length > budget) {
+    count -= 1;
+    text = render(count);
+  }
+  return text.replace(/§/g, '');
+}
+
+function readControllerMemoryState(opts, rootDir, d) {
+  if (!opts.goal) return null;
+  try {
+    const goalsApi = d.goals || require('./goals');
+    const status = goalsApi.statusGoal(String(opts.goal), Object.assign({}, opts, { rootDir }), d);
+    if (!status || status.refusal)
+      return { goalId: String(opts.goal), status: 'unreadable', items: [] };
+    const items = status.items || [];
+    const last = items.filter((i) => i.reviewVerdict || i.testResult).pop();
+    return {
+      goalId: status.goalId,
+      status: status.status,
+      items,
+      lastOutcome: last
+        ? `${last.workItemId} review ${last.reviewVerdict || 'none'} tests ${
+            typeof last.testResult === 'string'
+              ? last.testResult
+              : last.testResult
+                ? 'recorded'
+                : 'none'
+          }`
+        : '',
+    };
+  } catch {
+    return null;
+  }
+}
+
+function syncControllerMemory(homeDir, state, fsApi) {
+  if (!state) return null;
+  const memPath = path.join(homeDir, 'memories', 'MEMORY.md');
+  let existing = '';
+  try {
+    existing = String(fsApi.readFileSync(memPath, 'utf8'));
+  } catch {}
+  const b = existing.indexOf(MEMORY_BEGIN_MARKER);
+  const e = existing.indexOf(MEMORY_END_MARKER);
+  const hasBlock = b !== -1 && e > b;
+  const before = hasBlock ? existing.slice(0, b) : existing;
+  const after = hasBlock ? existing.slice(e + MEMORY_END_MARKER.length) : '';
+  const sep = hasBlock ? '' : before.trim() ? MEMORY_ENTRY_DELIMITER : '';
+  const limit = readMemoryCharLimit(homeDir, fsApi);
+  const budget = Math.max(0, limit - before.length - after.length - sep.length);
+  const block = buildControllerMemoryBlock(state, budget);
+  fsApi.mkdirSync(path.dirname(memPath), { recursive: true });
+  fsApi.writeFileSync(memPath, before + sep + block + after, 'utf8');
+  return memPath;
+}
+
 function installSkillFile(hermesHomeDir, options, deps) {
   const d = deps || {};
   const opts = options || {};
@@ -1513,6 +1648,7 @@ function writeProvidersConfig(candidate, options, deps) {
       `  provider: ${escapeYamlString(providerName)}`,
       'api_max_retries: 1',
       'auto_recovery_cycles: 0',
+      ...skillsConfigLines(homeDir, fsApi),
       '',
     ].join('\n');
 
@@ -1658,6 +1794,7 @@ function writeProvidersConfig(candidate, options, deps) {
           ),
         ]
       : []),
+    ...skillsConfigLines(homeDir, fsApi),
     '',
   ].join('\n');
 
@@ -1952,6 +2089,16 @@ async function probeRankedRoutes(
  */
 async function launchHermesSession(options, deps) {
   const opts = options || {};
+  if (opts.acp && (typeof opts.prompt !== 'string' || !opts.prompt.trim())) {
+    throw new Error('ACP_PROMPT_REQUIRED');
+  }
+  if (
+    opts.acp &&
+    opts.acpTimeoutMs !== undefined &&
+    (!Number.isFinite(opts.acpTimeoutMs) || opts.acpTimeoutMs <= 0)
+  ) {
+    throw new Error('ACP_INVALID_TIMEOUT');
+  }
   const d = await refreshReasoningContext(opts, deps || {});
   const rootDir = resolveRootDir(opts, d);
   const hermesHome = opts.hermesHome || d.hermesHome || getHermesHomeDir(rootDir);
@@ -2376,17 +2523,26 @@ async function launchHermesSession(options, deps) {
     session.candidateKey = candidate.candidateKey;
     saveSession(session, opts, d);
     const configResult = writeProvidersConfig(candidate, opts, d);
+    try {
+      syncControllerMemory(
+        hermesHome,
+        readControllerMemoryState(opts, rootDir, d),
+        opts.fs || d.fs || fs
+      );
+    } catch {}
     attempt += 1;
 
-    const argv = buildHermesArgv(candidate, session, {
-      rootDir,
-      providerName: configResult.providerName,
-      includeChatCommand: opts.includeChatCommand,
-      omitChatCommand: opts.omitChatCommand,
-      extraArgs: opts.extraArgs,
-      skillName: opts.skillName,
-      skill: opts.skill,
-    });
+    const argv = opts.acp
+      ? ['acp']
+      : buildHermesArgv(candidate, session, {
+          rootDir,
+          providerName: configResult.providerName,
+          includeChatCommand: opts.includeChatCommand,
+          omitChatCommand: opts.omitChatCommand,
+          extraArgs: opts.extraArgs,
+          skillName: opts.skillName,
+          skill: opts.skill,
+        });
 
     const resolverInput = Object.assign(
       {
@@ -2456,6 +2612,41 @@ async function launchHermesSession(options, deps) {
         hermesHome,
         refusalReasons: probeReasons.slice(),
         rejected: initialRejected || selection.rejected || [],
+      };
+    }
+
+    if (opts.acp) {
+      const statusPath = path.join(getHermesDir(rootDir), 'acp-status.json');
+      const fsApi = opts.fs || d.fs || fs;
+      const acpStatus = await (d.runAcpTurn || require('./hermes-acp').runAcpTurn)(
+        resolved.command,
+        resolved.args,
+        {
+          cwd: rootDir,
+          env,
+          modelId: candidate.modelId,
+          providerName: configResult.providerName,
+          prompt: `Read and follow the ${CONTROLLER_SKILL_NAME} skill before acting.\n${opts.prompt}`,
+          timeoutMs: opts.acpTimeoutMs,
+          onStatus: (status) => {
+            fsApi.mkdirSync(path.dirname(statusPath), { recursive: true });
+            const temp = statusPath + '.tmp';
+            fsApi.writeFileSync(
+              temp,
+              JSON.stringify({ ...status, sessionId: session.sessionId }),
+              'utf8'
+            );
+            atomicRenameSync(temp, statusPath, { fs: fsApi });
+          },
+        },
+        d
+      );
+      return {
+        status: acpStatus.state,
+        exitCode: acpStatus.stopReason === 'end_turn' ? 0 : 1,
+        sessionId: session.sessionId,
+        acpStatus,
+        statusPath,
       };
     }
 
@@ -2694,6 +2885,7 @@ async function goalSessionCommand(args, deps) {
 async function chatCommand(args, deps) {
   const d = deps || {};
   const opts = Object.assign({}, args);
+  if (args['acp-timeout-ms'] !== undefined) opts.acpTimeoutMs = Number(args['acp-timeout-ms']);
   if (args.session) opts.session = args.session;
   if (args.goal) opts.goal = args.goal;
   if (args.reselect) opts.reselect = true;
@@ -2733,6 +2925,8 @@ async function chatCommand(args, deps) {
 }
 
 module.exports = {
+  syncControllerMemory,
+  skillsConfigLines,
   probeRankedRoutes,
   CONTROLLER_SKILL_NAME,
   installSkillFile,

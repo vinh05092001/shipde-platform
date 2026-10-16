@@ -102,6 +102,35 @@ try {
     $cleanHourly = & $scriptUnderTest -TaskName $testTaskName -TaskPath $testTaskPath -Action Unregister -Apply
     Assert-Condition "Cleaned up hourly task" ($cleanHourly.Status -eq "REMOVED")
 
+    # 13. Periodic trigger option (e.g. 10 minutes)
+    $regPeriodic = & $scriptUnderTest -TaskName $testTaskName -TaskPath $testTaskPath -Action Register -Trigger Periodic -IntervalMinutes 10 -Apply
+    Assert-Condition "Registered periodic task successfully" ($regPeriodic.Applied -eq $true)
+    $statusPeriodic = & $scriptUnderTest -TaskName $testTaskName -TaskPath $testTaskPath -Action Status
+    Assert-Condition "Status on periodic task returns State = 'Ready'" ($statusPeriodic.State -eq "Ready")
+    $cleanPeriodic = & $scriptUnderTest -TaskName $testTaskName -TaskPath $testTaskPath -Action Unregister -Apply
+    Assert-Condition "Cleaned up periodic task" ($cleanPeriodic.Status -eq "REMOVED")
+
+    # 14. GoalResume action targets goal-resume.ps1 in the given working directory (preview only)
+    $goalWork = Join-Path ([System.IO.Path]::GetTempPath()) ("shipde-goal-" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $goalWork | Out-Null
+    try {
+        $previewGoal = & $scriptUnderTest -TaskName $testTaskName -TaskPath $testTaskPath -Action Register -Trigger Periodic -IntervalMinutes 10 -ControllerAction GoalResume -GoalId TEST-GOAL -WorkingDirectory $goalWork 6>$null
+        Assert-Condition "GoalResume preview is not applied" ($previewGoal.Applied -eq $false)
+        $goalArgs = & $scriptUnderTest -TaskName $testTaskName -TaskPath $testTaskPath -Action Register -Trigger Periodic -IntervalMinutes 10 -ControllerAction GoalResume -GoalId TEST-GOAL -WorkingDirectory $goalWork *>&1 | Out-String -Width 4096
+        Assert-Condition "GoalResume runs goal-resume.ps1 with the goal and working directory" ($goalArgs -match "goal-resume\.ps1" -and $goalArgs -match "-GoalId TEST-GOAL" -and $goalArgs.Contains($goalWork))
+
+        # 15. goal-resume.ps1 appends a status block using the injected node command
+        $stub = Join-Path $goalWork "fake-node.cmd"
+        Set-Content -LiteralPath $stub -Value "@echo stub %3 %4" -Encoding ASCII
+        & (Join-Path $PSScriptRoot "goal-resume.ps1") -GoalId TEST-GOAL -WorkDir $goalWork -NodeCommand $stub | Out-Null
+        $statusLog = Join-Path $goalWork "data\goals\TEST-GOAL\scheduled-status.log"
+        Assert-Condition "goal-resume.ps1 wrote the status log" (Test-Path -LiteralPath $statusLog)
+        $logText = Get-Content -LiteralPath $statusLog -Raw
+        Assert-Condition "status log records resume and status output" ($logText -match "goal resume exit=0" -and $logText -match "stub resume TEST-GOAL" -and $logText -match "stub status TEST-GOAL")
+    } finally {
+        Remove-Item -LiteralPath $goalWork -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
     Write-Host "----------------------------------------------------------------"
     Write-Host "ALL $passed SCHEDULED TASK INTEGRATION TESTS PASSED" -ForegroundColor Green
     Write-Host "----------------------------------------------------------------"
