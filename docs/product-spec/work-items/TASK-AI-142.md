@@ -559,6 +559,15 @@ Live run GOAL-AUTOCLAW-REPOS-1 (15/10) recorded every JEV assessment as `JEV_UND
 - Before (new tests on unchanged base): pass 0, fail 2, assertion `retry must actually probe after the long writer`.
 - After: `node --test tools/ai-brain/test/task-ai-142-writer-probe.test.js`: pass 15, fail 0. Offline fixtures only; no live provider run.
 
+### H3 live: JEV weights fall back per dimension (2026-10-16)
+
+- Base: origin/main `97d8d3d68036240dc97ff8ea4288d83571d413f8`. Follow-up to `7239c5f0919f720dea764500f11a13b259f58199` separates numeric weighting confidence from closed-choice confidence.
+- `routing.assessTask` reads optional source.weightingMinConfidence for score dimensions; `jev.advise` applies it only to scores. Preset-only/other closed choices retain source.minConfidence or DEFAULT_MIN_CONFIDENCE. The existing default remains 0.7.
+- The exact live scores 4.11/1.98/1.08 and confidences 0.56/0.23/0.57 yield mixed quality/cost JEV plus preset latency with a source weighting threshold of 0.5: weights quality 52, latency 34, cost 14, logged confidence 0.23. Risk/role policy and all-low fallback remain intact. Zero trusted score mass retains preset weights/provenance.
+- Before follow-up: 1 pass/2 fail for the three new policy/provenance cases on the previous commit. After: weighting file pass 13/fail 0; weighting + request-schema + failure-reason files pass 21/fail 0. All advisory responses are offline stubs.
+- The operator authorized the sources.json extension on 2026-10-16. The committed JEV source now sets weightingMinConfidence: 0.5 while retaining minConfidence: 0.7 for choice answers; its policy comment distinguishes both.
+- Activation regression reads the committed source and passes a stubbed HTTP response through buildJevAsk and writer-selection.assessOnce. Before this configuration change: pass 0/fail 1 (`approved weighting policy must be active`). After: the exact live example returns mixed weights 52/34/14 and confidence 0.23. Weighting file pass 14/fail 0; the three named JEV files pass 22/fail 0. No real JEV/provider request was made.
+
 ### H3 live: the isolated writer receives its context pack (2026-10-16)
 
 The prompt told the writer to read the focused context pack at its host path, which the isolated worker cannot read (File not found), so the writer explored the repository instead and hit the 150k token budget before writing (live run 15/10 17:05, GOAL-AUTOCLAW-REPOS-1). The launcher now copies the pack into the worker's .shipde/ directory and points the prompt at the copy.

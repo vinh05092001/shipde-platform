@@ -354,11 +354,21 @@ async function assessTask(profile, opts) {
           Number.isFinite(Number(options.minConfidence))
         ? Number(options.minConfidence)
         : undefined;
+  // Numeric weight advice may use its own configured threshold. Choice answers
+  // still pass the existing source/default confidence policy.
+  const scoreMinConfidence =
+    options.source &&
+    options.source.weightingMinConfidence !== null &&
+    options.source.weightingMinConfidence !== undefined &&
+    Number.isFinite(Number(options.source.weightingMinConfidence))
+      ? Number(options.source.weightingMinConfidence)
+      : minConfidence;
   let result;
   try {
     result = await jev.adviseOrReason(question, {
       ask,
       minConfidence,
+      scoreMinConfidence,
       reasoningController: () => ({
         outcome: jev.Outcome.DECIDED,
         choice: fallbackId,
@@ -392,12 +402,44 @@ async function assessTask(profile, opts) {
   let chosenProfile = result.choice && WEIGHT_PROFILES[result.choice] ? result.choice : fallbackId;
   let weights = WEIGHT_PROFILES[chosenProfile];
   let weightSource = 'preset:' + chosenProfile;
+  let dimensionWeightSources = null;
   if (scoreDecided) {
-    const values = [
+    let values = [
       advisoryResult.scores.qualityImportance.score,
       advisoryResult.scores.latencyImportance.score,
       advisoryResult.scores.costImportance.score,
     ];
+    const threshold = scoreMinConfidence ?? jev.DEFAULT_MIN_CONFIDENCE;
+    const dimensions = ['quality', 'latency', 'cost'];
+    const scoreNames = ['qualityImportance', 'latencyImportance', 'costImportance'];
+    const accepted = scoreNames.map((name) => advisoryResult.scores[name].confidence >= threshold);
+    if (accepted.some((value) => !value)) {
+      const acceptedTotal = values.reduce(
+        (sum, value, index) => sum + (accepted[index] ? value : 0),
+        0
+      );
+      const presetTotal = dimensions.reduce(
+        (sum, dimension, index) =>
+          sum + (accepted[index] ? 0 : WEIGHT_PROFILES[fallbackId][dimension]),
+        0
+      );
+      // Preserve each fallback dimension's preset weight exactly. Allocate the
+      // remaining weight among trusted JEV dimensions in their score ratio.
+      values =
+        acceptedTotal > 0
+          ? values.map((value, index) =>
+              accepted[index]
+                ? (value * (100 - presetTotal)) / acceptedTotal
+                : WEIGHT_PROFILES[fallbackId][dimensions[index]]
+            )
+          : values.map(() => 0);
+      dimensionWeightSources = Object.fromEntries(
+        dimensions.map((dimension, index) => [
+          dimension,
+          accepted[index] ? 'jev-score' : 'preset:' + fallbackId,
+        ])
+      );
+    }
     const sum = values.reduce((a, b) => a + b, 0);
     if (sum > 0) {
       const exact = values.map((value) => (value * 100) / sum);
@@ -412,8 +454,10 @@ async function assessTask(profile, opts) {
       )
         rounded[fractions[i].index] += 1;
       weights = { quality: rounded[0], latency: rounded[1], cost: rounded[2] };
-      weightSource = 'jev-score';
+      weightSource = dimensionWeightSources ? 'mixed:jev-score+preset:' + fallbackId : 'jev-score';
       chosenProfile = null;
+    } else {
+      dimensionWeightSources = null;
     }
   }
   const highRisk = (profile.riskDomains || []).some((domain) =>
@@ -426,6 +470,7 @@ async function assessTask(profile, opts) {
     chosenProfile = 'QUALITY_FIRST';
     weights = WEIGHT_PROFILES.QUALITY_FIRST;
     weightSource = 'preset:QUALITY_FIRST';
+    dimensionWeightSources = null;
   }
   const decidedBy = qualityOverride ? 'controller' : jevDecided ? 'jev' : 'controller';
 
@@ -435,7 +480,9 @@ async function assessTask(profile, opts) {
     reasonCodes.push(
       'JEV_UNDECIDED:' + String((result.jev && result.jev.reason) || result.reason || 'UNKNOWN')
     );
-  if (weightSource === 'jev-score') {
+  if (weightSource.startsWith('mixed:')) {
+    reasonCodes.push('WEIGHTS_JEV_MIXED');
+  } else if (weightSource === 'jev-score') {
     reasonCodes.push('WEIGHTS_JEV_SCORE');
   } else {
     reasonCodes.push('WEIGHTS_' + chosenProfile + (jevDecided ? '' : '_CONTROLLER_FALLBACK'));
@@ -462,6 +509,7 @@ async function assessTask(profile, opts) {
     weightProfile: chosenProfile,
     weights,
     weightSource,
+    dimensionWeightSources,
     scores: advisoryResult.scores
       ? Object.fromEntries(
           Object.entries(advisoryResult.scores).map(([name, item]) => [name, item.score])
@@ -476,7 +524,7 @@ async function assessTask(profile, opts) {
     difficulty: String(profile.complexity),
     latencyPriority: profile.latencyPriority,
     recommendedModelClass,
-    confidence: jevDecided ? result.confidence : 0,
+    confidence: advisoryResult.confidence ?? 0,
     probabilities: jevDecided && result.probabilities ? result.probabilities : null,
     jevModel: jevDecided && result.jevModel ? result.jevModel : null,
     usage: jevDecided && result.usage ? result.usage : null,

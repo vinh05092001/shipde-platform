@@ -317,6 +317,9 @@ async function advise(question, options) {
   const minConfidence = Number.isFinite(Number(opts.minConfidence))
     ? Number(opts.minConfidence)
     : DEFAULT_MIN_CONFIDENCE;
+  const scoreMinConfidence = Number.isFinite(Number(opts.scoreMinConfidence))
+    ? Number(opts.scoreMinConfidence)
+    : minConfidence;
   const ask = opts.ask;
   if (typeof ask !== 'function') return undecided('UNREACHABLE');
 
@@ -339,7 +342,7 @@ async function advise(question, options) {
   if (raw.scores && typeof raw.scores === 'object') {
     const scoreNames = ['qualityImportance', 'latencyImportance', 'costImportance'];
     const scores = {};
-    let lowConfidence = false;
+    let confidentDimensions = 0;
     for (const name of scoreNames) {
       const item = raw.scores[name];
       const score = Number(item && item.score);
@@ -350,10 +353,10 @@ async function advise(question, options) {
           scores: Object.keys(scores).length ? scores : null,
         });
       }
-      if (confidence < minConfidence) lowConfidence = true;
+      if (confidence >= scoreMinConfidence) confidentDimensions += 1;
       scores[name] = { score, confidence, distribution: item.distribution || null };
     }
-    if (lowConfidence) {
+    if (confidentDimensions === 0) {
       return Object.assign(undecided('LOW_CONFIDENCE'), {
         choice: raw.choice || null,
         confidence: Math.min(...scoreNames.map((name) => scores[name].confidence)),
