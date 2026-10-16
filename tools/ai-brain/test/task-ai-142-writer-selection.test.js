@@ -146,6 +146,24 @@ test('JEV result and failure are cached for unchanged input; changed task asks a
   assert.equal(c.jevOutcome, 'DECIDED');
 });
 
+test('a rejected JEV assessment is not cached; the next call asks again', async () => {
+  let calls = 0;
+  const routing = {
+    jevQuestion: () => 'q',
+    assessTask: async () => {
+      calls++;
+      if (calls === 1) throw new Error('transient');
+      return { jevOutcome: 'DECIDED' };
+    },
+  };
+  const o = { jevAsk: async () => ({}) };
+  const p = { taskId: 'FIXTURE', role: 'writer', complexity: 'complex' };
+  await assert.rejects(selection.assessOnce(p, null, o.jevAsk, o, routing), /transient/);
+  const again = await selection.assessOnce(p, null, o.jevAsk, o, routing);
+  assert.equal(calls, 2);
+  assert.equal(again.jevOutcome, 'DECIDED');
+});
+
 test('route success without quota headers remains unknown; exhausted quota blocks only that candidate', () => {
   const c = candidate();
   selection.applyProbe(c, { ok: true, status: 200 });
