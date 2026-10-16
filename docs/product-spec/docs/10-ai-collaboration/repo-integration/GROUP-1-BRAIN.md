@@ -247,4 +247,3 @@ test. Spec SHA256 and the appended register row match the hermes-live originals;
 register diff is one insertion, zero deletions. Prettier check passed for the
 JavaScript test; repository .prettierignore excludes docs/ (validated by Python),
 and CSV has no Prettier parser. PR contract was intentionally not run before commit.
-
