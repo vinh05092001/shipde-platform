@@ -733,6 +733,159 @@ $output | ConvertTo-Json -Depth 10 | Out-File "${launchResultPath}" -Encoding UT
 `;
 }
 
+const CARRY_IDENTITY = [
+  '-c',
+  'user.name=Ship De Carry-over',
+  '-c',
+  'user.email=carry-over@shipde.invalid',
+];
+
+function carryRef(branch) {
+  return 'refs/shipde/carry/' + branch;
+}
+
+function carryGit(cwd, args, extraSafe) {
+  const nul = process.platform === 'win32' ? 'NUL' : '/dev/null';
+  const safe = path.resolve(cwd).split(path.sep).join('/');
+  return cp.spawnSync(
+    'git',
+    [
+      '-c',
+      'core.hooksPath=' + nul,
+      '-c',
+      'core.fsmonitor=false',
+      '-c',
+      'core.attributesFile=' + nul,
+      '-c',
+      'diff.external=',
+      '-c',
+      'commit.gpgsign=false',
+      '-c',
+      'safe.directory=' + safe,
+      '-c',
+      'safe.directory=' +
+        path
+          .resolve(extraSafe || cwd)
+          .split(path.sep)
+          .join('/'),
+    ].concat(args),
+    {
+      cwd,
+      windowsHide: true,
+      encoding: 'utf8',
+      env: Object.assign({}, process.env, {
+        GIT_CONFIG_NOSYSTEM: '1',
+        GIT_CONFIG_GLOBAL: nul,
+        GIT_CONFIG_SYSTEM: nul,
+        GIT_TERMINAL_PROMPT: '0',
+      }),
+    }
+  );
+}
+
+/**
+ * Before a worker root is deleted, keep a previous writer's work: commit any
+ * uncommitted change on the target branch as a WIP commit and fetch the branch
+ * into a private ref of the host repo. Fail closed: never throws.
+ */
+function carryOverSave(hostCwd, oldRoot, branch, headSha) {
+  try {
+    if (!branch || !fs.existsSync(path.join(oldRoot, '.git'))) return false;
+    const cur = carryGit(oldRoot, ['symbolic-ref', '--short', 'HEAD']);
+    if (cur.status !== 0 || cur.stdout.trim() !== branch) return false;
+    const status = carryGit(oldRoot, [
+      'status',
+      '--porcelain',
+      '--',
+      '.',
+      ':!.shipde',
+      ':!run-target.ps1',
+      ':!run-target.complete.json',
+      ':!temp',
+      ':!.config',
+      ':!.local',
+      ':!Microsoft',
+    ]);
+    if (status.status === 0 && status.stdout.trim()) {
+      carryGit(oldRoot, [
+        'add',
+        '-A',
+        '--',
+        '.',
+        ':!.shipde',
+        ':!run-target.ps1',
+        ':!run-target.complete.json',
+        ':!temp',
+        ':!.config',
+        ':!.local',
+        ':!Microsoft',
+      ]);
+      carryGit(
+        oldRoot,
+        CARRY_IDENTITY.concat([
+          'commit',
+          '--no-verify',
+          '--no-gpg-sign',
+          '-m',
+          'WIP: carried over from an interrupted writer attempt',
+        ])
+      );
+    }
+    const ref = carryRef(branch);
+    const fetched = carryGit(
+      hostCwd,
+      ['fetch', '--no-tags', oldRoot, '+refs/heads/' + branch + ':' + ref],
+      oldRoot
+    );
+    if (fetched.status !== 0) return false;
+    const anc = carryGit(hostCwd, ['merge-base', '--is-ancestor', ref, headSha]);
+    if (anc.status === 0) {
+      carryGit(hostCwd, ['update-ref', '-d', ref]);
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * After the fresh checkout of branch at headSha: merge the carried work if any.
+ * Returns 'merged' | 'conflict' | 'none'. Fail closed to the plain checkout.
+ */
+function carryOverRestore(hostCwd, newRoot, branch, eolConfig) {
+  try {
+    if (!branch) return 'none';
+    const ref = carryRef(branch);
+    if (carryGit(hostCwd, ['rev-parse', '--verify', '--quiet', ref]).status !== 0) return 'none';
+    const local = 'refs/shipde/carry/incoming';
+    const f = carryGit(newRoot, ['fetch', '--no-tags', hostCwd, '+' + ref + ':' + local], hostCwd);
+    if (f.status !== 0) return 'none';
+    // Same line-ending config as the checkout, or every file looks modified.
+    const eol = [];
+    if (eolConfig && eolConfig.autocrlf !== null && eolConfig.autocrlf !== undefined)
+      eol.push('-c', 'core.autocrlf=' + eolConfig.autocrlf);
+    if (eolConfig && eolConfig.eol !== null && eolConfig.eol !== undefined)
+      eol.push('-c', 'core.eol=' + eolConfig.eol);
+    if (process.platform === 'win32') eol.push('-c', 'core.filemode=false');
+    const m = carryGit(
+      newRoot,
+      CARRY_IDENTITY.concat(eol, ['merge', '--no-edit', '--no-ff', '--no-verify', local])
+    );
+    if (m.status === 0) {
+      carryGit(hostCwd, ['update-ref', '-d', ref]);
+      carryGit(newRoot, ['update-ref', '-d', local]);
+      return 'merged';
+    }
+    carryGit(newRoot, ['merge', '--abort']);
+    carryGit(newRoot, ['reset', '--hard', 'ORIG_HEAD']);
+    carryGit(newRoot, ['update-ref', '-d', local]);
+    return 'conflict';
+  } catch {
+    return 'none';
+  }
+}
+
 function appendGitInfoExclude(workerRoot, entries) {
   const excludePath = path.join(workerRoot, '.git', 'info', 'exclude');
   fs.mkdirSync(path.dirname(excludePath), { recursive: true });
@@ -1095,6 +1248,7 @@ function getIsolatedLauncher() {
     const hostCwd = opts.cwd || process.cwd();
     const jobName = path.basename(hostCwd) || 'default';
     const workerRoot = opts.workerRoot || workerRootFor(hostCwd);
+    let carriedOver = 'none';
     let currentSid;
     const verdictData = require('./isolation-refresh').refreshIsolationVerdict({
       cwd: hostCwd,
@@ -1384,7 +1538,10 @@ function getIsolatedLauncher() {
       }
       // Matching HEAD: retain worker root and its commits as-is. NEVER run checkout.
     } else {
+      const carryBranch =
+        opts.branch || (opts.workItemId ? 'feat/' + String(opts.workItemId).toLowerCase() : null);
       if (fs.existsSync(workerRoot)) {
+        carryOverSave(hostCwd, workerRoot, carryBranch, headSha);
         fs.rmSync(workerRoot, { recursive: true, force: true });
       }
 
@@ -1466,6 +1623,9 @@ function getIsolatedLauncher() {
           }),
         });
       }
+
+      if (targetBranch)
+        carriedOver = carryOverRestore(hostCwd, workerRoot, targetBranch, eolConfig);
 
       if (eolConfig.autocrlf !== null) {
         cp.spawnSync('git', ['config', 'core.autocrlf', eolConfig.autocrlf], {
@@ -2154,6 +2314,7 @@ function getIsolatedLauncher() {
       launchResult.exercise = exerciseResult;
       launchResult.failBefore = exerciseResult.failBefore;
     }
+    launchResult.carriedOver = carriedOver;
     launchResult.rtk = { provided: rtkEnabled, reason: rtkDecision };
     launchResult.tokenBudget = opts.tokenBudget || null;
     launchResult.workerRoot = launchResult.workerRoot || workerRoot;
@@ -2279,6 +2440,8 @@ module.exports = {
   isWorkerPath,
   readClosedIsolationVerdict,
   appendGitInfoExclude,
+  carryOverSave,
+  carryOverRestore,
   materialiseExercise,
   captureFailBefore,
   WORKER_USERNAME,

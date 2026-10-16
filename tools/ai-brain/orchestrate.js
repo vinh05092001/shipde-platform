@@ -3660,20 +3660,16 @@ async function runOrchestration(goal, opts) {
   log.workerTimeoutMs = o.workerTimeoutMs;
   const budgetConfig = o.tokenBudgets || {};
   const budgetForItem = (item) => {
+    // Precedence per field: default, then the complexity budget, then the
+    // explicit role budget. The role is the more specific rule, so it wins for
+    // every field it sets; complexity applies to fields the role leaves unset.
+    // The legacy budgetConfig[role] form has the same role precedence.
     const limits = [
       budgetConfig.byComplexity?.[item.complexity],
-      budgetConfig[roleOf(item)],
       budgetConfig.byRole?.[roleOf(item)],
+      budgetConfig[roleOf(item)],
     ].filter(Boolean);
     const budget = Object.assign({}, budgetConfig.default || {}, ...limits);
-    // Defaults fill missing fields. Explicit role and complexity ceilings must
-    // both hold: a larger role allowance must not inflate a small task's cap.
-    for (const field of ['maxTokens', 'maxTurns', 'noProgressMinutes', 'repeatedQuotaFailures']) {
-      const ceilings = limits
-        .map((limit) => Number(limit[field]))
-        .filter((value) => Number.isFinite(value) && value > 0);
-      if (ceilings.length) budget[field] = Math.min(...ceilings);
-    }
     return budget;
   };
   const budgetProgressMs =
@@ -4620,6 +4616,7 @@ async function runOrchestration(goal, opts) {
         }
       }
     }
+    let writerLaunches = 0;
     for (let attempt = 1; !session && attempt <= candidates.length + 1; attempt += 1) {
       // 5. The Controller chooses every candidate (AI-64-P01). This is a live
       //    decision, not a dry run: it is written to the decision log before the
@@ -4724,7 +4721,9 @@ async function runOrchestration(goal, opts) {
         });
       }
       const candidate = candidates.find((c) => candidateKey(c) === decision.chosen);
-      if (attempt > Number(budgetForItem(item).maxTurns || Infinity)) {
+      // maxTurns bounds real writer launches for this item; selection rounds that
+      // only refuse or probe candidates are not launches (counted where the job starts).
+      if (writerLaunches >= Number(budgetForItem(item).maxTurns || Infinity)) {
         launch.fallbackReason = 'TURN_BUDGET_EXCEEDED';
         break;
       }
@@ -4899,6 +4898,7 @@ async function runOrchestration(goal, opts) {
       }
       const candDomain = routing.canonicalFailureDomain(candidate);
       domainAttempts.set(candDomain, (domainAttempts.get(candDomain) || 0) + 1);
+      writerLaunches += 1;
       const job = {
         workItemId: item.id,
         candidateKey: decision.chosen,

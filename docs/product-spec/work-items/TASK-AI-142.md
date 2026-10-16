@@ -367,6 +367,13 @@ The test spawns a cold `cli.js dispatch` process (~5s alone) under a 15s `spawnS
 
 The writer probe passed `groq/openai/gpt-oss-120b` with a tiny request, then the real first request (about 9.2k tokens) failed HTTP 413 against a 8000 tokens-per-minute limit. The probe now records `tokensPerMinuteLimit` from the `x-ratelimit-limit-tokens` header or from a 413/429 body, and a real launch's TPM 413 records `requestedTokens`; both persist in route health. Writer selection refuses a route with `ROUTE_TPM_TOO_SMALL` when its known limit is below a request size it already refused, and never refuses when either value is unknown (no token count is hardcoded).
 
+### H3 live: the role budget wins and only writer launches count as attempts (2026-10-16)
+
+Live on GOAL-AUTOCLAW-REPOS-1 (role author.foundation, complexity standard) budgetForItem took the minimum of the role ceiling (250k) and the complexity ceiling (150k), so a 1M-context writer that had written 4 files and edited 3 was killed at 150.5k (TOKEN_BUDGET_EXCEEDED) before committing. The explicit role budget is the more specific rule and now wins for every field it sets; complexity fills the fields the role leaves unset and the default fills the rest. The same item also ended TURN_BUDGET_EXCEEDED at selection round 14 after only a few real launches, because maxTurns was compared with the selection-round counter; it now counts actual writer launches.
+
+### H3 live: a retry keeps the previous writer's work (2026-10-16)
+A retry used to delete the worker root and re-create the branch from main, so a writer's commit (389ee9e1 on GOAL-AUTOCLAW-REPOS-1) and another writer's uncommitted files were lost. The launcher now commits uncommitted changes as a WIP commit, keeps the branch under a private host ref, and merges it into the fresh checkout, recording `carriedOver` as `merged`, `conflict` or `none` and falling back to the plain base on any failure.
+
 ### H3 live: native agy candidates use the live agy model list (2026-10-16)
 The native agy candidates take their model ids from the live `agy models` listing (the pool discovery and its cache) instead of the stale ids declared on the account: declared ids the listing lacks are dropped with reason `AGY_MODEL_NOT_LISTED`, and listed ids are added. When the listing is unavailable the declared ids are kept unchanged.
 
