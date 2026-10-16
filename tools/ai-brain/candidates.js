@@ -594,6 +594,42 @@ function openAiCompatibleCandidates(opts) {
  * @param {object} [opts.sourceOpts] – options passed to loadSources
  * @returns {object[]} array of candidate objects
  */
+/**
+ * A probed direct source that was discovered from an OpenCode provider is
+ * reachable by the isolated writer as `<providerKey>/<model>`. The key comes
+ * from discovery (never parsed from the flattened source id); a source without
+ * it yields nothing. Capabilities come only from per-model metadata.
+ */
+function pushOpencodeProviderWriters(out, source, o) {
+  const key = source && source.opencodeProvider;
+  if (!key || !source.endpoint || !(source.credential && source.credential.env)) return;
+  const excluded = new Set((o.excludeModels || []).map((id) => String(id).toLowerCase()));
+  for (const model of source.models || []) {
+    if (typeof model !== 'string' || !model || excluded.has(model.toLowerCase())) continue;
+    const meta = (source.modelMeta && source.modelMeta[model]) || {};
+    const contextWindow = toPositiveInteger(meta.contextWindow);
+    const maxOutputTokens = toPositiveInteger(meta.maxOutputTokens);
+    out.push({
+      harness: 'opencode-direct',
+      accessPath: source.endpoint,
+      gateway: source.id,
+      upstream: key,
+      accountId: source.id,
+      quotaScope: source.id,
+      modelId: key + '/' + model,
+      source: source.id,
+      sourceId: source.id,
+      endpoint: source.endpoint,
+      sourceEndpoint: source.endpoint,
+      kind: source.kind,
+      capabilities: contextWindow !== undefined ? { contextWindow } : {},
+      contextWindow,
+      maxOutputTokens,
+      sharedQuota: 'unknown',
+    });
+  }
+}
+
 function generateCandidates(opts) {
   const o = opts || {};
   const registry = o.registry || sourcesApi.loadSources(o.sourceOpts);
@@ -819,6 +855,7 @@ function generateCandidates(opts) {
           }
         }
       } else {
+        pushOpencodeProviderWriters(candidates, source, o);
         const route =
           registry.dispatch &&
           registry.dispatch.providers &&
