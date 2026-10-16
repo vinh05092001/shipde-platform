@@ -848,3 +848,58 @@ for (const reasonCode of ['PROBE_BUDGET_EXHAUSTED', 'PROBE_ROUTE_CONFIGURATION_U
     assert.equal(launches, 1, 'a successful new probe may launch the writer');
   });
 }
+
+for (const fallbackProbe of ['success', 'budget-exhausted']) {
+  test(`writer retry gets a fresh probe budget after a long launch: ${fallbackProbe}`, async (t) => {
+    const repo = makeTempRepo();
+    t.after(() => fs.rmSync(repo.dir, { recursive: true, force: true }));
+    let clock = Date.now();
+    t.mock.method(Date, 'now', () => clock);
+    const first = createCandidate({ modelId: 'vendor/first', quality: 99 });
+    const second = createCandidate({ modelId: 'vendor/second', quality: 80 });
+    const probed = [];
+    const launched = [];
+    const checkpointFile = path.join(repo.dir, 'checkpoint.json');
+    await runOrchestration('long writer retry', {
+      isolatedWorker: true,
+      cwd: repo.dir,
+      workerRoot: repo.dir,
+      baseSha: repo.sha,
+      checkpointFile,
+      decisionDir: path.join(repo.dir, 'decisions'),
+      evidenceDir: path.join(repo.dir, 'evidence'),
+      routeHealthFile: path.join(repo.dir, 'health.json'),
+      candidates: [first, second],
+      registry: {
+        sources: [{ id: 'oc', endpoint: first.accessPath, credential: { env: 'TEST_KEY' } }],
+        dispatch: { providers: { oc: { harness: 'opencode-direct', provider: 'opencode' } } },
+      },
+      specs: [{ id: 'LONG-WRITER', files: [], qualityFloor: 0 }],
+      routeProbe: async (candidate) => {
+        probed.push(candidate.modelId);
+        return candidate.modelId === second.modelId && fallbackProbe === 'budget-exhausted'
+          ? { ok: false, status: 0, reasonCode: 'PROBE_BUDGET_EXHAUSTED' }
+          : { ok: true, status: 200 };
+      },
+      run: (job) => {
+        launched.push(job.candidateKey);
+        clock += 30 * 60 * 1000;
+        return {
+          exitCode: 1,
+          failureReason: 'TOKEN_BUDGET_EXCEEDED',
+          stderr: 'token budget exceeded',
+        };
+      },
+      ranking: { priors: { ranking: [] } },
+    });
+    assert.deepEqual(
+      probed,
+      [first.modelId, second.modelId],
+      'retry must actually probe after the long writer'
+    );
+    assert.equal(launched.length, fallbackProbe === 'success' ? 2 : 1);
+    const checkpoint = JSON.parse(fs.readFileSync(checkpointFile, 'utf8'));
+    assert.match(checkpoint.liveSteps['LONG-WRITER'].reason, /TOKEN_BUDGET_EXCEEDED/);
+    assert.doesNotMatch(checkpoint.liveSteps['LONG-WRITER'].reason, /PROBE_BUDGET_EXHAUSTED/);
+  });
+}

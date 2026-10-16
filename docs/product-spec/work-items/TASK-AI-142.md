@@ -356,6 +356,9 @@ Selection logs retain the full chosenCandidate, the existing chosen identity, to
 
 Verification: sequential TASK-AI-141 199/199, TASK-AI-142 136/136, TASK-AI-64 129/129, dispatch-wiring 7/7 and decisions 28/28 passed. Additional candidate/routing regressions passed 74/74. Changed JavaScript passes ESLint no-undef; changed files pass Prettier and git diff --check. Live logs remain untouched and runtime data is excluded from commits.
 
+### H3 live: Hermes stops on a 401 route failure (2026-10-16)
+The live output scanner in `defaultSpawn` now treats `Error code: 401` on an API failure line as a route failure, so Hermes is stopped and the brain reselected instead of running until it exits. 400 stays excluded because a bad request is not a route failure.
+
 ### H3 live: a failed JEV assessment is not cached (2026-10-16)
 
 `assessOnce` cached the in-flight Promise, so a transient JEV rejection stayed cached and every later call in the session got the same failure. The rejected entry is now removed (only if it is still the same entry), so the next call asks JEV again; resolved results are unchanged.
@@ -555,6 +558,23 @@ Live run GOAL-AUTOCLAW-REPOS-1 (15/10) recorded every JEV assessment as `JEV_UND
 
 #323 classified "No Codex credentials stored" as an account failure, but Hermes prints it and exits 0, so the run counted as completed and the classifier never ran (live launch 16/10 06:03). The output scanner now treats that startup line as route evidence, so the run fails and the brain is reselected. No credential file is read.
 
+### H3 live: per-attempt writer probe budget (2026-10-16)
+
+- Base: origin/main `97d8d3d68036240dc97ff8ea4288d83571d413f8`.
+- Retry ranking starts a fresh probe window, excluding prior writer runtime. A probe budget stop after a launch preserves the last writer failure cause.
+- Regression: two injected-clock cases run a writer for 30 simulated minutes, then require a real fallback probe; both normal fallback and a later probe-budget stop retain TOKEN_BUDGET_EXCEEDED.
+- Before (new tests on unchanged base): pass 0, fail 2, assertion `retry must actually probe after the long writer`.
+- After: `node --test tools/ai-brain/test/task-ai-142-writer-probe.test.js`: pass 15, fail 0. Offline fixtures only; no live provider run.
+
+### H3 live: JEV weights fall back per dimension (2026-10-16)
+
+- Base: origin/main `97d8d3d68036240dc97ff8ea4288d83571d413f8`. Follow-up to `7239c5f0919f720dea764500f11a13b259f58199` separates numeric weighting confidence from closed-choice confidence.
+- `routing.assessTask` reads optional source.weightingMinConfidence for score dimensions; `jev.advise` applies it only to scores. Preset-only/other closed choices retain source.minConfidence or DEFAULT_MIN_CONFIDENCE. The existing default remains 0.7.
+- The exact live scores 4.11/1.98/1.08 and confidences 0.56/0.23/0.57 yield mixed quality/cost JEV plus preset latency with a source weighting threshold of 0.5: weights quality 52, latency 34, cost 14, logged confidence 0.23. Risk/role policy and all-low fallback remain intact. Zero trusted score mass retains preset weights/provenance.
+- Before follow-up: 1 pass/2 fail for the three new policy/provenance cases on the previous commit. After: weighting file pass 13/fail 0; weighting + request-schema + failure-reason files pass 21/fail 0. All advisory responses are offline stubs.
+- The operator authorized the sources.json extension on 2026-10-16. The committed JEV source now sets weightingMinConfidence: 0.5 while retaining minConfidence: 0.7 for choice answers; its policy comment distinguishes both.
+- Activation regression reads the committed source and passes a stubbed HTTP response through buildJevAsk and writer-selection.assessOnce. Before this configuration change: pass 0/fail 1 (`approved weighting policy must be active`). After: the exact live example returns mixed weights 52/34/14 and confidence 0.23. Weighting file pass 14/fail 0; the three named JEV files pass 22/fail 0. No real JEV/provider request was made.
+
 ### H3 live: the isolated writer receives its context pack (2026-10-16)
 
 The prompt told the writer to read the focused context pack at its host path, which the isolated worker cannot read (File not found), so the writer explored the repository instead and hit the 150k token budget before writing (live run 15/10 17:05, GOAL-AUTOCLAW-REPOS-1). The launcher now copies the pack into the worker's .shipde/ directory and points the prompt at the copy.
@@ -574,6 +594,14 @@ On 15/10 the live Controller got HTTP 422 then 400 from JEV and fell back to BAL
 ### H3 live: worker token discipline (2026-10-15)
 
 The operator observed Codex using about 174k and agy 0.5-0.8M input tokens per task, versus 60-90k for disciplined agents, mostly from whole-file reads, unfiltered test output and repeated full-suite runs. Every compiled writer and repair prompt now carries a short token-discipline block (search first, then read only a line range with the read tool; run only the named tests and keep their summary and failure lines; the Controller runs the full suite). The rule names no POSIX-only command because the isolated worker shell is PowerShell; the live 15/10 17:05 writer read whole 50-56k-character files and hit the 150k budget.
+
+### H3 live: work-evidence W-R02 follows the canonical key shape (2026-10-16)
+
+Direct-route candidate keys (such as `codex::cli::::codex::codex-cli::codex-cli::<model>` for the auto-bound Codex CLI) have an empty gateway segment. `tools/ai-brain/work-evidence.js` W-R02 previously required every part to be non-empty, rejecting valid direct writer keys with `WRITER_KEY_INVALID` and preventing published work from being recorded. Writer validation now uses `parseCandidateKey` from `tools/ai-brain/discovery/identity.js`, requiring non-empty harness, accessPath, upstream, and modelId, while allowing gateway, account, and quotaScope to be empty per the canonical key contract.
+
+### H3 live: dispatch dry-run ranks via live task profile and priors (2026-10-16)
+
+`node tools/ai-brain/cli.js dispatch --dry-run` previously routed through legacy `ranking.rankAndRecord`, scoring every candidate 26 points and ignoring priors and profile dimensions. The dispatch dry-run now routes through `routing.rankForProfile`, matching the live writer ranking order, scores, and advisory JEV caching without side effects.
 
 ### H3 live: custom candidate without gateway uses upstream instead of openai (2026-10-16)
 
