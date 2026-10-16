@@ -370,7 +370,9 @@ Verification (2026-10-14): sequential TASK-AI-141 199/199, TASK-AI-142 140/140, 
 
 Selection logs retain the full chosenCandidate, the existing chosen identity, top ten ranked candidates and score breakdown summaries, and rejection totals by reasonCode with ten examples. Full runtime routing arrays remain available for fallback. Daily logs roll at 50 MiB into date.N.jsonl; readers consume all parts in numeric order. `node tools/ai-brain/cli.js decisions compact --dir <dir>` incrementally writes capped copies named `<source>.compact-<timestamp>.jsonl`, preserving originals. Copies are excluded from daily history until the operator explicitly replaces originals; malformed input fails rather than silently dropping evidence. No live data is modified by this change.
 
-Verification: sequential TASK-AI-141 199/199, TASK-AI-142 136/136, TASK-AI-64 129/129, dispatch-wiring 7/7 and decisions 28/28 passed. Additional candidate/routing regressions passed 74/74. Changed JavaScript passes ESLint no-undef; changed files pass Prettier and git diff --check. Live logs remain untouched and runtime data is excluded from commits.
+### H3 live: register auto-sync from GitHub, goal PR registration, and writer pinpointing (2026-10-16)
+
+Controller now automatically synchronizes merged GitHub Pull Requests into FEATURE-DELIVERY-REGISTER.csv on scheduling turns and control runs (`tools/ai-brain/reconcile.js`, `tools/ai-brain/next-runner.js`, `scripts/ai/control.ps1`), avoiding false dependency-blocked states without manual edits. Goal Work Item rows and specs are preserved across isolation boundaries (`tools/ai-brain/isolation-launcher.js`) and excluded from `validate_docs.py` core feature catalog audits, allowing goal PRs to satisfy single Work Item contracts. Pre-writer pinpointing (`tools/ai-brain/pinpoint.js`, `tools/ai-brain/prompt-compiler.js`) extracts explicit file:line targets and keyword clusters across allowed paths before dispatch, cutting codebase exploration tokens.
 
 ### H3 live: the PR contract accepts Controller goal Work Items (2026-10-16)
 

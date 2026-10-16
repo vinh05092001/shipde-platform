@@ -82,7 +82,7 @@ def main() -> int:
     work_item_changes = [
         path
         for path in files
-        if re.search(r"docs/product-spec/work-items/(?:FEAT|TASK)-", path)
+        if re.search(r"docs/product-spec/work-items/(?:FEAT|TASK|GOAL)-", path)
     ]
     distinct_changed_ids = {
         match.group(0)

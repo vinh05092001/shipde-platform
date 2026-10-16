@@ -802,7 +802,7 @@ function planGoal(goalId, options, deps) {
       'GOAL',
       `Goal: ${goalId}`,
       spec.id,
-      `GOAL-${goalId.toUpperCase()}`,
+      spec.featureId || `GOAL-${goalId.toUpperCase()}`,
       spec.title || `Task ${idx + 1}`,
       spec.businessOutcome || spec.title || goal.text,
       initialStatus,

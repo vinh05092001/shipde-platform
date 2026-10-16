@@ -130,7 +130,9 @@ def main() -> int:
             register_rows = list(csv.DictReader(handle))
 
     registered_features = [
-        row.get("feature_id", "") for row in register_rows if row.get("feature_id")
+        row.get("feature_id", "")
+        for row in register_rows
+        if row.get("feature_id") and not row.get("feature_id", "").startswith("GOAL-")
     ]
     registered_set = set(registered_features)
     if len(registered_features) != len(registered_set):

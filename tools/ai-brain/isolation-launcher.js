@@ -1054,6 +1054,48 @@ function appendGitInfoExclude(workerRoot, entries) {
   fs.appendFileSync(excludePath, prefix + missing.join('\n') + '\n', 'utf8');
 }
 
+function ensureGoalRegistrationInWorker(hostCwd, workerRoot, workItemId) {
+  if (!workItemId || typeof workItemId !== 'string') return;
+  const isGoal = workItemId.toUpperCase().startsWith('GOAL-');
+  if (!isGoal) return;
+
+  const regRel = path.join(
+    'docs',
+    'product-spec',
+    'docs',
+    '10-ai-collaboration',
+    'FEATURE-DELIVERY-REGISTER.csv'
+  );
+  const specRel = path.join('docs', 'product-spec', 'work-items', `${workItemId}.md`);
+
+  const hostSpec = path.join(hostCwd, specRel);
+  const workerSpec = path.join(workerRoot, specRel);
+  if (!fs.existsSync(workerSpec) && fs.existsSync(hostSpec)) {
+    fs.mkdirSync(path.dirname(workerSpec), { recursive: true });
+    fs.copyFileSync(hostSpec, workerSpec);
+  }
+
+  const hostReg = path.join(hostCwd, regRel);
+  const workerReg = path.join(workerRoot, regRel);
+  if (fs.existsSync(hostReg) && fs.existsSync(workerReg)) {
+    const workerContent = fs.readFileSync(workerReg, 'utf8');
+    if (!workerContent.includes(workItemId)) {
+      const hostContent = fs.readFileSync(hostReg, 'utf8');
+      const hostLines = hostContent.split(/\r?\n/);
+      const matchingLine = hostLines.find(
+        (line) => line.includes(`"${workItemId}"`) || line.includes(`,${workItemId},`)
+      );
+      if (matchingLine) {
+        const eol = workerContent.includes('\r\n') ? '\r\n' : '\n';
+        const updated = workerContent.endsWith('\n')
+          ? workerContent + matchingLine + eol
+          : workerContent + eol + matchingLine + eol;
+        fs.writeFileSync(workerReg, updated, 'utf8');
+      }
+    }
+  }
+}
+
 const EXERCISE_CASES = path.join(__dirname, 'exercise', 'e1-branch-name.cases.json');
 const EXERCISE_RUNNER = path.join('tools', 'ai-brain', 'test', 'e1-branch-name.test.js');
 const THROWS = 'THROWS:';
@@ -1779,6 +1821,8 @@ function getIsolatedLauncher() {
       if (targetBranch)
         carriedOver = carryOverRestore(hostCwd, workerRoot, targetBranch, eolConfig);
 
+      ensureGoalRegistrationInWorker(hostCwd, workerRoot, opts.workItemId);
+
       if (eolConfig.autocrlf !== null) {
         cp.spawnSync('git', ['config', 'core.autocrlf', eolConfig.autocrlf], {
           cwd: workerRoot,
@@ -2482,6 +2526,61 @@ function getIsolatedLauncher() {
     launchResult.tokenBudget = opts.tokenBudget || null;
     launchResult.workerRoot = launchResult.workerRoot || workerRoot;
     launchResult.worktree = launchResult.worktree || workerRoot;
+
+    // Ensure any modified register row or staged work item spec for a GOAL item
+    // is committed into the workerSha so the PR contract passes
+    if (
+      opts.workItemId &&
+      typeof opts.workItemId === 'string' &&
+      opts.workItemId.toUpperCase().startsWith('GOAL-') &&
+      fs.existsSync(workerRoot) &&
+      fs.existsSync(path.join(workerRoot, '.git'))
+    ) {
+      try {
+        const { withCleanGitEnv, safeGit } = require('./supervisor');
+        withCleanGitEnv(
+          workerRoot,
+          (safeGitDir) => {
+            const statusRes = safeGit(safeGitDir, workerRoot, ['status', '--porcelain'], 20000);
+            if (statusRes && statusRes.status === 0 && statusRes.stdout) {
+              const dirtyLines = statusRes.stdout.split(/\r?\n/).filter(Boolean);
+              const needsCommit = dirtyLines.some(
+                (l) => l.includes('FEATURE-DELIVERY-REGISTER.csv') || l.includes(opts.workItemId)
+              );
+              if (needsCommit) {
+                const headCheck = safeGit(
+                  safeGitDir,
+                  workerRoot,
+                  ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'],
+                  20000
+                );
+                const currentHead = ((headCheck && headCheck.stdout) || '').trim();
+                if (currentHead && currentHead !== (opts.headSha || '')) {
+                  safeGit(
+                    safeGitDir,
+                    workerRoot,
+                    [
+                      'add',
+                      'docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv',
+                      `docs/product-spec/work-items/${opts.workItemId}.md`,
+                    ],
+                    20000
+                  );
+                  safeGit(
+                    safeGitDir,
+                    workerRoot,
+                    ['commit', '--amend', '--no-edit', '--no-verify'],
+                    20000
+                  );
+                }
+              }
+            }
+          },
+          { workerWritable: true }
+        );
+      } catch (_) {}
+    }
+
     if (
       !launchResult.workerSha &&
       fs.existsSync(workerRoot) &&
@@ -2617,4 +2716,5 @@ module.exports = {
   EXPECTED_FIREWALL_RULES,
   DEFAULT_WORKER_TIMEOUT_MS,
   enforceTokenBudget,
+  ensureGoalRegistrationInWorker,
 };

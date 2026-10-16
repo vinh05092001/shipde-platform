@@ -136,11 +136,32 @@ function compilePrompt(item, ctx) {
   const c = ctx || {};
   const i = item || {};
   const lines = [];
+
+  // Pinpointed brief with exact file:line targets
+  if (c.pinpoint !== false) {
+    try {
+      const { pinpointTarget } = require('./pinpoint');
+      const pp = pinpointTarget(i, { rootDir: c.rootDir });
+      if (pp && pp.promptHeader) {
+        lines.push(pp.promptHeader);
+      }
+    } catch (_) {}
+  }
+
   lines.push('Work Item: ' + (i.id || ''));
   lines.push('Goal: ' + (c.goal || ''));
   if (c.specText) lines.push('Source spec: ' + String(c.specText));
   lines.push('Role requirement: ' + JSON.stringify(i.roleRequirement || {}));
-  lines.push('Allowed files: ' + (i.allowedPaths || []).join(', '));
+
+  const isGoalItem = typeof i.id === 'string' && i.id.toUpperCase().startsWith('GOAL-');
+  const allowed = (i.allowedPaths || []).slice();
+  if (isGoalItem) {
+    const regRel = 'docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv';
+    const specRel = `docs/product-spec/work-items/${i.id}.md`;
+    if (!allowed.includes(regRel)) allowed.push(regRel);
+    if (!allowed.includes(specRel)) allowed.push(specRel);
+  }
+  lines.push('Allowed files: ' + allowed.join(', '));
   lines.push('Forbidden files: everything outside the allowed paths.');
   lines.push('Dependencies: ' + (i.dependencies || []).join(', '));
   lines.push('Acceptance criteria:');
@@ -178,6 +199,13 @@ function compilePrompt(item, ctx) {
       branch +
       ') containing all your changes (no push).'
   );
+  if (isGoalItem) {
+    lines.push(
+      'Registration requirement: you must stage and commit docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv and docs/product-spec/work-items/' +
+        i.id +
+        '.md alongside your changes.'
+    );
+  }
   lines.push(CLEAN_TREE_RULES);
 
   let dirtyPaths = [];

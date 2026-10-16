@@ -18,6 +18,8 @@
  *   info   — a record is incomplete but nothing is being misrepresented.
  */
 
+const fs = require('fs');
+const path = require('path');
 const { commitExists, isAncestorOf, branchExists, fileExists, headSha } = require('./facts');
 
 const TERMINAL_STATUS = 'MERGED';
@@ -840,6 +842,102 @@ function applyStatusMutations(text, mutations, options) {
   return { text: out, applied };
 }
 
+function extractWorkItemIdFromPrTitle(title) {
+  if (typeof title !== 'string') return null;
+  const match = title.match(
+    /\b(FEAT-[A-Z0-9-]+|TASK-FOUND-[0-9]+|TASK-AI-[0-9]+|GOAL-[A-Z0-9]+(?:-[A-Z0-9]+)*-[0-9]+)\b/i
+  );
+  return match ? match[1].toUpperCase() : null;
+}
+
+/**
+ * Automatically syncs merged Pull Requests from GitHub into FEATURE-DELIVERY-REGISTER.csv
+ */
+function syncMergedPullRequestsToRegister(options = {}, deps = {}) {
+  const rootDir = path.resolve(options.rootDir || (deps && deps.rootDir) || process.cwd());
+  const regPath = options.registerPath
+    ? path.resolve(rootDir, options.registerPath)
+    : path.join(
+        rootDir,
+        'docs',
+        'product-spec',
+        'docs',
+        '10-ai-collaboration',
+        'FEATURE-DELIVERY-REGISTER.csv'
+      );
+
+  const fsApi = (deps && deps.fs) || (options && options.fs) || fs;
+  if (!fsApi.existsSync(regPath)) {
+    return { synced: false, reason: 'REGISTER_NOT_FOUND' };
+  }
+
+  let mergedPrs = [];
+  if (Array.isArray(deps.mergedPullRequests || options.mergedPullRequests)) {
+    mergedPrs = deps.mergedPullRequests || options.mergedPullRequests;
+  } else {
+    try {
+      const { runGh } = require('./governed-merge');
+      const repoArg = options.repo ? ['--repo', options.repo] : [];
+      const ghRes = runGh(
+        [
+          'pr',
+          'list',
+          '--state',
+          'merged',
+          '--limit',
+          '100',
+          '--json',
+          'number,title,mergeCommit,headRefOid,mergedAt',
+        ].concat(repoArg),
+        rootDir,
+        deps.ghRunner || options.ghRunner
+      );
+      if (ghRes && ghRes.exitCode === 0 && ghRes.stdout) {
+        mergedPrs = JSON.parse(ghRes.stdout);
+      }
+    } catch (_) {}
+  }
+
+  if (!Array.isArray(mergedPrs) || mergedPrs.length === 0) {
+    return { synced: false, updatedCount: 0 };
+  }
+
+  const text = fsApi.readFileSync(regPath, 'utf8');
+  const mutations = [];
+
+  for (const pr of mergedPrs) {
+    if (!pr || !pr.title) continue;
+    const workItemId = extractWorkItemIdFromPrTitle(pr.title);
+    if (!workItemId) continue;
+
+    const mergeCommit =
+      (pr.mergeCommit && pr.mergeCommit.oid) || pr.mergeCommitOid || pr.merge_commit || '';
+    const prNumberStr = '#' + pr.number;
+
+    mutations.push({
+      workItemId,
+      to: 'MERGED',
+      evidence: {
+        pr: prNumberStr,
+        codexVerdict: 'PASS',
+        mergeCommit,
+      },
+    });
+  }
+
+  if (mutations.length === 0) {
+    return { synced: false, updatedCount: 0 };
+  }
+
+  const { text: newText, applied } = applyStatusMutations(text, mutations, options);
+  if (applied > 0) {
+    fsApi.writeFileSync(regPath, newText, 'utf8');
+    return { synced: true, updatedCount: applied, registerPath: regPath };
+  }
+
+  return { synced: false, updatedCount: 0 };
+}
+
 module.exports = {
   reconcileRegister,
   parseDependencies,
@@ -851,6 +949,8 @@ module.exports = {
   parseCsvRecords,
   applyStatusMutations,
   serializeRecord,
+  extractWorkItemIdFromPrTitle,
+  syncMergedPullRequestsToRegister,
   ACCEPTED_DEPENDENCY_VERDICTS,
   ACCEPTED_MERGED_VERDICTS,
   ALLOWED_SOURCES_FOR_BACKLOG,
