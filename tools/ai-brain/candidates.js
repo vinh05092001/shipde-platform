@@ -50,6 +50,63 @@ function parsePrefix(modelId) {
   return { upstream: str.slice(0, idx), model: str.slice(idx + 1) };
 }
 
+/**
+ * Resolves a model ID against a router/gateway source.
+ * A router forwards requests to upstream providers, so every valid model
+ * reachable through a router MUST carry an upstream prefix (e.g. "cl/...", "ag/...").
+ *
+ * If the model ID starts with the router's prefix (from source.modelPrefix,
+ * source.id + '/', or dispatch table), that prefix is stripped to uncover
+ * the inner model ID.
+ *
+ * Returns { upstream, innerModelId } if valid, or null if the inner model has no
+ * upstream prefix (bare model, e.g. "gpt-6-astra", "muse-spark-1-3") or refers
+ * to the router itself as upstream.
+ */
+function resolveRouterModel(modelId, routerSource, registry, cliSource) {
+  if (!modelId) return null;
+  const raw =
+    typeof modelId === 'string'
+      ? modelId
+      : (modelId && (modelId.modelId || modelId.model || modelId.id)) || '';
+  if (!raw) return null;
+
+  const routerId = routerSource && routerSource.id;
+  const prefixes = new Set();
+  if (routerSource && routerSource.modelPrefix) prefixes.add(routerSource.modelPrefix);
+  if (cliSource && cliSource.modelPrefix) prefixes.add(cliSource.modelPrefix);
+  if (routerId) prefixes.add(routerId + '/');
+  if (cliSource && cliSource.id) prefixes.add(cliSource.id + '/');
+
+  const dispatch = (registry && registry.dispatch && registry.dispatch.providers) || {};
+  if (routerId && dispatch[routerId]?.modelPrefix) prefixes.add(dispatch[routerId].modelPrefix);
+  if (cliSource && cliSource.id && dispatch[cliSource.id]?.modelPrefix) {
+    prefixes.add(dispatch[cliSource.id].modelPrefix);
+  }
+
+  let inner = raw;
+  const sortedPrefixes = Array.from(prefixes).sort((a, b) => b.length - a.length);
+  for (const prefix of sortedPrefixes) {
+    const p = prefix.endsWith('/') ? prefix : prefix + '/';
+    if (inner.startsWith(p)) {
+      inner = inner.slice(p.length);
+      break;
+    }
+  }
+
+  const parsed = parsePrefix(inner);
+  if (!parsed) return null;
+
+  for (const prefix of sortedPrefixes) {
+    const clean = prefix.replace(/\/$/, '');
+    if (parsed.upstream === clean) return null;
+  }
+  if (routerId && parsed.upstream === routerId) return null;
+  if (cliSource && cliSource.id && parsed.upstream === cliSource.id) return null;
+
+  return { upstream: parsed.upstream, innerModelId: inner };
+}
+
 const { candidateKey } = require('./discovery/identity');
 
 /**
@@ -261,13 +318,25 @@ function openAiCompatibleCandidates(opts) {
     const modelSet = new Set();
     if (source.modelMeta && typeof source.modelMeta === 'object') {
       for (const m of Object.keys(source.modelMeta)) {
-        if (m) modelSet.add(m);
+        if (!m) continue;
+        if (source.kind === 'router') {
+          const resolved = resolveRouterModel(m, source, registry);
+          if (resolved) modelSet.add(resolved.innerModelId);
+        } else {
+          modelSet.add(m);
+        }
       }
     }
     if (Array.isArray(source.models)) {
       for (const m of source.models) {
         const id = typeof m === 'string' ? m : m && m.model;
-        if (id) modelSet.add(id);
+        if (!id) continue;
+        if (source.kind === 'router') {
+          const resolved = resolveRouterModel(id, source, registry);
+          if (resolved) modelSet.add(resolved.innerModelId);
+        } else {
+          modelSet.add(id);
+        }
       }
     }
     if (source.kind === 'router' && source.servesModels !== false) {
@@ -276,16 +345,16 @@ function openAiCompatibleCandidates(opts) {
           const id =
             typeof item === 'string' ? item : item && (item.modelId || item.model || item.id);
           if (!id) continue;
-          const parsed = parsePrefix(id);
-          if (!parsed) continue;
+          const resolved = resolveRouterModel(id, source, registry);
+          if (!resolved) continue;
           if (
             item &&
             typeof item === 'object' &&
             item.upstream &&
-            item.upstream !== parsed.upstream
+            item.upstream !== resolved.upstream
           )
             continue;
-          modelSet.add(id);
+          modelSet.add(resolved.innerModelId);
         }
       }
     } else if (source.kind === 'model-source' && source.servesModels !== false) {
@@ -489,19 +558,24 @@ function generateCandidates(opts) {
           continue;
         const fullId =
           typeof item === 'string' ? item : (item && (item.modelId || item.model || item.id)) || '';
-        const parsed = parsePrefix(fullId);
-        if (!parsed) continue;
-        if (item && typeof item === 'object' && item.upstream && item.upstream !== parsed.upstream)
+        const resolved = resolveRouterModel(fullId, source, registry);
+        if (!resolved) continue;
+        if (
+          item &&
+          typeof item === 'object' &&
+          item.upstream &&
+          item.upstream !== resolved.upstream
+        )
           continue;
         if (sharedArc) {
           candidates.push({
             harness,
             accessPath,
             gateway: source.id,
-            upstream: parsed.upstream,
+            upstream: resolved.upstream,
             accountId: '*',
-            quotaScope: parsed.upstream,
-            modelId: fullId,
+            quotaScope: resolved.upstream,
+            modelId: resolved.innerModelId,
             source: source.id,
             sourceId: source.id,
             endpoint: source.endpoint,
@@ -515,10 +589,10 @@ function generateCandidates(opts) {
               harness,
               accessPath,
               gateway: source.id,
-              upstream: parsed.upstream,
+              upstream: resolved.upstream,
               accountId: acc.id,
               quotaScope: acc.id,
-              modelId: fullId,
+              modelId: resolved.innerModelId,
               source: source.id,
               sourceId: source.id,
               endpoint: source.endpoint,
@@ -671,11 +745,17 @@ function generateCandidates(opts) {
       if (source.reachedVia) {
         // OpenCode reaches 9Router models via ninerouter/ prefix.
         // Its own namespace is in openCodeIds.
+        const routerSource = (registry.sources || []).find((s) => s && s.id === source.reachedVia);
         const mp =
-          source.modelPrefix || registry.dispatch?.providers?.[source.id]?.modelPrefix || '';
+          source.modelPrefix ||
+          (routerSource && routerSource.modelPrefix) ||
+          registry.dispatch?.providers?.[source.id]?.modelPrefix ||
+          registry.dispatch?.providers?.[source.reachedVia]?.modelPrefix ||
+          '';
+        const prefix = mp ? (mp.endsWith('/') ? mp : mp + '/') : '';
         for (const ocId of openCodeIds) {
-          const parsed = parsePrefix(ocId);
-          if (!mp || !String(ocId).startsWith(mp) || !parsed) {
+          const resolved = resolveRouterModel(ocId, routerSource, registry, source);
+          if (!resolved || (prefix && !String(ocId).startsWith(prefix))) {
             if (Array.isArray(o.candidateGenerationRejections)) {
               o.candidateGenerationRejections.push({ modelId: ocId, reasonCode: 'ALIAS_MISMATCH' });
             }
@@ -686,7 +766,7 @@ function generateCandidates(opts) {
               harness,
               accessPath,
               gateway: source.reachedVia,
-              upstream: parsed ? parsed.upstream : source.id,
+              upstream: resolved.upstream,
               accountId: '*',
               quotaScope: source.id,
               modelId: ocId,
@@ -696,12 +776,13 @@ function generateCandidates(opts) {
             });
           } else {
             for (const acc of bound) {
-              const row = accountModelRow(acc, ocId) || {};
+              const row =
+                accountModelRow(acc, ocId) || accountModelRow(acc, resolved.innerModelId) || {};
               candidates.push({
                 harness,
                 accessPath,
                 gateway: source.reachedVia,
-                upstream: parsed ? parsed.upstream : source.id,
+                upstream: resolved.upstream,
                 accountId: acc.id,
                 quotaScope: acc.id,
                 modelId: ocId,
@@ -718,20 +799,21 @@ function generateCandidates(opts) {
         }
         // Also the ninerouter/ models from the HTTP catalogue, accessible
         // through OpenCode's ninerouter/ prefix.
-        if (mp) {
+        if (prefix) {
           for (const item of catalogue) {
             const fullId =
               typeof item === 'string'
                 ? item
                 : (item && (item.modelId || item.model || item.id)) || '';
-            const prefix = mp.endsWith('/') ? mp : mp + '/';
-            const prefixed = fullId.startsWith(prefix) ? fullId : prefix + fullId;
+            const resolved = resolveRouterModel(fullId, routerSource, registry, source);
+            if (!resolved) continue;
+            const prefixed = prefix + resolved.innerModelId;
             if (sharedArc) {
               candidates.push({
                 harness,
                 accessPath,
                 gateway: source.reachedVia,
-                upstream: parsePrefix(fullId)?.upstream || source.id,
+                upstream: resolved.upstream,
                 accountId: '*',
                 quotaScope: source.id,
                 modelId: prefixed,
@@ -741,12 +823,16 @@ function generateCandidates(opts) {
               });
             } else {
               for (const acc of bound) {
-                const row = accountModelRow(acc, prefixed) || accountModelRow(acc, fullId) || {};
+                const row =
+                  accountModelRow(acc, prefixed) ||
+                  accountModelRow(acc, resolved.innerModelId) ||
+                  accountModelRow(acc, fullId) ||
+                  {};
                 candidates.push({
                   harness,
                   accessPath,
                   gateway: source.reachedVia,
-                  upstream: parsePrefix(fullId)?.upstream || source.id,
+                  upstream: resolved.upstream,
                   accountId: acc.id,
                   quotaScope: acc.id,
                   modelId: prefixed,
@@ -1644,6 +1730,7 @@ function annotateCandidates(candidates, evidenceData, opts) {
 
 module.exports = {
   parsePrefix,
+  resolveRouterModel,
   candidateKey,
   harnessOf,
   accessPathOf,
