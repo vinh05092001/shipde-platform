@@ -130,7 +130,7 @@ describe('TASK-AI-142: Register auto-sync, Goal registration, and Pinpointing', 
 
       // Call findNextWorkItem with mergedPullRequests injected
       const result = nextRunner.findNextWorkItem(
-        { rootDir: tempDir, registerPath: regPath },
+        { rootDir: tempDir, registerPath: regPath, syncRegister: true },
         { mergedPullRequests: mockMergedPrs }
       );
 

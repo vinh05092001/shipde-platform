@@ -639,8 +639,10 @@ function findNextWorkItem(options, deps) {
   const decisionRecords = collectAllDecisionRecords(opts, d);
   const terminalWorkItems = opts.terminalWorkItems || d.terminalWorkItems || new Map();
 
-  // Auto-sync merged PRs from GitHub to register.csv unless explicitly disabled
-  if (opts.syncRegister !== false && d.syncRegister !== false) {
+  // Sync merged PRs from GitHub into the register only when the caller asks
+  // (the `next --run` command). Library callers and tests never touch GitHub
+  // or rewrite the repository register as a side effect.
+  if (opts.syncRegister === true || d.syncRegister === true) {
     try {
       const { syncMergedPullRequestsToRegister } = require('./reconcile');
       syncMergedPullRequestsToRegister(opts, d);
@@ -1519,6 +1521,7 @@ function nextCommand(args, deps) {
       rootDir,
       registerPath,
       run,
+      syncRegister: run && args['sync-register'] !== false,
       loop,
       workItem,
       stopFile,
