@@ -2478,7 +2478,15 @@ function importReviewedCommitForPublish(o, entry, request) {
     assertGitOk(
       runHardenedGit(
         tmpDir,
-        ['clone', '--no-local', '--no-hardlinks', '--no-tags', publishCwd, cloneDir],
+        [
+          'clone',
+          '--no-local',
+          '--no-hardlinks',
+          '--no-tags',
+          '--no-checkout',
+          publishCwd,
+          cloneDir,
+        ],
         [publishCwd]
       ),
       'PUBLISH_REFUSED: failed to create operator-side publish clone'
@@ -2503,13 +2511,12 @@ function importReviewedCommitForPublish(o, entry, request) {
       runHardenedGit(cloneDir, ['check-ref-format', '--branch', branch]),
       'PUBLISH_REFUSED: invalid publish branch'
     );
+    // Only the reviewed commit is needed locally. The publisher pushes that
+    // SHA to refs/heads/<branch>; it never needs to move or check out the
+    // destination branch, which may already be checked out in a worktree.
     assertGitOk(
-      runHardenedGit(cloneDir, ['branch', '-f', branch, reviewedSha]),
-      'PUBLISH_REFUSED: failed to point publish branch at reviewed commit'
-    );
-    assertGitOk(
-      runHardenedGit(cloneDir, ['checkout', '-f', branch]),
-      'PUBLISH_REFUSED: failed to checkout publish branch'
+      runHardenedGit(cloneDir, ['checkout', '--detach', reviewedSha]),
+      'PUBLISH_REFUSED: failed to checkout reviewed commit for publish'
     );
     const head = assertGitOk(
       runHardenedGit(cloneDir, ['rev-parse', 'HEAD']),
