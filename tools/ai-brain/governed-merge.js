@@ -1361,6 +1361,7 @@ function isEligibleForMerge(entry, published, options) {
 }
 
 module.exports = {
+  runGh,
   RefusalCode,
   loadMergeConfig,
   findReviewManifest,

@@ -370,6 +370,10 @@ Verification (2026-10-14): sequential TASK-AI-141 199/199, TASK-AI-142 140/140, 
 
 Selection logs retain the full chosenCandidate, the existing chosen identity, top ten ranked candidates and score breakdown summaries, and rejection totals by reasonCode with ten examples. Full runtime routing arrays remain available for fallback. Daily logs roll at 50 MiB into date.N.jsonl; readers consume all parts in numeric order. `node tools/ai-brain/cli.js decisions compact --dir <dir>` incrementally writes capped copies named `<source>.compact-<timestamp>.jsonl`, preserving originals. Copies are excluded from daily history until the operator explicitly replaces originals; malformed input fails rather than silently dropping evidence. No live data is modified by this change.
 
+### H3 live: register sync reads merged PRs from GitHub (2026-10-17)
+
+The register sync loaded `runGh` from governed-merge.js, which did not export it; the require threw inside a try/catch, so the GitHub source never ran and GOAL-AUTOCLAW-REPOS-5 (PR #361) stayed IN_PROGRESS after merge. governed-merge.js now exports runGh; a test drives the real GitHub path with an injected gh runner and checks the canonical and goal registers become MERGED without a review verdict.
+
 ### H3 live: register auto-sync from GitHub, goal PR registration, and writer pinpointing (2026-10-16)
 
 Controller now automatically synchronizes merged GitHub Pull Requests into FEATURE-DELIVERY-REGISTER.csv on scheduling turns and control runs (`tools/ai-brain/reconcile.js`, `tools/ai-brain/next-runner.js`, `scripts/ai/control.ps1`), avoiding false dependency-blocked states without manual edits. Goal Work Item rows and specs are preserved across isolation boundaries (`tools/ai-brain/isolation-launcher.js`) and excluded from `validate_docs.py` core feature catalog audits, allowing goal PRs to satisfy single Work Item contracts. Pre-writer pinpointing (`tools/ai-brain/pinpoint.js`, `tools/ai-brain/prompt-compiler.js`) extracts explicit file:line targets and keyword clusters across allowed paths before dispatch, cutting codebase exploration tokens.
