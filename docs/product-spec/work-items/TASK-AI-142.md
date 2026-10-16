@@ -360,6 +360,10 @@ Verification: sequential TASK-AI-141 199/199, TASK-AI-142 136/136, TASK-AI-64 12
 
 Hermes injects the name and description of every enabled skill into each session's system prompt (agent/prompt_builder.py build_skills_system_prompt) and loads bodies on demand via skill_view; `skills.disabled` in config.yaml hides skills by name (agent/skill_utils.py get_disabled_skill_names). Live sessions only ever loaded the Controller skill, so writeProvidersConfig now disables every other installed skill by name, discovered from the Hermes home. memories/MEMORY.md is loaded into every session (agent/agent_init.py) and bounded by memory_char_limit (default 2200), so each launch replaces only the marked Controller block with goal status, item states and the last review/test outcome from the goal register, keeping user text and the limit.
 
+### H3 live: a scheduled task resumes the goal without a model call (2026-10-16)
+
+`schedule-task.ps1 -ControllerAction GoalResume -GoalId <id>` registers a Windows task that runs `scripts/ai/goal-resume.ps1` in the Controller worktree: it loads the user environment, runs `goal resume` (which refuses to start a second run while one is active) and appends `goal status` to `data/goals/<id>/scheduled-status.log`. No model is called. Operator command: `schedule-task.ps1 -Action Register -Trigger Periodic -IntervalMinutes 10 -ControllerAction GoalResume -GoalId AUTOCLAW-REPOS -WorkingDirectory <hermes-live> -TaskName ShipDe-Goal-Resume -Apply`.
+
 ### H3 live: agy pool schema failures retain redacted diagnostics (2026-10-16)
 
 On origin/main d9982a32, a fresh writer dispatch dry-run produced 147 pool candidates, with no CAPABILITY_MISSING:tools rejection (36 quota exclusions and 111 NOT_SELECTED). Per the operator assignment, capability composition is unchanged. A failed pool schema probe now carries its state, reason, exit code and last 20 non-empty output lines through jsonSchemaEvidence.detail into the routing rejection, using createSecretRedactor. The new fixture failed on main with missing detail; the repaired writer-jsonschema suite passes 12/12. Dry-run snapshots are task4-before-decision.json and task4-after-decision.json under .worktrees/logs/night; live pool execution is not claimed.
@@ -371,6 +375,10 @@ When an upstream source declares headers (such as AgentRouter CLI User-Agent), `
 ### H3 live: a router only offers models it lists itself (2026-10-16)
 
 After operator keys were probed, the intake catalogue merged 3254 ids from many sources (for example azure/, bedrock/, vertex/, runware/ ids from Requesty), and the router branch turned every one into a 9router candidate. 9router serves none of those prefixes, so hundreds of writer probes timed out, PROBE_BUDGET_EXHAUSTED fired and GOAL-AUTOCLAW-REPOS-1 failed before any writer launched. A router now produces catalogue-derived candidates only for ids in its own listing (per-source `sourceModels` from intake, or its `source.models`); with no known listing it produces none and records `ROUTER_LISTING_UNKNOWN`.
+
+### H3 live: Windows Task Scheduler periodic trigger for goal resume (2026-10-16)
+
+`scripts/ai/schedule-task.ps1` previously supported only `Daily`, `Logon`, and `Hourly` triggers. It now supports `-Trigger Periodic` with `-IntervalMinutes` (default 10 minutes), allowing zero-RAM background execution of `control.ps1 -Action Resume` to periodically check and resume goals without needing a permanent daemon process. Tested and verified in `scripts/ai/schedule-task.Tests.ps1`.
 
 ### H3 live: a Hermes reselection gets its own probe window and a Hermes login failure is remembered (2026-10-16)
 
