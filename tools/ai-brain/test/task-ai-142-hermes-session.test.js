@@ -1800,6 +1800,17 @@ test('defaultSpawn ignores model quota text and recognizes Hermes API failure li
     );
     assert.match(apiFailure.routeFailure, /API call failed.*403.*insufficient_user_quota/i);
     assert.notEqual(apiFailure.exitCode, 0);
+
+    // Hermes reports a missing provider login and exits 0; that is route evidence.
+    const missingLogin = await defaultSpawn(
+      process.execPath,
+      [
+        '-e',
+        "process.stdout.write('\\u001b[1;31mNo Codex credentials stored. Run hermes auth add openai-codex to\\u001b[0m\\nGoodbye!\\n'); setTimeout(() => process.exit(0), 30);",
+      ],
+      { stdio: ['inherit', 'pipe', 'pipe'] }
+    );
+    assert.match(missingLogin.routeFailure, /^No Codex credentials stored/);
   } finally {
     process.stderr.write = origStderrWrite;
   }
@@ -3719,4 +3730,42 @@ test('Hermes exit "No Codex credentials stored" is an account auth failure, so t
   });
   assert.equal(c.cause, classifier.Cause.ACCOUNT_AUTH_FAILED);
   assert.equal(c.scope, classifier.Scope.ACCOUNT);
+});
+
+test('writeProvidersConfig uses upstream when gateway is empty, avoiding builtin openai providerName', () => {
+  const root = fixtureRoot('hermes-cfg-empty-gw-');
+  try {
+    const candidate = {
+      candidateKey:
+        'hermes::https://developer.amd.com.cn/radeon/api/v1::::amd-radeon::*::deepseek-ai/deepseek-v3.1',
+      modelId: 'deepseek-ai/deepseek-v3.1',
+    };
+    const registry = {
+      sources: [
+        {
+          id: 'amd-radeon',
+          endpoint: 'https://developer.amd.com.cn/radeon/api/v1',
+          credential: { type: 'env', env: 'AMD_RADEON_API_KEY' },
+        },
+      ],
+    };
+    const res = writeProvidersConfig(candidate, { rootDir: root }, { registry });
+    assert.notEqual(
+      res.providerName,
+      'openai',
+      'candidate with empty gateway must not fall back to openai'
+    );
+    assert.equal(res.providerName, 'amd-radeon', 'candidate with empty gateway must use upstream');
+    const content = fs.readFileSync(res.configPath, 'utf8');
+    assert.ok(
+      !content.includes('provider: "openai"'),
+      'config.yaml must not contain provider: "openai"'
+    );
+    assert.ok(
+      content.includes('provider: "amd-radeon"'),
+      'config.yaml must configure upstream provider'
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

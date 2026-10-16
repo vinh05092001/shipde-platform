@@ -547,6 +547,10 @@ Live run GOAL-AUTOCLAW-REPOS-1 (15/10) recorded every JEV assessment as `JEV_UND
 - Final stress validation: 10 full named-file runs with Windows User/Machine env loaded (NINEROUTER key present) and 10 with credential variables removed (key absent), both groups concurrently; all 20 exit codes 0. Credential values are never printed.
 - Host gate and production routing are unchanged. The historical live run's exact ten failures are not claimed replayed; the isolated reader/timer/concurrent-fixture faults are directly reproduced and repaired.
 
+### H3 live: a Hermes brain without its login is reselected (2026-10-16)
+
+#323 classified "No Codex credentials stored" as an account failure, but Hermes prints it and exits 0, so the run counted as completed and the classifier never ran (live launch 16/10 06:03). The output scanner now treats that startup line as route evidence, so the run fails and the brain is reselected. No credential file is read.
+
 ### H3 live: the isolated writer receives its context pack (2026-10-16)
 
 The prompt told the writer to read the focused context pack at its host path, which the isolated worker cannot read (File not found), so the writer explored the repository instead and hit the 150k token budget before writing (live run 15/10 17:05, GOAL-AUTOCLAW-REPOS-1). The launcher now copies the pack into the worker's .shipde/ directory and points the prompt at the copy.
@@ -562,3 +566,11 @@ The dry-run listed the auto-bound codex-cli writer but every live run had no cod
 ### H3 live: JEV requests match the API schema (2026-10-15)
 
 On 15/10 the live Controller got HTTP 422 then 400 from JEV and fell back to BALANCED weights, which let a weak writer rank first. Score questions now send their rubric as `criteria` (not `levels`) and use at most the API limit of 10 levels. A live call through routing.assessTask now returns a JEV decision (LOW_CONFIDENCE for the GOAL-AUTOCLAW-REPOS-1 profile) instead of an HTTP error.
+
+### H3 live: worker token discipline (2026-10-15)
+
+The operator observed Codex using about 174k and agy 0.5-0.8M input tokens per task, versus 60-90k for disciplined agents, mostly from whole-file reads, unfiltered test output and repeated full-suite runs. Every compiled writer and repair prompt now carries a short token-discipline block (search first, then read only a line range with the read tool; run only the named tests and keep their summary and failure lines; the Controller runs the full suite). The rule names no POSIX-only command because the isolated worker shell is PowerShell; the live 15/10 17:05 writer read whole 50-56k-character files and hit the 150k budget.
+
+### H3 live: custom candidate without gateway uses upstream instead of openai (2026-10-16)
+
+When a candidate key had an empty gateway (e.g. `hermes::https://developer.amd.com.cn/radeon/api/v1::::amd-radeon::...`), `writeProvidersConfig` defaulted the gateway to `openai`. Hermes treated this as its built-in provider, reported "No Codex credentials stored", and exited 0. `writeProvidersConfig` now names the provider after the upstream route when the gateway is empty, and `custom` when neither is known.
