@@ -17,7 +17,11 @@ async function probeRoute(candidate, apiKeyEnv, env, options) {
   try {
     const response = await (opts.fetch || globalThis.fetch)(url, {
       method: 'POST',
-      headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
+      headers: {
+        ...(candidate.headers && typeof candidate.headers === 'object' ? candidate.headers : {}),
+        authorization: `Bearer ${apiKey}`,
+        'content-type': 'application/json',
+      },
       body: JSON.stringify({
         model: candidate.modelId || candidate.model,
         messages: [
