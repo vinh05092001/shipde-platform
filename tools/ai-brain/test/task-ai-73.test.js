@@ -1602,7 +1602,9 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
       'tools must be in requiredCapabilities'
     );
 
-    // 2. Candidate generation reads capabilities from bound accounts
+    // 2. Candidate generation reads capabilities from bound accounts; a routed
+    // model's context window comes from that model's metadata, never from the
+    // gateway account (16/10: a blanket 200k let an 8k-TPM model pass).
     const fakeRegistry = {
       sources: [
         {
@@ -1611,6 +1613,7 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
           harness: 'hermes',
           accessPath: 'http://127.0.0.1:20128/v1',
           servesModels: true,
+          modelMeta: { 'xmtp/mimo-v2.6-pro': { contextWindow: 200000 } },
         },
       ],
       dispatch: {
@@ -1637,6 +1640,19 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
     });
 
     assert.ok(generated.length > 0, 'Candidates must be generated for xmtp/mimo-v2.6-pro');
+    const withoutMeta = candidatesApi.generateCandidates({
+      registry: {
+        ...fakeRegistry,
+        sources: [{ ...fakeRegistry.sources[0], modelMeta: undefined }],
+      },
+      accounts: fakeAccounts,
+      catalogue: ['xmtp/mimo-v2.6-pro'],
+    });
+    assert.strictEqual(
+      withoutMeta[0].capabilities.contextWindow,
+      undefined,
+      'a gateway account contextWindow is not evidence for a routed model'
+    );
     const candObj = generated[0];
     assert.strictEqual(
       candObj.capabilities.jsonSchema,

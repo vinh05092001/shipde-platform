@@ -380,6 +380,42 @@ function probeCooldownMs(cause) {
   return hours * 3600000;
 }
 
+/** Keep the learned per-minute token limit and the largest request it refused. */
+function applyTpmEvidence(record, evidence) {
+  if (!evidence) return;
+  if (evidence.tokensPerMinuteLimit > 0)
+    record.tokensPerMinuteLimit = evidence.tokensPerMinuteLimit;
+  if (evidence.requestedTokens > 0)
+    record.requestedTokens = Math.max(record.requestedTokens || 0, evidence.requestedTokens);
+}
+
+/** Record a real launch's TPM 413 so the next selection can refuse the route. */
+function rememberLaunchTpm(candidate, text, options) {
+  const o = options || {};
+  const evidence = require('./route-probe').tokenLimitEvidence(null, text);
+  if (!evidence.tokensPerMinuteLimit && !evidence.requestedTokens) return null;
+  const file = probeMemoryFile(o);
+  const store = o.routeHealth || loadStore(file, { allowMissing: true });
+  const identity = probeIdentity(candidate);
+  const record = getPathRecord(store, identity.model, identity.route);
+  if (!record) return null;
+  applyTpmEvidence(record, evidence);
+  if (o.persistRouteHealth !== false) saveStore(file, store, o);
+  return record;
+}
+
+/** ROUTE_TPM_TOO_SMALL when the known limit is below a request it already refused. */
+function tpmTooSmall(candidate, options) {
+  const o = options || {};
+  const store = o.routeHealth || loadStore(probeMemoryFile(o), { allowMissing: true });
+  const identity = probeIdentity(candidate);
+  const record = getPathRecord(store, identity.model, identity.route);
+  if (!record || !(record.tokensPerMinuteLimit > 0) || !(record.requestedTokens > 0)) return null;
+  return record.tokensPerMinuteLimit < record.requestedTokens
+    ? `ROUTE_TPM_TOO_SMALL: limit ${record.tokensPerMinuteLimit} < request ${record.requestedTokens}`
+    : null;
+}
+
 function rememberProbe(candidate, result, options) {
   const o = options || {};
   const cause = result && result.ok ? null : require('./route-probe').classifyProbeFailure(result);
@@ -401,6 +437,7 @@ function rememberProbe(candidate, result, options) {
   const causeCode =
     typeof cause === 'object' && cause !== null ? cause.reason || cause.reasonCode : cause;
   record.probeCause = causeCode;
+  applyTpmEvidence(record, result);
   if (cause) {
     record.nextCheckAt = new Date(now + probeCooldownMs(cause)).toISOString();
   }
@@ -1103,6 +1140,8 @@ module.exports = {
   probeCooldown,
   probeMemoryFile,
   rememberProbe,
+  rememberLaunchTpm,
+  tpmTooSmall,
   orderProbeRoutes,
   normalizeModelId,
   classifyFailure,

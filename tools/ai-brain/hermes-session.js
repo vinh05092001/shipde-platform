@@ -1704,6 +1704,7 @@ function writeProvidersConfig(candidate, options, deps) {
     modelId,
     baseUrl,
     apiKeyEnv,
+    ...(src && src.headers && typeof src.headers === 'object' ? { headers: src.headers } : {}),
     installedSkillPath,
   };
 }
@@ -2158,11 +2159,16 @@ async function launchHermesSession(options, deps) {
         result = await Promise.race([
           Promise.resolve()
             .then(() =>
-              (d.probe || opts.probeFn || probeHermesCandidate)(candidate, config.apiKeyEnv, env, {
-                timeoutMs,
-                fetch: d.fetch || opts.fetch,
-                signal: controller.signal,
-              })
+              (d.probe || opts.probeFn || probeHermesCandidate)(
+                config.headers ? { ...candidate, headers: config.headers } : candidate,
+                config.apiKeyEnv,
+                env,
+                {
+                  timeoutMs,
+                  fetch: d.fetch || opts.fetch,
+                  signal: controller.signal,
+                }
+              )
             )
             .catch(() => ({ ok: false, status: 0, body: 'Probe transport failed' })),
           new Promise((resolve) => {

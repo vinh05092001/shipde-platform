@@ -434,6 +434,7 @@ function routeProbeCandidate(candidate, route, registry, allowModelFallback = tr
     modelId: /^ninerouter\//i.test(exactModel) ? upstreamModel : exactModel,
     maxOutputTokens: candidate.maxOutputTokens || candidate.max_output_tokens,
     apiKeyEnv,
+    ...(source.headers && typeof source.headers === 'object' ? { headers: source.headers } : {}),
   };
 }
 
@@ -4532,7 +4533,8 @@ async function runOrchestration(goal, opts) {
         skip: (candidate, account) =>
           exhaustedAccountKeys.has(account)
             ? 'WRITER_PROBE_SKIPPED_ACCOUNT_EXHAUSTED'
-            : require('./route-health').probeCooldown(candidate, o),
+            : require('./route-health').probeCooldown(candidate, o) ||
+              require('./route-health').tpmTooSmall(candidate, o),
         refusal: refuse,
         runProbe: async (candidate) => {
           const route = resolveLaunchRoute(candidate, o, registry);
@@ -4624,7 +4626,8 @@ async function runOrchestration(goal, opts) {
       for (const offered of candidates) {
         const reason = writerProbeResults.has(candidateKey(offered))
           ? null
-          : require('./route-health').probeCooldown(offered, o);
+          : require('./route-health').probeCooldown(offered, o) ||
+            require('./route-health').tpmTooSmall(offered, o);
         if (reason) {
           failedForSelection.add(candidateKey(offered));
           decisions.recordDecision(
@@ -5560,6 +5563,7 @@ async function runOrchestration(goal, opts) {
           );
         }
 
+        require('./route-health').rememberLaunchTpm(candidate, launchFailureText(res), o);
         const attemptsInDomain = domainAttempts.get(candDomain) || 0;
         const domainExhausted = attemptsInDomain >= 2;
         const scopeExcludesDomain =
@@ -8819,6 +8823,7 @@ function finish(log, statusOf, ctx) {
 }
 
 module.exports = {
+  routeProbeCandidate,
   baseGateCache,
   runHostBrainGate,
   runOrchestration,

@@ -17,7 +17,11 @@ async function probeRoute(candidate, apiKeyEnv, env, options) {
   try {
     const response = await (opts.fetch || globalThis.fetch)(url, {
       method: 'POST',
-      headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
+      headers: {
+        ...(candidate.headers && typeof candidate.headers === 'object' ? candidate.headers : {}),
+        authorization: `Bearer ${apiKey}`,
+        'content-type': 'application/json',
+      },
       body: JSON.stringify({
         model: candidate.modelId || candidate.model,
         messages: [
@@ -38,10 +42,13 @@ async function probeRoute(candidate, apiKeyEnv, env, options) {
       if (/^x-ratelimit-remaining-/i.test(name) && /^\d+(?:\.\d+)?$/.test(value))
         remaining[name.toLowerCase()] = Number(value);
     });
+    const body = await response.text();
+    const tpm = tokenLimitEvidence(response.headers, body);
     return {
       ok: response.ok,
       status: response.status,
-      body: await response.text(),
+      body,
+      ...tpm,
       quota: {
         status: Object.keys(remaining).length
           ? Object.values(remaining).some((n) => n === 0)
@@ -63,6 +70,27 @@ async function probeRoute(candidate, apiKeyEnv, env, options) {
     clearTimeout(timeout);
     if (opts.signal) opts.signal.removeEventListener('abort', onAbort);
   }
+}
+
+/**
+ * Per-minute token limit a provider exposes: the x-ratelimit-limit-tokens
+ * response header, or a 413/429 body of the form "tokens per minute (TPM):
+ * Limit N, Requested M". Nothing is returned when neither is present.
+ */
+function tokenLimitEvidence(headers, body) {
+  const out = {};
+  let headerLimit;
+  headers?.forEach?.((value, name) => {
+    if (/^x-ratelimit-limit-tokens$/i.test(name) && /^\d+$/.test(String(value).trim()))
+      headerLimit = Number(value);
+  });
+  const text = String(body || '');
+  const limit = text.match(/tokens per minute[^]*?Limit\s+(\d+)/i);
+  const requested = text.match(/tokens per minute[^]*?Requested\s+(\d+)/i);
+  const n = headerLimit ?? (limit ? Number(limit[1]) : undefined);
+  if (n > 0) out.tokensPerMinuteLimit = n;
+  if (requested) out.requestedTokens = Number(requested[1]);
+  return out;
 }
 
 function classifyProbeFailure(result) {
@@ -135,4 +163,10 @@ function failureReason(cause) {
   return String(cause || 'PROBE_FAILED');
 }
 
-module.exports = { probeRoute, classifyProbeFailure, boundedProbe, failureReason };
+module.exports = {
+  tokenLimitEvidence,
+  probeRoute,
+  classifyProbeFailure,
+  boundedProbe,
+  failureReason,
+};
