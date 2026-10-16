@@ -360,6 +360,10 @@ Verification: sequential TASK-AI-141 199/199, TASK-AI-142 136/136, TASK-AI-64 12
 
 On origin/main d9982a32, a fresh writer dispatch dry-run produced 147 pool candidates, with no CAPABILITY_MISSING:tools rejection (36 quota exclusions and 111 NOT_SELECTED). Per the operator assignment, capability composition is unchanged. A failed pool schema probe now carries its state, reason, exit code and last 20 non-empty output lines through jsonSchemaEvidence.detail into the routing rejection, using createSecretRedactor. The new fixture failed on main with missing detail; the repaired writer-jsonschema suite passes 12/12. Dry-run snapshots are task4-before-decision.json and task4-after-decision.json under .worktrees/logs/night; live pool execution is not claimed.
 
+### H3 live: source headers reach Hermes runtime custom_providers configuration (2026-10-16)
+
+When an upstream source declares headers (such as AgentRouter CLI User-Agent), `writeProvidersConfig` now writes `extra_headers` into `custom_providers` within `config.yaml` using proper YAML quoting. Hermes natively supports `extra_headers` on custom providers, passing them into the HTTP client `default_headers`. When no headers are declared, the generated YAML is unchanged and header values are never logged.
+
 ### H3 live: a Hermes reselection gets its own probe window and a Hermes login failure is remembered (2026-10-16)
 
 The probe wall-clock deadline was computed once per launch, so after a runtime route failure (Hermes printing `No Codex credentials stored`) every remaining route was skipped and the launch ended NO_REASONING_CANDIDATE. Each selection round now recomputes the deadline with the same per-round cap. A Hermes-side missing login is also recorded as an account `account_auth_failed` cooldown in the route-health store (existing 6 hour cause cooldown), so the next launch skips that candidate without probing or spawning it.

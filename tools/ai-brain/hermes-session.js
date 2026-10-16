@@ -1650,6 +1650,14 @@ function writeProvidersConfig(candidate, options, deps) {
     `  - name: ${escapeYamlString(providerName)}`,
     `    base_url: ${escapeYamlString(baseUrl)}`,
     `    key_env: ${escapeYamlString(apiKeyEnv)}`,
+    ...(src && src.headers && typeof src.headers === 'object' && Object.keys(src.headers).length
+      ? [
+          '    extra_headers:',
+          ...Object.entries(src.headers).map(
+            ([key, value]) => `      ${escapeYamlString(key)}: ${escapeYamlString(value)}`
+          ),
+        ]
+      : []),
     '',
   ].join('\n');
 
