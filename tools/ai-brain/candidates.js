@@ -100,6 +100,40 @@ function accountModels(account) {
 }
 
 /**
+ * Native agy accounts take their model ids from the live `agy models` listing
+ * (the same discovery the pool uses) when it is available: declared ids the CLI
+ * no longer lists are dropped, listed ids are added. With no listing, the
+ * declared ids stand.
+ */
+function liveAgyAccountModels(acc, source, models, o) {
+  const isAgy =
+    (acc && (acc.provider === 'antigravity' || acc.id === 'agy-native-a')) ||
+    (source && source.id === 'antigravity');
+  if (!isAgy || !o || o.discoverPool === false) return models;
+  if (!o.__agyListing) {
+    let listed = [];
+    try {
+      listed = require('./agy-pool-runtime').discoverPoolModels(o);
+    } catch {}
+    Object.defineProperty(o, '__agyListing', {
+      value: new Set((listed || []).filter(Boolean)),
+      enumerable: false,
+    });
+  }
+  const live = o.__agyListing;
+  if (live.size === 0) return models;
+  const out = [];
+  for (const model of models) {
+    if (live.has(model)) out.push(model);
+    else if (Array.isArray(o.candidateGenerationRejections)) {
+      o.candidateGenerationRejections.push({ modelId: model, reasonCode: 'AGY_MODEL_NOT_LISTED' });
+    }
+  }
+  for (const model of live) if (!out.includes(model)) out.push(model);
+  return out;
+}
+
+/**
  * A Codex CLI the operator is already logged into is a bound account without a
  * registry entry: existence of ~/.codex/auth.json (never its content) proves the
  * login and the model ids come only from ~/.codex/config.toml. The same helpers
@@ -569,7 +603,7 @@ function generateCandidates(opts) {
               .map((e) => (typeof e === 'string' ? e : e && (e.modelId || e.model || e.id)))
               .filter(Boolean)
           );
-          const models = accountModels(acc).filter(
+          const models = liveAgyAccountModels(acc, source, accountModels(acc), o).filter(
             (model) =>
               catalogue.length === 0 || catalogue.includes(model) || catalogueModelIds.has(model)
           );
@@ -804,7 +838,7 @@ function generateCandidates(opts) {
           });
         } else {
           for (const acc of bound) {
-            const models = accountModels(acc);
+            const models = liveAgyAccountModels(acc, source, accountModels(acc), o);
             for (const model of models) {
               candidates.push({
                 harness,

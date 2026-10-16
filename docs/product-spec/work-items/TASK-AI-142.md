@@ -356,6 +356,9 @@ Selection logs retain the full chosenCandidate, the existing chosen identity, to
 
 Verification: sequential TASK-AI-141 199/199, TASK-AI-142 136/136, TASK-AI-64 129/129, dispatch-wiring 7/7 and decisions 28/28 passed. Additional candidate/routing regressions passed 74/74. Changed JavaScript passes ESLint no-undef; changed files pass Prettier and git diff --check. Live logs remain untouched and runtime data is excluded from commits.
 
+### H3 live: native agy candidates use the live agy model list (2026-10-16)
+The native agy candidates take their model ids from the live `agy models` listing (the pool discovery and its cache) instead of the stale ids declared on the account: declared ids the listing lacks are dropped with reason `AGY_MODEL_NOT_LISTED`, and listed ids are added. When the listing is unavailable the declared ids are kept unchanged.
+
 ### H3 live: the host gate baseline is the writer branch's merge-base (2026-10-16)
 
 On 16/10 the branch feat/goal-autoclaw-repos-1 was cut from main e037323e; main later fixed 9 environment-sensitive tests, so the gate's baseline at the new origin/main passed while the writer tree still failed them, and 9 pre-existing failures were reported as new (HOST_GATE_FAILED) that the repair writer could not fix. When the base is a ref, runHostBrainGate now baselines at `git merge-base HEAD <ref>` (falling back to the ref's rev-parse); an explicit 40-hex baseSha is unchanged.
