@@ -231,25 +231,36 @@ test('25 CI failure creates a repair task with the right cause', async () => {
         call += 1;
         return call === 1 ? { pass: false, cause: 'UPSTREAM_AUTH_403' } : { pass: true };
       },
-      review: () => ({ pass: true, sha: 'head', findings: [] }),
-      repair: () => ({ sha: 'head' }),
+      review: (sha) => ({
+        pass: true,
+        sha: typeof sha === 'string' ? sha : 'head-repaired',
+        findings: [],
+      }),
+      repair: () => ({ sha: 'head-repaired' }),
     }
   );
   assert.equal(result.status, 'COMPLETED');
   const repair = result.rounds.find((r) => r.stage === 'repair');
   assert.ok(repair);
   assert.equal(repair.cause, 'UPSTREAM_AUTH_403');
+  assert.equal(result.finalSha, 'head-repaired');
 });
 
 test('26 repair over budget -> BLOCKED', async () => {
+  let repairRound = 0;
   const result = await runReviewLoop(
     { sha: 'head', budget: 1 },
     {
       runTests: () => ({ pass: false, cause: 'TEST_FAILURE' }),
-      review: () => ({ pass: true, sha: 'head' }),
+      review: (sha) => ({ pass: true, sha }),
       // TASK-AI-64: the old `(findings, sha) => ({ sha })` default repair is
       // gone, so the seam this test drives on purpose is supplied explicitly.
-      repair: (findings, sha) => ({ sha }),
+      // Every attempt advances the SHA to test budget exhaustion rather than
+      // stopping early on REPAIR_NO_PROGRESS.
+      repair: (findings, sha) => {
+        repairRound += 1;
+        return { sha: `${sha}-r${repairRound}` };
+      },
     }
   );
   assert.equal(result.status, 'BLOCKED');
@@ -324,4 +335,197 @@ test('30 no second state store or ranking engine', () => {
   assert.ok(!src.includes('function rankAndRecord'));
   assert.ok(!src.includes('function recordDecision'));
   assert.ok(!/class\s+\w*Store\b/.test(src));
+});
+
+test('31 review CHANGES_REQUIRED with unchanged repair SHA stops immediately with REPAIR_NO_PROGRESS (review 1, repair 1)', async () => {
+  let reviewCalls = 0;
+  let repairCalls = 0;
+  const initialSha = 'a'.repeat(40);
+
+  const result = await runReviewLoop(
+    { sha: initialSha, budget: 3 },
+    {
+      runTests: () => ({ pass: true }),
+      review: (sha) => {
+        reviewCalls += 1;
+        return {
+          pass: false,
+          sha,
+          verdict: 'CHANGES_REQUIRED',
+          reviewer: 'codex-reviewer',
+          findings: [{ id: 'finding-1', summary: 'fix needed' }],
+        };
+      },
+      repair: (findings, sha) => {
+        repairCalls += 1;
+        return { sha };
+      },
+    }
+  );
+
+  assert.equal(result.status, 'BLOCKED');
+  assert.equal(reviewCalls, 1);
+  assert.equal(repairCalls, 1);
+  assert.equal(result.finalSha, initialSha);
+  assert.equal(result.repairCount, 1);
+  assert.equal(result.verdict, 'CHANGES_REQUIRED');
+  assert.equal(result.reviewer, 'codex-reviewer');
+  assert.deepEqual(result.findings, [{ id: 'finding-1', summary: 'fix needed' }]);
+  assert.equal(result.rounds.at(-1).stage, 'blocked');
+  assert.equal(result.rounds.at(-1).cause, 'REPAIR_NO_PROGRESS');
+});
+
+test('32 test failure with unchanged repair SHA stops immediately with REPAIR_NO_PROGRESS (repair 1, reviewer 0)', async () => {
+  let reviewCalls = 0;
+  let repairCalls = 0;
+  const initialSha = 'a'.repeat(40);
+
+  const result = await runReviewLoop(
+    { sha: initialSha, budget: 3 },
+    {
+      runTests: () => ({
+        pass: false,
+        cause: 'TEST_FAILURE',
+        findings: [{ id: 'test-failure-1', summary: 'assertion failed' }],
+      }),
+      review: () => {
+        reviewCalls += 1;
+        return { pass: true, sha: initialSha, findings: [] };
+      },
+      repair: (findings, sha) => {
+        repairCalls += 1;
+        return { sha };
+      },
+    }
+  );
+
+  assert.equal(result.status, 'BLOCKED');
+  assert.equal(reviewCalls, 0);
+  assert.equal(repairCalls, 1);
+  assert.equal(result.finalSha, initialSha);
+  assert.equal(result.repairCount, 1);
+  assert.deepEqual(result.findings, [{ id: 'test-failure-1', summary: 'assertion failed' }]);
+  assert.equal(result.rounds.at(-1).stage, 'blocked');
+  assert.equal(result.rounds.at(-1).cause, 'REPAIR_NO_PROGRESS');
+});
+
+test('33 repair returning no SHA or empty SHA stops immediately with REPAIR_NO_PROGRESS', async () => {
+  // Subcase A: review CHANGES_REQUIRED, repair returns missing sha
+  {
+    let reviewCalls = 0;
+    let repairCalls = 0;
+    const initialSha = 'a'.repeat(40);
+
+    const result = await runReviewLoop(
+      { sha: initialSha, budget: 3 },
+      {
+        runTests: () => ({ pass: true }),
+        review: (sha) => {
+          reviewCalls += 1;
+          return {
+            pass: false,
+            sha,
+            verdict: 'CHANGES_REQUIRED',
+            findings: [{ id: 'f-empty-sha' }],
+          };
+        },
+        repair: () => {
+          repairCalls += 1;
+          return {};
+        },
+      }
+    );
+
+    assert.equal(result.status, 'BLOCKED');
+    assert.equal(reviewCalls, 1);
+    assert.equal(repairCalls, 1);
+    assert.equal(result.finalSha, initialSha);
+    assert.equal(result.repairCount, 1);
+    assert.deepEqual(result.findings, [{ id: 'f-empty-sha' }]);
+    assert.equal(result.rounds.at(-1).stage, 'blocked');
+    assert.equal(result.rounds.at(-1).cause, 'REPAIR_NO_PROGRESS');
+  }
+
+  // Subcase B: test failure, repair returns null
+  {
+    let reviewCalls = 0;
+    let repairCalls = 0;
+    const initialSha = 'b'.repeat(40);
+
+    const result = await runReviewLoop(
+      { sha: initialSha, budget: 3 },
+      {
+        runTests: () => ({
+          pass: false,
+          cause: 'LINT_FAILURE',
+          findings: [{ id: 'lint-1' }],
+        }),
+        review: () => {
+          reviewCalls += 1;
+          return { pass: true, sha: initialSha, findings: [] };
+        },
+        repair: () => {
+          repairCalls += 1;
+          return null;
+        },
+      }
+    );
+
+    assert.equal(result.status, 'BLOCKED');
+    assert.equal(reviewCalls, 0);
+    assert.equal(repairCalls, 1);
+    assert.equal(result.finalSha, initialSha);
+    assert.equal(result.repairCount, 1);
+    assert.deepEqual(result.findings, [{ id: 'lint-1' }]);
+    assert.equal(result.rounds.at(-1).stage, 'blocked');
+    assert.equal(result.rounds.at(-1).cause, 'REPAIR_NO_PROGRESS');
+  }
+});
+
+test('34 repair producing a new SHA advances the loop and PASS confirms the new SHA', async () => {
+  const initialSha = 'a'.repeat(40);
+  const repairedSha = 'c'.repeat(40);
+  let reviewCalls = 0;
+  let repairCalls = 0;
+  const reviewedShas = [];
+
+  const result = await runReviewLoop(
+    { sha: initialSha, budget: 3 },
+    {
+      runTests: () => ({ pass: true }),
+      review: (sha) => {
+        reviewCalls += 1;
+        reviewedShas.push(sha);
+        if (sha === initialSha) {
+          return {
+            pass: false,
+            sha,
+            verdict: 'CHANGES_REQUIRED',
+            findings: [{ id: 'finding-needs-repair' }],
+          };
+        }
+        return {
+          pass: true,
+          sha,
+          verdict: 'PASS',
+          reviewer: 'independent-codex',
+          findings: [],
+        };
+      },
+      repair: (findings, sha) => {
+        repairCalls += 1;
+        assert.equal(sha, initialSha);
+        return { sha: repairedSha };
+      },
+    }
+  );
+
+  assert.equal(result.status, 'COMPLETED');
+  assert.equal(result.finalSha, repairedSha);
+  assert.equal(result.repairCount, 1);
+  assert.equal(result.verdict, 'PASS');
+  assert.equal(result.reviewer, 'independent-codex');
+  assert.equal(reviewCalls, 2);
+  assert.equal(repairCalls, 1);
+  assert.deepEqual(reviewedShas, [initialSha, repairedSha]);
 });

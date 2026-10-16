@@ -775,16 +775,23 @@ test('64-09 a PASS verdict carrying open findings is rejected, and the contradic
 test('64-10 the repair budget is finite and the exhausted run ends BLOCKED with its reason (AI-64-R10, AI-64-R14)', async () => {
   const dir = tmpDir('task-ai-64-budget-');
   let reviewCalls = 0;
+  let repairCalls = 0;
   const result = await safeRun(
     baseOpts({
       decisionDir: dir,
       reviewBudget: 2,
       run: recorder([liveLaunch()]),
-      reviewer: () => {
+      // Each repair makes progress (a new commit), so only the budget can stop
+      // the loop; a repair without progress stops earlier (REPAIR_NO_PROGRESS).
+      repairer: () => {
+        repairCalls += 1;
+        return { sha: String(repairCalls).repeat(40) };
+      },
+      reviewer: (arg) => {
         reviewCalls += 1;
         return {
           pass: false,
-          sha: SHA_A,
+          sha: (typeof arg === 'string' ? arg : arg && arg.sha) || SHA_A,
           verdict: 'CHANGES_REQUIRED',
           findings: [{ id: 'F-' + reviewCalls, open: true }],
         };
@@ -809,6 +816,37 @@ test('64-10 the repair budget is finite and the exhausted run ends BLOCKED with 
     decisionText(dir).includes('REPAIR_BUDGET_EXHAUSTED'),
     'exhausting the repair budget is a terminal BLOCKED outcome and must be recorded in the ' +
       'decision log, which today carries only the selection record'
+  );
+});
+
+test('64-10b a repair that runs but leaves the SHA unchanged ends BLOCKED with REPAIR_NO_PROGRESS (TASK-AI-60)', async () => {
+  const dir = tmpDir('task-ai-64-no-progress-');
+  let repairCalls = 0;
+  const result = await safeRun(
+    baseOpts({
+      decisionDir: dir,
+      reviewBudget: 3,
+      run: recorder([liveLaunch()]),
+      repairer: (findings, sha) => {
+        repairCalls += 1;
+        return { sha: sha || SHA_A };
+      },
+      reviewer: (arg) => ({
+        pass: false,
+        sha: (typeof arg === 'string' ? arg : arg && arg.sha) || SHA_A,
+        verdict: 'CHANGES_REQUIRED',
+        findings: [{ id: 'F-NP', open: true }],
+      }),
+    })
+  );
+  assert.ok(result.log, 'the loop must return a run record: ' + result.refusal);
+  assert.equal(repairCalls, 1, 'a repair without progress stops the loop after one repair');
+  assert.equal(isLiveCompletion(result, 'A'), false);
+  const text = decisionText(dir);
+  assert.ok(text.includes('REPAIR_NO_PROGRESS'), 'the decision log must name REPAIR_NO_PROGRESS');
+  assert.ok(
+    !text.includes('REPAIR_BUDGET_EXHAUSTED'),
+    'a no-progress stop is not a budget exhaustion'
   );
 });
 
@@ -3037,10 +3075,13 @@ describe('TASK-AI-64 worker head review, local commit verification, and usage re
         })
       );
       assert.ok(resBudget.log, 'budget run record must exist');
-      assert.ok(reviewCalls > 1, 'must perform repair rounds (saw ' + reviewCalls + ')');
+      // With no workerRoot the repair has no worker repo to advance. Had it bound
+      // to the process.cwd() repo, HEAD there would differ from SHA_A and count as
+      // progress; instead the repair makes none and the run stops (TASK-AI-60).
+      assert.equal(reviewCalls, 1, 'a repair without progress stops after one review');
       assert.ok(
-        decisionText(dirBudget).includes('REPAIR_BUDGET_EXHAUSTED'),
-        'decision log must record REPAIR_BUDGET_EXHAUSTED'
+        decisionText(dirBudget).includes('REPAIR_NO_PROGRESS'),
+        'decision log must record REPAIR_NO_PROGRESS'
       );
 
       // (3) runVerificationCommand ignores dirty state in process.cwd() when workerRoot is unspecified
@@ -6992,6 +7033,14 @@ describe('TASK-AI-64 clean-tree prompt and repair dirty path listing (Defect R)'
           candidates: [writerCand, reviewerCand],
           ranking: { headrooms: { codex: { status: 'available' } } },
           reviewer: reviewerSeam,
+          // The repair does real work: a new commit in the worker root, so HEAD
+          // advances and the loop sees progress (TASK-AI-60).
+          repairer: () => {
+            fs.writeFileSync(path.join(repo.dir, 'branch-name.js'), 'module.exports = 1;\n');
+            git(['add', '.']);
+            git(['commit', '-q', '-m', 'fix: repair finding']);
+            return { sha: git(['rev-parse', 'HEAD']).stdout.trim() };
+          },
           specs: [
             {
               id: 'TASK-AI-64',

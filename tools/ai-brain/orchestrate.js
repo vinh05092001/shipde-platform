@@ -8123,7 +8123,7 @@ function repairRound(
       return { sha, repairRefused: replanned.errors };
     }
     const planned = replanned.workItems.find((w) => w.id === spec.id);
-    if (!planned) return { sha };
+    if (!planned) return { sha, repairNotAttempted: 'NO_REPAIR_PLAN' };
 
     planned.failedKeys = failedKeySet;
     planned.excludedDomains = excludedDomainSet;
@@ -8159,7 +8159,7 @@ function repairRound(
           repair: { round, sha, candidateKey: decision.chosen },
         });
       }
-      return { sha };
+      return { sha, repairNotAttempted: 'NO_REPAIR_CANDIDATE' };
     }
     const candidate = candidates.find((c) => candidateKey(c) === decision.chosen);
     triedKeySet.add(decision.chosen);
@@ -8168,7 +8168,7 @@ function repairRound(
     const candDomain = routing.canonicalFailureDomain(candidate);
     domainAttemptsMap.set(candDomain, (domainAttemptsMap.get(candDomain) || 0) + 1);
     const route = resolveLaunchRoute(candidate, o, registry);
-    if (!route) return { sha };
+    if (!route) return { sha, repairNotAttempted: 'NO_REPAIR_ROUTE' };
     const branch = o.branch || 'feat/' + String(item.id).toLowerCase();
     const usageFile = prepareUsageReport(usageDir, planned.id + '-' + now + '-repair' + round);
     const repairFindings = Array.isArray(findings) ? findings : [];
@@ -8307,7 +8307,7 @@ function repairRound(
       }
       // TASK-AI-121 LF-R02: an unusable isolation verdict stops the run.
       markIsolationVerdictStop(log, res, classification);
-      return { sha };
+      return { sha, repairNotAttempted: 'REPAIR_LAUNCH_FAILED' };
     }
 
     const adapter = harnessFor({ harness: repairJob.harness });

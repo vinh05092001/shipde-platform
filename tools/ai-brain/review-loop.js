@@ -38,6 +38,7 @@ const Refusal = Object.freeze({
   STALE_SHA: 'STALE_REVIEW_SHA',
   PASS_WITH_FINDINGS: 'PASS_WITH_FINDINGS_REJECTED',
   BUDGET_EXHAUSTED: 'REPAIR_BUDGET_EXHAUSTED',
+  NO_PROGRESS: 'REPAIR_NO_PROGRESS',
 });
 
 const DEFAULT_BUDGET = 3;
@@ -101,7 +102,27 @@ async function runReviewLoop(state, deps) {
         return { status: Status.BLOCKED, rounds, finalSha: currentSha, repairCount };
       }
       const rep = await repair(tests.findings || [], currentSha);
-      currentSha = (rep && rep.sha) || currentSha;
+      const nextSha = rep && typeof rep.sha === 'string' && rep.sha.trim() !== '' ? rep.sha : null;
+      // A repair that never ran (refused, no candidate or route, failed launch) is
+      // not a no-progress repair: the next round may try another repairer.
+      const notAttempted = Boolean(rep && (rep.repairNotAttempted || rep.repairRefused));
+      if (!notAttempted && (!nextSha || nextSha === currentSha)) {
+        rounds.push({
+          round,
+          stage: 'blocked',
+          sha: currentSha,
+          cause: Refusal.NO_PROGRESS,
+          findings: tests.findings || [],
+        });
+        return {
+          status: Status.BLOCKED,
+          rounds,
+          finalSha: currentSha,
+          repairCount,
+          findings: tests.findings || [],
+        };
+      }
+      currentSha = nextSha || currentSha;
       tests = runTests();
       continue;
     }
@@ -187,7 +208,31 @@ async function runReviewLoop(state, deps) {
       return { status: Status.BLOCKED, rounds, finalSha: currentSha, repairCount };
     }
     const rep = await repair(open, currentSha);
-    currentSha = (rep && rep.sha) || currentSha;
+    const nextSha = rep && typeof rep.sha === 'string' && rep.sha.trim() !== '' ? rep.sha : null;
+    // A repair that never ran (refused, no candidate or route, failed launch) is
+    // not a no-progress repair: the next round may try another repairer.
+    const notAttempted = Boolean(rep && (rep.repairNotAttempted || rep.repairRefused));
+    if (!notAttempted && (!nextSha || nextSha === currentSha)) {
+      rounds.push({
+        round,
+        stage: 'blocked',
+        sha: currentSha,
+        cause: Refusal.NO_PROGRESS,
+        verdict: rev.verdict || null,
+        reviewer: rev.reviewer || null,
+        findings: open,
+      });
+      return {
+        status: Status.BLOCKED,
+        rounds,
+        finalSha: currentSha,
+        repairCount,
+        verdict: rev.verdict || null,
+        reviewer: rev.reviewer || null,
+        findings: open,
+      };
+    }
+    currentSha = nextSha || currentSha;
     tests = runTests();
   }
 
