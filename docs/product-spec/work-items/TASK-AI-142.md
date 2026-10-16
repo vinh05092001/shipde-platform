@@ -370,6 +370,10 @@ Verification (2026-10-14): sequential TASK-AI-141 199/199, TASK-AI-142 140/140, 
 
 Selection logs retain the full chosenCandidate, the existing chosen identity, top ten ranked candidates and score breakdown summaries, and rejection totals by reasonCode with ten examples. Full runtime routing arrays remain available for fallback. Daily logs roll at 50 MiB into date.N.jsonl; readers consume all parts in numeric order. `node tools/ai-brain/cli.js decisions compact --dir <dir>` incrementally writes capped copies named `<source>.compact-<timestamp>.jsonl`, preserving originals. Copies are excluded from daily history until the operator explicitly replaces originals; malformed input fails rather than silently dropping evidence. No live data is modified by this change.
 
+### H3 live: goal items become ready when their dependencies merge (2026-10-17)
+
+goal plan sets each goal item status once (BACKLOG when it has dependencies). After GOAL-AUTOCLAW-REPOS-1 merged, item 2 stayed BACKLOG and the runner stopped with "plan --run requires the isolated planner", although goal plan had already written its Work Item. goal resume now promotes a BACKLOG goal item to READY_FOR_AUTHOR in the goal and delivery registers when every dependency is MERGED and its Work Item file exists.
+
 ### H3 live: register sync reads merged PRs from GitHub (2026-10-17)
 
 The register sync loaded `runGh` from governed-merge.js, which did not export it; the require threw inside a try/catch, so the GitHub source never ran and GOAL-AUTOCLAW-REPOS-5 (PR #361) stayed IN_PROGRESS after merge. governed-merge.js now exports runGh; a test drives the real GitHub path with an injected gh runner and checks the canonical and goal registers become MERGED without a review verdict. The sync is opt-in: only `next --run` turns it on, so library callers and tests never call GitHub or rewrite the repository register (with the export fixed, the full suite had rewritten the worktree register during the ship gate).
