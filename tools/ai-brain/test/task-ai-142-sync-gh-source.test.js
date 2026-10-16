@@ -77,3 +77,28 @@ test('a merged PR from gh marks the canonical and goal registers MERGED', () => 
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('findNextWorkItem never calls gh or rewrites the register unless asked', () => {
+  const nextRunner = require('../next-runner');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sync-optin-'));
+  try {
+    const reg = path.join(root, 'register.csv');
+    const before = [HEADER, row('GOAL-X-1', 'IN_PROGRESS')].join('\n') + '\n';
+    fs.writeFileSync(reg, before);
+    const calls = [];
+    const ghRunner = (args) => {
+      calls.push(args.join(' '));
+      return { exitCode: 0, stdout: '[]', stderr: '' };
+    };
+    nextRunner.findNextWorkItem({ rootDir: root, registerPath: reg }, { ghRunner });
+    assert.deepEqual(calls, []);
+    assert.equal(fs.readFileSync(reg, 'utf8'), before);
+    nextRunner.findNextWorkItem(
+      { rootDir: root, registerPath: reg, syncRegister: true },
+      { ghRunner }
+    );
+    assert.ok(calls.some((c) => c.startsWith('pr list')));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

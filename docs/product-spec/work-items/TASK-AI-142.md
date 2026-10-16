@@ -372,7 +372,7 @@ Selection logs retain the full chosenCandidate, the existing chosen identity, to
 
 ### H3 live: register sync reads merged PRs from GitHub (2026-10-17)
 
-The register sync loaded `runGh` from governed-merge.js, which did not export it; the require threw inside a try/catch, so the GitHub source never ran and GOAL-AUTOCLAW-REPOS-5 (PR #361) stayed IN_PROGRESS after merge. governed-merge.js now exports runGh; a test drives the real GitHub path with an injected gh runner and checks the canonical and goal registers become MERGED without a review verdict.
+The register sync loaded `runGh` from governed-merge.js, which did not export it; the require threw inside a try/catch, so the GitHub source never ran and GOAL-AUTOCLAW-REPOS-5 (PR #361) stayed IN_PROGRESS after merge. governed-merge.js now exports runGh; a test drives the real GitHub path with an injected gh runner and checks the canonical and goal registers become MERGED without a review verdict. The sync is opt-in: only `next --run` turns it on, so library callers and tests never call GitHub or rewrite the repository register (with the export fixed, the full suite had rewritten the worktree register during the ship gate).
 
 ### H3 live: register auto-sync from GitHub, goal PR registration, and writer pinpointing (2026-10-16)
 
