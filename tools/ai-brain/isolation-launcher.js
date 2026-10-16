@@ -6,6 +6,7 @@ const os = require('os');
 const cp = require('child_process');
 const { executableFor } = require('./harness');
 const crypto = require('crypto');
+const { parseCsvRecords } = require('./reconcile');
 
 const WORKER_USERNAME = 'ShipDeWorker';
 // The worker root, defined once. Every component that has to know whether a
@@ -1079,14 +1080,21 @@ function ensureGoalRegistrationInWorker(hostCwd, workerRoot, workItemId) {
   const workerReg = path.join(workerRoot, regRel);
   if (fs.existsSync(hostReg) && fs.existsSync(workerReg)) {
     const workerContent = fs.readFileSync(workerReg, 'utf8');
-    if (!workerContent.includes(workItemId)) {
+    const workerRecords = parseCsvRecords(workerContent);
+    const workerIdColumn = workerRecords[0]?.fields.indexOf('work_item_id') ?? -1;
+    if (workerIdColumn < 0) return;
+    if (!workerRecords.slice(1).some((record) => record.fields[workerIdColumn] === workItemId)) {
       const hostContent = fs.readFileSync(hostReg, 'utf8');
-      const hostLines = hostContent.split(/\r?\n/);
-      const matchingLine = hostLines.find(
-        (line) => line.includes(`"${workItemId}"`) || line.includes(`,${workItemId},`)
-      );
-      if (matchingLine) {
-        const eol = workerContent.includes('\r\n') ? '\r\n' : '\n';
+      const hostRecords = parseCsvRecords(hostContent);
+      const hostIdColumn = hostRecords[0]?.fields.indexOf('work_item_id') ?? -1;
+      if (hostIdColumn < 0) return;
+      const matchingRecord = hostRecords
+        .slice(1)
+        .find((record) => record.fields[hostIdColumn] === workItemId);
+      if (matchingRecord) {
+        const matchingLine = matchingRecord.raw.replace(/(?:\r\n|\n|\r)$/, '');
+        const eol =
+          /\r\n|\n|\r/.exec(workerContent)?.[0] || /\r\n|\n|\r/.exec(hostContent)?.[0] || '\n';
         const updated = workerContent.endsWith('\n')
           ? workerContent + matchingLine + eol
           : workerContent + eol + matchingLine + eol;
