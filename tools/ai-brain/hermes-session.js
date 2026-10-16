@@ -1448,8 +1448,11 @@ function writeProvidersConfig(candidate, options, deps) {
 
   const parsed =
     candidate && candidate.candidateKey ? parseCandidateKey(candidate.candidateKey) : candidate;
-  const gateway = (candidate && candidate.gateway) || (parsed && parsed.gateway) || 'openai';
-  const upstream = (candidate && candidate.upstream) || (parsed && parsed.upstream) || gateway;
+  const gateway = (candidate && candidate.gateway) || (parsed && parsed.gateway) || '';
+  const upstream =
+    (candidate && candidate.upstream) ||
+    (parsed && parsed.upstream) ||
+    (gateway && gateway !== '*' ? gateway : '');
 
   const isCodexProvider =
     (candidate &&
@@ -1464,7 +1467,9 @@ function writeProvidersConfig(candidate, options, deps) {
     ? 'openai-codex'
     : gateway && gateway !== '*'
       ? gateway
-      : upstream;
+      : upstream && upstream !== '*'
+        ? upstream
+        : 'custom';
   if (!providerName || providerName === '*') providerName = 'custom';
 
   if (!/^[a-zA-Z0-9_.-]+$/.test(providerName)) {
