@@ -416,6 +416,50 @@ function tpmTooSmall(candidate, options) {
     : null;
 }
 
+const CONTEXT_OVERFLOW_PATTERN =
+  /context[ _]length[ _]exceeded|maximum context length|exceeds? (?:the )?(?:model'?s? )?(?:maximum )?context (?:window|length)|too many tokens|prompt is too long|context_length_exceeded/i;
+
+/** Context overflow is a per-request size failure, distinct from the per-minute TPM 413. */
+function contextOverflowEvidence(text) {
+  const body = String(text || '');
+  if (!CONTEXT_OVERFLOW_PATTERN.test(body)) return null;
+  if (/tokens per minute/i.test(body)) return null;
+  const limit =
+    body.match(/maximum context length(?: is|:)?\s*(\d[\d,]*)/i) ||
+    body.match(/context (?:window|length) (?:is|of|:)\s*(\d[\d,]*)/i) ||
+    body.match(/limit(?: is|:)?\s*(\d[\d,]*) tokens/i);
+  const observed = limit ? Number(limit[1].replace(/,/g, '')) : undefined;
+  return { observedContextLimit: observed > 0 ? observed : undefined };
+}
+
+/** Record a launch that failed because the request exceeded the model context. */
+function rememberLaunchContextOverflow(candidate, text, options) {
+  const o = options || {};
+  const evidence = contextOverflowEvidence(text);
+  if (!evidence) return null;
+  const file = probeMemoryFile(o);
+  const store = o.routeHealth || loadStore(file, { allowMissing: true });
+  const identity = probeIdentity(candidate);
+  const record = getPathRecord(store, identity.model, identity.route);
+  if (!record) return null;
+  record.contextOverflowObserved = true;
+  if (evidence.observedContextLimit) record.observedContextLimit = evidence.observedContextLimit;
+  if (o.persistRouteHealth !== false) saveStore(file, store, o);
+  return record;
+}
+
+/** CONTEXT_OVERFLOW_OBSERVED when a real launch already overflowed this model's context. */
+function contextOverflowObserved(candidate, options) {
+  const o = options || {};
+  const store = o.routeHealth || loadStore(probeMemoryFile(o), { allowMissing: true });
+  const identity = probeIdentity(candidate);
+  const record = getPathRecord(store, identity.model, identity.route);
+  if (!record || !record.contextOverflowObserved) return null;
+  return record.observedContextLimit
+    ? `CONTEXT_OVERFLOW_OBSERVED: context limit ${record.observedContextLimit}`
+    : 'CONTEXT_OVERFLOW_OBSERVED';
+}
+
 function rememberProbe(candidate, result, options) {
   const o = options || {};
   const cause = result && result.ok ? null : require('./route-probe').classifyProbeFailure(result);
@@ -1142,6 +1186,9 @@ module.exports = {
   rememberProbe,
   rememberLaunchTpm,
   tpmTooSmall,
+  rememberLaunchContextOverflow,
+  contextOverflowObserved,
+  contextOverflowEvidence,
   orderProbeRoutes,
   normalizeModelId,
   classifyFailure,

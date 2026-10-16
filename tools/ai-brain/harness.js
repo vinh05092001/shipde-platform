@@ -251,11 +251,23 @@ const codex = {
 
 const MIN_CONTEXT = Object.freeze({ hermes: 32000 });
 
-function contextRefusal(harnessName, contextWindow) {
+/** True when the harness has a context floor and the candidate reports no window. */
+function contextUnknown(harnessName, contextWindow) {
+  if (!MIN_CONTEXT[String(harnessName || '').toLowerCase()]) return false;
+  const window = Number(contextWindow);
+  return !Number.isFinite(window) || window <= 0;
+}
+
+/**
+ * With allowUnknown an unreported window keeps the candidate eligible (ranking
+ * penalises it); a KNOWN window below the floor is always refused.
+ */
+function contextRefusal(harnessName, contextWindow, options) {
   const floor = MIN_CONTEXT[String(harnessName || '').toLowerCase()];
   if (!floor) return null;
   const window = Number(contextWindow);
   if (!Number.isFinite(window) || window <= 0) {
+    if (options && options.allowUnknown) return null;
     return 'CONTEXT_WINDOW_UNVERIFIED: ' + harnessName + ' requires verified context >= ' + floor;
   }
   if (window >= floor) return null;
@@ -705,6 +717,7 @@ module.exports = {
   executableFor,
   MIN_CONTEXT,
   contextRefusal,
+  contextUnknown,
   ProgressStatus,
   progressVerdict,
   structuredOutcome,
