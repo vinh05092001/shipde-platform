@@ -2029,7 +2029,7 @@ async function launchHermesSession(options, deps) {
   let initialRejected;
   const probeTimeoutMs = Math.min(Number(opts.probeTimeoutMs) || 8000, 8000);
   const probeBudgetMs = Math.min(Number(opts.probeBudgetMs) || 180000, 180000);
-  const probeDeadline = Date.now() + probeBudgetMs;
+  let probeDeadline = Date.now() + probeBudgetMs;
   let attempt = 0;
   const routeHealthFile =
     opts.routeHealthFile ||
@@ -2065,6 +2065,8 @@ async function launchHermesSession(options, deps) {
   };
 
   while (true) {
+    // Each selection round (initial or after a runtime route failure) gets its own probe window.
+    probeDeadline = Date.now() + probeBudgetMs;
     const isRetry = attempt > 0;
     const shouldReselect = Boolean(opts.reselect) || isRetry || !session.candidateKey;
     const preferredCandidateKey = shouldReselect ? null : session.candidateKey;
@@ -2560,6 +2562,15 @@ async function launchHermesSession(options, deps) {
     }
 
     // Route/model/quota failure: exclude failed route and reselect
+    // A missing Hermes-side login is account-scoped: remember it so the next launch skips this candidate.
+    if (liveRouteFailure && /^No [a-z0-9 -]*credentials stored\b/i.test(String(liveRouteFailure))) {
+      health.rememberAccountCooldown(candidate, 'account_auth_failed', undefined, {
+        ...opts,
+        registry: d.registry || opts.registry,
+        routeHealth,
+        routeHealthFile,
+      });
+    }
     excludedCandidates.push(candidate.candidateKey);
     if (candidate._preRewriteKey) {
       excludedCandidates.push(candidate._preRewriteKey);
