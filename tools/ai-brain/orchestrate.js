@@ -388,6 +388,14 @@ function resolveLaunchRoute(candidate, options, registry) {
   );
 }
 
+/** An OpenCode provider's models are addressed `<providerKey>/<model>`; the wire id has no key. */
+function stripOpencodeProviderPrefix(modelId, source) {
+  const key = source && source.opencodeProvider;
+  return key && String(modelId).startsWith(key + '/')
+    ? String(modelId).slice(key.length + 1)
+    : modelId;
+}
+
 function routeProbeCandidate(candidate, route, registry, allowModelFallback = true) {
   const sources = (registry && registry.sources) || [];
   const routeSource = [candidate.gateway, candidate.source, route && route.provider]
@@ -396,7 +404,10 @@ function routeProbeCandidate(candidate, route, registry, allowModelFallback = tr
       (entry) => entry && (entry.endpoint || /^https?:\/\//i.test(String(entry.accessPath || '')))
     );
   const exactModel = String((route && route.model) || candidate.modelId || candidate.model || '');
-  const upstreamModel = exactModel.replace(/^ninerouter\//i, '');
+  const upstreamModel = stripOpencodeProviderPrefix(
+    exactModel.replace(/^ninerouter\//i, ''),
+    routeSource
+  );
   const modelSource = sources.find(
     (entry) =>
       entry &&
@@ -431,7 +442,7 @@ function routeProbeCandidate(candidate, route, registry, allowModelFallback = tr
   return {
     accessPath,
     // OpenCode's provider prefix is local configuration, not a gateway alias.
-    modelId: /^ninerouter\//i.test(exactModel) ? upstreamModel : exactModel,
+    modelId: upstreamModel,
     maxOutputTokens: candidate.maxOutputTokens || candidate.max_output_tokens,
     apiKeyEnv,
     ...(source.headers && typeof source.headers === 'object' ? { headers: source.headers } : {}),
