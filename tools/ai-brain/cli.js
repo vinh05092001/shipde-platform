@@ -693,14 +693,60 @@ function assembleCandidates(
 
   // 1. Discovery candidates
   const discCands = (discoveryCat && discoveryCat.candidates) || [];
+  const sourceList = Array.isArray(registry)
+    ? registry
+    : registry && Array.isArray(registry.sources)
+      ? registry.sources
+      : [];
+  const sourceMap = new Map(sourceList.map((s) => [s && s.id, s]));
+
   for (const dc of discCands) {
-    const accountId = dc.accountId || dc.account || '*';
+    let accountId = dc.accountId || dc.account || '*';
+    let credentialEnvMissing = false;
+    let blocked = dc.blocked;
+    let blockReason = dc.blockReason;
+    let blockScope = dc.blockScope;
+
+    if (accountId === '*') {
+      const sourceId =
+        (dc.sourceIds && dc.sourceIds.find((id) => sourceMap.has(id))) ||
+        (sourceMap.has(dc.accessPath) && dc.accessPath) ||
+        (sourceMap.has(dc.upstream) && dc.upstream) ||
+        (sourceMap.has(dc.gateway) && dc.gateway) ||
+        (sourceMap.has(dc.source) && dc.source);
+      const source = sourceId ? sourceMap.get(sourceId) : null;
+      if (
+        source &&
+        source.kind !== 'router' &&
+        source.credential &&
+        source.credential.type === 'api-key' &&
+        source.credential.env
+      ) {
+        const envName = source.credential.env;
+        const envVal = process.env[envName];
+        const hasKey = Boolean(envVal && String(envVal).trim().length > 0);
+        const accId = candidatesApi.deriveCredentialAccountId
+          ? candidatesApi.deriveCredentialAccountId(source)
+          : `${source.id}-${envName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+        if (hasKey) {
+          accountId = accId;
+        } else {
+          credentialEnvMissing = true;
+          blocked = true;
+          blockReason = 'CREDENTIAL_ENV_MISSING';
+          blockScope = 'credential';
+        }
+      }
+    }
+
     const modelId = dc.modelId || dc.model;
     const c = {
       ...dc,
       accountId,
       quotaScope: dc.quotaScope || (accountId !== '*' ? accountId : dc.upstream || ''),
       modelId,
+      ...(credentialEnvMissing ? { credentialEnvMissing: true } : {}),
+      ...(blocked ? { blocked: true, blockReason, blockScope } : {}),
     };
     const off = offeringMap.get(`${accountId}::${modelId}`) || offeringMap.get(modelId);
     if (off) {

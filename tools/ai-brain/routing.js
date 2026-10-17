@@ -1337,17 +1337,26 @@ function rankForProfile(candidates, profile, assessment, ctx) {
       });
 
     if (c.blocked) {
+      const reasonCode = String(c.blockReason || '').startsWith('QUOTA_EXHAUSTED')
+        ? 'QUOTA_EXHAUSTED'
+        : c.blockReason === 'CREDENTIAL_ENV_MISSING' ||
+            c.reasonCode === 'CREDENTIAL_ENV_MISSING' ||
+            c.credentialEnvMissing
+          ? 'CREDENTIAL_ENV_MISSING'
+          : 'CANDIDATE_BLOCKED';
       rejected.push({
         candidateKey: key,
-        reasonCode: String(c.blockReason || '').startsWith('QUOTA_EXHAUSTED')
-          ? 'QUOTA_EXHAUSTED'
-          : 'CANDIDATE_BLOCKED',
+        reasonCode,
         reason: String(c.blockReason || 'upstream/candidate blocked'),
         scope: c.blockScope || 'candidate',
         upstream: c.upstream,
         modelId: c.modelId,
         accountId: c.accountId || '*',
       });
+      continue;
+    }
+    if (c.credentialEnvMissing) {
+      reject('CREDENTIAL_ENV_MISSING', 'credential');
       continue;
     }
     const contextRefusalReason = contextRefusal(c.harness, candidateContextWindow(c), {
