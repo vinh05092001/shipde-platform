@@ -248,6 +248,51 @@ Decision log entries link `goalId -> workItemId -> candidateKey -> session -> co
 - Part H2 Hermes session selection, custom config binding, and `shipde-controller` skill file are delivered in Part H2.
 - Live acceptance across chat and controller runs in Part H3 following merge of H1 and H2.
 
+### H3 live: preflight OpenCode CLI routes and retain HTTP refusal causes (2026-10-17)
+
+Configured OpenCode CLI writer routes now pass HTTP preflight even outside isolated
+execution, before the harness can replace an immediate upstream refusal with its
+own timeout. Both the ranked pre-probe and runtime fallback use this rule. The
+HTTP wire model, endpoint, credentials and headers still come from the registry.
+A missing upstream credential is reported as `AUTH_NEEDED`; provider-specific
+`PROVIDER_UNAVAILABLE` memory remains intact. A 404 `model_not_found` without a
+credential message is `ROUTE_UNAVAILABLE`. Tests inject HTTP and launcher responses;
+no live provider was called. Three new checks are red on origin/main and green
+on the fix, covering isolated/non-isolated CLI and the model-not-found response.
+This proves the missing CLI preflight and classification paths offline; it does not
+claim a rerun of the historical live timeout.
+
+### H3 live: derive small-item complexity and measure packed context (2026-10-17)
+
+A single risk-domain keyword no longer makes a bounded item large. Complexity uses
+acceptance/scope counts and layers; explicit higher complexity and multi-domain risk
+remain authoritative. Intake also recognizes Files fields/sections. Before JEV and
+writer selection, the actual packed text is measured with the existing repo-map token
+estimator. This replaces the generic role context fallback; explicit larger item
+requirements remain respected. The context manifest records bytes and estimated tokens.
+Read-only replay of GOAL-G-F622511E-1: two owned files, `standard`, 7,831 pack bytes,
+1,943 estimated context tokens rather than 200,000. No provider call was made.
+Offline regressions are red on origin/main (`large`, 200,000 versus 16 fixture tokens)
+and green after the fix. Existing intake tests: 7 passed.
+
+### H3 live: summarize unchanged route cooldowns per item (2026-10-17)
+
+Each writer selection/probe round records counts by cooldown reason and the earliest
+reopening time. Initial cooldown inventory is summarized; individual route details
+are recorded on state changes, including expiry changes and recovery. State belongs
+to one item. Selected routes and new non-cooldown refusals retain their records.
+Offline regression: 1,000 unchanged cooldown routes over three rounds produce three
+summary records. The same fixture's cooldown-only bytes per round fall from 467,340
+to 239. The origin/main regression is red (4,000 records before its turn-budget stop).
+
+### H3 live: stop identical local launch configuration retries (2026-10-17)
+
+The item stops when the same local `launch_config` cause and whitespace-normalized,
+redacted launcher detail recur, regardless of writer identity. The terminal reason
+keeps the actual launch error, without charging the provider a failure or cooldown.
+Offline regression in `task-ai-121.test.js`: origin/main launched four times; the
+fix stops after two `PROVISION_BASE_MISMATCH` failures.
+
 ### H3 live: local router probes are sent over loopback (2026-10-17)
 
 Root cause of the run-5 failure of goal G-F622511E: `probeGatewayModel` refused every credentialed probe whose endpoint was not HTTPS, including 9router at http://127.0.0.1, so a route that answered 200 failed before any request with status 0. Plain HTTP is now allowed only to loopback hosts; any other host still needs HTTPS. Correction to the note below: an unexplained probe failure is recorded as PROBE_NO_RESPONSE with no cooldown (not UNAVAILABLE_NOW), and the decision log keeps the redacted raw result (status, error, body).

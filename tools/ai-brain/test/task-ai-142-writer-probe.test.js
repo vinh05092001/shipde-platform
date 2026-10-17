@@ -1099,6 +1099,102 @@ for (const [body, expected] of [
   });
 }
 
+// Live writer runs are isolated; the preflight is an isolated-worker gate.
+for (const isolatedWorker of [true]) {
+  test(
+    'H3 opencode CLI gateway preflight preserves missing upstream credentials, isolated=' +
+      isolatedWorker,
+    async (t) => {
+      const repo = makeTempRepo();
+      t.after(() => fs.rmSync(repo.dir, { recursive: true, force: true }));
+      const candidate = createCandidate({
+        accessPath: 'cli',
+        gateway: 'gateway-fixture',
+        source: 'gateway-fixture',
+        upstream: 'vendor',
+        modelId: 'fixture-provider/vendor/model',
+      });
+      let launches = 0;
+      const requests = [];
+      const routeHealth = { version: 1, paths: {}, events: [] };
+      const result = await runOrchestration('missing upstream credentials', {
+        isolatedWorker,
+        cwd: repo.dir,
+        workerRoot: repo.dir,
+        baseSha: repo.sha,
+        candidates: [candidate],
+        env: { FIXTURE_KEY: 'fixture-only' },
+        registry: {
+          sources: [
+            {
+              id: 'gateway-fixture',
+              kind: 'router',
+              harness: 'opencode',
+              endpoint: 'https://gateway.example/v1',
+              opencodeProvider: 'fixture-provider',
+              credential: { env: 'FIXTURE_KEY' },
+            },
+          ],
+          dispatch: {
+            providers: {
+              'gateway-fixture': { harness: 'opencode-direct', provider: 'fixture-provider' },
+            },
+          },
+        },
+        specs: [{ id: 'A', files: ['a.js'], qualityFloor: 0 }],
+        decisionDir: path.join(repo.dir, 'decisions'),
+        usageDir: path.join(repo.dir, 'usage'),
+        routeHealth,
+        persistRouteHealth: false,
+        tokenBudgets: { default: { maxTurns: 2 } },
+        fetch: async (url, init) => {
+          requests.push({ url, model: JSON.parse(init.body).model });
+          return {
+            ok: false,
+            status: 404,
+            text: async () =>
+              JSON.stringify({
+                error: {
+                  message: 'No active credentials for provider: vendor',
+                  code: 'model_not_found',
+                },
+              }),
+          };
+        },
+        run: () => {
+          launches++;
+          return { exitCode: 1, timedOut: true, stderr: 'Request timeout' };
+        },
+        ranking: { headrooms: { 'account-1': { status: 'available' } } },
+      });
+      assert.equal(launches, 0, 'HTTP refusal must stop the harness before it can mask the cause');
+      assert.deepEqual(requests, [
+        { url: 'https://gateway.example/v1/chat/completions', model: 'vendor/model' },
+      ]);
+      const records = require('../decisions').readDecisionsSafe({
+        dir: path.join(repo.dir, 'decisions'),
+      });
+      const failure = records.find((r) => r.stage === 'failed');
+      assert.equal(failure?.cause, 'AUTH_NEEDED');
+      assert.doesNotMatch(result.outcomes[0].reason, /TIMEOUT/);
+      assert.ok(
+        Object.values(routeHealth.paths).some((r) => r.probeCause === 'PROVIDER_UNAVAILABLE')
+      );
+    }
+  );
+}
+
+test('H3 HTTP 404 model_not_found without a credential message is route unavailable', () => {
+  assert.equal(
+    require('../route-probe').classifyProbeFailure({
+      ok: false,
+      status: 404,
+      body: '{"error":{"code":"model_not_found"}}',
+    }),
+    'ROUTE_UNAVAILABLE'
+  );
+});
+
 test('unknown writer pre-probe can be checked again by the next selection without a route penalty', async (t) => {
   const repo = makeTempRepo();
   t.after(() => fs.rmSync(repo.dir, { recursive: true, force: true }));
