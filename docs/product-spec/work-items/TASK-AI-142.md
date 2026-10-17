@@ -248,6 +248,20 @@ Decision log entries link `goalId -> workItemId -> candidateKey -> session -> co
 - Part H2 Hermes session selection, custom config binding, and `shipde-controller` skill file are delivered in Part H2.
 - Live acceptance across chat and controller runs in Part H3 following merge of H1 and H2.
 
+### H3 live: preflight OpenCode CLI routes and retain HTTP refusal causes (2026-10-17)
+
+Configured OpenCode CLI writer routes now pass HTTP preflight even outside isolated
+execution, before the harness can replace an immediate upstream refusal with its
+own timeout. Both the ranked pre-probe and runtime fallback use this rule. The
+HTTP wire model, endpoint, credentials and headers still come from the registry.
+A missing upstream credential is reported as `AUTH_NEEDED`; provider-specific
+`PROVIDER_UNAVAILABLE` memory remains intact. A 404 `model_not_found` without a
+credential message is `ROUTE_UNAVAILABLE`. Tests inject HTTP and launcher responses;
+no live provider was called. Three new checks are red on origin/main and green
+on the fix, covering isolated/non-isolated CLI and the model-not-found response.
+This proves the missing CLI preflight and classification paths offline; it does not
+claim a rerun of the historical live timeout.
+
 ### H3 live: derive small-item complexity and measure packed context (2026-10-17)
 
 A single risk-domain keyword no longer makes a bounded item large. Complexity uses

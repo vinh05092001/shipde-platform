@@ -4530,11 +4530,30 @@ async function runOrchestration(goal, opts) {
         : null;
     };
 
+    const writerProbeFailureReason = (result) => {
+      const cause = sharedRouteProbe.classifyProbeFailure(result);
+      // Keep provider-scoped health memory, but report the operator action accurately.
+      return cause && cause.reason === 'PROVIDER_UNAVAILABLE' && cause.provider
+        ? 'AUTH_NEEDED'
+        : sharedRouteProbe.failureReason(cause);
+    };
+    const needsWriterHttpProbe = (candidate, route) =>
+      Boolean(
+        route &&
+        (o.isolatedWorker ||
+          route.harnessName === 'opencode-direct' ||
+          sourcesApi.runsOpenCodeHarness(route.harnessName, registry)) &&
+        (route.harnessName === 'opencode-direct' ||
+          routeProbeCandidate(candidate, route, registry, false))
+      );
+    const isCliWriter = (candidate) =>
+      candidate.harness === 'opencode-direct' ||
+      sourcesApi.runsOpenCodeHarness(candidate.harness, registry);
     let writerProbeStartedAt = Date.now();
     let lastWriterFailureReason = null;
     const exhaustedAccountKeys = new Set();
     const writerProbeResults = new Map();
-    if (!session && o.isolatedWorker) {
+    if (!session && (o.isolatedWorker || candidates.some(isCliWriter))) {
       const ranked = await selectCandidateForProfile(
         item,
         candidates,
@@ -4549,10 +4568,7 @@ async function runOrchestration(goal, opts) {
         ranked.result.ranking.filter((candidate) => {
           try {
             const route = resolveLaunchRoute(candidate, o, registry);
-            return (
-              route?.harnessName === 'opencode-direct' ||
-              Boolean(route && routeProbeCandidate(candidate, route, registry, false))
-            );
+            return needsWriterHttpProbe(candidate, route);
           } catch {
             return false;
           }
@@ -4648,9 +4664,7 @@ async function runOrchestration(goal, opts) {
             refuse(candidate, 'QUOTA_EXHAUSTED: route probe');
             return false;
           }
-          const reasonCode = sharedRouteProbe.failureReason(
-            sharedRouteProbe.classifyProbeFailure(result)
-          );
+          const reasonCode = writerProbeFailureReason(result);
           const key = candidateKey(candidate);
           const reason =
             Date.now() - writerProbeStartedAt >= PROBE_BUDGET_MS
@@ -4879,12 +4893,7 @@ async function runOrchestration(goal, opts) {
         recordPostSelectFailure(blockedReason, 'HARNESS_UNKNOWN');
         break;
       }
-      if (
-        o.isolatedWorker &&
-        !replayedLaunch &&
-        (route.harnessName === 'opencode-direct' ||
-          routeProbeCandidate(candidate, route, registry, false))
-      ) {
+      if (!replayedLaunch && needsWriterHttpProbe(candidate, route)) {
         let probeResult = writerProbeResults.get(decision.chosen);
         if (!probeResult) {
           // Runtime fallback may reach a route below the pre-probe winner.
@@ -4930,9 +4939,7 @@ async function runOrchestration(goal, opts) {
         }
         require('./route-health').rememberProbe(candidate, probeResult, o);
         if (!probeResult || probeResult.ok !== true) {
-          const reasonCode = sharedRouteProbe.failureReason(
-            sharedRouteProbe.classifyProbeFailure(probeResult)
-          );
+          const reasonCode = writerProbeFailureReason(probeResult);
           const reason = 'WRITER_ROUTE_PROBE_FAILED ' + reasonCode;
           recordPostSelectFailure(reason, reasonCode, 'candidate');
           failedKeys.add(decision.chosen);
