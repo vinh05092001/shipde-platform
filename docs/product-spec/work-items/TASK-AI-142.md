@@ -248,6 +248,54 @@ Decision log entries link `goalId -> workItemId -> candidateKey -> session -> co
 - Part H2 Hermes session selection, custom config binding, and `shipde-controller` skill file are delivered in Part H2.
 - Live acceptance across chat and controller runs in Part H3 following merge of H1 and H2.
 
+### H3 live: verify unknown writer capabilities instead of inventing missing capabilities (2026-10-17)
+
+Review fixes: capability probing in dispatch runs only through an injectable seam and makes no network call in dry-run or tests unless a probe or fetch is injected; direct HTTP probing is chosen from the route (opencode-direct with a source endpoint, direct-http), not from an http accessPath, so loopback daemon harnesses are not probed as direct HTTP; a missing registry no longer falls back to the machine sources.json; the writer schema timeout comes from the existing route/profile timeout.
+`undefined` capability is now `CAPABILITY_UNVERIFIED`, kept in the explicit
+`needsCapabilityProbe` group and excluded from ranking until checked. Only an
+observed `false` produces `CAPABILITY_MISSING`, with the probe's real reason.
+Registry, catalogue and harness Boolean declarations carry provenance and do not
+serve as runtime proof. Account context-window declarations cannot supply a
+per-model context window; documented model context metadata remains usable.
+
+The shared verifier checks JSON schema by a strict nonce-bound writer-result
+contract and checks tools by an actual forced function call carrying a fresh nonce.
+HTTP probes use the selected source endpoint, credential environment variable,
+headers and wire model. CLI checks reuse `writer-schema.js`; tools additionally
+require tool-use telemetry observed by the isolated launcher (or actual pool event
+output). Returning valid JSON alone does not prove tools. No CLI/harness gets an
+implicit tools capability.
+
+Timestamped results, including real failed probes, are persisted per seven-part
+route and configuration binding in `evidence.json.capabilityProbes`. Each result
+merges into the latest store so other runtime evidence is retained. Authorization
+refusals, missing credentials and unattempted checks stay unknown, are not cached
+as failed capabilities, and do not open a launch path. Agy still requires the
+operator to include `agy-pool` in `externalWorkers` (`--external-workers agy-pool`);
+this change does not enable that option or change the pool authorization policy.
+Cached proof cannot bypass a revoked pool authorization.
+
+Capability checks consume the existing Controller probe budget and existing
+HTTP/schema timeouts. Only actual capability-probe time is deducted; JEV and pure
+ranking time do not spend the route-probe window. Dry-run never authorizes a CLI
+launch. HTTP refusal headers survive unreadable error bodies instead of becoming
+timeouts.
+
+Machine-only cleanup removed `jsonSchema`, `tools` and `contextWindow` from the
+`ninerouter` and `xkiro` account records; no registry data or credentials are committed.
+Windows-env profile dispatch dry-run before/after: `CAPABILITY_MISSING` 117 ->
+108 (104 schema, 4 tools). After repair these are actual negative probe results:
+83 upstream credit/quota, 7 rate limits, 4 HTTP 400, 10 timeouts and 4 incomplete
+schema responses. Another 33 routes remain explicitly unverified because the
+existing probe budget was exhausted. The selected route is
+`http::regolo::::regolo::::regolo-regolo-api-key::gemma4-31b`; both required
+capabilities were verified before ranking. This is a real HTTP capability check,
+not a live CLI/goal acceptance run. The diagnostic uses the Controller writer
+profile, current discovery/health data and Windows user environment, with offline
+JEV advice; proof persistence is isolated to the author worktree. No agy launch
+permission was added. Failed proofs can be retried after the existing failure
+cooldown; positive proof is reused only for the same route/configuration binding.
+
 ### H3 live: every failed probe leaves evidence (2026-10-17)
 
 Run 7 of goal G-F622511E recorded TIMEOUT for routes that answered within 1-4 s when probed directly with the same function, endpoint and environment (including 8 concurrent probes), and the decision log did not keep what the probe received. Every failed probe now records its redacted raw result, status and duration (boundedProbe adds elapsedMs) in the run decision log.

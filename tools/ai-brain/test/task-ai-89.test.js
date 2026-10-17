@@ -12,7 +12,7 @@
  *          still see no host registry.
  *   G-R03: with injected registry declaring xkiro capabilities and an --accounts input
  *          without xkiro, evidence-only xkiro WORK_ITEM_PASS candidate passes capability
- *          floor and is ranked; with registry empty it is refused CAPABILITY_MISSING:jsonSchema.
+ *          floor and is ranked; with registry empty it is refused CAPABILITY_UNVERIFIED:jsonSchema.
  */
 
 const { test, describe, beforeEach, afterEach } = require('node:test');
@@ -293,7 +293,7 @@ describe('TASK-AI-89: Live capability lookup uses official account registry', ()
       assert.ok(xkiroCand, 'xkiro candidate must be assembled');
       assert.deepEqual(
         xkiroCand.capabilities,
-        { jsonSchema: true, tools: true, contextWindow: 200000 },
+        { jsonSchema: true, tools: true },
         'registry capabilities must win when input entry declared none'
       );
 
@@ -343,7 +343,7 @@ describe('TASK-AI-89: Live capability lookup uses official account registry', ()
         r.candidateKey.includes('xkiro')
       );
       assert.ok(decRejection, 'xkiro rejection must be recorded');
-      assert.equal(decRejection.reasonCode, 'CAPABILITY_MISSING:jsonSchema');
+      assert.equal(decRejection.reasonCode, 'CAPABILITY_UNVERIFIED:jsonSchema');
     });
 
     test('orchestrate.buildCandidates with injected candidates and no registry sees no host registry', () => {
@@ -360,7 +360,7 @@ describe('TASK-AI-89: Live capability lookup uses official account registry', ()
 
   // G-R03: test: with an injected registry declaring xkiro capabilities and an --accounts input without xkiro,
   // an evidence-only xkiro WORK_ITEM_PASS candidate passes the capability floor and is ranked;
-  // with the registry empty it is refused CAPABILITY_MISSING:jsonSchema.
+  // with the registry empty it is refused CAPABILITY_UNVERIFIED:jsonSchema.
   describe('G-R03: injected registry allows evidence-only xkiro candidate to pass floor and be ranked', () => {
     const item = {
       id: 'TASK-AI-89-ITEM',
@@ -370,7 +370,7 @@ describe('TASK-AI-89: Live capability lookup uses official account registry', ()
       proofFloor: 'WORK_ITEM_PASS',
     };
 
-    test('with injected registry declaring xkiro capabilities and --accounts input without xkiro: candidate passes floor and is ranked', async () => {
+    test('with injected registry declaring xkiro capabilities and --accounts input without xkiro: candidate awaits capability verification', async () => {
       // Injected accounts has only ninerouter (no xkiro)
       const inputAccounts = [
         {
@@ -396,10 +396,16 @@ describe('TASK-AI-89: Live capability lookup uses official account registry', ()
         NOW
       );
 
-      assert.ok(decision.chosen, 'Candidate must be chosen');
-      assert.match(decision.chosen, /xkiro/, 'Chosen candidate must be xkiro');
-      const ranked = decision.result.ranking.find((r) => r.accountId === 'xkiro');
-      assert.ok(ranked, 'xkiro candidate must be ranked');
+      assert.equal(
+        decision.chosen,
+        null,
+        'Account declarations require a capability probe before selection'
+      );
+      assert.ok(decision.result.needsCapabilityProbe.some((r) => r.candidateKey.includes('xkiro')));
+      const ranked = decision.result.needsCapabilityProbe.find((r) =>
+        r.candidateKey.includes('xkiro')
+      );
+      assert.ok(ranked, 'xkiro candidate must await capability verification');
       assert.equal(
         decision.result.rejected.some((r) => r.reasonCode.startsWith('CAPABILITY_MISSING')),
         false,
@@ -407,7 +413,7 @@ describe('TASK-AI-89: Live capability lookup uses official account registry', ()
       );
     });
 
-    test('with the registry empty: candidate is refused CAPABILITY_MISSING:jsonSchema', async () => {
+    test('with the registry empty: candidate is refused CAPABILITY_UNVERIFIED:jsonSchema', async () => {
       // Injected accounts has only ninerouter (no xkiro), and registry is empty
       const inputAccounts = [
         {
@@ -435,15 +441,15 @@ describe('TASK-AI-89: Live capability lookup uses official account registry', ()
 
       assert.equal(decision.chosen, null, 'Candidate must not be chosen when registry is empty');
       const rejected = decision.result.rejected.find(
-        (r) => r.reasonCode === 'CAPABILITY_MISSING:jsonSchema'
+        (r) => r.reasonCode === 'CAPABILITY_UNVERIFIED:jsonSchema'
       );
       assert.ok(
         rejected,
-        'Candidate must be rejected with CAPABILITY_MISSING:jsonSchema when registry is empty'
+        'Candidate must be rejected with CAPABILITY_UNVERIFIED:jsonSchema when registry is empty'
       );
     });
 
-    test('orchestrate CLI end-to-end: injected listAccounts allows evidence-only xkiro candidate to be ranked and launched', async () => {
+    test('orchestrate CLI end-to-end: account declarations do not authorize an unprobed writer', async () => {
       fs.copyFileSync(FIXTURE_EVIDENCE, path.join(evidenceDir, 'evidence.json'));
       const accountsFile = path.join(tempRoot, 'empty-accounts.json');
       fs.writeFileSync(accountsFile, '[]', 'utf8');
@@ -465,11 +471,10 @@ describe('TASK-AI-89: Live capability lookup uses official account registry', ()
         }
       );
 
-      assert.ok(launchedJob, 'Job must be launched for xkiro candidate');
-      assert.equal(launchedJob.accountId, 'xkiro');
+      assert.equal(launchedJob, undefined, 'Registry declarations alone must not launch a writer');
     });
 
-    test('orchestrate CLI end-to-end: with empty listAccounts, xkiro candidate is refused CAPABILITY_MISSING:jsonSchema', async () => {
+    test('orchestrate CLI end-to-end: with empty listAccounts, xkiro candidate is refused CAPABILITY_UNVERIFIED:jsonSchema', async () => {
       fs.copyFileSync(FIXTURE_EVIDENCE, path.join(evidenceDir, 'evidence.json'));
       const accountsFile = path.join(tempRoot, 'empty-accounts.json');
       fs.writeFileSync(accountsFile, '[]', 'utf8');
@@ -503,7 +508,7 @@ describe('TASK-AI-89: Live capability lookup uses official account registry', ()
       assert.equal(dec.chosen, null);
       const rejected = (dec.rejected || []).find((r) => r.candidateKey.includes('xkiro'));
       assert.ok(rejected);
-      assert.equal(rejected.reasonCode, 'CAPABILITY_MISSING:jsonSchema');
+      assert.equal(rejected.reasonCode, 'CAPABILITY_UNVERIFIED:jsonSchema');
     });
   });
 });

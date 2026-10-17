@@ -1658,10 +1658,14 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
     const candObj = generated[0];
     assert.strictEqual(
       candObj.capabilities.jsonSchema,
-      true,
-      'candidate must retain jsonSchema capability'
+      undefined,
+      'account declaration is not jsonSchema probe evidence'
     );
-    assert.strictEqual(candObj.capabilities.tools, true, 'candidate must retain tools capability');
+    assert.strictEqual(
+      candObj.capabilities.tools,
+      undefined,
+      'account declaration is not tools probe evidence'
+    );
     assert.strictEqual(
       candObj.capabilities.contextWindow,
       200000,
@@ -1695,7 +1699,7 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
     // Because profile has proofFloor WORK_ITEM_PASS and evidenceData is empty, the honest refusal is PROOF_FLOOR_NOT_MET:NONE
     assert.strictEqual(
       rankResult.rejected[0].reasonCode,
-      'PROOF_FLOOR_NOT_MET:NONE',
+      'CAPABILITY_UNVERIFIED:jsonSchema',
       'Refusal must strictly be due to missing WORK_ITEM_PASS evidence'
     );
   });

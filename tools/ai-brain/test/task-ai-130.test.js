@@ -63,7 +63,7 @@ afterEach(() => {
 });
 
 describe('TASK-AI-130: agy-pool discovery and evidence selection', () => {
-  test('AC-R06.1: discovered list with gemini-3.8-flash-high and claude-opus-4-6-thinking produces candidates for both on agy01..agy07', () => {
+  test('AC-R06.1: discovered list with gemini-3.8-flash-high and claude-opus-4-6-thinking produces candidates for both on agy01..agy07', async () => {
     const runsDir = tmpDir('task-ai-130-runs1-');
 
     // agy01..agy07 have 100% quota in both families
@@ -150,8 +150,14 @@ describe('TASK-AI-130: agy-pool discovery and evidence selection', () => {
       assert.equal(c.upstream, 'antigravity');
       assert.equal(c.source, 'agy-pool');
       assert.equal(c.harness, 'agy-pool');
-      assert.equal(c.capabilities.jsonSchema, true, 'inherits jsonSchema from catalogue');
-      assert.equal(c.capabilities.tools, true, 'inherits tools from harness source');
+      assert.equal(
+        c.capabilities.jsonSchema,
+        true,
+        'retains a jsonSchema declaration from catalogue'
+      );
+      assert.equal(c.capabilities.tools, true, 'retains a tools declaration from harness source');
+      assert.equal(c.capabilityDeclarations.jsonSchema, true);
+      assert.equal(c.capabilityDeclarations.tools, true);
       if (c.modelId === 'gemini-3.8-flash-high') {
         assert.equal(c.quotaScope, `${c.accountId}:gemini`);
         assert.equal(c.contextWindow, 1000000);
@@ -175,6 +181,20 @@ describe('TASK-AI-130: agy-pool discovery and evidence selection', () => {
       weightProfile: 'BALANCED',
       weights: { latency: 34, quality: 33, cost: 33 },
     };
+    const unverified = routing.rankForProfile(poolCands, profile, assessment, {
+      now: Date.now(),
+      evidenceData: {},
+    });
+    assert.equal(
+      unverified.chosen,
+      null,
+      'catalogue and harness declarations do not prove runtime capabilities'
+    );
+    assert.ok(unverified.needsCapabilityProbe.length > 0);
+    await require('../capability-probe').probeCapabilities(poolCands, profile, {
+      externalWorkers: 'agy-pool',
+      probeCli: async () => ({ ok: true, method: 'fixture-schema-and-tool-observation' }),
+    });
     const rankResult = routing.rankForProfile(poolCands, profile, assessment, {
       now: Date.now(),
       evidenceData: {},
@@ -322,7 +342,7 @@ describe('TASK-AI-130: agy-pool discovery and evidence selection', () => {
     );
   });
 
-  test('AC-R06.4: an unknown model is rejected with CAPABILITY_MISSING', () => {
+  test('AC-R06.4: an unknown model remains CAPABILITY_UNVERIFIED', () => {
     const runsDir = tmpDir('task-ai-130-runs4-');
     const dir01 = path.join(runsDir, 'agy01');
     fs.mkdirSync(dir01, { recursive: true });
@@ -385,9 +405,9 @@ describe('TASK-AI-130: agy-pool discovery and evidence selection', () => {
 
     assert.equal(rankResult.chosen, null, 'unknown candidate cannot be chosen');
     const rejection = rankResult.rejected.find(
-      (r) => r.reasonCode === 'CAPABILITY_MISSING:jsonSchema'
+      (r) => r.reasonCode === 'CAPABILITY_UNVERIFIED:jsonSchema'
     );
-    assert.ok(rejection, 'unknown model is rejected with CAPABILITY_MISSING:jsonSchema');
+    assert.ok(rejection, 'unknown model remains CAPABILITY_UNVERIFIED:jsonSchema');
   });
 
   test('AC-R06.5: a failed discovery keeps the last good list with a warning', () => {
@@ -569,8 +589,8 @@ describe('TASK-AI-130: agy-pool discovery and evidence selection', () => {
     );
     assert.equal(rankResult.chosen, null);
     assert.ok(
-      rankResult.rejected.some((r) => r.reasonCode === 'CAPABILITY_MISSING:jsonSchema'),
-      'rejected with CAPABILITY_MISSING:jsonSchema because account row cannot supply capabilities'
+      rankResult.rejected.some((r) => r.reasonCode === 'CAPABILITY_UNVERIFIED:jsonSchema'),
+      'rejected with CAPABILITY_UNVERIFIED:jsonSchema because account row cannot supply capabilities'
     );
   });
 

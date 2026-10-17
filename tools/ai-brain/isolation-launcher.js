@@ -703,7 +703,10 @@ function Update-SessionProgress {
                 try {
                     $ev = $trimmed | ConvertFrom-Json
                     if ($null -ne $ev) {
-                        if ($ev.type -eq "tool_use" -or ($null -ne $ev.part -and $ev.part.type -eq "tool")) {
+                        if ($ev.type -eq "tool_use" -or ($null -ne $ev.part -and $ev.part.type -eq "tool") -or
+                            ($ev.type -eq "item.completed" -and $null -ne $ev.item -and
+                             $ev.item.type -eq "command_execution" -and $ev.item.status -eq "completed" -and
+                             $null -ne $ev.item.exit_code -and $ev.item.exit_code -eq 0)) {
                             $toolCount++
                         }
                         $err = $null
@@ -927,7 +930,9 @@ $exitValue = -1
 if ($completed -and -not $timedOut -and -not $budgetExceeded -and -not $script:requestTooLarge) { $exitValue = $jobExit }
 if ($failureReason.Length -gt 0) { $stderr = $stderr + [Environment]::NewLine + $failureReason }
 
+Update-SessionProgress
 $output = @{
+    verifiedToolCalls = $script:sessionToolCalls
     exitCode = $exitValue
     stdout = $stdout
     stderr = $stderr
@@ -2804,6 +2809,7 @@ function readLaunchResult(launchResultPath, completionNonce, hostRes) {
       .join('\n'),
     localFailure: resJson.localFailure ? String(resJson.localFailure) : null,
     timedOut: false,
+    verifiedToolCalls: Number(resJson.verifiedToolCalls) || 0,
     completionNonce: resJson.completionNonce,
     ...(resJson.sessionId ? { sessionId: resJson.sessionId } : {}),
     ...(resJson.launchHandle ? { launchHandle: resJson.launchHandle } : {}),

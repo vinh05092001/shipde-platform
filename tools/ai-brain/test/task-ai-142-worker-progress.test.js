@@ -265,3 +265,31 @@ test('B5: genuine tool progress and file changes reset stall detection', windows
   fs.rmSync(clockFile, { force: true });
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test(
+  'capability proof counts successful native command telemetry in the generated host',
+  windowsSkip,
+  () => {
+    const events = [
+      { type: 'item.completed', item: { type: 'agent_message', text: 'tools work' } },
+      {
+        type: 'item.completed',
+        item: { type: 'command_execution', status: 'failed', exit_code: 1 },
+      },
+      {
+        type: 'item.completed',
+        item: { type: 'command_execution', status: 'completed', exit_code: 0 },
+      },
+    ];
+    const { hostRes, raw, readIt, dir } = runGeneratedHost({
+      targetLines: [...events.map((event) => `Write-Output '${JSON.stringify(event)}'`), 'exit 0'],
+    });
+    try {
+      assert.equal(hostRes.status, 0, String(hostRes.stderr || hostRes.stdout || ''));
+      assert.equal(raw.verifiedToolCalls, 1);
+      assert.equal(readIt().verifiedToolCalls, 1);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+);

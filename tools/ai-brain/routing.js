@@ -1304,6 +1304,7 @@ function rankForProfile(candidates, profile, assessment, ctx) {
     : 0;
   const ranked = [];
   const rejected = [];
+  const needsCapabilityProbe = [];
   const probationKeys =
     (ctx && ctx.probationCandidateKeys) || (context && context.probationCandidateKeys) || [];
   const probation = new Set(probationKeys.filter((key) => typeof key === 'string'));
@@ -1383,15 +1384,30 @@ function rankForProfile(candidates, profile, assessment, ctx) {
       continue;
     }
 
-    const caps = c.capabilities || {};
-    const missingCapability = (profile.requiredCapabilities || []).find((cap) => !caps[cap]);
+    const caps = { ...c.capabilities };
+    for (const cap of Object.keys(c.capabilityDeclarations || {})) {
+      if (!c.capabilityEvidence?.[cap]?.observedAt) delete caps[cap];
+    }
+    const missingCapability = (profile.requiredCapabilities || []).find(
+      (cap) => caps[cap] === false
+    );
     if (missingCapability) {
       reject('CAPABILITY_MISSING:' + missingCapability, 'capability');
-      if (missingCapability === 'jsonSchema' && c.jsonSchemaEvidence) {
-        rejected[rejected.length - 1].reason = c.jsonSchemaEvidence.reason;
-        if (c.jsonSchemaEvidence.detail)
-          rejected[rejected.length - 1].detail = c.jsonSchemaEvidence.detail;
+      const proof =
+        c.capabilityEvidence?.[missingCapability] ||
+        (missingCapability === 'jsonSchema' ? c.jsonSchemaEvidence : null);
+      if (proof) {
+        rejected[rejected.length - 1].reason = proof.reason;
+        if (proof.detail) rejected[rejected.length - 1].detail = proof.detail;
       }
+      continue;
+    }
+    const unverified = (profile.requiredCapabilities || []).filter((cap) => caps[cap] !== true);
+    if (unverified.length) {
+      needsCapabilityProbe.push({ candidateKey: key, capabilities: unverified });
+      reject('CAPABILITY_UNVERIFIED:' + unverified[0], 'capability');
+      const proof = c.capabilityEvidence?.[unverified[0]] || c.jsonSchemaEvidence;
+      if (proof?.reason) rejected[rejected.length - 1].reason = proof.reason;
       continue;
     }
     const contextWindow = Number(candidateContextWindow(c));
@@ -1599,6 +1615,7 @@ function rankForProfile(candidates, profile, assessment, ctx) {
     chosen,
     top3,
     ranking: ranked,
+    needsCapabilityProbe,
     rejected,
     refused: chosen ? null : 'NO_CANDIDATE_MEETS_PROFILE',
     reasonCode,
@@ -1895,6 +1912,15 @@ async function runProfileDispatch(args, deps) {
     evidenceData,
     { now }
   );
+
+  const probe = d.probeCapabilities || require('./capability-probe').probeCapabilities;
+  await probe(annotated, profile, {
+    ...d,
+    evidenceDir,
+    registry: d.registry || sourceRegistry.loadSources(),
+    externalWorkers: d.externalWorkers || args['external-workers'],
+    allowNetwork: args.execute === true && d.capabilityProbeAllowNetwork === true,
+  });
 
   const independentReviewerCandidates = annotated.filter((candidate) => {
     if (
