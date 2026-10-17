@@ -235,7 +235,7 @@ const codex = {
       job.isolationVerdictPath ? { verdictPath: job.isolationVerdictPath } : undefined
     );
     if (currentVerdict.verdict !== 'CLOSED') throw new Error('CODEX_REQUIRES_ISOLATION');
-    const args = ['exec', '--dangerously-bypass-approvals-and-sandbox'];
+    const args = ['exec', '--sandbox', 'workspace-write'];
     if (job.model) args.push('--model', job.model);
     if (job.resultSchemaPath) args.push('--output-schema', job.resultSchemaPath);
     args.push(job.prompt || '');

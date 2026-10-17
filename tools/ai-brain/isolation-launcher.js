@@ -16,6 +16,64 @@ const WORKER_USERNAME = 'ShipDeWorker';
 const WORKER_ROOT = 'C:\\ShipDeWorker';
 const DEFAULT_WORKER_TIMEOUT_MS = 30 * 60 * 1000;
 
+/** Commit a successful native writer's file-only output on the Controller side.
+ * The injected runner is for offline tests; production uses normal Git hooks.
+ * A failed hook is a local failure and never becomes a reviewed worker SHA.
+ */
+function commitNativeWriterChanges(options) {
+  const o = options || {};
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => !/^GIT_/i.test(key))
+  );
+  // Clone hooks are absent. Pin the installed operator hooks explicitly instead
+  // of silently making a hookless commit in the freshly provisioned worker.
+  let hooksPath = o.hooksPath;
+  if (!o.run) {
+    const resolved = cp.spawnSync(
+      'git',
+      ['rev-parse', '--path-format=absolute', '--git-path', 'hooks'],
+      {
+        cwd: o.hostRoot,
+        env,
+        encoding: 'utf8',
+        windowsHide: true,
+      }
+    );
+    hooksPath = resolved?.status === 0 ? String(resolved.stdout || '').trim() : null;
+    if (!hooksPath || !fs.existsSync(path.join(hooksPath, 'pre-commit'))) {
+      throw new Error('NATIVE_WRITER_COMMIT_FAILED: installed pre-commit hook missing');
+    }
+  }
+  delete env.LEFTHOOK;
+  delete env.LEFTHOOK_EXCLUDE;
+  delete env.LEFTHOOK_SKIP;
+  const run =
+    o.run ||
+    ((args) =>
+      cp.spawnSync('git', ['-c', 'core.hooksPath=' + hooksPath, ...args], {
+        cwd: o.workerRoot,
+        env,
+        encoding: 'utf8',
+        windowsHide: true,
+        timeout: 30 * 60 * 1000,
+        maxBuffer: 1024 * 1024,
+      }));
+  const checked = (args) => {
+    const result = run(args);
+    if (!result || result.status !== 0) throw new Error('NATIVE_WRITER_COMMIT_FAILED: ' + args[0]);
+    return String(result.stdout || '').trim();
+  };
+  if (checked(['status', '--porcelain'])) {
+    checked(['add', '--all']);
+    checked(['commit', '-m', '[' + o.workItemId + '] native writer changes']);
+  }
+  const sha = checked(['rev-parse', '--verify', 'HEAD^{commit}']);
+  if (!/^[a-f0-9]{40}$/i.test(sha) || checked(['status', '--porcelain'])) {
+    throw new Error('NATIVE_WRITER_COMMIT_FAILED: invalid SHA or dirty tree');
+  }
+  return sha;
+}
+
 /** The operator-owned isolation attestation location. */
 function isolationVerdictPath(options) {
   const base =
@@ -2535,9 +2593,32 @@ function getIsolatedLauncher() {
     launchResult.workerRoot = launchResult.workerRoot || workerRoot;
     launchResult.worktree = launchResult.worktree || workerRoot;
 
+    if (
+      adapter?.id === 'codex' &&
+      opts.commitFileOnlyWriter === true &&
+      launchResult.exitCode === 0 &&
+      !launchResult.timedOut
+    ) {
+      try {
+        launchResult.workerSha = commitNativeWriterChanges({
+          workerRoot,
+          hostRoot: hostCwd,
+          workItemId: opts.workItemId,
+        });
+        launchResult.retainedHeadSha = launchResult.workerSha;
+      } catch {
+        launchResult.exitCode = 1;
+        launchResult.localFailure = 'NATIVE_WRITER_COMMIT_FAILED';
+        launchResult.failureReason = 'NATIVE_WRITER_COMMIT_FAILED';
+        delete launchResult.workerSha;
+        delete launchResult.retainedHeadSha;
+      }
+    }
+
     // Ensure any modified register row or staged work item spec for a GOAL item
     // is committed into the workerSha so the PR contract passes
     if (
+      adapter?.id !== 'codex' &&
       opts.workItemId &&
       typeof opts.workItemId === 'string' &&
       opts.workItemId.toUpperCase().startsWith('GOAL-') &&
@@ -2590,6 +2671,7 @@ function getIsolatedLauncher() {
     }
 
     if (
+      !launchResult.localFailure &&
       !launchResult.workerSha &&
       fs.existsSync(workerRoot) &&
       fs.existsSync(path.join(workerRoot, '.git'))
@@ -2705,6 +2787,7 @@ function readLaunchResult(launchResultPath, completionNonce, hostRes) {
 }
 
 module.exports = {
+  commitNativeWriterChanges,
   getIsolatedLauncher,
   getFolderHash,
   defaultVerifyBoundary,

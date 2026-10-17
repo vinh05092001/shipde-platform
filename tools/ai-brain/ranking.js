@@ -227,6 +227,17 @@ function resolveCandidateHeadroom(candidate, ctx) {
     };
   }
 
+  // Native login is not quota evidence. Reuse the quota store's age policy
+  // even for normalized status readings, which otherwise bypass freshness.
+  if (candidate.binding === 'cli-login') {
+    const stamp =
+      reading &&
+      typeof reading === 'object' &&
+      Date.parse(reading.observedAt || reading.updatedAt || reading.cachedAt || '');
+    if (!Number.isFinite(stamp) || now < stamp || now - stamp > quotaStore.DEFAULT_MAX_AGE_MS) {
+      reading = undefined;
+    }
+  }
   let status = 'unknown';
   let worstRatio = null;
   let reason = 'chưa khai hạn mức token';

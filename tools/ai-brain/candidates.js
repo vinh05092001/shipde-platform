@@ -144,9 +144,11 @@ function accessPathOf(source, registry) {
 }
 
 /** Accounts bound to a source id. */
-function accountsFor(accounts, sourceId) {
+function accountsFor(accounts, sourceId, registry) {
+  const source = registry?.sources?.find((s) => s.id === sourceId);
+  const providers = new Set([sourceId, ...(source?.accountProviders || [])]);
   return (accounts || []).filter(
-    (a) => a.sourceId === sourceId || a.source === sourceId || a.provider === sourceId
+    (a) => providers.has(a.sourceId) || providers.has(a.source) || providers.has(a.provider)
   );
 }
 
@@ -163,9 +165,7 @@ function accountModels(account) {
  * declared ids stand.
  */
 function liveAgyAccountModels(acc, source, models, o) {
-  const isAgy =
-    (acc && (acc.provider === 'antigravity' || acc.id === 'agy-native-a')) ||
-    (source && source.id === 'antigravity');
+  const isAgy = source && source.harness === 'agy';
   if (!isAgy || !o || o.discoverPool === false) return models;
   if (!o.__agyListing) {
     let listed = [];
@@ -574,9 +574,11 @@ function openAiCompatibleCandidates(opts) {
 
     if (modelSet.size === 0) continue;
 
-    let bound = accountsFor(accounts, source.id).filter((a) => a && a.id && a.id !== '*');
+    let bound = accountsFor(accounts, source.id, registry).filter((a) => a && a.id && a.id !== '*');
     if (bound.length === 0 && source.reachedVia) {
-      bound = accountsFor(accounts, source.reachedVia).filter((a) => a && a.id && a.id !== '*');
+      bound = accountsFor(accounts, source.reachedVia, registry).filter(
+        (a) => a && a.id && a.id !== '*'
+      );
     }
 
     const defaultUpstream =
@@ -751,14 +753,14 @@ function generateCandidatesWithCatalog(opts) {
     if (source.enabled === false) continue;
     if (sourcesApi.isRetired(source.id, registry)) continue;
     if (sourcesApi.isDeferred(source.id, registry)) continue;
-    let bound = accountsFor(accounts, source.id);
+    let bound = accountsFor(accounts, source.id, registry);
     if (bound.length === 0 && source.reachedVia) {
-      bound = accountsFor(accounts, source.reachedVia);
+      bound = accountsFor(accounts, source.reachedVia, registry);
     }
     // Disabled discovery inventory is not a bound CLI login. Intake snapshots
     // can contain such a source without any account models.
-    if (source.kind === 'agent-cli' && source.modelsFrom === 'account') {
-      bound = bound.filter((a) => a.enabled !== false);
+    if (source.kind === 'agent-cli' && !source.reachedVia) {
+      bound = bound.filter((a) => a.enabled !== false && !a.endpoint);
     }
     const hasConcreteAccounts = (accounts || []).some((a) => a && a.id && a.id !== '*');
     let sharedArc = bound.length === 0 && !hasConcreteAccounts;
@@ -768,6 +770,19 @@ function generateCandidatesWithCatalog(opts) {
         bound = [implicit];
         sharedArc = false;
       }
+    }
+
+    // Some gateways expose bare wire ids and a registry-declared writer adapter.
+    // Keep their writer inventory scoped to the live listing of this endpoint.
+    if (source.kind === 'router' && source.writerHarness && source.servesModels !== false) {
+      const models =
+        (source.writerInventory?.status === 'listed'
+          ? source.models
+          : o.sourceModels?.[source.id]) ||
+        source.models ||
+        bound.filter((a) => a.enabled !== false && a.status === 'available').flatMap(accountModels);
+      pushOpencodeProviderWriters(candidates, { ...source, models }, o);
+      continue;
     }
 
     if (source.kind === 'router' && source.servesModels !== false) {

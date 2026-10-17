@@ -248,6 +248,17 @@ Decision log entries link `goalId -> workItemId -> candidateKey -> session -> co
 - Part H2 Hermes session selection, custom config binding, and `shipde-controller` skill file are delivered in Part H2.
 - Live acceptance across chat and controller runs in Part H3 following merge of H1 and H2.
 
+### H3 live: native writer lanes (2026-10-17)
+
+- Scope: `.worktrees/w-nativelanes`, branch `fix/task-ai-142-native-writer-lanes`. No staging or commit by Codex; Claude commits with real hooks.
+- Native CLI binding excludes HTTP account inventory. Codex login checks auth file existence only, and models remain config-derived. Writer ranking refuses unknown or exhausted quota; usable Controller quota readings are required.
+- Native account provider aliases are declared in the source registry. Gateway writers use the endpoint's own model listing and the existing direct HTTP preflight, credential and schema gates.
+- A successful Codex file-only writer is committed by the Controller in its worker root before exact-SHA verification. Commit/hook failure is local and cannot become a successful worker SHA.
+- Regression evidence: all 10 native-lane tests fail against the unchanged HEAD modules and pass with this implementation; the Codex sandbox expectation also fails before the adapter fix. HTTP 200/503 and installed-hook behavior use injected collaborators, with no provider calls or actual native-writer commit.
+- Final offline validation: 537/537 tests pass, including Controller canary, TASK-AI-141, candidate generation and selected TASK-AI-142 suites; 0 skipped/TODO. Excluded: the two baseline-failing ACP/worker-progress suites below, plus `task-ai-142-agy-gateway.test.js` and `task-ai-142-jev-failure-reason.test.js` because they open loopback listeners. Gateway HTTP coverage here is injected. Prettier, `git diff --check` and the hardcode guard pass (6 production files scanned, 0 new violations). Logs: `native-lanes-final.log`, `native-lanes-red.log`, `native-lanes-baseline-failures.log` in this worktree.
+- Broader checks reproduce 6 failures on unchanged HEAD: 4 `ACP_CLEANUP_FAILED` cases in `task-ai-142-hermes-acp.test.js` and 2 B4 abort cases in `task-ai-142-worker-progress.test.js`. They remain outside this lane. Usage tests require temporary `LOCALAPPDATA` under the permitted temporary directory.
+- Evidence is offline fixtures only; this assignment does not establish live login, live quota, gateway availability or provider-backed writer success.
+
 ### H3 live: writer HTTP preflight, direct inventory and fresh health (2026-10-17)
 
 - Scope: `.worktrees/w-writersel`, branch `fix/task-ai-142-writer-selection`; changes stay uncommitted for the host operator. No changes to `hermes-live`, credentials or provider/model scores.
