@@ -47,6 +47,20 @@ function isLegacyUnverified(record) {
   return false;
 }
 
+/**
+ * Route health is kept per routed model id: the upstream prefix (ag/, zd/,
+ * cl/ ...) is a different provider with its own failures. Live 17/10: a
+ * GEO_BLOCKED from one upstream blocked ag/gemini-3.8-flash, which answered.
+ */
+function routeModelKey(value, routeId) {
+  const id = String(value || '')
+    .trim()
+    .toLowerCase();
+  const route = String(routeId || '').toLowerCase();
+  // A prefix that names the route itself is redundant (ag/x on route ag).
+  return route && id.startsWith(route + '/') ? id.slice(route.length + 1) : id;
+}
+
 function normalizeModelId(value) {
   let id = String(value || '')
     .trim()
@@ -591,7 +605,8 @@ function healthKey(modelId, routeId) {
     routeId && typeof routeId === 'object'
       ? String(routeId.id) + (routeId.accountId ? '@' + routeId.accountId : '')
       : String(routeId);
-  return normalizeModelId(modelId) + '|' + pathId;
+  const routeName = routeId && typeof routeId === 'object' ? routeId.id : routeId;
+  return routeModelKey(modelId, routeName) + '|' + pathId;
 }
 
 function isDue(store, modelId, routeId, now) {
@@ -618,7 +633,7 @@ function getPathRecord(store, modelId, routeId) {
     if (gatewayRecord) return gatewayRecord;
   }
   const id = routeId && typeof routeId === 'object' ? String(routeId.id) : String(routeId);
-  const prefix = normalizeModelId(modelId) + '|' + id + '@';
+  const prefix = routeModelKey(modelId, id) + '|' + id + '@';
   const rawPrefix = String(modelId) + '|' + id + '@';
   const related = Object.entries(store.paths).filter(
     ([key]) => key.startsWith(prefix) || key.startsWith(rawPrefix)
@@ -653,7 +668,7 @@ function isEligible(store, modelId, routeId, now) {
   if (routeId && typeof routeId === 'object' && routeId.accountId) return false;
   const id = routeId && typeof routeId === 'object' ? routeId.id : routeId;
   const accountRows = Object.entries(store.paths || {}).filter(([key]) =>
-    key.startsWith(normalizeModelId(modelId) + '|' + id + '@')
+    key.startsWith(routeModelKey(modelId, id) + '|' + id + '@')
   );
   return accountRows.length === 1 && accountRows[0][1].status === 'AVAILABLE';
 }
@@ -675,7 +690,7 @@ function isRouteHealthy(store, modelId, routeId) {
   if (exact) return exact.status === 'AVAILABLE';
   const id = routeId && typeof routeId === 'object' ? routeId.id : routeId;
   const rows = Object.entries(store.paths || {}).filter(([key]) =>
-    key.startsWith(normalizeModelId(modelId) + '|' + id + '@')
+    key.startsWith(routeModelKey(modelId, id) + '|' + id + '@')
   );
   return Boolean(rows.length === 1 && rows[0][1].status === 'AVAILABLE');
 }

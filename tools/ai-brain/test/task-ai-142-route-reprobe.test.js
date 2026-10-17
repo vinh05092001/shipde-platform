@@ -161,7 +161,7 @@ test('VIỆC 3: orderProbeRoutes orders legacy unverified ahead of genuine faile
   const store = {
     version: 1,
     paths: {
-      'claude-3-5-sonnet|9router@*': {
+      'cl/claude-3-5-sonnet|9router@*': {
         modelId: 'cl/claude-3-5-sonnet',
         normalizedModelId: 'claude-3-5-sonnet',
         routeId: { id: '9router', accountId: '*' },
@@ -171,7 +171,7 @@ test('VIỆC 3: orderProbeRoutes orders legacy unverified ahead of genuine faile
         lastCheckedAt: '2026-10-17T03:00:00Z',
         nextCheckAt: '2026-10-18T03:00:00Z',
       },
-      'gpt-4o|9router@*': {
+      'oa/gpt-4o|9router@*': {
         modelId: 'oa/gpt-4o',
         normalizedModelId: 'gpt-4o',
         routeId: { id: '9router', accountId: '*' },
@@ -192,7 +192,7 @@ test('VIỆC 3: orderProbeRoutes orders legacy unverified ahead of genuine faile
     accountId: '*',
   };
   const candFailed = {
-    modelId: 'cl/gpt-4o',
+    modelId: 'oa/gpt-4o',
     gateway: '9router',
     accountId: '*',
   };
@@ -217,5 +217,20 @@ test('VIỆC 3: orderProbeRoutes orders legacy unverified ahead of genuine faile
     'cl/claude-3-5-sonnet',
     'legacy unverified must be prioritized in unknown'
   );
-  assert.equal(ordered[1].modelId, 'cl/gpt-4o', 'genuine 451 must be in failed');
+  assert.equal(ordered[1].modelId, 'oa/gpt-4o', 'genuine 451 must be in failed');
+});
+
+test('a failure on one upstream behind a shared gateway does not block another upstream', () => {
+  // Live 17/10: GEO_BLOCKED for one upstream of gemini-3.8-flash behind 9router
+  // blocked ag/gemini-3.8-flash, which answered 200.
+  const now = Date.parse('2026-10-17T12:00:00Z');
+  const store = { version: 1, paths: {}, events: [] };
+  const route = { id: '9router', accountId: 'ninerouter' };
+  routeHealth.recordResult(store, 'zd/gemini-3.8-flash', route, { ok: false, status: 451 }, now);
+  assert.equal(routeHealth.isSelectable(store, 'zd/gemini-3.8-flash', route, now), false);
+  assert.notEqual(
+    routeHealth.isSelectable(store, 'ag/gemini-3.8-flash', route, now),
+    false,
+    'ag/ must not inherit the zd/ block'
+  );
 });
