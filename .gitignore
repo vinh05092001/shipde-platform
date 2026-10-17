@@ -34,3 +34,4 @@ tools/ai-brain/data/context-packs/
 tools/ai-brain/data/hermes/
 data/hermes/
 tools/ai-brain/data/model-route-health.json
+tools/ai-brain/data/sources.json

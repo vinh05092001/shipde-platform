@@ -71,8 +71,17 @@ function loadSources(options) {
   // reviewed registry sources. Only env-addressable credentials can be routed;
   // file-field credentials remain inventory metadata until a safe adapter is
   // available. Parked sources remain visible but cannot be selected.
-  const discoveredFile = opts.discoveredFile || path.join(__dirname, 'data', 'sources.json');
+  // A caller that names its own registry file gets only that file unless it
+  // also names a discovered file: this machine's discovery data must not leak
+  // into an explicit registry (tests, isolated workers).
+  // AI_BRAIN_DISCOVERED_SOURCES=none turns machine discovery data off (the
+  // host brain gate sets it so the suite sees what CI sees).
+  const machineDataOff = process.env.AI_BRAIN_DISCOVERED_SOURCES === 'none';
+  const discoveredFile =
+    opts.discoveredFile ||
+    (opts.file || machineDataOff ? null : path.join(__dirname, 'data', 'sources.json'));
   try {
+    if (!discoveredFile) throw new Error('NO_DISCOVERED_FILE');
     const discovered = readJson(discoveredFile);
     for (const entry of discovered.sources || []) {
       if (!entry || !entry.id) continue;
