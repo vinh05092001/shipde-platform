@@ -1206,6 +1206,20 @@ async function runIntake(opts, deps) {
     d.registry || sourcesApi.loadSources()
   );
 
+  const runDir = path.join(
+    root,
+    'tools',
+    'ai-brain',
+    'data',
+    'intake',
+    id + '-' + formatRunTimestamp(now)
+  );
+  const targetDecisionDir = o.decisionDir || d.decisionDir || path.join(runDir, 'decisions');
+  fs.mkdirSync(path.join(runDir, 'decisions'), { recursive: true });
+  if (targetDecisionDir !== path.join(runDir, 'decisions')) {
+    fs.mkdirSync(targetDecisionDir, { recursive: true });
+  }
+
   const routeHealthApi = require('./route-health');
   const routeHealthFile =
     d.routeHealthFile || path.join(root, 'tools', 'ai-brain', 'data', 'model-route-health.json');
@@ -1221,6 +1235,9 @@ async function runIntake(opts, deps) {
           Object.assign({ registry: d.registry }, probeOptions)
         )),
     {
+      decisionDir: targetDecisionDir,
+      workItemId: id,
+      env: d.env,
       catalogue: catalogue.models,
       fallbackCatalogue: catalogue.models,
       skipFallbackDiscovery: false,
@@ -1242,19 +1259,6 @@ async function runIntake(opts, deps) {
     : [];
   const rtkEnabled = !RTK_RISK_DOMAINS.some((domain) => riskDomains.includes(domain));
 
-  const runDir = path.join(
-    root,
-    'tools',
-    'ai-brain',
-    'data',
-    'intake',
-    id + '-' + formatRunTimestamp(now)
-  );
-  const targetDecisionDir = o.decisionDir || d.decisionDir || path.join(runDir, 'decisions');
-  fs.mkdirSync(path.join(runDir, 'decisions'), { recursive: true });
-  if (targetDecisionDir !== path.join(runDir, 'decisions')) {
-    fs.mkdirSync(targetDecisionDir, { recursive: true });
-  }
   fs.writeFileSync(path.join(runDir, 'goal.txt'), derived.goal);
   fs.writeFileSync(path.join(runDir, 'specs.json'), JSON.stringify([derived.specItem], null, 2));
   fs.writeFileSync(

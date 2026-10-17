@@ -1098,3 +1098,53 @@ for (const [body, expected] of [
     assert.equal(require('../route-probe').classifyProbeFailure({ status: 503, body }), expected);
   });
 }
+
+test('unknown writer pre-probe can be checked again by the next selection without a route penalty', async (t) => {
+  const repo = makeTempRepo();
+  t.after(() => fs.rmSync(repo.dir, { recursive: true, force: true }));
+  const candidate = createCandidate();
+  let probes = 0;
+  let launches = 0;
+  const result = await runOrchestration('unknown probe recovery', {
+    isolatedWorker: true,
+    cwd: repo.dir,
+    workerRoot: repo.dir,
+    baseSha: repo.sha,
+    sha: repo.sha,
+    decisionDir: path.join(repo.dir, 'decisions'),
+    usageDir: path.join(repo.dir, 'usage'),
+    candidates: [candidate],
+    routeHealth: { version: 1, paths: {}, events: [] },
+    persistRouteHealth: false,
+    registry: {
+      sources: [
+        { id: 'oc', endpoint: 'https://gateway.example/v1', credential: { env: 'TEST_KEY' } },
+      ],
+      dispatch: { providers: { oc: { harness: 'opencode-direct', provider: 'opencode' } } },
+    },
+    specs: [{ id: 'A', files: ['a.js'], qualityFloor: 0 }],
+    env: { TEST_KEY: 'fixture-only' },
+    routeProbe: async () => (++probes === 1 ? { ok: false } : { ok: true, status: 200 }),
+    run: () => {
+      launches++;
+      return {
+        exitCode: 0,
+        stdout: '{"sessionID":"fixture-session","tokens":{"input":10,"output":5}}',
+        stderr: '',
+        completionNonce: 'fixture-nonce',
+        workerSha: repo.sha,
+      };
+    },
+    reviewer: () => ({ pass: true, sha: repo.sha, verdict: 'PASS', findings: [] }),
+    tests: () => ({ pass: true }),
+    hostGate: () => ({ pass: true, failures: [] }),
+    ranking: { headrooms: { 'account-1': { status: 'available' } } },
+  });
+  assert.equal(probes, 2);
+  assert.equal(launches, 1);
+  assert.equal(result.status, 'COMPLETED');
+  const records = require('../decisions').readDecisionsSafe({
+    dir: path.join(repo.dir, 'decisions'),
+  });
+  assert.ok(records.some((r) => r.probeResult?.ok === false && r.workItemId === 'A'));
+});
