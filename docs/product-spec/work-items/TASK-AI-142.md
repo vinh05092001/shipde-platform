@@ -409,6 +409,17 @@ Verification (2026-10-14): sequential TASK-AI-141 199/199, TASK-AI-142 140/140, 
 
 Selection logs retain the full chosenCandidate, the existing chosen identity, top ten ranked candidates and score breakdown summaries, and rejection totals by reasonCode with ten examples. Full runtime routing arrays remain available for fallback. Daily logs roll at 50 MiB into date.N.jsonl; readers consume all parts in numeric order. `node tools/ai-brain/cli.js decisions compact --dir <dir>` incrementally writes capped copies named `<source>.compact-<timestamp>.jsonl`, preserving originals. Copies are excluded from daily history until the operator explicitly replaces originals; malformed input fails rather than silently dropping evidence. No live data is modified by this change.
 
+### H3 live: leaderboard source names carry explicit identifiers without undefined (2026-10-17)
+
+External benchmark tables recorded in `model-priors-live.json` had entries in `sources[]` containing only `url` and `retrievedAt` without `id` or `name`, causing decision logs and candidate score breakdowns to output `undefined` for `qualitySource`.
+
+1. Defined explicit source identifiers (`artificial-analysis` and `benchlm`) in `tools/ai-brain/priors-sources/public.json` under `sources[]`.
+2. Updated `resolveDescriptorSources` in `tools/ai-brain/priors-public.js` to extract source IDs dynamically from the descriptor without hardcoding names.
+3. Preserved `source.id` across document merging, per-model source records, and benchmark provenance in `tools/ai-brain/priors.js` (`mergePriorDocuments`).
+4. Prevented any `undefined` source string or property from appearing in decision logs or merged prior documents.
+
+Verification: `node --test tools/ai-brain/test/task-ai-142-priors-source-id.test.js tools/ai-brain/test/priors-public.test.js tools/ai-brain/test/task-ai-142-quality-priors.test.js` passed all tests. Changed files pass Prettier, ESLint, and `git diff --check`.
+
 ### H3 live: audit repairs (2026-10-17)
 
 - Tier-only rows (codingTier without a score) keep their tier: operator decision 2026-10-12 keeps imported Claude-family rows eligible for writer ranking. The live leaderboard refresh (610 models, all scored, 2026-10-17) makes this moot in practice. Recorded path drops (ROUTE_PROBE_UNPROVEN, CREDENTIAL_ENV_MISSING) appear in the rejection list with route or account scope.

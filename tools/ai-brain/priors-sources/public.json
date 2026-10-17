@@ -1,5 +1,17 @@
 {
   "kind": "public-leaderboards",
   "endpoint": "https://artificialanalysis.ai/leaderboards/models",
-  "benchlm": "https://benchlm.ai/data/models.json"
+  "benchlm": "https://benchlm.ai/data/models.json",
+  "sources": [
+    {
+      "id": "artificial-analysis",
+      "kind": "aa",
+      "url": "https://artificialanalysis.ai/leaderboards/models"
+    },
+    {
+      "id": "benchlm",
+      "kind": "bench",
+      "url": "https://benchlm.ai/data/models.json"
+    }
+  ]
 }

@@ -62,20 +62,50 @@ function aaRows(html) {
   if (!validated.length) throw new Error('PRIORS_AA_SCHEMA_CHANGED');
   return validated;
 }
+function resolveDescriptorSources(config) {
+  if (Array.isArray(config && config.sources) && config.sources.length) {
+    return config.sources
+      .map((s) => {
+        if (!s) return null;
+        const url = s.url || s.endpoint;
+        if (!url) return null;
+        const id = s.id || s.name || (s.kind === 'bench' ? 'benchlm' : 'artificial-analysis');
+        const kind = s.kind || (url.includes('bench') ? 'bench' : 'aa');
+        return { id, kind, url };
+      })
+      .filter(Boolean);
+  }
+  const items = [];
+  if (config && config.endpoint) {
+    items.push({
+      id: config.endpointId || 'artificial-analysis',
+      kind: 'aa',
+      url: config.endpoint,
+    });
+  }
+  if (config && config.benchlm) {
+    items.push({
+      id: config.benchlmId || 'benchlm',
+      kind: 'bench',
+      url: config.benchlm,
+    });
+  }
+  return items;
+}
+
 async function publicDocuments(options = {}) {
   const config = options.descriptor || descriptor;
   const fetcher = options.fetch || globalThis.fetch;
   const retrievedAt = new Date(options.now || Date.now()).toISOString();
   const documents = [];
-  for (const [kind, url] of [
-    ['aa', config.endpoint],
-    ['bench', config.benchlm],
-  ]) {
+  const entries = resolveDescriptorSources(config);
+  for (const entry of entries) {
+    const { kind, url, id } = entry;
     const response = await fetcher(url, { signal: AbortSignal.timeout(30000) });
     if (!response.ok) throw new Error('PRIORS_PUBLIC_HTTP_' + response.status);
     const rows = kind === 'aa' ? aaRows(await response.text()) : (await response.json()).items;
     if (!Array.isArray(rows) || !rows.length) throw new Error('PRIORS_PUBLIC_SCHEMA_CHANGED');
-    const source = { url, retrievedAt };
+    const source = { id, url, retrievedAt };
     const models = rows
       .map((row) => {
         const benchmarks = {};
