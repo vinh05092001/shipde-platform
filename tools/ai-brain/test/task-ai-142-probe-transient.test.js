@@ -56,7 +56,7 @@ test('probeCooldownMs assigns short cooldown (<=0.5h) to ROUTE_UNAVAILABLE, TIME
   assert.equal(health.probeCooldownMs('ALIAS_MISMATCH'), dayMs);
 });
 
-test('status 0 transient failure cools down only the specific model for 30m, never killing the entire provider', (t) => {
+test('confirmed timeout cools down only the specific model for 30m, never killing the entire provider', (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'probe-transient-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const file = path.join(root, 'health.json');
@@ -66,8 +66,8 @@ test('status 0 transient failure cools down only the specific model for 30m, nev
   const candA = candidate('fixture-provider/model-alpha');
   const candB = candidate('fixture-provider/model-beta');
 
-  // Probe candA with status 0 transient failure
-  health.rememberProbe(candA, { ok: false, status: 0, body: 'Probe request failed' }, options);
+  // A confirmed timeout retains the existing transient cooldown; cause-less failures have separate regressions.
+  health.rememberProbe(candA, { ok: false, status: 0, body: 'Request timeout' }, options);
 
   // Candidate A is cooled down for at most 0.5 hours (30 min)
   const cdAActive = health.probeCooldown(candA, { ...options, now: now + 15 * 60 * 1000 });

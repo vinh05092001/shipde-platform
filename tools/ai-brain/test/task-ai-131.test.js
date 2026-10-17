@@ -393,3 +393,35 @@ test('IN-R06 refuses a stale isolation verdict with the exact refresh command', 
   );
   assert.ok(!spawned, 'a stale verdict must not start orchestrate');
 });
+
+test('unknown intake probe writes its raw diagnostic into the generated run decision directory', async () => {
+  const root = makeFixtureRepo();
+  const result = await intake.runIntake(
+    { workItem: FULL_ID },
+    baseDeps(root, {
+      registry: { sources: [] },
+      probeRoute: async () => ({ ok: false }),
+      routeHealth: {
+        version: 1,
+        paths: {
+          'vendor/model|gateway-fixture': {
+            modelId: 'vendor/model',
+            routeId: 'gateway-fixture',
+            status: 'UNAVAILABLE_NOW',
+            failures: 0,
+            nextCheckAt: new Date(0).toISOString(),
+          },
+        },
+        events: [],
+      },
+    })
+  );
+  const records = require('../decisions').readDecisionsSafe({
+    dir: path.join(result.runDir, 'decisions'),
+  });
+  const raw = records.find((r) => r.probeResult);
+  assert.ok(raw, 'intake probes have a decision destination before refreshing routes');
+  assert.equal(raw.workItemId, FULL_ID);
+  assert.equal(raw.probeResult.ok, false);
+  assert.equal(raw.probeResult.status, null);
+});
