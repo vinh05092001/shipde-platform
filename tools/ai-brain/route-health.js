@@ -7,8 +7,45 @@ const path = require('path');
 const sourcesApi = require('./sources');
 const { atomicRenameSync } = require('./atomic-rename');
 const { candidateKey } = require('./discovery/identity');
+const { CLASSIFIER_VERSION } = require('./route-probe');
 
 const BACKOFF_MS = [30 * 60e3, 2 * 60 * 60e3, 6 * 60 * 60e3, 24 * 60 * 60e3];
+
+const GENUINE_STATUSES = new Set([
+  'AVAILABLE',
+  'GEO_BLOCKED',
+  'AUTH_NEEDED',
+  'NO_CREDIT',
+  'UPSTREAM_CREDIT_OR_QUOTA',
+  'RATE_LIMITED',
+  'UPSTREAM_FORBIDDEN',
+  'PROVIDER_UNAVAILABLE',
+  'ENTITLEMENT_REQUIRED',
+  'ALIAS_MISMATCH',
+]);
+
+const GENUINE_HTTP_STATUSES = new Set([401, 402, 403, 429, 451]);
+
+function isLegacyUnverified(record) {
+  if (!record || typeof record !== 'object') return false;
+  if (Number(record.classifierVersion) >= (CLASSIFIER_VERSION || 2)) return false;
+  if (record.status === 'AVAILABLE') return false;
+  if (GENUINE_STATUSES.has(record.status)) return false;
+  if (record.httpStatus && GENUINE_HTTP_STATUSES.has(Number(record.httpStatus))) return false;
+  if (record.probeCause) {
+    const cause = String(record.probeCause).toUpperCase();
+    for (const genuine of GENUINE_STATUSES) {
+      if (cause.includes(genuine)) return false;
+    }
+  }
+  if (
+    record.status === 'UNAVAILABLE_NOW' ||
+    /TIMEOUT|PROBE_NO_RESPONSE|PROBE_EXCEPTION|PROBE_FAILED/i.test(String(record.probeCause || ''))
+  ) {
+    return true;
+  }
+  return false;
+}
 
 function normalizeModelId(value) {
   let id = String(value || '')
@@ -73,6 +110,7 @@ function recordResult(store, modelId, routeId, result, now) {
       failures: previous.failures || 0,
       lastCheckedAt,
       nextCheckAt: null,
+      classifierVersion: CLASSIFIER_VERSION || 2,
     };
     if (previous.status && previous.status !== 'AVAILABLE')
       store.events.push({
@@ -101,6 +139,7 @@ function recordResult(store, modelId, routeId, result, now) {
     failures,
     lastCheckedAt,
     nextCheckAt: new Date(Number.isFinite(nextCheck) ? nextCheck : now + delay).toISOString(),
+    classifierVersion: CLASSIFIER_VERSION || 2,
   };
   // Due refreshes must retain the same cause-based policy as live preflight.
   if (previous.probeCause) {
@@ -162,7 +201,8 @@ function orderProbeRoutes(ranked, options) {
     const record = getPathRecord(store, identity.model, identity.route);
     if (require('./probe-order').recentRouteSuccess(candidate, store, { ...o, now }))
       live.push(candidate);
-    else if (!record || record.status === 'AVAILABLE') unknown.push(candidate);
+    else if (!record || record.status === 'AVAILABLE' || isLegacyUnverified(record))
+      unknown.push(candidate);
     else failed.push(candidate);
   }
   return [...live, ...unknown, ...failed];
@@ -562,17 +602,31 @@ function isDue(store, modelId, routeId, now) {
 }
 
 function getPathRecord(store, modelId, routeId) {
+  if (!store || !store.paths) return undefined;
+  const pathId =
+    routeId && typeof routeId === 'object'
+      ? String(routeId.id) + (routeId.accountId ? '@' + routeId.accountId : '')
+      : String(routeId);
+  const rawKey = String(modelId) + '|' + pathId;
+  if (store.paths[rawKey]) return store.paths[rawKey];
   const exact = store.paths[healthKey(modelId, routeId)];
   if (exact) return exact;
   if (routeId && typeof routeId === 'object' && routeId.accountId) {
-    const gatewayRecord = store.paths[healthKey(modelId, routeId.id)];
+    const gatewayRecord =
+      store.paths[String(modelId) + '|' + routeId.id] ||
+      store.paths[healthKey(modelId, routeId.id)];
     if (gatewayRecord) return gatewayRecord;
   }
   const id = routeId && typeof routeId === 'object' ? String(routeId.id) : String(routeId);
   const prefix = normalizeModelId(modelId) + '|' + id + '@';
-  const related = Object.entries(store.paths).filter(([key]) => key.startsWith(prefix));
+  const rawPrefix = String(modelId) + '|' + id + '@';
+  const related = Object.entries(store.paths).filter(
+    ([key]) => key.startsWith(prefix) || key.startsWith(rawPrefix)
+  );
   if (routeId && typeof routeId === 'object' && routeId.accountId)
-    return related.find(([key]) => key === prefix + routeId.accountId)?.[1];
+    return related.find(
+      ([key]) => key === prefix + routeId.accountId || key === rawPrefix + routeId.accountId
+    )?.[1];
   return undefined;
 }
 
@@ -593,7 +647,8 @@ function isEligible(store, modelId, routeId, now) {
   if (record)
     return (
       record.status === 'AVAILABLE' ||
-      Boolean(record.probeCause && dueAt(record, now ?? Date.now()))
+      Boolean(record.probeCause && dueAt(record, now ?? Date.now())) ||
+      isLegacyUnverified(record)
     );
   if (routeId && typeof routeId === 'object' && routeId.accountId) return false;
   const id = routeId && typeof routeId === 'object' ? routeId.id : routeId;
@@ -646,7 +701,7 @@ function isSelectable(store, modelId, routeId, now) {
     }
   }
   const record = getPathRecord(store, modelId, routeId);
-  return !record || record.status === 'AVAILABLE';
+  return !record || record.status === 'AVAILABLE' || isLegacyUnverified(record);
 }
 
 async function routeFallback(modelId, failedPath, paths, probe, store, options) {
@@ -1221,4 +1276,5 @@ module.exports = {
   getAccountRecord,
   deleteAccountRecord,
   probeCooldownMs,
+  isLegacyUnverified,
 };

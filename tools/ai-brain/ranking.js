@@ -198,12 +198,44 @@ function resolveCandidateHeadroom(candidate, ctx) {
       }
     }
   }
+  const now = (ctx && ctx.now) || Date.now();
+
+  // Live Codex quota source for native CLI login when no cached reading exists
+  if (
+    reading === undefined &&
+    (!ctx || ctx.useStoredQuota !== false) &&
+    candidate.binding === 'cli-login' &&
+    (candidate.harness === 'codex' ||
+      candidate.sourceId === 'codex' ||
+      candidate.source === 'codex' ||
+      candidate.accountId === 'codex-cli') &&
+    (!candidate.accountId || readings[candidate.accountId] === undefined) &&
+    (!candidate.quotaScope || readings[candidate.quotaScope] === undefined)
+  ) {
+    try {
+      const { readCodexSessionQuota } = require('./codex-quota');
+      const codexOpts = (ctx && ctx.codexOpts) || {
+        homeDir:
+          (ctx && ctx.home) ||
+          process.env.USERPROFILE ||
+          process.env.HOME ||
+          require('os').homedir(),
+      };
+      const sessionQuota = readCodexSessionQuota(codexOpts, {
+        now,
+        fs: (ctx && ctx.fs) || (codexOpts && codexOpts.fs),
+      });
+      if (sessionQuota && sessionQuota.status && sessionQuota.status !== 'unknown') {
+        reading = sessionQuota;
+      }
+    } catch {}
+  }
 
   // Active cooldown check from evidence store if present
   if (ctx && ctx.evidenceData) {
     try {
       const block = evidence.isCandidateBlocked(ctx.evidenceData, candidate, {
-        now: (ctx && ctx.now) || Date.now(),
+        now,
       });
       if (block && block.blocked) {
         return {
@@ -217,7 +249,6 @@ function resolveCandidateHeadroom(candidate, ctx) {
   }
 
   // Active cooldown on candidate or account
-  const now = (ctx && ctx.now) || Date.now();
   if (candidate.cooldownUntil && Date.parse(candidate.cooldownUntil) > now) {
     return {
       status: 'cooling',
@@ -234,13 +265,16 @@ function resolveCandidateHeadroom(candidate, ctx) {
       reading &&
       typeof reading === 'object' &&
       Date.parse(reading.observedAt || reading.updatedAt || reading.cachedAt || '');
-    if (!Number.isFinite(stamp) || now < stamp || now - stamp > quotaStore.DEFAULT_MAX_AGE_MS) {
+    const maxAge = (reading && reading.maxAgeMs) || quotaStore.DEFAULT_MAX_AGE_MS;
+    if (!Number.isFinite(stamp) || now < stamp || now - stamp > maxAge) {
       reading = undefined;
     }
   }
   let status = 'unknown';
   let worstRatio = null;
   let reason = 'chưa khai hạn mức token';
+  let cooldownUntil =
+    reading && typeof reading === 'object' ? reading.cooldownUntil || reading.resetsAt : undefined;
   if (typeof reading === 'string') {
     status = reading;
   } else if (reading && typeof reading === 'object') {
@@ -261,6 +295,7 @@ function resolveCandidateHeadroom(candidate, ctx) {
     worstRatio,
     reason,
     reservationsHeld: candReservations.length,
+    cooldownUntil: cooldownUntil || undefined,
   };
 }
 

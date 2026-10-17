@@ -152,6 +152,13 @@ function accountsFor(accounts, sourceId, registry) {
   );
 }
 
+function deriveCredentialAccountId(source) {
+  const envName = String((source && source.credential && source.credential.env) || '').trim();
+  if (!envName) return source.id;
+  const suffix = envName.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+  return `${source.id}-${suffix}`;
+}
+
 /** Model names an account declares, normalised to strings. */
 function accountModels(account) {
   const declared = (account && account.models) || [];
@@ -580,6 +587,26 @@ function openAiCompatibleCandidates(opts) {
         (a) => a && a.id && a.id !== '*'
       );
     }
+    if (
+      bound.length === 0 &&
+      source.credential &&
+      source.credential.type === 'api-key' &&
+      source.credential.env
+    ) {
+      const envName = source.credential.env;
+      const envVal = o.env && o.env[envName] !== undefined ? o.env[envName] : process.env[envName];
+      const hasKey = Boolean(envVal && String(envVal).trim().length > 0);
+      const accId = deriveCredentialAccountId(source);
+      const credentialAcc = {
+        id: accId,
+        source: source.id,
+        models: Array.from(modelSet),
+        enabled: true,
+        status: 'available',
+        credentialEnvMissing: !hasKey,
+      };
+      bound = [credentialAcc];
+    }
 
     const defaultUpstream =
       source.upstream ||
@@ -636,6 +663,14 @@ function openAiCompatibleCandidates(opts) {
             maxOutputTokens,
             contextSource,
             sharedQuota: 'unknown',
+            ...(acc.credentialEnvMissing
+              ? {
+                  credentialEnvMissing: true,
+                  blocked: true,
+                  blockReason: 'CREDENTIAL_ENV_MISSING',
+                  blockScope: 'credential',
+                }
+              : {}),
           };
           c.candidateKey = candidateKey(c);
           out.push(c);
@@ -769,6 +804,26 @@ function generateCandidatesWithCatalog(opts) {
       if (implicit) {
         bound = [implicit];
         sharedArc = false;
+      } else if (
+        source.credential &&
+        source.credential.type === 'api-key' &&
+        source.credential.env
+      ) {
+        const envName = source.credential.env;
+        const envVal =
+          o.env && o.env[envName] !== undefined ? o.env[envName] : process.env[envName];
+        const hasKey = Boolean(envVal && String(envVal).trim().length > 0);
+        const accId = deriveCredentialAccountId(source);
+        const credentialAcc = {
+          id: accId,
+          source: source.id,
+          models: source.models || [],
+          enabled: true,
+          status: 'available',
+          credentialEnvMissing: !hasKey,
+        };
+        bound = [credentialAcc];
+        sharedArc = false;
       }
     }
 
@@ -896,6 +951,14 @@ function generateCandidatesWithCatalog(opts) {
               contextWindow,
               cost: acc.cost,
               sharedQuota: 'unknown',
+              ...(acc.credentialEnvMissing
+                ? {
+                    credentialEnvMissing: true,
+                    blocked: true,
+                    blockReason: 'CREDENTIAL_ENV_MISSING',
+                    blockScope: 'credential',
+                  }
+                : {}),
             });
           }
         }
@@ -970,6 +1033,14 @@ function generateCandidatesWithCatalog(opts) {
                 contextWindow,
                 cost: acc.cost,
                 sharedQuota: 'unknown',
+                ...(acc.credentialEnvMissing
+                  ? {
+                      credentialEnvMissing: true,
+                      blocked: true,
+                      blockReason: 'CREDENTIAL_ENV_MISSING',
+                      blockScope: 'credential',
+                    }
+                  : {}),
               });
             }
           }
@@ -1048,6 +1119,14 @@ function generateCandidatesWithCatalog(opts) {
               quality: row.quality,
               cost: acc.cost,
               sharedQuota: 'unknown',
+              ...(acc.credentialEnvMissing
+                ? {
+                    credentialEnvMissing: true,
+                    blocked: true,
+                    blockReason: 'CREDENTIAL_ENV_MISSING',
+                    blockScope: 'credential',
+                  }
+                : {}),
             });
           }
         }
@@ -1264,6 +1343,14 @@ function generateCandidatesWithCatalog(opts) {
                   capabilities: acc.capabilities || {},
                   cost: acc.cost,
                   sharedQuota: 'unknown',
+                  ...(acc.credentialEnvMissing
+                    ? {
+                        credentialEnvMissing: true,
+                        blocked: true,
+                        blockReason: 'CREDENTIAL_ENV_MISSING',
+                        blockScope: 'credential',
+                      }
+                    : {}),
                 });
               }
             }
@@ -2104,4 +2191,5 @@ module.exports = {
   resolveCandidateContextMeta,
   resolveCandidateCapabilities,
   catalogEvidenceFor,
+  deriveCredentialAccountId,
 };

@@ -1,5 +1,7 @@
 'use strict';
 
+const CLASSIFIER_VERSION = 2;
+
 /** Shared OpenAI-compatible route preflight for Hermes and isolated workers. */
 async function probeRoute(candidate, apiKeyEnv, env, options) {
   const opts = options || {};
@@ -208,6 +210,7 @@ function failureReason(cause) {
 }
 
 module.exports = {
+  CLASSIFIER_VERSION,
   tokenLimitEvidence,
   probeRoute,
   classifyProbeFailure,

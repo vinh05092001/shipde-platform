@@ -81,6 +81,23 @@ const READERS = {
       return claudeUsage.asQuotaReading(usage, identity);
     },
   },
+  codex: {
+    read: (account, opts) => {
+      const { readCodexSessionQuota } = require('./codex-quota');
+      const codexOpts = (opts && opts.codexOpts) || {
+        homeDir:
+          (opts && opts.home) ||
+          (account && account.home) ||
+          process.env.USERPROFILE ||
+          process.env.HOME ||
+          require('os').homedir(),
+      };
+      return readCodexSessionQuota(codexOpts, {
+        now: (opts && opts.now) || Date.now(),
+        fs: (opts && opts.fs) || (codexOpts && codexOpts.fs),
+      });
+    },
+  },
 };
 
 const SUPPORTED_PROVIDERS = new Set(Object.keys(READERS));

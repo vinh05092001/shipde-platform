@@ -504,8 +504,11 @@ describe('TASK-AI-70: catalogue import through the CLI', () => {
       String(r.candidateKey).includes('test-claude-family')
     );
     assert.ok(claudeRanked.length > 0, 'the Claude-family row remains eligible for ranking');
-    const claudeRejected = (payload.rejected || []).filter((r) =>
-      String(r.candidateKey).includes('test-claude-family')
+    // Recorded path drops (unproven route health, missing credential env) are
+    // about one route, not a rejection of the Claude-family model.
+    const pathDrops = new Set(['ROUTE_PROBE_UNPROVEN', 'CREDENTIAL_ENV_MISSING']);
+    const claudeRejected = (payload.rejected || []).filter(
+      (r) => String(r.candidateKey).includes('test-claude-family') && !pathDrops.has(r.reasonCode)
     );
     assert.equal(claudeRejected.length, 0, 'Claude-family row must not be rejected');
   });

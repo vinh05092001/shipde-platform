@@ -1085,8 +1085,11 @@ function qualityScoreOf(candidate, now) {
     }
   }
 
-  const declared = Number(candidate && candidate.quality);
-  if (Number.isFinite(declared)) {
+  const declared =
+    candidate && candidate.quality !== null && candidate.quality !== undefined
+      ? Number(candidate.quality)
+      : null;
+  if (declared !== null && Number.isFinite(declared)) {
     base = base !== null ? Math.max(base, declared) : declared;
   }
 
@@ -1254,19 +1257,27 @@ function scoreForProfile(candidate, assessment, ctx) {
     }
   }
 
+  const breakdown = {
+    latency,
+    quality,
+    reliability,
+    cost,
+    busyPenalty,
+    evidenceAgePenalty: agePenalty,
+    headroomPenalty,
+    contextPenalty,
+    prior,
+  };
+  if (prior) {
+    if (prior.url) breakdown.url = prior.url;
+    if (prior.retrievedAt) breakdown.retrievedAt = prior.retrievedAt;
+    if (prior.source) breakdown.qualitySource = prior.source;
+    if (prior.stale) breakdown.stalePriorWarning = true;
+  }
+
   return {
     score,
-    breakdown: {
-      latency,
-      quality,
-      reliability,
-      cost,
-      busyPenalty,
-      evidenceAgePenalty: agePenalty,
-      headroomPenalty,
-      contextPenalty,
-      prior,
-    },
+    breakdown,
     reservationsHeld: busy,
   };
 }
@@ -1326,17 +1337,26 @@ function rankForProfile(candidates, profile, assessment, ctx) {
       });
 
     if (c.blocked) {
+      const reasonCode = String(c.blockReason || '').startsWith('QUOTA_EXHAUSTED')
+        ? 'QUOTA_EXHAUSTED'
+        : c.blockReason === 'CREDENTIAL_ENV_MISSING' ||
+            c.reasonCode === 'CREDENTIAL_ENV_MISSING' ||
+            c.credentialEnvMissing
+          ? 'CREDENTIAL_ENV_MISSING'
+          : 'CANDIDATE_BLOCKED';
       rejected.push({
         candidateKey: key,
-        reasonCode: String(c.blockReason || '').startsWith('QUOTA_EXHAUSTED')
-          ? 'QUOTA_EXHAUSTED'
-          : 'CANDIDATE_BLOCKED',
+        reasonCode,
         reason: String(c.blockReason || 'upstream/candidate blocked'),
         scope: c.blockScope || 'candidate',
         upstream: c.upstream,
         modelId: c.modelId,
         accountId: c.accountId || '*',
       });
+      continue;
+    }
+    if (c.credentialEnvMissing) {
+      reject('CREDENTIAL_ENV_MISSING', 'credential');
       continue;
     }
     const contextRefusalReason = contextRefusal(c.harness, candidateContextWindow(c), {
@@ -1550,15 +1570,28 @@ function rankForProfile(candidates, profile, assessment, ctx) {
   const deterministicChosen = top3.length ? top3[0].candidateKey : null;
   const chosen = deterministicChosen;
   const reasonCode = allZero ? 'MODEL_SELECTION_NOT_PROVEN' : null;
+  const topScore =
+    top3.length > 0 &&
+    ((top3[0].scoreBreakdown && top3[0].scoreBreakdown.quality === null) ||
+      top3[0].score === null ||
+      top3[0].score === undefined)
+      ? 'chưa rõ'
+      : top3.length > 0
+        ? top3[0].score
+        : null;
+  const weightsLabel =
+    assessment.weightProfile ||
+    assessment.weightSource ||
+    (assessment.weights ? JSON.stringify(assessment.weights) : 'default');
   const reason = chosen
     ? 'fastest candidate meeting quality floor ' +
       profile.qualityFloor +
       ' and proof floor ' +
       profile.proofFloor +
       ' (score ' +
-      top3[0].score +
+      topScore +
       ', weights ' +
-      assessment.weightProfile +
+      weightsLabel +
       ')'
     : 'REFUSED: no candidate meets the profile floors';
 
@@ -1908,6 +1941,9 @@ async function runProfileDispatch(args, deps) {
     independentReviewerCandidates,
   };
   const result = rankForProfile(annotated, profile, assessment, rankCtx);
+  if (d.candidates && d.candidates.excludedRoutes && Array.isArray(d.candidates.excludedRoutes)) {
+    result.rejected.push(...d.candidates.excludedRoutes);
+  }
   const askForModelChoice =
     typeof d.modelChoiceAsk === 'function'
       ? d.modelChoiceAsk

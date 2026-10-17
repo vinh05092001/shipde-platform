@@ -19,7 +19,7 @@ const ROLE_BENCHMARK_WEIGHTS = Object.freeze({
  * When no explicit file is given, read the curated baseline deterministically.
  */
 function loadPriors(file) {
-  const target = file || DEFAULT_PRIORS_FILE;
+  const target = file || (fs.existsSync(LIVE_PRIORS_FILE) ? LIVE_PRIORS_FILE : DEFAULT_PRIORS_FILE);
   try {
     const parsed = JSON.parse(fs.readFileSync(target, 'utf8'));
     if (parsed && typeof parsed === 'object' && Array.isArray(parsed.ranking)) {
@@ -36,9 +36,9 @@ function normaliseCanonical(value) {
   let canonical = value
     .trim()
     .toLowerCase()
-    .replace(/\s*\([^)]*\)/g, '')
-    .split('/')
-    .pop();
+    .replace(/\s*\([^)]*\)/g, '');
+  canonical = canonical.split('::').pop();
+  canonical = canonical.split('/').pop();
   canonical = canonical.split('@')[0];
   canonical = canonical.replace(/(?::free|-free)$/, '');
   canonical = canonical.replace(/\s*\([^)]*\)/g, '').replace(/[._\s]+/g, '-');
@@ -98,7 +98,17 @@ function priorFor(candidate, role, priors, now) {
   const liveBench = benchmarkValue(match, 'liveBench');
   if (liveBench !== null) result.liveBench = liveBench;
   if (stale) result.stale = true;
-  if (match.sources && match.sources.length) result.sources = match.sources;
+  if (match.sources && match.sources.length) {
+    result.sources = match.sources;
+    result.url = match.sources[0].url || match.url || null;
+    result.retrievedAt = match.sources[0].retrievedAt || retrievalDate || null;
+    result.source =
+      match.sources[0].id || match.sources[0].name || (priors && priors.label) || 'model-priors';
+  } else if (match.url) {
+    result.url = match.url;
+    result.retrievedAt = match.retrievedAt || retrievalDate || null;
+    result.source = match.source || (priors && priors.label) || 'model-priors';
+  }
   if (Number.isFinite(priorScore)) {
     result.score = Math.round(Math.max(0, Math.min(100, priorScore)));
   } else if (match.benchmarks || Number.isFinite(match.score) || match.score === null) {
@@ -215,12 +225,13 @@ function normaliseModelId(value) {
 // Preserve effort labels for exact leaderboard lookup; routing identity stays compatible.
 function leaderboardModelId(value) {
   if (typeof value !== 'string' || !value.trim()) return null;
-  return value
+  let raw = value
     .trim()
     .toLowerCase()
-    .replace(/\s*\(([^)]*)\)/g, (_, effort) => '-' + effort.replace(/[^a-z0-9]+/g, '-'))
-    .split('/')
-    .pop()
+    .replace(/\s*\(([^)]*)\)/g, (_, effort) => '-' + effort.replace(/[^a-z0-9]+/g, '-'));
+  raw = raw.split('::').pop();
+  raw = raw.split('/').pop();
+  return raw
     .split('@')[0]
     .replace(/(?::free|-free)$/, '')
     .replace(/[._\s]+/g, '-');
@@ -346,7 +357,8 @@ function assignQuartileTiers(rows) {
     .slice(1)
     .map((_, index) => scores[Math.ceil(((index + 1) * scores.length) / tiers.length) - 1]);
   for (const row of rows) {
-    if (row.score === null || !Number.isFinite(row.score)) {
+    if (row.score === null || row.score === undefined || !Number.isFinite(row.score)) {
+      row.score = null;
       row.codingTier = null;
       row.reviewTier = null;
       continue;
@@ -445,10 +457,21 @@ async function refreshPriors(options) {
   return document;
 }
 
+function arePriorsStale(priorsDoc, now) {
+  const p = priorsDoc || loadPriors();
+  if (!p || !Array.isArray(p.ranking) || p.ranking.length === 0) return false;
+  const sourceDates = (p.sources || []).map((s) => s && s.retrievedAt).filter(Boolean);
+  const retrievalDate = p.generatedAt || (sourceDates.length ? sourceDates[0] : null);
+  if (isStale(retrievalDate, now)) return true;
+  return p.ranking.some((item) => item && (item.stale === true || isStale(item.retrievedAt, now)));
+}
+
 module.exports = {
   loadPriors,
   priorFor,
   isStale,
+  arePriorsStale,
+  STALE_AFTER_MS,
   mergePriorDocuments,
   refreshPriors,
   normaliseModelId,

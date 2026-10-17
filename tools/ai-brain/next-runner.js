@@ -1413,6 +1413,21 @@ async function runNext(options, deps) {
     return { stopped: true, reason: 'STOP_FILE_EXISTS' };
   }
 
+  // Auto-refresh stale model priors in next --run without blocking on network error
+  if (opts.run) {
+    try {
+      const priorsApi = require('./priors');
+      const currentPriors = d.priors || priorsApi.loadPriors();
+      if (priorsApi.arePriorsStale(currentPriors, now)) {
+        if (typeof d.refreshPriors === 'function') {
+          await d.refreshPriors().catch(() => {});
+        } else {
+          await priorsApi.refreshPriors({ root: rootDir }).catch(() => {});
+        }
+      }
+    } catch (_) {}
+  }
+
   // 2. Find next work item
   const findResult = findNextWorkItem(opts, d);
   for (const s of findResult.skipped) {

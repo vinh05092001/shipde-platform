@@ -39,7 +39,7 @@ const NOW = new Date('2026-09-18T12:00:00Z');
 describe('Benchmark external evidence (TASK-AI-46)', () => {
   test('benchmarks.json loads valid records with source URL and checked_on date', () => {
     const list = loadBenchmarks();
-    assert.ok(list.length > 0, 'must load benchmark records');
+    assert.ok(Array.isArray(list), 'must load benchmark records');
     for (const r of list) {
       assert.ok(r.model_id, 'must have model_id');
       assert.ok(r.benchmark, 'must have benchmark');

@@ -693,14 +693,60 @@ function assembleCandidates(
 
   // 1. Discovery candidates
   const discCands = (discoveryCat && discoveryCat.candidates) || [];
+  const sourceList = Array.isArray(registry)
+    ? registry
+    : registry && Array.isArray(registry.sources)
+      ? registry.sources
+      : [];
+  const sourceMap = new Map(sourceList.map((s) => [s && s.id, s]));
+
   for (const dc of discCands) {
-    const accountId = dc.accountId || dc.account || '*';
+    let accountId = dc.accountId || dc.account || '*';
+    let credentialEnvMissing = false;
+    let blocked = dc.blocked;
+    let blockReason = dc.blockReason;
+    let blockScope = dc.blockScope;
+
+    if (accountId === '*') {
+      const sourceId =
+        (dc.sourceIds && dc.sourceIds.find((id) => sourceMap.has(id))) ||
+        (sourceMap.has(dc.accessPath) && dc.accessPath) ||
+        (sourceMap.has(dc.upstream) && dc.upstream) ||
+        (sourceMap.has(dc.gateway) && dc.gateway) ||
+        (sourceMap.has(dc.source) && dc.source);
+      const source = sourceId ? sourceMap.get(sourceId) : null;
+      if (
+        source &&
+        source.kind !== 'router' &&
+        source.credential &&
+        source.credential.type === 'api-key' &&
+        source.credential.env
+      ) {
+        const envName = source.credential.env;
+        const envVal = process.env[envName];
+        const hasKey = Boolean(envVal && String(envVal).trim().length > 0);
+        const accId = candidatesApi.deriveCredentialAccountId
+          ? candidatesApi.deriveCredentialAccountId(source)
+          : `${source.id}-${envName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+        if (hasKey) {
+          accountId = accId;
+        } else {
+          credentialEnvMissing = true;
+          blocked = true;
+          blockReason = 'CREDENTIAL_ENV_MISSING';
+          blockScope = 'credential';
+        }
+      }
+    }
+
     const modelId = dc.modelId || dc.model;
     const c = {
       ...dc,
       accountId,
       quotaScope: dc.quotaScope || (accountId !== '*' ? accountId : dc.upstream || ''),
       modelId,
+      ...(credentialEnvMissing ? { credentialEnvMissing: true } : {}),
+      ...(blocked ? { blocked: true, blockReason, blockScope } : {}),
     };
     const off = offeringMap.get(`${accountId}::${modelId}`) || offeringMap.get(modelId);
     if (off) {
@@ -941,6 +987,13 @@ function mergeEvidenceAccounts(inputAccounts, registryAccounts) {
 }
 
 function isCandidateRouteEligible(routeHealth, candidate, options, routeHealthApi, isExplicit) {
+  if (
+    candidate &&
+    (candidate.credentialEnvMissing === true ||
+      (candidate.blocked && candidate.blockReason === 'CREDENTIAL_ENV_MISSING'))
+  ) {
+    return false;
+  }
   if (options && options.allowUnprobedCandidates === true) return true;
   if (!routeHealth) return true;
   const modelId = candidate && candidate.modelId;
@@ -1098,24 +1151,72 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
   };
 
   if (Array.isArray(opts.candidates)) {
-    const buildExplicit = () =>
-      assembleCandidates(discoveryCat, [], resolvedRegistry, accounts, opts.candidates).filter(
-        (candidate) => {
-          if (!routeHealth) return true;
+    const buildExplicit = () => {
+      const explicitCandidates = assembleCandidates(
+        discoveryCat,
+        [],
+        resolvedRegistry,
+        accounts,
+        opts.candidates
+      );
+      const eligible = [];
+      const excludedRoutes = [];
+      const seenExcluded = new Set();
+      for (const candidate of explicitCandidates) {
+        let isEligible = true;
+        if (routeHealth) {
           const modelId = candidate && candidate.modelId;
           const gateway = candidate && candidate.gateway;
-          if (!modelId || !gateway) return Boolean(modelId);
-          const routePath = candidate.accountId
-            ? { id: gateway, accountId: candidate.accountId }
-            : gateway;
-          const rec = routeHealthApi.getPathRecord(routeHealth, modelId, routePath);
-          if (rec) return rec.status === 'AVAILABLE';
-          if (enforceEmptyHealth) {
-            return Boolean(opts.probeEvidence && opts.probeEvidence(modelId, routePath));
+          if (modelId && gateway) {
+            const routePath = candidate.accountId
+              ? { id: gateway, accountId: candidate.accountId }
+              : gateway;
+            const rec = routeHealthApi.getPathRecord(routeHealth, modelId, routePath);
+            if (rec) {
+              isEligible = rec.status === 'AVAILABLE';
+            } else if (enforceEmptyHealth) {
+              isEligible = Boolean(opts.probeEvidence && opts.probeEvidence(modelId, routePath));
+            }
           }
-          return true;
         }
-      );
+        if (isEligible) {
+          eligible.push(candidate);
+        } else {
+          const key = candidatesApi.candidateKey(candidate);
+          if (!seenExcluded.has(key)) {
+            seenExcluded.add(key);
+            const modelId = candidate && candidate.modelId;
+            const gateway = candidate && candidate.gateway;
+            const routePath =
+              candidate && candidate.accountId
+                ? { id: gateway, accountId: candidate.accountId }
+                : gateway;
+            const rec =
+              routeHealth && modelId && gateway
+                ? routeHealthApi.getPathRecord(routeHealth, modelId, routePath)
+                : null;
+            const reason = rec ? rec.status || 'ROUTE_UNAVAILABLE' : 'ROUTE_PROBE_UNPROVEN';
+            excludedRoutes.push({
+              offeringId: key,
+              candidateKey: key,
+              reason,
+              reasonCode: String(reason).split(':')[0],
+              scope: 'route',
+            });
+          }
+        }
+      }
+      Object.defineProperty(eligible, 'excludedRoutes', {
+        value: excludedRoutes,
+        enumerable: false,
+        writable: true,
+        configurable: true,
+      });
+      if (opts && Array.isArray(opts.excludedRoutes)) {
+        opts.excludedRoutes.push(...excludedRoutes);
+      }
+      return eligible;
+    };
     if (!refresh) return buildExplicit();
     return Promise.resolve(persistHealth()).then(buildExplicit);
   }
@@ -1138,36 +1239,27 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
 
   const buildCandidates = () => {
     const assembled = assembleCandidates(discoveryCat, offs, resolvedRegistry, accounts, null, [
-      ...candidatesApi
-        .generateCandidates({
-          harness: opts.harness,
-          registry: resolvedRegistry,
-          accounts: accounts || [],
-          openCodeIds: (accounts || []).flatMap((account) =>
-            ((account && account.models) || [])
-              .map((model) => (typeof model === 'string' ? model : model && model.model))
-              .filter(Boolean)
-          ),
-          catalogue:
-            catalogueRows.length > 0
-              ? catalogueRows
-              : (discoveryCat && discoveryCat.candidates) || [],
-          evidenceData: opts.evidenceData,
-          fakeRunsDir: opts.fakeRunsDir,
-          home: opts.home,
-          discoverPool: opts.discoverPool !== false,
-          adapterScript: opts.adapterScript,
-          platform: opts.platform,
-          keepExhausted: true,
-        })
-        .filter((candidate) =>
-          isCandidateRouteEligible(
-            routeHealth,
-            candidate,
-            Object.assign({}, opts, { requireRouteHealth: enforceMissingHealth }),
-            routeHealthApi
-          )
+      ...candidatesApi.generateCandidates({
+        harness: opts.harness,
+        registry: resolvedRegistry,
+        accounts: accounts || [],
+        openCodeIds: (accounts || []).flatMap((account) =>
+          ((account && account.models) || [])
+            .map((model) => (typeof model === 'string' ? model : model && model.model))
+            .filter(Boolean)
         ),
+        catalogue:
+          catalogueRows.length > 0
+            ? catalogueRows
+            : (discoveryCat && discoveryCat.candidates) || [],
+        evidenceData: opts.evidenceData,
+        fakeRunsDir: opts.fakeRunsDir,
+        home: opts.home,
+        discoverPool: opts.discoverPool !== false,
+        adapterScript: opts.adapterScript,
+        platform: opts.platform,
+        keepExhausted: true,
+      }),
       ...candidatesApi.gatewayAccountCandidates({
         registry: resolvedRegistry,
         accounts: accounts || [],
@@ -1264,14 +1356,61 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
       }
       assembled.push(...directCandidates);
     }
-    return assembled.filter((candidate) =>
-      isCandidateRouteEligible(
-        routeHealth,
-        candidate,
-        Object.assign({}, opts, { requireRouteHealth: enforceMissingHealth }),
-        routeHealthApi
-      )
-    );
+    const eligible = [];
+    const excludedRoutes = [];
+    const seenExcluded = new Set();
+    for (const candidate of assembled) {
+      if (
+        isCandidateRouteEligible(
+          routeHealth,
+          candidate,
+          Object.assign({}, opts, { requireRouteHealth: enforceMissingHealth }),
+          routeHealthApi
+        )
+      ) {
+        eligible.push(candidate);
+      } else {
+        const key = candidatesApi.candidateKey(candidate);
+        if (!seenExcluded.has(key)) {
+          seenExcluded.add(key);
+          const modelId = candidate && candidate.modelId;
+          const gateway =
+            candidate &&
+            (candidate.gateway ||
+              (opts && opts.harness === 'hermes' && (candidate.sourceId || candidate.source)));
+          const isWildcard = !candidate.accountId || candidate.accountId === '*';
+          const routePath = isWildcard ? gateway : { id: gateway, accountId: candidate.accountId };
+          const rec =
+            routeHealth && modelId && gateway
+              ? routeHealthApi.getPathRecord(routeHealth, modelId, routePath)
+              : null;
+          const reason =
+            candidate &&
+            (candidate.credentialEnvMissing || candidate.blockReason === 'CREDENTIAL_ENV_MISSING')
+              ? 'CREDENTIAL_ENV_MISSING'
+              : rec
+                ? rec.status || 'ROUTE_UNAVAILABLE'
+                : 'ROUTE_PROBE_UNPROVEN';
+          excludedRoutes.push({
+            offeringId: key,
+            candidateKey: key,
+            reason,
+            reasonCode: String(reason).split(':')[0],
+            scope: candidate && candidate.blockReason ? 'account' : 'route',
+          });
+        }
+      }
+    }
+    Object.defineProperty(eligible, 'excludedRoutes', {
+      value: excludedRoutes,
+      enumerable: false,
+      writable: true,
+      configurable: true,
+    });
+    if (opts && Array.isArray(opts.excludedRoutes)) {
+      opts.excludedRoutes.push(...excludedRoutes);
+    }
+    return eligible;
   };
   if (!refresh) return buildCandidates();
   return Promise.resolve(persistHealth()).then(buildCandidates);
@@ -1594,10 +1733,16 @@ function buildDryRunLog(parts) {
   }
   const candidates = (parts.annotated || []).map((c) => {
     const key = parts.candidatesApi.candidateKey(c);
+    const scoreVal =
+      (c.scoreBreakdown && c.scoreBreakdown.quality === null) ||
+      c.score === null ||
+      c.score === undefined
+        ? 'chưa rõ'
+        : c.score;
     return Object.assign(sevenFields(c), {
       offeringId: key,
       status: c.status === 'passed' ? 'PASS' : c.status || 'unknown',
-      score: c.score,
+      score: scoreVal,
     });
   });
   for (const c of candidates) {
@@ -1649,7 +1794,12 @@ function buildDryRunLog(parts) {
       reason: decision.reason,
       ordered: (decision.candidates || []).map((c) => ({
         offeringId: c.offeringId,
-        score: c.score,
+        score:
+          (c.scoreBreakdown && c.scoreBreakdown.quality === null) ||
+          c.score === null ||
+          c.score === undefined
+            ? 'chưa rõ'
+            : c.score,
         headroom: c.headroom || 'unknown',
       })),
     },
@@ -2161,11 +2311,22 @@ function dispatchCommand(args, deps = {}) {
           offeringId: candidate.candidateKey,
           headroom: candidate.headroomStatus,
         })),
-        rejected: result.rejected.map((candidate) => ({
-          ...candidate,
-          offeringId: candidate.candidateKey,
-          reason: candidate.reason || candidate.reasonCode,
-        })),
+        rejected: [
+          ...result.rejected.map((candidate) => ({
+            ...candidate,
+            offeringId: candidate.candidateKey,
+            reason: candidate.reason || candidate.reasonCode,
+          })),
+          ...(
+            (offered && offered.excludedRoutes) ||
+            (candidateList && candidateList.excludedRoutes) ||
+            []
+          ).map((candidate) => ({
+            ...candidate,
+            offeringId: candidate.candidateKey || candidate.offeringId,
+            reason: candidate.reason || candidate.reasonCode,
+          })),
+        ],
       };
     };
     const decision = rankDryRun(annotated);
@@ -2187,6 +2348,7 @@ function dispatchCommand(args, deps = {}) {
       const ranked = candidateFromDecision(decision, candidatesApi.candidateKey(c));
       if (ranked) {
         c.score = ranked.score;
+        c.scoreBreakdown = ranked.scoreBreakdown;
         c.headroomStatus = ranked.headroom;
       }
     }
@@ -2333,7 +2495,13 @@ function dispatchCommand(args, deps = {}) {
     log('Ranked candidates for ' + item.workItemId + ':');
     for (let i = 0; i < decision.candidates.length; i++) {
       const c = decision.candidates[i];
-      log('  ' + (i + 1) + '. ' + c.offeringId + ' (score: ' + c.score + ')');
+      const displayScore =
+        (c.scoreBreakdown && c.scoreBreakdown.quality === null) ||
+        c.score === null ||
+        c.score === undefined
+          ? 'chưa rõ'
+          : c.score;
+      log('  ' + (i + 1) + '. ' + c.offeringId + ' (score: ' + displayScore + ')');
     }
     log('Chosen: ' + decision.chosen);
     if (fallback && fallback.chosen) {
@@ -4485,6 +4653,7 @@ module.exports = {
   // ranking decision, the failure-domain rule, the atomic checkpoint store.
   readCheckpoint,
   writeJsonFile,
+  buildDryRunLog,
   sameFailureDomain,
   applyFailureBlocks,
   applyDryRunBlocks,
