@@ -293,6 +293,10 @@ keeps the actual launch error, without charging the provider a failure or cooldo
 Offline regression in `task-ai-121.test.js`: origin/main launched four times; the
 fix stops after two `PROVISION_BASE_MISMATCH` failures.
 
+### H3 live: pre-launch check uses the carry-over rule (2026-10-17)
+
+Run 4 of goal G-F622511E chose ag/gemini-3.8-flash (health keys fixed) but 20 launches failed PROVISION_BASE_MISMATCH at the second check, "worker root HEAD before agent start", which still compared the carry-over merge with the base. It now applies the same rule as provisioning; a retained worker head must still match exactly.
+
 ### H3 live: route health per upstream behind a shared gateway (2026-10-17)
 
 The third live run of goal G-F622511E exhausted its probe budget: ag/gemini-3.8-flash through 9router answered 200, but route health keyed it as gemini-3.8-flash|9router@ninerouter after stripping a fixed list of upstream prefixes, so a GEO_BLOCKED from another upstream blocked it until the next day. Health keys now keep the routed model id and drop a prefix only when it names the route itself (ag/x on route ag). Catalogue normalisation is unchanged.
