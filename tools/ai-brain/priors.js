@@ -290,6 +290,7 @@ function mergePriorDocuments(documents, now) {
       );
       for (const source of sourceRows) {
         row.sources.push({
+          ...(source.id ? { id: source.id } : source.name ? { id: source.name } : {}),
           url: source.url,
           retrievedAt:
             source.retrievedAt || document.retrievedAt || new Date(now || Date.now()).toISOString(),
@@ -300,24 +301,47 @@ function mergePriorDocuments(documents, now) {
         const score = Number(value && typeof value === 'object' ? value.score : value);
         if (!Number.isFinite(score)) continue;
         const benchmarkSource = value && value.source ? value.source : sourceRows[0] || null;
-        row.benchmarks.push({ name, score, source: benchmarkSource });
-        if (benchmarkSource && benchmarkSource.url) {
-          row.sources.push({
-            url: benchmarkSource.url,
-            retrievedAt:
-              benchmarkSource.retrievedAt ||
-              document.retrievedAt ||
-              new Date(now || Date.now()).toISOString(),
-          });
+        const normalizedBenchmarkSource = benchmarkSource
+          ? {
+              ...(benchmarkSource.id
+                ? { id: benchmarkSource.id }
+                : benchmarkSource.name
+                  ? { id: benchmarkSource.name }
+                  : {}),
+              url: benchmarkSource.url,
+              retrievedAt:
+                benchmarkSource.retrievedAt ||
+                document.retrievedAt ||
+                new Date(now || Date.now()).toISOString(),
+            }
+          : null;
+        row.benchmarks.push({ name, score, source: normalizedBenchmarkSource });
+        if (normalizedBenchmarkSource && normalizedBenchmarkSource.url) {
+          row.sources.push(normalizedBenchmarkSource);
         }
       }
       const directScore = benchmarkScore(item);
-      if (directScore !== null)
+      if (directScore !== null) {
+        const directSource = sourceRows[0]
+          ? {
+              ...(sourceRows[0].id
+                ? { id: sourceRows[0].id }
+                : sourceRows[0].name
+                  ? { id: sourceRows[0].name }
+                  : {}),
+              url: sourceRows[0].url,
+              retrievedAt:
+                sourceRows[0].retrievedAt ||
+                document.retrievedAt ||
+                new Date(now || Date.now()).toISOString(),
+            }
+          : null;
         row.benchmarks.push({
           name: 'aggregate',
           score: directScore,
-          source: sourceRows[0] || null,
+          source: directSource,
         });
+      }
       if (item.releaseDate) row.releaseDate = item.releaseDate;
       if (Number.isFinite(Number(item.contextWindow)))
         row.contextWindow = Number(item.contextWindow);
