@@ -248,6 +248,10 @@ Decision log entries link `goalId -> workItemId -> candidateKey -> session -> co
 - Part H2 Hermes session selection, custom config binding, and `shipde-controller` skill file are delivered in Part H2.
 - Live acceptance across chat and controller runs in Part H3 following merge of H1 and H2.
 
+### H3 live: carry-over keeps the base check (2026-10-17)
+
+The second live Controller run of goal G-F622511E failed TURN_BUDGET_EXCEEDED: 17 launches in a row failed PROVISION_BASE_MISMATCH because carry-over merged the previous attempt into the fresh checkout and the base check compared that merge commit with the base. When carry-over merged, the provisioned HEAD must be a merge whose first parent is the base; otherwise HEAD must equal the base.
+
 ### H3 live: host gate sees what CI sees (2026-10-17)
 
 The first live Controller run after the writer-selection audit (goal G-F622511E) chose a writer (9router ag/gemini-3.8-flash) that produced a commit, but the host brain gate failed 11 candidate tests: loadSources() merged this machine's discovery data (tools/ai-brain/data/sources.json, 33 sources) into every registry, including explicit test registries. An explicit registry file is now read alone unless a discovered file is named; AI_BRAIN_DISCOVERED_SOURCES=none turns machine discovery data off, and the host gate sets it. data/sources.json is gitignored.
