@@ -98,7 +98,11 @@ test('credentialed HTTP intake refusal happens before fetch and retains the actu
   const result = await health.probeGatewayModel(candidate.modelId, route, {
     registry: {
       sources: [
-        { id: route.id, endpoint: 'http://localhost/v1', credential: { env: 'FIXTURE_API_KEY' } },
+        {
+          id: route.id,
+          endpoint: 'http://router.example/v1',
+          credential: { env: 'FIXTURE_API_KEY' },
+        },
       ],
     },
     fetch: async () => {
@@ -135,3 +139,36 @@ for (const [status, body, cause] of [
     assert.ok(health.probeCooldown(candidate, options));
   });
 }
+
+test('a credentialed probe to the local router on loopback is sent, not refused', async () => {
+  // Live 17/10: 9router listens on http://127.0.0.1; the HTTPS guard refused
+  // it before any request, so a route that answered 200 failed every probe.
+  let fetches = 0;
+  const previous = process.env.FIXTURE_LOOPBACK_KEY;
+  process.env.FIXTURE_LOOPBACK_KEY = 'fixture-not-a-secret';
+  try {
+    const result = await health.probeGatewayModel(candidate.modelId, route, {
+      registry: {
+        sources: [
+          {
+            id: route.id,
+            endpoint: 'http://127.0.0.1:65530/v1',
+            credential: { env: 'FIXTURE_LOOPBACK_KEY' },
+          },
+        ],
+      },
+      fetch: async () => {
+        fetches++;
+        return new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      },
+    });
+    assert.equal(fetches, 1, 'the probe reached the local router');
+    assert.doesNotMatch(String(result.error || ''), /must use HTTPS/);
+  } finally {
+    if (previous === undefined) delete process.env.FIXTURE_LOOPBACK_KEY;
+    else process.env.FIXTURE_LOOPBACK_KEY = previous;
+  }
+});

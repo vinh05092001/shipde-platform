@@ -248,6 +248,10 @@ Decision log entries link `goalId -> workItemId -> candidateKey -> session -> co
 - Part H2 Hermes session selection, custom config binding, and `shipde-controller` skill file are delivered in Part H2.
 - Live acceptance across chat and controller runs in Part H3 following merge of H1 and H2.
 
+### H3 live: local router probes are sent over loopback (2026-10-17)
+
+Root cause of the run-5 failure of goal G-F622511E: `probeGatewayModel` refused every credentialed probe whose endpoint was not HTTPS, including 9router at http://127.0.0.1, so a route that answered 200 failed before any request with status 0. Plain HTTP is now allowed only to loopback hosts; any other host still needs HTTPS. Correction to the note below: an unexplained probe failure is recorded as PROBE_NO_RESPONSE with no cooldown (not UNAVAILABLE_NOW), and the decision log keeps the redacted raw result (status, error, body).
+
 ### H3 live: unknown probe evidence does not park a route (2026-10-17)
 
 A failed probe without HTTP response evidence or an explicit failure cause is

@@ -1259,7 +1259,12 @@ async function probeGatewayModel(modelId, routeId, options) {
   } catch {
     return { ok: false, status: 0, error: 'route endpoint is invalid' };
   }
-  if (envName && configuredUrl.protocol !== 'https:')
+  // A credential may travel over plain HTTP only to this machine (the local
+  // router listens on loopback); anything else must be HTTPS. Live 17/10: the
+  // guard refused 9router at 127.0.0.1 before any request, so every intake
+  // probe of a working route failed with status 0.
+  const loopback = ['localhost', '127.0.0.1', '[::1]', '::1'].includes(configuredUrl.hostname);
+  if (envName && configuredUrl.protocol !== 'https:' && !loopback)
     return { ok: false, status: 0, error: 'credentialed probe endpoint must use HTTPS' };
   const token = envName && process.env[envName];
   if (envName && !token) return { ok: false, status: 401, error: 'route credential unavailable' };
