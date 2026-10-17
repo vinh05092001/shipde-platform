@@ -569,3 +569,93 @@ test('H3 repeated local launch config stops at second identical normalized failu
   assert.match(log.launches.at(-1).fallbackReason, /PROVISION_BASE_MISMATCH/);
   assertNoEvidenceCooldown(f.evidenceData, [f.writerKey, f.writer2Key]);
 });
+
+test('H3 cooldown logging summarizes three rounds of one thousand unchanged routes', async (t) => {
+  const dir = tmpDir('retry-cooldown-');
+  const host = makeRepo(path.join(dir, 'host'));
+  const f = launchHarness([{ id: 'A', files: ['a.js'], verification: { command: 'test' } }], {
+    host,
+    decisionDir: path.join(dir, 'decisions'),
+    usageDir: path.join(dir, 'usage'),
+    run: (job, state) => {
+      throw new Error(PROVISION_MSG + (state.calls.length === 1 ? ' first' : ' repeated'));
+    },
+  });
+  const routeHealth = { version: 1, paths: {}, events: [] };
+  f.opts.tokenBudgets = { default: { maxTurns: 3 } };
+  f.opts.routeHealth = routeHealth;
+  f.opts.persistRouteHealth = false;
+  for (let i = 0; i < 1000; i++) {
+    const cold = cand('cold-' + i, 'author.foundation');
+    require('../route-health').rememberProbe(
+      cold,
+      { ok: false, status: 503, body: 'unavailable' },
+      { routeHealth, persistRouteHealth: false, now: NOW }
+    );
+    f.opts.candidates.push(cold);
+  }
+  await runOrchestration('cooldown summary', f.opts);
+  const records = decisionRecords(f.opts.decisionDir);
+  const cooldown = records.filter(
+    (r) => r.stage === 'refused' && JSON.stringify(r).includes('PROBE_COOLDOWN')
+  );
+  assert.equal(cooldown.length, 3, 'one summary per reason per selection round');
+  assert.equal(f.state.calls.length, 3);
+  for (const r of cooldown) {
+    assert.equal(r.count, 1000);
+    assert.ok(r.earliestNextCheckAt);
+    assert.ok(!r.rejected?.length, 'unchanged routes do not produce individual records');
+  }
+  assert.ok(records.some((r) => r.stage === 'selected' && r.chosen === f.writerKey));
+  const oldDir = path.join(dir, 'old-round');
+  for (const cold of f.opts.candidates.filter((c) => c.modelId.startsWith('model-cold-'))) {
+    const reason = require('../route-health').probeCooldown(cold, f.opts);
+    require('../decisions').recordDecision(
+      {
+        stage: 'refused',
+        workItemId: 'A',
+        rejected: [{ candidateKey: candidateKey(cold), reason }],
+        detail: reason,
+      },
+      { dir: oldDir, now: NOW }
+    );
+  }
+  const bytes = (rows) => rows.reduce((n, r) => n + Buffer.byteLength(JSON.stringify(r) + '\n'), 0);
+  t.diagnostic(
+    'one cooldown round bytes: before=' +
+      bytes(decisionRecords(oldDir)) +
+      '; after=' +
+      bytes([cooldown[0]])
+  );
+});
+
+test('H3 cooldown transitions preserve new refusals and expiry changes per item', () => {
+  const dir = tmpDir('cooldown-transitions-');
+  const decisions = require('../decisions');
+  const states = new Map();
+  const options = { dir, now: NOW };
+  const entry = { workItemId: 'A' };
+  const first = 'PROBE_COOLDOWN: RATE_LIMITED until ' + new Date(NOW + 1000).toISOString();
+  const later = 'PROBE_COOLDOWN: RATE_LIMITED until ' + new Date(NOW + 2000).toISOString();
+  const round = (reason) =>
+    decisions.recordRouteRefusals([{ candidateKey: 'route-a', reason }], states, entry, options);
+  round(first);
+  round(first);
+  round(later);
+  round(null);
+  round('NEW_REFUSAL');
+  round('NEW_REFUSAL');
+  const records = decisionRecords(dir);
+  assert.equal(records.filter((r) => r.candidateKey === 'route-a').length, 3);
+  assert.ok(records.some((r) => r.detail === later && r.previousReason === first));
+  assert.ok(records.some((r) => r.stage === 'resumed' && r.candidateKey === 'route-a'));
+  assert.ok(records.some((r) => r.detail === 'NEW_REFUSAL'));
+  const fresh = new Map();
+  decisions.recordRouteRefusals(
+    [{ candidateKey: 'route-a', reason: first }],
+    fresh,
+    { workItemId: 'B' },
+    options
+  );
+  assert.equal(decisionRecords(dir).at(-1).count, 1);
+});

@@ -248,6 +248,16 @@ Decision log entries link `goalId -> workItemId -> candidateKey -> session -> co
 - Part H2 Hermes session selection, custom config binding, and `shipde-controller` skill file are delivered in Part H2.
 - Live acceptance across chat and controller runs in Part H3 following merge of H1 and H2.
 
+### H3 live: summarize unchanged route cooldowns per item (2026-10-17)
+
+Each writer selection/probe round records counts by cooldown reason and the earliest
+reopening time. Initial cooldown inventory is summarized; individual route details
+are recorded on state changes, including expiry changes and recovery. State belongs
+to one item. Selected routes and new non-cooldown refusals retain their records.
+Offline regression: 1,000 unchanged cooldown routes over three rounds produce three
+summary records. The same fixture's cooldown-only bytes per round fall from 467,340
+to 239. The origin/main regression is red (4,000 records before its turn-budget stop).
+
 ### H3 live: stop identical local launch configuration retries (2026-10-17)
 
 The item stops when the same local `launch_config` cause and whitespace-normalized,

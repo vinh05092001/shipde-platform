@@ -179,6 +179,46 @@ function dayFile(dir, now) {
  * @param options { dir, now }
  * @returns the record as written
  */
+function recordRouteRefusals(entries, previous, entry, options) {
+  const summaries = new Map();
+  for (const { candidateKey, reason } of entries) {
+    const cooldown = String(reason || '').match(
+      /^(PROBE_COOLDOWN(?:_ACCOUNT)?): (.*?)(?: until (.*))?$/
+    );
+    if (cooldown) {
+      const code =
+        cooldown[1] === 'PROBE_COOLDOWN_ACCOUNT' ? cooldown[1] : cooldown[1] + ': ' + cooldown[2];
+      const nextCheckAt = cooldown[3] || null;
+      const summary = summaries.get(code) || { reason: code, count: 0, earliestNextCheckAt: null };
+      summary.count += 1;
+      if (
+        nextCheckAt &&
+        (!summary.earliestNextCheckAt || nextCheckAt < summary.earliestNextCheckAt)
+      )
+        summary.earliestNextCheckAt = nextCheckAt;
+      summaries.set(code, summary);
+    }
+    const seen = previous.has(candidateKey);
+    const prior = previous.get(candidateKey);
+    if ((seen && prior !== reason) || (!seen && reason && !cooldown)) {
+      recordDecision(
+        {
+          ...entry,
+          stage: reason ? Stage.REFUSED : Stage.RESUMED,
+          rejected: reason ? [{ candidateKey, reason }] : [],
+          candidateKey,
+          detail: reason,
+          previousReason: prior || null,
+        },
+        options
+      );
+    }
+    previous.set(candidateKey, reason);
+  }
+  for (const summary of summaries.values())
+    recordDecision({ ...entry, stage: Stage.REFUSED, ...summary, detail: summary.reason }, options);
+}
+
 function recordDecision(entry, options) {
   const opts = options || {};
   const dir = opts.dir || DEFAULT_DIR;
@@ -600,6 +640,7 @@ module.exports = {
   compactDecisions,
   DEFAULT_DIR,
   recordDecision,
+  recordRouteRefusals,
   readDecisions,
   readDecisionsSafe,
   readDecisionsDetailed,

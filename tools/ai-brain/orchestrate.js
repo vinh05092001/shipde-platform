@@ -4380,6 +4380,7 @@ async function runOrchestration(goal, opts) {
     let session = null;
     const recordedWriterFailures = new Set();
     const localLaunchFailures = new Set();
+    const routeRefusalStates = new Map();
 
     // TASK-AI-117 (RS-R01/RS-R02): a checkpoint whose launch already completed
     // (a worker commit and exit 0) has nothing to relaunch and nothing to
@@ -4549,8 +4550,13 @@ async function runOrchestration(goal, opts) {
       );
       // Ranking work (jsonSchema proofs share their own budget) must not spend the probe budget.
       writerProbeStartedAt = Date.now();
+      const preProbeCooldowns = [];
       const refuse = (candidate, reason, exclude = true) => {
         if (exclude) failedKeys.add(candidateKey(candidate));
+        if (/^PROBE_COOLDOWN/.test(reason)) {
+          preProbeCooldowns.push({ candidateKey: candidateKey(candidate), reason });
+          return;
+        }
         decisions.recordDecision(
           {
             stage: decisions.Stage.REFUSED,
@@ -4654,6 +4660,12 @@ async function runOrchestration(goal, opts) {
           return false;
         },
       });
+      decisions.recordRouteRefusals(
+        preProbeCooldowns,
+        routeRefusalStates,
+        { workItemId: item.id },
+        logOpts
+      );
       if (batch.winner) {
         for (const [key, result] of writerProbeResults) {
           if (result?.ok !== true) failedKeys.add(key);
@@ -4676,25 +4688,22 @@ async function runOrchestration(goal, opts) {
       //    launch, with the ranking inputs it was made from (AI-64-R03).
       const currentItemStep = liveSteps[item.id] || savedStep;
       const failedForSelection = new Set(failedKeys);
-      for (const offered of candidates) {
-        const reason = writerProbeResults.has(candidateKey(offered))
+      const routeRefusals = candidates.map((offered) => {
+        const key = candidateKey(offered);
+        const reason = writerProbeResults.has(key)
           ? null
           : require('./route-health').probeCooldown(offered, o) ||
             require('./route-health').tpmTooSmall(offered, o) ||
             require('./route-health').contextOverflowObserved(offered, o);
-        if (reason) {
-          failedForSelection.add(candidateKey(offered));
-          decisions.recordDecision(
-            {
-              stage: decisions.Stage.REFUSED,
-              workItemId: item.id,
-              rejected: [{ candidateKey: candidateKey(offered), reason }],
-              detail: reason,
-            },
-            logOpts
-          );
-        }
-      }
+        if (reason) failedForSelection.add(key);
+        return { candidateKey: key, reason };
+      });
+      decisions.recordRouteRefusals(
+        routeRefusals,
+        routeRefusalStates,
+        { workItemId: item.id, attempt },
+        logOpts
+      );
       // Prefer completed live probes, retaining Controller eligibility checks.
       const liveKeys = candidates
         .filter(
