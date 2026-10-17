@@ -1852,7 +1852,11 @@ function runHostBrainGate(job, options = {}) {
     encoding: 'utf8',
     timeout: options.brainGateTimeoutMs || 30 * 60 * 1000,
     maxBuffer: 64 * 1024 * 1024,
-    env: Object.assign({}, process.env, { NINEROUTER_API_KEY: undefined }),
+    // The suite must see what CI sees: no router key, no machine discovery data.
+    env: Object.assign({}, process.env, {
+      NINEROUTER_API_KEY: undefined,
+      AI_BRAIN_DISCOVERED_SOURCES: 'none',
+    }),
   });
   const output = String(result.stdout || '') + '\n' + String(result.stderr || '');
   const failed = [...output.matchAll(/(?:not ok \d+ - |✖ )([^\r\n]+)/g)].map((match) =>
