@@ -221,7 +221,9 @@ Inspect writer candidates without launching models.
       registry,
       baseSha: 'a'.repeat(40),
       buildCatalogue: () => ['fixture-model'],
-      listAccounts: () => [],
+      listAccounts: () => [
+        { id: 'native-codex-fixture', sourceId: 'codex', models: ['fixture-model'] },
+      ],
       routeHealth: { paths: {}, events: [] },
       persistRouteHealth: false,
       probeRoute: () => {
@@ -233,7 +235,7 @@ Inspect writer candidates without launching models.
     }
   );
   const accounts = JSON.parse(fs.readFileSync(command.runFiles.accounts, 'utf8'));
-  assert.equal(accounts[0].enabled, true);
+  assert.ok(accounts.some((a) => a.endpoint && a.enabled === true));
   assert.equal(command.argv[command.argv.indexOf('--external-workers') + 1], 'agy-pool');
   const rows = require('../candidates').generateCandidates({
     registry,
@@ -243,7 +245,7 @@ Inspect writer candidates without launching models.
     discoverPool: false,
     externalWorkers: command.argv[command.argv.indexOf('--external-workers') + 1],
   });
-  assert.ok(rows.some((c) => c.harness === 'codex'));
+  assert.ok(rows.some((c) => c.harness === 'codex' && c.accountId === 'native-codex-fixture'));
   assert.ok(rows.some((c) => c.harness === 'agy-pool'));
 });
 

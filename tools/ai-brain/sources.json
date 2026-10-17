@@ -97,6 +97,7 @@
     },
     {
       "id": "agy-local",
+      "accountProviders": ["antigravity"],
       "label": "agy (local)",
       "kind": "agent-cli",
       "servesModels": true,
@@ -162,6 +163,8 @@
     },
     {
       "id": "agy-gateway",
+      "writerHarness": "opencode-direct",
+      "opencodeProvider": "agy-gateway",
       "label": "Agy Pool Gateway",
       "kind": "router",
       "servesModels": true,

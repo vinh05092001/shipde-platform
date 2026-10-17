@@ -257,6 +257,7 @@ function resolveLauncher(o, isolatedLauncher) {
       baseSha: job.baseSha,
       branch: job.branch,
       workItemId: job.title || (job.labels && job.labels.workItem) || null,
+      commitFileOnlyWriter: /^author(?:\.|$)|^(?:writer|repair)$/.test(job.labels?.role || ''),
       retainWorkerHead: job.retainWorkerHead || undefined,
       verdictPath: job.verdictPath,
       exercise: job.exercise || o.exercise || null,
@@ -3119,6 +3120,7 @@ function buildCandidates(options, evidenceData) {
       discoverPool: o.discoverPool,
       openCodeIds: o.openCodeIds || [],
       codexOpts: o.codexOpts,
+      sourceModels: o.sourceModels,
     });
   }
   const testsInjectedCandidates = Array.isArray(o.candidates);

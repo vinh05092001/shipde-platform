@@ -1393,6 +1393,16 @@ function rankForProfile(candidates, profile, assessment, ctx) {
 
     const headroom = ranking.resolveCandidateHeadroom(c, context);
     c.headroomStatus = headroom.status;
+    if (
+      profile.role === 'writer' &&
+      c.binding === 'cli-login' &&
+      !['open', 'tight'].includes(headroom.status) &&
+      headroom.status !== 'exhausted' &&
+      headroom.status !== 'cooling'
+    ) {
+      reject('NATIVE_WRITER_QUOTA_UNVERIFIED', 'account');
+      continue;
+    }
     if (headroom.status === 'exhausted' || headroom.status === 'cooling') {
       reject(
         headroom.status === 'exhausted' ? 'QUOTA_EXHAUSTED' : 'COOLDOWN_ACTIVE',

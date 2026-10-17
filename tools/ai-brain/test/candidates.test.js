@@ -476,7 +476,7 @@ describe('candidate generation', () => {
           id: 'antigravity',
           kind: 'agent-cli',
           modelsFrom: 'account',
-          harness: 'paseo',
+          harness: 'agy',
           accessPath: 'cli',
         },
       ],

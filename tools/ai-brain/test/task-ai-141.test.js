@@ -251,7 +251,7 @@ test('Codex harness and launcher require the fresh CLOSED verdict', () => {
         isolationVerdictPath: verdictPath,
         prompt: 'task',
       }),
-      ['exec', '--dangerously-bypass-approvals-and-sandbox', 'task']
+      ['exec', '--sandbox', 'workspace-write', 'task']
     );
   } finally {
     if (previous === undefined) delete process.env.LOCALAPPDATA;
@@ -323,7 +323,7 @@ test('Codex harness runs the fake CLI with the isolated worker arguments', (t) =
     assert.equal(result.status, 0, result.stderr);
     assert.match(
       result.stdout,
-      /exec --dangerously-bypass-approvals-and-sandbox --model codex-fixture-model fake prompt/
+      /exec --sandbox workspace-write --model codex-fixture-model fake prompt/
     );
   } finally {
     if (previous === undefined) delete process.env.LOCALAPPDATA;
