@@ -60,3 +60,12 @@ test('a carry-over merge on top of the base matches; anything else does not', ()
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('both provisioning base checks use the carry-over rule', () => {
+  // Live 17/10 run 4: the provisioning check passed, then the pre-launch check
+  // ("worker root HEAD before agent start") still compared the carry-over merge
+  // with the base and failed 20 launches.
+  const src = fs.readFileSync(path.join(__dirname, '..', 'isolation-launcher.js'), 'utf8');
+  const calls = src.match(/provisionedHeadMatchesBase\(workerRoot,/g) || [];
+  assert.ok(calls.length >= 2, 'provisioning and pre-launch checks both apply the rule');
+});

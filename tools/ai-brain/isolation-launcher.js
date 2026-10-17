@@ -2404,7 +2404,11 @@ function getIsolatedLauncher() {
         preLaunchHead = revRes.stdout.trim();
       }
     }
-    if (!preLaunchHead || preLaunchHead.toLowerCase() !== expectedActiveSha.toLowerCase()) {
+    // Same rule as provisioning: a carried-over merge on the base is the base.
+    const preLaunchOk = retainWorkerHead
+      ? Boolean(preLaunchHead) && preLaunchHead.toLowerCase() === expectedActiveSha.toLowerCase()
+      : provisionedHeadMatchesBase(workerRoot, preLaunchHead, headSha, carriedOver);
+    if (!preLaunchOk) {
       const code = retainWorkerHead ? 'WORKER_HEAD_MISMATCH' : 'PROVISION_BASE_MISMATCH';
       const err = new Error(
         code +
