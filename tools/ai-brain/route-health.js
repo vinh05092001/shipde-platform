@@ -8,6 +8,7 @@ const sourcesApi = require('./sources');
 const { atomicRenameSync } = require('./atomic-rename');
 const { candidateKey } = require('./discovery/identity');
 const { CLASSIFIER_VERSION } = require('./route-probe');
+const PROBE_BODY_LIMIT = 500;
 
 const BACKOFF_MS = [30 * 60e3, 2 * 60 * 60e3, 6 * 60 * 60e3, 24 * 60 * 60e3];
 
@@ -111,7 +112,50 @@ function dueAt(record, now) {
   );
 }
 
-function recordResult(store, modelId, routeId, result, now) {
+// Missing transport evidence is not evidence that a provider refused the route.
+function isUnverifiedProbe(result) {
+  if (result?.ok || Number(result?.status) > 0 || result?.cause || result?.reasonCode) return false;
+  const cause = require('./route-probe').classifyProbeFailure({
+    ...result,
+    body: result?.body || result?.message || result?.error,
+  });
+  return cause === 'PROBE_NO_RESPONSE';
+}
+
+function unverifiedRecord(record) {
+  return Boolean(
+    record &&
+    (record.status === 'PROBE_NO_RESPONSE' ||
+      (record.status === 'UNAVAILABLE_NOW' && !record.httpStatus && !record.probeCause))
+  );
+}
+
+function recordUnknownProbe(modelId, routeId, result, now, options) {
+  const o = options || {};
+  if (!o.decisionDir) return;
+  const decisions = require('./decisions');
+  const redact = decisions.createSecretRedactor({ ...process.env, ...o.env });
+  decisions.recordDecision(
+    {
+      stage: decisions.Stage.WARNING,
+      workItemId: o.workItemId,
+      modelId,
+      routeId,
+      cause: 'PROBE_NO_RESPONSE',
+      probeResult: {
+        ok: result?.ok ?? null,
+        status: result?.status ?? null,
+        body: redact(String(result?.body || result?.message || result?.error || '')).slice(
+          0,
+          PROBE_BODY_LIMIT
+        ),
+      },
+    },
+    { dir: o.decisionDir, now }
+  );
+}
+
+function recordResult(store, modelId, routeId, result, now, options) {
   const key = healthKey(modelId, routeId);
   const previous = store.paths[key] || { failures: 0 };
   const lastCheckedAt = new Date(now).toISOString();
@@ -136,14 +180,18 @@ function recordResult(store, modelId, routeId, result, now) {
     return { key, eligible: true };
   }
   const status = Number(result && result.status) || 0;
-  const reason = classifyFailure(status, result && (result.message || result.error));
-  const failures = previous.failures + 1;
+  const unverified = isUnverifiedProbe(result);
+  const reason = unverified
+    ? 'PROBE_NO_RESPONSE'
+    : classifyFailure(status, result && (result.message || result.error));
+  const failures = unverified ? previous.failures : previous.failures + 1;
   const explicit = result && (result.resetAt || result.retryAt);
   let delay = BACKOFF_MS[Math.min(failures - 1, BACKOFF_MS.length - 1)];
   if (reason === 'GEO_BLOCKED' || reason === 'AUTH_NEEDED') delay = 24 * 60 * 60e3;
   const operatorChange =
     result && (result.networkChanged === true || result.credentialsChanged === true);
-  const nextCheck = operatorChange ? now : explicit ? Date.parse(explicit) : now + delay;
+  const nextCheck =
+    unverified || operatorChange ? now : explicit ? Date.parse(explicit) : now + delay;
   store.paths[key] = {
     modelId: String(modelId),
     normalizedModelId: normalizeModelId(modelId),
@@ -156,7 +204,10 @@ function recordResult(store, modelId, routeId, result, now) {
     classifierVersion: CLASSIFIER_VERSION || 2,
   };
   // Due refreshes must retain the same cause-based policy as live preflight.
-  if (previous.probeCause) {
+  if (unverified) {
+    store.paths[key].probeCause = reason;
+    recordUnknownProbe(modelId, routeId, result, now, options);
+  } else if (previous.probeCause) {
     const cause = require('./route-probe').classifyProbeFailure({
       ...result,
       body: result && (result.body || result.message || result.error),
@@ -215,7 +266,12 @@ function orderProbeRoutes(ranked, options) {
     const record = getPathRecord(store, identity.model, identity.route);
     if (require('./probe-order').recentRouteSuccess(candidate, store, { ...o, now }))
       live.push(candidate);
-    else if (!record || record.status === 'AVAILABLE' || isLegacyUnverified(record))
+    else if (
+      !record ||
+      record.status === 'AVAILABLE' ||
+      unverifiedRecord(record) ||
+      isLegacyUnverified(record)
+    )
       unknown.push(candidate);
     else failed.push(candidate);
   }
@@ -414,7 +470,8 @@ function probeCooldown(candidate, options) {
     }
   }
   const record = getPathRecord(store, identity.model, identity.route);
-  if (!record || !record.probeCause || record.status === 'AVAILABLE') return null;
+  if (!record || !record.probeCause || record.status === 'AVAILABLE' || unverifiedRecord(record))
+    return null;
   if (Date.parse(record.nextCheckAt) <= now) return null;
   return `PROBE_COOLDOWN: ${record.probeCause} until ${record.nextCheckAt}`;
 }
@@ -528,8 +585,9 @@ function rememberProbe(candidate, result, options) {
     store,
     identity.model,
     identity.route,
-    { ok: result && result.ok, status: result && result.status },
-    now
+    { ...result, message: result?.body || result?.message || result?.error },
+    now,
+    o
   );
   const record = store.paths[recorded.key];
   record.candidateKey = candidate.candidateKey || null;
@@ -537,7 +595,7 @@ function rememberProbe(candidate, result, options) {
     typeof cause === 'object' && cause !== null ? cause.reason || cause.reasonCode : cause;
   record.probeCause = causeCode;
   applyTpmEvidence(record, result);
-  if (cause) {
+  if (cause && !isUnverifiedProbe(result)) {
     record.nextCheckAt = new Date(now + probeCooldownMs(cause)).toISOString();
   }
   const gateway = identity.route?.id || candidate.gateway || candidate.sourceId || candidate.source;
@@ -612,7 +670,9 @@ function healthKey(modelId, routeId) {
 function isDue(store, modelId, routeId, now) {
   const record = getPathRecord(store, modelId, routeId);
   return Boolean(
-    record && record.status !== 'AVAILABLE' && dueAt(record, Number(now) || Date.now())
+    record &&
+    record.status !== 'AVAILABLE' &&
+    (unverifiedRecord(record) || dueAt(record, Number(now) || Date.now()))
   );
 }
 
@@ -662,6 +722,7 @@ function isEligible(store, modelId, routeId, now) {
   if (record)
     return (
       record.status === 'AVAILABLE' ||
+      unverifiedRecord(record) ||
       Boolean(record.probeCause && dueAt(record, now ?? Date.now())) ||
       isLegacyUnverified(record)
     );
@@ -716,7 +777,12 @@ function isSelectable(store, modelId, routeId, now) {
     }
   }
   const record = getPathRecord(store, modelId, routeId);
-  return !record || record.status === 'AVAILABLE' || isLegacyUnverified(record);
+  return (
+    !record ||
+    record.status === 'AVAILABLE' ||
+    unverifiedRecord(record) ||
+    isLegacyUnverified(record)
+  );
 }
 
 async function routeFallback(modelId, failedPath, paths, probe, store, options) {
@@ -796,7 +862,8 @@ async function routeFallback(modelId, failedPath, paths, probe, store, options) 
       modelId,
       route.accountId ? { id: route.id, accountId: route.accountId } : route.id,
       result,
-      now
+      now,
+      o
     );
     if (recorded.eligible) {
       store.events.push({
@@ -1029,7 +1096,7 @@ async function refreshCatalogueRoutes(catalogue, registry, accounts, store, prob
     } catch (error) {
       result = { ok: false, status: 0, error: String(error) };
     }
-    const outcome = recordResult(store, modelId, routeId, result, now);
+    const outcome = recordResult(store, modelId, routeId, result, now, o);
     checked.push({ modelId, routeId, ...outcome });
   }
   return { checked, count: checked.length };
@@ -1040,7 +1107,7 @@ async function recheckDue(store, probe, options) {
   const now = Number(o.now) || Date.now();
   const cap = Math.max(0, Number(o.cap ?? 20));
   const due = Object.values(store.paths)
-    .filter((row) => dueAt(row, now))
+    .filter((row) => unverifiedRecord(row) || dueAt(row, now))
     .slice(0, cap);
   const checkedKeys = due.map((row) => healthKey(row.modelId, row.routeId));
   const restored = [];
@@ -1054,7 +1121,7 @@ async function recheckDue(store, probe, options) {
     } catch (error) {
       result = { ok: false, error: String(error) };
     }
-    const outcome = recordResult(store, row.modelId, row.routeId, result, now);
+    const outcome = recordResult(store, row.modelId, row.routeId, result, now, o);
     if (outcome.eligible) restored.push(row.modelId + '|' + row.routeId);
   }
   return { checked: due.length, checkedKeys, restored };
@@ -1192,7 +1259,12 @@ async function probeGatewayModel(modelId, routeId, options) {
   } catch {
     return { ok: false, status: 0, error: 'route endpoint is invalid' };
   }
-  if (envName && configuredUrl.protocol !== 'https:')
+  // A credential may travel over plain HTTP only to this machine (the local
+  // router listens on loopback); anything else must be HTTPS. Live 17/10: the
+  // guard refused 9router at 127.0.0.1 before any request, so every intake
+  // probe of a working route failed with status 0.
+  const loopback = ['localhost', '127.0.0.1', '[::1]', '::1'].includes(configuredUrl.hostname);
+  if (envName && configuredUrl.protocol !== 'https:' && !loopback)
     return { ok: false, status: 0, error: 'credentialed probe endpoint must use HTTPS' };
   const token = envName && process.env[envName];
   if (envName && !token) return { ok: false, status: 401, error: 'route credential unavailable' };
@@ -1221,7 +1293,12 @@ async function probeGatewayModel(modelId, routeId, options) {
         ? new Date(Date.now() + Number(retry) * 1000).toISOString()
         : new Date(retry).toISOString()
       : null;
-    return { ok: response.ok, status: response.status, message: body.slice(0, 500), resetAt };
+    return {
+      ok: response.ok,
+      status: response.status,
+      message: body.slice(0, PROBE_BODY_LIMIT),
+      resetAt,
+    };
   } catch (error) {
     return { ok: false, status: 0, error: String((error && error.message) || error) };
   } finally {
@@ -1255,6 +1332,7 @@ module.exports = {
   probeCooldown,
   probeMemoryFile,
   rememberProbe,
+  isUnverifiedProbe,
   rememberLaunchTpm,
   tpmTooSmall,
   rememberLaunchContextOverflow,
