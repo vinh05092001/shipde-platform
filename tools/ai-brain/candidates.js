@@ -153,7 +153,11 @@ function accountsFor(accounts, sourceId, registry) {
 }
 
 function deriveCredentialAccountId(source) {
-  const envName = String((source && source.credential && source.credential.env) || '').trim();
+  const envName = String(
+    (source && source.credential && (source.credential.env || source.credential.name)) ||
+      (source && source.apiKeyEnv) ||
+      ''
+  ).trim();
   if (!envName) return source.id;
   const suffix = envName.toLowerCase().replace(/[^a-z0-9]+/g, '-');
   return `${source.id}-${suffix}`;
@@ -733,27 +737,153 @@ function openAiCompatibleCandidates(opts) {
  * @returns {object[]} array of candidate objects
  */
 /**
- * A probed direct source that was discovered from an OpenCode provider is
- * reachable by the isolated writer as `<providerKey>/<model>`. The key comes
- * from discovery (never parsed from the flattened source id); a source without
- * it yields nothing. Capabilities come only from per-model metadata.
+ * A direct OpenAI-compatible source (or a probed provider source) is reachable
+ * by the isolated writer as `<providerKey>/<model>`. If source.opencodeProvider is
+ * not explicitly set, the provider key falls back to source.id.
+ *
+ * Eligible sources must:
+ * - Be active (not retired, not deferred, servesModels !== false, enabled !== false)
+ * - Expose an OpenAI-compatible endpoint (http: or https:)
+ * - Have a declared credential environment variable name (credential.env, credential.name, or apiKeyEnv)
+ * - Not declare a dedicated CLI harness (kind !== 'agent-cli' and accessPath !== 'cli')
+ *
+ * Capabilities leave tools and jsonSchema undefined so Codex's capability probe
+ * can determine live capability without hardcoded assumptions.
  */
-function pushOpencodeProviderWriters(out, source, o) {
-  const key = source && source.opencodeProvider;
-  if (!key || !source.endpoint || !(source.credential && source.credential.env)) return;
-  const excluded = new Set((o.excludeModels || []).map((id) => String(id).toLowerCase()));
-  for (const model of source.models || []) {
-    if (typeof model !== 'string' || !model || excluded.has(model.toLowerCase())) continue;
+function pushOpencodeProviderWriters(out, source, o, bound) {
+  if (!source || source.enabled === false || source.servesModels === false) return;
+  if (source.disposition === 'deferred') return;
+  if (source.kind === 'agent-cli' || source.accessPath === 'cli') return;
+
+  const endpoint = source.endpoint;
+  if (!endpoint || typeof endpoint !== 'string' || !/^https?:\/\//i.test(endpoint.trim())) {
+    return;
+  }
+
+  const credentialEnv =
+    (source.credential &&
+      (typeof source.credential.env === 'string' && source.credential.env.trim()
+        ? source.credential.env.trim()
+        : typeof source.credential.name === 'string' && source.credential.name.trim()
+          ? source.credential.name.trim()
+          : null)) ||
+    (typeof source.apiKeyEnv === 'string' && source.apiKeyEnv.trim()
+      ? source.apiKeyEnv.trim()
+      : null);
+  if (!credentialEnv) return;
+
+  const key = source.opencodeProvider || source.id;
+  if (!key) return;
+
+  const opts = o || {};
+  const excluded = new Set((opts.excludeModels || []).map((id) => String(id).toLowerCase()));
+
+  // Collect model IDs from all declared source descriptors:
+  // 1. source.models
+  // 2. source.modelMeta
+  // 3. opts.sourceModels[source.id]
+  // 4. bound accounts
+  // 5. opts.catalogue entries belonging to this source
+  const modelSet = new Set();
+  const add = (m) => {
+    const id = typeof m === 'string' ? m : m && (m.id || m.model || m.modelId);
+    if (typeof id === 'string' && id.trim()) {
+      modelSet.add(id.trim());
+    }
+  };
+
+  if (Array.isArray(source.models)) {
+    for (const m of source.models) add(m);
+  }
+  if (source.modelMeta && typeof source.modelMeta === 'object') {
+    for (const m of Object.keys(source.modelMeta)) add(m);
+  }
+  if (opts.sourceModels && Array.isArray(opts.sourceModels[source.id])) {
+    for (const m of opts.sourceModels[source.id]) add(m);
+  }
+  if (Array.isArray(bound)) {
+    for (const acc of bound) {
+      if (acc && acc.enabled !== false) {
+        for (const m of accountModels(acc)) add(m);
+      }
+    }
+  }
+  if (Array.isArray(opts.catalogue)) {
+    const prefix = key + '/';
+    for (const item of opts.catalogue) {
+      if (!item) continue;
+      const itemSource =
+        item.gateway ||
+        item.source ||
+        item.sourceId ||
+        item.upstream ||
+        (Array.isArray(item.sourceIds) ? item.sourceIds[0] : null);
+      const matchesSource =
+        itemSource === source.id ||
+        (Array.isArray(item.sourceIds) && item.sourceIds.includes(source.id));
+      if (matchesSource) {
+        const id =
+          typeof item === 'string' ? item : item && (item.modelId || item.model || item.id);
+        if (typeof id === 'string' && id.trim()) {
+          const wireId = id.startsWith(prefix) ? id.slice(prefix.length) : id;
+          modelSet.add(wireId.trim());
+        }
+      }
+    }
+  }
+
+  const envVal =
+    opts.env && opts.env[credentialEnv] !== undefined
+      ? opts.env[credentialEnv]
+      : process.env[credentialEnv];
+  const hasKey = Boolean(envVal && String(envVal).trim().length > 0);
+  const accId =
+    Array.isArray(bound) && bound.length > 0 && bound[0] && bound[0].id
+      ? bound[0].id
+      : deriveCredentialAccountId(source);
+  const isMissing =
+    !hasKey || (Array.isArray(bound) && bound.some((a) => a && a.credentialEnvMissing));
+
+  for (const model of modelSet) {
+    if (
+      !model ||
+      excluded.has(model.toLowerCase()) ||
+      excluded.has((key + '/' + model).toLowerCase())
+    ) {
+      continue;
+    }
     const meta = (source.modelMeta && source.modelMeta[model]) || {};
-    const contextWindow = toPositiveInteger(meta.contextWindow);
-    const maxOutputTokens = toPositiveInteger(meta.maxOutputTokens);
+    let contextWindow = toPositiveInteger(meta.contextWindow);
+    let maxOutputTokens = toPositiveInteger(meta.maxOutputTokens);
+    if (contextWindow === undefined && Array.isArray(opts.catalogue)) {
+      const catEntry = opts.catalogue.find(
+        (e) =>
+          typeof e === 'object' &&
+          e &&
+          ((e.modelId || e.model || e.id) === model ||
+            (e.modelId || e.model || e.id) === key + '/' + model) &&
+          (!e.gateway || e.gateway === source.id) &&
+          (!e.source || e.source === source.id)
+      );
+      if (catEntry) {
+        if (catEntry.contextWindow !== undefined) {
+          contextWindow = toPositiveInteger(catEntry.contextWindow);
+        } else if (catEntry.capabilities && catEntry.capabilities.contextWindow !== undefined) {
+          contextWindow = toPositiveInteger(catEntry.capabilities.contextWindow);
+        }
+        if (maxOutputTokens === undefined && catEntry.maxOutputTokens !== undefined) {
+          maxOutputTokens = toPositiveInteger(catEntry.maxOutputTokens);
+        }
+      }
+    }
+
     out.push({
       harness: 'opencode-direct',
       accessPath: source.endpoint,
       gateway: source.id,
       upstream: key,
-      accountId: source.id,
-      quotaScope: source.id,
+      accountId: accId,
+      quotaScope: accId,
       modelId: key + '/' + model,
       source: source.id,
       sourceId: source.id,
@@ -764,6 +894,14 @@ function pushOpencodeProviderWriters(out, source, o) {
       contextWindow,
       maxOutputTokens,
       sharedQuota: 'unknown',
+      ...(isMissing
+        ? {
+            credentialEnvMissing: true,
+            blocked: true,
+            blockReason: 'CREDENTIAL_ENV_MISSING',
+            blockScope: 'credential',
+          }
+        : {}),
     });
   }
 }
@@ -862,7 +1000,7 @@ function generateCandidatesWithCatalog(opts) {
           : o.sourceModels?.[source.id]) ||
         source.models ||
         bound.filter((a) => a.enabled !== false && a.status === 'available').flatMap(accountModels);
-      pushOpencodeProviderWriters(candidates, { ...source, models }, o);
+      pushOpencodeProviderWriters(candidates, { ...source, models }, o, bound);
       continue;
     }
 
@@ -1072,7 +1210,6 @@ function generateCandidatesWithCatalog(opts) {
           }
         }
       } else {
-        pushOpencodeProviderWriters(candidates, source, o);
         const route =
           registry.dispatch &&
           registry.dispatch.providers &&
@@ -1080,82 +1217,84 @@ function generateCandidatesWithCatalog(opts) {
         const harness = (route && route.harness) || source.harness || null;
         const accessPath =
           (route && route.accessPath) || source.accessPath || source.endpoint || null;
-        if (!harness || !accessPath) continue;
-        for (const acc of bound) {
-          const catalogueModelIds = new Set(
-            catalogue
-              .map((e) => (typeof e === 'string' ? e : e && (e.modelId || e.model || e.id)))
-              .filter(Boolean)
-          );
-          const models = liveAgyAccountModels(acc, source, accountModels(acc), o).filter(
-            (model) =>
-              // A direct source's own inventory is authoritative for its wire ids.
-              // Another gateway's catalogue may use entirely different aliases.
-              (Array.isArray(source.models) && source.models.includes(model)) ||
-              catalogue.length === 0 ||
-              catalogue.includes(model) ||
-              catalogueModelIds.has(model)
-          );
-          for (const model of models) {
-            const row = accountModelRow(acc, model) || {};
-            let contextWindow = undefined;
-            const catEntry = catalogue.find(
-              (e) =>
-                typeof e === 'object' &&
-                e &&
-                (e.modelId || e.model || e.id) === model &&
-                (!e.gateway || e.gateway === source.id) &&
-                (!e.source || e.source === source.id)
+        if (harness && accessPath) {
+          for (const acc of bound) {
+            const catalogueModelIds = new Set(
+              catalogue
+                .map((e) => (typeof e === 'string' ? e : e && (e.modelId || e.model || e.id)))
+                .filter(Boolean)
             );
-            if (
-              catEntry &&
-              (catEntry.contextWindow !== undefined ||
-                (catEntry.capabilities && catEntry.capabilities.contextWindow !== undefined))
-            ) {
-              contextWindow = toPositiveInteger(
-                catEntry.contextWindow !== undefined
-                  ? catEntry.contextWindow
-                  : catEntry.capabilities.contextWindow
+            const models = liveAgyAccountModels(acc, source, accountModels(acc), o).filter(
+              (model) =>
+                // A direct source's own inventory is authoritative for its wire ids.
+                // Another gateway's catalogue may use entirely different aliases.
+                (Array.isArray(source.models) && source.models.includes(model)) ||
+                catalogue.length === 0 ||
+                catalogue.includes(model) ||
+                catalogueModelIds.has(model)
+            );
+            for (const model of models) {
+              const row = accountModelRow(acc, model) || {};
+              let contextWindow = undefined;
+              const catEntry = catalogue.find(
+                (e) =>
+                  typeof e === 'object' &&
+                  e &&
+                  (e.modelId || e.model || e.id) === model &&
+                  (!e.gateway || e.gateway === source.id) &&
+                  (!e.source || e.source === source.id)
               );
+              if (
+                catEntry &&
+                (catEntry.contextWindow !== undefined ||
+                  (catEntry.capabilities && catEntry.capabilities.contextWindow !== undefined))
+              ) {
+                contextWindow = toPositiveInteger(
+                  catEntry.contextWindow !== undefined
+                    ? catEntry.contextWindow
+                    : catEntry.capabilities.contextWindow
+                );
+              }
+              if (contextWindow === undefined && source.modelMeta && source.modelMeta[model]) {
+                contextWindow = toPositiveInteger(source.modelMeta[model].contextWindow);
+              }
+              const caps = Object.assign({}, acc.capabilities || {});
+              if (contextWindow !== undefined) {
+                caps.contextWindow = contextWindow;
+              } else {
+                delete caps.contextWindow;
+              }
+              candidates.push({
+                harness,
+                accessPath,
+                gateway: source.id,
+                upstream: source.id,
+                accountId: acc.id,
+                quotaScope: acc.id,
+                modelId: model,
+                source: source.id,
+                sourceId: source.id,
+                endpoint: source.endpoint,
+                sourceEndpoint: source.endpoint,
+                kind: source.kind,
+                capabilities: caps,
+                contextWindow,
+                quality: row.quality,
+                cost: acc.cost,
+                sharedQuota: 'unknown',
+                ...(acc.credentialEnvMissing
+                  ? {
+                      credentialEnvMissing: true,
+                      blocked: true,
+                      blockReason: 'CREDENTIAL_ENV_MISSING',
+                      blockScope: 'credential',
+                    }
+                  : {}),
+              });
             }
-            if (contextWindow === undefined && source.modelMeta && source.modelMeta[model]) {
-              contextWindow = toPositiveInteger(source.modelMeta[model].contextWindow);
-            }
-            const caps = Object.assign({}, acc.capabilities || {});
-            if (contextWindow !== undefined) {
-              caps.contextWindow = contextWindow;
-            } else {
-              delete caps.contextWindow;
-            }
-            candidates.push({
-              harness,
-              accessPath,
-              gateway: source.id,
-              upstream: source.id,
-              accountId: acc.id,
-              quotaScope: acc.id,
-              modelId: model,
-              source: source.id,
-              sourceId: source.id,
-              endpoint: source.endpoint,
-              sourceEndpoint: source.endpoint,
-              kind: source.kind,
-              capabilities: caps,
-              contextWindow,
-              quality: row.quality,
-              cost: acc.cost,
-              sharedQuota: 'unknown',
-              ...(acc.credentialEnvMissing
-                ? {
-                    credentialEnvMissing: true,
-                    blocked: true,
-                    blockReason: 'CREDENTIAL_ENV_MISSING',
-                    blockScope: 'credential',
-                  }
-                : {}),
-            });
           }
         }
+        pushOpencodeProviderWriters(candidates, source, o, bound);
       }
     }
 

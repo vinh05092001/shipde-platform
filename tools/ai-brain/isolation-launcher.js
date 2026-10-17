@@ -2245,7 +2245,10 @@ function getIsolatedLauncher() {
 
       // DS-R02: validate that the source has an https endpoint (or http://127.0.0.1 / localhost) and credential.env
       const endpoint = selectedSource.endpoint;
-      const credentialEnv = selectedSource.credential && selectedSource.credential.env;
+      const credentialEnv =
+        (selectedSource.credential &&
+          (selectedSource.credential.env || selectedSource.credential.name)) ||
+        selectedSource.apiKeyEnv;
 
       const isHttpsOrLocalhost =
         endpoint &&
@@ -2315,7 +2318,7 @@ function getIsolatedLauncher() {
             name: selectedSource.label || providerId,
             options: {
               baseURL: selectedSource.endpoint,
-              apiKey: `{env:${selectedSource.credential.env}}`,
+              apiKey: `{env:${credentialEnv}}`,
               ...(selectedSource.headers && typeof selectedSource.headers === 'object'
                 ? { headers: selectedSource.headers }
                 : {}),
