@@ -172,3 +172,27 @@ test('a credentialed probe to the local router on loopback is sent, not refused'
     else process.env.FIXTURE_LOOPBACK_KEY = previous;
   }
 });
+
+test('every failed probe leaves its raw result and duration in the decision log', () => {
+  // Live 17/10 run 7: routes that answered within seconds were recorded as
+  // TIMEOUT and nothing showed what the probe had actually received.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'probe-evidence-'));
+  try {
+    const store = { version: 1, paths: {}, events: [] };
+    health.recordResult(
+      store,
+      candidate.modelId,
+      route,
+      { ok: false, status: 402, body: 'insufficient account funds', elapsedMs: 870 },
+      now,
+      { decisionDir: dir }
+    );
+    const raw = decisions.readDecisionsSafe({ dir, now }).find((r) => r.probeResult);
+    assert.ok(raw, 'a decision with the probe result was written');
+    assert.equal(raw.probeResult.status, 402);
+    assert.equal(raw.probeResult.elapsedMs, 870);
+    assert.match(raw.probeResult.body, /insufficient account funds/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

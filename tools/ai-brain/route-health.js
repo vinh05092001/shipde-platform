@@ -141,10 +141,11 @@ function recordUnknownProbe(modelId, routeId, result, now, options) {
       workItemId: o.workItemId,
       modelId,
       routeId,
-      cause: 'PROBE_NO_RESPONSE',
+      cause: o.cause || 'PROBE_NO_RESPONSE',
       probeResult: {
         ok: result?.ok ?? null,
         status: result?.status ?? null,
+        elapsedMs: Number.isFinite(result?.elapsedMs) ? result.elapsedMs : null,
         body: redact(String(result?.body || result?.message || result?.error || '')).slice(
           0,
           PROBE_BODY_LIMIT
@@ -204,9 +205,12 @@ function recordResult(store, modelId, routeId, result, now, options) {
     classifierVersion: CLASSIFIER_VERSION || 2,
   };
   // Due refreshes must retain the same cause-based policy as live preflight.
+  // Every failed probe leaves its redacted raw result (and duration when
+  // known) in the run decision log, so a recorded cause can be checked
+  // against what the route actually answered.
+  recordUnknownProbe(modelId, routeId, result, now, { ...options, cause: reason });
   if (unverified) {
     store.paths[key].probeCause = reason;
-    recordUnknownProbe(modelId, routeId, result, now, options);
   } else if (previous.probeCause) {
     const cause = require('./route-probe').classifyProbeFailure({
       ...result,

@@ -248,6 +248,10 @@ Decision log entries link `goalId -> workItemId -> candidateKey -> session -> co
 - Part H2 Hermes session selection, custom config binding, and `shipde-controller` skill file are delivered in Part H2.
 - Live acceptance across chat and controller runs in Part H3 following merge of H1 and H2.
 
+### H3 live: every failed probe leaves evidence (2026-10-17)
+
+Run 7 of goal G-F622511E recorded TIMEOUT for routes that answered within 1-4 s when probed directly with the same function, endpoint and environment (including 8 concurrent probes), and the decision log did not keep what the probe received. Every failed probe now records its redacted raw result, status and duration (boundedProbe adds elapsedMs) in the run decision log.
+
 ### H3 live: host gate turns all machine caches off (2026-10-17)
 
 Run 6 of goal G-F622511E reached a writer commit (ag/gemini-3.8-flash) but the host gate failed candidate tests again: the models.dev cache in the Hermes home (models_dev_cache.json) gave a model a 200k context window. AI_BRAIN_MACHINE_DATA=none now turns machine caches off (that catalogue and discovered sources); the host gate sets it. An explicit catalogue path still counts.

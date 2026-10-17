@@ -176,24 +176,31 @@ async function boundedProbe(probeFn, candidate, apiKeyEnv, env, options) {
   }
   let timer;
   let httpFailure;
+  const startedAt = Date.now();
+  const timed = (result) =>
+    result && typeof result === 'object'
+      ? { ...result, elapsedMs: Date.now() - startedAt }
+      : result;
   try {
-    return await Promise.race([
-      Promise.resolve().then(() =>
-        probeFn(candidate, apiKeyEnv, env, {
-          ...opts,
-          signal: controller.signal,
-          onHttpFailure: (result) => {
-            httpFailure = result;
-          },
-        })
-      ),
-      new Promise((resolve) => {
-        timer = setTimeout(() => {
-          controller.abort();
-          resolve(httpFailure || { ok: false, status: 0, body: 'Probe request timeout' });
-        }, timeoutMs);
-      }),
-    ]);
+    return timed(
+      await Promise.race([
+        Promise.resolve().then(() =>
+          probeFn(candidate, apiKeyEnv, env, {
+            ...opts,
+            signal: controller.signal,
+            onHttpFailure: (result) => {
+              httpFailure = result;
+            },
+          })
+        ),
+        new Promise((resolve) => {
+          timer = setTimeout(() => {
+            controller.abort();
+            resolve(httpFailure || { ok: false, status: 0, body: 'Probe request timeout' });
+          }, timeoutMs);
+        }),
+      ])
+    );
   } catch (_) {
     // Injected probes can reject too. Never let an untrusted error body (which
     // may contain credentials) escape into controller output.
