@@ -81,6 +81,36 @@ const READERS = {
       return claudeUsage.asQuotaReading(usage, identity);
     },
   },
+  codex: {
+    read: (account, opts) => {
+      const hermes = require('./hermes-session');
+      const codexOpts = (opts && opts.codexOpts) || {
+        homeDir: (opts && opts.home) || (account && account.home) || process.env.USERPROFILE || process.env.HOME || require('os').homedir(),
+      };
+      const hasAuth = hermes.hasCodexAuth(codexOpts, codexOpts);
+      if (!hasAuth) {
+        return {
+          available: false,
+          status: 'auth_needed',
+          reason: 'AUTH_NEEDED',
+        };
+      }
+      return {
+        available: true,
+        status: 'open',
+        observedAt: new Date((opts && opts.now) || Date.now()).toISOString(),
+        rows: [
+          {
+            dimension: 'session',
+            limit: 1,
+            used: 0,
+            remaining: 1,
+            remainingPercent: 100,
+          },
+        ],
+      };
+    },
+  },
 };
 
 const SUPPORTED_PROVIDERS = new Set(Object.keys(READERS));

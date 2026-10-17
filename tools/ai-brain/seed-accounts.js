@@ -41,55 +41,46 @@ const ANTIGRAVITY_MODELS = [
     modelVersion: '20260201',
     codingGrade: D.COMPLEX,
     reviewGrade: D.STANDARD,
-    quality: 84,
   },
   {
     model: 'gemini-3.8-flash-medium',
     modelVersion: '20260201',
     codingGrade: D.STANDARD,
-    quality: 76,
   },
   {
     model: 'gemini-3.8-flash-low',
     modelVersion: '20260201',
     codingGrade: D.MECHANICAL,
-    quality: 62,
   },
   {
     model: 'gemini-3.7-flash-high',
     modelVersion: '20260101',
     codingGrade: D.STANDARD,
-    quality: 78,
   },
   {
     model: 'gemini-3.7-flash-medium',
     modelVersion: '20260101',
     codingGrade: D.STANDARD,
-    quality: 72,
   },
   {
     model: 'gemini-3.7-flash-low',
     modelVersion: '20260101',
     codingGrade: D.MECHANICAL,
-    quality: 58,
   },
   {
     model: 'gemini-3.6-flash-high',
     modelVersion: '20251101',
     codingGrade: D.STANDARD,
-    quality: 74,
   },
   {
     model: 'gemini-3.6-flash-medium',
     modelVersion: '20251101',
     codingGrade: D.STANDARD,
-    quality: 68,
   },
   {
     model: 'gemini-3.6-flash-low',
     modelVersion: '20251101',
     codingGrade: D.MECHANICAL,
-    quality: 54,
   },
   // Pro carries the architectural work on this provider.
   {
@@ -97,14 +88,12 @@ const ANTIGRAVITY_MODELS = [
     modelVersion: '20260115',
     codingGrade: D.ARCHITECTURAL,
     reviewGrade: D.COMPLEX,
-    quality: 90,
   },
   {
     model: 'gemini-3.1-pro-low',
     modelVersion: '20260115',
     codingGrade: D.COMPLEX,
     reviewGrade: D.STANDARD,
-    quality: 82,
   },
   // A thinking model is the one worth reserving for review.
   {
@@ -112,16 +101,14 @@ const ANTIGRAVITY_MODELS = [
     modelVersion: '20260201',
     codingGrade: D.ARCHITECTURAL,
     reviewGrade: D.ARCHITECTURAL,
-    quality: 94,
   },
   {
     model: 'claude-sonnet-4-6',
     modelVersion: '20260201',
     codingGrade: D.COMPLEX,
     reviewGrade: D.COMPLEX,
-    quality: 86,
   },
-  { model: 'gpt-oss-120b-medium', modelVersion: '20260101', codingGrade: D.STANDARD, quality: 70 },
+  { model: 'gpt-oss-120b-medium', modelVersion: '20260101', codingGrade: D.STANDARD },
 ];
 
 /**
@@ -135,36 +122,31 @@ const NINEROUTER_MODELS = [
     modelVersion: '20260301',
     codingGrade: D.ARCHITECTURAL,
     reviewGrade: D.ARCHITECTURAL,
-    quality: 96,
   },
   {
     model: 'cc/claude-sonnet-5',
     modelVersion: '20260301',
     codingGrade: D.COMPLEX,
     reviewGrade: D.COMPLEX,
-    quality: 88,
   },
   {
     model: 'cc/claude-haiku-4-5-20251001',
     modelVersion: '20251001',
     codingGrade: D.MECHANICAL,
-    quality: 60,
   },
-  { model: 'kimchi/glm-5.3', modelVersion: '20260101', codingGrade: D.STANDARD, quality: 72 },
+  { model: 'kimchi/glm-5.3', modelVersion: '20260101', codingGrade: D.STANDARD },
   {
     model: 'kimchi/glm-5.3-flash',
     modelVersion: '20260101',
     codingGrade: D.MECHANICAL,
-    quality: 58,
   },
   {
     model: 'kimchi/deepseek-v4-flash-0731',
     modelVersion: '0731',
     codingGrade: D.STANDARD,
-    quality: 74,
   },
-  { model: 'kimchi/minimax-m3', modelVersion: '20260101', codingGrade: D.STANDARD, quality: 70 },
-  { model: 'gh/gpt-5.3-codex', modelVersion: '20260201', codingGrade: D.COMPLEX, quality: 84 },
+  { model: 'kimchi/minimax-m3', modelVersion: '20260101', codingGrade: D.STANDARD },
+  { model: 'gh/gpt-5.3-codex', modelVersion: '20260201', codingGrade: D.COMPLEX },
 ];
 
 const ACCOUNTS = [

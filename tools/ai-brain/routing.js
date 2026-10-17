@@ -1085,8 +1085,11 @@ function qualityScoreOf(candidate, now) {
     }
   }
 
-  const declared = Number(candidate && candidate.quality);
-  if (Number.isFinite(declared)) {
+  const declared =
+    candidate && candidate.quality !== null && candidate.quality !== undefined
+      ? Number(candidate.quality)
+      : null;
+  if (declared !== null && Number.isFinite(declared)) {
     base = base !== null ? Math.max(base, declared) : declared;
   }
 
@@ -1550,15 +1553,28 @@ function rankForProfile(candidates, profile, assessment, ctx) {
   const deterministicChosen = top3.length ? top3[0].candidateKey : null;
   const chosen = deterministicChosen;
   const reasonCode = allZero ? 'MODEL_SELECTION_NOT_PROVEN' : null;
+  const topScore =
+    top3.length > 0 &&
+    ((top3[0].scoreBreakdown && top3[0].scoreBreakdown.quality === null) ||
+      top3[0].score === null ||
+      top3[0].score === undefined)
+      ? 'chưa rõ'
+      : top3.length > 0
+        ? top3[0].score
+        : null;
+  const weightsLabel =
+    assessment.weightProfile ||
+    assessment.weightSource ||
+    (assessment.weights ? JSON.stringify(assessment.weights) : 'default');
   const reason = chosen
     ? 'fastest candidate meeting quality floor ' +
       profile.qualityFloor +
       ' and proof floor ' +
       profile.proofFloor +
       ' (score ' +
-      top3[0].score +
+      topScore +
       ', weights ' +
-      assessment.weightProfile +
+      weightsLabel +
       ')'
     : 'REFUSED: no candidate meets the profile floors';
 
@@ -1908,6 +1924,9 @@ async function runProfileDispatch(args, deps) {
     independentReviewerCandidates,
   };
   const result = rankForProfile(annotated, profile, assessment, rankCtx);
+  if (d.candidates && d.candidates.excludedRoutes && Array.isArray(d.candidates.excludedRoutes)) {
+    result.rejected.push(...d.candidates.excludedRoutes);
+  }
   const askForModelChoice =
     typeof d.modelChoiceAsk === 'function'
       ? d.modelChoiceAsk

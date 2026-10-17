@@ -198,12 +198,43 @@ function resolveCandidateHeadroom(candidate, ctx) {
       }
     }
   }
+  const now = (ctx && ctx.now) || Date.now();
+
+  // Live Codex quota source for native CLI login when no cached reading exists
+  if (
+    reading === undefined &&
+    (!ctx || ctx.useStoredQuota !== false) &&
+    candidate.binding === 'cli-login' &&
+    (candidate.harness === 'codex' ||
+      candidate.sourceId === 'codex' ||
+      candidate.source === 'codex' ||
+      candidate.accountId === 'codex-cli') &&
+    (!candidate.accountId || readings[candidate.accountId] === undefined) &&
+    (!candidate.quotaScope || readings[candidate.quotaScope] === undefined)
+  ) {
+    try {
+      const hermes = require('./hermes-session');
+      const codexOpts = (ctx && ctx.codexOpts) || {
+        homeDir:
+          (ctx && ctx.home) ||
+          process.env.USERPROFILE ||
+          process.env.HOME ||
+          require('os').homedir(),
+      };
+      if (hermes.hasCodexAuth(codexOpts, codexOpts)) {
+        reading = {
+          status: 'open',
+          observedAt: new Date(now).toISOString(),
+        };
+      }
+    } catch {}
+  }
 
   // Active cooldown check from evidence store if present
   if (ctx && ctx.evidenceData) {
     try {
       const block = evidence.isCandidateBlocked(ctx.evidenceData, candidate, {
-        now: (ctx && ctx.now) || Date.now(),
+        now,
       });
       if (block && block.blocked) {
         return {
@@ -217,7 +248,6 @@ function resolveCandidateHeadroom(candidate, ctx) {
   }
 
   // Active cooldown on candidate or account
-  const now = (ctx && ctx.now) || Date.now();
   if (candidate.cooldownUntil && Date.parse(candidate.cooldownUntil) > now) {
     return {
       status: 'cooling',
