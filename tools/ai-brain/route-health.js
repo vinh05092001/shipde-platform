@@ -170,6 +170,11 @@ function recordResult(store, modelId, routeId, result, now, options) {
       lastCheckedAt,
       nextCheckAt: null,
       classifierVersion: CLASSIFIER_VERSION || 2,
+      ...(Number.isFinite(result && result.elapsedMs)
+        ? { elapsedMs: result.elapsedMs }
+        : Number.isFinite(previous.elapsedMs)
+          ? { elapsedMs: previous.elapsedMs }
+          : {}),
     };
     if (previous.status && previous.status !== 'AVAILABLE')
       store.events.push({
@@ -203,6 +208,11 @@ function recordResult(store, modelId, routeId, result, now, options) {
     lastCheckedAt,
     nextCheckAt: new Date(Number.isFinite(nextCheck) ? nextCheck : now + delay).toISOString(),
     classifierVersion: CLASSIFIER_VERSION || 2,
+    ...(Number.isFinite(result && result.elapsedMs)
+      ? { elapsedMs: result.elapsedMs }
+      : Number.isFinite(previous.elapsedMs)
+        ? { elapsedMs: previous.elapsedMs }
+        : {}),
   };
   // Due refreshes must retain the same cause-based policy as live preflight.
   // Every failed probe leaves its redacted raw result (and duration when
@@ -1374,4 +1384,5 @@ module.exports = {
   deleteAccountRecord,
   probeCooldownMs,
   isLegacyUnverified,
+  probeIdentity,
 };

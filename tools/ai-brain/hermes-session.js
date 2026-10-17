@@ -2001,6 +2001,7 @@ async function probeRankedRoutes(
     refusal = () => {},
     deadline = Infinity,
     now = Date.now,
+    maxConcurrentProbes = 8,
   }
 ) {
   if (accountKey === undefined) accountKey = candidateAccountKey;
@@ -2024,7 +2025,7 @@ async function probeRankedRoutes(
         }
         if (
           (bestSuccess >= 0 && index > bestSuccess) ||
-          inFlight.size >= 8 ||
+          inFlight.size >= maxConcurrentProbes ||
           busyAccounts.has(account) ||
           now() >= deadline
         )
@@ -2186,8 +2187,10 @@ async function launchHermesSession(options, deps) {
   const recordedSkippedKeys = new Set();
   let initialModelRanking;
   let initialRejected;
-  const probeTimeoutMs = Math.min(Number(opts.probeTimeoutMs) || 8000, 8000);
-  const probeBudgetMs = Math.min(Number(opts.probeBudgetMs) || 180000, 180000);
+  const sourcesApi = require('./sources');
+  const dispatchConfig = sourcesApi.getDispatchConfig(d.registry || opts.registry, opts);
+  const probeTimeoutMs = dispatchConfig.probeTimeoutMs;
+  const probeBudgetMs = dispatchConfig.probeBudgetMs;
   let probeDeadline = Date.now() + probeBudgetMs;
   let attempt = 0;
   const routeHealthFile =
@@ -2305,8 +2308,11 @@ async function launchHermesSession(options, deps) {
       }
       const controller = new AbortController();
       const remainingMs = probeDeadline - Date.now();
-      const budgetLimited = remainingMs < probeTimeoutMs;
-      const timeoutMs = Math.max(1, Math.min(probeTimeoutMs, remainingMs));
+      const identity = health.probeIdentity(candidate);
+      const record = health.getPathRecord(routeHealth, identity.model, identity.route);
+      const baseTimeout = sourcesApi.resolveProbeTimeout(candidate, record, dispatchConfig);
+      const budgetLimited = remainingMs < baseTimeout;
+      const timeoutMs = Math.max(1, Math.min(baseTimeout, remainingMs));
       if (remainingMs <= 0) {
         refusal(candidate, 'HERMES_ROUTE_PROBE_SKIPPED wall-clock budget exhausted');
         return false;
@@ -2434,6 +2440,7 @@ async function launchHermesSession(options, deps) {
       runProbe,
       accountKey: probeAccountKey,
       refusal,
+      maxConcurrentProbes: dispatchConfig.maxConcurrentProbes,
       deadline: opts.dryRun && !opts.probe ? Infinity : probeDeadline,
       skip: (route, account) => {
         const specificAcc = health.extractAccountKey(route, {

@@ -352,6 +352,101 @@ function runsOpenCodeHarness(harnessName, registry) {
   return openCodeHarnesses.has(name);
 }
 
+function getDispatchConfig(registry, options = {}) {
+  let dispatch = {};
+  try {
+    dispatch = (registry && registry.dispatch) || {};
+  } catch {
+    dispatch = {};
+  }
+  const probeBudgetMs = Number(options.probeBudgetMs ?? dispatch.probeBudgetMs) || 180000;
+  const maxConcurrentProbes =
+    Number(options.maxConcurrentProbes ?? dispatch.maxConcurrentProbes) || 8;
+  const probeTimeoutMs = Number(options.probeTimeoutMs ?? dispatch.probeTimeoutMs) || 8000;
+  const safetyMarginMs =
+    Number(
+      options.probeSafetyMarginMs ??
+        options.safetyMarginMs ??
+        dispatch.probeSafetyMarginMs ??
+        dispatch.safetyMarginMs
+    ) || 2000;
+  const schemaProbeBudgetMs =
+    Number(
+      options.schemaProbeBudgetMs ??
+        options.schemaBudgetMs ??
+        dispatch.schemaProbeBudgetMs ??
+        dispatch.schemaBudgetMs ??
+        probeBudgetMs
+    ) || probeBudgetMs;
+  return {
+    probeBudgetMs,
+    maxConcurrentProbes,
+    probeTimeoutMs,
+    safetyMarginMs,
+    schemaProbeBudgetMs,
+  };
+}
+
+function isAgyPoolWriterEnabled(registry, options = {}) {
+  if (options.allowAgyPoolWriter !== undefined) return Boolean(options.allowAgyPoolWriter);
+  let dispatch = {};
+  try {
+    dispatch = registry?.dispatch || {};
+  } catch {
+    dispatch = {};
+  }
+  let sources = [];
+  try {
+    sources = registry?.sources || [];
+  } catch {
+    sources = [];
+  }
+  const source = sources.find((s) => s.id === 'agy-pool');
+  if (source?.writerEnabled !== undefined) {
+    const enabled = Boolean(source.writerEnabled);
+    if (!enabled) return false;
+    if (options.externalWorkers !== undefined) {
+      return String(options.externalWorkers || '')
+        .split(',')
+        .includes('agy-pool');
+    }
+    return true;
+  }
+  if (source?.allowWriter !== undefined) {
+    const enabled = Boolean(source.allowWriter);
+    if (!enabled) return false;
+    if (options.externalWorkers !== undefined) {
+      return String(options.externalWorkers || '')
+        .split(',')
+        .includes('agy-pool');
+    }
+    return true;
+  }
+  if (dispatch.agyPoolWriterEnabled !== undefined) {
+    return Boolean(dispatch.agyPoolWriterEnabled);
+  }
+  if (options.externalWorkers !== undefined) {
+    return String(options.externalWorkers || '')
+      .split(',')
+      .includes('agy-pool');
+  }
+  return false;
+}
+
+function resolveProbeTimeout(candidate, record, dispatchConfig, remainingMs) {
+  const cfg = dispatchConfig || {};
+  const safetyMarginMs = Number(cfg.probeSafetyMarginMs ?? cfg.safetyMarginMs) || 2000;
+  const defaultTimeout = Number(cfg.probeTimeoutMs) || 8000;
+  const measuredElapsedMs = candidate?.elapsedMs ?? record?.elapsedMs;
+  const baseTimeout =
+    Number.isFinite(measuredElapsedMs) && measuredElapsedMs > 0
+      ? measuredElapsedMs + safetyMarginMs
+      : defaultTimeout;
+  return Number.isFinite(remainingMs)
+    ? Math.max(1, Math.min(baseTimeout, remainingMs))
+    : Math.max(1, baseTimeout);
+}
+
 module.exports = {
   Kind,
   CAPACITY_KINDS,
@@ -369,4 +464,7 @@ module.exports = {
   qualifyModel,
   providerFromPrefix,
   runsOpenCodeHarness,
+  getDispatchConfig,
+  isAgyPoolWriterEnabled,
+  resolveProbeTimeout,
 };

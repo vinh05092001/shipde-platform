@@ -7,6 +7,8 @@ const schemaApi = require('./writer-schema');
 const routeProbe = require('./route-probe');
 const { createSecretRedactor } = require('./decisions');
 
+const sourcesApi = require('./sources');
+
 // Shared with the Controller route probes; capability checks get no extra window.
 const { PROBE_BUDGET_MS } = require('./orchestrate');
 const CAPABILITIES = ['jsonSchema', 'tools'];
@@ -60,10 +62,8 @@ async function httpProof(candidate, capability, route, options) {
   const controller = new AbortController();
   const remaining = o.deadline - Date.now();
   if (remaining <= 0) return pending('WRITER_SCHEMA_NOT_VERIFIED_BUDGET');
-  const timer = setTimeout(
-    () => controller.abort(),
-    Math.min(routeProbe.DEFAULT_TIMEOUT_MS, remaining)
-  );
+  const timeoutMs = o.timeoutMs || Math.min(routeProbe.DEFAULT_TIMEOUT_MS, remaining);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   let httpFailure;
   try {
     const response = await (o.fetch || globalThis.fetch)(
@@ -136,11 +136,19 @@ async function httpProof(candidate, capability, route, options) {
 
 async function probeCapabilities(candidates, profile, options = {}) {
   const o = options;
+  const dispatchConfig = sourcesApi.getDispatchConfig(o.registry, o);
   const data = o.evidenceDir
     ? evidence.loadEvidence(o.evidenceDir)
     : o.capabilityEvidence || (o.capabilityEvidence = {});
   const records = data.capabilityProbes || (data.capabilityProbes = {});
-  const deadline = o.deadline ?? Date.now() + PROBE_BUDGET_MS;
+  const schemaBudget =
+    o.schemaProbeBudgetMs ??
+    o.schemaBudgetMs ??
+    dispatchConfig.schemaProbeBudgetMs ??
+    PROBE_BUDGET_MS;
+  const deadline = o.deadline ?? Date.now() + schemaBudget;
+
+  const store = o.routeHealth || null;
 
   for (const c of candidates) {
     if (c.blocked || c.credentialEnvMissing || !c.accountId || c.accountId === '*') continue;
@@ -157,12 +165,23 @@ async function probeCapabilities(candidates, profile, options = {}) {
     const source = (o.registry?.sources || []).find((s) =>
       [c.sourceId, c.source, c.gateway, c.upstream].includes(s.id)
     );
+    const isPureCli = ['codex', 'agy-pool'].includes(c.harness);
+    const isVia9Router = [
+      c.gateway,
+      c.upstream,
+      c.sourceId,
+      c.source,
+      source?.id,
+      source?.reachedVia,
+    ].some((id) => ['9router', 'ninerouter'].includes(String(id || '').toLowerCase()));
     const direct =
-      c.harness === 'direct-http' ||
-      (c.harness === 'opencode-direct' && Boolean(source?.endpoint)) ||
-      (source?.kind === require('./sources').Kind.MODEL_SOURCE &&
-        !source.harness &&
-        !require('./harness').HARNESSES[c.harness]);
+      !isPureCli &&
+      (c.harness === 'direct-http' ||
+        c.harness === 'opencode-direct' ||
+        ((c.harness === 'opencode' || c.harness === 'paseo') && isVia9Router) ||
+        (source?.kind === require('./sources').Kind.MODEL_SOURCE &&
+          !source.harness &&
+          !require('./harness').HARNESSES[c.harness]));
     const binding = crypto
       .createHash('sha256')
       .update(
@@ -177,23 +196,92 @@ async function probeCapabilities(candidates, profile, options = {}) {
       .digest('hex');
     const cached = records[key]?.binding === binding ? records[key] : { binding };
     c.capabilities = { ...c.capabilities };
-    for (const cap of CAPABILITIES.filter((cap) =>
+
+    const neededCaps = CAPABILITIES.filter((cap) =>
       (profile.requiredCapabilities || []).includes(cap)
-    )) {
-      // Normalized observed values remain usable; registry declarations always require a probe.
+    );
+
+    const identity = require('./route-health').probeIdentity(c);
+    const record = store
+      ? require('./route-health').getPathRecord(store, identity.model, identity.route)
+      : null;
+
+    if (record && record.status && record.status !== 'AVAILABLE') {
+      const failProof = {
+        ok: false,
+        reason: record.failureReason || 'ROUTE_UNAVAILABLE',
+        httpStatus: record.probeResult?.status,
+        observedAt: new Date(o.now ?? Date.now()).toISOString(),
+      };
+      for (const cap of neededCaps) {
+        cached[cap] = failProof;
+        c.capabilityEvidence = { ...c.capabilityEvidence, [cap]: failProof };
+        if (cap === 'jsonSchema') c.jsonSchemaEvidence = failProof;
+        delete c.capabilities[cap];
+      }
+      records[key] = cached;
+      continue;
+    }
+
+    // Cheap HTTP preflight before checking jsonSchema/tools
+    const hasUncached = neededCaps.some((cap) => {
+      const p = cached[cap];
+      return !p || p.ok === false;
+    });
+
+    if (hasUncached && direct && route && o.preflightHttp === true) {
+      const remaining = deadline - Date.now();
+      const identity = require('./route-health').probeIdentity(c);
+      const record = store
+        ? require('./route-health').getPathRecord(store, identity.model, identity.route)
+        : null;
+      const timeoutMs = sourcesApi.resolveProbeTimeout(c, record, dispatchConfig, remaining);
+      let preflight;
+      if (o.allowNetwork === false && typeof o.fetch !== 'function') {
+        preflight = { ok: false, status: 0, body: 'CAPABILITY_PROBE_TRANSPORT_NOT_INJECTED' };
+      } else {
+        preflight = await routeProbe.boundedProbe(
+          o.routeProbe || routeProbe.probeRoute,
+          route,
+          route.apiKeyEnv,
+          { ...process.env, ...o.env },
+          { timeoutMs, fetch: o.fetch, signal: o.signal }
+        );
+      }
+      if (!preflight.ok) {
+        if (store && o.persistRouteHealth !== false) {
+          require('./route-health').rememberProbe(c, preflight, { ...o, routeHealth: store });
+        }
+        const cause = routeProbe.failureReason(routeProbe.classifyProbeFailure(preflight));
+        const failProof = {
+          ok: false,
+          reason: cause,
+          httpStatus: preflight.status,
+          observedAt: new Date(o.now ?? Date.now()).toISOString(),
+        };
+        for (const cap of neededCaps) {
+          cached[cap] = failProof;
+          c.capabilityEvidence = { ...c.capabilityEvidence, [cap]: failProof };
+          if (cap === 'jsonSchema') c.jsonSchemaEvidence = failProof;
+          delete c.capabilities[cap];
+        }
+        records[key] = cached;
+        continue; // Never check schema on failed preflight
+      }
+    }
+
+    for (const cap of neededCaps) {
+      const isPool = c.harness === 'agy-pool';
       const forceSchema = cap === 'jsonSchema' && ['codex', 'agy-pool'].includes(c.harness);
       if (
         c.capabilities[cap] !== undefined &&
+        !c.capabilityDeclarations?.[cap] &&
         !forceSchema &&
-        c.harness !== 'agy-pool' &&
-        !c.capabilityDeclarations?.[cap]
+        (!isPool || sourcesApi.isAgyPoolWriterEnabled(o.registry, o))
       )
         continue;
       const authorized =
-        c.harness !== 'agy-pool' ||
-        String(o.externalWorkers || '')
-          .split(',')
-          .includes('agy-pool');
+        c.harness !== 'agy-pool' || sourcesApi.isAgyPoolWriterEnabled(o.registry, o);
       let proof = authorized ? cached[cap] : pending('WRITER_SCHEMA_LAUNCH_NOT_AUTHORIZED');
       if (
         proof?.ok === false &&
@@ -202,17 +290,24 @@ async function probeCapabilities(candidates, profile, options = {}) {
       )
         proof = undefined;
       if (!proof) {
+        const remaining = deadline - Date.now();
+        const identity = require('./route-health').probeIdentity(c);
+        const record = store
+          ? require('./route-health').getPathRecord(store, identity.model, identity.route)
+          : null;
+        const timeoutMs = sourcesApi.resolveProbeTimeout(c, record, dispatchConfig, remaining);
+
         if (Date.now() >= deadline) proof = pending('WRITER_SCHEMA_NOT_VERIFIED_BUDGET');
         else if (direct && route && o.allowNetwork === false && typeof o.fetch !== 'function')
           proof = pending('CAPABILITY_PROBE_TRANSPORT_NOT_INJECTED');
         else if (direct && route)
           proof = await routeProbe.boundedProbe(
             (_c, _key, _env, probeOptions) =>
-              httpProof(c, cap, route, { ...o, deadline, ...probeOptions }),
+              httpProof(c, cap, route, { ...o, deadline, timeoutMs, ...probeOptions }),
             c,
             route.apiKeyEnv,
             o.env,
-            { timeoutMs: Math.min(routeProbe.DEFAULT_TIMEOUT_MS, deadline - Date.now()) }
+            { timeoutMs, fetch: o.fetch }
           );
         else if (typeof o.probeCli === 'function')
           proof = await routeProbe.boundedProbe(

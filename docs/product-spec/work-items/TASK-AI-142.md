@@ -248,6 +248,11 @@ Decision log entries link `goalId -> workItemId -> candidateKey -> session -> co
 - Part H2 Hermes session selection, custom config binding, and `shipde-controller` skill file are delivered in Part H2.
 - Live acceptance across chat and controller runs in Part H3 following merge of H1 and H2.
 
+### H3 live: configurable probe budget, probe ordering by evidence, and HTTP-first capability verification (2026-10-17)
+
+Operator decision 2026-10-17 23:10: the agy pool may write (writerEnabled/allowWriter true in sources.json). Tests set the flags explicitly rather than reading the tracked value.
+PR C moves hard-coded probe budgets (`probeBudgetMs`, `maxConcurrentProbes`, `probeTimeoutMs`, `probeSafetyMarginMs`, `schemaProbeBudgetMs`) into `sources.json.dispatch`. Individual probe timeouts adapt to measured route duration (`elapsedMs + safetyMarginMs`) when available and fall back to configured `probeTimeoutMs`. Route probe ordering (`orderProbeRoutes`) puts routes with fresh successful evidence ahead of higher-scored routes without evidence; an unevidenced route is never ranked above an evidenced route. `agy-pool` writer permission is governed by registry configuration (`writerEnabled: false`, default OFF). Capability verification probes cheap HTTP routes first, so routes failing HTTP preflight (such as 402 monthly limits) never execute schema checks. HTTP-routed models (9Router, OpenCode-direct, direct-http) verify capabilities through direct OpenAI-compatible HTTP requests without spawning CLI harnesses. Pure CLI harness capability proofs (Codex, agy-pool) persist to evidence and are reused across rounds without re-execution.
+
 ### H3 live: verify unknown writer capabilities instead of inventing missing capabilities (2026-10-17)
 
 Review fixes: capability probing in dispatch runs only through an injectable seam and makes no network call in dry-run or tests unless a probe or fetch is injected; direct HTTP probing is chosen from the route (opencode-direct with a source endpoint, direct-http), not from an http accessPath, so loopback daemon harnesses are not probed as direct HTTP; a missing registry no longer falls back to the machine sources.json; the writer schema timeout comes from the existing route/profile timeout.

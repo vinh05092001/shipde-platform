@@ -156,6 +156,8 @@
         "agy10"
       ],
       "capabilities": { "tools": true },
+      "writerEnabled": true,
+      "allowWriter": true,
       "harness": "agy-pool",
       "accessPath": "cli",
       "credential": { "type": "none" },
@@ -334,6 +336,11 @@
     }
   ],
   "dispatch": {
+    "probeBudgetMs": 180000,
+    "maxConcurrentProbes": 8,
+    "probeTimeoutMs": 8000,
+    "probeSafetyMarginMs": 2000,
+    "schemaProbeBudgetMs": 180000,
     "note": "How a registry account's `provider` reaches a running session. This table is why the executor needs no provider branch: a new provider is a row here.",
     "providers": {
       "claude-code": { "harness": "paseo", "provider": "claude" },
