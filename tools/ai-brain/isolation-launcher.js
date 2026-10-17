@@ -1113,6 +1113,28 @@ function appendGitInfoExclude(workerRoot, entries) {
   fs.appendFileSync(excludePath, prefix + missing.join('\n') + '\n', 'utf8');
 }
 
+/**
+ * Provisioning ends on the requested base. When carry-over merged the previous
+ * attempt's work, HEAD is that merge commit and its first parent must be the
+ * base; otherwise HEAD must be the base itself. Live 17/10: every retry of
+ * GOAL-G-F622511E-1 failed PROVISION_BASE_MISMATCH because the carry-over
+ * merge commit was compared with the base directly.
+ */
+function provisionedHeadMatchesBase(workerRoot, provisionedHeadSha, baseSha, carriedOver, run) {
+  if (!provisionedHeadSha || !baseSha) return false;
+  const head = provisionedHeadSha.toLowerCase();
+  const base = baseSha.toLowerCase();
+  if (head === base) return true;
+  if (carriedOver !== 'merged') return false;
+  const git = run || cp.spawnSync;
+  const res = git('git', ['rev-parse', '--verify', '--quiet', head + '^1'], {
+    cwd: workerRoot,
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  return Boolean(res && res.status === 0 && String(res.stdout).trim().toLowerCase() === base);
+}
+
 function ensureGoalRegistrationInWorker(hostCwd, workerRoot, workItemId) {
   if (!workItemId || typeof workItemId !== 'string') return;
   const isGoal = workItemId.toUpperCase().startsWith('GOAL-');
@@ -1981,7 +2003,7 @@ function getIsolatedLauncher() {
         }
       }
 
-      if (!provisionedHeadSha || provisionedHeadSha.toLowerCase() !== headSha.toLowerCase()) {
+      if (!provisionedHeadMatchesBase(workerRoot, provisionedHeadSha, headSha, carriedOver)) {
         const err = new Error(
           'PROVISION_BASE_MISMATCH: provisioned worker root HEAD (' +
             (provisionedHeadSha || 'unknown') +
@@ -2787,6 +2809,7 @@ function readLaunchResult(launchResultPath, completionNonce, hostRes) {
 }
 
 module.exports = {
+  provisionedHeadMatchesBase,
   commitNativeWriterChanges,
   getIsolatedLauncher,
   getFolderHash,
