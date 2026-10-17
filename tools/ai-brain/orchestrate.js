@@ -1856,6 +1856,7 @@ function runHostBrainGate(job, options = {}) {
     env: Object.assign({}, process.env, {
       NINEROUTER_API_KEY: undefined,
       AI_BRAIN_DISCOVERED_SOURCES: 'none',
+      AI_BRAIN_MACHINE_DATA: 'none',
     }),
   });
   const output = String(result.stdout || '') + '\n' + String(result.stderr || '');
