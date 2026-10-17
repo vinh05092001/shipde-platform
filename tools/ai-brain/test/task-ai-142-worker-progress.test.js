@@ -35,6 +35,7 @@ function runGeneratedHost({
   usageFile,
   progressTimeoutMs,
   tempRoot,
+  fakeClockPath,
 }) {
   const dir = fs.mkdtempSync(path.join(tempRoot || os.tmpdir(), 'shipde-progress-test-'));
   const targetPath = path.join(dir, 'target.ps1');
@@ -43,7 +44,7 @@ function runGeneratedHost({
 
   const launchResultPath = path.join(dir, 'launch-result.json');
   const completionNonce = crypto.randomBytes(16).toString('hex');
-  const script = buildWorkerLaunchScript({
+  let script = buildWorkerLaunchScript({
     credPath: path.join(dir, 'WorkerUser.cred'),
     workerRoot: dir,
     workerUsername: 'ShipDeWorker',
@@ -57,6 +58,26 @@ function runGeneratedHost({
     usageFile,
     progressTimeoutMs,
   });
+
+  if (fakeClockPath) {
+    const clockFn = `function Get-ProgressTestClock {
+    try {
+        if (Test-Path -LiteralPath '${fakeClockPath.replace(/'/g, "''")}') {
+            $ms = [double](Get-Content -LiteralPath '${fakeClockPath.replace(/'/g, "''")}' -Raw)
+            return [long]($ms * [System.Diagnostics.Stopwatch]::Frequency / 1000)
+        }
+    } catch {}
+    return [long]0
+}
+`;
+    script =
+      clockFn +
+      script.replaceAll(
+        '[System.Diagnostics.Stopwatch]::GetTimestamp()',
+        '(Get-ProgressTestClock)'
+      );
+  }
+
   const hostPath = path.join(dir, 'host.ps1');
   fs.writeFileSync(hostPath, script, 'utf8');
 
@@ -199,26 +220,34 @@ test('B5: genuine tool progress and file changes reset stall detection', windows
   const tempRoot = path.join(__dirname, '..', '..', '..', '.upstream-tmp');
   fs.mkdirSync(tempRoot, { recursive: true });
   const usageFile = path.join(tempRoot, 'task-ai-142-genuine-usage.json');
+  const clockFile = path.join(tempRoot, 'task-ai-142-b5-clock.txt');
   fs.rmSync(usageFile, { force: true });
+  fs.writeFileSync(clockFile, '0\r\n', 'utf8');
 
-  const startedAt = Date.now();
   const { hostRes, raw, readIt, dir } = runGeneratedHost({
     workerTimeoutMs: 30000,
     progressTimeoutMs: 1500,
     usageFile,
     tempRoot,
+    fakeClockPath: clockFile,
     targetLines: [
       '$ErrorActionPreference = "Stop"',
+      `Set-Content -LiteralPath '${clockFile.replace(/'/g, "''")}' -Value "0"`,
       'Write-Output \'{"tokens":{"input":100,"output":0,"total":100}}\'',
-      'Start-Sleep -Milliseconds 600',
+      'Start-Sleep -Milliseconds 50',
+      `Set-Content -LiteralPath '${clockFile.replace(/'/g, "''")}' -Value "600"`,
+      'Start-Sleep -Milliseconds 50',
       'Write-Output \'{"type":"tool_use","part":{"type":"tool","tool":"bash"}}\'',
-      'Start-Sleep -Milliseconds 600',
+      'Start-Sleep -Milliseconds 50',
+      `Set-Content -LiteralPath '${clockFile.replace(/'/g, "''")}' -Value "1200"`,
+      'Start-Sleep -Milliseconds 50',
       'Set-Content -LiteralPath "progress-file.txt" -Value "progress made"',
-      'Start-Sleep -Milliseconds 600',
+      'Start-Sleep -Milliseconds 50',
+      `Set-Content -LiteralPath '${clockFile.replace(/'/g, "''")}' -Value "1800"`,
+      'Start-Sleep -Milliseconds 50',
       'exit 0',
     ],
   });
-  const elapsedMs = Date.now() - startedAt;
 
   assert.equal(hostRes.status, 0, String(hostRes.stderr || hostRes.stdout || ''));
   assert.ok(raw, 'launch result must be written');
@@ -233,5 +262,6 @@ test('B5: genuine tool progress and file changes reset stall detection', windows
   assert.equal(result.exitCode, 0);
 
   fs.rmSync(usageFile, { force: true });
+  fs.rmSync(clockFile, { force: true });
   fs.rmSync(dir, { recursive: true, force: true });
 });

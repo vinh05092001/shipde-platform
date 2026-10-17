@@ -153,10 +153,28 @@ function readCodexSessionQuota(options, deps) {
     };
   }
 
-  const primaryUsed = Number(rateLimitsRecord.primary.used_percent) || 0;
+  const rawPrimaryUsed = rateLimitsRecord.primary && rateLimitsRecord.primary.used_percent;
+  if (
+    rawPrimaryUsed === null ||
+    rawPrimaryUsed === undefined ||
+    typeof rawPrimaryUsed !== 'number' ||
+    !Number.isFinite(rawPrimaryUsed)
+  ) {
+    return {
+      available: false,
+      status: 'unknown',
+      observedAt,
+      reason:
+        'Thiếu hoặc sai định dạng trường primary.used_percent trong rate_limits log phiên Codex',
+    };
+  }
+
+  const primaryUsed = rawPrimaryUsed;
   const secondaryUsed =
-    rateLimitsRecord.secondary && Number.isFinite(rateLimitsRecord.secondary.used_percent)
-      ? Number(rateLimitsRecord.secondary.used_percent)
+    rateLimitsRecord.secondary &&
+    typeof rateLimitsRecord.secondary.used_percent === 'number' &&
+    Number.isFinite(rateLimitsRecord.secondary.used_percent)
+      ? rateLimitsRecord.secondary.used_percent
       : 0;
 
   const isExhausted = primaryUsed >= 100 || secondaryUsed >= 100;

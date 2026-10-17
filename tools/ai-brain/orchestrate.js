@@ -4653,7 +4653,7 @@ async function runOrchestration(goal, opts) {
             result
           );
           writerProbeResults.set(candidateKey(candidate), result);
-          require('./route-health').rememberProbe(candidate, result, o);
+          require('./route-health').rememberProbe(candidate, result, { ...o, workItemId: item.id });
           if (result?.ok === true && result?.quota?.status !== 'exhausted') return true;
           if (result?.quota?.status === 'exhausted') {
             refuse(candidate, 'QUOTA_EXHAUSTED: route probe');
@@ -4665,9 +4665,11 @@ async function runOrchestration(goal, opts) {
             Date.now() - writerProbeStartedAt >= PROBE_BUDGET_MS
               ? 'PROBE_BUDGET_EXHAUSTED: writer route probe budget exhausted'
               : 'WRITER_ROUTE_PROBE_FAILED ' + reasonCode;
-          recordWriterFailure(key, reason, reasonCode, 'candidate');
+          const unknown = require('./route-health').isUnverifiedProbe(result);
+          if (unknown) writerProbeResults.delete(key);
+          recordWriterFailure(key, reason, reasonCode, unknown ? 'local' : 'candidate');
           recordWriterPrompt(candidate);
-          refuse(candidate, reason);
+          refuse(candidate, reason, !unknown);
           const cause = String(result?.cause || result?.reasonCode || reasonCode)
             .toLowerCase()
             .trim();
@@ -4932,12 +4934,17 @@ async function runOrchestration(goal, opts) {
           recordPostSelectFailure('QUOTA_EXHAUSTED: route probe', 'QUOTA_EXHAUSTED', 'candidate');
           continue;
         }
-        require('./route-health').rememberProbe(candidate, probeResult, o);
+        require('./route-health').rememberProbe(candidate, probeResult, {
+          ...o,
+          workItemId: item.id,
+        });
         if (!probeResult || probeResult.ok !== true) {
           const reasonCode = writerProbeFailureReason(probeResult);
           const reason = 'WRITER_ROUTE_PROBE_FAILED ' + reasonCode;
-          recordPostSelectFailure(reason, reasonCode, 'candidate');
-          failedKeys.add(decision.chosen);
+          const unknown = require('./route-health').isUnverifiedProbe(probeResult);
+          recordPostSelectFailure(reason, reasonCode, unknown ? 'local' : 'candidate');
+          if (unknown) writerProbeResults.delete(decision.chosen);
+          else failedKeys.add(decision.chosen);
 
           const rawCause =
             (probeResult && (probeResult.cause || probeResult.reasonCode)) || reasonCode;

@@ -293,6 +293,44 @@ keeps the actual launch error, without charging the provider a failure or cooldo
 Offline regression in `task-ai-121.test.js`: origin/main launched four times; the
 fix stops after two `PROVISION_BASE_MISMATCH` failures.
 
+### H3 live: local router probes are sent over loopback (2026-10-17)
+
+Root cause of the run-5 failure of goal G-F622511E: `probeGatewayModel` refused every credentialed probe whose endpoint was not HTTPS, including 9router at http://127.0.0.1, so a route that answered 200 failed before any request with status 0. Plain HTTP is now allowed only to loopback hosts; any other host still needs HTTPS. Correction to the note below: an unexplained probe failure is recorded as PROBE_NO_RESPONSE with no cooldown (not UNAVAILABLE_NOW), and the decision log keeps the redacted raw result (status, error, body).
+
+### H3 live: unknown probe evidence does not park a route (2026-10-17)
+
+A failed probe without HTTP response evidence or an explicit failure cause is
+`PROBE_NO_RESPONSE`, not confirmed `UNAVAILABLE_NOW`. It does not increase the
+failure backoff and is due for another probe at the next selection. Existing
+versioned, status-zero records missing `probeCause` are also eligible for recheck.
+Known HTTP refusals and confirmed timeouts retain the existing cause/cooldown
+policy in `probeCooldownMs`; no new cooldown value is introduced. Unverified
+observations are never recorded as successful probes or healthy routes.
+
+Both writer pre-probe and runtime fallback keep an uncertain route out of the
+permanent failure exclusion/cache. The next selection can probe it again before
+launch. Intake creates its decision destination before refreshing route health.
+The shared health recorder logs uncertain probe status and body/message/error,
+redacting environment secrets before truncating to the existing HTTP body limit.
+
+Read-only evidence: the live `ag/gemini-3.8-flash|9router@xkiro` record has HTTP
+status zero, no cause, and a 30-minute interval starting 09:17:46.055Z. That shape
+comes from intake `recordResult`, whereas `rememberProbe` always sets a cause.
+An offline reproduction using the current registry metadata shows that
+`probeGatewayModel` rejects a credentialed HTTP 9Router endpoint with
+`credentialed probe endpoint must use HTTPS` before invoking fetch. This local
+refusal explains a reproducible source of the missing cause; the historical
+round-five error cannot be proven uniquely because its raw response was not kept.
+The HTTPS guard and live health/intake files were not modified.
+
+Seven new regressions fail on origin/main
+`40275bb8a4045367b7623e0dc7f3bfe243832971` and pass after repair, covering health
+eligibility, old cause-less records, safe raw diagnostics, intake destination,
+and a writer recovering on the next probe. Additional checks preserve HTTP
+401/403/451/402/quota/404 handling and confirmed-timeout cooldown. Final offline
+validation: 126 tests passed, including Controller canary, intake, route reprobe,
+probe memory, writer preflight, and route-health fallback coverage.
+
 ### H3 live: pre-launch check uses the carry-over rule (2026-10-17)
 
 Run 4 of goal G-F622511E chose ag/gemini-3.8-flash (health keys fixed) but 20 launches failed PROVISION_BASE_MISMATCH at the second check, "worker root HEAD before agent start", which still compared the carry-over merge with the base. It now applies the same rule as provisioning; a retained worker head must still match exactly.
@@ -453,6 +491,38 @@ Verification (2026-10-14): sequential TASK-AI-141 199/199, TASK-AI-142 140/140, 
 ## H3 decision log size
 
 Selection logs retain the full chosenCandidate, the existing chosen identity, top ten ranked candidates and score breakdown summaries, and rejection totals by reasonCode with ten examples. Full runtime routing arrays remain available for fallback. Daily logs roll at 50 MiB into date.N.jsonl; readers consume all parts in numeric order. `node tools/ai-brain/cli.js decisions compact --dir <dir>` incrementally writes capped copies named `<source>.compact-<timestamp>.jsonl`, preserving originals. Copies are excluded from daily history until the operator explicitly replaces originals; malformed input fails rather than silently dropping evidence. No live data is modified by this change.
+
+### H3 live: worker progress stall detection test B5 uses injected clock (2026-10-17)
+
+Test B5 in `tools/ai-brain/test/task-ai-142-worker-progress.test.js` verified that genuine progress (tool calls, file signature changes) resets the worker stall detection timer. Under heavy system load, real wall-clock sleeps (600ms) could stretch beyond the 1500ms timeout threshold before progress was recorded, causing intermittent test failures.
+
+1. Injected a simulated clock (`fakeClockPath`) into `runGeneratedHost` in `task-ai-142-worker-progress.test.js`, overriding `[System.Diagnostics.Stopwatch]::GetTimestamp()` in the generated host script.
+2. Synchronized simulated time advances with target execution steps, ensuring deterministic timer resets without relying on real wall-clock elapsed time.
+3. Preserved all original test assertions and contracts without loosening timeout tolerances.
+
+Verification: `node --test tools/ai-brain/test/task-ai-142-worker-progress.test.js` passed 10 consecutive runs under parallel full-suite load. Changed files pass Prettier, ESLint, and `git diff --check`.
+
+### H3 live: missing Codex used_percent is treated as unknown quota rather than zero (2026-10-17)
+
+When `primary.used_percent` in Codex session rollout logs was omitted or non-numeric, `readCodexSessionQuota` in `tools/ai-brain/codex-quota.js` previously evaluated `Number(...) || 0`, falsely treating unmeasured quota as 0% used (`open`).
+
+1. Enforced strict validation on `primary.used_percent`: when missing, null, undefined, or non-finite, `readCodexSessionQuota` returns `status: 'unknown'` and `available: false`, specifying the exact missing field in `reason`.
+2. Omitted or unparseable `secondary.used_percent` gracefully falls back to evaluating `primary.used_percent` alone, retaining established secondary behavior.
+3. Tests use synthetic session rollout files in temporary directories and never access or create `auth.json`.
+
+Verification: `node --test tools/ai-brain/test/task-ai-142-codex-quota-missing.test.js tools/ai-brain/test/task-ai-142-audit-repairs.test.js` passed 14/14 tests. Changed files pass Prettier, ESLint, and `git diff --check`.
+
+### H3 live: unverified route probes retain diagnostic evidence without a 30-minute penalty (2026-10-17)
+
+When candidate route pre-probes return an unverified failure (`ok: false` with no HTTP status or recognizable error cause, e.g. `ag/gemini-3.8-flash|9router@xkiro`), `recordResult` in `tools/ai-brain/route-health.js` previously assigned the full 30-minute transient cooldown (`UNAVAILABLE_NOW`, 1800000ms), and `failedKeys` in `orchestrate.js` excluded the route from subsequent selection rounds, starving the candidate loop. Furthermore, raw diagnostic details (HTTP status, error message, body) were lost because intake had not initialized the run decision directory prior to route probe fallback.
+
+1. Added `isUnverifiedProbe` and `unverifiedRecord` in `tools/ai-brain/route-health.js`. Unverified / cause-less probe failures (`status === null || status === undefined || status === 0` without recognized error patterns) record as `UNAVAILABLE_NOW` with `failures: 0` and immediate `nextCheckAt = now`, remaining eligible for re-probing in subsequent selection rounds (`isEligible`, `isSelectable`, and `orderProbeRoutes`).
+2. Log raw diagnostics (`probeResult: { ok: false, status, message, error }` with redacted secrets) to decision records via `recordUnknownProbe` and `recordDecision`.
+3. Pre-create the run decision directory in `tools/ai-brain/intake.js` so candidate route probe fallback writes diagnostics into the active run before route refresh.
+4. Keep unverified failures scoped locally without registering permanent route failures or blacklisting keys in `failedKeys` in `tools/ai-brain/orchestrate.js`.
+5. Genuine HTTP errors (401, 403, 451, 402, 429, 404, etc.) retain their explicit causes, diagnostics, and full standard cooldown backoffs.
+
+Verification: `node --test tools/ai-brain/test/task-ai-142-unknown-probe-cause.test.js tools/ai-brain/test/task-ai-142-probe-transient.test.js tools/ai-brain/test/task-ai-142-writer-probe.test.js tools/ai-brain/test/task-ai-131.test.js` passed 52/52 tests. Changed files pass Prettier and `git diff --check`.
 
 ### H3 live: audit repairs (2026-10-17)
 
