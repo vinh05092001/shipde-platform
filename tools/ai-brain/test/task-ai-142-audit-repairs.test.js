@@ -36,13 +36,10 @@ describe('TASK-AI-142 Audit Repairs: Benchmark & Quality hygiene', () => {
     }
   });
 
-  test('benchmarks.json source_urls are valid swebench.com URLs and marked verified: false', () => {
+  test('benchmarks.json has purged unverified/fabricated benchmark records and is empty', () => {
     const list = benchmarks.loadBenchmarks();
-    assert.ok(list.length > 0);
-    for (const r of list) {
-      assert.equal(r.verified, false, 'Shipped benchmark records must be verified: false');
-      assert.equal(r.source_url, 'https://www.swebench.com/');
-    }
+    assert.ok(Array.isArray(list), 'loadBenchmarks must return array');
+    assert.equal(list.length, 0, 'shipped benchmarks must be empty (fabricated records purged)');
   });
 });
 
@@ -177,78 +174,266 @@ describe('TASK-AI-142 Audit Repairs: Transient cooldown for TIMEOUT and PROBE_NO
 });
 
 describe('TASK-AI-142 Audit Repairs: Live Codex CLI Quota Telemetry', () => {
-  test('codex-cli with valid auth resolves status "open" and is NOT rejected with NATIVE_WRITER_QUOTA_UNVERIFIED', () => {
-    const codexCandidate = {
-      harness: 'codex',
-      source: 'codex',
-      sourceId: 'codex',
-      accountId: 'codex-cli',
-      quotaScope: 'codex-cli',
-      modelId: 'gpt-5.3-codex',
-      binding: 'cli-login',
-      evidence: [],
-      quality: 85,
-      cost: 0,
-    };
-    codexCandidate.candidateKey = routing.candidateKey(codexCandidate);
+  const codexCandidate = {
+    harness: 'codex',
+    source: 'codex',
+    sourceId: 'codex',
+    accountId: 'codex-cli',
+    quotaScope: 'codex-cli',
+    modelId: 'gpt-5.3-codex',
+    binding: 'cli-login',
+    evidence: [],
+    quality: 85,
+    cost: 0,
+  };
+  codexCandidate.candidateKey = routing.candidateKey(codexCandidate);
 
-    const fakeCodexOpts = {
-      homeDir: '/fake/home',
-      fs: {
-        existsSync: (p) => p.endsWith('auth.json') || p.endsWith('config.toml'),
-        statSync: () => ({ isFile: () => true }),
-        readFileSync: () => 'model = "gpt-5.3-codex"\n',
+  const writerProfile = {
+    taskId: 'TASK-CODEX-WRITER',
+    role: 'writer',
+    complexity: 'complex',
+    requiredCapabilities: [],
+    proofFloor: 'NONE',
+    qualityFloor: 50,
+    costCeiling: 100,
+  };
+  const assessment = {
+    weightProfile: 'QUALITY_FIRST',
+    weights: routing.WEIGHT_PROFILES.QUALITY_FIRST,
+  };
+
+  function makeRolloutContent({
+    usedPrimary = 90,
+    usedSecondary = 86,
+    windowPrimary = 300,
+    windowSecondary = 10080,
+    resetsPrimary = 1792211503,
+    timestamp = new Date().toISOString(),
+  } = {}) {
+    return (
+      JSON.stringify({
+        timestamp,
+        type: 'event_msg',
+        payload: {
+          type: 'rate_limits',
+          rate_limits: {
+            limit_id: 'codex',
+            primary: {
+              used_percent: usedPrimary,
+              window_minutes: windowPrimary,
+              resets_at: resetsPrimary,
+            },
+            secondary: {
+              used_percent: usedSecondary,
+              window_minutes: windowSecondary,
+              resets_at: 1792650681,
+            },
+            credits: { has_credits: false, balance: '0' },
+          },
+        },
+      }) + '\n'
+    );
+  }
+
+  function makeFakeCodexFs({ auth = true, config = 'model = "gpt-5.3-codex"\n', sessions = [] } = {}) {
+    const files = new Map();
+    const dirs = new Set(['/fake', '/fake/home', '/fake/home/.codex', '/fake/home/.codex/sessions']);
+
+    if (auth) files.set('/fake/home/.codex/auth.json', '{"auth":"dummy"}');
+    if (config) files.set('/fake/home/.codex/config.toml', config);
+
+    for (const s of sessions) {
+      const filePath = `/fake/home/.codex/sessions/${s.name}`;
+      files.set(filePath, s.content);
+    }
+
+    return {
+      existsSync: (p) => {
+        const norm = p.replace(/\\/g, '/');
+        return files.has(norm) || dirs.has(norm);
+      },
+      readdirSync: (dir) => {
+        const norm = dir.replace(/\\/g, '/');
+        const prefix = norm.endsWith('/') ? norm : norm + '/';
+        const names = [];
+        for (const f of files.keys()) {
+          if (f.startsWith(prefix)) {
+            const rest = f.slice(prefix.length);
+            if (!rest.includes('/')) {
+              names.push(rest);
+            }
+          }
+        }
+        return names;
+      },
+      statSync: (p) => {
+        const norm = p.replace(/\\/g, '/');
+        if (dirs.has(norm)) {
+          return { isDirectory: () => true, isFile: () => false };
+        }
+        if (files.has(norm)) {
+          return { isDirectory: () => false, isFile: () => true };
+        }
+        throw new Error(`ENOENT: ${p}`);
+      },
+      readFileSync: (p) => {
+        const norm = p.replace(/\\/g, '/');
+        if (norm.endsWith('auth.json')) {
+          throw new Error('AUTH_FORBIDDEN: auth.json must never be read for quota!');
+        }
+        if (!files.has(norm)) throw new Error(`ENOENT: ${p}`);
+        return files.get(norm);
       },
     };
+  }
 
-    // Headroom resolution with live auth succeeds with 'open'
+  test('auth.json present but NO session rollout logs -> unknown status, rejected with NATIVE_WRITER_QUOTA_UNVERIFIED', () => {
+    const now = Date.now();
+    const fakeFs = makeFakeCodexFs({ auth: true, sessions: [] });
+    const codexOpts = { homeDir: '/fake/home', fs: fakeFs };
+
     const headroom = ranking.resolveCandidateHeadroom(codexCandidate, {
-      codexOpts: fakeCodexOpts,
+      codexOpts,
       useStoredQuota: true,
-      now: Date.now(),
+      now,
     });
-    assert.equal(headroom.status, 'open');
+    assert.equal(headroom.status, 'unknown', 'absence of session rollout must resolve unknown');
 
-    // Profile ranking admits codex-cli as writer
-    const profile = {
-      taskId: 'TASK-CODEX-WRITER',
-      role: 'writer',
-      complexity: 'complex',
-      requiredCapabilities: [],
-      proofFloor: 'NONE',
-      qualityFloor: 50,
-      costCeiling: 100,
-    };
-    const assessment = {
-      weightProfile: 'QUALITY_FIRST',
-      weights: routing.WEIGHT_PROFILES.QUALITY_FIRST,
-    };
-
-    const ranked = routing.rankForProfile([codexCandidate], profile, assessment, {
-      codexOpts: fakeCodexOpts,
+    const ranked = routing.rankForProfile([codexCandidate], writerProfile, assessment, {
+      codexOpts,
       useStoredQuota: true,
-      now: Date.now(),
+      now,
     });
+    assert.equal(ranked.ranking.length, 0, 'writer cannot be chosen without live quota telemetry');
+    const rejection = ranked.rejected.find((r) => r.candidateKey === codexCandidate.candidateKey);
+    assert.ok(rejection, 'candidate must be rejected');
+    assert.equal(rejection.reasonCode, 'NATIVE_WRITER_QUOTA_UNVERIFIED');
+  });
 
-    assert.equal(ranked.rejected.length, 0, 'codex-cli must not be rejected');
+  test('fixture rollout with 90%/86% resolves "tight" status and is admitted in writer ranking', () => {
+    const now = Date.now();
+    const content = makeRolloutContent({ usedPrimary: 90, usedSecondary: 86, timestamp: new Date(now).toISOString() });
+    const fakeFs = makeFakeCodexFs({
+      auth: true,
+      sessions: [{ name: 'rollout-2026-10-17T06-51-57-test.jsonl', content }],
+    });
+    const codexOpts = { homeDir: '/fake/home', fs: fakeFs };
+
+    const headroom = ranking.resolveCandidateHeadroom(codexCandidate, {
+      codexOpts,
+      useStoredQuota: true,
+      now,
+    });
+    assert.equal(headroom.status, 'tight', '90% used primary is past 80% threshold -> tight');
+
+    const ranked = routing.rankForProfile([codexCandidate], writerProfile, assessment, {
+      codexOpts,
+      useStoredQuota: true,
+      now,
+    });
+    assert.equal(ranked.rejected.length, 0, 'candidate must be admitted when tight');
     assert.equal(ranked.chosen, codexCandidate.candidateKey);
   });
 
-  test('refresh-quota.js supports codex provider and reports open when auth exists', () => {
+  test('fixture rollout with 50%/40% resolves "open" status and is admitted in writer ranking', () => {
+    const now = Date.now();
+    const content = makeRolloutContent({ usedPrimary: 50, usedSecondary: 40, timestamp: new Date(now).toISOString() });
+    const fakeFs = makeFakeCodexFs({
+      auth: true,
+      sessions: [{ name: 'rollout-2026-10-17T06-51-57-test.jsonl', content }],
+    });
+    const codexOpts = { homeDir: '/fake/home', fs: fakeFs };
+
+    const headroom = ranking.resolveCandidateHeadroom(codexCandidate, {
+      codexOpts,
+      useStoredQuota: true,
+      now,
+    });
+    assert.equal(headroom.status, 'open', '50% used primary is below threshold -> open');
+
+    const ranked = routing.rankForProfile([codexCandidate], writerProfile, assessment, {
+      codexOpts,
+      useStoredQuota: true,
+      now,
+    });
+    assert.equal(ranked.rejected.length, 0);
+    assert.equal(ranked.chosen, codexCandidate.candidateKey);
+  });
+
+  test('fixture rollout with 100% resolves "exhausted" with resets_at and is rejected with QUOTA_EXHAUSTED', () => {
+    const now = Date.now();
+    const resetEpoch = Math.floor(now / 1000) + 7200;
+    const content = makeRolloutContent({
+      usedPrimary: 100,
+      usedSecondary: 60,
+      resetsPrimary: resetEpoch,
+      timestamp: new Date(now).toISOString(),
+    });
+    const fakeFs = makeFakeCodexFs({
+      auth: true,
+      sessions: [{ name: 'rollout-2026-10-17T06-51-57-test.jsonl', content }],
+    });
+    const codexOpts = { homeDir: '/fake/home', fs: fakeFs };
+
+    const headroom = ranking.resolveCandidateHeadroom(codexCandidate, {
+      codexOpts,
+      useStoredQuota: true,
+      now,
+    });
+    assert.equal(headroom.status, 'exhausted');
+    assert.equal(headroom.cooldownUntil, new Date(resetEpoch * 1000).toISOString());
+
+    const ranked = routing.rankForProfile([codexCandidate], writerProfile, assessment, {
+      codexOpts,
+      useStoredQuota: true,
+      now,
+    });
+    assert.equal(ranked.ranking.length, 0);
+    const rejection = ranked.rejected.find((r) => r.candidateKey === codexCandidate.candidateKey);
+    assert.ok(rejection);
+    assert.equal(rejection.reasonCode, 'QUOTA_EXHAUSTED');
+  });
+
+  test('stale rollout reading (older than primary window_minutes) resolves "unknown"', () => {
+    const now = Date.now();
+    // 350 minutes old with a 300 minute primary window
+    const oldTime = new Date(now - 350 * 60 * 1000).toISOString();
+    const content = makeRolloutContent({
+      usedPrimary: 50,
+      windowPrimary: 300,
+      timestamp: oldTime,
+    });
+    const fakeFs = makeFakeCodexFs({
+      auth: true,
+      sessions: [{ name: 'rollout-2026-10-17T01-00-00-test.jsonl', content }],
+    });
+    const codexOpts = { homeDir: '/fake/home', fs: fakeFs };
+
+    const headroom = ranking.resolveCandidateHeadroom(codexCandidate, {
+      codexOpts,
+      useStoredQuota: true,
+      now,
+    });
+    assert.equal(headroom.status, 'unknown', 'reading older than window_minutes must be unknown');
+  });
+
+  test('refresh-quota.js supports codex provider and delegates to readCodexSessionQuota', () => {
     assert.ok(refreshQuota.SUPPORTED_PROVIDERS.has('codex'));
+    const now = Date.now();
+    const content = makeRolloutContent({ usedPrimary: 90, usedSecondary: 86, timestamp: new Date(now).toISOString() });
+    const fakeFs = makeFakeCodexFs({
+      auth: true,
+      sessions: [{ name: 'rollout-2026-10-17T06-51-57-test.jsonl', content }],
+    });
     const reading = refreshQuota.READERS.codex.read(
       { id: 'codex-cli', provider: 'codex' },
       {
-        codexOpts: {
-          fs: {
-            existsSync: () => true,
-            statSync: () => ({ isFile: () => true }),
-          },
-        },
+        codexOpts: { homeDir: '/fake/home', fs: fakeFs },
+        now,
       }
     );
     assert.equal(reading.available, true);
-    assert.equal(reading.status, 'open');
+    assert.equal(reading.status, 'tight');
   });
 });
 

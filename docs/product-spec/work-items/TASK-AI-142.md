@@ -393,6 +393,18 @@ Verification (2026-10-14): sequential TASK-AI-141 199/199, TASK-AI-142 140/140, 
 
 Selection logs retain the full chosenCandidate, the existing chosen identity, top ten ranked candidates and score breakdown summaries, and rejection totals by reasonCode with ten examples. Full runtime routing arrays remain available for fallback. Daily logs roll at 50 MiB into date.N.jsonl; readers consume all parts in numeric order. `node tools/ai-brain/cli.js decisions compact --dir <dir>` incrementally writes capped copies named `<source>.compact-<timestamp>.jsonl`, preserving originals. Copies are excluded from daily history until the operator explicitly replaces originals; malformed input fails rather than silently dropping evidence. No live data is modified by this change.
 
+### H3 live: audit repairs (2026-10-17)
+
+Audit repairs on Controller model quality scoring, candidate route rejection visibility, route health isolation, transient failure cooldowns, and genuine writer quota telemetry:
+1. Removed all hardcoded `quality` numbers from `tools/ai-brain/seed-accounts.js` (both ANTIGRAVITY_MODELS and NINEROUTER_MODELS).
+2. Purged unverified/fabricated benchmark scores from `tools/ai-brain/benchmarks.json` (leaving an empty table until verifiable external sources are cited), updated staleness audit to allow clean empty tables.
+3. Missing quality scores (`quality === null`) now display as "chưa rõ" (unknown) instead of defaulting to 100 in CLI candidate outputs and dry-run decision logs; fixed unformatted weights printing `weights null`.
+4. Ineligible and unprobed candidate routes are explicitly retained in `decision.rejected` and CLI summaries with exact reason codes (`ROUTE_PROBE_UNPROVEN` or `rec.status` e.g. `UNAVAILABLE_NOW`) rather than dropped silently.
+5. Transient probe errors (`TIMEOUT`, `PROBE_NO_RESPONSE`) employ a 30-minute transient cooldown instead of long lockouts, enabling automatic route re-probing.
+6. Real Codex quota telemetry read from the latest session rollout log (`~/.codex/sessions/<yyyy>/<mm>/<dd>/rollout-*.jsonl`, parsing `rate_limits`), strictly checking timestamp freshness against `primary.window_minutes` and evaluating existing headroom thresholds (100% used -> exhausted with `resets_at`; >= 80% used -> tight; < 80% used -> open; stale/missing -> unknown). Auth existence alone never claims capacity, and `auth.json` contents are never read.
+7. Untracked runtime state `tools/ai-brain/data/model-route-health.json` from git and added to `.gitignore`.
+Evidence: dry-run ranking decisions recorded in `data/dryrun-decision-1017.json` and unit tests in `tools/ai-brain/test/task-ai-142-audit-repairs.test.js`.
+
 ### H3 live: goal items become ready when their dependencies merge (2026-10-17)
 
 goal plan sets each goal item status once (BACKLOG when it has dependencies). After GOAL-AUTOCLAW-REPOS-1 merged, item 2 stayed BACKLOG and the runner stopped with "plan --run requires the isolated planner", although goal plan had already written its Work Item. goal resume now promotes a BACKLOG goal item to READY_FOR_AUTHOR in the goal and delivery registers when every dependency is MERGED and its Work Item file exists.

@@ -213,7 +213,7 @@ function resolveCandidateHeadroom(candidate, ctx) {
     (!candidate.quotaScope || readings[candidate.quotaScope] === undefined)
   ) {
     try {
-      const hermes = require('./hermes-session');
+      const { readCodexSessionQuota } = require('./codex-quota');
       const codexOpts = (ctx && ctx.codexOpts) || {
         homeDir:
           (ctx && ctx.home) ||
@@ -221,11 +221,12 @@ function resolveCandidateHeadroom(candidate, ctx) {
           process.env.HOME ||
           require('os').homedir(),
       };
-      if (hermes.hasCodexAuth(codexOpts, codexOpts)) {
-        reading = {
-          status: 'open',
-          observedAt: new Date(now).toISOString(),
-        };
+      const sessionQuota = readCodexSessionQuota(codexOpts, {
+        now,
+        fs: (ctx && ctx.fs) || (codexOpts && codexOpts.fs),
+      });
+      if (sessionQuota && sessionQuota.status && sessionQuota.status !== 'unknown') {
+        reading = sessionQuota;
       }
     } catch {}
   }
@@ -264,13 +265,15 @@ function resolveCandidateHeadroom(candidate, ctx) {
       reading &&
       typeof reading === 'object' &&
       Date.parse(reading.observedAt || reading.updatedAt || reading.cachedAt || '');
-    if (!Number.isFinite(stamp) || now < stamp || now - stamp > quotaStore.DEFAULT_MAX_AGE_MS) {
+    const maxAge = (reading && reading.maxAgeMs) || quotaStore.DEFAULT_MAX_AGE_MS;
+    if (!Number.isFinite(stamp) || now < stamp || now - stamp > maxAge) {
       reading = undefined;
     }
   }
   let status = 'unknown';
   let worstRatio = null;
   let reason = 'chưa khai hạn mức token';
+  let cooldownUntil = reading && typeof reading === 'object' ? reading.cooldownUntil || reading.resetsAt : undefined;
   if (typeof reading === 'string') {
     status = reading;
   } else if (reading && typeof reading === 'object') {
@@ -291,6 +294,7 @@ function resolveCandidateHeadroom(candidate, ctx) {
     worstRatio,
     reason,
     reservationsHeld: candReservations.length,
+    cooldownUntil: cooldownUntil || undefined,
   };
 }
 
