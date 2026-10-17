@@ -248,6 +248,14 @@ Decision log entries link `goalId -> workItemId -> candidateKey -> session -> co
 - Part H2 Hermes session selection, custom config binding, and `shipde-controller` skill file are delivered in Part H2.
 - Live acceptance across chat and controller runs in Part H3 following merge of H1 and H2.
 
+### H3 live: stop identical local launch configuration retries (2026-10-17)
+
+The item stops when the same local `launch_config` cause and whitespace-normalized,
+redacted launcher detail recur, regardless of writer identity. The terminal reason
+keeps the actual launch error, without charging the provider a failure or cooldown.
+Offline regression in `task-ai-121.test.js`: origin/main launched four times; the
+fix stops after two `PROVISION_BASE_MISMATCH` failures.
+
 ### H3 live: route health per upstream behind a shared gateway (2026-10-17)
 
 The third live run of goal G-F622511E exhausted its probe budget: ag/gemini-3.8-flash through 9router answered 200, but route health keyed it as gemini-3.8-flash|9router@ninerouter after stripping a fixed list of upstream prefixes, so a GEO_BLOCKED from another upstream blocked it until the next day. Health keys now keep the routed model id and drop a prefix only when it names the route itself (ag/x on route ag). Catalogue normalisation is unchanged.
@@ -408,7 +416,8 @@ Selection logs retain the full chosenCandidate, the existing chosen identity, to
 ### H3 live: audit repairs (2026-10-17)
 
 - Tier-only rows (codingTier without a score) keep their tier: operator decision 2026-10-12 keeps imported Claude-family rows eligible for writer ranking. The live leaderboard refresh (610 models, all scored, 2026-10-17) makes this moot in practice. Recorded path drops (ROUTE_PROBE_UNPROVEN, CREDENTIAL_ENV_MISSING) appear in the rejection list with route or account scope.
-Audit repairs on Controller model quality scoring, candidate route rejection visibility, route health isolation, transient failure cooldowns, and genuine writer quota telemetry:
+  Audit repairs on Controller model quality scoring, candidate route rejection visibility, route health isolation, transient failure cooldowns, and genuine writer quota telemetry:
+
 1. Removed all hardcoded `quality` numbers from `tools/ai-brain/seed-accounts.js` (both ANTIGRAVITY_MODELS and NINEROUTER_MODELS).
 2. Purged unverified/fabricated benchmark scores from `tools/ai-brain/benchmarks.json` (leaving an empty table until verifiable external sources are cited), updated staleness audit to allow clean empty tables.
 3. Missing quality scores (`quality === null`) now display as "chưa rõ" (unknown) instead of defaulting to 100 in CLI candidate outputs and dry-run decision logs; fixed unformatted weights printing `weights null`.
@@ -419,7 +428,7 @@ Audit repairs on Controller model quality scoring, candidate route rejection vis
 8. Extracted candidate quality scores from `model-priors.json` external rankings when internal evidence is absent, recording quality, source provenance, URL, and retrievedAt in `scoreBreakdown` and decision logs; normalized model IDs across router prefixes (`cl/`, `ninerouter/`), account prefixes (`::`), and effort suffixes (`-thinking`, etc.) while unmatched models remain 'chưa rõ'; added staleness detection with decision log warning and non-blocking auto-refresh on `next --run`.
 9. Bound credentialed API key sources to concrete account IDs derived from source ID and env variable name when the key is populated in the environment, eliminating false `WILDCARD_ACCOUNT` drops for operator keys (tencent, cohere, baseten, inception, regolo, amd-radeon, dahl); unpopulated env keys reject cleanly with `CREDENTIAL_ENV_MISSING` while routing wildcard gates remain strictly enforced.
 10. Versioned route-health schema with `CLASSIFIER_VERSION = 2` to distinguish modern HTTP-cause records from legacy unclassified records; legacy records with unversioned `TIMEOUT`, `PROBE_NO_RESPONSE`, `PROBE_EXCEPTION`, or `UNAVAILABLE_NOW` before PR #372 are recognized as unverified (`isLegacyUnverified`) and permitted to re-probe via preflight HTTP before harness launch (partitioned into the probe-eligible unknown queue in `orderProbeRoutes`), while genuine error codes (401/403/451/402/quota/geo-blocked) preserve exact classifications and cooldowns.
-Evidence: dry-run ranking decisions recorded in `data/dryrun-decision-1017.json` and unit tests in `tools/ai-brain/test/task-ai-142-audit-repairs.test.js`, `task-ai-142-quality-priors.test.js`, `task-ai-142-credential-keys.test.js`, and `task-ai-142-route-reprobe.test.js`.
+    Evidence: dry-run ranking decisions recorded in `data/dryrun-decision-1017.json` and unit tests in `tools/ai-brain/test/task-ai-142-audit-repairs.test.js`, `task-ai-142-quality-priors.test.js`, `task-ai-142-credential-keys.test.js`, and `task-ai-142-route-reprobe.test.js`.
 
 ### H3 live: goal items become ready when their dependencies merge (2026-10-17)
 
@@ -445,7 +454,7 @@ PR #356 [GOAL-AUTOCLAW-REPOS-1] failed CI validate/contract with `feature-regist
 
 ### H3 live: the PR contract accepts Controller goal Work Items (2026-10-16)
 
-PR #356 [GOAL-AUTOCLAW-REPOS-1] (Hermes-coded, review PASS, ai-brain-tests green) failed the contract gate because the title rule only knew FEAT-*, TASK-FOUND-* and TASK-AI-*, so no goal item the Controller plans could ever be published. validate_pr_contract.py and AGENTS.md now also accept GOAL-<GOAL>-<n>.
+PR #356 [GOAL-AUTOCLAW-REPOS-1] (Hermes-coded, review PASS, ai-brain-tests green) failed the contract gate because the title rule only knew FEAT-_, TASK-FOUND-_ and TASK-AI-*, so no goal item the Controller plans could ever be published. validate_pr_contract.py and AGENTS.md now also accept GOAL-<GOAL>-<n>.
 
 ### H3 live: the agy gateway returns the answer, not the agy envelope (2026-10-16)
 
@@ -496,6 +505,7 @@ The probe wall-clock deadline was computed once per launch, so after a runtime r
 A header a source declares as data (for example the CLI user agent AgentRouter requires) now reaches the requests that actually call the provider: the shared route probe, the orchestrator route candidate, the opencode provider `options.headers` written for isolated workers, and the Hermes route probe. The Hermes `config.yaml` custom provider has no verified extra-header field, so Hermes runtime calls are not changed and only its probe sends the headers; no source id is hardcoded.
 
 ### H3 live: the quota-fallback controller test is deterministic (2026-10-16)
+
 The test spawns a cold `cli.js dispatch` process (~5s alone) under a 15s `spawnSync` budget, so full-suite parallel load could kill it (status null) and fail the exit-code assertion; HOME, USERPROFILE and APPDATA were already per-test temp dirs. The budget is now a 180s ceiling with all assertions unchanged (not reproduced in 26 runs under load, so this is the identified wall-clock cause, not an observed failure).
 
 ### H3 live: the probe learns a route's token-per-minute limit (2026-10-16)
@@ -507,9 +517,11 @@ The writer probe passed `groq/openai/gpt-oss-120b` with a tiny request, then the
 Live on GOAL-AUTOCLAW-REPOS-1 (role author.foundation, complexity standard) budgetForItem took the minimum of the role ceiling (250k) and the complexity ceiling (150k), so a 1M-context writer that had written 4 files and edited 3 was killed at 150.5k (TOKEN_BUDGET_EXCEEDED) before committing. The explicit role budget is the more specific rule and now wins for every field it sets; complexity fills the fields the role leaves unset and the default fills the rest. The same item also ended TURN_BUDGET_EXCEEDED at selection round 14 after only a few real launches, because maxTurns was compared with the selection-round counter; it now counts actual writer launches.
 
 ### H3 live: a retry keeps the previous writer's work (2026-10-16)
+
 A retry used to delete the worker root and re-create the branch from main, so a writer's commit (389ee9e1 on GOAL-AUTOCLAW-REPOS-1) and another writer's uncommitted files were lost. The launcher now commits uncommitted changes as a WIP commit, keeps the branch under a private host ref, and merges it into the fresh checkout, recording `carriedOver` as `merged`, `conflict` or `none` and falling back to the plain base on any failure.
 
 ### H3 live: native agy candidates use the live agy model list (2026-10-16)
+
 The native agy candidates take their model ids from the live `agy models` listing (the pool discovery and its cache) instead of the stale ids declared on the account: declared ids the listing lacks are dropped with reason `AGY_MODEL_NOT_LISTED`, and listed ids are added. When the listing is unavailable the declared ids are kept unchanged.
 
 ### H3 live: a CLI login binding is not test evidence (2026-10-16)
@@ -529,6 +541,7 @@ When the Codex jsonSchema proof fails with a generic reason such as WRITER_SCHEM
 On 16/10 the branch feat/goal-autoclaw-repos-1 was cut from main e037323e; main later fixed 9 environment-sensitive tests, so the gate's baseline at the new origin/main passed while the writer tree still failed them, and 9 pre-existing failures were reported as new (HOST_GATE_FAILED) that the repair writer could not fix. When the base is a ref, runHostBrainGate now baselines at `git merge-base HEAD <ref>` (falling back to the ref's rev-parse); an explicit 40-hex baseSha is unchanged.
 
 ### H3 live: Hermes stops on a 401 route failure (2026-10-16)
+
 The live output scanner in `defaultSpawn` now treats `Error code: 401` on an API failure line as a route failure, so Hermes is stopped and the brain reselected instead of running until it exits. 400 stays excluded because a bad request is not a route failure.
 
 ### H3 live: a failed JEV assessment is not cached (2026-10-16)

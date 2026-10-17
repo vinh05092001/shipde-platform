@@ -546,3 +546,26 @@ test('LF-R01: classifyFailure reports every launcher infrastructure error as lau
     assert.equal(result.retryable, false, message);
   }
 });
+
+test('H3 repeated local launch config stops at second identical normalized failure', async () => {
+  const dir = tmpDir('retry-config-');
+  const host = makeRepo(path.join(dir, 'host'));
+  const f = launchHarness([{ id: 'A', files: ['a.js'], verification: { command: 'test' } }], {
+    host,
+    decisionDir: path.join(dir, 'decisions'),
+    usageDir: path.join(dir, 'usage'),
+    twoWriters: true,
+    run: (job, state) => {
+      throw new Error(
+        state.calls.length % 2 ? PROVISION_MSG : '  ' + PROVISION_MSG.replaceAll(' ', '  ') + '\n'
+      );
+    },
+  });
+  const log = await runOrchestration('repeated local launch config', f.opts);
+  assert.equal(f.state.calls.length, 2, 'stop after the repeated failure, across routes');
+  assert.match(outcomeOf(log, 'A').reason, /PROVISION_BASE_MISMATCH/);
+  assert.doesNotMatch(outcomeOf(log, 'A').reason, /TURN_BUDGET_EXCEEDED/);
+  assert.equal(log.launches.at(-1).cause, 'launch_config');
+  assert.match(log.launches.at(-1).fallbackReason, /PROVISION_BASE_MISMATCH/);
+  assertNoEvidenceCooldown(f.evidenceData, [f.writerKey, f.writer2Key]);
+});

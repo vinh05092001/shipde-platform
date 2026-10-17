@@ -60,6 +60,8 @@ const { candidateKey } = require('./candidates');
 const { parseCandidateKey } = require('./discovery/identity');
 const {
   classifyFailure,
+  Cause,
+  Scope,
   isReplayable,
   isolationVerdictBlockReason,
   ISOLATION_VERDICT_HUMAN_ACTION,
@@ -4377,6 +4379,7 @@ async function runOrchestration(goal, opts) {
     let blockedReason = null;
     let session = null;
     const recordedWriterFailures = new Set();
+    const localLaunchFailures = new Set();
 
     // TASK-AI-117 (RS-R01/RS-R02): a checkpoint whose launch already completed
     // (a worker commit and exit 0) has nothing to relaunch and nothing to
@@ -5703,6 +5706,17 @@ async function runOrchestration(goal, opts) {
         if (verdictStop) {
           blockedReason = verdictStop.reason;
           break;
+        }
+        if (classification.scope === Scope.LOCAL && classification.cause === Cause.LAUNCH_CONFIG) {
+          // Item-local identity deliberately excludes the selected route/model.
+          const detail = decisions.scrubText(launchFailureText(res)).replace(/\s+/g, ' ').trim();
+          const identity = JSON.stringify([classification.cause, detail]);
+          if (localLaunchFailures.has(identity)) {
+            blockedReason = detail;
+            launch.fallbackReason = detail;
+            break;
+          }
+          localLaunchFailures.add(identity);
         }
         const alternate = candidates.find((c) => {
           const k = candidateKey(c);
