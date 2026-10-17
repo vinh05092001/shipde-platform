@@ -66,5 +66,27 @@ test('the host brain gate runs the suite without machine discovery data', () => 
   );
   assert.ok(seenEnv, 'the gate spawned the suite');
   assert.equal(seenEnv.AI_BRAIN_DISCOVERED_SOURCES, 'none');
+  assert.equal(seenEnv.AI_BRAIN_MACHINE_DATA, 'none');
   assert.equal(seenEnv.NINEROUTER_API_KEY, undefined);
+});
+
+test('machine caches are off when AI_BRAIN_MACHINE_DATA=none', () => {
+  // Live 17/10 run 6: the host gate failed candidate tests because the
+  // models.dev cache in the Hermes home gave a model a 200k context window.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'machdata-'));
+  const previous = process.env.AI_BRAIN_MACHINE_DATA;
+  try {
+    writeJson(dir, 'models_dev_cache.json', { p: { models: { m: { limit: { context: 1 } } } } });
+    const candidates = require('../candidates');
+    process.env.AI_BRAIN_MACHINE_DATA = 'none';
+    assert.equal(candidates.loadModelCatalog({ hermesHome: dir }), null);
+    assert.ok(
+      candidates.loadModelCatalog({ modelCatalogPath: path.join(dir, 'models_dev_cache.json') }),
+      'an explicit catalogue path still counts'
+    );
+  } finally {
+    if (previous === undefined) delete process.env.AI_BRAIN_MACHINE_DATA;
+    else process.env.AI_BRAIN_MACHINE_DATA = previous;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

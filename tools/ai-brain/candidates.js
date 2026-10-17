@@ -318,6 +318,9 @@ function loadModelCatalog(opts = {}) {
   if (opts.modelCatalog && typeof opts.modelCatalog === 'object') return opts.modelCatalog;
   if (ambientModelCatalog && typeof ambientModelCatalog === 'object') return ambientModelCatalog;
   let file = opts.modelCatalogPath;
+  // AI_BRAIN_MACHINE_DATA=none: no machine caches (the host brain gate sets
+  // it so the suite sees what CI sees). An explicit catalogue path still counts.
+  if (!file && process.env.AI_BRAIN_MACHINE_DATA === 'none') return null;
   if (!file) {
     try {
       const home =
@@ -2175,6 +2178,7 @@ function annotateCandidates(candidates, evidenceData, opts) {
 }
 
 module.exports = {
+  loadModelCatalog,
   parsePrefix,
   resolveRouterModel,
   candidateKey,

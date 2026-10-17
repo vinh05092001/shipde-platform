@@ -76,7 +76,9 @@ function loadSources(options) {
   // into an explicit registry (tests, isolated workers).
   // AI_BRAIN_DISCOVERED_SOURCES=none turns machine discovery data off (the
   // host brain gate sets it so the suite sees what CI sees).
-  const machineDataOff = process.env.AI_BRAIN_DISCOVERED_SOURCES === 'none';
+  const machineDataOff =
+    process.env.AI_BRAIN_DISCOVERED_SOURCES === 'none' ||
+    process.env.AI_BRAIN_MACHINE_DATA === 'none';
   const discoveredFile =
     opts.discoveredFile ||
     (opts.file || machineDataOff ? null : path.join(__dirname, 'data', 'sources.json'));
