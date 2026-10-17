@@ -447,6 +447,16 @@ Verification (2026-10-14): sequential TASK-AI-141 199/199, TASK-AI-142 140/140, 
 
 Selection logs retain the full chosenCandidate, the existing chosen identity, top ten ranked candidates and score breakdown summaries, and rejection totals by reasonCode with ten examples. Full runtime routing arrays remain available for fallback. Daily logs roll at 50 MiB into date.N.jsonl; readers consume all parts in numeric order. `node tools/ai-brain/cli.js decisions compact --dir <dir>` incrementally writes capped copies named `<source>.compact-<timestamp>.jsonl`, preserving originals. Copies are excluded from daily history until the operator explicitly replaces originals; malformed input fails rather than silently dropping evidence. No live data is modified by this change.
 
+### H3 live: worker progress stall detection test B5 uses injected clock (2026-10-17)
+
+Test B5 in `tools/ai-brain/test/task-ai-142-worker-progress.test.js` verified that genuine progress (tool calls, file signature changes) resets the worker stall detection timer. Under heavy system load, real wall-clock sleeps (600ms) could stretch beyond the 1500ms timeout threshold before progress was recorded, causing intermittent test failures.
+
+1. Injected a simulated clock (`fakeClockPath`) into `runGeneratedHost` in `task-ai-142-worker-progress.test.js`, overriding `[System.Diagnostics.Stopwatch]::GetTimestamp()` in the generated host script.
+2. Synchronized simulated time advances with target execution steps, ensuring deterministic timer resets without relying on real wall-clock elapsed time.
+3. Preserved all original test assertions and contracts without loosening timeout tolerances.
+
+Verification: `node --test tools/ai-brain/test/task-ai-142-worker-progress.test.js` passed 10 consecutive runs under parallel full-suite load. Changed files pass Prettier, ESLint, and `git diff --check`.
+
 ### H3 live: missing Codex used_percent is treated as unknown quota rather than zero (2026-10-17)
 
 When `primary.used_percent` in Codex session rollout logs was omitted or non-numeric, `readCodexSessionQuota` in `tools/ai-brain/codex-quota.js` previously evaluated `Number(...) || 0`, falsely treating unmeasured quota as 0% used (`open`).
