@@ -546,3 +546,171 @@ test('LF-R01: classifyFailure reports every launcher infrastructure error as lau
     assert.equal(result.retryable, false, message);
   }
 });
+
+test('H3 repeated local launch config stops at second identical normalized failure', async () => {
+  const dir = tmpDir('retry-config-');
+  const host = makeRepo(path.join(dir, 'host'));
+  const f = launchHarness([{ id: 'A', files: ['a.js'], verification: { command: 'test' } }], {
+    host,
+    decisionDir: path.join(dir, 'decisions'),
+    usageDir: path.join(dir, 'usage'),
+    twoWriters: true,
+    run: (job, state) => {
+      throw new Error(
+        state.calls.length % 2 ? PROVISION_MSG : '  ' + PROVISION_MSG.replaceAll(' ', '  ') + '\n'
+      );
+    },
+  });
+  const log = await runOrchestration('repeated local launch config', f.opts);
+  assert.equal(f.state.calls.length, 2, 'stop after the repeated failure, across routes');
+  assert.match(outcomeOf(log, 'A').reason, /PROVISION_BASE_MISMATCH/);
+  assert.doesNotMatch(outcomeOf(log, 'A').reason, /TURN_BUDGET_EXCEEDED/);
+  assert.equal(log.launches.at(-1).cause, 'launch_config');
+  assert.match(log.launches.at(-1).fallbackReason, /PROVISION_BASE_MISMATCH/);
+  assertNoEvidenceCooldown(f.evidenceData, [f.writerKey, f.writer2Key]);
+});
+
+test('H3 cooldown logging summarizes three rounds of one thousand unchanged routes', async (t) => {
+  const dir = tmpDir('retry-cooldown-');
+  const host = makeRepo(path.join(dir, 'host'));
+  const f = launchHarness([{ id: 'A', files: ['a.js'], verification: { command: 'test' } }], {
+    host,
+    decisionDir: path.join(dir, 'decisions'),
+    usageDir: path.join(dir, 'usage'),
+    run: (job, state) => {
+      throw new Error(PROVISION_MSG + (state.calls.length === 1 ? ' first' : ' repeated'));
+    },
+  });
+  const routeHealth = { version: 1, paths: {}, events: [] };
+  f.opts.tokenBudgets = { default: { maxTurns: 3 } };
+  f.opts.routeHealth = routeHealth;
+  f.opts.persistRouteHealth = false;
+  for (let i = 0; i < 1000; i++) {
+    const cold = cand('cold-' + i, 'author.foundation');
+    require('../route-health').rememberProbe(
+      cold,
+      { ok: false, status: 503, body: 'unavailable' },
+      { routeHealth, persistRouteHealth: false, now: NOW }
+    );
+    f.opts.candidates.push(cold);
+  }
+  await runOrchestration('cooldown summary', f.opts);
+  const records = decisionRecords(f.opts.decisionDir);
+  const cooldown = records.filter(
+    (r) => r.stage === 'refused' && JSON.stringify(r).includes('PROBE_COOLDOWN')
+  );
+  assert.equal(cooldown.length, 3, 'one summary per reason per selection round');
+  assert.equal(f.state.calls.length, 3);
+  for (const r of cooldown) {
+    assert.equal(r.count, 1000);
+    assert.ok(r.earliestNextCheckAt);
+    assert.ok(!r.rejected?.length, 'unchanged routes do not produce individual records');
+  }
+  assert.ok(records.some((r) => r.stage === 'selected' && r.chosen === f.writerKey));
+  const oldDir = path.join(dir, 'old-round');
+  for (const cold of f.opts.candidates.filter((c) => c.modelId.startsWith('model-cold-'))) {
+    const reason = require('../route-health').probeCooldown(cold, f.opts);
+    require('../decisions').recordDecision(
+      {
+        stage: 'refused',
+        workItemId: 'A',
+        rejected: [{ candidateKey: candidateKey(cold), reason }],
+        detail: reason,
+      },
+      { dir: oldDir, now: NOW }
+    );
+  }
+  const bytes = (rows) => rows.reduce((n, r) => n + Buffer.byteLength(JSON.stringify(r) + '\n'), 0);
+  t.diagnostic(
+    'one cooldown round bytes: before=' +
+      bytes(decisionRecords(oldDir)) +
+      '; after=' +
+      bytes([cooldown[0]])
+  );
+});
+
+test('H3 cooldown transitions preserve new refusals and expiry changes per item', () => {
+  const dir = tmpDir('cooldown-transitions-');
+  const decisions = require('../decisions');
+  const states = new Map();
+  const options = { dir, now: NOW };
+  const entry = { workItemId: 'A' };
+  const first = 'PROBE_COOLDOWN: RATE_LIMITED until ' + new Date(NOW + 1000).toISOString();
+  const later = 'PROBE_COOLDOWN: RATE_LIMITED until ' + new Date(NOW + 2000).toISOString();
+  const round = (reason) =>
+    decisions.recordRouteRefusals([{ candidateKey: 'route-a', reason }], states, entry, options);
+  round(first);
+  round(first);
+  round(later);
+  round(null);
+  round('NEW_REFUSAL');
+  round('NEW_REFUSAL');
+  const records = decisionRecords(dir);
+  assert.equal(records.filter((r) => r.candidateKey === 'route-a').length, 3);
+  assert.ok(records.some((r) => r.detail === later && r.previousReason === first));
+  assert.ok(records.some((r) => r.stage === 'resumed' && r.candidateKey === 'route-a'));
+  assert.ok(records.some((r) => r.detail === 'NEW_REFUSAL'));
+  const fresh = new Map();
+  decisions.recordRouteRefusals(
+    [{ candidateKey: 'route-a', reason: first }],
+    fresh,
+    { workItemId: 'B' },
+    options
+  );
+  assert.equal(decisionRecords(dir).at(-1).count, 1);
+});
+
+function smallGoalSpec() {
+  return require('../intake').deriveSpec({
+    id: 'A',
+    root: '.',
+    deps: {},
+    registerItem: { dependencies: '' },
+    workItemText: [
+      '# One file quota repair',
+      '## Control',
+      '| Field | Value |',
+      '|---|---|',
+      '| Allowed paths | `a.js`; `test/a.test.js` |',
+      '| Risk domains | auth |',
+      '## Business outcome',
+      'Missing usage remains unknown.',
+      '## Acceptance criteria',
+      '| ID | Criterion |',
+      '|---|---|',
+      '| AC-1 | Do not read auth.json |',
+    ].join('\n'),
+  });
+}
+
+test('H3 one implementation file plus one test does not inherit large complexity from auth keywords', () => {
+  const derived = smallGoalSpec();
+  assert.deepEqual(derived.specItem.files, ['a.js', 'test/a.test.js']);
+  assert.deepEqual(derived.riskDomains, ['auth']);
+  assert.equal(derived.complexity, 'standard');
+});
+
+test('H3 routing context demand measures the actual packed content before JEV selection', async () => {
+  const dir = tmpDir('measured-context-');
+  const host = makeRepo(path.join(dir, 'host'));
+  fs.writeFileSync(path.join(host.dir, 'a.js'), 'module.exports = true;\n');
+  const f = launchHarness([smallGoalSpec().specItem], {
+    host,
+    decisionDir: path.join(dir, 'decisions'),
+    usageDir: path.join(dir, 'usage'),
+    run: () => {
+      throw new Error(PROVISION_MSG);
+    },
+  });
+  f.opts.cwd = host.dir;
+  f.opts.enableContextPack = true;
+  f.opts.contextPackDir = path.join(dir, 'packs');
+  f.opts.enforceProofFloors = true;
+  const log = await runOrchestration('small measured context', f.opts);
+  const content = fs.readFileSync(log.contextPack.path, 'utf8');
+  const expected = require('../repo-map').estimateTokens(content);
+  const profile = decisionRecords(f.opts.decisionDir).find((r) => r.profile)?.profile;
+  assert.ok(profile);
+  assert.equal(profile.contextSize, expected);
+  assert.equal(profile.complexity, 'standard');
+});

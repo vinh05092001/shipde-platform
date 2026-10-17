@@ -126,7 +126,7 @@ for (const [status, body, cause] of [
   [451, 'location blocked', 'GEO_BLOCKED'],
   [402, 'payment required', 'UPSTREAM_CREDIT_OR_QUOTA'],
   [429, 'quota', 'UPSTREAM_CREDIT_OR_QUOTA'],
-  [404, '{"code":"model_not_found"}', 'HTTP_404'],
+  [404, '{"code":"model_not_found"}', 'ROUTE_UNAVAILABLE'],
 ]) {
   test('real HTTP refusal retains its existing cause and cooldown: ' + status, () => {
     const store = { version: 1, paths: {}, events: [] };

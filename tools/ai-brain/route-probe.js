@@ -148,6 +148,7 @@ function classifyProbeFailure(result) {
     return 'AUTH_NEEDED';
   if (status === 402 || /insufficient[_ ]credits?|credit exhausted|quota/i.test(body))
     return 'UPSTREAM_CREDIT_OR_QUOTA';
+  if (status === 404 && /model_not_found/i.test(body)) return 'ROUTE_UNAVAILABLE';
   if (/alias.?mismatch|unknown model|model not found|no such model/i.test(body))
     return 'ALIAS_MISMATCH';
   if (status === 401 || (status >= 500 && /\b401\b[^\n]*re-?auth/i.test(body)))

@@ -60,6 +60,8 @@ const { candidateKey } = require('./candidates');
 const { parseCandidateKey } = require('./discovery/identity');
 const {
   classifyFailure,
+  Cause,
+  Scope,
   isReplayable,
   isolationVerdictBlockReason,
   ISOLATION_VERDICT_HUMAN_ACTION,
@@ -3753,12 +3755,23 @@ async function runOrchestration(goal, opts) {
         outputDir: o.contextPackDir,
         sources: o.contextSources,
       });
-      log.contextPack = { path: contextPack.path, files: contextPack.files.length };
+      const contextTokens = require('./repo-map').estimateTokens(contextPack.content);
+      log.contextPack = {
+        path: contextPack.path,
+        files: contextPack.files.length,
+        bytes: Buffer.byteLength(contextPack.content),
+        tokens: contextTokens,
+      };
+      // The pack is the content actually attached to every item, including on resume.
+      // An explicit item context requirement may request more, never less than this pack.
+      for (const item of log.plan.workItems || []) {
+        item.contextSize = Math.max(Number(item.contextSize) || 0, contextTokens);
+      }
       if (typeof o.contextManifest === 'string' && o.contextManifest) {
         fs.mkdirSync(path.dirname(o.contextManifest), { recursive: true });
         fs.writeFileSync(
           o.contextManifest,
-          JSON.stringify({ path: contextPack.path, files: contextPack.files }, null, 2) + '\n',
+          JSON.stringify({ ...log.contextPack, files: contextPack.files }, null, 2) + '\n',
           'utf8'
         );
       }
@@ -4378,6 +4391,8 @@ async function runOrchestration(goal, opts) {
     let blockedReason = null;
     let session = null;
     const recordedWriterFailures = new Set();
+    const localLaunchFailures = new Set();
+    const routeRefusalStates = new Map();
 
     // TASK-AI-117 (RS-R01/RS-R02): a checkpoint whose launch already completed
     // (a worker commit and exit 0) has nothing to relaunch and nothing to
@@ -4516,6 +4531,20 @@ async function runOrchestration(goal, opts) {
         : null;
     };
 
+    const writerProbeFailureReason = (result) => {
+      const cause = sharedRouteProbe.classifyProbeFailure(result);
+      // Keep provider-scoped health memory, but report the operator action accurately.
+      return cause && cause.reason === 'PROVIDER_UNAVAILABLE' && cause.provider
+        ? 'AUTH_NEEDED'
+        : sharedRouteProbe.failureReason(cause);
+    };
+    const needsWriterHttpProbe = (candidate, route) =>
+      Boolean(
+        route &&
+        o.isolatedWorker &&
+        (route.harnessName === 'opencode-direct' ||
+          routeProbeCandidate(candidate, route, registry, false))
+      );
     let writerProbeStartedAt = Date.now();
     let lastWriterFailureReason = null;
     const exhaustedAccountKeys = new Set();
@@ -4535,10 +4564,7 @@ async function runOrchestration(goal, opts) {
         ranked.result.ranking.filter((candidate) => {
           try {
             const route = resolveLaunchRoute(candidate, o, registry);
-            return (
-              route?.harnessName === 'opencode-direct' ||
-              Boolean(route && routeProbeCandidate(candidate, route, registry, false))
-            );
+            return needsWriterHttpProbe(candidate, route);
           } catch {
             return false;
           }
@@ -4547,8 +4573,13 @@ async function runOrchestration(goal, opts) {
       );
       // Ranking work (jsonSchema proofs share their own budget) must not spend the probe budget.
       writerProbeStartedAt = Date.now();
+      const preProbeCooldowns = [];
       const refuse = (candidate, reason, exclude = true) => {
         if (exclude) failedKeys.add(candidateKey(candidate));
+        if (/^PROBE_COOLDOWN/.test(reason)) {
+          preProbeCooldowns.push({ candidateKey: candidateKey(candidate), reason });
+          return;
+        }
         decisions.recordDecision(
           {
             stage: decisions.Stage.REFUSED,
@@ -4629,9 +4660,7 @@ async function runOrchestration(goal, opts) {
             refuse(candidate, 'QUOTA_EXHAUSTED: route probe');
             return false;
           }
-          const reasonCode = sharedRouteProbe.failureReason(
-            sharedRouteProbe.classifyProbeFailure(result)
-          );
+          const reasonCode = writerProbeFailureReason(result);
           const key = candidateKey(candidate);
           const reason =
             Date.now() - writerProbeStartedAt >= PROBE_BUDGET_MS
@@ -4654,6 +4683,12 @@ async function runOrchestration(goal, opts) {
           return false;
         },
       });
+      decisions.recordRouteRefusals(
+        preProbeCooldowns,
+        routeRefusalStates,
+        { workItemId: item.id },
+        logOpts
+      );
       if (batch.winner) {
         for (const [key, result] of writerProbeResults) {
           if (result?.ok !== true) failedKeys.add(key);
@@ -4676,25 +4711,22 @@ async function runOrchestration(goal, opts) {
       //    launch, with the ranking inputs it was made from (AI-64-R03).
       const currentItemStep = liveSteps[item.id] || savedStep;
       const failedForSelection = new Set(failedKeys);
-      for (const offered of candidates) {
-        const reason = writerProbeResults.has(candidateKey(offered))
+      const routeRefusals = candidates.map((offered) => {
+        const key = candidateKey(offered);
+        const reason = writerProbeResults.has(key)
           ? null
           : require('./route-health').probeCooldown(offered, o) ||
             require('./route-health').tpmTooSmall(offered, o) ||
             require('./route-health').contextOverflowObserved(offered, o);
-        if (reason) {
-          failedForSelection.add(candidateKey(offered));
-          decisions.recordDecision(
-            {
-              stage: decisions.Stage.REFUSED,
-              workItemId: item.id,
-              rejected: [{ candidateKey: candidateKey(offered), reason }],
-              detail: reason,
-            },
-            logOpts
-          );
-        }
-      }
+        if (reason) failedForSelection.add(key);
+        return { candidateKey: key, reason };
+      });
+      decisions.recordRouteRefusals(
+        routeRefusals,
+        routeRefusalStates,
+        { workItemId: item.id, attempt },
+        logOpts
+      );
       // Prefer completed live probes, retaining Controller eligibility checks.
       const liveKeys = candidates
         .filter(
@@ -4859,12 +4891,7 @@ async function runOrchestration(goal, opts) {
         recordPostSelectFailure(blockedReason, 'HARNESS_UNKNOWN');
         break;
       }
-      if (
-        o.isolatedWorker &&
-        !replayedLaunch &&
-        (route.harnessName === 'opencode-direct' ||
-          routeProbeCandidate(candidate, route, registry, false))
-      ) {
+      if (!replayedLaunch && needsWriterHttpProbe(candidate, route)) {
         let probeResult = writerProbeResults.get(decision.chosen);
         if (!probeResult) {
           // Runtime fallback may reach a route below the pre-probe winner.
@@ -4913,9 +4940,7 @@ async function runOrchestration(goal, opts) {
           workItemId: item.id,
         });
         if (!probeResult || probeResult.ok !== true) {
-          const reasonCode = sharedRouteProbe.failureReason(
-            sharedRouteProbe.classifyProbeFailure(probeResult)
-          );
+          const reasonCode = writerProbeFailureReason(probeResult);
           const reason = 'WRITER_ROUTE_PROBE_FAILED ' + reasonCode;
           const unknown = require('./route-health').isUnverifiedProbe(probeResult);
           recordPostSelectFailure(reason, reasonCode, unknown ? 'local' : 'candidate');
@@ -5711,6 +5736,17 @@ async function runOrchestration(goal, opts) {
         if (verdictStop) {
           blockedReason = verdictStop.reason;
           break;
+        }
+        if (classification.scope === Scope.LOCAL && classification.cause === Cause.LAUNCH_CONFIG) {
+          // Item-local identity deliberately excludes the selected route/model.
+          const detail = decisions.scrubText(launchFailureText(res)).replace(/\s+/g, ' ').trim();
+          const identity = JSON.stringify([classification.cause, detail]);
+          if (localLaunchFailures.has(identity)) {
+            blockedReason = detail;
+            launch.fallbackReason = detail;
+            break;
+          }
+          localLaunchFailures.add(identity);
         }
         const alternate = candidates.find((c) => {
           const k = candidateKey(c);
