@@ -4540,20 +4540,15 @@ async function runOrchestration(goal, opts) {
     const needsWriterHttpProbe = (candidate, route) =>
       Boolean(
         route &&
-        (o.isolatedWorker ||
-          route.harnessName === 'opencode-direct' ||
-          sourcesApi.runsOpenCodeHarness(route.harnessName, registry)) &&
+        o.isolatedWorker &&
         (route.harnessName === 'opencode-direct' ||
           routeProbeCandidate(candidate, route, registry, false))
       );
-    const isCliWriter = (candidate) =>
-      candidate.harness === 'opencode-direct' ||
-      sourcesApi.runsOpenCodeHarness(candidate.harness, registry);
     let writerProbeStartedAt = Date.now();
     let lastWriterFailureReason = null;
     const exhaustedAccountKeys = new Set();
     const writerProbeResults = new Map();
-    if (!session && (o.isolatedWorker || candidates.some(isCliWriter))) {
+    if (!session && o.isolatedWorker) {
       const ranked = await selectCandidateForProfile(
         item,
         candidates,

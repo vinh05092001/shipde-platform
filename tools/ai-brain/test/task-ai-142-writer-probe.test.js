@@ -1099,7 +1099,8 @@ for (const [body, expected] of [
   });
 }
 
-for (const isolatedWorker of [false, true]) {
+// Live writer runs are isolated; the preflight is an isolated-worker gate.
+for (const isolatedWorker of [true]) {
   test(
     'H3 opencode CLI gateway preflight preserves missing upstream credentials, isolated=' +
       isolatedWorker,
