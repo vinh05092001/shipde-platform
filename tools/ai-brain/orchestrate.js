@@ -198,6 +198,19 @@ function resolveLauncher(o, isolatedLauncher) {
   if (!isolatedLauncher && externalWorkers.length === 0) return null;
   const { getHarness } = require('./harness');
   return (job) => {
+    if (job.harness === 'agy-pool') {
+      const sourcesApi = require('./sources');
+      const reg = o.registry;
+      const agyPoolWriterAllowed = reg ? sourcesApi.isAgyPoolWriterEnabled(reg, o) : true;
+      if (!agyPoolWriterAllowed) {
+        return {
+          exitCode: 1,
+          stdout: '',
+          stderr: 'LAUNCH_REFUSED: agy-pool writer is disabled by configuration',
+          refusal: 'WRITER_LAUNCH_NOT_AUTHORIZED: agy-pool writer is disabled by configuration',
+        };
+      }
+    }
     const writerSchema = require('./writer-schema');
     if (['codex', 'agy-pool'].includes(job.harness) && !job.resultSchema) {
       job = writerSchema.prepareJob(job);
@@ -3389,13 +3402,18 @@ async function selectCandidateForProfile(
     (profile.requiredCapabilities || []).some((cap) => ['jsonSchema', 'tools'].includes(cap))
   ) {
     const schemaApi = require('./writer-schema');
+    const sourcesApi = require('./sources');
+    const dispatchConfig = sourcesApi.getDispatchConfig(registry, o);
+    const schemaBudgetMs =
+      o.schemaProbeBudgetMs ?? o.schemaBudgetMs ?? dispatchConfig.schemaProbeBudgetMs;
     const cache = o.writerSchemaEvidence || (o.writerSchemaEvidence = new Map());
     const failedSchemaAccounts =
       o.writerSchemaFailedAccounts || (o.writerSchemaFailedAccounts = new Map());
     o.capabilityProbeStartedAt = Date.now();
     await require('./capability-probe').probeCapabilities(candidates, profile, {
       ...o,
-      deadline: o.capabilityProbeStartedAt + PROBE_BUDGET_MS,
+      deadline: o.capabilityProbeStartedAt + schemaBudgetMs,
+      preflightHttp: o.preflightHttp === true,
       capabilityEvidence: o.capabilityEvidence || (o.capabilityEvidence = {}),
       httpRoute: (c) => {
         if (!o.registry) return null;
@@ -3410,13 +3428,7 @@ async function selectCandidateForProfile(
         const account = c.harness + '::' + c.accountId;
         let proof = capability === 'jsonSchema' ? cache.get(key) : null;
         if (!proof && failedSchemaAccounts.has(account)) proof = failedSchemaAccounts.get(account);
-        if (
-          !proof &&
-          c.harness === 'agy-pool' &&
-          String(o.externalWorkers || '')
-            .split(',')
-            .includes('agy-pool')
-        ) {
+        if (!proof && c.harness === 'agy-pool' && sourcesApi.isAgyPoolWriterEnabled(registry, o)) {
           proof = await schemaApi.verify(c, { ...o, capability, schemaTimeoutMs: remainingMs });
           if (proof && !proof.ok && /^WRITER_SCHEMA_POOL_/.test(String(proof.reason)))
             failedSchemaAccounts.set(account, proof);
@@ -4626,8 +4638,12 @@ async function runOrchestration(goal, opts) {
           }),
         });
       };
+      const sourcesApi = require('./sources');
+      const dispatchConfig = sourcesApi.getDispatchConfig(registry, o);
+      const probeBudgetMs = o.probeBudgetMs ?? dispatchConfig.probeBudgetMs;
       const batch = await probeRankedRoutes(ordered, {
-        deadline: writerProbeStartedAt + PROBE_BUDGET_MS,
+        deadline: writerProbeStartedAt + probeBudgetMs,
+        maxConcurrentProbes: dispatchConfig.maxConcurrentProbes,
         skip: (candidate, account) =>
           exhaustedAccountKeys.has(account)
             ? 'WRITER_PROBE_SKIPPED_ACCOUNT_EXHAUSTED'
@@ -4638,7 +4654,24 @@ async function runOrchestration(goal, opts) {
         runProbe: async (candidate) => {
           const route = resolveLaunchRoute(candidate, o, registry);
           const routeCandidate = routeProbeCandidate(candidate, route, registry);
-          const remainingMs = PROBE_BUDGET_MS - (Date.now() - writerProbeStartedAt);
+          const remainingMs = probeBudgetMs - (Date.now() - writerProbeStartedAt);
+          const store =
+            o.routeHealth ||
+            (typeof require('./route-health').probeMemoryFile === 'function'
+              ? require('./route-health').loadStore(require('./route-health').probeMemoryFile(o), {
+                  allowMissing: true,
+                })
+              : null);
+          const identity = require('./route-health').probeIdentity(candidate);
+          const record = store
+            ? require('./route-health').getPathRecord(store, identity.model, identity.route)
+            : null;
+          const timeoutMs = sourcesApi.resolveProbeTimeout(
+            candidate,
+            record,
+            dispatchConfig,
+            remainingMs
+          );
           const result =
             routeCandidate && remainingMs > 0
               ? await sharedRouteProbe.boundedProbe(
@@ -4646,7 +4679,7 @@ async function runOrchestration(goal, opts) {
                   routeCandidate,
                   routeCandidate.apiKeyEnv,
                   Object.assign({}, process.env, o.env || {}),
-                  { timeoutMs: Math.min(8000, remainingMs), fetch: o.fetch }
+                  { timeoutMs, fetch: o.fetch }
                 )
               : {
                   ok: false,

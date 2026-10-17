@@ -40,7 +40,14 @@ function recentRouteSuccess(candidate, store, options) {
   // A route success cannot override a newer shared provider/account refusal.
   if (health.probeCooldown(candidate, { ...o, routeHealth: store })) return false;
   const age = (o.now ?? Date.now()) - Date.parse(record?.lastCheckedAt);
-  return record?.status === 'AVAILABLE' && age >= 0 && age <= 24 * 3600000;
+  if (record?.status === 'AVAILABLE' && age >= 0 && age <= 24 * 3600000) return true;
+  const identity = health.probeIdentity(candidate);
+  const directRecord = health.getPathRecord(store, identity.model, identity.route);
+  if (directRecord?.status === 'AVAILABLE') {
+    const directAge = (o.now ?? Date.now()) - Date.parse(directRecord.lastCheckedAt);
+    if (directAge >= 0 && directAge <= 24 * 3600000) return true;
+  }
+  return false;
 }
 
 // Only reorder the ranking returned by the quality/eligibility gates.
@@ -63,10 +70,14 @@ function preferKnownGood(result, candidates, options) {
     return c && ['agy-pool', 'codex'].includes(c.harness);
   });
   if (!result.chosen || !result.ranking?.length) return result;
+  const sourcesApi = require('./sources');
   const priority = (row) => {
     const c = byKey.get(row.candidateKey) || row;
     // Isolated CLI lanes qualify through their launcher/quota, never HTTP.
-    if (['agy-pool', 'codex'].includes(c.harness)) return -1;
+    if (c.harness === 'codex') return -1;
+    if (c.harness === 'agy-pool') {
+      return sourcesApi.isAgyPoolWriterEnabled(o.registry, o) ? -1 : 1;
+    }
     return recentRouteSuccess(c, store, { ...o, now }) ? 0 : 1;
   };
   result.ranking = result.ranking
