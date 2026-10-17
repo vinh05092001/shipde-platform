@@ -395,6 +395,7 @@ Selection logs retain the full chosenCandidate, the existing chosen identity, to
 
 ### H3 live: audit repairs (2026-10-17)
 
+- Tier-only rows (codingTier without a score) keep their tier: operator decision 2026-10-12 keeps imported Claude-family rows eligible for writer ranking. The live leaderboard refresh (610 models, all scored, 2026-10-17) makes this moot in practice. Recorded path drops (ROUTE_PROBE_UNPROVEN, CREDENTIAL_ENV_MISSING) appear in the rejection list with route or account scope.
 Audit repairs on Controller model quality scoring, candidate route rejection visibility, route health isolation, transient failure cooldowns, and genuine writer quota telemetry:
 1. Removed all hardcoded `quality` numbers from `tools/ai-brain/seed-accounts.js` (both ANTIGRAVITY_MODELS and NINEROUTER_MODELS).
 2. Purged unverified/fabricated benchmark scores from `tools/ai-brain/benchmarks.json` (leaving an empty table until verifiable external sources are cited), updated staleness audit to allow clean empty tables.

@@ -23,15 +23,6 @@ function loadPriors(file) {
   try {
     const parsed = JSON.parse(fs.readFileSync(target, 'utf8'));
     if (parsed && typeof parsed === 'object' && Array.isArray(parsed.ranking)) {
-      for (const row of parsed.ranking) {
-        if (row && (row.score === null || row.score === undefined || !Number.isFinite(row.score))) {
-          if (benchmarkScore(row) === null) {
-            row.score = null;
-            row.codingTier = null;
-            row.reviewTier = null;
-          }
-        }
-      }
       return parsed;
     }
   } catch (_) {
@@ -71,9 +62,6 @@ function priorFor(candidate, role, priors, now) {
   const resolved = matchModelPrior(modelId, ranking);
   const match = resolved && resolved.entry;
   if (!match) return neutralPrior(canonical);
-
-  const hasScore = Number.isFinite(match.score) || benchmarkScore(match) !== null;
-  if (!hasScore) return neutralPrior(canonical);
 
   const tier =
     role === 'reviewer' || role === 'security-review' ? match.reviewTier : match.codingTier;
@@ -115,10 +103,7 @@ function priorFor(candidate, role, priors, now) {
     result.url = match.sources[0].url || match.url || null;
     result.retrievedAt = match.sources[0].retrievedAt || retrievalDate || null;
     result.source =
-      match.sources[0].id ||
-      match.sources[0].name ||
-      (priors && priors.label) ||
-      'model-priors';
+      match.sources[0].id || match.sources[0].name || (priors && priors.label) || 'model-priors';
   } else if (match.url) {
     result.url = match.url;
     result.retrievedAt = match.retrievedAt || retrievalDate || null;
