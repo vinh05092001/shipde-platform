@@ -767,7 +767,8 @@ function assembleCandidates(
     ) {
       const acc = (accounts || []).find((a) => a && a.id === accountId);
       if (acc && acc.capabilities) {
-        c.capabilities = Object.assign({}, acc.capabilities, c.capabilities || {});
+        c.capabilityDeclarations = { ...acc.capabilities };
+        c.capabilities = { ...c.capabilities };
       }
       if (c.cost === undefined && acc && acc.cost !== undefined) {
         c.cost = acc.cost;
@@ -935,7 +936,7 @@ function assembleCandidates(
     }
   }
 
-  return result;
+  return candidatesApi.markCapabilityDeclarations(result);
 }
 
 /**
@@ -1912,6 +1913,7 @@ async function dispatchProfileCommand(args, deps) {
     args,
     Object.assign({}, deps, {
       candidates: candidateList,
+      registry,
       rootDir,
       ask: (deps && deps.ask) || jevAsk,
       minConfidence: jevSource && jevSource.minConfidence,
@@ -2288,6 +2290,34 @@ function dispatchCommand(args, deps = {}) {
             accounts,
             candidates: candidateList,
             assessment,
+          })
+        );
+    }
+    if (
+      !deps.capabilitiesPrepared &&
+      annotated.some((c) =>
+        (profile.requiredCapabilities || []).some(
+          (cap) =>
+            c.capabilities?.[cap] === undefined ||
+            (c.capabilityDeclarations?.[cap] && !c.capabilityEvidence?.[cap]?.observedAt)
+        )
+      )
+    ) {
+      return require('./capability-probe')
+        .probeCapabilities(annotated, profile, {
+          ...deps,
+          registry,
+          evidenceDir,
+          externalWorkers: args['external-workers'] || deps.externalWorkers,
+        })
+        .then(() =>
+          dispatchCommand(args, {
+            ...deps,
+            candidates: annotated,
+            capabilitiesPrepared: true,
+            registry,
+            accounts,
+            evidenceDir,
           })
         );
     }

@@ -397,6 +397,9 @@ function resolveCandidateCapabilities(acc, modelId, opts = {}) {
   );
 
   const baseCaps = Object.assign({}, (acc && acc.capabilities) || {});
+  delete baseCaps.tools;
+  delete baseCaps.jsonSchema;
+  delete baseCaps.contextWindow;
   if (isGatewayRoute) {
     // Gateway accounts cannot grant blanket context window to unverified models
     delete baseCaps.contextWindow;
@@ -765,11 +768,31 @@ function pushOpencodeProviderWriters(out, source, o) {
   }
 }
 
+// Inventory/registry capabilities are declarations. A runtime probe supplies evidence.
+function markCapabilityDeclarations(candidates) {
+  for (const c of candidates) {
+    c.capabilityDeclarations = { ...c.capabilityDeclarations };
+    if (
+      c.capabilities?.contextWindow !== undefined &&
+      c.contextWindow === undefined &&
+      !c.contextSource &&
+      !c.capabilities.contextEvidence
+    ) {
+      c.capabilities = { ...c.capabilities };
+      delete c.capabilities.contextWindow;
+    }
+    for (const cap of ['jsonSchema', 'tools']) {
+      if (typeof c.capabilities?.[cap] === 'boolean') c.capabilityDeclarations[cap] = true;
+    }
+  }
+  return candidates;
+}
+
 function generateCandidates(opts) {
   const previous = ambientModelCatalog;
   ambientModelCatalog = (opts && opts.modelCatalog) || previous;
   try {
-    return generateCandidatesWithCatalog(opts);
+    return markCapabilityDeclarations(generateCandidatesWithCatalog(opts));
   } finally {
     ambientModelCatalog = previous;
   }
@@ -1845,7 +1868,7 @@ function poolAccountCandidates(opts) {
     }
   }
 
-  return candidates;
+  return markCapabilityDeclarations(candidates);
 }
 
 /**
@@ -2001,6 +2024,8 @@ function gatewayAccountCandidates(opts) {
       if (!parsePrefix(modelId)) continue;
       const candidateUpstream = upstream;
       const candidateCapabilities = Object.assign({}, account.capabilities || {});
+      delete candidateCapabilities.tools;
+      delete candidateCapabilities.jsonSchema;
       let contextWindow = undefined;
       if (
         row.contextWindow !== undefined ||
@@ -2053,7 +2078,7 @@ function gatewayAccountCandidates(opts) {
     if (typeof o.onAccountCount === 'function') o.onAccountCount(account.id, contributed);
   }
 
-  return out;
+  return markCapabilityDeclarations(out);
 }
 
 function resolveComboCapabilities(combo, accounts) {
@@ -2130,7 +2155,7 @@ function candidatesFromEvidence(evidenceData, options) {
       out.push(cand);
     }
   }
-  return out;
+  return markCapabilityDeclarations(out);
 }
 
 /**
@@ -2185,6 +2210,7 @@ module.exports = {
   harnessOf,
   accessPathOf,
   generateCandidates,
+  markCapabilityDeclarations,
   gatewayAccountCandidates,
   poolAccountCandidates,
   candidatesFromEvidence,

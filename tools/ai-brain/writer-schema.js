@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { candidateKey } = require('./candidates');
 const { createSecretRedactor } = require('./decisions');
+const DEFAULT_TIMEOUT_MS = 60000;
 
 // This is the writer's final result, not the pool's process-state envelope.
 function contract(key, nonce) {
@@ -84,6 +85,27 @@ function failureDetail(result, env) {
   return redact(`exitCode=${code}${tail ? '\n' + tail : ''}`);
 }
 
+function observedToolUse(result, text) {
+  if (Number(result?.verifiedToolCalls) > 0) return true;
+  return String(text || '')
+    .split(/\r?\n/)
+    .some((line) => {
+      try {
+        const event = JSON.parse(line);
+        return (
+          event.type === 'tool_use' ||
+          event.part?.type === 'tool' ||
+          (event.type === 'item.completed' &&
+            event.item?.type === 'command_execution' &&
+            event.item.status === 'completed' &&
+            event.item.exit_code === 0)
+        );
+      } catch {
+        return false;
+      }
+    });
+}
+
 async function verify(candidate, options) {
   const o = options || {};
   const key = candidateKey(candidate);
@@ -94,18 +116,21 @@ async function verify(candidate, options) {
     model: candidate.modelId,
     cwd: o.workerRoot || o.cwd,
     prompt:
-      'Read-only capability probe. Do not use tools, change files or execute commands. Return status completed and artifacts [].',
+      o.capability === 'tools'
+        ? 'Read-only capability probe. Use a read-only file tool to inspect the result schema file. Do not change files. Return status completed and artifacts [].'
+        : 'Read-only capability probe. Do not use tools, change files or execute commands. Return status completed and artifacts [].',
   });
   try {
     let result;
     let text;
+    let toolsObserved = false;
     if (candidate.harness === 'agy-pool') {
       const pool = require('./agy-pool-runtime');
       const previous = pool.readResult(candidate.accountId, o);
       if (previous && previous.state === 'running')
         return { ok: false, reason: 'WRITER_SCHEMA_POOL_BUSY' };
       const budgetMs = Number(o.schemaTimeoutMs);
-      const timeoutMs = budgetMs > 0 ? Math.min(60000, budgetMs) : 60000;
+      const timeoutMs = budgetMs > 0 ? Math.min(DEFAULT_TIMEOUT_MS, budgetMs) : DEFAULT_TIMEOUT_MS;
       result = pool.submitJob(candidate.accountId, job, { ...o, timeoutMs });
       if (!result || result.state !== 'ok' || result.exitCode !== 0) {
         const known = [
@@ -133,7 +158,9 @@ async function verify(candidate, options) {
           ),
         };
       }
-      text = poolResultText(pool.readOutText(candidate.accountId, o));
+      const raw = pool.readOutText(candidate.accountId, o);
+      toolsObserved = observedToolUse(result, raw);
+      text = poolResultText(raw);
     } else {
       if (typeof o.run !== 'function')
         return { ok: false, reason: 'WRITER_SCHEMA_ISOLATED_LAUNCHER_MISSING' };
@@ -175,16 +202,24 @@ async function verify(candidate, options) {
         };
       }
       text = result.stdout;
+      toolsObserved = observedToolUse(result, text);
     }
     const checked = validate(text, job.resultSchema);
     if (!checked.ok) return checked;
+    if (o.capability === 'tools' && !toolsObserved)
+      return { ok: false, reason: 'TOOL_CALL_NOT_OBSERVED' };
     if (checked.value.status !== 'completed' || checked.value.artifacts.length)
       return { ok: false, reason: 'WRITER_SCHEMA_PROBE_NOT_COMPLETED' };
     return {
       ok: true,
       candidateKey: key,
       nonce: job.resultSchema.properties.nonce.enum[0],
-      method: candidate.harness === 'codex' ? 'codex-exec-output-schema' : 'agy-worker-result-json',
+      method:
+        candidate.harness === 'codex'
+          ? 'codex-exec-output-schema'
+          : candidate.harness === 'agy-pool'
+            ? 'agy-worker-result-json'
+            : `${candidate.harness}-worker-result-json`,
     };
   } catch (err) {
     // No untrusted CLI output or secret-bearing error messages in evidence.
@@ -196,4 +231,12 @@ async function verify(candidate, options) {
   }
 }
 
-module.exports = { contract, prepareJob, validate, materialise, poolResultText, verify };
+module.exports = {
+  DEFAULT_TIMEOUT_MS,
+  contract,
+  prepareJob,
+  validate,
+  materialise,
+  poolResultText,
+  verify,
+};

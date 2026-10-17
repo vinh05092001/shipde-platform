@@ -1,6 +1,7 @@
 'use strict';
 
 const CLASSIFIER_VERSION = 2;
+const DEFAULT_TIMEOUT_MS = 8000;
 
 /** Shared OpenAI-compatible route preflight for Hermes and isolated workers. */
 async function probeRoute(candidate, apiKeyEnv, env, options) {
@@ -15,7 +16,7 @@ async function probeRoute(candidate, apiKeyEnv, env, options) {
     if (opts.signal.aborted) controller.abort();
     else opts.signal.addEventListener('abort', onAbort, { once: true });
   }
-  const timeout = setTimeout(() => controller.abort(), opts.timeoutMs || 8000);
+  const timeout = setTimeout(() => controller.abort(), opts.timeoutMs || DEFAULT_TIMEOUT_MS);
   try {
     const response = await (opts.fetch || globalThis.fetch)(url, {
       method: 'POST',
@@ -65,7 +66,7 @@ async function probeRoute(candidate, apiKeyEnv, env, options) {
                   controller.abort();
                   resolve('Upstream error response body unavailable');
                 },
-                Math.min(250, Math.max(1, (opts.timeoutMs || 8000) / 2))
+                Math.min(250, Math.max(1, (opts.timeoutMs || DEFAULT_TIMEOUT_MS) / 2))
               );
             }),
           ]);
@@ -167,7 +168,7 @@ function classifyProbeFailure(result) {
 
 async function boundedProbe(probeFn, candidate, apiKeyEnv, env, options) {
   const opts = options || {};
-  const timeoutMs = Math.max(1, Number(opts.timeoutMs) || 8000);
+  const timeoutMs = Math.max(1, Number(opts.timeoutMs) || DEFAULT_TIMEOUT_MS);
   const controller = new AbortController();
   const onAbort = () => controller.abort();
   if (opts.signal) {
@@ -219,6 +220,7 @@ function failureReason(cause) {
 
 module.exports = {
   CLASSIFIER_VERSION,
+  DEFAULT_TIMEOUT_MS,
   tokenLimitEvidence,
   probeRoute,
   classifyProbeFailure,

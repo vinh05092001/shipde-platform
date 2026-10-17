@@ -60,7 +60,7 @@ describe('TASK-AI-87: Evidence-only candidate capabilities', () => {
       assert.ok(cand, 'candidate for xkiro must be present');
       assert.deepEqual(
         cand.capabilities,
-        { jsonSchema: true, tools: true, contextWindow: 200000 },
+        { jsonSchema: true, tools: true },
         'candidate must carry account declared capabilities'
       );
     });
@@ -76,7 +76,7 @@ describe('TASK-AI-87: Evidence-only candidate capabilities', () => {
       assert.ok(cand, 'candidate for xkiro must be present');
       assert.deepEqual(
         cand.capabilities,
-        { jsonSchema: true, tools: true, contextWindow: 200000 },
+        { jsonSchema: true, tools: true },
         'account declared capabilities must win over combo.capabilities'
       );
       assert.equal(cand.capabilities.legacyCap, undefined);
@@ -101,7 +101,7 @@ describe('TASK-AI-87: Evidence-only candidate capabilities', () => {
       assert.ok(cand, 'candidate must be present');
       assert.deepEqual(
         cand.capabilities,
-        { customFallback: true, contextWindow: 128000 },
+        { customFallback: true },
         'combo.capabilities must win when account declares none'
       );
     });
@@ -179,7 +179,7 @@ describe('TASK-AI-87: Evidence-only candidate capabilities', () => {
         (r) => r.candidateKey === candidatesApi.candidateKey(cand)
       );
       assert.ok(rejection, 'Rejection must be recorded');
-      assert.equal(rejection.reasonCode, 'CAPABILITY_MISSING:jsonSchema');
+      assert.equal(rejection.reasonCode, 'CAPABILITY_UNVERIFIED:jsonSchema');
     });
   });
 
@@ -192,7 +192,7 @@ describe('TASK-AI-87: Evidence-only candidate capabilities', () => {
       assert.ok(cand, 'xkiro candidate must be present');
       assert.deepEqual(
         cand.capabilities,
-        { jsonSchema: true, tools: true, contextWindow: 200000 },
+        { jsonSchema: true, tools: true },
         'evidence candidate in buildCandidates must receive account capabilities'
       );
     });
@@ -229,8 +229,12 @@ describe('TASK-AI-87: Evidence-only candidate capabilities', () => {
         NOW
       );
 
-      assert.ok(decision.chosen, 'Candidate must be chosen');
-      assert.match(decision.chosen, /xkiro/, 'Chosen candidate must be xkiro');
+      assert.equal(
+        decision.chosen,
+        null,
+        'Account declarations require a capability probe before selection'
+      );
+      assert.ok(decision.result.needsCapabilityProbe.some((r) => r.candidateKey.includes('xkiro')));
     });
 
     test('cli.assembleForDispatch passes accounts to evidence candidates', () => {
@@ -255,7 +259,7 @@ describe('TASK-AI-87: Evidence-only candidate capabilities', () => {
       assert.ok(cand, 'xkiro candidate must be present in assembled candidates');
       assert.deepEqual(
         cand.capabilities,
-        { jsonSchema: true, tools: true, contextWindow: 200000 },
+        { jsonSchema: true, tools: true },
         'candidate assembled for dispatch must carry account declared capabilities'
       );
     });
@@ -263,7 +267,7 @@ describe('TASK-AI-87: Evidence-only candidate capabilities', () => {
 
   // C-R04: test: evidence store with WORK_ITEM_PASS for an xkiro-like key + injected accounts
   // declaring jsonSchema/tools -> the candidate passes the capability floor and is ranked;
-  // without the account -> CAPABILITY_MISSING:jsonSchema.
+  // without the account -> CAPABILITY_UNVERIFIED:jsonSchema.
   describe('C-R04: evidence store with WORK_ITEM_PASS for xkiro passes floor when accounts injected', () => {
     const item = {
       id: 'TASK-C-R04',
@@ -275,7 +279,7 @@ describe('TASK-AI-87: Evidence-only candidate capabilities', () => {
       proofFloor: 'WORK_ITEM_PASS',
     };
 
-    test('with injected accounts declaring jsonSchema/tools -> candidate passes floor and is ranked', async () => {
+    test('with account declarations only -> candidate awaits capability verification', async () => {
       const decision = await orchestrate.selectCandidateForProfile(
         item,
         [],
@@ -286,9 +290,15 @@ describe('TASK-AI-87: Evidence-only candidate capabilities', () => {
         NOW
       );
 
-      assert.ok(decision.chosen, 'Candidate must be chosen');
-      const ranked = decision.result.ranking.find((r) => r.accountId === 'xkiro');
-      assert.ok(ranked, 'xkiro candidate must be ranked');
+      assert.equal(
+        decision.chosen,
+        null,
+        'Account declarations require a capability probe before selection'
+      );
+      const ranked = decision.result.needsCapabilityProbe.find((r) =>
+        r.candidateKey.includes('xkiro')
+      );
+      assert.ok(ranked, 'xkiro candidate must await capability verification');
       assert.equal(
         decision.result.rejected.some((r) => r.reasonCode.startsWith('CAPABILITY_MISSING')),
         false,
@@ -296,7 +306,7 @@ describe('TASK-AI-87: Evidence-only candidate capabilities', () => {
       );
     });
 
-    test('without the account -> candidate is refused CAPABILITY_MISSING:jsonSchema', async () => {
+    test('without the account -> candidate is refused CAPABILITY_UNVERIFIED:jsonSchema', async () => {
       const decision = await orchestrate.selectCandidateForProfile(
         item,
         [],
@@ -309,11 +319,11 @@ describe('TASK-AI-87: Evidence-only candidate capabilities', () => {
 
       assert.equal(decision.chosen, null, 'Candidate must not be chosen without account');
       const rejected = decision.result.rejected.find(
-        (r) => r.reasonCode === 'CAPABILITY_MISSING:jsonSchema'
+        (r) => r.reasonCode === 'CAPABILITY_UNVERIFIED:jsonSchema'
       );
       assert.ok(
         rejected,
-        'Candidate must be rejected with CAPABILITY_MISSING:jsonSchema when account is missing'
+        'Candidate must be rejected with CAPABILITY_UNVERIFIED:jsonSchema when account is missing'
       );
     });
   });

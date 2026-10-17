@@ -3384,66 +3384,82 @@ async function selectCandidateForProfile(
           : hasQuotaAccountReadings(o),
   };
 
-  if (profile.role === 'writer' && (profile.requiredCapabilities || []).includes('jsonSchema')) {
+  if (
+    profile.role === 'writer' ||
+    (profile.requiredCapabilities || []).some((cap) => ['jsonSchema', 'tools'].includes(cap))
+  ) {
     const schemaApi = require('./writer-schema');
     const cache = o.writerSchemaEvidence || (o.writerSchemaEvidence = new Map());
-    const external = String(o.externalWorkers || '')
-      .split(',')
-      .includes('agy-pool');
-    // Each proof launches a real job and waits for it, so the proofs share the
-    // writer probe wall-clock budget. A pool account that is busy or failing
-    // fails every model on it; its other models are not launched again.
-    const schemaStartedAt = Date.now();
-    const failedSchemaAccounts = o.writerSchemaFailedAccounts || new Map();
-    o.writerSchemaFailedAccounts = failedSchemaAccounts;
-    for (const c of candidates) {
-      if (!['codex', 'agy-pool'].includes(c.harness)) continue;
-      const key = candidateKey(c);
-      // The pool account itself, not the shared gateway key: agy01 and agy02 are separate.
-      const account = c.harness + '::' + c.accountId;
-      let proof = cache.get(key);
-      const remainingMs = PROBE_BUDGET_MS - (Date.now() - schemaStartedAt);
-      if (!proof && failedSchemaAccounts.has(account)) {
-        proof = failedSchemaAccounts.get(account);
-      } else if (!proof && remainingMs <= 0) {
-        // Not cached: an unverified route is retried by the next selection.
-        proof = { ok: false, reason: 'WRITER_SCHEMA_NOT_VERIFIED_BUDGET' };
-      } else if (!proof && !c.blocked && c.accountId && c.accountId !== '*') {
-        if (c.harness === 'agy-pool' && external) {
-          proof = await schemaApi.verify(c, { ...o, schemaTimeoutMs: remainingMs });
+    const failedSchemaAccounts =
+      o.writerSchemaFailedAccounts || (o.writerSchemaFailedAccounts = new Map());
+    o.capabilityProbeStartedAt = Date.now();
+    await require('./capability-probe').probeCapabilities(candidates, profile, {
+      ...o,
+      deadline: o.capabilityProbeStartedAt + PROBE_BUDGET_MS,
+      capabilityEvidence: o.capabilityEvidence || (o.capabilityEvidence = {}),
+      httpRoute: (c) => {
+        try {
+          return routeProbeCandidate(c, resolveLaunchRoute(c, o, registry), registry, false);
+        } catch {
+          return null;
+        }
+      },
+      probeCli: async (c, capability, remainingMs) => {
+        const key = candidateKey(c);
+        const account = c.harness + '::' + c.accountId;
+        let proof = capability === 'jsonSchema' ? cache.get(key) : null;
+        if (!proof && failedSchemaAccounts.has(account)) proof = failedSchemaAccounts.get(account);
+        if (
+          !proof &&
+          c.harness === 'agy-pool' &&
+          String(o.externalWorkers || '')
+            .split(',')
+            .includes('agy-pool')
+        ) {
+          proof = await schemaApi.verify(c, { ...o, capability, schemaTimeoutMs: remainingMs });
           if (proof && !proof.ok && /^WRITER_SCHEMA_POOL_/.test(String(proof.reason)))
             failedSchemaAccounts.set(account, proof);
-        } else if (c.harness === 'codex' && o.isolatedWorker) {
+        } else if (!proof && o.isolatedWorker && c.harness !== 'agy-pool') {
           const isolation = require('./isolation-launcher');
           const root = resolveIsolatedWorkerRoot(o, o.cwd || process.cwd()) + '-schema-probe';
+          const route = resolveLaunchRoute(c, o, registry);
           const run = resolveLauncher(
-            { ...o, exercise: null, onProvisioned: undefined, workerTimeoutMs: 60000 },
+            {
+              ...o,
+              exercise: null,
+              onProvisioned: undefined,
+              workerTimeoutMs: Math.min(schemaApi.DEFAULT_TIMEOUT_MS, remainingMs),
+            },
             isolation.getIsolatedLauncher()
           );
           proof = await schemaApi.verify(c, {
             ...o,
+            capability,
+            schemaTimeoutMs: remainingMs,
             workerRoot: root,
             run: (job) =>
               run({
                 ...job,
+                harness: route?.harnessName || job.harness,
+                provider: route?.provider,
+                model: route?.model || job.model,
                 isolatedWorker: true,
                 cwd: root,
                 workerRoot: root,
                 hostWorktree: o.cwd || process.cwd(),
                 baseSha: o.baseSha,
                 title: `${item.id}-schema-probe`,
-                workerTimeoutMs: 60000,
+                workerTimeoutMs: Math.min(schemaApi.DEFAULT_TIMEOUT_MS, remainingMs),
                 isolationVerdict: isolation.readClosedIsolationVerdict(),
               }),
           });
-        } else {
-          proof = { ok: false, reason: 'WRITER_SCHEMA_LAUNCH_NOT_AUTHORIZED' };
-        }
-        cache.set(key, proof);
-      }
-      c.capabilities = { ...c.capabilities, jsonSchema: Boolean(proof && proof.ok) };
-      c.jsonSchemaEvidence = proof || { ok: false, reason: 'WRITER_SCHEMA_UNVERIFIED' };
-    }
+        } else if (!proof)
+          proof = { unverified: true, reason: 'WRITER_SCHEMA_LAUNCH_NOT_AUTHORIZED' };
+        if (capability === 'jsonSchema' && !proof.unverified) cache.set(key, proof);
+        return proof;
+      },
+    });
+    o.capabilityProbeDurationMs = Date.now() - o.capabilityProbeStartedAt;
   }
   const result = routing.rankForProfile(candidates, profile, assessment, rankCtx);
   if (o.isolatedWorker && profile.role !== 'reviewer') {
@@ -4572,7 +4588,7 @@ async function runOrchestration(goal, opts) {
         o
       );
       // Ranking work (jsonSchema proofs share their own budget) must not spend the probe budget.
-      writerProbeStartedAt = Date.now();
+      writerProbeStartedAt = Date.now() - (o.capabilityProbeDurationMs || 0);
       const preProbeCooldowns = [];
       const refuse = (candidate, reason, exclude = true) => {
         if (exclude) failedKeys.add(candidateKey(candidate));
@@ -4774,7 +4790,7 @@ async function runOrchestration(goal, opts) {
           );
 
       // Each retry owns a probe window; ranking and prior writer runtime are excluded.
-      if (attempt > 1) writerProbeStartedAt = Date.now();
+      if (attempt > 1) writerProbeStartedAt = Date.now() - (o.capabilityProbeDurationMs || 0);
       log.selections.push({ workItemId: item.id, attempt, decision });
       if (!decision.chosen) {
         if (failedKeys.size > 0) {
@@ -8928,6 +8944,7 @@ function finish(log, statusOf, ctx) {
 }
 
 module.exports = {
+  PROBE_BUDGET_MS,
   routeProbeCandidate,
   baseGateCache,
   runHostBrainGate,

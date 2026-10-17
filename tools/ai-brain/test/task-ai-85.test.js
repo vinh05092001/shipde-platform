@@ -130,7 +130,7 @@ describe('TASK-AI-85: live orchestrate CLI loads evidence store', () => {
     assert.equal(launched, false);
   });
 
-  test('V-R03: in-process orchestrate CLI with temp --evidence-dir ranks key absent from --accounts', async () => {
+  test('V-R03: in-process orchestrate CLI ranks a capability-probed key absent from --accounts', async () => {
     const candK = makeCand({ gateway: 'gw-k85', upstream: 'up-k85', accountId: 'acc-k85' });
     evidence.recordProbe(tempEvidenceDir, candK, {
       status: 'passed',
@@ -145,6 +145,20 @@ describe('TASK-AI-85: live orchestrate CLI loads evidence store', () => {
     );
     combo.capabilities = { tools: true, jsonSchema: true, contextWindow: 200000 };
     evidence.saveEvidence(tempEvidenceDir, evData);
+    const capabilityCandidate = candidatesApi
+      .candidatesFromEvidence(evData)
+      .find((c) => candidatesApi.candidateKey(c) === candK.candidateKey);
+    await require('../capability-probe').probeCapabilities(
+      [capabilityCandidate],
+      {
+        requiredCapabilities: ['jsonSchema', 'tools'],
+      },
+      {
+        evidenceDir: tempEvidenceDir,
+        now: NOW,
+        probeCli: async () => ({ ok: true, method: 'fixture-schema-and-tool-observation' }),
+      }
+    );
 
     let launchedJob;
     const result = await runCli(

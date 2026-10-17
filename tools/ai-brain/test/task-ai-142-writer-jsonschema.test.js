@@ -171,7 +171,7 @@ test('Controller makes writers eligible only after proof and records precise rej
   const unproven = candidate();
   unproven.capabilities.jsonSchema = true;
   const noLaunch = await choose(unproven, {});
-  assert.equal(noLaunch.result.rejected[0].reasonCode, 'CAPABILITY_MISSING:jsonSchema');
+  assert.equal(noLaunch.result.rejected[0].reasonCode, 'CAPABILITY_UNVERIFIED:jsonSchema');
   assert.equal(noLaunch.result.rejected[0].reason, 'WRITER_SCHEMA_LAUNCH_NOT_AUTHORIZED');
   let calls = 0;
   const o = {

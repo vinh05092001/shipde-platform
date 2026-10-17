@@ -725,7 +725,7 @@ describe('TASK-AI-65: live routing (profile -> JEV -> ranking -> pinned executio
     });
     const p3 = profile({ requiredCapabilities: ['image'] });
     const r3 = await runDispatch(p3, [noCap], dirs);
-    assert.equal(r3.result.rejected[0].reasonCode, 'CAPABILITY_MISSING:image');
+    assert.equal(r3.result.rejected[0].reasonCode, 'CAPABILITY_UNVERIFIED:image');
 
     // 4. Profile contextSize floor (routing.js rankForProfile). paseo has no
     // harness context minimum, so the rejection is the profile floor, not
