@@ -987,7 +987,11 @@ function mergeEvidenceAccounts(inputAccounts, registryAccounts) {
 }
 
 function isCandidateRouteEligible(routeHealth, candidate, options, routeHealthApi, isExplicit) {
-  if (candidate && (candidate.credentialEnvMissing === true || (candidate.blocked && candidate.blockReason === 'CREDENTIAL_ENV_MISSING'))) {
+  if (
+    candidate &&
+    (candidate.credentialEnvMissing === true ||
+      (candidate.blocked && candidate.blockReason === 'CREDENTIAL_ENV_MISSING'))
+  ) {
     return false;
   }
   if (options && options.allowUnprobedCandidates === true) return true;
@@ -1148,7 +1152,13 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
 
   if (Array.isArray(opts.candidates)) {
     const buildExplicit = () => {
-      const explicitCandidates = assembleCandidates(discoveryCat, [], resolvedRegistry, accounts, opts.candidates);
+      const explicitCandidates = assembleCandidates(
+        discoveryCat,
+        [],
+        resolvedRegistry,
+        accounts,
+        opts.candidates
+      );
       const eligible = [];
       const excludedRoutes = [];
       const seenExcluded = new Set();
@@ -1177,14 +1187,15 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
             seenExcluded.add(key);
             const modelId = candidate && candidate.modelId;
             const gateway = candidate && candidate.gateway;
-            const routePath = candidate && candidate.accountId
-              ? { id: gateway, accountId: candidate.accountId }
-              : gateway;
+            const routePath =
+              candidate && candidate.accountId
+                ? { id: gateway, accountId: candidate.accountId }
+                : gateway;
             const rec =
               routeHealth && modelId && gateway
                 ? routeHealthApi.getPathRecord(routeHealth, modelId, routePath)
                 : null;
-            const reason = rec ? (rec.status || 'ROUTE_UNAVAILABLE') : 'ROUTE_PROBE_UNPROVEN';
+            const reason = rec ? rec.status || 'ROUTE_UNAVAILABLE' : 'ROUTE_PROBE_UNPROVEN';
             excludedRoutes.push({
               offeringId: key,
               candidateKey: key,
@@ -1228,28 +1239,27 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
 
   const buildCandidates = () => {
     const assembled = assembleCandidates(discoveryCat, offs, resolvedRegistry, accounts, null, [
-      ...candidatesApi
-        .generateCandidates({
-          harness: opts.harness,
-          registry: resolvedRegistry,
-          accounts: accounts || [],
-          openCodeIds: (accounts || []).flatMap((account) =>
-            ((account && account.models) || [])
-              .map((model) => (typeof model === 'string' ? model : model && model.model))
-              .filter(Boolean)
-          ),
-          catalogue:
-            catalogueRows.length > 0
-              ? catalogueRows
-              : (discoveryCat && discoveryCat.candidates) || [],
-          evidenceData: opts.evidenceData,
-          fakeRunsDir: opts.fakeRunsDir,
-          home: opts.home,
-          discoverPool: opts.discoverPool !== false,
-          adapterScript: opts.adapterScript,
-          platform: opts.platform,
-          keepExhausted: true,
-        }),
+      ...candidatesApi.generateCandidates({
+        harness: opts.harness,
+        registry: resolvedRegistry,
+        accounts: accounts || [],
+        openCodeIds: (accounts || []).flatMap((account) =>
+          ((account && account.models) || [])
+            .map((model) => (typeof model === 'string' ? model : model && model.model))
+            .filter(Boolean)
+        ),
+        catalogue:
+          catalogueRows.length > 0
+            ? catalogueRows
+            : (discoveryCat && discoveryCat.candidates) || [],
+        evidenceData: opts.evidenceData,
+        fakeRunsDir: opts.fakeRunsDir,
+        home: opts.home,
+        discoverPool: opts.discoverPool !== false,
+        adapterScript: opts.adapterScript,
+        platform: opts.platform,
+        keepExhausted: true,
+      }),
       ...candidatesApi.gatewayAccountCandidates({
         registry: resolvedRegistry,
         accounts: accounts || [],
@@ -1376,8 +1386,7 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
               : null;
           const reason =
             candidate &&
-            (candidate.credentialEnvMissing ||
-              candidate.blockReason === 'CREDENTIAL_ENV_MISSING')
+            (candidate.credentialEnvMissing || candidate.blockReason === 'CREDENTIAL_ENV_MISSING')
               ? 'CREDENTIAL_ENV_MISSING'
               : rec
                 ? rec.status || 'ROUTE_UNAVAILABLE'
@@ -2308,11 +2317,15 @@ function dispatchCommand(args, deps = {}) {
             offeringId: candidate.candidateKey,
             reason: candidate.reason || candidate.reasonCode,
           })),
-          ...(((offered && offered.excludedRoutes) || (candidateList && candidateList.excludedRoutes) || []).map((candidate) => ({
+          ...(
+            (offered && offered.excludedRoutes) ||
+            (candidateList && candidateList.excludedRoutes) ||
+            []
+          ).map((candidate) => ({
             ...candidate,
             offeringId: candidate.candidateKey || candidate.offeringId,
             reason: candidate.reason || candidate.reasonCode,
-          }))),
+          })),
         ],
       };
     };

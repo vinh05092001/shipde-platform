@@ -30,7 +30,10 @@ describe('TASK-AI-142: Route health isolation and default store immutability', (
     tempDir = createTempDir();
     if (!fs.existsSync(DEFAULT_HEALTH_PATH)) {
       fs.mkdirSync(path.dirname(DEFAULT_HEALTH_PATH), { recursive: true });
-      fs.writeFileSync(DEFAULT_HEALTH_PATH, JSON.stringify({ version: 1, paths: {}, events: [] }, null, 2));
+      fs.writeFileSync(
+        DEFAULT_HEALTH_PATH,
+        JSON.stringify({ version: 1, paths: {}, events: [] }, null, 2)
+      );
     }
     assert.ok(
       fs.existsSync(DEFAULT_HEALTH_PATH),

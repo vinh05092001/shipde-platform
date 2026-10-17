@@ -123,7 +123,10 @@ describe('TASK-AI-142 Audit Repairs: Ineligible and unprobed routes appear in re
       accountId: 'acc-9router',
     };
 
-    const failingKey = routeHealth.healthKey('9router/model-failing', { id: '9router', accountId: 'acc-9router' });
+    const failingKey = routeHealth.healthKey('9router/model-failing', {
+      id: '9router',
+      accountId: 'acc-9router',
+    });
     const mockHealth = {
       version: 1,
       paths: {
@@ -152,12 +155,16 @@ describe('TASK-AI-142 Audit Repairs: Ineligible and unprobed routes appear in re
     assert.ok(Array.isArray(eligible.excludedRoutes));
     assert.equal(eligible.excludedRoutes.length, 2);
 
-    const unprobedRec = eligible.excludedRoutes.find((r) => r.candidateKey.includes('model-unprobed'));
+    const unprobedRec = eligible.excludedRoutes.find((r) =>
+      r.candidateKey.includes('model-unprobed')
+    );
     assert.ok(unprobedRec);
     assert.equal(unprobedRec.reasonCode, 'ROUTE_PROBE_UNPROVEN');
     assert.equal(unprobedRec.scope, 'route');
 
-    const failingRec = eligible.excludedRoutes.find((r) => r.candidateKey.includes('model-failing'));
+    const failingRec = eligible.excludedRoutes.find((r) =>
+      r.candidateKey.includes('model-failing')
+    );
     assert.ok(failingRec);
     assert.equal(failingRec.reasonCode, 'UNAVAILABLE_NOW');
   });
@@ -235,9 +242,18 @@ describe('TASK-AI-142 Audit Repairs: Live Codex CLI Quota Telemetry', () => {
     );
   }
 
-  function makeFakeCodexFs({ auth = true, config = 'model = "gpt-5.3-codex"\n', sessions = [] } = {}) {
+  function makeFakeCodexFs({
+    auth = true,
+    config = 'model = "gpt-5.3-codex"\n',
+    sessions = [],
+  } = {}) {
     const files = new Map();
-    const dirs = new Set(['/fake', '/fake/home', '/fake/home/.codex', '/fake/home/.codex/sessions']);
+    const dirs = new Set([
+      '/fake',
+      '/fake/home',
+      '/fake/home/.codex',
+      '/fake/home/.codex/sessions',
+    ]);
 
     if (auth) files.set('/fake/home/.codex/auth.json', '{"auth":"dummy"}');
     if (config) files.set('/fake/home/.codex/config.toml', config);
@@ -312,7 +328,11 @@ describe('TASK-AI-142 Audit Repairs: Live Codex CLI Quota Telemetry', () => {
 
   test('fixture rollout with 90%/86% resolves "tight" status and is admitted in writer ranking', () => {
     const now = Date.now();
-    const content = makeRolloutContent({ usedPrimary: 90, usedSecondary: 86, timestamp: new Date(now).toISOString() });
+    const content = makeRolloutContent({
+      usedPrimary: 90,
+      usedSecondary: 86,
+      timestamp: new Date(now).toISOString(),
+    });
     const fakeFs = makeFakeCodexFs({
       auth: true,
       sessions: [{ name: 'rollout-2026-10-17T06-51-57-test.jsonl', content }],
@@ -337,7 +357,11 @@ describe('TASK-AI-142 Audit Repairs: Live Codex CLI Quota Telemetry', () => {
 
   test('fixture rollout with 50%/40% resolves "open" status and is admitted in writer ranking', () => {
     const now = Date.now();
-    const content = makeRolloutContent({ usedPrimary: 50, usedSecondary: 40, timestamp: new Date(now).toISOString() });
+    const content = makeRolloutContent({
+      usedPrimary: 50,
+      usedSecondary: 40,
+      timestamp: new Date(now).toISOString(),
+    });
     const fakeFs = makeFakeCodexFs({
       auth: true,
       sessions: [{ name: 'rollout-2026-10-17T06-51-57-test.jsonl', content }],
@@ -420,7 +444,11 @@ describe('TASK-AI-142 Audit Repairs: Live Codex CLI Quota Telemetry', () => {
   test('refresh-quota.js supports codex provider and delegates to readCodexSessionQuota', () => {
     assert.ok(refreshQuota.SUPPORTED_PROVIDERS.has('codex'));
     const now = Date.now();
-    const content = makeRolloutContent({ usedPrimary: 90, usedSecondary: 86, timestamp: new Date(now).toISOString() });
+    const content = makeRolloutContent({
+      usedPrimary: 90,
+      usedSecondary: 86,
+      timestamp: new Date(now).toISOString(),
+    });
     const fakeFs = makeFakeCodexFs({
       auth: true,
       sessions: [{ name: 'rollout-2026-10-17T06-51-57-test.jsonl', content }],
@@ -439,7 +467,10 @@ describe('TASK-AI-142 Audit Repairs: Live Codex CLI Quota Telemetry', () => {
 
 describe('TASK-AI-142 Audit Repairs: Route health file untracked from Git', () => {
   test('.gitignore contains tools/ai-brain/data/model-route-health.json', () => {
-    const gitignoreContent = fs.readFileSync(path.join(__dirname, '..', '..', '..', '.gitignore'), 'utf8');
+    const gitignoreContent = fs.readFileSync(
+      path.join(__dirname, '..', '..', '..', '.gitignore'),
+      'utf8'
+    );
     assert.ok(
       gitignoreContent.includes('tools/ai-brain/data/model-route-health.json'),
       '.gitignore must ignore model-route-health.json'

@@ -273,7 +273,8 @@ function resolveCandidateHeadroom(candidate, ctx) {
   let status = 'unknown';
   let worstRatio = null;
   let reason = 'chưa khai hạn mức token';
-  let cooldownUntil = reading && typeof reading === 'object' ? reading.cooldownUntil || reading.resetsAt : undefined;
+  let cooldownUntil =
+    reading && typeof reading === 'object' ? reading.cooldownUntil || reading.resetsAt : undefined;
   if (typeof reading === 'string') {
     status = reading;
   } else if (reading && typeof reading === 'object') {

@@ -594,8 +594,7 @@ function openAiCompatibleCandidates(opts) {
       source.credential.env
     ) {
       const envName = source.credential.env;
-      const envVal =
-        o.env && o.env[envName] !== undefined ? o.env[envName] : process.env[envName];
+      const envVal = o.env && o.env[envName] !== undefined ? o.env[envName] : process.env[envName];
       const hasKey = Boolean(envVal && String(envVal).trim().length > 0);
       const accId = deriveCredentialAccountId(source);
       const credentialAcc = {

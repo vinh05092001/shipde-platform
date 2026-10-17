@@ -35,10 +35,19 @@ test('VIỆC 3: Legacy TIMEOUT record without classifierVersion is eligible for 
 
   // Must be detected as legacy unverified
   const record = store.paths['cl/claude-3-5-sonnet|9router@*'];
-  assert.equal(routeHealth.isLegacyUnverified(record), true, 'legacy TIMEOUT must be flagged unverified');
+  assert.equal(
+    routeHealth.isLegacyUnverified(record),
+    true,
+    'legacy TIMEOUT must be flagged unverified'
+  );
 
   // isEligible must allow re-probing
-  const eligible = routeHealth.isEligible(store, candidate.modelId, { id: '9router', accountId: '*' }, now);
+  const eligible = routeHealth.isEligible(
+    store,
+    candidate.modelId,
+    { id: '9router', accountId: '*' },
+    now
+  );
   assert.equal(eligible, true, 'legacy TIMEOUT must be eligible for re-probe');
 
   // orderProbeRoutes must place candidate in unknown (to be probed) rather than failed
@@ -80,7 +89,12 @@ test('VIỆC 3: Classified record with version and 451 remains GEO_BLOCKED', () 
   const record = store.paths['cl/claude-3-5-sonnet|9router@*'];
   assert.equal(routeHealth.isLegacyUnverified(record), false, 'versioned 451 is NOT unverified');
 
-  const eligible = routeHealth.isEligible(store, candidate.modelId, { id: '9router', accountId: '*' }, now);
+  const eligible = routeHealth.isEligible(
+    store,
+    candidate.modelId,
+    { id: '9router', accountId: '*' },
+    now
+  );
   assert.equal(eligible, false, 'GEO_BLOCKED route must remain ineligible during cooldown');
 });
 
@@ -114,7 +128,12 @@ test('VIỆC 3: Legacy record with genuine 451 GEO_BLOCKED remains GEO_BLOCKED e
   const record = store.paths['cl/claude-3-5-sonnet|9router@*'];
   assert.equal(routeHealth.isLegacyUnverified(record), false, 'genuine 451 is not unverified');
 
-  const eligible = routeHealth.isEligible(store, candidate.modelId, { id: '9router', accountId: '*' }, now);
+  const eligible = routeHealth.isEligible(
+    store,
+    candidate.modelId,
+    { id: '9router', accountId: '*' },
+    now
+  );
   assert.equal(eligible, false, 'legacy GEO_BLOCKED remains ineligible');
 });
 
@@ -122,7 +141,13 @@ test('VIỆC 3: recordResult tags paths with classifierVersion', () => {
   const store = { version: 1, paths: {}, events: [] };
   const now = Date.parse('2026-10-17T12:00:00Z');
 
-  routeHealth.recordResult(store, 'test-model', 'test-gw', { ok: false, status: 451, message: 'Geo block' }, now);
+  routeHealth.recordResult(
+    store,
+    'test-model',
+    'test-gw',
+    { ok: false, status: 451, message: 'Geo block' },
+    now
+  );
 
   const keys = Object.keys(store.paths);
   assert.equal(keys.length, 1);
@@ -172,12 +197,25 @@ test('VIỆC 3: orderProbeRoutes orders legacy unverified ahead of genuine faile
     accountId: '*',
   };
 
-  assert.equal(routeHealth.isSelectable(store, candLegacy.modelId, { id: '9router', accountId: '*' }, now), true);
-  assert.equal(routeHealth.isSelectable(store, candFailed.modelId, { id: '9router', accountId: '*' }, now), false);
+  assert.equal(
+    routeHealth.isSelectable(store, candLegacy.modelId, { id: '9router', accountId: '*' }, now),
+    true
+  );
+  assert.equal(
+    routeHealth.isSelectable(store, candFailed.modelId, { id: '9router', accountId: '*' }, now),
+    false
+  );
 
-  const ordered = routeHealth.orderProbeRoutes([candFailed, candLegacy], { routeHealth: store, now });
+  const ordered = routeHealth.orderProbeRoutes([candFailed, candLegacy], {
+    routeHealth: store,
+    now,
+  });
   assert.equal(ordered.length, 2);
   // candLegacy should be in unknown, candFailed in failed -> candLegacy placed first!
-  assert.equal(ordered[0].modelId, 'cl/claude-3-5-sonnet', 'legacy unverified must be prioritized in unknown');
+  assert.equal(
+    ordered[0].modelId,
+    'cl/claude-3-5-sonnet',
+    'legacy unverified must be prioritized in unknown'
+  );
   assert.equal(ordered[1].modelId, 'cl/gpt-4o', 'genuine 451 must be in failed');
 });

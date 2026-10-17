@@ -90,8 +90,14 @@ test('VIỆC 2: Source with api-key credential rejects with CREDENTIAL_ENV_MISSI
     headrooms: { default: 'open' },
   });
 
-  const envMissingRejects = ranked.rejected.filter((r) => r.reasonCode === 'CREDENTIAL_ENV_MISSING');
-  assert.equal(envMissingRejects.length, result.length, 'all candidates rejected with CREDENTIAL_ENV_MISSING');
+  const envMissingRejects = ranked.rejected.filter(
+    (r) => r.reasonCode === 'CREDENTIAL_ENV_MISSING'
+  );
+  assert.equal(
+    envMissingRejects.length,
+    result.length,
+    'all candidates rejected with CREDENTIAL_ENV_MISSING'
+  );
 
   const wildcardRejects = ranked.rejected.filter((r) => r.reasonCode === 'WILDCARD_ACCOUNT');
   assert.equal(wildcardRejects.length, 0, 'must not be rejected with WILDCARD_ACCOUNT');
