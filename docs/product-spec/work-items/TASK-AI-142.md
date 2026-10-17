@@ -248,6 +248,19 @@ Decision log entries link `goalId -> workItemId -> candidateKey -> session -> co
 - Part H2 Hermes session selection, custom config binding, and `shipde-controller` skill file are delivered in Part H2.
 - Live acceptance across chat and controller runs in Part H3 following merge of H1 and H2.
 
+### H3 live: derive small-item complexity and measure packed context (2026-10-17)
+
+A single risk-domain keyword no longer makes a bounded item large. Complexity uses
+acceptance/scope counts and layers; explicit higher complexity and multi-domain risk
+remain authoritative. Intake also recognizes Files fields/sections. Before JEV and
+writer selection, the actual packed text is measured with the existing repo-map token
+estimator. This replaces the generic role context fallback; explicit larger item
+requirements remain respected. The context manifest records bytes and estimated tokens.
+Read-only replay of GOAL-G-F622511E-1: two owned files, `standard`, 7,831 pack bytes,
+1,943 estimated context tokens rather than 200,000. No provider call was made.
+Offline regressions are red on origin/main (`large`, 200,000 versus 16 fixture tokens)
+and green after the fix. Existing intake tests: 7 passed.
+
 ### H3 live: summarize unchanged route cooldowns per item (2026-10-17)
 
 Each writer selection/probe round records counts by cooldown reason and the earliest

@@ -659,3 +659,58 @@ test('H3 cooldown transitions preserve new refusals and expiry changes per item'
   );
   assert.equal(decisionRecords(dir).at(-1).count, 1);
 });
+
+function smallGoalSpec() {
+  return require('../intake').deriveSpec({
+    id: 'A',
+    root: '.',
+    deps: {},
+    registerItem: { dependencies: '' },
+    workItemText: [
+      '# One file quota repair',
+      '## Control',
+      '| Field | Value |',
+      '|---|---|',
+      '| Allowed paths | `a.js`; `test/a.test.js` |',
+      '| Risk domains | auth |',
+      '## Business outcome',
+      'Missing usage remains unknown.',
+      '## Acceptance criteria',
+      '| ID | Criterion |',
+      '|---|---|',
+      '| AC-1 | Do not read auth.json |',
+    ].join('\n'),
+  });
+}
+
+test('H3 one implementation file plus one test does not inherit large complexity from auth keywords', () => {
+  const derived = smallGoalSpec();
+  assert.deepEqual(derived.specItem.files, ['a.js', 'test/a.test.js']);
+  assert.deepEqual(derived.riskDomains, ['auth']);
+  assert.equal(derived.complexity, 'standard');
+});
+
+test('H3 routing context demand measures the actual packed content before JEV selection', async () => {
+  const dir = tmpDir('measured-context-');
+  const host = makeRepo(path.join(dir, 'host'));
+  fs.writeFileSync(path.join(host.dir, 'a.js'), 'module.exports = true;\n');
+  const f = launchHarness([smallGoalSpec().specItem], {
+    host,
+    decisionDir: path.join(dir, 'decisions'),
+    usageDir: path.join(dir, 'usage'),
+    run: () => {
+      throw new Error(PROVISION_MSG);
+    },
+  });
+  f.opts.cwd = host.dir;
+  f.opts.enableContextPack = true;
+  f.opts.contextPackDir = path.join(dir, 'packs');
+  f.opts.enforceProofFloors = true;
+  const log = await runOrchestration('small measured context', f.opts);
+  const content = fs.readFileSync(log.contextPack.path, 'utf8');
+  const expected = require('../repo-map').estimateTokens(content);
+  const profile = decisionRecords(f.opts.decisionDir).find((r) => r.profile)?.profile;
+  assert.ok(profile);
+  assert.equal(profile.contextSize, expected);
+  assert.equal(profile.complexity, 'standard');
+});

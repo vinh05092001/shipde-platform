@@ -220,7 +220,7 @@ function pathLike(token) {
 }
 
 function deriveAllowedPaths(text) {
-  const value = controlValue(text, ['allowed paths', 'allowed files']);
+  const value = controlValue(text, ['allowed paths', 'allowed files', 'files']);
   let tokens = value ? extractBackticks(value) : [];
   if (tokens.length === 0 && value) {
     tokens = String(value)
@@ -230,7 +230,7 @@ function deriveAllowedPaths(text) {
   }
   let paths = tokens.map(stripTicks).filter(pathLike);
   if (paths.length === 0) {
-    const body = sectionBody(text, /^##\s+(Allowed|Scope)\b/i);
+    const body = sectionBody(text, /^##\s+(Allowed|Scope|Files)\b/i);
     paths = extractBackticks(body).filter(pathLike);
   }
   return unique(paths);
@@ -301,6 +301,7 @@ const RISK_DOMAIN_PATTERNS = Object.freeze({
 
 function deriveComplexity(text, acceptanceCriteria, riskDomains, allowedPaths) {
   const acCount = acceptanceCriteria.length;
+  const scopeCount = Math.max(acCount, allowedPaths.length);
   const layers = new Set();
   const scope = sectionBody(text, /^##\s+(?:In Scope|Scope)\b/i);
   const material = [scope, ...allowedPaths, ...acceptanceCriteria].join('\n');
@@ -313,7 +314,7 @@ function deriveComplexity(text, acceptanceCriteria, riskDomains, allowedPaths) {
   if ((riskDomains.includes('auth') || riskDomains.includes('security')) && acCount >= 15)
     return 'complex';
   if (riskDomains.length >= 2 || acCount >= 15 || layers.size >= 3) return 'complex';
-  if (acCount >= 8 || layers.size >= 2 || riskDomains.length === 1) return 'large';
+  if (scopeCount >= 8 || layers.size >= 2) return 'large';
   return 'standard';
 }
 

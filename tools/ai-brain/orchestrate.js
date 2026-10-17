@@ -3754,12 +3754,23 @@ async function runOrchestration(goal, opts) {
         outputDir: o.contextPackDir,
         sources: o.contextSources,
       });
-      log.contextPack = { path: contextPack.path, files: contextPack.files.length };
+      const contextTokens = require('./repo-map').estimateTokens(contextPack.content);
+      log.contextPack = {
+        path: contextPack.path,
+        files: contextPack.files.length,
+        bytes: Buffer.byteLength(contextPack.content),
+        tokens: contextTokens,
+      };
+      // The pack is the content actually attached to every item, including on resume.
+      // An explicit item context requirement may request more, never less than this pack.
+      for (const item of log.plan.workItems || []) {
+        item.contextSize = Math.max(Number(item.contextSize) || 0, contextTokens);
+      }
       if (typeof o.contextManifest === 'string' && o.contextManifest) {
         fs.mkdirSync(path.dirname(o.contextManifest), { recursive: true });
         fs.writeFileSync(
           o.contextManifest,
-          JSON.stringify({ path: contextPack.path, files: contextPack.files }, null, 2) + '\n',
+          JSON.stringify({ ...log.contextPack, files: contextPack.files }, null, 2) + '\n',
           'utf8'
         );
       }
