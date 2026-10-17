@@ -1,0 +1,216 @@
+{
+ "generatedAt": "2026-10-06T05:44:36.871Z",
+ "probeScript": ".inputs/probe-sources-v3.js (from v2 + parser/mixed-SSE + per-target concurrency + 429 backoff + extraBody/omit)",
+ "probeFile": ".inputs/live-fix-20261006.jsonl",
+ "classifier": ".inputs/classify-live-20261006.js replica (copied into .inputs/summarize-fix.js)",
+ "groups": {
+  "9router-gh": {
+   "note": "gh/* models WRONG_OR_EMPTY in live-9router-r2 (17 of 53 total WRONG_OR_EMPTY; parenthetical 53 is the file total)",
+   "target": 17,
+   "before": {
+    "PASS": 0,
+    "R429": 0,
+    "other": 17
+   },
+   "after": {
+    "PASS": 13,
+    "R429": 0,
+    "other": 4
+   },
+   "newlyAlive": [
+    "gh/copilot-search-a",
+    "gh/exec-agent-c",
+    "gh/gpt-3.5-turbo",
+    "gh/gpt-3.5-turbo-0613",
+    "gh/gpt-4-o-preview",
+    "gh/gpt-4.1",
+    "gh/gpt-4.1-2025-04-14",
+    "gh/gpt-4o",
+    "gh/gpt-4o-2024-05-13",
+    "gh/gpt-4o-2024-08-06",
+    "gh/gpt-4o-2024-11-20",
+    "gh/gpt-4o-mini",
+    "gh/gpt-4o-mini-2024-07-18"
+   ],
+   "stillFailing": [
+    {
+     "model": "gh/exec-agent-a",
+     "result": "WRONG_OR_EMPTY",
+     "http": 200,
+     "class": "CONTENT_RETURNED_NONCE_MISSING"
+    },
+    {
+     "model": "gh/copilot-search-c",
+     "result": "WRONG_OR_EMPTY",
+     "http": 200,
+     "class": "CONTENT_RETURNED_NONCE_MISSING"
+    },
+    {
+     "model": "gh/exec-agent-b",
+     "result": "WRONG_OR_EMPTY",
+     "http": 200,
+     "class": "CONTENT_RETURNED_NONCE_MISSING"
+    },
+    {
+     "model": "gh/copilot-search-b",
+     "result": "WRONG_OR_EMPTY",
+     "http": 200,
+     "class": "CONTENT_RETURNED_NONCE_MISSING"
+    }
+   ]
+  },
+  "thegrid": {
+   "note": "all 17 models from live /models list, concurrency 2 (documented limit 3: thegrid.ai/docs/api-reference/errors-and-rate-limits.md)",
+   "before": {
+    "PASS": 3,
+    "R429": 14,
+    "other": 0
+   },
+   "after": {
+    "PASS": 17,
+    "R429": 0,
+    "other": 0
+   },
+   "newlyAlive": [
+    "agent-prime",
+    "bytedance-pro-latest",
+    "claude-opus-latest",
+    "code-max",
+    "code-prime",
+    "deepseek-pro-latest",
+    "gemini-pro-latest",
+    "glm-latest",
+    "gpt-sol-latest",
+    "kimi-latest",
+    "minimax-latest",
+    "text-max",
+    "text-prime",
+    "text-standard"
+   ],
+   "stillFailing": []
+  },
+  "explabs-429-503": {
+   "note": "models with HTTP 429 (287) or 503 (4) in live-extra; probed with concurrency 2 + 429 backoff (5s/10s, Retry-After/reset-text honoured, cap 30s, 2 retries). Run hit time budget after 180/291; all 180 probed returned purchase-gated 429s.",
+   "target": 291,
+   "before": {
+    "PASS": 0,
+    "R429": 287,
+    "other": 4
+   },
+   "afterProbed": {
+    "PASS": 0,
+    "R429": 180,
+    "other": 0
+   },
+   "probed": 180,
+   "unprobed": 111,
+   "unprobedByBeforeResult": {
+    "HTTP_429": 107,
+    "HTTP_503": 4
+   },
+   "newlyAlive": [],
+   "stillFailingSample": [
+    {
+     "model": "aion-2.0",
+     "result": "HTTP_429",
+     "http": 429,
+     "class": "BLOCKED_QUOTA"
+    },
+    {
+     "model": "aion-3.0",
+     "result": "HTTP_429",
+     "http": 429,
+     "class": "BLOCKED_QUOTA"
+    },
+    {
+     "model": "claude-fable-5",
+     "result": "HTTP_429",
+     "http": 429,
+     "class": "BLOCKED_QUOTA"
+    },
+    {
+     "model": "aion-3.0-mini",
+     "result": "HTTP_429",
+     "http": 429,
+     "class": "BLOCKED_QUOTA"
+    },
+    {
+     "model": "aion-rp-llama-3.1-8b",
+     "result": "HTTP_429",
+     "http": 429,
+     "class": "BLOCKED_QUOTA"
+    }
+   ],
+   "stillFailingClass": "BLOCKED_QUOTA (detail: model_requires_purchase, purchase-gated)"
+  },
+  "9router-cohere": {
+   "note": "cohere/* through 9router gateway. 9router /models lists cohere/command-r-08-2024, cohere/command-r-plus-08-2024, cohere/command-a-03-2025 (plus cl/cohere/* cline-namespace variants); POST /v1/chat/completions returns HTTP 405 for all three before and after. Cohere compat docs (docs.cohere.com/docs/compatibility-api) show the same path works direct, so the gateway route is unsupported. Not guessed around.",
+   "before": {
+    "PASS": 0,
+    "R429": 0,
+    "other": 3
+   },
+   "after": {
+    "PASS": 0,
+    "R429": 0,
+    "other": 3
+   },
+   "newlyAlive": [],
+   "stillFailing": [
+    {
+     "model": "cohere/command-r-plus-08-2024",
+     "result": "HTTP_405",
+     "http": 405,
+     "classifyReplica": "CALL_CONTRACT_UNRESOLVED",
+     "recordedAs": "ROUTE_UNSUPPORTED_BY_GATEWAY"
+    },
+    {
+     "model": "cohere/command-a-03-2025",
+     "result": "HTTP_405",
+     "http": 405,
+     "classifyReplica": "CALL_CONTRACT_UNRESOLVED",
+     "recordedAs": "ROUTE_UNSUPPORTED_BY_GATEWAY"
+    },
+    {
+     "model": "cohere/command-r-08-2024",
+     "result": "HTTP_405",
+     "http": 405,
+     "classifyReplica": "CALL_CONTRACT_UNRESOLVED",
+     "recordedAs": "ROUTE_UNSUPPORTED_BY_GATEWAY"
+    }
+   ]
+  },
+  "corti": {
+   "note": "corti-s1 re-probed with docs-minimal body (model+messages only; omit temperature,max_tokens per docs.corti.ai quickstart + API ref which shows temperature default 1 but s1 rejected it); corti-s1-tiny re-probed with fixed parser (reasoning alias). Base https://ai.us.corti.app/v1, OAuth client_credentials.",
+   "before": {
+    "PASS": 0,
+    "R429": 0,
+    "other": 2
+   },
+   "beforeDetail": [
+    {
+     "model": "corti-s1",
+     "result": "HTTP_400",
+     "http": 400,
+     "class": "CALL_CONTRACT_UNRESOLVED"
+    },
+    {
+     "model": "corti-s1-tiny",
+     "result": "WRONG_OR_EMPTY",
+     "http": 200,
+     "class": "CONTENT_RETURNED_NONCE_MISSING"
+    }
+   ],
+   "after": {
+    "PASS": 2,
+    "R429": 0,
+    "other": 0
+   },
+   "newlyAlive": [
+    "corti-s1",
+    "corti-s1-tiny"
+   ],
+   "stillFailing": []
+  }
+ }
+}

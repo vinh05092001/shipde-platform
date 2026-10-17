@@ -1,0 +1,3295 @@
+{
+ "generatedAt": "2026-10-06T07:24:35.813Z",
+ "supersedes": "ranking-20261006-v3.json (left untouched; v3 identity + scores preserved)",
+ "probeFiles": [
+  ".inputs/live-20261006.jsonl",
+  ".inputs/live-9router-r2-20261006.jsonl",
+  ".inputs/live-extra-20261006.jsonl",
+  ".inputs/live-ca-20261006.jsonl",
+  ".inputs/live-fix-20261006.jsonl",
+  ".inputs/live-audit2-20261006.jsonl",
+  ".inputs/live-r3-confirm.jsonl",
+  ".inputs/live-r3-quota.jsonl"
+ ],
+ "probeLineTimeRange": {
+  "min": "2026-10-06T04:04:44.367Z",
+  "max": "2026-10-06T07:20:42.421Z"
+ },
+ "livenessRule": "alive iff latest line for (source, modelId) across the 8 probe files is PASS",
+ "aliveRowCount": 232,
+ "v3AliveRowCount": 194,
+ "v3RowsLost": [],
+ "newAliveRows": [
+  {
+   "source": "9router",
+   "modelId": "bzl/auto:free",
+   "lastAt": "2026-10-06T07:07:32.828Z",
+   "probeFile": ".inputs/live-r3-confirm.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "cf/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b",
+   "lastAt": "2026-10-06T07:07:16.742Z",
+   "probeFile": ".inputs/live-r3-confirm.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "cf/@cf/meta/llama-3.1-70b-instruct-fp8-fast",
+   "lastAt": "2026-10-06T07:07:10.549Z",
+   "probeFile": ".inputs/live-r3-confirm.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "cf/@cf/meta/llama-3.2-3b-instruct",
+   "lastAt": "2026-10-06T07:07:09.848Z",
+   "probeFile": ".inputs/live-r3-confirm.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "cf/@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+   "lastAt": "2026-10-06T07:07:10.318Z",
+   "probeFile": ".inputs/live-r3-confirm.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "cf/@cf/mistralai/mistral-small-3.1-24b-instruct",
+   "lastAt": "2026-10-06T07:07:11.000Z",
+   "probeFile": ".inputs/live-r3-confirm.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "cf/@cf/qwen/qwen2.5-coder-32b-instruct",
+   "lastAt": "2026-10-06T07:07:11.390Z",
+   "probeFile": ".inputs/live-r3-confirm.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "cf/@cf/qwen/qwq-32b",
+   "lastAt": "2026-10-06T07:07:15.930Z",
+   "probeFile": ".inputs/live-r3-confirm.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "cf/@cf/zai-org/glm-4.7-flash",
+   "lastAt": "2026-10-06T07:07:27.842Z",
+   "probeFile": ".inputs/live-r3-confirm.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "cl/apodex/apodex-1.1-mini:free",
+   "lastAt": "2026-10-06T06:29:26.655Z",
+   "probeFile": ".inputs/live-audit2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "cl/cohere/north-mini-code:free",
+   "lastAt": "2026-10-06T06:29:33.732Z",
+   "probeFile": ".inputs/live-audit2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "cl/dots-studio/dots-3-note-preview:free",
+   "lastAt": "2026-10-06T06:29:32.976Z",
+   "probeFile": ".inputs/live-audit2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "cl/inclusionai/ling-3.0-flash-sante:free",
+   "lastAt": "2026-10-06T06:29:34.800Z",
+   "probeFile": ".inputs/live-audit2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "cl/nvidia/nemotron-3-super-120b-a12b:free",
+   "lastAt": "2026-10-06T06:29:34.753Z",
+   "probeFile": ".inputs/live-audit2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "cl/nvidia/nemotron-3-ultra-550b-a55b:free",
+   "lastAt": "2026-10-06T06:29:38.258Z",
+   "probeFile": ".inputs/live-audit2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "cl/nvidia/nemotron-3.5-content-safety:free",
+   "lastAt": "2026-10-06T06:29:38.180Z",
+   "probeFile": ".inputs/live-audit2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "cl/poolside/laguna-s-2.1:free",
+   "lastAt": "2026-10-06T06:29:39.216Z",
+   "probeFile": ".inputs/live-audit2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "gh/exec-agent-a",
+   "lastAt": "2026-10-06T06:29:51.917Z",
+   "probeFile": ".inputs/live-audit2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "groq/openai/gpt-oss-120b",
+   "lastAt": "2026-10-06T06:29:55.282Z",
+   "probeFile": ".inputs/live-audit2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "kgw/kilo-auto/free",
+   "lastAt": "2026-10-06T07:07:17.929Z",
+   "probeFile": ".inputs/live-r3-confirm.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "kgw/nvidia/nemotron-3-super-120b-a12b:free",
+   "lastAt": "2026-10-06T07:07:17.919Z",
+   "probeFile": ".inputs/live-r3-confirm.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "mistral/codestral-latest",
+   "lastAt": "2026-10-06T07:07:18.456Z",
+   "probeFile": ".inputs/live-r3-confirm.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "openrouter/nvidia/nemotron-3.5-lightning:free",
+   "lastAt": "2026-10-06T07:07:44.654Z",
+   "probeFile": ".inputs/live-r3-confirm.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "tokenrouter/anthropic/claude-haiku-4.5",
+   "lastAt": "2026-10-06T07:07:22.438Z",
+   "probeFile": ".inputs/live-r3-confirm.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "tokenrouter/anthropic/claude-opus-4.8",
+   "lastAt": "2026-10-06T07:07:26.635Z",
+   "probeFile": ".inputs/live-r3-confirm.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "tokenrouter/anthropic/claude-sonnet-4.6",
+   "lastAt": "2026-10-06T07:07:30.849Z",
+   "probeFile": ".inputs/live-r3-confirm.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "tokenrouter/deepseek/deepseek-v4-flash",
+   "lastAt": "2026-10-06T07:19:20.916Z",
+   "probeFile": ".inputs/live-r3-quota.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "tokenrouter/deepseek/deepseek-v4-pro",
+   "lastAt": "2026-10-06T07:19:05.528Z",
+   "probeFile": ".inputs/live-r3-quota.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "tokenrouter/google/gemini-3.5-flash",
+   "lastAt": "2026-10-06T07:07:32.911Z",
+   "probeFile": ".inputs/live-r3-confirm.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "tokenrouter/google/gemini-3.6-flash",
+   "lastAt": "2026-10-06T07:19:04.838Z",
+   "probeFile": ".inputs/live-r3-quota.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "tokenrouter/moonshotai/kimi-k2.7-code",
+   "lastAt": "2026-10-06T07:19:03.798Z",
+   "probeFile": ".inputs/live-r3-quota.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "tokenrouter/openai/gpt-5.4",
+   "lastAt": "2026-10-06T06:31:00.622Z",
+   "probeFile": ".inputs/live-audit2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "tokenrouter/z-ai/glm-5.2",
+   "lastAt": "2026-10-06T07:07:36.547Z",
+   "probeFile": ".inputs/live-r3-confirm.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "xmtp/mimo-v2.5",
+   "lastAt": "2026-10-06T07:07:40.043Z",
+   "probeFile": ".inputs/live-r3-confirm.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "xmtp/mimo-v2.5-pro",
+   "lastAt": "2026-10-06T07:07:36.630Z",
+   "probeFile": ".inputs/live-r3-confirm.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "xmtp/mimo-v2.5-pro-claude",
+   "lastAt": "2026-10-06T07:07:38.504Z",
+   "probeFile": ".inputs/live-r3-confirm.jsonl"
+  },
+  {
+   "source": "llmtr",
+   "modelId": "agnes/agnes-2.5-flash",
+   "lastAt": "2026-10-06T07:20:29.559Z",
+   "probeFile": ".inputs/live-r3-quota.jsonl"
+  },
+  {
+   "source": "llmtr",
+   "modelId": "agnes/agnes-3.0-flash",
+   "lastAt": "2026-10-06T07:20:32.543Z",
+   "probeFile": ".inputs/live-r3-quota.jsonl"
+  }
+ ],
+ "identityRule": "v2 EXACT rule plus ONLY format normalization N1-N4. N1: lower-case. N2: treat '.', '_' and '-' as equivalent. N3: strip a leading organisation prefix, only for deepseek-ai/, zai-org/, Qwen/, qwen/, meta-llama/, mistralai/, google/, openai/, MiniMaxAI/, moonshotai/, nvidia/, ibm-granite/, microsoft/. N4: strip a trailing \":free\", \"-free\" or \"-instruct\" only when the benchmark source lists the model under the base name (benchmarks never carry a :free tier suffix; no probe id ends with -instruct, so that branch is a no-op). A match counts only if the normalized strings are equal. Forbidden and NOT applied: router aliases (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, cl/*, ocz/* non-real ids); mapping a family name to a specific version; stripping version numbers or size tags.",
+ "tierRules": {
+  "aaCodingIndex": "T1>=74,T2>=66,T3>=50,else T4",
+  "livebenchFallback": "used only without AA: T1>=79,T2>=73,T3>=66,else T4",
+  "sweBench": "stored only, never tiered"
+ },
+ "officialBenchmarkPages": [
+  "https://artificialanalysis.ai/models/capabilities/coding",
+  "https://artificialanalysis.ai/evaluations/artificial-analysis-intelligence-index",
+  "https://livebench.ai/ (release 2026-06-25)",
+  "https://www.swebench.com/verified"
+ ],
+ "benchmarkLookupDate": "2026-10-06",
+ "livebenchCodingMirrors": [
+  "https://www.benchleader.com/benchmarks/livebench_coding (LiveBench release 2026-06-25 coding subscores)",
+  "https://llmrun.dev/benchmark/livebench-coding (LiveBench release 2026-06-25 coding subscores)"
+ ],
+ "canonicalIdsFound": [
+  "deepseek-v4-1-flash",
+  "qwen3-8-flash-next",
+  "qwen3-8-max",
+  "gpt-5-6-luna",
+  "deepseek-v4-flash-0731",
+  "qwen3-8-27b",
+  "qwen3-7-max",
+  "deepseek-v4-flash-vision-exp",
+  "qwen3-7-plus",
+  "qwen3-6-plus",
+  "qwen3-6-27b",
+  "minimax-m2-7",
+  "gpt-6-luna",
+  "glm-5-3-flash",
+  "mistral-medium-3-5",
+  "gemma4-31b",
+  "qwen3-6-35b-a3b",
+  "gpt-oss-120b",
+  "gpt-oss-20b"
+ ],
+ "rankedCount": 19,
+ "rankedAliveRows": 26,
+ "unrankedCount": 206,
+ "unrankedByReason": {
+  "PREFIX_NOT_ALLOWED": 66,
+  "ROUTER_ALIAS": 80,
+  "NO_NORMALIZED_MATCH": 60
+ },
+ "ranked": [
+  {
+   "canonicalModelId": "deepseek-v4-1-flash",
+   "tier": "T1",
+   "tierSource": "LiveBench overall (AA missing)",
+   "aaCodingIndex": null,
+   "livebenchOverall": 81.1,
+   "livebenchCoding": 80,
+   "benchmarks": [
+    {
+     "name": "Artificial Analysis",
+     "metric": "Intelligence Index",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://artificialanalysis.ai/evaluations/artificial-analysis-intelligence-index"
+    },
+    {
+     "name": "Artificial Analysis",
+     "metric": "Coding Index",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://artificialanalysis.ai/models/capabilities/coding"
+    },
+    {
+     "name": "LiveBench",
+     "metric": "overall (release 2026-06-25)",
+     "score": 81.1,
+     "date": "2026-06-25",
+     "url": "https://livebench.ai/"
+    },
+    {
+     "name": "LiveBench",
+     "metric": "coding (release 2026-06-25)",
+     "score": 80,
+     "date": "2026-06-25",
+     "url": "https://livebench.ai/"
+    },
+    {
+     "name": "SWE-bench Verified",
+     "metric": "% resolved (mini-SWE-agent)",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://www.swebench.com/verified"
+    }
+   ],
+   "members": [
+    {
+     "source": "explabs",
+     "modelId": "deepseek-v4.1-flash",
+     "lastAt": "2026-10-06T04:57:24.271Z",
+     "probeFile": ".inputs/live-extra-20261006.jsonl",
+     "matchRule": "N2",
+     "normalizedId": "deepseek-v4-1-flash"
+    },
+    {
+     "source": "pgsgrove",
+     "modelId": "deepseek-v4.1-flash",
+     "lastAt": "2026-10-06T04:26:04.050Z",
+     "probeFile": ".inputs/live-20261006.jsonl",
+     "matchRule": "N2",
+     "normalizedId": "deepseek-v4-1-flash"
+    },
+    {
+     "source": "tokenharbor",
+     "modelId": "deepseek-v4.1-flash:free",
+     "lastAt": "2026-10-06T04:21:18.360Z",
+     "probeFile": ".inputs/live-20261006.jsonl",
+     "matchRule": "N2+N4",
+     "normalizedId": "deepseek-v4-1-flash"
+    }
+   ],
+   "matchRule": "N2, N2+N4",
+   "rank": 1
+  },
+  {
+   "canonicalModelId": "qwen3-8-flash-next",
+   "tier": "T2",
+   "tierSource": "AA Coding Index",
+   "aaCodingIndex": 73,
+   "livebenchOverall": 76.2,
+   "livebenchCoding": 72.5,
+   "benchmarks": [
+    {
+     "name": "Artificial Analysis",
+     "metric": "Intelligence Index",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://artificialanalysis.ai/evaluations/artificial-analysis-intelligence-index"
+    },
+    {
+     "name": "Artificial Analysis",
+     "metric": "Coding Index",
+     "score": 73,
+     "date": "2026-10-06",
+     "url": "https://artificialanalysis.ai/models/capabilities/coding"
+    },
+    {
+     "name": "LiveBench",
+     "metric": "overall (release 2026-06-25)",
+     "score": 76.2,
+     "date": "2026-06-25",
+     "url": "https://livebench.ai/"
+    },
+    {
+     "name": "LiveBench",
+     "metric": "coding (release 2026-06-25)",
+     "score": 72.5,
+     "date": "2026-06-25",
+     "url": "https://livebench.ai/"
+    },
+    {
+     "name": "SWE-bench Verified",
+     "metric": "% resolved (mini-SWE-agent)",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://www.swebench.com/verified"
+    }
+   ],
+   "members": [
+    {
+     "source": "amd-radeon",
+     "modelId": "Qwen3.8-Flash-Next",
+     "lastAt": "2026-10-06T04:25:15.872Z",
+     "probeFile": ".inputs/live-20261006.jsonl",
+     "matchRule": "N1+N2",
+     "normalizedId": "qwen3-8-flash-next"
+    }
+   ],
+   "matchRule": "N1+N2",
+   "rank": 2
+  },
+  {
+   "canonicalModelId": "qwen3-8-max",
+   "tier": "T2",
+   "tierSource": "AA Coding Index",
+   "aaCodingIndex": 71.8,
+   "livebenchOverall": 78.5,
+   "livebenchCoding": 72.9,
+   "benchmarks": [
+    {
+     "name": "Artificial Analysis",
+     "metric": "Intelligence Index",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://artificialanalysis.ai/evaluations/artificial-analysis-intelligence-index"
+    },
+    {
+     "name": "Artificial Analysis",
+     "metric": "Coding Index",
+     "score": 71.8,
+     "date": "2026-10-06",
+     "url": "https://artificialanalysis.ai/models/capabilities/coding"
+    },
+    {
+     "name": "LiveBench",
+     "metric": "overall (release 2026-06-25)",
+     "score": 78.5,
+     "date": "2026-06-25",
+     "url": "https://livebench.ai/"
+    },
+    {
+     "name": "LiveBench",
+     "metric": "coding (release 2026-06-25)",
+     "score": 72.9,
+     "date": "2026-06-25",
+     "url": "https://livebench.ai/"
+    },
+    {
+     "name": "SWE-bench Verified",
+     "metric": "% resolved (mini-SWE-agent)",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://www.swebench.com/verified"
+    }
+   ],
+   "members": [
+    {
+     "source": "xkiro",
+     "modelId": "qwen/qwen3.8-max:free",
+     "lastAt": "2026-10-06T04:21:05.006Z",
+     "probeFile": ".inputs/live-20261006.jsonl",
+     "matchRule": "N2+N3+N4",
+     "normalizedId": "qwen3-8-max"
+    }
+   ],
+   "matchRule": "N2+N3+N4",
+   "rank": 3
+  },
+  {
+   "canonicalModelId": "gpt-5-6-luna",
+   "tier": "T2",
+   "tierSource": "AA Coding Index",
+   "aaCodingIndex": 71.5,
+   "livebenchOverall": 73.6,
+   "livebenchCoding": null,
+   "benchmarks": [
+    {
+     "name": "Artificial Analysis",
+     "metric": "Intelligence Index",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://artificialanalysis.ai/evaluations/artificial-analysis-intelligence-index"
+    },
+    {
+     "name": "Artificial Analysis",
+     "metric": "Coding Index",
+     "score": 71.5,
+     "date": "2026-10-06",
+     "url": "https://artificialanalysis.ai/models/capabilities/coding"
+    },
+    {
+     "name": "LiveBench",
+     "metric": "overall (release 2026-06-25)",
+     "score": 73.6,
+     "date": "2026-06-25",
+     "url": "https://livebench.ai/"
+    },
+    {
+     "name": "LiveBench",
+     "metric": "coding (release 2026-06-25)",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://livebench.ai/"
+    },
+    {
+     "name": "SWE-bench Verified",
+     "metric": "% resolved (mini-SWE-agent)",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://www.swebench.com/verified"
+    }
+   ],
+   "members": [
+    {
+     "source": "explabs",
+     "modelId": "gpt-5.6-luna",
+     "lastAt": "2026-10-06T04:57:29.011Z",
+     "probeFile": ".inputs/live-extra-20261006.jsonl",
+     "matchRule": "N2",
+     "normalizedId": "gpt-5-6-luna"
+    }
+   ],
+   "matchRule": "N2",
+   "rank": 4
+  },
+  {
+   "canonicalModelId": "deepseek-v4-flash-0731",
+   "tier": "T2",
+   "tierSource": "AA Coding Index",
+   "aaCodingIndex": 69.1,
+   "livebenchOverall": 74.2,
+   "livebenchCoding": 75,
+   "benchmarks": [
+    {
+     "name": "Artificial Analysis",
+     "metric": "Intelligence Index",
+     "score": 34.3,
+     "date": "2026-10-06",
+     "url": "https://artificialanalysis.ai/evaluations/artificial-analysis-intelligence-index"
+    },
+    {
+     "name": "Artificial Analysis",
+     "metric": "Coding Index",
+     "score": 69.1,
+     "date": "2026-10-06",
+     "url": "https://artificialanalysis.ai/models/capabilities/coding"
+    },
+    {
+     "name": "LiveBench",
+     "metric": "overall (release 2026-06-25)",
+     "score": 74.2,
+     "date": "2026-06-25",
+     "url": "https://livebench.ai/"
+    },
+    {
+     "name": "LiveBench",
+     "metric": "coding (release 2026-06-25)",
+     "score": 75,
+     "date": "2026-06-25",
+     "url": "https://livebench.ai/"
+    },
+    {
+     "name": "SWE-bench Verified",
+     "metric": "% resolved (mini-SWE-agent)",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://www.swebench.com/verified"
+    }
+   ],
+   "members": [
+    {
+     "source": "dahl",
+     "modelId": "deepseek-ai/DeepSeek-V4-Flash-0731",
+     "lastAt": "2026-10-06T04:26:06.334Z",
+     "probeFile": ".inputs/live-20261006.jsonl",
+     "matchRule": "N1+N3",
+     "normalizedId": "deepseek-v4-flash-0731"
+    },
+    {
+     "source": "pgsgrove",
+     "modelId": "deepseek-v4-flash-0731",
+     "lastAt": "2026-10-06T04:26:03.674Z",
+     "probeFile": ".inputs/live-20261006.jsonl",
+     "matchRule": "EXACT",
+     "normalizedId": "deepseek-v4-flash-0731"
+    }
+   ],
+   "matchRule": "N1+N3, EXACT",
+   "rank": 5
+  },
+  {
+   "canonicalModelId": "qwen3-8-27b",
+   "tier": "T2",
+   "tierSource": "AA Coding Index",
+   "aaCodingIndex": 68.1,
+   "livebenchOverall": 75.3,
+   "livebenchCoding": 75.7,
+   "benchmarks": [
+    {
+     "name": "Artificial Analysis",
+     "metric": "Intelligence Index",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://artificialanalysis.ai/evaluations/artificial-analysis-intelligence-index"
+    },
+    {
+     "name": "Artificial Analysis",
+     "metric": "Coding Index",
+     "score": 68.1,
+     "date": "2026-10-06",
+     "url": "https://artificialanalysis.ai/models/capabilities/coding"
+    },
+    {
+     "name": "LiveBench",
+     "metric": "overall (release 2026-06-25)",
+     "score": 75.3,
+     "date": "2026-06-25",
+     "url": "https://livebench.ai/"
+    },
+    {
+     "name": "LiveBench",
+     "metric": "coding (release 2026-06-25)",
+     "score": 75.7,
+     "date": "2026-06-25",
+     "url": "https://livebench.ai/"
+    },
+    {
+     "name": "SWE-bench Verified",
+     "metric": "% resolved (mini-SWE-agent)",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://www.swebench.com/verified"
+    }
+   ],
+   "members": [
+    {
+     "source": "amd-radeon",
+     "modelId": "Qwen3.8-27B",
+     "lastAt": "2026-10-06T04:25:23.951Z",
+     "probeFile": ".inputs/live-20261006.jsonl",
+     "matchRule": "N1+N2",
+     "normalizedId": "qwen3-8-27b"
+    },
+    {
+     "source": "explabs",
+     "modelId": "qwen3.8-27b",
+     "lastAt": "2026-10-06T04:57:38.996Z",
+     "probeFile": ".inputs/live-extra-20261006.jsonl",
+     "matchRule": "N2",
+     "normalizedId": "qwen3-8-27b"
+    },
+    {
+     "source": "regolo",
+     "modelId": "qwen3.8-27b",
+     "lastAt": "2026-10-06T04:24:43.437Z",
+     "probeFile": ".inputs/live-20261006.jsonl",
+     "matchRule": "N2",
+     "normalizedId": "qwen3-8-27b"
+    }
+   ],
+   "matchRule": "N1+N2, N2",
+   "rank": 6
+  },
+  {
+   "canonicalModelId": "qwen3-7-max",
+   "tier": "T2",
+   "tierSource": "AA Coding Index",
+   "aaCodingIndex": 66,
+   "livebenchOverall": 73.1,
+   "livebenchCoding": 74.2,
+   "benchmarks": [
+    {
+     "name": "Artificial Analysis",
+     "metric": "Intelligence Index",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://artificialanalysis.ai/evaluations/artificial-analysis-intelligence-index"
+    },
+    {
+     "name": "Artificial Analysis",
+     "metric": "Coding Index",
+     "score": 66,
+     "date": "2026-10-06",
+     "url": "https://artificialanalysis.ai/models/capabilities/coding"
+    },
+    {
+     "name": "LiveBench",
+     "metric": "overall (release 2026-06-25)",
+     "score": 73.1,
+     "date": "2026-06-25",
+     "url": "https://livebench.ai/"
+    },
+    {
+     "name": "LiveBench",
+     "metric": "coding (release 2026-06-25)",
+     "score": 74.2,
+     "date": "2026-06-25",
+     "url": "https://livebench.ai/"
+    },
+    {
+     "name": "SWE-bench Verified",
+     "metric": "% resolved (mini-SWE-agent)",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://www.swebench.com/verified"
+    }
+   ],
+   "members": [
+    {
+     "source": "xkiro",
+     "modelId": "qwen/qwen3.7-max:free",
+     "lastAt": "2026-10-06T04:21:00.129Z",
+     "probeFile": ".inputs/live-20261006.jsonl",
+     "matchRule": "N2+N3+N4",
+     "normalizedId": "qwen3-7-max"
+    }
+   ],
+   "matchRule": "N2+N3+N4",
+   "rank": 7
+  },
+  {
+   "canonicalModelId": "deepseek-v4-flash-vision-exp",
+   "tier": "T2",
+   "tierSource": "LiveBench overall (AA missing)",
+   "aaCodingIndex": null,
+   "livebenchOverall": 76.8,
+   "livebenchCoding": 68.2,
+   "benchmarks": [
+    {
+     "name": "Artificial Analysis",
+     "metric": "Intelligence Index",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://artificialanalysis.ai/evaluations/artificial-analysis-intelligence-index"
+    },
+    {
+     "name": "Artificial Analysis",
+     "metric": "Coding Index",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://artificialanalysis.ai/models/capabilities/coding"
+    },
+    {
+     "name": "LiveBench",
+     "metric": "overall (release 2026-06-25)",
+     "score": 76.8,
+     "date": "2026-06-25",
+     "url": "https://livebench.ai/"
+    },
+    {
+     "name": "LiveBench",
+     "metric": "coding (release 2026-06-25)",
+     "score": 68.2,
+     "date": "2026-06-25",
+     "url": "https://livebench.ai/"
+    },
+    {
+     "name": "SWE-bench Verified",
+     "metric": "% resolved (mini-SWE-agent)",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://www.swebench.com/verified"
+    }
+   ],
+   "members": [
+    {
+     "source": "amd-radeon",
+     "modelId": "DeepSeek-V4-Flash-Vision-Exp",
+     "lastAt": "2026-10-06T04:25:15.495Z",
+     "probeFile": ".inputs/live-20261006.jsonl",
+     "matchRule": "N1",
+     "normalizedId": "deepseek-v4-flash-vision-exp"
+    }
+   ],
+   "matchRule": "N1",
+   "rank": 8
+  },
+  {
+   "canonicalModelId": "qwen3-7-plus",
+   "tier": "T3",
+   "tierSource": "AA Coding Index",
+   "aaCodingIndex": 55.9,
+   "livebenchOverall": null,
+   "livebenchCoding": null,
+   "benchmarks": [
+    {
+     "name": "Artificial Analysis",
+     "metric": "Intelligence Index",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://artificialanalysis.ai/evaluations/artificial-analysis-intelligence-index"
+    },
+    {
+     "name": "Artificial Analysis",
+     "metric": "Coding Index",
+     "score": 55.9,
+     "date": "2026-10-06",
+     "url": "https://artificialanalysis.ai/models/capabilities/coding"
+    },
+    {
+     "name": "LiveBench",
+     "metric": "overall (release 2026-06-25)",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://livebench.ai/"
+    },
+    {
+     "name": "LiveBench",
+     "metric": "coding (release 2026-06-25)",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://livebench.ai/"
+    },
+    {
+     "name": "SWE-bench Verified",
+     "metric": "% resolved (mini-SWE-agent)",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://www.swebench.com/verified"
+    }
+   ],
+   "members": [
+    {
+     "source": "xkiro",
+     "modelId": "qwen/qwen3.7-plus:free",
+     "lastAt": "2026-10-06T04:21:00.459Z",
+     "probeFile": ".inputs/live-20261006.jsonl",
+     "matchRule": "N2+N3+N4",
+     "normalizedId": "qwen3-7-plus"
+    }
+   ],
+   "matchRule": "N2+N3+N4",
+   "rank": 9
+  },
+  {
+   "canonicalModelId": "qwen3-6-plus",
+   "tier": "T3",
+   "tierSource": "AA Coding Index",
+   "aaCodingIndex": 54.5,
+   "livebenchOverall": 68.9,
+   "livebenchCoding": null,
+   "benchmarks": [
+    {
+     "name": "Artificial Analysis",
+     "metric": "Intelligence Index",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://artificialanalysis.ai/evaluations/artificial-analysis-intelligence-index"
+    },
+    {
+     "name": "Artificial Analysis",
+     "metric": "Coding Index",
+     "score": 54.5,
+     "date": "2026-10-06",
+     "url": "https://artificialanalysis.ai/models/capabilities/coding"
+    },
+    {
+     "name": "LiveBench",
+     "metric": "overall (release 2026-06-25)",
+     "score": 68.9,
+     "date": "2026-06-25",
+     "url": "https://livebench.ai/"
+    },
+    {
+     "name": "LiveBench",
+     "metric": "coding (release 2026-06-25)",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://livebench.ai/"
+    },
+    {
+     "name": "SWE-bench Verified",
+     "metric": "% resolved (mini-SWE-agent)",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://www.swebench.com/verified"
+    }
+   ],
+   "members": [
+    {
+     "source": "xkiro",
+     "modelId": "qwen/qwen3.6-plus:free",
+     "lastAt": "2026-10-06T04:20:58.448Z",
+     "probeFile": ".inputs/live-20261006.jsonl",
+     "matchRule": "N2+N3+N4",
+     "normalizedId": "qwen3-6-plus"
+    }
+   ],
+   "matchRule": "N2+N3+N4",
+   "rank": 10
+  },
+  {
+   "canonicalModelId": "qwen3-6-27b",
+   "tier": "T3",
+   "tierSource": "AA Coding Index",
+   "aaCodingIndex": 53.7,
+   "livebenchOverall": 64,
+   "livebenchCoding": 71.8,
+   "benchmarks": [
+    {
+     "name": "Artificial Analysis",
+     "metric": "Intelligence Index",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://artificialanalysis.ai/evaluations/artificial-analysis-intelligence-index"
+    },
+    {
+     "name": "Artificial Analysis",
+     "metric": "Coding Index",
+     "score": 53.7,
+     "date": "2026-10-06",
+     "url": "https://artificialanalysis.ai/models/capabilities/coding"
+    },
+    {
+     "name": "LiveBench",
+     "metric": "overall (release 2026-06-25)",
+     "score": 64,
+     "date": "2026-06-25",
+     "url": "https://livebench.ai/"
+    },
+    {
+     "name": "LiveBench",
+     "metric": "coding (release 2026-06-25)",
+     "score": 71.8,
+     "date": "2026-06-25",
+     "url": "https://livebench.ai/"
+    },
+    {
+     "name": "SWE-bench Verified",
+     "metric": "% resolved (mini-SWE-agent)",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://www.swebench.com/verified"
+    }
+   ],
+   "members": [
+    {
+     "source": "xkiro",
+     "modelId": "qwen/qwen3.6-27b:free",
+     "lastAt": "2026-10-06T04:20:57.002Z",
+     "probeFile": ".inputs/live-20261006.jsonl",
+     "matchRule": "N2+N3+N4",
+     "normalizedId": "qwen3-6-27b"
+    }
+   ],
+   "matchRule": "N2+N3+N4",
+   "rank": 11
+  },
+  {
+   "canonicalModelId": "minimax-m2-7",
+   "tier": "T3",
+   "tierSource": "AA Coding Index",
+   "aaCodingIndex": 52.6,
+   "livebenchOverall": null,
+   "livebenchCoding": null,
+   "benchmarks": [
+    {
+     "name": "Artificial Analysis",
+     "metric": "Intelligence Index",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://artificialanalysis.ai/evaluations/artificial-analysis-intelligence-index"
+    },
+    {
+     "name": "Artificial Analysis",
+     "metric": "Coding Index",
+     "score": 52.6,
+     "date": "2026-10-06",
+     "url": "https://artificialanalysis.ai/models/capabilities/coding"
+    },
+    {
+     "name": "LiveBench",
+     "metric": "overall (release 2026-06-25)",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://livebench.ai/"
+    },
+    {
+     "name": "LiveBench",
+     "metric": "coding (release 2026-06-25)",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://livebench.ai/"
+    },
+    {
+     "name": "SWE-bench Verified",
+     "metric": "% resolved (mini-SWE-agent)",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://www.swebench.com/verified"
+    }
+   ],
+   "members": [
+    {
+     "source": "dahl",
+     "modelId": "MiniMaxAI/MiniMax-M2.7",
+     "lastAt": "2026-10-06T04:26:18.190Z",
+     "probeFile": ".inputs/live-20261006.jsonl",
+     "matchRule": "N1+N2+N3",
+     "normalizedId": "minimax-m2-7"
+    }
+   ],
+   "matchRule": "N1+N2+N3",
+   "rank": 12
+  },
+  {
+   "canonicalModelId": "gpt-6-luna",
+   "tier": "T3",
+   "tierSource": "LiveBench overall (AA missing)",
+   "aaCodingIndex": null,
+   "livebenchOverall": 72,
+   "livebenchCoding": 79,
+   "benchmarks": [
+    {
+     "name": "Artificial Analysis",
+     "metric": "Intelligence Index",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://artificialanalysis.ai/evaluations/artificial-analysis-intelligence-index"
+    },
+    {
+     "name": "Artificial Analysis",
+     "metric": "Coding Index",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://artificialanalysis.ai/models/capabilities/coding"
+    },
+    {
+     "name": "LiveBench",
+     "metric": "overall (release 2026-06-25)",
+     "score": 72,
+     "date": "2026-06-25",
+     "url": "https://livebench.ai/"
+    },
+    {
+     "name": "LiveBench",
+     "metric": "coding (release 2026-06-25)",
+     "score": 79,
+     "date": "2026-06-25",
+     "url": "https://livebench.ai/"
+    },
+    {
+     "name": "SWE-bench Verified",
+     "metric": "% resolved (mini-SWE-agent)",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://www.swebench.com/verified"
+    }
+   ],
+   "members": [
+    {
+     "source": "explabs",
+     "modelId": "gpt-6-luna",
+     "lastAt": "2026-10-06T04:57:29.685Z",
+     "probeFile": ".inputs/live-extra-20261006.jsonl",
+     "matchRule": "EXACT",
+     "normalizedId": "gpt-6-luna"
+    }
+   ],
+   "matchRule": "EXACT",
+   "rank": 13
+  },
+  {
+   "canonicalModelId": "glm-5-3-flash",
+   "tier": "T3",
+   "tierSource": "LiveBench overall (AA missing)",
+   "aaCodingIndex": null,
+   "livebenchOverall": 71.6,
+   "livebenchCoding": 79,
+   "benchmarks": [
+    {
+     "name": "Artificial Analysis",
+     "metric": "Intelligence Index",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://artificialanalysis.ai/evaluations/artificial-analysis-intelligence-index"
+    },
+    {
+     "name": "Artificial Analysis",
+     "metric": "Coding Index",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://artificialanalysis.ai/models/capabilities/coding"
+    },
+    {
+     "name": "LiveBench",
+     "metric": "overall (release 2026-06-25)",
+     "score": 71.6,
+     "date": "2026-06-25",
+     "url": "https://livebench.ai/"
+    },
+    {
+     "name": "LiveBench",
+     "metric": "coding (release 2026-06-25)",
+     "score": 79,
+     "date": "2026-06-25",
+     "url": "https://livebench.ai/"
+    },
+    {
+     "name": "SWE-bench Verified",
+     "metric": "% resolved (mini-SWE-agent)",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://www.swebench.com/verified"
+    }
+   ],
+   "members": [
+    {
+     "source": "amd-radeon",
+     "modelId": "GLM-5.3-Flash",
+     "lastAt": "2026-10-06T04:25:59.207Z",
+     "probeFile": ".inputs/live-20261006.jsonl",
+     "matchRule": "N1+N2",
+     "normalizedId": "glm-5-3-flash"
+    },
+    {
+     "source": "dahl",
+     "modelId": "zai-org/GLM-5.3-Flash",
+     "lastAt": "2026-10-06T04:26:09.127Z",
+     "probeFile": ".inputs/live-20261006.jsonl",
+     "matchRule": "N1+N2+N3",
+     "normalizedId": "glm-5-3-flash"
+    },
+    {
+     "source": "pgsgrove",
+     "modelId": "glm-5.3-flash",
+     "lastAt": "2026-10-06T04:26:03.897Z",
+     "probeFile": ".inputs/live-20261006.jsonl",
+     "matchRule": "N2",
+     "normalizedId": "glm-5-3-flash"
+    }
+   ],
+   "matchRule": "N1+N2, N1+N2+N3, N2",
+   "rank": 14
+  },
+  {
+   "canonicalModelId": "mistral-medium-3-5",
+   "tier": "T4",
+   "tierSource": "AA Coding Index",
+   "aaCodingIndex": 46.9,
+   "livebenchOverall": null,
+   "livebenchCoding": null,
+   "benchmarks": [
+    {
+     "name": "Artificial Analysis",
+     "metric": "Intelligence Index",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://artificialanalysis.ai/evaluations/artificial-analysis-intelligence-index"
+    },
+    {
+     "name": "Artificial Analysis",
+     "metric": "Coding Index",
+     "score": 46.9,
+     "date": "2026-10-06",
+     "url": "https://artificialanalysis.ai/models/capabilities/coding"
+    },
+    {
+     "name": "LiveBench",
+     "metric": "overall (release 2026-06-25)",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://livebench.ai/"
+    },
+    {
+     "name": "LiveBench",
+     "metric": "coding (release 2026-06-25)",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://livebench.ai/"
+    },
+    {
+     "name": "SWE-bench Verified",
+     "metric": "% resolved (mini-SWE-agent)",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://www.swebench.com/verified"
+    }
+   ],
+   "members": [
+    {
+     "source": "xkiro",
+     "modelId": "mistralai/mistral-medium-3.5",
+     "lastAt": "2026-10-06T04:20:52.802Z",
+     "probeFile": ".inputs/live-20261006.jsonl",
+     "matchRule": "N2+N3",
+     "normalizedId": "mistral-medium-3-5"
+    }
+   ],
+   "matchRule": "N2+N3",
+   "rank": 15
+  },
+  {
+   "canonicalModelId": "gemma4-31b",
+   "tier": "T4",
+   "tierSource": "AA Coding Index",
+   "aaCodingIndex": 43.4,
+   "livebenchOverall": null,
+   "livebenchCoding": null,
+   "benchmarks": [
+    {
+     "name": "Artificial Analysis",
+     "metric": "Intelligence Index",
+     "score": 15,
+     "date": "2026-10-06",
+     "url": "https://artificialanalysis.ai/models/gemma-4-31b"
+    },
+    {
+     "name": "Artificial Analysis",
+     "metric": "Coding Index",
+     "score": 43.4,
+     "date": "2026-10-06",
+     "url": "https://artificialanalysis.ai/models/capabilities/coding"
+    },
+    {
+     "name": "LiveBench",
+     "metric": "overall (release 2026-06-25)",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://livebench.ai/"
+    },
+    {
+     "name": "LiveBench",
+     "metric": "coding (release 2026-06-25)",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://livebench.ai/"
+    },
+    {
+     "name": "SWE-bench Verified",
+     "metric": "% resolved (mini-SWE-agent)",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://www.swebench.com/verified"
+    }
+   ],
+   "members": [
+    {
+     "source": "regolo",
+     "modelId": "gemma4-31b",
+     "lastAt": "2026-10-06T04:24:42.811Z",
+     "probeFile": ".inputs/live-20261006.jsonl",
+     "matchRule": "EXACT",
+     "normalizedId": "gemma4-31b"
+    }
+   ],
+   "matchRule": "EXACT",
+   "rank": 16
+  },
+  {
+   "canonicalModelId": "qwen3-6-35b-a3b",
+   "tier": "T4",
+   "tierSource": "AA Coding Index",
+   "aaCodingIndex": 41.9,
+   "livebenchOverall": null,
+   "livebenchCoding": null,
+   "benchmarks": [
+    {
+     "name": "Artificial Analysis",
+     "metric": "Intelligence Index",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://artificialanalysis.ai/evaluations/artificial-analysis-intelligence-index"
+    },
+    {
+     "name": "Artificial Analysis",
+     "metric": "Coding Index",
+     "score": 41.9,
+     "date": "2026-10-06",
+     "url": "https://artificialanalysis.ai/models/capabilities/coding"
+    },
+    {
+     "name": "LiveBench",
+     "metric": "overall (release 2026-06-25)",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://livebench.ai/"
+    },
+    {
+     "name": "LiveBench",
+     "metric": "coding (release 2026-06-25)",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://livebench.ai/"
+    },
+    {
+     "name": "SWE-bench Verified",
+     "metric": "% resolved (mini-SWE-agent)",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://www.swebench.com/verified"
+    }
+   ],
+   "members": [
+    {
+     "source": "xkiro",
+     "modelId": "qwen/qwen3.6-35b-a3b:free",
+     "lastAt": "2026-10-06T04:21:04.276Z",
+     "probeFile": ".inputs/live-20261006.jsonl",
+     "matchRule": "N2+N3+N4",
+     "normalizedId": "qwen3-6-35b-a3b"
+    }
+   ],
+   "matchRule": "N2+N3+N4",
+   "rank": 17
+  },
+  {
+   "canonicalModelId": "gpt-oss-120b",
+   "tier": "T4",
+   "tierSource": "AA Coding Index",
+   "aaCodingIndex": 30.4,
+   "livebenchOverall": null,
+   "livebenchCoding": null,
+   "benchmarks": [
+    {
+     "name": "Artificial Analysis",
+     "metric": "Intelligence Index",
+     "score": 12,
+     "date": "2026-10-06",
+     "url": "https://artificialanalysis.ai/models/gpt-oss-120b"
+    },
+    {
+     "name": "Artificial Analysis",
+     "metric": "Coding Index",
+     "score": 30.4,
+     "date": "2026-10-06",
+     "url": "https://artificialanalysis.ai/models/capabilities/coding"
+    },
+    {
+     "name": "LiveBench",
+     "metric": "overall (release 2026-06-25)",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://livebench.ai/"
+    },
+    {
+     "name": "LiveBench",
+     "metric": "coding (release 2026-06-25)",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://livebench.ai/"
+    },
+    {
+     "name": "SWE-bench Verified",
+     "metric": "% resolved (mini-SWE-agent)",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://www.swebench.com/verified"
+    }
+   ],
+   "members": [
+    {
+     "source": "regolo",
+     "modelId": "gpt-oss-120b",
+     "lastAt": "2026-10-06T04:24:43.059Z",
+     "probeFile": ".inputs/live-20261006.jsonl",
+     "matchRule": "EXACT",
+     "normalizedId": "gpt-oss-120b"
+    }
+   ],
+   "matchRule": "EXACT",
+   "rank": 18
+  },
+  {
+   "canonicalModelId": "gpt-oss-20b",
+   "tier": "T4",
+   "tierSource": "AA Coding Index",
+   "aaCodingIndex": 20.7,
+   "livebenchOverall": null,
+   "livebenchCoding": null,
+   "benchmarks": [
+    {
+     "name": "Artificial Analysis",
+     "metric": "Intelligence Index",
+     "score": 9,
+     "date": "2026-10-06",
+     "url": "https://artificialanalysis.ai/models/gpt-oss-20b"
+    },
+    {
+     "name": "Artificial Analysis",
+     "metric": "Coding Index",
+     "score": 20.7,
+     "date": "2026-10-06",
+     "url": "https://artificialanalysis.ai/models/capabilities/coding"
+    },
+    {
+     "name": "LiveBench",
+     "metric": "overall (release 2026-06-25)",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://livebench.ai/"
+    },
+    {
+     "name": "LiveBench",
+     "metric": "coding (release 2026-06-25)",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://livebench.ai/"
+    },
+    {
+     "name": "SWE-bench Verified",
+     "metric": "% resolved (mini-SWE-agent)",
+     "score": null,
+     "date": "2026-10-06",
+     "url": "https://www.swebench.com/verified"
+    }
+   ],
+   "members": [
+    {
+     "source": "regolo",
+     "modelId": "gpt-oss-20b",
+     "lastAt": "2026-10-06T04:24:43.062Z",
+     "probeFile": ".inputs/live-20261006.jsonl",
+     "matchRule": "EXACT",
+     "normalizedId": "gpt-oss-20b"
+    }
+   ],
+   "matchRule": "EXACT",
+   "rank": 19
+  }
+ ],
+ "unranked": [
+  {
+   "source": "9router",
+   "modelId": "bzl/auto:free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: leading prefix not in the N3 allowlist; versions and sizes are never stripped",
+   "lastAt": "2026-10-06T07:07:32.828Z",
+   "probeFile": ".inputs/live-r3-confirm.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "cf/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: leading prefix not in the N3 allowlist; versions and sizes are never stripped",
+   "lastAt": "2026-10-06T07:07:16.742Z",
+   "probeFile": ".inputs/live-r3-confirm.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "cf/@cf/meta/llama-3.1-70b-instruct-fp8-fast",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: leading prefix not in the N3 allowlist; versions and sizes are never stripped",
+   "lastAt": "2026-10-06T07:07:10.549Z",
+   "probeFile": ".inputs/live-r3-confirm.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "cf/@cf/meta/llama-3.2-3b-instruct",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: leading prefix not in the N3 allowlist; versions and sizes are never stripped",
+   "lastAt": "2026-10-06T07:07:09.848Z",
+   "probeFile": ".inputs/live-r3-confirm.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "cf/@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: leading prefix not in the N3 allowlist; versions and sizes are never stripped",
+   "lastAt": "2026-10-06T07:07:10.318Z",
+   "probeFile": ".inputs/live-r3-confirm.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "cf/@cf/mistralai/mistral-small-3.1-24b-instruct",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: leading prefix not in the N3 allowlist; versions and sizes are never stripped",
+   "lastAt": "2026-10-06T07:07:11.000Z",
+   "probeFile": ".inputs/live-r3-confirm.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "cf/@cf/qwen/qwen2.5-coder-32b-instruct",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: leading prefix not in the N3 allowlist; versions and sizes are never stripped",
+   "lastAt": "2026-10-06T07:07:11.390Z",
+   "probeFile": ".inputs/live-r3-confirm.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "cf/@cf/qwen/qwq-32b",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: leading prefix not in the N3 allowlist; versions and sizes are never stripped",
+   "lastAt": "2026-10-06T07:07:15.930Z",
+   "probeFile": ".inputs/live-r3-confirm.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "cf/@cf/zai-org/glm-4.7-flash",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: leading prefix not in the N3 allowlist; versions and sizes are never stripped",
+   "lastAt": "2026-10-06T07:07:27.842Z",
+   "probeFile": ".inputs/live-r3-confirm.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "cl/apodex/apodex-1.1-mini:free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v4 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, cl/*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T06:29:26.655Z",
+   "probeFile": ".inputs/live-audit2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "cl/cohere/north-mini-code:free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v4 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, cl/*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T06:29:33.732Z",
+   "probeFile": ".inputs/live-audit2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "cl/dots-studio/dots-3-note-preview:free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v4 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, cl/*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T06:29:32.976Z",
+   "probeFile": ".inputs/live-audit2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "cl/inclusionai/ling-3.0-flash-sante:free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v4 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, cl/*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T06:29:34.800Z",
+   "probeFile": ".inputs/live-audit2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "cl/nvidia/nemotron-3-super-120b-a12b:free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v4 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, cl/*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T06:29:34.753Z",
+   "probeFile": ".inputs/live-audit2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "cl/nvidia/nemotron-3-ultra-550b-a55b:free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v4 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, cl/*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T06:29:38.258Z",
+   "probeFile": ".inputs/live-audit2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "cl/nvidia/nemotron-3.5-content-safety:free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v4 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, cl/*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T06:29:38.180Z",
+   "probeFile": ".inputs/live-audit2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "cl/poolside/laguna-s-2.1:free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v4 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, cl/*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T06:29:39.216Z",
+   "probeFile": ".inputs/live-audit2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "gh/copilot-search-a",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T05:17:30.420Z",
+   "probeFile": ".inputs/live-fix-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "gh/exec-agent-a",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v4 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, cl/*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T06:29:51.917Z",
+   "probeFile": ".inputs/live-audit2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "gh/exec-agent-c",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T05:17:31.297Z",
+   "probeFile": ".inputs/live-fix-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "gh/gpt-3.5-turbo",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T05:17:33.024Z",
+   "probeFile": ".inputs/live-fix-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "gh/gpt-3.5-turbo-0613",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T05:17:32.008Z",
+   "probeFile": ".inputs/live-fix-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "gh/gpt-4-o-preview",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T05:17:32.624Z",
+   "probeFile": ".inputs/live-fix-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "gh/gpt-4.1",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T05:17:35.079Z",
+   "probeFile": ".inputs/live-fix-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "gh/gpt-4.1-2025-04-14",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T05:17:31.897Z",
+   "probeFile": ".inputs/live-fix-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "gh/gpt-4o",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T05:17:33.953Z",
+   "probeFile": ".inputs/live-fix-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "gh/gpt-4o-2024-05-13",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T05:17:32.570Z",
+   "probeFile": ".inputs/live-fix-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "gh/gpt-4o-2024-08-06",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T05:17:32.279Z",
+   "probeFile": ".inputs/live-fix-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "gh/gpt-4o-2024-11-20",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T05:17:32.988Z",
+   "probeFile": ".inputs/live-fix-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "gh/gpt-4o-mini",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T05:17:33.271Z",
+   "probeFile": ".inputs/live-fix-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "gh/gpt-4o-mini-2024-07-18",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T05:17:31.629Z",
+   "probeFile": ".inputs/live-fix-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "groq/openai/gpt-oss-120b",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: leading prefix not in the N3 allowlist; versions and sizes are never stripped",
+   "lastAt": "2026-10-06T06:29:55.282Z",
+   "probeFile": ".inputs/live-audit2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "kgw/kilo-auto/free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: leading prefix not in the N3 allowlist; versions and sizes are never stripped",
+   "lastAt": "2026-10-06T07:07:17.929Z",
+   "probeFile": ".inputs/live-r3-confirm.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "kgw/nvidia/nemotron-3-super-120b-a12b:free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: leading prefix not in the N3 allowlist; versions and sizes are never stripped",
+   "lastAt": "2026-10-06T07:07:17.919Z",
+   "probeFile": ".inputs/live-r3-confirm.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "kr/auto",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T04:51:23.219Z",
+   "probeFile": ".inputs/live-9router-r2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "kr/auto-thinking",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T04:51:23.709Z",
+   "probeFile": ".inputs/live-9router-r2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "kr/claude-haiku-4.5",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T04:51:28.149Z",
+   "probeFile": ".inputs/live-9router-r2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "kr/claude-haiku-4.5-agentic",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T04:51:28.259Z",
+   "probeFile": ".inputs/live-9router-r2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "kr/claude-haiku-4.5-thinking",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T04:51:29.997Z",
+   "probeFile": ".inputs/live-9router-r2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "kr/claude-haiku-4.5-thinking-agentic",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T04:51:30.364Z",
+   "probeFile": ".inputs/live-9router-r2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "kr/claude-sonnet-4",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T04:51:27.271Z",
+   "probeFile": ".inputs/live-9router-r2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "kr/claude-sonnet-4-agentic",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T04:51:27.500Z",
+   "probeFile": ".inputs/live-9router-r2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "kr/claude-sonnet-4-thinking",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T04:51:28.846Z",
+   "probeFile": ".inputs/live-9router-r2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "kr/claude-sonnet-4-thinking-agentic",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T04:51:29.585Z",
+   "probeFile": ".inputs/live-9router-r2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "kr/claude-sonnet-4.5",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T04:51:24.793Z",
+   "probeFile": ".inputs/live-9router-r2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "kr/claude-sonnet-4.5-agentic",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T04:51:25.739Z",
+   "probeFile": ".inputs/live-9router-r2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "kr/claude-sonnet-4.5-thinking",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T04:51:28.594Z",
+   "probeFile": ".inputs/live-9router-r2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "kr/claude-sonnet-4.5-thinking-agentic",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T04:51:26.787Z",
+   "probeFile": ".inputs/live-9router-r2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "kr/deepseek-3.2",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T04:51:28.585Z",
+   "probeFile": ".inputs/live-9router-r2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "kr/deepseek-3.2-agentic",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T04:51:29.317Z",
+   "probeFile": ".inputs/live-9router-r2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "kr/deepseek-3.2-thinking",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T04:51:32.424Z",
+   "probeFile": ".inputs/live-9router-r2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "kr/deepseek-3.2-thinking-agentic",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T04:51:29.679Z",
+   "probeFile": ".inputs/live-9router-r2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "kr/glm-5",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T04:51:31.448Z",
+   "probeFile": ".inputs/live-9router-r2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "kr/glm-5-agentic",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T04:51:31.949Z",
+   "probeFile": ".inputs/live-9router-r2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "kr/glm-5-thinking",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T04:51:31.845Z",
+   "probeFile": ".inputs/live-9router-r2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "kr/glm-5-thinking-agentic",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T04:51:32.394Z",
+   "probeFile": ".inputs/live-9router-r2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "kr/minimax-m2.1",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T04:51:31.313Z",
+   "probeFile": ".inputs/live-9router-r2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "kr/minimax-m2.1-agentic",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T04:51:31.831Z",
+   "probeFile": ".inputs/live-9router-r2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "kr/minimax-m2.1-thinking",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T04:51:30.837Z",
+   "probeFile": ".inputs/live-9router-r2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "kr/minimax-m2.1-thinking-agentic",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T04:51:31.715Z",
+   "probeFile": ".inputs/live-9router-r2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "kr/minimax-m2.5",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T04:51:29.738Z",
+   "probeFile": ".inputs/live-9router-r2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "kr/minimax-m2.5-agentic",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T04:51:39.824Z",
+   "probeFile": ".inputs/live-9router-r2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "kr/minimax-m2.5-thinking",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T04:51:29.961Z",
+   "probeFile": ".inputs/live-9router-r2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "kr/minimax-m2.5-thinking-agentic",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T04:51:30.941Z",
+   "probeFile": ".inputs/live-9router-r2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "kr/qwen3-coder-next",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T04:51:37.583Z",
+   "probeFile": ".inputs/live-9router-r2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "kr/qwen3-coder-next-agentic",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T04:51:32.552Z",
+   "probeFile": ".inputs/live-9router-r2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "kr/qwen3-coder-next-thinking",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T04:51:37.604Z",
+   "probeFile": ".inputs/live-9router-r2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "kr/qwen3-coder-next-thinking-agentic",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T04:51:34.856Z",
+   "probeFile": ".inputs/live-9router-r2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "mistral/codestral-latest",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: leading prefix not in the N3 allowlist; versions and sizes are never stripped",
+   "lastAt": "2026-10-06T07:07:18.456Z",
+   "probeFile": ".inputs/live-r3-confirm.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "ocz/big-pickle",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T04:53:07.819Z",
+   "probeFile": ".inputs/live-9router-r2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "ocz/mimo-v2.5-free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T04:53:06.615Z",
+   "probeFile": ".inputs/live-9router-r2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "ocz/mimo-v2.6-flash-free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T04:53:04.935Z",
+   "probeFile": ".inputs/live-9router-r2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "ocz/muse-spark-1.2-contributor-free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T04:53:08.525Z",
+   "probeFile": ".inputs/live-9router-r2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "ocz/muse-spark-1.3-contributor-free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T04:53:07.127Z",
+   "probeFile": ".inputs/live-9router-r2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "ocz/nemotron-3-ultra-free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T04:53:11.628Z",
+   "probeFile": ".inputs/live-9router-r2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "ocz/nemotron-3.5-lightning-free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T04:53:07.071Z",
+   "probeFile": ".inputs/live-9router-r2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "ollama/gpt-oss:120b",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: namespaced id whose prefix is not in the N3 allowlist, so the prefix cannot be stripped; normalized remainder equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:50:42.565Z",
+   "probeFile": ".inputs/live-9router-r2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "openrouter/nvidia/nemotron-3.5-lightning:free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: leading prefix not in the N3 allowlist; versions and sizes are never stripped",
+   "lastAt": "2026-10-06T07:07:44.654Z",
+   "probeFile": ".inputs/live-r3-confirm.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "qd/qfmodel",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: namespaced id whose prefix is not in the N3 allowlist, so the prefix cannot be stripped; normalized remainder equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:39:29.796Z",
+   "probeFile": ".inputs/live-9router-r2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "tokenrouter/anthropic/claude-haiku-4.5",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: leading prefix not in the N3 allowlist; versions and sizes are never stripped",
+   "lastAt": "2026-10-06T07:07:22.438Z",
+   "probeFile": ".inputs/live-r3-confirm.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "tokenrouter/anthropic/claude-opus-4.8",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: leading prefix not in the N3 allowlist; versions and sizes are never stripped",
+   "lastAt": "2026-10-06T07:07:26.635Z",
+   "probeFile": ".inputs/live-r3-confirm.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "tokenrouter/anthropic/claude-sonnet-4.6",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: leading prefix not in the N3 allowlist; versions and sizes are never stripped",
+   "lastAt": "2026-10-06T07:07:30.849Z",
+   "probeFile": ".inputs/live-r3-confirm.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "tokenrouter/deepseek/deepseek-v4-flash",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: leading prefix not in the N3 allowlist; versions and sizes are never stripped",
+   "lastAt": "2026-10-06T07:19:20.916Z",
+   "probeFile": ".inputs/live-r3-quota.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "tokenrouter/deepseek/deepseek-v4-pro",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: leading prefix not in the N3 allowlist; versions and sizes are never stripped",
+   "lastAt": "2026-10-06T07:19:05.528Z",
+   "probeFile": ".inputs/live-r3-quota.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "tokenrouter/google/gemini-3.5-flash",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: leading prefix not in the N3 allowlist; versions and sizes are never stripped",
+   "lastAt": "2026-10-06T07:07:32.911Z",
+   "probeFile": ".inputs/live-r3-confirm.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "tokenrouter/google/gemini-3.6-flash",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: leading prefix not in the N3 allowlist; versions and sizes are never stripped",
+   "lastAt": "2026-10-06T07:19:04.838Z",
+   "probeFile": ".inputs/live-r3-quota.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "tokenrouter/moonshotai/kimi-k2.7-code",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: leading prefix not in the N3 allowlist; versions and sizes are never stripped",
+   "lastAt": "2026-10-06T07:19:03.798Z",
+   "probeFile": ".inputs/live-r3-quota.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "tokenrouter/openai/gpt-5.4",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: leading prefix not in the N3 allowlist; versions and sizes are never stripped",
+   "lastAt": "2026-10-06T06:31:00.622Z",
+   "probeFile": ".inputs/live-audit2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "tokenrouter/z-ai/glm-5.2",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: leading prefix not in the N3 allowlist; versions and sizes are never stripped",
+   "lastAt": "2026-10-06T07:07:36.547Z",
+   "probeFile": ".inputs/live-r3-confirm.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "vinh",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:38:43.504Z",
+   "probeFile": ".inputs/live-9router-r2-20261006.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "xmtp/mimo-v2.5",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: leading prefix not in the N3 allowlist; versions and sizes are never stripped",
+   "lastAt": "2026-10-06T07:07:40.043Z",
+   "probeFile": ".inputs/live-r3-confirm.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "xmtp/mimo-v2.5-pro",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: leading prefix not in the N3 allowlist; versions and sizes are never stripped",
+   "lastAt": "2026-10-06T07:07:36.630Z",
+   "probeFile": ".inputs/live-r3-confirm.jsonl"
+  },
+  {
+   "source": "9router",
+   "modelId": "xmtp/mimo-v2.5-pro-claude",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: leading prefix not in the N3 allowlist; versions and sizes are never stripped",
+   "lastAt": "2026-10-06T07:07:38.504Z",
+   "probeFile": ".inputs/live-r3-confirm.jsonl"
+  },
+  {
+   "source": "amd-radeon",
+   "modelId": "DeepSeek-V4-Flash",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4; family base name is not mapped to a specific dated version",
+   "lastAt": "2026-10-06T04:25:14.366Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "amd-radeon",
+   "modelId": "MiMo-V2.6-Flash",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:26:01.304Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "amd-radeon",
+   "modelId": "MiniCPM5-2B",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:25:13.789Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "cohere",
+   "modelId": "c4ai-aya-expanse-32b",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:21:21.508Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "cohere",
+   "modelId": "c4ai-aya-vision-32b",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:21:21.628Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "cohere",
+   "modelId": "command-a-03-2025",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:21:21.613Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "cohere",
+   "modelId": "command-a-plus-05-2026",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:21:23.223Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "cohere",
+   "modelId": "command-a-reasoning-08-2025",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:21:23.529Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "cohere",
+   "modelId": "command-a-translate-08-2025",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:21:21.647Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "cohere",
+   "modelId": "command-a-vision-07-2025",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:21:21.601Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "cohere",
+   "modelId": "command-r-08-2024",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:21:21.635Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "cohere",
+   "modelId": "command-r-plus-08-2024",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:21:21.747Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "cohere",
+   "modelId": "command-r7b-12-2024",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:21:21.581Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "corti",
+   "modelId": "corti-s1",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T05:43:58.057Z",
+   "probeFile": ".inputs/live-fix-20261006.jsonl"
+  },
+  {
+   "source": "corti",
+   "modelId": "corti-s1-instant",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T05:05:38.120Z",
+   "probeFile": ".inputs/live-ca-20261006.jsonl"
+  },
+  {
+   "source": "corti",
+   "modelId": "corti-s1-mini",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T05:05:38.871Z",
+   "probeFile": ".inputs/live-ca-20261006.jsonl"
+  },
+  {
+   "source": "corti",
+   "modelId": "corti-s1-mini-instant",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T05:05:39.724Z",
+   "probeFile": ".inputs/live-ca-20261006.jsonl"
+  },
+  {
+   "source": "corti",
+   "modelId": "corti-s1-tiny",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T05:44:03.770Z",
+   "probeFile": ".inputs/live-fix-20261006.jsonl"
+  },
+  {
+   "source": "corti",
+   "modelId": "corti-s1-tiny-instant",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T05:05:40.471Z",
+   "probeFile": ".inputs/live-ca-20261006.jsonl"
+  },
+  {
+   "source": "explabs",
+   "modelId": "claude-opus-5.5",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:57:22.467Z",
+   "probeFile": ".inputs/live-extra-20261006.jsonl"
+  },
+  {
+   "source": "explabs",
+   "modelId": "deepseek-v4-flash",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4; family base name is not mapped to a specific dated version",
+   "lastAt": "2026-10-06T04:57:23.538Z",
+   "probeFile": ".inputs/live-extra-20261006.jsonl"
+  },
+  {
+   "source": "explabs",
+   "modelId": "glm-5.3-flash-abliterated",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4; extra variant suffix is kept (no version/suffix stripping allowed)",
+   "lastAt": "2026-10-06T04:57:39.348Z",
+   "probeFile": ".inputs/live-extra-20261006.jsonl"
+  },
+  {
+   "source": "explabs",
+   "modelId": "gpt-6-sol",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:57:30.065Z",
+   "probeFile": ".inputs/live-extra-20261006.jsonl"
+  },
+  {
+   "source": "explabs",
+   "modelId": "mimo-v2.6-pro",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:57:33.987Z",
+   "probeFile": ".inputs/live-extra-20261006.jsonl"
+  },
+  {
+   "source": "inception",
+   "modelId": "mercury-2",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:26:19.066Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "inception",
+   "modelId": "mercury-2.5",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:26:19.382Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "llmtr",
+   "modelId": "agnes/agnes-2.5-flash",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: leading prefix not in the N3 allowlist; versions and sizes are never stripped",
+   "lastAt": "2026-10-06T07:20:29.559Z",
+   "probeFile": ".inputs/live-r3-quota.jsonl"
+  },
+  {
+   "source": "llmtr",
+   "modelId": "agnes/agnes-3.0-flash",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: leading prefix not in the N3 allowlist; versions and sizes are never stripped",
+   "lastAt": "2026-10-06T07:20:32.543Z",
+   "probeFile": ".inputs/live-r3-quota.jsonl"
+  },
+  {
+   "source": "opencode-builtin",
+   "modelId": "opencode/big-pickle",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: namespaced id whose prefix is not in the N3 allowlist, so the prefix cannot be stripped; normalized remainder equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:59:02.630Z",
+   "probeFile": ".inputs/live-extra-20261006.jsonl"
+  },
+  {
+   "source": "opencode-builtin",
+   "modelId": "opencode/fledge-alpha-free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: namespaced id whose prefix is not in the N3 allowlist, so the prefix cannot be stripped; normalized remainder equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:59:10.484Z",
+   "probeFile": ".inputs/live-extra-20261006.jsonl"
+  },
+  {
+   "source": "opencode-builtin",
+   "modelId": "opencode/ling-3.1-flash-free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: namespaced id whose prefix is not in the N3 allowlist, so the prefix cannot be stripped; normalized remainder equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T05:01:18.469Z",
+   "probeFile": ".inputs/live-extra-20261006.jsonl"
+  },
+  {
+   "source": "opencode-builtin",
+   "modelId": "opencode/longcat-2.5-preview-free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: namespaced id whose prefix is not in the N3 allowlist, so the prefix cannot be stripped; normalized remainder equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T05:01:28.074Z",
+   "probeFile": ".inputs/live-extra-20261006.jsonl"
+  },
+  {
+   "source": "opencode-builtin",
+   "modelId": "opencode/mimo-v2.6-flash-free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: namespaced id whose prefix is not in the N3 allowlist, so the prefix cannot be stripped; normalized remainder equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T05:01:57.036Z",
+   "probeFile": ".inputs/live-extra-20261006.jsonl"
+  },
+  {
+   "source": "opencode-builtin",
+   "modelId": "opencode/muse-spark-1.3-contributor-free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: namespaced id whose prefix is not in the N3 allowlist, so the prefix cannot be stripped; normalized remainder equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T05:02:03.834Z",
+   "probeFile": ".inputs/live-extra-20261006.jsonl"
+  },
+  {
+   "source": "opencode-builtin",
+   "modelId": "opencode/nemotron-3-ultra-free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: namespaced id whose prefix is not in the N3 allowlist, so the prefix cannot be stripped; normalized remainder equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T05:02:12.002Z",
+   "probeFile": ".inputs/live-extra-20261006.jsonl"
+  },
+  {
+   "source": "opencode-builtin",
+   "modelId": "opencode/nemotron-3.5-lightning-free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: namespaced id whose prefix is not in the N3 allowlist, so the prefix cannot be stripped; normalized remainder equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T05:02:26.119Z",
+   "probeFile": ".inputs/live-extra-20261006.jsonl"
+  },
+  {
+   "source": "opencode-builtin",
+   "modelId": "opencode/space-bunny-free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: namespaced id whose prefix is not in the N3 allowlist, so the prefix cannot be stripped; normalized remainder equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T05:02:39.834Z",
+   "probeFile": ".inputs/live-extra-20261006.jsonl"
+  },
+  {
+   "source": "pgsgrove",
+   "modelId": "deepseek-v4-flash-0731-turbo",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4; -turbo is not an N4 suffix and is kept",
+   "lastAt": "2026-10-06T04:26:04.991Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "pgsgrove",
+   "modelId": "deepseek-v4.1-flash-turbo",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4; -turbo is not an N4 suffix and is kept",
+   "lastAt": "2026-10-06T04:26:04.160Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "pgsgrove",
+   "modelId": "mimo-v2.6-flash",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:26:04.353Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "regolo",
+   "modelId": "apertus-70b",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:24:43.178Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "regolo",
+   "modelId": "brick-complexity-pro",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:24:42.812Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "regolo",
+   "modelId": "brick-v1-beta",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:24:43.680Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "regolo",
+   "modelId": "glm5.2",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:24:52.773Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "regolo",
+   "modelId": "mistral-small-4-119b",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4; size suffix is never stripped (mistral-small-4-119b != mistral-small-4)",
+   "lastAt": "2026-10-06T04:24:42.781Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "regolo",
+   "modelId": "qwen3.5-122b",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4; size suffix is never stripped (qwen3-5-122b != qwen3-5-122b-a10b)",
+   "lastAt": "2026-10-06T04:24:44.263Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "regolo",
+   "modelId": "qwen3.5-9b",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:24:44.623Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "thegrid",
+   "modelId": "agent-max",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T05:17:45.199Z",
+   "probeFile": ".inputs/live-fix-20261006.jsonl"
+  },
+  {
+   "source": "thegrid",
+   "modelId": "agent-prime",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T05:17:45.007Z",
+   "probeFile": ".inputs/live-fix-20261006.jsonl"
+  },
+  {
+   "source": "thegrid",
+   "modelId": "agent-standard",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T05:17:46.833Z",
+   "probeFile": ".inputs/live-fix-20261006.jsonl"
+  },
+  {
+   "source": "thegrid",
+   "modelId": "bytedance-pro-latest",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T05:17:47.984Z",
+   "probeFile": ".inputs/live-fix-20261006.jsonl"
+  },
+  {
+   "source": "thegrid",
+   "modelId": "claude-opus-latest",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T05:17:48.036Z",
+   "probeFile": ".inputs/live-fix-20261006.jsonl"
+  },
+  {
+   "source": "thegrid",
+   "modelId": "code-max",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T05:17:49.675Z",
+   "probeFile": ".inputs/live-fix-20261006.jsonl"
+  },
+  {
+   "source": "thegrid",
+   "modelId": "code-prime",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T05:17:49.218Z",
+   "probeFile": ".inputs/live-fix-20261006.jsonl"
+  },
+  {
+   "source": "thegrid",
+   "modelId": "code-standard",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T05:17:50.244Z",
+   "probeFile": ".inputs/live-fix-20261006.jsonl"
+  },
+  {
+   "source": "thegrid",
+   "modelId": "deepseek-pro-latest",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T05:17:50.664Z",
+   "probeFile": ".inputs/live-fix-20261006.jsonl"
+  },
+  {
+   "source": "thegrid",
+   "modelId": "gemini-pro-latest",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T05:17:53.341Z",
+   "probeFile": ".inputs/live-fix-20261006.jsonl"
+  },
+  {
+   "source": "thegrid",
+   "modelId": "glm-latest",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T05:17:51.974Z",
+   "probeFile": ".inputs/live-fix-20261006.jsonl"
+  },
+  {
+   "source": "thegrid",
+   "modelId": "gpt-sol-latest",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T05:17:54.387Z",
+   "probeFile": ".inputs/live-fix-20261006.jsonl"
+  },
+  {
+   "source": "thegrid",
+   "modelId": "kimi-latest",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T05:17:54.924Z",
+   "probeFile": ".inputs/live-fix-20261006.jsonl"
+  },
+  {
+   "source": "thegrid",
+   "modelId": "minimax-latest",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T05:17:55.709Z",
+   "probeFile": ".inputs/live-fix-20261006.jsonl"
+  },
+  {
+   "source": "thegrid",
+   "modelId": "text-max",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T05:17:56.337Z",
+   "probeFile": ".inputs/live-fix-20261006.jsonl"
+  },
+  {
+   "source": "thegrid",
+   "modelId": "text-prime",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T05:17:56.912Z",
+   "probeFile": ".inputs/live-fix-20261006.jsonl"
+  },
+  {
+   "source": "thegrid",
+   "modelId": "text-standard",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "ROUTER_ALIAS: router aliases remain unmapped in v3 (kr/*, gh/*, thegrid *-latest/code-*/agent-*/text-*, copilot-*, ocz/*); N1-N4 not applied to aliases",
+   "lastAt": "2026-10-06T05:17:59.304Z",
+   "probeFile": ".inputs/live-fix-20261006.jsonl"
+  },
+  {
+   "source": "tokenharbor",
+   "modelId": "deepseek-v4-flash:free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4; org-prefix strip applied but still no match; family base name is not mapped to a specific dated version; :free stripped under N4 but base still matches nothing",
+   "lastAt": "2026-10-06T04:21:19.057Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "tokenharbor",
+   "modelId": "mimo-v2.5:free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4; org-prefix strip applied but still no match; :free stripped under N4 but base still matches nothing",
+   "lastAt": "2026-10-06T04:21:20.642Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "tokenharbor",
+   "modelId": "mimo-v2.6-flash:free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4; org-prefix strip applied but still no match; :free stripped under N4 but base still matches nothing",
+   "lastAt": "2026-10-06T04:21:18.684Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "xkiro",
+   "modelId": "apodex/apodex-1.1-mini:free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: namespaced id whose prefix is not in the N3 allowlist, so the prefix cannot be stripped; normalized remainder equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:20:53.364Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "xkiro",
+   "modelId": "cohere/aya-expanse-32b",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: namespaced id whose prefix is not in the N3 allowlist, so the prefix cannot be stripped; normalized remainder equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:20:52.153Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "xkiro",
+   "modelId": "cohere/aya-vision-32b",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: namespaced id whose prefix is not in the N3 allowlist, so the prefix cannot be stripped; normalized remainder equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:20:52.090Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "xkiro",
+   "modelId": "cohere/command-a",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: namespaced id whose prefix is not in the N3 allowlist, so the prefix cannot be stripped; normalized remainder equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:21:01.426Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "xkiro",
+   "modelId": "cohere/command-a-plus",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: namespaced id whose prefix is not in the N3 allowlist, so the prefix cannot be stripped; normalized remainder equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:21:07.217Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "xkiro",
+   "modelId": "cohere/command-a-reasoning",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: namespaced id whose prefix is not in the N3 allowlist, so the prefix cannot be stripped; normalized remainder equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:21:08.233Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "xkiro",
+   "modelId": "cohere/command-a-translate",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: namespaced id whose prefix is not in the N3 allowlist, so the prefix cannot be stripped; normalized remainder equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:21:01.805Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "xkiro",
+   "modelId": "cohere/command-a-vision",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: namespaced id whose prefix is not in the N3 allowlist, so the prefix cannot be stripped; normalized remainder equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:21:06.061Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "xkiro",
+   "modelId": "cohere/command-r-08-2024",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: namespaced id whose prefix is not in the N3 allowlist, so the prefix cannot be stripped; normalized remainder equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:20:58.052Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "xkiro",
+   "modelId": "cohere/command-r-plus-08-2024",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: namespaced id whose prefix is not in the N3 allowlist, so the prefix cannot be stripped; normalized remainder equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:20:57.472Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "xkiro",
+   "modelId": "cohere/command-r7b-12-2024",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: namespaced id whose prefix is not in the N3 allowlist, so the prefix cannot be stripped; normalized remainder equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:21:01.009Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "xkiro",
+   "modelId": "cohere/north-mini-code",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: namespaced id whose prefix is not in the N3 allowlist, so the prefix cannot be stripped; normalized remainder equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:20:52.728Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "xkiro",
+   "modelId": "cohere/north-small-translate",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: namespaced id whose prefix is not in the N3 allowlist, so the prefix cannot be stripped; normalized remainder equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:21:05.244Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "xkiro",
+   "modelId": "cohere/tiny-aya-earth",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: namespaced id whose prefix is not in the N3 allowlist, so the prefix cannot be stripped; normalized remainder equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:21:06.719Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "xkiro",
+   "modelId": "cohere/tiny-aya-fire",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: namespaced id whose prefix is not in the N3 allowlist, so the prefix cannot be stripped; normalized remainder equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:21:06.130Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "xkiro",
+   "modelId": "cohere/tiny-aya-global",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: namespaced id whose prefix is not in the N3 allowlist, so the prefix cannot be stripped; normalized remainder equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:21:06.121Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "xkiro",
+   "modelId": "cohere/tiny-aya-water",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: namespaced id whose prefix is not in the N3 allowlist, so the prefix cannot be stripped; normalized remainder equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:21:06.818Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "xkiro",
+   "modelId": "dots-studio/dots-3-note-preview:free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: namespaced id whose prefix is not in the N3 allowlist, so the prefix cannot be stripped; normalized remainder equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:21:05.398Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "xkiro",
+   "modelId": "inclusionai/ling-3.0-flash-sante:free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: namespaced id whose prefix is not in the N3 allowlist, so the prefix cannot be stripped; normalized remainder equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:20:55.348Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "xkiro",
+   "modelId": "liquid/lfm-2.5-2.6b:free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: namespaced id whose prefix is not in the N3 allowlist, so the prefix cannot be stripped; normalized remainder equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:20:54.389Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "xkiro",
+   "modelId": "meituan/longcat-2.0",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: namespaced id whose prefix is not in the N3 allowlist, so the prefix cannot be stripped; normalized remainder equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:21:00.027Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "xkiro",
+   "modelId": "meituan/longcat-2.5-preview:free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: namespaced id whose prefix is not in the N3 allowlist, so the prefix cannot be stripped; normalized remainder equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:21:00.549Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "xkiro",
+   "modelId": "mistralai/codestral-2508",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:20:53.228Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "xkiro",
+   "modelId": "mistralai/devstral-medium",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:20:53.153Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "xkiro",
+   "modelId": "mistralai/ministral-14b",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:20:51.438Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "xkiro",
+   "modelId": "mistralai/ministral-3b",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:20:51.696Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "xkiro",
+   "modelId": "mistralai/ministral-8b",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:20:53.705Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "xkiro",
+   "modelId": "mistralai/mistral-large-2512",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:20:51.662Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "xkiro",
+   "modelId": "mistralai/mistral-small-2603",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:20:52.411Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "xkiro",
+   "modelId": "qwen/qwen-plus-2025-07-28:free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4; :free stripped under N4 but base still matches nothing",
+   "lastAt": "2026-10-06T04:21:06.166Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "xkiro",
+   "modelId": "qwen/qwen3-coder-plus:free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4; :free stripped under N4 but base still matches nothing",
+   "lastAt": "2026-10-06T04:21:08.125Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "xkiro",
+   "modelId": "qwen/qwen3-max:free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4; :free stripped under N4 but base still matches nothing",
+   "lastAt": "2026-10-06T04:21:00.450Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "xkiro",
+   "modelId": "qwen/qwen3-omni-flash:free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4; :free stripped under N4 but base still matches nothing",
+   "lastAt": "2026-10-06T04:20:55.593Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "xkiro",
+   "modelId": "qwen/qwen3-vl-plus:free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4; :free stripped under N4 but base still matches nothing",
+   "lastAt": "2026-10-06T04:20:56.013Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "xkiro",
+   "modelId": "qwen/qwen3.5-397b-a17b:free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4; :free stripped under N4 but base still matches nothing",
+   "lastAt": "2026-10-06T04:21:05.919Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "xkiro",
+   "modelId": "qwen/qwen3.5-flash:free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4; :free stripped under N4 but base still matches nothing",
+   "lastAt": "2026-10-06T04:21:04.996Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "xkiro",
+   "modelId": "qwen/qwen3.5-omni-flash:free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4; :free stripped under N4 but base still matches nothing",
+   "lastAt": "2026-10-06T04:21:02.719Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "xkiro",
+   "modelId": "qwen/qwen3.5-omni-plus:free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4; :free stripped under N4 but base still matches nothing",
+   "lastAt": "2026-10-06T04:20:57.235Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "xkiro",
+   "modelId": "qwen/qwen3.5-plus:free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4; :free stripped under N4 but base still matches nothing",
+   "lastAt": "2026-10-06T04:20:56.762Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "xkiro",
+   "modelId": "qwen/qwen3.6-max-preview:free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4; :free stripped under N4 but base still matches nothing",
+   "lastAt": "2026-10-06T04:21:04.154Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "xkiro",
+   "modelId": "qwen/qwen3.7-flash:free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4; :free stripped under N4 but base still matches nothing",
+   "lastAt": "2026-10-06T04:20:55.540Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "xkiro",
+   "modelId": "qwen/qwen3.8-omni-flash:free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "NO_NORMALIZED_MATCH: normalized form equals no benchmark/priors name under N1-N4; :free stripped under N4 but base still matches nothing",
+   "lastAt": "2026-10-06T04:21:00.660Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "xkiro",
+   "modelId": "sensenova/sensenova-6.7-flash-lite",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: namespaced id whose prefix is not in the N3 allowlist, so the prefix cannot be stripped; normalized remainder equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:21:02.327Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "xkiro",
+   "modelId": "sensenova/sensenova-6.8-flash-lite",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: namespaced id whose prefix is not in the N3 allowlist, so the prefix cannot be stripped; normalized remainder equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:20:56.457Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "xkiro",
+   "modelId": "stealth/big-pickle",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: namespaced id whose prefix is not in the N3 allowlist, so the prefix cannot be stripped; normalized remainder equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:21:00.872Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  },
+  {
+   "source": "xkiro",
+   "modelId": "stealth/space-bunny-alpha:free",
+   "canonicalModelId": "UNKNOWN",
+   "matchRule": "NONE",
+   "reason": "PREFIX_NOT_ALLOWED: namespaced id whose prefix is not in the N3 allowlist, so the prefix cannot be stripped; normalized remainder equals no benchmark/priors name under N1-N4",
+   "lastAt": "2026-10-06T04:21:04.850Z",
+   "probeFile": ".inputs/live-20261006.jsonl"
+  }
+ ]
+}

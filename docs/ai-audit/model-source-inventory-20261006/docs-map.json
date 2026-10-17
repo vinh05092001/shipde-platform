@@ -1,0 +1,394 @@
+[
+ {
+  "sourceId": "cohere",
+  "officialDocs": "https://docs.cohere.com/docs/compatibility-api",
+  "documentedListMethod": "GET /compatibility/v1/models (OpenAI-compatible list)",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "baseten",
+  "officialDocs": "https://www.baseten.co/reference/openai-api",
+  "documentedListMethod": "GET /v1/models (OpenAI-compatible)",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "inception",
+  "officialDocs": "https://docs.inceptionlabs.ai/",
+  "documentedListMethod": "GET /v1/models (OpenAI-compatible)",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "regolo",
+  "officialDocs": "https://docs.regolo.ai/models/catalog/",
+  "documentedListMethod": "GET /v1/models (OpenAI-compatible lightweight list); GET /model_group/info (full catalog)",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "amd-radeon",
+  "officialDocs": "https://developer.amd.com/radeon-ai/",
+  "documentedListMethod": "GET /v1/models (OpenAI-compatible)",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "dahl",
+  "officialDocs": "https://inference.dahl.global/docs/models/",
+  "documentedListMethod": "GET /v1/models (public, no key)",
+  "documentedModels": [
+   "MiniMaxAI/MiniMax-M2.7",
+   "deepseek-ai/DeepSeek-V4-Flash-0731",
+   "zai-org/GLM-5.3-Flash"
+  ],
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "thegrid",
+  "officialDocs": "UNKNOWN",
+  "documentedListMethod": "UNKNOWN",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "pgsgrove",
+  "officialDocs": "https://api.pgsgrove.com/docs/models",
+  "documentedListMethod": "GET /v1/models (public, no key)",
+  "documentedModels": [
+   "glm-5.2",
+   "glm-5.3",
+   "glm-5.3-flash",
+   "deepseek-v4-pro",
+   "deepseek-v4-flash-0731",
+   "deepseek-v4.1-flash",
+   "deepseek-v4-flash",
+   "kimi-k3",
+   "kimi-k2.6",
+   "minimax-m3",
+   "mimo-v2.6-flash",
+   "mimo-v2.6-pro",
+   "nemotron-3-ultra",
+   "nemotron-3-super",
+   "gemma-4-31b"
+  ],
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "scaleway",
+  "officialDocs": "https://www.scaleway.com/en/docs/generative-apis/api-cli/using-models-api/",
+  "documentedListMethod": "GET /v1/models (OpenAI-compatible; serverless catalog page lists supported models)",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "explabs",
+  "officialDocs": "UNKNOWN",
+  "documentedListMethod": "UNKNOWN",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "thb",
+  "officialDocs": "https://tokenharbor.ai/docs",
+  "documentedListMethod": "GET /v1/models (OpenAI-compatible; full catalog on https://tokenharbor.ai/models)",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "xkiro",
+  "officialDocs": "https://docs.xkiro.com/api/list-models/",
+  "documentedListMethod": "GET /v1/models (public; chat modality default, ?modality=all for all)",
+  "documentedModels": [
+   "openai/gpt-5.6-sol"
+  ],
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "bai",
+  "officialDocs": "https://docs.b.ai/llmservice/api/",
+  "documentedListMethod": "GET /v1/models (per-credential list)",
+  "documentedModels": [
+   "gpt-5-mini",
+   "gpt-5-nano",
+   "gpt-5.2",
+   "gpt-5.4",
+   "gpt-5.4-mini",
+   "gpt-5.4-nano",
+   "gpt-5.4-pro",
+   "gpt-5.5",
+   "gpt-5.5-instant",
+   "gpt-5.6-luna",
+   "gpt-5.6-sol",
+   "gpt-5.6-terra"
+  ],
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "tencent",
+  "officialDocs": "https://cloud.tencent.com/document/product/1772",
+  "documentedListMethod": "GET /v1/models (OpenAI-compatible)",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "nebius",
+  "officialDocs": "https://docs.tokenfactory.nebius.com/api-reference/models/list-models",
+  "documentedListMethod": "GET /v1/models (OpenAI-compatible; source has no endpoint in inventory inputs)",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "rqsty",
+  "officialDocs": "https://docs.requesty.ai/",
+  "documentedListMethod": "GET /v1/models (OpenAI-compatible)",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "llmtr",
+  "officialDocs": "https://llmtr.com/docs/en/gateway/model-discovery/",
+  "documentedListMethod": "GET /v1/models (public, no key; OpenAI schema + extensions)",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "agentrouter",
+  "officialDocs": "https://co.agentrouter.org/portal",
+  "documentedListMethod": "Vendor catalog page per API key (OpenAI-compatible base https://co.agentrouter.org/v1; source has no endpoint in inventory inputs)",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "regolo-ai",
+  "officialDocs": "UNKNOWN",
+  "documentedListMethod": "UNKNOWN",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "tencent-tokenhub",
+  "officialDocs": "UNKNOWN",
+  "documentedListMethod": "UNKNOWN",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "the-grid-ai",
+  "officialDocs": "UNKNOWN",
+  "documentedListMethod": "UNKNOWN",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "opencode-builtin",
+  "officialDocs": "https://opencode.ai/docs",
+  "documentedListMethod": "opencode models listing (builtin service, no baseURL)",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "9router-upstream-ag",
+  "officialDocs": "UNKNOWN",
+  "documentedListMethod": "/v1/models listing (gateway union; upstream namespace inside 9router)",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "9router-upstream-alims-intl",
+  "officialDocs": "UNKNOWN",
+  "documentedListMethod": "/v1/models listing (gateway union; upstream namespace inside 9router)",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "9router-upstream-bpm",
+  "officialDocs": "UNKNOWN",
+  "documentedListMethod": "/v1/models listing (gateway union; upstream namespace inside 9router)",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "9router-upstream-bzl",
+  "officialDocs": "UNKNOWN",
+  "documentedListMethod": "/v1/models listing (gateway union; upstream namespace inside 9router)",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "9router-upstream-cbai",
+  "officialDocs": "UNKNOWN",
+  "documentedListMethod": "/v1/models listing (gateway union; upstream namespace inside 9router)",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "9router-upstream-cc",
+  "officialDocs": "UNKNOWN",
+  "documentedListMethod": "/v1/models listing (gateway union; upstream namespace inside 9router)",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "9router-upstream-cerebras",
+  "officialDocs": "UNKNOWN",
+  "documentedListMethod": "/v1/models listing (gateway union; upstream namespace inside 9router)",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "9router-upstream-cf",
+  "officialDocs": "UNKNOWN",
+  "documentedListMethod": "/v1/models listing (gateway union; upstream namespace inside 9router)",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "9router-upstream-cl",
+  "officialDocs": "UNKNOWN",
+  "documentedListMethod": "/v1/models listing (gateway union; upstream namespace inside 9router)",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "9router-upstream-cmc",
+  "officialDocs": "UNKNOWN",
+  "documentedListMethod": "/v1/models listing (gateway union; upstream namespace inside 9router)",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "9router-upstream-cohere",
+  "officialDocs": "UNKNOWN",
+  "documentedListMethod": "/v1/models listing (gateway union; upstream namespace inside 9router)",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "9router-upstream-combo",
+  "officialDocs": "UNKNOWN",
+  "documentedListMethod": "/v1/models listing (gateway union; upstream namespace inside 9router)",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "9router-upstream-gcli",
+  "officialDocs": "UNKNOWN",
+  "documentedListMethod": "/v1/models listing (gateway union; upstream namespace inside 9router)",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "9router-upstream-gh",
+  "officialDocs": "UNKNOWN",
+  "documentedListMethod": "/v1/models listing (gateway union; upstream namespace inside 9router)",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "9router-upstream-groq",
+  "officialDocs": "UNKNOWN",
+  "documentedListMethod": "/v1/models listing (gateway union; upstream namespace inside 9router)",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "9router-upstream-kc",
+  "officialDocs": "UNKNOWN",
+  "documentedListMethod": "/v1/models listing (gateway union; upstream namespace inside 9router)",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "9router-upstream-kgw",
+  "officialDocs": "UNKNOWN",
+  "documentedListMethod": "/v1/models listing (gateway union; upstream namespace inside 9router)",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "9router-upstream-kimchi",
+  "officialDocs": "UNKNOWN",
+  "documentedListMethod": "/v1/models listing (gateway union; upstream namespace inside 9router)",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "9router-upstream-kr",
+  "officialDocs": "UNKNOWN",
+  "documentedListMethod": "/v1/models listing (gateway union; upstream namespace inside 9router)",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "9router-upstream-llm7",
+  "officialDocs": "UNKNOWN",
+  "documentedListMethod": "/v1/models listing (gateway union; upstream namespace inside 9router)",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "9router-upstream-mistral",
+  "officialDocs": "UNKNOWN",
+  "documentedListMethod": "/v1/models listing (gateway union; upstream namespace inside 9router)",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "9router-upstream-ocg",
+  "officialDocs": "UNKNOWN",
+  "documentedListMethod": "/v1/models listing (gateway union; upstream namespace inside 9router)",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "9router-upstream-ocz",
+  "officialDocs": "UNKNOWN",
+  "documentedListMethod": "/v1/models listing (gateway union; upstream namespace inside 9router)",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "9router-upstream-ollama",
+  "officialDocs": "UNKNOWN",
+  "documentedListMethod": "/v1/models listing (gateway union; upstream namespace inside 9router)",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "9router-upstream-openrouter",
+  "officialDocs": "UNKNOWN",
+  "documentedListMethod": "/v1/models listing (gateway union; upstream namespace inside 9router)",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "9router-upstream-qd",
+  "officialDocs": "UNKNOWN",
+  "documentedListMethod": "/v1/models listing (gateway union; upstream namespace inside 9router)",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "9router-upstream-siliconflow",
+  "officialDocs": "UNKNOWN",
+  "documentedListMethod": "/v1/models listing (gateway union; upstream namespace inside 9router)",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "9router-upstream-tokenrouter",
+  "officialDocs": "UNKNOWN",
+  "documentedListMethod": "/v1/models listing (gateway union; upstream namespace inside 9router)",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ },
+ {
+  "sourceId": "9router-upstream-xmtp",
+  "officialDocs": "UNKNOWN",
+  "documentedListMethod": "/v1/models listing (gateway union; upstream namespace inside 9router)",
+  "documentedModels": "UNKNOWN",
+  "checkedAt": "2026-10-06"
+ }
+]
