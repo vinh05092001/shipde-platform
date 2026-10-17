@@ -1257,19 +1257,27 @@ function scoreForProfile(candidate, assessment, ctx) {
     }
   }
 
+  const breakdown = {
+    latency,
+    quality,
+    reliability,
+    cost,
+    busyPenalty,
+    evidenceAgePenalty: agePenalty,
+    headroomPenalty,
+    contextPenalty,
+    prior,
+  };
+  if (prior) {
+    if (prior.url) breakdown.url = prior.url;
+    if (prior.retrievedAt) breakdown.retrievedAt = prior.retrievedAt;
+    if (prior.source) breakdown.qualitySource = prior.source;
+    if (prior.stale) breakdown.stalePriorWarning = true;
+  }
+
   return {
     score,
-    breakdown: {
-      latency,
-      quality,
-      reliability,
-      cost,
-      busyPenalty,
-      evidenceAgePenalty: agePenalty,
-      headroomPenalty,
-      contextPenalty,
-      prior,
-    },
+    breakdown,
     reservationsHeld: busy,
   };
 }

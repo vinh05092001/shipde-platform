@@ -403,7 +403,8 @@ Audit repairs on Controller model quality scoring, candidate route rejection vis
 5. Transient probe errors (`TIMEOUT`, `PROBE_NO_RESPONSE`) employ a 30-minute transient cooldown instead of long lockouts, enabling automatic route re-probing.
 6. Real Codex quota telemetry read from the latest session rollout log (`~/.codex/sessions/<yyyy>/<mm>/<dd>/rollout-*.jsonl`, parsing `rate_limits`), strictly checking timestamp freshness against `primary.window_minutes` and evaluating existing headroom thresholds (100% used -> exhausted with `resets_at`; >= 80% used -> tight; < 80% used -> open; stale/missing -> unknown). Auth existence alone never claims capacity, and `auth.json` contents are never read.
 7. Untracked runtime state `tools/ai-brain/data/model-route-health.json` from git and added to `.gitignore`.
-Evidence: dry-run ranking decisions recorded in `data/dryrun-decision-1017.json` and unit tests in `tools/ai-brain/test/task-ai-142-audit-repairs.test.js`.
+8. Extracted candidate quality scores from `model-priors.json` external rankings when internal evidence is absent, recording quality, source provenance, URL, and retrievedAt in `scoreBreakdown` and decision logs; normalized model IDs across router prefixes (`cl/`, `ninerouter/`), account prefixes (`::`), and effort suffixes (`-thinking`, etc.) while unmatched models remain 'chưa rõ'; added staleness detection with decision log warning and non-blocking auto-refresh on `next --run`.
+Evidence: dry-run ranking decisions recorded in `data/dryrun-decision-1017.json` and unit tests in `tools/ai-brain/test/task-ai-142-audit-repairs.test.js` and `task-ai-142-quality-priors.test.js`.
 
 ### H3 live: goal items become ready when their dependencies merge (2026-10-17)
 
