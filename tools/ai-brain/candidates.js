@@ -798,8 +798,23 @@ function pushOpencodeProviderWriters(out, source, o, bound) {
   if (source.modelMeta && typeof source.modelMeta === 'object') {
     for (const m of Object.keys(source.modelMeta)) add(m);
   }
-  if (opts.sourceModels && Array.isArray(opts.sourceModels[source.id])) {
-    for (const m of opts.sourceModels[source.id]) add(m);
+  if (opts.sourceModels && typeof opts.sourceModels === 'object') {
+    const cleanKey = (k) =>
+      String(k || '')
+        .toLowerCase()
+        .replace(/^opencode-provider-/, '')
+        .replace(/-options$/, '')
+        .replace(/-ai$/, '')
+        .replace(/-tokenhub$/, '');
+    const targetKey = cleanKey(source.id);
+    const targetProvider = key ? cleanKey(key) : targetKey;
+    for (const [k, models] of Object.entries(opts.sourceModels)) {
+      if (!Array.isArray(models)) continue;
+      const ck = cleanKey(k);
+      if (k === source.id || (key && k === key) || ck === targetKey || ck === targetProvider) {
+        for (const m of models) add(m);
+      }
+    }
   }
   if (Array.isArray(bound)) {
     for (const acc of bound) {
@@ -810,8 +825,18 @@ function pushOpencodeProviderWriters(out, source, o, bound) {
   }
   if (Array.isArray(opts.catalogue)) {
     const prefix = key + '/';
+    const altPrefix = source.id + '/';
     for (const item of opts.catalogue) {
       if (!item) continue;
+      if (typeof item === 'string') {
+        const s = item.trim();
+        if (s.startsWith(prefix)) {
+          modelSet.add(s.slice(prefix.length).trim());
+        } else if (s.startsWith(altPrefix)) {
+          modelSet.add(s.slice(altPrefix.length).trim());
+        }
+        continue;
+      }
       const itemSource =
         item.gateway ||
         item.source ||
@@ -820,12 +845,43 @@ function pushOpencodeProviderWriters(out, source, o, bound) {
         (Array.isArray(item.sourceIds) ? item.sourceIds[0] : null);
       const matchesSource =
         itemSource === source.id ||
-        (Array.isArray(item.sourceIds) && item.sourceIds.includes(source.id));
+        (key && itemSource === key) ||
+        (Array.isArray(item.sourceIds) &&
+          (item.sourceIds.includes(source.id) || (key && item.sourceIds.includes(key))));
       if (matchesSource) {
         const id =
           typeof item === 'string' ? item : item && (item.modelId || item.model || item.id);
         if (typeof id === 'string' && id.trim()) {
-          const wireId = id.startsWith(prefix) ? id.slice(prefix.length) : id;
+          const wireId = id.startsWith(prefix)
+            ? id.slice(prefix.length)
+            : id.startsWith(altPrefix)
+              ? id.slice(altPrefix.length)
+              : id;
+          modelSet.add(wireId.trim());
+        }
+      }
+    }
+  }
+  if (opts.discoveryCatalogue && Array.isArray(opts.discoveryCatalogue.candidates)) {
+    const prefix = key + '/';
+    const altPrefix = source.id + '/';
+    for (const dc of opts.discoveryCatalogue.candidates) {
+      if (!dc) continue;
+      const srcIds = Array.isArray(dc.sourceIds) ? dc.sourceIds : [];
+      const dcSource = dc.gateway || dc.source || dc.sourceId || dc.upstream || srcIds[0];
+      const matches =
+        dcSource === source.id ||
+        (key && dcSource === key) ||
+        srcIds.includes(source.id) ||
+        (key && srcIds.includes(key));
+      if (matches) {
+        const id = dc.modelId || dc.model || dc.id;
+        if (typeof id === 'string' && id.trim()) {
+          const wireId = id.startsWith(prefix)
+            ? id.slice(prefix.length)
+            : id.startsWith(altPrefix)
+              ? id.slice(altPrefix.length)
+              : id;
           modelSet.add(wireId.trim());
         }
       }
@@ -873,6 +929,29 @@ function pushOpencodeProviderWriters(out, source, o, bound) {
         }
         if (maxOutputTokens === undefined && catEntry.maxOutputTokens !== undefined) {
           maxOutputTokens = toPositiveInteger(catEntry.maxOutputTokens);
+        }
+      }
+    }
+    if (
+      contextWindow === undefined &&
+      opts.discoveryCatalogue &&
+      Array.isArray(opts.discoveryCatalogue.candidates)
+    ) {
+      const dcEntry = opts.discoveryCatalogue.candidates.find(
+        (e) =>
+          e &&
+          ((e.modelId || e.model || e.id) === model ||
+            (e.modelId || e.model || e.id) === key + '/' + model ||
+            (e.modelId || e.model || e.id) === source.id + '/' + model)
+      );
+      if (dcEntry) {
+        if (dcEntry.contextWindow !== undefined) {
+          contextWindow = toPositiveInteger(dcEntry.contextWindow);
+        } else if (dcEntry.capabilities && dcEntry.capabilities.contextWindow !== undefined) {
+          contextWindow = toPositiveInteger(dcEntry.capabilities.contextWindow);
+        }
+        if (maxOutputTokens === undefined && dcEntry.maxOutputTokens !== undefined) {
+          maxOutputTokens = toPositiveInteger(dcEntry.maxOutputTokens);
         }
       }
     }
