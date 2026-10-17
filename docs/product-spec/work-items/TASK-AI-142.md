@@ -467,6 +467,17 @@ When `primary.used_percent` in Codex session rollout logs was omitted or non-num
 
 Verification: `node --test tools/ai-brain/test/task-ai-142-codex-quota-missing.test.js tools/ai-brain/test/task-ai-142-audit-repairs.test.js` passed 14/14 tests. Changed files pass Prettier, ESLint, and `git diff --check`.
 
+### H3 live: leaderboard source names carry explicit identifiers without undefined (2026-10-17)
+
+External benchmark tables recorded in `model-priors-live.json` had entries in `sources[]` containing only `url` and `retrievedAt` without `id` or `name`, causing decision logs and candidate score breakdowns to output `undefined` for `qualitySource`.
+
+1. Defined explicit source identifiers (`artificial-analysis` and `benchlm`) in `tools/ai-brain/priors-sources/public.json` under `sources[]`.
+2. Updated `resolveDescriptorSources` in `tools/ai-brain/priors-public.js` to extract source IDs dynamically from the descriptor without hardcoding names.
+3. Preserved `source.id` across document merging, per-model source records, and benchmark provenance in `tools/ai-brain/priors.js` (`mergePriorDocuments`).
+4. Prevented any `undefined` source string or property from appearing in decision logs or merged prior documents.
+
+Verification: `node --test tools/ai-brain/test/task-ai-142-priors-source-id.test.js tools/ai-brain/test/priors-public.test.js tools/ai-brain/test/task-ai-142-quality-priors.test.js` passed all tests. Changed files pass Prettier, ESLint, and `git diff --check`.
+
 ### H3 live: unverified route probes retain diagnostic evidence without a 30-minute penalty (2026-10-17)
 
 When candidate route pre-probes return an unverified failure (`ok: false` with no HTTP status or recognizable error cause, e.g. `ag/gemini-3.8-flash|9router@xkiro`), `recordResult` in `tools/ai-brain/route-health.js` previously assigned the full 30-minute transient cooldown (`UNAVAILABLE_NOW`, 1800000ms), and `failedKeys` in `orchestrate.js` excluded the route from subsequent selection rounds, starving the candidate loop. Furthermore, raw diagnostic details (HTTP status, error message, body) were lost because intake had not initialized the run decision directory prior to route probe fallback.
