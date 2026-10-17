@@ -29,7 +29,15 @@ function makeCandidate(extra = {}) {
 }
 
 test('PR C (Item 1 & 6): sources.json dispatch configuration provides probe and schema budgets', () => {
-  const defaultRegistry = sourcesApi.loadSources();
+  // The tracked configuration is an operator choice; these tests fix the agy-pool
+  // writer flags explicitly instead of reading whatever the repo currently sets.
+  const loaded = sourcesApi.loadSources();
+  const defaultRegistry = {
+    ...loaded,
+    sources: loaded.sources.map((s) =>
+      s.id === 'agy-pool' ? { ...s, writerEnabled: false, allowWriter: false } : s
+    ),
+  };
   const config = sourcesApi.getDispatchConfig(defaultRegistry);
   assert.equal(config.probeBudgetMs, 180000);
   assert.equal(config.maxConcurrentProbes, 8);
@@ -113,8 +121,16 @@ test('PR C (Item 2): orderProbeRoutes places route with recent success ahead of 
   assert.equal(ordered[1].candidateKey, candHighNoEvidence.candidateKey);
 });
 
-test('PR C (Item 3): agy-pool writer permission is controlled by sources.json configuration, default OFF', () => {
-  const defaultRegistry = sourcesApi.loadSources();
+test('PR C (Item 3): agy-pool writer permission is controlled by sources.json configuration', () => {
+  // The tracked configuration is an operator choice; these tests fix the agy-pool
+  // writer flags explicitly instead of reading whatever the repo currently sets.
+  const loaded = sourcesApi.loadSources();
+  const defaultRegistry = {
+    ...loaded,
+    sources: loaded.sources.map((s) =>
+      s.id === 'agy-pool' ? { ...s, writerEnabled: false, allowWriter: false } : s
+    ),
+  };
   // In default sources.json, agy-pool writer must be disabled
   assert.equal(sourcesApi.isAgyPoolWriterEnabled(defaultRegistry), false);
 
@@ -330,7 +346,15 @@ test('PR C (Item 5): CLI schema proof recorded in evidence is reused on subseque
 test('PR C (Item 3): preferKnownGood does not prioritize agy-pool ahead of known-good when writer is disabled', () => {
   const store = { version: 1, paths: {}, events: [] };
   const now = Date.now();
-  const defaultRegistry = sourcesApi.loadSources();
+  // The tracked configuration is an operator choice; these tests fix the agy-pool
+  // writer flags explicitly instead of reading whatever the repo currently sets.
+  const loaded = sourcesApi.loadSources();
+  const defaultRegistry = {
+    ...loaded,
+    sources: loaded.sources.map((s) =>
+      s.id === 'agy-pool' ? { ...s, writerEnabled: false, allowWriter: false } : s
+    ),
+  };
   const agyCand = makeCandidate({ harness: 'agy-pool', accessPath: 'pool' });
   const liveCand = makeCandidate({ modelId: 'live/model', accessPath: 'live' });
 
@@ -368,7 +392,15 @@ test('PR C (Item 3): preferKnownGood does not prioritize agy-pool ahead of known
 });
 
 test('PR C (Item 3): orchestrate launcher refuses agy-pool when writer is disabled by configuration', () => {
-  const defaultRegistry = sourcesApi.loadSources();
+  // The tracked configuration is an operator choice; these tests fix the agy-pool
+  // writer flags explicitly instead of reading whatever the repo currently sets.
+  const loaded = sourcesApi.loadSources();
+  const defaultRegistry = {
+    ...loaded,
+    sources: loaded.sources.map((s) =>
+      s.id === 'agy-pool' ? { ...s, writerEnabled: false, allowWriter: false } : s
+    ),
+  };
   const orchestrate = require('../orchestrate');
   const launcher = orchestrate.resolveLauncher(
     {

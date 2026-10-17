@@ -156,8 +156,8 @@
         "agy10"
       ],
       "capabilities": { "tools": true },
-      "writerEnabled": false,
-      "allowWriter": false,
+      "writerEnabled": true,
+      "allowWriter": true,
       "harness": "agy-pool",
       "accessPath": "cli",
       "credential": { "type": "none" },
