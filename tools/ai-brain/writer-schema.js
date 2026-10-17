@@ -5,7 +5,13 @@ const fs = require('fs');
 const path = require('path');
 const { candidateKey } = require('./candidates');
 const { createSecretRedactor } = require('./decisions');
-const DEFAULT_TIMEOUT_MS = 60000;
+// Reuse the configured worker/route timeout and the remaining shared probe budget.
+function probeTimeoutMs(options, remainingMs) {
+  const values = [options.workerTimeoutMs, options.timeoutMs, remainingMs]
+    .map(Number)
+    .filter((value) => Number.isFinite(value) && value > 0);
+  return values.length ? Math.min(...values) : undefined;
+}
 
 // This is the writer's final result, not the pool's process-state envelope.
 function contract(key, nonce) {
@@ -129,8 +135,7 @@ async function verify(candidate, options) {
       const previous = pool.readResult(candidate.accountId, o);
       if (previous && previous.state === 'running')
         return { ok: false, reason: 'WRITER_SCHEMA_POOL_BUSY' };
-      const budgetMs = Number(o.schemaTimeoutMs);
-      const timeoutMs = budgetMs > 0 ? Math.min(DEFAULT_TIMEOUT_MS, budgetMs) : DEFAULT_TIMEOUT_MS;
+      const timeoutMs = probeTimeoutMs(o, o.schemaTimeoutMs);
       result = pool.submitJob(candidate.accountId, job, { ...o, timeoutMs });
       if (!result || result.state !== 'ok' || result.exitCode !== 0) {
         const known = [
@@ -232,7 +237,7 @@ async function verify(candidate, options) {
 }
 
 module.exports = {
-  DEFAULT_TIMEOUT_MS,
+  probeTimeoutMs,
   contract,
   prepareJob,
   validate,

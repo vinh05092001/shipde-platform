@@ -250,6 +250,7 @@ Decision log entries link `goalId -> workItemId -> candidateKey -> session -> co
 
 ### H3 live: verify unknown writer capabilities instead of inventing missing capabilities (2026-10-17)
 
+Review fixes: capability probing in dispatch runs only through an injectable seam and makes no network call in dry-run or tests unless a probe or fetch is injected; direct HTTP probing is chosen from the route (opencode-direct with a source endpoint, direct-http), not from an http accessPath, so loopback daemon harnesses are not probed as direct HTTP; a missing registry no longer falls back to the machine sources.json; the writer schema timeout comes from the existing route/profile timeout.
 `undefined` capability is now `CAPABILITY_UNVERIFIED`, kept in the explicit
 `needsCapabilityProbe` group and excluded from ranking until checked. Only an
 observed `false` produces `CAPABILITY_MISSING`, with the probe's real reason.

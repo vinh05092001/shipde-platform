@@ -158,8 +158,8 @@ async function probeCapabilities(candidates, profile, options = {}) {
       [c.sourceId, c.source, c.gateway, c.upstream].includes(s.id)
     );
     const direct =
-      /^https?:\/\//i.test(String(c.accessPath || '')) ||
       c.harness === 'direct-http' ||
+      (c.harness === 'opencode-direct' && Boolean(source?.endpoint)) ||
       (source?.kind === require('./sources').Kind.MODEL_SOURCE &&
         !source.harness &&
         !require('./harness').HARNESSES[c.harness]);
@@ -203,6 +203,8 @@ async function probeCapabilities(candidates, profile, options = {}) {
         proof = undefined;
       if (!proof) {
         if (Date.now() >= deadline) proof = pending('WRITER_SCHEMA_NOT_VERIFIED_BUDGET');
+        else if (direct && route && o.allowNetwork === false && typeof o.fetch !== 'function')
+          proof = pending('CAPABILITY_PROBE_TRANSPORT_NOT_INJECTED');
         else if (direct && route)
           proof = await routeProbe.boundedProbe(
             (_c, _key, _env, probeOptions) =>

@@ -431,3 +431,130 @@ test('item dry-run probes declared capabilities instead of treating them as evid
     )
   );
 });
+
+test('review P1: daemon URL stays on CLI capability seam', async () => {
+  let http = 0,
+    cli = 0;
+  const c = candidate({ harness: 'paseo', accessPath: 'http://127.0.0.1:20128/v1' });
+  await require('../capability-probe').probeCapabilities([c], profile, {
+    registry,
+    env: { FIXTURE_KEY: 'fixture' },
+    fetch: async () => {
+      http++;
+      return { ok: false, status: 451, json: async () => ({}) };
+    },
+    probeCli: async () => {
+      cli++;
+      return { ok: true };
+    },
+  });
+  assert.equal(http, 0);
+  assert.equal(cli, 2);
+});
+
+test('review P1: dispatch dry-run honors injected probe and never uses ambient fetch', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-seam-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  let ambient = 0,
+    injected = 0;
+  t.mock.method(globalThis, 'fetch', async () => {
+    ambient++;
+    throw Error('ambient network forbidden');
+  });
+  const opts = {
+    candidates: [candidate()],
+    items: [{ workItemId: 'CAP-SEAM', requiredCapabilities: ['tools'], qualityFloor: 0 }],
+    registry,
+    accounts: [],
+    env: { FIXTURE_KEY: 'fixture' },
+    evidenceDir: path.join(root, 'evidence'),
+    assessment: { weightProfile: 'BALANCED', weights: routing.WEIGHT_PROFILES.BALANCED },
+    log: () => {},
+    exit: () => {},
+  };
+  await require('../cli').dispatchCommand(
+    { 'dry-run': true, root },
+    {
+      ...opts,
+      probeCapabilities: async () => {
+        injected++;
+      },
+    }
+  );
+  assert.equal(injected, 1);
+  await require('../cli').dispatchCommand({ 'dry-run': true, root }, opts);
+  assert.equal(ambient, 0);
+});
+
+test('review P2: selection without registry never reads host sources or probes HTTP', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-no-registry-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  let reads = 0,
+    http = 0;
+  t.mock.method(require('../sources'), 'loadSources', () => {
+    reads++;
+    return registry;
+  });
+  await require('../orchestrate').selectCandidateForProfile(
+    { id: 'NO-REG', role: 'reviewer.primary', requiredCapabilities: ['tools'], qualityFloor: 0 },
+    [candidate()],
+    [],
+    {},
+    {
+      jevAsk: async () => null,
+      env: { FIXTURE_KEY: 'fixture' },
+      fetch: async () => {
+        http++;
+        return { ok: false, status: 451, json: async () => ({}) };
+      },
+    },
+    { dir },
+    Date.now()
+  );
+  assert.equal(reads, 0);
+  assert.equal(http, 0);
+});
+
+test('review P3: pool schema proof uses configured worker timeout within remaining budget', async (t) => {
+  const pool = require('../agy-pool-runtime');
+  let timeout;
+  t.mock.method(pool, 'readResult', () => null);
+  t.mock.method(pool, 'readOutText', () => '');
+  t.mock.method(pool, 'submitJob', (_a, _j, o) => {
+    timeout = o.timeoutMs;
+    return { state: 'error', reason: 'POOL_TIMEOUT' };
+  });
+  await require('../writer-schema').verify(candidate({ harness: 'agy-pool' }), {
+    workerTimeoutMs: 2345,
+    schemaTimeoutMs: 90000,
+  });
+  assert.equal(timeout, 2345);
+});
+
+test('review P1: profile dispatch also honors injected capability probe', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-profile-seam-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const file = path.join(root, 'profile.json');
+  fs.writeFileSync(file, JSON.stringify(profile));
+  await assert.rejects(
+    require('../cli').dispatchProfileCommand(
+      { profile: file, json: true },
+      {
+        candidates: [candidate()],
+        accounts: [],
+        registry,
+        evidenceDir: path.join(root, 'evidence'),
+        decisionDir: root,
+        ask: async () => null,
+        env: { FIXTURE_KEY: 'fixture' },
+        fetch: async () => ({ ok: false, status: 451, json: async () => ({}) }),
+        probeCapabilities: async () => {
+          throw Error('INJECTED_PROFILE_PROBE');
+        },
+        log: () => {},
+        exit: () => {},
+      }
+    ),
+    /INJECTED_PROFILE_PROBE/
+  );
+});

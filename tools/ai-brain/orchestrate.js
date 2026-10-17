@@ -3255,7 +3255,7 @@ async function selectCandidateForProfile(
   const attemptNumber = options.attempt !== undefined ? options.attempt : item && item.attempt;
 
   const profile = buildProfile(item, o, forbiddenDomains);
-  const registry = (o && o.registry) || sourcesApi.loadSources();
+  const registry = (o && o.registry) || { sources: [] };
   const jevSource = sourcesApi.getSource('jev', registry);
   const jevAsk =
     o.jevAsk ||
@@ -3398,6 +3398,7 @@ async function selectCandidateForProfile(
       deadline: o.capabilityProbeStartedAt + PROBE_BUDGET_MS,
       capabilityEvidence: o.capabilityEvidence || (o.capabilityEvidence = {}),
       httpRoute: (c) => {
+        if (!o.registry) return null;
         try {
           return routeProbeCandidate(c, resolveLaunchRoute(c, o, registry), registry, false);
         } catch {
@@ -3428,7 +3429,7 @@ async function selectCandidateForProfile(
               ...o,
               exercise: null,
               onProvisioned: undefined,
-              workerTimeoutMs: Math.min(schemaApi.DEFAULT_TIMEOUT_MS, remainingMs),
+              workerTimeoutMs: schemaApi.probeTimeoutMs(o, remainingMs),
             },
             isolation.getIsolatedLauncher()
           );
@@ -3449,7 +3450,7 @@ async function selectCandidateForProfile(
                 hostWorktree: o.cwd || process.cwd(),
                 baseSha: o.baseSha,
                 title: `${item.id}-schema-probe`,
-                workerTimeoutMs: Math.min(schemaApi.DEFAULT_TIMEOUT_MS, remainingMs),
+                workerTimeoutMs: schemaApi.probeTimeoutMs(o, remainingMs),
                 isolationVerdict: isolation.readClosedIsolationVerdict(),
               }),
           });

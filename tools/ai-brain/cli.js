@@ -1913,6 +1913,7 @@ async function dispatchProfileCommand(args, deps) {
     args,
     Object.assign({}, deps, {
       candidates: candidateList,
+      capabilityProbeAllowNetwork: args.execute === true && !Array.isArray(deps && deps.candidates),
       registry,
       rootDir,
       ask: (deps && deps.ask) || jevAsk,
@@ -2303,23 +2304,25 @@ function dispatchCommand(args, deps = {}) {
         )
       )
     ) {
-      return require('./capability-probe')
-        .probeCapabilities(annotated, profile, {
+      const probe = deps.probeCapabilities || require('./capability-probe').probeCapabilities;
+      return Promise.resolve(
+        probe(annotated, profile, {
           ...deps,
           registry,
           evidenceDir,
           externalWorkers: args['external-workers'] || deps.externalWorkers,
+          allowNetwork: false,
         })
-        .then(() =>
-          dispatchCommand(args, {
-            ...deps,
-            candidates: annotated,
-            capabilitiesPrepared: true,
-            registry,
-            accounts,
-            evidenceDir,
-          })
-        );
+      ).then(() =>
+        dispatchCommand(args, {
+          ...deps,
+          candidates: annotated,
+          capabilitiesPrepared: true,
+          registry,
+          accounts,
+          evidenceDir,
+        })
+      );
     }
     const fallbackProfile = routing.controllerFallbackProfile(profile);
     const assessment = deps.assessment || {

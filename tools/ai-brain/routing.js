@@ -1913,11 +1913,13 @@ async function runProfileDispatch(args, deps) {
     { now }
   );
 
-  await require('./capability-probe').probeCapabilities(annotated, profile, {
+  const probe = d.probeCapabilities || require('./capability-probe').probeCapabilities;
+  await probe(annotated, profile, {
     ...d,
     evidenceDir,
     registry: d.registry || sourceRegistry.loadSources(),
     externalWorkers: d.externalWorkers || args['external-workers'],
+    allowNetwork: args.execute === true && d.capabilityProbeAllowNetwork === true,
   });
 
   const independentReviewerCandidates = annotated.filter((candidate) => {
