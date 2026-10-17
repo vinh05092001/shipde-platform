@@ -46,8 +46,23 @@ describe('probed opencode providers become writer candidates', () => {
     assert.deepEqual(out[0].capabilities, {});
   });
 
-  test('a source without an opencode provider key yields no writer candidate', () => {
-    assert.equal(gen(source({})).filter((c) => c.harness === 'opencode-direct').length, 0);
+  test('a source without an endpoint or credential env yields no writer candidate', () => {
+    assert.equal(
+      gen(source({ endpoint: undefined })).filter((c) => c.harness === 'opencode-direct').length,
+      0
+    );
+    assert.equal(
+      gen(source({ credential: undefined })).filter((c) => c.harness === 'opencode-direct').length,
+      0
+    );
+  });
+
+  test('a source without an opencode provider key yields opencode-direct using source id', () => {
+    const out = gen(source({})).filter((c) => c.harness === 'opencode-direct');
+    assert.equal(out.length, 1);
+    assert.equal(out[0].modelId, 'opencode-provider-x-options/m1');
+    assert.equal(out[0].gateway, 'opencode-provider-x-options');
+    assert.equal(out[0].upstream, 'opencode-provider-x-options');
   });
 
   test('the route probe sends the wire id without the provider key', () => {

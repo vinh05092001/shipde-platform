@@ -543,6 +543,16 @@ When candidate route pre-probes return an unverified failure (`ok: false` with n
 
 Verification: `node --test tools/ai-brain/test/task-ai-142-unknown-probe-cause.test.js tools/ai-brain/test/task-ai-142-probe-transient.test.js tools/ai-brain/test/task-ai-142-writer-probe.test.js tools/ai-brain/test/task-ai-131.test.js` passed 52/52 tests. Changed files pass Prettier and `git diff --check`.
 
+### H3 live: direct OpenAI-compatible sources yield opencode-direct writer candidates (2026-10-17)
+
+Direct OpenAI-compatible sources with HTTP/HTTPS endpoints and environment-variable credentials (tencent, cohere, baseten, inception, regolo, amd-radeon) now generate isolated writer candidates with harness `opencode-direct`.
+1. Data-driven candidate generation: Any active source in `sources.json` declaring an HTTP/HTTPS endpoint and environment credential variable without a custom CLI harness produces `opencode-direct` writer candidates for each declared or catalogued model ID, without hardcoded provider lists or model IDs. Direct-http candidates remain untouched for other roles.
+2. Secret protection: Isolated worker configuration in `tools/ai-brain/isolation-launcher.js` generates OpenCode provider configurations referencing `{env:VARIABLE_NAME}` without writing raw API key secrets to disk. Keys are passed to the worker exclusively via process environment variables.
+3. Undeclared capabilities: Newly generated candidates leave `jsonSchema` and `tools` undefined for probe-based verification (PR B), while preserving known `contextWindow` and token limits.
+4. Route resolution: `stripOpencodeProviderPrefix` and executor `resolveRoute` correctly resolve wire model IDs for sources where `source.id` acts as the provider key.
+5. Account binding and missing env detection: Candidate `accountId` binds to the concrete credential account ID (`<sourceId>-<envSuffix>`), rejecting missing keys honestly with `CREDENTIAL_ENV_MISSING` and eliminating false `WILDCARD_ACCOUNT` drops.
+Evidence: 115 new `opencode-direct` candidates yielded across 6 direct sources (tencent: 72, cohere: 15, baseten: 11, inception: 2, regolo: 9, amd-radeon: 6). Unit tests in `tools/ai-brain/test/task-ai-142-direct-writer-harness.test.js` and `tools/ai-brain/test/task-ai-142-opencode-writers.test.js`.
+
 ### H3 live: audit repairs (2026-10-17)
 
 - Tier-only rows (codingTier without a score) keep their tier: operator decision 2026-10-12 keeps imported Claude-family rows eligible for writer ranking. The live leaderboard refresh (610 models, all scored, 2026-10-17) makes this moot in practice. Recorded path drops (ROUTE_PROBE_UNPROVEN, CREDENTIAL_ENV_MISSING) appear in the rejection list with route or account scope.

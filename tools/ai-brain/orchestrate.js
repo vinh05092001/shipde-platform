@@ -393,7 +393,7 @@ function resolveLaunchRoute(candidate, options, registry) {
 
 /** An OpenCode provider's models are addressed `<providerKey>/<model>`; the wire id has no key. */
 function stripOpencodeProviderPrefix(modelId, source) {
-  const key = source && source.opencodeProvider;
+  const key = source && (source.opencodeProvider || source.id);
   return key && String(modelId).startsWith(key + '/')
     ? String(modelId).slice(key.length + 1)
     : modelId;
