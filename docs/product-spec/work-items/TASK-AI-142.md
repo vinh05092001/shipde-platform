@@ -248,6 +248,10 @@ Decision log entries link `goalId -> workItemId -> candidateKey -> session -> co
 - Part H2 Hermes session selection, custom config binding, and `shipde-controller` skill file are delivered in Part H2.
 - Live acceptance across chat and controller runs in Part H3 following merge of H1 and H2.
 
+### H3 live: route health per upstream behind a shared gateway (2026-10-17)
+
+The third live run of goal G-F622511E exhausted its probe budget: ag/gemini-3.8-flash through 9router answered 200, but route health keyed it as gemini-3.8-flash|9router@ninerouter after stripping a fixed list of upstream prefixes, so a GEO_BLOCKED from another upstream blocked it until the next day. Health keys now keep the routed model id and drop a prefix only when it names the route itself (ag/x on route ag). Catalogue normalisation is unchanged.
+
 ### H3 live: carry-over keeps the base check (2026-10-17)
 
 The second live Controller run of goal G-F622511E failed TURN_BUDGET_EXCEEDED: 17 launches in a row failed PROVISION_BASE_MISMATCH because carry-over merged the previous attempt into the fresh checkout and the base check compared that merge commit with the base. When carry-over merged, the provisioned HEAD must be a merge whose first parent is the base; otherwise HEAD must equal the base.
