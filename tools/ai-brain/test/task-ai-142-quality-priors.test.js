@@ -256,3 +256,62 @@ test('VIỆC 1: Stale priors trigger staleness detection and decision log warnin
   assert.equal(c.scoreBreakdown.prior.stale, true, 'prior must be flagged stale');
   assert.equal(c.scoreBreakdown.stalePriorWarning, true, 'stale warning recorded on breakdown');
 });
+
+test('VIỆC 1b: Source item lacking score yields null score and no tier (unknown), never unearned tier bonus', () => {
+  const customDocs = [
+    {
+      sources: [
+        {
+          url: 'https://benchlm.ai/data/models.json',
+          retrievedAt: '2026-10-17T00:00:00.000Z',
+        },
+      ],
+      models: [
+        {
+          modelId: 'unscored-weak-model',
+          benchmarks: {},
+          source: {
+            url: 'https://benchlm.ai/data/models.json',
+            retrievedAt: '2026-10-17T00:00:00.000Z',
+          },
+        },
+        {
+          modelId: 'strong-model',
+          benchmarks: { aaCodingIndex: 85, aaAgenticIndex: 85, intelligenceIndex: 85 },
+          source: {
+            url: 'https://benchlm.ai/data/models.json',
+            retrievedAt: '2026-10-17T00:00:00.000Z',
+          },
+        },
+      ],
+    },
+  ];
+
+  const merged = priors.mergePriorDocuments(customDocs);
+  const unscoredEntry = merged.ranking.find((r) => r.canonical === 'unscored-weak-model');
+  assert.ok(unscoredEntry, 'unscored model entry exists in merged ranking');
+  assert.equal(unscoredEntry.score, null, 'unscored model must have null score');
+  assert.equal(unscoredEntry.codingTier, null, 'unscored model must not have codingTier');
+  assert.equal(unscoredEntry.reviewTier, null, 'unscored model must not have reviewTier');
+
+  const prior = priors.priorFor({ modelId: 'unscored-weak-model' }, 'writer', merged);
+  assert.equal(prior.score, null, 'prior score must be null');
+  assert.equal(prior.bonus, 0, 'prior bonus must be 0');
+  assert.equal(prior.priorUnknown, true, 'prior must be unknown');
+
+  // Also verify legacy fixture entry lacking score never earns tier bonus
+  const legacyDoc = {
+    ranking: [
+      {
+        canonical: 'legacy-unscored-t3',
+        codingTier: 'T3',
+        reviewTier: 'T3',
+        score: null,
+      },
+    ],
+  };
+  const legacyPrior = priors.priorFor({ modelId: 'legacy-unscored-t3' }, 'writer', legacyDoc);
+  assert.equal(legacyPrior.score, null);
+  assert.equal(legacyPrior.bonus, 0);
+  assert.equal(legacyPrior.priorUnknown, true);
+});

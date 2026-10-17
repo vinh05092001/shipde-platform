@@ -2099,8 +2099,9 @@
           "retrievedAt": "2026-10-13T00:00:00.000Z"
         }
       ],
-      "codingTier": "T3",
-      "reviewTier": "T3"
+      "codingTier": null,
+      "reviewTier": null,
+      "score": null
     },
     {
       "canonical": "claude-sonnet-5-5",
@@ -2120,8 +2121,9 @@
           "retrievedAt": "2026-10-13T00:00:00.000Z"
         }
       ],
-      "codingTier": "T3",
-      "reviewTier": "T3"
+      "codingTier": null,
+      "reviewTier": null,
+      "score": null
     },
     {
       "canonical": "muse-wonder",
@@ -2141,8 +2143,9 @@
           "retrievedAt": "2026-10-13T00:00:00.000Z"
         }
       ],
-      "codingTier": "T3",
-      "reviewTier": "T3"
+      "codingTier": null,
+      "reviewTier": null,
+      "score": null
     },
     {
       "canonical": "claude-fable-5-1",
@@ -2162,8 +2165,9 @@
           "retrievedAt": "2026-10-13T00:00:00.000Z"
         }
       ],
-      "codingTier": "T3",
-      "reviewTier": "T3"
+      "codingTier": null,
+      "reviewTier": null,
+      "score": null
     },
     {
       "canonical": "gemini-4-argon",
@@ -2183,8 +2187,9 @@
           "retrievedAt": "2026-10-13T00:00:00.000Z"
         }
       ],
-      "codingTier": "T3",
-      "reviewTier": "T3"
+      "codingTier": null,
+      "reviewTier": null,
+      "score": null
     },
     {
       "canonical": "gpt-6-1-sol",
@@ -2204,8 +2209,9 @@
           "retrievedAt": "2026-10-13T00:00:00.000Z"
         }
       ],
-      "codingTier": "T3",
-      "reviewTier": "T3"
+      "codingTier": null,
+      "reviewTier": null,
+      "score": null
     },
     {
       "canonical": "claude-opus-5",
@@ -2225,8 +2231,9 @@
           "retrievedAt": "2026-10-13T00:00:00.000Z"
         }
       ],
-      "codingTier": "T3",
-      "reviewTier": "T3"
+      "codingTier": null,
+      "reviewTier": null,
+      "score": null
     }
   ],
   "searchSource": "benchlm-curated-public-benchmarks"

@@ -19,10 +19,19 @@ const ROLE_BENCHMARK_WEIGHTS = Object.freeze({
  * When no explicit file is given, read the curated baseline deterministically.
  */
 function loadPriors(file) {
-  const target = file || DEFAULT_PRIORS_FILE;
+  const target = file || (fs.existsSync(LIVE_PRIORS_FILE) ? LIVE_PRIORS_FILE : DEFAULT_PRIORS_FILE);
   try {
     const parsed = JSON.parse(fs.readFileSync(target, 'utf8'));
     if (parsed && typeof parsed === 'object' && Array.isArray(parsed.ranking)) {
+      for (const row of parsed.ranking) {
+        if (row && (row.score === null || row.score === undefined || !Number.isFinite(row.score))) {
+          if (benchmarkScore(row) === null) {
+            row.score = null;
+            row.codingTier = null;
+            row.reviewTier = null;
+          }
+        }
+      }
       return parsed;
     }
   } catch (_) {
@@ -62,6 +71,9 @@ function priorFor(candidate, role, priors, now) {
   const resolved = matchModelPrior(modelId, ranking);
   const match = resolved && resolved.entry;
   if (!match) return neutralPrior(canonical);
+
+  const hasScore = Number.isFinite(match.score) || benchmarkScore(match) !== null;
+  if (!hasScore) return neutralPrior(canonical);
 
   const tier =
     role === 'reviewer' || role === 'security-review' ? match.reviewTier : match.codingTier;
@@ -360,7 +372,8 @@ function assignQuartileTiers(rows) {
     .slice(1)
     .map((_, index) => scores[Math.ceil(((index + 1) * scores.length) / tiers.length) - 1]);
   for (const row of rows) {
-    if (row.score === null || !Number.isFinite(row.score)) {
+    if (row.score === null || row.score === undefined || !Number.isFinite(row.score)) {
+      row.score = null;
       row.codingTier = null;
       row.reviewTier = null;
       continue;

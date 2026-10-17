@@ -987,6 +987,9 @@ function mergeEvidenceAccounts(inputAccounts, registryAccounts) {
 }
 
 function isCandidateRouteEligible(routeHealth, candidate, options, routeHealthApi, isExplicit) {
+  if (candidate && (candidate.credentialEnvMissing === true || (candidate.blocked && candidate.blockReason === 'CREDENTIAL_ENV_MISSING'))) {
+    return false;
+  }
   if (options && options.allowUnprobedCandidates === true) return true;
   if (!routeHealth) return true;
   const modelId = candidate && candidate.modelId;
@@ -1371,13 +1374,20 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
             routeHealth && modelId && gateway
               ? routeHealthApi.getPathRecord(routeHealth, modelId, routePath)
               : null;
-          const reason = rec ? (rec.status || 'ROUTE_UNAVAILABLE') : 'ROUTE_PROBE_UNPROVEN';
+          const reason =
+            candidate &&
+            (candidate.credentialEnvMissing ||
+              candidate.blockReason === 'CREDENTIAL_ENV_MISSING')
+              ? 'CREDENTIAL_ENV_MISSING'
+              : rec
+                ? rec.status || 'ROUTE_UNAVAILABLE'
+                : 'ROUTE_PROBE_UNPROVEN';
           excludedRoutes.push({
             offeringId: key,
             candidateKey: key,
             reason,
             reasonCode: String(reason).split(':')[0],
-            scope: 'route',
+            scope: candidate && candidate.blockReason ? 'account' : 'route',
           });
         }
       }
