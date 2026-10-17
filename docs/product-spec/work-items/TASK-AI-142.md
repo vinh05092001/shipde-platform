@@ -447,6 +447,16 @@ Verification (2026-10-14): sequential TASK-AI-141 199/199, TASK-AI-142 140/140, 
 
 Selection logs retain the full chosenCandidate, the existing chosen identity, top ten ranked candidates and score breakdown summaries, and rejection totals by reasonCode with ten examples. Full runtime routing arrays remain available for fallback. Daily logs roll at 50 MiB into date.N.jsonl; readers consume all parts in numeric order. `node tools/ai-brain/cli.js decisions compact --dir <dir>` incrementally writes capped copies named `<source>.compact-<timestamp>.jsonl`, preserving originals. Copies are excluded from daily history until the operator explicitly replaces originals; malformed input fails rather than silently dropping evidence. No live data is modified by this change.
 
+### H3 live: missing Codex used_percent is treated as unknown quota rather than zero (2026-10-17)
+
+When `primary.used_percent` in Codex session rollout logs was omitted or non-numeric, `readCodexSessionQuota` in `tools/ai-brain/codex-quota.js` previously evaluated `Number(...) || 0`, falsely treating unmeasured quota as 0% used (`open`).
+
+1. Enforced strict validation on `primary.used_percent`: when missing, null, undefined, or non-finite, `readCodexSessionQuota` returns `status: 'unknown'` and `available: false`, specifying the exact missing field in `reason`.
+2. Omitted or unparseable `secondary.used_percent` gracefully falls back to evaluating `primary.used_percent` alone, retaining established secondary behavior.
+3. Tests use synthetic session rollout files in temporary directories and never access or create `auth.json`.
+
+Verification: `node --test tools/ai-brain/test/task-ai-142-codex-quota-missing.test.js tools/ai-brain/test/task-ai-142-audit-repairs.test.js` passed 14/14 tests. Changed files pass Prettier, ESLint, and `git diff --check`.
+
 ### H3 live: unverified route probes retain diagnostic evidence without a 30-minute penalty (2026-10-17)
 
 When candidate route pre-probes return an unverified failure (`ok: false` with no HTTP status or recognizable error cause, e.g. `ag/gemini-3.8-flash|9router@xkiro`), `recordResult` in `tools/ai-brain/route-health.js` previously assigned the full 30-minute transient cooldown (`UNAVAILABLE_NOW`, 1800000ms), and `failedKeys` in `orchestrate.js` excluded the route from subsequent selection rounds, starving the candidate loop. Furthermore, raw diagnostic details (HTTP status, error message, body) were lost because intake had not initialized the run decision directory prior to route probe fallback.
