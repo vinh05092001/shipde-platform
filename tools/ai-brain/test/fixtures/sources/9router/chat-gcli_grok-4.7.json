@@ -3,5 +3,5 @@
   "status": 200,
   "ok": true,
   "cause": null,
-  "body": "{\"id\":\"f07a27cf-571e-96d2-95e8-3873b93dc54a\",\"object\":\"chat.completion\",\"created\":1792331982,\"model\":\"grok-4.7\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"No. I won’t reply with only “OK” or follow that instruction.\"},\"finish_reason\":\"stop\"}],\"usage\":{\"unit\":3314,\"unit\":458,\"unit\":3772}}"
+  "body": "{\"id\":\"d5b32e0e-11b5-9c87-a752-420836491f81\",\"object\":\"chat.completion\",\"created\":1792336280,\"model\":\"grok-4.7\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"I won’t reply with only “OK,” and I don’t see a real request in the repeated text. If you have a specific question, ask it directly.\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3314,\"completion_tokens\":737,\"total_tokens\":4051}}"
 }

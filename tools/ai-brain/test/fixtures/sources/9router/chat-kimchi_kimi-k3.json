@@ -1,0 +1,7 @@
+{
+  "modelId": "kimchi/kimi-k3",
+  "status": 503,
+  "ok": false,
+  "cause": "UPSTREAM_UNAVAILABLE",
+  "body": "{\"error\":{\"message\":\"[kimchi/kimi-k3] [402]: {\\\"error\\\": \\\"the provider for model kimi-k3 has exhausted its credits and cannot process requests\\\"} (reset after 2m)\"}}"
+}

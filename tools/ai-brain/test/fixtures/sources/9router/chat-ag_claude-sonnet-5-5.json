@@ -1,0 +1,7 @@
+{
+  "modelId": "ag/claude-sonnet-5-5",
+  "status": 503,
+  "ok": false,
+  "cause": "UPSTREAM_UNAVAILABLE",
+  "body": "{\"error\":{\"message\":\"[antigravity/claude-sonnet-5-5] [404]: {\\n  \\\"error\\\": {\\n    \\\"code\\\": 404,\\n    \\\"message\\\": \\\"Requested entity was not found.\\\",\\n    \\\"status\\\": \\\"NOT_FOUND\\\"\\n  }\\n}\\n (reset after 2m)\"}}"
+}

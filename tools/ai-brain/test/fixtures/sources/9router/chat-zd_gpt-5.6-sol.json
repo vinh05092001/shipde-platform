@@ -1,7 +1,0 @@
-{
-  "modelId": "zd/gpt-5.6-sol",
-  "status": 451,
-  "ok": false,
-  "cause": "GEO_BLOCKED",
-  "body": "{\"error\":{\"message\":\"[451]: Access to OpenAi models is not available from this data center (HKG)\",\"type\":\"invalid_request_error\",\"code\":\"\"}}"
-}

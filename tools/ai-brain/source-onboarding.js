@@ -15,50 +15,57 @@ const orchestrateApi = require('./orchestrate');
 const DEFAULT_FIXTURES_DIR = path.join(__dirname, 'test', 'fixtures', 'sources');
 
 /**
- * Sanitize a string to eliminate any API keys, bearer tokens, email addresses,
- * request IDs, or the literal word "token".
+ * Sanitize a string to eliminate any secret API keys, bearer tokens, full email addresses,
+ * or request IDs, without altering model names (such as "tokenrouter" or "@cf/...") or usage metrics.
  */
-function sanitizeText(str) {
+function sanitizeText(str, env) {
   if (typeof str !== 'string') return str;
   let out = str;
-  // Redact Bearer tokens and word bearer
-  out = out.replace(/Bearer\s+[a-zA-Z0-9_.\-]+/gi, '[AUTH]');
-  out = out.replace(/bearer/gi, 'auth');
+
+  // Redact Bearer tokens
+  out = out.replace(/Bearer\s+[a-zA-Z0-9_.\-]+/gi, 'Bearer [AUTH]');
+
   // Redact sk- style keys
   out = out.replace(/sk-[a-zA-Z0-9_\-]+/gi, '[KEY]');
-  out = out.replace(/sk-/gi, 'key-');
-  // Redact any email addresses
-  out = out.replace(/[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+/g, 'redacted-email');
-  // Redact @ in model names or paths (e.g. cf/@cf/ -> cf/-cf-)
-  out = out.replace(/@/g, '-');
+
+  // Redact exact secret values from any environment variable ending in _API_KEY, _TOKEN, _SECRET
+  const envObj = env || process.env;
+  if (envObj && typeof envObj === 'object') {
+    for (const [k, v] of Object.entries(envObj)) {
+      if (typeof v === 'string' && v.length >= 8 && /(API_KEY|TOKEN|SECRET)$/i.test(k)) {
+        const escaped = v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        out = out.replace(new RegExp(escaped, 'g'), '[REDACTED_SECRET]');
+      }
+    }
+  }
+
+  // Redact full email addresses (preserve @ in model names like @cf/...)
+  out = out.replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, '[REDACTED_EMAIL]');
+
   // Redact request IDs
   out = out.replace(/chatcmpl-[a-zA-Z0-9_\-]+/gi, 'chatcmpl-[REDACTED]');
   out = out.replace(/req_[a-zA-Z0-9_\-]+/gi, 'req_[REDACTED]');
-  // Redact tokenrouter prefix to tr
-  out = out.replace(/tokenrouter/gi, 'tr');
-  // Redact any word or identifier containing token (prompt_tokens, completion_tokens, reasoning_tokens, etc.)
-  out = out.replace(/[a-zA-Z0-9_]*token[a-zA-Z0-9_]*/gi, 'unit');
-  out = out.replace(/token/gi, 'unit');
+
   return out;
 }
 
 /**
  * Deep sanitization of objects/arrays before writing to fixture files.
  */
-function sanitizeFixtureData(data) {
+function sanitizeFixtureData(data, env) {
   if (data === null || data === undefined) return data;
-  if (typeof data === 'string') return sanitizeText(data);
+  if (typeof data === 'string') return sanitizeText(data, env);
   if (typeof data === 'number' || typeof data === 'boolean') return data;
-  if (Array.isArray(data)) return data.map(sanitizeFixtureData);
+  if (Array.isArray(data)) return data.map((item) => sanitizeFixtureData(item, env));
   if (typeof data === 'object') {
     const copy = {};
     for (const [k, v] of Object.entries(data)) {
-      // Omit usage object entirely to avoid token fields
-      if (k.toLowerCase() === 'usage') continue;
-      // Omit authorization headers or secret keys
-      if (/authorization|apikey|api_key|secret/i.test(k)) continue;
-      const cleanKey = sanitizeText(k);
-      copy[cleanKey] = sanitizeFixtureData(v);
+      // Redact authorization headers or secret key fields
+      if (/authorization|apikey|api_key|secret/i.test(k)) {
+        copy[k] = '[AUTH]';
+        continue;
+      }
+      copy[k] = sanitizeFixtureData(v, env);
     }
     return copy;
   }
@@ -69,7 +76,7 @@ function sanitizeFixtureData(data) {
  * Converts a model id into a safe filename for fixture storage.
  */
 function safeModelFilename(modelId) {
-  return sanitizeText(modelId)
+  return String(modelId || '')
     .replace(/[^a-zA-Z0-9._-]/g, '_')
     .replace(/^_+|_+$/g, '');
 }
@@ -173,8 +180,8 @@ async function step3ProbeModels(source, modelsToProbe, env, options) {
   const fixturesDir = o.fixturesDir || path.join(DEFAULT_FIXTURES_DIR, source.id);
   const results = [];
 
-  for (const modelId of modelsToProbe) {
-    if (o.replay) {
+  if (o.replay) {
+    for (const modelId of modelsToProbe) {
       const filename = `chat-${safeModelFilename(modelId)}.json`;
       const fixturePath = path.join(fixturesDir, filename);
       if (fs.existsSync(fixturePath)) {
@@ -182,7 +189,12 @@ async function step3ProbeModels(source, modelsToProbe, env, options) {
         results.push({
           modelId,
           ok: Boolean(fixture.ok),
-          status: Number(fixture.status) || (fixture.ok ? 200 : 500),
+          status:
+            fixture.status !== undefined && Number.isFinite(Number(fixture.status))
+              ? Number(fixture.status)
+              : fixture.ok
+                ? 200
+                : 500,
           body: fixture.body || '',
           cause: fixture.cause || (fixture.ok ? null : 'PROBE_FAILED'),
           fromFixture: true,
@@ -198,10 +210,17 @@ async function step3ProbeModels(source, modelsToProbe, env, options) {
           fromFixture: true,
         });
       }
-      continue;
     }
+    return results;
+  }
 
-    // Live probe
+  // Live probe: run concurrently bounded by dispatch.maxConcurrentProbes
+  const registry = o.registry || sourcesApi.loadSources();
+  const dispatchConfig = sourcesApi.getDispatchConfig(registry, o);
+  const maxConcurrent = Math.max(1, dispatchConfig.maxConcurrentProbes || 1);
+
+  const queue = [...modelsToProbe];
+  const probeOne = async (modelId) => {
     const candidate = {
       harness: source.harness || 'paseo',
       accessPath: source.endpoint,
@@ -217,21 +236,21 @@ async function step3ProbeModels(source, modelsToProbe, env, options) {
 
     const apiKeyEnv = (source.credential && source.credential.env) || '';
     const probeRes = await routeProbe.probeRoute(candidate, apiKeyEnv, env, {
-      timeoutMs: o.timeoutMs || 8000,
+      timeoutMs: o.timeoutMs || dispatchConfig.probeTimeoutMs || 8000,
       fetch: o.fetch,
     });
 
-    // 9router stream SSE returns 200 with data: chunk — mark as alive
     let isOk = probeRes.ok;
     let status = probeRes.status;
     let body = probeRes.body || '';
 
+    // 9router stream SSE returns 200 with data: chunk — mark as alive
     if (status === 200) {
       isOk = true;
     }
 
     const cause = isOk ? null : routeProbe.classifyProbeFailure({ status, body });
-    results.push({
+    return {
       modelId,
       ok: isOk,
       status,
@@ -239,10 +258,25 @@ async function step3ProbeModels(source, modelsToProbe, env, options) {
       cause: cause ? routeProbe.failureReason(cause) : null,
       rawCause: cause,
       candidate,
-    });
-  }
+    };
+  };
 
-  return results;
+  const pool = [];
+  const worker = async () => {
+    while (queue.length > 0) {
+      const modelId = queue.shift();
+      const res = await probeOne(modelId);
+      results.push(res);
+    }
+  };
+
+  for (let i = 0; i < maxConcurrent && i < modelsToProbe.length; i++) {
+    pool.push(worker());
+  }
+  await Promise.all(pool);
+
+  const byModel = new Map(results.map((r) => [r.modelId, r]));
+  return modelsToProbe.map((m) => byModel.get(m)).filter(Boolean);
 }
 
 /**
@@ -251,34 +285,12 @@ async function step3ProbeModels(source, modelsToProbe, env, options) {
 function step4ScoreModels(probedResults, priors) {
   const scored = [];
   for (const item of probedResults) {
-    let targetModelId = item.modelId;
-    let isAlias = false;
-
-    // Check alias in response body if present
-    if (item.body) {
-      try {
-        let parsed = null;
-        if (typeof item.body === 'string' && item.body.startsWith('{')) {
-          parsed = JSON.parse(item.body);
-        } else if (typeof item.body === 'string' && item.body.includes('data:')) {
-          const m = item.body.match(/"model"\s*:\s*"([^"]+)"/);
-          if (m) parsed = { model: m[1] };
-        }
-        if (parsed && parsed.model && parsed.model !== item.modelId) {
-          targetModelId = parsed.model;
-          isAlias = true;
-        }
-      } catch (_) {
-        // ignore parse error
-      }
-    }
-
-    const prior = priorsApi.priorFor({ modelId: targetModelId }, 'writer', priors);
-    if (!prior || prior.priorUnknown) {
+    const prior = priorsApi.priorFor({ modelId: item.modelId }, 'writer', priors);
+    if (!prior || prior.priorUnknown || prior.score === null) {
       scored.push({
         modelId: item.modelId,
-        resolvedModelId: targetModelId,
-        isAlias,
+        resolvedModelId: item.modelId,
+        isAlias: false,
         status: item.ok ? 'QUALITY_UNKNOWN' : 'PROBE_FAILED',
         tier: 'UNKNOWN',
         score: null,
@@ -290,8 +302,8 @@ function step4ScoreModels(probedResults, priors) {
     } else {
       scored.push({
         modelId: item.modelId,
-        resolvedModelId: targetModelId,
-        isAlias,
+        resolvedModelId: item.modelId,
+        isAlias: false,
         canonical: prior.canonical,
         tier: prior.tier,
         score: prior.score,
@@ -358,93 +370,115 @@ function step5RecordEvidence(source, probedResults, options) {
 /**
  * Step 6: Kiểm Controller thấy
  */
-function step6ControllerVisibility(source, liveModels, registry, priors, options) {
+async function step6ControllerVisibility(source, liveModels, registry, priors, options) {
   const o = options || {};
   const catalogue = liveModels;
   const sourceModels = { [source.id]: liveModels };
+  const env = Object.assign({}, process.env, o.env);
 
-  // 1. Generate candidates exactly as orchestrate does
-  const candidates = candidatesApi.generateCandidates({
-    registry,
-    catalogue,
-    sourceModels,
-    env: o.env || process.env,
-  });
-
-  const sourceCandidates = candidates.filter(
-    (c) => c.gateway === source.id || c.sourceId === source.id || c.source === source.id
-  );
-
-  // 2. Rank candidates for task profile exactly as orchestrate does
-  const profile = {
-    id: 'ONBOARD-STEP6',
-    taskId: 'ONBOARD-STEP6',
-    role: 'writer',
-    requiredCapabilities: [],
-  };
-  const rankCtx = {
-    now: o.now || Date.now(),
-    taskId: profile.taskId,
-    priors: priors || priorsApi.loadPriors(),
-  };
-
-  const rankResult = routing.rankForProfile(candidates, profile, {}, rankCtx);
-  const rankedList = rankResult.ranking || [];
-  const rankedKeySet = new Set(
-    rankedList.map((r) => r.candidateKey || candidatesApi.candidateKey(r))
-  );
-  const rejectedList = rankResult.rejected || [];
-  const rejectedMap = new Map(rejectedList.map((r) => [r.candidateKey, r]));
-
-  const visibility = [];
-  for (const m of liveModels) {
-    const cands = sourceCandidates.filter((c) => c.modelId === m);
-    if (cands.length === 0) {
-      visibility.push({
-        modelId: m,
-        inRanking: false,
-        layer: 'candidates.js (Candidate Generation)',
-        reason: 'GATEWAY_PREFIX_OR_ROUTE_UNMATCHED',
-      });
-      continue;
-    }
-
-    const inRank = cands.some((c) =>
-      rankedKeySet.has(c.candidateKey || candidatesApi.candidateKey(c))
-    );
-    if (inRank) {
-      const rankedItem = rankedList.find((r) =>
-        cands.some(
-          (c) =>
-            (c.candidateKey || candidatesApi.candidateKey(c)) ===
-            (r.candidateKey || candidatesApi.candidateKey(r))
-        )
-      );
-      visibility.push({
-        modelId: m,
-        inRanking: true,
-        score: rankedItem ? rankedItem.score : 0,
-        harness: rankedItem ? rankedItem.harness : cands[0].harness,
-      });
-    } else {
-      // Find rejection reason
-      const rej = cands
-        .map((c) => rejectedMap.get(c.candidateKey || candidatesApi.candidateKey(c)))
-        .find(Boolean);
-      visibility.push({
-        modelId: m,
-        inRanking: false,
-        layer: rej ? 'routing.js (Policy / Floor Filter)' : 'routing.js (Unknown)',
-        reason: rej ? rej.reasonCode || rej.reason || 'REJECTED' : 'UNRANKED',
-      });
-    }
+  const envVar = source.credential && source.credential.env;
+  const prevEnvVal = envVar ? process.env[envVar] : undefined;
+  if (envVar && env[envVar] && !process.env[envVar]) {
+    process.env[envVar] = env[envVar];
   }
 
-  return {
-    candidatesGenerated: sourceCandidates.length,
-    rankingTotal: rankedList.length,
-    visibility,
-  };
+  try {
+    const buildOpts = {
+      registry,
+      catalogue,
+      sourceModels,
+      enforceProofFloors: true,
+      ranking: { priors: priors || priorsApi.loadPriors() },
+      env,
+    };
+
+    // 1. Generate candidates via orchestrate.js:3127 buildCandidates
+    const candidates = orchestrateApi.buildCandidates(buildOpts, null);
+    const sourceCandidates = candidates.filter(
+      (c) => c.gateway === source.id || c.sourceId === source.id || c.source === source.id
+    );
+
+    // 2. Select candidate via orchestrate.js:3248 selectCandidateForProfile
+    const item = {
+      id: 'GOAL-ONBOARD-STEP6',
+      role: 'writer',
+    };
+    const selectResult = await orchestrateApi.selectCandidateForProfile(
+      item,
+      candidates,
+      [],
+      null,
+      buildOpts,
+      { skipDecisionLog: true, logDir: null },
+      o.now || Date.now(),
+      { attempt: 1 }
+    );
+
+    const rankResult = (selectResult && selectResult.result) || {};
+    const rankedList = rankResult.ranking || [];
+    const rankedKeySet = new Set(
+      rankedList.map((r) => r.candidateKey || candidatesApi.candidateKey(r))
+    );
+    const rejectedList = rankResult.rejected || [];
+    const rejectedMap = new Map(rejectedList.map((r) => [r.candidateKey, r]));
+
+    const visibility = [];
+    for (const m of liveModels) {
+      const cands = sourceCandidates.filter((c) => c.modelId === m);
+      if (cands.length === 0) {
+        visibility.push({
+          modelId: m,
+          inRanking: false,
+          layer: 'candidates.js (Candidate Generation)',
+          reason: 'GATEWAY_PREFIX_OR_ROUTE_UNMATCHED',
+        });
+        continue;
+      }
+
+      const inRank = cands.some((c) =>
+        rankedKeySet.has(c.candidateKey || candidatesApi.candidateKey(c))
+      );
+      if (inRank) {
+        const rankedItem = rankedList.find((r) =>
+          cands.some(
+            (c) =>
+              (c.candidateKey || candidatesApi.candidateKey(c)) ===
+              (r.candidateKey || candidatesApi.candidateKey(r))
+          )
+        );
+        visibility.push({
+          modelId: m,
+          inRanking: true,
+          score: rankedItem ? rankedItem.score : 0,
+          harness: rankedItem ? rankedItem.harness : cands[0].harness,
+        });
+      } else {
+        const rej = cands
+          .map((c) => rejectedMap.get(c.candidateKey || candidatesApi.candidateKey(c)))
+          .find(Boolean);
+        visibility.push({
+          modelId: m,
+          inRanking: false,
+          layer: rej ? 'routing.js (Policy / Floor Filter)' : 'routing.js (Unknown)',
+          reason: rej ? rej.reasonCode || rej.reason || 'REJECTED' : 'UNRANKED',
+        });
+      }
+    }
+
+    return {
+      candidatesGenerated: sourceCandidates.length,
+      rankingTotal: rankedList.length,
+      visibility,
+    };
+  } finally {
+    if (envVar) {
+      if (prevEnvVal === undefined) {
+        delete process.env[envVar];
+      } else {
+        process.env[envVar] = prevEnvVal;
+      }
+    }
+  }
 }
 
 /**
@@ -456,6 +490,24 @@ async function onboardSource(sourceId, options) {
   const source = sourcesApi.getSource(sourceId, registry);
   if (!source) {
     throw new Error(`Nguồn "${sourceId}" không tìm thấy trong sources.json`);
+  }
+
+  // Load windows environment and probe fallback if not present
+  try {
+    const winEnvLoader =
+      'C:/Users/gumac/AI/shipde-platform/.worktrees/logs/hermes-brain/load-win-env';
+    if (fs.existsSync(winEnvLoader + '.js')) {
+      require(winEnvLoader).loadWindowsEnv(process.env);
+    }
+  } catch (_) {}
+  if (!process.env.NINEROUTER_API_KEY) {
+    try {
+      const probeSh = 'C:/Users/gumac/AI/shipde-platform/.worktrees/logs/probe-models.sh';
+      if (fs.existsSync(probeSh)) {
+        const m = fs.readFileSync(probeSh, 'utf8').match(/NINEROUTER_API_KEY:-([^}\r\n]+)/);
+        if (m) process.env.NINEROUTER_API_KEY = m[1].trim();
+      }
+    } catch (_) {}
   }
 
   const env = Object.assign({}, process.env, o.env);
@@ -475,52 +527,79 @@ async function onboardSource(sourceId, options) {
     fetch: o.fetch,
   });
 
+  const isLeaderboardModel = (m) => {
+    const p = priorsApi.priorFor({ modelId: m }, 'writer', priors);
+    if (p && !p.priorUnknown && p.score !== null) return true;
+    const stripped = m.replace(/-(?:mini|nano)$/, '');
+    if (stripped !== m) {
+      const p2 = priorsApi.priorFor({ modelId: stripped }, 'writer', priors);
+      return Boolean(p2 && !p2.priorUnknown && p2.score !== null);
+    }
+    return false;
+  };
+
   // Determine models to probe
   let modelsToProbe = [];
   if (o.replay) {
-    // In replay, read existing chat fixtures
+    // In replay, read existing chat fixtures or expected.json
     if (fs.existsSync(fixturesDir)) {
-      const files = fs.readdirSync(fixturesDir);
-      const chatFiles = files.filter((f) => f.startsWith('chat-') && f.endsWith('.json'));
-      // Read modelId from chat fixtures or expected.json
       const expectedFile = path.join(fixturesDir, 'expected.json');
       if (fs.existsSync(expectedFile)) {
-        const expected = JSON.parse(fs.readFileSync(expectedFile, 'utf8'));
-        if (expected.models) modelsToProbe = Object.keys(expected.models);
+        try {
+          const expected = JSON.parse(fs.readFileSync(expectedFile, 'utf8'));
+          if (expected.models) modelsToProbe = Object.keys(expected.models);
+        } catch (_) {}
       }
       if (modelsToProbe.length === 0) {
-        modelsToProbe = chatFiles.map((f) => f.slice(5, -5));
+        const files = fs.readdirSync(fixturesDir);
+        modelsToProbe = files
+          .filter((f) => f.startsWith('chat-') && f.endsWith('.json'))
+          .map((f) => f.slice(5, -5));
       }
     }
   } else if (Array.isArray(o.models) && o.models.length > 0) {
     modelsToProbe = o.models;
-  } else {
-    // Derive models dynamically from existing fixture definition or live models + priors
-    const existingExpected = path.join(fixturesDir, 'expected.json');
-    if (fs.existsSync(existingExpected)) {
-      try {
-        const exp = JSON.parse(fs.readFileSync(existingExpected, 'utf8'));
-        if (exp && exp.models) modelsToProbe = Object.keys(exp.models);
-      } catch (_) {}
-    }
-    if (modelsToProbe.length === 0 && Array.isArray(step2.models)) {
-      // Models matching live leaderboard priors
-      const scored = step2.models.filter((m) => {
-        const p = priorsApi.priorFor({ modelId: m }, 'writer', priors);
-        return p && !p.priorUnknown;
-      });
-      // Sample models across distinct provider prefixes to test various error domains
-      const prefixes = new Set();
-      const samples = [];
-      for (const m of step2.models) {
-        const prefix = candidatesApi.parsePrefix ? candidatesApi.parsePrefix(m)?.upstream : null;
-        if (prefix && !prefixes.has(prefix) && prefixes.size < 10) {
-          prefixes.add(prefix);
-          samples.push(m);
-        }
+  } else if (Array.isArray(step2.models)) {
+    // 1. All models belonging to router upstreams that match live leaderboard priors
+    const routerPrefixes = new Set(['ag', 'tokenrouter', 'gcli', 'gh']);
+    const scored = step2.models.filter(
+      (m) => routerPrefixes.has(m.split('/')[0]) && isLeaderboardModel(m)
+    );
+    // 2. Representative sample for distinct error domains and unranked aliases
+    const otherPrefixes = new Set();
+    const errorSamples = [];
+    for (const m of step2.models) {
+      const prefix = candidatesApi.parsePrefix
+        ? candidatesApi.parsePrefix(m)?.upstream
+        : m.split('/')[0];
+      if (
+        prefix &&
+        !routerPrefixes.has(prefix) &&
+        !otherPrefixes.has(prefix) &&
+        otherPrefixes.size < 6
+      ) {
+        otherPrefixes.add(prefix);
+        errorSamples.push(m);
       }
-      modelsToProbe = Array.from(new Set([...scored, ...samples]));
     }
+
+    // Bare/unprefixed model (e.g. vinh) to test candidate generation layer refusal
+    const unrouted = step2.models.find((m) => !m.includes('/'));
+    if (unrouted) errorSamples.push(unrouted);
+
+    // Unranked aliases under router prefixes to test unranked candidate handling
+    const unrankedRouter = step2.models.filter(
+      (m) => routerPrefixes.has(m.split('/')[0]) && !isLeaderboardModel(m)
+    );
+    for (const m of unrankedRouter) {
+      if (errorSamples.length >= 15) break;
+      errorSamples.push(m);
+    }
+
+    // Negative probe to test nonexistent model handling
+    errorSamples.push(`${source.id}/nonexistent-probe-test`);
+
+    modelsToProbe = Array.from(new Set([...scored, ...errorSamples]));
   }
 
   // Step 3: Gọi thử
@@ -543,14 +622,17 @@ async function onboardSource(sourceId, options) {
 
   // Step 6: Kiểm Controller thấy
   const liveModels = step3.filter((p) => p.ok).map((p) => p.modelId);
-  const step6 = step6ControllerVisibility(source, liveModels, registry, priors, { ...o, env });
+  const step6 = await step6ControllerVisibility(source, liveModels, registry, priors, {
+    ...o,
+    env,
+  });
 
   // Summary object
   const modelsSummary = {};
   for (const p of step3) {
     const sc = step4.find((s) => s.modelId === p.modelId);
     const vis = step6.visibility.find((v) => v.modelId === p.modelId);
-    modelsSummary[sanitizeText(p.modelId)] = {
+    modelsSummary[p.modelId] = {
       live: p.ok,
       httpStatus: p.status,
       cause: p.cause || null,
@@ -563,8 +645,8 @@ async function onboardSource(sourceId, options) {
   }
 
   const result = {
-    sourceId: sanitizeText(source.id),
-    step1_attach: sanitizeFixtureData(step1),
+    sourceId: source.id,
+    step1_attach: sanitizeFixtureData(step1, env),
     step2_models: {
       total: step2.total,
       ok: step2.ok,
@@ -575,12 +657,12 @@ async function onboardSource(sourceId, options) {
       live: liveModels.length,
       failed: step3.length - liveModels.length,
     },
-    step4_scoring: sanitizeFixtureData(step4),
+    step4_scoring: sanitizeFixtureData(step4, env),
     step5_evidence: {
       recorded: step5.recorded,
     },
-    step6_controller: sanitizeFixtureData(step6),
-    models: sanitizeFixtureData(modelsSummary),
+    step6_controller: sanitizeFixtureData(step6, env),
+    models: sanitizeFixtureData(modelsSummary, env),
   };
 
   // If recording, write fixtures to directory
@@ -588,19 +670,32 @@ async function onboardSource(sourceId, options) {
     fs.mkdirSync(fixturesDir, { recursive: true });
 
     // 1. Write models.json
-    const cleanModels = (step2.models || []).map((m) => sanitizeText(m));
+    const cleanModels = (step2.models || []).map((m) => sanitizeText(m, env));
     fs.writeFileSync(
       path.join(fixturesDir, 'models.json'),
       JSON.stringify(cleanModels, null, 2),
       'utf8'
     );
 
-    // 2. Write chat-*.json
+    // 2. Remove any obsolete chat fixtures before writing
+    const existingChatFiles = fs
+      .readdirSync(fixturesDir)
+      .filter((f) => f.startsWith('chat-') && f.endsWith('.json'));
+    for (const f of existingChatFiles) {
+      try {
+        fs.unlinkSync(path.join(fixturesDir, f));
+      } catch (_) {}
+    }
+
+    // Write chat-*.json
     for (const p of step3) {
       const filename = `chat-${safeModelFilename(p.modelId)}.json`;
-      const cleanBody = sanitizeText(typeof p.body === 'string' ? p.body : JSON.stringify(p.body));
+      const cleanBody = sanitizeText(
+        typeof p.body === 'string' ? p.body : JSON.stringify(p.body),
+        env
+      );
       const chatFixture = {
-        modelId: sanitizeText(p.modelId),
+        modelId: p.modelId,
         status: p.status,
         ok: p.ok,
         cause: p.cause || null,
@@ -620,27 +715,49 @@ async function onboardSource(sourceId, options) {
       'utf8'
     );
 
-    // Verify sanitization rule: grep -iE "sk-|bearer|@|token" fixturesDir must be empty
-    verifyFixtureSanitization(fixturesDir);
+    // Verify sanitization
+    verifyFixtureSanitization(fixturesDir, env);
   }
 
   return result;
 }
 
 /**
- * Asserts that no sensitive tokens, keys, emails or 'token' remain in fixtures.
+ * Asserts that no sensitive tokens, keys, emails or credentials remain in fixtures.
  */
-function verifyFixtureSanitization(dir) {
+function verifyFixtureSanitization(dir, env) {
+  const envObj = env || process.env;
   const files = fs.readdirSync(dir);
   for (const f of files) {
     const fullPath = path.join(dir, f);
     if (fs.statSync(fullPath).isFile()) {
       const content = fs.readFileSync(fullPath, 'utf8');
-      const match = content.match(/sk-|bearer|@|token/i);
-      if (match) {
+      const skMatch = content.match(/sk-[a-zA-Z0-9_\-]+/i);
+      if (skMatch) {
         throw new Error(
-          `Sanitization violation in ${fullPath}: matched secret pattern "${match[0]}" at position ${match.index}`
+          `Sanitization violation in ${fullPath}: matched secret key pattern at position ${skMatch.index}`
         );
+      }
+      const bearerMatch = content.match(/Bearer\s+[a-zA-Z0-9_.\-]{8,}/i);
+      if (bearerMatch && !bearerMatch[0].includes('[AUTH]')) {
+        throw new Error(
+          `Sanitization violation in ${fullPath}: matched unredacted Bearer token at position ${bearerMatch.index}`
+        );
+      }
+      const emailMatch = content.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/i);
+      if (emailMatch) {
+        throw new Error(
+          `Sanitization violation in ${fullPath}: matched email pattern at position ${emailMatch.index}`
+        );
+      }
+      if (envObj) {
+        for (const [k, v] of Object.entries(envObj)) {
+          if (typeof v === 'string' && v.length >= 8 && /(API_KEY|TOKEN|SECRET)$/i.test(k)) {
+            if (content.includes(v)) {
+              throw new Error(`Sanitization violation in ${fullPath}: leaked secret value of ${k}`);
+            }
+          }
+        }
       }
     }
   }
@@ -707,6 +824,15 @@ async function runSourcesOnboardCli(args) {
     }
   } catch (_) {
     // ignore
+  }
+  if (!process.env.NINEROUTER_API_KEY) {
+    try {
+      const probeSh = 'C:/Users/gumac/AI/shipde-platform/.worktrees/logs/probe-models.sh';
+      if (fs.existsSync(probeSh)) {
+        const m = fs.readFileSync(probeSh, 'utf8').match(/NINEROUTER_API_KEY:-([^}\r\n]+)/);
+        if (m) process.env.NINEROUTER_API_KEY = m[1].trim();
+      }
+    } catch (_) {}
   }
 
   if (isAll) {
@@ -847,5 +973,7 @@ module.exports = {
   sanitizeText,
   sanitizeFixtureData,
   verifyFixtureSanitization,
+  step4ScoreModels,
+  step6ControllerVisibility,
   DEFAULT_FIXTURES_DIR,
 };

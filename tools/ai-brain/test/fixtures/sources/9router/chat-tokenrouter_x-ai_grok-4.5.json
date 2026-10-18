@@ -1,0 +1,7 @@
+{
+  "modelId": "tokenrouter/x-ai/grok-4.5",
+  "status": 503,
+  "ok": false,
+  "cause": "UPSTREAM_CREDIT_OR_QUOTA",
+  "body": "{\"error\":{\"message\":\"[tokenrouter/x-ai/grok-4.5] [403]: {\\\"error\\\":{\\\"message\\\":\\\"This model cannot use part of your gift balance, remaining eligible quota: ＄0.000000, required pre-deduction amount: ＄0.021318 (request id: 202610181511298342024959ZAFOmMg)\\\",\\\"type\\\":\\\"api_error\\\",\\\"param\\\":\\\"\\\",\\\"code\\\":\\\"insufficient_user_quota\\\"},\\\"id\\\":276749,\\\"message\\\":\\\"This model cannot use part of your gift balance\\\",\\\"org_id\\\":\\\"\\\",\\\"role\\\":1,\\\"suffer\\\":\\\"money\\\"} (reset after 28s)\"}}"
+}

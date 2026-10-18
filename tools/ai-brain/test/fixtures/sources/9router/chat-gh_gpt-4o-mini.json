@@ -1,7 +1,0 @@
-{
-  "modelId": "gh/gpt-4o-mini",
-  "status": 200,
-  "ok": true,
-  "cause": null,
-  "body": "{\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"content_filter_results\":{\"hate\":{\"filtered\":false,\"severity\":\"safe\"},\"self_harm\":{\"filtered\":false,\"severity\":\"safe\"},\"sexual\":{\"filtered\":false,\"severity\":\"safe\"},\"violence\":{\"filtered\":false,\"severity\":\"safe\"}},\"message\":{\"content\":\"OK\",\"padding\":\"abcdefghijklmnopq\",\"role\":\"assistant\"}}],\"id\":\"chatcmpl-[REDACTED]\",\"usage\":{\"unit\":1,\"unit\":{\"unit\":0,\"unit\":0},\"unit\":2092,\"unit\":{\"unit\":2048},\"unit\":2093},\"model\":\"gpt-4o-mini-2024-07-18\",\"prompt_filter_results\":[{\"content_filter_results\":{\"hate\":{\"filtered\":false,\"severity\":\"safe\"},\"self_harm\":{\"filtered\":false,\"severity\":\"safe\"},\"sexual\":{\"filtered\":false,\"severity\":\"safe\"},\"violence\":{\"filtered\":false,\"severity\":\"safe\"}},\"prompt_index\":0}],\"service_tier\":\"default\",\"system_fingerprint\":\"fp_76a3e34f09\",\"copilot_usage\":{\"unit\":[{\"batch_size\":1000000,\"cost_per_batch\":0,\"model\":\"gpt-4o-mini\",\"unit\":44,\"unit\":\"input\"},{\"batch_size\":1000000,\"cost_per_batch\":0,\"model\":\"gpt-4o-mini\",\"unit\":2048,\"unit\":\"cache_read\"},{\"batch_size\":1000000,\"cost_per_batch\":0,\"model\":\"gpt-4o-mini\",\"unit\":0,\"unit\":\"cache_write\"},{\"batch_size\":1000000,\"cost_per_batch\":0,\"model\":\"gpt-4o-mini\",\"unit\":1,\"unit\":\"output\"}],\"total_nano_aiu\":0}}\ndata: [DONE]\n\n"
-}

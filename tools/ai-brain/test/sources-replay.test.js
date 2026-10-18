@@ -24,7 +24,7 @@ describe('TASK-AI-142: Sources replay regression suite', () => {
       // Must not throw Sanitization violation
       assert.doesNotThrow(
         () => verifyFixtureSanitization(dirPath),
-        `Fixture directory ${dirName} must be free of sk-, bearer, @, or token substrings`
+        `Fixture directory ${dirName} must be free of leaked API keys, tokens, or emails`
       );
     }
   });
