@@ -161,20 +161,28 @@ function hasPriorWorkPass(candidate, combinations) {
   if (!Array.isArray(combinations)) return false;
   return combinations.some((combo) => {
     if (!combo) return false;
-    const matchHarness = combo.harness === candidate.harness;
+    const matchHarness =
+      combo.harness === candidate.harness ||
+      (candidate.harness === 'opencode-direct' && combo.harness === 'opencode') ||
+      (candidate.harness === 'direct-http' && ['opencode', 'paseo'].includes(combo.harness));
     const matchAccount =
       !combo.accountId || combo.accountId === '*' || combo.accountId === candidate.accountId;
     const matchModel =
       combo.model === candidate.modelId ||
       combo.modelId === candidate.modelId ||
-      (candidate.modelId && String(candidate.modelId).endsWith('/' + combo.model));
+      (candidate.modelId && String(candidate.modelId).endsWith('/' + combo.model)) ||
+      (combo.model &&
+        candidate.modelId &&
+        String(candidate.modelId).split('/').pop() === String(combo.model).split('/').pop());
     if (matchHarness && matchAccount && matchModel) {
       const evs = Array.isArray(combo.evidence) ? combo.evidence : [];
       return evs.some(
         (e) =>
           e &&
           (e.proofLevel === 'WORK_ITEM_PASS' ||
-            (e.status === 'passed' && (e.level === 3 || e.level === 2)))
+            (e.status === 'passed' &&
+              (e.level === 3 || e.level === 2 || e.level === 1 || e.level === 'API')) ||
+            (e.proofLevel === 'API_PASS' && !e.cause))
       );
     }
     return false;
@@ -201,15 +209,19 @@ function orderCandidatesForProbe(candidates, profile, options) {
     const probeOrder = require('./probe-order');
     const isLive =
       record?.status === 'AVAILABLE' ||
-      (store &&
-        typeof probeOrder.recentRouteSuccess === 'function' &&
-        probeOrder.recentRouteSuccess(c, store, { registry, now: o.now }));
+      (typeof probeOrder.recentRouteSuccess === 'function' &&
+        probeOrder.recentRouteSuccess(c, store || { paths: {} }, {
+          registry,
+          evidenceData: data,
+          now: o.now,
+        }));
     if (isLive) return 1;
-    if (c.harness === 'codex') return 2;
+    if (c.harness === 'opencode-direct') return 2;
+    if (c.harness === 'direct-http') return 3;
+    if (c.harness === 'codex') return 4;
     if (c.harness === 'agy-pool') {
-      return sourcesApi.isAgyPoolWriterEnabled(registry, o) ? 2 : 50;
+      return sourcesApi.isAgyPoolWriterEnabled(registry, o) ? 5 : 50;
     }
-    if (c.harness === 'opencode-direct') return 3;
     return 10;
   };
 
@@ -471,4 +483,9 @@ async function probeCapabilities(candidates, profile, options = {}) {
   return candidates;
 }
 
-module.exports = { PROBE_BUDGET_MS, probeCapabilities, orderCandidatesForProbe };
+module.exports = {
+  PROBE_BUDGET_MS,
+  probeCapabilities,
+  orderCandidatesForProbe,
+  hasPriorWorkPass,
+};

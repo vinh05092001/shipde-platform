@@ -87,6 +87,38 @@ const PART_PATTERN = /^(\d{4}-\d{2}-\d{2})(?:\.(\d+))?\.jsonl$/;
 const identity = (c) =>
   typeof c === 'string' ? c : c && (c.candidateKey || c.offeringId || c.key);
 
+function sampleRepresentative(list, limit = CANDIDATE_LIMIT) {
+  if (!Array.isArray(list) || list.length <= limit) return (list || []).slice(0, limit);
+  const picked = [];
+  const seenHarnessReason = new Set();
+  const harnessOf = (row) =>
+    (row.candidateKey && row.candidateKey.split('::')[0]) || row.harness || 'unknown';
+  const reasonOf = (row) => row.reasonCode || row.reason || 'UNKNOWN';
+
+  // Pass 1: Ensure distinct (harness, reason) combinations have representation
+  for (const row of list) {
+    if (picked.length >= limit) break;
+    const hr = harnessOf(row) + '::' + reasonOf(row);
+    if (!seenHarnessReason.has(hr)) {
+      seenHarnessReason.add(hr);
+      picked.push(row);
+    }
+  }
+
+  // Pass 2: Fill remaining slots up to limit in original order
+  if (picked.length < limit) {
+    const pickedSet = new Set(picked);
+    for (const row of list) {
+      if (picked.length >= limit) break;
+      if (!pickedSet.has(row)) {
+        pickedSet.add(row);
+        picked.push(row);
+      }
+    }
+  }
+  return picked;
+}
+
 function capDecision(entry) {
   const out = { ...entry };
   const chosen = identity(entry.chosen) || entry.chosenKey || entry.selected;
@@ -127,7 +159,7 @@ function capDecision(entry) {
       }
       out[field + 'ByReasonCode'] = counts;
     }
-    out[field] = entry[field].slice(0, CANDIDATE_LIMIT);
+    out[field] = sampleRepresentative(entry[field], CANDIDATE_LIMIT);
   }
   return out;
 }

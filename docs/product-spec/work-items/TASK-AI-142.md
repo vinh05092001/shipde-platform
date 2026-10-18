@@ -248,6 +248,10 @@ Decision log entries link `goalId -> workItemId -> candidateKey -> session -> co
 - Part H2 Hermes session selection, custom config binding, and `shipde-controller` skill file are delivered in Part H2.
 - Live acceptance across chat and controller runs in Part H3 following merge of H1 and H2.
 
+### H3 live: live route prioritization, fast HTTP probe priority, and non-starving decision log representation (2026-10-18)
+
+Operator decision 2026-10-18 (Trial 14 follow-up): trial 14 ranked only 2 candidates (both agy-pool) because slow CLI/pool probes preceded fast HTTP probes, exhausting the 180s probe budget and leaving all other candidates unverified, and decision log truncation sliced away representative candidates from isolated lanes and general rejections. `orderCandidatesForProbe` now prioritizes live available routes (via routeHealth or recentRouteSuccess across evidence combinations) and fast direct HTTP routes (`opencode-direct`, `direct-http`) before slow CLI and pool workers (`codex`, `agy-pool`), preventing probe budget starvation. `probe-order.js` preserves representative entries across all isolated harnesses (`codex`, `agy-pool`, `opencode-direct`) in `isolatedLaneRejected`, and `decisions.js` samples diverse harness and reason entries up to `CANDIDATE_LIMIT` so no source group is silently dropped from the decision log.
+
 ### H3 live: writers are schema-checked after the run, not before selection (2026-10-18)
 
 Operator decision 2026-10-18: trials 10-13 of goal G-F622511E refused every agy-pool and Codex writer because the pre-selection jsonSchema proof (a full CLI launch) timed out or ran out of budget. The writer roles (author.foundation, author.lowrisk) no longer require jsonSchema before selection; the writer result is still validated after the run (WRITER_RESULT_INVALID_JSON), and the host gate and exact-SHA review still gate the commit. Planner and reviewer roles keep the requirement.

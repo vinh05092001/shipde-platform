@@ -48,6 +48,38 @@ function recentRouteSuccess(candidate, store, options) {
     const directAge = (o.now ?? Date.now()) - Date.parse(directRecord.lastCheckedAt);
     if (directAge >= 0 && directAge <= 24 * 3600000) return true;
   }
+  const evData =
+    o.evidenceData || (o.evidenceDir ? require('./evidence').loadEvidence(o.evidenceDir) : null);
+  if (evData && Array.isArray(evData.combinations)) {
+    const hasEv = evData.combinations.some((combo) => {
+      if (!combo) return false;
+      const matchGateway =
+        !candidate.gateway ||
+        !combo.gateway ||
+        candidate.gateway === combo.gateway ||
+        candidate.sourceId === combo.gateway;
+      const matchModel =
+        combo.model === candidate.modelId ||
+        combo.modelId === candidate.modelId ||
+        (candidate.modelId && String(candidate.modelId).endsWith('/' + combo.model)) ||
+        (combo.model &&
+          candidate.modelId &&
+          String(candidate.modelId).split('/').pop() === String(combo.model).split('/').pop());
+      if (matchGateway && matchModel) {
+        const evs = Array.isArray(combo.evidence) ? combo.evidence : [];
+        return evs.some(
+          (e) =>
+            e &&
+            (e.proofLevel === 'WORK_ITEM_PASS' ||
+              (e.status === 'passed' &&
+                (e.level === 3 || e.level === 2 || e.level === 1 || e.level === 'API')) ||
+              (e.proofLevel === 'API_PASS' && !e.cause))
+        );
+      }
+      return false;
+    });
+    if (hasEv) return true;
+  }
   return false;
 }
 
@@ -64,7 +96,16 @@ function preferKnownGood(result, candidates, options) {
   const byKey = new Map(candidates.map((c) => [candidateKey(c), c]));
   result.knownGoodRejected = (result.rejected || []).filter((row) => {
     const c = byKey.get(row.candidateKey);
-    return c && recentRouteSuccess(c, store, { ...o, now });
+    return (
+      c &&
+      (recentRouteSuccess(c, store, { ...o, now }) ||
+        (require('./capability-probe').hasPriorWorkPass &&
+          require('./capability-probe').hasPriorWorkPass(
+            c,
+            (o.evidenceData && o.evidenceData.combinations) ||
+              (o.evidenceDir && require('./evidence').loadEvidence(o.evidenceDir)?.combinations)
+          )))
+    );
   });
   const harnessOf = (row) => {
     const c = byKey.get(row.candidateKey) || row;
@@ -74,16 +115,37 @@ function preferKnownGood(result, candidates, options) {
     const h = harnessOf(row);
     return ['agy-pool', 'codex', 'opencode-direct'].includes(h);
   });
-  result.isolatedLaneRejected.sort((a, b) => {
-    const order = (row) => {
-      const h = harnessOf(row);
-      if (h === 'codex') return 1;
-      if (h === 'agy-pool') return 2;
-      if (row.reason && row.reason !== 'WRITER_SCHEMA_NOT_VERIFIED_BUDGET') return 3;
-      return 4;
-    };
-    return order(a) - order(b);
-  });
+  const codex = [];
+  const agyPool = [];
+  const opencodeDirect = [];
+  for (const row of result.isolatedLaneRejected) {
+    const h = harnessOf(row);
+    if (h === 'codex') codex.push(row);
+    else if (h === 'agy-pool') agyPool.push(row);
+    else if (h === 'opencode-direct') opencodeDirect.push(row);
+  }
+  const reasonScore = (row) =>
+    row.reason && row.reason !== 'WRITER_SCHEMA_NOT_VERIFIED_BUDGET' ? 0 : 1;
+  codex.sort((a, b) => reasonScore(a) - reasonScore(b));
+  agyPool.sort((a, b) => reasonScore(a) - reasonScore(b));
+  opencodeDirect.sort((a, b) => reasonScore(a) - reasonScore(b));
+
+  // Guarantee representative slots in top 10 for all 3 isolated harnesses:
+  // Codex first (priority launcher lane), agy-pool next, followed by opencode-direct.
+  const top = [];
+  if (codex.length > 0) top.push(...codex.slice(0, 2));
+  if (agyPool.length > 0) top.push(...agyPool.slice(0, 4));
+  if (opencodeDirect.length > 0) top.push(...opencodeDirect.slice(0, 4));
+
+  const seen = new Set(top);
+  const remaining = [];
+  for (const row of [...codex, ...agyPool, ...opencodeDirect]) {
+    if (!seen.has(row)) {
+      seen.add(row);
+      remaining.push(row);
+    }
+  }
+  result.isolatedLaneRejected = [...top, ...remaining];
   if (!result.chosen || !result.ranking?.length) return result;
   const sourcesApi = require('./sources');
   const priority = (row) => {
