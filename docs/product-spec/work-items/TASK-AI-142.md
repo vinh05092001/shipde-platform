@@ -248,6 +248,18 @@ Decision log entries link `goalId -> workItemId -> candidateKey -> session -> co
 - Part H2 Hermes session selection, custom config binding, and `shipde-controller` skill file are delivered in Part H2.
 - Live acceptance across chat and controller runs in Part H3 following merge of H1 and H2.
 
+### H3 live: exact route evidence and measured probe ordering (2026-10-18)
+
+Repair of the `2b783b56` review: one shared `route-evidence.js` matcher binds work evidence to the full candidate identity (transport, path, gateway, upstream, account, quota scope and full model identifier). Missing gateway/account data and matching model suffixes cannot borrow another route's proof. Freshness reads `dispatch.routeEvidenceMaxAgeMs` (preserving the existing 24-hour window). API/level-1 success may inform route availability; only `WORK_ITEM_PASS` or passed level 2/3 counts as completed work. The agy writer authorization gate remains unchanged.
+
+Probe order uses exact work/availability observations, then measured `elapsedMs` from route-health or evidence; unknown cost uses the existing dispatch `probeTimeoutMs`. Harness names receive no numeric priority. Rejection diagnostics share `sampleRepresentative` across every harness/reason, retaining the existing overall decision-log bound without named lane quotas. Dispatch dry-run and isolated goal ranking apply the same ordering.
+
+Offline regression includes a checked-in, explicitly bounded sample from trial 14's selected decision (two ranked identities and ten recorded rejection identities), with no credentials, launch metadata or machine paths. The integration drives both `dispatchCommand --dry-run` and `runOrchestration` with fixture-only capability results and a fake writer launcher. It compares the generated, pre/post capability and pre-ranking candidate sets, then verifies the selected identity reaches the launcher. Sample counts: 12 generated, 12 at capability/ranking gates, 2 ranked and 10 rejected; these are fixture counts, not a claim about the uncapped live inventory. Tests never read the original snapshot or the host account registry.
+
+### H3 live: live route prioritization, fast HTTP probe priority, and non-starving decision log representation (2026-10-18)
+
+Historical proposal in rejected SHA `2b783b56`, superseded by the exact-identity repair above: the original change introduced `sampleRepresentative`, but also used harness-name priorities and named lane quotas, and let API evidence satisfy work proof. Those parts failed review and are removed by the repair. The generic representative sampling remains.
+
 ### H3 live: scheduled resume selects an open goal and respects live owners (2026-10-18)
 
 `GoalResume` registration and `goal-resume.ps1` accept an optional goal ID.
@@ -1128,3 +1140,26 @@ Aggregator routers like 9Router require model IDs to carry an upstream provider 
      - `tools/ai-brain/test/sources-replay.test.js` exercises deterministic offline replay across all source fixtures with zero network calls, verifying deep equality against `expected.json`.
   6. Defect 5 resolution:
      - Fixed tests in `tools/ai-brain/test/task-ai-142-probe-config.test.js` to isolate `routeHealthFile` in temporary directories, preventing mutation of the production store `tools/ai-brain/data/model-route-health.json`. Covered by `tools/ai-brain/test/task-ai-142-route-health-isolation.test.js`.
+
+### H3 live: opencode writer path (2026-10-18)
+
+- Investigation and repair of isolated OpenCode writer execution (`opencode-direct` adapter):
+  1. Root cause analysis of provider routing and stream parsing defects:
+     - Model `ninerouter/tokenrouter/openai/gpt-5.6-sol`: In 9Router/upstream, returned `Content-Type: text/event-stream` with a raw non-SSE JSON payload lacking `data: ` line prefixes. OpenCode's SSE parser received 0 stream chunks, exiting with code 0 and empty text (`> build · ...` only).
+     - Model `ninerouter/tokenrouter/qwen/qwen3.8-max`: Non-stream fallback from 9Router appended `data: [DONE]` directly to JSON body without delimiter, breaking standard JSON parsers with `UnknownError: Unexpected server error`. In OpenCode configuration, `tokenrouter/qwen/qwen3.8-max` was missing from declared `models` map.
+     - Model `explabs/muse-spark-1.3`: The direct provider `explabs` had 0 models declared in `opencode.json` (`models: {}`), causing OpenCode to fail to route or resolve capabilities.
+     - Permission boundary: In unattended execution, OpenCode auto-denied `external_directory` access for files outside the worker root (such as Controller report and usage logs), causing premature termination.
+     - Empty response failure classification: An exit code 0 producing no content or tool calls was not flagged by the harness.
+  2. Controller repairs in `isolation-launcher.js`, `harness.js`, and `executor.js`:
+     - Dynamic `opencode.json` generation in `tools/ai-brain/isolation-launcher.js`:
+       - Populated `models` map with wire ID, relative model ID, output limits (`limit.output`), and context window (`limit.context`).
+       - Propagated source options (`options`, `headers`, `timeout`, `max_tokens`) from source data into `provider.<id>.options`.
+       - Scoped `permission.external_directory` strictly to `workerRoot` and designated Controller report paths (`usageDir`, `usageFile`), preventing whole-machine wildcard while enabling headless operation.
+       - Enforced `{env:KEY_NAME}` credential format, preventing token leakage into disk configuration.
+     - Empty response detection in `tools/ai-brain/executor.js`:
+       - Added `hasHarnessResponse` checking for real text or tool use events while filtering build banner lines.
+       - Mapped empty responses to named error `HARNESS_EMPTY_RESPONSE` in `readSessionId`.
+     - Session naming in `tools/ai-brain/harness.js`:
+       - Ensured consistent `--title` fallback to work item ID or task name.
+  3. Verification:
+     - New unit tests in `tools/ai-brain/test/task-ai-142-opencode-writer.test.js` verifying config generation for SSE/JSON sources, permission scoping, secret redaction, and `HARNESS_EMPTY_RESPONSE` handling.

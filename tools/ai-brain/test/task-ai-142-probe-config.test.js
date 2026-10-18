@@ -408,7 +408,11 @@ test('PR C (Item 3): preferKnownGood does not prioritize agy-pool ahead of known
       routeHealthFile: isolatedHealthFile,
       now,
     });
-    assert.equal(resultEnabled.chosen, agyCand.candidateKey);
+    assert.equal(
+      resultEnabled.chosen,
+      liveCand.candidateKey,
+      'authorization is not measured probe evidence'
+    );
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

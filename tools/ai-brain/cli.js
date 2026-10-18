@@ -2336,6 +2336,14 @@ function dispatchCommand(args, deps = {}) {
         priors: deps.priors === undefined ? deps.ranking?.priors : deps.priors,
         useStoredQuota: true,
       });
+      if (deps.isolatedWorker && profile.role !== 'reviewer') {
+        require('./probe-order').preferKnownGood(result, offered, {
+          ...deps,
+          registry,
+          now,
+          evidenceData,
+        });
+      }
       // Retain the dispatch CLI's existing output/checkpoint field names.
       return {
         ...result,
