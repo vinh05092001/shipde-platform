@@ -259,6 +259,21 @@ atomic lock acquisition. Tests invoke PowerShell against temporary goals and a
 stub CLI; the machine-data gate disables machine/user environment loading.
 The existing scheduled task remains untouched; the operator decides activation.
 
+### H3 live: configured writer selection and item duration limits (2026-10-18)
+
+Dispatch config now owns `maxWriterSelectionRounds` and `maxItemDurationMs`.
+Each item stops retrying when either limit is reached, with an explicit terminal
+code and counts of observed rejection/failure reasons. Selection-only refusals
+consume selection rounds; the existing `maxTurns` still counts actual launches.
+Capability and route probes share the item deadline and worker launch timeouts
+are capped by its remaining duration. Defaults come from versioned `sources.json`;
+invalid limits fail closed. Regression fixtures inject routes and clocks, with no
+machine data or provider calls.
+
+### H3 live: writers are schema-checked after the run, not before selection (2026-10-18)
+
+Operator decision 2026-10-18: trials 10-13 of goal G-F622511E refused every agy-pool and Codex writer because the pre-selection jsonSchema proof (a full CLI launch) timed out or ran out of budget. The writer roles (author.foundation, author.lowrisk) no longer require jsonSchema before selection; the writer result is still validated after the run (WRITER_RESULT_INVALID_JSON), and the host gate and exact-SHA review still gate the commit. Planner and reviewer roles keep the requirement.
+
 ### H3 live: configurable probe budget, probe ordering by evidence, and HTTP-first capability verification (2026-10-17)
 
 Operator decision 2026-10-17 23:10: the agy pool may write (writerEnabled/allowWriter true in sources.json). Tests set the flags explicitly rather than reading the tracked value.
