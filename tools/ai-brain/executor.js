@@ -155,10 +155,49 @@ function inspectVerdict(res) {
  * HARNESS_NO_SESSION_ID: never a pid, a timestamp or a "latest" lookup, because
  * a value that is not a session cannot be resumed.
  */
+function hasHarnessResponse(res, adapter) {
+  if (!res) return false;
+  const stdout = String(res.stdout || '').trim();
+  if (!stdout) return false;
+  if (adapter && (adapter.id === 'opencode-direct' || adapter.id === 'opencode')) {
+    const lines = stdout
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean);
+    for (const line of lines) {
+      if (line.startsWith('{') && line.endsWith('}')) {
+        try {
+          const parsed = JSON.parse(line);
+          if (
+            (parsed.type === 'text' &&
+              parsed.part &&
+              parsed.part.text &&
+              String(parsed.part.text).trim()) ||
+            parsed.content ||
+            parsed.text ||
+            parsed.type === 'tool_use' ||
+            parsed.type === 'tool-call' ||
+            (parsed.part && (parsed.part.type === 'tool-call' || parsed.part.toolName))
+          ) {
+            return true;
+          }
+        } catch (_) {}
+      } else if (!line.startsWith('>') && !line.startsWith('build')) {
+        return true;
+      }
+    }
+    return false;
+  }
+  return true;
+}
+
 function readSessionId(adapter, job, res) {
   const isIsolated = Boolean(
     (job && job.isolatedWorker) || (res && (res.isolatedWorker || res.workerRoot))
   );
+  if (adapter && adapter.id === 'opencode-direct' && !hasHarnessResponse(res, adapter)) {
+    return { id: null, cause: 'HARNESS_EMPTY_RESPONSE' };
+  }
   if (isIsolated && res) {
     const isoId = res.sessionId || res.launchHandle;
     if (isoId !== undefined && isoId !== null && String(isoId).trim() !== '') {
@@ -566,6 +605,7 @@ module.exports = {
   resumePrompt,
   inspectVerdict,
   readSessionId,
+  hasHarnessResponse,
   usageReportPath,
   Outcome,
 };
