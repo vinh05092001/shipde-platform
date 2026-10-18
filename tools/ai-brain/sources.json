@@ -336,6 +336,7 @@
     }
   ],
   "dispatch": {
+    "routeEvidenceMaxAgeMs": 86400000,
     "maxWriterSelectionRounds": 12,
     "maxItemDurationMs": 3600000,
     "probeBudgetMs": 180000,

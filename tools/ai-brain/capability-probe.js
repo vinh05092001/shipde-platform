@@ -8,6 +8,8 @@ const routeProbe = require('./route-probe');
 const { createSecretRedactor } = require('./decisions');
 
 const sourcesApi = require('./sources');
+const routeEvidence = require('./route-evidence');
+const { hasPriorWorkPass } = routeEvidence;
 
 // Shared with the Controller route probes; capability checks get no extra window.
 const { PROBE_BUDGET_MS } = require('./orchestrate');
@@ -156,67 +158,27 @@ async function httpProof(candidate, capability, route, options) {
   }
 }
 
-function hasPriorWorkPass(candidate, combinations) {
-  if (!['agy-pool', 'codex'].includes(candidate.harness)) return false;
-  if (!Array.isArray(combinations)) return false;
-  return combinations.some((combo) => {
-    if (!combo) return false;
-    const matchHarness = combo.harness === candidate.harness;
-    const matchAccount =
-      !combo.accountId || combo.accountId === '*' || combo.accountId === candidate.accountId;
-    const matchModel =
-      combo.model === candidate.modelId ||
-      combo.modelId === candidate.modelId ||
-      (candidate.modelId && String(candidate.modelId).endsWith('/' + combo.model));
-    if (matchHarness && matchAccount && matchModel) {
-      const evs = Array.isArray(combo.evidence) ? combo.evidence : [];
-      return evs.some(
-        (e) =>
-          e &&
-          (e.proofLevel === 'WORK_ITEM_PASS' ||
-            (e.status === 'passed' && (e.level === 3 || e.level === 2)))
-      );
-    }
-    return false;
-  });
-}
-
-function orderCandidatesForProbe(candidates, profile, options) {
-  const o = options || {};
-  const isWriter =
-    profile?.role === 'writer' ||
-    (profile?.requiredCapabilities || []).some((cap) => ['jsonSchema', 'tools'].includes(cap));
-  if (!isWriter || !Array.isArray(candidates)) return candidates;
-
-  const registry = o.registry;
-  const store = o.routeHealth || null;
-  const data = o.evidenceDir ? evidence.loadEvidence(o.evidenceDir) : o.capabilityEvidence || {};
-
-  const priorityOf = (c) => {
-    if (hasPriorWorkPass(c, data.combinations)) return 0;
-    const identity = require('./route-health').probeIdentity(c);
-    const record = store
-      ? require('./route-health').getPathRecord(store, identity.model, identity.route)
-      : null;
-    const probeOrder = require('./probe-order');
-    const isLive =
-      record?.status === 'AVAILABLE' ||
-      (store &&
-        typeof probeOrder.recentRouteSuccess === 'function' &&
-        probeOrder.recentRouteSuccess(c, store, { registry, now: o.now }));
-    if (isLive) return 1;
-    if (c.harness === 'codex') return 2;
-    if (c.harness === 'agy-pool') {
-      return sourcesApi.isAgyPoolWriterEnabled(registry, o) ? 2 : 50;
-    }
-    if (c.harness === 'opencode-direct') return 3;
-    return 10;
-  };
-
+function orderCandidatesForProbe(candidates, profile, options = {}) {
+  if (!Array.isArray(candidates)) return candidates;
+  const store = options.routeHealth || { paths: {} };
+  const data = routeEvidence.evidenceData(options);
+  const context = { ...options, evidenceData: data };
   return candidates
-    .map((c, index) => ({ c, index, prio: priorityOf(c) }))
-    .sort((a, b) => a.prio - b.prio || a.index - b.index)
-    .map(({ c }) => c);
+    .map((c, index) => ({
+      c,
+      index,
+      work: hasPriorWorkPass(c, data.combinations),
+      live: routeEvidence.recentRouteSuccess(c, store, context),
+      cost: routeEvidence.measuredProbeCost(c, store, context),
+    }))
+    .sort(
+      (a, b) =>
+        Number(b.work) - Number(a.work) ||
+        Number(b.live) - Number(a.live) ||
+        a.cost - b.cost ||
+        a.index - b.index
+    )
+    .map((row) => row.c);
 }
 
 async function probeCapabilities(candidates, profile, options = {}) {
@@ -471,4 +433,9 @@ async function probeCapabilities(candidates, profile, options = {}) {
   return candidates;
 }
 
-module.exports = { PROBE_BUDGET_MS, probeCapabilities, orderCandidatesForProbe };
+module.exports = {
+  PROBE_BUDGET_MS,
+  probeCapabilities,
+  orderCandidatesForProbe,
+  hasPriorWorkPass,
+};

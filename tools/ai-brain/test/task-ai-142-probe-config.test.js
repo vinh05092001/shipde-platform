@@ -388,7 +388,11 @@ test('PR C (Item 3): preferKnownGood does not prioritize agy-pool ahead of known
     routeHealth: store,
     now,
   });
-  assert.equal(resultEnabled.chosen, agyCand.candidateKey);
+  assert.equal(
+    resultEnabled.chosen,
+    liveCand.candidateKey,
+    'authorization is not measured probe evidence'
+  );
 });
 
 test('PR C (Item 3): orchestrate launcher refuses agy-pool when writer is disabled by configuration', () => {

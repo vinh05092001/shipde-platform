@@ -55,7 +55,7 @@ test('intake discovered Codex CLI account needs CLI availability, not HTTP crede
     preferKnownGood({ chosen: 'unknown', ranking: [unknown, c] }, [unknown, c], {
       routeHealth: { paths: {} },
     }).chosen,
-    c.candidateKey
+    'unknown'
   );
   assert.equal(
     mergeDiscoveredSources(
@@ -77,7 +77,7 @@ test('JSON-roundtripped failure causes serialize to reason strings', () => {
   assert.equal(failureReason({ reasonCode: { reason: 'TIMEOUT' } }), 'TIMEOUT');
 });
 
-test('Hermes success orders OpenCode writers by gateway and upstream, preserving floors', () => {
+test('API success cannot cross source/account identity and exact route proof preserves floors', () => {
   const now = Date.now();
   const registry = {
     sources: [
@@ -117,7 +117,20 @@ test('Hermes success orders OpenCode writers by gateway and upstream, preserving
     [unknown, other, live],
     options
   );
-  assert.equal(ordered.chosen, live.candidateKey);
+  assert.equal(ordered.chosen, unknown.candidateKey);
+  health.rememberProbe(
+    live,
+    { ok: true, status: 200 },
+    { routeHealth: store, now, persistRouteHealth: false }
+  );
+  assert.equal(
+    preferKnownGood(
+      { chosen: unknown.candidateKey, ranking: [unknown, other, live] },
+      [unknown, other, live],
+      options
+    ).chosen,
+    live.candidateKey
+  );
   const refusal = {
     chosen: unknown.candidateKey,
     ranking: [unknown],
