@@ -4616,10 +4616,7 @@ async function runOrchestration(goal, opts) {
           workItemId: item.id,
           role: roleOf(item),
           chosen: key,
-          ranking:
-            (selectedDecision && selectedDecision.decision?.decisionRecorded?.ranking) ||
-            decision?.decisionRecorded?.ranking ||
-            [],
+          ranking: (selectedDecision && selectedDecision.decision?.decisionRecorded?.ranking) || [],
           cause,
           failureScope: scope,
           detail: reason,
