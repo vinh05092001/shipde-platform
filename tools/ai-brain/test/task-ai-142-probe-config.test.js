@@ -107,18 +107,29 @@ test('PR C (Item 2): orderProbeRoutes places route with recent success ahead of 
   });
 
   const store = { version: 1, paths: {}, events: [] };
-  const options = { routeHealth: store, now };
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'probe-config-'));
+  const isolatedHealthFile = path.join(tmpDir, 'model-route-health.json');
+  const options = {
+    routeHealth: store,
+    routeHealthFile: isolatedHealthFile,
+    persistRouteHealth: false,
+    now,
+  };
 
-  // Record recent successful probe for candLowRecentSuccess
-  health.rememberProbe(candLowRecentSuccess, { ok: true, status: 200 }, options);
+  try {
+    // Record recent successful probe for candLowRecentSuccess
+    health.rememberProbe(candLowRecentSuccess, { ok: true, status: 200 }, options);
 
-  // High score candidate comes first in ranking
-  const ranked = [candHighNoEvidence, candLowRecentSuccess];
+    // High score candidate comes first in ranking
+    const ranked = [candHighNoEvidence, candLowRecentSuccess];
 
-  // orderProbeRoutes must place the proven route ahead of unevidenced route
-  const ordered = health.orderProbeRoutes(ranked, options);
-  assert.equal(ordered[0].candidateKey, candLowRecentSuccess.candidateKey);
-  assert.equal(ordered[1].candidateKey, candHighNoEvidence.candidateKey);
+    // orderProbeRoutes must place the proven route ahead of unevidenced route
+    const ordered = health.orderProbeRoutes(ranked, options);
+    assert.equal(ordered[0].candidateKey, candLowRecentSuccess.candidateKey);
+    assert.equal(ordered[1].candidateKey, candHighNoEvidence.candidateKey);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 });
 
 test('PR C (Item 3): agy-pool writer permission is controlled by sources.json configuration', () => {
@@ -345,6 +356,8 @@ test('PR C (Item 5): CLI schema proof recorded in evidence is reused on subseque
 
 test('PR C (Item 3): preferKnownGood does not prioritize agy-pool ahead of known-good when writer is disabled', () => {
   const store = { version: 1, paths: {}, events: [] };
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'probe-config-'));
+  const isolatedHealthFile = path.join(tmpDir, 'model-route-health.json');
   const now = Date.now();
   // The tracked configuration is an operator choice; these tests fix the agy-pool
   // writer flags explicitly instead of reading whatever the repo currently sets.
@@ -358,41 +371,51 @@ test('PR C (Item 3): preferKnownGood does not prioritize agy-pool ahead of known
   const agyCand = makeCandidate({ harness: 'agy-pool', accessPath: 'pool' });
   const liveCand = makeCandidate({ modelId: 'live/model', accessPath: 'live' });
 
-  health.rememberProbe(liveCand, { ok: true, status: 200 }, { routeHealth: store, now });
+  try {
+    health.rememberProbe(
+      liveCand,
+      { ok: true, status: 200 },
+      { routeHealth: store, routeHealthFile: isolatedHealthFile, persistRouteHealth: false, now }
+    );
 
-  const resultDisabled = {
-    chosen: agyCand.candidateKey,
-    ranking: [agyCand, liveCand],
-  };
-  probeOrder.preferKnownGood(resultDisabled, [agyCand, liveCand], {
-    registry: defaultRegistry,
-    routeHealth: store,
-    now,
-  });
-  // When agy-pool is disabled, liveCand (known good) should win over agy-pool
-  assert.equal(resultDisabled.chosen, liveCand.candidateKey);
+    const resultDisabled = {
+      chosen: agyCand.candidateKey,
+      ranking: [agyCand, liveCand],
+    };
+    probeOrder.preferKnownGood(resultDisabled, [agyCand, liveCand], {
+      registry: defaultRegistry,
+      routeHealth: store,
+      routeHealthFile: isolatedHealthFile,
+      now,
+    });
+    // When agy-pool is disabled, liveCand (known good) should win over agy-pool
+    assert.equal(resultDisabled.chosen, liveCand.candidateKey);
 
-  // When agy-pool writer is enabled in registry
-  const enabledRegistry = {
-    ...defaultRegistry,
-    sources: defaultRegistry.sources.map((s) =>
-      s.id === 'agy-pool' ? { ...s, writerEnabled: true } : s
-    ),
-  };
-  const resultEnabled = {
-    chosen: liveCand.candidateKey,
-    ranking: [liveCand, agyCand],
-  };
-  probeOrder.preferKnownGood(resultEnabled, [liveCand, agyCand], {
-    registry: enabledRegistry,
-    routeHealth: store,
-    now,
-  });
-  assert.equal(
-    resultEnabled.chosen,
-    liveCand.candidateKey,
-    'authorization is not measured probe evidence'
-  );
+    // When agy-pool writer is enabled in registry
+    const enabledRegistry = {
+      ...defaultRegistry,
+      sources: defaultRegistry.sources.map((s) =>
+        s.id === 'agy-pool' ? { ...s, writerEnabled: true } : s
+      ),
+    };
+    const resultEnabled = {
+      chosen: liveCand.candidateKey,
+      ranking: [liveCand, agyCand],
+    };
+    probeOrder.preferKnownGood(resultEnabled, [liveCand, agyCand], {
+      registry: enabledRegistry,
+      routeHealth: store,
+      routeHealthFile: isolatedHealthFile,
+      now,
+    });
+    assert.equal(
+      resultEnabled.chosen,
+      liveCand.candidateKey,
+      'authorization is not measured probe evidence'
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 });
 
 test('PR C (Item 3): orchestrate launcher refuses agy-pool when writer is disabled by configuration', () => {

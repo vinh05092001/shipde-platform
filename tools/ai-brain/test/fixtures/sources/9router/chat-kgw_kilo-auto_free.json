@@ -1,0 +1,7 @@
+{
+  "modelId": "kgw/kilo-auto/free",
+  "status": 0,
+  "ok": false,
+  "cause": "TIMEOUT",
+  "body": "Request timeout"
+}

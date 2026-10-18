@@ -1,0 +1,7 @@
+{
+  "modelId": "qd/ultimate",
+  "status": 400,
+  "ok": false,
+  "cause": "HTTP_400",
+  "body": "{\"error\":{\"message\":\"[400]: {\\\"error\\\":{\\\"message\\\":\\\"qoder: model_config for \\\\\\\"ultimate\\\\\\\" not yet known (run a model list fetch or check upstream connectivity)\\\"}}\",\"type\":\"invalid_request_error\",\"code\":\"bad_request\"}}"
+}

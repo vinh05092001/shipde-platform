@@ -4449,12 +4449,28 @@ function main(argv = process.argv.slice(2), deps = {}) {
     process.exit(runSerenaCli(process.argv.slice(3)));
   }
 
-  // sources --discover [--probe] [--json]: inventory local provider endpoints
-  // and persist only endpoint/model metadata and credential locations.
+  // sources:
+  // - sources onboard <sourceId> [--record|--replay] [--json]
+  // - sources onboard --all --replay
+  // - sources --discover [--probe] [--json]
   if (command === 'sources') {
+    if (args._[1] === 'onboard') {
+      const { runSourcesOnboardCli } = require('./source-onboarding');
+      runSourcesOnboardCli(args)
+        .then((code) => {
+          if (typeof code === 'number') process.exitCode = code;
+        })
+        .catch((err) => {
+          console.error('Sources onboard failed: ' + String((err && err.message) || err));
+          process.exitCode = 1;
+        });
+      return;
+    }
     const discovery = require('./source-discovery');
     if (!args.discover) {
-      console.error('Dùng: sources --discover [--probe] [--json]');
+      console.error(
+        'Dùng: sources onboard <sourceId> [--record|--replay] [--json] | sources onboard --all --replay | sources --discover [--probe] [--json]'
+      );
       process.exit(2);
     }
     discovery

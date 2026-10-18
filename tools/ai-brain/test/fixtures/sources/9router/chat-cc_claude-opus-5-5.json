@@ -1,0 +1,7 @@
+{
+  "modelId": "cc/claude-opus-5-5",
+  "status": 503,
+  "ok": false,
+  "cause": "AUTH_NEEDED",
+  "body": "{\"error\":{\"message\":\"[claude/claude-opus-5-5] [401]: {\\\"type\\\":\\\"error\\\",\\\"error\\\":{\\\"type\\\":\\\"authentication_error\\\",\\\"message\\\":\\\"OAuth access token has expired. Re-authenticate to continue.\\\"},\\\"request_id\\\":\\\"req_[REDACTED]\\\"} (reset after 2m)\"}}"
+}
