@@ -3645,11 +3645,29 @@ async function orchestrateCommand(args, deps = {}) {
       .split(',')
       .map((s) => s.trim())
       .includes('agy-pool');
+  const catSourcesPath =
+    args['catalogue-sources'] ||
+    (typeof args.catalogue === 'string' &&
+    fsx.existsSync(path.join(path.dirname(args.catalogue), 'catalogue-sources.json'))
+      ? path.join(path.dirname(args.catalogue), 'catalogue-sources.json')
+      : null);
+  const sourceModels = readJsonArg(catSourcesPath) || undefined;
+  const discDir =
+    (d && d.discoveryDataDir) || args['discovery-dir'] || path.join(__dirname, 'data', 'discovery');
+  let discoveryCatalogue = null;
+  if (fsx.existsSync(discDir)) {
+    try {
+      const { readDiscoveryCatalogue } = require('./discovery/read');
+      discoveryCatalogue = readDiscoveryCatalogue({ dataDir: discDir });
+    } catch {}
+  }
   const candidates = Array.isArray(d.candidates)
     ? d.candidates
     : generateCandidates({
         registry,
         catalogue: readJsonArg(args.catalogue) || [],
+        sourceModels,
+        discoveryCatalogue,
         accounts: inputAccounts,
         externalWorkers: args['external-workers'],
         openCodeIds: Array.isArray(args['opencode-ids'])

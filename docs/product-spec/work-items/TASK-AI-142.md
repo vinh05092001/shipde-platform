@@ -553,6 +553,21 @@ Verification (2026-10-14): sequential TASK-AI-141 199/199, TASK-AI-142 140/140, 
 
 Selection logs retain the full chosenCandidate, the existing chosen identity, top ten ranked candidates and score breakdown summaries, and rejection totals by reasonCode with ten examples. Full runtime routing arrays remain available for fallback. Daily logs roll at 50 MiB into date.N.jsonl; readers consume all parts in numeric order. `node tools/ai-brain/cli.js decisions compact --dir <dir>` incrementally writes capped copies named `<source>.compact-<timestamp>.jsonl`, preserving originals. Copies are excluded from daily history until the operator explicitly replaces originals; malformed input fails rather than silently dropping evidence. No live data is modified by this change.
 
+### H3 live: goal writer pool candidate generation and capability probe starvation fix (2026-10-18)
+
+1. Data-driven candidate harvesting for direct OpenAI-compatible sources:
+   - `pushOpencodeProviderWriters` in `tools/ai-brain/candidates.js` resolves models from:
+     a) String catalogue entries matching provider prefix (`${key}/` or `${source.id}/`), e.g. `regolo/gemma4-31b` or `tencent/*`.
+     b) `sourceModels` containing provider aliases and option keys (`opencode-provider-${source.id}-options`, `${source.id}-ai`, `${source.id}-tokenhub`, etc.).
+     c) `discoveryCatalogue` candidates from discovery imports and catalogue.
+   - `tools/ai-brain/intake.js`: `composeOrchestrateCommand` includes `--catalogue-sources` pointing to `catalogue-sources.json`.
+   - `tools/ai-brain/cli.js`: `orchestrateCommand` reads `--catalogue-sources` and discovery data, passing `sourceModels` and `discoveryCatalogue` to `generateCandidates`.
+2. Writer capability probe ordering & prevention of budget starvation:
+   - `tools/ai-brain/capability-probe.js`: Prioritizes writer candidates (`codex`, `agy-pool`, `opencode-direct`) at the head of the capability probe queue when selecting for writer roles, preventing starvation by thousands of preceding unranked router routes within the 180s probe deadline.
+   - Prior real work evidence reuse: Checks `evidence.combinations` for prior real work execution (`proofLevel === 'WORK_ITEM_PASS'` or `status === 'passed'`), satisfying `jsonSchema` capability verification without launching CLI or consuming probe budget.
+   - Verified proof caching: Successfully verified CLI schema proofs are cached into `evidence.capabilityProbes` and reused across subsequent rounds.
+3. Verification: Unit tests in `tools/ai-brain/test/task-ai-142-goal-writer-pool.test.js` pass (5/5). All related TASK-AI-142 suites pass (83/83).
+
 ### H3 live: worker progress stall detection test B5 uses injected clock (2026-10-17)
 
 Test B5 in `tools/ai-brain/test/task-ai-142-worker-progress.test.js` verified that genuine progress (tool calls, file signature changes) resets the worker stall detection timer. Under heavy system load, real wall-clock sleeps (600ms) could stretch beyond the 1500ms timeout threshold before progress was recorded, causing intermittent test failures.
