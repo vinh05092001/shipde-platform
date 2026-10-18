@@ -1050,3 +1050,30 @@ Aggregator routers like 9Router require model IDs to carry an upstream provider 
      - Diagnosis: The probe prompt asked the model to inspect the schema file with a tool, but also appended the full schema JSON to the prompt text. The model responded directly in 1 turn (`num_turns: 1`) without using tools. Moreover, `writerSchema.observedToolUse` only recognized Claude/Codex/OpenCode event streams, failing to parse Antigravity's JSON completion envelope. Finally, `candidates.js` line 2051 dropped `harnessCapabilities` (`tools: true`) when `modelCapabilities` was empty, subjecting the model to redundant tool verification.
      - Fix: Preserved `harnessCapabilities` in `candidates.js` when `modelCapabilities` is not specified, and updated `observedToolUse` in `writer-schema.js` to recognize Antigravity's completion envelope.
 - Verification: `node --test tools/ai-brain/test/task-ai-142-goal-writer-pool-2.test.js` passed 7/7. Full offline test suite executed with `AI_BRAIN_MACHINE_DATA=none` and without `NINEROUTER_API_KEY`.
+
+### H3 live: live route prioritization, HTTP account quota short-circuit, and agy-pool tools inheritance (2026-10-18)
+
+- Trial 12 post-fix analysis and resolution across four root causes:
+  1. `agy-pool` & `codex` disappearance from trial 12 decision log:
+     - Root cause: PR #391 added `opencode-direct` to `isolatedLaneRejected`. Because `candidatesApi.generateCandidates` emitted 5,742 `opencode-direct` candidates ahead of `agy-pool` (98) and `codex` (1), `isolatedLaneRejected.slice(0, 10)` in `decisions.js` captured only the first 10 `opencode-direct` items, pushing `agy-pool` and `codex` past index 5742 and completely truncating them from the 10-item decision log window. Evidence in `evidence.json` confirmed `codex` and `agy-pool` (`ShipDe-agy01`, `02`, `03`, `05`, `07`) were actually probed at `2026-10-18T02:38:01.356Z`. Additionally, `codex` was rejected in `routing.js` with `NATIVE_WRITER_QUOTA_UNVERIFIED` because `readCodexSessionQuota()` returned `status: 'unknown'` due to stale rollout log (>300 min window).
+     - Fix: Updated `preferKnownGood` in `tools/ai-brain/probe-order.js` to prioritize CLI lanes (`codex`, `agy-pool`) and probed direct candidates ahead of bulk unprobed direct candidates when ranking `isolatedLaneRejected`.
+  2. JsonSchema probe duration & 30 candidates hitting `WRITER_SCHEMA_NOT_VERIFIED_BUDGET`:
+     - Real latency measurements from `evidence.json`:
+       - `opencode-direct`: median 257ms, avg 263ms (min 250ms, max 1682ms).
+       - `direct-http`: median 264ms, avg 271ms (min 83ms, max 1060ms).
+       - `codex`: 16,152ms (~16.15s).
+       - `agy-pool`: success 18,935ms (~18.9s); pool timeout 12,180ms.
+       - `paseo`: median 1,585ms, avg 1,608ms (~1.6s).
+     - Budget exhaustion root cause: `orderCandidatesForProbe` assigned `opencode-direct` priority 2 ahead of live routes (`record.status === 'AVAILABLE'`, priority 3). Nguồn `source-aihubmix` ran out of quota/credits (403 / `UPSTREAM_CREDIT_OR_QUOTA`). `capability-probe.js` lacked account-level failure caching for HTTP accounts, probing all 326 models of `aihubmix` sequentially (326 * 260ms * 2 = ~170s), draining the entire 180s budget before live routes were evaluated. The 30 candidates in the log correspond to Attempt 1 (10 paseo in `rejected` + 10 opencode-direct in `isolatedLaneRejected`) and Attempt 2 (10 paseo in `rejected`).
+     - Fix: In `tools/ai-brain/capability-probe.js`:
+       - Prioritized live available routes (`record.status === 'AVAILABLE'` or recent route success) at priority 1, ahead of unprobed direct candidates.
+       - Implemented account-level short-circuiting (`failedHttpAccounts` Map) for HTTP routes: when an account encounters `UPSTREAM_CREDIT_OR_QUOTA`, `AUTH_NEEDED`, or related account-level refusal, all subsequent models sharing that account/endpoint are immediately short-circuited without making redundant HTTP calls.
+  3. 2x `WRITER_RESULT_INVALID_JSON`:
+     - Candidate models: `aihubmix/qwen3.8-flash-free` and `aihubmix/qwen3.8-max-free` (account: `source-aihubmix`).
+     - Raw output (redacted): The gateway returned HTTP 200 containing plain text in `choices[0].message.content`: `"Sorry, to prevent abuse of free resources, accounts that have not been recharged can only try 10 times. You can increase the free quota after recharging; https://console.aihubmix.com/topup"`.
+     - Diagnosis: The upstream gateway intercepted the request and returned a plain-text quota refusal under HTTP 200 instead of a structured JSON response. `schemaApi.validate` failed with `SyntaxError` on `JSON.parse`, mapping to `WRITER_RESULT_INVALID_JSON`.
+     - Fix: Updated `httpProof` in `tools/ai-brain/capability-probe.js` to inspect `message.content` under HTTP 200 for quota and recharge refusal patterns, classifying them accurately as `UPSTREAM_CREDIT_OR_QUOTA` and populating `failedHttpAccounts`. Also broadened insufficient credit regex in `tools/ai-brain/route-probe.js`.
+  4. Real writer selection guarantee:
+     - Root cause: In trial 12, `ShipDe-agy05` passed `jsonSchema` in 18,935ms. However, `candidates.js` line 2068 dropped `harnessCapabilities` (`tools: true`) when `modelCapabilities` was null in catalogue for `gemini-3.8-flash-high`. This forced `probeCapabilities` to launch a second CLI process to verify `tools`, which timed out after 12,180ms (`WRITER_SCHEMA_POOL_POOL_TIMEOUT`) and marked account `agy-pool::ShipDe-agy05` as failed.
+     - Fix: In `tools/ai-brain/candidates.js`, `effectiveCapabilities` now falls back to `Object.assign({}, harnessCapabilities)` when `modelCapabilities` is null or empty, ensuring `agy-pool` candidates inherit `tools: true` without redundant CLI tool probes.
+- Verification: Unit tests in `tools/ai-brain/test/task-ai-142-goal-writer-pool-3.test.js` (6/6 pass), `task-ai-142-goal-writer-pool-2.test.js` (7/7 pass), and `task-ai-142-goal-writer-pool.test.js` (5/5 pass). Full test suite passes offline with `AI_BRAIN_MACHINE_DATA=none` and without `NINEROUTER_API_KEY`.

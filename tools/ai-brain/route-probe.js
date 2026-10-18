@@ -147,7 +147,7 @@ function classifyProbeFailure(result) {
   if (/entitlement|not entitled|subscription required/i.test(body)) return 'ENTITLEMENT_REQUIRED';
   if (/missing provider credential|authentication required|invalid api.?key/i.test(body))
     return 'AUTH_NEEDED';
-  if (status === 402 || /insufficient[_ ]credits?|credit exhausted|quota/i.test(body))
+  if (status === 402 || /insufficient|credit exhausted|quota|recharg/i.test(body))
     return 'UPSTREAM_CREDIT_OR_QUOTA';
   if (status === 404 && /model_not_found/i.test(body)) return 'ROUTE_UNAVAILABLE';
   if (/alias.?mismatch|unknown model|model not found|no such model/i.test(body))

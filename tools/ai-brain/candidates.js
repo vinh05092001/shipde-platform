@@ -2011,6 +2011,7 @@ function poolAccountCandidates(opts) {
 
       // Look up catalogue entry for the SAME backend model ID
       let modelCapabilities = null;
+      let matchedCatalogueEntry = null;
       let contextWindow = undefined;
 
       if (Array.isArray(catalogue)) {
@@ -2033,6 +2034,7 @@ function poolAccountCandidates(opts) {
                 entryModel === 'ag/' + model ||
                 entryModel === 'antigravity/' + model);
           if (matchBackend) {
+            matchedCatalogueEntry = entry;
             if (entry.capabilities && Object.keys(entry.capabilities).length > 0) {
               modelCapabilities = Object.assign({}, entry.capabilities);
             }
@@ -2076,6 +2078,8 @@ function poolAccountCandidates(opts) {
             effectiveCapabilities[k] = v;
           }
         }
+      } else if (matchedCatalogueEntry) {
+        effectiveCapabilities = Object.assign({}, harnessCapabilities);
       }
 
       if (contextWindow !== undefined) {

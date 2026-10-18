@@ -6,6 +6,7 @@ const { candidateKey } = require('./discovery/identity');
 // Availability is shared by a gateway/upstream route, not by a harness key.
 // This is a probe-order hint only; account eligibility remains independently gated.
 function recentRouteSuccess(candidate, store, options) {
+  if (!store || !candidate) return false;
   const o = options || {};
   const sources = o.registry?.sources || [];
   const endpoint = (id) => {
@@ -65,9 +66,23 @@ function preferKnownGood(result, candidates, options) {
     const c = byKey.get(row.candidateKey);
     return c && recentRouteSuccess(c, store, { ...o, now });
   });
+  const harnessOf = (row) => {
+    const c = byKey.get(row.candidateKey) || row;
+    return c?.harness || (row.candidateKey && row.candidateKey.split('::')[0]) || '';
+  };
   result.isolatedLaneRejected = (result.rejected || []).filter((row) => {
-    const c = byKey.get(row.candidateKey);
-    return c && ['agy-pool', 'codex', 'opencode-direct'].includes(c.harness);
+    const h = harnessOf(row);
+    return ['agy-pool', 'codex', 'opencode-direct'].includes(h);
+  });
+  result.isolatedLaneRejected.sort((a, b) => {
+    const order = (row) => {
+      const h = harnessOf(row);
+      if (h === 'codex') return 1;
+      if (h === 'agy-pool') return 2;
+      if (row.reason && row.reason !== 'WRITER_SCHEMA_NOT_VERIFIED_BUDGET') return 3;
+      return 4;
+    };
+    return order(a) - order(b);
   });
   if (!result.chosen || !result.ranking?.length) return result;
   const sourcesApi = require('./sources');
