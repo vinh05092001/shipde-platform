@@ -278,6 +278,39 @@ stdout, so the regression uses explicitly synthetic prose. It proves the protoco
 path and fallback, not that the historical writer completed the work. No real
 goal replay is part of this validation.
 
+### H3 live: exact route evidence and measured probe ordering (2026-10-18)
+
+Repair of the `2b783b56` review: one shared `route-evidence.js` matcher binds work evidence to the full candidate identity (transport, path, gateway, upstream, account, quota scope and full model identifier). Missing gateway/account data and matching model suffixes cannot borrow another route's proof. Freshness reads `dispatch.routeEvidenceMaxAgeMs` (preserving the existing 24-hour window). API/level-1 success may inform route availability; only `WORK_ITEM_PASS` or passed level 2/3 counts as completed work. The agy writer authorization gate remains unchanged.
+
+Probe order uses exact work/availability observations, then measured `elapsedMs` from route-health or evidence; unknown cost uses the existing dispatch `probeTimeoutMs`. Harness names receive no numeric priority. Rejection diagnostics share `sampleRepresentative` across every harness/reason, retaining the existing overall decision-log bound without named lane quotas. Dispatch dry-run and isolated goal ranking apply the same ordering.
+
+Offline regression includes a checked-in, explicitly bounded sample from trial 14's selected decision (two ranked identities and ten recorded rejection identities), with no credentials, launch metadata or machine paths. The integration drives both `dispatchCommand --dry-run` and `runOrchestration` with fixture-only capability results and a fake writer launcher. It compares the generated, pre/post capability and pre-ranking candidate sets, then verifies the selected identity reaches the launcher. Sample counts: 12 generated, 12 at capability/ranking gates, 2 ranked and 10 rejected; these are fixture counts, not a claim about the uncapped live inventory. Tests never read the original snapshot or the host account registry.
+
+### H3 live: live route prioritization, fast HTTP probe priority, and non-starving decision log representation (2026-10-18)
+
+Historical proposal in rejected SHA `2b783b56`, superseded by the exact-identity repair above: the original change introduced `sampleRepresentative`, but also used harness-name priorities and named lane quotas, and let API evidence satisfy work proof. Those parts failed review and are removed by the repair. The generic representative sampling remains.
+
+### H3 live: scheduled resume selects an open goal and respects live owners (2026-10-18)
+
+`GoalResume` registration and `goal-resume.ps1` accept an optional goal ID.
+Without it, the script selects the first directory by name whose
+`goal.json` reports OPEN, PLANNED or RUNNING and whose lock has no live owner.
+An explicit goal also respects its live lock. Malformed lock ownership fails
+closed; locks are never deleted by the scheduler, and the Controller still owns
+atomic lock acquisition. Tests invoke PowerShell against temporary goals and a
+stub CLI; the machine-data gate disables machine/user environment loading.
+The existing scheduled task remains untouched; the operator decides activation.
+
+### H3 live: configured writer selection and item duration limits (2026-10-18)
+
+Dispatch config now owns `maxWriterSelectionRounds` and `maxItemDurationMs`.
+Each item stops retrying when either limit is reached, with an explicit terminal
+code and counts of observed rejection/failure reasons. Selection-only refusals
+consume selection rounds; the existing `maxTurns` still counts actual launches.
+Capability and route probes share the item deadline and worker launch timeouts
+are capped by its remaining duration. Defaults come from versioned `sources.json`;
+invalid limits fail closed. Regression fixtures inject routes and clocks, with no
+machine data or provider calls.
 ### H3 live: writers are schema-checked after the run, not before selection (2026-10-18)
 
 Operator decision 2026-10-18: trials 10-13 of goal G-F622511E refused every agy-pool and Codex writer because the pre-selection jsonSchema proof (a full CLI launch) timed out or ran out of budget. The writer roles (author.foundation, author.lowrisk) no longer require jsonSchema before selection; the writer result is still validated after the run (WRITER_RESULT_INVALID_JSON), and the host gate and exact-SHA review still gate the commit. Planner and reviewer roles keep the requirement.
