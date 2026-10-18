@@ -292,7 +292,7 @@ function resolveLauncher(o, isolatedLauncher) {
       lowRisk: job.lowRisk === true,
       // TASK-AI-121 LF-R03: the worker timeout the run was given, for writer,
       // reviewer and repair launches alike.
-      workerTimeoutMs: o.workerTimeoutMs || job.workerTimeoutMs || undefined,
+      workerTimeoutMs: job.workerTimeoutMs || o.workerTimeoutMs || undefined,
       // TASK-AI-127 WD-R03: a WORKER_DEPS_UNAVAILABLE warning is recorded in
       // the same decision log the run itself writes.
       decisionDir: o.decisionDir || undefined,
@@ -3276,7 +3276,10 @@ async function selectCandidateForProfile(
       home: o && o.home,
       env: (o && o.env) || process.env,
       httpClient: o && o.jevHttpClient,
-      timeoutMs: o && o.jevTimeoutMs,
+      timeoutMs: Math.min(
+        o.jevTimeoutMs || jev.DEFAULT_HTTP_TIMEOUT_MS,
+        (o.itemDeadline || Infinity) - Date.now()
+      ),
     });
 
   const evData =
@@ -3412,7 +3415,7 @@ async function selectCandidateForProfile(
     o.capabilityProbeStartedAt = Date.now();
     await require('./capability-probe').probeCapabilities(candidates, profile, {
       ...o,
-      deadline: o.capabilityProbeStartedAt + schemaBudgetMs,
+      deadline: Math.min(o.capabilityProbeStartedAt + schemaBudgetMs, o.itemDeadline || Infinity),
       preflightHttp: o.preflightHttp === true,
       capabilityEvidence: o.capabilityEvidence || (o.capabilityEvidence = {}),
       httpRoute: (c) => {
@@ -3820,7 +3823,24 @@ async function runOrchestration(goal, opts) {
   }
   const hostWorktree = o.cwd || process.cwd();
   const isolatedWorkerRoot = resolveIsolatedWorkerRoot(o, hostWorktree);
-  const launcher = resolveLauncher(o, isolatedLauncher);
+  const launchWorker = resolveLauncher(o, isolatedLauncher);
+  const launcher =
+    launchWorker &&
+    ((job) => {
+      const remainingMs = (o.itemDeadline || Infinity) - Date.now();
+      if (remainingMs <= 0) {
+        return {
+          exitCode: 1,
+          failureReason: 'ITEM_DURATION_LIMIT_EXCEEDED',
+          stderr: 'Item deadline exhausted before worker launch',
+        };
+      }
+      job.workerTimeoutMs = Math.min(
+        job.workerTimeoutMs || o.workerTimeoutMs || Infinity,
+        remainingMs
+      );
+      return launchWorker(job);
+    });
   log.isolation = {
     requested: Boolean(o.isolatedWorker),
     launcherObtained: Boolean(isolatedLauncher),
@@ -4046,7 +4066,10 @@ async function runOrchestration(goal, opts) {
     return null;
   };
 
+  const itemDispatchConfig = sourcesApi.getDispatchConfig(registry, o);
   for (const item of orderDependenciesFirst(log.plan.workItems)) {
+    const itemStartedAt = Date.now();
+    o.itemDeadline = itemStartedAt + itemDispatchConfig.maxItemDurationMs;
     if (log.plan.errors.length > 0) {
       // AI-64-R01: nothing is deferred silently; the errors travel in the run's
       // own outcome record and every item is reported as deferred.
@@ -4642,7 +4665,7 @@ async function runOrchestration(goal, opts) {
       const dispatchConfig = sourcesApi.getDispatchConfig(registry, o);
       const probeBudgetMs = o.probeBudgetMs ?? dispatchConfig.probeBudgetMs;
       const batch = await probeRankedRoutes(ordered, {
-        deadline: writerProbeStartedAt + probeBudgetMs,
+        deadline: Math.min(writerProbeStartedAt + probeBudgetMs, o.itemDeadline),
         maxConcurrentProbes: dispatchConfig.maxConcurrentProbes,
         skip: (candidate, account) =>
           exhaustedAccountKeys.has(account)
@@ -4654,7 +4677,10 @@ async function runOrchestration(goal, opts) {
         runProbe: async (candidate) => {
           const route = resolveLaunchRoute(candidate, o, registry);
           const routeCandidate = routeProbeCandidate(candidate, route, registry);
-          const remainingMs = probeBudgetMs - (Date.now() - writerProbeStartedAt);
+          const remainingMs = Math.min(
+            probeBudgetMs - (Date.now() - writerProbeStartedAt),
+            o.itemDeadline - Date.now()
+          );
           const store =
             o.routeHealth ||
             (typeof require('./route-health').probeMemoryFile === 'function'
@@ -4754,8 +4780,46 @@ async function runOrchestration(goal, opts) {
         }
       }
     }
+    const itemLimitReason = (code, rounds) => {
+      const reasons = {};
+      const add = (reason) => {
+        if (reason) reasons[reason] = (reasons[reason] || 0) + 1;
+      };
+      for (const entry of log.selections.filter((entry) => entry.workItemId === item.id)) {
+        for (const rejected of entry.decision.result?.rejected || entry.decision.rejected || []) {
+          add(rejected.reason);
+        }
+      }
+      for (const failure of liveSteps[item.id]?.failures || [])
+        add(failure.cause || failure.reason);
+      add(launch.cause);
+      return (
+        code +
+        ': ' +
+        JSON.stringify({
+          rounds,
+          maxWriterSelectionRounds: itemDispatchConfig.maxWriterSelectionRounds,
+          elapsedMs: Date.now() - itemStartedAt,
+          maxItemDurationMs: itemDispatchConfig.maxItemDurationMs,
+          rejectionReasons: reasons,
+        })
+      );
+    };
+    const reachedItemLimit = (rounds) => {
+      const code =
+        Date.now() >= o.itemDeadline
+          ? 'ITEM_DURATION_LIMIT_EXCEEDED'
+          : rounds >= itemDispatchConfig.maxWriterSelectionRounds
+            ? 'WRITER_SELECTION_LIMIT_EXCEEDED'
+            : null;
+      if (!code) return false;
+      blockedReason = itemLimitReason(code, rounds);
+      launch.fallbackReason = blockedReason;
+      return true;
+    };
     let writerLaunches = 0;
     for (let attempt = 1; !session && attempt <= candidates.length + 1; attempt += 1) {
+      if (reachedItemLimit(attempt - 1)) break;
       // 5. The Controller chooses every candidate (AI-64-P01). This is a live
       //    decision, not a dry run: it is written to the decision log before the
       //    launch, with the ranking inputs it was made from (AI-64-R03).
@@ -4826,6 +4890,7 @@ async function runOrchestration(goal, opts) {
       // Each retry owns a probe window; ranking and prior writer runtime are excluded.
       if (attempt > 1) writerProbeStartedAt = Date.now() - (o.capabilityProbeDurationMs || 0);
       log.selections.push({ workItemId: item.id, attempt, decision });
+      if (Date.now() >= o.itemDeadline && reachedItemLimit(attempt)) break;
       if (!decision.chosen) {
         if (failedKeys.size > 0) {
           blockedReason =
@@ -4946,7 +5011,10 @@ async function runOrchestration(goal, opts) {
         if (!probeResult) {
           // Runtime fallback may reach a route below the pre-probe winner.
           const routeCandidate = routeProbeCandidate(candidate, route, registry);
-          const remainingMs = PROBE_BUDGET_MS - (Date.now() - writerProbeStartedAt);
+          const remainingMs = Math.min(
+            PROBE_BUDGET_MS - (Date.now() - writerProbeStartedAt),
+            o.itemDeadline - Date.now()
+          );
           probeResult =
             routeCandidate && remainingMs > 0
               ? await sharedRouteProbe.boundedProbe(
@@ -5063,7 +5131,7 @@ async function runOrchestration(goal, opts) {
         title: String(item.id),
         labels: { workItem: String(item.id), role: roleOf(item) },
         exercise: o.exercise || null,
-        workerTimeoutMs: o.workerTimeoutMs || null,
+        workerTimeoutMs: Math.min(o.workerTimeoutMs || Infinity, o.itemDeadline - Date.now()),
         rtk: {
           enabled: itemRtkPermitted,
           sourcePath: o.rtk && typeof o.rtk === 'object' ? o.rtk.sourcePath : undefined,
@@ -6066,8 +6134,11 @@ async function runOrchestration(goal, opts) {
         (verdictStop && verdictStop.reason) || terminalReason,
         Object.assign(
           {
-            reasonCode:
-              blockedReason === 'TOKEN_BUDGET_EXCEEDED'
+            reasonCode: /^WRITER_SELECTION_LIMIT_EXCEEDED|^ITEM_DURATION_LIMIT_EXCEEDED/.test(
+              blockedReason || ''
+            )
+              ? blockedReason.split(':')[0]
+              : blockedReason === 'TOKEN_BUDGET_EXCEEDED'
                 ? 'TOKEN_BUDGET_EXCEEDED'
                 : launch.cause === 'STALLED_NO_PROGRESS'
                   ? 'STALLED_NO_PROGRESS'

@@ -59,12 +59,13 @@ if ([string]::IsNullOrWhiteSpace($WorkingDirectory)) {
 }
 
 if ($ControllerAction -eq "GoalResume") {
-    # Resumes one goal through the Controller (no model call); see goal-resume.ps1.
-    if ([string]::IsNullOrWhiteSpace($GoalId)) { throw "-GoalId is required for -ControllerAction GoalResume" }
+    # Without an explicit goal, goal-resume chooses an open, unowned goal.
     if ([string]::IsNullOrWhiteSpace($TargetScript)) {
         $TargetScript = Join-Path $WorkingDirectory "scripts\ai\goal-resume.ps1"
     }
-    $arguments = "-NonInteractive -ExecutionPolicy Bypass -File `"$TargetScript`" -GoalId $GoalId -WorkDir `"$WorkingDirectory`""
+    if ($GoalId -and $GoalId -notmatch '^[A-Za-z0-9._-]+$') { throw "Invalid GoalId" }
+    $goalArgument = if ([string]::IsNullOrWhiteSpace($GoalId)) { "" } else { " -GoalId $GoalId" }
+    $arguments = "-NonInteractive -ExecutionPolicy Bypass -File `"$TargetScript`"$goalArgument -WorkDir `"$WorkingDirectory`""
 } else {
     if ([string]::IsNullOrWhiteSpace($TargetScript)) {
         $TargetScript = Join-Path $WorkingDirectory "scripts\ai\control.ps1"

@@ -384,8 +384,18 @@ function getDispatchConfig(registry, options = {}) {
       dispatch.routeEvidenceMaxAgeMs ??
       DEFAULT_DISPATCH.routeEvidenceMaxAgeMs
   );
+  const defaults = require('./sources.json').dispatch;
+  const configuredLimit = (key) => {
+    const value = Number(options[key] ?? dispatch[key] ?? defaults[key]);
+    if (!Number.isSafeInteger(value) || value <= 0) {
+      throw new Error('DISPATCH_CONFIG_INVALID: ' + key + ' must be a positive integer');
+    }
+    return value;
+  };
   return {
     routeEvidenceMaxAgeMs,
+    maxWriterSelectionRounds: configuredLimit('maxWriterSelectionRounds'),
+    maxItemDurationMs: configuredLimit('maxItemDurationMs'),
     probeBudgetMs,
     maxConcurrentProbes,
     probeTimeoutMs,
