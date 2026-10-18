@@ -4667,6 +4667,7 @@ async function runOrchestration(goal, opts) {
           routeProbeCandidate(candidate, route, registry, false))
       );
     let writerProbeStartedAt = Date.now();
+    const writerProbeBudgetMs = o.probeBudgetMs ?? itemDispatchConfig.probeBudgetMs;
     let lastWriterFailureReason = null;
     const exhaustedAccountKeys = new Set();
     const writerProbeResults = new Map();
@@ -4693,7 +4694,7 @@ async function runOrchestration(goal, opts) {
         o
       );
       // Ranking work (jsonSchema proofs share their own budget) must not spend the probe budget.
-      writerProbeStartedAt = Date.now() - (o.capabilityProbeDurationMs || 0);
+      writerProbeStartedAt = Date.now();
       const preProbeCooldowns = [];
       const refuse = (candidate, reason, exclude = true) => {
         if (exclude) failedKeys.add(candidateKey(candidate));
@@ -4732,7 +4733,7 @@ async function runOrchestration(goal, opts) {
       };
       const sourcesApi = require('./sources');
       const dispatchConfig = sourcesApi.getDispatchConfig(registry, o);
-      const probeBudgetMs = o.probeBudgetMs ?? dispatchConfig.probeBudgetMs;
+      const probeBudgetMs = writerProbeBudgetMs;
       const batch = await probeRankedRoutes(ordered, {
         deadline: Math.min(writerProbeStartedAt + probeBudgetMs, o.itemDeadline),
         maxConcurrentProbes: dispatchConfig.maxConcurrentProbes,
@@ -4808,7 +4809,7 @@ async function runOrchestration(goal, opts) {
           const reasonCode = writerProbeFailureReason(result);
           const key = candidateKey(candidate);
           const reason =
-            Date.now() - writerProbeStartedAt >= PROBE_BUDGET_MS
+            Date.now() - writerProbeStartedAt >= writerProbeBudgetMs
               ? 'PROBE_BUDGET_EXHAUSTED: writer route probe budget exhausted'
               : 'WRITER_ROUTE_PROBE_FAILED ' + reasonCode;
           const unknown = require('./route-health').isUnverifiedProbe(result);
@@ -4840,7 +4841,7 @@ async function runOrchestration(goal, opts) {
         }
       }
       // Unstarted routes remain eligible for fallback while time remains.
-      if (Date.now() - writerProbeStartedAt >= PROBE_BUDGET_MS) {
+      if (Date.now() - writerProbeStartedAt >= writerProbeBudgetMs) {
         for (const candidate of ordered) {
           if (!batch.outcomes.has(candidateKey(candidate))) {
             // Recorded only: an unprobed route is not a failed route and stays a fallback.
@@ -4957,7 +4958,7 @@ async function runOrchestration(goal, opts) {
           );
 
       // Each retry owns a probe window; ranking and prior writer runtime are excluded.
-      if (attempt > 1) writerProbeStartedAt = Date.now() - (o.capabilityProbeDurationMs || 0);
+      if (attempt > 1) writerProbeStartedAt = Date.now();
       log.selections.push({ workItemId: item.id, attempt, decision });
       if (Date.now() >= o.itemDeadline && reachedItemLimit(attempt)) break;
       if (!decision.chosen) {
@@ -5169,7 +5170,7 @@ async function runOrchestration(goal, opts) {
           );
           launch.fallbackReason = reason;
           launch.cause = reasonCode;
-          if (Date.now() - writerProbeStartedAt >= PROBE_BUDGET_MS) {
+          if (Date.now() - writerProbeStartedAt >= writerProbeBudgetMs) {
             blockedReason = 'PROBE_BUDGET_EXHAUSTED: writer route probe budget exhausted';
             break;
           }
