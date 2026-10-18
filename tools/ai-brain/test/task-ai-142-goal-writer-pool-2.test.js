@@ -13,7 +13,7 @@ const agyPoolRuntime = require('../agy-pool-runtime');
 const { buildWorkerLaunchScript } = require('../isolation-launcher');
 const writerSchema = require('../writer-schema');
 
-test('TASK-AI-142 item 1: probe-order retains opencode-direct in isolatedLaneRejected and priority -1', () => {
+test('TASK-AI-142 item 1: probe-order samples every harness and preserves unmeasured ranking order', () => {
   const candidates = [
     {
       harness: 'opencode-direct',
@@ -62,9 +62,9 @@ test('TASK-AI-142 item 1: probe-order retains opencode-direct in isolatedLaneRej
     'isolatedLaneRejected must include opencode-direct'
   );
   assert.ok(isolatedHarnesses.includes('codex'), 'isolatedLaneRejected must include codex');
-  assert.ok(!isolatedHarnesses.includes('paseo'), 'isolatedLaneRejected must not include paseo');
+  assert.ok(isolatedHarnesses.includes('paseo'), 'every harness uses the same representative rule');
 
-  // Verify priority in ranking
+  // With no observed duration or success, preserve existing ranking order.
   const rankingResult = {
     chosen: result.rejected[0].candidateKey,
     ranking: result.rejected.slice(),
@@ -72,10 +72,7 @@ test('TASK-AI-142 item 1: probe-order retains opencode-direct in isolatedLaneRej
   };
   preferKnownGood(rankingResult, candidates, { routeHealth: { probes: {} } });
   const firstHarness = rankingResult.ranking[0].candidateKey.split('::')[0];
-  assert.ok(
-    ['opencode-direct', 'codex'].includes(firstHarness),
-    'Isolated lanes (opencode-direct, codex) must have priority -1'
-  );
+  assert.equal(firstHarness, candidates[0].harness, 'unmeasured routes retain rank order');
 });
 
 test('TASK-AI-142 item 1: opencode-direct inherits model capabilities and context window from sources', () => {
