@@ -248,6 +248,10 @@ Decision log entries link `goalId -> workItemId -> candidateKey -> session -> co
 - Part H2 Hermes session selection, custom config binding, and `shipde-controller` skill file are delivered in Part H2.
 - Live acceptance across chat and controller runs in Part H3 following merge of H1 and H2.
 
+### H3 live: writers are schema-checked after the run, not before selection (2026-10-18)
+
+Operator decision 2026-10-18: trials 10-13 of goal G-F622511E refused every agy-pool and Codex writer because the pre-selection jsonSchema proof (a full CLI launch) timed out or ran out of budget. The writer roles (author.foundation, author.lowrisk) no longer require jsonSchema before selection; the writer result is still validated after the run (WRITER_RESULT_INVALID_JSON), and the host gate and exact-SHA review still gate the commit. Planner and reviewer roles keep the requirement.
+
 ### H3 live: configurable probe budget, probe ordering by evidence, and HTTP-first capability verification (2026-10-17)
 
 Operator decision 2026-10-17 23:10: the agy pool may write (writerEnabled/allowWriter true in sources.json). Tests set the flags explicitly rather than reading the tracked value.
