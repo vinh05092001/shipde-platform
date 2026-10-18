@@ -373,6 +373,9 @@ function buildWorkerLaunchScript(options) {
   const workerRoot = options.workerRoot;
   const workerUsername = options.workerUsername || WORKER_USERNAME;
   const exeFile = options.exeFile;
+  const exePrefixArgs = Array.isArray(options.exePrefixArgs) ? options.exePrefixArgs : [];
+  const exePrefixArgsStr =
+    exePrefixArgs.length > 0 ? exePrefixArgs.map((a) => `"${a}"`).join(' ') + ' ' : '';
   const payloadArgsPath = options.payloadArgsPath;
   const launchResultPath = options.launchResultPath;
   const workerTimeoutMs = options.workerTimeoutMs;
@@ -396,7 +399,6 @@ function buildWorkerLaunchScript(options) {
     ? ''
     : `$sec = Get-Content "${credPath}" | ConvertTo-SecureString
 $cred = New-Object System.Management.Automation.PSCredential("${workerUsername}", $sec)
-
 `;
   const impersonationLines = runAsCurrentUser
     ? ''
@@ -411,7 +413,7 @@ $psi.Password = $sec
   @{ nonce = "${completionNonce}"; exitCode = 1; completed = $true; localFailure = "CODEX_NOT_LOGGED_IN"; completedAt = (Get-Date).ToString('o') } | ConvertTo-Json -Depth 5 | Out-File "${markerPath}" -Encoding UTF8
   exit 0
 }
-& "${exeFile}" login status *> \`$null
+& "${exeFile}" ${exePrefixArgsStr}login status *> \`$null
 if (-not \`$?) {
   @{ nonce = "${completionNonce}"; exitCode = 1; completed = $true; localFailure = "CODEX_NOT_LOGGED_IN"; completedAt = (Get-Date).ToString('o') } | ConvertTo-Json -Depth 5 | Out-File "${markerPath}" -Encoding UTF8
   exit 0
@@ -2569,6 +2571,7 @@ function getIsolatedLauncher() {
       workerRoot,
       workerUsername: WORKER_USERNAME,
       exeFile: exe.file,
+      exePrefixArgs: exe.prefixArgs || [],
       payloadArgsPath,
       launchResultPath,
       workerTimeoutMs,

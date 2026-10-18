@@ -1029,3 +1029,24 @@ Aggregator routers like 9Router require model IDs to carry an upstream provider 
   2. Implemented `resolveCandidateCapabilities(acc, modelId, opts)` in `tools/ai-brain/candidates.js`: for gateway/router routes, strips blanket `contextWindow` from gateway accounts and derives `contextWindow`, `tools`, and `jsonSchema` per-model from `item` (catalogue), `row` (account model row), or source/routerSource `modelMeta`. Unverified models retain `contextWindow: undefined`.
   3. Integrated `resolveCandidateCapabilities` across router catalogue candidates, reachedVia model sources, and agent-cli (OpenCode) loops.
 - Verification: `tools/ai-brain/test/task-ai-142-capabilities.test.js` (pass 3/fail 0), plus all candidate and context window suites pass clean.
+
+### H3 live: opencode-direct lane preservation, pool probe latency adaptation, and isolation launcher repair (2026-10-18)
+
+- Trial 11 post-fix analysis and resolution across four root causes:
+  1. `opencode-direct` decision log presence & candidate propagation:
+     - Root cause: `probe-order.js` filtered `result.isolatedLaneRejected` using `['agy-pool', 'codex'].includes(c.harness)`, completely excluding `opencode-direct`. `decisions.js` caps general `rejected` to 10 entries (all occupied by preceding `paseo` candidates). `cli.js` also omitted `sourceModels`, `catalogue`, and `discoveryCatalogue` from `runOrchestration` options, and `candidates.js` pushOpencodeProviderWriters dropped model metadata capabilities.
+     - Fix: Added `opencode-direct` to `isolatedLaneRejected` and `priority(row)` (priority -1) in `probe-order.js`. Forwarded `catalogue`, `sourceModels`, and `discoveryCatalogue` from `cli.js` to `runOrchestration`. Scoped `catEntry` and `dcEntry` to propagate declared model capabilities and context windows to `opencode-direct` candidates.
+  2. `agy-pool` 9x `WRITER_SCHEMA_POOL_POOL_TIMEOUT`:
+     - Real latency measurement: `out.txt` records Antigravity CLI duration `17.5810159s`; `runs.jsonl` records 9.09s–26.28s (up to 82.8s under prompt load). `result.json` total run is ~26.65s.
+     - Timeout defect: `sources.resolveProbeTimeout` defaulted to `cfg.probeTimeoutMs = 8000` (8s) because `candidate.elapsedMs` and `record.elapsedMs` were undefined for `agy-pool`. 8s < 17.58s caused `waitForResult` to time out while the background task was still running. In `orchestrate.js`, the first timeout recorded a failure for account `agy-pool::ShipDe\ShipDe-agy01`, immediately failing all 8 subsequent candidates on the account.
+     - Fix: Implemented `readLastRunElapsedMs(accountId, options)` in `agy-pool-runtime.js`. In `sources.resolveProbeTimeout` and `writer-schema.js`, `agy-pool` wait time is governed by measured pool latency + `safetyMarginMs` (from PR #389 `cfg.probeSafetyMarginMs = 2000`), or uses `cfg.schemaProbeBudgetMs = 180000` (from PR #389) bounded by `remainingMs`, without inventing arbitrary constants.
+  3. `codex` 2x `WRITER_SCHEMA_CODEX_LAUNCH_FAILED`:
+     - Real error extracted from decision log:
+       `node.exe : node:internal/modules/cjs/loader:1479 ... & "C:\Program Files\nodejs\node.exe" login status *> $null ... Cannot find module 'login'`.
+     - Defect: `isolation-launcher.js` line 414 invoked `& "${exeFile}" login status` without prefix arguments, attempting to execute `node.exe login` instead of `node.exe codex.js login status`. Codex was verified logged in (`Logged in using ChatGPT`, exit code 0); not an OpenAI quota issue.
+     - Fix: `buildWorkerLaunchScript` now accepts `exePrefixArgs` and executes `& "${exeFile}" ${exePrefixArgsStr}login status`.
+  4. 2x `TOOL_CALL_NOT_OBSERVED`:
+     - Candidate: `agy-pool::ShipDe\ShipDe-agy01::::antigravity::agy01::agy01:gemini::gemini-3.8-flash-high`.
+     - Diagnosis: The probe prompt asked the model to inspect the schema file with a tool, but also appended the full schema JSON to the prompt text. The model responded directly in 1 turn (`num_turns: 1`) without using tools. Moreover, `writerSchema.observedToolUse` only recognized Claude/Codex/OpenCode event streams, failing to parse Antigravity's JSON completion envelope. Finally, `candidates.js` line 2051 dropped `harnessCapabilities` (`tools: true`) when `modelCapabilities` was empty, subjecting the model to redundant tool verification.
+     - Fix: Preserved `harnessCapabilities` in `candidates.js` when `modelCapabilities` is not specified, and updated `observedToolUse` in `writer-schema.js` to recognize Antigravity's completion envelope.
+- Verification: `node --test tools/ai-brain/test/task-ai-142-goal-writer-pool-2.test.js` passed 7/7. Full offline test suite executed with `AI_BRAIN_MACHINE_DATA=none` and without `NINEROUTER_API_KEY`.
