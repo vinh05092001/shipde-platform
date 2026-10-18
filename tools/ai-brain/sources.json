@@ -336,6 +336,8 @@
     }
   ],
   "dispatch": {
+    "maxWriterSelectionRounds": 12,
+    "maxItemDurationMs": 3600000,
     "probeBudgetMs": 180000,
     "maxConcurrentProbes": 8,
     "probeTimeoutMs": 8000,
