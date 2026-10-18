@@ -7,7 +7,7 @@ const capabilityProbe = require('../capability-probe');
 const probeOrder = require('../probe-order');
 const decisions = require('../decisions');
 
-test('TASK-AI-142 trial 14: recentRouteSuccess recognizes combinations across harnesses with live evidence', () => {
+test('TASK-AI-142 trial 14: recentRouteSuccess requires exact harness/source identity and fresh live evidence', () => {
   const combinations = [
     {
       harness: 'paseo',
@@ -15,7 +15,14 @@ test('TASK-AI-142 trial 14: recentRouteSuccess recognizes combinations across ha
       upstream: 'gcli',
       accountId: 'acct-1',
       model: 'gcli/grok-4.7',
-      evidence: [{ status: 'passed', level: 1, proofLevel: 'API_PASS' }],
+      evidence: [
+        {
+          status: 'passed',
+          level: 1,
+          proofLevel: 'API_PASS',
+          observedAt: new Date().toISOString(),
+        },
+      ],
     },
     {
       harness: 'opencode',
@@ -23,12 +30,20 @@ test('TASK-AI-142 trial 14: recentRouteSuccess recognizes combinations across ha
       upstream: 'tencent',
       accountId: 'acct-tencent',
       model: 'tencent/hy4-preview',
-      evidence: [{ status: 'passed', level: 2, proofLevel: 'WORK_ITEM_PASS' }],
+      evidence: [
+        {
+          status: 'passed',
+          level: 2,
+          proofLevel: 'WORK_ITEM_PASS',
+          observedAt: new Date().toISOString(),
+        },
+      ],
     },
   ];
 
   // Paseo candidate with matching passed combo
   const candPaseo = {
+    ...combinations[0],
     harness: 'paseo',
     accountId: 'acct-1',
     modelId: 'gcli/grok-4.7',
@@ -41,14 +56,15 @@ test('TASK-AI-142 trial 14: recentRouteSuccess recognizes combinations across ha
 
   // opencode-direct candidate matching opencode combo
   const candDirect = {
+    ...combinations[1],
     harness: 'opencode-direct',
     accountId: 'acct-tencent',
     modelId: 'tencent/hy4-preview',
   };
   assert.equal(
     probeOrder.recentRouteSuccess(candDirect, { paths: {} }, { evidenceData: { combinations } }),
-    true,
-    'opencode-direct candidate matching opencode combo must match recent route success'
+    false,
+    'opencode-direct must not borrow proof from opencode'
   );
 
   // Candidate without evidence
@@ -69,7 +85,14 @@ test('TASK-AI-142 trial 14: recentRouteSuccess recognizes combinations across ha
       harness: 'agy-pool',
       accountId: 'agy01',
       model: 'gemini-3.8-flash-high',
-      evidence: [{ status: 'passed', level: 3, proofLevel: 'WORK_ITEM_PASS' }],
+      evidence: [
+        {
+          status: 'passed',
+          level: 3,
+          proofLevel: 'WORK_ITEM_PASS',
+          observedAt: new Date().toISOString(),
+        },
+      ],
     },
   ];
   assert.equal(
@@ -82,14 +105,19 @@ test('TASK-AI-142 trial 14: recentRouteSuccess recognizes combinations across ha
   );
 });
 
-test('TASK-AI-142 trial 14: orderCandidatesForProbe orders fast HTTP routes before slow CLI/pool workers', () => {
+test('TASK-AI-142 trial 14: orderCandidatesForProbe orders observed fast probes before observed slow probes', () => {
   const profile = { role: 'writer', requiredCapabilities: ['tools'] };
   const candidates = [
-    { harness: 'agy-pool', modelId: 'gemini-3.8-flash-high', accountId: 'agy01' },
-    { harness: 'codex', modelId: 'gpt-6.1-sol', accountId: 'codex-cli' },
-    { harness: 'opencode-direct', modelId: 'tencent/hy4-preview', accountId: 'acct-tencent' },
-    { harness: 'direct-http', modelId: 'sovinfra/sovapi', accountId: 'acct-sov' },
-    { harness: 'paseo', modelId: '9router/model-x', accountId: 'xkiro' },
+    { harness: 'agy-pool', modelId: 'gemini-3.8-flash-high', accountId: 'agy01', elapsedMs: 700 },
+    { harness: 'codex', modelId: 'gpt-6.1-sol', accountId: 'codex-cli', elapsedMs: 500 },
+    {
+      harness: 'opencode-direct',
+      modelId: 'tencent/hy4-preview',
+      accountId: 'acct-tencent',
+      elapsedMs: 10,
+    },
+    { harness: 'direct-http', modelId: 'sovinfra/sovapi', accountId: 'acct-sov', elapsedMs: 20 },
+    { harness: 'paseo', modelId: '9router/model-x', accountId: 'xkiro', elapsedMs: 900 },
     { harness: 'paseo', modelId: 'gcli/grok-4.7', accountId: 'acct-1' },
   ];
 
@@ -98,7 +126,14 @@ test('TASK-AI-142 trial 14: orderCandidatesForProbe orders fast HTTP routes befo
       harness: 'paseo',
       accountId: 'acct-1',
       model: 'gcli/grok-4.7',
-      evidence: [{ status: 'passed', level: 1, proofLevel: 'API_PASS' }],
+      evidence: [
+        {
+          status: 'passed',
+          level: 1,
+          proofLevel: 'API_PASS',
+          observedAt: new Date().toISOString(),
+        },
+      ],
     },
   ];
 
@@ -107,15 +142,15 @@ test('TASK-AI-142 trial 14: orderCandidatesForProbe orders fast HTTP routes befo
     registry: { sources: [{ id: 'agy-pool', writerEnabled: true }] },
   });
 
-  // Prior work pass first (prio 0)
+  // Fresh API availability first; API remains distinct from work proof.
   assert.equal(ordered[0].modelId, 'gcli/grok-4.7');
-  // Fast HTTP next: opencode-direct (prio 2), direct-http (prio 3)
+  // Measured durations, not harness names, determine the remaining order.
   assert.equal(ordered[1].harness, 'opencode-direct');
   assert.equal(ordered[2].harness, 'direct-http');
-  // Slow CLI and pool workers after fast HTTP: codex (prio 4), agy-pool (prio 5)
+  // Slower observed probes follow.
   assert.equal(ordered[3].harness, 'codex');
   assert.equal(ordered[4].harness, 'agy-pool');
-  // Unproven generic router last (prio 10)
+  // The slowest measured route is last.
   assert.equal(ordered[5].modelId, '9router/model-x');
 });
 

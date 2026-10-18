@@ -666,6 +666,7 @@ function createSecretRedactor(env) {
 
 module.exports = {
   Stage,
+  sampleRepresentative,
   decisionFiles,
   decisionLines,
   capDecision,

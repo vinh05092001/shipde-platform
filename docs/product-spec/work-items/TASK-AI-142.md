@@ -248,9 +248,17 @@ Decision log entries link `goalId -> workItemId -> candidateKey -> session -> co
 - Part H2 Hermes session selection, custom config binding, and `shipde-controller` skill file are delivered in Part H2.
 - Live acceptance across chat and controller runs in Part H3 following merge of H1 and H2.
 
+### H3 live: exact route evidence and measured probe ordering (2026-10-18)
+
+Repair of the `2b783b56` review: one shared `route-evidence.js` matcher binds work evidence to the full candidate identity (transport, path, gateway, upstream, account, quota scope and full model identifier). Missing gateway/account data and matching model suffixes cannot borrow another route's proof. Freshness reads `dispatch.routeEvidenceMaxAgeMs` (preserving the existing 24-hour window). API/level-1 success may inform route availability; only `WORK_ITEM_PASS` or passed level 2/3 counts as completed work. The agy writer authorization gate remains unchanged.
+
+Probe order uses exact work/availability observations, then measured `elapsedMs` from route-health or evidence; unknown cost uses the existing dispatch `probeTimeoutMs`. Harness names receive no numeric priority. Rejection diagnostics share `sampleRepresentative` across every harness/reason, retaining the existing overall decision-log bound without named lane quotas. Dispatch dry-run and isolated goal ranking apply the same ordering.
+
+Offline regression includes a checked-in, explicitly bounded sample from trial 14's selected decision (two ranked identities and ten recorded rejection identities), with no credentials, launch metadata or machine paths. The integration drives both `dispatchCommand --dry-run` and `runOrchestration` with fixture-only capability results and a fake writer launcher. It compares the generated, pre/post capability and pre-ranking candidate sets, then verifies the selected identity reaches the launcher. Sample counts: 12 generated, 12 at capability/ranking gates, 2 ranked and 10 rejected; these are fixture counts, not a claim about the uncapped live inventory. Tests never read the original snapshot or the host account registry.
+
 ### H3 live: live route prioritization, fast HTTP probe priority, and non-starving decision log representation (2026-10-18)
 
-Operator decision 2026-10-18 (Trial 14 follow-up): trial 14 ranked only 2 candidates (both agy-pool) because slow CLI/pool probes preceded fast HTTP probes, exhausting the 180s probe budget and leaving all other candidates unverified, and decision log truncation sliced away representative candidates from isolated lanes and general rejections. `orderCandidatesForProbe` now prioritizes live available routes (via routeHealth or recentRouteSuccess across evidence combinations) and fast direct HTTP routes (`opencode-direct`, `direct-http`) before slow CLI and pool workers (`codex`, `agy-pool`), preventing probe budget starvation. `probe-order.js` preserves representative entries across all isolated harnesses (`codex`, `agy-pool`, `opencode-direct`) in `isolatedLaneRejected`, and `decisions.js` samples diverse harness and reason entries up to `CANDIDATE_LIMIT` so no source group is silently dropped from the decision log.
+Historical proposal in rejected SHA `2b783b56`, superseded by the exact-identity repair above: the original change introduced `sampleRepresentative`, but also used harness-name priorities and named lane quotas, and let API evidence satisfy work proof. Those parts failed review and are removed by the repair. The generic representative sampling remains.
 
 ### H3 live: writers are schema-checked after the run, not before selection (2026-10-18)
 
@@ -622,12 +630,13 @@ Verification: `node --test tools/ai-brain/test/task-ai-142-unknown-probe-cause.t
 ### H3 live: direct OpenAI-compatible sources yield opencode-direct writer candidates (2026-10-17)
 
 Direct OpenAI-compatible sources with HTTP/HTTPS endpoints and environment-variable credentials (tencent, cohere, baseten, inception, regolo, amd-radeon) now generate isolated writer candidates with harness `opencode-direct`.
+
 1. Data-driven candidate generation: Any active source in `sources.json` declaring an HTTP/HTTPS endpoint and environment credential variable without a custom CLI harness produces `opencode-direct` writer candidates for each declared or catalogued model ID, without hardcoded provider lists or model IDs. Direct-http candidates remain untouched for other roles.
 2. Secret protection: Isolated worker configuration in `tools/ai-brain/isolation-launcher.js` generates OpenCode provider configurations referencing `{env:VARIABLE_NAME}` without writing raw API key secrets to disk. Keys are passed to the worker exclusively via process environment variables.
 3. Undeclared capabilities: Newly generated candidates leave `jsonSchema` and `tools` undefined for probe-based verification (PR B), while preserving known `contextWindow` and token limits.
 4. Route resolution: `stripOpencodeProviderPrefix` and executor `resolveRoute` correctly resolve wire model IDs for sources where `source.id` acts as the provider key.
 5. Account binding and missing env detection: Candidate `accountId` binds to the concrete credential account ID (`<sourceId>-<envSuffix>`), rejecting missing keys honestly with `CREDENTIAL_ENV_MISSING` and eliminating false `WILDCARD_ACCOUNT` drops.
-Evidence: 115 new `opencode-direct` candidates yielded across 6 direct sources (tencent: 72, cohere: 15, baseten: 11, inception: 2, regolo: 9, amd-radeon: 6). Unit tests in `tools/ai-brain/test/task-ai-142-direct-writer-harness.test.js` and `tools/ai-brain/test/task-ai-142-opencode-writers.test.js`.
+   Evidence: 115 new `opencode-direct` candidates yielded across 6 direct sources (tencent: 72, cohere: 15, baseten: 11, inception: 2, regolo: 9, amd-radeon: 6). Unit tests in `tools/ai-brain/test/task-ai-142-direct-writer-harness.test.js` and `tools/ai-brain/test/task-ai-142-opencode-writers.test.js`.
 
 ### H3 live: audit repairs (2026-10-17)
 

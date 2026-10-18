@@ -97,7 +97,7 @@ describe('TASK-AI-142: Goal writer pool fixes', () => {
     );
   });
 
-  test('probeCapabilities prioritizes writer candidates ahead of unranked router routes to avoid budget starvation', async () => {
+  test('probeCapabilities prioritizes measured fast candidates to avoid budget starvation', async () => {
     const writerProfile = {
       role: 'writer',
       requiredCapabilities: ['jsonSchema'],
@@ -129,6 +129,7 @@ describe('TASK-AI-142: Goal writer pool fixes', () => {
       capabilities: {},
     };
 
+    codexWriterCand.elapsedMs = 10;
     const candidates = [...dummyRouterCands, codexWriterCand];
 
     let probedOrder = [];
@@ -147,11 +148,7 @@ describe('TASK-AI-142: Goal writer pool fixes', () => {
     });
 
     assert.ok(probedOrder.includes('codex'), 'codex must be probed before budget exhaustion');
-    assert.equal(
-      probedOrder[0],
-      'codex',
-      'writer candidate (codex) must be probed first for writer profile'
-    );
+    assert.equal(probedOrder[0], 'codex', 'the measured fast candidate must be probed first');
     assert.equal(codexWriterCand.capabilities.jsonSchema, true);
   });
 
@@ -183,9 +180,8 @@ describe('TASK-AI-142: Goal writer pool fixes', () => {
     const capabilityEvidence = {
       combinations: [
         {
-          harness: 'agy-pool',
-          accountId: 'agy01',
-          model: 'gemini-3.8-flash-high',
+          ...agyCand,
+          model: agyCand.modelId,
           evidence: [
             {
               status: 'passed',
