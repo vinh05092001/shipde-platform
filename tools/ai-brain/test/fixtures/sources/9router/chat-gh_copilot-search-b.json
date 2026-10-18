@@ -1,0 +1,7 @@
+{
+  "modelId": "gh/copilot-search-b",
+  "status": 200,
+  "ok": true,
+  "cause": null,
+  "body": "{\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"content_filter_results\":{},\"message\":{\"content\":\"OK\",\"padding\":\"abcdefghijkl\",\"role\":\"assistant\"}}],\"id\":\"chatcmpl-[REDACTED]\",\"usage\":{\"completion_tokens\":2,\"prompt_tokens\":2093,\"prompt_tokens_details\":{\"cached_tokens\":2080},\"total_tokens\":2095},\"model\":\"copilot-search-b\",\"copilot_usage\":{\"token_details\":[{\"batch_size\":1000000,\"cost_per_batch\":0,\"model\":\"copilot-search-b\",\"token_count\":13,\"token_type\":\"input\"},{\"batch_size\":1000000,\"cost_per_batch\":0,\"model\":\"copilot-search-b\",\"token_count\":2080,\"token_type\":\"cache_read\"},{\"batch_size\":1000000,\"cost_per_batch\":0,\"model\":\"copilot-search-b\",\"token_count\":0,\"token_type\":\"cache_write\"},{\"batch_size\":1000000,\"cost_per_batch\":0,\"model\":\"copilot-search-b\",\"token_count\":2,\"token_type\":\"output\"}],\"total_nano_aiu\":0}}\ndata: [DONE]\n\n"
+}

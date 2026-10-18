@@ -1147,6 +1147,29 @@ Aggregator routers like 9Router require model IDs to carry an upstream provider 
      - Fix: In `tools/ai-brain/candidates.js`, preserved the PR #388 contract that candidates without catalogue capabilities do not inherit harness tools by default. In `tools/ai-brain/test/task-ai-142-goal-writer-pool-3.test.js`, self-contained test fixtures construct isolated registry/accounts/catalogue definitions, asserting unverified default capability and confirming that `tools` capability is acquired through runtime probe verification (`probeCli`).
 - Verification: Unit tests in `tools/ai-brain/test/task-ai-142-goal-writer-pool-3.test.js` (6/6 pass), `task-ai-142-goal-writer-pool-2.test.js` (7/7 pass), and `task-ai-142-goal-writer-pool.test.js` (5/5 pass). Full test suite passes offline with `AI_BRAIN_MACHINE_DATA=none` and without `NINEROUTER_API_KEY`.
 
+### H3 live: rolling source onboarding step 1 (9router)
+
+- Implementation of rolling source onboarding framework (`tools/ai-brain/source-onboarding.js`, `tools/ai-brain/cli.js`):
+  1. CLI subcommands `sources onboard <sourceId> [--record|--replay] [--json]` and `sources onboard --all --replay`.
+  2. Six-stage pipeline:
+     - Gắn: Source endpoint & credential verification without secret leakage.
+     - Danh sách model: GET /models discovery and classification.
+     - Gọi thử: Live route probe via `route-probe.js` recognizing SSE stream 200 chunk responses as live.
+     - Chấm điểm: Mapping models and response alias targets (`model` field) to benchmark priors (`model-priors-live.json` / `priors.js`), assigning `QUALITY_UNKNOWN` without dropping unbenchmarked models.
+     - Ghi bằng chứng: Isolated health and evidence recording with canonical 7-part keys.
+     - Kiểm Controller thấy: End-to-end candidate generation (`candidates.js`) and ranking (`routing.js`) under task profile, explicitly diagnosing and reporting filtering layers and refusal reasons for unranked models.
+  3. Live 9router verification:
+     - 919 discovered models; 14 representative models probed and recorded into `tools/ai-brain/test/fixtures/sources/9router/`.
+     - 9 models live (200 OK): `ag/gemini-3.8-flash`, `ag/gemini-3.8-flash-high`, `ag/gemini-3.8-flash-medium`, `ag/gemini-3.8-flash-low`, `gcli/grok-4.7`, `gh/gpt-4o`, `gh/gpt-4o-mini`, `ag/claude-sonnet-4-6`, `vinh` (alias).
+     - 5 sample error types recorded: 400 (`HTTP_400`), 401 (`AUTH_NEEDED`), 402/503 (`UPSTREAM_UNAVAILABLE`), 404 (`PROVIDER_UNAVAILABLE`), 451 (`GEO_BLOCKED`).
+     - 8 live router models enter Controller ranking under `paseo` harness; unranked models diagnosed accurately (e.g. `vinh` missing upstream prefix caught at candidate generation layer).
+  4. Secret and token sanitization:
+     - All keys (`sk-`), authorization headers (`Bearer`), email addresses (`@`), and token identifiers completely scrubbed from recorded fixtures. Verified clean with `grep -iE "sk-|bearer|@|token"`.
+  5. Regression test suite:
+     - `tools/ai-brain/test/sources-replay.test.js` exercises deterministic offline replay across all source fixtures with zero network calls, verifying deep equality against `expected.json`.
+  6. Defect 5 resolution:
+     - Fixed tests in `tools/ai-brain/test/task-ai-142-probe-config.test.js` to isolate `routeHealthFile` in temporary directories, preventing mutation of the production store `tools/ai-brain/data/model-route-health.json`. Covered by `tools/ai-brain/test/task-ai-142-route-health-isolation.test.js`.
+
 ### H3 live: opencode writer path (2026-10-18)
 
 - Investigation and repair of isolated OpenCode writer execution (`opencode-direct` adapter):
