@@ -192,7 +192,8 @@ const opencodeDirect = {
     if (!job.model) throw new Error('OPENCODE_DIRECT_REQUIRES_PINNED_MODEL');
     if (!job.cwd) throw new Error('OPENCODE_DIRECT_REQUIRES_DIR');
     const args = ['run', '--model', job.model, '--dir', job.cwd, '--auto', '--format', 'json'];
-    if (job.title) args.push('--title', job.title);
+    const title = job.title || job.name || job.workItemId || 'task';
+    args.push('--title', title);
     args.push(job.prompt);
     return args;
   },
