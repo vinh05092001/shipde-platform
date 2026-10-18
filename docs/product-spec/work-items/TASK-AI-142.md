@@ -1051,7 +1051,7 @@ Aggregator routers like 9Router require model IDs to carry an upstream provider 
      - Fix: Preserved `harnessCapabilities` in `candidates.js` when `modelCapabilities` is not specified, and updated `observedToolUse` in `writer-schema.js` to recognize Antigravity's completion envelope.
 - Verification: `node --test tools/ai-brain/test/task-ai-142-goal-writer-pool-2.test.js` passed 7/7. Full offline test suite executed with `AI_BRAIN_MACHINE_DATA=none` and without `NINEROUTER_API_KEY`.
 
-### H3 live: live route prioritization, HTTP account quota short-circuit, and agy-pool tools inheritance (2026-10-18)
+### H3 live: live route prioritization, HTTP account quota short-circuit, and agy-pool capability probe verification (2026-10-18)
 
 - Trial 12 post-fix analysis and resolution across four root causes:
   1. `agy-pool` & `codex` disappearance from trial 12 decision log:
@@ -1073,7 +1073,8 @@ Aggregator routers like 9Router require model IDs to carry an upstream provider 
      - Raw output (redacted): The gateway returned HTTP 200 containing plain text in `choices[0].message.content`: `"Sorry, to prevent abuse of free resources, accounts that have not been recharged can only try 10 times. You can increase the free quota after recharging; https://console.aihubmix.com/topup"`.
      - Diagnosis: The upstream gateway intercepted the request and returned a plain-text quota refusal under HTTP 200 instead of a structured JSON response. `schemaApi.validate` failed with `SyntaxError` on `JSON.parse`, mapping to `WRITER_RESULT_INVALID_JSON`.
      - Fix: Updated `httpProof` in `tools/ai-brain/capability-probe.js` to inspect `message.content` under HTTP 200 for quota and recharge refusal patterns, classifying them accurately as `UPSTREAM_CREDIT_OR_QUOTA` and populating `failedHttpAccounts`. Also broadened insufficient credit regex in `tools/ai-brain/route-probe.js`.
-  4. Real writer selection guarantee:
-     - Root cause: In trial 12, `ShipDe-agy05` passed `jsonSchema` in 18,935ms. However, `candidates.js` line 2068 dropped `harnessCapabilities` (`tools: true`) when `modelCapabilities` was null in catalogue for `gemini-3.8-flash-high`. This forced `probeCapabilities` to launch a second CLI process to verify `tools`, which timed out after 12,180ms (`WRITER_SCHEMA_POOL_POOL_TIMEOUT`) and marked account `agy-pool::ShipDe-agy05` as failed.
-     - Fix: In `tools/ai-brain/candidates.js`, `effectiveCapabilities` now falls back to `Object.assign({}, harnessCapabilities)` when `modelCapabilities` is null or empty, ensuring `agy-pool` candidates inherit `tools: true` without redundant CLI tool probes.
+  4. Real writer capability verification:
+     - Design rule: PR #388 established that inventory and harness declarations do not authorize unprobed capability or grant implicit tools capability.
+     - Diagnosis: Test 4 in `task-ai-142-goal-writer-pool-3.test.js` failed on Linux CI because it lacked mock pool accounts/models and incorrectly asserted default inheritance of `tools: true` from the harness.
+     - Fix: In `tools/ai-brain/candidates.js`, preserved the PR #388 contract that candidates without catalogue capabilities do not inherit harness tools by default. In `tools/ai-brain/test/task-ai-142-goal-writer-pool-3.test.js`, self-contained test fixtures construct isolated registry/accounts/catalogue definitions, asserting unverified default capability and confirming that `tools` capability is acquired through runtime probe verification (`probeCli`).
 - Verification: Unit tests in `tools/ai-brain/test/task-ai-142-goal-writer-pool-3.test.js` (6/6 pass), `task-ai-142-goal-writer-pool-2.test.js` (7/7 pass), and `task-ai-142-goal-writer-pool.test.js` (5/5 pass). Full test suite passes offline with `AI_BRAIN_MACHINE_DATA=none` and without `NINEROUTER_API_KEY`.

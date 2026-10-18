@@ -226,7 +226,7 @@ test('TASK-AI-142 item 3: httpProof detects upstream gateway quota refusal insid
   );
 });
 
-test('TASK-AI-142 item 4: agy-pool candidates inherit tools capability from harness when model capabilities are omitted', () => {
+test('TASK-AI-142 item 4: agy-pool candidates do not inherit tools by default and require probe evidence', async () => {
   const registry = {
     sources: [
       {
@@ -234,24 +234,56 @@ test('TASK-AI-142 item 4: agy-pool candidates inherit tools capability from harn
         kind: 'agent-cli',
         capabilities: { tools: true },
         writerEnabled: true,
+        accounts: ['agy01'],
       },
     ],
   };
 
   const cands = candidatesApi.generateCandidates({
     registry,
-    catalogue: [{ id: 'gemini-3.8-flash-high', modelId: 'gemini-3.8-flash-high' }], // no explicit capabilities in catalogue
-    accounts: [],
+    models: ['gemini-3.8-flash-high'],
+    catalogue: [
+      {
+        id: 'gemini-3.8-flash-high',
+        modelId: 'gemini-3.8-flash-high',
+        upstream: 'antigravity',
+      },
+    ],
+    accounts: [{ id: 'agy01', provider: 'agy-pool' }],
     externalWorkers: 'agy-pool',
+    discoverPool: false,
   });
 
   const agy = cands.find((c) => c.harness === 'agy-pool');
   assert.ok(agy, 'agy-pool candidate must be generated');
   assert.equal(
     agy.capabilities.tools,
-    true,
-    'agy-pool candidate must inherit tools: true from agySource.capabilities'
+    undefined,
+    'agy-pool candidate must not inherit tools capability by default without probe proof'
   );
+
+  let probeCliCalled = false;
+  await capabilityProbe.probeCapabilities(
+    [agy],
+    { role: 'writer', requiredCapabilities: ['tools'] },
+    {
+      registry,
+      probeCli: async (_cand, cap) => {
+        probeCliCalled = true;
+        assert.equal(cap, 'tools');
+        return { ok: true, verifiedToolCalls: 1 };
+      },
+      schemaProbeBudgetMs: 5000,
+    }
+  );
+
+  assert.ok(probeCliCalled, 'probeCli must be executed to verify tools capability');
+  assert.equal(
+    agy.capabilities.tools,
+    true,
+    'agy-pool candidate must acquire tools capability only from probe proof'
+  );
+  assert.equal(agy.capabilityEvidence.tools.ok, true);
 });
 
 test('TASK-AI-142 item 5: writer selection succeeds when candidate has verified capability evidence', () => {
