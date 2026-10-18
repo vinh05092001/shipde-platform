@@ -220,6 +220,28 @@ function resolveLauncher(o, isolatedLauncher) {
     }
     const adapter = getHarness(job.harness);
     if (!adapter) throw new Error('UNKNOWN_HARNESS: ' + String(job.harness));
+    if (
+      adapter.id === 'agy-pool' &&
+      externalWorkers.includes(adapter.id) &&
+      Boolean(
+        o.registry?.dispatch?.agyPoolWriterEnabled ||
+        o.dispatch?.agyPoolWriterEnabled ||
+        o.allowAgyPoolWriter
+      )
+    ) {
+      const pool = require('./agy-pool-runtime');
+      const result = pool.submitJob(job.accountId, job, {
+        ...o,
+        timeoutMs: job.workerTimeoutMs || o.workerTimeoutMs,
+      });
+      return {
+        ...result,
+        exitCode: result.state === 'ok' ? result.exitCode : result.exitCode || 1,
+        stdout: result.jobId && result.state === 'ok' ? pool.readOutText(job.accountId, o) : '',
+        stderr: result.reason || (result.state === 'ok' ? '' : result.state || ''),
+        launchHandle: result.jobId || null,
+      };
+    }
     let launchArgs;
     try {
       launchArgs = adapter.launch(job);
@@ -4426,6 +4448,48 @@ async function runOrchestration(goal, opts) {
     const excludedDomains = item.excludedDomains;
     const domainAttempts = item.domainAttempts;
     const triedKeys = item.triedKeys;
+    const localCandidateFailures = new Map();
+    let maxLocalWriterFallbacks = require('./sources.json').dispatch.maxLocalWriterFallbacks;
+    try {
+      const configuredLocalFallbacks = Number(
+        registry?.dispatch?.maxLocalWriterFallbacks ??
+          require('./sources.json').dispatch.maxLocalWriterFallbacks
+      );
+      if (Number.isSafeInteger(configuredLocalFallbacks) && configuredLocalFallbacks >= 0) {
+        maxLocalWriterFallbacks = configuredLocalFallbacks;
+      }
+    } catch {}
+    const skipLocalCandidate = (key, cause, refundDomainAttempt = false) => {
+      localCandidateFailures.set(key, cause);
+      if (refundDomainAttempt) {
+        const candidate = candidates.find((c) => candidateKey(c) === key);
+        const domain = routing.canonicalFailureDomain(candidate);
+        domainAttempts.set(domain, Math.max(0, (domainAttempts.get(domain) || 0) - 1));
+      }
+      if (localCandidateFailures.size > maxLocalWriterFallbacks) {
+        blockedReason =
+          'LOCAL_WRITER_FALLBACK_LIMIT: ' +
+          JSON.stringify(
+            Array.from(localCandidateFailures, ([candidateKey, cause]) => ({ candidateKey, cause }))
+          );
+        launch.fallbackReason = blockedReason;
+        decisions.recordDecision(
+          {
+            stage: decisions.Stage.FAILED,
+            workItemId: item.id,
+            chosen: key,
+            failureScope: 'local',
+            cause: 'LOCAL_WRITER_FALLBACK_LIMIT',
+            detail: blockedReason,
+            retryable: false,
+          },
+          logOpts
+        );
+        return false;
+      }
+      return true;
+    };
+
     for (const failure of (savedStep && savedStep.failures) || []) {
       // TASK-AI-120 RI-R03: a local failure (a missing base commit) blames
       // nothing — not on the fresh attempt and not on a later resume.
@@ -4542,12 +4606,17 @@ async function runOrchestration(goal, opts) {
         ],
       });
       recordedWriterFailures.add(key);
+      const selectedDecision = log.selections
+        .slice()
+        .reverse()
+        .find((entry) => entry.workItemId === item.id && entry.decision?.chosen === key);
       decisions.recordDecision(
         {
           stage: decisions.Stage.FAILED,
           workItemId: item.id,
           role: roleOf(item),
           chosen: key,
+          ranking: (selectedDecision && selectedDecision.decision?.decisionRecorded?.ranking) || [],
           cause,
           failureScope: scope,
           detail: reason,
@@ -4824,7 +4893,7 @@ async function runOrchestration(goal, opts) {
       //    decision, not a dry run: it is written to the decision log before the
       //    launch, with the ranking inputs it was made from (AI-64-R03).
       const currentItemStep = liveSteps[item.id] || savedStep;
-      const failedForSelection = new Set(failedKeys);
+      const failedForSelection = new Set([...failedKeys, ...localCandidateFailures.keys()]);
       const routeRefusals = candidates.map((offered) => {
         const key = candidateKey(offered);
         const reason = writerProbeResults.has(key)
@@ -4892,7 +4961,11 @@ async function runOrchestration(goal, opts) {
       log.selections.push({ workItemId: item.id, attempt, decision });
       if (Date.now() >= o.itemDeadline && reachedItemLimit(attempt)) break;
       if (!decision.chosen) {
-        if (failedKeys.size > 0) {
+        if (localCandidateFailures.size > 0) {
+          // Exhausting this invocation's alternatives must retain the real
+          // harness/session cause, not replace it with a generic rank refusal.
+          blockedReason = launch.cause || Array.from(localCandidateFailures.values()).at(-1);
+        } else if (failedKeys.size > 0) {
           blockedReason =
             'NO_ALTERNATE_FAILURE_DOMAIN' +
             (launch.fallbackReason
@@ -5866,9 +5939,26 @@ async function runOrchestration(goal, opts) {
           }
           localLaunchFailures.add(identity);
         }
+        if (
+          classification.scope === Scope.LOCAL &&
+          classification.cause !== Cause.LAUNCH_CONFIG &&
+          classification.cause !== 'HOST_GATE_FAILED'
+        ) {
+          const rankedCandidates =
+            decision?.decisionRecorded?.ranking || decision?.result?.ranking || [];
+          const hasAlternate = rankedCandidates.some((r) => {
+            const k = r.candidateKey || (typeof r === 'string' ? r : null);
+            return (
+              k && k !== decision.chosen && !failedKeys.has(k) && !localCandidateFailures.has(k)
+            );
+          });
+          if (hasAlternate) {
+            if (!skipLocalCandidate(decision.chosen, classification.cause)) break;
+          }
+        }
         const alternate = candidates.find((c) => {
           const k = candidateKey(c);
-          if (failedKeys.has(k)) return false;
+          if (failedKeys.has(k) || localCandidateFailures.has(k)) return false;
           if (c.blocked) return false;
           const cDomain = routing.canonicalFailureDomain(c);
           if (excludedDomains.has(cDomain)) return false;
@@ -5914,6 +6004,26 @@ async function runOrchestration(goal, opts) {
         blockedReason = reported.cause || 'HARNESS_NO_SESSION_ID';
         launch.fallbackReason = blockedReason;
         launch.cause = blockedReason;
+        launch.scope = 'local';
+        recordPostSelectFailure(blockedReason, blockedReason);
+        log.launches.push({ ...launch });
+        const rankedCandidates =
+          decision?.decisionRecorded?.ranking || decision?.result?.ranking || [];
+        const hasAlternate =
+          !log.hostGate?.pass &&
+          rankedCandidates.some((r) => {
+            const k = r.candidateKey || (typeof r === 'string' ? r : null);
+            return (
+              k && k !== decision.chosen && !failedKeys.has(k) && !localCandidateFailures.has(k)
+            );
+          });
+        if (
+          hasAlternate &&
+          skipLocalCandidate(decision.chosen, reported.cause || 'HARNESS_NO_SESSION_ID', true)
+        ) {
+          blockedReason = null;
+          continue;
+        }
         break;
       }
 
@@ -6085,13 +6195,22 @@ async function runOrchestration(goal, opts) {
           ? lastWriterFailureReason
           : blockedReason || launch.fallbackReason || 'NO_LIVE_SESSION';
       const step = liveSteps[item.id] || {};
+      const targetFailedKey =
+        launch.selected ||
+        Array.from(localCandidateFailures.keys()).at(-1) ||
+        log.selections
+          .slice()
+          .reverse()
+          .find((entry) => entry.workItemId === item.id && entry.decision?.chosen)?.decision
+          ?.chosen ||
+        null;
       persistStep(item.id, 'writer_post_selection_failed', {
         reason: terminalReason,
         failures: (step.failures || []).length
           ? step.failures
           : [
               {
-                failedCandidateKey: launch.selected,
+                failedCandidateKey: targetFailedKey,
                 reason: terminalReason,
                 cause: launch.cause || terminalReason,
                 failureScope: launch.scope || 'local',
@@ -6100,18 +6219,18 @@ async function runOrchestration(goal, opts) {
       });
       // Existing launch failures already carry the scrubbed launcher detail and
       // classification. Keep that record while wrapping its checkpoint reason.
-      if (!recordedWriterFailures.has(launch.selected)) {
+      if (!recordedWriterFailures.has(targetFailedKey) && targetFailedKey) {
         const selectedDecision = log.selections
           .slice()
           .reverse()
           .find(
-            (entry) => entry.workItemId === item.id && entry.decision.chosen === launch.selected
+            (entry) => entry.workItemId === item.id && entry.decision?.chosen === targetFailedKey
           );
         decisions.recordDecision(
           {
             stage: decisions.Stage.FAILED,
             workItemId: item.id,
-            chosen: launch.selected,
+            chosen: targetFailedKey,
             ranking:
               (selectedDecision && selectedDecision.decision.decisionRecorded?.ranking) || [],
             detail: terminalReason,
@@ -6134,19 +6253,21 @@ async function runOrchestration(goal, opts) {
         (verdictStop && verdictStop.reason) || terminalReason,
         Object.assign(
           {
-            reasonCode: /^WRITER_SELECTION_LIMIT_EXCEEDED|^ITEM_DURATION_LIMIT_EXCEEDED/.test(
-              blockedReason || ''
-            )
-              ? blockedReason.split(':')[0]
-              : blockedReason === 'TOKEN_BUDGET_EXCEEDED'
-                ? 'TOKEN_BUDGET_EXCEEDED'
-                : launch.cause === 'STALLED_NO_PROGRESS'
-                  ? 'STALLED_NO_PROGRESS'
-                  : verdictStop
-                    ? verdictStop.reasonCode
-                    : isNoAlt
-                      ? 'NO_ALTERNATE_FAILURE_DOMAIN'
-                      : undefined,
+            reasonCode: blockedReason?.startsWith('LOCAL_WRITER_FALLBACK_LIMIT')
+              ? 'LOCAL_WRITER_FALLBACK_LIMIT'
+              : /^WRITER_SELECTION_LIMIT_EXCEEDED|^ITEM_DURATION_LIMIT_EXCEEDED/.test(
+                    blockedReason || ''
+                  )
+                ? blockedReason.split(':')[0]
+                : blockedReason === 'TOKEN_BUDGET_EXCEEDED'
+                  ? 'TOKEN_BUDGET_EXCEEDED'
+                  : launch.cause === 'STALLED_NO_PROGRESS'
+                    ? 'STALLED_NO_PROGRESS'
+                    : verdictStop
+                      ? verdictStop.reasonCode
+                      : isNoAlt
+                        ? 'NO_ALTERNATE_FAILURE_DOMAIN'
+                        : undefined,
             triedKeys: Array.from(triedKeys),
             tried: Array.from(triedKeys),
             cause: launch.cause || undefined,

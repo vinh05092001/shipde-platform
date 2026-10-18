@@ -338,6 +338,7 @@
   "dispatch": {
     "routeEvidenceMaxAgeMs": 86400000,
     "maxWriterSelectionRounds": 12,
+    "maxLocalWriterFallbacks": 3,
     "maxItemDurationMs": 3600000,
     "probeBudgetMs": 180000,
     "maxConcurrentProbes": 8,

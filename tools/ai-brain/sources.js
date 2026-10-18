@@ -392,9 +392,17 @@ function getDispatchConfig(registry, options = {}) {
     }
     return value;
   };
+  const configuredNonNegativeLimit = (key) => {
+    const value = Number(options[key] ?? dispatch[key] ?? defaults[key]);
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new Error('DISPATCH_CONFIG_INVALID: ' + key + ' must be a non-negative integer');
+    }
+    return value;
+  };
   return {
     routeEvidenceMaxAgeMs,
     maxWriterSelectionRounds: configuredLimit('maxWriterSelectionRounds'),
+    maxLocalWriterFallbacks: configuredNonNegativeLimit('maxLocalWriterFallbacks'),
     maxItemDurationMs: configuredLimit('maxItemDurationMs'),
     probeBudgetMs,
     maxConcurrentProbes,

@@ -248,6 +248,36 @@ Decision log entries link `goalId -> workItemId -> candidateKey -> session -> co
 - Part H2 Hermes session selection, custom config binding, and `shipde-controller` skill file are delivered in Part H2.
 - Live acceptance across chat and controller runs in Part H3 following merge of H1 and H2.
 
+### H3 live: pool writer job identity and bounded local fallback (2026-10-18)
+
+Trial 14 recorded an agy-pool writer exit 0 with no durable session identity,
+then HARNESS_INVALID_JSON and an immediate item stop. `resolveLauncher` previously
+used the adapter/scheduler path, which neither bound the result to a pool job nor
+returned a launch handle. `readSessionId` therefore fell through to stdout JSON
+parsing; the missing-session branch in orchestration stopped selection.
+
+Authorized external pool writers now use the existing locked pool submission
+path. The pool allocates a job UUID at submission, writes account/job identity
+into job.json before execution, retains a per-job receipt, and returns that same
+identity in result metadata. Executor reads it through the pool adapter contract,
+independently of prose stdout and without claiming isolated execution. No PID,
+time-derived id, account-only id or latest-session lookup is used. Reusing an
+account creates a distinct job while retaining the earlier receipt.
+
+A candidate-local session failure is recorded with its exact key and cause,
+then skipped only for this item invocation. It consumes no upstream attempt or
+provider cooldown. The next writer is selected by the Controller's existing
+ranking. `dispatch.maxLocalWriterFallbacks` bounds the number of transitions;
+exhaustion records LOCAL_WRITER_FALLBACK_LIMIT with each candidate/reason. Existing
+isolation-verdict stops and repeated identical infrastructure-failure stops remain.
+The agy authorization gate is unchanged. Tests use temporary repos/pool files and
+mock adapter/scheduler boundaries; no machine fixture data is read by tests.
+
+The historical decision snapshot retains exit/session metadata but no writer
+stdout, so the regression uses explicitly synthetic prose. It proves the protocol
+path and fallback, not that the historical writer completed the work. No real
+goal replay is part of this validation.
+
 ### H3 live: exact route evidence and measured probe ordering (2026-10-18)
 
 Repair of the `2b783b56` review: one shared `route-evidence.js` matcher binds work evidence to the full candidate identity (transport, path, gateway, upstream, account, quota scope and full model identifier). Missing gateway/account data and matching model suffixes cannot borrow another route's proof. Freshness reads `dispatch.routeEvidenceMaxAgeMs` (preserving the existing 24-hour window). API/level-1 success may inform route availability; only `WORK_ITEM_PASS` or passed level 2/3 counts as completed work. The agy writer authorization gate remains unchanged.
@@ -281,7 +311,6 @@ Capability and route probes share the item deadline and worker launch timeouts
 are capped by its remaining duration. Defaults come from versioned `sources.json`;
 invalid limits fail closed. Regression fixtures inject routes and clocks, with no
 machine data or provider calls.
-
 ### H3 live: writers are schema-checked after the run, not before selection (2026-10-18)
 
 Operator decision 2026-10-18: trials 10-13 of goal G-F622511E refused every agy-pool and Codex writer because the pre-selection jsonSchema proof (a full CLI launch) timed out or ran out of budget. The writer roles (author.foundation, author.lowrisk) no longer require jsonSchema before selection; the writer result is still validated after the run (WRITER_RESULT_INVALID_JSON), and the host gate and exact-SHA review still gate the commit. Planner and reviewer roles keep the requirement.

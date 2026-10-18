@@ -380,6 +380,13 @@ const agyPool = {
     fs.writeFileSync(path.join(accountDir, 'job.json'), JSON.stringify(payload, null, 2), 'utf8');
     return ['/run', '/tn', `ShipDe\\ShipDe-${job.accountId}`];
   },
+  sessionIdFromResult(job, result) {
+    if (result?.accountId && result.accountId !== job?.accountId) return null;
+    const id = result?.jobId || result?.launchHandle;
+    if (typeof id !== 'string' || !id.trim() || id === job?.accountId) return null;
+    if (result?.jobId && !id.startsWith(job?.accountId + '/')) return null;
+    return id.trim();
+  },
   quota(accountId, opts) {
     const pool = require('./agy-pool-runtime');
     const result = pool.submitJob(accountId, { command: 'quota' }, opts);
@@ -389,7 +396,9 @@ const agyPool = {
     return this.launch(Object.assign({}, job, { prompt }), opts);
   },
   stop(sessionId) {
-    return ['/end', '/tn', `ShipDe\\ShipDe-${sessionId}`];
+    const accountId = String(sessionId || '').split('/')[0];
+    if (!require('./agy-pool-runtime').isValidAccountId(accountId)) return null;
+    return ['/end', '/tn', `ShipDe\\ShipDe-${accountId}`];
   },
   sessionIdFrom(parsed) {
     return parsed && parsed.accountId ? String(parsed.accountId) : null;
