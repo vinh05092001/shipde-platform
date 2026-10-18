@@ -3,6 +3,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { randomUUID } = require('crypto');
 const { spawnSync } = require('child_process');
 const {
   mapFamily,
@@ -249,7 +250,29 @@ function submitJob(accountId, job, options) {
 function submitLocked(accountId, job, opts, dir) {
   const resultFile = path.join(dir, 'result.json');
   const startedAt = Date.now();
-  fs.writeFileSync(path.join(dir, 'job.json'), JSON.stringify(job, null, 2), 'utf8');
+  // Allocate the pool job identity at submission, persist it before execution,
+  // and retain its receipt after the account mailbox is reused by another job.
+  const jobId = accountId + '/' + randomUUID();
+  const submitted = { ...job, accountId, jobId };
+  const receiptDir = path.join(dir, 'jobs');
+  fs.mkdirSync(receiptDir, { recursive: true });
+  const receiptFile = path.join(receiptDir, jobId.split('/')[1] + '.json');
+  const receipt = { jobId, accountId, candidateKey: job.candidateKey || null };
+  fs.writeFileSync(receiptFile, JSON.stringify({ ...receipt, state: 'submitted' }), 'utf8');
+  fs.writeFileSync(path.join(dir, 'job.json'), JSON.stringify(submitted, null, 2), 'utf8');
+  const finish = (result) => {
+    const bound = { ...result, jobId, accountId };
+    fs.writeFileSync(
+      receiptFile,
+      JSON.stringify({
+        ...receipt,
+        state: result?.state || 'error',
+        exitCode: result?.exitCode ?? null,
+      }),
+      'utf8'
+    );
+    return bound;
+  };
   const launch = exp.runAdapter(accountId, opts);
   if (launch.exitCode !== 0) {
     const isTimeout = Boolean(launch.stderr && launch.stderr.includes('ADAPTER_TIMEOUT'));
@@ -269,9 +292,9 @@ function submitLocked(accountId, job, opts, dir) {
     try {
       fs.writeFileSync(resultFile, JSON.stringify(errorResult, null, 2), 'utf8');
     } catch {}
-    return errorResult;
+    return finish(errorResult);
   }
-  return exp.waitForResult(accountId, startedAt, opts);
+  return finish(exp.waitForResult(accountId, startedAt, opts));
 }
 
 function parseQuotaJson(value) {

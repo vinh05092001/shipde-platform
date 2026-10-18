@@ -156,6 +156,11 @@ function inspectVerdict(res) {
  * a value that is not a session cannot be resumed.
  */
 function readSessionId(adapter, job, res) {
+  // Some job harnesses report identity as process metadata, never in prose stdout.
+  if (adapter && typeof adapter.sessionIdFromResult === 'function') {
+    const id = adapter.sessionIdFromResult(job, res);
+    return { id: id || null, cause: id ? null : 'HARNESS_NO_SESSION_ID' };
+  }
   const isIsolated = Boolean(
     (job && job.isolatedWorker) || (res && (res.isolatedWorker || res.workerRoot))
   );
