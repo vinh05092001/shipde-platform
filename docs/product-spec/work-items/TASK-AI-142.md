@@ -1117,3 +1117,26 @@ Aggregator routers like 9Router require model IDs to carry an upstream provider 
      - Diagnosis: Test 4 in `task-ai-142-goal-writer-pool-3.test.js` failed on Linux CI because it lacked mock pool accounts/models and incorrectly asserted default inheritance of `tools: true` from the harness.
      - Fix: In `tools/ai-brain/candidates.js`, preserved the PR #388 contract that candidates without catalogue capabilities do not inherit harness tools by default. In `tools/ai-brain/test/task-ai-142-goal-writer-pool-3.test.js`, self-contained test fixtures construct isolated registry/accounts/catalogue definitions, asserting unverified default capability and confirming that `tools` capability is acquired through runtime probe verification (`probeCli`).
 - Verification: Unit tests in `tools/ai-brain/test/task-ai-142-goal-writer-pool-3.test.js` (6/6 pass), `task-ai-142-goal-writer-pool-2.test.js` (7/7 pass), and `task-ai-142-goal-writer-pool.test.js` (5/5 pass). Full test suite passes offline with `AI_BRAIN_MACHINE_DATA=none` and without `NINEROUTER_API_KEY`.
+
+### H3 live: opencode writer path (2026-10-18)
+
+- Investigation and repair of isolated OpenCode writer execution (`opencode-direct` adapter):
+  1. Root cause analysis of provider routing and stream parsing defects:
+     - Model `ninerouter/tokenrouter/openai/gpt-5.6-sol`: In 9Router/upstream, returned `Content-Type: text/event-stream` with a raw non-SSE JSON payload lacking `data: ` line prefixes. OpenCode's SSE parser received 0 stream chunks, exiting with code 0 and empty text (`> build · ...` only).
+     - Model `ninerouter/tokenrouter/qwen/qwen3.8-max`: Non-stream fallback from 9Router appended `data: [DONE]` directly to JSON body without delimiter, breaking standard JSON parsers with `UnknownError: Unexpected server error`. In OpenCode configuration, `tokenrouter/qwen/qwen3.8-max` was missing from declared `models` map.
+     - Model `explabs/muse-spark-1.3`: The direct provider `explabs` had 0 models declared in `opencode.json` (`models: {}`), causing OpenCode to fail to route or resolve capabilities.
+     - Permission boundary: In unattended execution, OpenCode auto-denied `external_directory` access for files outside the worker root (such as Controller report and usage logs), causing premature termination.
+     - Empty response failure classification: An exit code 0 producing no content or tool calls was not flagged by the harness.
+  2. Controller repairs in `isolation-launcher.js`, `harness.js`, and `executor.js`:
+     - Dynamic `opencode.json` generation in `tools/ai-brain/isolation-launcher.js`:
+       - Populated `models` map with wire ID, relative model ID, output limits (`limit.output`), and context window (`limit.context`).
+       - Propagated source options (`options`, `headers`, `timeout`, `max_tokens`) from source data into `provider.<id>.options`.
+       - Scoped `permission.external_directory` strictly to `workerRoot` and designated Controller report paths (`usageDir`, `usageFile`), preventing whole-machine wildcard while enabling headless operation.
+       - Enforced `{env:KEY_NAME}` credential format, preventing token leakage into disk configuration.
+     - Empty response detection in `tools/ai-brain/executor.js`:
+       - Added `hasHarnessResponse` checking for real text or tool use events while filtering build banner lines.
+       - Mapped empty responses to named error `HARNESS_EMPTY_RESPONSE` in `readSessionId`.
+     - Session naming in `tools/ai-brain/harness.js`:
+       - Ensured consistent `--title` fallback to work item ID or task name.
+  3. Verification:
+     - New unit tests in `tools/ai-brain/test/task-ai-142-opencode-writer.test.js` verifying config generation for SSE/JSON sources, permission scoping, secret redaction, and `HARNESS_EMPTY_RESPONSE` handling.
