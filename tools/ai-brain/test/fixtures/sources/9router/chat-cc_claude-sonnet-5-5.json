@@ -1,0 +1,7 @@
+{
+  "modelId": "cc/claude-sonnet-5-5",
+  "status": 503,
+  "ok": false,
+  "cause": "AUTH_NEEDED",
+  "body": "{\"error\":{\"message\":\"[claude/claude-sonnet-5-5] [401]: {\\\"type\\\":\\\"error\\\",\\\"error\\\":{\\\"type\\\":\\\"authentication_error\\\",\\\"message\\\":\\\"OAuth access unit has expired. Re-authenticate to continue.\\\"},\\\"request_id\\\":\\\"req_[REDACTED]\\\"} (reset after 35s)\"}}"
+}

@@ -1,0 +1,7 @@
+{
+  "modelId": "ag/gemini-3.8-flash-medium",
+  "status": 200,
+  "ok": true,
+  "cause": null,
+  "body": "data: {\"id\":\"chatcmpl-[REDACTED]\",\"object\":\"chat.completion.chunk\",\"created\":1792331978,\"model\":\"gemini-3.8-flash-n\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-[REDACTED]\",\"object\":\"chat.completion.chunk\",\"created\":1792331978,\"model\":\"gemini-3.8-flash-n\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"OK\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-[REDACTED]\",\"object\":\"chat.completion.chunk\",\"created\":1792331978,\"model\":\"gemini-3.8-flash-n\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"unit\":4086,\"unit\":48,\"unit\":4134,\"unit\":{\"unit\":47}}}\n\n"
+}

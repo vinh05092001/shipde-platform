@@ -1,0 +1,7 @@
+{
+  "modelId": "ag/claude-sonnet-4-6",
+  "status": 200,
+  "ok": true,
+  "cause": null,
+  "body": "data: {\"id\":\"chatcmpl-[REDACTED]\",\"object\":\"chat.completion.chunk\",\"created\":1792331991,\"model\":\"claude-sonnet-4-6\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-[REDACTED]\",\"object\":\"chat.completion.chunk\",\"created\":1792331991,\"model\":\"claude-sonnet-4-6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"OK\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-[REDACTED]\",\"object\":\"chat.completion.chunk\",\"created\":1792331991,\"model\":\"claude-sonnet-4-6\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"unit\":4222,\"unit\":4,\"unit\":4226}}\n\n"
+}

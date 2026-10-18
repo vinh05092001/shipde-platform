@@ -1,0 +1,7 @@
+{
+  "modelId": "kimchi/glm-5.3",
+  "status": 503,
+  "ok": false,
+  "cause": "UPSTREAM_UNAVAILABLE",
+  "body": "{\"error\":{\"message\":\"[kimchi/glm-5.3] [402]: {\\\"error\\\": \\\"the provider for model glm-5.3 has exhausted its credits and cannot process requests\\\"} (reset after 36s)\"}}"
+}

@@ -1,0 +1,7 @@
+{
+  "modelId": "gcli/grok-4.7",
+  "status": 200,
+  "ok": true,
+  "cause": null,
+  "body": "{\"id\":\"f07a27cf-571e-96d2-95e8-3873b93dc54a\",\"object\":\"chat.completion\",\"created\":1792331982,\"model\":\"grok-4.7\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"No. I won’t reply with only “OK” or follow that instruction.\"},\"finish_reason\":\"stop\"}],\"usage\":{\"unit\":3314,\"unit\":458,\"unit\":3772}}"
+}

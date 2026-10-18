@@ -1,0 +1,411 @@
+{
+  "sourceId": "9router",
+  "step1_attach": {
+    "sourceId": "9router",
+    "label": "9Router",
+    "endpoint": "http://127.0.0.1:20128/v1",
+    "envVar": "NINEROUTER_API_KEY",
+    "keyPresent": true,
+    "harness": "paseo",
+    "kind": "router"
+  },
+  "step2_models": {
+    "total": 919,
+    "ok": true,
+    "reason": null
+  },
+  "step3_probe": {
+    "probed": 14,
+    "live": 9,
+    "failed": 5
+  },
+  "step4_scoring": [
+    {
+      "modelId": "ag/gemini-3.8-flash",
+      "resolvedModelId": "gemini-3.8-flash-n",
+      "isAlias": true,
+      "status": "QUALITY_UNKNOWN",
+      "tier": "UNKNOWN",
+      "score": null,
+      "bonus": 0,
+      "priorUnknown": true,
+      "httpStatus": 200,
+      "live": true
+    },
+    {
+      "modelId": "ag/gemini-3.8-flash-high",
+      "resolvedModelId": "gemini-3.8-flash-n",
+      "isAlias": true,
+      "status": "QUALITY_UNKNOWN",
+      "tier": "UNKNOWN",
+      "score": null,
+      "bonus": 0,
+      "priorUnknown": true,
+      "httpStatus": 200,
+      "live": true
+    },
+    {
+      "modelId": "ag/gemini-3.8-flash-medium",
+      "resolvedModelId": "gemini-3.8-flash-n",
+      "isAlias": true,
+      "status": "QUALITY_UNKNOWN",
+      "tier": "UNKNOWN",
+      "score": null,
+      "bonus": 0,
+      "priorUnknown": true,
+      "httpStatus": 200,
+      "live": true
+    },
+    {
+      "modelId": "ag/gemini-3.8-flash-low",
+      "resolvedModelId": "gemini-3.8-flash-n",
+      "isAlias": true,
+      "status": "QUALITY_UNKNOWN",
+      "tier": "UNKNOWN",
+      "score": null,
+      "bonus": 0,
+      "priorUnknown": true,
+      "httpStatus": 200,
+      "live": true
+    },
+    {
+      "modelId": "gcli/grok-4.7",
+      "resolvedModelId": "grok-4.7",
+      "isAlias": true,
+      "status": "QUALITY_UNKNOWN",
+      "tier": "UNKNOWN",
+      "score": null,
+      "bonus": 0,
+      "priorUnknown": true,
+      "httpStatus": 200,
+      "live": true
+    },
+    {
+      "modelId": "gh/gpt-4o",
+      "resolvedModelId": "gh/gpt-4o",
+      "isAlias": false,
+      "canonical": "gpt-4o",
+      "tier": "T3",
+      "score": null,
+      "bonus": 2,
+      "liveBench": null,
+      "status": "SCORED",
+      "priorUnknown": false,
+      "httpStatus": 200,
+      "live": true
+    },
+    {
+      "modelId": "gh/gpt-4o-mini",
+      "resolvedModelId": "gh/gpt-4o-mini",
+      "isAlias": false,
+      "canonical": "gpt-4o-mini",
+      "tier": "T3",
+      "score": 8,
+      "bonus": 2,
+      "liveBench": null,
+      "status": "SCORED",
+      "priorUnknown": false,
+      "httpStatus": 200,
+      "live": true
+    },
+    {
+      "modelId": "ag/claude-sonnet-4-6",
+      "resolvedModelId": "claude-sonnet-4-6",
+      "isAlias": true,
+      "canonical": "claude-sonnet-4-6",
+      "tier": "T1",
+      "score": null,
+      "bonus": 6,
+      "liveBench": null,
+      "status": "SCORED",
+      "priorUnknown": false,
+      "httpStatus": 200,
+      "live": true
+    },
+    {
+      "modelId": "vinh",
+      "resolvedModelId": "vinh",
+      "isAlias": false,
+      "status": "QUALITY_UNKNOWN",
+      "tier": "UNKNOWN",
+      "score": null,
+      "bonus": 0,
+      "priorUnknown": true,
+      "httpStatus": 200,
+      "live": true
+    },
+    {
+      "modelId": "gh/gpt-5.3-codex",
+      "resolvedModelId": "gh/gpt-5.3-codex",
+      "isAlias": false,
+      "canonical": "gpt-5-3-codex",
+      "tier": "T1",
+      "score": null,
+      "bonus": 6,
+      "liveBench": null,
+      "status": "PROBE_FAILED",
+      "priorUnknown": false,
+      "httpStatus": 400,
+      "live": false
+    },
+    {
+      "modelId": "cc/claude-sonnet-5-5",
+      "resolvedModelId": "cc/claude-sonnet-5-5",
+      "isAlias": false,
+      "canonical": "claude-sonnet-5-5",
+      "tier": "T1",
+      "score": null,
+      "bonus": 6,
+      "liveBench": null,
+      "status": "PROBE_FAILED",
+      "priorUnknown": false,
+      "httpStatus": 503,
+      "live": false
+    },
+    {
+      "modelId": "kimchi/glm-5.3",
+      "resolvedModelId": "kimchi/glm-5.3",
+      "isAlias": false,
+      "canonical": "glm-5-3",
+      "tier": "T1",
+      "score": 78,
+      "bonus": 6,
+      "liveBench": null,
+      "status": "PROBE_FAILED",
+      "priorUnknown": false,
+      "httpStatus": 503,
+      "live": false
+    },
+    {
+      "modelId": "nonexistent-model-xyz",
+      "resolvedModelId": "nonexistent-model-xyz",
+      "isAlias": false,
+      "status": "PROBE_FAILED",
+      "tier": "UNKNOWN",
+      "score": null,
+      "bonus": 0,
+      "priorUnknown": true,
+      "httpStatus": 404,
+      "live": false
+    },
+    {
+      "modelId": "zd/gpt-5.6-sol",
+      "resolvedModelId": "zd/gpt-5.6-sol",
+      "isAlias": false,
+      "canonical": "gpt-5-6-sol",
+      "tier": "T1",
+      "score": 79,
+      "bonus": 6,
+      "liveBench": null,
+      "status": "PROBE_FAILED",
+      "priorUnknown": false,
+      "httpStatus": 451,
+      "live": false
+    }
+  ],
+  "step5_evidence": {
+    "recorded": 14
+  },
+  "step6_controller": {
+    "candidatesGenerated": 16,
+    "rankingTotal": 10,
+    "visibility": [
+      {
+        "modelId": "ag/gemini-3.8-flash",
+        "inRanking": true,
+        "score": 59,
+        "harness": "paseo"
+      },
+      {
+        "modelId": "ag/gemini-3.8-flash-high",
+        "inRanking": true,
+        "score": 0,
+        "harness": "paseo"
+      },
+      {
+        "modelId": "ag/gemini-3.8-flash-medium",
+        "inRanking": true,
+        "score": 0,
+        "harness": "paseo"
+      },
+      {
+        "modelId": "ag/gemini-3.8-flash-low",
+        "inRanking": true,
+        "score": 0,
+        "harness": "paseo"
+      },
+      {
+        "modelId": "gcli/grok-4.7",
+        "inRanking": true,
+        "score": 0,
+        "harness": "paseo"
+      },
+      {
+        "modelId": "gh/gpt-4o",
+        "inRanking": true,
+        "score": 0,
+        "harness": "paseo"
+      },
+      {
+        "modelId": "gh/gpt-4o-mini",
+        "inRanking": true,
+        "score": 0,
+        "harness": "paseo"
+      },
+      {
+        "modelId": "ag/claude-sonnet-4-6",
+        "inRanking": true,
+        "score": 0,
+        "harness": "paseo"
+      },
+      {
+        "modelId": "vinh",
+        "inRanking": false,
+        "layer": "candidates.js (Candidate Generation)",
+        "reason": "GATEWAY_PREFIX_OR_ROUTE_UNMATCHED"
+      }
+    ]
+  },
+  "models": {
+    "ag/gemini-3.8-flash": {
+      "live": true,
+      "httpStatus": 200,
+      "cause": null,
+      "score": null,
+      "status": "QUALITY_UNKNOWN",
+      "inRanking": true,
+      "filterLayer": null,
+      "filterReason": null
+    },
+    "ag/gemini-3.8-flash-high": {
+      "live": true,
+      "httpStatus": 200,
+      "cause": null,
+      "score": null,
+      "status": "QUALITY_UNKNOWN",
+      "inRanking": true,
+      "filterLayer": null,
+      "filterReason": null
+    },
+    "ag/gemini-3.8-flash-medium": {
+      "live": true,
+      "httpStatus": 200,
+      "cause": null,
+      "score": null,
+      "status": "QUALITY_UNKNOWN",
+      "inRanking": true,
+      "filterLayer": null,
+      "filterReason": null
+    },
+    "ag/gemini-3.8-flash-low": {
+      "live": true,
+      "httpStatus": 200,
+      "cause": null,
+      "score": null,
+      "status": "QUALITY_UNKNOWN",
+      "inRanking": true,
+      "filterLayer": null,
+      "filterReason": null
+    },
+    "gcli/grok-4.7": {
+      "live": true,
+      "httpStatus": 200,
+      "cause": null,
+      "score": null,
+      "status": "QUALITY_UNKNOWN",
+      "inRanking": true,
+      "filterLayer": null,
+      "filterReason": null
+    },
+    "gh/gpt-4o": {
+      "live": true,
+      "httpStatus": 200,
+      "cause": null,
+      "score": null,
+      "status": "SCORED",
+      "inRanking": true,
+      "filterLayer": null,
+      "filterReason": null
+    },
+    "gh/gpt-4o-mini": {
+      "live": true,
+      "httpStatus": 200,
+      "cause": null,
+      "score": 8,
+      "status": "SCORED",
+      "inRanking": true,
+      "filterLayer": null,
+      "filterReason": null
+    },
+    "ag/claude-sonnet-4-6": {
+      "live": true,
+      "httpStatus": 200,
+      "cause": null,
+      "score": null,
+      "status": "SCORED",
+      "inRanking": true,
+      "filterLayer": null,
+      "filterReason": null
+    },
+    "vinh": {
+      "live": true,
+      "httpStatus": 200,
+      "cause": null,
+      "score": null,
+      "status": "QUALITY_UNKNOWN",
+      "inRanking": false,
+      "filterLayer": "candidates.js (Candidate Generation)",
+      "filterReason": "GATEWAY_PREFIX_OR_ROUTE_UNMATCHED"
+    },
+    "gh/gpt-5.3-codex": {
+      "live": false,
+      "httpStatus": 400,
+      "cause": "HTTP_400",
+      "score": null,
+      "status": "PROBE_FAILED",
+      "inRanking": false,
+      "filterLayer": null,
+      "filterReason": null
+    },
+    "cc/claude-sonnet-5-5": {
+      "live": false,
+      "httpStatus": 503,
+      "cause": "AUTH_NEEDED",
+      "score": null,
+      "status": "PROBE_FAILED",
+      "inRanking": false,
+      "filterLayer": null,
+      "filterReason": null
+    },
+    "kimchi/glm-5.3": {
+      "live": false,
+      "httpStatus": 503,
+      "cause": "UPSTREAM_UNAVAILABLE",
+      "score": 78,
+      "status": "PROBE_FAILED",
+      "inRanking": false,
+      "filterLayer": null,
+      "filterReason": null
+    },
+    "nonexistent-model-xyz": {
+      "live": false,
+      "httpStatus": 404,
+      "cause": "PROVIDER_UNAVAILABLE",
+      "score": null,
+      "status": "PROBE_FAILED",
+      "inRanking": false,
+      "filterLayer": null,
+      "filterReason": null
+    },
+    "zd/gpt-5.6-sol": {
+      "live": false,
+      "httpStatus": 451,
+      "cause": "GEO_BLOCKED",
+      "score": 79,
+      "status": "PROBE_FAILED",
+      "inRanking": false,
+      "filterLayer": null,
+      "filterReason": null
+    }
+  }
+}

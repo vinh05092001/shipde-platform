@@ -1,0 +1,7 @@
+{
+  "modelId": "gh/gpt-5.3-codex",
+  "status": 400,
+  "ok": false,
+  "cause": "HTTP_400",
+  "body": "{\"error\":{\"message\":\"[400]: {\\\"error\\\":{\\\"message\\\":\\\"The requested model is not supported.\\\",\\\"code\\\":\\\"model_not_supported\\\",\\\"param\\\":\\\"model\\\",\\\"type\\\":\\\"invalid_request_error\\\"}}\\n\",\"type\":\"invalid_request_error\",\"code\":\"bad_request\"}}"
+}
