@@ -248,6 +248,17 @@ Decision log entries link `goalId -> workItemId -> candidateKey -> session -> co
 - Part H2 Hermes session selection, custom config binding, and `shipde-controller` skill file are delivered in Part H2.
 - Live acceptance across chat and controller runs in Part H3 following merge of H1 and H2.
 
+### H3 live: scheduled resume selects an open goal and respects live owners (2026-10-18)
+
+`GoalResume` registration and `goal-resume.ps1` accept an optional goal ID.
+Without it, the script selects the first directory by name whose
+`goal.json` reports OPEN, PLANNED or RUNNING and whose lock has no live owner.
+An explicit goal also respects its live lock. Malformed lock ownership fails
+closed; locks are never deleted by the scheduler, and the Controller still owns
+atomic lock acquisition. Tests invoke PowerShell against temporary goals and a
+stub CLI; the machine-data gate disables machine/user environment loading.
+The existing scheduled task remains untouched; the operator decides activation.
+
 ### H3 live: configurable probe budget, probe ordering by evidence, and HTTP-first capability verification (2026-10-17)
 
 Operator decision 2026-10-17 23:10: the agy pool may write (writerEnabled/allowWriter true in sources.json). Tests set the flags explicitly rather than reading the tracked value.
@@ -614,12 +625,13 @@ Verification: `node --test tools/ai-brain/test/task-ai-142-unknown-probe-cause.t
 ### H3 live: direct OpenAI-compatible sources yield opencode-direct writer candidates (2026-10-17)
 
 Direct OpenAI-compatible sources with HTTP/HTTPS endpoints and environment-variable credentials (tencent, cohere, baseten, inception, regolo, amd-radeon) now generate isolated writer candidates with harness `opencode-direct`.
+
 1. Data-driven candidate generation: Any active source in `sources.json` declaring an HTTP/HTTPS endpoint and environment credential variable without a custom CLI harness produces `opencode-direct` writer candidates for each declared or catalogued model ID, without hardcoded provider lists or model IDs. Direct-http candidates remain untouched for other roles.
 2. Secret protection: Isolated worker configuration in `tools/ai-brain/isolation-launcher.js` generates OpenCode provider configurations referencing `{env:VARIABLE_NAME}` without writing raw API key secrets to disk. Keys are passed to the worker exclusively via process environment variables.
 3. Undeclared capabilities: Newly generated candidates leave `jsonSchema` and `tools` undefined for probe-based verification (PR B), while preserving known `contextWindow` and token limits.
 4. Route resolution: `stripOpencodeProviderPrefix` and executor `resolveRoute` correctly resolve wire model IDs for sources where `source.id` acts as the provider key.
 5. Account binding and missing env detection: Candidate `accountId` binds to the concrete credential account ID (`<sourceId>-<envSuffix>`), rejecting missing keys honestly with `CREDENTIAL_ENV_MISSING` and eliminating false `WILDCARD_ACCOUNT` drops.
-Evidence: 115 new `opencode-direct` candidates yielded across 6 direct sources (tencent: 72, cohere: 15, baseten: 11, inception: 2, regolo: 9, amd-radeon: 6). Unit tests in `tools/ai-brain/test/task-ai-142-direct-writer-harness.test.js` and `tools/ai-brain/test/task-ai-142-opencode-writers.test.js`.
+   Evidence: 115 new `opencode-direct` candidates yielded across 6 direct sources (tencent: 72, cohere: 15, baseten: 11, inception: 2, regolo: 9, amd-radeon: 6). Unit tests in `tools/ai-brain/test/task-ai-142-direct-writer-harness.test.js` and `tools/ai-brain/test/task-ai-142-opencode-writers.test.js`.
 
 ### H3 live: audit repairs (2026-10-17)
 
