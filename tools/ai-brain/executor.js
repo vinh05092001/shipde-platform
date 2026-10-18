@@ -175,6 +175,10 @@ function hasHarnessResponse(res, adapter) {
               String(parsed.part.text).trim()) ||
             parsed.content ||
             parsed.text ||
+            parsed.completed ||
+            parsed.completionNonce ||
+            parsed.sessionId ||
+            parsed.session_id ||
             parsed.type === 'tool_use' ||
             parsed.type === 'tool-call' ||
             (parsed.part && (parsed.part.type === 'tool-call' || parsed.part.toolName))
@@ -195,9 +199,6 @@ function readSessionId(adapter, job, res) {
   const isIsolated = Boolean(
     (job && job.isolatedWorker) || (res && (res.isolatedWorker || res.workerRoot))
   );
-  if (adapter && adapter.id === 'opencode-direct' && !hasHarnessResponse(res, adapter)) {
-    return { id: null, cause: 'HARNESS_EMPTY_RESPONSE' };
-  }
   if (isIsolated && res) {
     const isoId = res.sessionId || res.launchHandle;
     if (isoId !== undefined && isoId !== null && String(isoId).trim() !== '') {
@@ -220,6 +221,13 @@ function readSessionId(adapter, job, res) {
     }
     const id = adapter.sessionIdFrom(report) || null;
     return { id, cause: id ? null : 'HARNESS_NO_SESSION_ID' };
+  }
+  if (
+    adapter &&
+    (adapter.id === 'opencode-direct' || adapter.id === 'opencode') &&
+    !hasHarnessResponse(res, adapter)
+  ) {
+    return { id: null, cause: 'HARNESS_EMPTY_RESPONSE' };
   }
   if (adapter.id === 'opencode-direct') {
     const id = (res && res.completionNonce) || null;
