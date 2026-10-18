@@ -14,6 +14,15 @@ const { PROBE_BUDGET_MS } = require('./orchestrate');
 const CAPABILITIES = ['jsonSchema', 'tools'];
 const TOOL_NAME = 'capability_probe';
 
+const ACCOUNT_LEVEL_FAILURES = new Set([
+  'UPSTREAM_CREDIT_OR_QUOTA',
+  'AUTH_NEEDED',
+  'ENTITLEMENT_REQUIRED',
+  'ACCOUNT_SUSPENDED',
+  'ACCOUNT_NOT_FOUND',
+  'BILLING_ISSUE',
+]);
+
 function pending(reason) {
   return { reason, unverified: true };
 }
@@ -102,6 +111,19 @@ async function httpProof(candidate, capability, route, options) {
     }
     const message = body.choices?.[0]?.message;
     if (capability === 'jsonSchema') {
+      const content = String(message?.content || '');
+      if (
+        /insufficient|recharg|free quota|abuse of free resources|balance is insufficient|upgrade your subscription/i.test(
+          content
+        )
+      ) {
+        return {
+          ok: false,
+          reason: 'UPSTREAM_CREDIT_OR_QUOTA',
+          httpStatus: 200,
+          detail: createSecretRedactor(env)(content.slice(0, 300)),
+        };
+      }
       const checked = schemaApi.validate(message?.content, job.resultSchema);
       return checked.ok && checked.value.status === 'completed' && !checked.value.artifacts.length
         ? { ok: true, method: 'http-json-schema' }
@@ -168,18 +190,26 @@ function orderCandidatesForProbe(candidates, profile, options) {
 
   const registry = o.registry;
   const store = o.routeHealth || null;
+  const data = o.evidenceDir ? evidence.loadEvidence(o.evidenceDir) : o.capabilityEvidence || {};
 
   const priorityOf = (c) => {
-    if (c.harness === 'codex') return 1;
-    if (c.harness === 'agy-pool') {
-      return sourcesApi.isAgyPoolWriterEnabled(registry, o) ? 1 : 50;
-    }
-    if (c.harness === 'opencode-direct') return 2;
+    if (hasPriorWorkPass(c, data.combinations)) return 0;
     const identity = require('./route-health').probeIdentity(c);
     const record = store
       ? require('./route-health').getPathRecord(store, identity.model, identity.route)
       : null;
-    if (record?.status === 'AVAILABLE') return 3;
+    const probeOrder = require('./probe-order');
+    const isLive =
+      record?.status === 'AVAILABLE' ||
+      (store &&
+        typeof probeOrder.recentRouteSuccess === 'function' &&
+        probeOrder.recentRouteSuccess(c, store, { registry, now: o.now }));
+    if (isLive) return 1;
+    if (c.harness === 'codex') return 2;
+    if (c.harness === 'agy-pool') {
+      return sourcesApi.isAgyPoolWriterEnabled(registry, o) ? 2 : 50;
+    }
+    if (c.harness === 'opencode-direct') return 3;
     return 10;
   };
 
@@ -204,6 +234,7 @@ async function probeCapabilities(candidates, profile, options = {}) {
   const deadline = o.deadline ?? Date.now() + schemaBudget;
 
   const store = o.routeHealth || null;
+  const failedHttpAccounts = o.failedHttpAccounts || new Map();
   const orderedCandidates = orderCandidatesForProbe(candidates, profile, o);
 
   for (const c of orderedCandidates) {
@@ -238,6 +269,15 @@ async function probeCapabilities(candidates, profile, options = {}) {
         (source?.kind === require('./sources').Kind.MODEL_SOURCE &&
           !source.harness &&
           !require('./harness').HARNESSES[c.harness]));
+    const accountKey =
+      direct && route
+        ? `${route.accessPath}::${route.apiKeyEnv || c.accountId || c.sourceId || ''}`
+        : null;
+
+    const neededCaps = CAPABILITIES.filter((cap) =>
+      (profile.requiredCapabilities || []).includes(cap)
+    );
+
     const binding = crypto
       .createHash('sha256')
       .update(
@@ -253,9 +293,24 @@ async function probeCapabilities(candidates, profile, options = {}) {
     const cached = records[key]?.binding === binding ? records[key] : { binding };
     c.capabilities = { ...c.capabilities };
 
-    const neededCaps = CAPABILITIES.filter((cap) =>
-      (profile.requiredCapabilities || []).includes(cap)
-    );
+    if (accountKey && failedHttpAccounts.has(accountKey)) {
+      const failed = failedHttpAccounts.get(accountKey);
+      const failProof = {
+        ok: false,
+        reason: failed.reason || 'UPSTREAM_CREDIT_OR_QUOTA',
+        httpStatus: failed.httpStatus,
+        observedAt: new Date(o.now ?? Date.now()).toISOString(),
+        ...(failed.detail ? { detail: failed.detail } : {}),
+      };
+      for (const cap of neededCaps) {
+        cached[cap] = failProof;
+        c.capabilityEvidence = { ...c.capabilityEvidence, [cap]: failProof };
+        if (cap === 'jsonSchema') c.jsonSchemaEvidence = failProof;
+        delete c.capabilities[cap];
+      }
+      records[key] = cached;
+      continue;
+    }
 
     const identity = require('./route-health').probeIdentity(c);
     const record = store
@@ -309,6 +364,9 @@ async function probeCapabilities(candidates, profile, options = {}) {
           require('./route-health').rememberProbe(c, preflight, { ...o, routeHealth: store });
         }
         const cause = routeProbe.failureReason(routeProbe.classifyProbeFailure(preflight));
+        if (accountKey && ACCOUNT_LEVEL_FAILURES.has(cause)) {
+          failedHttpAccounts.set(accountKey, { reason: cause, httpStatus: preflight.status });
+        }
         const failProof = {
           ok: false,
           reason: cause,
@@ -363,7 +421,7 @@ async function probeCapabilities(candidates, profile, options = {}) {
         if (Date.now() >= deadline) proof = pending('WRITER_SCHEMA_NOT_VERIFIED_BUDGET');
         else if (direct && route && o.allowNetwork === false && typeof o.fetch !== 'function')
           proof = pending('CAPABILITY_PROBE_TRANSPORT_NOT_INJECTED');
-        else if (direct && route)
+        else if (direct && route) {
           proof = await routeProbe.boundedProbe(
             (_c, _key, _env, probeOptions) =>
               httpProof(c, cap, route, { ...o, deadline, timeoutMs, ...probeOptions }),
@@ -372,7 +430,10 @@ async function probeCapabilities(candidates, profile, options = {}) {
             o.env,
             { timeoutMs, fetch: o.fetch }
           );
-        else if (typeof o.probeCli === 'function')
+          if (proof?.ok === false && accountKey && ACCOUNT_LEVEL_FAILURES.has(proof.reason)) {
+            failedHttpAccounts.set(accountKey, proof);
+          }
+        } else if (typeof o.probeCli === 'function')
           proof = await routeProbe.boundedProbe(
             () => o.probeCli(c, cap, deadline - Date.now()),
             c,
@@ -410,4 +471,4 @@ async function probeCapabilities(candidates, profile, options = {}) {
   return candidates;
 }
 
-module.exports = { PROBE_BUDGET_MS, probeCapabilities };
+module.exports = { PROBE_BUDGET_MS, probeCapabilities, orderCandidatesForProbe };

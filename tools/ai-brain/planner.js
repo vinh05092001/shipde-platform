@@ -16,8 +16,8 @@
 
 const ROLE_CAPABILITIES = Object.freeze({
   'planner.default': { jsonSchema: true, tools: false, minContext: 128000 },
-  'author.foundation': { jsonSchema: true, tools: true, minContext: 200000 },
-  'author.lowrisk': { jsonSchema: true, tools: true, minContext: 64000 },
+  'author.foundation': { jsonSchema: false, tools: true, minContext: 200000 },
+  'author.lowrisk': { jsonSchema: false, tools: true, minContext: 64000 },
   'reviewer.primary': { jsonSchema: true, tools: true, minContext: 200000 },
   'analyst.default': { jsonSchema: false, tools: true, minContext: 128000 },
 });
