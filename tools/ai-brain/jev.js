@@ -86,6 +86,8 @@ function readCredential(source, options) {
   };
 }
 
+const DEFAULT_HTTP_TIMEOUT_MS = 30000;
+
 function postJson(url, body, headers, options) {
   const client = options && options.httpClient;
   if (typeof client === 'function') return client(url, body, headers);
@@ -107,7 +109,7 @@ function postJson(url, body, headers, options) {
         port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
         path: parsed.pathname + parsed.search,
         method: 'POST',
-        timeout: (options && options.timeoutMs) || 30000,
+        timeout: (options && options.timeoutMs) || DEFAULT_HTTP_TIMEOUT_MS,
         headers: Object.assign(
           {
             'content-type': 'application/json',
@@ -432,6 +434,7 @@ function transcriptQuestion(transcript, states) {
 }
 
 module.exports = {
+  DEFAULT_HTTP_TIMEOUT_MS,
   Outcome,
   DEFAULT_MIN_CONFIDENCE,
   PROVIDER_FAILURE_REASONS,

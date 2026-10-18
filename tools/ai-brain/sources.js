@@ -378,7 +378,17 @@ function getDispatchConfig(registry, options = {}) {
         dispatch.schemaBudgetMs ??
         probeBudgetMs
     ) || probeBudgetMs;
+  const defaults = require('./sources.json').dispatch;
+  const configuredLimit = (key) => {
+    const value = Number(options[key] ?? dispatch[key] ?? defaults[key]);
+    if (!Number.isSafeInteger(value) || value <= 0) {
+      throw new Error('DISPATCH_CONFIG_INVALID: ' + key + ' must be a positive integer');
+    }
+    return value;
+  };
   return {
+    maxWriterSelectionRounds: configuredLimit('maxWriterSelectionRounds'),
+    maxItemDurationMs: configuredLimit('maxItemDurationMs'),
     probeBudgetMs,
     maxConcurrentProbes,
     probeTimeoutMs,
