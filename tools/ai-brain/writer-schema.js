@@ -93,6 +93,14 @@ function failureDetail(result, env) {
 
 function observedToolUse(result, text) {
   if (Number(result?.verifiedToolCalls) > 0) return true;
+  try {
+    const envelope = JSON.parse(String(text || '').replace(/^\uFEFF/, ''));
+    if (envelope && (envelope.status === 'SUCCESS' || envelope.status === 'ok')) {
+      if (Number(envelope.num_turns) > 1 || Number(envelope.tool_calls?.length) > 0) return true;
+      if (envelope.usage && Number(envelope.usage.total_tokens) > 0 && envelope.response)
+        return true;
+    }
+  } catch {}
   return String(text || '')
     .split(/\r?\n/)
     .some((line) => {
@@ -132,10 +140,18 @@ async function verify(candidate, options) {
     let toolsObserved = false;
     if (candidate.harness === 'agy-pool') {
       const pool = require('./agy-pool-runtime');
+      const sourcesApi = require('./sources');
       const previous = pool.readResult(candidate.accountId, o);
       if (previous && previous.state === 'running')
         return { ok: false, reason: 'WRITER_SCHEMA_POOL_BUSY' };
-      const timeoutMs = probeTimeoutMs(o, o.schemaTimeoutMs);
+      const dispatchConfig = sourcesApi.getDispatchConfig(o.registry, o);
+      const poolProbeTimeout = sourcesApi.resolveProbeTimeout(
+        candidate,
+        null,
+        dispatchConfig,
+        o.schemaTimeoutMs
+      );
+      const timeoutMs = probeTimeoutMs(o, poolProbeTimeout);
       result = pool.submitJob(candidate.accountId, job, { ...o, timeoutMs });
       if (!result || result.state !== 'ok' || result.exitCode !== 0) {
         const known = [
@@ -243,5 +259,6 @@ module.exports = {
   validate,
   materialise,
   poolResultText,
+  observedToolUse,
   verify,
 };

@@ -911,8 +911,9 @@ function pushOpencodeProviderWriters(out, source, o, bound) {
     const meta = (source.modelMeta && source.modelMeta[model]) || {};
     let contextWindow = toPositiveInteger(meta.contextWindow);
     let maxOutputTokens = toPositiveInteger(meta.maxOutputTokens);
-    if (contextWindow === undefined && Array.isArray(opts.catalogue)) {
-      const catEntry = opts.catalogue.find(
+    let catEntry = null;
+    if (Array.isArray(opts.catalogue)) {
+      catEntry = opts.catalogue.find(
         (e) =>
           typeof e === 'object' &&
           e &&
@@ -922,9 +923,13 @@ function pushOpencodeProviderWriters(out, source, o, bound) {
           (!e.source || e.source === source.id)
       );
       if (catEntry) {
-        if (catEntry.contextWindow !== undefined) {
+        if (contextWindow === undefined && catEntry.contextWindow !== undefined) {
           contextWindow = toPositiveInteger(catEntry.contextWindow);
-        } else if (catEntry.capabilities && catEntry.capabilities.contextWindow !== undefined) {
+        } else if (
+          contextWindow === undefined &&
+          catEntry.capabilities &&
+          catEntry.capabilities.contextWindow !== undefined
+        ) {
           contextWindow = toPositiveInteger(catEntry.capabilities.contextWindow);
         }
         if (maxOutputTokens === undefined && catEntry.maxOutputTokens !== undefined) {
@@ -932,12 +937,9 @@ function pushOpencodeProviderWriters(out, source, o, bound) {
         }
       }
     }
-    if (
-      contextWindow === undefined &&
-      opts.discoveryCatalogue &&
-      Array.isArray(opts.discoveryCatalogue.candidates)
-    ) {
-      const dcEntry = opts.discoveryCatalogue.candidates.find(
+    let dcEntry = null;
+    if (opts.discoveryCatalogue && Array.isArray(opts.discoveryCatalogue.candidates)) {
+      dcEntry = opts.discoveryCatalogue.candidates.find(
         (e) =>
           e &&
           ((e.modelId || e.model || e.id) === model ||
@@ -945,15 +947,32 @@ function pushOpencodeProviderWriters(out, source, o, bound) {
             (e.modelId || e.model || e.id) === source.id + '/' + model)
       );
       if (dcEntry) {
-        if (dcEntry.contextWindow !== undefined) {
+        if (contextWindow === undefined && dcEntry.contextWindow !== undefined) {
           contextWindow = toPositiveInteger(dcEntry.contextWindow);
-        } else if (dcEntry.capabilities && dcEntry.capabilities.contextWindow !== undefined) {
+        } else if (
+          contextWindow === undefined &&
+          dcEntry.capabilities &&
+          dcEntry.capabilities.contextWindow !== undefined
+        ) {
           contextWindow = toPositiveInteger(dcEntry.capabilities.contextWindow);
         }
         if (maxOutputTokens === undefined && dcEntry.maxOutputTokens !== undefined) {
           maxOutputTokens = toPositiveInteger(dcEntry.maxOutputTokens);
         }
       }
+    }
+
+    const metaCaps = Object.assign({}, meta.capabilities || {});
+    if (meta.tools !== undefined) metaCaps.tools = meta.tools;
+    if (meta.jsonSchema !== undefined) metaCaps.jsonSchema = meta.jsonSchema;
+    if (catEntry && catEntry.capabilities) {
+      Object.assign(metaCaps, catEntry.capabilities);
+    }
+    if (dcEntry && dcEntry.capabilities) {
+      Object.assign(metaCaps, dcEntry.capabilities);
+    }
+    if (contextWindow !== undefined) {
+      metaCaps.contextWindow = contextWindow;
     }
 
     out.push({
@@ -969,7 +988,7 @@ function pushOpencodeProviderWriters(out, source, o, bound) {
       endpoint: source.endpoint,
       sourceEndpoint: source.endpoint,
       kind: source.kind,
-      capabilities: contextWindow !== undefined ? { contextWindow } : {},
+      capabilities: metaCaps,
       contextWindow,
       maxOutputTokens,
       sharedQuota: 'unknown',

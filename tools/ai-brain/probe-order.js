@@ -67,7 +67,7 @@ function preferKnownGood(result, candidates, options) {
   });
   result.isolatedLaneRejected = (result.rejected || []).filter((row) => {
     const c = byKey.get(row.candidateKey);
-    return c && ['agy-pool', 'codex'].includes(c.harness);
+    return c && ['agy-pool', 'codex', 'opencode-direct'].includes(c.harness);
   });
   if (!result.chosen || !result.ranking?.length) return result;
   const sourcesApi = require('./sources');

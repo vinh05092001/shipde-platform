@@ -437,11 +437,23 @@ function resolveProbeTimeout(candidate, record, dispatchConfig, remainingMs) {
   const cfg = dispatchConfig || {};
   const safetyMarginMs = Number(cfg.probeSafetyMarginMs ?? cfg.safetyMarginMs) || 2000;
   const defaultTimeout = Number(cfg.probeTimeoutMs) || 8000;
-  const measuredElapsedMs = candidate?.elapsedMs ?? record?.elapsedMs;
+  let measuredElapsedMs = candidate?.elapsedMs ?? record?.elapsedMs;
+  if (!measuredElapsedMs && candidate?.harness === 'agy-pool') {
+    try {
+      const pool = require('./agy-pool-runtime');
+      if (typeof pool.readLastRunElapsedMs === 'function') {
+        measuredElapsedMs = pool.readLastRunElapsedMs(candidate.accountId);
+      }
+    } catch {}
+  }
+  const fallbackTimeout =
+    candidate?.harness === 'agy-pool'
+      ? Number(cfg.schemaProbeBudgetMs) || defaultTimeout
+      : defaultTimeout;
   const baseTimeout =
     Number.isFinite(measuredElapsedMs) && measuredElapsedMs > 0
       ? measuredElapsedMs + safetyMarginMs
-      : defaultTimeout;
+      : fallbackTimeout;
   return Number.isFinite(remainingMs)
     ? Math.max(1, Math.min(baseTimeout, remainingMs))
     : Math.max(1, baseTimeout);

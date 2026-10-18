@@ -85,6 +85,28 @@ function readOutText(accountId, options) {
   }
 }
 
+function readLastRunElapsedMs(accountId, options) {
+  if (!isValidAccountId(accountId)) return undefined;
+  const file = path.join(exp.accountDir(accountId, options), 'runs.jsonl');
+  try {
+    const content = fs.readFileSync(file, 'utf8').trim();
+    if (!content) return undefined;
+    const lines = content.split('\n');
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i].trim();
+      if (!line) continue;
+      const entry = JSON.parse(line);
+      if (entry.state === 'ok' && entry.startedAt && entry.finishedAt) {
+        const start = Date.parse(entry.startedAt);
+        const end = Date.parse(entry.finishedAt);
+        const elapsed = end - start;
+        if (Number.isFinite(elapsed) && elapsed > 0) return elapsed;
+      }
+    }
+  } catch {}
+  return undefined;
+}
+
 function waitForResult(accountId, sinceMs, options) {
   if (!isValidAccountId(accountId)) return { state: 'error', reason: 'INVALID_ACCOUNT_ID' };
   const opts = options || {};
@@ -516,6 +538,7 @@ const exp = {
   getLastDiscoveryWarning,
   isValidAccountId,
   parseCliModels,
+  readLastRunElapsedMs,
 };
 
 module.exports = exp;
