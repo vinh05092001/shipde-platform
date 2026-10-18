@@ -247,6 +247,8 @@ describe('TASK-AI-132: Controller next runner', () => {
     ].join('\n');
     fs.writeFileSync(csvPath, content, 'utf8');
 
+    fs.writeFileSync(path.join(runDir, 'run.lock'), JSON.stringify({ pid: process.pid }));
+
     // 1. Direct isOpenRun check
     assert.equal(
       isOpenRun('TASK-OPEN-1', { rootDir: dir, intakeDir: intakeBase }),
@@ -400,54 +402,6 @@ describe('TASK-AI-132: Controller next runner', () => {
     const skipped = result.skipped.find((s) => s.id === 'TASK-LIVE-1');
     assert.ok(skipped);
     assert.equal(skipped.reason, 'claimed by open run');
-  });
-
-  test('TASK-AI-142: no pid retains TTL behaviour (open within TTL, closed after TTL)', () => {
-    const dir = makeTempDir('open-run-no-pid-');
-    const intakeBase = path.join(dir, 'tools', 'ai-brain', 'data', 'intake');
-    const runDir = path.join(intakeBase, 'TASK-NOPID-1-2026-10-15T12-00-00-000Z');
-    fs.mkdirSync(runDir, { recursive: true });
-
-    fs.writeFileSync(
-      path.join(runDir, 'specs.json'),
-      JSON.stringify([{ id: 'TASK-NOPID-1' }], null, 2),
-      'utf8'
-    );
-    // Explicitly NO run.lock or pid recorded
-
-    const stat = fs.statSync(runDir);
-    const ttlMs = 4 * 60 * 60 * 1000;
-
-    // Within TTL: open
-    const withinTtlRuns = getOpenRuns(
-      { rootDir: dir, intakeDir: intakeBase },
-      { now: () => stat.mtimeMs + 1000 }
-    );
-    assert.equal(withinTtlRuns.length, 1, 'within TTL must be open');
-    assert.equal(withinTtlRuns[0].workItemId, 'TASK-NOPID-1');
-    assert.equal(
-      isOpenRun(
-        'TASK-NOPID-1',
-        { rootDir: dir, intakeDir: intakeBase },
-        { now: () => stat.mtimeMs + 1000 }
-      ),
-      true
-    );
-
-    // Beyond TTL: closed (not open)
-    const beyondTtlRuns = getOpenRuns(
-      { rootDir: dir, intakeDir: intakeBase },
-      { now: () => stat.mtimeMs + ttlMs + 5000 }
-    );
-    assert.equal(beyondTtlRuns.length, 0, 'beyond TTL must not be open');
-    assert.equal(
-      isOpenRun(
-        'TASK-NOPID-1',
-        { rootDir: dir, intakeDir: intakeBase },
-        { now: () => stat.mtimeMs + ttlMs + 5000 }
-      ),
-      false
-    );
   });
 
   test('TASK-AI-142: goal run lock with dead pid does not claim goal item on resume', () => {

@@ -195,7 +195,10 @@ function resolveRunPid(runDir, workItemId, rootDir, opts, d, fsApi = fs) {
     } catch (_) {}
   }
 
-  // 3. Goal run lock in data/goals/<goalId>/run.lock
+  // 3. Goal run lock in data/goals/<goalId>/run.lock.
+  // runGoal records the next runner itself in this lock. Its own PID is not
+  // evidence that an older intake directory still has a worker; otherwise a
+  // resumed runner borrows its new lock and blocks itself on abandoned intakes.
   const goalsDir =
     (opts && (opts.goalsDir || opts['goals-dir'])) ||
     (d && (d.goalsDir || d['goals-dir'])) ||
@@ -216,7 +219,7 @@ function resolveRunPid(runDir, workItemId, rootDir, opts, d, fsApi = fs) {
           try {
             const data = JSON.parse(fsApi.readFileSync(cand, 'utf8'));
             const pid = parsePid(data && (data.pid != null ? data.pid : data));
-            if (pid != null) return pid;
+            if (pid != null && pid !== process.pid) return pid;
           } catch (_) {}
         }
       }
@@ -237,7 +240,7 @@ function resolveRunPid(runDir, workItemId, rootDir, opts, d, fsApi = fs) {
             if (Array.isArray(gData.items) && gData.items.includes(workItemId)) {
               const lData = JSON.parse(fsApi.readFileSync(lockPath, 'utf8'));
               const pid = parsePid(lData && (lData.pid != null ? lData.pid : lData));
-              if (pid != null) return pid;
+              if (pid != null && pid !== process.pid) return pid;
             }
           } catch (_) {}
         }
@@ -258,7 +261,6 @@ function getOpenRuns(options, deps) {
     (d && d.intakeDir) ||
     path.join(rootDir, 'tools', 'ai-brain', 'data', 'intake');
   const now = typeof d.now === 'function' ? d.now() : d.now || opts.now || Date.now();
-  const ttlMs = opts.ttlMs || (d && d.ttlMs) || 4 * 60 * 60 * 1000;
   const checkAlive =
     (d && (d.isPidAlive || d.checkAlive)) ||
     (opts && (opts.isPidAlive || opts.checkAlive)) ||
@@ -302,13 +304,9 @@ function getOpenRuns(options, deps) {
       if (!workItemId) continue;
 
       const pid = resolveRunPid(runDir, workItemId, rootDir, opts, d, fsApi);
-      if (pid != null) {
-        if (!checkAlive(pid)) {
-          continue;
-        }
-      } else {
-        if (now - stat.mtimeMs > ttlMs) continue;
-      }
+      // Directory freshness is not proof that an owner is running. Preserve the
+      // intake for recovery, but only a live owner may hold the item/ceiling.
+      if (pid == null || !checkAlive(pid)) continue;
 
       let terminal = false;
       const runDecDir = path.join(runDir, 'decisions');
