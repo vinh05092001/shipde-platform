@@ -675,4 +675,109 @@ describe('TASK-AI-142 T8: rolling source onboarding', () => {
     const second = await run('second-fixture-key', failFetch);
     assert.equal(ranked(second), false);
   });
+  test('after a successful key rotation, old-key passes for other models cannot rank', async (t) => {
+    const dir = fixture(t);
+    const evidenceDir = path.join(dir, 'evidence');
+    fs.mkdirSync(evidenceDir, { recursive: true });
+    const { dispatchCommand } = require('../cli');
+    const registry = {
+      sources: [
+        {
+          id: 'multi-source',
+          kind: 'model-source',
+          servesModels: true,
+          endpoint: 'https://multi.invalid/v1',
+          models: ['multi-source/first', 'multi-source/second'],
+          harness: 'direct-http',
+          credential: { env: 'MULTI_KEY' },
+        },
+      ],
+      dispatch: { ...defaultDispatch, providers: {} },
+    };
+    const routeHealth = { version: 1, paths: {}, events: [] };
+    const okFetch = async () => ({
+      ok: true,
+      status: 200,
+      headers: new Map(),
+      text: async () => JSON.stringify({ choices: [{ message: { content: 'OK' } }] }),
+    });
+    // Old key: evidence for a second model exists, earned before the rotation.
+    const {
+      onboardSourceRolling: onboard,
+      credentialFingerprint: fp,
+    } = require('../rolling-onboard');
+    const evidenceData = { combinations: [] };
+    await onboard(registry.sources[0], {
+      evidenceData,
+      evidenceDir,
+      quotaStateFile: path.join(dir, 'quota-state.json'),
+      routeHealth,
+      registry,
+      env: { MULTI_KEY: 'old-fixture-key' },
+      fetch: okFetch,
+      now: 1700000000000,
+    });
+    const second = { ...evidenceData.combinations[0] };
+    second.model = second.modelId = 'multi-source/second';
+    second.candidateKey = require('../candidates').candidateKey(second);
+    second.evidence = [
+      {
+        status: 'passed',
+        level: 1,
+        proofLevel: 'API_PASS',
+        observedAt: '2023-11-14T22:13:20.000Z',
+      },
+    ];
+    evidenceData.combinations.push(second);
+    require('../route-health').rememberProbe(
+      second,
+      { ok: true, status: 200 },
+      { routeHealth, now: 1700000000000, persistRouteHealth: false }
+    );
+    require('../evidence').saveEvidence(evidenceDir, evidenceData);
+    assert.equal(second.credentialFingerprint, fp('old-fixture-key'));
+
+    const res = await dispatchCommand(
+      { 'dry-run': true, item: 'TASK-ONBOARD-MULTI' },
+      {
+        registry,
+        env: { MULTI_KEY: 'new-fixture-key' },
+        fetch: okFetch,
+        evidenceDir,
+        quotaStateFile: path.join(dir, 'quota-state.json'),
+        routeHealth,
+        routeHealthFile: path.join(dir, 'route-health.json'),
+        discoveryCatalogue: { candidates: [] },
+        accounts: [],
+        assessment: {},
+        priors: [],
+        home: path.join(dir, 'home'),
+        storePath: path.join(dir, 'quota-store.json'),
+        now: 1700000000000,
+        exit: () => {},
+      }
+    );
+    const ranked = (res.decision?.ranking || []).map((c) => c.modelId || c.model);
+    assert.ok(ranked.includes('multi-source/first'), 'the re-verified model ranks');
+    assert.equal(ranked.includes('multi-source/second'), false, 'the old-key model does not');
+  });
+
+  test('a quota scan whose body never finishes is cut off by the configured timeout', async () => {
+    const { scanScope } = require('../quota-scan');
+    const result = await scanScope(
+      { source: 's', scope: 's', model: 'm/x', endpoint: 'https://s.invalid/v1' },
+      {
+        env: {},
+        registry: { sources: [], dispatch: { ...defaultDispatch, providers: {} } },
+        probeTimeoutMs: 50,
+        fetch: async () => ({
+          ok: true,
+          status: 200,
+          headers: new Map(),
+          text: () => new Promise(() => {}),
+        }),
+      }
+    );
+    assert.equal(result.code, 'TIMEOUT');
+  });
 });

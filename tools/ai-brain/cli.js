@@ -2197,6 +2197,9 @@ function dispatchCommand(args, deps = {}) {
       ? []
       : rollingOnboard.detectNewSources(registry, evidenceData, env);
 
+  // Like the route-refresh, JEV and capability-probe branches below, onboarding makes this
+  // call asynchronous. dispatchCommand's only caller (the `dispatch` command) already
+  // awaits a returned promise and turns a rejection into a non-zero exit.
   if (newSources.length > 0) {
     const rawAccounts = deps && deps.accounts !== undefined ? deps.accounts : listAccounts() || [];
     return rollingOnboard

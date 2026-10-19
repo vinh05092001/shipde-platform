@@ -39,6 +39,28 @@ const QUOTA_STATUS_CODES = Object.freeze({
 
 const BLOCKING_CODES = new Set(['QUOTA', 'AUTH', 'REGION']);
 
+// Settles with the promise, or rejects with an AbortError once the signal fires, so a
+// stalled connect or a body that never ends cannot outlive the configured timeout.
+function withinSignal(promise, signal) {
+  if (!signal) return promise;
+  const aborted = () => Object.assign(new Error('aborted'), { name: 'AbortError' });
+  if (signal.aborted) return Promise.reject(aborted());
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(aborted());
+    signal.addEventListener('abort', onAbort, { once: true });
+    Promise.resolve(promise).then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (err) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(err);
+      }
+    );
+  });
+}
+
 function getHeader(headers, name) {
   if (!headers) return null;
   const target = String(name).toLowerCase();
@@ -340,18 +362,24 @@ async function scanScope(target, options = {}) {
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const res = await fetchFn(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(payload),
-      signal: controller.signal,
-    });
+    const res = await withinSignal(
+      fetchFn(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      }),
+      controller.signal
+    );
 
-    clearTimeout(timer);
+    // The timeout stays armed until the whole body is read.
     let bodyText = '';
     try {
-      bodyText = await res.text();
-    } catch {}
+      bodyText = await withinSignal(res.text(), controller.signal);
+    } catch (err) {
+      if (controller.signal.aborted) throw err;
+    }
+    clearTimeout(timer);
 
     const classification = classifyQuotaResponse(res.status, bodyText, res.headers, now);
 
@@ -401,9 +429,15 @@ async function discover9RouterScopes(source, options = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), probeTimeoutMs);
   try {
-    const res = await fetchFn(url, { method: 'GET', headers, signal: controller.signal });
+    const res = await withinSignal(
+      fetchFn(url, { method: 'GET', headers, signal: controller.signal }),
+      controller.signal
+    );
     if (res.ok) {
-      const data = typeof res.json === 'function' ? await res.json() : JSON.parse(await res.text());
+      const data = await withinSignal(
+        typeof res.json === 'function' ? res.json() : res.text().then(JSON.parse),
+        controller.signal
+      );
       if (Array.isArray(data?.data)) {
         modelsList = data.data.map((m) => m.id || m.model || m).filter(Boolean);
       }
@@ -551,4 +585,5 @@ module.exports = {
   scanSourceQuotas,
   scanTargetsForSource,
   validateCompletion,
+  withinSignal,
 };

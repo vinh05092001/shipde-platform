@@ -122,20 +122,25 @@ async function onboardSourceRolling(src, options = {}) {
   const timer = setTimeout(() => controller.abort(), dispatchConfig.probeTimeoutMs);
 
   try {
-    const res = await fetchFn(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        model: repModel,
-        messages: [{ role: 'user', content: 'ping' }],
-        max_tokens: dispatchConfig.quotaProbeMaxOutputTokens,
+    const res = await quotaScan.withinSignal(
+      fetchFn(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          model: repModel,
+          messages: [{ role: 'user', content: 'ping' }],
+          max_tokens: dispatchConfig.quotaProbeMaxOutputTokens,
+        }),
+        signal: controller.signal,
       }),
-      signal: controller.signal,
-    });
+      controller.signal
+    );
     probeStatus = res.status;
     try {
-      probeBody = await res.text();
-    } catch {}
+      probeBody = await quotaScan.withinSignal(res.text(), controller.signal);
+    } catch (err) {
+      if (controller.signal.aborted) throw err;
+    }
     if (res.ok) {
       const completion = quotaScan.validateCompletion(probeBody);
       probeOk = completion.ok;
@@ -167,6 +172,40 @@ async function onboardSourceRolling(src, options = {}) {
       routeHealthApi.loadStore(routeHealthApi.probeMemoryFile(healthOptions), {
         allowMissing: true,
       }));
+
+  // Evidence earned with any other key no longer proves this source, whatever this probe
+  // found: a pass for one model under the new key says nothing about the others. Retire
+  // every old-key pass so only re-verified routes can rank.
+  const retireOtherKeyPasses = (status) => {
+    const fingerprint = credentialFingerprint(apiKey);
+    let retired = 0;
+    for (const combination of evidenceData.combinations) {
+      if (
+        !combination ||
+        ![combination.source, combination.sourceId, combination.gateway].includes(src.id) ||
+        (fingerprint && combination.credentialFingerprint === fingerprint)
+      ) {
+        continue;
+      }
+      const items = Array.isArray(combination.evidence) ? combination.evidence : [];
+      if (items.at(-1)?.status !== evidenceApi.Status.PASSED) continue;
+      combination.evidence = items.concat({
+        status: evidenceApi.Status.FAILED,
+        cause: 'CREDENTIAL_NOT_REVERIFIED',
+        observedAt: new Date(now).toISOString(),
+      });
+      retired += 1;
+      // Route health is what dispatch requires, so the retirement must land there too.
+      routeHealthApi.rememberProbe(
+        combination,
+        { ok: false, status, cause: 'CREDENTIAL_NOT_REVERIFIED' },
+        { ...healthOptions, routeHealth: healthStore(), now }
+      );
+    }
+    if (retired > 0 && options.persist !== false && evidenceDir) {
+      evidenceApi.saveEvidence(evidenceDir, evidenceData);
+    }
+  };
 
   let quotaResults = [];
   if (probeOk) {
@@ -210,6 +249,8 @@ async function onboardSourceRolling(src, options = {}) {
     };
     combo.candidateKey = candidatesApi.candidateKey(combo);
     evidenceData.combinations.push(combo);
+    // Status 0: nothing was sent for those routes; the cause names why they stop ranking.
+    retireOtherKeyPasses(0);
 
     if (options.persist !== false && evidenceDir) {
       evidenceApi.saveEvidence(evidenceDir, evidenceData);
@@ -232,36 +273,7 @@ async function onboardSourceRolling(src, options = {}) {
     };
   }
 
-  // Evidence earned with any other key no longer proves this source: retire it so a
-  // failed re-probe after a key rotation cannot leave the old pass rankable.
-  const fingerprint = credentialFingerprint(apiKey);
-  let retired = 0;
-  for (const combination of evidenceData.combinations) {
-    if (
-      !combination ||
-      ![combination.source, combination.sourceId, combination.gateway].includes(src.id) ||
-      (fingerprint && combination.credentialFingerprint === fingerprint)
-    ) {
-      continue;
-    }
-    const items = Array.isArray(combination.evidence) ? combination.evidence : [];
-    if (items.at(-1)?.status !== evidenceApi.Status.PASSED) continue;
-    combination.evidence = items.concat({
-      status: evidenceApi.Status.FAILED,
-      cause: 'CREDENTIAL_NOT_REVERIFIED',
-      observedAt: new Date(now).toISOString(),
-    });
-    retired += 1;
-    // Route health is what dispatch requires, so the failed re-probe must land there too.
-    routeHealthApi.rememberProbe(
-      combination,
-      { ok: false, status: probeStatus, body: probeReason },
-      { ...healthOptions, routeHealth: healthStore(), now }
-    );
-  }
-  if (retired > 0 && options.persist !== false && evidenceDir) {
-    evidenceApi.saveEvidence(evidenceDir, evidenceData);
-  }
+  retireOtherKeyPasses(probeStatus);
 
   return {
     ok: false,
