@@ -7,7 +7,7 @@ const path = require('node:path');
 const cp = require('node:child_process');
 const launcher = require('../isolation-launcher');
 
-function fixture(t) {
+function fixture(t, opts = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'worker-hook-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^GIT_/i.test(k)));
@@ -25,8 +25,10 @@ function fixture(t) {
     return r.stdout.trim();
   };
   git('init', '-q');
-  git('config', 'user.name', 'fixture');
-  git('config', 'user.email', 'fixture@example.invalid');
+  if (!opts.noIdentity) {
+    git('config', 'user.name', 'fixture');
+    git('config', 'user.email', 'fixture@example.invalid');
+  }
   const file = 'docs/product-spec/work-items/GOAL-FIXTURE.md';
   fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
   fs.writeFileSync(path.join(root, file), 'base\n');
@@ -112,13 +114,22 @@ test('dirty metadata with unchanged HEAD needs no commit or installed hook', (t)
   assert.equal(f.git('rev-parse', 'HEAD'), f.sha);
 });
 
-test('worker-planted filter clean or core.fsmonitor in .git/config is not executed', (t) => {
+function createExecutableScript(basePath, content) {
+  const isWin = process.platform === 'win32';
+  const filePath = isWin ? basePath + '.bat' : basePath + '.sh';
+  const scriptContent = isWin ? `@echo off\n${content}\n` : `#!/bin/sh\n${content}\n`;
+  fs.writeFileSync(filePath, scriptContent, { mode: 0o755 });
+  return filePath.replace(/\\/g, '/');
+}
+
+test('worker-planted filter clean or core.fsmonitor in .git/config is rejected and not executed', (t) => {
   const f = fixture(t);
   fs.writeFileSync(f.hook, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-  const touchClean = path.join(f.root, 'touch_clean.bat').replace(/\\/g, '/');
-  fs.writeFileSync(touchClean, '@echo clean_ran > pwned_clean\n');
-  const touchFs = path.join(f.root, 'touch_fs.bat').replace(/\\/g, '/');
-  fs.writeFileSync(touchFs, '@echo fs_ran > pwned_fs\n');
+  const touchClean = createExecutableScript(
+    path.join(f.root, 'touch_clean'),
+    'echo clean_ran > pwned_clean'
+  );
+  const touchFs = createExecutableScript(path.join(f.root, 'touch_fs'), 'echo fs_ran > pwned_fs');
 
   fs.appendFileSync(
     path.join(f.root, '.git', 'config'),
@@ -126,11 +137,15 @@ test('worker-planted filter clean or core.fsmonitor in .git/config is not execut
   );
   fs.writeFileSync(path.join(f.root, '.gitattributes'), '* filter=evil\n');
 
-  launcher.commitWorkerMetadata({
-    hostRoot: f.root,
-    workerRoot: f.root,
-    workItemId: 'GOAL-FIXTURE',
-  });
+  assert.throws(
+    () =>
+      launcher.commitWorkerMetadata({
+        hostRoot: f.root,
+        workerRoot: f.root,
+        workItemId: 'GOAL-FIXTURE',
+      }),
+    /WORKER_COMMIT_FAILED: disallowed git config section: \[filter "evil"\]/
+  );
 
   assert.equal(
     fs.existsSync(path.join(f.root, 'pwned_clean')),
@@ -138,4 +153,67 @@ test('worker-planted filter clean or core.fsmonitor in .git/config is not execut
     'clean filter must not execute'
   );
   assert.equal(fs.existsSync(path.join(f.root, 'pwned_fs')), false, 'fsmonitor must not execute');
+});
+
+test('worker config allowlist rejects legacy filter, includes, and merge drivers', (t) => {
+  const cases = [
+    {
+      section: '\n[filter.evil]\n\tclean = echo pwned\n',
+      match: /disallowed git config section: \[filter\.evil\]/,
+    },
+    {
+      section: '\n[include]\n\tpath = evil.inc\n',
+      match: /disallowed git config section: \[include\]/,
+    },
+    {
+      section: '\n[includeIf "gitdir:foo"]\n\tpath = evil.inc\n',
+      match: /disallowed git config section: \[includeIf "gitdir:foo"\]/,
+    },
+    {
+      section: '\n[merge "evil"]\n\tdriver = echo pwned\n',
+      match: /disallowed git config section: \[merge "evil"\]/,
+    },
+    { section: '\n[core]\n\teditor = evil\n', match: /disallowed core git config key: editor/ },
+  ];
+  for (const c of cases) {
+    const f = fixture(t);
+    fs.writeFileSync(f.hook, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    fs.appendFileSync(path.join(f.root, '.git', 'config'), c.section);
+    assert.throws(
+      () =>
+        launcher.commitWorkerMetadata({
+          hostRoot: f.root,
+          workerRoot: f.root,
+          workItemId: 'GOAL-FIXTURE',
+        }),
+      c.match
+    );
+  }
+});
+
+test('native writer and metadata commits succeed without local identity or global config', (t) => {
+  const f = fixture(t, { noIdentity: true });
+  fs.writeFileSync(f.hook, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+
+  // Verify worker config has no local identity
+  const cfg = fs.readFileSync(path.join(f.root, '.git', 'config'), 'utf8');
+  assert.equal(/user\.(name|email)/i.test(cfg), false);
+
+  // Metadata commit amendment succeeds via injected controller identity
+  const amendedSha = launcher.commitWorkerMetadata({
+    hostRoot: f.root,
+    workerRoot: f.root,
+    workItemId: 'GOAL-FIXTURE',
+  });
+  assert.match(amendedSha, /^[a-f0-9]{40}$/);
+
+  // Native writer file-only commit succeeds with no local identity
+  fs.writeFileSync(path.join(f.root, 'native_change.txt'), 'native content\n');
+  const writerSha = launcher.commitNativeWriterChanges({
+    hostRoot: f.root,
+    workerRoot: f.root,
+    workItemId: 'GOAL-FIXTURE',
+  });
+  assert.match(writerSha, /^[a-f0-9]{40}$/);
+  assert.notEqual(writerSha, amendedSha);
 });

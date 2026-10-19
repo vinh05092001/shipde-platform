@@ -20,17 +20,196 @@ const DEFAULT_WORKER_TIMEOUT_MS = 30 * 60 * 1000;
  * The injected runner is for offline tests; production uses normal Git hooks.
  * A failed hook is a local failure and never becomes a reviewed worker SHA.
  */
-function sanitizeWorkerGitConfig(workerRoot) {
+const ALLOWED_GIT_CONFIG_SECTIONS = new Set(['core', 'remote', 'branch', 'user']);
+
+const ALLOWED_CORE_KEYS = new Set([
+  'repositoryformatversion',
+  'filemode',
+  'bare',
+  'logallrefupdates',
+  'symlinks',
+  'ignorecase',
+  'autocrlf',
+  'eol',
+  'worktree',
+  'hidedotfiles',
+  'preloadindex',
+  'fscache',
+  'trustctime',
+  'checkstat',
+  'compression',
+  'longpaths',
+]);
+
+const ALLOWED_REMOTE_KEYS = new Set(['url', 'fetch', 'pushurl', 'push', 'mirror', 'tagopt']);
+
+const ALLOWED_BRANCH_KEYS = new Set(['remote', 'merge', 'rebase', 'description']);
+
+const ALLOWED_USER_KEYS = new Set(['name', 'email', 'signingkey', 'useconfigonly']);
+
+function validateGitConfigContent(content, failure) {
+  const lines = content.split(/\r?\n/);
+  let currentSection = null;
+  let inContinuation = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i].trim();
+    if (!line || line.startsWith('#') || line.startsWith(';')) {
+      inContinuation = false;
+      continue;
+    }
+    if (inContinuation) {
+      inContinuation = line.endsWith('\\');
+      continue;
+    }
+    if (line.endsWith('\\')) {
+      inContinuation = true;
+      line = line.slice(0, -1).trim();
+    }
+
+    const sectionMatch = line.match(/^\[\s*([^\]]+?)\s*\]$/);
+    if (sectionMatch) {
+      const rawHeader = sectionMatch[1].trim();
+      let sectionName = null;
+      let subsection = null;
+      const subQuoteMatch = rawHeader.match(/^([a-zA-Z0-9_\-]+)\s+"(.*)"$/);
+      const subDotMatch = rawHeader.match(/^([a-zA-Z0-9_\-]+)\.(.+)$/);
+      if (subQuoteMatch) {
+        sectionName = subQuoteMatch[1].toLowerCase();
+        subsection = subQuoteMatch[2];
+      } else if (subDotMatch) {
+        sectionName = subDotMatch[1].toLowerCase();
+        subsection = subDotMatch[2];
+      } else {
+        sectionName = rawHeader.toLowerCase();
+      }
+
+      if (!ALLOWED_GIT_CONFIG_SECTIONS.has(sectionName)) {
+        throw new Error(failure + ': disallowed git config section: ' + line);
+      }
+      if (sectionName === 'core' && subsection !== null) {
+        throw new Error(failure + ': disallowed subsection in core: ' + line);
+      }
+      currentSection = sectionName;
+      continue;
+    }
+
+    if (!currentSection) {
+      throw new Error(failure + ': git config directive outside section: ' + line);
+    }
+
+    const eqIdx = line.indexOf('=');
+    const rawKey = (eqIdx >= 0 ? line.slice(0, eqIdx) : line).trim();
+    const keyName = rawKey.toLowerCase();
+
+    if (currentSection === 'core') {
+      if (!ALLOWED_CORE_KEYS.has(keyName)) {
+        throw new Error(failure + ': disallowed core git config key: ' + keyName);
+      }
+    } else if (currentSection === 'remote') {
+      if (!ALLOWED_REMOTE_KEYS.has(keyName)) {
+        throw new Error(failure + ': disallowed remote git config key: ' + keyName);
+      }
+    } else if (currentSection === 'branch') {
+      if (!ALLOWED_BRANCH_KEYS.has(keyName)) {
+        throw new Error(failure + ': disallowed branch git config key: ' + keyName);
+      }
+    } else if (currentSection === 'user') {
+      if (!ALLOWED_USER_KEYS.has(keyName)) {
+        throw new Error(failure + ': disallowed user git config key: ' + keyName);
+      }
+    }
+  }
+}
+
+function validateWorkerGitConfig(workerRoot, failure) {
   if (!workerRoot) return;
-  const configPath = path.join(workerRoot, '.git', 'config');
-  if (!fs.existsSync(configPath)) return;
+  let gitDir = path.join(workerRoot, '.git');
+  if (!fs.existsSync(gitDir)) return;
   try {
-    let content = fs.readFileSync(configPath, 'utf8');
-    content = content.replace(/\[filter(?:\s+[^\]]+)?\][^\[]*/gi, '');
-    content = content.replace(/\[diff(?:\s+[^\]]+)?\][^\[]*/gi, '');
-    content = content.replace(/^\s*(?:fsmonitor|external|editor|pager)\s*=.*$/gim, '');
-    fs.writeFileSync(configPath, content, 'utf8');
+    const stat = fs.statSync(gitDir);
+    if (stat.isFile()) {
+      const gitDirContent = fs.readFileSync(gitDir, 'utf8').trim();
+      const match = gitDirContent.match(/^gitdir:\s*(.+)$/i);
+      if (match) {
+        gitDir = path.resolve(workerRoot, match[1]);
+        const commonPath = path.join(gitDir, 'commondir');
+        if (!fs.existsSync(path.join(gitDir, 'config')) && fs.existsSync(commonPath)) {
+          const commonDir = fs.readFileSync(commonPath, 'utf8').trim();
+          gitDir = path.resolve(gitDir, commonDir);
+        }
+      }
+    }
   } catch {}
+  const configPath = path.join(gitDir, 'config');
+  if (!fs.existsSync(configPath)) {
+    if (!fs.existsSync(path.join(gitDir, 'HEAD'))) return;
+    throw new Error(failure + ': worker git config missing');
+  }
+  let content;
+  try {
+    content = fs.readFileSync(configPath, 'utf8');
+  } catch (err) {
+    throw new Error(failure + ': failed to read worker git config: ' + err.message);
+  }
+  validateGitConfigContent(content, failure);
+
+  const worktreeConfig = path.join(gitDir, 'config.worktree');
+  if (fs.existsSync(worktreeConfig)) {
+    try {
+      content = fs.readFileSync(worktreeConfig, 'utf8');
+    } catch (err) {
+      throw new Error(failure + ': failed to read worker git config.worktree: ' + err.message);
+    }
+    validateGitConfigContent(content, failure);
+  }
+}
+
+function resolveControllerIdentity(hostRoot) {
+  let name = process.env.GIT_AUTHOR_NAME || process.env.GIT_COMMITTER_NAME;
+  let email = process.env.GIT_AUTHOR_EMAIL || process.env.GIT_COMMITTER_EMAIL;
+  if ((!name || !email) && hostRoot && fs.existsSync(hostRoot)) {
+    try {
+      const resName = cp.spawnSync('git', ['config', 'user.name'], {
+        cwd: hostRoot,
+        encoding: 'utf8',
+        windowsHide: true,
+      });
+      if (resName?.status === 0 && resName.stdout.trim()) {
+        name = name || resName.stdout.trim();
+      }
+      const resEmail = cp.spawnSync('git', ['config', 'user.email'], {
+        cwd: hostRoot,
+        encoding: 'utf8',
+        windowsHide: true,
+      });
+      if (resEmail?.status === 0 && resEmail.stdout.trim()) {
+        email = email || resEmail.stdout.trim();
+      }
+    } catch {}
+  }
+  if (!name || !email) {
+    try {
+      const resName = cp.spawnSync('git', ['config', '--global', 'user.name'], {
+        encoding: 'utf8',
+        windowsHide: true,
+      });
+      if (resName?.status === 0 && resName.stdout.trim()) {
+        name = name || resName.stdout.trim();
+      }
+      const resEmail = cp.spawnSync('git', ['config', '--global', 'user.email'], {
+        encoding: 'utf8',
+        windowsHide: true,
+      });
+      if (resEmail?.status === 0 && resEmail.stdout.trim()) {
+        email = email || resEmail.stdout.trim();
+      }
+    } catch {}
+  }
+  return {
+    name: name || 'ShipDe Controller',
+    email: email || 'controller@shipde.invalid',
+  };
 }
 
 function hookedControllerGit(options) {
@@ -67,7 +246,24 @@ function hookedControllerGit(options) {
   delete env.LEFTHOOK;
   delete env.LEFTHOOK_EXCLUDE;
   delete env.LEFTHOOK_SKIP;
-  sanitizeWorkerGitConfig(o.workerRoot);
+  validateWorkerGitConfig(o.workerRoot, failure);
+
+  const safeConfig = [];
+  if (o.workerRoot) {
+    safeConfig.push('-c', 'safe.directory=' + path.resolve(o.workerRoot).split(path.sep).join('/'));
+  }
+  if (o.hostRoot) {
+    safeConfig.push('-c', 'safe.directory=' + path.resolve(o.hostRoot).split(path.sep).join('/'));
+  }
+
+  const hasIdentity = (o.gitConfig || []).some((c) => String(c).includes('user.name'));
+  const identityConfig = [];
+  if (!hasIdentity) {
+    const ident = resolveControllerIdentity(o.hostRoot);
+    if (ident.name) identityConfig.push('-c', 'user.name=' + ident.name);
+    if (ident.email) identityConfig.push('-c', 'user.email=' + ident.email);
+  }
+
   const run =
     o.run ||
     ((args) =>
@@ -82,6 +278,8 @@ function hookedControllerGit(options) {
           'core.attributesFile=' + nulDevice,
           '-c',
           'diff.external=',
+          ...safeConfig,
+          ...identityConfig,
           ...(o.gitConfig || []),
           ...args,
         ],
@@ -1160,6 +1358,7 @@ function carryOverRestore(hostCwd, newRoot, branch, eolConfig) {
     const local = 'refs/shipde/carry/incoming';
     const f = carryGit(newRoot, ['fetch', '--no-tags', hostCwd, '+' + ref + ':' + local], hostCwd);
     if (f.status !== 0) return 'none';
+    validateWorkerGitConfig(newRoot, 'WORKER_COMMIT_FAILED');
     // Same line-ending config as the checkout, or every file looks modified.
     const eol = [];
     if (eolConfig && eolConfig.autocrlf !== null && eolConfig.autocrlf !== undefined)
@@ -3026,6 +3225,7 @@ module.exports = {
   provisionedHeadMatchesBase,
   commitNativeWriterChanges,
   commitWorkerMetadata,
+  validateWorkerGitConfig,
   getIsolatedLauncher,
   getFolderHash,
   defaultVerifyBoundary,

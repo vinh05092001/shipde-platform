@@ -252,6 +252,11 @@ Decision log entries link `goalId -> workItemId -> candidateKey -> session -> co
 
 Carry-over restoration creates its merge commit through the installed operator pre-commit hook, using the same checked Git runner as native writer commits. Goal metadata amendments also run that hook and check the resulting SHA; rejection becomes `WORKER_COMMIT_FAILED` and clears publishable SHAs. Missing hooks fail explicitly, while dirty metadata with unchanged HEAD requires no commit or hook. Worker repository configs and filters are neutralized during controller-executed Git runs without overriding safe.directory. A rejected carry-over commit aborts the merge, preserves the private recovery ref, and produces a structured local failure at launcher level. Only the private interrupted-work save retains its approved hook bypass. Offline regressions use temporary Git repositories and executable success/rejection hooks, covering missing hooks, rejected commits, unchanged HEAD, worker config neutralization, recovery-ref preservation, and the single remaining bypass.
 
+### H3 live: worker config validation and controller identity for hooked commits (2026-10-19)
+
+Worker git configuration is validated against an allowlist of safe core, remote, branch, and user keys, failing closed with `WORKER_COMMIT_FAILED` upon encountering disallowed sections (`filter`, `include`, `includeIf`, `merge`, `diff`), unknown keys, or unreadable config files. `hookedControllerGit` explicitly binds `safe.directory` for both worker and host roots and injects controller identity (`user.name` and `user.email`) via `-c`, allowing native writer commits and metadata amendments to succeed under isolated worker SIDs and empty local identities without dropping safe directory boundaries. Regressions cover allowlist rejection of hostile sections and successful commit execution in repositories without local git identity.
+
+
 ### H3 live: independent review repair for narrow test commands, fail-closed truncation, and diagnostic scoping (2026-10-19)
 
 Addressing review findings for PR #404:
