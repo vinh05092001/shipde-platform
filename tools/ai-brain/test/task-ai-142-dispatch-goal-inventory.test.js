@@ -294,3 +294,266 @@ test('dispatch from snapshot does not merge live accounts into snapshot inventor
     'snapshot account must be retained'
   );
 });
+
+test('explicit catalogue requires and validates sibling accounts.json and catalogue-sources.json', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'candidate-explicit-validation-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const missingAccountsDir = path.join(root, 'missing-accounts');
+  const missingSourcesDir = path.join(root, 'missing-sources');
+  const invalidAccountsDir = path.join(root, 'invalid-accounts');
+  fs.mkdirSync(missingAccountsDir, { recursive: true });
+  fs.mkdirSync(missingSourcesDir, { recursive: true });
+  fs.mkdirSync(invalidAccountsDir, { recursive: true });
+
+  fs.writeFileSync(path.join(missingAccountsDir, 'catalogue.json'), JSON.stringify(['vendor/one']));
+  fs.writeFileSync(
+    path.join(missingAccountsDir, 'catalogue-sources.json'),
+    JSON.stringify({ router: ['vendor/one'] })
+  );
+
+  fs.writeFileSync(path.join(missingSourcesDir, 'catalogue.json'), JSON.stringify(['vendor/one']));
+  fs.writeFileSync(path.join(missingSourcesDir, 'accounts.json'), JSON.stringify([]));
+
+  fs.writeFileSync(path.join(invalidAccountsDir, 'catalogue.json'), JSON.stringify(['vendor/one']));
+  fs.writeFileSync(
+    path.join(invalidAccountsDir, 'catalogue-sources.json'),
+    JSON.stringify({ router: ['vendor/one'] })
+  );
+  fs.writeFileSync(
+    path.join(invalidAccountsDir, 'accounts.json'),
+    JSON.stringify({ not: 'an array' })
+  );
+
+  const { readCandidateInventory } = require('../candidate-inventory');
+  assert.throws(
+    () =>
+      readCandidateInventory({ catalogueFile: path.join(missingAccountsDir, 'catalogue.json') }),
+    /Invalid candidate snapshot/
+  );
+  assert.throws(
+    () => readCandidateInventory({ catalogueFile: path.join(missingSourcesDir, 'catalogue.json') }),
+    /Invalid source inventory/
+  );
+  assert.throws(
+    () =>
+      readCandidateInventory({ catalogueFile: path.join(invalidAccountsDir, 'catalogue.json') }),
+    /Invalid candidate snapshot/
+  );
+});
+
+test('dispatch with explicit catalogue missing sibling accounts fails closed without falling back to live accounts', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'candidate-dispatch-missing-accounts-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const snapshotDir = path.join(root, 'snapshot-missing-accounts');
+  fs.mkdirSync(snapshotDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(snapshotDir, 'catalogue.json'),
+    JSON.stringify(['vendor/fixture-one'])
+  );
+  fs.writeFileSync(
+    path.join(snapshotDir, 'catalogue-sources.json'),
+    JSON.stringify({ 'fixture-router': ['vendor/fixture-one'] })
+  );
+
+  const registry = {
+    sources: [
+      {
+        id: 'fixture-router',
+        kind: 'router',
+        harness: 'paseo',
+        endpoint: 'https://router.invalid/v1',
+        writerEnabled: true,
+        models: [],
+        credential: { type: 'api-key', env: 'FIXTURE_ROUTER_KEY' },
+      },
+    ],
+    dispatch: { providers: {} },
+  };
+  const profile = {
+    taskId: 'TASK-FIXTURE',
+    role: 'writer',
+    requiredCapabilities: [],
+    taskClass: 'T1',
+    riskDomains: [],
+  };
+  const routing = require('../routing');
+
+  await assert.rejects(
+    async () =>
+      cli.dispatchCommand(
+        {
+          'dry-run': true,
+          item: profile.taskId,
+          root,
+          catalogue: path.join(snapshotDir, 'catalogue.json'),
+        },
+        {
+          root,
+          rootDir: root,
+          home: root,
+          registry,
+          discoveryCatalogue: { candidates: [] },
+          allowUnprobedCandidates: true,
+          capabilitiesPrepared: true,
+          discoverPool: false,
+          fakeRunsDir: path.join(root, 'pool'),
+          evidenceData: { combinations: [] },
+          routeHealth: { paths: {}, events: [] },
+          env: { FIXTURE_ROUTER_KEY: 'fixture-only' },
+          taskProfile: profile,
+          assessment: { weightProfile: 'BALANCED', weights: routing.WEIGHT_PROFILES.BALANCED },
+          ranking: { priors: { ranking: [] } },
+          evidenceDir: path.join(root, 'evidence'),
+          decisionDir: path.join(root, 'decisions'),
+          storePath: path.join(root, 'quota.json'),
+          listAccounts: () => [
+            {
+              id: 'live-newer-account',
+              sourceId: 'fixture-router',
+              enabled: true,
+              models: ['vendor/fixture-one'],
+            },
+          ],
+          log: () => {},
+          error: () => {},
+          exit: () => {},
+        }
+      ),
+    /Invalid candidate snapshot/
+  );
+});
+
+test('dispatch dry-run skips newer partial intake snapshots and uses complete snapshot accounts', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'candidate-dispatch-latest-intake-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const intake = path.join(root, 'tools/ai-brain/data/intake');
+  const complete = path.join(intake, 'complete');
+  const partial = path.join(intake, 'partial');
+  const partialWithoutSources = path.join(intake, 'partial-without-sources');
+  fs.mkdirSync(complete, { recursive: true });
+  fs.mkdirSync(partial, { recursive: true });
+  fs.mkdirSync(partialWithoutSources, { recursive: true });
+
+  const completeData = {
+    catalogue: ['vendor/discovered'],
+    sourceModels: { 'fixture-router': ['vendor/discovered'] },
+    accounts: [
+      {
+        id: 'snapshot-discovered-account',
+        sourceId: 'fixture-router',
+        enabled: true,
+        models: ['vendor/discovered'],
+      },
+    ],
+  };
+  fs.writeFileSync(path.join(complete, 'catalogue.json'), JSON.stringify(completeData.catalogue));
+  fs.writeFileSync(
+    path.join(complete, 'catalogue-sources.json'),
+    JSON.stringify(completeData.sourceModels)
+  );
+  fs.writeFileSync(path.join(complete, 'accounts.json'), JSON.stringify(completeData.accounts));
+
+  fs.writeFileSync(
+    path.join(partial, 'catalogue-sources.json'),
+    JSON.stringify({ unrelated: ['wrong/model'] })
+  );
+
+  fs.writeFileSync(
+    path.join(partialWithoutSources, 'catalogue.json'),
+    JSON.stringify(['vendor/unrelated-newer'])
+  );
+  fs.writeFileSync(
+    path.join(partialWithoutSources, 'accounts.json'),
+    JSON.stringify([{ id: 'unrelated-newer-account' }])
+  );
+
+  fs.utimesSync(complete, new Date(1000), new Date(1000));
+  fs.utimesSync(partial, new Date(2000), new Date(2000));
+  fs.utimesSync(partialWithoutSources, new Date(3000), new Date(3000));
+
+  const registry = {
+    sources: [
+      {
+        id: 'fixture-router',
+        kind: 'router',
+        harness: 'paseo',
+        endpoint: 'https://router.invalid/v1',
+        writerEnabled: true,
+        models: [],
+        credential: { type: 'api-key', env: 'FIXTURE_ROUTER_KEY' },
+      },
+    ],
+    dispatch: { providers: {} },
+  };
+
+  const routing = require('../routing');
+  const originalRank = routing.rankForProfile;
+  let offered;
+  t.mock.method(routing, 'rankForProfile', (cs, ...args) => {
+    offered = cs;
+    return originalRank(cs, ...args);
+  });
+
+  const profile = {
+    taskId: 'TASK-FIXTURE',
+    role: 'writer',
+    requiredCapabilities: [],
+    taskClass: 'T1',
+    riskDomains: [],
+  };
+
+  await cli.dispatchCommand(
+    {
+      'dry-run': true,
+      item: profile.taskId,
+      root,
+    },
+    {
+      root,
+      rootDir: root,
+      home: root,
+      registry,
+      allowUnprobedCandidates: true,
+      capabilitiesPrepared: true,
+      discoverPool: false,
+      fakeRunsDir: path.join(root, 'pool'),
+      evidenceData: { combinations: [] },
+      routeHealth: { paths: {}, events: [] },
+      env: { FIXTURE_ROUTER_KEY: 'fixture-only' },
+      taskProfile: profile,
+      assessment: { weightProfile: 'BALANCED', weights: routing.WEIGHT_PROFILES.BALANCED },
+      ranking: { priors: { ranking: [] } },
+      evidenceDir: path.join(root, 'evidence'),
+      decisionDir: path.join(root, 'decisions'),
+      storePath: path.join(root, 'quota.json'),
+      listAccounts: () => [
+        {
+          id: 'live-newer-account',
+          sourceId: 'fixture-router',
+          enabled: true,
+          models: ['vendor/discovered'],
+        },
+      ],
+      log: () => {},
+      error: () => {},
+      exit: () => {},
+    }
+  );
+
+  assert.ok(offered && offered.length > 0, 'must have offered candidates');
+  assert.equal(
+    offered.some((c) => c.accountId === 'snapshot-discovered-account'),
+    true,
+    'complete snapshot account must be used'
+  );
+  assert.equal(
+    offered.some((c) => c.accountId === 'unrelated-newer-account'),
+    false,
+    'partial newer snapshot account must be skipped'
+  );
+  assert.equal(
+    offered.some((c) => c.accountId === 'live-newer-account'),
+    false,
+    'live account must not be merged into snapshot inventory'
+  );
+});
