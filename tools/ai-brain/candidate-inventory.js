@@ -11,8 +11,7 @@ function readCandidateInventory(options = {}) {
     const accounts = read(path.join(dir, 'accounts.json'));
     if (!Array.isArray(catalogue) || !Array.isArray(accounts))
       throw Error('Invalid candidate snapshot');
-    const sourceFile = path.join(dir, 'catalogue-sources.json');
-    const sourceModels = fs.existsSync(sourceFile) ? read(sourceFile) : {};
+    const sourceModels = read(path.join(dir, 'catalogue-sources.json'));
     if (!sourceModels || typeof sourceModels !== 'object' || Array.isArray(sourceModels))
       throw Error('Invalid source inventory');
     return { catalogue, accounts, sourceModels };
@@ -20,12 +19,13 @@ function readCandidateInventory(options = {}) {
   if (o.catalogueFile || o.sourceModelsFile) {
     const catalogueFile = o.catalogueFile;
     const sourceFile =
-      o.sourceModelsFile || path.join(path.dirname(catalogueFile), 'catalogue-sources.json');
+      o.sourceModelsFile ||
+      (catalogueFile && path.join(path.dirname(catalogueFile), 'catalogue-sources.json'));
     const accountsFile = path.join(path.dirname(catalogueFile || sourceFile), 'accounts.json');
     return {
       catalogue: catalogueFile ? read(catalogueFile) : undefined,
-      sourceModels: fs.existsSync(sourceFile) ? read(sourceFile) : {},
-      accounts: fs.existsSync(accountsFile) ? read(accountsFile) : [],
+      sourceModels: sourceFile && fs.existsSync(sourceFile) ? read(sourceFile) : {},
+      accounts: fs.existsSync(accountsFile) ? read(accountsFile) : undefined,
     };
   }
   if (o.useLatestIntake) {
@@ -49,6 +49,6 @@ function readCandidateInventory(options = {}) {
       }
     }
   }
-  return { accounts: [] };
+  return {};
 }
 module.exports = { readCandidateInventory };

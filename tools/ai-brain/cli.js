@@ -2194,15 +2194,20 @@ function dispatchCommand(args, deps = {}) {
       deps.catalogue === undefined &&
       deps.discoveryCatalogue === undefined,
   });
-  const accounts = mergeEvidenceAccounts(
-    inventory.accounts,
+  const accounts =
     deps.accounts !== undefined
       ? deps.accounts
-      : typeof deps.listAccounts === 'function'
-        ? deps.listAccounts()
-        : listAccounts() || []
-  );
-  const candidateOptions = { ...inventory, ...deps, root: rootDir };
+      : inventory.accounts !== undefined
+        ? inventory.accounts
+        : typeof deps.listAccounts === 'function'
+          ? deps.listAccounts()
+          : listAccounts() || [];
+  const candidateOptions = {
+    ...inventory,
+    ...deps,
+    root: rootDir,
+    registryAccounts: deps.registryAccounts !== undefined ? deps.registryAccounts : accounts,
+  };
   const routeHealthApi = require('./route-health');
   const candidateList = assembleForDispatch(
     discCat,

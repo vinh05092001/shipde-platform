@@ -168,12 +168,129 @@ test('latest coherent snapshot retains discovered accounts and skips a newer par
     path.join(partial, 'catalogue-sources.json'),
     JSON.stringify({ unrelated: ['wrong/model'] })
   );
+  const partialWithoutSources = path.join(intake, 'partial-without-sources');
+  fs.mkdirSync(partialWithoutSources);
+  fs.writeFileSync(
+    path.join(partialWithoutSources, 'catalogue.json'),
+    JSON.stringify(['vendor/unrelated-newer'])
+  );
+  fs.writeFileSync(
+    path.join(partialWithoutSources, 'accounts.json'),
+    JSON.stringify([{ id: 'unrelated-newer-account' }])
+  );
   fs.utimesSync(complete, new Date(1000), new Date(1000));
   fs.utimesSync(partial, new Date(2000), new Date(2000));
+  fs.utimesSync(partialWithoutSources, new Date(3000), new Date(3000));
   const { readCandidateInventory } = require('../candidate-inventory');
   assert.deepEqual(readCandidateInventory({ rootDir: root, useLatestIntake: true }), expected);
   assert.deepEqual(
     readCandidateInventory({ catalogueFile: path.join(complete, 'catalogue.json') }),
     expected
+  );
+});
+
+test('dispatch from snapshot does not merge live accounts into snapshot inventory', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'candidate-live-accounts-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const registry = {
+    sources: [
+      {
+        id: 'fixture-router',
+        kind: 'router',
+        harness: 'paseo',
+        endpoint: 'https://router.invalid/v1',
+        writerEnabled: true,
+        models: [],
+        credential: { type: 'api-key', env: 'FIXTURE_ROUTER_KEY' },
+      },
+    ],
+    dispatch: { providers: {} },
+  };
+  const sourceModels = { 'fixture-router': ['vendor/fixture-one'] };
+  const snapshotDir = path.join(root, 'snapshot');
+  fs.mkdirSync(snapshotDir);
+  fs.writeFileSync(
+    path.join(snapshotDir, 'catalogue.json'),
+    JSON.stringify(['vendor/fixture-one'])
+  );
+  fs.writeFileSync(path.join(snapshotDir, 'catalogue-sources.json'), JSON.stringify(sourceModels));
+  fs.writeFileSync(
+    path.join(snapshotDir, 'accounts.json'),
+    JSON.stringify([
+      {
+        id: 'snapshot-account',
+        sourceId: 'fixture-router',
+        enabled: true,
+        models: ['vendor/fixture-one'],
+      },
+    ])
+  );
+
+  const routing = require('../routing');
+  const originalRank = routing.rankForProfile;
+  let offered;
+  t.mock.method(routing, 'rankForProfile', (cs, ...args) => {
+    offered = cs;
+    return originalRank(cs, ...args);
+  });
+
+  const profile = {
+    taskId: 'TASK-FIXTURE',
+    role: 'writer',
+    requiredCapabilities: [],
+    taskClass: 'T1',
+    riskDomains: [],
+  };
+
+  await cli.dispatchCommand(
+    {
+      'dry-run': true,
+      item: profile.taskId,
+      root,
+      catalogue: path.join(snapshotDir, 'catalogue.json'),
+    },
+    {
+      root,
+      rootDir: root,
+      home: root,
+      registry,
+      discoveryCatalogue: { candidates: [] },
+      allowUnprobedCandidates: true,
+      capabilitiesPrepared: true,
+      discoverPool: false,
+      fakeRunsDir: path.join(root, 'pool'),
+      evidenceData: { combinations: [] },
+      routeHealth: { paths: {}, events: [] },
+      env: { FIXTURE_ROUTER_KEY: 'fixture-only' },
+      taskProfile: profile,
+      assessment: { weightProfile: 'BALANCED', weights: routing.WEIGHT_PROFILES.BALANCED },
+      ranking: { priors: { ranking: [] } },
+      evidenceDir: path.join(root, 'evidence'),
+      decisionDir: path.join(root, 'decisions'),
+      storePath: path.join(root, 'quota.json'),
+      listAccounts: () => [
+        {
+          id: 'live-newer-account',
+          sourceId: 'fixture-router',
+          enabled: true,
+          models: ['vendor/fixture-one'],
+        },
+      ],
+      log: () => {},
+      error: () => {},
+      exit: () => {},
+    }
+  );
+
+  assert.ok(offered && offered.length > 0, 'must have offered candidates');
+  assert.equal(
+    offered.some((c) => c.accountId === 'live-newer-account'),
+    false,
+    'live account must not be merged into snapshot inventory'
+  );
+  assert.equal(
+    offered.some((c) => c.accountId === 'snapshot-account'),
+    true,
+    'snapshot account must be retained'
   );
 });
