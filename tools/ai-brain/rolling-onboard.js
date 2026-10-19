@@ -202,21 +202,25 @@ async function onboardSourceRolling(src, options = {}) {
       evidenceApi.saveEvidence(evidenceDir, evidenceData);
     }
 
-    // 2. Record route health
+    // 2. Record route health in the same store dispatch reads. rememberProbe
+    // resolves the file from these options and persists unless the caller opts out.
+    const healthOptions = {
+      routeHealthFile: options.routeHealthFile,
+      'route-health': options['route-health'],
+      cwd: options.cwd,
+      root: options.root,
+      persistRouteHealth: options.persistRouteHealth,
+    };
     const store =
       options.routeHealth ||
-      routeHealthApi.loadStore(
-        options.routeHealthFile || path.join(__dirname, 'data', 'model-route-health.json'),
-        { allowMissing: true }
-      );
+      routeHealthApi.loadStore(routeHealthApi.probeMemoryFile(healthOptions), {
+        allowMissing: true,
+      });
     routeHealthApi.rememberProbe(
       combo,
       { ok: true, status: probeStatus, body: probeBody },
-      { routeHealth: store, now }
+      { ...healthOptions, routeHealth: store, now }
     );
-    if (options.persistRouteHealth === true && options.routeHealthFile) {
-      routeHealthApi.saveStore(options.routeHealthFile, store);
-    }
 
     // 3. Quota scan entry
     let quotaScan;

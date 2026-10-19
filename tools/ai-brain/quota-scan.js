@@ -126,7 +126,9 @@ function classifyQuotaResponse(status, body, headers, now = Date.now()) {
   }
 
   if (status === 403) {
-    if (/tier|deposit|ultra\s+and\s+power\s+plans|requires\s+an\s+active\s+paid\s+plan/i.test(bodyStr)) {
+    if (
+      /tier|deposit|ultra\s+and\s+power\s+plans|requires\s+an\s+active\s+paid\s+plan/i.test(bodyStr)
+    ) {
       return {
         status: 403,
         code: QUOTA_STATUS_CODES.TIER,
@@ -291,7 +293,8 @@ function isScopeBlocked(scopeEntry, now = Date.now()) {
 async function scanScope(target, options = {}) {
   const fetchFn = options.fetch || globalThis.fetch;
   const now = options.now ?? Date.now();
-  const apiKey = (options.env && options.env[target.apiKeyEnv]) || process.env[target.apiKeyEnv] || '';
+  const apiKey =
+    (options.env && options.env[target.apiKeyEnv]) || process.env[target.apiKeyEnv] || '';
 
   const endpoint = String(target.endpoint || '').replace(/\/+$/, '');
   const url = `${endpoint}/chat/completions`;
@@ -360,7 +363,10 @@ async function scanScope(target, options = {}) {
 
 async function discover9RouterScopes(source, options = {}) {
   const fetchFn = options.fetch || globalThis.fetch;
-  const apiKey = (options.env && options.env[source.credential?.env]) || process.env[source.credential?.env] || '';
+  const apiKey =
+    (options.env && options.env[source.credential?.env]) ||
+    process.env[source.credential?.env] ||
+    '';
   const endpoint = String(source.endpoint || '').replace(/\/+$/, '');
   const url = `${endpoint}/models`;
 
@@ -434,9 +440,7 @@ async function scanAllQuotas(options = {}) {
       targets.push(...routerTargets);
     } else if (src.kind === 'model-source' || src.endpoint) {
       const repModel =
-        (Array.isArray(src.models) && src.models[0]) ||
-        src.verify?.model ||
-        `${src.id}/default`;
+        (Array.isArray(src.models) && src.models[0]) || src.verify?.model || `${src.id}/default`;
       targets.push({
         source: src.id,
         scope: src.id,

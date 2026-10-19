@@ -100,6 +100,7 @@ describe('TASK-AI-142 T8: rolling source onboarding', () => {
     const dir = fixture(t);
     const evidenceDir = path.join(dir, 'evidence');
     const quotaFile = path.join(dir, 'quota-state.json');
+    const healthFile = path.join(dir, 'route-health.json');
     fs.mkdirSync(evidenceDir, { recursive: true });
 
     const src = {
@@ -131,6 +132,7 @@ describe('TASK-AI-142 T8: rolling source onboarding', () => {
       evidenceData,
       evidenceDir,
       quotaStateFile: quotaFile,
+      routeHealthFile: healthFile,
       env,
       fetch: fakeFetch,
       now: 1700000000000,
@@ -151,6 +153,10 @@ describe('TASK-AI-142 T8: rolling source onboarding', () => {
     assert.equal(fs.existsSync(quotaFile), true);
     const quota = JSON.parse(fs.readFileSync(quotaFile, 'utf8'));
     assert.equal(quota.scopes['mock-provider'].code, 'OK');
+
+    // Route health lands in the configured store, not the production default
+    const health = JSON.parse(fs.readFileSync(healthFile, 'utf8'));
+    assert.ok(Object.keys(health.paths).some((key) => key.includes('mockprovider/model-alpha')));
   });
 
   test('onboardSourceRolling rejects an HTTP 200 application error without API_PASS evidence', async (t) => {
