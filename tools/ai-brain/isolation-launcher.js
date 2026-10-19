@@ -20,12 +20,31 @@ const DEFAULT_WORKER_TIMEOUT_MS = 30 * 60 * 1000;
  * The injected runner is for offline tests; production uses normal Git hooks.
  * A failed hook is a local failure and never becomes a reviewed worker SHA.
  */
+function sanitizeWorkerGitConfig(workerRoot) {
+  if (!workerRoot) return;
+  const configPath = path.join(workerRoot, '.git', 'config');
+  if (!fs.existsSync(configPath)) return;
+  try {
+    let content = fs.readFileSync(configPath, 'utf8');
+    content = content.replace(/\[filter(?:\s+[^\]]+)?\][^\[]*/gi, '');
+    content = content.replace(/\[diff(?:\s+[^\]]+)?\][^\[]*/gi, '');
+    content = content.replace(/^\s*(?:fsmonitor|external|editor|pager)\s*=.*$/gim, '');
+    fs.writeFileSync(configPath, content, 'utf8');
+  } catch {}
+}
+
 function hookedControllerGit(options) {
   const o = options || {};
   const failure = o.failure || 'NATIVE_WRITER_COMMIT_FAILED';
+  const nulDevice = process.platform === 'win32' ? 'NUL' : '/dev/null';
   const env = Object.fromEntries(
     Object.entries(process.env).filter(([key]) => !/^GIT_/i.test(key))
   );
+  Object.assign(env, {
+    GIT_CONFIG_NOSYSTEM: '1',
+    GIT_CONFIG_GLOBAL: nulDevice,
+    GIT_CONFIG_SYSTEM: nulDevice,
+  });
   // Clone hooks are absent. Pin the installed operator hooks explicitly instead
   // of silently making a hookless commit in the freshly provisioned worker.
   let hooksPath = o.hooksPath;
@@ -48,6 +67,7 @@ function hookedControllerGit(options) {
   delete env.LEFTHOOK;
   delete env.LEFTHOOK_EXCLUDE;
   delete env.LEFTHOOK_SKIP;
+  sanitizeWorkerGitConfig(o.workerRoot);
   const run =
     o.run ||
     ((args) =>
@@ -57,7 +77,11 @@ function hookedControllerGit(options) {
           '-c',
           'core.hooksPath=' + hooksPath,
           '-c',
-          'safe.directory=' + path.resolve(o.workerRoot).split(path.sep).join('/'),
+          'core.fsmonitor=false',
+          '-c',
+          'core.attributesFile=' + nulDevice,
+          '-c',
+          'diff.external=',
           ...(o.gitConfig || []),
           ...args,
         ],
@@ -66,7 +90,7 @@ function hookedControllerGit(options) {
           env,
           encoding: 'utf8',
           windowsHide: true,
-          timeout: 30 * 60 * 1000,
+          timeout: o.timeoutMs || DEFAULT_WORKER_TIMEOUT_MS,
           maxBuffer: 1024 * 1024,
         }
       ));
@@ -107,9 +131,15 @@ function commitWorkerMetadata(options) {
   if (!status || status.status !== 0) throw new Error('WORKER_COMMIT_FAILED: status');
   const dirty = String(status.stdout || '').trim();
   if (!dirty) return null;
+  const headCheck = withCleanGitEnv(
+    o.workerRoot,
+    (safeDir) =>
+      safeGit(safeDir, o.workerRoot, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'], 20000),
+    { workerWritable: true }
+  );
+  const head = headCheck && headCheck.status === 0 ? String(headCheck.stdout || '').trim() : null;
+  if (!head || head === o.headSha) return null;
   const checked = hookedControllerGit({ ...o, failure: 'WORKER_COMMIT_FAILED' });
-  const head = checked(['rev-parse', '--verify', 'HEAD^{commit}']);
-  if (head === o.headSha) return null;
   // Some goals have no register delta: only stage metadata that exists.
   const present = files.filter((f) => fs.existsSync(path.join(o.workerRoot, f)));
   checked(['add', '--', ...present]);
@@ -1979,8 +2009,21 @@ function getIsolatedLauncher() {
         });
       }
 
-      if (targetBranch)
-        carriedOver = carryOverRestore(hostCwd, workerRoot, targetBranch, eolConfig);
+      if (targetBranch) {
+        try {
+          carriedOver = carryOverRestore(hostCwd, workerRoot, targetBranch, eolConfig);
+        } catch (error) {
+          if (String(error.message).startsWith('WORKER_COMMIT_FAILED:')) {
+            return {
+              exitCode: 1,
+              localFailure: 'WORKER_COMMIT_FAILED',
+              failureReason: String(error.message),
+              stderr: String(error.message),
+            };
+          }
+          throw error;
+        }
+      }
 
       ensureGoalRegistrationInWorker(hostCwd, workerRoot, opts.workItemId);
 

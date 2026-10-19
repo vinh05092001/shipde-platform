@@ -97,3 +97,45 @@ test('only the private interrupted-work save retains a hook bypass', () => {
   );
   assert.match(source, /launchResult\.localFailure = 'WORKER_COMMIT_FAILED'/);
 });
+
+test('dirty metadata with unchanged HEAD needs no commit or installed hook', (t) => {
+  const f = fixture(t);
+  assert.equal(
+    launcher.commitWorkerMetadata({
+      hostRoot: f.root,
+      workerRoot: f.root,
+      workItemId: 'GOAL-FIXTURE',
+      headSha: f.sha,
+    }),
+    null
+  );
+  assert.equal(f.git('rev-parse', 'HEAD'), f.sha);
+});
+
+test('worker-planted filter clean or core.fsmonitor in .git/config is not executed', (t) => {
+  const f = fixture(t);
+  fs.writeFileSync(f.hook, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  const touchClean = path.join(f.root, 'touch_clean.bat').replace(/\\/g, '/');
+  fs.writeFileSync(touchClean, '@echo clean_ran > pwned_clean\n');
+  const touchFs = path.join(f.root, 'touch_fs.bat').replace(/\\/g, '/');
+  fs.writeFileSync(touchFs, '@echo fs_ran > pwned_fs\n');
+
+  fs.appendFileSync(
+    path.join(f.root, '.git', 'config'),
+    `\n[filter "evil"]\n\tclean = "${touchClean}"\n[core]\n\tfsmonitor = "${touchFs}"\n`
+  );
+  fs.writeFileSync(path.join(f.root, '.gitattributes'), '* filter=evil\n');
+
+  launcher.commitWorkerMetadata({
+    hostRoot: f.root,
+    workerRoot: f.root,
+    workItemId: 'GOAL-FIXTURE',
+  });
+
+  assert.equal(
+    fs.existsSync(path.join(f.root, 'pwned_clean')),
+    false,
+    'clean filter must not execute'
+  );
+  assert.equal(fs.existsSync(path.join(f.root, 'pwned_fs')), false, 'fsmonitor must not execute');
+});
