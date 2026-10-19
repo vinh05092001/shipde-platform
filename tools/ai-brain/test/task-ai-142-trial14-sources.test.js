@@ -140,6 +140,8 @@ test('TASK-AI-142 trial 14: orderCandidatesForProbe orders observed fast probes 
   const ordered = capabilityProbe.orderCandidatesForProbe(candidates, profile, {
     capabilityEvidence: { combinations },
     registry: { sources: [{ id: 'agy-pool', writerEnabled: true }] },
+    // Quality priors also order probes; none here, so only measured cost decides.
+    priors: { ranking: [] },
   });
 
   // Fresh API availability first; API remains distinct from work proof.
