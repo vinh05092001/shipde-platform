@@ -266,6 +266,10 @@ Repairs:
 3. Failed and host_gate_failed decision and checkpoint records capture individual failing check names and a concise summary bounded by `dispatch.maxHostGateSummaryChars`.
 4. A host-gate repair killed by REQUEST_TOO_LARGE remains retryable when alternative candidates exist.
 
+### H3 live: host-gate base failures match by name without run duration (2026-10-19)
+
+Live trial 19 of goal G-F622511E (19/10): the writer and reviewer commits were clean, but node --test prints each failure as `✖ <name> (<duration>ms)`; the run and the base run of the same pre-existing failure differed only in duration, so all 7 base failures counted as new and the host gate failed. Failure names are now parsed once, with the duration suffix removed, for both the run and the base run; a genuinely new failure is still reported.
+
 ### H3 live: the writer route-probe window is not charged with capability proof time (2026-10-18)
 
 Live trial 15 of goal G-F622511E (18/10 15:59Z) ended PROBE_BUDGET_EXHAUSTED without probing a single route: #388 started the writer route-probe window at `now - capabilityProbeDurationMs`, so slow CLI capability proofs spent it first. Capability proofs keep their own `schemaProbeBudgetMs`; the route window now starts when route probing starts and its length is `probeBudgetMs` from the dispatch configuration instead of a module constant.
