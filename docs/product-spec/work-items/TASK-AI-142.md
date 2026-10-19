@@ -1260,3 +1260,18 @@ Aggregator routers like 9Router require model IDs to carry an upstream provider 
       - Multi-source round-robin fairness across sources with configurable batch size and prior-descending ordering within source.
       - HTTP preflight skipping after budget deadline without cooldown recording.
       - Snapshot threading of `ranking.priors` into probe ordering.
+
+### H3 live: rolling source and key onboarding during dispatch cycles (2026-10-19)
+
+- Root cause:
+  - When new sources were added to `sources.json` or new credentials provided in `env`, the Controller required manual CLI commands (`sources onboard`) or static test fixtures before those sources could produce evidence and be ranked during dispatch.
+- Repairs:
+  - In `tools/ai-brain/rolling-onboard.js`:
+    - Implemented `detectNewSources` to identify sources in registry with env keys that lack route evidence.
+    - Implemented `onboardSourceRolling` to automatically execute representative probes and quota scans, populating `evidenceData.combinations`, `routeHealth`, and `quota-state.json`.
+    - Implemented `autoOnboardNewSources` to coordinate rolling onboarding across discovered new sources.
+  - In `tools/ai-brain/cli.js`:
+    - Wired `detectNewSources` and `autoOnboardNewSources` into `dispatchCommand` so that new sources with credentials automatically qualify, receive evidence, bind accounts, and enter candidate ranking in `dispatch --dry-run` and live selection without code changes.
+- Verification:
+  - New test suite in `tools/ai-brain/test/task-ai-142-rolling-onboarding.test.js` verifying detection of unevidenced sources with keys, rolling probe and evidence recording, and end-to-end appearance of newly added mock source in `dispatch --dry-run`.
+

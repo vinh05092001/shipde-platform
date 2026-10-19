@@ -2175,6 +2175,41 @@ function dispatchCommand(args, deps = {}) {
     }
   }
 
+  const isCandidateInjected = Array.isArray(deps && deps.candidates);
+  const rollingOnboard = require('./rolling-onboard');
+  const env = (deps && deps.env) || process.env;
+  const evidenceData = (deps && deps.evidenceData) || evidence.loadEvidence(evidenceDir);
+  const newSources =
+    (deps && deps.onboardingPrepared) || isCandidateInjected || (!isDryRun && !deps?.autoOnboard)
+      ? []
+      : rollingOnboard.detectNewSources(registry, evidenceData, env);
+
+  if (newSources.length > 0) {
+    const rawAccounts = deps && deps.accounts !== undefined ? deps.accounts : listAccounts() || [];
+    return rollingOnboard
+      .autoOnboardNewSources(newSources, {
+        ...deps,
+        evidenceData,
+        evidenceDir,
+        registry,
+        env,
+      })
+      .then(() => {
+        const updatedAccounts = rawAccounts.slice();
+        for (const s of newSources) {
+          if (!updatedAccounts.some((a) => a.source === s.id || a.id === `${s.id}-auto`)) {
+            updatedAccounts.push({ id: `${s.id}-auto`, source: s.id, provider: s.id });
+          }
+        }
+        return dispatchCommand(args, {
+          ...deps,
+          accounts: updatedAccounts,
+          onboardingPrepared: true,
+          evidenceData,
+        });
+      });
+  }
+
   const accounts = deps && deps.accounts !== undefined ? deps.accounts : listAccounts() || [];
   const routeHealthApi = require('./route-health');
   const candidateList = assembleForDispatch(
