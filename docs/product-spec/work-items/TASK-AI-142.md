@@ -248,6 +248,15 @@ Decision log entries link `goalId -> workItemId -> candidateKey -> session -> co
 - Part H2 Hermes session selection, custom config binding, and `shipde-controller` skill file are delivered in Part H2.
 - Live acceptance across chat and controller runs in Part H3 following merge of H1 and H2.
 
+### H3 live: published worker commits require installed hooks (2026-10-19)
+
+Carry-over restoration creates its merge commit through the installed operator pre-commit hook, using the same checked Git runner as native writer commits. Goal metadata amendments also run that hook and check the resulting SHA; rejection becomes `WORKER_COMMIT_FAILED` and clears publishable SHAs. Missing hooks fail explicitly, while dirty metadata with unchanged HEAD requires no commit or hook. Worker repository configs and filters are neutralized during controller-executed Git runs without overriding safe.directory. A rejected carry-over commit aborts the merge, preserves the private recovery ref, and produces a structured local failure at launcher level. Only the private interrupted-work save retains its approved hook bypass. Offline regressions use temporary Git repositories and executable success/rejection hooks, covering missing hooks, rejected commits, unchanged HEAD, worker config neutralization, recovery-ref preservation, and the single remaining bypass.
+
+### H3 live: worker config validation and controller identity for hooked commits (2026-10-19)
+
+Worker git configuration is validated against an allowlist of safe core, remote, branch, and user keys, failing closed with `WORKER_COMMIT_FAILED` upon encountering disallowed sections (`filter`, `include`, `includeIf`, `merge`, `diff`), unknown keys, or unreadable config files. `hookedControllerGit` explicitly binds `safe.directory` for both worker and host roots and injects controller identity (`user.name` and `user.email`) via `-c`, allowing native writer commits and metadata amendments to succeed under isolated worker SIDs and empty local identities without dropping safe directory boundaries. Regressions cover allowlist rejection of hostile sections and successful commit execution in repositories without local git identity.
+
+
 ### H3 live: independent review repair for narrow test commands, fail-closed truncation, and diagnostic scoping (2026-10-19)
 
 Addressing review findings for PR #404:
@@ -341,6 +350,7 @@ Capability and route probes share the item deadline and worker launch timeouts
 are capped by its remaining duration. Defaults come from versioned `sources.json`;
 invalid limits fail closed. Regression fixtures inject routes and clocks, with no
 machine data or provider calls.
+
 ### H3 live: writers are schema-checked after the run, not before selection (2026-10-18)
 
 Operator decision 2026-10-18: trials 10-13 of goal G-F622511E refused every agy-pool and Codex writer because the pre-selection jsonSchema proof (a full CLI launch) timed out or ran out of budget. The writer roles (author.foundation, author.lowrisk) no longer require jsonSchema before selection; the writer result is still validated after the run (WRITER_RESULT_INVALID_JSON), and the host gate and exact-SHA review still gate the commit. Planner and reviewer roles keep the requirement.

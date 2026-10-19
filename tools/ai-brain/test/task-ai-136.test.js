@@ -72,6 +72,9 @@ function installLaunchMocks(t, workerRoot, forcedInstallError = null) {
         })
       );
     }
+    // This dependency fixture has no private carry-over ref.
+    if (command === 'git' && args.some((arg) => String(arg).startsWith('refs/shipde/carry/')))
+      return { status: 1, stdout: '' };
     return { status: 0, stdout: BASE_SHA };
   });
   t.mock.method(supervisor, 'withCleanGitEnv', (dir, callback) => callback('safegit'));

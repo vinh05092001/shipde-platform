@@ -20,49 +20,264 @@ const DEFAULT_WORKER_TIMEOUT_MS = 30 * 60 * 1000;
  * The injected runner is for offline tests; production uses normal Git hooks.
  * A failed hook is a local failure and never becomes a reviewed worker SHA.
  */
-function commitNativeWriterChanges(options) {
-  const o = options || {};
+const ALLOWED_CORE_KEYS = new Set([
+  'repositoryformatversion',
+  'filemode',
+  'bare',
+  'logallrefupdates',
+  'symlinks',
+  'ignorecase',
+  'autocrlf',
+  'eol',
+  'hidedotfiles',
+  'preloadindex',
+  'fscache',
+  'trustctime',
+  'checkstat',
+  'compression',
+  'longpaths',
+]);
+
+const ALLOWED_REMOTE_KEYS = new Set(['url', 'fetch', 'pushurl', 'push', 'mirror', 'tagopt']);
+
+const ALLOWED_BRANCH_KEYS = new Set(['remote', 'merge', 'rebase', 'description']);
+
+const ALLOWED_USER_KEYS = new Set(['name', 'email', 'signingkey', 'useconfigonly']);
+
+function isWorkerConfigKeyAllowed(rawKey) {
+  if (!rawKey || typeof rawKey !== 'string') return false;
+  const parts = rawKey.split('.');
+  if (parts.length < 2) return false;
+  const section = parts[0].toLowerCase();
+  const prop = parts[parts.length - 1].toLowerCase();
+
+  if (section === 'core') {
+    return parts.length === 2 && ALLOWED_CORE_KEYS.has(prop);
+  }
+  if (section === 'user') {
+    return parts.length === 2 && ALLOWED_USER_KEYS.has(prop);
+  }
+  if (section === 'remote') {
+    return parts.length >= 3 && ALLOWED_REMOTE_KEYS.has(prop);
+  }
+  if (section === 'branch') {
+    return parts.length >= 3 && ALLOWED_BRANCH_KEYS.has(prop);
+  }
+  return false;
+}
+
+function cleanGitEnv() {
+  const nul = process.platform === 'win32' ? 'NUL' : '/dev/null';
   const env = Object.fromEntries(
     Object.entries(process.env).filter(([key]) => !/^GIT_/i.test(key))
   );
-  // Clone hooks are absent. Pin the installed operator hooks explicitly instead
-  // of silently making a hookless commit in the freshly provisioned worker.
-  let hooksPath = o.hooksPath;
-  if (!o.run) {
-    const resolved = cp.spawnSync(
-      'git',
-      ['rev-parse', '--path-format=absolute', '--git-path', 'hooks'],
-      {
-        cwd: o.hostRoot,
-        env,
-        encoding: 'utf8',
-        windowsHide: true,
-      }
-    );
-    hooksPath = resolved?.status === 0 ? String(resolved.stdout || '').trim() : null;
-    if (!hooksPath || !fs.existsSync(path.join(hooksPath, 'pre-commit'))) {
-      throw new Error('NATIVE_WRITER_COMMIT_FAILED: installed pre-commit hook missing');
-    }
-  }
+  Object.assign(env, {
+    GIT_CONFIG_NOSYSTEM: '1',
+    GIT_CONFIG_GLOBAL: nul,
+    GIT_CONFIG_SYSTEM: nul,
+  });
   delete env.LEFTHOOK;
   delete env.LEFTHOOK_EXCLUDE;
   delete env.LEFTHOOK_SKIP;
-  const run =
-    o.run ||
-    ((args) =>
-      cp.spawnSync('git', ['-c', 'core.hooksPath=' + hooksPath, ...args], {
-        cwd: o.workerRoot,
-        env,
-        encoding: 'utf8',
-        windowsHide: true,
-        timeout: 30 * 60 * 1000,
-        maxBuffer: 1024 * 1024,
-      }));
-  const checked = (args) => {
-    const result = run(args);
-    if (!result || result.status !== 0) throw new Error('NATIVE_WRITER_COMMIT_FAILED: ' + args[0]);
+  return env;
+}
+
+function isPathInside(parent, child) {
+  const relative = path.relative(parent, child);
+  return Boolean(relative) && relative !== '..' && !relative.startsWith('..' + path.sep);
+}
+
+function workerGitPaths(workerRoot, failure = 'WORKER_COMMIT_FAILED') {
+  if (!workerRoot) {
+    throw new Error(failure + ': missing or unreadable worker git directory');
+  }
+  const root = path.resolve(workerRoot);
+  const dotGit = path.join(root, '.git');
+  let stat;
+  try {
+    stat = fs.lstatSync(dotGit);
+    fs.accessSync(dotGit, fs.constants.R_OK);
+  } catch {
+    throw new Error(failure + ': missing or unreadable worker git directory');
+  }
+
+  let gitDir = dotGit;
+  if (stat.isFile()) {
+    let gitFileContent;
+    try {
+      gitFileContent = fs.readFileSync(dotGit, 'utf8');
+    } catch {
+      throw new Error(failure + ': missing or unreadable worker git directory');
+    }
+    const match = gitFileContent.trim().match(/^gitdir:\s*(.+)$/i);
+    if (!match) throw new Error(failure + ': invalid gitfile');
+    gitDir = path.resolve(root, match[1]);
+  }
+
+  let realRoot;
+  let realGitDir;
+  try {
+    realRoot = fs.realpathSync(root);
+    realGitDir = fs.realpathSync(gitDir);
+  } catch (error) {
+    throw new Error(failure + ': cannot resolve git directory: ' + error.message);
+  }
+  if (!isPathInside(root, path.resolve(gitDir)) || !isPathInside(realRoot, realGitDir)) {
+    throw new Error(failure + ': git directory resolves outside worker repository');
+  }
+
+  let commonDir = realGitDir;
+  const commonFile = path.join(realGitDir, 'commondir');
+  if (fs.existsSync(commonFile)) {
+    let commonFileContent;
+    try {
+      commonFileContent = fs.readFileSync(commonFile, 'utf8').trim();
+    } catch {
+      throw new Error(failure + ': missing or unreadable worker git directory');
+    }
+    try {
+      commonDir = fs.realpathSync(path.resolve(realGitDir, commonFileContent));
+    } catch (error) {
+      throw new Error(failure + ': cannot resolve git directory: ' + error.message);
+    }
+    if (!isPathInside(realRoot, commonDir)) {
+      throw new Error(failure + ': git directory resolves outside worker repository');
+    }
+  }
+  return { gitDir: realGitDir, commonDir };
+}
+
+function gitConfigCheckTimeoutMs(failure) {
+  const ms = Number(require('./sources.json').dispatch?.gitConfigCheckTimeoutMs);
+  if (!Number.isFinite(ms) || ms <= 0) {
+    throw new Error(failure + ': dispatch.gitConfigCheckTimeoutMs not configured');
+  }
+  return ms;
+}
+
+function validateConfigFile(configFile, workerRoot, failure) {
+  let stat;
+  try {
+    stat = fs.lstatSync(configFile);
+  } catch (error) {
+    if (error.code === 'ENOENT') return;
+    throw new Error(failure + ': cannot stat worker git config');
+  }
+  // A FIFO or device would block git forever; only a regular file is parsed.
+  if (!stat.isFile()) throw new Error(failure + ': worker git config is not a regular file');
+  const result = cp.spawnSync(
+    'git',
+    ['config', '--file', configFile, '--no-includes', '--name-only', '--null', '--list'],
+    {
+      cwd: os.tmpdir(),
+      env: cleanGitEnv(),
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: gitConfigCheckTimeoutMs(failure),
+    }
+  );
+  if (!result || result.status !== 0) throw new Error(failure + ': invalid worker git config');
+  const keys = String(result.stdout || '')
+    .split('\0')
+    .filter(Boolean);
+  for (const key of keys) {
+    if (!isWorkerConfigKeyAllowed(key)) {
+      throw new Error(failure + ': forbidden worker git config: ' + key);
+    }
+  }
+}
+
+function validateWorkerGitConfig(workerRoot, failure = 'WORKER_COMMIT_FAILED') {
+  const dirs = workerGitPaths(workerRoot, failure);
+  const config = path.join(dirs.commonDir, 'config');
+  if (!fs.existsSync(config)) throw new Error(failure + ': worker git config missing');
+  validateConfigFile(config, workerRoot, failure);
+  validateConfigFile(path.join(dirs.gitDir, 'config.worktree'), workerRoot, failure);
+}
+
+function resolveInstalledHook(hostRoot, env, failure) {
+  const result = cp.spawnSync(
+    'git',
+    ['rev-parse', '--path-format=absolute', '--git-path', 'hooks'],
+    { cwd: hostRoot, env, encoding: 'utf8', windowsHide: true }
+  );
+  const hooks = result?.status === 0 ? String(result.stdout || '').trim() : '';
+  const hook = hooks ? path.join(hooks, 'pre-commit') : '';
+  if (!hook || !fs.existsSync(hook)) {
+    throw new Error(failure + ': installed pre-commit hook missing');
+  }
+  try {
+    const stat = fs.statSync(hook);
+    if (!stat.isFile() || (process.platform !== 'win32' && (stat.mode & 0o111) === 0)) {
+      throw new Error('not executable');
+    }
+    fs.accessSync(hook, fs.constants.X_OK);
+  } catch {
+    throw new Error(failure + ': installed pre-commit hook not executable');
+  }
+  return hooks;
+}
+
+function controllerGit(options, requireHook) {
+  const o = options || {};
+  const failure = o.failure || 'NATIVE_WRITER_COMMIT_FAILED';
+  if (o.run) {
+    return (args) => {
+      const result = o.run(args);
+      if (!result || result.status !== 0) throw new Error(failure + ': ' + args[0]);
+      return String(result.stdout || '').trim();
+    };
+  }
+
+  const env = cleanGitEnv();
+  const hooksPath = requireHook ? resolveInstalledHook(o.hostRoot, env, failure) : null;
+  validateWorkerGitConfig(o.workerRoot, failure);
+  const nul = process.platform === 'win32' ? 'NUL' : '/dev/null';
+  const prefix = [
+    '-c',
+    'core.fsmonitor=false',
+    '-c',
+    'core.attributesFile=' + nul,
+    '-c',
+    'diff.external=',
+    '-c',
+    'commit.gpgsign=false',
+    '-c',
+    'user.name=ShipDe Controller',
+    '-c',
+    'user.email=controller@shipde.invalid',
+    '-c',
+    'safe.directory=' + path.resolve(o.workerRoot).split(path.sep).join('/'),
+  ];
+  if (o.hostRoot) {
+    prefix.push('-c', 'safe.directory=' + path.resolve(o.hostRoot).split(path.sep).join('/'));
+  }
+  if (hooksPath) {
+    prefix.unshift('-c', 'core.hooksPath=' + hooksPath);
+  }
+  prefix.push(...(o.gitConfig || []));
+
+  return (args) => {
+    const result = cp.spawnSync('git', [...prefix, ...args], {
+      cwd: o.workerRoot,
+      env,
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: o.timeoutMs || DEFAULT_WORKER_TIMEOUT_MS,
+      maxBuffer: 1024 * 1024,
+    });
+    if (!result || result.status !== 0) throw new Error(failure + ': ' + args[0]);
     return String(result.stdout || '').trim();
   };
+}
+
+function hookedControllerGit(options) {
+  return controllerGit(options, true);
+}
+
+function commitNativeWriterChanges(options) {
+  const o = options || {};
+  const checked = hookedControllerGit(o);
   if (checked(['status', '--porcelain'])) {
     checked(['add', '--all']);
     checked(['commit', '-m', '[' + o.workItemId + '] native writer changes']);
@@ -70,6 +285,30 @@ function commitNativeWriterChanges(options) {
   const sha = checked(['rev-parse', '--verify', 'HEAD^{commit}']);
   if (!/^[a-f0-9]{40}$/i.test(sha) || checked(['status', '--porcelain'])) {
     throw new Error('NATIVE_WRITER_COMMIT_FAILED: invalid SHA or dirty tree');
+  }
+  return sha;
+}
+
+/** Amend only Controller-owned goal metadata, using the installed host hook. */
+function commitWorkerMetadata(options) {
+  const o = options || {};
+  const files = [
+    'docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv',
+    `docs/product-spec/work-items/${o.workItemId}.md`,
+  ];
+  const inspect = controllerGit({ ...o, failure: 'WORKER_COMMIT_FAILED' }, false);
+  if (!inspect(['status', '--porcelain', '--', ...files])) return null;
+  const head = inspect(['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']);
+  if (!/^[a-f0-9]{40}$/i.test(head)) throw new Error('WORKER_COMMIT_FAILED: rev-parse');
+  if (o.headSha && head.toLowerCase() === String(o.headSha).trim().toLowerCase()) return null;
+  const checked = hookedControllerGit({ ...o, failure: 'WORKER_COMMIT_FAILED' });
+  // Some goals have no register delta: only stage metadata that exists.
+  const present = files.filter((f) => fs.existsSync(path.join(o.workerRoot, f)));
+  checked(['add', '--', ...present]);
+  checked(['commit', '--amend', '--no-edit']);
+  const sha = checked(['rev-parse', '--verify', 'HEAD^{commit}']);
+  if (!/^[a-f0-9]{40}$/i.test(sha) || checked(['status', '--porcelain', '--', ...files])) {
+    throw new Error('WORKER_COMMIT_FAILED: invalid SHA or dirty metadata');
   }
   return sha;
 }
@@ -1083,6 +1322,7 @@ function carryOverRestore(hostCwd, newRoot, branch, eolConfig) {
     const local = 'refs/shipde/carry/incoming';
     const f = carryGit(newRoot, ['fetch', '--no-tags', hostCwd, '+' + ref + ':' + local], hostCwd);
     if (f.status !== 0) return 'none';
+    validateWorkerGitConfig(newRoot, 'WORKER_COMMIT_FAILED');
     // Same line-ending config as the checkout, or every file looks modified.
     const eol = [];
     if (eolConfig && eolConfig.autocrlf !== null && eolConfig.autocrlf !== undefined)
@@ -1090,11 +1330,25 @@ function carryOverRestore(hostCwd, newRoot, branch, eolConfig) {
     if (eolConfig && eolConfig.eol !== null && eolConfig.eol !== undefined)
       eol.push('-c', 'core.eol=' + eolConfig.eol);
     if (process.platform === 'win32') eol.push('-c', 'core.filemode=false');
+    const commit = hookedControllerGit({
+      hostRoot: hostCwd,
+      workerRoot: newRoot,
+      failure: 'WORKER_COMMIT_FAILED',
+      gitConfig: [...CARRY_IDENTITY, ...eol],
+    });
     const m = carryGit(
       newRoot,
-      CARRY_IDENTITY.concat(eol, ['merge', '--no-edit', '--no-ff', '--no-verify', local])
+      CARRY_IDENTITY.concat(eol, ['merge', '--no-commit', '--no-ff', local])
     );
     if (m.status === 0) {
+      if (carryGit(newRoot, ['rev-parse', '--verify', '--quiet', 'MERGE_HEAD']).status === 0) {
+        try {
+          commit(['commit', '-m', 'Restore interrupted writer work']);
+        } catch (error) {
+          carryGit(newRoot, ['merge', '--abort']);
+          throw error;
+        }
+      }
       carryGit(hostCwd, ['update-ref', '-d', ref]);
       carryGit(newRoot, ['update-ref', '-d', local]);
       return 'merged';
@@ -1103,7 +1357,8 @@ function carryOverRestore(hostCwd, newRoot, branch, eolConfig) {
     carryGit(newRoot, ['reset', '--hard', 'ORIG_HEAD']);
     carryGit(newRoot, ['update-ref', '-d', local]);
     return 'conflict';
-  } catch {
+  } catch (error) {
+    if (String(error.message).startsWith('WORKER_COMMIT_FAILED:')) throw error;
     return 'none';
   }
 }
@@ -1917,8 +2172,21 @@ function getIsolatedLauncher() {
         });
       }
 
-      if (targetBranch)
-        carriedOver = carryOverRestore(hostCwd, workerRoot, targetBranch, eolConfig);
+      if (targetBranch) {
+        try {
+          carriedOver = carryOverRestore(hostCwd, workerRoot, targetBranch, eolConfig);
+        } catch (error) {
+          if (String(error.message).startsWith('WORKER_COMMIT_FAILED:')) {
+            return {
+              exitCode: 1,
+              localFailure: 'WORKER_COMMIT_FAILED',
+              failureReason: String(error.message),
+              stderr: String(error.message),
+            };
+          }
+          throw error;
+        }
+      }
 
       ensureGoalRegistrationInWorker(hostCwd, workerRoot, opts.workItemId);
 
@@ -2794,48 +3062,26 @@ function getIsolatedLauncher() {
       fs.existsSync(path.join(workerRoot, '.git'))
     ) {
       try {
-        const { withCleanGitEnv, safeGit } = require('./supervisor');
-        withCleanGitEnv(
+        const amended = commitWorkerMetadata({
+          hostRoot: hostCwd,
           workerRoot,
-          (safeGitDir) => {
-            const statusRes = safeGit(safeGitDir, workerRoot, ['status', '--porcelain'], 20000);
-            if (statusRes && statusRes.status === 0 && statusRes.stdout) {
-              const dirtyLines = statusRes.stdout.split(/\r?\n/).filter(Boolean);
-              const needsCommit = dirtyLines.some(
-                (l) => l.includes('FEATURE-DELIVERY-REGISTER.csv') || l.includes(opts.workItemId)
-              );
-              if (needsCommit) {
-                const headCheck = safeGit(
-                  safeGitDir,
-                  workerRoot,
-                  ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'],
-                  20000
-                );
-                const currentHead = ((headCheck && headCheck.stdout) || '').trim();
-                if (currentHead && currentHead !== (opts.headSha || '')) {
-                  safeGit(
-                    safeGitDir,
-                    workerRoot,
-                    [
-                      'add',
-                      'docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv',
-                      `docs/product-spec/work-items/${opts.workItemId}.md`,
-                    ],
-                    20000
-                  );
-                  safeGit(
-                    safeGitDir,
-                    workerRoot,
-                    ['commit', '--amend', '--no-edit', '--no-verify'],
-                    20000
-                  );
-                }
-              }
-            }
-          },
-          { workerWritable: true }
-        );
-      } catch (_) {}
+          workItemId: opts.workItemId,
+          headSha: opts.headSha,
+        });
+        if (amended) {
+          launchResult.workerSha = amended;
+          launchResult.retainedHeadSha = amended;
+        }
+      } catch (error) {
+        launchResult.exitCode = 1;
+        launchResult.localFailure = 'WORKER_COMMIT_FAILED';
+        launchResult.failureReason = String(error.message);
+        launchResult.stderr = [launchResult.stderr, launchResult.failureReason]
+          .filter(Boolean)
+          .join('\n');
+        delete launchResult.workerSha;
+        delete launchResult.retainedHeadSha;
+      }
     }
 
     if (
@@ -2958,6 +3204,9 @@ function readLaunchResult(launchResultPath, completionNonce, hostRes) {
 module.exports = {
   provisionedHeadMatchesBase,
   commitNativeWriterChanges,
+  commitWorkerMetadata,
+  validateWorkerGitConfig,
+  isWorkerConfigKeyAllowed,
   getIsolatedLauncher,
   getFolderHash,
   defaultVerifyBoundary,

@@ -343,6 +343,7 @@
     "probeBudgetMs": 180000,
     "maxConcurrentProbes": 8,
     "probeTimeoutMs": 8000,
+    "gitConfigCheckTimeoutMs": 15000,
     "probeSafetyMarginMs": 2000,
     "schemaProbeBudgetMs": 180000,
     "probeRoundRobinBatch": 1,
