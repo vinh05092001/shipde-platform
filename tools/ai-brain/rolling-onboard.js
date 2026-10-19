@@ -17,6 +17,7 @@ const evidenceApi = require('./evidence');
 const routeHealthApi = require('./route-health');
 const candidatesApi = require('./candidates');
 const sourcesApi = require('./sources');
+const quotaScan = require('./quota-scan');
 
 // One-way, truncated digest: identifies which key produced the evidence without storing it.
 function credentialFingerprint(apiKey) {
@@ -42,39 +43,6 @@ function sourceHasPassingEvidence(combinations, sourceId, fingerprint) {
     const items = Array.isArray(combination.evidence) ? combination.evidence : [];
     return items.at(-1)?.status === evidenceApi.Status.PASSED;
   });
-}
-
-function validateCompletion(bodyText) {
-  let body;
-  try {
-    body = JSON.parse(bodyText);
-  } catch {
-    return { ok: false, reason: 'COMPLETION_UNREADABLE' };
-  }
-
-  if (
-    !body ||
-    typeof body !== 'object' ||
-    body.error ||
-    body.ok === false ||
-    ['error', 'failed'].includes(String(body.status || '').toLowerCase())
-  ) {
-    return { ok: false, reason: 'APPLICATION_ERROR' };
-  }
-
-  const choice = Array.isArray(body.choices) ? body.choices[0] : null;
-  const message = choice && choice.message;
-  const content = message && message.content;
-  const hasText =
-    (typeof content === 'string' && content.trim().length > 0) ||
-    (Array.isArray(content) &&
-      content.some((part) => part && typeof part.text === 'string' && part.text.trim().length > 0));
-  const hasToolCall = Array.isArray(message?.tool_calls) && message.tool_calls.length > 0;
-  if (!choice || !message || message.refusal || (!hasText && !hasToolCall)) {
-    return { ok: false, reason: 'COMPLETION_UNUSABLE' };
-  }
-
-  return { ok: true };
 }
 
 function detectNewSources(registry, evidenceData, env) {
@@ -121,9 +89,14 @@ async function onboardSourceRolling(src, options = {}) {
   const apiKeyEnv = src.credential?.env;
   const apiKey = (apiKeyEnv && env[apiKeyEnv]) || '';
 
+  // The quota scan names the source's scopes from configuration or, for a router, from its
+  // live model list; its first scope supplies the probe model when none is configured.
+  const scanOptions = { ...options, registry, env, fetch: fetchFn, now };
+  const scanTargets = await quotaScan.scanTargetsForSource(src, scanOptions);
   const repModel =
     (Array.isArray(src.models) && src.models.find((model) => typeof model === 'string' && model)) ||
-    src.verify?.model;
+    src.verify?.model ||
+    scanTargets[0]?.model;
 
   if (!repModel) {
     return { ok: false, sourceId: src.id, model: null, status: 0, reason: 'MODEL_UNCONFIGURED' };
@@ -164,7 +137,7 @@ async function onboardSourceRolling(src, options = {}) {
       probeBody = await res.text();
     } catch {}
     if (res.ok) {
-      const completion = validateCompletion(probeBody);
+      const completion = quotaScan.validateCompletion(probeBody);
       probeOk = completion.ok;
       probeReason = completion.reason;
     } else {
@@ -177,6 +150,17 @@ async function onboardSourceRolling(src, options = {}) {
     probeReason = err && err.name === 'AbortError' ? 'TIMEOUT' : 'PROBE_FAILED';
   } finally {
     clearTimeout(timer);
+  }
+
+  let quotaResults = [];
+  if (probeOk) {
+    quotaResults = await quotaScan.scanSourceQuotas(src, { ...scanOptions, targets: scanTargets });
+    const refused = quotaResults.find((result) => quotaScan.BLOCKING_CODES.has(result.code));
+    if (refused) {
+      // A source whose quota scan refuses it is not onboarded: no evidence, no ranking.
+      probeOk = false;
+      probeReason = `QUOTA_${refused.code}`;
+    }
   }
 
   if (probeOk) {
@@ -235,15 +219,6 @@ async function onboardSourceRolling(src, options = {}) {
       { ...healthOptions, routeHealth: store, now }
     );
 
-    // 3. Real quota scan of the source's scopes, recorded where dispatch reads quota.
-    const quotaResults = await require('./quota-scan').scanSourceQuotas(src, {
-      ...options,
-      registry,
-      env,
-      fetch: fetchFn,
-      now,
-    });
-
     return {
       ok: true,
       sourceId: src.id,
@@ -259,6 +234,7 @@ async function onboardSourceRolling(src, options = {}) {
     model: repModel,
     status: probeStatus,
     reason: probeReason,
+    quota: quotaResults.map((result) => ({ scope: result.scope, code: result.code })),
   };
 }
 

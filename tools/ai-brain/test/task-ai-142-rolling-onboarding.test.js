@@ -14,6 +14,24 @@ const {
   autoOnboardNewSources,
 } = require('../rolling-onboard');
 
+// Completion probe answers; the quota scan that follows reports exhausted credit.
+function refusingQuotaFetch(onCall) {
+  let calls = 0;
+  return async () => {
+    calls += 1;
+    onCall();
+    if (calls === 1) {
+      return {
+        ok: true,
+        status: 200,
+        headers: new Map(),
+        text: async () => JSON.stringify({ choices: [{ message: { content: 'OK' } }] }),
+      };
+    }
+    return { ok: false, status: 402, headers: new Map(), text: async () => 'insufficient_quota' };
+  };
+}
+
 function fixture(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rolling-onboard-test-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -158,7 +176,7 @@ describe('TASK-AI-142 T8: rolling source onboarding', () => {
     // Verify quota state was saved
     assert.equal(fs.existsSync(quotaFile), true);
     const quota = JSON.parse(fs.readFileSync(quotaFile, 'utf8'));
-    assert.equal(quota.scopes['mock-provider'].code, 'OK');
+    assert.equal(quota.scopes['mock-provider::mock-provider'].code, 'OK');
 
     // Route health lands in the configured store, not the production default
     const health = JSON.parse(fs.readFileSync(healthFile, 'utf8'));
@@ -391,9 +409,10 @@ describe('TASK-AI-142 T8: rolling source onboarding', () => {
     );
   });
 
-  test('onboarding runs a real quota scan and records a quota refusal from it', async (t) => {
+  test('a source whose quota scan refuses it is recorded but not onboarded', async (t) => {
     const dir = fixture(t);
     const quotaFile = path.join(dir, 'quota-state.json');
+    const evidenceData = { combinations: [] };
     let calls = 0;
     const result = await onboardSourceRolling(
       {
@@ -404,37 +423,132 @@ describe('TASK-AI-142 T8: rolling source onboarding', () => {
         credential: { env: 'SCAN_KEY' },
       },
       {
-        evidenceData: { combinations: [] },
+        evidenceData,
         evidenceDir: path.join(dir, 'evidence'),
         quotaStateFile: quotaFile,
         routeHealthFile: path.join(dir, 'route-health.json'),
         env: { SCAN_KEY: 'scan-fixture-key' },
-        fetch: async () => {
-          calls += 1;
-          // The completion probe succeeds; the quota scan that follows is refused.
-          if (calls === 1) {
-            return {
-              ok: true,
-              status: 200,
-              headers: new Map(),
-              text: async () => JSON.stringify({ choices: [{ message: { content: 'OK' } }] }),
-            };
-          }
-          return {
-            ok: false,
-            status: 429,
-            headers: new Map(),
-            text: async () => 'quota exceeded for key scan-fixture-key',
-          };
-        },
+        fetch: refusingQuotaFetch(() => (calls += 1)),
         now: 1700000000000,
       }
     );
     assert.equal(calls, 2);
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, 'QUOTA_QUOTA');
+    assert.equal(evidenceData.combinations.length, 0);
+    const raw = fs.readFileSync(quotaFile, 'utf8');
+    assert.equal(JSON.parse(raw).scopes['scan-source::scan-source'].code, 'QUOTA');
+    assert.equal(raw.includes('scan-fixture-key'), false);
+  });
+
+  test('dispatch does not rank a new source whose quota scan refuses it', async (t) => {
+    const dir = fixture(t);
+    const { dispatchCommand } = require('../cli');
+    const res = await dispatchCommand(
+      { 'dry-run': true, item: 'TASK-ONBOARD-REFUSED' },
+      {
+        registry: {
+          sources: [
+            {
+              id: 'refused-source',
+              kind: 'model-source',
+              servesModels: true,
+              endpoint: 'https://refused.invalid/v1',
+              models: ['refused-source/model'],
+              harness: 'direct-http',
+              credential: { env: 'REFUSED_KEY' },
+            },
+          ],
+          dispatch: { ...defaultDispatch, providers: {} },
+        },
+        env: { REFUSED_KEY: 'refused-fixture-key' },
+        fetch: refusingQuotaFetch(() => {}),
+        evidenceDir: path.join(dir, 'evidence'),
+        quotaStateFile: path.join(dir, 'quota-state.json'),
+        routeHealth: { version: 1, paths: {}, events: [] },
+        routeHealthFile: path.join(dir, 'route-health.json'),
+        discoveryCatalogue: { candidates: [] },
+        accounts: [],
+        assessment: {},
+        priors: [],
+        home: path.join(dir, 'home'),
+        storePath: path.join(dir, 'quota-store.json'),
+        now: 1700000000000,
+        exit: () => {},
+      }
+    );
+    const ranked = (res.decision?.candidates || []).concat(res.decision?.ranking || []);
+    assert.equal(
+      ranked.some((c) => [c.source, c.sourceId, c.gateway].includes('refused-source')),
+      false
+    );
+  });
+
+  test('a router with only live-listed models is onboarded from its /models discovery', async (t) => {
+    const dir = fixture(t);
+    const evidenceData = { combinations: [] };
+    const result = await onboardSourceRolling(
+      {
+        id: 'live-router',
+        kind: 'router',
+        endpoint: 'https://router.invalid/v1',
+        credential: { env: 'ROUTER_KEY' },
+      },
+      {
+        evidenceData,
+        evidenceDir: path.join(dir, 'evidence'),
+        quotaStateFile: path.join(dir, 'quota-state.json'),
+        routeHealthFile: path.join(dir, 'route-health.json'),
+        env: { ROUTER_KEY: 'router-fixture-key' },
+        fetch: async (url) =>
+          url.endsWith('/models')
+            ? { ok: true, status: 200, json: async () => ({ data: [{ id: 'up1/listed-model' }] }) }
+            : {
+                ok: true,
+                status: 200,
+                headers: new Map(),
+                text: async () => JSON.stringify({ choices: [{ message: { content: 'OK' } }] }),
+              },
+        now: 1700000000000,
+      }
+    );
     assert.equal(result.ok, true);
-    const quota = JSON.parse(fs.readFileSync(quotaFile, 'utf8'));
-    assert.notEqual(quota.scopes['scan-source::scan-source'].code, 'OK');
-    assert.equal(fs.readFileSync(quotaFile, 'utf8').includes('scan-fixture-key'), false);
+    assert.equal(result.model, 'up1/listed-model');
+    assert.equal(evidenceData.combinations.length, 1);
+  });
+
+  test('HTTP 200 with an application error is not recorded as healthy quota', () => {
+    const { classifyQuotaResponse } = require('../quota-scan');
+    const res = classifyQuotaResponse(200, JSON.stringify({ error: { code: 'x' } }), new Map(), 0);
+    assert.notEqual(res.code, 'OK');
+  });
+
+  test('scanScope never falls back to the host env when the caller supplies one', async () => {
+    const { scanScope } = require('../quota-scan');
+    process.env.HOST_ONLY_FIXTURE_KEY = 'host-fixture-key';
+    try {
+      let auth;
+      await scanScope(
+        {
+          source: 's',
+          scope: 's',
+          model: 'm/x',
+          endpoint: 'https://s.invalid/v1',
+          apiKeyEnv: 'HOST_ONLY_FIXTURE_KEY',
+        },
+        {
+          env: {},
+          registry: { sources: [], dispatch: { ...defaultDispatch, providers: {} } },
+          fetch: async (url, opts) => {
+            auth = opts.headers.authorization;
+            return { ok: true, status: 200, headers: new Map(), text: async () => '{}' };
+          },
+        }
+      );
+      assert.equal(auth, undefined);
+    } finally {
+      delete process.env.HOST_ONLY_FIXTURE_KEY;
+    }
   });
 
   test('quota classification never copies the provider body into the persisted reason', () => {

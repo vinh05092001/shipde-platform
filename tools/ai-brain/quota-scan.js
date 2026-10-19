@@ -56,6 +56,40 @@ function getHeader(headers, name) {
   return null;
 }
 
+// A provider can answer HTTP 200 with an application error; only a usable completion counts.
+function validateCompletion(bodyText) {
+  let body;
+  try {
+    body = JSON.parse(bodyText);
+  } catch {
+    return { ok: false, reason: 'COMPLETION_UNREADABLE' };
+  }
+
+  if (
+    !body ||
+    typeof body !== 'object' ||
+    body.error ||
+    body.ok === false ||
+    ['error', 'failed'].includes(String(body.status || '').toLowerCase())
+  ) {
+    return { ok: false, reason: 'APPLICATION_ERROR' };
+  }
+
+  const choice = Array.isArray(body.choices) ? body.choices[0] : null;
+  const message = choice && choice.message;
+  const content = message && message.content;
+  const hasText =
+    (typeof content === 'string' && content.trim().length > 0) ||
+    (Array.isArray(content) &&
+      content.some((part) => part && typeof part.text === 'string' && part.text.trim().length > 0));
+  const hasToolCall = Array.isArray(message?.tool_calls) && message.tool_calls.length > 0;
+  if (!choice || !message || message.refusal || (!hasText && !hasToolCall)) {
+    return { ok: false, reason: 'COMPLETION_UNUSABLE' };
+  }
+
+  return { ok: true };
+}
+
 function classifyQuotaResponse(status, body, headers, now = Date.now()) {
   const bodyStr = typeof body === 'object' ? JSON.stringify(body) : String(body || '');
   let retryAfter = null;
@@ -76,6 +110,15 @@ function classifyQuotaResponse(status, body, headers, now = Date.now()) {
         retryAfter = val > 1e11 ? val : val > 1e9 ? val * 1000 : now + val * 1000;
       }
     }
+  }
+
+  if (status === 200 && !validateCompletion(bodyStr).ok) {
+    return {
+      status,
+      code: QUOTA_STATUS_CODES.ERROR,
+      reason: validateCompletion(bodyStr).reason,
+      retryAfter,
+    };
   }
 
   if (status === 200) {
@@ -202,55 +245,28 @@ function saveQuotaState(state, options = {}) {
   fs.renameSync(tempPath, filePath);
 }
 
+// Looks a candidate up by source-qualified keys only, mirroring recordScanResult.
 function getQuotaScopeState(candidate, quotaState) {
   if (!candidate || !quotaState || !quotaState.scopes) return null;
   const scopes = quotaState.scopes;
+  const source = candidate.gateway || candidate.sourceId || candidate.source;
+  if (!source) return null;
 
-  // Direct check by candidate quotaScope
-  if (candidate.quotaScope && scopes[candidate.quotaScope]) {
-    return scopes[candidate.quotaScope];
+  const modelId = String(candidate.modelId || candidate.model || '');
+  const ownPrefixes = [source, candidate.routerAlias].filter(Boolean).map((p) => `${p}/`);
+  const own = ownPrefixes.find((p) => modelId.startsWith(p));
+  const prefixMatch = (own ? modelId.slice(own.length) : modelId).match(/^([A-Za-z0-9_-]+)\//);
+
+  const scopeNames = [
+    candidate.quotaScope,
+    candidate.upstream,
+    prefixMatch && prefixMatch[1],
+    source,
+  ].filter(Boolean);
+  for (const scope of scopeNames) {
+    const entry = scopes[`${source}::${scope}`];
+    if (entry) return entry;
   }
-
-  // Upstream check for gateway/router
-  const isRouter =
-    candidate.gateway === '9router' ||
-    candidate.source === '9router' ||
-    candidate.sourceId === '9router';
-
-  if (candidate.upstream) {
-    if (isRouter && scopes[`9router::${candidate.upstream}`]) {
-      return scopes[`9router::${candidate.upstream}`];
-    }
-    if (scopes[candidate.upstream]) {
-      return scopes[candidate.upstream];
-    }
-  }
-
-  // Model prefix check (e.g. cl/..., kr/..., ocz/...)
-  const modelId = candidate.modelId || candidate.model || '';
-  const cleanModelId = modelId.replace(/^(ninerouter\/|9router\/)/, '');
-  const prefixMatch = cleanModelId.match(/^([A-Za-z0-9_-]+)\//);
-  if (prefixMatch) {
-    const p = prefixMatch[1];
-    if (isRouter && scopes[`9router::${p}`]) {
-      return scopes[`9router::${p}`];
-    }
-    if (scopes[`9router::${p}`]) {
-      return scopes[`9router::${p}`];
-    }
-    if (scopes[p]) {
-      return scopes[p];
-    }
-  }
-
-  // Source ID check
-  if (candidate.sourceId && scopes[candidate.sourceId]) {
-    return scopes[candidate.sourceId];
-  }
-  if (candidate.source && scopes[candidate.source]) {
-    return scopes[candidate.source];
-  }
-
   return null;
 }
 
@@ -294,8 +310,9 @@ function isScopeBlocked(scopeEntry, now = Date.now()) {
 async function scanScope(target, options = {}) {
   const fetchFn = options.fetch || globalThis.fetch;
   const now = options.now ?? Date.now();
-  const apiKey =
-    (options.env && options.env[target.apiKeyEnv]) || process.env[target.apiKeyEnv] || '';
+  // A caller-supplied environment is used exclusively; the host env is never a fallback.
+  const env = options.env || process.env;
+  const apiKey = (target.apiKeyEnv && env[target.apiKeyEnv]) || '';
 
   const endpoint = String(target.endpoint || '').replace(/\/+$/, '');
   const url = `${endpoint}/chat/completions`;
@@ -368,26 +385,33 @@ async function scanScope(target, options = {}) {
 
 async function discover9RouterScopes(source, options = {}) {
   const fetchFn = options.fetch || globalThis.fetch;
-  const apiKey =
-    (options.env && options.env[source.credential?.env]) ||
-    process.env[source.credential?.env] ||
-    '';
+  const env = options.env || process.env;
+  const apiKey = (source.credential?.env && env[source.credential.env]) || '';
   const endpoint = String(source.endpoint || '').replace(/\/+$/, '');
   const url = `${endpoint}/models`;
+  const { probeTimeoutMs } = sourcesApi.getDispatchConfig(
+    options.registry || sourcesApi.loadSources(options.sourceOpts),
+    { ...options, probeTimeoutMs: options.timeoutMs ?? options.probeTimeoutMs }
+  );
 
   const headers = {};
   if (apiKey) headers.authorization = `Bearer ${apiKey}`;
 
   let modelsList = [];
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), probeTimeoutMs);
   try {
-    const res = await fetchFn(url, { method: 'GET', headers });
+    const res = await fetchFn(url, { method: 'GET', headers, signal: controller.signal });
     if (res.ok) {
       const data = typeof res.json === 'function' ? await res.json() : JSON.parse(await res.text());
       if (Array.isArray(data?.data)) {
         modelsList = data.data.map((m) => m.id || m.model || m).filter(Boolean);
       }
     }
-  } catch {}
+  } catch {
+  } finally {
+    clearTimeout(timer);
+  }
 
   // Fallback if /models endpoint returned empty or failed
   if (modelsList.length === 0 && Array.isArray(options.catalogue)) {
@@ -450,10 +474,9 @@ async function scanTargetsForSource(src, options = {}) {
   ];
 }
 
+// Keys are always source-qualified so a router prefix can never collide with another source.
 function recordScanResult(quotaState, target, result) {
   quotaState.scopes[`${target.source}::${target.scope}`] = result;
-  quotaState.scopes[target.source] = result;
-  quotaState.scopes[target.scope] = result;
 }
 
 // Scans one source's quota scopes (per key, or per router upstream) and records them.
@@ -461,7 +484,9 @@ function recordScanResult(quotaState, target, result) {
 async function scanSourceQuotas(src, options = {}) {
   const quotaState = loadQuotaState(options);
   quotaState.scopes = quotaState.scopes || {};
-  const targets = await scanTargetsForSource(src, options);
+  const targets = Array.isArray(options.targets)
+    ? options.targets
+    : await scanTargetsForSource(src, options);
   const results = [];
   for (const target of targets) {
     const result = await scanScope(target, options);
@@ -524,4 +549,6 @@ module.exports = {
   discover9RouterScopes,
   scanAllQuotas,
   scanSourceQuotas,
+  scanTargetsForSource,
+  validateCompletion,
 };
