@@ -1260,3 +1260,24 @@ Aggregator routers like 9Router require model IDs to carry an upstream provider 
       - Multi-source round-robin fairness across sources with configurable batch size and prior-descending ordering within source.
       - HTTP preflight skipping after budget deadline without cooldown recording.
       - Snapshot threading of `ranking.priors` into probe ordering.
+### H3 live: unscored models assigned QUALITY_UNKNOWN and ordered after scored models (2026-10-19)
+
+- Root cause:
+  - Candidates whose models are not present in the benchmark priors table (`model-priors.json`) or lack benchmark coverage had null quality without a formal machine-readable label, and displayed informal localized text in CLI dry-run logs.
+  - The Controller needed a strict guarantee that unscored models never default to 0 or an arbitrary average (e.g. 50), sort cleanly after scored models, remain selectable ahead of rejected candidates, and print `QUALITY_UNKNOWN` in `dispatch --dry-run`.
+- Repairs:
+  - In `tools/ai-brain/priors.js`:
+    - In `neutralPrior` and `priorFor`, assigned `qualityLabel: 'QUALITY_UNKNOWN'` and `priorUnknown: true` for missing or null-scored models.
+  - In `tools/ai-brain/routing.js`:
+    - In `scoreForProfile`, attached `qualityLabel: 'QUALITY_UNKNOWN'` to candidate and `breakdown` when neither internal quality nor prior benchmark coverage exists, renormalizing weights over present dimensions without defaulting quality.
+    - In `rankForProfile`, attached `qualityLabel: 'QUALITY_UNKNOWN'` and ordered scored models strictly ahead of `QUALITY_UNKNOWN` models, which remain eligible ahead of filtered/rejected routes.
+  - In `tools/ai-brain/ranking.js`:
+    - Assigned `qualityLabel: 'QUALITY_UNKNOWN'` for unscored candidates and sorted scored models before unscored models.
+  - In `tools/ai-brain/cli.js`:
+    - Preserved `qualityLabel` in `buildDryRunLog` and `rankDryRun`.
+    - In `dispatchCommand` dry-run terminal output, printed `(score: QUALITY_UNKNOWN)` for unscored candidates.
+- Verification:
+  - New test file `tools/ai-brain/test/task-ai-142-quality-unknown.test.js` passing:
+    - `priorFor` returns `QUALITY_UNKNOWN` on absent and zero-benchmark models.
+    - Relative ordering: scored model (#1) -> unscored model (#2) -> rejected model (#3 in rejected list).
+    - `dispatch --dry-run` terminal log outputs `(score: QUALITY_UNKNOWN)`.

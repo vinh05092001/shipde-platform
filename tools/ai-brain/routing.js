@@ -1189,6 +1189,14 @@ function scoreForProfile(candidate, assessment, ctx) {
             : internalQuality * (1 - effectivePriorWeight) + prior.score * effectivePriorWeight
         )
       : internalQuality;
+  const isQualityUnknown =
+    quality === null ||
+    (prior && (prior.qualityLabel === 'QUALITY_UNKNOWN' || prior.score === null));
+  const qualityLabel = isQualityUnknown ? 'QUALITY_UNKNOWN' : undefined;
+  if (isQualityUnknown && candidate) {
+    candidate.qualityLabel = 'QUALITY_UNKNOWN';
+    candidate.priorUnknown = true;
+  }
   const reliability = reliabilityScoreOf(candidate);
   const cost = costScoreOf(candidate);
 
@@ -1270,6 +1278,7 @@ function scoreForProfile(candidate, assessment, ctx) {
   const breakdown = {
     latency,
     quality,
+    qualityLabel,
     reliability,
     cost,
     busyPenalty,
@@ -1558,11 +1567,16 @@ function rankForProfile(candidates, profile, assessment, ctx) {
       priors,
     });
     const scored = scoreForProfile(c, assessment, scoreContext);
+    const isQualityUnknown =
+      c.qualityLabel === 'QUALITY_UNKNOWN' ||
+      scored.breakdown.qualityLabel === 'QUALITY_UNKNOWN' ||
+      scored.breakdown.quality === null;
     ranked.push(
       Object.assign({}, c, {
         candidateKey: key,
         score: scored.score,
         scoreBreakdown: scored.breakdown,
+        qualityLabel: isQualityUnknown ? 'QUALITY_UNKNOWN' : undefined,
         reservationsHeld: scored.reservationsHeld,
         headroomStatus: headroom.status,
         probation: admittedOnProbation,
@@ -1572,8 +1586,10 @@ function rankForProfile(candidates, profile, assessment, ctx) {
   }
 
   ranked.sort((a, b) => {
-    const aKnown = Number.isFinite(a.scoreBreakdown.quality);
-    const bKnown = Number.isFinite(b.scoreBreakdown.quality);
+    const aKnown =
+      Number.isFinite(a.scoreBreakdown.quality) && a.qualityLabel !== 'QUALITY_UNKNOWN';
+    const bKnown =
+      Number.isFinite(b.scoreBreakdown.quality) && b.qualityLabel !== 'QUALITY_UNKNOWN';
     if (aKnown !== bKnown) return Number(bKnown) - Number(aKnown);
     if (b.score !== a.score) return b.score - a.score;
     const aPriorBonus = Number(a.scoreBreakdown.prior && a.scoreBreakdown.prior.bonus) || 0;
@@ -1604,7 +1620,10 @@ function rankForProfile(candidates, profile, assessment, ctx) {
   const reasonCode = allZero ? 'MODEL_SELECTION_NOT_PROVEN' : null;
   const topScore =
     top3.length > 0 &&
-    ((top3[0].scoreBreakdown && top3[0].scoreBreakdown.quality === null) ||
+    ((top3[0].scoreBreakdown &&
+      (top3[0].scoreBreakdown.quality === null ||
+        top3[0].scoreBreakdown.qualityLabel === 'QUALITY_UNKNOWN')) ||
+      top3[0].qualityLabel === 'QUALITY_UNKNOWN' ||
       top3[0].score === null ||
       top3[0].score === undefined)
       ? 'chưa rõ'

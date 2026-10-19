@@ -634,14 +634,21 @@ function rankAndRecord(candidates, context) {
 
   // ── 2. Score ───────────────────────────────────────────────────
   for (const c of eligible) {
+    if (!Number.isFinite(c.quality) && c.quality !== 0) {
+      c.qualityLabel = 'QUALITY_UNKNOWN';
+    }
     const { total, breakdown } = scoreCandidate(c, eligible, kind, ctx);
     c.score = total;
     c.scoreBreakdown = breakdown;
+    if (c.qualityLabel) c.scoreBreakdown.qualityLabel = c.qualityLabel;
     c.scoreSource = 'evidence+capability+headroom+spread+cost';
   }
 
-  // ── 3. Sort by score (descending) ──────────────────────────────
+  // ── 3. Sort by score (descending), scored models before unscored ──
   eligible.sort((a, b) => {
+    const aKnown = a.qualityLabel !== 'QUALITY_UNKNOWN' && Number.isFinite(a.quality);
+    const bKnown = b.qualityLabel !== 'QUALITY_UNKNOWN' && Number.isFinite(b.quality);
+    if (aKnown !== bKnown) return Number(bKnown) - Number(aKnown);
     if (b.score !== a.score) return b.score - a.score;
     return a.upstream.localeCompare(b.upstream);
   });
