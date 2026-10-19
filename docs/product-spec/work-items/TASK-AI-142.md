@@ -270,6 +270,10 @@ Repairs:
 3. Failed and host_gate_failed decision and checkpoint records capture individual failing check names and a concise summary bounded by `dispatch.maxHostGateSummaryChars`.
 4. A host-gate repair killed by REQUEST_TOO_LARGE remains retryable when alternative candidates exist.
 
+### H3 live: the host gate runs the brain suite on a clean checkout of HEAD (2026-10-19)
+
+Live FEAT-AUTH-05 run (19/10 14:17): 7 next-runner, route-health and account-registry tests failed in the host checkout (hermes-live), which holds live Controller state under tools/ai-brain/data, but passed on the base run's clean worktree, so they counted as new failures and blocked the writer. The gate now runs the suite on a detached clean worktree of HEAD (removed afterwards); if one cannot be created it runs in place as before.
+
 ### H3 live: host-gate base failures match by name without run duration (2026-10-19)
 
 Live trial 19 of goal G-F622511E (19/10): the writer and reviewer commits were clean, but node --test prints each failure as `✖ <name> (<duration>ms)`; the run and the base run of the same pre-existing failure differed only in duration, so all 7 base failures counted as new and the host gate failed. Failure names are now parsed once, with the duration suffix removed, for both the run and the base run; a genuinely new failure is still reported.
@@ -1223,6 +1227,20 @@ Aggregator routers like 9Router require model IDs to carry an upstream provider 
        - Ensured consistent `--title` fallback to work item ID or task name.
   3. Verification:
      - New unit tests in `tools/ai-brain/test/task-ai-142-opencode-writer.test.js` verifying config generation for SSE/JSON sources, permission scoping, secret redaction, and `HARNESS_EMPTY_RESPONSE` handling.
+
+### H3 live: launcher supports direct-http writer and rejects unsupported harnesses (2026-10-19)
+
+- Fixed UNKNOWN_HARNESS: direct-http defect where direct-http candidates were selected for writer tasks but failed at launch:
+  1. Root cause: Direct model sources declaring harness `direct-http` (such as Mercury 2.5 on Inception) were admitted into writer selection and preflight, but `executor.js` / `harness.js` lacked `direct-http` in `runsOpenCodeHarness` and `HARNESSES`. When launched, the launcher failed with `UNKNOWN_HARNESS: direct-http`.
+  2. Resolution: Launcher writer adapter now supports `direct-http` by routing through `opencodeDirect` (`opencode-direct`), enabling OpenCode to run direct HTTP OpenAI-compatible endpoints with dynamic config generation. Additionally, candidates whose harness has no launcher writer adapter are rejected during writer ranking and orchestrator preflight gates with `reasonCode: 'HARNESS_WRITER_UNSUPPORTED'` derived dynamically from launcher data (`listHarnesses()` in `tools/ai-brain/harness.js`) and OpenCode source aliases, with fail-closed validation and test harness injection via options.
+  3. Verification: Covered by `tools/ai-brain/test/task-ai-142-direct-http-writer.test.js` and full brain test suite.
+
+### H3 live: strict priority source lookup and credential binding in executor resolveRoute (2026-10-19)
+
+- Fixed P1 review finding in `tools/ai-brain/executor.js`:
+  1. Root cause: `resolveRoute` source lookup evaluated multiple conditions in a single `.find()` call including a loose `s.models.includes(model)` fallback, allowing an earlier aggregator or decoy source listing the same model to win over an exact provider ID match, and resolved endpoint and apiKeyEnv independently risking credential misbinding. Furthermore, credential environment variables were assigned without format validation.
+  2. Resolution: Sources are now resolved in strict priority order (`provider` -> `source` -> `upstream` -> `gateway`) by exact ID match. The loose model-membership fallback is dropped (fails closed without endpoint/apiKeyEnv if no exact source ID matches). Endpoint and apiKeyEnv are always bound from the same source (or both from the assignment), preventing credential misbinding, and environment variable names are strictly validated against valid identifier format (`/^[A-Za-z0-9_]+$/`).
+  3. Verification: Regression tests added to `tools/ai-brain/test/task-ai-142-direct-http-writer.test.js` covering decoy avoidance, priority order, fail-closed handling, credential misbinding prevention, and env identifier validation.
 
 ### H3 live: strong models prioritized in capability probes and fair round-robin source dispatch (2026-10-19)
 

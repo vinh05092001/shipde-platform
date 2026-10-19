@@ -487,55 +487,61 @@ const agyPool = {
   },
 };
 
+const autoclaw = {
+  id: 'autoclaw',
+  command: 'openclaw',
+  launch(job, opts) {
+    const fs = require('fs');
+    const path = require('path');
+    const crypto = require('crypto');
+    if (!job.model) throw new Error('AUTOCLAW_REQUIRES_PINNED_MODEL');
+    if (!job.cwd) throw new Error('AUTOCLAW_REQUIRES_DIR');
+
+    const nonce = crypto.randomBytes(16).toString('hex');
+    const shipdeDir = path.join(job.cwd, '.shipde');
+    fs.mkdirSync(shipdeDir, { recursive: true });
+    const promptPath = path.join(shipdeDir, `prompt-${nonce}.md`);
+    fs.writeFileSync(promptPath, Buffer.from(job.prompt || '', 'utf8'));
+
+    const message = `Read the file .shipde/prompt-${nonce}.md in the current directory. It is your complete task; follow it exactly.`;
+    const sessionId = job.sessionId || crypto.randomBytes(8).toString('hex');
+
+    const args = ['agent', '--agent', 'main', '--session-id', sessionId, '--model', job.model];
+    if (opts && opts.timeoutMs) {
+      args.push('--timeout', Math.floor(opts.timeoutMs / 1000).toString());
+    }
+    args.push('--message', message);
+
+    // AutoClaw adapter does not write a usage file yet, but if the caller requires it:
+    if (job.usageFile) {
+      fs.writeFileSync(job.usageFile, JSON.stringify({ session_id: sessionId }));
+    }
+    return args;
+  },
+  resume(sessionId, prompt, job, opts) {
+    return this.launch(Object.assign({}, job, { prompt, sessionId }), opts);
+  },
+  stop() {
+    return null;
+  },
+  sessionIdFrom(parsed) {
+    const v = parsed && (parsed.session_id || parsed.sessionId || parsed.sessionID);
+    return v !== undefined && v !== null && String(v).trim() !== '' ? String(v) : null;
+  },
+};
+
 const HARNESSES = Object.freeze({
   paseo,
   cline,
   hermes,
   codex,
   'opencode-direct': opencodeDirect,
+  'direct-http': opencodeDirect,
   'agy-pool': agyPool,
-  autoclaw: {
-    id: 'autoclaw',
-    command: 'openclaw',
-    launch(job, opts) {
-      const fs = require('fs');
-      const path = require('path');
-      const crypto = require('crypto');
-      if (!job.model) throw new Error('AUTOCLAW_REQUIRES_PINNED_MODEL');
-      if (!job.cwd) throw new Error('AUTOCLAW_REQUIRES_DIR');
-
-      const nonce = crypto.randomBytes(16).toString('hex');
-      const shipdeDir = path.join(job.cwd, '.shipde');
-      fs.mkdirSync(shipdeDir, { recursive: true });
-      const promptPath = path.join(shipdeDir, `prompt-${nonce}.md`);
-      fs.writeFileSync(promptPath, Buffer.from(job.prompt || '', 'utf8'));
-
-      const message = `Read the file .shipde/prompt-${nonce}.md in the current directory. It is your complete task; follow it exactly.`;
-      const sessionId = job.sessionId || crypto.randomBytes(8).toString('hex');
-
-      const args = ['agent', '--agent', 'main', '--session-id', sessionId, '--model', job.model];
-      if (opts && opts.timeoutMs) {
-        args.push('--timeout', Math.floor(opts.timeoutMs / 1000).toString());
-      }
-      args.push('--message', message);
-
-      // AutoClaw adapter does not write a usage file yet, but if the caller requires it:
-      if (job.usageFile) {
-        fs.writeFileSync(job.usageFile, JSON.stringify({ session_id: sessionId }));
-      }
-      return args;
-    },
-    resume(sessionId, prompt, job, opts) {
-      return this.launch(Object.assign({}, job, { prompt, sessionId }), opts);
-    },
-    stop() {
-      return null;
-    },
-    sessionIdFrom(parsed) {
-      const v = parsed && (parsed.session_id || parsed.sessionId || parsed.sessionID);
-      return v !== undefined && v !== null && String(v).trim() !== '' ? String(v) : null;
-    },
-  },
+  autoclaw,
+  // openclaw CLI adapter alias: required by existing writer candidates (e.g. TASK-AI-75)
+  // whose declared harness is 'openclaw' and whose execution command is openclaw.
+  openclaw: autoclaw,
 });
 
 function pickId(obj) {
@@ -562,6 +568,54 @@ function getHarness(name) {
 
 function listHarnesses() {
   return Object.keys(HARNESSES);
+}
+
+/**
+ * True when the harness has an adapter capable of launching a writer session.
+ * The list of supported harnesses is derived dynamically from launcher data
+ * (HARNESSES), with OpenCode alias support derived from registry/sources data
+ * without hardcoding. Tests may inject harnesses via options.supportedHarnesses
+ * or options.harnesses.
+ */
+function hasLauncherWriter(harnessName, options = {}) {
+  if (!harnessName) return false;
+  const name = String(harnessName).toLowerCase();
+  if (options && options.supportedHarnesses) {
+    const injected = options.supportedHarnesses;
+    if (typeof injected.has === 'function' && injected.has(name)) return true;
+    if (Array.isArray(injected) && injected.map((x) => String(x).toLowerCase()).includes(name)) {
+      return true;
+    }
+  }
+  if (
+    options &&
+    options.harnesses &&
+    Object.prototype.hasOwnProperty.call(options.harnesses, name)
+  ) {
+    return true;
+  }
+  const supported = new Set(listHarnesses().map((h) => String(h).toLowerCase()));
+  if (supported.has(name)) return true;
+  try {
+    const { runsOpenCodeHarness } = require('./sources');
+    const reg =
+      options && options.registry
+        ? options.registry
+        : options && Array.isArray(options.sources)
+          ? options
+          : undefined;
+    if (runsOpenCodeHarness(name, reg)) return true;
+  } catch (err) {
+    if (options && typeof options.onError === 'function') {
+      options.onError(err);
+    } else if (process.env.DEBUG || process.env.NODE_ENV === 'development') {
+      console.warn(
+        'hasLauncherWriter: failed to evaluate runsOpenCodeHarness:',
+        err?.message || err
+      );
+    }
+  }
+  return false;
 }
 
 /**
@@ -723,6 +777,7 @@ module.exports = {
   RETIRED,
   getHarness,
   listHarnesses,
+  hasLauncherWriter,
   runHarness,
   executableFor,
   MIN_CONTEXT,
