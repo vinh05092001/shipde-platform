@@ -313,13 +313,21 @@ function getOpenRuns(options, deps) {
     (d && (d.isPidAlive || d.checkAlive)) ||
     (opts && (opts.isPidAlive || opts.checkAlive)) ||
     getPidAliveHelper(d);
-  let defaultStartupGraceMs = 180000;
+  let defaultStartupGraceMs = 0;
   try {
-    const sJson = require('./sources.json');
-    if (sJson && sJson.dispatch && sJson.dispatch.startupGraceMs) {
-      defaultStartupGraceMs = Number(sJson.dispatch.startupGraceMs);
+    const sourcesApi = (d && d.sources) || (opts && opts.sources) || require('./sources');
+    const cfg = sourcesApi.getDispatchConfig(opts.registry || (d && d.registry), opts);
+    if (cfg && cfg.startupGraceMs != null) {
+      defaultStartupGraceMs = Number(cfg.startupGraceMs);
     }
-  } catch (_) {}
+  } catch (_) {
+    try {
+      const sJson = require('./sources.json');
+      if (sJson && sJson.dispatch && sJson.dispatch.startupGraceMs) {
+        defaultStartupGraceMs = Number(sJson.dispatch.startupGraceMs);
+      }
+    } catch (_) {}
+  }
   const startupGraceMs =
     opts.startupGraceMs ??
     opts.ttlMs ??

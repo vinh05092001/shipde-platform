@@ -420,8 +420,7 @@ describe('TASK-AI-132: Controller next runner', () => {
     const stat = fs.statSync(runDir);
     const intakeTime = Date.parse('2026-10-15T12:00:00.000Z');
     const sourcesConfig = require('../sources.json');
-    const startupGraceMs =
-      (sourcesConfig.dispatch && sourcesConfig.dispatch.startupGraceMs) || 180000;
+    const startupGraceMs = Number(sourcesConfig.dispatch && sourcesConfig.dispatch.startupGraceMs);
 
     // Within grace window: open
     const withinGraceRuns = getOpenRuns(
