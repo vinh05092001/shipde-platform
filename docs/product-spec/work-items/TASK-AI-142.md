@@ -1275,7 +1275,6 @@ Aggregator routers like 9Router require model IDs to carry an upstream provider 
 - Verification:
   - New test suite in `tools/ai-brain/test/task-ai-142-rolling-onboarding.test.js` verifying detection of unevidenced sources with keys, rolling probe and evidence recording, and end-to-end appearance of newly added mock source in `dispatch --dry-run`.
 
-||||||| d420e1e5
 
 ### Launch faults are not model quality failures (2026-10-19)
 
