@@ -248,9 +248,18 @@ Decision log entries link `goalId -> workItemId -> candidateKey -> session -> co
 - Part H2 Hermes session selection, custom config binding, and `shipde-controller` skill file are delivered in Part H2.
 - Live acceptance across chat and controller runs in Part H3 following merge of H1 and H2.
 
+### H3 live: independent review repair for narrow test commands, fail-closed truncation, and diagnostic scoping (2026-10-19)
+
+Addressing review findings for PR #404:
+1. Bare test names in gate failures are resolved to concrete test files from gate output/summary or allowed paths; if unresolved, no command is emitted to avoid executing the whole suite.
+2. When narrow commands cannot be derived (including UNPARSED_FAILURE), the repair prompt omits the Tests command line rather than falling back to the full test suite.
+3. Command output truncation and gate summary truncation fail closed when limits are missing or non-positive.
+4. Attempt-level result `res` is scoped inside the candidate loop; host gate failure details travel on the session and do not leak across attempts.
+5. Extracted `formatHostGateDiagnostics` helper to eliminate duplication and enforce fail-closed truncation.
+
 ### H3 live: narrow repair test commands, truncated prompt output, and host-gate failure diagnostics (2026-10-19)
 
-Live trial 17 (19/10): a successful writer (regolo/qwen3.8-27b, exit 0) failed the host gate. The subsequent host-gate repair attempt executed the full test suite `node --test tools/ai-brain/test/`, generating massive tool output that triggered REQUEST_TOO_LARGE, killing the worker. The resulting host_gate_failed failure record did not capture which checks failed.
+Live trial 17 (19/10): a successful writer (exit 0) failed the host gate. The subsequent host-gate repair attempt executed the full test suite `node --test tools/ai-brain/test/`, generating massive tool output that triggered REQUEST_TOO_LARGE, killing the worker. The resulting host_gate_failed failure record did not capture which checks failed.
 Repairs:
 1. Repair prompt narrows test commands to gate.failures only (`deriveNarrowTestCommands`), preventing execution of the full test suite during host-gate repair.
 2. Prompt host gate command output is bounded by `dispatch.maxPromptCommandOutputChars` loaded from `sources.json` (no hardcoded numeric limits in code).

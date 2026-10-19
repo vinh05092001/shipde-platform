@@ -127,8 +127,18 @@ function recordPromptTools(item, role, tools, logOpts) {
   }
 }
 
-function deriveNarrowTestCommands(failures) {
+function deriveNarrowTestCommands(failures, options) {
   if (!Array.isArray(failures) || failures.length === 0) return [];
+  const opts = typeof options === 'string' ? { gateOutput: options } : options || {};
+  const gateOutput = opts.gateOutput ? String(opts.gateOutput) : '';
+  const gateSummary = Array.isArray(opts.gateSummary)
+    ? opts.gateSummary.join('\n')
+    : opts.gateSummary
+      ? String(opts.gateSummary)
+      : '';
+  const combinedOutput = (gateOutput + '\n' + gateSummary).trim();
+  const allowedPaths = Array.isArray(opts.allowedPaths) ? opts.allowedPaths : [];
+
   const commands = [];
   for (const failure of failures) {
     if (!failure) continue;
@@ -137,33 +147,73 @@ function deriveNarrowTestCommands(failures) {
         ? failure.trim()
         : String(failure.command || failure.test || '').trim();
     if (!raw) continue;
+    if (raw === 'UNPARSED_FAILURE' || raw === 'NO_BRAIN_TEST_FILES') continue;
+    if (/^(?:node|pnpm|npm|npx|yarn|bun|sh|bash)\s/.test(raw)) continue;
 
-    if (/^(node\s|pnpm\s|npm\s)/.test(raw)) {
-      commands.push(raw);
-      continue;
-    }
+    let testFile = null;
+    let testName = '';
 
     const fileMatch = raw.match(/([a-zA-Z0-9_\-./\\]+\.test\.[cm]?js)/);
     if (fileMatch) {
-      const testFile = fileMatch[1].replace(/\\/g, '/');
-      const afterFile = raw
-        .slice(raw.indexOf(fileMatch[1]) + fileMatch[1].length)
-        .replace(/^[\s>:]+/, '')
-        .trim();
-      const nameMatch = afterFile.match(/^([^(\r\n]+)/);
-      const testName = nameMatch ? nameMatch[1].trim() : '';
-      if (testName) {
-        commands.push(
-          `node --test ${testFile} --test-name-pattern="${testName.replace(/"/g, '\\"')}"`
-        );
+      testFile = fileMatch[1].replace(/\\/g, '/');
+      const patternMatch = raw.match(/--test-name-pattern=["']?([^"'\r\n]+)["']?/);
+      if (patternMatch) {
+        testName = patternMatch[1].trim();
       } else {
-        commands.push(`node --test ${testFile}`);
+        const afterFile = raw
+          .slice(raw.indexOf(fileMatch[1]) + fileMatch[1].length)
+          .replace(/^[\s>:]+/, '')
+          .trim();
+        const nameMatch = afterFile.match(/^([^(\r\n]+)/);
+        testName = nameMatch ? nameMatch[1].trim() : '';
       }
-      continue;
+    } else {
+      const cleanName = raw
+        .replace(/^(?:not ok \d+\s*-\s*|✖\s*)/, '')
+        .replace(/\s*\([\d.]+m?s\)$/, '')
+        .trim();
+      if (!cleanName || cleanName === 'UNPARSED_FAILURE' || cleanName === 'NO_BRAIN_TEST_FILES') {
+        continue;
+      }
+      testName = cleanName;
+
+      if (combinedOutput) {
+        const idx = combinedOutput.indexOf(cleanName);
+        if (idx !== -1) {
+          const beforeSlice = combinedOutput.slice(Math.max(0, idx - 5000), idx);
+          const backwardMatches = [
+            ...beforeSlice.matchAll(
+              /(?:# Subtest:\s*|▶\s*|✖\s*|\b)([a-zA-Z0-9_\-./\\]+\.test\.[cm]?js)/g
+            ),
+          ];
+          if (backwardMatches.length > 0) {
+            testFile = backwardMatches[backwardMatches.length - 1][1].replace(/\\/g, '/');
+          }
+          if (!testFile) {
+            const afterSlice = combinedOutput.slice(idx, idx + 2000);
+            const forwardMatch = afterSlice.match(/([a-zA-Z0-9_\-./\\]+\.test\.[cm]?js)/);
+            if (forwardMatch) {
+              testFile = forwardMatch[1].replace(/\\/g, '/');
+            }
+          }
+        }
+      }
+
+      if (!testFile && allowedPaths.length > 0) {
+        const allowedTests = allowedPaths.filter((p) => /\.test\.[cm]?js$/.test(p));
+        if (allowedTests.length === 1) {
+          testFile = allowedTests[0].replace(/\\/g, '/');
+        }
+      }
     }
 
-    if (raw !== 'UNPARSED_FAILURE' && raw !== 'NO_BRAIN_TEST_FILES') {
-      commands.push(`node --test --test-name-pattern="${raw.replace(/"/g, '\\"')}"`);
+    if (!testFile) continue;
+
+    const safeName = testName.replace(/["`$\\;&|<>\r\n]/g, '').trim();
+    if (safeName) {
+      commands.push(`node --test ${testFile} --test-name-pattern="${safeName}"`);
+    } else {
+      commands.push(`node --test ${testFile}`);
     }
   }
   return [...new Set(commands)];
@@ -210,19 +260,29 @@ function compilePrompt(item, ctx) {
   for (const ac of i.acceptanceCriteria || []) lines.push('- ' + ac);
 
   const command = i.verification && i.verification.command;
-  let testCommand = command;
-  if (Array.isArray(c.hostGateFailures) && c.hostGateFailures.length > 0) {
-    const narrowCommands = deriveNarrowTestCommands(c.hostGateFailures);
+  const isHostGateRepair = Array.isArray(c.hostGateFailures) && c.hostGateFailures.length > 0;
+  let testCommand = null;
+  if (isHostGateRepair) {
+    const narrowCommands = deriveNarrowTestCommands(c.hostGateFailures, {
+      gateOutput: c.hostGateOutput || c.commandOutput,
+      gateSummary: c.hostGateSummary,
+      allowedPaths: allowed,
+    });
     if (narrowCommands.length > 0) {
       testCommand = narrowCommands.join(' && ');
     }
+  } else {
+    testCommand = command;
   }
-  lines.push(
-    'Tests: ' +
-      (testCommand ||
-        '(none declared: a work item with no verification command is not dispatchable)')
-  );
-  if (testCommand) lines.push('Expected result: ' + (i.verification?.expect || '(exit code 0)'));
+
+  if (testCommand) {
+    lines.push('Tests: ' + testCommand);
+    lines.push('Expected result: ' + (i.verification?.expect || '(exit code 0)'));
+  } else if (!isHostGateRepair) {
+    lines.push(
+      'Tests: (none declared: a work item with no verification command is not dispatchable)'
+    );
+  }
   if (c.focusedTestsOnly) {
     lines.push(
       "Run only focused tests for this change. Print concise test output only: node --test ... 2>&1 | grep -E '^ℹ (pass|fail)|^✖ ' (or an equivalent concise reporter). Do not run or print the full brain suite; the Controller runs that host-side gate and returns failing test names only."
@@ -241,20 +301,22 @@ function compilePrompt(item, ctx) {
         : null);
     if (gateOutput) {
       let maxOutputChars = c.maxPromptCommandOutputChars;
-      if (!maxOutputChars) {
+      if (maxOutputChars === undefined) {
         try {
           const sourcesApi = require('./sources');
           maxOutputChars = sourcesApi.getDispatchConfig().maxPromptCommandOutputChars;
         } catch (_) {}
       }
-      const rawText = String(gateOutput).trim();
-      if (rawText) {
-        const isTruncated = maxOutputChars && rawText.length > maxOutputChars;
-        const truncated = isTruncated
-          ? rawText.slice(0, maxOutputChars) + '\n... (truncated)'
-          : rawText;
-        lines.push('Host gate output:');
-        lines.push(truncated);
+      if (typeof maxOutputChars === 'number' && maxOutputChars > 0) {
+        const rawText = String(gateOutput).trim();
+        if (rawText) {
+          const isTruncated = rawText.length > maxOutputChars;
+          const truncated = isTruncated
+            ? rawText.slice(0, maxOutputChars) + '\n... (truncated)'
+            : rawText;
+          lines.push('Host gate output:');
+          lines.push(truncated);
+        }
       }
     }
   }
