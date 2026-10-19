@@ -168,7 +168,8 @@ function classifyQuotaResponse(status, body, headers, now = Date.now()) {
   return {
     status: status || 500,
     code: status ? `HTTP_${status}` : QUOTA_STATUS_CODES.ERROR,
-    reason: bodyStr.slice(0, 200) || `HTTP_${status}`,
+    // Never persist the provider body: it can echo request headers or credentials.
+    reason: status ? `HTTP_${status}` : QUOTA_STATUS_CODES.ERROR,
     retryAfter,
   };
 }
@@ -307,14 +308,18 @@ async function scanScope(target, options = {}) {
     headers.authorization = `Bearer ${apiKey}`;
   }
 
+  const dispatchConfig = sourcesApi.getDispatchConfig(
+    options.registry || sourcesApi.loadSources(options.sourceOpts),
+    { ...options, probeTimeoutMs: options.timeoutMs ?? options.probeTimeoutMs }
+  );
   const payload = {
     model: target.model,
     messages: [{ role: 'user', content: 'ping' }],
-    max_tokens: 1,
+    max_tokens: dispatchConfig.quotaProbeMaxOutputTokens,
   };
 
   const controller = new AbortController();
-  const timeoutMs = options.timeoutMs || 8000;
+  const timeoutMs = dispatchConfig.probeTimeoutMs;
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
@@ -354,7 +359,7 @@ async function scanScope(target, options = {}) {
       model: target.model,
       code: isTimeout ? QUOTA_STATUS_CODES.TIMEOUT : QUOTA_STATUS_CODES.UNAVAILABLE,
       status: isTimeout ? 408 : 503,
-      reason: err ? err.message : 'Fetch failed',
+      reason: isTimeout ? 'TIMEOUT' : 'UNAVAILABLE',
       at: new Date(now).toISOString(),
       retryAfter: null,
     };
@@ -422,6 +427,53 @@ async function discover9RouterScopes(source, options = {}) {
   return targets;
 }
 
+async function scanTargetsForSource(src, options = {}) {
+  if (!src || src.servesModels === false) return [];
+  if (src.kind === 'router' || src.id === '9router') {
+    return discover9RouterScopes(src, options);
+  }
+  if (src.kind !== 'model-source' && !src.endpoint) return [];
+  const repModel =
+    (Array.isArray(src.models) && src.models.find((m) => typeof m === 'string' && m)) ||
+    src.verify?.model;
+  // A source with no configured or verified model has nothing honest to scan.
+  if (!repModel) return [];
+  return [
+    {
+      source: src.id,
+      scope: src.id,
+      upstream: src.routerAlias || src.id,
+      model: repModel,
+      endpoint: src.endpoint,
+      apiKeyEnv: src.credential?.env,
+    },
+  ];
+}
+
+function recordScanResult(quotaState, target, result) {
+  quotaState.scopes[`${target.source}::${target.scope}`] = result;
+  quotaState.scopes[target.source] = result;
+  quotaState.scopes[target.scope] = result;
+}
+
+// Scans one source's quota scopes (per key, or per router upstream) and records them.
+// Unlike a full scan it leaves the full-scan timestamp alone.
+async function scanSourceQuotas(src, options = {}) {
+  const quotaState = loadQuotaState(options);
+  quotaState.scopes = quotaState.scopes || {};
+  const targets = await scanTargetsForSource(src, options);
+  const results = [];
+  for (const target of targets) {
+    const result = await scanScope(target, options);
+    recordScanResult(quotaState, target, result);
+    results.push(result);
+  }
+  if (targets.length > 0 && options.persist !== false) {
+    saveQuotaState(quotaState, options);
+  }
+  return results;
+}
+
 async function scanAllQuotas(options = {}) {
   const now = options.now ?? Date.now();
   const registry = options.registry || sourcesApi.loadSources(options.sourceOpts);
@@ -432,33 +484,14 @@ async function scanAllQuotas(options = {}) {
   const sources = (registry && registry.sources) || [];
 
   for (const src of sources) {
-    if (src.servesModels === false) continue;
     if (options.source && src.id !== options.source) continue;
-
-    if (src.kind === 'router' || src.id === '9router') {
-      const routerTargets = await discover9RouterScopes(src, options);
-      targets.push(...routerTargets);
-    } else if (src.kind === 'model-source' || src.endpoint) {
-      const repModel =
-        (Array.isArray(src.models) && src.models[0]) || src.verify?.model || `${src.id}/default`;
-      targets.push({
-        source: src.id,
-        scope: src.id,
-        upstream: src.routerAlias || src.id,
-        model: repModel,
-        endpoint: src.endpoint,
-        apiKeyEnv: src.credential?.env,
-      });
-    }
+    targets.push(...(await scanTargetsForSource(src, options)));
   }
 
   let blockedCount = 0;
   for (const target of targets) {
     const result = await scanScope(target, options);
-    const scopeKey = `${target.source}::${target.scope}`;
-    quotaState.scopes[scopeKey] = result;
-    quotaState.scopes[target.source] = result;
-    quotaState.scopes[target.scope] = result;
+    recordScanResult(quotaState, target, result);
     if (BLOCKING_CODES.has(result.code)) {
       blockedCount++;
     }
@@ -490,4 +523,5 @@ module.exports = {
   scanScope,
   discover9RouterScopes,
   scanAllQuotas,
+  scanSourceQuotas,
 };

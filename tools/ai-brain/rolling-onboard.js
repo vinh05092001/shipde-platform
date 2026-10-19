@@ -9,6 +9,7 @@
  * without requiring code modifications.
  */
 
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
@@ -17,7 +18,13 @@ const routeHealthApi = require('./route-health');
 const candidatesApi = require('./candidates');
 const sourcesApi = require('./sources');
 
-function sourceHasPassingEvidence(combinations, sourceId) {
+// One-way, truncated digest: identifies which key produced the evidence without storing it.
+function credentialFingerprint(apiKey) {
+  if (!apiKey) return null;
+  return crypto.createHash('sha256').update(String(apiKey)).digest('hex').slice(0, 16);
+}
+
+function sourceHasPassingEvidence(combinations, sourceId, fingerprint) {
   return combinations.some((combination) => {
     if (
       !combination ||
@@ -25,6 +32,10 @@ function sourceHasPassingEvidence(combinations, sourceId) {
       combination.verified === false ||
       ![combination.source, combination.sourceId, combination.gateway].includes(sourceId)
     ) {
+      return false;
+    }
+    // Evidence earned with another (or an unrecorded) key does not prove the current one.
+    if (fingerprint && combination.credentialFingerprint !== fingerprint) {
       return false;
     }
 
@@ -80,10 +91,11 @@ function detectNewSources(registry, evidenceData, env) {
       continue; // Key not in env, cannot onboard
     }
 
-    // A failed latest observation is not onboarding proof. It must remain
-    // retryable, including after the operator replaces its credential.
+    // A failed latest observation is not onboarding proof, and neither is a pass
+    // earned with a different key: a replaced credential is probed again.
     const combinations = evidenceData?.combinations || [];
-    const hasEvidence = sourceHasPassingEvidence(combinations, src.id);
+    const fingerprint = credentialFingerprint(apiKeyEnv ? envObj[apiKeyEnv] : null);
+    const hasEvidence = sourceHasPassingEvidence(combinations, src.id, fingerprint);
 
     if (!hasEvidence) {
       newSources.push(src);
@@ -143,7 +155,7 @@ async function onboardSourceRolling(src, options = {}) {
       body: JSON.stringify({
         model: repModel,
         messages: [{ role: 'user', content: 'ping' }],
-        max_tokens: dispatchConfig.rollingOnboardMaxOutputTokens,
+        max_tokens: dispatchConfig.quotaProbeMaxOutputTokens,
       }),
       signal: controller.signal,
     });
@@ -185,6 +197,7 @@ async function onboardSourceRolling(src, options = {}) {
       modelId: repModel,
       source: src.id,
       sourceId: src.id,
+      credentialFingerprint: credentialFingerprint(apiKey),
       evidence: [
         {
           status: 'passed',
@@ -222,37 +235,21 @@ async function onboardSourceRolling(src, options = {}) {
       { ...healthOptions, routeHealth: store, now }
     );
 
-    // 3. Quota scan entry
-    let quotaScan;
-    try {
-      quotaScan = require('./quota-scan');
-    } catch {}
-    if (quotaScan) {
-      const quotaState = quotaScan.loadQuotaState(options);
-      quotaState.scopes = quotaState.scopes || {};
-      const qEntry = {
-        source: src.id,
-        scope: src.id,
-        upstream: src.routerAlias || src.id,
-        model: repModel,
-        code: 'OK',
-        status: probeStatus,
-        reason: 'OK',
-        at: new Date(now).toISOString(),
-        retryAfter: null,
-      };
-      quotaState.scopes[src.id] = qEntry;
-      quotaState.scopes[`${src.id}::${src.id}`] = qEntry;
-      if (options.persist !== false) {
-        quotaScan.saveQuotaState(quotaState, options);
-      }
-    }
+    // 3. Real quota scan of the source's scopes, recorded where dispatch reads quota.
+    const quotaResults = await require('./quota-scan').scanSourceQuotas(src, {
+      ...options,
+      registry,
+      env,
+      fetch: fetchFn,
+      now,
+    });
 
     return {
       ok: true,
       sourceId: src.id,
       model: repModel,
       status: probeStatus,
+      quota: quotaResults.map((r) => ({ scope: r.scope, code: r.code })),
     };
   }
 
@@ -275,6 +272,7 @@ async function autoOnboardNewSources(newSources, options = {}) {
 }
 
 module.exports = {
+  credentialFingerprint,
   detectNewSources,
   onboardSourceRolling,
   autoOnboardNewSources,

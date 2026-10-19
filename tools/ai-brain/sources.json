@@ -346,7 +346,7 @@
     "probeSafetyMarginMs": 2000,
     "schemaProbeBudgetMs": 180000,
     "probeRoundRobinBatch": 1,
-    "rollingOnboardMaxOutputTokens": 1,
+    "quotaProbeMaxOutputTokens": 1,
     "maxPromptCommandOutputChars": 4000,
     "maxHostGateSummaryChars": 500,
     "headroomUnknownPenalty": 15,

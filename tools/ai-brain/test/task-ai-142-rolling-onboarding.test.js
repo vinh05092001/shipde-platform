@@ -8,6 +8,7 @@ const path = require('node:path');
 const defaultDispatch = require('../sources.json').dispatch;
 
 const {
+  credentialFingerprint,
   detectNewSources,
   onboardSourceRolling,
   autoOnboardNewSources,
@@ -51,7 +52,12 @@ describe('TASK-AI-142 T8: rolling source onboarding', () => {
 
     const evidenceData = {
       combinations: [
-        { source: 'existing-source', modelId: 'm1', evidence: [{ status: 'passed' }] },
+        {
+          source: 'existing-source',
+          modelId: 'm1',
+          credentialFingerprint: credentialFingerprint('secret1'),
+          evidence: [{ status: 'passed' }],
+        },
       ],
     };
 
@@ -324,7 +330,8 @@ describe('TASK-AI-142 T8: rolling source onboarding', () => {
       }
     );
 
-    assert.equal(fetchCalls, 1);
+    // One completion probe plus one quota scan of the source scope.
+    assert.equal(fetchCalls, 2);
     assert.equal(launchCalls, 1);
     assert.equal(result.exitCode, 0);
   });
@@ -359,5 +366,101 @@ describe('TASK-AI-142 T8: rolling source onboarding', () => {
         ['up2', 'up2/model-b'],
       ]
     );
+  });
+  test('detectNewSources re-probes a source whose key was replaced after it passed', () => {
+    const registry = {
+      sources: [{ id: 'rotated', kind: 'model-source', credential: { env: 'ROTATED_KEY' } }],
+    };
+    const evidenceData = {
+      combinations: [
+        {
+          source: 'rotated',
+          modelId: 'fixture/rotated-model',
+          credentialFingerprint: credentialFingerprint('old-fixture-key'),
+          evidence: [{ status: 'passed' }],
+        },
+      ],
+    };
+    assert.deepEqual(
+      detectNewSources(registry, evidenceData, { ROTATED_KEY: 'old-fixture-key' }),
+      []
+    );
+    assert.deepEqual(
+      detectNewSources(registry, evidenceData, { ROTATED_KEY: 'new-fixture-key' }).map((s) => s.id),
+      ['rotated']
+    );
+  });
+
+  test('onboarding runs a real quota scan and records a quota refusal from it', async (t) => {
+    const dir = fixture(t);
+    const quotaFile = path.join(dir, 'quota-state.json');
+    let calls = 0;
+    const result = await onboardSourceRolling(
+      {
+        id: 'scan-source',
+        kind: 'model-source',
+        endpoint: 'https://scan.invalid/v1',
+        models: ['fixture/scan-model'],
+        credential: { env: 'SCAN_KEY' },
+      },
+      {
+        evidenceData: { combinations: [] },
+        evidenceDir: path.join(dir, 'evidence'),
+        quotaStateFile: quotaFile,
+        routeHealthFile: path.join(dir, 'route-health.json'),
+        env: { SCAN_KEY: 'scan-fixture-key' },
+        fetch: async () => {
+          calls += 1;
+          // The completion probe succeeds; the quota scan that follows is refused.
+          if (calls === 1) {
+            return {
+              ok: true,
+              status: 200,
+              headers: new Map(),
+              text: async () => JSON.stringify({ choices: [{ message: { content: 'OK' } }] }),
+            };
+          }
+          return {
+            ok: false,
+            status: 429,
+            headers: new Map(),
+            text: async () => 'quota exceeded for key scan-fixture-key',
+          };
+        },
+        now: 1700000000000,
+      }
+    );
+    assert.equal(calls, 2);
+    assert.equal(result.ok, true);
+    const quota = JSON.parse(fs.readFileSync(quotaFile, 'utf8'));
+    assert.notEqual(quota.scopes['scan-source::scan-source'].code, 'OK');
+    assert.equal(fs.readFileSync(quotaFile, 'utf8').includes('scan-fixture-key'), false);
+  });
+
+  test('quota classification never copies the provider body into the persisted reason', () => {
+    const { classifyQuotaResponse } = require('../quota-scan');
+    const res = classifyQuotaResponse(418, 'echo: Bearer sk-fixture-secret', new Map(), 0);
+    assert.equal(res.reason.includes('sk-fixture-secret'), false);
+  });
+
+  test('a full scan skips a source with no configured model instead of inventing one', async (t) => {
+    const dir = fixture(t);
+    const { scanAllQuotas } = require('../quota-scan');
+    let calls = 0;
+    const res = await scanAllQuotas({
+      registry: {
+        sources: [{ id: 'no-model', kind: 'model-source', endpoint: 'https://x.invalid/v1' }],
+        dispatch: { ...defaultDispatch, providers: {} },
+      },
+      quotaStateFile: path.join(dir, 'q.json'),
+      fetch: async () => {
+        calls += 1;
+        return { ok: true, status: 200, headers: new Map(), text: async () => '{}' };
+      },
+      env: {},
+      now: 1700000000000,
+    });
+    assert.equal(calls, 0);
+    assert.equal(res.count, 0);
   });
 });
