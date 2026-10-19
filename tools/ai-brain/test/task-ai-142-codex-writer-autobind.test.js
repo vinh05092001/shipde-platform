@@ -107,7 +107,13 @@ test('intake snapshot disabled CLI inventory does not hide the logged-in Codex c
     },
   };
   const candidates = buildCandidates(options, null).filter((c) => c.source === source.id);
-  assert.deepStrictEqual(candidates, codexCands(options.codexOpts.fs));
+  // Shared dispatch assembly stamps each candidate with its canonical key.
+  const { candidateKey } = require('../candidates');
+  for (const c of candidates) assert.strictEqual(c.key, candidateKey(c));
+  assert.deepStrictEqual(
+    candidates.map(({ key, ...rest }) => rest),
+    codexCands(options.codexOpts.fs)
+  );
   assert.strictEqual(candidates.length, 1);
   assert.strictEqual(candidates[0].binding, 'cli-login');
   options.codexOpts.fs = fakeFs({ auth: false, config: 'model = "op-model-x"\n' });

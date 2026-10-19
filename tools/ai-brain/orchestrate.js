@@ -3151,20 +3151,25 @@ function buildCandidates(options, evidenceData) {
   let baseCandidates = [];
   if (Array.isArray(o.candidates)) {
     baseCandidates = o.candidates;
-  } else if (o.accounts || o.catalogue) {
-    baseCandidates = candidatesApi.generateCandidates({
-      registry: o.registry || sourcesApi.loadSources(),
-      catalogue: o.catalogue || [],
-      accounts: o.accounts || [],
-      externalWorkers: o.externalWorkers,
-      fakeRunsDir: o.fakeRunsDir || o.runsDir,
-      poolRuntimeDir: o.poolRuntimeDir,
-      discoverPool: o.discoverPool,
-      openCodeIds: o.openCodeIds || [],
-      codexOpts: o.codexOpts,
-      sourceModels: o.sourceModels,
-    });
+  } else if (o.accounts || o.catalogue || o.sourceModels) {
+    // Candidate assembly is shared with dispatch; route admission happens in
+    // the goal's capability/route-probe stages, after this inventory is built.
+    baseCandidates = require('./cli').assembleForDispatch(
+      o.discoveryCatalogue || { candidates: [] },
+      o.accounts || [],
+      o.registry || sourcesApi.loadSources(),
+      {
+        ...o,
+        registryAccounts: resolveEvidenceAccounts(o),
+        routeHealth: o.routeHealth || { paths: {}, events: [] },
+        skipRouteAdmission: true,
+        refreshRoutes: false,
+        discoverPool: o.discoverPool !== false,
+        evidenceData: evidenceData === undefined ? o.evidenceData : evidenceData,
+      }
+    );
   }
+
   const testsInjectedCandidates = Array.isArray(o.candidates);
   const evData =
     evidenceData !== undefined

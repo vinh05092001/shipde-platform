@@ -1165,7 +1165,7 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
       const seenExcluded = new Set();
       for (const candidate of explicitCandidates) {
         let isEligible = true;
-        if (routeHealth) {
+        if (routeHealth && !opts.skipRouteAdmission) {
           const modelId = candidate && candidate.modelId;
           const gateway = candidate && candidate.gateway;
           if (modelId && gateway) {
@@ -1241,20 +1241,24 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
   const buildCandidates = () => {
     const assembled = assembleCandidates(discoveryCat, offs, resolvedRegistry, accounts, null, [
       ...candidatesApi.generateCandidates({
+        ...opts,
         harness: opts.harness,
         registry: resolvedRegistry,
         accounts: accounts || [],
-        openCodeIds: (accounts || []).flatMap((account) =>
-          ((account && account.models) || [])
-            .map((model) => (typeof model === 'string' ? model : model && model.model))
-            .filter(Boolean)
-        ),
+        openCodeIds:
+          opts.openCodeIds ||
+          (accounts || []).flatMap((account) =>
+            ((account && account.models) || [])
+              .map((model) => (typeof model === 'string' ? model : model && model.model))
+              .filter(Boolean)
+          ),
         catalogue:
-          catalogueRows.length > 0
+          opts.catalogue ||
+          (catalogueRows.length > 0
             ? catalogueRows
-            : (discoveryCat && discoveryCat.candidates) || [],
+            : (discoveryCat && discoveryCat.candidates) || []),
         evidenceData: opts.evidenceData,
-        fakeRunsDir: opts.fakeRunsDir,
+        fakeRunsDir: opts.fakeRunsDir || opts.runsDir,
         home: opts.home,
         discoverPool: opts.discoverPool !== false,
         adapterScript: opts.adapterScript,
@@ -1293,8 +1297,7 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
       ...candidatesApi
         .candidatesFromEvidence(opts.evidenceData, { accounts: evidenceAccounts })
         .filter((c) => {
-          if (c.legacy) return false;
-          return Array.isArray(c.evidence) && c.evidence.some((e) => e && e.status === 'passed');
+          return !c.legacy;
         }),
     ]);
     for (const fallback of resolvedFallbackRoutes) {
@@ -1362,6 +1365,7 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
     const seenExcluded = new Set();
     for (const candidate of assembled) {
       if (
+        opts.skipRouteAdmission ||
         isCandidateRouteEligible(
           routeHealth,
           candidate,
@@ -2175,15 +2179,38 @@ function dispatchCommand(args, deps = {}) {
     }
   }
 
-  const accounts = deps && deps.accounts !== undefined ? deps.accounts : listAccounts() || [];
+  const inventory = require('./candidate-inventory').readCandidateInventory({
+    rootDir,
+    catalogueFile:
+      typeof args.catalogue === 'string' ? path.resolve(rootDir, args.catalogue) : undefined,
+    sourceModelsFile:
+      typeof args['catalogue-sources'] === 'string'
+        ? path.resolve(rootDir, args['catalogue-sources'])
+        : undefined,
+    useLatestIntake:
+      deps.candidates === undefined &&
+      deps.accounts === undefined &&
+      deps.sourceModels === undefined &&
+      deps.catalogue === undefined &&
+      deps.discoveryCatalogue === undefined,
+  });
+  const accounts = mergeEvidenceAccounts(
+    inventory.accounts,
+    deps.accounts !== undefined
+      ? deps.accounts
+      : typeof deps.listAccounts === 'function'
+        ? deps.listAccounts()
+        : listAccounts() || []
+  );
+  const candidateOptions = { ...inventory, ...deps, root: rootDir };
   const routeHealthApi = require('./route-health');
   const candidateList = assembleForDispatch(
     discCat,
     accounts,
     registry,
     Array.isArray(deps.candidates) || deps.allowUnprobedCandidates === true
-      ? deps
-      : Object.assign({}, deps, { requireRouteHealth: true })
+      ? candidateOptions
+      : Object.assign({}, candidateOptions, { requireRouteHealth: true })
   );
 
   // Filter by explicit pins (--model, --account, --harness)
