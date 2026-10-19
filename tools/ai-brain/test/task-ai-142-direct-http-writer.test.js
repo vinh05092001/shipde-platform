@@ -193,6 +193,242 @@ describe('TASK-AI-142: launcher supports writer direct-http', () => {
     );
   });
 
+  test('P1: resolveRoute does not bind decoy earlier source endpoint/key when provider matches later source', () => {
+    const reg = {
+      version: 2,
+      sources: [
+        {
+          id: 'decoy-aggregator',
+          label: 'Decoy Aggregator',
+          kind: 'router',
+          endpoint: 'https://aggregator.decoy.example/v1',
+          credential: { type: 'api-key', env: 'DECOY_API_KEY' },
+          servesModels: true,
+          models: ['mercury-2.5'],
+        },
+        {
+          id: 'inception',
+          label: 'Inception Labs',
+          kind: 'model-source',
+          endpoint: 'https://api.inceptionlabs.ai/v1',
+          credential: { type: 'api-key', env: 'INCEPTION_API_KEY' },
+          servesModels: true,
+          models: ['mercury-2.5'],
+        },
+      ],
+      dispatch: { providers: {} },
+    };
+
+    const route = resolveRoute(
+      {
+        provider: 'inception',
+        gateway: 'direct',
+        accessPath: 'direct',
+        model: 'mercury-2.5',
+        harness: 'direct-http',
+      },
+      { isolatedWorker: true },
+      reg
+    );
+
+    assert.ok(route, 'route must resolve');
+    assert.equal(
+      route.endpoint,
+      'https://api.inceptionlabs.ai/v1',
+      'must not bind earlier decoy endpoint'
+    );
+    assert.equal(route.apiKeyEnv, 'INCEPTION_API_KEY', 'must not bind earlier decoy apiKeyEnv');
+  });
+
+  test('P1: resolveRoute looks up sources in strict priority order (provider -> source -> upstream -> gateway)', () => {
+    const reg = {
+      version: 2,
+      sources: [
+        {
+          id: 'p-src',
+          endpoint: 'https://p.test/v1',
+          credential: { type: 'api-key', env: 'P_KEY' },
+        },
+        {
+          id: 's-src',
+          endpoint: 'https://s.test/v1',
+          credential: { type: 'api-key', env: 'S_KEY' },
+        },
+        {
+          id: 'u-src',
+          endpoint: 'https://u.test/v1',
+          credential: { type: 'api-key', env: 'U_KEY' },
+        },
+        {
+          id: 'g-src',
+          endpoint: 'https://g.test/v1',
+          credential: { type: 'api-key', env: 'G_KEY' },
+        },
+      ],
+      dispatch: { providers: {} },
+    };
+
+    // 1. provider priority
+    const r1 = resolveRoute(
+      {
+        provider: 'p-src',
+        source: 's-src',
+        upstream: 'u-src',
+        gateway: 'g-src',
+        harness: 'direct-http',
+      },
+      { isolatedWorker: true },
+      reg
+    );
+    assert.equal(r1.endpoint, 'https://p.test/v1');
+    assert.equal(r1.apiKeyEnv, 'P_KEY');
+
+    // 2. source priority when provider unmatched
+    const r2 = resolveRoute(
+      {
+        provider: 'unknown-p',
+        source: 's-src',
+        upstream: 'u-src',
+        gateway: 'g-src',
+        harness: 'direct-http',
+      },
+      { isolatedWorker: true },
+      reg
+    );
+    assert.equal(r2.endpoint, 'https://s.test/v1');
+    assert.equal(r2.apiKeyEnv, 'S_KEY');
+
+    // 3. upstream priority when provider and source unmatched
+    const r3 = resolveRoute(
+      {
+        provider: 'unknown-p',
+        source: 'unknown-s',
+        upstream: 'u-src',
+        gateway: 'g-src',
+        harness: 'direct-http',
+      },
+      { isolatedWorker: true },
+      reg
+    );
+    assert.equal(r3.endpoint, 'https://u.test/v1');
+    assert.equal(r3.apiKeyEnv, 'U_KEY');
+
+    // 4. gateway priority when provider, source, upstream unmatched
+    const r4 = resolveRoute(
+      {
+        provider: 'unknown-p',
+        source: 'unknown-s',
+        upstream: 'unknown-u',
+        gateway: 'g-src',
+        harness: 'direct-http',
+      },
+      { isolatedWorker: true },
+      reg
+    );
+    assert.equal(r4.endpoint, 'https://g.test/v1');
+    assert.equal(r4.apiKeyEnv, 'G_KEY');
+  });
+
+  test('P1: resolveRoute fails closed without endpoint/apiKeyEnv when no exact ID match (no model-membership fallback)', () => {
+    const reg = {
+      version: 2,
+      sources: [
+        {
+          id: 'decoy-model-holder',
+          endpoint: 'https://holder.example/v1',
+          credential: { type: 'api-key', env: 'HOLDER_KEY' },
+          models: ['target-model'],
+        },
+      ],
+      dispatch: { providers: {} },
+    };
+
+    const route = resolveRoute(
+      { provider: 'unmatched-provider', model: 'target-model', harness: 'direct-http' },
+      { isolatedWorker: true },
+      reg
+    );
+    assert.ok(route, 'route object returned');
+    assert.equal(
+      route.endpoint,
+      undefined,
+      'must not carry endpoint from model-membership fallback'
+    );
+    assert.equal(
+      route.apiKeyEnv,
+      undefined,
+      'must not carry apiKeyEnv from model-membership fallback'
+    );
+  });
+
+  test('P1: resolveRoute prevents credential misbinding (always takes endpoint and credential from same source)', () => {
+    const reg = {
+      version: 2,
+      sources: [
+        {
+          id: 'inception',
+          endpoint: 'https://api.inceptionlabs.ai/v1',
+          credential: { type: 'api-key', env: 'INCEPTION_API_KEY' },
+        },
+      ],
+      dispatch: { providers: {} },
+    };
+
+    // Assignment provides custom endpoint, but no apiKeyEnv -> must NOT attach inception key
+    const r1 = resolveRoute(
+      {
+        provider: 'inception',
+        endpoint: 'https://custom.endpoint.example/v1',
+        model: 'mercury-2.5',
+        harness: 'direct-http',
+      },
+      { isolatedWorker: true },
+      reg
+    );
+    assert.equal(r1.endpoint, 'https://custom.endpoint.example/v1');
+    assert.equal(
+      r1.apiKeyEnv,
+      undefined,
+      'must not bind matched source key to assignment endpoint'
+    );
+
+    // Assignment provides custom apiKeyEnv, but no endpoint -> must NOT attach inception endpoint
+    const r2 = resolveRoute(
+      {
+        provider: 'inception',
+        apiKeyEnv: 'CUSTOM_API_KEY',
+        model: 'mercury-2.5',
+        harness: 'direct-http',
+      },
+      { isolatedWorker: true },
+      reg
+    );
+    assert.equal(r2.apiKeyEnv, 'CUSTOM_API_KEY');
+    assert.equal(r2.endpoint, undefined, 'must not bind matched source endpoint to assignment key');
+  });
+
+  test('P1: resolveRoute rejects invalid credential env names without valid identifier format', () => {
+    const reg = {
+      version: 2,
+      sources: [
+        {
+          id: 'invalid-cred-source',
+          endpoint: 'https://invalid-cred.example/v1',
+          credential: { type: 'api-key', env: 'INVALID KEY WITH SPACES' },
+        },
+      ],
+      dispatch: { providers: {} },
+    };
+
+    const route = resolveRoute(
+      { provider: 'invalid-cred-source', harness: 'direct-http' },
+      { isolatedWorker: true },
+      reg
+    );
+    assert.equal(route.endpoint, 'https://invalid-cred.example/v1');
+    assert.equal(route.apiKeyEnv, undefined, 'invalid env name must be rejected');
+  });
+
   test('rankForProfile rejects candidates with unsupported harness from writer ranking', () => {
     const unsupp = unsupportedCandidate();
     const direct = directHttpCandidate();

@@ -80,6 +80,25 @@ function resumePrompt(assignment, opts) {
   );
 }
 
+function validateEnvVar(val) {
+  if (typeof val !== 'string') return null;
+  const trimmed = val.trim();
+  return /^[A-Za-z0-9_]+$/.test(trimmed) ? trimmed : null;
+}
+
+function extractSourceApiKeyEnv(src) {
+  if (!src) return null;
+  const raw =
+    (src.credential && typeof src.credential.env === 'string' && src.credential.env) ||
+    (src.credential &&
+      src.credential.type === 'env' &&
+      typeof src.credential.name === 'string' &&
+      src.credential.name) ||
+    (typeof src.apiKeyEnv === 'string' && src.apiKeyEnv) ||
+    null;
+  return validateEnvVar(raw);
+}
+
 /**
  * Where an assignment should run: which harness, which provider name that
  * harness understands, and the model spelled the way it expects.
@@ -111,30 +130,37 @@ function resolveRoute(assignment, options, registry) {
     harnessName = 'opencode-direct';
   }
   if (!harnessName) return null;
-  const src =
-    (reg &&
-      Array.isArray(reg.sources) &&
-      reg.sources.find(
-        (s) =>
-          s &&
-          (s.id === assignment.provider ||
-            (route && s.id === route.provider) ||
-            (assignment.gateway &&
-              assignment.gateway !== 'direct' &&
-              s.id === assignment.gateway) ||
-            (assignment.upstream && s.id === assignment.upstream) ||
-            (assignment.source && s.id === assignment.source) ||
-            (assignment.model && Array.isArray(s.models) && s.models.includes(assignment.model)))
-      )) ||
-    null;
-  const endpoint =
-    assignment.endpoint || (src && src.endpoint) || (route && route.endpoint) || null;
-  const apiKeyEnv =
-    assignment.apiKeyEnv ||
-    (src && src.credential && (src.credential.env || src.credential.name)) ||
-    (src && src.apiKeyEnv) ||
-    (route && route.apiKeyEnv) ||
-    null;
+
+  const candidateIds = [
+    assignment.provider,
+    route && route.provider,
+    assignment.source,
+    assignment.upstream,
+    assignment.gateway && assignment.gateway !== 'direct' ? assignment.gateway : null,
+  ].filter((id) => typeof id === 'string' && id.trim().length > 0);
+
+  let src = null;
+  if (reg && Array.isArray(reg.sources)) {
+    for (const targetId of candidateIds) {
+      const match = reg.sources.find((s) => s && s.id === targetId);
+      if (match) {
+        src = match;
+        break;
+      }
+    }
+  }
+
+  let endpoint = null;
+  let apiKeyEnv = null;
+
+  if (assignment.endpoint || assignment.apiKeyEnv) {
+    endpoint = (typeof assignment.endpoint === 'string' && assignment.endpoint.trim()) || null;
+    apiKeyEnv = validateEnvVar(assignment.apiKeyEnv);
+  } else if (src) {
+    endpoint = (typeof src.endpoint === 'string' && src.endpoint.trim()) || null;
+    apiKeyEnv = extractSourceApiKeyEnv(src);
+  }
+
   return {
     harnessName,
     provider: (route && route.provider) || assignment.provider,
