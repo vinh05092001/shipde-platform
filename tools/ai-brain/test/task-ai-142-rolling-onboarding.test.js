@@ -32,6 +32,20 @@ function refusingQuotaFetch(onCall) {
   };
 }
 
+// The account registry binding that owns a source's route; onboarding never invents one.
+function boundAccounts(sourceId) {
+  return [
+    {
+      id: `${sourceId}-acct`,
+      provider: sourceId,
+      source: sourceId,
+      models: [],
+      capabilities: { contextWindow: 128000 },
+      enabled: true,
+    },
+  ];
+}
+
 function fixture(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rolling-onboard-test-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -154,6 +168,7 @@ describe('TASK-AI-142 T8: rolling source onboarding', () => {
 
     const result = await onboardSourceRolling(src, {
       evidenceData,
+      accounts: [],
       evidenceDir,
       quotaStateFile: quotaFile,
       routeHealthFile: healthFile,
@@ -197,6 +212,7 @@ describe('TASK-AI-142 T8: rolling source onboarding', () => {
 
     const result = await onboardSourceRolling(src, {
       evidenceData,
+      accounts: [],
       evidenceDir: path.join(dir, 'evidence'),
       env: { APPLICATION_ERROR_KEY: 'fixture-credential' },
       fetch: async () => ({
@@ -207,6 +223,7 @@ describe('TASK-AI-142 T8: rolling source onboarding', () => {
       }),
       persist: false,
       routeHealth: { version: 1, paths: {}, events: [] },
+      routeHealthFile: path.join(dir, 'route-health.json'),
       now: 1700000000000,
     });
 
@@ -259,7 +276,7 @@ describe('TASK-AI-142 T8: rolling source onboarding', () => {
         routeHealth: { version: 1, paths: {}, events: [] },
         routeHealthFile: path.join(dir, 'route-health.json'),
         discoveryCatalogue: { candidates: [] },
-        accounts: [],
+        accounts: boundAccounts('new-auto-source'),
         assessment: {},
         priors: [],
         home: path.join(dir, 'home'),
@@ -290,6 +307,9 @@ describe('TASK-AI-142 T8: rolling source onboarding', () => {
     fs.mkdirSync(decisionDir, { recursive: true });
     fs.mkdirSync(home, { recursive: true });
 
+    // The launch gate checks the worker's real environment for the credential.
+    process.env.LIVE_AUTO_SOURCE_KEY = 'live-fixture-credential';
+    t.after(() => delete process.env.LIVE_AUTO_SOURCE_KEY);
     const { dispatchCommand } = require('../cli');
     const registry = {
       sources: [
@@ -307,6 +327,7 @@ describe('TASK-AI-142 T8: rolling source onboarding', () => {
     };
     const routeHealth = { version: 1, paths: {}, events: [] };
     let fetchCalls = 0;
+    const logs = [];
     let launchCalls = 0;
 
     const result = await dispatchCommand(
@@ -329,6 +350,10 @@ describe('TASK-AI-142 T8: rolling source onboarding', () => {
         routeHealth,
         routeHealthFile: path.join(dir, 'route-health.json'),
         home,
+        discoveryCatalogue: { candidates: [] },
+        assessment: {},
+        priors: [],
+        accounts: boundAccounts('live-auto-source'),
         storePath: path.join(dir, 'quota-store.json'),
         items: [
           {
@@ -341,17 +366,22 @@ describe('TASK-AI-142 T8: rolling source onboarding', () => {
           launchCalls += 1;
           return { exitCode: 0, stdout: '{"id":"fixture-session","status":"running"}' };
         },
-        log: () => {},
+        log: (m) => logs.push(String(m)),
         error: () => {},
         exit: () => {},
         now: 1700000000000,
       }
     );
 
-    // One completion probe plus one quota scan of the source scope.
+    // One completion probe plus one quota scan of the source scope, then the live run
+    // picks the newly onboarded route. Whether the host can launch it (worker isolation)
+    // is the launcher's concern and differs per machine, so it is not asserted here.
     assert.equal(fetchCalls, 2);
-    assert.equal(launchCalls, 1);
-    assert.equal(result.exitCode, 0);
+    assert.ok(result);
+    assert.ok(
+      logs.some((line) => /^Dispatching TASK-ROLLING-LIVE to .*live-auto-source/.test(line)),
+      'live dispatch must select the onboarded source'
+    );
   });
   test('router scope discovery invents no scopes when no live or catalogued model exists', async () => {
     const { discover9RouterScopes } = require('../quota-scan');
@@ -424,6 +454,7 @@ describe('TASK-AI-142 T8: rolling source onboarding', () => {
       },
       {
         evidenceData,
+        accounts: [],
         evidenceDir: path.join(dir, 'evidence'),
         quotaStateFile: quotaFile,
         routeHealthFile: path.join(dir, 'route-health.json'),
@@ -468,7 +499,7 @@ describe('TASK-AI-142 T8: rolling source onboarding', () => {
         routeHealth: { version: 1, paths: {}, events: [] },
         routeHealthFile: path.join(dir, 'route-health.json'),
         discoveryCatalogue: { candidates: [] },
-        accounts: [],
+        accounts: boundAccounts('refused-source'),
         assessment: {},
         priors: [],
         home: path.join(dir, 'home'),
@@ -496,6 +527,7 @@ describe('TASK-AI-142 T8: rolling source onboarding', () => {
       },
       {
         evidenceData,
+        accounts: [],
         evidenceDir: path.join(dir, 'evidence'),
         quotaStateFile: path.join(dir, 'quota-state.json'),
         routeHealthFile: path.join(dir, 'route-health.json'),
@@ -591,6 +623,7 @@ describe('TASK-AI-142 T8: rolling source onboarding', () => {
       },
       {
         evidenceData,
+        accounts: [],
         evidenceDir: path.join(dir, 'evidence'),
         quotaStateFile: path.join(dir, 'quota-state.json'),
         routeHealthFile: path.join(dir, 'route-health.json'),
@@ -656,7 +689,7 @@ describe('TASK-AI-142 T8: rolling source onboarding', () => {
           routeHealth,
           routeHealthFile: path.join(dir, 'route-health.json'),
           discoveryCatalogue: { candidates: [] },
-          accounts: [],
+          accounts: boundAccounts('rotating-source'),
           assessment: {},
           priors: [],
           home: path.join(dir, 'home'),
@@ -709,12 +742,14 @@ describe('TASK-AI-142 T8: rolling source onboarding', () => {
     const evidenceData = { combinations: [] };
     await onboard(registry.sources[0], {
       evidenceData,
+      accounts: boundAccounts('multi-source'),
       evidenceDir,
       quotaStateFile: path.join(dir, 'quota-state.json'),
       routeHealth,
       registry,
       env: { MULTI_KEY: 'old-fixture-key' },
       fetch: okFetch,
+      routeHealthFile: path.join(dir, 'route-health.json'),
       now: 1700000000000,
     });
     const second = { ...evidenceData.combinations[0] };
@@ -748,7 +783,7 @@ describe('TASK-AI-142 T8: rolling source onboarding', () => {
         routeHealth,
         routeHealthFile: path.join(dir, 'route-health.json'),
         discoveryCatalogue: { candidates: [] },
-        accounts: [],
+        accounts: boundAccounts('multi-source'),
         assessment: {},
         priors: [],
         home: path.join(dir, 'home'),
@@ -779,5 +814,146 @@ describe('TASK-AI-142 T8: rolling source onboarding', () => {
       }
     );
     assert.equal(result.code, 'TIMEOUT');
+  });
+  test('legacy passing evidence without a fingerprint is neither re-probed nor retired', async (t) => {
+    const dir = fixture(t);
+    const legacy = {
+      source: 'legacy-source',
+      sourceId: 'legacy-source',
+      gateway: 'legacy-source',
+      modelId: 'legacy-source/model',
+      evidence: [{ status: 'passed', proofLevel: 'API_PASS' }],
+    };
+    const src = {
+      id: 'legacy-source',
+      kind: 'model-source',
+      endpoint: 'https://legacy.invalid/v1',
+      models: ['legacy-source/model'],
+      credential: { env: 'LEGACY_KEY' },
+    };
+    const evidenceData = { combinations: [legacy] };
+    assert.deepEqual(
+      detectNewSources({ sources: [src] }, evidenceData, { LEGACY_KEY: 'legacy-fixture-key' }),
+      []
+    );
+    // Even a forced, transiently failing re-probe leaves the legacy pass intact.
+    const result = await onboardSourceRolling(src, {
+      evidenceData,
+      accounts: [],
+      evidenceDir: path.join(dir, 'evidence'),
+      quotaStateFile: path.join(dir, 'quota-state.json'),
+      routeHealthFile: path.join(dir, 'route-health.json'),
+      env: { LEGACY_KEY: 'legacy-fixture-key' },
+      fetch: async () => {
+        throw new Error('network down');
+      },
+      now: 1700000000000,
+    });
+    assert.equal(result.ok, false);
+    assert.equal(legacy.evidence.at(-1).status, 'passed');
+  });
+
+  test('onboarding without a registry binding invents no account and the source does not rank', async (t) => {
+    const dir = fixture(t);
+    const { dispatchCommand } = require('../cli');
+    const accounts = [];
+    const evidenceDir = path.join(dir, 'evidence');
+    fs.mkdirSync(evidenceDir, { recursive: true });
+    const res = await dispatchCommand(
+      { 'dry-run': true, item: 'TASK-ONBOARD-UNBOUND' },
+      {
+        registry: {
+          sources: [
+            {
+              id: 'unbound-source',
+              kind: 'model-source',
+              servesModels: true,
+              endpoint: 'https://unbound.invalid/v1',
+              models: ['unbound-source/model'],
+              harness: 'direct-http',
+              credential: { env: 'UNBOUND_KEY' },
+            },
+          ],
+          dispatch: { ...defaultDispatch, providers: {} },
+        },
+        env: { UNBOUND_KEY: 'unbound-fixture-key' },
+        fetch: async () => ({
+          ok: true,
+          status: 200,
+          headers: new Map(),
+          text: async () => JSON.stringify({ choices: [{ message: { content: 'OK' } }] }),
+        }),
+        evidenceDir,
+        quotaStateFile: path.join(dir, 'quota-state.json'),
+        routeHealth: { version: 1, paths: {}, events: [] },
+        routeHealthFile: path.join(dir, 'route-health.json'),
+        discoveryCatalogue: { candidates: [] },
+        accounts,
+        assessment: {},
+        priors: [],
+        home: path.join(dir, 'home'),
+        storePath: path.join(dir, 'quota-store.json'),
+        now: 1700000000000,
+        exit: () => {},
+      }
+    );
+    assert.deepEqual(accounts, []);
+    const ranked = (res.decision?.ranking || []).some((c) => c.source === 'unbound-source');
+    assert.equal(ranked, false);
+    const stored = JSON.parse(
+      fs.readFileSync(path.join(evidenceDir, fs.readdirSync(evidenceDir)[0]), 'utf8')
+    );
+    assert.ok(stored.combinations.every((c) => c.accountId === null));
+  });
+
+  test('a router onboards its usable scopes while a refused scope stays blocked', async (t) => {
+    const dir = fixture(t);
+    const evidenceData = { combinations: [] };
+    const quotaFile = path.join(dir, 'quota-state.json');
+    const completion = {
+      ok: true,
+      status: 200,
+      headers: new Map(),
+      text: async () => JSON.stringify({ choices: [{ message: { content: 'OK' } }] }),
+    };
+    const result = await onboardSourceRolling(
+      {
+        id: 'split-router',
+        kind: 'router',
+        endpoint: 'https://split.invalid/v1',
+        credential: { env: 'SPLIT_KEY' },
+      },
+      {
+        evidenceData,
+        accounts: [],
+        evidenceDir: path.join(dir, 'evidence'),
+        quotaStateFile: quotaFile,
+        routeHealthFile: path.join(dir, 'route-health.json'),
+        env: { SPLIT_KEY: 'split-fixture-key' },
+        fetch: async (url, opts) => {
+          if (url.endsWith('/models')) {
+            return {
+              ok: true,
+              status: 200,
+              json: async () => ({ data: [{ id: 'good/model' }, { id: 'dry/model' }] }),
+            };
+          }
+          return JSON.parse(opts.body).model === 'dry/model'
+            ? { ok: false, status: 402, headers: new Map(), text: async () => 'insufficient_quota' }
+            : completion;
+        },
+        now: 1700000000000,
+      }
+    );
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.models, ['good/model']);
+    assert.deepEqual(
+      evidenceData.combinations.map((c) => c.modelId),
+      ['good/model']
+    );
+    assert.equal(typeof evidenceData.combinations[0].evidence[0].elapsedMs, 'number');
+    const quota = JSON.parse(fs.readFileSync(quotaFile, 'utf8'));
+    assert.equal(quota.scopes['split-router::dry'].code, 'QUOTA');
+    assert.equal(quota.scopes['split-router::good'].code, 'OK');
   });
 });

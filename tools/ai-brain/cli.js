@@ -2201,7 +2201,8 @@ function dispatchCommand(args, deps = {}) {
   // call asynchronous. dispatchCommand's only caller (the `dispatch` command) already
   // awaits a returned promise and turns a rejection into a non-zero exit.
   if (newSources.length > 0) {
-    const rawAccounts = deps && deps.accounts !== undefined ? deps.accounts : listAccounts() || [];
+    // Onboarding only records evidence, route health and quota. Accounts stay owned by the
+    // account registry: no binding is invented here, so isolation and quota policy hold.
     return rollingOnboard
       .autoOnboardNewSources(newSources, {
         ...deps,
@@ -2210,20 +2211,13 @@ function dispatchCommand(args, deps = {}) {
         registry,
         env,
       })
-      .then(() => {
-        const updatedAccounts = rawAccounts.slice();
-        for (const s of newSources) {
-          if (!updatedAccounts.some((a) => a.source === s.id || a.id === `${s.id}-auto`)) {
-            updatedAccounts.push({ id: `${s.id}-auto`, source: s.id, provider: s.id });
-          }
-        }
-        return dispatchCommand(args, {
+      .then(() =>
+        dispatchCommand(args, {
           ...deps,
-          accounts: updatedAccounts,
           onboardingPrepared: true,
           evidenceData,
-        });
-      });
+        })
+      );
   }
 
   const accounts = deps && deps.accounts !== undefined ? deps.accounts : listAccounts() || [];

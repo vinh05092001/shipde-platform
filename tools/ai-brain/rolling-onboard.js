@@ -35,8 +35,13 @@ function sourceHasPassingEvidence(combinations, sourceId, fingerprint) {
     ) {
       return false;
     }
-    // Evidence earned with another (or an unrecorded) key does not prove the current one.
-    if (fingerprint && combination.credentialFingerprint !== fingerprint) {
+    // Evidence earned with a different, known key does not prove the current one. Evidence
+    // recorded before fingerprints existed stays valid: it is not proof of a rotation.
+    if (
+      fingerprint &&
+      combination.credentialFingerprint &&
+      combination.credentialFingerprint !== fingerprint
+    ) {
       return false;
     }
 
@@ -173,9 +178,9 @@ async function onboardSourceRolling(src, options = {}) {
         allowMissing: true,
       }));
 
-  // Evidence earned with any other key no longer proves this source, whatever this probe
-  // found: a pass for one model under the new key says nothing about the others. Retire
-  // every old-key pass so only re-verified routes can rank.
+  // Evidence earned with a different, known key no longer proves this source, whatever this
+  // probe found: a pass for one model under the new key says nothing about the others.
+  // Unfingerprinted (pre-rotation-tracking) evidence is never retired here.
   const retireOtherKeyPasses = (status) => {
     const fingerprint = credentialFingerprint(apiKey);
     let retired = 0;
@@ -183,7 +188,8 @@ async function onboardSourceRolling(src, options = {}) {
       if (
         !combination ||
         ![combination.source, combination.sourceId, combination.gateway].includes(src.id) ||
-        (fingerprint && combination.credentialFingerprint === fingerprint)
+        !combination.credentialFingerprint ||
+        combination.credentialFingerprint === fingerprint
       ) {
         continue;
       }
@@ -208,47 +214,59 @@ async function onboardSourceRolling(src, options = {}) {
   };
 
   let quotaResults = [];
+  let usable = [];
   if (probeOk) {
     quotaResults = await quotaScan.scanSourceQuotas(src, { ...scanOptions, targets: scanTargets });
-    // Fail closed: every scanned scope must be confirmed usable, and there must be one.
-    const unusable = quotaResults.find((result) => result.code !== quotaScan.QUOTA_STATUS_CODES.OK);
-    if (quotaResults.length === 0 || unusable) {
+    // Each scope stands alone: quota state is source-and-scope qualified, so a refused
+    // upstream stays blocked while confirmed ones enter ranking.
+    usable = quotaResults.filter((result) => result.code === quotaScan.QUOTA_STATUS_CODES.OK);
+    if (usable.length === 0) {
       probeOk = false;
-      probeReason = unusable ? `QUOTA_${unusable.code}` : 'QUOTA_UNSCANNED';
+      const refused = quotaResults[0];
+      probeReason = refused ? `QUOTA_${refused.code}` : 'QUOTA_UNSCANNED';
     }
   }
 
   if (probeOk) {
-    // 1. Record in evidenceData.combinations
+    // An existing registry binding owns the account; onboarding never invents one.
+    const accounts =
+      options.accounts !== undefined
+        ? options.accounts
+        : require('./accounts').listAccounts({ home: options.home }) || [];
+    const bound = (accounts || []).find(
+      (account) => account && (account.source === src.id || account.provider === src.id)
+    );
     const harness = src.harness || 'direct-http';
     const accessPath = src.endpoint || src.accessPath || 'direct';
-    const accountId = `${src.id}-auto`;
-    const quotaScope = src.id;
-
-    const combo = {
-      harness,
-      accessPath,
-      gateway: src.id,
-      upstream: src.routerAlias || src.id,
-      accountId,
-      quotaScope,
-      model: repModel,
-      modelId: repModel,
-      source: src.id,
-      sourceId: src.id,
-      credentialFingerprint: credentialFingerprint(apiKey),
-      evidence: [
-        {
-          status: 'passed',
-          level: 1,
-          proofLevel: 'API_PASS',
-          observedAt: new Date(now).toISOString(),
-          elapsedMs: 100,
-        },
-      ],
-    };
-    combo.candidateKey = candidatesApi.candidateKey(combo);
-    evidenceData.combinations.push(combo);
+    const store = healthStore();
+    const combos = usable.map((result) => {
+      const combo = {
+        harness,
+        accessPath,
+        gateway: src.id,
+        upstream: result.upstream || src.routerAlias || src.id,
+        accountId: bound ? bound.id : null,
+        quotaScope: result.scope,
+        model: result.model,
+        modelId: result.model,
+        source: src.id,
+        sourceId: src.id,
+        credentialFingerprint: credentialFingerprint(apiKey),
+        evidence: [
+          {
+            status: 'passed',
+            level: 1,
+            proofLevel: 'API_PASS',
+            observedAt: new Date(now).toISOString(),
+            // Measured from the scan that confirmed this scope's completion.
+            elapsedMs: result.elapsedMs,
+          },
+        ],
+      };
+      combo.candidateKey = candidatesApi.candidateKey(combo);
+      return combo;
+    });
+    evidenceData.combinations.push(...combos);
     // Status 0: nothing was sent for those routes; the cause names why they stop ranking.
     retireOtherKeyPasses(0);
 
@@ -256,20 +274,21 @@ async function onboardSourceRolling(src, options = {}) {
       evidenceApi.saveEvidence(evidenceDir, evidenceData);
     }
 
-    // 2. Record route health in the same store dispatch reads.
-    const store = healthStore();
-    routeHealthApi.rememberProbe(
-      combo,
-      { ok: true, status: probeStatus, body: probeBody },
-      { ...healthOptions, routeHealth: store, now }
-    );
+    for (const combo of combos) {
+      routeHealthApi.rememberProbe(
+        combo,
+        { ok: true, status: probeStatus, body: probeBody },
+        { ...healthOptions, routeHealth: store, now }
+      );
+    }
 
     return {
       ok: true,
       sourceId: src.id,
       model: repModel,
+      models: combos.map((combo) => combo.modelId),
       status: probeStatus,
-      quota: quotaResults.map((r) => ({ scope: r.scope, code: r.code })),
+      quota: quotaResults.map((result) => ({ scope: result.scope, code: result.code })),
     };
   }
 

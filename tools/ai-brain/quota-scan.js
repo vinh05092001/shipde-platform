@@ -359,6 +359,7 @@ async function scanScope(target, options = {}) {
 
   const controller = new AbortController();
   const timeoutMs = dispatchConfig.probeTimeoutMs;
+  const startedAt = Date.now();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
@@ -393,6 +394,7 @@ async function scanScope(target, options = {}) {
       reason: classification.reason,
       at: new Date(now).toISOString(),
       retryAfter: classification.retryAfter,
+      elapsedMs: Date.now() - startedAt,
     };
   } catch (err) {
     clearTimeout(timer);
