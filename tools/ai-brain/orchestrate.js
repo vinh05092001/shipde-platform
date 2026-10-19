@@ -615,22 +615,23 @@ function fileExistsOnBase(baseCwd, baseSha, relPath, spawnFn) {
   if (!baseCwd || !relPath) return false;
   const run = spawnFn || spawnSync;
   const cleanRel = relPath.replace(/\\/g, '/');
-  if (baseSha) {
-    try {
-      const res = run(
-        'git',
-        ['-c', 'safe.directory=*', 'cat-file', '-e', `${baseSha}:${cleanRel}`],
-        {
-          cwd: baseCwd,
-          encoding: 'utf8',
-          windowsHide: true,
-        }
-      );
-      if (res && res.status === 0) return true;
-      if (res && res.status !== 0) return false;
-    } catch {}
+  const targetSha =
+    (baseSha ? String(baseSha).trim() : null) || headShaOf(baseCwd, { spawnSync: run });
+  if (!targetSha) return false;
+  try {
+    const res = run(
+      'git',
+      ['-c', 'safe.directory=*', 'cat-file', '-e', `${targetSha}:${cleanRel}`],
+      {
+        cwd: baseCwd,
+        encoding: 'utf8',
+        windowsHide: true,
+      }
+    );
+    return Boolean(res && res.status === 0);
+  } catch {
+    return false;
   }
-  return fs.existsSync(path.resolve(baseCwd, relPath));
 }
 
 function resolveSpecificAcceptanceCriteria(item) {
@@ -702,6 +703,39 @@ function resolveSpecificAcceptanceCriteria(item) {
   };
 }
 
+function parsePassingTestNames(output) {
+  const clean = stripAnsi(output);
+  const results = [];
+  const lines = clean.split(/\r?\n/);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    if (trimmed.startsWith('#')) continue;
+    if (trimmed.startsWith('ℹ')) continue;
+    if (/^(?:not ok \d+|✖)\b/.test(trimmed)) continue;
+    if (/#\s*(?:SKIP|TODO)\b/i.test(trimmed)) continue;
+    if (/^[﹣\-⊘]\s+/.test(trimmed)) continue;
+
+    const tapMatch = trimmed.match(/^ok\s+\d+\s+-\s+(.+?)$/);
+    if (tapMatch) {
+      const name = tapMatch[1]
+        .replace(/\s*#.*$/, '')
+        .replace(/\s*\(\d+(?:\.\d+)?m?s\)\s*$/, '')
+        .trim();
+      if (name) results.push(name);
+      continue;
+    }
+
+    const specMatch = trimmed.match(/^(?:[✔✓√+]|\(\+\))\s+(.+?)$/);
+    if (specMatch) {
+      const name = specMatch[1].replace(/\s*\(\d+(?:\.\d+)?m?s\)\s*$/, '').trim();
+      if (name) results.push(name);
+      continue;
+    }
+  }
+  return [...new Set(results)];
+}
+
 function checkItemAlreadySatisfiedOnBase(item, options = {}) {
   const verification = item && item.verification;
   const command = verification && verification.command;
@@ -744,38 +778,41 @@ function checkItemAlreadySatisfiedOnBase(item, options = {}) {
   let worktreeAdded = false;
 
   const currentHead = headShaOf(baseCwd, { spawnSync: spawnFn });
-  const needsDetachedWorktree =
-    Boolean(baseSha) && (!currentHead || currentHead.toLowerCase() !== baseSha.toLowerCase());
+  const targetSha = baseSha || currentHead;
+
+  if (!targetSha) {
+    return {
+      satisfied: false,
+      reason: 'BASE_WORKTREE_UNAVAILABLE',
+      detail: 'no base SHA available to isolate',
+    };
+  }
 
   try {
-    if (needsDetachedWorktree) {
-      try {
-        tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-base-wt-'));
-        tempWorktree = path.join(tempDir, 'wt');
-        const addRes = spawnFn(
-          'git',
-          ['-c', 'safe.directory=*', 'worktree', 'add', '--detach', tempWorktree, baseSha],
-          { cwd: baseCwd, encoding: 'utf8', windowsHide: true }
-        );
-        if (addRes && addRes.status === 0) {
-          worktreeAdded = true;
-          runCwd = tempWorktree;
-        } else {
-          return {
-            satisfied: false,
-            reason: 'BASE_WORKTREE_UNAVAILABLE',
-            detail: String(
-              (addRes && (addRes.stderr || addRes.stdout)) || 'git worktree add failed'
-            ),
-          };
-        }
-      } catch (err) {
+    try {
+      tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-base-wt-'));
+      tempWorktree = path.join(tempDir, 'wt');
+      const addRes = spawnFn(
+        'git',
+        ['-c', 'safe.directory=*', 'worktree', 'add', '--detach', tempWorktree, targetSha],
+        { cwd: baseCwd, encoding: 'utf8', windowsHide: true }
+      );
+      if (addRes && addRes.status === 0) {
+        worktreeAdded = true;
+        runCwd = tempWorktree;
+      } else {
         return {
           satisfied: false,
           reason: 'BASE_WORKTREE_UNAVAILABLE',
-          detail: err && err.message,
+          detail: String((addRes && (addRes.stderr || addRes.stdout)) || 'git worktree add failed'),
         };
       }
+    } catch (err) {
+      return {
+        satisfied: false,
+        reason: 'BASE_WORKTREE_UNAVAILABLE',
+        detail: err && err.message,
+      };
     }
 
     const childEnv = Object.assign({}, process.env, options.env || {});
@@ -810,36 +847,60 @@ function checkItemAlreadySatisfiedOnBase(item, options = {}) {
       return {
         satisfied: false,
         reason: 'VERIFICATION_EXIT',
-        baseSha: baseSha || currentHead || null,
+        baseSha: targetSha,
         command,
         exitCode,
         output,
       };
     }
 
-    if (specificCriteria.expect && !output.includes(specificCriteria.expect)) {
-      return {
-        satisfied: false,
-        reason: 'VERIFICATION_EXPECT_MISSING',
-        expect: specificCriteria.expect,
-        baseSha: baseSha || currentHead || null,
-        command,
-        exitCode,
-        output,
-      };
+    const passingTests = parsePassingTestNames(output);
+
+    if (specificCriteria.expect) {
+      const expectPassed =
+        output.includes(specificCriteria.expect) &&
+        passingTests.some(
+          (p) =>
+            p === specificCriteria.expect ||
+            p.includes(specificCriteria.expect) ||
+            specificCriteria.expect.includes(p)
+        );
+      if (!expectPassed) {
+        return {
+          satisfied: false,
+          reason: 'VERIFICATION_EXPECT_MISSING',
+          expect: specificCriteria.expect,
+          baseSha: targetSha,
+          command,
+          exitCode,
+          output,
+        };
+      }
     }
 
     if (specificCriteria.testNamePattern) {
+      const patternRegex = (() => {
+        try {
+          return new RegExp(specificCriteria.testNamePattern, 'i');
+        } catch {
+          return null;
+        }
+      })();
+      const patternPassed = passingTests.some(
+        (p) =>
+          (patternRegex && patternRegex.test(p)) || p.includes(specificCriteria.testNamePattern)
+      );
       if (
         output.includes('ℹ tests 0') ||
         output.includes('ℹ pass 0') ||
-        !output.includes(specificCriteria.testNamePattern)
+        output.includes('# pass 0') ||
+        !patternPassed
       ) {
         return {
           satisfied: false,
           reason: 'VERIFICATION_TEST_PATTERN_UNMATCHED',
           pattern: specificCriteria.testNamePattern,
-          baseSha: baseSha || currentHead || null,
+          baseSha: targetSha,
           command,
           exitCode,
           output,
@@ -848,12 +909,13 @@ function checkItemAlreadySatisfiedOnBase(item, options = {}) {
     }
 
     for (const tc of specificCriteria.testCases) {
-      if (!output.includes(tc)) {
+      const tcPassed = passingTests.some((p) => p === tc || p.includes(tc) || tc.includes(p));
+      if (!tcPassed) {
         return {
           satisfied: false,
           reason: 'ACCEPTANCE_TEST_CASE_MISSING_ON_BASE',
           missingTestCase: tc,
-          baseSha: baseSha || currentHead || null,
+          baseSha: targetSha,
           command,
           exitCode,
           output,
@@ -863,7 +925,7 @@ function checkItemAlreadySatisfiedOnBase(item, options = {}) {
 
     return {
       satisfied: true,
-      baseSha: baseSha || currentHead || null,
+      baseSha: targetSha,
       command,
       exitCode,
       output,
@@ -9752,4 +9814,6 @@ module.exports = {
   checkItemAlreadySatisfiedOnBase,
   resolveSpecificAcceptanceCriteria,
   formatHostGateDiagnostics,
+  fileExistsOnBase,
+  parsePassingTestNames,
 };

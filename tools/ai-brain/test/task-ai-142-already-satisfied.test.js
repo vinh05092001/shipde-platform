@@ -12,6 +12,8 @@ const {
   ItemStatus,
   checkItemAlreadySatisfiedOnBase,
   resolveSpecificAcceptanceCriteria,
+  fileExistsOnBase,
+  parsePassingTestNames,
 } = require('../orchestrate');
 const { resumeGoal } = require('../goals');
 const { getDispatchConfig } = require('../sources');
@@ -633,4 +635,147 @@ test('TASK-AI-142 unit: checkItemAlreadySatisfiedOnBase succeeds when specific t
   assert.equal(res.satisfied, true);
   assert.equal(res.baseSha, baseSha);
   assert.equal(res.exitCode, 0);
+});
+
+test('TASK-AI-142 regression P1 (832): skipped test or diagnostic line with 0 exit code fails closed', () => {
+  const host = makeTempRepo();
+  const testRelPath = 'tools/ai-brain/test/unit-skipped-diag.test.js';
+  const testCode = [
+    "'use strict';",
+    "const { test } = require('node:test');",
+    "console.log('diagnostic log containing named target feature');",
+    "test('other passing case', () => {});",
+    "test('named target feature', { skip: 'not yet implemented' }, () => {});",
+  ].join('\n');
+  const baseSha = addCommit(host.dir, testRelPath, testCode, 'commit');
+
+  const item = {
+    id: 'TASK-UNIT-SKIPPED-DIAG',
+    files: [testRelPath],
+    verification: {
+      command: `node --test ${testRelPath}`,
+      expect: 'named target feature',
+    },
+    acceptanceCriteria: ['Test passes: named target feature'],
+  };
+
+  const res = checkItemAlreadySatisfiedOnBase(item, {
+    cwd: host.dir,
+    baseSha,
+  });
+
+  assert.equal(res.satisfied, false, 'skipped acceptance test must not mark item satisfied');
+  assert.equal(res.reason, 'VERIFICATION_EXPECT_MISSING');
+});
+
+test('TASK-AI-142 regression P1 (832): parsePassingTestNames ignores skipped, todo, failing, and diagnostic lines', () => {
+  const mockOutput = [
+    '✔ passing test 1 (1.2ms)',
+    '  ✔ nested passing test (0.5ms)',
+    '﹣ skipped test (0.1ms) # SKIP',
+    '✔ todo test (0.2ms) # TODO',
+    '✖ failed test (0.3ms)',
+    'diagnostic line containing passing test 1',
+    'ok 1 - tap passing test',
+    'ok 2 - tap skipped # SKIP',
+    'not ok 3 - tap failed',
+    'ℹ pass 3',
+    'ℹ fail 2',
+  ].join('\n');
+
+  const parsed = parsePassingTestNames(mockOutput);
+  assert.deepEqual(parsed, ['passing test 1', 'nested passing test', 'tap passing test']);
+});
+
+test('TASK-AI-142 regression P1 (760): baseSha equals HEAD verifies in isolated checkout, preventing uncommitted green from bypassing red base', () => {
+  const host = makeTempRepo();
+  const testRelPath = 'tools/ai-brain/test/unit-dirty-bypass.test.js';
+  const testCodeFailing = [
+    "'use strict';",
+    "const { test } = require('node:test');",
+    "const assert = require('node:assert/strict');",
+    "test('exact sha target feature', () => {",
+    '  assert.equal(1, 2);',
+    '});',
+  ].join('\n');
+  const baseSha = addCommit(host.dir, testRelPath, testCodeFailing, 'commit red base');
+
+  const headSha = spawnSync('git', ['rev-parse', 'HEAD'], {
+    cwd: host.dir,
+    encoding: 'utf8',
+  }).stdout.trim();
+  assert.equal(headSha, baseSha);
+
+  // Uncommitted change in host working tree making test pass
+  const testCodePassing = testCodeFailing.replace('assert.equal(1, 2)', 'assert.equal(1, 1)');
+  fs.writeFileSync(path.join(host.dir, testRelPath), testCodePassing, 'utf8');
+
+  const item = {
+    id: 'TASK-UNIT-DIRTY-BYPASS',
+    files: [testRelPath],
+    verification: {
+      command: `node --test ${testRelPath}`,
+      expect: 'exact sha target feature',
+    },
+    acceptanceCriteria: ['Test passes: exact sha target feature'],
+  };
+
+  const res = checkItemAlreadySatisfiedOnBase(item, {
+    cwd: host.dir,
+    baseSha,
+  });
+
+  assert.equal(
+    res.satisfied,
+    false,
+    'verification must run against committed exact baseSha in isolated worktree, ignoring uncommitted fix in host'
+  );
+  assert.equal(res.reason, 'VERIFICATION_EXIT');
+});
+
+test('TASK-AI-142 regression P1 (652): fileExistsOnBase fails closed on untracked file without working tree fallback', () => {
+  const host = makeTempRepo();
+  const untrackedRelPath = 'tools/ai-brain/test/untracked-acceptance.test.js';
+  const fullPath = path.join(host.dir, untrackedRelPath);
+  fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+  fs.writeFileSync(fullPath, 'module.exports = {};', 'utf8');
+
+  assert.ok(fs.existsSync(fullPath));
+
+  const baseSha = spawnSync('git', ['rev-parse', 'HEAD'], {
+    cwd: host.dir,
+    encoding: 'utf8',
+  }).stdout.trim();
+
+  // 1. Regular git check returns false for untracked file
+  assert.equal(fileExistsOnBase(host.dir, baseSha, untrackedRelPath), false);
+
+  // 2. Git check that throws must return false and NOT fall back to fs.existsSync
+  const throwingSpawn = () => {
+    throw new Error('git spawn crash');
+  };
+  assert.equal(fileExistsOnBase(host.dir, baseSha, untrackedRelPath, throwingSpawn), false);
+
+  // 3. Git check that returns no status / error must return false and NOT fall back to fs.existsSync
+  const noStatusSpawn = () => ({ status: null, error: new Error('killed') });
+  assert.equal(fileExistsOnBase(host.dir, baseSha, untrackedRelPath, noStatusSpawn), false);
+
+  // 4. End-to-end: checkItemAlreadySatisfiedOnBase fails closed on untracked acceptance file
+  const item = {
+    id: 'TASK-UNIT-UNTRACKED',
+    files: [untrackedRelPath],
+    verification: {
+      command: `node --test ${untrackedRelPath}`,
+      expect: 'something',
+    },
+    acceptanceCriteria: ['Test passes: something'],
+  };
+  const res = checkItemAlreadySatisfiedOnBase(item, {
+    cwd: host.dir,
+    baseSha,
+    spawnSync: throwingSpawn,
+  });
+  assert.equal(res.satisfied, false);
+  assert.equal(res.reason, 'ACCEPTANCE_FILE_MISSING_ON_BASE');
+  assert.equal(res.missingFile, untrackedRelPath);
 });
