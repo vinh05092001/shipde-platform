@@ -1734,6 +1734,14 @@ function buildDryRunLog(parts) {
   }
   const candidates = (parts.annotated || []).map((c) => {
     const key = parts.candidatesApi.candidateKey(c);
+    const isUnscored =
+      c.qualityLabel === 'QUALITY_UNKNOWN' ||
+      (c.scoreBreakdown &&
+        (c.scoreBreakdown.quality === null ||
+          c.scoreBreakdown.quality === 'QUALITY_UNKNOWN' ||
+          c.scoreBreakdown.qualityLabel === 'QUALITY_UNKNOWN')) ||
+      c.score === null ||
+      c.score === undefined;
     const scoreVal =
       (c.scoreBreakdown && c.scoreBreakdown.quality === null) ||
       c.score === null ||
@@ -1744,6 +1752,7 @@ function buildDryRunLog(parts) {
       offeringId: key,
       status: c.status === 'passed' ? 'PASS' : c.status || 'unknown',
       score: scoreVal,
+      qualityLabel: isUnscored ? 'QUALITY_UNKNOWN' : undefined,
     });
   });
   for (const c of candidates) {
@@ -1801,6 +1810,10 @@ function buildDryRunLog(parts) {
           c.score === undefined
             ? 'chưa rõ'
             : c.score,
+        qualityLabel:
+          c.qualityLabel ||
+          (c.scoreBreakdown && c.scoreBreakdown.qualityLabel) ||
+          (c.scoreBreakdown && c.scoreBreakdown.quality === null ? 'QUALITY_UNKNOWN' : undefined),
         headroom: c.headroom || 'unknown',
       })),
     },
@@ -2351,6 +2364,7 @@ function dispatchCommand(args, deps = {}) {
           ...candidate,
           offeringId: candidate.candidateKey,
           headroom: candidate.headroomStatus,
+          qualityLabel: candidate.qualityLabel,
         })),
         rejected: [
           ...result.rejected.map((candidate) => ({
@@ -2536,12 +2550,17 @@ function dispatchCommand(args, deps = {}) {
     log('Ranked candidates for ' + item.workItemId + ':');
     for (let i = 0; i < decision.candidates.length; i++) {
       const c = decision.candidates[i];
-      const displayScore =
-        (c.scoreBreakdown && c.scoreBreakdown.quality === null) ||
+      const isUnscored =
+        c.qualityLabel === 'QUALITY_UNKNOWN' ||
+        (c.scoreBreakdown &&
+          (c.scoreBreakdown.quality === null ||
+            c.scoreBreakdown.quality === 'QUALITY_UNKNOWN' ||
+            c.scoreBreakdown.qualityLabel === 'QUALITY_UNKNOWN')) ||
         c.score === null ||
-        c.score === undefined
-          ? 'chưa rõ'
-          : c.score;
+        c.score === undefined ||
+        c.score === 'chưa rõ' ||
+        c.score === 'QUALITY_UNKNOWN';
+      const displayScore = isUnscored ? 'QUALITY_UNKNOWN' : c.score;
       log('  ' + (i + 1) + '. ' + c.offeringId + ' (score: ' + displayScore + ')');
     }
     log('Chosen: ' + decision.chosen);

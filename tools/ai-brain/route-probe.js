@@ -144,6 +144,9 @@ function classifyProbeFailure(result) {
   }
   if (result && result.reasonCode) return result.reasonCode;
   if (/probe budget exhausted/i.test(body)) return 'PROBE_BUDGET_EXHAUSTED';
+  // One premium model locked behind a purchase says nothing about the account's
+  // other models; it must not be read as account-wide credit or entitlement loss.
+  if (/model_requires_purchase|is locked on your account/i.test(body)) return 'MODEL_LOCKED';
   if (/entitlement|not entitled|subscription required/i.test(body)) return 'ENTITLEMENT_REQUIRED';
   if (/missing provider credential|authentication required|invalid api.?key/i.test(body))
     return 'AUTH_NEEDED';

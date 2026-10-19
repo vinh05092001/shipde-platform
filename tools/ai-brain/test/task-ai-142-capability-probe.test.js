@@ -218,6 +218,7 @@ test('capability budget is shared across checks and does not cache unattempted r
   let calls = 0;
   await api.probeCapabilities([first, second], profile, {
     deadline,
+    maxConcurrentProbes: 1,
     probeCli: async () => {
       calls++;
       clock = deadline;
