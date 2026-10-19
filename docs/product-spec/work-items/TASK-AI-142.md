@@ -266,6 +266,10 @@ Repairs:
 3. Failed and host_gate_failed decision and checkpoint records capture individual failing check names and a concise summary bounded by `dispatch.maxHostGateSummaryChars`.
 4. A host-gate repair killed by REQUEST_TOO_LARGE remains retryable when alternative candidates exist.
 
+### H3 live: the host gate runs the brain suite on a clean checkout of HEAD (2026-10-19)
+
+Live FEAT-AUTH-05 run (19/10 14:17): 7 next-runner, route-health and account-registry tests failed in the host checkout (hermes-live), which holds live Controller state under tools/ai-brain/data, but passed on the base run's clean worktree, so they counted as new failures and blocked the writer. The gate now runs the suite on a detached clean worktree of HEAD (removed afterwards); if one cannot be created it runs in place as before.
+
 ### H3 live: host-gate base failures match by name without run duration (2026-10-19)
 
 Live trial 19 of goal G-F622511E (19/10): the writer and reviewer commits were clean, but node --test prints each failure as `✖ <name> (<duration>ms)`; the run and the base run of the same pre-existing failure differed only in duration, so all 7 base failures counted as new and the host gate failed. Failure names are now parsed once, with the duration suffix removed, for both the run and the base run; a genuinely new failure is still reported.
