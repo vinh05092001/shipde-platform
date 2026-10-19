@@ -248,6 +248,11 @@ Decision log entries link `goalId -> workItemId -> candidateKey -> session -> co
 - Part H2 Hermes session selection, custom config binding, and `shipde-controller` skill file are delivered in Part H2.
 - Live acceptance across chat and controller runs in Part H3 following merge of H1 and H2.
 
+### H3 live: items already satisfied on base skip writer and record ALREADY_SATISFIED_ON_BASE (2026-10-19)
+
+Live trial on 19/10 of goal G-F622511E (item GOAL-G-F622511E-1): the fix and acceptance test were already merged on main (#382). The controller launched writers that returned "No changes needed", then host gate failBefore ran the test on base where it exited 0, causing HOST_GATE_FAILED and recurring retry loops via ShipDe-Goal-Resume.
+The controller now verifies acceptance tests on base prior to writer selection. When the acceptance test already passes and all acceptance files are present on base, the writer launch is bypassed and the item completes as ALREADY_SATISFIED_ON_BASE with base SHA, command, exit code, and truncated output recorded in decisions and checkpoints. Goal resume recognizes ALREADY_SATISFIED_ON_BASE items as completed, skips them, and completes the goal or halts when no runnable items remain.
+
 ### H3 live: the writer route-probe window is not charged with capability proof time (2026-10-18)
 
 Live trial 15 of goal G-F622511E (18/10 15:59Z) ended PROBE_BUDGET_EXHAUSTED without probing a single route: #388 started the writer route-probe window at `now - capabilityProbeDurationMs`, so slow CLI capability proofs spent it first. Capability proofs keep their own `schemaProbeBudgetMs`; the route window now starts when route probing starts and its length is `probeBudgetMs` from the dispatch configuration instead of a module constant.

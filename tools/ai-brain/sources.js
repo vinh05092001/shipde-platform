@@ -399,6 +399,19 @@ function getDispatchConfig(registry, options = {}) {
     }
     return value;
   };
+  const alreadySatisfiedStatus = String(
+    options.alreadySatisfiedStatus ??
+      dispatch.alreadySatisfiedStatus ??
+      defaults.alreadySatisfiedStatus ??
+      'ALREADY_SATISFIED_ON_BASE'
+  );
+  const alreadySatisfiedMaxOutputChars =
+    Number(
+      options.alreadySatisfiedMaxOutputChars ??
+        dispatch.alreadySatisfiedMaxOutputChars ??
+        defaults.alreadySatisfiedMaxOutputChars ??
+        2000
+    ) || 2000;
   return {
     routeEvidenceMaxAgeMs,
     maxWriterSelectionRounds: configuredLimit('maxWriterSelectionRounds'),
@@ -409,6 +422,8 @@ function getDispatchConfig(registry, options = {}) {
     probeTimeoutMs,
     safetyMarginMs,
     schemaProbeBudgetMs,
+    alreadySatisfiedStatus,
+    alreadySatisfiedMaxOutputChars,
   };
 }
 

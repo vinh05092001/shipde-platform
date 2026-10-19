@@ -1028,7 +1028,11 @@ function inspectItemStatus(itemId, goalId, rootDir, goalsDir, d, options) {
       const goalRows = readRegisterCsvRows(goalRegPath);
       const grow = goalRows.find((r) => r[3] === itemId);
       if (grow) {
-        const isDone = (s) => s === 'MERGED' || s === 'PASSED' || s === 'COMPLETED';
+        const isDone = (s) =>
+          s === 'MERGED' ||
+          s === 'PASSED' ||
+          s === 'COMPLETED' ||
+          s === 'ALREADY_SATISFIED_ON_BASE';
         if (isDone(grow[7]) || !isDone(state)) {
           state = grow[7] || state;
         }
@@ -1067,6 +1071,14 @@ function inspectItemStatus(itemId, goalId, rootDir, goalsDir, d, options) {
       if (last.stage === decisions.Stage.COMPLETED) {
         state = 'COMPLETED';
       }
+      if (
+        last.stage === decisions.Stage.ALREADY_SATISFIED_ON_BASE ||
+        last.stage === 'already_satisfied_on_base' ||
+        last.status === 'ALREADY_SATISFIED_ON_BASE' ||
+        last.detail?.startsWith('ALREADY_SATISFIED_ON_BASE')
+      ) {
+        state = 'ALREADY_SATISFIED_ON_BASE';
+      }
       if (last.status === 'merged' || last.detail === 'GOVERNED_MERGE_SUCCESS') {
         state = 'MERGED';
       }
@@ -1097,12 +1109,25 @@ function inspectItemStatus(itemId, goalId, rootDir, goalsDir, d, options) {
     const goalDir = resolveGoalDir(goalsDir, goalId);
     const ckptPath = path.join(goalDir, 'checkpoint.json');
     const ckpt = readJsonSafe(ckptPath);
-    if (ckpt && ckpt.items && ckpt.items[itemId]) {
-      const it = ckpt.items[itemId];
-      testResult = it.testResult || testResult;
-      reviewVerdict = it.reviewVerdict || reviewVerdict;
-      commitSha = it.commitSha || commitSha;
-      if (it.state) state = it.state;
+    if (ckpt) {
+      if (ckpt.items && ckpt.items[itemId]) {
+        const it = ckpt.items[itemId];
+        testResult = it.testResult || testResult;
+        reviewVerdict = it.reviewVerdict || reviewVerdict;
+        commitSha = it.commitSha || commitSha;
+        if (it.state) state = it.state;
+      }
+      if (Array.isArray(ckpt.alreadySatisfied) && ckpt.alreadySatisfied.includes(itemId)) {
+        state = 'ALREADY_SATISFIED_ON_BASE';
+      }
+      if (
+        ckpt.liveSteps &&
+        ckpt.liveSteps[itemId] &&
+        (ckpt.liveSteps[itemId].stage === 'already_satisfied_on_base' ||
+          ckpt.liveSteps[itemId].status === 'ALREADY_SATISFIED_ON_BASE')
+      ) {
+        state = 'ALREADY_SATISFIED_ON_BASE';
+      }
     }
   } catch {}
 
@@ -1286,9 +1311,12 @@ function stopGoal(goalId, options, deps) {
 
 function isItemDone(info) {
   if (!info) return false;
-  // A review verdict is evidence, not a lifecycle transition. It may belong
-  // to an earlier attempt whose item is now blocked or awaiting another gate.
-  return info.state === 'PASSED' || info.state === 'MERGED' || info.state === 'COMPLETED';
+  return (
+    info.state === 'PASSED' ||
+    info.state === 'MERGED' ||
+    info.state === 'COMPLETED' ||
+    info.state === 'ALREADY_SATISFIED_ON_BASE'
+  );
 }
 
 /**
@@ -1296,7 +1324,9 @@ function isItemDone(info) {
  * Uses existing checkpoints; resume skips items already PASSED/MERGED.
  */
 function promoteReadyGoalRows(rows, rootDir) {
-  const merged = new Set(rows.filter((r) => r[7] === 'MERGED').map((r) => r[3]));
+  const merged = new Set(
+    rows.filter((r) => r[7] === 'MERGED' || r[7] === 'ALREADY_SATISFIED_ON_BASE').map((r) => r[3])
+  );
   let promoted = 0;
   for (const row of rows) {
     if (row[7] !== 'BACKLOG') continue;
@@ -1425,9 +1455,9 @@ function resumeGoal(goalId, options, deps) {
       const itemId = row[3];
       if (skipped.includes(itemId)) {
         const info = itemStatusMap.get(itemId) || {};
-        if (info.state === 'MERGED') {
-          if (row[7] !== 'MERGED') {
-            row[7] = 'MERGED';
+        if (info.state === 'MERGED' || info.state === 'ALREADY_SATISFIED_ON_BASE') {
+          if (row[7] !== info.state) {
+            row[7] = info.state;
             mainModified = true;
           }
           if (info.commitSha && row[13] !== info.commitSha) {
@@ -1460,11 +1490,12 @@ function resumeGoal(goalId, options, deps) {
   if (remaining.length === 0) {
     goal.status = 'COMPLETED';
     goal.updatedAt = (d.now ? new Date(d.now()) : new Date()).toISOString();
+    goal.reason = 'All items are already PASSED/MERGED/ALREADY_SATISFIED_ON_BASE';
     writeJsonAtomic(goalFile, goal);
     return {
       status: 'COMPLETED',
       goalId,
-      message: 'All items are already PASSED/MERGED',
+      message: 'All items are already PASSED/MERGED/ALREADY_SATISFIED_ON_BASE',
       skipped,
       remaining: [],
     };

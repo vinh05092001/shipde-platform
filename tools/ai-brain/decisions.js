@@ -55,6 +55,7 @@ const Stage = Object.freeze({
   // raw tool output never lands here.
   PROMPT_TOOLS: 'prompt_tools',
   TOOL_GATE: 'tool_gate',
+  ALREADY_SATISFIED_ON_BASE: 'already_satisfied_on_base',
 });
 
 const SECRET_KEYS = /^(key|apiKey|api_key|token|secret|password|authorization|credential)$/i;
@@ -435,7 +436,13 @@ function openWritersDetailed(options) {
         since: r.at,
         area: r.area || null,
       });
-    } else if (r.stage === Stage.COMPLETED || r.stage === Stage.FAILED) {
+    } else if (
+      r.stage === Stage.COMPLETED ||
+      r.stage === Stage.FAILED ||
+      r.stage === Stage.ALREADY_SATISFIED_ON_BASE ||
+      r.stage === 'already_satisfied_on_base' ||
+      r.status === 'ALREADY_SATISFIED_ON_BASE'
+    ) {
       state.delete(r.workItemId);
     }
   }
@@ -562,7 +569,13 @@ function openReviewersDetailed(options) {
           lastActivity: new Date(r.at).getTime(),
         });
       }
-    } else if (r.stage === Stage.COMPLETED || r.stage === Stage.FAILED) {
+    } else if (
+      r.stage === Stage.COMPLETED ||
+      r.stage === Stage.FAILED ||
+      r.stage === Stage.ALREADY_SATISFIED_ON_BASE ||
+      r.stage === 'already_satisfied_on_base' ||
+      r.status === 'ALREADY_SATISFIED_ON_BASE'
+    ) {
       for (const [key, rev] of state.entries()) {
         if (rev.workItemId === r.workItemId) {
           state.delete(key);

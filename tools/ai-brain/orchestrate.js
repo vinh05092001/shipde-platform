@@ -91,6 +91,7 @@ const ItemStatus = Object.freeze({
   // completed nor an infrastructure block — the work exists, it is unformatted,
   // and it is never reviewed or published until a repair round formats it.
   REFUSED: 'refused',
+  ALREADY_SATISFIED_ON_BASE: 'ALREADY_SATISFIED_ON_BASE',
 });
 
 const RunStatus = Object.freeze({
@@ -578,6 +579,175 @@ function runVerificationCommand(item, options) {
     exitCode: res ? res.status : null,
     detail: output.slice(-2000),
   };
+}
+
+function resolveAcceptanceFiles(item) {
+  const files = new Set();
+  const v = item && item.verification;
+  if (v) {
+    if (Array.isArray(v.files)) {
+      for (const f of v.files) if (typeof f === 'string' && f.trim()) files.add(f.trim());
+    } else if (typeof v.file === 'string' && v.file.trim()) {
+      files.add(v.file.trim());
+    }
+    if (typeof v.command === 'string') {
+      const tokens = v.command.split(/\s+/);
+      for (const token of tokens) {
+        const clean = token.replace(/^['"]|['"]$/g, '');
+        if (isTestFilePath(clean)) {
+          files.add(clean);
+        }
+      }
+    }
+  }
+  const itemFiles = item && (item.files || item.allowedPaths);
+  if (Array.isArray(itemFiles)) {
+    for (const f of itemFiles) {
+      if (typeof f === 'string' && isTestFilePath(f.trim())) {
+        files.add(f.trim());
+      }
+    }
+  }
+  return Array.from(files);
+}
+
+function fileExistsOnBase(baseCwd, baseSha, relPath, spawnFn) {
+  if (!baseCwd || !relPath) return false;
+  const run = spawnFn || spawnSync;
+  const cleanRel = relPath.replace(/\\/g, '/');
+  if (baseSha) {
+    try {
+      const res = run(
+        'git',
+        ['-c', 'safe.directory=*', 'cat-file', '-e', `${baseSha}:${cleanRel}`],
+        {
+          cwd: baseCwd,
+          encoding: 'utf8',
+          windowsHide: true,
+        }
+      );
+      if (res && res.status === 0) return true;
+      if (res && res.status !== 0) return false;
+    } catch {}
+  }
+  return fs.existsSync(path.resolve(baseCwd, relPath));
+}
+
+function checkItemAlreadySatisfiedOnBase(item, options = {}) {
+  const verification = item && item.verification;
+  const command = verification && verification.command;
+  if (!command || typeof command !== 'string' || !command.trim()) {
+    return { satisfied: false, reason: 'VERIFICATION_COMMAND_MISSING' };
+  }
+
+  const acceptanceFiles = resolveAcceptanceFiles(item);
+  if (acceptanceFiles.length === 0) {
+    return { satisfied: false, reason: 'NO_ACCEPTANCE_FILES' };
+  }
+
+  const baseCwd = options.cwd || options.hostCwd || options.workerRoot || process.cwd();
+  const spawnFn = options.spawnSync || spawnSync;
+  const baseSha = options.baseSha ? String(options.baseSha).trim() : null;
+
+  for (const relFile of acceptanceFiles) {
+    if (!fileExistsOnBase(baseCwd, baseSha, relFile, spawnFn)) {
+      return {
+        satisfied: false,
+        reason: 'ACCEPTANCE_FILE_MISSING_ON_BASE',
+        missingFile: relFile,
+      };
+    }
+  }
+
+  let runCwd = baseCwd;
+  let tempWorktree = null;
+  let tempDir = null;
+  let worktreeAdded = false;
+
+  const currentHead = headShaOf(baseCwd, { spawnSync: spawnFn });
+  const needsDetachedWorktree =
+    Boolean(baseSha) && Boolean(currentHead) && currentHead.toLowerCase() !== baseSha.toLowerCase();
+
+  try {
+    if (needsDetachedWorktree) {
+      tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-base-wt-'));
+      tempWorktree = path.join(tempDir, 'wt');
+      const addRes = spawnFn(
+        'git',
+        ['-c', 'safe.directory=*', 'worktree', 'add', '--detach', tempWorktree, baseSha],
+        { cwd: baseCwd, encoding: 'utf8', windowsHide: true }
+      );
+      if (addRes && addRes.status === 0) {
+        worktreeAdded = true;
+        runCwd = tempWorktree;
+      }
+    }
+
+    const childEnv = Object.assign({}, process.env, options.env || {});
+    delete childEnv.NODE_TEST_CONTEXT;
+    delete childEnv.NODE_TEST_WORKER_ID;
+    if (worktreeAdded) {
+      childEnv.NODE_PATH = [
+        path.join(runCwd, 'node_modules'),
+        path.join(baseCwd, 'node_modules'),
+        process.env.NODE_PATH,
+      ]
+        .filter(Boolean)
+        .join(path.delimiter);
+    }
+
+    const res = spawnFn(command, {
+      cwd: runCwd,
+      env: childEnv,
+      encoding: 'utf8',
+      shell: true,
+      windowsHide: true,
+      timeout: options.timeoutMs || 60000,
+      maxBuffer: 16 * 1024 * 1024,
+    });
+
+    const exitCode = res ? (res.status !== null && res.status !== undefined ? res.status : -1) : -1;
+    const stdout = String((res && res.stdout) || '');
+    const stderr = String((res && res.stderr) || '');
+    const output = stdout + (stderr ? (stdout ? '\n' : '') + stderr : '');
+    const expect = verification.expect || null;
+    const expectOk = expect ? output.includes(expect) : true;
+
+    if (exitCode === 0 && expectOk) {
+      return {
+        satisfied: true,
+        baseSha: baseSha || currentHead || null,
+        command,
+        exitCode,
+        output,
+        acceptanceFiles,
+      };
+    }
+
+    return {
+      satisfied: false,
+      reason: exitCode !== 0 ? 'VERIFICATION_EXIT' : 'VERIFICATION_EXPECT_MISSING',
+      baseSha: baseSha || currentHead || null,
+      command,
+      exitCode,
+      output,
+    };
+  } finally {
+    if (worktreeAdded && tempWorktree) {
+      try {
+        spawnFn('git', ['-c', 'safe.directory=*', 'worktree', 'remove', '--force', tempWorktree], {
+          cwd: baseCwd,
+          encoding: 'utf8',
+          windowsHide: true,
+        });
+      } catch {}
+    }
+    if (tempDir) {
+      try {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      } catch {}
+    }
+  }
 }
 
 /**
@@ -3920,6 +4090,11 @@ async function runOrchestration(goal, opts) {
   const completedBefore = new Set(
     checkpointOnDisk && Array.isArray(checkpointOnDisk.completed) ? checkpointOnDisk.completed : []
   );
+  const alreadySatisfiedBefore = new Set(
+    checkpointOnDisk && Array.isArray(checkpointOnDisk.alreadySatisfied)
+      ? checkpointOnDisk.alreadySatisfied
+      : []
+  );
   const publishedBefore = new Set(
     Object.entries(liveSteps)
       .filter(
@@ -4092,10 +4267,39 @@ async function runOrchestration(goal, opts) {
   for (const item of orderDependenciesFirst(log.plan.workItems)) {
     const itemStartedAt = Date.now();
     o.itemDeadline = itemStartedAt + itemDispatchConfig.maxItemDurationMs;
+    const savedStep = (liveSteps && liveSteps[item.id]) || null;
     if (log.plan.errors.length > 0) {
       // AI-64-R01: nothing is deferred silently; the errors travel in the run's
       // own outcome record and every item is reported as deferred.
       outcome(item, ItemStatus.DEFERRED, log.plan.errors.join('; '));
+      continue;
+    }
+    const isAlreadySatisfiedBefore =
+      alreadySatisfiedBefore.has(item.id) ||
+      Boolean(
+        savedStep &&
+        (savedStep.stage === 'already_satisfied_on_base' ||
+          savedStep.status === itemDispatchConfig.alreadySatisfiedStatus ||
+          savedStep.stage === itemDispatchConfig.alreadySatisfiedStatus)
+      );
+    if (isAlreadySatisfiedBefore) {
+      outcome(
+        item,
+        itemDispatchConfig.alreadySatisfiedStatus,
+        itemDispatchConfig.alreadySatisfiedStatus,
+        {
+          baseSha: (savedStep && savedStep.baseSha) || null,
+          command: (savedStep && savedStep.command) || null,
+          exitCode: (savedStep && savedStep.exitCode) ?? 0,
+          output: (savedStep && savedStep.output) || '',
+          evidence: (savedStep && savedStep.evidence) || undefined,
+        }
+      );
+      log.resumed = {
+        stage: 'resumed',
+        workItemId: item.id,
+        from: (savedStep && savedStep.stage) || 'already_satisfied_on_base',
+      };
       continue;
     }
     if (completedBefore.has(item.id) || publishedBefore.has(item.id)) {
@@ -4105,7 +4309,6 @@ async function runOrchestration(goal, opts) {
         workItemId: item.id,
         from: checkpointOnDisk.step || 'completed',
       };
-      const savedStep = liveSteps[item.id];
       const rec = extractCheckpointReview(checkpointOnDisk, item.id);
       const checkpointReviewError = validateCheckpointReceipt(rec, item, o);
       const anchoredEvidence =
@@ -4174,7 +4377,6 @@ async function runOrchestration(goal, opts) {
       log.review = log.reviews[log.reviews.length - 1] || reviewEntry;
       continue;
     }
-    const savedStep = liveSteps[item.id] || null;
     if (savedStep && savedStep.review && savedStep.review.status === ReviewStatus.COMPLETED) {
       const reviewEntry = savedStep.review.entry;
       if (reviewEntry) {
@@ -4347,6 +4549,26 @@ async function runOrchestration(goal, opts) {
         depPassSha = liveSteps[depId].review.entry.sha;
       }
       if (!depPassSha) {
+        const depOutcome = log.outcomes.find(
+          (out) =>
+            out.workItemId === depId &&
+            (out.status === itemDispatchConfig.alreadySatisfiedStatus ||
+              out.status === ItemStatus.ALREADY_SATISFIED_ON_BASE)
+        );
+        if (
+          depOutcome ||
+          (liveSteps[depId] &&
+            (liveSteps[depId].stage === 'already_satisfied_on_base' ||
+              liveSteps[depId].status === itemDispatchConfig.alreadySatisfiedStatus))
+        ) {
+          depPassSha =
+            (depOutcome && depOutcome.baseSha) ||
+            (liveSteps[depId] && liveSteps[depId].baseSha) ||
+            o.baseSha ||
+            null;
+        }
+      }
+      if (!depPassSha) {
         const reason =
           'DEPENDENCY_NOT_PASSED: ' +
           item.id +
@@ -4397,6 +4619,73 @@ async function runOrchestration(goal, opts) {
         continue;
       }
       dependencyBase = { baseSha: depPassSha, baseFrom: depId };
+    }
+
+    const baseSatisfaction = checkItemAlreadySatisfiedOnBase(item, {
+      workerRoot: o.workerRoot,
+      cwd: o.cwd,
+      hostCwd,
+      baseSha: dependencyBase ? dependencyBase.baseSha : o.baseSha,
+      spawnSync: o.spawnSync || spawnSync,
+      env: o.env,
+      timeoutMs: o.verificationTimeoutMs || o.timeoutMs,
+    });
+
+    if (baseSatisfaction && baseSatisfaction.satisfied) {
+      const alreadySatisfiedStatus =
+        itemDispatchConfig.alreadySatisfiedStatus || 'ALREADY_SATISFIED_ON_BASE';
+      const maxOutputChars = itemDispatchConfig.alreadySatisfiedMaxOutputChars || 2000;
+      const truncatedOutput = String(baseSatisfaction.output || '').slice(-maxOutputChars);
+
+      outcome(item, alreadySatisfiedStatus, alreadySatisfiedStatus, {
+        baseSha: baseSatisfaction.baseSha || null,
+        command: baseSatisfaction.command,
+        exitCode: baseSatisfaction.exitCode,
+        output: truncatedOutput,
+        evidence: {
+          baseSha: baseSatisfaction.baseSha || null,
+          command: baseSatisfaction.command,
+          exitCode: baseSatisfaction.exitCode,
+          output: truncatedOutput,
+        },
+      });
+
+      decisions.recordDecision(
+        {
+          stage: decisions.Stage.ALREADY_SATISFIED_ON_BASE || alreadySatisfiedStatus,
+          workItemId: item.id,
+          role: roleOf(item),
+          status: alreadySatisfiedStatus,
+          baseSha: baseSatisfaction.baseSha || null,
+          command: baseSatisfaction.command,
+          exitCode: baseSatisfaction.exitCode,
+          output: truncatedOutput,
+          detail: `${alreadySatisfiedStatus}: verification passed at base SHA`,
+          evidence: {
+            baseSha: baseSatisfaction.baseSha || null,
+            command: baseSatisfaction.command,
+            exitCode: baseSatisfaction.exitCode,
+            output: truncatedOutput,
+          },
+        },
+        logOpts
+      );
+
+      persistStep(item.id, 'already_satisfied_on_base', {
+        status: alreadySatisfiedStatus,
+        baseSha: baseSatisfaction.baseSha || null,
+        command: baseSatisfaction.command,
+        exitCode: baseSatisfaction.exitCode,
+        output: truncatedOutput,
+        evidence: {
+          baseSha: baseSatisfaction.baseSha || null,
+          command: baseSatisfaction.command,
+          exitCode: baseSatisfaction.exitCode,
+          output: truncatedOutput,
+        },
+      });
+
+      continue;
     }
 
     const launch = {
@@ -6578,7 +6867,15 @@ async function runOrchestration(goal, opts) {
   };
   log.evidenceData = evidenceData;
 
-  return finish(log, statusOf, { now, cli, checkpointFile, checkpointOnDisk, out: o.out, logOpts });
+  return finish(log, statusOf, {
+    now,
+    cli,
+    checkpointFile,
+    checkpointOnDisk,
+    out: o.out,
+    logOpts,
+    alreadySatisfiedStatus: itemDispatchConfig.alreadySatisfiedStatus,
+  });
 }
 /**
  * L-R02 (TASK-AI-83): After each review round the loop writes the human markdown
@@ -9092,9 +9389,18 @@ function finish(log, statusOf, ctx) {
   const completed = [];
   const blocked = [];
   const deferred = [];
+  const alreadySatisfied = [];
+  const alreadySatisfiedStatus =
+    (ctx && ctx.alreadySatisfiedStatus) ||
+    require('./sources.json').dispatch.alreadySatisfiedStatus ||
+    'ALREADY_SATISFIED_ON_BASE';
   for (const item of log.plan.workItems) {
     const status = statusOf.get(item.id) || ItemStatus.DEFERRED;
     if (status === ItemStatus.COMPLETED) completed.push(item.id);
+    else if (status === alreadySatisfiedStatus || status === ItemStatus.ALREADY_SATISFIED_ON_BASE) {
+      completed.push(item.id);
+      alreadySatisfied.push(item.id);
+    }
     // A format-gate refusal is a stop the next run re-attempts after the files
     // are formatted, so it is reported beside the blocks and never as deferred.
     else if (status === ItemStatus.BLOCKED || status === ItemStatus.REFUSED) blocked.push(item.id);
@@ -9103,6 +9409,7 @@ function finish(log, statusOf, ctx) {
   log.reconciliation = {
     total: log.plan.workItems.length,
     completed,
+    alreadySatisfied,
     blocked,
     deferred,
   };
@@ -9135,6 +9442,7 @@ function finish(log, statusOf, ctx) {
 
   const prior = ctx.checkpointOnDisk || {};
   const allCompleted = unique((prior.completed || []).concat(completed));
+  const allAlreadySatisfied = unique((prior.alreadySatisfied || []).concat(alreadySatisfied));
   const checkpointReviews = buildCheckpointReviews(log, prior, allCompleted, ctx.logOpts || {});
   const next = Object.assign({}, prior, {
     schemaVersion: 1,
@@ -9142,6 +9450,7 @@ function finish(log, statusOf, ctx) {
     updatedAt: new Date(ctx.now).toISOString(),
     workItemIds: log.plan.workItems.map((i) => i.id),
     completed: allCompleted,
+    alreadySatisfied: allAlreadySatisfied,
     blocked,
     deferred,
     outcomes: log.outcomes.map((entry) => ({
