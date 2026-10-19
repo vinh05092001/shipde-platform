@@ -1862,6 +1862,18 @@ function resolveSuiteFiles(rootDir, suite) {
     });
 }
 
+// node --test appends the run duration to each failure line ("✖ name (12.3ms)"); the same
+// failure on the base run differs only in that suffix, so it is not part of the name.
+function parseFailedTestNames(output) {
+  return [
+    ...new Set(
+      [...String(output || '').matchAll(/(?:not ok \d+ - |✖ )([^\r\n]+)/g)].map((match) =>
+        match[1].replace(/\s*\(\d+(?:\.\d+)?m?s\)\s*$/, '').trim()
+      )
+    ),
+  ];
+}
+
 function runHostBrainGate(job, options = {}) {
   const requestedRoot = options.hostCwd || options.cwd || process.cwd();
   const root =
@@ -1897,9 +1909,7 @@ function runHostBrainGate(job, options = {}) {
     }),
   });
   const output = String(result.stdout || '') + '\n' + String(result.stderr || '');
-  const failed = [...output.matchAll(/(?:not ok \d+ - |✖ )([^\r\n]+)/g)].map((match) =>
-    match[1].trim()
-  );
+  const failed = parseFailedTestNames(output);
   const summary = output.split(/\r?\n/).filter((line) => /^ℹ (?:pass|fail)\b|^✖ /.test(line));
   const pass = result.status === 0 && failed.length === 0;
   if (pass) {
@@ -2023,9 +2033,7 @@ function runHostBrainGate(job, options = {}) {
         if (baseResult && typeof baseResult.status === 'number' && !baseResult.error) {
           const baseOutput =
             String(baseResult.stdout || '') + '\n' + String(baseResult.stderr || '');
-          const parsedFailures = [...baseOutput.matchAll(/(?:not ok \d+ - |✖ )([^\r\n]+)/g)].map(
-            (match) => match[1].trim()
-          );
+          const parsedFailures = parseFailedTestNames(baseOutput);
 
           if (baseResult.status === 0 || parsedFailures.length > 0) {
             baseFailed = parsedFailures;
