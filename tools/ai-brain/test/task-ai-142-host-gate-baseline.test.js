@@ -147,7 +147,7 @@ test('TASK-AI-142: (d) base result is cached per base SHA for the session', () =
       if (args && args[0] === 'rev-parse') return { status: 0, stdout: baseSha + '\n', stderr: '' };
       return { status: 0, stdout: '', stderr: '' };
     }
-    const isBase = opts && opts.cwd && String(opts.cwd).includes('wt');
+    const isBase = opts && opts.cwd && String(opts.cwd).includes('host-gate-base-');
     if (isBase) {
       baseRunCalls++;
       return baseOutput;
@@ -195,7 +195,8 @@ test('TASK-AI-142: (e) worker suite non-zero exit with zero parsed names -> bloc
   assert.deepEqual(result.failures, ['UNPARSED_FAILURE']);
   assert.deepEqual(result.hostGateFailures.newFailures, ['UNPARSED_FAILURE']);
   assert.deepEqual(result.hostGateFailures.baselineFailures, []);
-  assert.equal(spawnCalls.length, 1);
+  // Only the suite itself runs (the clean HEAD checkout is git, not a suite run).
+  assert.equal(spawnCalls.filter((c) => c.cmd !== 'git').length, 1);
   assert.equal(customCache.has(baseSha), false);
 });
 
@@ -347,8 +348,11 @@ test('TASK-AI-142: baseline runs at the merge-base of HEAD and the ref, not the 
       if (args[0] === 'rev-parse') return { status: 0, stdout: shaB + '\n', stderr: '' };
       if (args[0] === 'merge-base') return { status: 0, stdout: shaA + '\n', stderr: '' };
       if (args[0] === 'worktree' && args[1] === 'add') {
-        baselineDir = args[args.length - 2];
-        addedAt.push(args[args.length - 1]);
+        // The suite also runs on a clean checkout of HEAD; only the baseline matters here.
+        if (args[args.length - 1] !== 'HEAD') {
+          baselineDir = args[args.length - 2];
+          addedAt.push(args[args.length - 1]);
+        }
       }
       return { status: 0, stdout: '', stderr: '' };
     }
