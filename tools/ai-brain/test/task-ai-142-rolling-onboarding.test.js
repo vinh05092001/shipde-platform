@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const defaultDispatch = require('../sources.json').dispatch;
 
 const {
   detectNewSources,
@@ -204,11 +205,7 @@ describe('TASK-AI-142 T8: rolling source onboarding', () => {
           credential: { env: 'AUTO_SOURCE_KEY' },
         },
       ],
-      dispatch: {
-        decisionSampleCap: 2,
-        decisionRetentionDays: 7,
-        quotaScanIntervalMin: 60,
-      },
+      dispatch: { ...defaultDispatch, providers: {} },
     };
 
     const fakeFetch = async (url, opts) => ({
@@ -222,20 +219,29 @@ describe('TASK-AI-142 T8: rolling source onboarding', () => {
 
     // Run dry-run dispatch. The source is new, so it triggers auto-onboarding during the run
     const res = await dispatchCommand(
-      { 'dry-run': true, task: 'TASK-ONBOARD-TEST' },
+      { 'dry-run': true, item: 'TASK-ONBOARD-TEST' },
       {
         registry,
         env,
         fetch: fakeFetch,
         evidenceDir,
         quotaStateFile: quotaFile,
+        routeHealth: { version: 1, paths: {}, events: [] },
+        routeHealthFile: path.join(dir, 'route-health.json'),
+        discoveryCatalogue: { candidates: [] },
+        accounts: [],
+        assessment: {},
+        priors: [],
+        home: path.join(dir, 'home'),
+        storePath: path.join(dir, 'quota-store.json'),
         now: 1700000000000,
+        exit: () => {},
       }
     );
 
     assert.ok(res, 'dispatchCommand must return a result');
     // The newly onboarded model should appear in ranking or candidates
-    const allCandidates = (res.candidates || []).concat(res.ranking || []);
+    const allCandidates = (res.decision?.candidates || []).concat(res.decision?.ranking || []);
     const found = allCandidates.some(
       (c) =>
         c.source === 'new-auto-source' ||
@@ -255,7 +261,6 @@ describe('TASK-AI-142 T8: rolling source onboarding', () => {
     fs.mkdirSync(home, { recursive: true });
 
     const { dispatchCommand } = require('../cli');
-    const defaultDispatch = require('../sources.json').dispatch;
     const registry = {
       sources: [
         {
@@ -316,5 +321,37 @@ describe('TASK-AI-142 T8: rolling source onboarding', () => {
     assert.equal(fetchCalls, 1);
     assert.equal(launchCalls, 1);
     assert.equal(result.exitCode, 0);
+  });
+  test('router scope discovery invents no scopes when no live or catalogued model exists', async () => {
+    const { discover9RouterScopes } = require('../quota-scan');
+    const targets = await discover9RouterScopes(
+      { id: 'router-fixture', endpoint: 'https://router.invalid/v1' },
+      { env: {}, fetch: async () => ({ ok: false, status: 503, text: async () => '' }) }
+    );
+    assert.deepEqual(targets, []);
+  });
+
+  test('router scope discovery groups live model ids by their own upstream prefix', async () => {
+    const { discover9RouterScopes } = require('../quota-scan');
+    const targets = await discover9RouterScopes(
+      { id: 'router-fixture', endpoint: 'https://router.invalid/v1' },
+      {
+        env: {},
+        fetch: async () => ({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: [{ id: 'router-fixture/up1/model-a' }, { id: 'up2/model-b' }, { id: 'bare' }],
+          }),
+        }),
+      }
+    );
+    assert.deepEqual(
+      targets.map((t) => [t.scope, t.model]),
+      [
+        ['up1', 'up1/model-a'],
+        ['up2', 'up2/model-b'],
+      ]
+    );
   });
 });

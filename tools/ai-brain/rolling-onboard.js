@@ -15,6 +15,56 @@ const path = require('path');
 const evidenceApi = require('./evidence');
 const routeHealthApi = require('./route-health');
 const candidatesApi = require('./candidates');
+const sourcesApi = require('./sources');
+
+function sourceHasPassingEvidence(combinations, sourceId) {
+  return combinations.some((combination) => {
+    if (
+      !combination ||
+      combination.legacy ||
+      combination.verified === false ||
+      ![combination.source, combination.sourceId, combination.gateway].includes(sourceId)
+    ) {
+      return false;
+    }
+
+    const items = Array.isArray(combination.evidence) ? combination.evidence : [];
+    return items.at(-1)?.status === evidenceApi.Status.PASSED;
+  });
+}
+
+function validateCompletion(bodyText) {
+  let body;
+  try {
+    body = JSON.parse(bodyText);
+  } catch {
+    return { ok: false, reason: 'COMPLETION_UNREADABLE' };
+  }
+
+  if (
+    !body ||
+    typeof body !== 'object' ||
+    body.error ||
+    body.ok === false ||
+    ['error', 'failed'].includes(String(body.status || '').toLowerCase())
+  ) {
+    return { ok: false, reason: 'APPLICATION_ERROR' };
+  }
+
+  const choice = Array.isArray(body.choices) ? body.choices[0] : null;
+  const message = choice && choice.message;
+  const content = message && message.content;
+  const hasText =
+    (typeof content === 'string' && content.trim().length > 0) ||
+    (Array.isArray(content) &&
+      content.some((part) => part && typeof part.text === 'string' && part.text.trim().length > 0));
+  const hasToolCall = Array.isArray(message?.tool_calls) && message.tool_calls.length > 0;
+  if (!choice || !message || message.refusal || (!hasText && !hasToolCall)) {
+    return { ok: false, reason: 'COMPLETION_UNUSABLE' };
+  }
+
+  return { ok: true };
+}
 
 function detectNewSources(registry, evidenceData, env) {
   const sources = (registry && registry.sources) || [];
@@ -30,11 +80,10 @@ function detectNewSources(registry, evidenceData, env) {
       continue; // Key not in env, cannot onboard
     }
 
-    // Check whether source already has evidence in evidenceData.combinations
+    // A failed latest observation is not onboarding proof. It must remain
+    // retryable, including after the operator replaces its credential.
     const combinations = evidenceData?.combinations || [];
-    const hasEvidence = combinations.some(
-      (c) => c.source === src.id || c.sourceId === src.id || c.gateway === src.id
-    );
+    const hasEvidence = sourceHasPassingEvidence(combinations, src.id);
 
     if (!hasEvidence) {
       newSources.push(src);
@@ -51,14 +100,22 @@ async function onboardSourceRolling(src, options = {}) {
   const evidenceDir = options.evidenceDir || path.join(__dirname, 'data', 'evidence');
   const evidenceData = options.evidenceData || evidenceApi.loadEvidence(evidenceDir);
   evidenceData.combinations = evidenceData.combinations || [];
+  const registry = options.registry || sourcesApi.loadSources();
+  const dispatchConfig = sourcesApi.getDispatchConfig(registry, {
+    ...options,
+    probeTimeoutMs: options.timeoutMs ?? options.probeTimeoutMs,
+  });
 
   const apiKeyEnv = src.credential?.env;
   const apiKey = (apiKeyEnv && env[apiKeyEnv]) || '';
 
   const repModel =
-    (Array.isArray(src.models) && src.models[0]) ||
-    src.verify?.model ||
-    `${src.id}/default`;
+    (Array.isArray(src.models) && src.models.find((model) => typeof model === 'string' && model)) ||
+    src.verify?.model;
+
+  if (!repModel) {
+    return { ok: false, sourceId: src.id, model: null, status: 0, reason: 'MODEL_UNCONFIGURED' };
+  }
 
   const endpoint = String(src.endpoint || src.accessPath || '').replace(/\/+$/, '');
   const url = `${endpoint}/chat/completions`;
@@ -74,9 +131,10 @@ async function onboardSourceRolling(src, options = {}) {
   let probeOk = false;
   let probeStatus = 0;
   let probeBody = '';
+  let probeReason = 'PROBE_FAILED';
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), options.timeoutMs || 8000);
+  const timer = setTimeout(() => controller.abort(), dispatchConfig.probeTimeoutMs);
 
   try {
     const res = await fetchFn(url, {
@@ -85,21 +143,28 @@ async function onboardSourceRolling(src, options = {}) {
       body: JSON.stringify({
         model: repModel,
         messages: [{ role: 'user', content: 'ping' }],
-        max_tokens: 1,
+        max_tokens: dispatchConfig.rollingOnboardMaxOutputTokens,
       }),
       signal: controller.signal,
     });
-    clearTimeout(timer);
     probeStatus = res.status;
-    probeOk = res.ok;
     try {
       probeBody = await res.text();
     } catch {}
+    if (res.ok) {
+      const completion = validateCompletion(probeBody);
+      probeOk = completion.ok;
+      probeReason = completion.reason;
+    } else {
+      probeReason = `HTTP_${probeStatus}`;
+    }
   } catch (err) {
-    clearTimeout(timer);
     probeStatus = 503;
     probeOk = false;
-    probeBody = err ? err.message : 'Fetch failed';
+    probeBody = '';
+    probeReason = err && err.name === 'AbortError' ? 'TIMEOUT' : 'PROBE_FAILED';
+  } finally {
+    clearTimeout(timer);
   }
 
   if (probeOk) {
@@ -192,7 +257,7 @@ async function onboardSourceRolling(src, options = {}) {
     sourceId: src.id,
     model: repModel,
     status: probeStatus,
-    reason: probeBody,
+    reason: probeReason,
   };
 }
 

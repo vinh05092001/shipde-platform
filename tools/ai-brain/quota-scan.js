@@ -385,10 +385,13 @@ async function discover9RouterScopes(source, options = {}) {
       .filter(Boolean);
   }
 
-  // Decompose by upstream prefix: cl/, kr/, ocz/, ag/...
+  // Decompose by the upstream prefix each live model id carries.
   const groups = new Map();
   for (const mId of modelsList) {
-    const cleanId = String(mId).replace(/^(ninerouter\/|9router\/)/, '');
+    const ownPrefixes = [source.id, source.routerAlias].filter(Boolean).map((p) => `${p}/`);
+    const raw = String(mId);
+    const own = ownPrefixes.find((p) => raw.startsWith(p));
+    const cleanId = own ? raw.slice(own.length) : raw;
     const prefixMatch = cleanId.match(/^([A-Za-z0-9_-]+)\//);
     if (!prefixMatch) continue;
     const prefix = prefixMatch[1];
@@ -397,13 +400,8 @@ async function discover9RouterScopes(source, options = {}) {
     }
   }
 
-  // If no prefix models found, default known scopes
-  if (groups.size === 0) {
-    for (const p of ['cl', 'kr', 'ocz', 'ag']) {
-      groups.set(p, `${p}/default`);
-    }
-  }
-
+  // No live or catalogued model means no scope can be named honestly; scan nothing
+  // rather than invent prefixes or model ids.
   const targets = [];
   for (const [prefix, repModel] of groups.entries()) {
     targets.push({

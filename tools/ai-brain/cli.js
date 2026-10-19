@@ -2180,7 +2180,7 @@ function dispatchCommand(args, deps = {}) {
   const env = (deps && deps.env) || process.env;
   const evidenceData = (deps && deps.evidenceData) || evidence.loadEvidence(evidenceDir);
   const newSources =
-    (deps && deps.onboardingPrepared) || isCandidateInjected || (!isDryRun && !deps?.autoOnboard)
+    (deps && deps.onboardingPrepared) || isCandidateInjected
       ? []
       : rollingOnboard.detectNewSources(registry, evidenceData, env);
 
