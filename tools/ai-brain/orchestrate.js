@@ -633,6 +633,75 @@ function fileExistsOnBase(baseCwd, baseSha, relPath, spawnFn) {
   return fs.existsSync(path.resolve(baseCwd, relPath));
 }
 
+function resolveSpecificAcceptanceCriteria(item) {
+  const cases = new Set();
+  const v = item && item.verification;
+  const fb = item && item.failBefore;
+
+  const expect =
+    (v && typeof v.expect === 'string' && v.expect.trim()) ||
+    (item && typeof item.expect === 'string' && item.expect.trim()) ||
+    (fb && typeof fb.expect === 'string' && fb.expect.trim()) ||
+    null;
+
+  let testNamePattern =
+    (v && typeof v.testNamePattern === 'string' && v.testNamePattern.trim()) ||
+    (v && typeof v.testFilter === 'string' && v.testFilter.trim()) ||
+    null;
+  if (!testNamePattern && v && typeof v.command === 'string') {
+    const filterMatch = v.command.match(
+      /(?:--test-name-pattern|-t|--grep)[=\s]+(?:["']([^"']+)["']|(\S+))/i
+    );
+    if (filterMatch) {
+      testNamePattern = (filterMatch[1] || filterMatch[2] || '').trim() || null;
+    }
+  }
+
+  if (fb) {
+    if (Array.isArray(fb.testNames)) {
+      for (const t of fb.testNames) if (typeof t === 'string' && t.trim()) cases.add(t.trim());
+    }
+    if (Array.isArray(fb.tests)) {
+      for (const t of fb.tests) if (typeof t === 'string' && t.trim()) cases.add(t.trim());
+    }
+  }
+  if (item) {
+    if (Array.isArray(item.tests)) {
+      for (const t of item.tests) if (typeof t === 'string' && t.trim()) cases.add(t.trim());
+    }
+    if (Array.isArray(item.testNames)) {
+      for (const t of item.testNames) if (typeof t === 'string' && t.trim()) cases.add(t.trim());
+    }
+  }
+  if (v) {
+    if (Array.isArray(v.tests)) {
+      for (const t of v.tests) if (typeof t === 'string' && t.trim()) cases.add(t.trim());
+    }
+    if (Array.isArray(v.testNames)) {
+      for (const t of v.testNames) if (typeof t === 'string' && t.trim()) cases.add(t.trim());
+    }
+  }
+  const criteria = [].concat(
+    (item && item.acceptanceCriteria) || [],
+    (item && item.criteria) || []
+  );
+  for (const crit of criteria) {
+    if (typeof crit !== 'string') continue;
+    const trimmed = crit.trim();
+    const match = trimmed.match(/^(?:Test passes|passes test|test):\s*(.+)$/i);
+    if (match && match[1].trim()) {
+      cases.add(match[1].trim());
+    }
+  }
+
+  return {
+    expect,
+    testNamePattern,
+    testCases: Array.from(cases),
+    hasSpecificCriteria: Boolean(expect || testNamePattern || cases.size > 0),
+  };
+}
+
 function checkItemAlreadySatisfiedOnBase(item, options = {}) {
   const verification = item && item.verification;
   const command = verification && verification.command;
@@ -643,6 +712,16 @@ function checkItemAlreadySatisfiedOnBase(item, options = {}) {
   const acceptanceFiles = resolveAcceptanceFiles(item);
   if (acceptanceFiles.length === 0) {
     return { satisfied: false, reason: 'NO_ACCEPTANCE_FILES' };
+  }
+
+  const specificCriteria = resolveSpecificAcceptanceCriteria(item);
+  if (!specificCriteria.hasSpecificCriteria) {
+    return {
+      satisfied: false,
+      reason: 'SPECIFIC_ACCEPTANCE_UNVERIFIABLE',
+      detail:
+        'item declares no verification.expect, test-name filter, or specific test cases; base satisfaction cannot be proven without extending existing tests',
+    };
   }
 
   const baseCwd = options.cwd || options.hostCwd || options.workerRoot || process.cwd();
@@ -666,20 +745,36 @@ function checkItemAlreadySatisfiedOnBase(item, options = {}) {
 
   const currentHead = headShaOf(baseCwd, { spawnSync: spawnFn });
   const needsDetachedWorktree =
-    Boolean(baseSha) && Boolean(currentHead) && currentHead.toLowerCase() !== baseSha.toLowerCase();
+    Boolean(baseSha) && (!currentHead || currentHead.toLowerCase() !== baseSha.toLowerCase());
 
   try {
     if (needsDetachedWorktree) {
-      tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-base-wt-'));
-      tempWorktree = path.join(tempDir, 'wt');
-      const addRes = spawnFn(
-        'git',
-        ['-c', 'safe.directory=*', 'worktree', 'add', '--detach', tempWorktree, baseSha],
-        { cwd: baseCwd, encoding: 'utf8', windowsHide: true }
-      );
-      if (addRes && addRes.status === 0) {
-        worktreeAdded = true;
-        runCwd = tempWorktree;
+      try {
+        tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-base-wt-'));
+        tempWorktree = path.join(tempDir, 'wt');
+        const addRes = spawnFn(
+          'git',
+          ['-c', 'safe.directory=*', 'worktree', 'add', '--detach', tempWorktree, baseSha],
+          { cwd: baseCwd, encoding: 'utf8', windowsHide: true }
+        );
+        if (addRes && addRes.status === 0) {
+          worktreeAdded = true;
+          runCwd = tempWorktree;
+        } else {
+          return {
+            satisfied: false,
+            reason: 'BASE_WORKTREE_UNAVAILABLE',
+            detail: String(
+              (addRes && (addRes.stderr || addRes.stdout)) || 'git worktree add failed'
+            ),
+          };
+        }
+      } catch (err) {
+        return {
+          satisfied: false,
+          reason: 'BASE_WORKTREE_UNAVAILABLE',
+          detail: err && err.message,
+        };
       }
     }
 
@@ -710,27 +805,70 @@ function checkItemAlreadySatisfiedOnBase(item, options = {}) {
     const stdout = String((res && res.stdout) || '');
     const stderr = String((res && res.stderr) || '');
     const output = stdout + (stderr ? (stdout ? '\n' : '') + stderr : '');
-    const expect = verification.expect || null;
-    const expectOk = expect ? output.includes(expect) : true;
 
-    if (exitCode === 0 && expectOk) {
+    if (exitCode !== 0) {
       return {
-        satisfied: true,
+        satisfied: false,
+        reason: 'VERIFICATION_EXIT',
         baseSha: baseSha || currentHead || null,
         command,
         exitCode,
         output,
-        acceptanceFiles,
       };
     }
 
+    if (specificCriteria.expect && !output.includes(specificCriteria.expect)) {
+      return {
+        satisfied: false,
+        reason: 'VERIFICATION_EXPECT_MISSING',
+        expect: specificCriteria.expect,
+        baseSha: baseSha || currentHead || null,
+        command,
+        exitCode,
+        output,
+      };
+    }
+
+    if (specificCriteria.testNamePattern) {
+      if (
+        output.includes('ℹ tests 0') ||
+        output.includes('ℹ pass 0') ||
+        !output.includes(specificCriteria.testNamePattern)
+      ) {
+        return {
+          satisfied: false,
+          reason: 'VERIFICATION_TEST_PATTERN_UNMATCHED',
+          pattern: specificCriteria.testNamePattern,
+          baseSha: baseSha || currentHead || null,
+          command,
+          exitCode,
+          output,
+        };
+      }
+    }
+
+    for (const tc of specificCriteria.testCases) {
+      if (!output.includes(tc)) {
+        return {
+          satisfied: false,
+          reason: 'ACCEPTANCE_TEST_CASE_MISSING_ON_BASE',
+          missingTestCase: tc,
+          baseSha: baseSha || currentHead || null,
+          command,
+          exitCode,
+          output,
+        };
+      }
+    }
+
     return {
-      satisfied: false,
-      reason: exitCode !== 0 ? 'VERIFICATION_EXIT' : 'VERIFICATION_EXPECT_MISSING',
+      satisfied: true,
       baseSha: baseSha || currentHead || null,
       command,
       exitCode,
       output,
+      acceptanceFiles,
+      specificCriteria,
     };
   } finally {
     if (worktreeAdded && tempWorktree) {
@@ -9515,4 +9653,6 @@ module.exports = {
   PublicationStatus,
   effectiveCooldownMs: evidence.effectiveCooldownMs,
   buildDefaults,
+  checkItemAlreadySatisfiedOnBase,
+  resolveSpecificAcceptanceCriteria,
 };

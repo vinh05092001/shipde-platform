@@ -7,7 +7,12 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
-const { runOrchestration, ItemStatus } = require('../orchestrate');
+const {
+  runOrchestration,
+  ItemStatus,
+  checkItemAlreadySatisfiedOnBase,
+  resolveSpecificAcceptanceCriteria,
+} = require('../orchestrate');
 const { resumeGoal } = require('../goals');
 const { getDispatchConfig } = require('../sources');
 const { candidateKey } = require('../candidates');
@@ -111,8 +116,9 @@ test('TASK-AI-142: test nghiem thu da XANH tren base -> khong goi writer, ket th
     files: [testRelPath],
     verification: {
       command: `node --test ${testRelPath}`,
+      expect: 'already passing acceptance test',
     },
-    acceptanceCriteria: ['passes acceptance test'],
+    acceptanceCriteria: ['Test passes: already passing acceptance test'],
   };
 
   const options = {
@@ -212,8 +218,9 @@ test('TASK-AI-142: test nghiem thu DO tren base -> van goi writer nhu cu', async
     files: [testRelPath],
     verification: {
       command: `node --test ${testRelPath}`,
+      expect: 'failing acceptance test on base',
     },
-    acceptanceCriteria: ['passes acceptance test'],
+    acceptanceCriteria: ['Test passes: failing acceptance test on base'],
   };
 
   const options = {
@@ -391,4 +398,239 @@ test('TASK-AI-142: goal resume nhan dien dependency da ALREADY_SATISFIED_ON_BASE
     'READY_FOR_AUTHOR',
     'dependent item must be promoted to READY_FOR_AUTHOR'
   );
+});
+
+test('TASK-AI-142 P1: detached base worktree that fails to create returns BASE_WORKTREE_UNAVAILABLE and runs writer', async () => {
+  const host = makeTempRepo();
+  const worker = makeTempRepo();
+
+  const testRelPath = 'tools/ai-brain/test/fixture-wt-fail.test.js';
+  const testCode = [
+    "'use strict';",
+    "const { test } = require('node:test');",
+    "const assert = require('node:assert/strict');",
+    "test('wt fail test', () => {",
+    '  assert.equal(1, 1);',
+    '});',
+  ].join('\n');
+
+  // Commit on host so the file exists at baseSha
+  const baseSha = addCommit(host.dir, testRelPath, testCode, 'base commit');
+  // Add another commit so host HEAD is different from baseSha
+  addCommit(host.dir, 'other.txt', 'other', 'advance host head');
+
+  const checkpointFile = path.join(tmpDir(), 'checkpoint.json');
+  const decisionDir = tmpDir('decisions-');
+  const evidenceDir = tmpDir('evidence-');
+
+  let writerLaunches = 0;
+  const spec = {
+    id: 'TASK-WT-FAIL',
+    files: [testRelPath],
+    verification: {
+      command: `node --test ${testRelPath}`,
+      expect: 'wt fail test',
+    },
+    acceptanceCriteria: ['Test passes: wt fail test'],
+  };
+
+  const originalSpawnSync = spawnSync;
+  const failingSpawnSync = (cmd, args, opts) => {
+    if (cmd === 'git' && Array.isArray(args) && args.includes('worktree') && args.includes('add')) {
+      return { status: 128, stdout: '', stderr: 'fatal: unable to create worktree' };
+    }
+    return originalSpawnSync(cmd, args, opts);
+  };
+
+  const options = {
+    isolatedWorker: true,
+    cwd: host.dir,
+    workerRoot: worker.dir,
+    baseSha,
+    checkpointFile,
+    decisionDir,
+    evidenceDir,
+    candidates: [sampleCandidate()],
+    registry: sampleRegistry(),
+    specs: [spec],
+    spawnSync: failingSpawnSync,
+    routeProbe: async () => ({ ok: true, status: 200 }),
+    run: (job) => {
+      writerLaunches++;
+      return { exitCode: 0, sessionId: 'ses-writer' };
+    },
+  };
+
+  const result = await runOrchestration('wt fail goal', options);
+  assert.equal(writerLaunches, 1, 'writer must be launched when base worktree is unavailable');
+});
+
+test('TASK-AI-142 P1: item extending existing test file is not falsely marked ALREADY_SATISFIED_ON_BASE when new case missing', async () => {
+  const host = makeTempRepo();
+  const worker = makeTempRepo();
+
+  const testRelPath = 'tools/ai-brain/test/fixture-existing.test.js';
+  const existingTestCode = [
+    "'use strict';",
+    "const { test } = require('node:test');",
+    "const assert = require('node:assert/strict');",
+    "test('old case passes', () => {",
+    '  assert.equal(1, 1);',
+    '});',
+  ].join('\n');
+
+  const baseSha = addCommit(host.dir, testRelPath, existingTestCode, 'existing test file');
+  addCommit(worker.dir, testRelPath, existingTestCode, 'sync existing test file');
+
+  const checkpointFile = path.join(tmpDir(), 'checkpoint.json');
+  const decisionDir = tmpDir('decisions-');
+  const evidenceDir = tmpDir('evidence-');
+
+  let writerLaunches = 0;
+  const spec = {
+    id: 'TASK-EXTEND-1',
+    files: [testRelPath],
+    verification: {
+      command: `node --test ${testRelPath}`,
+    },
+    acceptanceCriteria: ['Test passes: new edge case is handled'],
+  };
+
+  const options = {
+    isolatedWorker: true,
+    cwd: host.dir,
+    workerRoot: worker.dir,
+    baseSha,
+    checkpointFile,
+    decisionDir,
+    evidenceDir,
+    candidates: [sampleCandidate()],
+    registry: sampleRegistry(),
+    specs: [spec],
+    routeProbe: async () => ({ ok: true, status: 200 }),
+    run: (job) => {
+      writerLaunches++;
+      return { exitCode: 0, sessionId: 'ses-writer' };
+    },
+  };
+
+  const result = await runOrchestration('extend goal', options);
+  assert.equal(
+    writerLaunches,
+    1,
+    'writer must be launched because new edge case does not exist on base'
+  );
+});
+
+test('TASK-AI-142 unit: checkItemAlreadySatisfiedOnBase returns BASE_WORKTREE_UNAVAILABLE when worktree add fails', () => {
+  const host = makeTempRepo();
+  const testRelPath = 'tools/ai-brain/test/unit-wt.test.js';
+  const baseSha = addCommit(host.dir, testRelPath, "test('x', ()=>{});", 'commit 1');
+  addCommit(host.dir, 'dummy.txt', 'dummy', 'advance head');
+
+  const item = {
+    id: 'TASK-UNIT-WT',
+    verification: {
+      command: `node --test ${testRelPath}`,
+      expect: 'x',
+    },
+  };
+
+  const failingSpawn = (cmd, args, opts) => {
+    if (cmd === 'git' && Array.isArray(args) && args.includes('worktree') && args.includes('add')) {
+      return { status: 128, stdout: '', stderr: 'fatal: worktree add failed' };
+    }
+    return spawnSync(cmd, args, opts);
+  };
+
+  const res = checkItemAlreadySatisfiedOnBase(item, {
+    cwd: host.dir,
+    baseSha,
+    spawnSync: failingSpawn,
+  });
+
+  assert.equal(res.satisfied, false);
+  assert.equal(res.reason, 'BASE_WORKTREE_UNAVAILABLE');
+});
+
+test('TASK-AI-142 unit: checkItemAlreadySatisfiedOnBase returns SPECIFIC_ACCEPTANCE_UNVERIFIABLE when no specific criteria declared', () => {
+  const host = makeTempRepo();
+  const testRelPath = 'tools/ai-brain/test/unit-general.test.js';
+  const baseSha = addCommit(host.dir, testRelPath, "test('general', ()=>{});", 'commit');
+
+  const item = {
+    id: 'TASK-UNIT-GEN',
+    files: [testRelPath],
+    verification: {
+      command: `node --test ${testRelPath}`,
+    },
+    acceptanceCriteria: ['some general criteria without test names'],
+  };
+
+  const res = checkItemAlreadySatisfiedOnBase(item, {
+    cwd: host.dir,
+    baseSha,
+  });
+
+  assert.equal(res.satisfied, false);
+  assert.equal(res.reason, 'SPECIFIC_ACCEPTANCE_UNVERIFIABLE');
+});
+
+test('TASK-AI-142 unit: checkItemAlreadySatisfiedOnBase detects missing specific test case on base', () => {
+  const host = makeTempRepo();
+  const testRelPath = 'tools/ai-brain/test/unit-missing-case.test.js';
+  const testCode = [
+    "'use strict';",
+    "const { test } = require('node:test');",
+    "test('existing case', () => {});",
+  ].join('\n');
+  const baseSha = addCommit(host.dir, testRelPath, testCode, 'commit');
+
+  const item = {
+    id: 'TASK-UNIT-MISSING',
+    files: [testRelPath],
+    verification: {
+      command: `node --test ${testRelPath}`,
+    },
+    acceptanceCriteria: ['Test passes: brand new uncommitted case'],
+  };
+
+  const res = checkItemAlreadySatisfiedOnBase(item, {
+    cwd: host.dir,
+    baseSha,
+  });
+
+  assert.equal(res.satisfied, false);
+  assert.equal(res.reason, 'ACCEPTANCE_TEST_CASE_MISSING_ON_BASE');
+  assert.equal(res.missingTestCase, 'brand new uncommitted case');
+});
+
+test('TASK-AI-142 unit: checkItemAlreadySatisfiedOnBase succeeds when specific test case and expect match on base', () => {
+  const host = makeTempRepo();
+  const testRelPath = 'tools/ai-brain/test/unit-matched.test.js';
+  const testCode = [
+    "'use strict';",
+    "const { test } = require('node:test');",
+    "test('specific target feature works', () => {});",
+  ].join('\n');
+  const baseSha = addCommit(host.dir, testRelPath, testCode, 'commit');
+
+  const item = {
+    id: 'TASK-UNIT-MATCH',
+    files: [testRelPath],
+    verification: {
+      command: `node --test ${testRelPath}`,
+      expect: 'specific target feature works',
+    },
+    acceptanceCriteria: ['Test passes: specific target feature works'],
+  };
+
+  const res = checkItemAlreadySatisfiedOnBase(item, {
+    cwd: host.dir,
+    baseSha,
+  });
+
+  assert.equal(res.satisfied, true);
+  assert.equal(res.baseSha, baseSha);
+  assert.equal(res.exitCode, 0);
 });

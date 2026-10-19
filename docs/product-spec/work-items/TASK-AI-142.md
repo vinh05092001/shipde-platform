@@ -248,6 +248,10 @@ Decision log entries link `goalId -> workItemId -> candidateKey -> session -> co
 - Part H2 Hermes session selection, custom config binding, and `shipde-controller` skill file are delivered in Part H2.
 - Live acceptance across chat and controller runs in Part H3 following merge of H1 and H2.
 
+### H3 live: base verification hardens against worktree failure and unverified test extension (2026-10-19)
+
+Review of already-satisfied verification (#408) identified fail-open gaps: (1) if detached base worktree creation fails, running on host checkout claimed base SHA verification on false evidence; (2) items extending existing test files whose older tests pass on base were silently skipped as already satisfied. Base verification now requires detached worktree creation when base SHA differs from HEAD and returns BASE_WORKTREE_UNAVAILABLE on failure. Base verification also requires specific acceptance criteria (explicit expect marker, test-name filter, or declared test case names) and checks that the specific test cases run and pass on base before bypassing writer launch.
+
 ### H3 live: items already satisfied on base skip writer and record ALREADY_SATISFIED_ON_BASE (2026-10-19)
 
 Live trial on 19/10 of goal G-F622511E (item GOAL-G-F622511E-1): the fix and acceptance test were already merged on main (#382). The controller launched writers that returned "No changes needed", then host gate failBefore ran the test on base where it exited 0, causing HOST_GATE_FAILED and recurring retry loops via ShipDe-Goal-Resume.
