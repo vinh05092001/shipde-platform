@@ -163,3 +163,92 @@ test('no metadata change needs no hook, and only private carry-over save bypasse
   assert.match(source.slice(saveStart, restoreStart), /--no-verify/);
   assert.doesNotMatch(source.slice(0, saveStart) + source.slice(restoreStart), /--no-verify/);
 });
+
+test('missing or unreadable worker git directory fails closed before running git', (t) => {
+  const host = fixture(t);
+  writeHook(host.hook, 'exit 0');
+
+  // 1. Missing worker .git directory
+  const emptyWorker = fs.mkdtempSync(path.join(os.tmpdir(), 'worker-empty-'));
+  t.after(() => fs.rmSync(emptyWorker, { recursive: true, force: true }));
+
+  assert.throws(
+    () =>
+      launcher.commitNativeWriterChanges({
+        hostRoot: host.root,
+        workerRoot: emptyWorker,
+        workItemId: 'GOAL-FIXTURE',
+      }),
+    /NATIVE_WRITER_COMMIT_FAILED: missing or unreadable worker git directory/
+  );
+  assert.throws(
+    () =>
+      launcher.commitWorkerMetadata({
+        hostRoot: host.root,
+        workerRoot: emptyWorker,
+        workItemId: 'GOAL-FIXTURE',
+      }),
+    /WORKER_COMMIT_FAILED: missing or unreadable worker git directory/
+  );
+  assert.throws(
+    () => launcher.validateWorkerGitConfig(emptyWorker),
+    /WORKER_COMMIT_FAILED: missing or unreadable worker git directory/
+  );
+
+  // 2. Unreadable worker .git directory
+  const worker = fixture(t);
+  writeHook(worker.hook, 'exit 0');
+  const dotGit = path.join(worker.root, '.git');
+  const access = fs.accessSync.bind(fs);
+  t.mock.method(fs, 'accessSync', (target, mode) => {
+    if (path.resolve(target) === path.resolve(dotGit)) {
+      throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+    }
+    return access(target, mode);
+  });
+
+  assert.throws(
+    () =>
+      launcher.commitNativeWriterChanges({
+        hostRoot: host.root,
+        workerRoot: worker.root,
+        workItemId: 'GOAL-FIXTURE',
+      }),
+    /NATIVE_WRITER_COMMIT_FAILED: missing or unreadable worker git directory/
+  );
+  assert.throws(
+    () => launcher.validateWorkerGitConfig(worker.root),
+    /WORKER_COMMIT_FAILED: missing or unreadable worker git directory/
+  );
+});
+
+test('worker config allowlist rejects unknown keys and disallowed merge and diff keys', (t) => {
+  const cases = [
+    '[custom]\nkey = val\n',
+    '[core]\nunknownKey = val\n',
+    '[core]\npager = cat\n',
+    '[merge]\nconflictstyle = diff3\n',
+    '[merge "custom"]\nname = custom merge\n',
+    '[diff]\nrenames = true\n',
+    '[diff "custom"]\ncommand = echo\n',
+    '[branch "main"]\nunknownKey = val\n',
+    '[remote "origin"]\nunknownKey = val\n',
+    '[user]\nunknownKey = val\n',
+  ];
+  for (const config of cases) {
+    const f = fixture(t);
+    writeHook(f.hook, 'exit 0');
+    fs.appendFileSync(path.join(f.root, '.git', 'config'), '\n' + config);
+    assert.throws(
+      () => commitMetadata(f),
+      /WORKER_COMMIT_FAILED: forbidden worker git config:/,
+      config
+    );
+    assert.throws(
+      () => launcher.validateWorkerGitConfig(f.root),
+      /WORKER_COMMIT_FAILED: forbidden worker git config:/,
+      config
+    );
+    assert.equal(git(f.root, 'rev-parse', 'HEAD'), f.head);
+  }
+});

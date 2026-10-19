@@ -20,8 +20,51 @@ const DEFAULT_WORKER_TIMEOUT_MS = 30 * 60 * 1000;
  * The injected runner is for offline tests; production uses normal Git hooks.
  * A failed hook is a local failure and never becomes a reviewed worker SHA.
  */
-const FORBIDDEN_WORKER_CONFIG =
-  /^(?:core\.(?:worktree|hookspath|fsmonitor|sshcommand)|include(?:if)?\.|filter\.|merge\..*\.driver$|diff\..*\.command$)/i;
+const ALLOWED_CORE_KEYS = new Set([
+  'repositoryformatversion',
+  'filemode',
+  'bare',
+  'logallrefupdates',
+  'symlinks',
+  'ignorecase',
+  'autocrlf',
+  'eol',
+  'hidedotfiles',
+  'preloadindex',
+  'fscache',
+  'trustctime',
+  'checkstat',
+  'compression',
+  'longpaths',
+]);
+
+const ALLOWED_REMOTE_KEYS = new Set(['url', 'fetch', 'pushurl', 'push', 'mirror', 'tagopt']);
+
+const ALLOWED_BRANCH_KEYS = new Set(['remote', 'merge', 'rebase', 'description']);
+
+const ALLOWED_USER_KEYS = new Set(['name', 'email', 'signingkey', 'useconfigonly']);
+
+function isWorkerConfigKeyAllowed(rawKey) {
+  if (!rawKey || typeof rawKey !== 'string') return false;
+  const parts = rawKey.split('.');
+  if (parts.length < 2) return false;
+  const section = parts[0].toLowerCase();
+  const prop = parts[parts.length - 1].toLowerCase();
+
+  if (section === 'core') {
+    return parts.length === 2 && ALLOWED_CORE_KEYS.has(prop);
+  }
+  if (section === 'user') {
+    return parts.length === 2 && ALLOWED_USER_KEYS.has(prop);
+  }
+  if (section === 'remote') {
+    return parts.length >= 3 && ALLOWED_REMOTE_KEYS.has(prop);
+  }
+  if (section === 'branch') {
+    return parts.length >= 3 && ALLOWED_BRANCH_KEYS.has(prop);
+  }
+  return false;
+}
 
 function cleanGitEnv() {
   const nul = process.platform === 'win32' ? 'NUL' : '/dev/null';
@@ -44,22 +87,29 @@ function isPathInside(parent, child) {
   return Boolean(relative) && relative !== '..' && !relative.startsWith('..' + path.sep);
 }
 
-function workerGitPaths(workerRoot, failure) {
+function workerGitPaths(workerRoot, failure = 'WORKER_COMMIT_FAILED') {
+  if (!workerRoot) {
+    throw new Error(failure + ': missing or unreadable worker git directory');
+  }
   const root = path.resolve(workerRoot);
   const dotGit = path.join(root, '.git');
   let stat;
   try {
     stat = fs.lstatSync(dotGit);
+    fs.accessSync(dotGit, fs.constants.R_OK);
   } catch {
-    return null;
+    throw new Error(failure + ': missing or unreadable worker git directory');
   }
 
   let gitDir = dotGit;
   if (stat.isFile()) {
-    const match = fs
-      .readFileSync(dotGit, 'utf8')
-      .trim()
-      .match(/^gitdir:\s*(.+)$/i);
+    let gitFileContent;
+    try {
+      gitFileContent = fs.readFileSync(dotGit, 'utf8');
+    } catch {
+      throw new Error(failure + ': missing or unreadable worker git directory');
+    }
+    const match = gitFileContent.trim().match(/^gitdir:\s*(.+)$/i);
     if (!match) throw new Error(failure + ': invalid gitfile');
     gitDir = path.resolve(root, match[1]);
   }
@@ -79,9 +129,17 @@ function workerGitPaths(workerRoot, failure) {
   let commonDir = realGitDir;
   const commonFile = path.join(realGitDir, 'commondir');
   if (fs.existsSync(commonFile)) {
-    commonDir = fs.realpathSync(
-      path.resolve(realGitDir, fs.readFileSync(commonFile, 'utf8').trim())
-    );
+    let commonFileContent;
+    try {
+      commonFileContent = fs.readFileSync(commonFile, 'utf8').trim();
+    } catch {
+      throw new Error(failure + ': missing or unreadable worker git directory');
+    }
+    try {
+      commonDir = fs.realpathSync(path.resolve(realGitDir, commonFileContent));
+    } catch (error) {
+      throw new Error(failure + ': cannot resolve git directory: ' + error.message);
+    }
     if (!isPathInside(realRoot, commonDir)) {
       throw new Error(failure + ': git directory resolves outside worker repository');
     }
@@ -97,16 +155,18 @@ function validateConfigFile(configFile, workerRoot, failure) {
     { cwd: os.tmpdir(), env: cleanGitEnv(), encoding: 'utf8', windowsHide: true }
   );
   if (!result || result.status !== 0) throw new Error(failure + ': invalid worker git config');
-  const blocked = String(result.stdout || '')
+  const keys = String(result.stdout || '')
     .split('\0')
-    .find((key) => key && FORBIDDEN_WORKER_CONFIG.test(key));
-  if (blocked) throw new Error(failure + ': forbidden worker git config: ' + blocked);
+    .filter(Boolean);
+  for (const key of keys) {
+    if (!isWorkerConfigKeyAllowed(key)) {
+      throw new Error(failure + ': forbidden worker git config: ' + key);
+    }
+  }
 }
 
 function validateWorkerGitConfig(workerRoot, failure = 'WORKER_COMMIT_FAILED') {
-  if (!workerRoot) return;
   const dirs = workerGitPaths(workerRoot, failure);
-  if (!dirs) return;
   const config = path.join(dirs.commonDir, 'config');
   if (!fs.existsSync(config)) throw new Error(failure + ': worker git config missing');
   validateConfigFile(config, workerRoot, failure);
@@ -147,8 +207,9 @@ function controllerGit(options, requireHook) {
     };
   }
 
-  validateWorkerGitConfig(o.workerRoot, failure);
   const env = cleanGitEnv();
+  const hooksPath = requireHook ? resolveInstalledHook(o.hostRoot, env, failure) : null;
+  validateWorkerGitConfig(o.workerRoot, failure);
   const nul = process.platform === 'win32' ? 'NUL' : '/dev/null';
   const prefix = [
     '-c',
@@ -169,8 +230,8 @@ function controllerGit(options, requireHook) {
   if (o.hostRoot) {
     prefix.push('-c', 'safe.directory=' + path.resolve(o.hostRoot).split(path.sep).join('/'));
   }
-  if (requireHook) {
-    prefix.unshift('-c', 'core.hooksPath=' + resolveInstalledHook(o.hostRoot, env, failure));
+  if (hooksPath) {
+    prefix.unshift('-c', 'core.hooksPath=' + hooksPath);
   }
   prefix.push(...(o.gitConfig || []));
 
