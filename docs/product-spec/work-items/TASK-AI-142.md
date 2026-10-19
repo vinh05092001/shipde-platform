@@ -1260,3 +1260,7 @@ Aggregator routers like 9Router require model IDs to carry an upstream provider 
       - Multi-source round-robin fairness across sources with configurable batch size and prior-descending ordering within source.
       - HTTP preflight skipping after budget deadline without cooldown recording.
       - Snapshot threading of `ranking.priors` into probe ordering.
+
+### Launch faults are not model quality failures (2026-10-19)
+
+FEAT-AUTH-05 run 2026-10-19 18:38 chose Qwen3.8-27B (score 55) because GPT-6 Astra, Muse Spark 1.3, Qwen 3.8 Max and Grok 4.6 carried failed evidence from Controller faults (`writeUsageReportFromHarnessResult is not defined`, worker `EPERM`, `UNKNOWN_HARNESS: direct-http` before #405, `TOKEN_BUDGET_UNVERIFIED`). Those launches never reached the model. `evidence.isQualityFailure` now counts only model-scoped or non-launch failures; routing proof, prior usability, probation and reliability use it.
