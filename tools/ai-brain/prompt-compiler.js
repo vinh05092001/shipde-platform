@@ -127,6 +127,48 @@ function recordPromptTools(item, role, tools, logOpts) {
   }
 }
 
+function deriveNarrowTestCommands(failures) {
+  if (!Array.isArray(failures) || failures.length === 0) return [];
+  const commands = [];
+  for (const failure of failures) {
+    if (!failure) continue;
+    const raw =
+      typeof failure === 'string'
+        ? failure.trim()
+        : String(failure.command || failure.test || '').trim();
+    if (!raw) continue;
+
+    if (/^(node\s|pnpm\s|npm\s)/.test(raw)) {
+      commands.push(raw);
+      continue;
+    }
+
+    const fileMatch = raw.match(/([a-zA-Z0-9_\-./\\]+\.test\.[cm]?js)/);
+    if (fileMatch) {
+      const testFile = fileMatch[1].replace(/\\/g, '/');
+      const afterFile = raw
+        .slice(raw.indexOf(fileMatch[1]) + fileMatch[1].length)
+        .replace(/^[\s>:]+/, '')
+        .trim();
+      const nameMatch = afterFile.match(/^([^(\r\n]+)/);
+      const testName = nameMatch ? nameMatch[1].trim() : '';
+      if (testName) {
+        commands.push(
+          `node --test ${testFile} --test-name-pattern="${testName.replace(/"/g, '\\"')}"`
+        );
+      } else {
+        commands.push(`node --test ${testFile}`);
+      }
+      continue;
+    }
+
+    if (raw !== 'UNPARSED_FAILURE' && raw !== 'NO_BRAIN_TEST_FILES') {
+      commands.push(`node --test --test-name-pattern="${raw.replace(/"/g, '\\"')}"`);
+    }
+  }
+  return [...new Set(commands)];
+}
+
 /**
  * @param item  a plan work item (from planner.js)
  * @param ctx   { goal, specText, candidateKey, branch, usageFile, dirtyPaths, headSha, baseSha }
@@ -166,12 +208,21 @@ function compilePrompt(item, ctx) {
   lines.push('Dependencies: ' + (i.dependencies || []).join(', '));
   lines.push('Acceptance criteria:');
   for (const ac of i.acceptanceCriteria || []) lines.push('- ' + ac);
+
   const command = i.verification && i.verification.command;
+  let testCommand = command;
+  if (Array.isArray(c.hostGateFailures) && c.hostGateFailures.length > 0) {
+    const narrowCommands = deriveNarrowTestCommands(c.hostGateFailures);
+    if (narrowCommands.length > 0) {
+      testCommand = narrowCommands.join(' && ');
+    }
+  }
   lines.push(
     'Tests: ' +
-      (command || '(none declared: a work item with no verification command is not dispatchable)')
+      (testCommand ||
+        '(none declared: a work item with no verification command is not dispatchable)')
   );
-  if (command) lines.push('Expected result: ' + (i.verification.expect || '(exit code 0)'));
+  if (testCommand) lines.push('Expected result: ' + (i.verification?.expect || '(exit code 0)'));
   if (c.focusedTestsOnly) {
     lines.push(
       "Run only focused tests for this change. Print concise test output only: node --test ... 2>&1 | grep -E '^ℹ (pass|fail)|^✖ ' (or an equivalent concise reporter). Do not run or print the full brain suite; the Controller runs that host-side gate and returns failing test names only."
@@ -181,6 +232,31 @@ function compilePrompt(item, ctx) {
   if (Array.isArray(c.hostGateFailures) && c.hostGateFailures.length > 0) {
     lines.push('Host-side verification failures to repair (failing test names only):');
     for (const failure of c.hostGateFailures) lines.push('- ' + String(failure));
+
+    const gateOutput =
+      c.hostGateOutput ||
+      c.commandOutput ||
+      (Array.isArray(c.hostGateSummary) && c.hostGateSummary.length > 0
+        ? c.hostGateSummary.join('\n')
+        : null);
+    if (gateOutput) {
+      let maxOutputChars = c.maxPromptCommandOutputChars;
+      if (!maxOutputChars) {
+        try {
+          const sourcesApi = require('./sources');
+          maxOutputChars = sourcesApi.getDispatchConfig().maxPromptCommandOutputChars;
+        } catch (_) {}
+      }
+      const rawText = String(gateOutput).trim();
+      if (rawText) {
+        const isTruncated = maxOutputChars && rawText.length > maxOutputChars;
+        const truncated = isTruncated
+          ? rawText.slice(0, maxOutputChars) + '\n... (truncated)'
+          : rawText;
+        lines.push('Host gate output:');
+        lines.push(truncated);
+      }
+    }
   }
   if (c.contextPack) {
     lines.push('Focused context pack: read ' + c.contextPack + ' before exploring files.');
@@ -378,6 +454,7 @@ function compileReviewPrompt(item, ctx) {
 module.exports = {
   compilePrompt,
   compileReviewPrompt,
+  deriveNarrowTestCommands,
   PUBLISHER_BOUNDARY,
   CLEAN_TREE_RULES,
   ISOLATED_WORKER_VERIFICATION_NOTE,

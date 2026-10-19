@@ -409,6 +409,8 @@ function getDispatchConfig(registry, options = {}) {
     probeTimeoutMs,
     safetyMarginMs,
     schemaProbeBudgetMs,
+    maxPromptCommandOutputChars: configuredLimit('maxPromptCommandOutputChars'),
+    maxHostGateSummaryChars: configuredLimit('maxHostGateSummaryChars'),
   };
 }
 

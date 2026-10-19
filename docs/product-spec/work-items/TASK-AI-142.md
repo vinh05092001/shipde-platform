@@ -248,6 +248,15 @@ Decision log entries link `goalId -> workItemId -> candidateKey -> session -> co
 - Part H2 Hermes session selection, custom config binding, and `shipde-controller` skill file are delivered in Part H2.
 - Live acceptance across chat and controller runs in Part H3 following merge of H1 and H2.
 
+### H3 live: narrow repair test commands, truncated prompt output, and host-gate failure diagnostics (2026-10-19)
+
+Live trial 17 (19/10): a successful writer (regolo/qwen3.8-27b, exit 0) failed the host gate. The subsequent host-gate repair attempt executed the full test suite `node --test tools/ai-brain/test/`, generating massive tool output that triggered REQUEST_TOO_LARGE, killing the worker. The resulting host_gate_failed failure record did not capture which checks failed.
+Repairs:
+1. Repair prompt narrows test commands to gate.failures only (`deriveNarrowTestCommands`), preventing execution of the full test suite during host-gate repair.
+2. Prompt host gate command output is bounded by `dispatch.maxPromptCommandOutputChars` loaded from `sources.json` (no hardcoded numeric limits in code).
+3. Failed and host_gate_failed decision and checkpoint records capture individual failing check names and a concise summary bounded by `dispatch.maxHostGateSummaryChars`.
+4. A host-gate repair killed by REQUEST_TOO_LARGE remains retryable when alternative candidates exist.
+
 ### H3 live: the writer route-probe window is not charged with capability proof time (2026-10-18)
 
 Live trial 15 of goal G-F622511E (18/10 15:59Z) ended PROBE_BUDGET_EXHAUSTED without probing a single route: #388 started the writer route-probe window at `now - capabilityProbeDurationMs`, so slow CLI capability proofs spent it first. Capability proofs keep their own `schemaProbeBudgetMs`; the route window now starts when route probing starts and its length is `probeBudgetMs` from the dispatch configuration instead of a module constant.
