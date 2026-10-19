@@ -8,6 +8,7 @@ const routeProbe = require('./route-probe');
 const { createSecretRedactor } = require('./decisions');
 
 const sourcesApi = require('./sources');
+const { loadPriors, priorFor } = require('./priors');
 const routeEvidence = require('./route-evidence');
 const { hasPriorWorkPass } = routeEvidence;
 
@@ -158,27 +159,108 @@ async function httpProof(candidate, capability, route, options) {
   }
 }
 
+function candidateSourceKey(c) {
+  return c.sourceId || c.gateway || c.source || c.harness || 'unknown';
+}
+
+function comparePriorScores(aScore, bScore) {
+  const aHas = Number.isFinite(aScore);
+  const bHas = Number.isFinite(bScore);
+  if (aHas && bHas) return bScore - aScore;
+  if (aHas && !bHas) return -1;
+  if (!aHas && bHas) return 1;
+  return 0;
+}
+
 function orderCandidatesForProbe(candidates, profile, options = {}) {
   if (!Array.isArray(candidates)) return candidates;
   const store = options.routeHealth || { paths: {} };
   const data = routeEvidence.evidenceData(options);
   const context = { ...options, evidenceData: data };
-  return candidates
-    .map((c, index) => ({
+  const machineDataOff = process.env.AI_BRAIN_MACHINE_DATA === 'none';
+  const priors =
+    options.priors !== undefined
+      ? options.priors
+      : options.ranking?.priors !== undefined
+        ? options.ranking.priors
+        : !machineDataOff
+          ? loadPriors()
+          : undefined;
+  const role = profile?.role || options.role || 'writer';
+  const now = options.now || Date.now();
+  const dispatchConfig = sourcesApi.getDispatchConfig(options.registry, options);
+  const batchSize = dispatchConfig.probeRoundRobinBatch;
+
+  const rows = candidates.map((c, index) => {
+    const prior = priorFor(c, role, priors, now);
+    const priorScore = Number.isFinite(prior?.score) ? prior.score : null;
+    return {
       c,
       index,
       work: hasPriorWorkPass(c, data.combinations),
       live: routeEvidence.recentRouteSuccess(c, store, context),
       cost: routeEvidence.measuredProbeCost(c, store, context),
-    }))
-    .sort(
-      (a, b) =>
-        Number(b.work) - Number(a.work) ||
-        Number(b.live) - Number(a.live) ||
-        a.cost - b.cost ||
-        a.index - b.index
-    )
-    .map((row) => row.c);
+      priorScore,
+    };
+  });
+
+  const buckets = new Map();
+  for (const row of rows) {
+    const bKey =
+      (row.work ? '1' : '0') +
+      ':' +
+      (row.live ? '1' : '0') +
+      ':' +
+      (Number.isFinite(row.priorScore) ? '1' : '0');
+    if (!buckets.has(bKey)) buckets.set(bKey, []);
+    buckets.get(bKey).push(row);
+  }
+
+  const sortedBucketKeys = Array.from(buckets.keys()).sort((a, b) => b.localeCompare(a));
+  const result = [];
+
+  for (const bKey of sortedBucketKeys) {
+    const bucketRows = buckets.get(bKey);
+    const sourceQueues = new Map();
+    for (const row of bucketRows) {
+      const src = candidateSourceKey(row.c);
+      if (!sourceQueues.has(src)) sourceQueues.set(src, []);
+      sourceQueues.get(src).push(row);
+    }
+
+    for (const queue of sourceQueues.values()) {
+      queue.sort(
+        (a, b) =>
+          comparePriorScores(a.priorScore, b.priorScore) || a.cost - b.cost || a.index - b.index
+      );
+    }
+
+    const sortedSources = Array.from(sourceQueues.keys()).sort((srcA, srcB) => {
+      const topA = sourceQueues.get(srcA)[0];
+      const topB = sourceQueues.get(srcB)[0];
+      return (
+        comparePriorScores(topA.priorScore, topB.priorScore) ||
+        topA.cost - topB.cost ||
+        topA.index - topB.index
+      );
+    });
+
+    const targetLength = result.length + bucketRows.length;
+    while (result.length < targetLength) {
+      let takenAny = false;
+      for (const src of sortedSources) {
+        const queue = sourceQueues.get(src);
+        if (queue && queue.length) {
+          const take = queue.splice(0, batchSize);
+          result.push(...take);
+          takenAny = true;
+        }
+      }
+      if (!takenAny) break;
+    }
+  }
+
+  return result.map((r) => r.c);
 }
 
 async function probeCapabilities(candidates, profile, options = {}) {
@@ -302,7 +384,7 @@ async function probeCapabilities(candidates, profile, options = {}) {
       return !p || p.ok === false;
     });
 
-    if (hasUncached && direct && route && o.preflightHttp === true) {
+    if (Date.now() < deadline && hasUncached && direct && route && o.preflightHttp === true) {
       const remaining = deadline - Date.now();
       const identity = require('./route-health').probeIdentity(c);
       const record = store

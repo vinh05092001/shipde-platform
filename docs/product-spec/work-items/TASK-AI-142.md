@@ -1196,3 +1196,19 @@ Aggregator routers like 9Router require model IDs to carry an upstream provider 
        - Ensured consistent `--title` fallback to work item ID or task name.
   3. Verification:
      - New unit tests in `tools/ai-brain/test/task-ai-142-opencode-writer.test.js` verifying config generation for SSE/JSON sources, permission scoping, secret redaction, and `HARNESS_EMPTY_RESPONSE` handling.
+
+### H3 live: strong models prioritized in capability probes and fair round-robin source dispatch (2026-10-19)
+
+- Root cause:
+  - In `capability-probe.js`, candidate probe ordering prioritized prior work and recent live route success but sorted unverified candidates strictly by cost and array index without quality prior scores (`priorFor`).
+  - Large catalog sources (such as 9Router with thousands of models) consumed the probe budget (`schemaProbeBudgetMs`), starving high-prior unprobed models on other sources (such as Claude Opus 4.7, Fable 5.1, GPT-6 on explabs, and GPT-5.6 Sol on tokenharbor) from being probed, causing them to be rejected as `CAPABILITY_UNVERIFIED:tools / WRITER_SCHEMA_NOT_VERIFIED_BUDGET`.
+- Repairs:
+  - In `tools/ai-brain/capability-probe.js`:
+    - Updated `orderCandidatesForProbe` to sort candidates within each work/live bucket in descending order of benchmark prior score via `priorFor`. Unscored candidates sort after scored candidates while remaining probe-eligible.
+    - Added fair round-robin dispatch across sources/gateways using `probeRoundRobinBatch` from dispatch configuration, ensuring no single source exhausts the probe window.
+    - Guarded `preflightHttp` with `Date.now() < deadline` so budget exhaustion does not cause premature route failure or cooldown records in `routeHealth`.
+    - Unprobed candidates at budget exhaustion retain `unverified: true` status without recording route errors or cooldowns.
+  - In `tools/ai-brain/sources.json` and `tools/ai-brain/sources.js`:
+    - Added configurable `probeRoundRobinBatch` in `dispatch` configuration and exposed it via `getDispatchConfig`.
+  - Verification:
+    - New test `tools/ai-brain/test/task-ai-142-probe-strong-first.test.js` verifying that a high-prior model (prior 90) on a secondary source is probed before budget exhaustion ahead of 50 weak models from a large source.
