@@ -1281,7 +1281,6 @@ Aggregator routers like 9Router require model IDs to carry an upstream provider 
     - `priorFor` returns `QUALITY_UNKNOWN` on absent and zero-benchmark models.
     - Relative ordering: scored model (#1) -> unscored model (#2) -> rejected model (#3 in rejected list).
     - `dispatch --dry-run` terminal log outputs `(score: QUALITY_UNKNOWN)`.
-||||||| d420e1e5
 
 ### Launch faults are not model quality failures (2026-10-19)
 
