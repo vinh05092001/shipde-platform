@@ -2355,6 +2355,9 @@ function getIsolatedLauncher() {
           ? sourcesModule.providerFromPrefix(pinnedModel) || selectedSource.id
           : selectedSource.opencodeProvider || selectedSource.id;
 
+      // The worker config below registers only providerId, keyed by the source's own model id
+      // (which may contain '/'). opencode splits --model at the first '/', so any id not already
+      // qualified with providerId must be, even if it contains a slash.
       if (!isRouter && pinnedModel && !pinnedModel.startsWith(providerId + '/')) {
         directModelRewrite = providerId + '/' + pinnedModel;
       }

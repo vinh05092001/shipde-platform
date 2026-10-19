@@ -97,6 +97,10 @@ function getLaunchPayload(model, sourceOpts = {}) {
     assert.equal(argsFiles.length, 1, 'exactly one launch-args file must be written');
 
     const payload = JSON.parse(fs.readFileSync(path.join(shipdeDir, argsFiles[0]), 'utf8'));
+    const configPath = path.join(fakeWorkerRoot, 'opencode.json');
+    Object.defineProperty(payload, 'opencodeConfig', {
+      value: fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, 'utf8')) : null,
+    });
     return payload;
   } finally {
     cp.spawnSync = realSpawn;
@@ -148,6 +152,29 @@ describe('TASK-AI-142: direct model prefix in opencode launch args', () => {
         payload[modelIdx + 1],
         'opencode-provider-mock/model-bare-alpha',
         'already-prefixed model must remain unchanged'
+      );
+    } finally {
+      delete process.env.MOCK_DIRECT_API_KEY;
+    }
+  });
+
+  test('direct source model id containing a slash is qualified with the only configured provider', () => {
+    // A direct source's worker config registers exactly one provider (providerId) whose models are
+    // keyed by the source's own model id, which may itself contain '/' (e.g. dahl's
+    // "MiniMaxAI/MiniMax-M2.7"). opencode splits --model at the first '/', so the id must be
+    // qualified with providerId even though it already contains a slash.
+    process.env.MOCK_DIRECT_API_KEY = 'mock-key-value';
+    try {
+      const payload = getLaunchPayload('MiniMaxAI/MiniMax-M2.7', {
+        selectedSource: directSource,
+      });
+      const modelIdx = payload.indexOf('--model');
+      assert.equal(payload[modelIdx + 1], 'opencode-provider-mock/MiniMaxAI/MiniMax-M2.7');
+      const providers = Object.keys(payload.opencodeConfig.provider);
+      assert.deepEqual(providers, ['opencode-provider-mock'], 'the worker config has one provider');
+      assert.ok(
+        payload.opencodeConfig.provider['opencode-provider-mock'].models['MiniMaxAI/MiniMax-M2.7'],
+        'the provider resolves the remainder after the first slash'
       );
     } finally {
       delete process.env.MOCK_DIRECT_API_KEY;
