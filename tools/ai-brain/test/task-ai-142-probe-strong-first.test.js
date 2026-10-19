@@ -390,6 +390,7 @@ test('TASK-AI-142 P2: preflightHttp skips probing after budget deadline and mark
     { role: 'writer', requiredCapabilities: ['tools'] },
     {
       preflightHttp: true,
+      maxConcurrentProbes: 1,
       routeProbe: mockRouteProbe.probeRoute,
       fetch: mockFetch,
       schemaProbeBudgetMs: 4000,

@@ -1268,3 +1268,7 @@ FEAT-AUTH-05 run 2026-10-19 18:38 chose Qwen3.8-27B (score 55) because GPT-6 Ast
 ### A purchase-locked model never blocks its whole account (2026-10-19)
 
 explabs returns HTTP 429 `model_requires_purchase` for premium models such as `aion-2.0` while `gpt-6-astra` on the same key returns 200. The probe classifier read the body's `insufficient_quota` as `UPSTREAM_CREDIT_OR_QUOTA`, an account-level failure, so one locked model removed GPT-6 Astra, Muse Spark 1.3 and every other explabs model from FEAT-AUTH-05 writer selection. The classifier now returns `MODEL_LOCKED`, which is model-scoped.
+
+### Capability probes run concurrently across accounts (2026-10-19)
+
+FEAT-AUTH-05 runs at 18:38, 20:40 and 21:41 chose Qwen3.8-27B. Simulation on the 21:41 intake snapshot: `buildCandidates` yields 14,693 candidates including 648 explabs ones, and `rankForProfile` on cached proofs ranks GPT-6 Astra (64) above Qwen3.8-27B (55). In the probe order, however, Muse Spark 1.3 sits at position 122 and GPT-6 Astra at 183, and `probeCapabilities` probed strictly one candidate at a time inside the 180 s schema budget, so neither was ever reached. Probes now run up to `dispatch.maxConcurrentProbes` at once. One account's models stay serial, so account-level failures still short-circuit that account.
