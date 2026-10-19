@@ -188,8 +188,13 @@ function orderCandidatesForProbe(candidates, profile, options = {}) {
           : undefined;
   const role = profile?.role || options.role || 'writer';
   const now = options.now || Date.now();
-  const dispatchConfig = sourcesApi.getDispatchConfig(options.registry, options);
-  const batchSize = dispatchConfig.probeRoundRobinBatch;
+  const dispatchConfig =
+    options.dispatchConfig || sourcesApi.getDispatchConfig(options.registry, options);
+  const rawBatchSize = options.probeRoundRobinBatch ?? dispatchConfig?.probeRoundRobinBatch;
+  const batchSize = Number(rawBatchSize);
+  if (!Number.isSafeInteger(batchSize) || batchSize <= 0) {
+    throw new Error('DISPATCH_CONFIG_INVALID: probeRoundRobinBatch must be a positive integer');
+  }
 
   const rows = candidates.map((c, index) => {
     const prior = priorFor(c, role, priors, now);
@@ -219,6 +224,12 @@ function orderCandidatesForProbe(candidates, profile, options = {}) {
   const sortedBucketKeys = Array.from(buckets.keys()).sort((a, b) => b.localeCompare(a));
   const result = [];
 
+  // Round-robin dispatch trade-off:
+  // Candidates are partitioned by source. Inside each source, candidates are ordered
+  // strictly descending by priorScore (cost and initial index as tie-breakers).
+  // Cross-source round-robin interleaves up to `batchSize` models per source to prevent
+  // a catalog-heavy source from monopolizing the schema probe budget window, deliberately
+  // favoring source diversity and starvation prevention over global prior ordering across sources.
   for (const bKey of sortedBucketKeys) {
     const bucketRows = buckets.get(bKey);
     const sourceQueues = new Map();
@@ -252,8 +263,10 @@ function orderCandidatesForProbe(candidates, profile, options = {}) {
         const queue = sourceQueues.get(src);
         if (queue && queue.length) {
           const take = queue.splice(0, batchSize);
-          result.push(...take);
-          takenAny = true;
+          if (take.length > 0) {
+            result.push(...take);
+            takenAny = true;
+          }
         }
       }
       if (!takenAny) break;
@@ -279,7 +292,16 @@ async function probeCapabilities(candidates, profile, options = {}) {
 
   const store = o.routeHealth || null;
   const failedHttpAccounts = o.failedHttpAccounts || new Map();
-  const orderedCandidates = orderCandidatesForProbe(candidates, profile, o);
+  const machineDataOff = process.env.AI_BRAIN_MACHINE_DATA === 'none';
+  const priors =
+    o.priors !== undefined
+      ? o.priors
+      : o.ranking?.priors !== undefined
+        ? o.ranking.priors
+        : !machineDataOff
+          ? loadPriors()
+          : undefined;
+  const orderedCandidates = orderCandidatesForProbe(candidates, profile, { ...o, priors });
 
   for (const c of orderedCandidates) {
     if (c.blocked || c.credentialEnvMissing || !c.accountId || c.accountId === '*') continue;

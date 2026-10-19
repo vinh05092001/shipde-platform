@@ -1201,14 +1201,22 @@ Aggregator routers like 9Router require model IDs to carry an upstream provider 
 
 - Root cause:
   - In `capability-probe.js`, candidate probe ordering prioritized prior work and recent live route success but sorted unverified candidates strictly by cost and array index without quality prior scores (`priorFor`).
-  - Large catalog sources (such as 9Router with thousands of models) consumed the probe budget (`schemaProbeBudgetMs`), starving high-prior unprobed models on other sources (such as Claude Opus 4.7, Fable 5.1, GPT-6 on explabs, and GPT-5.6 Sol on tokenharbor) from being probed, causing them to be rejected as `CAPABILITY_UNVERIFIED:tools / WRITER_SCHEMA_NOT_VERIFIED_BUDGET`.
+  - Large catalog sources (such as 9Router with thousands of models) consumed the probe budget (`schemaProbeBudgetMs`), starving high-prior unprobed models on other sources from being probed, causing them to be rejected as `CAPABILITY_UNVERIFIED:tools / WRITER_SCHEMA_NOT_VERIFIED_BUDGET`.
 - Repairs:
   - In `tools/ai-brain/capability-probe.js`:
     - Updated `orderCandidatesForProbe` to sort candidates within each work/live bucket in descending order of benchmark prior score via `priorFor`. Unscored candidates sort after scored candidates while remaining probe-eligible.
     - Added fair round-robin dispatch across sources/gateways using `probeRoundRobinBatch` from dispatch configuration, ensuring no single source exhausts the probe window.
-    - Guarded `preflightHttp` with `Date.now() < deadline` so budget exhaustion does not cause premature route failure or cooldown records in `routeHealth`.
-    - Unprobed candidates at budget exhaustion retain `unverified: true` status without recording route errors or cooldowns.
+    - Strictly validated `probeRoundRobinBatch` as a positive integer fail-closed limit (raising `DISPATCH_CONFIG_INVALID` on non-positive or invalid input) and guarded progression by `take.length > 0`.
+    - Snapshotted and threaded `priors` through `probeCapabilities` into `orderCandidatesForProbe` so ordering and subsequent ranking reuse the identical snapshot without reloading machine data.
+    - Guarded `preflightHttp` with `Date.now() < deadline` so budget exhaustion does not trigger HTTP preflight after deadline.
   - In `tools/ai-brain/sources.json` and `tools/ai-brain/sources.js`:
     - Added configurable `probeRoundRobinBatch` in `dispatch` configuration and exposed it via `getDispatchConfig`.
+  - Trade-offs & Known Limitations:
+    - Round-robin interleaves models across sources up to `probeRoundRobinBatch` per turn to guarantee source diversity and prevent large single sources from monopolizing the probe window. This deliberately trades strict cross-source prior order for source starvation prevention (inside each source, models are strictly sorted descending by benchmark prior score, with cost and index as tie-breakers).
   - Verification:
-    - New test `tools/ai-brain/test/task-ai-142-probe-strong-first.test.js` verifying that a high-prior model (prior 90) on a secondary source is probed before budget exhaustion ahead of 50 weak models from a large source.
+    - New tests in `tools/ai-brain/test/task-ai-142-probe-strong-first.test.js` verifying:
+      - High-prior model (prior 90) on a secondary source probed before budget exhaustion ahead of 50 weak models from a large source.
+      - Fail-closed validation of `probeRoundRobinBatch` when missing, negative, zero, or invalid.
+      - Multi-source round-robin fairness across sources with configurable batch size and prior-descending ordering within source.
+      - HTTP preflight skipping after budget deadline without cooldown recording.
+      - Snapshot threading of `ranking.priors` into probe ordering.
