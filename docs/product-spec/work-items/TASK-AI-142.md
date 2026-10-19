@@ -1196,3 +1196,10 @@ Aggregator routers like 9Router require model IDs to carry an upstream provider 
        - Ensured consistent `--title` fallback to work item ID or task name.
   3. Verification:
      - New unit tests in `tools/ai-brain/test/task-ai-142-opencode-writer.test.js` verifying config generation for SSE/JSON sources, permission scoping, secret redaction, and `HARNESS_EMPTY_RESPONSE` handling.
+
+### H3 live: launcher supports direct-http writer and rejects unsupported harnesses (2026-10-19)
+
+- Fixed UNKNOWN_HARNESS: direct-http defect where direct-http candidates were selected for writer tasks but failed at launch:
+  1. Root cause: Direct model sources declaring harness `direct-http` (such as Mercury 2.5 on Inception) were admitted into writer selection and preflight, but `executor.js` / `harness.js` lacked `direct-http` in `runsOpenCodeHarness` and `HARNESSES`. When launched, the launcher failed with `UNKNOWN_HARNESS: direct-http`.
+  2. Resolution: Launcher writer adapter now supports `direct-http` by routing through `opencodeDirect` (`opencode-direct`), enabling OpenCode to run direct HTTP OpenAI-compatible endpoints with dynamic config generation. Additionally, candidates whose harness has no launcher writer adapter are rejected during writer ranking with `reasonCode: 'HARNESS_WRITER_UNSUPPORTED'` derived dynamically from launcher data (`listHarnesses()` / `HARNESSES` in `tools/ai-brain/harness.js`).
+  3. Verification: Covered by `tools/ai-brain/test/task-ai-142-direct-http-writer.test.js` and full brain test suite.

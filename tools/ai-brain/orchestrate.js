@@ -3355,6 +3355,7 @@ async function selectCandidateForProfile(
   if (o.isolatedWorker && (o.refreshWriterModels === true || o.enforceCredentialCheck === true)) {
     const env = { ...process.env, ...o.env };
     const selectionApi = require('./writer-selection');
+    const { hasLauncherWriter } = require('./harness');
     candidates = candidates.map((c) => {
       if (c.blocked) return c;
       let route;
@@ -3368,6 +3369,13 @@ async function selectCandidateForProfile(
           ...c,
           blocked: true,
           blockReason: 'ROUTE_CONFIGURATION_UNAVAILABLE',
+          routeEvidence: selectionApi.inventoryEvidence(c, registry, false),
+        };
+      if (!hasLauncherWriter(route.harnessName, { registry }))
+        return {
+          ...c,
+          blocked: true,
+          blockReason: 'HARNESS_WRITER_UNSUPPORTED',
           routeEvidence: selectionApi.inventoryEvidence(c, registry, false),
         };
       if (route.harnessName !== 'opencode-direct') return c;

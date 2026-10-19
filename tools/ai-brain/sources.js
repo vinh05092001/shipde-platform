@@ -346,10 +346,11 @@ function runsOpenCodeHarness(harnessName, registry) {
   const openCodeHarnesses = new Set(
     sources
       .map((s) => s && s.harness && String(s.harness).toLowerCase())
-      .filter((h) => h === 'opencode' || h === 'paseo')
+      .filter((h) => h === 'opencode' || h === 'paseo' || h === 'direct-http')
   );
   openCodeHarnesses.add('opencode');
   openCodeHarnesses.add('paseo');
+  openCodeHarnesses.add('direct-http');
   return openCodeHarnesses.has(name);
 }
 
