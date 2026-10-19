@@ -51,6 +51,20 @@ test('metadata amend refuses a missing installed hook and preserves HEAD', (t) =
   assert.equal(f.git('rev-parse', 'HEAD'), f.sha);
 });
 
+test('unchanged metadata needs no commit or installed hook', (t) => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.root, 'docs/product-spec/work-items/GOAL-FIXTURE.md'), 'base\n');
+  assert.equal(
+    launcher.commitWorkerMetadata({
+      hostRoot: f.root,
+      workerRoot: f.root,
+      workItemId: 'GOAL-FIXTURE',
+    }),
+    null
+  );
+  assert.equal(f.git('rev-parse', 'HEAD'), f.sha);
+});
+
 for (const exit of [0, 1])
   test(`metadata amend executes installed hook (exit ${exit})`, (t) => {
     const f = fixture(t);

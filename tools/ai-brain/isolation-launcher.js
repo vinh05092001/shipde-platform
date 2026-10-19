@@ -94,13 +94,20 @@ function commitNativeWriterChanges(options) {
 /** Amend only Controller-owned goal metadata, using the installed host hook. */
 function commitWorkerMetadata(options) {
   const o = options || {};
-  const checked = hookedControllerGit({ ...o, failure: 'WORKER_COMMIT_FAILED' });
   const files = [
     'docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv',
     `docs/product-spec/work-items/${o.workItemId}.md`,
   ];
-  const dirty = checked(['status', '--porcelain', '--', ...files]);
+  const { withCleanGitEnv, safeGit } = require('./supervisor');
+  const status = withCleanGitEnv(
+    o.workerRoot,
+    (safeDir) => safeGit(safeDir, o.workerRoot, ['status', '--porcelain', '--', ...files], 20000),
+    { workerWritable: true }
+  );
+  if (!status || status.status !== 0) throw new Error('WORKER_COMMIT_FAILED: status');
+  const dirty = String(status.stdout || '').trim();
   if (!dirty) return null;
+  const checked = hookedControllerGit({ ...o, failure: 'WORKER_COMMIT_FAILED' });
   const head = checked(['rev-parse', '--verify', 'HEAD^{commit}']);
   if (head === o.headSha) return null;
   // Some goals have no register delta: only stage metadata that exists.
