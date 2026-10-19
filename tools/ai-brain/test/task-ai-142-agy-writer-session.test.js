@@ -211,6 +211,9 @@ test('goal orchestration uses the authorized pool submission and keeps its durab
     candidates: [c],
     run: undefined,
     runsDir,
+    // Without an injected run the host brain gate would run this repository's
+    // whole suite from inside the test (30 minutes on Linux CI).
+    hostGate: () => ({ pass: true, command: 'fixture-only', failures: [], summary: [] }),
     externalWorkers: 'agy-pool',
     registry: { sources: [], dispatch: { agyPoolWriterEnabled: true, maxLocalWriterFallbacks: 1 } },
   });
