@@ -1939,6 +1939,7 @@ function runHostBrainGate(job, options = {}) {
       command,
       reason: 'UNPARSED_FAILURE',
       failures,
+      output,
       hostGateFailures,
       newFailures: [...failures],
       baselineFailures: [],
@@ -2114,6 +2115,7 @@ function runHostBrainGate(job, options = {}) {
       pass: false,
       command,
       failures: [...newFailures],
+      output,
       hostGateFailures,
       newFailures,
       baselineFailures,
@@ -2133,6 +2135,7 @@ function runHostBrainGate(job, options = {}) {
     pass: false,
     command,
     failures: [...failed],
+    output,
     hostGateFailures,
     newFailures: [...failed],
     baselineFailures: [],
@@ -2141,6 +2144,24 @@ function runHostBrainGate(job, options = {}) {
     cleanupErrors: cleanupMessages,
     cleanupError,
   };
+}
+
+/**
+ * Format host gate diagnostics (failing checks, truncated summary, detail message).
+ * Fails closed if maxSummaryChars is not a positive number.
+ */
+function formatHostGateDiagnostics({ failures, summary, output, maxSummaryChars, defaultDetail }) {
+  const failedChecks = Array.isArray(failures) ? failures.map(String) : [];
+  let shortSummary = '';
+  if (typeof maxSummaryChars === 'number' && maxSummaryChars > 0) {
+    const rawSummary = Array.isArray(summary) ? summary.join('; ') : summary || output || '';
+    shortSummary = String(rawSummary).trim().slice(0, maxSummaryChars);
+  }
+  const detailMessage =
+    failedChecks.length > 0
+      ? `${failedChecks.join(', ')}${shortSummary ? ': ' + shortSummary : ''}`
+      : defaultDetail || shortSummary || '';
+  return { failedChecks, shortSummary, detailMessage };
 }
 
 /** Progress markers, measured host-side from the worker's own worktree. */
@@ -5475,6 +5496,9 @@ async function runOrchestration(goal, opts) {
           res = Object.assign({}, res, {
             exitCode: 1,
             hostGateFailures: gateFailures,
+            hostGateSummary: gate.summary,
+            hostGateOutput: gate.output,
+            hostGateCommand: gate.command,
             needsHostGateRepair: true,
           });
         }
@@ -5535,6 +5559,10 @@ async function runOrchestration(goal, opts) {
           focusedTestsOnly: true,
           contextPack: contextPack && contextPack.path,
           hostGateFailures: res.hostGateFailures,
+          hostGateOutput: res.hostGateOutput,
+          hostGateSummary: res.hostGateSummary,
+          hostGateCommand: res.hostGateCommand,
+          maxPromptCommandOutputChars: itemDispatchConfig.maxPromptCommandOutputChars,
         });
         prompt = repairJob.prompt;
         const promptRecord = log.prompts.find(
@@ -5561,11 +5589,19 @@ async function runOrchestration(goal, opts) {
         } finally {
           recordWriterResult(repairJob, gateRepairResult, 'host-gate-repair', logOpts, o.env);
         }
+        const isRepairRequestTooLarge = Boolean(
+          gateRepairResult &&
+          (gateRepairResult.reason === 'REQUEST_TOO_LARGE' ||
+            /REQUEST_TOO_LARGE/i.test(gateRepairResult.stderr || ''))
+        );
         if (!gateRepairResult || gateRepairResult.exitCode !== 0) {
           item.hostGateFailures = res.hostGateFailures;
           // The repair refusal cannot erase the successful writer session.
           // Its original report remains the evidence; the host gate still blocks review.
-          res = Object.assign({}, res, { exitCode: 0 });
+          res = Object.assign({}, res, {
+            exitCode: 0,
+            hostGateRepairRequestTooLarge: isRepairRequestTooLarge,
+          });
           log.hostGate.repairFailure = failureMessageOf(gateRepairResult);
         } else {
           Object.assign(job, repairJob);
@@ -5574,9 +5610,15 @@ async function runOrchestration(goal, opts) {
           log.hostGate = repairedGate;
           if (!repairedGate.pass) {
             item.hostGateFailures = repairedGate.failures || [];
-            res = Object.assign({}, res, { hostGateFailures: item.hostGateFailures });
+            res = Object.assign({}, res, {
+              hostGateFailures: item.hostGateFailures,
+              hostGateSummary: repairedGate.summary,
+              hostGateOutput: repairedGate.output,
+              hostGateCommand: repairedGate.command,
+            });
           } else {
             delete item.hostGateFailures;
+            delete res.hostGateFailures;
           }
         }
         log.prompts.push({
@@ -5589,6 +5631,12 @@ async function runOrchestration(goal, opts) {
 
       if (res && Array.isArray(res.hostGateFailures) && res.exitCode !== 0) {
         recordedWriterFailures.add(decision.chosen);
+        const { failedChecks, shortSummary, detailMessage } = formatHostGateDiagnostics({
+          failures: res.hostGateFailures,
+          summary: res.hostGateSummary,
+          output: res.hostGateOutput,
+          maxSummaryChars: itemDispatchConfig.maxHostGateSummaryChars,
+        });
         decisions.recordDecision(
           {
             stage: decisions.Stage.FAILED,
@@ -5597,7 +5645,10 @@ async function runOrchestration(goal, opts) {
             chosen: decision.chosen,
             failureScope: 'local',
             cause: 'HOST_GATE_FAILED',
-            detail: res.hostGateFailures.join(', '),
+            detail: detailMessage,
+            failures: failedChecks,
+            failedChecks,
+            summary: shortSummary,
           },
           logOpts
         );
@@ -6105,9 +6156,36 @@ async function runOrchestration(goal, opts) {
         launch.cause = blockedReason;
         launch.outcome = 'failed';
         const step = liveSteps[item.id] || {};
+        const { failedChecks, shortSummary, detailMessage } = formatHostGateDiagnostics({
+          failures: res.hostGateFailures,
+          summary: res.hostGateSummary,
+          output: res.hostGateOutput,
+          maxSummaryChars: itemDispatchConfig.maxHostGateSummaryChars,
+          defaultDetail: blockedReason,
+        });
+
+        const isRequestTooLargeRepair = Boolean(res.hostGateRepairRequestTooLarge);
+        const remainingCandidates = candidates.filter(
+          (c) => candidateKey(c) !== decision.chosen && !failedKeys.has(candidateKey(c))
+        );
+        const isRetryable = isRequestTooLargeRepair && remainingCandidates.length > 0;
+
+        session.hostGateFailures = failedChecks;
+        session.hostGateSummary = shortSummary;
+        session.hostGateDetail = detailMessage;
+        session.isRetryable = isRetryable;
+
         persistStep(item.id, 'host_gate_failed', {
           reason: blockedReason,
-          launch: Object.assign({}, step.launch, { hostGatePass: false }),
+          detail: detailMessage,
+          failures: failedChecks,
+          failedChecks,
+          summary: shortSummary,
+          retryable: isRetryable,
+          launch: Object.assign({}, step.launch, {
+            hostGatePass: false,
+            hostGateFailures: failedChecks,
+          }),
         });
         break;
       }
@@ -6290,6 +6368,7 @@ async function runOrchestration(goal, opts) {
     if (blockedReason) {
       // A real session that is not a completion. The claim is released as failed
       // so a human decides, and the reason is the session's own terminal status.
+      const isHostGateFailed = blockedReason === 'HOST_GATE_FAILED';
       decisions.recordDecision(
         {
           stage: decisions.Stage.FAILED,
@@ -6298,9 +6377,18 @@ async function runOrchestration(goal, opts) {
           chosen: session.candidateKey,
           branch: session.branch,
           sessionId: session.sessionId,
-          detail: blockedReason,
-          // RT-R01: retryable is false for terminal session failures (no classification available)
-          retryable: false,
+          detail:
+            isHostGateFailed && session.hostGateDetail ? session.hostGateDetail : blockedReason,
+          ...(isHostGateFailed
+            ? {
+                failures: session.hostGateFailures || [],
+                failedChecks: session.hostGateFailures || [],
+                summary: session.hostGateSummary || '',
+              }
+            : {}),
+          // RT-R01: retryable is false for terminal session failures (no classification available),
+          // except when host gate repair was killed by REQUEST_TOO_LARGE and other candidates remain.
+          retryable: isHostGateFailed ? Boolean(session.isRetryable) : false,
           retryAfterMs: null,
           cooldownMs: null,
         },
@@ -9214,4 +9302,5 @@ module.exports = {
   PublicationStatus,
   effectiveCooldownMs: evidence.effectiveCooldownMs,
   buildDefaults,
+  formatHostGateDiagnostics,
 };
