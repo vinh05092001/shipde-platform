@@ -168,6 +168,50 @@ function getPidAliveHelper(deps) {
   };
 }
 
+function parseRunDirTimestamp(runDir) {
+  const base = path.basename(runDir);
+  const match = base.match(/(\d{4}-\d{2}-\d{2}T\d{2})[-:](\d{2})[-:](\d{2})(?:[-.](\d{3}))?(Z?)$/);
+  if (match) {
+    const iso = `${match[1]}:${match[2]}:${match[3]}${match[4] ? '.' + match[4] : ''}${match[5] || 'Z'}`;
+    const t = Date.parse(iso);
+    if (!Number.isNaN(t)) return t;
+  }
+  return null;
+}
+
+function isGoalLockActiveForIntake(lockPath, lockData, pid, runDir, fsApi) {
+  if (pid == null) return false;
+  if (pid !== process.pid) return true;
+
+  // Distinguish in-flight work of the selecting runner from abandoned intakes
+  // created by older sessions before this runner acquired the goal lock.
+  let lockStartTime = null;
+  if (lockData && lockData.startedAt) {
+    const t = Date.parse(lockData.startedAt);
+    if (!Number.isNaN(t)) lockStartTime = t;
+  }
+  if (lockStartTime == null) {
+    try {
+      const lockStat = fsApi.statSync(lockPath);
+      lockStartTime = lockStat.birthtimeMs || lockStat.mtimeMs;
+    } catch (_) {}
+  }
+
+  let intakeTime = parseRunDirTimestamp(runDir);
+  if (intakeTime == null) {
+    try {
+      const dirStat = fsApi.statSync(runDir);
+      intakeTime = dirStat.birthtimeMs || dirStat.mtimeMs;
+    } catch (_) {}
+  }
+
+  if (lockStartTime != null && intakeTime != null) {
+    return intakeTime >= lockStartTime;
+  }
+
+  return true;
+}
+
 function resolveRunPid(runDir, workItemId, rootDir, opts, d, fsApi = fs) {
   // 1. Check run.lock inside runDir
   const runLockFile = path.join(runDir, 'run.lock');
@@ -219,7 +263,9 @@ function resolveRunPid(runDir, workItemId, rootDir, opts, d, fsApi = fs) {
           try {
             const data = JSON.parse(fsApi.readFileSync(cand, 'utf8'));
             const pid = parsePid(data && (data.pid != null ? data.pid : data));
-            if (pid != null && pid !== process.pid) return pid;
+            if (pid != null && isGoalLockActiveForIntake(cand, data, pid, runDir, fsApi)) {
+              return pid;
+            }
           } catch (_) {}
         }
       }
@@ -240,7 +286,9 @@ function resolveRunPid(runDir, workItemId, rootDir, opts, d, fsApi = fs) {
             if (Array.isArray(gData.items) && gData.items.includes(workItemId)) {
               const lData = JSON.parse(fsApi.readFileSync(lockPath, 'utf8'));
               const pid = parsePid(lData && (lData.pid != null ? lData.pid : lData));
-              if (pid != null && pid !== process.pid) return pid;
+              if (pid != null && isGoalLockActiveForIntake(lockPath, lData, pid, runDir, fsApi)) {
+                return pid;
+              }
             }
           } catch (_) {}
         }
@@ -265,6 +313,20 @@ function getOpenRuns(options, deps) {
     (d && (d.isPidAlive || d.checkAlive)) ||
     (opts && (opts.isPidAlive || opts.checkAlive)) ||
     getPidAliveHelper(d);
+  let defaultStartupGraceMs = 180000;
+  try {
+    const sJson = require('./sources.json');
+    if (sJson && sJson.dispatch && sJson.dispatch.startupGraceMs) {
+      defaultStartupGraceMs = Number(sJson.dispatch.startupGraceMs);
+    }
+  } catch (_) {}
+  const startupGraceMs =
+    opts.startupGraceMs ??
+    opts.ttlMs ??
+    (d && (d.startupGraceMs || d.ttlMs)) ??
+    (opts.dispatch && opts.dispatch.startupGraceMs) ??
+    (d && d.dispatch && d.dispatch.startupGraceMs) ??
+    defaultStartupGraceMs;
 
   const openRuns = [];
   try {
@@ -303,10 +365,17 @@ function getOpenRuns(options, deps) {
       }
       if (!workItemId) continue;
 
+      const intakeTime = parseRunDirTimestamp(runDir) ?? stat.mtimeMs;
       const pid = resolveRunPid(runDir, workItemId, rootDir, opts, d, fsApi);
-      // Directory freshness is not proof that an owner is running. Preserve the
-      // intake for recovery, but only a live owner may hold the item/ceiling.
-      if (pid == null || !checkAlive(pid)) continue;
+      if (pid != null) {
+        if (!checkAlive(pid)) {
+          continue;
+        }
+      } else {
+        if (now - intakeTime > startupGraceMs) {
+          continue;
+        }
+      }
 
       let terminal = false;
       const runDecDir = path.join(runDir, 'decisions');

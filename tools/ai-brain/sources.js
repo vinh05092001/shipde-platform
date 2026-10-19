@@ -409,6 +409,7 @@ function getDispatchConfig(registry, options = {}) {
     probeTimeoutMs,
     safetyMarginMs,
     schemaProbeBudgetMs,
+    startupGraceMs: configuredLimit('startupGraceMs'),
   };
 }
 

@@ -404,6 +404,57 @@ describe('TASK-AI-132: Controller next runner', () => {
     assert.equal(skipped.reason, 'claimed by open run');
   });
 
+  test('TASK-AI-142: no pid retains startup grace behaviour (open within grace window, closed after grace window)', () => {
+    const dir = makeTempDir('open-run-no-pid-');
+    const intakeBase = path.join(dir, 'tools', 'ai-brain', 'data', 'intake');
+    const runDir = path.join(intakeBase, 'TASK-NOPID-1-2026-10-15T12-00-00-000Z');
+    fs.mkdirSync(runDir, { recursive: true });
+
+    fs.writeFileSync(
+      path.join(runDir, 'specs.json'),
+      JSON.stringify([{ id: 'TASK-NOPID-1' }], null, 2),
+      'utf8'
+    );
+    // Explicitly NO run.lock or pid recorded
+
+    const stat = fs.statSync(runDir);
+    const intakeTime = Date.parse('2026-10-15T12:00:00.000Z');
+    const sourcesConfig = require('../sources.json');
+    const startupGraceMs =
+      (sourcesConfig.dispatch && sourcesConfig.dispatch.startupGraceMs) || 180000;
+
+    // Within grace window: open
+    const withinGraceRuns = getOpenRuns(
+      { rootDir: dir, intakeDir: intakeBase },
+      { now: () => intakeTime + 1000 }
+    );
+    assert.equal(withinGraceRuns.length, 1, 'within grace window must be open');
+    assert.equal(withinGraceRuns[0].workItemId, 'TASK-NOPID-1');
+    assert.equal(
+      isOpenRun(
+        'TASK-NOPID-1',
+        { rootDir: dir, intakeDir: intakeBase },
+        { now: () => intakeTime + 1000 }
+      ),
+      true
+    );
+
+    // Beyond grace window: closed (not open)
+    const beyondGraceRuns = getOpenRuns(
+      { rootDir: dir, intakeDir: intakeBase },
+      { now: () => intakeTime + startupGraceMs + 5000 }
+    );
+    assert.equal(beyondGraceRuns.length, 0, 'beyond grace window must not be open');
+    assert.equal(
+      isOpenRun(
+        'TASK-NOPID-1',
+        { rootDir: dir, intakeDir: intakeBase },
+        { now: () => intakeTime + startupGraceMs + 5000 }
+      ),
+      false
+    );
+  });
+
   test('TASK-AI-142: goal run lock with dead pid does not claim goal item on resume', () => {
     const dir = makeTempDir('open-run-goal-lock-');
     const intakeBase = path.join(dir, 'tools', 'ai-brain', 'data', 'intake');

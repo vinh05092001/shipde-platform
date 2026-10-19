@@ -250,11 +250,14 @@ Decision log entries link `goalId -> workItemId -> candidateKey -> session -> co
 
 ### H3 live: abandoned intake directories do not retain claims (2026-10-18)
 
-`getOpenRuns` requires a resolvable live owner PID. A fresh directory without a PID
-is retained for recovery but cannot claim an item or consume the writer ceiling.
-Run/checkpoint and goal-lock PID resolution and terminal-state checks remain active.
-A goal lock owned by the selecting runner itself does not revive older intake
-directories; another live runner still blocks concurrent work.
+`getOpenRuns` requires a live owner PID, or directory freshness within the bounded
+`startupGraceMs` dispatch window to protect in-flight launch startup from duplicate selection
+and ceiling overflow. An intake directory exceeding the startup grace window without a live
+PID is retained for recovery but does not hold a claim. Run/checkpoint and goal-lock PID
+resolution and terminal-state checks remain active. A goal lock owned by the selecting runner
+itself attributes only in-flight intakes created after the lock was acquired, preventing
+abandoned intake directories from reviving claims while counting active in-flight work.
+Another live runner's goal lock continues to protect concurrent work.
 The regression creates only temporary fixtures and verifies selection, ceiling,
 and preservation of the abandoned intake directory.
 
