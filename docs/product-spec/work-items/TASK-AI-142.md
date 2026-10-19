@@ -1301,3 +1301,7 @@ FEAT-AUTH-05 run 2026-10-20 00:08 ranked claude-opus-5 (quality 82, live probe 2
 ### Pool writer tests no longer race the Linux file clock (2026-10-20)
 
 `task-ai-142-agy-writer-session.test.js` failed intermittently on CI after 120 s and 30 min. `waitForResult` accepts only a `result.json` modified at or after submission, and the coarse Linux file clock could stamp the fixture's result before the submit `Date.now()`. The fixtures now mark their result as written one second later. Production waiting is unchanged.
+
+### Direct sources prefix bare model id with providerId in OpenCode launch args (2026-10-20)
+
+FEAT-AUTH-05 run 2026-10-20 02:30 chose a direct-http provider with bare model id, and worker launch failed instantly with launch_config because OpenCode requires `--model <providerId>/<model>` to resolve the provider entry in worker `opencode.json`. Once `providerId` is resolved for an `opencode-direct` launch on a direct (non-router) source, any un-prefixed `--model` argument is rewritten to `providerId + '/' + pinnedModel` in `launch-args-*.json`. Already-prefixed models and router models remain unchanged.
