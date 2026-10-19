@@ -20,334 +20,176 @@ const DEFAULT_WORKER_TIMEOUT_MS = 30 * 60 * 1000;
  * The injected runner is for offline tests; production uses normal Git hooks.
  * A failed hook is a local failure and never becomes a reviewed worker SHA.
  */
-const ALLOWED_GIT_CONFIG_SECTIONS = new Set(['core', 'remote', 'branch', 'user']);
+const FORBIDDEN_WORKER_CONFIG =
+  /^(?:core\.(?:worktree|hookspath|fsmonitor|sshcommand)|include(?:if)?\.|filter\.|merge\..*\.driver$|diff\..*\.command$)/i;
 
-const ALLOWED_CORE_KEYS = new Set([
-  'repositoryformatversion',
-  'filemode',
-  'bare',
-  'logallrefupdates',
-  'symlinks',
-  'ignorecase',
-  'autocrlf',
-  'eol',
-  'hidedotfiles',
-  'preloadindex',
-  'fscache',
-  'trustctime',
-  'checkstat',
-  'compression',
-  'longpaths',
-]);
-
-const ALLOWED_REMOTE_KEYS = new Set(['url', 'fetch', 'pushurl', 'push', 'mirror', 'tagopt']);
-
-const ALLOWED_BRANCH_KEYS = new Set(['remote', 'merge', 'rebase', 'description']);
-
-const ALLOWED_USER_KEYS = new Set(['name', 'email', 'signingkey', 'useconfigonly']);
-
-function validateGitConfigContent(content, failure) {
-  const lines = content.split(/\r?\n/);
-  let currentSection = null;
-  let inContinuation = false;
-
-  for (let i = 0; i < lines.length; i++) {
-    let line = lines[i].trim();
-    if (!line || line.startsWith('#') || line.startsWith(';')) {
-      inContinuation = false;
-      continue;
-    }
-    if (inContinuation) {
-      inContinuation = line.endsWith('\\');
-      continue;
-    }
-    if (line.endsWith('\\')) {
-      inContinuation = true;
-      line = line.slice(0, -1).trim();
-    }
-
-    const sectionMatch = line.match(/^\[\s*([^\]]+?)\s*\]$/);
-    if (sectionMatch) {
-      const rawHeader = sectionMatch[1].trim();
-      let sectionName = null;
-      let subsection = null;
-      const subQuoteMatch = rawHeader.match(/^([a-zA-Z0-9_\-]+)\s+"(.*)"$/);
-      const subDotMatch = rawHeader.match(/^([a-zA-Z0-9_\-]+)\.(.+)$/);
-      if (subQuoteMatch) {
-        sectionName = subQuoteMatch[1].toLowerCase();
-        subsection = subQuoteMatch[2];
-      } else if (subDotMatch) {
-        sectionName = subDotMatch[1].toLowerCase();
-        subsection = subDotMatch[2];
-      } else {
-        sectionName = rawHeader.toLowerCase();
-      }
-
-      if (!ALLOWED_GIT_CONFIG_SECTIONS.has(sectionName)) {
-        throw new Error(failure + ': disallowed git config section: ' + line);
-      }
-      if (sectionName === 'core' && subsection !== null) {
-        throw new Error(failure + ': disallowed subsection in core: ' + line);
-      }
-      currentSection = sectionName;
-      continue;
-    }
-
-    if (!currentSection) {
-      throw new Error(failure + ': git config directive outside section: ' + line);
-    }
-
-    const eqIdx = line.indexOf('=');
-    const rawKey = (eqIdx >= 0 ? line.slice(0, eqIdx) : line).trim();
-    const keyName = rawKey.toLowerCase();
-
-    if (currentSection === 'core') {
-      if (!ALLOWED_CORE_KEYS.has(keyName)) {
-        throw new Error(failure + ': disallowed core git config key: ' + keyName);
-      }
-    } else if (currentSection === 'remote') {
-      if (!ALLOWED_REMOTE_KEYS.has(keyName)) {
-        throw new Error(failure + ': disallowed remote git config key: ' + keyName);
-      }
-    } else if (currentSection === 'branch') {
-      if (!ALLOWED_BRANCH_KEYS.has(keyName)) {
-        throw new Error(failure + ': disallowed branch git config key: ' + keyName);
-      }
-    } else if (currentSection === 'user') {
-      if (!ALLOWED_USER_KEYS.has(keyName)) {
-        throw new Error(failure + ': disallowed user git config key: ' + keyName);
-      }
-    }
-  }
-}
-
-function isPathInside(parent, child) {
-  const rel = path.relative(parent, child);
-  return Boolean(rel) && !rel.startsWith('..') && !path.isAbsolute(rel);
-}
-
-function validateWorkerGitConfig(workerRoot, failure) {
-  if (!workerRoot) return;
-  const fail = failure || 'WORKER_COMMIT_FAILED';
-  const resolvedWorker = path.resolve(workerRoot);
-  let gitDir = path.join(resolvedWorker, '.git');
-  let stat;
-  try {
-    stat = fs.lstatSync(gitDir);
-  } catch {
-    return;
-  }
-  if (stat.isFile()) {
-    let gitDirContent;
-    try {
-      gitDirContent = fs.readFileSync(gitDir, 'utf8').trim();
-    } catch (err) {
-      throw new Error(fail + ': failed to read worker gitfile: ' + err.message);
-    }
-    const match = gitDirContent.match(/^gitdir:\s*(.+)$/i);
-    if (!match) {
-      throw new Error(fail + ': invalid gitfile format');
-    }
-    gitDir = path.resolve(resolvedWorker, match[1]);
-    const commonPath = path.join(gitDir, 'commondir');
-    if (!fs.existsSync(path.join(gitDir, 'config')) && fs.existsSync(commonPath)) {
-      try {
-        const commonDir = fs.readFileSync(commonPath, 'utf8').trim();
-        gitDir = path.resolve(gitDir, commonDir);
-      } catch (err) {
-        throw new Error(fail + ': failed to read worker git commondir: ' + err.message);
-      }
-    }
-  }
-
-  const targetGitDir = path.resolve(gitDir);
-  if (!isPathInside(resolvedWorker, targetGitDir)) {
-    throw new Error(fail + ': git directory resolves outside worker repository');
-  }
-
-  let realWorker;
-  let realGitDir;
-  try {
-    realWorker = fs.realpathSync(resolvedWorker);
-    realGitDir = fs.realpathSync(targetGitDir);
-  } catch (err) {
-    throw new Error(fail + ': failed to resolve worker git directory: ' + err.message);
-  }
-  if (!isPathInside(realWorker, realGitDir)) {
-    throw new Error(fail + ': git directory resolves outside worker repository');
-  }
-
-  const configPath = path.join(targetGitDir, 'config');
-  if (!fs.existsSync(configPath)) {
-    if (!fs.existsSync(path.join(targetGitDir, 'HEAD'))) return;
-    throw new Error(fail + ': worker git config missing');
-  }
-  let content;
-  try {
-    content = fs.readFileSync(configPath, 'utf8');
-  } catch (err) {
-    throw new Error(fail + ': failed to read worker git config: ' + err.message);
-  }
-  validateGitConfigContent(content, fail);
-
-  const worktreeConfig = path.join(targetGitDir, 'config.worktree');
-  if (fs.existsSync(worktreeConfig)) {
-    try {
-      content = fs.readFileSync(worktreeConfig, 'utf8');
-    } catch (err) {
-      throw new Error(fail + ': failed to read worker git config.worktree: ' + err.message);
-    }
-    validateGitConfigContent(content, fail);
-  }
-}
-
-function resolveControllerIdentity(hostRoot) {
-  let name = process.env.GIT_AUTHOR_NAME || process.env.GIT_COMMITTER_NAME;
-  let email = process.env.GIT_AUTHOR_EMAIL || process.env.GIT_COMMITTER_EMAIL;
-  if ((!name || !email) && hostRoot && fs.existsSync(hostRoot)) {
-    try {
-      const resName = cp.spawnSync('git', ['config', 'user.name'], {
-        cwd: hostRoot,
-        encoding: 'utf8',
-        windowsHide: true,
-      });
-      if (resName?.status === 0 && resName.stdout.trim()) {
-        name = name || resName.stdout.trim();
-      }
-      const resEmail = cp.spawnSync('git', ['config', 'user.email'], {
-        cwd: hostRoot,
-        encoding: 'utf8',
-        windowsHide: true,
-      });
-      if (resEmail?.status === 0 && resEmail.stdout.trim()) {
-        email = email || resEmail.stdout.trim();
-      }
-    } catch {}
-  }
-  if (!name || !email) {
-    try {
-      const resName = cp.spawnSync('git', ['config', '--global', 'user.name'], {
-        encoding: 'utf8',
-        windowsHide: true,
-      });
-      if (resName?.status === 0 && resName.stdout.trim()) {
-        name = name || resName.stdout.trim();
-      }
-      const resEmail = cp.spawnSync('git', ['config', '--global', 'user.email'], {
-        encoding: 'utf8',
-        windowsHide: true,
-      });
-      if (resEmail?.status === 0 && resEmail.stdout.trim()) {
-        email = email || resEmail.stdout.trim();
-      }
-    } catch {}
-  }
-  return {
-    name: name || 'ShipDe Controller',
-    email: email || 'controller@shipde.invalid',
-  };
-}
-
-function hookedControllerGit(options) {
-  const o = options || {};
-  const failure = o.failure || 'NATIVE_WRITER_COMMIT_FAILED';
-  const nulDevice = process.platform === 'win32' ? 'NUL' : '/dev/null';
+function cleanGitEnv() {
+  const nul = process.platform === 'win32' ? 'NUL' : '/dev/null';
   const env = Object.fromEntries(
     Object.entries(process.env).filter(([key]) => !/^GIT_/i.test(key))
   );
   Object.assign(env, {
     GIT_CONFIG_NOSYSTEM: '1',
-    GIT_CONFIG_GLOBAL: nulDevice,
-    GIT_CONFIG_SYSTEM: nulDevice,
+    GIT_CONFIG_GLOBAL: nul,
+    GIT_CONFIG_SYSTEM: nul,
   });
-  // Clone hooks are absent. Pin the installed operator hooks explicitly instead
-  // of silently making a hookless commit in the freshly provisioned worker.
-  let hooksPath = o.hooksPath;
-  if (!o.run) {
-    const resolved = cp.spawnSync(
-      'git',
-      ['rev-parse', '--path-format=absolute', '--git-path', 'hooks'],
-      {
-        cwd: o.hostRoot,
-        env,
-        encoding: 'utf8',
-        windowsHide: true,
-      }
-    );
-    hooksPath = resolved?.status === 0 ? String(resolved.stdout || '').trim() : null;
-    const hookFile = hooksPath ? path.join(hooksPath, 'pre-commit') : null;
-    if (!hookFile || !fs.existsSync(hookFile)) {
-      throw new Error(failure + ': installed pre-commit hook missing');
-    }
-    try {
-      const stat = fs.statSync(hookFile);
-      if (stat.isDirectory()) {
-        throw Object.assign(new Error('is directory'), { code: 'EACCES' });
-      }
-      if (process.platform !== 'win32' && (stat.mode & 0o111) === 0) {
-        throw Object.assign(new Error('not executable'), { code: 'EACCES' });
-      }
-      fs.accessSync(hookFile, fs.constants.X_OK);
-    } catch (err) {
-      if (err.code !== 'ENOENT') {
-        throw new Error(failure + ': installed pre-commit hook not executable');
-      }
-    }
-  }
   delete env.LEFTHOOK;
   delete env.LEFTHOOK_EXCLUDE;
   delete env.LEFTHOOK_SKIP;
+  return env;
+}
+
+function isPathInside(parent, child) {
+  const relative = path.relative(parent, child);
+  return Boolean(relative) && relative !== '..' && !relative.startsWith('..' + path.sep);
+}
+
+function workerGitPaths(workerRoot, failure) {
+  const root = path.resolve(workerRoot);
+  const dotGit = path.join(root, '.git');
+  let stat;
+  try {
+    stat = fs.lstatSync(dotGit);
+  } catch {
+    return null;
+  }
+
+  let gitDir = dotGit;
+  if (stat.isFile()) {
+    const match = fs
+      .readFileSync(dotGit, 'utf8')
+      .trim()
+      .match(/^gitdir:\s*(.+)$/i);
+    if (!match) throw new Error(failure + ': invalid gitfile');
+    gitDir = path.resolve(root, match[1]);
+  }
+
+  let realRoot;
+  let realGitDir;
+  try {
+    realRoot = fs.realpathSync(root);
+    realGitDir = fs.realpathSync(gitDir);
+  } catch (error) {
+    throw new Error(failure + ': cannot resolve git directory: ' + error.message);
+  }
+  if (!isPathInside(root, path.resolve(gitDir)) || !isPathInside(realRoot, realGitDir)) {
+    throw new Error(failure + ': git directory resolves outside worker repository');
+  }
+
+  let commonDir = realGitDir;
+  const commonFile = path.join(realGitDir, 'commondir');
+  if (fs.existsSync(commonFile)) {
+    commonDir = fs.realpathSync(
+      path.resolve(realGitDir, fs.readFileSync(commonFile, 'utf8').trim())
+    );
+    if (!isPathInside(realRoot, commonDir)) {
+      throw new Error(failure + ': git directory resolves outside worker repository');
+    }
+  }
+  return { gitDir: realGitDir, commonDir };
+}
+
+function validateConfigFile(configFile, workerRoot, failure) {
+  if (!fs.existsSync(configFile)) return;
+  const result = cp.spawnSync(
+    'git',
+    ['config', '--file', configFile, '--no-includes', '--name-only', '--null', '--list'],
+    { cwd: os.tmpdir(), env: cleanGitEnv(), encoding: 'utf8', windowsHide: true }
+  );
+  if (!result || result.status !== 0) throw new Error(failure + ': invalid worker git config');
+  const blocked = String(result.stdout || '')
+    .split('\0')
+    .find((key) => key && FORBIDDEN_WORKER_CONFIG.test(key));
+  if (blocked) throw new Error(failure + ': forbidden worker git config: ' + blocked);
+}
+
+function validateWorkerGitConfig(workerRoot, failure = 'WORKER_COMMIT_FAILED') {
+  if (!workerRoot) return;
+  const dirs = workerGitPaths(workerRoot, failure);
+  if (!dirs) return;
+  const config = path.join(dirs.commonDir, 'config');
+  if (!fs.existsSync(config)) throw new Error(failure + ': worker git config missing');
+  validateConfigFile(config, workerRoot, failure);
+  validateConfigFile(path.join(dirs.gitDir, 'config.worktree'), workerRoot, failure);
+}
+
+function resolveInstalledHook(hostRoot, env, failure) {
+  const result = cp.spawnSync(
+    'git',
+    ['rev-parse', '--path-format=absolute', '--git-path', 'hooks'],
+    { cwd: hostRoot, env, encoding: 'utf8', windowsHide: true }
+  );
+  const hooks = result?.status === 0 ? String(result.stdout || '').trim() : '';
+  const hook = hooks ? path.join(hooks, 'pre-commit') : '';
+  if (!hook || !fs.existsSync(hook)) {
+    throw new Error(failure + ': installed pre-commit hook missing');
+  }
+  try {
+    const stat = fs.statSync(hook);
+    if (!stat.isFile() || (process.platform !== 'win32' && (stat.mode & 0o111) === 0)) {
+      throw new Error('not executable');
+    }
+    fs.accessSync(hook, fs.constants.X_OK);
+  } catch {
+    throw new Error(failure + ': installed pre-commit hook not executable');
+  }
+  return hooks;
+}
+
+function controllerGit(options, requireHook) {
+  const o = options || {};
+  const failure = o.failure || 'NATIVE_WRITER_COMMIT_FAILED';
+  if (o.run) {
+    return (args) => {
+      const result = o.run(args);
+      if (!result || result.status !== 0) throw new Error(failure + ': ' + args[0]);
+      return String(result.stdout || '').trim();
+    };
+  }
+
   validateWorkerGitConfig(o.workerRoot, failure);
-
-  const safeConfig = [];
-  if (o.workerRoot) {
-    safeConfig.push('-c', 'safe.directory=' + path.resolve(o.workerRoot).split(path.sep).join('/'));
-  }
+  const env = cleanGitEnv();
+  const nul = process.platform === 'win32' ? 'NUL' : '/dev/null';
+  const prefix = [
+    '-c',
+    'core.fsmonitor=false',
+    '-c',
+    'core.attributesFile=' + nul,
+    '-c',
+    'diff.external=',
+    '-c',
+    'commit.gpgsign=false',
+    '-c',
+    'user.name=ShipDe Controller',
+    '-c',
+    'user.email=controller@shipde.invalid',
+    '-c',
+    'safe.directory=' + path.resolve(o.workerRoot).split(path.sep).join('/'),
+  ];
   if (o.hostRoot) {
-    safeConfig.push('-c', 'safe.directory=' + path.resolve(o.hostRoot).split(path.sep).join('/'));
+    prefix.push('-c', 'safe.directory=' + path.resolve(o.hostRoot).split(path.sep).join('/'));
   }
-
-  const hasIdentity = (o.gitConfig || []).some((c) => String(c).includes('user.name'));
-  const identityConfig = [];
-  if (!hasIdentity) {
-    const ident = resolveControllerIdentity(o.hostRoot);
-    if (ident.name) identityConfig.push('-c', 'user.name=' + ident.name);
-    if (ident.email) identityConfig.push('-c', 'user.email=' + ident.email);
+  if (requireHook) {
+    prefix.unshift('-c', 'core.hooksPath=' + resolveInstalledHook(o.hostRoot, env, failure));
   }
+  prefix.push(...(o.gitConfig || []));
 
-  const run =
-    o.run ||
-    ((args) =>
-      cp.spawnSync(
-        'git',
-        [
-          '-c',
-          'core.hooksPath=' + hooksPath,
-          '-c',
-          'core.fsmonitor=false',
-          '-c',
-          'core.attributesFile=' + nulDevice,
-          '-c',
-          'diff.external=',
-          ...safeConfig,
-          ...identityConfig,
-          ...(o.gitConfig || []),
-          ...args,
-        ],
-        {
-          cwd: o.workerRoot,
-          env,
-          encoding: 'utf8',
-          windowsHide: true,
-          timeout: o.timeoutMs || DEFAULT_WORKER_TIMEOUT_MS,
-          maxBuffer: 1024 * 1024,
-        }
-      ));
   return (args) => {
-    const result = run(args);
+    const result = cp.spawnSync('git', [...prefix, ...args], {
+      cwd: o.workerRoot,
+      env,
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: o.timeoutMs || DEFAULT_WORKER_TIMEOUT_MS,
+      maxBuffer: 1024 * 1024,
+    });
     if (!result || result.status !== 0) throw new Error(failure + ': ' + args[0]);
     return String(result.stdout || '').trim();
   };
+}
+
+function hookedControllerGit(options) {
+  return controllerGit(options, true);
 }
 
 function commitNativeWriterChanges(options) {
@@ -367,44 +209,14 @@ function commitNativeWriterChanges(options) {
 /** Amend only Controller-owned goal metadata, using the installed host hook. */
 function commitWorkerMetadata(options) {
   const o = options || {};
-  validateWorkerGitConfig(o.workerRoot, 'WORKER_COMMIT_FAILED');
   const files = [
     'docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv',
     `docs/product-spec/work-items/${o.workItemId}.md`,
   ];
-  const { withCleanGitEnv, safeGit } = require('./supervisor');
-  let status;
-  try {
-    status = withCleanGitEnv(
-      o.workerRoot,
-      (safeDir) => safeGit(safeDir, o.workerRoot, ['status', '--porcelain', '--', ...files], 20000),
-      { workerWritable: true }
-    );
-  } catch (err) {
-    throw new Error('WORKER_COMMIT_FAILED: status: ' + err.message);
-  }
-  if (!status || status.status !== 0) throw new Error('WORKER_COMMIT_FAILED: status');
-  const dirty = String(status.stdout || '').trim();
-  if (!dirty) return null;
-  let headCheck;
-  try {
-    headCheck = withCleanGitEnv(
-      o.workerRoot,
-      (safeDir) =>
-        safeGit(
-          safeDir,
-          o.workerRoot,
-          ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'],
-          20000
-        ),
-      { workerWritable: true }
-    );
-  } catch (err) {
-    throw new Error('WORKER_COMMIT_FAILED: rev-parse: ' + err.message);
-  }
-  if (!headCheck || headCheck.status !== 0) throw new Error('WORKER_COMMIT_FAILED: rev-parse');
-  const head = String(headCheck.stdout || '').trim();
-  if (!head || !/^[a-f0-9]{40}$/i.test(head)) throw new Error('WORKER_COMMIT_FAILED: rev-parse');
+  const inspect = controllerGit({ ...o, failure: 'WORKER_COMMIT_FAILED' }, false);
+  if (!inspect(['status', '--porcelain', '--', ...files])) return null;
+  const head = inspect(['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']);
+  if (!/^[a-f0-9]{40}$/i.test(head)) throw new Error('WORKER_COMMIT_FAILED: rev-parse');
   if (o.headSha && head.toLowerCase() === String(o.headSha).trim().toLowerCase()) return null;
   const checked = hookedControllerGit({ ...o, failure: 'WORKER_COMMIT_FAILED' });
   // Some goals have no register delta: only stage metadata that exists.

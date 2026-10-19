@@ -228,6 +228,8 @@ test('installed hooks are pinned on the production commit path without touching 
   const calls = [];
   let dirty = true;
   t.mock.method(fs, 'existsSync', (file) => String(file).endsWith('pre-commit'));
+  t.mock.method(fs, 'statSync', () => ({ isFile: () => true, mode: 0o755 }));
+  t.mock.method(fs, 'accessSync', () => undefined);
   t.mock.method(cp, 'spawnSync', (cmd, args, opts) => {
     assert.equal(cmd, 'git');
     calls.push(args);

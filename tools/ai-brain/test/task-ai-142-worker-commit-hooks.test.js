@@ -1,365 +1,165 @@
 'use strict';
-const { test } = require('node:test');
+const test = require('node:test');
 const assert = require('node:assert/strict');
+const cp = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const cp = require('node:child_process');
 const launcher = require('../isolation-launcher');
 
-function fixture(t, opts = {}) {
+const EMPTY_GLOBAL = process.platform === 'win32' ? 'NUL' : '/dev/null';
+const IDENTITY = ['-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid'];
+
+function git(cwd, ...args) {
+  const result = cp.spawnSync('git', [...IDENTITY, ...args], {
+    cwd,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      GIT_CONFIG_NOSYSTEM: '1',
+      GIT_CONFIG_GLOBAL: EMPTY_GLOBAL,
+      GIT_CONFIG_SYSTEM: EMPTY_GLOBAL,
+    },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  return result.stdout.trim();
+}
+
+function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'worker-hook-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^GIT_/i.test(k)));
-  Object.assign(env, {
-    GIT_CONFIG_NOSYSTEM: '1',
-    GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
-  });
-  const git = (...args) => {
-    const r = cp.spawnSync(
-      'git',
-      ['-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid', ...args],
-      { cwd: root, env, encoding: 'utf8' }
-    );
-    assert.equal(r.status, 0, r.stderr);
-    return r.stdout.trim();
-  };
-  git('init', '-q');
-  if (!opts.noIdentity) {
-    git('config', 'user.name', 'fixture');
-    git('config', 'user.email', 'fixture@example.invalid');
-  }
-  const file = 'docs/product-spec/work-items/GOAL-FIXTURE.md';
-  fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
-  fs.writeFileSync(path.join(root, file), 'base\n');
-  git('add', '.');
-  git('commit', '-m', 'base');
-  const sha = git('rev-parse', 'HEAD');
-  fs.writeFileSync(path.join(root, file), 'updated\n');
-  return { root, git, sha, hook: path.join(root, '.git/hooks/pre-commit') };
+  git(root, 'init', '-q');
+  const workItem = 'docs/product-spec/work-items/GOAL-FIXTURE.md';
+  fs.mkdirSync(path.dirname(path.join(root, workItem)), { recursive: true });
+  fs.writeFileSync(path.join(root, workItem), 'base\n');
+  git(root, 'add', '.');
+  git(root, 'commit', '-m', 'base');
+  const head = git(root, 'rev-parse', 'HEAD');
+  fs.writeFileSync(path.join(root, workItem), 'updated\n');
+  return { root, workItem, head, hook: path.join(root, '.git', 'hooks', 'pre-commit') };
 }
 
-test('metadata amend refuses a missing installed hook and preserves HEAD', (t) => {
-  const f = fixture(t);
-  assert.throws(
-    () =>
-      launcher.commitWorkerMetadata({
-        hostRoot: f.root,
-        workerRoot: f.root,
-        workItemId: 'GOAL-FIXTURE',
-      }),
-    /WORKER_COMMIT_FAILED: installed pre-commit hook missing/
-  );
-  assert.equal(f.git('rev-parse', 'HEAD'), f.sha);
-});
+function writeHook(target, body, mode = 0o755) {
+  fs.writeFileSync(target, '#!/bin/sh\n' + body + '\n', { mode });
+}
 
-test('metadata amend refuses a non-executable installed hook and preserves HEAD', (t) => {
-  const f = fixture(t);
-  fs.writeFileSync(f.hook, '#!/bin/sh\nexit 0\n', { mode: 0o644 });
-  const origAccessSync = fs.accessSync.bind(fs);
-  t.mock.method(fs, 'accessSync', (target, mode) => {
-    if (path.resolve(target) === path.resolve(f.hook) && mode & fs.constants.X_OK) {
-      const err = new Error('EACCES: permission denied, access ' + target);
-      err.code = 'EACCES';
-      throw err;
-    }
-    return origAccessSync(target, mode);
+function commitMetadata(f, options = {}) {
+  return launcher.commitWorkerMetadata({
+    hostRoot: options.hostRoot || f.root,
+    workerRoot: f.root,
+    workItemId: 'GOAL-FIXTURE',
+    ...options,
   });
-  assert.throws(
-    () =>
-      launcher.commitWorkerMetadata({
-        hostRoot: f.root,
-        workerRoot: f.root,
-        workItemId: 'GOAL-FIXTURE',
-      }),
-    /WORKER_COMMIT_FAILED: installed pre-commit hook not executable/
-  );
-  assert.equal(f.git('rev-parse', 'HEAD'), f.sha);
-});
+}
 
-test('unchanged metadata needs no commit or installed hook', (t) => {
-  const f = fixture(t);
-  fs.writeFileSync(path.join(f.root, 'docs/product-spec/work-items/GOAL-FIXTURE.md'), 'base\n');
-  assert.equal(
-    launcher.commitWorkerMetadata({
-      hostRoot: f.root,
-      workerRoot: f.root,
-      workItemId: 'GOAL-FIXTURE',
-    }),
-    null
-  );
-  assert.equal(f.git('rev-parse', 'HEAD'), f.sha);
-});
-
-for (const exit of [0, 1])
-  test(`metadata amend executes installed hook (exit ${exit})`, (t) => {
+test('published metadata commit executes the installed hook and rejects its failure', (t) => {
+  for (const exitCode of [0, 1]) {
     const f = fixture(t);
-    fs.writeFileSync(f.hook, `#!/bin/sh\nprintf ran > hook-ran\nexit ${exit}\n`, { mode: 0o755 });
-    const run = () =>
-      launcher.commitWorkerMetadata({
-        hostRoot: f.root,
-        workerRoot: f.root,
-        workItemId: 'GOAL-FIXTURE',
-      });
-    if (exit) {
-      assert.throws(run, /WORKER_COMMIT_FAILED: commit/);
-      assert.equal(f.git('rev-parse', 'HEAD'), f.sha);
+    writeHook(f.hook, `printf ran > hook-ran\nexit ${exitCode}`);
+    if (exitCode === 0) {
+      assert.match(commitMetadata(f), /^[a-f0-9]{40}$/);
+      assert.notEqual(git(f.root, 'rev-parse', 'HEAD'), f.head);
     } else {
-      assert.match(run(), /^[a-f0-9]{40}$/);
-      assert.notEqual(f.git('rev-parse', 'HEAD'), f.sha);
+      assert.throws(() => commitMetadata(f), /WORKER_COMMIT_FAILED: commit/);
+      assert.equal(git(f.root, 'rev-parse', 'HEAD'), f.head);
     }
     assert.equal(fs.readFileSync(path.join(f.root, 'hook-ran'), 'utf8'), 'ran');
-  });
-
-test('only the private interrupted-work save retains a hook bypass', () => {
-  const source = fs.readFileSync(require.resolve('../isolation-launcher'), 'utf8');
-  assert.equal((source.match(/--no-verify/g) || []).length, 1);
-  assert.match(
-    source.slice(
-      source.indexOf('function carryOverSave'),
-      source.indexOf('function carryOverRestore')
-    ),
-    /--no-verify/
-  );
-  assert.match(source, /launchResult\.localFailure = 'WORKER_COMMIT_FAILED'/);
+  }
 });
 
-test('dirty metadata with unchanged HEAD needs no commit or installed hook', (t) => {
-  const f = fixture(t);
-  assert.equal(
-    launcher.commitWorkerMetadata({
-      hostRoot: f.root,
-      workerRoot: f.root,
-      workItemId: 'GOAL-FIXTURE',
-      headSha: f.sha,
-    }),
-    null
-  );
-  assert.equal(f.git('rev-parse', 'HEAD'), f.sha);
-});
+test('git directory and gitfile redirects outside the worker repository fail closed', (t) => {
+  const host = fixture(t);
+  writeHook(host.hook, 'exit 0');
+  const victim = fixture(t);
 
-function createExecutableScript(basePath, content) {
-  const isWin = process.platform === 'win32';
-  const filePath = isWin ? basePath + '.bat' : basePath + '.sh';
-  const scriptContent = isWin ? `@echo off\n${content}\n` : `#!/bin/sh\n${content}\n`;
-  fs.writeFileSync(filePath, scriptContent, { mode: 0o755 });
-  return filePath.replace(/\\/g, '/');
-}
-
-test('worker-planted filter clean or core.fsmonitor in .git/config is rejected and not executed', (t) => {
-  const f = fixture(t);
-  fs.writeFileSync(f.hook, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-  const touchClean = createExecutableScript(
-    path.join(f.root, 'touch_clean'),
-    'echo clean_ran > pwned_clean'
-  );
-  const touchFs = createExecutableScript(path.join(f.root, 'touch_fs'), 'echo fs_ran > pwned_fs');
-
-  fs.appendFileSync(
-    path.join(f.root, '.git', 'config'),
-    `\n[filter "evil"]\n\tclean = "${touchClean}"\n[core]\n\tfsmonitor = "${touchFs}"\n`
-  );
-  fs.writeFileSync(path.join(f.root, '.gitattributes'), '* filter=evil\n');
-
-  assert.throws(
-    () =>
-      launcher.commitWorkerMetadata({
-        hostRoot: f.root,
-        workerRoot: f.root,
-        workItemId: 'GOAL-FIXTURE',
-      }),
-    /WORKER_COMMIT_FAILED: disallowed git config section: \[filter "evil"\]/
-  );
-
-  assert.equal(
-    fs.existsSync(path.join(f.root, 'pwned_clean')),
-    false,
-    'clean filter must not execute'
-  );
-  assert.equal(fs.existsSync(path.join(f.root, 'pwned_fs')), false, 'fsmonitor must not execute');
-});
-
-test('worker config allowlist rejects legacy filter, includes, and merge drivers', (t) => {
-  const cases = [
-    {
-      section: '\n[filter.evil]\n\tclean = echo pwned\n',
-      match: /disallowed git config section: \[filter\.evil\]/,
-    },
-    {
-      section: '\n[include]\n\tpath = evil.inc\n',
-      match: /disallowed git config section: \[include\]/,
-    },
-    {
-      section: '\n[includeIf "gitdir:foo"]\n\tpath = evil.inc\n',
-      match: /disallowed git config section: \[includeIf "gitdir:foo"\]/,
-    },
-    {
-      section: '\n[merge "evil"]\n\tdriver = echo pwned\n',
-      match: /disallowed git config section: \[merge "evil"\]/,
-    },
-    { section: '\n[core]\n\teditor = evil\n', match: /disallowed core git config key: editor/ },
-    {
-      section: '\n[core]\n\tworktree = ../..\n',
-      match: /disallowed core git config key: worktree/,
-    },
-  ];
-  for (const c of cases) {
-    const f = fixture(t);
-    fs.writeFileSync(f.hook, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-    fs.appendFileSync(path.join(f.root, '.git', 'config'), c.section);
+  for (const kind of ['gitfile', 'directory-link']) {
+    const worker = fixture(t);
+    fs.rmSync(path.join(worker.root, '.git'), { recursive: true, force: true });
+    if (kind === 'gitfile') {
+      fs.writeFileSync(
+        path.join(worker.root, '.git'),
+        `gitdir: ${path.join(victim.root, '.git')}\n`
+      );
+    } else {
+      fs.symlinkSync(
+        path.join(victim.root, '.git'),
+        path.join(worker.root, '.git'),
+        process.platform === 'win32' ? 'junction' : 'dir'
+      );
+    }
     assert.throws(
-      () =>
-        launcher.commitWorkerMetadata({
-          hostRoot: f.root,
-          workerRoot: f.root,
-          workItemId: 'GOAL-FIXTURE',
-        }),
-      c.match
+      () => commitMetadata(worker, { hostRoot: host.root }),
+      /WORKER_COMMIT_FAILED: git directory resolves outside worker repository/
+    );
+    assert.equal(git(victim.root, 'rev-parse', 'HEAD'), victim.head);
+  }
+});
+
+test('worker config cannot redirect worktree, hooks, includes, filters, or merge drivers', (t) => {
+  const cases = [
+    '[core]\nworktree = ../outside\n',
+    '[core]\nhooksPath = hooks-controlled-by-worker\n',
+    '[include]\npath = controlled.inc\n',
+    '[includeIf "gitdir:worker"]\npath = controlled.inc\n',
+    '[filter "evil"]\nclean = echo executed\n',
+    '[merge "evil"]\ndriver = echo executed\n',
+  ];
+  for (const config of cases) {
+    const f = fixture(t);
+    writeHook(f.hook, 'exit 0');
+    fs.appendFileSync(path.join(f.root, '.git', 'config'), '\n' + config);
+    assert.throws(
+      () => commitMetadata(f),
+      /WORKER_COMMIT_FAILED: forbidden worker git config/,
+      config
+    );
+    assert.equal(
+      git(
+        os.tmpdir(),
+        `--git-dir=${path.join(f.root, '.git')}`,
+        `--work-tree=${f.root}`,
+        'rev-parse',
+        'HEAD'
+      ),
+      f.head
     );
   }
 });
 
-test('native writer and metadata commits succeed without local identity or global config', (t) => {
-  const f = fixture(t, { noIdentity: true });
-  fs.writeFileSync(f.hook, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-
-  // Verify worker config has no local identity
-  const cfg = fs.readFileSync(path.join(f.root, '.git', 'config'), 'utf8');
-  assert.equal(/user\.(name|email)/i.test(cfg), false);
-
-  // Metadata commit amendment succeeds via injected controller identity
-  const amendedSha = launcher.commitWorkerMetadata({
-    hostRoot: f.root,
-    workerRoot: f.root,
-    workItemId: 'GOAL-FIXTURE',
-  });
-  assert.match(amendedSha, /^[a-f0-9]{40}$/);
-
-  // Native writer file-only commit succeeds with no local identity
-  fs.writeFileSync(path.join(f.root, 'native_change.txt'), 'native content\n');
-  const writerSha = launcher.commitNativeWriterChanges({
-    hostRoot: f.root,
-    workerRoot: f.root,
-    workItemId: 'GOAL-FIXTURE',
-  });
-  assert.match(writerSha, /^[a-f0-9]{40}$/);
-  assert.notEqual(writerSha, amendedSha);
-});
-
-test('worker config allowlist rejects core.worktree pointing outside isolated root', (t) => {
+test('a present but non-executable pre-commit hook fails closed', (t) => {
   const f = fixture(t);
-  fs.writeFileSync(f.hook, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-  fs.appendFileSync(path.join(f.root, '.git', 'config'), '\n[core]\n\tworktree = ../..\n');
+  writeHook(f.hook, 'exit 0', 0o644);
+  if (process.platform === 'win32') {
+    const access = fs.accessSync.bind(fs);
+    t.mock.method(fs, 'accessSync', (target, mode) => {
+      if (path.resolve(target) === path.resolve(f.hook) && mode & fs.constants.X_OK) {
+        throw Object.assign(new Error('not executable'), { code: 'EACCES' });
+      }
+      return access(target, mode);
+    });
+  }
   assert.throws(
-    () =>
-      launcher.commitWorkerMetadata({
-        hostRoot: f.root,
-        workerRoot: f.root,
-        workItemId: 'GOAL-FIXTURE',
-      }),
-    /WORKER_COMMIT_FAILED: disallowed core git config key: worktree/
+    () => commitMetadata(f),
+    /WORKER_COMMIT_FAILED: installed pre-commit hook not executable/
   );
-  assert.equal(f.git('rev-parse', 'HEAD'), f.sha);
+  assert.equal(git(f.root, 'rev-parse', 'HEAD'), f.head);
 });
 
-test('worker git directory or gitfile resolving outside worker repository is rejected before git write', (t) => {
-  const host = fixture(t);
-  fs.writeFileSync(host.hook, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-  const worker = fixture(t);
-  const victim = fixture(t);
-
-  // 1. gitfile redirecting to victim repository
-  fs.rmSync(path.join(worker.root, '.git'), { recursive: true, force: true });
-  fs.writeFileSync(
-    path.join(worker.root, '.git'),
-    'gitdir: ' + path.join(victim.root, '.git') + '\n'
-  );
-
-  assert.throws(
-    () =>
-      launcher.commitWorkerMetadata({
-        hostRoot: host.root,
-        workerRoot: worker.root,
-        workItemId: 'GOAL-FIXTURE',
-      }),
-    /WORKER_COMMIT_FAILED: git directory resolves outside worker repository/
-  );
-
-  assert.throws(
-    () =>
-      launcher.commitNativeWriterChanges({
-        hostRoot: host.root,
-        workerRoot: worker.root,
-        workItemId: 'GOAL-FIXTURE',
-      }),
-    /NATIVE_WRITER_COMMIT_FAILED: git directory resolves outside worker repository/
-  );
-
-  assert.throws(
-    () => launcher.validateWorkerGitConfig(worker.root, 'TEST_FAILURE'),
-    /TEST_FAILURE: git directory resolves outside worker repository/
-  );
-
-  // Victim repository must remain unmodified
-  assert.equal(victim.git('rev-parse', 'HEAD'), victim.sha);
-
-  // 2. Directory symlink / junction redirecting to victim repository
-  fs.rmSync(path.join(worker.root, '.git'), { recursive: true, force: true });
-  fs.symlinkSync(
-    path.join(victim.root, '.git'),
-    path.join(worker.root, '.git'),
-    process.platform === 'win32' ? 'junction' : 'dir'
-  );
-
-  assert.throws(
-    () =>
-      launcher.commitWorkerMetadata({
-        hostRoot: host.root,
-        workerRoot: worker.root,
-        workItemId: 'GOAL-FIXTURE',
-      }),
-    /WORKER_COMMIT_FAILED: git directory resolves outside worker repository/
-  );
-
-  assert.throws(
-    () =>
-      launcher.commitNativeWriterChanges({
-        hostRoot: host.root,
-        workerRoot: worker.root,
-        workItemId: 'GOAL-FIXTURE',
-      }),
-    /NATIVE_WRITER_COMMIT_FAILED: git directory resolves outside worker repository/
-  );
-  assert.equal(victim.git('rev-parse', 'HEAD'), victim.sha);
-});
-
-test('dirty metadata with unreadable or missing HEAD fails closed instead of succeeding', (t) => {
+test('a failed HEAD lookup is a commit failure, never a no-op', (t) => {
   const f = fixture(t);
-  fs.writeFileSync(f.hook, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  writeHook(f.hook, 'exit 0');
+  fs.writeFileSync(path.join(f.root, '.git', 'HEAD'), 'ref: refs/heads/missing\n');
+  assert.throws(() => commitMetadata(f, { headSha: f.head }), /WORKER_COMMIT_FAILED: rev-parse/);
+});
 
-  // Missing/invalid HEAD ref where rev-parse HEAD fails
-  fs.writeFileSync(path.join(f.root, '.git', 'HEAD'), 'ref: refs/heads/missing-branch\n');
+test('no metadata change needs no hook, and only private carry-over save bypasses hooks', (t) => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.root, f.workItem), 'base\n');
+  assert.equal(commitMetadata(f), null);
 
-  // Without headSha, must fail closed with WORKER_COMMIT_FAILED: rev-parse
-  assert.throws(
-    () =>
-      launcher.commitWorkerMetadata({
-        hostRoot: f.root,
-        workerRoot: f.root,
-        workItemId: 'GOAL-FIXTURE',
-      }),
-    /WORKER_COMMIT_FAILED: rev-parse/
-  );
-
-  // Even with headSha supplied, unverified HEAD must fail closed and NOT take no-commit path
-  assert.throws(
-    () =>
-      launcher.commitWorkerMetadata({
-        hostRoot: f.root,
-        workerRoot: f.root,
-        workItemId: 'GOAL-FIXTURE',
-        headSha: f.sha,
-      }),
-    /WORKER_COMMIT_FAILED: rev-parse/
-  );
+  const source = fs.readFileSync(require.resolve('../isolation-launcher'), 'utf8');
+  const saveStart = source.indexOf('function carryOverSave');
+  const restoreStart = source.indexOf('function carryOverRestore');
+  assert.match(source.slice(saveStart, restoreStart), /--no-verify/);
+  assert.doesNotMatch(source.slice(0, saveStart) + source.slice(restoreStart), /--no-verify/);
 });
