@@ -3,7 +3,12 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { getOpenRuns, findNextWorkItem, checkCeiling } = require('../next-runner');
+const {
+  getOpenRuns,
+  findNextWorkItem,
+  checkCeiling,
+  resolveStartupGraceMs,
+} = require('../next-runner');
 
 test('abandoned intake without pid does not claim a ready item or consume ceiling', () => {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'unowned-intake-'));
@@ -222,7 +227,10 @@ test('another live goal runner still claims its goal intake', () => {
     fs.mkdirSync(goalDir, { recursive: true });
     fs.writeFileSync(path.join(runDir, 'specs.json'), JSON.stringify([{ id: 'GOAL-FIXTURE-1' }]));
     const otherPid = process.pid + 1;
-    fs.writeFileSync(path.join(goalDir, 'run.lock'), JSON.stringify({ pid: otherPid }));
+    fs.writeFileSync(
+      path.join(goalDir, 'run.lock'),
+      JSON.stringify({ pid: otherPid, startedAt: '2026-10-18T00:00:00.000Z' })
+    );
     fs.writeFileSync(
       path.join(goalDir, 'goal.json'),
       JSON.stringify({ items: ['GOAL-FIXTURE-1'] })
@@ -236,4 +244,92 @@ test('another live goal runner still claims its goal intake', () => {
   } finally {
     fs.rmSync(rootDir, { recursive: true, force: true });
   }
+});
+
+test('another live goal runner cannot claim an older abandoned intake created before the goal lock', () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'intake-goal-other-abandoned-'));
+  try {
+    const intakeDir = path.join(rootDir, 'intake');
+    const runDir = path.join(intakeDir, 'GOAL-FIXTURE-1-2026-10-18T00-00-00-000Z');
+    const goalsDir = path.join(rootDir, 'goals');
+    const goalDir = path.join(goalsDir, 'FIXTURE');
+    fs.mkdirSync(runDir, { recursive: true });
+    fs.mkdirSync(goalDir, { recursive: true });
+    fs.writeFileSync(path.join(runDir, 'specs.json'), JSON.stringify([{ id: 'GOAL-FIXTURE-1' }]));
+    const otherPid = process.pid + 1;
+    fs.writeFileSync(
+      path.join(goalDir, 'run.lock'),
+      JSON.stringify({ pid: otherPid, startedAt: '2026-10-19T00:00:00.000Z' })
+    );
+    fs.writeFileSync(
+      path.join(goalDir, 'goal.json'),
+      JSON.stringify({ items: ['GOAL-FIXTURE-1'] })
+    );
+    const runs = getOpenRuns(
+      { rootDir, intakeDir, goalsDir },
+      { isPidAlive: (pid) => pid === otherPid }
+    );
+    assert.equal(
+      runs.length,
+      0,
+      'newly acquired goal lock by other live PID must not claim abandoned intake'
+    );
+  } finally {
+    fs.rmSync(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('resolveStartupGraceMs rejects zero grace period override and fail-closed in getOpenRuns', () => {
+  assert.throws(
+    () => resolveStartupGraceMs({ startupGraceMs: 0 }),
+    /DISPATCH_CONFIG_INVALID: startupGraceMs must be a positive integer/
+  );
+  assert.throws(
+    () => resolveStartupGraceMs({ ttlMs: 0 }),
+    /DISPATCH_CONFIG_INVALID: startupGraceMs must be a positive integer/
+  );
+  assert.throws(
+    () => getOpenRuns({ startupGraceMs: 0 }, {}),
+    /DISPATCH_CONFIG_INVALID: startupGraceMs must be a positive integer/
+  );
+});
+
+test('resolveStartupGraceMs rejects invalid non-positive or non-integer limits', () => {
+  assert.throws(
+    () => resolveStartupGraceMs({ startupGraceMs: -5000 }),
+    /DISPATCH_CONFIG_INVALID: startupGraceMs must be a positive integer/
+  );
+  assert.throws(
+    () => resolveStartupGraceMs({ startupGraceMs: 'invalid' }),
+    /DISPATCH_CONFIG_INVALID: startupGraceMs must be a positive integer/
+  );
+  assert.throws(
+    () => resolveStartupGraceMs({ startupGraceMs: NaN }),
+    /DISPATCH_CONFIG_INVALID: startupGraceMs must be a positive integer/
+  );
+  assert.throws(
+    () => resolveStartupGraceMs({ startupGraceMs: Infinity }),
+    /DISPATCH_CONFIG_INVALID: startupGraceMs must be a positive integer/
+  );
+});
+
+test('resolveStartupGraceMs rejects when dispatch configuration fails without silent fallback', () => {
+  assert.throws(
+    () => resolveStartupGraceMs({ registry: { dispatch: { startupGraceMs: 0 } } }),
+    /DISPATCH_CONFIG_INVALID: startupGraceMs must be a positive integer/
+  );
+  assert.throws(
+    () =>
+      resolveStartupGraceMs(
+        {},
+        {
+          sources: {
+            getDispatchConfig: () => {
+              throw new Error('DISPATCH_CONFIG_INVALID: simulated failure');
+            },
+          },
+        }
+      ),
+    /DISPATCH_CONFIG_INVALID: simulated failure/
+  );
 });

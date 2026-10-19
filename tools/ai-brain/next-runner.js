@@ -182,37 +182,36 @@ function parseRunDirTimestamp(runDir) {
 function resolveStartupGraceMs(options, deps) {
   const opts = options || {};
   const d = deps || {};
-  let defaultStartupGraceMs = 0;
-  try {
-    const sourcesApi = (d && d.sources) || (opts && opts.sources) || require('./sources');
-    const cfg = sourcesApi.getDispatchConfig(opts.registry || (d && d.registry), opts);
-    if (cfg && cfg.startupGraceMs != null) {
-      defaultStartupGraceMs = Number(cfg.startupGraceMs);
-    }
-  } catch (_) {
-    try {
-      const sJson = require('./sources.json');
-      if (sJson && sJson.dispatch && sJson.dispatch.startupGraceMs) {
-        defaultStartupGraceMs = Number(sJson.dispatch.startupGraceMs);
-      }
-    } catch (_) {}
-  }
-  return (
+  const sourcesApi = (d && d.sources) || (opts && opts.sources) || require('./sources');
+  const override =
     opts.startupGraceMs ??
     opts.ttlMs ??
-    (d && (d.startupGraceMs || d.ttlMs)) ??
+    (d && (d.startupGraceMs ?? d.ttlMs)) ??
     (opts.dispatch && opts.dispatch.startupGraceMs) ??
-    (d && d.dispatch && d.dispatch.startupGraceMs) ??
-    defaultStartupGraceMs
-  );
+    (d && d.dispatch && d.dispatch.startupGraceMs);
+
+  const dispatchOpts = Object.assign({}, opts);
+  if (override !== undefined) {
+    dispatchOpts.startupGraceMs = override;
+  }
+  const registry =
+    opts.registry ||
+    (d && d.registry) ||
+    (opts.dispatch ? { dispatch: opts.dispatch } : null) ||
+    (d && d.dispatch ? { dispatch: d.dispatch } : null);
+  const cfg = sourcesApi.getDispatchConfig(registry, dispatchOpts);
+  const val = Number(cfg && cfg.startupGraceMs);
+  if (!Number.isSafeInteger(val) || val <= 0) {
+    throw new Error('DISPATCH_CONFIG_INVALID: startupGraceMs must be a positive integer');
+  }
+  return val;
 }
 
 function isGoalLockActiveForIntake(lockPath, lockData, pid, runDir, fsApi, context) {
   if (pid == null) return false;
-  if (pid !== process.pid) return true;
 
-  // Distinguish in-flight work of the selecting runner from abandoned intakes
-  // created by older sessions before this runner acquired the goal lock.
+  // Distinguish in-flight work from abandoned intakes created before this
+  // runner acquired the goal lock.
   let lockStartTime = null;
   if (lockData && lockData.startedAt) {
     const t = Date.parse(lockData.startedAt);
@@ -237,6 +236,8 @@ function isGoalLockActiveForIntake(lockPath, lockData, pid, runDir, fsApi, conte
     return false;
   }
 
+  if (pid !== process.pid) return true;
+
   // A goal lock held by the selecting process only attributes an intake if the
   // work is demonstrably active or within the startup grace window.
   // Otherwise an abandoned intake without a live run PID would be owned indefinitely.
@@ -252,7 +253,9 @@ function isGoalLockActiveForIntake(lockPath, lockData, pid, runDir, fsApi, conte
         ? d.now()
         : (d && d.now) || (opts && opts.now) || Date.now();
   const startupGraceMs =
-    ctx.startupGraceMs != null ? ctx.startupGraceMs : resolveStartupGraceMs(opts, d);
+    ctx.startupGraceMs != null
+      ? resolveStartupGraceMs(Object.assign({}, opts, { startupGraceMs: ctx.startupGraceMs }), d)
+      : resolveStartupGraceMs(opts, d);
 
   if (
     typeof ctx.isDemonstrablyActive === 'function' &&
@@ -1714,4 +1717,5 @@ module.exports = {
   collectAllDecisionRecords,
   getOpenRuns,
   isOpenRun,
+  resolveStartupGraceMs,
 };
