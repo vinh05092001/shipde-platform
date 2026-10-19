@@ -1189,14 +1189,8 @@ function scoreForProfile(candidate, assessment, ctx) {
             : internalQuality * (1 - effectivePriorWeight) + prior.score * effectivePriorWeight
         )
       : internalQuality;
-  const isQualityUnknown =
-    quality === null ||
-    (prior && (prior.qualityLabel === 'QUALITY_UNKNOWN' || prior.score === null));
+  const isQualityUnknown = quality === null || !Number.isFinite(quality);
   const qualityLabel = isQualityUnknown ? 'QUALITY_UNKNOWN' : undefined;
-  if (isQualityUnknown && candidate) {
-    candidate.qualityLabel = 'QUALITY_UNKNOWN';
-    candidate.priorUnknown = true;
-  }
   const reliability = reliabilityScoreOf(candidate);
   const cost = costScoreOf(candidate);
 
@@ -1278,7 +1272,6 @@ function scoreForProfile(candidate, assessment, ctx) {
   const breakdown = {
     latency,
     quality,
-    qualityLabel,
     reliability,
     cost,
     busyPenalty,
@@ -1287,6 +1280,7 @@ function scoreForProfile(candidate, assessment, ctx) {
     contextPenalty,
     prior,
   };
+  if (qualityLabel) breakdown.qualityLabel = qualityLabel;
   if (prior) {
     if (prior.url) breakdown.url = prior.url;
     if (prior.retrievedAt) breakdown.retrievedAt = prior.retrievedAt;
@@ -1568,9 +1562,7 @@ function rankForProfile(candidates, profile, assessment, ctx) {
     });
     const scored = scoreForProfile(c, assessment, scoreContext);
     const isQualityUnknown =
-      c.qualityLabel === 'QUALITY_UNKNOWN' ||
-      scored.breakdown.qualityLabel === 'QUALITY_UNKNOWN' ||
-      scored.breakdown.quality === null;
+      scored.breakdown.qualityLabel === 'QUALITY_UNKNOWN' || scored.breakdown.quality === null;
     ranked.push(
       Object.assign({}, c, {
         candidateKey: key,

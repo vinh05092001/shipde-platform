@@ -151,18 +151,35 @@ test('TASK-AI-142 T5: unscored model is assigned QUALITY_UNKNOWN and ordered aft
   // Candidate unscored must have QUALITY_UNKNOWN label and not defaulted to 0 or average 50
   assert.equal(result.ranking.length, 2, '2 eligible candidates ranked');
   const rankedScored = result.ranking.find((c) => c.candidateKey === candidateScored.candidateKey);
-  const rankedUnscored = result.ranking.find((c) => c.candidateKey === candidateUnscored.candidateKey);
+  const rankedUnscored = result.ranking.find(
+    (c) => c.candidateKey === candidateUnscored.candidateKey
+  );
   assert.ok(rankedScored, 'scored candidate is in ranking');
   assert.ok(rankedUnscored, 'unscored candidate is in ranking');
 
   assert.equal(rankedUnscored.qualityLabel, 'QUALITY_UNKNOWN');
   assert.equal(rankedUnscored.scoreBreakdown.qualityLabel, 'QUALITY_UNKNOWN');
-  assert.equal(rankedUnscored.scoreBreakdown.quality, null, 'quality score must remain null, not defaulted to 0 or 50');
+  assert.equal(
+    rankedUnscored.scoreBreakdown.quality,
+    null,
+    'quality score must remain null, not defaulted to 0 or 50'
+  );
 
   // Order: scored (#1) -> unscored (#2) -> rejected
-  assert.equal(result.ranking[0].candidateKey, candidateScored.candidateKey, 'scored model must rank before unscored model');
-  assert.equal(result.ranking[1].candidateKey, candidateUnscored.candidateKey, 'unscored model ranks after scored model');
-  assert.ok(result.rejected.some((r) => r.candidateKey === candidateRejected.candidateKey), 'rejected model is in rejected list');
+  assert.equal(
+    result.ranking[0].candidateKey,
+    candidateScored.candidateKey,
+    'scored model must rank before unscored model'
+  );
+  assert.equal(
+    result.ranking[1].candidateKey,
+    candidateUnscored.candidateKey,
+    'unscored model ranks after scored model'
+  );
+  assert.ok(
+    result.rejected.some((r) => r.candidateKey === candidateRejected.candidateKey),
+    'rejected model is in rejected list'
+  );
 });
 
 test('TASK-AI-142 T5: dispatch --dry-run prints QUALITY_UNKNOWN for unscored models', async (t) => {
@@ -216,8 +233,186 @@ test('TASK-AI-142 T5: dispatch --dry-run prints QUALITY_UNKNOWN for unscored mod
   // Check that the terminal log output for dry-run printed QUALITY_UNKNOWN
   const rankedLine = logs.find((line) => line.includes(candidateUnscored.candidateKey));
   assert.ok(rankedLine, 'ranked candidate line must be logged: ' + logs.join('\n'));
-  assert.match(rankedLine, /QUALITY_UNKNOWN/, 'printed line must include QUALITY_UNKNOWN label: ' + rankedLine);
+  assert.match(
+    rankedLine,
+    /QUALITY_UNKNOWN/,
+    'printed line must include QUALITY_UNKNOWN label: ' + rankedLine
+  );
 
   // Check decision log structure
   assert.equal(actual.decision.candidates[0].qualityLabel, 'QUALITY_UNKNOWN');
+});
+
+test('TASK-AI-142 regression: null benchmark prior does not set QUALITY_UNKNOWN when internal quality is finite', () => {
+  const sources = require('../sources.json');
+  const modelPrefix = sources.dispatch.providers.oc.modelPrefix;
+  const modelWithEvidence = `${modelPrefix}test-with-evidence`;
+  const modelBenchmarkOnly = `${modelPrefix}test-benchmark-only`;
+
+  const customPriors = {
+    generatedAt: new Date().toISOString(),
+    ranking: [
+      {
+        canonical: 'test-with-evidence',
+        score: null,
+        qualityLabel: 'QUALITY_UNKNOWN',
+        benchmarks: {},
+      },
+      {
+        canonical: 'test-benchmark-only',
+        score: Math.round(sources.dispatch.maxWriterSelectionRounds * 5),
+        benchmarks: { aaCodingIndex: Math.round(sources.dispatch.maxWriterSelectionRounds * 5) },
+      },
+    ],
+  };
+
+  const candidateWithEvidence = {
+    harness: 'opencode-direct',
+    accessPath: 'cli',
+    gateway: 'gw',
+    upstream: 'up-1',
+    accountId: 'acc-1',
+    quotaScope: 'acc-1',
+    modelId: modelWithEvidence,
+    contextWindow: 64000,
+    cost: 5,
+    latency: 500,
+    qualifiedRoles: ['author.foundation'],
+    evidence: [{ status: 'passed', proofLevel: 'HARNESS_PASS', ts: new Date().toISOString() }],
+  };
+  candidateWithEvidence.candidateKey = routing.candidateKey(candidateWithEvidence);
+
+  const candidateBenchmarkOnly = {
+    harness: 'opencode-direct',
+    accessPath: 'cli',
+    gateway: 'gw',
+    upstream: 'up-2',
+    accountId: 'acc-2',
+    quotaScope: 'acc-2',
+    modelId: modelBenchmarkOnly,
+    contextWindow: 64000,
+    cost: 5,
+    latency: 500,
+    qualifiedRoles: ['author.foundation'],
+    evidence: [],
+  };
+  candidateBenchmarkOnly.candidateKey = routing.candidateKey(candidateBenchmarkOnly);
+
+  const profile = {
+    taskId: 'TASK-T5-REG1',
+    role: 'author.foundation',
+    complexity: 'standard',
+    requiredCapabilities: [],
+    contextSize: 32000,
+    proofFloor: 'NONE',
+    qualityFloor: 0,
+    costCeiling: 100,
+  };
+
+  const assessment = {
+    weightProfile: 'BALANCED',
+    weights: { quality: 50, latency: 25, cost: 25 },
+  };
+
+  const scoreResult = routing.scoreForProfile(candidateWithEvidence, assessment, {
+    priors: customPriors,
+  });
+  assert.equal(scoreResult.breakdown.quality, 80);
+  assert.notEqual(scoreResult.breakdown.qualityLabel, 'QUALITY_UNKNOWN');
+
+  const result = routing.rankForProfile(
+    [candidateBenchmarkOnly, candidateWithEvidence],
+    profile,
+    assessment,
+    {
+      priors: customPriors,
+      headrooms: { default: 'open' },
+    }
+  );
+
+  const rankedCandidate = result.ranking.find(
+    (c) => c.candidateKey === candidateWithEvidence.candidateKey
+  );
+  assert.ok(rankedCandidate);
+  assert.notEqual(rankedCandidate.qualityLabel, 'QUALITY_UNKNOWN');
+  assert.equal(
+    result.ranking[0].candidateKey,
+    candidateWithEvidence.candidateKey,
+    'candidate with internal quality score ranks ahead of lower benchmark-only model'
+  );
+});
+
+test('TASK-AI-142 regression: scoring does not mutate candidate qualityLabel and ranking derives label afresh', () => {
+  const sources = require('../sources.json');
+  const modelPrefix = sources.dispatch.providers.oc.modelPrefix;
+  const modelId = `${modelPrefix}test-unscored-then-scored`;
+
+  const customPriors = {
+    generatedAt: new Date().toISOString(),
+    ranking: [],
+  };
+
+  const candidate = {
+    harness: 'opencode-direct',
+    accessPath: 'cli',
+    gateway: 'gw',
+    upstream: 'up-fresh',
+    accountId: 'acc-fresh',
+    quotaScope: 'acc-fresh',
+    modelId,
+    contextWindow: 64000,
+    cost: 5,
+    latency: 500,
+    qualifiedRoles: ['author.foundation'],
+    evidence: [],
+  };
+  candidate.candidateKey = routing.candidateKey(candidate);
+
+  const profile = {
+    taskId: 'TASK-T5-REG2',
+    role: 'author.foundation',
+    complexity: 'standard',
+    requiredCapabilities: [],
+    contextSize: 32000,
+    proofFloor: 'NONE',
+    qualityFloor: 0,
+    costCeiling: 100,
+  };
+
+  const assessment = {
+    weightProfile: 'BALANCED',
+    weights: { quality: 50, latency: 25, cost: 25 },
+  };
+
+  // Step 1: Score initially when unscored
+  const scoreInitial = routing.scoreForProfile(candidate, assessment, { priors: customPriors });
+  assert.equal(scoreInitial.breakdown.qualityLabel, 'QUALITY_UNKNOWN');
+  // Candidate input object must not be mutated
+  assert.equal(
+    candidate.qualityLabel,
+    undefined,
+    'scoring must not mutate input candidate qualityLabel'
+  );
+
+  // Step 2: Simulate candidate having stale qualityLabel or ranked previously
+  candidate.qualityLabel = 'QUALITY_UNKNOWN';
+  candidate.evidence = [
+    { status: 'passed', proofLevel: 'HARNESS_PASS', ts: new Date().toISOString() },
+  ];
+
+  // Step 3: Rank candidate again now that evidence exists
+  const result = routing.rankForProfile([candidate], profile, assessment, {
+    priors: customPriors,
+    headrooms: { default: 'open' },
+  });
+
+  assert.equal(result.ranking.length, 1);
+  const ranked = result.ranking[0];
+  assert.equal(ranked.scoreBreakdown.quality, 80);
+  assert.notEqual(
+    ranked.qualityLabel,
+    'QUALITY_UNKNOWN',
+    'ranking must derive label afresh from quality evidence instead of trusting stale candidate.qualityLabel'
+  );
+  assert.notEqual(ranked.scoreBreakdown.qualityLabel, 'QUALITY_UNKNOWN');
 });
