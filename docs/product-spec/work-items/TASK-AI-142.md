@@ -1264,3 +1264,7 @@ Aggregator routers like 9Router require model IDs to carry an upstream provider 
 ### Launch faults are not model quality failures (2026-10-19)
 
 FEAT-AUTH-05 run 2026-10-19 18:38 chose Qwen3.8-27B (score 55) because GPT-6 Astra, Muse Spark 1.3, Qwen 3.8 Max and Grok 4.6 carried failed evidence from Controller faults (`writeUsageReportFromHarnessResult is not defined`, worker `EPERM`, `UNKNOWN_HARNESS: direct-http` before #405, `TOKEN_BUDGET_UNVERIFIED`). Those launches never reached the model. `evidence.isQualityFailure` now counts only model-scoped or non-launch failures; routing proof, prior usability, probation and reliability use it.
+
+### A purchase-locked model never blocks its whole account (2026-10-19)
+
+explabs returns HTTP 429 `model_requires_purchase` for premium models such as `aion-2.0` while `gpt-6-astra` on the same key returns 200. The probe classifier read the body's `insufficient_quota` as `UPSTREAM_CREDIT_OR_QUOTA`, an account-level failure, so one locked model removed GPT-6 Astra, Muse Spark 1.3 and every other explabs model from FEAT-AUTH-05 writer selection. The classifier now returns `MODEL_LOCKED`, which is model-scoped.
