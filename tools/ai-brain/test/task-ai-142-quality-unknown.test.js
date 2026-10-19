@@ -416,3 +416,84 @@ test('TASK-AI-142 regression: scoring does not mutate candidate qualityLabel and
   );
   assert.notEqual(ranked.scoreBreakdown.qualityLabel, 'QUALITY_UNKNOWN');
 });
+
+test('TASK-AI-142 regression: rankAndRecord clears QUALITY_UNKNOWN when candidate gains finite quality and orders correctly', () => {
+  const sources = require('../sources.json');
+  const candidatesApi = require('../candidates');
+  const modelPrefix = sources.dispatch.providers.oc.modelPrefix;
+  const modelA = `${modelPrefix}cand-unscored-then-scored`;
+  const modelB = `${modelPrefix}cand-already-scored`;
+
+  const candA = {
+    harness: 'opencode-direct',
+    accessPath: 'cli',
+    gateway: 'gw',
+    upstream: 'up-a',
+    accountId: 'acc-a',
+    quotaScope: 'acc-a',
+    modelId: modelA,
+    status: 'passed',
+    qualifiedRoles: ['author.foundation'],
+    evidence: [{ status: 'passed', level: 3 }],
+    quality: undefined,
+  };
+
+  const candB = {
+    harness: 'opencode-direct',
+    accessPath: 'cli',
+    gateway: 'gw',
+    upstream: 'up-b',
+    accountId: 'acc-b',
+    quotaScope: 'acc-b',
+    modelId: modelB,
+    status: 'passed',
+    qualifiedRoles: ['author.foundation'],
+    evidence: [{ status: 'passed', level: 1 }],
+    quality: Math.round(sources.dispatch.maxWriterSelectionRounds * 5),
+  };
+
+  // Step 1: Initial ranking pass when candA has undefined quality
+  const decision1 = ranking.rankAndRecord([candA, candB], {
+    workItemId: 'TASK-P1-REGRESSION',
+    role: 'author.foundation',
+    dryRun: true,
+  });
+
+  assert.equal(candA.qualityLabel, 'QUALITY_UNKNOWN');
+  assert.equal(candA.scoreBreakdown.qualityLabel, 'QUALITY_UNKNOWN');
+  assert.equal(
+    decision1.candidates[0].offeringId,
+    candidatesApi.candidateKey(candB),
+    'scored candidate B must rank before unscored candidate A'
+  );
+
+  // Step 2: candA gains a finite quality score
+  candA.quality = Math.round(sources.dispatch.maxWriterSelectionRounds * 7);
+
+  // Step 3: Subsequent ranking pass
+  const decision2 = ranking.rankAndRecord([candA, candB], {
+    workItemId: 'TASK-P1-REGRESSION',
+    role: 'author.foundation',
+    dryRun: true,
+  });
+
+  // Candidate A must no longer have QUALITY_UNKNOWN
+  assert.notEqual(
+    candA.qualityLabel,
+    'QUALITY_UNKNOWN',
+    'rankAndRecord must clear QUALITY_UNKNOWN when candidate gains a finite quality score'
+  );
+  assert.notEqual(
+    candA.scoreBreakdown.qualityLabel,
+    'QUALITY_UNKNOWN',
+    'scoreBreakdown must not retain QUALITY_UNKNOWN when candidate gains a finite quality score'
+  );
+
+  // Candidate A has higher score (level 3 evidence) and finite quality, so it must rank before candidate B
+  assert.equal(
+    decision2.candidates[0].offeringId,
+    candidatesApi.candidateKey(candA),
+    'now-scored candidate A must rank before candidate B on subsequent ranking'
+  );
+  assert.equal(decision2.chosen, candidatesApi.candidateKey(candA));
+});

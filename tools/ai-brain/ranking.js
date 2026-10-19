@@ -636,11 +636,17 @@ function rankAndRecord(candidates, context) {
   for (const c of eligible) {
     if (!Number.isFinite(c.quality) && c.quality !== 0) {
       c.qualityLabel = 'QUALITY_UNKNOWN';
+    } else {
+      delete c.qualityLabel;
     }
     const { total, breakdown } = scoreCandidate(c, eligible, kind, ctx);
     c.score = total;
     c.scoreBreakdown = breakdown;
-    if (c.qualityLabel) c.scoreBreakdown.qualityLabel = c.qualityLabel;
+    if (c.qualityLabel) {
+      c.scoreBreakdown.qualityLabel = c.qualityLabel;
+    } else if (c.scoreBreakdown && c.scoreBreakdown.qualityLabel) {
+      delete c.scoreBreakdown.qualityLabel;
+    }
     c.scoreSource = 'evidence+capability+headroom+spread+cost';
   }
 
