@@ -290,7 +290,7 @@ test('schema proofs stop at the probe budget and leave the rest unverified, not 
     clock += 10 * 60 * 1000;
     return { ok: false, reason: 'WRITER_SCHEMA_POOL_POOL_TIMEOUT' };
   });
-  const o = { registry: { sources: [] }, externalWorkers: 'agy-pool' };
+  const o = { registry: { sources: [] }, externalWorkers: 'agy-pool', maxConcurrentProbes: 1 };
   const decision = await selectCandidateForProfile(
     item,
     [first, second],
