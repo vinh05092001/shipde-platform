@@ -20,8 +20,9 @@ const DEFAULT_WORKER_TIMEOUT_MS = 30 * 60 * 1000;
  * The injected runner is for offline tests; production uses normal Git hooks.
  * A failed hook is a local failure and never becomes a reviewed worker SHA.
  */
-function commitNativeWriterChanges(options) {
+function hookedControllerGit(options) {
   const o = options || {};
+  const failure = o.failure || 'NATIVE_WRITER_COMMIT_FAILED';
   const env = Object.fromEntries(
     Object.entries(process.env).filter(([key]) => !/^GIT_/i.test(key))
   );
@@ -41,7 +42,7 @@ function commitNativeWriterChanges(options) {
     );
     hooksPath = resolved?.status === 0 ? String(resolved.stdout || '').trim() : null;
     if (!hooksPath || !fs.existsSync(path.join(hooksPath, 'pre-commit'))) {
-      throw new Error('NATIVE_WRITER_COMMIT_FAILED: installed pre-commit hook missing');
+      throw new Error(failure + ': installed pre-commit hook missing');
     }
   }
   delete env.LEFTHOOK;
@@ -50,19 +51,35 @@ function commitNativeWriterChanges(options) {
   const run =
     o.run ||
     ((args) =>
-      cp.spawnSync('git', ['-c', 'core.hooksPath=' + hooksPath, ...args], {
-        cwd: o.workerRoot,
-        env,
-        encoding: 'utf8',
-        windowsHide: true,
-        timeout: 30 * 60 * 1000,
-        maxBuffer: 1024 * 1024,
-      }));
-  const checked = (args) => {
+      cp.spawnSync(
+        'git',
+        [
+          '-c',
+          'core.hooksPath=' + hooksPath,
+          '-c',
+          'safe.directory=' + path.resolve(o.workerRoot).split(path.sep).join('/'),
+          ...(o.gitConfig || []),
+          ...args,
+        ],
+        {
+          cwd: o.workerRoot,
+          env,
+          encoding: 'utf8',
+          windowsHide: true,
+          timeout: 30 * 60 * 1000,
+          maxBuffer: 1024 * 1024,
+        }
+      ));
+  return (args) => {
     const result = run(args);
-    if (!result || result.status !== 0) throw new Error('NATIVE_WRITER_COMMIT_FAILED: ' + args[0]);
+    if (!result || result.status !== 0) throw new Error(failure + ': ' + args[0]);
     return String(result.stdout || '').trim();
   };
+}
+
+function commitNativeWriterChanges(options) {
+  const o = options || {};
+  const checked = hookedControllerGit(o);
   if (checked(['status', '--porcelain'])) {
     checked(['add', '--all']);
     checked(['commit', '-m', '[' + o.workItemId + '] native writer changes']);
@@ -70,6 +87,29 @@ function commitNativeWriterChanges(options) {
   const sha = checked(['rev-parse', '--verify', 'HEAD^{commit}']);
   if (!/^[a-f0-9]{40}$/i.test(sha) || checked(['status', '--porcelain'])) {
     throw new Error('NATIVE_WRITER_COMMIT_FAILED: invalid SHA or dirty tree');
+  }
+  return sha;
+}
+
+/** Amend only Controller-owned goal metadata, using the installed host hook. */
+function commitWorkerMetadata(options) {
+  const o = options || {};
+  const checked = hookedControllerGit({ ...o, failure: 'WORKER_COMMIT_FAILED' });
+  const files = [
+    'docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv',
+    `docs/product-spec/work-items/${o.workItemId}.md`,
+  ];
+  const dirty = checked(['status', '--porcelain', '--', ...files]);
+  if (!dirty) return null;
+  const head = checked(['rev-parse', '--verify', 'HEAD^{commit}']);
+  if (head === o.headSha) return null;
+  // Some goals have no register delta: only stage metadata that exists.
+  const present = files.filter((f) => fs.existsSync(path.join(o.workerRoot, f)));
+  checked(['add', '--', ...present]);
+  checked(['commit', '--amend', '--no-edit']);
+  const sha = checked(['rev-parse', '--verify', 'HEAD^{commit}']);
+  if (!/^[a-f0-9]{40}$/i.test(sha) || checked(['status', '--porcelain', '--', ...files])) {
+    throw new Error('WORKER_COMMIT_FAILED: invalid SHA or dirty metadata');
   }
   return sha;
 }
@@ -1090,11 +1130,25 @@ function carryOverRestore(hostCwd, newRoot, branch, eolConfig) {
     if (eolConfig && eolConfig.eol !== null && eolConfig.eol !== undefined)
       eol.push('-c', 'core.eol=' + eolConfig.eol);
     if (process.platform === 'win32') eol.push('-c', 'core.filemode=false');
+    const commit = hookedControllerGit({
+      hostRoot: hostCwd,
+      workerRoot: newRoot,
+      failure: 'WORKER_COMMIT_FAILED',
+      gitConfig: [...CARRY_IDENTITY, ...eol],
+    });
     const m = carryGit(
       newRoot,
-      CARRY_IDENTITY.concat(eol, ['merge', '--no-edit', '--no-ff', '--no-verify', local])
+      CARRY_IDENTITY.concat(eol, ['merge', '--no-commit', '--no-ff', local])
     );
     if (m.status === 0) {
+      if (carryGit(newRoot, ['rev-parse', '--verify', '--quiet', 'MERGE_HEAD']).status === 0) {
+        try {
+          commit(['commit', '-m', 'Restore interrupted writer work']);
+        } catch (error) {
+          carryGit(newRoot, ['merge', '--abort']);
+          throw error;
+        }
+      }
       carryGit(hostCwd, ['update-ref', '-d', ref]);
       carryGit(newRoot, ['update-ref', '-d', local]);
       return 'merged';
@@ -1103,7 +1157,8 @@ function carryOverRestore(hostCwd, newRoot, branch, eolConfig) {
     carryGit(newRoot, ['reset', '--hard', 'ORIG_HEAD']);
     carryGit(newRoot, ['update-ref', '-d', local]);
     return 'conflict';
-  } catch {
+  } catch (error) {
+    if (String(error.message).startsWith('WORKER_COMMIT_FAILED:')) throw error;
     return 'none';
   }
 }
@@ -2778,48 +2833,26 @@ function getIsolatedLauncher() {
       fs.existsSync(path.join(workerRoot, '.git'))
     ) {
       try {
-        const { withCleanGitEnv, safeGit } = require('./supervisor');
-        withCleanGitEnv(
+        const amended = commitWorkerMetadata({
+          hostRoot: hostCwd,
           workerRoot,
-          (safeGitDir) => {
-            const statusRes = safeGit(safeGitDir, workerRoot, ['status', '--porcelain'], 20000);
-            if (statusRes && statusRes.status === 0 && statusRes.stdout) {
-              const dirtyLines = statusRes.stdout.split(/\r?\n/).filter(Boolean);
-              const needsCommit = dirtyLines.some(
-                (l) => l.includes('FEATURE-DELIVERY-REGISTER.csv') || l.includes(opts.workItemId)
-              );
-              if (needsCommit) {
-                const headCheck = safeGit(
-                  safeGitDir,
-                  workerRoot,
-                  ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'],
-                  20000
-                );
-                const currentHead = ((headCheck && headCheck.stdout) || '').trim();
-                if (currentHead && currentHead !== (opts.headSha || '')) {
-                  safeGit(
-                    safeGitDir,
-                    workerRoot,
-                    [
-                      'add',
-                      'docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv',
-                      `docs/product-spec/work-items/${opts.workItemId}.md`,
-                    ],
-                    20000
-                  );
-                  safeGit(
-                    safeGitDir,
-                    workerRoot,
-                    ['commit', '--amend', '--no-edit', '--no-verify'],
-                    20000
-                  );
-                }
-              }
-            }
-          },
-          { workerWritable: true }
-        );
-      } catch (_) {}
+          workItemId: opts.workItemId,
+          headSha: opts.headSha,
+        });
+        if (amended) {
+          launchResult.workerSha = amended;
+          launchResult.retainedHeadSha = amended;
+        }
+      } catch (error) {
+        launchResult.exitCode = 1;
+        launchResult.localFailure = 'WORKER_COMMIT_FAILED';
+        launchResult.failureReason = String(error.message);
+        launchResult.stderr = [launchResult.stderr, launchResult.failureReason]
+          .filter(Boolean)
+          .join('\n');
+        delete launchResult.workerSha;
+        delete launchResult.retainedHeadSha;
+      }
     }
 
     if (
@@ -2942,6 +2975,7 @@ function readLaunchResult(launchResultPath, completionNonce, hostRes) {
 module.exports = {
   provisionedHeadMatchesBase,
   commitNativeWriterChanges,
+  commitWorkerMetadata,
   getIsolatedLauncher,
   getFolderHash,
   defaultVerifyBoundary,

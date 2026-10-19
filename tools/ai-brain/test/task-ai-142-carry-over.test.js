@@ -30,6 +30,9 @@ function scenario(t, conflicting) {
   fs.writeFileSync(path.join(host, 'a.txt'), 'base\n');
   git(host, 'add', '-A');
   git(host, 'commit', '-q', '-m', 'base');
+  fs.writeFileSync(path.join(host, '.git/hooks/pre-commit'), '#!/bin/sh\nexit 0\n', {
+    mode: 0o755,
+  });
   const headSha = git(host, 'rev-parse', 'HEAD');
   const oldRoot = path.join(tmp, 'old');
   git(tmp, 'clone', '-q', host, oldRoot);
@@ -71,3 +74,16 @@ test('carry-over: a conflicting merge is aborted and the checkout stays plain', 
   assert.equal(git(newRoot, 'status', '--porcelain'), '');
   assert.equal(fs.readFileSync(path.join(newRoot, 'a.txt'), 'utf8'), 'different\n');
 });
+
+for (const missing of [true, false])
+  test(`carry-over refuses ${missing ? 'missing' : 'rejecting'} host hook without advancing HEAD`, (t) => {
+    const { host, newRoot } = scenario(t, false);
+    const hook = path.join(host, '.git/hooks/pre-commit');
+    if (missing) fs.unlinkSync(hook);
+    else fs.writeFileSync(hook, '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+    const before = git(newRoot, 'rev-parse', 'HEAD');
+    assert.throws(() => carryOverRestore(host, newRoot, 'feat/x'), /WORKER_COMMIT_FAILED/);
+    assert.equal(git(newRoot, 'rev-parse', 'HEAD'), before);
+    assert.equal(git(newRoot, 'status', '--porcelain'), '');
+    assert.match(git(host, 'rev-parse', 'refs/shipde/carry/feat/x'), /^[a-f0-9]{40}$/);
+  });

@@ -248,6 +248,10 @@ Decision log entries link `goalId -> workItemId -> candidateKey -> session -> co
 - Part H2 Hermes session selection, custom config binding, and `shipde-controller` skill file are delivered in Part H2.
 - Live acceptance across chat and controller runs in Part H3 following merge of H1 and H2.
 
+### H3 live: published worker commits require installed hooks (2026-10-19)
+
+Carry-over restoration creates its merge commit through the installed operator pre-commit hook, using the same checked Git runner as native writer commits. Goal metadata amendments also run that hook and check the resulting SHA; rejection becomes `WORKER_COMMIT_FAILED` and clears publishable SHAs. Missing hooks fail explicitly. A rejected carry-over commit aborts the merge and preserves the private recovery ref. Only the private interrupted-work save retains its approved hook bypass. Offline regressions use temporary Git repositories and executable success/rejection hooks, covering missing hooks, rejected commits, unchanged HEAD, recovery-ref preservation, and the single remaining bypass.
+
 ### H3 live: the writer route-probe window is not charged with capability proof time (2026-10-18)
 
 Live trial 15 of goal G-F622511E (18/10 15:59Z) ended PROBE_BUDGET_EXHAUSTED without probing a single route: #388 started the writer route-probe window at `now - capabilityProbeDurationMs`, so slow CLI capability proofs spent it first. Capability proofs keep their own `schemaProbeBudgetMs`; the route window now starts when route probing starts and its length is `probeBudgetMs` from the dispatch configuration instead of a module constant.
@@ -315,6 +319,7 @@ Capability and route probes share the item deadline and worker launch timeouts
 are capped by its remaining duration. Defaults come from versioned `sources.json`;
 invalid limits fail closed. Regression fixtures inject routes and clocks, with no
 machine data or provider calls.
+
 ### H3 live: writers are schema-checked after the run, not before selection (2026-10-18)
 
 Operator decision 2026-10-18: trials 10-13 of goal G-F622511E refused every agy-pool and Codex writer because the pre-selection jsonSchema proof (a full CLI launch) timed out or ran out of budget. The writer roles (author.foundation, author.lowrisk) no longer require jsonSchema before selection; the writer result is still validated after the run (WRITER_RESULT_INVALID_JSON), and the host gate and exact-SHA review still gate the commit. Planner and reviewer roles keep the requirement.
