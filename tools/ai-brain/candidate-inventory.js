@@ -31,6 +31,13 @@ function readCandidateInventory(options = {}) {
       path.join(dir, 'catalogue-sources.json')
     );
   if (o.catalogueFile || o.sourceModelsFile) {
+    if (
+      o.catalogueFile &&
+      o.sourceModelsFile &&
+      path.resolve(path.dirname(o.catalogueFile)) !== path.resolve(path.dirname(o.sourceModelsFile))
+    ) {
+      throw Error('Cannot mix candidate snapshot paths from different directories');
+    }
     const catalogueFile =
       o.catalogueFile ||
       (o.sourceModelsFile && path.join(path.dirname(o.sourceModelsFile), 'catalogue.json'));
@@ -52,12 +59,15 @@ function readCandidateInventory(options = {}) {
           time: fs.statSync(path.join(root, entry.name)).mtimeMs,
         }))
         .sort((a, b) => b.time - a.time || b.name.localeCompare(a.name));
-      for (const run of runs) {
-        try {
-          return snapshot(run.dir);
-        } catch {
-          /* Partial runs cannot mix with another snapshot. */
+      if (runs.length > 0) {
+        for (const run of runs) {
+          try {
+            return snapshot(run.dir);
+          } catch {
+            /* Partial runs cannot mix with another snapshot. */
+          }
         }
+        throw Error('No complete intake snapshot found');
       }
     }
   }

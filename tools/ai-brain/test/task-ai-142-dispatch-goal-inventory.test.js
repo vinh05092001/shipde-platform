@@ -557,3 +557,258 @@ test('dispatch dry-run skips newer partial intake snapshots and uses complete sn
     'live account must not be merged into snapshot inventory'
   );
 });
+
+test('ordinary dispatch (--execute) does not use intake snapshots and prefers live accounts over snapshot accounts', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'candidate-dispatch-execute-intake-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const intake = path.join(root, 'tools/ai-brain/data/intake');
+  const snapshotRun = path.join(intake, 'run-1');
+  fs.mkdirSync(snapshotRun, { recursive: true });
+
+  const snapshotData = {
+    catalogue: ['vendor/discovered'],
+    sourceModels: { 'fixture-router': ['vendor/discovered'] },
+    accounts: [
+      {
+        id: 'snapshot-discovered-account',
+        sourceId: 'fixture-router',
+        enabled: true,
+        models: ['vendor/discovered'],
+      },
+    ],
+  };
+  fs.writeFileSync(
+    path.join(snapshotRun, 'catalogue.json'),
+    JSON.stringify(snapshotData.catalogue)
+  );
+  fs.writeFileSync(
+    path.join(snapshotRun, 'catalogue-sources.json'),
+    JSON.stringify(snapshotData.sourceModels)
+  );
+  fs.writeFileSync(path.join(snapshotRun, 'accounts.json'), JSON.stringify(snapshotData.accounts));
+
+  const registry = {
+    sources: [
+      {
+        id: 'fixture-router',
+        kind: 'router',
+        harness: 'paseo',
+        endpoint: 'https://router.invalid/v1',
+        writerEnabled: true,
+        models: [],
+        credential: { type: 'api-key', env: 'FIXTURE_ROUTER_KEY' },
+      },
+    ],
+    dispatch: { providers: {} },
+  };
+
+  const ranking = require('../ranking');
+  let realDispatchCandidates = null;
+  t.mock.method(ranking, 'rankAndRecord', (cs) => {
+    realDispatchCandidates = cs;
+    return { chosen: null, candidates: [], rejected: [] };
+  });
+
+  const profile = {
+    taskId: 'TASK-FIXTURE',
+    role: 'writer',
+    requiredCapabilities: [],
+    taskClass: 'T1',
+    riskDomains: [],
+  };
+
+  await cli.dispatchCommand(
+    {
+      execute: true,
+      item: profile.taskId,
+      root,
+    },
+    {
+      root,
+      rootDir: root,
+      home: root,
+      registry,
+      discoveryDataDir: path.join(root, 'empty-discovery'),
+      allowUnprobedCandidates: true,
+      capabilitiesPrepared: true,
+      discoverPool: false,
+      fakeRunsDir: path.join(root, 'pool'),
+      evidenceData: { combinations: [] },
+      routeHealth: { paths: {}, events: [] },
+      env: { FIXTURE_ROUTER_KEY: 'fixture-only' },
+      taskProfile: profile,
+      ranking: { priors: { ranking: [] } },
+      evidenceDir: path.join(root, 'evidence'),
+      decisionDir: path.join(root, 'decisions'),
+      storePath: path.join(root, 'quota.json'),
+      listAccounts: () => [
+        {
+          id: 'live-newer-account',
+          sourceId: 'fixture-router',
+          enabled: true,
+          models: ['vendor/discovered'],
+        },
+      ],
+      log: () => {},
+      error: () => {},
+      exit: () => {},
+    }
+  );
+
+  assert.ok(
+    realDispatchCandidates && realDispatchCandidates.length > 0,
+    'candidates must be offered to real dispatch'
+  );
+  assert.equal(
+    realDispatchCandidates.some((c) => c.accountId === 'live-newer-account'),
+    true,
+    'real dispatch must use live accounts'
+  );
+  assert.equal(
+    realDispatchCandidates.some((c) => c.accountId === 'snapshot-discovered-account'),
+    false,
+    'real dispatch must not use automatic intake snapshot accounts'
+  );
+});
+
+test('supplying catalogue and catalogue-sources from different directories throws error rejecting mixed snapshot paths', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'candidate-mixed-snapshots-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const dirA = path.join(root, 'snapshot-a');
+  const dirB = path.join(root, 'snapshot-b');
+  fs.mkdirSync(dirA, { recursive: true });
+  fs.mkdirSync(dirB, { recursive: true });
+
+  fs.writeFileSync(path.join(dirA, 'catalogue.json'), JSON.stringify(['vendor/model-a']));
+  fs.writeFileSync(path.join(dirA, 'accounts.json'), JSON.stringify([{ id: 'acc-a' }]));
+  fs.writeFileSync(
+    path.join(dirA, 'catalogue-sources.json'),
+    JSON.stringify({ srcA: ['vendor/model-a'] })
+  );
+
+  fs.writeFileSync(path.join(dirB, 'catalogue.json'), JSON.stringify(['vendor/model-b']));
+  fs.writeFileSync(path.join(dirB, 'accounts.json'), JSON.stringify([{ id: 'acc-b' }]));
+  fs.writeFileSync(
+    path.join(dirB, 'catalogue-sources.json'),
+    JSON.stringify({ srcB: ['vendor/model-b'] })
+  );
+
+  const { readCandidateInventory } = require('../candidate-inventory');
+
+  assert.throws(
+    () =>
+      readCandidateInventory({
+        catalogueFile: path.join(dirA, 'catalogue.json'),
+        sourceModelsFile: path.join(dirB, 'catalogue-sources.json'),
+      }),
+    /Cannot mix candidate snapshot paths/
+  );
+
+  await assert.rejects(
+    async () =>
+      cli.dispatchCommand(
+        {
+          'dry-run': true,
+          item: 'TASK-FIXTURE',
+          root,
+          catalogue: path.join(dirA, 'catalogue.json'),
+          'catalogue-sources': path.join(dirB, 'catalogue-sources.json'),
+        },
+        {
+          root,
+          rootDir: root,
+          home: root,
+          log: () => {},
+          error: () => {},
+          exit: () => {},
+        }
+      ),
+    /Cannot mix candidate snapshot paths/
+  );
+});
+
+test('when intake runs exist but none is complete, candidate inventory reader and dispatch fail closed', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'candidate-intake-incomplete-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const intake = path.join(root, 'tools/ai-brain/data/intake');
+  const run1 = path.join(intake, 'run-partial-1');
+  const run2 = path.join(intake, 'run-partial-2');
+  fs.mkdirSync(run1, { recursive: true });
+  fs.mkdirSync(run2, { recursive: true });
+
+  fs.writeFileSync(path.join(run1, 'catalogue.json'), JSON.stringify(['vendor/discovered']));
+  fs.writeFileSync(
+    path.join(run2, 'catalogue-sources.json'),
+    JSON.stringify({ 'fixture-router': ['vendor/discovered'] })
+  );
+
+  const { readCandidateInventory } = require('../candidate-inventory');
+
+  assert.throws(
+    () => readCandidateInventory({ rootDir: root, useLatestIntake: true }),
+    /No complete intake snapshot found/
+  );
+
+  const registry = {
+    sources: [
+      {
+        id: 'fixture-router',
+        kind: 'router',
+        harness: 'paseo',
+        endpoint: 'https://router.invalid/v1',
+        writerEnabled: true,
+        models: [],
+        credential: { type: 'api-key', env: 'FIXTURE_ROUTER_KEY' },
+      },
+    ],
+    dispatch: { providers: {} },
+  };
+
+  const profile = {
+    taskId: 'TASK-FIXTURE',
+    role: 'writer',
+    requiredCapabilities: [],
+    taskClass: 'T1',
+    riskDomains: [],
+  };
+
+  await assert.rejects(
+    async () =>
+      cli.dispatchCommand(
+        {
+          'dry-run': true,
+          item: profile.taskId,
+          root,
+        },
+        {
+          root,
+          rootDir: root,
+          home: root,
+          registry,
+          discoveryDataDir: path.join(root, 'empty-discovery'),
+          allowUnprobedCandidates: true,
+          capabilitiesPrepared: true,
+          discoverPool: false,
+          fakeRunsDir: path.join(root, 'pool'),
+          evidenceData: { combinations: [] },
+          routeHealth: { paths: {}, events: [] },
+          env: { FIXTURE_ROUTER_KEY: 'fixture-only' },
+          taskProfile: profile,
+          listAccounts: () => [
+            {
+              id: 'live-newer-account',
+              sourceId: 'fixture-router',
+              enabled: true,
+              models: ['vendor/discovered'],
+            },
+          ],
+          log: () => {},
+          error: () => {},
+          exit: () => {},
+        }
+      ),
+    /No complete intake snapshot found/
+  );
+});

@@ -2188,6 +2188,7 @@ function dispatchCommand(args, deps = {}) {
         ? path.resolve(rootDir, args['catalogue-sources'])
         : undefined,
     useLatestIntake:
+      Boolean(isDryRun) &&
       deps.candidates === undefined &&
       deps.accounts === undefined &&
       deps.sourceModels === undefined &&
