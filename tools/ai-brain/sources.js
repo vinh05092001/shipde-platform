@@ -392,8 +392,11 @@ function getDispatchConfig(registry, options = {}) {
     }
     return value;
   };
-  const configuredNonNegativeLimit = (key) => {
-    const value = Number(options[key] ?? dispatch[key] ?? defaults[key]);
+  const configuredNonNegativeLimit = (key, fallbackKey) => {
+    const optVal = options[key] ?? (fallbackKey ? options[fallbackKey] : undefined);
+    const dispVal = dispatch[key] ?? (fallbackKey ? dispatch[fallbackKey] : undefined);
+    const defVal = defaults[key] ?? (fallbackKey ? defaults[fallbackKey] : undefined);
+    const value = Number(optVal ?? dispVal ?? defVal);
     if (!Number.isSafeInteger(value) || value < 0) {
       throw new Error('DISPATCH_CONFIG_INVALID: ' + key + ' must be a non-negative integer');
     }
@@ -412,6 +415,22 @@ function getDispatchConfig(registry, options = {}) {
     probeRoundRobinBatch: configuredLimit('probeRoundRobinBatch'),
     maxPromptCommandOutputChars: configuredLimit('maxPromptCommandOutputChars'),
     maxHostGateSummaryChars: configuredLimit('maxHostGateSummaryChars'),
+    headroomUnknownPenalty: configuredNonNegativeLimit(
+      'headroomUnknownPenalty',
+      'unknownHeadroomPenalty'
+    ),
+    headroomTightPenalty: configuredNonNegativeLimit(
+      'headroomTightPenalty',
+      'tightHeadroomPenalty'
+    ),
+    unknownHeadroomPenalty: configuredNonNegativeLimit(
+      'headroomUnknownPenalty',
+      'unknownHeadroomPenalty'
+    ),
+    tightHeadroomPenalty: configuredNonNegativeLimit(
+      'headroomTightPenalty',
+      'tightHeadroomPenalty'
+    ),
   };
 }
 

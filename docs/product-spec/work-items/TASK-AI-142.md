@@ -1285,3 +1285,19 @@ Aggregator routers like 9Router require model IDs to carry an upstream provider 
 ### Launch faults are not model quality failures (2026-10-19)
 
 FEAT-AUTH-05 run 2026-10-19 18:38 chose Qwen3.8-27B (score 55) because GPT-6 Astra, Muse Spark 1.3, Qwen 3.8 Max and Grok 4.6 carried failed evidence from Controller faults (`writeUsageReportFromHarnessResult is not defined`, worker `EPERM`, `UNKNOWN_HARNESS: direct-http` before #405, `TOKEN_BUDGET_UNVERIFIED`). Those launches never reached the model. `evidence.isQualityFailure` now counts only model-scoped or non-launch failures; routing proof, prior usability, probation and reliability use it.
+
+### A purchase-locked model never blocks its whole account (2026-10-19)
+
+explabs returns HTTP 429 `model_requires_purchase` for premium models such as `aion-2.0` while `gpt-6-astra` on the same key returns 200. The probe classifier read the body's `insufficient_quota` as `UPSTREAM_CREDIT_OR_QUOTA`, an account-level failure, so one locked model removed GPT-6 Astra, Muse Spark 1.3 and every other explabs model from FEAT-AUTH-05 writer selection. The classifier now returns `MODEL_LOCKED`, which is model-scoped.
+
+### Capability probes run concurrently across accounts (2026-10-19)
+
+FEAT-AUTH-05 runs at 18:38, 20:40 and 21:41 chose Qwen3.8-27B. Simulation on the 21:41 intake snapshot: `buildCandidates` yields 14,693 candidates including 648 explabs ones, and `rankForProfile` on cached proofs ranks GPT-6 Astra (64) above Qwen3.8-27B (55). In the probe order, however, Muse Spark 1.3 sits at position 122 and GPT-6 Astra at 183, and `probeCapabilities` probed strictly one candidate at a time inside the 180 s schema budget, so neither was ever reached. Probes now run up to `dispatch.maxConcurrentProbes` at once. One account's models stay serial, so account-level failures still short-circuit that account.
+
+### A live-probed writer is not penalized for missing quota headers (2026-10-20)
+
+FEAT-AUTH-05 run 2026-10-20 00:08 ranked claude-opus-5 (quality 82, live probe 200) at 67, below Qwen3.8-27B (quality 70) at 70, because explabs sends no rate-limit headers and unknown headroom cost a flat 15 points. Qwen stalled twice and the item hit the one-hour limit. A successful live route probe for the exact candidate now removes the unknown-headroom penalty; unprobed unknown and tight headroom keep theirs. Both penalties live in `dispatch.headroomUnknownPenalty` and `dispatch.headroomTightPenalty`.
+
+### Pool writer tests no longer race the Linux file clock (2026-10-20)
+
+`task-ai-142-agy-writer-session.test.js` failed intermittently on CI after 120 s and 30 min. `waitForResult` accepts only a `result.json` modified at or after submission, and the coarse Linux file clock could stamp the fixture's result before the submit `Date.now()`. The fixtures now mark their result as written one second later. Production waiting is unchanged.

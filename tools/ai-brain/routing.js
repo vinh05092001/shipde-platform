@@ -1237,11 +1237,19 @@ function scoreForProfile(candidate, assessment, ctx) {
     .filter((r) => r && r.workItemId !== ctx.taskId).length;
   const busyPenalty = busy * BUSY_PENALTY_PER_RESERVATION;
   const agePenalty = evidenceAgePenalty(candidate, now);
+  const dispatchConfig =
+    (ctx && ctx.dispatchConfig) || sourceRegistry.getDispatchConfig(ctx && ctx.registry, ctx || {});
+  const probeSucceeded = candidate && candidate.routeEvidence?.probeSucceeded === true;
+  const headroomStatus =
+    candidate.headroomStatus ??
+    (ctx && ctx.headrooms ? ranking.resolveCandidateHeadroom(candidate, ctx).status : undefined);
   const headroomPenalty =
-    candidate.headroomStatus === 'unknown'
-      ? UNKNOWN_EVIDENCE_PENALTY
-      : candidate.headroomStatus === 'tight'
-        ? 10
+    headroomStatus === 'unknown'
+      ? probeSucceeded
+        ? 0
+        : dispatchConfig.headroomUnknownPenalty
+      : headroomStatus === 'tight'
+        ? dispatchConfig.headroomTightPenalty
         : 0;
   const contextPenalty = require('./harness').contextUnknown(
     candidate.harness,
@@ -1307,6 +1315,8 @@ function scoreForProfile(candidate, assessment, ctx) {
  */
 function rankForProfile(candidates, profile, assessment, ctx) {
   const context = ctx || {};
+  const dispatchConfig =
+    context.dispatchConfig || sourceRegistry.getDispatchConfig(context.registry, context);
   const now = context.now || Date.now();
   const priors = context.priors === undefined ? loadPriors() : context.priors;
   const explorationBudget = Number.isFinite(Number(context.explorationBudget))
@@ -1559,6 +1569,7 @@ function rankForProfile(candidates, profile, assessment, ctx) {
       now,
       role: profile.role,
       priors,
+      dispatchConfig,
     });
     const scored = scoreForProfile(c, assessment, scoreContext);
     const isQualityUnknown =
