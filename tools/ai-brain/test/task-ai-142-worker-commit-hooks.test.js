@@ -261,3 +261,105 @@ test('worker config allowlist rejects core.worktree pointing outside isolated ro
   );
   assert.equal(f.git('rev-parse', 'HEAD'), f.sha);
 });
+
+test('worker git directory or gitfile resolving outside worker repository is rejected before git write', (t) => {
+  const host = fixture(t);
+  fs.writeFileSync(host.hook, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  const worker = fixture(t);
+  const victim = fixture(t);
+
+  // 1. gitfile redirecting to victim repository
+  fs.rmSync(path.join(worker.root, '.git'), { recursive: true, force: true });
+  fs.writeFileSync(
+    path.join(worker.root, '.git'),
+    'gitdir: ' + path.join(victim.root, '.git') + '\n'
+  );
+
+  assert.throws(
+    () =>
+      launcher.commitWorkerMetadata({
+        hostRoot: host.root,
+        workerRoot: worker.root,
+        workItemId: 'GOAL-FIXTURE',
+      }),
+    /WORKER_COMMIT_FAILED: git directory resolves outside worker repository/
+  );
+
+  assert.throws(
+    () =>
+      launcher.commitNativeWriterChanges({
+        hostRoot: host.root,
+        workerRoot: worker.root,
+        workItemId: 'GOAL-FIXTURE',
+      }),
+    /NATIVE_WRITER_COMMIT_FAILED: git directory resolves outside worker repository/
+  );
+
+  assert.throws(
+    () => launcher.validateWorkerGitConfig(worker.root, 'TEST_FAILURE'),
+    /TEST_FAILURE: git directory resolves outside worker repository/
+  );
+
+  // Victim repository must remain unmodified
+  assert.equal(victim.git('rev-parse', 'HEAD'), victim.sha);
+
+  // 2. Directory symlink / junction redirecting to victim repository
+  fs.rmSync(path.join(worker.root, '.git'), { recursive: true, force: true });
+  fs.symlinkSync(
+    path.join(victim.root, '.git'),
+    path.join(worker.root, '.git'),
+    process.platform === 'win32' ? 'junction' : 'dir'
+  );
+
+  assert.throws(
+    () =>
+      launcher.commitWorkerMetadata({
+        hostRoot: host.root,
+        workerRoot: worker.root,
+        workItemId: 'GOAL-FIXTURE',
+      }),
+    /WORKER_COMMIT_FAILED: git directory resolves outside worker repository/
+  );
+
+  assert.throws(
+    () =>
+      launcher.commitNativeWriterChanges({
+        hostRoot: host.root,
+        workerRoot: worker.root,
+        workItemId: 'GOAL-FIXTURE',
+      }),
+    /NATIVE_WRITER_COMMIT_FAILED: git directory resolves outside worker repository/
+  );
+  assert.equal(victim.git('rev-parse', 'HEAD'), victim.sha);
+});
+
+test('dirty metadata with unreadable or missing HEAD fails closed instead of succeeding', (t) => {
+  const f = fixture(t);
+  fs.writeFileSync(f.hook, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+
+  // Missing/invalid HEAD ref where rev-parse HEAD fails
+  fs.writeFileSync(path.join(f.root, '.git', 'HEAD'), 'ref: refs/heads/missing-branch\n');
+
+  // Without headSha, must fail closed with WORKER_COMMIT_FAILED: rev-parse
+  assert.throws(
+    () =>
+      launcher.commitWorkerMetadata({
+        hostRoot: f.root,
+        workerRoot: f.root,
+        workItemId: 'GOAL-FIXTURE',
+      }),
+    /WORKER_COMMIT_FAILED: rev-parse/
+  );
+
+  // Even with headSha supplied, unverified HEAD must fail closed and NOT take no-commit path
+  assert.throws(
+    () =>
+      launcher.commitWorkerMetadata({
+        hostRoot: f.root,
+        workerRoot: f.root,
+        workItemId: 'GOAL-FIXTURE',
+        headSha: f.sha,
+      }),
+    /WORKER_COMMIT_FAILED: rev-parse/
+  );
+});
