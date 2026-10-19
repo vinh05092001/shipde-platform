@@ -2204,6 +2204,7 @@ function getIsolatedLauncher() {
 
     // DS-R04: store the credential env for the worker allowlist
     let selectedCredentialEnv = null;
+    let directModelRewrite = null;
 
     if (adapter.id === 'opencode-direct') {
       const sourcesModule = require('./sources');
@@ -2353,6 +2354,10 @@ function getIsolatedLauncher() {
         isRouter && pinnedModel
           ? sourcesModule.providerFromPrefix(pinnedModel) || selectedSource.id
           : selectedSource.opencodeProvider || selectedSource.id;
+
+      if (!isRouter && pinnedModel && !pinnedModel.startsWith(providerId + '/')) {
+        directModelRewrite = providerId + '/' + pinnedModel;
+      }
 
       if (pinnedModel && isRouter) {
         const derivedFromModel = sourcesModule.providerFromPrefix(pinnedModel);
@@ -2664,18 +2669,26 @@ function getIsolatedLauncher() {
     let launchArgs = fullArgs.map((arg) =>
       typeof arg === 'string' ? stageContextPack(arg, payloadDir, completionNonce) : arg
     );
-    if (adapter.id === 'opencode-direct' && launchArgs.length > 0) {
-      const prompt = launchArgs[launchArgs.length - 1];
-      if (typeof prompt === 'string' && prompt.length > 0) {
-        const promptFileName = 'prompt-' + completionNonce + '.md';
-        fs.writeFileSync(path.join(payloadDir, promptFileName), Buffer.from(prompt, 'utf8'));
-        launchArgs = launchArgs
-          .slice(0, -1)
-          .concat(
-            'Read the file .shipde/' +
-              promptFileName +
-              ' in the current directory. It is your complete task; follow it exactly.'
-          );
+    if (adapter.id === 'opencode-direct') {
+      if (directModelRewrite) {
+        const modelIdx = launchArgs.indexOf('--model');
+        if (modelIdx !== -1 && modelIdx + 1 < launchArgs.length) {
+          launchArgs[modelIdx + 1] = directModelRewrite;
+        }
+      }
+      if (launchArgs.length > 0) {
+        const prompt = launchArgs[launchArgs.length - 1];
+        if (typeof prompt === 'string' && prompt.length > 0) {
+          const promptFileName = 'prompt-' + completionNonce + '.md';
+          fs.writeFileSync(path.join(payloadDir, promptFileName), Buffer.from(prompt, 'utf8'));
+          launchArgs = launchArgs
+            .slice(0, -1)
+            .concat(
+              'Read the file .shipde/' +
+                promptFileName +
+                ' in the current directory. It is your complete task; follow it exactly.'
+            );
+        }
       }
     }
 
