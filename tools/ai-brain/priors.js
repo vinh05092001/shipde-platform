@@ -113,6 +113,12 @@ function priorFor(candidate, role, priors, now) {
     result.score = Math.round(Math.max(0, Math.min(100, priorScore)));
   } else if (match.benchmarks || Number.isFinite(match.score) || match.score === null) {
     result.score = null;
+    result.qualityLabel = 'QUALITY_UNKNOWN';
+    result.priorUnknown = true;
+  }
+  if (result.score === null) {
+    result.qualityLabel = 'QUALITY_UNKNOWN';
+    result.priorUnknown = true;
   }
   return result;
 }
@@ -123,6 +129,7 @@ function neutralPrior(canonical) {
     score: null,
     bonus: 0,
     priorUnknown: true,
+    qualityLabel: 'QUALITY_UNKNOWN',
     reason: 'NO_BENCHMARK_COVERAGE',
   };
 }
