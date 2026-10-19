@@ -1281,3 +1281,8 @@ Aggregator routers like 9Router require model IDs to carry an upstream provider 
     - `priorFor` returns `QUALITY_UNKNOWN` on absent and zero-benchmark models.
     - Relative ordering: scored model (#1) -> unscored model (#2) -> rejected model (#3 in rejected list).
     - `dispatch --dry-run` terminal log outputs `(score: QUALITY_UNKNOWN)`.
+||||||| d420e1e5
+
+### Launch faults are not model quality failures (2026-10-19)
+
+FEAT-AUTH-05 run 2026-10-19 18:38 chose Qwen3.8-27B (score 55) because GPT-6 Astra, Muse Spark 1.3, Qwen 3.8 Max and Grok 4.6 carried failed evidence from Controller faults (`writeUsageReportFromHarnessResult is not defined`, worker `EPERM`, `UNKNOWN_HARNESS: direct-http` before #405, `TOKEN_BUDGET_UNVERIFIED`). Those launches never reached the model. `evidence.isQualityFailure` now counts only model-scoped or non-launch failures; routing proof, prior usability, probation and reliability use it.
