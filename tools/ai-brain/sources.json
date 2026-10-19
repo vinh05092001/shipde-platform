@@ -348,6 +348,8 @@
     "probeRoundRobinBatch": 1,
     "maxPromptCommandOutputChars": 4000,
     "maxHostGateSummaryChars": 500,
+    "headroomUnknownPenalty": 15,
+    "headroomTightPenalty": 10,
     "note": "How a registry account's `provider` reaches a running session. This table is why the executor needs no provider branch: a new provider is a row here.",
     "providers": {
       "claude-code": { "harness": "paseo", "provider": "claude" },
