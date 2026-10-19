@@ -329,7 +329,11 @@ test('worker config parse is bounded by the dispatch-configured timeout and fail
   t.mock.method(cp, 'spawnSync', (cmd, args, options) => {
     if (Array.isArray(args) && args.includes('--no-includes')) {
       seen.push(options && options.timeout);
-      return { status: null, signal: 'SIGTERM', error: Object.assign(new Error('t'), { code: 'ETIMEDOUT' }) };
+      return {
+        status: null,
+        signal: 'SIGTERM',
+        error: Object.assign(new Error('t'), { code: 'ETIMEDOUT' }),
+      };
     }
     return original(cmd, args, options);
   });

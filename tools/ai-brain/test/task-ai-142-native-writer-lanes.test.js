@@ -241,11 +241,13 @@ test('installed hooks are pinned on the production commit path without touching 
     isDirectory: () => true,
     mode: 0o755,
   }));
-  t.mock.method(fs, 'lstatSync', () => ({
-    isFile: () => false,
-    isDirectory: () => true,
-    mode: 0o755,
-  }));
+  t.mock.method(fs, 'lstatSync', (file) => {
+    if (String(file).endsWith('config.worktree')) {
+      throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+    }
+    const isConfig = String(file).endsWith('config');
+    return { isFile: () => isConfig, isDirectory: () => !isConfig, mode: 0o755 };
+  });
   t.mock.method(fs, 'realpathSync', (p) => path.resolve(p));
   t.mock.method(fs, 'accessSync', () => undefined);
   t.mock.method(cp, 'spawnSync', (cmd, args, opts) => {
