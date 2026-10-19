@@ -1223,6 +1223,20 @@ Aggregator routers like 9Router require model IDs to carry an upstream provider 
   3. Verification:
      - New unit tests in `tools/ai-brain/test/task-ai-142-opencode-writer.test.js` verifying config generation for SSE/JSON sources, permission scoping, secret redaction, and `HARNESS_EMPTY_RESPONSE` handling.
 
+### H3 live: launcher supports direct-http writer and rejects unsupported harnesses (2026-10-19)
+
+- Fixed UNKNOWN_HARNESS: direct-http defect where direct-http candidates were selected for writer tasks but failed at launch:
+  1. Root cause: Direct model sources declaring harness `direct-http` (such as Mercury 2.5 on Inception) were admitted into writer selection and preflight, but `executor.js` / `harness.js` lacked `direct-http` in `runsOpenCodeHarness` and `HARNESSES`. When launched, the launcher failed with `UNKNOWN_HARNESS: direct-http`.
+  2. Resolution: Launcher writer adapter now supports `direct-http` by routing through `opencodeDirect` (`opencode-direct`), enabling OpenCode to run direct HTTP OpenAI-compatible endpoints with dynamic config generation. Additionally, candidates whose harness has no launcher writer adapter are rejected during writer ranking and orchestrator preflight gates with `reasonCode: 'HARNESS_WRITER_UNSUPPORTED'` derived dynamically from launcher data (`listHarnesses()` in `tools/ai-brain/harness.js`) and OpenCode source aliases, with fail-closed validation and test harness injection via options.
+  3. Verification: Covered by `tools/ai-brain/test/task-ai-142-direct-http-writer.test.js` and full brain test suite.
+
+### H3 live: strict priority source lookup and credential binding in executor resolveRoute (2026-10-19)
+
+- Fixed P1 review finding in `tools/ai-brain/executor.js`:
+  1. Root cause: `resolveRoute` source lookup evaluated multiple conditions in a single `.find()` call including a loose `s.models.includes(model)` fallback, allowing an earlier aggregator or decoy source listing the same model to win over an exact provider ID match, and resolved endpoint and apiKeyEnv independently risking credential misbinding. Furthermore, credential environment variables were assigned without format validation.
+  2. Resolution: Sources are now resolved in strict priority order (`provider` -> `source` -> `upstream` -> `gateway`) by exact ID match. The loose model-membership fallback is dropped (fails closed without endpoint/apiKeyEnv if no exact source ID matches). Endpoint and apiKeyEnv are always bound from the same source (or both from the assignment), preventing credential misbinding, and environment variable names are strictly validated against valid identifier format (`/^[A-Za-z0-9_]+$/`).
+  3. Verification: Regression tests added to `tools/ai-brain/test/task-ai-142-direct-http-writer.test.js` covering decoy avoidance, priority order, fail-closed handling, credential misbinding prevention, and env identifier validation.
+
 ### H3 live: strong models prioritized in capability probes and fair round-robin source dispatch (2026-10-19)
 
 - Root cause:

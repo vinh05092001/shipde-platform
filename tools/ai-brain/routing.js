@@ -44,8 +44,18 @@ const {
 } = require('./discovery/identity');
 const sourceRegistry = require('./sources');
 const BACKEND_MODEL_PREFIXES = registryPrefixes(sourceRegistry.loadSources());
-const { contextRefusal } = require('./harness');
+const { contextRefusal, hasLauncherWriter } = require('./harness');
 const { Cause, Scope, classifyFailure } = require('./failure-classifier');
+
+/**
+ * Roles that execute code writing or workspace modifications.
+ * Includes 'writer', 'repair' (code repair sessions), and 'author' (author lanes).
+ */
+function isWriterRole(role) {
+  if (!role) return false;
+  const s = String(role).trim().toLowerCase();
+  return /^author(?:\.|$)|^(?:writer|repair)$/i.test(s);
+}
 
 /** Task roles a profile may name. Planner stays out: Codex plans, it is not routed. */
 const TASK_ROLES = Object.freeze([
@@ -1408,6 +1418,12 @@ function rankForProfile(candidates, profile, assessment, ctx) {
       reject('CAPABILITY_UNVERIFIED:' + unverified[0], 'capability');
       const proof = c.capabilityEvidence?.[unverified[0]] || c.jsonSchemaEvidence;
       if (proof?.reason) rejected[rejected.length - 1].reason = proof.reason;
+      continue;
+    }
+    if (isWriterRole(profile.role) && !hasLauncherWriter(c.harness, context)) {
+      reject('HARNESS_WRITER_UNSUPPORTED', 'harness');
+      rejected[rejected.length - 1].reason =
+        'HARNESS_WRITER_UNSUPPORTED: ' + c.harness + ' has no launcher writer';
       continue;
     }
     const contextWindow = Number(candidateContextWindow(c));

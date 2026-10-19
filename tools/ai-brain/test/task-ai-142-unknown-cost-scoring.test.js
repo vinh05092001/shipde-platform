@@ -28,7 +28,7 @@ function sampleProfile(overrides = {}) {
 function sampleCandidate(overrides = {}) {
   const c = Object.assign(
     {
-      harness: 'test-harness',
+      harness: 'opencode-direct',
       accessPath: 'cli',
       gateway: 'test-gw',
       upstream: 'test-upstream',

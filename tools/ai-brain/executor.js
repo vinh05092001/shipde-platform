@@ -80,6 +80,25 @@ function resumePrompt(assignment, opts) {
   );
 }
 
+function validateEnvVar(val) {
+  if (typeof val !== 'string') return null;
+  const trimmed = val.trim();
+  return /^[A-Za-z0-9_]+$/.test(trimmed) ? trimmed : null;
+}
+
+function extractSourceApiKeyEnv(src) {
+  if (!src) return null;
+  const raw =
+    (src.credential && typeof src.credential.env === 'string' && src.credential.env) ||
+    (src.credential &&
+      src.credential.type === 'env' &&
+      typeof src.credential.name === 'string' &&
+      src.credential.name) ||
+    (typeof src.apiKeyEnv === 'string' && src.apiKeyEnv) ||
+    null;
+  return validateEnvVar(raw);
+}
+
 /**
  * Where an assignment should run: which harness, which provider name that
  * harness understands, and the model spelled the way it expects.
@@ -98,14 +117,56 @@ function resolveRoute(assignment, options, registry) {
     (typeof opts.harnessFor === 'function' ? opts.harnessFor(assignment) : null) ||
     (route && route.harness) ||
     null;
-  if (opts.isolatedWorker && runsOpenCodeHarness(harnessName, reg)) {
+  let adapter = null;
+  try {
+    adapter = getHarness(harnessName);
+  } catch {
+    adapter = null;
+  }
+  if (
+    opts.isolatedWorker &&
+    (runsOpenCodeHarness(harnessName, reg) || adapter === getHarness('opencode-direct'))
+  ) {
     harnessName = 'opencode-direct';
   }
   if (!harnessName) return null;
+
+  const candidateIds = [
+    assignment.provider,
+    route && route.provider,
+    assignment.source,
+    assignment.upstream,
+    assignment.gateway && assignment.gateway !== 'direct' ? assignment.gateway : null,
+  ].filter((id) => typeof id === 'string' && id.trim().length > 0);
+
+  let src = null;
+  if (reg && Array.isArray(reg.sources)) {
+    for (const targetId of candidateIds) {
+      const match = reg.sources.find((s) => s && s.id === targetId);
+      if (match) {
+        src = match;
+        break;
+      }
+    }
+  }
+
+  let endpoint = null;
+  let apiKeyEnv = null;
+
+  if (assignment.endpoint || assignment.apiKeyEnv) {
+    endpoint = (typeof assignment.endpoint === 'string' && assignment.endpoint.trim()) || null;
+    apiKeyEnv = validateEnvVar(assignment.apiKeyEnv);
+  } else if (src) {
+    endpoint = (typeof src.endpoint === 'string' && src.endpoint.trim()) || null;
+    apiKeyEnv = extractSourceApiKeyEnv(src);
+  }
+
   return {
     harnessName,
     provider: (route && route.provider) || assignment.provider,
     model: qualifyModel(assignment.model, route),
+    ...(endpoint ? { endpoint } : {}),
+    ...(apiKeyEnv ? { apiKeyEnv } : {}),
   };
 }
 
