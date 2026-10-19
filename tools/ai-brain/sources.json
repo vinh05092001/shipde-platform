@@ -345,6 +345,7 @@
     "probeTimeoutMs": 8000,
     "probeSafetyMarginMs": 2000,
     "schemaProbeBudgetMs": 180000,
+    "probeRoundRobinBatch": 1,
     "maxPromptCommandOutputChars": 4000,
     "maxHostGateSummaryChars": 500,
     "note": "How a registry account's `provider` reaches a running session. This table is why the executor needs no provider branch: a new provider is a row here.",
