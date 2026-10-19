@@ -53,6 +53,30 @@ test('metadata amend refuses a missing installed hook and preserves HEAD', (t) =
   assert.equal(f.git('rev-parse', 'HEAD'), f.sha);
 });
 
+test('metadata amend refuses a non-executable installed hook and preserves HEAD', (t) => {
+  const f = fixture(t);
+  fs.writeFileSync(f.hook, '#!/bin/sh\nexit 0\n', { mode: 0o644 });
+  const origAccessSync = fs.accessSync.bind(fs);
+  t.mock.method(fs, 'accessSync', (target, mode) => {
+    if (path.resolve(target) === path.resolve(f.hook) && mode & fs.constants.X_OK) {
+      const err = new Error('EACCES: permission denied, access ' + target);
+      err.code = 'EACCES';
+      throw err;
+    }
+    return origAccessSync(target, mode);
+  });
+  assert.throws(
+    () =>
+      launcher.commitWorkerMetadata({
+        hostRoot: f.root,
+        workerRoot: f.root,
+        workItemId: 'GOAL-FIXTURE',
+      }),
+    /WORKER_COMMIT_FAILED: installed pre-commit hook not executable/
+  );
+  assert.equal(f.git('rev-parse', 'HEAD'), f.sha);
+});
+
 test('unchanged metadata needs no commit or installed hook', (t) => {
   const f = fixture(t);
   fs.writeFileSync(path.join(f.root, 'docs/product-spec/work-items/GOAL-FIXTURE.md'), 'base\n');
@@ -174,6 +198,10 @@ test('worker config allowlist rejects legacy filter, includes, and merge drivers
       match: /disallowed git config section: \[merge "evil"\]/,
     },
     { section: '\n[core]\n\teditor = evil\n', match: /disallowed core git config key: editor/ },
+    {
+      section: '\n[core]\n\tworktree = ../..\n',
+      match: /disallowed core git config key: worktree/,
+    },
   ];
   for (const c of cases) {
     const f = fixture(t);
@@ -216,4 +244,20 @@ test('native writer and metadata commits succeed without local identity or globa
   });
   assert.match(writerSha, /^[a-f0-9]{40}$/);
   assert.notEqual(writerSha, amendedSha);
+});
+
+test('worker config allowlist rejects core.worktree pointing outside isolated root', (t) => {
+  const f = fixture(t);
+  fs.writeFileSync(f.hook, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  fs.appendFileSync(path.join(f.root, '.git', 'config'), '\n[core]\n\tworktree = ../..\n');
+  assert.throws(
+    () =>
+      launcher.commitWorkerMetadata({
+        hostRoot: f.root,
+        workerRoot: f.root,
+        workItemId: 'GOAL-FIXTURE',
+      }),
+    /WORKER_COMMIT_FAILED: disallowed core git config key: worktree/
+  );
+  assert.equal(f.git('rev-parse', 'HEAD'), f.sha);
 });

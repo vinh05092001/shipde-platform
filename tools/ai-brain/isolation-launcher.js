@@ -31,7 +31,6 @@ const ALLOWED_CORE_KEYS = new Set([
   'ignorecase',
   'autocrlf',
   'eol',
-  'worktree',
   'hidedotfiles',
   'preloadindex',
   'fscache',
@@ -239,8 +238,23 @@ function hookedControllerGit(options) {
       }
     );
     hooksPath = resolved?.status === 0 ? String(resolved.stdout || '').trim() : null;
-    if (!hooksPath || !fs.existsSync(path.join(hooksPath, 'pre-commit'))) {
+    const hookFile = hooksPath ? path.join(hooksPath, 'pre-commit') : null;
+    if (!hookFile || !fs.existsSync(hookFile)) {
       throw new Error(failure + ': installed pre-commit hook missing');
+    }
+    try {
+      const stat = fs.statSync(hookFile);
+      if (stat.isDirectory()) {
+        throw Object.assign(new Error('is directory'), { code: 'EACCES' });
+      }
+      if (process.platform !== 'win32' && (stat.mode & 0o111) === 0) {
+        throw Object.assign(new Error('not executable'), { code: 'EACCES' });
+      }
+      fs.accessSync(hookFile, fs.constants.X_OK);
+    } catch (err) {
+      if (err.code !== 'ENOENT') {
+        throw new Error(failure + ': installed pre-commit hook not executable');
+      }
     }
   }
   delete env.LEFTHOOK;
