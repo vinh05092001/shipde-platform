@@ -2179,14 +2179,28 @@ function dispatchCommand(args, deps = {}) {
     }
   }
 
+  const explicitCatalogueFile =
+    typeof args.catalogue === 'string' ? path.resolve(rootDir, args.catalogue) : undefined;
+  const explicitSourceModelsFile =
+    typeof args['catalogue-sources'] === 'string'
+      ? path.resolve(rootDir, args['catalogue-sources'])
+      : undefined;
+  const hasExplicitSnapshot = Boolean(explicitCatalogueFile || explicitSourceModelsFile);
+
+  if (hasExplicitSnapshot) {
+    if (
+      deps.accounts !== undefined ||
+      deps.catalogue !== undefined ||
+      deps.sourceModels !== undefined
+    ) {
+      throw Error('Cannot supply conflicting injected inventory with an explicit snapshot');
+    }
+  }
+
   const inventory = require('./candidate-inventory').readCandidateInventory({
     rootDir,
-    catalogueFile:
-      typeof args.catalogue === 'string' ? path.resolve(rootDir, args.catalogue) : undefined,
-    sourceModelsFile:
-      typeof args['catalogue-sources'] === 'string'
-        ? path.resolve(rootDir, args['catalogue-sources'])
-        : undefined,
+    catalogueFile: explicitCatalogueFile,
+    sourceModelsFile: explicitSourceModelsFile,
     useLatestIntake:
       Boolean(isDryRun) &&
       deps.candidates === undefined &&
@@ -2195,23 +2209,52 @@ function dispatchCommand(args, deps = {}) {
       deps.catalogue === undefined &&
       deps.discoveryCatalogue === undefined,
   });
+  const isSnapshotBacked = Boolean(
+    inventory && inventory.catalogue && inventory.accounts && inventory.sourceModels
+  );
   const accounts =
-    deps.accounts !== undefined
-      ? deps.accounts
+    hasExplicitSnapshot && inventory.accounts !== undefined
+      ? inventory.accounts
       : inventory.accounts !== undefined
         ? inventory.accounts
-        : typeof deps.listAccounts === 'function'
-          ? deps.listAccounts()
-          : listAccounts() || [];
+        : deps.accounts !== undefined
+          ? deps.accounts
+          : typeof deps.listAccounts === 'function'
+            ? deps.listAccounts()
+            : listAccounts() || [];
   const candidateOptions = {
-    ...inventory,
     ...deps,
+    ...inventory,
     root: rootDir,
-    registryAccounts: deps.registryAccounts !== undefined ? deps.registryAccounts : accounts,
+    registryAccounts:
+      hasExplicitSnapshot && inventory.accounts !== undefined
+        ? inventory.accounts
+        : deps.registryAccounts !== undefined
+          ? deps.registryAccounts
+          : accounts,
   };
+
+  const explicitSnapshotDir = explicitCatalogueFile
+    ? path.dirname(explicitCatalogueFile)
+    : explicitSourceModelsFile
+      ? path.dirname(explicitSourceModelsFile)
+      : undefined;
+  let boundDiscCat = null;
+  if (explicitSnapshotDir) {
+    const boundDiscDir = path.join(explicitSnapshotDir, 'discovery');
+    if (fs.existsSync(boundDiscDir)) {
+      try {
+        boundDiscCat = readDiscoveryCatalogue({ dataDir: boundDiscDir });
+      } catch {
+        boundDiscCat = { candidates: [] };
+      }
+    }
+  }
+  const dispatchDiscCat = isSnapshotBacked ? boundDiscCat || { candidates: [] } : discCat;
+
   const routeHealthApi = require('./route-health');
   const candidateList = assembleForDispatch(
-    discCat,
+    dispatchDiscCat,
     accounts,
     registry,
     Array.isArray(deps.candidates) || deps.allowUnprobedCandidates === true

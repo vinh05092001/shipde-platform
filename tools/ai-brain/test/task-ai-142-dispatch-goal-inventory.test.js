@@ -812,3 +812,354 @@ test('when intake runs exist but none is complete, candidate inventory reader an
     /No complete intake snapshot found/
   );
 });
+
+test('dispatch with explicit snapshot rejects conflicting injected inventory', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'candidate-conflict-inventory-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const registry = {
+    sources: [
+      {
+        id: 'fixture-router',
+        kind: 'router',
+        harness: 'paseo',
+        endpoint: 'https://router.invalid/v1',
+        writerEnabled: true,
+        models: [],
+        credential: { type: 'api-key', env: 'FIXTURE_ROUTER_KEY' },
+      },
+    ],
+    dispatch: { providers: {} },
+  };
+
+  const snapshotDir = path.join(root, 'snapshot');
+  fs.mkdirSync(snapshotDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(snapshotDir, 'catalogue.json'),
+    JSON.stringify(['vendor/fixture-snapshot-model'])
+  );
+  fs.writeFileSync(
+    path.join(snapshotDir, 'catalogue-sources.json'),
+    JSON.stringify({ 'fixture-router': ['vendor/fixture-snapshot-model'] })
+  );
+  fs.writeFileSync(
+    path.join(snapshotDir, 'accounts.json'),
+    JSON.stringify([
+      {
+        id: 'snapshot-account',
+        sourceId: 'fixture-router',
+        enabled: true,
+        models: ['vendor/fixture-snapshot-model'],
+      },
+    ])
+  );
+
+  const profile = {
+    taskId: 'TASK-FIXTURE',
+    role: 'writer',
+    requiredCapabilities: [],
+    taskClass: 'T1',
+    riskDomains: [],
+  };
+
+  const baseDeps = {
+    root,
+    rootDir: root,
+    home: root,
+    registry,
+    allowUnprobedCandidates: true,
+    capabilitiesPrepared: true,
+    discoverPool: false,
+    fakeRunsDir: path.join(root, 'pool'),
+    evidenceData: { combinations: [] },
+    routeHealth: { paths: {}, events: [] },
+    env: { FIXTURE_ROUTER_KEY: 'fixture-only' },
+    taskProfile: profile,
+    log: () => {},
+    error: () => {},
+    exit: () => {},
+  };
+
+  await assert.rejects(
+    async () =>
+      cli.dispatchCommand(
+        {
+          'dry-run': true,
+          item: profile.taskId,
+          root,
+          catalogue: path.join(snapshotDir, 'catalogue.json'),
+        },
+        {
+          ...baseDeps,
+          accounts: [
+            {
+              id: 'conflicting-account',
+              sourceId: 'fixture-router',
+              enabled: true,
+              models: ['vendor/conflicting-model'],
+            },
+          ],
+        }
+      ),
+    /Cannot supply conflicting injected inventory with an explicit snapshot/
+  );
+
+  await assert.rejects(
+    async () =>
+      cli.dispatchCommand(
+        {
+          'dry-run': true,
+          item: profile.taskId,
+          root,
+          catalogue: path.join(snapshotDir, 'catalogue.json'),
+        },
+        {
+          ...baseDeps,
+          catalogue: ['vendor/conflicting-model'],
+        }
+      ),
+    /Cannot supply conflicting injected inventory with an explicit snapshot/
+  );
+
+  await assert.rejects(
+    async () =>
+      cli.dispatchCommand(
+        {
+          'dry-run': true,
+          item: profile.taskId,
+          root,
+          catalogue: path.join(snapshotDir, 'catalogue.json'),
+        },
+        {
+          ...baseDeps,
+          sourceModels: { 'fixture-router': ['vendor/conflicting-model'] },
+        }
+      ),
+    /Cannot supply conflicting injected inventory with an explicit snapshot/
+  );
+});
+
+test('snapshot-backed dry-run excludes unrelated discovery candidates from ranking', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'candidate-discovery-isolation-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const intake = path.join(root, 'tools/ai-brain/data/intake');
+  const snapshotRun = path.join(intake, 'run-1');
+  fs.mkdirSync(snapshotRun, { recursive: true });
+
+  const snapshotData = {
+    catalogue: ['vendor/snapshot-model'],
+    sourceModels: { 'fixture-router': ['vendor/snapshot-model'] },
+    accounts: [
+      {
+        id: 'snapshot-account',
+        sourceId: 'fixture-router',
+        enabled: true,
+        models: ['vendor/snapshot-model'],
+      },
+    ],
+  };
+  fs.writeFileSync(
+    path.join(snapshotRun, 'catalogue.json'),
+    JSON.stringify(snapshotData.catalogue)
+  );
+  fs.writeFileSync(
+    path.join(snapshotRun, 'catalogue-sources.json'),
+    JSON.stringify(snapshotData.sourceModels)
+  );
+  fs.writeFileSync(path.join(snapshotRun, 'accounts.json'), JSON.stringify(snapshotData.accounts));
+
+  const unrelatedDiscDir = path.join(root, 'unrelated-discovery');
+  fs.mkdirSync(unrelatedDiscDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(unrelatedDiscDir, 'catalogue.jsonl'),
+    JSON.stringify({
+      modelId: 'vendor/unrelated-discovery-model',
+      accessPath: 'fixture-router',
+      account: '',
+    }) + '\n'
+  );
+
+  const registry = {
+    sources: [
+      {
+        id: 'fixture-router',
+        kind: 'router',
+        harness: 'paseo',
+        endpoint: 'https://router.invalid/v1',
+        writerEnabled: true,
+        models: [],
+        credential: { type: 'api-key', env: 'FIXTURE_ROUTER_KEY' },
+      },
+    ],
+    dispatch: { providers: {} },
+  };
+
+  const routing = require('../routing');
+  const originalRank = routing.rankForProfile;
+  let offered;
+  t.mock.method(routing, 'rankForProfile', (cs, ...args) => {
+    offered = cs;
+    return originalRank(cs, ...args);
+  });
+
+  const profile = {
+    taskId: 'TASK-FIXTURE',
+    role: 'writer',
+    requiredCapabilities: [],
+    taskClass: 'T1',
+    riskDomains: [],
+  };
+
+  await cli.dispatchCommand(
+    {
+      'dry-run': true,
+      item: profile.taskId,
+      root,
+      'discovery-dir': unrelatedDiscDir,
+    },
+    {
+      root,
+      rootDir: root,
+      home: root,
+      registry,
+      discoveryDataDir: unrelatedDiscDir,
+      allowUnprobedCandidates: true,
+      capabilitiesPrepared: true,
+      discoverPool: false,
+      fakeRunsDir: path.join(root, 'pool'),
+      evidenceData: { combinations: [] },
+      routeHealth: { paths: {}, events: [] },
+      env: { FIXTURE_ROUTER_KEY: 'fixture-only' },
+      taskProfile: profile,
+      assessment: { weightProfile: 'BALANCED', weights: routing.WEIGHT_PROFILES.BALANCED },
+      ranking: { priors: { ranking: [] } },
+      evidenceDir: path.join(root, 'evidence'),
+      decisionDir: path.join(root, 'decisions'),
+      storePath: path.join(root, 'quota.json'),
+      listAccounts: () => [],
+      log: () => {},
+      error: () => {},
+      exit: () => {},
+    }
+  );
+
+  assert.ok(offered && offered.length > 0, 'snapshot candidates must be offered');
+  assert.equal(
+    offered.some((c) => c.modelId === 'vendor/snapshot-model'),
+    true,
+    'snapshot model must be present'
+  );
+  assert.equal(
+    offered.some((c) => c.modelId === 'vendor/unrelated-discovery-model'),
+    false,
+    'unrelated discovery candidates cannot enter the ranking'
+  );
+});
+
+test('snapshot-backed dispatch binds discovery to the selected snapshot when present', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'candidate-discovery-bound-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const snapshotDir = path.join(root, 'snapshot');
+  const boundDiscDir = path.join(snapshotDir, 'discovery');
+  fs.mkdirSync(boundDiscDir, { recursive: true });
+
+  fs.writeFileSync(
+    path.join(snapshotDir, 'catalogue.json'),
+    JSON.stringify(['vendor/snapshot-model'])
+  );
+  fs.writeFileSync(
+    path.join(snapshotDir, 'catalogue-sources.json'),
+    JSON.stringify({ 'fixture-router': ['vendor/snapshot-model'] })
+  );
+  fs.writeFileSync(
+    path.join(snapshotDir, 'accounts.json'),
+    JSON.stringify([
+      {
+        id: 'snapshot-account',
+        sourceId: 'fixture-router',
+        enabled: true,
+        models: ['vendor/snapshot-model'],
+      },
+    ])
+  );
+  fs.writeFileSync(
+    path.join(boundDiscDir, 'catalogue.jsonl'),
+    JSON.stringify({
+      modelId: 'vendor/bound-discovery-model',
+      accessPath: 'fixture-router',
+      account: '',
+    }) + '\n'
+  );
+
+  const registry = {
+    sources: [
+      {
+        id: 'fixture-router',
+        kind: 'router',
+        harness: 'paseo',
+        endpoint: 'https://router.invalid/v1',
+        writerEnabled: true,
+        models: [],
+        credential: { type: 'api-key', env: 'FIXTURE_ROUTER_KEY' },
+      },
+    ],
+    dispatch: { providers: {} },
+  };
+
+  const routing = require('../routing');
+  const originalRank = routing.rankForProfile;
+  let offered;
+  t.mock.method(routing, 'rankForProfile', (cs, ...args) => {
+    offered = cs;
+    return originalRank(cs, ...args);
+  });
+
+  const profile = {
+    taskId: 'TASK-FIXTURE',
+    role: 'writer',
+    requiredCapabilities: [],
+    taskClass: 'T1',
+    riskDomains: [],
+  };
+
+  await cli.dispatchCommand(
+    {
+      'dry-run': true,
+      item: profile.taskId,
+      root,
+      catalogue: path.join(snapshotDir, 'catalogue.json'),
+    },
+    {
+      root,
+      rootDir: root,
+      home: root,
+      registry,
+      allowUnprobedCandidates: true,
+      capabilitiesPrepared: true,
+      discoverPool: false,
+      fakeRunsDir: path.join(root, 'pool'),
+      evidenceData: { combinations: [] },
+      routeHealth: { paths: {}, events: [] },
+      env: { FIXTURE_ROUTER_KEY: 'fixture-only' },
+      taskProfile: profile,
+      assessment: { weightProfile: 'BALANCED', weights: routing.WEIGHT_PROFILES.BALANCED },
+      ranking: { priors: { ranking: [] } },
+      evidenceDir: path.join(root, 'evidence'),
+      decisionDir: path.join(root, 'decisions'),
+      storePath: path.join(root, 'quota.json'),
+      listAccounts: () => [],
+      log: () => {},
+      error: () => {},
+      exit: () => {},
+    }
+  );
+
+  assert.ok(offered && offered.length > 0, 'candidates must be offered');
+  assert.equal(
+    offered.some((c) => c.modelId === 'vendor/bound-discovery-model'),
+    true,
+    'bound discovery model must be present'
+  );
+});
