@@ -913,7 +913,7 @@ function proofObservedWithSource(evidenceData, candidate) {
   const passed = (items || []).filter((e) => e.status === 'passed');
   const direct = evidence.proofLevelOf(passed);
   const ownBlocked = evidence.isCandidateBlocked(evidenceData, candidate).blocked;
-  const ownFailed = (items || []).some((item) => item.status === 'failed');
+  const ownFailed = (items || []).some((item) => evidence.isQualityFailure(item));
   const quotaExhausted =
     candidate &&
     (candidate.headroomStatus === 'exhausted' ||
@@ -1121,7 +1121,7 @@ function reliabilityScoreOf(candidate) {
   for (const e of items) {
     if (!e) continue;
     if (e.status === 'passed') passed += 1;
-    else if (e.status === 'failed') failed += 1;
+    else if (evidence.isQualityFailure(e)) failed += 1;
   }
   if (passed + failed === 0) return null;
   return Math.round(100 * (passed / (passed + failed)));
@@ -1169,7 +1169,7 @@ function scoreForProfile(candidate, assessment, ctx) {
   const internalEvidence =
     storedEvidence.length > 0 ? storedEvidence : (candidate && candidate.evidence) || [];
   const evidenceCount = internalEvidence.filter((item) => item && item.status === 'passed').length;
-  const hasQualityFailure = internalEvidence.some((item) => item && item.status === 'failed');
+  const hasQualityFailure = internalEvidence.some((item) => evidence.isQualityFailure(item));
   const qualityWeight = Number(
     assessment && assessment.weights && assessment.weights.quality !== undefined
       ? assessment.weights.quality
@@ -1487,7 +1487,7 @@ function rankForProfile(candidates, profile, assessment, ctx) {
     const candidateEvidence = evidence.getEvidence(context.evidenceData, c) || [];
     const legacyEvidence = Array.isArray(c.evidence) ? c.evidence : [];
     const allCandidateEvidence = candidateEvidence.concat(legacyEvidence);
-    const hasQualityFailure = allCandidateEvidence.some((item) => item && item.status === 'failed');
+    const hasQualityFailure = allCandidateEvidence.some((item) => evidence.isQualityFailure(item));
     const hasInternalWorkItemPass = allCandidateEvidence.some(
       (item) => item && item.status === 'passed' && item.proofLevel === 'WORK_ITEM_PASS'
     );
@@ -2418,6 +2418,7 @@ async function defaultLauncher(request) {
 }
 
 module.exports = {
+  reliabilityScoreOf,
   TASK_ROLES,
   WORKER_REVIEWER_ROLES,
   PROOF_FLOORS,

@@ -318,6 +318,14 @@ function recordProbe(dir, candidate, item) {
 }
 
 /** Get evidence items for a candidate. */
+// A launch that never reached the model (launcher, harness or isolation fault)
+// says nothing about the model's quality; only model-scoped failures count.
+function isQualityFailure(item) {
+  if (!item || (item.status !== 'failed' && item.status !== Status.FAILED)) return false;
+  if (item.scope === 'model') return true;
+  return item.source !== 'launch-failure' && item.scope !== 'harness';
+}
+
 function getEvidence(data, candidate) {
   const combo = findCombo(data, candidate);
   if (!combo || combo.legacy || combo.verified === false) return [];
@@ -618,6 +626,7 @@ module.exports = {
   recordProbe,
   recordOutcome: recordProbe,
   getEvidence,
+  isQualityFailure,
   isCandidateBlocked,
   isUpstreamBlocked,
   candidateStatus,
