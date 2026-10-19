@@ -72,7 +72,7 @@ test('TASK-AI-142 item 2: orderCandidatesForProbe prioritizes live routes and pr
 
   const store = {
     paths: {
-      'src2::live-model': {
+      'live-model|src2@acc2': {
         routeId: 'src2',
         modelId: 'live-model',
         status: 'AVAILABLE',

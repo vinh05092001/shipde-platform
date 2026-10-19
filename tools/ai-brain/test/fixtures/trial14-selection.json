@@ -1,0 +1,76 @@
+{
+  "provenance": {
+    "run": "GOAL-G-F622511E-1-2026-10-18T07-43-09-946Z",
+    "source": "decisions/2026-10-18.jsonl selected",
+    "scope": "bounded recorded ranking and rejection sample; not full uncapped inventory"
+  },
+  "profile": {
+    "taskId": "GOAL-G-F622511E-1",
+    "description": "GOAL-G-F622511E-1",
+    "role": "writer",
+    "complexity": "standard",
+    "requiredCapabilities": ["tools"],
+    "proofFloor": "NONE",
+    "contextSize": 2975,
+    "expectedDuration": 1800000,
+    "latencyPriority": "normal",
+    "qualityFloor": 70,
+    "costCeiling": 1000000,
+    "requiredHarness": null,
+    "forbiddenFailureDomains": [],
+    "resourceCeiling": 4,
+    "currentWorkload": 0
+  },
+  "ranking": [
+    {
+      "candidateKey": "agy-pool::ShipDe\\ShipDe-agy01::::antigravity::agy01::agy01:gemini::gemini-3.8-flash-high",
+      "score": 70
+    },
+    {
+      "candidateKey": "agy-pool::ShipDe\\ShipDe-agy01::::antigravity::agy01::agy01:gemini::gemini-3.8-flash-low",
+      "score": 70
+    }
+  ],
+  "rejected": [
+    {
+      "candidateKey": "paseo::http://127.0.0.1:20128/v1::9router::ag::xkiro::xkiro::ag/claude-opus-4-6-thinking",
+      "reason": "WRITER_SCHEMA_NOT_VERIFIED_BUDGET"
+    },
+    {
+      "candidateKey": "paseo::http://127.0.0.1:20128/v1::9router::ag::xkiro::xkiro::ag/claude-opus-5-5",
+      "reason": "WRITER_SCHEMA_NOT_VERIFIED_BUDGET"
+    },
+    {
+      "candidateKey": "paseo::http://127.0.0.1:20128/v1::9router::ag::xkiro::xkiro::ag/claude-opus-5-5-high",
+      "reason": "WRITER_SCHEMA_NOT_VERIFIED_BUDGET"
+    },
+    {
+      "candidateKey": "paseo::http://127.0.0.1:20128/v1::9router::ag::xkiro::xkiro::ag/claude-opus-5-5-low",
+      "reason": "WRITER_SCHEMA_NOT_VERIFIED_BUDGET"
+    },
+    {
+      "candidateKey": "paseo::http://127.0.0.1:20128/v1::9router::ag::xkiro::xkiro::ag/claude-opus-5-5-medium",
+      "reason": "WRITER_SCHEMA_NOT_VERIFIED_BUDGET"
+    },
+    {
+      "candidateKey": "paseo::http://127.0.0.1:20128/v1::9router::ag::xkiro::xkiro::ag/claude-sonnet-4-6",
+      "reason": "WRITER_SCHEMA_NOT_VERIFIED_BUDGET"
+    },
+    {
+      "candidateKey": "paseo::http://127.0.0.1:20128/v1::9router::ag::xkiro::xkiro::ag/claude-sonnet-5-5",
+      "reason": "WRITER_SCHEMA_NOT_VERIFIED_BUDGET"
+    },
+    {
+      "candidateKey": "paseo::http://127.0.0.1:20128/v1::9router::ag::xkiro::xkiro::ag/claude-sonnet-5-5-high",
+      "reason": "WRITER_SCHEMA_NOT_VERIFIED_BUDGET"
+    },
+    {
+      "candidateKey": "paseo::http://127.0.0.1:20128/v1::9router::ag::xkiro::xkiro::ag/claude-sonnet-5-5-low",
+      "reason": "WRITER_SCHEMA_NOT_VERIFIED_BUDGET"
+    },
+    {
+      "candidateKey": "paseo::http://127.0.0.1:20128/v1::9router::ag::xkiro::xkiro::ag/claude-sonnet-5-5-medium",
+      "reason": "WRITER_SCHEMA_NOT_VERIFIED_BUDGET"
+    }
+  ]
+}

@@ -441,8 +441,11 @@ if (\`$LASTEXITCODE -ne 0) {
     'PATHEXT',
   ];
   // DS-R04: add only the selected source's credential env to the allowlist
-  if (options.adapterId === 'opencode-direct' && options.credentialEnv) {
-    envAllowed.push(options.credentialEnv);
+  if (options.adapterId === 'opencode-direct') {
+    if (options.credentialEnv) {
+      envAllowed.push(options.credentialEnv);
+    }
+    envAllowed.push('OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX');
   }
   const allowedArray = '@(' + envAllowed.map((k) => `"${k}"`).join(', ') + ')';
 
@@ -472,6 +475,7 @@ $wrapperStartTime = Get-Date
 \`$env:GIT_CONFIG_VALUE_0 = "${safeWorkerRootForGit}"
 \`$env:TEMP = "${workerRoot}\\temp"
 \`$env:TMP = "${workerRoot}\\temp"
+if (-not \`$env:OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX) { \`$env:OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX = "4096" }
 if (-not (Test-Path "${workerRoot}\\temp")) { New-Item -ItemType Directory -Path "${workerRoot}\\temp" | Out-Null }
 if (-not (Test-Path "${workerRoot}\\.shipde")) { New-Item -ItemType Directory -Path "${workerRoot}\\.shipde" | Out-Null }
 Set-Location -Path "${workerRoot}"
@@ -2204,15 +2208,19 @@ function getIsolatedLauncher() {
     if (adapter.id === 'opencode-direct') {
       const sourcesModule = require('./sources');
       const staticSources = require('./sources.json');
+      const loadedSources =
+        opts && opts.sources
+          ? Array.isArray(opts.sources)
+            ? opts.sources
+            : (opts.sources && opts.sources.sources) || []
+          : sourcesModule.loadSources(opts).sources;
       // Discovered (probed) direct sources are only in the merged registry.
       const sources = {
         ...staticSources,
         sources: (staticSources.sources || []).concat(
-          sourcesModule
-            .loadSources()
-            .sources.filter(
-              (entry) => !(staticSources.sources || []).some((s) => s.id === entry.id)
-            )
+          loadedSources.filter(
+            (entry) => !(staticSources.sources || []).some((s) => s.id === entry.id)
+          )
         ),
       };
       const { parseCandidateKey } = require('./discovery/identity');
@@ -2224,19 +2232,79 @@ function getIsolatedLauncher() {
           ? args[modelIdx + 1]
           : (opts && opts.pinnedModel) || (opts && opts.model) || null;
 
-      // SUPERVISOR FIX: resolve source from candidate gateway, not model prefix
-      // The gateway comes from the Controller-pinned candidate key (7 parts separated by '::')
+      // SUPERVISOR FIX: resolve source from options, candidate gateway, or model prefix
+      let selectedSource =
+        opts && (opts.selectedSource || (typeof opts.source === 'object' ? opts.source : null));
       const candidateKey = (opts && opts.candidateKey) || null;
-      let sourceId = null;
-      if (candidateKey) {
+      let sourceId =
+        (opts &&
+          (opts.sourceId ||
+            (typeof opts.source === 'string' ? opts.source : null) ||
+            opts.gateway)) ||
+        null;
+      if (!sourceId && candidateKey) {
         const parsed = parseCandidateKey(candidateKey);
         sourceId = parsed && parsed.gateway ? parsed.gateway : null;
+      }
+      if (!sourceId && pinnedModel) {
+        const prefix = sourcesModule.providerFromPrefix(pinnedModel);
+        if (prefix) {
+          const match = sources.sources.find(
+            (s) =>
+              s.id === prefix ||
+              s.opencodeProvider === prefix ||
+              s.modelPrefix === prefix + '/' ||
+              s.modelPrefix === prefix
+          );
+          if (match) {
+            sourceId = match.id;
+          } else {
+            const machineDataOff =
+              process.env.AI_BRAIN_DISCOVERED_SOURCES === 'none' ||
+              process.env.AI_BRAIN_MACHINE_DATA === 'none';
+            if (!machineDataOff) {
+              try {
+                const { discoverSources } = require('./source-discovery');
+                const discovered = discoverSources();
+                const dMatch = discovered.find(
+                  (s) => s.id === prefix || s.opencodeProvider === prefix
+                );
+                if (dMatch) {
+                  sourceId = dMatch.id;
+                  selectedSource = dMatch;
+                }
+              } catch (_) {}
+            }
+          }
+        }
       }
 
       // No gateway (legacy callers/tests) -> use 9router unchanged
       sourceId = sourceId || '9router';
 
-      const selectedSource = sources.sources.find((s) => s.id === sourceId);
+      if (!selectedSource) {
+        selectedSource =
+          opts && (opts.selectedSource || (typeof opts.source === 'object' ? opts.source : null));
+      }
+      if (!selectedSource) {
+        selectedSource = sources.sources.find(
+          (s) => s.id === sourceId || s.opencodeProvider === sourceId
+        );
+      }
+      if (!selectedSource) {
+        const machineDataOff =
+          process.env.AI_BRAIN_DISCOVERED_SOURCES === 'none' ||
+          process.env.AI_BRAIN_MACHINE_DATA === 'none';
+        if (!machineDataOff) {
+          try {
+            const { discoverSources } = require('./source-discovery');
+            const discovered = discoverSources();
+            selectedSource = discovered.find(
+              (s) => s.id === sourceId || s.opencodeProvider === sourceId
+            );
+          } catch (_) {}
+        }
+      }
       if (!selectedSource) {
         const err = new Error(
           `OPENCODE_DIRECT_SOURCE_UNKNOWN: gateway '${sourceId}' not found in sources.json`
@@ -2266,8 +2334,10 @@ function getIsolatedLauncher() {
         throw err;
       }
 
-      // DS-R04: verify that the credential is available in the host environment before spawning (direct sources only; 9router never checked)
-      if (sourceId !== '9router' && !process.env[credentialEnv]) {
+      const isRouter = selectedSource.kind === 'router' || Boolean(selectedSource.modelPrefix);
+
+      // DS-R04: verify that the credential is available in the host environment before spawning (direct sources only; router never checked)
+      if (!isRouter && !process.env[credentialEnv]) {
         const err = new Error(
           `OPENCODE_DIRECT_CREDENTIAL_MISSING: environment variable ${credentialEnv} is not set`
         );
@@ -2280,11 +2350,11 @@ function getIsolatedLauncher() {
 
       // DS-R03: for direct sources, provider id must be the source id, not the model name
       const providerId =
-        sourceId === '9router' && pinnedModel
+        isRouter && pinnedModel
           ? sourcesModule.providerFromPrefix(pinnedModel) || selectedSource.id
           : selectedSource.opencodeProvider || selectedSource.id;
 
-      if (pinnedModel && sourceId === '9router') {
+      if (pinnedModel && isRouter) {
         const derivedFromModel = sourcesModule.providerFromPrefix(pinnedModel);
         if (derivedFromModel && derivedFromModel !== providerId) {
           throw new Error(
@@ -2295,36 +2365,81 @@ function getIsolatedLauncher() {
 
       const modelsMap = {};
       if (pinnedModel) {
-        modelsMap[pinnedModel] = { id: pinnedModel, name: pinnedModel };
         const prefixWithSlash = providerId + '/';
-        if (pinnedModel.startsWith(prefixWithSlash)) {
-          const relativeId = pinnedModel.slice(prefixWithSlash.length);
-          if (relativeId) {
-            // For 9router with upstream prefix (cl/, xmtp/), use full pinnedModel as wireId
-            // For 9router with router's own prefix and for direct sources, use relativeId as wireId
-            const routerProvider = sourcesModule.providerFromPrefix(selectedSource.modelPrefix);
-            const useFullWireId = sourceId === '9router' && providerId !== routerProvider;
-            const wireId = useFullWireId ? pinnedModel : relativeId;
-            modelsMap[relativeId] = { id: wireId, name: relativeId };
-          }
+        const relativeId = pinnedModel.startsWith(prefixWithSlash)
+          ? pinnedModel.slice(prefixWithSlash.length)
+          : pinnedModel;
+
+        const routerProvider = selectedSource.modelPrefix
+          ? sourcesModule.providerFromPrefix(selectedSource.modelPrefix)
+          : null;
+        const useFullWireId = isRouter && routerProvider && providerId !== routerProvider;
+        const wireId = useFullWireId ? pinnedModel : relativeId;
+
+        const outputLimit =
+          (selectedSource.modelMeta && selectedSource.modelMeta[pinnedModel]?.limit?.output) ||
+          (selectedSource.options && selectedSource.options.max_tokens) ||
+          4096;
+        const contextLimit =
+          (selectedSource.modelMeta && selectedSource.modelMeta[pinnedModel]?.limit?.context) ||
+          32000;
+
+        const modelEntry = {
+          id: wireId,
+          name: relativeId,
+          limit: {
+            context: contextLimit,
+            output: outputLimit,
+          },
+        };
+        modelsMap[pinnedModel] = modelEntry;
+        if (relativeId && relativeId !== pinnedModel) {
+          modelsMap[relativeId] = modelEntry;
         }
+      }
+
+      const providerOptions = {
+        baseURL: selectedSource.endpoint,
+        apiKey: `{env:${credentialEnv}}`,
+        ...(selectedSource.headers && typeof selectedSource.headers === 'object'
+          ? { headers: selectedSource.headers }
+          : {}),
+      };
+      if (selectedSource.options && typeof selectedSource.options === 'object') {
+        Object.assign(providerOptions, selectedSource.options);
+        // Ensure apiKey is strictly {env:credentialEnv} and never leaked/overwritten
+        providerOptions.apiKey = `{env:${credentialEnv}}`;
+      }
+
+      // Permission scoping: strictly worker root and report dir; no whole-machine wildcard
+      const normWorker = path.resolve(workerRoot).replace(/\\/g, '/');
+      const workerPattern = normWorker.endsWith('/') ? normWorker + '**' : normWorker + '/**';
+      const extDirPerms = {
+        [workerPattern]: 'allow',
+      };
+      if (opts && opts.usageDir) {
+        const normUsage = path.resolve(opts.usageDir).replace(/\\/g, '/');
+        const usagePattern = normUsage.endsWith('/') ? normUsage + '**' : normUsage + '/**';
+        extDirPerms[usagePattern] = 'allow';
+      }
+      if (opts && opts.usageFile) {
+        const reportDir = path.dirname(path.resolve(opts.usageFile)).replace(/\\/g, '/');
+        const reportPattern = reportDir.endsWith('/') ? reportDir + '**' : reportDir + '/**';
+        extDirPerms[reportPattern] = 'allow';
       }
 
       // DS-R03: generate opencode.json with the direct source's endpoint and credential
       const configPath = path.join(workerRoot, 'opencode.json');
       const configData = JSON.stringify({
         $schema: 'https://opencode.ai/config.json',
+        permission: {
+          external_directory: extDirPerms,
+        },
         provider: {
           [providerId]: {
             npm: '@ai-sdk/openai-compatible',
             name: selectedSource.label || providerId,
-            options: {
-              baseURL: selectedSource.endpoint,
-              apiKey: `{env:${credentialEnv}}`,
-              ...(selectedSource.headers && typeof selectedSource.headers === 'object'
-                ? { headers: selectedSource.headers }
-                : {}),
-            },
+            options: providerOptions,
             models: modelsMap,
           },
         },

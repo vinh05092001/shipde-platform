@@ -33,6 +33,7 @@ const fs = require('fs');
 const path = require('path');
 
 const DEFAULT_PATH = path.join(__dirname, 'sources.json');
+const DEFAULT_DISPATCH = require('./sources.json').dispatch;
 
 const Kind = Object.freeze({
   MODEL_SOURCE: 'model-source',
@@ -378,6 +379,11 @@ function getDispatchConfig(registry, options = {}) {
         dispatch.schemaBudgetMs ??
         probeBudgetMs
     ) || probeBudgetMs;
+  const routeEvidenceMaxAgeMs = Number(
+    options.routeEvidenceMaxAgeMs ??
+      dispatch.routeEvidenceMaxAgeMs ??
+      DEFAULT_DISPATCH.routeEvidenceMaxAgeMs
+  );
   const defaults = require('./sources.json').dispatch;
   const configuredLimit = (key) => {
     const value = Number(options[key] ?? dispatch[key] ?? defaults[key]);
@@ -386,8 +392,17 @@ function getDispatchConfig(registry, options = {}) {
     }
     return value;
   };
+  const configuredNonNegativeLimit = (key) => {
+    const value = Number(options[key] ?? dispatch[key] ?? defaults[key]);
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new Error('DISPATCH_CONFIG_INVALID: ' + key + ' must be a non-negative integer');
+    }
+    return value;
+  };
   return {
+    routeEvidenceMaxAgeMs,
     maxWriterSelectionRounds: configuredLimit('maxWriterSelectionRounds'),
+    maxLocalWriterFallbacks: configuredNonNegativeLimit('maxLocalWriterFallbacks'),
     maxItemDurationMs: configuredLimit('maxItemDurationMs'),
     probeBudgetMs,
     maxConcurrentProbes,

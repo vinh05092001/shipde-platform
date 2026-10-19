@@ -1,0 +1,7 @@
+{
+  "modelId": "9router/nonexistent-probe-test",
+  "status": 404,
+  "ok": false,
+  "cause": "PROVIDER_UNAVAILABLE",
+  "body": "{\"error\":{\"message\":\"No active credentials for provider: 9router\",\"type\":\"invalid_request_error\",\"code\":\"model_not_found\"}}"
+}

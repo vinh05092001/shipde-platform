@@ -1,0 +1,7 @@
+{
+  "modelId": "gh/copilot-search-c",
+  "status": 0,
+  "ok": false,
+  "cause": "TIMEOUT",
+  "body": "Request timeout"
+}

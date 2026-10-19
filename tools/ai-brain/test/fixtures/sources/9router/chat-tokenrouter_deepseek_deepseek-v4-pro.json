@@ -1,0 +1,7 @@
+{
+  "modelId": "tokenrouter/deepseek/deepseek-v4-pro",
+  "status": 503,
+  "ok": false,
+  "cause": "UPSTREAM_CREDIT_OR_QUOTA",
+  "body": "{\"error\":{\"message\":\"[tokenrouter/deepseek/deepseek-v4-pro] [403]: {\\\"error\\\":{\\\"message\\\":\\\"This model cannot use part of your gift balance, remaining eligible quota: ＄0.000000, required pre-deduction amount: ＄0.014068 (request id: 2026101815112489372628nKf1YV43)\\\",\\\"type\\\":\\\"api_error\\\",\\\"param\\\":\\\"\\\",\\\"code\\\":\\\"insufficient_user_quota\\\"},\\\"id\\\":276749,\\\"message\\\":\\\"This model cannot use part of your gift balance\\\",\\\"org_id\\\":\\\"\\\",\\\"role\\\":1,\\\"suffer\\\":\\\"money\\\"} (reset after 1m 57s)\"}}"
+}

@@ -258,6 +258,52 @@ directories; another live runner still blocks concurrent work.
 The regression creates only temporary fixtures and verifies selection, ceiling,
 and preservation of the abandoned intake directory.
 
+### H3 live: the writer route-probe window is not charged with capability proof time (2026-10-18)
+
+Live trial 15 of goal G-F622511E (18/10 15:59Z) ended PROBE_BUDGET_EXHAUSTED without probing a single route: #388 started the writer route-probe window at `now - capabilityProbeDurationMs`, so slow CLI capability proofs spent it first. Capability proofs keep their own `schemaProbeBudgetMs`; the route window now starts when route probing starts and its length is `probeBudgetMs` from the dispatch configuration instead of a module constant.
+
+### H3 live: pool writer job identity and bounded local fallback (2026-10-18)
+
+Trial 14 recorded an agy-pool writer exit 0 with no durable session identity,
+then HARNESS_INVALID_JSON and an immediate item stop. `resolveLauncher` previously
+used the adapter/scheduler path, which neither bound the result to a pool job nor
+returned a launch handle. `readSessionId` therefore fell through to stdout JSON
+parsing; the missing-session branch in orchestration stopped selection.
+
+Authorized external pool writers now use the existing locked pool submission
+path. The pool allocates a job UUID at submission, writes account/job identity
+into job.json before execution, retains a per-job receipt, and returns that same
+identity in result metadata. Executor reads it through the pool adapter contract,
+independently of prose stdout and without claiming isolated execution. No PID,
+time-derived id, account-only id or latest-session lookup is used. Reusing an
+account creates a distinct job while retaining the earlier receipt.
+
+A candidate-local session failure is recorded with its exact key and cause,
+then skipped only for this item invocation. It consumes no upstream attempt or
+provider cooldown. The next writer is selected by the Controller's existing
+ranking. `dispatch.maxLocalWriterFallbacks` bounds the number of transitions;
+exhaustion records LOCAL_WRITER_FALLBACK_LIMIT with each candidate/reason. Existing
+isolation-verdict stops and repeated identical infrastructure-failure stops remain.
+The agy authorization gate is unchanged. Tests use temporary repos/pool files and
+mock adapter/scheduler boundaries; no machine fixture data is read by tests.
+
+The historical decision snapshot retains exit/session metadata but no writer
+stdout, so the regression uses explicitly synthetic prose. It proves the protocol
+path and fallback, not that the historical writer completed the work. No real
+goal replay is part of this validation.
+
+### H3 live: exact route evidence and measured probe ordering (2026-10-18)
+
+Repair of the `2b783b56` review: one shared `route-evidence.js` matcher binds work evidence to the full candidate identity (transport, path, gateway, upstream, account, quota scope and full model identifier). Missing gateway/account data and matching model suffixes cannot borrow another route's proof. Freshness reads `dispatch.routeEvidenceMaxAgeMs` (preserving the existing 24-hour window). API/level-1 success may inform route availability; only `WORK_ITEM_PASS` or passed level 2/3 counts as completed work. The agy writer authorization gate remains unchanged.
+
+Probe order uses exact work/availability observations, then measured `elapsedMs` from route-health or evidence; unknown cost uses the existing dispatch `probeTimeoutMs`. Harness names receive no numeric priority. Rejection diagnostics share `sampleRepresentative` across every harness/reason, retaining the existing overall decision-log bound without named lane quotas. Dispatch dry-run and isolated goal ranking apply the same ordering.
+
+Offline regression includes a checked-in, explicitly bounded sample from trial 14's selected decision (two ranked identities and ten recorded rejection identities), with no credentials, launch metadata or machine paths. The integration drives both `dispatchCommand --dry-run` and `runOrchestration` with fixture-only capability results and a fake writer launcher. It compares the generated, pre/post capability and pre-ranking candidate sets, then verifies the selected identity reaches the launcher. Sample counts: 12 generated, 12 at capability/ranking gates, 2 ranked and 10 rejected; these are fixture counts, not a claim about the uncapped live inventory. Tests never read the original snapshot or the host account registry.
+
+### H3 live: live route prioritization, fast HTTP probe priority, and non-starving decision log representation (2026-10-18)
+
+Historical proposal in rejected SHA `2b783b56`, superseded by the exact-identity repair above: the original change introduced `sampleRepresentative`, but also used harness-name priorities and named lane quotas, and let API evidence satisfy work proof. Those parts failed review and are removed by the repair. The generic representative sampling remains.
+
 ### H3 live: scheduled resume selects an open goal and respects live owners (2026-10-18)
 
 `GoalResume` registration and `goal-resume.ps1` accept an optional goal ID.
@@ -1115,3 +1161,49 @@ Aggregator routers like 9Router require model IDs to carry an upstream provider 
      - Diagnosis: Test 4 in `task-ai-142-goal-writer-pool-3.test.js` failed on Linux CI because it lacked mock pool accounts/models and incorrectly asserted default inheritance of `tools: true` from the harness.
      - Fix: In `tools/ai-brain/candidates.js`, preserved the PR #388 contract that candidates without catalogue capabilities do not inherit harness tools by default. In `tools/ai-brain/test/task-ai-142-goal-writer-pool-3.test.js`, self-contained test fixtures construct isolated registry/accounts/catalogue definitions, asserting unverified default capability and confirming that `tools` capability is acquired through runtime probe verification (`probeCli`).
 - Verification: Unit tests in `tools/ai-brain/test/task-ai-142-goal-writer-pool-3.test.js` (6/6 pass), `task-ai-142-goal-writer-pool-2.test.js` (7/7 pass), and `task-ai-142-goal-writer-pool.test.js` (5/5 pass). Full test suite passes offline with `AI_BRAIN_MACHINE_DATA=none` and without `NINEROUTER_API_KEY`.
+
+### H3 live: rolling source onboarding step 1 (9router)
+
+- Implementation of rolling source onboarding framework (`tools/ai-brain/source-onboarding.js`, `tools/ai-brain/cli.js`):
+  1. CLI subcommands `sources onboard <sourceId> [--record|--replay] [--json]` and `sources onboard --all --replay`.
+  2. Six-stage pipeline:
+     - Gắn: Source endpoint & credential verification without secret leakage.
+     - Danh sách model: GET /models discovery and classification.
+     - Gọi thử: Live route probe via `route-probe.js` recognizing SSE stream 200 chunk responses as live.
+     - Chấm điểm: Mapping models and response alias targets (`model` field) to benchmark priors (`model-priors-live.json` / `priors.js`), assigning `QUALITY_UNKNOWN` without dropping unbenchmarked models.
+     - Ghi bằng chứng: Isolated health and evidence recording with canonical 7-part keys.
+     - Kiểm Controller thấy: End-to-end candidate generation (`candidates.js`) and ranking (`routing.js`) under task profile, explicitly diagnosing and reporting filtering layers and refusal reasons for unranked models.
+  3. Live 9router verification:
+     - 919 discovered models; 14 representative models probed and recorded into `tools/ai-brain/test/fixtures/sources/9router/`.
+     - 9 models live (200 OK): `ag/gemini-3.8-flash`, `ag/gemini-3.8-flash-high`, `ag/gemini-3.8-flash-medium`, `ag/gemini-3.8-flash-low`, `gcli/grok-4.7`, `gh/gpt-4o`, `gh/gpt-4o-mini`, `ag/claude-sonnet-4-6`, `vinh` (alias).
+     - 5 sample error types recorded: 400 (`HTTP_400`), 401 (`AUTH_NEEDED`), 402/503 (`UPSTREAM_UNAVAILABLE`), 404 (`PROVIDER_UNAVAILABLE`), 451 (`GEO_BLOCKED`).
+     - 8 live router models enter Controller ranking under `paseo` harness; unranked models diagnosed accurately (e.g. `vinh` missing upstream prefix caught at candidate generation layer).
+  4. Secret and token sanitization:
+     - All keys (`sk-`), authorization headers (`Bearer`), email addresses (`@`), and token identifiers completely scrubbed from recorded fixtures. Verified clean with `grep -iE "sk-|bearer|@|token"`.
+  5. Regression test suite:
+     - `tools/ai-brain/test/sources-replay.test.js` exercises deterministic offline replay across all source fixtures with zero network calls, verifying deep equality against `expected.json`.
+  6. Defect 5 resolution:
+     - Fixed tests in `tools/ai-brain/test/task-ai-142-probe-config.test.js` to isolate `routeHealthFile` in temporary directories, preventing mutation of the production store `tools/ai-brain/data/model-route-health.json`. Covered by `tools/ai-brain/test/task-ai-142-route-health-isolation.test.js`.
+
+### H3 live: opencode writer path (2026-10-18)
+
+- Investigation and repair of isolated OpenCode writer execution (`opencode-direct` adapter):
+  1. Root cause analysis of provider routing and stream parsing defects:
+     - Model `ninerouter/tokenrouter/openai/gpt-5.6-sol`: In 9Router/upstream, returned `Content-Type: text/event-stream` with a raw non-SSE JSON payload lacking `data: ` line prefixes. OpenCode's SSE parser received 0 stream chunks, exiting with code 0 and empty text (`> build · ...` only).
+     - Model `ninerouter/tokenrouter/qwen/qwen3.8-max`: Non-stream fallback from 9Router appended `data: [DONE]` directly to JSON body without delimiter, breaking standard JSON parsers with `UnknownError: Unexpected server error`. In OpenCode configuration, `tokenrouter/qwen/qwen3.8-max` was missing from declared `models` map.
+     - Model `explabs/muse-spark-1.3`: The direct provider `explabs` had 0 models declared in `opencode.json` (`models: {}`), causing OpenCode to fail to route or resolve capabilities.
+     - Permission boundary: In unattended execution, OpenCode auto-denied `external_directory` access for files outside the worker root (such as Controller report and usage logs), causing premature termination.
+     - Empty response failure classification: An exit code 0 producing no content or tool calls was not flagged by the harness.
+  2. Controller repairs in `isolation-launcher.js`, `harness.js`, and `executor.js`:
+     - Dynamic `opencode.json` generation in `tools/ai-brain/isolation-launcher.js`:
+       - Populated `models` map with wire ID, relative model ID, output limits (`limit.output`), and context window (`limit.context`).
+       - Propagated source options (`options`, `headers`, `timeout`, `max_tokens`) from source data into `provider.<id>.options`.
+       - Scoped `permission.external_directory` strictly to `workerRoot` and designated Controller report paths (`usageDir`, `usageFile`), preventing whole-machine wildcard while enabling headless operation.
+       - Enforced `{env:KEY_NAME}` credential format, preventing token leakage into disk configuration.
+     - Empty response detection in `tools/ai-brain/executor.js`:
+       - Added `hasHarnessResponse` checking for real text or tool use events while filtering build banner lines.
+       - Mapped empty responses to named error `HARNESS_EMPTY_RESPONSE` in `readSessionId`.
+     - Session naming in `tools/ai-brain/harness.js`:
+       - Ensured consistent `--title` fallback to work item ID or task name.
+  3. Verification:
+     - New unit tests in `tools/ai-brain/test/task-ai-142-opencode-writer.test.js` verifying config generation for SSE/JSON sources, permission scoping, secret redaction, and `HARNESS_EMPTY_RESPONSE` handling.

@@ -1,0 +1,7 @@
+{
+  "modelId": "gh/exec-agent-c",
+  "status": 0,
+  "ok": false,
+  "cause": "TIMEOUT",
+  "body": "Request timeout"
+}

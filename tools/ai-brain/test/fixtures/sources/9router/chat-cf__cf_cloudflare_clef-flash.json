@@ -1,0 +1,7 @@
+{
+  "modelId": "cf/@cf/cloudflare/clef-flash",
+  "status": 400,
+  "ok": false,
+  "cause": "ALIAS_MISMATCH",
+  "body": "{\"error\":{\"message\":\"[400]: {\\\"errors\\\":[{\\\"message\\\":\\\"AiError: No such model: No such model clef-flash or task (ffda2735-9b26-475c-88c6-39199b8076c0)\\\",\\\"code\\\":5007}],\\\"success\\\":false,\\\"result\\\":{},\\\"messages\\\":[]}\",\"type\":\"invalid_request_error\",\"code\":\"bad_request\"}}"
+}

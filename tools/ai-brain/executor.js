@@ -155,7 +155,52 @@ function inspectVerdict(res) {
  * HARNESS_NO_SESSION_ID: never a pid, a timestamp or a "latest" lookup, because
  * a value that is not a session cannot be resumed.
  */
+function hasHarnessResponse(res, adapter) {
+  if (!res) return false;
+  const stdout = String(res.stdout || '').trim();
+  if (!stdout) return false;
+  if (adapter && (adapter.id === 'opencode-direct' || adapter.id === 'opencode')) {
+    const lines = stdout
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean);
+    for (const line of lines) {
+      if (line.startsWith('{') && line.endsWith('}')) {
+        try {
+          const parsed = JSON.parse(line);
+          if (
+            (parsed.type === 'text' &&
+              parsed.part &&
+              parsed.part.text &&
+              String(parsed.part.text).trim()) ||
+            parsed.content ||
+            parsed.text ||
+            parsed.completed ||
+            parsed.completionNonce ||
+            parsed.sessionId ||
+            parsed.session_id ||
+            parsed.type === 'tool_use' ||
+            parsed.type === 'tool-call' ||
+            (parsed.part && (parsed.part.type === 'tool-call' || parsed.part.toolName))
+          ) {
+            return true;
+          }
+        } catch (_) {}
+      } else if (!line.startsWith('>') && !line.startsWith('build')) {
+        return true;
+      }
+    }
+    return false;
+  }
+  return true;
+}
+
 function readSessionId(adapter, job, res) {
+  // Some job harnesses report identity as process metadata, never in prose stdout.
+  if (adapter && typeof adapter.sessionIdFromResult === 'function') {
+    const id = adapter.sessionIdFromResult(job, res);
+    return { id: id || null, cause: id ? null : 'HARNESS_NO_SESSION_ID' };
+  }
   const isIsolated = Boolean(
     (job && job.isolatedWorker) || (res && (res.isolatedWorker || res.workerRoot))
   );
@@ -181,6 +226,13 @@ function readSessionId(adapter, job, res) {
     }
     const id = adapter.sessionIdFrom(report) || null;
     return { id, cause: id ? null : 'HARNESS_NO_SESSION_ID' };
+  }
+  if (
+    adapter &&
+    (adapter.id === 'opencode-direct' || adapter.id === 'opencode') &&
+    !hasHarnessResponse(res, adapter)
+  ) {
+    return { id: null, cause: 'HARNESS_EMPTY_RESPONSE' };
   }
   if (adapter.id === 'opencode-direct') {
     const id = (res && res.completionNonce) || null;
@@ -566,6 +618,7 @@ module.exports = {
   resumePrompt,
   inspectVerdict,
   readSessionId,
+  hasHarnessResponse,
   usageReportPath,
   Outcome,
 };

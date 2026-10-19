@@ -314,6 +314,25 @@ describe('TASK-AI-142: Route health isolation and default store immutability', (
     assert.equal(hashFile(DEFAULT_HEALTH_PATH), initialDefaultHash);
     assert.equal(fs.statSync(DEFAULT_HEALTH_PATH).mtimeMs, initialMtimeMs);
   });
+
+  test('task-ai-142-probe-config test suite does not touch default route-health file', () => {
+    fs.writeFileSync(
+      DEFAULT_HEALTH_PATH,
+      JSON.stringify({ version: 1, paths: {}, events: [] }, null, 2)
+    );
+    const cleanHash = hashFile(DEFAULT_HEALTH_PATH);
+    const child = require('node:child_process').spawnSync(
+      process.execPath,
+      ['--test', path.resolve(__dirname, 'task-ai-142-probe-config.test.js')],
+      { stdio: 'pipe' }
+    );
+    assert.equal(child.status, 0);
+    assert.equal(
+      hashFile(DEFAULT_HEALTH_PATH),
+      cleanHash,
+      'Default file was modified by probe-config test'
+    );
+  });
 });
 
 test('dispatchCommand: an explicit args health file wins over deps', async (t) => {
