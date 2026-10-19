@@ -248,6 +248,28 @@ Decision log entries link `goalId -> workItemId -> candidateKey -> session -> co
 - Part H2 Hermes session selection, custom config binding, and `shipde-controller` skill file are delivered in Part H2.
 - Live acceptance across chat and controller runs in Part H3 following merge of H1 and H2.
 
+### H3 live: independent review repair for narrow test commands, fail-closed truncation, and diagnostic scoping (2026-10-19)
+
+Addressing review findings for PR #404:
+1. Bare test names in gate failures are resolved to concrete test files from gate output/summary or allowed paths; if unresolved, no command is emitted to avoid executing the whole suite.
+2. When narrow commands cannot be derived (including UNPARSED_FAILURE), the repair prompt omits the Tests command line rather than falling back to the full test suite.
+3. Command output truncation and gate summary truncation fail closed when limits are missing or non-positive.
+4. Attempt-level result `res` is scoped inside the candidate loop; host gate failure details travel on the session and do not leak across attempts.
+5. Extracted `formatHostGateDiagnostics` helper to eliminate duplication and enforce fail-closed truncation.
+
+### H3 live: narrow repair test commands, truncated prompt output, and host-gate failure diagnostics (2026-10-19)
+
+Live trial 17 (19/10): a successful writer (exit 0) failed the host gate. The subsequent host-gate repair attempt executed the full test suite `node --test tools/ai-brain/test/`, generating massive tool output that triggered REQUEST_TOO_LARGE, killing the worker. The resulting host_gate_failed failure record did not capture which checks failed.
+Repairs:
+1. Repair prompt narrows test commands to gate.failures only (`deriveNarrowTestCommands`), preventing execution of the full test suite during host-gate repair.
+2. Prompt host gate command output is bounded by `dispatch.maxPromptCommandOutputChars` loaded from `sources.json` (no hardcoded numeric limits in code).
+3. Failed and host_gate_failed decision and checkpoint records capture individual failing check names and a concise summary bounded by `dispatch.maxHostGateSummaryChars`.
+4. A host-gate repair killed by REQUEST_TOO_LARGE remains retryable when alternative candidates exist.
+
+### H3 live: host-gate base failures match by name without run duration (2026-10-19)
+
+Live trial 19 of goal G-F622511E (19/10): the writer and reviewer commits were clean, but node --test prints each failure as `✖ <name> (<duration>ms)`; the run and the base run of the same pre-existing failure differed only in duration, so all 7 base failures counted as new and the host gate failed. Failure names are now parsed once, with the duration suffix removed, for both the run and the base run; a genuinely new failure is still reported.
+
 ### H3 live: the writer route-probe window is not charged with capability proof time (2026-10-18)
 
 Live trial 15 of goal G-F622511E (18/10 15:59Z) ended PROBE_BUDGET_EXHAUSTED without probing a single route: #388 started the writer route-probe window at `now - capabilityProbeDurationMs`, so slow CLI capability proofs spent it first. Capability proofs keep their own `schemaProbeBudgetMs`; the route window now starts when route probing starts and its length is `probeBudgetMs` from the dispatch configuration instead of a module constant.
