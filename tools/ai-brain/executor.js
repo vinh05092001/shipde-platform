@@ -98,14 +98,49 @@ function resolveRoute(assignment, options, registry) {
     (typeof opts.harnessFor === 'function' ? opts.harnessFor(assignment) : null) ||
     (route && route.harness) ||
     null;
-  if (opts.isolatedWorker && runsOpenCodeHarness(harnessName, reg)) {
+  let adapter = null;
+  try {
+    adapter = getHarness(harnessName);
+  } catch {
+    adapter = null;
+  }
+  if (
+    opts.isolatedWorker &&
+    (runsOpenCodeHarness(harnessName, reg) || adapter === getHarness('opencode-direct'))
+  ) {
     harnessName = 'opencode-direct';
   }
   if (!harnessName) return null;
+  const src =
+    (reg &&
+      Array.isArray(reg.sources) &&
+      reg.sources.find(
+        (s) =>
+          s &&
+          (s.id === assignment.provider ||
+            (route && s.id === route.provider) ||
+            (assignment.gateway &&
+              assignment.gateway !== 'direct' &&
+              s.id === assignment.gateway) ||
+            (assignment.upstream && s.id === assignment.upstream) ||
+            (assignment.source && s.id === assignment.source) ||
+            (assignment.model && Array.isArray(s.models) && s.models.includes(assignment.model)))
+      )) ||
+    null;
+  const endpoint =
+    assignment.endpoint || (src && src.endpoint) || (route && route.endpoint) || null;
+  const apiKeyEnv =
+    assignment.apiKeyEnv ||
+    (src && src.credential && (src.credential.env || src.credential.name)) ||
+    (src && src.apiKeyEnv) ||
+    (route && route.apiKeyEnv) ||
+    null;
   return {
     harnessName,
     provider: (route && route.provider) || assignment.provider,
     model: qualifyModel(assignment.model, route),
+    ...(endpoint ? { endpoint } : {}),
+    ...(apiKeyEnv ? { apiKeyEnv } : {}),
   };
 }
 

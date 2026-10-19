@@ -47,10 +47,14 @@ const BACKEND_MODEL_PREFIXES = registryPrefixes(sourceRegistry.loadSources());
 const { contextRefusal, hasLauncherWriter } = require('./harness');
 const { Cause, Scope, classifyFailure } = require('./failure-classifier');
 
+/**
+ * Roles that execute code writing or workspace modifications.
+ * Includes 'writer', 'repair' (code repair sessions), and 'author' (author lanes).
+ */
 function isWriterRole(role) {
   if (!role) return false;
   const s = String(role).trim().toLowerCase();
-  return s === 'writer' || /^author(?:\.|$)|^(?:writer|repair)$/i.test(s);
+  return /^author(?:\.|$)|^(?:writer|repair)$/i.test(s);
 }
 
 /** Task roles a profile may name. Planner stays out: Codex plans, it is not routed. */

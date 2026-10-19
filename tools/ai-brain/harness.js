@@ -539,6 +539,8 @@ const HARNESSES = Object.freeze({
   'direct-http': opencodeDirect,
   'agy-pool': agyPool,
   autoclaw,
+  // openclaw CLI adapter alias: required by existing writer candidates (e.g. TASK-AI-75)
+  // whose declared harness is 'openclaw' and whose execution command is openclaw.
   openclaw: autoclaw,
 });
 
@@ -572,19 +574,47 @@ function listHarnesses() {
  * True when the harness has an adapter capable of launching a writer session.
  * The list of supported harnesses is derived dynamically from launcher data
  * (HARNESSES), with OpenCode alias support derived from registry/sources data
- * without hardcoding.
+ * without hardcoding. Tests may inject harnesses via options.supportedHarnesses
+ * or options.harnesses.
  */
 function hasLauncherWriter(harnessName, options = {}) {
   if (!harnessName) return false;
   const name = String(harnessName).toLowerCase();
-  if (name.startsWith('test-')) return true;
+  if (options && options.supportedHarnesses) {
+    const injected = options.supportedHarnesses;
+    if (typeof injected.has === 'function' && injected.has(name)) return true;
+    if (Array.isArray(injected) && injected.map((x) => String(x).toLowerCase()).includes(name)) {
+      return true;
+    }
+  }
+  if (
+    options &&
+    options.harnesses &&
+    Object.prototype.hasOwnProperty.call(options.harnesses, name)
+  ) {
+    return true;
+  }
   const supported = new Set(listHarnesses().map((h) => String(h).toLowerCase()));
   if (supported.has(name)) return true;
   try {
     const { runsOpenCodeHarness } = require('./sources');
-    const reg = options && (options.registry || (options.sources ? options : undefined));
+    const reg =
+      options && options.registry
+        ? options.registry
+        : options && Array.isArray(options.sources)
+          ? options
+          : undefined;
     if (runsOpenCodeHarness(name, reg)) return true;
-  } catch {}
+  } catch (err) {
+    if (options && typeof options.onError === 'function') {
+      options.onError(err);
+    } else if (process.env.DEBUG || process.env.NODE_ENV === 'development') {
+      console.warn(
+        'hasLauncherWriter: failed to evaluate runsOpenCodeHarness:',
+        err?.message || err
+      );
+    }
+  }
   return false;
 }
 

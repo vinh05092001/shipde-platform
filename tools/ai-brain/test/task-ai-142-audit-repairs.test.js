@@ -46,7 +46,7 @@ describe('TASK-AI-142 Audit Repairs: Benchmark & Quality hygiene', () => {
 describe('TASK-AI-142 Audit Repairs: Score display shows "chưa rõ", not 100', () => {
   test('candidates lacking quality display "chưa rõ" in CLI ranked output and dry run log', () => {
     const candidateUnmeasured = {
-      harness: 'test-harness',
+      harness: 'opencode-direct',
       accessPath: 'cli',
       gateway: 'test-gw',
       upstream: 'test-up',
