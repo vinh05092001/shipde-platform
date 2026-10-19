@@ -230,7 +230,9 @@ test('worker config allowlist rejects unknown keys and disallowed merge and diff
     '[merge]\nconflictstyle = diff3\n',
     '[merge "custom"]\nname = custom merge\n',
     '[diff]\nrenames = true\n',
+    '[diff]\nexternal = echo\n',
     '[diff "custom"]\ncommand = echo\n',
+    '[diff "custom"]\ntextconv = echo\n',
     '[branch "main"]\nunknownKey = val\n',
     '[remote "origin"]\nunknownKey = val\n',
     '[user]\nunknownKey = val\n',
@@ -251,4 +253,59 @@ test('worker config allowlist rejects unknown keys and disallowed merge and diff
     );
     assert.equal(git(f.root, 'rev-parse', 'HEAD'), f.head);
   }
+});
+
+test('worker config allowlist rejects diff.<driver>.textconv and executable diff settings before invoking hooks', (t) => {
+  const f = fixture(t);
+  const marker = path.join(f.root, 'pwned-textconv.txt');
+
+  const scriptExt = process.platform === 'win32' ? '.bat' : '.sh';
+  const scriptPath = path.join(f.root, `textconv-exploit${scriptExt}`);
+  if (process.platform === 'win32') {
+    fs.writeFileSync(scriptPath, `@echo off\r\necho pwned > "${marker}"\r\n`);
+  } else {
+    fs.writeFileSync(scriptPath, `#!/bin/sh\necho pwned > "${marker}"\n`, { mode: 0o755 });
+  }
+
+  const escapedScript = scriptPath.replace(/\\/g, '/');
+  fs.appendFileSync(
+    path.join(f.root, '.git', 'config'),
+    `\n[diff "customdriver"]\n\ttextconv = "${escapedScript}"\n`
+  );
+  fs.writeFileSync(path.join(f.root, '.gitattributes'), '* diff=customdriver\n');
+
+  // Install a hook that runs git diff
+  writeHook(f.hook, 'git diff --cached\nexit 0');
+
+  // Direct allowlist unit check
+  assert.equal(launcher.isWorkerConfigKeyAllowed('diff.customdriver.textconv'), false);
+  assert.equal(launcher.isWorkerConfigKeyAllowed('diff.customdriver.command'), false);
+  assert.equal(launcher.isWorkerConfigKeyAllowed('diff.external'), false);
+
+  // validateWorkerGitConfig must reject diff.<driver>.textconv
+  assert.throws(
+    () => launcher.validateWorkerGitConfig(f.root),
+    /WORKER_COMMIT_FAILED: forbidden worker git config: diff\.customdriver\.textconv/
+  );
+
+  // commitWorkerMetadata must reject before invoking the hook or executing textconv
+  assert.throws(
+    () => commitMetadata(f),
+    /WORKER_COMMIT_FAILED: forbidden worker git config: diff\.customdriver\.textconv/
+  );
+
+  // commitNativeWriterChanges must also reject before invoking the hook or executing textconv
+  assert.throws(
+    () =>
+      launcher.commitNativeWriterChanges({
+        hostRoot: f.root,
+        workerRoot: f.root,
+        workItemId: 'GOAL-FIXTURE',
+      }),
+    /NATIVE_WRITER_COMMIT_FAILED: forbidden worker git config: diff\.customdriver\.textconv/
+  );
+
+  // The textconv command must NEVER have executed and HEAD must remain unchanged
+  assert.equal(fs.existsSync(marker), false, 'textconv command should not have executed');
+  assert.equal(git(f.root, 'rev-parse', 'HEAD'), f.head);
 });

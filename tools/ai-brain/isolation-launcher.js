@@ -3168,6 +3168,7 @@ module.exports = {
   commitNativeWriterChanges,
   commitWorkerMetadata,
   validateWorkerGitConfig,
+  isWorkerConfigKeyAllowed,
   getIsolatedLauncher,
   getFolderHash,
   defaultVerifyBoundary,
