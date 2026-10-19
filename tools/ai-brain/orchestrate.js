@@ -859,12 +859,7 @@ function checkItemAlreadySatisfiedOnBase(item, options = {}) {
     if (specificCriteria.expect) {
       const expectPassed =
         output.includes(specificCriteria.expect) &&
-        passingTests.some(
-          (p) =>
-            p === specificCriteria.expect ||
-            p.includes(specificCriteria.expect) ||
-            specificCriteria.expect.includes(p)
-        );
+        passingTests.some((p) => p === specificCriteria.expect);
       if (!expectPassed) {
         return {
           satisfied: false,
@@ -909,7 +904,7 @@ function checkItemAlreadySatisfiedOnBase(item, options = {}) {
     }
 
     for (const tc of specificCriteria.testCases) {
-      const tcPassed = passingTests.some((p) => p === tc || p.includes(tc) || tc.includes(p));
+      const tcPassed = passingTests.some((p) => p === tc);
       if (!tcPassed) {
         return {
           satisfied: false,
@@ -4493,6 +4488,47 @@ async function runOrchestration(goal, opts) {
   };
 
   const itemDispatchConfig = sourcesApi.getDispatchConfig(registry, o);
+  const resolveItemBaseSha = (targetItem) => {
+    const deps = (targetItem.dependencies || []).filter(Boolean);
+    if (deps.length > 0) {
+      const depId = deps[0];
+      let depPassSha = dependencyPassShaOf(depId);
+      if (
+        !depPassSha &&
+        liveSteps[depId] &&
+        liveSteps[depId].review &&
+        liveSteps[depId].review.entry &&
+        liveSteps[depId].review.entry.sha
+      ) {
+        depPassSha = liveSteps[depId].review.entry.sha;
+      }
+      if (!depPassSha) {
+        const depOutcome = log.outcomes.find(
+          (out) =>
+            out.workItemId === depId &&
+            (out.status === itemDispatchConfig.alreadySatisfiedStatus ||
+              out.status === ItemStatus.ALREADY_SATISFIED_ON_BASE)
+        );
+        if (
+          depOutcome ||
+          (liveSteps[depId] &&
+            (liveSteps[depId].stage === 'already_satisfied_on_base' ||
+              liveSteps[depId].status === itemDispatchConfig.alreadySatisfiedStatus))
+        ) {
+          depPassSha =
+            (depOutcome && depOutcome.baseSha) ||
+            (liveSteps[depId] && liveSteps[depId].baseSha) ||
+            o.baseSha ||
+            null;
+        }
+      }
+      if (depPassSha) return String(depPassSha).trim();
+    }
+    if (o.baseSha) return String(o.baseSha).trim();
+    const baseCwd = o.cwd || hostCwd || o.workerRoot || process.cwd();
+    return headShaOf(baseCwd, { spawnSync: o.spawnSync || spawnSync }) || null;
+  };
+
   for (const item of orderDependenciesFirst(log.plan.workItems)) {
     const itemStartedAt = Date.now();
     o.itemDeadline = itemStartedAt + itemDispatchConfig.maxItemDurationMs;
@@ -4503,25 +4539,55 @@ async function runOrchestration(goal, opts) {
       outcome(item, ItemStatus.DEFERRED, log.plan.errors.join('; '));
       continue;
     }
-    const isAlreadySatisfiedBefore =
-      alreadySatisfiedBefore.has(item.id) ||
-      Boolean(
-        savedStep &&
-        (savedStep.stage === 'already_satisfied_on_base' ||
-          savedStep.status === itemDispatchConfig.alreadySatisfiedStatus ||
-          savedStep.stage === itemDispatchConfig.alreadySatisfiedStatus)
-      );
+    const targetBaseSha = resolveItemBaseSha(item);
+    const recordedBaseSha =
+      (savedStep &&
+        (savedStep.baseSha || savedStep.evidence?.baseSha) &&
+        String(savedStep.baseSha || savedStep.evidence?.baseSha).trim()) ||
+      null;
+    const recordedExitCode = savedStep
+      ? typeof savedStep.exitCode === 'number'
+        ? savedStep.exitCode
+        : typeof savedStep.evidence?.exitCode === 'number'
+          ? savedStep.evidence.exitCode
+          : null
+      : null;
+    const recordedCommand =
+      (savedStep &&
+        (savedStep.command || savedStep.evidence?.command) &&
+        String(savedStep.command || savedStep.evidence?.command).trim()) ||
+      null;
+    const isStageOrStatusSatisfied = Boolean(
+      savedStep &&
+      (savedStep.stage === 'already_satisfied_on_base' ||
+        savedStep.status === itemDispatchConfig.alreadySatisfiedStatus ||
+        savedStep.stage === itemDispatchConfig.alreadySatisfiedStatus ||
+        alreadySatisfiedBefore.has(item.id))
+    );
+    const hasCompleteSavedEvidence = Boolean(
+      isStageOrStatusSatisfied && recordedExitCode === 0 && recordedCommand && recordedBaseSha
+    );
+    const hasMatchingBaseSha = Boolean(
+      hasCompleteSavedEvidence && targetBaseSha && recordedBaseSha === targetBaseSha
+    );
+    const isAlreadySatisfiedBefore = hasCompleteSavedEvidence && hasMatchingBaseSha;
     if (isAlreadySatisfiedBefore) {
+      const output = (savedStep && (savedStep.output ?? savedStep.evidence?.output)) || '';
       outcome(
         item,
         itemDispatchConfig.alreadySatisfiedStatus,
         itemDispatchConfig.alreadySatisfiedStatus,
         {
-          baseSha: (savedStep && savedStep.baseSha) || null,
-          command: (savedStep && savedStep.command) || null,
-          exitCode: (savedStep && savedStep.exitCode) ?? 0,
-          output: (savedStep && savedStep.output) || '',
-          evidence: (savedStep && savedStep.evidence) || undefined,
+          baseSha: recordedBaseSha,
+          command: recordedCommand,
+          exitCode: recordedExitCode,
+          output,
+          evidence: savedStep.evidence || {
+            baseSha: recordedBaseSha,
+            command: recordedCommand,
+            exitCode: recordedExitCode,
+            output,
+          },
         }
       );
       log.resumed = {
@@ -4864,18 +4930,20 @@ async function runOrchestration(goal, opts) {
       const alreadySatisfiedStatus =
         itemDispatchConfig.alreadySatisfiedStatus || 'ALREADY_SATISFIED_ON_BASE';
       const maxOutputChars = itemDispatchConfig.alreadySatisfiedMaxOutputChars || 2000;
-      const truncatedOutput = String(baseSatisfaction.output || '').slice(-maxOutputChars);
+      const redactor = decisions.createSecretRedactor({ ...process.env, ...o.env });
+      const redactedOutput = redactor(String(baseSatisfaction.output || '')).slice(-maxOutputChars);
+      const redactedCommand = redactor(String(baseSatisfaction.command || ''));
 
       outcome(item, alreadySatisfiedStatus, alreadySatisfiedStatus, {
         baseSha: baseSatisfaction.baseSha || null,
-        command: baseSatisfaction.command,
+        command: redactedCommand,
         exitCode: baseSatisfaction.exitCode,
-        output: truncatedOutput,
+        output: redactedOutput,
         evidence: {
           baseSha: baseSatisfaction.baseSha || null,
-          command: baseSatisfaction.command,
+          command: redactedCommand,
           exitCode: baseSatisfaction.exitCode,
-          output: truncatedOutput,
+          output: redactedOutput,
         },
       });
 
@@ -4886,15 +4954,15 @@ async function runOrchestration(goal, opts) {
           role: roleOf(item),
           status: alreadySatisfiedStatus,
           baseSha: baseSatisfaction.baseSha || null,
-          command: baseSatisfaction.command,
+          command: redactedCommand,
           exitCode: baseSatisfaction.exitCode,
-          output: truncatedOutput,
+          output: redactedOutput,
           detail: `${alreadySatisfiedStatus}: verification passed at base SHA`,
           evidence: {
             baseSha: baseSatisfaction.baseSha || null,
-            command: baseSatisfaction.command,
+            command: redactedCommand,
             exitCode: baseSatisfaction.exitCode,
-            output: truncatedOutput,
+            output: redactedOutput,
           },
         },
         logOpts
@@ -4903,14 +4971,14 @@ async function runOrchestration(goal, opts) {
       persistStep(item.id, 'already_satisfied_on_base', {
         status: alreadySatisfiedStatus,
         baseSha: baseSatisfaction.baseSha || null,
-        command: baseSatisfaction.command,
+        command: redactedCommand,
         exitCode: baseSatisfaction.exitCode,
-        output: truncatedOutput,
+        output: redactedOutput,
         evidence: {
           baseSha: baseSatisfaction.baseSha || null,
-          command: baseSatisfaction.command,
+          command: redactedCommand,
           exitCode: baseSatisfaction.exitCode,
-          output: truncatedOutput,
+          output: redactedOutput,
         },
       });
 

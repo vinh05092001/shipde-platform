@@ -779,3 +779,284 @@ test('TASK-AI-142 regression P1 (652): fileExistsOnBase fails closed on untracke
   assert.equal(res.reason, 'ACCEPTANCE_FILE_MISSING_ON_BASE');
   assert.equal(res.missingFile, untrackedRelPath);
 });
+
+test('TASK-AI-142 regression P1 (866-920): shorter unrelated passing test does not satisfy longer acceptance name through includes, even when longer name appears in diagnostic output', () => {
+  const host = makeTempRepo();
+  const testRelPath = 'tools/ai-brain/test/unit-shorter-unrelated.test.js';
+  const testCode = [
+    "'use strict';",
+    "const { test } = require('node:test');",
+    "console.log('diagnostic: target acceptance feature with extra details');",
+    "test('target', () => {});",
+    "test('target acceptance feature with extra details', { skip: 'not implemented' }, () => {});",
+  ].join('\n');
+  const baseSha = addCommit(host.dir, testRelPath, testCode, 'commit shorter test');
+
+  const item = {
+    id: 'TASK-UNIT-EXACT-MATCH',
+    files: [testRelPath],
+    verification: {
+      command: `node --test ${testRelPath}`,
+      expect: 'target acceptance feature with extra details',
+    },
+    acceptanceCriteria: ['Test passes: target acceptance feature with extra details'],
+  };
+
+  const res = checkItemAlreadySatisfiedOnBase(item, {
+    cwd: host.dir,
+    baseSha,
+  });
+
+  assert.equal(
+    res.satisfied,
+    false,
+    'exact match required: shorter passing test must not satisfy longer acceptance test'
+  );
+  assert.equal(res.reason, 'VERIFICATION_EXPECT_MISSING');
+});
+
+test('TASK-AI-142 regression P1 (4858-4910): test output with printed secret is redacted in decisions and checkpoint', async () => {
+  const host = makeTempRepo();
+  const worker = makeTempRepo();
+
+  const secretToken = 'ghp_secretTokenVal1234567890';
+  const testRelPath = 'tools/ai-brain/test/fixture-secret.test.js';
+  const testCode = [
+    "'use strict';",
+    "const { test } = require('node:test');",
+    "const assert = require('node:assert/strict');",
+    "test('passing test with sensitive log', () => {",
+    `  console.log('sensitive secret token: ${secretToken}');`,
+    '  assert.equal(1, 1);',
+    '});',
+  ].join('\n');
+
+  const baseSha = addCommit(host.dir, testRelPath, testCode, 'commit passing test with secret');
+  addCommit(worker.dir, testRelPath, testCode, 'sync passing test with secret');
+
+  const checkpointFile = path.join(tmpDir(), 'checkpoint.json');
+  const decisionDir = tmpDir('decisions-');
+  const evidenceDir = tmpDir('evidence-');
+
+  let writerLaunches = 0;
+  const spec = {
+    id: 'TASK-SECRET-1',
+    files: [testRelPath],
+    verification: {
+      command: `node --test ${testRelPath}`,
+      expect: 'passing test with sensitive log',
+    },
+    acceptanceCriteria: ['Test passes: passing test with sensitive log'],
+  };
+
+  const options = {
+    isolatedWorker: true,
+    cwd: host.dir,
+    workerRoot: worker.dir,
+    baseSha,
+    checkpointFile,
+    decisionDir,
+    evidenceDir,
+    env: { TEST_API_TOKEN: secretToken },
+    candidates: [sampleCandidate()],
+    registry: sampleRegistry(),
+    specs: [spec],
+    routeProbe: async () => ({ ok: true, status: 200 }),
+    run: () => {
+      writerLaunches++;
+      return { exitCode: 0, sessionId: 'ses-writer' };
+    },
+  };
+
+  const result = await runOrchestration('secret redact goal', options);
+  assert.equal(writerLaunches, 0);
+
+  // Check outcome
+  const itemOutcome = result.outcomes.find((o) => o.workItemId === 'TASK-SECRET-1');
+  assert.ok(itemOutcome);
+  assert.ok(!itemOutcome.output.includes(secretToken), 'outcome output must not contain secret');
+  assert.ok(itemOutcome.output.includes('[REDACTED_SECRET]'), 'outcome output must redact secret');
+
+  // Check decisions
+  const decisionFiles = fs.readdirSync(decisionDir).filter((f) => f.endsWith('.jsonl'));
+  const decisionContent = decisionFiles
+    .map((f) => fs.readFileSync(path.join(decisionDir, f), 'utf8'))
+    .join('\n');
+  assert.ok(!decisionContent.includes(secretToken), 'decision logs must not contain secret');
+  assert.ok(
+    decisionContent.includes('[REDACTED_SECRET]'),
+    'decision logs must contain redacted secret marker'
+  );
+
+  // Check checkpoint
+  const checkpointRaw = fs.readFileSync(checkpointFile, 'utf8');
+  assert.ok(!checkpointRaw.includes(secretToken), 'checkpoint file must not contain secret');
+  assert.ok(
+    checkpointRaw.includes('[REDACTED_SECRET]'),
+    'checkpoint file must contain redacted secret marker'
+  );
+});
+
+test('TASK-AI-142 regression P1 (4499-4535): prior alreadySatisfied checkpoint with stale base SHA reverifies on changed base and launches writer when red', async () => {
+  const host = makeTempRepo();
+  const worker = makeTempRepo();
+
+  // Commit 1 (old base): acceptance test passes
+  const testRelPath = 'tools/ai-brain/test/fixture-stale-sha.test.js';
+  const passingTest = [
+    "'use strict';",
+    "const { test } = require('node:test');",
+    "test('stale sha test', () => {});",
+  ].join('\n');
+  const oldBaseSha = addCommit(host.dir, testRelPath, passingTest, 'old base commit');
+
+  // Commit 2 (current base): acceptance test fails on current base
+  const failingTest = [
+    "'use strict';",
+    "const { test } = require('node:test');",
+    "const assert = require('node:assert/strict');",
+    "test('stale sha test', () => { assert.equal(1, 2); });",
+  ].join('\n');
+  const currentBaseSha = addCommit(
+    host.dir,
+    testRelPath,
+    failingTest,
+    'change base to failing test'
+  );
+  addCommit(worker.dir, testRelPath, failingTest, 'sync failing test');
+
+  const checkpointFile = path.join(tmpDir(), 'checkpoint.json');
+  const decisionDir = tmpDir('decisions-');
+  const evidenceDir = tmpDir('evidence-');
+
+  // Pre-seed checkpoint recording item as satisfied on OLD base SHA
+  fs.writeFileSync(
+    checkpointFile,
+    JSON.stringify({
+      schemaVersion: 1,
+      liveSteps: {
+        'TASK-STALE-SHA': {
+          stage: 'already_satisfied_on_base',
+          status: 'ALREADY_SATISFIED_ON_BASE',
+          baseSha: oldBaseSha,
+          command: `node --test ${testRelPath}`,
+          exitCode: 0,
+          output: '✔ stale sha test (1ms)',
+          evidence: {
+            baseSha: oldBaseSha,
+            command: `node --test ${testRelPath}`,
+            exitCode: 0,
+            output: '✔ stale sha test (1ms)',
+          },
+        },
+      },
+      alreadySatisfied: ['TASK-STALE-SHA'],
+    }),
+    'utf8'
+  );
+
+  let writerLaunches = 0;
+  const spec = {
+    id: 'TASK-STALE-SHA',
+    files: [testRelPath],
+    verification: {
+      command: `node --test ${testRelPath}`,
+      expect: 'stale sha test',
+    },
+    acceptanceCriteria: ['Test passes: stale sha test'],
+  };
+
+  const options = {
+    isolatedWorker: true,
+    cwd: host.dir,
+    workerRoot: worker.dir,
+    baseSha: currentBaseSha, // Changed base SHA!
+    checkpointFile,
+    decisionDir,
+    evidenceDir,
+    candidates: [sampleCandidate()],
+    registry: sampleRegistry(),
+    specs: [spec],
+    routeProbe: async () => ({ ok: true, status: 200 }),
+    run: () => {
+      writerLaunches++;
+      return { exitCode: 0, sessionId: 'ses-writer' };
+    },
+  };
+
+  await runOrchestration('stale sha goal', options);
+
+  assert.equal(
+    writerLaunches,
+    1,
+    'changed base SHA must not trust stale checkpoint; must reverify and launch writer when failing on current base'
+  );
+});
+
+test('TASK-AI-142 regression P1 (4499-4535): checkpoint with alreadySatisfied list entry alone without complete evidence does not fabricate exit 0 and reverifies', async () => {
+  const host = makeTempRepo();
+  const worker = makeTempRepo();
+
+  // Test fails on base
+  const testRelPath = 'tools/ai-brain/test/fixture-list-entry-alone.test.js';
+  const failingTest = [
+    "'use strict';",
+    "const { test } = require('node:test');",
+    "const assert = require('node:assert/strict');",
+    "test('list entry alone test', () => { assert.equal(1, 2); });",
+  ].join('\n');
+  const baseSha = addCommit(host.dir, testRelPath, failingTest, 'commit failing test');
+  addCommit(worker.dir, testRelPath, failingTest, 'sync failing test');
+
+  const checkpointFile = path.join(tmpDir(), 'checkpoint.json');
+  const decisionDir = tmpDir('decisions-');
+  const evidenceDir = tmpDir('evidence-');
+
+  // Pre-seed checkpoint with list entry alone in alreadySatisfied, NO liveSteps entry!
+  fs.writeFileSync(
+    checkpointFile,
+    JSON.stringify({
+      schemaVersion: 1,
+      liveSteps: {},
+      alreadySatisfied: ['TASK-LIST-ENTRY'],
+    }),
+    'utf8'
+  );
+
+  let writerLaunches = 0;
+  const spec = {
+    id: 'TASK-LIST-ENTRY',
+    files: [testRelPath],
+    verification: {
+      command: `node --test ${testRelPath}`,
+      expect: 'list entry alone test',
+    },
+    acceptanceCriteria: ['Test passes: list entry alone test'],
+  };
+
+  const options = {
+    isolatedWorker: true,
+    cwd: host.dir,
+    workerRoot: worker.dir,
+    baseSha,
+    checkpointFile,
+    decisionDir,
+    evidenceDir,
+    candidates: [sampleCandidate()],
+    registry: sampleRegistry(),
+    specs: [spec],
+    routeProbe: async () => ({ ok: true, status: 200 }),
+    run: () => {
+      writerLaunches++;
+      return { exitCode: 0, sessionId: 'ses-writer' };
+    },
+  };
+
+  await runOrchestration('list entry goal', options);
+
+  assert.equal(
+    writerLaunches,
+    1,
+    'checkpoint with list entry alone must not fabricate exit 0; must reverify and launch writer when failing'
+  );
+});
