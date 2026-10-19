@@ -1874,6 +1874,50 @@ function parseFailedTestNames(output) {
   ];
 }
 
+// A detached worktree of `ref` in a temp dir; `dir` is null when it cannot be created
+// (the caller then runs in place). cleanup() returns the error messages, never throws.
+function checkoutCleanCommit(root, ref, { run, fs: fileSystem }) {
+  let tempDir = null;
+  let dir = null;
+  try {
+    tempDir = fileSystem.mkdtempSync(path.join(os.tmpdir(), 'host-gate-head-'));
+    const wt = path.join(tempDir, 'wt');
+    const res = run('git', ['worktree', 'add', '--detach', wt, ref], {
+      cwd: root,
+      encoding: 'utf8',
+    });
+    if (res && res.status === 0) dir = wt;
+  } catch (_) {
+    dir = null;
+  }
+  return {
+    dir,
+    cleanup() {
+      const errors = [];
+      if (dir) {
+        try {
+          const r = run('git', ['worktree', 'remove', '--force', dir], {
+            cwd: root,
+            encoding: 'utf8',
+          });
+          if (r && (r.status !== 0 || r.error))
+            errors.push(String((r.error && r.error.message) || r.stderr || r.stdout).trim());
+        } catch (err) {
+          errors.push(err.message || String(err));
+        }
+      }
+      if (tempDir) {
+        try {
+          fileSystem.rmSync(tempDir, { recursive: true, force: true });
+        } catch (err) {
+          errors.push(err.message || String(err));
+        }
+      }
+      return errors;
+    },
+  };
+}
+
 function runHostBrainGate(job, options = {}) {
   const requestedRoot = options.hostCwd || options.cwd || process.cwd();
   const root =
@@ -1896,8 +1940,12 @@ function runHostBrainGate(job, options = {}) {
     };
   }
   const command = 'node --test ' + suiteFiles.join(' ');
+  // The host checkout carries live Controller state (intake runs, goals, locks) under
+  // tools/ai-brain/data, which the base run's clean worktree does not. Run the suite on
+  // a clean checkout of the same HEAD so that state never shows up as a new failure.
+  const headClean = checkoutCleanCommit(root, 'HEAD', { run, fs: options.fs || fs });
   const result = run(node, ['--test', ...suiteFiles], {
-    cwd: root,
+    cwd: headClean.dir || root,
     encoding: 'utf8',
     timeout: options.brainGateTimeoutMs || 30 * 60 * 1000,
     maxBuffer: 64 * 1024 * 1024,
@@ -1906,8 +1954,12 @@ function runHostBrainGate(job, options = {}) {
       NINEROUTER_API_KEY: undefined,
       AI_BRAIN_DISCOVERED_SOURCES: 'none',
       AI_BRAIN_MACHINE_DATA: 'none',
+      NODE_PATH: [headClean.dir && path.join(root, 'node_modules'), process.env.NODE_PATH]
+        .filter(Boolean)
+        .join(path.delimiter),
     }),
   });
+  const headCleanupErrors = headClean.cleanup();
   const output = String(result.stdout || '') + '\n' + String(result.stderr || '');
   const failed = parseFailedTestNames(output);
   const summary = output.split(/\r?\n/).filter((line) => /^ℹ (?:pass|fail)\b|^✖ /.test(line));
@@ -1922,8 +1974,8 @@ function runHostBrainGate(job, options = {}) {
       newFailures: [],
       baselineFailures: [],
       summary,
-      cleanupErrors: [],
-      cleanupError: null,
+      cleanupErrors: headCleanupErrors,
+      cleanupError: headCleanupErrors[0] || null,
     };
   }
 
@@ -1945,8 +1997,8 @@ function runHostBrainGate(job, options = {}) {
       baselineFailures: [],
       summary,
       repairDetails,
-      cleanupErrors: [],
-      cleanupError: null,
+      cleanupErrors: headCleanupErrors,
+      cleanupError: headCleanupErrors[0] || null,
     };
   }
 
@@ -1994,7 +2046,7 @@ function runHostBrainGate(job, options = {}) {
     baseRan = true;
   }
 
-  const cleanupErrors = [];
+  const cleanupErrors = [...headCleanupErrors];
   const fileSystem = options.fs || fs;
 
   if (!baseRan && baseSha) {
@@ -3384,6 +3436,7 @@ async function selectCandidateForProfile(
   if (o.isolatedWorker && (o.refreshWriterModels === true || o.enforceCredentialCheck === true)) {
     const env = { ...process.env, ...o.env };
     const selectionApi = require('./writer-selection');
+    const { hasLauncherWriter } = require('./harness');
     candidates = candidates.map((c) => {
       if (c.blocked) return c;
       let route;
@@ -3397,6 +3450,13 @@ async function selectCandidateForProfile(
           ...c,
           blocked: true,
           blockReason: 'ROUTE_CONFIGURATION_UNAVAILABLE',
+          routeEvidence: selectionApi.inventoryEvidence(c, registry, false),
+        };
+      if (!hasLauncherWriter(route.harnessName, { registry }))
+        return {
+          ...c,
+          blocked: true,
+          blockReason: 'HARNESS_WRITER_UNSUPPORTED',
           routeEvidence: selectionApi.inventoryEvidence(c, registry, false),
         };
       if (route.harnessName !== 'opencode-direct') return c;

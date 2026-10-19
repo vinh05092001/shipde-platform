@@ -58,8 +58,9 @@ test('the host brain gate runs the suite without machine discovery data', () => 
     {
       hostCwd: path.resolve(__dirname, '..', '..', '..'),
       brainSuite: 'tools/ai-brain/test/task-ai-142-sources-isolation.test.js',
-      spawnSync: (_cmd, _args, opts) => {
-        seenEnv = opts.env;
+      spawnSync: (cmd, _args, opts) => {
+        // git calls prepare the clean checkout; the suite run is the node call.
+        if (cmd !== 'git') seenEnv = opts.env;
         return { status: 0, stdout: 'ℹ pass 1\nℹ fail 0\n', stderr: '' };
       },
     }
