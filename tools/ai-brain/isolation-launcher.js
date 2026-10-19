@@ -147,12 +147,34 @@ function workerGitPaths(workerRoot, failure = 'WORKER_COMMIT_FAILED') {
   return { gitDir: realGitDir, commonDir };
 }
 
+function gitConfigCheckTimeoutMs(failure) {
+  const ms = Number(require('./sources.json').dispatch?.gitConfigCheckTimeoutMs);
+  if (!Number.isFinite(ms) || ms <= 0) {
+    throw new Error(failure + ': dispatch.gitConfigCheckTimeoutMs not configured');
+  }
+  return ms;
+}
+
 function validateConfigFile(configFile, workerRoot, failure) {
-  if (!fs.existsSync(configFile)) return;
+  let stat;
+  try {
+    stat = fs.lstatSync(configFile);
+  } catch (error) {
+    if (error.code === 'ENOENT') return;
+    throw new Error(failure + ': cannot stat worker git config');
+  }
+  // A FIFO or device would block git forever; only a regular file is parsed.
+  if (!stat.isFile()) throw new Error(failure + ': worker git config is not a regular file');
   const result = cp.spawnSync(
     'git',
     ['config', '--file', configFile, '--no-includes', '--name-only', '--null', '--list'],
-    { cwd: os.tmpdir(), env: cleanGitEnv(), encoding: 'utf8', windowsHide: true }
+    {
+      cwd: os.tmpdir(),
+      env: cleanGitEnv(),
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: gitConfigCheckTimeoutMs(failure),
+    }
   );
   if (!result || result.status !== 0) throw new Error(failure + ': invalid worker git config');
   const keys = String(result.stdout || '')

@@ -309,3 +309,31 @@ test('worker config allowlist rejects diff.<driver>.textconv and executable diff
   assert.equal(fs.existsSync(marker), false, 'textconv command should not have executed');
   assert.equal(git(f.root, 'rev-parse', 'HEAD'), f.head);
 });
+
+test('a non-regular worker config file fails closed before git parses it', (t) => {
+  const f = fixture(t);
+  writeHook(f.hook, 'exit 0');
+  fs.mkdirSync(path.join(f.root, '.git', 'config.worktree'));
+  assert.throws(
+    () => commitMetadata(f),
+    /WORKER_COMMIT_FAILED: worker git config is not a regular file/
+  );
+});
+
+test('worker config parse is bounded by the dispatch-configured timeout and fails closed on expiry', (t) => {
+  const f = fixture(t);
+  writeHook(f.hook, 'exit 0');
+  const configured = require('../sources.json').dispatch.gitConfigCheckTimeoutMs;
+  const original = cp.spawnSync;
+  const seen = [];
+  t.mock.method(cp, 'spawnSync', (cmd, args, options) => {
+    if (Array.isArray(args) && args.includes('--no-includes')) {
+      seen.push(options && options.timeout);
+      return { status: null, signal: 'SIGTERM', error: Object.assign(new Error('t'), { code: 'ETIMEDOUT' }) };
+    }
+    return original(cmd, args, options);
+  });
+  assert.throws(() => commitMetadata(f), /WORKER_COMMIT_FAILED: invalid worker git config/);
+  assert.ok(seen.length > 0);
+  assert.ok(seen.every((ms) => ms === configured));
+});
