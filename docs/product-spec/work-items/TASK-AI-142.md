@@ -248,6 +248,28 @@ Decision log entries link `goalId -> workItemId -> candidateKey -> session -> co
 - Part H2 Hermes session selection, custom config binding, and `shipde-controller` skill file are delivered in Part H2.
 - Live acceptance across chat and controller runs in Part H3 following merge of H1 and H2.
 
+### H3 live: independent review repair for narrow test commands, fail-closed truncation, and diagnostic scoping (2026-10-19)
+
+Addressing review findings for PR #404:
+1. Bare test names in gate failures are resolved to concrete test files from gate output/summary or allowed paths; if unresolved, no command is emitted to avoid executing the whole suite.
+2. When narrow commands cannot be derived (including UNPARSED_FAILURE), the repair prompt omits the Tests command line rather than falling back to the full test suite.
+3. Command output truncation and gate summary truncation fail closed when limits are missing or non-positive.
+4. Attempt-level result `res` is scoped inside the candidate loop; host gate failure details travel on the session and do not leak across attempts.
+5. Extracted `formatHostGateDiagnostics` helper to eliminate duplication and enforce fail-closed truncation.
+
+### H3 live: narrow repair test commands, truncated prompt output, and host-gate failure diagnostics (2026-10-19)
+
+Live trial 17 (19/10): a successful writer (exit 0) failed the host gate. The subsequent host-gate repair attempt executed the full test suite `node --test tools/ai-brain/test/`, generating massive tool output that triggered REQUEST_TOO_LARGE, killing the worker. The resulting host_gate_failed failure record did not capture which checks failed.
+Repairs:
+1. Repair prompt narrows test commands to gate.failures only (`deriveNarrowTestCommands`), preventing execution of the full test suite during host-gate repair.
+2. Prompt host gate command output is bounded by `dispatch.maxPromptCommandOutputChars` loaded from `sources.json` (no hardcoded numeric limits in code).
+3. Failed and host_gate_failed decision and checkpoint records capture individual failing check names and a concise summary bounded by `dispatch.maxHostGateSummaryChars`.
+4. A host-gate repair killed by REQUEST_TOO_LARGE remains retryable when alternative candidates exist.
+
+### H3 live: host-gate base failures match by name without run duration (2026-10-19)
+
+Live trial 19 of goal G-F622511E (19/10): the writer and reviewer commits were clean, but node --test prints each failure as `✖ <name> (<duration>ms)`; the run and the base run of the same pre-existing failure differed only in duration, so all 7 base failures counted as new and the host gate failed. Failure names are now parsed once, with the duration suffix removed, for both the run and the base run; a genuinely new failure is still reported.
+
 ### H3 live: abandoned intake directories do not retain claims (2026-10-18)
 
 `getOpenRuns` requires a live owner PID, or directory freshness within the bounded
@@ -1210,3 +1232,27 @@ Aggregator routers like 9Router require model IDs to carry an upstream provider 
        - Ensured consistent `--title` fallback to work item ID or task name.
   3. Verification:
      - New unit tests in `tools/ai-brain/test/task-ai-142-opencode-writer.test.js` verifying config generation for SSE/JSON sources, permission scoping, secret redaction, and `HARNESS_EMPTY_RESPONSE` handling.
+
+### H3 live: strong models prioritized in capability probes and fair round-robin source dispatch (2026-10-19)
+
+- Root cause:
+  - In `capability-probe.js`, candidate probe ordering prioritized prior work and recent live route success but sorted unverified candidates strictly by cost and array index without quality prior scores (`priorFor`).
+  - Large catalog sources (such as 9Router with thousands of models) consumed the probe budget (`schemaProbeBudgetMs`), starving high-prior unprobed models on other sources from being probed, causing them to be rejected as `CAPABILITY_UNVERIFIED:tools / WRITER_SCHEMA_NOT_VERIFIED_BUDGET`.
+- Repairs:
+  - In `tools/ai-brain/capability-probe.js`:
+    - Updated `orderCandidatesForProbe` to sort candidates within each work/live bucket in descending order of benchmark prior score via `priorFor`. Unscored candidates sort after scored candidates while remaining probe-eligible.
+    - Added fair round-robin dispatch across sources/gateways using `probeRoundRobinBatch` from dispatch configuration, ensuring no single source exhausts the probe window.
+    - Strictly validated `probeRoundRobinBatch` as a positive integer fail-closed limit (raising `DISPATCH_CONFIG_INVALID` on non-positive or invalid input) and guarded progression by `take.length > 0`.
+    - Snapshotted and threaded `priors` through `probeCapabilities` into `orderCandidatesForProbe` so ordering and subsequent ranking reuse the identical snapshot without reloading machine data.
+    - Guarded `preflightHttp` with `Date.now() < deadline` so budget exhaustion does not trigger HTTP preflight after deadline.
+  - In `tools/ai-brain/sources.json` and `tools/ai-brain/sources.js`:
+    - Added configurable `probeRoundRobinBatch` in `dispatch` configuration and exposed it via `getDispatchConfig`.
+  - Trade-offs & Known Limitations:
+    - Round-robin interleaves models across sources up to `probeRoundRobinBatch` per turn to guarantee source diversity and prevent large single sources from monopolizing the probe window. This deliberately trades strict cross-source prior order for source starvation prevention (inside each source, models are strictly sorted descending by benchmark prior score, with cost and index as tie-breakers).
+  - Verification:
+    - New tests in `tools/ai-brain/test/task-ai-142-probe-strong-first.test.js` verifying:
+      - High-prior model (prior 90) on a secondary source probed before budget exhaustion ahead of 50 weak models from a large source.
+      - Fail-closed validation of `probeRoundRobinBatch` when missing, negative, zero, or invalid.
+      - Multi-source round-robin fairness across sources with configurable batch size and prior-descending ordering within source.
+      - HTTP preflight skipping after budget deadline without cooldown recording.
+      - Snapshot threading of `ranking.priors` into probe ordering.

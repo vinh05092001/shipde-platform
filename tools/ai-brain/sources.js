@@ -410,6 +410,9 @@ function getDispatchConfig(registry, options = {}) {
     safetyMarginMs,
     schemaProbeBudgetMs,
     startupGraceMs: configuredLimit('startupGraceMs'),
+    probeRoundRobinBatch: configuredLimit('probeRoundRobinBatch'),
+    maxPromptCommandOutputChars: configuredLimit('maxPromptCommandOutputChars'),
+    maxHostGateSummaryChars: configuredLimit('maxHostGateSummaryChars'),
   };
 }
 
