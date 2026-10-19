@@ -2191,7 +2191,8 @@ function dispatchCommand(args, deps = {}) {
     if (
       deps.accounts !== undefined ||
       deps.catalogue !== undefined ||
-      deps.sourceModels !== undefined
+      deps.sourceModels !== undefined ||
+      deps.candidates !== undefined
     ) {
       throw Error('Cannot supply conflicting injected inventory with an explicit snapshot');
     }

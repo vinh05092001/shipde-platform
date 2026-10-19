@@ -937,6 +937,23 @@ test('dispatch with explicit snapshot rejects conflicting injected inventory', a
       ),
     /Cannot supply conflicting injected inventory with an explicit snapshot/
   );
+
+  await assert.rejects(
+    async () =>
+      cli.dispatchCommand(
+        {
+          'dry-run': true,
+          item: profile.taskId,
+          root,
+          catalogue: path.join(snapshotDir, 'catalogue.json'),
+        },
+        {
+          ...baseDeps,
+          candidates: [{ harness: 'paseo', modelId: 'vendor/conflicting-model', accountId: 'x' }],
+        }
+      ),
+    /Cannot supply conflicting injected inventory with an explicit snapshot/
+  );
 });
 
 test('snapshot-backed dry-run excludes unrelated discovery candidates from ranking', async (t) => {
