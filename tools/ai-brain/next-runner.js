@@ -179,7 +179,35 @@ function parseRunDirTimestamp(runDir) {
   return null;
 }
 
-function isGoalLockActiveForIntake(lockPath, lockData, pid, runDir, fsApi) {
+function resolveStartupGraceMs(options, deps) {
+  const opts = options || {};
+  const d = deps || {};
+  let defaultStartupGraceMs = 0;
+  try {
+    const sourcesApi = (d && d.sources) || (opts && opts.sources) || require('./sources');
+    const cfg = sourcesApi.getDispatchConfig(opts.registry || (d && d.registry), opts);
+    if (cfg && cfg.startupGraceMs != null) {
+      defaultStartupGraceMs = Number(cfg.startupGraceMs);
+    }
+  } catch (_) {
+    try {
+      const sJson = require('./sources.json');
+      if (sJson && sJson.dispatch && sJson.dispatch.startupGraceMs) {
+        defaultStartupGraceMs = Number(sJson.dispatch.startupGraceMs);
+      }
+    } catch (_) {}
+  }
+  return (
+    opts.startupGraceMs ??
+    opts.ttlMs ??
+    (d && (d.startupGraceMs || d.ttlMs)) ??
+    (opts.dispatch && opts.dispatch.startupGraceMs) ??
+    (d && d.dispatch && d.dispatch.startupGraceMs) ??
+    defaultStartupGraceMs
+  );
+}
+
+function isGoalLockActiveForIntake(lockPath, lockData, pid, runDir, fsApi, context) {
   if (pid == null) return false;
   if (pid !== process.pid) return true;
 
@@ -205,14 +233,67 @@ function isGoalLockActiveForIntake(lockPath, lockData, pid, runDir, fsApi) {
     } catch (_) {}
   }
 
-  if (lockStartTime != null && intakeTime != null) {
-    return intakeTime >= lockStartTime;
+  if (lockStartTime != null && intakeTime != null && intakeTime < lockStartTime) {
+    return false;
   }
 
-  return true;
+  // A goal lock held by the selecting process only attributes an intake if the
+  // work is demonstrably active or within the startup grace window.
+  // Otherwise an abandoned intake without a live run PID would be owned indefinitely.
+  const ctx = context || {};
+  const opts = ctx.opts;
+  const d = ctx.d;
+  const workItemId = ctx.workItemId;
+  const rootDir = ctx.rootDir || (opts && opts.rootDir) || (d && d.rootDir) || process.cwd();
+  const now =
+    ctx.now != null
+      ? ctx.now
+      : typeof (d && d.now) === 'function'
+        ? d.now()
+        : (d && d.now) || (opts && opts.now) || Date.now();
+  const startupGraceMs =
+    ctx.startupGraceMs != null ? ctx.startupGraceMs : resolveStartupGraceMs(opts, d);
+
+  if (
+    typeof ctx.isDemonstrablyActive === 'function' &&
+    ctx.isDemonstrablyActive(runDir, workItemId)
+  ) {
+    return true;
+  }
+  if (
+    d &&
+    typeof d.isDemonstrablyActive === 'function' &&
+    d.isDemonstrablyActive(runDir, workItemId)
+  ) {
+    return true;
+  }
+
+  const writerFn =
+    (d && d.writerFor) || (opts && opts.writerFor) || (decisions && decisions.writerFor);
+  if (typeof writerFn === 'function' && workItemId) {
+    try {
+      const decDir =
+        (opts && (opts.decisionDir || opts.decisionsDir)) ||
+        (d && (d.decisionDir || d.decisionsDir)) ||
+        path.join(rootDir, 'tools', 'ai-brain', 'data', 'decisions');
+      const activeWriter = writerFn(workItemId, {
+        dir: decDir,
+        now,
+        ...(opts && opts.records ? { records: opts.records } : {}),
+        ...(d && d.records ? { records: d.records } : {}),
+      });
+      if (activeWriter) return true;
+    } catch (_) {}
+  }
+
+  if (intakeTime != null && now - intakeTime <= startupGraceMs) {
+    return true;
+  }
+
+  return false;
 }
 
-function resolveRunPid(runDir, workItemId, rootDir, opts, d, fsApi = fs) {
+function resolveRunPid(runDir, workItemId, rootDir, opts, d, fsApi = fs, context) {
   // 1. Check run.lock inside runDir
   const runLockFile = path.join(runDir, 'run.lock');
   if (fsApi.existsSync(runLockFile)) {
@@ -239,6 +320,14 @@ function resolveRunPid(runDir, workItemId, rootDir, opts, d, fsApi = fs) {
     } catch (_) {}
   }
 
+  const ctx = {
+    workItemId,
+    rootDir,
+    opts,
+    d,
+    ...context,
+  };
+
   // 3. Goal run lock in data/goals/<goalId>/run.lock.
   // runGoal records the next runner itself in this lock. Its own PID is not
   // evidence that an older intake directory still has a worker; otherwise a
@@ -263,7 +352,7 @@ function resolveRunPid(runDir, workItemId, rootDir, opts, d, fsApi = fs) {
           try {
             const data = JSON.parse(fsApi.readFileSync(cand, 'utf8'));
             const pid = parsePid(data && (data.pid != null ? data.pid : data));
-            if (pid != null && isGoalLockActiveForIntake(cand, data, pid, runDir, fsApi)) {
+            if (pid != null && isGoalLockActiveForIntake(cand, data, pid, runDir, fsApi, ctx)) {
               return pid;
             }
           } catch (_) {}
@@ -286,7 +375,10 @@ function resolveRunPid(runDir, workItemId, rootDir, opts, d, fsApi = fs) {
             if (Array.isArray(gData.items) && gData.items.includes(workItemId)) {
               const lData = JSON.parse(fsApi.readFileSync(lockPath, 'utf8'));
               const pid = parsePid(lData && (lData.pid != null ? lData.pid : lData));
-              if (pid != null && isGoalLockActiveForIntake(lockPath, lData, pid, runDir, fsApi)) {
+              if (
+                pid != null &&
+                isGoalLockActiveForIntake(lockPath, lData, pid, runDir, fsApi, ctx)
+              ) {
                 return pid;
               }
             }
@@ -313,28 +405,7 @@ function getOpenRuns(options, deps) {
     (d && (d.isPidAlive || d.checkAlive)) ||
     (opts && (opts.isPidAlive || opts.checkAlive)) ||
     getPidAliveHelper(d);
-  let defaultStartupGraceMs = 0;
-  try {
-    const sourcesApi = (d && d.sources) || (opts && opts.sources) || require('./sources');
-    const cfg = sourcesApi.getDispatchConfig(opts.registry || (d && d.registry), opts);
-    if (cfg && cfg.startupGraceMs != null) {
-      defaultStartupGraceMs = Number(cfg.startupGraceMs);
-    }
-  } catch (_) {
-    try {
-      const sJson = require('./sources.json');
-      if (sJson && sJson.dispatch && sJson.dispatch.startupGraceMs) {
-        defaultStartupGraceMs = Number(sJson.dispatch.startupGraceMs);
-      }
-    } catch (_) {}
-  }
-  const startupGraceMs =
-    opts.startupGraceMs ??
-    opts.ttlMs ??
-    (d && (d.startupGraceMs || d.ttlMs)) ??
-    (opts.dispatch && opts.dispatch.startupGraceMs) ??
-    (d && d.dispatch && d.dispatch.startupGraceMs) ??
-    defaultStartupGraceMs;
+  const startupGraceMs = resolveStartupGraceMs(opts, d);
 
   const openRuns = [];
   try {
@@ -374,7 +445,10 @@ function getOpenRuns(options, deps) {
       if (!workItemId) continue;
 
       const intakeTime = parseRunDirTimestamp(runDir) ?? stat.mtimeMs;
-      const pid = resolveRunPid(runDir, workItemId, rootDir, opts, d, fsApi);
+      const pid = resolveRunPid(runDir, workItemId, rootDir, opts, d, fsApi, {
+        now,
+        startupGraceMs,
+      });
       if (pid != null) {
         if (!checkAlive(pid)) {
           continue;

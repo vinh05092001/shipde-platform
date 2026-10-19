@@ -9,14 +9,17 @@ test('abandoned intake without pid does not claim a ready item or consume ceilin
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'unowned-intake-'));
   try {
     const intakeDir = path.join(rootDir, 'intake');
+    const intakeIso = '2026-10-18T00:00:00.000Z';
+    const controlledTime = Date.parse(intakeIso);
     const runDir = path.join(intakeDir, 'TASK-FIXTURE-1-2026-10-18T00-00-00-000Z');
     fs.mkdirSync(runDir, { recursive: true });
     fs.writeFileSync(path.join(runDir, 'specs.json'), JSON.stringify([{ id: 'TASK-FIXTURE-1' }]));
-    const stat = fs.statSync(runDir);
+    const sourcesConfig = require('../sources.json');
+    const startupGraceMs = Number(sourcesConfig.dispatch && sourcesConfig.dispatch.startupGraceMs);
     const opts = { rootDir, intakeDir, decisionDir: path.join(rootDir, 'decisions') };
     const deps = {
       isPidAlive: () => false,
-      now: () => stat.mtimeMs + 200000,
+      now: () => controlledTime + startupGraceMs + 5000,
       items: [{ work_item_id: 'TASK-FIXTURE-1', status: 'READY_FOR_AUTHOR' }],
       writerFor: () => null,
     };
@@ -33,14 +36,15 @@ test('fresh intake without pid inside startup grace window claims item and consu
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'startup-intake-'));
   try {
     const intakeDir = path.join(rootDir, 'intake');
+    const intakeIso = '2026-10-19T10:00:00.000Z';
+    const controlledTime = Date.parse(intakeIso);
     const runDir = path.join(intakeDir, 'TASK-STARTUP-1-2026-10-19T10-00-00-000Z');
     fs.mkdirSync(runDir, { recursive: true });
     fs.writeFileSync(path.join(runDir, 'specs.json'), JSON.stringify([{ id: 'TASK-STARTUP-1' }]));
-    const stat = fs.statSync(runDir);
     const opts = { rootDir, intakeDir, decisionDir: path.join(rootDir, 'decisions') };
     const deps = {
       isPidAlive: () => false,
-      now: () => stat.mtimeMs + 1000,
+      now: () => controlledTime + 1000,
       items: [{ work_item_id: 'TASK-STARTUP-1', status: 'READY_FOR_AUTHOR' }],
       writerFor: () => null,
     };
@@ -101,9 +105,10 @@ test('the selecting runner counts its own active in-flight intake created after 
       path.join(goalDir, 'goal.json'),
       JSON.stringify({ items: ['GOAL-FIXTURE-2'] })
     );
+    const controlledTime = Date.parse('2026-10-19T01:00:00.000Z');
     const runs = getOpenRuns(
       { rootDir, intakeDir, goalsDir },
-      { isPidAlive: (pid) => pid === process.pid }
+      { isPidAlive: (pid) => pid === process.pid, now: () => controlledTime + 1000 }
     );
     assert.equal(
       runs.length,
@@ -112,6 +117,95 @@ test('the selecting runner counts its own active in-flight intake created after 
     );
     assert.equal(runs[0].pid, process.pid);
     assert.equal(runs[0].workItemId, 'GOAL-FIXTURE-2');
+  } finally {
+    fs.rmSync(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('the selecting runner does not claim an intake created after the goal lock once beyond startup grace window without live pid', () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'intake-goal-beyond-grace-'));
+  try {
+    const intakeDir = path.join(rootDir, 'intake');
+    const intakeIso = '2026-10-19T01:00:00.000Z';
+    const intakeTime = Date.parse(intakeIso);
+    const runDir = path.join(intakeDir, 'GOAL-FIXTURE-3-2026-10-19T01-00-00-000Z');
+    const goalsDir = path.join(rootDir, 'goals');
+    const goalDir = path.join(goalsDir, 'FIXTURE');
+    fs.mkdirSync(runDir, { recursive: true });
+    fs.mkdirSync(goalDir, { recursive: true });
+    fs.writeFileSync(path.join(runDir, 'specs.json'), JSON.stringify([{ id: 'GOAL-FIXTURE-3' }]));
+    fs.writeFileSync(
+      path.join(goalDir, 'run.lock'),
+      JSON.stringify({ pid: process.pid, startedAt: '2026-10-19T00:00:00.000Z' })
+    );
+    fs.writeFileSync(
+      path.join(goalDir, 'goal.json'),
+      JSON.stringify({ items: ['GOAL-FIXTURE-3'] })
+    );
+    const sourcesConfig = require('../sources.json');
+    const startupGraceMs = Number(sourcesConfig.dispatch && sourcesConfig.dispatch.startupGraceMs);
+    const opts = { rootDir, intakeDir, goalsDir, decisionDir: path.join(rootDir, 'decisions') };
+    const deps = {
+      isPidAlive: (pid) => pid === process.pid,
+      now: () => intakeTime + startupGraceMs + 5000,
+      items: [{ work_item_id: 'GOAL-FIXTURE-3', status: 'READY_FOR_AUTHOR' }],
+      writerFor: () => null,
+    };
+    const runs = getOpenRuns(opts, deps);
+    assert.equal(
+      runs.length,
+      0,
+      'intake beyond startup grace without live pid must not be claimed by selecting runner'
+    );
+    const next = findNextWorkItem(opts, deps);
+    assert.equal(
+      next.item && next.item.work_item_id,
+      'GOAL-FIXTURE-3',
+      'item must be selectable once abandoned intake expires past startup grace'
+    );
+    assert.equal(checkCeiling(opts, deps).allowed, true, 'ceiling must not be consumed');
+  } finally {
+    fs.rmSync(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('the selecting runner claims an intake created after the goal lock beyond startup grace window when work is demonstrably active', () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'intake-goal-demonstrably-active-'));
+  try {
+    const intakeDir = path.join(rootDir, 'intake');
+    const intakeIso = '2026-10-19T01:00:00.000Z';
+    const intakeTime = Date.parse(intakeIso);
+    const runDir = path.join(intakeDir, 'GOAL-FIXTURE-4-2026-10-19T01-00-00-000Z');
+    const goalsDir = path.join(rootDir, 'goals');
+    const goalDir = path.join(goalsDir, 'FIXTURE');
+    fs.mkdirSync(runDir, { recursive: true });
+    fs.mkdirSync(goalDir, { recursive: true });
+    fs.writeFileSync(path.join(runDir, 'specs.json'), JSON.stringify([{ id: 'GOAL-FIXTURE-4' }]));
+    fs.writeFileSync(
+      path.join(goalDir, 'run.lock'),
+      JSON.stringify({ pid: process.pid, startedAt: '2026-10-19T00:00:00.000Z' })
+    );
+    fs.writeFileSync(
+      path.join(goalDir, 'goal.json'),
+      JSON.stringify({ items: ['GOAL-FIXTURE-4'] })
+    );
+    const sourcesConfig = require('../sources.json');
+    const startupGraceMs = Number(sourcesConfig.dispatch && sourcesConfig.dispatch.startupGraceMs);
+    const opts = { rootDir, intakeDir, goalsDir, decisionDir: path.join(rootDir, 'decisions') };
+    const deps = {
+      isPidAlive: (pid) => pid === process.pid,
+      now: () => intakeTime + startupGraceMs + 5000,
+      items: [{ work_item_id: 'GOAL-FIXTURE-4', status: 'READY_FOR_AUTHOR' }],
+      writerFor: (id) => (id === 'GOAL-FIXTURE-4' ? { sessionId: 'active-session-1' } : null),
+    };
+    const runs = getOpenRuns(opts, deps);
+    assert.equal(
+      runs.length,
+      1,
+      'demonstrably active intake must be counted even beyond startup grace'
+    );
+    assert.equal(runs[0].pid, process.pid);
+    assert.equal(runs[0].workItemId, 'GOAL-FIXTURE-4');
   } finally {
     fs.rmSync(rootDir, { recursive: true, force: true });
   }
