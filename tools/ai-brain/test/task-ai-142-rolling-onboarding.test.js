@@ -577,4 +577,102 @@ describe('TASK-AI-142 T8: rolling source onboarding', () => {
     assert.equal(calls, 0);
     assert.equal(res.count, 0);
   });
+  test('a nonblocking but unusable quota scan (rate limited) still does not onboard', async (t) => {
+    const dir = fixture(t);
+    const evidenceData = { combinations: [] };
+    let calls = 0;
+    const result = await onboardSourceRolling(
+      {
+        id: 'rated-source',
+        kind: 'model-source',
+        endpoint: 'https://rated.invalid/v1',
+        models: ['fixture/rated-model'],
+        credential: { env: 'RATED_KEY' },
+      },
+      {
+        evidenceData,
+        evidenceDir: path.join(dir, 'evidence'),
+        quotaStateFile: path.join(dir, 'quota-state.json'),
+        routeHealthFile: path.join(dir, 'route-health.json'),
+        env: { RATED_KEY: 'rated-fixture-key' },
+        fetch: async () => {
+          calls += 1;
+          return calls === 1
+            ? {
+                ok: true,
+                status: 200,
+                headers: new Map(),
+                text: async () => JSON.stringify({ choices: [{ message: { content: 'OK' } }] }),
+              }
+            : { ok: false, status: 429, headers: new Map(), text: async () => 'slow down' };
+        },
+        now: 1700000000000,
+      }
+    );
+    assert.equal(result.ok, false);
+    assert.match(result.reason, /^QUOTA_/);
+    assert.equal(evidenceData.combinations.length, 0);
+  });
+
+  test('after a key rotation a failed re-probe removes the old pass from dispatch', async (t) => {
+    const dir = fixture(t);
+    const { dispatchCommand } = require('../cli');
+    const registry = {
+      sources: [
+        {
+          id: 'rotating-source',
+          kind: 'model-source',
+          servesModels: true,
+          endpoint: 'https://rotating.invalid/v1',
+          models: ['rotating-source/model'],
+          harness: 'direct-http',
+          credential: { env: 'ROTATING_KEY' },
+        },
+      ],
+      dispatch: { ...defaultDispatch, providers: {} },
+    };
+    const routeHealth = { version: 1, paths: {}, events: [] };
+    const okFetch = async () => ({
+      ok: true,
+      status: 200,
+      headers: new Map(),
+      text: async () => JSON.stringify({ choices: [{ message: { content: 'OK' } }] }),
+    });
+    const failFetch = async () => ({
+      ok: false,
+      status: 401,
+      headers: new Map(),
+      text: async () => 'invalid api key',
+    });
+    const run = (key, fetch) =>
+      dispatchCommand(
+        { 'dry-run': true, item: 'TASK-ONBOARD-ROTATE' },
+        {
+          registry,
+          env: { ROTATING_KEY: key },
+          fetch,
+          evidenceDir: path.join(dir, 'evidence'),
+          quotaStateFile: path.join(dir, 'quota-state.json'),
+          routeHealth,
+          routeHealthFile: path.join(dir, 'route-health.json'),
+          discoveryCatalogue: { candidates: [] },
+          accounts: [],
+          assessment: {},
+          priors: [],
+          home: path.join(dir, 'home'),
+          storePath: path.join(dir, 'quota-store.json'),
+          now: 1700000000000,
+          exit: () => {},
+        }
+      );
+    const ranked = (res) =>
+      (res.decision?.candidates || [])
+        .concat(res.decision?.ranking || [])
+        .some((c) => [c.source, c.sourceId, c.gateway].includes('rotating-source'));
+
+    fs.mkdirSync(path.join(dir, 'evidence'), { recursive: true });
+    assert.equal(ranked(await run('first-fixture-key', okFetch)), true);
+    const second = await run('second-fixture-key', failFetch);
+    assert.equal(ranked(second), false);
+  });
 });

@@ -152,14 +152,30 @@ async function onboardSourceRolling(src, options = {}) {
     clearTimeout(timer);
   }
 
+  // rememberProbe resolves the file from these options and persists unless told not to.
+  const healthOptions = {
+    routeHealthFile: options.routeHealthFile,
+    'route-health': options['route-health'],
+    cwd: options.cwd,
+    root: options.root,
+    persistRouteHealth: options.persistRouteHealth,
+  };
+  let loadedHealth = options.routeHealth;
+  const healthStore = () =>
+    (loadedHealth =
+      loadedHealth ||
+      routeHealthApi.loadStore(routeHealthApi.probeMemoryFile(healthOptions), {
+        allowMissing: true,
+      }));
+
   let quotaResults = [];
   if (probeOk) {
     quotaResults = await quotaScan.scanSourceQuotas(src, { ...scanOptions, targets: scanTargets });
-    const refused = quotaResults.find((result) => quotaScan.BLOCKING_CODES.has(result.code));
-    if (refused) {
-      // A source whose quota scan refuses it is not onboarded: no evidence, no ranking.
+    // Fail closed: every scanned scope must be confirmed usable, and there must be one.
+    const unusable = quotaResults.find((result) => result.code !== quotaScan.QUOTA_STATUS_CODES.OK);
+    if (quotaResults.length === 0 || unusable) {
       probeOk = false;
-      probeReason = `QUOTA_${refused.code}`;
+      probeReason = unusable ? `QUOTA_${unusable.code}` : 'QUOTA_UNSCANNED';
     }
   }
 
@@ -199,20 +215,8 @@ async function onboardSourceRolling(src, options = {}) {
       evidenceApi.saveEvidence(evidenceDir, evidenceData);
     }
 
-    // 2. Record route health in the same store dispatch reads. rememberProbe
-    // resolves the file from these options and persists unless the caller opts out.
-    const healthOptions = {
-      routeHealthFile: options.routeHealthFile,
-      'route-health': options['route-health'],
-      cwd: options.cwd,
-      root: options.root,
-      persistRouteHealth: options.persistRouteHealth,
-    };
-    const store =
-      options.routeHealth ||
-      routeHealthApi.loadStore(routeHealthApi.probeMemoryFile(healthOptions), {
-        allowMissing: true,
-      });
+    // 2. Record route health in the same store dispatch reads.
+    const store = healthStore();
     routeHealthApi.rememberProbe(
       combo,
       { ok: true, status: probeStatus, body: probeBody },
@@ -226,6 +230,37 @@ async function onboardSourceRolling(src, options = {}) {
       status: probeStatus,
       quota: quotaResults.map((r) => ({ scope: r.scope, code: r.code })),
     };
+  }
+
+  // Evidence earned with any other key no longer proves this source: retire it so a
+  // failed re-probe after a key rotation cannot leave the old pass rankable.
+  const fingerprint = credentialFingerprint(apiKey);
+  let retired = 0;
+  for (const combination of evidenceData.combinations) {
+    if (
+      !combination ||
+      ![combination.source, combination.sourceId, combination.gateway].includes(src.id) ||
+      (fingerprint && combination.credentialFingerprint === fingerprint)
+    ) {
+      continue;
+    }
+    const items = Array.isArray(combination.evidence) ? combination.evidence : [];
+    if (items.at(-1)?.status !== evidenceApi.Status.PASSED) continue;
+    combination.evidence = items.concat({
+      status: evidenceApi.Status.FAILED,
+      cause: 'CREDENTIAL_NOT_REVERIFIED',
+      observedAt: new Date(now).toISOString(),
+    });
+    retired += 1;
+    // Route health is what dispatch requires, so the failed re-probe must land there too.
+    routeHealthApi.rememberProbe(
+      combination,
+      { ok: false, status: probeStatus, body: probeReason },
+      { ...healthOptions, routeHealth: healthStore(), now }
+    );
+  }
+  if (retired > 0 && options.persist !== false && evidenceDir) {
+    evidenceApi.saveEvidence(evidenceDir, evidenceData);
   }
 
   return {
