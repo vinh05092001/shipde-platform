@@ -303,8 +303,10 @@ async function probeCapabilities(candidates, profile, options = {}) {
           : undefined;
   const orderedCandidates = orderCandidatesForProbe(candidates, profile, { ...o, priors });
 
-  for (const c of orderedCandidates) {
-    if (c.blocked || c.credentialEnvMissing || !c.accountId || c.accountId === '*') continue;
+  // Probes run concurrently up to dispatch.maxConcurrentProbes so the strongest
+  // candidates late in the probe order are still reached inside the schema budget.
+  const probeOne = async (c) => {
+    if (c.blocked || c.credentialEnvMissing || !c.accountId || c.accountId === '*') return;
     const key = candidateKey(c);
     const route =
       typeof o.httpRoute === 'function'
@@ -375,7 +377,7 @@ async function probeCapabilities(candidates, profile, options = {}) {
         delete c.capabilities[cap];
       }
       records[key] = cached;
-      continue;
+      return;
     }
 
     const identity = require('./route-health').probeIdentity(c);
@@ -397,7 +399,7 @@ async function probeCapabilities(candidates, profile, options = {}) {
         delete c.capabilities[cap];
       }
       records[key] = cached;
-      continue;
+      return;
     }
 
     // Cheap HTTP preflight before checking jsonSchema/tools
@@ -446,7 +448,7 @@ async function probeCapabilities(candidates, profile, options = {}) {
           delete c.capabilities[cap];
         }
         records[key] = cached;
-        continue; // Never check schema on failed preflight
+        return; // Never check schema on failed preflight
       }
     }
 
@@ -533,7 +535,48 @@ async function probeCapabilities(candidates, profile, options = {}) {
       c.capabilityEvidence = { ...c.capabilityEvidence, [cap]: proof };
       if (cap === 'jsonSchema') c.jsonSchemaEvidence = proof;
     }
-  }
+  };
+  const concurrency = Math.max(
+    1,
+    Number(o.maxConcurrentProbes ?? dispatchConfig.maxConcurrentProbes) || 1
+  );
+  // Different accounts probe in parallel; one account's models stay serial so an
+  // account-level failure still short-circuits its remaining models.
+  const accountOf = (c) => String(c.harness || '') + '::' + String(c.accountId || '');
+  const queue = orderedCandidates.slice();
+  const busy = new Set();
+  let wake = null;
+  const takeNext = () => {
+    const idx = queue.findIndex((c) => !busy.has(accountOf(c)));
+    return idx < 0 ? null : queue.splice(idx, 1)[0];
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
+      while (queue.length > 0) {
+        const c = takeNext();
+        if (!c) {
+          await new Promise((resolve) => {
+            const prev = wake;
+            wake = () => {
+              if (prev) prev();
+              resolve();
+            };
+          });
+          continue;
+        }
+        const account = accountOf(c);
+        busy.add(account);
+        try {
+          await probeOne(c);
+        } finally {
+          busy.delete(account);
+          const w = wake;
+          wake = null;
+          if (w) w();
+        }
+      }
+    })
+  );
   return candidates;
 }
 

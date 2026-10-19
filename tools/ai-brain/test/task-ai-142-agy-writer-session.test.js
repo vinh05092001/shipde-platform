@@ -16,6 +16,13 @@ function root(t) {
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   return dir;
 }
+// Coarse filesystem clocks (Linux CI) can stamp a just-written result before the submit
+// time the pool waits from; mark fixture results as written after submission.
+function freshResult(file) {
+  const later = new Date(Date.now() + 1000);
+  fs.utimesSync(file, later, later);
+}
+
 test('pool writer launch persists a real job identity and reads its prose without JSON session parsing', (t) => {
   const dir = root(t);
   let submitted;
@@ -38,6 +45,7 @@ test('pool writer launch persists a real job identity and reads its prose withou
       path.join(accountDir, 'result.json'),
       JSON.stringify({ state: 'ok', exitCode: 0 })
     );
+    freshResult(path.join(accountDir, 'result.json'));
     return { exitCode: 0, stdout: 'scheduled', stderr: '' };
   });
   const launch = resolveLauncher(
@@ -203,6 +211,7 @@ test('goal orchestration uses the authorized pool submission and keeps its durab
       'The requested changes are ready for verification.'
     );
     fs.writeFileSync(path.join(dir, 'result.json'), JSON.stringify({ state: 'ok', exitCode: 0 }));
+    freshResult(path.join(dir, 'result.json'));
     return { exitCode: 0 };
   });
   const c = { ...candidate('pool'), harness: 'agy-pool', accountId: 'agy01' };
