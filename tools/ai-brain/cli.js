@@ -1021,18 +1021,19 @@ function isCandidateRouteEligible(routeHealth, candidate, options, routeHealthAp
       return Boolean(options.probeEvidence(modelId, routePath));
     }
     if (
+      !isWildcard &&
       Array.isArray(candidate.evidence) &&
       candidate.evidence.some((e) => e && (e.status === 'passed' || e.status === 1))
     ) {
       return true;
     }
-    if (options && options.evidenceData && Array.isArray(options.evidenceData.combinations)) {
+    if (!isWildcard && options && options.evidenceData && Array.isArray(options.evidenceData.combinations)) {
       const match = options.evidenceData.combinations.find(
         (c) =>
           c &&
           (c.modelId === modelId || c.model === modelId) &&
           (c.gateway === gateway || c.source === gateway || c.sourceId === gateway) &&
-          (!c.accountId || isWildcard || c.accountId === candidate.accountId) &&
+          (!c.accountId || c.accountId === candidate.accountId) &&
           Array.isArray(c.evidence) &&
           c.evidence.some((e) => e && (e.status === 'passed' || e.status === 1))
       );
