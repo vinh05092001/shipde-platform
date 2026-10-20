@@ -86,6 +86,8 @@ jobs:
       - run: pnpm lint
       - name: ast-grep structural rules
         run: pnpm lint:ast
+      - name: Controller prompt contract (promptfoo, offline echo provider)
+        run: pnpm test:prompts
       - run: pnpm format:check
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.base_ref || 'origin/main' }}

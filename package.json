@@ -39,6 +39,7 @@
     "security:secrets": "tsx scripts/verify-secrets.ts",
     "security:trivy": "tsx scripts/verify-trivy.ts",
     "test:load": "bash tools/k6/run-health-smoke.sh",
+    "test:prompts": "bash tools/controller-eval/run.sh",
     "lint:ast": "ast-grep test --skip-snapshot-tests && ast-grep scan apps packages",
     "security:semgrep": "semgrep --test tools/semgrep/rules && semgrep scan --config tools/semgrep/rules --error --metrics=off apps packages",
     "verify:inventory": "tsx scripts/verify-inventory.ts",
