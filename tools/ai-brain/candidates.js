@@ -2395,9 +2395,6 @@ function candidatesFromEvidence(evidenceData, options) {
         evidence: evidenceList,
         capabilities: resolveComboCapabilities(combo, accounts),
       };
-      if (combo.capabilities) {
-        cand.capabilities = Object.assign({}, cand.capabilities, combo.capabilities);
-      }
       if (combo.capabilityEvidence) {
         cand.capabilityEvidence = Object.assign({}, combo.capabilityEvidence);
       }
