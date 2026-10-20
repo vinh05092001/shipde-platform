@@ -38,7 +38,7 @@ export const ControlTowerTab: React.FC<Props> = ({ role, onNavigate, onCreateOrd
   return (
     <div className="w-full space-y-6">
       {/* Operational Header Bar */}
-      <div className="modern-card p-5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-gradient-to-r from-white via-white to-[#FFF5F0] border-l-4 border-l-[#EA4B12]">
+      <div className="modern-card p-5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-gradient-to-r from-white via-white to-[#FFF5F0] border-l-4 border-l-[#c23807]">
         <div>
           <h1 className="text-base font-bold text-slate-900 flex items-center gap-2">
             <span>Bàn Điều Khiển Vận Hành & Đối Soát Ba Sổ</span>
@@ -61,13 +61,13 @@ export const ControlTowerTab: React.FC<Props> = ({ role, onNavigate, onCreateOrd
         {/* Metric 1: Active Shipments */}
         <div
           onClick={() => onNavigate('shipments')}
-          className="modern-card p-5 cursor-pointer flex flex-col justify-between group hover:border-[#EA4B12] transition-colors"
+          className="modern-card p-5 cursor-pointer flex flex-col justify-between group hover:border-[#c23807] transition-colors"
         >
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
               Tổng Bưu Kiện Đang Chạy
             </span>
-            <div className="w-9 h-9 rounded-xl bg-[#FFF5F0] text-[#EA4B12] flex items-center justify-center">
+            <div className="w-9 h-9 rounded-xl bg-[#FFF5F0] text-[#c23807] flex items-center justify-center">
               <Package className="w-4.5 h-4.5" />
             </div>
           </div>
@@ -79,7 +79,7 @@ export const ControlTowerTab: React.FC<Props> = ({ role, onNavigate, onCreateOrd
               Trên tổng số {metrics.totalShipments} bưu kiện trong hệ thống
             </div>
           </div>
-          <div className="flex items-center gap-1 text-xs font-semibold text-[#EA4B12] group-hover:underline pt-2 border-t border-slate-100">
+          <div className="flex items-center gap-1 text-xs font-semibold text-[#c23807] group-hover:underline pt-2 border-t border-slate-100">
             <span>Mở danh sách vận đơn</span>
             <ArrowRight className="w-3.5 h-3.5" />
           </div>

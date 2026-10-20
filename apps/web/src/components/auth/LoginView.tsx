@@ -224,11 +224,11 @@ export const LoginView: React.FC<Props> = ({ onSwitchToRegister }) => {
   };
 
   return (
-    <div className="min-h-screen bg-[#FDFCFB] text-slate-900 flex flex-col justify-center py-12 sm:px-6 lg:px-8 font-sans selection:bg-[#EA4B12] selection:text-white relative">
+    <div className="min-h-screen bg-[#FDFCFB] text-slate-900 flex flex-col justify-center py-12 sm:px-6 lg:px-8 font-sans selection:bg-[#c23807] selection:text-white relative">
       <div className="sm:mx-auto sm:w-full sm:max-w-md relative z-10">
         {/* Brand Logo & Title */}
         <div className="text-center space-y-2 mb-8">
-          <div className="w-14 h-14 rounded-2xl bg-[#EA4B12] text-white flex items-center justify-center font-black text-2xl mx-auto shadow-md shadow-[#EA4B12]/20">
+          <div className="w-14 h-14 rounded-2xl bg-[#c23807] text-white flex items-center justify-center font-black text-2xl mx-auto shadow-md shadow-[#c23807]/20">
             S
           </div>
           <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900">
@@ -338,7 +338,7 @@ export const LoginView: React.FC<Props> = ({ onSwitchToRegister }) => {
                         <label className="text-xs font-bold text-slate-700">Mật Khẩu</label>
                         <Link
                           href="/forgot-password"
-                          className="text-xs text-[#EA4B12] font-semibold hover:underline"
+                          className="text-xs text-[#c23807] font-semibold hover:underline"
                         >
                           Quên mật khẩu?
                         </Link>
@@ -356,6 +356,8 @@ export const LoginView: React.FC<Props> = ({ onSwitchToRegister }) => {
                         <button
                           type="button"
                           onClick={() => setShowPassword(!showPassword)}
+                          aria-label={showPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+                          aria-pressed={showPassword}
                           className="absolute right-3 top-3.5 text-slate-400 hover:text-slate-600"
                         >
                           {showPassword ? (
@@ -378,7 +380,7 @@ export const LoginView: React.FC<Props> = ({ onSwitchToRegister }) => {
                           type="checkbox"
                           checked={rememberMe}
                           onChange={(e) => setRememberMe(e.target.checked)}
-                          className="w-4 h-4 rounded text-[#EA4B12] focus:ring-[#EA4B12] border-slate-300"
+                          className="w-4 h-4 rounded text-[#c23807] focus:ring-[#c23807] border-slate-300"
                         />
                         <span>Ghi nhớ đăng nhập trên thiết bị này</span>
                       </label>
@@ -408,12 +410,12 @@ export const LoginView: React.FC<Props> = ({ onSwitchToRegister }) => {
                     <button
                       type="button"
                       onClick={handleStartOtp}
-                      className="w-full p-3 rounded-xl border border-slate-200 hover:border-[#EA4B12] hover:bg-[#FFF5F0] transition flex items-center justify-center gap-2 text-xs font-bold text-slate-700"
+                      className="w-full p-3 rounded-xl border border-slate-200 hover:border-[#c23807] hover:bg-[#FFF5F0] transition flex items-center justify-center gap-2 text-xs font-bold text-slate-700"
                     >
-                      <Smartphone className="w-4 h-4 text-[#EA4B12]" />
+                      <Smartphone className="w-4 h-4 text-[#c23807]" />
                       Đăng nhập bằng mã OTP
                     </button>
-                    <p className="text-[11px] text-slate-400 text-center mt-2">
+                    <p className="text-[11px] text-slate-500 text-center mt-2">
                       Chỉ khả dụng khi cửa hàng của bạn bật đăng nhập bằng mã OTP.
                     </p>
                   </div>
@@ -527,7 +529,7 @@ export const LoginView: React.FC<Props> = ({ onSwitchToRegister }) => {
                       type="button"
                       onClick={handleResendOtp}
                       disabled={resendBusy || resendCooldown > 0}
-                      className="text-xs text-[#EA4B12] font-semibold hover:underline disabled:text-slate-400 disabled:cursor-not-allowed disabled:no-underline"
+                      className="text-xs text-[#c23807] font-semibold hover:underline disabled:text-slate-400 disabled:cursor-not-allowed disabled:no-underline"
                     >
                       {resendBusy
                         ? 'Đang gửi lại...'
@@ -555,7 +557,7 @@ export const LoginView: React.FC<Props> = ({ onSwitchToRegister }) => {
           <button
             type="button"
             onClick={onSwitchToRegister}
-            className="text-[#EA4B12] font-bold hover:underline"
+            className="text-[#c23807] font-bold hover:underline"
           >
             Đăng ký tài khoản mới
           </button>

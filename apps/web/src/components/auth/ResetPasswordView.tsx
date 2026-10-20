@@ -155,7 +155,7 @@ export const ResetPasswordView: React.FC<Props> = ({ onBackToLogin }) => {
   const strengthLabels = ['Rất yếu', 'Yếu', 'Trung bình', 'Mạnh', 'Rất mạnh'];
 
   return (
-    <div className="min-h-screen bg-[#FDFCFB] text-slate-900 flex flex-col justify-center py-12 sm:px-6 lg:px-8 font-sans selection:bg-[#EA4B12] selection:text-white relative">
+    <div className="min-h-screen bg-[#FDFCFB] text-slate-900 flex flex-col justify-center py-12 sm:px-6 lg:px-8 font-sans selection:bg-[#c23807] selection:text-white relative">
       <div className="sm:mx-auto sm:w-full sm:max-w-md relative z-10">
         <div className="text-center space-y-2 mb-8">
           <button
@@ -175,7 +175,7 @@ export const ResetPasswordView: React.FC<Props> = ({ onBackToLogin }) => {
         <div className="modern-card p-8 space-y-6 shadow-xl">
           {state === 'VERIFYING' && (
             <div className="flex flex-col items-center justify-center py-8 space-y-4 animate-in fade-in">
-              <Loader2 className="w-10 h-10 border-4 border-[#EA4B12] border-t-transparent rounded-full animate-spin" />
+              <Loader2 className="w-10 h-10 border-4 border-[#c23807] border-t-transparent rounded-full animate-spin" />
               <span className="text-sm text-slate-600 font-medium">Đang xác minh liên kết...</span>
             </div>
           )}
@@ -372,7 +372,7 @@ export const ResetPasswordView: React.FC<Props> = ({ onBackToLogin }) => {
 
           {state === 'LOADING' && (
             <div className="flex flex-col items-center justify-center py-8 space-y-4 animate-in fade-in">
-              <Loader2 className="w-10 h-10 border-4 border-[#EA4B12] border-t-transparent rounded-full animate-spin" />
+              <Loader2 className="w-10 h-10 border-4 border-[#c23807] border-t-transparent rounded-full animate-spin" />
               <span className="text-sm text-slate-600 font-medium">Đang đặt lại mật khẩu...</span>
             </div>
           )}
@@ -400,7 +400,7 @@ export const ResetPasswordView: React.FC<Props> = ({ onBackToLogin }) => {
           <button
             type="button"
             onClick={handleBackToLogin}
-            className="text-[#EA4B12] font-bold hover:underline"
+            className="text-[#c23807] font-bold hover:underline"
           >
             Quay lại đăng nhập
           </button>

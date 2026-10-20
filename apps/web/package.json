@@ -17,7 +17,8 @@
     "test:e2e": "tsx src/tests/e2e-scenarios.test.ts",
     "test:baseline": "tsx src/tests/preservation-smoke.test.ts",
     "db:generate": "prisma generate",
-    "version:next": "next --version"
+    "version:next": "next --version",
+    "test:a11y": "playwright test"
   },
   "dependencies": {
     "@prisma/client": "^6.19.2",
@@ -32,11 +33,14 @@
     "recharts": "^3.8.0"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.14.0",
+    "@playwright/test": "^1.64.1",
     "@shipde/testkit": "workspace:*",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "axe-core": "4.14.0",
     "eslint": "^9.39.5",
     "eslint-config-next": "16.1.6",
     "prisma": "^6.19.2",

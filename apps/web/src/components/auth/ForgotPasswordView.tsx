@@ -95,10 +95,10 @@ export const ForgotPasswordView: React.FC<Props> = ({ onBackToLogin }) => {
   };
 
   return (
-    <div className="min-h-screen bg-[#FDFCFB] text-slate-900 flex flex-col justify-center py-12 sm:px-6 lg:px-8 font-sans selection:bg-[#EA4B12] selection:text-white relative">
+    <div className="min-h-screen bg-[#FDFCFB] text-slate-900 flex flex-col justify-center py-12 sm:px-6 lg:px-8 font-sans selection:bg-[#c23807] selection:text-white relative">
       <div className="sm:mx-auto sm:w-full sm:max-w-md relative z-10">
         <div className="text-center space-y-2 mb-8">
-          <div className="w-14 h-14 rounded-2xl bg-[#EA4B12] text-white flex items-center justify-center font-black text-2xl mx-auto shadow-md shadow-[#EA4B12]/20">
+          <div className="w-14 h-14 rounded-2xl bg-[#c23807] text-white flex items-center justify-center font-black text-2xl mx-auto shadow-md shadow-[#c23807]/20">
             S
           </div>
           <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900">
@@ -111,7 +111,7 @@ export const ForgotPasswordView: React.FC<Props> = ({ onBackToLogin }) => {
         <div className="modern-card p-8 space-y-6 shadow-xl">
           {state === 'LOADING' && (
             <div className="flex flex-col items-center justify-center py-8 space-y-4 animate-in fade-in">
-              <Loader2 className="w-10 h-10 border-4 border-[#EA4B12] border-t-transparent rounded-full animate-spin" />
+              <Loader2 className="w-10 h-10 border-4 border-[#c23807] border-t-transparent rounded-full animate-spin" />
               <span className="text-sm text-slate-600 font-medium">Đang gửi liên kết...</span>
             </div>
           )}
@@ -246,7 +246,7 @@ export const ForgotPasswordView: React.FC<Props> = ({ onBackToLogin }) => {
           <button
             type="button"
             onClick={handleBackToLogin}
-            className="text-[#EA4B12] font-bold hover:underline"
+            className="text-[#c23807] font-bold hover:underline"
           >
             Quay lại đăng nhập
           </button>

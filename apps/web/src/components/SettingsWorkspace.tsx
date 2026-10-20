@@ -140,10 +140,10 @@ export const SettingsWorkspace: React.FC<Props> = ({
   return (
     <div className="w-full space-y-6">
       {/* Settings Header */}
-      <div className="modern-card p-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-l-4 border-l-[#EA4B12]">
+      <div className="modern-card p-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-l-4 border-l-[#c23807]">
         <div>
           <h1 className="text-xl font-bold text-slate-900 flex items-center gap-2.5">
-            <Sliders className="w-6 h-6 text-[#EA4B12]" />
+            <Sliders className="w-6 h-6 text-[#c23807]" />
             <span>Cài Đặt & Cấu Hình Cửa Hàng</span>
           </h1>
           <p className="text-sm text-slate-500 mt-1">
@@ -209,12 +209,12 @@ export const SettingsWorkspace: React.FC<Props> = ({
                   onClick={() => setActiveSection(item.id as any)}
                   className={`w-full text-left px-3.5 py-3 rounded-xl transition flex items-center gap-3 cursor-pointer ${
                     isActive
-                      ? 'bg-[#FFF5F0] text-[#EA4B12] font-bold border border-[#FDDDD0]'
+                      ? 'bg-[#FFF5F0] text-[#c23807] font-bold border border-[#FDDDD0]'
                       : 'text-slate-700 hover:bg-slate-50 font-medium'
                   }`}
                 >
                   <Icon
-                    className={`w-5 h-5 shrink-0 ${isActive ? 'text-[#EA4B12]' : 'text-slate-400'}`}
+                    className={`w-5 h-5 shrink-0 ${isActive ? 'text-[#c23807]' : 'text-slate-400'}`}
                   />
                   <div>
                     <div className="text-sm leading-tight">{item.label}</div>
@@ -304,7 +304,7 @@ export const SettingsWorkspace: React.FC<Props> = ({
                 <div className="p-5 rounded-2xl border border-slate-200 bg-slate-50/50 space-y-4">
                   <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
                     <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-xl bg-white border border-slate-200 flex items-center justify-center font-black text-xs text-[#EA4B12] shadow-2xs">
+                      <div className="w-10 h-10 rounded-xl bg-white border border-slate-200 flex items-center justify-center font-black text-xs text-[#c23807] shadow-2xs">
                         GHN
                       </div>
                       <div>
@@ -358,7 +358,7 @@ export const SettingsWorkspace: React.FC<Props> = ({
                           <button
                             type="button"
                             onClick={() => setIsEditingGhnToken(true)}
-                            className="text-xs font-bold text-[#EA4B12] hover:underline"
+                            className="text-xs font-bold text-[#c23807] hover:underline"
                           >
                             Đổi Token
                           </button>
@@ -515,7 +515,7 @@ export const SettingsWorkspace: React.FC<Props> = ({
                           <button
                             type="button"
                             onClick={() => setIsEditingGhtkToken(true)}
-                            className="text-xs font-bold text-[#EA4B12] hover:underline"
+                            className="text-xs font-bold text-[#c23807] hover:underline"
                           >
                             Đổi Token
                           </button>
@@ -587,7 +587,7 @@ export const SettingsWorkspace: React.FC<Props> = ({
                         <button
                           type="button"
                           onClick={() => onToast('✓ Vui lòng nhập mã API Key mới')}
-                          className="text-xs font-bold text-[#EA4B12] hover:underline"
+                          className="text-xs font-bold text-[#c23807] hover:underline"
                         >
                           Cập Nhật
                         </button>

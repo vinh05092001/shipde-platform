@@ -175,10 +175,10 @@ export const ShipmentListTab: React.FC<Props> = ({
           <div>
             <div className="flex items-center gap-2.5">
               <h1 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-                <Package className="w-5 h-5 text-[#EA4B12]" />
+                <Package className="w-5 h-5 text-[#c23807]" />
                 <span>Danh Sách & Tra Cứu Vận Đơn</span>
               </h1>
-              <span className="text-xs font-bold px-2.5 py-0.5 rounded-full bg-[#FFF5F0] text-[#EA4B12] border border-[#FDDDD0]">
+              <span className="text-xs font-bold px-2.5 py-0.5 rounded-full bg-[#FFF5F0] text-[#c23807] border border-[#FDDDD0]">
                 {totalCount} bưu kiện
               </span>
             </div>
@@ -217,7 +217,7 @@ export const ShipmentListTab: React.FC<Props> = ({
               title="Tải lại dữ liệu mới nhất"
             >
               <RefreshCw
-                className={`w-3.5 h-3.5 ${loading ? 'animate-spin text-[#EA4B12]' : 'text-slate-500'}`}
+                className={`w-3.5 h-3.5 ${loading ? 'animate-spin text-[#c23807]' : 'text-slate-500'}`}
               />
               <span className="hidden sm:inline">Làm mới</span>
             </button>
@@ -314,7 +314,7 @@ export const ShipmentListTab: React.FC<Props> = ({
                 hasOpenCaseFilter ||
                 matchStatusFilter !== 'ALL' ||
                 warehouseFilter !== 'ALL'
-                  ? 'bg-[#FFF5F0] text-[#EA4B12] border-[#FDDDD0] font-bold'
+                  ? 'bg-[#FFF5F0] text-[#c23807] border-[#FDDDD0] font-bold'
                   : ''
               }`}
             >
@@ -386,7 +386,7 @@ export const ShipmentListTab: React.FC<Props> = ({
                     setHasOpenCaseFilter(e.target.checked);
                     setCursorIndex(0);
                   }}
-                  className="w-4 h-4 rounded text-[#EA4B12] focus:ring-[#EA4B12] border-slate-300"
+                  className="w-4 h-4 rounded text-[#c23807] focus:ring-[#c23807] border-slate-300"
                 />
                 <span className="font-bold text-slate-800 text-xs flex items-center gap-1.5">
                   <AlertTriangle className="w-4 h-4 text-amber-600" />
@@ -457,7 +457,7 @@ export const ShipmentListTab: React.FC<Props> = ({
                         <button
                           type="button"
                           onClick={() => toggleUnmask(shipment.id, shipment.tracking_code)}
-                          className="text-slate-400 hover:text-[#EA4B12] transition"
+                          className="text-slate-400 hover:text-[#c23807] transition"
                           title={
                             isUnmasked
                               ? 'Ẩn số điện thoại'
@@ -465,7 +465,7 @@ export const ShipmentListTab: React.FC<Props> = ({
                           }
                         >
                           {isUnmasked ? (
-                            <EyeOff className="w-3.5 h-3.5 text-[#EA4B12]" />
+                            <EyeOff className="w-3.5 h-3.5 text-[#c23807]" />
                           ) : (
                             <Eye className="w-3.5 h-3.5" />
                           )}

@@ -203,7 +203,7 @@ export const RegisterView: React.FC<Props> = ({ onSwitchToLogin }) => {
       <div className="sm:mx-auto sm:w-full sm:max-w-lg relative z-10">
         {/* Brand Header */}
         <div className="text-center space-y-2 mb-6">
-          <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-[#ea4b12] to-[#c23807] text-white flex items-center justify-center font-black text-2xl mx-auto shadow-md shadow-orange-500/20">
+          <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-[#c23807] to-[#a8300a] text-white flex items-center justify-center font-black text-2xl mx-auto shadow-md shadow-orange-500/20">
             S
           </div>
           <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900">
@@ -423,15 +423,15 @@ export const RegisterView: React.FC<Props> = ({ onSwitchToLogin }) => {
                       }
                     }}
                     disabled={loading}
-                    className="w-4 h-4 mt-0.5 rounded border-slate-300 text-[#ea4b12] focus:ring-[#ea4b12]"
+                    className="w-4 h-4 mt-0.5 rounded border-slate-300 text-[#c23807] focus:ring-[#c23807]"
                   />
                   <span className="text-[11px] leading-relaxed text-slate-600 font-normal">
                     Tôi đã đọc và đồng ý với{' '}
-                    <span className="text-[#ea4b12] font-semibold hover:underline">
+                    <span className="text-[#c23807] font-semibold hover:underline">
                       Điều khoản dịch vụ
                     </span>{' '}
                     và{' '}
-                    <span className="text-[#ea4b12] font-semibold hover:underline">
+                    <span className="text-[#c23807] font-semibold hover:underline">
                       Chính sách bảo mật
                     </span>{' '}
                     của Ship Dễ (Phiên bản 2026.1).
@@ -448,7 +448,7 @@ export const RegisterView: React.FC<Props> = ({ onSwitchToLogin }) => {
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full h-12 bg-[#ea4b12] hover:bg-[#d03e0b] disabled:bg-slate-300 text-white rounded-xl text-sm font-bold flex items-center justify-center gap-2 shadow-md shadow-orange-500/25 transition-all mt-2 cursor-pointer disabled:cursor-not-allowed"
+                className="w-full h-12 bg-[#c23807] hover:bg-[#a8300a] disabled:bg-slate-300 text-white rounded-xl text-sm font-bold flex items-center justify-center gap-2 shadow-md shadow-orange-500/25 transition-all mt-2 cursor-pointer disabled:cursor-not-allowed"
               >
                 {loading ? (
                   <span className="flex items-center gap-2">
@@ -468,7 +468,7 @@ export const RegisterView: React.FC<Props> = ({ onSwitchToLogin }) => {
               <button
                 type="button"
                 onClick={onSwitchToLogin}
-                className="text-xs text-[#ea4b12] hover:text-[#c23807] font-bold hover:underline"
+                className="text-xs text-[#c23807] hover:text-[#a8300a] font-bold hover:underline"
               >
                 ← Đã có tài khoản? Quay lại đăng nhập
               </button>
@@ -535,7 +535,7 @@ export const RegisterView: React.FC<Props> = ({ onSwitchToLogin }) => {
               <button
                 type="submit"
                 disabled={verifyLoading}
-                className="w-full h-11 bg-[#ea4b12] hover:bg-[#d03e0b] disabled:bg-slate-300 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-md shadow-orange-500/20"
+                className="w-full h-11 bg-[#c23807] hover:bg-[#a8300a] disabled:bg-slate-300 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-md shadow-orange-500/20"
               >
                 {verifyLoading ? (
                   <span className="flex items-center gap-2">
@@ -561,7 +561,7 @@ export const RegisterView: React.FC<Props> = ({ onSwitchToLogin }) => {
                 type="button"
                 onClick={handleResend}
                 disabled={resendCooldown > 0}
-                className="text-[#ea4b12] hover:text-[#c23807] disabled:text-slate-400 font-bold inline-flex items-center gap-1 cursor-pointer disabled:cursor-not-allowed"
+                className="text-[#c23807] hover:text-[#a8300a] disabled:text-slate-400 font-bold inline-flex items-center gap-1 cursor-pointer disabled:cursor-not-allowed"
               >
                 <RefreshCw className="w-3 h-3" />
                 <span>
