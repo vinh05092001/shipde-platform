@@ -30,6 +30,7 @@ const path = require('path');
 
 const SUPERPOWERS_ROOT = path.join(__dirname, 'skills', 'superpowers');
 const IMPECCABLE_ROOT = path.join(__dirname, 'skills', 'impeccable');
+const VERCEL_ROOT = path.join(__dirname, 'skills', 'vercel');
 
 /**
  * Pure data: role -> vendored skills. `file` is the sub-path kept from the
@@ -111,6 +112,18 @@ const UI_ROLE_SKILLS = Object.freeze([
   Object.freeze({
     name: 'impeccable-clarify',
     file: '.agent/skills/impeccable/reference/clarify.md',
+  }),
+  // Vercel guidance (GOAL-AUTOCLAW-REPOS-6), vendored under skills/vercel/.
+  // Only the two texts approved in AI-TOOLCHAIN-DECISIONS.md.
+  Object.freeze({
+    name: 'vercel-react-best-practices',
+    root: 'vercel',
+    file: 'react-best-practices/SKILL.md',
+  }),
+  Object.freeze({
+    name: 'vercel-web-interface-guidelines',
+    root: 'vercel',
+    file: 'web-interface-guidelines/command.md',
   }),
 ]);
 
@@ -224,11 +237,11 @@ function entriesFor(role) {
  * @returns [{ name, file, text }] in pack order, [] when the role has no pack
  */
 function skillsFor(role) {
-  const root = isUiRole(role) ? IMPECCABLE_ROOT : SUPERPOWERS_ROOT;
+  const laneRoot = isUiRole(role) ? IMPECCABLE_ROOT : SUPERPOWERS_ROOT;
   return entriesFor(role).map((entry) => ({
     name: entry.name,
     file: entry.file,
-    text: readSkillText(root, entry.file),
+    text: readSkillText(entry.root === 'vercel' ? VERCEL_ROOT : laneRoot, entry.file),
   }));
 }
 
