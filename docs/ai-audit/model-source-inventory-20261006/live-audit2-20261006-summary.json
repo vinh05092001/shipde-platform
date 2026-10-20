@@ -1,0 +1,1566 @@
+{
+ "generatedAt": "2026-10-06T06:37:45.034Z",
+ "task": "9router re-audit audit2 (fixed probe v3)",
+ "inputs": {
+  "baseline": ".inputs/live-9router-r2-20261006.jsonl",
+  "overlay": ".inputs/live-fix-20261006.jsonl (fix wins per model)",
+  "probe": ".inputs/probe-sources-v3.js",
+  "targets": ".inputs/targets-audit2-9r.json",
+  "out": ".inputs/live-audit2-20261006.jsonl",
+  "selection": ".inputs/live-audit2-selection.json"
+ },
+ "route": {
+  "via": "9router",
+  "baseURL": "http://127.0.0.1:20128/v1",
+  "concurrency": 4
+ },
+ "selectionRules": {
+  "a": "every WRONG_OR_EMPTY",
+  "b": "HTTP 400/401/403/404/405 whose detail lacks (case-insensitive): insufficient credits | balance | model not supported | model_not_supported | not supported | does not exist | model_not_found | unsupported model | retired | deprecated",
+  "c": "HTTP 503/500/502 whose detail lacks (case-insensitive): quota | credit | rate | exhaust | reset",
+  "d": "every TIMEOUT or ERROR",
+  "explainedNoReprobe": "PASS already-alive (72), HTTP_429 purchase/credit-gated (180), HTTP_410 retired (5), rule-b matches on 400 (39), rule-c matches on 503 (684)"
+ },
+ "probeOutcome": {
+  "listHttp": 200,
+  "listModels": 883,
+  "modelLines": 98,
+  "results": {
+   "PASS": 11,
+   "WRONG_OR_EMPTY": 30,
+   "HTTP_400": 32,
+   "HTTP_503": 22,
+   "HTTP_405": 3
+  },
+  "truncation": "script-defined: returned 80 chars, detail 240 chars (key-scrubbed); summary evidence capped at first 200 chars"
+ },
+ "parserGap": {
+  "pattern": "200 body is a JSON object with data: [DONE] appended on the SAME line (no separating newline); v3 handles newline-separated SSE only, so contentInfo returns empty although the nonce is present",
+  "affected": "21 WRONG_OR_EMPTY lines whose bodies held the exact nonce; verdict ALIVE with audit-detail and/or same-route diagnostic confirmation (read-only fetches, probe script unmodified)",
+  "confirmedInAuditDetail": [
+   "bzl/auto:free",
+   "cf/@cf/meta/llama-3.1-70b-instruct-fp8-fast",
+   "cf/@cf/qwen/qwq-32b (truncated mid-nonce)",
+   "cf/@cf/qwen/qwen2.5-coder-32b-instruct",
+   "cf/@cf/zai-org/glm-4.7-flash",
+   "kgw/kilo-auto/free",
+   "tokenrouter/anthropic/claude-haiku-4.5",
+   "tokenrouter/anthropic/claude-opus-4.8",
+   "tokenrouter/anthropic/claude-sonnet-4.6",
+   "tokenrouter/google/gemini-3.5-flash",
+   "tokenrouter/z-ai/glm-5.2",
+   "xmtp/mimo-v2.5",
+   "xmtp/mimo-v2.5-pro",
+   "xmtp/mimo-v2.5-pro-claude"
+  ],
+  "confirmedViaDiagnostic": [
+   "cf/@cf/meta/llama-3.2-3b-instruct",
+   "cf/@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+   "cf/@cf/mistralai/mistral-small-3.1-24b-instruct",
+   "cf/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b",
+   "kgw/nvidia/nemotron-3-super-120b-a12b:free",
+   "mistral/codestral-latest",
+   "openrouter/nvidia/nemotron-3.5-lightning:free"
+  ]
+ },
+ "verdictRules": [
+  "ALIVE: exact expectedNonce present in the 200 body (probe PASS, or parser-gap cases above)",
+  "QUOTA: credit/rate/exhaust/reset/quota/balance/insufficient/subscription/purchase-or-plan-gate text in outer or wrapped-inner detail (billing gates grouped here per BLOCKED_QUOTA precedent: bpm CodingPlan subscription, alims Arrearage overdue-payment, ollama 402 Free-plan)",
+  "NOT_SUPPORTED_ON_ROUTE: model_not_supported, wrapped 404 model_not_found/does-not-exist/UnsupportedModel, or 405 method",
+  "RETIRED: 410/deprecated, or explicit model-sunset message naming a successor",
+  "AUTH: 401/403 (outer or wrapped-inner) without quota/billing text; extended to 400-wrapped workspace permission/privacy gates (ocg Global-regions, train-on-data) with note in model record",
+  "TOOL_ONLY: 200, finish tool_calls, empty text content",
+  "MODEL_WRONG_ANSWER: 200 text (or empty/whitespace) without the nonce; returned text included",
+  "CALL_CONTRACT: request shape/protocol rejected; parameter or endpoint named from evidence; docs link only when quoted in evidence",
+  "UPSTREAM_ERROR: upstream failure text (Model is unavailable / model_unavailable); outer code in model record (400-wrapped cases grouped here)",
+  "UNEXPLAINED: anything else with raw evidence (none this round)"
+ ],
+ "perPrefix": {
+  "(no-prefix)": {
+   "total": 196,
+   "explained": {
+    "ALREADY_PASS": 16,
+    "QUOTA_429": 180
+   },
+   "explainedTotal": 196,
+   "reprobed": 0,
+   "verdicts": {}
+  },
+  "gh": {
+   "total": 32,
+   "explained": {
+    "ALREADY_PASS": 13,
+    "B400_NOT_SUPPORTED": 14,
+    "QUOTA_5XX": 1
+   },
+   "explainedTotal": 28,
+   "reprobed": 4,
+   "verdicts": {
+    "TOOL_ONLY": 2,
+    "ALIVE": 1,
+    "MODEL_WRONG_ANSWER": 1
+   }
+  },
+  "kimchi": {
+   "total": 8,
+   "explained": {
+    "QUOTA_5XX": 8
+   },
+   "explainedTotal": 8,
+   "reprobed": 0,
+   "verdicts": {}
+  },
+  "cc": {
+   "total": 7,
+   "explained": {
+    "QUOTA_5XX": 7
+   },
+   "explainedTotal": 7,
+   "reprobed": 0,
+   "verdicts": {}
+  },
+  "ag": {
+   "total": 20,
+   "explained": {
+    "QUOTA_5XX": 19
+   },
+   "explainedTotal": 19,
+   "reprobed": 1,
+   "verdicts": {
+    "RETIRED": 1
+   }
+  },
+  "cf": {
+   "total": 13,
+   "explained": {
+    "RETIRED_410": 1
+   },
+   "explainedTotal": 1,
+   "reprobed": 12,
+   "verdicts": {
+    "ALIVE": 8,
+    "MODEL_WRONG_ANSWER": 2,
+    "AUTH": 2
+   }
+  },
+  "qd": {
+   "total": 15,
+   "explained": {
+    "ALREADY_PASS": 1,
+    "QUOTA_5XX": 14
+   },
+   "explainedTotal": 15,
+   "reprobed": 0,
+   "verdicts": {}
+  },
+  "mistral": {
+   "total": 3,
+   "explained": {
+    "QUOTA_5XX": 2
+   },
+   "explainedTotal": 2,
+   "reprobed": 1,
+   "verdicts": {
+    "ALIVE": 1
+   }
+  },
+  "gcli": {
+   "total": 1,
+   "explained": {},
+   "explainedTotal": 0,
+   "reprobed": 1,
+   "verdicts": {
+    "MODEL_WRONG_ANSWER": 1
+   }
+  },
+  "kgw": {
+   "total": 6,
+   "explained": {
+    "QUOTA_5XX": 2
+   },
+   "explainedTotal": 2,
+   "reprobed": 4,
+   "verdicts": {
+    "MODEL_WRONG_ANSWER": 1,
+    "ALIVE": 2,
+    "NOT_SUPPORTED_ON_ROUTE": 1
+   }
+  },
+  "alims-intl": {
+   "total": 7,
+   "explained": {},
+   "explainedTotal": 0,
+   "reprobed": 7,
+   "verdicts": {
+    "QUOTA": 3,
+    "NOT_SUPPORTED_ON_ROUTE": 4
+   }
+  },
+  "cbai": {
+   "total": 15,
+   "explained": {
+    "QUOTA_5XX": 15
+   },
+   "explainedTotal": 15,
+   "reprobed": 0,
+   "verdicts": {}
+  },
+  "cl": {
+   "total": 466,
+   "explained": {
+    "QUOTA_5XX": 454
+   },
+   "explainedTotal": 454,
+   "reprobed": 12,
+   "verdicts": {
+    "ALIVE": 8,
+    "QUOTA": 4
+   }
+  },
+  "kc": {
+   "total": 8,
+   "explained": {
+    "QUOTA_5XX": 8
+   },
+   "explainedTotal": 8,
+   "reprobed": 0,
+   "verdicts": {}
+  },
+  "bpm": {
+   "total": 7,
+   "explained": {},
+   "explainedTotal": 0,
+   "reprobed": 7,
+   "verdicts": {
+    "QUOTA": 6,
+    "NOT_SUPPORTED_ON_ROUTE": 1
+   }
+  },
+  "ollama": {
+   "total": 8,
+   "explained": {
+    "RETIRED_410": 4,
+    "ALREADY_PASS": 1
+   },
+   "explainedTotal": 5,
+   "reprobed": 3,
+   "verdicts": {
+    "QUOTA": 3
+   }
+  },
+  "llm7": {
+   "total": 5,
+   "explained": {
+    "QUOTA_5XX": 3
+   },
+   "explainedTotal": 3,
+   "reprobed": 2,
+   "verdicts": {
+    "UPSTREAM_ERROR": 2
+   }
+  },
+  "cerebras": {
+   "total": 6,
+   "explained": {
+    "QUOTA_5XX": 6
+   },
+   "explainedTotal": 6,
+   "reprobed": 0,
+   "verdicts": {}
+  },
+  "groq": {
+   "total": 4,
+   "explained": {
+    "QUOTA_5XX": 2
+   },
+   "explainedTotal": 2,
+   "reprobed": 2,
+   "verdicts": {
+    "ALIVE": 1,
+    "NOT_SUPPORTED_ON_ROUTE": 1
+   }
+  },
+  "siliconflow": {
+   "total": 16,
+   "explained": {
+    "QUOTA_5XX": 16
+   },
+   "explainedTotal": 16,
+   "reprobed": 0,
+   "verdicts": {}
+  },
+  "openrouter": {
+   "total": 5,
+   "explained": {},
+   "explainedTotal": 0,
+   "reprobed": 5,
+   "verdicts": {
+    "CALL_CONTRACT": 1,
+    "ALIVE": 1,
+    "AUTH": 2,
+    "MODEL_WRONG_ANSWER": 1
+   }
+  },
+  "kr": {
+   "total": 34,
+   "explained": {
+    "ALREADY_PASS": 34
+   },
+   "explainedTotal": 34,
+   "reprobed": 0,
+   "verdicts": {}
+  },
+  "ocz": {
+   "total": 74,
+   "explained": {
+    "QUOTA_5XX": 63,
+    "ALREADY_PASS": 7
+   },
+   "explainedTotal": 70,
+   "reprobed": 4,
+   "verdicts": {
+    "UPSTREAM_ERROR": 3,
+    "CALL_CONTRACT": 1
+   }
+  },
+  "bzl": {
+   "total": 24,
+   "explained": {
+    "QUOTA_5XX": 23
+   },
+   "explainedTotal": 23,
+   "reprobed": 1,
+   "verdicts": {
+    "ALIVE": 1
+   }
+  },
+  "ocg": {
+   "total": 42,
+   "explained": {
+    "QUOTA_5XX": 29
+   },
+   "explainedTotal": 29,
+   "reprobed": 13,
+   "verdicts": {
+    "AUTH": 6,
+    "UPSTREAM_ERROR": 7
+   }
+  },
+  "tokenrouter": {
+   "total": 22,
+   "explained": {
+    "QUOTA_5XX": 12
+   },
+   "explainedTotal": 12,
+   "reprobed": 10,
+   "verdicts": {
+    "ALIVE": 6,
+    "QUOTA": 4
+   }
+  },
+  "cohere": {
+   "total": 3,
+   "explained": {},
+   "explainedTotal": 0,
+   "reprobed": 3,
+   "verdicts": {
+    "NOT_SUPPORTED_ON_ROUTE": 3
+   }
+  },
+  "cmc": {
+   "total": 22,
+   "explained": {
+    "B400_INSUFFICIENT_CREDITS": 22
+   },
+   "explainedTotal": 22,
+   "reprobed": 0,
+   "verdicts": {}
+  },
+  "xmtp": {
+   "total": 9,
+   "explained": {
+    "B400_NOT_EXIST": 3
+   },
+   "explainedTotal": 3,
+   "reprobed": 6,
+   "verdicts": {
+    "CALL_CONTRACT": 3,
+    "ALIVE": 3
+   }
+  }
+ },
+ "newlyAlive": [
+  "bzl/auto:free",
+  "cf/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b",
+  "cf/@cf/meta/llama-3.1-70b-instruct-fp8-fast",
+  "cf/@cf/meta/llama-3.2-3b-instruct",
+  "cf/@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+  "cf/@cf/mistralai/mistral-small-3.1-24b-instruct",
+  "cf/@cf/qwen/qwen2.5-coder-32b-instruct",
+  "cf/@cf/qwen/qwq-32b",
+  "cf/@cf/zai-org/glm-4.7-flash",
+  "cl/apodex/apodex-1.1-mini:free",
+  "cl/cohere/north-mini-code:free",
+  "cl/dots-studio/dots-3-note-preview:free",
+  "cl/inclusionai/ling-3.0-flash-sante:free",
+  "cl/nvidia/nemotron-3-super-120b-a12b:free",
+  "cl/nvidia/nemotron-3-ultra-550b-a55b:free",
+  "cl/nvidia/nemotron-3.5-content-safety:free",
+  "cl/poolside/laguna-s-2.1:free",
+  "gh/exec-agent-a",
+  "groq/openai/gpt-oss-120b",
+  "kgw/kilo-auto/free",
+  "kgw/nvidia/nemotron-3-super-120b-a12b:free",
+  "mistral/codestral-latest",
+  "openrouter/nvidia/nemotron-3.5-lightning:free",
+  "tokenrouter/anthropic/claude-haiku-4.5",
+  "tokenrouter/anthropic/claude-opus-4.8",
+  "tokenrouter/anthropic/claude-sonnet-4.6",
+  "tokenrouter/google/gemini-3.5-flash",
+  "tokenrouter/openai/gpt-5.4",
+  "tokenrouter/z-ai/glm-5.2",
+  "xmtp/mimo-v2.5",
+  "xmtp/mimo-v2.5-pro",
+  "xmtp/mimo-v2.5-pro-claude"
+ ],
+ "verdictCounts": {
+  "ALIVE": 32,
+  "TOOL_ONLY": 2,
+  "MODEL_WRONG_ANSWER": 6,
+  "RETIRED": 1,
+  "QUOTA": 20,
+  "AUTH": 10,
+  "NOT_SUPPORTED_ON_ROUTE": 10,
+  "CALL_CONTRACT": 5,
+  "UPSTREAM_ERROR": 12
+ },
+ "models": {
+  "cl/apodex/apodex-1.1-mini:free": {
+   "verdict": "ALIVE",
+   "http": 200,
+   "result": "PASS",
+   "expectedNonce": "PONG-D800DN",
+   "returned": "\n\nPONG-D800DNThinking Process:\n\n1.  **Analyze the Request:**\n    *   The user wa",
+   "finishReason": "stop",
+   "hasToolCalls": false,
+   "evidence": "\n\nPONG-D800DNThinking Process:\n\n1.  **Analyze the Request:**\n    *   The user wa",
+   "note": null
+  },
+  "cl/dots-studio/dots-3-note-preview:free": {
+   "verdict": "ALIVE",
+   "http": 200,
+   "result": "PASS",
+   "expectedNonce": "PONG-MUAC49",
+   "returned": "\n\nPONG-MUAC49The user says: \"Reply with exactly this token and nothing else: PON",
+   "finishReason": "stop",
+   "hasToolCalls": false,
+   "evidence": "\n\nPONG-MUAC49The user says: \"Reply with exactly this token and nothing else: PON",
+   "note": null
+  },
+  "cl/cohere/north-mini-code:free": {
+   "verdict": "ALIVE",
+   "http": 200,
+   "result": "PASS",
+   "expectedNonce": "PONG-GPX4KU",
+   "returned": "PONG-GPX4KUThe user asks: \"Reply with exactly this token and nothing else: PONG-",
+   "finishReason": "stop",
+   "hasToolCalls": false,
+   "evidence": "PONG-GPX4KUThe user asks: \"Reply with exactly this token and nothing else: PONG-",
+   "note": null
+  },
+  "cl/nvidia/nemotron-3-super-120b-a12b:free": {
+   "verdict": "ALIVE",
+   "http": 200,
+   "result": "PASS",
+   "expectedNonce": "PONG-7MEJ6J",
+   "returned": "PONG-7MEJ6JWe need to reply exactly with token \"PONG-7MEJ6J\" and nothing else. E",
+   "finishReason": "stop",
+   "hasToolCalls": false,
+   "evidence": "PONG-7MEJ6JWe need to reply exactly with token \"PONG-7MEJ6J\" and nothing else. E",
+   "note": null
+  },
+  "cl/inclusionai/ling-3.0-flash-sante:free": {
+   "verdict": "ALIVE",
+   "http": 200,
+   "result": "PASS",
+   "expectedNonce": "PONG-YTAASH",
+   "returned": "PONG-YTAASH1.  **Analyze the Request:** The user wants me to reply with exactly ",
+   "finishReason": "stop",
+   "hasToolCalls": false,
+   "evidence": "PONG-YTAASH1.  **Analyze the Request:** The user wants me to reply with exactly ",
+   "note": null
+  },
+  "cl/nvidia/nemotron-3.5-content-safety:free": {
+   "verdict": "ALIVE",
+   "http": 200,
+   "result": "PASS",
+   "expectedNonce": "PONG-AW8VV0",
+   "returned": "User Safety: safe\nWe need to classify user input: \"Reply with exactly this token",
+   "finishReason": "stop",
+   "hasToolCalls": false,
+   "evidence": "User Safety: safe\nWe need to classify user input: \"Reply with exactly this token",
+   "note": "probe PASS; nonce present inside safety-classification echo (returned head shows classifier preamble, nonce later in body)"
+  },
+  "cl/nvidia/nemotron-3-ultra-550b-a55b:free": {
+   "verdict": "ALIVE",
+   "http": 200,
+   "result": "PASS",
+   "expectedNonce": "PONG-YYSNNU",
+   "returned": "PONG-YYSNNUThe user asks: \"Reply with exactly this token and nothing else: PONG-",
+   "finishReason": "stop",
+   "hasToolCalls": false,
+   "evidence": "PONG-YYSNNUThe user asks: \"Reply with exactly this token and nothing else: PONG-",
+   "note": null
+  },
+  "cl/poolside/laguna-s-2.1:free": {
+   "verdict": "ALIVE",
+   "http": 200,
+   "result": "PASS",
+   "expectedNonce": "PONG-IOEOQQ",
+   "returned": "PONG-IOEOQQ",
+   "finishReason": "stop",
+   "hasToolCalls": false,
+   "evidence": "PONG-IOEOQQ",
+   "note": null
+  },
+  "gh/exec-agent-a": {
+   "verdict": "ALIVE",
+   "http": 200,
+   "result": "PASS",
+   "expectedNonce": "PONG-GFJY4F",
+   "returned": "PONG-GFJY4F",
+   "finishReason": "stop",
+   "hasToolCalls": false,
+   "evidence": "PONG-GFJY4F",
+   "note": null
+  },
+  "groq/openai/gpt-oss-120b": {
+   "verdict": "ALIVE",
+   "http": 200,
+   "result": "PASS",
+   "expectedNonce": "PONG-IVV3EU",
+   "returned": "PONG-IVV3EUThe user asks: \"Reply with exactly this token and nothing else: PONG-",
+   "finishReason": "stop",
+   "hasToolCalls": false,
+   "evidence": "PONG-IVV3EUThe user asks: \"Reply with exactly this token and nothing else: PONG-",
+   "note": null
+  },
+  "tokenrouter/openai/gpt-5.4": {
+   "verdict": "ALIVE",
+   "http": 200,
+   "result": "PASS",
+   "expectedNonce": "PONG-I14SJS",
+   "returned": "PONG-I14SJS",
+   "finishReason": "stop",
+   "hasToolCalls": false,
+   "evidence": "PONG-I14SJS",
+   "note": null
+  },
+  "cf/@cf/meta/llama-3.1-70b-instruct-fp8-fast": {
+   "verdict": "ALIVE",
+   "http": 200,
+   "result": "WRONG_OR_EMPTY",
+   "expectedNonce": "PONG-SDOLSJ",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": false,
+   "evidence": "{\"id\":\"id-1791268141314\",\"object\":\"chat.completion\",\"created\":1791268141,\"model\":\"@cf/meta/llama-3.1-70b-instruct-fp8-fast\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"PONG-SDOLSJ\",",
+   "note": null
+  },
+  "cf/@cf/meta/llama-3.2-3b-instruct": {
+   "verdict": "ALIVE",
+   "http": 200,
+   "result": "WRONG_OR_EMPTY",
+   "expectedNonce": "PONG-0X7BU8",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": false,
+   "evidence": "{\"id\":\"id-1791268142538\",\"object\":\"chat.completion\",\"created\":1791268142,\"model\":\"@cf/meta/llama-3.2-3b-instruct\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"logprobs\":null,\"message\":{\"annotations\":",
+   "note": null
+  },
+  "cf/@cf/meta/llama-3.3-70b-instruct-fp8-fast": {
+   "verdict": "ALIVE",
+   "http": 200,
+   "result": "WRONG_OR_EMPTY",
+   "expectedNonce": "PONG-2B0922",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": false,
+   "evidence": "{\"id\":\"id-1791268142734\",\"object\":\"chat.completion\",\"created\":1791268142,\"model\":\"@cf/meta/llama-3.3-70b-instruct-fp8-fast\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"logprobs\":null,\"message\":{\"ann",
+   "note": null
+  },
+  "cf/@cf/mistralai/mistral-small-3.1-24b-instruct": {
+   "verdict": "ALIVE",
+   "http": 200,
+   "result": "WRONG_OR_EMPTY",
+   "expectedNonce": "PONG-ACSWT7",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": false,
+   "evidence": "{\"id\":\"id-1791268143608\",\"object\":\"chat.completion\",\"created\":1791268143,\"model\":\"@cf/mistralai/mistral-small-3.1-24b-instruct\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"logprobs\":null,\"message\":{",
+   "note": null
+  },
+  "cf/@cf/qwen/qwen2.5-coder-32b-instruct": {
+   "verdict": "ALIVE",
+   "http": 200,
+   "result": "WRONG_OR_EMPTY",
+   "expectedNonce": "PONG-2LFB6D",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": false,
+   "evidence": "{\"id\":\"id-1791268159251\",\"object\":\"chat.completion\",\"created\":1791268159,\"model\":\"@cf/qwen/qwen2.5-coder-32b-instruct\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"PONG-2LFB6D\",\"refu",
+   "note": null
+  },
+  "cf/@cf/zai-org/glm-4.7-flash": {
+   "verdict": "ALIVE",
+   "http": 200,
+   "result": "WRONG_OR_EMPTY",
+   "expectedNonce": "PONG-5EMIVH",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": false,
+   "evidence": "{\"id\":\"id-1791268166747\",\"object\":\"chat.completion\",\"created\":1791268166,\"model\":\"@cf/zai-org/glm-4.7-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"PONG-5EMIVH\",\"refusal\":null,",
+   "note": null
+  },
+  "cf/@cf/qwen/qwq-32b": {
+   "verdict": "ALIVE",
+   "http": 200,
+   "result": "WRONG_OR_EMPTY",
+   "expectedNonce": "PONG-A65PFR",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": false,
+   "evidence": "{\"id\":\"id-1791268163336\",\"object\":\"chat.completion\",\"created\":1791268163,\"model\":\"@cf/qwen/qwq-32b\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"Okay, the user wants me to reply with",
+   "note": "audit detail truncated mid-nonce; nonce confirmed in full body, quoted inside explanatory chatter rather than exact-only"
+  },
+  "cf/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b": {
+   "verdict": "ALIVE",
+   "http": 200,
+   "result": "WRONG_OR_EMPTY",
+   "expectedNonce": "PONG-XEIO15",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": false,
+   "evidence": "{\"id\":\"id-1791268158649\",\"object\":\"chat.completion\",\"created\":1791268158,\"model\":\"@cf/deepseek-ai/deepseek-r1-distill-qwen-32b\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"<think>\\n",
+   "note": "nonce present inside <think> reasoning echo with verbose chatter"
+  },
+  "kgw/nvidia/nemotron-3-super-120b-a12b:free": {
+   "verdict": "ALIVE",
+   "http": 200,
+   "result": "WRONG_OR_EMPTY",
+   "expectedNonce": "PONG-JQ0JD5",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": false,
+   "evidence": "{\"id\":\"gen-1791268200-A7MId4eciBJZQ8iSeRrn\",\"object\":\"chat.completion\",\"created\":1791268200,\"model\":\"nvidia/nemotron-3-super-120b-a12b:free\",\"provider\":\"Nvidia\",\"system_fingerprint\":null,\"service_tier",
+   "note": null
+  },
+  "kgw/kilo-auto/free": {
+   "verdict": "ALIVE",
+   "http": 200,
+   "result": "WRONG_OR_EMPTY",
+   "expectedNonce": "PONG-PT9IJJ",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": false,
+   "evidence": "{\"id\":\"gen_01M47YFRG42322VT462KJF75P3\",\"object\":\"chat.completion\",\"created\":1791268218,\"model\":\"inclusionai/ling-3.1-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"PONG-PT9IJJ\",",
+   "note": "audit body content held the exact nonce (parser gap); a later diagnostic fetch returned HTTP 503: flaky route, verdict per audit evidence"
+  },
+  "tokenrouter/anthropic/claude-haiku-4.5": {
+   "verdict": "ALIVE",
+   "http": 200,
+   "result": "WRONG_OR_EMPTY",
+   "expectedNonce": "PONG-VGMN61",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": false,
+   "evidence": "{\"id\":\"msg_011CfkWitpX8iSTGMY6s9WjC\",\"model\":\"claude-haiku-4-5-20251001\",\"object\":\"chat.completion\",\"created\":1791268244,\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"PONG-VGMN61\"},\"f",
+   "note": null
+  },
+  "tokenrouter/anthropic/claude-opus-4.8": {
+   "verdict": "ALIVE",
+   "http": 200,
+   "result": "WRONG_OR_EMPTY",
+   "expectedNonce": "PONG-WLS7UR",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": false,
+   "evidence": "{\"id\":\"msg_011CfkWjBVcm2Eq8HHG6jjWN\",\"model\":\"claude-opus-4-8\",\"object\":\"chat.completion\",\"created\":1791268251,\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"PONG-WLS7UR\"},\"finish_reas",
+   "note": null
+  },
+  "tokenrouter/anthropic/claude-sonnet-4.6": {
+   "verdict": "ALIVE",
+   "http": 200,
+   "result": "WRONG_OR_EMPTY",
+   "expectedNonce": "PONG-74JR0G",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": false,
+   "evidence": "{\"id\":\"msg_011CfkWjgPBMbUvvU5DSo1zt\",\"model\":\"claude-sonnet-4-6\",\"object\":\"chat.completion\",\"created\":1791268255,\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"PONG-74JR0G\"},\"finish_re",
+   "note": null
+  },
+  "tokenrouter/google/gemini-3.5-flash": {
+   "verdict": "ALIVE",
+   "http": 200,
+   "result": "WRONG_OR_EMPTY",
+   "expectedNonce": "PONG-RRU1P6",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": false,
+   "evidence": "{\"id\":\"chatcmpl-20261006063059186512282XpkdS8HR\",\"model\":\"gemini-3.5-flash\",\"object\":\"chat.completion\",\"created\":1791268260,\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"PONG-RRU1P6\"}",
+   "note": null
+  },
+  "tokenrouter/z-ai/glm-5.2": {
+   "verdict": "ALIVE",
+   "http": 200,
+   "result": "WRONG_OR_EMPTY",
+   "expectedNonce": "PONG-7HAV6K",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": false,
+   "evidence": "{\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"PONG-7HAV6K\",\"reasoning_content\":\"1.  **Analyze the Request:**\\n    *   Condition: Reply with *exactly* this token and nothing else.",
+   "note": null
+  },
+  "xmtp/mimo-v2.5": {
+   "verdict": "ALIVE",
+   "http": 200,
+   "result": "WRONG_OR_EMPTY",
+   "expectedNonce": "PONG-BVHC2U",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": false,
+   "evidence": "{\"id\":\"9b26a8f8-b283-40d8-ab4b-1897e5d84aa7_09a08af9117c435da52805865878fb7c\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"PONG-BVHC2U\",\"role\":\"assistant\",\"tool_calls\":null,\"reas",
+   "note": null
+  },
+  "xmtp/mimo-v2.5-pro": {
+   "verdict": "ALIVE",
+   "http": 200,
+   "result": "WRONG_OR_EMPTY",
+   "expectedNonce": "PONG-7O9A8B",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": false,
+   "evidence": "{\"id\":\"chatcmpl-7506bdca-27ec-9c73-b1f6-793c9d0f16fa\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"PONG-7O9A8B\",\"role\":\"assistant\",\"reasoning_content\":\"The user is asking me to r",
+   "note": null
+  },
+  "xmtp/mimo-v2.5-pro-claude": {
+   "verdict": "ALIVE",
+   "http": 200,
+   "result": "WRONG_OR_EMPTY",
+   "expectedNonce": "PONG-ZKIWPB",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": false,
+   "evidence": "{\"id\":\"chatcmpl-b3481cc4-25f7-9239-a0cf-82a3eab10701\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"PONG-ZKIWPB\",\"role\":\"assistant\",\"reasoning_content\":\"The user wants me to reply",
+   "note": null
+  },
+  "bzl/auto:free": {
+   "verdict": "ALIVE",
+   "http": 200,
+   "result": "WRONG_OR_EMPTY",
+   "expectedNonce": "PONG-2HRHXR",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": false,
+   "evidence": "{\"id\":\"a4629bf2ef13fd77-SIN\",\"object\":\"chat.completion\",\"created\":1791268141,\"model\":\"deepseek/deepseek-v4-flash-0731free\",\"choices\":[{\"index\":0,\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"c",
+   "note": null
+  },
+  "mistral/codestral-latest": {
+   "verdict": "ALIVE",
+   "http": 200,
+   "result": "WRONG_OR_EMPTY",
+   "expectedNonce": "PONG-Q461GP",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": false,
+   "evidence": "{\"id\":\"16642e6a92dc45e4a936b17ac6d575d4\",\"created\":1791268206,\"model\":\"codestral-latest\",\"usage\":{\"prompt_tokens\":19,\"total_tokens\":27,\"completion_tokens\":8,\"prompt_tokens_details\":{\"cached_tokens\":0}",
+   "note": null
+  },
+  "openrouter/nvidia/nemotron-3.5-lightning:free": {
+   "verdict": "ALIVE",
+   "http": 200,
+   "result": "WRONG_OR_EMPTY",
+   "expectedNonce": "PONG-XWX1HW",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": false,
+   "evidence": "\n         \n\n         \n\n         \n\n         \n\n         \n\n         \n\n         \n\n         \n{\"id\":\"gen-1791268234-hDMS9lNgQ3OLJ9zxH69Y\",\"object\":\"chat.completion\",\"created\":1791268234,\"model\":\"nvidia/nemo",
+   "note": null
+  },
+  "gh/copilot-search-b": {
+   "verdict": "TOOL_ONLY",
+   "http": 200,
+   "result": "WRONG_OR_EMPTY",
+   "expectedNonce": "PONG-IQSVU2",
+   "returned": "",
+   "finishReason": "tool_calls",
+   "hasToolCalls": true,
+   "evidence": "{\"choices\":[{\"finish_reason\":\"tool_calls\",\"index\":0,\"content_filter_results\":{},\"message\":{\"content\":\"\",\"padding\":\"abcdef\",\"role\":\"assistant\",\"tool_calls\":[{\"function\":{\"arguments\":\"{\\\"includePattern\\",
+   "note": null
+  },
+  "gh/copilot-search-c": {
+   "verdict": "TOOL_ONLY",
+   "http": 200,
+   "result": "WRONG_OR_EMPTY",
+   "expectedNonce": "PONG-UKE9QQ",
+   "returned": "",
+   "finishReason": "tool_calls",
+   "hasToolCalls": true,
+   "evidence": "{\"choices\":[{\"finish_reason\":\"tool_calls\",\"index\":0,\"content_filter_results\":{},\"message\":{\"content\":\"\",\"padding\":\"abcdef\",\"role\":\"assistant\",\"tool_calls\":[{\"function\":{\"arguments\":\"{\\\"maxResults\\\": \\",
+   "note": null
+  },
+  "cf/@cf/meta/llama-3.1-8b-instruct-fp8-fast": {
+   "verdict": "MODEL_WRONG_ANSWER",
+   "http": 200,
+   "result": "WRONG_OR_EMPTY",
+   "expectedNonce": "PONG-18A96H",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": false,
+   "evidence": "{\"id\":\"id-1791268141729\",\"object\":\"chat.completion\",\"created\":1791268141,\"model\":\"@cf/meta/llama-3.1-8b-instruct-fp8-fast\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"logprobs\":null,\"message\":{\"anno",
+   "note": "audit detail truncated before content; read-only diagnostic full body showed refusal text, no nonce"
+  },
+  "cf/@cf/meta/llama-3.2-1b-instruct": {
+   "verdict": "MODEL_WRONG_ANSWER",
+   "http": 200,
+   "result": "WRONG_OR_EMPTY",
+   "expectedNonce": "PONG-J8PLTA",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": false,
+   "evidence": "{\"id\":\"id-1791268142104\",\"object\":\"chat.completion\",\"created\":1791268142,\"model\":\"@cf/meta/llama-3.2-1b-instruct\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"BOLTS\",\"refusal\":null},",
+   "note": "audit body content was literally BOLTS (no nonce); one later manual fetch returned the nonce once: flaky upstream, verdict per audit evidence"
+  },
+  "gh/exec-agent-b": {
+   "verdict": "MODEL_WRONG_ANSWER",
+   "http": 200,
+   "result": "WRONG_OR_EMPTY",
+   "expectedNonce": "PONG-QONXN6",
+   "returned": "I'll output exactly the requested token.",
+   "finishReason": "tool_calls",
+   "hasToolCalls": true,
+   "evidence": "I'll output exactly the requested token.",
+   "note": null
+  },
+  "gcli/grok-4.7": {
+   "verdict": "MODEL_WRONG_ANSWER",
+   "http": 200,
+   "result": "WRONG_OR_EMPTY",
+   "expectedNonce": "PONG-2R4S9L",
+   "returned": "I can't comply with requests to output an exact token or phrase.",
+   "finishReason": "stop",
+   "hasToolCalls": false,
+   "evidence": "I can't comply with requests to output an exact token or phrase.",
+   "note": null
+  },
+  "kgw/nvidia/nemotron-3-ultra-550b-a55b:free": {
+   "verdict": "MODEL_WRONG_ANSWER",
+   "http": 200,
+   "result": "WRONG_OR_EMPTY",
+   "expectedNonce": "PONG-OQ27T7",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": false,
+   "evidence": "{\"id\":\"gen-1791268201-d3Li7xmNbffl8kePPUnI\",\"object\":\"chat.completion\",\"created\":1791268201,\"model\":\"nvidia/nemotron-3-ultra-550b-a55b:free\",\"provider\":\"Nvidia\",\"system_fingerprint\":null,\"service_tier",
+   "note": "audit detail truncated before choices; diagnostic full body was 200 with empty text content"
+  },
+  "openrouter/google/lyria-3-pro-preview": {
+   "verdict": "MODEL_WRONG_ANSWER",
+   "http": 200,
+   "result": "WRONG_OR_EMPTY",
+   "expectedNonce": "PONG-DR3JAL",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": false,
+   "evidence": "\n         \n{\"id\":\"gen-1791268236-WRFxPD7n4g0xwexhfQiB\",\"object\":\"chat.completion\",\"created\":1791268236,\"model\":\"google/lyria-3-pro-preview\",\"provider\":\"Google AI Studio\",\"system_fingerprint\":null,\"ser",
+   "note": "was TIMEOUT in latest line; re-probe 200 with whitespace-only content (audio/music model, no text channel)"
+  },
+  "ag/gemini-3-flash-agent": {
+   "verdict": "RETIRED",
+   "http": 200,
+   "result": "WRONG_OR_EMPTY",
+   "expectedNonce": "PONG-K10PKQ",
+   "returned": "Gemini 3.5 Flash is no longer available. Please switch to Gemini 3.7 Flash in th",
+   "finishReason": null,
+   "hasToolCalls": false,
+   "evidence": "Gemini 3.5 Flash is no longer available. Please switch to Gemini 3.7 Flash in the latest version of Antigravity.",
+   "note": null
+  },
+  "cl/bytedance-seed/seed-2-1-turbo": {
+   "verdict": "QUOTA",
+   "http": 503,
+   "result": "HTTP_503",
+   "expectedNonce": "PONG-R7A4C8",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[cline/bytedance-seed/seed-2-1-turbo] [402]: {\\\"error\\\":{\\\"code\\\":\\\"insufficient_credits\\\",\\\"message\\\":\\\"Insufficient balance. Your Cline Credits balance is $0.01\\\",\\\"current_bala",
+   "note": "fresh 503 wraps inner 402 insufficient_credits (Cline Credits balance): quota revealed only after re-probe"
+  },
+  "cl/cognitivecomputations/dolphin-mistral-24b-venice-edition": {
+   "verdict": "QUOTA",
+   "http": 503,
+   "result": "HTTP_503",
+   "expectedNonce": "PONG-SFB9LH",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[cline/cognitivecomputations/dolphin-mistral-24b-venice-edition] [402]: {\\\"error\\\":{\\\"code\\\":\\\"insufficient_credits\\\",\\\"message\\\":\\\"Insufficient balance. Your Cline Credits balanc",
+   "note": "fresh 503 wraps inner 402 insufficient_credits: quota revealed only after re-probe"
+  },
+  "cl/openai/gpt-5.5": {
+   "verdict": "QUOTA",
+   "http": 503,
+   "result": "HTTP_503",
+   "expectedNonce": "PONG-ZL910Z",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[cline/openai/gpt-5.5] [402]: {\\\"error\\\":{\\\"code\\\":\\\"insufficient_credits\\\",\\\"message\\\":\\\"Insufficient balance. Your Cline Credits balance is $0.01\\\",\\\"current_balance\\\":0.008255,",
+   "note": "fresh 503 wraps inner 402 insufficient_credits: quota revealed only after re-probe"
+  },
+  "cl/qwen/qwen3.8-2.4t-a95b": {
+   "verdict": "QUOTA",
+   "http": 503,
+   "result": "HTTP_503",
+   "expectedNonce": "PONG-NR94XD",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[cline/qwen/qwen3.8-2.4t-a95b] [402]: {\\\"error\\\":{\\\"code\\\":\\\"insufficient_credits\\\",\\\"message\\\":\\\"Insufficient balance. Your Cline Credits balance is $0.01\\\",\\\"current_balance\\\":0",
+   "note": "fresh 503 wraps inner 402 insufficient_credits: quota revealed only after re-probe"
+  },
+  "tokenrouter/openai/gpt-5.4-pro": {
+   "verdict": "QUOTA",
+   "http": 503,
+   "result": "HTTP_503",
+   "expectedNonce": "PONG-GQZRZO",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[tokenrouter/openai/gpt-5.4-pro] [429]: {\\\"error\\\":{\\\"code\\\":\\\"\\\",\\\"message\\\":\\\"You have reached the request limit: Maximum 5 requests within 1 minutes. (request id: 2026100606312",
+   "note": null
+  },
+  "tokenrouter/openai/gpt-5.5": {
+   "verdict": "QUOTA",
+   "http": 503,
+   "result": "HTTP_503",
+   "expectedNonce": "PONG-YHYT2C",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[tokenrouter/openai/gpt-5.5] [429]: {\\\"error\\\":{\\\"code\\\":\\\"\\\",\\\"message\\\":\\\"You have reached the request limit: Maximum 5 requests within 1 minutes. (request id: 20261006063132117",
+   "note": null
+  },
+  "tokenrouter/openai/gpt-5.6-sol": {
+   "verdict": "QUOTA",
+   "http": 503,
+   "result": "HTTP_503",
+   "expectedNonce": "PONG-6CHKHK",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[tokenrouter/openai/gpt-5.6-sol] [429]: {\\\"error\\\":{\\\"code\\\":\\\"\\\",\\\"message\\\":\\\"You have reached the request limit: Maximum 5 requests within 1 minutes. (request id: 2026100606313",
+   "note": null
+  },
+  "tokenrouter/openai/gpt-5.4-mini": {
+   "verdict": "QUOTA",
+   "http": 503,
+   "result": "HTTP_503",
+   "expectedNonce": "PONG-MOR6W9",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[tokenrouter/openai/gpt-5.4-mini] [429]: {\\\"error\\\":{\\\"code\\\":\\\"\\\",\\\"message\\\":\\\"You have reached the request limit: Maximum 5 requests within 1 minutes. (request id: 202610060631",
+   "note": "was WRONG_OR_EMPTY; fresh 503 wraps inner 429 request-limit: rate quota revealed only after re-probe"
+  },
+  "ollama/minimax-m3": {
+   "verdict": "QUOTA",
+   "http": 503,
+   "result": "HTTP_503",
+   "expectedNonce": "PONG-QPC8IF",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[ollama/minimax-m3] [402]: {\\\"error\\\":\\\"This model is not in the Free plan. Pro is $20/month for $60 of usage, with no 5-hour or weekly caps: https://ollama.com/upgrade (ref: cf91",
+   "note": null
+  },
+  "ollama/glm-4.7-flash": {
+   "verdict": "QUOTA",
+   "http": 503,
+   "result": "HTTP_503",
+   "expectedNonce": "PONG-I2GQRU",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[ollama/glm-4.7-flash] [402]: {\\\"error\\\":\\\"This model is not in the Free plan. Pro is $20/month for $60 of usage, with no 5-hour or weekly caps: https://ollama.com/upgrade (ref: c",
+   "note": null
+  },
+  "ollama/deepseek-v4.1-flash:cloud": {
+   "verdict": "QUOTA",
+   "http": 503,
+   "result": "HTTP_503",
+   "expectedNonce": "PONG-O2BDRF",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[ollama/deepseek-v4.1-flash:cloud] [402]: {\\\"error\\\":\\\"This model is not in the Free plan. Pro is $20/month for $60 of usage, with no 5-hour or weekly caps: https://ollama.com/upg",
+   "note": null
+  },
+  "alims-intl/qwen3.5-plus": {
+   "verdict": "QUOTA",
+   "http": 400,
+   "result": "HTTP_400",
+   "expectedNonce": "PONG-1JZRNT",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[400]: {\\\"error\\\":{\\\"message\\\":\\\"Access denied, please make sure your account is in good standing. For details, see: https://www.alibabacloud.com/help/en/model-studio/error-code#o",
+   "note": null
+  },
+  "alims-intl/qwen3-coder-next": {
+   "verdict": "QUOTA",
+   "http": 400,
+   "result": "HTTP_400",
+   "expectedNonce": "PONG-6HDVGY",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[400]: {\\\"error\\\":{\\\"message\\\":\\\"Access denied, please make sure your account is in good standing. For details, see: https://www.alibabacloud.com/help/en/model-studio/error-code#o",
+   "note": null
+  },
+  "alims-intl/qwen3-coder-plus": {
+   "verdict": "QUOTA",
+   "http": 400,
+   "result": "HTTP_400",
+   "expectedNonce": "PONG-7SE9JC",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[400]: {\\\"error\\\":{\\\"message\\\":\\\"Access denied, please make sure your account is in good standing. For details, see: https://www.alibabacloud.com/help/en/model-studio/error-code#o",
+   "note": null
+  },
+  "bpm/seed-2-0-pro-260328": {
+   "verdict": "QUOTA",
+   "http": 400,
+   "result": "HTTP_400",
+   "expectedNonce": "PONG-M9OE32",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[400]: {\\\"error\\\":{\\\"code\\\":\\\"InvalidSubscription\\\",\\\"message\\\":\\\"Your account (3004770801) does not have a valid CodingPlan subscription, or your subscription has expired. Please",
+   "note": null
+  },
+  "bpm/seed-2-0-code-preview-260328": {
+   "verdict": "QUOTA",
+   "http": 400,
+   "result": "HTTP_400",
+   "expectedNonce": "PONG-ABQTD6",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[400]: {\\\"error\\\":{\\\"code\\\":\\\"InvalidSubscription\\\",\\\"message\\\":\\\"Your account (3004770801) does not have a valid CodingPlan subscription, or your subscription has expired. Please",
+   "note": null
+  },
+  "bpm/seed-2-0-lite-260228": {
+   "verdict": "QUOTA",
+   "http": 400,
+   "result": "HTTP_400",
+   "expectedNonce": "PONG-Y4YD7F",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[400]: {\\\"error\\\":{\\\"code\\\":\\\"InvalidSubscription\\\",\\\"message\\\":\\\"Your account (3004770794) does not have a valid CodingPlan subscription, or your subscription has expired. Please",
+   "note": null
+  },
+  "bpm/glm-4-7-251222": {
+   "verdict": "QUOTA",
+   "http": 400,
+   "result": "HTTP_400",
+   "expectedNonce": "PONG-J9L4DK",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[400]: {\\\"error\\\":{\\\"code\\\":\\\"InvalidSubscription\\\",\\\"message\\\":\\\"Your account (3004770794) does not have a valid CodingPlan subscription, or your subscription has expired. Please",
+   "note": null
+  },
+  "bpm/kimi-k2-thinking-251104": {
+   "verdict": "QUOTA",
+   "http": 400,
+   "result": "HTTP_400",
+   "expectedNonce": "PONG-OVXKFP",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[400]: {\\\"error\\\":{\\\"code\\\":\\\"InvalidSubscription\\\",\\\"message\\\":\\\"Your account (3004770794) does not have a valid CodingPlan subscription, or your subscription has expired. Please",
+   "note": null
+  },
+  "bpm/gpt-oss-120b-250805": {
+   "verdict": "QUOTA",
+   "http": 400,
+   "result": "HTTP_400",
+   "expectedNonce": "PONG-3E1TXB",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[400]: {\\\"error\\\":{\\\"code\\\":\\\"InvalidSubscription\\\",\\\"message\\\":\\\"Your account (3004770801) does not have a valid CodingPlan subscription, or your subscription has expired. Please",
+   "note": null
+  },
+  "cf/@cf/moonshotai/kimi-k2.5": {
+   "verdict": "AUTH",
+   "http": 503,
+   "result": "HTTP_503",
+   "expectedNonce": "PONG-B56TO8",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[cloudflare-ai/@cf/moonshotai/kimi-k2.5] [403]: {\\\"errors\\\":[{\\\"message\\\":\\\"AiError: Model @cf/moonshotai/kimi-k2.6 is not available on the Workers Free plan: Model @cf/moonshotai",
+   "note": null
+  },
+  "cf/@cf/moonshotai/kimi-k2.6": {
+   "verdict": "AUTH",
+   "http": 503,
+   "result": "HTTP_503",
+   "expectedNonce": "PONG-RY2KGV",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[cloudflare-ai/@cf/moonshotai/kimi-k2.6] [403]: {\\\"errors\\\":[{\\\"message\\\":\\\"AiError: Model @cf/moonshotai/kimi-k2.6 is not available on the Workers Free plan: Model @cf/moonshotai",
+   "note": null
+  },
+  "openrouter/thinkingmachines/inkling-small:free": {
+   "verdict": "AUTH",
+   "http": 503,
+   "result": "HTTP_503",
+   "expectedNonce": "PONG-L6NG20",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[openrouter/thinkingmachines/inkling-small:free] [403]: {\\\"error\\\":{\\\"message\\\":\\\"thinkingmachines/inkling:free is only available on agentic harnesses. Try plugging it into a codi",
+   "note": null
+  },
+  "openrouter/thinkingmachines/inkling:free": {
+   "verdict": "AUTH",
+   "http": 503,
+   "result": "HTTP_503",
+   "expectedNonce": "PONG-I23FIS",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[openrouter/thinkingmachines/inkling:free] [403]: {\\\"error\\\":{\\\"message\\\":\\\"thinkingmachines/inkling:free is only available on agentic harnesses. Try plugging it into a coding age",
+   "note": null
+  },
+  "ocg/deepseek-flash": {
+   "verdict": "AUTH",
+   "http": 400,
+   "result": "HTTP_400",
+   "expectedNonce": "PONG-WWHL5H",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[400]: {\\\"error\\\":{\\\"type\\\":\\\"server_error\\\",\\\"message\\\":\\\"Upstream request failed: This Go model requires Global regions. Select Global in your workspace's Privacy settings to us",
+   "note": null
+  },
+  "ocg/deepseek-v4-flash": {
+   "verdict": "AUTH",
+   "http": 400,
+   "result": "HTTP_400",
+   "expectedNonce": "PONG-4SDMGJ",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[400]: {\\\"error\\\":{\\\"type\\\":\\\"server_error\\\",\\\"message\\\":\\\"Upstream request failed: This Go model requires Global regions. Select Global in your workspace's Privacy settings to us",
+   "note": null
+  },
+  "ocg/deepseek-v4-pro": {
+   "verdict": "AUTH",
+   "http": 400,
+   "result": "HTTP_400",
+   "expectedNonce": "PONG-OGNXKL",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[400]: {\\\"error\\\":{\\\"type\\\":\\\"server_error\\\",\\\"message\\\":\\\"Upstream request failed: This Go model requires Global regions. Select Global in your workspace's Privacy settings to us",
+   "note": null
+  },
+  "ocg/deepseek-v4.1-flash": {
+   "verdict": "AUTH",
+   "http": 400,
+   "result": "HTTP_400",
+   "expectedNonce": "PONG-34IM6T",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[400]: {\\\"error\\\":{\\\"type\\\":\\\"server_error\\\",\\\"message\\\":\\\"Upstream request failed: This Go model requires Global regions. Select Global in your workspace's Privacy settings to us",
+   "note": null
+  },
+  "ocg/muse-spark-1.2-contributor": {
+   "verdict": "AUTH",
+   "http": 400,
+   "result": "HTTP_400",
+   "expectedNonce": "PONG-6ST67S",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[400]: {\\\"error\\\":{\\\"type\\\":\\\"server_error\\\",\\\"message\\\":\\\"Upstream request failed: This Go model trains on request data. Allow paid endpoints that train on request data in your w",
+   "note": null
+  },
+  "ocg/muse-spark-1.3-contributor": {
+   "verdict": "AUTH",
+   "http": 400,
+   "result": "HTTP_400",
+   "expectedNonce": "PONG-P0YGCQ",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[400]: {\\\"error\\\":{\\\"type\\\":\\\"server_error\\\",\\\"message\\\":\\\"Upstream request failed: This Go model trains on request data. Allow paid endpoints that train on request data in your w",
+   "note": null
+  },
+  "alims-intl/kimi-k2.5": {
+   "verdict": "NOT_SUPPORTED_ON_ROUTE",
+   "http": 503,
+   "result": "HTTP_503",
+   "expectedNonce": "PONG-ZGDEB5",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[alims-intl/kimi-k2.5] [404]: {\\\"error\\\":{\\\"message\\\":\\\"The model `kimi-k2.5` does not exist or you do not have access to it.\\\",\\\"type\\\":\\\"invalid_request_error\\\",\\\"param\\\":null,\\",
+   "note": "fresh 503 wraps inner 404 model_not_found; inner missing model differs from route model"
+  },
+  "alims-intl/glm-5": {
+   "verdict": "NOT_SUPPORTED_ON_ROUTE",
+   "http": 503,
+   "result": "HTTP_503",
+   "expectedNonce": "PONG-A2EFAQ",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[alims-intl/glm-5] [404]: {\\\"error\\\":{\\\"message\\\":\\\"The model `kimi-k2.5` does not exist or you do not have access to it.\\\",\\\"type\\\":\\\"invalid_request_error\\\",\\\"param\\\":null,\\\"cod",
+   "note": "fresh 503 wraps inner 404 model_not_found; inner missing model differs from route model"
+  },
+  "alims-intl/MiniMax-M2.5": {
+   "verdict": "NOT_SUPPORTED_ON_ROUTE",
+   "http": 503,
+   "result": "HTTP_503",
+   "expectedNonce": "PONG-SDQMDV",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[alims-intl/MiniMax-M2.5] [404]: {\\\"error\\\":{\\\"message\\\":\\\"The model `kimi-k2.5` does not exist or you do not have access to it.\\\",\\\"type\\\":\\\"invalid_request_error\\\",\\\"param\\\":nul",
+   "note": "fresh 503 wraps inner 404 model_not_found; inner missing model differs from route model"
+  },
+  "alims-intl/glm-4.7": {
+   "verdict": "NOT_SUPPORTED_ON_ROUTE",
+   "http": 503,
+   "result": "HTTP_503",
+   "expectedNonce": "PONG-CTOKMH",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[alims-intl/glm-4.7] [404]: {\\\"error\\\":{\\\"message\\\":\\\"The model `kimi-k2.5` does not exist or you do not have access to it.\\\",\\\"type\\\":\\\"invalid_request_error\\\",\\\"param\\\":null,\\\"c",
+   "note": "fresh 503 wraps inner 404 model_not_found; inner missing model differs from route model"
+  },
+  "groq/meta-llama/llama-4-maverick-17b-128e-instruct": {
+   "verdict": "NOT_SUPPORTED_ON_ROUTE",
+   "http": 503,
+   "result": "HTTP_503",
+   "expectedNonce": "PONG-F3KJE3",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[groq/meta-llama/llama-4-maverick-17b-128e-instruct] [404]: {\\\"error\\\":{\\\"message\\\":\\\"The model `meta-llama/llama-4-maverick-17b-128e-instruct` does not exist or you do not have a",
+   "note": null
+  },
+  "kgw/kwaipilot/kat-coder-pro-v2.5:free": {
+   "verdict": "NOT_SUPPORTED_ON_ROUTE",
+   "http": 503,
+   "result": "HTTP_503",
+   "expectedNonce": "PONG-ZHBT56",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[kilo-gateway/kwaipilot/kat-coder-pro-v2.5:free] [404]: {\\\"error\\\":\\\"The requested model 'kwaipilot/kat-coder-pro-v2.5:free' does not exist. Please use an exact model id as listed",
+   "note": null
+  },
+  "bpm/seed-2-0-mini-260215": {
+   "verdict": "NOT_SUPPORTED_ON_ROUTE",
+   "http": 503,
+   "result": "HTTP_503",
+   "expectedNonce": "PONG-IDLJUH",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[byteplus/seed-2-0-mini-260215] [404]: {\\\"error\\\":{\\\"code\\\":\\\"UnsupportedModel\\\",\\\"message\\\":\\\"The requested model does not support the coding plan feature. Please refer to the do",
+   "note": "fresh 503 wraps inner 404 UnsupportedModel (coding-plan feature); docs reference quoted from evidence itself"
+  },
+  "cohere/command-r-plus-08-2024": {
+   "verdict": "NOT_SUPPORTED_ON_ROUTE",
+   "http": 405,
+   "result": "HTTP_405",
+   "expectedNonce": "PONG-V20PGG",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[405]: HTTP 405\",\"type\":\"invalid_request_error\",\"code\":\"\"}}",
+   "note": "HTTP 405 again; matches live-fix 9router-cohere finding (gateway route unsupported)"
+  },
+  "cohere/command-r-08-2024": {
+   "verdict": "NOT_SUPPORTED_ON_ROUTE",
+   "http": 405,
+   "result": "HTTP_405",
+   "expectedNonce": "PONG-0D94M6",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[405]: HTTP 405\",\"type\":\"invalid_request_error\",\"code\":\"\"}}",
+   "note": "HTTP 405 again; matches live-fix 9router-cohere finding (gateway route unsupported)"
+  },
+  "cohere/command-a-03-2025": {
+   "verdict": "NOT_SUPPORTED_ON_ROUTE",
+   "http": 405,
+   "result": "HTTP_405",
+   "expectedNonce": "PONG-ZS2C07",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[405]: HTTP 405\",\"type\":\"invalid_request_error\",\"code\":\"\"}}",
+   "note": "HTTP 405 again; matches live-fix 9router-cohere finding (gateway route unsupported)"
+  },
+  "ocz/jev-1.13-free": {
+   "verdict": "CALL_CONTRACT",
+   "http": 400,
+   "result": "HTTP_400",
+   "expectedNonce": "PONG-IKQ5WA",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[400]: {\\\"type\\\":\\\"error\\\",\\\"error\\\":{\\\"type\\\":\\\"ModelProtocolUnsupported\\\",\\\"message\\\":\\\"Model does not support this protocol.\\\"}}\",\"type\":\"invalid_request_error\",\"code\":\"bad_req",
+   "note": null
+  },
+  "openrouter/typesafe/jev-1.13": {
+   "verdict": "CALL_CONTRACT",
+   "http": 400,
+   "result": "HTTP_400",
+   "expectedNonce": "PONG-Q37HYA",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[400]: {\\\"error\\\":{\\\"message\\\":\\\"typesafe/jev-1.13 is a decisions model and cannot be used with the chat/completions endpoint. Use the /api/alpha/decisions endpoint instead.\\\",\\\"c",
+   "note": null
+  },
+  "xmtp/mimo-v2.5-tts": {
+   "verdict": "CALL_CONTRACT",
+   "http": 400,
+   "result": "HTTP_400",
+   "expectedNonce": "PONG-C4F8UR",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[400]: data:{\\\"error\\\":{\\\"code\\\":\\\"400\\\",\\\"message\\\":\\\"Param Incorrect\\\",\\\"param\\\":\\\"messages must contain an assistant role for TTS model\\\",\\\"type\\\":\\\"\\\"}}\\n\\n\",\"type\":\"invalid_r",
+   "note": null
+  },
+  "xmtp/mimo-v2.5-tts-voicedesign": {
+   "verdict": "CALL_CONTRACT",
+   "http": 400,
+   "result": "HTTP_400",
+   "expectedNonce": "PONG-CG7U3H",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[400]: data:{\\\"error\\\":{\\\"code\\\":\\\"400\\\",\\\"message\\\":\\\"Param Incorrect\\\",\\\"param\\\":\\\"messages must contain an assistant role for TTS model\\\",\\\"type\\\":\\\"\\\"}}\\n\\n\",\"type\":\"invalid_r",
+   "note": null
+  },
+  "xmtp/mimo-v2.5-tts-voiceclone": {
+   "verdict": "CALL_CONTRACT",
+   "http": 400,
+   "result": "HTTP_400",
+   "expectedNonce": "PONG-KH8RP2",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[400]: data:{\\\"error\\\":{\\\"code\\\":\\\"400\\\",\\\"message\\\":\\\"Param Incorrect\\\",\\\"param\\\":\\\"messages must contain an assistant role for TTS model\\\",\\\"type\\\":\\\"\\\"}}\\n\\n\",\"type\":\"invalid_r",
+   "note": null
+  },
+  "ocg/glm-5": {
+   "verdict": "UPSTREAM_ERROR",
+   "http": 400,
+   "result": "HTTP_400",
+   "expectedNonce": "PONG-DTG7WO",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[400]: {\\\"error\\\":{\\\"type\\\":\\\"server_error\\\",\\\"message\\\":\\\"Upstream request failed: Model is unavailable.\\\"}}\",\"type\":\"invalid_request_error\",\"code\":\"bad_request\"}}",
+   "note": null
+  },
+  "ocg/grok-4.5": {
+   "verdict": "UPSTREAM_ERROR",
+   "http": 400,
+   "result": "HTTP_400",
+   "expectedNonce": "PONG-9AVCQD",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[400]: {\\\"error\\\":{\\\"type\\\":\\\"server_error\\\",\\\"message\\\":\\\"Upstream request failed: Model is unavailable.\\\"}}\",\"type\":\"invalid_request_error\",\"code\":\"bad_request\"}}",
+   "note": null
+  },
+  "ocg/hy3-preview": {
+   "verdict": "UPSTREAM_ERROR",
+   "http": 400,
+   "result": "HTTP_400",
+   "expectedNonce": "PONG-E3IBAK",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[400]: {\\\"error\\\":{\\\"type\\\":\\\"server_error\\\",\\\"message\\\":\\\"Upstream request failed: Model is unavailable.\\\"}}\",\"type\":\"invalid_request_error\",\"code\":\"bad_request\"}}",
+   "note": null
+  },
+  "ocg/kimi-k2.5": {
+   "verdict": "UPSTREAM_ERROR",
+   "http": 400,
+   "result": "HTTP_400",
+   "expectedNonce": "PONG-EPQF6S",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[400]: {\\\"error\\\":{\\\"type\\\":\\\"server_error\\\",\\\"message\\\":\\\"Upstream request failed: Model is unavailable.\\\"}}\",\"type\":\"invalid_request_error\",\"code\":\"bad_request\"}}",
+   "note": null
+  },
+  "ocg/mimo-v2-omni": {
+   "verdict": "UPSTREAM_ERROR",
+   "http": 400,
+   "result": "HTTP_400",
+   "expectedNonce": "PONG-L7JQ7X",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[400]: {\\\"error\\\":{\\\"type\\\":\\\"server_error\\\",\\\"message\\\":\\\"Upstream request failed: Model is unavailable.\\\"}}\",\"type\":\"invalid_request_error\",\"code\":\"bad_request\"}}",
+   "note": null
+  },
+  "ocg/mimo-v2-pro": {
+   "verdict": "UPSTREAM_ERROR",
+   "http": 400,
+   "result": "HTTP_400",
+   "expectedNonce": "PONG-HW3GLE",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[400]: {\\\"error\\\":{\\\"type\\\":\\\"server_error\\\",\\\"message\\\":\\\"Upstream request failed: Model is unavailable.\\\"}}\",\"type\":\"invalid_request_error\",\"code\":\"bad_request\"}}",
+   "note": null
+  },
+  "ocg/qwen3.5-plus": {
+   "verdict": "UPSTREAM_ERROR",
+   "http": 400,
+   "result": "HTTP_400",
+   "expectedNonce": "PONG-JB9NI0",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[400]: {\\\"error\\\":{\\\"type\\\":\\\"server_error\\\",\\\"message\\\":\\\"Upstream request failed: Model is unavailable.\\\"}}\",\"type\":\"invalid_request_error\",\"code\":\"bad_request\"}}",
+   "note": null
+  },
+  "ocz/claude-sonnet-4": {
+   "verdict": "UPSTREAM_ERROR",
+   "http": 400,
+   "result": "HTTP_400",
+   "expectedNonce": "PONG-29CN58",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[400]: {\\\"error\\\":{\\\"type\\\":\\\"server_error\\\",\\\"message\\\":\\\"Upstream request failed: Model is unavailable.\\\"}}\",\"type\":\"invalid_request_error\",\"code\":\"bad_request\"}}",
+   "note": null
+  },
+  "ocz/deepseek-v4-flash-free": {
+   "verdict": "UPSTREAM_ERROR",
+   "http": 400,
+   "result": "HTTP_400",
+   "expectedNonce": "PONG-KVPVTH",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[400]: {\\\"error\\\":{\\\"type\\\":\\\"server_error\\\",\\\"message\\\":\\\"Upstream request failed: Model is unavailable.\\\"}}\",\"type\":\"invalid_request_error\",\"code\":\"bad_request\"}}",
+   "note": null
+  },
+  "ocz/union-alpha": {
+   "verdict": "UPSTREAM_ERROR",
+   "http": 400,
+   "result": "HTTP_400",
+   "expectedNonce": "PONG-Q38SNI",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[400]: {\\\"error\\\":{\\\"type\\\":\\\"server_error\\\",\\\"message\\\":\\\"Upstream request failed: Model is unavailable.\\\"}}\",\"type\":\"invalid_request_error\",\"code\":\"bad_request\"}}",
+   "note": null
+  },
+  "llm7/gpt-5.5": {
+   "verdict": "UPSTREAM_ERROR",
+   "http": 400,
+   "result": "HTTP_400",
+   "expectedNonce": "PONG-KK8ZTW",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[400]: {\\\"error\\\":{\\\"message\\\":\\\"Model 'gpt-5.5' is currently unavailable.\\\",\\\"type\\\":\\\"invalid_request_error\\\",\\\"param\\\":null,\\\"code\\\":\\\"model_unavailable\\\"}}\",\"type\":\"invalid_re",
+   "note": null
+  },
+  "llm7/deepseek-v4-flash": {
+   "verdict": "UPSTREAM_ERROR",
+   "http": 400,
+   "result": "HTTP_400",
+   "expectedNonce": "PONG-TP0MYB",
+   "returned": "",
+   "finishReason": null,
+   "hasToolCalls": null,
+   "evidence": "{\"error\":{\"message\":\"[400]: {\\\"error\\\":{\\\"message\\\":\\\"Model 'deepseek-v4-flash' is currently unavailable.\\\",\\\"type\\\":\\\"invalid_request_error\\\",\\\"param\\\":null,\\\"code\\\":\\\"model_unavailable\\\"}}\",\"type\":\"",
+   "note": null
+  }
+ },
+ "callContract": [
+  {
+   "model": "ocz/jev-1.13-free",
+   "http": 400,
+   "parameter": "protocol: chat/completions unsupported for this model (ModelProtocolUnsupported)",
+   "docsLink": null,
+   "evidence": "{\"error\":{\"message\":\"[400]: {\\\"type\\\":\\\"error\\\",\\\"error\\\":{\\\"type\\\":\\\"ModelProtocolUnsupported\\\",\\\"message\\\":\\\"Model does not support this protocol.\\\"}}\",\"type\":\"invalid_request_error\",\"code\":\"bad_req",
+   "note": null
+  },
+  {
+   "model": "openrouter/typesafe/jev-1.13",
+   "http": 400,
+   "parameter": "endpoint: decisions model, must use /api/alpha/decisions instead of chat/completions",
+   "docsLink": null,
+   "evidence": "{\"error\":{\"message\":\"[400]: {\\\"error\\\":{\\\"message\\\":\\\"typesafe/jev-1.13 is a decisions model and cannot be used with the chat/completions endpoint. Use the /api/alpha/decisions endpoint instead.\\\",\\\"c",
+   "note": null
+  },
+  {
+   "model": "xmtp/mimo-v2.5-tts",
+   "http": 400,
+   "parameter": "messages (must contain an assistant role for TTS model)",
+   "docsLink": null,
+   "evidence": "{\"error\":{\"message\":\"[400]: data:{\\\"error\\\":{\\\"code\\\":\\\"400\\\",\\\"message\\\":\\\"Param Incorrect\\\",\\\"param\\\":\\\"messages must contain an assistant role for TTS model\\\",\\\"type\\\":\\\"\\\"}}\\n\\n\",\"type\":\"invalid_r",
+   "note": null
+  },
+  {
+   "model": "xmtp/mimo-v2.5-tts-voiceclone",
+   "http": 400,
+   "parameter": "messages (must contain an assistant role for TTS model)",
+   "docsLink": null,
+   "evidence": "{\"error\":{\"message\":\"[400]: data:{\\\"error\\\":{\\\"code\\\":\\\"400\\\",\\\"message\\\":\\\"Param Incorrect\\\",\\\"param\\\":\\\"messages must contain an assistant role for TTS model\\\",\\\"type\\\":\\\"\\\"}}\\n\\n\",\"type\":\"invalid_r",
+   "note": null
+  },
+  {
+   "model": "xmtp/mimo-v2.5-tts-voicedesign",
+   "http": 400,
+   "parameter": "messages (must contain an assistant role for TTS model)",
+   "docsLink": null,
+   "evidence": "{\"error\":{\"message\":\"[400]: data:{\\\"error\\\":{\\\"code\\\":\\\"400\\\",\\\"message\\\":\\\"Param Incorrect\\\",\\\"param\\\":\\\"messages must contain an assistant role for TTS model\\\",\\\"type\\\":\\\"\\\"}}\\n\\n\",\"type\":\"invalid_r",
+   "note": null
+  }
+ ],
+ "unexplained": [],
+ "totalsCheck": {
+  "perPrefixBalanced": true,
+  "total": 1078,
+  "explained": 980,
+  "reprobed": 98
+ }
+}

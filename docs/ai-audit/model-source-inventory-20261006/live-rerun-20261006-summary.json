@@ -1,0 +1,297 @@
+{
+ "probeFile": ".inputs/live-9router-r2-20261006.jsonl",
+ "probeExitCode": 0,
+ "windowUtc": {
+  "start": "2026-10-06T04:38:36Z",
+  "listAt": null,
+  "atMin": "2026-10-06T04:38:43.504Z",
+  "atMax": "2026-10-06T04:55:16.107Z"
+ },
+ "classifier": ".inputs/classify-live-20261006.js (replica; .inputs/reconcile-20261005.js holds no inline classify — loads absent reconcile-scan.js)",
+ "totalModels": 883,
+ "listModels": 883,
+ "listHttp": 200,
+ "apiPassCount": 44,
+ "apiPassModels": [
+  "kr/auto",
+  "kr/auto-thinking",
+  "kr/claude-haiku-4.5",
+  "kr/claude-haiku-4.5-agentic",
+  "kr/claude-haiku-4.5-thinking",
+  "kr/claude-haiku-4.5-thinking-agentic",
+  "kr/claude-sonnet-4",
+  "kr/claude-sonnet-4-agentic",
+  "kr/claude-sonnet-4-thinking",
+  "kr/claude-sonnet-4-thinking-agentic",
+  "kr/claude-sonnet-4.5",
+  "kr/claude-sonnet-4.5-agentic",
+  "kr/claude-sonnet-4.5-thinking",
+  "kr/claude-sonnet-4.5-thinking-agentic",
+  "kr/deepseek-3.2",
+  "kr/deepseek-3.2-agentic",
+  "kr/deepseek-3.2-thinking",
+  "kr/deepseek-3.2-thinking-agentic",
+  "kr/glm-5",
+  "kr/glm-5-agentic",
+  "kr/glm-5-thinking",
+  "kr/glm-5-thinking-agentic",
+  "kr/minimax-m2.1",
+  "kr/minimax-m2.1-agentic",
+  "kr/minimax-m2.1-thinking",
+  "kr/minimax-m2.1-thinking-agentic",
+  "kr/minimax-m2.5",
+  "kr/minimax-m2.5-agentic",
+  "kr/minimax-m2.5-thinking",
+  "kr/minimax-m2.5-thinking-agentic",
+  "kr/qwen3-coder-next",
+  "kr/qwen3-coder-next-agentic",
+  "kr/qwen3-coder-next-thinking",
+  "kr/qwen3-coder-next-thinking-agentic",
+  "ocz/big-pickle",
+  "ocz/mimo-v2.5-free",
+  "ocz/mimo-v2.6-flash-free",
+  "ocz/muse-spark-1.2-contributor-free",
+  "ocz/muse-spark-1.3-contributor-free",
+  "ocz/nemotron-3-ultra-free",
+  "ocz/nemotron-3.5-lightning-free",
+  "ollama/gpt-oss:120b",
+  "qd/qfmodel",
+  "vinh"
+ ],
+ "byClass": {
+  "API_PASS": 44,
+  "CONTENT_RETURNED_NONCE_MISSING": 53,
+  "ROUTE_MODEL_UNAVAILABLE": 15,
+  "BLOCKED_QUOTA": 719,
+  "UPSTREAM_FAILED": 28,
+  "AUTH_FAILED": 8,
+  "CALL_CONTRACT_UNRESOLVED": 16
+ },
+ "quotaTextInsufficientCredits": 45,
+ "wrongOrEmptyBreakdown": {
+  "total": 53,
+  "staleOrCached": 0,
+  "differentCase": 0,
+  "toolCallOnly": 0,
+  "otherText": 53,
+  "staleModels": [],
+  "diffModels": [],
+  "toolModels": []
+ },
+ "cohere405": {
+  "count": 3,
+  "models": [
+   "cohere/command-r-plus-08-2024",
+   "cohere/command-r-08-2024",
+   "cohere/command-a-03-2025"
+  ]
+ },
+ "extra": {
+  "probeFile": ".inputs/live-extra-20261006.jsonl",
+  "concurrency": 8,
+  "totalModelLines": 724,
+  "lists": {
+   "agentrouter": [
+    {
+     "http": 401,
+     "models": 0
+    }
+   ],
+   "bai#1": [
+    {
+     "http": 200,
+     "models": 59
+    }
+   ],
+   "bai#2": [
+    {
+     "http": 200,
+     "models": 59
+    }
+   ],
+   "bai#3": [
+    {
+     "http": 200,
+     "models": 59
+    }
+   ],
+   "bai#4": [
+    {
+     "http": 200,
+     "models": 59
+    }
+   ],
+   "bai#5": [
+    {
+     "http": 200,
+     "models": 59
+    }
+   ],
+   "bai#6": [
+    {
+     "http": 200,
+     "models": 59
+    }
+   ],
+   "bai#7": [
+    {
+     "http": 200,
+     "models": 59
+    }
+   ],
+   "scaleway": [
+    {
+     "http": 403,
+     "models": 0
+    }
+   ],
+   "explabs": [
+    {
+     "http": 200,
+     "models": 301
+    }
+   ]
+  },
+  "bySource": {
+   "bai#1": {
+    "total": 59,
+    "byResult": {
+     "HTTP_403/403": 10,
+     "HTTP_400/400": 1,
+     "HTTP_429/429": 48
+    },
+    "byClass": {
+     "BLOCKED_QUOTA": 59
+    },
+    "pass": []
+   },
+   "bai#2": {
+    "total": 59,
+    "byResult": {
+     "HTTP_403/403": 9,
+     "HTTP_400/400": 1,
+     "HTTP_429/429": 49
+    },
+    "byClass": {
+     "BLOCKED_QUOTA": 59
+    },
+    "pass": []
+   },
+   "bai#3": {
+    "total": 59,
+    "byResult": {
+     "HTTP_403/403": 9,
+     "HTTP_400/400": 1,
+     "HTTP_429/429": 49
+    },
+    "byClass": {
+     "BLOCKED_QUOTA": 59
+    },
+    "pass": []
+   },
+   "bai#4": {
+    "total": 59,
+    "byResult": {
+     "HTTP_403/403": 11,
+     "HTTP_400/400": 1,
+     "HTTP_429/429": 47
+    },
+    "byClass": {
+     "BLOCKED_QUOTA": 59
+    },
+    "pass": []
+   },
+   "bai#5": {
+    "total": 59,
+    "byResult": {
+     "HTTP_403/403": 9,
+     "HTTP_400/400": 1,
+     "HTTP_429/429": 49
+    },
+    "byClass": {
+     "BLOCKED_QUOTA": 59
+    },
+    "pass": []
+   },
+   "bai#6": {
+    "total": 59,
+    "byResult": {
+     "HTTP_403/403": 9,
+     "HTTP_400/400": 1,
+     "HTTP_429/429": 49
+    },
+    "byClass": {
+     "BLOCKED_QUOTA": 59
+    },
+    "pass": []
+   },
+   "bai#7": {
+    "total": 59,
+    "byResult": {
+     "HTTP_403/403": 9,
+     "HTTP_400/400": 1,
+     "HTTP_429/429": 49
+    },
+    "byClass": {
+     "BLOCKED_QUOTA": 59
+    },
+    "pass": []
+   },
+   "explabs": {
+    "total": 301,
+    "byResult": {
+     "HTTP_429/429": 287,
+     "PASS/200": 9,
+     "WRONG_OR_EMPTY/200": 1,
+     "HTTP_503/503": 4
+    },
+    "byClass": {
+     "BLOCKED_QUOTA": 287,
+     "API_PASS": 9,
+     "CONTENT_RETURNED_NONCE_MISSING": 1,
+     "UPSTREAM_FAILED": 4
+    },
+    "pass": [
+     "claude-opus-5.5",
+     "deepseek-v4-flash",
+     "deepseek-v4.1-flash",
+     "glm-5.3-flash-abliterated",
+     "gpt-5.6-luna",
+     "gpt-6-luna",
+     "gpt-6-sol",
+     "mimo-v2.6-pro",
+     "qwen3.8-27b"
+    ]
+   },
+   "opencode-builtin": {
+    "total": 10,
+    "byResult": {
+     "PASS/200": 9,
+     "ERROR/0": 1
+    },
+    "byClass": {
+     "API_PASS": 9,
+     "UPSTREAM_FAILED": 1
+    },
+    "pass": [
+     "opencode/big-pickle",
+     "opencode/fledge-alpha-free",
+     "opencode/ling-3.1-flash-free",
+     "opencode/longcat-2.5-preview-free",
+     "opencode/mimo-v2.6-flash-free",
+     "opencode/muse-spark-1.3-contributor-free",
+     "opencode/nemotron-3-ultra-free",
+     "opencode/nemotron-3.5-lightning-free",
+     "opencode/space-bunny-free"
+    ]
+   }
+  },
+  "overallByClass": {
+   "BLOCKED_QUOTA": 700,
+   "API_PASS": 18,
+   "CONTENT_RETURNED_NONCE_MISSING": 1,
+   "UPSTREAM_FAILED": 5
+  },
+  "mergeNotes": "tencent-tokenhub=tencent; regolo-ai=regolo; the-grid-ai=thegrid (no such aliases observed in this extra run); nebius is a Requesty upstream (REQUESTY_API_KEY), not a direct source — not probed as direct"
+ }
+}
