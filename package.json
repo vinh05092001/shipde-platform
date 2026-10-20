@@ -38,6 +38,7 @@
     "db:seed": "tsx infra/docker/seed.ts",
     "security:secrets": "tsx scripts/verify-secrets.ts",
     "security:trivy": "tsx scripts/verify-trivy.ts",
+    "security:semgrep": "semgrep --test tools/semgrep/rules && semgrep scan --config tools/semgrep/rules --error --metrics=off apps packages",
     "verify:inventory": "tsx scripts/verify-inventory.ts",
     "concierge:audit": "tsx scripts/concierge-audit.ts",
     "guard:install": "node tools/ai-guard/cli.js install",

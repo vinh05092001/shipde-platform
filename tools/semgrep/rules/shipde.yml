@@ -1,0 +1,34 @@
+rules:
+  - id: shipde-no-dynamic-code
+    message: eval or new Function runs strings as code; use explicit logic instead.
+    severity: ERROR
+    languages: [typescript, javascript]
+    pattern-either:
+      - pattern: eval(...)
+      - pattern: new Function(...)
+  - id: shipde-no-unsafe-raw-sql
+    message: $queryRawUnsafe/$executeRawUnsafe allow SQL injection; use the tagged $queryRaw/$executeRaw template.
+    severity: ERROR
+    languages: [typescript, javascript]
+    pattern-either:
+      - pattern: $DB.$queryRawUnsafe(...)
+      - pattern: $DB.$executeRawUnsafe(...)
+  - id: shipde-no-dangerous-html
+    message: dangerouslySetInnerHTML renders unsanitized HTML; render text or sanitize with an approved helper.
+    severity: ERROR
+    languages: [typescript, javascript]
+    pattern: <$EL dangerouslySetInnerHTML={...} />
+  - id: shipde-no-secret-in-log
+    message: Secrets and one-time codes must not reach logs (AGENTS.md security rules).
+    severity: ERROR
+    languages: [typescript, javascript]
+    patterns:
+      - pattern-either:
+          - pattern: console.$LOG(..., $X, ...)
+          - pattern: $LOGGER.$LOG(..., $X, ...)
+      - metavariable-regex:
+          metavariable: $LOG
+          regex: ^(log|info|warn|error|debug|trace)$
+      - metavariable-regex:
+          metavariable: $X
+          regex: (?i)^[\w.]*(password|passwd|secret|token|otp|apikey|api_key)$

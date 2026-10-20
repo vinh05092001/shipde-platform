@@ -92,3 +92,20 @@ None.
 - Real run: the first run found 26 dependency advisories (23 HIGH, 3 CRITICAL) in `next`, `sharp`, `postcss`, `proxy-addr`, `multer`, `source-map-js` and `deepmerge-ts`, plus Dockerfile DS-0002. Fixes: `next`/`eslint-config-next` were raised to 16.3.8 and pnpm overrides raise the transitive packages. After that the scan exits 0.
 - Accepted exception: DS-0002 for `scripts/ai/docker-worker/Dockerfile`, a local agy worker image whose login state lives under `/root`. The reason is recorded in `.trivyignore`.
 - Regression: `pnpm lint`, `typecheck`, `test`, `test:e2e`, `build` and `test:a11y` pass locally after the upgrades.
+
+### 2026-10-20 — semgrep/semgrep: EXECUTION_VERIFIED
+
+- **Repo/ref:** Semgrep `1.181.0`. It is installed in CI with pip, and the version is read from the manifest entry, so the pin lives in one place. It moves from candidates (PILOT) to adopted.
+- **Capability:** a blocking code-security gate over `apps` and `packages`, using repository-owned rules in `tools/semgrep/rules/shipde.yml`:
+  - `shipde-no-dynamic-code`: `eval` and `new Function`;
+  - `shipde-no-unsafe-raw-sql`: Prisma `$queryRawUnsafe` and `$executeRawUnsafe`;
+  - `shipde-no-dangerous-html`: `dangerouslySetInnerHTML`;
+  - `shipde-no-secret-in-log`: password, secret, token, OTP or API key arguments to console or logger calls.
+
+  No registry rulesets are fetched, so results do not change without review. `--metrics=off` is set.
+- **Trigger:** `pnpm security:semgrep`; CI job `code-scan` in `security-baseline.yml`.
+- **Rule tests:** `semgrep --test tools/semgrep/rules` passes 4/4. Each rule has positive (`ruleid:`) and negative (`ok:`) fixtures in `shipde.ts` and `shipde.tsx`.
+- **Real run:**
+  - The scan of the current `apps` and `packages` exits 0 with no findings.
+  - Negative proof: a planted `console.log("pw", password)` in `apps/api/src` makes the scan exit 1. The probe file was removed afterwards.
+- **Validator:** `scripts/ai/ecosystem.ps1` no longer requires exactly 10 candidates. It now rejects a candidate whose id is also adopted. `validate` passes.

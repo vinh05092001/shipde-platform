@@ -971,6 +971,27 @@
       "health_check": "Test-Path tools/ai-brain/skills/impeccable/NOTICE.md",
       "rollback": "Remove the entry; callers fall back to the remaining harnesses.",
       "profiles": ["UI_FEATURE"]
+    },
+    {
+      "id": "semgrep",
+      "name": "Semgrep",
+      "canonical_url": "https://github.com/semgrep/semgrep",
+      "repository": "semgrep/semgrep",
+      "owner": "semgrep",
+      "kind": "cli",
+      "role": "Blocking code-security gate with repository-owned rules (dynamic code, unsafe raw SQL, unsanitized HTML, secrets in logs).",
+      "source_of_truth_boundary": "Rules live in tools/semgrep/rules with fixtures; registry rulesets are not fetched.",
+      "install_method": "ci-provisioned",
+      "pinned_version_or_commit": "1.181.0",
+      "platform": "linux",
+      "lifecycle_state": "ADOPTED",
+      "default_enabled": true,
+      "blocking_policy": "BLOCKING_GATE",
+      "permissions": "read-only",
+      "telemetry_network_behavior": "none (--metrics=off)",
+      "health_check": "pnpm security:semgrep",
+      "rollback": "Remove the code-scan job from security-baseline.yml.",
+      "profiles": ["FOUNDATION", "SECURITY_REVIEW"]
     }
   ],
   "product_dependencies": [
@@ -1222,19 +1243,6 @@
       "default_enabled": false,
       "installed": false,
       "evaluation_goal": "Benchmark high-volume batch statement upload and audit throughput."
-    },
-    {
-      "id": "semgrep",
-      "name": "Semgrep",
-      "canonical_url": "https://github.com/semgrep/semgrep",
-      "repository": "semgrep/semgrep",
-      "owner": "semgrep",
-      "kind": "cli",
-      "role": "Static analysis engine for finding bugs and enforcing code standards.",
-      "lifecycle_state": "PILOT",
-      "default_enabled": false,
-      "installed": false,
-      "evaluation_goal": "Enforce tenant boundary checks and detect cross-tenant data leaks via custom AST rules."
     },
     {
       "id": "syft",

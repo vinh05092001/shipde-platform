@@ -381,7 +381,9 @@ function Assert-ShipDeManifest {
         "getpaseo/paseo",
         "rtk-ai/rtk",
         "obra/superpowers",
-        "pbakaus/impeccable"
+        "pbakaus/impeccable",
+        # GOAL-AUTOCLAW-REPOS-7: promoted from candidates
+        "semgrep/semgrep"
     )
     if ($adopted.Count -ne $canonicalApprovedRepos.Count) {
         $errors.Add("Manifest adopted count must equal the $($canonicalApprovedRepos.Count) approved repositories; found $($adopted.Count).")
@@ -484,15 +486,16 @@ function Assert-ShipDeManifest {
         }
     }
 
-    # 4. Candidates check: exactly 10 candidates with PILOT or WATCH lifecycle
+    # 4. Candidates check: PILOT or WATCH only; a candidate promoted to adopted leaves this list
     if (-not $Manifest.candidates) {
         $errors.Add("Manifest must define 'candidates' array.")
     } else {
         $candidates = @($Manifest.candidates)
-        if ($candidates.Count -ne 10) {
-            $errors.Add("Manifest candidates count must be exactly 10; found $($candidates.Count).")
-        }
+        $adoptedIds = @($adopted | ForEach-Object { $_.id })
         foreach ($c in $candidates) {
+            if ($c.id -in $adoptedIds) {
+                $errors.Add("Candidate '$($c.id)' is also adopted; remove it from candidates.")
+            }
             if ($c.lifecycle_state -notin @("PILOT", "WATCH")) {
                 $errors.Add("Candidate '$($c.id)' must have lifecycle_state 'PILOT' or 'WATCH'; found '$($c.lifecycle_state)'.")
             }
@@ -588,7 +591,7 @@ function Invoke-ShipDeValidate {
         exit 1
     }
 
-    Write-Host "VALIDATION PASSED: All approved adopted repositories, 14 product dependencies, 10 candidates, and 9 profiles conform to ecosystem policy." -ForegroundColor Green
+    Write-Host "VALIDATION PASSED: All approved adopted repositories, product dependencies, candidates and profiles conform to ecosystem policy." -ForegroundColor Green
 }
 
 function Invoke-ShipDeStatus {
