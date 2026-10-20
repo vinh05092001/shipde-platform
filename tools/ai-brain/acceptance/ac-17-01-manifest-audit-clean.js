@@ -35,9 +35,15 @@ const real = JSON.parse(fs.readFileSync(MANIFEST, 'utf8'));
 // cannot see anything.
 const tmp = path.join(os.tmpdir(), 'shipde-ac17-01-' + process.pid + '.json');
 const tampered = JSON.parse(JSON.stringify(real));
-const probe = tampered.adopted.find((e) => e.id === 'trivy');
+// Pick the probe from live audit data: a PENDING entry the audit measures as
+// absent. A fixed id goes stale as soon as that tool is genuinely adopted.
+const realRows = auditManifest(real).rows;
+const probe = tampered.adopted.find(
+  (e) =>
+    e.lifecycle_state === 'PENDING' && realRows.some((r) => r.id === e.id && r.present === false)
+);
 if (!probe) {
-  console.error('CONTROL_FAILED: entry `trivy` is no longer present in ' + MANIFEST);
+  console.error('CONTROL_FAILED: no PENDING entry is measurably absent in ' + MANIFEST);
   process.exit(2);
 }
 probe.lifecycle_state = 'ADOPTED';
@@ -47,7 +53,7 @@ fs.writeFileSync(tmp, JSON.stringify(tampered));
 const control = auditManifest(JSON.parse(fs.readFileSync(tmp, 'utf8')));
 fs.unlinkSync(tmp);
 const controlFinding = control.findings.find(
-  (f) => f.id === 'trivy' && OVERSTATEMENT_CODES.includes(f.code)
+  (f) => f.id === probe.id && OVERSTATEMENT_CODES.includes(f.code)
 );
 if (!controlFinding) {
   console.error('CONTROL_FAILED: the audit accepted an absent adopted gate');

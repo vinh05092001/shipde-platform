@@ -116,8 +116,8 @@ test('security inventory preserves unavailable gates and existing scan authoriti
   assert.match(read('.github/workflows/security-baseline.yml'), /8\.24\.0/);
   assert.match(read('.github/workflows/security-baseline.yml'), /--test-negative/);
   assert.ok(read('.gitleaks.toml').length > 0);
-  assert.equal(trivy.TRIVY_PINNED_VERSION, '0.60.0');
-  assert.equal(trivy.TRIVY_SECURITY_CHECKS, 'vuln,config');
+  assert.equal(trivy.TRIVY_PINNED_VERSION, '0.75.0');
+  assert.equal(trivy.TRIVY_SECURITY_CHECKS, 'vuln,misconfig');
 });
 
 test('Trivy benign, malicious and broken process fixtures preserve distinct outcomes', () => {

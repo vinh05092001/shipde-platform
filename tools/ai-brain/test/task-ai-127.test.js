@@ -77,6 +77,9 @@ function installLaunchMocks(t, workerRoots) {
     return realRmSync(p, o);
   });
   t.mock.method(cp, 'spawnSync', (cmd, args, options) => {
+    // This dependency fixture has no private carry-over ref.
+    if (cmd === 'git' && args.some((arg) => String(arg).startsWith('refs/shipde/carry/')))
+      return { status: 1, stdout: '' };
     if (
       (String(cmd).toLowerCase().endsWith('pnpm.exe') || cmd === 'pnpm.cmd' || cmd === 'pnpm') &&
       args[0] === 'install'

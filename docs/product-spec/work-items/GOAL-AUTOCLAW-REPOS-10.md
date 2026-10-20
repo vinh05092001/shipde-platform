@@ -82,3 +82,14 @@
 ## Residual limitations
 
 None.
+
+### 2026-10-20 — overlapping candidates rejected
+
+Operator decision on 2026-10-20. Each candidate duplicates a capability this repository already runs, so adopting it would create a second source of truth:
+
+- **github/spec-kit** → REJECTED. Structured specifications are already covered by `docs/product-spec` Work Items, the acceptance matrix and open-spec (group 2).
+- **gastownhall/beads** → REJECTED. The dependency graph and memory are covered by `FEATURE-DELIVERY-REGISTER.csv` dependencies and Hermes memory.
+- **getnao/sylph** → REJECTED. The execution harness and sandbox are covered by `tools/ai-brain/isolation-launcher.js`, `harness.js` and paseo.
+- **xiufengsun/TokenTracker** stays PENDING. Token visibility is wanted, but no requirement defines what it must measure.
+
+Verification: `node tools/ai-brain/acceptance/ac-17-01-manifest-audit-clean.js` reports error 0.

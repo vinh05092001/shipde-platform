@@ -82,3 +82,26 @@
 ## Residual limitations
 
 None.
+
+### 2026-10-20 — dequelabs/axe-core: EXECUTION_VERIFIED
+
+- Repo/package + ref: `axe-core@4.14.0`, `@axe-core/playwright@4.14.0`, `@playwright/test@1.64.1` (apps/web devDependencies).
+- Capability: WCAG 2.1 A/AA DOM audit of the public web routes `/`, `/register`, `/forgot-password`, `/reset-password`.
+- Trigger: `pnpm --filter @shipde/web test:a11y`, run by CI `current-application` after `pnpm build`.
+- Caller/config: `apps/web/playwright.config.ts`, `apps/web/e2e/a11y.spec.ts`.
+- Contract: a violation fails the gate. The full violations and incomplete results are attached to `apps/web/test-results/a11y-report.json` and uploaded as the `a11y-report` artifact.
+- Real run: the first run found `button-name` (password visibility toggle) and `color-contrast` (brand orange `#EA4B12` 3.8:1, helper text 2.6:1) on all four routes. After the fixes all four pass.
+- Fix decision: the operator chose to move the brand token to `#C23807` (5.4:1), hover `#A8300A`, per DESIGN-SYSTEM-UX-RULES "Minimum WCAG AA contrast".
+- Limitation: authenticated screens are not audited yet; they need a seeded session fixture.
+
+### 2026-10-20 — GoogleChrome/lighthouse-ci: EXECUTION_VERIFIED
+
+- Repo/package + ref: `@lhci/cli@0.15.1` (apps/web devDependency). Chrome is the Playwright Chromium already installed for the axe gate.
+- Capability: Lighthouse budgets on the public routes `/`, `/register`, `/forgot-password`, `/reset-password`. Each route gets 3 desktop runs and the median run is scored.
+- Trigger: `pnpm --filter @shipde/web test:lighthouse`, run in CI `current-application` after the axe gate. Reports are uploaded as the `lighthouse-report` artifact.
+- Budgets (`apps/web/lighthouserc.cjs`):
+  - Fail the build: accessibility ≥ 0.95, best-practices ≥ 0.90.
+  - Warn only: performance ≥ 0.80, SEO ≥ 0.80.
+  - The spec names no numeric performance budget yet, so performance stays non-blocking.
+- Real run (median): `/` 0.96/0.95/0.96/1.00, `/register` 0.93/1.00/0.96/1.00, `/forgot-password` 1.00/1.00/0.96/1.00, `/reset-password` 0.96/1.00/0.96/1.00 (performance/accessibility/best-practices/SEO).
+- Limitation: authenticated screens are not measured yet. The scores do not replace functional acceptance evidence (TECH-STACK-REPOSITORY).

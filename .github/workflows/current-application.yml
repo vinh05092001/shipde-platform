@@ -145,6 +145,26 @@ jobs:
             exit 1
           fi
       - run: pnpm build
+      - name: Install Playwright Chromium for accessibility gate
+        run: pnpm --filter @shipde/web exec playwright install --with-deps chromium
+      - name: Accessibility gate (axe-core, WCAG 2.1 A/AA)
+        run: pnpm --filter @shipde/web test:a11y
+      - name: Lighthouse CI budgets
+        run: pnpm --filter @shipde/web test:lighthouse
+      - name: Upload Lighthouse report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lighthouse-report
+          path: apps/web/lhci-report/
+          if-no-files-found: ignore
+      - name: Upload accessibility report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: a11y-report
+          path: apps/web/test-results/
+          if-no-files-found: ignore
       - run: pnpm security:secrets
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.base_ref || 'origin/main' }}

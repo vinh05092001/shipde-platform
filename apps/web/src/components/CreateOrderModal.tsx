@@ -77,7 +77,7 @@ export const CreateOrderModal: React.FC<Props> = ({ isOpen, onClose, onOrderCrea
       tierLabel: 'Tự động gọi API (L2)',
       badge: '⚡ Giao Nhanh Nhất',
       badgeColor: 'bg-emerald-50 text-emerald-800 border-emerald-200',
-      logoBg: 'bg-[#FFF5F0] text-[#EA4B12]',
+      logoBg: 'bg-[#FFF5F0] text-[#c23807]',
     },
     {
       id: 'GHTK' as const,
@@ -169,7 +169,7 @@ export const CreateOrderModal: React.FC<Props> = ({ isOpen, onClose, onOrderCrea
         {/* Modal Header */}
         <div className="p-4 sm:p-5 border-b border-slate-100 bg-[#FDFCFB] flex justify-between items-center shrink-0">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-[#EA4B12] text-white flex items-center justify-center shadow-xs">
+            <div className="w-10 h-10 rounded-xl bg-[#c23807] text-white flex items-center justify-center shadow-xs">
               <PackagePlus className="w-5 h-5" />
             </div>
             <div>
@@ -214,7 +214,7 @@ export const CreateOrderModal: React.FC<Props> = ({ isOpen, onClose, onOrderCrea
               <div className="space-y-3 p-4 bg-slate-50/70 rounded-xl border border-slate-200/80">
                 <div className="flex justify-between items-center">
                   <span className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
-                    <MapPin className="w-3.5 h-3.5 text-[#EA4B12]" />
+                    <MapPin className="w-3.5 h-3.5 text-[#c23807]" />
                     <span>1. Thông Tin Người Nhận & Nơi Giao</span>
                   </span>
                   <span className="text-xs font-mono text-slate-500 font-semibold">
@@ -314,7 +314,7 @@ export const CreateOrderModal: React.FC<Props> = ({ isOpen, onClose, onOrderCrea
               {/* Section 2: Package Weight, Dimensions & COD */}
               <div className="space-y-3 p-4 bg-slate-50/70 rounded-xl border border-slate-200/80">
                 <span className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
-                  <Scale className="w-3.5 h-3.5 text-[#EA4B12]" />
+                  <Scale className="w-3.5 h-3.5 text-[#c23807]" />
                   <span>2. Thông Số Kiện Hàng & Thu Tiền (COD)</span>
                 </span>
 
@@ -385,7 +385,7 @@ export const CreateOrderModal: React.FC<Props> = ({ isOpen, onClose, onOrderCrea
                     Cân thực: <strong>{weightGram}g</strong> · Thể tích quy đổi (D×R×C/5000):{' '}
                     <strong>{volumetricWeightGram}g</strong>
                   </span>
-                  <span className="font-bold text-[#EA4B12]">
+                  <span className="font-bold text-[#c23807]">
                     Tính cước: {chargeableWeightGram}g
                   </span>
                 </div>
@@ -458,7 +458,7 @@ export const CreateOrderModal: React.FC<Props> = ({ isOpen, onClose, onOrderCrea
               <div className="space-y-3">
                 <div className="flex justify-between items-center border-b border-slate-100 pb-2">
                   <div className="flex items-center gap-1.5 font-bold text-slate-900 text-xs">
-                    <Truck className="w-4 h-4 text-[#EA4B12]" />
+                    <Truck className="w-4 h-4 text-[#c23807]" />
                     <span>So Sánh Cước Phí Theo Biểu Giá Hợp Đồng:</span>
                   </div>
                 </div>
@@ -473,7 +473,7 @@ export const CreateOrderModal: React.FC<Props> = ({ isOpen, onClose, onOrderCrea
                         onClick={() => setSelectedCarrier(carrier.id)}
                         className={`p-3.5 rounded-xl border transition cursor-pointer flex flex-col justify-between space-y-2.5 ${
                           isSelected
-                            ? 'bg-[#FFF5F0] border-[#EA4B12] ring-2 ring-[#EA4B12]/20 shadow-xs'
+                            ? 'bg-[#FFF5F0] border-[#c23807] ring-2 ring-[#c23807]/20 shadow-xs'
                             : 'bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50'
                         }`}
                       >

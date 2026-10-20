@@ -227,10 +227,33 @@ test('installed hooks are pinned on the production commit path without touching 
   const fs = require('node:fs');
   const calls = [];
   let dirty = true;
-  t.mock.method(fs, 'existsSync', (file) => String(file).endsWith('pre-commit'));
+  const path = require('node:path');
+  t.mock.method(
+    fs,
+    'existsSync',
+    (file) =>
+      String(file).endsWith('pre-commit') ||
+      String(file).endsWith('.git') ||
+      String(file).endsWith('config')
+  );
+  t.mock.method(fs, 'statSync', () => ({
+    isFile: () => true,
+    isDirectory: () => true,
+    mode: 0o755,
+  }));
+  t.mock.method(fs, 'lstatSync', (file) => {
+    if (String(file).endsWith('config.worktree')) {
+      throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+    }
+    const isConfig = String(file).endsWith('config');
+    return { isFile: () => isConfig, isDirectory: () => !isConfig, mode: 0o755 };
+  });
+  t.mock.method(fs, 'realpathSync', (p) => path.resolve(p));
+  t.mock.method(fs, 'accessSync', () => undefined);
   t.mock.method(cp, 'spawnSync', (cmd, args, opts) => {
     assert.equal(cmd, 'git');
     calls.push(args);
+    if (args[0] === 'config') return { status: 0, stdout: 'core.repositoryformatversion\0' };
     if (args[0] === 'rev-parse') return { status: 0, stdout: '/trusted/hooks' };
     assert.equal(args[1], 'core.hooksPath=/trusted/hooks');
     assert.equal(opts.env.LEFTHOOK, undefined);

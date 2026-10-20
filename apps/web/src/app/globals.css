@@ -10,8 +10,8 @@
   --font-mono: 'JetBrains Mono', monospace;
 
   /* Brand Primary Orange */
-  --primary: #ea4b12;
-  --primary-hover: #d03e0b;
+  --primary: #c23807;
+  --primary-hover: #a8300a;
   --primary-subtle: #fff5f0;
   --primary-border: #fdddd0;
 
@@ -30,7 +30,7 @@
   /* Warm Neutral Hairline Borders */
   --border-subtle: #eae7e4;
   --border-strong: #d5d1cb;
-  --border-focus: #ea4b12;
+  --border-focus: #c23807;
 
   /* Semantic Status Tokens (Green, Amber, Red Only) */
   --status-ok-bg: #f0fdf4;
@@ -117,11 +117,11 @@ th {
   gap: 8px;
   transition: all 0.15s ease-in-out;
   cursor: pointer;
-  box-shadow: 0 1px 2px rgba(234, 75, 18, 0.15);
+  box-shadow: 0 1px 2px rgba(194, 56, 7, 0.15);
 }
 .btn-primary:hover:not(:disabled) {
   background-color: var(--primary-hover);
-  box-shadow: 0 2px 4px rgba(234, 75, 18, 0.25);
+  box-shadow: 0 2px 4px rgba(194, 56, 7, 0.25);
 }
 .btn-primary:disabled {
   opacity: 0.5;
@@ -185,7 +185,7 @@ th {
 .modern-input:focus {
   outline: none;
   border-color: var(--border-focus);
-  box-shadow: 0 0 0 3px rgba(234, 75, 18, 0.12);
+  box-shadow: 0 0 0 3px rgba(194, 56, 7, 0.12);
 }
 
 /* Semantic Badges */

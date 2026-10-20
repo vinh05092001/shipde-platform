@@ -69,14 +69,14 @@ export const TrackingCode: React.FC<TrackingCodeProps> = ({ code, onClick, class
   return (
     <span
       onClick={onClick}
-      className={`inline-flex items-center gap-1.5 font-mono text-[13px] font-bold text-slate-900 hover:text-[#EA4B12] cursor-pointer group select-all transition-colors ${className}`}
+      className={`inline-flex items-center gap-1.5 font-mono text-[13px] font-bold text-slate-900 hover:text-[#c23807] cursor-pointer group select-all transition-colors ${className}`}
       title="Bấm để sao chép hoặc mở chi tiết hành trình"
     >
       <span>{code}</span>
       <button
         type="button"
         onClick={handleCopy}
-        className="text-slate-400 hover:text-[#EA4B12] p-1 rounded-md transition"
+        className="text-slate-400 hover:text-[#c23807] p-1 rounded-md transition"
         title={copied ? 'Đã sao chép mã' : 'Sao chép mã'}
       >
         {copied ? (
@@ -337,7 +337,7 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
       <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4 animate-in fade-in zoom-in-95 duration-150">
         <div className="flex items-center gap-3">
           <div
-            className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${isDanger ? 'bg-rose-50 text-rose-600' : 'bg-[#FFF5F0] text-[#EA4B12]'}`}
+            className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${isDanger ? 'bg-rose-50 text-rose-600' : 'bg-[#FFF5F0] text-[#c23807]'}`}
           >
             {isDanger ? <ShieldAlert className="w-5 h-5" /> : <AlertTriangle className="w-5 h-5" />}
           </div>

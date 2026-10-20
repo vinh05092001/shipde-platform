@@ -125,7 +125,7 @@ export const ExceptionWorkboxTab: React.FC<Props> = ({
 
             {[
               { id: 'ALL', label: 'Tất cả sự cố', count: caseList.length, color: 'text-slate-900' },
-              { id: 'MINE', label: 'Việc của tôi', count: myCasesCount, color: 'text-[#EA4B12]' },
+              { id: 'MINE', label: 'Việc của tôi', count: myCasesCount, color: 'text-[#c23807]' },
               {
                 id: 'UNASSIGNED',
                 label: 'Chưa phân công',
@@ -145,7 +145,7 @@ export const ExceptionWorkboxTab: React.FC<Props> = ({
                 onClick={() => setFilterType(f.id as any)}
                 className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
                   filterType === f.id
-                    ? 'bg-[#FFF5F0] text-[#EA4B12] font-bold border border-[#FDDDD0]'
+                    ? 'bg-[#FFF5F0] text-[#c23807] font-bold border border-[#FDDDD0]'
                     : 'text-slate-600 hover:bg-slate-50'
                 }`}
               >
@@ -186,7 +186,7 @@ export const ExceptionWorkboxTab: React.FC<Props> = ({
                   key={c.id}
                   onClick={() => setSelectedCaseId(c.id)}
                   className={`p-4 cursor-pointer transition ${
-                    isSelected ? 'bg-[#FFF5F0] border-l-4 border-l-[#EA4B12]' : 'hover:bg-slate-50'
+                    isSelected ? 'bg-[#FFF5F0] border-l-4 border-l-[#c23807]' : 'hover:bg-slate-50'
                   }`}
                 >
                   <div className="flex justify-between items-start">
@@ -276,7 +276,7 @@ export const ExceptionWorkboxTab: React.FC<Props> = ({
             {/* Reattempt Action Form */}
             <div className="space-y-3 p-4 rounded-xl border border-[#FDDDD0] bg-[#FFF5F0]/50">
               <span className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
-                <Send className="w-4 h-4 text-[#EA4B12]" />
+                <Send className="w-4 h-4 text-[#c23807]" />
                 Gửi Yêu Cầu Giao Lại (
                 {currentTier === 'L2' ? 'Tự động gọi qua API' : 'Tạo hồ sơ dán cổng'}):
               </span>

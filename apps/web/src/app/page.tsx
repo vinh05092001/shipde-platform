@@ -246,7 +246,7 @@ export default function ShipDeConsoleApp() {
   }
 
   return (
-    <div className="min-h-screen bg-[#FDFCFB] text-slate-900 flex flex-col justify-between font-sans selection:bg-[#EA4B12] selection:text-white">
+    <div className="min-h-screen bg-[#FDFCFB] text-slate-900 flex flex-col justify-between font-sans selection:bg-[#c23807] selection:text-white">
       <div>
         {/* Global Toast Notification */}
         {toastMessage && (
@@ -269,7 +269,7 @@ export default function ShipDeConsoleApp() {
             <div className="flex items-center gap-3.5">
               <div
                 onClick={() => setActiveTab('dashboard')}
-                className="w-8.5 h-8.5 rounded-xl bg-[#EA4B12] text-white flex items-center justify-center font-black text-base shadow-xs cursor-pointer"
+                className="w-8.5 h-8.5 rounded-xl bg-[#c23807] text-white flex items-center justify-center font-black text-base shadow-xs cursor-pointer"
               >
                 S
               </div>
@@ -288,7 +288,7 @@ export default function ShipDeConsoleApp() {
                     onClick={() => setStoreMenuOpen(!storeMenuOpen)}
                     className="flex items-center gap-1.5 text-xs font-semibold text-slate-800 bg-[#F6F5F3] hover:bg-[#EAE7E4] px-3 py-1.5 rounded-lg border border-[#EAE7E4] transition cursor-pointer"
                   >
-                    <Store className="w-3.5 h-3.5 text-[#EA4B12]" />
+                    <Store className="w-3.5 h-3.5 text-[#c23807]" />
                     <span className="truncate max-w-[150px]">{currentStoreObj.name}</span>
                     <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
                   </button>
@@ -309,7 +309,7 @@ export default function ShipDeConsoleApp() {
                           }}
                           className={`w-full text-left px-3 py-2 rounded-lg transition flex items-center justify-between ${
                             selectedStore === store.id
-                              ? 'bg-[#FFF5F0] text-[#EA4B12] font-bold'
+                              ? 'bg-[#FFF5F0] text-[#c23807] font-bold'
                               : 'hover:bg-slate-50 text-slate-700'
                           }`}
                         >
@@ -353,7 +353,7 @@ export default function ShipDeConsoleApp() {
                 title="Kích hoạt đồng bộ đơn hàng mới từ Pancake POS"
               >
                 <RefreshCw
-                  className={`w-3.5 h-3.5 ${syncingPancake ? 'animate-spin text-[#EA4B12]' : 'text-slate-600'}`}
+                  className={`w-3.5 h-3.5 ${syncingPancake ? 'animate-spin text-[#c23807]' : 'text-slate-600'}`}
                 />
                 <span>Đồng bộ POS</span>
               </button>
@@ -377,7 +377,7 @@ export default function ShipDeConsoleApp() {
                   onClick={() => setActiveTab('settings')}
                   className={`flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold rounded-lg border transition cursor-pointer ${
                     activeTab === 'settings'
-                      ? 'bg-[#EA4B12] text-white border-[#EA4B12]'
+                      ? 'bg-[#c23807] text-white border-[#c23807]'
                       : 'bg-[#F6F5F3] text-slate-700 hover:bg-[#EAE7E4] border-[#EAE7E4]'
                   }`}
                   title="Cài đặt cửa hàng, nhân sự, kết nối hãng và bảo mật"
@@ -401,7 +401,7 @@ export default function ShipDeConsoleApp() {
                     <div className="text-xs text-slate-900 leading-tight truncate max-w-[120px]">
                       {user?.full_name}
                     </div>
-                    <div className="text-[11px] text-[#EA4B12] font-semibold leading-none">
+                    <div className="text-[11px] text-[#c23807] font-semibold leading-none">
                       {user?.role}
                     </div>
                   </div>
@@ -510,7 +510,7 @@ export default function ShipDeConsoleApp() {
                     onClick={() => setActiveTab(tab.id)}
                     className={`px-4 py-2 text-xs font-bold rounded-xl transition whitespace-nowrap flex items-center gap-2 cursor-pointer ${
                       isActive
-                        ? 'bg-[#EA4B12] text-white shadow-xs'
+                        ? 'bg-[#c23807] text-white shadow-xs'
                         : 'text-slate-700 hover:bg-[#F6F5F3] hover:text-slate-900'
                     }`}
                   >
@@ -622,7 +622,7 @@ export default function ShipDeConsoleApp() {
           <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 space-y-4 animate-in fade-in zoom-in-95 duration-150">
             <div className="flex justify-between items-center pb-2 border-b border-slate-100">
               <div className="flex items-center gap-2 font-bold text-sm text-slate-900">
-                <Search className="w-4 h-4 text-[#EA4B12]" />
+                <Search className="w-4 h-4 text-[#c23807]" />
                 <span>Tra Cứu Mã Vận Đơn Nhanh</span>
               </div>
               <button
