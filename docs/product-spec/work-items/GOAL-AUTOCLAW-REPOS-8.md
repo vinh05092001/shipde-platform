@@ -94,4 +94,5 @@ None.
   - 196,844 requests, `p(95)=2.76ms`, 0% failed, all checks passed; exit 0.
   - Negative proof: the same run with `p(95)<0.1` exits 99 with "thresholds on metrics 'http_req_duration' have been crossed".
 - **Verification:** manifest audit error 0; `ecosystem.ps1 validate` passes; manifest-audit and repo-integration tests pass 54/0.
+- **CI run:** run `39423204142` on `ubuntu-latest` downloads `k6-v2.3.0-linux-amd64.tar.gz` (checksum "OK"). `k6 version` prints "k6 v2.3.0 (commit/e088784614, go1.26.8, linux/amd64)". The workload makes 141,594 requests with `p(95)=4.93ms` and passes all thresholds. k6 moved from 0.x to 1.x and 2.x, so v2.3.0 is a published release.
 - **Limitation:** the first workload covers liveness only. Load on authenticated routes needs a seeded database in CI.
