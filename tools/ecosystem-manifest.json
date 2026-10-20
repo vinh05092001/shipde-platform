@@ -301,7 +301,7 @@
       "install_method": "system",
       "pinned_version_or_commit": "5.4.0",
       "platform": "windows",
-      "lifecycle_state": "PENDING",
+      "lifecycle_state": "REJECTED",
       "default_enabled": false,
       "blocking_policy": "NON_BLOCKING",
       "permissions": "docker-socket-local",
@@ -795,7 +795,7 @@
       "install_method": "npx-on-demand",
       "pinned_version_or_commit": "0.120.0",
       "platform": "windows",
-      "lifecycle_state": "PENDING",
+      "lifecycle_state": "ADOPTED",
       "default_enabled": false,
       "blocking_policy": "NON_BLOCKING",
       "permissions": "prompt-evaluation-local",
@@ -1047,7 +1047,7 @@
       "role": "Version control runtime and worktree management.",
       "install_method": "system",
       "pinned_version_or_commit": "2.49.0",
-      "lifecycle_state": "REJECTED",
+      "lifecycle_state": "INSTALLED",
       "foundation_item": "TASK-FOUND-01"
     },
     {

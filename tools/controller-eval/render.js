@@ -1,6 +1,7 @@
 'use strict';
 // Renders the real Controller prompts so promptfoo can assert their contract.
 // Offline: the echo provider returns the prompt unchanged; no model is called.
+const path = require('node:path');
 const { compilePrompt, compileReviewPrompt } = require('../ai-brain/prompt-compiler');
 
 const ctx = (vars) => ({
@@ -8,7 +9,7 @@ const ctx = (vars) => ({
   pinpoint: false,
   recordTools: false,
   logOpts: null,
-  rootDir: process.cwd(),
+  rootDir: path.resolve(__dirname, '../..'),
 });
 
 function author({ vars }) {
