@@ -1,0 +1,7 @@
+# GOAL-AUTOCLAW-REPOS-7 — accepted Trivy exceptions. Each entry names its reason.
+#
+# DS-0002 (Dockerfile without a non-root USER): scripts/ai/docker-worker/Dockerfile
+# is the local agy-docker worker image. The agy CLI installs under /root/.local and
+# its login state lives in the container's /root volume; switching the user would
+# lose that state. The image is never deployed and runs only on the operator host.
+DS-0002

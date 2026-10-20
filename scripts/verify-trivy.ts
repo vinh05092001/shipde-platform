@@ -21,10 +21,10 @@ import { spawnSync, execFileSync } from 'child_process';
  *   2 = the scan did not run, or did not finish (operational failure)
  */
 
-export const TRIVY_PINNED_VERSION = '0.60.0';
+export const TRIVY_PINNED_VERSION = '0.75.0';
 
 /** `AI-37-R02` — `secret` is deliberately absent. */
-export const TRIVY_SECURITY_CHECKS = 'vuln,config';
+export const TRIVY_SECURITY_CHECKS = 'vuln,misconfig';
 
 /** `AI-37-R07` — the exact string the container step emits with no target. */
 export const NO_CONTAINER_TARGET_MESSAGE =
@@ -103,7 +103,7 @@ export function getTrivyBinary(
 export function buildFsScanArgs(target: string): string[] {
   return [
     'fs',
-    '--security-checks',
+    '--scanners',
     TRIVY_SECURITY_CHECKS,
     '--exit-code',
     '1',
@@ -119,7 +119,10 @@ export function buildFsScanArgs(target: string): string[] {
  * a second secret-scanning authority alongside Gitleaks.
  */
 export function assertNoSecretScanning(args: string[]): void {
-  const idx = args.indexOf('--security-checks');
+  const idx =
+    args.indexOf('--scanners') >= 0
+      ? args.indexOf('--scanners')
+      : args.indexOf('--security-checks');
   const checks = idx >= 0 ? (args[idx + 1] ?? '') : '';
   if (
     checks

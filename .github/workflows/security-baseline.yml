@@ -46,3 +46,27 @@ jobs:
             echo "Error: Expected secret-scan negative proof to exit with exact code 1, but got code $EXIT_CODE!"
             exit 1
           fi
+
+  dependency-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.23.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Install Pinned Trivy
+        run: |
+          TRIVY_VERSION="$(node -e "const s=require('fs').readFileSync('scripts/verify-trivy.ts','utf8');console.log(s.match(/TRIVY_PINNED_VERSION = '([^']+)'/)[1])")"
+          ASSET="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          BASE="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}"
+          curl -sSLO "${BASE}/${ASSET}"
+          curl -sSL "${BASE}/trivy_${TRIVY_VERSION}_checksums.txt" | grep " ${ASSET}$" | sha256sum -c -
+          sudo tar -xzf "${ASSET}" -C /usr/local/bin trivy
+          trivy --version
+      - name: Trivy vulnerability and misconfiguration gate
+        run: pnpm security:trivy
