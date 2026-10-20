@@ -1017,7 +1017,34 @@ function isCandidateRouteEligible(routeHealth, candidate, options, routeHealthAp
     (options && options.requireRouteHealth === true) ||
     Object.keys(routeHealth.paths || {}).length > 0
   ) {
-    return Boolean(options && options.probeEvidence && options.probeEvidence(modelId, routePath));
+    if (options && typeof options.probeEvidence === 'function') {
+      return Boolean(options.probeEvidence(modelId, routePath));
+    }
+    if (
+      !isWildcard &&
+      Array.isArray(candidate.evidence) &&
+      candidate.evidence.some((e) => e && (e.status === 'passed' || e.status === 1))
+    ) {
+      return true;
+    }
+    if (
+      !isWildcard &&
+      options &&
+      options.evidenceData &&
+      Array.isArray(options.evidenceData.combinations)
+    ) {
+      const match = options.evidenceData.combinations.find(
+        (c) =>
+          c &&
+          (c.modelId === modelId || c.model === modelId) &&
+          (c.gateway === gateway || c.source === gateway || c.sourceId === gateway) &&
+          (!c.accountId || c.accountId === candidate.accountId) &&
+          Array.isArray(c.evidence) &&
+          c.evidence.some((e) => e && (e.status === 'passed' || e.status === 1))
+      );
+      if (match) return true;
+    }
+    return false;
   }
   return true;
 }
@@ -2186,6 +2213,38 @@ function dispatchCommand(args, deps = {}) {
     } catch {
       discCat = { candidates: [] };
     }
+  }
+
+  const isCandidateInjected = Array.isArray(deps && deps.candidates);
+  const rollingOnboard = require('./rolling-onboard');
+  const env = (deps && deps.env) || process.env;
+  const evidenceData = (deps && deps.evidenceData) || evidence.loadEvidence(evidenceDir);
+  const newSources =
+    (deps && deps.onboardingPrepared) || isCandidateInjected
+      ? []
+      : rollingOnboard.detectNewSources(registry, evidenceData, env);
+
+  // Like the route-refresh, JEV and capability-probe branches below, onboarding makes this
+  // call asynchronous. dispatchCommand's only caller (the `dispatch` command) already
+  // awaits a returned promise and turns a rejection into a non-zero exit.
+  if (newSources.length > 0) {
+    // Onboarding only records evidence, route health and quota. Accounts stay owned by the
+    // account registry: no binding is invented here, so isolation and quota policy hold.
+    return rollingOnboard
+      .autoOnboardNewSources(newSources, {
+        ...deps,
+        evidenceData,
+        evidenceDir,
+        registry,
+        env,
+      })
+      .then(() =>
+        dispatchCommand(args, {
+          ...deps,
+          onboardingPrepared: true,
+          evidenceData,
+        })
+      );
   }
 
   const accounts = deps && deps.accounts !== undefined ? deps.accounts : listAccounts() || [];

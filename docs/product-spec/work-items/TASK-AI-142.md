@@ -1292,6 +1292,21 @@ Aggregator routers like 9Router require model IDs to carry an upstream provider 
     - Relative ordering: scored model (#1) -> unscored model (#2) -> rejected model (#3 in rejected list).
     - `dispatch --dry-run` terminal log outputs `(score: QUALITY_UNKNOWN)`.
 
+### H3 live: rolling source and key onboarding during dispatch cycles (2026-10-19)
+
+- Root cause:
+  - When new sources were added to `sources.json` or new credentials provided in `env`, the Controller required manual CLI commands (`sources onboard`) or static test fixtures before those sources could produce evidence and be ranked during dispatch.
+- Repairs:
+  - In `tools/ai-brain/rolling-onboard.js`:
+    - Implemented `detectNewSources` to identify sources in registry with env keys that lack route evidence.
+    - Implemented `onboardSourceRolling` to automatically execute representative probes and quota scans, populating `evidenceData.combinations`, `routeHealth`, and `quota-state.json`.
+    - Implemented `autoOnboardNewSources` to coordinate rolling onboarding across discovered new sources.
+  - In `tools/ai-brain/cli.js`:
+    - Wired `detectNewSources` and `autoOnboardNewSources` into `dispatchCommand` so that new sources with credentials automatically qualify, receive evidence, bind accounts, and enter candidate ranking in `dispatch --dry-run` and live selection without code changes.
+- Verification:
+  - New test suite in `tools/ai-brain/test/task-ai-142-rolling-onboarding.test.js` verifying detection of unevidenced sources with keys, rolling probe and evidence recording, and end-to-end appearance of newly added mock source in `dispatch --dry-run`.
+
+
 ### Launch faults are not model quality failures (2026-10-19)
 
 FEAT-AUTH-05 run 2026-10-19 18:38 chose Qwen3.8-27B (score 55) because GPT-6 Astra, Muse Spark 1.3, Qwen 3.8 Max and Grok 4.6 carried failed evidence from Controller faults (`writeUsageReportFromHarnessResult is not defined`, worker `EPERM`, `UNKNOWN_HARNESS: direct-http` before #405, `TOKEN_BUDGET_UNVERIFIED`). Those launches never reached the model. `evidence.isQualityFailure` now counts only model-scoped or non-launch failures; routing proof, prior usability, probation and reliability use it.
@@ -1315,3 +1330,8 @@ FEAT-AUTH-05 run 2026-10-20 00:08 ranked claude-opus-5 (quality 82, live probe 2
 ### Direct sources prefix bare model id with providerId in OpenCode launch args (2026-10-20)
 
 FEAT-AUTH-05 run 2026-10-20 02:30 chose a direct-http provider with bare model id, and worker launch failed instantly with launch_config because OpenCode requires `--model <providerId>/<model>` to resolve the provider entry in worker `opencode.json`. Once `providerId` is resolved for an `opencode-direct` launch on a direct (non-router) source, any un-prefixed `--model` argument is rewritten to `providerId + '/' + pinnedModel` in `launch-args-*.json`. Already-prefixed models and router models remain unchanged.
+
+### Live rolling onboarding across multi-scope routers and direct sources (2026-10-20)
+
+Aggregator gateways like 9router failed rolling onboarding entirely when an initial scope (such as kimchi) returned 503, blocking healthy upstreams (`gcli`, `ag`) from being admitted. In addition, direct sources lacking a slash prefix (such as TokenHarbor `thb`) failed candidate generation in `resolveRouterModel`, while `assembleForDispatch` excluded unrecorded routes as `ROUTE_PROBE_UNPROVEN` even after passing onboarding evidence was recorded.
+`onboardSourceRolling` now iterates through candidate scopes on multi-scope routers, admitting all verified working scopes into evidence and route health. `resolveRouterModel` maps bare models for non-prefixed router sources directly to the source upstream, and `isCandidateRouteEligible` recognizes passing evidence from `evidenceData` when `probeEvidence` is not passed. Finally, `runOrchestration` runs rolling onboarding before building writer candidates in goal runs.

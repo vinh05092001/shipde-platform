@@ -413,6 +413,7 @@ function getDispatchConfig(registry, options = {}) {
     safetyMarginMs,
     schemaProbeBudgetMs,
     probeRoundRobinBatch: configuredLimit('probeRoundRobinBatch'),
+    quotaProbeMaxOutputTokens: configuredLimit('quotaProbeMaxOutputTokens'),
     maxPromptCommandOutputChars: configuredLimit('maxPromptCommandOutputChars'),
     maxHostGateSummaryChars: configuredLimit('maxHostGateSummaryChars'),
     headroomUnknownPenalty: configuredNonNegativeLimit(

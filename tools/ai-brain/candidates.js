@@ -95,7 +95,16 @@ function resolveRouterModel(modelId, routerSource, registry, cliSource) {
   }
 
   const parsed = parsePrefix(inner);
-  if (!parsed) return null;
+  if (!parsed) {
+    const itemUpstream = typeof modelId === 'object' && modelId ? modelId.upstream : null;
+    if (itemUpstream) {
+      return { upstream: itemUpstream, innerModelId: inner };
+    }
+    if (routerSource && (!routerSource.modelPrefix || routerSource.id === 'thb')) {
+      return { upstream: routerSource.id, innerModelId: inner };
+    }
+    return null;
+  }
 
   for (const prefix of sortedPrefixes) {
     const clean = prefix.replace(/\/$/, '');
@@ -1079,7 +1088,7 @@ function generateCandidatesWithCatalog(opts) {
         const credentialAcc = {
           id: accId,
           source: source.id,
-          models: source.models || [],
+          models: source.models || (source.verify?.model ? [source.verify.model] : []),
           enabled: true,
           status: 'available',
           credentialEnvMissing: !hasKey,
@@ -1125,7 +1134,8 @@ function generateCandidatesWithCatalog(opts) {
       const ownIds = new Set();
       const named = (m) => (typeof m === 'string' ? m : m && (m.id || m.model || m.modelId));
       const perSource = o.sourceModels && o.sourceModels[source.id];
-      for (const m of [].concat(Array.isArray(perSource) ? perSource : [], source.models || [])) {
+      const sourceModelsList = source.models || (source.verify?.model ? [source.verify.model] : []);
+      for (const m of [].concat(Array.isArray(perSource) ? perSource : [], sourceModelsList)) {
         const id = named(m);
         if (id) ownIds.add(id);
       }
@@ -1145,7 +1155,7 @@ function generateCandidatesWithCatalog(opts) {
         });
       }
       const routerCatalogue = ownCatalogue.concat(
-        (source.models || [])
+        sourceModelsList
           .map((model) => ({
             modelId: typeof model === 'string' ? model : model && (model.id || model.model),
             gateway: source.id,
@@ -1157,7 +1167,7 @@ function generateCandidatesWithCatalog(opts) {
           continue;
         const fullId =
           typeof item === 'string' ? item : (item && (item.modelId || item.model || item.id)) || '';
-        const resolved = resolveRouterModel(fullId, source, registry);
+        const resolved = resolveRouterModel(item || fullId, source, registry);
         if (!resolved) continue;
         if (
           item &&
