@@ -85,7 +85,7 @@ None.
 
 ### 2026-10-20 — ast-grep/ast-grep: EXECUTION_VERIFIED
 
-- **Repo/ref:** `@ast-grep/cli` `0.51.0`, a root devDependency. Its postinstall, which only links the prebuilt platform binary, is allowed in `pnpm-workspace.yaml`. ast-grep moves from candidates (WATCH) to adopted.
+- **Repo/ref:** `@ast-grep/cli` `0.51.0`, a root devDependency. It runs from its platform optionalDependency, so its postinstall stays disabled (`false` in `pnpm-workspace.yaml` allowBuilds) and the reviewed allowlist is unchanged. ast-grep moves from candidates (WATCH) to adopted.
 - **Capability:**
   - Structural search and codemod. Agents preview with `ast-grep run -p <pattern> --rewrite <fix>` and apply with `-U` only after the diff is reviewed, as documented in `sgconfig.yml`.
   - Blocking structural rules in `tools/ast-grep/rules`. The first rule, `no-empty-catch`, flags a catch that swallows a failure silently.
