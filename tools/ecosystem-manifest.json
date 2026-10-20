@@ -792,7 +792,7 @@
       "kind": "cli",
       "role": "Prompt security assertions, adversarial testing, and LLM output evaluation suites.",
       "source_of_truth_boundary": "Offline contract checks of the real Controller author/review prompts (tools/controller-eval, echo provider); run by pnpm test:prompts in CI. 0.122.x-0.124.x are uninstallable (missing @ai-sdk/provider@3.0.19).",
-      "install_method": "npx-on-demand",
+      "install_method": "npm-isolated-prefix",
       "pinned_version_or_commit": "0.120.0",
       "platform": "windows",
       "lifecycle_state": "ADOPTED",
