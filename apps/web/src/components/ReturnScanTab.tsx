@@ -144,7 +144,7 @@ export const ReturnScanTab: React.FC = () => {
         <div className="flex justify-between items-center pb-4 border-b border-slate-100">
           <div>
             <h1 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-              <RotateCcw className="w-5 h-5 text-[#EA4B12]" />
+              <RotateCcw className="w-5 h-5 text-[#c23807]" />
               <span>Tiếp Nhận & Quét Mã Kiện Hàng Hoàn</span>
             </h1>
             <p className="text-xs text-slate-500 mt-0.5">
@@ -204,7 +204,7 @@ export const ReturnScanTab: React.FC = () => {
                   onClick={() => setConditionInput(cond.id as any)}
                   className={`p-3 rounded-xl text-left border transition cursor-pointer ${
                     conditionInput === cond.id
-                      ? 'bg-[#FFF5F0] border-[#EA4B12] text-[#EA4B12]'
+                      ? 'bg-[#FFF5F0] border-[#c23807] text-[#c23807]'
                       : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
                   }`}
                 >

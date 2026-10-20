@@ -118,7 +118,7 @@ export const ReconciliationTab: React.FC<Props> = ({
         <div className="space-y-1">
           <div className="flex items-center gap-2">
             <h1 className="text-lg font-bold text-white flex items-center gap-2">
-              <DollarSign className="w-5 h-5 text-[#EA4B12]" />
+              <DollarSign className="w-5 h-5 text-[#c23807]" />
               <span>Đối Soát COD, Cước Vận Chuyển & Phụ Phí</span>
             </h1>
             <span className="badge-ok text-xs">Kỳ Mở</span>
@@ -194,7 +194,7 @@ export const ReconciliationTab: React.FC<Props> = ({
                 onClick={() => setSelectedDiscrepancyType(f.id)}
                 className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
                   selectedDiscrepancyType === f.id
-                    ? 'bg-[#FFF5F0] text-[#EA4B12] font-bold border border-[#FDDDD0]'
+                    ? 'bg-[#FFF5F0] text-[#c23807] font-bold border border-[#FDDDD0]'
                     : 'text-slate-600 hover:bg-slate-100'
                 }`}
               >

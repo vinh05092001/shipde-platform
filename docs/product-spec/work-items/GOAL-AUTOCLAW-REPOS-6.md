@@ -82,3 +82,14 @@
 ## Residual limitations
 
 None.
+
+### 2026-10-20 — dequelabs/axe-core: EXECUTION_VERIFIED
+
+- Repo/package + ref: `axe-core@4.14.0`, `@axe-core/playwright@4.14.0`, `@playwright/test@1.64.1` (apps/web devDependencies).
+- Capability: WCAG 2.1 A/AA DOM audit of the public web routes `/`, `/register`, `/forgot-password`, `/reset-password`.
+- Trigger: `pnpm --filter @shipde/web test:a11y`, run by CI `current-application` after `pnpm build`.
+- Caller/config: `apps/web/playwright.config.ts`, `apps/web/e2e/a11y.spec.ts`.
+- Contract: a violation fails the gate. The full violations and incomplete results are attached to `apps/web/test-results/a11y-report.json` and uploaded as the `a11y-report` artifact.
+- Real run: the first run found `button-name` (password visibility toggle) and `color-contrast` (brand orange `#EA4B12` 3.8:1, helper text 2.6:1) on all four routes. After the fixes all four pass.
+- Fix decision: the operator chose to move the brand token to `#C23807` (5.4:1), hover `#A8300A`, per DESIGN-SYSTEM-UX-RULES "Minimum WCAG AA contrast".
+- Limitation: authenticated screens are not audited yet; they need a seeded session fixture.
