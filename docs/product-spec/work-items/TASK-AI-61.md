@@ -109,3 +109,4 @@ Notes:
 .\scripts\ai\isolation\Remove-WorkerIsolation.ps1
 ```
 *Expected output*: Scripts confirms removal of rules, ACLs, and user.
+Live E2E proof E2E-PROOF-20260929-1512
