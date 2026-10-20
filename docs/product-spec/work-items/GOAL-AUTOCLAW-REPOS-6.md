@@ -120,3 +120,12 @@ None.
 - **Real run:** `lockedPack('author.ui')` returns 97,550 characters containing both `## Skill: vercel-*` sections. `lockedPack('author')` contains none.
 - **Tests:** `repo-integration-vercel-skills.test.js` checks the byte pins against NOTICE, the ordering behind the headers and that non-UI roles receive nothing. The `task-ai-109*` and group-2 tests pass as well: 34 pass, 0 fail.
 - **Rollback:** `SHIPDE_SKILL_PACK=off`, or revert the commit.
+
+### 2026-10-20 — forwardemail/supertest: EXECUTION_VERIFIED (registered)
+
+- **Repo/ref:** `supertest` `7.2.2`, a devDependency of `apps/api` and `apps/worker`. It was running but missing from the manifest, and is now registered as ADOPTED / BLOCKING_GATE.
+- **Callers:**
+  - `apps/api` `test`: `api.supertest.spec.ts`, `auth/auth.supertest.spec.ts`, `auth/auth.login.supertest.spec.ts` and `session/session.supertest.spec.ts`. They assert side effects such as audit rows, verification tokens and session state through Prisma.
+  - `apps/worker` `test`: `worker.supertest.spec.ts`.
+- **Real run:** CI run `39420673151` (`current-application`, `pnpm test`) executes both suites. The worker harness prints "ALL WORKER SUPERTEST & NESTJS HARNESS TESTS PASSED 100%", and the API suites pass inside the same green job.
+- **Verification:** manifest audit error 0; `ecosystem.ps1 validate` passes; manifest-audit and repo-integration tests pass 54/0.

@@ -1013,6 +1013,27 @@
       "health_check": "pnpm lint:ast",
       "rollback": "Remove the lint:ast CI step and the devDependency.",
       "profiles": ["FOUNDATION", "RESEARCH_ONLY"]
+    },
+    {
+      "id": "supertest",
+      "name": "Supertest",
+      "canonical_url": "https://github.com/forwardemail/supertest",
+      "repository": "forwardemail/supertest",
+      "owner": "forwardemail",
+      "kind": "dev-dependency",
+      "role": "HTTP integration assertions against the NestJS API and worker apps, including side effects (audit rows, tokens, sessions).",
+      "source_of_truth_boundary": "Assertions follow the Work Item acceptance matrix; Playwright covers browser flows, MSW covers mocked upstreams.",
+      "install_method": "npm-dev",
+      "pinned_version_or_commit": "7.2.2",
+      "platform": "any",
+      "lifecycle_state": "ADOPTED",
+      "default_enabled": true,
+      "blocking_policy": "BLOCKING_GATE",
+      "permissions": "read-only",
+      "telemetry_network_behavior": "none",
+      "health_check": "pnpm --filter @shipde/api test",
+      "rollback": "Remove the *.supertest.spec.ts suites from the app test scripts.",
+      "profiles": ["FOUNDATION", "BACKEND_FEATURE"]
     }
   ],
   "product_dependencies": [
