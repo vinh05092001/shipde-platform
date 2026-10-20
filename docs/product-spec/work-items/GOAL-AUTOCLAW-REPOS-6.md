@@ -117,6 +117,6 @@ None.
   - The upstream `web-design-guidelines` skill only tells the agent to fetch `command.md` from `main` before every review. That unpinned fetch is replaced by the pinned rules file.
   - `AGENTS.md` (112 KB) is not vendored.
 - **Caller:** `tools/ai-brain/skill-pack.js` `UI_ROLE_SKILLS`. Each entry may name its own vendored root. UI roles (`author.ui`, `reviewer.ui`) receive the texts after `UI_AUTHORITY_HEADER` and `LOCK_HEADER`. Non-UI packs are unchanged.
-- **Real run:** `lockedPack('author.ui')` returns 97,890 characters containing both `## Skill: vercel-*` sections. `lockedPack('author')` contains none.
+- **Real run:** `lockedPack('author.ui')` returns 97,550 characters containing both `## Skill: vercel-*` sections. `lockedPack('author')` contains none.
 - **Tests:** `repo-integration-vercel-skills.test.js` checks the byte pins against NOTICE, the ordering behind the headers and that non-UI roles receive nothing. The `task-ai-109*` and group-2 tests pass as well: 34 pass, 0 fail.
 - **Rollback:** `SHIPDE_SKILL_PACK=off`, or revert the commit.

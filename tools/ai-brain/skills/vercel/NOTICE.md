@@ -22,6 +22,6 @@ These files reach a worker only through `lockedPack(role)` in
 
 ## Vendored files (sha256 of the exact upstream bytes)
 
-- `react-best-practices/SKILL.md` sha256:`3286ace648b4d740317b9c1cb7fbd38600eaacc62a8b57ea5e06fd2992b5582e`
-- `web-interface-guidelines/command.md` sha256:`d9d63639b5f6a376243ffda2b930f0cc91505fd0e0b527376b466c3c6a2c9794`
-- `web-interface-guidelines/LICENSE` sha256:`13071e827f4b5cfdb252ab27758488ae86dc8fa392fe36a45ea7952e05546519`
+- `react-best-practices/SKILL.md` sha256:`71ed7794962fa6e803ee83030517b5b93a9f70fbfeb431ec4535c5480a8d8355`
+- `web-interface-guidelines/command.md` sha256:`d246b026f4f29b5823a9cc857f9edf3d2507002e055e32040cadeaf3b38e0234`
+- `web-interface-guidelines/LICENSE` sha256:`6cd1609c9c12233507cdd2ce0d32e9a721e3c27494951be06b90090deeeb7af2`
