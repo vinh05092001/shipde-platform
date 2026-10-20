@@ -329,16 +329,13 @@ function Assert-ShipDeManifest {
 
     $errors = [System.Collections.Generic.List[string]]::new()
 
-    # 1. Adopted entries check: exactly 37 adopted repositories/capabilities
+    # 1. Adopted entries check: the manifest holds exactly the approved repositories below
     if (-not $Manifest.adopted) {
         $errors.Add("Manifest must define 'adopted' array.")
         return $errors
     }
 
     $adopted = @($Manifest.adopted)
-    if ($adopted.Count -ne 37) {
-        $errors.Add("Manifest adopted count must be exactly 37; found $($adopted.Count).")
-    }
 
     # Approved canonical repository identities (Finding 1: 30 baseline + 7 additions)
     $canonicalApprovedRepos = @(
@@ -378,8 +375,17 @@ function Assert-ShipDeManifest {
         "promptfoo/promptfoo",
         "aquasecurity/trivy",
         "open-telemetry/opentelemetry-js",
-        "thanglequoc/vietnamese-provinces-database"
+        "thanglequoc/vietnamese-provinces-database",
+        # GOAL-AUTOCLAW-REPOS-2: appendix 2026-10-13 tools that already run
+        "anomalyco/opencode",
+        "getpaseo/paseo",
+        "rtk-ai/rtk",
+        "obra/superpowers",
+        "pbakaus/impeccable"
     )
+    if ($adopted.Count -ne $canonicalApprovedRepos.Count) {
+        $errors.Add("Manifest adopted count must equal the $($canonicalApprovedRepos.Count) approved repositories; found $($adopted.Count).")
+    }
 
     # 2. Uniqueness checks for id, canonical_url, repository
     $seenIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
@@ -582,7 +588,7 @@ function Invoke-ShipDeValidate {
         exit 1
     }
 
-    Write-Host "VALIDATION PASSED: All 37 approved adopted repositories, 14 product dependencies, 10 candidates, and 9 profiles conform to ecosystem policy." -ForegroundColor Green
+    Write-Host "VALIDATION PASSED: All approved adopted repositories, 14 product dependencies, 10 candidates, and 9 profiles conform to ecosystem policy." -ForegroundColor Green
 }
 
 function Invoke-ShipDeStatus {
@@ -992,7 +998,7 @@ function Invoke-ShipDeTests {
         if ($errors.Count -ne 0) {
             throw "Base validation failed unexpectedly: $($errors -join '; ')"
         }
-        Write-Host "  [PASS] 37 approved adopted tools and 9 profiles validated cleanly with 0 errors."
+        Write-Host "  [PASS] Approved adopted tools and 9 profiles validated cleanly with 0 errors."
 
         # Negative Test 1: Malformed JSON syntax
         Write-Host "`nTest 2 [Negative]: Malformed JSON must fail closed with exact exit code..."

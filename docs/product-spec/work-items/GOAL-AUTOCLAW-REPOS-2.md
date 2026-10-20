@@ -112,3 +112,4 @@ These five appendix repositories were running but had no manifest entry. Each is
 - **microsoft/playwright** moves from DEFERRED to ADOPTED at `1.64.1`. It has run the blocking axe-core gate in CI (`current-application.yml`) since #422.
 
 Verification: manifest audit error 0. manifest-audit and all repo-integration tests: 54 pass, 0 fail.
+Validator: `scripts/ai/ecosystem.ps1 validate` passes. It now checks the adopted count against the approved list instead of a hardcoded 37, and the approved list includes the five registered repositories.
