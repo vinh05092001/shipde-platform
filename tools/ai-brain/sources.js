@@ -414,6 +414,13 @@ function getDispatchConfig(registry, options = {}) {
     schemaProbeBudgetMs,
     probeRoundRobinBatch: configuredLimit('probeRoundRobinBatch'),
     quotaProbeMaxOutputTokens: configuredLimit('quotaProbeMaxOutputTokens'),
+    quotaScanIntervalMin: configuredLimit('quotaScanIntervalMin'),
+    quotaBlockTtlMin: configuredLimit('quotaBlockTtlMin'),
+    quotaScanMaxTokens: configuredLimit('quotaScanMaxTokens'),
+    quotaBlockTtlMs:
+      Number(options.quotaBlockTtlMs ?? dispatch.quotaBlockTtlMs) > 0
+        ? Number(options.quotaBlockTtlMs ?? dispatch.quotaBlockTtlMs)
+        : configuredLimit('quotaBlockTtlMin') * 60 * 1000,
     maxPromptCommandOutputChars: configuredLimit('maxPromptCommandOutputChars'),
     maxHostGateSummaryChars: configuredLimit('maxHostGateSummaryChars'),
     rateLimitCooldownMs: configuredLimit('rateLimitCooldownMs'),

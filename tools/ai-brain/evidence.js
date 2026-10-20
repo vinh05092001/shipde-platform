@@ -478,6 +478,32 @@ function isCandidateBlocked(data, candidate, opts) {
     }
   }
 
+  // 4. Quota state check (TASK-AI-142 T4)
+  try {
+    const quotaScan = require('./quota-scan');
+    const quotaState =
+      opts?.quotaState || (opts?.loadQuotaState !== false ? quotaScan.loadQuotaState(opts) : null);
+    if (quotaState) {
+      const scopeState = quotaScan.getQuotaScopeState(candObj, quotaState);
+      if (scopeState && quotaScan.isScopeBlocked(scopeState, now)) {
+        return {
+          blocked: true,
+          reason: `QUOTA_SCOPE_${scopeState.code}: ${scopeState.scope || scopeState.source}`,
+          since: scopeState.at,
+          scope: 'quota-scope',
+        };
+      }
+    }
+  } catch (err) {
+    // Fail closed: an unreadable or unevaluable quota state is not evidence that the scope is usable.
+    return {
+      blocked: true,
+      reason: `QUOTA_SCOPE_STATE_ERROR: ${String(err?.message || err).slice(0, 200)}`,
+      since: new Date(now).toISOString(),
+      scope: 'quota-scope',
+    };
+  }
+
   return { blocked: false, status: 'unknown' };
 }
 

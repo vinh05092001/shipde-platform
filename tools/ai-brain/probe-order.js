@@ -29,6 +29,34 @@ function preferKnownGood(result, candidates, options = {}) {
   // Every transport and reason follows the same sampling rule, without lane quotas.
   result.isolatedLaneRejected = sampleRepresentative(result.rejected || []);
   if (!result.chosen || !result.ranking?.length) return result;
+
+  const quotaScan = require('./quota-scan');
+  const quotaState = options.quotaState || quotaScan.loadQuotaState(options);
+  const now = options.now ?? Date.now();
+  if (result.ranking?.length) {
+    const valid = [];
+    result.rejected = result.rejected || [];
+    for (const row of result.ranking) {
+      const c = byKey.get(row.candidateKey) || row;
+      const scopeState = quotaScan.getQuotaScopeState(c, quotaState);
+      if (scopeState && quotaScan.isScopeBlocked(scopeState, now)) {
+        result.rejected.push({
+          candidateKey: row.candidateKey,
+          reasonCode: `QUOTA_SCOPE_${scopeState.code}`,
+          reason: `QUOTA_SCOPE_${scopeState.code}: ${scopeState.scope || scopeState.source}`,
+          score: row.score,
+        });
+      } else {
+        valid.push(row);
+      }
+    }
+    result.ranking = valid;
+    if (!result.ranking.length) {
+      result.chosen = null;
+      result.top3 = [];
+      return result;
+    }
+  }
   result.ranking = result.ranking
     .map((row, index) => {
       const c = byKey.get(row.candidateKey) || row;
