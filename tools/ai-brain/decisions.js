@@ -27,6 +27,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { randomUUID } = require('node:crypto');
 const { StringDecoder } = require('node:string_decoder');
 
 const DEFAULT_DIR = path.join(os.homedir(), '.shipde', 'decisions');
@@ -87,40 +88,37 @@ const PART_PATTERN = /^(\d{4}-\d{2}-\d{2})(?:\.(\d+))?\.jsonl$/;
 const identity = (c) =>
   typeof c === 'string' ? c : c && (c.candidateKey || c.offeringId || c.key);
 
-function sampleRepresentative(list, limit = CANDIDATE_LIMIT) {
-  if (!Array.isArray(list) || list.length <= limit) return (list || []).slice(0, limit);
+function sampleRepresentative(list, options = CANDIDATE_LIMIT) {
+  if (!Array.isArray(list)) return [];
+  const opts = typeof options === 'number' ? { limit: options } : options || {};
+  const sampleCap = positiveDispatchLimit(
+    { decisionSampleCap: opts.sampleCap ?? opts.decisionSampleCap },
+    opts.dispatch || {},
+    'decisionSampleCap'
+  );
+  const limit = Number(opts.limit) > 0 ? Number(opts.limit) : CANDIDATE_LIMIT;
+
   const picked = [];
-  const seenHarnessReason = new Set();
+  const pairCounts = new Map();
   const harnessOf = (row) =>
     (row.candidateKey && row.candidateKey.split('::')[0]) || row.harness || 'unknown';
   const reasonOf = (row) => row.reasonCode || row.reason || 'UNKNOWN';
 
-  // Pass 1: Ensure distinct (harness, reason) combinations have representation
   for (const row of list) {
     if (picked.length >= limit) break;
     const hr = harnessOf(row) + '::' + reasonOf(row);
-    if (!seenHarnessReason.has(hr)) {
-      seenHarnessReason.add(hr);
+    const count = pairCounts.get(hr) || 0;
+    if (count < sampleCap) {
+      pairCounts.set(hr, count + 1);
       picked.push(row);
-    }
-  }
-
-  // Pass 2: Fill remaining slots up to limit in original order
-  if (picked.length < limit) {
-    const pickedSet = new Set(picked);
-    for (const row of list) {
-      if (picked.length >= limit) break;
-      if (!pickedSet.has(row)) {
-        pickedSet.add(row);
-        picked.push(row);
-      }
     }
   }
   return picked;
 }
 
-function capDecision(entry) {
+function capDecision(entry, options) {
   const out = { ...entry };
+  const opts = options || {};
   const chosen = identity(entry.chosen) || entry.chosenKey || entry.selected;
   for (const field of ['candidates', 'ranking', 'top3', 'modelRanking']) {
     if (!Array.isArray(entry[field])) continue;
@@ -159,9 +157,236 @@ function capDecision(entry) {
       }
       out[field + 'ByReasonCode'] = counts;
     }
-    out[field] = sampleRepresentative(entry[field], CANDIDATE_LIMIT);
+    out[field] = sampleRepresentative(entry[field], opts);
   }
   return out;
+}
+
+function positiveDispatchLimit(options, dispatch, key) {
+  const configured = require('./sources.json').dispatch || {};
+  const value = Number(options[key] ?? dispatch[key] ?? configured[key]);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error('DISPATCH_CONFIG_INVALID: ' + key + ' must be a positive integer');
+  }
+  return value;
+}
+
+function mergeRankingSummaryEntries(entries, maxEntries) {
+  const rollups = [];
+  const detailsByFile = new Map();
+
+  for (const entry of entries) {
+    if (!entry || typeof entry !== 'object') continue;
+    if (entry.kind === 'rollup') {
+      rollups.push(entry);
+    } else if (typeof entry.file === 'string') {
+      detailsByFile.set(entry.file, entry);
+    }
+  }
+
+  const details = [...detailsByFile.values()].sort(
+    (a, b) =>
+      String(a.mtime || '').localeCompare(String(b.mtime || '')) || a.file.localeCompare(b.file)
+  );
+  if (rollups.length === 0 && details.length <= maxEntries) return details;
+
+  const detailSlots = Math.max(0, maxEntries - 1);
+  const retained = detailSlots > 0 ? details.slice(-detailSlots) : [];
+  const rolledDetails = details.slice(0, details.length - retained.length);
+  const rolledEntries = [...rollups, ...rolledDetails];
+  const rollup = {
+    kind: 'rollup',
+    filesCount: 0,
+    oldestMtime: null,
+    newestMtime: null,
+    candidatesCount: 0,
+    rejectedCount: 0,
+    rejectedByReasonCode: {},
+    modelRankingCount: 0,
+  };
+
+  for (const entry of rolledEntries) {
+    const filesCount = entry.kind === 'rollup' ? Number(entry.filesCount) : 1;
+    rollup.filesCount += Number.isSafeInteger(filesCount) && filesCount > 0 ? filesCount : 0;
+    for (const field of ['candidatesCount', 'rejectedCount', 'modelRankingCount']) {
+      const count = Number(entry[field]);
+      if (Number.isFinite(count) && count > 0) rollup[field] += count;
+    }
+    for (const [reason, countValue] of Object.entries(entry.rejectedByReasonCode || {})) {
+      const count = Number(countValue);
+      if (Number.isFinite(count) && count > 0) {
+        rollup.rejectedByReasonCode[reason] = (rollup.rejectedByReasonCode[reason] || 0) + count;
+      }
+    }
+    const oldest = entry.oldestMtime || entry.mtime || null;
+    const newest = entry.newestMtime || entry.mtime || null;
+    if (oldest && (!rollup.oldestMtime || oldest < rollup.oldestMtime)) {
+      rollup.oldestMtime = oldest;
+    }
+    if (newest && (!rollup.newestMtime || newest > rollup.newestMtime)) {
+      rollup.newestMtime = newest;
+    }
+  }
+
+  return [rollup, ...retained];
+}
+
+function replaceJsonDurably(file, value) {
+  const temporary = file + '.' + process.pid + '-' + randomUUID() + '.tmp';
+  let fd;
+  let directoryFd;
+  try {
+    fd = fs.openSync(temporary, 'wx');
+    fs.writeFileSync(fd, JSON.stringify(value, null, 2), 'utf8');
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fd = undefined;
+    fs.renameSync(temporary, file);
+    if (process.platform !== 'win32') {
+      directoryFd = fs.openSync(path.dirname(file), 'r');
+      fs.fsyncSync(directoryFd);
+      fs.closeSync(directoryFd);
+      directoryFd = undefined;
+    }
+  } finally {
+    if (fd !== undefined) {
+      try {
+        fs.closeSync(fd);
+      } catch {}
+    }
+    if (directoryFd !== undefined) {
+      try {
+        fs.closeSync(directoryFd);
+      } catch {}
+    }
+    try {
+      fs.unlinkSync(temporary);
+    } catch {}
+  }
+}
+
+function retentionLimits(options) {
+  const opts = options || {};
+  const dispatch = opts.dispatch || (opts.registry && opts.registry.dispatch) || {};
+  return {
+    decisionRetentionDays: positiveDispatchLimit(opts, dispatch, 'decisionRetentionDays'),
+    rankingSummaryMaxEntries: positiveDispatchLimit(opts, dispatch, 'rankingSummaryMaxEntries'),
+  };
+}
+
+function summarizeOldRankingFiles(options) {
+  const opts = options || {};
+  const dir = opts.dir || opts.decisionDir || DEFAULT_DIR;
+  if (!dir || !fs.existsSync(dir)) return { summarized: 0, removed: 0 };
+
+  const now = Number(opts.now) > 0 ? Number(opts.now) : Date.now();
+  const dispatch = opts.dispatch || (opts.registry && opts.registry.dispatch) || {};
+  const retentionDays = positiveDispatchLimit(opts, dispatch, 'decisionRetentionDays');
+  const summaryMaxEntries = positiveDispatchLimit(opts, dispatch, 'rankingSummaryMaxEntries');
+  const maxAgeMs = retentionDays * 24 * 60 * 60 * 1000;
+
+  let entries = [];
+  try {
+    entries = fs.readdirSync(dir);
+  } catch {
+    return { summarized: 0, removed: 0 };
+  }
+  const rankingPattern = /^ranking-(?!summary).*\.json$/;
+  const oldFiles = [];
+
+  for (const file of entries) {
+    if (!rankingPattern.test(file)) continue;
+    const fullPath = path.join(dir, file);
+    try {
+      const stat = fs.statSync(fullPath);
+      if (now - stat.mtimeMs > maxAgeMs) {
+        oldFiles.push({ file, fullPath, mtimeMs: stat.mtimeMs });
+      }
+    } catch {}
+  }
+
+  const summaryFile = opts.summaryFile || path.join(dir, 'ranking-summary.json');
+  let summaries = [];
+  if (fs.existsSync(summaryFile)) {
+    const parsed = JSON.parse(fs.readFileSync(summaryFile, 'utf8'));
+    if (!Array.isArray(parsed)) throw new Error('RANKING_SUMMARY_INVALID');
+    summaries = parsed;
+  }
+
+  // Sources already folded into the summary by an earlier run whose unlink did not
+  // complete. They are removed now and never counted again.
+  const pendingEntry = summaries.find((entry) => entry && entry.kind === 'pending');
+  summaries = summaries.filter((entry) => !(entry && entry.kind === 'pending'));
+  const alreadyCounted = new Set();
+  let removed = 0;
+  for (const file of (pendingEntry && pendingEntry.files) || []) {
+    if (typeof file !== 'string' || !rankingPattern.test(file)) continue;
+    try {
+      fs.unlinkSync(path.join(dir, file));
+      removed += 1;
+    } catch (error) {
+      if (error && error.code !== 'ENOENT') alreadyCounted.add(file);
+    }
+  }
+
+  const summarizedFiles = [];
+  for (const { file, fullPath, mtimeMs } of oldFiles) {
+    if (alreadyCounted.has(file)) continue;
+    try {
+      const content = fs.readFileSync(fullPath, 'utf8');
+      const data = JSON.parse(content);
+      const capped = capDecision(data, opts);
+      summaries.push({
+        file,
+        mtime: new Date(mtimeMs).toISOString(),
+        candidatesCount:
+          capped.candidatesCount ?? (Array.isArray(data.candidates) ? data.candidates.length : 0),
+        rejectedCount:
+          capped.rejectedCount ?? (Array.isArray(data.rejected) ? data.rejected.length : 0),
+        rejectedByReasonCode: capped.rejectedByReasonCode || {},
+        modelRankingCount:
+          capped.modelRankingCount ??
+          (Array.isArray(data.modelRanking) ? data.modelRanking.length : 0),
+        chosen: identity(data.chosen) || data.chosenKey || data.selected || null,
+      });
+      summarizedFiles.push({ file, fullPath });
+    } catch {}
+  }
+
+  const pendingFiles = [...alreadyCounted, ...summarizedFiles.map(({ file }) => file)];
+  const pendingChanged =
+    JSON.stringify(pendingFiles) !== JSON.stringify((pendingEntry && pendingEntry.files) || []);
+  if (summarizedFiles.length === 0 && !pendingChanged) {
+    return { summarized: summaries.length, removed, summaryFile };
+  }
+
+  summaries = mergeRankingSummaryEntries(summaries, summaryMaxEntries);
+  const written = pendingFiles.length
+    ? [...summaries, { kind: 'pending', files: pendingFiles }]
+    : summaries;
+  replaceJsonDurably(summaryFile, written);
+
+  const stillPending = [...alreadyCounted];
+  for (const { file, fullPath } of summarizedFiles) {
+    try {
+      fs.unlinkSync(fullPath);
+      removed += 1;
+    } catch {
+      stillPending.push(file);
+    }
+  }
+  if (stillPending.length !== pendingFiles.length) {
+    try {
+      replaceJsonDurably(
+        summaryFile,
+        stillPending.length ? [...summaries, { kind: 'pending', files: stillPending }] : summaries
+      );
+    } catch {
+      // The earlier pending list stays; next run finds those sources gone and drops them.
+    }
+  }
+
+  return { summarized: summaries.length, removed, summaryFile };
 }
 
 function decisionFiles(dir) {
@@ -179,6 +404,7 @@ function decisionFiles(dir) {
 function compactDecisions(options) {
   const dir = options && options.dir;
   if (!dir) throw new Error('decisions compact requires --dir');
+  summarizeOldRankingFiles(options);
   return decisionFiles(dir).map((name) => {
     const source = path.join(dir, name);
     const output = source + '.compact-' + Date.now() + '.jsonl';
@@ -255,9 +481,10 @@ function recordDecision(entry, options) {
   const opts = options || {};
   const dir = opts.dir || DEFAULT_DIR;
   const now = opts.now || Date.now();
+  const retention = retentionLimits(opts);
   const record = Object.assign(
     { at: new Date(now).toISOString() },
-    scrub(capDecision(entry || {}))
+    scrub(capDecision(entry || {}, opts))
   );
   if (!record.stage) record.stage = Stage.SELECTED;
   fs.mkdirSync(dir, { recursive: true });
@@ -272,6 +499,13 @@ function recordDecision(entry, options) {
     file = path.join(dir, stamp + '.' + part + '.jsonl');
   }
   fs.appendFileSync(file, line, 'utf8');
+  try {
+    summarizeOldRankingFiles({ ...opts, ...retention });
+  } catch (error) {
+    // The decision is already durable. Retention I/O is retried on the next record:
+    // sources stay in place until the summary that counts them has been replaced.
+    if (String(error && error.message).startsWith('DISPATCH_CONFIG_INVALID')) throw error;
+  }
   return record;
 }
 
@@ -671,6 +905,7 @@ module.exports = {
   decisionLines,
   capDecision,
   compactDecisions,
+  summarizeOldRankingFiles,
   DEFAULT_DIR,
   recordDecision,
   recordRouteRefusals,

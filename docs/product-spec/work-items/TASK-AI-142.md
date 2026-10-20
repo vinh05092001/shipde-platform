@@ -1335,7 +1335,6 @@ FEAT-AUTH-05 run 2026-10-20 02:30 chose a direct-http provider with bare model i
 
 Aggregator gateways like 9router failed rolling onboarding entirely when an initial scope (such as kimchi) returned 503, blocking healthy upstreams (`gcli`, `ag`) from being admitted. In addition, direct sources lacking a slash prefix (such as TokenHarbor `thb`) failed candidate generation in `resolveRouterModel`, while `assembleForDispatch` excluded unrecorded routes as `ROUTE_PROBE_UNPROVEN` even after passing onboarding evidence was recorded.
 `onboardSourceRolling` now iterates through candidate scopes on multi-scope routers, admitting all verified working scopes into evidence and route health. `resolveRouterModel` maps bare models for non-prefixed router sources directly to the source upstream, and `isCandidateRouteEligible` recognizes passing evidence from `evidenceData` when `probeEvidence` is not passed. Finally, `runOrchestration` runs rolling onboarding before building writer candidates in goal runs.
-
 ### H3 live: provider probe sweep imported into route evidence and candidate exclusion (2026-10-19)
 
 - Root cause:
@@ -1358,3 +1357,24 @@ Aggregator gateways like 9router failed rolling onboarding entirely when an init
     - Capability combination generation matching `probe-order` / `recentRouteSuccess` contracts.
     - Dry-run dispatch exclusions verifying exact reason codes (`QUOTA`, `AUTH`, `TIER`, `RATE`, `REGION`, `NO_CHANNEL`).
     - CLI entrypoint and missing-file validation.
+
+### H3 live: cap representative decision samples and roll stale ranking logs (2026-10-19)
+
+- Root cause:
+  - In `decisions.js`, `capDecision` previously sampled a single flat slice of rejected candidates (`slice(0, 10)`), which lacked diversity when a single failure reason dominated or bloated records when unconstrained. In trial 14, over 100 rejected routes shared the exact same harness and reason (`paseo` / `WRITER_SCHEMA_NOT_VERIFIED_BUDGET`).
+  - Historical `data/decisions/ranking-*.json` files accumulated indefinitely without bounded retention.
+- Repairs:
+  - In `tools/ai-brain/decisions.js`:
+    - Updated `sampleRepresentative` to cap rejected candidate samples per `(harness, reason)` pair up to `dispatch.decisionSampleCap` from `sources.json` (no code fallback), while retaining total counts in `rejectedCount` and `rejectedByReasonCode`.
+    - Added `summarizeOldRankingFiles` to roll `ranking-*.json` files older than `dispatch.decisionRetentionDays` into `ranking-summary.json`, bounded by `dispatch.rankingSummaryMaxEntries`, and unlink stale files only after the summary is durably replaced.
+    - Updated `recordDecision` and `compactDecisions` to invoke `summarizeOldRankingFiles`.
+  - In `tools/ai-brain/sources.json` and `tools/ai-brain/sources.js`:
+    - Added `decisionSampleCap: 2`, `decisionRetentionDays: 7`, and `rankingSummaryMaxEntries: 1000` in `dispatch` configuration and exposed them via `getDispatchConfig`.
+- Verification:
+  - Verified in `tools/ai-brain/test/decisions-size.test.js` reducing realistic trial 14 fixture size by >= 80% with exact pair capping, preserving reason counts, and rolling files older than retention threshold.
+
+### Ranking summary is bounded and written before rankings are removed (2026-10-20)
+
+Review of #415 found that stale rankings were unlinked before `ranking-summary.json` was written, that the summary grew by one entry per retired file, and that invalid limits fell back to code constants. `summarizeOldRankingFiles` now writes the summary to a temporary file, syncs it and renames it over the old summary before unlinking any source ranking; on failure every source is kept. Entries beyond `dispatch.rankingSummaryMaxEntries` are folded into one rollup entry with file, candidate, rejection and per-reason counts, so the file stays bounded. `decisionRetentionDays`, `decisionSampleCap` and `rankingSummaryMaxEntries` come only from dispatch configuration; a missing or non-positive value raises `DISPATCH_CONFIG_INVALID` and nothing is deleted. Tests in `decisions-size.test.js` cover the `recordDecision` and `compactDecisions` paths, a failing summary write and invalid configuration.
+
+Second review round: the summary now carries a `pending` entry naming the sources it already counts. It is written before those sources are unlinked and cleared once they are gone; a later run unlinks any listed source still present and never summarizes it again, so an interrupted or failed unlink cannot double-count. `recordDecision` and `compactDecisions` validate the retention limits before writing anything and raise `DISPATCH_CONFIG_INVALID`; `compactDecisions` also raises when the summary cannot be replaced. `recordDecision` keeps the decision when retention I/O fails and retries on the next record, because the sources stay until a summary that counts them exists.
