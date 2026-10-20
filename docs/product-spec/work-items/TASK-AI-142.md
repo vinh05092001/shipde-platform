@@ -1335,3 +1335,26 @@ FEAT-AUTH-05 run 2026-10-20 02:30 chose a direct-http provider with bare model i
 
 Aggregator gateways like 9router failed rolling onboarding entirely when an initial scope (such as kimchi) returned 503, blocking healthy upstreams (`gcli`, `ag`) from being admitted. In addition, direct sources lacking a slash prefix (such as TokenHarbor `thb`) failed candidate generation in `resolveRouterModel`, while `assembleForDispatch` excluded unrecorded routes as `ROUTE_PROBE_UNPROVEN` even after passing onboarding evidence was recorded.
 `onboardSourceRolling` now iterates through candidate scopes on multi-scope routers, admitting all verified working scopes into evidence and route health. `resolveRouterModel` maps bare models for non-prefixed router sources directly to the source upstream, and `isCandidateRouteEligible` recognizes passing evidence from `evidenceData` when `probeEvidence` is not passed. Finally, `runOrchestration` runs rolling onboarding before building writer candidates in goal runs.
+
+### H3 live: provider probe sweep imported into route evidence and candidate exclusion (2026-10-19)
+
+- Root cause:
+  - Sweep probes in `logs/night/` recorded external probe results across 51 model sources and 219 combinations, but there was no automated bridge to ingest these probe outcomes into the Controller's evidence store (`evidence.json`) or route evidence.
+  - As a result, candidates on exhausted accounts (e.g. 402/403 balance insufficient), unauthorized keys (401), rate-limited routes (429), region blocks (451), and missing gateway channels (503) were still evaluated during dispatch selection instead of being excluded with their specific failure cause.
+- Repairs:
+  - Added `tools/ai-brain/sweep-import.js` to parse sweep output rows and map probe results to canonical reason codes:
+    - 401 / unauthorized -> `AUTH`
+    - 402 / balance insufficient / out of credits -> `QUOTA`
+    - 403 tier / plan required / deposit -> `TIER`
+    - 429 / rate limited -> `RATE`
+    - 451 / geo-blocked -> `REGION`
+    - 503 / no channel / model not found -> `NO_CHANNEL`
+  - Ingests probe outcomes into `evidenceData.combinations` in the shape consumed by `route-evidence.js` and `probe-order.js`, recording `API_PASS` for `TOOLS_OK` and `failed` with exact failure codes for errors.
+  - Records candidate and scoped model/upstream cooldowns in `evidenceData.cooldowns`, ensuring `dispatch --dry-run` and live dispatch immediately reject exhausted or blocked candidates with their exact reason code.
+  - Added CLI command `cli.js sweep-import <file>` with strict file argument validation and summary reporting.
+- Verification:
+  - Unit and integration tests in `tools/ai-brain/test/task-ai-142-sweep-import.test.js`:
+    - Strict classification across all HTTP error categories and embedded upstream codes.
+    - Capability combination generation matching `probe-order` / `recentRouteSuccess` contracts.
+    - Dry-run dispatch exclusions verifying exact reason codes (`QUOTA`, `AUTH`, `TIER`, `RATE`, `REGION`, `NO_CHANNEL`).
+    - CLI entrypoint and missing-file validation.

@@ -4426,6 +4426,52 @@ function main(argv = process.argv.slice(2), deps = {}) {
     return;
   }
   if (command === 'shadow') return shadowCommand(args);
+  // sweep-import (TASK-AI-142 T3): ingest provider probe sweep into route evidence
+  if (command === 'sweep-import') {
+    const sweepImport = require('./sweep-import');
+    const file = args._[1] || args.file;
+    if (!file) {
+      console.error('SWEEP_IMPORT_FILE_REQUIRED');
+      process.exitCode = 2;
+      return;
+    }
+    const evidenceDir = args['evidence-dir'] || args.evidenceDir || (deps && deps.evidenceDir);
+    const registry =
+      (deps && deps.registry) ||
+      require('./sources').loadSources(args.sources || (deps && deps.sources));
+    const accounts =
+      (deps && deps.accounts) ||
+      (typeof deps.listAccounts === 'function'
+        ? deps.listAccounts()
+        : require('./accounts').listAccounts());
+    let discCat = deps && deps.discoveryCatalogue;
+    if (!discCat) {
+      const discDir =
+        (deps && deps.discoveryDataDir) ||
+        args['discovery-dir'] ||
+        path.join(__dirname, 'data', 'discovery');
+      try {
+        discCat = readDiscoveryCatalogue({ dataDir: discDir });
+      } catch {
+        discCat = { candidates: [] };
+      }
+    }
+    const candidates =
+      (deps && deps.candidates) ||
+      assembleForDispatch(discCat, accounts, registry, {
+        ...deps,
+        ...args,
+        allowUnprobedCandidates: true,
+      });
+    return sweepImport.runSweepImport(file, {
+      ...args,
+      ...(evidenceDir ? { evidenceDir } : {}),
+      candidates,
+      registry,
+      accounts,
+      ...deps,
+    });
+  }
   // discovery import | discovery candidates (TASK-AI-70): bring a reviewed
   // model audit into the stores dispatch reads, then show what the Controller
   // sees. Synchronous, like reconcile and quota.
