@@ -105,3 +105,18 @@ None.
   - The spec names no numeric performance budget yet, so performance stays non-blocking.
 - Real run (median): `/` 0.96/0.95/0.96/1.00, `/register` 0.93/1.00/0.96/1.00, `/forgot-password` 1.00/1.00/0.96/1.00, `/reset-password` 0.96/1.00/0.96/1.00 (performance/accessibility/best-practices/SEO).
 - Limitation: authenticated screens are not measured yet. The scores do not replace functional acceptance evidence (TECH-STACK-REPOSITORY).
+
+### 2026-10-20 — vercel-labs/agent-skills: EXECUTION_VERIFIED
+
+- **Repo and ref:**
+  - `vercel-labs/agent-skills` `063bee94c3f4df8453406c830b0a7df0f2860278`: `react-best-practices/SKILL.md`.
+  - `vercel-labs/web-interface-guidelines` `434b7f91364665f2f733b310ec54809bf8f37937`: `command.md` plus `LICENSE`.
+  - Both are vendored byte-for-byte under `tools/ai-brain/skills/vercel/`, and `NOTICE.md` records the sha256 of each file.
+  - The manifest's old pin `e74b3d8` no longer resolves upstream.
+- **Scope:** only the two texts approved in `AI-TOOLCHAIN-DECISIONS.md`.
+  - The upstream `web-design-guidelines` skill only tells the agent to fetch `command.md` from `main` before every review. That unpinned fetch is replaced by the pinned rules file.
+  - `AGENTS.md` (112 KB) is not vendored.
+- **Caller:** `tools/ai-brain/skill-pack.js` `UI_ROLE_SKILLS`. Each entry may name its own vendored root. UI roles (`author.ui`, `reviewer.ui`) receive the texts after `UI_AUTHORITY_HEADER` and `LOCK_HEADER`. Non-UI packs are unchanged.
+- **Real run:** `lockedPack('author.ui')` returns 97,550 characters containing both `## Skill: vercel-*` sections. `lockedPack('author')` contains none.
+- **Tests:** `repo-integration-vercel-skills.test.js` checks the byte pins against NOTICE, the ordering behind the headers and that non-UI roles receive nothing. The `task-ai-109*` and group-2 tests pass as well: 34 pass, 0 fail.
+- **Rollback:** `SHIPDE_SKILL_PACK=off`, or revert the commit.

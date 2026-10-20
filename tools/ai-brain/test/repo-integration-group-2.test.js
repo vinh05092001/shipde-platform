@@ -76,7 +76,11 @@ test('existing role loader selects review/UI skills and refuses unknown roles', 
   const pack = require('../skill-pack');
   assert.ok(pack.skillsFor('author').some((s) => s.name === 'systematic-debugging'));
   assert.ok(pack.skillsFor('reviewer').some((s) => s.name === 'receiving-code-review'));
-  assert.ok(pack.skillsFor('author.ui').every((s) => s.name.startsWith('impeccable')));
+  assert.ok(
+    pack
+      .skillsFor('author.ui')
+      .every((s) => s.name.startsWith('impeccable') || s.name.startsWith('vercel-'))
+  );
   assert.deepEqual(pack.skillsFor('unassigned'), []);
   const previous = process.env.SHIPDE_SKILL_PACK;
   try {
