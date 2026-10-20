@@ -149,6 +149,15 @@ jobs:
         run: pnpm --filter @shipde/web exec playwright install --with-deps chromium
       - name: Accessibility gate (axe-core, WCAG 2.1 A/AA)
         run: pnpm --filter @shipde/web test:a11y
+      - name: Lighthouse CI budgets
+        run: pnpm --filter @shipde/web test:lighthouse
+      - name: Upload Lighthouse report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lighthouse-report
+          path: apps/web/lhci-report/
+          if-no-files-found: ignore
       - name: Upload accessibility report
         if: always()
         uses: actions/upload-artifact@v4

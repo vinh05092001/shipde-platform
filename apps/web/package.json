@@ -18,7 +18,8 @@
     "test:baseline": "tsx src/tests/preservation-smoke.test.ts",
     "db:generate": "prisma generate",
     "version:next": "next --version",
-    "test:a11y": "playwright test"
+    "test:a11y": "playwright test",
+    "test:lighthouse": "lhci autorun --config=./lighthouserc.cjs"
   },
   "dependencies": {
     "@prisma/client": "^6.19.2",
@@ -34,6 +35,7 @@
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.14.0",
+    "@lhci/cli": "^0.15.1",
     "@playwright/test": "^1.64.1",
     "@shipde/testkit": "workspace:*",
     "@tailwindcss/postcss": "^4",
