@@ -18,6 +18,7 @@ const routeHealthApi = require('./route-health');
 const candidatesApi = require('./candidates');
 const sourcesApi = require('./sources');
 const quotaScan = require('./quota-scan');
+const { computeBinding } = require('./capability-probe');
 
 // One-way, truncated digest: identifies which key produced the evidence without storing it.
 function credentialFingerprint(apiKey) {
@@ -195,6 +196,105 @@ async function onboardSourceRolling(src, options = {}) {
     }
   }
 
+  const TOOL_NAME = 'capability_probe';
+
+  async function probeToolCapability(modelToProbe) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), dispatchConfig.probeTimeoutMs);
+    const nonce = crypto.randomUUID
+      ? crypto.randomUUID()
+      : `probe-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const tools = [
+      {
+        type: 'function',
+        function: {
+          name: TOOL_NAME,
+          description: 'Return the probe nonce without side effects.',
+          parameters: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['nonce'],
+            properties: { nonce: { type: 'string', enum: [nonce] } },
+          },
+        },
+      },
+    ];
+    try {
+      const res = await quotaScan.withinSignal(
+        fetchFn(url, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            model: modelToProbe,
+            messages: [
+              {
+                role: 'user',
+                content: `Call ${TOOL_NAME} with nonce ${nonce}. Do not execute commands.`,
+              },
+            ],
+            tools,
+            tool_choice: { type: 'function', function: { name: TOOL_NAME } },
+            max_tokens: dispatchConfig.quotaProbeMaxOutputTokens || 128,
+          }),
+          signal: controller.signal,
+        }),
+        controller.signal
+      );
+      if (!res.ok) {
+        return { ok: false, status: res.status, reason: `HTTP_${res.status}` };
+      }
+      const bodyText = await quotaScan.withinSignal(res.text(), controller.signal);
+      let data;
+      try {
+        data = typeof bodyText === 'string' ? JSON.parse(bodyText) : bodyText;
+      } catch {
+        return { ok: false, reason: 'INVALID_JSON' };
+      }
+      const message = data?.choices?.[0]?.message;
+      const call = message?.tool_calls?.find(
+        (c) => c.type === 'function' && c.function?.name === TOOL_NAME
+      );
+      let args;
+      try {
+        args =
+          typeof call?.function?.arguments === 'string'
+            ? JSON.parse(call.function.arguments)
+            : call?.function?.arguments;
+      } catch {}
+      if (args?.nonce === nonce) {
+        return {
+          ok: true,
+          method: 'http-forced-tool-call',
+          observedAt: new Date(now).toISOString(),
+        };
+      }
+      return { ok: false, reason: 'TOOL_CALL_NOT_OBSERVED' };
+    } catch (err) {
+      return {
+        ok: false,
+        reason: err && err.name === 'AbortError' ? 'TIMEOUT' : 'PROBE_FAILED',
+      };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  const toolCapabilityMap = new Map();
+  if (probeOk && options.probeTools !== false) {
+    for (const target of usable) {
+      const model = target.model || repModel;
+      if (model && !toolCapabilityMap.has(model)) {
+        let toolRes;
+        if (typeof options.probeToolCapability === 'function') {
+          toolRes = await options.probeToolCapability(model, src, options);
+        } else {
+          toolRes = await probeToolCapability(model);
+        }
+        toolCapabilityMap.set(model, toolRes);
+      }
+    }
+  }
+
   // rememberProbe resolves the file from these options and persists unless told not to.
   const healthOptions = {
     routeHealthFile: options.routeHealthFile,
@@ -259,6 +359,8 @@ async function onboardSourceRolling(src, options = {}) {
     const accessPath = src.endpoint || src.accessPath || 'direct';
     const store = healthStore();
     const combos = usable.map((result) => {
+      const model = result.model || repModel;
+      const toolProof = toolCapabilityMap.get(model);
       const combo = {
         harness,
         accessPath,
@@ -282,10 +384,70 @@ async function onboardSourceRolling(src, options = {}) {
           },
         ],
       };
+      if (toolProof?.ok === true) {
+        combo.capabilities = { ...(combo.capabilities || {}), tools: true };
+        combo.capabilityEvidence = { ...(combo.capabilityEvidence || {}), tools: toolProof };
+      }
       combo.candidateKey = candidatesApi.candidateKey(combo);
       return combo;
     });
     evidenceData.combinations.push(...combos);
+    evidenceData.capabilityProbes = evidenceData.capabilityProbes || {};
+
+    const allBound = (accounts || []).filter(
+      (account) => account && (account.source === src.id || account.provider === src.id)
+    );
+
+    for (const combo of combos) {
+      if (combo.capabilities?.tools === true && combo.capabilityEvidence?.tools) {
+        const modelIdWithoutPrefix = String(combo.modelId || '').replace(/^ninerouter\//i, '');
+        const route = {
+          accessPath: src.endpoint || src.accessPath || combo.accessPath,
+          modelId: modelIdWithoutPrefix,
+          apiKeyEnv: src.credential?.env,
+          headers: src.headers,
+        };
+
+        const binding = computeBinding(combo.candidateKey, route);
+        evidenceData.capabilityProbes[combo.candidateKey] = {
+          binding,
+          tools: combo.capabilityEvidence.tools,
+        };
+
+        for (const acc of allBound) {
+          if (acc.id && acc.id !== combo.accountId) {
+            const altCombo = { ...combo, accountId: acc.id, quotaScope: acc.id };
+            const altKey = candidatesApi.candidateKey(altCombo);
+            const altBinding = computeBinding(altKey, route);
+            evidenceData.capabilityProbes[altKey] = {
+              binding: altBinding,
+              tools: combo.capabilityEvidence.tools,
+            };
+          }
+        }
+
+        if (src.kind === 'router') {
+          for (const acc of allBound.length ? allBound : [{ id: bound ? bound.id : null }]) {
+            const ocCand = {
+              harness: 'opencode',
+              accessPath: 'cli',
+              gateway: src.id,
+              upstream: combo.upstream,
+              accountId: acc.id,
+              quotaScope: acc.id,
+              modelId: `${src.modelPrefix || src.id + '/'}${modelIdWithoutPrefix}`,
+            };
+            const ocKey = candidatesApi.candidateKey(ocCand);
+            const ocBinding = computeBinding(ocKey, route);
+            evidenceData.capabilityProbes[ocKey] = {
+              binding: ocBinding,
+              tools: combo.capabilityEvidence.tools,
+            };
+          }
+        }
+      }
+    }
+
     // Status 0: nothing was sent for those routes; the cause names why they stop ranking.
     retireOtherKeyPasses(0);
 
@@ -308,6 +470,11 @@ async function onboardSourceRolling(src, options = {}) {
       models: combos.map((combo) => combo.modelId),
       status: probeStatus,
       quota: quotaResults.map((result) => ({ scope: result.scope, code: result.code })),
+      tools: Array.from(toolCapabilityMap.entries()).map(([model, res]) => ({
+        model,
+        ok: res.ok,
+        ...(res.reason ? { reason: res.reason } : {}),
+      })),
     };
   }
 

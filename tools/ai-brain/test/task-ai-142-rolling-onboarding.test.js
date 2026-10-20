@@ -373,10 +373,10 @@ describe('TASK-AI-142 T8: rolling source onboarding', () => {
       }
     );
 
-    // One completion probe plus one quota scan of the source scope, then the live run
+    // Completion probe, quota scan, and tool capability probe of the source scope, then the live run
     // picks the newly onboarded route. Whether the host can launch it (worker isolation)
     // is the launcher's concern and differs per machine, so it is not asserted here.
-    assert.equal(fetchCalls, 2);
+    assert.equal(fetchCalls, 3);
     assert.ok(result);
     assert.ok(
       logs.some((line) => /^Dispatching TASK-ROLLING-LIVE to .*live-auto-source/.test(line)),
@@ -955,5 +955,294 @@ describe('TASK-AI-142 T8: rolling source onboarding', () => {
     const quota = JSON.parse(fs.readFileSync(quotaFile, 'utf8'));
     assert.equal(quota.scopes['split-router::dry'].code, 'QUOTA');
     assert.equal(quota.scopes['split-router::good'].code, 'OK');
+  });
+
+  test('onboardSourceRolling probes forced tool call and records tools capability evidence into capabilityProbes and combo', async (t) => {
+    const dir = fixture(t);
+    const evidenceDir = path.join(dir, 'evidence');
+    const quotaFile = path.join(dir, 'quota-state.json');
+    const healthFile = path.join(dir, 'route-health.json');
+    fs.mkdirSync(evidenceDir, { recursive: true });
+
+    const src = {
+      id: '9router',
+      kind: 'router',
+      servesModels: true,
+      harness: 'paseo',
+      endpoint: 'http://127.0.0.1:20128/v1',
+      credential: { env: 'NINEROUTER_API_KEY' },
+    };
+
+    const evidenceData = { combinations: [] };
+    const env = { NINEROUTER_API_KEY: 'test-ninerouter-key' };
+
+    let toolCallReceived = false;
+    const fakeFetch = async (url, opts) => {
+      if (url.endsWith('/models')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: [{ id: 'ag/claude-opus-4-6-thinking' }],
+          }),
+        };
+      }
+      const body = JSON.parse(opts.body);
+      if (body.tool_choice && body.tools) {
+        toolCallReceived = true;
+        const tool = body.tools[0].function;
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              choices: [
+                {
+                  message: {
+                    tool_calls: [
+                      {
+                        type: 'function',
+                        function: {
+                          name: tool.name,
+                          arguments: JSON.stringify({
+                            nonce: tool.parameters.properties.nonce.enum[0],
+                          }),
+                        },
+                      },
+                    ],
+                  },
+                },
+              ],
+            }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ choices: [{ message: { content: 'OK' } }] }),
+      };
+    };
+
+    const accounts = [
+      {
+        id: 'xkiro',
+        provider: '9router',
+        source: '9router',
+        capabilities: {},
+      },
+    ];
+
+    const result = await onboardSourceRolling(src, {
+      evidenceData,
+      accounts,
+      evidenceDir,
+      quotaStateFile: quotaFile,
+      routeHealthFile: healthFile,
+      env,
+      fetch: fakeFetch,
+      now: 1700000000000,
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(toolCallReceived, true);
+    assert.deepEqual(result.tools, [{ model: 'ag/claude-opus-4-6-thinking', ok: true }]);
+
+    // Combo carries tools capability
+    assert.equal(evidenceData.combinations.length, 1);
+    const combo = evidenceData.combinations[0];
+    assert.equal(combo.capabilities.tools, true);
+    assert.equal(combo.capabilityEvidence.tools.ok, true);
+    assert.equal(combo.capabilityEvidence.tools.method, 'http-forced-tool-call');
+
+    // Capability probes table carries valid binding and tools proof
+    assert.ok(evidenceData.capabilityProbes[combo.candidateKey]);
+    assert.equal(evidenceData.capabilityProbes[combo.candidateKey].tools.ok, true);
+    assert.ok(evidenceData.capabilityProbes[combo.candidateKey].binding);
+
+    // Reload from persisted store
+    const reloaded = JSON.parse(fs.readFileSync(path.join(evidenceDir, 'evidence.json'), 'utf8'));
+    assert.equal(reloaded.combinations[0].capabilities.tools, true);
+    assert.equal(reloaded.capabilityProbes[combo.candidateKey].tools.ok, true);
+  });
+
+  test('dispatch dry-run with writer role requiring tools admits onboarded model without CAPABILITY_UNVERIFIED:tools', async (t) => {
+    const dir = fixture(t);
+    const evidenceDir = path.join(dir, 'evidence');
+    const decisionDir = path.join(dir, 'decisions');
+    const home = path.join(dir, 'home');
+    fs.mkdirSync(evidenceDir, { recursive: true });
+    fs.mkdirSync(decisionDir, { recursive: true });
+    fs.mkdirSync(home, { recursive: true });
+
+    const { dispatchCommand } = require('../cli');
+
+    const registry = {
+      sources: [
+        {
+          id: '9router',
+          kind: 'router',
+          servesModels: true,
+          harness: 'paseo',
+          endpoint: 'http://127.0.0.1:20128/v1',
+          credential: { env: 'NINEROUTER_API_KEY' },
+        },
+      ],
+      dispatch: { ...defaultDispatch, providers: {} },
+    };
+
+    const fakeFetch = async (url, opts) => {
+      if (url.endsWith('/models')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: [{ id: 'ag/claude-opus-4-6-thinking' }],
+          }),
+        };
+      }
+      const body = JSON.parse(opts.body);
+      if (body.tool_choice && body.tools) {
+        const tool = body.tools[0].function;
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              choices: [
+                {
+                  message: {
+                    tool_calls: [
+                      {
+                        type: 'function',
+                        function: {
+                          name: tool.name,
+                          arguments: JSON.stringify({
+                            nonce: tool.parameters.properties.nonce.enum[0],
+                          }),
+                        },
+                      },
+                    ],
+                  },
+                },
+              ],
+            }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ choices: [{ message: { content: 'OK' } }] }),
+      };
+    };
+
+    const env = { NINEROUTER_API_KEY: 'test-ninerouter-key' };
+    const accounts = [
+      {
+        id: 'xkiro',
+        provider: '9router',
+        source: '9router',
+        capabilities: { contextWindow: 200000 },
+      },
+    ];
+
+    const res = await dispatchCommand(
+      { 'dry-run': true, item: 'TASK-WRITER-TOOL-QUAL' },
+      {
+        registry,
+        env,
+        fetch: fakeFetch,
+        evidenceDir,
+        decisionDir,
+        quotaStateFile: path.join(dir, 'quota-state.json'),
+        routeHealth: { version: 1, paths: {}, events: [] },
+        routeHealthFile: path.join(dir, 'route-health.json'),
+        discoveryCatalogue: { candidates: [] },
+        accounts,
+        assessment: {},
+        priors: [
+          {
+            canonical: 'claude-opus-4-6-thinking',
+            score: 95,
+            tier: 'T0',
+          },
+        ],
+        taskProfile: {
+          role: 'writer',
+          requiredCapabilities: ['tools'],
+          contextSize: 1000,
+        },
+        profile: {
+          role: 'writer',
+          requiredCapabilities: ['tools'],
+          contextSize: 1000,
+        },
+        home,
+        storePath: path.join(dir, 'quota-store.json'),
+        now: 1700000000000,
+        exit: () => {},
+      }
+    );
+
+    assert.ok(res, 'dispatchCommand must return result');
+    const decision = res.decision;
+    assert.ok(decision, 'decision must be recorded');
+    // Model must be ranked
+    const opusRanked = (decision.ranking || []).some(
+      (c) => c.candidateKey && c.candidateKey.includes('ag/claude-opus-4-6-thinking')
+    );
+    assert.equal(opusRanked, true, 'ag/claude-opus-4-6-thinking must be ranked');
+    // Must NOT be rejected with CAPABILITY_UNVERIFIED:tools
+    const rejectedForTools = (decision.rejected || []).some(
+      (r) =>
+        r.candidateKey &&
+        r.candidateKey.includes('ag/claude-opus-4-6-thinking') &&
+        r.reasonCode === 'CAPABILITY_UNVERIFIED:tools'
+    );
+    assert.equal(rejectedForTools, false, 'must not be rejected with CAPABILITY_UNVERIFIED:tools');
+  });
+
+  test('when forced tool call probe fails, model is not granted tools capability and fails closed', async (t) => {
+    const dir = fixture(t);
+    const evidenceDir = path.join(dir, 'evidence');
+    const quotaFile = path.join(dir, 'quota-state.json');
+    const healthFile = path.join(dir, 'route-health.json');
+    fs.mkdirSync(evidenceDir, { recursive: true });
+
+    const src = {
+      id: 'notool-source',
+      kind: 'model-source',
+      servesModels: true,
+      endpoint: 'https://notool.invalid/v1',
+      models: ['notool/weak-model'],
+      credential: { env: 'NOTOOL_KEY' },
+    };
+
+    const evidenceData = { combinations: [] };
+    const env = { NOTOOL_KEY: 'test-notool-key' };
+
+    // Returns plain text response even when tools are requested
+    const fakeFetch = async (url, opts) => ({
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({ choices: [{ message: { content: 'I cannot use tools' } }] }),
+    });
+
+    const result = await onboardSourceRolling(src, {
+      evidenceData,
+      accounts: [],
+      evidenceDir,
+      quotaStateFile: quotaFile,
+      routeHealthFile: healthFile,
+      env,
+      fetch: fakeFetch,
+      now: 1700000000000,
+    });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.tools, [
+      { model: 'notool/weak-model', ok: false, reason: 'TOOL_CALL_NOT_OBSERVED' },
+    ]);
+    assert.equal(evidenceData.combinations[0].capabilities?.tools, undefined);
   });
 });

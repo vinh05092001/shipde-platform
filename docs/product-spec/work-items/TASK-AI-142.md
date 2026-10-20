@@ -1358,3 +1358,26 @@ Aggregator gateways like 9router failed rolling onboarding entirely when an init
     - Capability combination generation matching `probe-order` / `recentRouteSuccess` contracts.
     - Dry-run dispatch exclusions verifying exact reason codes (`QUOTA`, `AUTH`, `TIER`, `RATE`, `REGION`, `NO_CHANNEL`).
     - CLI entrypoint and missing-file validation.
+
+### H3 live: rolling onboarding probes tools capability and records into evidence (2026-10-21)
+
+- Root cause:
+  - In FEAT-AUTH-05 live run (2026-10-20), out of 15,645 candidates, 15,591 were rejected during initial selection with `CAPABILITY_UNVERIFIED:tools` (`WRITER_SCHEMA_NOT_VERIFIED_BUDGET`).
+  - Rolling onboarding (`rolling-onboard.js`) only performed a basic completion ping (`messages: [{ role: 'user', content: 'ping' }]` -> `API_PASS`) to confirm HTTP connectivity and recorded no tool-calling capability evidence.
+  - When dispatch ran with writer requirement (`requiredCapabilities: ['tools']`), thousands of unverified candidates competed for the 180s schema probe budget window (`schemaProbeBudgetMs`), starving the budget before strong candidate routes on 9Router, Requesty, and TokenHarbor (such as `ag/claude-opus-4-6-thinking`) could be verified, causing them to be disqualified.
+- Repairs:
+  - In `tools/ai-brain/rolling-onboard.js`:
+    - Implemented `probeToolCapability(modelToProbe)` using OpenAI-compatible forced tool calling (`capability_probe` function with nonce) to verify actual tool execution capability during rolling onboarding.
+    - When tool probe succeeds, records tool capability proof into `combo.capabilities.tools = true`, `combo.capabilityEvidence.tools`, and `evidenceData.capabilityProbes[combo.candidateKey]` with canonical route `binding`.
+    - Automatically records capability probe bindings for all bound accounts and alternative router harnesses (e.g. `opencode`).
+    - Exposes tool capability probe results in onboarding response.
+  - In `tools/ai-brain/capability-probe.js`:
+    - Exported `computeBinding(key, route)` for consistent route hashing across onboarding and dispatch.
+    - Updated capability verification in `probeCapabilities`: when `cached[cap]` is absent, reuses verified tools proof from `c.capabilityEvidence` or matching combos in `data.combinations` before consuming probe budget.
+  - In `tools/ai-brain/candidates.js`:
+    - Propagated `combo.capabilityEvidence` to candidate objects in `candidatesFromEvidence`.
+- Verification:
+  - Unit and integration tests in `tools/ai-brain/test/task-ai-142-rolling-onboarding.test.js`:
+    - `onboardSourceRolling` executes forced tool call probe, sets `combo.capabilities.tools = true`, and stores `capabilityProbes` with matching binding.
+    - `dispatch --dry-run` with writer role requiring tools admits onboarded model without `CAPABILITY_UNVERIFIED:tools`.
+    - Failed tool probe fails closed without granting tools capability.

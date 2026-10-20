@@ -30,6 +30,21 @@ function pending(reason) {
   return { reason, unverified: true };
 }
 
+function computeBinding(key, route) {
+  return crypto
+    .createHash('sha256')
+    .update(
+      JSON.stringify({
+        key,
+        endpoint: route?.accessPath,
+        model: route?.modelId,
+        credentialEnv: route?.apiKeyEnv,
+        headers: route?.headers,
+      })
+    )
+    .digest('hex');
+}
+
 async function httpProof(candidate, capability, route, options) {
   const o = options;
   const env = { ...process.env, ...o.env };
@@ -346,18 +361,7 @@ async function probeCapabilities(candidates, profile, options = {}) {
       (profile.requiredCapabilities || []).includes(cap)
     );
 
-    const binding = crypto
-      .createHash('sha256')
-      .update(
-        JSON.stringify({
-          key,
-          endpoint: route?.accessPath,
-          model: route?.modelId,
-          credentialEnv: route?.apiKeyEnv,
-          headers: route?.headers,
-        })
-      )
-      .digest('hex');
+    const binding = computeBinding(key, route);
     const cached = records[key]?.binding === binding ? records[key] : { binding };
     c.capabilities = { ...c.capabilities };
 
@@ -478,6 +482,37 @@ async function probeCapabilities(candidates, profile, options = {}) {
           observedAt: new Date(o.now ?? Date.now()).toISOString(),
         };
       }
+      if (!proof && authorized && cap === 'tools') {
+        if (c.capabilityEvidence?.tools?.ok === true && c.capabilityEvidence.tools.observedAt) {
+          proof = c.capabilityEvidence.tools;
+        } else {
+          const mId = String(c.modelId || '').replace(/^ninerouter\//i, '');
+          const matchingCombo = (data.combinations || []).find((combo) => {
+            if (!combo) return false;
+            const comboModelId = String(combo.modelId || combo.model || '').replace(
+              /^ninerouter\//i,
+              ''
+            );
+            return (
+              (combo.source === c.source ||
+                combo.sourceId === c.sourceId ||
+                combo.gateway === c.gateway ||
+                combo.upstream === c.upstream) &&
+              comboModelId === mId &&
+              (combo.capabilities?.tools === true || combo.capabilityEvidence?.tools?.ok === true)
+            );
+          });
+          if (matchingCombo) {
+            proof = matchingCombo.capabilityEvidence?.tools || {
+              ok: true,
+              method: 'http-forced-tool-call',
+              observedAt:
+                matchingCombo.evidence?.at(-1)?.observedAt ||
+                new Date(o.now ?? Date.now()).toISOString(),
+            };
+          }
+        }
+      }
       if (!proof) {
         const remaining = deadline - Date.now();
         const identity = require('./route-health').probeIdentity(c);
@@ -585,4 +620,5 @@ module.exports = {
   probeCapabilities,
   orderCandidatesForProbe,
   hasPriorWorkPass,
+  computeBinding,
 };
