@@ -52,6 +52,12 @@ try {
 } catch (err) {
   out.secretGuard = (err as Error).message;
 }
+try {
+  assertNoSecretScanning(['fs', '--scanners', 'vuln,misconfig,secret', '.']);
+  out.secretGuardScanners = 'NOT_REJECTED';
+} catch (err) {
+  out.secretGuardScanners = (err as Error).message;
+}
 out.secretGuardAllowsVulnConfig = (() => {
   try {
     assertNoSecretScanning(buildFsScanArgs('.'));

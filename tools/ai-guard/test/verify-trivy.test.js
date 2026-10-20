@@ -171,7 +171,9 @@ test('the three outcomes stay distinct: clean=0 vulnerable=1 operational=2', asy
 test('AI-37-R02: secret scanning stays with Gitleaks alone', async (t) => {
   await t.test('the blocking argument vector omits the secret checker', () => {
     const h = harness();
-    assert.equal(h.securityChecks, 'vuln,config');
+    assert.equal(h.securityChecks, 'vuln,misconfig');
+    assert.match(String(h.secretGuardScanners), /AI-37-R02 violation/);
+    assert.ok(h.fsScanArgs.includes('--scanners'));
     assert.ok(!h.securityChecks.split(',').includes('secret'));
     assert.ok(!h.fsScanArgs.some((a) => String(a).includes('secret')));
   });
