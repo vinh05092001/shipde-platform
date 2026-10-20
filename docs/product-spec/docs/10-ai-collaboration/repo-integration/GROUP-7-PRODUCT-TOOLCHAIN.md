@@ -111,6 +111,7 @@ Work Item: `GOAL-AUTOCLAW-REPOS-8`. Uses [the existing five-state contract](../R
     "verifiedAt": "2026-10-17T00:00:00.000Z",
     "verifiedBy": "codex",
     "versionRef": {
+      "@ast-grep/cli": "0.51.0",
       "@prisma/client": "^6.19.2",
       "@types/js-yaml": "^4.0.9",
       "@types/node": "^20",
@@ -154,6 +155,7 @@ Work Item: `GOAL-AUTOCLAW-REPOS-8`. Uses [the existing five-state contract](../R
     "verifiedAt": "2026-10-17T00:00:00.000Z",
     "verifiedBy": "codex",
     "versionRef": {
+      "@ast-grep/cli": "0.51.0",
       "@prisma/client": "^6.19.2",
       "@types/js-yaml": "^4.0.9",
       "@types/node": "^20",
@@ -182,6 +184,7 @@ Work Item: `GOAL-AUTOCLAW-REPOS-8`. Uses [the existing five-state contract](../R
     "verifiedAt": "2026-10-17T00:00:00.000Z",
     "verifiedBy": "codex",
     "versionRef": {
+      "@ast-grep/cli": "0.51.0",
       "@prisma/client": "^6.19.2",
       "@types/js-yaml": "^4.0.9",
       "@types/node": "^20",

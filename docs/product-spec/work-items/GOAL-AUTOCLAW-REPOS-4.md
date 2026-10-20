@@ -94,4 +94,4 @@ None.
   - Live pattern searches over `apps` and `packages`: `$X as any` finds 43 matches and `console.log($$$)` finds 295.
   - The first scan with `no-empty-catch` found 3 silent catches in `apps/web/src/tests/regression-audit.test.ts` (lines 781, 1103 and 1301). All three ignore errors deliberately, so each now records why in a comment.
   - After that the scan exits 0. A planted empty catch in `apps/api/src` makes it exit 1; the probe was removed.
-- **Tests:** `ast-grep test` passes 1/1, with valid and invalid cases including a commented catch. The manifest audit (alias `@ast-grep/cli` added to `PACKAGE_ALIASES`) reports error 0. `ecosystem.ps1 validate` passes.
+- **Tests:** `ast-grep test` passes 1/1, with valid and invalid cases including a commented catch. The manifest audit (alias `@ast-grep/cli` added to `PACKAGE_ALIASES`) reports error 0. `ecosystem.ps1 validate` passes. The root devDependency snapshots in `GROUP-7-PRODUCT-TOOLCHAIN.md` gain `@ast-grep/cli`; manifest-audit and repo-integration tests pass 54/0.
