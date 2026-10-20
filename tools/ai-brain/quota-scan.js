@@ -488,7 +488,7 @@ async function discover9RouterScopes(source, options = {}) {
     targets.push({
       source: source.id,
       scope,
-      upstream: isBareRouter ? (source.routerAlias || source.id) : scope,
+      upstream: isBareRouter ? source.routerAlias || source.id : scope,
       model: repModel,
       endpoint: source.endpoint,
       apiKeyEnv: source.credential?.env,

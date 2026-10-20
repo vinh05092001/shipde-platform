@@ -1027,7 +1027,12 @@ function isCandidateRouteEligible(routeHealth, candidate, options, routeHealthAp
     ) {
       return true;
     }
-    if (!isWildcard && options && options.evidenceData && Array.isArray(options.evidenceData.combinations)) {
+    if (
+      !isWildcard &&
+      options &&
+      options.evidenceData &&
+      Array.isArray(options.evidenceData.combinations)
+    ) {
       const match = options.evidenceData.combinations.find(
         (c) =>
           c &&

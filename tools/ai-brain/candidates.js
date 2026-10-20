@@ -1088,8 +1088,7 @@ function generateCandidatesWithCatalog(opts) {
         const credentialAcc = {
           id: accId,
           source: source.id,
-          models:
-            source.models || (source.verify?.model ? [source.verify.model] : []),
+          models: source.models || (source.verify?.model ? [source.verify.model] : []),
           enabled: true,
           status: 'available',
           credentialEnvMissing: !hasKey,
@@ -1135,8 +1134,7 @@ function generateCandidatesWithCatalog(opts) {
       const ownIds = new Set();
       const named = (m) => (typeof m === 'string' ? m : m && (m.id || m.model || m.modelId));
       const perSource = o.sourceModels && o.sourceModels[source.id];
-      const sourceModelsList =
-        source.models || (source.verify?.model ? [source.verify.model] : []);
+      const sourceModelsList = source.models || (source.verify?.model ? [source.verify.model] : []);
       for (const m of [].concat(Array.isArray(perSource) ? perSource : [], sourceModelsList)) {
         const id = named(m);
         if (id) ownIds.add(id);
