@@ -3,6 +3,8 @@ packages:
   - 'packages/*'
 
 allowBuilds:
+  # ast-grep postinstall only links its prebuilt platform binary (GOAL-AUTOCLAW-REPOS-4)
+  '@ast-grep/cli': true
   # 1. Generates Prisma client JavaScript/TypeScript runtime bindings during install
   '@esbuild/aix-ppc64': false
   '@esbuild/android-arm': false
