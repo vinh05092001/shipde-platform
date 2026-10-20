@@ -82,3 +82,10 @@
 ## Residual limitations
 
 None.
+
+### Integration evidence 2026-10-20 — promptfoo adopted, docker-compose rejected
+
+- `promptfoo/promptfoo` is now executed, not only declared: `tools/controller-eval/eval.yaml` renders the real Controller prompts (`compilePrompt`, `compileReviewPrompt` from `tools/ai-brain/prompt-compiler.js`) through the offline `echo` provider and asserts the contract: publisher boundary and skill-pack lock in author prompts, UI authority for `author.ui`, the PASS-without-findings rule and the diff in review prompts, no `undefined`/`[object Object]` in ShipDe-generated text, and no token-shaped secrets. No model or network call is made by the eval.
+- Command `pnpm test:prompts` (CI step in `current-application.yml`, telemetry and update checks disabled). Local result: 4 passed, 0 failed, exit 0. Negative check with `SHIPDE_SKILL_PACK=off`: 3 failed, exit 100, so a dropped lock fails the gate.
+- Pinned to 0.120.0: 0.122.2 through 0.124.1 fail to install (`ETARGET No matching version found for @ai-sdk/provider@3.0.19`).
+- `docker/compose` set to REJECTED by operator decision: it only starts local backing services and is not a Controller or CI gate.
