@@ -82,3 +82,20 @@
 ## Residual limitations
 
 None.
+
+### 2026-10-20 — installed CLIs and router: measured state
+
+Each tool was run on the operator host on 2026-10-20. Manifest states follow what ran, not what was declared.
+
+- **9router** `0.5.104` → ADOPTED. Caller: `tools/ai-brain/hermes-session.js:162-174` (base `http://127.0.0.1:20128/v1`). Real run: `GET /v1/models` returns HTTP 200. Independent reviews of #422, #423, #424 and #417 ran through `ag/gemini-3.8-flash-high` on this router; the records are under `.worktrees/logs/reviews/<sha>.md`.
+- **codex-cli** `0.162.1` → ADOPTED. Caller: `tools/ai-brain/harness.js:212` (`command: 'codex'`) and `candidates.js:213`. Real run: `codex login status` reports "Logged in using ChatGPT". It was the TASK-142 reviewer until its quota ran out.
+- **antigravity-cli** `1.4.3` → ADOPTED. Caller: `tools/ai-brain/agy-pool-runtime.js:463` and `agy-quota.js:240`. Real run: `agy -p "Reply with exactly: OK"` returns `OK`.
+- **claude-code** `2.1.296` → ADOPTED. Caller: `harness.js` paseo adapter (`run --provider claude`). Real run: `claude -p` returns `OK`.
+- **gh** `2.98.0` → ADOPTED. Caller: `tools/ai-brain/governed-merge.js:303` and `publisher.js:775`. Real run: `gh api rate_limit` returns an authenticated core limit of 5000.
+- **deepseek-harness** `0.1.1-rc.2` stays INSTALLED. `dsh --help` runs, but no Controller caller launches it and no work run was observed.
+- **gemini-cli** `0.58.0` → REJECTED. A real run fails with `IneligibleTierError: UNSUPPORTED_CLIENT`: Google no longer serves this client for individual Code Assist and directs users to Antigravity, which is adopted above.
+- **docker-compose** → PENDING. `docker` is not on PATH and WSL has no distribution, so the earlier INSTALLED claim was an overstatement found by the manifest audit.
+- **promptfoo** → PENDING. It was ADOPTED, but the `pf` binary is absent and no caller runs it; `fitness.js:154` only mentions it in a comment.
+- **shipde-brain** → REJECTED by operator decision on 2026-10-20. Its role (task facts, lessons and prompts with provenance) is already covered by `docs/product-spec`, the skill pack and Hermes memory, and its provenance is the reviewed commits and PRs of this repository. A separate repository would add a second source that can drift.
+
+Verification: `node tools/ai-brain/acceptance/ac-17-01-manifest-audit-clean.js` now reports `error 0`. Before this change, main reported 1 error, from the docker-compose and promptfoo overstatements. Related tests (manifest-audit, review-lane, repo-integration group 1, group 8 and evidence): 45 pass, 0 fail.
