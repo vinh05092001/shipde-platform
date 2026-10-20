@@ -50,3 +50,5 @@ tools/ai-brain/skills/superpowers/LICENSE
 # whole tree (including NOTICE.md hash records) stays byte-stable and is
 # consumed only through the ShipDe lock in tools/ai-brain/skill-pack.js.
 tools/ai-brain/skills/impeccable/
+# GOAL-AUTOCLAW-REPOS-6: Vercel guidance vendored verbatim at pinned bytes (see NOTICE.md).
+tools/ai-brain/skills/vercel/
