@@ -1034,6 +1034,27 @@
       "health_check": "pnpm --filter @shipde/api test",
       "rollback": "Remove the *.supertest.spec.ts suites from the app test scripts.",
       "profiles": ["FOUNDATION", "BACKEND_FEATURE"]
+    },
+    {
+      "id": "k6",
+      "name": "Grafana k6",
+      "canonical_url": "https://github.com/grafana/k6",
+      "repository": "grafana/k6",
+      "owner": "grafana",
+      "kind": "cli",
+      "role": "Load workload against the built API with latency and error thresholds; a crossed threshold fails CI.",
+      "source_of_truth_boundary": "Workloads and thresholds live in tools/k6; the API runs with the placeholder .env.example and no external services.",
+      "install_method": "ci-provisioned",
+      "pinned_version_or_commit": "2.3.0",
+      "platform": "linux",
+      "lifecycle_state": "ADOPTED",
+      "default_enabled": true,
+      "blocking_policy": "BLOCKING_GATE",
+      "permissions": "read-only",
+      "telemetry_network_behavior": "none (local target only)",
+      "health_check": "pnpm test:load",
+      "rollback": "Remove the k6 steps from current-application.yml.",
+      "profiles": ["FOUNDATION", "BACKEND_FEATURE"]
     }
   ],
   "product_dependencies": [
@@ -1272,19 +1293,6 @@
       "default_enabled": false,
       "installed": false,
       "evaluation_goal": "Simulate network partitions and timeouts in carrier reconciliation loops."
-    },
-    {
-      "id": "k6",
-      "name": "k6",
-      "canonical_url": "https://github.com/grafana/k6",
-      "repository": "grafana/k6",
-      "owner": "grafana",
-      "kind": "cli",
-      "role": "Developer-centric load and performance testing tool.",
-      "lifecycle_state": "WATCH",
-      "default_enabled": false,
-      "installed": false,
-      "evaluation_goal": "Benchmark high-volume batch statement upload and audit throughput."
     },
     {
       "id": "syft",

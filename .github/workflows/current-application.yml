@@ -160,6 +160,27 @@ jobs:
           name: lighthouse-report
           path: apps/web/lhci-report/
           if-no-files-found: ignore
+      - name: Install pinned k6
+        run: |
+          K6_VERSION="$(node -e "console.log(require('./tools/ecosystem-manifest.json').adopted.find(e=>e.id==='k6').pinned_version_or_commit)")"
+          ASSET="k6-v${K6_VERSION}-linux-amd64.tar.gz"
+          BASE="https://github.com/grafana/k6/releases/download/v${K6_VERSION}"
+          curl -sSLO "${BASE}/${ASSET}"
+          curl -sSL "${BASE}/k6-v${K6_VERSION}-checksums.txt" | grep " ${ASSET}$" | sha256sum -c -
+          tar -xzf "${ASSET}"
+          sudo mv "k6-v${K6_VERSION}-linux-amd64/k6" /usr/local/bin/k6
+          k6 version
+      - name: k6 API load thresholds
+        run: pnpm test:load
+      - name: Upload k6 summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: k6-summary
+          path: |
+            k6-summary.json
+            k6-api.log
+          if-no-files-found: ignore
       - name: Upload accessibility report
         if: always()
         uses: actions/upload-artifact@v4
