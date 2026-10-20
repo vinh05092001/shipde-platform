@@ -1,0 +1,52 @@
+# Offline contract checks for the prompts the Controller sends to workers.
+# Provider "echo" returns the rendered prompt; nothing leaves the machine.
+description: Controller prompt contract
+providers:
+  - echo
+prompts:
+  - id: file://render.js:author
+    label: author
+  - id: file://render.js:review
+    label: review
+defaultTest:
+  assert:
+    # Only the ShipDe-generated part: vendored skill text may quote 'undefined'.
+    - type: javascript
+      value: |
+        const own = output.split('ShipDe skill-pack lock')[0];
+        return !own.includes('undefined') && !own.includes('[object Object]');
+    - type: not-regex
+      value: '(sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|AIza[0-9A-Za-z_-]{30,})'
+tests:
+  - description: backend author item
+    vars:
+      goal: Add tenant-scoped shipment listing
+      diffText: 'diff --git a/x b/x'
+      item:
+        id: FEAT-FIXTURE-01
+        title: Tenant-scoped shipment listing
+        role: author
+        acceptance: ['Lists only shipments of the caller tenant']
+    assert:
+      - type: javascript
+        value: output.length > 200
+      - type: javascript
+        value: |
+          const author = !output.includes('verdict must be');
+          return author
+            ? output.includes('Publisher boundary') && output.includes('skill-pack lock')
+            : output.includes('Never return PASS with open findings') && output.includes('diff --git a/x b/x');
+  - description: UI author item gets UI authority
+    vars:
+      goal: Shipment list screen
+      diffText: 'diff --git a/y b/y'
+      item:
+        id: FEAT-FIXTURE-02
+        title: Shipment list screen
+        role: author.ui
+        acceptance: ['Shows empty, loading and error states']
+    assert:
+      - type: javascript
+        value: |
+          if (output.includes('verdict must be')) return output.includes('skill-pack lock');
+          return output.includes('UI authority') && output.includes('Publisher boundary');

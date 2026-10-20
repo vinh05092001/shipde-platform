@@ -329,16 +329,13 @@ function Assert-ShipDeManifest {
 
     $errors = [System.Collections.Generic.List[string]]::new()
 
-    # 1. Adopted entries check: exactly 37 adopted repositories/capabilities
+    # 1. Adopted entries check: the manifest holds exactly the approved repositories below
     if (-not $Manifest.adopted) {
         $errors.Add("Manifest must define 'adopted' array.")
         return $errors
     }
 
     $adopted = @($Manifest.adopted)
-    if ($adopted.Count -ne 37) {
-        $errors.Add("Manifest adopted count must be exactly 37; found $($adopted.Count).")
-    }
 
     # Approved canonical repository identities (Finding 1: 30 baseline + 7 additions)
     $canonicalApprovedRepos = @(
@@ -378,8 +375,22 @@ function Assert-ShipDeManifest {
         "promptfoo/promptfoo",
         "aquasecurity/trivy",
         "open-telemetry/opentelemetry-js",
-        "thanglequoc/vietnamese-provinces-database"
+        "thanglequoc/vietnamese-provinces-database",
+        # GOAL-AUTOCLAW-REPOS-2: appendix 2026-10-13 tools that already run
+        "anomalyco/opencode",
+        "getpaseo/paseo",
+        "rtk-ai/rtk",
+        "obra/superpowers",
+        "pbakaus/impeccable",
+        # GOAL-AUTOCLAW-REPOS-7: promoted from candidates
+        "semgrep/semgrep",
+        "ast-grep/ast-grep",
+        "forwardemail/supertest",
+        "grafana/k6"
     )
+    if ($adopted.Count -ne $canonicalApprovedRepos.Count) {
+        $errors.Add("Manifest adopted count must equal the $($canonicalApprovedRepos.Count) approved repositories; found $($adopted.Count).")
+    }
 
     # 2. Uniqueness checks for id, canonical_url, repository
     $seenIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
@@ -478,15 +489,16 @@ function Assert-ShipDeManifest {
         }
     }
 
-    # 4. Candidates check: exactly 10 candidates with PILOT or WATCH lifecycle
+    # 4. Candidates check: PILOT or WATCH only; a candidate promoted to adopted leaves this list
     if (-not $Manifest.candidates) {
         $errors.Add("Manifest must define 'candidates' array.")
     } else {
         $candidates = @($Manifest.candidates)
-        if ($candidates.Count -ne 10) {
-            $errors.Add("Manifest candidates count must be exactly 10; found $($candidates.Count).")
-        }
+        $adoptedIds = @($adopted | ForEach-Object { $_.id })
         foreach ($c in $candidates) {
+            if ($c.id -in $adoptedIds) {
+                $errors.Add("Candidate '$($c.id)' is also adopted; remove it from candidates.")
+            }
             if ($c.lifecycle_state -notin @("PILOT", "WATCH")) {
                 $errors.Add("Candidate '$($c.id)' must have lifecycle_state 'PILOT' or 'WATCH'; found '$($c.lifecycle_state)'.")
             }
@@ -582,7 +594,7 @@ function Invoke-ShipDeValidate {
         exit 1
     }
 
-    Write-Host "VALIDATION PASSED: All 37 approved adopted repositories, 14 product dependencies, 10 candidates, and 9 profiles conform to ecosystem policy." -ForegroundColor Green
+    Write-Host "VALIDATION PASSED: All approved adopted repositories, product dependencies, candidates and profiles conform to ecosystem policy." -ForegroundColor Green
 }
 
 function Invoke-ShipDeStatus {
@@ -992,7 +1004,7 @@ function Invoke-ShipDeTests {
         if ($errors.Count -ne 0) {
             throw "Base validation failed unexpectedly: $($errors -join '; ')"
         }
-        Write-Host "  [PASS] 37 approved adopted tools and 9 profiles validated cleanly with 0 errors."
+        Write-Host "  [PASS] Approved adopted tools and 9 profiles validated cleanly with 0 errors."
 
         # Negative Test 1: Malformed JSON syntax
         Write-Host "`nTest 2 [Negative]: Malformed JSON must fail closed with exact exit code..."

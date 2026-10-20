@@ -3,6 +3,8 @@ packages:
   - 'packages/*'
 
 allowBuilds:
+  # ast-grep runs from its platform optionalDependency; its postinstall is not needed (GOAL-AUTOCLAW-REPOS-4)
+  '@ast-grep/cli': false
   # 1. Generates Prisma client JavaScript/TypeScript runtime bindings during install
   '@esbuild/aix-ppc64': false
   '@esbuild/android-arm': false

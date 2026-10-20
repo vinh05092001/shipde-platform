@@ -1,0 +1,7 @@
+id: no-empty-catch
+valid:
+  - 'try { run(); } catch (e) { log(e); }'
+  - 'try { run(); } catch { /* the cache is optional */ }'
+invalid:
+  - 'try { run(); } catch (e) {}'
+  - 'try { run(); } catch {}'

@@ -82,3 +82,16 @@
 ## Residual limitations
 
 None.
+
+### 2026-10-20 — ast-grep/ast-grep: EXECUTION_VERIFIED
+
+- **Repo/ref:** `@ast-grep/cli` `0.51.0`, a root devDependency. It runs from its platform optionalDependency, so its postinstall stays disabled (`false` in `pnpm-workspace.yaml` allowBuilds) and the reviewed allowlist is unchanged. ast-grep moves from candidates (WATCH) to adopted.
+- **Capability:**
+  - Structural search and codemod. Agents preview with `ast-grep run -p <pattern> --rewrite <fix>` and apply with `-U` only after the diff is reviewed, as documented in `sgconfig.yml`.
+  - Blocking structural rules in `tools/ast-grep/rules`. The first rule, `no-empty-catch`, flags a catch that swallows a failure silently.
+- **Trigger:** `pnpm lint:ast` (rule tests, then scan of `apps` and `packages`); CI step after `pnpm lint` in `current-application.yml`.
+- **Real run:**
+  - Live pattern searches over `apps` and `packages`: `$X as any` finds 43 matches and `console.log($$$)` finds 295.
+  - The first scan with `no-empty-catch` found 3 silent catches in `apps/web/src/tests/regression-audit.test.ts` (lines 781, 1103 and 1301). All three ignore errors deliberately, so each now records why in a comment.
+  - After that the scan exits 0. A planted empty catch in `apps/api/src` makes it exit 1; the probe was removed.
+- **Tests:** `ast-grep test` passes 1/1, with valid and invalid cases including a commented catch. The manifest audit (alias `@ast-grep/cli` added to `PACKAGE_ALIASES`) reports error 0. `ecosystem.ps1 validate` passes. The root devDependency snapshots in `GROUP-7-PRODUCT-TOOLCHAIN.md` gain `@ast-grep/cli`; manifest-audit and repo-integration tests pass 54/0.

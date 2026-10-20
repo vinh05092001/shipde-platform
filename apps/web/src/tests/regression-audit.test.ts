@@ -778,7 +778,9 @@ async function runRegressionSuite() {
               ]),
               'utf-8'
             );
-          } catch {}
+          } catch {
+            // The mock report path may be gone; the scan result under test does not depend on it.
+          }
         }
         return {
           status: 1,
@@ -1100,7 +1102,9 @@ async function runRegressionSuite() {
             }
           }
         }
-      } catch {}
+      } catch {
+        // No readable .git file means no extra safe.directory entry is needed.
+      }
 
       const args: string[] = [];
       for (const dir of safeDirs) {
@@ -1298,7 +1302,9 @@ async function runRegressionSuite() {
             }
           }
         }
-      } catch {}
+      } catch {
+        // No readable .git file means no extra safe.directory entry is needed.
+      }
 
       const args: string[] = [];
       for (const dir of safeDirs) {

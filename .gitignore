@@ -37,3 +37,5 @@ tools/ai-brain/data/model-route-health.json
 tools/ai-brain/data/sources.json
 lhci-report/
 .lighthouseci/
+k6-summary.json
+k6-api.log
