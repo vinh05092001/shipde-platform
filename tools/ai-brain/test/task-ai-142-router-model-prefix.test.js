@@ -196,5 +196,28 @@ describe('TASK-AI-142: router model prefix filtering and candidate generation', 
       ),
       null
     );
+
+    // Direct / non-prefix router source like thb resolves bare models to its source id
+    const thbSource = registry.sources.find((s) => s.id === 'thb');
+    if (thbSource) {
+      const resThb = candidatesApi.resolveRouterModel('gpt-6-luna', thbSource, registry);
+      assert.deepEqual(resThb, {
+        upstream: 'thb',
+        innerModelId: 'gpt-6-luna',
+      });
+    }
+  });
+
+  test('tokenharbor (thb) generates candidates for bare models like gpt-6-luna', () => {
+    const registry = sourcesApi.loadSources();
+    const result = candidatesApi.generateCandidates({
+      registry,
+      sourceModels: { thb: ['gpt-6-luna'] },
+      catalogue: ['gpt-6-luna'],
+    });
+
+    const thbCand = result.find((c) => c.gateway === 'thb' && c.modelId === 'gpt-6-luna');
+    assert.ok(thbCand, 'thb candidate for gpt-6-luna must be generated');
+    assert.equal(thbCand.upstream, 'thb');
   });
 });

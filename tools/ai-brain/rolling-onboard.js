@@ -98,7 +98,7 @@ async function onboardSourceRolling(src, options = {}) {
   // live model list; its first scope supplies the probe model when none is configured.
   const scanOptions = { ...options, registry, env, fetch: fetchFn, now };
   const scanTargets = await quotaScan.scanTargetsForSource(src, scanOptions);
-  const repModel =
+  let repModel =
     (Array.isArray(src.models) && src.models.find((model) => typeof model === 'string' && model)) ||
     src.verify?.model ||
     scanTargets[0]?.model;
@@ -123,43 +123,76 @@ async function onboardSourceRolling(src, options = {}) {
   let probeBody = '';
   let probeReason = 'PROBE_FAILED';
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), dispatchConfig.probeTimeoutMs);
-
-  try {
-    const res = await quotaScan.withinSignal(
-      fetchFn(url, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          model: repModel,
-          messages: [{ role: 'user', content: 'ping' }],
-          max_tokens: dispatchConfig.quotaProbeMaxOutputTokens,
-        }),
-        signal: controller.signal,
-      }),
-      controller.signal
-    );
-    probeStatus = res.status;
+  async function probeModel(modelToProbe) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), dispatchConfig.probeTimeoutMs);
     try {
-      probeBody = await quotaScan.withinSignal(res.text(), controller.signal);
+      const res = await quotaScan.withinSignal(
+        fetchFn(url, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            model: modelToProbe,
+            messages: [{ role: 'user', content: 'ping' }],
+            max_tokens: dispatchConfig.quotaProbeMaxOutputTokens,
+          }),
+          signal: controller.signal,
+        }),
+        controller.signal
+      );
+      probeStatus = res.status;
+      try {
+        probeBody = await quotaScan.withinSignal(res.text(), controller.signal);
+      } catch (err) {
+        if (controller.signal.aborted) throw err;
+      }
+      if (res.ok) {
+        const completion = quotaScan.validateCompletion(probeBody);
+        probeOk = completion.ok;
+        probeReason = completion.reason;
+      } else {
+        probeOk = false;
+        probeReason = `HTTP_${probeStatus}`;
+      }
     } catch (err) {
-      if (controller.signal.aborted) throw err;
+      probeStatus = 503;
+      probeOk = false;
+      probeBody = '';
+      probeReason = err && err.name === 'AbortError' ? 'TIMEOUT' : 'PROBE_FAILED';
+    } finally {
+      clearTimeout(timer);
     }
-    if (res.ok) {
-      const completion = quotaScan.validateCompletion(probeBody);
-      probeOk = completion.ok;
-      probeReason = completion.reason;
+    return probeOk;
+  }
+
+  await probeModel(repModel);
+  if (!probeOk && scanTargets.length > 1) {
+    for (const target of scanTargets) {
+      if (target.model && target.model !== repModel) {
+        const ok = await probeModel(target.model);
+        if (ok) {
+          repModel = target.model;
+          break;
+        }
+      }
+    }
+  }
+
+  let quotaResults = [];
+  let usable = [];
+  if (probeOk) {
+    quotaResults = await quotaScan.scanSourceQuotas(src, { ...scanOptions, targets: scanTargets });
+    usable = quotaResults.filter((result) => result.code === quotaScan.QUOTA_STATUS_CODES.OK);
+    if (usable.length === 0) {
+      probeOk = false;
+      const refused = quotaResults[0];
+      probeReason = refused ? `QUOTA_${refused.code}` : 'QUOTA_UNSCANNED';
+      if (refused && refused.status) {
+        probeStatus = refused.status;
+      }
     } else {
-      probeReason = `HTTP_${probeStatus}`;
+      repModel = usable[0].model;
     }
-  } catch (err) {
-    probeStatus = 503;
-    probeOk = false;
-    probeBody = '';
-    probeReason = err && err.name === 'AbortError' ? 'TIMEOUT' : 'PROBE_FAILED';
-  } finally {
-    clearTimeout(timer);
   }
 
   // rememberProbe resolves the file from these options and persists unless told not to.
@@ -212,20 +245,6 @@ async function onboardSourceRolling(src, options = {}) {
       evidenceApi.saveEvidence(evidenceDir, evidenceData);
     }
   };
-
-  let quotaResults = [];
-  let usable = [];
-  if (probeOk) {
-    quotaResults = await quotaScan.scanSourceQuotas(src, { ...scanOptions, targets: scanTargets });
-    // Each scope stands alone: quota state is source-and-scope qualified, so a refused
-    // upstream stays blocked while confirmed ones enter ranking.
-    usable = quotaResults.filter((result) => result.code === quotaScan.QUOTA_STATUS_CODES.OK);
-    if (usable.length === 0) {
-      probeOk = false;
-      const refused = quotaResults[0];
-      probeReason = refused ? `QUOTA_${refused.code}` : 'QUOTA_UNSCANNED';
-    }
-  }
 
   if (probeOk) {
     // An existing registry binding owns the account; onboarding never invents one.

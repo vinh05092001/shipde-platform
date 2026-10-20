@@ -4075,6 +4075,27 @@ async function runOrchestration(goal, opts) {
       : evidenceDir
         ? evidence.loadEvidence(evidenceDir)
         : null;
+  if (
+    (o.isolatedWorker || o.refreshWriterModels === true) &&
+    !testsInjectedCandidates &&
+    o.autoOnboard !== false
+  ) {
+    const rollingOnboard = require('./rolling-onboard');
+    const env = o.env || process.env;
+    const currentReg = o.registry || sourcesApi.loadSources();
+    const newSources = rollingOnboard.detectNewSources(currentReg, evidenceData, env);
+    if (newSources.length > 0) {
+      await rollingOnboard.autoOnboardNewSources(newSources, {
+        ...o,
+        evidenceData,
+        evidenceDir,
+        registry: currentReg,
+        env,
+      });
+      if (evidenceDir) evidenceData = evidence.loadEvidence(evidenceDir);
+    }
+  }
+
   // Opt-in: the CLI turns this on for real runs; a direct runOrchestration call
   // (tests, embedded use) never reaches live /models with host credentials.
   if (o.refreshWriterModels === true) {

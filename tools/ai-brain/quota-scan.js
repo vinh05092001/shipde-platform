@@ -471,14 +471,24 @@ async function discover9RouterScopes(source, options = {}) {
     }
   }
 
+  const isBareRouter = groups.size === 0 && modelsList.length > 0;
+  if (isBareRouter) {
+    for (const mId of modelsList) {
+      const raw = String(mId);
+      if (!groups.has(raw)) {
+        groups.set(raw, raw);
+      }
+    }
+  }
+
   // No live or catalogued model means no scope can be named honestly; scan nothing
   // rather than invent prefixes or model ids.
   const targets = [];
-  for (const [prefix, repModel] of groups.entries()) {
+  for (const [scope, repModel] of groups.entries()) {
     targets.push({
       source: source.id,
-      scope: prefix,
-      upstream: prefix,
+      scope,
+      upstream: isBareRouter ? (source.routerAlias || source.id) : scope,
       model: repModel,
       endpoint: source.endpoint,
       apiKeyEnv: source.credential?.env,
@@ -523,16 +533,19 @@ async function scanSourceQuotas(src, options = {}) {
   const targets = Array.isArray(options.targets)
     ? options.targets
     : await scanTargetsForSource(src, options);
-  const results = [];
-  for (const target of targets) {
-    const result = await scanScope(target, options);
+  const results = await Promise.all(
+    targets.map(async (target) => {
+      const result = await scanScope(target, options);
+      return { target, result };
+    })
+  );
+  for (const { target, result } of results) {
     recordScanResult(quotaState, target, result);
-    results.push(result);
   }
   if (targets.length > 0 && options.persist !== false) {
     saveQuotaState(quotaState, options);
   }
-  return results;
+  return results.map((r) => r.result);
 }
 
 async function scanAllQuotas(options = {}) {

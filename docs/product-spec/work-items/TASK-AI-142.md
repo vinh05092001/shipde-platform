@@ -1320,3 +1320,8 @@ FEAT-AUTH-05 run 2026-10-20 00:08 ranked claude-opus-5 (quality 82, live probe 2
 ### Direct sources prefix bare model id with providerId in OpenCode launch args (2026-10-20)
 
 FEAT-AUTH-05 run 2026-10-20 02:30 chose a direct-http provider with bare model id, and worker launch failed instantly with launch_config because OpenCode requires `--model <providerId>/<model>` to resolve the provider entry in worker `opencode.json`. Once `providerId` is resolved for an `opencode-direct` launch on a direct (non-router) source, any un-prefixed `--model` argument is rewritten to `providerId + '/' + pinnedModel` in `launch-args-*.json`. Already-prefixed models and router models remain unchanged.
+
+### Live rolling onboarding across multi-scope routers and direct sources (2026-10-20)
+
+Aggregator gateways like 9router failed rolling onboarding entirely when an initial scope (such as kimchi) returned 503, blocking healthy upstreams (`gcli`, `ag`) from being admitted. In addition, direct sources lacking a slash prefix (such as TokenHarbor `thb`) failed candidate generation in `resolveRouterModel`, while `assembleForDispatch` excluded unrecorded routes as `ROUTE_PROBE_UNPROVEN` even after passing onboarding evidence was recorded.
+`onboardSourceRolling` now iterates through candidate scopes on multi-scope routers, admitting all verified working scopes into evidence and route health. `resolveRouterModel` maps bare models for non-prefixed router sources directly to the source upstream, and `isCandidateRouteEligible` recognizes passing evidence from `evidenceData` when `probeEvidence` is not passed. Finally, `runOrchestration` runs rolling onboarding before building writer candidates in goal runs.
