@@ -99,3 +99,16 @@ Each tool was run on the operator host on 2026-10-20. Manifest states follow wha
 - **shipde-brain** → REJECTED by operator decision on 2026-10-20. Its role (task facts, lessons and prompts with provenance) is already covered by `docs/product-spec`, the skill pack and Hermes memory, and its provenance is the reviewed commits and PRs of this repository. A separate repository would add a second source that can drift.
 
 Verification: `node tools/ai-brain/acceptance/ac-17-01-manifest-audit-clean.js` now reports `error 0`. Before this change, main reported 1 error, from the docker-compose and promptfoo overstatements. Related tests (manifest-audit, review-lane, repo-integration group 1, group 8 and evidence): 45 pass, 0 fail.
+
+### 2026-10-20 — appendix tools already in use, now registered
+
+These five appendix repositories were running but had no manifest entry. Each is registered as ADOPTED with the observed version, its caller and a live run on the operator host:
+
+- **anomalyco/opencode** `1.18.31`. Caller: `tools/ai-brain/harness.js:187` (`opencode-direct`) and the paseo `--provider opencode/...` sessions. Live: `opencode models` lists 1,533 models.
+- **getpaseo/paseo** `0.8.0`. Caller: `harness.js:43` paseo adapter (`run --provider --background --json`). Live: the daemon was not running, so `paseo daemon start` started it, and `paseo ls` then listed past worker sessions with agent ID, provider, status and cwd.
+- **rtk-ai/rtk** `0.50.0`. Caller: `tools/ai-brain/intake.js:44` and `:1264`. RTK is enabled only when no `RTK_RISK_DOMAINS` domain is present, so risk-domain items get raw output. Live: `rtk git status` returns compacted status.
+- **obra/superpowers** `8ca22dba`. Vendored under `skills/superpowers/` and consumed by `skill-pack.js` (TASK-AI-109). The byte pins are tested by `task-ai-109.test.js`.
+- **pbakaus/impeccable** `4e8504f1`. Vendored under `skills/impeccable/` and consumed by `skill-pack.js` for UI roles. The byte pins are tested by `task-ai-109-ui.test.js`.
+- **microsoft/playwright** moves from DEFERRED to ADOPTED at `1.64.1`. It has run the blocking axe-core gate in CI (`current-application.yml`) since #422.
+
+Verification: manifest audit error 0. manifest-audit and all repo-integration tests: 54 pass, 0 fail.
