@@ -70,3 +70,20 @@ jobs:
           trivy --version
       - name: Trivy vulnerability and misconfiguration gate
         run: pnpm security:trivy
+
+  code-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned Semgrep
+        run: |
+          SEMGREP_VERSION="$(node -e "console.log(require('./tools/ecosystem-manifest.json').adopted.find(e=>e.id==='semgrep').pinned_version_or_commit)")"
+          pip install "semgrep==${SEMGREP_VERSION}"
+          semgrep --version
+      - name: Semgrep rule fixtures and blocking scan
+        run: |
+          semgrep --test tools/semgrep/rules
+          semgrep scan --config tools/semgrep/rules --error --metrics=off apps packages
