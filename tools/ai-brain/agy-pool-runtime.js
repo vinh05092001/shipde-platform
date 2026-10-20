@@ -108,18 +108,42 @@ function readLastRunElapsedMs(accountId, options) {
   return undefined;
 }
 
+// The tightest finite bound wins; an unbounded caller timeout (Infinity) never
+// widens the configured pool bound, and the fallback is configuration, not code.
+function poolTimeoutMs(opts) {
+  const configured = require('./sources').getDispatchConfig(opts.registry, opts).agyPoolTimeoutMs;
+  return Math.min(
+    ...[opts.timeoutMs, opts.dispatch?.agyPoolTimeoutMs, configured]
+      .filter((v) => v !== null && v !== undefined && v !== '')
+      .map(Number)
+      .filter((v) => Number.isFinite(v) && v >= 0)
+  );
+}
+
 function waitForResult(accountId, sinceMs, options) {
   if (!isValidAccountId(accountId)) return { state: 'error', reason: 'INVALID_ACCOUNT_ID' };
   const opts = options || {};
-  const timeoutMs = Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : 120000;
+  const timeoutMs = poolTimeoutMs(opts);
+  if (!Number.isFinite(timeoutMs)) return { state: 'error', reason: 'POOL_TIMEOUT_UNBOUNDED' };
   const file = path.join(exp.accountDir(accountId, opts), 'result.json');
   const start = Date.now();
   while (Date.now() - start <= timeoutMs) {
     try {
       const stat = fs.statSync(file);
-      if (!sinceMs || stat.mtimeMs >= sinceMs) return exp.readResult(accountId, opts);
+      if (!sinceMs || stat.mtimeMs >= sinceMs - 1000) {
+        const result = exp.readResult(accountId, opts);
+        // A result that names another job (a late prior adapter) is never this
+        // job's output; keep waiting for the submitted job's own result.
+        if (!opts.expectedJobId || result?.jobId === opts.expectedJobId) return result;
+      }
     } catch {}
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+    if (timeoutMs === 0) break;
+    Atomics.wait(
+      new Int32Array(new SharedArrayBuffer(4)),
+      0,
+      0,
+      Math.min(100, Math.max(1, timeoutMs))
+    );
   }
   return { state: 'error', reason: 'POOL_TIMEOUT' };
 }
@@ -253,7 +277,11 @@ function submitLocked(accountId, job, opts, dir) {
   // Allocate the pool job identity at submission, persist it before execution,
   // and retain its receipt after the account mailbox is reused by another job.
   const jobId = accountId + '/' + randomUUID();
-  const submitted = { ...job, accountId, jobId };
+  // The producer bounds each agy call by the same configured pool wait, so a run
+  // never outlives the controller waiting for it.
+  const boundMs = poolTimeoutMs(opts);
+  const printTimeoutSec = Number.isFinite(boundMs) ? Math.max(1, Math.floor(boundMs / 1000)) : null;
+  const submitted = { ...job, accountId, jobId, printTimeoutSec };
   const receiptDir = path.join(dir, 'jobs');
   fs.mkdirSync(receiptDir, { recursive: true });
   const receiptFile = path.join(receiptDir, jobId.split('/')[1] + '.json');
@@ -273,6 +301,19 @@ function submitLocked(accountId, job, opts, dir) {
     );
     return bound;
   };
+  // A stale result that cannot be removed could be read back as this job's
+  // output; only an already-absent file is safe to ignore.
+  try {
+    fs.unlinkSync(resultFile);
+  } catch (err) {
+    if (!err || err.code !== 'ENOENT') {
+      return finish({
+        state: 'error',
+        exitCode: 1,
+        reason: 'POOL_STALE_RESULT_UNREMOVABLE: ' + String((err && err.code) || err),
+      });
+    }
+  }
   const launch = exp.runAdapter(accountId, opts);
   if (launch.exitCode !== 0) {
     const isTimeout = Boolean(launch.stderr && launch.stderr.includes('ADAPTER_TIMEOUT'));
@@ -294,7 +335,7 @@ function submitLocked(accountId, job, opts, dir) {
     } catch {}
     return finish(errorResult);
   }
-  return finish(exp.waitForResult(accountId, startedAt, opts));
+  return finish(exp.waitForResult(accountId, startedAt, { ...opts, expectedJobId: jobId }));
 }
 
 function parseQuotaJson(value) {
