@@ -416,6 +416,7 @@ function getDispatchConfig(registry, options = {}) {
     quotaProbeMaxOutputTokens: configuredLimit('quotaProbeMaxOutputTokens'),
     maxPromptCommandOutputChars: configuredLimit('maxPromptCommandOutputChars'),
     maxHostGateSummaryChars: configuredLimit('maxHostGateSummaryChars'),
+    rateLimitCooldownMs: configuredLimit('rateLimitCooldownMs'),
     headroomUnknownPenalty: configuredNonNegativeLimit(
       'headroomUnknownPenalty',
       'unknownHeadroomPenalty'
