@@ -1,0 +1,7 @@
+# ast-grep structural rules (GOAL-AUTOCLAW-REPOS-4). `pnpm lint:ast` runs the
+# rule tests, then scans; agents use `ast-grep run -p <pattern> --rewrite <fix>`
+# to preview a codemod diff and add `-U` only after reviewing it.
+ruleDirs:
+  - tools/ast-grep/rules
+testConfigs:
+  - testDir: tools/ast-grep/rule-tests

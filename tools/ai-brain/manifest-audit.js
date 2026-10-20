@@ -41,6 +41,7 @@ const BINARY_ALIASES = {
 
 /** npm package names for entries installed as dev dependencies. */
 const PACKAGE_ALIASES = {
+  'ast-grep': '@ast-grep/cli',
   'lighthouse-ci': '@lhci/cli',
   'opentelemetry-js': '@opentelemetry/api',
   'openapi-typescript': 'openapi-typescript',

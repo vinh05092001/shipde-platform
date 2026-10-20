@@ -992,6 +992,27 @@
       "health_check": "pnpm security:semgrep",
       "rollback": "Remove the code-scan job from security-baseline.yml.",
       "profiles": ["FOUNDATION", "SECURITY_REVIEW"]
+    },
+    {
+      "id": "ast-grep",
+      "name": "ast-grep",
+      "canonical_url": "https://github.com/ast-grep/ast-grep",
+      "repository": "ast-grep/ast-grep",
+      "owner": "ast-grep",
+      "kind": "cli",
+      "role": "Structural search and codemod with preview-before-apply; blocking structural rules in CI (no-empty-catch).",
+      "source_of_truth_boundary": "Rules live in tools/ast-grep with tests; a codemod is applied only after its previewed diff is reviewed.",
+      "install_method": "npm-dev",
+      "pinned_version_or_commit": "0.51.0",
+      "platform": "any",
+      "lifecycle_state": "ADOPTED",
+      "default_enabled": true,
+      "blocking_policy": "BLOCKING_GATE",
+      "permissions": "read-only",
+      "telemetry_network_behavior": "none",
+      "health_check": "pnpm lint:ast",
+      "rollback": "Remove the lint:ast CI step and the devDependency.",
+      "profiles": ["FOUNDATION", "RESEARCH_ONLY"]
     }
   ],
   "product_dependencies": [
@@ -1256,19 +1277,6 @@
       "default_enabled": false,
       "installed": false,
       "evaluation_goal": "Generate automated SPDX and CycloneDX SBOM artifacts in GitHub Actions."
-    },
-    {
-      "id": "ast-grep",
-      "name": "ast-grep",
-      "canonical_url": "https://github.com/ast-grep/ast-grep",
-      "repository": "ast-grep/ast-grep",
-      "owner": "ast-grep",
-      "kind": "cli",
-      "role": "Fast and polyglot tool for code searching, linting, and rewriting at AST level.",
-      "lifecycle_state": "WATCH",
-      "default_enabled": false,
-      "installed": false,
-      "evaluation_goal": "Automate structural refactoring across shared packages and Next.js applications."
     },
     {
       "id": "llmlingua",

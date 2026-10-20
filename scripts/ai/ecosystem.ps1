@@ -383,7 +383,8 @@ function Assert-ShipDeManifest {
         "obra/superpowers",
         "pbakaus/impeccable",
         # GOAL-AUTOCLAW-REPOS-7: promoted from candidates
-        "semgrep/semgrep"
+        "semgrep/semgrep",
+        "ast-grep/ast-grep"
     )
     if ($adopted.Count -ne $canonicalApprovedRepos.Count) {
         $errors.Add("Manifest adopted count must equal the $($canonicalApprovedRepos.Count) approved repositories; found $($adopted.Count).")
