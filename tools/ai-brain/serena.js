@@ -488,6 +488,9 @@ function runSerenaCli(argv) {
     console.log('  references   --symbol <name> [--file <path>] [--root <dir>] [--json]');
     console.log('  measure      --symbol <name> [--file <path>] [--root <dir>] [--json]');
     console.log('  health       [--root <dir>] [--json]');
+    console.log(
+      '  live         --symbol <name> --file <path> [--root <dir>]  (real Serena MCP, read-only)'
+    );
     return 0;
   }
 
@@ -639,3 +642,46 @@ module.exports = {
   checkHealth,
   runSerenaCli,
 };
+
+/**
+ * `serena live`: asks the real Serena language-server backend (serena-mcp.js)
+ * for the symbol definition and its references. Exit 0 only when Serena
+ * answered both calls.
+ */
+async function runSerenaLive(argv) {
+  const value = (flag) => {
+    const i = argv.indexOf(flag);
+    return i >= 0 ? argv[i + 1] : undefined;
+  };
+  const symbol = value('--symbol');
+  const file = value('--file');
+  if (!symbol || !file) {
+    console.error('Missing required options: --symbol <name> --file <path>');
+    return 2;
+  }
+  const root = path.resolve(value('--root') || path.join(__dirname, '..', '..'));
+  const { callSerena } = require('./serena-mcp');
+  const relative = file.split(path.sep).join('/');
+  const { tools, results } = await callSerena(root, [
+    {
+      name: 'find_symbol',
+      arguments: { name_path_pattern: symbol, relative_path: relative, include_body: false },
+    },
+    (done) => {
+      // Serena disambiguates overloads as name[0], name[1]; reference the definition it found.
+      const found = Array.isArray(done[0].value) ? done[0].value : [];
+      const definition = found.find((s) => s.kind !== 'Property') || found[0];
+      return {
+        name: 'find_referencing_symbols',
+        arguments: {
+          name_path: definition ? definition.name_path : symbol,
+          relative_path: relative,
+        },
+      };
+    },
+  ]);
+  console.log(JSON.stringify({ backend: 'oraios/serena', tools, results }, null, 2));
+  return results.every((r) => r.ok) ? 0 : 1;
+}
+
+module.exports.runSerenaLive = runSerenaLive;
