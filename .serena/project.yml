@@ -1,6 +1,6 @@
-project_name: "shipde-platform"
-language_servers: ["typescript"]
-encoding: "utf-8"
+project_name: 'shipde-platform'
+language_servers: ['typescript']
+encoding: 'utf-8'
 activation_command:
 activation_command_timeout: 180
 line_ending:
@@ -8,7 +8,7 @@ language_backend:
 agent_interface:
 ignore_all_files_in_gitignore: true
 ls_specific_settings: {}
-ls_workspace_folders: ["."]
+ls_workspace_folders: ['.']
 ls_additional_workspace_folders: []
 ignored_paths: []
 read_only: true
@@ -19,7 +19,7 @@ excluded_apis: []
 included_apis: []
 default_modes:
 added_modes:
-initial_prompt: ""
+initial_prompt: ''
 symbol_info_budget:
 read_only_memory_patterns: []
 ignored_memory_patterns: []
