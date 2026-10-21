@@ -354,6 +354,7 @@
     "maxPromptCommandOutputChars": 4000,
     "maxHostGateSummaryChars": 500,
     "rateLimitCooldownMs": 300000,
+    "agyPoolTimeoutMs": 1800000,
     "headroomUnknownPenalty": 15,
     "headroomTightPenalty": 10,
     "note": "How a registry account's `provider` reaches a running session. This table is why the executor needs no provider branch: a new provider is a row here.",

@@ -11,6 +11,7 @@ const { readSessionId } = require('../executor');
 const pool = require('../agy-pool-runtime');
 const harness = require('../harness');
 const { candidateKey } = require('../candidates');
+const reviewLoop = require('../review-loop');
 function root(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-writer-session-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -34,6 +35,7 @@ test('pool writer launch persists a real job identity and reads its prose withou
     stdout: 'fixture scheduler only',
     stderr: '',
   }));
+  t.mock.method(pool, 'waitForResult', (account, sinceMs, opts) => pool.readResult(account, opts));
   t.mock.method(pool, 'runAdapter', (account) => {
     const accountDir = pool.accountDir(account, { runsDir: dir });
     submitted = JSON.parse(fs.readFileSync(path.join(accountDir, 'job.json'), 'utf8'));
@@ -43,7 +45,7 @@ test('pool writer launch persists a real job identity and reads its prose withou
     );
     fs.writeFileSync(
       path.join(accountDir, 'result.json'),
-      JSON.stringify({ state: 'ok', exitCode: 0 })
+      JSON.stringify({ state: 'ok', exitCode: 0, jobId: submitted.jobId })
     );
     freshResult(path.join(accountDir, 'result.json'));
     return { exitCode: 0, stdout: 'scheduled', stderr: '' };
@@ -107,25 +109,52 @@ function candidate(name) {
   c.candidateKey = candidateKey(c);
   return c;
 }
-async function runFixture(t, limit, allFail, overrides = {}) {
-  const dir = root(t);
-  function git(args) {
-    const r = cp.spawnSync('git', args, { cwd: dir, encoding: 'utf8', windowsHide: true });
+let templateDir = null;
+let templateBaseSha = null;
+
+function ensureTemplate() {
+  if (templateDir && fs.existsSync(templateDir)) return { templateDir, templateBaseSha };
+  templateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-fixture-template-'));
+  const git = (args) => {
+    const r = cp.spawnSync('git', args, { cwd: templateDir, encoding: 'utf8', windowsHide: true });
     assert.equal(r.status, 0, r.stderr);
     return r.stdout.trim();
-  }
+  };
   git(['init', '-q']);
   git(['config', 'user.name', 'Fixture']);
   git(['config', 'user.email', 'fixture@example.test']);
-  fs.writeFileSync(path.join(dir, 'fixture.txt'), 'fixture');
+  fs.writeFileSync(path.join(templateDir, 'fixture.txt'), 'fixture');
   git(['add', '.']);
   git(['commit', '-qm', 'fixture']);
+  templateBaseSha = git(['rev-parse', 'HEAD']);
+  return { templateDir, templateBaseSha };
+}
+ensureTemplate();
+process.on('exit', () => {
+  if (templateDir) {
+    try {
+      fs.rmSync(templateDir, { recursive: true, force: true });
+    } catch {}
+  }
+});
+
+async function runFixture(t, limit, allFail, overrides = {}) {
+  const dir = root(t);
+  t.mock.method(reviewLoop, 'runReviewLoop', async ({ sha }) => ({
+    status: reviewLoop.Status.COMPLETED,
+    finalSha: sha,
+    verdict: 'PASS',
+    repairCount: 0,
+    rounds: [],
+  }));
+  const { templateDir: tDir, templateBaseSha: baseSha } = ensureTemplate();
+  fs.cpSync(tDir, dir, { recursive: true });
   const calls = [],
     candidates = overrides.candidates || ['high', 'low', 'other'].map(candidate);
   const checkpointFile = path.join(dir, 'checkpoint.json');
   const log = await runOrchestration('fixture goal', {
     cwd: dir,
-    baseSha: git(['rev-parse', 'HEAD']),
+    baseSha,
     candidates,
     specs: [
       {
@@ -135,7 +164,10 @@ async function runFixture(t, limit, allFail, overrides = {}) {
         qualityFloor: 0,
       },
     ],
-    registry: { sources: [], dispatch: { maxLocalWriterFallbacks: limit } },
+    registry: {
+      sources: [],
+      dispatch: { maxLocalWriterFallbacks: limit, agyPoolTimeoutMs: 0 },
+    },
     checkpointFile,
     evidenceDir: path.join(dir, 'evidence'),
     decisionDir: path.join(dir, 'decisions'),
@@ -202,6 +234,7 @@ test('goal orchestration uses the authorized pool submission and keeps its durab
     stdout: 'fixture scheduler only',
     stderr: '',
   }));
+  t.mock.method(pool, 'waitForResult', (account, sinceMs, opts) => pool.readResult(account, opts));
   let submitted;
   t.mock.method(pool, 'runAdapter', (account) => {
     const dir = pool.accountDir(account, { runsDir });
@@ -210,7 +243,10 @@ test('goal orchestration uses the authorized pool submission and keeps its durab
       path.join(dir, 'out.txt'),
       'The requested changes are ready for verification.'
     );
-    fs.writeFileSync(path.join(dir, 'result.json'), JSON.stringify({ state: 'ok', exitCode: 0 }));
+    fs.writeFileSync(
+      path.join(dir, 'result.json'),
+      JSON.stringify({ state: 'ok', exitCode: 0, jobId: submitted.jobId })
+    );
     freshResult(path.join(dir, 'result.json'));
     return { exitCode: 0 };
   });
@@ -224,7 +260,10 @@ test('goal orchestration uses the authorized pool submission and keeps its durab
     // whole suite from inside the test (30 minutes on Linux CI).
     hostGate: () => ({ pass: true, command: 'fixture-only', failures: [], summary: [] }),
     externalWorkers: 'agy-pool',
-    registry: { sources: [], dispatch: { agyPoolWriterEnabled: true, maxLocalWriterFallbacks: 1 } },
+    registry: {
+      sources: [],
+      dispatch: { agyPoolWriterEnabled: true, maxLocalWriterFallbacks: 1, agyPoolTimeoutMs: 0 },
+    },
   });
   assert.ok(submitted?.jobId);
   assert.equal(log.sessions[0]?.sessionId, submitted.jobId);

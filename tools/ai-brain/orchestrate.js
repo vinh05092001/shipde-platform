@@ -230,9 +230,23 @@ function resolveLauncher(o, isolatedLauncher) {
       )
     ) {
       const pool = require('./agy-pool-runtime');
+      // The pool wait is synchronous, so it honours the tightest finite bound among
+      // the pool setting, the launch timeout and the job's own deadline; an
+      // unbounded (Infinity) general timeout never widens it.
+      const bounds = [
+        o.poolTimeoutMs,
+        o.registry?.dispatch?.agyPoolTimeoutMs,
+        o.timeoutMs,
+        job.workerTimeoutMs,
+        o.workerTimeoutMs,
+      ]
+        .filter((v) => v !== null && v !== undefined && v !== '')
+        .map(Number)
+        .filter((v) => Number.isFinite(v) && v >= 0);
+      const poolTimeoutMs = bounds.length > 0 ? Math.min(...bounds) : undefined;
       const result = pool.submitJob(job.accountId, job, {
         ...o,
-        timeoutMs: job.workerTimeoutMs || o.workerTimeoutMs,
+        timeoutMs: poolTimeoutMs,
       });
       return {
         ...result,

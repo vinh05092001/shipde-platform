@@ -681,7 +681,8 @@ describe('candidate generation', () => {
           "const path = require('path');",
           'const dir = process.argv[2];',
           "const state = JSON.parse(fs.readFileSync(path.join(dir, 'state.json'), 'utf8'));",
-          "fs.writeFileSync(path.join(dir, 'result.json'), JSON.stringify(state.result));",
+          "const job = JSON.parse(fs.readFileSync(path.join(dir, 'job.json'), 'utf8'));",
+          "fs.writeFileSync(path.join(dir, 'result.json'), JSON.stringify({ ...state.result, jobId: job.jobId }));",
           "if (state.out !== undefined) fs.writeFileSync(path.join(dir, 'out.txt'), state.out);",
         ].join('\n')
       );

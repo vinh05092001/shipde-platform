@@ -420,6 +420,7 @@ function getDispatchConfig(registry, options = {}) {
     maxPromptCommandOutputChars: configuredLimit('maxPromptCommandOutputChars'),
     maxHostGateSummaryChars: configuredLimit('maxHostGateSummaryChars'),
     rateLimitCooldownMs: configuredLimit('rateLimitCooldownMs'),
+    agyPoolTimeoutMs: configuredNonNegativeLimit('agyPoolTimeoutMs'),
     headroomUnknownPenalty: configuredNonNegativeLimit(
       'headroomUnknownPenalty',
       'unknownHeadroomPenalty'

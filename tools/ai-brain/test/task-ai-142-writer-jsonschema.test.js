@@ -86,7 +86,7 @@ const dir = process.argv[2];
 const job = JSON.parse(fs.readFileSync(path.join(dir, 'job.json'), 'utf8'));
 const response = JSON.stringify({ candidateKey: job.candidateKey, nonce: job.resultSchema.properties.nonce.enum[0], status: 'completed', artifacts: [] });
 fs.writeFileSync(path.join(dir, 'out.txt'), JSON.stringify({response}));
-fs.writeFileSync(path.join(dir, 'result.json'), JSON.stringify({state:'ok',exitCode:0}));`
+fs.writeFileSync(path.join(dir, 'result.json'), JSON.stringify({state:'ok',exitCode:0,jobId:job.jobId}));`
   );
   const opts = { fakeRunsDir: root, adapterScript: script };
   const proof = await schemaApi.verify(candidate('agy-pool'), opts);
@@ -95,7 +95,7 @@ fs.writeFileSync(path.join(dir, 'result.json'), JSON.stringify({state:'ok',exitC
   const submitted = JSON.parse(fs.readFileSync(path.join(root, 'agy01', 'job.json')));
   fs.writeFileSync(
     script,
-    `const fs=require('fs');const path=require('path');fs.writeFileSync(path.join(process.argv[2],'result.json'),JSON.stringify({state:'ok',exitCode:0}));`
+    `const fs=require('fs');const path=require('path');const dir=process.argv[2];const job=JSON.parse(fs.readFileSync(path.join(dir,'job.json'),'utf8'));fs.writeFileSync(path.join(dir,'result.json'),JSON.stringify({state:'ok',exitCode:0,jobId:job.jobId}));`
   );
   assert.equal(
     (await schemaApi.verify(candidate('agy-pool'), opts)).reason,
