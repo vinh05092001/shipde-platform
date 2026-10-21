@@ -29,11 +29,11 @@ function writePoolAdapter(root) {
       "const job = JSON.parse(fs.readFileSync(path.join(dir, 'job.json'), 'utf8'));",
       "const quota = JSON.parse(fs.readFileSync(path.join(dir, 'quota-state.json'), 'utf8'));",
       "if (job.command === 'quota') {",
-      "  fs.writeFileSync(path.join(dir, 'result.json'), JSON.stringify(quota.result));",
+      "  fs.writeFileSync(path.join(dir, 'result.json'), JSON.stringify({ ...quota.result, jobId: job.jobId }));",
       "  fs.writeFileSync(path.join(dir, 'out.txt'), JSON.stringify(quota.out));",
       '  process.exit(0);',
       '}',
-      "fs.writeFileSync(path.join(dir, 'result.json'), JSON.stringify({ state: 'ok', exitCode: 0 }));",
+      "fs.writeFileSync(path.join(dir, 'result.json'), JSON.stringify({ state: 'ok', exitCode: 0, jobId: job.jobId }));",
     ].join('\n'),
     'utf8'
   );
@@ -293,7 +293,8 @@ describe('TASK-AI-69: agy pool quota and first evidence go through the CLI', () 
         "const fs = require('fs');",
         "const path = require('path');",
         'const dir = process.argv[2];',
-        "fs.writeFileSync(path.join(dir, 'result.json'), JSON.stringify({ state: 'ok', exitCode: 0 }));",
+        "const job = JSON.parse(fs.readFileSync(path.join(dir, 'job.json'), 'utf8'));",
+        "fs.writeFileSync(path.join(dir, 'result.json'), JSON.stringify({ state: 'ok', exitCode: 0, jobId: job.jobId }));",
         'process.exit(0);',
       ].join('\n'),
       'utf8'
@@ -496,7 +497,8 @@ describe('TASK-AI-69: agy pool quota and first evidence go through the CLI', () 
         "const fs = require('fs');",
         "const path = require('path');",
         'const dir = process.argv[2];',
-        "fs.writeFileSync(path.join(dir, 'result.json'), JSON.stringify({ state: 'ok', exitCode: 0 }));",
+        "const job = JSON.parse(fs.readFileSync(path.join(dir, 'job.json'), 'utf8'));",
+        "fs.writeFileSync(path.join(dir, 'result.json'), JSON.stringify({ state: 'ok', exitCode: 0, jobId: job.jobId }));",
         'process.exit(0);',
       ].join('\n'),
       'utf8'
@@ -651,6 +653,7 @@ describe('TASK-AI-69: agy pool quota and first evidence go through the CLI', () 
         candidates: [poolCand],
         evidenceDir,
         decisionDir,
+        home,
         log: fakeLog,
         exit: () => {},
       }

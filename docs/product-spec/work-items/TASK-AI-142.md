@@ -1335,7 +1335,6 @@ FEAT-AUTH-05 run 2026-10-20 02:30 chose a direct-http provider with bare model i
 
 Aggregator gateways like 9router failed rolling onboarding entirely when an initial scope (such as kimchi) returned 503, blocking healthy upstreams (`gcli`, `ag`) from being admitted. In addition, direct sources lacking a slash prefix (such as TokenHarbor `thb`) failed candidate generation in `resolveRouterModel`, while `assembleForDispatch` excluded unrecorded routes as `ROUTE_PROBE_UNPROVEN` even after passing onboarding evidence was recorded.
 `onboardSourceRolling` now iterates through candidate scopes on multi-scope routers, admitting all verified working scopes into evidence and route health. `resolveRouterModel` maps bare models for non-prefixed router sources directly to the source upstream, and `isCandidateRouteEligible` recognizes passing evidence from `evidenceData` when `probeEvidence` is not passed. Finally, `runOrchestration` runs rolling onboarding before building writer candidates in goal runs.
-
 ### H3 live: provider probe sweep imported into route evidence and candidate exclusion (2026-10-19)
 
 - Root cause:
@@ -1358,6 +1357,36 @@ Aggregator gateways like 9router failed rolling onboarding entirely when an init
     - Capability combination generation matching `probe-order` / `recentRouteSuccess` contracts.
     - Dry-run dispatch exclusions verifying exact reason codes (`QUOTA`, `AUTH`, `TIER`, `RATE`, `REGION`, `NO_CHANNEL`).
     - CLI entrypoint and missing-file validation.
+
+### H3 live: bounded agy pool wait timeout and CI hang resolution (2026-10-19)
+
+- Root causes:
+  1. In `tools/ai-brain/agy-pool-runtime.js:waitForResult`, `Number(opts.timeoutMs) > 0 ? opts.timeoutMs : 120000` failed closed when `opts.timeoutMs` was `Infinity` (passed down from `orchestrate.js: Math.min(..., remainingMs)` when `remainingMs` was `Infinity`), causing an unbounded poll loop `while (Date.now() - start <= Infinity)`.
+  2. Linux ext4 filesystem timestamp truncation on CI caused strict `stat.mtimeMs >= sinceMs` comparisons against high-resolution `Date.now()` to fail when `result.json` was written in the same millisecond or rounded down, causing poll loops to sleep indefinitely.
+  3. `submitLocked` did not unlink stale `resultFile` prior to adapter execution.
+  4. In `test/task-ai-142-agy-writer-session.test.js`, `pool.runAdapter` was mocked without mocking `pool.waitForResult`, and fixture initialization spawned multiple git subprocesses on every fixture invocation instead of reusing a cached template repo.
+- Repairs:
+  1. In `tools/ai-brain/agy-pool-runtime.js`:
+     - Bounded `timeoutMs` fallback with `Number.isFinite(rawTimeout) && rawTimeout >= 0 ? rawTimeout : 120000`, reading `opts.timeoutMs` or `opts.dispatch?.agyPoolTimeoutMs`.
+     - Added 1000ms mtime tolerance (`stat.mtimeMs >= sinceMs - 1000`) for timestamp rounding on ext4/tmpfs.
+     - Unlinked `resultFile` before `runAdapter` launch in `submitLocked`.
+  2. In `tools/ai-brain/orchestrate.js`:
+     - Read configurable `poolTimeoutMs` (incorporating `o.timeoutMs`, `o.poolTimeoutMs`, and `registry.dispatch.agyPoolTimeoutMs`) before forwarding to `pool.submitJob`.
+  3. In `tools/ai-brain/test/task-ai-142-agy-writer-session.test.js`:
+     - Pre-initialized git template fixture once and reused across fixture runs.
+     - Mocked `pool.waitForResult` in unit tests, mocked `reviewLoop.runReviewLoop`, and set `agyPoolTimeoutMs: 0` in fixture dispatch options.
+     - Reduced test suite execution time from 30+ minutes hang down to < 5 seconds.
+- Verification:
+  - Passed all 6 tests in `tools/ai-brain/test/task-ai-142-agy-writer-session.test.js` in < 5.0s.
+  - Passed all 59 tests in agy-related test suite without regression.
+
+### H3 live: the pool result producer is versioned and proven to echo jobId (2026-10-20)
+
+- Root cause: `submitLocked` accepts a pool `result.json` only when it names the submitted `jobId`, but the producer that writes it (`C:\Tools\agy-pool\worker-core.ps1`, run by the `ShipDe-agyNN` scheduled task) lived outside the repository, so no test exercised its real output.
+- Repair: versioned the producer as `scripts/ai/agy-pool/worker-core.ps1` (paths overridable by `-RunsDir`/`AGY_POOL_RUNS_DIR` and `-AgyExe`/`AGY_POOL_AGY_EXE`, deployed defaults unchanged). Pool adapter fixtures now echo `job.jobId` like the producer.
+- Verification: `tools/ai-brain/test/task-ai-142-agy-pool-producer.test.js` submits through the real `submitJob`, runs the producer with a stand-in agy binary and asserts the result is accepted with the matching `jobId`; deleting the echo line in the producer makes it fail with `POOL_TIMEOUT`.
+- Follow-up: the producer no longer carries its own agy time limits. `submitLocked` stamps `printTimeoutSec` from the same configured pool bound (`dispatch.agyPoolTimeoutMs`, tightened by the caller) into `job.json`; the producer passes it to every agy call and refuses a job without it (`NO_PRINT_TIMEOUT`, agy not started). Paths use `Join-Path`, so the producer test also runs under `pwsh` on the Linux CI runner and fails there instead of skipping if PowerShell is missing.
+
 
 ### H3 live: rolling onboarding probes tools capability and records into evidence (2026-10-21)
 
