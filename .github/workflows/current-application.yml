@@ -91,7 +91,7 @@ jobs:
       - name: Work Item acceptance matrices (OpenSpec strict validate)
         run: pnpm test:specs
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || 'origin/main' }}
       - run: pnpm format:check
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.base_ref || 'origin/main' }}

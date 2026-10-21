@@ -43,3 +43,14 @@ test('writes ephemeral specs and reports items without a matrix', () => {
   assert.ok(fs.existsSync(path.join(dir, 'out/openspec/specs/feat-x/spec.md')));
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('an escaped pipe stays inside its cell', () => {
+  const row = String.raw`| AC-1 | run a \| b | ok | x |`;
+  const md = [
+    '## Acceptance matrix',
+    '| AC/Test ID | Scenario | Expected result | Evidence |',
+    '|---|---|---|---|',
+    row,
+  ].join('\n');
+  assert.deepEqual(acceptanceRows(md), [{ id: 'AC-1', scenario: 'run a | b', expected: 'ok' }]);
+});

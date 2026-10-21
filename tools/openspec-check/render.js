@@ -6,12 +6,13 @@ const fs = require('fs');
 const path = require('path');
 
 function cells(line) {
+  // Split on unescaped pipes; Markdown writes a literal pipe in a cell as \|.
   return line
     .trim()
     .replace(/^\|/, '')
-    .replace(/\|$/, '')
-    .split('|')
-    .map((c) => c.trim());
+    .replace(/(?<!\\)\|$/, '')
+    .split(/(?<!\\)\|/)
+    .map((c) => c.replace(/\\\|/g, '|').trim());
 }
 
 function acceptanceRows(markdown) {
