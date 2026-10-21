@@ -82,3 +82,9 @@
 ## Residual limitations
 
 None.
+
+### Integration evidence 2026-10-21 — Fission-AI/OpenSpec strict validation
+
+- `pnpm test:specs` runs `@fission-ai/openspec@1.14.3` `validate --specs --strict` over every Work Item acceptance matrix, rendered into a temp directory.
+- Local: 84/125 valid, 9 without matrix, 0 changed, 0 failing. A duplicated `AC-1` in a changed Work Item failed with exit 1. An unresolvable base gates every Work Item (fail closed).
+- Details and limitations: `docs/product-spec/docs/10-ai-collaboration/repo-integration/GROUP-2-WORKFLOW.md`.
