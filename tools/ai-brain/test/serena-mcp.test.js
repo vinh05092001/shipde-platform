@@ -21,7 +21,7 @@ test('the committed Serena project is read-only and TypeScript-backed', () => {
   assertReadOnlyProject(root);
   assert.match(
     fs.readFileSync(path.join(root, '.serena/project.yml'), 'utf8'),
-    /^language_servers: \["typescript"\]$/m
+    /^language_servers: \[['"]typescript['"]\]$/m
   );
 });
 
