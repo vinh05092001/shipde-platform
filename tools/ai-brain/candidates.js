@@ -2395,6 +2395,9 @@ function candidatesFromEvidence(evidenceData, options) {
         evidence: evidenceList,
         capabilities: resolveComboCapabilities(combo, accounts),
       };
+      if (combo.capabilityEvidence) {
+        cand.capabilityEvidence = Object.assign({}, combo.capabilityEvidence);
+      }
       if (combo.cost !== undefined) cand.cost = combo.cost;
       if (combo.quality !== undefined) cand.quality = combo.quality;
       if (combo.latencyMs !== undefined) cand.latencyMs = combo.latencyMs;

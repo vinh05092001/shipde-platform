@@ -1386,3 +1386,27 @@ Aggregator gateways like 9router failed rolling onboarding entirely when an init
 - Repair: versioned the producer as `scripts/ai/agy-pool/worker-core.ps1` (paths overridable by `-RunsDir`/`AGY_POOL_RUNS_DIR` and `-AgyExe`/`AGY_POOL_AGY_EXE`, deployed defaults unchanged). Pool adapter fixtures now echo `job.jobId` like the producer.
 - Verification: `tools/ai-brain/test/task-ai-142-agy-pool-producer.test.js` submits through the real `submitJob`, runs the producer with a stand-in agy binary and asserts the result is accepted with the matching `jobId`; deleting the echo line in the producer makes it fail with `POOL_TIMEOUT`.
 - Follow-up: the producer no longer carries its own agy time limits. `submitLocked` stamps `printTimeoutSec` from the same configured pool bound (`dispatch.agyPoolTimeoutMs`, tightened by the caller) into `job.json`; the producer passes it to every agy call and refuses a job without it (`NO_PRINT_TIMEOUT`, agy not started). Paths use `Join-Path`, so the producer test also runs under `pwsh` on the Linux CI runner and fails there instead of skipping if PowerShell is missing.
+
+
+### H3 live: rolling onboarding probes tools capability and records into evidence (2026-10-21)
+
+- Root cause:
+  - In FEAT-AUTH-05 live run (2026-10-20), out of 15,645 candidates, 15,591 were rejected during initial selection with `CAPABILITY_UNVERIFIED:tools` (`WRITER_SCHEMA_NOT_VERIFIED_BUDGET`).
+  - Rolling onboarding (`rolling-onboard.js`) only performed a basic completion ping (`messages: [{ role: 'user', content: 'ping' }]` -> `API_PASS`) to confirm HTTP connectivity and recorded no tool-calling capability evidence.
+  - When dispatch ran with writer requirement (`requiredCapabilities: ['tools']`), thousands of unverified candidates competed for the 180s schema probe budget window (`schemaProbeBudgetMs`), starving the budget before strong candidate routes on 9Router, Requesty, and TokenHarbor (such as `ag/claude-opus-4-6-thinking`) could be verified, causing them to be disqualified.
+- Repairs:
+  - In `tools/ai-brain/rolling-onboard.js`:
+    - Implemented `probeToolCapability(modelToProbe)` using OpenAI-compatible forced tool calling (`capability_probe` function with nonce) to verify actual tool execution capability during rolling onboarding.
+    - When tool probe succeeds, records tool capability proof into `combo.capabilities.tools = true`, `combo.capabilityEvidence.tools`, and `evidenceData.capabilityProbes[combo.candidateKey]` with canonical route `binding`.
+    - Automatically records capability probe bindings for all bound accounts and alternative router harnesses (e.g. `opencode`).
+    - Exposes tool capability probe results in onboarding response.
+  - In `tools/ai-brain/capability-probe.js`:
+    - Exported `computeBinding(key, route)` for consistent route hashing across onboarding and dispatch.
+    - Updated capability verification in `probeCapabilities`: when `cached[cap]` is absent, reuses verified tools proof from `c.capabilityEvidence` or matching combos in `data.combinations` before consuming probe budget.
+  - In `tools/ai-brain/candidates.js`:
+    - Propagated `combo.capabilityEvidence` to candidate objects in `candidatesFromEvidence`.
+- Verification:
+  - Unit and integration tests in `tools/ai-brain/test/task-ai-142-rolling-onboarding.test.js`:
+    - `onboardSourceRolling` executes forced tool call probe, sets `combo.capabilities.tools = true`, and stores `capabilityProbes` with matching binding.
+    - `dispatch --dry-run` with writer role requiring tools admits onboarded model without `CAPABILITY_UNVERIFIED:tools`.
+    - Failed tool probe fails closed without granting tools capability.
