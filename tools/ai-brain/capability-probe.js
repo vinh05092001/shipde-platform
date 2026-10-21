@@ -486,13 +486,19 @@ async function probeCapabilities(candidates, profile, options = {}) {
         if (c.capabilityEvidence?.tools?.ok === true && c.capabilityEvidence.tools.observedAt) {
           proof = c.capabilityEvidence.tools;
         } else {
-          const mId = String(c.modelId || '').replace(/^ninerouter\//i, '');
+          // Gateway prefixes come from the registry (modelPrefix or "<id>/"), never a fixed name.
+          const prefixes = (o.registry?.sources || [])
+            .filter((s) => [c.gateway, c.source, c.sourceId, c.upstream].includes(s.id))
+            .map((s) => s.modelPrefix || s.id + '/');
+          const bare = (id) => {
+            const text = String(id || '');
+            const hit = prefixes.find((p) => text.startsWith(p));
+            return hit ? text.slice(hit.length) : text;
+          };
+          const mId = bare(c.modelId);
           const matchingCombo = (data.combinations || []).find((combo) => {
             if (!combo) return false;
-            const comboModelId = String(combo.modelId || combo.model || '').replace(
-              /^ninerouter\//i,
-              ''
-            );
+            const comboModelId = bare(combo.modelId || combo.model);
             return (
               (combo.source === c.source ||
                 combo.sourceId === c.sourceId ||

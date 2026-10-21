@@ -1034,6 +1034,7 @@ describe('TASK-AI-142 T8: rolling source onboarding', () => {
 
     const result = await onboardSourceRolling(src, {
       evidenceData,
+      registry: { sources: [src], dispatch: { ...defaultDispatch, providers: {} } },
       accounts,
       evidenceDir,
       quotaStateFile: quotaFile,
@@ -1058,6 +1059,30 @@ describe('TASK-AI-142 T8: rolling source onboarding', () => {
     assert.ok(evidenceData.capabilityProbes[combo.candidateKey]);
     assert.equal(evidenceData.capabilityProbes[combo.candidateKey].tools.ok, true);
     assert.ok(evidenceData.capabilityProbes[combo.candidateKey].binding);
+
+    // The opencode harness candidate dispatch builds for this router reuses the
+    // proof: same key, and the binding dispatch computes from its own route.
+    const { candidateKey } = require('../candidates');
+    const { computeBinding } = require('../capability-probe');
+    const { routeProbeCandidate } = require('../orchestrate');
+    const registry = { sources: [src], dispatch: { ...defaultDispatch, providers: {} } };
+    const ocCand = {
+      harness: 'opencode',
+      accessPath: 'cli',
+      gateway: '9router',
+      upstream: combo.upstream,
+      accountId: 'xkiro',
+      quotaScope: 'xkiro',
+      modelId: '9router/ag/claude-opus-4-6-thinking',
+    };
+    const ocKey = candidateKey(ocCand);
+    const ocRecord = evidenceData.capabilityProbes[ocKey];
+    assert.ok(ocRecord, 'opencode proof recorded under the dispatch key');
+    assert.equal(ocRecord.tools.ok, true);
+    assert.equal(
+      ocRecord.binding,
+      computeBinding(ocKey, routeProbeCandidate(ocCand, { model: ocCand.modelId }, registry, false))
+    );
 
     // Reload from persisted store
     const reloaded = JSON.parse(fs.readFileSync(path.join(evidenceDir, 'evidence.json'), 'utf8'));

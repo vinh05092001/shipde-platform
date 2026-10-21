@@ -398,51 +398,46 @@ async function onboardSourceRolling(src, options = {}) {
       (account) => account && (account.source === src.id || account.provider === src.id)
     );
 
+    // Bind each stored proof with the same route dispatch resolves for that
+    // candidate, so probeCapabilities() finds it under an equal binding.
+    const prefix = src.modelPrefix || src.id + '/';
+    const stripPrefix = (id) => {
+      const text = String(id || '');
+      return text.startsWith(prefix) ? text.slice(prefix.length) : text;
+    };
+    const recordProof = (cand, tools) => {
+      const key = candidatesApi.candidateKey(cand);
+      const route = require('./orchestrate').routeProbeCandidate(
+        cand,
+        { model: cand.modelId },
+        registry,
+        false
+      );
+      evidenceData.capabilityProbes[key] = { binding: computeBinding(key, route), tools };
+    };
     for (const combo of combos) {
       if (combo.capabilities?.tools === true && combo.capabilityEvidence?.tools) {
-        const modelIdWithoutPrefix = String(combo.modelId || '').replace(/^ninerouter\//i, '');
-        const route = {
-          accessPath: src.endpoint || src.accessPath || combo.accessPath,
-          modelId: modelIdWithoutPrefix,
-          apiKeyEnv: src.credential?.env,
-          headers: src.headers,
-        };
-
-        const binding = computeBinding(combo.candidateKey, route);
-        evidenceData.capabilityProbes[combo.candidateKey] = {
-          binding,
-          tools: combo.capabilityEvidence.tools,
-        };
-
+        const tools = combo.capabilityEvidence.tools;
+        recordProof(combo, tools);
         for (const acc of allBound) {
           if (acc.id && acc.id !== combo.accountId) {
-            const altCombo = { ...combo, accountId: acc.id, quotaScope: acc.id };
-            const altKey = candidatesApi.candidateKey(altCombo);
-            const altBinding = computeBinding(altKey, route);
-            evidenceData.capabilityProbes[altKey] = {
-              binding: altBinding,
-              tools: combo.capabilityEvidence.tools,
-            };
+            recordProof({ ...combo, accountId: acc.id, quotaScope: acc.id }, tools);
           }
         }
-
         if (src.kind === 'router') {
           for (const acc of allBound.length ? allBound : [{ id: bound ? bound.id : null }]) {
-            const ocCand = {
-              harness: 'opencode',
-              accessPath: 'cli',
-              gateway: src.id,
-              upstream: combo.upstream,
-              accountId: acc.id,
-              quotaScope: acc.id,
-              modelId: `${src.modelPrefix || src.id + '/'}${modelIdWithoutPrefix}`,
-            };
-            const ocKey = candidatesApi.candidateKey(ocCand);
-            const ocBinding = computeBinding(ocKey, route);
-            evidenceData.capabilityProbes[ocKey] = {
-              binding: ocBinding,
-              tools: combo.capabilityEvidence.tools,
-            };
+            recordProof(
+              {
+                harness: 'opencode',
+                accessPath: 'cli',
+                gateway: src.id,
+                upstream: combo.upstream,
+                accountId: acc.id,
+                quotaScope: acc.id,
+                modelId: `${prefix}${stripPrefix(combo.modelId)}`,
+              },
+              tools
+            );
           }
         }
       }
