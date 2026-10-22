@@ -27,5 +27,7 @@ jobs:
       # TASK-AI-142: compare against the PR base branch.
       - name: Check no hardcode guard
         run: node scripts/ai/check-no-hardcode.mjs
+      - name: Context pack through pinned repomix (live)
+        run: pnpm test:context-pack
       - name: Run AI Brain test suite
         run: pnpm test:brain

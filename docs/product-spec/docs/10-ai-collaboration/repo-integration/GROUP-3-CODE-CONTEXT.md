@@ -58,8 +58,8 @@ no new lifecycle or manifest entry is introduced.
     "verifiedAt": "2026-10-17T00:00:00.000Z",
     "verifiedBy": "codex",
     "registrationPending": false,
-    "requestedRef": "0.3.3",
-    "versionRef": "unresolved; requestedRef is specification inventory, not observed installation",
+    "requestedRef": "repomix@1.18.1",
+    "versionRef": "repomix 1.18.1 from npm, installed in an isolated prefix by tools/repomix/run.sh",
     "capability": "scoped files/dependencies context packing with token budget required",
     "caller": "tools/ai-brain/context-pack.js",
     "execution": "NOT_RUN",
@@ -192,3 +192,21 @@ and CSV has no Prettier parser. PR contract was intentionally not run before com
   through a destructured CommonJS `require` are not resolved by the TypeScript language
   server. The regex lookups in `serena.js` stay as the offline fallback. State stays
   `DECLARED` until a reviewed merged SHA.
+
+### Repomix wiring 2026-10-22
+
+- Trigger: the Controller context pack (`orchestrate.js` with `enableContextPack` or
+  `contextManifest`) and `node tools/ai-brain/context-pack.js --spec <file> --output <file>`.
+- Caller: `tools/ai-brain/context-pack.js` resolves repomix from `SHIPDE_REPOMIX_BIN` or the
+  workspace `node_modules/.bin`, packs only the Work Item allowed/cited files, and now returns
+  `packer` (`repomix` or `fallback`) with `packerReason`; the orchestrator log records both.
+  Before this change repomix was not installed anywhere the caller looked, so every pack was
+  the silent plain-text fallback.
+- Live proof: `pnpm test:context-pack` (CI step in `ai-brain-tests.yml`) installs pinned
+  repomix 1.18.1 in an isolated npm prefix and packs two scoped files through the real caller.
+  Local result: `REPOMIX_CONTEXT_PACK: repomix 1.18.1, packer=repomix, files=2, bytes=11301`,
+  exit 0. Without the binary the proof exits 1 with `REPOMIX_NOT_INSTALLED`.
+- Limitation: production orchestrator runs use repomix only when `SHIPDE_REPOMIX_BIN` is set
+  or repomix is in the workspace; otherwise the log now shows `packer: fallback`. Token budget
+  is still enforced by byte limits, not by repomix token counting. State stays `DECLARED`
+  until a reviewed merged SHA.

@@ -101,3 +101,9 @@ None.
 - `node tools/ai-brain/cli.js serena live --symbol callSerena --file tools/ai-brain/serena-mcp.js` started oraios/serena v2.1.0 over MCP stdio and returned `find_symbol` (Function, lines 48-129) and `find_referencing_symbols` (export at line 131).
 - `.serena/project.yml` sets `read_only: true`; Serena listed 7 read tools and no editing tool.
 - Details and limitations: `docs/product-spec/docs/10-ai-collaboration/repo-integration/GROUP-3-CODE-CONTEXT.md`.
+
+### Integration evidence 2026-10-22 — yamadashy/repomix in the context packer
+
+- `pnpm test:context-pack` installs repomix 1.18.1 in an isolated npm prefix and packs two scoped files through `tools/ai-brain/context-pack.js`: `REPOMIX_CONTEXT_PACK: repomix 1.18.1, packer=repomix, files=2, bytes=11301`, exit 0; without the binary it exits 1 (`REPOMIX_NOT_INSTALLED`).
+- The packer now reports `packer`/`packerReason`, so a plain-text fallback is no longer presented as a repomix pack.
+- Details and limitations: `docs/product-spec/docs/10-ai-collaboration/repo-integration/GROUP-3-CODE-CONTEXT.md`.
