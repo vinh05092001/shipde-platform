@@ -30,6 +30,10 @@ export interface AccessTokenClaims {
   exp: number;
   /** Unique token id */
   jti: string;
+  /** Optional token scope (e.g. 'mfa_setup') */
+  scope?: string;
+  /** Whether session is MFA-verified */
+  mfa_verified?: boolean;
 }
 
 export type AccessTokenIssuanceInput = Omit<AccessTokenClaims, 'iat' | 'exp' | 'jti'>;
@@ -118,7 +122,8 @@ export function verifyAccessToken(token: string, secret: string): AccessTokenCla
     throw new TokenVerificationError('MALFORMED');
   }
 
-  const { sub, sid, mid, role, st, iat, exp, jti } = parsed as Partial<AccessTokenClaims>;
+  const { sub, sid, mid, role, st, iat, exp, jti, scope, mfa_verified } =
+    parsed as Partial<AccessTokenClaims>;
   if (
     !sub ||
     !sid ||
@@ -137,5 +142,16 @@ export function verifyAccessToken(token: string, secret: string): AccessTokenCla
     throw new TokenVerificationError('EXPIRED');
   }
 
-  return { sub, sid, mid, role, st, iat, exp, jti };
+  return {
+    sub,
+    sid,
+    mid,
+    role,
+    st,
+    iat,
+    exp,
+    jti,
+    ...(scope ? { scope } : {}),
+    ...(mfa_verified !== undefined ? { mfa_verified } : {}),
+  };
 }

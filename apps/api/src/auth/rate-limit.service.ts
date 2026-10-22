@@ -454,6 +454,24 @@ export class RateLimitService {
     await this.recordAttemptKey(`ratelimit:login:otpreq:id:${cleanId}`, 3600);
   }
 
+  /** MFA challenge failures per IP: max 10 per 15 minutes (900 seconds) (BR-AUTH-16 / AC-AUTH-05-24). */
+  async checkMfaIpLimit(ip: string): Promise<RateLimitResult> {
+    const windowSeconds = 900;
+    const check = await this.getAttempts(`ratelimit:mfa:fail:ip:${ip}`, windowSeconds);
+    if (check.count >= 10) {
+      return {
+        allowed: false,
+        retryAfterSeconds: check.retryAfterSeconds,
+        reason: 'Quá nhiều lần thử xác thực thất bại từ địa chỉ IP này',
+      };
+    }
+    return { allowed: true };
+  }
+
+  async recordMfaIpFailure(ip: string): Promise<void> {
+    await this.recordAttemptKey(`ratelimit:mfa:fail:ip:${ip}`, 900);
+  }
+
   private async resetKey(key: string): Promise<void> {
     if (this.redisService) {
       try {

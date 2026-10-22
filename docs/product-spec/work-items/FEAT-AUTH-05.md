@@ -6,7 +6,7 @@
 | --- | --- |
 | Work Item ID | `FEAT-AUTH-05` |
 | Feature ID | `FEAT-AUTH-05` |
-| Status | `READY_FOR_AUTHOR` |
+| Status | `READY_FOR_CODEX` |
 | Delivery order | `9` |
 | Dependencies | `TASK-FOUND-04` — `MERGED` by PR `#13` at `9d101f4e5d9de9b880cc4311126ce8fe06de4206`; the implementation baseline also contains merged `FEAT-AUTH-01` registration/verification (PR `#14`, merge `4f32b93b18db6087559169f34eaa619cfd56da49`), `FEAT-AUTH-03` login/session issuance (PR `#124`, merge `57a0f3c22013fa0739d99eb18fb78a5fa92feefe`), and `FEAT-AUTH-06` session management (PR `#126`, merge `85ee3d86f66b1d4090bde999bd66a2dbb6d8fadb`). Note: the `FEATURE-DELIVERY-REGISTER.csv` rows for merged `FEAT-AUTH-03`, `FEAT-AUTH-04`, and `FEAT-AUTH-06` are currently stale and are synced by a separate register-housekeeping change. |
 | Assigned author | `GEMINI` |

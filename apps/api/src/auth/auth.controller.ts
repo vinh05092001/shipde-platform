@@ -1,5 +1,6 @@
 import {
   Controller,
+  Get,
   Post,
   Body,
   Req,
@@ -23,6 +24,10 @@ import {
   LoginDto,
   LoginOtpRequestDto,
   LoginOtpVerifyDto,
+  MfaSetupVerifyDto,
+  MfaChallengeVerifyDto,
+  MfaRecoveryVerifyDto,
+  CanonicalApiException,
 } from './auth.service';
 import { CanonicalExceptionFilter } from './canonical-exception.filter';
 import { normalizeCorrelationId } from '@shipde/config';
@@ -167,6 +172,94 @@ export class AuthController {
     const correlationId = (req as any).correlationId || normalizeCorrelationId();
     const clientIp = extractClientIp(req);
     const result = await this.authService.verifyLoginOtp(dto, clientIp, correlationId);
+    return res.status(HttpStatus.OK).json(result);
+  }
+
+  // --------------------------------------------------------------------------
+  // FEAT-AUTH-05: Two-Factor Authentication (MFA)
+  // --------------------------------------------------------------------------
+
+  @Get('mfa/status')
+  @HttpCode(HttpStatus.OK)
+  async getMfaStatus(@Req() req: Request, @Res() res: Response): Promise<Response> {
+    const actor = await this.authService.resolveActorFromHeader(req.headers['authorization']);
+    const result = await this.authService.getMfaStatus(actor.userId);
+    return res.status(HttpStatus.OK).json(result);
+  }
+
+  @Post('mfa/setup')
+  @HttpCode(HttpStatus.OK)
+  async setupMfa(@Req() req: Request, @Res() res: Response): Promise<Response> {
+    const actor = await this.authService.resolveActorFromHeader(req.headers['authorization']);
+    const correlationId = (req as any).correlationId || normalizeCorrelationId();
+    const clientIp = extractClientIp(req);
+    const result = await this.authService.setupMfa(actor.userId, clientIp, correlationId);
+    return res.status(HttpStatus.OK).json(result);
+  }
+
+  @Post('mfa/setup/verify')
+  @HttpCode(HttpStatus.OK)
+  async verifyMfaSetup(
+    @Body() dto: MfaSetupVerifyDto,
+    @Req() req: Request,
+    @Res() res: Response
+  ): Promise<Response> {
+    const actor = await this.authService.resolveActorFromHeader(req.headers['authorization']);
+    const correlationId = (req as any).correlationId || normalizeCorrelationId();
+    const clientIp = extractClientIp(req);
+    const result = await this.authService.verifyMfaSetup(
+      actor.userId,
+      dto,
+      clientIp,
+      correlationId
+    );
+    return res.status(HttpStatus.OK).json(result);
+  }
+
+  @Post('mfa/challenge/verify')
+  @HttpCode(HttpStatus.OK)
+  async verifyMfaChallenge(
+    @Body() dto: MfaChallengeVerifyDto,
+    @Req() req: Request,
+    @Res() res: Response
+  ): Promise<Response> {
+    const correlationId = (req as any).correlationId || normalizeCorrelationId();
+    const clientIp = extractClientIp(req);
+    const result = await this.authService.verifyMfaChallenge(dto, clientIp, correlationId);
+    return res.status(HttpStatus.OK).json(result);
+  }
+
+  @Post('mfa/recovery/verify')
+  @HttpCode(HttpStatus.OK)
+  async verifyMfaRecovery(
+    @Body() dto: MfaRecoveryVerifyDto,
+    @Req() req: Request,
+    @Res() res: Response
+  ): Promise<Response> {
+    const correlationId = (req as any).correlationId || normalizeCorrelationId();
+    const clientIp = extractClientIp(req);
+    const result = await this.authService.verifyMfaRecovery(dto, clientIp, correlationId);
+    return res.status(HttpStatus.OK).json(result);
+  }
+
+  @Post('mfa/recovery-codes/regenerate')
+  @HttpCode(HttpStatus.OK)
+  async regenerateRecoveryCodes(@Req() req: Request, @Res() res: Response): Promise<Response> {
+    const actor = await this.authService.resolveActorFromHeader(req.headers['authorization']);
+    if (actor.scope === 'mfa_setup') {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Token tạm thời không có quyền thực hiện thao tác này'
+      );
+    }
+    const correlationId = (req as any).correlationId || normalizeCorrelationId();
+    const clientIp = extractClientIp(req);
+    const result = await this.authService.regenerateRecoveryCodes(
+      actor.userId,
+      clientIp,
+      correlationId
+    );
     return res.status(HttpStatus.OK).json(result);
   }
 }

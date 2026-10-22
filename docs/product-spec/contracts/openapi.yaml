@@ -336,6 +336,261 @@ paths:
         '429':
           description: OTP_MAX_ATTEMPTS_EXCEEDED or RATE_LIMITED
           $ref: '#/components/responses/RateLimited'
+  /auth/mfa/status:
+    get:
+      tags: [Auth]
+      summary: Query MFA status
+      operationId: getMfaStatus
+      responses:
+        '200':
+          description: Current MFA status
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: object
+                    required: [status, required, recovery_codes_remaining]
+                    properties:
+                      status:
+                        type: string
+                        enum: [NOT_ENROLLED, PENDING, ACTIVE]
+                      required:
+                        type: boolean
+                      recovery_codes_remaining:
+                        type: integer
+                  meta:
+                    $ref: '#/components/schemas/Meta'
+        '401':
+          $ref: '#/components/responses/Error'
+  /auth/mfa/setup:
+    post:
+      tags: [Auth]
+      summary: Start TOTP MFA enrollment
+      operationId: setupMfa
+      responses:
+        '200':
+          description: TOTP setup details
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: object
+                    required: [secret, otpauth_url, expires_in]
+                    properties:
+                      secret:
+                        type: string
+                      otpauth_url:
+                        type: string
+                      expires_in:
+                        type: integer
+                  meta:
+                    $ref: '#/components/schemas/Meta'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+  /auth/mfa/setup/verify:
+    post:
+      tags: [Auth]
+      summary: Verify and activate TOTP MFA
+      operationId: verifyMfaSetup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code:
+                  type: string
+      responses:
+        '200':
+          description: MFA activated and recovery codes returned
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: object
+                    required: [status, recovery_codes]
+                    properties:
+                      status:
+                        type: string
+                      access_token:
+                        type: string
+                      recovery_codes:
+                        type: array
+                        items:
+                          type: string
+                  meta:
+                    $ref: '#/components/schemas/Meta'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+  /auth/mfa/challenge/verify:
+    post:
+      tags: [Auth]
+      summary: Verify MFA login challenge with TOTP
+      operationId: verifyMfaChallenge
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [challenge_id, code]
+              properties:
+                challenge_id:
+                  type: string
+                code:
+                  type: string
+      responses:
+        '200':
+          description: Authenticated session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /auth/mfa/recovery/verify:
+    post:
+      tags: [Auth]
+      summary: Verify MFA login challenge with recovery code
+      operationId: verifyMfaRecovery
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [challenge_id, recovery_code]
+              properties:
+                challenge_id:
+                  type: string
+                recovery_code:
+                  type: string
+      responses:
+        '200':
+          description: Authenticated session with remaining recovery codes count
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: object
+                    required: [status, recovery_codes_remaining]
+                    properties:
+                      status:
+                        type: string
+                      access_token:
+                        type: string
+                      recovery_codes_remaining:
+                        type: integer
+                  meta:
+                    $ref: '#/components/schemas/Meta'
+        '400':
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /auth/mfa/recovery-codes/regenerate:
+    post:
+      tags: [Auth]
+      summary: Regenerate recovery codes
+      operationId: regenerateRecoveryCodes
+      responses:
+        '200':
+          description: New replacement recovery codes
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: object
+                    required: [recovery_codes]
+                    properties:
+                      recovery_codes:
+                        type: array
+                        items:
+                          type: string
+                  meta:
+                    $ref: '#/components/schemas/Meta'
+        '401':
+          $ref: '#/components/responses/Error'
+  /users/{user_id}/mfa/reset:
+    post:
+      tags: [Auth]
+      summary: Tenant administrator reset of user MFA
+      operationId: resetUserMfa
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+      responses:
+        '200':
+          description: MFA reset confirmation
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: object
+                    required: [success, user_id, sessions_revoked, reset_at]
+                    properties:
+                      success:
+                        type: boolean
+                      user_id:
+                        type: string
+                      sessions_revoked:
+                        type: integer
+                      reset_at:
+                        type: string
+                        format: date-time
+                  meta:
+                    $ref: '#/components/schemas/Meta'
+        '400':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
   /me:
     get:
       tags: [Auth]

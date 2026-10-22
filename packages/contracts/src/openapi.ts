@@ -346,6 +346,125 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/auth/mfa/status': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Query MFA status */
+    get: operations['getMfaStatus'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/auth/mfa/setup': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Start TOTP MFA enrollment */
+    post: operations['setupMfa'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/auth/mfa/setup/verify': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Verify and activate TOTP MFA */
+    post: operations['verifyMfaSetup'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/auth/mfa/challenge/verify': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Verify MFA login challenge with TOTP */
+    post: operations['verifyMfaChallenge'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/auth/mfa/recovery/verify': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Verify MFA login challenge with recovery code */
+    post: operations['verifyMfaRecovery'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/auth/mfa/recovery-codes/regenerate': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Regenerate recovery codes */
+    post: operations['regenerateRecoveryCodes'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/users/{user_id}/mfa/reset': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Tenant administrator reset of user MFA */
+    post: operations['resetUserMfa'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/me': {
     parameters: {
       query?: never;
@@ -1277,6 +1396,233 @@ export interface operations {
       410: components['responses']['Error'];
       /** @description OTP_MAX_ATTEMPTS_EXCEEDED or RATE_LIMITED */
       429: components['responses']['RateLimited'];
+    };
+  };
+  getMfaStatus: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Current MFA status */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': {
+            data: {
+              /** @enum {string} */
+              status: 'NOT_ENROLLED' | 'PENDING' | 'ACTIVE';
+              required: boolean;
+              recovery_codes_remaining: number;
+            };
+            meta: components['schemas']['Meta'];
+          };
+        };
+      };
+      401: components['responses']['Error'];
+    };
+  };
+  setupMfa: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description TOTP setup details */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': {
+            data: {
+              secret: string;
+              otpauth_url: string;
+              expires_in: number;
+            };
+            meta: components['schemas']['Meta'];
+          };
+        };
+      };
+      401: components['responses']['Error'];
+      403: components['responses']['Error'];
+    };
+  };
+  verifyMfaSetup: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': {
+          code: string;
+        };
+      };
+    };
+    responses: {
+      /** @description MFA activated and recovery codes returned */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': {
+            data: {
+              status: string;
+              access_token?: string;
+              recovery_codes: string[];
+            };
+            meta: components['schemas']['Meta'];
+          };
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['Error'];
+      409: components['responses']['Error'];
+    };
+  };
+  verifyMfaChallenge: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': {
+          challenge_id: string;
+          code: string;
+        };
+      };
+    };
+    responses: {
+      /** @description Authenticated session */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AuthResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      429: components['responses']['RateLimited'];
+    };
+  };
+  verifyMfaRecovery: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': {
+          challenge_id: string;
+          recovery_code: string;
+        };
+      };
+    };
+    responses: {
+      /** @description Authenticated session with remaining recovery codes count */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': {
+            data: {
+              status: string;
+              access_token?: string;
+              recovery_codes_remaining: number;
+            };
+            meta: components['schemas']['Meta'];
+          };
+        };
+      };
+      400: components['responses']['Error'];
+      429: components['responses']['RateLimited'];
+    };
+  };
+  regenerateRecoveryCodes: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description New replacement recovery codes */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': {
+            data: {
+              recovery_codes: string[];
+            };
+            meta: components['schemas']['Meta'];
+          };
+        };
+      };
+      401: components['responses']['Error'];
+    };
+  };
+  resetUserMfa: {
+    parameters: {
+      query?: never;
+      header?: {
+        'Idempotency-Key'?: string;
+      };
+      path: {
+        user_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': {
+          reason: string;
+        };
+      };
+    };
+    responses: {
+      /** @description MFA reset confirmation */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': {
+            data: {
+              success: boolean;
+              user_id: string;
+              sessions_revoked: number;
+              /** Format: date-time */
+              reset_at: string;
+            };
+            meta: components['schemas']['Meta'];
+          };
+        };
+      };
+      400: components['responses']['Error'];
+      403: components['responses']['Error'];
+      409: components['responses']['Error'];
     };
   };
   getMe: {

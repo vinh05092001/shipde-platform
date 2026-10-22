@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AuthController } from './auth.controller';
+import { UsersController } from '../users/users.controller';
 import { AuthService } from './auth.service';
 import { RateLimitService } from './rate-limit.service';
 import { VERIFICATION_ADAPTER } from './auth.tokens';
@@ -11,7 +12,7 @@ import { validateConfig, AppConfig } from '@shipde/config';
 import { APP_CONFIG } from '../config.token';
 
 @Module({
-  controllers: [AuthController],
+  controllers: [AuthController, UsersController],
   providers: [
     {
       provide: APP_CONFIG,

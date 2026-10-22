@@ -4,6 +4,7 @@ import {
   Inject,
   Injectable,
   UnauthorizedException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { Request } from 'express';
 import { SessionService } from './session.service';
@@ -53,6 +54,40 @@ export class SessionGuard implements CanActivate {
           retryable: false,
         },
       });
+    }
+
+    if (rawToken.startsWith('v1.')) {
+      try {
+        const { resolveAccessTokenSecret, verifyAccessToken } = await import('../auth/token.util');
+        const secret = resolveAccessTokenSecret(process.env.AUTH_TOKEN_SECRET);
+        const claims = verifyAccessToken(rawToken, secret);
+        if (claims.scope === 'mfa_setup') {
+          throw new ForbiddenException({
+            error: {
+              code: 'FORBIDDEN',
+              message: 'Token thiết lập MFA không có quyền truy cập dữ liệu cửa hàng',
+              retryable: false,
+            },
+          });
+        }
+        (req as any).userId = claims.sub;
+        (req as any).merchantId = claims.mid;
+        (req as any).sessionId = claims.sid;
+        (req as any).role = claims.role;
+        return true;
+      } catch (err: any) {
+        if (err instanceof ForbiddenException) {
+          throw err;
+        }
+        throw new UnauthorizedException({
+          error: {
+            code: 'SESSION_INVALID',
+            message: 'Phiên đăng nhập đã hết hạn hoặc không hợp lệ',
+            retryable: false,
+            next_action: 'Vui lòng đăng nhập lại',
+          },
+        });
+      }
     }
 
     const { createHash } = await import('node:crypto');

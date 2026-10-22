@@ -132,6 +132,8 @@ model Merchant {
   claims            Claim[]
   audit_logs        AuditLog[]
   device_sessions   DeviceSession[]
+  mfa_factors       MfaFactor[]
+  mfa_challenges    MfaChallenge[]
 
   @@map("merchants")
 }
@@ -160,6 +162,8 @@ model User {
   device_sessions       DeviceSession[]
   verification_tokens   VerificationToken[]
   password_reset_tokens PasswordResetToken[]
+  mfa_factors           MfaFactor[]
+  mfa_challenges        MfaChallenge[]
 
   @@index([merchant_id, role])
   @@map("users")
@@ -220,6 +224,8 @@ model DeviceSession {
   revoked_at         DateTime?         @db.Timestamptz
   revoked_by         String?           @db.VarChar(255)
   revoke_reason      String?           @db.VarChar(255)
+  mfa_verified_at    DateTime?         @db.Timestamptz
+  auth_assurance     String?           @default("PASSWORD") @db.VarChar(32)
   created_at         DateTime          @default(now()) @db.Timestamptz
 
   user               User              @relation(fields: [user_id], references: [id], onDelete: Cascade)
@@ -229,6 +235,66 @@ model DeviceSession {
   @@index([user_id, status])
   @@index([user_id, is_revoked])
   @@map("device_sessions")
+}
+
+model MfaFactor {
+  id                 String            @id @default(uuid()) @db.Uuid
+  user_id            String            @db.Uuid
+  merchant_id        String            @db.Uuid
+  type               String            @default("TOTP") @db.VarChar(32)
+  encrypted_secret   String            @db.Text
+  key_version        Int               @default(1)
+  status             String            @default("PENDING") @db.VarChar(32) // PENDING, ACTIVE, RESET
+  expires_at         DateTime?         @db.Timestamptz
+  activated_at       DateTime?         @db.Timestamptz
+  reset_at           DateTime?         @db.Timestamptz
+  reset_by           String?           @db.VarChar(255)
+  reset_reason       String?           @db.VarChar(255)
+  last_accepted_step BigInt?
+  created_at         DateTime          @default(now()) @db.Timestamptz
+  updated_at         DateTime          @updatedAt @db.Timestamptz
+
+  user               User              @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  merchant           Merchant          @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
+  recovery_codes     MfaRecoveryCode[]
+
+  @@index([user_id, status])
+  @@index([merchant_id, user_id])
+  @@map("mfa_factors")
+}
+
+model MfaRecoveryCode {
+  id           String    @id @default(uuid()) @db.Uuid
+  factor_id    String    @db.Uuid
+  code_hash    String    @db.VarChar(255)
+  consumed_at  DateTime? @db.Timestamptz
+  consumed_by  String?   @db.VarChar(255)
+  created_at   DateTime  @default(now()) @db.Timestamptz
+
+  factor       MfaFactor @relation(fields: [factor_id], references: [id], onDelete: Cascade)
+
+  @@index([factor_id, consumed_at])
+  @@map("mfa_recovery_codes")
+}
+
+model MfaChallenge {
+  id               String    @id @default(uuid()) @db.Uuid
+  challenge_hash   String    @unique @db.VarChar(255)
+  user_id          String    @db.Uuid
+  merchant_id      String    @db.Uuid
+  purpose          String    @default("LOGIN") @db.VarChar(32)
+  failed_attempts  Int       @default(0)
+  expires_at       DateTime  @db.Timestamptz
+  consumed_at      DateTime? @db.Timestamptz
+  invalidated_at   DateTime? @db.Timestamptz
+  created_at       DateTime  @default(now()) @db.Timestamptz
+
+  user             User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  merchant         Merchant  @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id, expires_at])
+  @@index([challenge_hash])
+  @@map("mfa_challenges")
 }
 
 // ----------------------------------------------------------------------------

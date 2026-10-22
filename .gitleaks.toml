@@ -12,6 +12,7 @@ paths = [
   '''^out[\\/]''',
   '''^build[\\/]''',
   '''package-lock\.json$''',
+  '''DASHBOARD\.html$''',
 ]
 stopwords = [
   "REQ_REATTEMPT_88291042",
