@@ -529,7 +529,7 @@
       "kind": "cli",
       "role": "Fast semantic context retrieval engine for codebases and documentation.",
       "source_of_truth_boundary": "Semantic retrieval utility; advisory only and never bypasses source precedence.",
-      "install_method": "npm-global",
+      "install_method": "npx-on-demand",
       "pinned_version_or_commit": "0.5.9",
       "platform": "any",
       "lifecycle_state": "ADOPTED",
@@ -542,7 +542,7 @@
       "data_sent": "Target library names and documentation query terms (no local repository source code sent)",
       "telemetry_defaults": "disabled",
       "local_mode": "read-only-cache",
-      "health_check": "ctx7 --version",
+      "health_check": "node tools/ai-brain/cli.js docs prisma migrate deploy",
       "rollback": "N/A",
       "profiles": ["RESEARCH_ONLY", "PR_REVIEW"]
     },

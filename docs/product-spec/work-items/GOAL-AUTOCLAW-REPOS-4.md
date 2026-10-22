@@ -107,3 +107,8 @@ None.
 - `pnpm test:context-pack` installs repomix 1.18.1 in an isolated npm prefix and packs two scoped files through `tools/ai-brain/context-pack.js`: `REPOMIX_CONTEXT_PACK: repomix 1.18.1, packer=repomix, files=2, bytes=11301`, exit 0; without the binary it exits 1 (`REPOMIX_NOT_INSTALLED`).
 - The packer now reports `packer`/`packerReason`, so a plain-text fallback is no longer presented as a repomix pack.
 - Details and limitations: `docs/product-spec/docs/10-ai-collaboration/repo-integration/GROUP-3-CODE-CONTEXT.md`.
+
+### Integration evidence 2026-10-22 — upstash/context7 docs lookup
+
+- `node tools/ai-brain/cli.js docs prisma migrate deploy in CI` ran ctx7 0.5.9 anonymously and returned `/websites/prisma_io` with 5 snippets, each cited to a prisma.io URL, exit 0; an unavailable binary returns `CONTEXT7_UNAVAILABLE`, exit 1.
+- Details and limitations: `docs/product-spec/docs/10-ai-collaboration/repo-integration/GROUP-3-CODE-CONTEXT.md`.

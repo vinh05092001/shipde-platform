@@ -71,16 +71,16 @@ no new lifecycle or manifest entry is introduced.
     "repo": "upstash/context7",
     "state": "DECLARED",
     "evidenceRef": "docs/product-spec/docs/10-ai-collaboration/REPOSITORY-CLI-MANIFEST.md",
-    "command": null,
+    "command": "node tools/ai-brain/cli.js docs <library> <query> [--library-id <id>] [--json]",
     "blocked": true,
     "blockedReason": "No complete integration execution evidence at an exact reviewed SHA; requested external behavior remains unverified.",
     "verifiedAt": "2026-10-17T00:00:00.000Z",
     "verifiedBy": "codex",
     "registrationPending": false,
     "requestedRef": "ctx7@0.5.9",
-    "versionRef": "unresolved; requestedRef is specification inventory, not observed installation",
+    "versionRef": "ctx7 0.5.9 from npm, run pinned through npx by tools/ai-brain/context7.js",
     "capability": "library/version docs lookup with citations",
-    "caller": "tools/ai-brain/data/tool-manifest.json",
+    "caller": "tools/ai-brain/context7.js",
     "execution": "NOT_RUN",
     "acceptance": "PENDING"
   },
@@ -210,3 +210,18 @@ and CSV has no Prettier parser. PR contract was intentionally not run before com
   or repomix is in the workspace; otherwise the log now shows `packer: fallback`. Token budget
   is still enforced by byte limits, not by repomix token counting. State stays `DECLARED`
   until a reviewed merged SHA.
+
+### Context7 wiring 2026-10-22
+
+- Trigger: `node tools/ai-brain/cli.js docs <library> <query>` when a task needs a library API
+  the author is unsure of.
+- Caller: `tools/ai-brain/context7.js` runs the anonymous ctx7 CLI 0.5.9 (pinned through
+  `npx`, or `SHIPDE_CTX7_BIN`): `library` resolves the ID (Context7's own first-ranked match
+  unless `--library-id` is given), `docs` returns snippets. Only snippets with a source URL are
+  kept, so every answer carries citations. Outcomes `CONTEXT7_UNAVAILABLE`,
+  `CONTEXT7_LIBRARY_NOT_FOUND` and `CONTEXT7_NO_CITED_DOCS` stay distinct and exit 1.
+- Live run: `docs prisma migrate deploy in CI` returned `/websites/prisma_io` with 5 cited
+  snippets from prisma.io, exit 0. A missing binary gave `CONTEXT7_UNAVAILABLE`, exit 1.
+- Limitation: no login and no key, so the anonymous rate limit applies; no CI step, because
+  an external service must not decide a merge gate. State stays `DECLARED` until a reviewed
+  merged SHA.
