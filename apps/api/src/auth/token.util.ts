@@ -30,17 +30,23 @@ export interface AccessTokenClaims {
   exp: number;
   /** Unique token id */
   jti: string;
+  scope?: string;
+  auth_assurance?: string;
+  mfa_verified_at?: string;
 }
 
 export type AccessTokenIssuanceInput = Omit<AccessTokenClaims, 'iat' | 'exp' | 'jti'>;
 
 export class TokenVerificationError extends Error {
+  public readonly reason:
+    'MALFORMED' | 'BAD_SIGNATURE' | 'EXPIRED' | 'UNSUPPORTED_VERSION' | 'INCOMPLETE_CLAIMS';
+
   constructor(
-    public readonly reason:
-      'MALFORMED' | 'BAD_SIGNATURE' | 'EXPIRED' | 'UNSUPPORTED_VERSION' | 'INCOMPLETE_CLAIMS'
+    reason: 'MALFORMED' | 'BAD_SIGNATURE' | 'EXPIRED' | 'UNSUPPORTED_VERSION' | 'INCOMPLETE_CLAIMS'
   ) {
     super(`Access token verification failed: ${reason}`);
     this.name = 'TokenVerificationError';
+    this.reason = reason;
   }
 }
 
@@ -118,7 +124,8 @@ export function verifyAccessToken(token: string, secret: string): AccessTokenCla
     throw new TokenVerificationError('MALFORMED');
   }
 
-  const { sub, sid, mid, role, st, iat, exp, jti } = parsed as Partial<AccessTokenClaims>;
+  const { sub, sid, mid, role, st, iat, exp, jti, scope, auth_assurance, mfa_verified_at } =
+    parsed as Partial<AccessTokenClaims>;
   if (
     !sub ||
     !sid ||
@@ -137,5 +144,5 @@ export function verifyAccessToken(token: string, secret: string): AccessTokenCla
     throw new TokenVerificationError('EXPIRED');
   }
 
-  return { sub, sid, mid, role, st, iat, exp, jti };
+  return { sub, sid, mid, role, st, iat, exp, jti, scope, auth_assurance, mfa_verified_at };
 }

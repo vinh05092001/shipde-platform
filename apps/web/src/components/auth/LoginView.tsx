@@ -14,9 +14,17 @@ import {
   AlertTriangle,
   Loader2,
   Smartphone,
+  ShieldCheck,
+  KeyRound,
 } from 'lucide-react';
 
-type LoginMode = 'CREDENTIALS' | 'OTP_IDENTIFIER' | 'OTP_CODE';
+type LoginMode =
+  | 'CREDENTIALS'
+  | 'OTP_IDENTIFIER'
+  | 'OTP_CODE'
+  | 'MFA_CHALLENGE'
+  | 'MFA_RECOVERY'
+  | 'MFA_ENROLLMENT_NOTICE';
 
 const RESEND_COOLDOWN_SECONDS = 60;
 
@@ -37,7 +45,14 @@ interface Props {
 }
 
 export const LoginView: React.FC<Props> = ({ onSwitchToRegister }) => {
-  const { login, requestLoginOtp, verifyLoginOtp, resendVerification } = useAuth();
+  const {
+    login,
+    requestLoginOtp,
+    verifyLoginOtp,
+    resendVerification,
+    verifyMfaChallenge,
+    verifyMfaRecovery,
+  } = useAuth();
 
   const [mode, setMode] = useState<LoginMode>('CREDENTIALS');
   const [account, setAccount] = useState('');
@@ -61,6 +76,13 @@ export const LoginView: React.FC<Props> = ({ onSwitchToRegister }) => {
   const [otpCode, setOtpCode] = useState('');
   const [resendCooldown, setResendCooldown] = useState(0);
   const [resendBusy, setResendBusy] = useState(false);
+
+  // MFA state
+  const [mfaChallengeId, setMfaChallengeId] = useState<string | null>(null);
+  const [mfaExpiresIn, setMfaExpiresIn] = useState<number | null>(null);
+  const [mfaTotpCode, setMfaTotpCode] = useState('');
+  const [mfaRecoveryCode, setMfaRecoveryCode] = useState('');
+  const [mfaSetupToken, setMfaSetupToken] = useState<string | null>(null);
 
   useEffect(() => {
     if (resendCooldown <= 0) return undefined;
@@ -88,6 +110,20 @@ export const LoginView: React.FC<Props> = ({ onSwitchToRegister }) => {
     setLoading(false);
 
     if (res.success) return; // Session applied by AuthContext; the app shell re-renders.
+
+    if (res.mfaRequired && res.challengeId) {
+      setMfaChallengeId(res.challengeId);
+      setMfaExpiresIn(res.expiresIn || 300);
+      setMfaTotpCode('');
+      setMode('MFA_CHALLENGE');
+      return;
+    }
+
+    if (res.mfaEnrollmentRequired) {
+      setMfaSetupToken(res.setupToken || null);
+      setMode('MFA_ENROLLMENT_NOTICE');
+      return;
+    }
 
     if (res.statusBlock) {
       setStatusBlock(res.statusBlock);
@@ -167,6 +203,20 @@ export const LoginView: React.FC<Props> = ({ onSwitchToRegister }) => {
 
     if (res.success) return; // Session applied by AuthContext; the app shell re-renders.
 
+    if (res.mfaRequired && res.challengeId) {
+      setMfaChallengeId(res.challengeId);
+      setMfaExpiresIn(res.expiresIn || 300);
+      setMfaTotpCode('');
+      setMode('MFA_CHALLENGE');
+      return;
+    }
+
+    if (res.mfaEnrollmentRequired) {
+      setMfaSetupToken(res.setupToken || null);
+      setMode('MFA_ENROLLMENT_NOTICE');
+      return;
+    }
+
     if (res.statusBlock) {
       setStatusBlock(res.statusBlock);
       return;
@@ -180,6 +230,89 @@ export const LoginView: React.FC<Props> = ({ onSwitchToRegister }) => {
       return;
     }
     setFieldError({ otp: res.error || 'Mã OTP không đúng. Vui lòng thử lại.' });
+  };
+
+  const handleVerifyMfaChallenge = async (e: React.FormEvent) => {
+    e.preventDefault();
+    resetMessages();
+
+    if (!/^\d{6}$/.test(mfaTotpCode.trim())) {
+      setFieldError({ otp: 'Mã xác thực gồm 6 chữ số.' });
+      return;
+    }
+    if (!mfaChallengeId) {
+      setErrorMsg('Phiên xác thực đã hết hạn. Vui lòng đăng nhập lại.');
+      setMode('CREDENTIALS');
+      return;
+    }
+
+    setFieldError(null);
+    setLoading(true);
+    const res = await verifyMfaChallenge(mfaChallengeId, mfaTotpCode.trim());
+    setLoading(false);
+
+    if (res.success) return;
+
+    if (res.code === 'RATE_LIMITED') {
+      const retry = res.retryAfterSeconds
+        ? ` (thử lại sau ${formatRetry(res.retryAfterSeconds)})`
+        : '';
+      setErrorMsg(`${res.error || 'Bạn đã thử xác thực quá nhiều lần.'}${retry}`);
+      return;
+    }
+    if (
+      res.code === 'CHALLENGE_EXPIRED' ||
+      res.code === 'CHALLENGE_CONSUMED' ||
+      res.code === 'CHALLENGE_INVALIDATED'
+    ) {
+      setErrorMsg('Phiên xác thực đã hết hạn. Vui lòng đăng nhập lại.');
+      setMode('CREDENTIALS');
+      return;
+    }
+
+    setFieldError({ otp: res.error || 'Mã xác thực không chính xác. Vui lòng thử lại.' });
+  };
+
+  const handleVerifyMfaRecovery = async (e: React.FormEvent) => {
+    e.preventDefault();
+    resetMessages();
+
+    const cleanCode = mfaRecoveryCode.trim().toUpperCase();
+    if (!cleanCode) {
+      setFieldError({ otp: 'Vui lòng nhập mã dự phòng.' });
+      return;
+    }
+    if (!mfaChallengeId) {
+      setErrorMsg('Phiên xác thực đã hết hạn. Vui lòng đăng nhập lại.');
+      setMode('CREDENTIALS');
+      return;
+    }
+
+    setFieldError(null);
+    setLoading(true);
+    const res = await verifyMfaRecovery(mfaChallengeId, cleanCode);
+    setLoading(false);
+
+    if (res.success) return;
+
+    if (res.code === 'RATE_LIMITED') {
+      const retry = res.retryAfterSeconds
+        ? ` (thử lại sau ${formatRetry(res.retryAfterSeconds)})`
+        : '';
+      setErrorMsg(`${res.error || 'Bạn đã thử xác thực quá nhiều lần.'}${retry}`);
+      return;
+    }
+    if (
+      res.code === 'CHALLENGE_EXPIRED' ||
+      res.code === 'CHALLENGE_CONSUMED' ||
+      res.code === 'CHALLENGE_INVALIDATED'
+    ) {
+      setErrorMsg('Phiên xác thực đã hết hạn. Vui lòng đăng nhập lại.');
+      setMode('CREDENTIALS');
+      return;
+    }
+
+    setFieldError({ otp: res.error || 'Mã dự phòng không chính xác hoặc đã được sử dụng.' });
   };
 
   const handleResendOtp = async () => {
@@ -220,6 +353,8 @@ export const LoginView: React.FC<Props> = ({ onSwitchToRegister }) => {
     resetMessages();
     setStatusBlock(null);
     setFieldError(null);
+    setMfaTotpCode('');
+    setMfaRecoveryCode('');
     setMode('CREDENTIALS');
   };
 
@@ -356,9 +491,7 @@ export const LoginView: React.FC<Props> = ({ onSwitchToRegister }) => {
                         <button
                           type="button"
                           onClick={() => setShowPassword(!showPassword)}
-                          aria-label={showPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
-                          aria-pressed={showPassword}
-                          className="absolute right-3 top-3.5 text-slate-400 hover:text-slate-600"
+                          className="absolute right-3.5 top-3.5 text-slate-400 hover:text-slate-600"
                         >
                           {showPassword ? (
                             <EyeOff className="w-4 h-4" />
@@ -375,62 +508,63 @@ export const LoginView: React.FC<Props> = ({ onSwitchToRegister }) => {
                     </div>
 
                     <div className="flex items-center justify-between pt-1">
-                      <label className="flex items-center gap-2 cursor-pointer select-none text-xs text-slate-600">
+                      <label className="flex items-center gap-2 cursor-pointer">
                         <input
                           type="checkbox"
                           checked={rememberMe}
                           onChange={(e) => setRememberMe(e.target.checked)}
-                          className="w-4 h-4 rounded text-[#c23807] focus:ring-[#c23807] border-slate-300"
+                          className="rounded border-slate-300 text-[#c23807] focus:ring-[#c23807] w-4 h-4"
                         />
-                        <span>Ghi nhớ đăng nhập trên thiết bị này</span>
+                        <span className="text-xs text-slate-600 font-medium">
+                          Ghi nhớ đăng nhập
+                        </span>
                       </label>
                     </div>
 
                     <button
                       type="submit"
                       disabled={loading}
-                      className="btn-primary w-full justify-center text-sm py-3 font-bold mt-2"
+                      className="btn-primary w-full justify-center text-sm py-3 font-bold"
                     >
                       {loading ? (
                         <span className="flex items-center gap-2">
                           <Loader2 className="w-4 h-4 animate-spin" />
-                          Đang Xác Thực...
+                          Đang Đăng Nhập...
                         </span>
                       ) : (
                         <>
-                          <span>Vào Bàn Điều Khiển</span>
+                          <span>Đăng Nhập</span>
                           <ArrowRight className="w-4 h-4" />
                         </>
                       )}
                     </button>
                   </form>
 
-                  {/* OTP alternative (SCR-AUTH-01: rendered always, usable only when the operator enables it) */}
-                  <div className="pt-5 border-t border-slate-100">
-                    <button
-                      type="button"
-                      onClick={handleStartOtp}
-                      className="w-full p-3 rounded-xl border border-slate-200 hover:border-[#c23807] hover:bg-[#FFF5F0] transition flex items-center justify-center gap-2 text-xs font-bold text-slate-700"
-                    >
-                      <Smartphone className="w-4 h-4 text-[#c23807]" />
-                      Đăng nhập bằng mã OTP
-                    </button>
-                    <p className="text-[11px] text-slate-500 text-center mt-2">
-                      Chỉ khả dụng khi cửa hàng của bạn bật đăng nhập bằng mã OTP.
-                    </p>
+                  <div className="relative my-4">
+                    <div className="absolute inset-0 flex items-center">
+                      <div className="w-full border-t border-slate-200" />
+                    </div>
+                    <div className="relative flex justify-center text-xs">
+                      <span className="bg-white px-3 text-slate-400 font-semibold">hoặc</span>
+                    </div>
                   </div>
+
+                  <button
+                    type="button"
+                    onClick={handleStartOtp}
+                    className="w-full flex items-center justify-center gap-2 h-11 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50 transition-colors"
+                  >
+                    <Smartphone className="w-4 h-4 text-slate-500" />
+                    Đăng nhập bằng mã OTP (không cần mật khẩu)
+                  </button>
                 </>
               )}
 
               {mode === 'OTP_IDENTIFIER' && (
                 <form onSubmit={handleRequestOtp} className="space-y-4 text-xs">
-                  <p className="text-xs text-slate-600 leading-relaxed">
-                    Nhập email hoặc số điện thoại đã xác thực của bạn. Chúng tôi sẽ gửi một mã OTP
-                    gồm 6 chữ số để đăng nhập mà không cần mật khẩu.
-                  </p>
                   <div>
                     <label className="text-xs font-bold text-slate-700 block mb-1.5">
-                      Email hoặc Số Điện Thoại
+                      Email hoặc Số Điện Thoại nhận mã
                     </label>
                     <div className="relative">
                       <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
@@ -546,6 +680,206 @@ export const LoginView: React.FC<Props> = ({ onSwitchToRegister }) => {
                     </button>
                   </div>
                 </form>
+              )}
+
+              {mode === 'MFA_CHALLENGE' && (
+                <form
+                  onSubmit={handleVerifyMfaChallenge}
+                  className="space-y-4 text-xs"
+                  data-testid="mfa-challenge-form"
+                >
+                  <div className="p-3.5 rounded-xl bg-orange-50 border border-orange-200 text-[11px] text-orange-950 leading-relaxed flex items-start gap-2.5">
+                    <ShieldCheck className="w-5 h-5 text-[#c23807] shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-bold text-slate-900 mb-0.5">Xác thực hai yếu tố (2FA)</p>
+                      <p className="text-slate-600">
+                        Nhập mã 6 chữ số từ ứng dụng xác thực (Google Authenticator, Microsoft
+                        Authenticator) trên điện thoại của bạn.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-bold text-slate-700 block mb-1.5">
+                      Mã Xác Thực (TOTP)
+                    </label>
+                    <div className="relative">
+                      <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        autoComplete="one-time-code"
+                        maxLength={6}
+                        value={mfaTotpCode}
+                        onChange={(e) =>
+                          setMfaTotpCode(e.target.value.replace(/\D/g, '').slice(0, 6))
+                        }
+                        placeholder="••••••"
+                        autoFocus
+                        className="modern-input pl-10 h-11 text-sm font-medium tracking-[0.4em]"
+                      />
+                    </div>
+                    {fieldError?.otp && (
+                      <p className="text-[11px] text-rose-600 font-semibold mt-1.5">
+                        {fieldError.otp}
+                      </p>
+                    )}
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="btn-primary w-full justify-center text-sm py-3 font-bold"
+                  >
+                    {loading ? (
+                      <span className="flex items-center gap-2">
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Đang Xác Thực...
+                      </span>
+                    ) : (
+                      <>
+                        <span>Xác Nhận Đăng Nhập</span>
+                        <ArrowRight className="w-4 h-4" />
+                      </>
+                    )}
+                  </button>
+
+                  <div className="flex flex-col gap-2 pt-2 text-center">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        resetMessages();
+                        setFieldError(null);
+                        setMode('MFA_RECOVERY');
+                      }}
+                      className="text-xs text-[#c23807] font-semibold hover:underline"
+                    >
+                      Không mang theo điện thoại? Sử dụng mã dự phòng
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleBackToCredentials}
+                      className="text-xs text-slate-500 font-semibold hover:text-slate-700 hover:underline"
+                    >
+                      ← Quay lại đăng nhập bằng tài khoản khác
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              {mode === 'MFA_RECOVERY' && (
+                <form
+                  onSubmit={handleVerifyMfaRecovery}
+                  className="space-y-4 text-xs"
+                  data-testid="mfa-recovery-form"
+                >
+                  <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-[11px] text-slate-700 leading-relaxed flex items-start gap-2.5">
+                    <KeyRound className="w-5 h-5 text-slate-700 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-bold text-slate-900 mb-0.5">Sử dụng mã dự phòng</p>
+                      <p className="text-slate-600">
+                        Nhập một trong các mã khôi phục bạn đã lưu khi kích hoạt 2FA. Mỗi mã chỉ
+                        dùng được một lần.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-bold text-slate-700 block mb-1.5">
+                      Mã Dự Phòng (Recovery Code)
+                    </label>
+                    <div className="relative">
+                      <KeyRound className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
+                      <input
+                        type="text"
+                        autoCapitalize="characters"
+                        autoComplete="off"
+                        value={mfaRecoveryCode}
+                        onChange={(e) => setMfaRecoveryCode(e.target.value.toUpperCase())}
+                        placeholder="XXXX-XXXX-XXXX"
+                        autoFocus
+                        className="modern-input pl-10 h-11 text-sm font-mono tracking-wider uppercase"
+                      />
+                    </div>
+                    {fieldError?.otp && (
+                      <p className="text-[11px] text-rose-600 font-semibold mt-1.5">
+                        {fieldError.otp}
+                      </p>
+                    )}
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="btn-primary w-full justify-center text-sm py-3 font-bold"
+                  >
+                    {loading ? (
+                      <span className="flex items-center gap-2">
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Đang Xác Thực...
+                      </span>
+                    ) : (
+                      <>
+                        <span>Xác Nhận Bằng Mã Dự Phòng</span>
+                        <ArrowRight className="w-4 h-4" />
+                      </>
+                    )}
+                  </button>
+
+                  <div className="flex flex-col gap-2 pt-2 text-center">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        resetMessages();
+                        setFieldError(null);
+                        setMode('MFA_CHALLENGE');
+                      }}
+                      className="text-xs text-[#c23807] font-semibold hover:underline"
+                    >
+                      ← Sử dụng mã xác thực từ ứng dụng (TOTP)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleBackToCredentials}
+                      className="text-xs text-slate-500 font-semibold hover:text-slate-700 hover:underline"
+                    >
+                      Quay lại đăng nhập
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              {mode === 'MFA_ENROLLMENT_NOTICE' && (
+                <div className="space-y-4 text-center" data-testid="mfa-enrollment-notice">
+                  <div className="w-12 h-12 rounded-2xl mx-auto flex items-center justify-center bg-amber-50 text-amber-600">
+                    <ShieldCheck className="w-6 h-6" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <h2 className="text-base font-bold text-slate-900">
+                      Bắt buộc thiết lập Xác thực Hai Yếu tố (MFA)
+                    </h2>
+                    <p className="text-xs text-slate-600 leading-relaxed">
+                      Tài khoản Chủ cửa hàng (Owner) hoặc Quản lý tài chính bắt buộc phải kích hoạt
+                      bảo mật hai lớp trước khi truy cập hệ thống Ship Dễ.
+                    </p>
+                  </div>
+
+                  <Link
+                    href="/settings/security"
+                    className="btn-primary w-full justify-center text-sm py-3 font-bold inline-flex items-center gap-2"
+                  >
+                    <span>Kích Hoạt Bảo Mật 2FA Ngay</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </Link>
+
+                  <button
+                    type="button"
+                    onClick={handleBackToCredentials}
+                    className="text-xs text-slate-500 font-semibold hover:text-slate-700 hover:underline block mx-auto"
+                  >
+                    ← Quay lại đăng nhập
+                  </button>
+                </div>
               )}
             </>
           )}

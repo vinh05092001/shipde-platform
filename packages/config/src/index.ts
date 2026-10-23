@@ -47,6 +47,8 @@ export interface AppConfig {
   AUDIT_IDENTIFIER_HMAC_KEY: string;
   /** Number of trusted reverse proxies for Express 'trust proxy'. Defaults to 0. */
   TRUST_PROXY_HOPS: number;
+  /** Dedicated encryption key for MFA factor seeds at rest (FEAT-AUTH-05). Required in production (>= 32 chars). */
+  MFA_ENCRYPTION_KEY?: string;
 }
 
 export class ConfigValidationError extends Error {
@@ -243,6 +245,17 @@ export function validateConfig(rawEnv: NodeJS.ProcessEnv = process.env): AppConf
   }
   const AUTH_LOGIN_OTP_ENABLED = authLoginOtpRaw === 'true';
 
+  // --- FEAT-AUTH-05: dedicated MFA encryption key ---
+  const mfaEncryptionKeyRaw = rawEnv.MFA_ENCRYPTION_KEY;
+  if (NODE_ENV === 'production') {
+    if (!mfaEncryptionKeyRaw || mfaEncryptionKeyRaw.trim().length < 32) {
+      invalidFields.push(
+        'MFA_ENCRYPTION_KEY (required in production with at least 32 characters or 64 hex characters)'
+      );
+    }
+  }
+  const MFA_ENCRYPTION_KEY = mfaEncryptionKeyRaw || undefined;
+
   const passwordResetTtlRaw = rawEnv.PASSWORD_RESET_TTL_SECONDS || '3600';
   const PASSWORD_RESET_TTL_SECONDS = parseInt(passwordResetTtlRaw, 10);
   if (isNaN(PASSWORD_RESET_TTL_SECONDS) || PASSWORD_RESET_TTL_SECONDS <= 0) {
@@ -302,6 +315,7 @@ export function validateConfig(rawEnv: NodeJS.ProcessEnv = process.env): AppConf
     AUDIT_IDENTIFIER_HMAC_KEY,
     TRUST_PROXY_HOPS,
     FRONTEND_URL,
+    MFA_ENCRYPTION_KEY,
   };
 }
 
@@ -455,3 +469,14 @@ export function formatStructuredLog(entry: StructuredLogEntry): string {
 }
 
 export * from './telemetry.js';
+
+let ephemeralMfaKey: string | undefined;
+export function resolveMfaEncryptionKey(configuredKey?: string): string {
+  if (configuredKey && configuredKey.trim().length >= 32) {
+    return configuredKey.trim();
+  }
+  if (!ephemeralMfaKey) {
+    ephemeralMfaKey = 'shipde_dev_mfa_encryption_key_32bytes_aes256gcm_secret!';
+  }
+  return ephemeralMfaKey;
+}

@@ -21,6 +21,36 @@ This dictionary lists high-value fields. Machine schema and migrations must expa
 | VerificationToken.consumed_at | timestamp   |          No | Null until verified                                    |
 | Membership.tenant_id          | UUID        |         Yes | Never inferred from client payload alone               |
 | Membership.scope_json         | JSON        |         Yes | Branch/warehouse/carrier-account scope                 |
+| DeviceSession.mfa_verified_at | timestamp   |          No | Timestamp of MFA verification in this session          |
+| DeviceSession.auth_assurance  | string      |         Yes | PASSWORD or MFA assurance level                        |
+
+## Two-Factor Authentication (MFA)
+
+| Entity.field                        | Type        | Required | Notes                                                  |
+| ----------------------------------- | ----------- | -------: | ------------------------------------------------------ |
+| MfaFactor.id                        | UUID        |      Yes | Factor identifier                                      |
+| MfaFactor.user_id                   | UUID        |      Yes | User identity binding                                  |
+| MfaFactor.merchant_id               | UUID        |      Yes | Tenant isolation key                                   |
+| MfaFactor.type                      | enum/string |      Yes | TOTP                                                   |
+| MfaFactor.status                    | enum/string |      Yes | PENDING / ACTIVE / RESET                               |
+| MfaFactor.secret_ciphertext         | string      |      Yes | AES-256-GCM encrypted secret at rest                   |
+| MfaFactor.key_version               | integer     |      Yes | Key version for secret encryption                      |
+| MfaFactor.setup_expires_at          | timestamp   |       No | 10-minute setup expiration                             |
+| MfaFactor.activated_at              | timestamp   |       No | Timestamp of valid TOTP activation                     |
+| MfaFactor.reset_at                  | timestamp   |       No | Timestamp of administrator reset                       |
+| MfaFactor.last_accepted_step        | bigint      |       No | Step replay protection                                 |
+| MfaRecoveryCode.id                  | UUID        |      Yes | Recovery code verifier ID                              |
+| MfaRecoveryCode.factor_id           | UUID        |      Yes | Foreign key to MfaFactor                               |
+| MfaRecoveryCode.code_hash           | string      |      Yes | Non-reversible SHA-256 verifier                        |
+| MfaRecoveryCode.consumed_at         | timestamp   |       No | Timestamp when consumed atomically                     |
+| MfaChallenge.id                     | UUID        |      Yes | Challenge identifier                                   |
+| MfaChallenge.challenge_hash         | string      |      Yes | SHA-256 hash of opaque 32-byte token                   |
+| MfaChallenge.user_id                | UUID        |      Yes | Target user reference                                  |
+| MfaChallenge.merchant_id            | UUID        |      Yes | Merchant tenant reference                              |
+| MfaChallenge.expires_at             | timestamp   |      Yes | 5-minute challenge deadline                            |
+| MfaChallenge.failed_attempts        | integer     |      Yes | Failed attempt counter (max 5)                         |
+| MfaChallenge.consumed_at            | timestamp   |       No | Timestamp when verified and consumed                   |
+| MfaChallenge.invalidated_at         | timestamp   |       No | Timestamp when invalidated by reset/expiry             |
 
 ## Carrier account
 

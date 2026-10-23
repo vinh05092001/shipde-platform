@@ -6,11 +6,14 @@ import { VERIFICATION_ADAPTER } from './auth.tokens';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
 import { DefaultVerificationAdapter } from './default-verification-adapter';
+import { UsersModule } from '../users/users.module';
+import { SessionModule } from '../session/session.module';
 
 import { validateConfig, AppConfig } from '@shipde/config';
 import { APP_CONFIG } from '../config.token';
 
 @Module({
+  imports: [UsersModule, SessionModule],
   controllers: [AuthController],
   providers: [
     {

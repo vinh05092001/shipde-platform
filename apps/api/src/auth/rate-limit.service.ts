@@ -468,6 +468,49 @@ export class RateLimitService {
     this.memoryStore.delete(key);
   }
 
+  // --- FEAT-AUTH-05: MFA challenge rate limits (BR-AUTH-16 / AC-AUTH-05-08 / AC-AUTH-05-24) ---
+
+  /** MFA challenge IP gate: max 10 failed attempts per 15 minutes across any user. */
+  async checkMfaIpLimit(ip: string): Promise<RateLimitResult> {
+    const windowSeconds = 900;
+    const check = await this.getAttempts(`ratelimit:mfa:ip:${ip}`, windowSeconds);
+    if (check.count >= 10) {
+      return {
+        allowed: false,
+        retryAfterSeconds: check.retryAfterSeconds,
+        reason: 'Quá nhiều lần thử xác thực hai yếu tố từ địa chỉ IP này. Vui lòng thử lại sau.',
+      };
+    }
+    return { allowed: true };
+  }
+
+  async recordMfaIpFailure(ip: string): Promise<void> {
+    await this.recordAttemptKey(`ratelimit:mfa:ip:${ip}`, 900);
+  }
+
+  /** MFA challenge failure gate: max 5 failures per challenge / user in 15 minutes. */
+  async checkMfaChallengeLimit(challengeHash: string): Promise<RateLimitResult> {
+    const windowSeconds = 900;
+    const check = await this.getAttempts(`ratelimit:mfa:challenge:${challengeHash}`, windowSeconds);
+    if (check.count >= 5) {
+      return {
+        allowed: false,
+        retryAfterSeconds: check.retryAfterSeconds,
+        reason: 'Mã xác thực không chính xác hoặc đã vượt quá số lần thử cho phép.',
+      };
+    }
+    return { allowed: true };
+  }
+
+  async recordMfaChallengeFailure(challengeHash: string): Promise<number> {
+    await this.recordAttemptKey(`ratelimit:mfa:challenge:${challengeHash}`, 900);
+    const check = await this.getAttempts(`ratelimit:mfa:challenge:${challengeHash}`, 900);
+    return check.count;
+  }
+
+  async resetMfaChallengeFailures(challengeHash: string): Promise<void> {
+    await this.resetKey(`ratelimit:mfa:challenge:${challengeHash}`);
+  }
   clear(): void {
     this.memoryStore.clear();
     this.cooldownStore.clear();
