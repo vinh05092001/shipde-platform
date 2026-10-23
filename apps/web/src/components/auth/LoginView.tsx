@@ -491,6 +491,7 @@ export const LoginView: React.FC<Props> = ({ onSwitchToRegister }) => {
                         <button
                           type="button"
                           onClick={() => setShowPassword(!showPassword)}
+                          aria-label={showPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
                           className="absolute right-3.5 top-3.5 text-slate-400 hover:text-slate-600"
                         >
                           {showPassword ? (
@@ -545,7 +546,7 @@ export const LoginView: React.FC<Props> = ({ onSwitchToRegister }) => {
                       <div className="w-full border-t border-slate-200" />
                     </div>
                     <div className="relative flex justify-center text-xs">
-                      <span className="bg-white px-3 text-slate-400 font-semibold">hoặc</span>
+                      <span className="bg-white px-3 text-slate-600 font-semibold">hoặc</span>
                     </div>
                   </div>
 
