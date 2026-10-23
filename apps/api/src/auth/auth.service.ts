@@ -2218,7 +2218,7 @@ export class AuthService {
         merchant: {
           id: merchant.id,
           name: merchant.name,
-          code: merchant.code,
+          business_code: merchant.code,
           status: merchant.status.toUpperCase(),
           created_at: merchant.created_at.toISOString(),
         },
