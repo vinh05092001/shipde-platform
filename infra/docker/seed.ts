@@ -94,6 +94,22 @@ export const SEED_USERS = [
   },
 ];
 
+export const SEED_MFA_FACTOR_ID = 'e0000000-0000-0000-0000-000000000001';
+export const SEED_MFA_FACTORS = [
+  {
+    id: SEED_MFA_FACTOR_ID,
+    user_id: 'b0000000-0000-0000-0000-000000000002',
+    merchant_id: SEED_MERCHANT_ID,
+    type: 'TOTP',
+    status: 'ACTIVE',
+    // Deterministic encrypted test factor material (never plaintext)
+    secret_ciphertext:
+      'v1:a1b2c3d4e5f6a1b2c3d4e5f6:f1e2d3c4b5a6f1e2d3c4b5a6f1e2d3c4:5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f',
+    key_version: 1,
+    activated_at: new Date('2026-09-01T00:00:00Z'),
+  },
+];
+
 export const SEED_VERIFICATION_TOKENS = [
   {
     id: 'd0000000-0000-0000-0000-000000000001',
@@ -281,6 +297,20 @@ export async function seedDatabase(client?: PrismaClient): Promise<{
       );
     }
 
+    // 5. Seed MFA Factors (if model available)
+    if ((prisma as any).mfaFactor) {
+      for (const mf of SEED_MFA_FACTORS) {
+        await (prisma as any).mfaFactor.upsert({
+          where: { id: mf.id },
+          update: {
+            status: mf.status,
+            secret_ciphertext: mf.secret_ciphertext,
+            activated_at: mf.activated_at,
+          },
+          create: mf,
+        });
+      }
+    }
     return { merchantsCount, usersCount, accountsCount, tokensCount };
   } finally {
     if (!client) {

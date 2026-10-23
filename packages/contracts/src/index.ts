@@ -323,5 +323,43 @@ export type SessionRevokeResponse = components['schemas']['RevokeSessionResponse
 export type SessionRevokeAllResponse = components['schemas']['RevokeAllSessionsResponse'];
 export type SessionHeartbeatResponse = components['schemas']['HeartbeatSessionResponse'];
 
+// --- Multi-Factor Authentication (MFA) Contracts (FEAT-AUTH-05) ---
+export const MfaStatus = {
+  NOT_ENROLLED: 'NOT_ENROLLED',
+  PENDING: 'PENDING',
+  ACTIVE: 'ACTIVE',
+  RESET: 'RESET',
+} as const;
+
+export type MfaStatus = (typeof MfaStatus)[keyof typeof MfaStatus];
+
+export const MfaErrorCode = {
+  MFA_ENROLLMENT_REQUIRED: 'MFA_ENROLLMENT_REQUIRED',
+  MFA_ALREADY_ENABLED: 'MFA_ALREADY_ENABLED',
+  MFA_SETUP_EXPIRED: 'MFA_SETUP_EXPIRED',
+  MFA_CHALLENGE_INVALID: 'MFA_CHALLENGE_INVALID',
+  MFA_CHALLENGE_EXPIRED: 'MFA_CHALLENGE_EXPIRED',
+  MFA_CODE_INVALID: 'MFA_CODE_INVALID',
+  MFA_RECOVERY_CODE_INVALID: 'MFA_RECOVERY_CODE_INVALID',
+  MFA_FRESH_AUTH_REQUIRED: 'MFA_FRESH_AUTH_REQUIRED',
+  IDEMPOTENCY_CONFLICT: 'IDEMPOTENCY_CONFLICT',
+} as const;
+
+export type MfaErrorCode = (typeof MfaErrorCode)[keyof typeof MfaErrorCode];
+
+export const MfaAuditEvent = {
+  AUTH_MFA_SETUP_STARTED: 'AUTH_MFA_SETUP_STARTED',
+  AUTH_MFA_SETUP_COMPLETED: 'AUTH_MFA_SETUP_COMPLETED',
+  AUTH_MFA_SETUP_EXPIRED: 'AUTH_MFA_SETUP_EXPIRED',
+  AUTH_MFA_CHALLENGE_SUCCEEDED: 'AUTH_MFA_CHALLENGE_SUCCEEDED',
+  AUTH_MFA_CHALLENGE_FAILED: 'AUTH_MFA_CHALLENGE_FAILED',
+  AUTH_MFA_RATE_LIMITED: 'AUTH_MFA_RATE_LIMITED',
+  AUTH_MFA_RECOVERY_USED: 'AUTH_MFA_RECOVERY_USED',
+  AUTH_MFA_RECOVERY_REGENERATED: 'AUTH_MFA_RECOVERY_REGENERATED',
+  AUTH_MFA_ADMIN_RESET: 'AUTH_MFA_ADMIN_RESET',
+} as const;
+
+export type MfaAuditEvent = (typeof MfaAuditEvent)[keyof typeof MfaAuditEvent];
+
 // --- Generated OpenAPI Schema Types ---
 export type * from './openapi';

@@ -33,6 +33,11 @@ interface AuthContextType {
     code?: string;
     retryAfterSeconds?: number;
     statusBlock?: AuthStatusBlock;
+    mfaRequired?: boolean;
+    challengeId?: string;
+    expiresIn?: number;
+    mfaEnrollmentRequired?: boolean;
+    setupToken?: string;
   }>;
   requestLoginOtp: (identifier: string) => Promise<{
     success: boolean;
@@ -55,6 +60,11 @@ interface AuthContextType {
     retryAfterSeconds?: number;
     maskedIdentifier?: string;
     statusBlock?: AuthStatusBlock;
+    mfaRequired?: boolean;
+    challengeId?: string;
+    expiresIn?: number;
+    mfaEnrollmentRequired?: boolean;
+    setupToken?: string;
   }>;
   register: (payload: {
     merchantName: string;
@@ -122,6 +132,67 @@ interface AuthContextType {
     nextAction?: string;
     fields?: FieldError[];
   }>;
+  verifyMfaChallenge: (
+    challengeId: string,
+    code: string
+  ) => Promise<{
+    success: boolean;
+    error?: string;
+    code?: string;
+    retryAfterSeconds?: number;
+  }>;
+  verifyMfaRecovery: (
+    challengeId: string,
+    recoveryCode: string
+  ) => Promise<{
+    success: boolean;
+    error?: string;
+    code?: string;
+    retryAfterSeconds?: number;
+    recoveryCodesRemaining?: number;
+  }>;
+  getMfaStatus: () => Promise<{
+    success: boolean;
+    data?: {
+      status: 'NOT_ENROLLED' | 'PENDING' | 'ACTIVE' | 'RESET';
+      required: boolean;
+      recovery_codes_remaining: number;
+      mfa_verified_at: string | null;
+    };
+    error?: string;
+  }>;
+  startMfaSetup: (password: string) => Promise<{
+    success: boolean;
+    data?: {
+      secret_key: string;
+      provisioning_uri: string;
+      expires_at: string;
+      expires_in_seconds: number;
+    };
+    error?: string;
+    code?: string;
+  }>;
+  verifyMfaSetup: (code: string) => Promise<{
+    success: boolean;
+    data?: {
+      status: string;
+      recovery_codes: string[];
+    };
+    error?: string;
+    code?: string;
+  }>;
+  regenerateMfaRecoveryCodes: (
+    password: string,
+    code: string
+  ) => Promise<{
+    success: boolean;
+    data?: {
+      recovery_codes: string[];
+    };
+    error?: string;
+    code?: string;
+    retryAfterSeconds?: number;
+  }>;
   logout: () => void;
   switchRole: (role: Role) => void;
 }
@@ -162,8 +233,20 @@ function extractError(body: any): ExtractedError {
     code: body?.error?.code,
     message: body?.error?.message,
     nextAction: body?.error?.next_action,
-    retryAfter: body?.error?.retry_after,
+    retryAfter: body?.error?.retry_after ?? body?.error?.cooldown_seconds,
   };
+}
+
+// A stored (setup or access) token whose exp claim is in the past must never be replayed.
+function isStoredTokenExpired(jwt: string): boolean {
+  try {
+    const payload = jwt.split('.')[1];
+    if (!payload) return false;
+    const json = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/')));
+    return typeof json.exp === 'number' && json.exp * 1000 <= Date.now();
+  } catch {
+    return false;
+  }
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -185,7 +268,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const savedMerchant = localStorage.getItem('shipde_merchant');
         const savedToken = localStorage.getItem('shipde_token');
 
-        if (savedUser && savedMerchant && savedToken) {
+        if (savedToken && isStoredTokenExpired(savedToken)) {
+          localStorage.removeItem('shipde_user');
+          localStorage.removeItem('shipde_merchant');
+          localStorage.removeItem('shipde_token');
+        } else if (savedUser && savedMerchant && savedToken) {
           setUser(mapUser(JSON.parse(savedUser)));
           setMerchant(mapMerchant(JSON.parse(savedMerchant)));
           setToken(savedToken);
@@ -231,6 +318,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
         const err = extractError(body);
+        if (err.code === 'MFA_ENROLLMENT_REQUIRED') {
+          const setupTok = (body?.error?.setup_token || body?.error?.access_token || '') as string;
+          if (setupTok) {
+            setToken(setupTok);
+            localStorage.setItem('shipde_token', setupTok);
+          }
+          return {
+            success: false,
+            code: 'MFA_ENROLLMENT_REQUIRED',
+            error: err.message || 'Tài khoản yêu cầu thiết lập xác thực hai yếu tố (MFA).',
+            mfaEnrollmentRequired: true,
+            setupToken: setupTok,
+            expiresIn: body?.error?.expires_in,
+          };
+        }
         if (STATUS_GATE_CODES.includes(err.code ?? '')) {
           return {
             success: false,
@@ -248,6 +350,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           error: err.message || 'Đăng nhập không thành công.',
           code: err.code || 'VALIDATION_ERROR',
           retryAfterSeconds: err.retryAfter,
+        };
+      }
+
+      if (body?.data?.status === 'MFA_REQUIRED') {
+        return {
+          success: false,
+          mfaRequired: true,
+          challengeId: body.data.challenge_id,
+          expiresIn: body.data.expires_in,
         };
       }
 
@@ -308,6 +419,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
         const err = extractError(body);
+        if (err.code === 'MFA_ENROLLMENT_REQUIRED') {
+          const setupTok = (body?.error?.setup_token || body?.error?.access_token || '') as string;
+          if (setupTok) {
+            setToken(setupTok);
+            localStorage.setItem('shipde_token', setupTok);
+          }
+          return {
+            success: false,
+            code: 'MFA_ENROLLMENT_REQUIRED',
+            error: err.message || 'Tài khoản yêu cầu thiết lập xác thực hai yếu tố (MFA).',
+            mfaEnrollmentRequired: true,
+            setupToken: setupTok,
+            expiresIn: body?.error?.expires_in,
+          };
+        }
         if (STATUS_GATE_CODES.includes(err.code ?? '')) {
           return {
             success: false,
@@ -322,9 +448,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
         return {
           success: false,
-          error: err.message || 'Xác thực mã OTP thất bại.',
-          code: err.code || 'VALIDATION_ERROR',
+          error: err.message || 'Mã OTP không chính xác hoặc đã hết hạn.',
+          code: err.code || 'INVALID_OTP',
           retryAfterSeconds: err.retryAfter,
+        };
+      }
+
+      if (body?.data?.status === 'MFA_REQUIRED') {
+        return {
+          success: false,
+          mfaRequired: true,
+          challengeId: body.data.challenge_id,
+          expiresIn: body.data.expires_in,
         };
       }
 
@@ -544,6 +679,174 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const verifyMfaChallenge = async (challengeId: string, code: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/auth/mfa/challenge/verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ challenge_id: challengeId, code }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const err = extractError(body);
+        return {
+          success: false,
+          error: err.message || 'Mã xác thực không chính xác.',
+          code: err.code,
+          retryAfterSeconds: err.retryAfter,
+        };
+      }
+      applySession(body.data);
+      return { success: true };
+    } catch {
+      return {
+        success: false,
+        error: 'Không thể kết nối đến máy chủ. Vui lòng kiểm tra đường truyền mạng.',
+        code: 'NETWORK_ERROR',
+      };
+    }
+  };
+
+  const verifyMfaRecovery = async (challengeId: string, recoveryCode: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/auth/mfa/recovery/verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ challenge_id: challengeId, recovery_code: recoveryCode }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const err = extractError(body);
+        return {
+          success: false,
+          error: err.message || 'Mã dự phòng không chính xác hoặc đã được sử dụng.',
+          code: err.code,
+          retryAfterSeconds: err.retryAfter,
+        };
+      }
+      applySession(body.data);
+      return {
+        success: true,
+        recoveryCodesRemaining: body.data.recovery_codes_remaining,
+      };
+    } catch {
+      return {
+        success: false,
+        error: 'Không thể kết nối đến máy chủ. Vui lòng kiểm tra đường truyền mạng.',
+        code: 'NETWORK_ERROR',
+      };
+    }
+  };
+
+  const getMfaStatus = async () => {
+    try {
+      const currentToken =
+        token || (typeof window !== 'undefined' ? localStorage.getItem('shipde_token') : null);
+      const res = await fetch(`${API_BASE}/auth/mfa/status`, {
+        headers: {
+          Authorization: `Bearer ${currentToken}`,
+        },
+      });
+      const body = await res.json().catch(() => ({}));
+      if (res.status === 401 && body?.error?.code === 'UNAUTHENTICATED') {
+        // Expired/invalid (e.g. setup-only) token: drop it so the user is sent back to login.
+        logout();
+      }
+      if (!res.ok) {
+        return { success: false, error: body?.error?.message || 'Không thể lấy thông tin MFA' };
+      }
+      return { success: true, data: body.data };
+    } catch {
+      return { success: false, error: 'Không thể kết nối đến máy chủ' };
+    }
+  };
+
+  const startMfaSetup = async (password: string) => {
+    try {
+      const currentToken =
+        token || (typeof window !== 'undefined' ? localStorage.getItem('shipde_token') : null);
+      const res = await fetch(`${API_BASE}/auth/mfa/setup`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${currentToken}`,
+        },
+        body: JSON.stringify({ password }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (res.status === 401 && body?.error?.code === 'UNAUTHENTICATED') {
+        // Expired/invalid (e.g. setup-only) token: drop it so the user is sent back to login.
+        logout();
+      }
+      if (!res.ok) {
+        const err = extractError(body);
+        return { success: false, error: err.message, code: err.code };
+      }
+      return { success: true, data: body.data };
+    } catch {
+      return { success: false, error: 'Không thể kết nối đến máy chủ' };
+    }
+  };
+
+  const verifyMfaSetup = async (code: string) => {
+    try {
+      const currentToken =
+        token || (typeof window !== 'undefined' ? localStorage.getItem('shipde_token') : null);
+      const res = await fetch(`${API_BASE}/auth/mfa/setup/verify`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${currentToken}`,
+        },
+        body: JSON.stringify({ code }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (res.status === 401 && body?.error?.code === 'UNAUTHENTICATED') {
+        // Expired/invalid (e.g. setup-only) token: drop it so the user is sent back to login.
+        logout();
+      }
+      if (!res.ok) {
+        const err = extractError(body);
+        return { success: false, error: err.message, code: err.code };
+      }
+      applySession(body.data);
+      return { success: true, data: body.data };
+    } catch {
+      return { success: false, error: 'Không thể kết nối đến máy chủ' };
+    }
+  };
+
+  const regenerateMfaRecoveryCodes = async (password: string, code: string) => {
+    try {
+      const currentToken =
+        token || (typeof window !== 'undefined' ? localStorage.getItem('shipde_token') : null);
+      const res = await fetch(`${API_BASE}/auth/mfa/recovery-codes/regenerate`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${currentToken}`,
+        },
+        body: JSON.stringify({ password, code }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (res.status === 401 && body?.error?.code === 'UNAUTHENTICATED') {
+        // Expired/invalid (e.g. setup-only) token: drop it so the user is sent back to login.
+        logout();
+      }
+      if (!res.ok) {
+        const err = extractError(body);
+        return {
+          success: false,
+          error: err.message,
+          code: err.code,
+          retryAfterSeconds: err.retryAfter,
+        };
+      }
+      return { success: true, data: body.data };
+    } catch {
+      return { success: false, error: 'Không thể kết nối đến máy chủ' };
+    }
+  };
   const logout = () => {
     setUser(null);
     setMerchant(null);
@@ -586,6 +889,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         resetPassword,
         logout,
         switchRole,
+        verifyMfaChallenge,
+        verifyMfaRecovery,
+        getMfaStatus,
+        startMfaSetup,
+        verifyMfaSetup,
+        regenerateMfaRecoveryCodes,
       }}
     >
       {children}

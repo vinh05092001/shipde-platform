@@ -10,6 +10,10 @@ Given an active verified user with valid credentials, when login and MFA succeed
 
 Given a prospective shop owner on SCR-AUTH-02 (/register), when submitting valid shop name, owner name, email or phone, password, and accepted terms, then exactly one Merchant and User(OWNER, PENDING_VERIFICATION) are created atomically and a single-use expiring verification token is issued; when verified with a valid token, the user transitions to ACTIVE and verified timestamp is recorded; invalid inputs, duplicate verified identifiers, unaccepted terms, expired/consumed tokens, and rate-limit violations fail closed with distinct actionable errors.
 
+### AC-AUTH-05
+
+Given an active user on Ship Dễ, when setting up MFA with fresh primary authentication, then a 10-minute expiring TOTP factor is provisioned and secret encrypted at rest; when verified with a valid non-replayed TOTP, exactly one active factor and 10 single-use recovery codes are issued, and session carries MFA assurance metadata; when an enrolled user logs in, MFA_REQUIRED is returned with an opaque 5-minute challenge; owners without MFA receive MFA_ENROLLMENT_REQUIRED with a bounded setup token; authorized administrators can reset another user's factor with mandatory reason and idempotency, revoking all target sessions and logging immutable audit records.
+
 ### AC-USR-01
 
 Given an owner, when inviting an operator with one warehouse/account scope, then the invite can be accepted and the operator cannot access another warehouse/account.
