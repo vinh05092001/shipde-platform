@@ -27,6 +27,17 @@ Every implementation use case includes actor, preconditions, trigger, main flow,
 - Audit: registration event and verification events logged with hashed IP and actor context; never log plaintext passwords, OTPs, or verification tokens.
 - Acceptance: AC-AUTH-02.
 
+## UC-AUTH-03 Enroll and use MFA
+
+- Actor: active registered user or authorized tenant administrator.
+- Preconditions: authenticated active account; fresh primary re-authentication.
+- Trigger: initiate MFA setup, verify login challenge, use recovery code, regenerate codes, or admin reset.
+- Main result: enroll TOTP factor, issue one-time recovery codes, challenge primary logins, and issue sessions with verified MFA assurance.
+- Alternatives: verify using one-time recovery code; admin reset lost factor for in-scope user with mandatory reason.
+- Failures: invalid or replayed TOTP, expired setup/challenge, invalid recovery code, rate-limited attempts, self-reset, cross-tenant reset.
+- Audit: immutable security events for setup, verify, challenge, recovery, and admin reset without secrets or codes.
+- Acceptance: AC-AUTH-05.
+
 ## UC-USR-01 Invite and authorize a user
 
 - Actor: SHOP_OWNER or authorized administrator.

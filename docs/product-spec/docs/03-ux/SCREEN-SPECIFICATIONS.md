@@ -35,6 +35,9 @@ State coverage:
   - `AUTH_ACCOUNT_DISABLED`: "Tài khoản đã bị vô hiệu hoá. Vui lòng liên hệ bộ phận hỗ trợ Ship Dễ."
   - `RATE_LIMITED`: Actionable warning with cooldown countdown window hint.
 - **Success**: Confirmation screen celebrating successful login, leading into session start or organization selection.
+- **MFA challenge**: 6-digit TOTP input, remaining challenge expiry countdown, alternative recovery-code toggle, and return-to-login action.
+- **MFA recovery**: 16-character recovery-code input, non-enumerating error for invalid/used codes, remaining recovery code count indicator upon success.
+- **MFA enrollment required**: Distinct blocking screen for required roles (Owner/Finance) explaining mandatory MFA setup with action button to begin enrollment flow.
 ## SCR-AUTH-02 Self-registration
 
 Route: `/register`
@@ -61,6 +64,28 @@ State coverage:
 - **Verification error**: Distinct screens for expired token ("Mã xác thực đã hết hạn") and consumed token ("Mã xác thực đã được sử dụng") with single-click resend option.
 - **Verification success**: Confirmation screen celebrating account activation, leading into session start or login.
 - **Recovery**: Unsaved form warning on navigation; network interruptions preserve entered values.
+
+## SCR-AUTH-03 Security settings (MFA)
+
+Route: `/settings/security`
+
+Fields/actions:
+- MFA status badge (NOT_ENROLLED, PENDING, ACTIVE, RESET).
+- Role requirement indicator and remaining recovery codes count.
+- Setup flow: password re-authentication, QR code display, manual Base32 key with copy, 6-digit TOTP verification.
+- Recovery codes modal: display 10 high-entropy codes once with copy and download options; mandatory "I have saved these codes" confirmation.
+- Code regeneration flow: password + current TOTP re-authentication; invalidates old codes and displays 10 new codes.
+
+State coverage:
+- **Loading**: Skeletons for status loading and inline spinner during setup/regeneration/verify actions.
+- **Empty/Not enrolled**: Informative banner explaining MFA protection, requirement for Owner role, and "Thiết lập ngay" action.
+- **Setup**: QR code with labeled manual key alternative, 10-minute expiry hint, 6-digit verification input, and cancellation warning.
+- **Validation**: Per-field validation for password, malformed TOTP (must be 6 digits), and empty reason.
+- **Success**: 10 one-time recovery codes displayed in a 2-column grid with copy/download buttons and confirmation checkbox.
+- **Active status**: Displays active factor status, setup date, and recovery codes remaining counter; offers code regeneration.
+- **Expired**: Actionable notice when setup expires (10 minutes) offering clean restart.
+- **Rate limited**: Retry-after countdown indicator preserving entered form state except secrets.
+- **Responsive/accessibility**: Mobile-friendly inputs, visible focus indicators, live async announcements, and keyboard navigable controls.
 
 ## SCR-ONB-01 Onboarding
 

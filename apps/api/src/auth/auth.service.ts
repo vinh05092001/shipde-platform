@@ -1,4 +1,15 @@
 import {
+  generateTotpSecret,
+  generateTotpCode,
+  verifyTotpCode,
+  generateProvisioningUri,
+  encryptMfaSecret,
+  decryptMfaSecret,
+  generateRecoveryCodes,
+  hashRecoveryCode,
+} from './totp.util';
+import { resolveMfaEncryptionKey, normalizeCorrelationId } from '@shipde/config';
+import {
   Injectable,
   Inject,
   BadRequestException,
@@ -46,6 +57,29 @@ export interface ForgotPasswordDto {
   channel?: 'email' | 'phone';
 }
 
+export interface MfaSetupDto {
+  password?: string;
+}
+
+export interface MfaSetupVerifyDto {
+  code?: string;
+}
+
+export interface MfaChallengeVerifyDto {
+  challenge_id?: string;
+  code?: string;
+}
+
+export interface MfaRecoveryVerifyDto {
+  challenge_id?: string;
+  recovery_code?: string;
+}
+
+export interface MfaRegenerateRecoveryCodesDto {
+  password?: string;
+  code?: string;
+}
+
 export interface VerifyResetTokenDto {
   token: string;
 }
@@ -88,7 +122,8 @@ export class CanonicalApiException extends HttpException {
     public readonly retryable = false,
     public readonly next_action?: string,
     public readonly fields?: CanonicalFieldError[],
-    public readonly retryAfterSeconds?: number
+    public readonly retryAfterSeconds?: number,
+    public readonly extra?: Record<string, unknown>
   ) {
     super(
       {
@@ -99,6 +134,7 @@ export class CanonicalApiException extends HttpException {
           next_action,
           fields,
           ...(retryAfterSeconds !== undefined && { cooldown_seconds: retryAfterSeconds }),
+          ...(extra || {}),
         },
       },
       statusCode
@@ -1633,6 +1669,70 @@ export class AuthService {
 
     await this.rateLimitService.resetOtpAttempts(normalized.stored);
 
+    // FEAT-AUTH-05: Check MFA factor enrollment (AC-AUTH-05-06, AC-AUTH-05-12)
+    const activeFactor = await this.prisma.mfaFactor.findFirst({
+      where: { user_id: tokenRecord.user.id, status: 'ACTIVE' },
+    });
+
+    if (activeFactor) {
+      const rawChallenge = 'mfa_ch_' + randomBytes(32).toString('hex');
+      const challengeHash = createHash('sha256').update(rawChallenge).digest('hex');
+      const challengeTtlSeconds = 300;
+
+      await this.prisma.mfaChallenge.create({
+        data: {
+          challenge_hash: challengeHash,
+          user_id: tokenRecord.user.id,
+          merchant_id: tokenRecord.user.merchant_id,
+          login_transaction_ref: correlationId,
+          purpose: 'MFA_LOGIN',
+          expires_at: new Date(Date.now() + challengeTtlSeconds * 1000),
+          correlation_id: correlationId,
+        },
+      });
+
+      return {
+        data: {
+          status: 'MFA_REQUIRED' as const,
+          challenge_id: rawChallenge,
+          expires_in: challengeTtlSeconds,
+        },
+        meta: { correlation_id: correlationId },
+      };
+    }
+
+    if (tokenRecord.user.role === RoleEnum.OWNER) {
+      const setupTtlSeconds = 600;
+      const secret = resolveAccessTokenSecret(this.config?.AUTH_TOKEN_SECRET);
+      const { token: setupToken } = signAccessToken(
+        {
+          sub: tokenRecord.user.id,
+          sid: 'mfa-setup-session',
+          mid: tokenRecord.user.merchant_id,
+          role: tokenRecord.user.role,
+          st: tokenRecord.user.status,
+          scope: 'setup',
+        },
+        secret,
+        setupTtlSeconds
+      );
+
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'MFA_ENROLLMENT_REQUIRED',
+        'Tài khoản Chủ shop (Owner) bắt buộc phải hoàn thành thiết lập xác thực hai yếu tố (MFA)',
+        false,
+        'Vui lòng hoàn thành thiết lập MFA bằng mã token được cấp',
+        undefined,
+        undefined,
+        {
+          setup_token: setupToken,
+          access_token: setupToken,
+          expires_in: setupTtlSeconds,
+        }
+      );
+    }
+
     return this.createLoginSessionAndResponse(
       tokenRecord.user,
       false,
@@ -1773,6 +1873,70 @@ export class AuthService {
 
     // Success resets the identifier failure counter only (the IP counter is not reset, CD-9)
     await this.rateLimitService.resetLoginIdentifierFailures(normalized.stored);
+
+    // FEAT-AUTH-05: Check MFA factor enrollment (AC-AUTH-05-05, AC-AUTH-05-12)
+    const activeFactor = await this.prisma.mfaFactor.findFirst({
+      where: { user_id: user.id, status: 'ACTIVE' },
+    });
+
+    if (activeFactor) {
+      const rawChallenge = 'mfa_ch_' + randomBytes(32).toString('hex');
+      const challengeHash = createHash('sha256').update(rawChallenge).digest('hex');
+      const challengeTtlSeconds = 300;
+
+      await this.prisma.mfaChallenge.create({
+        data: {
+          challenge_hash: challengeHash,
+          user_id: user.id,
+          merchant_id: user.merchant_id,
+          login_transaction_ref: correlationId,
+          purpose: 'MFA_LOGIN',
+          expires_at: new Date(Date.now() + challengeTtlSeconds * 1000),
+          correlation_id: correlationId,
+        },
+      });
+
+      return {
+        data: {
+          status: 'MFA_REQUIRED' as const,
+          challenge_id: rawChallenge,
+          expires_in: challengeTtlSeconds,
+        },
+        meta: { correlation_id: correlationId },
+      };
+    }
+
+    if (user.role === RoleEnum.OWNER) {
+      const setupTtlSeconds = 600;
+      const secret = resolveAccessTokenSecret(this.config?.AUTH_TOKEN_SECRET);
+      const { token: setupToken } = signAccessToken(
+        {
+          sub: user.id,
+          sid: 'mfa-setup-session',
+          mid: user.merchant_id,
+          role: user.role,
+          st: user.status,
+          scope: 'setup',
+        },
+        secret,
+        setupTtlSeconds
+      );
+
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'MFA_ENROLLMENT_REQUIRED',
+        'Tài khoản Chủ shop (Owner) bắt buộc phải hoàn thành thiết lập xác thực hai yếu tố (MFA)',
+        false,
+        'Vui lòng hoàn thành thiết lập MFA bằng mã token được cấp',
+        undefined,
+        undefined,
+        {
+          setup_token: setupToken,
+          access_token: setupToken,
+          expires_in: setupTtlSeconds,
+        }
+      );
+    }
 
     return this.createLoginSessionAndResponse(
       user,
@@ -1983,19 +2147,13 @@ export class AuthService {
     rememberDevice: boolean,
     clientIp: string,
     correlationId: string,
-    auditAction: 'AUTH_LOGIN_SUCCESS' | 'AUTH_LOGIN_OTP_SUCCESS'
+    auditAction: 'AUTH_LOGIN_SUCCESS' | 'AUTH_LOGIN_OTP_SUCCESS' | 'AUTH_MFA_CHALLENGE_SUCCEEDED',
+    authAssurance: 'PASSWORD' | 'MFA' = 'PASSWORD',
+    mfaVerifiedAt: Date | null = null
   ) {
     const ttlSeconds = this.config?.AUTH_TOKEN_TTL_SECONDS ?? 43200;
     const merchant = user.merchant;
 
-    // FEAT-AUTH-06 made merchant_id, session_token_hash and expires_at required
-    // on DeviceSession, and this login path still created a row without them.
-    //
-    // The hash has to be the hash of the token the client will actually present,
-    // or the row can never be matched and the session is unusable while still
-    // reading as ACTIVE. The token needs the session id to sign, and the id used
-    // to come from the insert — so the id is minted here instead, the token is
-    // signed against it, and the row is written once with a hash that matches.
     const sessionId = randomUUID();
     const secret = resolveAccessTokenSecret(this.config?.AUTH_TOKEN_SECRET);
     const { token } = signAccessToken(
@@ -2005,6 +2163,8 @@ export class AuthService {
         mid: user.merchant_id,
         role: user.role,
         st: user.status,
+        auth_assurance: authAssurance,
+        mfa_verified_at: mfaVerifiedAt ? mfaVerifiedAt.toISOString() : undefined,
       },
       secret,
       ttlSeconds
@@ -2020,6 +2180,8 @@ export class AuthService {
         last_active_at: new Date(),
         expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
         ip_address: this.hashIp(clientIp),
+        auth_assurance: authAssurance,
+        mfa_verified_at: mfaVerifiedAt,
       },
     });
 
@@ -2031,7 +2193,7 @@ export class AuthService {
       resource: `user:${user.id}`,
       correlationId,
       ipAddress: this.hashIp(clientIp),
-      details: { session_id: session.id, role: user.role },
+      details: { session_id: session.id, role: user.role, auth_assurance: authAssurance },
     });
 
     return {
@@ -2050,12 +2212,14 @@ export class AuthService {
           email_verified_at: user.email_verified_at ? user.email_verified_at.toISOString() : null,
           phone_verified_at: user.phone_verified_at ? user.phone_verified_at.toISOString() : null,
           created_at: user.created_at.toISOString(),
+          auth_assurance: authAssurance,
+          mfa_verified_at: mfaVerifiedAt ? mfaVerifiedAt.toISOString() : null,
         },
         merchant: {
           id: merchant.id,
           name: merchant.name,
-          business_code: merchant.code,
-          status: merchant.status,
+          code: merchant.code,
+          status: merchant.status.toUpperCase(),
           created_at: merchant.created_at.toISOString(),
         },
       },
@@ -2191,5 +2355,703 @@ export class AuthService {
         console.error('Failed to persist audit log to database:', err);
       }
     }
+  }
+
+  /**
+   * GET /auth/mfa/status (API-AUTH-MFA-STATUS, FEAT-AUTH-05)
+   */
+  async getMfaStatus(userId: string, merchantId: string, role?: string, correlationId?: string) {
+    const factor = await this.prisma.mfaFactor.findFirst({
+      where: { user_id: userId, status: { in: ['ACTIVE', 'PENDING', 'RESET'] } },
+      orderBy: { created_at: 'desc' },
+    });
+
+    let effectiveStatus: 'NOT_ENROLLED' | 'PENDING' | 'ACTIVE' | 'RESET' = 'NOT_ENROLLED';
+    if (factor) {
+      if (factor.status === 'ACTIVE') {
+        effectiveStatus = 'ACTIVE';
+      } else if (factor.status === 'PENDING') {
+        if (factor.setup_expires_at && factor.setup_expires_at < new Date()) {
+          effectiveStatus = 'NOT_ENROLLED';
+        } else {
+          effectiveStatus = 'PENDING';
+        }
+      } else if (factor.status === 'RESET') {
+        effectiveStatus = 'RESET';
+      }
+    }
+
+    let recoveryCodesRemaining = 0;
+    if (effectiveStatus === 'ACTIVE' && factor) {
+      recoveryCodesRemaining = await this.prisma.mfaRecoveryCode.count({
+        where: { factor_id: factor.id, consumed_at: null },
+      });
+    }
+
+    const isRequired = role === RoleEnum.OWNER || role === 'OWNER';
+
+    return {
+      data: {
+        status: effectiveStatus,
+        required: isRequired,
+        recovery_codes_remaining: recoveryCodesRemaining,
+        mfa_verified_at: factor?.activated_at ? factor.activated_at.toISOString() : null,
+      },
+      meta: { correlation_id: correlationId || normalizeCorrelationId() },
+    };
+  }
+
+  /**
+   * POST /auth/mfa/setup (API-AUTH-MFA-SETUP, FEAT-AUTH-05, BR-AUTH-14, AC-AUTH-05-01)
+   */
+  async startMfaSetup(
+    userId: string,
+    merchantId: string,
+    dto: MfaSetupDto,
+    clientIp: string,
+    correlationId: string
+  ) {
+    if (!dto.password) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Mật khẩu là bắt buộc để bắt đầu thiết lập MFA',
+        false,
+        'Vui lòng nhập mật khẩu đăng nhập'
+      );
+    }
+
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) {
+      throw new CanonicalApiException(
+        HttpStatus.UNAUTHORIZED,
+        'UNAUTHENTICATED',
+        'Người dùng không tồn tại'
+      );
+    }
+
+    const passwordMatches = await verifyPassword(dto.password, user.password_hash).catch(
+      () => false
+    );
+    if (!passwordMatches) {
+      throw new CanonicalApiException(
+        HttpStatus.UNAUTHORIZED,
+        'INVALID_CREDENTIALS',
+        'Mật khẩu xác thực không chính xác',
+        false
+      );
+    }
+
+    const activeFactor = await this.prisma.mfaFactor.findFirst({
+      where: { user_id: userId, status: 'ACTIVE' },
+    });
+    if (activeFactor) {
+      throw new CanonicalApiException(
+        HttpStatus.CONFLICT,
+        'MFA_ALREADY_ENABLED',
+        'Tài khoản đã có phương thức xác thực hai yếu tố đang hoạt động',
+        false
+      );
+    }
+
+    await this.prisma.mfaFactor.deleteMany({
+      where: { user_id: userId, status: 'PENDING' },
+    });
+
+    const secret = generateTotpSecret();
+    const encryptionKey = resolveMfaEncryptionKey(this.config?.MFA_ENCRYPTION_KEY);
+    const encryptedSecret = encryptMfaSecret(secret, encryptionKey);
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+    await this.prisma.mfaFactor.create({
+      data: {
+        user_id: userId,
+        merchant_id: merchantId,
+        type: 'TOTP',
+        status: 'PENDING',
+        secret_ciphertext: encryptedSecret,
+        key_version: 1,
+        setup_expires_at: expiresAt,
+        created_by: userId,
+      },
+    });
+
+    await this.logAudit({
+      merchantId,
+      userId,
+      actor: `user:${userId}`,
+      action: 'AUTH_MFA_SETUP_STARTED',
+      resource: `user:${userId}`,
+      correlationId,
+      ipAddress: this.hashIp(clientIp),
+      details: { expires_at: expiresAt.toISOString() },
+    });
+
+    const accountIdentifier = user.email || user.phone || user.id;
+    const uri = generateProvisioningUri({
+      secret,
+      accountName: accountIdentifier,
+      issuer: 'Ship Dễ',
+    });
+
+    return {
+      data: {
+        secret_key: secret,
+        provisioning_uri: uri,
+        expires_at: expiresAt.toISOString(),
+        expires_in_seconds: 600,
+      },
+      meta: { correlation_id: correlationId },
+    };
+  }
+
+  /**
+   * POST /auth/mfa/setup/verify (API-AUTH-MFA-SETUP-VERIFY, FEAT-AUTH-05, BR-AUTH-15, AC-AUTH-05-02..04)
+   */
+  async verifyMfaSetup(
+    userId: string,
+    merchantId: string,
+    dto: MfaSetupVerifyDto,
+    clientIp: string,
+    correlationId: string
+  ) {
+    if (!dto.code || !/^\d{6}$/.test(dto.code.trim())) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Mã xác thực gồm 6 chữ số',
+        false,
+        undefined,
+        [{ field: 'code', code: 'INVALID_FORMAT', message: 'Mã xác thực phải gồm 6 chữ số' }]
+      );
+    }
+
+    const factor = await this.prisma.mfaFactor.findFirst({
+      where: { user_id: userId, status: 'PENDING' },
+      orderBy: { created_at: 'desc' },
+      include: { user: { include: { merchant: true } } },
+    });
+
+    if (!factor) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'MFA_CHALLENGE_INVALID',
+        'Không tìm thấy phiên thiết lập MFA đang chờ'
+      );
+    }
+
+    if (factor.setup_expires_at && factor.setup_expires_at < new Date()) {
+      throw new CanonicalApiException(
+        HttpStatus.GONE,
+        'MFA_SETUP_EXPIRED',
+        'Phiên thiết lập MFA đã hết hạn (10 phút). Vui lòng bắt đầu lại.',
+        false,
+        'Vui lòng bắt đầu lại thiết lập xác thực hai yếu tố'
+      );
+    }
+
+    const encryptionKey = resolveMfaEncryptionKey(this.config?.MFA_ENCRYPTION_KEY);
+    const secret = decryptMfaSecret(factor.secret_ciphertext, encryptionKey);
+    const verifyResult = verifyTotpCode(dto.code, secret, factor.last_accepted_step);
+
+    if (!verifyResult.valid) {
+      if (verifyResult.error === 'STEP_REPLAYED') {
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'MFA_CODE_INVALID',
+          'Mã xác thực đã được sử dụng. Vui lòng chờ mã mới từ ứng dụng.',
+          false
+        );
+      }
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'MFA_CODE_INVALID',
+        'Mã xác thực không chính xác',
+        false
+      );
+    }
+
+    const { plaintext: recoveryCodes, hashes: recoveryHashes } = generateRecoveryCodes(10);
+    const now = new Date();
+
+    await this.prisma.$transaction(async (tx) => {
+      const activeCheck = await tx.mfaFactor.findFirst({
+        where: { user_id: userId, status: 'ACTIVE' },
+      });
+      if (activeCheck) {
+        throw new CanonicalApiException(
+          HttpStatus.CONFLICT,
+          'CONFLICT',
+          'Tài khoản đã có phương thức xác thực MFA đang hoạt động'
+        );
+      }
+
+      const updateResult = await tx.mfaFactor.updateMany({
+        where: { id: factor.id, status: 'PENDING' },
+        data: {
+          status: 'ACTIVE',
+          activated_at: now,
+          last_accepted_step: verifyResult.acceptedStep,
+          updated_by: userId,
+        },
+      });
+
+      if (updateResult.count === 0) {
+        throw new CanonicalApiException(
+          HttpStatus.CONFLICT,
+          'CONFLICT',
+          'Phiên thiết lập đã thay đổi hoặc đang được xử lý'
+        );
+      }
+
+      await tx.mfaRecoveryCode.createMany({
+        data: recoveryHashes.map((h) => ({
+          factor_id: factor.id,
+          code_hash: h,
+        })),
+      });
+    });
+
+    await this.logAudit({
+      merchantId,
+      userId,
+      actor: `user:${userId}`,
+      action: 'AUTH_MFA_SETUP_COMPLETED',
+      resource: `user:${userId}`,
+      correlationId,
+      ipAddress: this.hashIp(clientIp),
+      details: { factor_id: factor.id },
+    });
+
+    const user = factor.user;
+    const sessionRes = await this.createLoginSessionAndResponse(
+      user,
+      false,
+      clientIp,
+      correlationId,
+      'AUTH_LOGIN_SUCCESS',
+      'MFA',
+      now
+    );
+
+    return {
+      data: {
+        status: 'AUTHENTICATED' as const,
+        recovery_codes: recoveryCodes,
+        access_token: sessionRes.data.access_token,
+        expires_in: sessionRes.data.expires_in,
+        user: sessionRes.data.user,
+        merchant: sessionRes.data.merchant,
+      },
+      meta: { correlation_id: correlationId },
+    };
+  }
+
+  /**
+   * POST /auth/mfa/challenge/verify (API-AUTH-MFA-CHALLENGE-VERIFY, FEAT-AUTH-05, BR-AUTH-16, AC-AUTH-05-07..08, AC-AUTH-05-16, AC-AUTH-05-24)
+   */
+  async verifyMfaChallenge(dto: MfaChallengeVerifyDto, clientIp: string, correlationId: string) {
+    const ipCheck = await this.rateLimitService.checkMfaIpLimit(clientIp);
+    if (!ipCheck.allowed) {
+      await this.logAudit({
+        actor: this.hashIp(clientIp),
+        action: 'AUTH_MFA_RATE_LIMITED',
+        resource: 'auth/mfa/challenge/verify',
+        correlationId,
+        ipAddress: this.hashIp(clientIp),
+        details: { scope: 'ip' },
+      });
+      throw new CanonicalApiException(
+        HttpStatus.TOO_MANY_REQUESTS,
+        'RATE_LIMITED',
+        ipCheck.reason || 'Quá nhiều lần thử xác thực hai yếu tố từ IP này.',
+        true,
+        'Vui lòng thử lại sau',
+        undefined,
+        ipCheck.retryAfterSeconds
+      );
+    }
+
+    if (!dto.challenge_id || !dto.code || !/^\d{6}$/.test(dto.code.trim())) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Mã thử thách và mã xác thực 6 chữ số là bắt buộc'
+      );
+    }
+
+    const challengeHash = createHash('sha256').update(dto.challenge_id).digest('hex');
+
+    const challengeLimitCheck = await this.rateLimitService.checkMfaChallengeLimit(challengeHash);
+    if (!challengeLimitCheck.allowed) {
+      await this.rateLimitService.recordMfaIpFailure(clientIp);
+      throw new CanonicalApiException(
+        HttpStatus.TOO_MANY_REQUESTS,
+        'RATE_LIMITED',
+        challengeLimitCheck.reason || 'Đã vượt quá số lần thử cho phép.',
+        true,
+        'Vui lòng thử lại sau',
+        undefined,
+        challengeLimitCheck.retryAfterSeconds
+      );
+    }
+
+    const challenge = await this.prisma.mfaChallenge.findUnique({
+      where: { challenge_hash: challengeHash },
+      include: { user: { include: { merchant: true } } },
+    });
+
+    const now = new Date();
+    if (
+      !challenge ||
+      challenge.consumed_at !== null ||
+      challenge.invalidated_at !== null ||
+      challenge.expires_at < now ||
+      challenge.failed_attempts >= 5
+    ) {
+      await this.rateLimitService.recordMfaIpFailure(clientIp);
+      await this.rateLimitService.recordMfaChallengeFailure(challengeHash);
+      if (challenge) {
+        await this.logAudit({
+          merchantId: challenge.merchant_id,
+          userId: challenge.user_id,
+          actor: `user:${challenge.user_id}`,
+          action: 'AUTH_MFA_CHALLENGE_FAILED',
+          resource: `user:${challenge.user_id}`,
+          correlationId,
+          ipAddress: this.hashIp(clientIp),
+          details: { reason: 'challenge_expired_or_invalid' },
+        });
+      }
+      throw new CanonicalApiException(
+        HttpStatus.GONE,
+        'MFA_CHALLENGE_EXPIRED',
+        'Mã thử thách xác thực đã hết hạn hoặc không hợp lệ. Vui lòng đăng nhập lại.'
+      );
+    }
+
+    if (challenge.user.status !== 'active') {
+      await this.rateLimitService.recordMfaIpFailure(clientIp);
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'MFA_CHALLENGE_INVALID',
+        'Tài khoản không ở trạng thái hợp lệ để đăng nhập'
+      );
+    }
+
+    const factor = await this.prisma.mfaFactor.findFirst({
+      where: { user_id: challenge.user_id, status: 'ACTIVE' },
+    });
+
+    if (!factor) {
+      await this.rateLimitService.recordMfaIpFailure(clientIp);
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'MFA_CHALLENGE_INVALID',
+        'Không tìm thấy phương thức xác thực hai yếu tố hợp lệ'
+      );
+    }
+
+    const encryptionKey = resolveMfaEncryptionKey(this.config?.MFA_ENCRYPTION_KEY);
+    const secret = decryptMfaSecret(factor.secret_ciphertext, encryptionKey);
+    const verifyResult = verifyTotpCode(dto.code, secret, factor.last_accepted_step);
+
+    if (!verifyResult.valid) {
+      await this.prisma.mfaChallenge.update({
+        where: { id: challenge.id },
+        data: { failed_attempts: { increment: 1 } },
+      });
+      await this.rateLimitService.recordMfaIpFailure(clientIp);
+      await this.rateLimitService.recordMfaChallengeFailure(challengeHash);
+
+      await this.logAudit({
+        merchantId: challenge.merchant_id,
+        userId: challenge.user_id,
+        actor: `user:${challenge.user_id}`,
+        action: 'AUTH_MFA_CHALLENGE_FAILED',
+        resource: `user:${challenge.user_id}`,
+        correlationId,
+        ipAddress: this.hashIp(clientIp),
+        details: { reason: verifyResult.error || 'invalid_totp' },
+      });
+
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'MFA_CODE_INVALID',
+        'Mã xác thực không chính xác'
+      );
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.mfaChallenge.update({
+        where: { id: challenge.id },
+        data: { consumed_at: now },
+      });
+      await tx.mfaFactor.update({
+        where: { id: factor.id },
+        data: { last_accepted_step: verifyResult.acceptedStep },
+      });
+    });
+
+    await this.rateLimitService.resetMfaChallengeFailures(challengeHash);
+
+    return this.createLoginSessionAndResponse(
+      challenge.user,
+      false,
+      clientIp,
+      correlationId,
+      'AUTH_MFA_CHALLENGE_SUCCEEDED',
+      'MFA',
+      now
+    );
+  }
+
+  /**
+   * POST /auth/mfa/recovery/verify (API-AUTH-MFA-RECOVERY-VERIFY, FEAT-AUTH-05, BR-AUTH-17, AC-AUTH-05-09..10, AC-AUTH-05-23)
+   */
+  async verifyMfaRecovery(dto: MfaRecoveryVerifyDto, clientIp: string, correlationId: string) {
+    const ipCheck = await this.rateLimitService.checkMfaIpLimit(clientIp);
+    if (!ipCheck.allowed) {
+      throw new CanonicalApiException(
+        HttpStatus.TOO_MANY_REQUESTS,
+        'RATE_LIMITED',
+        ipCheck.reason || 'Quá nhiều lần thử từ IP này.',
+        true,
+        undefined,
+        undefined,
+        ipCheck.retryAfterSeconds
+      );
+    }
+
+    if (!dto.challenge_id || !dto.recovery_code) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Mã thử thách và mã dự phòng là bắt buộc'
+      );
+    }
+
+    const challengeHash = createHash('sha256').update(dto.challenge_id).digest('hex');
+    const challenge = await this.prisma.mfaChallenge.findUnique({
+      where: { challenge_hash: challengeHash },
+      include: { user: { include: { merchant: true } } },
+    });
+
+    const now = new Date();
+    if (
+      !challenge ||
+      challenge.consumed_at !== null ||
+      challenge.invalidated_at !== null ||
+      challenge.expires_at < now ||
+      challenge.failed_attempts >= 5
+    ) {
+      throw new CanonicalApiException(
+        HttpStatus.GONE,
+        'MFA_CHALLENGE_EXPIRED',
+        'Mã thử thách xác thực đã hết hạn hoặc không hợp lệ. Vui lòng đăng nhập lại.'
+      );
+    }
+
+    if (challenge.user.status !== 'active') {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'MFA_CHALLENGE_INVALID',
+        'Tài khoản không ở trạng thái hợp lệ để đăng nhập'
+      );
+    }
+
+    const factor = await this.prisma.mfaFactor.findFirst({
+      where: { user_id: challenge.user_id, status: 'ACTIVE' },
+    });
+
+    if (!factor) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'MFA_CHALLENGE_INVALID',
+        'Không tìm thấy phương thức xác thực hai yếu tố hợp lệ'
+      );
+    }
+
+    const hashedInput = hashRecoveryCode(dto.recovery_code);
+
+    let remainingCount = 0;
+    await this.prisma.$transaction(async (tx) => {
+      const codeRecord = await tx.mfaRecoveryCode.findFirst({
+        where: {
+          factor_id: factor.id,
+          code_hash: hashedInput,
+          consumed_at: null,
+        },
+      });
+
+      if (!codeRecord) {
+        await tx.mfaChallenge.update({
+          where: { id: challenge.id },
+          data: { failed_attempts: { increment: 1 } },
+        });
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'MFA_RECOVERY_CODE_INVALID',
+          'Mã dự phòng không chính xác hoặc đã được sử dụng'
+        );
+      }
+
+      const updateResult = await tx.mfaRecoveryCode.updateMany({
+        where: { id: codeRecord.id, consumed_at: null },
+        data: {
+          consumed_at: now,
+          consumed_correlation_id: correlationId,
+        },
+      });
+
+      if (updateResult.count === 0) {
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'MFA_RECOVERY_CODE_INVALID',
+          'Mã dự phòng không chính xác hoặc đã được sử dụng'
+        );
+      }
+
+      await tx.mfaChallenge.update({
+        where: { id: challenge.id },
+        data: { consumed_at: now },
+      });
+
+      remainingCount = await tx.mfaRecoveryCode.count({
+        where: { factor_id: factor.id, consumed_at: null },
+      });
+    });
+
+    await this.logAudit({
+      merchantId: challenge.merchant_id,
+      userId: challenge.user_id,
+      actor: `user:${challenge.user_id}`,
+      action: 'AUTH_MFA_RECOVERY_USED',
+      resource: `user:${challenge.user_id}`,
+      correlationId,
+      ipAddress: this.hashIp(clientIp),
+      details: { remaining_codes: remainingCount },
+    });
+
+    const sessionRes = await this.createLoginSessionAndResponse(
+      challenge.user,
+      false,
+      clientIp,
+      correlationId,
+      'AUTH_MFA_CHALLENGE_SUCCEEDED',
+      'MFA',
+      now
+    );
+
+    return {
+      data: {
+        status: 'AUTHENTICATED' as const,
+        access_token: sessionRes.data.access_token,
+        expires_in: sessionRes.data.expires_in,
+        recovery_codes_remaining: remainingCount,
+        user: sessionRes.data.user,
+        merchant: sessionRes.data.merchant,
+      },
+      meta: { correlation_id: correlationId },
+    };
+  }
+
+  /**
+   * POST /auth/mfa/recovery-codes/regenerate (API-AUTH-MFA-RECOVERY-REGENERATE, FEAT-AUTH-05, BR-AUTH-17, AC-AUTH-05-11)
+   */
+  async regenerateRecoveryCodes(
+    userId: string,
+    merchantId: string,
+    dto: MfaRegenerateRecoveryCodesDto,
+    clientIp: string,
+    correlationId: string
+  ) {
+    if (!dto.password || !dto.code || !/^\d{6}$/.test(dto.code.trim())) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Mật khẩu và mã xác thực 6 chữ số là bắt buộc để tạo lại mã dự phòng'
+      );
+    }
+
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) {
+      throw new CanonicalApiException(
+        HttpStatus.UNAUTHORIZED,
+        'UNAUTHENTICATED',
+        'Người dùng không tồn tại'
+      );
+    }
+
+    const passwordMatches = await verifyPassword(dto.password, user.password_hash).catch(
+      () => false
+    );
+    if (!passwordMatches) {
+      throw new CanonicalApiException(
+        HttpStatus.UNAUTHORIZED,
+        'INVALID_CREDENTIALS',
+        'Mật khẩu xác thực không chính xác'
+      );
+    }
+
+    const factor = await this.prisma.mfaFactor.findFirst({
+      where: { user_id: userId, status: 'ACTIVE' },
+    });
+    if (!factor) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'MFA_CHALLENGE_INVALID',
+        'Tài khoản chưa kích hoạt xác thực hai yếu tố'
+      );
+    }
+
+    const encryptionKey = resolveMfaEncryptionKey(this.config?.MFA_ENCRYPTION_KEY);
+    const secret = decryptMfaSecret(factor.secret_ciphertext, encryptionKey);
+    const verifyResult = verifyTotpCode(dto.code, secret, factor.last_accepted_step);
+    if (!verifyResult.valid) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'MFA_CODE_INVALID',
+        'Mã xác thực không chính xác'
+      );
+    }
+
+    const { plaintext: newPlaintextCodes, hashes: newHashes } = generateRecoveryCodes(10);
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.mfaRecoveryCode.deleteMany({
+        where: { factor_id: factor.id },
+      });
+
+      await tx.mfaRecoveryCode.createMany({
+        data: newHashes.map((h) => ({
+          factor_id: factor.id,
+          code_hash: h,
+        })),
+      });
+
+      await tx.mfaFactor.update({
+        where: { id: factor.id },
+        data: { last_accepted_step: verifyResult.acceptedStep },
+      });
+    });
+
+    await this.logAudit({
+      merchantId,
+      userId,
+      actor: `user:${userId}`,
+      action: 'AUTH_MFA_RECOVERY_REGENERATED',
+      resource: `user:${userId}`,
+      correlationId,
+      ipAddress: this.hashIp(clientIp),
+      details: { new_codes_count: 10 },
+    });
+
+    return {
+      data: {
+        recovery_codes: newPlaintextCodes,
+      },
+      meta: { correlation_id: correlationId },
+    };
   }
 }

@@ -64,6 +64,8 @@ export class SessionService {
     userId: string;
     merchantId: string;
     sessionId: string;
+    authAssurance: string;
+    mfaVerifiedAt: Date | null;
   } | null> {
     const now = new Date();
     const inactivityThreshold = new Date(now.getTime() - INACTIVITY_DAYS * 24 * 60 * 60 * 1000);
@@ -85,6 +87,8 @@ export class SessionService {
       userId: session.user_id,
       merchantId: session.merchant_id,
       sessionId: session.id,
+      authAssurance: session.auth_assurance,
+      mfaVerifiedAt: session.mfa_verified_at,
     };
   }
 
@@ -252,6 +256,59 @@ export class SessionService {
     };
   }
 
+  /**
+   * Revoke all sessions for a specific target user in the tenant (FEAT-AUTH-05 Admin MFA Reset).
+   */
+  async revokeTargetUserSessions(
+    targetUserId: string,
+    merchantId: string,
+    actorUserId: string,
+    reason: string,
+    correlationId: string,
+    ipAddress?: string,
+    tx?: any
+  ): Promise<number> {
+    const client = tx || this.prisma;
+    const activeSessions = await client.deviceSession.findMany({
+      where: {
+        merchant_id: merchantId,
+        user_id: targetUserId,
+        status: SessionStatusEnum.ACTIVE,
+      },
+    });
+
+    if (activeSessions.length === 0) {
+      return 0;
+    }
+
+    const now = new Date();
+    await client.deviceSession.updateMany({
+      where: { id: { in: activeSessions.map((s: any) => s.id) } },
+      data: {
+        status: SessionStatusEnum.REVOKED,
+        is_revoked: true,
+        revoked_at: now,
+        revoked_by: actorUserId,
+        revoke_reason: reason,
+      },
+    });
+
+    await this.logAudit(
+      {
+        merchantId,
+        userId: targetUserId,
+        actor: actorUserId,
+        action: 'SESSIONS_REVOKED_ALL',
+        resource: `User:${targetUserId}`,
+        details: { revoked_count: activeSessions.length, reason },
+        correlationId,
+        ipAddress,
+      },
+      tx
+    );
+
+    return activeSessions.length;
+  }
   async heartbeat(
     sessionId: string,
     userId: string,

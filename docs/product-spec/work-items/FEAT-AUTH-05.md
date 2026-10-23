@@ -6,14 +6,14 @@
 | --- | --- |
 | Work Item ID | `FEAT-AUTH-05` |
 | Feature ID | `FEAT-AUTH-05` |
-| Status | `READY_FOR_AUTHOR` |
+| Status | `READY_FOR_CODEX` |
 | Delivery order | `9` |
 | Dependencies | `TASK-FOUND-04` — `MERGED` by PR `#13` at `9d101f4e5d9de9b880cc4311126ce8fe06de4206`; the implementation baseline also contains merged `FEAT-AUTH-01` registration/verification (PR `#14`, merge `4f32b93b18db6087559169f34eaa619cfd56da49`), `FEAT-AUTH-03` login/session issuance (PR `#124`, merge `57a0f3c22013fa0739d99eb18fb78a5fa92feefe`), and `FEAT-AUTH-06` session management (PR `#126`, merge `85ee3d86f66b1d4090bde999bd66a2dbb6d8fadb`). Note: the `FEATURE-DELIVERY-REGISTER.csv` rows for merged `FEAT-AUTH-03`, `FEAT-AUTH-04`, and `FEAT-AUTH-06` are currently stale and are synced by a separate register-housekeeping change. |
 | Assigned author | `GEMINI` |
 | Risk | `HIGH` |
 | Allowed paths | `docs/product-spec/work-items/FEAT-AUTH-05.md`; `docs/product-spec/docs/00-control/TRACEABILITY.md`; `docs/product-spec/docs/02-business/BUSINESS-RULES-DECISION-TABLES.md`; `docs/product-spec/docs/02-business/USE-CASES.md`; `docs/product-spec/docs/03-ux/INFORMATION-ARCHITECTURE.md`; `docs/product-spec/docs/03-ux/SCREEN-SPECIFICATIONS.md`; `docs/product-spec/docs/04-data/DATA-DICTIONARY.md`; `docs/product-spec/docs/08-testing/ACCEPTANCE-AND-E2E.md`; `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`; `docs/product-spec/contracts/openapi.yaml`; `prisma/schema.prisma`; `prisma/migrations/**`; `apps/api/src/auth/**`; `apps/api/src/session/**`; `apps/api/src/users/**`; `apps/web/src/app/settings/security/**`; `apps/web/src/components/auth/**`; `apps/web/src/context/AuthContext.tsx`; `packages/config/**`; `packages/contracts/**`; `packages/testkit/**`; `infra/docker/seed.ts` |
 | Reviewer | `Codex — fresh independent task` |
-| Branch | `feat/feat-auth-05-two-factor-authentication` |
+| Branch | `feat/feat-auth-05` |
 | Pull Request | `Pending` |
 
 ## Business outcome
@@ -188,6 +188,8 @@ pnpm build
 ```
 
 Feature-focused evidence must additionally include the repository's actual filtered commands for the new API auth unit/Supertest suites and the Playwright MFA journey; record the exact commands and results in the implementation PR rather than substituting manual claims.
+
+- `node --test apps/api/src/auth/totp.util.spec.ts && python docs/product-spec/scripts/validate_docs.py`
 
 ## Codex review record
 
