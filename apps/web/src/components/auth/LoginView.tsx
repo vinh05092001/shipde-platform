@@ -637,7 +637,7 @@ export const LoginView: React.FC<Props> = ({ onSwitchToRegister }) => {
                       />
                     </div>
                     {fieldError?.otp && (
-                      <p className="text-[11px] text-rose-600 font-semibold mt-1.5">
+                      <p role="alert" className="text-[11px] text-rose-600 font-semibold mt-1.5">
                         {fieldError.otp}
                       </p>
                     )}
@@ -701,12 +701,16 @@ export const LoginView: React.FC<Props> = ({ onSwitchToRegister }) => {
                   </div>
 
                   <div>
-                    <label className="text-xs font-bold text-slate-700 block mb-1.5">
+                    <label
+                      htmlFor="mfa-totp-code"
+                      className="text-xs font-bold text-slate-700 block mb-1.5"
+                    >
                       Mã Xác Thực (TOTP)
                     </label>
                     <div className="relative">
                       <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
                       <input
+                        id="mfa-totp-code"
                         type="text"
                         inputMode="numeric"
                         autoComplete="one-time-code"
@@ -721,7 +725,7 @@ export const LoginView: React.FC<Props> = ({ onSwitchToRegister }) => {
                       />
                     </div>
                     {fieldError?.otp && (
-                      <p className="text-[11px] text-rose-600 font-semibold mt-1.5">
+                      <p role="alert" className="text-[11px] text-rose-600 font-semibold mt-1.5">
                         {fieldError.otp}
                       </p>
                     )}
@@ -786,24 +790,28 @@ export const LoginView: React.FC<Props> = ({ onSwitchToRegister }) => {
                   </div>
 
                   <div>
-                    <label className="text-xs font-bold text-slate-700 block mb-1.5">
+                    <label
+                      htmlFor="mfa-recovery-code"
+                      className="text-xs font-bold text-slate-700 block mb-1.5"
+                    >
                       Mã Dự Phòng (Recovery Code)
                     </label>
                     <div className="relative">
                       <KeyRound className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
                       <input
+                        id="mfa-recovery-code"
                         type="text"
                         autoCapitalize="characters"
                         autoComplete="off"
                         value={mfaRecoveryCode}
                         onChange={(e) => setMfaRecoveryCode(e.target.value.toUpperCase())}
-                        placeholder="XXXX-XXXX-XXXX"
+                        placeholder="XXXX-XXXX-XXXX-XXXX"
                         autoFocus
                         className="modern-input pl-10 h-11 text-sm font-mono tracking-wider uppercase"
                       />
                     </div>
                     {fieldError?.otp && (
-                      <p className="text-[11px] text-rose-600 font-semibold mt-1.5">
+                      <p role="alert" className="text-[11px] text-rose-600 font-semibold mt-1.5">
                         {fieldError.otp}
                       </p>
                     )}

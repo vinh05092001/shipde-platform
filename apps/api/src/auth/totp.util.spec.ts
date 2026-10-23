@@ -111,12 +111,12 @@ describe('TOTP Utility (RFC 6238 / RFC 4226 / AES-256-GCM)', () => {
     for (let i = 0; i < 10; i++) {
       const code = plaintext[i];
       const hash = hashes[i];
-      assert.match(code, /^[A-Z0-9]{4,5}-[A-Z0-9]{4,5}$/);
+      assert.match(code, /^[A-F0-9]{4}(-[A-F0-9]{4}){3}$/);
       assert.strictEqual(hashRecoveryCode(code), hash);
       // Normalized matching handles case and spaces
-      assert.strictEqual(hashRecoveryCode(code.toLowerCase().replace('-', ' ')), hash);
+      assert.strictEqual(hashRecoveryCode(code.toLowerCase().replace(/-/g, ' ')), hash);
       assert.strictEqual(
-        normalizeRecoveryCode(code.toLowerCase().replace('-', ' ')),
+        normalizeRecoveryCode(code.toLowerCase().replace(/-/g, ' ')),
         normalizeRecoveryCode(code)
       );
     }

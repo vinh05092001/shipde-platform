@@ -51,6 +51,11 @@ This dictionary lists high-value fields. Machine schema and migrations must expa
 | MfaChallenge.failed_attempts        | integer     |      Yes | Failed attempt counter (max 5)                         |
 | MfaChallenge.consumed_at            | timestamp   |       No | Timestamp when verified and consumed                   |
 | MfaChallenge.invalidated_at         | timestamp   |       No | Timestamp when invalidated by reset/expiry             |
+| MfaAdminResetIdempotency.merchant_id | UUID | Yes | Tenant scope; unique with idempotency_key |
+| MfaAdminResetIdempotency.idempotency_key | string | Yes | Idempotency-Key header of the admin reset (BR-AUTH-19) |
+| MfaAdminResetIdempotency.target_user_id / reason | UUID / text | Yes | Request fingerprint; a different fingerprint with the same key is IDEMPOTENCY_CONFLICT |
+| MfaAdminResetIdempotency.response | json | Yes | Original result replayed for the same request; written in the reset transaction |
+| MfaFactor unique ACTIVE | index | - | Partial unique index on (user_id) WHERE status = 'ACTIVE' |
 
 ## Carrier account
 

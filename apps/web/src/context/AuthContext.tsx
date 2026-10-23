@@ -237,6 +237,18 @@ function extractError(body: any): ExtractedError {
   };
 }
 
+// A stored (setup or access) token whose exp claim is in the past must never be replayed.
+function isStoredTokenExpired(jwt: string): boolean {
+  try {
+    const payload = jwt.split('.')[1];
+    if (!payload) return false;
+    const json = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/')));
+    return typeof json.exp === 'number' && json.exp * 1000 <= Date.now();
+  } catch {
+    return false;
+  }
+}
+
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -256,7 +268,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const savedMerchant = localStorage.getItem('shipde_merchant');
         const savedToken = localStorage.getItem('shipde_token');
 
-        if (savedUser && savedMerchant && savedToken) {
+        if (savedToken && isStoredTokenExpired(savedToken)) {
+          localStorage.removeItem('shipde_user');
+          localStorage.removeItem('shipde_merchant');
+          localStorage.removeItem('shipde_token');
+        } else if (savedUser && savedMerchant && savedToken) {
           setUser(mapUser(JSON.parse(savedUser)));
           setMerchant(mapMerchant(JSON.parse(savedMerchant)));
           setToken(savedToken);
@@ -732,6 +748,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         },
       });
       const body = await res.json().catch(() => ({}));
+      if (res.status === 401 && body?.error?.code === 'UNAUTHENTICATED') {
+        // Expired/invalid (e.g. setup-only) token: drop it so the user is sent back to login.
+        logout();
+      }
       if (!res.ok) {
         return { success: false, error: body?.error?.message || 'Không thể lấy thông tin MFA' };
       }
@@ -754,6 +774,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         body: JSON.stringify({ password }),
       });
       const body = await res.json().catch(() => ({}));
+      if (res.status === 401 && body?.error?.code === 'UNAUTHENTICATED') {
+        // Expired/invalid (e.g. setup-only) token: drop it so the user is sent back to login.
+        logout();
+      }
       if (!res.ok) {
         const err = extractError(body);
         return { success: false, error: err.message, code: err.code };
@@ -777,6 +801,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         body: JSON.stringify({ code }),
       });
       const body = await res.json().catch(() => ({}));
+      if (res.status === 401 && body?.error?.code === 'UNAUTHENTICATED') {
+        // Expired/invalid (e.g. setup-only) token: drop it so the user is sent back to login.
+        logout();
+      }
       if (!res.ok) {
         const err = extractError(body);
         return { success: false, error: err.message, code: err.code };
@@ -801,6 +829,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         body: JSON.stringify({ password, code }),
       });
       const body = await res.json().catch(() => ({}));
+      if (res.status === 401 && body?.error?.code === 'UNAUTHENTICATED') {
+        // Expired/invalid (e.g. setup-only) token: drop it so the user is sent back to login.
+        logout();
+      }
       if (!res.ok) {
         const err = extractError(body);
         return {

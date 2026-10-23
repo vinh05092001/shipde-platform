@@ -2219,7 +2219,7 @@ export class AuthService {
           id: merchant.id,
           name: merchant.name,
           business_code: merchant.code,
-          status: merchant.status.toUpperCase(),
+          status: merchant.status,
           created_at: merchant.created_at.toISOString(),
         },
       },
@@ -2541,6 +2541,16 @@ export class AuthService {
     }
 
     if (factor.setup_expires_at && factor.setup_expires_at < new Date()) {
+      await this.logAudit({
+        merchantId,
+        userId,
+        actor: `user:${userId}`,
+        action: 'AUTH_MFA_SETUP_EXPIRED',
+        resource: `user:${userId}`,
+        correlationId,
+        ipAddress: this.hashIp(clientIp),
+        details: { expired_at: factor.setup_expires_at.toISOString() },
+      });
       throw new CanonicalApiException(
         HttpStatus.GONE,
         'MFA_SETUP_EXPIRED',
@@ -2845,6 +2855,7 @@ export class AuthService {
       challenge.expires_at < now ||
       challenge.failed_attempts >= 5
     ) {
+      await this.rateLimitService.recordMfaIpFailure(clientIp);
       throw new CanonicalApiException(
         HttpStatus.GONE,
         'MFA_CHALLENGE_EXPIRED',

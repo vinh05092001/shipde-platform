@@ -134,6 +134,7 @@ model Merchant {
   device_sessions   DeviceSession[]
   mfa_factors       MfaFactor[]
   mfa_challenges    MfaChallenge[]
+  mfa_admin_reset_idempotency MfaAdminResetIdempotency[]
 
   @@map("merchants")
 }
@@ -266,6 +267,22 @@ model MfaFactor {
   @@index([user_id, status])
   @@index([merchant_id, user_id])
   @@map("mfa_factors")
+}
+
+model MfaAdminResetIdempotency {
+  id              String   @id @default(uuid()) @db.Uuid
+  merchant_id     String   @db.Uuid
+  idempotency_key String   @db.VarChar(128)
+  actor_user_id   String   @db.Uuid
+  target_user_id  String   @db.Uuid
+  reason          String   @db.Text
+  response        Json
+  created_at      DateTime @default(now()) @db.Timestamptz
+
+  merchant        Merchant @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
+
+  @@unique([merchant_id, idempotency_key])
+  @@map("mfa_admin_reset_idempotency")
 }
 
 model MfaRecoveryCode {

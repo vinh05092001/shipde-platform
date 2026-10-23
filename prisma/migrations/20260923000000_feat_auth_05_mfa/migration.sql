@@ -84,3 +84,25 @@ ALTER TABLE "mfa_recovery_codes" ADD CONSTRAINT "mfa_recovery_codes_factor_id_fk
 
 ALTER TABLE "mfa_challenges" ADD CONSTRAINT "mfa_challenges_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 ALTER TABLE "mfa_challenges" ADD CONSTRAINT "mfa_challenges_merchant_id_fkey" FOREIGN KEY ("merchant_id") REFERENCES "merchants"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- BR-AUTH-19 / P1-03: authoritative database guarantee of at most one ACTIVE factor per user.
+-- Prisma cannot express partial unique indexes, so this lives only in the migration.
+CREATE UNIQUE INDEX "mfa_factors_user_id_active_key" ON "mfa_factors"("user_id") WHERE "status" = 'ACTIVE';
+
+-- BR-AUTH-19 / P1-02: durable tenant-scoped idempotency for admin MFA reset.
+CREATE TABLE "mfa_admin_reset_idempotency" (
+    "id" UUID NOT NULL,
+    "merchant_id" UUID NOT NULL,
+    "idempotency_key" VARCHAR(128) NOT NULL,
+    "actor_user_id" UUID NOT NULL,
+    "target_user_id" UUID NOT NULL,
+    "reason" TEXT NOT NULL,
+    "response" JSONB NOT NULL,
+    "created_at" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "mfa_admin_reset_idempotency_pkey" PRIMARY KEY ("id")
+);
+
+CREATE UNIQUE INDEX "mfa_admin_reset_idempotency_merchant_id_idempotency_key_key" ON "mfa_admin_reset_idempotency"("merchant_id", "idempotency_key");
+
+ALTER TABLE "mfa_admin_reset_idempotency" ADD CONSTRAINT "mfa_admin_reset_idempotency_merchant_id_fkey" FOREIGN KEY ("merchant_id") REFERENCES "merchants"("id") ON DELETE CASCADE ON UPDATE CASCADE;

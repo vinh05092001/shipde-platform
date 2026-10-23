@@ -334,7 +334,7 @@ export default function SecuritySettingsPage() {
                 )}
 
                 {verifiedAt && (
-                  <div className="text-xs text-slate-400">
+                  <div className="text-xs text-slate-600">
                     Kích hoạt lần cuối vào: {new Date(verifiedAt).toLocaleString('vi-VN')}
                   </div>
                 )}
@@ -349,7 +349,7 @@ export default function SecuritySettingsPage() {
                   <button
                     type="button"
                     onClick={handleStartSetupClick}
-                    className="inline-flex items-center px-4 py-2.5 border border-transparent text-sm font-medium rounded-lg shadow-sm text-white bg-emerald-600 hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500"
+                    className="inline-flex items-center px-4 py-2.5 border border-transparent text-sm font-medium rounded-lg shadow-sm text-white bg-emerald-700 hover:bg-emerald-800 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500"
                   >
                     <Key className="w-4 h-4 mr-2" />
                     Bắt đầu thiết lập MFA
@@ -404,7 +404,7 @@ export default function SecuritySettingsPage() {
                 <button
                   type="submit"
                   disabled={submitting}
-                  className="inline-flex items-center px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-50"
+                  className="inline-flex items-center px-4 py-2 bg-emerald-700 text-white rounded-lg text-sm font-medium hover:bg-emerald-800 focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-50"
                 >
                   {submitting && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
                   Tiếp tục
@@ -498,7 +498,7 @@ export default function SecuritySettingsPage() {
                 <button
                   type="submit"
                   disabled={submitting || totpCodeInput.length !== 6}
-                  className="inline-flex items-center px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-50"
+                  className="inline-flex items-center px-4 py-2 bg-emerald-700 text-white rounded-lg text-sm font-medium hover:bg-emerald-800 focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-50"
                 >
                   {submitting && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
                   Kích hoạt và nhận mã dự phòng
@@ -578,7 +578,7 @@ export default function SecuritySettingsPage() {
                   type="button"
                   disabled={!confirmedSaved}
                   onClick={handleFinishSaveCodes}
-                  className="w-full sm:w-auto inline-flex items-center justify-center px-6 py-2.5 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed"
+                  className="w-full sm:w-auto inline-flex items-center justify-center px-6 py-2.5 bg-emerald-700 text-white rounded-lg text-sm font-medium hover:bg-emerald-800 focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   Hoàn tất thiết lập
                 </button>
@@ -654,7 +654,7 @@ export default function SecuritySettingsPage() {
                 <button
                   type="submit"
                   disabled={submitting}
-                  className="inline-flex items-center px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-50"
+                  className="inline-flex items-center px-4 py-2 bg-emerald-700 text-white rounded-lg text-sm font-medium hover:bg-emerald-800 focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-50"
                 >
                   {submitting && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
                   Tạo 10 mã mới

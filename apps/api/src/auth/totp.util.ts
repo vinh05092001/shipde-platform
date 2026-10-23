@@ -221,7 +221,7 @@ export function hashRecoveryCode(code: string): string {
 
 /**
  * Generates exactly `count` (default 10) high-entropy single-use recovery codes.
- * Returns plaintext formatted as `XXXXX-XXXXX` and their irreversible SHA-256 hashes.
+ * Returns plaintext formatted as `XXXX-XXXX-XXXX-XXXX` (64 bits of entropy) and their irreversible SHA-256 hashes.
  */
 export function generateRecoveryCodes(count: number = 10): {
   plaintext: string[];
@@ -231,9 +231,9 @@ export function generateRecoveryCodes(count: number = 10): {
   const hashes: string[] = [];
 
   for (let i = 0; i < count; i++) {
-    // 5 random bytes -> 10 hex characters formatted as 5-5
-    const bytes = randomBytes(5).toString('hex').toUpperCase();
-    const formatted = `${bytes.slice(0, 5)}-${bytes.slice(5)}`;
+    // 8 random bytes (64 bits) -> 16 hex characters formatted as 4-4-4-4
+    const bytes = randomBytes(8).toString('hex').toUpperCase();
+    const formatted = bytes.match(/.{4}/g)!.join('-');
     plaintext.push(formatted);
     hashes.push(hashRecoveryCode(formatted));
   }

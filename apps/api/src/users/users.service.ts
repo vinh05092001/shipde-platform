@@ -8,16 +8,8 @@ export interface AdminResetMfaDto {
   reason: string;
 }
 
-interface IdempotencyRecord {
-  targetUserId: string;
-  reason: string;
-  response: any;
-}
-
 @Injectable()
 export class UsersService {
-  private readonly idempotencyStore = new Map<string, IdempotencyRecord>();
-
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(SessionService) private readonly sessionService: SessionService
@@ -95,16 +87,16 @@ export class UsersService {
       );
     }
 
-    const cached = this.idempotencyStore.get(idempotencyKey);
-    if (cached) {
-      if (cached.targetUserId === targetUserId && cached.reason === dto.reason.trim()) {
-        return cached.response;
-      }
-      throw new CanonicalApiException(
-        HttpStatus.CONFLICT,
-        'IDEMPOTENCY_CONFLICT',
-        'Khóa Idempotency-Key đã được sử dụng cho một yêu cầu khác'
-      );
+    // Durable, tenant-scoped idempotency record (BR-AUTH-19): survives restarts and is shared
+    // across API instances. The unique (merchant_id, idempotency_key) index arbitrates races.
+    const replay = await this.findIdempotentReplay(
+      actor.merchantId,
+      idempotencyKey.trim(),
+      targetUserId,
+      dto.reason.trim()
+    );
+    if (replay) {
+      return replay;
     }
 
     // 6. Target lookup with strict tenant scoping (AC-AUTH-05-15 non-leaking FORBIDDEN)
@@ -144,87 +136,133 @@ export class UsersService {
     const now = new Date();
     const factorIds = targetFactors.map((f) => f.id);
 
-    const revokedSessionsCount = await this.prisma.$transaction(async (tx) => {
-      // A. Invalidate/Reset factors
-      await tx.mfaFactor.updateMany({
-        where: { id: { in: factorIds } },
-        data: {
-          status: 'RESET',
-          reset_at: now,
-          updated_by: actor.userId,
-        },
-      });
+    let response: any;
+    try {
+      response = await this.prisma.$transaction(async (tx) => {
+        // A. Invalidate/Reset factors
+        await tx.mfaFactor.updateMany({
+          where: { id: { in: factorIds } },
+          data: {
+            status: 'RESET',
+            reset_at: now,
+            updated_by: actor.userId,
+          },
+        });
 
-      // B. Delete/Invalidate recovery codes
-      await tx.mfaRecoveryCode.deleteMany({
-        where: { factor_id: { in: factorIds } },
-      });
+        // B. Delete/Invalidate recovery codes
+        await tx.mfaRecoveryCode.deleteMany({
+          where: { factor_id: { in: factorIds } },
+        });
 
-      // C. Invalidate outstanding MFA challenges
-      await tx.mfaChallenge.updateMany({
-        where: {
-          user_id: targetUserId,
-          consumed_at: null,
-          invalidated_at: null,
-        },
-        data: {
-          invalidated_at: now,
-        },
-      });
+        // C. Invalidate outstanding MFA challenges
+        await tx.mfaChallenge.updateMany({
+          where: {
+            user_id: targetUserId,
+            consumed_at: null,
+            invalidated_at: null,
+          },
+          data: {
+            invalidated_at: now,
+          },
+        });
 
-      // D. Revoke all target sessions using SessionService helper
-      const revokedCount = await this.sessionService.revokeTargetUserSessions(
-        targetUserId,
-        actor.merchantId,
-        actor.userId,
-        `Admin MFA Reset: ${dto.reason.trim()}`,
-        correlationId,
-        clientIp,
-        tx
-      );
+        // D. Revoke all target sessions using SessionService helper
+        const revokedCount = await this.sessionService.revokeTargetUserSessions(
+          targetUserId,
+          actor.merchantId,
+          actor.userId,
+          `Admin MFA Reset: ${dto.reason.trim()}`,
+          correlationId,
+          clientIp,
+          tx
+        );
 
-      // E. Write immutable audit log
-      await tx.auditLog.create({
-        data: {
-          merchant_id: actor.merchantId,
-          user_id: actor.userId,
-          action: 'AUTH_MFA_ADMIN_RESET',
-          entity_type: 'User',
-          entity_id: targetUserId,
-          reason: dto.reason.trim(),
-          ip_address: clientIp,
-          new_value: {
+        // E. Write immutable audit log
+        await tx.auditLog.create({
+          data: {
+            merchant_id: actor.merchantId,
+            user_id: actor.userId,
+            action: 'AUTH_MFA_ADMIN_RESET',
+            entity_type: 'User',
+            entity_id: targetUserId,
+            reason: dto.reason.trim(),
+            ip_address: clientIp,
+            new_value: {
+              target_user_id: targetUserId,
+              actor_user_id: actor.userId,
+              factors_reset_count: targetFactors.length,
+              revoked_sessions_count: revokedCount,
+              correlation_id: correlationId,
+            },
+          },
+        });
+
+        const result = {
+          data: {
             target_user_id: targetUserId,
-            actor_user_id: actor.userId,
-            factors_reset_count: targetFactors.length,
+            reset: true,
             revoked_sessions_count: revokedCount,
+            message: 'Đã đặt lại xác thực hai yếu tố cho người dùng thành công',
+          },
+          meta: {
             correlation_id: correlationId,
           },
-        },
+        };
+
+        // F. Persist the idempotency record in the same transaction as the effect.
+        await tx.mfaAdminResetIdempotency.create({
+          data: {
+            merchant_id: actor.merchantId,
+            idempotency_key: idempotencyKey.trim(),
+            actor_user_id: actor.userId,
+            target_user_id: targetUserId,
+            reason: dto.reason.trim(),
+            response: result,
+          },
+        });
+
+        return result;
       });
-
-      return revokedCount;
-    });
-
-    const response = {
-      data: {
-        target_user_id: targetUserId,
-        reset: true,
-        revoked_sessions_count: revokedSessionsCount,
-        message: 'Đã đặt lại xác thực hai yếu tố cho người dùng thành công',
-      },
-      meta: {
-        correlation_id: correlationId,
-      },
-    };
-
-    // Store in idempotency cache
-    this.idempotencyStore.set(idempotencyKey, {
-      targetUserId,
-      reason: dto.reason.trim(),
-      response,
-    });
+    } catch (err: any) {
+      // A concurrent request with the same key won the unique (merchant_id, idempotency_key) race.
+      if (err?.code === 'P2002') {
+        const replay = await this.findIdempotentReplay(
+          actor.merchantId,
+          idempotencyKey.trim(),
+          targetUserId,
+          dto.reason.trim()
+        );
+        if (replay) {
+          return replay;
+        }
+      }
+      throw err;
+    }
 
     return response;
+  }
+
+  private async findIdempotentReplay(
+    merchantId: string,
+    idempotencyKey: string,
+    targetUserId: string,
+    reason: string
+  ) {
+    const record = await this.prisma.mfaAdminResetIdempotency.findUnique({
+      where: {
+        merchant_id_idempotency_key: { merchant_id: merchantId, idempotency_key: idempotencyKey },
+      },
+    });
+    if (!record) {
+      return null;
+    }
+    if (record.target_user_id === targetUserId && record.reason === reason) {
+      return record.response;
+    }
+    throw new CanonicalApiException(
+      HttpStatus.CONFLICT,
+      'IDEMPOTENCY_CONFLICT',
+      'Khóa Idempotency-Key đã được sử dụng cho một yêu cầu khác'
+    );
   }
 }
