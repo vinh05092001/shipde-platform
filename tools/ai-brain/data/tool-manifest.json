@@ -427,7 +427,7 @@
     "roles": ["analyst"],
     "triggers": ["**/*.md", "**/*.txt", "docs/**"],
     "gate": false,
-    "command": null,
+    "command": "node tools/ai-brain/cli.js docs <library> <query> [--library-id <id>] [--json]",
     "installed": false,
     "evidenceRef": "docs/product-spec/docs/10-ai-collaboration/REPOSITORY-CLI-MANIFEST.md"
   },

@@ -3918,6 +3918,8 @@ async function runOrchestration(goal, opts) {
         files: contextPack.files.length,
         bytes: Buffer.byteLength(contextPack.content),
         tokens: contextTokens,
+        packer: contextPack.packer,
+        packerReason: contextPack.packerReason,
       };
       // The pack is the content actually attached to every item, including on resume.
       // An explicit item context requirement may request more, never less than this pack.
