@@ -4646,6 +4646,19 @@ function main(argv = process.argv.slice(2), deps = {}) {
       });
     return;
   }
+  // docs (GOAL-AUTOCLAW-REPOS-4): Context7 library docs lookup with source citations
+  if (command === 'docs') {
+    require('./context7')
+      .runDocsCli(process.argv.slice(3))
+      .then(
+        (code) => process.exit(code),
+        (err) => {
+          console.error(err.message);
+          process.exit(1);
+        }
+      );
+    return;
+  }
   // serena (TASK-AI-32): Serena read-only pilot for code retrieval
   // Symbol and reference lookup for authors, measured against TokenPerMergedItem
   if (command === 'serena') {
@@ -4932,7 +4945,7 @@ function main(argv = process.argv.slice(2), deps = {}) {
 
   console.error('Lệnh không rõ: ' + command);
   console.error(
-    'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | discovery | account | probe | qualify | serena | sources | evidence | review | orchestrate | intake | plan | next | merge | goal | priors refresh | chat | goal session'
+    'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | discovery | account | probe | qualify | serena | docs | sources | evidence | review | orchestrate | intake | plan | next | merge | goal | priors refresh | chat | goal session'
   );
   process.exit(2);
 }

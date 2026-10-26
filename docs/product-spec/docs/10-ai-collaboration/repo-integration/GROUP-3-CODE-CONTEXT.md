@@ -58,8 +58,8 @@ no new lifecycle or manifest entry is introduced.
     "verifiedAt": "2026-10-17T00:00:00.000Z",
     "verifiedBy": "codex",
     "registrationPending": false,
-    "requestedRef": "0.3.3",
-    "versionRef": "unresolved; requestedRef is specification inventory, not observed installation",
+    "requestedRef": "repomix@1.18.1",
+    "versionRef": "repomix 1.18.1 from npm, installed in an isolated prefix by tools/repomix/run.sh",
     "capability": "scoped files/dependencies context packing with token budget required",
     "caller": "tools/ai-brain/context-pack.js",
     "execution": "NOT_RUN",
@@ -71,16 +71,16 @@ no new lifecycle or manifest entry is introduced.
     "repo": "upstash/context7",
     "state": "DECLARED",
     "evidenceRef": "docs/product-spec/docs/10-ai-collaboration/REPOSITORY-CLI-MANIFEST.md",
-    "command": null,
+    "command": "node tools/ai-brain/cli.js docs <library> <query> [--library-id <id>] [--json]",
     "blocked": true,
     "blockedReason": "No complete integration execution evidence at an exact reviewed SHA; requested external behavior remains unverified.",
     "verifiedAt": "2026-10-17T00:00:00.000Z",
     "verifiedBy": "codex",
     "registrationPending": false,
     "requestedRef": "ctx7@0.5.9",
-    "versionRef": "unresolved; requestedRef is specification inventory, not observed installation",
+    "versionRef": "ctx7 0.5.9 from npm, run pinned through npx by tools/ai-brain/context7.js",
     "capability": "library/version docs lookup with citations",
-    "caller": "tools/ai-brain/data/tool-manifest.json",
+    "caller": "tools/ai-brain/context7.js",
     "execution": "NOT_RUN",
     "acceptance": "PENDING"
   },
@@ -192,3 +192,36 @@ and CSV has no Prettier parser. PR contract was intentionally not run before com
   through a destructured CommonJS `require` are not resolved by the TypeScript language
   server. The regex lookups in `serena.js` stay as the offline fallback. State stays
   `DECLARED` until a reviewed merged SHA.
+
+### Repomix wiring 2026-10-22
+
+- Trigger: the Controller context pack (`orchestrate.js` with `enableContextPack` or
+  `contextManifest`) and `node tools/ai-brain/context-pack.js --spec <file> --output <file>`.
+- Caller: `tools/ai-brain/context-pack.js` resolves repomix from `SHIPDE_REPOMIX_BIN` or the
+  workspace `node_modules/.bin`, packs only the Work Item allowed/cited files, and now returns
+  `packer` (`repomix` or `fallback`) with `packerReason`; the orchestrator log records both.
+  Before this change repomix was not installed anywhere the caller looked, so every pack was
+  the silent plain-text fallback.
+- Live proof: `pnpm test:context-pack` (CI step in `ai-brain-tests.yml`) installs pinned
+  repomix 1.18.1 in an isolated npm prefix and packs two scoped files through the real caller.
+  Local result: `REPOMIX_CONTEXT_PACK: repomix 1.18.1, packer=repomix, files=2, bytes=11301`,
+  exit 0. Without the binary the proof exits 1 with `REPOMIX_NOT_INSTALLED`.
+- Limitation: production orchestrator runs use repomix only when `SHIPDE_REPOMIX_BIN` is set
+  or repomix is in the workspace; otherwise the log now shows `packer: fallback`. Token budget
+  is still enforced by byte limits, not by repomix token counting. State stays `DECLARED`
+  until a reviewed merged SHA.
+
+### Context7 wiring 2026-10-22
+
+- Trigger: `node tools/ai-brain/cli.js docs <library> <query>` when a task needs a library API
+  the author is unsure of.
+- Caller: `tools/ai-brain/context7.js` runs the anonymous ctx7 CLI 0.5.9 (pinned through
+  `npx`, or `SHIPDE_CTX7_BIN`): `library` resolves the ID (Context7's own first-ranked match
+  unless `--library-id` is given), `docs` returns snippets. Only snippets with a source URL are
+  kept, so every answer carries citations. Outcomes `CONTEXT7_UNAVAILABLE`,
+  `CONTEXT7_LIBRARY_NOT_FOUND` and `CONTEXT7_NO_CITED_DOCS` stay distinct and exit 1.
+- Live run: `docs prisma migrate deploy in CI` returned `/websites/prisma_io` with 5 cited
+  snippets from prisma.io, exit 0. A missing binary gave `CONTEXT7_UNAVAILABLE`, exit 1.
+- Limitation: no login and no key, so the anonymous rate limit applies; no CI step, because
+  an external service must not decide a merge gate. State stays `DECLARED` until a reviewed
+  merged SHA.

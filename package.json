@@ -41,6 +41,7 @@
     "test:load": "bash tools/k6/run-health-smoke.sh",
     "test:prompts": "bash tools/controller-eval/run.sh",
     "test:specs": "bash tools/openspec-check/run.sh",
+    "test:context-pack": "bash tools/repomix/run.sh",
     "lint:ast": "ast-grep test --skip-snapshot-tests && ast-grep scan apps packages",
     "security:semgrep": "semgrep --test tools/semgrep/rules && semgrep scan --config tools/semgrep/rules --error --metrics=off apps packages",
     "verify:inventory": "tsx scripts/verify-inventory.ts",

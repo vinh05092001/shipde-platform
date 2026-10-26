@@ -62,6 +62,21 @@ function assertPackSize(files, root, options = {}) {
   }
 }
 
+// The repomix binary comes from SHIPDE_REPOMIX_BIN (set by tools/repomix/run.sh,
+// which installs the pinned version in an isolated npm prefix) or from the
+// workspace node_modules. Callers learn which packer actually produced the pack.
+function resolveRepomix(root, env = process.env) {
+  const bin = process.platform === 'win32' ? 'repomix.cmd' : 'repomix';
+  const candidates = [env.SHIPDE_REPOMIX_BIN, path.join(root, 'node_modules', '.bin', bin)];
+  return candidates.find((candidate) => candidate && fs.existsSync(candidate)) || null;
+}
+
+function fallbackReason(repomix, includeArg, attempted) {
+  if (!repomix) return 'REPOMIX_NOT_INSTALLED';
+  if (includeArg.length > 4000) return 'INCLUDE_ARG_TOO_LONG';
+  return attempted ? 'REPOMIX_FAILED' : 'REPOMIX_SKIPPED';
+}
+
 function createContextPack(items, options = {}) {
   const root = path.resolve(options.root || process.cwd());
   const requestedOutput = options.output ? path.resolve(options.output) : null;
@@ -81,24 +96,24 @@ function createContextPack(items, options = {}) {
     'utf8'
   );
   const includeArg = manifest.join(',');
-  const repomix = path.join(
-    root,
-    'node_modules',
-    '.bin',
-    process.platform === 'win32' ? 'repomix.cmd' : 'repomix'
-  );
+  const repomix = resolveRepomix(root);
   let content = null;
-  if (fs.existsSync(repomix) && includeArg.length <= 4000) {
+  let attempted = false;
+  if (repomix && includeArg.length <= 4000) {
+    attempted = true;
     const result = cp.spawnSync(repomix, ['--include', includeArg, '--output', output], {
       cwd: root,
       encoding: 'utf8',
       timeout: 120000,
       windowsHide: true,
+      shell: process.platform === 'win32',
     });
     if (result.status === 0 && fs.existsSync(output)) {
       content = fs.readFileSync(output, 'utf8');
     }
   }
+  const packer = content ? 'repomix' : 'fallback';
+  const packerReason = content ? null : fallbackReason(repomix, includeArg, attempted);
   if (!content) {
     content =
       '# Focused context pack\n\n' +
@@ -115,7 +130,7 @@ function createContextPack(items, options = {}) {
     JSON.stringify({ files: manifest, createdAt: new Date().toISOString() }, null, 2) + '\n',
     'utf8'
   );
-  return { path: output, files: manifest, content };
+  return { path: output, files: manifest, content, packer, packerReason };
 }
 
 async function createContextPackAsync(items, options = {}) {
@@ -138,14 +153,11 @@ async function createContextPackAsync(items, options = {}) {
     'utf8'
   );
   const includeArg = manifest.join(',');
-  const repomix = path.join(
-    root,
-    'node_modules',
-    '.bin',
-    process.platform === 'win32' ? 'repomix.cmd' : 'repomix'
-  );
+  const repomix = resolveRepomix(root);
   let content = null;
-  if (fs.existsSync(repomix) && includeArg.length <= 4000) {
+  let attempted = false;
+  if (repomix && includeArg.length <= 4000) {
+    attempted = true;
     const timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : 120000;
     const completed = await new Promise((resolve) => {
       let settled = false;
@@ -175,6 +187,8 @@ async function createContextPackAsync(items, options = {}) {
       content = await fs.promises.readFile(output, 'utf8');
     }
   }
+  const packer = content ? 'repomix' : 'fallback';
+  const packerReason = content ? null : fallbackReason(repomix, includeArg, attempted);
   if (!content) {
     const sections = [];
     for (const file of manifest) {
@@ -187,10 +201,10 @@ async function createContextPackAsync(items, options = {}) {
     content = '# Focused context pack\n\n' + sections.join('\n\n');
     await fs.promises.writeFile(output, content, 'utf8');
   }
-  return { path: output, files: manifest, content };
+  return { path: output, files: manifest, content, packer, packerReason };
 }
 
-module.exports = { createContextPack, createContextPackAsync, safeRelative };
+module.exports = { createContextPack, createContextPackAsync, resolveRepomix, safeRelative };
 
 if (require.main === module) {
   const args = process.argv.slice(2);
