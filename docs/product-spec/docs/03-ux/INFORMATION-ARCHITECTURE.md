@@ -44,6 +44,7 @@
 |---|---|---|
 | SCR-AUTH-01 | /login | Đăng nhập |
 | SCR-AUTH-02 | /register | Đăng ký |
+| SCR-AUTH-03 | /settings/security | Bảo mật tài khoản (MFA) |
 | SCR-ONB-01 | /onboarding | Thiết lập ban đầu |
 | SCR-DASH-01 | /dashboard | Tổng quan theo vai trò |
 | SCR-USR-01 | /settings/users | Người dùng |

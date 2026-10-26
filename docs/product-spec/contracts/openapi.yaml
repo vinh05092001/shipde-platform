@@ -336,6 +336,187 @@ paths:
         '429':
           description: OTP_MAX_ATTEMPTS_EXCEEDED or RATE_LIMITED
           $ref: '#/components/responses/RateLimited'
+  /auth/mfa/status:
+    get:
+      tags: [Auth]
+      summary: Get MFA enrollment and recovery status (API-AUTH-MFA-STATUS, FEAT-AUTH-05)
+      operationId: getMfaStatus
+      responses:
+        '200':
+          description: Current MFA status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MfaStatusResponse'
+        '401':
+          $ref: '#/components/responses/Error'
+  /auth/mfa/setup:
+    post:
+      tags: [Auth]
+      summary: Initiate authenticator-app TOTP enrollment (API-AUTH-MFA-SETUP, FEAT-AUTH-05)
+      operationId: startMfaSetup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MfaSetupRequest'
+      responses:
+        '200':
+          description: Provisioning URI and manual secret key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MfaSetupResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '409':
+          description: MFA already active
+          $ref: '#/components/responses/Error'
+  /auth/mfa/setup/verify:
+    post:
+      tags: [Auth]
+      summary: Verify TOTP and activate MFA factor (API-AUTH-MFA-SETUP-VERIFY, FEAT-AUTH-05)
+      operationId: verifyMfaSetup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MfaSetupVerifyRequest'
+      responses:
+        '200':
+          description: Factor activated, returns 10 recovery codes and authenticated session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MfaSetupVerifyResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '409':
+          description: Activation conflict
+          $ref: '#/components/responses/Error'
+        '410':
+          description: Setup expired
+          $ref: '#/components/responses/Error'
+  /auth/mfa/challenge/verify:
+    post:
+      tags: [Auth]
+      summary: Verify TOTP login challenge (API-AUTH-MFA-CHALLENGE-VERIFY, FEAT-AUTH-05)
+      operationId: verifyMfaChallenge
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MfaChallengeVerifyRequest'
+      responses:
+        '200':
+          description: Session issued with auth_assurance=MFA
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          description: Invalid TOTP code
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '410':
+          description: Challenge expired or consumed
+          $ref: '#/components/responses/Error'
+        '429':
+          description: Rate limited (challenge or IP threshold)
+          $ref: '#/components/responses/RateLimited'
+  /auth/mfa/recovery/verify:
+    post:
+      tags: [Auth]
+      summary: Verify recovery code and issue session (API-AUTH-MFA-RECOVERY-VERIFY, FEAT-AUTH-05)
+      operationId: verifyMfaRecovery
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MfaRecoveryVerifyRequest'
+      responses:
+        '200':
+          description: Code consumed and session issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MfaRecoveryVerifyResponse'
+        '400':
+          description: Invalid or already consumed recovery code
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '410':
+          description: Challenge expired or consumed
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /auth/mfa/recovery-codes/regenerate:
+    post:
+      tags: [Auth]
+      summary: Regenerate recovery codes (API-AUTH-MFA-RECOVERY-REGENERATE, FEAT-AUTH-05)
+      operationId: regenerateMfaRecoveryCodes
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MfaRegenerateRecoveryCodesRequest'
+      responses:
+        '200':
+          description: 10 new one-time recovery codes displayed once
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MfaRegenerateRecoveryCodesResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+  /users/{user_id}/mfa/reset:
+    post:
+      tags: [Users]
+      summary: Admin reset user MFA factor (API-AUTH-MFA-ADMIN-RESET, FEAT-AUTH-05)
+      operationId: adminResetUserMfa
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MfaAdminResetRequest'
+      responses:
+        '200':
+          description: Factor reset and sessions revoked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MfaAdminResetResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          description: Idempotency conflict
+          $ref: '#/components/responses/Error'
   /me:
     get:
       tags: [Auth]
@@ -1325,3 +1506,178 @@ components:
           additionalProperties:
             type: string
             enum: [up, down]
+
+    MfaStatusResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          required: [status, required, recovery_codes_remaining]
+          properties:
+            status:
+              type: string
+              enum: [NOT_ENROLLED, PENDING, ACTIVE, RESET]
+            required:
+              type: boolean
+            recovery_codes_remaining:
+              type: integer
+              minimum: 0
+            mfa_verified_at:
+              type: string
+              format: date-time
+              nullable: true
+        meta:
+          $ref: '#/components/schemas/Meta'
+    MfaSetupRequest:
+      type: object
+      required: [password]
+      properties:
+        password:
+          type: string
+    MfaSetupResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          required: [secret_key, provisioning_uri, expires_at, expires_in_seconds]
+          properties:
+            secret_key:
+              type: string
+            provisioning_uri:
+              type: string
+            expires_at:
+              type: string
+              format: date-time
+            expires_in_seconds:
+              type: integer
+        meta:
+          $ref: '#/components/schemas/Meta'
+    MfaSetupVerifyRequest:
+      type: object
+      required: [code]
+      properties:
+        code:
+          type: string
+          pattern: '^[0-9]{6}$'
+    MfaSetupVerifyResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          required: [status, recovery_codes, access_token, expires_in, user, merchant]
+          properties:
+            status:
+              type: string
+              enum: [AUTHENTICATED]
+            recovery_codes:
+              type: array
+              items:
+                type: string
+              minItems: 10
+              maxItems: 10
+            access_token:
+              type: string
+            expires_in:
+              type: integer
+            user:
+              $ref: '#/components/schemas/AuthenticatedUser'
+            merchant:
+              $ref: '#/components/schemas/AuthenticatedMerchant'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    MfaChallengeVerifyRequest:
+      type: object
+      required: [challenge_id, code]
+      properties:
+        challenge_id:
+          type: string
+        code:
+          type: string
+          pattern: '^[0-9]{6}$'
+    MfaRecoveryVerifyRequest:
+      type: object
+      required: [challenge_id, recovery_code]
+      properties:
+        challenge_id:
+          type: string
+        recovery_code:
+          type: string
+    MfaRecoveryVerifyResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          required: [status, access_token, expires_in, recovery_codes_remaining, user, merchant]
+          properties:
+            status:
+              type: string
+              enum: [AUTHENTICATED]
+            access_token:
+              type: string
+            expires_in:
+              type: integer
+            recovery_codes_remaining:
+              type: integer
+              minimum: 0
+            user:
+              $ref: '#/components/schemas/AuthenticatedUser'
+            merchant:
+              $ref: '#/components/schemas/AuthenticatedMerchant'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    MfaRegenerateRecoveryCodesRequest:
+      type: object
+      required: [password, code]
+      properties:
+        password:
+          type: string
+        code:
+          type: string
+          pattern: '^[0-9]{6}$'
+    MfaRegenerateRecoveryCodesResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          required: [recovery_codes]
+          properties:
+            recovery_codes:
+              type: array
+              items:
+                type: string
+              minItems: 10
+              maxItems: 10
+        meta:
+          $ref: '#/components/schemas/Meta'
+    MfaAdminResetRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          minLength: 1
+    MfaAdminResetResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          required: [target_user_id, reset, revoked_sessions_count, message]
+          properties:
+            target_user_id:
+              type: string
+              format: uuid
+            reset:
+              type: boolean
+            revoked_sessions_count:
+              type: integer
+              minimum: 0
+            message:
+              type: string
+        meta:
+          $ref: '#/components/schemas/Meta'

@@ -1,6 +1,8 @@
 import {
   Controller,
   Post,
+  Get,
+  UseGuards,
   Body,
   Req,
   Res,
@@ -23,9 +25,15 @@ import {
   LoginDto,
   LoginOtpRequestDto,
   LoginOtpVerifyDto,
+  MfaSetupDto,
+  MfaSetupVerifyDto,
+  MfaChallengeVerifyDto,
+  MfaRecoveryVerifyDto,
+  MfaRegenerateRecoveryCodesDto,
 } from './auth.service';
 import { CanonicalExceptionFilter } from './canonical-exception.filter';
 import { normalizeCorrelationId } from '@shipde/config';
+import { SessionGuard } from '../session/session.guard';
 
 @Controller('auth')
 @UseFilters(CanonicalExceptionFilter)
@@ -168,5 +176,92 @@ export class AuthController {
     const clientIp = extractClientIp(req);
     const result = await this.authService.verifyLoginOtp(dto, clientIp, correlationId);
     return res.status(HttpStatus.OK).json(result);
+  }
+
+  /**
+   * GET /auth/mfa/status (API-AUTH-MFA-STATUS, FEAT-AUTH-05)
+   */
+  @Get('mfa/status')
+  @UseGuards(SessionGuard)
+  @HttpCode(HttpStatus.OK)
+  async getMfaStatus(@Req() req: any): Promise<any> {
+    const correlationId = (req as any).correlationId || normalizeCorrelationId();
+    const userId = req.userId as string;
+    const merchantId = req.merchantId as string;
+    const role = req.userRole || req.jwtClaims?.role;
+    return this.authService.getMfaStatus(userId, merchantId, role, correlationId);
+  }
+
+  /**
+   * POST /auth/mfa/setup (API-AUTH-MFA-SETUP, FEAT-AUTH-05)
+   */
+  @Post('mfa/setup')
+  @UseGuards(SessionGuard)
+  @HttpCode(HttpStatus.OK)
+  async startMfaSetup(@Body() dto: MfaSetupDto, @Req() req: any): Promise<any> {
+    const correlationId = (req as any).correlationId || normalizeCorrelationId();
+    const clientIp = extractClientIp(req);
+    const userId = req.userId as string;
+    const merchantId = req.merchantId as string;
+    return this.authService.startMfaSetup(userId, merchantId, dto, clientIp, correlationId);
+  }
+
+  /**
+   * POST /auth/mfa/setup/verify (API-AUTH-MFA-SETUP-VERIFY, FEAT-AUTH-05)
+   */
+  @Post('mfa/setup/verify')
+  @UseGuards(SessionGuard)
+  @HttpCode(HttpStatus.OK)
+  async verifyMfaSetup(@Body() dto: MfaSetupVerifyDto, @Req() req: any): Promise<any> {
+    const correlationId = (req as any).correlationId || normalizeCorrelationId();
+    const clientIp = extractClientIp(req);
+    const userId = req.userId as string;
+    const merchantId = req.merchantId as string;
+    return this.authService.verifyMfaSetup(userId, merchantId, dto, clientIp, correlationId);
+  }
+
+  /**
+   * POST /auth/mfa/challenge/verify (API-AUTH-MFA-CHALLENGE-VERIFY, FEAT-AUTH-05)
+   */
+  @Post('mfa/challenge/verify')
+  @HttpCode(HttpStatus.OK)
+  async verifyMfaChallenge(@Body() dto: MfaChallengeVerifyDto, @Req() req: Request): Promise<any> {
+    const correlationId = (req as any).correlationId || normalizeCorrelationId();
+    const clientIp = extractClientIp(req);
+    return this.authService.verifyMfaChallenge(dto, clientIp, correlationId);
+  }
+
+  /**
+   * POST /auth/mfa/recovery/verify (API-AUTH-MFA-RECOVERY-VERIFY, FEAT-AUTH-05)
+   */
+  @Post('mfa/recovery/verify')
+  @HttpCode(HttpStatus.OK)
+  async verifyMfaRecovery(@Body() dto: MfaRecoveryVerifyDto, @Req() req: Request): Promise<any> {
+    const correlationId = (req as any).correlationId || normalizeCorrelationId();
+    const clientIp = extractClientIp(req);
+    return this.authService.verifyMfaRecovery(dto, clientIp, correlationId);
+  }
+
+  /**
+   * POST /auth/mfa/recovery-codes/regenerate (API-AUTH-MFA-RECOVERY-REGENERATE, FEAT-AUTH-05)
+   */
+  @Post('mfa/recovery-codes/regenerate')
+  @UseGuards(SessionGuard)
+  @HttpCode(HttpStatus.OK)
+  async regenerateRecoveryCodes(
+    @Body() dto: MfaRegenerateRecoveryCodesDto,
+    @Req() req: any
+  ): Promise<any> {
+    const correlationId = (req as any).correlationId || normalizeCorrelationId();
+    const clientIp = extractClientIp(req);
+    const userId = req.userId as string;
+    const merchantId = req.merchantId as string;
+    return this.authService.regenerateRecoveryCodes(
+      userId,
+      merchantId,
+      dto,
+      clientIp,
+      correlationId
+    );
   }
 }

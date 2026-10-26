@@ -4,30 +4,21 @@ import {
   Inject,
   Injectable,
   UnauthorizedException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { Request } from 'express';
 import { SessionService } from './session.service';
+import { verifyAccessToken, resolveAccessTokenSecret } from '../auth/token.util';
 
 /**
- * Lightweight session-based auth guard for FEAT-AUTH-06.
- *
- * Reads a `session_token` from the `Authorization: Bearer <token>` header,
- * hashes it, and validates it against DeviceSession table.
- *
- * On success, attaches userId, merchantId, sessionId, and sessionTokenHash
- * to the request object for downstream use.
- *
- * When FEAT-AUTH-03 (login + JWT) merges, this guard will be upgraded to
- * validate JWT claims first, then resolve the session from the JWT payload.
+ * Session and Access-Token Auth Guard.
+ * Supports:
+ * 1. Standard active device sessions via SHA-256 token hash.
+ * 2. Setup-only tokens (FEAT-AUTH-05 AC-AUTH-05-12) for bounded MFA enrollment.
+ * 3. Attaches userId, merchantId, sessionId, authAssurance, and mfaVerifiedAt to req.
  */
 @Injectable()
 export class SessionGuard implements CanActivate {
-  // Explicit @Inject, like every other injectable in this app. The test and
-  // dev paths run through tsx, and esbuild does not emit decorator metadata
-  // whatever tsconfig says, so Nest has no parameter type to resolve and
-  // hands the constructor undefined. The guard then died on
-  // `this.sessionService.validateSession` with a 500 that read as an auth
-  // failure rather than a wiring one.
   constructor(@Inject(SessionService) private readonly sessionService: SessionService) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -55,6 +46,54 @@ export class SessionGuard implements CanActivate {
       });
     }
 
+    // Check if it's a signed JWT (v1.<payload>.<signature>)
+    if (rawToken.startsWith('v1.')) {
+      try {
+        const secret = resolveAccessTokenSecret(process.env.AUTH_TOKEN_SECRET);
+        const claims = verifyAccessToken(rawToken, secret);
+
+        if (claims.scope === 'setup') {
+          // Bounded setup token (AC-AUTH-05-12)
+          const url = req.originalUrl || req.url || '';
+          const isAllowedSetupRoute =
+            url.includes('/auth/mfa/status') ||
+            url.includes('/auth/mfa/setup') ||
+            url.includes('/auth/logout');
+
+          if (!isAllowedSetupRoute) {
+            throw new ForbiddenException({
+              error: {
+                code: 'FORBIDDEN',
+                message:
+                  'Tài khoản của bạn bắt buộc phải hoàn tất thiết lập MFA trước khi truy cập ứng dụng',
+                retryable: false,
+                next_action: 'Vui lòng hoàn thành thiết lập xác thực hai yếu tố',
+              },
+            });
+          }
+
+          (req as any).userId = claims.sub;
+          (req as any).merchantId = claims.mid;
+          (req as any).userRole = claims.role;
+          (req as any).isSetupOnly = true;
+          return true;
+        }
+
+        // For non-setup tokens, continue to validate against DeviceSession
+        (req as any).jwtClaims = claims;
+      } catch (err: any) {
+        if (err instanceof ForbiddenException) throw err;
+        throw new UnauthorizedException({
+          error: {
+            code: 'SESSION_INVALID',
+            message: 'Phiên đăng nhập đã hết hạn hoặc không hợp lệ',
+            retryable: false,
+            next_action: 'Vui lòng đăng nhập lại',
+          },
+        });
+      }
+    }
+
     const { createHash } = await import('node:crypto');
     const tokenHash = createHash('sha256').update(rawToken).digest('hex');
 
@@ -75,6 +114,8 @@ export class SessionGuard implements CanActivate {
     (req as any).merchantId = session.merchantId;
     (req as any).sessionId = session.sessionId;
     (req as any).sessionTokenHash = tokenHash;
+    (req as any).authAssurance = session.authAssurance;
+    (req as any).mfaVerifiedAt = session.mfaVerifiedAt;
 
     return true;
   }

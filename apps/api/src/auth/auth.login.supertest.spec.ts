@@ -28,9 +28,11 @@ import { seedDatabase, SEED_MERCHANT_ID } from '../../../../infra/docker/seed';
  * Covers AC-AUTH-01-01..15; AC-AUTH-01-16 is covered by `pnpm contract:check` in CI.
  */
 const TEST_PASSWORD = 'TestPassword123!'; // Documented test-only seed credential (see work item)
-const OWNER_ID = 'b0000000-0000-0000-0000-000000000001';
-const OWNER_EMAIL = 'owner@shipde.vn';
-const OWNER_PHONE = '0901234567';
+// FEAT-AUTH-05: OWNER logins now require MFA enrollment (BR-AUTH-18), so the primary-login
+// fixture is an optional-role (no forced MFA) user that this suite creates itself.
+const OWNER_ID = 'b0000000-0000-0000-0000-0000000000a1';
+const OWNER_EMAIL = 'login-subject@shipde.vn';
+const OWNER_PHONE = '0909999501';
 const PENDING_EMAIL = 'pending@shipde.vn';
 const OPS_EMAIL = 'ops@shipde.vn';
 const ACCOUNTANT_EMAIL = 'accountant@shipde.vn';
@@ -138,6 +140,25 @@ async function runAuthLoginSupertestSuite() {
 
   // Deterministic fixtures: owner@shipde.vn (active, verified email+phone), pending@shipde.vn, etc.
   await seedDatabase(prisma);
+  const verifiedAt = new Date('2026-09-01T00:00:00Z');
+  const subjectData = {
+    merchant_id: SEED_MERCHANT_ID,
+    email: OWNER_EMAIL,
+    phone: OWNER_PHONE,
+    full_name: 'Login Subject',
+    password_hash: await hashPassword(TEST_PASSWORD),
+    role: RoleEnum.OPS_CSKH,
+    status: 'active',
+    email_verified_at: verifiedAt,
+    phone_verified_at: verifiedAt,
+    terms_accepted_at: verifiedAt,
+    terms_version: '2026.1',
+  };
+  await prisma.user.upsert({
+    where: { id: OWNER_ID },
+    update: subjectData,
+    create: { id: OWNER_ID, ...subjectData },
+  });
 
   const testSuffix = `${Date.now().toString().slice(-6)}${Math.floor(Math.random() * 900 + 100)}`;
   const ipFor = (n: number) => `203.0.113.${n}`;
@@ -177,7 +198,7 @@ async function runAuthLoginSupertestSuite() {
     assert.ok(res1.body.data.access_token, 'access_token must be present');
     assert.strictEqual(res1.body.data.expires_in, 43200);
     assert.strictEqual(res1.body.data.user.id, OWNER_ID);
-    assert.strictEqual(res1.body.data.user.role, 'OWNER');
+    assert.strictEqual(res1.body.data.user.role, 'OPS_CSKH');
     assert.strictEqual(res1.body.data.user.status, 'ACTIVE');
     assert.strictEqual(res1.body.data.user.email, OWNER_EMAIL);
     assert.strictEqual(res1.body.data.merchant.business_code, 'SHOP_DEMO_01');
@@ -190,7 +211,7 @@ async function runAuthLoginSupertestSuite() {
     );
     assert.strictEqual(claims1.sub, OWNER_ID);
     assert.strictEqual(claims1.mid, SEED_MERCHANT_ID);
-    assert.strictEqual(claims1.role, 'OWNER');
+    assert.strictEqual(claims1.role, 'OPS_CSKH');
     assert.strictEqual(claims1.st, 'active');
     assert.ok(claims1.exp > claims1.iat, 'token expiry must be in the future');
     const session1 = await prisma.deviceSession.findUnique({ where: { id: claims1.sid } });
@@ -401,7 +422,7 @@ async function runAuthLoginSupertestSuite() {
     assert.strictEqual(res9.body.data.status, 'OTP_SENT');
     assert.strictEqual(res9.body.data.channel, 'phone');
     assert.ok(
-      res9.body.data.recipient_masked.startsWith('0901'),
+      res9.body.data.recipient_masked.startsWith('0909'),
       'masked recipient must hint at the real phone tail'
     );
     assert.strictEqual(res9.body.data.cooldown_seconds, 60);
@@ -436,7 +457,7 @@ async function runAuthLoginSupertestSuite() {
     collectedBodies.push(res10.body);
     assert.strictEqual(res10.body.data.status, 'AUTHENTICATED');
     assert.strictEqual(res10.body.data.user.id, OWNER_ID);
-    assert.strictEqual(res10.body.data.user.role, 'OWNER');
+    assert.strictEqual(res10.body.data.user.role, 'OPS_CSKH');
     assert.ok(res10.body.data.access_token);
     const claims10 = verifyAccessToken(
       res10.body.data.access_token,

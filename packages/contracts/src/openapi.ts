@@ -346,6 +346,125 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/auth/mfa/status': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get MFA enrollment and recovery status (API-AUTH-MFA-STATUS, FEAT-AUTH-05) */
+    get: operations['getMfaStatus'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/auth/mfa/setup': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Initiate authenticator-app TOTP enrollment (API-AUTH-MFA-SETUP, FEAT-AUTH-05) */
+    post: operations['startMfaSetup'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/auth/mfa/setup/verify': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Verify TOTP and activate MFA factor (API-AUTH-MFA-SETUP-VERIFY, FEAT-AUTH-05) */
+    post: operations['verifyMfaSetup'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/auth/mfa/challenge/verify': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Verify TOTP login challenge (API-AUTH-MFA-CHALLENGE-VERIFY, FEAT-AUTH-05) */
+    post: operations['verifyMfaChallenge'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/auth/mfa/recovery/verify': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Verify recovery code and issue session (API-AUTH-MFA-RECOVERY-VERIFY, FEAT-AUTH-05) */
+    post: operations['verifyMfaRecovery'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/auth/mfa/recovery-codes/regenerate': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Regenerate recovery codes (API-AUTH-MFA-RECOVERY-REGENERATE, FEAT-AUTH-05) */
+    post: operations['regenerateMfaRecoveryCodes'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/users/{user_id}/mfa/reset': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Admin reset user MFA factor (API-AUTH-MFA-ADMIN-RESET, FEAT-AUTH-05) */
+    post: operations['adminResetUserMfa'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/me': {
     parameters: {
       query?: never;
@@ -993,6 +1112,88 @@ export interface components {
         [key: string]: 'up' | 'down';
       };
     };
+    MfaStatusResponse: {
+      data: {
+        /** @enum {string} */
+        status: 'NOT_ENROLLED' | 'PENDING' | 'ACTIVE' | 'RESET';
+        required: boolean;
+        recovery_codes_remaining: number;
+        /** Format: date-time */
+        mfa_verified_at?: string | null;
+      };
+      meta: components['schemas']['Meta'];
+    };
+    MfaSetupRequest: {
+      password: string;
+    };
+    MfaSetupResponse: {
+      data: {
+        secret_key: string;
+        provisioning_uri: string;
+        /** Format: date-time */
+        expires_at: string;
+        expires_in_seconds: number;
+      };
+      meta: components['schemas']['Meta'];
+    };
+    MfaSetupVerifyRequest: {
+      code: string;
+    };
+    MfaSetupVerifyResponse: {
+      data: {
+        /** @enum {string} */
+        status: 'AUTHENTICATED';
+        recovery_codes: string[];
+        access_token: string;
+        expires_in: number;
+        user: components['schemas']['AuthenticatedUser'];
+        merchant: components['schemas']['AuthenticatedMerchant'];
+      };
+      meta: components['schemas']['Meta'];
+    };
+    MfaChallengeVerifyRequest: {
+      challenge_id: string;
+      code: string;
+    };
+    MfaRecoveryVerifyRequest: {
+      challenge_id: string;
+      recovery_code: string;
+    };
+    MfaRecoveryVerifyResponse: {
+      data: {
+        /** @enum {string} */
+        status: 'AUTHENTICATED';
+        access_token: string;
+        expires_in: number;
+        recovery_codes_remaining: number;
+        user: components['schemas']['AuthenticatedUser'];
+        merchant: components['schemas']['AuthenticatedMerchant'];
+      };
+      meta: components['schemas']['Meta'];
+    };
+    MfaRegenerateRecoveryCodesRequest: {
+      password: string;
+      code: string;
+    };
+    MfaRegenerateRecoveryCodesResponse: {
+      data: {
+        recovery_codes: string[];
+      };
+      meta: components['schemas']['Meta'];
+    };
+    MfaAdminResetRequest: {
+      reason: string;
+    };
+    MfaAdminResetResponse: {
+      data: {
+        /** Format: uuid */
+        target_user_id: string;
+        reset: boolean;
+        revoked_sessions_count: number;
+        message: string;
+      };
+      meta: components['schemas']['Meta'];
+    };
   };
   responses: {
     /** @description Canonical error */
@@ -1277,6 +1478,205 @@ export interface operations {
       410: components['responses']['Error'];
       /** @description OTP_MAX_ATTEMPTS_EXCEEDED or RATE_LIMITED */
       429: components['responses']['RateLimited'];
+    };
+  };
+  getMfaStatus: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Current MFA status */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['MfaStatusResponse'];
+        };
+      };
+      401: components['responses']['Error'];
+    };
+  };
+  startMfaSetup: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['MfaSetupRequest'];
+      };
+    };
+    responses: {
+      /** @description Provisioning URI and manual secret key */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['MfaSetupResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['Error'];
+      /** @description MFA already active */
+      409: components['responses']['Error'];
+    };
+  };
+  verifyMfaSetup: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['MfaSetupVerifyRequest'];
+      };
+    };
+    responses: {
+      /** @description Factor activated, returns 10 recovery codes and authenticated session */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['MfaSetupVerifyResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      /** @description Activation conflict */
+      409: components['responses']['Error'];
+      /** @description Setup expired */
+      410: components['responses']['Error'];
+    };
+  };
+  verifyMfaChallenge: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['MfaChallengeVerifyRequest'];
+      };
+    };
+    responses: {
+      /** @description Session issued with auth_assurance=MFA */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AuthResponse'];
+        };
+      };
+      /** @description Invalid TOTP code */
+      400: components['responses']['Error'];
+      401: components['responses']['Error'];
+      /** @description Challenge expired or consumed */
+      410: components['responses']['Error'];
+      /** @description Rate limited (challenge or IP threshold) */
+      429: components['responses']['RateLimited'];
+    };
+  };
+  verifyMfaRecovery: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['MfaRecoveryVerifyRequest'];
+      };
+    };
+    responses: {
+      /** @description Code consumed and session issued */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['MfaRecoveryVerifyResponse'];
+        };
+      };
+      /** @description Invalid or already consumed recovery code */
+      400: components['responses']['Error'];
+      401: components['responses']['Error'];
+      /** @description Challenge expired or consumed */
+      410: components['responses']['Error'];
+      429: components['responses']['RateLimited'];
+    };
+  };
+  regenerateMfaRecoveryCodes: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['MfaRegenerateRecoveryCodesRequest'];
+      };
+    };
+    responses: {
+      /** @description 10 new one-time recovery codes displayed once */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['MfaRegenerateRecoveryCodesResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['Error'];
+    };
+  };
+  adminResetUserMfa: {
+    parameters: {
+      query?: never;
+      header: {
+        'Idempotency-Key': components['parameters']['IdempotencyKey'];
+      };
+      path: {
+        user_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['MfaAdminResetRequest'];
+      };
+    };
+    responses: {
+      /** @description Factor reset and sessions revoked */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['MfaAdminResetResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['Error'];
+      403: components['responses']['Error'];
+      404: components['responses']['Error'];
+      /** @description Idempotency conflict */
+      409: components['responses']['Error'];
     };
   };
   getMe: {
