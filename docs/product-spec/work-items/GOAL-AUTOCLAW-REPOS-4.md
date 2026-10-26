@@ -95,3 +95,9 @@ None.
   - The first scan with `no-empty-catch` found 3 silent catches in `apps/web/src/tests/regression-audit.test.ts` (lines 781, 1103 and 1301). All three ignore errors deliberately, so each now records why in a comment.
   - After that the scan exits 0. A planted empty catch in `apps/api/src` makes it exit 1; the probe was removed.
 - **Tests:** `ast-grep test` passes 1/1, with valid and invalid cases including a commented catch. The manifest audit (alias `@ast-grep/cli` added to `PACKAGE_ALIASES`) reports error 0. `ecosystem.ps1 validate` passes. The root devDependency snapshots in `GROUP-7-PRODUCT-TOOLCHAIN.md` gain `@ast-grep/cli`; manifest-audit and repo-integration tests pass 54/0.
+
+### Integration evidence 2026-10-21 — oraios/serena read-only backend
+
+- `node tools/ai-brain/cli.js serena live --symbol callSerena --file tools/ai-brain/serena-mcp.js` started oraios/serena v2.1.0 over MCP stdio and returned `find_symbol` (Function, lines 48-129) and `find_referencing_symbols` (export at line 131).
+- `.serena/project.yml` sets `read_only: true`; Serena listed 7 read tools and no editing tool.
+- Details and limitations: `docs/product-spec/docs/10-ai-collaboration/repo-integration/GROUP-3-CODE-CONTEXT.md`.

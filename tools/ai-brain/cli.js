@@ -4649,7 +4649,17 @@ function main(argv = process.argv.slice(2), deps = {}) {
   // serena (TASK-AI-32): Serena read-only pilot for code retrieval
   // Symbol and reference lookup for authors, measured against TokenPerMergedItem
   if (command === 'serena') {
-    const { runSerenaCli } = require('./serena');
+    const { runSerenaCli, runSerenaLive } = require('./serena');
+    if (process.argv[3] === 'live') {
+      runSerenaLive(process.argv.slice(4)).then(
+        (code) => process.exit(code),
+        (err) => {
+          console.error(err.message);
+          process.exit(1);
+        }
+      );
+      return;
+    }
     process.exit(runSerenaCli(process.argv.slice(3)));
   }
 

@@ -20,10 +20,10 @@ no new lifecycle or manifest entry is introduced.
     "verifiedAt": "2026-10-17T00:00:00.000Z",
     "verifiedBy": "codex",
     "registrationPending": true,
-    "requestedRef": "unresolved",
-    "versionRef": "unresolved; requestedRef is specification inventory, not observed installation",
+    "requestedRef": "git+https://github.com/oraios/serena@v2.1.0",
+    "versionRef": "oraios/serena v2.1.0 (5e4f5cd1) run via uv tool run; pinned in tools/ai-brain/serena-mcp.js",
     "capability": "symbol, references/callers; semantic editing requested but read-only pilot",
-    "caller": "tools/ai-brain/serena.js",
+    "caller": "tools/ai-brain/serena-mcp.js",
     "execution": "NOT_RUN",
     "acceptance": "PENDING"
   },
@@ -175,3 +175,20 @@ test. Spec SHA256 and the appended register row match the hermes-live originals;
 register diff is one insertion, zero deletions. Prettier check passed for the
 JavaScript test; repository .prettierignore excludes docs/ (validated by Python),
 and CSV has no Prettier parser. PR contract was intentionally not run before commit.
+
+### Serena wiring 2026-10-21
+
+- Trigger: `node tools/ai-brain/cli.js serena live --symbol <name> --file <path>`.
+- Caller: `tools/ai-brain/serena-mcp.js` starts the real Serena MCP server over stdio
+  (`--agent-interface tools`, `ide` context, no dashboard) and calls `find_symbol` then
+  `find_referencing_symbols` with the exact `name_path` Serena returned.
+- Read-only: committed `.serena/project.yml` sets `read_only: true` and the TypeScript
+  language server; Serena then lists no editing tools. The caller refuses a project
+  without `read_only: true`, any non-read tool, and a server that still exposes editing tools.
+- Local run: `serena live --symbol callSerena --file tools/ai-brain/serena-mcp.js` returned the
+  Function at lines 48-129 and its export reference at line 131. The server listed 7 read
+  tools and no editing tool.
+- Limitation: no CI run (needs Python, uv and a language-server download). References made
+  through a destructured CommonJS `require` are not resolved by the TypeScript language
+  server. The regex lookups in `serena.js` stay as the offline fallback. State stays
+  `DECLARED` until a reviewed merged SHA.

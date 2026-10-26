@@ -40,3 +40,8 @@ lhci-report/
 .lighthouseci/
 k6-summary.json
 k6-api.log
+
+# Serena per-machine state; only .serena/project.yml is shared
+.serena/memories/
+.serena/project.local.yml
+.serena/cache/

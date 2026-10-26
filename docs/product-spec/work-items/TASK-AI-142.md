@@ -1357,7 +1357,6 @@ Aggregator gateways like 9router failed rolling onboarding entirely when an init
     - Capability combination generation matching `probe-order` / `recentRouteSuccess` contracts.
     - Dry-run dispatch exclusions verifying exact reason codes (`QUOTA`, `AUTH`, `TIER`, `RATE`, `REGION`, `NO_CHANNEL`).
     - CLI entrypoint and missing-file validation.
-
 ### H3 live: periodic quota scanning per source and per-scope 9router key decomposition (2026-10-19)
 
 - Root cause:
@@ -1377,3 +1376,56 @@ Aggregator gateways like 9router failed rolling onboarding entirely when an init
     - Added `quota-scan` CLI command and exported `quotaScanCommand`.
 - Verification:
   - Test suites in `tools/ai-brain/test/task-ai-142-quota-scan*.test.js` verifying 9Router prefix splitting, 1-token budget discipline, response classification, persistence, unexpired scope exclusion in capability-probe and preferKnownGood, review rounds 1-6 findings, and CLI execution.
+
+### H3 live: bounded agy pool wait timeout and CI hang resolution (2026-10-19)
+
+- Root causes:
+  1. In `tools/ai-brain/agy-pool-runtime.js:waitForResult`, `Number(opts.timeoutMs) > 0 ? opts.timeoutMs : 120000` failed closed when `opts.timeoutMs` was `Infinity` (passed down from `orchestrate.js: Math.min(..., remainingMs)` when `remainingMs` was `Infinity`), causing an unbounded poll loop `while (Date.now() - start <= Infinity)`.
+  2. Linux ext4 filesystem timestamp truncation on CI caused strict `stat.mtimeMs >= sinceMs` comparisons against high-resolution `Date.now()` to fail when `result.json` was written in the same millisecond or rounded down, causing poll loops to sleep indefinitely.
+  3. `submitLocked` did not unlink stale `resultFile` prior to adapter execution.
+  4. In `test/task-ai-142-agy-writer-session.test.js`, `pool.runAdapter` was mocked without mocking `pool.waitForResult`, and fixture initialization spawned multiple git subprocesses on every fixture invocation instead of reusing a cached template repo.
+- Repairs:
+  1. In `tools/ai-brain/agy-pool-runtime.js`:
+     - Bounded `timeoutMs` fallback with `Number.isFinite(rawTimeout) && rawTimeout >= 0 ? rawTimeout : 120000`, reading `opts.timeoutMs` or `opts.dispatch?.agyPoolTimeoutMs`.
+     - Added 1000ms mtime tolerance (`stat.mtimeMs >= sinceMs - 1000`) for timestamp rounding on ext4/tmpfs.
+     - Unlinked `resultFile` before `runAdapter` launch in `submitLocked`.
+  2. In `tools/ai-brain/orchestrate.js`:
+     - Read configurable `poolTimeoutMs` (incorporating `o.timeoutMs`, `o.poolTimeoutMs`, and `registry.dispatch.agyPoolTimeoutMs`) before forwarding to `pool.submitJob`.
+  3. In `tools/ai-brain/test/task-ai-142-agy-writer-session.test.js`:
+     - Pre-initialized git template fixture once and reused across fixture runs.
+     - Mocked `pool.waitForResult` in unit tests, mocked `reviewLoop.runReviewLoop`, and set `agyPoolTimeoutMs: 0` in fixture dispatch options.
+     - Reduced test suite execution time from 30+ minutes hang down to < 5 seconds.
+- Verification:
+  - Passed all 6 tests in `tools/ai-brain/test/task-ai-142-agy-writer-session.test.js` in < 5.0s.
+  - Passed all 59 tests in agy-related test suite without regression.
+
+### H3 live: the pool result producer is versioned and proven to echo jobId (2026-10-20)
+
+- Root cause: `submitLocked` accepts a pool `result.json` only when it names the submitted `jobId`, but the producer that writes it (`C:\Tools\agy-pool\worker-core.ps1`, run by the `ShipDe-agyNN` scheduled task) lived outside the repository, so no test exercised its real output.
+- Repair: versioned the producer as `scripts/ai/agy-pool/worker-core.ps1` (paths overridable by `-RunsDir`/`AGY_POOL_RUNS_DIR` and `-AgyExe`/`AGY_POOL_AGY_EXE`, deployed defaults unchanged). Pool adapter fixtures now echo `job.jobId` like the producer.
+- Verification: `tools/ai-brain/test/task-ai-142-agy-pool-producer.test.js` submits through the real `submitJob`, runs the producer with a stand-in agy binary and asserts the result is accepted with the matching `jobId`; deleting the echo line in the producer makes it fail with `POOL_TIMEOUT`.
+- Follow-up: the producer no longer carries its own agy time limits. `submitLocked` stamps `printTimeoutSec` from the same configured pool bound (`dispatch.agyPoolTimeoutMs`, tightened by the caller) into `job.json`; the producer passes it to every agy call and refuses a job without it (`NO_PRINT_TIMEOUT`, agy not started). Paths use `Join-Path`, so the producer test also runs under `pwsh` on the Linux CI runner and fails there instead of skipping if PowerShell is missing.
+
+
+### H3 live: rolling onboarding probes tools capability and records into evidence (2026-10-21)
+
+- Root cause:
+  - In FEAT-AUTH-05 live run (2026-10-20), out of 15,645 candidates, 15,591 were rejected during initial selection with `CAPABILITY_UNVERIFIED:tools` (`WRITER_SCHEMA_NOT_VERIFIED_BUDGET`).
+  - Rolling onboarding (`rolling-onboard.js`) only performed a basic completion ping (`messages: [{ role: 'user', content: 'ping' }]` -> `API_PASS`) to confirm HTTP connectivity and recorded no tool-calling capability evidence.
+  - When dispatch ran with writer requirement (`requiredCapabilities: ['tools']`), thousands of unverified candidates competed for the 180s schema probe budget window (`schemaProbeBudgetMs`), starving the budget before strong candidate routes on 9Router, Requesty, and TokenHarbor (such as `ag/claude-opus-4-6-thinking`) could be verified, causing them to be disqualified.
+- Repairs:
+  - In `tools/ai-brain/rolling-onboard.js`:
+    - Implemented `probeToolCapability(modelToProbe)` using OpenAI-compatible forced tool calling (`capability_probe` function with nonce) to verify actual tool execution capability during rolling onboarding.
+    - When tool probe succeeds, records tool capability proof into `combo.capabilities.tools = true`, `combo.capabilityEvidence.tools`, and `evidenceData.capabilityProbes[combo.candidateKey]` with canonical route `binding`.
+    - Automatically records capability probe bindings for all bound accounts and alternative router harnesses (e.g. `opencode`).
+    - Exposes tool capability probe results in onboarding response.
+  - In `tools/ai-brain/capability-probe.js`:
+    - Exported `computeBinding(key, route)` for consistent route hashing across onboarding and dispatch.
+    - Updated capability verification in `probeCapabilities`: when `cached[cap]` is absent, reuses verified tools proof from `c.capabilityEvidence` or matching combos in `data.combinations` before consuming probe budget.
+  - In `tools/ai-brain/candidates.js`:
+    - Propagated `combo.capabilityEvidence` to candidate objects in `candidatesFromEvidence`.
+- Verification:
+  - Unit and integration tests in `tools/ai-brain/test/task-ai-142-rolling-onboarding.test.js`:
+    - `onboardSourceRolling` executes forced tool call probe, sets `combo.capabilities.tools = true`, and stores `capabilityProbes` with matching binding.
+    - `dispatch --dry-run` with writer role requiring tools admits onboarded model without `CAPABILITY_UNVERIFIED:tools`.
+    - Failed tool probe fails closed without granting tools capability.

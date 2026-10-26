@@ -39,10 +39,10 @@ no new lifecycle or manifest entry is introduced.
     "verifiedAt": "2026-10-17T00:00:00.000Z",
     "verifiedBy": "codex",
     "registrationPending": true,
-    "requestedRef": "unresolved",
-    "versionRef": "unresolved; requestedRef is specification inventory, not observed installation",
+    "requestedRef": "@fission-ai/openspec@1.14.3",
+    "versionRef": "@fission-ai/openspec@1.14.3 pinned in tools/openspec-check/run.sh; isolated npm prefix, no lockfile change",
     "capability": "spec/change proposal validation",
-    "caller": "docs/product-spec/scripts/validate_docs.py",
+    "caller": "tools/openspec-check/run.js",
     "execution": "NOT_RUN",
     "acceptance": "PENDING"
   },
@@ -158,3 +158,18 @@ test. Spec SHA256 and the appended register row match the hermes-live originals;
 register diff is one insertion, zero deletions. Prettier check passed for the
 JavaScript test; repository .prettierignore excludes docs/ (validated by Python),
 and CSV has no Prettier parser. PR contract was intentionally not run before commit.
+
+### OpenSpec wiring 2026-10-21
+
+- Trigger: `pnpm test:specs`, CI step `Work Item acceptance matrices (OpenSpec strict validate)`.
+- Caller: `tools/openspec-check/run.js` renders each Work Item acceptance matrix into an
+  ephemeral `openspec/specs/<id>/spec.md` in a temp directory and runs
+  `openspec validate --specs --strict --json`. Nothing is committed under `openspec/`;
+  the Work Item remains the only spec authority.
+- Gate: only Work Items changed against `BASE_SHA` (default `origin/main`) block;
+  `OPENSPEC_GATE_ALL=1` gates every item.
+- Local run: 85/125 matrices valid, 9 Work Items without a matrix, 0 changed, 0 failing.
+  A duplicated `AC-1` in a changed Work Item failed with exit 1 and the OpenSpec
+  duplicate-requirement error.
+- Limitation: the 40 legacy failures (duplicate IDs, empty matrices, multiple tables) are
+  reported, not fixed. State stays `DECLARED` until CI runs it at a reviewed merged SHA.
