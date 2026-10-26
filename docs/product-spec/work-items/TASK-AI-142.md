@@ -1357,6 +1357,25 @@ Aggregator gateways like 9router failed rolling onboarding entirely when an init
     - Capability combination generation matching `probe-order` / `recentRouteSuccess` contracts.
     - Dry-run dispatch exclusions verifying exact reason codes (`QUOTA`, `AUTH`, `TIER`, `RATE`, `REGION`, `NO_CHANNEL`).
     - CLI entrypoint and missing-file validation.
+### H3 live: periodic quota scanning per source and per-scope 9router key decomposition (2026-10-19)
+
+- Root cause:
+  - Controller lacked proactive quota discovery, relying only on post-failure capability probes and route-health marks.
+  - 9Router was treated as a single monolith source, masking individual upstream key exhaustion (e.g. Cline $0 balance, xKiro monthly exhaustion, OCZ, Kimchi).
+- Repairs:
+  - In `tools/ai-brain/quota-scan.js`:
+    - Implemented periodic quota scan querying representative models with lightweight 1-token requests.
+    - Decomposed 9Router by upstream model prefix (`cl/`, `kr/`, `ocz/`, `ag/`, etc.) into distinct quota scopes using public `/v1/models` and `/v1/chat/completions` without accessing credential stores.
+    - Classified responses with canonical codes (`OK`, `QUOTA`, `AUTH`, `TIER`, `RATE`, `REGION`, `NO_CHANNEL`) and parsed `retry-after` timestamps into `retryAfter`.
+    - Persisted state in `data/quota-state.json`.
+  - In `tools/ai-brain/evidence.js`, `tools/ai-brain/capability-probe.js`, and `tools/ai-brain/probe-order.js`:
+    - Ignored and skipped candidates belonging to unexpired scopes marked in `QUOTA`, `AUTH`, or `REGION`, preventing probe budget waste and ensuring dry-run routing excludes exhausted scopes.
+  - In `tools/ai-brain/sources.json` and `tools/ai-brain/sources.js`:
+    - Added configurable `quotaScanIntervalMin: 60`, `quotaBlockTtlMin: 60`, and `quotaScanMaxTokens: 1` in `dispatch` configuration and exposed via `getDispatchConfig`.
+  - In `tools/ai-brain/cli.js`:
+    - Added `quota-scan` CLI command and exported `quotaScanCommand`.
+- Verification:
+  - Test suites in `tools/ai-brain/test/task-ai-142-quota-scan*.test.js` verifying 9Router prefix splitting, 1-token budget discipline, response classification, persistence, unexpired scope exclusion in capability-probe and preferKnownGood, review rounds 1-6 findings, and CLI execution.
 
 ### H3 live: bounded agy pool wait timeout and CI hang resolution (2026-10-19)
 

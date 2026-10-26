@@ -11,6 +11,7 @@ const sourcesApi = require('./sources');
 const { loadPriors, priorFor } = require('./priors');
 const routeEvidence = require('./route-evidence');
 const { hasPriorWorkPass } = routeEvidence;
+const quotaScan = require('./quota-scan');
 
 // Shared with the Controller route probes; capability checks get no extra window.
 const { PROBE_BUDGET_MS } = require('./orchestrate');
@@ -211,6 +212,25 @@ function orderCandidatesForProbe(candidates, profile, options = {}) {
     throw new Error('DISPATCH_CONFIG_INVALID: probeRoundRobinBatch must be a positive integer');
   }
 
+  const quotaScan = require('./quota-scan');
+  const quotaState = options.quotaState || quotaScan.loadQuotaState(options);
+  for (const c of candidates) {
+    const scopeState = quotaScan.getQuotaScopeState(c, quotaState);
+    if (c.blockScope === 'quota-scope') {
+      if (!scopeState || !quotaScan.isScopeBlocked(scopeState, now)) {
+        c.blocked = false;
+        delete c.blockReason;
+        delete c.blockScope;
+      }
+    } else if (!c.blocked) {
+      if (scopeState && quotaScan.isScopeBlocked(scopeState, now)) {
+        c.blocked = true;
+        c.blockReason = `QUOTA_SCOPE_${scopeState.code}: ${scopeState.scope || scopeState.source}`;
+        c.blockScope = 'quota-scope';
+      }
+    }
+  }
+
   const rows = candidates.map((c, index) => {
     const prior = priorFor(c, role, priors, now);
     const priorScore = Number.isFinite(prior?.score) ? prior.score : null;
@@ -317,6 +337,25 @@ async function probeCapabilities(candidates, profile, options = {}) {
           ? loadPriors()
           : undefined;
   const orderedCandidates = orderCandidatesForProbe(candidates, profile, { ...o, priors });
+
+  const quotaState = o.quotaState || quotaScan.loadQuotaState(o);
+  const probeNow = o.now ?? Date.now();
+  for (const c of orderedCandidates) {
+    const scopeState = quotaScan.getQuotaScopeState(c, quotaState);
+    if (c.blockScope === 'quota-scope') {
+      if (!scopeState || !quotaScan.isScopeBlocked(scopeState, probeNow)) {
+        c.blocked = false;
+        delete c.blockReason;
+        delete c.blockScope;
+      }
+    } else if (!c.blocked) {
+      if (scopeState && quotaScan.isScopeBlocked(scopeState, probeNow)) {
+        c.blocked = true;
+        c.blockReason = `QUOTA_SCOPE_${scopeState.code}: ${scopeState.scope || scopeState.source}`;
+        c.blockScope = 'quota-scope';
+      }
+    }
+  }
 
   // Probes run concurrently up to dispatch.maxConcurrentProbes so the strongest
   // candidates late in the probe order are still reached inside the schema budget.

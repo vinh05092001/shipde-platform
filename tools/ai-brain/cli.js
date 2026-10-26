@@ -664,6 +664,65 @@ function resolveModelContextMeta(modelId, gateway, ...args) {
   };
 }
 
+async function quotaScanCommand(args, deps = {}) {
+  const quotaScan = require('./quota-scan');
+  const sourcesApi = require('./sources');
+  const registry = deps.registry || sourcesApi.loadSources(deps.sourceOpts);
+  const dispatchConfig = sourcesApi.getDispatchConfig ? sourcesApi.getDispatchConfig(registry) : {};
+  const intervalMin =
+    args?.intervalMin ?? args?.interval ?? deps.intervalMin ?? dispatchConfig.quotaScanIntervalMin;
+
+  if (args?.periodic || args?.loop || deps.periodic || deps.loop) {
+    const runner = quotaScan.schedulePeriodicQuotaScan({
+      ...deps,
+      registry,
+      intervalMin,
+      quotaStateFile: args?.out || args?.file || deps?.quotaStateFile,
+      source: args?.source || deps?.source,
+      unref: deps?.unref ?? false,
+    });
+    if (runner.initialPromise) {
+      await runner.initialPromise;
+    }
+    return {
+      periodic: true,
+      intervalMin,
+      runner,
+    };
+  }
+
+  if (args?.['if-due'] || args?.ifDue || args?.gate || deps.gateScan || deps.ifDue) {
+    const quotaFile = args?.out || args?.file || deps?.quotaStateFile;
+    const quotaState = deps.quotaState || quotaScan.loadQuotaState({ quotaStateFile: quotaFile });
+    const now = deps.now ?? Date.now();
+    const dueSource = args?.source || deps?.source || null;
+    if (
+      !quotaScan.isQuotaScanDue(quotaState, intervalMin, now, dueSource) &&
+      !args?.force &&
+      !deps.force
+    ) {
+      return {
+        gated: true,
+        at: quotaState.updatedAt,
+        scopes: quotaState.scopes,
+        count: 0,
+        blockedCount: 0,
+      };
+    }
+  }
+
+  const result = await quotaScan.scanAllQuotas({
+    ...deps,
+    registry,
+    quotaStateFile: args?.out || args?.file || deps?.quotaStateFile,
+    source: args?.source || deps?.source,
+  });
+  console.log(
+    `Quota scan complete: scanned ${result.count} scopes (${result.blockedCount} blocked)`
+  );
+  return result;
+}
+
 function assembleCandidates(
   discoveryCat,
   offerings,
@@ -2298,10 +2357,20 @@ function dispatchCommand(args, deps = {}) {
       Boolean(checkpoint && checkpoint.workItemId === item.workItemId && checkpoint.step) ||
       Boolean(failedKeys.size);
     const evidenceData = evidence.loadEvidence(evidenceDir);
+    const quotaStateFile =
+      args['quota-state'] ||
+      args['quota-state-file'] ||
+      args.quotaStateFile ||
+      deps?.quotaStateFile;
+    const annotateOpts = {
+      now,
+      ...(quotaStateFile ? { quotaStateFile } : {}),
+      ...(deps?.quotaState ? { quotaState: deps.quotaState } : {}),
+    };
     const annotated = candidatesApi.annotateCandidates(
       eligibleCandidates.map((c) => Object.assign({}, c)),
       evidenceData,
-      { now }
+      annotateOpts
     );
     applyHarnessVerification(annotated);
 
@@ -2515,7 +2584,7 @@ function dispatchCommand(args, deps = {}) {
         const fallbackAnnotated = candidatesApi.annotateCandidates(
           eligibleCandidates.map((c) => Object.assign({}, c)),
           evidenceData,
-          { now }
+          annotateOpts
         );
         applyDryRunBlocks(
           fallbackAnnotated,
@@ -2530,7 +2599,7 @@ function dispatchCommand(args, deps = {}) {
           const exactOnlyAnnotated = candidatesApi.annotateCandidates(
             eligibleCandidates.map((c) => Object.assign({}, c)),
             evidenceData,
-            { now }
+            annotateOpts
           );
           applyDryRunBlocks(exactOnlyAnnotated, failedKeys, chosenCandidate, classification, false);
           fallbackDecision = rankDryRun(exactOnlyAnnotated);
@@ -2705,10 +2774,20 @@ function dispatchCommand(args, deps = {}) {
 
     if (!finalChosenKey) {
       const evidenceData = evidence.loadEvidence(evidenceDir);
+      const quotaStateFile =
+        args['quota-state'] ||
+        args['quota-state-file'] ||
+        args.quotaStateFile ||
+        deps?.quotaStateFile;
+      const annotateOpts = {
+        now,
+        ...(quotaStateFile ? { quotaStateFile } : {}),
+        ...(deps?.quotaState ? { quotaState: deps.quotaState } : {}),
+      };
       const annotated = candidatesApi.annotateCandidates(
         eligibleCandidates.map((c) => Object.assign({}, c)),
         evidenceData,
-        { now }
+        annotateOpts
       );
       applyHarnessVerification(annotated);
 
@@ -4409,6 +4488,7 @@ function main(argv = process.argv.slice(2), deps = {}) {
   if (command === 'manifest') return manifestCommand(args);
   if (command === 'prove') return proveCommand(args);
   if (command === 'quota') return quotaCommand(args);
+  if (command === 'quota-scan') return quotaScanCommand(args, deps);
   if (command === 'dispatch') {
     const result = dispatchCommand(args);
     // The profile path (TASK-AI-65) is async: the JEV advisory returns a
@@ -4913,57 +4993,116 @@ module.exports = {
       };
     }
     if (args.loop && !nextDeps.refreshRouteHealth) {
-      const fs = require('fs');
-      nextDeps.refreshRouteHealth = async ({ now }) => {
-        const routeHealthApi = require('./route-health');
-        const healthFile =
-          args['route-health'] ||
-          args.routeHealthFile ||
-          nextDeps.routeHealthFile ||
-          nextDeps['route-health'] ||
-          (args.root
-            ? path.join(args.root, 'tools', 'ai-brain', 'data', 'model-route-health.json')
-            : null) ||
-          path.join(__dirname, 'data', 'model-route-health.json');
-        const registry = nextDeps.registry || require('./sources').loadSources();
-        const store = routeHealthApi.loadStore(healthFile, { allowMissing: true });
-        let catalogue = [];
-        if (args.catalogue) {
-          const cataloguePath = path.resolve(args.catalogue);
-          if (fs.existsSync(cataloguePath))
-            catalogue = JSON.parse(fs.readFileSync(cataloguePath, 'utf8')).candidates || [];
-        }
-        const accounts = nextDeps.accounts || require('./accounts').listAccounts();
-        const probe =
-          nextDeps.probeRoute ||
-          ((model, route, probeOptions) =>
-            routeHealthApi.probeGatewayModel(
-              model,
-              route,
-              Object.assign({ registry }, probeOptions)
-            ));
-        const result = await routeHealthApi.recheckBeforeSelection(store, probe, {
-          now,
-          cap: nextDeps.probeCap,
-          timeoutMs: nextDeps.probeTimeoutMs,
-          catalogue,
-          registry,
-          accounts,
-          allowUnprobed: true,
-        });
-        routeHealthApi.saveStore(healthFile, store);
-        if (nextDeps.onRouteRefresh) nextDeps.onRouteRefresh(result);
-        return result;
-      };
+      nextDeps.refreshRouteHealth = createRefreshRouteHealth(args, nextDeps);
     }
     return require('./next-runner').nextCommand(args, nextDeps);
   },
   goalCommand: (args, deps) => require('./goals').runGoalCli(args, deps),
   _buildQualificationCandidates: buildQualificationCandidates,
   _resolveFallbackRoutes: resolveFallbackRoutes,
+  _createRefreshRouteHealth: createRefreshRouteHealth,
   chatCommand: (args, deps) => require('./hermes-session').chatCommand(args, deps),
   goalSessionCommand: (args, deps) => require('./hermes-session').goalSessionCommand(args, deps),
+  quotaScanCommand,
 };
+
+function createRefreshRouteHealth(routeArgs = {}, routeDeps = {}) {
+  const fs = require('fs');
+  return async ({ now }) => {
+    const routeHealthApi = require('./route-health');
+    const healthFile =
+      routeArgs['route-health'] ||
+      routeArgs.routeHealthFile ||
+      routeDeps.routeHealthFile ||
+      routeDeps['route-health'] ||
+      (routeArgs.root
+        ? path.join(routeArgs.root, 'tools', 'ai-brain', 'data', 'model-route-health.json')
+        : null) ||
+      path.join(__dirname, 'data', 'model-route-health.json');
+    const registry = routeDeps.registry || require('./sources').loadSources();
+    const store = routeHealthApi.loadStore(healthFile, { allowMissing: true });
+    let catalogue = [];
+    if (routeArgs.catalogue) {
+      const cataloguePath = path.resolve(routeArgs.catalogue);
+      if (fs.existsSync(cataloguePath))
+        catalogue = JSON.parse(fs.readFileSync(cataloguePath, 'utf8')).candidates || [];
+    }
+    const accounts = routeDeps.accounts || require('./accounts').listAccounts();
+    const probe =
+      routeDeps.probeRoute ||
+      ((model, route, probeOptions) =>
+        routeHealthApi.probeGatewayModel(model, route, Object.assign({ registry }, probeOptions)));
+    const result = await routeHealthApi.recheckBeforeSelection(store, probe, {
+      now,
+      cap: routeDeps.probeCap,
+      timeoutMs: routeDeps.probeTimeoutMs,
+      catalogue,
+      registry,
+      accounts,
+      allowUnprobed: true,
+    });
+    routeHealthApi.saveStore(healthFile, store);
+    if (routeDeps.onRouteRefresh) routeDeps.onRouteRefresh(result);
+    try {
+      const quotaScan = require('./quota-scan');
+      const dispatchConfig = require('./sources').getDispatchConfig(registry);
+      const intervalMin = dispatchConfig.quotaScanIntervalMin;
+      const quotaFile =
+        routeDeps.quotaStateFile || path.join(__dirname, 'data', 'quota-state.json');
+      const quotaState = quotaScan.loadQuotaState({ quotaStateFile: quotaFile });
+      if (quotaScan.isQuotaScanDue(quotaState, intervalMin, now)) {
+        const scanResult = await quotaScan.scanAllQuotas({
+          registry,
+          quotaStateFile: quotaFile,
+          now,
+          fetch: routeDeps.fetch,
+        });
+        if (result && typeof result === 'object') {
+          result.quotaScanResult = scanResult;
+          result.quotaState = scanResult.scopes;
+        }
+      } else if (result && typeof result === 'object') {
+        result.quotaState = quotaState.scopes || {};
+      }
+    } catch (err) {
+      try {
+        const quotaScan = require('./quota-scan');
+        const quotaFile =
+          routeDeps.quotaStateFile || path.join(__dirname, 'data', 'quota-state.json');
+        const quotaState = quotaScan.loadQuotaState({ quotaStateFile: quotaFile });
+        quotaState.scopes = quotaState.scopes || {};
+        const sanitizedReason = quotaScan.sanitizeStatusDescription(err?.message, 'SCAN_FAILED');
+        quotaState.scanError = sanitizedReason;
+        quotaState.lastErrorAt = new Date(now).toISOString();
+        if (err && err.source) {
+          const srcId = err.source;
+          const failureEntry = {
+            source: srcId,
+            scope: srcId,
+            upstream: srcId,
+            model: null,
+            code: err.code || 'ERROR',
+            status: err.status || 503,
+            reason: sanitizedReason,
+            at: new Date(now).toISOString(),
+            retryAfter: null,
+          };
+          quotaState.scopes[`${srcId}::${srcId}`] = failureEntry;
+          quotaState.scopes[srcId] = failureEntry;
+        }
+        quotaScan.saveQuotaState(quotaState, { quotaStateFile: quotaFile });
+        if (result && typeof result === 'object') {
+          result.quotaScanError = err;
+          result.quotaState = quotaState.scopes;
+        }
+      } catch {}
+      if (typeof routeDeps.onQuotaScanError === 'function') {
+        routeDeps.onQuotaScanError(err);
+      }
+    }
+    return result;
+  };
+}
 
 if (require.main === module) {
   main();
