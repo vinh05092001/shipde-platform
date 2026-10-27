@@ -3498,4 +3498,52 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
     assert.strictEqual(testActor.role, 'OWNER');
     assert.strictEqual(testActor.authAssurance, 'MFA');
   });
+
+  // Finding 1 (Round 14 / P1-01): audit_logs schema contract preserves non-null merchant_id on tenant operations and supports nullable platform seed audit
+  test('Finding 1 (Round 14 / P1-01): audit_logs contract ensures tenant mutations populate non-null merchant_id while platform seed logs without merchant dependency', async () => {
+    // 1. Create a custom role and verify its audit log strictly populates merchant_id
+    mockPrisma.auditLogs = [];
+    const created = await service.createRole(
+      {
+        name: `Audit Contract Role ${Date.now()}`,
+        permissions: ['order:view_create'],
+      },
+      OWNER_ACTOR,
+      'corr-p1-01'
+    );
+    assert.ok(created.data.role.id);
+
+    const tenantAudit = mockPrisma.auditLogs.find(
+      (a) => a.action === 'ROLE_CREATED' && a.entity_id === created.data.role.id
+    );
+    assert.ok(tenantAudit, 'Tenant ROLE_CREATED audit must exist');
+    assert.strictEqual(
+      tenantAudit.merchant_id,
+      MERCHANT_A,
+      'Tenant audit log must have non-null merchant_id matching the merchant tenant'
+    );
+    assert.strictEqual(
+      tenantAudit.user_id,
+      OWNER_ACTOR.userId,
+      'Tenant audit log must retain user_id'
+    );
+
+    // 2. Clear mock merchant and run platform seed; verify platform reconciliation audit has null merchant_id
+    mockPrisma.merchant.findFirst = async () => null;
+    const cskhRoleId = mockPrisma.roles.find((r) => r.code === 'OPS_CSKH')?.id;
+    if (cskhRoleId) {
+      mockPrisma.rolePermissions = mockPrisma.rolePermissions.filter(
+        (rp) => rp.role_id !== cskhRoleId
+      );
+    }
+    (service as any).isSeeded = false;
+    await service.ensurePlatformSeed();
+
+    const platformAudit = mockPrisma.auditLogs.find(
+      (a) => a.action === 'SYSTEM_ROLE_PERMISSIONS_RECONCILED'
+    );
+    assert.ok(platformAudit, 'Platform seed reconciliation audit must exist');
+    assert.strictEqual(platformAudit.merchant_id, null, 'Platform audit must have null merchant_id');
+    assert.strictEqual(platformAudit.user_id, null, 'Platform audit must have null user_id');
+  });
 });

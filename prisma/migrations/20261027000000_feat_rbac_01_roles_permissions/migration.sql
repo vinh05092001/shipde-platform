@@ -156,6 +156,15 @@ CREATE TRIGGER trg_check_user_custom_role_same_merchant
     FOR EACH ROW
     EXECUTE FUNCTION check_user_custom_role_same_merchant();
 
--- Allow platform-level system audit logs without customer merchant binding (Finding 1 / Round 12 / BR-RBAC-07 / BR-RBAC-04)
-ALTER TABLE "audit_logs" ALTER COLUMN "merchant_id" DROP NOT NULL;
+-- Allow platform-level system audit logs without customer merchant binding (Finding 1 / Round 12 / Finding 1 / Round 14 / BR-RBAC-07 / BR-RBAC-04)
+-- Existing customer audit log rows retain their non-null merchant_id; only platform-level bootstrap events omit merchant_id.
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'audit_logs' AND column_name = 'merchant_id' AND is_nullable = 'NO'
+    ) THEN
+        ALTER TABLE "audit_logs" ALTER COLUMN "merchant_id" DROP NOT NULL;
+    END IF;
+END $$;
 

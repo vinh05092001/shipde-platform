@@ -701,6 +701,8 @@ model Claim {
 
 model AuditLog {
   id                   String            @id @default(uuid()) @db.Uuid
+  // merchant_id is nullable strictly for platform-level system audit events (such as system role seed reconciliation).
+  // All tenant-scoped actions (roles, users, sessions) strictly require and populate merchant_id (Finding 1 / Round 14 / BR-RBAC-07 / BR-RBAC-04).
   merchant_id          String?           @db.Uuid
   user_id              String?           @db.VarChar(255)
   action               String            @db.VarChar(128)
