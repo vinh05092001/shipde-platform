@@ -637,6 +637,45 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
       assert.strictEqual((res.data[0] as any).token_hash, undefined, 'token_hash must be omitted');
       assert.strictEqual((res.data[0] as any).token, undefined, 'token must be omitted');
     });
+
+    it('persists and filters EXPIRED status for expired invitations (Finding 8)', async () => {
+      let updateManyCalled = false;
+      let findManyWhere: any = null;
+      mockPrisma.invitation.updateMany = async (args: any) => {
+        if (args?.where?.status === InvitationStatusEnum.PENDING && args?.where?.expires_at) {
+          updateManyCalled = true;
+        }
+        return { count: 1 };
+      };
+      mockPrisma.invitation.findMany = async (args: any) => {
+        findManyWhere = args.where;
+        return [
+          {
+            id: 'expired-1',
+            merchant_id: MERCHANT_ID,
+            email: 'expired@shipde.vn',
+            role: RoleEnum.OPS_CSKH,
+            store_scopes: [],
+            warehouse_scopes: [],
+            token_hash: 'hash-exp',
+            status: InvitationStatusEnum.EXPIRED,
+            invited_by_user_id: OWNER_USER_ID,
+            expires_at: new Date(Date.now() - 10000),
+            created_at: new Date(),
+            consumed_at: null,
+          },
+        ];
+      };
+      mockPrisma.invitation.count = async () => 1;
+
+      const actor = { userId: OWNER_USER_ID, merchantId: MERCHANT_ID, role: RoleEnum.OWNER };
+      const res = await service.listInvitations(actor, { status: 'EXPIRED' }, 'test-corr-exp');
+
+      assert.strictEqual(updateManyCalled, true);
+      assert.ok(findManyWhere.OR);
+      assert.strictEqual(res.data.length, 1);
+      assert.strictEqual(res.data[0].status, InvitationStatusEnum.EXPIRED);
+    });
   });
 
   // AC-USR-01-09: Owner resends an expired invitation

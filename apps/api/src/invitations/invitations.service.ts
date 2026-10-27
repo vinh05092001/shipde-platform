@@ -405,11 +405,33 @@ export class InvitationsService {
     const limit = Math.min(100, Math.max(1, filter.limit || 20));
     const skip = (page - 1) * limit;
 
+    const now = new Date();
+
+    // Persist expired status for time-elapsed pending invitations in caller's merchant (Finding 8)
+    await this.prisma.invitation.updateMany({
+      where: {
+        merchant_id: actor.merchantId,
+        status: InvitationStatusEnum.PENDING,
+        expires_at: { lt: now },
+      },
+      data: {
+        status: InvitationStatusEnum.EXPIRED,
+      },
+    });
+
     const where: any = {
       merchant_id: actor.merchantId,
     };
 
-    if (filter.status && filter.status !== 'ALL') {
+    if (filter.status === 'EXPIRED' || filter.status === InvitationStatusEnum.EXPIRED) {
+      where.OR = [
+        { status: InvitationStatusEnum.EXPIRED },
+        { status: InvitationStatusEnum.PENDING, expires_at: { lt: now } },
+      ];
+    } else if (filter.status === 'PENDING' || filter.status === InvitationStatusEnum.PENDING) {
+      where.status = InvitationStatusEnum.PENDING;
+      where.expires_at = { gte: now };
+    } else if (filter.status && filter.status !== 'ALL') {
       where.status = filter.status as InvitationStatusEnum;
     }
 
@@ -423,7 +445,6 @@ export class InvitationsService {
       }),
     ]);
 
-    const now = new Date();
     const items: InvitationItem[] = records.map((rec) => {
       let displayStatus = rec.status;
       if (rec.status === InvitationStatusEnum.PENDING && rec.expires_at < now) {
