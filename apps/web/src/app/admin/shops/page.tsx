@@ -548,7 +548,7 @@ export function AdminShopsView({
               </div>
             ))}
           </div>
-        ) : shops.length === 0 ? (
+        ) : listError ? null : shops.length === 0 ? (
           /* Empty State */
           <div
             data-testid="state-empty"

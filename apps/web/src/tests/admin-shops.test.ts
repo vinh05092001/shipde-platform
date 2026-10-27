@@ -425,6 +425,15 @@ async function runAdminShopsFrontendSuite() {
     errorHtml.includes('Không thể kết nối đến máy chủ quản trị (HTTP 502)'),
     'Error state must display upstream error message'
   );
+  // Finding 8: Error state must not also render state-empty
+  assert.ok(
+    !errorHtml.includes('data-testid="state-empty"'),
+    'Error state must not also render state-empty'
+  );
+  assert.ok(
+    !errorHtml.includes('Chưa có cửa hàng nào được khởi tạo'),
+    'Error state must not render empty shop guidance'
+  );
 
   // State 6: Success State (Shop Listing rendered from exact API payload shape - Finding 2)
   const mockShopFromApi: ShopRecord = {
