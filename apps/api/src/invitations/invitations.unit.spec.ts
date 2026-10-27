@@ -20,6 +20,7 @@ import {
   assertNoMigrationIndexDrift,
   validateMigrationSqlSafety,
   sanitizePrismaMigrateDiff,
+  assertSafeMigrationDiff,
   isProtectedPartialIndex,
 } from './migration-guard';
 
@@ -3442,17 +3443,26 @@ CREATE INDEX "some_other_idx" ON "invitations"("created_at");
       assert.strictEqual(safetyCheck.safe, false);
       assert.deepStrictEqual(safetyCheck.violations, ['invitations_merchant_pending_email_unique']);
 
-      // 4. Verify sanitizePrismaMigrateDiff strips generated DROP INDEX statements
-      const sanitized = sanitizePrismaMigrateDiff(unsafeDiffSql);
-      assert.strictEqual(
-        sanitized.includes('invitations_merchant_pending_email_unique'),
-        false,
-        'sanitized diff must strip forbidden DROP INDEX'
+      // 4. Round 9 Finding 3: Verify assertSafeMigrationDiff and sanitizePrismaMigrateDiff fail CI when a diff drops protected indexes
+      assert.throws(
+        () => assertSafeMigrationDiff(unsafeDiffSql),
+        (err: any) => {
+          assert.ok(err.message.includes('Forbidden DROP INDEX detected in migration diff'));
+          assert.ok(err.message.includes('invitations_merchant_pending_email_unique'));
+          return true;
+        }
       );
-      assert.ok(
-        sanitized.includes('some_other_idx'),
-        'unrelated index statement must be preserved'
+      assert.throws(
+        () => sanitizePrismaMigrateDiff(unsafeDiffSql),
+        (err: any) => {
+          assert.ok(err.message.includes('Forbidden DROP INDEX detected in migration diff'));
+          return true;
+        }
       );
+
+      const safeDiffSql = `CREATE INDEX "safe_idx" ON "invitations"("created_at");`;
+      assert.doesNotThrow(() => assertSafeMigrationDiff(safeDiffSql));
+      assert.strictEqual(sanitizePrismaMigrateDiff(safeDiffSql), safeDiffSql);
     });
 
     it('Round 8 Finding 2: Shared canonical identity helper blocks resend and accept duplicate active users', async () => {

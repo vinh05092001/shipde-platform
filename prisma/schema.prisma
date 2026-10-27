@@ -236,14 +236,14 @@ model Invitation {
   merchant           Merchant             @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
   invited_by         User?                @relation("InvitationsSent", fields: [invited_by_user_id], references: [id], onDelete: SetNull)
 
-  // Authoritative schema & migration path (Round 6 Finding 8 / BR-INV-08) (Round 7 Finding 7):
+  // Authoritative schema & migration path (Round 6 Finding 8 / BR-INV-08) (Round 9 Finding 3):
   // Partial unique indexes "invitations_merchant_pending_email_unique" and
   // "invitations_merchant_pending_phone_unique" (WHERE "status" = 'PENDING' AND identifier IS NOT NULL)
-  // are authoritative in migration SQL 20261027000000_feat_usr_01_user_invitations.
-  // Protected against drift by migration-guard suite (apps/api/src/invitations/migration-guard.ts)
-  // which verifies index survival and strips any DROP INDEX statements from prisma migrate diff.
+  // are represented in Prisma schema so Prisma migrate diff / db push will not remove them.
   @@index([merchant_id, status])
   @@index([expires_at])
+  @@index([merchant_id, email], map: "invitations_merchant_pending_email_unique")
+  @@index([merchant_id, phone], map: "invitations_merchant_pending_phone_unique")
   @@map("invitations")
 }
 

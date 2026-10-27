@@ -38,32 +38,27 @@ export function validateMigrationSqlSafety(sql: string): {
 }
 
 /**
- * Sanitizes prisma migrate diff SQL output by stripping any generated DROP INDEX statements
- * targeting the protected PostgreSQL partial unique indexes, ensuring they survive automated
- * Prisma migrate diff schema synchronization without index degradation (BR-INV-08).
+ * Validates prisma migrate diff SQL output and fails CI immediately if it attempts to drop
+ * any of the protected PostgreSQL partial unique indexes (BR-INV-08 / Round 9 Finding 3).
+ * Stripping DROP statements is forbidden; diffs attempting to remove protected indexes must fail CI.
+ */
+export function assertSafeMigrationDiff(diffSql: string): void {
+  const check = validateMigrationSqlSafety(diffSql);
+  if (!check.safe) {
+    throw new Error(
+      `[MIGRATION_GUARD] Forbidden DROP INDEX detected in migration diff for: ${check.violations.join(', ')}. ` +
+      `PostgreSQL partial unique pending indexes must never be dropped.`
+    );
+  }
+}
+
+/**
+ * Sanitizes prisma migrate diff SQL output by asserting safety. If any protected partial unique
+ * index drop is present, throws immediately to fail CI instead of silently deleting DROP statements.
  */
 export function sanitizePrismaMigrateDiff(diffSql: string): string {
-  const lines = diffSql.split('\n');
-  const safeLines: string[] = [];
-
-  for (const line of lines) {
-    let shouldDrop = false;
-    for (const idx of PROTECTED_PARTIAL_INDEXES) {
-      const dropPattern = new RegExp(
-        `DROP\\s+INDEX\\s+(?:IF\\s+EXISTS\\s+)?(?:["']?${idx}["']?)`,
-        'i'
-      );
-      if (dropPattern.test(line)) {
-        shouldDrop = true;
-        break;
-      }
-    }
-    if (!shouldDrop) {
-      safeLines.push(line);
-    }
-  }
-
-  return safeLines.join('\n');
+  assertSafeMigrationDiff(diffSql);
+  return diffSql;
 }
 
 /**
