@@ -525,9 +525,12 @@ async function runSessionSupertestSuite() {
     console.log('  PASS: AC-SESS-14 Heartbeat for non-current session returns 403 FORBIDDEN');
 
     // -------------------------------------------------------------------------
-    // AC-SESS-15: Heartbeat on inactive session
+    // AC-SESS-15: Heartbeat on inactive / time-expired session over HTTP
     // -------------------------------------------------------------------------
-    console.log('[TEST AC-SESS-15] User sends heartbeat for inactive session');
+    console.log(
+      '[TEST AC-SESS-15] User sends heartbeat for inactive and time-expired sessions over HTTP'
+    );
+    // Case 1: Inactive (REVOKED) session over HTTP
     const tokInactiveH = createSessionToken();
     const sessInactiveH = await prisma.deviceSession.create({
       data: {
@@ -539,13 +542,54 @@ async function runSessionSupertestSuite() {
         expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
       },
     });
-    try {
-      await sessionService.heartbeat(sessInactiveH.id, user.id, merchant.id, sessInactiveH.id);
-      assert.fail('Should throw ForbiddenException for inactive session');
-    } catch (err: any) {
-      assert.strictEqual(err.response?.error?.code, 'SESSION_NOT_ACTIVE');
-    }
-    console.log('  PASS: AC-SESS-15 Heartbeat on inactive session returns 403 SESSION_NOT_ACTIVE');
+
+    const res15Inactive = await request(server)
+      .patch(`/api/v1/sessions/${sessInactiveH.id}/heartbeat`)
+      .set('Authorization', `Bearer ${tok1.raw}`)
+      .expect(403);
+    assert.strictEqual(
+      res15Inactive.body.error.code,
+      'SESSION_NOT_ACTIVE',
+      'Revoked session heartbeat must return 403 SESSION_NOT_ACTIVE'
+    );
+
+    // Case 2: Time-expired session (> 30 days inactivity) over HTTP
+    const tokTimeExpired = createSessionToken();
+    const sessTimeExpired = await prisma.deviceSession.create({
+      data: {
+        user_id: user.id,
+        merchant_id: merchant.id,
+        session_token_hash: tokTimeExpired.hash,
+        device_id: 'time_expired_heartbeat_device',
+        status: SessionStatusEnum.ACTIVE,
+        last_active_at: new Date(Date.now() - 35 * 24 * 60 * 60 * 1000), // 35 days inactive
+        expires_at: new Date(Date.now() + 55 * 24 * 60 * 60 * 1000),
+      },
+    });
+
+    const res15Expired = await request(server)
+      .patch(`/api/v1/sessions/${sessTimeExpired.id}/heartbeat`)
+      .set('Authorization', `Bearer ${tok1.raw}`)
+      .expect(403);
+    assert.strictEqual(
+      res15Expired.body.error.code,
+      'SESSION_NOT_ACTIVE',
+      'Time-expired session heartbeat must return 403 SESSION_NOT_ACTIVE'
+    );
+
+    // Verify time-expired row was updated to EXPIRED status in DB (BR-SESS-03)
+    const dbSessTimeExpired = await prisma.deviceSession.findUnique({
+      where: { id: sessTimeExpired.id },
+    });
+    assert.strictEqual(
+      dbSessTimeExpired?.status,
+      SessionStatusEnum.EXPIRED,
+      'Time-expired session must be persisted as EXPIRED in DB'
+    );
+
+    console.log(
+      '  PASS: AC-SESS-15 Inactive and time-expired sessions return 403 SESSION_NOT_ACTIVE over HTTP and transition to EXPIRED in DB'
+    );
 
     // -------------------------------------------------------------------------
     // AC-SESS-16: Revoke-all excluding current
