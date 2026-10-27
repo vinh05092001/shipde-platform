@@ -3713,4 +3713,28 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
     assert.strictEqual(updated.data.role.name, 'Updated Bold Role');
     assert.strictEqual(updated.data.role.description, 'Updated Description');
   });
+
+  // Finding 5 (Round 14 / P2-07): OpenAPI specification specifies /api/v1 base server URL aligning /roles and /permissions with RbacController route prefix
+  test('Finding 5 (Round 14 / P2-07): OpenAPI server base path /api/v1 matches RbacController route prefix', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const openapiContent = fs.readFileSync(
+      path.resolve(__dirname, '../../../../docs/product-spec/contracts/openapi.yaml'),
+      'utf-8'
+    );
+    assert.ok(
+      openapiContent.includes('servers:\n  - url: /api/v1'),
+      'OpenAPI must declare /api/v1 server mount point'
+    );
+    assert.ok(
+      openapiContent.includes('/permissions:'),
+      'OpenAPI must declare /permissions route under base server'
+    );
+    assert.ok(
+      openapiContent.includes('/roles:'),
+      'OpenAPI must declare /roles route under base server'
+    );
+    const controllerPath = Reflect.getMetadata('path', RbacController);
+    assert.strictEqual(controllerPath, 'api/v1', 'RbacController route prefix must match OpenAPI server base URL');
+  });
 });

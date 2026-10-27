@@ -2,9 +2,13 @@ openapi: 3.1.0
 info:
   title: Ship Dễ Internal API
   version: 1.0.0
-  description: Baseline frontend/backend contract. Extend without changing documented semantics.
+  description: >-
+    Baseline frontend/backend contract. The base server path is defined as /api/v1 (Finding 5 / Round 14 / P2-07).
+    All endpoint paths declared below (/permissions, /roles, /roles/{id}, etc.) are relative to /api/v1,
+    resolving to /api/v1/* in generated API clients to strictly match NestJS @Controller('api/v1') routes.
 servers:
   - url: /api/v1
+    description: Primary API v1 server mount point (all non-health endpoints resolve under /api/v1)
 security:
   - bearerAuth: []
 tags:
@@ -517,6 +521,7 @@ paths:
         '409':
           description: Idempotency conflict
           $ref: '#/components/responses/Error'
+  # RBAC Endpoints (FEAT-RBAC-01) - Resolves under /api/v1 base server URL (/api/v1/permissions, /api/v1/roles, /api/v1/roles/{id})
   /permissions:
     get:
       tags: [Roles]
