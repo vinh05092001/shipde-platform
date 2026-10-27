@@ -630,6 +630,13 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
       created_at: new Date(),
       updated_at: new Date(),
     });
+    mockPrisma.users.push({
+      id: 'user-manager-cskh',
+      merchant_id: MERCHANT_A,
+      role: 'OPS_CSKH',
+      custom_role_id: 'role-cskh-lead',
+      status: 'ACTIVE',
+    });
     // Give CSKH lead iam:manage_users and order:view_create
     mockPrisma.rolePermissions.push(
       {
@@ -1740,6 +1747,13 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
       role: 'OPS_CSKH', // OPS_CSKH has pii:unmask statically
       customRoleId: 'role-restricted',
     };
+    mockPrisma.users.push({
+      id: 'user-cskh-custom',
+      merchant_id: MERCHANT_A,
+      role: 'OPS_CSKH',
+      custom_role_id: 'role-restricted',
+      status: 'ACTIVE',
+    });
 
     // Simulate DB read failure on role.findFirst
     mockPrisma.shouldFailRoleFindFirst = true;
@@ -2817,5 +2831,26 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
       assert.strictEqual(err.getStatus(), 403);
       assert.strictEqual(err.code, 'MFA_FRESH_AUTH_REQUIRED');
     }
+  });
+
+  test('Finding 3 (Round 10): getActorPermissions fails closed with empty permissions when user.findUnique returns null', async () => {
+    // Deleted or non-existent user holding stale OWNER claim in actor object
+    const staleActor = {
+      userId: 'non-existent-or-deleted-user-uuid',
+      merchantId: MERCHANT_A,
+      role: 'OWNER',
+      customRoleId: 'custom-role-1',
+    };
+
+    const perms = await service.getActorPermissions(staleActor);
+    assert.deepStrictEqual(perms, [], 'Must fail closed with empty array when user row does not exist in DB');
+
+    // GET /roles can_manage_roles check with stale actor returns false
+    const rolesRes = await service.getRoles(MERCHANT_A, 'corr-r10-f3', staleActor);
+    assert.strictEqual(
+      rolesRes.data.can_manage_roles,
+      false,
+      'can_manage_roles must be false when DB user lookup fails closed'
+    );
   });
 });

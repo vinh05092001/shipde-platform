@@ -367,14 +367,15 @@ export class RbacService {
           where: { id: actor.userId },
           select: { role: true, custom_role_id: true, merchant_id: true, status: true },
         });
-        if (user) {
-          if (!isUserActiveStatus(user.status)) {
-            return [];
-          }
-          role = user.role;
-          customRoleId = user.custom_role_id ?? undefined;
-          merchantId = user.merchant_id || merchantId;
+        if (!user) {
+          return [];
         }
+        if (!isUserActiveStatus(user.status)) {
+          return [];
+        }
+        role = user.role;
+        customRoleId = user.custom_role_id ?? undefined;
+        merchantId = user.merchant_id || merchantId;
       } catch (err) {
         if (err instanceof CanonicalApiException) throw err;
         throw new CanonicalApiException(
