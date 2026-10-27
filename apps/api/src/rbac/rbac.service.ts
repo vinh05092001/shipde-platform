@@ -330,13 +330,16 @@ export class RbacService {
     let role = actor.role;
     let merchantId = actor.merchantId;
 
-    if (actor.userId && (!role || customRoleId === undefined)) {
+    if (actor.userId) {
       try {
         const user = await db.user.findUnique({
           where: { id: actor.userId },
-          select: { role: true, custom_role_id: true, merchant_id: true },
+          select: { role: true, custom_role_id: true, merchant_id: true, status: true },
         });
         if (user) {
+          if (!isUserActiveStatus(user.status)) {
+            return [];
+          }
           role = user.role;
           customRoleId = user.custom_role_id ?? undefined;
           merchantId = user.merchant_id || merchantId;
@@ -415,6 +418,85 @@ export class RbacService {
     const actorPerms = await this.getActorPermissions(actor);
     const actorPermSet = new Set(actorPerms);
     return requiredPermissions.every((p) => actorPermSet.has(p));
+  }
+
+  /**
+   * Locks and reloads the actor row in transaction, verifying status, merchant ownership,
+   * and requiring specified permissions under the transactional snapshot (Finding 1 / Round 7).
+   */
+  async lockAndAuthorizeActor(
+    tx: any,
+    actor: ActorContext,
+    requiredPermissions: string[] = ['iam:manage_users']
+  ): Promise<{
+    actorSnapshot: ActorContext;
+    effectivePerms: string[];
+    permSet: Set<string>;
+  }> {
+    if (!actor.userId) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Thiếu thông tin người thực hiện'
+      );
+    }
+
+    const lockedActors = await tx.$queryRaw<
+      Array<{
+        id: string;
+        status: string;
+        role: RoleEnum;
+        custom_role_id: string | null;
+        merchant_id: string;
+      }>
+    >`SELECT id, status, role, custom_role_id, merchant_id FROM users WHERE id = ${actor.userId}::uuid FOR UPDATE`;
+
+    if (!lockedActors || lockedActors.length === 0) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Người dùng không tồn tại hoặc đã bị xóa'
+      );
+    }
+
+    const actorRow = lockedActors[0];
+    if (!isUserActiveStatus(actorRow.status)) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Tài khoản người dùng đã bị khóa hoặc không hoạt động'
+      );
+    }
+
+    if (actor.merchantId && actorRow.merchant_id !== actor.merchantId) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Người dùng không thuộc tổ chức hiện tại'
+      );
+    }
+
+    const actorSnapshot: ActorContext = {
+      ...actor,
+      merchantId: actorRow.merchant_id,
+      role: actorRow.role,
+      customRoleId: actorRow.custom_role_id ?? undefined,
+    };
+
+    const effectivePerms = await this.getActorPermissions(actorSnapshot, tx);
+    const permSet = new Set(effectivePerms);
+
+    for (const required of requiredPermissions) {
+      if (!permSet.has(required)) {
+        throw new CanonicalApiException(
+          HttpStatus.FORBIDDEN,
+          'FORBIDDEN',
+          'Bạn không có quyền quản lý vai trò và phân quyền'
+        );
+      }
+    }
+
+    return { actorSnapshot, effectivePerms, permSet };
   }
 
   /**
@@ -730,6 +812,23 @@ export class RbacService {
     let createdRole: any;
     try {
       createdRole = await this.prisma.$transaction(async (tx) => {
+        // Lock and reload actor row in transaction to ensure actor is active and holds iam:manage_users (Finding 1 / Round 7)
+        const { actorSnapshot, permSet } = await this.lockAndAuthorizeActor(tx, actor);
+
+        // In-transaction privilege ceiling re-check (Finding 1 / Round 7)
+        const unauthorizedInTx = permissionsInDb
+          .map((p) => p.code)
+          .filter((code) => !permSet.has(code));
+        if (unauthorizedInTx.length > 0) {
+          throw new CanonicalApiException(
+            HttpStatus.FORBIDDEN,
+            'PRIVILEGE_ESCALATION_DENIED',
+            'Không thể cấp quyền vượt quá thẩm quyền của bạn',
+            false,
+            `Bạn không có các quyền sau: ${unauthorizedInTx.join(', ')}`
+          );
+        }
+
         const existingInTx = await tx.role.findFirst({
           where: {
             merchant_id: actor.merchantId,
@@ -1050,9 +1149,11 @@ export class RbacService {
           include: { permission: true },
         });
 
-        // Re-read actor permissions under transaction to prevent stale checks
-        const actorPermsInTx = await this.getActorPermissions(actor, tx);
-        const actorPermSetInTx = new Set(actorPermsInTx);
+        // Lock and reload actor row in transaction to ensure actor is active and holds iam:manage_users (Finding 1 / Round 7)
+        const { actorSnapshot, permSet: actorPermSetInTx } = await this.lockAndAuthorizeActor(
+          tx,
+          actor
+        );
 
         // Privilege ceiling check 1: Actor must hold EVERY permission currently assigned to the role
         const unauthorizedCurrentCodes = currentRolePermsInTx
@@ -1330,9 +1431,11 @@ export class RbacService {
         const currentRolePermCodes = currentRolePermsInTx.map((rp) => rp.permission.code);
         const customPermCodes = new Set(currentRolePermCodes);
 
-        // Re-read actor permissions under transaction to avoid stale authorization
-        const actorPermsInTx = await this.getActorPermissions(actor, tx);
-        const actorPermSetInTx = new Set(actorPermsInTx);
+        // Lock and reload actor row in transaction to ensure actor is active and holds iam:manage_users (Finding 1 / Round 7)
+        const { actorSnapshot, permSet: actorPermSetInTx } = await this.lockAndAuthorizeActor(
+          tx,
+          actor
+        );
 
         // Verify actor holds all current permissions of the role under the lock
         const unauthorizedRoleCodes = currentRolePermCodes.filter(

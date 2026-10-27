@@ -398,6 +398,21 @@ class MockPrismaService {
       return r ? [{ id: r.id, merchant_id: r.merchant_id, is_system: Boolean(r.is_system) }] : [];
     }
     if (sql.includes('FROM users') && sql.includes('FOR UPDATE')) {
+      if (sql.includes('WHERE id =')) {
+        const actorUserId = values[0];
+        const u = this.users.find((x) => x.id === actorUserId);
+        return u
+          ? [
+              {
+                id: u.id,
+                status: u.status,
+                role: u.role,
+                custom_role_id: u.custom_role_id,
+                merchant_id: u.merchant_id,
+              },
+            ]
+          : [];
+      }
       const customRoleId = values[0];
       const merchantId = values[1];
       return this.users
@@ -409,6 +424,7 @@ class MockPrismaService {
           status: u.status,
           role: u.role,
           custom_role_id: u.custom_role_id,
+          merchant_id: u.merchant_id,
         }));
     }
     return [];
@@ -2019,6 +2035,104 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
       (err: any) => {
         assert.strictEqual(err.code, 'P2002');
         assert.match(err.message, /roles_merchant_id_name_lower_key/);
+        return true;
+      }
+    );
+  });
+
+  // Finding 1 (Round 7): In-transaction actor locking and re-authorization prevents mutation under stale ceiling or suspended status
+  test('Finding 1 / Round 7 / BR-RBAC-02 / AC-RBAC-01-05 / AC-RBAC-01-14: In-transaction actor locking and re-authorization prevents mutation under stale ceiling or suspended state', async () => {
+    // 1. Create a custom role for delegated admin with iam:manage_users and order:view_create
+    const delegatedRole = await service.createRole(
+      {
+        name: 'Delegated Admin Role R7',
+        permissions: ['iam:manage_users', 'order:view_create', 'shipment:quote_carrier'],
+      },
+      OWNER_ACTOR,
+      '127.0.0.1',
+      'corr-r7-f1-setup'
+    );
+    const delegatedRoleId = delegatedRole.data.role.id;
+
+    // 2. Setup delegated admin user with this custom role
+    const delegatedUserId = 'user-delegated-r7';
+    mockPrisma.users.push({
+      id: delegatedUserId,
+      merchant_id: MERCHANT_A,
+      role: 'OPS_CSKH',
+      custom_role_id: delegatedRoleId,
+      status: 'ACTIVE',
+    });
+
+    const delegatedActor = {
+      userId: delegatedUserId,
+      merchantId: MERCHANT_A,
+      role: 'OPS_CSKH',
+      customRoleId: delegatedRoleId,
+    };
+
+    // 3. Verify getActorPermissions reloads from DB even when role and customRoleId are preset
+    const permsBefore = await service.getActorPermissions(delegatedActor);
+    assert.ok(permsBefore.includes('shipment:quote_carrier'));
+
+    // 4. Demote the delegated role in DB to remove shipment:quote_carrier
+    const demotedPerms = mockPrisma.permissions.filter(
+      (p) => p.code === 'iam:manage_users' || p.code === 'order:view_create'
+    );
+    mockPrisma.rolePermissions = mockPrisma.rolePermissions.filter(
+      (rp) => rp.role_id !== delegatedRoleId
+    );
+    for (const p of demotedPerms) {
+      mockPrisma.rolePermissions.push({
+        id: `rp-${delegatedRoleId}-${p.id}`,
+        role_id: delegatedRoleId,
+        permission_id: p.id,
+      });
+    }
+
+    // Attempt createRole requesting shipment:quote_carrier with stale actor object claiming old role
+    // Must be rejected in transaction with 403 PRIVILEGE_ESCALATION_DENIED
+    await assert.rejects(
+      async () => {
+        await service.createRole(
+          {
+            name: 'Escalated Role Under Stale Snapshot',
+            permissions: ['order:view_create', 'shipment:quote_carrier'],
+          },
+          delegatedActor,
+          '127.0.0.1',
+          'corr-r7-f1-escalate'
+        );
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 403);
+        assert.strictEqual(err.code, 'PRIVILEGE_ESCALATION_DENIED');
+        return true;
+      }
+    );
+
+    // 5. Concurrently suspend the user
+    const userInDb = mockPrisma.users.find((u) => u.id === delegatedUserId)!;
+    userInDb.status = 'SUSPENDED';
+
+    // Must be rejected in transaction with 403 FORBIDDEN
+    await assert.rejects(
+      async () => {
+        await service.createRole(
+          {
+            name: 'Attempt By Suspended User',
+            permissions: ['order:view_create'],
+          },
+          delegatedActor,
+          '127.0.0.1',
+          'corr-r7-f1-suspended'
+        );
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 403);
+        assert.strictEqual(err.code, 'FORBIDDEN');
         return true;
       }
     );
