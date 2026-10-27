@@ -236,9 +236,11 @@ model Invitation {
   merchant           Merchant             @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
   invited_by         User?                @relation("InvitationsSent", fields: [invited_by_user_id], references: [id], onDelete: SetNull)
 
+  // Note: Partial unique constraints (BR-INV-08) "invitations_merchant_pending_email_unique"
+  // and "invitations_merchant_pending_phone_unique" (WHERE "status" = 'PENDING') are defined
+  // in migration SQL. Non-unique @@index([merchant_id, email]) is omitted here to prevent
+  // schema-driven migrations from dropping the partial unique idempotency constraint.
   @@index([merchant_id, status])
-  @@index([merchant_id, email])
-  @@index([merchant_id, phone])
   @@index([expires_at])
   @@map("invitations")
 }
