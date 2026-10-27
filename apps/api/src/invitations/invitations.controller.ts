@@ -19,6 +19,9 @@ import { CanonicalExceptionFilter } from '../auth/canonical-exception.filter';
 import { normalizeCorrelationId } from '@shipde/config';
 import { extractClientIp } from '../utils/ip.util';
 import { SendInvitationRequest, AcceptInvitationRequest } from '@shipde/contracts';
+import { resolveFrontendBaseUrl } from './invitation-url.util';
+
+export { resolveFrontendBaseUrl };
 
 @Controller(['api/v1/invitations', 'invitations'])
 @UseFilters(CanonicalExceptionFilter)
@@ -42,11 +45,7 @@ export class InvitationsController {
       userId: req.userId as string,
       merchantId: req.merchantId as string,
     };
-    const baseUrl =
-      (req.headers?.['origin'] as string) ||
-      process.env.FRONTEND_URL ||
-      process.env.APP_BASE_URL ||
-      'http://localhost:3000';
+    const baseUrl = resolveFrontendBaseUrl(req.headers?.['origin'] as string | undefined);
 
     return this.invitationsService.createInvitation(dto, actor, clientIp, correlationId, baseUrl);
   }
@@ -95,11 +94,7 @@ export class InvitationsController {
       userId: req.userId as string,
       merchantId: req.merchantId as string,
     };
-    const baseUrl =
-      (req.headers?.['origin'] as string) ||
-      process.env.FRONTEND_URL ||
-      process.env.APP_BASE_URL ||
-      'http://localhost:3000';
+    const baseUrl = resolveFrontendBaseUrl(req.headers?.['origin'] as string | undefined);
 
     return this.invitationsService.resendInvitation(id, actor, clientIp, correlationId, baseUrl);
   }

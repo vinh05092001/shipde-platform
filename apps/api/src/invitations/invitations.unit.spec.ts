@@ -167,34 +167,77 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
     });
 
     it('dispatches invitation through configured delivery adapter using frontend origin (Finding 4)', async () => {
-      let dispatchedParams: any = null;
-      const mockDeliveryAdapter = {
-        sendVerification: async (params: any) => {
-          dispatchedParams = params;
-        },
-      };
+      const prevFrontendUrl = process.env.FRONTEND_URL;
+      process.env.FRONTEND_URL = 'https://app.shipde.vn';
+      try {
+        let dispatchedParams: any = null;
+        const mockDeliveryAdapter = {
+          sendVerification: async (params: any) => {
+            dispatchedParams = params;
+          },
+        };
 
-      const customService = new InvitationsService(mockPrisma, mockDeliveryAdapter as any);
-      const actor = { userId: OWNER_USER_ID, merchantId: MERCHANT_ID, role: RoleEnum.OWNER };
-      const frontendOrigin = 'https://app.shipde.vn';
+        const customService = new InvitationsService(mockPrisma, mockDeliveryAdapter as any);
+        const actor = { userId: OWNER_USER_ID, merchantId: MERCHANT_ID, role: RoleEnum.OWNER };
+        const frontendOrigin = 'https://app.shipde.vn';
 
-      const res = await customService.createInvitation(
-        {
-          email: 'dispatch_test@shipde.vn',
-          role: RoleEnum.OPS_CSKH,
-        },
-        actor,
-        '127.0.0.1',
-        'test-corr-dispatch',
-        frontendOrigin
-      );
+        const res = await customService.createInvitation(
+          {
+            email: 'dispatch_test@shipde.vn',
+            role: RoleEnum.OPS_CSKH,
+          },
+          actor,
+          '127.0.0.1',
+          'test-corr-dispatch',
+          frontendOrigin
+        );
 
-      assert.ok(res.data.invitation_url.startsWith('https://app.shipde.vn/invite/accept?token='));
-      assert.ok(dispatchedParams);
-      assert.strictEqual(dispatchedParams.recipient, 'dispatch_test@shipde.vn');
-      assert.strictEqual(dispatchedParams.channel, 'email');
-      assert.strictEqual(dispatchedParams.purpose, 'invitation');
-      assert.strictEqual(dispatchedParams.link, res.data.invitation_url);
+        assert.ok(res.data.invitation_url.startsWith('https://app.shipde.vn/invite/accept?token='));
+        assert.ok(dispatchedParams);
+        assert.strictEqual(dispatchedParams.recipient, 'dispatch_test@shipde.vn');
+        assert.strictEqual(dispatchedParams.channel, 'email');
+        assert.strictEqual(dispatchedParams.purpose, 'invitation');
+        assert.strictEqual(dispatchedParams.link, res.data.invitation_url);
+      } finally {
+        process.env.FRONTEND_URL = prevFrontendUrl;
+      }
+    });
+
+    it('rejects untrusted Origin / base URL and falls back strictly to configured FRONTEND_URL (Finding 1)', async () => {
+      const prevFrontendUrl = process.env.FRONTEND_URL;
+      process.env.FRONTEND_URL = 'https://portal.shipde.vn';
+      try {
+        let dispatchedParams: any = null;
+        const mockDeliveryAdapter = {
+          sendVerification: async (params: any) => {
+            dispatchedParams = params;
+          },
+        };
+
+        const customService = new InvitationsService(mockPrisma, mockDeliveryAdapter as any);
+        const actor = { userId: OWNER_USER_ID, merchantId: MERCHANT_ID, role: RoleEnum.OWNER };
+        const attackerHost = 'https://attacker.evil.com';
+
+        const res = await customService.createInvitation(
+          {
+            email: 'untrusted_origin@shipde.vn',
+            role: RoleEnum.OPS_CSKH,
+          },
+          actor,
+          '127.0.0.1',
+          'test-corr-untrusted-origin',
+          attackerHost
+        );
+
+        // Security assertion: must NOT use attacker host
+        assert.ok(!res.data.invitation_url.includes('attacker.evil.com'));
+        assert.ok(res.data.invitation_url.startsWith('https://portal.shipde.vn/invite/accept?token='));
+        assert.ok(dispatchedParams);
+        assert.ok(!dispatchedParams.link.includes('attacker.evil.com'));
+        assert.ok(dispatchedParams.link.startsWith('https://portal.shipde.vn/invite/accept?token='));
+      } finally {
+        process.env.FRONTEND_URL = prevFrontendUrl;
+      }
     });
   });
 

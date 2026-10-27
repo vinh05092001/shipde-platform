@@ -8,6 +8,7 @@ import { VERIFICATION_ADAPTER } from '../auth/auth.tokens';
 import type { IVerificationDeliveryAdapter } from '@shipde/contracts';
 import { SendInvitationRequest, AcceptInvitationRequest, InvitationItem } from '@shipde/contracts';
 import { RateLimitService } from '../auth/rate-limit.service';
+import { resolveFrontendBaseUrl } from './invitation-url.util';
 
 export function maskIdentifier(identifier?: string | null): string {
   if (!identifier) return '';
@@ -379,7 +380,8 @@ export class InvitationsService {
       await this.rateLimitService.recordInvitationDispatchAttempt(clientIp, recipient);
     }
 
-    const invitationUrl = `${baseUrl}/invite/accept?token=${rawToken}`;
+    const safeBaseUrl = resolveFrontendBaseUrl(baseUrl);
+    const invitationUrl = `${safeBaseUrl}/invite/accept?token=${rawToken}`;
 
     // Dispatch verification via configured delivery adapter if registered
     if (this.deliveryAdapter) {
@@ -685,7 +687,8 @@ export class InvitationsService {
       await this.rateLimitService.recordInvitationDispatchAttempt(clientIp, recipient);
     }
 
-    const invitationUrl = `${baseUrl}/invite/accept?token=${rawToken}`;
+    const safeBaseUrl = resolveFrontendBaseUrl(baseUrl);
+    const invitationUrl = `${safeBaseUrl}/invite/accept?token=${rawToken}`;
 
     // Dispatch verification via configured delivery adapter if registered
     if (this.deliveryAdapter) {
