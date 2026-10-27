@@ -31,6 +31,7 @@ import {
   Discrepancy,
 } from '../types/domain';
 import { ERROR_CATALOG, ShipDeAppError } from '../types/error-codes';
+import { formatStoreScopeLabel } from '../components/UserManagementTab';
 
 interface TestResult {
   group: string;
@@ -1519,6 +1520,30 @@ export async function runComprehensiveRulesAudit(): Promise<{
       'Hàm validate ném lỗi chặn ngay khi phát hiện trường tổng cộng dồn',
       caughtForbiddenField,
       'Phát hiện từ khóa cấm total_value và chặn lập tức.'
+    );
+  }
+
+  // ==========================================================================
+  // NHÓM 8: PHẠM VI TRUY CẬP & GIAO DIỆN LỜI MỜI (FEAT-USR-01)
+  // ==========================================================================
+  console.log('\n--- [NHÓM 8] PHẠM VI TRUY CẬP & GIAO DIỆN LỜI MỜI (FEAT-USR-01) ---');
+  {
+    assertTest(
+      'User Management Scope',
+      'FEAT-USR-01-SCOPE-01',
+      'Empty store_scopes phải hiển thị "không gán phạm vi" thay vì toàn bộ chi nhánh',
+      formatStoreScopeLabel([]) === 'không gán phạm vi' &&
+        formatStoreScopeLabel(null) === 'không gán phạm vi' &&
+        formatStoreScopeLabel(undefined) === 'không gán phạm vi',
+      'Chặn nhận vơ quyền toàn bộ chi nhánh khi người dùng chưa được gán phạm vi.'
+    );
+
+    assertTest(
+      'User Management Scope',
+      'FEAT-USR-01-SCOPE-02',
+      'Gán đúng danh sách chi nhánh khi store_scopes có phần tử',
+      formatStoreScopeLabel(['HCM-Q3', 'HN-CG']) === 'HCM-Q3, HN-CG',
+      'Hiển thị chính xác danh sách chi nhánh được gán.'
     );
   }
 

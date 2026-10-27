@@ -47,6 +47,13 @@ export interface StoreItem {
 }
 
 // User with Store Scoping & Custom Overrides
+export function formatStoreScopeLabel(storeScopes?: string[] | null): string {
+  if (storeScopes && storeScopes.length > 0) {
+    return storeScopes.join(', ');
+  }
+  return 'không gán phạm vi';
+}
+
 export interface UserWithStores {
   id: string;
   full_name: string;
@@ -878,7 +885,7 @@ export const UserManagementTab: React.FC = () => {
                                       ))
                                     ) : (
                                       <span className="text-[10px] text-slate-400">
-                                        Toàn bộ chi nhánh
+                                        không gán phạm vi
                                       </span>
                                     )}
                                   </div>
