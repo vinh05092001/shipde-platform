@@ -11,6 +11,7 @@ import {
   ShieldCheck,
   MapPin,
   Warehouse,
+  RefreshCw,
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 
@@ -27,6 +28,13 @@ export function parseScopeInput(input: string): string[] {
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
+}
+
+export function canRetryInviteSubmission(params: {
+  loading: boolean;
+  errorMsg: string | null;
+}): boolean {
+  return !params.loading && Boolean(params.errorMsg);
 }
 
 export function validateInviteForm(params: {
@@ -151,16 +159,27 @@ export const InviteUserModal: React.FC<Props> = ({ isOpen, onClose, onUserInvite
         {errorMsg && (
           <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-xl flex items-start gap-2.5">
             <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-            <div className="flex-1">
+            <div className="flex-1 space-y-1">
               <p className="font-medium">{errorMsg}</p>
             </div>
-            <button
-              type="button"
-              onClick={() => setErrorMsg(null)}
-              className="text-red-500 hover:text-red-700 text-xs font-semibold"
-            >
-              Đóng
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={(e) => void handleSubmit(e as any)}
+                disabled={loading}
+                className="px-2.5 py-1 bg-red-100 hover:bg-red-200 text-red-800 rounded-lg text-xs font-semibold transition flex items-center gap-1"
+              >
+                <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} />
+                <span>Thử lại</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setErrorMsg(null)}
+                className="text-red-500 hover:text-red-700 text-xs font-semibold px-1"
+              >
+                Đóng
+              </button>
+            </div>
           </div>
         )}
 

@@ -41,7 +41,11 @@ import {
   isManageUsersForbidden,
   resolveInvitationsUIState,
 } from '../components/UserManagementTab';
-import { parseScopeInput, validateInviteForm } from '../components/forms/InviteUserModal';
+import {
+  parseScopeInput,
+  validateInviteForm,
+  canRetryInviteSubmission,
+} from '../components/forms/InviteUserModal';
 import {
   validateAcceptPassword,
   resolveAcceptInviteUIState,
@@ -1643,7 +1647,7 @@ export async function runComprehensiveRulesAudit(): Promise<{
     assertTest(
       'User Management UI States',
       'FEAT-USR-01-UI-RETRY',
-      'Hiển thị banner lỗi có nút "Thử lại" khi gọi API thất bại',
+      'Hiển thị banner lỗi có nút "Thử lại" khi gọi API thất bại và cho phép retry gửi form lời mời',
       resolveInvitationsUIState({
         isForbidden: false,
         error: 'Network timeout',
@@ -1651,6 +1655,9 @@ export async function runComprehensiveRulesAudit(): Promise<{
         itemCount: 0,
       }) === 'error' &&
         INVITATIONS_RETRY_LABEL === 'Thử lại' &&
+        canRetryInviteSubmission({ loading: false, errorMsg: 'Lỗi kết nối máy chủ' }) === true &&
+        canRetryInviteSubmission({ loading: true, errorMsg: 'Lỗi kết nối máy chủ' }) === false &&
+        canRetryInviteSubmission({ loading: false, errorMsg: null }) === false &&
         resolveAcceptInviteUIState({
           verifying: false,
           verifyError: 'Token expired',
@@ -1658,7 +1665,7 @@ export async function runComprehensiveRulesAudit(): Promise<{
           success: false,
           hasInvitation: false,
         }) === 'verify_error',
-      'Cho phép người dùng nhấn Thử lại mà không mất dữ liệu đã nhập.'
+      'Cho phép người dùng nhấn Thử lại mà không mất dữ liệu đã nhập trong modal và tab quản trị.'
     );
 
     assertTest(
