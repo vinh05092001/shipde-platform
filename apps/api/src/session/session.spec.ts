@@ -188,6 +188,134 @@ describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
   });
 
   // ---------------------------------------------------------------------------
+  // Finding 3 / AC-SESS-20: Post-commit audit emission & explicit rollback logging
+  // ---------------------------------------------------------------------------
+  describe('Transactional Audit Logging & Explicit Rollback (BR-SESS-07 / AC-SESS-20)', () => {
+    it('emits AUDIT: SESSION_REVOKED to stdout only after transaction commit', async () => {
+      process.env.AUDIT_IDENTIFIER_HMAC_KEY = 'test-audit-hmac-key-placeholder-32-chars';
+      const stdoutEvents: string[] = [];
+      const origLog = console.log;
+      console.log = (...args: any[]) => {
+        stdoutEvents.push(args.join(' '));
+        origLog(...args);
+      };
+
+      try {
+        let committed = false;
+        const mockPrisma: any = {
+          deviceSession: {
+            findUnique: async () => ({
+              id: 'sess-commit-1',
+              user_id: 'user-1',
+              merchant_id: 'merchant-1',
+              status: SessionStatusEnum.ACTIVE,
+              device_id: 'dev-1',
+            }),
+          },
+          $transaction: async (cb: any) => {
+            const tx: any = {
+              deviceSession: {
+                updateMany: async () => ({ count: 1 }),
+                findUnique: async () => ({
+                  id: 'sess-commit-1',
+                  status: SessionStatusEnum.REVOKED,
+                }),
+              },
+              auditLog: {
+                create: async () => {
+                  // Inside transaction: stdout must NOT have emitted the success audit yet!
+                  assert.strictEqual(
+                    stdoutEvents.some((l) => l.includes('AUDIT: SESSION_REVOKED')),
+                    false,
+                    'stdout must NOT log AUDIT: SESSION_REVOKED before transaction commits'
+                  );
+                  return { id: 'audit-1' };
+                },
+              },
+            };
+            const res = await cb(tx);
+            committed = true;
+            return res;
+          },
+        };
+
+        const service = new SessionService(mockPrisma);
+        const res = await service.revoke('sess-commit-1', 'user-1', 'merchant-1', 'c-1');
+        assert.strictEqual(res.status, SessionStatusEnum.REVOKED);
+        assert.strictEqual(committed, true);
+        assert.ok(
+          stdoutEvents.some((l) => l.includes('AUDIT: SESSION_REVOKED')),
+          'stdout must emit AUDIT: SESSION_REVOKED after transaction commits'
+        );
+      } finally {
+        console.log = origLog;
+      }
+    });
+
+    it('does not emit stdout success audit and logs AUDIT_ROLLBACK when audit creation fails', async () => {
+      process.env.AUDIT_IDENTIFIER_HMAC_KEY = 'test-audit-hmac-key-placeholder-32-chars';
+      const stdoutEvents: string[] = [];
+      const stderrEvents: string[] = [];
+      const origLog = console.log;
+      const origErr = console.error;
+      console.log = (...args: any[]) => {
+        stdoutEvents.push(args.join(' '));
+        origLog(...args);
+      };
+      console.error = (...args: any[]) => {
+        stderrEvents.push(args.join(' '));
+        origErr(...args);
+      };
+
+      try {
+        const mockPrisma: any = {
+          deviceSession: {
+            findUnique: async () => ({
+              id: 'sess-fail-1',
+              user_id: 'user-1',
+              merchant_id: 'merchant-1',
+              status: SessionStatusEnum.ACTIVE,
+              device_id: 'dev-1',
+            }),
+          },
+          $transaction: async (cb: any) => {
+            const tx: any = {
+              deviceSession: {
+                updateMany: async () => ({ count: 1 }),
+              },
+              auditLog: {
+                create: async () => {
+                  throw new Error('Database disk full');
+                },
+              },
+            };
+            return cb(tx);
+          },
+        };
+
+        const service = new SessionService(mockPrisma);
+        await assert.rejects(
+          async () => service.revoke('sess-fail-1', 'user-1', 'merchant-1', 'c-fail-1'),
+          /Database disk full/
+        );
+
+        assert.strictEqual(
+          stdoutEvents.some((l) => l.includes('AUDIT: SESSION_REVOKED')),
+          false,
+          'stdout must not record a successful audit when write fails'
+        );
+        assert.ok(
+          stderrEvents.some((l) => l.includes('AUDIT_FAILED') || l.includes('AUDIT_ROLLBACK')),
+          'stderr must explicitly log failure and rollback'
+        );
+      } finally {
+        console.log = origLog;
+        console.error = origErr;
+      }
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // Finding 4: No predictable hard-coded HMAC fallback (fail-closed)
   // ---------------------------------------------------------------------------
   describe('SessionService Secret Enforcement (BR-SESS-09 / Finding 4)', () => {

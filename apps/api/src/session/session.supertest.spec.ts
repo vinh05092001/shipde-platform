@@ -866,6 +866,20 @@ async function runSessionSupertestSuite() {
     });
 
     const originalLogAudit = (sessionService as any).logAudit;
+    const stdoutLogs: string[] = [];
+    const stderrLogs: string[] = [];
+    const origConsoleLog = console.log;
+    const origConsoleError = console.error;
+
+    console.log = (...args: any[]) => {
+      stdoutLogs.push(args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' '));
+      origConsoleLog(...args);
+    };
+    console.error = (...args: any[]) => {
+      stderrLogs.push(args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' '));
+      origConsoleError(...args);
+    };
+
     (sessionService as any).logAudit = async () => {
       throw new Error('Simulated audit persistence failure');
     };
@@ -882,11 +896,33 @@ async function runSessionSupertestSuite() {
         SessionStatusEnum.ACTIVE,
         'Session must remain ACTIVE after audit rollback'
       );
+
+      // Verify stdout did NOT record a successful audit
+      const leakedSuccessAudit = stdoutLogs.some(
+        (l) => l.includes('AUDIT: SESSION_REVOKED') && l.includes(sess20.id)
+      );
+      assert.strictEqual(
+        leakedSuccessAudit,
+        false,
+        'stdout must not record a successful audit when transaction rolls back'
+      );
+
+      // Verify rollback was explicitly recorded in stderr
+      const loggedRollback = stderrLogs.some(
+        (l) => l.includes('AUDIT_ROLLBACK') && l.includes(sess20.id)
+      );
+      assert.ok(
+        loggedRollback,
+        'stderr must explicitly record AUDIT_ROLLBACK when transaction fails'
+      );
+
       console.log(
-        '  PASS: AC-SESS-20 Transaction rolls back on audit failure; session remains ACTIVE'
+        '  PASS: AC-SESS-20 Transaction rolls back on audit failure; session remains ACTIVE and rollback is logged explicitly'
       );
     } finally {
       (sessionService as any).logAudit = originalLogAudit;
+      console.log = origConsoleLog;
+      console.error = origConsoleError;
     }
 
     // -------------------------------------------------------------------------

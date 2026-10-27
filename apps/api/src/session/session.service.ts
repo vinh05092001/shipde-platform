@@ -188,61 +188,80 @@ export class SessionService {
       };
     }
 
-    return await this.prisma.$transaction(async (tx) => {
-      // Concurrency-safe atomic transition: only update if currently ACTIVE
-      const updateResult = await tx.deviceSession.updateMany({
-        where: {
-          id: sessionId,
-          user_id: userId,
-          merchant_id: merchantId,
-          status: SessionStatusEnum.ACTIVE,
-        },
-        data: {
-          status: SessionStatusEnum.REVOKED,
-          is_revoked: true,
-          revoked_at: new Date(),
-          revoked_by: userId,
-          revoke_reason: reason,
-        },
-      });
-
-      if (updateResult.count > 0) {
-        await this.logAudit(
-          {
-            merchantId,
-            userId,
-            actor: userId,
-            action: 'SESSION_REVOKED',
-            resource: `Session:${sessionId}`,
-            details: { reason, device_id: session.device_id },
-            correlationId,
-            ipAddress,
+    let auditLogAction: (() => void) | null = null;
+    try {
+      const result = await this.prisma.$transaction(async (tx) => {
+        // Concurrency-safe atomic transition: only update if currently ACTIVE
+        const updateResult = await tx.deviceSession.updateMany({
+          where: {
+            id: sessionId,
+            user_id: userId,
+            merchant_id: merchantId,
+            status: SessionStatusEnum.ACTIVE,
           },
-          tx
-        );
+          data: {
+            status: SessionStatusEnum.REVOKED,
+            is_revoked: true,
+            revoked_at: new Date(),
+            revoked_by: userId,
+            revoke_reason: reason,
+          },
+        });
+
+        if (updateResult.count > 0) {
+          auditLogAction = await this.logAudit(
+            {
+              merchantId,
+              userId,
+              actor: userId,
+              action: 'SESSION_REVOKED',
+              resource: `Session:${sessionId}`,
+              details: { reason, device_id: session.device_id },
+              correlationId,
+              ipAddress,
+            },
+            tx
+          );
+
+          return {
+            session_id: sessionId,
+            status: SessionStatusEnum.REVOKED,
+            message: 'Phiên đã được thu hồi',
+          };
+        }
+
+        // If count is 0, a concurrent request already transitioned the session.
+        // Fetch latest status to respond idempotently without duplicate audit logs or timestamp mutations.
+        const latest = await tx.deviceSession.findUnique({
+          where: { id: sessionId },
+        });
 
         return {
           session_id: sessionId,
-          status: SessionStatusEnum.REVOKED,
-          message: 'Phiên đã được thu hồi',
+          status: latest?.status ?? SessionStatusEnum.REVOKED,
+          message:
+            latest?.status === SessionStatusEnum.REVOKED
+              ? 'Phiên đã được thu hồi trước đó'
+              : 'Phiên đã hết hạn',
         };
-      }
-
-      // If count is 0, a concurrent request already transitioned the session.
-      // Fetch latest status to respond idempotently without duplicate audit logs or timestamp mutations.
-      const latest = await tx.deviceSession.findUnique({
-        where: { id: sessionId },
       });
 
-      return {
-        session_id: sessionId,
-        status: latest?.status ?? SessionStatusEnum.REVOKED,
-        message:
-          latest?.status === SessionStatusEnum.REVOKED
-            ? 'Phiên đã được thu hồi trước đó'
-            : 'Phiên đã hết hạn',
-      };
-    });
+      // Emitted only after transaction successfully commits
+      if (typeof auditLogAction === 'function') {
+        auditLogAction();
+      }
+      return result;
+    } catch (err) {
+      console.error(
+        formatStructuredLog({
+          level: 'error',
+          service: 'api',
+          message: `AUDIT_ROLLBACK: Transaction rolled back during revocation of Session:${sessionId}`,
+          metadata: { sessionId, merchantId, userId, correlationId, error: (err as any)?.message },
+        })
+      );
+      throw err;
+    }
   }
 
   async revokeAll(
@@ -256,51 +275,70 @@ export class SessionService {
     const includeCurrent = dto.include_current === true;
     const now = new Date();
 
-    return await this.prisma.$transaction(async (tx) => {
-      const where: Record<string, unknown> = {
-        merchant_id: merchantId,
-        user_id: userId,
-        status: SessionStatusEnum.ACTIVE,
-      };
+    let auditLogAction: (() => void) | null = null;
+    try {
+      const result = await this.prisma.$transaction(async (tx) => {
+        const where: Record<string, unknown> = {
+          merchant_id: merchantId,
+          user_id: userId,
+          status: SessionStatusEnum.ACTIVE,
+        };
 
-      if (!includeCurrent && currentSessionId) {
-        where.id = { not: currentSessionId };
-      }
+        if (!includeCurrent && currentSessionId) {
+          where.id = { not: currentSessionId };
+        }
 
-      const updateResult = await tx.deviceSession.updateMany({
-        where,
-        data: {
-          status: SessionStatusEnum.REVOKED,
-          is_revoked: true,
-          revoked_at: now,
-          revoked_by: userId,
-          revoke_reason: 'Revoke all sessions',
-        },
+        const updateResult = await tx.deviceSession.updateMany({
+          where,
+          data: {
+            status: SessionStatusEnum.REVOKED,
+            is_revoked: true,
+            revoked_at: now,
+            revoked_by: userId,
+            revoke_reason: 'Revoke all sessions',
+          },
+        });
+
+        if (updateResult.count === 0) {
+          return { revoked_count: 0, message: 'Không có phiên nào cần thu hồi' };
+        }
+
+        auditLogAction = await this.logAudit(
+          {
+            merchantId,
+            userId,
+            actor: userId,
+            action: 'SESSIONS_REVOKED_ALL',
+            resource: `User:${userId}`,
+            details: { revoked_count: updateResult.count, include_current: includeCurrent },
+            correlationId,
+            ipAddress,
+          },
+          tx
+        );
+
+        return {
+          revoked_count: updateResult.count,
+          message: `Đã thu hồi ${updateResult.count} phiên`,
+        };
       });
 
-      if (updateResult.count === 0) {
-        return { revoked_count: 0, message: 'Không có phiên nào cần thu hồi' };
+      // Emitted only after transaction successfully commits
+      if (typeof auditLogAction === 'function') {
+        auditLogAction();
       }
-
-      await this.logAudit(
-        {
-          merchantId,
-          userId,
-          actor: userId,
-          action: 'SESSIONS_REVOKED_ALL',
-          resource: `User:${userId}`,
-          details: { revoked_count: updateResult.count, include_current: includeCurrent },
-          correlationId,
-          ipAddress,
-        },
-        tx
+      return result;
+    } catch (err) {
+      console.error(
+        formatStructuredLog({
+          level: 'error',
+          service: 'api',
+          message: `AUDIT_ROLLBACK: Transaction rolled back during revoke-all for User:${userId}`,
+          metadata: { merchantId, userId, correlationId, error: (err as any)?.message },
+        })
       );
-
-      return {
-        revoked_count: updateResult.count,
-        message: `Đã thu hồi ${updateResult.count} phiên`,
-      };
-    });
+      throw err;
+    }
   }
 
   /**
@@ -340,7 +378,7 @@ export class SessionService {
       },
     });
 
-    await this.logAudit(
+    const auditAction = await this.logAudit(
       {
         merchantId,
         userId: targetUserId,
@@ -351,8 +389,11 @@ export class SessionService {
         correlationId,
         ipAddress,
       },
-      tx
+      client
     );
+    if (!tx && typeof auditAction === 'function') {
+      auditAction();
+    }
 
     return activeSessions.length;
   }
@@ -484,18 +525,20 @@ export class SessionService {
       ipAddress?: string;
     },
     tx: any = this.prisma
-  ): Promise<void> {
+  ): Promise<() => void> {
     const hashedIp = meta.ipAddress ? this.hashIp(meta.ipAddress) : null;
     const { ipAddress: _rawIp, ...safeMeta } = meta;
 
-    console.log(
-      formatStructuredLog({
-        level: 'info',
-        service: 'api',
-        message: `AUDIT: ${meta.action} on ${meta.resource} by ${meta.actor}`,
-        metadata: { ...safeMeta, ipAddress: hashedIp, timestamp: new Date().toISOString() },
-      })
-    );
+    const emitLog = () => {
+      console.log(
+        formatStructuredLog({
+          level: 'info',
+          service: 'api',
+          message: `AUDIT: ${meta.action} on ${meta.resource} by ${meta.actor}`,
+          metadata: { ...safeMeta, ipAddress: hashedIp, timestamp: new Date().toISOString() },
+        })
+      );
+    };
 
     try {
       await tx.auditLog.create({
@@ -510,8 +553,21 @@ export class SessionService {
         },
       });
     } catch (err) {
-      console.error('Failed to persist audit log:', err);
+      console.error(
+        formatStructuredLog({
+          level: 'error',
+          service: 'api',
+          message: `AUDIT_FAILED: Failed to persist audit log for ${meta.action} on ${meta.resource}`,
+          metadata: { ...safeMeta, ipAddress: hashedIp, error: (err as any)?.message },
+        })
+      );
       throw err;
     }
+
+    if (tx === this.prisma) {
+      emitLog();
+    }
+
+    return emitLog;
   }
 }
