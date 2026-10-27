@@ -506,11 +506,12 @@ export class InvitationsService {
       'mời'
     );
 
-    // 4. Duplicate checks using shared canonical identity helper (BR-INV-08 / Round 7 Finding 6 / Round 8 Finding 2)
+    // 4. Duplicate checks using shared canonical identity helper (BR-INV-08 / Round 7 Finding 6 / Round 8 Finding 2 / Round 10 Finding 3)
     // 4a. Check active user with case-insensitive email or canonical phone variants (AC-USR-01-05)
     const existingUser = await this.prisma.user.findFirst({
       where: {
         merchant_id: actor.merchantId,
+        status: { in: ['active', 'ACTIVE'] },
         OR: identity.buildUserOrConditions(),
       },
     });
@@ -592,10 +593,11 @@ export class InvitationsService {
     try {
       invitation = await this.prisma.$transaction(
         async (tx) => {
-          // Finding 6 (Round 7): Case-insensitive email and canonical phone checks inside insertion transaction (BR-INV-08)
+          // Finding 6 (Round 7 / Round 10 Finding 3): Case-insensitive email and canonical phone checks for active users inside insertion transaction (BR-INV-08)
           const inTxExistingUser = await tx.user.findFirst({
             where: {
               merchant_id: actor.merchantId,
+              status: { in: ['active', 'ACTIVE'] },
               OR: identity.buildUserOrConditions(),
             },
           });
@@ -634,10 +636,11 @@ export class InvitationsService {
             },
           });
 
-          // Round 9 Finding 4: Re-check user under serializable transaction before inserting pending invite (BR-INV-08 / AC-USR-01-05)
+          // Round 9 Finding 4 / Round 10 Finding 3: Re-check active user under serializable transaction before inserting pending invite (BR-INV-08 / AC-USR-01-05)
           const recheckUser = await tx.user.findFirst({
             where: {
               merchant_id: actor.merchantId,
+              status: { in: ['active', 'ACTIVE'] },
               OR: identity.buildUserOrConditions(),
             },
           });
@@ -1028,10 +1031,11 @@ export class InvitationsService {
     // Shared canonical identity helper (Round 8 Finding 2 / BR-INV-08 / AC-USR-01-05)
     const identity = resolveCanonicalIdentity({ email: invitation.email, phone: invitation.phone });
 
-    // Re-check active user before rotating token or consuming quota
+    // Re-check active user before rotating token or consuming quota (BR-INV-08 / Round 10 Finding 3)
     const existingActiveUser = await this.prisma.user.findFirst({
       where: {
         merchant_id: actor.merchantId,
+        status: { in: ['active', 'ACTIVE'] },
         OR: identity.buildUserOrConditions(),
       },
     });
@@ -1658,67 +1662,135 @@ export class InvitationsService {
     const now = new Date();
     const hashedPassword = await hashPassword(dto.password);
 
-    const result = await this.prisma.$transaction(async (tx) => {
-      // Atomic concurrency guard pinning token_hash, unconsumed status, and unexpired expires_at (Finding 2 / BR-INV-03, BR-INV-04, BR-INV-05)
-      const updateCount = await tx.invitation.updateMany({
-        where: {
-          id: invitation.id,
-          token_hash: resolvedTokenHash,
-          status: InvitationStatusEnum.PENDING,
-          consumed_at: null,
-          expires_at: { gt: now },
-        },
-        data: {
-          status: InvitationStatusEnum.ACCEPTED,
-          consumed_at: now,
-          updated_at: now,
-        },
-      });
+    let result: any;
+    try {
+      result = await this.prisma.$transaction(
+        async (tx) => {
+          // Atomic concurrency guard pinning token_hash, unconsumed status, and unexpired expires_at (Finding 2 / BR-INV-03, BR-INV-04, BR-INV-05)
+          const updateCount = await tx.invitation.updateMany({
+            where: {
+              id: invitation.id,
+              token_hash: resolvedTokenHash,
+              status: InvitationStatusEnum.PENDING,
+              consumed_at: null,
+              expires_at: { gt: now },
+            },
+            data: {
+              status: InvitationStatusEnum.ACCEPTED,
+              consumed_at: now,
+              updated_at: now,
+            },
+          });
 
-      if (updateCount.count === 0) {
-        const current = await tx.invitation.findUnique({
-          where: { id: invitation.id },
-        });
-        if (
-          current?.status === InvitationStatusEnum.EXPIRED ||
-          (current?.expires_at && current.expires_at <= now)
-        ) {
-          throw new CanonicalApiException(
-            HttpStatus.BAD_REQUEST,
-            'INVITATION_EXPIRED',
-            'Lời mời đã hết hạn. Vui lòng liên hệ quản trị viên để nhận lời mời mới.',
-            false
-          );
-        }
-        if (current?.consumed_at || current?.status === InvitationStatusEnum.ACCEPTED) {
-          throw new CanonicalApiException(
-            HttpStatus.BAD_REQUEST,
-            'INVITATION_ALREADY_USED',
-            'Lời mời đã được chấp nhận bởi một yêu cầu khác',
-            false
-          );
-        }
-        throw new CanonicalApiException(
-          HttpStatus.BAD_REQUEST,
-          'INVITATION_ALREADY_USED',
-          'Lời mời đã bị thay thế hoặc không còn khả dụng',
-          false
-        );
-      }
+          if (updateCount.count === 0) {
+            const current = await tx.invitation.findUnique({
+              where: { id: invitation.id },
+            });
+            if (
+              current?.status === InvitationStatusEnum.EXPIRED ||
+              (current?.expires_at && current.expires_at <= now)
+            ) {
+              throw new CanonicalApiException(
+                HttpStatus.BAD_REQUEST,
+                'INVITATION_EXPIRED',
+                'Lời mời đã hết hạn. Vui lòng liên hệ quản trị viên để nhận lời mời mới.',
+                false
+              );
+            }
+            if (current?.consumed_at || current?.status === InvitationStatusEnum.ACCEPTED) {
+              throw new CanonicalApiException(
+                HttpStatus.BAD_REQUEST,
+                'INVITATION_ALREADY_USED',
+                'Lời mời đã được chấp nhận bởi một yêu cầu khác',
+                false
+              );
+            }
+            throw new CanonicalApiException(
+              HttpStatus.BAD_REQUEST,
+              'INVITATION_ALREADY_USED',
+              'Lời mời đã bị thay thế hoặc không còn khả dụng',
+              false
+            );
+          }
 
-      // Check existing user conflict in merchant using shared canonical identity helper (Round 8 Finding 2 / BR-INV-08 / AC-USR-01-05)
-      const identity = resolveCanonicalIdentity({
-        email: invitation.email,
-        phone: invitation.phone,
-      });
-      const duplicateUser = await tx.user.findFirst({
-        where: {
-          merchant_id: invitation.merchant_id,
-          OR: identity.buildUserOrConditions(),
+          // Check existing active user conflict in merchant using shared canonical identity helper (Round 8 Finding 2 / BR-INV-08 / AC-USR-01-05 / Round 10 Finding 3)
+          const identity = resolveCanonicalIdentity({
+            email: invitation.email,
+            phone: invitation.phone,
+          });
+          const duplicateUser = await tx.user.findFirst({
+            where: {
+              merchant_id: invitation.merchant_id,
+              status: { in: ['active', 'ACTIVE'] },
+              OR: identity.buildUserOrConditions(),
+            },
+          });
+
+          if (duplicateUser) {
+            throw new CanonicalApiException(
+              HttpStatus.BAD_REQUEST,
+              'USER_ALREADY_EXISTS',
+              'Người dùng với thông tin này đã được kích hoạt trong cửa hàng',
+              false
+            );
+          }
+
+          // Create User with ACTIVE status and assigned scopes
+          const newUser = await tx.user.create({
+            data: {
+              merchant_id: invitation.merchant_id,
+              email: identity.email || null,
+              phone: identity.phone || null,
+              full_name: dto.full_name.trim(),
+              password_hash: hashedPassword,
+              role: invitation.role,
+              store_scopes: invitation.store_scopes,
+              warehouse_scopes: invitation.warehouse_scopes,
+              status: 'active',
+              email_verified_at: invitation.email ? now : null,
+              phone_verified_at: invitation.phone ? now : null,
+              terms_accepted_at: null,
+              terms_version: null,
+            },
+          });
+
+          // Immutable audit log (BR-INV-09, AC-USR-01-14, AC-USR-01-18)
+          // Zero passwords or raw tokens
+          await tx.auditLog.create({
+            data: {
+              merchant_id: invitation.merchant_id,
+              user_id: newUser.id,
+              action: 'INVITATION_ACCEPTED',
+              entity_type: 'Invitation',
+              entity_id: invitation.id,
+              ip_address: clientIp,
+              new_value: {
+                invitation_id: invitation.id,
+                merchant_id: invitation.merchant_id,
+                actor_id: newUser.id,
+                target_identifier_masked: maskIdentifier(invitation.email || invitation.phone),
+                user_id: newUser.id,
+                role: newUser.role,
+                store_scopes: newUser.store_scopes,
+                warehouse_scopes: newUser.warehouse_scopes,
+                correlation_id: safeCorrelationId,
+              },
+            },
+          });
+
+          return newUser;
         },
-      });
-
-      if (duplicateUser) {
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }
+      );
+    } catch (err: any) {
+      if (err instanceof CanonicalApiException) throw err;
+      if (
+        err?.code === 'P2002' ||
+        err?.code === 'P2034' ||
+        err?.code === '40001' ||
+        err?.message?.includes('could not serialize') ||
+        err?.message?.includes('Unique constraint failed')
+      ) {
         throw new CanonicalApiException(
           HttpStatus.BAD_REQUEST,
           'USER_ALREADY_EXISTS',
@@ -1726,52 +1798,8 @@ export class InvitationsService {
           false
         );
       }
-
-      // Create User with ACTIVE status and assigned scopes
-      const newUser = await tx.user.create({
-        data: {
-          merchant_id: invitation.merchant_id,
-          email: identity.email || null,
-          phone: identity.phone || null,
-          full_name: dto.full_name.trim(),
-          password_hash: hashedPassword,
-          role: invitation.role,
-          store_scopes: invitation.store_scopes,
-          warehouse_scopes: invitation.warehouse_scopes,
-          status: 'active',
-          email_verified_at: invitation.email ? now : null,
-          phone_verified_at: invitation.phone ? now : null,
-          terms_accepted_at: null,
-          terms_version: null,
-        },
-      });
-
-      // Immutable audit log (BR-INV-09, AC-USR-01-14, AC-USR-01-18)
-      // Zero passwords or raw tokens
-      await tx.auditLog.create({
-        data: {
-          merchant_id: invitation.merchant_id,
-          user_id: newUser.id,
-          action: 'INVITATION_ACCEPTED',
-          entity_type: 'Invitation',
-          entity_id: invitation.id,
-          ip_address: clientIp,
-          new_value: {
-            invitation_id: invitation.id,
-            merchant_id: invitation.merchant_id,
-            actor_id: newUser.id,
-            target_identifier_masked: maskIdentifier(invitation.email || invitation.phone),
-            user_id: newUser.id,
-            role: newUser.role,
-            store_scopes: newUser.store_scopes,
-            warehouse_scopes: newUser.warehouse_scopes,
-            correlation_id: safeCorrelationId,
-          },
-        },
-      });
-
-      return newUser;
-    });
+      throw err;
+    }
 
     return {
       data: {

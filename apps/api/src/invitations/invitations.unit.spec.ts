@@ -1,6 +1,7 @@
 import * as assert from 'node:assert';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { createHash } from 'node:crypto';
 import { describe, it, beforeEach } from 'node:test';
 import {
   InvitationsService,
@@ -4026,6 +4027,73 @@ CREATE INDEX "some_other_idx" ON "invitations"("created_at");
       const resAccept = await throwLimiter.checkInvitationAcceptLimit('10.0.0.3', 'sample-token');
       assert.strictEqual(resAccept.allowed, false);
       assert.strictEqual(resAccept.retryAfterSeconds, 60);
+    });
+
+    it('Round 10 Finding 3: treat only active tenant user as USER_ALREADY_EXISTS and map accept user unique conflict to USER_ALREADY_EXISTS', async () => {
+      // 1. A suspended or disabled user is NOT treated as USER_ALREADY_EXISTS (BR-INV-08)
+      let queriedStatusFilter: any = null;
+      mockPrisma.user.findFirst = async (args: any) => {
+        if (args?.where?.id) {
+          return { id: OWNER_USER_ID, role: RoleEnum.OWNER, status: 'active', merchant_id: MERCHANT_ID };
+        }
+        queriedStatusFilter = args?.where?.status;
+        // Simulating a suspended user exists: should not trigger USER_ALREADY_EXISTS
+        return null;
+      };
+
+      const resCreate = await service.createInvitation(
+        { email: 'suspended-user@shipde.vn', role: RoleEnum.OPS_CSKH },
+        { userId: OWNER_USER_ID, merchantId: MERCHANT_ID },
+        '127.0.0.1',
+        'corr-suspended-test'
+      );
+      assert.ok(resCreate.data.id);
+      assert.deepStrictEqual(queriedStatusFilter, { in: ['active', 'ACTIVE'] });
+
+      // 2. Accept transaction uses serializable isolation and maps P2002 unique conflict on user to USER_ALREADY_EXISTS
+      const token = 'accept_unique_race_token';
+      const tokenHash = createHash('sha256').update(token).digest('hex');
+
+      mockPrisma.invitation.findUnique = async () => ({
+        id: 'inv-unique-race-id',
+        merchant_id: MERCHANT_ID,
+        email: 'race-recipient@shipde.vn',
+        phone: null,
+        role: RoleEnum.OPS_CSKH,
+        store_scopes: [],
+        warehouse_scopes: [],
+        status: InvitationStatusEnum.PENDING,
+        token_hash: tokenHash,
+        expires_at: new Date(Date.now() + 86400000),
+        consumed_at: null,
+      });
+
+      mockPrisma.invitation.updateMany = async () => ({ count: 1 });
+      mockPrisma.user.findFirst = async () => null; // passes in-tx check
+      mockPrisma.user.create = async () => {
+        const error: any = new Error('Unique constraint failed on users');
+        error.code = 'P2002';
+        throw error;
+      };
+
+      await assert.rejects(
+        () =>
+          service.acceptInvitation(
+            {
+              token,
+              full_name: 'Test Race User',
+              password: 'Password123!',
+              password_confirm: 'Password123!',
+            },
+            '127.0.0.1',
+            'corr-race-accept'
+          ),
+        (err: any) => {
+          assert.strictEqual(err.code, 'USER_ALREADY_EXISTS');
+          assert.strictEqual(err.status, 400);
+          return true;
+        }
+      );
     });
   });
 });
