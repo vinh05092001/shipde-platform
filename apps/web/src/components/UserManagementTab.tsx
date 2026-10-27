@@ -861,175 +861,175 @@ export const UserManagementTab: React.FC = () => {
                       </button>
                     </div>
                   ) : (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse text-xs">
-                      <thead>
-                        <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider text-[10px]">
-                          <th className="py-3 px-4">Người Nhận</th>
-                          <th className="py-3 px-4">Vai Trò Chỉ Định</th>
-                          <th className="py-3 px-4">Phạm Vi Chi Nhánh / Kho</th>
-                          <th className="py-3 px-4">Trạng Thái</th>
-                          <th className="py-3 px-4">Thời Gian Hết Hạn</th>
-                          <th className="py-3 px-4 text-right">Thao Tác</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {invitations.map((inv) => {
-                          const isExpired = inv.status === 'EXPIRED';
-                          const isPending = inv.status === 'PENDING';
-                          const isAccepted = inv.status === 'ACCEPTED';
-                          const isCancelled = inv.status === 'CANCELLED';
-                          const isLoadingAction = actionLoadingId === inv.id;
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left border-collapse text-xs">
+                        <thead>
+                          <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider text-[10px]">
+                            <th className="py-3 px-4">Người Nhận</th>
+                            <th className="py-3 px-4">Vai Trò Chỉ Định</th>
+                            <th className="py-3 px-4">Phạm Vi Chi Nhánh / Kho</th>
+                            <th className="py-3 px-4">Trạng Thái</th>
+                            <th className="py-3 px-4">Thời Gian Hết Hạn</th>
+                            <th className="py-3 px-4 text-right">Thao Tác</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {invitations.map((inv) => {
+                            const isExpired = inv.status === 'EXPIRED';
+                            const isPending = inv.status === 'PENDING';
+                            const isAccepted = inv.status === 'ACCEPTED';
+                            const isCancelled = inv.status === 'CANCELLED';
+                            const isLoadingAction = actionLoadingId === inv.id;
 
-                          return (
-                            <tr key={inv.id} className="hover:bg-slate-50/80 transition">
-                              <td className="py-3 px-4">
-                                <div className="font-bold text-slate-900 flex items-center gap-1.5">
-                                  {inv.email ? (
-                                    <>
-                                      <Mail className="w-3.5 h-3.5 text-blue-500 shrink-0" />
-                                      <span>{inv.email}</span>
-                                    </>
-                                  ) : (
-                                    <>
-                                      <Phone className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-                                      <span>{inv.phone}</span>
-                                    </>
-                                  )}
-                                </div>
-                                <div className="text-[11px] text-slate-400 mt-0.5">
-                                  Tạo ngày: {new Date(inv.created_at).toLocaleDateString('vi-VN')}
-                                </div>
-                              </td>
-
-                              <td className="py-3 px-4">
-                                <span className="inline-block px-2 py-0.5 rounded text-[11px] font-bold bg-slate-100 text-slate-700">
-                                  {inv.role === 'OWNER' && 'Chủ Cửa Hàng'}
-                                  {inv.role === 'OPS_CSKH' && 'CSKH / Vận Hành'}
-                                  {inv.role === 'WAREHOUSE' && 'Thủ Kho'}
-                                  {inv.role === 'ACCOUNTANT' && 'Kế Toán'}
-                                </span>
-                              </td>
-
-                              <td className="py-3 px-4">
-                                <div className="space-y-1">
-                                  <div className="flex flex-wrap gap-1">
-                                    {inv.store_scopes?.length > 0 ? (
-                                      inv.store_scopes.map((sc: string) => (
-                                        <span
-                                          key={sc}
-                                          className="text-[10px] bg-blue-50 text-blue-700 px-1.5 py-0.2 rounded font-medium"
-                                        >
-                                          {sc}
-                                        </span>
-                                      ))
+                            return (
+                              <tr key={inv.id} className="hover:bg-slate-50/80 transition">
+                                <td className="py-3 px-4">
+                                  <div className="font-bold text-slate-900 flex items-center gap-1.5">
+                                    {inv.email ? (
+                                      <>
+                                        <Mail className="w-3.5 h-3.5 text-blue-500 shrink-0" />
+                                        <span>{inv.email}</span>
+                                      </>
                                     ) : (
-                                      <span className="text-[10px] text-slate-400">
-                                        không gán phạm vi
-                                      </span>
+                                      <>
+                                        <Phone className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                                        <span>{inv.phone}</span>
+                                      </>
                                     )}
                                   </div>
-                                  <div className="flex flex-wrap gap-1">
-                                    {inv.warehouse_scopes?.length > 0 &&
-                                      inv.warehouse_scopes.map((wh: string) => (
-                                        <span
-                                          key={wh}
-                                          className="text-[10px] bg-indigo-50 text-indigo-700 px-1.5 py-0.2 rounded font-medium"
-                                        >
-                                          {wh}
-                                        </span>
-                                      ))}
+                                  <div className="text-[11px] text-slate-400 mt-0.5">
+                                    Tạo ngày: {new Date(inv.created_at).toLocaleDateString('vi-VN')}
                                   </div>
-                                </div>
-                              </td>
+                                </td>
 
-                              <td className="py-3 px-4">
-                                {isPending && (
-                                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
-                                    <Clock className="w-3 h-3" /> Đang chờ xử lý
+                                <td className="py-3 px-4">
+                                  <span className="inline-block px-2 py-0.5 rounded text-[11px] font-bold bg-slate-100 text-slate-700">
+                                    {inv.role === 'OWNER' && 'Chủ Cửa Hàng'}
+                                    {inv.role === 'OPS_CSKH' && 'CSKH / Vận Hành'}
+                                    {inv.role === 'WAREHOUSE' && 'Thủ Kho'}
+                                    {inv.role === 'ACCOUNTANT' && 'Kế Toán'}
                                   </span>
-                                )}
-                                {isAccepted && (
-                                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                                    <Check className="w-3 h-3" /> Đã chấp nhận
-                                  </span>
-                                )}
-                                {isExpired && (
-                                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-red-50 text-red-700 border border-red-200">
-                                    <AlertCircle className="w-3 h-3" /> Đã hết hạn
-                                  </span>
-                                )}
-                                {isCancelled && (
-                                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-600 border border-slate-200">
-                                    Đã hủy
-                                  </span>
-                                )}
-                              </td>
+                                </td>
 
-                              <td className="py-3 px-4 text-slate-600">
-                                <div>{new Date(inv.expires_at).toLocaleDateString('vi-VN')}</div>
-                                <div className="text-[10px] text-slate-400">
-                                  {new Date(inv.expires_at).toLocaleTimeString('vi-VN')}
-                                </div>
-                              </td>
-
-                              <td className="py-3 px-4 text-right">
-                                <div className="flex items-center justify-end gap-1.5">
-                                  {/* Recovery: Resend button for unconsumed PENDING and EXPIRED (Finding 5) */}
-                                  {isInvitationResendable(inv.status, inv.consumed_at) && (
-                                    <button
-                                      type="button"
-                                      onClick={() => void handleResendInvite(inv.id)}
-                                      disabled={isLoadingAction}
-                                      className="px-2.5 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded font-semibold text-xs flex items-center gap-1 transition"
-                                    >
-                                      {isLoadingAction ? (
-                                        <Loader2 className="w-3 h-3 animate-spin" />
+                                <td className="py-3 px-4">
+                                  <div className="space-y-1">
+                                    <div className="flex flex-wrap gap-1">
+                                      {inv.store_scopes?.length > 0 ? (
+                                        inv.store_scopes.map((sc: string) => (
+                                          <span
+                                            key={sc}
+                                            className="text-[10px] bg-blue-50 text-blue-700 px-1.5 py-0.2 rounded font-medium"
+                                          >
+                                            {sc}
+                                          </span>
+                                        ))
                                       ) : (
-                                        <RefreshCw className="w-3 h-3" />
+                                        <span className="text-[10px] text-slate-400">
+                                          không gán phạm vi
+                                        </span>
                                       )}
-                                      <span>Gửi lại</span>
-                                    </button>
-                                  )}
+                                    </div>
+                                    <div className="flex flex-wrap gap-1">
+                                      {inv.warehouse_scopes?.length > 0 &&
+                                        inv.warehouse_scopes.map((wh: string) => (
+                                          <span
+                                            key={wh}
+                                            className="text-[10px] bg-indigo-50 text-indigo-700 px-1.5 py-0.2 rounded font-medium"
+                                          >
+                                            {wh}
+                                          </span>
+                                        ))}
+                                    </div>
+                                  </div>
+                                </td>
 
-                                  {/* Cancel button for PENDING */}
+                                <td className="py-3 px-4">
                                   {isPending && (
-                                    <button
-                                      type="button"
-                                      onClick={() => void handleCancelInvite(inv.id)}
-                                      disabled={isLoadingAction}
-                                      className="px-2.5 py-1 bg-slate-100 hover:bg-red-50 hover:text-red-700 hover:border-red-200 text-slate-600 border border-slate-200 rounded font-semibold text-xs flex items-center gap-1 transition"
-                                    >
-                                      {isLoadingAction ? (
-                                        <Loader2 className="w-3 h-3 animate-spin" />
-                                      ) : (
-                                        <span>Hủy lời mời</span>
-                                      )}
-                                    </button>
+                                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+                                      <Clock className="w-3 h-3" /> Đang chờ xử lý
+                                    </span>
                                   )}
-
                                   {isAccepted && (
-                                    <span className="text-[11px] text-slate-400 italic">
-                                      Đã kích hoạt
+                                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                      <Check className="w-3 h-3" /> Đã chấp nhận
+                                    </span>
+                                  )}
+                                  {isExpired && (
+                                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-red-50 text-red-700 border border-red-200">
+                                      <AlertCircle className="w-3 h-3" /> Đã hết hạn
                                     </span>
                                   )}
                                   {isCancelled && (
-                                    <span className="text-[11px] text-slate-400 italic">
-                                      Đã hủy bỏ
+                                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-600 border border-slate-200">
+                                      Đã hủy
                                     </span>
                                   )}
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-            )}
-          </>
+                                </td>
+
+                                <td className="py-3 px-4 text-slate-600">
+                                  <div>{new Date(inv.expires_at).toLocaleDateString('vi-VN')}</div>
+                                  <div className="text-[10px] text-slate-400">
+                                    {new Date(inv.expires_at).toLocaleTimeString('vi-VN')}
+                                  </div>
+                                </td>
+
+                                <td className="py-3 px-4 text-right">
+                                  <div className="flex items-center justify-end gap-1.5">
+                                    {/* Recovery: Resend button for unconsumed PENDING and EXPIRED (Finding 5) */}
+                                    {isInvitationResendable(inv.status, inv.consumed_at) && (
+                                      <button
+                                        type="button"
+                                        onClick={() => void handleResendInvite(inv.id)}
+                                        disabled={isLoadingAction}
+                                        className="px-2.5 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded font-semibold text-xs flex items-center gap-1 transition"
+                                      >
+                                        {isLoadingAction ? (
+                                          <Loader2 className="w-3 h-3 animate-spin" />
+                                        ) : (
+                                          <RefreshCw className="w-3 h-3" />
+                                        )}
+                                        <span>Gửi lại</span>
+                                      </button>
+                                    )}
+
+                                    {/* Cancel button for PENDING */}
+                                    {isPending && (
+                                      <button
+                                        type="button"
+                                        onClick={() => void handleCancelInvite(inv.id)}
+                                        disabled={isLoadingAction}
+                                        className="px-2.5 py-1 bg-slate-100 hover:bg-red-50 hover:text-red-700 hover:border-red-200 text-slate-600 border border-slate-200 rounded font-semibold text-xs flex items-center gap-1 transition"
+                                      >
+                                        {isLoadingAction ? (
+                                          <Loader2 className="w-3 h-3 animate-spin" />
+                                        ) : (
+                                          <span>Hủy lời mời</span>
+                                        )}
+                                      </button>
+                                    )}
+
+                                    {isAccepted && (
+                                      <span className="text-[11px] text-slate-400 italic">
+                                        Đã kích hoạt
+                                      </span>
+                                    )}
+                                    {isCancelled && (
+                                      <span className="text-[11px] text-slate-400 italic">
+                                        Đã hủy bỏ
+                                      </span>
+                                    )}
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
           )}
         </div>
       )}

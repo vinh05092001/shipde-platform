@@ -1626,7 +1626,8 @@ export async function runComprehensiveRulesAudit(): Promise<{
         itemCount: 0,
       }) === 'empty' &&
         INVITATIONS_EMPTY_STATE_TEXT === 'Chưa có lời mời nào đang chờ xử lý' &&
-        shouldDisplayInvitationsEmptyState({ error: null, loading: false, itemCount: 0 }) === true &&
+        shouldDisplayInvitationsEmptyState({ error: null, loading: false, itemCount: 0 }) ===
+          true &&
         shouldDisplayInvitationsEmptyState({
           error: 'Connection timeout',
           loading: false,

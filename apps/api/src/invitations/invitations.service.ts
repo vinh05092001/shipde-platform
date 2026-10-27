@@ -6,7 +6,12 @@ import { RoleEnum, InvitationStatusEnum, Prisma } from '@prisma/client';
 import { randomBytes, createHash } from 'node:crypto';
 import { VERIFICATION_ADAPTER } from '../auth/auth.tokens';
 import type { IVerificationDeliveryAdapter } from '@shipde/contracts';
-import { SendInvitationRequest, AcceptInvitationRequest, InvitationItem, isActiveStatus } from '@shipde/contracts';
+import {
+  SendInvitationRequest,
+  AcceptInvitationRequest,
+  InvitationItem,
+  isActiveStatus,
+} from '@shipde/contracts';
 import { RateLimitService } from '../auth/rate-limit.service';
 import type { InvitationDispatchReservation } from '../auth/rate-limit.service';
 import { resolveFrontendBaseUrl, sanitizeCorrelationId } from './invitation-url.util';
