@@ -953,6 +953,11 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
 
       assert.ok(auditCreated);
       assert.strictEqual(auditCreated.action, 'INVITATION_RESENT');
+      // Finding 4: target_identifier_masked, merchant_id, actor_id, and correlation_id (BR-INV-09)
+      assert.strictEqual(auditCreated.new_value.target_identifier_masked, 'e****d@shipde.vn');
+      assert.strictEqual(auditCreated.new_value.merchant_id, MERCHANT_ID);
+      assert.strictEqual(auditCreated.new_value.actor_id, OWNER_USER_ID);
+      assert.strictEqual(auditCreated.new_value.correlation_id, 'test-corr-09');
     });
 
     it('rejects resend with 400 INVITATION_ALREADY_USED when concurrent accept committed (count === 0)', async () => {
@@ -1070,6 +1075,7 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
       const pendingInvite = {
         id: 'pending-inv-id',
         merchant_id: MERCHANT_ID,
+        email: 'cancel_pending@shipde.vn',
         role: RoleEnum.OPS_CSKH,
         status: InvitationStatusEnum.PENDING,
         consumed_at: null,
@@ -1111,6 +1117,11 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
 
       assert.ok(auditCreated);
       assert.strictEqual(auditCreated.action, 'INVITATION_CANCELLED');
+      // Finding 4: target_identifier_masked, merchant_id, actor_id, and correlation_id (BR-INV-09)
+      assert.strictEqual(auditCreated.new_value.target_identifier_masked, 'c****g@shipde.vn');
+      assert.strictEqual(auditCreated.new_value.merchant_id, MERCHANT_ID);
+      assert.strictEqual(auditCreated.new_value.actor_id, OWNER_USER_ID);
+      assert.strictEqual(auditCreated.new_value.correlation_id, 'test-corr-10');
     });
 
     it('rejects cancel with 400 INVITATION_ALREADY_USED when concurrent accept committed (count === 0)', async () => {

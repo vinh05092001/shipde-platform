@@ -389,6 +389,8 @@ export class InvitationsService {
             ip_address: clientIp,
             new_value: {
               invitation_id: inv.id,
+              merchant_id: actor.merchantId,
+              actor_id: actor.userId,
               role: inv.role,
               store_scopes: inv.store_scopes,
               warehouse_scopes: inv.warehouse_scopes,
@@ -726,6 +728,9 @@ export class InvitationsService {
           ip_address: clientIp,
           new_value: {
             invitation_id: inv.id,
+            merchant_id: actor.merchantId,
+            actor_id: actor.userId,
+            target_identifier_masked: maskIdentifier(inv.email || inv.phone),
             role: inv.role,
             status: inv.status,
             expires_at: inv.expires_at.toISOString(),
@@ -907,6 +912,9 @@ export class InvitationsService {
           ip_address: clientIp,
           new_value: {
             invitation_id: inv.id,
+            merchant_id: actor.merchantId,
+            actor_id: actor.userId,
+            target_identifier_masked: maskIdentifier(inv.email || inv.phone),
             status: inv.status,
             correlation_id: correlationId,
           },
@@ -1217,6 +1225,9 @@ export class InvitationsService {
           ip_address: clientIp,
           new_value: {
             invitation_id: invitation.id,
+            merchant_id: invitation.merchant_id,
+            actor_id: newUser.id,
+            target_identifier_masked: maskIdentifier(invitation.email || invitation.phone),
             user_id: newUser.id,
             role: newUser.role,
             store_scopes: newUser.store_scopes,
