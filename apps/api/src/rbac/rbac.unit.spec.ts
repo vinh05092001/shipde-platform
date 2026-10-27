@@ -94,6 +94,10 @@ class MockPrismaService {
     this.shouldFailRolePermissionUnique = false;
   }
 
+  merchant = {
+    findFirst: async () => ({ id: 'merchant-aaa-111' }),
+  };
+
   permission = {
     findMany: async (args?: any) => {
       if (this.shouldFailPermissionFindMany) {
@@ -3077,7 +3081,7 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
       (a) => a.action === 'SYSTEM_ROLE_PERMISSIONS_RECONCILED'
     );
     assert.ok(reconAudit, 'System role reconciliation must record an audit row');
-    assert.strictEqual(reconAudit?.actor_id, 'SYSTEM');
+    assert.strictEqual(reconAudit?.user_id, 'SYSTEM');
 
     // 3. Spy ensurePlatformSeed to verify tenant reads do NOT invoke it
     let seedCalled = false;

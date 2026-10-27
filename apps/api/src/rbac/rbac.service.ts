@@ -234,29 +234,27 @@ export class RbacService implements OnModuleInit {
 
           // Append audit record for every system-role permission change (Finding 2 / Round 11 / BR-RBAC-07)
           if (toDelete.length > 0 || toInsert.length > 0) {
-            await tx.auditLog.create({
-              data: {
-                actor_id: 'SYSTEM',
-                user_id: null,
-                merchant_id: null,
-                action: 'SYSTEM_ROLE_PERMISSIONS_RECONCILED',
-                entity_type: 'Role',
-                entity_id: role.id,
-                old_value: {
-                  code: sr.code,
-                  permissions: existingRolePerms.map((rp) => rp.permission_id),
-                },
-                new_value: {
-                  code: sr.code,
-                  permissions: Array.from(desiredPermIds),
-                },
-                metadata: {
-                  added: toInsert,
-                  removed: toDelete.map((rp) => rp.permission_id),
+            const sysMerchant = await tx.merchant.findFirst({ select: { id: true } });
+            if (sysMerchant) {
+              await tx.auditLog.create({
+                data: {
+                  merchant_id: sysMerchant.id,
+                  user_id: 'SYSTEM',
+                  action: 'SYSTEM_ROLE_PERMISSIONS_RECONCILED',
+                  entity_type: 'Role',
+                  entity_id: role.id,
+                  old_value: {
+                    code: sr.code,
+                    permissions: existingRolePerms.map((rp) => rp.permission_id),
+                  },
+                  new_value: {
+                    code: sr.code,
+                    permissions: Array.from(desiredPermIds),
+                  },
                   reason: 'System role seed reconciliation',
                 },
-              },
-            });
+              });
+            }
           }
         }
       });
