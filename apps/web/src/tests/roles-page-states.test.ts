@@ -201,8 +201,57 @@ async function runTest() {
   assert.strictEqual(validResult.isValid, true);
   assert.strictEqual(Object.keys(validResult.errors).length, 0);
 
+  // 9. UI State: Round 5 Finding 2 - Modal In-Dialog Save Error & Resubmit Retry
+  const modalSaveErrorHtml = renderPage({
+    initialLoading: false,
+    initialCanManageRoles: true,
+    initialRoles: mockPayload,
+    initialCreateOpen: true,
+    initialModalError: 'Tên vai trò đã tồn tại trong cửa hàng (400 ROLE_NAME_EXISTS)',
+    initialFormState: {
+      name: 'Nhân viên kiểm hàng trùng',
+      description: 'Mô tả không bị mất',
+      permissions: ['order:view_create'],
+    },
+  });
+  assert.ok(
+    modalSaveErrorHtml.includes('role="alert"') &&
+      modalSaveErrorHtml.includes('Lỗi lưu vai trò') &&
+      modalSaveErrorHtml.includes('Tên vai trò đã tồn tại'),
+    'Modal save failure must render alert banner inside the open dialog'
+  );
+  assert.ok(
+    modalSaveErrorHtml.includes('value="Nhân viên kiểm hàng trùng"') &&
+      modalSaveErrorHtml.includes('Mô tả không bị mất'),
+    'Modal inputs (name, description, permissions) must be preserved on save error'
+  );
+  assert.ok(
+    modalSaveErrorHtml.includes('Thử lại'),
+    'Modal must provide retry button to resubmit the failed form'
+  );
+
+  // 10. UI State: Round 5 Finding 2 - Delete Modal Error & Retry
+  const modalDeleteErrorHtml = renderPage({
+    initialLoading: false,
+    initialCanManageRoles: true,
+    initialRoles: mockPayload,
+    initialDeletingRole: mockPayload[3],
+    initialDeleteModalError:
+      'Không thể xóa vai trò đang được gán cho 3 người dùng (400 ROLE_IN_USE)',
+  });
+  assert.ok(
+    modalDeleteErrorHtml.includes('role="alert"') &&
+      modalDeleteErrorHtml.includes('Lỗi xóa vai trò') &&
+      modalDeleteErrorHtml.includes('Không thể xóa vai trò đang được gán'),
+    'Delete modal error must be displayed inside the open delete dialog'
+  );
+  assert.ok(
+    modalDeleteErrorHtml.includes('Thử lại'),
+    'Delete modal must provide in-dialog retry button'
+  );
+
   console.log(
-    '✅ Finding 4: SCR-RBAC-01 Roles page real component rendering & UI states proved successfully!'
+    '✅ Finding 2 / Round 5 & Finding 4: SCR-RBAC-01 Roles page real component rendering & UI states proved successfully!'
   );
 }
 

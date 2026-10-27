@@ -38,6 +38,12 @@ export interface RolesSettingsPageProps {
   initialCanManageRoles?: boolean;
   initialError?: string | null;
   initialSuccess?: string | null;
+  initialCreateOpen?: boolean;
+  initialEditingRole?: RoleItem | null;
+  initialDeletingRole?: RoleItem | null;
+  initialModalError?: string | null;
+  initialDeleteModalError?: string | null;
+  initialFormState?: FormState;
 }
 
 export function validateRoleForm(
@@ -73,6 +79,12 @@ export default function RolesSettingsPage({
   initialCanManageRoles,
   initialError,
   initialSuccess,
+  initialCreateOpen,
+  initialEditingRole,
+  initialDeletingRole,
+  initialModalError,
+  initialDeleteModalError,
+  initialFormState,
 }: RolesSettingsPageProps = {}) {
   const { user, merchant } = useAuth();
   const token = typeof window !== 'undefined' ? localStorage.getItem('shipde_token') : null;
@@ -93,17 +105,23 @@ export default function RolesSettingsPage({
   const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
 
   // Modals state
-  const [isCreateOpen, setIsCreateOpen] = useState<boolean>(false);
-  const [editingRole, setEditingRole] = useState<RoleItem | null>(null);
+  const [isCreateOpen, setIsCreateOpen] = useState<boolean>(initialCreateOpen ?? false);
+  const [editingRole, setEditingRole] = useState<RoleItem | null>(initialEditingRole ?? null);
   const [viewingRole, setViewingRole] = useState<RoleItem | null>(null);
-  const [deletingRole, setDeletingRole] = useState<RoleItem | null>(null);
+  const [deletingRole, setDeletingRole] = useState<RoleItem | null>(initialDeletingRole ?? null);
+  const [modalError, setModalError] = useState<string | null>(initialModalError ?? null);
+  const [deleteModalError, setDeleteModalError] = useState<string | null>(
+    initialDeleteModalError ?? null
+  );
 
   // Form input state
-  const [formState, setFormState] = useState<FormState>({
-    name: '',
-    description: '',
-    permissions: [],
-  });
+  const [formState, setFormState] = useState<FormState>(
+    initialFormState ?? {
+      name: '',
+      description: '',
+      permissions: [],
+    }
+  );
   const [fieldErrors, setFieldErrors] = useState<{ name?: string; permissions?: string }>({});
   const [canManageRoles, setCanManageRoles] = useState<boolean>(initialCanManageRoles ?? false);
 
@@ -230,12 +248,12 @@ export default function RolesSettingsPage({
     return isValid;
   };
 
-  const handleSaveRole = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSaveRole = async (e?: React.FormEvent) => {
+    e?.preventDefault?.();
     if (!validateForm()) return;
 
     setSubmitting(true);
-    setErrorMsg(null);
+    setModalError(null);
     setSuccessMsg(null);
 
     try {
@@ -263,10 +281,12 @@ export default function RolesSettingsPage({
       const json = await res.json().catch(() => null);
 
       if (!res.ok) {
-        if (json?.error?.fields) {
+        const errorFields =
+          json?.error?.fields || (Array.isArray(json?.error?.details) ? json.error.details : null);
+        if (errorFields && Array.isArray(errorFields)) {
           const fieldMap: Record<string, string> = {};
-          json.error.fields.forEach((f: any) => {
-            fieldMap[f.field] = f.message;
+          errorFields.forEach((f: any) => {
+            if (f.field) fieldMap[f.field] = f.message;
           });
           setFieldErrors(fieldMap);
         }
@@ -276,9 +296,10 @@ export default function RolesSettingsPage({
       setSuccessMsg('Đã lưu vai trò phân quyền thành công');
       setIsCreateOpen(false);
       setEditingRole(null);
+      setModalError(null);
       void fetchData();
     } catch (err: any) {
-      setErrorMsg(err.message || 'Lỗi khi lưu vai trò');
+      setModalError(err.message || 'Lỗi khi lưu vai trò');
     } finally {
       setSubmitting(false);
     }
@@ -287,7 +308,7 @@ export default function RolesSettingsPage({
   const handleDeleteRole = async () => {
     if (!deletingRole) return;
     setSubmitting(true);
-    setErrorMsg(null);
+    setDeleteModalError(null);
     setSuccessMsg(null);
 
     try {
@@ -309,9 +330,10 @@ export default function RolesSettingsPage({
 
       setSuccessMsg('Đã xóa vai trò tùy chỉnh thành công');
       setDeletingRole(null);
+      setDeleteModalError(null);
       void fetchData();
     } catch (err: any) {
-      setErrorMsg(err.message || 'Lỗi khi xóa vai trò');
+      setDeleteModalError(err.message || 'Lỗi khi xóa vai trò');
     } finally {
       setSubmitting(false);
     }
@@ -787,6 +809,30 @@ export default function RolesSettingsPage({
             </div>
 
             <form onSubmit={handleSaveRole} className="overflow-y-auto pr-1 flex-1 space-y-4">
+              {/* Modal Save Error Banner with In-Dialog Resubmit Retry */}
+              {modalError && (
+                <div
+                  role="alert"
+                  className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-800 flex items-start justify-between gap-3 text-xs"
+                >
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                    <div>
+                      <strong className="font-semibold block">Lỗi lưu vai trò</strong>
+                      <p className="text-[11px] text-rose-700">{modalError}</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleSaveRole()}
+                    disabled={submitting}
+                    className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-semibold text-[11px] shrink-0"
+                  >
+                    Thử lại
+                  </button>
+                </div>
+              )}
+
               {/* Role Name */}
               <div>
                 <label className="font-bold text-slate-700 block mb-1">
@@ -950,6 +996,30 @@ export default function RolesSettingsPage({
               </div>
             </div>
 
+            {/* Delete Modal Error Banner with In-Dialog Retry */}
+            {deleteModalError && (
+              <div
+                role="alert"
+                className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-800 flex items-start justify-between gap-3 text-xs"
+              >
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                  <div>
+                    <strong className="font-semibold block">Lỗi xóa vai trò</strong>
+                    <p className="text-[11px] text-rose-700">{deleteModalError}</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleDeleteRole}
+                  disabled={submitting}
+                  className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-semibold text-[11px] shrink-0"
+                >
+                  Thử lại
+                </button>
+              </div>
+            )}
+
             <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-1.5 text-slate-600">
               <p>
                 Bạn có chắc chắn muốn xóa vai trò <strong>{deletingRole.name}</strong>?
@@ -973,7 +1043,10 @@ export default function RolesSettingsPage({
             <div className="flex justify-end gap-2 pt-2">
               <button
                 type="button"
-                onClick={() => setDeletingRole(null)}
+                onClick={() => {
+                  setDeletingRole(null);
+                  setDeleteModalError(null);
+                }}
                 className="btn-secondary text-xs py-1.5 px-3.5"
                 disabled={submitting}
               >
