@@ -3546,4 +3546,54 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
     assert.strictEqual(platformAudit.merchant_id, null, 'Platform audit must have null merchant_id');
     assert.strictEqual(platformAudit.user_id, null, 'Platform audit must have null user_id');
   });
+
+  // Finding 2 (Round 14 / P1-02): RbacController.getPermissions resolves actor and rejects unauthenticated or inactive users
+  test('Finding 2 (Round 14 / P1-02): RbacController.getPermissions enforces actor resolution and rejects inactive users', async () => {
+    const controller = new RbacController(service);
+
+    // 1. Active owner succeeds and reads catalog
+    const res = await controller.getPermissions({
+      userId: 'user-owner-1',
+      merchantId: MERCHANT_A,
+    });
+    assert.ok(res.data.permissions.length >= 20);
+    assert.ok(res.data.categories.length >= 6);
+
+    // 2. Missing user ID fails closed with 403 FORBIDDEN
+    await assert.rejects(
+      async () => {
+        await controller.getPermissions({} as any);
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 403);
+        assert.strictEqual(err.code, 'FORBIDDEN');
+        return true;
+      }
+    );
+
+    // 3. Inactive user fails closed with 403 FORBIDDEN
+    mockPrisma.users.push({
+      id: 'user-inactive-perms',
+      merchant_id: MERCHANT_A,
+      role: 'OPS_CSKH',
+      custom_role_id: null,
+      status: 'SUSPENDED',
+    });
+
+    await assert.rejects(
+      async () => {
+        await controller.getPermissions({
+          userId: 'user-inactive-perms',
+          merchantId: MERCHANT_A,
+        });
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 403);
+        assert.strictEqual(err.code, 'FORBIDDEN');
+        return true;
+      }
+    );
+  });
 });

@@ -32,10 +32,12 @@ export class RbacController {
 
   /**
    * GET /api/v1/permissions (AC-RBAC-01-01)
+   * Enforces actor resolution so only active authenticated tenant members can read permissions catalog (P1-02 / defense-in-depth).
    */
   @Get('permissions')
   async getPermissions(@Req() req: any) {
     const correlationId = (req as any).correlationId || normalizeCorrelationId();
+    await this.resolveActor(req);
     return this.rbacService.getPermissions(correlationId);
   }
 
