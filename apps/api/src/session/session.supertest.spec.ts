@@ -537,15 +537,46 @@ async function runSessionSupertestSuite() {
     console.log('  PASS: AC-SESS-13 Heartbeat updates last_active_at');
 
     // -------------------------------------------------------------------------
-    // AC-SESS-14: Heartbeat on non-current session forbidden
+    // AC-SESS-14: Heartbeat on non-current session forbidden and timestamp not updated
     // -------------------------------------------------------------------------
     console.log('[TEST AC-SESS-14] User sends heartbeat for non-current session (Forbidden)');
+    const tokOther = createSessionToken();
+    const sessOther = await prisma.deviceSession.create({
+      data: {
+        user_id: user.id,
+        merchant_id: merchant.id,
+        session_token_hash: tokOther.hash,
+        device_id: 'other_active_device_for_user',
+        status: SessionStatusEnum.ACTIVE,
+        last_active_at: new Date(Date.now() - 3600 * 1000), // 1 hour ago
+        expires_at: new Date(Date.now() + 80 * 24 * 60 * 60 * 1000),
+      },
+    });
+    const initialLastActiveAt = sessOther.last_active_at.getTime();
+
     const res14 = await request(server)
-      .patch(`/api/v1/sessions/${sessUser2.id}/heartbeat`)
+      .patch(`/api/v1/sessions/${sessOther.id}/heartbeat`)
       .set('Authorization', `Bearer ${tok1.raw}`)
       .expect(403);
     assert.strictEqual(res14.body.error.code, 'FORBIDDEN');
-    console.log('  PASS: AC-SESS-14 Heartbeat for non-current session returns 403 FORBIDDEN');
+    assert.strictEqual(
+      res14.body.error.message,
+      'Chỉ có thể cập nhật trạng thái hoạt động cho phiên hiện tại'
+    );
+
+    // Verify last_active_at timestamp was NOT modified in DB
+    const checkSessOther = await prisma.deviceSession.findUnique({
+      where: { id: sessOther.id },
+    });
+    assert.ok(checkSessOther);
+    assert.strictEqual(
+      checkSessOther.last_active_at.getTime(),
+      initialLastActiveAt,
+      'last_active_at timestamp must not be updated for non-current session'
+    );
+    console.log(
+      '  PASS: AC-SESS-14 Heartbeat for non-current session returns 403 FORBIDDEN and timestamp remains unchanged'
+    );
 
     // -------------------------------------------------------------------------
     // AC-SESS-15: Heartbeat on inactive / time-expired session over HTTP
