@@ -70,9 +70,9 @@ async function runTest() {
   ];
 
   // Helper to render component wrapped in AuthProvider
-  const renderPage = (props: React.ComponentProps<typeof RolesSettingsPage>) => {
+  const renderPage = (props?: any) => {
     return renderToStaticMarkup(
-      React.createElement(AuthProvider, null, React.createElement(RolesSettingsPage, props))
+      React.createElement(AuthProvider, null, React.createElement(RolesSettingsPage, props || {}))
     );
   };
 
