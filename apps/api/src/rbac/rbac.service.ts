@@ -1023,63 +1023,77 @@ export class RbacService {
       );
     }
 
-    // 3. Role in-use safeguard (BR-RBAC-03, AC-RBAC-01-09)
-    const activeUserCount = await this.prisma.user.count({
-      where: {
-        merchant_id: actor.merchantId,
-        custom_role_id: roleId,
-        status: 'active',
-      },
-    });
-
-    if (activeUserCount > 0) {
-      throw new CanonicalApiException(
-        HttpStatus.BAD_REQUEST,
-        'ROLE_IN_USE',
-        `Không thể xóa vai trò đang được gán cho ${activeUserCount} người dùng đang hoạt động`,
-        false,
-        'Vui lòng chuyển vai trò của các người dùng sang vai trò khác trước khi xóa',
-        [
-          {
-            field: 'role_id',
-            code: 'IN_USE',
-            message: `Vai trò đang được gán cho ${activeUserCount} người dùng`,
+    // 3. Transaction: Guard active assignments inside transaction, Delete Role & Write Audit Log (BR-RBAC-03, AC-RBAC-01-09, AC-RBAC-01-10)
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        const activeUserCount = await tx.user.count({
+          where: {
+            merchant_id: actor.merchantId,
+            custom_role_id: roleId,
+            status: 'active',
           },
-        ]
-      );
+        });
+
+        if (activeUserCount > 0) {
+          throw new CanonicalApiException(
+            HttpStatus.BAD_REQUEST,
+            'ROLE_IN_USE',
+            `Không thể xóa vai trò đang được gán cho ${activeUserCount} người dùng đang hoạt động`,
+            false,
+            'Vui lòng chuyển vai trò của các người dùng sang vai trò khác trước khi xóa',
+            [
+              {
+                field: 'role_id',
+                code: 'IN_USE',
+                message: `Vai trò đang được gán cho ${activeUserCount} người dùng`,
+              },
+            ]
+          );
+        }
+
+        // Remove role_permissions
+        await tx.rolePermission.deleteMany({
+          where: { role_id: roleId },
+        });
+
+        // Remove role
+        await tx.role.delete({
+          where: { id: roleId },
+        });
+
+        // Write immutable audit log
+        await tx.auditLog.create({
+          data: {
+            merchant_id: actor.merchantId,
+            user_id: actor.userId,
+            action: 'ROLE_DELETED',
+            entity_type: 'Role',
+            entity_id: roleId,
+            old_value: {
+              id: existingRole.id,
+              name: existingRole.name,
+              description: existingRole.description,
+              permissions: existingRole.permissions.map((rp) => rp.permission.code),
+              correlation_id: correlationId,
+            },
+            ip_address: clientIp,
+          },
+        });
+      });
+    } catch (err: any) {
+      if (err instanceof CanonicalApiException) throw err;
+      if (err?.code === 'P2003' || /foreign key/i.test(err?.message || '')) {
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'ROLE_IN_USE',
+          'Không thể xóa vai trò đang được gán cho người dùng',
+          false,
+          'Vui lòng chuyển vai trò của các người dùng sang vai trò khác trước khi xóa',
+          [{ field: 'role_id', code: 'IN_USE', message: 'Vai trò đang được gán cho người dùng' }]
+        );
+      }
+      throw err;
     }
-
-    // 4. Transaction: Delete Role & Write Audit Log (AC-RBAC-01-10)
-    await this.prisma.$transaction(async (tx) => {
-      // Remove role_permissions
-      await tx.rolePermission.deleteMany({
-        where: { role_id: roleId },
-      });
-
-      // Remove role
-      await tx.role.delete({
-        where: { id: roleId },
-      });
-
-      // Write immutable audit log
-      await tx.auditLog.create({
-        data: {
-          merchant_id: actor.merchantId,
-          user_id: actor.userId,
-          action: 'ROLE_DELETED',
-          entity_type: 'Role',
-          entity_id: roleId,
-          old_value: {
-            id: existingRole.id,
-            name: existingRole.name,
-            description: existingRole.description,
-            permissions: existingRole.permissions.map((rp) => rp.permission.code),
-            correlation_id: correlationId,
-          },
-          ip_address: clientIp,
-        },
-      });
-    });
 
     return {
       data: {

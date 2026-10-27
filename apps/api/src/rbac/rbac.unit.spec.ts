@@ -207,6 +207,14 @@ class MockPrismaService {
       return this.roles[idx];
     },
     delete: async (args: any) => {
+      const assignedUser = this.users.find((u) => u.custom_role_id === args.where.id);
+      if (assignedUser) {
+        const error: any = new Error(
+          'Foreign key constraint failed on the field: users_custom_role_id_fkey'
+        );
+        error.code = 'P2003';
+        throw error;
+      }
       const idx = this.roles.findIndex((r) => r.id === args.where.id);
       if (idx === -1) throw new Error('Not found');
       const deleted = this.roles.splice(idx, 1)[0];
@@ -944,5 +952,46 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
         return true;
       }
     );
+  });
+
+  // Finding 5 (P1): Role in-use safeguard inside transaction with restrict constraint
+  test('Finding 5 / BR-RBAC-03: Deleting role assigned to active user fails closed inside transaction with 400 ROLE_IN_USE', async () => {
+    // 1. Create a custom role
+    const created = await service.createRole(
+      {
+        name: 'Vai Trò Nhân Viên Kho Đêm',
+        permissions: ['order:view_create'],
+      },
+      OWNER_ACTOR,
+      '127.0.0.1',
+      'corr-role-del-1'
+    );
+    const roleId = created.data.role.id;
+
+    // 2. Assign active user to this role
+    mockPrisma.users.push({
+      id: 'user-assigned-to-night-role',
+      merchant_id: MERCHANT_A,
+      role: 'CUSTOM',
+      custom_role_id: roleId,
+      status: 'active',
+    });
+
+    // 3. Attempt to delete role
+    await assert.rejects(
+      async () => {
+        await service.deleteRole(roleId, OWNER_ACTOR, '127.0.0.1', 'corr-role-del-2');
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 400);
+        assert.strictEqual(err.code, 'ROLE_IN_USE');
+        return true;
+      }
+    );
+
+    // 4. Verify role is still preserved in DB
+    const preserved = mockPrisma.roles.find((r) => r.id === roleId);
+    assert.ok(preserved, 'Role must not be deleted when active users are assigned');
   });
 });
