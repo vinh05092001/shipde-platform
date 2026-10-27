@@ -31,7 +31,11 @@ function createMockPrismaService() {
     },
     passwordResetToken: {
       create: async ({ data }: any) => {
-        const record = { id: `prt-${Date.now()}-${Math.random()}`, ...data, created_at: new Date() };
+        const record = {
+          id: `prt-${Date.now()}-${Math.random()}`,
+          ...data,
+          created_at: new Date(),
+        };
         passwordResetTokens.push(record);
         return record;
       },

@@ -55,8 +55,7 @@ export function validateAdminKey(key: string | undefined): void {
 
   const keyBuf = Buffer.from(key);
   const expectedBuf = Buffer.from(expectedKey);
-  const isValid =
-    keyBuf.length === expectedBuf.length && timingSafeEqual(keyBuf, expectedBuf);
+  const isValid = keyBuf.length === expectedBuf.length && timingSafeEqual(keyBuf, expectedBuf);
 
   if (!isValid) {
     throw new CanonicalApiException(

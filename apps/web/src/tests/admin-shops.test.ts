@@ -9,12 +9,7 @@ import { createHmac, randomUUID } from 'node:crypto';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { NextRequest } from 'next/server';
-import {
-  GET,
-  POST,
-  verifyAdminAuthorization,
-  getAdminApiKey,
-} from '../app/api/admin/shops/route';
+import { GET, POST, verifyAdminAuthorization, getAdminApiKey } from '../app/api/admin/shops/route';
 import {
   AdminShopsView,
   validateShopForm,
@@ -49,9 +44,7 @@ function generateTestV1Token(
   };
 
   const payload = Buffer.from(JSON.stringify(payloadData)).toString('base64url');
-  const signature = createHmac('sha256', secret)
-    .update(`v1.${payload}`)
-    .digest('base64url');
+  const signature = createHmac('sha256', secret).update(`v1.${payload}`).digest('base64url');
 
   return `v1.${payload}.${signature}`;
 }
@@ -137,7 +130,10 @@ async function runAdminShopsFrontendSuite() {
   assert.strictEqual(tamperedRes.status, 403, 'Tampered token signature must return 403 Forbidden');
 
   // Expired token
-  const expiredToken = generateTestV1Token({ role: 'BACKOFFICE', exp: Math.floor(Date.now() / 1000) - 100 }, TEST_AUTH_SECRET);
+  const expiredToken = generateTestV1Token(
+    { role: 'BACKOFFICE', exp: Math.floor(Date.now() / 1000) - 100 },
+    TEST_AUTH_SECRET
+  );
   const expiredReq = new NextRequest('http://localhost:3000/api/admin/shops', {
     method: 'GET',
     headers: { Authorization: `Bearer ${expiredToken}`, Accept: 'application/json' },
@@ -149,7 +145,9 @@ async function runAdminShopsFrontendSuite() {
   // ---------------------------------------------------------------------------
   // 3. Finding 1 / Role Enforcement: Non-platform-admin roles are rejected
   // ---------------------------------------------------------------------------
-  console.log('🧪 Testing Finding 1: Non-platform-admin roles (OWNER, OPS_CSKH, etc.) are rejected...');
+  console.log(
+    '🧪 Testing Finding 1: Non-platform-admin roles (OWNER, OPS_CSKH, etc.) are rejected...'
+  );
   const tenantRoles = ['OWNER', 'OPS_CSKH', 'WAREHOUSE', 'ACCOUNTANT'];
   for (const role of tenantRoles) {
     const tenantToken = generateTestV1Token({ role }, TEST_AUTH_SECRET);
@@ -213,7 +211,9 @@ async function runAdminShopsFrontendSuite() {
   // ---------------------------------------------------------------------------
   // 5. Finding 4 / AC-ADMIN-14: Upstream Failure Preservation (Never fabricated 200)
   // ---------------------------------------------------------------------------
-  console.log('🧪 Testing Finding 4: Upstream list failures are preserved as canonical errors (502)...');
+  console.log(
+    '🧪 Testing Finding 4: Upstream list failures are preserved as canonical errors (502)...'
+  );
   // With API backend offline on port 3001, GET /api/admin/shops must return 502 UPSTREAM_ERROR, NOT 200
   const authGetReq = new NextRequest('http://localhost:3000/api/admin/shops', {
     method: 'GET',
@@ -228,7 +228,11 @@ async function runAdminShopsFrontendSuite() {
     200,
     'AC-ADMIN-14: Failed upstream request must NEVER return a fabricated 200 empty state'
   );
-  assert.strictEqual(authGetRes.status, 502, 'Upstream network failure must return 502 Bad Gateway');
+  assert.strictEqual(
+    authGetRes.status,
+    502,
+    'Upstream network failure must return 502 Bad Gateway'
+  );
   const authGetJson = await authGetRes.json();
   assert.strictEqual(authGetJson?.error?.code, 'UPSTREAM_ERROR');
 
@@ -244,7 +248,9 @@ async function runAdminShopsFrontendSuite() {
   });
   const authPostRes = await POST(authPostReq);
   assert.strictEqual(authPostRes.status, 502, 'POST upstream network failure must return 502');
-  console.log('✅ Finding 4: Upstream failures preserved as canonical errors (status 502, UPSTREAM_ERROR)');
+  console.log(
+    '✅ Finding 4: Upstream failures preserved as canonical errors (status 502, UPSTREAM_ERROR)'
+  );
 
   // ---------------------------------------------------------------------------
   // 6. Form Validation Logic: Complete field and format coverage
@@ -285,7 +291,11 @@ async function runAdminShopsFrontendSuite() {
 
   // Valid custom password >= 8
   const validWithPass = validateShopForm('Shop Valid', 'test@example.com', '', 'ValidPass123!');
-  assert.strictEqual(Object.keys(validWithPass).length, 0, 'Valid password >= 8 must have 0 errors');
+  assert.strictEqual(
+    Object.keys(validWithPass).length,
+    0,
+    'Valid password >= 8 must have 0 errors'
+  );
   console.log('✅ Form validation logic: All validation constraints verified');
 
   // ---------------------------------------------------------------------------
@@ -421,7 +431,10 @@ async function runAdminShopsFrontendSuite() {
       showCreateModal: false,
     })
   );
-  assert.ok(successListHtml.includes('data-testid="state-success"'), 'Must render state-success table');
+  assert.ok(
+    successListHtml.includes('data-testid="state-success"'),
+    'Must render state-success table'
+  );
   assert.ok(successListHtml.includes('GUMAC Flagship Store'), 'Must render shop name');
   assert.ok(successListHtml.includes('GUMAC_STORE_001'), 'Must render merchant code');
 

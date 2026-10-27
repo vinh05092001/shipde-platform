@@ -244,7 +244,9 @@ export function AdminShopsView({
             <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full border border-slate-100 overflow-hidden my-8 animate-in fade-in zoom-in-95 duration-150">
               <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between">
                 <div>
-                  <h3 className="text-lg font-bold text-slate-900">Khởi tạo Shop & Chủ Tài Khoản</h3>
+                  <h3 className="text-lg font-bold text-slate-900">
+                    Khởi tạo Shop & Chủ Tài Khoản
+                  </h3>
                   <p className="text-xs text-slate-500 mt-0.5">
                     Tài khoản được kích hoạt và xác thực ngay khi khởi tạo
                   </p>
@@ -312,7 +314,8 @@ export function AdminShopsView({
                           Thiết lập mật khẩu lần đầu:
                         </span>
                         <p className="text-xs text-blue-800 leading-relaxed mt-0.5">
-                          Liên kết thiết lập mật khẩu một lần bảo mật đã được gửi tới chủ cửa hàng qua{' '}
+                          Liên kết thiết lập mật khẩu một lần bảo mật đã được gửi tới chủ cửa hàng
+                          qua{' '}
                           <strong>{createdSuccess.user.email || createdSuccess.user.phone}</strong>.
                         </p>
                       </div>
@@ -648,9 +651,9 @@ export default function AdminShopsPage() {
 
   const isPlatformAdmin = Boolean(
     user &&
-      ((user.role as string) === 'BACKOFFICE' ||
-        (user.role as string) === 'PLATFORM_ADMIN' ||
-        (user.role as string) === 'ADMIN')
+    ((user.role as string) === 'BACKOFFICE' ||
+      (user.role as string) === 'PLATFORM_ADMIN' ||
+      (user.role as string) === 'ADMIN')
   );
 
   const [showCreateModal, setShowCreateModal] = useState(false);

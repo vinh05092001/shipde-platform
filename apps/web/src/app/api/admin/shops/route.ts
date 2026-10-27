@@ -34,8 +34,7 @@ export function verifyAdminAuthorization(req: NextRequest): AuthResult {
     }
     const keyBuf = Buffer.from(adminKeyHeader);
     const expBuf = Buffer.from(configuredKey);
-    const isKeyValid =
-      keyBuf.length === expBuf.length && timingSafeEqual(keyBuf, expBuf);
+    const isKeyValid = keyBuf.length === expBuf.length && timingSafeEqual(keyBuf, expBuf);
 
     if (isKeyValid) {
       return { authorized: true, statusCode: 200, message: 'OK' };
@@ -53,8 +52,7 @@ export function verifyAdminAuthorization(req: NextRequest): AuthResult {
   if (authHeader && authHeader.startsWith('Bearer ')) {
     rawToken = authHeader.slice(7).trim();
   } else {
-    rawToken =
-      req.cookies.get('token')?.value?.trim() || req.cookies.get('session')?.value?.trim();
+    rawToken = req.cookies.get('token')?.value?.trim() || req.cookies.get('session')?.value?.trim();
   }
 
   if (!rawToken) {
@@ -92,15 +90,10 @@ export function verifyAdminAuthorization(req: NextRequest): AuthResult {
     };
   }
 
-  const expectedSig = createHmac('sha256', tokenSecret)
-    .update(`${version}.${payload}`)
-    .digest();
+  const expectedSig = createHmac('sha256', tokenSecret).update(`${version}.${payload}`).digest();
   const providedSig = Buffer.from(signature, 'base64url');
 
-  if (
-    providedSig.length !== expectedSig.length ||
-    !timingSafeEqual(providedSig, expectedSig)
-  ) {
+  if (providedSig.length !== expectedSig.length || !timingSafeEqual(providedSig, expectedSig)) {
     return {
       authorized: false,
       statusCode: 403,
