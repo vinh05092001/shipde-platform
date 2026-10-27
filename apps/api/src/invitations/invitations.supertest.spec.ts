@@ -384,7 +384,7 @@ async function runInvitationsSupertestSuite() {
   assert.strictEqual(notFoundRes.body.error.code, 'INVITATION_NOT_FOUND');
 
   // 12b. Expired token returns identical canonical 404 (Finding 10)
-  const expiredRawToken = 'expiredtoken'.repeat(5) + '1234';
+  const expiredRawToken = `expired_${testSuffix}_${randomBytes(16).toString('hex')}`;
   const expiredTokenHash = createHash('sha256').update(expiredRawToken).digest('hex');
   await prisma.invitation.create({
     data: {
@@ -404,7 +404,7 @@ async function runInvitationsSupertestSuite() {
   assert.strictEqual(expiredVerifyRes.body.error.code, 'INVITATION_NOT_FOUND');
 
   // 12c. Cancelled token returns identical canonical 404 (Finding 10)
-  const cancelledRawToken = 'cancelledtoken'.repeat(4) + '12345678';
+  const cancelledRawToken = `cancelled_${testSuffix}_${randomBytes(16).toString('hex')}`;
   const cancelledTokenHash = createHash('sha256').update(cancelledRawToken).digest('hex');
   await prisma.invitation.create({
     data: {
