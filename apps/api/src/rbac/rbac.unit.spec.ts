@@ -354,6 +354,15 @@ class MockPrismaService {
       }
       return { count: updatedCount };
     },
+    update: async (args: any) => {
+      const idx = this.users.findIndex((u) => u.id === args.where.id);
+      if (idx === -1) throw new Error('User not found');
+      this.users[idx] = {
+        ...this.users[idx],
+        ...args.data,
+      };
+      return this.users[idx];
+    },
   };
 
   auditLog = {
@@ -365,6 +374,35 @@ class MockPrismaService {
       this.auditLogs.push(entry);
       return entry;
     },
+  };
+
+  rawQueries: string[] = [];
+  $queryRaw = async (strings: TemplateStringsArray, ...values: any[]) => {
+    const sql = strings.join('?');
+    this.rawQueries.push(sql);
+    if (sql.includes('FROM roles') && sql.includes('FOR UPDATE')) {
+      const roleId = values[0];
+      const merchantId = values[1];
+      const r = this.roles.find(
+        (x) => x.id === roleId && (x.is_system || !merchantId || x.merchant_id === merchantId)
+      );
+      return r ? [{ id: r.id, merchant_id: r.merchant_id, is_system: Boolean(r.is_system) }] : [];
+    }
+    if (sql.includes('FROM users') && sql.includes('FOR UPDATE')) {
+      const customRoleId = values[0];
+      const merchantId = values[1];
+      return this.users
+        .filter(
+          (u) => u.custom_role_id === customRoleId && (!merchantId || u.merchant_id === merchantId)
+        )
+        .map((u) => ({
+          id: u.id,
+          status: u.status,
+          role: u.role,
+          custom_role_id: u.custom_role_id,
+        }));
+    }
+    return [];
   };
 
   $transaction = async (fn: (tx: any) => Promise<any>) => {
@@ -863,12 +901,13 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
     assert.ok(audit, 'ROLE_DELETED audit log must be written');
   });
 
-  // Finding 2 Proving Test (Round 4): BR-RBAC-03
-  test('Finding 2 / BR-RBAC-03: Role held only by inactive users detaches them in transaction and completes delete', async () => {
+  // Finding 2 Proving Test (Round 4 / Updated Round 5): BR-RBAC-03
+  test('Finding 2 / BR-RBAC-03: Role held only by inactive users detaches them in transaction and completes delete when not broader', async () => {
+    const opsPerms = SYSTEM_ROLES.find((sr) => sr.code === 'OPS_CSKH')!.permissions;
     const createRes = await service.createRole(
       {
-        name: 'Vai trò Chỉ Gán Cho Inactive',
-        permissions: ['order:view_create'],
+        name: 'Vai trò Đủ Quyền Cho Inactive',
+        permissions: opsPerms,
       },
       OWNER_ACTOR,
       '127.0.0.1',
@@ -876,7 +915,7 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
     );
     const customRoleId = createRes.data.role.id;
 
-    // Simulate an inactive user assigned to this role
+    // Simulate an inactive user assigned to this role (their enum role is OPS_CSKH, whose permissions match the custom role)
     const inactiveUserId = 'user-inactive-assignee';
     mockPrisma.users.push({
       id: inactiveUserId,
@@ -896,7 +935,7 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
     assert.strictEqual(
       deleteRes.data.deleted,
       true,
-      'Delete must succeed when only held by inactive users'
+      'Delete must succeed when only held by inactive users and not broader'
     );
 
     // DB Proof: Role row was deleted
@@ -911,11 +950,122 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
       'Inactive user custom_role_id must be detached (null)'
     );
 
-    // DB Proof: Audit log exists
+    // DB Proof: Membership change audit log exists for the inactive user (BR-RBAC-07)
+    const userDetachAudit = mockPrisma.auditLogs.find(
+      (a) => a.action === 'USER_ROLE_DETACHED' && a.entity_id === inactiveUserId
+    );
+    assert.ok(userDetachAudit, 'USER_ROLE_DETACHED audit log must be created for detached user');
+
+    // DB Proof: Role delete audit log exists
     const audit = mockPrisma.auditLogs.find(
       (a) => a.action === 'ROLE_DELETED' && a.entity_id === customRoleId
     );
     assert.ok(audit, 'ROLE_DELETED audit log must be created');
+  });
+
+  // Finding 1 Proving Test 1 (Round 5): BR-RBAC-02 / BR-RBAC-03
+  test('Finding 1 / Round 5 / BR-RBAC-02: Deleting role assigned to inactive user whose enum role is broader blocks with 400 ROLE_IN_USE and no assignment change', async () => {
+    const createRes = await service.createRole(
+      {
+        name: 'Vai trò Hẹp Cho Inactive',
+        permissions: ['order:view_create'],
+      },
+      OWNER_ACTOR,
+      '127.0.0.1',
+      'corr-r5-f1-narrow'
+    );
+    const customRoleId = createRes.data.role.id;
+
+    // Simulate inactive user whose enum role is OPS_CSKH (has pii:unmask, shipment:quote_carrier etc, much broader than order:view_create)
+    const inactiveBroaderUserId = 'user-inactive-broader';
+    mockPrisma.users.push({
+      id: inactiveBroaderUserId,
+      merchant_id: MERCHANT_A,
+      role: 'OPS_CSKH',
+      custom_role_id: customRoleId,
+      status: 'INACTIVE',
+    });
+
+    await assert.rejects(
+      async () => {
+        await service.deleteRole(customRoleId, OWNER_ACTOR, '127.0.0.1', 'corr-r5-f1-del');
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 400);
+        assert.strictEqual(err.code, 'ROLE_IN_USE');
+        assert.ok(err.message.includes('mở rộng quyền hạn'));
+        return true;
+      }
+    );
+
+    // DB Proof: Role was NOT deleted
+    const roleInDb = mockPrisma.roles.find((r) => r.id === customRoleId);
+    assert.ok(roleInDb, 'Role must remain in DB when delete is blocked');
+
+    // DB Proof: Inactive user custom_role_id was NOT modified / stripped
+    const userInDb = mockPrisma.users.find((u) => u.id === inactiveBroaderUserId);
+    assert.strictEqual(
+      userInDb?.custom_role_id,
+      customRoleId,
+      'Inactive user assignment must NOT be changed when blocked'
+    );
+  });
+
+  // Finding 1 Proving Test 2 (Round 5): Concurrency & Row Locks
+  test('Finding 1 / Round 5 / Concurrency: deleteRole executes SELECT ... FOR UPDATE row locks on role and assignees; concurrent active assignment detected fails closed with 400 ROLE_IN_USE without stripping', async () => {
+    mockPrisma.rawQueries = [];
+
+    const createRes = await service.createRole(
+      {
+        name: 'Vai trò Khóa Dòng Concurrency',
+        permissions: ['order:view_create'],
+      },
+      OWNER_ACTOR,
+      '127.0.0.1',
+      'corr-r5-f1-lock-c'
+    );
+    const customRoleId = createRes.data.role.id;
+
+    // Simulate an active user concurrently assigned
+    const concurrentActiveUserId = 'user-concurrent-active';
+    mockPrisma.users.push({
+      id: concurrentActiveUserId,
+      merchant_id: MERCHANT_A,
+      role: 'OPS_CSKH',
+      custom_role_id: customRoleId,
+      status: 'ACTIVE',
+    });
+
+    await assert.rejects(
+      async () => {
+        await service.deleteRole(customRoleId, OWNER_ACTOR, '127.0.0.1', 'corr-r5-f1-lock-d');
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 400);
+        assert.strictEqual(err.code, 'ROLE_IN_USE');
+        return true;
+      }
+    );
+
+    // Proof: Row lock queries were executed inside transaction
+    const hasRoleLock = mockPrisma.rawQueries.some(
+      (q) => q.includes('FROM roles') && q.includes('FOR UPDATE')
+    );
+    const hasAssigneeLock = mockPrisma.rawQueries.some(
+      (q) => q.includes('FROM users') && q.includes('FOR UPDATE')
+    );
+    assert.ok(hasRoleLock, 'Must execute SELECT ... FROM roles ... FOR UPDATE');
+    assert.ok(hasAssigneeLock, 'Must execute SELECT ... FROM users ... FOR UPDATE');
+
+    // Proof: Concurrent active assignment was NOT stripped
+    const userInDb = mockPrisma.users.find((u) => u.id === concurrentActiveUserId);
+    assert.strictEqual(
+      userInDb?.custom_role_id,
+      customRoleId,
+      'Active user assignment must NOT be stripped'
+    );
   });
 
   // Finding 3 Proving Test (Round 4): Non-role-name unique constraint failures stay 500

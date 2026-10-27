@@ -1174,44 +1174,104 @@ export class RbacService {
       );
     }
 
-    // 3. Transaction: Guard active assignments inside transaction, Delete Role & Write Audit Log (BR-RBAC-03, AC-RBAC-01-09, AC-RBAC-01-10)
+    // 3. Transaction: Guard active assignments inside transaction with row locks, Delete Role & Write Audit Log (BR-RBAC-03, BR-RBAC-02, BR-RBAC-07)
     try {
       await this.prisma.$transaction(async (tx) => {
-        const activeUserCount = await tx.user.count({
-          where: {
-            merchant_id: actor.merchantId,
-            custom_role_id: roleId,
-            status: ACTIVE_USER_STATUS_FILTER,
-          },
-        });
+        // Lock the role row to serialize concurrent delete / assignment operations (Finding 1 / Round 5)
+        const lockedRoles = await tx.$queryRaw<
+          Array<{ id: string; merchant_id: string; is_system: boolean }>
+        >`SELECT id, merchant_id, is_system FROM roles WHERE id = ${roleId}::uuid AND merchant_id = ${actor.merchantId}::uuid FOR UPDATE`;
 
-        if (activeUserCount > 0) {
+        if (!lockedRoles || lockedRoles.length === 0) {
+          throw new CanonicalApiException(
+            HttpStatus.NOT_FOUND,
+            'ROLE_NOT_FOUND',
+            'Không tìm thấy vai trò phân quyền'
+          );
+        }
+
+        // Lock all current assignees for this role in the merchant
+        const assignees = await tx.$queryRaw<
+          Array<{ id: string; status: string; role: string; custom_role_id: string }>
+        >`SELECT id, status, role, custom_role_id FROM users WHERE custom_role_id = ${roleId}::uuid AND merchant_id = ${actor.merchantId}::uuid FOR UPDATE`;
+
+        const activeAssignees = assignees.filter((u) => isUserActiveStatus(u.status));
+        if (activeAssignees.length > 0) {
           throw new CanonicalApiException(
             HttpStatus.BAD_REQUEST,
             'ROLE_IN_USE',
-            `Không thể xóa vai trò đang được gán cho ${activeUserCount} người dùng đang hoạt động`,
+            `Không thể xóa vai trò đang được gán cho ${activeAssignees.length} người dùng đang hoạt động`,
             false,
             'Vui lòng chuyển vai trò của các người dùng sang vai trò khác trước khi xóa',
             [
               {
                 field: 'role_id',
                 code: 'IN_USE',
-                message: `Vai trò đang được gán cho ${activeUserCount} người dùng`,
+                message: `Vai trò đang được gán cho ${activeAssignees.length} người dùng`,
               },
             ]
           );
         }
 
-        // Detach inactive users in the same transaction so foreign key ON DELETE RESTRICT is satisfied
-        await tx.user.updateMany({
-          where: {
-            merchant_id: actor.merchantId,
-            custom_role_id: roleId,
-          },
-          data: {
-            custom_role_id: null,
-          },
-        });
+        // Inactive assignees handling: block if reverting to enum role grants broader permissions, or detach and audit each change
+        const inactiveAssignees = assignees.filter((u) => !isUserActiveStatus(u.status));
+        if (inactiveAssignees.length > 0) {
+          const customPermCodes = new Set(existingRole.permissions.map((rp) => rp.permission.code));
+          const broaderUsers: string[] = [];
+
+          for (const u of inactiveAssignees) {
+            const enumDef = SYSTEM_ROLES.find((sr) => sr.code === u.role);
+            const enumPerms = enumDef ? enumDef.permissions : [];
+            const hasBroaderPerms = enumPerms.some((code) => !customPermCodes.has(code));
+            if (hasBroaderPerms) {
+              broaderUsers.push(u.id);
+            }
+          }
+
+          if (broaderUsers.length > 0) {
+            throw new CanonicalApiException(
+              HttpStatus.BAD_REQUEST,
+              'ROLE_IN_USE',
+              `Không thể xóa vai trò đang được gán cho ${broaderUsers.length} người dùng không hoạt động vì việc gỡ vai trò sẽ mở rộng quyền hạn`,
+              false,
+              'Vui lòng chuyển vai trò của người dùng sang vai trò thích hợp trước khi xóa',
+              [
+                {
+                  field: 'role_id',
+                  code: 'IN_USE',
+                  message: `Gỡ vai trò sẽ mở rộng quyền hạn cho người dùng không hoạt động: ${broaderUsers.join(', ')}`,
+                },
+              ]
+            );
+          }
+
+          // If not broader, safely detach each inactive user and audit each membership change (BR-RBAC-07)
+          for (const u of inactiveAssignees) {
+            await tx.user.update({
+              where: { id: u.id },
+              data: { custom_role_id: null },
+            });
+
+            await tx.auditLog.create({
+              data: {
+                merchant_id: actor.merchantId,
+                user_id: actor.userId,
+                action: 'USER_ROLE_DETACHED',
+                entity_type: 'User',
+                entity_id: u.id,
+                old_value: {
+                  custom_role_id: roleId,
+                  role: u.role,
+                },
+                new_value: {
+                  custom_role_id: null,
+                  role: u.role,
+                },
+                ip_address: clientIp,
+              },
+            });
+          }
+        }
 
         // Remove role_permissions
         await tx.rolePermission.deleteMany({
