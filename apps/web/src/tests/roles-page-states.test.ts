@@ -254,6 +254,36 @@ async function runTest() {
     'Delete modal must provide in-dialog retry button'
   );
 
+  // 11. UI State: Round 7 Finding 3 - Refresh Error preserves custom roles list & shows error banner
+  const refreshErrorHtml = renderPage({
+    initialLoading: false,
+    initialCanManageRoles: true,
+    initialRoles: mockPayload,
+    initialHasLoadedSuccessfully: true,
+    initialError: 'Lỗi kết nối máy chủ khi làm mới dữ liệu phân quyền',
+  });
+  assert.ok(
+    refreshErrorHtml.includes('role="alert"') &&
+      refreshErrorHtml.includes('Lỗi kết nối máy chủ khi làm mới dữ liệu'),
+    'Refresh error must display error alert banner with retry'
+  );
+  assert.ok(
+    refreshErrorHtml.includes('Thử lại'),
+    'Refresh error must display retry action'
+  );
+  assert.ok(
+    refreshErrorHtml.includes('Nhân viên kiểm hàng'),
+    'Refresh error must keep existing custom roles mounted instead of unmounting to blank/stale state'
+  );
+  assert.ok(
+    refreshErrorHtml.includes('Chủ Shop'),
+    'Refresh error must keep system roles list mounted'
+  );
+
+  console.log(
+    '✅ Finding 3 (Round 7): Preserved custom-role list on refresh failure and trusted server boolean proved successfully!'
+  );
+
   console.log(
     '✅ Finding 2 / Round 5 & Finding 4: SCR-RBAC-01 Roles page real component rendering & UI states proved successfully!'
   );

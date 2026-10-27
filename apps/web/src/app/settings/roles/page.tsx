@@ -164,11 +164,13 @@ export default function RolesSettingsPage({
       setPermissions(permsJson.data.permissions || []);
       setCategories(permsJson.data.categories || []);
       setRoles(rolesJson.data.roles || []);
-      setCanManageRoles(Boolean(rolesJson.data?.can_manage_roles ?? user?.role === 'OWNER'));
+      // Trust only the server-authoritative boolean (Finding 3 / Round 7)
+      setCanManageRoles(Boolean(rolesJson.data?.can_manage_roles));
       setHasLoadedSuccessfully(true);
     } catch (err: any) {
       setErrorMsg(err.message || 'Lỗi kết nối máy chủ khi tải dữ liệu phân quyền');
-      setHasLoadedSuccessfully(false);
+      // Do not reset hasLoadedSuccessfully to false on refresh error (Finding 3 / Round 7);
+      // keeps the last successful list and form values mounted beside the error banner with retry.
     } finally {
       setLoading(false);
     }
