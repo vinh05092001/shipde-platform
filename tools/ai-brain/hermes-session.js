@@ -1271,6 +1271,22 @@ function selectReasoningCandidate(options, deps) {
         !excludedModels.has(canonicalHermesModelId(c.modelId || c.model))
     )
     .filter((c) => {
+      const isAgyLane =
+        c.gateway === 'agy-gateway' ||
+        c.sourceId === 'agy-gateway' ||
+        c.source === 'agy-gateway' ||
+        c.harness === 'agy-pool' ||
+        (typeof c.accountId === 'string' && /^agy\d{2}$/.test(c.accountId));
+      if (
+        isAgyLane &&
+        typeof (c.modelId || c.model) === 'string' &&
+        (c.modelId || c.model).includes('/')
+      ) {
+        return false;
+      }
+      return true;
+    })
+    .filter((c) => {
       const provKey = getCandidateProviderKey(c);
       if (
         provKey &&
@@ -2296,6 +2312,23 @@ async function launchHermesSession(options, deps) {
         return false;
       }
       if (opts.dryRun && !opts.probe) return true;
+      const isAgyLane =
+        candidate.gateway === 'agy-gateway' ||
+        candidate.sourceId === 'agy-gateway' ||
+        candidate.source === 'agy-gateway' ||
+        candidate.harness === 'agy-pool' ||
+        (typeof candidate.accountId === 'string' && /^agy\d{2}$/.test(candidate.accountId));
+      if (
+        isAgyLane &&
+        typeof (candidate.modelId || candidate.model) === 'string' &&
+        (candidate.modelId || candidate.model).includes('/')
+      ) {
+        refusal(
+          candidate,
+          'HERMES_ROUTE_PROBE_FAILED 9router model ids must never reach agy lanes'
+        );
+        return false;
+      }
       const isCodexProvider =
         (candidate &&
           (candidate.provider === 'openai-codex' ||
