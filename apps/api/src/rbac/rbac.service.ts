@@ -44,52 +44,53 @@ export class RbacService {
 
   /**
    * Ensures platform permissions and system roles are populated in the database.
+   * Runs as a single atomic transaction reconciling system roles and permissions (Finding 8 / BR-RBAC-01).
    */
   async ensurePlatformSeed(): Promise<void> {
     if (this.isSeeded) return;
 
     try {
-      // 1. Upsert all canonical platform permissions
-      for (let i = 0; i < PLATFORM_PERMISSIONS.length; i++) {
-        const p = PLATFORM_PERMISSIONS[i];
-        const permId = deterministicUuid(PERMISSION_UUID_PREFIX, i + 1);
-        await this.prisma.permission.upsert({
-          where: { code: p.code },
-          update: {
-            name: p.name,
-            description: p.description,
-            category: p.category,
-          },
-          create: {
-            id: permId,
-            code: p.code,
-            name: p.name,
-            description: p.description,
-            category: p.category,
-          },
-        });
-      }
+      await this.prisma.$transaction(async (tx) => {
+        // 1. Upsert all canonical platform permissions
+        for (let i = 0; i < PLATFORM_PERMISSIONS.length; i++) {
+          const p = PLATFORM_PERMISSIONS[i];
+          const permId = deterministicUuid(PERMISSION_UUID_PREFIX, i + 1);
+          await tx.permission.upsert({
+            where: { code: p.code },
+            update: {
+              name: p.name,
+              description: p.description,
+              category: p.category,
+            },
+            create: {
+              id: permId,
+              code: p.code,
+              name: p.name,
+              description: p.description,
+              category: p.category,
+            },
+          });
+        }
 
-      // Fetch all permission mappings by code
-      const allPerms = await this.prisma.permission.findMany();
-      const permMap = new Map<string, string>(allPerms.map((p) => [p.code, p.id]));
+        // Fetch all permission mappings by code within the transaction
+        const allPerms = await tx.permission.findMany();
+        const permMap = new Map<string, string>(allPerms.map((p) => [p.code, p.id]));
 
-      // 2. Upsert all built-in system roles
-      for (let i = 0; i < SYSTEM_ROLES.length; i++) {
-        const sr = SYSTEM_ROLES[i];
-        const roleId =
-          SYSTEM_ROLE_IDS[sr.code] || deterministicUuid(SYSTEM_ROLE_UUID_PREFIX, i + 1);
+        // 2. Reconcile all built-in system roles transactionally
+        for (let i = 0; i < SYSTEM_ROLES.length; i++) {
+          const sr = SYSTEM_ROLES[i];
+          const roleId =
+            SYSTEM_ROLE_IDS[sr.code] || deterministicUuid(SYSTEM_ROLE_UUID_PREFIX, i + 1);
 
-        const existingRole = await this.prisma.role.findFirst({
-          where: { code: sr.code, is_system: true },
-        });
-
-        const activeRoleId = existingRole ? existingRole.id : roleId;
-
-        if (!existingRole) {
-          await this.prisma.role.create({
-            data: {
-              id: activeRoleId,
+          const role = await tx.role.upsert({
+            where: { code: sr.code },
+            update: {
+              name: sr.name,
+              description: sr.description,
+              is_system: true,
+            },
+            create: {
+              id: roleId,
               code: sr.code,
               name: sr.name,
               description: sr.description,
@@ -97,28 +98,39 @@ export class RbacService {
               merchant_id: null,
             },
           });
-        }
 
-        // Ensure role permissions are mapped
-        for (const permCode of sr.permissions) {
-          const pId = permMap.get(permCode);
-          if (pId) {
-            await this.prisma.rolePermission.upsert({
+          // Reconcile role_permissions: add missing, delete obsolete
+          const desiredPermIds = new Set(
+            sr.permissions.map((code) => permMap.get(code)).filter(Boolean) as string[]
+          );
+          const existingRolePerms = await tx.rolePermission.findMany({
+            where: { role_id: role.id },
+          });
+
+          // Delete permissions no longer in SYSTEM_ROLES
+          const toDelete = existingRolePerms.filter((rp) => !desiredPermIds.has(rp.permission_id));
+          if (toDelete.length > 0) {
+            await tx.rolePermission.deleteMany({
               where: {
-                role_id_permission_id: {
-                  role_id: activeRoleId,
-                  permission_id: pId,
-                },
+                role_id: role.id,
+                permission_id: { in: toDelete.map((rp) => rp.permission_id) },
               },
-              update: {},
-              create: {
-                role_id: activeRoleId,
+            });
+          }
+
+          // Insert missing permissions
+          const existingPermIdSet = new Set(existingRolePerms.map((rp) => rp.permission_id));
+          const toInsert = Array.from(desiredPermIds).filter((pid) => !existingPermIdSet.has(pid));
+          for (const pId of toInsert) {
+            await tx.rolePermission.create({
+              data: {
+                role_id: role.id,
                 permission_id: pId,
               },
             });
           }
         }
-      }
+      });
 
       this.isSeeded = true;
     } catch (err: any) {
@@ -285,15 +297,30 @@ export class RbacService {
       return customRole.permissions.map((rp: any) => rp.permission.code);
     }
 
-    // Owner holds all 20 canonical permissions unconditionally
-    if (role === 'OWNER') {
-      return PLATFORM_PERMISSIONS.map((p) => p.code);
-    }
-
-    // If user has a standard system role
-    const systemRoleDef = SYSTEM_ROLES.find((r) => r.code === role);
-    if (systemRoleDef) {
-      return systemRoleDef.permissions;
+    // System role resolution directly from reconciled DB rows (Finding 8 / BR-RBAC-01)
+    if (role) {
+      let sysRole: any = null;
+      try {
+        sysRole = await this.prisma.role.findFirst({
+          where: { code: role, is_system: true },
+          include: {
+            permissions: {
+              include: { permission: true },
+            },
+          },
+        });
+      } catch (err) {
+        if (err instanceof CanonicalApiException) throw err;
+        throw new CanonicalApiException(
+          HttpStatus.SERVICE_UNAVAILABLE,
+          'SERVICE_UNAVAILABLE',
+          'Không thể tải thông tin vai trò hệ thống lúc này',
+          true
+        );
+      }
+      if (sysRole) {
+        return sysRole.permissions.map((rp: any) => rp.permission.code);
+      }
     }
 
     return [];

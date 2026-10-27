@@ -220,17 +220,49 @@ class MockPrismaService {
       const deleted = this.roles.splice(idx, 1)[0];
       return deleted;
     },
+    upsert: async (args: any) => {
+      const idx = this.roles.findIndex((r) => r.code === args.where.code);
+      if (idx !== -1) {
+        this.roles[idx] = {
+          ...this.roles[idx],
+          ...args.update,
+          updated_at: new Date(),
+        };
+        return this.roles[idx];
+      }
+      const created = {
+        id: args.create.id || `role-${this.roles.length + 1}`,
+        ...args.create,
+        created_at: new Date(),
+        updated_at: new Date(),
+      };
+      this.roles.push(created);
+      return created;
+    },
   };
 
   rolePermission = {
-    findMany: async () => this.rolePermissions,
+    findMany: async (args?: any) => {
+      if (args?.where?.role_id) {
+        return this.rolePermissions.filter((rp) => rp.role_id === args.where.role_id);
+      }
+      return this.rolePermissions;
+    },
     create: async (args: any) => {
       const created = { id: `rp-${Date.now()}-${Math.random()}`, ...args.data };
       this.rolePermissions.push(created);
       return created;
     },
     deleteMany: async (args: any) => {
-      if (args.where.role_id) {
+      if (args?.where?.role_id && args?.where?.permission_id?.in) {
+        this.rolePermissions = this.rolePermissions.filter(
+          (rp) =>
+            !(
+              rp.role_id === args.where.role_id &&
+              args.where.permission_id.in.includes(rp.permission_id)
+            )
+        );
+      } else if (args?.where?.role_id) {
         this.rolePermissions = this.rolePermissions.filter(
           (rp) => rp.role_id !== args.where.role_id
         );
@@ -1021,5 +1053,44 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
     // Assert role was not created
     const found = mockPrisma.roles.find((r) => r.name === 'Role With Bogus Code');
     assert.strictEqual(found, undefined, 'Must not partially save role with dropped codes');
+  });
+
+  // Finding 8 (P1): System-role transactional reconciliation, unique system code key, unified DB reads between catalog and authz
+  test('Finding 8 / BR-RBAC-01: Transactional seed reconciles system roles and GET/authz read identical DB rows', async () => {
+    // 1. Force re-seed
+    (service as any).isSeeded = false;
+    await service.ensurePlatformSeed();
+
+    // 2. Modify system role in DB to simulate a reconciled change (e.g. drop a permission from OPS_CSKH)
+    const opsRole = mockPrisma.roles.find((r) => r.code === 'OPS_CSKH');
+    assert.ok(opsRole, 'OPS_CSKH system role must exist');
+
+    // Remove one permission from OPS_CSKH in DB
+    const firstRpIndex = mockPrisma.rolePermissions.findIndex((rp) => rp.role_id === opsRole.id);
+    const removedPermId = mockPrisma.rolePermissions[firstRpIndex].permission_id;
+    const removedPerm = mockPrisma.permissions.find((p) => p.id === removedPermId);
+    mockPrisma.rolePermissions.splice(firstRpIndex, 1);
+
+    // 3. getActorPermissions for an OPS_CSKH actor reads directly from DB rows, NOT in-memory constant
+    const actorPerms = await service.getActorPermissions({
+      userId: 'user-cskh-2',
+      merchantId: MERCHANT_A,
+      role: 'OPS_CSKH',
+    });
+    assert.strictEqual(
+      actorPerms.includes(removedPerm!.code),
+      false,
+      'authz must reflect reconciled DB permissions, not static in-memory lists'
+    );
+
+    // 4. GET /roles returns the exact same reconciled permission set as authz
+    const rolesRes = await service.getRoles(MERCHANT_A, 'corr-test-f8');
+    const catalogOpsRole = rolesRes.data.roles.find((r) => r.code === 'OPS_CSKH');
+    assert.ok(catalogOpsRole);
+    assert.strictEqual(
+      catalogOpsRole.permissions.some((p: any) => p.code === removedPerm!.code),
+      false,
+      'Catalog must match authz evaluation identically'
+    );
   });
 });

@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS "role_permissions" (
 -- CreateIndex
 CREATE UNIQUE INDEX IF NOT EXISTS "roles_merchant_id_name_key" ON "roles"("merchant_id", "name");
 CREATE UNIQUE INDEX IF NOT EXISTS "roles_merchant_id_lower_name_key" ON "roles"("merchant_id", LOWER("name"));
+CREATE UNIQUE INDEX IF NOT EXISTS "roles_code_key" ON "roles"("code");
 
 -- CreateIndex
 CREATE INDEX IF NOT EXISTS "roles_merchant_id_is_system_idx" ON "roles"("merchant_id", "is_system");
