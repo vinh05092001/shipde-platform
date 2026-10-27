@@ -10,8 +10,6 @@ import {
   AlertTriangle,
   CheckCircle2,
   Lock,
-  Copy,
-  Check,
   Search,
   ShieldAlert,
   ArrowRight,
@@ -58,7 +56,14 @@ export interface CreatedShopSuccessData {
 }
 
 export default function AdminShopsPage() {
-  const { user, isAuthenticated, isHydrating } = useAuth();
+  const { user, token, isAuthenticated, isHydrating } = useAuth();
+
+  const isPlatformAdmin = Boolean(
+    user &&
+      (user.role === 'BACKOFFICE' ||
+        (user.role as string) === 'PLATFORM_ADMIN' ||
+        (user.role as string) === 'ADMIN')
+  );
 
   // Navigation / Modal tab state
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -79,7 +84,6 @@ export default function AdminShopsPage() {
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
   const [createError, setCreateError] = useState<string | null>(null);
   const [createdSuccess, setCreatedSuccess] = useState<CreatedShopSuccessData | null>(null);
-  const [copiedPass, setCopiedPass] = useState(false);
 
   // Fetch shops
   const fetchShops = useCallback(async () => {
@@ -87,7 +91,10 @@ export default function AdminShopsPage() {
     setListError(null);
     try {
       const res = await fetch(`/api/admin/shops?search=${encodeURIComponent(searchQuery)}`, {
-        headers: { Accept: 'application/json' },
+        headers: {
+          Accept: 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
       });
 
       if (!res.ok) {
@@ -104,18 +111,18 @@ export default function AdminShopsPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [searchQuery]);
+  }, [searchQuery, token]);
 
   useEffect(() => {
-    if (isAuthenticated && user) {
+    if (isAuthenticated && user && isPlatformAdmin) {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- initial fetch
       void fetchShops();
     }
-  }, [isAuthenticated, user, fetchShops]);
+  }, [isAuthenticated, user, isPlatformAdmin, fetchShops]);
 
   // AC-ADMIN-15: Signed-out users access admin routes must reach the forbidden state
   // before any loading skeleton or in-flight state
-  if (!isHydrating && (!isAuthenticated || !user)) {
+  if (!isHydrating && (!isAuthenticated || !user || !isPlatformAdmin)) {
     return (
       <main className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
         <div
@@ -194,6 +201,7 @@ export default function AdminShopsPage() {
         headers: {
           'Content-Type': 'application/json',
           Accept: 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({
           merchant_name: merchantName.trim(),
@@ -232,14 +240,6 @@ export default function AdminShopsPage() {
       setCreateError(err.message || 'Lỗi khi khởi tạo cửa hàng');
     } finally {
       setIsSubmitting(false);
-    }
-  };
-
-  const copyTemporaryPassword = (pwd: string) => {
-    if (typeof navigator !== 'undefined' && navigator.clipboard) {
-      navigator.clipboard.writeText(pwd);
-      setCopiedPass(true);
-      setTimeout(() => setCopiedPass(false), 3000);
     }
   };
 

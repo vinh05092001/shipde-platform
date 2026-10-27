@@ -10,14 +10,21 @@ export default function AdminPage() {
   const router = useRouter();
   const { user, isAuthenticated, isHydrating } = useAuth();
 
+  const isPlatformAdmin = Boolean(
+    user &&
+      (user.role === 'BACKOFFICE' ||
+        (user.role as string) === 'PLATFORM_ADMIN' ||
+        (user.role as string) === 'ADMIN')
+  );
+
   useEffect(() => {
-    if (isAuthenticated && user) {
+    if (isAuthenticated && user && isPlatformAdmin) {
       router.replace('/admin/shops');
     }
-  }, [isAuthenticated, user, router]);
+  }, [isAuthenticated, user, isPlatformAdmin, router]);
 
-  // AC-ADMIN-15: Signed-out users reach forbidden state immediately
-  if (!isHydrating && (!isAuthenticated || !user)) {
+  // AC-ADMIN-15: Signed-out or unauthorized users reach forbidden state immediately
+  if (!isHydrating && (!isAuthenticated || !user || !isPlatformAdmin)) {
     return (
       <main className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
         <div

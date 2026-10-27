@@ -1,32 +1,169 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 
 const API_BASE =
   process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
-const ADMIN_API_KEY =
-  process.env.ADMIN_API_KEY || process.env.ADMIN_KEY || 'shipde-admin-dev-secret-key-32-chars';
 
-function isAuthorized(req: NextRequest): boolean {
-  const authHeader = req.headers.get('authorization');
-  const tokenCookie = req.cookies.get('token')?.value || req.cookies.get('session')?.value;
-  const adminKeyHeader = req.headers.get('x-admin-key') || req.headers.get('x-api-key');
-
-  // Check if admin key or session token is present
-  if (adminKeyHeader) {
-    return adminKeyHeader === ADMIN_API_KEY;
+export function getAdminApiKey(): string | undefined {
+  const key = process.env.ADMIN_API_KEY || process.env.ADMIN_KEY;
+  if (typeof key === 'string' && key.trim().length > 0) {
+    return key.trim();
   }
-  return Boolean(authHeader || tokenCookie);
+  return undefined;
+}
+
+export interface AuthResult {
+  authorized: boolean;
+  statusCode: number;
+  message: string;
+}
+
+export function verifyAdminAuthorization(req: NextRequest): AuthResult {
+  // 1. Direct admin API key check
+  const adminKeyHeader =
+    req.headers.get('x-admin-key')?.trim() || req.headers.get('x-api-key')?.trim();
+
+  if (adminKeyHeader) {
+    const configuredKey = getAdminApiKey();
+    if (!configuredKey) {
+      return {
+        authorized: false,
+        statusCode: 403,
+        message: 'Khóa quản trị viên chưa được cấu hình trên máy chủ',
+      };
+    }
+    const keyBuf = Buffer.from(adminKeyHeader);
+    const expBuf = Buffer.from(configuredKey);
+    const isKeyValid =
+      keyBuf.length === expBuf.length && timingSafeEqual(keyBuf, expBuf);
+
+    if (isKeyValid) {
+      return { authorized: true, statusCode: 200, message: 'OK' };
+    }
+    return {
+      authorized: false,
+      statusCode: 403,
+      message: 'Khóa quản trị viên không hợp lệ',
+    };
+  }
+
+  // 2. Validate signed session token (Bearer token or cookie)
+  let rawToken: string | undefined;
+  const authHeader = req.headers.get('authorization');
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    rawToken = authHeader.slice(7).trim();
+  } else {
+    rawToken =
+      req.cookies.get('token')?.value?.trim() || req.cookies.get('session')?.value?.trim();
+  }
+
+  if (!rawToken) {
+    return {
+      authorized: false,
+      statusCode: 403,
+      message: 'Truy cập bị từ chối: Yêu cầu đăng nhập quản trị viên',
+    };
+  }
+
+  const tokenSecret = process.env.AUTH_TOKEN_SECRET?.trim();
+  if (!tokenSecret) {
+    return {
+      authorized: false,
+      statusCode: 403,
+      message: 'Khóa ký phiên chưa được cấu hình trên máy chủ (fail-closed)',
+    };
+  }
+
+  const parts = rawToken.split('.');
+  if (parts.length !== 3) {
+    return {
+      authorized: false,
+      statusCode: 403,
+      message: 'Phiên đăng nhập không hợp lệ',
+    };
+  }
+
+  const [version, payload, signature] = parts;
+  if (version !== 'v1') {
+    return {
+      authorized: false,
+      statusCode: 403,
+      message: 'Phiên bản phiên đăng nhập không được hỗ trợ',
+    };
+  }
+
+  const expectedSig = createHmac('sha256', tokenSecret)
+    .update(`${version}.${payload}`)
+    .digest();
+  const providedSig = Buffer.from(signature, 'base64url');
+
+  if (
+    providedSig.length !== expectedSig.length ||
+    !timingSafeEqual(providedSig, expectedSig)
+  ) {
+    return {
+      authorized: false,
+      statusCode: 403,
+      message: 'Chữ ký phiên đăng nhập không hợp lệ',
+    };
+  }
+
+  let claims: any;
+  try {
+    claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+  } catch {
+    return {
+      authorized: false,
+      statusCode: 403,
+      message: 'Dữ liệu phiên đăng nhập không hợp lệ',
+    };
+  }
+
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  if (typeof claims.exp !== 'number' || claims.exp <= nowSeconds) {
+    return {
+      authorized: false,
+      statusCode: 403,
+      message: 'Phiên đăng nhập đã hết hạn',
+    };
+  }
+
+  const PLATFORM_ADMIN_ROLES = ['BACKOFFICE', 'PLATFORM_ADMIN', 'ADMIN'];
+  if (!claims.role || !PLATFORM_ADMIN_ROLES.includes(claims.role)) {
+    return {
+      authorized: false,
+      statusCode: 403,
+      message: 'Truy cập bị từ chối: Yêu cầu quyền quản trị viên nền tảng (Backoffice/Admin)',
+    };
+  }
+
+  return { authorized: true, statusCode: 200, message: 'OK' };
 }
 
 export async function GET(req: NextRequest) {
-  if (!isAuthorized(req)) {
+  const auth = verifyAdminAuthorization(req);
+  if (!auth.authorized) {
     return NextResponse.json(
       {
         error: {
           code: 'FORBIDDEN',
-          message: 'Truy cập bị từ chối: Yêu cầu đăng nhập quản trị viên',
+          message: auth.message,
         },
       },
-      { status: 403 }
+      { status: auth.statusCode }
+    );
+  }
+
+  const adminApiKey = getAdminApiKey();
+  if (!adminApiKey) {
+    return NextResponse.json(
+      {
+        error: {
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Khóa quản trị viên chưa được cấu hình trên máy chủ proxy',
+        },
+      },
+      { status: 500 }
     );
   }
 
@@ -39,38 +176,51 @@ export async function GET(req: NextRequest) {
     const query = new URLSearchParams({ limit, offset, ...(search ? { search } : {}) });
     const res = await fetch(`${API_BASE}/admin/shops?${query.toString()}`, {
       headers: {
-        'x-admin-key': ADMIN_API_KEY,
+        'x-admin-key': adminApiKey,
         Accept: 'application/json',
       },
+      cache: 'no-store',
     });
 
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
     return NextResponse.json(data, { status: res.status });
-  } catch {
-    // Graceful offline fallback in development/test
+  } catch (err: any) {
     return NextResponse.json(
       {
-        success: true,
-        data: {
-          shops: [],
-          total: 0,
+        error: {
+          code: 'UPSTREAM_ERROR',
+          message: err?.message || 'Không thể kết nối đến máy chủ quản trị',
         },
       },
-      { status: 200 }
+      { status: 502 }
     );
   }
 }
 
 export async function POST(req: NextRequest) {
-  if (!isAuthorized(req)) {
+  const auth = verifyAdminAuthorization(req);
+  if (!auth.authorized) {
     return NextResponse.json(
       {
         error: {
           code: 'FORBIDDEN',
-          message: 'Truy cập bị từ chối: Yêu cầu đăng nhập quản trị viên',
+          message: auth.message,
         },
       },
-      { status: 403 }
+      { status: auth.statusCode }
+    );
+  }
+
+  const adminApiKey = getAdminApiKey();
+  if (!adminApiKey) {
+    return NextResponse.json(
+      {
+        error: {
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'Khóa quản trị viên chưa được cấu hình trên máy chủ proxy',
+        },
+      },
+      { status: 500 }
     );
   }
 
@@ -81,23 +231,23 @@ export async function POST(req: NextRequest) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-admin-key': ADMIN_API_KEY,
+        'x-admin-key': adminApiKey,
         Accept: 'application/json',
       },
       body: JSON.stringify(body),
     });
 
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
     return NextResponse.json(data, { status: res.status });
   } catch (err: any) {
     return NextResponse.json(
       {
         error: {
-          code: 'INTERNAL_SERVER_ERROR',
+          code: 'UPSTREAM_ERROR',
           message: err?.message || 'Không thể kết nối đến máy chủ quản trị',
         },
       },
-      { status: 500 }
+      { status: 502 }
     );
   }
 }

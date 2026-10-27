@@ -11,8 +11,6 @@ import {
   CheckCircle2,
   AlertTriangle,
   Key,
-  Copy,
-  Check,
   RefreshCw,
   ArrowRight,
 } from 'lucide-react';
@@ -20,7 +18,14 @@ import { CreatedShopSuccessData } from '../page';
 
 export default function AdminNewShopPage() {
   const router = useRouter();
-  const { user, isAuthenticated, isHydrating } = useAuth();
+  const { user, token, isAuthenticated, isHydrating } = useAuth();
+
+  const isPlatformAdmin = Boolean(
+    user &&
+      (user.role === 'BACKOFFICE' ||
+        (user.role as string) === 'PLATFORM_ADMIN' ||
+        (user.role as string) === 'ADMIN')
+  );
 
   const [merchantName, setMerchantName] = useState('');
   const [fullName, setFullName] = useState('');
@@ -31,10 +36,9 @@ export default function AdminNewShopPage() {
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
   const [createError, setCreateError] = useState<string | null>(null);
   const [createdSuccess, setCreatedSuccess] = useState<CreatedShopSuccessData | null>(null);
-  const [copiedPass, setCopiedPass] = useState(false);
 
   // AC-ADMIN-15: Signed-out users access admin routes must reach forbidden state immediately
-  if (!isHydrating && (!isAuthenticated || !user)) {
+  if (!isHydrating && (!isAuthenticated || !user || !isPlatformAdmin)) {
     return (
       <main className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
         <div
@@ -111,6 +115,7 @@ export default function AdminNewShopPage() {
         headers: {
           'Content-Type': 'application/json',
           Accept: 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({
           merchant_name: merchantName.trim(),
@@ -139,14 +144,6 @@ export default function AdminNewShopPage() {
       setCreateError(err.message || 'Lỗi khi khởi tạo cửa hàng');
     } finally {
       setIsSubmitting(false);
-    }
-  };
-
-  const copyTemporaryPassword = (pwd: string) => {
-    if (typeof navigator !== 'undefined' && navigator.clipboard) {
-      navigator.clipboard.writeText(pwd);
-      setCopiedPass(true);
-      setTimeout(() => setCopiedPass(false), 3000);
     }
   };
 
