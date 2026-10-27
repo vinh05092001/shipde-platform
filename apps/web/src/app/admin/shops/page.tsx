@@ -648,7 +648,7 @@ export default function AdminShopsPage() {
 
   const isPlatformAdmin = Boolean(
     user &&
-      (user.role === 'BACKOFFICE' ||
+      ((user.role as string) === 'BACKOFFICE' ||
         (user.role as string) === 'PLATFORM_ADMIN' ||
         (user.role as string) === 'ADMIN')
   );
