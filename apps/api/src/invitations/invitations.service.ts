@@ -708,10 +708,11 @@ export class InvitationsService {
         err?.message?.includes('serialization')
       ) {
         throw new CanonicalApiException(
-          HttpStatus.BAD_REQUEST,
-          'USER_ALREADY_EXISTS',
-          'Người dùng với thông tin định danh này đã tồn tại trong cửa hàng',
-          false
+          HttpStatus.CONFLICT,
+          'CONFLICT',
+          'Xung đột dữ liệu khi tạo lời mời đồng thời. Vui lòng thử lại.',
+          true,
+          'Vui lòng thử lại'
         );
       }
       if (err?.code === 'P2002') {
@@ -1783,19 +1784,43 @@ export class InvitationsService {
       );
     } catch (err: any) {
       if (err instanceof CanonicalApiException) throw err;
-      if (
-        err?.code === 'P2002' ||
+      const isSerialization =
         err?.code === 'P2034' ||
         err?.code === '40001' ||
         err?.message?.includes('could not serialize') ||
-        err?.message?.includes('Unique constraint failed')
-      ) {
+        err?.message?.includes('serialization');
+
+      if (isSerialization) {
         throw new CanonicalApiException(
-          HttpStatus.BAD_REQUEST,
-          'USER_ALREADY_EXISTS',
-          'Người dùng với thông tin này đã được kích hoạt trong cửa hàng',
-          false
+          HttpStatus.CONFLICT,
+          'CONFLICT',
+          'Xung đột dữ liệu khi xử lý đồng thời. Lời mời vẫn đang chờ xử lý, vui lòng thử lại.',
+          true,
+          'Vui lòng thử lại'
         );
+      }
+
+      if (err?.code === 'P2002') {
+        const target = Array.isArray(err?.meta?.target)
+          ? err.meta.target.join(',')
+          : String(err?.meta?.target || '');
+        const modelName = String(err?.meta?.modelName || '');
+        const message = String(err?.message || '');
+        if (
+          modelName === 'User' ||
+          target.includes('users_') ||
+          target.includes('email') ||
+          target.includes('phone') ||
+          message.includes('Unique constraint failed on user') ||
+          message.includes('Unique constraint failed on the fields')
+        ) {
+          throw new CanonicalApiException(
+            HttpStatus.BAD_REQUEST,
+            'USER_ALREADY_EXISTS',
+            'Người dùng với thông tin này đã được kích hoạt trong cửa hàng',
+            false
+          );
+        }
       }
       throw err;
     }

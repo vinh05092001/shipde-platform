@@ -3785,16 +3785,19 @@ CREATE INDEX "some_other_idx" ON "invitations"("created_at");
     });
 
     it('Round 9 Finding 4: createInvitation uses serializable tx and maps serialization/user conflicts to USER_ALREADY_EXISTS', async () => {
-      // 1. Serialization conflict (P2034) throws USER_ALREADY_EXISTS
+      // 1. Serialization conflict (P2034) throws retryable 409 CONFLICT (Round 11 Finding 2)
       const mockP2034Prisma: any = {
         user: {
-          findFirst: async () => ({
-            id: OWNER_USER_ID,
-            role: RoleEnum.OWNER,
-            status: 'ACTIVE',
-            store_scopes: ['*'],
-            warehouse_scopes: ['*'],
-          }),
+          findFirst: async (args: any) =>
+            args?.where?.id
+              ? {
+                  id: OWNER_USER_ID,
+                  role: RoleEnum.OWNER,
+                  status: 'ACTIVE',
+                  store_scopes: ['*'],
+                  warehouse_scopes: ['*'],
+                }
+              : null,
         },
         invitation: {
           findFirst: async () => null,
@@ -3825,8 +3828,9 @@ CREATE INDEX "some_other_idx" ON "invitations"("created_at");
             'test-corr-r9'
           ),
         (err: any) => {
-          assert.strictEqual(err.code, 'USER_ALREADY_EXISTS');
-          assert.strictEqual(err.status, 400);
+          assert.strictEqual(err.code, 'CONFLICT');
+          assert.strictEqual(err.status, 409);
+          assert.strictEqual(err.retryable, true);
           return true;
         }
       );
@@ -4168,6 +4172,55 @@ CREATE INDEX "some_other_idx" ON "invitations"("created_at");
         (err: any) => {
           assert.strictEqual(err.code, 'USER_ALREADY_EXISTS');
           assert.strictEqual(err.status, 400);
+          return true;
+        }
+      );
+    });
+
+    it('Round 11 Finding 2: acceptInvitation maps serialization conflict to retryable 409 CONFLICT without claiming user exists', async () => {
+      const token = 'accept_serialization_race_token';
+      const tokenHash = createHash('sha256').update(token).digest('hex');
+
+      mockPrisma.invitation.findUnique = async () => ({
+        id: 'inv-serial-race-id',
+        merchant_id: MERCHANT_ID,
+        email: 'serial-recipient@shipde.vn',
+        phone: null,
+        role: RoleEnum.OPS_CSKH,
+        store_scopes: [],
+        warehouse_scopes: [],
+        status: InvitationStatusEnum.PENDING,
+        token_hash: tokenHash,
+        expires_at: new Date(Date.now() + 86400000),
+        consumed_at: null,
+      });
+
+      mockPrisma.$transaction = async () => {
+        const err: any = new Error(
+          'could not serialize access due to read/write dependencies among transactions'
+        );
+        err.code = 'P2034';
+        throw err;
+      };
+
+      await assert.rejects(
+        () =>
+          service.acceptInvitation(
+            {
+              token,
+              full_name: 'Test Serialization User',
+              password: 'Password123!',
+              password_confirm: 'Password123!',
+            },
+            '127.0.0.1',
+            'corr-serial-accept'
+          ),
+        (err: any) => {
+          assert.ok(err instanceof CanonicalApiException);
+          assert.strictEqual(err.code, 'CONFLICT');
+          assert.strictEqual(err.getStatus(), HttpStatus.CONFLICT);
+          assert.strictEqual(err.retryable, true);
+          assert.notStrictEqual(err.code, 'USER_ALREADY_EXISTS');
           return true;
         }
       );
