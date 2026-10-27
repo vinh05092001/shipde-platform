@@ -15,6 +15,7 @@ class MockPrismaService {
   users: any[] = [];
   auditLogs: any[] = [];
   shouldFailAudit = false;
+  shouldFailRoleFindFirst = false;
 
   constructor() {
     this.reset();
@@ -81,6 +82,7 @@ class MockPrismaService {
     ];
     this.auditLogs = [];
     this.shouldFailAudit = false;
+    this.shouldFailRoleFindFirst = false;
   }
 
   permission = {
@@ -135,6 +137,9 @@ class MockPrismaService {
       };
     },
     findFirst: async (args: any) => {
+      if (this.shouldFailRoleFindFirst) {
+        throw new Error('Database connection failed during role lookup');
+      }
       const r = this.roles.find((r) => {
         if (args?.where?.id && r.id !== args.where.id) return false;
         if (args?.where?.code && r.code !== args.where.code) return false;
@@ -842,6 +847,31 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
         assert.ok(err instanceof CanonicalApiException);
         assert.strictEqual(err.code, 'FORBIDDEN');
         assert.strictEqual(err.getStatus(), 403);
+        return true;
+      }
+    );
+  });
+
+  // Finding 2 (P1): Custom role read error fails closed and never falls through to broader permissions
+  test('Finding 2 / BR-RBAC-02: Thrown custom-role read fails closed (503) and does not widen privileges to enum role', async () => {
+    const actorWithCustomRole = {
+      userId: 'user-cskh-custom',
+      merchantId: MERCHANT_A,
+      role: 'OPS_CSKH', // OPS_CSKH has pii:unmask statically
+      customRoleId: 'role-restricted',
+    };
+
+    // Simulate DB read failure on role.findFirst
+    mockPrisma.shouldFailRoleFindFirst = true;
+
+    await assert.rejects(
+      async () => {
+        await service.getActorPermissions(actorWithCustomRole);
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 503);
+        assert.strictEqual(err.code, 'SERVICE_UNAVAILABLE');
         return true;
       }
     );
