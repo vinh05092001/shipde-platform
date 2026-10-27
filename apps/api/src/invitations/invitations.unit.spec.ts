@@ -3100,4 +3100,80 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
       );
     });
   });
+
+  describe('Repair Round 7 findings', () => {
+    it('Finding 1: delivery exception throws canonical 502 DELIVERY_FAILED without leaking raw provider error or token', async () => {
+      const leakedSecret = 'secret_link_token_payload';
+      const svc = new InvitationsService(
+        mockPrisma,
+        {
+          sendVerification: async () => {
+            throw new Error(`Provider outage echo: ${leakedSecret}`);
+          },
+        } as any,
+        new RateLimitService()
+      );
+      await assert.rejects(
+        () =>
+          svc.createInvitation(
+            { email: 'r7-f1@shipde.vn', role: RoleEnum.OPS_CSKH },
+            { userId: OWNER_USER_ID, merchantId: MERCHANT_ID, role: 'OWNER' },
+            '10.7.1.1',
+            'corr-r7-1'
+          ),
+        (err: any) => {
+          assert.strictEqual(err.status, 502);
+          assert.strictEqual(err.code, 'DELIVERY_FAILED');
+          assert.strictEqual(String(err.message).includes(leakedSecret), false);
+          return true;
+        }
+      );
+
+      const resendPrisma: any = {
+        ...mockPrisma,
+        invitation: {
+          ...mockPrisma.invitation,
+          findUnique: async () => ({
+            id: 'target-id',
+            merchant_id: MERCHANT_ID,
+            email: 'r7-resend@shipde.vn',
+            phone: null,
+            role: RoleEnum.OPS_CSKH,
+            status: 'PENDING',
+            token_hash: 'old-hash',
+            expires_at: new Date(Date.now() + 100000),
+            consumed_at: null,
+            store_scopes: [],
+            warehouse_scopes: [],
+          }),
+        },
+        $transaction: async (fn: any) => fn(resendPrisma),
+      };
+
+      const resendSvc = new InvitationsService(
+        resendPrisma,
+        {
+          sendVerification: async () => {
+            throw new Error(`Provider echo: ${leakedSecret}`);
+          },
+        } as any,
+        new RateLimitService()
+      );
+      await assert.rejects(
+        () =>
+          resendSvc.resendInvitation(
+            'target-id',
+            { userId: OWNER_USER_ID, merchantId: MERCHANT_ID, role: 'OWNER' },
+            '10.7.1.2',
+            'corr-r7-1-resend'
+          ),
+        (err: any) => {
+          assert.strictEqual(err.status, 502);
+          assert.strictEqual(err.code, 'DELIVERY_FAILED');
+          assert.strictEqual(String(err.message).includes(leakedSecret), false);
+          return true;
+        }
+      );
+    });
+  });
 });

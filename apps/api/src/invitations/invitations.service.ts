@@ -581,7 +581,11 @@ export class InvitationsService {
       });
     } catch (deliveryErr: any) {
       await compensateFailedCreate('DELIVERY_EXCEPTION');
-      throw deliveryErr;
+      throw new CanonicalApiException(
+        HttpStatus.BAD_GATEWAY,
+        'DELIVERY_FAILED',
+        'Không thể gửi thông báo lời mời tới người nhận'
+      );
     }
 
     if (!dispatchRes || !dispatchRes.success) {
@@ -1016,7 +1020,11 @@ export class InvitationsService {
       });
     } catch (deliveryErr: any) {
       await compensateFailedResend('DELIVERY_EXCEPTION');
-      throw deliveryErr;
+      throw new CanonicalApiException(
+        HttpStatus.BAD_GATEWAY,
+        'DELIVERY_FAILED',
+        'Không thể gửi thông báo lời mời tới người nhận'
+      );
     }
 
     if (!dispatchRes || !dispatchRes.success) {
