@@ -259,7 +259,9 @@ export class InvitationsService {
       if (dto.warehouse_scopes && dto.warehouse_scopes.length > 0) {
         const actorWarehouses = new Set(actorUser.warehouse_scopes);
         if (!actorWarehouses.has('*')) {
-          const unauthorizedWarehouses = dto.warehouse_scopes.filter((w) => !actorWarehouses.has(w));
+          const unauthorizedWarehouses = dto.warehouse_scopes.filter(
+            (w) => !actorWarehouses.has(w)
+          );
           if (unauthorizedWarehouses.length > 0) {
             throw new CanonicalApiException(
               HttpStatus.FORBIDDEN,
@@ -861,7 +863,8 @@ export class InvitationsService {
         throw new CanonicalApiException(
           HttpStatus.TOO_MANY_REQUESTS,
           'RATE_LIMITED',
-          rateLimit.reason || 'Quá nhiều yêu cầu kiểm tra lời mời từ địa chỉ IP này. Vui lòng thử lại sau.',
+          rateLimit.reason ||
+            'Quá nhiều yêu cầu kiểm tra lời mời từ địa chỉ IP này. Vui lòng thử lại sau.',
           false,
           undefined,
           undefined,
@@ -930,7 +933,8 @@ export class InvitationsService {
         throw new CanonicalApiException(
           HttpStatus.TOO_MANY_REQUESTS,
           'RATE_LIMITED',
-          rateLimit.reason || 'Quá nhiều yêu cầu chấp nhận lời mời từ địa chỉ IP này. Vui lòng thử lại sau.',
+          rateLimit.reason ||
+            'Quá nhiều yêu cầu chấp nhận lời mời từ địa chỉ IP này. Vui lòng thử lại sau.',
           false,
           undefined,
           undefined,

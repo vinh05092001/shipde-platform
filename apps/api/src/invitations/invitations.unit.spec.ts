@@ -529,7 +529,9 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
     it('maps P2002 partial unique index constraint violation on concurrent insert to 400 INVITATION_ALREADY_PENDING', async () => {
       mockPrisma.invitation.findFirst = async () => null; // Check-then-insert race: read passed
       mockPrisma.invitation.create = async () => {
-        const err: any = new Error('Unique constraint failed on the fields: (`merchant_id`,`email`)');
+        const err: any = new Error(
+          'Unique constraint failed on the fields: (`merchant_id`,`email`)'
+        );
         err.code = 'P2002';
         err.meta = { target: ['invitations_merchant_pending_email_unique'] };
         throw err;
@@ -1288,11 +1290,7 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
         recordInvitationDispatchAttempt: async () => {},
       };
 
-      const limitedService = new InvitationsService(
-        mockPrisma,
-        undefined,
-        mockRateLimit as any
-      );
+      const limitedService = new InvitationsService(mockPrisma, undefined, mockRateLimit as any);
 
       await assert.rejects(
         async () => {
@@ -1323,11 +1321,7 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
         recordInvitationAcceptAttempt: async () => {},
       };
 
-      const limitedService = new InvitationsService(
-        mockPrisma,
-        undefined,
-        mockRateLimit as any
-      );
+      const limitedService = new InvitationsService(mockPrisma, undefined, mockRateLimit as any);
 
       await assert.rejects(
         async () => {

@@ -549,7 +549,8 @@ export class RateLimitService {
         return {
           allowed: false,
           retryAfterSeconds: hourlyCheck.retryAfterSeconds,
-          reason: 'Đã vượt quá số lần gửi lời mời cho người dùng này trong 1 giờ. Vui lòng thử lại sau.',
+          reason:
+            'Đã vượt quá số lần gửi lời mời cho người dùng này trong 1 giờ. Vui lòng thử lại sau.',
         };
       }
     }

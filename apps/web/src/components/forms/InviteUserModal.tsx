@@ -69,7 +69,8 @@ export const InviteUserModal: React.FC<Props> = ({ isOpen, onClose, onUserInvite
             </button>
           </div>
           <p className="text-slate-600 text-xs leading-relaxed">
-            Liên kết kích hoạt tài khoản đã được khởi tạo thành công (hiệu lực 7 ngày). Hãy sao chép liên kết dưới đây để gửi cho người nhận:
+            Liên kết kích hoạt tài khoản đã được khởi tạo thành công (hiệu lực 7 ngày). Hãy sao chép
+            liên kết dưới đây để gửi cho người nhận:
           </p>
           <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-2.5">
             <input
