@@ -3110,7 +3110,8 @@ export class AuthService {
   async adminCreateShop(
     dto: AdminCreateShopDto,
     clientIp: string,
-    correlationId: string
+    correlationId: string,
+    actor = 'admin:key'
   ): Promise<{
     success: boolean;
     data: AdminCreatedShopResult;
@@ -3277,7 +3278,7 @@ export class AuthService {
         await this.logAudit({
           merchantId: match.merchant.id,
           userId: match.id,
-          actor: 'admin:provisioning',
+          actor: actor || 'admin:key',
           action: 'ADMIN_RETRY_SHOP_SETUP',
           resource: `merchant:${match.merchant.id}`,
           correlationId,
@@ -3486,7 +3487,7 @@ export class AuthService {
     await this.logAudit({
       merchantId: merchant.id,
       userId: user.id,
-      actor: 'admin:provisioning',
+      actor: actor || 'admin:key',
       action: 'ADMIN_CREATE_SHOP',
       resource: `merchant:${merchant.id}`,
       correlationId,

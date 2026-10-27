@@ -1,6 +1,6 @@
 import { CanActivate, ExecutionContext, Injectable, HttpStatus } from '@nestjs/common';
 import { Request } from 'express';
-import { timingSafeEqual } from 'node:crypto';
+import { timingSafeEqual, createHash } from 'node:crypto';
 import { CanonicalApiException } from './auth.service';
 
 export function getExpectedAdminKey(): string | undefined {
@@ -74,6 +74,10 @@ export class AdminAuthGuard implements CanActivate {
     const req = context.switchToHttp().getRequest<Request>();
     const key = extractAdminKey(req);
     validateAdminKey(key);
+
+    const keyFingerprint = createHash('sha256').update(key!).digest('hex').slice(0, 12);
+    const actorHeader = req.headers['x-admin-actor']?.toString()?.trim();
+    (req as any).adminActor = actorHeader || `admin:key:${keyFingerprint}`;
     return true;
   }
 }

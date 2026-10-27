@@ -35,7 +35,8 @@ export class AdminShopsController {
   ): Promise<Response> {
     const correlationId = (req as any).correlationId || normalizeCorrelationId();
     const clientIp = extractClientIp(req);
-    const result = await this.authService.adminCreateShop(dto, clientIp, correlationId);
+    const actor = (req as any).adminActor || 'admin:key';
+    const result = await this.authService.adminCreateShop(dto, clientIp, correlationId, actor);
     return res.status(HttpStatus.CREATED).json(result);
   }
 

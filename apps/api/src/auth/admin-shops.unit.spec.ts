@@ -578,6 +578,30 @@ describe('FEAT-AUTH-02: Admin-Created Shop Account Unit Tests', () => {
     );
   });
 
+  // Finding 7: Durable audit records the server-authenticated actor and never hardcoded provisioning
+  it('Finding 7: Audit log durably records server-authenticated actor without PII or secrets', async () => {
+    const mockPrisma = createMockPrismaService();
+    const service = new AuthService(mockPrisma, createMockRateLimitService());
+
+    const authenticatedActor = 'admin:key:e8c3b417d9a1';
+    await service.adminCreateShop(
+      { merchant_name: 'Shop Audit Test', email: 'audit-actor@example.com' },
+      '192.168.1.100',
+      'corr-audit-actor',
+      authenticatedActor
+    );
+
+    assert.ok(mockPrisma.auditLogs.length > 0, 'Audit record must be logged');
+    const log = mockPrisma.auditLogs.find((l: any) => l.action === 'ADMIN_CREATE_SHOP');
+    assert.ok(log, 'ADMIN_CREATE_SHOP audit entry must exist');
+    assert.strictEqual(log.actor, authenticatedActor, 'Audit record must match server-authenticated actor');
+    // Ensure no PII in details
+    assert.strictEqual(log.details.has_email, true);
+    assert.strictEqual(log.details.has_phone, false);
+    assert.strictEqual(log.details.email, undefined);
+    assert.strictEqual(log.details.phone, undefined);
+  });
+
   test('teardown test environment', () => {
     if (originalEnvKey !== undefined) {
       process.env.ADMIN_API_KEY = originalEnvKey;
