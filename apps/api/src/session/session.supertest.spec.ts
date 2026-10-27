@@ -12,6 +12,7 @@ import { SessionService } from './session.service';
 import { APP_CONFIG } from '../config.token';
 import { AppConfig } from '@shipde/config';
 import { SessionStatusEnum, RoleEnum } from '@prisma/client';
+import { hashPassword } from '../auth/password.util';
 
 function createSessionToken(): { raw: string; hash: string } {
   const raw = randomBytes(48).toString('hex');
@@ -117,12 +118,13 @@ async function runSessionSupertestSuite() {
       status: 'ACTIVE',
     },
   });
+  const ownerPassword = 'SessionOwnerSecurePassword123!';
   const user = await prisma.user.create({
     data: {
       merchant_id: merchant.id,
       email: `session.owner.${testSuffix}@shipde.vn`,
       full_name: 'Session Test Owner',
-      password_hash: 'test-hash-not-real',
+      password_hash: await hashPassword(ownerPassword),
       role: RoleEnum.OWNER,
       status: 'ACTIVE',
     },
@@ -160,30 +162,66 @@ async function runSessionSupertestSuite() {
 
   try {
     // -------------------------------------------------------------------------
-    // AC-SESS-01: Session Creation
+    // AC-SESS-01: Session Creation via Real Login Path and Service Entry Point
     // -------------------------------------------------------------------------
-    console.log('[TEST AC-SESS-01] Active user logs in - session creation');
-    const tok1 = createSessionToken();
-    const expiresAt1 = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000);
-    const sess1 = await prisma.deviceSession.create({
-      data: {
+    console.log('[TEST AC-SESS-01] Active user logs in - session creation on real login path');
+    const tok1 = { raw: '', hash: '' };
+
+    const loginRes = await request(server)
+      .post('/api/v1/auth/login')
+      .send({
+        identifier: user.email,
+        password: ownerPassword,
+      })
+      .expect(200);
+
+    const loginToken = loginRes.body.data?.access_token || loginRes.body.data?.token;
+    assert.ok(loginToken, 'Login must issue access token');
+    const expectedHash = createHash('sha256').update(loginToken).digest('hex');
+
+    const sess1 = await prisma.deviceSession.findFirst({
+      where: {
         user_id: user.id,
         merchant_id: merchant.id,
-        session_token_hash: tok1.hash,
-        device_id: 'browser_chrome_desktop',
-        device_model: 'Chrome 128',
-        user_agent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-        status: SessionStatusEnum.ACTIVE,
-        expires_at: expiresAt1,
+        session_token_hash: expectedHash,
       },
     });
-    assert.ok(sess1.id, 'Session ID must be generated');
+
+    assert.ok(sess1, 'DeviceSession row must exist in DB created by login path');
     assert.strictEqual(sess1.status, SessionStatusEnum.ACTIVE);
-    assert.strictEqual(sess1.session_token_hash, tok1.hash);
+    assert.strictEqual(sess1.session_token_hash, expectedHash);
     assert.ok(sess1.last_active_at);
-    assert.strictEqual(sess1.expires_at.getTime(), expiresAt1.getTime());
+    const now1 = Date.now();
+    const expiryDiffDays = (sess1.expires_at.getTime() - now1) / (1000 * 60 * 60 * 24);
+    assert.ok(
+      expiryDiffDays >= 89 && expiryDiffDays <= 91,
+      'expires_at must be approximately 90 days in future'
+    );
+    const activeDiffMs = Math.abs(now1 - sess1.last_active_at.getTime());
+    assert.ok(activeDiffMs < 60000, 'last_active_at must be recent');
+
+    tok1.raw = loginToken;
+    tok1.hash = expectedHash;
+
+    // Verify SessionService.create entry point as well
+    const svcRawToken = randomBytes(48).toString('hex');
+    const svcExpectedHash = createHash('sha256').update(svcRawToken).digest('hex');
+    const svcSess = await sessionService.create({
+      userId: user.id,
+      merchantId: merchant.id,
+      token: svcRawToken,
+      deviceId: 'service_created_device',
+      deviceModel: 'Test Device',
+    });
+    assert.ok(svcSess.id);
+    assert.strictEqual(svcSess.status, SessionStatusEnum.ACTIVE);
+    assert.strictEqual(svcSess.session_token_hash, svcExpectedHash);
+    assert.ok(svcSess.last_active_at);
+    const svcExpiryDiff = (svcSess.expires_at.getTime() - Date.now()) / (1000 * 60 * 60 * 24);
+    assert.ok(svcExpiryDiff >= 89 && svcExpiryDiff <= 91);
+
     console.log(
-      '  PASS: AC-SESS-01 Session created in DB with ACTIVE status, hash, 90-day expiry, and last_active_at'
+      '  PASS: AC-SESS-01 Real login path & service entry point generate DeviceSession with ACTIVE status, SHA-256 hash, 90-day expiry, and last_active_at'
     );
 
     // -------------------------------------------------------------------------

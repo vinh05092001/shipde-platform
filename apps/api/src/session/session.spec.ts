@@ -366,4 +366,46 @@ describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
       assert.notStrictEqual(loggedIp1, rawIp, 'Must not be raw IP');
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Finding 1: AC-SESS-01 Session creation with SHA-256 hash and 90-day expiry
+  // ---------------------------------------------------------------------------
+  describe('SessionService Creation (AC-SESS-01 / Finding 1)', () => {
+    it('creates active session with SHA-256 token hash, 90-day expiry, and last_active_at', async () => {
+      process.env.AUDIT_IDENTIFIER_HMAC_KEY = 'test-audit-hmac-key-placeholder-32-chars';
+      const rawToken = 'test-raw-bearer-token-random-value-xyz';
+      const expectedHash = createHash('sha256').update(rawToken).digest('hex');
+      let createdPayload: any = null;
+
+      const mockPrisma: any = {
+        deviceSession: {
+          create: async ({ data }: any) => {
+            createdPayload = data;
+            return { ...data, id: data.id || 'created-session-uuid-1' };
+          },
+        },
+      };
+
+      const service = new SessionService(mockPrisma);
+      const created = await service.create({
+        userId: 'user-uuid-1',
+        merchantId: 'merchant-uuid-1',
+        token: rawToken,
+        deviceId: 'web-desktop-chrome',
+        deviceModel: 'Chrome 128',
+      });
+
+      assert.strictEqual(created.id, 'created-session-uuid-1');
+      assert.strictEqual(createdPayload.user_id, 'user-uuid-1');
+      assert.strictEqual(createdPayload.merchant_id, 'merchant-uuid-1');
+      assert.strictEqual(createdPayload.session_token_hash, expectedHash);
+      assert.strictEqual(createdPayload.status, SessionStatusEnum.ACTIVE);
+      assert.ok(createdPayload.last_active_at instanceof Date);
+      assert.ok(createdPayload.expires_at instanceof Date);
+
+      const now = Date.now();
+      const diffDays = (createdPayload.expires_at.getTime() - now) / (1000 * 60 * 60 * 24);
+      assert.ok(diffDays >= 89 && diffDays <= 91, 'Expiry must be approximately 90 days');
+    });
+  });
 });

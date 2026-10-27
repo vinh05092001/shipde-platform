@@ -15,6 +15,46 @@ const INACTIVITY_DAYS = 30;
 export class SessionService {
   constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
 
+  /**
+   * Internal creation of session records during successful login (AC-SESS-01).
+   * Persists device session with SHA-256 token hash, 90-day absolute expiry,
+   * current last_active_at timestamp, and ACTIVE status.
+   */
+  async create(data: {
+    sessionId?: string;
+    userId: string;
+    merchantId: string;
+    token: string;
+    deviceId?: string;
+    deviceModel?: string;
+    userAgent?: string;
+    ipAddress?: string;
+    authAssurance?: string;
+    mfaVerifiedAt?: Date | null;
+  }) {
+    const tokenHash = createHash('sha256').update(data.token).digest('hex');
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + ABSOLUTE_LIFETIME_DAYS * 24 * 60 * 60 * 1000);
+
+    return this.prisma.deviceSession.create({
+      data: {
+        id: data.sessionId,
+        user_id: data.userId,
+        merchant_id: data.merchantId,
+        session_token_hash: tokenHash,
+        device_id: data.deviceId ?? 'web-session',
+        device_model: data.deviceModel,
+        user_agent: data.userAgent,
+        ip_address: data.ipAddress ? this.hashIp(data.ipAddress) : null,
+        status: SessionStatusEnum.ACTIVE,
+        last_active_at: now,
+        expires_at: expiresAt,
+        auth_assurance: data.authAssurance ?? 'PASSWORD',
+        mfa_verified_at: data.mfaVerifiedAt,
+      },
+    });
+  }
+
   async list(
     userId: string,
     merchantId: string,
