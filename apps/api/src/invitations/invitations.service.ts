@@ -2,7 +2,7 @@ import { Injectable, Inject, Optional, HttpStatus } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CanonicalApiException } from '../auth/auth.service';
 import { hashPassword } from '../auth/password.util';
-import { RoleEnum, InvitationStatusEnum } from '@prisma/client';
+import { RoleEnum, InvitationStatusEnum, Prisma } from '@prisma/client';
 import { randomBytes, createHash } from 'node:crypto';
 import { VERIFICATION_ADAPTER } from '../auth/auth.tokens';
 import type { IVerificationDeliveryAdapter } from '@shipde/contracts';
@@ -587,15 +587,132 @@ export class InvitationsService {
     // 7. Persist invitation record in database transaction (BR-INV-04, BR-INV-09)
     let invitation: any;
     try {
-      invitation = await this.prisma.$transaction(async (tx) => {
-        // Finding 6 (Round 7): Case-insensitive email and canonical phone checks inside insertion transaction (BR-INV-08)
-        const inTxExistingUser = await tx.user.findFirst({
-          where: {
-            merchant_id: actor.merchantId,
-            OR: identity.buildUserOrConditions(),
-          },
-        });
-        if (inTxExistingUser) {
+      invitation = await this.prisma.$transaction(
+        async (tx) => {
+          // Finding 6 (Round 7): Case-insensitive email and canonical phone checks inside insertion transaction (BR-INV-08)
+          const inTxExistingUser = await tx.user.findFirst({
+            where: {
+              merchant_id: actor.merchantId,
+              OR: identity.buildUserOrConditions(),
+            },
+          });
+          if (inTxExistingUser) {
+            throw new CanonicalApiException(
+              HttpStatus.BAD_REQUEST,
+              'USER_ALREADY_EXISTS',
+              'Người dùng với thông tin định danh này đã tồn tại trong cửa hàng',
+              false
+            );
+          }
+
+          const inTxPendingInvite = await tx.invitation.findFirst({
+            where: {
+              merchant_id: actor.merchantId,
+              status: InvitationStatusEnum.PENDING,
+              expires_at: { gt: new Date() },
+              OR: identity.buildInvitationOrConditions(),
+            },
+          });
+          if (inTxPendingInvite) {
+            throw this.alreadyPendingException();
+          }
+
+          // Finding 3: In-transaction expiration of time-elapsed PENDING invitations (BR-INV-08 / AC-USR-01-06)
+          // Avoids unique partial index collision (P2002) when creating an invite for a previously expired pending recipient
+          await tx.invitation.updateMany({
+            where: {
+              merchant_id: actor.merchantId,
+              status: InvitationStatusEnum.PENDING,
+              expires_at: { lte: new Date() },
+              OR: [...(email ? [{ email }] : []), ...(phone ? [{ phone }] : [])],
+            },
+            data: {
+              status: InvitationStatusEnum.EXPIRED,
+            },
+          });
+
+          // Round 9 Finding 4: Re-check user under serializable transaction before inserting pending invite (BR-INV-08 / AC-USR-01-05)
+          const recheckUser = await tx.user.findFirst({
+            where: {
+              merchant_id: actor.merchantId,
+              OR: identity.buildUserOrConditions(),
+            },
+          });
+          if (recheckUser) {
+            throw new CanonicalApiException(
+              HttpStatus.BAD_REQUEST,
+              'USER_ALREADY_EXISTS',
+              'Người dùng với thông tin định danh này đã tồn tại trong cửa hàng',
+              false
+            );
+          }
+
+          const inv = await tx.invitation.create({
+            data: {
+              merchant_id: actor.merchantId,
+              email: email || null,
+              phone: phone || null,
+              role: dto.role as RoleEnum,
+              store_scopes: dto.store_scopes || [],
+              warehouse_scopes: dto.warehouse_scopes || [],
+              token_hash: tokenHash,
+              status: InvitationStatusEnum.PENDING,
+              invited_by_user_id: actor.userId,
+              expires_at: expiresAt,
+            },
+          });
+
+          // 8. Immutable Audit Trail committed atomically with the invitation row
+          // (BR-INV-09, AC-USR-01-01, AC-USR-01-18; Round 6 Finding 3): a crash after commit can
+          // never leave a live invite without audit. A failed delivery appends a compensating
+          // INVITATION_DELIVERY_FAILED event; audit rows are never deleted. Never logs raw token.
+          await tx.auditLog.create({
+            data: {
+              merchant_id: actor.merchantId,
+              user_id: actor.userId,
+              action: 'INVITATION_SENT',
+              entity_type: 'Invitation',
+              entity_id: inv.id,
+              ip_address: clientIp,
+              new_value: {
+                invitation_id: inv.id,
+                merchant_id: actor.merchantId,
+                actor_id: actor.userId,
+                role: inv.role,
+                store_scopes: inv.store_scopes,
+                warehouse_scopes: inv.warehouse_scopes,
+                expires_at: inv.expires_at.toISOString(),
+                target_identifier_masked: maskIdentifier(email || phone),
+                correlation_id: correlationId,
+              },
+            },
+          });
+
+          return inv;
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }
+      );
+    } catch (err: any) {
+      // Transaction rolled back: no invite committed, so refund exactly this request's quota
+      // slots (Round 6 Finding 4)
+      await this.refundDispatchQuota(rateLimit.reservation);
+      if (
+        err?.code === 'P2034' ||
+        err?.code === '40001' ||
+        err?.message?.includes('could not serialize') ||
+        err?.message?.includes('serialization')
+      ) {
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'USER_ALREADY_EXISTS',
+          'Người dùng với thông tin định danh này đã tồn tại trong cửa hàng',
+          false
+        );
+      }
+      if (err?.code === 'P2002') {
+        const target = Array.isArray(err?.meta?.target) ? err.meta.target.join(',') : String(err?.meta?.target || '');
+        const modelName = String(err?.meta?.modelName || '');
+        if (modelName === 'User' || target.includes('users_')) {
           throw new CanonicalApiException(
             HttpStatus.BAD_REQUEST,
             'USER_ALREADY_EXISTS',
@@ -603,81 +720,6 @@ export class InvitationsService {
             false
           );
         }
-
-        const inTxPendingInvite = await tx.invitation.findFirst({
-          where: {
-            merchant_id: actor.merchantId,
-            status: InvitationStatusEnum.PENDING,
-            expires_at: { gt: new Date() },
-            OR: identity.buildInvitationOrConditions(),
-          },
-        });
-        if (inTxPendingInvite) {
-          throw this.alreadyPendingException();
-        }
-
-        // Finding 3: In-transaction expiration of time-elapsed PENDING invitations (BR-INV-08 / AC-USR-01-06)
-        // Avoids unique partial index collision (P2002) when creating an invite for a previously expired pending recipient
-        await tx.invitation.updateMany({
-          where: {
-            merchant_id: actor.merchantId,
-            status: InvitationStatusEnum.PENDING,
-            expires_at: { lte: new Date() },
-            OR: [...(email ? [{ email }] : []), ...(phone ? [{ phone }] : [])],
-          },
-          data: {
-            status: InvitationStatusEnum.EXPIRED,
-          },
-        });
-
-        const inv = await tx.invitation.create({
-          data: {
-            merchant_id: actor.merchantId,
-            email: email || null,
-            phone: phone || null,
-            role: dto.role as RoleEnum,
-            store_scopes: dto.store_scopes || [],
-            warehouse_scopes: dto.warehouse_scopes || [],
-            token_hash: tokenHash,
-            status: InvitationStatusEnum.PENDING,
-            invited_by_user_id: actor.userId,
-            expires_at: expiresAt,
-          },
-        });
-
-        // 8. Immutable Audit Trail committed atomically with the invitation row
-        // (BR-INV-09, AC-USR-01-01, AC-USR-01-18; Round 6 Finding 3): a crash after commit can
-        // never leave a live invite without audit. A failed delivery appends a compensating
-        // INVITATION_DELIVERY_FAILED event; audit rows are never deleted. Never logs raw token.
-        await tx.auditLog.create({
-          data: {
-            merchant_id: actor.merchantId,
-            user_id: actor.userId,
-            action: 'INVITATION_SENT',
-            entity_type: 'Invitation',
-            entity_id: inv.id,
-            ip_address: clientIp,
-            new_value: {
-              invitation_id: inv.id,
-              merchant_id: actor.merchantId,
-              actor_id: actor.userId,
-              role: inv.role,
-              store_scopes: inv.store_scopes,
-              warehouse_scopes: inv.warehouse_scopes,
-              expires_at: inv.expires_at.toISOString(),
-              target_identifier_masked: maskIdentifier(email || phone),
-              correlation_id: correlationId,
-            },
-          },
-        });
-
-        return inv;
-      });
-    } catch (err: any) {
-      // Transaction rolled back: no invite committed, so refund exactly this request's quota
-      // slots (Round 6 Finding 4)
-      await this.refundDispatchQuota(rateLimit.reservation);
-      if (err?.code === 'P2002' || err?.message?.includes('invitations_merchant_pending')) {
         throw new CanonicalApiException(
           HttpStatus.BAD_REQUEST,
           'INVITATION_ALREADY_PENDING',

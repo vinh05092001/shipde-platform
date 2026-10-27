@@ -3685,6 +3685,96 @@ CREATE INDEX "some_other_idx" ON "invitations"("created_at");
       }
     });
 
+    it('Round 9 Finding 4: createInvitation uses serializable tx and maps serialization/user conflicts to USER_ALREADY_EXISTS', async () => {
+      // 1. Serialization conflict (P2034) throws USER_ALREADY_EXISTS
+      const mockP2034Prisma: any = {
+        user: {
+          findFirst: async () => ({
+            id: OWNER_USER_ID,
+            role: RoleEnum.OWNER,
+            status: 'ACTIVE',
+            store_scopes: ['*'],
+            warehouse_scopes: ['*'],
+          }),
+        },
+        invitation: {
+          findFirst: async () => null,
+          findMany: async () => [],
+        },
+        $transaction: async (_cb: any, opts: any) => {
+          assert.strictEqual(opts?.isolationLevel, 'Serializable');
+          const err: any = new Error('could not serialize access due to read/write dependencies among transactions');
+          err.code = 'P2034';
+          throw err;
+        },
+      };
+
+      const customService = new InvitationsService(
+        mockP2034Prisma,
+        { sendVerification: async () => ({ messageId: 'm1' }) } as any,
+        undefined
+      );
+
+      await assert.rejects(
+        () =>
+          customService.createInvitation(
+            { email: 'concurrent@shipde.vn', role: RoleEnum.OPS_CSKH },
+            { userId: OWNER_USER_ID, merchantId: MERCHANT_ID },
+            '127.0.0.1',
+            'test-corr-r9'
+          ),
+        (err: any) => {
+          assert.strictEqual(err.code, 'USER_ALREADY_EXISTS');
+          assert.strictEqual(err.status, 400);
+          return true;
+        }
+      );
+
+      // 2. User unique conflict (P2002) throws USER_ALREADY_EXISTS
+      const mockP2002UserPrisma: any = {
+        user: {
+          findFirst: async () => ({
+            id: OWNER_USER_ID,
+            role: RoleEnum.OWNER,
+            status: 'ACTIVE',
+            store_scopes: ['*'],
+            warehouse_scopes: ['*'],
+          }),
+        },
+        invitation: {
+          findFirst: async () => null,
+          findMany: async () => [],
+        },
+        $transaction: async () => {
+          const err: any = new Error('Unique constraint failed on the fields: (`email`)');
+          err.code = 'P2002';
+          err.meta = { modelName: 'User', target: ['email'] };
+          throw err;
+        },
+      };
+
+      const userService2 = new InvitationsService(
+        mockP2002UserPrisma,
+        { sendVerification: async () => ({ messageId: 'm1' }) } as any,
+        undefined
+      );
+
+      await assert.rejects(
+        () =>
+          userService2.createInvitation(
+            { email: 'existing-unique@shipde.vn', role: RoleEnum.OPS_CSKH },
+            { userId: OWNER_USER_ID, merchantId: MERCHANT_ID },
+            '127.0.0.1',
+            'test-corr-r9'
+          ),
+        (err: any) => {
+          assert.strictEqual(err.code, 'USER_ALREADY_EXISTS');
+          assert.strictEqual(err.status, 400);
+          return true;
+        }
+      );
+    });
+
     it('Round 9 Finding 5: acceptInvitation sets Cache-Control: no-store and Referrer-Policy: no-referrer', () => {
       const headers = Reflect.getMetadata('__headers__', InvitationsController.prototype.acceptInvitation) || [];
       const hasNoStore = headers.some((h: any) => h.name === 'Cache-Control' && h.value === 'no-store');
