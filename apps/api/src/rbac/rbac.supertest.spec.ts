@@ -566,10 +566,37 @@ async function main() {
   // =========================================================================
   // AC-RBAC-01-15: Forced audit write failure against PostgreSQL rolls back transaction and returns canonical 500
   // =========================================================================
-  // Add a CHECK constraint to audit_logs that rejects action = 'ROLE_CREATED' for rollback test
+  // Ensure no legacy test constraint exists on shared database (Finding 6 / Round 8)
   await prisma.$executeRawUnsafe(
-    "ALTER TABLE audit_logs ADD CONSTRAINT test_fail_audit_ac15 CHECK (action != 'ROLE_CREATED') NOT VALID;"
-  );
+    'ALTER TABLE audit_logs DROP CONSTRAINT IF EXISTS test_fail_audit_ac15;'
+  ).catch(() => {});
+
+  // Intercept auditLog write inside the real PostgreSQL interactive transaction to simulate failure
+  // without modifying shared database schema or leaving durable DDL hazards if killed
+  const origTransaction = prisma.$transaction.bind(prisma);
+  prisma.$transaction = (async (fn: any, options?: any) => {
+    return origTransaction(async (tx: any) => {
+      const origAuditCreate = tx.auditLog.create.bind(tx.auditLog);
+      tx.auditLog.create = async (args: any) => {
+        if (
+          args?.data?.action === 'ROLE_CREATED' &&
+          args?.data?.new_value?.name === 'Audit Rollback Test Role'
+        ) {
+          // Verify role actually exists inside the active uncommitted transaction prior to abort
+          const roleInsideTx = await tx.role.findFirst({
+            where: { name: 'Audit Rollback Test Role' },
+          });
+          assert.ok(
+            roleInsideTx,
+            'Role must exist inside uncommitted PostgreSQL transaction prior to audit failure'
+          );
+          throw new Error('Simulated auditLog persistence failure inside transaction');
+        }
+        return origAuditCreate(args);
+      };
+      return fn(tx);
+    }, options);
+  }) as any;
 
   try {
     const auditFailRes = await request(server)
@@ -595,10 +622,8 @@ async function main() {
       'Role must not exist in DB after transaction rollback from audit write failure'
     );
   } finally {
-    // Drop the test constraint safely
-    await prisma.$executeRawUnsafe(
-      'ALTER TABLE audit_logs DROP CONSTRAINT IF EXISTS test_fail_audit_ac15;'
-    );
+    // Restore original transaction method safely
+    prisma.$transaction = origTransaction as any;
   }
 
   // =========================================================================
