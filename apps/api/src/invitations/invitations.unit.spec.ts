@@ -1915,6 +1915,49 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
       );
       assert.strictEqual(resStore.data.authorized, true);
     });
+
+    it('safely handles legacy or external users with null/undefined scopes without throwing 500 (Finding 3)', async () => {
+      const usersService = new UsersService(mockPrisma as any, {} as any);
+      mockPrisma.user.findFirst = async () => ({
+        id: 'legacy-null-scopes-user',
+        merchant_id: MERCHANT_ID,
+        role: RoleEnum.OPS_CSKH,
+        store_scopes: null,
+        warehouse_scopes: null,
+        status: 'active',
+      });
+
+      // Should return 403 FORBIDDEN rather than crashing with TypeError on null.includes()
+      await assert.rejects(
+        () =>
+          usersService.checkScopeAccess(
+            'legacy-null-scopes-user',
+            MERCHANT_ID,
+            { warehouse_id: 'wh-north' },
+            'corr-null-scope-wh'
+          ),
+        (err: any) => {
+          assert.strictEqual(err.getStatus(), HttpStatus.FORBIDDEN);
+          assert.strictEqual(err.code, 'FORBIDDEN');
+          return true;
+        }
+      );
+
+      await assert.rejects(
+        () =>
+          usersService.checkScopeAccess(
+            'legacy-null-scopes-user',
+            MERCHANT_ID,
+            { store_id: 'store-hcm' },
+            'corr-null-scope-store'
+          ),
+        (err: any) => {
+          assert.strictEqual(err.getStatus(), HttpStatus.FORBIDDEN);
+          assert.strictEqual(err.code, 'FORBIDDEN');
+          return true;
+        }
+      );
+    });
   });
 
   // AC-USR-01-18: Inspection of logs, audit entries, and database secrecy

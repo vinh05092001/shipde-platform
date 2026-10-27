@@ -316,6 +316,10 @@ export class UsersService {
       );
     }
 
+    // Robustness: default null/undefined scopes to empty array for legacy/external users (Finding 3 / AC-USR-01-17 / SECURITY-NFR)
+    const userWarehouseScopes = user.warehouse_scopes || [];
+    const userStoreScopes = user.store_scopes || [];
+
     // Owner role has full access across all stores and warehouses
     if (user.role === RoleEnum.OWNER) {
       return {
@@ -323,8 +327,8 @@ export class UsersService {
           authorized: true,
           user_id: user.id,
           role: user.role,
-          store_scopes: user.store_scopes,
-          warehouse_scopes: user.warehouse_scopes,
+          store_scopes: userStoreScopes,
+          warehouse_scopes: userWarehouseScopes,
         },
         meta: {
           correlation_id: correlationId,
@@ -335,8 +339,8 @@ export class UsersService {
     // Warehouse scope enforcement (* or explicit membership)
     if (requestedScope.warehouse_id) {
       const allowed =
-        user.warehouse_scopes.includes('*') ||
-        user.warehouse_scopes.includes(requestedScope.warehouse_id);
+        userWarehouseScopes.includes('*') ||
+        userWarehouseScopes.includes(requestedScope.warehouse_id);
       if (!allowed) {
         throw new CanonicalApiException(
           HttpStatus.FORBIDDEN,
@@ -350,7 +354,7 @@ export class UsersService {
     // Store scope enforcement (* or explicit membership)
     if (requestedScope.store_id) {
       const allowed =
-        user.store_scopes.includes('*') || user.store_scopes.includes(requestedScope.store_id);
+        userStoreScopes.includes('*') || userStoreScopes.includes(requestedScope.store_id);
       if (!allowed) {
         throw new CanonicalApiException(
           HttpStatus.FORBIDDEN,
@@ -366,8 +370,8 @@ export class UsersService {
         authorized: true,
         user_id: user.id,
         role: user.role,
-        store_scopes: user.store_scopes,
-        warehouse_scopes: user.warehouse_scopes,
+        store_scopes: userStoreScopes,
+        warehouse_scopes: userWarehouseScopes,
       },
       meta: {
         correlation_id: correlationId,
