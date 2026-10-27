@@ -1,4 +1,4 @@
-import { Injectable, Inject, HttpStatus } from '@nestjs/common';
+import { Injectable, Inject, HttpStatus, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { RoleEnum } from '@prisma/client';
 import { CanonicalApiException as BaseCanonicalApiException } from '../auth/auth.service';
@@ -133,10 +133,14 @@ export function isMfaAssuranceFresh(
 }
 
 @Injectable()
-export class RbacService {
+export class RbacService implements OnModuleInit {
   private isSeeded = false;
 
   constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+
+  async onModuleInit(): Promise<void> {
+    await this.ensurePlatformSeed();
+  }
 
   /**
    * Ensures platform permissions and system roles are populated in the database.
@@ -227,6 +231,33 @@ export class RbacService {
               },
             });
           }
+
+          // Append audit record for every system-role permission change (Finding 2 / Round 11 / BR-RBAC-07)
+          if (toDelete.length > 0 || toInsert.length > 0) {
+            await tx.auditLog.create({
+              data: {
+                actor_id: 'SYSTEM',
+                user_id: null,
+                merchant_id: null,
+                action: 'SYSTEM_ROLE_PERMISSIONS_RECONCILED',
+                entity_type: 'Role',
+                entity_id: role.id,
+                old_value: {
+                  code: sr.code,
+                  permissions: existingRolePerms.map((rp) => rp.permission_id),
+                },
+                new_value: {
+                  code: sr.code,
+                  permissions: Array.from(desiredPermIds),
+                },
+                metadata: {
+                  added: toInsert,
+                  removed: toDelete.map((rp) => rp.permission_id),
+                  reason: 'System role seed reconciliation',
+                },
+              },
+            });
+          }
         }
       });
 
@@ -247,8 +278,6 @@ export class RbacService {
    * GET /api/v1/permissions (AC-RBAC-01-01)
    */
   async getPermissions(correlationId: string) {
-    await this.ensurePlatformSeed();
-
     try {
       const dbPermissions = await this.prisma.permission.findMany({
         orderBy: [{ category: 'asc' }, { code: 'asc' }],
@@ -373,7 +402,6 @@ export class RbacService {
    * Resolves effective permission codes held by the given actor.
    */
   async getActorPermissions(actor: ActorContext, txClient?: any): Promise<string[]> {
-    await this.ensurePlatformSeed();
     const db = txClient || this.prisma;
 
     let customRoleId = actor.customRoleId;
@@ -611,7 +639,6 @@ export class RbacService {
    * GET /api/v1/roles (AC-RBAC-01-02)
    */
   async getRoles(merchantId: string, correlationId: string, actor?: ActorContext) {
-    await this.ensurePlatformSeed();
     const canManageRoles = actor
       ? await this.actorHasPermissions(actor, ['iam:manage_users'])
       : false;
@@ -708,8 +735,6 @@ export class RbacService {
    * GET /api/v1/roles/:id
    */
   async getRoleById(roleId: string, actor: ActorContext, correlationId: string) {
-    await this.ensurePlatformSeed();
-
     try {
       const role = await this.prisma.role.findUnique({
         where: { id: roleId },
@@ -812,8 +837,6 @@ export class RbacService {
     clientIp: string,
     correlationId: string
   ) {
-    await this.ensurePlatformSeed();
-
     // 1. Authorization: Actor must hold 'iam:manage_users' (AC-RBAC-01-14)
     const canManageUsers = await this.actorHasPermissions(actor, ['iam:manage_users']);
     if (!canManageUsers) {
@@ -1160,8 +1183,6 @@ export class RbacService {
     clientIp: string,
     correlationId: string
   ) {
-    await this.ensurePlatformSeed();
-
     // 1. Authorization: Actor must hold 'iam:manage_users'
     const canManageUsers = await this.actorHasPermissions(actor, ['iam:manage_users']);
     if (!canManageUsers) {
@@ -1673,8 +1694,6 @@ export class RbacService {
    * DELETE /api/v1/roles/:id (AC-RBAC-01-07, 09, 10, 11)
    */
   async deleteRole(roleId: string, actor: ActorContext, clientIp: string, correlationId: string) {
-    await this.ensurePlatformSeed();
-
     // 1. Authorization: Actor must hold 'iam:manage_users'
     const canManageUsers = await this.actorHasPermissions(actor, ['iam:manage_users']);
     if (!canManageUsers) {
