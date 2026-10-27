@@ -1851,7 +1851,7 @@ export class InvitationsService {
               role: invitation.role,
               store_scopes: invitation.store_scopes,
               warehouse_scopes: invitation.warehouse_scopes,
-              status: 'active',
+              status: 'ACTIVE',
               email_verified_at: invitation.email ? now : null,
               phone_verified_at: invitation.phone ? now : null,
               terms_accepted_at: null,

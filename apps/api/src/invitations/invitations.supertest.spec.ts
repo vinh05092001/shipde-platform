@@ -532,6 +532,11 @@ async function runInvitationsSupertestSuite() {
     userRow.password_hash.startsWith('scrypt$'),
     'Password must have real scrypt$ hash prefix'
   );
+  assert.strictEqual(
+    userRow.status,
+    'ACTIVE',
+    'Persisted user status must be canonical ACTIVE (AC-USR-01-14)'
+  );
   assert.deepStrictEqual(userRow.warehouse_scopes, ['wh-north']);
   assert.strictEqual(
     userRow.terms_accepted_at,

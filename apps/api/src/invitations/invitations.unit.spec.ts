@@ -1501,7 +1501,11 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
       assert.strictEqual(res.data.full_name, 'Nguyen Van Accepted');
 
       assert.ok(createdUserRecord);
-      assert.strictEqual(createdUserRecord.status, 'active');
+      assert.strictEqual(
+        createdUserRecord.status,
+        'ACTIVE',
+        'User status in database must be canonical ACTIVE (AC-USR-01-14 / DATA-DICTIONARY)'
+      );
       assert.ok(
         createdUserRecord.password_hash.startsWith('scrypt$'),
         'Password must be hashed with scrypt'
