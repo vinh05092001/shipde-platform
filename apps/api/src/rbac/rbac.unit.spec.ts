@@ -474,6 +474,7 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
     userId: 'user-owner-1',
     merchantId: MERCHANT_A,
     role: 'OWNER',
+    authAssurance: 'MFA',
   };
   const CSKH_ACTOR = {
     userId: 'user-cskh-2',
@@ -2738,6 +2739,83 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
       assert.strictEqual(err.code, 'INTERNAL_SERVER_ERROR');
     } finally {
       mockPrisma.auditLog.create = originalCreate;
+    }
+  });
+
+  test('Finding 2 (Round 10): Step-up / fresh MFA assurance required when granting sensitive capabilities', async () => {
+    // 1. Password-only session actor attempting to create role with pii:unmask -> 403 MFA_FRESH_AUTH_REQUIRED
+    const passwordActor = {
+      ...OWNER_ACTOR,
+      authAssurance: 'PASSWORD',
+      mfaVerifiedAt: null,
+    };
+
+    try {
+      await service.createRole(
+        {
+          name: 'PII Exporter Role',
+          permissions: ['pii:unmask'],
+        },
+        passwordActor,
+        '127.0.0.1',
+        'corr-r10-f2-pwd-create'
+      );
+      assert.fail('Should require MFA step-up for pii:unmask');
+    } catch (err: any) {
+      assert.ok(err instanceof CanonicalApiException);
+      assert.strictEqual(err.getStatus(), 403);
+      assert.strictEqual(err.code, 'MFA_FRESH_AUTH_REQUIRED');
+    }
+
+    // 2. MFA verified actor successfully creates role with sensitive permission
+    const mfaActor = {
+      ...OWNER_ACTOR,
+      authAssurance: 'MFA',
+      mfaVerifiedAt: new Date(),
+    };
+    const created = await service.createRole(
+      {
+        name: 'MFA PII Exporter Role',
+        permissions: ['pii:unmask'],
+      },
+      mfaActor,
+      '127.0.0.1',
+      'corr-r10-f2-mfa-create'
+    );
+    assert.ok(created.data.role.id);
+
+    // 3. Password-only session actor attempting to update role to add reconciliation:approve_rate_policy -> 403 MFA_FRESH_AUTH_REQUIRED
+    const baseRoleId = 'custom-r10-f2-base';
+    mockPrisma.roles.push({
+      id: baseRoleId,
+      merchant_id: MERCHANT_A,
+      code: null,
+      name: 'R10 F2 Base Role',
+      name_lower: 'r10 f2 base role',
+      description: 'Base role',
+      is_system: false,
+      permissions: [
+        {
+          permission: { code: 'order:view_create' },
+        },
+      ],
+    });
+
+    try {
+      await service.updateRole(
+        baseRoleId,
+        {
+          permissions: ['order:view_create', 'reconciliation:approve_rate_policy'],
+        },
+        passwordActor,
+        '127.0.0.1',
+        'corr-r10-f2-pwd-update'
+      );
+      assert.fail('Should require MFA step-up when adding reconciliation:approve_rate_policy');
+    } catch (err: any) {
+      assert.ok(err instanceof CanonicalApiException);
+      assert.strictEqual(err.getStatus(), 403);
+      assert.strictEqual(err.code, 'MFA_FRESH_AUTH_REQUIRED');
     }
   });
 });

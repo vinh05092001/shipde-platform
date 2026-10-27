@@ -109,6 +109,12 @@ export const SYSTEM_ROLE_IDS: Record<string, string> = {
   FINANCE: deterministicUuid(SYSTEM_ROLE_UUID_PREFIX, 5),
 };
 
+export const SENSITIVE_CAPABILITY_PERMISSIONS = new Set([
+  'pii:unmask',
+  'iam:grant_action_permission',
+  'reconciliation:approve_rate_policy',
+]);
+
 @Injectable()
 export class RbacService {
   private isSeeded = false;
@@ -873,6 +879,23 @@ export class RbacService {
       );
     }
 
+    // Step-up / fresh assurance check for sensitive capabilities (Finding 2 / Round 10 / RBAC-APPROVAL-MATRIX)
+    const hasSensitiveGrants = permissionsInDb.some((p) =>
+      SENSITIVE_CAPABILITY_PERMISSIONS.has(p.code)
+    );
+    if (hasSensitiveGrants) {
+      const hasStepUp = actor.authAssurance === 'MFA' || Boolean(actor.mfaVerifiedAt);
+      if (!hasStepUp) {
+        throw new CanonicalApiException(
+          HttpStatus.FORBIDDEN,
+          'MFA_FRESH_AUTH_REQUIRED',
+          'Thao tác gán quyền hạn nhạy cảm yêu cầu phiên làm việc đã xác thực MFA',
+          false,
+          'Vui lòng xác thực hai yếu tố trước khi gán các quyền hạn nhạy cảm'
+        );
+      }
+    }
+
     // 6. Execute in transaction with Audit Log (AC-RBAC-01-03, AC-RBAC-01-15)
     let createdRole: any;
     try {
@@ -1203,6 +1226,23 @@ export class RbacService {
 
     const beforePermissions = existingRole.permissions.map((rp) => rp.permission.code);
     const newPermissions = permissionsInDb.map((p) => p.code);
+
+    // Step-up / fresh assurance check for sensitive capabilities (Finding 2 / Round 10 / RBAC-APPROVAL-MATRIX)
+    const addsSensitiveGrants = newPermissions.some(
+      (code) => SENSITIVE_CAPABILITY_PERMISSIONS.has(code) && !beforePermissions.includes(code)
+    );
+    if (addsSensitiveGrants) {
+      const hasStepUp = actor.authAssurance === 'MFA' || Boolean(actor.mfaVerifiedAt);
+      if (!hasStepUp) {
+        throw new CanonicalApiException(
+          HttpStatus.FORBIDDEN,
+          'MFA_FRESH_AUTH_REQUIRED',
+          'Thao tác gán quyền hạn nhạy cảm yêu cầu phiên làm việc đã xác thực MFA',
+          false,
+          'Vui lòng xác thực hai yếu tố trước khi gán các quyền hạn nhạy cảm'
+        );
+      }
+    }
 
     // 5. Transaction: Update Role, Permissions & Audit Log (AC-RBAC-01-08, BR-RBAC-02)
     let updatedRole: any;
