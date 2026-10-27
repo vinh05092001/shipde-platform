@@ -138,19 +138,6 @@ export class SessionService {
       session.status === SessionStatusEnum.REVOKED ||
       session.status === SessionStatusEnum.EXPIRED
     ) {
-      if (session.status === SessionStatusEnum.REVOKED) {
-        await this.logAudit({
-          merchantId,
-          userId,
-          actor: userId,
-          action: 'SESSION_REVOKED',
-          resource: `Session:${sessionId}`,
-          details: { reason: 'Idempotent call', device_id: session.device_id },
-          correlationId,
-          ipAddress,
-        });
-      }
-
       return {
         session_id: session.id,
         status: session.status,
@@ -359,7 +346,11 @@ export class SessionService {
       });
     }
 
-    if (session.status !== SessionStatusEnum.ACTIVE) {
+    const now = new Date();
+    const inactivityThreshold = new Date(now.getTime() - INACTIVITY_DAYS * 24 * 60 * 60 * 1000);
+    const isExpired = session.expires_at < now || session.last_active_at < inactivityThreshold;
+
+    if (session.status !== SessionStatusEnum.ACTIVE || isExpired) {
       throw new ForbiddenException({
         error: {
           code: 'SESSION_NOT_ACTIVE',
@@ -371,7 +362,7 @@ export class SessionService {
 
     const updated = await this.prisma.deviceSession.update({
       where: { id: sessionId },
-      data: { last_active_at: new Date() },
+      data: { last_active_at: now },
     });
 
     return {
@@ -402,12 +393,15 @@ export class SessionService {
     },
     tx: any = this.prisma
   ): Promise<void> {
+    const hashedIp = meta.ipAddress ? this.hashIp(meta.ipAddress) : null;
+    const { ipAddress: _rawIp, ...safeMeta } = meta;
+
     console.log(
       formatStructuredLog({
         level: 'info',
         service: 'api',
         message: `AUDIT: ${meta.action} on ${meta.resource} by ${meta.actor}`,
-        metadata: { ...meta, timestamp: new Date().toISOString() },
+        metadata: { ...safeMeta, ipAddress: hashedIp, timestamp: new Date().toISOString() },
       })
     );
 
@@ -420,7 +414,7 @@ export class SessionService {
           entity_type: meta.resource.split(':')[0] || 'Session',
           entity_id: meta.resource.split(':')[1] || meta.userId || 'system',
           new_value: meta.details ? JSON.parse(JSON.stringify(meta.details)) : null,
-          ip_address: meta.ipAddress ? this.hashIp(meta.ipAddress) : null,
+          ip_address: hashedIp,
         },
       });
     } catch (err) {

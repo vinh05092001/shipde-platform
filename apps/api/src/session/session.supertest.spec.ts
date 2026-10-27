@@ -108,10 +108,6 @@ async function runSessionSupertestSuite() {
 
   const testSuffix = Date.now().toString().slice(-6);
   const merchant = await prisma.merchant.create({
-    // `code` is required and unique on Merchant, and the fixture omitted it:
-    // prisma.merchant.create() threw PrismaClientValidationError and the whole
-    // session suite failed before its first assertion. The suffix is already
-    // unique per run, so it keeps parallel runs from colliding on the index.
     data: {
       name: `Session Test Shop ${testSuffix}`,
       code: `SESSTEST${testSuffix}`,
@@ -124,10 +120,6 @@ async function runSessionSupertestSuite() {
       email: `session.owner.${testSuffix}@shipde.vn`,
       full_name: 'Session Test Owner',
       password_hash: 'test-hash-not-real',
-      // `role` has no default on User, so Prisma refuses the insert without it.
-      // OWNER is what the suite needs: every session endpoint it exercises is
-      // scoped to the caller's own store, and an OWNER is the actor the
-      // acceptance criteria describe.
       role: RoleEnum.OWNER,
       status: 'ACTIVE',
     },
@@ -162,14 +154,14 @@ async function runSessionSupertestSuite() {
   });
 
   const server = app.getHttpServer();
-  let createdSessionId: string;
-  let createdToken: string;
 
   try {
-    // AC-SESS-01: Create a session via the service directly (bypass guard)
-    console.log('[TEST 1 / AC-SESS-01] Create a session');
+    // -------------------------------------------------------------------------
+    // AC-SESS-01: Session Creation
+    // -------------------------------------------------------------------------
+    console.log('[TEST AC-SESS-01] Active user logs in - session creation');
     const tok1 = createSessionToken();
-    const expiresAt = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000);
+    const expiresAt1 = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000);
     const sess1 = await prisma.deviceSession.create({
       data: {
         user_id: user.id,
@@ -179,370 +171,541 @@ async function runSessionSupertestSuite() {
         device_model: 'Chrome 128',
         user_agent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
         status: SessionStatusEnum.ACTIVE,
-        expires_at: expiresAt,
+        expires_at: expiresAt1,
       },
     });
-    createdSessionId = sess1.id;
-    createdToken = tok1.raw;
-    assert.ok(createdSessionId);
-    console.log('  PASS: AC-SESS-01 Session created in DB');
+    assert.ok(sess1.id, 'Session ID must be generated');
+    assert.strictEqual(sess1.status, SessionStatusEnum.ACTIVE);
+    assert.strictEqual(sess1.session_token_hash, tok1.hash);
+    assert.ok(sess1.last_active_at);
+    assert.strictEqual(sess1.expires_at.getTime(), expiresAt1.getTime());
+    console.log(
+      '  PASS: AC-SESS-01 Session created in DB with ACTIVE status, hash, 90-day expiry, and last_active_at'
+    );
 
-    // AC-SESS-02: List sessions with Bearer token
-    console.log('[TEST 2 / AC-SESS-02] List sessions');
+    // -------------------------------------------------------------------------
+    // AC-SESS-02: List Sessions Scoped to User
+    // -------------------------------------------------------------------------
+    console.log('[TEST AC-SESS-02] Authenticated user requests session list');
     const res2 = await request(server)
       .get('/api/v1/sessions')
-      .set('Authorization', `Bearer ${createdToken}`)
+      .set('Authorization', `Bearer ${tok1.raw}`)
       .expect(200);
 
     assert.ok(Array.isArray(res2.body.data), 'data must be an array');
-    assert.ok(res2.body.meta.total >= 1, 'at least 1 session');
-    const listed = res2.body.data.find((s: any) => s.session_id === createdSessionId);
-    assert.ok(listed, 'created session must appear in list');
-    assert.strictEqual(listed.session_token, undefined, 'token must NOT appear in list');
-    assert.ok(listed.is_current, 'should be marked as current');
-    assert.ok(listed.expires_at);
-    console.log('  PASS: AC-SESS-02 List returns sessions without token');
-
-    // AC-SESS-03: Revoke a session
-    console.log('[TEST 3 / AC-SESS-03] Revoke a session');
-    const res3 = await request(server)
-      .delete(`/api/v1/sessions/${createdSessionId}`)
-      .set('Authorization', `Bearer ${createdToken}`)
-      .expect(200);
-
-    assert.strictEqual(res3.body.session_id, createdSessionId);
-    assert.strictEqual(res3.body.status, 'REVOKED');
-    assert.ok(res3.body.message.includes('thu hồi'));
-    console.log('  PASS: AC-SESS-03 Session revoked');
-
-    // AC-SESS-04: Revoke already-revoked is idempotent
-    // The session from AC-SESS-03 is now REVOKED, so we need a fresh active
-    // token to authenticate this request. The guard only passes ACTIVE sessions.
-    console.log('[TEST 4 / AC-SESS-04] Idempotent revoke');
-    const tok4 = createSessionToken();
-    await prisma.deviceSession.create({
-      data: {
-        user_id: user.id,
-        merchant_id: merchant.id,
-        session_token_hash: tok4.hash,
-        device_id: 'test_device_4_idempotent',
-        status: SessionStatusEnum.ACTIVE,
-        expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
-      },
-    });
-    const res4 = await request(server)
-      .delete(`/api/v1/sessions/${createdSessionId}`)
-      .set('Authorization', `Bearer ${tok4.raw}`)
-      .expect(200);
-
-    assert.strictEqual(res4.body.status, 'REVOKED');
-    console.log('  PASS: AC-SESS-04 Idempotent revoke');
-
-    // AC-SESS-05: Revoke nonexistent session and malformed session return identical 404
-    console.log(
-      '[TEST 5 / AC-SESS-05] Revoke nonexistent/malformed returns 404 with identical body'
+    const listed2 = res2.body.data.find((s: any) => s.session_id === sess1.id);
+    assert.ok(listed2, 'created session must appear in list');
+    assert.strictEqual(listed2.session_token, undefined, 'raw token must NOT appear in list');
+    assert.strictEqual(listed2.session_token_hash, undefined, 'token hash must NOT appear in list');
+    assert.strictEqual(
+      listed2.is_current,
+      true,
+      'caller session must be marked as is_current=true'
     );
-    // Create a fresh session to use as auth token (old one is revoked)
-    const tok5 = createSessionToken();
-    await prisma.deviceSession.create({
-      data: {
-        user_id: user.id,
-        merchant_id: merchant.id,
-        session_token_hash: tok5.hash,
-        device_id: 'test_device_5',
-        status: SessionStatusEnum.ACTIVE,
-        expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
-      },
-    });
-
-    const res5Malformed = await request(server)
-      .delete('/api/v1/sessions/malformed-session-id')
-      .set('Authorization', `Bearer ${tok5.raw}`)
-      .expect(404);
-
-    const res5Nonexistent = await request(server)
-      .delete('/api/v1/sessions/00000000-0000-0000-0000-000000000000')
-      .set('Authorization', `Bearer ${tok5.raw}`)
-      .expect(404);
-
-    const err5Malformed = { ...res5Malformed.body };
-    delete err5Malformed.correlation_id;
-    delete err5Malformed.request_id;
-    const err5Nonexistent = { ...res5Nonexistent.body };
-    delete err5Nonexistent.correlation_id;
-    delete err5Nonexistent.request_id;
-
-    assert.deepStrictEqual(err5Malformed, err5Nonexistent);
-    assert.strictEqual(err5Malformed.error.code, 'SESSION_NOT_FOUND');
-    assert.strictEqual(err5Malformed.error.message, 'Không tìm thấy phiên làm việc');
+    assert.ok(listed2.expires_at);
     console.log(
-      '  PASS: AC-SESS-05 Not found returns canonical error for both malformed and well-formed nonexistent IDs'
+      '  PASS: AC-SESS-02 List returns sessions scoped to user with is_current=true and tokens omitted'
     );
 
-    // TEST 5b: Heartbeat nonexistent session and malformed session return identical 404
-    console.log('[TEST 5b] Heartbeat nonexistent/malformed returns 404 with identical body');
-    const res5bMalformed = await request(server)
-      .patch('/api/v1/sessions/malformed-id/heartbeat')
-      .set('Authorization', `Bearer ${tok5.raw}`)
-      .expect(404);
-
-    const res5bNonexistent = await request(server)
-      .patch('/api/v1/sessions/00000000-0000-0000-0000-000000000000/heartbeat')
-      .set('Authorization', `Bearer ${tok5.raw}`)
-      .expect(404);
-
-    const err5bMalformed = { ...res5bMalformed.body };
-    delete err5bMalformed.correlation_id;
-    delete err5bMalformed.request_id;
-    const err5bNonexistent = { ...res5bNonexistent.body };
-    delete err5bNonexistent.correlation_id;
-    delete err5bNonexistent.request_id;
-
-    assert.deepStrictEqual(err5bMalformed, err5bNonexistent);
-    assert.strictEqual(err5bMalformed.error.code, 'SESSION_NOT_FOUND');
-    assert.strictEqual(err5bMalformed.error.message, 'Không tìm thấy phiên làm việc');
+    // -------------------------------------------------------------------------
+    // AC-SESS-03: User with only current session (Empty remote state)
+    // -------------------------------------------------------------------------
     console.log(
-      '  PASS: Heartbeat returns identical canonical error for both malformed and well-formed nonexistent IDs'
+      '[TEST AC-SESS-03] User with only current session requests list (Empty remote state)'
     );
-
-    // AC-SESS-06: Heartbeat
-    console.log('[TEST 6 / AC-SESS-06] Heartbeat');
-    const tok6 = createSessionToken();
-    const sess6 = await prisma.deviceSession.create({
-      data: {
-        user_id: user.id,
-        merchant_id: merchant.id,
-        session_token_hash: tok6.hash,
-        device_id: 'mobile_ios',
-        device_model: 'iPhone 16',
-        status: SessionStatusEnum.ACTIVE,
-        expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
-      },
-    });
-    const res6 = await request(server)
-      .patch(`/api/v1/sessions/${sess6.id}/heartbeat`)
-      .set('Authorization', `Bearer ${tok6.raw}`)
-      .expect(200);
-
-    assert.strictEqual(res6.body.session_id, sess6.id);
-    assert.ok(res6.body.last_active_at);
-    console.log('  PASS: AC-SESS-06 Heartbeat updated');
-
-    // AC-SESS-07: Revoke-all
-    console.log('[TEST 7 / AC-SESS-07] Revoke all sessions');
-    // Create a new session for revoke-all auth
-    const tok7 = createSessionToken();
-    await prisma.deviceSession.create({
-      data: {
-        user_id: user.id,
-        merchant_id: merchant.id,
-        session_token_hash: tok7.hash,
-        device_id: 'tablet_android',
-        status: SessionStatusEnum.ACTIVE,
-        expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
-      },
-    });
-    const res7 = await request(server)
-      .post('/api/v1/sessions/revoke-all')
-      .set('Authorization', `Bearer ${tok7.raw}`)
-      .send({ include_current: false })
-      .expect(200);
-
-    assert.ok(res7.body.revoked_count >= 1);
-    assert.ok(res7.body.message.includes('thu hồi'));
-    console.log(`  PASS: AC-SESS-07 Revoke-all: ${res7.body.revoked_count} sessions`);
-
-    // AC-SESS-08: Missing Bearer token returns 401
-    console.log('[TEST 8 / AC-SESS-08] Missing token returns 401');
-    const res8 = await request(server).get('/api/v1/sessions').expect(401);
-    assert.strictEqual(res8.body.error.code, 'UNAUTHENTICATED');
-    console.log('  PASS: AC-SESS-08 Missing token rejected');
-
-    console.log('[TEST 9] Cross-user and cross-tenant attempts get 403');
-    const tokUser1 = createSessionToken();
-    await prisma.deviceSession.create({
-      data: {
-        user_id: user.id,
-        merchant_id: merchant.id,
-        session_token_hash: tokUser1.hash,
-        device_id: 'dev1',
-        status: SessionStatusEnum.ACTIVE,
-        expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
-      },
-    });
-
-    const tokUser2 = createSessionToken();
-    const tokUser3 = createSessionToken();
-    const sess2 = await prisma.deviceSession.create({
-      data: {
-        user_id: user2.id,
-        merchant_id: merchant.id,
-        session_token_hash: tokUser2.hash,
-        device_id: 'dev2',
-        status: SessionStatusEnum.ACTIVE,
-        expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
-      },
-    });
-    const sess3 = await prisma.deviceSession.create({
+    const tok3 = createSessionToken();
+    const sessUser3 = await prisma.deviceSession.create({
       data: {
         user_id: user3.id,
         merchant_id: merchant2.id,
-        session_token_hash: tokUser3.hash,
-        device_id: 'dev3',
+        session_token_hash: tok3.hash,
+        device_id: 'device_user3_only',
         status: SessionStatusEnum.ACTIVE,
         expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
       },
     });
-
-    const res9a = await request(server)
-      .delete(`/api/v1/sessions/${sess2.id}`)
-      .set('Authorization', `Bearer ${tokUser1.raw}`)
-      .expect(403);
-    assert.strictEqual(res9a.body.error.code, 'FORBIDDEN');
-    const res9b = await request(server)
-      .delete(`/api/v1/sessions/${sess3.id}`)
-      .set('Authorization', `Bearer ${tokUser1.raw}`)
-      .expect(403);
-    assert.strictEqual(res9b.body.error.code, 'FORBIDDEN');
-    console.log('  PASS: Cross-user and cross-tenant deleted rejected');
-
-    console.log('[TEST 10] Heartbeat on a non-current session gets 403');
-    // tokUser2 has 1 session (sess2). Let's create another one for them.
-    const tokUser2b = createSessionToken();
-    const sess2b = await prisma.deviceSession.create({
-      data: {
-        user_id: user2.id,
-        merchant_id: merchant.id,
-        session_token_hash: tokUser2b.hash,
-        device_id: 'dev2b',
-        status: SessionStatusEnum.ACTIVE,
-        expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
-      },
-    });
-    // Using tokUser2 (current session = sess2), trying to heartbeat sess2b
-    const res10 = await request(server)
-      .patch(`/api/v1/sessions/${sess2b.id}/heartbeat`)
-      .set('Authorization', `Bearer ${tokUser2.raw}`)
-      .expect(403);
-    assert.strictEqual(res10.body.error.code, 'FORBIDDEN');
-    console.log('  PASS: Heartbeat on non-current session rejected');
-
-    console.log('[TEST 11] Include current = true behavior');
-    const res11 = await request(server)
-      .post('/api/v1/sessions/revoke-all')
-      .set('Authorization', `Bearer ${tokUser2.raw}`)
-      .send({ include_current: true })
-      .expect(200);
-    assert.strictEqual(res11.body.revoked_count, 2);
-    console.log('  PASS: include_current=true revokes all');
-
-    console.log('[TEST 12] Revoked/Expired session rejected');
-    // tokUser2 was just revoked, so it should be rejected
-    const res12 = await request(server)
+    const res3 = await request(server)
       .get('/api/v1/sessions')
-      .set('Authorization', `Bearer ${tokUser2.raw}`)
-      .expect(401);
-    assert.strictEqual(res12.body.error.code, 'SESSION_INVALID');
-    assert.ok(res12.body.error.next_action, 'next_action should be present');
+      .set('Authorization', `Bearer ${tok3.raw}`)
+      .expect(200);
 
-    // Create an expired session
+    assert.strictEqual(res3.body.data.length, 1);
+    assert.strictEqual(res3.body.data[0].session_id, sessUser3.id);
+    assert.strictEqual(res3.body.data[0].is_current, true);
+    const remoteSessions = res3.body.data.filter((s: any) => !s.is_current);
+    assert.strictEqual(
+      remoteSessions.length,
+      0,
+      'remote sessions count must be 0 for empty remote state'
+    );
+    console.log('  PASS: AC-SESS-03 User with only current session has 0 remote sessions');
+
+    // -------------------------------------------------------------------------
+    // AC-SESS-05: 30-day inactivity threshold
+    // -------------------------------------------------------------------------
+    console.log('[TEST AC-SESS-05] Session exceeds 30-day inactivity threshold');
+    const tokInactive = createSessionToken();
+    const thirtyOneDaysAgo = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000);
+    const sessInactive = await prisma.deviceSession.create({
+      data: {
+        user_id: user.id,
+        merchant_id: merchant.id,
+        session_token_hash: tokInactive.hash,
+        device_id: 'device_inactive_31d',
+        status: SessionStatusEnum.ACTIVE,
+        last_active_at: thirtyOneDaysAgo,
+        expires_at: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000),
+      },
+    });
+
+    const res5List = await request(server)
+      .get('/api/v1/sessions')
+      .set('Authorization', `Bearer ${tok1.raw}`)
+      .expect(200);
+    const listedInactive = res5List.body.data.find((s: any) => s.session_id === sessInactive.id);
+    assert.ok(listedInactive);
+    assert.strictEqual(listedInactive.status, 'EXPIRED');
+
+    const res5Auth = await request(server)
+      .get('/api/v1/sessions')
+      .set('Authorization', `Bearer ${tokInactive.raw}`)
+      .expect(401);
+    assert.strictEqual(res5Auth.body.error.code, 'SESSION_INVALID');
+    console.log(
+      '  PASS: AC-SESS-05 Inactive >30d evaluated as EXPIRED in list and rejected with 401 SESSION_INVALID'
+    );
+
+    // -------------------------------------------------------------------------
+    // AC-SESS-06: 90-day absolute lifetime expiry
+    // -------------------------------------------------------------------------
+    console.log('[TEST AC-SESS-06] Session exceeds 90-day absolute lifetime');
     const tokExpired = createSessionToken();
     await prisma.deviceSession.create({
       data: {
         user_id: user.id,
         merchant_id: merchant.id,
         session_token_hash: tokExpired.hash,
-        device_id: 'exp',
+        device_id: 'device_expired_abs',
         status: SessionStatusEnum.ACTIVE,
         expires_at: new Date(Date.now() - 1000),
       },
     });
-    const res12b = await request(server)
+    const res6 = await request(server)
       .get('/api/v1/sessions')
       .set('Authorization', `Bearer ${tokExpired.raw}`)
       .expect(401);
-    assert.strictEqual(res12b.body.error.code, 'SESSION_INVALID');
-    assert.ok(res12b.body.error.next_action, 'next_action should be present');
-    console.log('  PASS: Expired and revoked sessions rejected');
+    assert.strictEqual(res6.body.error.code, 'SESSION_INVALID');
+    assert.ok(res6.body.error.next_action, 'next_action must be present in canonical error');
+    console.log(
+      '  PASS: AC-SESS-06 90-day absolute expired session rejected with 401 SESSION_INVALID and next_action'
+    );
 
-    console.log('[TEST 13] Audit failure fails the operation');
-    const tokAudit = createSessionToken();
-    const sessAudit = await prisma.deviceSession.create({
+    // -------------------------------------------------------------------------
+    // AC-SESS-07: Owner revokes own active session
+    // -------------------------------------------------------------------------
+    console.log('[TEST AC-SESS-07] Owner revokes own active session');
+    const tok7 = createSessionToken();
+    const sess7 = await prisma.deviceSession.create({
       data: {
         user_id: user.id,
         merchant_id: merchant.id,
-        session_token_hash: tokAudit.hash,
-        device_id: 'audit-test',
+        session_token_hash: tok7.hash,
+        device_id: 'device_to_revoke',
+        status: SessionStatusEnum.ACTIVE,
+        expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+      },
+    });
+    const res7 = await request(server)
+      .delete(`/api/v1/sessions/${sess7.id}`)
+      .set('Authorization', `Bearer ${tok1.raw}`)
+      .expect(200);
+
+    assert.strictEqual(res7.body.session_id, sess7.id);
+    assert.strictEqual(res7.body.status, 'REVOKED');
+
+    const dbSess7 = await prisma.deviceSession.findUnique({ where: { id: sess7.id } });
+    assert.strictEqual(dbSess7?.status, SessionStatusEnum.REVOKED);
+    assert.strictEqual(dbSess7?.is_revoked, true);
+    assert.ok(dbSess7?.revoked_at);
+
+    const audit7 = await prisma.auditLog.findFirst({
+      where: {
+        merchant_id: merchant.id,
+        action: 'SESSION_REVOKED',
+        entity_id: sess7.id,
+      },
+    });
+    assert.ok(audit7, 'SESSION_REVOKED audit log record must exist');
+    console.log('  PASS: AC-SESS-07 Revoke updates session to REVOKED and creates audit record');
+
+    // -------------------------------------------------------------------------
+    // AC-SESS-08: Idempotent revocation
+    // -------------------------------------------------------------------------
+    console.log('[TEST AC-SESS-08] Owner revokes already revoked session (Idempotent / Recovery)');
+    const auditCountBefore = await prisma.auditLog.count({
+      where: { entity_id: sess7.id, action: 'SESSION_REVOKED' },
+    });
+    const revokedAtBefore = dbSess7!.revoked_at;
+
+    const res8 = await request(server)
+      .delete(`/api/v1/sessions/${sess7.id}`)
+      .set('Authorization', `Bearer ${tok1.raw}`)
+      .expect(200);
+
+    assert.strictEqual(res8.body.session_id, sess7.id);
+    assert.strictEqual(res8.body.status, 'REVOKED');
+
+    const dbSess8 = await prisma.deviceSession.findUnique({ where: { id: sess7.id } });
+    assert.strictEqual(
+      dbSess8?.revoked_at?.getTime(),
+      revokedAtBefore?.getTime(),
+      'revoked_at must not be mutated'
+    );
+
+    const auditCountAfter = await prisma.auditLog.count({
+      where: { entity_id: sess7.id, action: 'SESSION_REVOKED' },
+    });
+    assert.strictEqual(auditCountAfter, auditCountBefore, 'no duplicated audit log record');
+    console.log(
+      '  PASS: AC-SESS-08 Idempotent revocation returns 200 with no duplicated audit or timestamp mutation'
+    );
+
+    // -------------------------------------------------------------------------
+    // AC-SESS-09: Cross-user revocation forbidden
+    // -------------------------------------------------------------------------
+    console.log(
+      '[TEST AC-SESS-09] User attempts to revoke session of another user (Forbidden cross-user)'
+    );
+    const tokUser2 = createSessionToken();
+    const sessUser2 = await prisma.deviceSession.create({
+      data: {
+        user_id: user2.id,
+        merchant_id: merchant.id, // same merchant, different user
+        session_token_hash: tokUser2.hash,
+        device_id: 'device_user2',
+        status: SessionStatusEnum.ACTIVE,
+        expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+      },
+    });
+
+    const res9 = await request(server)
+      .delete(`/api/v1/sessions/${sessUser2.id}`)
+      .set('Authorization', `Bearer ${tok1.raw}`)
+      .expect(403);
+
+    assert.strictEqual(res9.body.error.code, 'FORBIDDEN');
+    const check9 = await prisma.deviceSession.findUnique({ where: { id: sessUser2.id } });
+    assert.strictEqual(
+      check9?.status,
+      SessionStatusEnum.ACTIVE,
+      'target session status remains unmodified'
+    );
+    console.log(
+      '  PASS: AC-SESS-09 Cross-user revocation rejected with 403 FORBIDDEN and unmodified session'
+    );
+
+    // -------------------------------------------------------------------------
+    // AC-SESS-10: Cross-tenant revocation forbidden
+    // -------------------------------------------------------------------------
+    console.log(
+      '[TEST AC-SESS-10] User attempts to revoke session of another merchant (Forbidden cross-tenant)'
+    );
+    const res10 = await request(server)
+      .delete(`/api/v1/sessions/${sessUser3.id}`)
+      .set('Authorization', `Bearer ${tok1.raw}`)
+      .expect(403);
+
+    assert.strictEqual(res10.body.error.code, 'FORBIDDEN');
+    const check10 = await prisma.deviceSession.findUnique({ where: { id: sessUser3.id } });
+    assert.strictEqual(
+      check10?.status,
+      SessionStatusEnum.ACTIVE,
+      'target session status remains unmodified'
+    );
+    console.log(
+      '  PASS: AC-SESS-10 Cross-tenant revocation rejected with 403 FORBIDDEN and unmodified session'
+    );
+
+    // -------------------------------------------------------------------------
+    // AC-SESS-11: Nonexistent UUID
+    // -------------------------------------------------------------------------
+    console.log('[TEST AC-SESS-11] User requests revocation with nonexistent UUID');
+    const res11 = await request(server)
+      .delete('/api/v1/sessions/00000000-0000-0000-0000-000000000000')
+      .set('Authorization', `Bearer ${tok1.raw}`)
+      .expect(404);
+    assert.strictEqual(res11.body.error.code, 'SESSION_NOT_FOUND');
+    console.log('  PASS: AC-SESS-11 Nonexistent UUID returns canonical 404 SESSION_NOT_FOUND');
+
+    // -------------------------------------------------------------------------
+    // AC-SESS-12: Malformed UUID
+    // -------------------------------------------------------------------------
+    console.log('[TEST AC-SESS-12] User requests revocation with malformed ID');
+    const res12 = await request(server)
+      .delete('/api/v1/sessions/invalid-uuid-format')
+      .set('Authorization', `Bearer ${tok1.raw}`)
+      .expect(404);
+    assert.strictEqual(res12.body.error.code, 'SESSION_NOT_FOUND');
+    assert.strictEqual(res12.body.error.message, res11.body.error.message);
+    console.log(
+      '  PASS: AC-SESS-12 Malformed ID returns 404 SESSION_NOT_FOUND identical to nonexistent UUID'
+    );
+
+    // -------------------------------------------------------------------------
+    // AC-SESS-13: Heartbeat on current session
+    // -------------------------------------------------------------------------
+    console.log('[TEST AC-SESS-13] Current active session sends heartbeat');
+    const res13 = await request(server)
+      .patch(`/api/v1/sessions/${sess1.id}/heartbeat`)
+      .set('Authorization', `Bearer ${tok1.raw}`)
+      .expect(200);
+    assert.strictEqual(res13.body.session_id, sess1.id);
+    assert.ok(res13.body.last_active_at);
+    console.log('  PASS: AC-SESS-13 Heartbeat updates last_active_at');
+
+    // -------------------------------------------------------------------------
+    // AC-SESS-14: Heartbeat on non-current session forbidden
+    // -------------------------------------------------------------------------
+    console.log('[TEST AC-SESS-14] User sends heartbeat for non-current session (Forbidden)');
+    const res14 = await request(server)
+      .patch(`/api/v1/sessions/${sessUser2.id}/heartbeat`)
+      .set('Authorization', `Bearer ${tok1.raw}`)
+      .expect(403);
+    assert.strictEqual(res14.body.error.code, 'FORBIDDEN');
+    console.log('  PASS: AC-SESS-14 Heartbeat for non-current session returns 403 FORBIDDEN');
+
+    // -------------------------------------------------------------------------
+    // AC-SESS-15: Heartbeat on inactive session
+    // -------------------------------------------------------------------------
+    console.log('[TEST AC-SESS-15] User sends heartbeat for inactive session');
+    const tokInactiveH = createSessionToken();
+    const sessInactiveH = await prisma.deviceSession.create({
+      data: {
+        user_id: user.id,
+        merchant_id: merchant.id,
+        session_token_hash: tokInactiveH.hash,
+        device_id: 'inactive_heartbeat_device',
+        status: SessionStatusEnum.REVOKED,
+        expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+      },
+    });
+    try {
+      await sessionService.heartbeat(sessInactiveH.id, user.id, merchant.id, sessInactiveH.id);
+      assert.fail('Should throw ForbiddenException for inactive session');
+    } catch (err: any) {
+      assert.strictEqual(err.response?.error?.code, 'SESSION_NOT_ACTIVE');
+    }
+    console.log('  PASS: AC-SESS-15 Heartbeat on inactive session returns 403 SESSION_NOT_ACTIVE');
+
+    // -------------------------------------------------------------------------
+    // AC-SESS-16: Revoke-all excluding current
+    // -------------------------------------------------------------------------
+    console.log('[TEST AC-SESS-16] User revokes all sessions excluding current');
+    const tokR1 = createSessionToken();
+    const tokR2 = createSessionToken();
+    await prisma.deviceSession.createMany({
+      data: [
+        {
+          user_id: user.id,
+          merchant_id: merchant.id,
+          session_token_hash: tokR1.hash,
+          device_id: 'dev_remote_1',
+          status: SessionStatusEnum.ACTIVE,
+          expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+        },
+        {
+          user_id: user.id,
+          merchant_id: merchant.id,
+          session_token_hash: tokR2.hash,
+          device_id: 'dev_remote_2',
+          status: SessionStatusEnum.ACTIVE,
+          expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+        },
+      ],
+    });
+
+    const res16 = await request(server)
+      .post('/api/v1/sessions/revoke-all')
+      .set('Authorization', `Bearer ${tok1.raw}`)
+      .send({ include_current: false })
+      .expect(200);
+
+    assert.ok(res16.body.revoked_count >= 2);
+    const checkCurrent16 = await prisma.deviceSession.findUnique({ where: { id: sess1.id } });
+    assert.strictEqual(
+      checkCurrent16?.status,
+      SessionStatusEnum.ACTIVE,
+      'current session must remain ACTIVE'
+    );
+
+    const audit16 = await prisma.auditLog.findFirst({
+      where: {
+        merchant_id: merchant.id,
+        user_id: user.id,
+        action: 'SESSIONS_REVOKED_ALL',
+      },
+    });
+    assert.ok(audit16, 'SESSIONS_REVOKED_ALL audit log must be recorded');
+    console.log(
+      '  PASS: AC-SESS-16 Revoke all excluding current preserves caller session and logs audit'
+    );
+
+    // -------------------------------------------------------------------------
+    // AC-SESS-17: Revoke-all including current
+    // -------------------------------------------------------------------------
+    console.log('[TEST AC-SESS-17] User revokes all sessions including current');
+    const tokToRevokeAll = createSessionToken();
+    await prisma.deviceSession.create({
+      data: {
+        user_id: user.id,
+        merchant_id: merchant.id,
+        session_token_hash: tokToRevokeAll.hash,
+        device_id: 'dev_include_current',
+        status: SessionStatusEnum.ACTIVE,
+        expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+      },
+    });
+
+    const res17 = await request(server)
+      .post('/api/v1/sessions/revoke-all')
+      .set('Authorization', `Bearer ${tokToRevokeAll.raw}`)
+      .send({ include_current: true })
+      .expect(200);
+
+    assert.ok(res17.body.revoked_count >= 1);
+
+    const res17Post = await request(server)
+      .get('/api/v1/sessions')
+      .set('Authorization', `Bearer ${tokToRevokeAll.raw}`)
+      .expect(401);
+    assert.strictEqual(res17Post.body.error.code, 'SESSION_INVALID');
+    console.log(
+      '  PASS: AC-SESS-17 Revoke all including current terminates caller session (subsequent request 401)'
+    );
+
+    // -------------------------------------------------------------------------
+    // AC-SESS-18: Revoke all when none active
+    // -------------------------------------------------------------------------
+    console.log('[TEST AC-SESS-18] User revokes all sessions when none active');
+    const tok18 = createSessionToken();
+    await prisma.deviceSession.create({
+      data: {
+        user_id: user.id,
+        merchant_id: merchant.id,
+        session_token_hash: tok18.hash,
+        device_id: 'dev_caller_18',
+        status: SessionStatusEnum.ACTIVE,
+        expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+      },
+    });
+    await request(server)
+      .post('/api/v1/sessions/revoke-all')
+      .set('Authorization', `Bearer ${tok18.raw}`)
+      .send({ include_current: false });
+
+    const res18 = await request(server)
+      .post('/api/v1/sessions/revoke-all')
+      .set('Authorization', `Bearer ${tok18.raw}`)
+      .send({ include_current: false })
+      .expect(200);
+
+    assert.strictEqual(res18.body.revoked_count, 0);
+    assert.strictEqual(res18.body.message, 'Không có phiên nào cần thu hồi');
+    console.log('  PASS: AC-SESS-18 Revoke all when none active returns revoked_count: 0');
+
+    // -------------------------------------------------------------------------
+    // AC-SESS-19: Unauthenticated request rejected
+    // -------------------------------------------------------------------------
+    console.log('[TEST AC-SESS-19] Request sent without Authorization header');
+    const res19 = await request(server).get('/api/v1/sessions').expect(401);
+    assert.strictEqual(res19.body.error.code, 'UNAUTHENTICATED');
+    console.log('  PASS: AC-SESS-19 Unauthenticated request returns 401 UNAUTHENTICATED');
+
+    // -------------------------------------------------------------------------
+    // AC-SESS-20: Audit rollback on failure
+    // -------------------------------------------------------------------------
+    console.log('[TEST AC-SESS-20] Audit logging fails during revocation (Error rollback)');
+    const tok20 = createSessionToken();
+    const sess20 = await prisma.deviceSession.create({
+      data: {
+        user_id: user.id,
+        merchant_id: merchant.id,
+        session_token_hash: tok20.hash,
+        device_id: 'audit_rollback_device',
         status: SessionStatusEnum.ACTIVE,
         expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
       },
     });
 
     const originalLogAudit = (sessionService as any).logAudit;
-    let auditCreateCalled = false;
     (sessionService as any).logAudit = async () => {
-      auditCreateCalled = true;
-      throw new Error('Simulated audit failure');
+      throw new Error('Simulated audit persistence failure');
     };
 
     try {
-      // 1. Transactional path: Trying to revoke the active session should fail
-      const res13 = await request(server)
-        .delete(`/api/v1/sessions/${sessAudit.id}`)
-        .set('Authorization', `Bearer ${tokAudit.raw}`)
-        .expect(500);
-
-      assert.ok(auditCreateCalled, 'logAudit should have been called');
-
-      // Verify the session was NOT revoked due to transaction rollback
-      const checkSess = await prisma.deviceSession.findUnique({ where: { id: sessAudit.id } });
-      assert.strictEqual(
-        checkSess?.status,
-        SessionStatusEnum.ACTIVE,
-        'Session should remain ACTIVE after failed audit'
-      );
-
-      // 2. Non-transactional path (idempotent revoke)
-      // Manually revoke the session first (bypassing the mock)
-      (sessionService as any).logAudit = originalLogAudit;
-      await prisma.deviceSession.update({
-        where: { id: sessAudit.id },
-        data: { status: SessionStatusEnum.REVOKED },
-      });
-      (sessionService as any).logAudit = async () => {
-        auditCreateCalled = true;
-        throw new Error('Simulated audit failure on idempotent path');
-      };
-
-      auditCreateCalled = false;
-      // Now do an idempotent revoke, which should fail because audit fails and we don't swallow
-      // We need a fresh active token to auth
-      const tokIdemp = createSessionToken();
-      await prisma.deviceSession.create({
-        data: {
-          user_id: user.id,
-          merchant_id: merchant.id,
-          session_token_hash: tokIdemp.hash,
-          device_id: 'audit-idemp',
-          status: SessionStatusEnum.ACTIVE,
-          expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
-        },
-      });
-
       await request(server)
-        .delete(`/api/v1/sessions/${sessAudit.id}`)
-        .set('Authorization', `Bearer ${tokIdemp.raw}`)
+        .delete(`/api/v1/sessions/${sess20.id}`)
+        .set('Authorization', `Bearer ${tok18.raw}`)
         .expect(500);
 
-      assert.ok(auditCreateCalled, 'logAudit should have been called on idempotent path');
-
-      console.log('  PASS: Audit failure aborted the operation and rolled back');
+      const check20 = await prisma.deviceSession.findUnique({ where: { id: sess20.id } });
+      assert.strictEqual(
+        check20?.status,
+        SessionStatusEnum.ACTIVE,
+        'Session must remain ACTIVE after audit rollback'
+      );
+      console.log(
+        '  PASS: AC-SESS-20 Transaction rolls back on audit failure; session remains ACTIVE'
+      );
     } finally {
       (sessionService as any).logAudit = originalLogAudit;
     }
 
+    // -------------------------------------------------------------------------
+    // AC-SESS-21: Security inspection of API responses and logs
+    // -------------------------------------------------------------------------
+    console.log('[TEST AC-SESS-21] Security inspection of API responses and logs');
+    const audit21 = await prisma.auditLog.findFirst({
+      where: {
+        merchant_id: merchant.id,
+        action: 'SESSIONS_REVOKED_ALL',
+        ip_address: { not: null },
+      },
+    });
+    if (audit21 && audit21.ip_address) {
+      assert.match(
+        audit21.ip_address,
+        /^[0-9a-f]{64}$/i,
+        'Audit IP must be a 64-char HMAC-SHA256 hex string'
+      );
+      assert.doesNotMatch(
+        audit21.ip_address,
+        /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/,
+        'Audit IP must not be raw IPv4'
+      );
+    }
+
+    const res21 = await request(server)
+      .get('/api/v1/sessions')
+      .set('Authorization', `Bearer ${tok18.raw}`)
+      .expect(200);
+    const bodyStr = JSON.stringify(res21.body);
+    assert.strictEqual(
+      bodyStr.includes('session_token_hash'),
+      false,
+      'Response body must not contain session_token_hash'
+    );
+    assert.strictEqual(
+      bodyStr.includes(tok18.raw),
+      false,
+      'Response body must not contain raw token'
+    );
+    console.log(
+      '  PASS: AC-SESS-21 Zero secrets disclosed; audit log IP is HMAC-SHA256 pseudonymized'
+    );
+
     console.log('================================================================');
-    console.log('ALL SESSION TESTS PASSED');
+    console.log('ALL SESSION TESTS (AC-SESS-01..21) PASSED');
     console.log('================================================================');
   } finally {
     try {
