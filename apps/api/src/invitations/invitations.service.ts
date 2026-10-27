@@ -215,7 +215,11 @@ export class InvitationsService {
         'Dịch vụ kiểm soát tần suất không khả dụng. Vui lòng thử lại sau.'
       );
     }
-    const rateLimit = await this.rateLimitService.checkInvitationDispatchLimit(clientIp, recipient);
+    const rateLimit = await this.rateLimitService.checkInvitationDispatchLimit(
+      clientIp,
+      recipient,
+      actor.merchantId
+    );
     if (!rateLimit.allowed) {
       throw new CanonicalApiException(
         HttpStatus.TOO_MANY_REQUESTS,
@@ -705,7 +709,11 @@ export class InvitationsService {
       );
     }
     const recipient = invitation.email || invitation.phone || undefined;
-    const rateLimit = await this.rateLimitService.checkInvitationDispatchLimit(clientIp, recipient);
+    const rateLimit = await this.rateLimitService.checkInvitationDispatchLimit(
+      clientIp,
+      recipient,
+      actor.merchantId
+    );
     if (!rateLimit.allowed) {
       throw new CanonicalApiException(
         HttpStatus.TOO_MANY_REQUESTS,

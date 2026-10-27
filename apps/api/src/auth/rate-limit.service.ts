@@ -515,30 +515,40 @@ export class RateLimitService {
   // --- FEAT-USR-01: invitation rate limits (SECURITY-NFR / BR-INV-09) ---
 
   /**
-   * Check invitation dispatch limits (create and resend):
+   * Check invitation dispatch limits (create and resend) with atomic consume-before-dispatch:
    * - IP: max 20 dispatch requests per hour
-   * - Recipient identifier (email or phone): max 5 per hour
+   * - Recipient identifier (email or phone): max 5 per hour, tenant-scoped
    */
-  async checkInvitationDispatchLimit(ip: string, identifier?: string): Promise<RateLimitResult> {
+  async checkInvitationDispatchLimit(
+    ip: string,
+    identifier?: string,
+    merchantId?: string
+  ): Promise<RateLimitResult> {
     const windowSeconds = 3600;
     const ipKey = `ratelimit:invite:dispatch:ip:${ip}`;
-    const ipCheck = await this.getAttempts(ipKey, windowSeconds);
-    if (ipCheck.count >= 20) {
+
+    // 1. Atomic consume IP limit (20/hour)
+    const ipConsume = await this.consumeAttemptKey(ipKey, 20, windowSeconds);
+    if (!ipConsume.allowed) {
       return {
         allowed: false,
-        retryAfterSeconds: ipCheck.retryAfterSeconds,
+        retryAfterSeconds: ipConsume.retryAfterSeconds,
         reason: 'Quá nhiều yêu cầu gửi lời mời từ địa chỉ IP này. Vui lòng thử lại sau.',
       };
     }
 
+    // 2. Atomic consume tenant-scoped recipient limit (5/hour per recipient in merchant)
     if (identifier) {
       const cleanId = identifier.toLowerCase().trim();
-      const hourlyKey = `ratelimit:invite:dispatch:hourly:${cleanId}`;
-      const hourlyCheck = await this.getAttempts(hourlyKey, windowSeconds);
-      if (hourlyCheck.count >= 5) {
+      const tenantPrefix = merchantId ? `merchant:${merchantId}:` : '';
+      const recipientKey = `ratelimit:invite:dispatch:${tenantPrefix}recipient:${cleanId}`;
+      const recipientConsume = await this.consumeAttemptKey(recipientKey, 5, windowSeconds);
+      if (!recipientConsume.allowed) {
+        // Revert IP consume if recipient quota was exceeded
+        await this.revertAttemptKey(ipKey);
         return {
           allowed: false,
-          retryAfterSeconds: hourlyCheck.retryAfterSeconds,
+          retryAfterSeconds: recipientConsume.retryAfterSeconds,
           reason:
             'Đã vượt quá số lần gửi lời mời cho người dùng này trong 1 giờ. Vui lòng thử lại sau.',
         };
@@ -548,12 +558,97 @@ export class RateLimitService {
     return { allowed: true };
   }
 
-  async recordInvitationDispatchAttempt(ip: string, identifier?: string): Promise<void> {
-    const windowSeconds = 3600;
-    await this.recordAttemptKey(`ratelimit:invite:dispatch:ip:${ip}`, windowSeconds);
-    if (identifier) {
-      const cleanId = identifier.toLowerCase().trim();
-      await this.recordAttemptKey(`ratelimit:invite:dispatch:hourly:${cleanId}`, windowSeconds);
+  async recordInvitationDispatchAttempt(ip: string, identifier?: string, merchantId?: string): Promise<void> {
+    // No-op to avoid double counting since checkInvitationDispatchLimit atomically consumes quota upfront
+  }
+
+  private async consumeAttemptKey(
+    key: string,
+    limit: number,
+    windowSeconds: number
+  ): Promise<{ allowed: boolean; retryAfterSeconds?: number; count: number }> {
+    const now = Date.now();
+    const windowMs = windowSeconds * 1000;
+
+    if (this.redisService) {
+      try {
+        const client = this.redisService.getClient();
+        if (client.status === 'ready') {
+          const clearBefore = now - windowMs;
+          const member = `${now}:${Math.random().toString(36).substring(2, 8)}`;
+          const lua = `
+            local key = KEYS[1]
+            local now = tonumber(ARGV[1])
+            local clearBefore = tonumber(ARGV[2])
+            local limit = tonumber(ARGV[3])
+            local windowSeconds = tonumber(ARGV[4])
+            local member = ARGV[5]
+
+            redis.call('zremrangebyscore', key, '-inf', clearBefore)
+            local count = redis.call('zcard', key)
+            if count >= limit then
+              local oldest = redis.call('zrange', key, 0, 0, 'WITHSCORES')
+              local earliest = (oldest and oldest[2]) and oldest[2] or now
+              return {0, count, earliest}
+            end
+            redis.call('zadd', key, now, member)
+            redis.call('expire', key, windowSeconds + 60)
+            return {1, count + 1, now}
+          `;
+          const res = (await client.eval(
+            lua,
+            1,
+            key,
+            now.toString(),
+            clearBefore.toString(),
+            limit.toString(),
+            windowSeconds.toString(),
+            member
+          )) as [number, number, number];
+          const allowed = res[0] === 1;
+          const count = res[1];
+          const earliest = Number(res[2]);
+          const retryAfter = Math.max(1, Math.ceil((earliest + windowMs - now) / 1000));
+          return { allowed, retryAfterSeconds: retryAfter, count };
+        }
+      } catch {
+        // Fallback to in-memory store
+      }
+    }
+
+    // In-memory atomic check-and-consume
+    const existing = this.memoryStore.get(key) || [];
+    const valid = existing.filter((ts) => now - ts < windowMs);
+    if (valid.length >= limit) {
+      const earliest = valid[0];
+      const retryAfter = Math.max(1, Math.ceil((earliest + windowMs - now) / 1000));
+      this.memoryStore.set(key, valid);
+      return { allowed: false, retryAfterSeconds: retryAfter, count: valid.length };
+    }
+    valid.push(now);
+    this.memoryStore.set(key, valid);
+    return { allowed: true, count: valid.length };
+  }
+
+  private async revertAttemptKey(key: string): Promise<void> {
+    const existing = this.memoryStore.get(key);
+    if (existing && existing.length > 0) {
+      existing.pop();
+      if (existing.length === 0) {
+        this.memoryStore.delete(key);
+      } else {
+        this.memoryStore.set(key, existing);
+      }
+    }
+    if (this.redisService) {
+      try {
+        const client = this.redisService.getClient();
+        if (client.status === 'ready') {
+          await client.zremrangebyrank(key, -1, -1);
+        }
+      } catch {
+        // Fallback ignore
+      }
     }
   }
 

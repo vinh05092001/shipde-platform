@@ -8,6 +8,7 @@ import {
 } from './invitations.service';
 import { resolveFrontendBaseUrl } from './invitation-url.util';
 import { UsersService } from '../users/users.service';
+import { RateLimitService } from '../auth/rate-limit.service';
 import { RoleEnum, InvitationStatusEnum } from '@prisma/client';
 import { CanonicalApiException } from '../auth/auth.service';
 import { HttpStatus } from '@nestjs/common';
@@ -2237,6 +2238,36 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
           return true;
         }
       );
+    });
+
+    it('Finding 4: atomic consume-before-dispatch and tenant-scoped recipient flood control', async () => {
+      const realRateLimiter = new RateLimitService();
+
+      // Recipient in Merchant A: first 5 attempts succeed and consume
+      for (let i = 0; i < 5; i++) {
+        const res = await realRateLimiter.checkInvitationDispatchLimit('1.2.3.4', 'user@shipde.vn', MERCHANT_ID);
+        assert.strictEqual(res.allowed, true, `Attempt ${i + 1} should be allowed`);
+      }
+
+      // 6th attempt for user@shipde.vn in Merchant A is blocked (5/hr recipient limit)
+      const blockedRes = await realRateLimiter.checkInvitationDispatchLimit('1.2.3.4', 'user@shipde.vn', MERCHANT_ID);
+      assert.strictEqual(blockedRes.allowed, false);
+      assert.ok(blockedRes.reason?.includes('người dùng này'));
+
+      // BUT in OTHER_MERCHANT_ID, user@shipde.vn is NOT blocked (tenant-scoped)
+      const otherMerchantRes = await realRateLimiter.checkInvitationDispatchLimit('5.6.7.8', 'user@shipde.vn', OTHER_MERCHANT_ID);
+      assert.strictEqual(otherMerchantRes.allowed, true, 'Different merchant tenant must have its own recipient quota');
+
+      // IP limit (20/hr): make 15 more attempts on 1.2.3.4 (5 were made already)
+      for (let i = 0; i < 15; i++) {
+        const res = await realRateLimiter.checkInvitationDispatchLimit('1.2.3.4', `distinct-${i}@shipde.vn`, MERCHANT_ID);
+        assert.strictEqual(res.allowed, true);
+      }
+
+      // 21st attempt from IP 1.2.3.4 is blocked by IP flood control
+      const ipBlockedRes = await realRateLimiter.checkInvitationDispatchLimit('1.2.3.4', 'another@shipde.vn', MERCHANT_ID);
+      assert.strictEqual(ipBlockedRes.allowed, false);
+      assert.ok(ipBlockedRes.reason?.includes('địa chỉ IP'));
     });
   });
 });
