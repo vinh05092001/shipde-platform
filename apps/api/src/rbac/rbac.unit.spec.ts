@@ -3516,6 +3516,7 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
         permissions: ['order:view_create'],
       },
       OWNER_ACTOR,
+      '127.0.0.1',
       'corr-p1-01'
     );
     assert.ok(created.data.role.id);
