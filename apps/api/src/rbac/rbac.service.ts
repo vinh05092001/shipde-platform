@@ -1,5 +1,6 @@
 import { Injectable, Inject, HttpStatus } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { RoleEnum } from '@prisma/client';
 import { CanonicalApiException } from '../auth/auth.service';
 import {
   PLATFORM_PERMISSIONS,
@@ -7,6 +8,10 @@ import {
   CanonicalPermissionDefinition,
 } from './rbac.constants';
 import { CreateRoleDto, UpdateRoleDto, ActorContext } from './rbac.dto';
+
+const isRoleEnumValue = (code: string | null): code is RoleEnum => {
+  return Boolean(code && Object.values(RoleEnum).includes(code as any));
+};
 
 // Deterministic UUID generator for canonical platform permissions & system roles
 function deterministicUuid(prefix: string, index: number): string {
@@ -378,27 +383,25 @@ export class RbacService {
     const roleItems = await Promise.all(
       roles.map(async (role) => {
         let userCount = 0;
-        try {
-          if (role.is_system && role.code) {
+        if (role.is_system) {
+          if (isRoleEnumValue(role.code)) {
             userCount = await this.prisma.user.count({
               where: {
                 merchant_id: merchantId,
-                role: role.code as any,
+                role: role.code,
                 custom_role_id: null,
                 status: 'active',
               },
             });
-          } else {
-            userCount = await this.prisma.user.count({
-              where: {
-                merchant_id: merchantId,
-                custom_role_id: role.id,
-                status: 'active',
-              },
-            });
           }
-        } catch {
-          userCount = 0;
+        } else {
+          userCount = await this.prisma.user.count({
+            where: {
+              merchant_id: merchantId,
+              custom_role_id: role.id,
+              status: 'active',
+            },
+          });
         }
 
         const perms = (role.permissions || []).map((rp: any) => ({
@@ -472,27 +475,25 @@ export class RbacService {
     }
 
     let userCount = 0;
-    try {
-      if (role.is_system && role.code) {
+    if (role.is_system) {
+      if (isRoleEnumValue(role.code)) {
         userCount = await this.prisma.user.count({
           where: {
             merchant_id: actor.merchantId,
-            role: role.code as any,
+            role: role.code,
             custom_role_id: null,
             status: 'active',
           },
         });
-      } else {
-        userCount = await this.prisma.user.count({
-          where: {
-            merchant_id: actor.merchantId,
-            custom_role_id: role.id,
-            status: 'active',
-          },
-        });
       }
-    } catch {
-      userCount = 0;
+    } else {
+      userCount = await this.prisma.user.count({
+        where: {
+          merchant_id: actor.merchantId,
+          custom_role_id: role.id,
+          status: 'active',
+        },
+      });
     }
 
     const perms = (role.permissions || []).map((rp: any) => ({

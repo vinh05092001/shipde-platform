@@ -17,6 +17,7 @@ class MockPrismaService {
   shouldFailAudit = false;
   shouldFailRoleFindFirst = false;
   shouldFailPermissionFindMany = false;
+  shouldFailUserCount = false;
 
   constructor() {
     this.reset();
@@ -283,6 +284,9 @@ class MockPrismaService {
 
   user = {
     count: async (args: any) => {
+      if (this.shouldFailUserCount) {
+        throw new Error('Simulated database user count error');
+      }
       let count = 0;
       for (const u of this.users) {
         if (args.where.merchant_id && u.merchant_id !== args.where.merchant_id) continue;
@@ -1196,6 +1200,33 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
         assert.ok(err instanceof CanonicalApiException);
         assert.strictEqual(err.getStatus(), 403);
         assert.strictEqual(err.code, 'FORBIDDEN');
+        return true;
+      }
+    );
+  });
+
+  // Finding 6 (P2 Round 2): Database user count failures throw instead of silently reporting 0 users
+  test('Finding 6 / BR-RBAC-03: User count database failure in getRoles or getRoleById throws instead of masking as 0 users', async () => {
+    mockPrisma.shouldFailUserCount = true;
+
+    // getRoles must throw rather than swallowing count error
+    await assert.rejects(
+      async () => {
+        await service.getRoles(MERCHANT_A, 'corr-f6-roles');
+      },
+      (err: any) => {
+        assert.strictEqual(err.message, 'Simulated database user count error');
+        return true;
+      }
+    );
+
+    // getRoleById must throw rather than swallowing count error
+    await assert.rejects(
+      async () => {
+        await service.getRoleById(SYSTEM_ROLE_IDS.OWNER, OWNER_ACTOR, 'corr-f6-role-by-id');
+      },
+      (err: any) => {
+        assert.strictEqual(err.message, 'Simulated database user count error');
         return true;
       }
     );
