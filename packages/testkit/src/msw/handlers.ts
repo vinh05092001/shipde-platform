@@ -357,11 +357,26 @@ export const handlers = [
           created_at: new Date().toISOString(),
           is_current: true,
         },
+        {
+          session_id: 'sess_002',
+          device_id: 'dev_mobile_iphone',
+          device_model: 'iPhone 16 Pro',
+          user_agent: 'Mozilla/5.0 (iPhone)',
+          ip_address: 'hashed_ip_002',
+          status: 'ACTIVE',
+          last_active_at: new Date(Date.now() - 3600 * 1000).toISOString(),
+          expires_at: new Date(Date.now() + 89 * 24 * 60 * 60 * 1000).toISOString(),
+          created_at: new Date(Date.now() - 86400 * 1000).toISOString(),
+          is_current: false,
+        },
       ],
-      meta: { total: 1 },
+      meta: { total: 2 },
     };
 
-    return handleStateResponse(successSessions, { data: [], meta: { total: 0 } });
+    return handleStateResponse(successSessions, {
+      data: [successSessions.data[0]],
+      meta: { total: 1 },
+    });
   }),
 
   // --- Session: Revoke ---
