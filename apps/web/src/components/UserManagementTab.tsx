@@ -78,6 +78,12 @@ export function formatStoreScopeLabel(storeScopes?: string[] | null): string {
   return 'không gán phạm vi';
 }
 
+export function isInvitationResendable(status: string, consumedAt?: string | null): boolean {
+  if (consumedAt) return false;
+  const s = status.toUpperCase();
+  return s === 'PENDING' || s === 'EXPIRED';
+}
+
 export interface UserWithStores {
   id: string;
   full_name: string;
@@ -954,8 +960,8 @@ export const UserManagementTab: React.FC = () => {
 
                               <td className="py-3 px-4 text-right">
                                 <div className="flex items-center justify-end gap-1.5">
-                                  {/* Recovery: Resend button for EXPIRED */}
-                                  {isExpired && (
+                                  {/* Recovery: Resend button for unconsumed PENDING and EXPIRED (Finding 5) */}
+                                  {isInvitationResendable(inv.status, inv.consumed_at) && (
                                     <button
                                       type="button"
                                       onClick={() => void handleResendInvite(inv.id)}

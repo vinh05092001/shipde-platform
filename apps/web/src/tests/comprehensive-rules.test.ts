@@ -33,6 +33,7 @@ import {
 import { ERROR_CATALOG, ShipDeAppError } from '../types/error-codes';
 import {
   formatStoreScopeLabel,
+  isInvitationResendable,
   INVITE_SUCCESS_TOAST,
   INVITATIONS_EMPTY_STATE_TEXT,
   INVITATIONS_FORBIDDEN_TEXT,
@@ -41,7 +42,11 @@ import {
   resolveInvitationsUIState,
 } from '../components/UserManagementTab';
 import { parseScopeInput, validateInviteForm } from '../components/forms/InviteUserModal';
-import { validateAcceptPassword, resolveAcceptInviteUIState } from '../app/invite/accept/page';
+import {
+  validateAcceptPassword,
+  resolveAcceptInviteUIState,
+  canRetryAcceptVerification,
+} from '../app/invite/accept/page';
 
 interface TestResult {
   group: string;
@@ -1683,6 +1688,28 @@ export async function runComprehensiveRulesAudit(): Promise<{
         hasInvitation: true,
       }) === 'success',
       'Hiển thị màn hình chào mừng kích hoạt tài khoản thành công.'
+    );
+
+    assertTest(
+      'User Management UI Recovery',
+      'FEAT-USR-01-UI-RESEND-RECOVERY',
+      'Cho phép gửi lại cho cả PENDING (khi gửi thất bại) và EXPIRED, nhưng chặn khi đã ACCEPTED',
+      isInvitationResendable('PENDING', null) === true &&
+        isInvitationResendable('EXPIRED', null) === true &&
+        isInvitationResendable('PENDING', '2026-10-27T00:00:00Z') === false &&
+        isInvitationResendable('ACCEPTED', '2026-10-27T00:00:00Z') === false &&
+        isInvitationResendable('CANCELLED', null) === false,
+      'Nút "Gửi lại" hiển thị cho unconsumed PENDING và EXPIRED để phục hồi khi thông báo chưa đến.'
+    );
+
+    assertTest(
+      'Accept Invite Verification Recovery',
+      'FEAT-USR-01-UI-VERIFY-RETRY',
+      'Hiển thị nút "Thử lại" khi xác thực token thất bại do sự cố mạng, giữ nguyên token',
+      canRetryAcceptVerification('valid-token-123', 'Mạng lỗi kết nối') === true &&
+        canRetryAcceptVerification(null, 'Thiếu token') === false &&
+        canRetryAcceptVerification('valid-token-123', null) === false,
+      'Cho phép người dùng thử lại ngay lập tức khi mạng lỗi mà không làm mất token trong URL.'
     );
   }
 

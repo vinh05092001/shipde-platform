@@ -16,6 +16,7 @@ import {
   ArrowRight,
   Eye,
   EyeOff,
+  RefreshCw,
 } from 'lucide-react';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
@@ -42,6 +43,13 @@ export function validateAcceptPassword(
   const match = Boolean(password && password === passwordConfirm);
   const isValid = length && upper && lower && digit && special && match;
   return { length, upper, lower, digit, special, match, isValid };
+}
+
+export function canRetryAcceptVerification(
+  token?: string | null,
+  verifyError?: string | null
+): boolean {
+  return Boolean(token && verifyError);
 }
 
 export type AcceptInviteUIState = 'verifying' | 'verify_error' | 'submitting' | 'success' | 'form';
@@ -229,9 +237,19 @@ function AcceptInvitationContent() {
                 <p className="text-xs text-slate-600 mt-2 leading-relaxed">{verifyError}</p>
               </div>
               <div className="pt-4 border-t border-slate-100 flex flex-col gap-2">
+                {token && (
+                  <button
+                    type="button"
+                    onClick={() => void verifyToken(token)}
+                    className="w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-sm"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>Thử lại</span>
+                  </button>
+                )}
                 <Link
                   href="/"
-                  className="w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-sm"
+                  className="w-full py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-sm"
                 >
                   <span>Quay về trang đăng nhập</span>
                   <ArrowRight className="w-3.5 h-3.5" />
