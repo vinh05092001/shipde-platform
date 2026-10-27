@@ -236,12 +236,12 @@ model Invitation {
   merchant           Merchant             @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
   invited_by         User?                @relation("InvitationsSent", fields: [invited_by_user_id], references: [id], onDelete: SetNull)
 
-  // Authoritative schema & migration path (Round 6 Finding 8 / BR-INV-08):
+  // Authoritative schema & migration path (Round 6 Finding 8 / BR-INV-08) (Round 7 Finding 7):
   // Partial unique indexes "invitations_merchant_pending_email_unique" and
   // "invitations_merchant_pending_phone_unique" (WHERE "status" = 'PENDING' AND identifier IS NOT NULL)
   // are authoritative in migration SQL 20261027000000_feat_usr_01_user_invitations.
-  // Non-unique @@index([merchant_id, email/phone]) is omitted from schema.prisma so Prisma migrate diff
-  // preserves PostgreSQL partial unique idempotency constraints without generating drop statements.
+  // Protected against drift by migration-guard suite (apps/api/src/invitations/migration-guard.ts)
+  // which verifies index survival and strips any DROP INDEX statements from prisma migrate diff.
   @@index([merchant_id, status])
   @@index([expires_at])
   @@map("invitations")
