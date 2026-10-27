@@ -2216,5 +2216,27 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
       assert.strictEqual(insertedPhone, '0987654321');
       assert.strictEqual(dispatchedRecipient, '0987654321');
     });
+
+    it('Finding 3: rejects creating invitation with both email and phone, preventing cross-binding verification abuse', async () => {
+      await assert.rejects(
+        () =>
+          service.createInvitation(
+            {
+              email: 'attacker@shipde.vn',
+              phone: '0901234567',
+              role: RoleEnum.OPS_CSKH,
+            },
+            { userId: OWNER_USER_ID, merchantId: MERCHANT_ID, role: 'OWNER' },
+            '10.0.0.1',
+            'corr-dual-id'
+          ),
+        (err: any) => {
+          assert.strictEqual(err.status, 400);
+          assert.strictEqual(err.code, 'VALIDATION_ERROR');
+          assert.strictEqual(err.fields?.[0]?.code, 'EXCLUSIVE_IDENTIFIER');
+          return true;
+        }
+      );
+    });
   });
 });

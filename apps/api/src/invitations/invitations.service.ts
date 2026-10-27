@@ -228,7 +228,7 @@ export class InvitationsService {
       );
     }
 
-    // 1. Validation: At least one recipient identifier required (AC-USR-01-07)
+    // 1. Validation: Exactly one recipient identifier required (AC-USR-01-07 / Security-NFR Finding 3)
     if (!email && !phone) {
       throw new CanonicalApiException(
         HttpStatus.BAD_REQUEST,
@@ -241,6 +241,23 @@ export class InvitationsService {
             field: 'identifier',
             code: 'REQUIRED',
             message: 'Vui lòng cung cấp email hoặc số điện thoại',
+          },
+        ]
+      );
+    }
+
+    if (email && phone) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Vui lòng chỉ cung cấp một phương thức nhận duy nhất (email hoặc số điện thoại)',
+        false,
+        undefined,
+        [
+          {
+            field: 'identifier',
+            code: 'EXCLUSIVE_IDENTIFIER',
+            message: 'Chỉ được cung cấp email hoặc số điện thoại, không được cung cấp cả hai',
           },
         ]
       );
