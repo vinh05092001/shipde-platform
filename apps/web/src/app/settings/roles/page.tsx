@@ -30,20 +30,65 @@ interface FormState {
   permissions: string[];
 }
 
-export default function RolesSettingsPage() {
+export interface RolesSettingsPageProps {
+  initialRoles?: RoleItem[];
+  initialPermissions?: PermissionItem[];
+  initialCategories?: string[];
+  initialLoading?: boolean;
+  initialCanManageRoles?: boolean;
+  initialError?: string | null;
+  initialSuccess?: string | null;
+}
+
+export function validateRoleForm(
+  name: string,
+  permissions: string[],
+  existingRoles: RoleItem[] = [],
+  editingRoleId?: string
+): { isValid: boolean; errors: { name?: string; permissions?: string } } {
+  const errors: { name?: string; permissions?: string } = {};
+  if (!name.trim()) {
+    errors.name = 'Vui lòng nhập tên vai trò';
+  } else {
+    const duplicate = existingRoles.find(
+      (r) =>
+        r.name.trim().toLowerCase() === name.trim().toLowerCase() &&
+        r.id !== editingRoleId
+    );
+    if (duplicate) {
+      errors.name = 'Tên vai trò đã tồn tại trong cửa hàng';
+    }
+  }
+
+  if (permissions.length === 0) {
+    errors.permissions = 'Cần chọn ít nhất một quyền hạn từ danh mục';
+  }
+
+  return { isValid: Object.keys(errors).length === 0, errors };
+}
+
+export default function RolesSettingsPage({
+  initialRoles,
+  initialPermissions,
+  initialCategories,
+  initialLoading,
+  initialCanManageRoles,
+  initialError,
+  initialSuccess,
+}: RolesSettingsPageProps = {}) {
   const { user, merchant } = useAuth();
   const token = typeof window !== 'undefined' ? localStorage.getItem('shipde_token') : null;
   const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
   // Role & permission catalog data
-  const [loading, setLoading] = useState<boolean>(true);
+  const [loading, setLoading] = useState<boolean>(initialLoading ?? (initialRoles === undefined));
   const [submitting, setSubmitting] = useState<boolean>(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(initialError ?? null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(initialSuccess ?? null);
 
-  const [roles, setRoles] = useState<RoleItem[]>([]);
-  const [permissions, setPermissions] = useState<PermissionItem[]>([]);
-  const [categories, setCategories] = useState<string[]>([]);
+  const [roles, setRoles] = useState<RoleItem[]>(initialRoles ?? []);
+  const [permissions, setPermissions] = useState<PermissionItem[]>(initialPermissions ?? []);
+  const [categories, setCategories] = useState<string[]>(initialCategories ?? []);
 
   // Search & filter
   const [searchTerm, setSearchTerm] = useState<string>('');
@@ -62,7 +107,7 @@ export default function RolesSettingsPage() {
     permissions: [],
   });
   const [fieldErrors, setFieldErrors] = useState<{ name?: string; permissions?: string }>({});
-  const [canManageRoles, setCanManageRoles] = useState<boolean>(false);
+  const [canManageRoles, setCanManageRoles] = useState<boolean>(initialCanManageRoles ?? false);
 
   // Fetch roles and permissions catalog
   const fetchData = useCallback(async () => {
@@ -107,9 +152,11 @@ export default function RolesSettingsPage() {
   }, [API_BASE, token, user]);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial roles and permissions catalog fetch
-    void fetchData();
-  }, [fetchData]);
+    if (initialRoles === undefined) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- initial roles and permissions catalog fetch
+      void fetchData();
+    }
+  }, [fetchData, initialRoles]);
 
   const handleOpenCreate = () => {
     if (!canManageRoles) {
@@ -175,28 +222,14 @@ export default function RolesSettingsPage() {
   };
 
   const validateForm = (): boolean => {
-    const errors: { name?: string; permissions?: string } = {};
-
-    if (!formState.name.trim()) {
-      errors.name = 'Vui lòng nhập tên vai trò';
-    } else {
-      // Check duplicate name within merchant
-      const duplicate = roles.find(
-        (r) =>
-          r.name.trim().toLowerCase() === formState.name.trim().toLowerCase() &&
-          r.id !== editingRole?.id
-      );
-      if (duplicate) {
-        errors.name = 'Tên vai trò đã tồn tại trong cửa hàng';
-      }
-    }
-
-    if (formState.permissions.length === 0) {
-      errors.permissions = 'Cần chọn ít nhất một quyền hạn từ danh mục';
-    }
-
+    const { isValid, errors } = validateRoleForm(
+      formState.name,
+      formState.permissions,
+      roles,
+      editingRole?.id
+    );
     setFieldErrors(errors);
-    return Object.keys(errors).length === 0;
+    return isValid;
   };
 
   const handleSaveRole = async (e: React.FormEvent) => {
