@@ -182,7 +182,7 @@ export const UserManagementTab: React.FC = () => {
   const [matrixError, setMatrixError] = useState<string | null>(null);
 
   // RBAC Granular Matrix State with Canonical Permission Codes
-  const [permissionsMatrix, setPermissionsMatrix] = useState([
+  const [permissionsMatrix] = useState([
     {
       id: 'p_pii',
       code: 'pii:unmask',
@@ -196,7 +196,7 @@ export const UserManagementTab: React.FC = () => {
     },
     {
       id: 'p_reattempt',
-      code: 'shipment:update_retry_status',
+      code: 'shipment:cancel_redeliver',
       feature: 'Gửi lệnh cứu đơn & yêu cầu giao lại qua Open API',
       rule: 'CN-10 · L2 Execute / L1 Assist',
       owner: true,
@@ -218,7 +218,7 @@ export const UserManagementTab: React.FC = () => {
     },
     {
       id: 'p_close_period',
-      code: 'finance:view_manage_balance',
+      code: 'reconciliation:run_review_audit',
       feature: 'Khóa sổ kỳ đối soát COD & Cước',
       rule: 'BR-11 · Bất biến không sửa đổi sau khi chốt',
       owner: true,
@@ -229,7 +229,7 @@ export const UserManagementTab: React.FC = () => {
     },
     {
       id: 'p_return_scan',
-      code: 'shipment:print_handover',
+      code: 'shipment:receive_return',
       feature: 'Quét nhận hàng hoàn kho ngoại tuyến SQLite',
       rule: 'BR-40 / BR-36 · Khử trùng lặp lũy đẳng',
       owner: true,
@@ -240,7 +240,7 @@ export const UserManagementTab: React.FC = () => {
     },
     {
       id: 'p_api_config',
-      code: 'iam:manage_users',
+      code: 'iam:shop_config',
       feature: 'Khai báo API Hãng, Webhook Key & Biểu giá',
       rule: 'BR-51 · Quyền quản trị kết nối cấp Shop',
       owner: true,
@@ -251,7 +251,7 @@ export const UserManagementTab: React.FC = () => {
     },
     {
       id: 'p_export_ledgers',
-      code: 'reconciliation:view_audit',
+      code: 'reconciliation:allocate_bank_receipt',
       feature: 'Xuất dữ liệu Ba Sổ Giá Trị & File Báo Cáo',
       rule: 'BR-45 · Quyền truy xuất số liệu kế toán',
       owner: true,
@@ -336,31 +336,6 @@ export const UserManagementTab: React.FC = () => {
       `[BR-08]: Đã thu hồi quyền truy cập của thiết bị [${userName}]. Mọi lệnh quét offline từ máy này sẽ bị từ chối với mã 401 device_revoked.`
     );
     setTimeout(() => setToastMessage(null), 5000);
-  };
-
-  const handleTogglePermission = (
-    featureId: string,
-    roleKey: 'owner' | 'manager' | 'cskh' | 'accountant' | 'warehouse'
-  ) => {
-    // Invariant check: CSKH cannot have p_discrepancy (Maker-Checker BR-12)
-    if (featureId === 'p_discrepancy' && roleKey === 'cskh') {
-      alert(
-        '[Bất biến Maker-Checker BR-12]: Nhân viên CSKH can thiệp đơn hàng KHÔNG ĐƯỢC PHÉP tự duyệt chênh lệch tài chính. Hệ thống chặn thay đổi quyền này.'
-      );
-      return;
-    }
-
-    setPermissionsMatrix((prev) =>
-      prev.map((item) => {
-        if (item.id === featureId) {
-          return { ...item, [roleKey]: !item[roleKey] };
-        }
-        return item;
-      })
-    );
-
-    setToastMessage('Đã cập nhật ma trận phân quyền RBAC thời gian thực.');
-    setTimeout(() => setToastMessage(null), 3000);
   };
 
   const handleSaveUserPermissions = (e: React.FormEvent) => {
@@ -802,30 +777,17 @@ export const UserManagementTab: React.FC = () => {
                         : ['owner', 'manager', 'cskh', 'accountant', 'warehouse'].map(
                             (roleKey: any) => {
                               const hasPerm = (row as any)[roleKey];
-                              const isCskhDiscrepancy =
-                                row.id === 'p_discrepancy' && roleKey === 'cskh';
-
                               return (
                                 <td key={roleKey} className="py-3 px-3 text-center">
-                                  <button
-                                    type="button"
-                                    onClick={() => handleTogglePermission(row.id, roleKey)}
-                                    disabled={isCskhDiscrepancy}
-                                    className={`w-6 h-6 rounded-md inline-flex items-center justify-center transition cursor-pointer ${
-                                      isCskhDiscrepancy
-                                        ? 'bg-rose-50 text-rose-300 border border-rose-200 cursor-not-allowed'
-                                        : hasPerm
-                                          ? 'bg-emerald-100 text-emerald-800 border border-emerald-300 hover:bg-emerald-200'
-                                          : 'bg-slate-100 text-slate-400 border border-slate-200 hover:bg-slate-200'
+                                  <span
+                                    className={`w-6 h-6 mx-auto rounded-md inline-flex items-center justify-center ${
+                                      hasPerm
+                                        ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                        : 'bg-slate-100 text-slate-400 border border-slate-200'
                                     }`}
-                                    title={
-                                      isCskhDiscrepancy
-                                        ? 'Bị khóa bởi quy tắc Maker-Checker BR-12'
-                                        : 'Bấm để đổi quyền'
-                                    }
                                   >
                                     {hasPerm ? <Check className="w-3.5 h-3.5 stroke-[3]" /> : '✕'}
-                                  </button>
+                                  </span>
                                 </td>
                               );
                             }
@@ -1136,3 +1098,23 @@ export const UserManagementTab: React.FC = () => {
     </div>
   );
 };
+
+export function resolveMatrixForLiveRoles(
+  liveRoles: RoleItem[],
+  matrixRows: Array<{ id: string; code: string; feature: string }>
+) {
+  return matrixRows.map((row) => {
+    const rolePermissions: Record<string, boolean> = {};
+    for (const role of liveRoles) {
+      rolePermissions[role.id] = (role.permissions || []).some(
+        (p) => p.code === row.code || p.id === row.id
+      );
+    }
+    return {
+      id: row.id,
+      code: row.code,
+      feature: row.feature,
+      roles: rolePermissions,
+    };
+  });
+}
