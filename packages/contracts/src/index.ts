@@ -43,7 +43,7 @@ export type VerificationChannel = (typeof VerificationChannel)[keyof typeof Veri
 export interface VerificationMessage {
   channel: 'email' | 'phone';
   recipient: string;
-  purpose?: 'account_verification' | 'password_reset';
+  purpose?: 'account_verification' | 'password_reset' | 'invitation';
   link?: string;
   token?: string;
   otp?: string;

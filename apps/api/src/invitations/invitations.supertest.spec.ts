@@ -109,15 +109,10 @@ async function runInvitationsSupertestSuite() {
 
   const dbStatus = await prisma.checkReadiness();
   if (dbStatus !== 'up') {
-    if (process.env.CI) {
-      throw new Error(`Database must be reachable in CI at ${databaseUrl}`);
-    }
-    console.warn(
-      `⚠️ PostgreSQL is not reachable at ${databaseUrl}. Deferred to CI for live DB assertions.`
-    );
     await app.close();
-    console.log('🎉 Invitations Supertest suite passed offline inspection safely!');
-    return;
+    throw new Error(
+      `[FAIL_CLOSED] PostgreSQL database is not reachable at ${databaseUrl}. Live DB supertest requires a running database.`
+    );
   }
 
   // Setup fixtures
@@ -229,6 +224,21 @@ async function runInvitationsSupertestSuite() {
   const invitationId = sendRes.body.data.id;
   assert.ok(rawToken);
 
+  // Assert token_hash, 7-day expires_at, and audit rows in DB
+  const invRow = await prisma.invitation.findUnique({ where: { id: invitationId } });
+  assert.ok(invRow);
+  assert.strictEqual(invRow.token_hash, createHash('sha256').update(rawToken).digest('hex'));
+  assert.notStrictEqual(invRow.token_hash, rawToken);
+  const expiryDiffDays = Math.round(
+    (new Date(invRow.expires_at).getTime() - Date.now()) / (24 * 3600 * 1000)
+  );
+  assert.strictEqual(expiryDiffDays, 7);
+  const auditSent = await prisma.auditLog.findFirst({
+    where: { entity_id: invitationId, action: 'INVITATION_SENT' },
+  });
+  assert.ok(auditSent);
+  assert.strictEqual(JSON.stringify(auditSent).includes(rawToken), false);
+
   // [TEST 2 / AC-USR-01-02] Owner invites new operator with phone identifier
   console.log('[TEST 2 / AC-USR-01-02] Owner invites new operator with phone identifier');
   const phoneRes = await request(app.getHttpServer())
@@ -318,8 +328,16 @@ async function runInvitationsSupertestSuite() {
     assert.strictEqual(item.token_hash, undefined);
   }
 
-  // [TEST 9 / AC-USR-01-09] Owner resends an invitation
-  console.log('[TEST 9 / AC-USR-01-09] Owner resends an invitation');
+  // [TEST 9 / AC-USR-01-09] Owner resends an expired invitation (EXPIRED -> PENDING)
+  console.log('[TEST 9 / AC-USR-01-09] Owner resends an expired invitation');
+  await prisma.invitation.update({
+    where: { id: invitationId },
+    data: {
+      status: InvitationStatusEnum.EXPIRED,
+      expires_at: new Date(Date.now() - 3600000),
+    },
+  });
+
   const resendRes = await request(app.getHttpServer())
     .post(`/api/v1/invitations/${invitationId}/resend`)
     .set('Authorization', `Bearer ${ownerToken}`);
@@ -327,6 +345,10 @@ async function runInvitationsSupertestSuite() {
   assert.strictEqual(resendRes.body.data.status, 'PENDING');
   const resentRawToken = resendRes.body.data.token;
   assert.ok(resentRawToken);
+  const auditResent = await prisma.auditLog.findFirst({
+    where: { entity_id: invitationId, action: 'INVITATION_RESENT' },
+  });
+  assert.ok(auditResent);
 
   // [TEST 10 / AC-USR-01-11] Cross-tenant actor attempts to cancel or resend invitation
   console.log(
@@ -380,6 +402,21 @@ async function runInvitationsSupertestSuite() {
   const newUserId = acceptRes.body.data.user_id;
   assert.ok(newUserId);
 
+  // Assert user password hash and audit log in DB
+  const userRow = await prisma.user.findFirst({
+    where: { email: `operator.${testSuffix}@shipde.vn` },
+  });
+  assert.ok(userRow);
+  assert.notStrictEqual(userRow.password_hash, 'StrongPassword123!');
+  assert.ok(
+    userRow.password_hash.startsWith('$scrypt$') || userRow.password_hash.length >= 40,
+    'Password must be hashed'
+  );
+  const auditAccepted = await prisma.auditLog.findFirst({
+    where: { entity_id: invitationId, action: 'INVITATION_ACCEPTED' },
+  });
+  assert.ok(auditAccepted);
+
   // [TEST 15 / AC-USR-01-15] Replay protection
   console.log('[TEST 15 / AC-USR-01-15] Recipient attempts to accept already-used token');
   const replayRes = await request(app.getHttpServer()).post('/api/v1/invitations/accept').send({
@@ -394,11 +431,25 @@ async function runInvitationsSupertestSuite() {
   // [TEST 16 / AC-USR-01-10] Owner cancels a pending invitation
   console.log('[TEST 16 / AC-USR-01-10] Owner cancels a pending invitation');
   const phoneInviteId = phoneRes.body.data.id;
+  const rawPhoneToken = phoneRes.body.data.token;
   const cancelRes = await request(app.getHttpServer())
     .post(`/api/v1/invitations/${phoneInviteId}/cancel`)
     .set('Authorization', `Bearer ${ownerToken}`);
   assert.strictEqual(cancelRes.status, 200);
   assert.strictEqual(cancelRes.body.data.status, 'CANCELLED');
+
+  // Assert token invalidated: public verify with original token must return 404
+  const verifyCancelled = await request(app.getHttpServer()).get(
+    `/api/v1/invitations/verify?token=${rawPhoneToken}`
+  );
+  assert.strictEqual(verifyCancelled.status, 404);
+  assert.strictEqual(verifyCancelled.body.error.code, 'INVITATION_NOT_FOUND');
+
+  // Assert audit row
+  const auditCancelled = await prisma.auditLog.findFirst({
+    where: { entity_id: phoneInviteId, action: 'INVITATION_CANCELLED' },
+  });
+  assert.ok(auditCancelled);
 
   // [TEST 17 / AC-USR-01-17] Scope authorization enforcement on accepted user
   console.log('[TEST 17 / AC-USR-01-17] Scope authorization enforcement on accepted user');
