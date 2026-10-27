@@ -10,6 +10,21 @@ import { SendInvitationRequest, AcceptInvitationRequest, InvitationItem } from '
 import { RateLimitService } from '../auth/rate-limit.service';
 import { resolveFrontendBaseUrl } from './invitation-url.util';
 
+/**
+ * Canonicalizes Vietnamese phone numbers to standard national format (e.g. 0901234567).
+ * BR-INV-08, AC-USR-01-05.
+ */
+export function canonicalizePhoneNumber(rawPhone?: string): string | undefined {
+  if (!rawPhone) return undefined;
+  let cleaned = rawPhone.trim().replace(/[\s-]/g, '');
+  if (cleaned.startsWith('+84')) {
+    cleaned = '0' + cleaned.slice(3);
+  } else if (cleaned.startsWith('84') && cleaned.length === 11) {
+    cleaned = '0' + cleaned.slice(2);
+  }
+  return cleaned;
+}
+
 export function maskIdentifier(identifier?: string | null): string {
   if (!identifier) return '';
   if (identifier.includes('@')) {
@@ -189,7 +204,7 @@ export class InvitationsService {
     baseUrl = 'http://localhost:3000'
   ) {
     const email = dto.email ? dto.email.trim().toLowerCase() : undefined;
-    const phone = dto.phone ? dto.phone.trim().replace(/[\s-]/g, '') : undefined;
+    const phone = canonicalizePhoneNumber(dto.phone);
     const recipient = email || phone;
 
     // Rate limiting: Anti-abuse dispatch limit (SECURITY-NFR) - fail closed
@@ -242,7 +257,7 @@ export class InvitationsService {
       );
     }
 
-    if (phone && !/^(?:\+84|0)(?:3|5|7|8|9)\d{8}$/.test(phone)) {
+    if (phone && !/^0(?:3|5|7|8|9)\d{8}$/.test(phone)) {
       throw new CanonicalApiException(
         HttpStatus.BAD_REQUEST,
         'VALIDATION_ERROR',

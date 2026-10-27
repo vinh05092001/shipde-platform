@@ -4,6 +4,7 @@ import {
   InvitationsService,
   maskIdentifier,
   validatePasswordStrength,
+  canonicalizePhoneNumber,
 } from './invitations.service';
 import { resolveFrontendBaseUrl } from './invitation-url.util';
 import { UsersService } from '../users/users.service';
@@ -2101,6 +2102,119 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
 
       assert.strictEqual(restoredTokenHash, initialHash, 'Prior token hash must be restored on delivery failure');
       assert.strictEqual(auditCleaned, true, 'Resend audit log must be cleaned up on delivery failure');
+    });
+
+    it('Finding 2: canonicalizes phone numbers to standard national format and avoids duplicate invites/users', async () => {
+      assert.strictEqual(canonicalizePhoneNumber('+84901234567'), '0901234567');
+      assert.strictEqual(canonicalizePhoneNumber('090-123-4567'), '0901234567');
+      assert.strictEqual(canonicalizePhoneNumber('84901234567'), '0901234567');
+      assert.strictEqual(canonicalizePhoneNumber('  090 123 4567 '), '0901234567');
+
+      let insertedPhone: string | null = null;
+      let dispatchedRecipient: string | null = null;
+
+      const mockPrismaPhone = {
+        user: {
+          findFirst: async (args: any) => {
+            if (args?.where?.id === OWNER_USER_ID) {
+              return {
+                id: OWNER_USER_ID,
+                merchant_id: MERCHANT_ID,
+                role: 'OWNER',
+                status: 'active',
+                store_scopes: [],
+                warehouse_scopes: [],
+              };
+            }
+            // Simulate existing active user with national format
+            if (args?.where?.OR?.some((cond: any) => cond.phone === '0901234567')) {
+              return { id: 'existing-phone-user', phone: '0901234567' };
+            }
+            return null;
+          },
+        },
+        invitation: {
+          findFirst: async () => null,
+          updateMany: async () => ({ count: 0 }),
+          create: async (args: any) => {
+            insertedPhone = args.data.phone;
+            return {
+              id: 'phone-invite-id',
+              ...args.data,
+              created_at: new Date(),
+              updated_at: new Date(),
+              consumed_at: null,
+            };
+          },
+        },
+        auditLog: {
+          create: async (args: any) => ({ id: 'phone-audit-id', ...args.data }),
+        },
+        $transaction: async (cb: any) => (typeof cb === 'function' ? cb(mockPrismaPhone) : Promise.all(cb)),
+      };
+
+      const phoneService = new InvitationsService(
+        mockPrismaPhone as any,
+        {
+          sendVerification: async (params: any) => {
+            dispatchedRecipient = params.recipient;
+            return { success: true, messageId: 'phone-msg-1' };
+          },
+        } as any
+      );
+
+      // 1. Should reject +84 format when national format already exists in users
+      await assert.rejects(
+        () =>
+          phoneService.createInvitation(
+            { phone: '+84901234567', role: RoleEnum.OPS_CSKH },
+            { userId: OWNER_USER_ID, merchantId: MERCHANT_ID, role: 'OWNER' },
+            '10.0.0.1',
+            'corr-phone-dup'
+          ),
+        (err: any) => {
+          assert.strictEqual(err.status, 400);
+          assert.strictEqual(err.code, 'USER_ALREADY_EXISTS');
+          return true;
+        }
+      );
+
+      // 2. When creating with +84 for a new number, it stores and dispatches canonical 09... format
+      const newPhoneService = new InvitationsService(
+        {
+          ...mockPrismaPhone,
+          user: {
+            findFirst: async (args: any) =>
+              args?.where?.id === OWNER_USER_ID
+                ? {
+                    id: OWNER_USER_ID,
+                    merchant_id: MERCHANT_ID,
+                    role: 'OWNER',
+                    status: 'active',
+                    store_scopes: [],
+                    warehouse_scopes: [],
+                  }
+                : null,
+          },
+        } as any,
+        {
+          sendVerification: async (params: any) => {
+            dispatchedRecipient = params.recipient;
+            return { success: true, messageId: 'phone-msg-2' };
+          },
+        } as any
+      );
+
+      const created = await newPhoneService.createInvitation(
+        { phone: '+84987654321', role: RoleEnum.OPS_CSKH },
+        { userId: OWNER_USER_ID, merchantId: MERCHANT_ID, role: 'OWNER' },
+        '10.0.0.1',
+        'corr-phone-new'
+      );
+
+      assert.strictEqual(created.data.phone, '0987654321');
+      assert.strictEqual(insertedPhone, '0987654321');
+      assert.strictEqual(dispatchedRecipient, '0987654321');
     });
   });
 });
