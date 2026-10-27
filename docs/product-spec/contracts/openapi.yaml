@@ -656,17 +656,22 @@ paths:
         '404':
           $ref: '#/components/responses/Error'
   /invitations/verify:
-    get:
+    post:
       tags: [Auth]
       summary: Public verification of invitation token (API-USR-INVITE-VERIFY, FEAT-USR-01)
       operationId: verifyInvitation
       security: []
-      parameters:
-        - name: token
-          in: query
-          required: true
-          schema:
-            type: string
+      description: Token is sent in the JSON body, never in the URL, so access logs, proxies and Referer never retain the plaintext secret (SECURITY-NFR / AC-USR-01-18).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token:
+                  type: string
       responses:
         '200':
           description: Token is valid and unexpired

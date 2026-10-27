@@ -1193,7 +1193,7 @@ export class InvitationsService {
   }
 
   /**
-   * Public verification of invitation token (GET /api/v1/invitations/verify?token=...)
+   * Public verification of invitation token (POST /api/v1/invitations/verify, token in JSON body)
    * BR-INV-06: Non-enumeration on public endpoints returns identical 404 for invalid,
    * expired, cancelled, or nonexistent tokens (AC-USR-01-12, AC-USR-01-13).
    */

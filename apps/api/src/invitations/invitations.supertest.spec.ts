@@ -379,9 +379,9 @@ async function runInvitationsSupertestSuite() {
   assert.ok(auditResent);
 
   // Assert old token no longer verifies (invalidated by hash rotation)
-  const oldTokenVerifyRes = await request(app.getHttpServer()).get(
-    `/api/v1/invitations/verify?token=${rawToken}`
-  );
+  const oldTokenVerifyRes = await request(app.getHttpServer())
+    .post('/api/v1/invitations/verify')
+    .send({ token: rawToken });
   assert.strictEqual(oldTokenVerifyRes.status, 404);
   assert.strictEqual(oldTokenVerifyRes.body.error.code, 'INVITATION_NOT_FOUND');
 
@@ -413,9 +413,9 @@ async function runInvitationsSupertestSuite() {
 
   // [TEST 11 / AC-USR-01-12] Public verification of valid unexpired token
   console.log('[TEST 11 / AC-USR-01-12] Public verification of valid invitation token');
-  const verifyRes = await request(app.getHttpServer()).get(
-    `/api/v1/invitations/verify?token=${resentRawToken}`
-  );
+  const verifyRes = await request(app.getHttpServer())
+    .post('/api/v1/invitations/verify')
+    .send({ token: resentRawToken });
   assert.strictEqual(verifyRes.status, 200);
   assert.strictEqual(verifyRes.body.data.valid, true);
   assert.strictEqual(verifyRes.body.data.tenant_name, merchant.name);
@@ -428,11 +428,20 @@ async function runInvitationsSupertestSuite() {
     '[TEST 12 / AC-USR-01-13] Public verification of invalid, expired, or cancelled token'
   );
   // 12a. Nonexistent token returns 404
-  const notFoundRes = await request(app.getHttpServer()).get(
-    '/api/v1/invitations/verify?token=nonexistenttoken123456'
-  );
+  const notFoundRes = await request(app.getHttpServer())
+    .post('/api/v1/invitations/verify')
+    .send({ token: 'nonexistenttoken123456' });
   assert.strictEqual(notFoundRes.status, 404);
   assert.strictEqual(notFoundRes.body.error.code, 'INVITATION_NOT_FOUND');
+  assert.strictEqual(notFoundRes.headers['cache-control'], 'no-store');
+  assert.strictEqual(notFoundRes.headers['referrer-policy'], 'no-referrer');
+
+  // Round 6 Finding 6: token is never accepted in the URL query string
+  const legacyQueryRes = await request(app.getHttpServer()).get(
+    `/api/v1/invitations/verify?token=${resentRawToken}`
+  );
+  assert.notStrictEqual(legacyQueryRes.status, 200, 'GET ?token= must not verify');
+  assert.strictEqual(JSON.stringify(legacyQueryRes.body).includes('masked'), false);
 
   // 12b. Expired token returns identical canonical 404 (Finding 10)
   const expiredRawToken = `expired_${testSuffix}_${randomBytes(16).toString('hex')}`;
@@ -448,9 +457,9 @@ async function runInvitationsSupertestSuite() {
       expires_at: new Date(Date.now() - 3600000), // 1 hour ago
     },
   });
-  const expiredVerifyRes = await request(app.getHttpServer()).get(
-    `/api/v1/invitations/verify?token=${expiredRawToken}`
-  );
+  const expiredVerifyRes = await request(app.getHttpServer())
+    .post('/api/v1/invitations/verify')
+    .send({ token: expiredRawToken });
   assert.strictEqual(expiredVerifyRes.status, 404);
   assert.strictEqual(expiredVerifyRes.body.error.code, 'INVITATION_NOT_FOUND');
 
@@ -468,9 +477,9 @@ async function runInvitationsSupertestSuite() {
       expires_at: new Date(Date.now() + 86400000),
     },
   });
-  const cancelledVerifyRes = await request(app.getHttpServer()).get(
-    `/api/v1/invitations/verify?token=${cancelledRawToken}`
-  );
+  const cancelledVerifyRes = await request(app.getHttpServer())
+    .post('/api/v1/invitations/verify')
+    .send({ token: cancelledRawToken });
   assert.strictEqual(cancelledVerifyRes.status, 404);
   assert.strictEqual(cancelledVerifyRes.body.error.code, 'INVITATION_NOT_FOUND');
 
@@ -563,9 +572,9 @@ async function runInvitationsSupertestSuite() {
   assert.strictEqual(cancelRes.body.data.status, 'CANCELLED');
 
   // Assert token invalidated: public verify with original token must return 404
-  const verifyCancelled = await request(app.getHttpServer()).get(
-    `/api/v1/invitations/verify?token=${rawPhoneToken}`
-  );
+  const verifyCancelled = await request(app.getHttpServer())
+    .post('/api/v1/invitations/verify')
+    .send({ token: rawPhoneToken });
   assert.strictEqual(verifyCancelled.status, 404);
   assert.strictEqual(verifyCancelled.body.error.code, 'INVITATION_NOT_FOUND');
 
@@ -610,7 +619,8 @@ async function runInvitationsSupertestSuite() {
   let burstRateLimited = false;
   for (let i = 0; i < 35; i++) {
     const res = await request(app.getHttpServer())
-      .get('/api/v1/invitations/verify?token=burst-rate-limit-check-token')
+      .post('/api/v1/invitations/verify')
+      .send({ token: 'burst-rate-limit-check-token' })
       .set('X-Forwarded-For', '198.51.100.99');
     if (res.status === 429) {
       burstRateLimited = true;

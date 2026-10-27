@@ -541,10 +541,10 @@ export interface paths {
       path?: never;
       cookie?: never;
     };
-    /** Public verification of invitation token (API-USR-INVITE-VERIFY, FEAT-USR-01) */
-    get: operations['verifyInvitation'];
+    get?: never;
     put?: never;
-    post?: never;
+    /** Public verification of invitation token (API-USR-INVITE-VERIFY, FEAT-USR-01) */
+    post: operations['verifyInvitation'];
     delete?: never;
     options?: never;
     head?: never;
@@ -2024,14 +2024,18 @@ export interface operations {
   };
   verifyInvitation: {
     parameters: {
-      query: {
-        token: string;
-      };
+      query?: never;
       header?: never;
       path?: never;
       cookie?: never;
     };
-    requestBody?: never;
+    requestBody: {
+      content: {
+        'application/json': {
+          token: string;
+        };
+      };
+    };
     responses: {
       /** @description Token is valid and unexpired */
       200: {

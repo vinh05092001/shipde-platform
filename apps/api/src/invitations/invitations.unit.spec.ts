@@ -6,6 +6,7 @@ import {
   validatePasswordStrength,
   canonicalizePhoneNumber,
 } from './invitations.service';
+import { InvitationsController } from './invitations.controller';
 import { resolveFrontendBaseUrl } from './invitation-url.util';
 import { UsersService } from '../users/users.service';
 import { RateLimitService } from '../auth/rate-limit.service';
@@ -3042,6 +3043,26 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
         'tx:commit',
         'dispatch',
       ]);
+    });
+
+    it('Finding 6: verify controller accepts token in body, never query string', async () => {
+      let passedToken = '';
+      const dummyService = {
+        verifyInvitation: async (t: string) => {
+          passedToken = t;
+          return { valid: true };
+        },
+      } as any;
+      const ctrl = new InvitationsController(dummyService);
+      const res = await ctrl.verifyInvitation({ token: 'secret-tok-123' }, { headers: {} });
+      assert.strictEqual(passedToken, 'secret-tok-123');
+      assert.strictEqual(res.valid, true);
+
+      // Undefined or non-string body falls back to empty token
+      await ctrl.verifyInvitation(undefined, { headers: {} });
+      assert.strictEqual(passedToken, '');
+      await ctrl.verifyInvitation({ token: 12345 } as any, { headers: {} });
+      assert.strictEqual(passedToken, '');
     });
   });
 });

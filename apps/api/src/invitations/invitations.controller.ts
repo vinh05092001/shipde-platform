@@ -8,6 +8,7 @@ import {
   Req,
   HttpCode,
   HttpStatus,
+  Header,
   Inject,
   UseGuards,
   UseFilters,
@@ -119,14 +120,19 @@ export class InvitationsController {
   }
 
   /**
-   * GET /api/v1/invitations/verify — Public token verification (API-USR-INVITE-VERIFY)
+   * POST /api/v1/invitations/verify — Public token verification (API-USR-INVITE-VERIFY)
+   * The bearer token is accepted only in the JSON body, never in the URL, so access logs,
+   * proxies and Referer never retain the plaintext secret (SECURITY-NFR / AC-USR-01-18).
    */
-  @Get('verify')
+  @Post('verify')
   @HttpCode(HttpStatus.OK)
-  async verifyInvitation(@Query('token') token: string, @Req() req: any) {
+  @Header('Cache-Control', 'no-store')
+  @Header('Referrer-Policy', 'no-referrer')
+  async verifyInvitation(@Body() body: { token?: unknown } | undefined, @Req() req: any) {
     const correlationId =
       req.headers?.['x-correlation-id'] || req.correlationId || normalizeCorrelationId();
     const clientIp = extractClientIp(req);
+    const token = typeof body?.token === 'string' ? body.token : '';
     return this.invitationsService.verifyInvitation(token, correlationId, clientIp);
   }
 

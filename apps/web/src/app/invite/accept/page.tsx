@@ -101,9 +101,13 @@ function AcceptInvitationContent() {
     setVerifying(true);
     setVerifyError(null);
     try {
-      const res = await fetch(
-        `${API_BASE}/api/v1/invitations/verify?token=${encodeURIComponent(tok)}`
-      );
+      // Token travels in the POST body, never in the API URL (SECURITY-NFR / AC-USR-01-18)
+      const res = await fetch(`${API_BASE}/api/v1/invitations/verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: tok }),
+        referrerPolicy: 'no-referrer',
+      });
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data.error?.message || 'Liên kết lời mời không hợp lệ hoặc đã hết hạn.');
