@@ -558,7 +558,11 @@ export class RateLimitService {
     return { allowed: true };
   }
 
-  async recordInvitationDispatchAttempt(ip: string, identifier?: string, merchantId?: string): Promise<void> {
+  async recordInvitationDispatchAttempt(
+    ip: string,
+    identifier?: string,
+    merchantId?: string
+  ): Promise<void> {
     // No-op to avoid double counting since checkInvitationDispatchLimit atomically consumes quota upfront
   }
 

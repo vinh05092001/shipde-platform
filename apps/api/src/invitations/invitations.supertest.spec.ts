@@ -522,7 +522,11 @@ async function runInvitationsSupertestSuite() {
     'Password must have real scrypt$ hash prefix'
   );
   assert.deepStrictEqual(userRow.warehouse_scopes, ['wh-north']);
-  assert.strictEqual(userRow.terms_accepted_at, null, 'Terms not captured on form must not be recorded');
+  assert.strictEqual(
+    userRow.terms_accepted_at,
+    null,
+    'Terms not captured on form must not be recorded'
+  );
   assert.strictEqual(userRow.terms_version, null);
 
   const acceptedInvite = await prisma.invitation.findUnique({

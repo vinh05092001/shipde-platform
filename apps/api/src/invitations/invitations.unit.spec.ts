@@ -1436,7 +1436,11 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
         'Password must be hashed with scrypt'
       );
       assert.deepStrictEqual(createdUserRecord.warehouse_scopes, ['WH1']);
-      assert.strictEqual(createdUserRecord.terms_accepted_at, null, 'Uncaptured terms must not be recorded');
+      assert.strictEqual(
+        createdUserRecord.terms_accepted_at,
+        null,
+        'Uncaptured terms must not be recorded'
+      );
       assert.strictEqual(createdUserRecord.terms_version, null);
 
       assert.ok(auditLogRecord);
@@ -2012,7 +2016,11 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
         }
       );
 
-      assert.strictEqual(invitationDeleted, true, 'Undispatched invitation row must be deleted on delivery failure');
+      assert.strictEqual(
+        invitationDeleted,
+        true,
+        'Undispatched invitation row must be deleted on delivery failure'
+      );
       assert.strictEqual(auditDeleted, true, 'Audit log must be cleaned up on delivery failure');
     });
 
@@ -2103,8 +2111,16 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
         }
       );
 
-      assert.strictEqual(restoredTokenHash, initialHash, 'Prior token hash must be restored on delivery failure');
-      assert.strictEqual(auditCleaned, true, 'Resend audit log must be cleaned up on delivery failure');
+      assert.strictEqual(
+        restoredTokenHash,
+        initialHash,
+        'Prior token hash must be restored on delivery failure'
+      );
+      assert.strictEqual(
+        auditCleaned,
+        true,
+        'Resend audit log must be cleaned up on delivery failure'
+      );
     });
 
     it('Finding 2: canonicalizes phone numbers to standard national format and avoids duplicate invites/users', async () => {
@@ -2153,7 +2169,8 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
         auditLog: {
           create: async (args: any) => ({ id: 'phone-audit-id', ...args.data }),
         },
-        $transaction: async (cb: any) => (typeof cb === 'function' ? cb(mockPrismaPhone) : Promise.all(cb)),
+        $transaction: async (cb: any) =>
+          typeof cb === 'function' ? cb(mockPrismaPhone) : Promise.all(cb),
       };
 
       const phoneService = new InvitationsService(
@@ -2247,27 +2264,51 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
 
       // Recipient in Merchant A: first 5 attempts succeed and consume
       for (let i = 0; i < 5; i++) {
-        const res = await realRateLimiter.checkInvitationDispatchLimit('1.2.3.4', 'user@shipde.vn', MERCHANT_ID);
+        const res = await realRateLimiter.checkInvitationDispatchLimit(
+          '1.2.3.4',
+          'user@shipde.vn',
+          MERCHANT_ID
+        );
         assert.strictEqual(res.allowed, true, `Attempt ${i + 1} should be allowed`);
       }
 
       // 6th attempt for user@shipde.vn in Merchant A is blocked (5/hr recipient limit)
-      const blockedRes = await realRateLimiter.checkInvitationDispatchLimit('1.2.3.4', 'user@shipde.vn', MERCHANT_ID);
+      const blockedRes = await realRateLimiter.checkInvitationDispatchLimit(
+        '1.2.3.4',
+        'user@shipde.vn',
+        MERCHANT_ID
+      );
       assert.strictEqual(blockedRes.allowed, false);
       assert.ok(blockedRes.reason?.includes('người dùng này'));
 
       // BUT in OTHER_MERCHANT_ID, user@shipde.vn is NOT blocked (tenant-scoped)
-      const otherMerchantRes = await realRateLimiter.checkInvitationDispatchLimit('5.6.7.8', 'user@shipde.vn', OTHER_MERCHANT_ID);
-      assert.strictEqual(otherMerchantRes.allowed, true, 'Different merchant tenant must have its own recipient quota');
+      const otherMerchantRes = await realRateLimiter.checkInvitationDispatchLimit(
+        '5.6.7.8',
+        'user@shipde.vn',
+        OTHER_MERCHANT_ID
+      );
+      assert.strictEqual(
+        otherMerchantRes.allowed,
+        true,
+        'Different merchant tenant must have its own recipient quota'
+      );
 
       // IP limit (20/hr): make 15 more attempts on 1.2.3.4 (5 were made already)
       for (let i = 0; i < 15; i++) {
-        const res = await realRateLimiter.checkInvitationDispatchLimit('1.2.3.4', `distinct-${i}@shipde.vn`, MERCHANT_ID);
+        const res = await realRateLimiter.checkInvitationDispatchLimit(
+          '1.2.3.4',
+          `distinct-${i}@shipde.vn`,
+          MERCHANT_ID
+        );
         assert.strictEqual(res.allowed, true);
       }
 
       // 21st attempt from IP 1.2.3.4 is blocked by IP flood control
-      const ipBlockedRes = await realRateLimiter.checkInvitationDispatchLimit('1.2.3.4', 'another@shipde.vn', MERCHANT_ID);
+      const ipBlockedRes = await realRateLimiter.checkInvitationDispatchLimit(
+        '1.2.3.4',
+        'another@shipde.vn',
+        MERCHANT_ID
+      );
       assert.strictEqual(ipBlockedRes.allowed, false);
       assert.ok(ipBlockedRes.reason?.includes('địa chỉ IP'));
     });
