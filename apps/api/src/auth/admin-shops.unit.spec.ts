@@ -594,7 +594,11 @@ describe('FEAT-AUTH-02: Admin-Created Shop Account Unit Tests', () => {
     assert.ok(mockPrisma.auditLogs.length > 0, 'Audit record must be logged');
     const log = mockPrisma.auditLogs.find((l: any) => l.action === 'ADMIN_CREATE_SHOP');
     assert.ok(log, 'ADMIN_CREATE_SHOP audit entry must exist');
-    assert.strictEqual(log.actor, authenticatedActor, 'Audit record must match server-authenticated actor');
+    assert.strictEqual(
+      log.actor,
+      authenticatedActor,
+      'Audit record must match server-authenticated actor'
+    );
     // Ensure no PII in details
     assert.strictEqual(log.details.has_email, true);
     assert.strictEqual(log.details.has_phone, false);
