@@ -88,6 +88,25 @@ export class InvitationsService {
     await this.rateLimitService.revertInvitationDispatchAttempt(reservation);
   }
 
+  /** Prisma P2002 on the BR-INV-08 partial unique pending indexes. */
+  private isPendingUniqueViolation(err: any): boolean {
+    if (err?.code !== 'P2002') return false;
+    const target = err?.meta?.target;
+    const targetText = Array.isArray(target) ? target.join(',') : String(target ?? '');
+    // Invitation has no other unique constraints besides id/token_hash; treat unknown target as pending
+    return !/token_hash|_pkey/.test(targetText);
+  }
+
+  private alreadyPendingException(): CanonicalApiException {
+    return new CanonicalApiException(
+      HttpStatus.BAD_REQUEST,
+      'INVITATION_ALREADY_PENDING',
+      'Đã có lời mời đang chờ xử lý cho người dùng này. Vui lòng sử dụng tính năng gửi lại nếu cần.',
+      false,
+      'Vui lòng sử dụng tính năng gửi lại lời mời'
+    );
+  }
+
   private async resolveActorUser(actor: {
     userId: string;
     merchantId: string;
@@ -732,6 +751,28 @@ export class InvitationsService {
       );
     }
 
+    // Round 6 Finding 1: a replacement pending invite for the same recipient blocks resend
+    // (BR-INV-08 / AC-USR-01-09) before any quota is consumed or the target row is touched
+    const recipientMatch = [
+      ...(invitation.email ? [{ email: invitation.email }] : []),
+      ...(invitation.phone ? [{ phone: invitation.phone }] : []),
+    ];
+    const pendingSibling =
+      recipientMatch.length > 0
+        ? await this.prisma.invitation.findFirst({
+            where: {
+              merchant_id: actor.merchantId,
+              id: { not: invitationId },
+              status: InvitationStatusEnum.PENDING,
+              expires_at: { gt: new Date() },
+              OR: recipientMatch,
+            },
+          })
+        : null;
+    if (pendingSibling) {
+      throw this.alreadyPendingException();
+    }
+
     // Rate limiting: Anti-abuse dispatch limit (SECURITY-NFR) - fail closed
     if (!this.rateLimitService) {
       throw new CanonicalApiException(
@@ -777,54 +818,80 @@ export class InvitationsService {
     }
 
     // Conditional atomic updateMany + audit log in single transaction (BR-INV-04, BR-INV-05, BR-INV-09)
-    const updated = await this.prisma.$transaction(async (tx) => {
-      const result = await tx.invitation.updateMany({
-        where: {
-          id: invitationId,
-          merchant_id: actor.merchantId,
-          status: { in: [InvitationStatusEnum.PENDING, InvitationStatusEnum.EXPIRED] },
-          consumed_at: null,
-        },
-        data: {
-          token_hash: tokenHash,
-          status: InvitationStatusEnum.PENDING,
-          expires_at: expiresAt,
-          updated_at: new Date(),
-        },
-      });
-
-      if (result.count === 0) {
-        const current = await tx.invitation.findUnique({ where: { id: invitationId } });
-        if (!current || current.merchant_id !== actor.merchantId) {
-          throw new CanonicalApiException(
-            HttpStatus.NOT_FOUND,
-            'INVITATION_NOT_FOUND',
-            'Không tìm thấy lời mời',
-            false
-          );
+    // Any failure rolls back the whole transaction, so the target row stays unchanged and the
+    // consumed dispatch quota is refunded (Round 6 Finding 1)
+    let updated: any;
+    try {
+      updated = await this.prisma.$transaction(async (tx) => {
+        // Persist EXPIRED for time-elapsed pending siblings so they cannot collide on the
+        // partial unique index (BR-INV-08); tenant-scoped and never touching the target row
+        if (recipientMatch.length > 0) {
+          await tx.invitation.updateMany({
+            where: {
+              merchant_id: actor.merchantId,
+              id: { not: invitationId },
+              status: InvitationStatusEnum.PENDING,
+              expires_at: { lte: new Date() },
+              OR: recipientMatch,
+            },
+            data: { status: InvitationStatusEnum.EXPIRED },
+          });
         }
-        if (current.status === InvitationStatusEnum.ACCEPTED || current.consumed_at) {
+
+        const result = await tx.invitation.updateMany({
+          where: {
+            id: invitationId,
+            merchant_id: actor.merchantId,
+            status: { in: [InvitationStatusEnum.PENDING, InvitationStatusEnum.EXPIRED] },
+            consumed_at: null,
+          },
+          data: {
+            token_hash: tokenHash,
+            status: InvitationStatusEnum.PENDING,
+            expires_at: expiresAt,
+            updated_at: new Date(),
+          },
+        });
+
+        if (result.count === 0) {
+          const current = await tx.invitation.findUnique({ where: { id: invitationId } });
+          if (!current || current.merchant_id !== actor.merchantId) {
+            throw new CanonicalApiException(
+              HttpStatus.NOT_FOUND,
+              'INVITATION_NOT_FOUND',
+              'Không tìm thấy lời mời',
+              false
+            );
+          }
+          if (current.status === InvitationStatusEnum.ACCEPTED || current.consumed_at) {
+            throw new CanonicalApiException(
+              HttpStatus.BAD_REQUEST,
+              'INVITATION_ALREADY_USED',
+              'Lời mời đã được chấp nhận trước đó',
+              false
+            );
+          }
           throw new CanonicalApiException(
             HttpStatus.BAD_REQUEST,
-            'INVITATION_ALREADY_USED',
-            'Lời mời đã được chấp nhận trước đó',
+            'INVALID_STATE',
+            'Không thể gửi lại lời mời ở trạng thái hiện tại',
             false
           );
         }
-        throw new CanonicalApiException(
-          HttpStatus.BAD_REQUEST,
-          'INVALID_STATE',
-          'Không thể gửi lại lời mời ở trạng thái hiện tại',
-          false
-        );
+
+        const inv = (await tx.invitation.findUnique({
+          where: { id: invitationId },
+        }))!;
+
+        return inv;
+      });
+    } catch (err: any) {
+      await this.refundDispatchQuota(rateLimit.reservation);
+      if (this.isPendingUniqueViolation(err)) {
+        throw this.alreadyPendingException();
       }
-
-      const inv = (await tx.invitation.findUnique({
-        where: { id: invitationId },
-      }))!;
-
-      return inv;
-    });
+      throw err;
+    }
 
     if (this.rateLimitService) {
       const recipient = invitation.email || invitation.phone || undefined;

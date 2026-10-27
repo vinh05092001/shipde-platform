@@ -2201,6 +2201,7 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
           },
         },
         invitation: {
+          findFirst: async () => null,
           findUnique: async () => ({
             id: 'resend-fail-id',
             merchant_id: MERCHANT_ID,
@@ -2303,6 +2304,7 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
           },
         },
         invitation: {
+          findFirst: async () => null,
           findUnique: async () => ({
             id: 'resend-concurrent-id',
             merchant_id: MERCHANT_ID,
@@ -2678,6 +2680,130 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
         MERCHANT_ID
       );
       assert.strictEqual(blocked.allowed, false, 'recipient cap 5/h still enforced');
+    });
+
+    const ownerUser = {
+      id: OWNER_USER_ID,
+      merchant_id: MERCHANT_ID,
+      role: 'OWNER',
+      status: 'active',
+      store_scopes: [],
+      warehouse_scopes: [],
+    };
+
+    const makeResendPrisma = (opts: { sibling?: any; targetUpdateThrows?: any }) => {
+      const calls = { targetUpdates: 0, siblingExpire: 0 };
+      const target = {
+        id: 'r6-target',
+        merchant_id: MERCHANT_ID,
+        email: 'r6-resend@shipde.vn',
+        phone: null,
+        role: 'OPS_CSKH',
+        status: 'EXPIRED',
+        token_hash: 'old-hash',
+        expires_at: new Date(Date.now() - 1000),
+        consumed_at: null,
+        store_scopes: [],
+        warehouse_scopes: [],
+        created_at: new Date(),
+      };
+      const prisma: any = {
+        user: { findFirst: async (a: any) => (a?.where?.id === OWNER_USER_ID ? ownerUser : null) },
+        invitation: {
+          findUnique: async () => ({ ...target }),
+          findFirst: async () => opts.sibling ?? null,
+          updateMany: async (a: any) => {
+            if (a.where?.id === 'r6-target') {
+              calls.targetUpdates++;
+              if (opts.targetUpdateThrows) throw opts.targetUpdateThrows;
+              return { count: 1 };
+            }
+            calls.siblingExpire++;
+            return { count: 0 };
+          },
+        },
+        auditLog: { create: async (a: any) => ({ id: 'a', ...a.data }) },
+        $transaction: async (fn: any) => fn(prisma),
+      };
+      return { prisma, calls };
+    };
+
+    it('Finding 1: resend with a replacement pending invite returns 400 INVITATION_ALREADY_PENDING without consuming quota', async () => {
+      const { prisma, calls } = makeResendPrisma({
+        sibling: { id: 'r6-replacement', status: 'PENDING' },
+      });
+      let quotaChecked = false;
+      const svc = new InvitationsService(
+        prisma,
+        { sendVerification: async () => ({ success: true }) } as any,
+        {
+          checkInvitationDispatchLimit: async () => {
+            quotaChecked = true;
+            return { allowed: true };
+          },
+        } as any
+      );
+      await assert.rejects(
+        () =>
+          svc.resendInvitation(
+            'r6-target',
+            { userId: OWNER_USER_ID, merchantId: MERCHANT_ID, role: 'OWNER' },
+            '10.6.1.1',
+            'corr-r6-1'
+          ),
+        (err: any) => {
+          assert.strictEqual(err.status, 400);
+          assert.strictEqual(err.code, 'INVITATION_ALREADY_PENDING');
+          return true;
+        }
+      );
+      assert.strictEqual(quotaChecked, false);
+      assert.strictEqual(calls.targetUpdates, 0, 'target row unchanged');
+    });
+
+    it('Finding 1: resend losing the pending-unique race maps P2002 to 400 and refunds the exact quota', async () => {
+      const p2002: any = new Error('Unique constraint failed');
+      p2002.code = 'P2002';
+      p2002.meta = { target: 'invitations_merchant_pending_email_unique' };
+      const { prisma, calls } = makeResendPrisma({ targetUpdateThrows: p2002 });
+      const rl = new RateLimitService();
+      let sent = false;
+      const svc = new InvitationsService(
+        prisma,
+        {
+          sendVerification: async () => {
+            sent = true;
+            return { success: true };
+          },
+        } as any,
+        rl
+      );
+      await assert.rejects(
+        () =>
+          svc.resendInvitation(
+            'r6-target',
+            { userId: OWNER_USER_ID, merchantId: MERCHANT_ID, role: 'OWNER' },
+            '10.6.1.2',
+            'corr-r6-2'
+          ),
+        (err: any) => {
+          assert.ok(err instanceof CanonicalApiException);
+          assert.strictEqual(err.status, 400);
+          assert.strictEqual(err.code, 'INVITATION_ALREADY_PENDING');
+          return true;
+        }
+      );
+      assert.strictEqual(sent, false, 'no dispatch for a rolled-back resend');
+      assert.strictEqual(calls.siblingExpire, 1, 'stale pending siblings expired in-transaction');
+      // Recipient quota fully refunded: 5 further dispatches remain available
+      for (let i = 0; i < 5; i++) {
+        const r = await rl.checkInvitationDispatchLimit(
+          '10.6.1.2',
+          'r6-resend@shipde.vn',
+          MERCHANT_ID
+        );
+        assert.strictEqual(r.allowed, true, `slot ${i + 1} available after refund`);
+      }
     });
   });
 });
