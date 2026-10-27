@@ -117,6 +117,28 @@ The role and permission management interface in `SCR-RBAC-01` (`/settings/roles`
 - `pnpm test`
 - `pnpm build`
 
+## Quality gate and security scan evidence
+
+### pnpm security:secrets
+```
+$ tsx scripts/verify-secrets.ts
+================================================================
+🔒 SHIP DỄ — BỘ QUÉT BẢO MẬT & CHỐNG LỘ BÍ MẬT (SECRET SCANNER)
+================================================================
+
+Đã nạp thành công 4 quy tắc từ .gitleaks.toml:
+ - [generic-api-key] Generic High-Entropy Secret or Token
+ - [private-key] Private Key Header
+ - [aws-secret-key] AWS / S3 Secret Key Pattern
+ - [shipde-carrier-live-token] Live Carrier Production Token (GHN, GHTK, ViettelPost, J&T)
+
+🔍 Thực thi Gitleaks native binary CLI...
+🔍 [Gitleaks git] Quét lịch sử commit PR (fa5f0946d4db0449929f883246c0816fef00ee06...HEAD)...
+🔍 [Gitleaks dir] Quét working tree các thư mục và tệp mã nguồn...
+
+✅ Quét secret hoàn tất: 0 phát hiện vi phạm bí mật trên commit history và working tree.
+```
+
 ## Open questions
 
 1. **Role Inheritance vs. Flat Roles:** Current specification defines roles with flat permission arrays. Whether custom roles can inherit from a base system role (e.g. `OPS_CSKH` plus `pii:unmask`) is deferred to future authorization refactoring.
