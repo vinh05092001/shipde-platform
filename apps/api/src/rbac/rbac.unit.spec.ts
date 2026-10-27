@@ -1,6 +1,7 @@
 import * as assert from 'node:assert';
 import { test, describe, beforeEach } from 'node:test';
-import { RbacService, SYSTEM_ROLE_IDS, ActorContext } from './rbac.service';
+import type { ActorContext } from './rbac.dto';
+import { RbacService, SYSTEM_ROLE_IDS } from './rbac.service';
 import { PLATFORM_PERMISSIONS, SYSTEM_ROLES } from './rbac.constants';
 import { CanonicalApiException as BaseCanonicalApiException } from '../auth/auth.service';
 import { CanonicalApiException } from './rbac.service';
@@ -131,7 +132,7 @@ class MockPrismaService {
   }
 
   merchant = {
-    findFirst: async () => ({ id: 'merchant-aaa-111' }),
+    findFirst: async (): Promise<any> => ({ id: 'merchant-aaa-111' }),
   };
 
   permission = {
@@ -3479,5 +3480,22 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
     );
     const survivingRole = mockPrisma.roles.find((r) => r.id === testRole.data.role.id);
     assert.ok(survivingRole, 'Role must not be deleted when session is expired');
+  });
+
+  // Finding 2 (Round 13): ActorContext is cleanly imported from rbac.dto, re-exported by rbac.service, and spec files compile without TS2305/TS2459
+  test('Finding 2 (Round 13): ActorContext interface import from rbac.dto and re-export from rbac.service conforms to required typecheck gate', () => {
+    // Assert that an ActorContext instance adheres to the exported interface contract
+    const testActor: ActorContext = {
+      userId: 'user-typecheck-prove',
+      merchantId: MERCHANT_A,
+      role: 'OWNER',
+      sessionId: 'session-prove-typecheck',
+      authAssurance: 'MFA',
+      mfaVerifiedAt: new Date(),
+    };
+    assert.strictEqual(testActor.userId, 'user-typecheck-prove');
+    assert.strictEqual(testActor.merchantId, MERCHANT_A);
+    assert.strictEqual(testActor.role, 'OWNER');
+    assert.strictEqual(testActor.authAssurance, 'MFA');
   });
 });

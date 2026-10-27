@@ -24,6 +24,7 @@ import {
   CanonicalPermissionDefinition,
 } from './rbac.constants';
 import { CreateRoleDto, UpdateRoleDto, ActorContext } from './rbac.dto';
+export type { ActorContext } from './rbac.dto';
 
 const isRoleEnumValue = (code: string | null): code is RoleEnum => {
   return Boolean(code && Object.values(RoleEnum).includes(code as any));
