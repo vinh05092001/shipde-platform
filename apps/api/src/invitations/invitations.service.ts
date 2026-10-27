@@ -141,7 +141,6 @@ export class InvitationsService {
           rateLimit.retryAfterSeconds
         );
       }
-      await this.rateLimitService.recordInvitationDispatchAttempt(clientIp, recipient);
     }
 
     // 1. Validation: At least one recipient identifier required (AC-USR-01-07)
@@ -375,6 +374,11 @@ export class InvitationsService {
       throw err;
     }
 
+    if (this.rateLimitService) {
+      const recipient = invitation.email || invitation.phone || undefined;
+      await this.rateLimitService.recordInvitationDispatchAttempt(clientIp, recipient);
+    }
+
     const invitationUrl = `${baseUrl}/invite/accept?token=${rawToken}`;
 
     // Dispatch verification via configured delivery adapter if registered
@@ -600,7 +604,6 @@ export class InvitationsService {
           rateLimit.retryAfterSeconds
         );
       }
-      await this.rateLimitService.recordInvitationDispatchAttempt(clientIp, recipient);
     }
 
     // Regenerate 32-byte token and reset expiry 7 days
@@ -676,6 +679,11 @@ export class InvitationsService {
 
       return inv;
     });
+
+    if (this.rateLimitService) {
+      const recipient = invitation.email || invitation.phone || undefined;
+      await this.rateLimitService.recordInvitationDispatchAttempt(clientIp, recipient);
+    }
 
     const invitationUrl = `${baseUrl}/invite/accept?token=${rawToken}`;
 

@@ -12,7 +12,7 @@ import { APP_CONFIG } from '../config.token';
 import { VERIFICATION_ADAPTER } from '../auth/auth.tokens';
 import { AppConfig } from '@shipde/config';
 import { MockVerificationDeliveryAdapter } from '@shipde/testkit';
-import { RoleEnum, SessionStatusEnum } from '@prisma/client';
+import { RoleEnum, SessionStatusEnum, InvitationStatusEnum } from '@prisma/client';
 
 function createSessionToken(): { raw: string; hash: string } {
   const raw = randomBytes(48).toString('hex');
@@ -393,7 +393,7 @@ async function runInvitationsSupertestSuite() {
       role: RoleEnum.OPS_CSKH,
       token_hash: expiredTokenHash,
       status: InvitationStatusEnum.EXPIRED,
-      invited_by_user_id: ownerUser.id,
+      invited_by_user_id: owner.id,
       expires_at: new Date(Date.now() - 3600000), // 1 hour ago
     },
   });
@@ -413,7 +413,7 @@ async function runInvitationsSupertestSuite() {
       role: RoleEnum.OPS_CSKH,
       token_hash: cancelledTokenHash,
       status: InvitationStatusEnum.CANCELLED,
-      invited_by_user_id: ownerUser.id,
+      invited_by_user_id: owner.id,
       expires_at: new Date(Date.now() + 86400000),
     },
   });

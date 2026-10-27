@@ -517,7 +517,7 @@ export class RateLimitService {
   /**
    * Check invitation dispatch limits (create and resend):
    * - IP: max 20 dispatch requests per hour
-   * - Recipient identifier (email or phone): 60s cooldown + max 5 per hour
+   * - Recipient identifier (email or phone): max 5 per hour
    */
   async checkInvitationDispatchLimit(ip: string, identifier?: string): Promise<RateLimitResult> {
     const windowSeconds = 3600;
@@ -533,16 +533,6 @@ export class RateLimitService {
 
     if (identifier) {
       const cleanId = identifier.toLowerCase().trim();
-      const cooldownKey = `ratelimit:invite:dispatch:cooldown:${cleanId}`;
-      const cooldown = await this.getCooldown(cooldownKey);
-      if (cooldown !== null && cooldown > 0) {
-        return {
-          allowed: false,
-          retryAfterSeconds: cooldown,
-          reason: `Vui lòng chờ ${cooldown} giây trước khi gửi lại lời mời đến thông tin này.`,
-        };
-      }
-
       const hourlyKey = `ratelimit:invite:dispatch:hourly:${cleanId}`;
       const hourlyCheck = await this.getAttempts(hourlyKey, windowSeconds);
       if (hourlyCheck.count >= 5) {
@@ -558,16 +548,11 @@ export class RateLimitService {
     return { allowed: true };
   }
 
-  async recordInvitationDispatchAttempt(
-    ip: string,
-    identifier?: string,
-    cooldownSeconds = 60
-  ): Promise<void> {
+  async recordInvitationDispatchAttempt(ip: string, identifier?: string): Promise<void> {
     const windowSeconds = 3600;
     await this.recordAttemptKey(`ratelimit:invite:dispatch:ip:${ip}`, windowSeconds);
     if (identifier) {
       const cleanId = identifier.toLowerCase().trim();
-      await this.setCooldown(`ratelimit:invite:dispatch:cooldown:${cleanId}`, cooldownSeconds);
       await this.recordAttemptKey(`ratelimit:invite:dispatch:hourly:${cleanId}`, windowSeconds);
     }
   }
