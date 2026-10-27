@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-const STRICT_UUID_REGEX =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const STRICT_UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Strict correlation ID sanitizer for invitation flows (BR-INV-09 / AC-USR-01-18 / Round 9 Finding 1).

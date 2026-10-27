@@ -551,7 +551,9 @@ export class RateLimitService {
       return {
         allowed: false,
         retryAfterSeconds: ipConsume.retryAfterSeconds,
-        reason: ipConsume.reason || 'Quá nhiều yêu cầu gửi lời mời từ địa chỉ IP này. Vui lòng thử lại sau.',
+        reason:
+          ipConsume.reason ||
+          'Quá nhiều yêu cầu gửi lời mời từ địa chỉ IP này. Vui lòng thử lại sau.',
       };
     }
     const attempts: AttemptReservation[] = [];

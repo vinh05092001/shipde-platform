@@ -998,7 +998,10 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
       assert.strictEqual(auditCreated.new_value.target_identifier_masked, 'e****d@shipde.vn');
       assert.strictEqual(auditCreated.new_value.merchant_id, MERCHANT_ID);
       assert.strictEqual(auditCreated.new_value.actor_id, OWNER_USER_ID);
-      assert.strictEqual(auditCreated.new_value.correlation_id, '00000000-0000-0000-0000-000000000009');
+      assert.strictEqual(
+        auditCreated.new_value.correlation_id,
+        '00000000-0000-0000-0000-000000000009'
+      );
     });
 
     it('rejects resend with 400 INVITATION_ALREADY_USED when concurrent accept committed (count === 0)', async () => {
@@ -1162,7 +1165,10 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
       assert.strictEqual(auditCreated.new_value.target_identifier_masked, 'c****g@shipde.vn');
       assert.strictEqual(auditCreated.new_value.merchant_id, MERCHANT_ID);
       assert.strictEqual(auditCreated.new_value.actor_id, OWNER_USER_ID);
-      assert.strictEqual(auditCreated.new_value.correlation_id, '00000000-0000-0000-0000-000000000010');
+      assert.strictEqual(
+        auditCreated.new_value.correlation_id,
+        '00000000-0000-0000-0000-000000000010'
+      );
     });
 
     it('rejects cancel with 400 INVITATION_ALREADY_USED when concurrent accept committed (count === 0)', async () => {
@@ -3714,7 +3720,9 @@ CREATE INDEX "some_other_idx" ON "invitations"("created_at");
         },
         $transaction: async (_cb: any, opts: any) => {
           assert.strictEqual(opts?.isolationLevel, 'Serializable');
-          const err: any = new Error('could not serialize access due to read/write dependencies among transactions');
+          const err: any = new Error(
+            'could not serialize access due to read/write dependencies among transactions'
+          );
           err.code = 'P2034';
           throw err;
         },
@@ -3787,11 +3795,20 @@ CREATE INDEX "some_other_idx" ON "invitations"("created_at");
     });
 
     it('Round 9 Finding 5: acceptInvitation sets Cache-Control: no-store and Referrer-Policy: no-referrer', () => {
-      const headers = Reflect.getMetadata('__headers__', InvitationsController.prototype.acceptInvitation) || [];
-      const hasNoStore = headers.some((h: any) => h.name === 'Cache-Control' && h.value === 'no-store');
-      const hasNoReferrer = headers.some((h: any) => h.name === 'Referrer-Policy' && h.value === 'no-referrer');
+      const headers =
+        Reflect.getMetadata('__headers__', InvitationsController.prototype.acceptInvitation) || [];
+      const hasNoStore = headers.some(
+        (h: any) => h.name === 'Cache-Control' && h.value === 'no-store'
+      );
+      const hasNoReferrer = headers.some(
+        (h: any) => h.name === 'Referrer-Policy' && h.value === 'no-referrer'
+      );
       assert.strictEqual(hasNoStore, true, 'acceptInvitation must set Cache-Control: no-store');
-      assert.strictEqual(hasNoReferrer, true, 'acceptInvitation must set Referrer-Policy: no-referrer');
+      assert.strictEqual(
+        hasNoReferrer,
+        true,
+        'acceptInvitation must set Referrer-Policy: no-referrer'
+      );
     });
 
     it('Round 9 Finding 2: Rate limiter fails closed when Redis is configured but not usable, memory fallback only when not configured', async () => {
@@ -3805,14 +3822,22 @@ CREATE INDEX "some_other_idx" ON "invitations"("created_at");
         }),
       };
       const unreadyLimiter = new RateLimitService(mockUnreadyRedisService);
-      const res1 = await unreadyLimiter.checkInvitationDispatchLimit('192.168.1.1', 'user@shipde.vn', MERCHANT_ID);
+      const res1 = await unreadyLimiter.checkInvitationDispatchLimit(
+        '192.168.1.1',
+        'user@shipde.vn',
+        MERCHANT_ID
+      );
       assert.strictEqual(res1.allowed, false);
       assert.strictEqual(res1.retryAfterSeconds, 60);
       assert.ok(res1.reason?.includes('sự cố'));
 
       // 2. Unconfigured Redis (undefined) falls back safely to in-memory store
       const unconfiguredLimiter = new RateLimitService(undefined);
-      const res2 = await unconfiguredLimiter.checkInvitationDispatchLimit('192.168.1.2', 'user2@shipde.vn', MERCHANT_ID);
+      const res2 = await unconfiguredLimiter.checkInvitationDispatchLimit(
+        '192.168.1.2',
+        'user2@shipde.vn',
+        MERCHANT_ID
+      );
       assert.strictEqual(res2.allowed, true);
     });
 
@@ -3892,7 +3917,10 @@ CREATE INDEX "some_other_idx" ON "invitations"("created_at");
       assert.ok(auditWritten);
       assert.strictEqual(auditWritten.action, 'INVITATION_ACCEPTED');
       // Hostile correlation ID must NEVER land in audit
-      assert.notStrictEqual(auditWritten.new_value.correlation_id, 'hostile-password-or-token-12345');
+      assert.notStrictEqual(
+        auditWritten.new_value.correlation_id,
+        'hostile-password-or-token-12345'
+      );
       assert.strictEqual(auditWritten.new_value.correlation_id.length, 36);
       assert.match(
         auditWritten.new_value.correlation_id,

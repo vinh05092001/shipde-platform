@@ -47,7 +47,7 @@ export function assertSafeMigrationDiff(diffSql: string): void {
   if (!check.safe) {
     throw new Error(
       `[MIGRATION_GUARD] Forbidden DROP INDEX detected in migration diff for: ${check.violations.join(', ')}. ` +
-      `PostgreSQL partial unique pending indexes must never be dropped.`
+        `PostgreSQL partial unique pending indexes must never be dropped.`
     );
   }
 }

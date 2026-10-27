@@ -713,7 +713,9 @@ export class InvitationsService {
         );
       }
       if (err?.code === 'P2002') {
-        const target = Array.isArray(err?.meta?.target) ? err.meta.target.join(',') : String(err?.meta?.target || '');
+        const target = Array.isArray(err?.meta?.target)
+          ? err.meta.target.join(',')
+          : String(err?.meta?.target || '');
         const modelName = String(err?.meta?.modelName || '');
         if (modelName === 'User' || target.includes('users_')) {
           throw new CanonicalApiException(
