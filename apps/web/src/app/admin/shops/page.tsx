@@ -24,23 +24,20 @@ export interface ShopRecord {
   code: string;
   status: string;
   created_at: string;
-  user_count?: number;
-  owner?: {
+  users: Array<{
     id: string;
     full_name: string;
     email: string | null;
     phone: string | null;
-  } | null;
+    role: string;
+    status: string;
+    email_verified_at: string | null;
+    phone_verified_at: string | null;
+  }>;
 }
 
 export interface CreatedShopSuccessData {
-  merchant: {
-    id: string;
-    name: string;
-    code: string;
-    status: string;
-    created_at: string;
-  };
+  merchant: { id: string; name: string; code: string; status: string; created_at: string };
   user: {
     id: string;
     merchant_id: string;
@@ -55,72 +52,103 @@ export interface CreatedShopSuccessData {
   password_is_temporary: boolean;
 }
 
-export default function AdminShopsPage() {
-  const { user, token, isAuthenticated, isHydrating } = useAuth();
+export function validateShopForm(
+  merchantName: string,
+  email: string,
+  phone: string,
+  password?: string
+): Record<string, string> {
+  const errors: Record<string, string> = {};
 
-  const isPlatformAdmin = Boolean(
-    user &&
-      (user.role === 'BACKOFFICE' ||
-        (user.role as string) === 'PLATFORM_ADMIN' ||
-        (user.role as string) === 'ADMIN')
-  );
+  if (!merchantName.trim() || merchantName.trim().length < 2) {
+    errors.merchant_name = 'Tên cửa hàng phải có ít nhất 2 ký tự';
+  } else if (merchantName.trim().length > 255) {
+    errors.merchant_name = 'Tên cửa hàng không được vượt quá 255 ký tự';
+  }
 
-  // Navigation / Modal tab state
-  const [showCreateModal, setShowCreateModal] = useState(false);
+  const trimmedEmail = email.trim();
+  const trimmedPhone = phone.trim();
 
-  // List data states
-  const [shops, setShops] = useState<ShopRecord[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [listError, setListError] = useState<string | null>(null);
-  const [searchQuery, setSearchQuery] = useState('');
+  if (!trimmedEmail && !trimmedPhone) {
+    errors.email = 'Phải cung cấp ít nhất email hoặc số điện thoại';
+    errors.phone = 'Phải cung cấp ít nhất email hoặc số điện thoại';
+  }
 
-  // Creation form states
-  const [merchantName, setMerchantName] = useState('');
-  const [fullName, setFullName] = useState('');
-  const [email, setEmail] = useState('');
-  const [phone, setPhone] = useState('');
-  const [password, setPassword] = useState('');
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
-  const [createError, setCreateError] = useState<string | null>(null);
-  const [createdSuccess, setCreatedSuccess] = useState<CreatedShopSuccessData | null>(null);
+  if (trimmedEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+    errors.email = 'Định dạng email không hợp lệ';
+  }
 
-  // Fetch shops
-  const fetchShops = useCallback(async () => {
-    setIsLoading(true);
-    setListError(null);
-    try {
-      const res = await fetch(`/api/admin/shops?search=${encodeURIComponent(searchQuery)}`, {
-        headers: {
-          Accept: 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-      });
+  if (trimmedPhone && !/^(0|\+84)[3|5|7|8|9][0-9]{8}$/.test(trimmedPhone.replace(/\s+/g, ''))) {
+    errors.phone = 'Số điện thoại không hợp lệ theo định dạng Việt Nam';
+  }
 
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(
-          errData?.error?.message || `Lỗi tải danh sách cửa hàng (HTTP ${res.status})`
-        );
-      }
+  if (password && password.length < 8) {
+    errors.password = 'Mật khẩu phải có độ dài tối thiểu 8 ký tự';
+  }
 
-      const json = await res.json();
-      setShops(json?.data?.shops || []);
-    } catch (err: any) {
-      setListError(err.message || 'Không thể kết nối đến máy chủ');
-    } finally {
-      setIsLoading(false);
-    }
-  }, [searchQuery, token]);
+  return errors;
+}
 
-  useEffect(() => {
-    if (isAuthenticated && user && isPlatformAdmin) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- initial fetch
-      void fetchShops();
-    }
-  }, [isAuthenticated, user, isPlatformAdmin, fetchShops]);
+export interface AdminShopsViewProps {
+  isAuthenticated: boolean;
+  user: any;
+  isPlatformAdmin: boolean;
+  isHydrating: boolean;
+  shops: ShopRecord[];
+  isLoading: boolean;
+  listError: string | null;
+  searchQuery: string;
+  setSearchQuery?: (q: string) => void;
+  showCreateModal: boolean;
+  setShowCreateModal?: (s: boolean) => void;
+  merchantName?: string;
+  setMerchantName?: (v: string) => void;
+  fullName?: string;
+  setFullName?: (v: string) => void;
+  email?: string;
+  setEmail?: (v: string) => void;
+  phone?: string;
+  setPhone?: (v: string) => void;
+  password?: string;
+  setPassword?: (v: string) => void;
+  isSubmitting?: boolean;
+  formErrors?: Record<string, string>;
+  createError?: string | null;
+  createdSuccess?: CreatedShopSuccessData | null;
+  onRefresh?: () => void;
+  onCreateSubmit?: (e: React.FormEvent) => void;
+}
 
-  // AC-ADMIN-15: Signed-out users access admin routes must reach the forbidden state
+export function AdminShopsView({
+  isAuthenticated,
+  user,
+  isPlatformAdmin,
+  isHydrating,
+  shops,
+  isLoading,
+  listError,
+  searchQuery,
+  setSearchQuery,
+  showCreateModal,
+  setShowCreateModal,
+  merchantName = '',
+  setMerchantName,
+  fullName = '',
+  setFullName,
+  email = '',
+  setEmail,
+  phone = '',
+  setPhone,
+  password = '',
+  setPassword,
+  isSubmitting = false,
+  formErrors = {},
+  createError = null,
+  createdSuccess = null,
+  onRefresh,
+  onCreateSubmit,
+}: AdminShopsViewProps) {
+  // AC-ADMIN-15: Signed-out or non-admin users reach the forbidden state immediately
   // before any loading skeleton or in-flight state
   if (!isHydrating && (!isAuthenticated || !user || !isPlatformAdmin)) {
     return (
@@ -150,98 +178,6 @@ export default function AdminShopsPage() {
       </main>
     );
   }
-
-  // Client-side form validation
-  const validateForm = (): boolean => {
-    const errors: Record<string, string> = {};
-
-    if (!merchantName.trim() || merchantName.trim().length < 2) {
-      errors.merchant_name = 'Tên cửa hàng phải có ít nhất 2 ký tự';
-    } else if (merchantName.trim().length > 255) {
-      errors.merchant_name = 'Tên cửa hàng không được vượt quá 255 ký tự';
-    }
-
-    const trimmedEmail = email.trim();
-    const trimmedPhone = phone.trim();
-
-    if (!trimmedEmail && !trimmedPhone) {
-      errors.email = 'Phải cung cấp ít nhất email hoặc số điện thoại';
-      errors.phone = 'Phải cung cấp ít nhất email hoặc số điện thoại';
-    }
-
-    if (trimmedEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
-      errors.email = 'Định dạng email không hợp lệ';
-    }
-
-    if (trimmedPhone && !/^(0|\+84)[3|5|7|8|9][0-9]{8}$/.test(trimmedPhone.replace(/\s+/g, ''))) {
-      errors.phone = 'Số điện thoại không hợp lệ theo định dạng Việt Nam';
-    }
-
-    if (password && password.length < 8) {
-      errors.password = 'Mật khẩu phải có độ dài tối thiểu 8 ký tự';
-    }
-
-    setFormErrors(errors);
-    return Object.keys(errors).length === 0;
-  };
-
-  const handleCreateShop = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setCreateError(null);
-    setCreatedSuccess(null);
-
-    if (!validateForm()) {
-      return;
-    }
-
-    setIsSubmitting(true);
-    try {
-      const res = await fetch('/api/admin/shops', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({
-          merchant_name: merchantName.trim(),
-          full_name: fullName.trim() || merchantName.trim(),
-          email: email.trim() || undefined,
-          phone: phone.trim() || undefined,
-          password: password || undefined,
-        }),
-      });
-
-      const json = await res.json();
-
-      if (!res.ok) {
-        if (json?.error?.fields && Array.isArray(json.error.fields)) {
-          const fieldMap: Record<string, string> = {};
-          json.error.fields.forEach((f: any) => {
-            fieldMap[f.field] = f.message;
-          });
-          setFormErrors(fieldMap);
-        }
-        throw new Error(json?.error?.message || `Khởi tạo thất bại (HTTP ${res.status})`);
-      }
-
-      setCreatedSuccess(json.data);
-      // Reset form
-      setMerchantName('');
-      setFullName('');
-      setEmail('');
-      setPhone('');
-      setPassword('');
-      setFormErrors({});
-
-      // Refresh shop list
-      fetchShops();
-    } catch (err: any) {
-      setCreateError(err.message || 'Lỗi khi khởi tạo cửa hàng');
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 pb-12">
@@ -285,7 +221,7 @@ export default function AdminShopsPage() {
           </div>
           <div className="flex items-center gap-3">
             <button
-              onClick={() => fetchShops()}
+              onClick={() => onRefresh && onRefresh()}
               disabled={isLoading}
               className="inline-flex items-center gap-2 px-3.5 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 shadow-sm transition-colors disabled:opacity-50"
             >
@@ -293,79 +229,245 @@ export default function AdminShopsPage() {
               Làm mới
             </button>
             <button
-              onClick={() => {
-                setShowCreateModal(true);
-                setCreatedSuccess(null);
-                setCreateError(null);
-              }}
-              className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-sm shadow-indigo-200 transition-colors"
+              onClick={() => setShowCreateModal && setShowCreateModal(true)}
+              className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-sm transition-colors"
             >
               <Plus className="w-4 h-4" />
-              Khởi tạo cửa hàng mới
+              Khởi tạo Cửa hàng Mới
             </button>
           </div>
         </div>
 
-        {/* Success Banner if recently created */}
-        {createdSuccess && (
-          <div
-            data-testid="state-success"
-            className="mb-8 p-6 bg-emerald-50 border border-emerald-200 rounded-xl shadow-sm"
-          >
-            <div className="flex items-start gap-4">
-              <div className="w-10 h-10 bg-emerald-100 text-emerald-600 rounded-lg flex items-center justify-center shrink-0">
-                <CheckCircle2 className="w-6 h-6" />
-              </div>
-              <div className="flex-1">
-                <h3 className="text-base font-semibold text-emerald-900">
-                  Khởi tạo cửa hàng thành công! (Mã: {createdSuccess.merchant.code})
-                </h3>
-                <p className="text-sm text-emerald-700 mt-0.5">
-                  Tài khoản chủ sở hữu đã được kích hoạt trực tiếp ở trạng thái{' '}
-                  <span className="font-semibold uppercase text-emerald-800">
-                    {createdSuccess.merchant.status}
-                  </span>{' '}
-                  và xác thực tự động.
-                </p>
-
-                <div className="mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 bg-white p-4 rounded-lg border border-emerald-100">
-                  <div>
-                    <span className="text-xs text-slate-500 block">Tên cửa hàng</span>
-                    <span className="text-sm font-semibold text-slate-800">
-                      {createdSuccess.merchant.name}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-xs text-slate-500 block">Mã định danh (Code)</span>
-                    <span className="text-sm font-mono font-medium text-indigo-600">
-                      {createdSuccess.merchant.code}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-xs text-slate-500 block">Chủ sở hữu</span>
-                    <span className="text-sm text-slate-800">
-                      {createdSuccess.user.full_name} (
-                      {createdSuccess.user.email || createdSuccess.user.phone})
-                    </span>
-                  </div>
+        {/* Modal: Create Shop */}
+        {showCreateModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs overflow-y-auto">
+            <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full border border-slate-100 overflow-hidden my-8 animate-in fade-in zoom-in-95 duration-150">
+              <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between">
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900">Khởi tạo Shop & Chủ Tài Khoản</h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Tài khoản được kích hoạt và xác thực ngay khi khởi tạo
+                  </p>
                 </div>
+                <button
+                  onClick={() => setShowCreateModal && setShowCreateModal(false)}
+                  className="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-50"
+                >
+                  ✕
+                </button>
+              </div>
 
-                {/* Initial Setup Notification */}
-                {createdSuccess.password_is_temporary && (
-                  <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg flex items-center gap-3">
-                    <Key className="w-5 h-5 text-blue-600 shrink-0" />
-                    <div>
-                      <span className="text-xs font-semibold text-blue-900 block">
-                        Thiết lập mật khẩu lần đầu:
+              {createdSuccess ? (
+                /* Success State */
+                <div data-testid="state-success" className="p-6">
+                  <div className="w-12 h-12 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <CheckCircle2 className="w-6 h-6" />
+                  </div>
+                  <h4 className="text-center font-bold text-slate-900 text-base mb-1">
+                    Cửa hàng đã khởi tạo thành công!
+                  </h4>
+                  <p className="text-center text-xs text-slate-500 mb-6">
+                    Hệ thống đã thiết lập tài khoản và định tuyến mã cửa hàng tự động.
+                  </p>
+
+                  <div className="bg-slate-50 rounded-xl p-4 border border-slate-200/80 space-y-2 text-xs mb-4">
+                    <div className="flex justify-between items-center py-1 border-b border-slate-200/60">
+                      <span className="text-slate-500">Tên cửa hàng:</span>
+                      <span className="font-semibold text-slate-800">
+                        {createdSuccess.merchant.name}
                       </span>
-                      <p className="text-xs text-blue-800 leading-relaxed mt-0.5">
-                        Liên kết thiết lập mật khẩu một lần bảo mật đã được gửi tới chủ cửa hàng qua{' '}
-                        <strong>{createdSuccess.user.email || createdSuccess.user.phone}</strong>.
-                      </p>
+                    </div>
+                    <div className="flex justify-between items-center py-1 border-b border-slate-200/60">
+                      <span className="text-slate-500">Mã định danh (Merchant Code):</span>
+                      <span className="font-mono font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
+                        {createdSuccess.merchant.code}
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center py-1 border-b border-slate-200/60">
+                      <span className="text-slate-500">Chủ tài khoản:</span>
+                      <span className="font-medium text-slate-800">
+                        {createdSuccess.user.full_name}
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center py-1 border-b border-slate-200/60">
+                      <span className="text-slate-500">Liên hệ:</span>
+                      <span className="text-slate-800">
+                        {createdSuccess.user.email || createdSuccess.user.phone}
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center py-1">
+                      <span className="text-slate-500">Trạng thái:</span>
+                      <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800">
+                        {createdSuccess.merchant.status.toUpperCase()} & ĐÃ XÁC THỰC
+                      </span>
                     </div>
                   </div>
-                )}
-              </div>
+
+                  {/* Initial Setup Notification */}
+                  {createdSuccess.password_is_temporary && (
+                    <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg flex items-center gap-3">
+                      <Key className="w-5 h-5 text-blue-600 shrink-0" />
+                      <div>
+                        <span className="text-xs font-semibold text-blue-900 block">
+                          Thiết lập mật khẩu lần đầu:
+                        </span>
+                        <p className="text-xs text-blue-800 leading-relaxed mt-0.5">
+                          Liên kết thiết lập mật khẩu một lần bảo mật đã được gửi tới chủ cửa hàng qua{' '}
+                          <strong>{createdSuccess.user.email || createdSuccess.user.phone}</strong>.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="mt-6 flex justify-end">
+                    <button
+                      onClick={() => setShowCreateModal && setShowCreateModal(false)}
+                      className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium transition-colors"
+                    >
+                      Đóng
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <form onSubmit={onCreateSubmit} className="p-6 space-y-4">
+                  {createError && (
+                    <div
+                      data-testid="state-error"
+                      className="p-3 bg-red-50 border border-red-200 text-red-700 text-xs rounded-lg flex items-center gap-2"
+                    >
+                      <AlertTriangle className="w-4 h-4 shrink-0" />
+                      <span>{createError}</span>
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Tên Cửa hàng (Merchant / Shop Name) <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={merchantName}
+                      onChange={(e) => setMerchantName && setMerchantName(e.target.value)}
+                      placeholder="Ví dụ: GUMAC Flagship Store"
+                      className={`w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 ${
+                        formErrors.merchant_name
+                          ? 'border-red-400 focus:ring-red-200'
+                          : 'border-slate-300 focus:ring-indigo-500 focus:border-indigo-500'
+                      }`}
+                    />
+                    {formErrors.merchant_name && (
+                      <p data-testid="state-validation" className="text-xs text-red-600 mt-1">
+                        {formErrors.merchant_name}
+                      </p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Họ tên chủ shop (Tùy chọn)
+                    </label>
+                    <input
+                      type="text"
+                      value={fullName}
+                      onChange={(e) => setFullName && setFullName(e.target.value)}
+                      placeholder="Mặc định lấy theo tên cửa hàng"
+                      className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        Email liên hệ
+                      </label>
+                      <input
+                        type="email"
+                        value={email}
+                        onChange={(e) => setEmail && setEmail(e.target.value)}
+                        placeholder="owner@domain.vn"
+                        className={`w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 ${
+                          formErrors.email
+                            ? 'border-red-400 focus:ring-red-200'
+                            : 'border-slate-300 focus:ring-indigo-500 focus:border-indigo-500'
+                        }`}
+                      />
+                      {formErrors.email && (
+                        <p data-testid="state-validation" className="text-xs text-red-600 mt-1">
+                          {formErrors.email}
+                        </p>
+                      )}
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        Số điện thoại
+                      </label>
+                      <input
+                        type="tel"
+                        value={phone}
+                        onChange={(e) => setPhone && setPhone(e.target.value)}
+                        placeholder="0987654321"
+                        className={`w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 ${
+                          formErrors.phone
+                            ? 'border-red-400 focus:ring-red-200'
+                            : 'border-slate-300 focus:ring-indigo-500 focus:border-indigo-500'
+                        }`}
+                      />
+                      {formErrors.phone && (
+                        <p data-testid="state-validation" className="text-xs text-red-600 mt-1">
+                          {formErrors.phone}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Mật khẩu khởi tạo (Tùy chọn)
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="password"
+                        value={password}
+                        onChange={(e) => setPassword && setPassword(e.target.value)}
+                        placeholder="Để trống sẽ gửi liên kết thiết lập một lần"
+                        className={`w-full pl-8 pr-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 ${
+                          formErrors.password
+                            ? 'border-red-400 focus:ring-red-200'
+                            : 'border-slate-300 focus:ring-indigo-500 focus:border-indigo-500'
+                        }`}
+                      />
+                      <Lock className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                    </div>
+                    {formErrors.password ? (
+                      <p data-testid="state-validation" className="text-xs text-red-600 mt-1">
+                        {formErrors.password}
+                      </p>
+                    ) : (
+                      <p className="text-xs text-slate-400 mt-1">
+                        Tối thiểu 8 ký tự nếu nhập trực tiếp
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setShowCreateModal && setShowCreateModal(false)}
+                      className="px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 rounded-lg transition-colors"
+                    >
+                      Hủy bỏ
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={isSubmitting}
+                      className="inline-flex items-center gap-2 px-5 py-2 text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-sm transition-colors disabled:opacity-50"
+                    >
+                      {isSubmitting && <RefreshCw className="w-4 h-4 animate-spin" />}
+                      {isSubmitting ? 'Đang tạo...' : 'Xác nhận tạo Shop'}
+                    </button>
+                  </div>
+                </form>
+              )}
             </div>
           </div>
         )}
@@ -384,8 +486,8 @@ export default function AdminShopsPage() {
               </div>
             </div>
             <button
-              onClick={() => fetchShops()}
-              className="px-3 py-1.5 bg-white border border-red-300 text-red-700 text-xs font-medium rounded-md hover:bg-red-50 transition-colors"
+              onClick={() => onRefresh && onRefresh()}
+              className="text-xs font-semibold px-3 py-1.5 bg-red-100 text-red-800 hover:bg-red-200 rounded-md transition-colors"
             >
               Thử lại
             </button>
@@ -399,7 +501,7 @@ export default function AdminShopsPage() {
             <input
               type="text"
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={(e) => setSearchQuery && setSearchQuery(e.target.value)}
               placeholder="Tìm kiếm theo tên cửa hàng hoặc mã cửa hàng..."
               className="w-full pl-10 pr-4 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
             />
@@ -439,11 +541,7 @@ export default function AdminShopsPage() {
               Hệ thống chưa có shop nào. Bấm nút bên dưới để khởi tạo tài khoản cửa hàng đầu tiên.
             </p>
             <button
-              onClick={() => {
-                setShowCreateModal(true);
-                setCreatedSuccess(null);
-                setCreateError(null);
-              }}
+              onClick={() => setShowCreateModal && setShowCreateModal(true)}
               className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-sm transition-colors"
             >
               <Plus className="w-4 h-4" />
@@ -451,8 +549,11 @@ export default function AdminShopsPage() {
             </button>
           </div>
         ) : (
-          /* Shop Cards / Table */
-          <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+          /* Shop Cards / Table (Success State) */
+          <div
+            data-testid="state-success"
+            className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden"
+          >
             <div className="overflow-x-auto">
               <table className="min-w-full divide-y divide-slate-200 text-sm">
                 <thead className="bg-slate-50 text-slate-500 font-medium text-xs uppercase tracking-wider text-left">
@@ -470,226 +571,225 @@ export default function AdminShopsPage() {
                       Trạng thái
                     </th>
                     <th scope="col" className="px-6 py-3.5">
-                      Ngày tạo
+                      Ngày khởi tạo
+                    </th>
+                    <th scope="col" className="px-6 py-3.5 text-right">
+                      Thao tác
                     </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200 text-slate-700">
-                  {shops.map((s) => (
-                    <tr key={s.id} className="hover:bg-slate-50 transition-colors">
-                      <td className="px-6 py-4 font-medium text-slate-900 flex items-center gap-2.5">
-                        <div className="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold text-xs">
-                          {s.name.slice(0, 2).toUpperCase()}
-                        </div>
-                        {s.name}
-                      </td>
-                      <td className="px-6 py-4 font-mono text-xs text-indigo-700 font-medium">
-                        {s.code}
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="font-medium text-slate-800">
-                          {s.owner?.full_name || 'Chưa cập nhật'}
-                        </div>
-                        <div className="text-xs text-slate-400">
-                          {s.owner?.email || s.owner?.phone || '—'}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200">
-                          <CheckCircle2 className="w-3.5 h-3.5" />
-                          {s.status.toUpperCase()}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 text-xs text-slate-500">
-                        {new Date(s.created_at).toLocaleDateString('vi-VN', {
-                          day: '2-digit',
-                          month: '2-digit',
-                          year: 'numeric',
-                        })}
-                      </td>
-                    </tr>
-                  ))}
+                  {shops.map((s) => {
+                    const owner = s.users?.find((u) => u.role === 'OWNER') || s.users?.[0];
+                    return (
+                      <tr key={s.id} className="hover:bg-slate-50/80 transition-colors">
+                        <td className="px-6 py-4 font-semibold text-slate-900">{s.name}</td>
+                        <td className="px-6 py-4 font-mono font-medium text-indigo-600 text-xs">
+                          {s.code}
+                        </td>
+                        <td className="px-6 py-4">
+                          {owner ? (
+                            <div>
+                              <div className="font-medium text-slate-800">{owner.full_name}</div>
+                              <div className="text-xs text-slate-500">
+                                {owner.email || owner.phone}
+                              </div>
+                            </div>
+                          ) : (
+                            <span className="text-slate-400 italic">Chưa gán</span>
+                          )}
+                        </td>
+                        <td className="px-6 py-4">
+                          <span
+                            className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${
+                              s.status === 'active'
+                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                : 'bg-amber-50 text-amber-700 border border-amber-200'
+                            }`}
+                          >
+                            {s.status.toUpperCase()}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 text-xs text-slate-500">
+                          {new Date(s.created_at).toLocaleDateString('vi-VN')}
+                        </td>
+                        <td className="px-6 py-4 text-right">
+                          <button
+                            disabled
+                            title="Tính năng truy cập bảng điều khiển shop dành riêng cho operator"
+                            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-slate-400 bg-slate-100 rounded-md cursor-not-allowed"
+                          >
+                            <ExternalLink className="w-3 h-3" />
+                            Truy cập
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
-          </div>
-        )}
-
-        {/* Modal for Shop Creation */}
-        {showCreateModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
-            <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden border border-slate-200 animate-in fade-in zoom-in duration-150">
-              <div className="px-6 py-5 border-b border-slate-200 flex items-center justify-between bg-slate-50">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-lg bg-indigo-600 text-white flex items-center justify-center">
-                    <Store className="w-4 h-4" />
-                  </div>
-                  <div>
-                    <h2 className="text-base font-bold text-slate-900">Khởi tạo cửa hàng mới</h2>
-                    <p className="text-xs text-slate-500">
-                      Cấp tài khoản chủ shop không qua đăng ký công khai
-                    </p>
-                  </div>
-                </div>
-                <button
-                  onClick={() => setShowCreateModal(false)}
-                  className="text-slate-400 hover:text-slate-600 p-1 rounded-lg"
-                >
-                  ✕
-                </button>
-              </div>
-
-              <form onSubmit={handleCreateShop} className="p-6 space-y-4">
-                {/* Form-level Error Alert */}
-                {createError && (
-                  <div
-                    data-testid="state-error"
-                    className="p-3 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700 flex items-center gap-2"
-                  >
-                    <AlertTriangle className="w-4 h-4 shrink-0 text-red-500" />
-                    <span>{createError}</span>
-                  </div>
-                )}
-
-                {/* Validation errors summary */}
-                {Object.keys(formErrors).length > 0 && (
-                  <div
-                    data-testid="state-validation"
-                    className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800"
-                  >
-                    <p className="font-semibold mb-1">Vui lòng kiểm tra lại thông tin:</p>
-                    <ul className="list-disc list-inside space-y-0.5">
-                      {Object.values(formErrors).map((msg, idx) => (
-                        <li key={idx}>{msg}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-
-                {/* Merchant Name Input */}
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Tên cửa hàng (Shop Name) <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={merchantName}
-                    onChange={(e) => setMerchantName(e.target.value)}
-                    placeholder="VD: An An Boutique, Giao Hàng Siêu Tốc"
-                    className={`w-full px-3.5 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
-                      formErrors.merchant_name ? 'border-red-300 bg-red-50/20' : 'border-slate-300'
-                    }`}
-                  />
-                  {formErrors.merchant_name && (
-                    <p className="text-xs text-red-600 mt-1">{formErrors.merchant_name}</p>
-                  )}
-                </div>
-
-                {/* Owner Full Name Input */}
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Họ và tên chủ cửa hàng
-                  </label>
-                  <input
-                    type="text"
-                    value={fullName}
-                    onChange={(e) => setFullName(e.target.value)}
-                    placeholder="VD: Nguyễn Văn An"
-                    className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  />
-                </div>
-
-                {/* Email Input */}
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Địa chỉ Email (hoặc SĐT)
-                  </label>
-                  <input
-                    type="email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="owner@shop.vn"
-                    className={`w-full px-3.5 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
-                      formErrors.email ? 'border-red-300 bg-red-50/20' : 'border-slate-300'
-                    }`}
-                  />
-                  {formErrors.email && (
-                    <p className="text-xs text-red-600 mt-1">{formErrors.email}</p>
-                  )}
-                </div>
-
-                {/* Phone Input */}
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Số điện thoại liên hệ (Định dạng VN)
-                  </label>
-                  <input
-                    type="tel"
-                    value={phone}
-                    onChange={(e) => setPhone(e.target.value)}
-                    placeholder="0901234567 hoặc +84901234567"
-                    className={`w-full px-3.5 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
-                      formErrors.phone ? 'border-red-300 bg-red-50/20' : 'border-slate-300'
-                    }`}
-                  />
-                  {formErrors.phone && (
-                    <p className="text-xs text-red-600 mt-1">{formErrors.phone}</p>
-                  )}
-                </div>
-
-                {/* Custom Password Input */}
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Mật khẩu tùy chọn (Bỏ trống để tự động sinh mật khẩu tạm thời)
-                  </label>
-                  <input
-                    type="password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="Tối thiểu 8 ký tự (hoặc để trống)"
-                    className={`w-full px-3.5 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
-                      formErrors.password ? 'border-red-300 bg-red-50/20' : 'border-slate-300'
-                    }`}
-                  />
-                  {formErrors.password && (
-                    <p className="text-xs text-red-600 mt-1">{formErrors.password}</p>
-                  )}
-                  <p className="text-2xs text-slate-400 mt-1">
-                    Nếu để trống, hệ thống sẽ tự động tạo mật khẩu mạnh và hiển thị sau khi khởi tạo
-                    thành công.
-                  </p>
-                </div>
-
-                {/* Actions */}
-                <div className="pt-4 border-t border-slate-100 flex items-center justify-end gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setShowCreateModal(false)}
-                    className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
-                  >
-                    Hủy
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={isSubmitting}
-                    className="inline-flex items-center gap-2 px-5 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-sm shadow-indigo-200 transition-colors disabled:opacity-50"
-                  >
-                    {isSubmitting ? (
-                      <>
-                        <RefreshCw className="w-4 h-4 animate-spin" />
-                        Đang khởi tạo...
-                      </>
-                    ) : (
-                      'Tạo cửa hàng'
-                    )}
-                  </button>
-                </div>
-              </form>
+            <div className="px-6 py-3.5 bg-slate-50 border-t border-slate-200 text-xs text-slate-500 flex items-center justify-between">
+              <span>Hiển thị {shops.length} cửa hàng</span>
+              <span className="inline-flex items-center gap-1.5">
+                <Users className="w-3.5 h-3.5" />
+                Hệ sinh thái phân quyền đơn vị
+              </span>
             </div>
           </div>
         )}
       </main>
     </div>
+  );
+}
+
+export default function AdminShopsPage() {
+  const { user, token, isAuthenticated, isHydrating } = useAuth();
+
+  const isPlatformAdmin = Boolean(
+    user &&
+      (user.role === 'BACKOFFICE' ||
+        (user.role as string) === 'PLATFORM_ADMIN' ||
+        (user.role as string) === 'ADMIN')
+  );
+
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [shops, setShops] = useState<ShopRecord[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [listError, setListError] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+
+  const [merchantName, setMerchantName] = useState('');
+  const [fullName, setFullName] = useState('');
+  const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
+  const [password, setPassword] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [createdSuccess, setCreatedSuccess] = useState<CreatedShopSuccessData | null>(null);
+
+  const fetchShops = useCallback(async () => {
+    setIsLoading(true);
+    setListError(null);
+    try {
+      const res = await fetch(`/api/admin/shops?search=${encodeURIComponent(searchQuery)}`, {
+        headers: {
+          Accept: 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(
+          errData?.error?.message || `Lỗi tải danh sách cửa hàng (HTTP ${res.status})`
+        );
+      }
+
+      const json = await res.json();
+      setShops(json?.data?.shops || []);
+    } catch (err: any) {
+      setListError(err.message || 'Không thể kết nối đến máy chủ');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [searchQuery, token]);
+
+  useEffect(() => {
+    if (isAuthenticated && user && isPlatformAdmin) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- initial fetch
+      void fetchShops();
+    }
+  }, [isAuthenticated, user, isPlatformAdmin, fetchShops]);
+
+  const handleCreateShop = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setCreateError(null);
+    setFormErrors({});
+
+    const errors = validateShopForm(merchantName, email, phone, password);
+    if (Object.keys(errors).length > 0) {
+      setFormErrors(errors);
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      const res = await fetch('/api/admin/shops', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          merchant_name: merchantName.trim(),
+          full_name: fullName.trim() || merchantName.trim(),
+          email: email.trim() || undefined,
+          phone: phone.trim() || undefined,
+          password: password || undefined,
+        }),
+      });
+
+      const json = await res.json();
+
+      if (!res.ok) {
+        if (json?.error?.fields && Array.isArray(json.error.fields)) {
+          const fieldMap: Record<string, string> = {};
+          json.error.fields.forEach((f: any) => {
+            fieldMap[f.field] = f.message;
+          });
+          setFormErrors(fieldMap);
+        }
+        throw new Error(json?.error?.message || `Khởi tạo thất bại (HTTP ${res.status})`);
+      }
+
+      setCreatedSuccess(json.data);
+      setMerchantName('');
+      setFullName('');
+      setEmail('');
+      setPhone('');
+      setPassword('');
+      setFormErrors({});
+
+      void fetchShops();
+    } catch (err: any) {
+      setCreateError(err.message || 'Lỗi khi khởi tạo cửa hàng');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <AdminShopsView
+      isAuthenticated={isAuthenticated}
+      user={user}
+      isPlatformAdmin={isPlatformAdmin}
+      isHydrating={isHydrating}
+      shops={shops}
+      isLoading={isLoading}
+      listError={listError}
+      searchQuery={searchQuery}
+      setSearchQuery={setSearchQuery}
+      showCreateModal={showCreateModal}
+      setShowCreateModal={setShowCreateModal}
+      merchantName={merchantName}
+      setMerchantName={setMerchantName}
+      fullName={fullName}
+      setFullName={setFullName}
+      email={email}
+      setEmail={setEmail}
+      phone={phone}
+      setPhone={setPhone}
+      password={password}
+      setPassword={setPassword}
+      isSubmitting={isSubmitting}
+      formErrors={formErrors}
+      createError={createError}
+      createdSuccess={createdSuccess}
+      onRefresh={fetchShops}
+      onCreateSubmit={handleCreateShop}
+    />
   );
 }

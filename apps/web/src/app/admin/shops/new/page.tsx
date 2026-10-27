@@ -14,30 +14,52 @@ import {
   RefreshCw,
   ArrowRight,
 } from 'lucide-react';
-import { CreatedShopSuccessData } from '../page';
+import { CreatedShopSuccessData, validateShopForm } from '../page';
 
-export default function AdminNewShopPage() {
-  const router = useRouter();
-  const { user, token, isAuthenticated, isHydrating } = useAuth();
+export interface AdminNewShopViewProps {
+  isAuthenticated: boolean;
+  user: any;
+  isPlatformAdmin: boolean;
+  isHydrating: boolean;
+  merchantName: string;
+  setMerchantName?: (v: string) => void;
+  fullName: string;
+  setFullName?: (v: string) => void;
+  email: string;
+  setEmail?: (v: string) => void;
+  phone: string;
+  setPhone?: (v: string) => void;
+  password: string;
+  setPassword?: (v: string) => void;
+  isSubmitting: boolean;
+  formErrors: Record<string, string>;
+  createError: string | null;
+  createdSuccess: CreatedShopSuccessData | null;
+  onSubmit?: (e: React.FormEvent) => void;
+}
 
-  const isPlatformAdmin = Boolean(
-    user &&
-      (user.role === 'BACKOFFICE' ||
-        (user.role as string) === 'PLATFORM_ADMIN' ||
-        (user.role as string) === 'ADMIN')
-  );
-
-  const [merchantName, setMerchantName] = useState('');
-  const [fullName, setFullName] = useState('');
-  const [email, setEmail] = useState('');
-  const [phone, setPhone] = useState('');
-  const [password, setPassword] = useState('');
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
-  const [createError, setCreateError] = useState<string | null>(null);
-  const [createdSuccess, setCreatedSuccess] = useState<CreatedShopSuccessData | null>(null);
-
-  // AC-ADMIN-15: Signed-out users access admin routes must reach forbidden state immediately
+export function AdminNewShopView({
+  isAuthenticated,
+  user,
+  isPlatformAdmin,
+  isHydrating,
+  merchantName,
+  setMerchantName,
+  fullName,
+  setFullName,
+  email,
+  setEmail,
+  phone,
+  setPhone,
+  password,
+  setPassword,
+  isSubmitting,
+  formErrors,
+  createError,
+  createdSuccess,
+  onSubmit,
+}: AdminNewShopViewProps) {
+  // AC-ADMIN-15: Signed-out or unauthorized users access admin routes must reach forbidden state immediately
   if (!isHydrating && (!isAuthenticated || !user || !isPlatformAdmin)) {
     return (
       <main className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
@@ -65,87 +87,6 @@ export default function AdminNewShopPage() {
       </main>
     );
   }
-
-  const validateForm = (): boolean => {
-    const errors: Record<string, string> = {};
-
-    if (!merchantName.trim() || merchantName.trim().length < 2) {
-      errors.merchant_name = 'Tên cửa hàng phải có ít nhất 2 ký tự';
-    } else if (merchantName.trim().length > 255) {
-      errors.merchant_name = 'Tên cửa hàng không được vượt quá 255 ký tự';
-    }
-
-    const trimmedEmail = email.trim();
-    const trimmedPhone = phone.trim();
-
-    if (!trimmedEmail && !trimmedPhone) {
-      errors.email = 'Phải cung cấp ít nhất email hoặc số điện thoại';
-      errors.phone = 'Phải cung cấp ít nhất email hoặc số điện thoại';
-    }
-
-    if (trimmedEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
-      errors.email = 'Định dạng email không hợp lệ';
-    }
-
-    if (trimmedPhone && !/^(0|\+84)[3|5|7|8|9][0-9]{8}$/.test(trimmedPhone.replace(/\s+/g, ''))) {
-      errors.phone = 'Số điện thoại không hợp lệ theo định dạng Việt Nam';
-    }
-
-    if (password && password.length < 8) {
-      errors.password = 'Mật khẩu phải có độ dài tối thiểu 8 ký tự';
-    }
-
-    setFormErrors(errors);
-    return Object.keys(errors).length === 0;
-  };
-
-  const handleCreateShop = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setCreateError(null);
-    setCreatedSuccess(null);
-
-    if (!validateForm()) {
-      return;
-    }
-
-    setIsSubmitting(true);
-    try {
-      const res = await fetch('/api/admin/shops', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({
-          merchant_name: merchantName.trim(),
-          full_name: fullName.trim() || merchantName.trim(),
-          email: email.trim() || undefined,
-          phone: phone.trim() || undefined,
-          password: password || undefined,
-        }),
-      });
-
-      const json = await res.json();
-
-      if (!res.ok) {
-        if (json?.error?.fields && Array.isArray(json.error.fields)) {
-          const fieldMap: Record<string, string> = {};
-          json.error.fields.forEach((f: any) => {
-            fieldMap[f.field] = f.message;
-          });
-          setFormErrors(fieldMap);
-        }
-        throw new Error(json?.error?.message || `Khởi tạo thất bại (HTTP ${res.status})`);
-      }
-
-      setCreatedSuccess(json.data);
-    } catch (err: any) {
-      setCreateError(err.message || 'Lỗi khi khởi tạo cửa hàng');
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 pb-12">
@@ -250,7 +191,7 @@ export default function AdminNewShopPage() {
         ) : (
           /* Create Form */
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 sm:p-8">
-            <form onSubmit={handleCreateShop} className="space-y-5">
+            <form onSubmit={onSubmit} className="space-y-5">
               {createError && (
                 <div
                   data-testid="state-error"
@@ -291,99 +232,108 @@ export default function AdminNewShopPage() {
                   type="text"
                   required
                   value={merchantName}
-                  onChange={(e) => setMerchantName(e.target.value)}
+                  onChange={(e) => setMerchantName && setMerchantName(e.target.value)}
                   placeholder="VD: Cửa hàng Thời Trang An An"
                   className={`w-full px-4 py-2.5 text-sm border rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
                     formErrors.merchant_name ? 'border-red-300 bg-red-50/20' : 'border-slate-300'
                   }`}
                 />
                 {formErrors.merchant_name && (
-                  <p className="text-xs text-red-600 mt-1">{formErrors.merchant_name}</p>
+                  <p data-testid="state-validation" className="text-xs text-red-600 mt-1">
+                    {formErrors.merchant_name}
+                  </p>
                 )}
               </div>
 
               <div>
                 <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                  Họ và tên chủ cửa hàng
+                  Họ và tên chủ cửa hàng (Tùy chọn)
                 </label>
                 <input
                   type="text"
                   value={fullName}
-                  onChange={(e) => setFullName(e.target.value)}
-                  placeholder="VD: Nguyễn Văn An"
+                  onChange={(e) => setFullName && setFullName(e.target.value)}
+                  placeholder="Để trống sẽ mặc định lấy theo Tên cửa hàng"
                   className="w-full px-4 py-2.5 text-sm border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 />
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                  Địa chỉ Email
-                </label>
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="owner@ananboutique.vn"
-                  className={`w-full px-4 py-2.5 text-sm border rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
-                    formErrors.email ? 'border-red-300 bg-red-50/20' : 'border-slate-300'
-                  }`}
-                />
-                {formErrors.email && (
-                  <p className="text-xs text-red-600 mt-1">{formErrors.email}</p>
-                )}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                    Email liên hệ
+                  </label>
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail && setEmail(e.target.value)}
+                    placeholder="VD: chu_shop@domain.vn"
+                    className={`w-full px-4 py-2.5 text-sm border rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
+                      formErrors.email ? 'border-red-300 bg-red-50/20' : 'border-slate-300'
+                    }`}
+                  />
+                  {formErrors.email && (
+                    <p data-testid="state-validation" className="text-xs text-red-600 mt-1">
+                      {formErrors.email}
+                    </p>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                    Số điện thoại
+                  </label>
+                  <input
+                    type="tel"
+                    value={phone}
+                    onChange={(e) => setPhone && setPhone(e.target.value)}
+                    placeholder="VD: 0987654321"
+                    className={`w-full px-4 py-2.5 text-sm border rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
+                      formErrors.phone ? 'border-red-300 bg-red-50/20' : 'border-slate-300'
+                    }`}
+                  />
+                  {formErrors.phone && (
+                    <p data-testid="state-validation" className="text-xs text-red-600 mt-1">
+                      {formErrors.phone}
+                    </p>
+                  )}
+                </div>
               </div>
 
               <div>
                 <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                  Số điện thoại
-                </label>
-                <input
-                  type="tel"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  placeholder="0901234567"
-                  className={`w-full px-4 py-2.5 text-sm border rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
-                    formErrors.phone ? 'border-red-300 bg-red-50/20' : 'border-slate-300'
-                  }`}
-                />
-                {formErrors.phone && (
-                  <p className="text-xs text-red-600 mt-1">{formErrors.phone}</p>
-                )}
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                  Mật khẩu tùy chọn
+                  Mật khẩu khởi tạo (Tùy chọn)
                 </label>
                 <input
                   type="password"
                   value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Để trống để sinh mật khẩu ngẫu nhiên"
+                  onChange={(e) => setPassword && setPassword(e.target.value)}
+                  placeholder="Để trống sẽ gửi liên kết thiết lập một lần"
                   className={`w-full px-4 py-2.5 text-sm border rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
                     formErrors.password ? 'border-red-300 bg-red-50/20' : 'border-slate-300'
                   }`}
                 />
                 {formErrors.password && (
-                  <p className="text-xs text-red-600 mt-1">{formErrors.password}</p>
+                  <p data-testid="state-validation" className="text-xs text-red-600 mt-1">
+                    {formErrors.password}
+                  </p>
                 )}
-                <p className="text-2xs text-slate-400 mt-1">
-                  Nếu để trống, hệ thống sẽ tự động tạo mật khẩu an toàn và cung cấp cho quản trị
-                  viên sau khi tạo thành công.
-                </p>
+                <span className="text-xs text-slate-400 mt-1 block">
+                  Tối thiểu 8 ký tự nếu nhập trực tiếp
+                </span>
               </div>
 
-              <div className="pt-4 border-t border-slate-100 flex items-center justify-end gap-3">
+              <div className="pt-4 flex items-center justify-end gap-3 border-t border-slate-100">
                 <Link
                   href="/admin/shops"
-                  className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-xl transition-colors"
+                  className="px-5 py-2.5 text-sm font-semibold text-slate-600 hover:text-slate-800 transition-colors"
                 >
-                  Hủy
+                  Hủy bỏ
                 </Link>
                 <button
                   type="submit"
                   disabled={isSubmitting}
-                  className="inline-flex items-center gap-2 px-6 py-2.5 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-sm shadow-indigo-200 transition-colors disabled:opacity-50"
+                  className="inline-flex items-center gap-2 px-6 py-2.5 text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-all shadow-sm hover:shadow disabled:opacity-50"
                 >
                   {isSubmitting ? (
                     <>
@@ -391,7 +341,10 @@ export default function AdminNewShopPage() {
                       Đang xử lý...
                     </>
                   ) : (
-                    'Khởi tạo cửa hàng'
+                    <>
+                      <Store className="w-4 h-4" />
+                      Khởi tạo ngay
+                    </>
                   )}
                 </button>
               </div>
@@ -400,5 +353,101 @@ export default function AdminNewShopPage() {
         )}
       </main>
     </div>
+  );
+}
+
+export default function AdminNewShopPage() {
+  const router = useRouter();
+  const { user, token, isAuthenticated, isHydrating } = useAuth();
+
+  const isPlatformAdmin = Boolean(
+    user &&
+      (user.role === 'BACKOFFICE' ||
+        (user.role as string) === 'PLATFORM_ADMIN' ||
+        (user.role as string) === 'ADMIN')
+  );
+
+  const [merchantName, setMerchantName] = useState('');
+  const [fullName, setFullName] = useState('');
+  const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
+  const [password, setPassword] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [createdSuccess, setCreatedSuccess] = useState<CreatedShopSuccessData | null>(null);
+
+  const handleCreateShop = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setCreateError(null);
+    setFormErrors({});
+
+    const errors = validateShopForm(merchantName, email, phone, password);
+    if (Object.keys(errors).length > 0) {
+      setFormErrors(errors);
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      const res = await fetch('/api/admin/shops', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          merchant_name: merchantName.trim(),
+          full_name: fullName.trim() || merchantName.trim(),
+          email: email.trim() || undefined,
+          phone: phone.trim() || undefined,
+          password: password || undefined,
+        }),
+      });
+
+      const json = await res.json();
+
+      if (!res.ok) {
+        if (json?.error?.fields && Array.isArray(json.error.fields)) {
+          const fieldMap: Record<string, string> = {};
+          json.error.fields.forEach((f: any) => {
+            fieldMap[f.field] = f.message;
+          });
+          setFormErrors(fieldMap);
+        }
+        throw new Error(json?.error?.message || `Khởi tạo thất bại (HTTP ${res.status})`);
+      }
+
+      setCreatedSuccess(json.data);
+    } catch (err: any) {
+      setCreateError(err.message || 'Lỗi khi khởi tạo cửa hàng');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <AdminNewShopView
+      isAuthenticated={isAuthenticated}
+      user={user}
+      isPlatformAdmin={isPlatformAdmin}
+      isHydrating={isHydrating}
+      merchantName={merchantName}
+      setMerchantName={setMerchantName}
+      fullName={fullName}
+      setFullName={setFullName}
+      email={email}
+      setEmail={setEmail}
+      phone={phone}
+      setPhone={setPhone}
+      password={password}
+      setPassword={setPassword}
+      isSubmitting={isSubmitting}
+      formErrors={formErrors}
+      createError={createError}
+      createdSuccess={createdSuccess}
+      onSubmit={handleCreateShop}
+    />
   );
 }
