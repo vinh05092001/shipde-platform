@@ -1406,22 +1406,22 @@ export class InvitationsService {
         'Dịch vụ kiểm soát tần suất không khả dụng. Vui lòng thử lại sau.'
       );
     }
-    if (clientIp) {
-      const rateLimit = await this.rateLimitService.checkInvitationVerifyLimit(clientIp);
-      if (!rateLimit.allowed) {
-        throw new CanonicalApiException(
-          HttpStatus.TOO_MANY_REQUESTS,
-          'RATE_LIMITED',
-          rateLimit.reason ||
-            'Quá nhiều yêu cầu kiểm tra lời mời từ địa chỉ IP này. Vui lòng thử lại sau.',
-          false,
-          undefined,
-          undefined,
-          rateLimit.retryAfterSeconds
-        );
-      }
-      await this.rateLimitService.recordInvitationVerifyAttempt(clientIp);
+    // Missing IP still consumes a bucket (SECURITY-NFR / Round 8 Finding 4)
+    const effectiveIp = clientIp && clientIp.trim() ? clientIp.trim() : 'unknown';
+    const rateLimit = await this.rateLimitService.checkInvitationVerifyLimit(effectiveIp);
+    if (!rateLimit.allowed) {
+      throw new CanonicalApiException(
+        HttpStatus.TOO_MANY_REQUESTS,
+        'RATE_LIMITED',
+        rateLimit.reason ||
+          'Quá nhiều yêu cầu kiểm tra lời mời từ địa chỉ IP này. Vui lòng thử lại sau.',
+        false,
+        undefined,
+        undefined,
+        rateLimit.retryAfterSeconds
+      );
     }
+    await this.rateLimitService.recordInvitationVerifyAttempt(effectiveIp);
     if (!rawToken || typeof rawToken !== 'string' || rawToken.trim().length === 0) {
       throw new CanonicalApiException(
         HttpStatus.NOT_FOUND,

@@ -542,7 +542,8 @@ export class RateLimitService {
     merchantId?: string
   ): Promise<RateLimitResult> {
     const windowSeconds = 3600;
-    const ipKey = `ratelimit:invite:dispatch:ip:${ip}`;
+    const safeIp = ip && ip.trim() ? ip.trim() : 'unknown';
+    const ipKey = `ratelimit:invite:dispatch:ip:${safeIp}`;
 
     // 1. Atomic consume IP limit (20/hour)
     const ipConsume = await this.consumeAttemptKey(ipKey, 20, windowSeconds);
@@ -663,9 +664,23 @@ export class RateLimitService {
             timestamp: now,
             reservation: allowed ? { key, member, timestamp: now, backend: 'redis' } : undefined,
           };
+        } else {
+          // Redis configured but client not ready: fail closed across instances (SECURITY-NFR / Round 8 Finding 4)
+          return {
+            allowed: false,
+            retryAfterSeconds: 60,
+            count: limit,
+            reason: 'Dịch vụ kiểm soát tần suất gặp sự cố. Vui lòng thử lại sau.',
+          };
         }
       } catch {
-        // Fallback to in-memory store
+        // Redis error: fail closed across instances (SECURITY-NFR / Round 8 Finding 4)
+        return {
+          allowed: false,
+          retryAfterSeconds: 60,
+          count: limit,
+          reason: 'Dịch vụ kiểm soát tần suất gặp sự cố. Vui lòng thử lại sau.',
+        };
       }
     }
 
@@ -731,7 +746,8 @@ export class RateLimitService {
    */
   async checkInvitationVerifyLimit(ip: string): Promise<RateLimitResult> {
     const windowSeconds = 900;
-    const key = `ratelimit:invite:verify:ip:${ip}`;
+    const safeIp = ip && ip.trim() ? ip.trim() : 'unknown';
+    const key = `ratelimit:invite:verify:ip:${safeIp}`;
     const ipConsume = await this.consumeAttemptKey(key, 30, windowSeconds);
     if (!ipConsume.allowed) {
       return {
@@ -754,7 +770,8 @@ export class RateLimitService {
    */
   async checkInvitationAcceptLimit(ip: string, tokenHash?: string): Promise<RateLimitResult> {
     const windowSeconds = 900;
-    const ipKey = `ratelimit:invite:accept:ip:${ip}`;
+    const safeIp = ip && ip.trim() ? ip.trim() : 'unknown';
+    const ipKey = `ratelimit:invite:accept:ip:${safeIp}`;
     const ipConsume = await this.consumeAttemptKey(ipKey, 10, windowSeconds);
     if (!ipConsume.allowed) {
       return {

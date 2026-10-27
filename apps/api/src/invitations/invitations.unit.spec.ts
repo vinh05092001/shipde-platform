@@ -3611,5 +3611,51 @@ CREATE INDEX "some_other_idx" ON "invitations"("created_at");
       assert.strictEqual(hashPasswordCalled, false);
       (service as any).hashPassword = originalHash;
     });
+
+    it('Round 8 Finding 4: Redis errors in rate limiter fail closed and verifyInvitation consumes bucket without clientIp', async () => {
+      // 1. Redis error in consumeAttemptKey returns allowed: false (fails closed, no fallback to local memory)
+      const mockFailingRedisClient = {
+        status: 'connecting',
+        eval: async () => {
+          throw new Error('Redis connection lost');
+        },
+      };
+      const mockRedisService = {
+        getClient: () => mockFailingRedisClient,
+      };
+      const redisRateLimiter = new RateLimitService(mockRedisService as any);
+
+      const checkResult = await redisRateLimiter.checkInvitationVerifyLimit('1.2.3.4');
+      assert.strictEqual(
+        checkResult.allowed,
+        false,
+        'Redis failure must fail closed instead of falling through to in-memory store'
+      );
+      assert.strictEqual(checkResult.retryAfterSeconds, 60);
+
+      // 2. Empty or missing clientIp in verifyInvitation still consumes rate limit bucket
+      const memoryRateLimiter = new RateLimitService();
+      const serviceWithLimiter = new InvitationsService(
+        mockPrisma,
+        { sendVerification: async () => ({ success: true }) } as any,
+        memoryRateLimiter
+      );
+
+      // Consume all 30 verify attempts for empty IP
+      for (let i = 0; i < 30; i++) {
+        const res = await memoryRateLimiter.checkInvitationVerifyLimit('');
+        assert.strictEqual(res.allowed, true);
+      }
+
+      // 31st verify check with empty clientIp must be rejected with 429 RATE_LIMITED
+      await assert.rejects(
+        serviceWithLimiter.verifyInvitation('some_token', 'corr-verify-limit', ''),
+        (err: any) => {
+          assert.strictEqual(err.getStatus(), HttpStatus.TOO_MANY_REQUESTS);
+          assert.strictEqual(err.code, 'RATE_LIMITED');
+          return true;
+        }
+      );
+    });
   });
 });
