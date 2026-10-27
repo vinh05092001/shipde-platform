@@ -1633,7 +1633,9 @@ export async function runComprehensiveRulesAudit(): Promise<{
         isManageUsersForbidden('OPS_CSKH') === false &&
         isManageUsersForbidden('WAREHOUSE') === true &&
         isManageUsersForbidden('ACCOUNTANT') === true &&
-        isManageUsersForbidden(null) === false &&
+        isManageUsersForbidden(null) === true &&
+        isManageUsersForbidden(undefined) === true &&
+        isManageUsersForbidden('') === true &&
         resolveInvitationsUIState({
           isForbidden: true,
           error: null,

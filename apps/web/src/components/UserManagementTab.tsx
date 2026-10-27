@@ -41,7 +41,8 @@ export const INVITATIONS_FORBIDDEN_TEXT = '403 — Không Có Quyền Truy Cập
 export const INVITATIONS_RETRY_LABEL = 'Thử lại';
 
 export function isManageUsersForbidden(userRole?: string | null): boolean {
-  return Boolean(userRole && userRole !== 'OWNER' && userRole !== 'OPS_CSKH');
+  if (!userRole) return true;
+  return userRole !== 'OWNER' && userRole !== 'OPS_CSKH';
 }
 
 export type InvitationsUIState = 'forbidden' | 'error' | 'loading' | 'empty' | 'ready';
