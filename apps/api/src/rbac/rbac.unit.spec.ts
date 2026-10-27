@@ -16,6 +16,7 @@ class MockPrismaService {
   auditLogs: any[] = [];
   shouldFailAudit = false;
   shouldFailRoleFindFirst = false;
+  shouldFailPermissionFindMany = false;
 
   constructor() {
     this.reset();
@@ -83,10 +84,14 @@ class MockPrismaService {
     this.auditLogs = [];
     this.shouldFailAudit = false;
     this.shouldFailRoleFindFirst = false;
+    this.shouldFailPermissionFindMany = false;
   }
 
   permission = {
     findMany: async (args?: any) => {
+      if (this.shouldFailPermissionFindMany) {
+        throw new Error('Database read failure for permissions');
+      }
       let result = [...this.permissions];
       if (args?.where?.OR) {
         const codes = args.where.OR.find((o: any) => o.code?.in)?.code?.in || [];
@@ -867,6 +872,23 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
     await assert.rejects(
       async () => {
         await service.getActorPermissions(actorWithCustomRole);
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 503);
+        assert.strictEqual(err.code, 'SERVICE_UNAVAILABLE');
+        return true;
+      }
+    );
+  });
+
+  // Finding 3 (P1): Platform seed and queries do not substitute fake static rows on DB failure
+  test('Finding 3 / AC-RBAC-01-01/02: Database failure throws instead of returning fake in-memory catalog', async () => {
+    mockPrisma.shouldFailPermissionFindMany = true;
+
+    await assert.rejects(
+      async () => {
+        await service.getPermissions('corr-fail-db');
       },
       (err: any) => {
         assert.ok(err instanceof CanonicalApiException);

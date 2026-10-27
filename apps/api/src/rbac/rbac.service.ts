@@ -121,8 +121,15 @@ export class RbacService {
       }
 
       this.isSeeded = true;
-    } catch {
-      // In tests where database may not yet be migrated or reachable, continue gracefully
+    } catch (err: any) {
+      this.isSeeded = false;
+      throw new CanonicalApiException(
+        HttpStatus.SERVICE_UNAVAILABLE,
+        'SERVICE_UNAVAILABLE',
+        'Không thể khởi tạo danh mục quyền hệ thống',
+        true,
+        'Vui lòng thử lại sau'
+      );
     }
   }
 
@@ -132,25 +139,9 @@ export class RbacService {
   async getPermissions(correlationId: string) {
     await this.ensurePlatformSeed();
 
-    let dbPermissions: any[] = [];
-    try {
-      dbPermissions = await this.prisma.permission.findMany({
-        orderBy: [{ category: 'asc' }, { code: 'asc' }],
-      });
-    } catch {
-      // Fallback
-    }
-
-    if (!dbPermissions || dbPermissions.length === 0) {
-      // Fallback to static catalog if DB is empty
-      dbPermissions = PLATFORM_PERMISSIONS.map((p, idx) => ({
-        id: deterministicUuid(PERMISSION_UUID_PREFIX, idx + 1),
-        code: p.code,
-        name: p.name,
-        description: p.description,
-        category: p.category,
-      }));
-    }
+    const dbPermissions = await this.prisma.permission.findMany({
+      orderBy: [{ category: 'asc' }, { code: 'asc' }],
+    });
 
     const categories = Array.from(new Set(dbPermissions.map((p) => p.category)));
 
@@ -323,52 +314,18 @@ export class RbacService {
   async getRoles(merchantId: string, correlationId: string) {
     await this.ensurePlatformSeed();
 
-    // Fetch system roles and merchant custom roles
-    let roles: any[] = [];
-    try {
-      roles = await this.prisma.role.findMany({
-        where: {
-          OR: [{ is_system: true }, { merchant_id: merchantId }],
+    // Fetch system roles and merchant custom roles from database
+    const roles = await this.prisma.role.findMany({
+      where: {
+        OR: [{ is_system: true }, { merchant_id: merchantId }],
+      },
+      include: {
+        permissions: {
+          include: { permission: true },
         },
-        include: {
-          permissions: {
-            include: { permission: true },
-          },
-        },
-        orderBy: [{ is_system: 'desc' }, { created_at: 'asc' }],
-      });
-    } catch {
-      // Fallback
-    }
-
-    if (!roles || roles.length === 0) {
-      // Construct from static system roles
-      roles = SYSTEM_ROLES.map((sr, idx) => ({
-        id: SYSTEM_ROLE_IDS[sr.code] || deterministicUuid(SYSTEM_ROLE_UUID_PREFIX, idx + 1),
-        code: sr.code,
-        name: sr.name,
-        description: sr.description,
-        is_system: true,
-        merchant_id: null,
-        created_at: new Date('2026-01-01T00:00:00Z'),
-        updated_at: new Date('2026-01-01T00:00:00Z'),
-        permissions: sr.permissions.map((code) => {
-          const def = PLATFORM_PERMISSIONS.find((p) => p.code === code);
-          return {
-            permission: {
-              id: deterministicUuid(
-                PERMISSION_UUID_PREFIX,
-                PLATFORM_PERMISSIONS.findIndex((p) => p.code === code) + 1
-              ),
-              code,
-              name: def?.name || code,
-              description: def?.description || '',
-              category: def?.category || 'IAM',
-            },
-          };
-        }),
-      }));
-    }
+      },
+      orderBy: [{ is_system: 'desc' }, { created_at: 'asc' }],
+    });
 
     // Get active user counts for each role in this merchant
     const roleItems = await Promise.all(
@@ -441,53 +398,14 @@ export class RbacService {
   async getRoleById(roleId: string, actor: ActorContext, correlationId: string) {
     await this.ensurePlatformSeed();
 
-    let role: any = null;
-    try {
-      role = await this.prisma.role.findUnique({
-        where: { id: roleId },
-        include: {
-          permissions: {
-            include: { permission: true },
-          },
+    const role = await this.prisma.role.findUnique({
+      where: { id: roleId },
+      include: {
+        permissions: {
+          include: { permission: true },
         },
-      });
-    } catch {
-      // fallback check against static system roles
-    }
-
-    if (!role) {
-      // Check if roleId corresponds to a static system role
-      const foundSysRole = SYSTEM_ROLES.find(
-        (sr) => SYSTEM_ROLE_IDS[sr.code] === roleId || sr.code === roleId
-      );
-      if (foundSysRole) {
-        role = {
-          id: SYSTEM_ROLE_IDS[foundSysRole.code],
-          code: foundSysRole.code,
-          name: foundSysRole.name,
-          description: foundSysRole.description,
-          is_system: true,
-          merchant_id: null,
-          created_at: new Date('2026-01-01T00:00:00Z'),
-          updated_at: new Date('2026-01-01T00:00:00Z'),
-          permissions: foundSysRole.permissions.map((code) => {
-            const def = PLATFORM_PERMISSIONS.find((p) => p.code === code);
-            return {
-              permission: {
-                id: deterministicUuid(
-                  PERMISSION_UUID_PREFIX,
-                  PLATFORM_PERMISSIONS.findIndex((p) => p.code === code) + 1
-                ),
-                code,
-                name: def?.name || code,
-                description: def?.description || '',
-                category: def?.category || 'IAM',
-              },
-            };
-          }),
-        };
-      }
-    }
+      },
+    });
 
     if (!role) {
       throw new CanonicalApiException(
