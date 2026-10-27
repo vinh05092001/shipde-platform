@@ -91,6 +91,7 @@ export class RbacService {
             where: { code: sr.code },
             update: {
               name: sr.name,
+              name_lower: sr.name.toLowerCase(),
               description: sr.description,
               is_system: true,
             },
@@ -98,6 +99,7 @@ export class RbacService {
               id: roleId,
               code: sr.code,
               name: sr.name,
+              name_lower: sr.name.toLowerCase(),
               description: sr.description,
               is_system: true,
               merchant_id: null,
@@ -673,6 +675,7 @@ export class RbacService {
           data: {
             merchant_id: actor.merchantId,
             name: trimmedName,
+            name_lower: trimmedName.toLowerCase(),
             description: dto.description?.trim() || null,
             is_system: false,
           },
@@ -949,6 +952,7 @@ export class RbacService {
           where: { id: roleId },
           data: {
             name: updatedName,
+            name_lower: updatedName.toLowerCase(),
             description:
               dto.description !== undefined
                 ? dto.description?.trim() || null

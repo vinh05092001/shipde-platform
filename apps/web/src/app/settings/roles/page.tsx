@@ -98,15 +98,13 @@ export default function RolesSettingsPage() {
       setPermissions(permsJson.data.permissions || []);
       setCategories(permsJson.data.categories || []);
       setRoles(rolesJson.data.roles || []);
-      setCanManageRoles(
-        Boolean(rolesJson.data?.can_manage_roles ?? (user?.role === 'OWNER'))
-      );
+      setCanManageRoles(Boolean(rolesJson.data?.can_manage_roles ?? user?.role === 'OWNER'));
     } catch (err: any) {
       setErrorMsg(err.message || 'Lỗi kết nối máy chủ khi tải dữ liệu phân quyền');
     } finally {
       setLoading(false);
     }
-  }, [API_BASE, token, user?.role]);
+  }, [API_BASE, token, user]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- initial roles and permissions catalog fetch
@@ -400,8 +398,8 @@ export default function RolesSettingsPage() {
         <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs flex items-center gap-2.5">
           <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0" />
           <span>
-            Bạn chỉ có quyền <strong>xem</strong> danh mục vai trò. Thao tác tạo hoặc chỉnh sửa quyền
-            hạn yêu cầu quyền <strong>iam:manage_users</strong> hoặc tài khoản{' '}
+            Bạn chỉ có quyền <strong>xem</strong> danh mục vai trò. Thao tác tạo hoặc chỉnh sửa
+            quyền hạn yêu cầu quyền <strong>iam:manage_users</strong> hoặc tài khoản{' '}
             <strong>Chủ Shop (Owner)</strong>.
           </span>
         </div>

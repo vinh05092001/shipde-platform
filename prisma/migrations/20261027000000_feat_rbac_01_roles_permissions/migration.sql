@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS "roles" (
     "merchant_id" UUID,
     "code" VARCHAR(64),
     "name" VARCHAR(255) NOT NULL,
+    "name_lower" VARCHAR(255),
     "description" TEXT,
     "is_system" BOOLEAN NOT NULL DEFAULT false,
     "created_at" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -21,6 +22,24 @@ CREATE TABLE IF NOT EXISTS "roles" (
 
     CONSTRAINT "roles_pkey" PRIMARY KEY ("id")
 );
+
+-- AlterTable (idempotency if roles table already existed without name_lower)
+ALTER TABLE "roles" ADD COLUMN IF NOT EXISTS "name_lower" VARCHAR(255);
+UPDATE "roles" SET "name_lower" = LOWER("name") WHERE "name_lower" IS NULL;
+
+-- Trigger to maintain name_lower automatically
+CREATE OR REPLACE FUNCTION set_role_name_lower() RETURNS trigger AS $$
+BEGIN
+    NEW.name_lower := LOWER(NEW.name);
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_role_name_lower ON "roles";
+CREATE TRIGGER trg_role_name_lower
+BEFORE INSERT OR UPDATE OF "name" ON "roles"
+FOR EACH ROW
+EXECUTE FUNCTION set_role_name_lower();
 
 -- CreateTable
 CREATE TABLE IF NOT EXISTS "permissions" (
@@ -45,8 +64,7 @@ CREATE TABLE IF NOT EXISTS "role_permissions" (
 );
 
 -- CreateIndex
-CREATE UNIQUE INDEX IF NOT EXISTS "roles_merchant_id_name_key" ON "roles"("merchant_id", "name");
-CREATE UNIQUE INDEX IF NOT EXISTS "roles_merchant_id_lower_name_key" ON "roles"("merchant_id", LOWER("name"));
+CREATE UNIQUE INDEX IF NOT EXISTS "roles_merchant_id_name_lower_key" ON "roles"("merchant_id", "name_lower");
 CREATE UNIQUE INDEX IF NOT EXISTS "roles_code_key" ON "roles"("code");
 
 -- CreateIndex

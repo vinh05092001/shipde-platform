@@ -336,6 +336,7 @@ model Role {
   merchant_id       String?           @db.Uuid
   code              String?           @unique @db.VarChar(64)
   name              String            @db.VarChar(255)
+  name_lower        String?           @db.VarChar(255)
   description       String?           @db.Text
   is_system         Boolean           @default(false)
   created_at        DateTime          @default(now()) @db.Timestamptz
@@ -345,7 +346,7 @@ model Role {
   permissions       RolePermission[]
   users             User[]
 
-  @@unique([merchant_id, name])
+  @@unique([merchant_id, name_lower])
   @@index([merchant_id, is_system])
   @@map("roles")
 }

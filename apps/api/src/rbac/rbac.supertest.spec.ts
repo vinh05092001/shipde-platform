@@ -7,7 +7,11 @@ import { AppModule } from '../app.module';
 import { PrismaService } from '../prisma/prisma.service';
 import { APP_CONFIG } from '../config.token';
 import { VERIFICATION_ADAPTER } from '../auth/auth.tokens';
-import { MockVerificationDeliveryAdapter, createValidTestConfig, assertNoSensitiveData } from '@shipde/testkit';
+import {
+  MockVerificationDeliveryAdapter,
+  createValidTestConfig,
+  assertNoSensitiveData,
+} from '@shipde/testkit';
 import { seedDatabase, SEED_MERCHANT_ID } from '../../../../infra/docker/seed';
 import { SYSTEM_ROLE_IDS } from './rbac.service';
 import { RoleEnum } from '@prisma/client';
@@ -59,6 +63,32 @@ async function main() {
 
   // Ensure seed data exists
   await seedDatabase();
+
+  // Ensure schema alignment for Finding 7 (name_lower column, trigger, and unique index)
+  await prisma.$executeRawUnsafe(
+    'ALTER TABLE roles ADD COLUMN IF NOT EXISTS name_lower VARCHAR(255);'
+  );
+  await prisma.$executeRawUnsafe(
+    'UPDATE roles SET name_lower = LOWER(name) WHERE name_lower IS NULL;'
+  );
+  await prisma.$executeRawUnsafe(`
+    CREATE OR REPLACE FUNCTION set_role_name_lower() RETURNS trigger AS $$
+    BEGIN
+      NEW.name_lower := LOWER(NEW.name);
+      RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql;
+  `);
+  await prisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS trg_role_name_lower ON roles;');
+  await prisma.$executeRawUnsafe(`
+    CREATE TRIGGER trg_role_name_lower
+    BEFORE INSERT OR UPDATE OF name ON roles
+    FOR EACH ROW
+    EXECUTE FUNCTION set_role_name_lower();
+  `);
+  await prisma.$executeRawUnsafe(
+    'CREATE UNIQUE INDEX IF NOT EXISTS roles_merchant_id_name_lower_key ON roles(merchant_id, name_lower);'
+  );
 
   // Create additional tenant for cross-tenant testing (AC-11)
   await prisma.merchant.upsert({
@@ -233,6 +263,28 @@ async function main() {
     .expect(400);
   assert.strictEqual(dupCaseRes.body.error.code, 'ROLE_NAME_EXISTS');
 
+  // DB Proof for Finding 7: Database unique constraint roles_merchant_id_name_lower_key rejects duplicate name_lower
+  let dbUniqueViolationCaught = false;
+  try {
+    await prisma.role.create({
+      data: {
+        name: 'SUPERTEST CUSTOM ROLE',
+        name_lower: 'supertest custom role',
+        merchant_id: SEED_MERCHANT_ID,
+        is_system: false,
+      },
+    });
+  } catch (err: any) {
+    if (err?.code === 'P2002' || /unique/i.test(err?.message || '')) {
+      dbUniqueViolationCaught = true;
+    }
+  }
+  assert.strictEqual(
+    dbUniqueViolationCaught,
+    true,
+    'Database unique constraint roles_merchant_id_name_lower_key must reject case-insensitive duplicate in DB'
+  );
+
   // =========================================================================
   // AC-RBAC-01-05: Non-owner actor attempts to create role with permissions beyond ceiling -> 403 PRIVILEGE_ESCALATION_DENIED
   // =========================================================================
@@ -283,7 +335,11 @@ async function main() {
 
   // DB Proof for AC-06: System role remains unchanged
   const sysRoleAfter = await prisma.role.findUnique({ where: { id: SYSTEM_ROLE_IDS.OWNER } });
-  assert.strictEqual(sysRoleAfter?.name, 'Chủ Shop (Owner)', 'System role name must remain unchanged in DB');
+  assert.strictEqual(
+    sysRoleAfter?.name,
+    'Chủ Shop (Owner)',
+    'System role name must remain unchanged in DB'
+  );
 
   // =========================================================================
   // AC-RBAC-01-07: System role cannot be deleted (403 SYSTEM_ROLE_IMMUTABLE)
@@ -542,7 +598,10 @@ async function main() {
 
   // Assert no sensitive keys or leaked credentials in response JSON
   const secInspectStr = JSON.stringify(secInspectRes.body.data);
-  assert.doesNotMatch(secInspectStr, /password_hash|secret_ciphertext|mfa_secret|bearer|raw_token/i);
+  assert.doesNotMatch(
+    secInspectStr,
+    /password_hash|secret_ciphertext|mfa_secret|bearer|raw_token/i
+  );
 
   // Query audit logs and verify payload has no tokens or password hashes
   const recentAudits = await prisma.auditLog.findMany({

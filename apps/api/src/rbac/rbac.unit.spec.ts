@@ -176,14 +176,15 @@ class MockPrismaService {
       return r;
     },
     create: async (args: any) => {
+      const nameLower = (args.data.name_lower || args.data.name || '').trim().toLowerCase();
       const duplicate = this.roles.find(
         (r) =>
           r.merchant_id === args.data.merchant_id &&
-          r.name.trim().toLowerCase() === args.data.name.trim().toLowerCase()
+          (r.name_lower || r.name).trim().toLowerCase() === nameLower
       );
       if (duplicate) {
         const error: any = new Error(
-          'Unique constraint failed on the constraint: roles_merchant_id_lower_name_key'
+          'Unique constraint failed on the constraint: roles_merchant_id_name_lower_key'
         );
         error.code = 'P2002';
         throw error;
@@ -191,6 +192,7 @@ class MockPrismaService {
       const created = {
         id: args.data.id || `custom-role-${this.roles.length + 1}`,
         ...args.data,
+        name_lower: nameLower,
         created_at: new Date(),
         updated_at: new Date(),
       };
@@ -200,9 +202,27 @@ class MockPrismaService {
     update: async (args: any) => {
       const idx = this.roles.findIndex((r) => r.id === args.where.id);
       if (idx === -1) throw new Error('Not found');
+      const updatedName = args.data.name;
+      const nameLower = (args.data.name_lower || updatedName || '').trim().toLowerCase();
+      if (updatedName) {
+        const duplicate = this.roles.find(
+          (r) =>
+            r.id !== args.where.id &&
+            r.merchant_id === this.roles[idx].merchant_id &&
+            (r.name_lower || r.name).trim().toLowerCase() === nameLower
+        );
+        if (duplicate) {
+          const error: any = new Error(
+            'Unique constraint failed on the constraint: roles_merchant_id_name_lower_key'
+          );
+          error.code = 'P2002';
+          throw error;
+        }
+      }
       this.roles[idx] = {
         ...this.roles[idx],
         ...args.data,
+        ...(updatedName ? { name_lower: nameLower } : {}),
         updated_at: new Date(),
       };
       return this.roles[idx];
@@ -1227,6 +1247,60 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
       },
       (err: any) => {
         assert.strictEqual(err.message, 'Simulated database user count error');
+        return true;
+      }
+    );
+  });
+
+  // Finding 7 (P2 Round 2): Case-insensitive unique constraint represented in schema via merchant_id and name_lower
+  test('Finding 7 / BR-RBAC-05: Case-insensitive unique constraint represented in schema via merchant_id and name_lower prevents "Admin" and "admin"', async () => {
+    // 1. Create first role "Admin"
+    const role1 = await service.createRole(
+      {
+        name: 'Admin',
+        permissions: ['pii:unmask'],
+      },
+      OWNER_ACTOR,
+      '127.0.0.1',
+      'corr-f7-1'
+    );
+    assert.strictEqual(role1.data.role.name, 'Admin');
+
+    // 2. Attempt to create "admin" in same tenant -> must fail with ROLE_NAME_EXISTS
+    await assert.rejects(
+      async () => {
+        await service.createRole(
+          {
+            name: 'admin',
+            permissions: ['pii:unmask'],
+          },
+          OWNER_ACTOR,
+          '127.0.0.1',
+          'corr-f7-2'
+        );
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 400);
+        assert.strictEqual(err.code, 'ROLE_NAME_EXISTS');
+        return true;
+      }
+    );
+
+    // 3. Direct DB insert violating schema unique index roles_merchant_id_name_lower_key
+    await assert.rejects(
+      async () => {
+        await mockPrisma.role.create({
+          data: {
+            merchant_id: MERCHANT_A,
+            name: 'ADMIN',
+            name_lower: 'admin',
+          },
+        });
+      },
+      (err: any) => {
+        assert.strictEqual(err.code, 'P2002');
+        assert.match(err.message, /roles_merchant_id_name_lower_key/);
         return true;
       }
     );
