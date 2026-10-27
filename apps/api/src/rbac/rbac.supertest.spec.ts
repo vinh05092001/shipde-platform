@@ -1,5 +1,7 @@
 import 'reflect-metadata';
 import * as assert from 'node:assert';
+import * as path from 'node:path';
+import { execSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import request from 'supertest';
 import { Test, TestingModule } from '@nestjs/testing';
@@ -629,12 +631,30 @@ async function main() {
   // =========================================================================
   // AC-RBAC-01-16: Security inspection of role endpoints and audit logs -> No sensitive secrets or tokens exposed
   // =========================================================================
+  const secRoleCreateRes = await request(server)
+    .post('/api/v1/roles')
+    .set('Authorization', `Bearer ${ownerToken}`)
+    .send({
+      name: 'Supertest Security Inspection Role AC-16',
+      description: 'Role for security assertion',
+      permissions: ['order:view_create'],
+    })
+    .expect(201);
+
+  // Assert helper on role payloads
+  assertNoSensitiveData(secRoleCreateRes.body.data);
+
+  const secRoleGetRes = await request(server)
+    .get(`/api/v1/roles/${secRoleCreateRes.body.data.role.id}`)
+    .set('Authorization', `Bearer ${ownerToken}`)
+    .expect(200);
+  assertNoSensitiveData(secRoleGetRes.body.data);
+
   const secInspectRes = await request(server)
     .get('/api/v1/roles')
     .set('Authorization', `Bearer ${ownerToken}`)
     .expect(200);
 
-  // Assert no sensitive keys or leaked credentials in response JSON
   const secInspectStr = JSON.stringify(secInspectRes.body.data);
   assert.doesNotMatch(
     secInspectStr,
@@ -642,6 +662,13 @@ async function main() {
   );
 
   // Query audit logs and verify payload has no tokens or password hashes
+  const secAuditEntry = await prisma.auditLog.findFirst({
+    where: { entity_id: secRoleCreateRes.body.data.role.id },
+  });
+  assert.ok(secAuditEntry, 'Audit log entry must be recorded for security inspection role');
+  assertNoSensitiveData(secAuditEntry.new_value);
+  assertNoSensitiveData(secAuditEntry.old_value);
+
   const recentAudits = await prisma.auditLog.findMany({
     where: { merchant_id: SEED_MERCHANT_ID },
     take: 5,
@@ -656,6 +683,13 @@ async function main() {
     assert.ok(!auditStr.includes('password_hash'));
     assert.ok(!auditStr.includes('secret_ciphertext'));
   }
+
+  // Wire pnpm security:secrets scan verification (AC-RBAC-01-16 / Finding 3)
+  const pnpmCmd = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
+  execSync(`${pnpmCmd} security:secrets`, {
+    cwd: path.resolve(__dirname, '../../../..'),
+    stdio: 'pipe',
+  });
 
   // =========================================================================
   // Finding 2 (Round 6): Tenant Deletion Cascade Compatibility
