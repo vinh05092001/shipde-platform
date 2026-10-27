@@ -644,7 +644,7 @@ paths:
       summary: List all shops (admin) (API-ADMIN-SHOP-LIST, FEAT-AUTH-02)
       operationId: listAdminShops
       security:
-        - adminApiKeyAuth: []
+        - bearerAuth: []
       parameters:
         - name: limit
           in: query
@@ -670,6 +670,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AdminListShopsResponse'
+        '401':
+          $ref: '#/components/responses/Error'
         '403':
           $ref: '#/components/responses/Error'
     post:
@@ -678,7 +680,7 @@ paths:
       description: Platform operator provisions initial shop owner account without exposing public self-registration.
       operationId: createAdminShop
       security:
-        - adminApiKeyAuth: []
+        - bearerAuth: []
       requestBody:
         required: true
         content:
@@ -693,6 +695,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/AdminCreateShopResponse'
         '400':
+          $ref: '#/components/responses/Error'
+        '401':
           $ref: '#/components/responses/Error'
         '403':
           $ref: '#/components/responses/Error'
@@ -936,10 +940,6 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
-    adminApiKeyAuth:
-      type: apiKey
-      in: header
-      name: x-admin-key
   parameters:
     Id:
       name: id

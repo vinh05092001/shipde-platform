@@ -2347,6 +2347,7 @@ export class AuthService {
           data: {
             merchant_id: meta.merchantId,
             user_id: meta.userId || null,
+            actor: meta.actor || null,
             action: meta.action,
             entity_type: meta.resource.split(':')[0] || 'Auth',
             entity_id: meta.resource.split(':')[1] || meta.userId || 'system',
@@ -3111,7 +3112,7 @@ export class AuthService {
     dto: AdminCreateShopDto,
     clientIp: string,
     correlationId: string,
-    actor = 'admin:key'
+    actor = 'operator'
   ): Promise<{
     success: boolean;
     data: AdminCreatedShopResult;
@@ -3278,7 +3279,7 @@ export class AuthService {
         await this.logAudit({
           merchantId: match.merchant.id,
           userId: match.id,
-          actor: actor || 'admin:key',
+          actor: actor || 'operator',
           action: 'ADMIN_RETRY_SHOP_SETUP',
           resource: `merchant:${match.merchant.id}`,
           correlationId,
@@ -3487,7 +3488,7 @@ export class AuthService {
     await this.logAudit({
       merchantId: merchant.id,
       userId: user.id,
-      actor: actor || 'admin:key',
+      actor: actor || 'operator',
       action: 'ADMIN_CREATE_SHOP',
       resource: `merchant:${merchant.id}`,
       correlationId,
