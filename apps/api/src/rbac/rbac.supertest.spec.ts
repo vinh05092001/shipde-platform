@@ -7,8 +7,7 @@ import { AppModule } from '../app.module';
 import { PrismaService } from '../prisma/prisma.service';
 import { APP_CONFIG } from '../config.token';
 import { VERIFICATION_ADAPTER } from '../auth/auth.tokens';
-import { AppConfig } from '@shipde/config';
-import { MockVerificationDeliveryAdapter } from '@shipde/testkit';
+import { MockVerificationDeliveryAdapter, createValidTestConfig, assertNoSensitiveData } from '@shipde/testkit';
 import { seedDatabase, SEED_MERCHANT_ID } from '../../../../infra/docker/seed';
 import { SYSTEM_ROLE_IDS } from './rbac.service';
 import { RoleEnum } from '@prisma/client';
@@ -29,29 +28,15 @@ async function main() {
     process.env.DATABASE_URL ||
     'postgresql://postgres:postgres@localhost:5433/shipde_dev?schema=public';
   process.env.DATABASE_URL = databaseUrl;
-  const testConfig = {
-    NODE_ENV: 'test',
+
+  const testConfig = createValidTestConfig({
+    DATABASE_URL: databaseUrl,
     PORT: 3098,
     WORKER_HEALTH_PORT: 3099,
-    DATABASE_URL: databaseUrl,
-    REDIS_HOST: process.env.REDIS_HOST || 'localhost',
-    REDIS_PORT: Number(process.env.REDIS_PORT || 6379),
-    S3_ENDPOINT: process.env.S3_ENDPOINT || 'http://localhost:9000',
-    S3_REGION: 'us-east-1',
-    S3_ACCESS_KEY: 'minioadmin',
-    S3_SECRET_KEY: 'minioadmin',
-    S3_BUCKET: 'test-bucket',
-    S3_FORCE_PATH_STYLE: true,
     CARRIER_MODE: 'disabled',
-    LOG_LEVEL: 'info',
-    AUTH_TOKEN_TTL_SECONDS: 43200,
     AUTH_LOGIN_OTP_ENABLED: false,
-    PASSWORD_RESET_TTL_SECONDS: 3600,
-    FRONTEND_URL: 'http://localhost:3000',
-    AUDIT_IDENTIFIER_HMAC_KEY: 'test-key-32-chars-rbac-audit',
-    AUTH_TOKEN_SECRET: 'test-jwt-secret-at-least-32-bytes-long!',
     TRUST_PROXY_HOPS: 1,
-  } as AppConfig;
+  });
 
   const moduleFixture: TestingModule = await Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(APP_CONFIG)
@@ -72,27 +57,22 @@ async function main() {
     return;
   }
 
-  try {
-    await seedDatabase(prisma);
-  } catch (err: any) {
-    if (process.env.CI) throw err;
-    console.warn('Database seed failed (unmigrated DB); skipping RBAC Supertest suite.');
-    await app.close();
-    return;
-  }
+  // Ensure seed data exists
+  await seedDatabase();
 
-  // Setup fixtures
+  // Create additional tenant for cross-tenant testing (AC-11)
   await prisma.merchant.upsert({
     where: { id: OTHER_MERCHANT_ID },
     update: {},
     create: {
       id: OTHER_MERCHANT_ID,
-      name: 'Other Tenant Merchant',
-      code: 'OTHER_TENANT_RBAC',
+      name: 'Other Tenant Store Supertest',
+      code: 'TENANT_SUPERTEST_OTHER',
       status: 'active',
     },
   });
 
+  // Setup fixture users
   for (const [id, mId, email, role] of [
     [OWNER_ID, SEED_MERCHANT_ID, 'owner-rbac@shipde.vn', RoleEnum.OWNER],
     [OPS_ID, SEED_MERCHANT_ID, 'ops-rbac@shipde.vn', RoleEnum.OPS_CSKH],
@@ -123,7 +103,8 @@ async function main() {
     });
   }
 
-  const createSession = async (userId: string, mId: string) => {
+  // Helper to create active device session & bearer token
+  const createSession = async (userId: string, merchantId: string): Promise<string> => {
     const raw = randomBytes(48).toString('hex');
     const hash = createHash('sha256').update(raw).digest('hex');
     await prisma.deviceSession.upsert({
@@ -131,15 +112,14 @@ async function main() {
       update: { status: 'ACTIVE' },
       create: {
         user_id: userId,
-        merchant_id: mId,
+        merchant_id: merchantId,
         session_token_hash: hash,
         device_id: 'test_supertest_device',
         device_model: 'Supertest',
-        user_agent: 'Supertest/1.0',
+        user_agent: 'Supertest',
         ip_address: '127.0.0.1',
-        auth_assurance: 'PASSWORD',
         status: 'ACTIVE',
-        last_active_at: new Date(),
+        auth_assurance: 'PASSWORD',
         expires_at: new Date(Date.now() + 3600000),
       },
     });
@@ -160,6 +140,8 @@ async function main() {
           'Supertest Custom Role Updated',
           'Delegated Manager Role',
           'Escalation Attempt Role',
+          'Audit Rollback Test Role',
+          'Cross Tenant Custom Role',
         ],
       },
     },
@@ -167,7 +149,9 @@ async function main() {
 
   console.log('--- Running RBAC Supertest End-to-End HTTP tests ---');
 
+  // =========================================================================
   // AC-RBAC-01-01: List permissions returns all 20 canonical permissions across categories
+  // =========================================================================
   const permRes = await request(server)
     .get('/api/v1/permissions')
     .set('Authorization', `Bearer ${ownerToken}`)
@@ -175,14 +159,18 @@ async function main() {
   assert.strictEqual(permRes.body.data.permissions.length, 20);
   assert.ok(permRes.body.data.categories.length >= 6);
 
+  // =========================================================================
   // AC-RBAC-01-02: List roles returns system roles plus tenant custom roles
+  // =========================================================================
   const rolesRes = await request(server)
     .get('/api/v1/roles')
     .set('Authorization', `Bearer ${ownerToken}`)
     .expect(200);
   assert.ok(rolesRes.body.data.roles.length >= 5);
 
+  // =========================================================================
   // AC-RBAC-01-03: Create custom role persists role, permissions, and audit log
+  // =========================================================================
   const testCorrelationId = 'test-corr-create-role-123';
   const createRes = await request(server)
     .post('/api/v1/roles')
@@ -221,7 +209,9 @@ async function main() {
   assert.strictEqual(createAudit?.merchant_id, SEED_MERCHANT_ID);
   assert.strictEqual((createAudit?.new_value as any)?.correlation_id, testCorrelationId);
 
+  // =========================================================================
   // AC-RBAC-01-04: Duplicate role name returns 400 ROLE_NAME_EXISTS
+  // =========================================================================
   const dupRes = await request(server)
     .post('/api/v1/roles')
     .set('Authorization', `Bearer ${ownerToken}`)
@@ -243,7 +233,9 @@ async function main() {
     .expect(400);
   assert.strictEqual(dupCaseRes.body.error.code, 'ROLE_NAME_EXISTS');
 
-  // Setup Delegated Admin for AC-05 & AC-13 (has iam:manage_users but NOT reconciliation:approve_rate_policy)
+  // =========================================================================
+  // AC-RBAC-01-05: Non-owner actor attempts to create role with permissions beyond ceiling -> 403 PRIVILEGE_ESCALATION_DENIED
+  // =========================================================================
   const delegRole = await prisma.role.create({
     data: {
       name: 'Delegated Manager Role',
@@ -265,7 +257,6 @@ async function main() {
   });
   const delegatedToken = await createSession(DELEGATED_ADMIN_ID, SEED_MERCHANT_ID);
 
-  // AC-RBAC-01-05 & AC-13: Actor with iam:manage_users attempts to grant privilege beyond ceiling -> PRIVILEGE_ESCALATION_DENIED
   const escalRes = await request(server)
     .post('/api/v1/roles')
     .set('Authorization', `Bearer ${delegatedToken}`)
@@ -276,7 +267,13 @@ async function main() {
     .expect(403);
   assert.strictEqual(escalRes.body.error.code, 'PRIVILEGE_ESCALATION_DENIED');
 
-  // AC-RBAC-01-06 & AC-15: System role cannot be modified (403 SYSTEM_ROLE_IMMUTABLE)
+  // DB Proof for AC-05: No row created in DB
+  const escDb = await prisma.role.findFirst({ where: { name: 'Escalation Attempt Role' } });
+  assert.strictEqual(escDb, null, 'Escalation attempt role must not exist in DB');
+
+  // =========================================================================
+  // AC-RBAC-01-06: System role cannot be modified (403 SYSTEM_ROLE_IMMUTABLE)
+  // =========================================================================
   const patchSysRes = await request(server)
     .patch(`/api/v1/roles/${SYSTEM_ROLE_IDS.OWNER}`)
     .set('Authorization', `Bearer ${ownerToken}`)
@@ -284,14 +281,26 @@ async function main() {
     .expect(403);
   assert.strictEqual(patchSysRes.body.error.code, 'SYSTEM_ROLE_IMMUTABLE');
 
-  // AC-RBAC-01-07 & AC-15: System role cannot be deleted (403 SYSTEM_ROLE_IMMUTABLE)
+  // DB Proof for AC-06: System role remains unchanged
+  const sysRoleAfter = await prisma.role.findUnique({ where: { id: SYSTEM_ROLE_IDS.OWNER } });
+  assert.strictEqual(sysRoleAfter?.name, 'Chủ Shop (Owner)', 'System role name must remain unchanged in DB');
+
+  // =========================================================================
+  // AC-RBAC-01-07: System role cannot be deleted (403 SYSTEM_ROLE_IMMUTABLE)
+  // =========================================================================
   const delSysRes = await request(server)
     .delete(`/api/v1/roles/${SYSTEM_ROLE_IDS.OWNER}`)
     .set('Authorization', `Bearer ${ownerToken}`)
     .expect(403);
   assert.strictEqual(delSysRes.body.error.code, 'SYSTEM_ROLE_IMMUTABLE');
 
-  // AC-RBAC-01-08 & AC-16: Update custom role updates DB, permissions, and writes audit log
+  // DB Proof for AC-07: System role preserved in DB
+  const sysRoleStillExists = await prisma.role.findUnique({ where: { id: SYSTEM_ROLE_IDS.OWNER } });
+  assert.ok(sysRoleStillExists, 'System role must still exist in DB');
+
+  // =========================================================================
+  // AC-RBAC-01-08: Update custom role updates DB, permissions, and writes audit log
+  // =========================================================================
   const updateCorrelationId = 'test-corr-update-role-456';
   const patchRes = await request(server)
     .patch(`/api/v1/roles/${createdRoleId}`)
@@ -304,7 +313,7 @@ async function main() {
     .expect(200);
   assert.strictEqual(patchRes.body.data.role.name, 'Supertest Custom Role Updated');
 
-  // DB and Audit assertion for AC-08 & AC-16
+  // DB and Audit assertion for AC-08
   const updatedDbRole = await prisma.role.findUnique({
     where: { id: createdRoleId },
     include: { permissions: { include: { permission: true } } },
@@ -328,7 +337,9 @@ async function main() {
     ['order:view_create', 'shipment:print_handover'].sort()
   );
 
+  // =========================================================================
   // AC-RBAC-01-09: Delete role with active assigned users returns 400 ROLE_IN_USE
+  // =========================================================================
   await prisma.user.update({
     where: { id: ASSIGNED_USER_ID },
     data: { custom_role_id: createdRoleId, status: 'active' },
@@ -339,21 +350,23 @@ async function main() {
     .expect(400);
   assert.strictEqual(inUseDelRes.body.error.code, 'ROLE_IN_USE');
 
-  // AC-RBAC-01-11: Tenant Isolation forbids access to another merchant's custom role
-  const crossTenantRes = await request(server)
-    .get(`/api/v1/roles/${createdRoleId}`)
-    .set('Authorization', `Bearer ${otherOwnerToken}`)
-    .expect(403);
-  assert.strictEqual(crossTenantRes.body.error.code, 'FORBIDDEN');
+  // DB Proof for AC-09: Role and active user count preserved
+  const inUseRole = await prisma.role.findUnique({ where: { id: createdRoleId } });
+  assert.ok(inUseRole, 'Role must still exist in DB when delete is rejected');
+  const activeCount = await prisma.user.count({
+    where: { custom_role_id: createdRoleId, status: 'active' },
+  });
+  assert.strictEqual(activeCount, 1, 'Assigned user count must be preserved');
 
-  // AC-RBAC-01-12 & AC-14: Role assignment and dynamic permissions evaluation
-  // Unassign the user so role can be safely deleted later
+  // Unassign the user so role can be safely deleted in AC-10
   await prisma.user.update({
     where: { id: ASSIGNED_USER_ID },
     data: { custom_role_id: null },
   });
 
+  // =========================================================================
   // AC-RBAC-01-10: Delete custom role removes role and writes audit log
+  // =========================================================================
   const deleteCorrelationId = 'test-corr-delete-role-789';
   const deleteRes = await request(server)
     .delete(`/api/v1/roles/${createdRoleId}`)
@@ -377,7 +390,175 @@ async function main() {
   assert.ok(deleteAudit, 'Audit log for ROLE_DELETED must exist');
   assert.strictEqual((deleteAudit?.old_value as any)?.correlation_id, deleteCorrelationId);
 
+  // Create another custom role for AC-11, AC-14, AC-15, AC-16
+  const targetRole = await prisma.role.create({
+    data: {
+      name: 'Cross Tenant Custom Role',
+      merchant_id: SEED_MERCHANT_ID,
+      is_system: false,
+    },
+  });
+
+  // =========================================================================
+  // AC-RBAC-01-11: Tenant Isolation forbids GET, PATCH, and DELETE on another merchant's role
+  // =========================================================================
+  const crossGetRes = await request(server)
+    .get(`/api/v1/roles/${targetRole.id}`)
+    .set('Authorization', `Bearer ${otherOwnerToken}`)
+    .expect(403);
+  assert.strictEqual(crossGetRes.body.error.code, 'FORBIDDEN');
+
+  const crossPatchRes = await request(server)
+    .patch(`/api/v1/roles/${targetRole.id}`)
+    .set('Authorization', `Bearer ${otherOwnerToken}`)
+    .send({ name: 'Hacked Cross Tenant Role' })
+    .expect(403);
+  assert.strictEqual(crossPatchRes.body.error.code, 'FORBIDDEN');
+
+  const crossDelRes = await request(server)
+    .delete(`/api/v1/roles/${targetRole.id}`)
+    .set('Authorization', `Bearer ${otherOwnerToken}`)
+    .expect(403);
+  assert.strictEqual(crossDelRes.body.error.code, 'FORBIDDEN');
+
+  // DB Proof for AC-11: Role unaffected by cross-tenant mutation attempts
+  const targetDbAfterCross = await prisma.role.findUnique({ where: { id: targetRole.id } });
+  assert.strictEqual(targetDbAfterCross?.name, 'Cross Tenant Custom Role');
+
+  // =========================================================================
+  // AC-RBAC-01-12: Missing required role name during creation -> 400 VALIDATION_ERROR
+  // =========================================================================
+  const missingNameRes = await request(server)
+    .post('/api/v1/roles')
+    .set('Authorization', `Bearer ${ownerToken}`)
+    .send({
+      name: '',
+      permissions: ['order:view_create'],
+    })
+    .expect(400);
+  assert.strictEqual(missingNameRes.body.error.code, 'VALIDATION_ERROR');
+
+  // DB Proof for AC-12: No empty-named role created
+  const emptyNameRole = await prisma.role.findFirst({
+    where: { merchant_id: SEED_MERCHANT_ID, name: '' },
+  });
+  assert.strictEqual(emptyNameRole, null, 'No role should be created with empty name');
+
+  // =========================================================================
+  // AC-RBAC-01-13: Creation request with empty permission array -> 400 VALIDATION_ERROR
+  // =========================================================================
+  const emptyPermsRes = await request(server)
+    .post('/api/v1/roles')
+    .set('Authorization', `Bearer ${ownerToken}`)
+    .send({
+      name: 'Role With Empty Permissions',
+      permissions: [],
+    })
+    .expect(400);
+  assert.strictEqual(emptyPermsRes.body.error.code, 'VALIDATION_ERROR');
+
+  // DB Proof for AC-13: No role created
+  const emptyPermRole = await prisma.role.findFirst({
+    where: { merchant_id: SEED_MERCHANT_ID, name: 'Role With Empty Permissions' },
+  });
+  assert.strictEqual(emptyPermRole, null, 'No role should be created with empty permissions');
+
+  // =========================================================================
+  // AC-RBAC-01-14: User lacking iam:manage_users permission attempts role mutations -> 403 FORBIDDEN
+  // =========================================================================
+  // opsToken belongs to OPS user who has no iam:manage_users permission
+  const opsCreateRes = await request(server)
+    .post('/api/v1/roles')
+    .set('Authorization', `Bearer ${opsToken}`)
+    .send({
+      name: 'Unauthorized Role By Ops',
+      permissions: ['order:view_create'],
+    })
+    .expect(403);
+  assert.strictEqual(opsCreateRes.body.error.code, 'FORBIDDEN');
+
+  const opsPatchRes = await request(server)
+    .patch(`/api/v1/roles/${targetRole.id}`)
+    .set('Authorization', `Bearer ${opsToken}`)
+    .send({ name: 'Tampered By Ops' })
+    .expect(403);
+  assert.strictEqual(opsPatchRes.body.error.code, 'FORBIDDEN');
+
+  const opsDeleteRes = await request(server)
+    .delete(`/api/v1/roles/${targetRole.id}`)
+    .set('Authorization', `Bearer ${opsToken}`)
+    .expect(403);
+  assert.strictEqual(opsDeleteRes.body.error.code, 'FORBIDDEN');
+
+  // DB Proof for AC-14: Target role state unmodified
+  const targetDbAfterOps = await prisma.role.findUnique({ where: { id: targetRole.id } });
+  assert.strictEqual(targetDbAfterOps?.name, 'Cross Tenant Custom Role');
+
+  // =========================================================================
+  // AC-RBAC-01-15: Forced audit write failure against PostgreSQL rolls back transaction and returns canonical 500
+  // =========================================================================
+  // Add a CHECK constraint to audit_logs that rejects action = 'ROLE_CREATED' for rollback test
+  await prisma.$executeRawUnsafe(
+    "ALTER TABLE audit_logs ADD CONSTRAINT test_fail_audit_ac15 CHECK (action != 'ROLE_CREATED') NOT VALID;"
+  );
+
+  try {
+    const auditFailRes = await request(server)
+      .post('/api/v1/roles')
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .send({
+        name: 'Audit Rollback Test Role',
+        permissions: ['order:view_create'],
+      })
+      .expect(500);
+
+    assert.strictEqual(auditFailRes.body.error.code, 'INTERNAL_SERVER_ERROR');
+    // Ensure no raw SQL or driver text is leaked to the client
+    assert.doesNotMatch(auditFailRes.body.error.message || '', /constraint|sql|prisma|check/i);
+
+    // DB Proof for AC-15: Role creation must be completely rolled back in PostgreSQL
+    const rolledBackRole = await prisma.role.findFirst({
+      where: { name: 'Audit Rollback Test Role' },
+    });
+    assert.strictEqual(
+      rolledBackRole,
+      null,
+      'Role must not exist in DB after transaction rollback from audit write failure'
+    );
+  } finally {
+    // Drop the test constraint safely
+    await prisma.$executeRawUnsafe(
+      'ALTER TABLE audit_logs DROP CONSTRAINT IF EXISTS test_fail_audit_ac15;'
+    );
+  }
+
+  // =========================================================================
+  // AC-RBAC-01-16: Security inspection of role endpoints and audit logs -> No sensitive secrets or tokens exposed
+  // =========================================================================
+  const secInspectRes = await request(server)
+    .get('/api/v1/roles')
+    .set('Authorization', `Bearer ${ownerToken}`)
+    .expect(200);
+
+  // Assert no sensitive keys or leaked credentials in response JSON
+  const secInspectStr = JSON.stringify(secInspectRes.body.data);
+  assert.doesNotMatch(secInspectStr, /password_hash|secret_ciphertext|mfa_secret|bearer|raw_token/i);
+
+  // Query audit logs and verify payload has no tokens or password hashes
+  const recentAudits = await prisma.auditLog.findMany({
+    where: { merchant_id: SEED_MERCHANT_ID },
+    take: 5,
+    orderBy: { created_at: 'desc' },
+  });
+  for (const log of recentAudits) {
+    const auditStr = JSON.stringify(log);
+    assert.doesNotMatch(auditStr, /password_hash|secret_ciphertext|mfa_secret|raw_token/i);
+  }
+
   // Cleanup helper fixtures
+  await prisma.role.deleteMany({
+    where: { id: targetRole.id },
+  });
   await prisma.user.deleteMany({
     where: { id: { in: [DELEGATED_ADMIN_ID, ASSIGNED_USER_ID] } },
   });
