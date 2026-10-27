@@ -408,4 +408,106 @@ describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
       assert.ok(diffDays >= 89 && diffDays <= 91, 'Expiry must be approximately 90 days');
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Finding 3: BR-SESS-01 / BR-SESS-05 Heartbeat Scoped Persistence & Expiry
+  // ---------------------------------------------------------------------------
+  describe('SessionService Heartbeat Scoped Persistence (BR-SESS-01 / BR-SESS-05 / Finding 3)', () => {
+    it('scopes heartbeat update to user_id, merchant_id, and ACTIVE status, and rejects concurrent revoke', async () => {
+      let updateWhere: any = null;
+      let updateData: any = null;
+
+      const mockPrisma: any = {
+        deviceSession: {
+          findUnique: async () => ({
+            id: 'sess-active-1',
+            user_id: 'user-1',
+            merchant_id: 'merchant-1',
+            status: SessionStatusEnum.ACTIVE,
+            last_active_at: new Date(),
+            expires_at: new Date(Date.now() + 80 * 24 * 60 * 60 * 1000),
+          }),
+          updateMany: async ({ where, data }: any) => {
+            updateWhere = where;
+            updateData = data;
+            return { count: 1 };
+          },
+        },
+      };
+
+      const service = new SessionService(mockPrisma);
+      const res = await service.heartbeat('sess-active-1', 'user-1', 'merchant-1', 'sess-active-1');
+      assert.strictEqual(res.session_id, 'sess-active-1');
+      assert.strictEqual(updateWhere.id, 'sess-active-1');
+      assert.strictEqual(updateWhere.user_id, 'user-1');
+      assert.strictEqual(updateWhere.merchant_id, 'merchant-1');
+      assert.strictEqual(updateWhere.status, SessionStatusEnum.ACTIVE);
+      assert.ok(updateData.last_active_at instanceof Date);
+    });
+
+    it('rejects concurrent revoke when updateMany count is 0', async () => {
+      const mockPrisma: any = {
+        deviceSession: {
+          findUnique: async () => ({
+            id: 'sess-concurrent-1',
+            user_id: 'user-1',
+            merchant_id: 'merchant-1',
+            status: SessionStatusEnum.ACTIVE,
+            last_active_at: new Date(),
+            expires_at: new Date(Date.now() + 80 * 24 * 60 * 60 * 1000),
+          }),
+          updateMany: async () => ({ count: 0 }), // Concurrently revoked
+        },
+      };
+
+      const service = new SessionService(mockPrisma);
+      await assert.rejects(
+        async () => {
+          await service.heartbeat('sess-concurrent-1', 'user-1', 'merchant-1', 'sess-concurrent-1');
+        },
+        (err: any) => {
+          assert.strictEqual(err.getResponse()?.error?.code, 'SESSION_NOT_ACTIVE');
+          return true;
+        }
+      );
+    });
+
+    it('stores expired row as EXPIRED in DB before throwing SESSION_NOT_ACTIVE (BR-SESS-03)', async () => {
+      let expiredStatusSet = false;
+      const mockPrisma: any = {
+        deviceSession: {
+          findUnique: async () => ({
+            id: 'sess-expired-1',
+            user_id: 'user-1',
+            merchant_id: 'merchant-1',
+            status: SessionStatusEnum.ACTIVE,
+            last_active_at: new Date(Date.now() - 35 * 24 * 60 * 60 * 1000), // > 30 days
+            expires_at: new Date(Date.now() + 50 * 24 * 60 * 60 * 1000),
+          }),
+          updateMany: async ({ data }: any) => {
+            if (data.status === SessionStatusEnum.EXPIRED) {
+              expiredStatusSet = true;
+            }
+            return { count: 1 };
+          },
+        },
+      };
+
+      const service = new SessionService(mockPrisma);
+      await assert.rejects(
+        async () => {
+          await service.heartbeat('sess-expired-1', 'user-1', 'merchant-1', 'sess-expired-1');
+        },
+        (err: any) => {
+          assert.strictEqual(err.getResponse()?.error?.code, 'SESSION_NOT_ACTIVE');
+          return true;
+        }
+      );
+      assert.strictEqual(
+        expiredStatusSet,
+        true,
+        'Expired session must be updated to EXPIRED status in DB'
+      );
+    });
+  });
 });

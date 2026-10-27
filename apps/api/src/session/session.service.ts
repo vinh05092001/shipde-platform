@@ -396,6 +396,32 @@ export class SessionService {
       });
     }
 
+    const now = new Date();
+    const inactivityThreshold = new Date(now.getTime() - INACTIVITY_DAYS * 24 * 60 * 60 * 1000);
+    const isExpired = session.expires_at < now || session.last_active_at < inactivityThreshold;
+
+    if (session.status !== SessionStatusEnum.ACTIVE || isExpired) {
+      if (session.status === SessionStatusEnum.ACTIVE && isExpired) {
+        // BR-SESS-03: an expired row is stored as EXPIRED in DB
+        await this.prisma.deviceSession.updateMany({
+          where: {
+            id: sessionId,
+            merchant_id: merchantId,
+            user_id: userId,
+            status: SessionStatusEnum.ACTIVE,
+          },
+          data: { status: SessionStatusEnum.EXPIRED },
+        });
+      }
+      throw new ForbiddenException({
+        error: {
+          code: 'SESSION_NOT_ACTIVE',
+          message: 'Phiên không còn hoạt động',
+          retryable: false,
+        },
+      });
+    }
+
     if (currentSessionId && sessionId !== currentSessionId) {
       throw new ForbiddenException({
         error: {
@@ -406,11 +432,21 @@ export class SessionService {
       });
     }
 
-    const now = new Date();
-    const inactivityThreshold = new Date(now.getTime() - INACTIVITY_DAYS * 24 * 60 * 60 * 1000);
-    const isExpired = session.expires_at < now || session.last_active_at < inactivityThreshold;
+    // Atomic update scoped to merchant_id, user_id, ACTIVE status, and validity thresholds (BR-SESS-01, BR-SESS-05)
+    const updateResult = await this.prisma.deviceSession.updateMany({
+      where: {
+        id: sessionId,
+        merchant_id: merchantId,
+        user_id: userId,
+        status: SessionStatusEnum.ACTIVE,
+        expires_at: { gt: now },
+        last_active_at: { gt: inactivityThreshold },
+      },
+      data: { last_active_at: now },
+    });
 
-    if (session.status !== SessionStatusEnum.ACTIVE || isExpired) {
+    if (updateResult.count === 0) {
+      // Concurrently revoked or expired between read and update
       throw new ForbiddenException({
         error: {
           code: 'SESSION_NOT_ACTIVE',
@@ -420,14 +456,9 @@ export class SessionService {
       });
     }
 
-    const updated = await this.prisma.deviceSession.update({
-      where: { id: sessionId },
-      data: { last_active_at: now },
-    });
-
     return {
-      session_id: updated.id,
-      last_active_at: updated.last_active_at.toISOString(),
+      session_id: sessionId,
+      last_active_at: now.toISOString(),
     };
   }
 
