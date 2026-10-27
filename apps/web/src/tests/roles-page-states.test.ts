@@ -288,7 +288,8 @@ async function runTest() {
     initialHasLoadedSuccessfully: false,
   });
   assert.ok(
-    !inFlightFetchHtml.includes('Bạn chỉ có quyền') && !inFlightFetchHtml.includes('iam:manage_users'),
+    !inFlightFetchHtml.includes('Bạn chỉ có quyền') &&
+      !inFlightFetchHtml.includes('iam:manage_users'),
     'In-flight catalogue fetch must not render false forbidden callout before load completes (SCR-RBAC-01)'
   );
 

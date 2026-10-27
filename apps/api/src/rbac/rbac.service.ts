@@ -757,7 +757,13 @@ export class RbacService {
         'Tên vai trò không được vượt quá 255 ký tự',
         false,
         'Vui lòng nhập tên vai trò ngắn hơn 255 ký tự',
-        [{ field: 'name', code: 'MAX_LENGTH', message: 'Tên vai trò không được vượt quá 255 ký tự' }]
+        [
+          {
+            field: 'name',
+            code: 'MAX_LENGTH',
+            message: 'Tên vai trò không được vượt quá 255 ký tự',
+          },
+        ]
       );
     }
 
@@ -1052,7 +1058,13 @@ export class RbacService {
           'Tên vai trò không được vượt quá 255 ký tự',
           false,
           undefined,
-          [{ field: 'name', code: 'MAX_LENGTH', message: 'Tên vai trò không được vượt quá 255 ký tự' }]
+          [
+            {
+              field: 'name',
+              code: 'MAX_LENGTH',
+              message: 'Tên vai trò không được vượt quá 255 ký tự',
+            },
+          ]
         );
       }
       updatedName = dto.name.trim();
@@ -1245,8 +1257,7 @@ export class RbacService {
         }
 
         // Compute writes from lockedTargetRole snapshot (Finding 3 / Round 8)
-        const effectiveName =
-          dto.name !== undefined ? dto.name.trim() : lockedTargetRole.name;
+        const effectiveName = dto.name !== undefined ? dto.name.trim() : lockedTargetRole.name;
         const effectiveDescription =
           dto.description !== undefined
             ? dto.description?.trim() || null

@@ -567,9 +567,9 @@ async function main() {
   // AC-RBAC-01-15: Forced audit write failure against PostgreSQL rolls back transaction and returns canonical 500
   // =========================================================================
   // Ensure no legacy test constraint exists on shared database (Finding 6 / Round 8)
-  await prisma.$executeRawUnsafe(
-    'ALTER TABLE audit_logs DROP CONSTRAINT IF EXISTS test_fail_audit_ac15;'
-  ).catch(() => {});
+  await prisma
+    .$executeRawUnsafe('ALTER TABLE audit_logs DROP CONSTRAINT IF EXISTS test_fail_audit_ac15;')
+    .catch(() => {});
 
   // Intercept auditLog write inside the real PostgreSQL interactive transaction to simulate failure
   // without modifying shared database schema or leaving durable DDL hazards if killed

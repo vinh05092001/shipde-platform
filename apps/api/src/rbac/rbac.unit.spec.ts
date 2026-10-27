@@ -2371,9 +2371,15 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
     );
 
     // Verify row locks on users, roles, and role_permissions were executed
-    const lockedUsers = mockPrisma.rawQueries.some((q) => q.includes('FROM users') && q.includes('FOR UPDATE'));
-    const lockedRoles = mockPrisma.rawQueries.some((q) => q.includes('FROM roles') && q.includes('FOR UPDATE'));
-    const lockedRolePerms = mockPrisma.rawQueries.some((q) => q.includes('FROM role_permissions') && q.includes('FOR UPDATE'));
+    const lockedUsers = mockPrisma.rawQueries.some(
+      (q) => q.includes('FROM users') && q.includes('FOR UPDATE')
+    );
+    const lockedRoles = mockPrisma.rawQueries.some(
+      (q) => q.includes('FROM roles') && q.includes('FOR UPDATE')
+    );
+    const lockedRolePerms = mockPrisma.rawQueries.some(
+      (q) => q.includes('FROM role_permissions') && q.includes('FOR UPDATE')
+    );
     assert.ok(lockedUsers, 'Must execute SELECT ... FOR UPDATE on users');
     assert.ok(lockedRoles, 'Must execute SELECT ... FOR UPDATE on roles');
     assert.ok(lockedRolePerms, 'Must execute SELECT ... FOR UPDATE on role_permissions');
