@@ -88,7 +88,7 @@ export class SessionGuard implements CanActivate {
             code: 'SESSION_INVALID',
             message: 'Phiên đăng nhập đã hết hạn hoặc không hợp lệ',
             retryable: false,
-            next_action: 'Vui lòng đăng nhập lại',
+            next_action: 'LOGIN',
           },
         });
       }
@@ -104,7 +104,7 @@ export class SessionGuard implements CanActivate {
           code: 'SESSION_INVALID',
           message: 'Phiên đăng nhập đã hết hạn hoặc bị thu hồi',
           retryable: false,
-          next_action: 'Vui lòng đăng nhập lại',
+          next_action: 'LOGIN',
         },
       });
     }
