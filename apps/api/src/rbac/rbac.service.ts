@@ -1034,8 +1034,6 @@ export class RbacService {
           );
         }
 
-
-
         if (lockedRoles[0].is_system) {
           throw new CanonicalApiException(
             HttpStatus.FORBIDDEN,
