@@ -66,31 +66,12 @@ async function main() {
   // Ensure seed data exists
   await seedDatabase();
 
-  // Ensure schema alignment for Finding 7 (name_lower column, trigger, and unique index)
-  await prisma.$executeRawUnsafe(
-    'ALTER TABLE roles ADD COLUMN IF NOT EXISTS name_lower VARCHAR(255);'
-  );
-  await prisma.$executeRawUnsafe(
-    'UPDATE roles SET name_lower = LOWER(name) WHERE name_lower IS NULL;'
-  );
-  await prisma.$executeRawUnsafe(`
-    CREATE OR REPLACE FUNCTION set_role_name_lower() RETURNS trigger AS $$
-    BEGIN
-      NEW.name_lower := LOWER(NEW.name);
-      RETURN NEW;
-    END;
-    $$ LANGUAGE plpgsql;
-  `);
-  await prisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS trg_role_name_lower ON roles;');
-  await prisma.$executeRawUnsafe(`
-    CREATE TRIGGER trg_role_name_lower
-    BEFORE INSERT OR UPDATE OF name ON roles
-    FOR EACH ROW
-    EXECUTE FUNCTION set_role_name_lower();
-  `);
-  await prisma.$executeRawUnsafe(
-    'CREATE UNIQUE INDEX IF NOT EXISTS roles_merchant_id_name_lower_key ON roles(merchant_id, name_lower);'
-  );
+  // Deploy real migrations against the test database (Finding 3 / Round 12)
+  execSync('npx prisma migrate deploy', {
+    env: { ...process.env, DATABASE_URL: databaseUrl },
+    cwd: path.resolve(__dirname, '../../../../'),
+    stdio: 'pipe',
+  });
 
   // Create additional tenant for cross-tenant testing (AC-11)
   await prisma.merchant.upsert({
@@ -598,6 +579,13 @@ async function main() {
     })
     .expect(400);
   assert.strictEqual(missingNameRes.body.error.code, 'VALIDATION_ERROR');
+  const nameField = (
+    missingNameRes.body.error.fields ||
+    missingNameRes.body.error.details ||
+    []
+  ).find((f: any) => f.field === 'name');
+  assert.ok(nameField, 'Expected field error on name');
+  assert.strictEqual(nameField.code, 'REQUIRED');
 
   // DB Proof for AC-12: No empty-named role created
   const emptyNameRole = await prisma.role.findFirst({
@@ -617,6 +605,13 @@ async function main() {
     })
     .expect(400);
   assert.strictEqual(emptyPermsRes.body.error.code, 'VALIDATION_ERROR');
+  const permsField = (
+    emptyPermsRes.body.error.fields ||
+    emptyPermsRes.body.error.details ||
+    []
+  ).find((f: any) => f.field === 'permissions');
+  assert.ok(permsField, 'Expected field error on permissions');
+  assert.strictEqual(permsField.code, 'REQUIRED');
 
   // DB Proof for AC-13: No role created
   const emptyPermRole = await prisma.role.findFirst({
