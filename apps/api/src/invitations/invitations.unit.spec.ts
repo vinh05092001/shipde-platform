@@ -85,6 +85,7 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
           ...args.data,
         }),
         updateMany: async () => ({ count: 1 }),
+        deleteMany: async () => ({ count: 1 }),
         update: async (args: any) => ({ id: args?.where?.id, ...args?.data }),
         delete: async (args: any) => ({ id: args?.where?.id }),
       },
@@ -1878,10 +1879,10 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
       );
     });
 
-    it('proves createInvitation commits mutation and audit log inside single $transaction', async () => {
+    it('proves createInvitation commits mutation inside transaction and writes INVITATION_SENT audit upon delivery success', async () => {
       let transactionCalled = false;
       let invitationCreatedInTx = false;
-      let auditCreatedInTx = false;
+      let auditCreatedOnSuccess = false;
 
       const txPrisma = {
         ...mockPrisma,
@@ -1901,8 +1902,9 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
         },
         auditLog: {
           create: async (args: any) => {
-            assert.ok(transactionCalled, 'auditLog.create must be called inside $transaction');
-            auditCreatedInTx = true;
+            if (args.data?.action === 'INVITATION_SENT') {
+              auditCreatedOnSuccess = true;
+            }
             return { id: 'tx-audit-id', ...args.data };
           },
         },
@@ -1932,12 +1934,13 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
       assert.ok(res.data.id);
       assert.strictEqual(transactionCalled, true);
       assert.strictEqual(invitationCreatedInTx, true);
-      assert.strictEqual(auditCreatedInTx, true);
+      assert.strictEqual(auditCreatedOnSuccess, true);
     });
 
-    it('Finding 1: createInvitation compensates by deleting undispatched row and audit on delivery failure', async () => {
-      let invitationDeleted = false;
-      let auditDeleted = false;
+    it('Finding 1: createInvitation conditionally retires row with deleteMany predicates and logs compensating audit without deleting audit history on delivery failure', async () => {
+      let invitationDeletedManyWhere: any = null;
+      let auditDeletedCalled = false;
+      let compensatingAuditCreated: any = null;
 
       const mockPrismaWithCompensation = {
         user: {
@@ -1965,19 +1968,20 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
             updated_at: new Date(),
             consumed_at: null,
           }),
-          delete: async (args: any) => {
-            if (args.where.id === 'failed-dispatch-id') {
-              invitationDeleted = true;
-            }
-            return { id: args.where.id };
+          deleteMany: async (args: any) => {
+            invitationDeletedManyWhere = args.where;
+            return { count: 1 };
           },
         },
         auditLog: {
-          create: async (args: any) => ({ id: 'failed-audit-id', ...args.data }),
-          deleteMany: async (args: any) => {
-            if (args.where.entity_id === 'failed-dispatch-id') {
-              auditDeleted = true;
+          create: async (args: any) => {
+            if (args.data?.action === 'INVITATION_DELIVERY_FAILED') {
+              compensatingAuditCreated = args.data;
             }
+            return { id: 'failed-audit-id', ...args.data };
+          },
+          deleteMany: async () => {
+            auditDeletedCalled = true;
             return { count: 1 };
           },
         },
@@ -2016,12 +2020,91 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
         }
       );
 
-      assert.strictEqual(
-        invitationDeleted,
-        true,
-        'Undispatched invitation row must be deleted on delivery failure'
+      assert.ok(invitationDeletedManyWhere, 'invitation.deleteMany must be called');
+      assert.strictEqual(invitationDeletedManyWhere.id, 'failed-dispatch-id');
+      assert.strictEqual(invitationDeletedManyWhere.merchant_id, MERCHANT_ID);
+      assert.strictEqual(invitationDeletedManyWhere.status, 'PENDING');
+      assert.strictEqual(invitationDeletedManyWhere.consumed_at, null);
+      assert.ok(invitationDeletedManyWhere.token_hash, 'must assert token_hash predicate');
+      assert.strictEqual(auditDeletedCalled, false, 'Audit history must NEVER be deleted');
+      assert.ok(compensatingAuditCreated, 'Compensating audit event must be recorded');
+      assert.strictEqual(compensatingAuditCreated.action, 'INVITATION_DELIVERY_FAILED');
+    });
+
+    it('Finding 1: createInvitation delivery failure preserves accepted invite if concurrent accept committed (deleteMany count === 0)', async () => {
+      let compensatingAuditCreated = false;
+
+      const mockPrismaConcurrent = {
+        user: {
+          findFirst: async (args: any) => {
+            if (args?.where?.id === OWNER_USER_ID) {
+              return {
+                id: OWNER_USER_ID,
+                merchant_id: MERCHANT_ID,
+                role: 'OWNER',
+                status: 'active',
+                store_scopes: [],
+                warehouse_scopes: [],
+              };
+            }
+            return null;
+          },
+        },
+        invitation: {
+          findFirst: async () => null,
+          updateMany: async () => ({ count: 0 }),
+          create: async (args: any) => ({
+            id: 'concurrent-accept-id',
+            ...args.data,
+            created_at: new Date(),
+            updated_at: new Date(),
+            consumed_at: null,
+          }),
+          deleteMany: async () => {
+            // Concurrent accept already committed, so status is ACCEPTED and consumed_at is non-null
+            return { count: 0 };
+          },
+        },
+        auditLog: {
+          create: async (args: any) => {
+            if (args.data?.action === 'INVITATION_DELIVERY_FAILED') {
+              compensatingAuditCreated = true;
+            }
+            return { id: 'audit-id', ...args.data };
+          },
+          deleteMany: async () => {
+            throw new Error('Audit deletion prohibited');
+          },
+        },
+        $transaction: async (cb: any) => cb(mockPrismaConcurrent),
+      };
+
+      const failingService = new InvitationsService(
+        mockPrismaConcurrent as any,
+        {
+          sendVerification: async () => ({ success: false, error: 'Provider outage' }),
+        } as any
       );
-      assert.strictEqual(auditDeleted, true, 'Audit log must be cleaned up on delivery failure');
+
+      await assert.rejects(
+        () =>
+          failingService.createInvitation(
+            { email: 'delivery-fail2@shipde.vn', role: RoleEnum.OPS_CSKH },
+            { userId: OWNER_USER_ID, merchantId: MERCHANT_ID, role: 'OWNER' },
+            '10.0.0.1',
+            'corr-del-fail-2'
+          ),
+        (err: any) => {
+          assert.strictEqual(err.status, 502);
+          return true;
+        }
+      );
+
+      assert.strictEqual(
+        compensatingAuditCreated,
+        false,
+        'Should not record delivery failure compensation audit if already accepted'
+      );
     });
 
     it('Finding 1: resendInvitation restores prior token hash and cleans up audit on delivery failure', async () => {

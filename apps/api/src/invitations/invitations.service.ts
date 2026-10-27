@@ -377,7 +377,16 @@ export class InvitationsService {
     // 6. Expiry: 7 days (168 hours) from now (BR-INV-03)
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
-    // 7. Persist invitation and immutable audit log in single database transaction (BR-INV-04, BR-INV-09)
+    // Fail closed early if delivery adapter unavailable before creating DB record
+    if (!this.deliveryAdapter) {
+      throw new CanonicalApiException(
+        HttpStatus.SERVICE_UNAVAILABLE,
+        'DELIVERY_UNAVAILABLE',
+        'Dịch vụ gửi thông báo lời mời không khả dụng'
+      );
+    }
+
+    // 7. Persist invitation record in database transaction (BR-INV-04, BR-INV-09)
     let invitation: any;
     try {
       invitation = await this.prisma.$transaction(async (tx) => {
@@ -410,30 +419,6 @@ export class InvitationsService {
           },
         });
 
-        // 8. Immutable Audit Trail (BR-INV-09, AC-USR-01-01, AC-USR-01-18)
-        // Committed atomically with the invitation record; never log raw token or password
-        await tx.auditLog.create({
-          data: {
-            merchant_id: actor.merchantId,
-            user_id: actor.userId,
-            action: 'INVITATION_SENT',
-            entity_type: 'Invitation',
-            entity_id: inv.id,
-            ip_address: clientIp,
-            new_value: {
-              invitation_id: inv.id,
-              merchant_id: actor.merchantId,
-              actor_id: actor.userId,
-              role: inv.role,
-              store_scopes: inv.store_scopes,
-              warehouse_scopes: inv.warehouse_scopes,
-              expires_at: inv.expires_at.toISOString(),
-              target_identifier_masked: maskIdentifier(email || phone),
-              correlation_id: correlationId,
-            },
-          },
-        });
-
         return inv;
       });
     } catch (err: any) {
@@ -457,14 +442,41 @@ export class InvitationsService {
     const safeBaseUrl = resolveFrontendBaseUrl(baseUrl);
     const invitationUrl = `${safeBaseUrl}/invite/accept?token=${rawToken}`;
 
-    // Dispatch verification via configured delivery adapter (BR-INV-02, SECURITY-NFR) - fail closed
-    if (!this.deliveryAdapter) {
-      throw new CanonicalApiException(
-        HttpStatus.SERVICE_UNAVAILABLE,
-        'DELIVERY_UNAVAILABLE',
-        'Dịch vụ gửi thông báo lời mời không khả dụng'
-      );
-    }
+    const compensateFailedCreate = async (reason: string) => {
+      // Conditionally retire row only if still unconsumed pending token
+      // Never delete audit rows to compensate; record a compensating audit event instead (Finding 1)
+      await this.prisma.$transaction(async (tx) => {
+        const deleted = await tx.invitation.deleteMany({
+          where: {
+            id: invitation.id,
+            merchant_id: actor.merchantId,
+            status: InvitationStatusEnum.PENDING,
+            token_hash: tokenHash,
+            consumed_at: null,
+          },
+        });
+        if (deleted.count > 0) {
+          await tx.auditLog.create({
+            data: {
+              merchant_id: actor.merchantId,
+              user_id: actor.userId,
+              action: 'INVITATION_DELIVERY_FAILED',
+              entity_type: 'Invitation',
+              entity_id: invitation.id,
+              ip_address: clientIp,
+              new_value: {
+                invitation_id: invitation.id,
+                merchant_id: actor.merchantId,
+                actor_id: actor.userId,
+                target_identifier_masked: maskIdentifier(email || phone),
+                correlation_id: correlationId,
+                reason,
+              },
+            },
+          });
+        }
+      });
+    };
 
     let dispatchRes;
     try {
@@ -476,36 +488,42 @@ export class InvitationsService {
         link: invitationUrl,
       });
     } catch (deliveryErr: any) {
-      // Compensate: delete undispatched row and audit log so retry doesn't hit INVITATION_ALREADY_PENDING
-      // and do not audit a send that did not happen (Finding 1)
-      await this.prisma.$transaction([
-        this.prisma.auditLog.deleteMany({
-          where: { entity_type: 'Invitation', entity_id: invitation.id },
-        }),
-        this.prisma.invitation.delete({
-          where: { id: invitation.id },
-        }),
-      ]);
+      await compensateFailedCreate(deliveryErr?.message || 'DELIVERY_EXCEPTION');
       throw deliveryErr;
     }
 
     if (!dispatchRes || !dispatchRes.success) {
-      // Compensate: delete undispatched row and audit log so retry doesn't hit INVITATION_ALREADY_PENDING
-      // and do not audit a send that did not happen (Finding 1)
-      await this.prisma.$transaction([
-        this.prisma.auditLog.deleteMany({
-          where: { entity_type: 'Invitation', entity_id: invitation.id },
-        }),
-        this.prisma.invitation.delete({
-          where: { id: invitation.id },
-        }),
-      ]);
+      await compensateFailedCreate(dispatchRes?.error || 'DELIVERY_FAILED');
       throw new CanonicalApiException(
         HttpStatus.BAD_GATEWAY,
         'DELIVERY_FAILED',
         'Không thể gửi thông báo lời mời tới người nhận'
       );
     }
+
+    // 8. Immutable Audit Trail (BR-INV-09, AC-USR-01-01, AC-USR-01-18)
+    // Write success audit only after delivery succeeds; never log raw token or password
+    await this.prisma.auditLog.create({
+      data: {
+        merchant_id: actor.merchantId,
+        user_id: actor.userId,
+        action: 'INVITATION_SENT',
+        entity_type: 'Invitation',
+        entity_id: invitation.id,
+        ip_address: clientIp,
+        new_value: {
+          invitation_id: invitation.id,
+          merchant_id: actor.merchantId,
+          actor_id: actor.userId,
+          role: invitation.role,
+          store_scopes: invitation.store_scopes,
+          warehouse_scopes: invitation.warehouse_scopes,
+          expires_at: invitation.expires_at.toISOString(),
+          target_identifier_masked: maskIdentifier(email || phone),
+          correlation_id: correlationId,
+        },
+      },
+    });
 
     // Zero plaintext token leakage in admin responses (BR-INV-02 / SECURITY-NFR)
     return {
