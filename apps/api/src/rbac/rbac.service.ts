@@ -387,12 +387,15 @@ export class RbacService implements OnModuleInit {
       );
     }
 
+    // Finding 1 / Round 13: Only accept server-resolved sessionId; ignore client/JWT sid unless it is the same server-resolved session
+    const sessionId = req.sessionId ? req.sessionId : undefined;
+
     return {
       userId: user.id,
       merchantId: user.merchant_id,
       role: user.role,
       customRoleId: user.custom_role_id ?? undefined,
-      sessionId: req.sessionId || req.jwtClaims?.sid,
+      sessionId,
       authAssurance: undefined,
       mfaVerifiedAt: undefined,
     };
@@ -573,13 +576,16 @@ export class RbacService implements OnModuleInit {
 
       if (sessions && sessions.length > 0) {
         const s = sessions[0];
-        if (s.status === 'ACTIVE' && new Date(s.expires_at) > new Date()) {
-          authAssurance = s.auth_assurance;
-          mfaVerifiedAt = s.mfa_verified_at;
-        } else {
-          authAssurance = 'REVOKED';
-          mfaVerifiedAt = null;
+        // Finding 1 / Round 13: If session is missing, not active, or expired, abort with 401 SESSION_INVALID before any role or audit write
+        if (s.status !== 'ACTIVE' || new Date(s.expires_at) <= new Date()) {
+          throw new CanonicalApiException(
+            HttpStatus.UNAUTHORIZED,
+            'SESSION_INVALID',
+            'Phiên làm việc đã hết hạn hoặc bị thu hồi'
+          );
         }
+        authAssurance = s.auth_assurance;
+        mfaVerifiedAt = s.mfa_verified_at;
       } else {
         throw new CanonicalApiException(
           HttpStatus.UNAUTHORIZED,

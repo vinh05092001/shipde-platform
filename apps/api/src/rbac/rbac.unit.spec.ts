@@ -3307,7 +3307,7 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
       }
     );
 
-    // 4. Caller with revoked or expired session row fails with 403 MFA_FRESH_AUTH_REQUIRED
+    // 4. Finding 1 / Round 13: Caller with revoked session row fails with 401 SESSION_INVALID before any write
     const actorWithRevokedSession: ActorContext = {
       userId: 'user-owner-1',
       merchantId: MERCHANT_A,
@@ -3329,8 +3329,36 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
       },
       (err: any) => {
         assert.ok(err instanceof CanonicalApiException);
-        assert.strictEqual(err.getStatus(), 403);
-        assert.strictEqual(err.code, 'MFA_FRESH_AUTH_REQUIRED');
+        assert.strictEqual(err.getStatus(), 401);
+        assert.strictEqual(err.code, 'SESSION_INVALID');
+        return true;
+      }
+    );
+
+    // 4b. Finding 1 / Round 13: Caller with expired session row fails with 401 SESSION_INVALID
+    const actorWithExpiredSession: ActorContext = {
+      userId: 'user-owner-1',
+      merchantId: MERCHANT_A,
+      role: 'OWNER',
+      sessionId: 'session-expired-mfa-owner',
+    };
+
+    await assert.rejects(
+      async () => {
+        await service.createRole(
+          {
+            name: 'Role With Expired Session',
+            permissions: ['order:view_create'],
+          },
+          actorWithExpiredSession,
+          '127.0.0.1',
+          'corr-r13-f1-expired-sess'
+        );
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 401);
+        assert.strictEqual(err.code, 'SESSION_INVALID');
         return true;
       }
     );
@@ -3353,5 +3381,103 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
       'corr-r12-f2-valid-mfa'
     );
     assert.ok(validRes.data.role.id, 'Role creation with valid MFA session must succeed');
+  });
+
+  // Finding 1 (Round 13): Least privilege revoked/expired session aborts with 401 SESSION_INVALID before role or audit write, and resolveActorFromSession pins session to server
+  test('Finding 1 (Round 13): lockAndAuthorizeActor aborts with 401 SESSION_INVALID on non-active or expired session and ignores client/JWT sid in resolveActorFromSession', async () => {
+    // 1. resolveActorFromSession ignores client/JWT sid unless server-resolved sessionId is present
+    mockPrisma.users.push({
+      id: 'user-jwt-sid-test',
+      merchant_id: MERCHANT_A,
+      role: 'OWNER',
+      custom_role_id: null,
+      status: 'ACTIVE',
+    });
+
+    const reqWithOnlyJwtSid = {
+      userId: 'user-jwt-sid-test',
+      merchantId: MERCHANT_A,
+      jwtClaims: { sid: 'untrusted-client-sid', role: 'OWNER' },
+    };
+    const resolvedWithoutServerSession = await service.resolveActorFromSession(
+      reqWithOnlyJwtSid as any
+    );
+    assert.strictEqual(
+      resolvedWithoutServerSession.sessionId,
+      undefined,
+      'Must ignore client/JWT sid when req.sessionId is not set'
+    );
+
+    const reqWithServerSession = {
+      userId: 'user-jwt-sid-test',
+      merchantId: MERCHANT_A,
+      sessionId: 'server-resolved-sid-123',
+      jwtClaims: { sid: 'different-client-sid', role: 'OWNER' },
+    };
+    const resolvedWithServerSession = await service.resolveActorFromSession(
+      reqWithServerSession as any
+    );
+    assert.strictEqual(
+      resolvedWithServerSession.sessionId,
+      'server-resolved-sid-123',
+      'Must pin to server-resolved sessionId and ignore conflicting client/JWT sid'
+    );
+
+    // 2. updateRole aborts with 401 SESSION_INVALID when session is revoked, before any write
+    const testRole = await service.createRole(
+      { name: 'Role For Revocation Check', permissions: ['order:view_create'] },
+      OWNER_ACTOR,
+      '127.0.0.1',
+      'corr-r13-setup-role'
+    );
+    const initialAuditCount = mockPrisma.auditLogs.length;
+
+    await assert.rejects(
+      async () => {
+        await service.updateRole(
+          testRole.data.role.id,
+          { name: 'Mutated By Revoked Session' },
+          { ...OWNER_ACTOR, sessionId: 'session-revoked-owner' },
+          '127.0.0.1',
+          'corr-r13-update-revoked'
+        );
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 401);
+        assert.strictEqual(err.code, 'SESSION_INVALID');
+        return true;
+      }
+    );
+    assert.strictEqual(
+      mockPrisma.auditLogs.length,
+      initialAuditCount,
+      'No audit log must be written when session is revoked'
+    );
+
+    // 3. deleteRole aborts with 401 SESSION_INVALID when session is expired, before any delete or audit
+    await assert.rejects(
+      async () => {
+        await service.deleteRole(
+          testRole.data.role.id,
+          { ...OWNER_ACTOR, sessionId: 'session-expired-mfa-owner' },
+          '127.0.0.1',
+          'corr-r13-delete-expired'
+        );
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 401);
+        assert.strictEqual(err.code, 'SESSION_INVALID');
+        return true;
+      }
+    );
+    assert.strictEqual(
+      mockPrisma.auditLogs.length,
+      initialAuditCount,
+      'No audit log must be written when session is expired'
+    );
+    const survivingRole = mockPrisma.roles.find((r) => r.id === testRole.data.role.id);
+    assert.ok(survivingRole, 'Role must not be deleted when session is expired');
   });
 });
