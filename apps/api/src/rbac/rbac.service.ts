@@ -56,6 +56,31 @@ export function isRoleNameUniqueViolation(err: any): boolean {
   );
 }
 
+export function isDeadlockOrSerializationError(err: any): boolean {
+  if (!err) return false;
+  const code = String(err.code || err.statusCode || '');
+  const msg = String(err.message || '');
+  return (
+    code === '40P01' || // PostgreSQL deadlock_detected
+    code === '40001' || // PostgreSQL serialization_failure
+    code === 'P2034' || // Prisma transaction conflict / deadlock
+    /deadlock detected/i.test(msg) ||
+    /could not serialize access/i.test(msg) ||
+    /concurrent update/i.test(msg) ||
+    /deadlock/i.test(msg)
+  );
+}
+
+export function createConcurrencyConflictException(): CanonicalApiException {
+  return new CanonicalApiException(
+    HttpStatus.CONFLICT,
+    'CONFLICT',
+    'Xung đột giao dịch đồng thời khi xử lý vai trò phân quyền',
+    true,
+    'Vui lòng thử lại thao tác'
+  );
+}
+
 // Deterministic UUID generator for canonical platform permissions & system roles
 function deterministicUuid(prefix: string, index: number): string {
   const hex = index.toString(16).padStart(12, '0');
@@ -494,14 +519,15 @@ export class RbacService {
       actorRoleId = sysRole?.id;
     }
 
-    // Lock roles in consistent lock order (ascending role ID order) to prevent deadlocks
-    const roleIdsToLock = Array.from(
-      new Set([actorRoleId, targetRoleId].filter((id): id is string => Boolean(id)))
-    ).sort();
+    // Lock in ONE global order: actor user -> actor role -> role_permissions -> target role (Finding 2 / Round 9)
+    if (actorRoleId) {
+      await tx.$queryRaw`SELECT id, merchant_id, is_system, name, description, code FROM roles WHERE id = ${actorRoleId}::uuid FOR UPDATE`;
+      await tx.$queryRaw`SELECT id, role_id, permission_id FROM role_permissions WHERE role_id = ${actorRoleId}::uuid FOR UPDATE`;
+    }
 
-    for (const rid of roleIdsToLock) {
-      await tx.$queryRaw`SELECT id, merchant_id, is_system, name, description, code FROM roles WHERE id = ${rid}::uuid FOR UPDATE`;
-      await tx.$queryRaw`SELECT id, role_id, permission_id FROM role_permissions WHERE role_id = ${rid}::uuid FOR UPDATE`;
+    if (targetRoleId && targetRoleId !== actorRoleId) {
+      await tx.$queryRaw`SELECT id, merchant_id, is_system, name, description, code FROM roles WHERE id = ${targetRoleId}::uuid FOR UPDATE`;
+      await tx.$queryRaw`SELECT id, role_id, permission_id FROM role_permissions WHERE role_id = ${targetRoleId}::uuid FOR UPDATE`;
     }
 
     // Re-read actor permissions under locked snapshot
@@ -939,6 +965,9 @@ export class RbacService {
           [{ field: 'name', code: 'DUPLICATE', message: 'Tên vai trò đã tồn tại' }]
         );
       }
+      if (isDeadlockOrSerializationError(err)) {
+        throw createConcurrencyConflictException();
+      }
       throw new CanonicalApiException(
         HttpStatus.INTERNAL_SERVER_ERROR,
         'INTERNAL_SERVER_ERROR',
@@ -1179,28 +1208,13 @@ export class RbacService {
     let updatedRole: any;
     try {
       updatedRole = await this.prisma.$transaction(async (tx) => {
-        // Lock role row to serialize concurrent modifications (Finding 1 / Round 6)
-        const lockedRoles = await tx.$queryRaw<
-          Array<{ id: string; merchant_id: string; is_system: boolean }>
-        >`SELECT id, merchant_id, is_system FROM roles WHERE id = ${roleId}::uuid AND merchant_id = ${actor.merchantId}::uuid FOR UPDATE`;
-
-        if (!lockedRoles || lockedRoles.length === 0) {
-          throw new CanonicalApiException(
-            HttpStatus.NOT_FOUND,
-            'ROLE_NOT_FOUND',
-            'Không tìm thấy vai trò phân quyền'
-          );
-        }
-
-        if (lockedRoles[0].is_system) {
-          throw new CanonicalApiException(
-            HttpStatus.FORBIDDEN,
-            'SYSTEM_ROLE_IMMUTABLE',
-            'Không thể chỉnh sửa vai trò mặc định của hệ thống',
-            false,
-            'Chỉ có thể chỉnh sửa các vai trò tùy chỉnh do cửa hàng tạo'
-          );
-        }
+        // Lock in ONE global order: actor user -> actor role -> role_permissions -> target role (Finding 2 / Round 9)
+        const { actorSnapshot, permSet: actorPermSetInTx } = await this.lockAndAuthorizeActor(
+          tx,
+          actor,
+          ['iam:manage_users'],
+          roleId
+        );
 
         // Re-read target role and permissions under row lock (Finding 3 / Round 8)
         const lockedTargetRole = await tx.role.findUnique({
@@ -1230,16 +1244,16 @@ export class RbacService {
           );
         }
 
+        if (!lockedTargetRole.merchant_id || lockedTargetRole.merchant_id !== actorSnapshot.merchantId) {
+          throw new CanonicalApiException(
+            HttpStatus.FORBIDDEN,
+            'FORBIDDEN',
+            'Không có quyền truy cập vai trò của đơn vị khác'
+          );
+        }
+
         const currentRolePermsInTx = lockedTargetRole.permissions || [];
         const currentRolePermCodes = currentRolePermsInTx.map((rp: any) => rp.permission.code);
-
-        // Lock actor, target role, and role_permissions in consistent order (Finding 2 / Round 8)
-        const { actorSnapshot, permSet: actorPermSetInTx } = await this.lockAndAuthorizeActor(
-          tx,
-          actor,
-          ['iam:manage_users'],
-          roleId
-        );
 
         // Privilege ceiling check 1: Actor must hold EVERY permission currently assigned to the locked role
         const unauthorizedCurrentCodes = currentRolePermCodes.filter(
@@ -1374,6 +1388,9 @@ export class RbacService {
           [{ field: 'name', code: 'DUPLICATE', message: 'Tên vai trò đã tồn tại' }]
         );
       }
+      if (isDeadlockOrSerializationError(err)) {
+        throw createConcurrencyConflictException();
+      }
       throw new CanonicalApiException(
         HttpStatus.INTERNAL_SERVER_ERROR,
         'INTERNAL_SERVER_ERROR',
@@ -1497,30 +1514,15 @@ export class RbacService {
     // 3. Transaction: Guard active assignments inside transaction with row locks, Delete Role & Write Audit Log (BR-RBAC-03, BR-RBAC-02, BR-RBAC-07)
     try {
       await this.prisma.$transaction(async (tx) => {
-        // Lock the role row to serialize concurrent delete / assignment operations (Finding 1 / Round 5 & 6)
-        const lockedRoles = await tx.$queryRaw<
-          Array<{ id: string; merchant_id: string; is_system: boolean }>
-        >`SELECT id, merchant_id, is_system FROM roles WHERE id = ${roleId}::uuid AND merchant_id = ${actor.merchantId}::uuid FOR UPDATE`;
+        // 1. Lock in ONE global order: actor user -> actor role -> role_permissions -> target role (Finding 2 / Round 9)
+        const { actorSnapshot, permSet: actorPermSetInTx } = await this.lockAndAuthorizeActor(
+          tx,
+          actor,
+          ['iam:manage_users'],
+          roleId
+        );
 
-        if (!lockedRoles || lockedRoles.length === 0) {
-          throw new CanonicalApiException(
-            HttpStatus.NOT_FOUND,
-            'ROLE_NOT_FOUND',
-            'Không tìm thấy vai trò phân quyền'
-          );
-        }
-
-        if (lockedRoles[0].is_system) {
-          throw new CanonicalApiException(
-            HttpStatus.FORBIDDEN,
-            'SYSTEM_ROLE_IMMUTABLE',
-            'Không thể xóa vai trò mặc định của hệ thống',
-            false,
-            'Chỉ có thể xóa các vai trò tùy chỉnh do cửa hàng tạo'
-          );
-        }
-
-        // Re-read current role under lock (Finding 1 / Round 9)
+        // 2. Re-read current role under lock (Finding 1 / Round 9)
         const lockedTargetRole = await tx.role.findUnique({
           where: { id: roleId },
           include: {
@@ -1548,17 +1550,17 @@ export class RbacService {
           );
         }
 
+        if (!lockedTargetRole.merchant_id || lockedTargetRole.merchant_id !== actorSnapshot.merchantId) {
+          throw new CanonicalApiException(
+            HttpStatus.FORBIDDEN,
+            'FORBIDDEN',
+            'Không có quyền truy cập vai trò của đơn vị khác'
+          );
+        }
+
         const currentRolePermsInTx = lockedTargetRole.permissions || [];
         const currentRolePermCodes = currentRolePermsInTx.map((rp: any) => rp.permission.code);
         const customPermCodes = new Set(currentRolePermCodes);
-
-        // Lock actor, target role, and role_permissions in consistent order (Finding 2 / Round 8)
-        const { actorSnapshot, permSet: actorPermSetInTx } = await this.lockAndAuthorizeActor(
-          tx,
-          actor,
-          ['iam:manage_users'],
-          roleId
-        );
 
         // Verify actor holds all current permissions of the role under the lock
         const unauthorizedRoleCodes = currentRolePermCodes.filter(
@@ -1726,6 +1728,9 @@ export class RbacService {
       });
     } catch (err: any) {
       if (err instanceof CanonicalApiException) throw err;
+      if (isDeadlockOrSerializationError(err)) {
+        throw createConcurrencyConflictException();
+      }
       if (err?.code === 'P2003' || /foreign key/i.test(err?.message || '')) {
         const fallbackCount = await this.prisma.user
           .count({

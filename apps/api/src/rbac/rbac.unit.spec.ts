@@ -2504,4 +2504,111 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
       'Audit old_value must record locked row description'
     );
   });
+
+  // Finding 2 Proving Test (Round 9): Consistent lock order everywhere and deadlock/serialization mapped to retryable CONFLICT
+  test('Finding 2 / Round 9 / BR-RBAC-02 / BR-RBAC-03: updateRole and deleteRole execute locks in ONE global order (actor user -> actor role -> role_permissions -> target role -> assignees) and map deadlock/serialization to retryable CONFLICT', async () => {
+    // 1. Create a custom role
+    const initialCreate = await service.createRole(
+      {
+        name: 'Vai Trò Thử Nghiệm Lock Order F2',
+        description: 'Mô tả thử nghiệm lock order',
+        permissions: ['order:view_create'],
+      },
+      OWNER_ACTOR,
+      '127.0.0.1',
+      'corr-r9-f2-setup'
+    );
+    const roleId = initialCreate.data.role.id;
+
+    // 2. Track executed $queryRaw locks in updateRole
+    const executedLocksUpdate: string[] = [];
+    const origQueryRaw = mockPrisma.$queryRaw.bind(mockPrisma);
+    mockPrisma.$queryRaw = async (strings: TemplateStringsArray, ...values: any[]) => {
+      const sql = strings.join('?');
+      if (sql.includes('FOR UPDATE')) {
+        if (sql.includes('FROM users WHERE id =')) {
+          executedLocksUpdate.push('actor_user');
+        } else if (sql.includes('FROM roles WHERE id =')) {
+          executedLocksUpdate.push(values[0] === roleId ? 'target_role' : 'actor_role');
+        } else if (sql.includes('FROM role_permissions WHERE role_id =')) {
+          executedLocksUpdate.push(
+            values[0] === roleId ? 'target_role_permissions' : 'actor_role_permissions'
+          );
+        } else if (sql.includes('FROM users WHERE custom_role_id =')) {
+          executedLocksUpdate.push('assignees');
+        }
+      }
+      return origQueryRaw(strings, ...values);
+    };
+
+    await service.updateRole(
+      roleId,
+      { description: 'Mô tả mới' },
+      OWNER_ACTOR,
+      '127.0.0.1',
+      'corr-r9-f2-update'
+    );
+
+    // Verify updateRole lock order: actor_user -> actor_role -> actor_role_permissions -> target_role -> target_role_permissions
+    assert.strictEqual(executedLocksUpdate[0], 'actor_user', 'First lock must be actor user');
+    const targetRoleIndex = executedLocksUpdate.indexOf('target_role');
+    const actorUserIndex = executedLocksUpdate.indexOf('actor_user');
+    assert.ok(targetRoleIndex > actorUserIndex, 'Target role lock must be taken AFTER actor user');
+
+    // 3. Track executed $queryRaw locks in deleteRole
+    const executedLocksDelete: string[] = [];
+    mockPrisma.$queryRaw = async (strings: TemplateStringsArray, ...values: any[]) => {
+      const sql = strings.join('?');
+      if (sql.includes('FOR UPDATE')) {
+        if (sql.includes('FROM users WHERE id =')) {
+          executedLocksDelete.push('actor_user');
+        } else if (sql.includes('FROM roles WHERE id =')) {
+          executedLocksDelete.push(values[0] === roleId ? 'target_role' : 'actor_role');
+        } else if (sql.includes('FROM role_permissions WHERE role_id =')) {
+          executedLocksDelete.push(
+            values[0] === roleId ? 'target_role_permissions' : 'actor_role_permissions'
+          );
+        } else if (sql.includes('FROM users WHERE custom_role_id =')) {
+          executedLocksDelete.push('assignees');
+        }
+      }
+      return origQueryRaw(strings, ...values);
+    };
+
+    await service.deleteRole(
+      roleId,
+      OWNER_ACTOR,
+      '127.0.0.1',
+      'corr-r9-f2-delete'
+    );
+
+    // Verify deleteRole lock order: actor_user -> ... -> target_role -> ... -> assignees
+    assert.strictEqual(executedLocksDelete[0], 'actor_user', 'First lock in deleteRole must be actor user');
+    const delTargetIndex = executedLocksDelete.indexOf('target_role');
+    const delAssigneesIndex = executedLocksDelete.indexOf('assignees');
+    assert.ok(delTargetIndex > 0, 'Target role lock must be taken after actor user');
+    assert.ok(delAssigneesIndex > delTargetIndex, 'Assignees lock must be taken after target role');
+
+    // 4. Verify deadlock/serialization error mapping
+    mockPrisma.$queryRaw = async () => {
+      const err: any = new Error('deadlock detected');
+      err.code = '40P01';
+      throw err;
+    };
+
+    try {
+      await service.createRole(
+        { name: 'Role Deadlock Test', permissions: ['order:view_create'] },
+        OWNER_ACTOR,
+        '127.0.0.1',
+        'corr-r9-f2-deadlock'
+      );
+      assert.fail('Should have thrown on deadlock');
+    } catch (err: any) {
+      assert.ok(err instanceof CanonicalApiException);
+      assert.strictEqual(err.getStatus(), 409);
+      assert.strictEqual(err.code, 'CONFLICT');
+      assert.strictEqual(err.retryable, true);
+    }
+  });
 });
