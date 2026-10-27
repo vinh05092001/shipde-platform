@@ -3574,5 +3574,42 @@ CREATE INDEX "some_other_idx" ON "invitations"("created_at");
         }
       );
     });
+
+    it('Round 8 Finding 3: Reject multi-kilobyte password with 400 VALIDATION_ERROR before hashPassword', async () => {
+      // 1. validatePasswordStrength rejects > 128 chars
+      const overLong = 'A1!a' + 'x'.repeat(130);
+      const res = validatePasswordStrength(overLong);
+      assert.strictEqual(res.valid, false);
+      assert.ok(res.errors.some((e) => e.includes('128')));
+
+      // 2. acceptInvitation with oversized password throws 400 VALIDATION_ERROR before scrypt
+      let hashPasswordCalled = false;
+      const originalHash = (service as any).hashPassword;
+      (service as any).hashPassword = async (...args: any[]) => {
+        hashPasswordCalled = true;
+        return originalHash.apply(service, args);
+      };
+
+      await assert.rejects(
+        service.acceptInvitation(
+          {
+            token: 'dummy_token',
+            full_name: 'Attacker Exhaustion',
+            password: 'A1!a' + 'x'.repeat(5000),
+          },
+          '127.0.0.1',
+          'corr-pwd-oversize'
+        ),
+        (err: any) => {
+          assert.strictEqual(err.getStatus(), HttpStatus.BAD_REQUEST);
+          assert.strictEqual(err.code, 'VALIDATION_ERROR');
+          return true;
+        }
+      );
+
+      // Verify hashPassword was NEVER called
+      assert.strictEqual(hashPasswordCalled, false);
+      (service as any).hashPassword = originalHash;
+    });
   });
 });

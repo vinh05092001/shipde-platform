@@ -99,6 +99,9 @@ export function validatePasswordStrength(password: string): { valid: boolean; er
   if (!password || password.length < 8) {
     errors.push('Mật khẩu phải có độ dài tối thiểu 8 ký tự');
   }
+  if (password && password.length > 128) {
+    errors.push('Mật khẩu không được vượt quá 128 ký tự');
+  }
   if (password && !/[A-Z]/.test(password)) {
     errors.push('Mật khẩu phải chứa ít nhất 1 chữ hoa');
   }
@@ -1518,7 +1521,18 @@ export class InvitationsService {
       );
     }
 
-    // 3. Validate password strength (AC-USR-01-16)
+    // 3. Validate password strength and bounded length (SECURITY-NFR / Round 8 Finding 3)
+    if (!dto.password || typeof dto.password !== 'string' || dto.password.length > 128) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Mật khẩu phải có độ dài từ 8 đến 128 ký tự',
+        false,
+        undefined,
+        [{ field: 'password', code: 'OUT_OF_RANGE', message: 'Mật khẩu phải có độ dài từ 8 đến 128 ký tự' }]
+      );
+    }
+
     const strength = validatePasswordStrength(dto.password);
     if (!strength.valid) {
       throw new CanonicalApiException(

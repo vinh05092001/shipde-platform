@@ -35,7 +35,7 @@ export function validateAcceptPassword(
   password: string,
   passwordConfirm: string
 ): PasswordValidationRules {
-  const length = password.length >= 8;
+  const length = Boolean(password && password.length >= 8 && password.length <= 128);
   const upper = /[A-Z]/.test(password);
   const lower = /[a-z]/.test(password);
   const digit = /[0-9]/.test(password);
