@@ -22,6 +22,22 @@ export function isUserActiveStatus(status?: string | null): boolean {
   return typeof status === 'string' && status.trim().toLowerCase() === 'active';
 }
 
+export function isRoleNameUniqueViolation(err: any): boolean {
+  if (err?.code !== 'P2002') return false;
+  const target = err?.meta?.target;
+  if (Array.isArray(target)) {
+    return target.includes('name_lower') || (target.includes('merchant_id') && target.includes('name'));
+  }
+  if (typeof target === 'string') {
+    return target.includes('name_lower') || target.includes('roles_merchant_id_name_lower_key');
+  }
+  const message = String(err?.message || '');
+  return (
+    message.includes('roles_merchant_id_name_lower_key') ||
+    (message.includes('name_lower') && message.includes('merchant_id'))
+  );
+}
+
 // Deterministic UUID generator for canonical platform permissions & system roles
 function deterministicUuid(prefix: string, index: number): string {
   const hex = index.toString(16).padStart(12, '0');
@@ -723,7 +739,7 @@ export class RbacService {
       });
     } catch (err: any) {
       if (err instanceof CanonicalApiException) throw err;
-      if (err?.code === 'P2002' || /unique/i.test(err?.message || '')) {
+      if (isRoleNameUniqueViolation(err)) {
         throw new CanonicalApiException(
           HttpStatus.BAD_REQUEST,
           'ROLE_NAME_EXISTS',
@@ -1030,7 +1046,7 @@ export class RbacService {
       });
     } catch (err: any) {
       if (err instanceof CanonicalApiException) throw err;
-      if (err?.code === 'P2002' || /unique/i.test(err?.message || '')) {
+      if (isRoleNameUniqueViolation(err)) {
         throw new CanonicalApiException(
           HttpStatus.BAD_REQUEST,
           'ROLE_NAME_EXISTS',
@@ -1043,7 +1059,7 @@ export class RbacService {
       throw new CanonicalApiException(
         HttpStatus.INTERNAL_SERVER_ERROR,
         'INTERNAL_SERVER_ERROR',
-        'Lỗi hệ thống khi tạo vai trò',
+        'Lỗi hệ thống khi cập nhật vai trò',
         false,
         'Vui lòng thử lại sau hoặc liên hệ hỗ trợ'
       );

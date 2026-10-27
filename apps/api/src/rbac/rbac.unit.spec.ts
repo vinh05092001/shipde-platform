@@ -87,6 +87,7 @@ class MockPrismaService {
     this.shouldFailAudit = false;
     this.shouldFailRoleFindFirst = false;
     this.shouldFailPermissionFindMany = false;
+    this.shouldFailRolePermissionUnique = false;
   }
 
   permission = {
@@ -271,6 +272,14 @@ class MockPrismaService {
       return this.rolePermissions;
     },
     create: async (args: any) => {
+      if (this.shouldFailRolePermissionUnique) {
+        const err: any = new Error(
+          'Unique constraint failed on the constraint: role_permissions_role_id_permission_id_key'
+        );
+        err.code = 'P2002';
+        err.meta = { target: ['role_id', 'permission_id'] };
+        throw err;
+      }
       const created = { id: `rp-${Date.now()}-${Math.random()}`, ...args.data };
       this.rolePermissions.push(created);
       return created;
@@ -890,6 +899,79 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
       (a) => a.action === 'ROLE_DELETED' && a.entity_id === customRoleId
     );
     assert.ok(audit, 'ROLE_DELETED audit log must be created');
+  });
+
+  // Finding 3 Proving Test (Round 4): Non-role-name unique constraint failures stay 500
+  test('Finding 3 / Canonical Error Contract: Non-name unique constraint failure (e.g. role_permissions) stays 500 and role unmodified', async () => {
+    mockPrisma.shouldFailRolePermissionUnique = true;
+
+    try {
+      // 1. In createRole
+      await assert.rejects(
+        async () => {
+          await service.createRole(
+            {
+              name: 'Vai trò Lỗi Role Permissions Unique',
+              permissions: ['order:view_create'],
+            },
+            OWNER_ACTOR,
+            '127.0.0.1',
+            'corr-r4-f3-create'
+          );
+        },
+        (err: any) => {
+          assert.ok(err instanceof CanonicalApiException);
+          assert.strictEqual(err.getStatus(), 500, 'Must stay 500 INTERNAL_SERVER_ERROR, NOT 400');
+          assert.strictEqual(err.code, 'INTERNAL_SERVER_ERROR', 'Must NOT map to ROLE_NAME_EXISTS');
+          return true;
+        }
+      );
+
+      // DB Proof: Role was rolled back and not persisted
+      const roleInDb = mockPrisma.roles.find((r) => r.name === 'Vai trò Lỗi Role Permissions Unique');
+      assert.strictEqual(roleInDb, undefined, 'Role must not be persisted on 500 failure');
+
+      // 2. In updateRole
+      mockPrisma.shouldFailRolePermissionUnique = false;
+      const initialRole = await service.createRole(
+        {
+          name: 'Vai trò Cần Sửa Permissions',
+          permissions: ['order:view_create'],
+        },
+        OWNER_ACTOR,
+        '127.0.0.1',
+        'corr-r4-f3-init'
+      );
+
+      mockPrisma.shouldFailRolePermissionUnique = true;
+      await assert.rejects(
+        async () => {
+          await service.updateRole(
+            initialRole.data.role.id,
+            {
+              permissions: ['shipment:create_update'],
+            },
+            OWNER_ACTOR,
+            '127.0.0.1',
+            'corr-r4-f3-update'
+          );
+        },
+        (err: any) => {
+          assert.ok(err instanceof CanonicalApiException);
+          assert.strictEqual(err.getStatus(), 500, 'Must stay 500 INTERNAL_SERVER_ERROR, NOT 400');
+          assert.strictEqual(err.code, 'INTERNAL_SERVER_ERROR', 'Must NOT map to ROLE_NAME_EXISTS');
+          return true;
+        }
+      );
+
+      // DB Proof: Role permissions remain unchanged
+      const rps = mockPrisma.rolePermissions.filter((rp) => rp.role_id === initialRole.data.role.id);
+      const permIds = rps.map((rp) => rp.permission_id);
+      const orderViewPerm = mockPrisma.permissions.find((p) => p.code === 'order:view_create');
+      assert.ok(permIds.includes(orderViewPerm?.id || ''), 'Permissions must remain unchanged on 500 rollback');
+    } finally {
+      mockPrisma.shouldFailRolePermissionUnique = false;
+    }
   });
 
   // AC-RBAC-01-11
