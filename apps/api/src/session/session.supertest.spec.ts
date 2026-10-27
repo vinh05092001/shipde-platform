@@ -689,10 +689,7 @@ async function runSessionSupertestSuite() {
         ip_address: { not: null },
       },
     });
-    assert.ok(
-      audit21,
-      'Audit record for SESSIONS_REVOKED_ALL with non-null ip_address must exist'
-    );
+    assert.ok(audit21, 'Audit record for SESSIONS_REVOKED_ALL with non-null ip_address must exist');
     assert.ok(audit21.ip_address, 'Audit IP must be non-null');
     assert.match(
       audit21.ip_address,
@@ -740,9 +737,7 @@ async function runSessionSupertestSuite() {
     const { createHmac } = await import('node:crypto');
     const configuredKey =
       process.env.AUDIT_IDENTIFIER_HMAC_KEY || 'test-audit-hmac-key-placeholder-32-chars';
-    const expectedPseudonym = createHmac('sha256', configuredKey)
-      .update(testRawIp)
-      .digest('hex');
+    const expectedPseudonym = createHmac('sha256', configuredKey).update(testRawIp).digest('hex');
 
     assert.strictEqual(
       auditKeyed.ip_address,
