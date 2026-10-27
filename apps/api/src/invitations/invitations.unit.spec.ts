@@ -23,7 +23,42 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
   beforeEach(() => {
     mockPrisma = {
       user: {
-        findFirst: async () => null,
+        findFirst: async (args: any) => {
+          if (args?.where?.id) {
+            if (args.where.id === OWNER_USER_ID) {
+              return {
+                id: OWNER_USER_ID,
+                merchant_id: MERCHANT_ID,
+                role: RoleEnum.OWNER,
+                store_scopes: ['*'],
+                warehouse_scopes: ['*'],
+                status: 'active',
+              };
+            }
+            if (args.where.id === OPS_USER_ID) {
+              return {
+                id: OPS_USER_ID,
+                merchant_id: MERCHANT_ID,
+                role: RoleEnum.OPS_CSKH,
+                store_scopes: ['STORE-01'],
+                warehouse_scopes: ['WH-01'],
+                status: 'active',
+              };
+            }
+            if (args.where.id === WAREHOUSE_USER_ID) {
+              return {
+                id: WAREHOUSE_USER_ID,
+                merchant_id: MERCHANT_ID,
+                role: RoleEnum.WAREHOUSE,
+                store_scopes: [],
+                warehouse_scopes: ['WH-01'],
+                status: 'active',
+              };
+            }
+            return null;
+          }
+          return null;
+        },
         findUnique: async () => null,
         create: async (args: any) => ({
           id: 'new-user-uuid',
@@ -541,17 +576,62 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
         }
       );
     });
+
+    it('rejects actor when DB user row is missing, ignoring caller-supplied role fallback (Finding 5)', async () => {
+      // DB user is not found
+      mockPrisma.user.findFirst = async () => null;
+
+      const actor = {
+        userId: 'non-existent-user-id',
+        merchantId: MERCHANT_ID,
+        role: RoleEnum.OWNER, // Caller attempts to inject OWNER claim
+        store_scopes: ['*'],
+        warehouse_scopes: ['*'],
+      };
+
+      await assert.rejects(
+        async () => {
+          await service.createInvitation(
+            {
+              email: 'test@shipde.vn',
+              role: RoleEnum.OPS_CSKH,
+            },
+            actor as any,
+            '127.0.0.1',
+            'test-corr-fallback-check'
+          );
+        },
+        (err: any) => {
+          assert.ok(err instanceof CanonicalApiException);
+          assert.strictEqual(err.getStatus(), HttpStatus.FORBIDDEN);
+          assert.strictEqual(err.code, 'FORBIDDEN');
+          return true;
+        }
+      );
+    });
   });
 
   // AC-USR-01-05: Invite sent to email already active in tenant
   describe('AC-USR-01-05: Duplicate active user rejected', () => {
     it('returns 400 USER_ALREADY_EXISTS when identifier belongs to active account', async () => {
-      mockPrisma.user.findFirst = async () => ({
-        id: 'existing-user-uuid',
-        email: 'active@shipde.vn',
-        merchant_id: MERCHANT_ID,
-        status: 'active',
-      });
+      mockPrisma.user.findFirst = async (args: any) => {
+        if (args?.where?.id === OWNER_USER_ID) {
+          return {
+            id: OWNER_USER_ID,
+            merchant_id: MERCHANT_ID,
+            role: RoleEnum.OWNER,
+            store_scopes: ['*'],
+            warehouse_scopes: ['*'],
+            status: 'active',
+          };
+        }
+        return {
+          id: 'existing-user-uuid',
+          email: 'active@shipde.vn',
+          merchant_id: MERCHANT_ID,
+          status: 'active',
+        };
+      };
 
       const actor = { userId: OWNER_USER_ID, merchantId: MERCHANT_ID, role: RoleEnum.OWNER };
 
@@ -859,11 +939,8 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
 
     it('rejects non-owner resending invitation with role or scope exceeding actor privilege ceiling (Finding 3)', async () => {
       const opsActor = {
-        userId: 'ops-actor-id',
+        userId: OPS_USER_ID,
         merchantId: MERCHANT_ID,
-        role: RoleEnum.OPS_CSKH,
-        store_scopes: ['STORE-1'],
-        warehouse_scopes: ['WH-1'],
       };
 
       // Case 1: OPS_CSKH trying to resend WAREHOUSE role invitation
@@ -872,7 +949,7 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
         merchant_id: MERCHANT_ID,
         role: RoleEnum.WAREHOUSE,
         store_scopes: [],
-        warehouse_scopes: ['WH-1'],
+        warehouse_scopes: ['WH-01'],
         status: InvitationStatusEnum.PENDING,
         consumed_at: null,
       });
@@ -896,7 +973,7 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
         id: 'scope-inv-id',
         merchant_id: MERCHANT_ID,
         role: RoleEnum.OPS_CSKH,
-        store_scopes: ['STORE-1'],
+        store_scopes: ['STORE-01'],
         warehouse_scopes: ['WH-UNAUTHORIZED'],
         status: InvitationStatusEnum.PENDING,
         consumed_at: null,
@@ -1008,11 +1085,8 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
 
     it('rejects non-owner cancelling invitation with role or scope exceeding actor privilege ceiling (Finding 3)', async () => {
       const opsActor = {
-        userId: 'ops-actor-id',
+        userId: OPS_USER_ID,
         merchantId: MERCHANT_ID,
-        role: RoleEnum.OPS_CSKH,
-        store_scopes: ['STORE-1'],
-        warehouse_scopes: ['WH-1'],
       };
 
       // Case 1: OPS_CSKH trying to cancel WAREHOUSE role invitation
@@ -1021,7 +1095,7 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
         merchant_id: MERCHANT_ID,
         role: RoleEnum.WAREHOUSE,
         store_scopes: [],
-        warehouse_scopes: ['WH-1'],
+        warehouse_scopes: ['WH-01'],
         status: InvitationStatusEnum.PENDING,
         consumed_at: null,
       });
@@ -1046,7 +1120,7 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
         merchant_id: MERCHANT_ID,
         role: RoleEnum.OPS_CSKH,
         store_scopes: ['STORE-UNAUTHORIZED'],
-        warehouse_scopes: ['WH-1'],
+        warehouse_scopes: ['WH-01'],
         status: InvitationStatusEnum.PENDING,
         consumed_at: null,
       });

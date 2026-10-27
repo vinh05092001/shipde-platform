@@ -102,14 +102,8 @@ export class InvitationsService {
         }
       }
     }
-    if (actor.role) {
-      return {
-        id: actor.userId || 'mock-actor-id',
-        role: actor.role,
-        store_scopes: actor.store_scopes || [],
-        warehouse_scopes: actor.warehouse_scopes || [],
-      };
-    }
+    // Backend is authoritative (Finding 5 / SECURITY-NFR):
+    // Never fall back to caller-supplied claims; authorize ONLY from tenant-scoped user row
     return null;
   }
 
