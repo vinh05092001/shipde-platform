@@ -293,6 +293,8 @@ export default function RolesSettingsPage() {
     return matchesSearch;
   });
 
+  const totalCustomRoles = roles.filter((r) => !r.is_system);
+  const totalSystemRoles = roles.filter((r) => r.is_system);
   const customRoles = filteredRoles.filter((r) => !r.is_system);
   const systemRoles = filteredRoles.filter((r) => r.is_system);
 
@@ -421,7 +423,9 @@ export default function RolesSettingsPage() {
         <div className="flex items-center gap-2 text-slate-500 text-xs">
           <span>Tổng số:</span>
           <strong className="text-slate-900 font-bold">{roles.length} vai trò</strong>
-          <span>(5 vai trò hệ thống, {customRoles.length} tùy chỉnh)</span>
+          <span>
+            ({totalSystemRoles.length} vai trò hệ thống, {totalCustomRoles.length} tùy chỉnh)
+          </span>
         </div>
       </div>
 
@@ -444,7 +448,7 @@ export default function RolesSettingsPage() {
               </h2>
             </div>
 
-            {customRoles.length === 0 ? (
+            {totalCustomRoles.length === 0 ? (
               // UI State: EMPTY
               <div className="modern-card p-8 text-center bg-slate-50/60 border border-dashed border-slate-200 rounded-xl space-y-3">
                 <div className="w-10 h-10 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center mx-auto">
@@ -469,6 +473,17 @@ export default function RolesSettingsPage() {
                     <span>Tạo vai trò tùy chỉnh đầu tiên</span>
                   </button>
                 )}
+              </div>
+            ) : customRoles.length === 0 ? (
+              // UI State: SEARCH EMPTY (custom roles exist, but search filter produced zero matches)
+              <div className="modern-card p-8 text-center bg-slate-50/40 border border-slate-200 rounded-xl text-slate-500 text-xs space-y-1">
+                <p className="font-semibold text-slate-700">
+                  Không tìm thấy vai trò tùy chỉnh nào phù hợp với từ khóa &ldquo;{searchTerm}
+                  &rdquo;
+                </p>
+                <p className="text-[11px] text-slate-400">
+                  Tổng cộng có {totalCustomRoles.length} vai trò tùy chỉnh trong cửa hàng.
+                </p>
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
