@@ -40,6 +40,7 @@ import {
   INVITATIONS_RETRY_LABEL,
   isManageUsersForbidden,
   resolveInvitationsUIState,
+  shouldDisplayInvitationsEmptyState,
 } from '../components/UserManagementTab';
 import {
   parseScopeInput,
@@ -1623,8 +1624,21 @@ export async function runComprehensiveRulesAudit(): Promise<{
         error: null,
         loading: false,
         itemCount: 0,
-      }) === 'empty' && INVITATIONS_EMPTY_STATE_TEXT === 'Chưa có lời mời nào đang chờ xử lý',
-      'Hiển thị placeholder trống khi không có lời mời nào đang chờ xử lý.'
+      }) === 'empty' &&
+        INVITATIONS_EMPTY_STATE_TEXT === 'Chưa có lời mời nào đang chờ xử lý' &&
+        shouldDisplayInvitationsEmptyState({ error: null, loading: false, itemCount: 0 }) === true &&
+        shouldDisplayInvitationsEmptyState({
+          error: 'Connection timeout',
+          loading: false,
+          itemCount: 0,
+        }) === false &&
+        shouldDisplayInvitationsEmptyState({
+          error: 'Outage 500',
+          loading: false,
+          itemCount: 5,
+        }) === false &&
+        shouldDisplayInvitationsEmptyState({ error: null, loading: true, itemCount: 0 }) === false,
+      'Hiển thị placeholder trống khi không có lời mời nào đang chờ xử lý và không có lỗi.'
     );
 
     assertTest(

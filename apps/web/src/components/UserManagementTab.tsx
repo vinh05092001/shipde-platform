@@ -60,6 +60,19 @@ export function resolveInvitationsUIState(params: {
   return 'ready';
 }
 
+/**
+ * Empty state contract helper (Round 11 Finding 3 / SCR-USR-01):
+ * Never show empty copy during an outage or error; empty state is only shown
+ * when the request succeeded with zero rows.
+ */
+export function shouldDisplayInvitationsEmptyState(params: {
+  error: string | null;
+  loading: boolean;
+  itemCount: number;
+}): boolean {
+  return !params.error && !params.loading && params.itemCount === 0;
+}
+
 export interface StoreItem {
   id: string;
   code: string;
@@ -819,34 +832,35 @@ export const UserManagementTab: React.FC = () => {
                 </div>
               </div>
 
-              {/* Table / List */}
-              <div className="modern-card overflow-hidden">
-                {invitationsLoading ? (
-                  <div className="p-6 space-y-3 animate-pulse">
-                    <div className="h-4 bg-slate-200 rounded w-1/4" />
-                    <div className="h-10 bg-slate-100 rounded" />
-                    <div className="h-10 bg-slate-100 rounded" />
-                    <div className="h-10 bg-slate-100 rounded" />
-                  </div>
-                ) : invitations.length === 0 ? (
-                  <div className="text-center py-12 px-4">
-                    <Mail className="w-12 h-12 text-slate-300 mx-auto mb-3" />
-                    <h4 className="font-bold text-sm text-slate-700">
-                      {INVITATIONS_EMPTY_STATE_TEXT}
-                    </h4>
-                    <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
-                      Hiện không có lời mời nào trong mục này. Bạn có thể nhấn &quot;Gửi Lời Mời
-                      Mới&quot; để mời thêm nhân sự vào cửa hàng.
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => setIsInviteOpen(true)}
-                      className="btn-primary text-xs mt-4 inline-flex items-center gap-1.5"
-                    >
-                      <UserPlus className="w-3.5 h-3.5" /> Gửi Lời Mời Mới
-                    </button>
-                  </div>
-                ) : (
+              {/* Table / List: dismissible retry alert only on error with zero rows; keep last successful rows on refresh failure */}
+              {!(invitationsError && invitations.length === 0) && (
+                <div className="modern-card overflow-hidden">
+                  {invitationsLoading ? (
+                    <div className="p-6 space-y-3 animate-pulse">
+                      <div className="h-4 bg-slate-200 rounded w-1/4" />
+                      <div className="h-10 bg-slate-100 rounded" />
+                      <div className="h-10 bg-slate-100 rounded" />
+                      <div className="h-10 bg-slate-100 rounded" />
+                    </div>
+                  ) : invitations.length === 0 ? (
+                    <div className="text-center py-12 px-4">
+                      <Mail className="w-12 h-12 text-slate-300 mx-auto mb-3" />
+                      <h4 className="font-bold text-sm text-slate-700">
+                        {INVITATIONS_EMPTY_STATE_TEXT}
+                      </h4>
+                      <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+                        Hiện không có lời mời nào trong mục này. Bạn có thể nhấn &quot;Gửi Lời Mời
+                        Mới&quot; để mời thêm nhân sự vào cửa hàng.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => setIsInviteOpen(true)}
+                        className="btn-primary text-xs mt-4 inline-flex items-center gap-1.5"
+                      >
+                        <UserPlus className="w-3.5 h-3.5" /> Gửi Lời Mời Mới
+                      </button>
+                    </div>
+                  ) : (
                   <div className="overflow-x-auto">
                     <table className="w-full text-left border-collapse text-xs">
                       <thead>
@@ -1014,7 +1028,8 @@ export const UserManagementTab: React.FC = () => {
                   </div>
                 )}
               </div>
-            </>
+            )}
+          </>
           )}
         </div>
       )}
