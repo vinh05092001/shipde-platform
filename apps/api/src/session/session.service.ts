@@ -392,12 +392,13 @@ export class SessionService {
   }
 
   private hashIp(ip: string): string {
-    return createHmac(
-      'sha256',
-      process.env.AUDIT_IDENTIFIER_HMAC_KEY || 'default-dev-audit-hmac-key-override-32-chars'
-    )
-      .update(ip)
-      .digest('hex');
+    const key = process.env.AUDIT_IDENTIFIER_HMAC_KEY;
+    if (!key || key.trim().length === 0) {
+      throw new Error(
+        'AUDIT_IDENTIFIER_HMAC_KEY is required for IP pseudonymization; refusing to fallback to predictable key'
+      );
+    }
+    return createHmac('sha256', key.trim()).update(ip).digest('hex');
   }
 
   private async logAudit(
