@@ -55,10 +55,10 @@ async function main() {
   const prisma = app.get(PrismaService);
 
   if ((await prisma.checkReadiness()) !== 'up') {
-    if (process.env.CI) throw new Error(`Database must be reachable in CI at ${databaseUrl}`);
-    console.warn('PostgreSQL not reachable; skipping RBAC Supertest HTTP suite.');
     await app.close();
-    return;
+    throw new Error(
+      `Database must be reachable at ${databaseUrl} for RBAC Supertest HTTP suite; failing closed.`
+    );
   }
 
   // Ensure seed data exists
