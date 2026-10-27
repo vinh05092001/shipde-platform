@@ -1924,28 +1924,34 @@ components:
         name:
           type: string
           minLength: 1
+          maxLength: 255
         description:
           type: string
           nullable: true
+          maxLength: 1000
         permissions:
           type: array
           items:
             type: string
           minItems: 1
+          maxItems: 50
     UpdateRoleRequest:
       type: object
       properties:
         name:
           type: string
           minLength: 1
+          maxLength: 255
         description:
           type: string
           nullable: true
+          maxLength: 1000
         permissions:
           type: array
           items:
             type: string
           minItems: 1
+          maxItems: 50
     DeleteRoleResponse:
       type: object
       required: [data, meta]

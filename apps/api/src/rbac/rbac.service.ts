@@ -800,7 +800,43 @@ export class RbacService {
       );
     }
 
-    // 3. Validation: empty permissions array (AC-RBAC-01-13)
+    // 2b. Validation: description type and max length (Finding 5 / Round 10)
+    if (dto.description !== undefined && dto.description !== null) {
+      if (typeof dto.description !== 'string') {
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'VALIDATION_ERROR',
+          'Mô tả vai trò phải là chuỗi ký tự',
+          false,
+          'Vui lòng nhập mô tả hợp lệ',
+          [
+            {
+              field: 'description',
+              code: 'INVALID_TYPE',
+              message: 'Mô tả vai trò phải là chuỗi ký tự',
+            },
+          ]
+        );
+      }
+      if (dto.description.length > 1000) {
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'VALIDATION_ERROR',
+          'Mô tả vai trò không được vượt quá 1000 ký tự',
+          false,
+          'Vui lòng nhập mô tả ngắn hơn 1000 ký tự',
+          [
+            {
+              field: 'description',
+              code: 'MAX_LENGTH',
+              message: 'Mô tả vai trò không được vượt quá 1000 ký tự',
+            },
+          ]
+        );
+      }
+    }
+
+    // 3. Validation: empty permissions array and max count (AC-RBAC-01-13, Finding 5 / Round 10)
     if (!dto.permissions || !Array.isArray(dto.permissions) || dto.permissions.length === 0) {
       throw new CanonicalApiException(
         HttpStatus.BAD_REQUEST,
@@ -809,6 +845,22 @@ export class RbacService {
         false,
         'Vui lòng chọn ít nhất một quyền hạn từ danh mục',
         [{ field: 'permissions', code: 'REQUIRED', message: 'Danh sách quyền không được để trống' }]
+      );
+    }
+    if (dto.permissions.length > 50) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Danh sách quyền hạn không được vượt quá 50 mục',
+        false,
+        'Vui lòng chọn tối đa 50 quyền hạn',
+        [
+          {
+            field: 'permissions',
+            code: 'MAX_ITEMS',
+            message: 'Danh sách quyền hạn không được vượt quá 50 mục',
+          },
+        ]
       );
     }
 
@@ -1142,6 +1194,42 @@ export class RbacService {
       }
     }
 
+    // Validation: description type and max length (Finding 5 / Round 10)
+    if (dto.description !== undefined && dto.description !== null) {
+      if (typeof dto.description !== 'string') {
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'VALIDATION_ERROR',
+          'Mô tả vai trò phải là chuỗi ký tự',
+          false,
+          'Vui lòng nhập mô tả hợp lệ',
+          [
+            {
+              field: 'description',
+              code: 'INVALID_TYPE',
+              message: 'Mô tả vai trò phải là chuỗi ký tự',
+            },
+          ]
+        );
+      }
+      if (dto.description.length > 1000) {
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'VALIDATION_ERROR',
+          'Mô tả vai trò không được vượt quá 1000 ký tự',
+          false,
+          'Vui lòng nhập mô tả ngắn hơn 1000 ký tự',
+          [
+            {
+              field: 'description',
+              code: 'MAX_LENGTH',
+              message: 'Mô tả vai trò không được vượt quá 1000 ký tự',
+            },
+          ]
+        );
+      }
+    }
+
     // 4. Permissions validation & privilege ceiling check (BR-RBAC-02, AC-RBAC-01-05)
     let permissionsInDb = existingRole.permissions.map((rp) => rp.permission);
     if (dto.permissions !== undefined) {
@@ -1157,6 +1245,22 @@ export class RbacService {
               field: 'permissions',
               code: 'REQUIRED',
               message: 'Danh sách quyền không được để trống',
+            },
+          ]
+        );
+      }
+      if (dto.permissions.length > 50) {
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'VALIDATION_ERROR',
+          'Danh sách quyền hạn không được vượt quá 50 mục',
+          false,
+          'Vui lòng chọn tối đa 50 quyền hạn',
+          [
+            {
+              field: 'permissions',
+              code: 'MAX_ITEMS',
+              message: 'Danh sách quyền hạn không được vượt quá 50 mục',
             },
           ]
         );

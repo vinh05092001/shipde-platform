@@ -2853,4 +2853,79 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
       'can_manage_roles must be false when DB user lookup fails closed'
     );
   });
+
+  test('Finding 5 (Round 10): Bounds check on description (>1000) and permissions count (>50) in createRole and updateRole', async () => {
+    // 1. Description exceeding 1000 chars in createRole
+    try {
+      await service.createRole(
+        {
+          name: 'Long Description Role',
+          description: 'a'.repeat(1001),
+          permissions: ['order:view_create'],
+        },
+        OWNER_ACTOR,
+        '127.0.0.1',
+        'corr-r10-f5-create-desc'
+      );
+      assert.fail('Should reject description > 1000 chars');
+    } catch (err: any) {
+      assert.ok(err instanceof CanonicalApiException);
+      assert.strictEqual(err.getStatus(), 400);
+      assert.strictEqual(err.code, 'VALIDATION_ERROR');
+      const fields = (err.getResponse() as any)?.error?.fields || err.fields || [];
+      const descField = fields.find((f: any) => f.field === 'description');
+      assert.ok(descField);
+      assert.strictEqual(descField.code, 'MAX_LENGTH');
+    }
+
+    // 2. Permissions array exceeding 50 items in createRole
+    try {
+      await service.createRole(
+        {
+          name: 'Oversized Perms Role',
+          permissions: Array(51).fill('order:view_create'),
+        },
+        OWNER_ACTOR,
+        '127.0.0.1',
+        'corr-r10-f5-create-perms'
+      );
+      assert.fail('Should reject permissions > 50 items');
+    } catch (err: any) {
+      assert.ok(err instanceof CanonicalApiException);
+      assert.strictEqual(err.getStatus(), 400);
+      assert.strictEqual(err.code, 'VALIDATION_ERROR');
+      const fields = (err.getResponse() as any)?.error?.fields || err.fields || [];
+      const permField = fields.find((f: any) => f.field === 'permissions');
+      assert.ok(permField);
+      assert.strictEqual(permField.code, 'MAX_ITEMS');
+    }
+
+    // 3. UpdateRole with description > 1000 chars
+    const roleId = 'custom-r10-f5-role';
+    mockPrisma.roles.push({
+      id: roleId,
+      merchant_id: MERCHANT_A,
+      code: null,
+      name: 'R10 F5 Valid Role',
+      name_lower: 'r10 f5 valid role',
+      description: 'Initial',
+      is_system: false,
+      permissions: [{ permission: { code: 'order:view_create' } }],
+    });
+
+    try {
+      await service.updateRole(
+        roleId,
+        { description: 'b'.repeat(1001) },
+        OWNER_ACTOR,
+        '127.0.0.1',
+        'corr-r10-f5-update-desc'
+      );
+      assert.fail('Should reject update description > 1000 chars');
+    } catch (err: any) {
+      assert.ok(err instanceof CanonicalApiException);
+      assert.strictEqual(err.getStatus(), 400);
+      assert.strictEqual(err.code, 'VALIDATION_ERROR');
+    }
+  });
 });
