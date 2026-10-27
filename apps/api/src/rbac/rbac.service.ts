@@ -421,13 +421,14 @@ export class RbacService {
   }
 
   /**
-   * Locks and reloads the actor row in transaction, verifying status, merchant ownership,
-   * and requiring specified permissions under the transactional snapshot (Finding 1 / Round 7).
+   * Locks and reloads the actor row in transaction, locks actor's role and role_permissions
+   * in consistent order with targetRoleId, and re-reads permissions under the locked snapshot (Finding 2 / Round 8).
    */
   async lockAndAuthorizeActor(
     tx: any,
     actor: ActorContext,
-    requiredPermissions: string[] = ['iam:manage_users']
+    requiredPermissions: string[] = ['iam:manage_users'],
+    targetRoleId?: string
   ): Promise<{
     actorSnapshot: ActorContext;
     effectivePerms: string[];
@@ -483,6 +484,27 @@ export class RbacService {
       customRoleId: actorRow.custom_role_id ?? undefined,
     };
 
+    // Determine actor's role ID (custom role or system role)
+    let actorRoleId = actorRow.custom_role_id;
+    if (!actorRoleId && actorRow.role) {
+      const sysRole = await tx.role.findFirst({
+        where: { code: actorRow.role, is_system: true },
+        select: { id: true },
+      });
+      actorRoleId = sysRole?.id;
+    }
+
+    // Lock roles in consistent lock order (ascending role ID order) to prevent deadlocks
+    const roleIdsToLock = Array.from(
+      new Set([actorRoleId, targetRoleId].filter((id): id is string => Boolean(id)))
+    ).sort();
+
+    for (const rid of roleIdsToLock) {
+      await tx.$queryRaw`SELECT id, merchant_id, is_system, name, description, code FROM roles WHERE id = ${rid}::uuid FOR UPDATE`;
+      await tx.$queryRaw`SELECT id, role_id, permission_id FROM role_permissions WHERE role_id = ${rid}::uuid FOR UPDATE`;
+    }
+
+    // Re-read actor permissions under locked snapshot
     const effectivePerms = await this.getActorPermissions(actorSnapshot, tx);
     const permSet = new Set(effectivePerms);
 
@@ -831,7 +853,7 @@ export class RbacService {
 
         const existingInTx = await tx.role.findFirst({
           where: {
-            merchant_id: actor.merchantId,
+            merchant_id: actorSnapshot.merchantId,
             name: { equals: trimmedName, mode: 'insensitive' },
           },
         });
@@ -849,7 +871,7 @@ export class RbacService {
 
         const role = await tx.role.create({
           data: {
-            merchant_id: actor.merchantId,
+            merchant_id: actorSnapshot.merchantId,
             name: trimmedName,
             name_lower: trimmedName.toLowerCase(),
             description: dto.description?.trim() || null,
@@ -870,8 +892,8 @@ export class RbacService {
         // Write immutable audit log
         await tx.auditLog.create({
           data: {
-            merchant_id: actor.merchantId,
-            user_id: actor.userId,
+            merchant_id: actorSnapshot.merchantId,
+            user_id: actorSnapshot.userId,
             action: 'ROLE_CREATED',
             entity_type: 'Role',
             entity_id: role.id,
@@ -886,7 +908,7 @@ export class RbacService {
           },
         });
 
-        return role;
+        return { role, actorSnapshot };
       });
     } catch (err: any) {
       if (err instanceof CanonicalApiException) throw err;
@@ -912,12 +934,12 @@ export class RbacService {
     return {
       data: {
         role: {
-          id: createdRole.id,
+          id: createdRole.role.id,
           code: null,
-          name: createdRole.name,
-          description: createdRole.description,
+          name: createdRole.role.name,
+          description: createdRole.role.description,
           is_system: false,
-          merchant_id: actor.merchantId,
+          merchant_id: createdRole.actorSnapshot.merchantId,
           permissions_count: permissionsInDb.length,
           permissions: permissionsInDb.map((p) => ({
             id: p.id,
@@ -927,8 +949,12 @@ export class RbacService {
             category: p.category,
           })),
           user_count: 0,
-          created_at: createdRole.created_at.toISOString(),
-          updated_at: createdRole.updated_at.toISOString(),
+          created_at: createdRole.role.created_at
+            ? createdRole.role.created_at.toISOString()
+            : new Date().toISOString(),
+          updated_at: createdRole.role.updated_at
+            ? createdRole.role.updated_at.toISOString()
+            : new Date().toISOString(),
         },
       },
       meta: {
@@ -1149,10 +1175,12 @@ export class RbacService {
           include: { permission: true },
         });
 
-        // Lock and reload actor row in transaction to ensure actor is active and holds iam:manage_users (Finding 1 / Round 7)
+        // Lock actor, target role, and role_permissions in consistent order (Finding 2 / Round 8)
         const { actorSnapshot, permSet: actorPermSetInTx } = await this.lockAndAuthorizeActor(
           tx,
-          actor
+          actor,
+          ['iam:manage_users'],
+          roleId
         );
 
         // Privilege ceiling check 1: Actor must hold EVERY permission currently assigned to the role
@@ -1197,7 +1225,7 @@ export class RbacService {
         if (dto.name !== undefined) {
           const duplicateInTx = await tx.role.findFirst({
             where: {
-              merchant_id: actor.merchantId,
+              merchant_id: actorSnapshot.merchantId,
               id: { not: roleId },
               name: { equals: updatedName, mode: 'insensitive' },
             },
@@ -1247,8 +1275,8 @@ export class RbacService {
         // Write immutable audit log
         await tx.auditLog.create({
           data: {
-            merchant_id: actor.merchantId,
-            user_id: actor.userId,
+            merchant_id: actorSnapshot.merchantId,
+            user_id: actorSnapshot.userId,
             action: 'ROLE_UPDATED',
             entity_type: 'Role',
             entity_id: roleId,
@@ -1431,10 +1459,12 @@ export class RbacService {
         const currentRolePermCodes = currentRolePermsInTx.map((rp) => rp.permission.code);
         const customPermCodes = new Set(currentRolePermCodes);
 
-        // Lock and reload actor row in transaction to ensure actor is active and holds iam:manage_users (Finding 1 / Round 7)
+        // Lock actor, target role, and role_permissions in consistent order (Finding 2 / Round 8)
         const { actorSnapshot, permSet: actorPermSetInTx } = await this.lockAndAuthorizeActor(
           tx,
-          actor
+          actor,
+          ['iam:manage_users'],
+          roleId
         );
 
         // Verify actor holds all current permissions of the role under the lock
@@ -1553,8 +1583,8 @@ export class RbacService {
 
             await tx.auditLog.create({
               data: {
-                merchant_id: actor.merchantId,
-                user_id: actor.userId,
+                merchant_id: actorSnapshot.merchantId,
+                user_id: actorSnapshot.userId,
                 action: 'USER_ROLE_DETACHED',
                 entity_type: 'User',
                 entity_id: u.id,
@@ -1585,8 +1615,8 @@ export class RbacService {
         // Write immutable audit log
         await tx.auditLog.create({
           data: {
-            merchant_id: actor.merchantId,
-            user_id: actor.userId,
+            merchant_id: actorSnapshot.merchantId,
+            user_id: actorSnapshot.userId,
             action: 'ROLE_DELETED',
             entity_type: 'Role',
             entity_id: roleId,

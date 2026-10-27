@@ -395,7 +395,24 @@ class MockPrismaService {
       const r = this.roles.find(
         (x) => x.id === roleId && (x.is_system || !merchantId || x.merchant_id === merchantId)
       );
-      return r ? [{ id: r.id, merchant_id: r.merchant_id, is_system: Boolean(r.is_system) }] : [];
+      return r
+        ? [
+            {
+              id: r.id,
+              name: r.name,
+              description: r.description,
+              merchant_id: r.merchant_id,
+              is_system: Boolean(r.is_system),
+              code: r.code,
+            },
+          ]
+        : [];
+    }
+    if (sql.includes('FROM role_permissions') && sql.includes('FOR UPDATE')) {
+      const roleId = values[0];
+      return this.rolePermissions
+        .filter((rp) => rp.role_id === roleId)
+        .map((rp) => ({ id: rp.id, role_id: rp.role_id, permission_id: rp.permission_id }));
     }
     if (sql.includes('FROM users') && sql.includes('FOR UPDATE')) {
       if (sql.includes('WHERE id =')) {
@@ -2199,5 +2216,89 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
       /FOREIGN KEY \("custom_role_id"\) REFERENCES "roles"\("id"\) ON DELETE NO ACTION ON UPDATE CASCADE DEFERRABLE INITIALLY DEFERRED/,
       'Migration must create users_custom_role_id_fkey as DEFERRABLE INITIALLY DEFERRED'
     );
+  });
+
+  // Finding 2 (Round 8): BR-RBAC-02 / Concurrency: Lock actor role and role_permissions in transaction
+  test('Finding 2 / Round 8 / BR-RBAC-02: lockAndAuthorizeActor locks actor role and role_permissions; concurrent revocation denies mutation with 403 PRIVILEGE_ESCALATION_DENIED', async () => {
+    mockPrisma.rawQueries = [];
+
+    // 1. Create a custom role for the actor with iam:manage_users and order:view_create
+    const pManage = mockPrisma.permissions.find((p) => p.code === 'iam:manage_users')!;
+    const pOrder = mockPrisma.permissions.find((p) => p.code === 'order:view_create')!;
+    const actorRoleId = 'role-actor-r8-f2';
+    mockPrisma.roles.push({
+      id: actorRoleId,
+      name: 'Delegated Admin Role',
+      name_lower: 'delegated admin role',
+      description: 'Admin role with order create',
+      is_system: false,
+      merchant_id: MERCHANT_A,
+      created_at: new Date(),
+      updated_at: new Date(),
+    });
+    mockPrisma.rolePermissions.push(
+      { id: 'rp-del-1', role_id: actorRoleId, permission_id: pManage.id },
+      { id: 'rp-del-2', role_id: actorRoleId, permission_id: pOrder.id }
+    );
+
+    const actorUserId = 'user-actor-r8-f2';
+    mockPrisma.users.push({
+      id: actorUserId,
+      merchant_id: MERCHANT_A,
+      role: 'OPS_CSKH',
+      custom_role_id: actorRoleId,
+      status: 'ACTIVE',
+    });
+
+    const delegatedActor: ActorContext = {
+      userId: actorUserId,
+      merchantId: MERCHANT_A,
+      role: 'OPS_CSKH',
+      customRoleId: actorRoleId,
+    };
+
+    // 2. Simulate concurrent revocation of order:view_create while user lock is acquired inside transaction
+    const origQueryRaw = mockPrisma.$queryRaw.bind(mockPrisma);
+    mockPrisma.$queryRaw = async (strings: TemplateStringsArray, ...values: any[]) => {
+      const sql = strings.join('?');
+      if (sql.includes('FROM users') && sql.includes('FOR UPDATE')) {
+        const rpIdx = mockPrisma.rolePermissions.findIndex(
+          (rp) => rp.role_id === actorRoleId && rp.permission_id === pOrder.id
+        );
+        if (rpIdx !== -1) {
+          mockPrisma.rolePermissions.splice(rpIdx, 1);
+        }
+      }
+      return origQueryRaw(strings, ...values);
+    };
+
+    // 3. Actor attempts to create a role containing order:view_create
+    await assert.rejects(
+      async () => {
+        await service.createRole(
+          {
+            name: 'Escalated Role Attempt',
+            permissions: ['order:view_create'],
+          },
+          delegatedActor,
+          '127.0.0.1',
+          'corr-r8-f2-escalation'
+        );
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 403);
+        assert.strictEqual(err.code, 'PRIVILEGE_ESCALATION_DENIED');
+        return true;
+      }
+    );
+
+    // Verify row locks on users, roles, and role_permissions were executed
+    const lockedUsers = mockPrisma.rawQueries.some((q) => q.includes('FROM users') && q.includes('FOR UPDATE'));
+    const lockedRoles = mockPrisma.rawQueries.some((q) => q.includes('FROM roles') && q.includes('FOR UPDATE'));
+    const lockedRolePerms = mockPrisma.rawQueries.some((q) => q.includes('FROM role_permissions') && q.includes('FOR UPDATE'));
+    assert.ok(lockedUsers, 'Must execute SELECT ... FOR UPDATE on users');
+    assert.ok(lockedRoles, 'Must execute SELECT ... FOR UPDATE on roles');
+    assert.ok(lockedRolePerms, 'Must execute SELECT ... FOR UPDATE on role_permissions');
   });
 });
