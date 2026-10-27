@@ -2301,4 +2301,68 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
     assert.ok(lockedRoles, 'Must execute SELECT ... FOR UPDATE on roles');
     assert.ok(lockedRolePerms, 'Must execute SELECT ... FOR UPDATE on role_permissions');
   });
+
+  // Finding 3 (Round 8): BR-RBAC-07 / AC-RBAC-01-08: Re-read role under row lock in updateRole and audit locked snapshot
+  test('Finding 3 / Round 8 / BR-RBAC-07: updateRole re-reads role under row lock and audits locked before-image rather than stale pre-lock snapshot', async () => {
+    // 1. Create a custom role
+    const initialCreate = await service.createRole(
+      {
+        name: 'Vai Trò Ban Đầu F3',
+        description: 'Mô tả ban đầu trước khi sửa',
+        permissions: ['order:view_create'],
+      },
+      OWNER_ACTOR,
+      '127.0.0.1',
+      'corr-r8-f3-setup'
+    );
+    const roleId = initialCreate.data.role.id;
+
+    // 2. Intercept transaction lock to simulate concurrent modification of name and description before lock re-read
+    const origQueryRaw = mockPrisma.$queryRaw.bind(mockPrisma);
+    mockPrisma.$queryRaw = async (strings: TemplateStringsArray, ...values: any[]) => {
+      const sql = strings.join('?');
+      if (sql.includes('FROM roles') && sql.includes('FOR UPDATE')) {
+        const role = mockPrisma.roles.find((r) => r.id === roleId);
+        if (role) {
+          role.name = 'Tên Đã Đổi Đồng Thời';
+          role.name_lower = 'tên đã đổi đồng thời';
+          role.description = 'Mô tả đã đổi đồng thời';
+        }
+      }
+      return origQueryRaw(strings, ...values);
+    };
+
+    // 3. Execute update without specifying name (only updating description)
+    const updateRes = await service.updateRole(
+      roleId,
+      {
+        description: 'Mô tả mới nhất từ PATCH',
+      },
+      OWNER_ACTOR,
+      '127.0.0.1',
+      'corr-r8-f3-patch'
+    );
+
+    // Verify concurrent name update was preserved from locked row, not overwritten with pre-lock initial name
+    assert.strictEqual(updateRes.data.role.name, 'Tên Đã Đổi Đồng Thời');
+    assert.strictEqual(updateRes.data.role.description, 'Mô tả mới nhất từ PATCH');
+    assert.strictEqual(updateRes.data.role.permissions.length, 1);
+    assert.strictEqual(updateRes.data.role.permissions[0].code, 'order:view_create');
+
+    // Verify audit log old_value captured the locked snapshot ('Tên Đã Đổi Đồng Thời' and 'Mô tả đã đổi đồng thời')
+    const updateAudit = mockPrisma.auditLogs.find(
+      (a) => a.action === 'ROLE_UPDATED' && a.entity_id === roleId
+    );
+    assert.ok(updateAudit, 'ROLE_UPDATED audit log must be created');
+    assert.strictEqual(
+      updateAudit.old_value.name,
+      'Tên Đã Đổi Đồng Thời',
+      'Audit old_value must record locked row name, not stale pre-lock name'
+    );
+    assert.strictEqual(
+      updateAudit.old_value.description,
+      'Mô tả đã đổi đồng thời',
+      'Audit old_value must record locked row description'
+    );
+  });
 });

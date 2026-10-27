@@ -1169,11 +1169,36 @@ export class RbacService {
           );
         }
 
-        // Re-read current role permissions under row lock to prevent stripping concurrent grants
-        const currentRolePermsInTx = await tx.rolePermission.findMany({
-          where: { role_id: roleId },
-          include: { permission: true },
+        // Re-read target role and permissions under row lock (Finding 3 / Round 8)
+        const lockedTargetRole = await tx.role.findUnique({
+          where: { id: roleId },
+          include: {
+            permissions: {
+              include: { permission: true },
+            },
+          },
         });
+
+        if (!lockedTargetRole) {
+          throw new CanonicalApiException(
+            HttpStatus.NOT_FOUND,
+            'ROLE_NOT_FOUND',
+            'Không tìm thấy vai trò cần cập nhật'
+          );
+        }
+
+        if (lockedTargetRole.is_system) {
+          throw new CanonicalApiException(
+            HttpStatus.FORBIDDEN,
+            'SYSTEM_ROLE_IMMUTABLE',
+            'Không thể chỉnh sửa vai trò mặc định của hệ thống',
+            false,
+            'Chỉ có thể chỉnh sửa các vai trò tùy chỉnh do cửa hàng tạo'
+          );
+        }
+
+        const currentRolePermsInTx = lockedTargetRole.permissions || [];
+        const currentRolePermCodes = currentRolePermsInTx.map((rp: any) => rp.permission.code);
 
         // Lock actor, target role, and role_permissions in consistent order (Finding 2 / Round 8)
         const { actorSnapshot, permSet: actorPermSetInTx } = await this.lockAndAuthorizeActor(
@@ -1183,10 +1208,10 @@ export class RbacService {
           roleId
         );
 
-        // Privilege ceiling check 1: Actor must hold EVERY permission currently assigned to the role
-        const unauthorizedCurrentCodes = currentRolePermsInTx
-          .map((rp) => rp.permission.code)
-          .filter((code) => !actorPermSetInTx.has(code));
+        // Privilege ceiling check 1: Actor must hold EVERY permission currently assigned to the locked role
+        const unauthorizedCurrentCodes = currentRolePermCodes.filter(
+          (code: string) => !actorPermSetInTx.has(code)
+        );
 
         if (unauthorizedCurrentCodes.length > 0) {
           throw new CanonicalApiException(
@@ -1198,16 +1223,24 @@ export class RbacService {
           );
         }
 
-        // If permissions were not explicitly passed in dto, keep current permissions
+        // Compute writes from lockedTargetRole snapshot (Finding 3 / Round 8)
+        const effectiveName =
+          dto.name !== undefined ? dto.name.trim() : lockedTargetRole.name;
+        const effectiveDescription =
+          dto.description !== undefined
+            ? dto.description?.trim() || null
+            : lockedTargetRole.description;
+
+        // If permissions were not explicitly passed in dto, keep current locked permissions
         const targetPermissions =
           dto.permissions !== undefined
             ? permissionsInDb
-            : currentRolePermsInTx.map((rp) => rp.permission);
+            : currentRolePermsInTx.map((rp: any) => rp.permission);
 
         // Privilege ceiling check 2: Target permission set must be a subset of actor's permissions
         const unauthorizedTargetCodes = targetPermissions
-          .map((p) => p.code)
-          .filter((code) => !actorPermSetInTx.has(code));
+          .map((p: any) => p.code)
+          .filter((code: string) => !actorPermSetInTx.has(code));
 
         if (unauthorizedTargetCodes.length > 0) {
           throw new CanonicalApiException(
@@ -1219,15 +1252,15 @@ export class RbacService {
           );
         }
 
-        const beforePermissions = currentRolePermsInTx.map((rp) => rp.permission.code);
-        const newPermissions = targetPermissions.map((p) => p.code);
+        const beforePermissions = currentRolePermCodes;
+        const newPermissions = targetPermissions.map((p: any) => p.code);
 
         if (dto.name !== undefined) {
           const duplicateInTx = await tx.role.findFirst({
             where: {
               merchant_id: actorSnapshot.merchantId,
               id: { not: roleId },
-              name: { equals: updatedName, mode: 'insensitive' },
+              name: { equals: effectiveName, mode: 'insensitive' },
             },
           });
 
@@ -1246,12 +1279,9 @@ export class RbacService {
         const updated = await tx.role.update({
           where: { id: roleId },
           data: {
-            name: updatedName,
-            name_lower: updatedName.toLowerCase(),
-            description:
-              dto.description !== undefined
-                ? dto.description?.trim() || null
-                : existingRole.description,
+            name: effectiveName,
+            name_lower: effectiveName.toLowerCase(),
+            description: effectiveDescription,
           },
         });
 
@@ -1272,7 +1302,7 @@ export class RbacService {
           }
         }
 
-        // Write immutable audit log
+        // Write immutable audit log with locked before-image (Finding 3 / Round 8)
         await tx.auditLog.create({
           data: {
             merchant_id: actorSnapshot.merchantId,
@@ -1281,11 +1311,14 @@ export class RbacService {
             entity_type: 'Role',
             entity_id: roleId,
             old_value: {
-              name: existingRole.name,
-              description: existingRole.description,
+              id: lockedTargetRole.id,
+              name: lockedTargetRole.name,
+              description: lockedTargetRole.description,
               permissions: beforePermissions,
+              correlation_id: correlationId,
             },
             new_value: {
+              id: updated.id,
               name: updated.name,
               description: updated.description,
               permissions: newPermissions,
@@ -1295,7 +1328,7 @@ export class RbacService {
           },
         });
 
-        return updated;
+        return { updated, targetPermissions, actorSnapshot };
       });
     } catch (err: any) {
       if (err instanceof CanonicalApiException) throw err;
@@ -1320,7 +1353,7 @@ export class RbacService {
 
     const activeUserCount = await this.prisma.user.count({
       where: {
-        merchant_id: actor.merchantId,
+        merchant_id: updatedRole.actorSnapshot.merchantId,
         custom_role_id: roleId,
         status: ACTIVE_USER_STATUS_FILTER,
       },
@@ -1329,14 +1362,14 @@ export class RbacService {
     return {
       data: {
         role: {
-          id: updatedRole.id,
+          id: updatedRole.updated.id,
           code: null,
-          name: updatedRole.name,
-          description: updatedRole.description,
+          name: updatedRole.updated.name,
+          description: updatedRole.updated.description,
           is_system: false,
-          merchant_id: actor.merchantId,
-          permissions_count: permissionsInDb.length,
-          permissions: permissionsInDb.map((p) => ({
+          merchant_id: updatedRole.actorSnapshot.merchantId,
+          permissions_count: updatedRole.targetPermissions.length,
+          permissions: updatedRole.targetPermissions.map((p: any) => ({
             id: p.id,
             code: p.code,
             name: p.name,
@@ -1344,8 +1377,12 @@ export class RbacService {
             category: p.category,
           })),
           user_count: activeUserCount,
-          created_at: updatedRole.created_at.toISOString(),
-          updated_at: updatedRole.updated_at.toISOString(),
+          created_at: updatedRole.updated.created_at
+            ? updatedRole.updated.created_at.toISOString()
+            : new Date().toISOString(),
+          updated_at: updatedRole.updated.updated_at
+            ? updatedRole.updated.updated_at.toISOString()
+            : new Date().toISOString(),
         },
       },
       meta: {
