@@ -141,6 +141,8 @@ export class InvitationsController {
    */
   @Post('accept')
   @HttpCode(HttpStatus.OK)
+  @Header('Cache-Control', 'no-store')
+  @Header('Referrer-Policy', 'no-referrer')
   async acceptInvitation(@Body() dto: AcceptInvitationRequest, @Req() req: any) {
     const correlationId =
       req.headers?.['x-correlation-id'] || req.correlationId || normalizeCorrelationId();

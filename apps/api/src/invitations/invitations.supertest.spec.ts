@@ -516,6 +516,8 @@ async function runInvitationsSupertestSuite() {
     password_confirm: 'StrongPassword123!',
   });
   assert.strictEqual(acceptRes.status, 200);
+  assert.strictEqual(acceptRes.headers['cache-control'], 'no-store');
+  assert.strictEqual(acceptRes.headers['referrer-policy'], 'no-referrer');
   assert.strictEqual(acceptRes.body.data.status, 'ACTIVE');
   const newUserId = acceptRes.body.data.user_id;
   assert.ok(newUserId);

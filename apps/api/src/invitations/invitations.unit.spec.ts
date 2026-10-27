@@ -3684,5 +3684,13 @@ CREATE INDEX "some_other_idx" ON "invitations"("created_at");
         fs.rmSync(tempDir, { recursive: true, force: true });
       }
     });
+
+    it('Round 9 Finding 5: acceptInvitation sets Cache-Control: no-store and Referrer-Policy: no-referrer', () => {
+      const headers = Reflect.getMetadata('__headers__', InvitationsController.prototype.acceptInvitation) || [];
+      const hasNoStore = headers.some((h: any) => h.name === 'Cache-Control' && h.value === 'no-store');
+      const hasNoReferrer = headers.some((h: any) => h.name === 'Referrer-Policy' && h.value === 'no-referrer');
+      assert.strictEqual(hasNoStore, true, 'acceptInvitation must set Cache-Control: no-store');
+      assert.strictEqual(hasNoReferrer, true, 'acceptInvitation must set Referrer-Policy: no-referrer');
+    });
   });
 });
