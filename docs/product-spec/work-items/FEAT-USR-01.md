@@ -1,0 +1,130 @@
+# FEAT-USR-01 — User invitations
+
+## Control
+
+| Field           | Value |
+| --------------- | ----- |
+| Work Item ID    | `FEAT-USR-01` |
+| Feature ID      | `FEAT-USR-01` |
+| Status          | `READY_FOR_AUTHOR` |
+| Delivery order  | 11 |
+| Dependencies    | `TASK-FOUND-04` (merged) |
+| Assigned author | `GEMINI` |
+| Risk            | `HIGH` |
+| Risk domains    | `auth`, `security`, `tenant isolation`, `database ownership` |
+| Allowed paths   | `prisma/schema.prisma`, `prisma/migrations/*`, `apps/api/src/users/*`, `apps/api/src/invitations/*`, `apps/api/src/app.module.ts`, `packages/contracts/src/index.ts`, `docs/product-spec/contracts/openapi.yaml`, `docs/product-spec/work-items/FEAT-USR-01.md`, `apps/web/src/components/forms/InviteUserModal.tsx`, `apps/web/src/components/UserManagementTab.tsx`, `apps/web/src/app/settings/users/*`, `apps/web/src/app/invite/accept/*` |
+| Reviewer        | Codex — fresh independent task |
+| Branch          | `feat/feat-usr-01-user-invitations` |
+| Pull Request    | Pending |
+
+## Business outcome
+
+A shop owner or authorized operations manager can invite new team members by email or phone, assign their role and store/warehouse scopes, resend expiring invitations, and cancel pending invitations. Invited recipients can securely inspect and accept the invitation via a tokenized link to activate their account and set their password, enforcing tenant isolation so users access only their assigned scopes.
+
+## Source references
+
+- `docs/product-spec/docs/01-product/MASTER-FEATURE-CATALOG.md` — `FEAT-USR-01`: User invitations ("Send, resend, cancel, accept and expire").
+- `docs/product-spec/docs/02-business/USE-CASES.md` — `UC-USR-01`: Invite and authorize a user (Actor: `SHOP_OWNER` or authorized administrator; enter identity → assign roles/scopes → send invite → recipient verifies and accepts; rules: cannot remove last owner; cannot grant permissions actor does not possess; audit: invite, resend, role/scope change, revoke; acceptance: `AC-USR-01`).
+- `docs/product-spec/docs/02-business/STATE-MACHINES.md` — Section "User invite": states `PENDING`, `ACCEPTED`, `EXPIRED`, `CANCELLED`; transitions `[*] -> PENDING`, `PENDING -> ACCEPTED`, `PENDING -> EXPIRED`, `PENDING -> CANCELLED`, `EXPIRED -> PENDING: resend`.
+- `docs/product-spec/docs/02-business/RBAC-APPROVAL-MATRIX.md` — Capability "Manage users/roles": Owner has full action (`A`), Ops manager has scoped action (`S`), all other roles denied (`-`). Rules: "A user cannot grant a permission they do not hold", "Backend is authoritative; hidden UI controls are insufficient", "Permission evaluation includes tenant, branch, warehouse and carrier-account scope."
+- `docs/product-spec/docs/02-business/BUSINESS-RULES-DECISION-TABLES.md` — `BR-AUTH-13`: Login of an `invited` user before acceptance is rejected with a distinct canonical error (`AUTH_INVITATION_PENDING`) and audit record.
+- `docs/product-spec/docs/04-data/DOMAIN-MODEL-ERD.md` — Identity aggregate includes `User`, `Membership`, `Role`, `Permission`, `UserSession`, `Invitation`.
+- `docs/product-spec/docs/04-data/DATA-DICTIONARY.md` — Section "Tenant and user": `User.status` (`PENDING_VERIFICATION`, `INVITED`, `ACTIVE`, `SUSPENDED`, `DISABLED`), `Membership.tenant_id`, `Membership.scope_json` (branch/warehouse scope).
+- `docs/product-spec/docs/08-testing/ACCEPTANCE-AND-E2E.md` — `AC-USR-01`: "Given an owner, when inviting an operator with one warehouse/account scope, then the invite can be accepted and the operator cannot access another warehouse/account."
+- `docs/product-spec/docs/03-ux/INFORMATION-ARCHITECTURE.md` — `SCR-USR-01` (`/settings/users`).
+- `docs/product-spec/docs/03-ux/DESIGN-SYSTEM-UX-RULES.md` — UI state contract (loading, empty, validation, error, forbidden, success, recovery).
+- `docs/product-spec/docs/06-architecture/SECURITY-NFR-OBSERVABILITY.md` — One-time invitation tokens, SHA-256 token hashing at rest, 7-day expiration, rate limiting on invite dispatch, zero plaintext token leakage in logs or responses.
+
+## Preconditions and dependencies
+
+- `TASK-FOUND-04` is merged, providing OpenAPI contract generation, test infrastructure, and baseline quality gates.
+- `FEAT-AUTH-01` is merged, providing password hashing primitives, user persistence schema, and audit logging patterns.
+- `FEAT-AUTH-03` is merged, enforcing status gate `AUTH_INVITATION_PENDING` for invited users attempting login prior to token acceptance.
+
+## Author boundary
+
+`GEMINI` is required because user invitations span database migrations, cryptographic token generation and verification, transactional user account creation, fine-grained RBAC privilege boundary checks, and multi-state UI flows.
+
+## In scope
+
+1. `POST /api/v1/invitations` — Send an invitation with recipient email or phone, assigned role (`OPS_CSKH`, `WAREHOUSE`, `ACCOUNTANT`), and store/warehouse scope arrays. Generates cryptographically secure 32-byte token, hashes with SHA-256, sets 7-day expiration (`PENDING`), and records audit log `INVITATION_SENT`.
+2. `GET /api/v1/invitations` — List pending, expired, and accepted invitations for the caller's tenant, with status filtering and pagination.
+3. `POST /api/v1/invitations/:id/resend` — Resend an invitation; regenerates token, resets expiration to 7 days from now, transitions `EXPIRED` back to `PENDING`, and records audit log `INVITATION_RESENT`.
+4. `POST /api/v1/invitations/:id/cancel` — Cancel a pending invitation (`PENDING` -> `CANCELLED`); records audit log `INVITATION_CANCELLED`.
+5. `GET /api/v1/invitations/verify` — Public query validating token from link query parameter; returns masked recipient identifier, tenant name, and role. Returns 404 for nonexistent, consumed, or expired tokens.
+6. `POST /api/v1/invitations/accept` — Public endpoint to accept invitation with valid token, user full name, and chosen password; atomically transitions invitation to `ACCEPTED`, creates `User` record with `ACTIVE` status, hashed password, and assigned scopes, and records audit log `INVITATION_ACCEPTED`.
+7. Privilege boundaries: Non-owner actors cannot invite users with roles or scopes exceeding their own (e.g. `OPS_CSKH` cannot invite an `OWNER`).
+8. Anti-duplication: Reject invitation if email/phone already has an active account in the tenant or an unexpired pending invitation.
+9. UI Integration: Connect `InviteUserModal` (`apps/web/src/components/forms/InviteUserModal.tsx`) and invitations list in `UserManagementTab` (`apps/web/src/components/UserManagementTab.tsx`), plus public `/invite/accept` screen.
+10. Integration and contract tests covering all positive, negative, expired, and privilege-escalation scenarios.
+
+## Out of scope
+
+- Self-registration for new tenants (`FEAT-AUTH-01`).
+- Platform operator admin-created shops (`FEAT-AUTH-02`).
+- User lifecycle management such as edit, suspend, reinstate, and delete (`FEAT-USR-02`).
+- Dynamic custom role creation editor (`FEAT-RBAC-01`).
+- Scope editing and multi-store assignment editor UI (`FEAT-RBAC-02`).
+- Multi-factor authentication setup during invite acceptance (`FEAT-AUTH-05`).
+
+## Business rules and edge cases
+
+- `BR-INV-01 — Privilege Ceiling`: An actor may only invite users with roles and scopes less than or equal to their own. An actor cannot invite an `OWNER` unless they are an active `OWNER`.
+- `BR-INV-02 — Token Hashing & Delivery`: Plaintext invitation tokens (32 cryptographically random bytes) are never stored in the database. Only `SHA-256(token)` is persisted. Plaintext is returned only in dispatch payload or mock delivery log.
+- `BR-INV-03 — 7-Day Expiry`: Invitations expire exactly 7 days (168 hours) from creation or resend. Verification or acceptance of an expired invitation returns 400 `INVITATION_EXPIRED`.
+- `BR-INV-04 — Atomic Acceptance`: Consuming an invitation token, updating invitation status to `ACCEPTED`, and creating the `User` with password hash occurs within a single database transaction. Concurrent acceptance requests using the same token succeed at most once.
+- `BR-INV-05 — Replay Protection`: A token once accepted (`consumed_at != null`) cannot be accepted again. Subsequent attempts return 400 `INVITATION_ALREADY_USED`.
+- `BR-INV-06 — Non-Enumeration on Public Endpoints`: Token verification (`GET /api/v1/invitations/verify`) returns identical canonical 404 `INVITATION_NOT_FOUND` whether the token is invalid, malformed, expired, or cancelled.
+- `BR-INV-07 — Tenant Scoping`: All admin invitation operations (`POST`, `GET`, `resend`, `cancel`) are strictly scoped to the authenticated caller's `merchant_id`. Cross-tenant requests return 403 `FORBIDDEN`.
+- `BR-INV-08 — Duplicate Prevention`: If a recipient email or phone already belongs to an `ACTIVE` user in the merchant, return 400 `USER_ALREADY_EXISTS`. If a `PENDING` unexpired invitation already exists for that identifier, return 400 `INVITATION_ALREADY_PENDING` (suggesting resend instead).
+- `BR-INV-09 — Immutable Audit Trail`: Every invitation creation, resend, cancellation, and acceptance records an immutable audit log entry including actor, target identifier, merchant ID, and correlation ID, with zero passwords or raw tokens recorded.
+
+## UI states
+
+The invitations modal and list in `SCR-USR-01` (`/settings/users`) and public acceptance screen `/invite/accept` must implement:
+
+- **Loading:** Skeleton table rows during invitations list fetch; submit buttons display spinner and lock against duplicate submissions.
+- **Empty:** When no pending invitations exist, table shows empty state: "Chưa có lời mời nào đang chờ xử lý".
+- **Validation:** Missing or malformed email/phone, empty full name, or password failing strength criteria render field errors from the canonical error envelope.
+- **Error:** Network or server errors display a dismissible alert with a retry action without resetting filled form data.
+- **Forbidden:** Actor lacking `Manage users/roles` permission receives 403 `FORBIDDEN` and cannot view or trigger invite actions.
+- **Success:** Sending an invite closes modal, refreshes list, and shows toast: "Đã gửi lời mời thành công"; acceptance shows welcome screen leading to login.
+- **Recovery:** Expired invitations on the list display an explicit "Gửi lại" (Resend) button to restore status to `PENDING`.
+
+## Acceptance matrix
+
+| AC/Test ID | Scenario | Expected result | Evidence required |
+| --- | --- | --- | --- |
+| `AC-USR-01-01` | Owner invites new operator with valid email and warehouse scope | 201 Created; `Invitation` record created with `PENDING` status, hashed token, 7-day expiry; audit `INVITATION_SENT` logged | Supertest integration test + DB assertion |
+| `AC-USR-01-02` | Owner invites new operator with phone identifier | 201 Created; phone-based invitation created with `PENDING` status | Supertest integration test |
+| `AC-USR-01-03` | Non-owner manager attempts to invite a user with `OWNER` role | 403 `FORBIDDEN` (Privilege ceiling exceeded); no invitation created | Supertest integration test |
+| `AC-USR-01-04` | User without `Manage users/roles` permission attempts to send invite | 403 `FORBIDDEN`; no invitation created | Supertest integration test |
+| `AC-USR-01-05` | Invite sent to email already active in the tenant | 400 `USER_ALREADY_EXISTS` canonical validation error; no duplicate created | Supertest integration test |
+| `AC-USR-01-06` | Invite sent to email that already has a pending unexpired invite | 400 `INVITATION_ALREADY_PENDING`; indicates resend action | Supertest integration test |
+| `AC-USR-01-07` | Missing required recipient identifier or role | 400 `VALIDATION_ERROR` with field details | Supertest integration test |
+| `AC-USR-01-08` | Owner lists invitations | 200 OK with list of invitations scoped to merchant; raw tokens omitted | Supertest integration test |
+| `AC-USR-01-09` | Owner resends an expired invitation | 200 OK; token regenerated; status transitions `EXPIRED -> PENDING`; expires_at extended 7 days; audit `INVITATION_RESENT` | Supertest integration test + DB assertion |
+| `AC-USR-01-10` | Owner cancels a pending invitation | 200 OK; status transitions `PENDING -> CANCELLED`; token invalidated; audit `INVITATION_CANCELLED` | Supertest integration test + DB assertion |
+| `AC-USR-01-11` | Cross-tenant actor attempts to cancel or resend invitation | 403 `FORBIDDEN`; target invitation unmodified | Supertest integration test |
+| `AC-USR-01-12` | Public verification of valid unexpired invitation token | 200 OK with `{ valid: true, tenant_name, role, identifier }` | Supertest integration test |
+| `AC-USR-01-13` | Public verification of expired, cancelled, or nonexistent token | 404 `INVITATION_NOT_FOUND` canonical error (anti-enumeration) | Supertest integration test |
+| `AC-USR-01-14` | Recipient accepts valid invitation with password and full name | 200 OK; `User` created with `ACTIVE` status, hashed password, and assigned scopes; invitation marked `ACCEPTED`; audit `INVITATION_ACCEPTED` | Supertest integration test + DB check |
+| `AC-USR-01-15` | Recipient attempts to accept an already-used invitation token | 400 `INVITATION_ALREADY_USED` canonical error; no second user created | Supertest integration test |
+| `AC-USR-01-16` | Recipient provides weak password during acceptance | 400 `VALIDATION_ERROR` with password strength errors; invitation remains `PENDING` | Supertest integration test |
+| `AC-USR-01-17` | Accepted user logs in and attempts access outside assigned scope | User access to unassigned warehouse/store scope returns 403 `FORBIDDEN` (`AC-USR-01`) | Integration authorization test |
+| `AC-USR-01-18` | Inspection of logs, audit entries, and database | Zero plaintext invitation tokens stored or logged; passwords hashed with scrypt/argon2id | Security assertion + `pnpm security:secrets` |
+
+## Verification commands
+
+- `pnpm install --frozen-lockfile`
+- `pnpm db:generate`
+- `pnpm lint`
+- `pnpm format:check`
+- `pnpm typecheck`
+- `pnpm test`
+- `pnpm build`
+
+## Open questions
+
+1. **Multi-tenant Identity Sharing:** When an email address already registered under Merchant A is invited to Merchant B, should the user accept the invite into a shared platform identity with multiple `Membership` rows, or must user accounts remain strictly isolated with independent credentials per merchant? (Current implementation uses merchant-scoped users; full multi-tenant shared identity depends on future identity model unification).
+2. **Invitation Expiry Configuration:** Expiry is standardized at 7 days (168 hours). Whether individual merchants may configure custom expiry limits (e.g. 24 hours or 48 hours) is deferred to future organization settings.
