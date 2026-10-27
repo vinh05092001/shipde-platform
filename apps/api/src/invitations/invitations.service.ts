@@ -26,6 +26,56 @@ export function canonicalizePhoneNumber(rawPhone?: string): string | undefined {
   return cleaned;
 }
 
+export interface CanonicalIdentity {
+  rawEmail?: string;
+  rawPhone?: string;
+  email?: string;
+  phone?: string;
+  recipient?: string;
+  buildUserOrConditions: () => Array<{ email?: { equals: string; mode: 'insensitive' }; phone?: string }>;
+  buildInvitationOrConditions: () => Array<{ email?: { equals: string; mode: 'insensitive' }; phone?: string }>;
+}
+
+/**
+ * ONE shared canonical identity helper (lowercase email, canonical VN phone)
+ * used across createInvitation, resendInvitation, and acceptInvitation (Round 8 Finding 2 / BR-INV-08 / AC-USR-01-05).
+ */
+export function resolveCanonicalIdentity(params: {
+  email?: string | null;
+  phone?: string | null;
+}): CanonicalIdentity {
+  const rawEmail = typeof params.email === 'string' ? params.email.trim() : undefined;
+  const rawPhone = typeof params.phone === 'string' ? params.phone.trim() : undefined;
+  const email = rawEmail && rawEmail.length > 0 ? rawEmail.toLowerCase() : undefined;
+  const phone = rawPhone ? canonicalizePhoneNumber(rawPhone) : undefined;
+  const recipient = email || phone;
+
+  const buildConditions = () => {
+    const or: Array<{ email?: { equals: string; mode: 'insensitive' }; phone?: string }> = [];
+    if (email) {
+      or.push({ email: { equals: email, mode: 'insensitive' } });
+    }
+    if (phone) {
+      or.push({ phone });
+      if (phone.startsWith('0')) {
+        or.push({ phone: `+84${phone.slice(1)}` });
+        or.push({ phone: `84${phone.slice(1)}` });
+      }
+    }
+    return or;
+  };
+
+  return {
+    rawEmail,
+    rawPhone,
+    email,
+    phone,
+    recipient,
+    buildUserOrConditions: buildConditions,
+    buildInvitationOrConditions: buildConditions,
+  };
+}
+
 export function maskIdentifier(identifier?: string | null): string {
   if (!identifier) return '';
   if (identifier.includes('@')) {
@@ -339,9 +389,10 @@ export class InvitationsService {
       );
     }
 
-    const email = typeof dto.email === 'string' ? dto.email.trim().toLowerCase() : undefined;
-    const phone = typeof dto.phone === 'string' ? canonicalizePhoneNumber(dto.phone) : undefined;
-    const recipient = email || phone;
+    const identity = resolveCanonicalIdentity({ email: dto.email, phone: dto.phone });
+    const email = identity.email;
+    const phone = identity.phone;
+    const recipient = identity.recipient;
 
     // 1. Validation: Exactly one recipient identifier required (AC-USR-01-07 / Security-NFR Finding 3)
     if (!email && !phone) {
@@ -443,42 +494,12 @@ export class InvitationsService {
       'mời'
     );
 
-    // 4. Duplicate checks (BR-INV-08 / Round 7 Finding 6)
-    const buildUserOrConditions = () => {
-      const or: any[] = [];
-      if (email) {
-        or.push({ email: { equals: email, mode: 'insensitive' } });
-      }
-      if (phone) {
-        or.push({ phone });
-        if (phone.startsWith('0')) {
-          or.push({ phone: `+84${phone.slice(1)}` });
-          or.push({ phone: `84${phone.slice(1)}` });
-        }
-      }
-      return or;
-    };
-
-    const buildInviteOrConditions = () => {
-      const or: any[] = [];
-      if (email) {
-        or.push({ email: { equals: email, mode: 'insensitive' } });
-      }
-      if (phone) {
-        or.push({ phone });
-        if (phone.startsWith('0')) {
-          or.push({ phone: `+84${phone.slice(1)}` });
-          or.push({ phone: `84${phone.slice(1)}` });
-        }
-      }
-      return or;
-    };
-
+    // 4. Duplicate checks using shared canonical identity helper (BR-INV-08 / Round 7 Finding 6 / Round 8 Finding 2)
     // 4a. Check active user with case-insensitive email or canonical phone variants (AC-USR-01-05)
     const existingUser = await this.prisma.user.findFirst({
       where: {
         merchant_id: actor.merchantId,
-        OR: buildUserOrConditions(),
+        OR: identity.buildUserOrConditions(),
       },
     });
 
@@ -497,7 +518,7 @@ export class InvitationsService {
         merchant_id: actor.merchantId,
         status: InvitationStatusEnum.PENDING,
         expires_at: { gt: new Date() },
-        OR: buildInviteOrConditions(),
+        OR: identity.buildInvitationOrConditions(),
       },
     });
 
@@ -562,7 +583,7 @@ export class InvitationsService {
         const inTxExistingUser = await tx.user.findFirst({
           where: {
             merchant_id: actor.merchantId,
-            OR: buildUserOrConditions(),
+            OR: identity.buildUserOrConditions(),
           },
         });
         if (inTxExistingUser) {
@@ -579,7 +600,7 @@ export class InvitationsService {
             merchant_id: actor.merchantId,
             status: InvitationStatusEnum.PENDING,
             expires_at: { gt: new Date() },
-            OR: buildInviteOrConditions(),
+            OR: identity.buildInvitationOrConditions(),
           },
         });
         if (inTxPendingInvite) {
@@ -946,24 +967,36 @@ export class InvitationsService {
       );
     }
 
+    // Shared canonical identity helper (Round 8 Finding 2 / BR-INV-08 / AC-USR-01-05)
+    const identity = resolveCanonicalIdentity({ email: invitation.email, phone: invitation.phone });
+
+    // Re-check active user before rotating token or consuming quota
+    const existingActiveUser = await this.prisma.user.findFirst({
+      where: {
+        merchant_id: actor.merchantId,
+        OR: identity.buildUserOrConditions(),
+      },
+    });
+    if (existingActiveUser) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'USER_ALREADY_EXISTS',
+        'Người dùng với thông tin định danh này đã tồn tại trong cửa hàng',
+        false
+      );
+    }
+
     // Round 6 Finding 1: a replacement pending invite for the same recipient blocks resend
     // (BR-INV-08 / AC-USR-01-09) before any quota is consumed or the target row is touched
-    const recipientMatch = [
-      ...(invitation.email ? [{ email: invitation.email }] : []),
-      ...(invitation.phone ? [{ phone: invitation.phone }] : []),
-    ];
-    const pendingSibling =
-      recipientMatch.length > 0
-        ? await this.prisma.invitation.findFirst({
-            where: {
-              merchant_id: actor.merchantId,
-              id: { not: invitationId },
-              status: InvitationStatusEnum.PENDING,
-              expires_at: { gt: new Date() },
-              OR: recipientMatch,
-            },
-          })
-        : null;
+    const pendingSibling = await this.prisma.invitation.findFirst({
+      where: {
+        merchant_id: actor.merchantId,
+        id: { not: invitationId },
+        status: InvitationStatusEnum.PENDING,
+        expires_at: { gt: new Date() },
+        OR: identity.buildInvitationOrConditions(),
+      },
+    });
     if (pendingSibling) {
       throw this.alreadyPendingException();
     }
@@ -1021,14 +1054,15 @@ export class InvitationsService {
       updated = await this.prisma.$transaction(async (tx) => {
         // Persist EXPIRED for time-elapsed pending siblings so they cannot collide on the
         // partial unique index (BR-INV-08); tenant-scoped and never touching the target row
-        if (recipientMatch.length > 0) {
+        const inviteConditions = identity.buildInvitationOrConditions();
+        if (inviteConditions.length > 0) {
           await tx.invitation.updateMany({
             where: {
               merchant_id: actor.merchantId,
               id: { not: invitationId },
               status: InvitationStatusEnum.PENDING,
               expires_at: { lte: new Date() },
-              OR: recipientMatch,
+              OR: inviteConditions,
             },
             data: { status: InvitationStatusEnum.EXPIRED },
           });
@@ -1594,14 +1628,12 @@ export class InvitationsService {
         );
       }
 
-      // Check existing user conflict in merchant
+      // Check existing user conflict in merchant using shared canonical identity helper (Round 8 Finding 2 / BR-INV-08 / AC-USR-01-05)
+      const identity = resolveCanonicalIdentity({ email: invitation.email, phone: invitation.phone });
       const duplicateUser = await tx.user.findFirst({
         where: {
           merchant_id: invitation.merchant_id,
-          OR: [
-            ...(invitation.email ? [{ email: invitation.email }] : []),
-            ...(invitation.phone ? [{ phone: invitation.phone }] : []),
-          ],
+          OR: identity.buildUserOrConditions(),
         },
       });
 
@@ -1618,8 +1650,8 @@ export class InvitationsService {
       const newUser = await tx.user.create({
         data: {
           merchant_id: invitation.merchant_id,
-          email: invitation.email || null,
-          phone: invitation.phone || null,
+          email: identity.email || null,
+          phone: identity.phone || null,
           full_name: dto.full_name.trim(),
           password_hash: hashedPassword,
           role: invitation.role,

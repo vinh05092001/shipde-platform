@@ -7,6 +7,7 @@ import {
   maskIdentifier,
   validatePasswordStrength,
   canonicalizePhoneNumber,
+  resolveCanonicalIdentity,
 } from './invitations.service';
 import { InvitationsController } from './invitations.controller';
 import { resolveFrontendBaseUrl } from './invitation-url.util';
@@ -3451,6 +3452,126 @@ CREATE INDEX "some_other_idx" ON "invitations"("created_at");
       assert.ok(
         sanitized.includes('some_other_idx'),
         'unrelated index statement must be preserved'
+      );
+    });
+
+    it('Round 8 Finding 2: Shared canonical identity helper blocks resend and accept duplicate active users', async () => {
+      // 1. Verify resolveCanonicalIdentity helper normalizes email to lowercase and phone to VN national format
+      const id1 = resolveCanonicalIdentity({ email: '  Test.User@Domain.COM  ' });
+      assert.strictEqual(id1.email, 'test.user@domain.com');
+      assert.strictEqual(id1.recipient, 'test.user@domain.com');
+      const or1 = id1.buildUserOrConditions();
+      assert.deepStrictEqual(or1, [{ email: { equals: 'test.user@domain.com', mode: 'insensitive' } }]);
+
+      const id2 = resolveCanonicalIdentity({ phone: '+84901234567' });
+      assert.strictEqual(id2.phone, '0901234567');
+      const or2 = id2.buildUserOrConditions();
+      assert.deepStrictEqual(or2, [
+        { phone: '0901234567' },
+        { phone: '+84901234567' },
+        { phone: '84901234567' },
+      ]);
+
+      // 2. Resend invitation rejects with 400 USER_ALREADY_EXISTS when active user exists (without rotating token)
+      mockPrisma.invitation.findUnique = async () => ({
+        id: 'inv-resend-user-dup',
+        merchant_id: MERCHANT_ID,
+        email: 'user@example.com',
+        phone: null,
+        role: RoleEnum.OPS_CSKH,
+        store_scopes: [],
+        warehouse_scopes: [],
+        status: InvitationStatusEnum.PENDING,
+        token_hash: 'existing_token_hash',
+        expires_at: new Date(Date.now() + 100000),
+        consumed_at: null,
+      });
+
+      let updateManyCalled = false;
+      mockPrisma.invitation.updateMany = async () => {
+        updateManyCalled = true;
+        return { count: 1 };
+      };
+
+      // Mock active user already exists matching canonical identity
+      const originalUserFindFirst = mockPrisma.user.findFirst;
+      mockPrisma.user.findFirst = async (args: any) => {
+        if (args?.where?.OR) {
+          return {
+            id: 'existing-user-id',
+            merchant_id: MERCHANT_ID,
+            email: 'USER@EXAMPLE.COM',
+            status: 'active',
+          };
+        }
+        return originalUserFindFirst(args);
+      };
+
+      await assert.rejects(
+        service.resendInvitation(
+          'inv-resend-user-dup',
+          { userId: OWNER_USER_ID, merchantId: MERCHANT_ID, role: RoleEnum.OWNER },
+          '127.0.0.1',
+          'corr-resend-dup'
+        ),
+        (err: any) => {
+          assert.strictEqual(err.getStatus(), HttpStatus.BAD_REQUEST);
+          assert.strictEqual(err.code, 'USER_ALREADY_EXISTS');
+          return true;
+        }
+      );
+
+      // Verify token was NOT rotated and no update happened
+      assert.strictEqual(updateManyCalled, false);
+
+      // 3. Accept invitation rejects with 400 USER_ALREADY_EXISTS when active user matches canonical identity inside tx
+      mockPrisma.invitation.findFirst = async () => ({
+        id: 'inv-accept-user-dup',
+        merchant_id: MERCHANT_ID,
+        email: 'newbie@example.com',
+        phone: null,
+        role: RoleEnum.OPS_CSKH,
+        store_scopes: [],
+        warehouse_scopes: [],
+        status: InvitationStatusEnum.PENDING,
+        token_hash: service.hashToken('valid_accept_token'),
+        expires_at: new Date(Date.now() + 100000),
+        consumed_at: null,
+      });
+
+      const txMock = {
+        invitation: {
+          updateMany: async () => ({ count: 1 }),
+        },
+        user: {
+          findFirst: async () => ({
+            id: 'existing-user-match',
+            merchant_id: MERCHANT_ID,
+            email: 'NEWBIE@EXAMPLE.COM',
+          }),
+          create: async () => ({ id: 'never-called' }),
+        },
+        auditLog: {
+          create: async () => ({}),
+        },
+      };
+      mockPrisma.$transaction = async (callback: any) => callback(txMock);
+
+      await assert.rejects(
+        service.acceptInvitation(
+          {
+            token: 'valid_accept_token',
+            full_name: 'Nguyen Van A',
+            password: 'ValidPassword123!',
+          },
+          '127.0.0.1',
+          'corr-accept-dup'
+        ),
+        (err: any) => {
+          assert.strictEqual(err.getStatus(), HttpStatus.BAD_REQUEST);
+          assert.strictEqual(err.code, 'USER_ALREADY_EXISTS');
+          return true;
+        }
       );
     });
   });
