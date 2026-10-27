@@ -56,6 +56,9 @@ export function extractInvitationToken(params: {
   hash?: string | null;
   searchToken?: string | null;
 }): string | null {
+  // AC-USR-01-18 / SECURITY-NFR / BR-INV-02: Honor ONLY the URL fragment (#token=...).
+  // Query parameters are deliberately ignored to prevent token leakage in web server access logs,
+  // document requests, and Referer headers.
   const hash = (params.hash || '').replace(/^#/, '');
   if (hash) {
     if (hash.startsWith('token=')) {
@@ -65,9 +68,6 @@ export function extractInvitationToken(params: {
     const tok = search.get('token');
     if (tok) return tok;
     if (!hash.includes('=')) return hash;
-  }
-  if (params.searchToken) {
-    return params.searchToken;
   }
   return null;
 }
@@ -151,8 +151,7 @@ function AcceptInvitationContent() {
 
   useEffect(() => {
     const rawHash = typeof window !== 'undefined' ? window.location.hash : null;
-    const searchToken = searchParams ? searchParams.get('token') : null;
-    const resolved = extractInvitationToken({ hash: rawHash, searchToken });
+    const resolved = extractInvitationToken({ hash: rawHash });
     // eslint-disable-next-line react-hooks/set-state-in-effect -- Client-side invitation token extraction from URL fragment
     setToken(resolved);
 
@@ -168,7 +167,7 @@ function AcceptInvitationContent() {
       return;
     }
     void verifyToken(resolved);
-  }, [searchParams, verifyToken]);
+  }, [verifyToken]);
 
   // Password rules helper
   const rules = validateAcceptPassword(password, passwordConfirm);

@@ -12,7 +12,7 @@
 | Assigned author | `GEMINI` |
 | Risk            | `HIGH` |
 | Risk domains    | `auth`, `security`, `tenant isolation`, `database ownership` |
-| Allowed paths   | `prisma/schema.prisma`, `prisma/migrations/*`, `apps/api/src/users/*`, `apps/api/src/invitations/*`, `apps/api/src/auth/rate-limit.service.ts`, `apps/api/src/app.module.ts`, `packages/contracts/src/*`, `docs/product-spec/contracts/openapi.yaml`, `docs/product-spec/work-items/FEAT-USR-01.md`, `apps/web/src/components/forms/InviteUserModal.tsx`, `apps/web/src/components/UserManagementTab.tsx`, `apps/web/src/app/settings/users/*`, `apps/web/src/app/invite/accept/*`, `apps/api/package.json`, `apps/web/src/tests/comprehensive-rules.test.ts` |
+| Allowed paths   | `prisma/schema.prisma`, `prisma/migrations/*`, `apps/api/src/users/*`, `apps/api/src/invitations/*`, `apps/api/src/auth/rate-limit.service.ts`, `apps/api/src/app.module.ts`, `packages/contracts/src/*`, `docs/product-spec/contracts/openapi.yaml`, `docs/product-spec/work-items/FEAT-USR-01.md`, `apps/web/src/components/forms/InviteUserModal.tsx`, `apps/web/src/components/UserManagementTab.tsx`, `apps/web/src/app/settings/users/*`, `apps/web/src/app/invite/accept/*`, `apps/api/package.json`, `apps/web/src/tests/comprehensive-rules.test.ts`, `apps/web/next.config.mjs` |
 | Reviewer        | Codex — fresh independent task |
 | Branch          | `feat/feat-usr-01-user-invitations` |
 | Pull Request    | Pending |
@@ -45,6 +45,7 @@ A shop owner or authorized operations manager can invite new team members by ema
 
 `GEMINI` is required because user invitations span database migrations, cryptographic token generation and verification, transactional user account creation, fine-grained RBAC privilege boundary checks, and multi-state UI flows.
 
+- **Next.js Document Security Headers (Round 8 Finding 1):** To enforce AC-USR-01-18, BR-INV-02, and SECURITY-NFR, `/invite/accept` requires document response headers `Referrer-Policy: no-referrer` and `Cache-Control: no-store` configured in `apps/web/next.config.mjs` and metadata layout, preventing token secrets from leaking in document requests and proxy access logs.
 - **Rate Limit Service boundary (Finding 10):** Invitation endpoints require rate limiting to prevent invitation flooding, email exhaustion, and acceptance brute forcing per `SECURITY-NFR-OBSERVABILITY.md`. Rather than duplicating rate limiting mechanics, `InvitationsService` reuses `RateLimitService` in `apps/api/src/auth/rate-limit.service.ts`, tracked explicitly in allowed paths.
 - **API Package Test Runner boundary (Finding 7 / AC-USR-01-18):** `apps/api/package.json` is modified solely to register the invitations unit test runner (`invitations.unit.spec.ts`) and supertest HTTP integration suite (`invitations.supertest.spec.ts`) under the package `"test"` script for automated quality gates.
 - **Web Comprehensive Test Suite boundary (Finding 7 / AC-USR-01-18):** `apps/web/src/tests/comprehensive-rules.test.ts` is the authoritative `@shipde/web` test harness, updated to verify frontend store scope formatting, scope parsing, and UI state contract (loading, empty, forbidden, retry/error, and validation).

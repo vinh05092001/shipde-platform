@@ -1726,15 +1726,29 @@ export async function runComprehensiveRulesAudit(): Promise<{
     };
     stripTokenFromAddressBar(fakeWindow as any);
 
+    const nextConfigModule = await import('../../next.config.mjs');
+    const customHeaders = await nextConfigModule.default.headers();
+    const acceptHeaderEntry = customHeaders.find((h: any) => h.source === '/invite/accept');
+    const hasNoReferrerHeader = acceptHeaderEntry?.headers?.some(
+      (h: any) => h.key === 'Referrer-Policy' && h.value === 'no-referrer'
+    );
+    const hasNoStoreHeader = acceptHeaderEntry?.headers?.some(
+      (h: any) => h.key === 'Cache-Control' && h.value === 'no-store'
+    );
+
     assertTest(
       'UI & SECURITY',
       'FEAT-USR-01-UI-FRAGMENT-TOKEN-SECURITY',
-      'Xác thực token lời mời từ URL fragment, không lưu vết token trên server log và xóa khỏi thanh địa chỉ',
+      'Xác thực token lời mời từ URL fragment duy nhất, bỏ qua query token, cấu hình Referrer-Policy và Cache-Control',
       extractInvitationToken({ hash: '#token=secret_frag_token' }) === 'secret_frag_token' &&
         extractInvitationToken({ hash: '#secret_raw_token' }) === 'secret_raw_token' &&
-        extractInvitationToken({ searchToken: 'query_tok' }) === 'query_tok' &&
-        replacedUrl === '/invite/accept',
-      'Trích xuất token an toàn từ fragment và xóa khỏi address bar để bảo vệ bí mật'
+        extractInvitationToken({ searchToken: 'query_tok' }) === null &&
+        extractInvitationToken({ hash: '#token=secret_frag_token', searchToken: 'query_tok' }) ===
+          'secret_frag_token' &&
+        replacedUrl === '/invite/accept' &&
+        Boolean(hasNoReferrerHeader) &&
+        Boolean(hasNoStoreHeader),
+      'Trích xuất token chỉ từ fragment, lờ đi query param, xóa khỏi address bar và áp dụng document headers bảo mật'
     );
   }
 
