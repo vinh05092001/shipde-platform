@@ -81,13 +81,25 @@ export class InvitationsService {
         where: { id: actor.userId, merchant_id: actor.merchantId },
         select: { id: true, role: true, store_scopes: true, warehouse_scopes: true, status: true },
       });
-      if (user && user.role) {
-        return {
-          id: user.id,
-          role: user.role,
-          store_scopes: user.store_scopes || [],
-          warehouse_scopes: user.warehouse_scopes || [],
-        };
+      if (user) {
+        const isUserActive =
+          typeof user.status === 'string' && user.status.toLowerCase() === 'active';
+        if (!isUserActive) {
+          throw new CanonicalApiException(
+            HttpStatus.FORBIDDEN,
+            'FORBIDDEN',
+            'Tài khoản người dùng đã bị vô hiệu hóa hoặc chưa kích hoạt',
+            false
+          );
+        }
+        if (user.role) {
+          return {
+            id: user.id,
+            role: user.role,
+            store_scopes: user.store_scopes || [],
+            warehouse_scopes: user.warehouse_scopes || [],
+          };
+        }
       }
     }
     if (actor.role) {

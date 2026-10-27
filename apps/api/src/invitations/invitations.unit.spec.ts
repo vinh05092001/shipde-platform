@@ -499,6 +499,48 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
         }
       );
     });
+
+    it('rejects suspended/disabled/non-active actor with 403 FORBIDDEN (Finding 4)', async () => {
+      mockPrisma.user.findFirst = async (args: any) => {
+        if (args?.where?.id === 'suspended-user-id') {
+          return {
+            id: 'suspended-user-id',
+            role: RoleEnum.OWNER,
+            store_scopes: ['*'],
+            warehouse_scopes: ['*'],
+            status: 'suspended', // Suspended owner account!
+          };
+        }
+        return null;
+      };
+
+      const actor = {
+        userId: 'suspended-user-id',
+        merchantId: MERCHANT_ID,
+      };
+
+      await assert.rejects(
+        async () => {
+          await service.createInvitation(
+            {
+              email: 'test@shipde.vn',
+              role: RoleEnum.OPS_CSKH,
+            },
+            actor,
+            '127.0.0.1',
+            'test-corr-suspended'
+          );
+        },
+        (err: any) => {
+          assert.ok(err instanceof CanonicalApiException);
+          assert.strictEqual(err.getStatus(), HttpStatus.FORBIDDEN);
+          assert.strictEqual(err.code, 'FORBIDDEN');
+          const resp = err.getResponse() as any;
+          assert.ok(resp?.error?.message.includes('vô hiệu hóa'));
+          return true;
+        }
+      );
+    });
   });
 
   // AC-USR-01-05: Invite sent to email already active in tenant
