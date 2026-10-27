@@ -1,7 +1,23 @@
 import { Injectable, Inject, HttpStatus } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { RoleEnum } from '@prisma/client';
-import { CanonicalApiException } from '../auth/auth.service';
+import { CanonicalApiException as BaseCanonicalApiException } from '../auth/auth.service';
+
+export class CanonicalApiException extends BaseCanonicalApiException {
+  constructor(
+    statusCode: HttpStatus,
+    code: string,
+    message: string,
+    retryable: boolean = false,
+    nextAction?: string,
+    fields?: any[],
+    retryAfterSeconds?: number,
+    extra?: Record<string, any>
+  ) {
+    super(statusCode, code, message, retryable, nextAction, fields, retryAfterSeconds, extra);
+    this.message = message;
+  }
+}
 import {
   PLATFORM_PERMISSIONS,
   SYSTEM_ROLES,

@@ -2,7 +2,9 @@ import * as assert from 'node:assert';
 import { test, describe, beforeEach } from 'node:test';
 import { RbacService, SYSTEM_ROLE_IDS } from './rbac.service';
 import { PLATFORM_PERMISSIONS, SYSTEM_ROLES } from './rbac.constants';
-import { CanonicalApiException } from '../auth/auth.service';
+import { CanonicalApiException as BaseCanonicalApiException } from '../auth/auth.service';
+import { CanonicalApiException } from './rbac.service';
+import { RbacExceptionFilter } from './rbac-exception.filter';
 import { assertNoSensitiveData } from '@shipde/testkit';
 
 /**
@@ -1206,6 +1208,54 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
       customRoleId,
       'User custom_role_id must NOT be cleared'
     );
+  });
+
+  // Finding 3 Proving Test (Round 6): Move change out of auth.service.ts; auth CanonicalApiException unmodified while RbacExceptionFilter maps fields to details
+  test('Finding 3 / Round 6 / Scope Integrity: CanonicalApiException in auth has no details duplicate; RbacExceptionFilter maps fields to details for RBAC endpoints', async () => {
+    // 1. Instantiate CanonicalApiException from auth.service directly
+    const authException = new BaseCanonicalApiException(
+      400,
+      'AUTH_ERROR',
+      'Test Auth Error',
+      false,
+      undefined,
+      [{ field: 'email', code: 'INVALID', message: 'Email invalid' }]
+    );
+    const authPayload: any = authException.getResponse();
+    assert.strictEqual(
+      authPayload.error.details,
+      undefined,
+      'Base CanonicalApiException in auth must NOT contain details duplicate'
+    );
+    assert.ok(
+      Array.isArray(authPayload.error.fields),
+      'Base CanonicalApiException must retain fields'
+    );
+
+    // 2. Test RbacExceptionFilter mapping
+    const filter = new RbacExceptionFilter();
+    let sentStatus: number | undefined;
+    let sentJson: any;
+    const mockResponse: any = {
+      status: (s: number) => {
+        sentStatus = s;
+        return {
+          json: (j: any) => {
+            sentJson = j;
+          },
+        };
+      },
+      setHeader: () => {},
+    };
+    const mockHost: any = {
+      switchToHttp: () => ({
+        getResponse: () => mockResponse,
+      }),
+    };
+
+    filter.catch(authException, mockHost);
+    assert.strictEqual(sentStatus, 400);
+    assert.deepStrictEqual(sentJson.error.details, authPayload.error.fields);
   });
 
   // Finding 3 Proving Test (Round 4): Non-role-name unique constraint failures stay 500

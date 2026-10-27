@@ -16,13 +16,13 @@ import {
 import { RbacService } from './rbac.service';
 import { CreateRoleDto, UpdateRoleDto, ActorContext } from './rbac.dto';
 import { SessionGuard } from '../session/session.guard';
-import { CanonicalExceptionFilter } from '../auth/canonical-exception.filter';
+import { RbacExceptionFilter } from './rbac-exception.filter';
 import { normalizeCorrelationId } from '@shipde/config';
 import { extractClientIp } from '../utils/ip.util';
 
 @Controller(['api/v1', ''])
 @UseGuards(SessionGuard)
-@UseFilters(CanonicalExceptionFilter)
+@UseFilters(RbacExceptionFilter)
 export class RbacController {
   constructor(@Inject(RbacService) private readonly rbacService: RbacService) {}
 
