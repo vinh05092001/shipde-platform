@@ -1663,9 +1663,11 @@ export class RbacService {
                 {
                   field: 'role_id',
                   code: 'IN_USE',
-                  message: `Gỡ vai trò sẽ mở rộng quyền hạn cho người dùng không hoạt động: ${broaderUsers.join(', ')}`,
+                  message: `Vai trò đang được gán cho ${broaderUsers.length} người dùng không hoạt động`,
                 },
-              ]
+              ],
+              undefined,
+              { broaderUsers }
             );
           }
 
@@ -1727,7 +1729,31 @@ export class RbacService {
         });
       });
     } catch (err: any) {
-      if (err instanceof CanonicalApiException) throw err;
+      if (err instanceof CanonicalApiException) {
+        if (err.code === 'ROLE_IN_USE' && err.extra?.broaderUsers) {
+          const broaderUsers = err.extra.broaderUsers as string[];
+          await this.prisma.auditLog
+            .create({
+              data: {
+                merchant_id: actor.merchantId || '',
+                user_id: actor.userId,
+                action: 'ROLE_DELETE_BLOCKED_INACTIVE_WIDENING',
+                entity_type: 'Role',
+                entity_id: roleId,
+                reason: 'DETACH_WOULD_WIDEN_PRIVILEGES',
+                old_value: {
+                  role_id: roleId,
+                  broader_user_count: broaderUsers.length,
+                  broader_user_ids: broaderUsers,
+                  correlation_id: correlationId,
+                },
+                ip_address: clientIp,
+              },
+            })
+            .catch(() => {});
+        }
+        throw err;
+      }
       if (isDeadlockOrSerializationError(err)) {
         throw createConcurrencyConflictException();
       }

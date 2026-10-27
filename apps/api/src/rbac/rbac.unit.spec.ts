@@ -2611,4 +2611,70 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
       assert.strictEqual(err.retryable, true);
     }
   });
+
+  // Finding 4 Proving Test (Round 9): Inactive assignee widening returns only count in client error and keeps IDs in audit row
+  test('Finding 4 / Round 9 / Security / PII: deleteRole inactive-assignee widening returns only count in client error without raw user IDs and preserves IDs in audit row', async () => {
+    // 1. Create a custom role with narrow permissions
+    const createRes = await service.createRole(
+      {
+        name: 'Vai Trò Hẹp PII Check F4',
+        permissions: ['order:view_create'],
+      },
+      OWNER_ACTOR,
+      '127.0.0.1',
+      'corr-r9-f4-setup'
+    );
+    const roleId = createRes.data.role.id;
+
+    // 2. Add inactive user with broader enum role (FINANCE)
+    const sensitiveInactiveUserId = 'user-secret-uuid-12345678-inactive';
+    mockPrisma.users.push({
+      id: sensitiveInactiveUserId,
+      merchant_id: MERCHANT_A,
+      role: 'FINANCE',
+      custom_role_id: roleId,
+      status: 'INACTIVE',
+    });
+
+    // 3. Attempt to delete role
+    try {
+      await service.deleteRole(
+        roleId,
+        OWNER_ACTOR,
+        '127.0.0.1',
+        'corr-r9-f4-delete'
+      );
+      assert.fail('Should have blocked deletion due to inactive assignee widening');
+    } catch (err: any) {
+      assert.ok(err instanceof CanonicalApiException);
+      assert.strictEqual(err.getStatus(), 400);
+      assert.strictEqual(err.code, 'ROLE_IN_USE');
+
+      // Assert client error field message does NOT leak raw user IDs
+      const fields = (err.getResponse() as any)?.error?.fields || err.fields || [];
+      assert.ok(fields.length > 0, 'Must include fields error');
+      const roleField = fields.find((f: any) => f.field === 'role_id');
+      assert.ok(roleField, 'Must include role_id field error');
+
+      assert.ok(
+        !roleField.message.includes(sensitiveInactiveUserId),
+        'Client error message must NOT leak raw user IDs'
+      );
+      assert.ok(
+        roleField.message.includes('1'),
+        'Client error message must contain user count'
+      );
+    }
+
+    // 4. Verify audit row retained the raw user IDs safely server-side
+    const wideningAudit = mockPrisma.auditLogs.find(
+      (a) => a.action === 'ROLE_DELETE_BLOCKED_INACTIVE_WIDENING' && a.entity_id === roleId
+    );
+    assert.ok(wideningAudit, 'Audit log for blocked widening must be recorded');
+    assert.strictEqual(wideningAudit.old_value.broader_user_count, 1);
+    assert.ok(
+      wideningAudit.old_value.broader_user_ids.includes(sensitiveInactiveUserId),
+      'Audit log must retain user IDs for administrative traceability'
+    );
+  });
 });
