@@ -544,8 +544,8 @@ export class RateLimitService {
       const recipientKey = `ratelimit:invite:dispatch:${tenantPrefix}recipient:${cleanId}`;
       const recipientConsume = await this.consumeAttemptKey(recipientKey, 5, windowSeconds);
       if (!recipientConsume.allowed) {
-        // Revert IP consume if recipient quota was exceeded
-        await this.revertAttemptKey(ipKey);
+        // Revert only the IP member just added if recipient quota was exceeded (Finding 4)
+        await this.revertAttemptKey(ipKey, ipConsume.member, ipConsume.timestamp);
         return {
           allowed: false,
           retryAfterSeconds: recipientConsume.retryAfterSeconds,
@@ -566,20 +566,35 @@ export class RateLimitService {
     // No-op to avoid double counting since checkInvitationDispatchLimit atomically consumes quota upfront
   }
 
+  async revertInvitationDispatchAttempt(
+    ip: string,
+    identifier?: string,
+    merchantId?: string
+  ): Promise<void> {
+    const ipKey = `ratelimit:invite:dispatch:ip:${ip}`;
+    await this.revertAttemptKey(ipKey);
+    if (identifier) {
+      const cleanId = identifier.toLowerCase().trim();
+      const tenantPrefix = merchantId ? `merchant:${merchantId}:` : '';
+      const recipientKey = `ratelimit:invite:dispatch:${tenantPrefix}recipient:${cleanId}`;
+      await this.revertAttemptKey(recipientKey);
+    }
+  }
+
   private async consumeAttemptKey(
     key: string,
     limit: number,
     windowSeconds: number
-  ): Promise<{ allowed: boolean; retryAfterSeconds?: number; count: number }> {
+  ): Promise<{ allowed: boolean; retryAfterSeconds?: number; count: number; member?: string; timestamp?: number }> {
     const now = Date.now();
     const windowMs = windowSeconds * 1000;
+    const member = `${now}:${Math.random().toString(36).substring(2, 8)}`;
 
     if (this.redisService) {
       try {
         const client = this.redisService.getClient();
         if (client.status === 'ready') {
           const clearBefore = now - windowMs;
-          const member = `${now}:${Math.random().toString(36).substring(2, 8)}`;
           const lua = `
             local key = KEYS[1]
             local now = tonumber(ARGV[1])
@@ -613,7 +628,7 @@ export class RateLimitService {
           const count = res[1];
           const earliest = Number(res[2]);
           const retryAfter = Math.max(1, Math.ceil((earliest + windowMs - now) / 1000));
-          return { allowed, retryAfterSeconds: retryAfter, count };
+          return { allowed, retryAfterSeconds: retryAfter, count, member, timestamp: now };
         }
       } catch {
         // Fallback to in-memory store
@@ -631,13 +646,16 @@ export class RateLimitService {
     }
     valid.push(now);
     this.memoryStore.set(key, valid);
-    return { allowed: true, count: valid.length };
+    return { allowed: true, count: valid.length, member, timestamp: now };
   }
 
-  private async revertAttemptKey(key: string): Promise<void> {
+  private async revertAttemptKey(key: string, member?: string, timestamp?: number): Promise<void> {
     const existing = this.memoryStore.get(key);
     if (existing && existing.length > 0) {
-      existing.pop();
+      const idx = timestamp !== undefined ? existing.lastIndexOf(timestamp) : existing.length - 1;
+      if (idx !== -1) {
+        existing.splice(idx, 1);
+      }
       if (existing.length === 0) {
         this.memoryStore.delete(key);
       } else {
@@ -648,7 +666,11 @@ export class RateLimitService {
       try {
         const client = this.redisService.getClient();
         if (client.status === 'ready') {
-          await client.zremrangebyrank(key, -1, -1);
+          if (member) {
+            await client.zrem(key, member);
+          } else {
+            await client.zremrangebyrank(key, -1, -1);
+          }
         }
       } catch {
         // Fallback ignore
@@ -658,16 +680,16 @@ export class RateLimitService {
 
   /**
    * Check invitation verification check limits:
-   * - IP: max 30 verification checks per 15 minutes
+   * - IP: max 30 verification checks per 15 minutes (atomic consume upfront to prevent race conditions)
    */
   async checkInvitationVerifyLimit(ip: string): Promise<RateLimitResult> {
     const windowSeconds = 900;
     const key = `ratelimit:invite:verify:ip:${ip}`;
-    const check = await this.getAttempts(key, windowSeconds);
-    if (check.count >= 30) {
+    const ipConsume = await this.consumeAttemptKey(key, 30, windowSeconds);
+    if (!ipConsume.allowed) {
       return {
         allowed: false,
-        retryAfterSeconds: check.retryAfterSeconds,
+        retryAfterSeconds: ipConsume.retryAfterSeconds,
         reason: 'Quá nhiều yêu cầu kiểm tra lời mời từ địa chỉ IP này. Vui lòng thử lại sau.',
       };
     }
@@ -675,33 +697,35 @@ export class RateLimitService {
   }
 
   async recordInvitationVerifyAttempt(ip: string): Promise<void> {
-    await this.recordAttemptKey(`ratelimit:invite:verify:ip:${ip}`, 900);
+    // No-op to avoid double counting since checkInvitationVerifyLimit atomically consumes quota upfront (Finding 4)
   }
 
   /**
    * Check invitation acceptance rate limits:
-   * - IP: max 10 accept attempts per 15 minutes
-   * - Token: max 5 accept attempts per 15 minutes
+   * - IP: max 10 accept attempts per 15 minutes (atomic consume)
+   * - Token: max 5 accept attempts per 15 minutes (atomic consume)
    */
   async checkInvitationAcceptLimit(ip: string, tokenHash?: string): Promise<RateLimitResult> {
     const windowSeconds = 900;
     const ipKey = `ratelimit:invite:accept:ip:${ip}`;
-    const ipCheck = await this.getAttempts(ipKey, windowSeconds);
-    if (ipCheck.count >= 10) {
+    const ipConsume = await this.consumeAttemptKey(ipKey, 10, windowSeconds);
+    if (!ipConsume.allowed) {
       return {
         allowed: false,
-        retryAfterSeconds: ipCheck.retryAfterSeconds,
+        retryAfterSeconds: ipConsume.retryAfterSeconds,
         reason: 'Quá nhiều yêu cầu chấp nhận lời mời từ địa chỉ IP này. Vui lòng thử lại sau.',
       };
     }
 
     if (tokenHash) {
       const tokenKey = `ratelimit:invite:accept:token:${tokenHash}`;
-      const tokenCheck = await this.getAttempts(tokenKey, windowSeconds);
-      if (tokenCheck.count >= 5) {
+      const tokenConsume = await this.consumeAttemptKey(tokenKey, 5, windowSeconds);
+      if (!tokenConsume.allowed) {
+        // Revert only the IP attempt just added (Finding 4)
+        await this.revertAttemptKey(ipKey, ipConsume.member, ipConsume.timestamp);
         return {
           allowed: false,
-          retryAfterSeconds: tokenCheck.retryAfterSeconds,
+          retryAfterSeconds: tokenConsume.retryAfterSeconds,
           reason: 'Quá nhiều lần thử kích hoạt lời mời này. Vui lòng thử lại sau.',
         };
       }
@@ -711,11 +735,7 @@ export class RateLimitService {
   }
 
   async recordInvitationAcceptAttempt(ip: string, tokenHash?: string): Promise<void> {
-    const windowSeconds = 900;
-    await this.recordAttemptKey(`ratelimit:invite:accept:ip:${ip}`, windowSeconds);
-    if (tokenHash) {
-      await this.recordAttemptKey(`ratelimit:invite:accept:token:${tokenHash}`, windowSeconds);
-    }
+    // No-op to avoid double counting since checkInvitationAcceptLimit atomically consumes quota upfront (Finding 4)
   }
 
   clear(): void {

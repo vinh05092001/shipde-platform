@@ -444,6 +444,13 @@ export class InvitationsService {
     const invitationUrl = `${safeBaseUrl}/invite/accept?token=${rawToken}`;
 
     const compensateFailedCreate = async (reason: string) => {
+      if (this.rateLimitService) {
+        await this.rateLimitService.revertInvitationDispatchAttempt(
+          clientIp,
+          recipient,
+          actor.merchantId
+        );
+      }
       // Conditionally retire row only if still unconsumed pending token
       // Never delete audit rows to compensate; record a compensating audit event instead (Finding 1)
       await this.prisma.$transaction(async (tx) => {
@@ -822,6 +829,13 @@ export class InvitationsService {
     const invitationUrl = `${safeBaseUrl}/invite/accept?token=${rawToken}`;
 
     const compensateFailedResend = async (reason: string) => {
+      if (this.rateLimitService) {
+        await this.rateLimitService.revertInvitationDispatchAttempt(
+          clientIp,
+          recipient,
+          actor.merchantId
+        );
+      }
       // Compensate: restore prior token hash, status, expiry conditionally using updateMany predicates
       // Never delete audit history; record compensating audit event instead (Finding 2)
       await this.prisma.$transaction(async (tx) => {

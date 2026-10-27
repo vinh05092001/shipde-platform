@@ -2546,5 +2546,50 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
       assert.strictEqual(ipBlockedRes.allowed, false);
       assert.ok(ipBlockedRes.reason?.includes('địa chỉ IP'));
     });
+
+    it('Finding 4: atomic consume for checkInvitationVerifyLimit blocks brute-force without check-then-record race', async () => {
+      const rateLimiter = new RateLimitService();
+      const ip = '10.99.1.1';
+
+      // 30 verification checks succeed and atomically consume quota
+      for (let i = 0; i < 30; i++) {
+        const res = await rateLimiter.checkInvitationVerifyLimit(ip);
+        assert.strictEqual(res.allowed, true, `Verify attempt ${i + 1} should be allowed`);
+      }
+
+      // 31st check is blocked atomically without needing recordInvitationVerifyAttempt
+      const blocked = await rateLimiter.checkInvitationVerifyLimit(ip);
+      assert.strictEqual(blocked.allowed, false);
+      assert.ok(blocked.retryAfterSeconds! > 0);
+    });
+
+    it('Finding 4: atomic consume for checkInvitationAcceptLimit blocks parallel race and reverts only the exact member', async () => {
+      const rateLimiter = new RateLimitService();
+      const ip = '10.99.2.1';
+      const tokenHash = 'test-token-hash-brute-force';
+
+      // Parallel race test: 15 concurrent accept attempts on the same token
+      // In check-then-record, all 15 would pass; with atomic consume, exactly 5 must pass
+      const results = await Promise.all(
+        Array.from({ length: 15 }, () => rateLimiter.checkInvitationAcceptLimit(ip, tokenHash))
+      );
+      const allowedCount = results.filter((r) => r.allowed).length;
+      const blockedCount = results.filter((r) => !r.allowed).length;
+
+      assert.strictEqual(allowedCount, 5, 'Exactly 5 concurrent token attempts must be allowed');
+      assert.strictEqual(blockedCount, 10, 'Exactly 10 concurrent token attempts must be rejected');
+
+      // The 10 rejected token attempts reverted their IP consume, so IP consumed is still 5
+      // Verify we can perform 5 more attempts with a different token from the same IP (reaching 10 max IP limit)
+      for (let i = 0; i < 5; i++) {
+        const res = await rateLimiter.checkInvitationAcceptLimit(ip, `different-token-${i}`);
+        assert.strictEqual(res.allowed, true, `IP attempt ${5 + i + 1} should be allowed`);
+      }
+
+      // 11th IP attempt is blocked
+      const ipBlocked = await rateLimiter.checkInvitationAcceptLimit(ip, 'another-token');
+      assert.strictEqual(ipBlocked.allowed, false);
+      assert.ok(ipBlocked.reason?.includes('địa chỉ IP'));
+    });
   });
 });
