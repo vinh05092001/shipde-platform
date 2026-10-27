@@ -363,8 +363,11 @@ export class RbacService {
   /**
    * GET /api/v1/roles (AC-RBAC-01-02)
    */
-  async getRoles(merchantId: string, correlationId: string) {
+  async getRoles(merchantId: string, correlationId: string, actor?: ActorContext) {
     await this.ensurePlatformSeed();
+    const canManageRoles = actor
+      ? await this.actorHasPermissions(actor, ['iam:manage_users'])
+      : true;
 
     // Fetch system roles and merchant custom roles from database
     const roles = await this.prisma.role.findMany({
@@ -435,6 +438,7 @@ export class RbacService {
     return {
       data: {
         roles: roleItems,
+        can_manage_roles: canManageRoles,
       },
       meta: {
         correlation_id: correlationId,

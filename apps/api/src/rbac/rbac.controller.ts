@@ -46,7 +46,7 @@ export class RbacController {
   async getRoles(@Req() req: any) {
     const correlationId = (req as any).correlationId || normalizeCorrelationId();
     const actor = await this.resolveActor(req);
-    return this.rbacService.getRoles(actor.merchantId, correlationId);
+    return this.rbacService.getRoles(actor.merchantId, correlationId, actor);
   }
 
   /**

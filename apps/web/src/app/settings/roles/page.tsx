@@ -62,8 +62,7 @@ export default function RolesSettingsPage() {
     permissions: [],
   });
   const [fieldErrors, setFieldErrors] = useState<{ name?: string; permissions?: string }>({});
-
-  const isOwner = user?.role === 'OWNER';
+  const [canManageRoles, setCanManageRoles] = useState<boolean>(false);
 
   // Fetch roles and permissions catalog
   const fetchData = useCallback(async () => {
@@ -99,12 +98,15 @@ export default function RolesSettingsPage() {
       setPermissions(permsJson.data.permissions || []);
       setCategories(permsJson.data.categories || []);
       setRoles(rolesJson.data.roles || []);
+      setCanManageRoles(
+        Boolean(rolesJson.data?.can_manage_roles ?? (user?.role === 'OWNER'))
+      );
     } catch (err: any) {
       setErrorMsg(err.message || 'Lỗi kết nối máy chủ khi tải dữ liệu phân quyền');
     } finally {
       setLoading(false);
     }
-  }, [API_BASE, token]);
+  }, [API_BASE, token, user?.role]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- initial roles and permissions catalog fetch
@@ -112,8 +114,8 @@ export default function RolesSettingsPage() {
   }, [fetchData]);
 
   const handleOpenCreate = () => {
-    if (!isOwner) {
-      setErrorMsg('Bạn không có quyền quản lý vai trò và phân quyền (Chỉ Chủ Shop)');
+    if (!canManageRoles) {
+      setErrorMsg('Bạn không có quyền quản lý vai trò và phân quyền (Cần quyền iam:manage_users)');
       return;
     }
     setFormState({
@@ -132,8 +134,8 @@ export default function RolesSettingsPage() {
       setErrorMsg('Vai trò mặc định của hệ thống không thể chỉnh sửa hoặc xóa');
       return;
     }
-    if (!isOwner) {
-      setErrorMsg('Bạn không có quyền quản lý vai trò và phân quyền');
+    if (!canManageRoles) {
+      setErrorMsg('Bạn không có quyền quản lý vai trò và phân quyền (Cần quyền iam:manage_users)');
       return;
     }
     setEditingRole(role);
@@ -332,7 +334,7 @@ export default function RolesSettingsPage() {
             <span>Làm mới</span>
           </button>
 
-          {isOwner && (
+          {canManageRoles && (
             <button
               type="button"
               onClick={handleOpenCreate}
@@ -393,13 +395,13 @@ export default function RolesSettingsPage() {
         </div>
       )}
 
-      {/* Non-owner Warning Callout */}
-      {!isOwner && (
+      {/* Non-authorized Warning Callout */}
+      {!canManageRoles && (
         <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs flex items-center gap-2.5">
           <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0" />
           <span>
-            Bạn đang đăng nhập với tư cách nhân viên. Bạn chỉ có quyền <strong>xem</strong> danh mục
-            vai trò. Thao tác tạo hoặc chỉnh sửa quyền hạn yêu cầu tài khoản{' '}
+            Bạn chỉ có quyền <strong>xem</strong> danh mục vai trò. Thao tác tạo hoặc chỉnh sửa quyền
+            hạn yêu cầu quyền <strong>iam:manage_users</strong> hoặc tài khoản{' '}
             <strong>Chủ Shop (Owner)</strong>.
           </span>
         </div>
@@ -459,7 +461,7 @@ export default function RolesSettingsPage() {
                     tạo vai trò tùy chỉnh mới để phân quyền chi tiết cho từng nghiệp vụ.
                   </p>
                 </div>
-                {isOwner && (
+                {canManageRoles && (
                   <button
                     type="button"
                     onClick={handleOpenCreate}
@@ -518,7 +520,7 @@ export default function RolesSettingsPage() {
                         >
                           Chi tiết
                         </button>
-                        {isOwner && (
+                        {canManageRoles && (
                           <>
                             <button
                               type="button"
