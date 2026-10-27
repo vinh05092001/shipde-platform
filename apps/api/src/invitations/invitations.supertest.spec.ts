@@ -571,6 +571,21 @@ async function runInvitationsSupertestSuite() {
   assert.strictEqual(unauthScopeRes.status, 403);
   assert.strictEqual(unauthScopeRes.body.error.code, 'FORBIDDEN');
 
+  // [TEST 18 / Finding 1] Burst rate limiting returns 429 RATE_LIMITED (SECURITY-NFR)
+  console.log('[TEST 18 / Finding 1] Rate limit burst returns 429 RATE_LIMITED');
+  let burstRateLimited = false;
+  for (let i = 0; i < 35; i++) {
+    const res = await request(app.getHttpServer())
+      .get('/api/v1/invitations/verify?token=burst-rate-limit-check-token')
+      .set('X-Forwarded-For', '198.51.100.99');
+    if (res.status === 429) {
+      burstRateLimited = true;
+      assert.strictEqual(res.body.error.code, 'RATE_LIMITED');
+      break;
+    }
+  }
+  assert.strictEqual(burstRateLimited, true, 'Rate limit burst must return 429 RATE_LIMITED');
+
   await app.close();
   console.log('================================================================');
   console.log('✅ ALL INVITATIONS SUPERTEST TESTS PASSED 100% (FEAT-USR-01)');

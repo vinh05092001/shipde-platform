@@ -12,3 +12,4 @@ import { AuthModule } from '../auth/auth.module';
   exports: [InvitationsService],
 })
 export class InvitationsModule {}
+

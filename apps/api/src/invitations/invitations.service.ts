@@ -55,9 +55,8 @@ export class InvitationsService {
     @Optional()
     @Inject(VERIFICATION_ADAPTER)
     private readonly deliveryAdapter?: IVerificationDeliveryAdapter,
-    @Optional()
     @Inject(RateLimitService)
-    private readonly rateLimitService?: RateLimitService
+    private readonly rateLimitService: RateLimitService = new RateLimitService()
   ) {}
 
   private hashToken(rawToken: string): string {
@@ -194,23 +193,28 @@ export class InvitationsService {
     const phone = dto.phone ? dto.phone.trim().replace(/[\s-]/g, '') : undefined;
     const recipient = email || phone;
 
-    // Rate limiting: Anti-abuse dispatch limit (SECURITY-NFR)
-    if (this.rateLimitService) {
-      const rateLimit = await this.rateLimitService.checkInvitationDispatchLimit(
-        clientIp,
-        recipient
+    // Rate limiting: Anti-abuse dispatch limit (SECURITY-NFR) - fail closed
+    if (!this.rateLimitService) {
+      throw new CanonicalApiException(
+        HttpStatus.TOO_MANY_REQUESTS,
+        'RATE_LIMITED',
+        'Dịch vụ kiểm soát tần suất không khả dụng. Vui lòng thử lại sau.'
       );
-      if (!rateLimit.allowed) {
-        throw new CanonicalApiException(
-          HttpStatus.TOO_MANY_REQUESTS,
-          'RATE_LIMITED',
-          rateLimit.reason || 'Quá nhiều yêu cầu gửi lời mời. Vui lòng thử lại sau.',
-          false,
-          undefined,
-          undefined,
-          rateLimit.retryAfterSeconds
-        );
-      }
+    }
+    const rateLimit = await this.rateLimitService.checkInvitationDispatchLimit(
+      clientIp,
+      recipient
+    );
+    if (!rateLimit.allowed) {
+      throw new CanonicalApiException(
+        HttpStatus.TOO_MANY_REQUESTS,
+        'RATE_LIMITED',
+        rateLimit.reason || 'Quá nhiều yêu cầu gửi lời mời. Vui lòng thử lại sau.',
+        false,
+        undefined,
+        undefined,
+        rateLimit.retryAfterSeconds
+      );
     }
 
     // 1. Validation: At least one recipient identifier required (AC-USR-01-07)
@@ -610,24 +614,29 @@ export class InvitationsService {
       );
     }
 
-    // Rate limiting: Anti-abuse dispatch limit (SECURITY-NFR)
-    if (this.rateLimitService) {
-      const recipient = invitation.email || invitation.phone || undefined;
-      const rateLimit = await this.rateLimitService.checkInvitationDispatchLimit(
-        clientIp,
-        recipient
+    // Rate limiting: Anti-abuse dispatch limit (SECURITY-NFR) - fail closed
+    if (!this.rateLimitService) {
+      throw new CanonicalApiException(
+        HttpStatus.TOO_MANY_REQUESTS,
+        'RATE_LIMITED',
+        'Dịch vụ kiểm soát tần suất không khả dụng. Vui lòng thử lại sau.'
       );
-      if (!rateLimit.allowed) {
-        throw new CanonicalApiException(
-          HttpStatus.TOO_MANY_REQUESTS,
-          'RATE_LIMITED',
-          rateLimit.reason || 'Quá nhiều yêu cầu gửi lại lời mời. Vui lòng thử lại sau.',
-          false,
-          undefined,
-          undefined,
-          rateLimit.retryAfterSeconds
-        );
-      }
+    }
+    const recipient = invitation.email || invitation.phone || undefined;
+    const rateLimit = await this.rateLimitService.checkInvitationDispatchLimit(
+      clientIp,
+      recipient
+    );
+    if (!rateLimit.allowed) {
+      throw new CanonicalApiException(
+        HttpStatus.TOO_MANY_REQUESTS,
+        'RATE_LIMITED',
+        rateLimit.reason || 'Quá nhiều yêu cầu gửi lại lời mời. Vui lòng thử lại sau.',
+        false,
+        undefined,
+        undefined,
+        rateLimit.retryAfterSeconds
+      );
     }
 
     // Regenerate 32-byte token and reset expiry 7 days
@@ -889,8 +898,15 @@ export class InvitationsService {
    * expired, cancelled, or nonexistent tokens (AC-USR-01-12, AC-USR-01-13).
    */
   async verifyInvitation(rawToken: string, correlationId: string, clientIp?: string) {
-    // Rate limiting: Anti-enumeration verification limit (SECURITY-NFR)
-    if (this.rateLimitService && clientIp) {
+    // Rate limiting: Anti-enumeration verification limit (SECURITY-NFR) - fail closed
+    if (!this.rateLimitService) {
+      throw new CanonicalApiException(
+        HttpStatus.TOO_MANY_REQUESTS,
+        'RATE_LIMITED',
+        'Dịch vụ kiểm soát tần suất không khả dụng. Vui lòng thử lại sau.'
+      );
+    }
+    if (clientIp) {
       const rateLimit = await this.rateLimitService.checkInvitationVerifyLimit(clientIp);
       if (!rateLimit.allowed) {
         throw new CanonicalApiException(
@@ -958,24 +974,29 @@ export class InvitationsService {
    * BR-INV-04, BR-INV-05, BR-INV-09, AC-USR-01-14, AC-USR-01-15, AC-USR-01-16.
    */
   async acceptInvitation(dto: AcceptInvitationRequest, clientIp: string, correlationId: string) {
-    // 0. Rate limiting: Anti-brute-force acceptance gate (SECURITY-NFR)
-    if (this.rateLimitService) {
-      const tokenHash = dto.token ? this.hashToken(dto.token.trim()) : undefined;
-      const rateLimit = await this.rateLimitService.checkInvitationAcceptLimit(clientIp, tokenHash);
-      if (!rateLimit.allowed) {
-        throw new CanonicalApiException(
-          HttpStatus.TOO_MANY_REQUESTS,
-          'RATE_LIMITED',
-          rateLimit.reason ||
-            'Quá nhiều yêu cầu chấp nhận lời mời từ địa chỉ IP này. Vui lòng thử lại sau.',
-          false,
-          undefined,
-          undefined,
-          rateLimit.retryAfterSeconds
-        );
-      }
-      await this.rateLimitService.recordInvitationAcceptAttempt(clientIp, tokenHash);
+    // 0. Rate limiting: Anti-brute-force acceptance gate (SECURITY-NFR) - fail closed
+    if (!this.rateLimitService) {
+      throw new CanonicalApiException(
+        HttpStatus.TOO_MANY_REQUESTS,
+        'RATE_LIMITED',
+        'Dịch vụ kiểm soát tần suất không khả dụng. Vui lòng thử lại sau.'
+      );
     }
+    const tokenHash = dto.token ? this.hashToken(dto.token.trim()) : undefined;
+    const rateLimit = await this.rateLimitService.checkInvitationAcceptLimit(clientIp, tokenHash);
+    if (!rateLimit.allowed) {
+      throw new CanonicalApiException(
+        HttpStatus.TOO_MANY_REQUESTS,
+        'RATE_LIMITED',
+        rateLimit.reason ||
+          'Quá nhiều yêu cầu chấp nhận lời mời từ địa chỉ IP này. Vui lòng thử lại sau.',
+        false,
+        undefined,
+        undefined,
+        rateLimit.retryAfterSeconds
+      );
+    }
+    await this.rateLimitService.recordInvitationAcceptAttempt(clientIp, tokenHash);
     // 1. Validate token
     if (!dto.token || typeof dto.token !== 'string' || dto.token.trim().length === 0) {
       throw new CanonicalApiException(
@@ -1024,9 +1045,9 @@ export class InvitationsService {
       );
     }
 
-    const tokenHash = this.hashToken(dto.token.trim());
+    const resolvedTokenHash = tokenHash || this.hashToken(dto.token.trim());
     const invitation = await this.prisma.invitation.findUnique({
-      where: { token_hash: tokenHash },
+      where: { token_hash: resolvedTokenHash },
     });
 
     if (!invitation || invitation.status === InvitationStatusEnum.CANCELLED) {
@@ -1067,7 +1088,7 @@ export class InvitationsService {
       const updateCount = await tx.invitation.updateMany({
         where: {
           id: invitation.id,
-          token_hash: tokenHash,
+          token_hash: resolvedTokenHash,
           status: InvitationStatusEnum.PENDING,
           consumed_at: null,
           expires_at: { gt: now },
