@@ -82,6 +82,16 @@ export function createConcurrencyConflictException(): CanonicalApiException {
   );
 }
 
+// Input sanitization helper to strip raw HTML and script tags from text inputs before persisting (Finding 4 / Round 14 / P2-05)
+export function sanitizeRoleTextInput(text: string): string {
+  if (typeof text !== 'string') return text;
+  return text
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+    .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
+    .replace(/<[^>]*>/g, '')
+    .trim();
+}
+
 // Deterministic UUID generator for canonical platform permissions & system roles
 function deterministicUuid(prefix: string, index: number): string {
   const hex = index.toString(16).padStart(12, '0');
@@ -977,7 +987,22 @@ export class RbacService implements OnModuleInit {
       );
     }
 
-    const trimmedName = dto.name.trim();
+    const sanitizedName = sanitizeRoleTextInput(dto.name);
+    if (sanitizedName.length === 0) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Tên vai trò không được để trống',
+        false,
+        'Vui lòng nhập tên vai trò hợp lệ',
+        [{ field: 'name', code: 'REQUIRED', message: 'Tên vai trò không được để trống' }]
+      );
+    }
+    const trimmedName = sanitizedName;
+    const sanitizedDescription =
+      dto.description !== undefined && dto.description !== null
+        ? sanitizeRoleTextInput(dto.description) || null
+        : null;
 
     // 4. Duplicate name check within tenant (BR-RBAC-05, AC-RBAC-01-04)
     const existing = await this.prisma.role.findFirst({
@@ -1132,7 +1157,7 @@ export class RbacService implements OnModuleInit {
             merchant_id: actorSnapshot.merchantId,
             name: trimmedName,
             name_lower: trimmedName.toLowerCase(),
-            description: dto.description?.trim() || null,
+            description: sanitizedDescription,
             is_system: false,
           },
         });
@@ -1554,11 +1579,22 @@ export class RbacService implements OnModuleInit {
           );
         }
 
-        // Compute writes from lockedTargetRole snapshot (Finding 3 / Round 8)
-        const effectiveName = dto.name !== undefined ? dto.name.trim() : lockedTargetRole.name;
+        // Compute writes from lockedTargetRole snapshot (Finding 3 / Round 8) with input sanitization (Finding 4 / Round 14 / P2-05)
+        const effectiveName =
+          dto.name !== undefined ? sanitizeRoleTextInput(dto.name) : lockedTargetRole.name;
+        if (dto.name !== undefined && effectiveName.length === 0) {
+          throw new CanonicalApiException(
+            HttpStatus.BAD_REQUEST,
+            'VALIDATION_ERROR',
+            'Tên vai trò không được để trống',
+            false,
+            'Vui lòng nhập tên vai trò hợp lệ',
+            [{ field: 'name', code: 'REQUIRED', message: 'Tên vai trò không được để trống' }]
+          );
+        }
         const effectiveDescription =
           dto.description !== undefined
-            ? dto.description?.trim() || null
+            ? dto.description ? sanitizeRoleTextInput(dto.description) || null : null
             : lockedTargetRole.description;
 
         // If permissions were not explicitly passed in dto, keep current locked permissions

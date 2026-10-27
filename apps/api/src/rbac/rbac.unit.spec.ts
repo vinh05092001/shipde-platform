@@ -3655,4 +3655,62 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
       }
     );
   });
+
+  // Finding 4 (Round 14 / P2-05): Input sanitization strips raw HTML and XSS injection payloads from name and description
+  test('Finding 4 (Round 14 / P2-05): sanitizeRoleTextInput strips raw HTML/XSS injections before persisting in createRole and updateRole', async () => {
+    // 1. Create role with XSS injection in name and description
+    const res = await service.createRole(
+      {
+        name: `<script>alert("xss")</script>Sanitized Role ${Date.now()}`,
+        description: `<p>Valid description</p><img src=x onerror=alert(1)>`,
+        permissions: ['order:view_create'],
+      },
+      OWNER_ACTOR,
+      '127.0.0.1',
+      'corr-p2-05'
+    );
+    assert.ok(res.data.role.id);
+    assert.strictEqual(res.data.role.name.includes('<script>'), false);
+    assert.strictEqual(res.data.role.name.startsWith('Sanitized Role'), true);
+
+    const savedRole = mockPrisma.roles.find((r) => r.id === res.data.role.id);
+    assert.ok(savedRole);
+    assert.strictEqual(savedRole.name.includes('<script>'), false);
+    assert.strictEqual(savedRole.description, 'Valid description');
+
+    // 2. Purely HTML name strips down to empty string and rejects with 400 VALIDATION_ERROR
+    await assert.rejects(
+      async () => {
+        await service.createRole(
+          {
+            name: '   <script>alert(1)</script>   ',
+            permissions: ['order:view_create'],
+          },
+          OWNER_ACTOR,
+          '127.0.0.1',
+          'corr-p2-05-pure-xss'
+        );
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 400);
+        assert.strictEqual(err.code, 'VALIDATION_ERROR');
+        return true;
+      }
+    );
+
+    // 3. updateRole with HTML payload also sanitizes before persisting
+    const updated = await service.updateRole(
+      res.data.role.id,
+      {
+        name: `<b>Updated Bold Role</b>`,
+        description: `<span>Updated Description</span>`,
+      },
+      OWNER_ACTOR,
+      '127.0.0.1',
+      'corr-p2-05-patch'
+    );
+    assert.strictEqual(updated.data.role.name, 'Updated Bold Role');
+    assert.strictEqual(updated.data.role.description, 'Updated Description');
+  });
 });
