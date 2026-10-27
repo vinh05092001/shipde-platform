@@ -11,9 +11,10 @@ import { APP_CONFIG } from './config.token';
 
 import { AuthModule } from './auth/auth.module';
 import { SessionModule } from './session/session.module';
+import { InvitationsModule } from './invitations/invitations.module';
 
 @Module({
-  imports: [AuthModule, SessionModule],
+  imports: [AuthModule, SessionModule, InvitationsModule],
   controllers: [HealthController],
   providers: [
     {
