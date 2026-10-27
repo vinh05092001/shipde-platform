@@ -912,10 +912,25 @@ export class RbacService {
       }
     }
 
-    // Privilege Ceiling (BR-RBAC-02 / in-scope item 7): Resulting permission set
-    // (explicit or unchanged/omitted) must strictly be a subset of the actor's server-side permissions.
+    // Privilege Ceiling (BR-RBAC-02 / in-scope item 7):
+    // 1. Actor must hold EVERY permission currently assigned to the role before modifying it.
+    // 2. Resulting permission set must also strictly be a subset of the actor's permissions.
     const actorPerms = await this.getActorPermissions(actor);
     const actorPermSet = new Set(actorPerms);
+
+    const unauthorizedCurrentCodes = existingRole.permissions
+      .map((rp) => rp.permission.code)
+      .filter((code) => !actorPermSet.has(code));
+
+    if (unauthorizedCurrentCodes.length > 0) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'PRIVILEGE_ESCALATION_DENIED',
+        'Không thể sửa vai trò có quyền hạn vượt quá thẩm quyền của bạn',
+        false,
+        `Bạn không có các quyền hiện tại của vai trò: ${unauthorizedCurrentCodes.join(', ')}`
+      );
+    }
 
     const unauthorizedResolvedCodes = permissionsInDb
       .map((p) => p.code)
@@ -1119,6 +1134,25 @@ export class RbacService {
         HttpStatus.FORBIDDEN,
         'FORBIDDEN',
         'Không có quyền truy cập vai trò của đơn vị khác'
+      );
+    }
+
+    // Privilege Ceiling (BR-RBAC-02 / in-scope item 7):
+    // Actor must hold EVERY permission currently assigned to the role before deleting it.
+    const actorPerms = await this.getActorPermissions(actor);
+    const actorPermSet = new Set(actorPerms);
+
+    const unauthorizedRoleCodes = existingRole.permissions
+      .map((rp) => rp.permission.code)
+      .filter((code) => !actorPermSet.has(code));
+
+    if (unauthorizedRoleCodes.length > 0) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'PRIVILEGE_ESCALATION_DENIED',
+        'Không thể xóa vai trò có quyền hạn vượt quá thẩm quyền của bạn',
+        false,
+        `Bạn không có các quyền hiện tại của vai trò: ${unauthorizedRoleCodes.join(', ')}`
       );
     }
 

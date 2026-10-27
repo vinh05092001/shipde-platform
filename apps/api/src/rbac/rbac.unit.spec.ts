@@ -700,6 +700,59 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
       'Vai Trò Kế Toán Trưởng',
       'Role row must remain unchanged with no write'
     );
+
+    // Finding 1 Proving Test (Round 4): Delegated actor attempts to bypass ceiling by sending permissions subset they hold
+    await assert.rejects(
+      async () => {
+        await service.updateRole(
+          highRole.data.role.id,
+          {
+            name: 'Vai Trò Kế Toán Bị Hạ Quyền',
+            permissions: ['order:view_create'], // Actor holds order:view_create, but role currently has finance:export_ledgers
+          },
+          delegatedActor,
+          '127.0.0.1',
+          'corr-r4-f1-strip'
+        );
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 403);
+        assert.strictEqual(err.code, 'PRIVILEGE_ESCALATION_DENIED');
+        assert.ok(err.message.includes('thẩm quyền'));
+        return true;
+      }
+    );
+
+    // DB Proof: Role row and permissions must remain unchanged in DB
+    const roleAfterBypassAttempt = mockPrisma.roles.find((r) => r.id === highRole.data.role.id);
+    assert.strictEqual(roleAfterBypassAttempt.name, 'Vai Trò Kế Toán Trưởng');
+    const rolePermsAfterAttempt = mockPrisma.rolePermissions.filter(
+      (rp) => rp.role_id === highRole.data.role.id
+    );
+    assert.strictEqual(
+      rolePermsAfterAttempt.length,
+      2,
+      'Role permissions must not be stripped or modified'
+    );
+
+    // Finding 1 Proving Test (Round 4): Delegated actor attempts to delete above-ceiling role with no active users
+    await assert.rejects(
+      async () => {
+        await service.deleteRole(highRole.data.role.id, delegatedActor, '127.0.0.1', 'corr-r4-f1-del');
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 403);
+        assert.strictEqual(err.code, 'PRIVILEGE_ESCALATION_DENIED');
+        assert.ok(err.message.includes('thẩm quyền'));
+        return true;
+      }
+    );
+
+    // DB Proof: Role still exists in DB
+    const roleStillExists = mockPrisma.roles.find((r) => r.id === highRole.data.role.id);
+    assert.ok(roleStillExists, 'Role must not be deleted by under-privileged actor');
   });
 
   // AC-RBAC-01-09
