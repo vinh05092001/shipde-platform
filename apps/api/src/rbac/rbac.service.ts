@@ -393,8 +393,8 @@ export class RbacService implements OnModuleInit {
       role: user.role,
       customRoleId: user.custom_role_id ?? undefined,
       sessionId: req.sessionId || req.jwtClaims?.sid,
-      authAssurance: req.authAssurance || req.jwtClaims?.auth_assurance,
-      mfaVerifiedAt: req.mfaVerifiedAt || req.jwtClaims?.mfa_verified_at,
+      authAssurance: undefined,
+      mfaVerifiedAt: undefined,
     };
   }
 
@@ -556,8 +556,9 @@ export class RbacService implements OnModuleInit {
       );
     }
 
-    let authAssurance = actor.authAssurance;
-    let mfaVerifiedAt = actor.mfaVerifiedAt;
+    // Assurance is only loaded from active, unexpired device_sessions under FOR UPDATE (Finding 2 / Round 12)
+    let authAssurance: string | undefined = undefined;
+    let mfaVerifiedAt: Date | null = null;
 
     if (actor.sessionId) {
       const sessions = await tx.$queryRaw<
@@ -1013,7 +1014,7 @@ export class RbacService implements OnModuleInit {
       SENSITIVE_CAPABILITY_PERMISSIONS.has(p.code)
     );
     if (hasSensitiveGrants) {
-      if (!isMfaAssuranceFresh(actor.authAssurance, actor.mfaVerifiedAt)) {
+      if (!actor.sessionId) {
         throw new CanonicalApiException(
           HttpStatus.FORBIDDEN,
           'MFA_FRESH_AUTH_REQUIRED',
@@ -1045,9 +1046,14 @@ export class RbacService implements OnModuleInit {
           );
         }
 
-        // In-transaction fresh MFA assurance check for sensitive capabilities (Finding 1 / Round 11)
+        // In-transaction fresh MFA assurance check for sensitive capabilities (Finding 2 / Round 12)
+        // Sensitive grants must load auth_assurance and mfa_verified_at only from caller's active, unexpired device_sessions row under FOR UPDATE, and reject when that row is missing
         if (hasSensitiveGrants) {
-          if (!isMfaAssuranceFresh(actorSnapshot.authAssurance, actorSnapshot.mfaVerifiedAt)) {
+          if (
+            !actorSnapshot.sessionId ||
+            !actorSnapshot.authAssurance ||
+            !isMfaAssuranceFresh(actorSnapshot.authAssurance, actorSnapshot.mfaVerifiedAt)
+          ) {
             throw new CanonicalApiException(
               HttpStatus.FORBIDDEN,
               'MFA_FRESH_AUTH_REQUIRED',
@@ -1423,7 +1429,7 @@ export class RbacService implements OnModuleInit {
       (code) => SENSITIVE_CAPABILITY_PERMISSIONS.has(code) && !beforePermissions.includes(code)
     );
     if (addsSensitiveGrants) {
-      if (!isMfaAssuranceFresh(actor.authAssurance, actor.mfaVerifiedAt)) {
+      if (!actor.sessionId) {
         throw new CanonicalApiException(
           HttpStatus.FORBIDDEN,
           'MFA_FRESH_AUTH_REQUIRED',
@@ -1539,8 +1545,14 @@ export class RbacService implements OnModuleInit {
           (code: string) =>
             SENSITIVE_CAPABILITY_PERMISSIONS.has(code) && !beforePermissions.includes(code)
         );
+        // In-transaction fresh MFA assurance check for newly added sensitive capabilities (Finding 2 / Round 12)
+        // Sensitive grants must load auth_assurance and mfa_verified_at only from caller's active, unexpired device_sessions row under FOR UPDATE, and reject when that row is missing
         if (newlyAddedSensitiveInTx.length > 0) {
-          if (!isMfaAssuranceFresh(actorSnapshot.authAssurance, actorSnapshot.mfaVerifiedAt)) {
+          if (
+            !actorSnapshot.sessionId ||
+            !actorSnapshot.authAssurance ||
+            !isMfaAssuranceFresh(actorSnapshot.authAssurance, actorSnapshot.mfaVerifiedAt)
+          ) {
             throw new CanonicalApiException(
               HttpStatus.FORBIDDEN,
               'MFA_FRESH_AUTH_REQUIRED',

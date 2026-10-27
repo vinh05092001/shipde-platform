@@ -1,6 +1,6 @@
 import * as assert from 'node:assert';
 import { test, describe, beforeEach } from 'node:test';
-import { RbacService, SYSTEM_ROLE_IDS } from './rbac.service';
+import { RbacService, SYSTEM_ROLE_IDS, ActorContext } from './rbac.service';
 import { PLATFORM_PERMISSIONS, SYSTEM_ROLES } from './rbac.constants';
 import { CanonicalApiException as BaseCanonicalApiException } from '../auth/auth.service';
 import { CanonicalApiException } from './rbac.service';
@@ -19,10 +19,12 @@ class MockPrismaService {
   rolePermissions: any[] = [];
   users: any[] = [];
   auditLogs: any[] = [];
+  deviceSessions: any[] = [];
   shouldFailAudit = false;
   shouldFailRoleFindFirst = false;
   shouldFailPermissionFindMany = false;
   shouldFailUserCount = false;
+  shouldFailRolePermissionUnique = false;
 
   constructor() {
     this.reset();
@@ -88,6 +90,40 @@ class MockPrismaService {
       },
     ];
     this.auditLogs = [];
+    this.deviceSessions = [
+      {
+        id: 'session-mfa-owner',
+        user_id: 'user-owner-1',
+        auth_assurance: 'MFA',
+        mfa_verified_at: new Date(),
+        status: 'ACTIVE',
+        expires_at: new Date(Date.now() + 86400000),
+      },
+      {
+        id: 'session-password-owner',
+        user_id: 'user-owner-1',
+        auth_assurance: 'PASSWORD',
+        mfa_verified_at: null,
+        status: 'ACTIVE',
+        expires_at: new Date(Date.now() + 86400000),
+      },
+      {
+        id: 'session-expired-mfa-owner',
+        user_id: 'user-owner-1',
+        auth_assurance: 'MFA',
+        mfa_verified_at: new Date(Date.now() - 3600000),
+        status: 'ACTIVE',
+        expires_at: new Date(Date.now() - 1000),
+      },
+      {
+        id: 'session-revoked-owner',
+        user_id: 'user-owner-1',
+        auth_assurance: 'MFA',
+        mfa_verified_at: new Date(),
+        status: 'REVOKED',
+        expires_at: new Date(Date.now() + 86400000),
+      },
+    ];
     this.shouldFailAudit = false;
     this.shouldFailRoleFindFirst = false;
     this.shouldFailPermissionFindMany = false;
@@ -447,6 +483,12 @@ class MockPrismaService {
           merchant_id: u.merchant_id,
         }));
     }
+    if (sql.includes('FROM device_sessions') && sql.includes('FOR UPDATE')) {
+      const sessionId = values[0];
+      const userId = values[1];
+      const s = this.deviceSessions.find((x) => x.id === sessionId && x.user_id === userId);
+      return s ? [s] : [];
+    }
     return [];
   };
 
@@ -480,8 +522,7 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
     userId: 'user-owner-1',
     merchantId: MERCHANT_A,
     role: 'OWNER',
-    authAssurance: 'MFA',
-    mfaVerifiedAt: new Date(),
+    sessionId: 'session-mfa-owner',
   };
   const CSKH_ACTOR = {
     userId: 'user-cskh-2',
@@ -2776,8 +2817,7 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
     // 1. Password-only session actor attempting to create role with pii:unmask -> 403 MFA_FRESH_AUTH_REQUIRED
     const passwordActor = {
       ...OWNER_ACTOR,
-      authAssurance: 'PASSWORD',
-      mfaVerifiedAt: null,
+      sessionId: 'session-password-owner',
     };
 
     try {
@@ -2800,8 +2840,7 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
     // 2. MFA verified actor successfully creates role with sensitive permission
     const mfaActor = {
       ...OWNER_ACTOR,
-      authAssurance: 'MFA',
-      mfaVerifiedAt: new Date(),
+      sessionId: 'session-mfa-owner',
     };
     const created = await service.createRole(
       {
@@ -2854,8 +2893,7 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
     // 1. Password session with a truthy old MFA timestamp must be rejected (authAssurance === 'PASSWORD')
     const staleMfaPasswordActor = {
       ...OWNER_ACTOR,
-      authAssurance: 'PASSWORD',
-      mfaVerifiedAt: new Date(Date.now() - 3600000), // 1 hour ago
+      sessionId: 'session-password-owner',
     };
 
     try {
@@ -3140,5 +3178,142 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
       }
     );
     mockPrisma.shouldFailPermissionFindMany = false;
+  });
+
+  // Finding 2 (Round 12): Sensitive create/update loads auth_assurance only from caller's active unexpired device_sessions row under FOR UPDATE and rejects when missing
+  test('Finding 2 (Round 12): Sensitive grant loads auth_assurance only from active unexpired device_sessions row under FOR UPDATE and rejects request claims or missing session', async () => {
+    // 1. Caller with fake authAssurance: 'MFA' in request context but NO sessionId is rejected with 403 MFA_FRESH_AUTH_REQUIRED
+    const spoofedActorWithoutSession: ActorContext = {
+      userId: 'user-owner-1',
+      merchantId: MERCHANT_A,
+      role: 'OWNER',
+      authAssurance: 'MFA',
+      mfaVerifiedAt: new Date(),
+    };
+
+    await assert.rejects(
+      async () => {
+        await service.createRole(
+          {
+            name: 'Spoofed MFA Role No Session',
+            permissions: ['pii:unmask'],
+          },
+          spoofedActorWithoutSession,
+          '127.0.0.1',
+          'corr-r12-f2-spoof-nosess'
+        );
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 403);
+        assert.strictEqual(err.code, 'MFA_FRESH_AUTH_REQUIRED');
+        return true;
+      }
+    );
+
+    // 2. Caller with fake authAssurance: 'MFA' pointing to a PASSWORD-only session row in DB is rejected with 403 MFA_FRESH_AUTH_REQUIRED
+    const spoofedActorWithPasswordSession: ActorContext = {
+      userId: 'user-owner-1',
+      merchantId: MERCHANT_A,
+      role: 'OWNER',
+      sessionId: 'session-password-owner',
+      authAssurance: 'MFA', // Attempt to spoof request property
+      mfaVerifiedAt: new Date(),
+    };
+
+    await assert.rejects(
+      async () => {
+        await service.createRole(
+          {
+            name: 'Spoofed MFA Role Password Session',
+            permissions: ['pii:unmask'],
+          },
+          spoofedActorWithPasswordSession,
+          '127.0.0.1',
+          'corr-r12-f2-spoof-pwdsess'
+        );
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 403);
+        assert.strictEqual(err.code, 'MFA_FRESH_AUTH_REQUIRED');
+        return true;
+      }
+    );
+
+    // 3. Caller with non-existent session ID fails closed with 401 SESSION_INVALID
+    const actorWithMissingSession: ActorContext = {
+      userId: 'user-owner-1',
+      merchantId: MERCHANT_A,
+      role: 'OWNER',
+      sessionId: 'non-existent-session-id',
+    };
+
+    await assert.rejects(
+      async () => {
+        await service.createRole(
+          {
+            name: 'Role With Missing Session Row',
+            permissions: ['pii:unmask'],
+          },
+          actorWithMissingSession,
+          '127.0.0.1',
+          'corr-r12-f2-missing-sess'
+        );
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 401);
+        assert.strictEqual(err.code, 'SESSION_INVALID');
+        return true;
+      }
+    );
+
+    // 4. Caller with revoked or expired session row fails with 403 MFA_FRESH_AUTH_REQUIRED
+    const actorWithRevokedSession: ActorContext = {
+      userId: 'user-owner-1',
+      merchantId: MERCHANT_A,
+      role: 'OWNER',
+      sessionId: 'session-revoked-owner',
+    };
+
+    await assert.rejects(
+      async () => {
+        await service.createRole(
+          {
+            name: 'Role With Revoked Session',
+            permissions: ['pii:unmask'],
+          },
+          actorWithRevokedSession,
+          '127.0.0.1',
+          'corr-r12-f2-revoked-sess'
+        );
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 403);
+        assert.strictEqual(err.code, 'MFA_FRESH_AUTH_REQUIRED');
+        return true;
+      }
+    );
+
+    // 5. Caller with valid active, unexpired MFA device_sessions row loaded under FOR UPDATE succeeds
+    const actorWithValidMfaSession: ActorContext = {
+      userId: 'user-owner-1',
+      merchantId: MERCHANT_A,
+      role: 'OWNER',
+      sessionId: 'session-mfa-owner',
+    };
+
+    const validRes = await service.createRole(
+      {
+        name: 'Valid MFA Session Role',
+        permissions: ['pii:unmask'],
+      },
+      actorWithValidMfaSession,
+      '127.0.0.1',
+      'corr-r12-f2-valid-mfa'
+    );
+    assert.ok(validRes.data.role.id, 'Role creation with valid MFA session must succeed');
   });
 });
