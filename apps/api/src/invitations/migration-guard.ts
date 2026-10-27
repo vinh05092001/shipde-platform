@@ -62,6 +62,28 @@ export function sanitizePrismaMigrateDiff(diffSql: string): string {
 }
 
 /**
+ * Asserts that prisma/schema.prisma does not reuse the protected partial unique index names
+ * as non-unique @@index maps, which would cause Prisma to drop partial unique constraints (Round 10 Finding 1).
+ */
+export function assertNoSchemaIndexNameConflict(schemaPath?: string): void {
+  const targetFile =
+    schemaPath || path.resolve(__dirname, '../../../../prisma/schema.prisma');
+  if (!fs.existsSync(targetFile)) {
+    throw new Error(`[MIGRATION_GUARD] Schema file not found: ${targetFile}`);
+  }
+  const content = fs.readFileSync(targetFile, 'utf8');
+  for (const idx of PROTECTED_PARTIAL_INDEXES) {
+    const pattern = new RegExp(`(?:map:\\s*["']${idx}["']|@@(?:index|unique)\\([^)]*${idx})`, 'i');
+    if (pattern.test(content)) {
+      throw new Error(
+        `[MIGRATION_GUARD] Forbidden index name reuse in schema.prisma for: ${idx}. ` +
+          `PostgreSQL partial unique indexes must remain SQL-only and omitted from schema.prisma.`
+      );
+    }
+  }
+}
+
+/**
  * Asserts that all migration files in prisma/migrations define the protected partial unique
  * indexes and no migration file contains a DROP INDEX statement for them.
  */
@@ -111,6 +133,7 @@ export function assertNoMigrationIndexDrift(migrationsDir?: string): void {
 export function runMigrationGuardCli(): void {
   try {
     assertNoMigrationIndexDrift();
+    assertNoSchemaIndexNameConflict();
     console.log(
       '[MIGRATION_GUARD] PASS: All PostgreSQL partial unique pending indexes protected and verified.'
     );

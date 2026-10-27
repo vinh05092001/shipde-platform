@@ -23,6 +23,7 @@ import {
   sanitizePrismaMigrateDiff,
   assertSafeMigrationDiff,
   isProtectedPartialIndex,
+  assertNoSchemaIndexNameConflict,
 } from './migration-guard';
 
 describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
@@ -3931,6 +3932,52 @@ CREATE INDEX "some_other_idx" ON "invitations"("created_at");
       assert.strictEqual(JSON.stringify(auditWritten).includes('hostile_raw_token_xyz'), false);
       // Meta correlation_id is also sanitized
       assert.strictEqual(acceptRes.meta.correlation_id, auditWritten.new_value.correlation_id);
+    });
+
+    it('Round 10 Finding 1: Partial unique pending indexes are SQL-only and not shadowed in schema.prisma', () => {
+      // 1. assertNoSchemaIndexNameConflict passes for live schema.prisma
+      assert.doesNotThrow(() => assertNoSchemaIndexNameConflict());
+
+      // 2. Proves that if schema.prisma declares conflicting non-unique @@index reusing protected names, it throws
+      const fs = require('fs');
+      const os = require('os');
+      const path = require('path');
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'schema-test-'));
+      const fakeSchemaPath = path.join(tmpDir, 'schema.prisma');
+
+      try {
+        fs.writeFileSync(
+          fakeSchemaPath,
+          'model Invitation { @@index([merchant_id, email], map: "invitations_merchant_pending_email_unique") }'
+        );
+        assert.throws(
+          () => assertNoSchemaIndexNameConflict(fakeSchemaPath),
+          /Forbidden index name reuse in schema.prisma for: invitations_merchant_pending_email_unique/
+        );
+
+        fs.writeFileSync(
+          fakeSchemaPath,
+          'model Invitation { @@index([merchant_id, phone], map: "invitations_merchant_pending_phone_unique") }'
+        );
+        assert.throws(
+          () => assertNoSchemaIndexNameConflict(fakeSchemaPath),
+          /Forbidden index name reuse in schema.prisma for: invitations_merchant_pending_phone_unique/
+        );
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+
+      // 3. Diff dropping protected partial unique indexes must throw and fail CI
+      const dropEmailDiff = `DROP INDEX "invitations_merchant_pending_email_unique";`;
+      assert.throws(
+        () => assertSafeMigrationDiff(dropEmailDiff),
+        /Forbidden DROP INDEX detected in migration diff for: invitations_merchant_pending_email_unique/
+      );
+      const dropPhoneDiff = `DROP INDEX IF EXISTS invitations_merchant_pending_phone_unique;`;
+      assert.throws(
+        () => assertSafeMigrationDiff(dropPhoneDiff),
+        /Forbidden DROP INDEX detected in migration diff for: invitations_merchant_pending_phone_unique/
+      );
     });
   });
 });
