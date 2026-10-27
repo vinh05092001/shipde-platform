@@ -1244,7 +1244,10 @@ export class RbacService {
           );
         }
 
-        if (!lockedTargetRole.merchant_id || lockedTargetRole.merchant_id !== actorSnapshot.merchantId) {
+        if (
+          !lockedTargetRole.merchant_id ||
+          lockedTargetRole.merchant_id !== actorSnapshot.merchantId
+        ) {
           throw new CanonicalApiException(
             HttpStatus.FORBIDDEN,
             'FORBIDDEN',
@@ -1550,7 +1553,10 @@ export class RbacService {
           );
         }
 
-        if (!lockedTargetRole.merchant_id || lockedTargetRole.merchant_id !== actorSnapshot.merchantId) {
+        if (
+          !lockedTargetRole.merchant_id ||
+          lockedTargetRole.merchant_id !== actorSnapshot.merchantId
+        ) {
           throw new CanonicalApiException(
             HttpStatus.FORBIDDEN,
             'FORBIDDEN',

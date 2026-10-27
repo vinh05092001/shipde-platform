@@ -2575,15 +2575,14 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
       return origQueryRaw(strings, ...values);
     };
 
-    await service.deleteRole(
-      roleId,
-      OWNER_ACTOR,
-      '127.0.0.1',
-      'corr-r9-f2-delete'
-    );
+    await service.deleteRole(roleId, OWNER_ACTOR, '127.0.0.1', 'corr-r9-f2-delete');
 
     // Verify deleteRole lock order: actor_user -> ... -> target_role -> ... -> assignees
-    assert.strictEqual(executedLocksDelete[0], 'actor_user', 'First lock in deleteRole must be actor user');
+    assert.strictEqual(
+      executedLocksDelete[0],
+      'actor_user',
+      'First lock in deleteRole must be actor user'
+    );
     const delTargetIndex = executedLocksDelete.indexOf('target_role');
     const delAssigneesIndex = executedLocksDelete.indexOf('assignees');
     assert.ok(delTargetIndex > 0, 'Target role lock must be taken after actor user');
@@ -2638,12 +2637,7 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
 
     // 3. Attempt to delete role
     try {
-      await service.deleteRole(
-        roleId,
-        OWNER_ACTOR,
-        '127.0.0.1',
-        'corr-r9-f4-delete'
-      );
+      await service.deleteRole(roleId, OWNER_ACTOR, '127.0.0.1', 'corr-r9-f4-delete');
       assert.fail('Should have blocked deletion due to inactive assignee widening');
     } catch (err: any) {
       assert.ok(err instanceof CanonicalApiException);
@@ -2660,10 +2654,7 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
         !roleField.message.includes(sensitiveInactiveUserId),
         'Client error message must NOT leak raw user IDs'
       );
-      assert.ok(
-        roleField.message.includes('1'),
-        'Client error message must contain user count'
-      );
+      assert.ok(roleField.message.includes('1'), 'Client error message must contain user count');
     }
 
     // 4. Verify audit row retained the raw user IDs safely server-side
