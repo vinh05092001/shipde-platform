@@ -1,11 +1,13 @@
 import { test, describe, it } from 'node:test';
 import * as assert from 'node:assert';
 import { AuthService, CanonicalApiException } from './auth.service';
-import { validateAdminKey, extractAdminKey, getExpectedAdminKey } from './admin-auth.guard';
+import { AdminAuthGuard } from './admin-auth.guard';
+import { signAccessToken, resolveAccessTokenSecret } from './token.util';
 import { AdminCreateShopDto } from './admin-shops.dto';
-import { RoleEnum } from '@prisma/client';
+import { RoleEnum, SessionStatusEnum } from '@prisma/client';
 import { verifyPassword } from './password.util';
 import { MockVerificationDeliveryAdapter } from '@shipde/testkit';
+import { randomUUID } from 'node:crypto';
 
 // In-memory mock Prisma for offline unit tests
 function createMockPrismaService() {
@@ -79,8 +81,9 @@ function createMockPrismaService() {
     },
     auditLog: {
       create: async ({ data }: any) => {
-        auditLogs.push(data);
-        return data;
+        const record = { ...data, actor: data.actor || data.user_id, details: data.new_value };
+        auditLogs.push(record);
+        return record;
       },
     },
     $transaction: async (cb: any) => {
@@ -107,16 +110,93 @@ function createMockRateLimitService() {
 }
 
 describe('FEAT-AUTH-02: Admin-Created Shop Account Unit Tests', () => {
-  const originalEnvKey = process.env.ADMIN_API_KEY;
+  const TEST_SECRET = 'unit-test-token-secret-must-be-32-chars-long';
+  process.env.AUTH_TOKEN_SECRET = TEST_SECRET;
 
-  test('setup test environment', () => {
-    process.env.ADMIN_API_KEY = 'test-admin-secret-key-40-chars';
+  function createMockContext(headers: Record<string, string> = {}) {
+    const req: any = { headers };
+    return {
+      req,
+      context: {
+        switchToHttp: () => ({
+          getRequest: () => req,
+        }),
+      } as any,
+    };
+  }
+
+  // AC-ADMIN-01: Missing or invalid session returns 401 SESSION_INVALID
+  it('AC-ADMIN-01: Missing session header returns 401 SESSION_INVALID', async () => {
+    const guard = new AdminAuthGuard();
+    const { context } = createMockContext({});
+    await assert.rejects(
+      async () => guard.canActivate(context),
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 401);
+        assert.strictEqual(err.code, 'SESSION_INVALID');
+        return true;
+      }
+    );
   });
 
-  // AC-ADMIN-01: Missing admin key returns 403 Forbidden
-  it('AC-ADMIN-01: Missing admin key throws 403 Forbidden', () => {
-    assert.throws(
-      () => validateAdminKey(undefined),
+  it('AC-ADMIN-01: Empty or malformed session returns 401 SESSION_INVALID', async () => {
+    const guard = new AdminAuthGuard();
+    const { context } = createMockContext({ authorization: 'Bearer ' });
+    await assert.rejects(
+      async () => guard.canActivate(context),
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 401);
+        assert.strictEqual(err.code, 'SESSION_INVALID');
+        return true;
+      }
+    );
+  });
+
+  it('AC-ADMIN-01: Expired session token returns 401 SESSION_INVALID', async () => {
+    const guard = new AdminAuthGuard();
+    const { token } = signAccessToken(
+      {
+        sub: 'u-operator-admin',
+        sid: randomUUID(),
+        role: RoleEnum.PLATFORM_ADMIN,
+        st: 'active',
+      },
+      TEST_SECRET,
+      -3600 // expired 1 hour ago
+    );
+
+    const { context } = createMockContext({ authorization: `Bearer ${token}` });
+    await assert.rejects(
+      async () => guard.canActivate(context),
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 401);
+        assert.strictEqual(err.code, 'SESSION_INVALID');
+        return true;
+      }
+    );
+  });
+
+  // AC-ADMIN-02: Missing PLATFORM_ADMIN role returns 403 FORBIDDEN
+  it('AC-ADMIN-02: Merchant OWNER role returns 403 FORBIDDEN', async () => {
+    const guard = new AdminAuthGuard();
+    const { token } = signAccessToken(
+      {
+        sub: 'u-merchant-owner',
+        sid: randomUUID(),
+        mid: 'm-tenant-123',
+        role: RoleEnum.OWNER,
+        st: 'active',
+      },
+      TEST_SECRET,
+      3600
+    );
+
+    const { context } = createMockContext({ authorization: `Bearer ${token}` });
+    await assert.rejects(
+      async () => guard.canActivate(context),
       (err: any) => {
         assert.ok(err instanceof CanonicalApiException);
         assert.strictEqual(err.getStatus(), 403);
@@ -126,41 +206,26 @@ describe('FEAT-AUTH-02: Admin-Created Shop Account Unit Tests', () => {
     );
   });
 
-  it('AC-ADMIN-01: Unconfigured admin credential fails closed with 403 Forbidden', () => {
-    delete process.env.ADMIN_API_KEY;
-    delete process.env.ADMIN_KEY;
-    try {
-      assert.strictEqual(getExpectedAdminKey(), undefined);
-      assert.throws(
-        () => validateAdminKey('some-key'),
-        (err: any) => {
-          assert.ok(err instanceof CanonicalApiException);
-          assert.strictEqual(err.getStatus(), 403);
-          assert.strictEqual(err.code, 'FORBIDDEN');
-          const response = err.getResponse() as any;
-          assert.ok(response?.error?.message?.includes('chưa được cấu hình'));
-          return true;
-        }
-      );
-    } finally {
-      process.env.ADMIN_API_KEY = 'test-admin-secret-key-40-chars';
-    }
-  });
-
-  // AC-ADMIN-02: Invalid admin key returns 403 Forbidden
-  it('AC-ADMIN-02: Invalid admin key throws 403 Forbidden', () => {
-    assert.throws(
-      () => validateAdminKey('wrong-admin-key'),
-      (err: any) => {
-        assert.ok(err instanceof CanonicalApiException);
-        assert.strictEqual(err.getStatus(), 403);
-        assert.strictEqual(err.code, 'FORBIDDEN');
-        return true;
-      }
+  // AC-ADMIN-03: PLATFORM_ADMIN role is authorized (200/true) with actor from session
+  it('AC-ADMIN-03: Valid PLATFORM_ADMIN session is authorized and sets actor from session', async () => {
+    const guard = new AdminAuthGuard();
+    const operatorId = 'u-operator-admin-uuid';
+    const { token } = signAccessToken(
+      {
+        sub: operatorId,
+        sid: randomUUID(),
+        role: RoleEnum.PLATFORM_ADMIN,
+        st: 'active',
+      },
+      TEST_SECRET,
+      3600
     );
 
-    // Valid key does not throw
-    assert.doesNotThrow(() => validateAdminKey('test-admin-secret-key-40-chars'));
+    const { context, req } = createMockContext({ authorization: `Bearer ${token}` });
+    const isAllowed = await guard.canActivate(context);
+    assert.strictEqual(isAllowed, true);
+    assert.strictEqual(req.userId, operatorId);
+    assert.strictEqual(req.adminActor, operatorId);
   });
 
   // AC-ADMIN-09: Missing both email and phone returns 400 VALIDATION_ERROR
@@ -583,12 +648,12 @@ describe('FEAT-AUTH-02: Admin-Created Shop Account Unit Tests', () => {
     const mockPrisma = createMockPrismaService();
     const service = new AuthService(mockPrisma, createMockRateLimitService());
 
-    const authenticatedActor = 'admin:key:e8c3b417d9a1';
+    const operatorUserId = 'u-operator-admin-uuid';
     await service.adminCreateShop(
       { merchant_name: 'Shop Audit Test', email: 'audit-actor@example.com' },
       '192.168.1.100',
       'corr-audit-actor',
-      authenticatedActor
+      operatorUserId
     );
 
     assert.ok(mockPrisma.auditLogs.length > 0, 'Audit record must be logged');
@@ -596,7 +661,7 @@ describe('FEAT-AUTH-02: Admin-Created Shop Account Unit Tests', () => {
     assert.ok(log, 'ADMIN_CREATE_SHOP audit entry must exist');
     assert.strictEqual(
       log.actor,
-      authenticatedActor,
+      operatorUserId,
       'Audit record must match server-authenticated actor'
     );
     // Ensure no PII in details
@@ -604,13 +669,5 @@ describe('FEAT-AUTH-02: Admin-Created Shop Account Unit Tests', () => {
     assert.strictEqual(log.details.has_phone, false);
     assert.strictEqual(log.details.email, undefined);
     assert.strictEqual(log.details.phone, undefined);
-  });
-
-  test('teardown test environment', () => {
-    if (originalEnvKey !== undefined) {
-      process.env.ADMIN_API_KEY = originalEnvKey;
-    } else {
-      delete process.env.ADMIN_API_KEY;
-    }
   });
 });
