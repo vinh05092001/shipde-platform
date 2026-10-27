@@ -136,12 +136,17 @@ async function main() {
   }
 
   // Helper to create active device session & bearer token
-  const createSession = async (userId: string, merchantId: string): Promise<string> => {
+  const createSession = async (
+    userId: string,
+    merchantId: string,
+    authAssurance: 'PASSWORD' | 'MFA' = 'PASSWORD',
+    mfaVerifiedAt: Date | null = null
+  ): Promise<string> => {
     const raw = randomBytes(48).toString('hex');
     const hash = createHash('sha256').update(raw).digest('hex');
     await prisma.deviceSession.upsert({
       where: { session_token_hash: hash },
-      update: { status: 'ACTIVE' },
+      update: { status: 'ACTIVE', auth_assurance: authAssurance, mfa_verified_at: mfaVerifiedAt },
       create: {
         user_id: userId,
         merchant_id: merchantId,
@@ -151,16 +156,23 @@ async function main() {
         user_agent: 'Supertest',
         ip_address: '127.0.0.1',
         status: 'ACTIVE',
-        auth_assurance: 'PASSWORD',
+        auth_assurance: authAssurance,
+        mfa_verified_at: mfaVerifiedAt,
         expires_at: new Date(Date.now() + 3600000),
       },
     });
     return raw;
   };
 
-  const ownerToken = await createSession(OWNER_ID, SEED_MERCHANT_ID);
-  const opsToken = await createSession(OPS_ID, SEED_MERCHANT_ID);
-  const otherOwnerToken = await createSession(OTHER_TENANT_OWNER_ID, OTHER_MERCHANT_ID);
+  const ownerToken = await createSession(OWNER_ID, SEED_MERCHANT_ID, 'PASSWORD', null);
+  const ownerMfaToken = await createSession(OWNER_ID, SEED_MERCHANT_ID, 'MFA', new Date());
+  const opsToken = await createSession(OPS_ID, SEED_MERCHANT_ID, 'PASSWORD', null);
+  const otherOwnerToken = await createSession(
+    OTHER_TENANT_OWNER_ID,
+    OTHER_MERCHANT_ID,
+    'PASSWORD',
+    null
+  );
 
   // Cleanup previous test roles if any
   await prisma.role.deleteMany({
@@ -325,6 +337,44 @@ async function main() {
     true,
     'Database unique constraint roles_merchant_id_name_lower_key must reject case-insensitive duplicate in DB'
   );
+
+  // =========================================================================
+  // Finding 1 (Round 11): Step-up MFA assurance: PASSWORD session cannot create or patch sensitive grants
+  // =========================================================================
+  const pwdCreateRes = await request(server)
+    .post('/api/v1/roles')
+    .set('Authorization', `Bearer ${ownerToken}`)
+    .send({
+      name: 'Password PII Role',
+      permissions: ['order:view_create', 'pii:unmask'],
+    })
+    .expect(403);
+  assert.strictEqual(pwdCreateRes.body.error.code, 'MFA_FRESH_AUTH_REQUIRED');
+
+  // MFA session succeeds creating sensitive grant
+  const mfaCreateRes = await request(server)
+    .post('/api/v1/roles')
+    .set('Authorization', `Bearer ${ownerMfaToken}`)
+    .send({
+      name: 'MFA PII Role',
+      permissions: ['order:view_create', 'pii:unmask'],
+    })
+    .expect(201);
+  assert.ok(mfaCreateRes.body.data.role.id);
+
+  // PASSWORD session attempting to patch existing role to add sensitive permission is denied with 403
+  const pwdPatchRes = await request(server)
+    .patch(`/api/v1/roles/${createdRoleId}`)
+    .set('Authorization', `Bearer ${ownerToken}`)
+    .send({
+      permissions: [
+        'order:view_create',
+        'shipment:quote_carrier',
+        'reconciliation:approve_rate_policy',
+      ],
+    })
+    .expect(403);
+  assert.strictEqual(pwdPatchRes.body.error.code, 'MFA_FRESH_AUTH_REQUIRED');
 
   // =========================================================================
   // AC-RBAC-01-05: Non-owner actor attempts to create role with permissions beyond ceiling -> 403 PRIVILEGE_ESCALATION_DENIED

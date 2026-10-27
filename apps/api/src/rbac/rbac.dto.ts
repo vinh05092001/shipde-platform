@@ -15,6 +15,7 @@ export interface ActorContext {
   merchantId: string;
   role?: string;
   customRoleId?: string | null;
+  sessionId?: string;
   authAssurance?: string;
   mfaVerifiedAt?: Date | string | null;
 }

@@ -115,6 +115,23 @@ export const SENSITIVE_CAPABILITY_PERMISSIONS = new Set([
   'reconciliation:approve_rate_policy',
 ]);
 
+export const MFA_FRESH_WINDOW_MS = 30 * 60 * 1000; // 30 minutes
+
+export function isMfaAssuranceFresh(
+  authAssurance?: string,
+  mfaVerifiedAt?: Date | string | null
+): boolean {
+  if (authAssurance !== 'MFA' || !mfaVerifiedAt) {
+    return false;
+  }
+  const verifiedTime = new Date(mfaVerifiedAt).getTime();
+  if (Number.isNaN(verifiedTime)) {
+    return false;
+  }
+  const ageMs = Date.now() - verifiedTime;
+  return ageMs >= -60000 && ageMs <= MFA_FRESH_WINDOW_MS;
+}
+
 @Injectable()
 export class RbacService {
   private isSeeded = false;
@@ -273,6 +290,7 @@ export class RbacService {
   async resolveActorFromSession(req: {
     userId?: string;
     merchantId?: string;
+    sessionId?: string;
     authAssurance?: string;
     mfaVerifiedAt?: any;
     jwtClaims?: any;
@@ -345,6 +363,7 @@ export class RbacService {
       merchantId: user.merchant_id,
       role: user.role,
       customRoleId: user.custom_role_id ?? undefined,
+      sessionId: req.sessionId || req.jwtClaims?.sid,
       authAssurance: req.authAssurance || req.jwtClaims?.auth_assurance,
       mfaVerifiedAt: req.mfaVerifiedAt || req.jwtClaims?.mfa_verified_at,
     };
@@ -509,11 +528,45 @@ export class RbacService {
       );
     }
 
+    let authAssurance = actor.authAssurance;
+    let mfaVerifiedAt = actor.mfaVerifiedAt;
+
+    if (actor.sessionId) {
+      const sessions = await tx.$queryRaw<
+        Array<{
+          id: string;
+          auth_assurance: string;
+          mfa_verified_at: Date | null;
+          status: string;
+          expires_at: Date;
+        }>
+      >`SELECT id, auth_assurance, mfa_verified_at, status, expires_at FROM device_sessions WHERE id = ${actor.sessionId}::uuid AND user_id = ${actor.userId}::uuid FOR UPDATE`;
+
+      if (sessions && sessions.length > 0) {
+        const s = sessions[0];
+        if (s.status === 'ACTIVE' && new Date(s.expires_at) > new Date()) {
+          authAssurance = s.auth_assurance;
+          mfaVerifiedAt = s.mfa_verified_at;
+        } else {
+          authAssurance = 'REVOKED';
+          mfaVerifiedAt = null;
+        }
+      } else {
+        throw new CanonicalApiException(
+          HttpStatus.UNAUTHORIZED,
+          'SESSION_INVALID',
+          'Phiên làm việc không tồn tại hoặc đã bị thu hồi'
+        );
+      }
+    }
+
     const actorSnapshot: ActorContext = {
       ...actor,
       merchantId: actorRow.merchant_id,
       role: actorRow.role,
       customRoleId: actorRow.custom_role_id ?? undefined,
+      authAssurance,
+      mfaVerifiedAt,
     };
 
     // Determine actor's role ID (custom role or system role)
@@ -932,13 +985,12 @@ export class RbacService {
       );
     }
 
-    // Step-up / fresh assurance check for sensitive capabilities (Finding 2 / Round 10 / RBAC-APPROVAL-MATRIX)
+    // Step-up / fresh assurance check for sensitive capabilities (Finding 2 / Round 10 / Finding 1 / Round 11 / RBAC-APPROVAL-MATRIX)
     const hasSensitiveGrants = permissionsInDb.some((p) =>
       SENSITIVE_CAPABILITY_PERMISSIONS.has(p.code)
     );
     if (hasSensitiveGrants) {
-      const hasStepUp = actor.authAssurance === 'MFA' || Boolean(actor.mfaVerifiedAt);
-      if (!hasStepUp) {
+      if (!isMfaAssuranceFresh(actor.authAssurance, actor.mfaVerifiedAt)) {
         throw new CanonicalApiException(
           HttpStatus.FORBIDDEN,
           'MFA_FRESH_AUTH_REQUIRED',
@@ -968,6 +1020,19 @@ export class RbacService {
             false,
             `Bạn không có các quyền sau: ${unauthorizedInTx.join(', ')}`
           );
+        }
+
+        // In-transaction fresh MFA assurance check for sensitive capabilities (Finding 1 / Round 11)
+        if (hasSensitiveGrants) {
+          if (!isMfaAssuranceFresh(actorSnapshot.authAssurance, actorSnapshot.mfaVerifiedAt)) {
+            throw new CanonicalApiException(
+              HttpStatus.FORBIDDEN,
+              'MFA_FRESH_AUTH_REQUIRED',
+              'Thao tác gán quyền hạn nhạy cảm yêu cầu phiên làm việc đã xác thực MFA',
+              false,
+              'Vui lòng xác thực hai yếu tố trước khi gán các quyền hạn nhạy cảm'
+            );
+          }
         }
 
         const existingInTx = await tx.role.findFirst({
@@ -1332,13 +1397,12 @@ export class RbacService {
     const beforePermissions = existingRole.permissions.map((rp) => rp.permission.code);
     const newPermissions = permissionsInDb.map((p) => p.code);
 
-    // Step-up / fresh assurance check for sensitive capabilities (Finding 2 / Round 10 / RBAC-APPROVAL-MATRIX)
+    // Step-up / fresh assurance check for sensitive capabilities (Finding 2 / Round 10 / Finding 1 / Round 11 / RBAC-APPROVAL-MATRIX)
     const addsSensitiveGrants = newPermissions.some(
       (code) => SENSITIVE_CAPABILITY_PERMISSIONS.has(code) && !beforePermissions.includes(code)
     );
     if (addsSensitiveGrants) {
-      const hasStepUp = actor.authAssurance === 'MFA' || Boolean(actor.mfaVerifiedAt);
-      if (!hasStepUp) {
+      if (!isMfaAssuranceFresh(actor.authAssurance, actor.mfaVerifiedAt)) {
         throw new CanonicalApiException(
           HttpStatus.FORBIDDEN,
           'MFA_FRESH_AUTH_REQUIRED',
@@ -1448,6 +1512,23 @@ export class RbacService {
 
         const beforePermissions = currentRolePermCodes;
         const newPermissions = targetPermissions.map((p: any) => p.code);
+
+        // In-transaction fresh MFA assurance check for newly added sensitive capabilities (Finding 1 / Round 11)
+        const newlyAddedSensitiveInTx = newPermissions.filter(
+          (code: string) =>
+            SENSITIVE_CAPABILITY_PERMISSIONS.has(code) && !beforePermissions.includes(code)
+        );
+        if (newlyAddedSensitiveInTx.length > 0) {
+          if (!isMfaAssuranceFresh(actorSnapshot.authAssurance, actorSnapshot.mfaVerifiedAt)) {
+            throw new CanonicalApiException(
+              HttpStatus.FORBIDDEN,
+              'MFA_FRESH_AUTH_REQUIRED',
+              'Thao tác gán quyền hạn nhạy cảm yêu cầu phiên làm việc đã xác thực MFA',
+              false,
+              'Vui lòng xác thực hai yếu tố trước khi gán các quyền hạn nhạy cảm'
+            );
+          }
+        }
 
         if (dto.name !== undefined) {
           const duplicateInTx = await tx.role.findFirst({

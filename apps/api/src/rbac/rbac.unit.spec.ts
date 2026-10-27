@@ -477,6 +477,7 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
     merchantId: MERCHANT_A,
     role: 'OWNER',
     authAssurance: 'MFA',
+    mfaVerifiedAt: new Date(),
   };
   const CSKH_ACTOR = {
     userId: 'user-cskh-2',
@@ -2832,6 +2833,86 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
       assert.ok(err instanceof CanonicalApiException);
       assert.strictEqual(err.getStatus(), 403);
       assert.strictEqual(err.code, 'MFA_FRESH_AUTH_REQUIRED');
+    }
+  });
+
+  // Finding 1 (Round 11): Step-up MFA assurance: PASSWORD session with old MFA timestamp rejected, session row locked in tx, recompute sensitive delta
+  test('Finding 1 (Round 11): PASSWORD session with stale or active mfaVerifiedAt rejected with 403 MFA_FRESH_AUTH_REQUIRED; locked update recomputes sensitive delta', async () => {
+    // 1. Password session with a truthy old MFA timestamp must be rejected (authAssurance === 'PASSWORD')
+    const staleMfaPasswordActor = {
+      ...OWNER_ACTOR,
+      authAssurance: 'PASSWORD',
+      mfaVerifiedAt: new Date(Date.now() - 3600000), // 1 hour ago
+    };
+
+    try {
+      await service.createRole(
+        {
+          name: 'Stale MFA PII Role',
+          permissions: ['pii:unmask'],
+        },
+        staleMfaPasswordActor,
+        '127.0.0.1',
+        'corr-r11-f1-stale-pwd'
+      );
+      assert.fail('Should reject password session carrying old MFA timestamp');
+    } catch (err: any) {
+      assert.ok(err instanceof CanonicalApiException);
+      assert.strictEqual(err.getStatus(), 403);
+      assert.strictEqual(err.code, 'MFA_FRESH_AUTH_REQUIRED');
+    }
+
+    // 2. In updateRole: Role initially has pii:unmask. Pre-lock it looks like no new sensitive grant is added.
+    // Concurrently, pii:unmask is removed before lock. Locked update must recompute from locked before-image and reject password session.
+    const concurrentTargetRoleId = 'role-r11-concurrent-sensitive';
+    const pOrder = mockPrisma.permissions.find((p) => p.code === 'order:view_create')!;
+    const pPii = mockPrisma.permissions.find((p) => p.code === 'pii:unmask')!;
+    mockPrisma.roles.push({
+      id: concurrentTargetRoleId,
+      merchant_id: MERCHANT_A,
+      code: null,
+      name: 'Concurrent Sensitive Role',
+      name_lower: 'concurrent sensitive role',
+      description: 'Role with PII',
+      is_system: false,
+      permissions: [{ permission: pOrder }, { permission: pPii }],
+      created_at: new Date(),
+      updated_at: new Date(),
+    });
+
+    // Intercept query to remove pii:unmask concurrently before row lock
+    const origQueryRaw = mockPrisma.$queryRaw.bind(mockPrisma);
+    mockPrisma.$queryRaw = async (strings: TemplateStringsArray, ...values: any[]) => {
+      const sql = strings.join('?');
+      if (sql.includes('FROM roles') && sql.includes('FOR UPDATE')) {
+        const target = mockPrisma.roles.find((r) => r.id === concurrentTargetRoleId);
+        if (target) {
+          // Concurrently strip pii:unmask
+          target.permissions = [{ permission: pOrder }];
+        }
+      }
+      return origQueryRaw(strings, ...values);
+    };
+
+    try {
+      await service.updateRole(
+        concurrentTargetRoleId,
+        {
+          permissions: ['order:view_create', 'pii:unmask'],
+        },
+        staleMfaPasswordActor,
+        '127.0.0.1',
+        'corr-r11-f1-concurrent-patch'
+      );
+      assert.fail(
+        'Locked update must recompute newly added sensitive codes and reject with MFA_FRESH_AUTH_REQUIRED'
+      );
+    } catch (err: any) {
+      assert.ok(err instanceof CanonicalApiException);
+      assert.strictEqual(err.getStatus(), 403);
+      assert.strictEqual(err.code, 'MFA_FRESH_AUTH_REQUIRED');
+    } finally {
+      mockPrisma.$queryRaw = origQueryRaw;
     }
   });
 
