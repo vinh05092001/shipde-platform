@@ -1,4 +1,6 @@
 import * as assert from 'node:assert';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { describe, it, beforeEach } from 'node:test';
 import {
   InvitationsService,
@@ -3063,6 +3065,39 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
       assert.strictEqual(passedToken, '');
       await ctrl.verifyInvitation({ token: 12345 } as any, { headers: {} });
       assert.strictEqual(passedToken, '');
+    });
+
+    it('Finding 8: schema and migration enforce BR-INV-08 partial unique pending constraints', () => {
+      const migrationSql = fs.readFileSync(
+        path.join(
+          __dirname,
+          '../../../../prisma/migrations/20261027000000_feat_usr_01_user_invitations/migration.sql'
+        ),
+        'utf8'
+      );
+      assert.ok(
+        migrationSql.includes(
+          'CREATE UNIQUE INDEX "invitations_merchant_pending_email_unique" ON "invitations"("merchant_id", "email") WHERE "status" = \'PENDING\''
+        ),
+        'authoritative migration must contain invitations_merchant_pending_email_unique'
+      );
+      assert.ok(
+        migrationSql.includes(
+          'CREATE UNIQUE INDEX "invitations_merchant_pending_phone_unique" ON "invitations"("merchant_id", "phone") WHERE "status" = \'PENDING\''
+        ),
+        'authoritative migration must contain invitations_merchant_pending_phone_unique'
+      );
+
+      const schemaPrisma = fs.readFileSync(
+        path.join(__dirname, '../../../../prisma/schema.prisma'),
+        'utf8'
+      );
+      assert.ok(
+        schemaPrisma.includes(
+          'Authoritative schema & migration path (Round 6 Finding 8 / BR-INV-08)'
+        ),
+        'schema.prisma must document authoritative partial unique index alignment'
+      );
     });
   });
 });

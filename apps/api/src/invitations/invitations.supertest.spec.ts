@@ -630,6 +630,82 @@ async function runInvitationsSupertestSuite() {
   }
   assert.strictEqual(burstRateLimited, true, 'Rate limit burst must return 429 RATE_LIMITED');
 
+  // [TEST 19 / Round 6 Finding 8] Authoritative partial unique pending index preserves BR-INV-08 in DB
+  console.log(
+    '[TEST 19 / Round 6 Finding 8] Partial unique pending indexes enforce BR-INV-08 idempotency'
+  );
+  const dbIndexes: Array<{ indexname: string; indexdef: string }> = await prisma.$queryRawUnsafe(
+    "SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'invitations' AND indexname LIKE 'invitations_merchant_pending_%'"
+  );
+  const emailIndex = dbIndexes.find(
+    (x) => x.indexname === 'invitations_merchant_pending_email_unique'
+  );
+  const phoneIndex = dbIndexes.find(
+    (x) => x.indexname === 'invitations_merchant_pending_phone_unique'
+  );
+  assert.ok(emailIndex, 'invitations_merchant_pending_email_unique must exist in PostgreSQL');
+  assert.ok(
+    emailIndex.indexdef.includes('PENDING'),
+    'email index must be partial on PENDING status'
+  );
+  assert.ok(phoneIndex, 'invitations_merchant_pending_phone_unique must exist in PostgreSQL');
+  assert.ok(
+    phoneIndex.indexdef.includes('PENDING'),
+    'phone index must be partial on PENDING status'
+  );
+
+  // Verify DB rejects duplicate pending insert with P2002
+  const dupEmail = `dup_pending_${testSuffix}@example.com`;
+  const invite1 = await prisma.invitation.create({
+    data: {
+      merchant_id: merchant.id,
+      email: dupEmail,
+      role: 'OPS_CSKH',
+      token_hash: createHash('sha256').update(`tok1_${testSuffix}`).digest('hex'),
+      status: 'PENDING',
+      expires_at: new Date(Date.now() + 86400000),
+    },
+  });
+  await assert.rejects(
+    () =>
+      prisma.invitation.create({
+        data: {
+          merchant_id: merchant.id,
+          email: dupEmail,
+          role: 'OPS_CSKH',
+          token_hash: createHash('sha256').update(`tok2_${testSuffix}`).digest('hex'),
+          status: 'PENDING',
+          expires_at: new Date(Date.now() + 86400000),
+        },
+      }),
+    (err: any) => {
+      assert.strictEqual(err.code, 'P2002');
+      return true;
+    }
+  );
+
+  // Transition first to EXPIRED -> now second insert succeeds
+  await prisma.invitation.update({
+    where: { id: invite1.id },
+    data: { status: 'EXPIRED' },
+  });
+  const invite2 = await prisma.invitation.create({
+    data: {
+      merchant_id: merchant.id,
+      email: dupEmail,
+      role: 'OPS_CSKH',
+      token_hash: createHash('sha256').update(`tok2_${testSuffix}`).digest('hex'),
+      status: 'PENDING',
+      expires_at: new Date(Date.now() + 86400000),
+    },
+  });
+  assert.ok(invite2.id);
+
+  // Clean up test rows
+  await prisma.invitation.deleteMany({
+    where: { id: { in: [invite1.id, invite2.id] } },
+  });
+
   await app.close();
   console.log('================================================================');
   console.log('✅ ALL INVITATIONS SUPERTEST TESTS PASSED 100% (FEAT-USR-01)');
