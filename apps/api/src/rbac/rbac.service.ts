@@ -13,6 +13,15 @@ const isRoleEnumValue = (code: string | null): code is RoleEnum => {
   return Boolean(code && Object.values(RoleEnum).includes(code as any));
 };
 
+export const ACTIVE_USER_STATUS_FILTER = {
+  equals: 'active',
+  mode: 'insensitive' as const,
+};
+
+export function isUserActiveStatus(status?: string | null): boolean {
+  return typeof status === 'string' && status.trim().toLowerCase() === 'active';
+}
+
 // Deterministic UUID generator for canonical platform permissions & system roles
 function deterministicUuid(prefix: string, index: number): string {
   const hex = index.toString(16).padStart(12, '0');
@@ -225,7 +234,7 @@ export class RbacService {
       );
     }
 
-    if (!user.status || user.status.toLowerCase() !== 'active') {
+    if (!isUserActiveStatus(user.status)) {
       throw new CanonicalApiException(
         HttpStatus.FORBIDDEN,
         'FORBIDDEN',
@@ -395,7 +404,7 @@ export class RbacService {
                 merchant_id: merchantId,
                 role: role.code,
                 custom_role_id: null,
-                status: 'active',
+                status: ACTIVE_USER_STATUS_FILTER,
               },
             });
           }
@@ -404,7 +413,7 @@ export class RbacService {
             where: {
               merchant_id: merchantId,
               custom_role_id: role.id,
-              status: 'active',
+              status: ACTIVE_USER_STATUS_FILTER,
             },
           });
         }
@@ -488,7 +497,7 @@ export class RbacService {
             merchant_id: actor.merchantId,
             role: role.code,
             custom_role_id: null,
-            status: 'active',
+            status: ACTIVE_USER_STATUS_FILTER,
           },
         });
       }
@@ -497,7 +506,7 @@ export class RbacService {
         where: {
           merchant_id: actor.merchantId,
           custom_role_id: role.id,
-          status: 'active',
+          status: ACTIVE_USER_STATUS_FILTER,
         },
       });
     }
@@ -1027,7 +1036,7 @@ export class RbacService {
       where: {
         merchant_id: actor.merchantId,
         custom_role_id: roleId,
-        status: 'active',
+        status: ACTIVE_USER_STATUS_FILTER,
       },
     });
 
@@ -1118,7 +1127,7 @@ export class RbacService {
           where: {
             merchant_id: actor.merchantId,
             custom_role_id: roleId,
-            status: 'active',
+            status: ACTIVE_USER_STATUS_FILTER,
           },
         });
 
@@ -1171,13 +1180,29 @@ export class RbacService {
     } catch (err: any) {
       if (err instanceof CanonicalApiException) throw err;
       if (err?.code === 'P2003' || /foreign key/i.test(err?.message || '')) {
+        const fallbackCount = await this.prisma.user
+          .count({
+            where: {
+              merchant_id: actor.merchantId,
+              custom_role_id: roleId,
+              status: ACTIVE_USER_STATUS_FILTER,
+            },
+          })
+          .catch(() => 1);
+        const resolvedCount = fallbackCount > 0 ? fallbackCount : 1;
         throw new CanonicalApiException(
           HttpStatus.BAD_REQUEST,
           'ROLE_IN_USE',
-          'Không thể xóa vai trò đang được gán cho người dùng',
+          `Không thể xóa vai trò đang được gán cho ${resolvedCount} người dùng đang hoạt động`,
           false,
           'Vui lòng chuyển vai trò của các người dùng sang vai trò khác trước khi xóa',
-          [{ field: 'role_id', code: 'IN_USE', message: 'Vai trò đang được gán cho người dùng' }]
+          [
+            {
+              field: 'role_id',
+              code: 'IN_USE',
+              message: `Vai trò đang được gán cho ${resolvedCount} người dùng`,
+            },
+          ]
         );
       }
       throw new CanonicalApiException(

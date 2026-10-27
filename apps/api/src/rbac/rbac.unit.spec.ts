@@ -311,7 +311,11 @@ class MockPrismaService {
       let count = 0;
       for (const u of this.users) {
         if (args.where.merchant_id && u.merchant_id !== args.where.merchant_id) continue;
-        if (args.where.status && u.status !== args.where.status) continue;
+        if (args.where.status) {
+          const filter = args.where.status;
+          const expected = typeof filter === 'string' ? filter : filter.equals;
+          if (expected && u.status?.toLowerCase() !== expected.toLowerCase()) continue;
+        }
         if (
           args.where.custom_role_id !== undefined &&
           u.custom_role_id !== args.where.custom_role_id
@@ -629,12 +633,12 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
 
     const customRoleId = createRes.data.role.id;
 
-    // Simulate active user assigned to this custom role
+    // Simulate active user assigned to this custom role with uppercase 'ACTIVE' status (Round 3 Finding 2)
     mockPrisma.users.push({
       id: 'user-assigned-1',
       merchant_id: MERCHANT_A,
       custom_role_id: customRoleId,
-      status: 'active',
+      status: 'ACTIVE',
     });
 
     await assert.rejects(
@@ -645,8 +649,22 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
         assert.ok(err instanceof CanonicalApiException);
         assert.strictEqual(err.code, 'ROLE_IN_USE');
         assert.strictEqual(err.getStatus(), 400);
+        assert.ok(
+          err.message.includes('1 người dùng đang hoạt động'),
+          'Error message must include active user count'
+        );
+        assert.strictEqual(err.fields?.[0]?.field, 'role_id');
+        assert.strictEqual(err.fields?.[0]?.code, 'IN_USE');
+        assert.strictEqual(err.fields?.[0]?.message, 'Vai trò đang được gán cho 1 người dùng');
         return true;
       }
+    );
+
+    // Proving DB state: Role row remains unchanged in DB when delete is rejected
+    const roleStillInDb = mockPrisma.roles.find((r) => r.id === customRoleId);
+    assert.ok(
+      roleStillInDb,
+      'Role row must remain unchanged when delete is rejected due to active user'
     );
   });
 

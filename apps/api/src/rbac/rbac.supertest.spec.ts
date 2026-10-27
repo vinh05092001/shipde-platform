@@ -394,23 +394,36 @@ async function main() {
   );
 
   // =========================================================================
-  // AC-RBAC-01-09: Delete role with active assigned users returns 400 ROLE_IN_USE
+  // AC-RBAC-01-09: Delete role with active assigned users returns 400 ROLE_IN_USE with active user count
+  // Proving Round 3 Finding 2: Uppercase status 'ACTIVE' is correctly recognized by case-insensitive predicate
   // =========================================================================
   await prisma.user.update({
     where: { id: ASSIGNED_USER_ID },
-    data: { custom_role_id: createdRoleId, status: 'active' },
+    data: { custom_role_id: createdRoleId, status: 'ACTIVE' },
   });
   const inUseDelRes = await request(server)
     .delete(`/api/v1/roles/${createdRoleId}`)
     .set('Authorization', `Bearer ${ownerToken}`)
     .expect(400);
   assert.strictEqual(inUseDelRes.body.error.code, 'ROLE_IN_USE');
+  assert.ok(
+    inUseDelRes.body.error.message.includes('1 người dùng đang hoạt động'),
+    '400 error message must include active user count'
+  );
+  assert.strictEqual(
+    inUseDelRes.body.error.details?.[0]?.message,
+    'Vai trò đang được gán cho 1 người dùng',
+    'Error details must include active user count'
+  );
 
-  // DB Proof for AC-09: Role and active user count preserved
+  // DB Proof for AC-09: Role and active user count preserved, role row unchanged
   const inUseRole = await prisma.role.findUnique({ where: { id: createdRoleId } });
   assert.ok(inUseRole, 'Role must still exist in DB when delete is rejected');
   const activeCount = await prisma.user.count({
-    where: { custom_role_id: createdRoleId, status: 'active' },
+    where: {
+      custom_role_id: createdRoleId,
+      status: { equals: 'active', mode: 'insensitive' },
+    },
   });
   assert.strictEqual(activeCount, 1, 'Assigned user count must be preserved');
 

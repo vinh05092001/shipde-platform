@@ -133,12 +133,14 @@ export class CanonicalApiException extends HttpException {
           retryable,
           next_action,
           fields,
+          details: fields,
           ...(retryAfterSeconds !== undefined && { cooldown_seconds: retryAfterSeconds }),
           ...(extra || {}),
         },
       },
       statusCode
     );
+    this.message = message;
   }
 }
 
