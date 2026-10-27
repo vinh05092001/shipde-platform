@@ -245,8 +245,95 @@ async function runAsyncTests() {
       'REVOKED',
       'Session status must transition to REVOKED'
     );
+
+    // Case 3c: In-flight ref tracking during execution
+    const testRevokingRef = { current: null as string | null };
+    const trackingRevoke = await executeRevokeSession({
+      sessionId: mockRemoteSession1.session_id,
+      baseUrl: 'http://localhost:3001',
+      token: 'dummy-token',
+      revokingId: null,
+      revokingIdRef: testRevokingRef,
+      revokeAllLoading: false,
+      isFetching: false,
+      setRevokingId: () => {},
+      setActionError: () => {},
+      setValidationMessage: () => {},
+      setSessions: (updater: any) => {
+        // While executeRevokeSession runs, revokingIdRef must be set to target sessionId
+        assert.strictEqual(
+          testRevokingRef.current,
+          mockRemoteSession1.session_id,
+          'revokingIdRef must hold active session_id during execution'
+        );
+      },
+      onToast: () => {},
+    });
+    assert.strictEqual(trackingRevoke.executed, true);
+    assert.strictEqual(
+      testRevokingRef.current,
+      null,
+      'revokingIdRef must reset to null after execution'
+    );
+
+    // Case 3d: In-flight revokingIdRef locks duplicate click before next paint
+    const lockedByRevokingRef = await executeRevokeSession({
+      sessionId: mockRemoteSession1.session_id,
+      baseUrl: 'http://localhost:3001',
+      token: 'dummy-token',
+      revokingId: null, // React state closure still null before re-render
+      revokingIdRef: { current: mockRemoteSession1.session_id }, // Ref synchronously locked!
+      revokeAllLoading: false,
+      isFetching: false,
+      setRevokingId: () => {},
+      setActionError: () => {},
+      setValidationMessage: () => {},
+      setSessions: () => {},
+    });
+    assert.strictEqual(
+      lockedByRevokingRef.executed,
+      false,
+      'Pre-paint duplicate click must be locked'
+    );
+    assert.strictEqual(lockedByRevokingRef.locked, true);
+
+    // Case 3e: Live revoke is locked when isFetching or fetchState === 'loading'
+    const lockedByFetching = await executeRevokeSession({
+      sessionId: mockRemoteSession1.session_id,
+      baseUrl: 'http://localhost:3001',
+      token: 'dummy-token',
+      revokingId: null,
+      revokeAllLoading: false,
+      isFetching: true,
+      setRevokingId: () => {},
+      setActionError: () => {},
+      setValidationMessage: () => {},
+      setSessions: () => {},
+    });
+    assert.strictEqual(lockedByFetching.executed, false);
+    assert.strictEqual(lockedByFetching.locked, true);
+
+    const lockedByLoadingState = await executeRevokeSession({
+      sessionId: mockRemoteSession1.session_id,
+      baseUrl: 'http://localhost:3001',
+      token: 'dummy-token',
+      revokingId: null,
+      revokeAllLoading: false,
+      isFetching: false,
+      fetchState: 'loading',
+      setRevokingId: () => {},
+      setActionError: () => {},
+      setValidationMessage: () => {},
+      setSessions: () => {},
+    });
+    assert.strictEqual(lockedByLoadingState.executed, false);
+    assert.strictEqual(lockedByLoadingState.locked, true);
+
     console.log(
       '  PASS: Single session revocation executed, updated to REVOKED, and triggered toast'
+    );
+    console.log(
+      '  PASS: AC-SESS-04 executeRevokeSession locks duplicate clicks via revokingIdRef, isFetching, and fetchState'
     );
   } finally {
     global.fetch = originalFetch;
@@ -387,7 +474,9 @@ async function runAsyncTests() {
   // ---------------------------------------------------------------------------
   // Static UI Render Tests (AC-SESS-03, AC-SESS-04, Error recovery, Forbidden, Validation)
   // ---------------------------------------------------------------------------
-  console.log('[TEST 5 / AC-SESS-04] Loading state renders skeleton with disabled buttons');
+  console.log(
+    '[TEST 5 / AC-SESS-04] Loading state renders skeleton with disabled buttons and locks live controls'
+  );
   const htmlLoading = renderWithAuth(
     React.createElement(SessionsTab, {
       initialState: 'loading',
@@ -403,7 +492,48 @@ async function runAsyncTests() {
   assert.ok(htmlLoading.includes('aria-busy="true"'), 'Must indicate aria-busy=true');
   assert.ok(htmlLoading.includes('animate-pulse'), 'Skeleton must have pulse animation');
   assert.ok(htmlLoading.includes('disabled'), 'Buttons must be disabled in loading state');
-  console.log('  PASS: AC-SESS-04 Skeleton placeholder rendered and controls disabled');
+
+  // Test 5b: Live session revoke button is strictly disabled when sessions exist during loading
+  const htmlLiveLoading = renderWithAuth(
+    React.createElement(SessionsTab, {
+      initialState: 'loading',
+      initialSessions: [mockCurrentSession, mockRemoteSession1],
+      authToken: 'dummy-token',
+    })
+  );
+  assert.ok(
+    htmlLiveLoading.includes('data-testid="revoke-btn-remote-session-uuid-2"'),
+    'Live revoke button must be rendered'
+  );
+  assert.match(
+    htmlLiveLoading,
+    /data-testid="revoke-btn-remote-session-uuid-2"[^>]*disabled/,
+    'Live revoke button must have disabled attribute when initialState is loading'
+  );
+
+  // Test 5c: Live session revoke button is strictly disabled when initialIsFetching is true
+  const htmlLiveFetching = renderWithAuth(
+    React.createElement(SessionsTab, {
+      initialState: 'success',
+      initialSessions: [mockCurrentSession, mockRemoteSession1],
+      initialIsFetching: true,
+      authToken: 'dummy-token',
+    })
+  );
+  assert.match(
+    htmlLiveFetching,
+    /data-testid="revoke-btn-remote-session-uuid-2"[^>]*disabled/,
+    'Live revoke button must have disabled attribute when initialIsFetching is true'
+  );
+  assert.match(
+    htmlLiveFetching,
+    /data-testid="revoke-all-button"[^>]*disabled/,
+    'Revoke all button must have disabled attribute when initialIsFetching is true'
+  );
+
+  console.log(
+    '  PASS: AC-SESS-04 Skeleton placeholder rendered and all live controls strictly disabled during loading/fetching'
+  );
 
   console.log('[TEST 6 / AC-SESS-03] Empty remote state displays Vietnamese empty message');
   const htmlEmptyRemote = renderWithAuth(
