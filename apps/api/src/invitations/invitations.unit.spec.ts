@@ -5,6 +5,7 @@ import {
   maskIdentifier,
   validatePasswordStrength,
 } from './invitations.service';
+import { resolveFrontendBaseUrl } from './invitation-url.util';
 import { UsersService } from '../users/users.service';
 import { RoleEnum, InvitationStatusEnum } from '@prisma/client';
 import { CanonicalApiException } from '../auth/auth.service';
@@ -297,6 +298,27 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
           dispatchedParams.link.startsWith('https://portal.shipde.vn/invite/accept?token=')
         );
       } finally {
+        process.env.FRONTEND_URL = prevFrontendUrl;
+      }
+    });
+
+    it('disallows localhost / 127.0.0.1 origins when NODE_ENV is production (Finding 6)', () => {
+      const prevNodeEnv = process.env.NODE_ENV;
+      const prevFrontendUrl = process.env.FRONTEND_URL;
+      try {
+        process.env.NODE_ENV = 'production';
+        process.env.FRONTEND_URL = 'https://portal.shipde.vn';
+
+        const resolved = resolveFrontendBaseUrl('http://localhost:3000');
+        assert.strictEqual(resolved, 'https://portal.shipde.vn');
+
+        const resolvedIp = resolveFrontendBaseUrl('http://127.0.0.1:3000');
+        assert.strictEqual(resolvedIp, 'https://portal.shipde.vn');
+
+        const resolvedProd = resolveFrontendBaseUrl('https://portal.shipde.vn');
+        assert.strictEqual(resolvedProd, 'https://portal.shipde.vn');
+      } finally {
+        process.env.NODE_ENV = prevNodeEnv;
         process.env.FRONTEND_URL = prevFrontendUrl;
       }
     });
