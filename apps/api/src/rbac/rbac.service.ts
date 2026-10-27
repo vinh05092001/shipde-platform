@@ -218,6 +218,16 @@ export class RbacService {
       );
     }
 
+    if (!user.status || user.status.toLowerCase() !== 'active') {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Tài khoản người dùng đã bị vô hiệu hóa hoặc chưa kích hoạt',
+        false,
+        'Vui lòng liên hệ quản trị viên'
+      );
+    }
+
     if (!user.merchant_id) {
       throw new CanonicalApiException(
         HttpStatus.FORBIDDEN,

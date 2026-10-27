@@ -1142,4 +1142,57 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
       }
     );
   });
+
+  // Finding 3 (P1 Round 2): resolveActorFromSession rejects non-active or disabled users
+  test('Finding 3 / AC-RBAC-01-14: Non-active users are rejected with 403 FORBIDDEN during session actor resolution', async () => {
+    // 1. Suspended / revoked user
+    mockPrisma.users.push({
+      id: 'user-disabled-owner',
+      merchant_id: MERCHANT_A,
+      role: 'OWNER',
+      custom_role_id: null,
+      status: 'SUSPENDED',
+    });
+
+    await assert.rejects(
+      async () => {
+        await service.resolveActorFromSession({
+          userId: 'user-disabled-owner',
+          merchantId: MERCHANT_A,
+        } as any);
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 403);
+        assert.strictEqual(err.code, 'FORBIDDEN');
+        const resp = err.getResponse() as any;
+        assert.match(resp?.error?.message || '', /vô hiệu hóa/i);
+        return true;
+      }
+    );
+
+    // 2. Pending verification user
+    mockPrisma.users.push({
+      id: 'user-pending-ops',
+      merchant_id: MERCHANT_A,
+      role: 'OPS_CSKH',
+      custom_role_id: null,
+      status: 'pending_verification',
+    });
+
+    await assert.rejects(
+      async () => {
+        await service.resolveActorFromSession({
+          userId: 'user-pending-ops',
+          merchantId: MERCHANT_A,
+        } as any);
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 403);
+        assert.strictEqual(err.code, 'FORBIDDEN');
+        return true;
+      }
+    );
+  });
 });
