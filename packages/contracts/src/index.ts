@@ -31,6 +31,15 @@ export type UserStatus = (typeof UserStatus)[keyof typeof UserStatus];
 export const CanonicalUserStatus = UserStatus;
 export type CanonicalUserStatus = UserStatus;
 
+/**
+ * Shared helper to verify if a user status string represents an active account.
+ * Case-insensitive comparison matching DATA-DICTIONARY ('ACTIVE') and legacy/in-flight ('active').
+ * AC-USR-01-17 / DATA-DICTIONARY User.status
+ */
+export function isActiveStatus(status?: string | null): boolean {
+  return typeof status === 'string' && status.trim().toLowerCase() === 'active';
+}
+
 // --- Verification Channels ---
 export const VerificationChannel = {
   EMAIL: 'email',

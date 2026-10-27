@@ -3,6 +3,9 @@ import { PrismaService } from '../prisma/prisma.service';
 import { SessionService } from '../session/session.service';
 import { CanonicalApiException } from '../auth/auth.service';
 import { RoleEnum } from '@prisma/client';
+import { isActiveStatus } from '@shipde/contracts';
+
+export { isActiveStatus };
 
 export interface AdminResetMfaDto {
   reason: string;
@@ -294,7 +297,7 @@ export class UsersService {
       );
     }
 
-    if (user.status !== 'active') {
+    if (!isActiveStatus(user.status)) {
       throw new CanonicalApiException(
         HttpStatus.FORBIDDEN,
         'FORBIDDEN',

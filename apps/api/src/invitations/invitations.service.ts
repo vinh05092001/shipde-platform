@@ -6,7 +6,7 @@ import { RoleEnum, InvitationStatusEnum, Prisma } from '@prisma/client';
 import { randomBytes, createHash } from 'node:crypto';
 import { VERIFICATION_ADAPTER } from '../auth/auth.tokens';
 import type { IVerificationDeliveryAdapter } from '@shipde/contracts';
-import { SendInvitationRequest, AcceptInvitationRequest, InvitationItem } from '@shipde/contracts';
+import { SendInvitationRequest, AcceptInvitationRequest, InvitationItem, isActiveStatus } from '@shipde/contracts';
 import { RateLimitService } from '../auth/rate-limit.service';
 import type { InvitationDispatchReservation } from '../auth/rate-limit.service';
 import { resolveFrontendBaseUrl, sanitizeCorrelationId } from './invitation-url.util';
@@ -225,8 +225,7 @@ export class InvitationsService {
         select: { id: true, role: true, store_scopes: true, warehouse_scopes: true, status: true },
       });
       if (user) {
-        const isUserActive =
-          typeof user.status === 'string' && user.status.toLowerCase() === 'active';
+        const isUserActive = isActiveStatus(user.status);
         if (!isUserActive) {
           throw new CanonicalApiException(
             HttpStatus.FORBIDDEN,

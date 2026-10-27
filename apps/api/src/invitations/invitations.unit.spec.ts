@@ -13,7 +13,7 @@ import {
 } from './invitations.service';
 import { InvitationsController } from './invitations.controller';
 import { resolveFrontendBaseUrl } from './invitation-url.util';
-import { UsersService } from '../users/users.service';
+import { UsersService, isActiveStatus } from '../users/users.service';
 import { RateLimitService } from '../auth/rate-limit.service';
 import { RoleEnum, InvitationStatusEnum } from '@prisma/client';
 import { CanonicalApiException } from '../auth/auth.service';
@@ -1723,6 +1723,86 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
       );
 
       assert.strictEqual(result.data.authorized, true);
+    });
+
+    it('proves shared isActiveStatus helper and canonical uppercase ACTIVE status gate (Round 11 Finding 1)', async () => {
+      // 1. Shared helper assertion across casing and dictionary values
+      assert.strictEqual(isActiveStatus('ACTIVE'), true);
+      assert.strictEqual(isActiveStatus('active'), true);
+      assert.strictEqual(isActiveStatus('Active'), true);
+      assert.strictEqual(isActiveStatus('SUSPENDED'), false);
+      assert.strictEqual(isActiveStatus('suspended'), false);
+      assert.strictEqual(isActiveStatus('DISABLED'), false);
+      assert.strictEqual(isActiveStatus(null), false);
+      assert.strictEqual(isActiveStatus(undefined), false);
+      assert.strictEqual(isActiveStatus(''), false);
+
+      const usersService = new UsersService(mockPrisma as any, {} as any);
+
+      // 2. Canonical uppercase 'ACTIVE' returns 200 within assigned scope
+      mockPrisma.user.findFirst = async () => ({
+        id: 'operator-user-1',
+        merchant_id: MERCHANT_ID,
+        role: RoleEnum.OPS_CSKH,
+        status: 'ACTIVE',
+        store_scopes: ['store-alpha'],
+        warehouse_scopes: ['wh-north'],
+      });
+
+      const okResult = await usersService.checkScopeAccess(
+        'operator-user-1',
+        MERCHANT_ID,
+        { warehouse_id: 'wh-north' },
+        'corr-scope-active-1'
+      );
+      assert.strictEqual(okResult.data.authorized, true);
+
+      // 3. Canonical uppercase 'ACTIVE' returns 403 outside assigned scope
+      await assert.rejects(
+        async () => {
+          await usersService.checkScopeAccess(
+            'operator-user-1',
+            MERCHANT_ID,
+            { warehouse_id: 'wh-south' },
+            'corr-scope-active-2'
+          );
+        },
+        (err: any) => {
+          assert.ok(err instanceof CanonicalApiException);
+          assert.strictEqual(err.getStatus(), HttpStatus.FORBIDDEN);
+          assert.strictEqual(err.code, 'FORBIDDEN');
+          return true;
+        }
+      );
+
+      // 4. Canonical 'SUSPENDED' returns 403 before scope check
+      mockPrisma.user.findFirst = async () => ({
+        id: 'operator-user-1',
+        merchant_id: MERCHANT_ID,
+        role: RoleEnum.OPS_CSKH,
+        status: 'SUSPENDED',
+        store_scopes: ['store-alpha'],
+        warehouse_scopes: ['wh-north'],
+      });
+
+      await assert.rejects(
+        async () => {
+          await usersService.checkScopeAccess(
+            'operator-user-1',
+            MERCHANT_ID,
+            { warehouse_id: 'wh-north' },
+            'corr-scope-suspended'
+          );
+        },
+        (err: any) => {
+          assert.ok(err instanceof CanonicalApiException);
+          assert.strictEqual(err.getStatus(), HttpStatus.FORBIDDEN);
+          assert.strictEqual(err.code, 'FORBIDDEN');
+          const response = err.getResponse() as any;
+          assert.match(response?.error?.message, /chưa kích hoạt hoặc đã bị khóa/);
+          return true;
+        }
+      );
     });
 
     it('rejects empty scope check omitting both store_id and warehouse_id with 400 VALIDATION_ERROR (Finding 6)', async () => {

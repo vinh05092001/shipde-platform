@@ -600,7 +600,13 @@ async function runInvitationsSupertestSuite() {
   const newUserToken = loginRes.body.data.access_token;
   assert.ok(newUserToken);
 
-  // Access within assigned warehouse scope
+  // Finding 1 (Round 11): Verify canonical uppercase 'ACTIVE' status gate (DATA-DICTIONARY)
+  await prisma.user.updateMany({
+    where: { email: `operator.${testSuffix}@shipde.vn` },
+    data: { status: 'ACTIVE' },
+  });
+
+  // Access within assigned warehouse scope with canonical 'ACTIVE' status -> 200
   const authScopeRes = await request(app.getHttpServer())
     .post('/api/v1/users/check-scope')
     .set('Authorization', `Bearer ${newUserToken}`)
@@ -615,6 +621,24 @@ async function runInvitationsSupertestSuite() {
     .send({ warehouse_id: 'wh-south' });
   assert.strictEqual(unauthScopeRes.status, 403);
   assert.strictEqual(unauthScopeRes.body.error.code, 'FORBIDDEN');
+
+  // Verify non-active canonical status ('SUSPENDED') is rejected with 403 FORBIDDEN before scope check
+  await prisma.user.updateMany({
+    where: { email: `operator.${testSuffix}@shipde.vn` },
+    data: { status: 'SUSPENDED' },
+  });
+  const suspendedScopeRes = await request(app.getHttpServer())
+    .post('/api/v1/users/check-scope')
+    .set('Authorization', `Bearer ${newUserToken}`)
+    .send({ warehouse_id: 'wh-north' });
+  assert.strictEqual(suspendedScopeRes.status, 403);
+  assert.strictEqual(suspendedScopeRes.body.error.code, 'FORBIDDEN');
+
+  // Restore canonical ACTIVE status
+  await prisma.user.updateMany({
+    where: { email: `operator.${testSuffix}@shipde.vn` },
+    data: { status: 'ACTIVE' },
+  });
 
   // [TEST 18 / Finding 1] Burst rate limiting returns 429 RATE_LIMITED (SECURITY-NFR)
   console.log('[TEST 18 / Finding 1] Rate limit burst returns 429 RATE_LIMITED');
