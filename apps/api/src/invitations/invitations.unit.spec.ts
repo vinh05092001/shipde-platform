@@ -3264,5 +3264,59 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
       );
       assert.strictEqual(refunds, 2, 'quota refunded on missing delivery adapter in resend');
     });
+
+    it('Finding 4: rejects non-string identifiers, non-array scopes, and unknown list status with 400 VALIDATION_ERROR', async () => {
+      const svc = new InvitationsService(mockPrisma, undefined as any, new RateLimitService());
+      const actor = { userId: OWNER_USER_ID, merchantId: MERCHANT_ID, role: 'OWNER' };
+
+      // Non-string email
+      await assert.rejects(
+        () =>
+          svc.createInvitation(
+            { email: 12345 as any, role: RoleEnum.OPS_CSKH },
+            actor,
+            '10.7.4.1',
+            'corr-r7-4'
+          ),
+        (err: any) => {
+          assert.strictEqual(err.status, 400);
+          assert.strictEqual(err.code, 'VALIDATION_ERROR');
+          assert.strictEqual(err.fields?.[0]?.field, 'email');
+          return true;
+        }
+      );
+
+      // Non-array store_scopes
+      await assert.rejects(
+        () =>
+          svc.createInvitation(
+            {
+              email: 'test@shipde.vn',
+              role: RoleEnum.OPS_CSKH,
+              store_scopes: 'store-1' as any,
+            },
+            actor,
+            '10.7.4.2',
+            'corr-r7-4b'
+          ),
+        (err: any) => {
+          assert.strictEqual(err.status, 400);
+          assert.strictEqual(err.code, 'VALIDATION_ERROR');
+          assert.strictEqual(err.fields?.[0]?.field, 'store_scopes');
+          return true;
+        }
+      );
+
+      // Unknown list status
+      await assert.rejects(
+        () => svc.listInvitations(actor, { status: 'UNKNOWN_STATUS_XYZ' }, 'corr-r7-4c'),
+        (err: any) => {
+          assert.strictEqual(err.status, 400);
+          assert.strictEqual(err.code, 'VALIDATION_ERROR');
+          assert.strictEqual(err.fields?.[0]?.field, 'status');
+          return true;
+        }
+      );
+    });
   });
 });

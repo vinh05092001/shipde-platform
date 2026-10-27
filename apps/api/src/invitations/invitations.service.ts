@@ -262,8 +262,75 @@ export class InvitationsService {
     correlationId: string,
     baseUrl = 'http://localhost:3000'
   ) {
-    const email = dto.email ? dto.email.trim().toLowerCase() : undefined;
-    const phone = canonicalizePhoneNumber(dto.phone);
+    if (!dto || typeof dto !== 'object') {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Dữ liệu yêu cầu không hợp lệ',
+        false
+      );
+    }
+
+    if (dto.email !== undefined && dto.email !== null && typeof dto.email !== 'string') {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Địa chỉ email phải là chuỗi ký tự',
+        false,
+        undefined,
+        [{ field: 'email', code: 'INVALID_TYPE', message: 'Email phải là chuỗi ký tự' }]
+      );
+    }
+
+    if (dto.phone !== undefined && dto.phone !== null && typeof dto.phone !== 'string') {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Số điện thoại phải là chuỗi ký tự',
+        false,
+        undefined,
+        [{ field: 'phone', code: 'INVALID_TYPE', message: 'Số điện thoại phải là chuỗi ký tự' }]
+      );
+    }
+
+    if (
+      dto.store_scopes !== undefined &&
+      dto.store_scopes !== null &&
+      !Array.isArray(dto.store_scopes)
+    ) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Phạm vi chi nhánh phải là danh sách chuỗi',
+        false,
+        undefined,
+        [{ field: 'store_scopes', code: 'INVALID_TYPE', message: 'store_scopes phải là một mảng' }]
+      );
+    }
+
+    if (
+      dto.warehouse_scopes !== undefined &&
+      dto.warehouse_scopes !== null &&
+      !Array.isArray(dto.warehouse_scopes)
+    ) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Phạm vi kho hàng phải là danh sách chuỗi',
+        false,
+        undefined,
+        [
+          {
+            field: 'warehouse_scopes',
+            code: 'INVALID_TYPE',
+            message: 'warehouse_scopes phải là một mảng',
+          },
+        ]
+      );
+    }
+
+    const email = typeof dto.email === 'string' ? dto.email.trim().toLowerCase() : undefined;
+    const phone = typeof dto.phone === 'string' ? canonicalizePhoneNumber(dto.phone) : undefined;
     const recipient = email || phone;
 
     // 1. Validation: Exactly one recipient identifier required (AC-USR-01-07 / Security-NFR Finding 3)
@@ -640,6 +707,24 @@ export class InvitationsService {
         'FORBIDDEN',
         'Bạn không có quyền quản lý người dùng và vai trò',
         false
+      );
+    }
+
+    const validStatuses = [
+      'ALL',
+      InvitationStatusEnum.PENDING,
+      InvitationStatusEnum.ACCEPTED,
+      InvitationStatusEnum.EXPIRED,
+      InvitationStatusEnum.CANCELLED,
+    ];
+    if (filter.status && !validStatuses.includes(filter.status as any)) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Trạng thái lọc lời mời không hợp lệ',
+        false,
+        undefined,
+        [{ field: 'status', code: 'INVALID_STATUS', message: 'Trạng thái lời mời không hợp lệ' }]
       );
     }
 
