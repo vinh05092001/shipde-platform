@@ -738,8 +738,8 @@ export class RbacService {
       );
     }
 
-    // 2. Validation: missing role name (AC-RBAC-01-12)
-    if (!dto.name || dto.name.trim().length === 0) {
+    // 2. Validation: role name type, empty, and max length (AC-RBAC-01-12, Finding 5 / Round 8)
+    if (typeof dto.name !== 'string' || dto.name.trim().length === 0) {
       throw new CanonicalApiException(
         HttpStatus.BAD_REQUEST,
         'VALIDATION_ERROR',
@@ -747,6 +747,17 @@ export class RbacService {
         false,
         'Vui lòng nhập tên vai trò hợp lệ',
         [{ field: 'name', code: 'REQUIRED', message: 'Tên vai trò không được để trống' }]
+      );
+    }
+
+    if (dto.name.trim().length > 255) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Tên vai trò không được vượt quá 255 ký tự',
+        false,
+        'Vui lòng nhập tên vai trò ngắn hơn 255 ký tự',
+        [{ field: 'name', code: 'MAX_LENGTH', message: 'Tên vai trò không được vượt quá 255 ký tự' }]
       );
     }
 
@@ -1024,7 +1035,7 @@ export class RbacService {
     // 3. Name validation & uniqueness check
     let updatedName = existingRole.name;
     if (dto.name !== undefined) {
-      if (dto.name.trim().length === 0) {
+      if (typeof dto.name !== 'string' || dto.name.trim().length === 0) {
         throw new CanonicalApiException(
           HttpStatus.BAD_REQUEST,
           'VALIDATION_ERROR',
@@ -1032,6 +1043,16 @@ export class RbacService {
           false,
           undefined,
           [{ field: 'name', code: 'REQUIRED', message: 'Tên vai trò không được để trống' }]
+        );
+      }
+      if (dto.name.trim().length > 255) {
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'VALIDATION_ERROR',
+          'Tên vai trò không được vượt quá 255 ký tự',
+          false,
+          undefined,
+          [{ field: 'name', code: 'MAX_LENGTH', message: 'Tên vai trò không được vượt quá 255 ký tự' }]
         );
       }
       updatedName = dto.name.trim();

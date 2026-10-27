@@ -1443,6 +1443,83 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
     );
   });
 
+  // Finding 5 (Round 8): Non-string name or name longer than 255 chars rejects with 400 VALIDATION_ERROR
+  test('Finding 5 / Round 8 / Validation: Non-string name or name exceeding 255 chars rejects with 400 VALIDATION_ERROR on name', async () => {
+    // 1. Non-string name in createRole
+    await assert.rejects(
+      async () => {
+        await service.createRole(
+          {
+            name: 12345 as any,
+            permissions: ['order:view_create'],
+          },
+          OWNER_ACTOR,
+          '127.0.0.1',
+          'corr-r8-f5-type'
+        );
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 400);
+        assert.strictEqual(err.code, 'VALIDATION_ERROR');
+        assert.ok(err.fields?.some((f: any) => f.field === 'name'));
+        return true;
+      }
+    );
+
+    // 2. Name exceeding 255 chars in createRole
+    const overlyLongName = 'A'.repeat(256);
+    await assert.rejects(
+      async () => {
+        await service.createRole(
+          {
+            name: overlyLongName,
+            permissions: ['order:view_create'],
+          },
+          OWNER_ACTOR,
+          '127.0.0.1',
+          'corr-r8-f5-length'
+        );
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 400);
+        assert.strictEqual(err.code, 'VALIDATION_ERROR');
+        assert.ok(err.fields?.some((f: any) => f.field === 'name' && f.code === 'MAX_LENGTH'));
+        return true;
+      }
+    );
+
+    // 3. Name exceeding 255 chars in updateRole
+    const validRole = await service.createRole(
+      {
+        name: 'Vai Trò Hợp Lệ F5',
+        permissions: ['order:view_create'],
+      },
+      OWNER_ACTOR,
+      '127.0.0.1',
+      'corr-r8-f5-setup'
+    );
+    await assert.rejects(
+      async () => {
+        await service.updateRole(
+          validRole.data.role.id,
+          { name: overlyLongName },
+          OWNER_ACTOR,
+          '127.0.0.1',
+          'corr-r8-f5-patch-length'
+        );
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 400);
+        assert.strictEqual(err.code, 'VALIDATION_ERROR');
+        assert.ok(err.fields?.some((f: any) => f.field === 'name' && f.code === 'MAX_LENGTH'));
+        return true;
+      }
+    );
+  });
+
   // AC-RBAC-01-13
   test('AC-RBAC-01-13: Creation request with empty permission array -> 400 VALIDATION_ERROR', async () => {
     await assert.rejects(
