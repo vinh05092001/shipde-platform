@@ -192,13 +192,51 @@ async function main() {
   assert.ok(permRes.body.data.categories.length >= 6);
 
   // =========================================================================
-  // AC-RBAC-01-02: List roles returns system roles plus tenant custom roles
+  // AC-RBAC-01-02: List roles returns system roles plus tenant custom roles, and strictly isolates other merchant custom roles (Finding 4 / Round 10)
   // =========================================================================
+  const ac02OtherRole = await prisma.role.create({
+    data: {
+      merchant_id: OTHER_MERCHANT_ID,
+      name: 'Other Merchant Role AC02',
+      name_lower: 'other merchant role ac02',
+      description: 'Cross merchant role to verify exclusion',
+      is_system: false,
+    },
+  });
+  const ac02OwnRole = await prisma.role.create({
+    data: {
+      merchant_id: SEED_MERCHANT_ID,
+      name: 'Own Merchant Role AC02',
+      name_lower: 'own merchant role ac02',
+      description: 'Own merchant custom role',
+      is_system: false,
+    },
+  });
+
   const rolesRes = await request(server)
     .get('/api/v1/roles')
     .set('Authorization', `Bearer ${ownerToken}`)
     .expect(200);
-  assert.ok(rolesRes.body.data.roles.length >= 5);
+
+  const returnedRoles = rolesRes.body.data.roles;
+  assert.ok(returnedRoles.length >= 6);
+  assert.ok(
+    returnedRoles.some((r: any) => r.id === ac02OwnRole.id),
+    'Own merchant custom role must be present in GET /roles'
+  );
+  assert.ok(
+    !returnedRoles.some((r: any) => r.id === ac02OtherRole.id),
+    'Other merchant custom role must be strictly absent from GET /roles'
+  );
+  for (const r of returnedRoles) {
+    if (!r.is_system) {
+      assert.strictEqual(
+        r.merchant_id,
+        SEED_MERCHANT_ID,
+        'Custom role returned must belong exclusively to actor merchant'
+      );
+    }
+  }
 
   // =========================================================================
   // AC-RBAC-01-03: Create custom role persists role, permissions, and audit log
