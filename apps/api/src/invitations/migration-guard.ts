@@ -108,3 +108,23 @@ export function assertNoMigrationIndexDrift(migrationsDir?: string): void {
     );
   }
 }
+
+/**
+ * CLI execution entrypoint: executed during CI (via `apps/api/package.json` test script)
+ * to fail build immediately if any migration file or prisma migrate diff drops protected partial unique indexes (BR-INV-08).
+ */
+export function runMigrationGuardCli(): void {
+  try {
+    assertNoMigrationIndexDrift();
+    console.log(
+      '[MIGRATION_GUARD] PASS: All PostgreSQL partial unique pending indexes protected and verified.'
+    );
+  } catch (err: any) {
+    console.error(`[MIGRATION_GUARD] FAIL: ${err.message}`);
+    process.exit(1);
+  }
+}
+
+if (process.argv[1]?.includes('migration-guard')) {
+  runMigrationGuardCli();
+}

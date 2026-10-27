@@ -3657,5 +3657,30 @@ CREATE INDEX "some_other_idx" ON "invitations"("created_at");
         }
       );
     });
+
+    it('Round 8 Finding 5: Migration guard CLI and real migrate diff drift assertions', () => {
+      // 1. Authoritative migration drift check passes on current codebase
+      assert.doesNotThrow(() => assertNoMigrationIndexDrift());
+
+      // 2. Fails when a migration or diff contains DROP INDEX on protected partial unique indexes
+      const tempDir = path.resolve(__dirname, '../../test-temp-migrations');
+      try {
+        fs.mkdirSync(path.join(tempDir, '20261028_bad_migration'), { recursive: true });
+        fs.writeFileSync(
+          path.join(tempDir, '20261028_bad_migration', 'migration.sql'),
+          'DROP INDEX "invitations_merchant_pending_phone_unique";'
+        );
+        assert.throws(
+          () => assertNoMigrationIndexDrift(tempDir),
+          (err: any) => {
+            assert.ok(err.message.includes('forbidden DROP INDEX'));
+            assert.ok(err.message.includes('invitations_merchant_pending_phone_unique'));
+            return true;
+          }
+        );
+      } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
   });
 });
