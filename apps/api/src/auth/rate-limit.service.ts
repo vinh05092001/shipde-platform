@@ -585,7 +585,13 @@ export class RateLimitService {
     key: string,
     limit: number,
     windowSeconds: number
-  ): Promise<{ allowed: boolean; retryAfterSeconds?: number; count: number; member?: string; timestamp?: number }> {
+  ): Promise<{
+    allowed: boolean;
+    retryAfterSeconds?: number;
+    count: number;
+    member?: string;
+    timestamp?: number;
+  }> {
     const now = Date.now();
     const windowMs = windowSeconds * 1000;
     const member = `${now}:${Math.random().toString(36).substring(2, 8)}`;

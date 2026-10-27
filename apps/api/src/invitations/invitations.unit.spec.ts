@@ -1876,7 +1876,11 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
           return true;
         }
       );
-      assert.strictEqual(dispatchQuotaChecked, false, 'Quota must not be consumed for unauthorized caller');
+      assert.strictEqual(
+        dispatchQuotaChecked,
+        false,
+        'Quota must not be consumed for unauthorized caller'
+      );
 
       // 2. Validation error (missing identifier) rejected with 400 without consuming quota
       await assert.rejects(
@@ -1893,7 +1897,11 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
           return true;
         }
       );
-      assert.strictEqual(dispatchQuotaChecked, false, 'Quota must not be consumed for validation failure');
+      assert.strictEqual(
+        dispatchQuotaChecked,
+        false,
+        'Quota must not be consumed for validation failure'
+      );
 
       // 3. Authorized and valid call consumes quota
       const res = await testService.createInvitation(
