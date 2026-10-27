@@ -64,6 +64,9 @@ async function runSessionSupertestSuite() {
     databaseUrl = databaseUrl.slice(1, -1);
   }
   process.env.DATABASE_URL = databaseUrl;
+  if (!process.env.AUDIT_IDENTIFIER_HMAC_KEY) {
+    process.env.AUDIT_IDENTIFIER_HMAC_KEY = 'test-audit-hmac-key-placeholder-32-chars';
+  }
 
   const testConfig: AppConfig = {
     NODE_ENV: 'test',
@@ -271,6 +274,11 @@ async function runSessionSupertestSuite() {
       .set('Authorization', `Bearer ${tokInactive.raw}`)
       .expect(401);
     assert.strictEqual(res5Auth.body.error.code, 'SESSION_INVALID');
+    assert.strictEqual(
+      res5Auth.body.error.next_action,
+      'LOGIN',
+      'next_action must be LOGIN per AC-SESS-06'
+    );
     console.log(
       '  PASS: AC-SESS-05 Inactive >30d evaluated as EXPIRED in list and rejected with 401 SESSION_INVALID'
     );
@@ -295,7 +303,11 @@ async function runSessionSupertestSuite() {
       .set('Authorization', `Bearer ${tokExpired.raw}`)
       .expect(401);
     assert.strictEqual(res6.body.error.code, 'SESSION_INVALID');
-    assert.ok(res6.body.error.next_action, 'next_action must be present in canonical error');
+    assert.strictEqual(
+      res6.body.error.next_action,
+      'LOGIN',
+      'next_action must be LOGIN per AC-SESS-06'
+    );
     console.log(
       '  PASS: AC-SESS-06 90-day absolute expired session rejected with 401 SESSION_INVALID and next_action'
     );
@@ -579,6 +591,11 @@ async function runSessionSupertestSuite() {
       .set('Authorization', `Bearer ${tokToRevokeAll.raw}`)
       .expect(401);
     assert.strictEqual(res17Post.body.error.code, 'SESSION_INVALID');
+    assert.strictEqual(
+      res17Post.body.error.next_action,
+      'LOGIN',
+      'next_action must be LOGIN after revoking current session'
+    );
     console.log(
       '  PASS: AC-SESS-17 Revoke all including current terminates caller session (subsequent request 401)'
     );
@@ -672,17 +689,160 @@ async function runSessionSupertestSuite() {
         ip_address: { not: null },
       },
     });
-    if (audit21 && audit21.ip_address) {
-      assert.match(
-        audit21.ip_address,
-        /^[0-9a-f]{64}$/i,
-        'Audit IP must be a 64-char HMAC-SHA256 hex string'
+    assert.ok(
+      audit21,
+      'Audit record for SESSIONS_REVOKED_ALL with non-null ip_address must exist'
+    );
+    assert.ok(audit21.ip_address, 'Audit IP must be non-null');
+    assert.match(
+      audit21.ip_address,
+      /^[0-9a-f]{64}$/i,
+      'Audit IP must be a 64-char HMAC-SHA256 hex string'
+    );
+    assert.doesNotMatch(
+      audit21.ip_address,
+      /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/,
+      'Audit IP must not be raw IPv4'
+    );
+
+    // Verify keyed pseudonymization against known input (Finding 6)
+    const testRawIp = '198.51.100.42';
+    const knownSession = await prisma.deviceSession.create({
+      data: {
+        user_id: user.id,
+        merchant_id: merchant.id,
+        session_token_hash: createSessionToken().hash,
+        device_id: 'device_keyed_hmac_test',
+        status: SessionStatusEnum.ACTIVE,
+        expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+      },
+    });
+
+    await sessionService.revoke(
+      knownSession.id,
+      user.id,
+      merchant.id,
+      'corr-test-keyed-hmac',
+      'Test keyed hmac verification',
+      testRawIp
+    );
+
+    const auditKeyed = await prisma.auditLog.findFirst({
+      where: {
+        merchant_id: merchant.id,
+        action: 'SESSION_REVOKED',
+        entity_id: knownSession.id,
+      },
+    });
+    assert.ok(auditKeyed, 'Audit record for SESSION_REVOKED must exist');
+    assert.ok(auditKeyed.ip_address, 'Keyed audit IP must not be null');
+
+    const { createHmac } = await import('node:crypto');
+    const configuredKey =
+      process.env.AUDIT_IDENTIFIER_HMAC_KEY || 'test-audit-hmac-key-placeholder-32-chars';
+    const expectedPseudonym = createHmac('sha256', configuredKey)
+      .update(testRawIp)
+      .digest('hex');
+
+    assert.strictEqual(
+      auditKeyed.ip_address,
+      expectedPseudonym,
+      'Audit IP pseudonym must match HMAC-SHA256 keyed with AUDIT_IDENTIFIER_HMAC_KEY'
+    );
+
+    const unkeyedSha256 = createHash('sha256').update(testRawIp).digest('hex');
+    assert.notStrictEqual(
+      auditKeyed.ip_address,
+      unkeyedSha256,
+      'Audit IP must not use unkeyed plain SHA-256'
+    );
+
+    // Verify concurrency safety: simultaneous revocations insert exactly 1 audit record (Finding 3)
+    const sessConcurrent = await prisma.deviceSession.create({
+      data: {
+        user_id: user.id,
+        merchant_id: merchant.id,
+        session_token_hash: createSessionToken().hash,
+        device_id: 'device_concurrent_revoke_test',
+        status: SessionStatusEnum.ACTIVE,
+        expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+      },
+    });
+
+    const [resConc1, resConc2] = await Promise.all([
+      sessionService.revoke(
+        sessConcurrent.id,
+        user.id,
+        merchant.id,
+        'corr-conc-1',
+        'Concurrent revoke 1',
+        testRawIp
+      ),
+      sessionService.revoke(
+        sessConcurrent.id,
+        user.id,
+        merchant.id,
+        'corr-conc-2',
+        'Concurrent revoke 2',
+        testRawIp
+      ),
+    ]);
+    assert.strictEqual(resConc1.status, SessionStatusEnum.REVOKED);
+    assert.strictEqual(resConc2.status, SessionStatusEnum.REVOKED);
+
+    const concurrentAudits = await prisma.auditLog.count({
+      where: {
+        merchant_id: merchant.id,
+        action: 'SESSION_REVOKED',
+        entity_id: sessConcurrent.id,
+      },
+    });
+    assert.strictEqual(
+      concurrentAudits,
+      1,
+      'Concurrent revocations must insert exactly ONE audit record (no duplicate audits)'
+    );
+
+    // Verify fail-closed behavior when AUDIT_IDENTIFIER_HMAC_KEY is absent (Finding 4)
+    const savedKey = process.env.AUDIT_IDENTIFIER_HMAC_KEY;
+    try {
+      delete process.env.AUDIT_IDENTIFIER_HMAC_KEY;
+      const sessFailClosed = await prisma.deviceSession.create({
+        data: {
+          user_id: user.id,
+          merchant_id: merchant.id,
+          session_token_hash: createSessionToken().hash,
+          device_id: 'device_fail_closed_test',
+          status: SessionStatusEnum.ACTIVE,
+          expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+        },
+      });
+
+      await assert.rejects(
+        async () => {
+          await sessionService.revoke(
+            sessFailClosed.id,
+            user.id,
+            merchant.id,
+            'corr-fail-closed',
+            'Must fail closed',
+            testRawIp
+          );
+        },
+        /AUDIT_IDENTIFIER_HMAC_KEY is required for IP pseudonymization/,
+        'Must fail closed when AUDIT_IDENTIFIER_HMAC_KEY is absent'
       );
-      assert.doesNotMatch(
-        audit21.ip_address,
-        /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/,
-        'Audit IP must not be raw IPv4'
+
+      const sessAfterAbort = await prisma.deviceSession.findUnique({
+        where: { id: sessFailClosed.id },
+      });
+      assert.strictEqual(
+        sessAfterAbort?.status,
+        SessionStatusEnum.ACTIVE,
+        'Session must remain ACTIVE after fail-closed transaction abort'
       );
+    } finally {
+      process.env.AUDIT_IDENTIFIER_HMAC_KEY = savedKey;
     }
 
     const res21 = await request(server)
