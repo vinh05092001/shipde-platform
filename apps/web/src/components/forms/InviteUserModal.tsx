@@ -36,7 +36,76 @@ export const InviteUserModal: React.FC<Props> = ({ isOpen, onClose, onUserInvite
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
+  const [createdInvite, setCreatedInvite] = useState<{
+    invitation_url: string;
+    email?: string;
+    phone?: string;
+    role: string;
+  } | null>(null);
+  const [copied, setCopied] = useState(false);
+
   if (!isOpen) return null;
+
+  if (createdInvite) {
+    return (
+      <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-150">
+        <div className="bg-white rounded-2xl border border-slate-200 max-w-md w-full p-6 space-y-4 shadow-2xl text-xs animate-in zoom-in-95 duration-150">
+          <div className="flex justify-between items-center pb-3 border-b border-slate-100">
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 rounded-lg bg-green-50 text-green-600 flex items-center justify-center font-bold">
+                ✓
+              </div>
+              <h3 className="font-bold text-sm text-slate-900">Tạo Lời Mời Thành Công</h3>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setCreatedInvite(null);
+                onClose();
+              }}
+              className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center font-bold text-xs"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          <p className="text-slate-600 text-xs leading-relaxed">
+            Liên kết kích hoạt tài khoản đã được khởi tạo thành công (hiệu lực 7 ngày). Hãy sao chép liên kết dưới đây để gửi cho người nhận:
+          </p>
+          <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-2.5">
+            <input
+              type="text"
+              readOnly
+              value={createdInvite.invitation_url || ''}
+              className="w-full text-[11px] bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 font-mono text-slate-700 select-all"
+            />
+            <button
+              type="button"
+              onClick={() => {
+                void navigator.clipboard?.writeText(createdInvite.invitation_url);
+                setCopied(true);
+                setTimeout(() => setCopied(false), 2000);
+              }}
+              className="w-full btn-primary text-xs py-2 flex items-center justify-center gap-1.5 font-semibold"
+            >
+              {copied ? '✓ Đã sao chép liên kết' : 'Sao chép liên kết kích hoạt'}
+            </button>
+          </div>
+          <div className="flex justify-end pt-2">
+            <button
+              type="button"
+              onClick={() => {
+                setCreatedInvite(null);
+                onClose();
+              }}
+              className="btn-secondary text-xs px-4 py-1.5"
+            >
+              Hoàn tất
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const isOwner = user?.role === 'OWNER';
 
@@ -112,7 +181,7 @@ export const InviteUserModal: React.FC<Props> = ({ isOpen, onClose, onUserInvite
       }
 
       onUserInvited(json.data);
-      onClose();
+      setCreatedInvite(json.data);
     } catch (err: any) {
       setErrorMsg(err.message || 'Lỗi kết nối máy chủ');
     } finally {

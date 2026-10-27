@@ -1,9 +1,11 @@
-import { Injectable, Inject, HttpStatus } from '@nestjs/common';
+import { Injectable, Inject, Optional, HttpStatus } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CanonicalApiException } from '../auth/auth.service';
 import { hashPassword } from '../auth/password.util';
 import { RoleEnum, InvitationStatusEnum } from '@prisma/client';
 import { randomBytes, createHash } from 'node:crypto';
+import { VERIFICATION_ADAPTER } from '../auth/auth.tokens';
+import type { IVerificationDeliveryAdapter } from '@shipde/contracts';
 import { SendInvitationRequest, AcceptInvitationRequest, InvitationItem } from '@shipde/contracts';
 
 export function maskIdentifier(identifier?: string | null): string {
@@ -46,7 +48,12 @@ export function validatePasswordStrength(password: string): { valid: boolean; er
 
 @Injectable()
 export class InvitationsService {
-  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Optional()
+    @Inject(VERIFICATION_ADAPTER)
+    private readonly deliveryAdapter?: IVerificationDeliveryAdapter
+  ) {}
 
   private hashToken(rawToken: string): string {
     return createHash('sha256').update(rawToken).digest('hex');
@@ -339,6 +346,17 @@ export class InvitationsService {
 
     const invitationUrl = `${baseUrl}/invite/accept?token=${rawToken}`;
 
+    // Dispatch verification via configured delivery adapter if registered
+    if (this.deliveryAdapter) {
+      await this.deliveryAdapter.sendVerification({
+        channel: email ? 'email' : 'phone',
+        recipient: (email || phone) as string,
+        token: rawToken,
+        purpose: 'invitation',
+        link: invitationUrl,
+      });
+    }
+
     return {
       data: {
         id: invitation.id,
@@ -582,13 +600,26 @@ export class InvitationsService {
       },
     });
 
+    const invitationUrl = `${baseUrl}/invite/accept?token=${rawToken}`;
+
+    // Dispatch verification via configured delivery adapter if registered
+    if (this.deliveryAdapter) {
+      await this.deliveryAdapter.sendVerification({
+        channel: updated.email ? 'email' : 'phone',
+        recipient: (updated.email || updated.phone) as string,
+        token: rawToken,
+        purpose: 'invitation',
+        link: invitationUrl,
+      });
+    }
+
     return {
       data: {
         id: updated.id,
         status: updated.status,
         expires_at: updated.expires_at.toISOString(),
         token: rawToken,
-        invitation_url: `${baseUrl}/invite/accept?token=${rawToken}`,
+        invitation_url: invitationUrl,
       },
       meta: {
         correlation_id: correlationId,

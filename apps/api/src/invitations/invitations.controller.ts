@@ -42,8 +42,13 @@ export class InvitationsController {
       merchantId: req.merchantId as string,
       role: req.userRole || req.jwtClaims?.role,
     };
+    const baseUrl =
+      (req.headers?.['origin'] as string) ||
+      process.env.FRONTEND_URL ||
+      process.env.APP_BASE_URL ||
+      'http://localhost:3000';
 
-    return this.invitationsService.createInvitation(dto, actor, clientIp, correlationId);
+    return this.invitationsService.createInvitation(dto, actor, clientIp, correlationId, baseUrl);
   }
 
   /**
@@ -92,8 +97,13 @@ export class InvitationsController {
       merchantId: req.merchantId as string,
       role: req.userRole || req.jwtClaims?.role,
     };
+    const baseUrl =
+      (req.headers?.['origin'] as string) ||
+      process.env.FRONTEND_URL ||
+      process.env.APP_BASE_URL ||
+      'http://localhost:3000';
 
-    return this.invitationsService.resendInvitation(id, actor, clientIp, correlationId);
+    return this.invitationsService.resendInvitation(id, actor, clientIp, correlationId, baseUrl);
   }
 
   /**

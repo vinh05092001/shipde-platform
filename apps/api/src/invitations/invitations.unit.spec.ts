@@ -165,6 +165,37 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
         'Audit log must never contain raw plaintext token'
       );
     });
+
+    it('dispatches invitation through configured delivery adapter using frontend origin (Finding 4)', async () => {
+      let dispatchedParams: any = null;
+      const mockDeliveryAdapter = {
+        sendVerification: async (params: any) => {
+          dispatchedParams = params;
+        },
+      };
+
+      const customService = new InvitationsService(mockPrisma, mockDeliveryAdapter as any);
+      const actor = { userId: OWNER_USER_ID, merchantId: MERCHANT_ID, role: RoleEnum.OWNER };
+      const frontendOrigin = 'https://app.shipde.vn';
+
+      const res = await customService.createInvitation(
+        {
+          email: 'dispatch_test@shipde.vn',
+          role: RoleEnum.OPS_CSKH,
+        },
+        actor,
+        '127.0.0.1',
+        'test-corr-dispatch',
+        frontendOrigin
+      );
+
+      assert.ok(res.data.invitation_url.startsWith('https://app.shipde.vn/invite/accept?token='));
+      assert.ok(dispatchedParams);
+      assert.strictEqual(dispatchedParams.recipient, 'dispatch_test@shipde.vn');
+      assert.strictEqual(dispatchedParams.channel, 'email');
+      assert.strictEqual(dispatchedParams.purpose, 'invitation');
+      assert.strictEqual(dispatchedParams.link, res.data.invitation_url);
+    });
   });
 
   // AC-USR-01-02: Owner invites new operator with phone identifier

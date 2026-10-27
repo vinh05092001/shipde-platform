@@ -127,7 +127,12 @@ export const UserManagementTab: React.FC = () => {
       if (!res.ok) {
         throw new Error(data.error?.message || 'Không thể gửi lại lời mời');
       }
-      setToastMessage('Đã gửi lại lời mời thành công và gia hạn 7 ngày');
+      if (data.data?.invitation_url && typeof navigator !== 'undefined' && navigator.clipboard) {
+        void navigator.clipboard.writeText(data.data.invitation_url);
+        setToastMessage('Đã cấp lại lời mời và sao chép liên kết kích hoạt vào bộ nhớ tạm');
+      } else {
+        setToastMessage('Đã cấp lại lời mời thành công và gia hạn 7 ngày');
+      }
       void fetchInvitations();
     } catch (err: any) {
       alert(err.message);
@@ -1370,7 +1375,7 @@ export const UserManagementTab: React.FC = () => {
         isOpen={isInviteOpen}
         onClose={() => setIsInviteOpen(false)}
         onUserInvited={(invited: any) => {
-          setToastMessage('Đã gửi lời mời thành công');
+          setToastMessage('Đã tạo lời mời thành công. Hãy gửi liên kết kích hoạt cho người nhận.');
           setActiveSubTab('invitations');
           void fetchInvitations();
           setTimeout(() => setToastMessage(null), 5000);
