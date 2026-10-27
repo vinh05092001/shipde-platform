@@ -46,6 +46,8 @@ import {
   validateAcceptPassword,
   resolveAcceptInviteUIState,
   canRetryAcceptVerification,
+  extractInvitationToken,
+  stripTokenFromAddressBar,
 } from '../app/invite/accept/page';
 
 interface TestResult {
@@ -1710,6 +1712,29 @@ export async function runComprehensiveRulesAudit(): Promise<{
         canRetryAcceptVerification(null, 'Thiếu token') === false &&
         canRetryAcceptVerification('valid-token-123', null) === false,
       'Cho phép người dùng thử lại ngay lập tức khi mạng lỗi mà không làm mất token trong URL.'
+    );
+
+    // Finding 2 (Round 7): Fragment token extraction and stripping from address bar
+    let replacedUrl: string | null = null;
+    const fakeWindow = {
+      history: {
+        replaceState: (_data: any, _unused: string, url?: string | URL | null) => {
+          replacedUrl = String(url);
+        },
+      },
+      location: { pathname: '/invite/accept' },
+    };
+    stripTokenFromAddressBar(fakeWindow as any);
+
+    assertTest(
+      'UI & SECURITY',
+      'FEAT-USR-01-UI-FRAGMENT-TOKEN-SECURITY',
+      'Xác thực token lời mời từ URL fragment, không lưu vết token trên server log và xóa khỏi thanh địa chỉ',
+      extractInvitationToken({ hash: '#token=secret_frag_token' }) === 'secret_frag_token' &&
+        extractInvitationToken({ hash: '#secret_raw_token' }) === 'secret_raw_token' &&
+        extractInvitationToken({ searchToken: 'query_tok' }) === 'query_tok' &&
+        replacedUrl === '/invite/accept',
+      'Trích xuất token an toàn từ fragment và xóa khỏi address bar để bảo vệ bí mật'
     );
   }
 

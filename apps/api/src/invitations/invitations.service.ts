@@ -529,7 +529,7 @@ export class InvitationsService {
     }
 
     const safeBaseUrl = resolveFrontendBaseUrl(baseUrl);
-    const invitationUrl = `${safeBaseUrl}/invite/accept?token=${rawToken}`;
+    const invitationUrl = `${safeBaseUrl}/invite/accept#token=${rawToken}`;
 
     // Fixed reason codes only: provider errors may echo the link or raw token (Round 6 Finding 5)
     const compensateFailedCreate = async (reason: DeliveryFailureReason) => {
@@ -963,7 +963,7 @@ export class InvitationsService {
     }
 
     const safeBaseUrl = resolveFrontendBaseUrl(baseUrl);
-    const invitationUrl = `${safeBaseUrl}/invite/accept?token=${rawToken}`;
+    const invitationUrl = `${safeBaseUrl}/invite/accept#token=${rawToken}`;
 
     // Fixed reason codes only: provider errors may echo the link or raw token (Round 6 Finding 5)
     const compensateFailedResend = async (reason: DeliveryFailureReason) => {

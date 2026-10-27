@@ -242,7 +242,7 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
         assert.strictEqual((res.data as any).token, undefined);
         assert.strictEqual((res.data as any).invitation_url, undefined);
         assert.ok(dispatchedParams);
-        assert.ok(dispatchedParams.link.startsWith('https://app.shipde.vn/invite/accept?token='));
+        assert.ok(dispatchedParams.link.startsWith('https://app.shipde.vn/invite/accept#token='));
         assert.strictEqual(dispatchedParams.recipient, 'dispatch_test@shipde.vn');
         assert.strictEqual(dispatchedParams.channel, 'email');
         assert.strictEqual(dispatchedParams.purpose, 'invitation');
@@ -305,7 +305,7 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
         assert.ok(dispatchedParams);
         assert.ok(!dispatchedParams.link.includes('attacker.evil.com'));
         assert.ok(
-          dispatchedParams.link.startsWith('https://portal.shipde.vn/invite/accept?token=')
+          dispatchedParams.link.startsWith('https://portal.shipde.vn/invite/accept#token=')
         );
       } finally {
         process.env.FRONTEND_URL = prevFrontendUrl;
@@ -2899,7 +2899,9 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
       const failed = audits.find((x) => x.action === 'INVITATION_DELIVERY_FAILED');
       assert.ok(failed, 'compensating audit recorded');
       assert.strictEqual(failed.new_value.reason, 'DELIVERY_EXCEPTION');
-      const rawToken = new URL(leakedLink).searchParams.get('token')!;
+      const rawToken = leakedLink.includes('#token=')
+        ? leakedLink.split('#token=')[1]!
+        : new URL(leakedLink).searchParams.get('token')!;
       assert.ok(rawToken.length >= 32);
       assert.strictEqual(JSON.stringify(audits).includes(rawToken), false, 'no raw token in audit');
     });
@@ -3173,6 +3175,32 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
           assert.strictEqual(String(err.message).includes(leakedSecret), false);
           return true;
         }
+      );
+    });
+
+    it('Finding 2: dispatched invitation URL uses hash fragment #token= and never query string', async () => {
+      let dispatchedLink = '';
+      const svc = new InvitationsService(
+        mockPrisma,
+        {
+          sendVerification: async (req: any) => {
+            dispatchedLink = req.link;
+            return { success: true };
+          },
+        } as any,
+        new RateLimitService()
+      );
+      await svc.createInvitation(
+        { email: 'r7-f2@shipde.vn', role: RoleEnum.OPS_CSKH },
+        { userId: OWNER_USER_ID, merchantId: MERCHANT_ID, role: 'OWNER' },
+        '10.7.2.1',
+        'corr-r7-2'
+      );
+      assert.ok(dispatchedLink.includes('#token='), 'link must contain #token= fragment');
+      assert.strictEqual(
+        dispatchedLink.includes('?token='),
+        false,
+        'link must never put token in URL query string'
       );
     });
   });

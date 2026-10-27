@@ -52,6 +52,35 @@ export function canRetryAcceptVerification(
   return Boolean(token && verifyError);
 }
 
+export function extractInvitationToken(params: {
+  hash?: string | null;
+  searchToken?: string | null;
+}): string | null {
+  const hash = (params.hash || '').replace(/^#/, '');
+  if (hash) {
+    if (hash.startsWith('token=')) {
+      return decodeURIComponent(hash.slice('token='.length));
+    }
+    const search = new URLSearchParams(hash);
+    const tok = search.get('token');
+    if (tok) return tok;
+    if (!hash.includes('=')) return hash;
+  }
+  if (params.searchToken) {
+    return params.searchToken;
+  }
+  return null;
+}
+
+export function stripTokenFromAddressBar(windowObj?: {
+  history?: { replaceState: (data: any, unused: string, url?: string | URL | null) => void };
+  location?: { pathname: string };
+}) {
+  if (windowObj?.history?.replaceState && windowObj?.location?.pathname) {
+    windowObj.history.replaceState(null, '', windowObj.location.pathname);
+  }
+}
+
 export type AcceptInviteUIState = 'verifying' | 'verify_error' | 'submitting' | 'success' | 'form';
 
 export function resolveAcceptInviteUIState(params: {
@@ -81,7 +110,7 @@ interface InvitationDetails {
 function AcceptInvitationContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const token = searchParams.get('token');
+  const [token, setToken] = useState<string | null>(null);
 
   const [verifying, setVerifying] = useState(true);
   const [invitation, setInvitation] = useState<InvitationDetails | null>(null);
@@ -121,7 +150,16 @@ function AcceptInvitationContent() {
   }, []);
 
   useEffect(() => {
-    if (!token) {
+    const rawHash = typeof window !== 'undefined' ? window.location.hash : null;
+    const searchToken = searchParams ? searchParams.get('token') : null;
+    const resolved = extractInvitationToken({ hash: rawHash, searchToken });
+    setToken(resolved);
+
+    if (resolved && typeof window !== 'undefined') {
+      stripTokenFromAddressBar(window);
+    }
+
+    if (!resolved) {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- Client-side invitation token verification initialization
       setVerifying(false);
       setVerifyError(
@@ -129,8 +167,8 @@ function AcceptInvitationContent() {
       );
       return;
     }
-    void verifyToken(token);
-  }, [token, verifyToken]);
+    void verifyToken(resolved);
+  }, [searchParams, verifyToken]);
 
   // Password rules helper
   const rules = validateAcceptPassword(password, passwordConfirm);
@@ -164,6 +202,7 @@ function AcceptInvitationContent() {
       const res = await fetch(`${API_BASE}/api/v1/invitations/accept`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        referrerPolicy: 'no-referrer',
         body: JSON.stringify({
           token,
           full_name: fullName.trim(),
@@ -209,6 +248,7 @@ function AcceptInvitationContent() {
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
+      <meta name="referrer" content="no-referrer" />
       <div className="sm:mx-auto sm:w-full sm:max-w-md text-center">
         <div className="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-blue-600 text-white shadow-lg mb-4">
           <Shield className="w-6 h-6" />
