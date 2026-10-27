@@ -207,31 +207,6 @@ export class InvitationsService {
     const phone = canonicalizePhoneNumber(dto.phone);
     const recipient = email || phone;
 
-    // Rate limiting: Anti-abuse dispatch limit (SECURITY-NFR) - fail closed
-    if (!this.rateLimitService) {
-      throw new CanonicalApiException(
-        HttpStatus.TOO_MANY_REQUESTS,
-        'RATE_LIMITED',
-        'Dịch vụ kiểm soát tần suất không khả dụng. Vui lòng thử lại sau.'
-      );
-    }
-    const rateLimit = await this.rateLimitService.checkInvitationDispatchLimit(
-      clientIp,
-      recipient,
-      actor.merchantId
-    );
-    if (!rateLimit.allowed) {
-      throw new CanonicalApiException(
-        HttpStatus.TOO_MANY_REQUESTS,
-        'RATE_LIMITED',
-        rateLimit.reason || 'Quá nhiều yêu cầu gửi lời mời. Vui lòng thử lại sau.',
-        false,
-        undefined,
-        undefined,
-        rateLimit.retryAfterSeconds
-      );
-    }
-
     // 1. Validation: Exactly one recipient identifier required (AC-USR-01-07 / Security-NFR Finding 3)
     if (!email && !phone) {
       throw new CanonicalApiException(
@@ -376,6 +351,32 @@ export class InvitationsService {
 
     // 6. Expiry: 7 days (168 hours) from now (BR-INV-03)
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
+    // Rate limiting: Anti-abuse dispatch limit (SECURITY-NFR) - fail closed
+    // Quota consumed only after validation, authorization, ceiling, and duplicate checks pass (Finding 3)
+    if (!this.rateLimitService) {
+      throw new CanonicalApiException(
+        HttpStatus.TOO_MANY_REQUESTS,
+        'RATE_LIMITED',
+        'Dịch vụ kiểm soát tần suất không khả dụng. Vui lòng thử lại sau.'
+      );
+    }
+    const rateLimit = await this.rateLimitService.checkInvitationDispatchLimit(
+      clientIp,
+      recipient,
+      actor.merchantId
+    );
+    if (!rateLimit.allowed) {
+      throw new CanonicalApiException(
+        HttpStatus.TOO_MANY_REQUESTS,
+        'RATE_LIMITED',
+        rateLimit.reason || 'Quá nhiều yêu cầu gửi lời mời. Vui lòng thử lại sau.',
+        false,
+        undefined,
+        undefined,
+        rateLimit.retryAfterSeconds
+      );
+    }
 
     // Fail closed early if delivery adapter unavailable before creating DB record
     if (!this.deliveryAdapter) {

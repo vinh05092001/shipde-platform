@@ -1845,6 +1845,67 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
       );
     });
 
+    it('Finding 3: does not consume dispatch quota when request is unauthorized or invalid', async () => {
+      let dispatchQuotaChecked = false;
+      const trackingRateLimit = {
+        checkInvitationDispatchLimit: async () => {
+          dispatchQuotaChecked = true;
+          return { allowed: true };
+        },
+        recordInvitationDispatchAttempt: async () => {},
+      };
+
+      const testService = new InvitationsService(
+        mockPrisma,
+        { sendVerification: async () => ({ success: true }) } as any,
+        trackingRateLimit as any
+      );
+
+      // 1. Unauthorized actor (WAREHOUSE) rejected with 403 without consuming quota
+      await assert.rejects(
+        () =>
+          testService.createInvitation(
+            { email: 'unauth-quota@shipde.vn', role: RoleEnum.OPS_CSKH },
+            { userId: WAREHOUSE_USER_ID, merchantId: MERCHANT_ID, role: 'WAREHOUSE' },
+            '10.0.0.1',
+            'corr-unauth'
+          ),
+        (err: any) => {
+          assert.strictEqual(err.status, 403);
+          assert.strictEqual(err.code, 'FORBIDDEN');
+          return true;
+        }
+      );
+      assert.strictEqual(dispatchQuotaChecked, false, 'Quota must not be consumed for unauthorized caller');
+
+      // 2. Validation error (missing identifier) rejected with 400 without consuming quota
+      await assert.rejects(
+        () =>
+          testService.createInvitation(
+            { role: RoleEnum.OPS_CSKH },
+            { userId: OWNER_USER_ID, merchantId: MERCHANT_ID, role: 'OWNER' },
+            '10.0.0.1',
+            'corr-val-err'
+          ),
+        (err: any) => {
+          assert.strictEqual(err.status, 400);
+          assert.strictEqual(err.code, 'VALIDATION_ERROR');
+          return true;
+        }
+      );
+      assert.strictEqual(dispatchQuotaChecked, false, 'Quota must not be consumed for validation failure');
+
+      // 3. Authorized and valid call consumes quota
+      const res = await testService.createInvitation(
+        { email: 'valid-quota@shipde.vn', role: RoleEnum.OPS_CSKH },
+        { userId: OWNER_USER_ID, merchantId: MERCHANT_ID, role: 'OWNER' },
+        '10.0.0.1',
+        'corr-valid-call'
+      );
+      assert.ok(res.data.id);
+      assert.strictEqual(dispatchQuotaChecked, true, 'Quota consumed for valid authorized attempt');
+    });
+
     it('enforces accept rate limit on acceptInvitation with 429 RATE_LIMITED', async () => {
       const mockRateLimit = {
         checkInvitationAcceptLimit: async () => ({
