@@ -37,10 +37,10 @@ export class InvitationsController {
     const correlationId =
       req.headers?.['x-correlation-id'] || req.correlationId || normalizeCorrelationId();
     const clientIp = extractClientIp(req);
+    // Backend is authoritative: do not trust stale token claims; service resolves live role & scopes from DB
     const actor = {
       userId: req.userId as string,
       merchantId: req.merchantId as string,
-      role: req.userRole || req.jwtClaims?.role,
     };
     const baseUrl =
       (req.headers?.['origin'] as string) ||
@@ -68,7 +68,6 @@ export class InvitationsController {
     const actor = {
       userId: req.userId as string,
       merchantId: req.merchantId as string,
-      role: req.userRole || req.jwtClaims?.role,
     };
 
     return this.invitationsService.listInvitations(
@@ -95,7 +94,6 @@ export class InvitationsController {
     const actor = {
       userId: req.userId as string,
       merchantId: req.merchantId as string,
-      role: req.userRole || req.jwtClaims?.role,
     };
     const baseUrl =
       (req.headers?.['origin'] as string) ||
@@ -119,7 +117,6 @@ export class InvitationsController {
     const actor = {
       userId: req.userId as string,
       merchantId: req.merchantId as string,
-      role: req.userRole || req.jwtClaims?.role,
     };
 
     return this.invitationsService.cancelInvitation(id, actor, clientIp, correlationId);

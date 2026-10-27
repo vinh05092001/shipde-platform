@@ -414,6 +414,48 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
         }
       );
     });
+
+    it('rejects demoted actor even if caller claims role OWNER in token (Finding 7)', async () => {
+      // Live DB row has been demoted to WAREHOUSE
+      mockPrisma.user.findFirst = async (args: any) => {
+        if (args?.where?.id === 'demoted-user-id') {
+          return {
+            id: 'demoted-user-id',
+            role: RoleEnum.WAREHOUSE,
+            store_scopes: [],
+            warehouse_scopes: [],
+            status: 'active',
+          };
+        }
+        return null;
+      };
+
+      const actor = {
+        userId: 'demoted-user-id',
+        merchantId: MERCHANT_ID,
+        role: RoleEnum.OWNER, // Stale token claims OWNER
+      };
+
+      await assert.rejects(
+        async () => {
+          await service.createInvitation(
+            {
+              email: 'newuser@shipde.vn',
+              role: RoleEnum.OPS_CSKH,
+            },
+            actor,
+            '127.0.0.1',
+            'test-corr-demoted'
+          );
+        },
+        (err: any) => {
+          assert.ok(err instanceof CanonicalApiException);
+          assert.strictEqual(err.getStatus(), HttpStatus.FORBIDDEN);
+          assert.strictEqual(err.code, 'FORBIDDEN');
+          return true;
+        }
+      );
+    });
   });
 
   // AC-USR-01-05: Invite sent to email already active in tenant
