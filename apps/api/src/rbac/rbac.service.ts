@@ -306,8 +306,9 @@ export class RbacService {
   /**
    * Resolves effective permission codes held by the given actor.
    */
-  async getActorPermissions(actor: ActorContext): Promise<string[]> {
+  async getActorPermissions(actor: ActorContext, txClient?: any): Promise<string[]> {
     await this.ensurePlatformSeed();
+    const db = txClient || this.prisma;
 
     let customRoleId = actor.customRoleId;
     let role = actor.role;
@@ -315,7 +316,7 @@ export class RbacService {
 
     if (actor.userId && (!role || customRoleId === undefined)) {
       try {
-        const user = await this.prisma.user.findUnique({
+        const user = await db.user.findUnique({
           where: { id: actor.userId },
           select: { role: true, custom_role_id: true, merchant_id: true },
         });
@@ -339,7 +340,7 @@ export class RbacService {
     if (customRoleId) {
       let customRole: any = null;
       try {
-        customRole = await this.prisma.role.findFirst({
+        customRole = await db.role.findFirst({
           where: { id: customRoleId, merchant_id: merchantId },
           include: {
             permissions: {
@@ -366,7 +367,7 @@ export class RbacService {
     if (role) {
       let sysRole: any = null;
       try {
-        sysRole = await this.prisma.role.findFirst({
+        sysRole = await db.role.findFirst({
           where: { code: role, is_system: true },
           include: {
             permissions: {
@@ -1000,10 +1001,84 @@ export class RbacService {
     const beforePermissions = existingRole.permissions.map((rp) => rp.permission.code);
     const newPermissions = permissionsInDb.map((p) => p.code);
 
-    // 5. Transaction: Update Role, Permissions & Audit Log (AC-RBAC-01-08)
+    // 5. Transaction: Update Role, Permissions & Audit Log (AC-RBAC-01-08, BR-RBAC-02)
     let updatedRole: any;
     try {
       updatedRole = await this.prisma.$transaction(async (tx) => {
+        // Lock role row to serialize concurrent modifications (Finding 1 / Round 6)
+        const lockedRoles = await tx.$queryRaw<
+          Array<{ id: string; merchant_id: string; is_system: boolean }>
+        >`SELECT id, merchant_id, is_system FROM roles WHERE id = ${roleId}::uuid AND merchant_id = ${actor.merchantId}::uuid FOR UPDATE`;
+
+        if (!lockedRoles || lockedRoles.length === 0) {
+          throw new CanonicalApiException(
+            HttpStatus.NOT_FOUND,
+            'ROLE_NOT_FOUND',
+            'Không tìm thấy vai trò phân quyền'
+          );
+        }
+
+
+
+        if (lockedRoles[0].is_system) {
+          throw new CanonicalApiException(
+            HttpStatus.FORBIDDEN,
+            'SYSTEM_ROLE_IMMUTABLE',
+            'Không thể chỉnh sửa vai trò mặc định của hệ thống',
+            false,
+            'Chỉ có thể chỉnh sửa các vai trò tùy chỉnh do cửa hàng tạo'
+          );
+        }
+
+        // Re-read current role permissions under row lock to prevent stripping concurrent grants
+        const currentRolePermsInTx = await tx.rolePermission.findMany({
+          where: { role_id: roleId },
+          include: { permission: true },
+        });
+
+        // Re-read actor permissions under transaction to prevent stale checks
+        const actorPermsInTx = await this.getActorPermissions(actor, tx);
+        const actorPermSetInTx = new Set(actorPermsInTx);
+
+        // Privilege ceiling check 1: Actor must hold EVERY permission currently assigned to the role
+        const unauthorizedCurrentCodes = currentRolePermsInTx
+          .map((rp) => rp.permission.code)
+          .filter((code) => !actorPermSetInTx.has(code));
+
+        if (unauthorizedCurrentCodes.length > 0) {
+          throw new CanonicalApiException(
+            HttpStatus.FORBIDDEN,
+            'PRIVILEGE_ESCALATION_DENIED',
+            'Không thể sửa vai trò có quyền hạn vượt quá thẩm quyền của bạn',
+            false,
+            `Bạn không có các quyền hiện tại của vai trò: ${unauthorizedCurrentCodes.join(', ')}`
+          );
+        }
+
+        // If permissions were not explicitly passed in dto, keep current permissions
+        const targetPermissions =
+          dto.permissions !== undefined
+            ? permissionsInDb
+            : currentRolePermsInTx.map((rp) => rp.permission);
+
+        // Privilege ceiling check 2: Target permission set must be a subset of actor's permissions
+        const unauthorizedTargetCodes = targetPermissions
+          .map((p) => p.code)
+          .filter((code) => !actorPermSetInTx.has(code));
+
+        if (unauthorizedTargetCodes.length > 0) {
+          throw new CanonicalApiException(
+            HttpStatus.FORBIDDEN,
+            'PRIVILEGE_ESCALATION_DENIED',
+            'Không thể cấp quyền vượt quá thẩm quyền của bạn',
+            false,
+            `Bạn không có các quyền sau: ${unauthorizedTargetCodes.join(', ')}`
+          );
+        }
+
+        const beforePermissions = currentRolePermsInTx.map((rp) => rp.permission.code);
+        const newPermissions = targetPermissions.map((p) => p.code);
+
         if (dto.name !== undefined) {
           const duplicateInTx = await tx.role.findFirst({
             where: {
@@ -1044,7 +1119,7 @@ export class RbacService {
           });
 
           // Insert new mappings
-          for (const p of permissionsInDb) {
+          for (const p of targetPermissions) {
             await tx.rolePermission.create({
               data: {
                 role_id: roleId,
@@ -1210,7 +1285,7 @@ export class RbacService {
     // 3. Transaction: Guard active assignments inside transaction with row locks, Delete Role & Write Audit Log (BR-RBAC-03, BR-RBAC-02, BR-RBAC-07)
     try {
       await this.prisma.$transaction(async (tx) => {
-        // Lock the role row to serialize concurrent delete / assignment operations (Finding 1 / Round 5)
+        // Lock the role row to serialize concurrent delete / assignment operations (Finding 1 / Round 5 & 6)
         const lockedRoles = await tx.$queryRaw<
           Array<{ id: string; merchant_id: string; is_system: boolean }>
         >`SELECT id, merchant_id, is_system FROM roles WHERE id = ${roleId}::uuid AND merchant_id = ${actor.merchantId}::uuid FOR UPDATE`;
@@ -1220,6 +1295,42 @@ export class RbacService {
             HttpStatus.NOT_FOUND,
             'ROLE_NOT_FOUND',
             'Không tìm thấy vai trò phân quyền'
+          );
+        }
+
+        if (lockedRoles[0].is_system) {
+          throw new CanonicalApiException(
+            HttpStatus.FORBIDDEN,
+            'SYSTEM_ROLE_IMMUTABLE',
+            'Không thể xóa vai trò mặc định của hệ thống',
+            false,
+            'Chỉ có thể xóa các vai trò tùy chỉnh do cửa hàng tạo'
+          );
+        }
+
+        // Re-read current role permissions under lock (Finding 1 / Round 6)
+        const currentRolePermsInTx = await tx.rolePermission.findMany({
+          where: { role_id: roleId },
+          include: { permission: true },
+        });
+        const currentRolePermCodes = currentRolePermsInTx.map((rp) => rp.permission.code);
+        const customPermCodes = new Set(currentRolePermCodes);
+
+        // Re-read actor permissions under transaction to avoid stale authorization
+        const actorPermsInTx = await this.getActorPermissions(actor, tx);
+        const actorPermSetInTx = new Set(actorPermsInTx);
+
+        // Verify actor holds all current permissions of the role under the lock
+        const unauthorizedRoleCodes = currentRolePermCodes.filter(
+          (code) => !actorPermSetInTx.has(code)
+        );
+        if (unauthorizedRoleCodes.length > 0) {
+          throw new CanonicalApiException(
+            HttpStatus.FORBIDDEN,
+            'PRIVILEGE_ESCALATION_DENIED',
+            'Không thể xóa vai trò có quyền hạn vượt quá thẩm quyền của bạn',
+            false,
+            `Bạn không có các quyền hiện tại của vai trò: ${unauthorizedRoleCodes.join(', ')}`
           );
         }
 
@@ -1246,17 +1357,31 @@ export class RbacService {
           );
         }
 
-        // Inactive assignees handling: block if reverting to enum role grants broader permissions, or detach and audit each change
+        // Inactive assignees handling:
+        // Under lock, resolve enum fallback permissions directly from DB and check:
+        // 1. Enum fallback must not expand beyond custom role permissions (!hasBroaderPerms)
+        // 2. Enum fallback must be a subset of actor's DB permissions (Finding 1 / Round 6)
         const inactiveAssignees = assignees.filter((u) => !isUserActiveStatus(u.status));
         if (inactiveAssignees.length > 0) {
-          const customPermCodes = new Set(existingRole.permissions.map((rp) => rp.permission.code));
           const broaderUsers: string[] = [];
 
           for (const u of inactiveAssignees) {
-            const enumDef = SYSTEM_ROLES.find((sr) => sr.code === u.role);
-            const enumPerms = enumDef ? enumDef.permissions : [];
-            const hasBroaderPerms = enumPerms.some((code) => !customPermCodes.has(code));
-            if (hasBroaderPerms) {
+            let enumPerms: string[] = [];
+            const sysRole = await tx.role.findFirst({
+              where: { code: u.role, is_system: true },
+              include: { permissions: { include: { permission: true } } },
+            });
+            if (sysRole) {
+              enumPerms = sysRole.permissions.map((rp: any) => rp.permission.code);
+            } else {
+              const enumDef = SYSTEM_ROLES.find((sr) => sr.code === u.role);
+              enumPerms = enumDef ? enumDef.permissions : [];
+            }
+
+            const hasBroaderPerms = enumPerms.some((code: string) => !customPermCodes.has(code));
+            const exceedsActorPerms = enumPerms.some((code: string) => !actorPermSetInTx.has(code));
+
+            if (hasBroaderPerms || exceedsActorPerms) {
               broaderUsers.push(u.id);
             }
           }
@@ -1265,7 +1390,7 @@ export class RbacService {
             throw new CanonicalApiException(
               HttpStatus.BAD_REQUEST,
               'ROLE_IN_USE',
-              `Không thể xóa vai trò đang được gán cho ${broaderUsers.length} người dùng không hoạt động vì việc gỡ vai trò sẽ mở rộng quyền hạn`,
+              `Không thể xóa vai trò đang được gán cho ${broaderUsers.length} người dùng không hoạt động vì việc gỡ vai trò sẽ mở rộng quyền hạn hoặc vượt quá thẩm quyền của bạn`,
               false,
               'Vui lòng chuyển vai trò của người dùng sang vai trò thích hợp trước khi xóa',
               [
@@ -1328,7 +1453,7 @@ export class RbacService {
               id: existingRole.id,
               name: existingRole.name,
               description: existingRole.description,
-              permissions: existingRole.permissions.map((rp) => rp.permission.code),
+              permissions: currentRolePermCodes,
               correlation_id: correlationId,
             },
             ip_address: clientIp,

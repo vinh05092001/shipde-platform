@@ -266,10 +266,17 @@ class MockPrismaService {
 
   rolePermission = {
     findMany: async (args?: any) => {
+      let items = this.rolePermissions;
       if (args?.where?.role_id) {
-        return this.rolePermissions.filter((rp) => rp.role_id === args.where.role_id);
+        items = items.filter((rp) => rp.role_id === args.where.role_id);
       }
-      return this.rolePermissions;
+      if (args?.include?.permission) {
+        return items.map((rp) => ({
+          ...rp,
+          permission: this.permissions.find((p) => p.id === rp.permission_id),
+        }));
+      }
+      return items;
     },
     create: async (args: any) => {
       if (this.shouldFailRolePermissionUnique) {
@@ -1065,6 +1072,139 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
       userInDb?.custom_role_id,
       customRoleId,
       'Active user assignment must NOT be stripped'
+    );
+  });
+
+  // Finding 1 Proving Test 1 (Round 6): updateRole serializes under row lock and detects concurrent permission grant, blocking privilege stripping with 403
+  test('Finding 1 / Round 6 / BR-RBAC-02: updateRole locks row and re-evaluates current permissions; concurrent grant of unauthorized permission blocks update with 403 PRIVILEGE_ESCALATION_DENIED', async () => {
+    // 1. Create a custom role with order:view_create
+    const createRes = await service.createRole(
+      {
+        name: 'Vai trò Concurrency Update',
+        permissions: ['order:view_create'],
+      },
+      OWNER_ACTOR,
+      '127.0.0.1',
+      'corr-r6-f1-create'
+    );
+    const customRoleId = createRes.data.role.id;
+
+    // 2. Define a non-owner actor who holds 'iam:manage_users' and 'order:view_create' via custom role
+    const managerRoleRes = await service.createRole(
+      {
+        name: 'Manager With Manage Users',
+        permissions: ['iam:manage_users', 'order:view_create'],
+      },
+      OWNER_ACTOR,
+      '127.0.0.1',
+      'corr-r6-f1-mgr-role'
+    );
+    const nonOwnerActor: ActorContext = {
+      userId: 'user-manager-r6',
+      merchantId: MERCHANT_A,
+      role: 'OPS_CSKH',
+      customRoleId: managerRoleRes.data.role.id,
+    };
+    mockPrisma.users.push({
+      id: 'user-manager-r6',
+      merchant_id: MERCHANT_A,
+      role: 'OPS_CSKH',
+      custom_role_id: managerRoleRes.data.role.id,
+      status: 'ACTIVE',
+    });
+
+    // 3. Simulate concurrent grant to the role of reconciliation:approve_rate_policy (which OPS_CSKH lacks)
+    const financePerm = mockPrisma.permissions.find(
+      (p) => p.code === 'reconciliation:approve_rate_policy'
+    )!;
+    mockPrisma.rolePermissions.push({
+      id: `rp-concurrent-grant`,
+      role_id: customRoleId,
+      permission_id: financePerm.id,
+    });
+
+    // 4. Non-owner tries to update role name (sending only their own permitted subset)
+    await assert.rejects(
+      async () => {
+        await service.updateRole(
+          customRoleId,
+          { name: 'Vai trò Concurrency Renamed' },
+          nonOwnerActor,
+          '127.0.0.1',
+          'corr-r6-f1-update'
+        );
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 403);
+        assert.strictEqual(err.code, 'PRIVILEGE_ESCALATION_DENIED');
+        return true;
+      }
+    );
+
+    // Proof: The concurrent grant was NOT stripped from DB
+    const permsAfter = mockPrisma.rolePermissions.filter((rp) => rp.role_id === customRoleId);
+    assert.ok(
+      permsAfter.some((rp) => rp.permission_id === financePerm.id),
+      'Concurrent grant must NOT be stripped by under-privileged actor'
+    );
+  });
+
+  // Finding 1 Proving Test 2 (Round 6): deleteRole re-reads permissions under lock and evaluates enum fallback against DB permissions
+  test('Finding 1 / Round 6 / BR-RBAC-03: deleteRole blocks with 400 ROLE_IN_USE when inactive assignee enum fallback exceeds actor DB permissions', async () => {
+    const createRes = await service.createRole(
+      {
+        name: 'Vai trò Hẹp Delete Check',
+        permissions: ['order:view_create'],
+      },
+      OWNER_ACTOR,
+      '127.0.0.1',
+      'corr-r6-f1-del-create'
+    );
+    const customRoleId = createRes.data.role.id;
+
+    // Inactive user with enum role FINANCE (holding financial permissions)
+    const inactiveUserId = 'user-inactive-finance-r6';
+    mockPrisma.users.push({
+      id: inactiveUserId,
+      merchant_id: MERCHANT_A,
+      role: 'FINANCE',
+      custom_role_id: customRoleId,
+      status: 'INACTIVE',
+    });
+
+    // Actor is OPS_CSKH who lacks FINANCE permissions
+    const cskhActor: ActorContext = {
+      userId: 'user-cskh-actor-r6',
+      merchantId: MERCHANT_A,
+      role: 'OPS_CSKH',
+    };
+    mockPrisma.users.push({
+      id: 'user-cskh-actor-r6',
+      merchant_id: MERCHANT_A,
+      role: 'OPS_CSKH',
+      status: 'ACTIVE',
+    });
+
+    await assert.rejects(
+      async () => {
+        await service.deleteRole(customRoleId, cskhActor, '127.0.0.1', 'corr-r6-f1-del-actor');
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.ok([400, 403].includes(err.getStatus()));
+        return true;
+      }
+    );
+
+    // DB Proof: Role was NOT deleted and inactive user custom_role_id was not cleared
+    const roleInDb = mockPrisma.roles.find((r) => r.id === customRoleId);
+    assert.ok(roleInDb, 'Role must remain in DB');
+    const userInDb = mockPrisma.users.find((u) => u.id === inactiveUserId);
+    assert.strictEqual(
+      userInDb?.custom_role_id,
+      customRoleId,
+      'User custom_role_id must NOT be cleared'
     );
   });
 
