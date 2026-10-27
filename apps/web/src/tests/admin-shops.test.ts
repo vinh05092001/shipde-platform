@@ -118,6 +118,43 @@ async function runAdminShopsFrontendSuite() {
   const fakeCookieRes = await GET(fakeCookieReq);
   assert.strictEqual(fakeCookieRes.status, 403, 'Arbitrary cookie must return 403 Forbidden');
 
+  // Finding 3: Cookie-only POST must NOT be authorized (CSRF defense)
+  const validTokenForCookie = generateTestV1Token({ role: 'BACKOFFICE' }, TEST_AUTH_SECRET);
+  const cookieOnlyPostReq = new NextRequest('http://localhost:3000/api/admin/shops', {
+    method: 'POST',
+    headers: {
+      Cookie: `token=${validTokenForCookie}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify({ merchant_name: 'Cookie Alone Post' }),
+  });
+  const cookieOnlyPostRes = await POST(cookieOnlyPostReq);
+  assert.strictEqual(
+    cookieOnlyPostRes.status,
+    403,
+    'Finding 3: State-changing POST must not be authorized by cookies alone'
+  );
+
+  // Finding 3: Origin mismatch on POST must return 403 (CSRF defense)
+  const originMismatchReq = new NextRequest('http://localhost:3000/api/admin/shops', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${validTokenForCookie}`,
+      Origin: 'https://attacker.evil.com',
+      Host: 'localhost:3000',
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify({ merchant_name: 'Origin Mismatch Post' }),
+  });
+  const originMismatchRes = await POST(originMismatchReq);
+  assert.strictEqual(
+    originMismatchRes.status,
+    403,
+    'Finding 3: Origin mismatch on state-changing request must return 403'
+  );
+
   // Tampered signature on valid payload
   const validToken = generateTestV1Token({ role: 'BACKOFFICE' }, TEST_AUTH_SECRET);
   const [ver, pay] = validToken.split('.');

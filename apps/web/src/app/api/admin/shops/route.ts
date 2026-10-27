@@ -18,7 +18,7 @@ export interface AuthResult {
   message: string;
 }
 
-export function verifyAdminAuthorization(req: NextRequest): AuthResult {
+export function verifyAdminAuthorization(req: NextRequest, isMutation = false): AuthResult {
   // 1. Direct admin API key check
   const adminKeyHeader =
     req.headers.get('x-admin-key')?.trim() || req.headers.get('x-api-key')?.trim();
@@ -46,13 +46,44 @@ export function verifyAdminAuthorization(req: NextRequest): AuthResult {
     };
   }
 
-  // 2. Validate signed session token (Bearer token or cookie)
+  // State-changing requests must not be authorized by cookies alone (CSRF/origin protection)
+  if (isMutation) {
+    const origin = req.headers.get('origin');
+    const host = req.headers.get('host');
+    if (origin && host) {
+      try {
+        const originHost = new URL(origin).host;
+        if (originHost !== host) {
+          return {
+            authorized: false,
+            statusCode: 403,
+            message: 'Truy cập bị từ chối do vi phạm bảo vệ Cross-Origin (CSRF)',
+          };
+        }
+      } catch {
+        return {
+          authorized: false,
+          statusCode: 403,
+          message: 'Origin không hợp lệ',
+        };
+      }
+    }
+  }
+
+  // 2. Validate signed session token (Bearer token only for mutations; cookies disallowed for mutations)
   let rawToken: string | undefined;
   const authHeader = req.headers.get('authorization');
   if (authHeader && authHeader.startsWith('Bearer ')) {
     rawToken = authHeader.slice(7).trim();
-  } else {
+  } else if (!isMutation) {
     rawToken = req.cookies.get('token')?.value?.trim() || req.cookies.get('session')?.value?.trim();
+  } else {
+    return {
+      authorized: false,
+      statusCode: 403,
+      message:
+        'Yêu cầu thay đổi trạng thái quản trị viên không được phép xác thực chỉ bằng cookie (CSRF)',
+    };
   }
 
   if (!rawToken) {
@@ -191,7 +222,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const auth = verifyAdminAuthorization(req);
+  const auth = verifyAdminAuthorization(req, true);
   if (!auth.authorized) {
     return NextResponse.json(
       {
