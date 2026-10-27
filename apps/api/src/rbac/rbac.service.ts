@@ -1694,10 +1694,12 @@ export class RbacService {
                 old_value: {
                   custom_role_id: roleId,
                   role: u.role,
+                  correlation_id: correlationId,
                 },
                 new_value: {
                   custom_role_id: null,
                   role: u.role,
+                  correlation_id: correlationId,
                 },
                 ip_address: clientIp,
               },
@@ -1738,25 +1740,35 @@ export class RbacService {
       if (err instanceof CanonicalApiException) {
         if (err.code === 'ROLE_IN_USE' && err.extra?.broaderUsers) {
           const broaderUsers = err.extra.broaderUsers as string[];
-          await this.prisma.auditLog
-            .create({
-              data: {
-                merchant_id: actor.merchantId || '',
-                user_id: actor.userId,
-                action: 'ROLE_DELETE_BLOCKED_INACTIVE_WIDENING',
-                entity_type: 'Role',
-                entity_id: roleId,
-                reason: 'DETACH_WOULD_WIDEN_PRIVILEGES',
-                old_value: {
-                  role_id: roleId,
-                  broader_user_count: broaderUsers.length,
-                  broader_user_ids: broaderUsers,
-                  correlation_id: correlationId,
+          try {
+            await this.prisma.$transaction(async (auditTx: any) => {
+              await auditTx.auditLog.create({
+                data: {
+                  merchant_id: actor.merchantId || '',
+                  user_id: actor.userId,
+                  action: 'ROLE_DELETE_BLOCKED_INACTIVE_WIDENING',
+                  entity_type: 'Role',
+                  entity_id: roleId,
+                  reason: 'DETACH_WOULD_WIDEN_PRIVILEGES',
+                  old_value: {
+                    role_id: roleId,
+                    broader_user_count: broaderUsers.length,
+                    broader_user_ids: broaderUsers,
+                    correlation_id: correlationId,
+                  },
+                  ip_address: clientIp,
                 },
-                ip_address: clientIp,
-              },
-            })
-            .catch(() => {});
+              });
+            });
+          } catch (auditErr: any) {
+            if (auditErr instanceof CanonicalApiException) throw auditErr;
+            throw new CanonicalApiException(
+              HttpStatus.INTERNAL_SERVER_ERROR,
+              'INTERNAL_SERVER_ERROR',
+              'Không thể lưu vết kiểm toán bảo mật khi chặn xóa vai trò',
+              true
+            );
+          }
         }
         throw err;
       }

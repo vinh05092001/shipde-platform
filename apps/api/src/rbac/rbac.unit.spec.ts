@@ -2663,9 +2663,81 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
     );
     assert.ok(wideningAudit, 'Audit log for blocked widening must be recorded');
     assert.strictEqual(wideningAudit.old_value.broader_user_count, 1);
+    assert.strictEqual(wideningAudit.old_value.correlation_id, 'corr-r9-f4-delete');
     assert.ok(
       wideningAudit.old_value.broader_user_ids.includes(sensitiveInactiveUserId),
       'Audit log must retain user IDs for administrative traceability'
     );
+  });
+
+  test('Finding 1 (Round 10): Durable audit log on inactive widening block does not discard failure and records correlation_id on USER_ROLE_DETACHED', async () => {
+    // 1. Create role and safe inactive assignee
+    const roleId = 'custom-r10-f1-role';
+    mockPrisma.roles.push({
+      id: roleId,
+      merchant_id: MERCHANT_A,
+      code: null,
+      name: 'R10 F1 Test Role',
+      name_lower: 'r10 f1 test role',
+      description: 'Testing detached audit',
+      is_system: false,
+      permissions: [],
+    });
+
+    const inactiveUserId = 'user-inactive-r10-f1';
+    mockPrisma.users.push({
+      id: inactiveUserId,
+      merchant_id: MERCHANT_A,
+      role: 'ORDER_OPERATOR',
+      custom_role_id: roleId,
+      status: 'INACTIVE',
+    });
+
+    const corrId = 'corr-r10-f1-detach';
+    await service.deleteRole(roleId, OWNER_ACTOR, '127.0.0.1', corrId);
+
+    const detachAudit = mockPrisma.auditLogs.find(
+      (a) => a.action === 'USER_ROLE_DETACHED' && a.entity_id === inactiveUserId
+    );
+    assert.ok(detachAudit, 'USER_ROLE_DETACHED audit log must exist');
+    assert.strictEqual(detachAudit.old_value.correlation_id, corrId);
+    assert.strictEqual(detachAudit.new_value.correlation_id, corrId);
+
+    // 2. Test that audit failure during widening block throws canonical 500 instead of swallowing
+    const wideningRoleId = 'custom-r10-f1-widening';
+    mockPrisma.roles.push({
+      id: wideningRoleId,
+      merchant_id: MERCHANT_A,
+      code: null,
+      name: 'R10 F1 Widening Test',
+      name_lower: 'r10 f1 widening test',
+      description: 'Audit failure test',
+      is_system: false,
+      permissions: [],
+    });
+    mockPrisma.users.push({
+      id: 'user-widening-r10',
+      merchant_id: MERCHANT_A,
+      role: 'OPS_MANAGER', // broader than empty custom role
+      custom_role_id: wideningRoleId,
+      status: 'INACTIVE',
+    });
+
+    // Intercept auditLog.create to throw
+    const originalCreate = mockPrisma.auditLog.create;
+    mockPrisma.auditLog.create = async () => {
+      throw new Error('Database disk full');
+    };
+
+    try {
+      await service.deleteRole(wideningRoleId, OWNER_ACTOR, '127.0.0.1', 'corr-r10-f1-audit-fail');
+      assert.fail('Should have failed with 500 when audit write fails');
+    } catch (err: any) {
+      assert.ok(err instanceof CanonicalApiException);
+      assert.strictEqual(err.getStatus(), 500);
+      assert.strictEqual(err.code, 'INTERNAL_SERVER_ERROR');
+    } finally {
+      mockPrisma.auditLog.create = originalCreate;
+    }
   });
 });
