@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import { randomBytes, createHash } from 'node:crypto';
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import request from 'supertest';
 import { AppModule } from '../app.module';
 import { PrismaService } from '../prisma/prisma.service';
@@ -13,6 +14,8 @@ import { APP_CONFIG } from '../config.token';
 import { AppConfig } from '@shipde/config';
 import { SessionStatusEnum, RoleEnum } from '@prisma/client';
 import { hashPassword } from '../auth/password.util';
+import { VERIFICATION_ADAPTER } from '../auth/auth.tokens';
+import { MockVerificationDeliveryAdapter } from '@shipde/testkit';
 
 function createSessionToken(): { raw: string; hash: string } {
   const raw = randomBytes(48).toString('hex');
@@ -84,16 +87,30 @@ async function runSessionSupertestSuite() {
     S3_FORCE_PATH_STYLE: true,
     CARRIER_MODE: 'disabled',
     LOG_LEVEL: 'info',
+    AUTH_TOKEN_SECRET:
+      process.env.AUTH_TOKEN_SECRET || 'test-secret-at-least-32-chars-long-enough-for-security',
+    AUTH_TOKEN_TTL_SECONDS: 43200,
+    AUTH_LOGIN_OTP_ENABLED: false,
+    PASSWORD_RESET_TTL_SECONDS: 3600,
+    FRONTEND_URL: 'http://localhost:3000',
+    AUDIT_IDENTIFIER_HMAC_KEY: 'test-key-32-chars-long-audit-hmac',
+    TRUST_PROXY_HOPS: 1,
   };
+  process.env.AUTH_TOKEN_SECRET = testConfig.AUTH_TOKEN_SECRET;
+
+  const mockDeliveryAdapter = new MockVerificationDeliveryAdapter();
 
   const moduleFixture: TestingModule = await Test.createTestingModule({
     imports: [AppModule],
   })
     .overrideProvider(APP_CONFIG)
     .useValue(testConfig)
+    .overrideProvider(VERIFICATION_ADAPTER)
+    .useValue(mockDeliveryAdapter)
     .compile();
 
-  const app: INestApplication = moduleFixture.createNestApplication();
+  const app = moduleFixture.createNestApplication<NestExpressApplication>();
+  app.set('trust proxy', 1);
   await app.init();
 
   const prisma = app.get(PrismaService);
@@ -125,8 +142,8 @@ async function runSessionSupertestSuite() {
       email: `session.owner.${testSuffix}@shipde.vn`,
       full_name: 'Session Test Owner',
       password_hash: await hashPassword(ownerPassword),
-      role: RoleEnum.OWNER,
-      status: 'ACTIVE',
+      role: RoleEnum.OPS_CSKH,
+      status: 'active',
     },
   });
 
@@ -168,7 +185,7 @@ async function runSessionSupertestSuite() {
     const tok1 = { raw: '', hash: '' };
 
     const loginRes = await request(server)
-      .post('/api/v1/auth/login')
+      .post('/auth/login')
       .send({
         identifier: user.email,
         password: ownerPassword,
