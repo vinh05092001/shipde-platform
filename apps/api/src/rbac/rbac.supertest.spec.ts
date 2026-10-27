@@ -635,7 +635,7 @@ async function main() {
     .post('/api/v1/roles')
     .set('Authorization', `Bearer ${ownerToken}`)
     .send({
-      name: 'Supertest Security Inspection Role AC-16',
+      name: `Supertest Security Inspection Role AC-16-${Date.now()}`,
       description: 'Role for security assertion',
       permissions: ['order:view_create'],
     })
