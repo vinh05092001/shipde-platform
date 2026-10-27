@@ -1451,10 +1451,28 @@ export class RbacService {
           );
         }
 
-        // Lock all current assignees for this role in the merchant
+        // Lock all current assignees for this role across the database (Finding 2 / Round 7)
         const assignees = await tx.$queryRaw<
-          Array<{ id: string; status: string; role: string; custom_role_id: string }>
-        >`SELECT id, status, role, custom_role_id FROM users WHERE custom_role_id = ${roleId}::uuid AND merchant_id = ${actor.merchantId}::uuid FOR UPDATE`;
+          Array<{ id: string; status: string; role: string; custom_role_id: string; merchant_id: string }>
+        >`SELECT id, status, role, custom_role_id, merchant_id FROM users WHERE custom_role_id = ${roleId}::uuid FOR UPDATE`;
+
+        const crossTenantAssignees = assignees.filter((u) => u.merchant_id !== actor.merchantId);
+        if (crossTenantAssignees.length > 0) {
+          throw new CanonicalApiException(
+            HttpStatus.BAD_REQUEST,
+            'ROLE_IN_USE',
+            `Không thể xóa vai trò đang được gán cho ${crossTenantAssignees.length} người dùng thuộc đơn vị khác`,
+            false,
+            'Vui lòng gỡ vai trò của tất cả người dùng trước khi xóa',
+            [
+              {
+                field: 'role_id',
+                code: 'IN_USE',
+                message: `Vai trò đang được gán cho ${crossTenantAssignees.length} người dùng thuộc đơn vị khác`,
+              },
+            ]
+          );
+        }
 
         const activeAssignees = assignees.filter((u) => isUserActiveStatus(u.status));
         if (activeAssignees.length > 0) {

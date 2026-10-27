@@ -160,7 +160,7 @@ model User {
   updated_at        DateTime          @updatedAt @db.Timestamptz
 
   merchant              Merchant              @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
-  custom_role           Role?                 @relation(fields: [custom_role_id], references: [id], onDelete: NoAction)
+  custom_role           Role?                 @relation(fields: [custom_role_id], references: [id], onDelete: Restrict)
   assigned_cases        ExceptionCase[]       @relation("CaseAssignee")
   contact_logs          ExceptionContactLog[]
   device_sessions       DeviceSession[]

@@ -112,13 +112,46 @@ BEGIN
     END IF;
 END $$;
 
--- AddForeignKey (deferrable to allow clean merchant deletion cascade without users_custom_role_id_fkey order hazard)
+-- AddForeignKey (non-deferred RESTRICT so every referencing user blocks delete, including other merchants)
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'users_custom_role_id_fkey') THEN
-        ALTER TABLE "users" ADD CONSTRAINT "users_custom_role_id_fkey" FOREIGN KEY ("custom_role_id") REFERENCES "roles"("id") ON DELETE NO ACTION ON UPDATE CASCADE DEFERRABLE INITIALLY DEFERRED;
-    ELSE
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'users_custom_role_id_fkey') THEN
         ALTER TABLE "users" DROP CONSTRAINT "users_custom_role_id_fkey";
-        ALTER TABLE "users" ADD CONSTRAINT "users_custom_role_id_fkey" FOREIGN KEY ("custom_role_id") REFERENCES "roles"("id") ON DELETE NO ACTION ON UPDATE CASCADE DEFERRABLE INITIALLY DEFERRED;
     END IF;
+    ALTER TABLE "users" ADD CONSTRAINT "users_custom_role_id_fkey" FOREIGN KEY ("custom_role_id") REFERENCES "roles"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 END $$;
+
+-- Same-merchant constraint trigger (BR-RBAC-04 / database ownership)
+CREATE OR REPLACE FUNCTION check_user_custom_role_same_merchant()
+RETURNS TRIGGER AS $$
+DECLARE
+    v_role_merchant_id UUID;
+    v_is_system BOOLEAN;
+BEGIN
+    IF NEW.custom_role_id IS NOT NULL THEN
+        SELECT merchant_id, is_system INTO v_role_merchant_id, v_is_system
+        FROM roles
+        WHERE id = NEW.custom_role_id;
+
+        IF NOT FOUND THEN
+            RAISE EXCEPTION 'Custom role % does not exist', NEW.custom_role_id;
+        END IF;
+
+        IF v_is_system THEN
+            RAISE EXCEPTION 'Cannot assign system role % as custom_role_id', NEW.custom_role_id;
+        END IF;
+
+        IF v_role_merchant_id IS DISTINCT FROM NEW.merchant_id THEN
+            RAISE EXCEPTION 'Cross-tenant custom role assignment: user merchant % does not match role merchant %',
+                NEW.merchant_id, v_role_merchant_id;
+        END IF;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_check_user_custom_role_same_merchant ON users;
+CREATE TRIGGER trg_check_user_custom_role_same_merchant
+    BEFORE INSERT OR UPDATE OF custom_role_id, merchant_id ON users
+    FOR EACH ROW
+    EXECUTE FUNCTION check_user_custom_role_same_merchant();

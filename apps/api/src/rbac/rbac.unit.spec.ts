@@ -414,11 +414,8 @@ class MockPrismaService {
           : [];
       }
       const customRoleId = values[0];
-      const merchantId = values[1];
       return this.users
-        .filter(
-          (u) => u.custom_role_id === customRoleId && (!merchantId || u.merchant_id === merchantId)
-        )
+        .filter((u) => u.custom_role_id === customRoleId)
         .map((u) => ({
           id: u.id,
           status: u.status,
@@ -2133,6 +2130,46 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
         assert.ok(err instanceof CanonicalApiException);
         assert.strictEqual(err.getStatus(), 403);
         assert.strictEqual(err.code, 'FORBIDDEN');
+        return true;
+      }
+    );
+  });
+
+  // Finding 2 (Round 7): Referencing users in other merchants block deleteRole with tenant-safe 400 ROLE_IN_USE
+  test('Finding 2 / Round 7 / BR-RBAC-04: Cross-tenant referencing user locks and blocks deleteRole with tenant-safe 400 ROLE_IN_USE', async () => {
+    // 1. Create a custom role in MERCHANT_A
+    const createdRole = await service.createRole(
+      {
+        name: 'Merchant A Isolated Role',
+        permissions: ['order:view_create'],
+      },
+      OWNER_ACTOR,
+      '127.0.0.1',
+      'corr-r7-f2-setup'
+    );
+    const roleId = createdRole.data.role.id;
+
+    // 2. Simulate a cross-tenant user in MERCHANT_B referencing this role
+    const crossTenantUserId = 'user-merchant-b-cross';
+    mockPrisma.users.push({
+      id: crossTenantUserId,
+      merchant_id: MERCHANT_B,
+      role: 'OPS_CSKH',
+      custom_role_id: roleId,
+      status: 'ACTIVE',
+    });
+
+    // 3. Attempt to delete the role from MERCHANT_A
+    // Must lock all assignees across merchants and refuse with 400 ROLE_IN_USE
+    await assert.rejects(
+      async () => {
+        await service.deleteRole(roleId, OWNER_ACTOR, '127.0.0.1', 'corr-r7-f2-del');
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 400);
+        assert.strictEqual(err.code, 'ROLE_IN_USE');
+        assert.ok(err.message.includes('đơn vị khác'));
         return true;
       }
     );
