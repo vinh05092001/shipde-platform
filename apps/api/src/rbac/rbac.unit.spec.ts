@@ -2845,7 +2845,11 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
     };
 
     const perms = await service.getActorPermissions(staleActor);
-    assert.deepStrictEqual(perms, [], 'Must fail closed with empty array when user row does not exist in DB');
+    assert.deepStrictEqual(
+      perms,
+      [],
+      'Must fail closed with empty array when user row does not exist in DB'
+    );
 
     // GET /roles can_manage_roles check with stale actor returns false
     const rolesRes = await service.getRoles(MERCHANT_A, 'corr-r10-f3', staleActor);

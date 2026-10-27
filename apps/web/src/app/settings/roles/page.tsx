@@ -718,7 +718,9 @@ export default function RolesSettingsPage({
                   )}
                 </div>
                 <div>
-                  <h3 id="view-role-title" className="font-bold text-base text-slate-900">{viewingRole.name}</h3>
+                  <h3 id="view-role-title" className="font-bold text-base text-slate-900">
+                    {viewingRole.name}
+                  </h3>
                   <p className="text-[11px] text-slate-500">
                     {viewingRole.is_system
                       ? 'Vai trò bảo vệ hệ thống'
@@ -1020,7 +1022,9 @@ export default function RolesSettingsPage({
                   <AlertTriangle className="w-5 h-5 text-rose-600" />
                 </div>
                 <div>
-                  <h3 id="delete-role-title" className="font-bold text-sm text-slate-900">Xác Nhận Xóa Vai Trò Tùy Chỉnh</h3>
+                  <h3 id="delete-role-title" className="font-bold text-sm text-slate-900">
+                    Xác Nhận Xóa Vai Trò Tùy Chỉnh
+                  </h3>
                   <p className="text-[11px] text-slate-500 font-mono">{deletingRole.name}</p>
                 </div>
               </div>
