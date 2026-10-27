@@ -551,7 +551,7 @@ export class RateLimitService {
       return {
         allowed: false,
         retryAfterSeconds: ipConsume.retryAfterSeconds,
-        reason: 'Quá nhiều yêu cầu gửi lời mời từ địa chỉ IP này. Vui lòng thử lại sau.',
+        reason: ipConsume.reason || 'Quá nhiều yêu cầu gửi lời mời từ địa chỉ IP này. Vui lòng thử lại sau.',
       };
     }
     const attempts: AttemptReservation[] = [];
@@ -570,6 +570,7 @@ export class RateLimitService {
           allowed: false,
           retryAfterSeconds: recipientConsume.retryAfterSeconds,
           reason:
+            recipientConsume.reason ||
             'Đã vượt quá số lần gửi lời mời cho người dùng này trong 1 giờ. Vui lòng thử lại sau.',
         };
       }
@@ -620,53 +621,68 @@ export class RateLimitService {
     const member = `${now}:${Math.random().toString(36).substring(2, 8)}`;
 
     if (this.redisService) {
-      const client = this.redisService.getClient();
-      if (client && client.status === 'ready') {
-        try {
-          const clearBefore = now - windowMs;
-          const lua = `
-            local key = KEYS[1]
-            local now = tonumber(ARGV[1])
-            local clearBefore = tonumber(ARGV[2])
-            local limit = tonumber(ARGV[3])
-            local windowSeconds = tonumber(ARGV[4])
-            local member = ARGV[5]
+      let client: any = null;
+      try {
+        client = this.redisService.getClient();
+      } catch {
+        client = null;
+      }
+      if (client) {
+        if (client.status === 'ready') {
+          try {
+            const clearBefore = now - windowMs;
+            const lua = `
+              local key = KEYS[1]
+              local now = tonumber(ARGV[1])
+              local clearBefore = tonumber(ARGV[2])
+              local limit = tonumber(ARGV[3])
+              local windowSeconds = tonumber(ARGV[4])
+              local member = ARGV[5]
 
-            redis.call('zremrangebyscore', key, '-inf', clearBefore)
-            local count = redis.call('zcard', key)
-            if count >= limit then
-              local oldest = redis.call('zrange', key, 0, 0, 'WITHSCORES')
-              local earliest = (oldest and oldest[2]) and oldest[2] or now
-              return {0, count, earliest}
-            end
-            redis.call('zadd', key, now, member)
-            redis.call('expire', key, windowSeconds + 60)
-            return {1, count + 1, now}
-          `;
-          const res = (await client.eval(
-            lua,
-            1,
-            key,
-            now.toString(),
-            clearBefore.toString(),
-            limit.toString(),
-            windowSeconds.toString(),
-            member
-          )) as [number, number, number];
-          const allowed = res[0] === 1;
-          const count = res[1];
-          const earliest = Number(res[2]);
-          const retryAfter = Math.max(1, Math.ceil((earliest + windowMs - now) / 1000));
-          return {
-            allowed,
-            retryAfterSeconds: retryAfter,
-            count,
-            member,
-            timestamp: now,
-            reservation: allowed ? { key, member, timestamp: now, backend: 'redis' } : undefined,
-          };
-        } catch {
-          // Redis execution error while ready: fail closed across instances (SECURITY-NFR / Round 8 Finding 4)
+              redis.call('zremrangebyscore', key, '-inf', clearBefore)
+              local count = redis.call('zcard', key)
+              if count >= limit then
+                local oldest = redis.call('zrange', key, 0, 0, 'WITHSCORES')
+                local earliest = (oldest and oldest[2]) and oldest[2] or now
+                return {0, count, earliest}
+              end
+              redis.call('zadd', key, now, member)
+              redis.call('expire', key, windowSeconds + 60)
+              return {1, count + 1, now}
+            `;
+            const res = (await client.eval(
+              lua,
+              1,
+              key,
+              now.toString(),
+              clearBefore.toString(),
+              limit.toString(),
+              windowSeconds.toString(),
+              member
+            )) as [number, number, number];
+            const allowed = res[0] === 1;
+            const count = res[1];
+            const earliest = Number(res[2]);
+            const retryAfter = Math.max(1, Math.ceil((earliest + windowMs - now) / 1000));
+            return {
+              allowed,
+              retryAfterSeconds: retryAfter,
+              count,
+              member,
+              timestamp: now,
+              reservation: allowed ? { key, member, timestamp: now, backend: 'redis' } : undefined,
+            };
+          } catch {
+            // Redis execution error while ready: fail closed across instances (SECURITY-NFR / Round 8 Finding 4)
+            return {
+              allowed: false,
+              retryAfterSeconds: 60,
+              count: limit,
+              reason: 'Dịch vụ kiểm soát tần suất gặp sự cố. Vui lòng thử lại sau.',
+            };
+          }
+        } else {
+          // Redis is configured but not usable (e.g. status !== 'ready'): fail closed across instances (Round 9 Finding 2)
           return {
             allowed: false,
             retryAfterSeconds: 60,

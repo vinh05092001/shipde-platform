@@ -3782,5 +3782,27 @@ CREATE INDEX "some_other_idx" ON "invitations"("created_at");
       assert.strictEqual(hasNoStore, true, 'acceptInvitation must set Cache-Control: no-store');
       assert.strictEqual(hasNoReferrer, true, 'acceptInvitation must set Referrer-Policy: no-referrer');
     });
+
+    it('Round 9 Finding 2: Rate limiter fails closed when Redis is configured but not usable, memory fallback only when not configured', async () => {
+      // 1. Configured Redis client with status !== 'ready' fails closed (allowed: false)
+      const mockUnreadyRedisService: any = {
+        getClient: () => ({
+          status: 'connecting',
+          eval: async () => {
+            throw new Error('Should not call eval when not ready');
+          },
+        }),
+      };
+      const unreadyLimiter = new RateLimitService(mockUnreadyRedisService);
+      const res1 = await unreadyLimiter.checkInvitationDispatchLimit('192.168.1.1', 'user@shipde.vn', MERCHANT_ID);
+      assert.strictEqual(res1.allowed, false);
+      assert.strictEqual(res1.retryAfterSeconds, 60);
+      assert.ok(res1.reason?.includes('sự cố'));
+
+      // 2. Unconfigured Redis (undefined) falls back safely to in-memory store
+      const unconfiguredLimiter = new RateLimitService(undefined);
+      const res2 = await unconfiguredLimiter.checkInvitationDispatchLimit('192.168.1.2', 'user2@shipde.vn', MERCHANT_ID);
+      assert.strictEqual(res2.allowed, true);
+    });
   });
 });
