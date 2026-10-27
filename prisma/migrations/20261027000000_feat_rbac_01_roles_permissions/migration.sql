@@ -155,3 +155,7 @@ CREATE TRIGGER trg_check_user_custom_role_same_merchant
     BEFORE INSERT OR UPDATE OF custom_role_id, merchant_id ON users
     FOR EACH ROW
     EXECUTE FUNCTION check_user_custom_role_same_merchant();
+
+-- Allow platform-level system audit logs without customer merchant binding (Finding 1 / Round 12 / BR-RBAC-07 / BR-RBAC-04)
+ALTER TABLE "audit_logs" ALTER COLUMN "merchant_id" DROP NOT NULL;
+

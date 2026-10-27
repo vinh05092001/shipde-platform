@@ -142,11 +142,8 @@ export class RbacService implements OnModuleInit {
     if (typeof this.prisma?.$transaction !== 'function') {
       return;
     }
-    try {
-      await this.ensurePlatformSeed();
-    } catch {
-      // Resilience: onModuleInit must not crash API bootstrap if DB is temporarily unreachable
-    }
+    // Startup must fail visibly if platform seed fails instead of swallowing and serving unseeded catalog (Finding 1 / Round 12)
+    await this.ensurePlatformSeed();
   }
 
   /**
@@ -239,29 +236,27 @@ export class RbacService implements OnModuleInit {
             });
           }
 
-          // Append audit record for every system-role permission change (Finding 2 / Round 11 / BR-RBAC-07)
+          // Append audit record for every system-role permission change (Finding 1 / Round 12 / BR-RBAC-07 / BR-RBAC-04)
+          // Platform seed audit must not depend on a customer merchant; uses nullable platform actor matching audit schema
           if (toDelete.length > 0 || toInsert.length > 0) {
-            const sysMerchant = await tx.merchant.findFirst({ select: { id: true } });
-            if (sysMerchant) {
-              await tx.auditLog.create({
-                data: {
-                  merchant_id: sysMerchant.id,
-                  user_id: 'SYSTEM',
-                  action: 'SYSTEM_ROLE_PERMISSIONS_RECONCILED',
-                  entity_type: 'Role',
-                  entity_id: role.id,
-                  old_value: {
-                    code: sr.code,
-                    permissions: existingRolePerms.map((rp) => rp.permission_id),
-                  },
-                  new_value: {
-                    code: sr.code,
-                    permissions: Array.from(desiredPermIds),
-                  },
-                  reason: 'System role seed reconciliation',
+            await tx.auditLog.create({
+              data: {
+                merchant_id: null,
+                user_id: null,
+                action: 'SYSTEM_ROLE_PERMISSIONS_RECONCILED',
+                entity_type: 'Role',
+                entity_id: role.id,
+                old_value: {
+                  code: sr.code,
+                  permissions: existingRolePerms.map((rp) => rp.permission_id),
                 },
-              });
-            }
+                new_value: {
+                  code: sr.code,
+                  permissions: Array.from(desiredPermIds),
+                },
+                reason: 'System role seed reconciliation',
+              },
+            });
           }
         }
       });

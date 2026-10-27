@@ -3081,7 +3081,8 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
       (a) => a.action === 'SYSTEM_ROLE_PERMISSIONS_RECONCILED'
     );
     assert.ok(reconAudit, 'System role reconciliation must record an audit row');
-    assert.strictEqual(reconAudit?.user_id, 'SYSTEM');
+    assert.strictEqual(reconAudit?.user_id, null);
+    assert.strictEqual(reconAudit?.merchant_id, null);
 
     // 3. Spy ensurePlatformSeed to verify tenant reads do NOT invoke it
     let seedCalled = false;
@@ -3100,5 +3101,44 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
     } finally {
       service.ensurePlatformSeed = origSeed;
     }
+  });
+
+  // Finding 1 (Round 12): BR-RBAC-07 / BR-RBAC-01 / BR-RBAC-04: Platform seed and audit must not depend on customer merchants, use nullable actor, and onModuleInit must fail startup visibly
+  test('Finding 1 (Round 12): Platform seed audit uses nullable platform actor without customer merchant dependency, and onModuleInit fails visibly on seed failure', async () => {
+    // 1. Clear merchant findFirst to prove platform seed does not depend on a customer merchant
+    mockPrisma.merchant.findFirst = async () => null;
+    mockPrisma.auditLogs = [];
+
+    // Remove permissions from OPS_CSKH role to trigger reconciliation
+    const cskhSysRoleId = mockPrisma.roles.find((r) => r.code === 'OPS_CSKH')?.id;
+    if (cskhSysRoleId) {
+      mockPrisma.rolePermissions = mockPrisma.rolePermissions.filter(
+        (rp) => rp.role_id !== cskhSysRoleId
+      );
+    }
+    (service as any).isSeeded = false;
+    await service.ensurePlatformSeed();
+
+    // Verify audit log exists and has nullable merchant_id and user_id (not tied to any customer tenant)
+    const platformAudit = mockPrisma.auditLogs.find(
+      (a) => a.action === 'SYSTEM_ROLE_PERMISSIONS_RECONCILED'
+    );
+    assert.ok(platformAudit, 'System role reconciliation audit row must be created');
+    assert.strictEqual(platformAudit.merchant_id, null, 'Platform audit must not belong to arbitrary customer merchant');
+    assert.strictEqual(platformAudit.user_id, null, 'Platform audit user_id must be null for system bootstrap');
+
+    // 2. onModuleInit must fail startup visibly if ensurePlatformSeed fails, rather than swallowing error
+    (service as any).isSeeded = false;
+    mockPrisma.shouldFailPermissionFindMany = true;
+    await assert.rejects(
+      async () => {
+        await service.onModuleInit();
+      },
+      (err: any) => {
+        assert.ok(err, 'onModuleInit must reject when seed fails');
+        return true;
+      }
+    );
+    mockPrisma.shouldFailPermissionFindMany = false;
   });
 });

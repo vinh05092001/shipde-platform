@@ -12,7 +12,7 @@
 | Assigned author | `GEMINI` |
 | Risk            | `HIGH` |
 | Risk domains    | `auth`, `security`, `tenant isolation`, `database ownership` |
-| Allowed paths   | `prisma/schema.prisma`, `prisma/migrations/*`, `apps/api/src/rbac/*`, `apps/api/src/users/*`, `apps/api/src/app.module.ts`, `packages/contracts/src/index.ts`, `packages/contracts/src/openapi.ts`, `docs/product-spec/contracts/openapi.yaml`, `docs/product-spec/work-items/FEAT-RBAC-01.md`, `apps/web/src/components/UserManagementTab.tsx`, `apps/web/src/app/settings/roles/*` |
+| Allowed paths   | `prisma/schema.prisma`, `prisma/migrations/*`, `apps/api/src/rbac/*`, `apps/api/src/users/*`, `apps/api/src/app.module.ts`, `packages/contracts/src/index.ts`, `packages/contracts/src/openapi.ts`, `docs/product-spec/contracts/openapi.yaml`, `docs/product-spec/work-items/FEAT-RBAC-01.md`, `apps/web/src/components/UserManagementTab.tsx`, `apps/web/src/app/settings/roles/*`, `apps/api/package.json` (wires test scripts for API RBAC suites), `apps/web/package.json` (wires test scripts for web RBAC suites), `apps/web/src/tests/rbac-matrix-live.test.ts` (test harness proving live RBAC matrix resolution), `apps/web/src/tests/roles-page-states.test.ts` (test harness proving roles page UI state contract) |
 | Reviewer        | Codex — fresh independent task |
 | Branch          | `feat/feat-rbac-01-roles-permissions` |
 | Pull Request    | Pending |
