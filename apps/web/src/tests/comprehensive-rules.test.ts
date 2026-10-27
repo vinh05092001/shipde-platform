@@ -45,6 +45,7 @@ import {
   parseScopeInput,
   validateInviteForm,
   canRetryInviteSubmission,
+  getGrantableRoles,
 } from '../components/forms/InviteUserModal';
 import {
   validateAcceptPassword,
@@ -1788,6 +1789,30 @@ export async function runComprehensiveRulesAudit(): Promise<{
         missingRun.token === null &&
         missingRun.shouldStrip === false,
       'Token được giữ trong ref/memory không bị mất khi Strict Mode chạy mount lần 2'
+    );
+
+    // Round 10 Finding 5: getGrantableRoles bounds non-owners to roles at or below live actor role (BR-INV-01)
+    const ownerRoles = getGrantableRoles('OWNER');
+    const opsRoles = getGrantableRoles('OPS_CSKH');
+    const whRoles = getGrantableRoles('WAREHOUSE');
+    const accountantRoles = getGrantableRoles('ACCOUNTANT');
+    const guestRoles = getGrantableRoles(null);
+
+    assertTest(
+      'UI & PRIVILEGE CEILING',
+      'FEAT-USR-01-UI-PRIVILEGE-CEILING-ROLES',
+      'Giới hạn danh sách vai trò có thể mời không vượt quá vai trò của tài khoản đang đăng nhập (BR-INV-01)',
+      ownerRoles.length === 4 &&
+        ownerRoles.some((r) => r.value === 'OWNER') &&
+        ownerRoles.some((r) => r.value === 'OPS_CSKH') &&
+        opsRoles.length === 1 &&
+        opsRoles[0].value === 'OPS_CSKH' &&
+        whRoles.length === 1 &&
+        whRoles[0].value === 'WAREHOUSE' &&
+        accountantRoles.length === 1 &&
+        accountantRoles[0].value === 'ACCOUNTANT' &&
+        guestRoles.length === 0,
+      'Chỉ hiển thị các vai trò bằng hoặc thấp hơn quyền của actor, không hiển thị vai trò vượt cấp'
     );
   }
 

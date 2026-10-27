@@ -37,6 +37,38 @@ export function canRetryInviteSubmission(params: {
   return !params.loading && Boolean(params.errorMsg);
 }
 
+export interface GrantableRoleOption {
+  value: 'OPS_CSKH' | 'WAREHOUSE' | 'ACCOUNTANT' | 'OWNER';
+  label: string;
+}
+
+export const ALL_ROLES: GrantableRoleOption[] = [
+  { value: 'OPS_CSKH', label: 'CSKH / Vận Hành (Cứu đơn & xử lý sự cố)' },
+  { value: 'WAREHOUSE', label: 'Thủ Kho (Xuất nhập kho, quét hoàn)' },
+  { value: 'ACCOUNTANT', label: 'Kế Toán (Đối soát COD, ký nhận công nợ)' },
+  { value: 'OWNER', label: 'Chủ Cửa Hàng (Toàn quyền quản trị)' },
+];
+
+/**
+ * BR-INV-01 Privilege Ceiling helper: Returns only roles and scopes at or below actor's live role.
+ * Non-owners cannot grant roles they do not possess.
+ */
+export function getGrantableRoles(actorRole?: string | null): GrantableRoleOption[] {
+  if (actorRole === 'OWNER') {
+    return ALL_ROLES;
+  }
+  if (actorRole === 'OPS_CSKH') {
+    return [{ value: 'OPS_CSKH', label: 'CSKH / Vận Hành (Cứu đơn & xử lý sự cố)' }];
+  }
+  if (actorRole === 'WAREHOUSE') {
+    return [{ value: 'WAREHOUSE', label: 'Thủ Kho (Xuất nhập kho, quét hoàn)' }];
+  }
+  if (actorRole === 'ACCOUNTANT') {
+    return [{ value: 'ACCOUNTANT', label: 'Kế Toán (Đối soát COD, ký nhận công nợ)' }];
+  }
+  return [];
+}
+
 export function validateInviteForm(params: {
   channel: 'email' | 'phone';
   email: string;
@@ -62,10 +94,15 @@ export function validateInviteForm(params: {
 export const InviteUserModal: React.FC<Props> = ({ isOpen, onClose, onUserInvited }) => {
   const { token, user } = useAuth();
 
+  const grantableRoles = getGrantableRoles(user?.role);
+  const isOwner = user?.role === 'OWNER';
+
   const [channel, setChannel] = useState<'email' | 'phone'>('email');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
-  const [role, setRole] = useState<'OPS_CSKH' | 'WAREHOUSE' | 'ACCOUNTANT' | 'OWNER'>('OPS_CSKH');
+  const [role, setRole] = useState<'OPS_CSKH' | 'WAREHOUSE' | 'ACCOUNTANT' | 'OWNER'>(
+    grantableRoles[0]?.value || 'OPS_CSKH'
+  );
   const [storeScopeInput, setStoreScopeInput] = useState('');
   const [whScopeInput, setWhScopeInput] = useState('');
 
@@ -73,9 +110,14 @@ export const InviteUserModal: React.FC<Props> = ({ isOpen, onClose, onUserInvite
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
-  if (!isOpen) return null;
+  // Ensure role is bounded to live grantable roles (BR-INV-01 / Round 10 Finding 5)
+  React.useEffect(() => {
+    if (grantableRoles.length > 0 && !grantableRoles.some((r) => r.value === role)) {
+      setRole(grantableRoles[0].value);
+    }
+  }, [user?.role, grantableRoles, role]);
 
-  const isOwner = user?.role === 'OWNER';
+  if (!isOpen) return null;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -112,14 +154,27 @@ export const InviteUserModal: React.FC<Props> = ({ isOpen, onClose, onUserInvite
       const json = await res.json();
 
       if (!res.ok) {
+        const message = json.error?.message || 'Không thể gửi lời mời. Vui lòng thử lại.';
+        const mapped: Record<string, string> = {};
         if (json.error?.fields && Array.isArray(json.error.fields)) {
-          const mapped: Record<string, string> = {};
           for (const f of json.error.fields) {
             mapped[f.field] = f.message;
           }
+        }
+        // Round 10 Finding 5: Surface API 403 as a field error without implying unheld roles/scopes are grantable
+        if (res.status === 403 || json.error?.code === 'FORBIDDEN') {
+          if (message.includes('chi nhánh') || message.includes('store')) {
+            mapped.store_scopes = message;
+          } else if (message.includes('kho hàng') || message.includes('warehouse')) {
+            mapped.warehouse_scopes = message;
+          } else {
+            mapped.role = message;
+          }
+        }
+        if (Object.keys(mapped).length > 0) {
           setFieldErrors(mapped);
         }
-        throw new Error(json.error?.message || 'Không thể gửi lời mời. Vui lòng thử lại.');
+        throw new Error(message);
       }
 
       onUserInvited(json.data);
@@ -264,16 +319,24 @@ export const InviteUserModal: React.FC<Props> = ({ isOpen, onClose, onUserInvite
               id="invite-role"
               value={role}
               onChange={(e) => setRole(e.target.value as any)}
-              className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-semibold outline-none focus:border-blue-500 bg-white"
+              className={`w-full px-3 py-2 border rounded-lg text-xs font-semibold outline-none focus:border-blue-500 bg-white ${
+                fieldErrors.role
+                  ? 'border-red-400 focus:ring-1 focus:ring-red-500'
+                  : 'border-slate-200'
+              }`}
             >
-              <option value="OPS_CSKH">CSKH / Vận Hành (Cứu đơn & xử lý sự cố)</option>
-              <option value="WAREHOUSE">Thủ Kho (Xuất nhập kho, quét hoàn)</option>
-              <option value="ACCOUNTANT">Kế Toán (Đối soát COD, ký nhận công nợ)</option>
-              {isOwner && <option value="OWNER">Chủ Cửa Hàng (Toàn quyền quản trị)</option>}
+              {grantableRoles.map((r) => (
+                <option key={r.value} value={r.value}>
+                  {r.label}
+                </option>
+              ))}
             </select>
+            {fieldErrors.role && (
+              <p className="text-red-500 text-[11px] mt-1">{fieldErrors.role}</p>
+            )}
             {!isOwner && (
               <p className="text-[11px] text-slate-500 mt-1 italic">
-                * Chỉ Chủ cửa hàng mới có quyền mời thành viên với vai trò Đồng Quản Trị (OWNER).
+                * Theo hạn mức phân quyền (BR-INV-01), bạn chỉ có thể mời thành viên với vai trò và phạm vi không vượt quá tài khoản của mình.
               </p>
             )}
           </div>
@@ -291,8 +354,20 @@ export const InviteUserModal: React.FC<Props> = ({ isOpen, onClose, onUserInvite
               placeholder="VD: store-01, store-02 (để trống: không gán phạm vi)"
               value={storeScopeInput}
               onChange={(e) => setStoreScopeInput(e.target.value)}
-              className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs outline-none focus:border-blue-500 bg-white"
+              className={`w-full px-3 py-2 border rounded-lg text-xs outline-none focus:border-blue-500 bg-white ${
+                fieldErrors.store_scopes
+                  ? 'border-red-400 focus:ring-1 focus:ring-red-500'
+                  : 'border-slate-200'
+              }`}
             />
+            {fieldErrors.store_scopes && (
+              <p className="text-red-500 text-[11px] mt-1">{fieldErrors.store_scopes}</p>
+            )}
+            {!isOwner && user?.store_scopes && user.store_scopes.length > 0 && !user.store_scopes.includes('*') && (
+              <p className="text-[11px] text-slate-500 mt-1 italic">
+                * Phạm vi chi nhánh tối đa bạn có thể phân quyền: {user.store_scopes.join(', ')}
+              </p>
+            )}
           </div>
 
           <div>
@@ -308,8 +383,20 @@ export const InviteUserModal: React.FC<Props> = ({ isOpen, onClose, onUserInvite
               placeholder="VD: wh-north, wh-south (để trống: không gán phạm vi)"
               value={whScopeInput}
               onChange={(e) => setWhScopeInput(e.target.value)}
-              className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs outline-none focus:border-blue-500 bg-white"
+              className={`w-full px-3 py-2 border rounded-lg text-xs outline-none focus:border-blue-500 bg-white ${
+                fieldErrors.warehouse_scopes
+                  ? 'border-red-400 focus:ring-1 focus:ring-red-500'
+                  : 'border-slate-200'
+              }`}
             />
+            {fieldErrors.warehouse_scopes && (
+              <p className="text-red-500 text-[11px] mt-1">{fieldErrors.warehouse_scopes}</p>
+            )}
+            {!isOwner && user?.warehouse_scopes && user.warehouse_scopes.length > 0 && !user.warehouse_scopes.includes('*') && (
+              <p className="text-[11px] text-slate-500 mt-1 italic">
+                * Phạm vi kho hàng tối đa bạn có thể phân quyền: {user.warehouse_scopes.join(', ')}
+              </p>
+            )}
           </div>
 
           <div className="pt-3 border-t border-slate-100 flex justify-end gap-2.5">
