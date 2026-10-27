@@ -148,9 +148,9 @@ export function AdminShopsView({
   onRefresh,
   onCreateSubmit,
 }: AdminShopsViewProps) {
-  // AC-ADMIN-15: Signed-out or non-admin users reach the forbidden state immediately
+  // AC-ADMIN-15: Signed-out or non-admin users reach the forbidden state immediately on first paint
   // before any loading skeleton or in-flight state
-  if (!isHydrating && (!isAuthenticated || !user || !isPlatformAdmin)) {
+  if (!isAuthenticated || !user || !isPlatformAdmin) {
     return (
       <main className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
         <div

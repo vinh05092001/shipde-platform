@@ -59,8 +59,8 @@ export function AdminNewShopView({
   createdSuccess,
   onSubmit,
 }: AdminNewShopViewProps) {
-  // AC-ADMIN-15: Signed-out or unauthorized users access admin routes must reach forbidden state immediately
-  if (!isHydrating && (!isAuthenticated || !user || !isPlatformAdmin)) {
+  // AC-ADMIN-15: Signed-out or unauthorized users access admin routes must reach forbidden state immediately on first paint
+  if (!isAuthenticated || !user || !isPlatformAdmin) {
     return (
       <main className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
         <div

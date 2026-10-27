@@ -23,8 +23,8 @@ export default function AdminPage() {
     }
   }, [isAuthenticated, user, isPlatformAdmin, router]);
 
-  // AC-ADMIN-15: Signed-out or unauthorized users reach forbidden state immediately
-  if (!isHydrating && (!isAuthenticated || !user || !isPlatformAdmin)) {
+  // AC-ADMIN-15: Signed-out or unauthorized users reach forbidden state immediately on first paint
+  if (!isAuthenticated || !user || !isPlatformAdmin) {
     return (
       <main className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
         <div

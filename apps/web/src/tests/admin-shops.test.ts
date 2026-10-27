@@ -303,7 +303,7 @@ async function runAdminShopsFrontendSuite() {
   // ---------------------------------------------------------------------------
   console.log('🧪 Testing Finding 5: Real UI Component rendering across all states...');
 
-  // State 1: Forbidden State (Signed out)
+  // State 1: Forbidden State (Signed out, regardless of isHydrating)
   const forbiddenHtml = renderToStaticMarkup(
     React.createElement(AdminShopsView, {
       isAuthenticated: false,
@@ -324,6 +324,30 @@ async function runAdminShopsFrontendSuite() {
   assert.ok(
     forbiddenHtml.includes('Truy cập bị từ chối (403 Forbidden)'),
     'Forbidden state must show 403 Forbidden heading'
+  );
+
+  // Finding 1 / AC-ADMIN-15: Signed-out user during isHydrating=true must still render forbidden on first paint
+  const hydratingForbiddenHtml = renderToStaticMarkup(
+    React.createElement(AdminShopsView, {
+      isAuthenticated: false,
+      user: null,
+      isPlatformAdmin: false,
+      isHydrating: true,
+      shops: [],
+      isLoading: false,
+      listError: null,
+      searchQuery: '',
+      showCreateModal: false,
+    })
+  );
+  assert.ok(
+    hydratingForbiddenHtml.includes('data-testid="state-forbidden"'),
+    'Signed-out view during hydration must render state-forbidden immediately on first paint'
+  );
+  assert.ok(
+    !hydratingForbiddenHtml.includes('animate-spin') &&
+      !hydratingForbiddenHtml.includes('animate-pulse'),
+    'Signed-out view must not render any spinner or skeleton while hydrating'
   );
 
   // State 2: Forbidden State (Signed in as merchant OWNER)
