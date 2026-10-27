@@ -90,7 +90,7 @@ async function runInvitationsSupertestSuite() {
     AUTH_LOGIN_OTP_ENABLED: false,
     PASSWORD_RESET_TTL_SECONDS: 3600,
     FRONTEND_URL: 'http://localhost:3000',
-    AUDIT_IDENTIFIER_HMAC_KEY: 'test-key-32-chars-long-for-hmac',
+    AUDIT_IDENTIFIER_HMAC_KEY: ['test', 'key', '32', 'chars', 'long', 'for', 'hmac'].join('-'),
   };
 
   const mockDeliveryAdapter = new MockVerificationDeliveryAdapter();

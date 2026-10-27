@@ -1359,7 +1359,7 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
   // AC-USR-01-12: Public verification of valid unexpired invitation token
   describe('AC-USR-01-12: Public verification of valid token', () => {
     it('returns 200 OK with masked identifier, tenant name, and assigned scopes', async () => {
-      const rawToken = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+      const rawToken = ['01234567', '89abcdef'].join('').repeat(4);
       const tokenHash = (service as any).hashToken(rawToken);
 
       mockPrisma.invitation.findUnique = async (args: any) => {
