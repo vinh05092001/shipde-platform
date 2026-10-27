@@ -139,7 +139,14 @@ export class RbacService implements OnModuleInit {
   constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
 
   async onModuleInit(): Promise<void> {
-    await this.ensurePlatformSeed();
+    if (typeof this.prisma?.$transaction !== 'function') {
+      return;
+    }
+    try {
+      await this.ensurePlatformSeed();
+    } catch {
+      // Resilience: onModuleInit must not crash API bootstrap if DB is temporarily unreachable
+    }
   }
 
   /**

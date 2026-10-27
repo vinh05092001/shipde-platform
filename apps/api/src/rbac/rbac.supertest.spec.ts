@@ -352,11 +352,12 @@ async function main() {
   assert.strictEqual(pwdCreateRes.body.error.code, 'MFA_FRESH_AUTH_REQUIRED');
 
   // MFA session succeeds creating sensitive grant
+  const mfaRoleSuffix = randomBytes(4).toString('hex');
   const mfaCreateRes = await request(server)
     .post('/api/v1/roles')
     .set('Authorization', `Bearer ${ownerMfaToken}`)
     .send({
-      name: 'MFA PII Role',
+      name: `MFA PII Role ${mfaRoleSuffix}`,
       permissions: ['order:view_create', 'pii:unmask'],
     })
     .expect(201);
