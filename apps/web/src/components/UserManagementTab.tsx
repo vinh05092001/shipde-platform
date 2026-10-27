@@ -35,6 +35,8 @@ import { useAuth } from '@/context/AuthContext';
 import { InviteUserModal } from './forms/InviteUserModal';
 
 // Available Stores in the system
+export const INVITE_SUCCESS_TOAST = 'Đã gửi lời mời thành công';
+
 export interface StoreItem {
   id: string;
   code: string;
@@ -1383,8 +1385,9 @@ export const UserManagementTab: React.FC = () => {
       <InviteUserModal
         isOpen={isInviteOpen}
         onClose={() => setIsInviteOpen(false)}
-        onUserInvited={(invited: any) => {
-          setToastMessage('Đã tạo lời mời thành công. Hãy gửi liên kết kích hoạt cho người nhận.');
+        onUserInvited={(_invited: any) => {
+          setIsInviteOpen(false);
+          setToastMessage(INVITE_SUCCESS_TOAST);
           setActiveSubTab('invitations');
           void fetchInvitations();
           setTimeout(() => setToastMessage(null), 5000);

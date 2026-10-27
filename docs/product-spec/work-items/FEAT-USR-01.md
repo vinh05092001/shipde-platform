@@ -12,7 +12,7 @@
 | Assigned author | `GEMINI` |
 | Risk            | `HIGH` |
 | Risk domains    | `auth`, `security`, `tenant isolation`, `database ownership` |
-| Allowed paths   | `prisma/schema.prisma`, `prisma/migrations/*`, `apps/api/src/users/*`, `apps/api/src/invitations/*`, `apps/api/src/app.module.ts`, `packages/contracts/src/*`, `docs/product-spec/contracts/openapi.yaml`, `docs/product-spec/work-items/FEAT-USR-01.md`, `apps/web/src/components/forms/InviteUserModal.tsx`, `apps/web/src/components/UserManagementTab.tsx`, `apps/web/src/app/settings/users/*`, `apps/web/src/app/invite/accept/*` |
+| Allowed paths   | `prisma/schema.prisma`, `prisma/migrations/*`, `apps/api/src/users/*`, `apps/api/src/invitations/*`, `apps/api/src/auth/rate-limit.service.ts`, `apps/api/src/app.module.ts`, `packages/contracts/src/*`, `docs/product-spec/contracts/openapi.yaml`, `docs/product-spec/work-items/FEAT-USR-01.md`, `apps/web/src/components/forms/InviteUserModal.tsx`, `apps/web/src/components/UserManagementTab.tsx`, `apps/web/src/app/settings/users/*`, `apps/web/src/app/invite/accept/*` |
 | Reviewer        | Codex — fresh independent task |
 | Branch          | `feat/feat-usr-01-user-invitations` |
 | Pull Request    | Pending |
@@ -44,6 +44,8 @@ A shop owner or authorized operations manager can invite new team members by ema
 ## Author boundary
 
 `GEMINI` is required because user invitations span database migrations, cryptographic token generation and verification, transactional user account creation, fine-grained RBAC privilege boundary checks, and multi-state UI flows.
+
+- **Rate Limit Service boundary (Finding 10):** Invitation endpoints require rate limiting to prevent invitation flooding, email exhaustion, and acceptance brute forcing per `SECURITY-NFR-OBSERVABILITY.md`. Rather than duplicating rate limiting mechanics, `InvitationsService` reuses `RateLimitService` in `apps/api/src/auth/rate-limit.service.ts`, tracked explicitly in allowed paths.
 
 ## In scope
 
@@ -129,3 +131,4 @@ The invitations modal and list in `SCR-USR-01` (`/settings/users`) and public ac
 1. **Multi-tenant Identity Sharing:** When an email address already registered under Merchant A is invited to Merchant B, should the user accept the invite into a shared platform identity with multiple `Membership` rows, or must user accounts remain strictly isolated with independent credentials per merchant? (Current implementation uses merchant-scoped users; full multi-tenant shared identity depends on future identity model unification).
 2. **Invitation Expiry Configuration:** Expiry is standardized at 7 days (168 hours). Whether individual merchants may configure custom expiry limits (e.g. 24 hours or 48 hours) is deferred to future organization settings.
 3. **Tenant Resource Scope Gating (Finding 5):** The current schema lacks first-class `Store` or `Warehouse` domain models (deferred to `FEAT-RBAC-02` / branch management). Scopes are stored as string identifier arrays on `User` (`store_scopes`, `warehouse_scopes`). Binding scope enforcement to specific tenant resource APIs (e.g. Orders or Shipments) requires a product decision on entity schema ownership and resource-level scoping attributes before real tenant resources can be gated.
+4. **First-Class Store and Warehouse Domain Models (Finding 10):** First-class Store and Warehouse entities are not yet modeled in the database schema. In `InviteUserModal` and `UserManagementTab`, scopes are entered as comma-separated identifier codes (e.g. `store-01`, `wh-north`) or left empty (displaying "không gán phạm vi"). Linking them to live relational records is deferred to `FEAT-WH-*` and `FEAT-ORD-*`.

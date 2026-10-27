@@ -22,6 +22,13 @@ interface Props {
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
+export function parseScopeInput(input: string): string[] {
+  return input
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 export const InviteUserModal: React.FC<Props> = ({ isOpen, onClose, onUserInvited }) => {
   const { token, user } = useAuth();
 
@@ -29,98 +36,16 @@ export const InviteUserModal: React.FC<Props> = ({ isOpen, onClose, onUserInvite
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [role, setRole] = useState<'OPS_CSKH' | 'WAREHOUSE' | 'ACCOUNTANT' | 'OWNER'>('OPS_CSKH');
-  const [selectedStores, setSelectedStores] = useState<string[]>(['HCM-Q3']);
-  const [selectedWarehouses, setSelectedWarehouses] = useState<string[]>(['KHO-TONG']);
+  const [storeScopeInput, setStoreScopeInput] = useState('');
+  const [whScopeInput, setWhScopeInput] = useState('');
 
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
-  const [createdInvite, setCreatedInvite] = useState<{
-    invitation_url: string;
-    email?: string;
-    phone?: string;
-    role: string;
-  } | null>(null);
-  const [copied, setCopied] = useState(false);
-
   if (!isOpen) return null;
 
-  if (createdInvite) {
-    return (
-      <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-150">
-        <div className="bg-white rounded-2xl border border-slate-200 max-w-md w-full p-6 space-y-4 shadow-2xl text-xs animate-in zoom-in-95 duration-150">
-          <div className="flex justify-between items-center pb-3 border-b border-slate-100">
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-lg bg-green-50 text-green-600 flex items-center justify-center font-bold">
-                ✓
-              </div>
-              <h3 className="font-bold text-sm text-slate-900">Tạo Lời Mời Thành Công</h3>
-            </div>
-            <button
-              type="button"
-              onClick={() => {
-                setCreatedInvite(null);
-                onClose();
-              }}
-              className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center font-bold text-xs"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-          <p className="text-slate-600 text-xs leading-relaxed">
-            Liên kết kích hoạt tài khoản đã được khởi tạo thành công (hiệu lực 7 ngày). Hãy sao chép
-            liên kết dưới đây để gửi cho người nhận:
-          </p>
-          <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-2.5">
-            <input
-              type="text"
-              readOnly
-              value={createdInvite.invitation_url || ''}
-              className="w-full text-[11px] bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 font-mono text-slate-700 select-all"
-            />
-            <button
-              type="button"
-              onClick={() => {
-                void navigator.clipboard?.writeText(createdInvite.invitation_url);
-                setCopied(true);
-                setTimeout(() => setCopied(false), 2000);
-              }}
-              className="w-full btn-primary text-xs py-2 flex items-center justify-center gap-1.5 font-semibold"
-            >
-              {copied ? '✓ Đã sao chép liên kết' : 'Sao chép liên kết kích hoạt'}
-            </button>
-          </div>
-          <div className="flex justify-end pt-2">
-            <button
-              type="button"
-              onClick={() => {
-                setCreatedInvite(null);
-                onClose();
-              }}
-              className="btn-secondary text-xs px-4 py-1.5"
-            >
-              Hoàn tất
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   const isOwner = user?.role === 'OWNER';
-
-  const toggleStore = (storeCode: string) => {
-    setSelectedStores((prev) =>
-      prev.includes(storeCode) ? prev.filter((s) => s !== storeCode) : [...prev, storeCode]
-    );
-  };
-
-  const toggleWarehouse = (whCode: string) => {
-    setSelectedWarehouses((prev) =>
-      prev.includes(whCode) ? prev.filter((w) => w !== whCode) : [...prev, whCode]
-    );
-  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -155,8 +80,8 @@ export const InviteUserModal: React.FC<Props> = ({ isOpen, onClose, onUserInvite
         email: channel === 'email' ? email.trim() : undefined,
         phone: channel === 'phone' ? phone.trim().replace(/[\s-]/g, '') : undefined,
         role,
-        store_scopes: selectedStores,
-        warehouse_scopes: selectedWarehouses,
+        store_scopes: parseScopeInput(storeScopeInput),
+        warehouse_scopes: parseScopeInput(whScopeInput),
       };
 
       const res = await fetch(`${API_BASE}/api/v1/invitations`, {
@@ -182,7 +107,7 @@ export const InviteUserModal: React.FC<Props> = ({ isOpen, onClose, onUserInvite
       }
 
       onUserInvited(json.data);
-      setCreatedInvite(json.data);
+      onClose();
     } catch (err: any) {
       setErrorMsg(err.message || 'Lỗi kết nối máy chủ');
     } finally {
@@ -327,57 +252,37 @@ export const InviteUserModal: React.FC<Props> = ({ isOpen, onClose, onUserInvite
           </div>
 
           <div>
-            <label className="font-bold text-slate-700 block mb-1.5 flex items-center gap-1.5">
+            <label className="font-bold text-slate-700 block mb-1 flex items-center gap-1.5">
               <MapPin className="w-3.5 h-3.5 text-slate-500" /> Phạm Vi Chi Nhánh / Cửa Hàng:
             </label>
-            <div className="flex flex-wrap gap-2">
-              {[
-                { code: 'HCM-Q3', name: 'Chi Nhánh Quận 3' },
-                { code: 'HCM-TB', name: 'Chi Nhánh Tân Bình' },
-                { code: 'HN-CG', name: 'Chi Nhánh Cầu Giấy' },
-              ].map((store) => (
-                <button
-                  key={store.code}
-                  type="button"
-                  onClick={() => toggleStore(store.code)}
-                  className={`px-2.5 py-1 rounded-md text-[11px] border font-medium transition ${
-                    selectedStores.includes(store.code)
-                      ? 'bg-blue-50 border-blue-400 text-blue-700'
-                      : 'border-slate-200 text-slate-600 hover:bg-slate-50'
-                  }`}
-                >
-                  {selectedStores.includes(store.code) ? '✓ ' : '+ '}
-                  {store.name} ({store.code})
-                </button>
-              ))}
-            </div>
+            <p className="text-[11px] text-slate-500 mb-1.5">
+              Nhập mã chi nhánh ngăn cách bởi dấu phẩy (VD: store-01, store-02) hoặc để trống nếu
+              không gán phạm vi.
+            </p>
+            <input
+              type="text"
+              placeholder="VD: store-01, store-02 (để trống: không gán phạm vi)"
+              value={storeScopeInput}
+              onChange={(e) => setStoreScopeInput(e.target.value)}
+              className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs outline-none focus:border-blue-500 bg-white"
+            />
           </div>
 
           <div>
-            <label className="font-bold text-slate-700 block mb-1.5 flex items-center gap-1.5">
+            <label className="font-bold text-slate-700 block mb-1 flex items-center gap-1.5">
               <Warehouse className="w-3.5 h-3.5 text-slate-500" /> Phạm Vi Kho Hàng:
             </label>
-            <div className="flex flex-wrap gap-2">
-              {[
-                { code: 'KHO-TONG', name: 'Kho Tổng Miền Nam' },
-                { code: 'KHO-TB', name: 'Kho Vận Tân Bình' },
-                { code: 'KHO-CG', name: 'Kho Vận Cầu Giấy' },
-              ].map((wh) => (
-                <button
-                  key={wh.code}
-                  type="button"
-                  onClick={() => toggleWarehouse(wh.code)}
-                  className={`px-2.5 py-1 rounded-md text-[11px] border font-medium transition ${
-                    selectedWarehouses.includes(wh.code)
-                      ? 'bg-indigo-50 border-indigo-400 text-indigo-700'
-                      : 'border-slate-200 text-slate-600 hover:bg-slate-50'
-                  }`}
-                >
-                  {selectedWarehouses.includes(wh.code) ? '✓ ' : '+ '}
-                  {wh.name} ({wh.code})
-                </button>
-              ))}
-            </div>
+            <p className="text-[11px] text-slate-500 mb-1.5">
+              Nhập mã kho hàng ngăn cách bởi dấu phẩy (VD: wh-north, wh-south) hoặc để trống nếu
+              không gán phạm vi.
+            </p>
+            <input
+              type="text"
+              placeholder="VD: wh-north, wh-south (để trống: không gán phạm vi)"
+              value={whScopeInput}
+              onChange={(e) => setWhScopeInput(e.target.value)}
+              className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs outline-none focus:border-blue-500 bg-white"
+            />
           </div>
 
           <div className="pt-3 border-t border-slate-100 flex justify-end gap-2.5">

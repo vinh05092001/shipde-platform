@@ -31,7 +31,8 @@ import {
   Discrepancy,
 } from '../types/domain';
 import { ERROR_CATALOG, ShipDeAppError } from '../types/error-codes';
-import { formatStoreScopeLabel } from '../components/UserManagementTab';
+import { formatStoreScopeLabel, INVITE_SUCCESS_TOAST } from '../components/UserManagementTab';
+import { parseScopeInput } from '../components/forms/InviteUserModal';
 
 interface TestResult {
   group: string;
@@ -1544,6 +1545,25 @@ export async function runComprehensiveRulesAudit(): Promise<{
       'Gán đúng danh sách chi nhánh khi store_scopes có phần tử',
       formatStoreScopeLabel(['HCM-Q3', 'HN-CG']) === 'HCM-Q3, HN-CG',
       'Hiển thị chính xác danh sách chi nhánh được gán.'
+    );
+
+    assertTest(
+      'User Management Scope',
+      'FEAT-USR-01-SCOPE-03',
+      'parseScopeInput tách chuỗi phạm vi kho và chi nhánh chính xác',
+      JSON.stringify(parseScopeInput('wh-north, wh-south')) ===
+        JSON.stringify(['wh-north', 'wh-south']) &&
+        JSON.stringify(parseScopeInput('')) === JSON.stringify([]) &&
+        JSON.stringify(parseScopeInput('   ')) === JSON.stringify([]),
+      'Chuyển đổi input chuỗi thành mảng scope không hardcode.'
+    );
+
+    assertTest(
+      'User Management Scope',
+      'FEAT-USR-01-UI-01',
+      'Toast thành công phải khớp UI contract "Đã gửi lời mời thành công"',
+      INVITE_SUCCESS_TOAST === 'Đã gửi lời mời thành công',
+      'Khớp 100% UI contract quy định tại FEAT-USR-01.md.'
     );
   }
 
