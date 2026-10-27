@@ -112,13 +112,13 @@ BEGIN
     END IF;
 END $$;
 
--- AddForeignKey (non-deferred RESTRICT so every referencing user blocks delete, including other merchants)
+-- AddForeignKey (DEFERRABLE INITIALLY DEFERRED so tenant cascade and role delete both have one defined outcome)
 DO $$
 BEGIN
     IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'users_custom_role_id_fkey') THEN
         ALTER TABLE "users" DROP CONSTRAINT "users_custom_role_id_fkey";
     END IF;
-    ALTER TABLE "users" ADD CONSTRAINT "users_custom_role_id_fkey" FOREIGN KEY ("custom_role_id") REFERENCES "roles"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+    ALTER TABLE "users" ADD CONSTRAINT "users_custom_role_id_fkey" FOREIGN KEY ("custom_role_id") REFERENCES "roles"("id") ON DELETE NO ACTION ON UPDATE CASCADE DEFERRABLE INITIALLY DEFERRED;
 END $$;
 
 -- Same-merchant constraint trigger (BR-RBAC-04 / database ownership)

@@ -2174,4 +2174,30 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
       }
     );
   });
+
+  // Finding 1 (Round 8): BR-RBAC-04 / Database Ownership: users_custom_role_id_fkey DEFERRABLE INITIALLY DEFERRED
+  test('Finding 1 / Round 8 / BR-RBAC-04: users.custom_role_id constraint configuration supports deferrable evaluation for tenant cascade', async () => {
+    // Read schema.prisma to prove relation is configured as NoAction for deferred foreign key
+    const fs = await import('fs');
+    const path = await import('path');
+    const schemaPath = path.resolve(__dirname, '../../../../prisma/schema.prisma');
+    const schemaContent = fs.readFileSync(schemaPath, 'utf8');
+    assert.match(
+      schemaContent,
+      /custom_role\s+Role\?\s+@relation\(fields:\s*\[custom_role_id\],\s*references:\s*\[id\],\s*onDelete:\s*NoAction\)/,
+      'Prisma schema must configure custom_role with onDelete: NoAction to permit deferred constraint'
+    );
+
+    // Read migration.sql to prove constraint is defined as DEFERRABLE INITIALLY DEFERRED
+    const migrationPath = path.resolve(
+      __dirname,
+      '../../../../prisma/migrations/20261027000000_feat_rbac_01_roles_permissions/migration.sql'
+    );
+    const migrationContent = fs.readFileSync(migrationPath, 'utf8');
+    assert.match(
+      migrationContent,
+      /FOREIGN KEY \("custom_role_id"\) REFERENCES "roles"\("id"\) ON DELETE NO ACTION ON UPDATE CASCADE DEFERRABLE INITIALLY DEFERRED/,
+      'Migration must create users_custom_role_id_fkey as DEFERRABLE INITIALLY DEFERRED'
+    );
+  });
 });
