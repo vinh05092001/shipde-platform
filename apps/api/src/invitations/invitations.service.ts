@@ -52,18 +52,50 @@ export class InvitationsService {
     return createHash('sha256').update(rawToken).digest('hex');
   }
 
+  private async resolveActorUser(actor: {
+    userId: string;
+    merchantId: string;
+    role?: string;
+    store_scopes?: string[];
+    warehouse_scopes?: string[];
+  }): Promise<{
+    id: string;
+    role: RoleEnum | string;
+    store_scopes: string[];
+    warehouse_scopes: string[];
+  } | null> {
+    if (actor.userId) {
+      const user = await this.prisma.user.findFirst({
+        where: { id: actor.userId, merchant_id: actor.merchantId },
+        select: { id: true, role: true, store_scopes: true, warehouse_scopes: true, status: true },
+      });
+      if (user && user.role) {
+        return {
+          id: user.id,
+          role: user.role,
+          store_scopes: user.store_scopes || [],
+          warehouse_scopes: user.warehouse_scopes || [],
+        };
+      }
+    }
+    if (actor.role) {
+      return {
+        id: actor.userId || 'mock-actor-id',
+        role: actor.role,
+        store_scopes: actor.store_scopes || [],
+        warehouse_scopes: actor.warehouse_scopes || [],
+      };
+    }
+    return null;
+  }
+
   private async resolveActorRole(actor: {
     userId: string;
     merchantId: string;
     role?: string;
   }): Promise<RoleEnum | string | undefined> {
-    if (actor.role) return actor.role;
-    if (!actor.userId) return undefined;
-    const user = await this.prisma.user.findFirst({
-      where: { id: actor.userId, merchant_id: actor.merchantId },
-      select: { role: true },
-    });
-    return user?.role;
+    const actorUser = await this.resolveActorUser(actor);
+    return actorUser?.role;
   }
 
   /**
@@ -134,9 +166,17 @@ export class InvitationsService {
     }
 
     // 2. Authorization: Caller must have "Manage users/roles" permission (AC-USR-01-04)
-    const actorRole = await this.resolveActorRole(actor);
-    const isOwner = actorRole === RoleEnum.OWNER || actorRole === 'OWNER';
-    const isOps = actorRole === RoleEnum.OPS_CSKH || actorRole === 'OPS_CSKH';
+    const actorUser = await this.resolveActorUser(actor);
+    if (!actorUser) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Bạn không có quyền quản lý người dùng và vai trò',
+        false
+      );
+    }
+    const isOwner = actorUser.role === RoleEnum.OWNER || actorUser.role === 'OWNER';
+    const isOps = actorUser.role === RoleEnum.OPS_CSKH || actorUser.role === 'OPS_CSKH';
     if (!isOwner && !isOps) {
       throw new CanonicalApiException(
         HttpStatus.FORBIDDEN,
@@ -147,13 +187,57 @@ export class InvitationsService {
     }
 
     // 3. Privilege Ceiling (BR-INV-01, AC-USR-01-03)
-    if (!isOwner && dto.role === RoleEnum.OWNER) {
-      throw new CanonicalApiException(
-        HttpStatus.FORBIDDEN,
-        'FORBIDDEN',
-        'Vượt quá hạn mức phân quyền: Bạn không có quyền mời người dùng với vai trò Chủ cửa hàng (OWNER)',
-        false
-      );
+    if (!isOwner) {
+      if (dto.role === RoleEnum.OWNER) {
+        throw new CanonicalApiException(
+          HttpStatus.FORBIDDEN,
+          'FORBIDDEN',
+          'Vượt quá hạn mức phân quyền: Bạn không có quyền mời người dùng với vai trò Chủ cửa hàng (OWNER)',
+          false
+        );
+      }
+
+      // Non-owner cannot grant roles they do not hold (e.g. OPS_CSKH cannot invite ACCOUNTANT or WAREHOUSE)
+      if (dto.role !== actorUser.role) {
+        throw new CanonicalApiException(
+          HttpStatus.FORBIDDEN,
+          'FORBIDDEN',
+          `Vượt quá hạn mức phân quyền: Bạn không thể phân quyền vai trò ${dto.role} vượt quá quyền hạn của mình`,
+          false
+        );
+      }
+
+      // Non-owner cannot grant store scopes outside their own scope
+      if (dto.store_scopes && dto.store_scopes.length > 0) {
+        const actorStores = new Set(actorUser.store_scopes);
+        if (!actorStores.has('*')) {
+          const unauthorizedStores = dto.store_scopes.filter((s) => !actorStores.has(s));
+          if (unauthorizedStores.length > 0) {
+            throw new CanonicalApiException(
+              HttpStatus.FORBIDDEN,
+              'FORBIDDEN',
+              `Vượt quá hạn mức phân quyền: Chi nhánh không thuộc phạm vi quản lý (${unauthorizedStores.join(', ')})`,
+              false
+            );
+          }
+        }
+      }
+
+      // Non-owner cannot grant warehouse scopes outside their own scope
+      if (dto.warehouse_scopes && dto.warehouse_scopes.length > 0) {
+        const actorWarehouses = new Set(actorUser.warehouse_scopes);
+        if (!actorWarehouses.has('*')) {
+          const unauthorizedWarehouses = dto.warehouse_scopes.filter((w) => !actorWarehouses.has(w));
+          if (unauthorizedWarehouses.length > 0) {
+            throw new CanonicalApiException(
+              HttpStatus.FORBIDDEN,
+              'FORBIDDEN',
+              `Vượt quá hạn mức phân quyền: Kho hàng không thuộc phạm vi quản lý (${unauthorizedWarehouses.join(', ')})`,
+              false
+            );
+          }
+        }
+      }
     }
 
     // 4. Duplicate checks (BR-INV-08)

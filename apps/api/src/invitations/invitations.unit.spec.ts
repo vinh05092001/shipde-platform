@@ -187,7 +187,7 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
     });
   });
 
-  // AC-USR-01-03: Non-owner manager attempts to invite a user with OWNER role
+  // AC-USR-01-03: Non-owner manager attempts to invite a user with OWNER role or role/scopes they do not hold
   describe('AC-USR-01-03: Privilege Ceiling Exceeded', () => {
     it('rejects non-owner inviting OWNER with 403 FORBIDDEN', async () => {
       const actor = { userId: OPS_USER_ID, merchantId: MERCHANT_ID, role: RoleEnum.OPS_CSKH };
@@ -211,6 +211,146 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
           return true;
         }
       );
+    });
+
+    it('rejects OPS_CSKH inviting ACCOUNTANT with 403 FORBIDDEN', async () => {
+      const actor = { userId: OPS_USER_ID, merchantId: MERCHANT_ID, role: RoleEnum.OPS_CSKH };
+
+      await assert.rejects(
+        async () => {
+          await service.createInvitation(
+            {
+              email: 'accountant@shipde.vn',
+              role: RoleEnum.ACCOUNTANT,
+            },
+            actor,
+            '127.0.0.1',
+            'test-corr-03b'
+          );
+        },
+        (err: any) => {
+          assert.ok(err instanceof CanonicalApiException);
+          assert.strictEqual(err.getStatus(), HttpStatus.FORBIDDEN);
+          assert.strictEqual(err.code, 'FORBIDDEN');
+          const response = err.getResponse() as any;
+          assert.ok(response?.error?.message?.includes('vai trò ACCOUNTANT'));
+          return true;
+        }
+      );
+    });
+
+    it('rejects OPS_CSKH inviting WAREHOUSE with 403 FORBIDDEN', async () => {
+      const actor = { userId: OPS_USER_ID, merchantId: MERCHANT_ID, role: RoleEnum.OPS_CSKH };
+
+      await assert.rejects(
+        async () => {
+          await service.createInvitation(
+            {
+              email: 'warehouse@shipde.vn',
+              role: RoleEnum.WAREHOUSE,
+            },
+            actor,
+            '127.0.0.1',
+            'test-corr-03c'
+          );
+        },
+        (err: any) => {
+          assert.ok(err instanceof CanonicalApiException);
+          assert.strictEqual(err.getStatus(), HttpStatus.FORBIDDEN);
+          assert.strictEqual(err.code, 'FORBIDDEN');
+          return true;
+        }
+      );
+    });
+
+    it('rejects OPS_CSKH assigning warehouse scopes outside actor live scopes with 403 FORBIDDEN', async () => {
+      const actor = {
+        userId: OPS_USER_ID,
+        merchantId: MERCHANT_ID,
+        role: RoleEnum.OPS_CSKH,
+        warehouse_scopes: ['WH-01'],
+      };
+
+      await assert.rejects(
+        async () => {
+          await service.createInvitation(
+            {
+              email: 'ops2@shipde.vn',
+              role: RoleEnum.OPS_CSKH,
+              warehouse_scopes: ['WH-01', 'WH-UNAUTHORIZED'],
+            },
+            actor,
+            '127.0.0.1',
+            'test-corr-03d'
+          );
+        },
+        (err: any) => {
+          assert.ok(err instanceof CanonicalApiException);
+          assert.strictEqual(err.getStatus(), HttpStatus.FORBIDDEN);
+          assert.strictEqual(err.code, 'FORBIDDEN');
+          const response = err.getResponse() as any;
+          assert.ok(response?.error?.message?.includes('Kho hàng không thuộc phạm vi quản lý'));
+          return true;
+        }
+      );
+    });
+
+    it('rejects OPS_CSKH assigning store scopes outside actor live scopes with 403 FORBIDDEN', async () => {
+      const actor = {
+        userId: OPS_USER_ID,
+        merchantId: MERCHANT_ID,
+        role: RoleEnum.OPS_CSKH,
+        store_scopes: ['STORE-01'],
+      };
+
+      await assert.rejects(
+        async () => {
+          await service.createInvitation(
+            {
+              email: 'ops3@shipde.vn',
+              role: RoleEnum.OPS_CSKH,
+              store_scopes: ['STORE-01', 'STORE-UNAUTHORIZED'],
+            },
+            actor,
+            '127.0.0.1',
+            'test-corr-03e'
+          );
+        },
+        (err: any) => {
+          assert.ok(err instanceof CanonicalApiException);
+          assert.strictEqual(err.getStatus(), HttpStatus.FORBIDDEN);
+          assert.strictEqual(err.code, 'FORBIDDEN');
+          const response = err.getResponse() as any;
+          assert.ok(response?.error?.message?.includes('Chi nhánh không thuộc phạm vi quản lý'));
+          return true;
+        }
+      );
+    });
+
+    it('allows OPS_CSKH inviting OPS_CSKH within live store and warehouse scopes', async () => {
+      const actor = {
+        userId: OPS_USER_ID,
+        merchantId: MERCHANT_ID,
+        role: RoleEnum.OPS_CSKH,
+        store_scopes: ['STORE-01'],
+        warehouse_scopes: ['WH-01'],
+      };
+
+      const res = await service.createInvitation(
+        {
+          email: 'ops_allowed@shipde.vn',
+          role: RoleEnum.OPS_CSKH,
+          store_scopes: ['STORE-01'],
+          warehouse_scopes: ['WH-01'],
+        },
+        actor,
+        '127.0.0.1',
+        'test-corr-03f'
+      );
+
+      assert.strictEqual(res.data.role, RoleEnum.OPS_CSKH);
+      assert.deepStrictEqual(res.data.store_scopes, ['STORE-01']);
+      assert.deepStrictEqual(res.data.warehouse_scopes, ['WH-01']);
     });
   });
 
