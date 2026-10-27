@@ -1,10 +1,27 @@
 import { Injectable, Optional, Inject } from '@nestjs/common';
 import { RedisService } from '../redis/redis.service';
 
+/**
+ * Exact slot consumed by an atomic consume call. Refunds must target this slot only so a
+ * concurrent request's slot is never removed (FEAT-USR-01 SECURITY-NFR invitation rate limit).
+ */
+export interface AttemptReservation {
+  key: string;
+  member: string;
+  timestamp: number;
+  backend: 'redis' | 'memory';
+}
+
+/** Slots consumed by one invitation dispatch quota check; refunded at most once. */
+export interface InvitationDispatchReservation {
+  attempts: AttemptReservation[];
+}
+
 export interface RateLimitResult {
   allowed: boolean;
   retryAfterSeconds?: number;
   reason?: string;
+  reservation?: InvitationDispatchReservation;
 }
 
 @Injectable()
@@ -536,6 +553,8 @@ export class RateLimitService {
         reason: 'Quá nhiều yêu cầu gửi lời mời từ địa chỉ IP này. Vui lòng thử lại sau.',
       };
     }
+    const attempts: AttemptReservation[] = [];
+    if (ipConsume.reservation) attempts.push(ipConsume.reservation);
 
     // 2. Atomic consume tenant-scoped recipient limit (5/hour per recipient in merchant)
     if (identifier) {
@@ -544,8 +563,8 @@ export class RateLimitService {
       const recipientKey = `ratelimit:invite:dispatch:${tenantPrefix}recipient:${cleanId}`;
       const recipientConsume = await this.consumeAttemptKey(recipientKey, 5, windowSeconds);
       if (!recipientConsume.allowed) {
-        // Revert only the IP member just added if recipient quota was exceeded (Finding 4)
-        await this.revertAttemptKey(ipKey, ipConsume.member, ipConsume.timestamp);
+        // Revert only the IP slot just added if recipient quota was exceeded (Finding 4)
+        await this.revertInvitationDispatchAttempt({ attempts });
         return {
           allowed: false,
           retryAfterSeconds: recipientConsume.retryAfterSeconds,
@@ -553,9 +572,10 @@ export class RateLimitService {
             'Đã vượt quá số lần gửi lời mời cho người dùng này trong 1 giờ. Vui lòng thử lại sau.',
         };
       }
+      if (recipientConsume.reservation) attempts.push(recipientConsume.reservation);
     }
 
-    return { allowed: true };
+    return { allowed: true, reservation: { attempts } };
   }
 
   async recordInvitationDispatchAttempt(
@@ -566,18 +586,18 @@ export class RateLimitService {
     // No-op to avoid double counting since checkInvitationDispatchLimit atomically consumes quota upfront
   }
 
+  /**
+   * Refund exactly the slots captured by checkInvitationDispatchLimit (Round 6 Finding 2).
+   * Never removes another request's slot; a reservation is refunded at most once.
+   */
   async revertInvitationDispatchAttempt(
-    ip: string,
-    identifier?: string,
-    merchantId?: string
+    reservation?: InvitationDispatchReservation
   ): Promise<void> {
-    const ipKey = `ratelimit:invite:dispatch:ip:${ip}`;
-    await this.revertAttemptKey(ipKey);
-    if (identifier) {
-      const cleanId = identifier.toLowerCase().trim();
-      const tenantPrefix = merchantId ? `merchant:${merchantId}:` : '';
-      const recipientKey = `ratelimit:invite:dispatch:${tenantPrefix}recipient:${cleanId}`;
-      await this.revertAttemptKey(recipientKey);
+    if (!reservation) return;
+    // Detach slots before awaiting so a concurrent/double refund cannot remove them twice
+    const attempts = reservation.attempts.splice(0, reservation.attempts.length);
+    for (const attempt of attempts) {
+      await this.revertAttemptKey(attempt.key, attempt.member, attempt.timestamp, attempt.backend);
     }
   }
 
@@ -591,6 +611,7 @@ export class RateLimitService {
     count: number;
     member?: string;
     timestamp?: number;
+    reservation?: AttemptReservation;
   }> {
     const now = Date.now();
     const windowMs = windowSeconds * 1000;
@@ -634,7 +655,14 @@ export class RateLimitService {
           const count = res[1];
           const earliest = Number(res[2]);
           const retryAfter = Math.max(1, Math.ceil((earliest + windowMs - now) / 1000));
-          return { allowed, retryAfterSeconds: retryAfter, count, member, timestamp: now };
+          return {
+            allowed,
+            retryAfterSeconds: retryAfter,
+            count,
+            member,
+            timestamp: now,
+            reservation: allowed ? { key, member, timestamp: now, backend: 'redis' } : undefined,
+          };
         }
       } catch {
         // Fallback to in-memory store
@@ -652,31 +680,44 @@ export class RateLimitService {
     }
     valid.push(now);
     this.memoryStore.set(key, valid);
-    return { allowed: true, count: valid.length, member, timestamp: now };
+    return {
+      allowed: true,
+      count: valid.length,
+      member,
+      timestamp: now,
+      reservation: { key, member, timestamp: now, backend: 'memory' },
+    };
   }
 
-  private async revertAttemptKey(key: string, member?: string, timestamp?: number): Promise<void> {
-    const existing = this.memoryStore.get(key);
-    if (existing && existing.length > 0) {
-      const idx = timestamp !== undefined ? existing.lastIndexOf(timestamp) : existing.length - 1;
-      if (idx !== -1) {
+  /**
+   * Remove exactly one previously consumed slot. Without a captured member/timestamp nothing is
+   * removed: refunding "the latest" slot could drop a concurrent request's slot (Round 6 Finding 2).
+   */
+  private async revertAttemptKey(
+    key: string,
+    member?: string,
+    timestamp?: number,
+    backend?: 'redis' | 'memory'
+  ): Promise<void> {
+    if (!member && timestamp === undefined) return;
+    if (backend !== 'redis' && timestamp !== undefined) {
+      // In-memory slots are stored as timestamps; equal timestamps are interchangeable slots
+      const existing = this.memoryStore.get(key);
+      const idx = existing ? existing.lastIndexOf(timestamp) : -1;
+      if (existing && idx !== -1) {
         existing.splice(idx, 1);
-      }
-      if (existing.length === 0) {
-        this.memoryStore.delete(key);
-      } else {
-        this.memoryStore.set(key, existing);
+        if (existing.length === 0) {
+          this.memoryStore.delete(key);
+        } else {
+          this.memoryStore.set(key, existing);
+        }
       }
     }
-    if (this.redisService) {
+    if (backend !== 'memory' && member && this.redisService) {
       try {
         const client = this.redisService.getClient();
         if (client.status === 'ready') {
-          if (member) {
-            await client.zrem(key, member);
-          } else {
-            await client.zremrangebyrank(key, -1, -1);
-          }
+          await client.zrem(key, member);
         }
       } catch {
         // Fallback ignore
@@ -728,7 +769,12 @@ export class RateLimitService {
       const tokenConsume = await this.consumeAttemptKey(tokenKey, 5, windowSeconds);
       if (!tokenConsume.allowed) {
         // Revert only the IP attempt just added (Finding 4)
-        await this.revertAttemptKey(ipKey, ipConsume.member, ipConsume.timestamp);
+        await this.revertAttemptKey(
+          ipKey,
+          ipConsume.member,
+          ipConsume.timestamp,
+          ipConsume.reservation?.backend
+        );
         return {
           allowed: false,
           retryAfterSeconds: tokenConsume.retryAfterSeconds,

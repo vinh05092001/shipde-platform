@@ -8,6 +8,7 @@ import { VERIFICATION_ADAPTER } from '../auth/auth.tokens';
 import type { IVerificationDeliveryAdapter } from '@shipde/contracts';
 import { SendInvitationRequest, AcceptInvitationRequest, InvitationItem } from '@shipde/contracts';
 import { RateLimitService } from '../auth/rate-limit.service';
+import type { InvitationDispatchReservation } from '../auth/rate-limit.service';
 import { resolveFrontendBaseUrl } from './invitation-url.util';
 
 /**
@@ -75,6 +76,16 @@ export class InvitationsService {
 
   private hashToken(rawToken: string): string {
     return createHash('sha256').update(rawToken).digest('hex');
+  }
+
+  /**
+   * Refund exactly the dispatch quota slots consumed by this request when no invitation
+   * dispatch was committed (Round 6 Findings 2 and 4).
+   */
+  private async refundDispatchQuota(reservation?: InvitationDispatchReservation): Promise<void> {
+    if (!reservation || !this.rateLimitService) return;
+    if (typeof this.rateLimitService.revertInvitationDispatchAttempt !== 'function') return;
+    await this.rateLimitService.revertInvitationDispatchAttempt(reservation);
   }
 
   private async resolveActorUser(actor: {
@@ -444,13 +455,8 @@ export class InvitationsService {
     const invitationUrl = `${safeBaseUrl}/invite/accept?token=${rawToken}`;
 
     const compensateFailedCreate = async (reason: string) => {
-      if (this.rateLimitService) {
-        await this.rateLimitService.revertInvitationDispatchAttempt(
-          clientIp,
-          recipient,
-          actor.merchantId
-        );
-      }
+      await this.refundDispatchQuota(rateLimit.reservation);
+
       // Conditionally retire row only if still unconsumed pending token
       // Never delete audit rows to compensate; record a compensating audit event instead (Finding 1)
       await this.prisma.$transaction(async (tx) => {
@@ -829,13 +835,8 @@ export class InvitationsService {
     const invitationUrl = `${safeBaseUrl}/invite/accept?token=${rawToken}`;
 
     const compensateFailedResend = async (reason: string) => {
-      if (this.rateLimitService) {
-        await this.rateLimitService.revertInvitationDispatchAttempt(
-          clientIp,
-          recipient,
-          actor.merchantId
-        );
-      }
+      await this.refundDispatchQuota(rateLimit.reservation);
+
       // Compensate: restore prior token hash, status, expiry conditionally using updateMany predicates
       // Never delete audit history; record compensating audit event instead (Finding 2)
       await this.prisma.$transaction(async (tx) => {

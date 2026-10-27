@@ -2600,4 +2600,84 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
       assert.ok(ipBlocked.reason?.includes('địa chỉ IP'));
     });
   });
+
+  // Round 6 regressions
+  describe('Round 6', () => {
+    const makeFakeRedis = () => {
+      const sets = new Map<string, Map<string, number>>();
+      const calls = { zremrangebyrank: 0, zrem: [] as string[] };
+      const client = {
+        status: 'ready',
+        eval: async (
+          _lua: string,
+          _n: number,
+          key: string,
+          now: string,
+          clearBefore: string,
+          limit: string,
+          _w: string,
+          member: string
+        ) => {
+          const set = sets.get(key) || new Map<string, number>();
+          for (const [m, s] of set) if (s <= Number(clearBefore)) set.delete(m);
+          if (set.size >= Number(limit)) {
+            const earliest = Math.min(...set.values());
+            sets.set(key, set);
+            return [0, set.size, earliest];
+          }
+          set.set(member, Number(now));
+          sets.set(key, set);
+          return [1, set.size, Number(now)];
+        },
+        zrem: async (key: string, member: string) => {
+          calls.zrem.push(member);
+          sets.get(key)?.delete(member);
+          return 1;
+        },
+        zremrangebyrank: async () => {
+          calls.zremrangebyrank++;
+          return 1;
+        },
+      };
+      return { sets, calls, redisService: { getClient: () => client } as any };
+    };
+
+    it('Finding 2: delivery-failure refund removes only the consumed member, never a concurrent slot', async () => {
+      const { sets, calls, redisService } = makeFakeRedis();
+      const rl = new RateLimitService(redisService);
+      const ipKey = 'ratelimit:invite:dispatch:ip:9.9.9.9';
+
+      const a = await rl.checkInvitationDispatchLimit('9.9.9.9', 'r6@shipde.vn', MERCHANT_ID);
+      const b = await rl.checkInvitationDispatchLimit('9.9.9.9', 'r6@shipde.vn', MERCHANT_ID);
+      assert.strictEqual(a.allowed, true);
+      assert.strictEqual(b.allowed, true);
+      const aMembers = a.reservation!.attempts.map((x) => x.member);
+      const bMembers = b.reservation!.attempts.map((x) => x.member);
+      assert.strictEqual(aMembers.length, 2, 'IP and recipient slots captured');
+
+      // Request A fails delivery and refunds; request B's concurrent slot must stay counted
+      await rl.revertInvitationDispatchAttempt(a.reservation);
+      await rl.revertInvitationDispatchAttempt(a.reservation); // double refund is a no-op
+      assert.strictEqual(calls.zremrangebyrank, 0, 'never drops an arbitrary rank');
+      assert.deepStrictEqual(calls.zrem.sort(), [...aMembers].sort());
+      const ipSet = sets.get(ipKey)!;
+      assert.strictEqual(ipSet.size, 1);
+      assert.ok(ipSet.has(bMembers[0]!), 'concurrent successful dispatch remains counted');
+    });
+
+    it('Finding 2: in-memory refund without a reservation removes nothing', async () => {
+      const rl = new RateLimitService();
+      for (let i = 0; i < 5; i++) {
+        const r = await rl.checkInvitationDispatchLimit('9.9.9.8', 'cap@shipde.vn', MERCHANT_ID);
+        assert.strictEqual(r.allowed, true);
+      }
+      await rl.revertInvitationDispatchAttempt(undefined);
+      const blocked = await rl.checkInvitationDispatchLimit(
+        '9.9.9.8',
+        'cap@shipde.vn',
+        MERCHANT_ID
+      );
+      assert.strictEqual(blocked.allowed, false, 'recipient cap 5/h still enforced');
+    });
+  });
 });
