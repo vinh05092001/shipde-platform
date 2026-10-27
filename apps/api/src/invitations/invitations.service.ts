@@ -32,8 +32,14 @@ export interface CanonicalIdentity {
   email?: string;
   phone?: string;
   recipient?: string;
-  buildUserOrConditions: () => Array<{ email?: { equals: string; mode: 'insensitive' }; phone?: string }>;
-  buildInvitationOrConditions: () => Array<{ email?: { equals: string; mode: 'insensitive' }; phone?: string }>;
+  buildUserOrConditions: () => Array<{
+    email?: { equals: string; mode: 'insensitive' };
+    phone?: string;
+  }>;
+  buildInvitationOrConditions: () => Array<{
+    email?: { equals: string; mode: 'insensitive' };
+    phone?: string;
+  }>;
 }
 
 /**
@@ -1529,7 +1535,13 @@ export class InvitationsService {
         'Mật khẩu phải có độ dài từ 8 đến 128 ký tự',
         false,
         undefined,
-        [{ field: 'password', code: 'OUT_OF_RANGE', message: 'Mật khẩu phải có độ dài từ 8 đến 128 ký tự' }]
+        [
+          {
+            field: 'password',
+            code: 'OUT_OF_RANGE',
+            message: 'Mật khẩu phải có độ dài từ 8 đến 128 ký tự',
+          },
+        ]
       );
     }
 
@@ -1643,7 +1655,10 @@ export class InvitationsService {
       }
 
       // Check existing user conflict in merchant using shared canonical identity helper (Round 8 Finding 2 / BR-INV-08 / AC-USR-01-05)
-      const identity = resolveCanonicalIdentity({ email: invitation.email, phone: invitation.phone });
+      const identity = resolveCanonicalIdentity({
+        email: invitation.email,
+        phone: invitation.phone,
+      });
       const duplicateUser = await tx.user.findFirst({
         where: {
           merchant_id: invitation.merchant_id,

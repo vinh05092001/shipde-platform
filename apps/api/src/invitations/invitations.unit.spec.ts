@@ -3461,7 +3461,9 @@ CREATE INDEX "some_other_idx" ON "invitations"("created_at");
       assert.strictEqual(id1.email, 'test.user@domain.com');
       assert.strictEqual(id1.recipient, 'test.user@domain.com');
       const or1 = id1.buildUserOrConditions();
-      assert.deepStrictEqual(or1, [{ email: { equals: 'test.user@domain.com', mode: 'insensitive' } }]);
+      assert.deepStrictEqual(or1, [
+        { email: { equals: 'test.user@domain.com', mode: 'insensitive' } },
+      ]);
 
       const id2 = resolveCanonicalIdentity({ phone: '+84901234567' });
       assert.strictEqual(id2.phone, '0901234567');
