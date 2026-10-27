@@ -1026,6 +1026,10 @@ export interface components {
         code: string;
         message: string;
         retryable: boolean;
+        /**
+         * @description Next action instructed for the client (e.g. 'LOGIN' on 401 SESSION_INVALID under AC-SESS-06)
+         * @example LOGIN
+         */
         next_action?: string;
         fields?: {
           field?: string;
@@ -1198,6 +1202,36 @@ export interface components {
   responses: {
     /** @description Canonical error */
     Error: {
+      headers: {
+        [name: string]: unknown;
+      };
+      content: {
+        'application/json': components['schemas']['ErrorResponse'];
+      };
+    };
+    /** @description Unauthenticated request — missing or empty authorization header (UNAUTHENTICATED under AC-SESS-19) */
+    Unauthenticated: {
+      headers: {
+        [name: string]: unknown;
+      };
+      content: {
+        /**
+         * @example {
+         *       "error": {
+         *         "code": "UNAUTHENTICATED",
+         *         "message": "Vui lòng đăng nhập để tiếp tục",
+         *         "retryable": false
+         *       },
+         *       "meta": {
+         *         "correlation_id": "123e4567-e89b-12d3-a456-426614174000"
+         *       }
+         *     }
+         */
+        'application/json': components['schemas']['ErrorResponse'];
+      };
+    };
+    /** @description Unauthorized request — missing token (UNAUTHENTICATED under AC-SESS-19) or expired/revoked/invalid session (SESSION_INVALID with next_action LOGIN under AC-SESS-06) */
+    SessionInvalid: {
       headers: {
         [name: string]: unknown;
       };
@@ -1718,7 +1752,7 @@ export interface operations {
           'application/json': components['schemas']['ListSessionsResponse'];
         };
       };
-      401: components['responses']['Error'];
+      401: components['responses']['SessionInvalid'];
     };
   };
   revokeSession: {
@@ -1741,7 +1775,7 @@ export interface operations {
           'application/json': components['schemas']['RevokeSessionResponse'];
         };
       };
-      401: components['responses']['Error'];
+      401: components['responses']['SessionInvalid'];
       /** @description Not owner of session or cross-tenant */
       403: components['responses']['Error'];
       /** @description Session not found */
@@ -1768,7 +1802,7 @@ export interface operations {
           'application/json': components['schemas']['HeartbeatSessionResponse'];
         };
       };
-      401: components['responses']['Error'];
+      401: components['responses']['SessionInvalid'];
       /** @description Session not active or not owned by caller */
       403: components['responses']['Error'];
       /** @description Session not found */
@@ -1797,7 +1831,7 @@ export interface operations {
           'application/json': components['schemas']['RevokeAllSessionsResponse'];
         };
       };
-      401: components['responses']['Error'];
+      401: components['responses']['SessionInvalid'];
     };
   };
   listShops: {

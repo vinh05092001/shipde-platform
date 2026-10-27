@@ -923,20 +923,45 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
-    SessionInvalid:
-      description: Session expired, revoked, or invalid (AC-SESS-06 returns SESSION_INVALID with next_action LOGIN)
+    Unauthenticated:
+      description: Unauthenticated request — missing or empty authorization header (UNAUTHENTICATED under AC-SESS-19)
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
           example:
             error:
-              code: SESSION_INVALID
-              message: Phiên đăng nhập đã hết hạn hoặc bị thu hồi
+              code: UNAUTHENTICATED
+              message: Vui lòng đăng nhập để tiếp tục
               retryable: false
-              next_action: LOGIN
             meta:
               correlation_id: 123e4567-e89b-12d3-a456-426614174000
+    SessionInvalid:
+      description: Unauthorized request — missing token (UNAUTHENTICATED under AC-SESS-19) or expired/revoked/invalid session (SESSION_INVALID with next_action LOGIN under AC-SESS-06)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            unauthenticated:
+              summary: Missing or empty authorization header (AC-SESS-19)
+              value:
+                error:
+                  code: UNAUTHENTICATED
+                  message: Vui lòng đăng nhập để tiếp tục
+                  retryable: false
+                meta:
+                  correlation_id: 123e4567-e89b-12d3-a456-426614174000
+            session_invalid:
+              summary: Session expired, revoked, or token invalid (AC-SESS-06)
+              value:
+                error:
+                  code: SESSION_INVALID
+                  message: Phiên đăng nhập đã hết hạn hoặc không hợp lệ
+                  retryable: false
+                  next_action: LOGIN
+                meta:
+                  correlation_id: 123e4567-e89b-12d3-a456-426614174000
     RateLimited:
       description: Rate limit exceeded (RATE_LIMITED)
       content:
