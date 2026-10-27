@@ -148,9 +148,15 @@ export class SessionService {
       };
     }
 
-    const updated = await this.prisma.$transaction(async (tx) => {
-      const updatedSession = await tx.deviceSession.update({
-        where: { id: sessionId },
+    return await this.prisma.$transaction(async (tx) => {
+      // Concurrency-safe atomic transition: only update if currently ACTIVE
+      const updateResult = await tx.deviceSession.updateMany({
+        where: {
+          id: sessionId,
+          user_id: userId,
+          merchant_id: merchantId,
+          status: SessionStatusEnum.ACTIVE,
+        },
         data: {
           status: SessionStatusEnum.REVOKED,
           is_revoked: true,
@@ -160,28 +166,43 @@ export class SessionService {
         },
       });
 
-      await this.logAudit(
-        {
-          merchantId,
-          userId,
-          actor: userId,
-          action: 'SESSION_REVOKED',
-          resource: `Session:${sessionId}`,
-          details: { reason, device_id: session.device_id },
-          correlationId,
-          ipAddress,
-        },
-        tx
-      );
+      if (updateResult.count > 0) {
+        await this.logAudit(
+          {
+            merchantId,
+            userId,
+            actor: userId,
+            action: 'SESSION_REVOKED',
+            resource: `Session:${sessionId}`,
+            details: { reason, device_id: session.device_id },
+            correlationId,
+            ipAddress,
+          },
+          tx
+        );
 
-      return updatedSession;
+        return {
+          session_id: sessionId,
+          status: SessionStatusEnum.REVOKED,
+          message: 'Phiên đã được thu hồi',
+        };
+      }
+
+      // If count is 0, a concurrent request already transitioned the session.
+      // Fetch latest status to respond idempotently without duplicate audit logs or timestamp mutations.
+      const latest = await tx.deviceSession.findUnique({
+        where: { id: sessionId },
+      });
+
+      return {
+        session_id: sessionId,
+        status: latest?.status ?? SessionStatusEnum.REVOKED,
+        message:
+          latest?.status === SessionStatusEnum.REVOKED
+            ? 'Phiên đã được thu hồi trước đó'
+            : 'Phiên đã hết hạn',
+      };
     });
-
-    return {
-      session_id: updated.id,
-      status: updated.status,
-      message: 'Phiên đã được thu hồi',
-    };
   }
 
   async revokeAll(
@@ -193,26 +214,21 @@ export class SessionService {
     ipAddress?: string
   ) {
     const includeCurrent = dto.include_current === true;
-    const where: Record<string, unknown> = {
-      merchant_id: merchantId,
-      user_id: userId,
-      status: SessionStatusEnum.ACTIVE,
-    };
-
-    if (!includeCurrent && currentSessionId) {
-      where.id = { not: currentSessionId };
-    }
-
-    const activeSessions = await this.prisma.deviceSession.findMany({ where });
-
-    if (activeSessions.length === 0) {
-      return { revoked_count: 0, message: 'Không có phiên nào cần thu hồi' };
-    }
-
     const now = new Date();
-    await this.prisma.$transaction(async (tx) => {
-      await tx.deviceSession.updateMany({
-        where: { id: { in: activeSessions.map((s) => s.id) } },
+
+    return await this.prisma.$transaction(async (tx) => {
+      const where: Record<string, unknown> = {
+        merchant_id: merchantId,
+        user_id: userId,
+        status: SessionStatusEnum.ACTIVE,
+      };
+
+      if (!includeCurrent && currentSessionId) {
+        where.id = { not: currentSessionId };
+      }
+
+      const updateResult = await tx.deviceSession.updateMany({
+        where,
         data: {
           status: SessionStatusEnum.REVOKED,
           is_revoked: true,
@@ -222,6 +238,10 @@ export class SessionService {
         },
       });
 
+      if (updateResult.count === 0) {
+        return { revoked_count: 0, message: 'Không có phiên nào cần thu hồi' };
+      }
+
       await this.logAudit(
         {
           merchantId,
@@ -229,18 +249,18 @@ export class SessionService {
           actor: userId,
           action: 'SESSIONS_REVOKED_ALL',
           resource: `User:${userId}`,
-          details: { revoked_count: activeSessions.length, include_current: includeCurrent },
+          details: { revoked_count: updateResult.count, include_current: includeCurrent },
           correlationId,
           ipAddress,
         },
         tx
       );
-    });
 
-    return {
-      revoked_count: activeSessions.length,
-      message: `Đã thu hồi ${activeSessions.length} phiên`,
-    };
+      return {
+        revoked_count: updateResult.count,
+        message: `Đã thu hồi ${updateResult.count} phiên`,
+      };
+    });
   }
 
   /**
