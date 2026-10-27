@@ -2287,17 +2287,26 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
     );
   });
 
-  // Finding 1 (Round 8): BR-RBAC-04 / Database Ownership: users_custom_role_id_fkey DEFERRABLE INITIALLY DEFERRED
+  // Finding 1 (Round 8 / Round 11): BR-RBAC-04 / Database Ownership: users_custom_role_id_fkey DEFERRABLE INITIALLY DEFERRED
   test('Finding 1 / Round 8 / BR-RBAC-04: users.custom_role_id constraint configuration supports deferrable evaluation for tenant cascade', async () => {
-    // Read schema.prisma to prove relation is configured as NoAction for deferred foreign key
+    // Read schema.prisma to prove custom_role_id is kept as migration source of truth unmanaged by Prisma relation to prevent drop on db push
     const fs = await import('fs');
     const path = await import('path');
     const schemaPath = path.resolve(__dirname, '../../../../prisma/schema.prisma');
     const schemaContent = fs.readFileSync(schemaPath, 'utf8');
     assert.match(
       schemaContent,
-      /custom_role\s+Role\?\s+@relation\(fields:\s*\[custom_role_id\],\s*references:\s*\[id\],\s*onDelete:\s*NoAction\)/,
-      'Prisma schema must configure custom_role with onDelete: NoAction to permit deferred constraint'
+      /custom_role_id\s+String\?\s+@db\.Uuid/,
+      'Prisma schema must define custom_role_id scalar field'
+    );
+    assert.ok(
+      !schemaContent.includes('custom_role           Role?'),
+      'Prisma schema must not model custom_role as an immediate FK relation so db push/diff cannot drop deferrable constraint'
+    );
+    assert.match(
+      schemaContent,
+      /DEFERRABLE INITIALLY DEFERRED/,
+      'Prisma schema must document deferrable constraint as migration source of truth'
     );
 
     // Read migration.sql to prove constraint is defined as DEFERRABLE INITIALLY DEFERRED
