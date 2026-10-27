@@ -75,6 +75,215 @@ function formatDate(iso: string): string {
   }
 }
 
+export async function executeFetchSessions(options: {
+  baseUrl: string;
+  token?: string | null;
+  sessions: SessionItem[];
+  isFetching: boolean;
+  setFetchState: (state: 'loading' | 'error' | 'forbidden' | 'validation' | 'success') => void;
+  setSessions: (sessions: SessionItem[]) => void;
+  setErrorMessage: (msg: string | null) => void;
+  setValidationMessage: (msg: string | null) => void;
+  setActionError: (msg: string | null) => void;
+  setIsFetching: (fetching: boolean) => void;
+}): Promise<{ executed: boolean; locked?: boolean; success?: boolean; error?: string }> {
+  if (options.isFetching) {
+    return { executed: false, locked: true };
+  }
+  if (!options.token) {
+    if (options.sessions.length === 0) {
+      options.setFetchState('forbidden');
+    } else {
+      options.setActionError('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
+    }
+    return { executed: true, success: false, error: 'NO_TOKEN' };
+  }
+
+  try {
+    options.setIsFetching(true);
+    if (options.sessions.length === 0) {
+      options.setFetchState('loading');
+    }
+    options.setErrorMessage(null);
+    options.setValidationMessage(null);
+    options.setActionError(null);
+
+    const res = await fetch(`${options.baseUrl}/api/v1/sessions`, {
+      headers: {
+        Authorization: `Bearer ${options.token}`,
+        Accept: 'application/json',
+      },
+    });
+
+    if (res.status === 401 || res.status === 403) {
+      if (options.sessions.length === 0) {
+        options.setFetchState('forbidden');
+      } else {
+        options.setActionError('Không có quyền truy cập hoặc phiên đã hết hạn (403 FORBIDDEN).');
+      }
+      return { executed: true, success: false, error: 'FORBIDDEN' };
+    }
+
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => null);
+      if (errJson?.error?.code === 'VALIDATION_ERROR') {
+        options.setValidationMessage(errJson.error.message || 'Lỗi kiểm tra dữ liệu');
+        options.setFetchState('validation');
+        return { executed: true, success: false, error: 'VALIDATION_ERROR' };
+      }
+      throw new Error(errJson?.error?.message || 'Không thể tải danh sách phiên đăng nhập');
+    }
+
+    const data = await res.json();
+    options.setSessions(data.data || []);
+    options.setFetchState('success');
+    return { executed: true, success: true };
+  } catch (err: any) {
+    options.setErrorMessage(err?.message || 'Đã xảy ra lỗi khi tải danh sách phiên làm việc.');
+    options.setFetchState('error');
+    return { executed: true, success: false, error: err?.message };
+  } finally {
+    options.setIsFetching(false);
+  }
+}
+
+export async function executeRevokeSession(options: {
+  sessionId: string;
+  baseUrl: string;
+  token?: string | null;
+  revokingId: string | null;
+  revokeAllLoading: boolean;
+  isFetching: boolean;
+  setRevokingId: (id: string | null) => void;
+  setActionError: (msg: string | null) => void;
+  setValidationMessage: (msg: string | null) => void;
+  setSessions: React.Dispatch<React.SetStateAction<SessionItem[]>>;
+  onToast?: (msg: string) => void;
+}): Promise<{ executed: boolean; locked?: boolean; success?: boolean; message?: string }> {
+  if (options.revokingId || options.revokeAllLoading || options.isFetching) {
+    return { executed: false, locked: true };
+  }
+  options.setRevokingId(options.sessionId);
+  options.setActionError(null);
+
+  try {
+    const res = await fetch(`${options.baseUrl}/api/v1/sessions/${options.sessionId}`, {
+      method: 'DELETE',
+      headers: {
+        Authorization: `Bearer ${options.token}`,
+        Accept: 'application/json',
+      },
+    });
+
+    if (res.status === 401 || res.status === 403) {
+      const errMsg = 'Không có quyền thu hồi phiên làm việc này (403 FORBIDDEN).';
+      options.setActionError(errMsg);
+      options.onToast?.('Không có quyền thu hồi phiên làm việc');
+      return { executed: true, success: false, message: errMsg };
+    }
+
+    const resData = await res.json().catch(() => null);
+
+    if (!res.ok) {
+      if (
+        resData?.error?.code === 'VALIDATION_ERROR' ||
+        resData?.error?.code === 'SESSION_NOT_FOUND'
+      ) {
+        options.setValidationMessage(resData?.error?.message || 'Không tìm thấy phiên làm việc');
+      }
+      throw new Error(resData?.error?.message || 'Thu hồi phiên thất bại');
+    }
+
+    options.setSessions((prev) =>
+      prev.map((s) => (s.session_id === options.sessionId ? { ...s, status: 'REVOKED' } : s))
+    );
+    const successMsg = resData?.message || 'Đã thu hồi 1 phiên làm việc';
+    options.onToast?.(successMsg);
+    return { executed: true, success: true, message: successMsg };
+  } catch (err: any) {
+    const errMsg = err?.message || 'Lỗi hệ thống khi thu hồi phiên. Vui lòng thử lại.';
+    options.setActionError(errMsg);
+    options.onToast?.(err?.message || 'Lỗi khi thu hồi phiên');
+    return { executed: true, success: false, message: errMsg };
+  } finally {
+    options.setRevokingId(null);
+  }
+}
+
+export async function executeRevokeAll(options: {
+  baseUrl: string;
+  token?: string | null;
+  includeCurrent: boolean;
+  revokeAllLoading: boolean;
+  revokingId: string | null;
+  isFetching: boolean;
+  setRevokeAllLoading: (loading: boolean) => void;
+  setActionError: (msg: string | null) => void;
+  setSessions: React.Dispatch<React.SetStateAction<SessionItem[]>>;
+  setFetchState: (state: 'loading' | 'error' | 'forbidden' | 'validation' | 'success') => void;
+  setRevokeAllOpen: (open: boolean) => void;
+  onToast?: (msg: string) => void;
+}): Promise<{
+  executed: boolean;
+  locked?: boolean;
+  success?: boolean;
+  revokedCount?: number;
+  message?: string;
+}> {
+  if (options.revokeAllLoading || options.revokingId || options.isFetching) {
+    return { executed: false, locked: true };
+  }
+  options.setRevokeAllLoading(true);
+  options.setActionError(null);
+
+  try {
+    const res = await fetch(`${options.baseUrl}/api/v1/sessions/revoke-all`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${options.token}`,
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({ include_current: options.includeCurrent }),
+    });
+
+    if (res.status === 401 || res.status === 403) {
+      const errMsg = 'Không có quyền thực hiện thao tác này (403 FORBIDDEN).';
+      options.setActionError(errMsg);
+      options.onToast?.('Không có quyền thu hồi tất cả phiên');
+      return { executed: true, success: false, message: errMsg };
+    }
+
+    const resData = await res.json().catch(() => null);
+
+    if (!res.ok) {
+      throw new Error(resData?.error?.message || 'Thu hồi tất cả phiên thất bại');
+    }
+
+    const count = resData?.revoked_count ?? 0;
+    const msg = resData?.message || `Đã thu hồi ${count} phiên làm việc`;
+    options.onToast?.(msg);
+
+    if (options.includeCurrent) {
+      options.setSessions(() => []);
+      options.setFetchState('forbidden');
+    } else {
+      options.setSessions((prev) =>
+        prev.map((s) => (s.is_current ? s : { ...s, status: 'REVOKED' }))
+      );
+    }
+    options.setRevokeAllOpen(false);
+    return { executed: true, success: true, revokedCount: count, message: msg };
+  } catch (err: any) {
+    const errMsg = err?.message || 'Lỗi hệ thống khi thu hồi tất cả phiên. Vui lòng thử lại.';
+    options.setActionError(errMsg);
+    options.onToast?.(err?.message || 'Lỗi khi thu hồi tất cả phiên');
+    return { executed: true, success: false, message: errMsg };
+  } finally {
+    options.setRevokeAllLoading(false);
+  }
+}
+
 export function SessionsTab({
   onToast,
   initialSessions,
@@ -106,156 +315,57 @@ export function SessionsTab({
   const baseUrl = apiUrl || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
   const fetchSessions = useCallback(async () => {
-    if (isFetching) return;
-    if (!token) {
-      if (sessions.length === 0) {
-        setFetchState('forbidden');
-      } else {
-        setActionError('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
-      }
-      return;
-    }
-    try {
-      setIsFetching(true);
-      if (sessions.length === 0) {
-        setFetchState('loading');
-      }
-      setErrorMessage(null);
-      setValidationMessage(null);
-      setActionError(null);
-
-      const res = await fetch(`${baseUrl}/api/v1/sessions`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: 'application/json',
-        },
-      });
-
-      if (res.status === 401 || res.status === 403) {
-        if (sessions.length === 0) {
-          setFetchState('forbidden');
-        } else {
-          setActionError('Không có quyền truy cập hoặc phiên đã hết hạn (403 FORBIDDEN).');
-        }
-        return;
-      }
-
-      if (!res.ok) {
-        const errJson = await res.json().catch(() => null);
-        if (errJson?.error?.code === 'VALIDATION_ERROR') {
-          setValidationMessage(errJson.error.message || 'Lỗi kiểm tra dữ liệu');
-          setFetchState('validation');
-          return;
-        }
-        throw new Error(errJson?.error?.message || 'Không thể tải danh sách phiên đăng nhập');
-      }
-
-      const data = await res.json();
-      setSessions(data.data || []);
-      setFetchState('success');
-    } catch (err: any) {
-      setErrorMessage(err?.message || 'Đã xảy ra lỗi khi tải danh sách phiên làm việc.');
-      setFetchState('error');
-    } finally {
-      setIsFetching(false);
-    }
-  }, [baseUrl, token, sessions.length, isFetching]);
+    await executeFetchSessions({
+      baseUrl,
+      token,
+      sessions,
+      isFetching,
+      setFetchState,
+      setSessions,
+      setErrorMessage,
+      setValidationMessage,
+      setActionError,
+      setIsFetching,
+    });
+  }, [baseUrl, token, sessions, isFetching]);
 
   useEffect(() => {
     if (!initialSessions && !initialState) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- initial fetch
       void fetchSessions();
     }
   }, [fetchSessions, initialSessions, initialState]);
 
   const handleRevoke = async (sessionId: string) => {
-    if (revokingId || revokeAllLoading) return; // Prevent duplicate clicks
-    setRevokingId(sessionId);
-    setActionError(null);
-
-    try {
-      const res = await fetch(`${baseUrl}/api/v1/sessions/${sessionId}`, {
-        method: 'DELETE',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: 'application/json',
-        },
-      });
-
-      if (res.status === 401 || res.status === 403) {
-        setActionError('Không có quyền thu hồi phiên làm việc này (403 FORBIDDEN).');
-        onToast?.('Không có quyền thu hồi phiên làm việc');
-        return;
-      }
-
-      const resData = await res.json().catch(() => null);
-
-      if (!res.ok) {
-        if (
-          resData?.error?.code === 'VALIDATION_ERROR' ||
-          resData?.error?.code === 'SESSION_NOT_FOUND'
-        ) {
-          setValidationMessage(resData?.error?.message || 'Không tìm thấy phiên làm việc');
-        }
-        throw new Error(resData?.error?.message || 'Thu hồi phiên thất bại');
-      }
-
-      setSessions((prev) =>
-        prev.map((s) => (s.session_id === sessionId ? { ...s, status: 'REVOKED' } : s))
-      );
-      onToast?.(resData?.message || 'Đã thu hồi 1 phiên làm việc');
-    } catch (err: any) {
-      setActionError(err?.message || 'Lỗi hệ thống khi thu hồi phiên. Vui lòng thử lại.');
-      onToast?.(err?.message || 'Lỗi khi thu hồi phiên');
-    } finally {
-      setRevokingId(null);
-    }
+    await executeRevokeSession({
+      sessionId,
+      baseUrl,
+      token,
+      revokingId,
+      revokeAllLoading,
+      isFetching,
+      setRevokingId,
+      setActionError,
+      setValidationMessage,
+      setSessions,
+      onToast,
+    });
   };
 
   const handleRevokeAll = async () => {
-    if (revokeAllLoading || revokingId) return;
-    setRevokeAllLoading(true);
-    setActionError(null);
-
-    try {
-      const res = await fetch(`${baseUrl}/api/v1/sessions/revoke-all`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-          Accept: 'application/json',
-        },
-        body: JSON.stringify({ include_current: revokeAllIncludeCurrent }),
-      });
-
-      if (res.status === 401 || res.status === 403) {
-        setActionError('Không có quyền thực hiện thao tác này (403 FORBIDDEN).');
-        onToast?.('Không có quyền thu hồi tất cả phiên');
-        return;
-      }
-
-      const resData = await res.json().catch(() => null);
-
-      if (!res.ok) {
-        throw new Error(resData?.error?.message || 'Thu hồi tất cả phiên thất bại');
-      }
-
-      const count = resData?.revoked_count ?? 0;
-      onToast?.(resData?.message || `Đã thu hồi ${count} phiên làm việc`);
-
-      if (revokeAllIncludeCurrent) {
-        setSessions([]);
-        setFetchState('forbidden');
-      } else {
-        setSessions((prev) => prev.map((s) => (s.is_current ? s : { ...s, status: 'REVOKED' })));
-      }
-      setRevokeAllOpen(false);
-    } catch (err: any) {
-      setActionError(err?.message || 'Lỗi hệ thống khi thu hồi tất cả phiên. Vui lòng thử lại.');
-      onToast?.(err?.message || 'Lỗi khi thu hồi tất cả phiên');
-    } finally {
-      setRevokeAllLoading(false);
-    }
+    await executeRevokeAll({
+      baseUrl,
+      token,
+      includeCurrent: revokeAllIncludeCurrent,
+      revokeAllLoading,
+      revokingId,
+      isFetching,
+      setRevokeAllLoading,
+      setActionError,
+      setSessions,
+      setFetchState,
+      setRevokeAllOpen,
+      onToast,
+    });
   };
 
   // Derive current and remote sessions
