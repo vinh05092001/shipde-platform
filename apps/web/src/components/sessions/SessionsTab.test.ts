@@ -335,6 +335,51 @@ async function runAsyncTests() {
     console.log(
       '  PASS: Revoke-all executed, remote sessions updated, and toast asserted with revoked count'
     );
+
+    // Case 4c: revoked_count: 0 leaves listed devices unchanged and preserves prior EXPIRED status
+    const mockExpiredSession: SessionItem = {
+      ...mockRemoteSession2,
+      session_id: 'expired-session-uuid-4',
+      status: 'EXPIRED',
+    };
+    let countZeroSessions = [mockCurrentSession, mockRemoteSession1, mockExpiredSession];
+    global.fetch = (async () => {
+      return new Response(
+        JSON.stringify({
+          revoked_count: 0,
+          message: 'Không có phiên nào cần thu hồi',
+        }),
+        { status: 200 }
+      );
+    }) as any;
+
+    const zeroRevokeAll = await executeRevokeAll({
+      baseUrl: 'http://localhost:3001',
+      token: 'dummy-token',
+      includeCurrent: false,
+      revokeAllLoading: false,
+      revokingId: null,
+      isFetching: false,
+      setRevokeAllLoading: () => {},
+      setActionError: () => {},
+      setSessions: (updater: any) => {
+        countZeroSessions = updater(countZeroSessions);
+      },
+      setFetchState: () => {},
+      setRevokeAllOpen: () => {},
+      onToast: (msg) => {
+        toastMessage = msg;
+      },
+    });
+
+    assert.strictEqual(zeroRevokeAll.executed, true);
+    assert.strictEqual(zeroRevokeAll.revokedCount, 0);
+    assert.strictEqual(toastMessage, 'Không có phiên nào cần thu hồi');
+    // Verify listed devices unchanged
+    assert.strictEqual(countZeroSessions[0].status, 'ACTIVE');
+    assert.strictEqual(countZeroSessions[1].status, 'ACTIVE');
+    assert.strictEqual(countZeroSessions[2].status, 'EXPIRED');
+    console.log('  PASS: revoked_count=0 leaves listed devices and prior statuses unchanged');
   } finally {
     global.fetch = originalFetch;
   }

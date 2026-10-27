@@ -323,16 +323,25 @@ export async function executeRevokeAll(options: {
     }
 
     const count = resData?.revoked_count ?? 0;
-    const msg = resData?.message || `Đã thu hồi ${count} phiên làm việc`;
+    const msg =
+      resData?.message ||
+      (count === 0 ? 'Không có phiên nào cần thu hồi' : `Đã thu hồi ${count} phiên làm việc`);
     options.onToast?.(msg);
 
-    if (options.includeCurrent) {
-      options.setSessions(() => []);
-      options.setFetchState('forbidden');
-    } else {
-      options.setSessions((prev) =>
-        prev.map((s) => (s.is_current ? s : { ...s, status: 'REVOKED' }))
-      );
+    if (count > 0) {
+      if (options.includeCurrent) {
+        options.setSessions(() => []);
+        options.setFetchState('unauthenticated');
+      } else {
+        options.setSessions((prev) =>
+          prev.map((s) => {
+            if (!s.is_current && s.status === 'ACTIVE') {
+              return { ...s, status: 'REVOKED' };
+            }
+            return s;
+          })
+        );
+      }
     }
     options.setRevokeAllOpen(false);
     return { executed: true, success: true, revokedCount: count, message: msg };
