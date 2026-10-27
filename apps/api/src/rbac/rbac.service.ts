@@ -388,8 +388,37 @@ export class RbacService implements OnModuleInit {
       );
     }
 
-    // Finding 1 / Round 13: Only accept server-resolved sessionId; ignore client/JWT sid unless it is the same server-resolved session
+    // Finding 1 / Round 13 / Finding 3 / Round 14 (P1-03): Only accept server-resolved sessionId; populate authAssurance and mfaVerifiedAt from active device_session
     const sessionId = req.sessionId ? req.sessionId : undefined;
+    let authAssurance: string | undefined = undefined;
+    let mfaVerifiedAt: Date | string | null | undefined = undefined;
+
+    if (sessionId) {
+      try {
+        const sessionRow = await (this.prisma as any).deviceSession?.findUnique?.({
+          where: { id: sessionId },
+          select: {
+            id: true,
+            user_id: true,
+            status: true,
+            expires_at: true,
+            auth_assurance: true,
+            mfa_verified_at: true,
+          },
+        });
+        if (
+          sessionRow &&
+          sessionRow.user_id === user.id &&
+          sessionRow.status === 'ACTIVE' &&
+          new Date(sessionRow.expires_at) > new Date()
+        ) {
+          authAssurance = sessionRow.auth_assurance;
+          mfaVerifiedAt = sessionRow.mfa_verified_at;
+        }
+      } catch {
+        // Fall back to undefined; in-transaction lockAndAuthorizeActor will query device_sessions under FOR UPDATE
+      }
+    }
 
     return {
       userId: user.id,
@@ -397,8 +426,8 @@ export class RbacService implements OnModuleInit {
       role: user.role,
       customRoleId: user.custom_role_id ?? undefined,
       sessionId,
-      authAssurance: undefined,
-      mfaVerifiedAt: undefined,
+      authAssurance,
+      mfaVerifiedAt,
     };
   }
 
@@ -1016,12 +1045,21 @@ export class RbacService implements OnModuleInit {
       );
     }
 
-    // Step-up / fresh assurance check for sensitive capabilities (Finding 2 / Round 10 / Finding 1 / Round 11 / RBAC-APPROVAL-MATRIX)
+    // Step-up / fresh assurance check for sensitive capabilities (Finding 2 / Round 10 / Finding 1 / Round 11 / Finding 3 / Round 14 / RBAC-APPROVAL-MATRIX)
     const hasSensitiveGrants = permissionsInDb.some((p) =>
       SENSITIVE_CAPABILITY_PERMISSIONS.has(p.code)
     );
     if (hasSensitiveGrants) {
       if (!actor.sessionId) {
+        throw new CanonicalApiException(
+          HttpStatus.FORBIDDEN,
+          'MFA_FRESH_AUTH_REQUIRED',
+          'Thao tác gán quyền hạn nhạy cảm yêu cầu phiên làm việc đã xác thực MFA',
+          false,
+          'Vui lòng xác thực hai yếu tố trước khi gán các quyền hạn nhạy cảm'
+        );
+      }
+      if (actor.authAssurance && !isMfaAssuranceFresh(actor.authAssurance, actor.mfaVerifiedAt)) {
         throw new CanonicalApiException(
           HttpStatus.FORBIDDEN,
           'MFA_FRESH_AUTH_REQUIRED',

@@ -428,6 +428,13 @@ class MockPrismaService {
     },
   };
 
+  deviceSession = {
+    findUnique: async (args: any) => {
+      const s = this.deviceSessions.find((x) => x.id === args?.where?.id);
+      return s || null;
+    },
+  };
+
   rawQueries: string[] = [];
   $queryRaw = async (strings: TemplateStringsArray, ...values: any[]) => {
     const sql = strings.join('?');
@@ -3592,6 +3599,58 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
         assert.ok(err instanceof CanonicalApiException);
         assert.strictEqual(err.getStatus(), 403);
         assert.strictEqual(err.code, 'FORBIDDEN');
+        return true;
+      }
+    );
+  });
+
+  // Finding 3 (Round 14 / P1-03): resolveActorFromSession populates authAssurance/mfaVerifiedAt from active session, and pre-tx MFA check fires early
+  test('Finding 3 (Round 14 / P1-03): resolveActorFromSession populates session assurance, enabling early pre-transaction MFA rejection for sensitive grants', async () => {
+    // 1. resolveActorFromSession populates authAssurance and mfaVerifiedAt from session-mfa-owner
+    const resolvedActor = await service.resolveActorFromSession({
+      userId: 'user-owner-1',
+      merchantId: MERCHANT_A,
+      sessionId: 'session-mfa-owner',
+    });
+    assert.strictEqual(resolvedActor.sessionId, 'session-mfa-owner');
+    assert.strictEqual(resolvedActor.authAssurance, 'MFA');
+    assert.ok(resolvedActor.mfaVerifiedAt, 'mfaVerifiedAt must be populated on resolved actor');
+
+    // 2. resolveActorFromSession for password session sets authAssurance: 'PASSWORD'
+    mockPrisma.deviceSessions.push({
+      id: 'session-pwd-user-1',
+      user_id: 'user-owner-1',
+      auth_assurance: 'PASSWORD',
+      status: 'ACTIVE',
+      expires_at: new Date(Date.now() + 3600000),
+      mfa_verified_at: null,
+    });
+
+    const resolvedPwdActor = await service.resolveActorFromSession({
+      userId: 'user-owner-1',
+      merchantId: MERCHANT_A,
+      sessionId: 'session-pwd-user-1',
+    });
+    assert.strictEqual(resolvedPwdActor.authAssurance, 'PASSWORD');
+    assert.strictEqual(resolvedPwdActor.mfaVerifiedAt, null);
+
+    // 3. Sensitive grant (pii:unmask) with resolvedPwdActor rejects pre-transaction with 403 MFA_FRESH_AUTH_REQUIRED
+    await assert.rejects(
+      async () => {
+        await service.createRole(
+          {
+            name: `Sensitive Role Pre-Tx Check ${Date.now()}`,
+            permissions: ['pii:unmask'],
+          },
+          resolvedPwdActor,
+          '127.0.0.1',
+          'corr-p1-03'
+        );
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 403);
+        assert.strictEqual(err.code, 'MFA_FRESH_AUTH_REQUIRED');
         return true;
       }
     );
