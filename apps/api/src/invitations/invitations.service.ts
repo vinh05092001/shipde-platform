@@ -64,6 +64,9 @@ export function validatePasswordStrength(password: string): { valid: boolean; er
   return { valid: errors.length === 0, errors };
 }
 
+/** Fixed audit reason codes for delivery compensation; never provider-supplied text. */
+type DeliveryFailureReason = 'DELIVERY_EXCEPTION' | 'DELIVERY_FAILED';
+
 @Injectable()
 export class InvitationsService {
   constructor(
@@ -476,7 +479,8 @@ export class InvitationsService {
     const safeBaseUrl = resolveFrontendBaseUrl(baseUrl);
     const invitationUrl = `${safeBaseUrl}/invite/accept?token=${rawToken}`;
 
-    const compensateFailedCreate = async (reason: string) => {
+    // Fixed reason codes only: provider errors may echo the link or raw token (Round 6 Finding 5)
+    const compensateFailedCreate = async (reason: DeliveryFailureReason) => {
       await this.refundDispatchQuota(rateLimit.reservation);
 
       // Conditionally retire row only if still unconsumed pending token
@@ -524,12 +528,12 @@ export class InvitationsService {
         link: invitationUrl,
       });
     } catch (deliveryErr: any) {
-      await compensateFailedCreate(deliveryErr?.message || 'DELIVERY_EXCEPTION');
+      await compensateFailedCreate('DELIVERY_EXCEPTION');
       throw deliveryErr;
     }
 
     if (!dispatchRes || !dispatchRes.success) {
-      await compensateFailedCreate((dispatchRes as any)?.error || 'DELIVERY_FAILED');
+      await compensateFailedCreate('DELIVERY_FAILED');
       throw new CanonicalApiException(
         HttpStatus.BAD_GATEWAY,
         'DELIVERY_FAILED',
@@ -904,7 +908,8 @@ export class InvitationsService {
     const safeBaseUrl = resolveFrontendBaseUrl(baseUrl);
     const invitationUrl = `${safeBaseUrl}/invite/accept?token=${rawToken}`;
 
-    const compensateFailedResend = async (reason: string) => {
+    // Fixed reason codes only: provider errors may echo the link or raw token (Round 6 Finding 5)
+    const compensateFailedResend = async (reason: DeliveryFailureReason) => {
       await this.refundDispatchQuota(rateLimit.reservation);
 
       // Compensate: restore prior token hash, status, expiry conditionally using updateMany predicates
@@ -957,12 +962,12 @@ export class InvitationsService {
         link: invitationUrl,
       });
     } catch (deliveryErr: any) {
-      await compensateFailedResend(deliveryErr?.message || 'DELIVERY_EXCEPTION');
+      await compensateFailedResend('DELIVERY_EXCEPTION');
       throw deliveryErr;
     }
 
     if (!dispatchRes || !dispatchRes.success) {
-      await compensateFailedResend((dispatchRes as any)?.error || 'DELIVERY_FAILED');
+      await compensateFailedResend('DELIVERY_FAILED');
       throw new CanonicalApiException(
         HttpStatus.BAD_GATEWAY,
         'DELIVERY_FAILED',

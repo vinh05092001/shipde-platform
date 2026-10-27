@@ -2850,5 +2850,83 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
         assert.strictEqual(r.allowed, true, `recipient slot ${i + 1} not burned by lost race`);
       }
     });
+
+    it('Finding 5: delivery compensation audits persist only fixed reason codes, never provider text', async () => {
+      const audits: any[] = [];
+      const prisma: any = {
+        user: { findFirst: async (a: any) => (a?.where?.id === OWNER_USER_ID ? ownerUser : null) },
+        invitation: {
+          findFirst: async () => null,
+          updateMany: async () => ({ count: 0 }),
+          deleteMany: async () => ({ count: 1 }),
+          create: async (a: any) => ({
+            id: 'r6-f5',
+            ...a.data,
+            created_at: new Date(),
+            consumed_at: null,
+          }),
+        },
+        auditLog: {
+          create: async (a: any) => {
+            audits.push(a.data);
+            return { id: 'a', ...a.data };
+          },
+        },
+        $transaction: async (fn: any) => fn(prisma),
+      };
+      let leakedLink = '';
+      const svc = new InvitationsService(
+        prisma,
+        {
+          sendVerification: async (req: any) => {
+            leakedLink = req.link;
+            throw new Error(`SMTP rejected message body ${req.link} token=${req.token}`);
+          },
+        } as any,
+        new RateLimitService()
+      );
+      await assert.rejects(() =>
+        svc.createInvitation(
+          { email: 'r6-f5@shipde.vn', role: RoleEnum.OPS_CSKH },
+          { userId: OWNER_USER_ID, merchantId: MERCHANT_ID, role: 'OWNER' },
+          '10.6.5.1',
+          'corr-r6-5'
+        )
+      );
+      const failed = audits.find((x) => x.action === 'INVITATION_DELIVERY_FAILED');
+      assert.ok(failed, 'compensating audit recorded');
+      assert.strictEqual(failed.new_value.reason, 'DELIVERY_EXCEPTION');
+      const rawToken = new URL(leakedLink).searchParams.get('token')!;
+      assert.ok(rawToken.length >= 32);
+      assert.strictEqual(JSON.stringify(audits).includes(rawToken), false, 'no raw token in audit');
+    });
+
+    it('Finding 5: resend failure audit stores DELIVERY_FAILED code instead of provider error', async () => {
+      const audits: any[] = [];
+      const { prisma } = makeResendPrisma({});
+      prisma.auditLog.create = async (a: any) => {
+        audits.push(a.data);
+        return { id: 'a', ...a.data };
+      };
+      const svc = new InvitationsService(
+        prisma,
+        {
+          sendVerification: async (req: any) => ({ success: false, error: `bounce ${req.link}` }),
+        } as any,
+        new RateLimitService()
+      );
+      await assert.rejects(() =>
+        svc.resendInvitation(
+          'r6-target',
+          { userId: OWNER_USER_ID, merchantId: MERCHANT_ID, role: 'OWNER' },
+          '10.6.5.2',
+          'corr-r6-5b'
+        )
+      );
+      const failed = audits.find((x) => x.action === 'INVITATION_RESEND_FAILED');
+      assert.ok(failed);
+      assert.strictEqual(failed.new_value.reason, 'DELIVERY_FAILED');
+      assert.strictEqual(JSON.stringify(audits).includes('token='), false);
+    });
   });
 });
