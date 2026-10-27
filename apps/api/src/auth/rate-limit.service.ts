@@ -629,18 +629,26 @@ export class RateLimitService {
       } catch {
         client = null;
       }
-      if (client) {
-        if (client.status === 'wait') {
-          try {
-            await client.connect();
-          } catch {
-            // connection failed
-          }
+      if (!client) {
+        // Redis is configured but client cannot be obtained: fail closed across instances (SECURITY-NFR / Round 10 Finding 2)
+        return {
+          allowed: false,
+          retryAfterSeconds: 60,
+          count: limit,
+          reason: 'Dịch vụ kiểm soát tần suất gặp sự cố. Vui lòng thử lại sau.',
+        };
+      }
+      if (client.status === 'wait') {
+        try {
+          await client.connect();
+        } catch {
+          // connection failed
         }
-        if (client.status === 'ready') {
-          try {
-            const clearBefore = now - windowMs;
-            const lua = `
+      }
+      if (client.status === 'ready') {
+        try {
+          const clearBefore = now - windowMs;
+          const lua = `
               local key = KEYS[1]
               local now = tonumber(ARGV[1])
               local clearBefore = tonumber(ARGV[2])
@@ -659,39 +667,30 @@ export class RateLimitService {
               redis.call('expire', key, windowSeconds + 60)
               return {1, count + 1, now}
             `;
-            const res = (await client.eval(
-              lua,
-              1,
-              key,
-              now.toString(),
-              clearBefore.toString(),
-              limit.toString(),
-              windowSeconds.toString(),
-              member
-            )) as [number, number, number];
-            const allowed = res[0] === 1;
-            const count = res[1];
-            const earliest = Number(res[2]);
-            const retryAfter = Math.max(1, Math.ceil((earliest + windowMs - now) / 1000));
-            return {
-              allowed,
-              retryAfterSeconds: retryAfter,
-              count,
-              member,
-              timestamp: now,
-              reservation: allowed ? { key, member, timestamp: now, backend: 'redis' } : undefined,
-            };
-          } catch {
-            // Redis execution error while ready: fail closed across instances (SECURITY-NFR / Round 8 Finding 4)
-            return {
-              allowed: false,
-              retryAfterSeconds: 60,
-              count: limit,
-              reason: 'Dịch vụ kiểm soát tần suất gặp sự cố. Vui lòng thử lại sau.',
-            };
-          }
-        } else {
-          // Redis is configured but not usable (e.g. status !== 'ready'): fail closed across instances (Round 9 Finding 2)
+          const res = (await client.eval(
+            lua,
+            1,
+            key,
+            now.toString(),
+            clearBefore.toString(),
+            limit.toString(),
+            windowSeconds.toString(),
+            member
+          )) as [number, number, number];
+          const allowed = res[0] === 1;
+          const count = res[1];
+          const earliest = Number(res[2]);
+          const retryAfter = Math.max(1, Math.ceil((earliest + windowMs - now) / 1000));
+          return {
+            allowed,
+            retryAfterSeconds: retryAfter,
+            count,
+            member,
+            timestamp: now,
+            reservation: allowed ? { key, member, timestamp: now, backend: 'redis' } : undefined,
+          };
+        } catch {
+          // Redis execution error while ready: fail closed across instances (SECURITY-NFR / Round 8 Finding 4)
           return {
             allowed: false,
             retryAfterSeconds: 60,
@@ -699,6 +698,14 @@ export class RateLimitService {
             reason: 'Dịch vụ kiểm soát tần suất gặp sự cố. Vui lòng thử lại sau.',
           };
         }
+      } else {
+        // Redis is configured but not usable (e.g. status !== 'ready'): fail closed across instances (Round 9 Finding 2)
+        return {
+          allowed: false,
+          retryAfterSeconds: 60,
+          count: limit,
+          reason: 'Dịch vụ kiểm soát tần suất gặp sự cố. Vui lòng thử lại sau.',
+        };
       }
     }
 

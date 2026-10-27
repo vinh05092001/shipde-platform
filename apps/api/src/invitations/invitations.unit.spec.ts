@@ -3979,5 +3979,53 @@ CREATE INDEX "some_other_idx" ON "invitations"("created_at");
         /Forbidden DROP INDEX detected in migration diff for: invitations_merchant_pending_phone_unique/
       );
     });
+
+    it('Round 10 Finding 2: Rate limiter fails closed if Redis is configured but getClient throws or returns null without touching memory store', async () => {
+      // 1. getClient() returns null when redisService is present
+      const mockNullRedisService: any = {
+        getClient: () => null,
+      };
+      const nullLimiter = new RateLimitService(mockNullRedisService);
+      const resNull = await nullLimiter.checkInvitationDispatchLimit(
+        '10.0.0.1',
+        'nullclient@shipde.vn',
+        MERCHANT_ID
+      );
+      assert.strictEqual(
+        resNull.allowed,
+        false,
+        'Must fail closed when getClient() returns null'
+      );
+      assert.strictEqual(resNull.retryAfterSeconds, 60);
+
+      // Verify in-memory store was not touched
+      const memStore: Map<string, number[]> = (nullLimiter as any).memoryStore;
+      assert.strictEqual(memStore.size, 0, 'In-memory store must not be touched');
+
+      // 2. getClient() throws when redisService is present
+      const mockThrowRedisService: any = {
+        getClient: () => {
+          throw new Error('Redis pool exhausted or uninitialized');
+        },
+      };
+      const throwLimiter = new RateLimitService(mockThrowRedisService);
+      const resThrow = await throwLimiter.checkInvitationVerifyLimit('10.0.0.2');
+      assert.strictEqual(
+        resThrow.allowed,
+        false,
+        'Must fail closed when getClient() throws'
+      );
+      assert.strictEqual(resThrow.retryAfterSeconds, 60);
+      assert.strictEqual(
+        ((throwLimiter as any).memoryStore as Map<string, number[]>).size,
+        0,
+        'In-memory store must not be touched'
+      );
+
+      // 3. checkInvitationAcceptLimit also fails closed
+      const resAccept = await throwLimiter.checkInvitationAcceptLimit('10.0.0.3', 'sample-token');
+      assert.strictEqual(resAccept.allowed, false);
+      assert.strictEqual(resAccept.retryAfterSeconds, 60);
+    });
   });
 });
