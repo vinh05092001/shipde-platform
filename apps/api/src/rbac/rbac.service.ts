@@ -716,7 +716,13 @@ export class RbacService {
           [{ field: 'name', code: 'DUPLICATE', message: 'Tên vai trò đã tồn tại' }]
         );
       }
-      throw err;
+      throw new CanonicalApiException(
+        HttpStatus.INTERNAL_SERVER_ERROR,
+        'INTERNAL_SERVER_ERROR',
+        'Lỗi hệ thống khi tạo vai trò',
+        false,
+        'Vui lòng thử lại sau hoặc liên hệ hỗ trợ'
+      );
     }
 
     return {
@@ -999,7 +1005,13 @@ export class RbacService {
           [{ field: 'name', code: 'DUPLICATE', message: 'Tên vai trò đã tồn tại' }]
         );
       }
-      throw err;
+      throw new CanonicalApiException(
+        HttpStatus.INTERNAL_SERVER_ERROR,
+        'INTERNAL_SERVER_ERROR',
+        'Lỗi hệ thống khi tạo vai trò',
+        false,
+        'Vui lòng thử lại sau hoặc liên hệ hỗ trợ'
+      );
     }
 
     const activeUserCount = await this.prisma.user.count({
@@ -1159,7 +1171,13 @@ export class RbacService {
           [{ field: 'role_id', code: 'IN_USE', message: 'Vai trò đang được gán cho người dùng' }]
         );
       }
-      throw err;
+      throw new CanonicalApiException(
+        HttpStatus.INTERNAL_SERVER_ERROR,
+        'INTERNAL_SERVER_ERROR',
+        'Lỗi hệ thống khi xóa vai trò',
+        false,
+        'Vui lòng thử lại sau hoặc liên hệ hỗ trợ'
+      );
     }
 
     return {

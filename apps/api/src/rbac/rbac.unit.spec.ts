@@ -793,7 +793,12 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
         );
       },
       (err: any) => {
-        assert.strictEqual(err.message, 'Simulated auditLog database storage failure');
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 500);
+        assert.strictEqual(err.code, 'INTERNAL_SERVER_ERROR');
+        const resp = err.getResponse() as any;
+        assert.strictEqual(resp?.error?.code, 'INTERNAL_SERVER_ERROR');
+        assert.doesNotMatch(resp?.error?.message || '', /simulated|database|storage/i);
         return true;
       }
     );
