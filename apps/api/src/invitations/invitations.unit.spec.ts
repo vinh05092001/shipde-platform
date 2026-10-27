@@ -266,10 +266,14 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
 
         // Security assertion: must NOT use attacker host
         assert.ok(!res.data.invitation_url.includes('attacker.evil.com'));
-        assert.ok(res.data.invitation_url.startsWith('https://portal.shipde.vn/invite/accept?token='));
+        assert.ok(
+          res.data.invitation_url.startsWith('https://portal.shipde.vn/invite/accept?token=')
+        );
         assert.ok(dispatchedParams);
         assert.ok(!dispatchedParams.link.includes('attacker.evil.com'));
-        assert.ok(dispatchedParams.link.startsWith('https://portal.shipde.vn/invite/accept?token='));
+        assert.ok(
+          dispatchedParams.link.startsWith('https://portal.shipde.vn/invite/accept?token=')
+        );
       } finally {
         process.env.FRONTEND_URL = prevFrontendUrl;
       }
@@ -956,7 +960,12 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
 
       await assert.rejects(
         async () => {
-          await service.resendInvitation('wh-inv-id', opsActor, '127.0.0.1', 'test-corr-resend-role');
+          await service.resendInvitation(
+            'wh-inv-id',
+            opsActor,
+            '127.0.0.1',
+            'test-corr-resend-role'
+          );
         },
         (err: any) => {
           assert.ok(err instanceof CanonicalApiException);
@@ -981,7 +990,12 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
 
       await assert.rejects(
         async () => {
-          await service.resendInvitation('scope-inv-id', opsActor, '127.0.0.1', 'test-corr-resend-scope');
+          await service.resendInvitation(
+            'scope-inv-id',
+            opsActor,
+            '127.0.0.1',
+            'test-corr-resend-scope'
+          );
         },
         (err: any) => {
           assert.ok(err instanceof CanonicalApiException);
@@ -1102,7 +1116,12 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
 
       await assert.rejects(
         async () => {
-          await service.cancelInvitation('wh-cancel-inv-id', opsActor, '127.0.0.1', 'test-corr-cancel-role');
+          await service.cancelInvitation(
+            'wh-cancel-inv-id',
+            opsActor,
+            '127.0.0.1',
+            'test-corr-cancel-role'
+          );
         },
         (err: any) => {
           assert.ok(err instanceof CanonicalApiException);
@@ -1127,7 +1146,12 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
 
       await assert.rejects(
         async () => {
-          await service.cancelInvitation('scope-cancel-inv-id', opsActor, '127.0.0.1', 'test-corr-cancel-scope');
+          await service.cancelInvitation(
+            'scope-cancel-inv-id',
+            opsActor,
+            '127.0.0.1',
+            'test-corr-cancel-scope'
+          );
         },
         (err: any) => {
           assert.ok(err instanceof CanonicalApiException);

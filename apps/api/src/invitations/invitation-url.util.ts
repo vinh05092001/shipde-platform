@@ -11,7 +11,8 @@ export function resolveFrontendBaseUrl(requestOrigin?: string): string {
     'http://127.0.0.1:3000',
   ].filter(Boolean) as string[];
 
-  const defaultBaseUrl = process.env.FRONTEND_URL || process.env.APP_BASE_URL || 'http://localhost:3000';
+  const defaultBaseUrl =
+    process.env.FRONTEND_URL || process.env.APP_BASE_URL || 'http://localhost:3000';
 
   if (!requestOrigin) {
     return defaultBaseUrl;

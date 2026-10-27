@@ -347,8 +347,7 @@ export class UsersService {
     // Store scope enforcement (* or explicit membership)
     if (requestedScope.store_id) {
       const allowed =
-        user.store_scopes.includes('*') ||
-        user.store_scopes.includes(requestedScope.store_id);
+        user.store_scopes.includes('*') || user.store_scopes.includes(requestedScope.store_id);
       if (!allowed) {
         throw new CanonicalApiException(
           HttpStatus.FORBIDDEN,
