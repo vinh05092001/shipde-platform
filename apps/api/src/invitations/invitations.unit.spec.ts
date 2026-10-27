@@ -3203,5 +3203,66 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
         'link must never put token in URL query string'
       );
     });
+
+    it('Finding 3: refunds dispatch quota when delivery adapter is missing / unavailable on create and resend', async () => {
+      const rateLimiter = new RateLimitService();
+      let refunds = 0;
+      (rateLimiter as any).revertInvitationDispatchAttempt = async () => {
+        refunds++;
+      };
+
+      const svc = new InvitationsService(mockPrisma, undefined as any, rateLimiter);
+      await assert.rejects(
+        () =>
+          svc.createInvitation(
+            { email: 'r7-f3@shipde.vn', role: RoleEnum.OPS_CSKH },
+            { userId: OWNER_USER_ID, merchantId: MERCHANT_ID, role: 'OWNER' },
+            '10.7.3.1',
+            'corr-r7-3'
+          ),
+        (err: any) => {
+          assert.strictEqual(err.status, 503);
+          assert.strictEqual(err.code, 'DELIVERY_UNAVAILABLE');
+          return true;
+        }
+      );
+      assert.strictEqual(refunds, 1, 'quota refunded on missing delivery adapter in create');
+
+      const resendPrisma: any = {
+        ...mockPrisma,
+        invitation: {
+          ...mockPrisma.invitation,
+          findUnique: async () => ({
+            id: 'r7-target-f3',
+            merchant_id: MERCHANT_ID,
+            email: 'r7-f3-resend@shipde.vn',
+            phone: null,
+            role: RoleEnum.OPS_CSKH,
+            status: 'PENDING',
+            token_hash: 'old-hash',
+            expires_at: new Date(Date.now() + 100000),
+            consumed_at: null,
+            store_scopes: [],
+            warehouse_scopes: [],
+          }),
+        },
+      };
+      const resendSvc = new InvitationsService(resendPrisma, undefined as any, rateLimiter);
+      await assert.rejects(
+        () =>
+          resendSvc.resendInvitation(
+            'r7-target-f3',
+            { userId: OWNER_USER_ID, merchantId: MERCHANT_ID, role: 'OWNER' },
+            '10.7.3.2',
+            'corr-r7-3-resend'
+          ),
+        (err: any) => {
+          assert.strictEqual(err.status, 503);
+          assert.strictEqual(err.code, 'DELIVERY_UNAVAILABLE');
+          return true;
+        }
+      );
+      assert.strictEqual(refunds, 2, 'quota refunded on missing delivery adapter in resend');
+    });
   });
 });

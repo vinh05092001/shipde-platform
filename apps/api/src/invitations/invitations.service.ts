@@ -439,6 +439,7 @@ export class InvitationsService {
 
     // Fail closed early if delivery adapter unavailable before creating DB record
     if (!this.deliveryAdapter) {
+      await this.refundDispatchQuota(rateLimit.reservation);
       throw new CanonicalApiException(
         HttpStatus.SERVICE_UNAVAILABLE,
         'DELIVERY_UNAVAILABLE',
@@ -851,6 +852,7 @@ export class InvitationsService {
 
     // Fail closed early if delivery adapter unavailable before updating DB
     if (!this.deliveryAdapter) {
+      await this.refundDispatchQuota(rateLimit.reservation);
       throw new CanonicalApiException(
         HttpStatus.SERVICE_UNAVAILABLE,
         'DELIVERY_UNAVAILABLE',
