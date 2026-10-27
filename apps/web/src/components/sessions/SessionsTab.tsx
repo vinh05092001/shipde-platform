@@ -36,7 +36,8 @@ export interface SessionItem {
 export interface SessionsTabProps {
   onToast?: (msg: string) => void;
   initialSessions?: SessionItem[];
-  initialState?: 'loading' | 'empty' | 'error' | 'forbidden' | 'validation' | 'success';
+  initialState?:
+    'loading' | 'empty' | 'error' | 'forbidden' | 'unauthenticated' | 'validation' | 'success';
   initialErrorMessage?: string;
   initialValidationMessage?: string;
   apiUrl?: string;
@@ -81,7 +82,9 @@ export async function executeFetchSessions(options: {
   sessions?: SessionItem[];
   isFetching?: boolean;
   isFetchingRef?: React.MutableRefObject<boolean> | { current: boolean };
-  setFetchState: (state: 'loading' | 'error' | 'forbidden' | 'validation' | 'success') => void;
+  setFetchState: (
+    state: 'loading' | 'error' | 'forbidden' | 'unauthenticated' | 'validation' | 'success'
+  ) => void;
   setSessions: (sessions: SessionItem[]) => void;
   setErrorMessage: (msg: string | null) => void;
   setValidationMessage: (msg: string | null) => void;
@@ -97,14 +100,15 @@ export async function executeFetchSessions(options: {
   const currentSessions = options.sessions ?? [];
   if (!options.token) {
     if (currentSessions.length === 0) {
-      options.setFetchState('forbidden');
+      options.setErrorMessage('Vui lòng đăng nhập để tiếp tục.');
+      options.setFetchState('unauthenticated');
     } else {
       options.setActionError('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
     }
     if (options.isFetchingRef) {
       options.isFetchingRef.current = false;
     }
-    return { executed: true, success: false, error: 'NO_TOKEN' };
+    return { executed: true, success: false, error: 'UNAUTHENTICATED' };
   }
 
   try {
@@ -123,11 +127,34 @@ export async function executeFetchSessions(options: {
       },
     });
 
-    if (res.status === 401 || res.status === 403) {
+    if (res.status === 401) {
+      const errJson = await res.json().catch(() => null);
+      const errCode = errJson?.error?.code || 'UNAUTHENTICATED';
+      const errMsg =
+        errJson?.error?.message ||
+        (errCode === 'SESSION_INVALID'
+          ? 'Phiên đăng nhập đã hết hạn hoặc không hợp lệ. Vui lòng đăng nhập lại.'
+          : 'Vui lòng đăng nhập để tiếp tục.');
+
       if (currentSessions.length === 0) {
+        options.setErrorMessage(errMsg);
+        options.setFetchState('unauthenticated');
+      } else {
+        options.setActionError(errMsg);
+      }
+      return { executed: true, success: false, error: errCode };
+    }
+
+    if (res.status === 403) {
+      const errJson = await res.json().catch(() => null);
+      const errMsg =
+        errJson?.error?.message || 'Không có quyền truy cập vào danh sách phiên làm việc.';
+
+      if (currentSessions.length === 0) {
+        options.setErrorMessage(errMsg);
         options.setFetchState('forbidden');
       } else {
-        options.setActionError('Không có quyền truy cập hoặc phiên đã hết hạn (403 FORBIDDEN).');
+        options.setActionError('Không có quyền truy cập (403 FORBIDDEN).');
       }
       return { executed: true, success: false, error: 'FORBIDDEN' };
     }
@@ -186,8 +213,19 @@ export async function executeRevokeSession(options: {
       },
     });
 
-    if (res.status === 401 || res.status === 403) {
-      const errMsg = 'Không có quyền thu hồi phiên làm việc này (403 FORBIDDEN).';
+    if (res.status === 401) {
+      const errJson = await res.json().catch(() => null);
+      const errMsg =
+        errJson?.error?.message || 'Phiên làm việc đã hết hạn. Vui lòng đăng nhập lại.';
+      options.setActionError(errMsg);
+      options.onToast?.('Phiên đăng nhập đã hết hạn');
+      return { executed: true, success: false, message: errMsg };
+    }
+
+    if (res.status === 403) {
+      const errJson = await res.json().catch(() => null);
+      const errMsg =
+        errJson?.error?.message || 'Không có quyền thu hồi phiên làm việc này (403 FORBIDDEN).';
       options.setActionError(errMsg);
       options.onToast?.('Không có quyền thu hồi phiên làm việc');
       return { executed: true, success: false, message: errMsg };
@@ -231,7 +269,9 @@ export async function executeRevokeAll(options: {
   setRevokeAllLoading: (loading: boolean) => void;
   setActionError: (msg: string | null) => void;
   setSessions: React.Dispatch<React.SetStateAction<SessionItem[]>>;
-  setFetchState: (state: 'loading' | 'error' | 'forbidden' | 'validation' | 'success') => void;
+  setFetchState: (
+    state: 'loading' | 'error' | 'forbidden' | 'unauthenticated' | 'validation' | 'success'
+  ) => void;
   setRevokeAllOpen: (open: boolean) => void;
   onToast?: (msg: string) => void;
 }): Promise<{
@@ -258,8 +298,19 @@ export async function executeRevokeAll(options: {
       body: JSON.stringify({ include_current: options.includeCurrent }),
     });
 
-    if (res.status === 401 || res.status === 403) {
-      const errMsg = 'Không có quyền thực hiện thao tác này (403 FORBIDDEN).';
+    if (res.status === 401) {
+      const errJson = await res.json().catch(() => null);
+      const errMsg =
+        errJson?.error?.message || 'Phiên làm việc đã hết hạn. Vui lòng đăng nhập lại.';
+      options.setActionError(errMsg);
+      options.onToast?.('Phiên đăng nhập đã hết hạn');
+      return { executed: true, success: false, message: errMsg };
+    }
+
+    if (res.status === 403) {
+      const errJson = await res.json().catch(() => null);
+      const errMsg =
+        errJson?.error?.message || 'Không có quyền thực hiện thao tác này (403 FORBIDDEN).';
       options.setActionError(errMsg);
       options.onToast?.('Không có quyền thu hồi tất cả phiên');
       return { executed: true, success: false, message: errMsg };
@@ -308,7 +359,7 @@ export function SessionsTab({
   const token = authToken !== undefined ? authToken : contextToken;
 
   const [fetchState, setFetchState] = useState<
-    'loading' | 'error' | 'forbidden' | 'validation' | 'success'
+    'loading' | 'error' | 'forbidden' | 'unauthenticated' | 'validation' | 'success'
   >(initialState === 'empty' ? 'success' : (initialState ?? 'loading'));
   const [sessions, setSessions] = useState<SessionItem[]>(initialSessions ?? []);
   const [errorMessage, setErrorMessage] = useState<string | null>(initialErrorMessage ?? null);
@@ -503,9 +554,32 @@ export function SessionsTab({
           <Lock className="w-8 h-8 text-amber-600 mx-auto" />
           <h3 className="text-sm font-bold">Không có quyền truy cập</h3>
           <p className="text-xs text-amber-700">
-            Phiên đăng nhập của bạn không có quyền truy cập hoặc đã bị thu hồi. Vui lòng đăng nhập
-            lại.
+            {errorMessage ||
+              'Phiên đăng nhập của bạn không có quyền truy cập hoặc quyền đã bị từ chối.'}
           </p>
+        </div>
+      )}
+
+      {/* Unauthenticated / Login Recovery State (AC-SESS-06, AC-SESS-19) */}
+      {fetchState === 'unauthenticated' && (
+        <div
+          role="alert"
+          data-testid="unauthenticated-alert"
+          className="rounded-xl border border-amber-200 bg-amber-50 p-6 text-center text-amber-800 space-y-3 shadow-xs"
+        >
+          <Lock className="w-8 h-8 text-amber-600 mx-auto" />
+          <h3 className="text-sm font-bold">Phiên đăng nhập hết hạn hoặc không hợp lệ</h3>
+          <p className="text-xs text-amber-700">
+            {errorMessage ||
+              'Phiên làm việc của bạn đã hết hạn hoặc chưa được xác thực. Vui lòng đăng nhập lại.'}
+          </p>
+          <a
+            href="/auth/login"
+            data-testid="login-recovery-button"
+            className="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold bg-amber-600 text-white hover:bg-amber-700 active:bg-amber-800 transition-colors shadow-xs"
+          >
+            Đăng nhập lại
+          </a>
         </div>
       )}
 
@@ -548,7 +622,10 @@ export function SessionsTab({
       {fetchState === 'loading' && sessions.length === 0 && renderLoadingSkeleton()}
 
       {/* Loaded sessions view - never blanked during retry or error if sessions exist */}
-      {(sessions.length > 0 || (fetchState !== 'loading' && fetchState !== 'forbidden')) && (
+      {(sessions.length > 0 ||
+        (fetchState !== 'loading' &&
+          fetchState !== 'forbidden' &&
+          fetchState !== 'unauthenticated')) && (
         <div className="space-y-6">
           {/* Section 1: Current Active Device */}
           <div className="space-y-3">

@@ -442,6 +442,130 @@ async function runAsyncTests() {
   assert.ok(htmlDefaultMount.includes('aria-busy="true"'));
   console.log('  PASS: Default mount renders loading skeleton cleanly');
 
+  // ---------------------------------------------------------------------------
+  // TEST 12: 401 drives login recovery; 403 drives forbidden notice (AC-SESS-06, AC-SESS-19)
+  // ---------------------------------------------------------------------------
+  console.log('[TEST 12] 401 drives login recovery; only 403 drives forbidden notice');
+  try {
+    let capturedState = '';
+    let capturedActionError: string | null = null;
+
+    // Case 12a: 401 on empty session list sets unauthenticated state
+    global.fetch = (async () => {
+      return new Response(
+        JSON.stringify({
+          error: {
+            code: 'SESSION_INVALID',
+            message: 'Phiên đăng nhập đã hết hạn hoặc không hợp lệ',
+            retryable: false,
+            next_action: 'LOGIN',
+          },
+        }),
+        { status: 401 }
+      );
+    }) as any;
+
+    const res401Empty = await executeFetchSessions({
+      baseUrl: 'http://localhost:3001',
+      token: 'expired-token',
+      sessions: [],
+      setFetchState: (s) => {
+        capturedState = s;
+      },
+      setSessions: () => {},
+      setErrorMessage: () => {},
+      setValidationMessage: () => {},
+      setActionError: (err) => {
+        capturedActionError = err;
+      },
+      setIsFetching: () => {},
+    });
+
+    assert.strictEqual(res401Empty.executed, true);
+    assert.strictEqual(res401Empty.success, false);
+    assert.strictEqual(res401Empty.error, 'SESSION_INVALID');
+    assert.strictEqual(
+      capturedState,
+      'unauthenticated',
+      'Empty list on 401 must transition to unauthenticated'
+    );
+    assert.strictEqual(capturedActionError, null);
+
+    // Case 12b: 401 with existing rows sets actionError without mentioning 403 FORBIDDEN
+    const actionErrorHolder = { current: null as string | null };
+    const res401WithRows = await executeFetchSessions({
+      baseUrl: 'http://localhost:3001',
+      token: 'expired-token',
+      sessions: [mockCurrentSession],
+      setFetchState: (s) => {
+        capturedState = s;
+      },
+      setSessions: () => {},
+      setErrorMessage: () => {},
+      setValidationMessage: () => {},
+      setActionError: (err) => {
+        actionErrorHolder.current = err;
+      },
+      setIsFetching: () => {},
+    });
+
+    assert.strictEqual(res401WithRows.executed, true);
+    assert.strictEqual(res401WithRows.success, false);
+    const capturedMsg = actionErrorHolder.current || '';
+    assert.ok(capturedMsg.includes('hết hạn') || capturedMsg.includes('đăng nhập lại'));
+    assert.ok(!capturedMsg.includes('403'), '401 must not display 403 FORBIDDEN notice');
+    assert.ok(!capturedMsg.includes('FORBIDDEN'));
+
+    // Case 12c: Real 403 sets forbidden state
+    global.fetch = (async () => {
+      return new Response(
+        JSON.stringify({
+          error: {
+            code: 'FORBIDDEN',
+            message: 'Không có quyền truy cập',
+          },
+        }),
+        { status: 403 }
+      );
+    }) as any;
+
+    const res403 = await executeFetchSessions({
+      baseUrl: 'http://localhost:3001',
+      token: 'dummy-token',
+      sessions: [],
+      setFetchState: (s) => {
+        capturedState = s;
+      },
+      setSessions: () => {},
+      setErrorMessage: () => {},
+      setValidationMessage: () => {},
+      setActionError: () => {},
+      setIsFetching: () => {},
+    });
+
+    assert.strictEqual(res403.executed, true);
+    assert.strictEqual(res403.success, false);
+    assert.strictEqual(res403.error, 'FORBIDDEN');
+    assert.strictEqual(capturedState, 'forbidden');
+    console.log('  PASS: 401 drives unauthenticated recovery; 403 drives forbidden state');
+  } finally {
+    global.fetch = originalFetch;
+  }
+
+  console.log('[TEST 13] Unauthenticated state renders login recovery prompt with login link');
+  const htmlUnauthenticated = renderWithAuth(
+    React.createElement(SessionsTab, {
+      initialState: 'unauthenticated',
+      authToken: 'dummy-token',
+    })
+  );
+  assert.ok(htmlUnauthenticated.includes('role="alert"'));
+  assert.ok(htmlUnauthenticated.includes('data-testid="unauthenticated-alert"'));
+  assert.ok(htmlUnauthenticated.includes('data-testid="login-recovery-button"'));
+  assert.ok(htmlUnauthenticated.includes('Đăng nhập lại'));
+  assert.ok(htmlUnauthenticated.includes('href="/auth/login"'));
+  console.log('  PASS: Unauthenticated alert and login recovery link rendered');
+
   console.log('================================================================');
   console.log('ALL SESSIONS TAB UI & ACTION TESTS PASSED 100%');
   console.log('================================================================');
