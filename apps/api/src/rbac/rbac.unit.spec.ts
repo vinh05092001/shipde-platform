@@ -3192,8 +3192,16 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
       (a) => a.action === 'SYSTEM_ROLE_PERMISSIONS_RECONCILED'
     );
     assert.ok(platformAudit, 'System role reconciliation audit row must be created');
-    assert.strictEqual(platformAudit.merchant_id, null, 'Platform audit must not belong to arbitrary customer merchant');
-    assert.strictEqual(platformAudit.user_id, null, 'Platform audit user_id must be null for system bootstrap');
+    assert.strictEqual(
+      platformAudit.merchant_id,
+      null,
+      'Platform audit must not belong to arbitrary customer merchant'
+    );
+    assert.strictEqual(
+      platformAudit.user_id,
+      null,
+      'Platform audit user_id must be null for system bootstrap'
+    );
 
     // 2. onModuleInit must fail startup visibly if ensurePlatformSeed fails, rather than swallowing error
     (service as any).isSeeded = false;
