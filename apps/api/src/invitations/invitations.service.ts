@@ -123,6 +123,16 @@ export class InvitationsService {
         [{ field, code: 'INVALID_INTEGER', message: `${field} phải là số nguyên dương` }]
       );
     }
+    if (field === 'page' && value > max) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Tham số phân trang vượt quá giới hạn cho phép',
+        false,
+        undefined,
+        [{ field: 'page', code: 'OUT_OF_RANGE', message: `page không được vượt quá ${max}` }]
+      );
+    }
     return Math.min(max, value);
   }
 
@@ -728,7 +738,7 @@ export class InvitationsService {
       );
     }
 
-    const page = this.parsePaginationParam(filter.page, 'page', 1, Number.MAX_SAFE_INTEGER);
+    const page = this.parsePaginationParam(filter.page, 'page', 1, 1000);
     const limit = this.parsePaginationParam(filter.limit, 'limit', 20, 100);
     const skip = (page - 1) * limit;
 

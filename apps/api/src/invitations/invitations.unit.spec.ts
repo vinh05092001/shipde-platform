@@ -3318,5 +3318,37 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
         }
       );
     });
+
+    it('Finding 5: caps page to small bounded range and returns 400 VALIDATION_ERROR when page exceeds cap', async () => {
+      const svc = new InvitationsService(mockPrisma, undefined as any, new RateLimitService());
+      const actor = { userId: OWNER_USER_ID, merchantId: MERCHANT_ID, role: 'OWNER' };
+
+      // Page exceeding 1000 cap
+      await assert.rejects(
+        () => svc.listInvitations(actor, { page: '1001' }, 'corr-r7-5'),
+        (err: any) => {
+          assert.strictEqual(err.status, 400);
+          assert.strictEqual(err.code, 'VALIDATION_ERROR');
+          assert.strictEqual(err.fields?.[0]?.field, 'page');
+          assert.strictEqual(err.fields?.[0]?.code, 'OUT_OF_RANGE');
+          return true;
+        }
+      );
+
+      // Huge all-digit page
+      await assert.rejects(
+        () => svc.listInvitations(actor, { page: '99999999999999' }, 'corr-r7-5b'),
+        (err: any) => {
+          assert.strictEqual(err.status, 400);
+          assert.strictEqual(err.code, 'VALIDATION_ERROR');
+          assert.strictEqual(err.fields?.[0]?.field, 'page');
+          return true;
+        }
+      );
+
+      // Valid page within bounds succeeds
+      const res = await svc.listInvitations(actor, { page: '100' }, 'corr-r7-5c');
+      assert.strictEqual(res.meta.page, 100);
+    });
   });
 });
