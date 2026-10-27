@@ -27,11 +27,11 @@ CREATE UNIQUE INDEX "invitations_token_hash_key" ON "invitations"("token_hash");
 -- CreateIndex
 CREATE INDEX "invitations_merchant_id_status_idx" ON "invitations"("merchant_id", "status");
 
--- CreateIndex
-CREATE INDEX "invitations_merchant_id_email_idx" ON "invitations"("merchant_id", "email");
+-- CreateIndex (Partial unique index enforcing at most one PENDING invitation per identifier per merchant)
+CREATE UNIQUE INDEX "invitations_merchant_pending_email_unique" ON "invitations"("merchant_id", "email") WHERE "status" = 'PENDING' AND "email" IS NOT NULL;
 
--- CreateIndex
-CREATE INDEX "invitations_merchant_id_phone_idx" ON "invitations"("merchant_id", "phone");
+-- CreateIndex (Partial unique index enforcing at most one PENDING invitation per identifier per merchant)
+CREATE UNIQUE INDEX "invitations_merchant_pending_phone_unique" ON "invitations"("merchant_id", "phone") WHERE "status" = 'PENDING' AND "phone" IS NOT NULL;
 
 -- CreateIndex
 CREATE INDEX "invitations_expires_at_idx" ON "invitations"("expires_at");

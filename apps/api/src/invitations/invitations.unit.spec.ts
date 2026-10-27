@@ -452,6 +452,38 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
         }
       );
     });
+
+    it('maps P2002 partial unique index constraint violation on concurrent insert to 400 INVITATION_ALREADY_PENDING', async () => {
+      mockPrisma.invitation.findFirst = async () => null; // Check-then-insert race: read passed
+      mockPrisma.invitation.create = async () => {
+        const err: any = new Error('Unique constraint failed on the fields: (`merchant_id`,`email`)');
+        err.code = 'P2002';
+        err.meta = { target: ['invitations_merchant_pending_email_unique'] };
+        throw err;
+      };
+
+      const actor = { userId: OWNER_USER_ID, merchantId: MERCHANT_ID, role: RoleEnum.OWNER };
+
+      await assert.rejects(
+        async () => {
+          await service.createInvitation(
+            {
+              email: 'concurrent_pending@shipde.vn',
+              role: RoleEnum.OPS_CSKH,
+            },
+            actor,
+            '127.0.0.1',
+            'test-corr-06-p2002'
+          );
+        },
+        (err: any) => {
+          assert.ok(err instanceof CanonicalApiException);
+          assert.strictEqual(err.getStatus(), HttpStatus.BAD_REQUEST);
+          assert.strictEqual(err.code, 'INVITATION_ALREADY_PENDING');
+          return true;
+        }
+      );
+    });
   });
 
   // AC-USR-01-07: Missing required recipient identifier or role

@@ -285,21 +285,35 @@ export class InvitationsService {
     // 6. Expiry: 7 days (168 hours) from now (BR-INV-03)
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
-    // 7. Persist invitation in DB
-    const invitation = await this.prisma.invitation.create({
-      data: {
-        merchant_id: actor.merchantId,
-        email: email || null,
-        phone: phone || null,
-        role: dto.role as RoleEnum,
-        store_scopes: dto.store_scopes || [],
-        warehouse_scopes: dto.warehouse_scopes || [],
-        token_hash: tokenHash,
-        status: InvitationStatusEnum.PENDING,
-        invited_by_user_id: actor.userId,
-        expires_at: expiresAt,
-      },
-    });
+    // 7. Persist invitation in DB (enforcing partial unique pending index under concurrency)
+    let invitation: any;
+    try {
+      invitation = await this.prisma.invitation.create({
+        data: {
+          merchant_id: actor.merchantId,
+          email: email || null,
+          phone: phone || null,
+          role: dto.role as RoleEnum,
+          store_scopes: dto.store_scopes || [],
+          warehouse_scopes: dto.warehouse_scopes || [],
+          token_hash: tokenHash,
+          status: InvitationStatusEnum.PENDING,
+          invited_by_user_id: actor.userId,
+          expires_at: expiresAt,
+        },
+      });
+    } catch (err: any) {
+      if (err?.code === 'P2002' || err?.message?.includes('invitations_merchant_pending')) {
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'INVITATION_ALREADY_PENDING',
+          'Đã có lời mời đang chờ xử lý cho người dùng này. Vui lòng sử dụng tính năng gửi lại nếu cần.',
+          false,
+          'Vui lòng sử dụng tính năng gửi lại lời mời'
+        );
+      }
+      throw err;
+    }
 
     // 8. Immutable Audit Trail (BR-INV-09, AC-USR-01-01, AC-USR-01-18)
     // Never log raw token or password
