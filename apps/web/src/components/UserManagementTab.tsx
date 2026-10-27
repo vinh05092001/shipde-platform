@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
+import Link from 'next/link';
 import {
   UserCheck,
   UserPlus,
@@ -623,16 +624,25 @@ export const UserManagementTab: React.FC = () => {
       {/* SUBTAB 3: RBAC MATRIX */}
       {activeSubTab === 'matrix' && (
         <div className="space-y-4">
-          <div className="modern-card p-4 bg-slate-50/70 border border-slate-200 text-xs space-y-2">
-            <div className="flex items-center gap-2 font-bold text-slate-900">
-              <ShieldAlert className="w-4 h-4 text-blue-600" />
-              <span>Bảo Vệ Tính Toàn Vẹn Quyền Hạn (Invariants Guard)</span>
+          <div className="modern-card p-4 bg-slate-50/70 border border-slate-200 text-xs flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2 font-bold text-slate-900">
+                <ShieldAlert className="w-4 h-4 text-blue-600" />
+                <span>Bảo Vệ Tính Toàn Vẹn Quyền Hạn (Invariants Guard)</span>
+              </div>
+              <p className="text-slate-600 text-[11px] leading-relaxed">
+                Hệ thống thực thi nguyên tắc phân chia trách nhiệm (Segregation of Duties). Quy tắc{' '}
+                <strong>Maker-Checker (BR-12)</strong> khóa cứng không cho phép vai trò CSKH tự
+                duyệt sai lệch đối soát tài chính nhằm phòng ngừa gian lận.
+              </p>
             </div>
-            <p className="text-slate-600 text-[11px] leading-relaxed">
-              Hệ thống thực thi nguyên tắc phân chia trách nhiệm (Segregation of Duties). Quy tắc{' '}
-              <strong>Maker-Checker (BR-12)</strong> khóa cứng không cho phép vai trò CSKH tự duyệt
-              sai lệch đối soát tài chính nhằm phòng ngừa gian lận.
-            </p>
+            <Link
+              href="/settings/roles"
+              className="btn-secondary text-xs py-1.5 px-3 whitespace-nowrap flex items-center gap-1.5 font-semibold text-blue-600 hover:text-blue-700 bg-white border border-blue-200 shadow-sm"
+            >
+              <Sliders className="w-3.5 h-3.5" />
+              <span>Quản Lý Vai Trò Cửa Hàng →</span>
+            </Link>
           </div>
 
           <div className="modern-card overflow-hidden">
