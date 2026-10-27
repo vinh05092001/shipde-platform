@@ -3070,7 +3070,8 @@ export class AuthService {
   }
 
   /**
-   * Generates a strong temporary password (>= 12 characters) with upper, lower, digits, and symbols.
+   * Generates a strong temporary password (>= 12 characters) using CSPRNG with rejection sampling
+   * and Fisher-Yates shuffle (Finding 6).
    */
   public generateTemporaryPassword(): string {
     const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
@@ -3080,9 +3081,8 @@ export class AuthService {
 
     const getChars = (set: string, count: number) => {
       let res = '';
-      const bytes = randomBytes(count);
       for (let i = 0; i < count; i++) {
-        res += set[bytes[i] % set.length];
+        res += set[randomInt(set.length)];
       }
       return res;
     };
@@ -3094,10 +3094,13 @@ export class AuthService {
       getChars(special, 2),
     ].join('');
 
-    return combined
-      .split('')
-      .sort(() => Math.random() - 0.5)
-      .join('');
+    // Uniform Fisher-Yates shuffle using cryptographically secure random integers (CSPRNG)
+    const arr = combined.split('');
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = randomInt(i + 1);
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr.join('');
   }
 
   /**

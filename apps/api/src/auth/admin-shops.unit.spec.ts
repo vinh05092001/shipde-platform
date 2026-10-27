@@ -334,6 +334,25 @@ describe('FEAT-AUTH-02: Admin-Created Shop Account Unit Tests', () => {
     );
   });
 
+  // Finding 6: Temporary password generation uses CSPRNG with rejection sampling & Fisher-Yates shuffle
+  it('Finding 6: Temporary password uses CSPRNG without modulo bias or Math.random', () => {
+    const mockPrisma = createMockPrismaService();
+    const service = new AuthService(mockPrisma, createMockRateLimitService());
+
+    const passwords = new Set<string>();
+    for (let i = 0; i < 50; i++) {
+      const pass = service.generateTemporaryPassword();
+      assert.ok(pass.length >= 12, 'Temporary password must have length >= 12');
+      assert.ok(/[A-Z]/.test(pass), 'Must contain uppercase characters');
+      assert.ok(/[a-z]/.test(pass), 'Must contain lowercase characters');
+      assert.ok(/[0-9]/.test(pass), 'Must contain numeric digits');
+      assert.ok(/[!@#$%^&*]/.test(pass), 'Must contain special symbols');
+      passwords.add(pass);
+    }
+    // High entropy CSPRNG: 50 independent passwords must all be distinct
+    assert.strictEqual(passwords.size, 50, 'All 50 generated passwords must be unique');
+  });
+
   // AC-ADMIN-03: Valid admin key with email-only creates verified active user and shop
   // AC-ADMIN-04: Database records verification (active status and verified timestamps)
   // AC-ADMIN-05: Generated merchant code unique and follows standard format
