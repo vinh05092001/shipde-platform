@@ -4254,5 +4254,113 @@ CREATE INDEX "some_other_idx" ON "invitations"("created_at");
       // 4. Executes assertRealPrismaMigrateDiffSafety against live schema/database
       assert.doesNotThrow(() => assertRealPrismaMigrateDiffSafety());
     });
+
+    it('Round 11 Finding 5: rejects non-string scopes, caps scope count/length, and caps full_name length with 400 VALIDATION_ERROR', async () => {
+      // 1. Non-string element in store_scopes
+      await assert.rejects(
+        () =>
+          service.createInvitation(
+            {
+              email: 'scope-validation@shipde.vn',
+              role: RoleEnum.OPS_CSKH,
+              store_scopes: ['valid-scope', 123 as any],
+            },
+            { userId: OWNER_USER_ID, merchantId: MERCHANT_ID },
+            '127.0.0.1',
+            'corr-scope-val-1'
+          ),
+        (err: any) => {
+          assert.ok(err instanceof CanonicalApiException);
+          assert.strictEqual(err.code, 'VALIDATION_ERROR');
+          assert.strictEqual(err.getStatus(), HttpStatus.BAD_REQUEST);
+          return true;
+        }
+      );
+
+      // 2. Element exceeding max length in warehouse_scopes (> 64 chars)
+      await assert.rejects(
+        () =>
+          service.createInvitation(
+            {
+              email: 'scope-length@shipde.vn',
+              role: RoleEnum.OPS_CSKH,
+              warehouse_scopes: ['wh-' + 'x'.repeat(65)],
+            },
+            { userId: OWNER_USER_ID, merchantId: MERCHANT_ID },
+            '127.0.0.1',
+            'corr-scope-val-2'
+          ),
+        (err: any) => {
+          assert.ok(err instanceof CanonicalApiException);
+          assert.strictEqual(err.code, 'VALIDATION_ERROR');
+          assert.strictEqual(err.getStatus(), HttpStatus.BAD_REQUEST);
+          return true;
+        }
+      );
+
+      // 3. Count exceeding 50 elements in store_scopes
+      const oversizedScopes = Array.from({ length: 51 }, (_, i) => `store-${i}`);
+      await assert.rejects(
+        () =>
+          service.createInvitation(
+            {
+              email: 'scope-count@shipde.vn',
+              role: RoleEnum.OPS_CSKH,
+              store_scopes: oversizedScopes,
+            },
+            { userId: OWNER_USER_ID, merchantId: MERCHANT_ID },
+            '127.0.0.1',
+            'corr-scope-val-3'
+          ),
+        (err: any) => {
+          assert.ok(err instanceof CanonicalApiException);
+          assert.strictEqual(err.code, 'VALIDATION_ERROR');
+          assert.strictEqual(err.getStatus(), HttpStatus.BAD_REQUEST);
+          return true;
+        }
+      );
+
+      // 4. acceptInvitation rejects full_name exceeding 100 characters
+      await assert.rejects(
+        () =>
+          service.acceptInvitation(
+            {
+              token: 'sample-token',
+              full_name: 'Nguyen ' + 'A'.repeat(95), // > 100 characters
+              password: 'StrongPassword123!',
+              password_confirm: 'StrongPassword123!',
+            },
+            '127.0.0.1',
+            'corr-fullname-val-1'
+          ),
+        (err: any) => {
+          assert.ok(err instanceof CanonicalApiException);
+          assert.strictEqual(err.code, 'VALIDATION_ERROR');
+          assert.strictEqual(err.getStatus(), HttpStatus.BAD_REQUEST);
+          return true;
+        }
+      );
+
+      // 5. acceptInvitation rejects non-string full_name
+      await assert.rejects(
+        () =>
+          service.acceptInvitation(
+            {
+              token: 'sample-token',
+              full_name: 12345 as any,
+              password: 'StrongPassword123!',
+              password_confirm: 'StrongPassword123!',
+            },
+            '127.0.0.1',
+            'corr-fullname-val-2'
+          ),
+        (err: any) => {
+          assert.ok(err instanceof CanonicalApiException);
+          assert.strictEqual(err.code, 'VALIDATION_ERROR');
+          assert.strictEqual(err.getStatus(), HttpStatus.BAD_REQUEST);
+          return true;
+        }
+      );
+    });
   });
 });

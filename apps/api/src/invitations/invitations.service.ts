@@ -207,6 +207,80 @@ export class InvitationsService {
     );
   }
 
+  /**
+   * Bounded string validation for store and warehouse scope arrays (Round 11 Finding 5 / SECURITY-NFR):
+   * Rejects non-strings, empty elements, and caps both element count and string length.
+   */
+  private validateScopeArray(
+    scopes: any,
+    fieldName: 'store_scopes' | 'warehouse_scopes',
+    maxCount = 50,
+    maxLength = 64
+  ): void {
+    if (scopes === undefined || scopes === null) return;
+    if (!Array.isArray(scopes)) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        `${fieldName} phải là một mảng chuỗi`,
+        false,
+        undefined,
+        [{ field: fieldName, code: 'INVALID_TYPE', message: `${fieldName} phải là một mảng chuỗi` }]
+      );
+    }
+    if (scopes.length > maxCount) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        `Số lượng phần tử trong ${fieldName} không được vượt quá ${maxCount}`,
+        false,
+        undefined,
+        [
+          {
+            field: fieldName,
+            code: 'OUT_OF_RANGE',
+            message: `Số lượng phần tử trong ${fieldName} không được vượt quá ${maxCount}`,
+          },
+        ]
+      );
+    }
+    for (let i = 0; i < scopes.length; i++) {
+      const item = scopes[i];
+      if (typeof item !== 'string' || item.trim().length === 0) {
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'VALIDATION_ERROR',
+          `Phần tử thứ ${i} trong ${fieldName} phải là chuỗi không rỗng`,
+          false,
+          undefined,
+          [
+            {
+              field: `${fieldName}[${i}]`,
+              code: 'INVALID_TYPE',
+              message: `Phần tử trong ${fieldName} phải là chuỗi không rỗng`,
+            },
+          ]
+        );
+      }
+      if (item.trim().length > maxLength) {
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'VALIDATION_ERROR',
+          `Phần tử trong ${fieldName} không được vượt quá ${maxLength} ký tự`,
+          false,
+          undefined,
+          [
+            {
+              field: `${fieldName}[${i}]`,
+              code: 'OUT_OF_RANGE',
+              message: `Phần tử trong ${fieldName} không được vượt quá ${maxLength} ký tự`,
+            },
+          ]
+        );
+      }
+    }
+  }
+
   private async resolveActorUser(actor: {
     userId: string;
     merchantId: string;
@@ -364,41 +438,8 @@ export class InvitationsService {
       );
     }
 
-    if (
-      dto.store_scopes !== undefined &&
-      dto.store_scopes !== null &&
-      !Array.isArray(dto.store_scopes)
-    ) {
-      throw new CanonicalApiException(
-        HttpStatus.BAD_REQUEST,
-        'VALIDATION_ERROR',
-        'Phạm vi chi nhánh phải là danh sách chuỗi',
-        false,
-        undefined,
-        [{ field: 'store_scopes', code: 'INVALID_TYPE', message: 'store_scopes phải là một mảng' }]
-      );
-    }
-
-    if (
-      dto.warehouse_scopes !== undefined &&
-      dto.warehouse_scopes !== null &&
-      !Array.isArray(dto.warehouse_scopes)
-    ) {
-      throw new CanonicalApiException(
-        HttpStatus.BAD_REQUEST,
-        'VALIDATION_ERROR',
-        'Phạm vi kho hàng phải là danh sách chuỗi',
-        false,
-        undefined,
-        [
-          {
-            field: 'warehouse_scopes',
-            code: 'INVALID_TYPE',
-            message: 'warehouse_scopes phải là một mảng',
-          },
-        ]
-      );
-    }
+    this.validateScopeArray(dto.store_scopes, 'store_scopes');
+    this.validateScopeArray(dto.warehouse_scopes, 'warehouse_scopes');
 
     const identity = resolveCanonicalIdentity({ email: dto.email, phone: dto.phone });
     const email = identity.email;
@@ -1571,8 +1612,8 @@ export class InvitationsService {
       );
     }
 
-    // 2. Validate full name (AC-USR-01-07)
-    if (!dto.full_name || dto.full_name.trim().length === 0) {
+    // 2. Validate full name (AC-USR-01-07 / Round 11 Finding 5 / SECURITY-NFR)
+    if (typeof dto.full_name !== 'string' || dto.full_name.trim().length === 0) {
       throw new CanonicalApiException(
         HttpStatus.BAD_REQUEST,
         'VALIDATION_ERROR',
@@ -1580,6 +1621,22 @@ export class InvitationsService {
         false,
         undefined,
         [{ field: 'full_name', code: 'REQUIRED', message: 'Vui lòng nhập họ và tên' }]
+      );
+    }
+    if (dto.full_name.trim().length > 100) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Họ và tên không được vượt quá 100 ký tự',
+        false,
+        undefined,
+        [
+          {
+            field: 'full_name',
+            code: 'OUT_OF_RANGE',
+            message: 'Họ và tên không được vượt quá 100 ký tự',
+          },
+        ]
       );
     }
 
