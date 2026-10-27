@@ -632,6 +632,68 @@ async function main() {
     assert.ok(!auditStr.includes('secret_ciphertext'));
   }
 
+  // =========================================================================
+  // Finding 2 (Round 6): Tenant Deletion Cascade Compatibility
+  // Verifies that deleting a merchant whose users are assigned to a custom role cascades cleanly
+  // without failing on users_custom_role_id_fkey due to deferrable constraint.
+  // =========================================================================
+  const testCascadeMerchantId = 'd8999999-9999-4999-a999-999999999991';
+  await prisma.merchant.upsert({
+    where: { id: testCascadeMerchantId },
+    create: {
+      id: testCascadeMerchantId,
+      name: 'Test Cascade Merchant',
+      code: 'TEST_CASCADE_M',
+      status: 'active',
+    },
+    update: {},
+  });
+
+  await prisma.user.deleteMany({ where: { merchant_id: testCascadeMerchantId } });
+  await prisma.role.deleteMany({ where: { merchant_id: testCascadeMerchantId } });
+
+  const testCascadeRole = await prisma.role.create({
+    data: {
+      merchant_id: testCascadeMerchantId,
+      name: 'Cascade Custom Role',
+      name_lower: 'cascade custom role',
+      is_system: false,
+    },
+  });
+
+  const testCascadeUserId = 'd8999999-9999-4999-a999-999999999992';
+  await prisma.user.upsert({
+    where: { id: testCascadeUserId },
+    create: {
+      id: testCascadeUserId,
+      email: 'cascade_user@shipde.test',
+      full_name: 'Cascade User',
+      password_hash: 'dummyhash',
+      merchant_id: testCascadeMerchantId,
+      role: 'OPS_CSKH',
+      custom_role_id: testCascadeRole.id,
+      status: 'active',
+    },
+    update: {
+      custom_role_id: testCascadeRole.id,
+    },
+  });
+
+  // Deleting the merchant must cascade cleanly without users_custom_role_id_fkey violation
+  await prisma.merchant.delete({
+    where: { id: testCascadeMerchantId },
+  });
+
+  // Verify both merchant, user, and role are deleted
+  const deletedMerchant = await prisma.merchant.findUnique({
+    where: { id: testCascadeMerchantId },
+  });
+  const deletedUser = await prisma.user.findUnique({ where: { id: testCascadeUserId } });
+  const deletedRole = await prisma.role.findUnique({ where: { id: testCascadeRole.id } });
+  assert.strictEqual(deletedMerchant, null);
+  assert.strictEqual(deletedUser, null);
+  assert.strictEqual(deletedRole, null);
+
   // Cleanup helper fixtures
   await prisma.role.deleteMany({
     where: { id: targetRole.id },

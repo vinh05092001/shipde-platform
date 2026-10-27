@@ -112,10 +112,13 @@ BEGIN
     END IF;
 END $$;
 
--- AddForeignKey
+-- AddForeignKey (deferrable to allow clean merchant deletion cascade without users_custom_role_id_fkey order hazard)
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'users_custom_role_id_fkey') THEN
-        ALTER TABLE "users" ADD CONSTRAINT "users_custom_role_id_fkey" FOREIGN KEY ("custom_role_id") REFERENCES "roles"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+        ALTER TABLE "users" ADD CONSTRAINT "users_custom_role_id_fkey" FOREIGN KEY ("custom_role_id") REFERENCES "roles"("id") ON DELETE NO ACTION ON UPDATE CASCADE DEFERRABLE INITIALLY DEFERRED;
+    ELSE
+        ALTER TABLE "users" DROP CONSTRAINT "users_custom_role_id_fkey";
+        ALTER TABLE "users" ADD CONSTRAINT "users_custom_role_id_fkey" FOREIGN KEY ("custom_role_id") REFERENCES "roles"("id") ON DELETE NO ACTION ON UPDATE CASCADE DEFERRABLE INITIALLY DEFERRED;
     END IF;
 END $$;
