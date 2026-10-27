@@ -1625,7 +1625,40 @@ export class InvitationsService {
    */
   async acceptInvitation(dto: AcceptInvitationRequest, clientIp: string, correlationId: string) {
     const safeCorrelationId = sanitizeCorrelationId(correlationId);
-    // 0. Rate limiting: Anti-brute-force acceptance gate (SECURITY-NFR) - fail closed
+
+    // 0. Validate request body and token shape first (Finding 4 / SECURITY-NFR)
+    if (!dto || typeof dto !== 'object' || Array.isArray(dto)) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Dữ liệu yêu cầu không hợp lệ',
+        false
+      );
+    }
+
+    if (!dto.token || typeof dto.token !== 'string' || dto.token.trim().length === 0) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Mã token lời mời là bắt buộc',
+        false,
+        undefined,
+        [{ field: 'token', code: 'REQUIRED', message: 'Token là bắt buộc' }]
+      );
+    }
+
+    if (dto.token.length > 256) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Mã token lời mời vượt quá độ dài cho phép',
+        false,
+        undefined,
+        [{ field: 'token', code: 'MAX_LENGTH_EXCEEDED', message: 'Token vượt quá độ dài cho phép' }]
+      );
+    }
+
+    // 1. Rate limiting: Anti-brute-force acceptance gate (SECURITY-NFR) - fail closed
     if (!this.rateLimitService) {
       throw new CanonicalApiException(
         HttpStatus.TOO_MANY_REQUESTS,
@@ -1633,7 +1666,7 @@ export class InvitationsService {
         'Dịch vụ kiểm soát tần suất không khả dụng. Vui lòng thử lại sau.'
       );
     }
-    const tokenHash = dto.token ? this.hashToken(dto.token.trim()) : undefined;
+    const tokenHash = this.hashToken(dto.token.trim());
     const rateLimit = await this.rateLimitService.checkInvitationAcceptLimit(clientIp, tokenHash);
     if (!rateLimit.allowed) {
       throw new CanonicalApiException(
@@ -1648,17 +1681,6 @@ export class InvitationsService {
       );
     }
     await this.rateLimitService.recordInvitationAcceptAttempt(clientIp, tokenHash);
-    // 1. Validate token
-    if (!dto.token || typeof dto.token !== 'string' || dto.token.trim().length === 0) {
-      throw new CanonicalApiException(
-        HttpStatus.BAD_REQUEST,
-        'VALIDATION_ERROR',
-        'Mã token lời mời là bắt buộc',
-        false,
-        undefined,
-        [{ field: 'token', code: 'REQUIRED', message: 'Token là bắt buộc' }]
-      );
-    }
 
     // 2. Validate full name (AC-USR-01-07 / Round 11 Finding 5 / SECURITY-NFR)
     if (typeof dto.full_name !== 'string' || dto.full_name.trim().length === 0) {

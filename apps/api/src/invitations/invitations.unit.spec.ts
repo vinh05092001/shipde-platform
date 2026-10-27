@@ -4458,5 +4458,51 @@ CREATE INDEX "some_other_idx" ON "invitations"("created_at");
         }
       );
     });
+
+    it('Round 12 Finding 4: acceptInvitation validates DTO shape and bounds token length before rate-limiting and hashing', async () => {
+      // 1. Missing / non-object DTO rejects with 400 VALIDATION_ERROR
+      await assert.rejects(
+        () => service.acceptInvitation(null as any, '127.0.0.1', 'corr-f4-null'),
+        (err: any) => {
+          assert.ok(err instanceof CanonicalApiException);
+          assert.strictEqual(err.code, 'VALIDATION_ERROR');
+          assert.strictEqual(err.getStatus(), HttpStatus.BAD_REQUEST);
+          return true;
+        }
+      );
+
+      // 2. Non-object primitive DTO rejects with 400 VALIDATION_ERROR
+      await assert.rejects(
+        () => service.acceptInvitation('invalid-body' as any, '127.0.0.1', 'corr-f4-str'),
+        (err: any) => {
+          assert.ok(err instanceof CanonicalApiException);
+          assert.strictEqual(err.code, 'VALIDATION_ERROR');
+          assert.strictEqual(err.getStatus(), HttpStatus.BAD_REQUEST);
+          return true;
+        }
+      );
+
+      // 3. Oversized token string (> 256 chars) rejects with 400 VALIDATION_ERROR before hashing
+      const oversizedToken = 'a'.repeat(300);
+      await assert.rejects(
+        () =>
+          service.acceptInvitation(
+            {
+              token: oversizedToken,
+              full_name: 'Test Name',
+              password: 'StrongPassword123!',
+              password_confirm: 'StrongPassword123!',
+            },
+            '127.0.0.1',
+            'corr-f4-oversized'
+          ),
+        (err: any) => {
+          assert.ok(err instanceof CanonicalApiException);
+          assert.strictEqual(err.code, 'VALIDATION_ERROR');
+          assert.strictEqual(err.getStatus(), HttpStatus.BAD_REQUEST);
+          return true;
+        }
+      );
+    });
   });
 });
