@@ -153,6 +153,7 @@ function AcceptInvitationContent() {
     const rawHash = typeof window !== 'undefined' ? window.location.hash : null;
     const searchToken = searchParams ? searchParams.get('token') : null;
     const resolved = extractInvitationToken({ hash: rawHash, searchToken });
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Client-side invitation token extraction from URL fragment
     setToken(resolved);
 
     if (resolved && typeof window !== 'undefined') {
@@ -160,7 +161,6 @@ function AcceptInvitationContent() {
     }
 
     if (!resolved) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- Client-side invitation token verification initialization
       setVerifying(false);
       setVerifyError(
         'Mã lời mời không tồn tại trong đường dẫn. Vui lòng kiểm tra lại liên kết trong email hoặc tin nhắn của bạn.'
