@@ -182,49 +182,56 @@ export const UserManagementTab: React.FC = () => {
   const [matrixLoading, setMatrixLoading] = useState<boolean>(false);
   const [matrixError, setMatrixError] = useState<string | null>(null);
 
-  // RBAC Granular Matrix State with Canonical Permission Codes
+  // RBAC Granular Matrix State with Canonical Permission Codes (Finding 4 / Round 7 / BR-RBAC-06 / SCR-USR-01)
   const [permissionsMatrix] = useState([
     {
       id: 'p_pii',
       code: 'pii:unmask',
-      feature: 'Xem & Mở che số điện thoại khách hàng (PII)',
-      rule: 'BR-42 · Ghi nhật ký Audit Trail',
+      name: 'Mở che thông tin khách hàng (PII)',
+      feature: 'Mở che thông tin khách hàng (PII)',
+      rule: 'BR-42 · Ghi nhật ký Audit Trail bất biến khi xem SĐT/địa chỉ',
     },
     {
       id: 'p_reattempt',
       code: 'shipment:cancel_redeliver',
-      feature: 'Gửi lệnh cứu đơn & yêu cầu giao lại qua Open API',
-      rule: 'CN-10 · L2 Execute / L1 Assist',
+      name: 'Hủy đơn và yêu cầu giao lại',
+      feature: 'Hủy đơn và yêu cầu giao lại (Cứu đơn)',
+      rule: 'CN-10 · L2 Execute / L1 Assist cứu đơn & giao lại',
     },
     {
       id: 'p_discrepancy',
       code: 'reconciliation:approve_rate_policy',
-      feature: 'Duyệt xử lý sai lệch đối soát (Maker-Checker)',
-      rule: 'BR-12 · Tách quyền tài chính cấp bản ghi',
+      name: 'Phê duyệt chính sách đối soát',
+      feature: 'Phê duyệt chính sách đối soát',
+      rule: 'BR-12 · Tách quyền SoD Maker-Checker (Checker phê duyệt chính sách)',
     },
     {
       id: 'p_close_period',
       code: 'reconciliation:run_review_audit',
-      feature: 'Khóa sổ kỳ đối soát COD & Cước',
-      rule: 'BR-11 · Bất biến không sửa đổi sau khi chốt',
+      name: 'Chạy và đối chiếu kiểm toán',
+      feature: 'Chạy và đối chiếu kiểm toán',
+      rule: 'BR-11 / D1-D7 · Kích hoạt khớp 6 quy tắc và rà soát sai lệch cước/COD',
     },
     {
       id: 'p_return_scan',
       code: 'shipment:receive_return',
-      feature: 'Quét nhận hàng hoàn kho ngoại tuyến SQLite',
-      rule: 'BR-40 / BR-36 · Khử trùng lặp lũy đẳng',
+      name: 'Nhận hàng hoàn và quét bằng chứng',
+      feature: 'Nhận hàng hoàn và quét bằng chứng',
+      rule: 'BR-40 / BR-36 · Quét hoàn ngoại tuyến SQLite & đối soát kiện trả',
     },
     {
       id: 'p_api_config',
       code: 'iam:shop_config',
-      feature: 'Khai báo API Hãng, Webhook Key & Biểu giá',
-      rule: 'BR-51 · Quyền quản trị kết nối cấp Shop',
+      name: 'Cấu hình cửa hàng',
+      feature: 'Cấu hình cửa hàng',
+      rule: 'BR-51 · Quyền quản trị kết nối Shop và biểu phí',
     },
     {
       id: 'p_export_ledgers',
       code: 'reconciliation:allocate_bank_receipt',
-      feature: 'Xuất dữ liệu Ba Sổ Giá Trị & File Báo Cáo',
-      rule: 'BR-45 · Quyền truy xuất số liệu kế toán',
+      name: 'Phân bổ dòng tiền thực nhận',
+      feature: 'Phân bổ dòng tiền thực nhận',
+      rule: 'BR-45 · Khớp số tiền ngân hàng thực nhận vào kỳ đối soát',
     },
   ]);
 
@@ -729,7 +736,10 @@ export const UserManagementTab: React.FC = () => {
                   <tbody className="divide-y divide-slate-100">
                     {permissionsMatrix.map((row) => (
                       <tr key={row.id} className="hover:bg-slate-50/80 transition">
-                        <td className="py-3 px-4 font-semibold text-slate-900">{row.feature}</td>
+                        <td className="py-3 px-4">
+                          <div className="font-semibold text-slate-900">{row.name || row.feature}</div>
+                          <div className="text-[11px] font-mono text-blue-600 font-normal">{row.code}</div>
+                        </td>
                         <td className="py-3 px-4 text-slate-500 font-mono text-[11px]">
                           {row.rule}
                         </td>
@@ -1066,7 +1076,7 @@ export const UserManagementTab: React.FC = () => {
 
 export function resolveMatrixForLiveRoles(
   liveRoles: RoleItem[],
-  matrixRows: Array<{ id: string; code: string; feature: string }>
+  matrixRows: Array<{ id: string; code: string; feature: string; name?: string }>
 ) {
   return matrixRows.map((row) => {
     const rolePermissions: Record<string, boolean> = {};
@@ -1078,6 +1088,7 @@ export function resolveMatrixForLiveRoles(
     return {
       id: row.id,
       code: row.code,
+      name: row.name || row.feature,
       feature: row.feature,
       roles: rolePermissions,
     };

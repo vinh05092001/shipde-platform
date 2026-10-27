@@ -107,36 +107,42 @@ async function runTest() {
   ];
 
   const canonicalMatrixRows = [
-    { id: 'p_pii', code: 'pii:unmask', feature: 'Xem & Mở che số điện thoại khách hàng (PII)' },
+    { id: 'p_pii', code: 'pii:unmask', name: 'Mở che thông tin khách hàng (PII)', feature: 'Mở che thông tin khách hàng (PII)' },
     {
       id: 'p_reattempt',
       code: 'shipment:cancel_redeliver',
-      feature: 'Gửi lệnh cứu đơn & yêu cầu giao lại qua Open API',
+      name: 'Hủy đơn và yêu cầu giao lại',
+      feature: 'Hủy đơn và yêu cầu giao lại (Cứu đơn)',
     },
     {
       id: 'p_discrepancy',
       code: 'reconciliation:approve_rate_policy',
-      feature: 'Duyệt xử lý sai lệch đối soát (Maker-Checker)',
+      name: 'Phê duyệt chính sách đối soát',
+      feature: 'Phê duyệt chính sách đối soát',
     },
     {
       id: 'p_close_period',
       code: 'reconciliation:run_review_audit',
-      feature: 'Khóa sổ kỳ đối soát COD & Cước',
+      name: 'Chạy và đối chiếu kiểm toán',
+      feature: 'Chạy và đối chiếu kiểm toán',
     },
     {
       id: 'p_return_scan',
       code: 'shipment:receive_return',
-      feature: 'Quét nhận hàng hoàn kho ngoại tuyến SQLite',
+      name: 'Nhận hàng hoàn và quét bằng chứng',
+      feature: 'Nhận hàng hoàn và quét bằng chứng',
     },
     {
       id: 'p_api_config',
       code: 'iam:shop_config',
-      feature: 'Khai báo API Hãng, Webhook Key & Biểu giá',
+      name: 'Cấu hình cửa hàng',
+      feature: 'Cấu hình cửa hàng',
     },
     {
       id: 'p_export_ledgers',
       code: 'reconciliation:allocate_bank_receipt',
-      feature: 'Xuất dữ liệu Ba Sổ Giá Trị & File Báo Cáo',
+      name: 'Phân bổ dòng tiền thực nhận',
+      feature: 'Phân bổ dòng tiền thực nhận',
     },
   ];
 
@@ -184,6 +190,23 @@ async function runTest() {
       `Row ${row.code} must not contain any role grants when live roles are empty`
     );
   }
+
+  // 5. Round 7 Finding 4: Canonical capability mapping verification from seed/spec
+  const auditRow = resolved.find((r) => r.code === 'reconciliation:run_review_audit')!;
+  assert.strictEqual(auditRow.feature, 'Chạy và đối chiếu kiểm toán');
+  assert.strictEqual(auditRow.name, 'Chạy và đối chiếu kiểm toán');
+
+  const bankRow = resolved.find((r) => r.code === 'reconciliation:allocate_bank_receipt')!;
+  assert.strictEqual(bankRow.feature, 'Phân bổ dòng tiền thực nhận');
+  assert.strictEqual(bankRow.name, 'Phân bổ dòng tiền thực nhận');
+
+  const policyRow = resolved.find((r) => r.code === 'reconciliation:approve_rate_policy')!;
+  assert.strictEqual(policyRow.feature, 'Phê duyệt chính sách đối soát');
+  assert.strictEqual(policyRow.name, 'Phê duyệt chính sách đối soát');
+
+  console.log(
+    '✅ Finding 4 (Round 7): Matrix rows bound to canonical RBAC catalog names and codes proved successfully!'
+  );
 
   console.log(
     '✅ Finding 1 (Round 3): Zero fake grants painted when live roles are empty/in-flight.'
