@@ -4,7 +4,6 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import {
   ShieldCheck,
-  Loader2,
   AlertTriangle,
   AlertCircle,
   Lock,
@@ -18,6 +17,7 @@ import {
   Clock,
   Globe,
   Radio,
+  Loader2,
 } from 'lucide-react';
 
 export interface SessionItem {
@@ -40,6 +40,10 @@ export interface SessionsTabProps {
     'loading' | 'empty' | 'error' | 'forbidden' | 'unauthenticated' | 'validation' | 'success';
   initialErrorMessage?: string;
   initialValidationMessage?: string;
+  initialRevokingId?: string | null;
+  initialRevokeAllOpen?: boolean;
+  initialRevokeAllLoading?: boolean;
+  initialIsFetching?: boolean;
   apiUrl?: string;
   authToken?: string;
 }
@@ -361,6 +365,10 @@ export function SessionsTab({
   initialState,
   initialErrorMessage,
   initialValidationMessage,
+  initialRevokingId,
+  initialRevokeAllOpen,
+  initialRevokeAllLoading,
+  initialIsFetching,
   apiUrl,
   authToken,
 }: SessionsTabProps) {
@@ -376,16 +384,16 @@ export function SessionsTab({
     initialValidationMessage ?? null
   );
 
-  const [isFetching, setIsFetching] = useState(false);
-  const isFetchingRef = useRef(false);
+  const [isFetching, setIsFetching] = useState(initialIsFetching ?? false);
+  const isFetchingRef = useRef(initialIsFetching ?? false);
   const sessionsRef = useRef(sessions);
   useEffect(() => {
     sessionsRef.current = sessions;
   }, [sessions]);
 
-  const [revokingId, setRevokingId] = useState<string | null>(null);
-  const [revokeAllOpen, setRevokeAllOpen] = useState(false);
-  const [revokeAllLoading, setRevokeAllLoading] = useState(false);
+  const [revokingId, setRevokingId] = useState<string | null>(initialRevokingId ?? null);
+  const [revokeAllOpen, setRevokeAllOpen] = useState(initialRevokeAllOpen ?? false);
+  const [revokeAllLoading, setRevokeAllLoading] = useState(initialRevokeAllLoading ?? false);
   const [revokeAllIncludeCurrent, setRevokeAllIncludeCurrent] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 

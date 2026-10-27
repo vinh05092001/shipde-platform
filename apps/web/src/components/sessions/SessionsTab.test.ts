@@ -611,6 +611,71 @@ async function runAsyncTests() {
   assert.ok(htmlUnauthenticated.includes('href="/auth/login"'));
   console.log('  PASS: Unauthenticated alert and login recovery link rendered');
 
+  // ---------------------------------------------------------------------------
+  // TEST 14 / AC-SESS-04: Loader2 spinner rendering on in-flight actions
+  // ---------------------------------------------------------------------------
+  console.log(
+    '[TEST 14 / AC-SESS-04] Loader2 spinner renders without ReferenceError on in-flight states'
+  );
+  // 14a: Single revoke in-flight shows Loader2 spinner and "Đang thu hồi..."
+  const htmlRevoking = renderWithAuth(
+    React.createElement(SessionsTab, {
+      initialState: 'success',
+      initialSessions: [mockCurrentSession, mockRemoteSession1],
+      initialRevokingId: mockRemoteSession1.session_id,
+      authToken: 'dummy-token',
+    })
+  );
+  assert.ok(
+    htmlRevoking.includes('Đang thu hồi...'),
+    'Single revoke in-flight must render "Đang thu hồi..." label'
+  );
+  assert.ok(
+    htmlRevoking.includes('animate-spin text-red-600'),
+    'Single revoke must render Loader2 spinner with animate-spin text-red-600'
+  );
+
+  // 14b: Revoke-all in-flight shows Loader2 spinner in confirmation dialog
+  const htmlRevokeAllInFlight = renderWithAuth(
+    React.createElement(SessionsTab, {
+      initialState: 'success',
+      initialSessions: [mockCurrentSession, mockRemoteSession1],
+      initialRevokeAllOpen: true,
+      initialRevokeAllLoading: true,
+      authToken: 'dummy-token',
+    })
+  );
+  assert.ok(
+    htmlRevokeAllInFlight.includes('data-testid="confirm-revoke-all-button"'),
+    'Dialog confirm button must be rendered'
+  );
+  assert.ok(
+    htmlRevokeAllInFlight.includes('animate-spin'),
+    'Revoke-all in-flight must render Loader2 spinner with animate-spin'
+  );
+
+  // 14c: Retry fetch in-flight shows Loader2 spinner and "Đang thử lại..."
+  const htmlRetryInFlight = renderWithAuth(
+    React.createElement(SessionsTab, {
+      initialState: 'error',
+      initialSessions: [mockCurrentSession],
+      initialErrorMessage: 'Lỗi tải phiên',
+      initialIsFetching: true,
+      authToken: 'dummy-token',
+    })
+  );
+  assert.ok(
+    htmlRetryInFlight.includes('Đang thử lại...'),
+    'Retry button in-flight must render "Đang thử lại..." label'
+  );
+  assert.ok(
+    htmlRetryInFlight.includes('animate-spin'),
+    'Retry button in-flight must render Loader2 spinner with animate-spin'
+  );
+  console.log(
+    '  PASS: AC-SESS-04 Loader2 inline spinner successfully rendered across all in-flight states'
+  );
+
   console.log('================================================================');
   console.log('ALL SESSIONS TAB UI & ACTION TESTS PASSED 100%');
   console.log('================================================================');
