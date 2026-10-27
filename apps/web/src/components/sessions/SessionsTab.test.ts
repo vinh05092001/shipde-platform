@@ -114,17 +114,25 @@ async function runAsyncTests() {
     assert.strictEqual(currentState, 'loading', 'State must not change');
     console.log('  PASS: In-flight GET locks duplicate clicks');
 
-    // Test successful GET execution when not locked
+    // Case 2b: In-flight ref tracking during execution
+    const testFetchingRef = { current: false };
     const successResult = await executeFetchSessions({
       baseUrl: 'http://localhost:3001',
       token: 'dummy-token',
       sessions: [],
       isFetching: false,
+      isFetchingRef: testFetchingRef,
       setFetchState: (s) => {
         currentState = s;
       },
       setSessions: (sess) => {
         assert.strictEqual(sess.length, 1);
+        // During setSessions execution, in-flight ref is still locked
+        assert.strictEqual(
+          testFetchingRef.current,
+          true,
+          'isFetchingRef must be locked during fetch lifecycle'
+        );
       },
       setErrorMessage: () => {},
       setValidationMessage: () => {},
@@ -136,7 +144,32 @@ async function runAsyncTests() {
     assert.strictEqual(successResult.success, true);
     assert.strictEqual(fetchDispatchedCount, 1);
     assert.strictEqual(currentState, 'success');
-    console.log('  PASS: Unlocked GET dispatches fetch and transitions to success');
+    assert.strictEqual(
+      testFetchingRef.current,
+      false,
+      'isFetchingRef must reset to false after completion'
+    );
+    console.log(
+      '  PASS: Unlocked GET dispatches fetch, locks in-flight ref, and transitions to success'
+    );
+
+    // Case 2c: In-flight ref prevents concurrent second dispatch
+    const lockedByRef = await executeFetchSessions({
+      baseUrl: 'http://localhost:3001',
+      token: 'dummy-token',
+      sessions: [mockCurrentSession],
+      isFetching: false,
+      isFetchingRef: { current: true },
+      setFetchState: () => {},
+      setSessions: () => {},
+      setErrorMessage: () => {},
+      setValidationMessage: () => {},
+      setActionError: () => {},
+      setIsFetching: () => {},
+    });
+    assert.strictEqual(lockedByRef.executed, false);
+    assert.strictEqual(lockedByRef.locked, true);
+    console.log('  PASS: isFetchingRef locks concurrent dispatches');
   } finally {
     global.fetch = originalFetch;
   }
@@ -397,6 +430,17 @@ async function runAsyncTests() {
   assert.ok(htmlValidation.includes('role="alert"'));
   assert.ok(htmlValidation.includes('Định dạng mã phiên không hợp lệ'));
   console.log('  PASS: Validation error banner rendered');
+
+  console.log('[TEST 11] Default mount without initial props renders loading skeleton cleanly');
+  const htmlDefaultMount = renderWithAuth(
+    React.createElement(SessionsTab, {
+      authToken: 'dummy-token',
+    })
+  );
+  assert.ok(htmlDefaultMount.includes('data-testid="sessions-manager"'));
+  assert.ok(htmlDefaultMount.includes('data-testid="sessions-loading-skeleton"'));
+  assert.ok(htmlDefaultMount.includes('aria-busy="true"'));
+  console.log('  PASS: Default mount renders loading skeleton cleanly');
 
   console.log('================================================================');
   console.log('ALL SESSIONS TAB UI & ACTION TESTS PASSED 100%');

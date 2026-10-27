@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import {
   ShieldCheck,
@@ -78,8 +78,9 @@ function formatDate(iso: string): string {
 export async function executeFetchSessions(options: {
   baseUrl: string;
   token?: string | null;
-  sessions: SessionItem[];
-  isFetching: boolean;
+  sessions?: SessionItem[];
+  isFetching?: boolean;
+  isFetchingRef?: React.MutableRefObject<boolean> | { current: boolean };
   setFetchState: (state: 'loading' | 'error' | 'forbidden' | 'validation' | 'success') => void;
   setSessions: (sessions: SessionItem[]) => void;
   setErrorMessage: (msg: string | null) => void;
@@ -87,21 +88,28 @@ export async function executeFetchSessions(options: {
   setActionError: (msg: string | null) => void;
   setIsFetching: (fetching: boolean) => void;
 }): Promise<{ executed: boolean; locked?: boolean; success?: boolean; error?: string }> {
-  if (options.isFetching) {
+  if (options.isFetching || options.isFetchingRef?.current) {
     return { executed: false, locked: true };
   }
+  if (options.isFetchingRef) {
+    options.isFetchingRef.current = true;
+  }
+  const currentSessions = options.sessions ?? [];
   if (!options.token) {
-    if (options.sessions.length === 0) {
+    if (currentSessions.length === 0) {
       options.setFetchState('forbidden');
     } else {
       options.setActionError('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
+    }
+    if (options.isFetchingRef) {
+      options.isFetchingRef.current = false;
     }
     return { executed: true, success: false, error: 'NO_TOKEN' };
   }
 
   try {
     options.setIsFetching(true);
-    if (options.sessions.length === 0) {
+    if (currentSessions.length === 0) {
       options.setFetchState('loading');
     }
     options.setErrorMessage(null);
@@ -116,7 +124,7 @@ export async function executeFetchSessions(options: {
     });
 
     if (res.status === 401 || res.status === 403) {
-      if (options.sessions.length === 0) {
+      if (currentSessions.length === 0) {
         options.setFetchState('forbidden');
       } else {
         options.setActionError('Không có quyền truy cập hoặc phiên đã hết hạn (403 FORBIDDEN).');
@@ -143,6 +151,9 @@ export async function executeFetchSessions(options: {
     options.setFetchState('error');
     return { executed: true, success: false, error: err?.message };
   } finally {
+    if (options.isFetchingRef) {
+      options.isFetchingRef.current = false;
+    }
     options.setIsFetching(false);
   }
 }
@@ -306,6 +317,12 @@ export function SessionsTab({
   );
 
   const [isFetching, setIsFetching] = useState(false);
+  const isFetchingRef = useRef(false);
+  const sessionsRef = useRef(sessions);
+  useEffect(() => {
+    sessionsRef.current = sessions;
+  }, [sessions]);
+
   const [revokingId, setRevokingId] = useState<string | null>(null);
   const [revokeAllOpen, setRevokeAllOpen] = useState(false);
   const [revokeAllLoading, setRevokeAllLoading] = useState(false);
@@ -315,11 +332,13 @@ export function SessionsTab({
   const baseUrl = apiUrl || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
   const fetchSessions = useCallback(async () => {
+    if (isFetchingRef.current) return;
     await executeFetchSessions({
       baseUrl,
       token,
-      sessions,
-      isFetching,
+      sessions: sessionsRef.current,
+      isFetching: isFetchingRef.current,
+      isFetchingRef,
       setFetchState,
       setSessions,
       setErrorMessage,
@@ -327,7 +346,7 @@ export function SessionsTab({
       setActionError,
       setIsFetching,
     });
-  }, [baseUrl, token, sessions, isFetching]);
+  }, [baseUrl, token]);
 
   useEffect(() => {
     if (!initialSessions && !initialState) {
