@@ -368,16 +368,60 @@ async function runInvitationsSupertestSuite() {
   assert.strictEqual(verifyRes.status, 200);
   assert.strictEqual(verifyRes.body.data.valid, true);
   assert.strictEqual(verifyRes.body.data.tenant_name, merchant.name);
+  // Minimal verify payload (Finding 10: BR-INV-06)
+  assert.strictEqual(verifyRes.body.data.store_scopes, undefined);
+  assert.strictEqual(verifyRes.body.data.warehouse_scopes, undefined);
 
   // [TEST 12 / AC-USR-01-13] Anti-enumeration on public verification
   console.log(
     '[TEST 12 / AC-USR-01-13] Public verification of invalid, expired, or cancelled token'
   );
+  // 12a. Nonexistent token returns 404
   const notFoundRes = await request(app.getHttpServer()).get(
     '/api/v1/invitations/verify?token=nonexistenttoken123456'
   );
   assert.strictEqual(notFoundRes.status, 404);
   assert.strictEqual(notFoundRes.body.error.code, 'INVITATION_NOT_FOUND');
+
+  // 12b. Expired token returns identical canonical 404 (Finding 10)
+  const expiredRawToken = 'expiredtoken'.repeat(5) + '1234';
+  const expiredTokenHash = createHash('sha256').update(expiredRawToken).digest('hex');
+  await prisma.invitation.create({
+    data: {
+      merchant_id: merchant.id,
+      email: `expired.${testSuffix}@shipde.vn`,
+      role: RoleEnum.OPS_CSKH,
+      token_hash: expiredTokenHash,
+      status: InvitationStatusEnum.EXPIRED,
+      invited_by_user_id: ownerUser.id,
+      expires_at: new Date(Date.now() - 3600000), // 1 hour ago
+    },
+  });
+  const expiredVerifyRes = await request(app.getHttpServer()).get(
+    `/api/v1/invitations/verify?token=${expiredRawToken}`
+  );
+  assert.strictEqual(expiredVerifyRes.status, 404);
+  assert.strictEqual(expiredVerifyRes.body.error.code, 'INVITATION_NOT_FOUND');
+
+  // 12c. Cancelled token returns identical canonical 404 (Finding 10)
+  const cancelledRawToken = 'cancelledtoken'.repeat(4) + '12345678';
+  const cancelledTokenHash = createHash('sha256').update(cancelledRawToken).digest('hex');
+  await prisma.invitation.create({
+    data: {
+      merchant_id: merchant.id,
+      email: `cancelled.${testSuffix}@shipde.vn`,
+      role: RoleEnum.OPS_CSKH,
+      token_hash: cancelledTokenHash,
+      status: InvitationStatusEnum.CANCELLED,
+      invited_by_user_id: ownerUser.id,
+      expires_at: new Date(Date.now() + 86400000),
+    },
+  });
+  const cancelledVerifyRes = await request(app.getHttpServer()).get(
+    `/api/v1/invitations/verify?token=${cancelledRawToken}`
+  );
+  assert.strictEqual(cancelledVerifyRes.status, 404);
+  assert.strictEqual(cancelledVerifyRes.body.error.code, 'INVITATION_NOT_FOUND');
 
   // [TEST 13 / AC-USR-01-16] Recipient provides weak password during acceptance
   console.log('[TEST 13 / AC-USR-01-16] Recipient provides weak password during acceptance');

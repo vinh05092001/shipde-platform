@@ -915,8 +915,8 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
       assert.strictEqual(res.data.tenant_name, 'An An Boutique');
       assert.strictEqual(res.data.role, RoleEnum.OPS_CSKH);
       assert.strictEqual(res.data.identifier, 'r****t@shipde.vn');
-      assert.deepStrictEqual(res.data.store_scopes, ['S1']);
-      assert.deepStrictEqual(res.data.warehouse_scopes, ['W1']);
+      assert.strictEqual((res.data as any).store_scopes, undefined);
+      assert.strictEqual((res.data as any).warehouse_scopes, undefined);
     });
   });
 

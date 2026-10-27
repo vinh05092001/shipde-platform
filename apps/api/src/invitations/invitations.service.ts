@@ -910,8 +910,6 @@ export class InvitationsService {
         tenant_name: invitation.merchant.name,
         role: invitation.role,
         identifier: masked,
-        store_scopes: invitation.store_scopes,
-        warehouse_scopes: invitation.warehouse_scopes,
       },
       meta: {
         correlation_id: correlationId,

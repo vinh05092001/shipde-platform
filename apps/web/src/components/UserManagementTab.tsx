@@ -114,6 +114,7 @@ export const UserManagementTab: React.FC = () => {
 
   const handleResendInvite = async (inviteId: string) => {
     setActionLoadingId(inviteId);
+    setInvitationsError(null);
     try {
       const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
       const res = await fetch(`${apiBase}/api/v1/invitations/${inviteId}/resend`, {
@@ -135,7 +136,7 @@ export const UserManagementTab: React.FC = () => {
       }
       void fetchInvitations();
     } catch (err: any) {
-      alert(err.message);
+      setInvitationsError(err.message || 'Thao tác gửi lại lời mời thất bại. Vui lòng thử lại.');
     } finally {
       setActionLoadingId(null);
     }
@@ -144,6 +145,7 @@ export const UserManagementTab: React.FC = () => {
   const handleCancelInvite = async (inviteId: string) => {
     if (!confirm('Bạn có chắc chắn muốn hủy lời mời này?')) return;
     setActionLoadingId(inviteId);
+    setInvitationsError(null);
     try {
       const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
       const res = await fetch(`${apiBase}/api/v1/invitations/${inviteId}/cancel`, {
@@ -160,7 +162,7 @@ export const UserManagementTab: React.FC = () => {
       setToastMessage('Đã hủy lời mời thành công');
       void fetchInvitations();
     } catch (err: any) {
-      alert(err.message);
+      setInvitationsError(err.message || 'Thao tác hủy lời mời thất bại. Vui lòng thử lại.');
     } finally {
       setActionLoadingId(null);
     }
