@@ -1,5 +1,6 @@
 import 'reflect-metadata';
 import * as assert from 'node:assert';
+import { test } from 'node:test';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { randomBytes, createHash } from 'node:crypto';
@@ -330,6 +331,9 @@ async function runInvitationsSupertestSuite() {
 
   // [TEST 9 / AC-USR-01-09] Owner resends an expired invitation (EXPIRED -> PENDING)
   console.log('[TEST 9 / AC-USR-01-09] Owner resends an expired invitation');
+  const invBeforeResend = await prisma.invitation.findUnique({ where: { id: invitationId } });
+  const oldTokenHash = invBeforeResend!.token_hash;
+
   await prisma.invitation.update({
     where: { id: invitationId },
     data: {
@@ -345,10 +349,32 @@ async function runInvitationsSupertestSuite() {
   assert.strictEqual(resendRes.body.data.status, 'PENDING');
   const resentRawToken = resendRes.body.data.token;
   assert.ok(resentRawToken);
+  assert.notStrictEqual(resentRawToken, rawToken, 'Resent raw token must be freshly generated');
+
+  // Assert DB state after resend hash rotation
+  const invAfterResend = await prisma.invitation.findUnique({ where: { id: invitationId } });
+  assert.ok(invAfterResend);
+  assert.notStrictEqual(
+    invAfterResend.token_hash,
+    oldTokenHash,
+    'Token hash must rotate on resend'
+  );
+  assert.strictEqual(
+    invAfterResend.token_hash,
+    createHash('sha256').update(resentRawToken).digest('hex')
+  );
+  assert.strictEqual(invAfterResend.status, InvitationStatusEnum.PENDING);
   const auditResent = await prisma.auditLog.findFirst({
     where: { entity_id: invitationId, action: 'INVITATION_RESENT' },
   });
   assert.ok(auditResent);
+
+  // Assert old token no longer verifies (invalidated by hash rotation)
+  const oldTokenVerifyRes = await request(app.getHttpServer()).get(
+    `/api/v1/invitations/verify?token=${rawToken}`
+  );
+  assert.strictEqual(oldTokenVerifyRes.status, 404);
+  assert.strictEqual(oldTokenVerifyRes.body.error.code, 'INVITATION_NOT_FOUND');
 
   // [TEST 10 / AC-USR-01-11] Cross-tenant actor attempts to cancel or resend invitation
   console.log(
@@ -359,6 +385,22 @@ async function runInvitationsSupertestSuite() {
     .set('Authorization', `Bearer ${otherToken}`);
   assert.strictEqual(crossResend.status, 403);
   assert.strictEqual(crossResend.body.error.code, 'FORBIDDEN');
+
+  const crossCancel = await request(app.getHttpServer())
+    .post(`/api/v1/invitations/${invitationId}/cancel`)
+    .set('Authorization', `Bearer ${otherToken}`);
+  assert.strictEqual(crossCancel.status, 403);
+  assert.strictEqual(crossCancel.body.error.code, 'FORBIDDEN');
+
+  // Assert DB state after cross-tenant cancel/resend: invitation remains unaffected
+  const crossDbCheck = await prisma.invitation.findUnique({ where: { id: invitationId } });
+  assert.ok(crossDbCheck);
+  assert.strictEqual(crossDbCheck.merchant_id, merchant.id);
+  assert.strictEqual(crossDbCheck.status, InvitationStatusEnum.PENDING);
+  const crossAudit = await prisma.auditLog.findFirst({
+    where: { entity_id: invitationId, merchant_id: otherMerchant.id },
+  });
+  assert.strictEqual(crossAudit, null);
 
   // [TEST 11 / AC-USR-01-12] Public verification of valid unexpired token
   console.log('[TEST 11 / AC-USR-01-12] Public verification of valid invitation token');
@@ -432,6 +474,20 @@ async function runInvitationsSupertestSuite() {
   });
   assert.strictEqual(weakPassRes.status, 400);
   assert.strictEqual(weakPassRes.body.error.code, 'VALIDATION_ERROR');
+
+  // Assert DB state after weak password rejection
+  const invAfterWeak = await prisma.invitation.findUnique({ where: { id: invitationId } });
+  assert.ok(invAfterWeak);
+  assert.strictEqual(invAfterWeak.status, InvitationStatusEnum.PENDING);
+  assert.strictEqual(invAfterWeak.consumed_at, null);
+  const userAfterWeak = await prisma.user.findFirst({
+    where: { email: `operator.${testSuffix}@shipde.vn` },
+  });
+  assert.strictEqual(userAfterWeak, null, 'No user should be created on weak password rejection');
+  const auditWeak = await prisma.auditLog.findFirst({
+    where: { entity_id: invitationId, action: 'INVITATION_ACCEPTED' },
+  });
+  assert.strictEqual(auditWeak, null, 'No acceptance audit log on weak password rejection');
 
   // [TEST 14 / AC-USR-01-14] Recipient accepts valid invitation
   console.log('[TEST 14 / AC-USR-01-14] Recipient accepts valid invitation');
@@ -521,9 +577,6 @@ async function runInvitationsSupertestSuite() {
   console.log('================================================================');
 }
 
-if (require.main === module || !module.parent) {
-  runInvitationsSupertestSuite().catch((err) => {
-    console.error('Fatal error in Invitations Supertest Suite:', err);
-    process.exit(1);
-  });
-}
+test('FEAT-USR-01 — User Invitations HTTP Acceptance Supertest Suite (AC-USR-01-01 to AC-USR-01-18)', async () => {
+  await runInvitationsSupertestSuite();
+});
