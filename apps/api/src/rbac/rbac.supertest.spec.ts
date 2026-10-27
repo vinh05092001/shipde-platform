@@ -194,11 +194,12 @@ async function main() {
   // =========================================================================
   // AC-RBAC-01-02: List roles returns system roles plus tenant custom roles, and strictly isolates other merchant custom roles (Finding 4 / Round 10)
   // =========================================================================
+  const ac02Suffix = randomBytes(4).toString('hex');
   const ac02OtherRole = await prisma.role.create({
     data: {
       merchant_id: OTHER_MERCHANT_ID,
-      name: 'Other Merchant Role AC02',
-      name_lower: 'other merchant role ac02',
+      name: `Other Merchant Role ${ac02Suffix}`,
+      name_lower: `other merchant role ${ac02Suffix}`,
       description: 'Cross merchant role to verify exclusion',
       is_system: false,
     },
@@ -206,8 +207,8 @@ async function main() {
   const ac02OwnRole = await prisma.role.create({
     data: {
       merchant_id: SEED_MERCHANT_ID,
-      name: 'Own Merchant Role AC02',
-      name_lower: 'own merchant role ac02',
+      name: `Own Merchant Role ${ac02Suffix}`,
+      name_lower: `own merchant role ${ac02Suffix}`,
       description: 'Own merchant custom role',
       is_system: false,
     },
