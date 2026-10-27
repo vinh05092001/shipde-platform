@@ -651,26 +651,39 @@ async function runSessionSupertestSuite() {
     console.log('[TEST AC-SESS-16] User revokes all sessions excluding current');
     const tokR1 = createSessionToken();
     const tokR2 = createSessionToken();
-    await prisma.deviceSession.createMany({
-      data: [
-        {
-          user_id: user.id,
-          merchant_id: merchant.id,
-          session_token_hash: tokR1.hash,
-          device_id: 'dev_remote_1',
-          status: SessionStatusEnum.ACTIVE,
-          expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
-        },
-        {
-          user_id: user.id,
-          merchant_id: merchant.id,
-          session_token_hash: tokR2.hash,
-          device_id: 'dev_remote_2',
-          status: SessionStatusEnum.ACTIVE,
-          expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
-        },
-      ],
+    const sessR1 = await prisma.deviceSession.create({
+      data: {
+        user_id: user.id,
+        merchant_id: merchant.id,
+        session_token_hash: tokR1.hash,
+        device_id: 'dev_remote_1',
+        status: SessionStatusEnum.ACTIVE,
+        expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+      },
     });
+    const sessR2 = await prisma.deviceSession.create({
+      data: {
+        user_id: user.id,
+        merchant_id: merchant.id,
+        session_token_hash: tokR2.hash,
+        device_id: 'dev_remote_2',
+        status: SessionStatusEnum.ACTIVE,
+        expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+      },
+    });
+
+    const callerOtherActiveCountBefore = await prisma.deviceSession.count({
+      where: {
+        user_id: user.id,
+        merchant_id: merchant.id,
+        status: SessionStatusEnum.ACTIVE,
+        id: { not: sess1.id },
+      },
+    });
+    const user2ActiveCountBefore = await prisma.deviceSession.count({
+      where: { user_id: user2.id, status: SessionStatusEnum.ACTIVE },
+    });
+    const revokeAllStartTime = new Date();
 
     const res16 = await request(server)
       .post('/api/v1/sessions/revoke-all')
@@ -678,24 +691,69 @@ async function runSessionSupertestSuite() {
       .send({ include_current: false })
       .expect(200);
 
-    assert.ok(res16.body.revoked_count >= 2);
+    assert.strictEqual(
+      res16.body.revoked_count,
+      callerOtherActiveCountBefore,
+      'revoked_count must exactly match caller other active sessions count'
+    );
+
+    // Verify remote rows were transitioned to REVOKED in database
+    const dbR1 = await prisma.deviceSession.findUnique({ where: { id: sessR1.id } });
+    const dbR2 = await prisma.deviceSession.findUnique({ where: { id: sessR2.id } });
+    assert.strictEqual(dbR1?.status, SessionStatusEnum.REVOKED, 'sessR1 must be REVOKED');
+    assert.strictEqual(dbR1?.is_revoked, true, 'sessR1 is_revoked must be true');
+    assert.ok(dbR1?.revoked_at, 'sessR1 revoked_at must be populated');
+    assert.strictEqual(dbR1?.revoked_by, user.id, 'sessR1 revoked_by must be caller user ID');
+
+    assert.strictEqual(dbR2?.status, SessionStatusEnum.REVOKED, 'sessR2 must be REVOKED');
+    assert.strictEqual(dbR2?.is_revoked, true, 'sessR2 is_revoked must be true');
+    assert.ok(dbR2?.revoked_at, 'sessR2 revoked_at must be populated');
+    assert.strictEqual(dbR2?.revoked_by, user.id, 'sessR2 revoked_by must be caller user ID');
+
+    // Verify current session sess1 remains ACTIVE
     const checkCurrent16 = await prisma.deviceSession.findUnique({ where: { id: sess1.id } });
     assert.strictEqual(
       checkCurrent16?.status,
       SessionStatusEnum.ACTIVE,
       'current session must remain ACTIVE'
     );
+    assert.strictEqual(checkCurrent16?.is_revoked, false);
 
+    // Verify other user's active sessions were not revoked
+    const user2ActiveCountAfter = await prisma.deviceSession.count({
+      where: { user_id: user2.id, status: SessionStatusEnum.ACTIVE },
+    });
+    assert.strictEqual(
+      user2ActiveCountAfter,
+      user2ActiveCountBefore,
+      'other user sessions must not be affected by caller revoke-all'
+    );
+
+    // Verify exact audit log for this operation
     const audit16 = await prisma.auditLog.findFirst({
       where: {
         merchant_id: merchant.id,
         user_id: user.id,
         action: 'SESSIONS_REVOKED_ALL',
+        created_at: { gte: revokeAllStartTime },
       },
+      orderBy: { created_at: 'desc' },
     });
-    assert.ok(audit16, 'SESSIONS_REVOKED_ALL audit log must be recorded');
+    assert.ok(audit16, 'SESSIONS_REVOKED_ALL audit log created by this call must exist');
+    const details16 = audit16.new_value as any;
+    assert.strictEqual(
+      details16?.revoked_count,
+      callerOtherActiveCountBefore,
+      'Audit log revoked_count must match caller other active sessions count'
+    );
+    assert.strictEqual(
+      details16?.include_current,
+      false,
+      'Audit log include_current must be false'
+    );
+
     console.log(
-      '  PASS: AC-SESS-16 Revoke all excluding current preserves caller session and logs audit'
+      '  PASS: AC-SESS-16 Revoke all excluding current matches exact active count, revokes remote rows, preserves current and tenant sessions, and logs audit'
     );
 
     // -------------------------------------------------------------------------
