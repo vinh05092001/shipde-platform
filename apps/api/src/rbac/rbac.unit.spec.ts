@@ -619,6 +619,75 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
     assert.ok(audit, 'ROLE_UPDATED audit log must be written');
   });
 
+  // Finding 3 (Round 3 / BR-RBAC-02): Privilege ceiling enforced on PATCH when permissions is omitted
+  test('Finding 3 / BR-RBAC-02: Actor with iam:manage_users cannot PATCH name/description of role holding permissions exceeding actor ceiling -> 403 PRIVILEGE_ESCALATION_DENIED', async () => {
+    // 1. Owner creates a high-privilege role with reconciliation:run_review_audit
+    const highRole = await service.createRole(
+      {
+        name: 'Vai Trò Kế Toán Trưởng',
+        permissions: ['order:view_create', 'reconciliation:run_review_audit'],
+      },
+      OWNER_ACTOR,
+      '127.0.0.1',
+      'corr-f3-create'
+    );
+
+    // 2. Create a delegated admin custom role holding iam:manage_users and order:view_create (lacks reconciliation:run_review_audit)
+    const delegatedRole = await service.createRole(
+      {
+        name: 'Vai Trò Quản Trị Giới Hạn',
+        permissions: ['iam:manage_users', 'order:view_create'],
+      },
+      OWNER_ACTOR,
+      '127.0.0.1',
+      'corr-f3-delegated'
+    );
+
+    // 3. User with this custom role
+    mockPrisma.users.push({
+      id: 'user-delegated-admin',
+      merchant_id: MERCHANT_A,
+      role: 'OPS_CSKH',
+      custom_role_id: delegatedRole.data.role.id,
+      status: 'ACTIVE',
+    });
+
+    const delegatedActor: ActorContext = {
+      userId: 'user-delegated-admin',
+      merchantId: MERCHANT_A,
+      role: 'OPS_CSKH',
+      customRoleId: delegatedRole.data.role.id,
+    };
+
+    // 4. Delegated actor attempts to PATCH name without touching permissions
+    await assert.rejects(
+      async () => {
+        await service.updateRole(
+          highRole.data.role.id,
+          { name: 'Vai Trò Kế Toán Trưởng Sửa Tên' },
+          delegatedActor,
+          '127.0.0.1',
+          'corr-f3-patch'
+        );
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 403);
+        assert.strictEqual(err.code, 'PRIVILEGE_ESCALATION_DENIED');
+        assert.ok(err.message.includes('thẩm quyền'));
+        return true;
+      }
+    );
+
+    // DB Proof: Role name was not updated in DB
+    const roleInDb = mockPrisma.roles.find((r) => r.id === highRole.data.role.id);
+    assert.strictEqual(
+      roleInDb.name,
+      'Vai Trò Kế Toán Trưởng',
+      'Role row must remain unchanged with no write'
+    );
+  });
+
   // AC-RBAC-01-09
   test('AC-RBAC-01-09: Owner attempts to delete custom role that is assigned to active user -> 400 ROLE_IN_USE', async () => {
     const createRes = await service.createRole(

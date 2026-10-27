@@ -910,23 +910,25 @@ export class RbacService {
           ]
         );
       }
+    }
 
-      const actorPerms = await this.getActorPermissions(actor);
-      const actorPermSet = new Set(actorPerms);
+    // Privilege Ceiling (BR-RBAC-02 / in-scope item 7): Resulting permission set
+    // (explicit or unchanged/omitted) must strictly be a subset of the actor's server-side permissions.
+    const actorPerms = await this.getActorPermissions(actor);
+    const actorPermSet = new Set(actorPerms);
 
-      const unauthorizedResolvedCodes = permissionsInDb
-        .map((p) => p.code)
-        .filter((code) => !actorPermSet.has(code));
+    const unauthorizedResolvedCodes = permissionsInDb
+      .map((p) => p.code)
+      .filter((code) => !actorPermSet.has(code));
 
-      if (unauthorizedResolvedCodes.length > 0) {
-        throw new CanonicalApiException(
-          HttpStatus.FORBIDDEN,
-          'PRIVILEGE_ESCALATION_DENIED',
-          'Không thể cấp quyền vượt quá thẩm quyền của bạn',
-          false,
-          `Bạn không có các quyền sau: ${unauthorizedResolvedCodes.join(', ')}`
-        );
-      }
+    if (unauthorizedResolvedCodes.length > 0) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'PRIVILEGE_ESCALATION_DENIED',
+        'Không thể cấp quyền vượt quá thẩm quyền của bạn',
+        false,
+        `Bạn không có các quyền sau: ${unauthorizedResolvedCodes.join(', ')}`
+      );
     }
 
     const beforePermissions = existingRole.permissions.map((rp) => rp.permission.code);
