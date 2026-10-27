@@ -1900,6 +1900,9 @@ components:
               type: array
               items:
                 $ref: '#/components/schemas/RoleItem'
+            can_manage_roles:
+              type: boolean
+              description: Whether the authenticated actor has server permission iam:manage_users to modify roles
         meta:
           $ref: '#/components/schemas/Meta'
     RoleDetailResponse:

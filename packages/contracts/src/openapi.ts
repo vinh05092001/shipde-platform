@@ -1283,6 +1283,8 @@ export interface components {
     RolesResponse: {
       data: {
         roles: components['schemas']['RoleItem'][];
+        /** @description Whether the authenticated actor has server permission iam:manage_users to modify roles */
+        can_manage_roles?: boolean;
       };
       meta: components['schemas']['Meta'];
     };

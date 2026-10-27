@@ -378,7 +378,7 @@ export class RbacService {
     await this.ensurePlatformSeed();
     const canManageRoles = actor
       ? await this.actorHasPermissions(actor, ['iam:manage_users'])
-      : true;
+      : false;
 
     // Fetch system roles and merchant custom roles from database
     const roles = await this.prisma.role.findMany({

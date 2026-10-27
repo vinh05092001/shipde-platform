@@ -418,6 +418,20 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
 
     const res = await service.getRoles(MERCHANT_A, 'corr-02');
     assert.strictEqual(res.meta.correlation_id, 'corr-02');
+    // Round 3 Finding 4: When actor is omitted, can_manage_roles must fail-closed (false)
+    assert.strictEqual(
+      res.data.can_manage_roles,
+      false,
+      'can_manage_roles must default to false when actor is omitted'
+    );
+
+    // When actor with iam:manage_users is provided, can_manage_roles is true
+    const resWithActor = await service.getRoles(MERCHANT_A, 'corr-02-actor', OWNER_ACTOR);
+    assert.strictEqual(
+      resWithActor.data.can_manage_roles,
+      true,
+      'can_manage_roles must be true for actor with iam:manage_users'
+    );
 
     // Should include 5 system roles + 1 custom role = 6 roles
     assert.strictEqual(res.data.roles.length, 6);
