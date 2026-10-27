@@ -1937,14 +1937,7 @@ components:
       required: [data, meta]
       properties:
         data:
-          allOf:
-            - $ref: '#/components/schemas/InvitationItem'
-            - type: object
-              properties:
-                invitation_url:
-                  type: string
-                token:
-                  type: string
+          $ref: '#/components/schemas/InvitationItem'
         meta:
           $ref: '#/components/schemas/Meta'
     ListInvitationsResponse:
@@ -1983,8 +1976,6 @@ components:
             expires_at:
               type: string
               format: date-time
-            token:
-              type: string
         meta:
           $ref: '#/components/schemas/Meta'
     CancelInvitationResponse:

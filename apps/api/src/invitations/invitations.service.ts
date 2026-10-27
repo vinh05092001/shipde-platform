@@ -52,9 +52,8 @@ export function validatePasswordStrength(password: string): { valid: boolean; er
 export class InvitationsService {
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
-    @Optional()
     @Inject(VERIFICATION_ADAPTER)
-    private readonly deliveryAdapter?: IVerificationDeliveryAdapter,
+    private readonly deliveryAdapter: IVerificationDeliveryAdapter,
     @Inject(RateLimitService)
     private readonly rateLimitService: RateLimitService = new RateLimitService()
   ) {}
@@ -409,17 +408,30 @@ export class InvitationsService {
     const safeBaseUrl = resolveFrontendBaseUrl(baseUrl);
     const invitationUrl = `${safeBaseUrl}/invite/accept?token=${rawToken}`;
 
-    // Dispatch verification via configured delivery adapter if registered
-    if (this.deliveryAdapter) {
-      await this.deliveryAdapter.sendVerification({
-        channel: email ? 'email' : 'phone',
-        recipient: (email || phone) as string,
-        token: rawToken,
-        purpose: 'invitation',
-        link: invitationUrl,
-      });
+    // Dispatch verification via configured delivery adapter (BR-INV-02, SECURITY-NFR) - fail closed
+    if (!this.deliveryAdapter) {
+      throw new CanonicalApiException(
+        HttpStatus.SERVICE_UNAVAILABLE,
+        'DELIVERY_UNAVAILABLE',
+        'Dịch vụ gửi thông báo lời mời không khả dụng'
+      );
+    }
+    const dispatchRes = await this.deliveryAdapter.sendVerification({
+      channel: email ? 'email' : 'phone',
+      recipient: (email || phone) as string,
+      token: rawToken,
+      purpose: 'invitation',
+      link: invitationUrl,
+    });
+    if (!dispatchRes || !dispatchRes.success) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_GATEWAY,
+        'DELIVERY_FAILED',
+        'Không thể gửi thông báo lời mời tới người nhận'
+      );
     }
 
+    // Zero plaintext token leakage in admin responses (BR-INV-02 / SECURITY-NFR)
     return {
       data: {
         id: invitation.id,
@@ -434,8 +446,6 @@ export class InvitationsService {
         created_at: invitation.created_at.toISOString(),
         consumed_at: invitation.consumed_at ? invitation.consumed_at.toISOString() : null,
         invited_by_user_id: invitation.invited_by_user_id,
-        invitation_url: invitationUrl,
-        token: rawToken, // Provided in dispatch response only (BR-INV-02)
       },
       meta: {
         correlation_id: correlationId,
@@ -721,24 +731,35 @@ export class InvitationsService {
     const safeBaseUrl = resolveFrontendBaseUrl(baseUrl);
     const invitationUrl = `${safeBaseUrl}/invite/accept?token=${rawToken}`;
 
-    // Dispatch verification via configured delivery adapter if registered
-    if (this.deliveryAdapter) {
-      await this.deliveryAdapter.sendVerification({
-        channel: updated.email ? 'email' : 'phone',
-        recipient: (updated.email || updated.phone) as string,
-        token: rawToken,
-        purpose: 'invitation',
-        link: invitationUrl,
-      });
+    // Dispatch verification via configured delivery adapter (BR-INV-02, SECURITY-NFR) - fail closed
+    if (!this.deliveryAdapter) {
+      throw new CanonicalApiException(
+        HttpStatus.SERVICE_UNAVAILABLE,
+        'DELIVERY_UNAVAILABLE',
+        'Dịch vụ gửi lại thông báo lời mời không khả dụng'
+      );
+    }
+    const dispatchRes = await this.deliveryAdapter.sendVerification({
+      channel: updated.email ? 'email' : 'phone',
+      recipient: (updated.email || updated.phone) as string,
+      token: rawToken,
+      purpose: 'invitation',
+      link: invitationUrl,
+    });
+    if (!dispatchRes || !dispatchRes.success) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_GATEWAY,
+        'DELIVERY_FAILED',
+        'Không thể gửi lại thông báo lời mời tới người nhận'
+      );
     }
 
+    // Zero plaintext token leakage in admin responses (BR-INV-02 / SECURITY-NFR)
     return {
       data: {
         id: updated.id,
         status: updated.status,
         expires_at: updated.expires_at.toISOString(),
-        token: rawToken,
-        invitation_url: invitationUrl,
       },
       meta: {
         correlation_id: correlationId,

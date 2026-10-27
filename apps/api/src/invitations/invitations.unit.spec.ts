@@ -99,7 +99,10 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
       $transaction: async (cb: any) => cb(mockPrisma),
     };
 
-    service = new InvitationsService(mockPrisma);
+    const defaultDeliveryAdapter = {
+      sendVerification: async () => ({ success: true, messageId: 'msg-default' }),
+    };
+    service = new InvitationsService(mockPrisma, defaultDeliveryAdapter as any);
   });
 
   // AC-USR-01-18: Zero plaintext token or password leakage; masking utility
@@ -168,15 +171,12 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
       assert.strictEqual(res.data.email, 'operator@shipde.vn');
       assert.strictEqual(res.data.status, InvitationStatusEnum.PENDING);
       assert.deepStrictEqual(res.data.warehouse_scopes, ['WH-HCM-01']);
-      assert.ok(res.data.token, 'Plaintext token must be returned in dispatch payload');
+      // Security NFR / BR-INV-02: Zero raw token or invitation_url in admin response
+      assert.strictEqual((res.data as any).token, undefined);
+      assert.strictEqual((res.data as any).invitation_url, undefined);
 
       // Database assertion (AC-USR-01-01, AC-USR-01-18)
       assert.ok(createdInviteData);
-      assert.notStrictEqual(
-        createdInviteData.token_hash,
-        res.data.token,
-        'Raw token MUST NEVER be persisted in database directly'
-      );
       assert.strictEqual(
         createdInviteData.token_hash.length,
         64,
@@ -209,6 +209,7 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
         const mockDeliveryAdapter = {
           sendVerification: async (params: any) => {
             dispatchedParams = params;
+            return { success: true, messageId: 'msg-mock' };
           },
         };
 
@@ -227,15 +228,37 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
           frontendOrigin
         );
 
-        assert.ok(res.data.invitation_url.startsWith('https://app.shipde.vn/invite/accept?token='));
+        assert.strictEqual((res.data as any).token, undefined);
+        assert.strictEqual((res.data as any).invitation_url, undefined);
         assert.ok(dispatchedParams);
+        assert.ok(dispatchedParams.link.startsWith('https://app.shipde.vn/invite/accept?token='));
         assert.strictEqual(dispatchedParams.recipient, 'dispatch_test@shipde.vn');
         assert.strictEqual(dispatchedParams.channel, 'email');
         assert.strictEqual(dispatchedParams.purpose, 'invitation');
-        assert.strictEqual(dispatchedParams.link, res.data.invitation_url);
       } finally {
         process.env.FRONTEND_URL = prevFrontendUrl;
       }
+    });
+
+    it('fails closed with 502 DELIVERY_FAILED when delivery adapter fails to send (Finding 2)', async () => {
+      const failingAdapter = {
+        sendVerification: async () => ({ success: false, messageId: '' }),
+      };
+      const failingService = new InvitationsService(mockPrisma, failingAdapter as any);
+      await assert.rejects(
+        () =>
+          failingService.createInvitation(
+            { email: 'delivery_fail@shipde.vn', role: RoleEnum.OPS_CSKH },
+            { userId: OWNER_USER_ID, merchantId: MERCHANT_ID, role: 'OWNER' },
+            '127.0.0.1',
+            'corr-fail'
+          ),
+        (err: any) => {
+          assert.strictEqual(err.code, 'DELIVERY_FAILED');
+          assert.strictEqual(err.status, 502);
+          return true;
+        }
+      );
     });
 
     it('rejects untrusted Origin / base URL and falls back strictly to configured FRONTEND_URL (Finding 1)', async () => {
@@ -246,6 +269,7 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
         const mockDeliveryAdapter = {
           sendVerification: async (params: any) => {
             dispatchedParams = params;
+            return { success: true, messageId: 'msg-mock' };
           },
         };
 
@@ -264,11 +288,9 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
           attackerHost
         );
 
-        // Security assertion: must NOT use attacker host
-        assert.ok(!res.data.invitation_url.includes('attacker.evil.com'));
-        assert.ok(
-          res.data.invitation_url.startsWith('https://portal.shipde.vn/invite/accept?token=')
-        );
+        // Security assertion: must NOT leak raw token in admin JSON response
+        assert.strictEqual((res.data as any).token, undefined);
+        assert.strictEqual((res.data as any).invitation_url, undefined);
         assert.ok(dispatchedParams);
         assert.ok(!dispatchedParams.link.includes('attacker.evil.com'));
         assert.ok(
@@ -888,7 +910,8 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
       );
 
       assert.strictEqual(res.data.status, InvitationStatusEnum.PENDING);
-      assert.ok(res.data.token);
+      assert.strictEqual((res.data as any).token, undefined);
+      assert.strictEqual((res.data as any).invitation_url, undefined);
       assert.deepStrictEqual(updateManyCalledWith.where.status, {
         in: [InvitationStatusEnum.PENDING, InvitationStatusEnum.EXPIRED],
       });
@@ -1694,19 +1717,18 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
         'corr-sec-1'
       );
 
-      const returnedRawToken = result.data.token;
-      assert.strictEqual(returnedRawToken.length, 64); // 32 hex bytes
+      // Security assertion: Zero raw token or invitation_url in admin response
+      assert.strictEqual((result.data as any).token, undefined);
+      assert.strictEqual((result.data as any).invitation_url, undefined);
 
       // Assert database record has token_hash, NEVER raw token
       assert.strictEqual(createdInvitationData.token, undefined);
       assert.strictEqual(createdInvitationData.rawToken, undefined);
       assert.strictEqual(typeof createdInvitationData.token_hash, 'string');
       assert.strictEqual(createdInvitationData.token_hash.length, 64);
-      assert.notStrictEqual(createdInvitationData.token_hash, returnedRawToken);
 
-      // Assert audit log does not leak token or raw identifier
+      // Assert audit log does not leak raw identifier
       const auditPayloadStr = JSON.stringify(createdAuditLogData);
-      assert.strictEqual(auditPayloadStr.includes(returnedRawToken), false);
       assert.strictEqual(auditPayloadStr.includes('secretcheck@example.com'), false);
       assert.ok(auditPayloadStr.includes('s****k@example.com'));
     });
@@ -1817,7 +1839,9 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
         },
       };
 
-      const txService = new InvitationsService(customPrisma as any);
+      const txService = new InvitationsService(customPrisma as any, {
+        sendVerification: async () => ({ success: true, messageId: 'msg-tx' }),
+      } as any);
       const res = await txService.createInvitation(
         { email: 'txcheck@shipde.vn', role: RoleEnum.OPS_CSKH },
         { userId: OWNER_USER_ID, merchantId: MERCHANT_ID, role: 'OWNER' },

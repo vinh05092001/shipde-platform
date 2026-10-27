@@ -93,13 +93,14 @@ async function runInvitationsSupertestSuite() {
     AUDIT_IDENTIFIER_HMAC_KEY: 'test-key-32-chars-long-for-hmac',
   };
 
+  const mockDeliveryAdapter = new MockVerificationDeliveryAdapter();
   const moduleFixture: TestingModule = await Test.createTestingModule({
     imports: [AppModule],
   })
     .overrideProvider(APP_CONFIG)
     .useValue(testConfig)
     .overrideProvider(VERIFICATION_ADAPTER)
-    .useValue(new MockVerificationDeliveryAdapter())
+    .useValue(mockDeliveryAdapter)
     .compile();
 
   const app = moduleFixture.createNestApplication<NestExpressApplication>();
@@ -221,7 +222,10 @@ async function runInvitationsSupertestSuite() {
   assert.strictEqual(sendRes.status, 201);
   assert.strictEqual(sendRes.body.data.role, 'OPS_CSKH');
   assert.strictEqual(sendRes.body.data.status, 'PENDING');
-  const rawToken = sendRes.body.data.token;
+  // SECURITY-NFR / BR-INV-02: Zero raw token or invitation_url in admin response
+  assert.strictEqual(sendRes.body.data.token, undefined);
+  assert.strictEqual(sendRes.body.data.invitation_url, undefined);
+  const rawToken = mockDeliveryAdapter.getLastMessage()?.token!;
   const invitationId = sendRes.body.data.id;
   assert.ok(rawToken);
 
@@ -251,6 +255,9 @@ async function runInvitationsSupertestSuite() {
     });
   assert.strictEqual(phoneRes.status, 201);
   assert.strictEqual(phoneRes.body.data.phone, '0901234567');
+  assert.strictEqual(phoneRes.body.data.token, undefined);
+  assert.strictEqual(phoneRes.body.data.invitation_url, undefined);
+  const rawPhoneToken = mockDeliveryAdapter.getLastMessage()?.token!;
 
   // [TEST 3 / AC-USR-01-03] Non-owner manager attempts to invite OWNER (Privilege Ceiling)
   console.log(
@@ -347,7 +354,9 @@ async function runInvitationsSupertestSuite() {
     .set('Authorization', `Bearer ${ownerToken}`);
   assert.strictEqual(resendRes.status, 200);
   assert.strictEqual(resendRes.body.data.status, 'PENDING');
-  const resentRawToken = resendRes.body.data.token;
+  assert.strictEqual(resendRes.body.data.token, undefined);
+  assert.strictEqual(resendRes.body.data.invitation_url, undefined);
+  const resentRawToken = mockDeliveryAdapter.getLastMessage()?.token!;
   assert.ok(resentRawToken);
   assert.notStrictEqual(resentRawToken, rawToken, 'Resent raw token must be freshly generated');
 
@@ -531,7 +540,7 @@ async function runInvitationsSupertestSuite() {
   // [TEST 16 / AC-USR-01-10] Owner cancels a pending invitation
   console.log('[TEST 16 / AC-USR-01-10] Owner cancels a pending invitation');
   const phoneInviteId = phoneRes.body.data.id;
-  const rawPhoneToken = phoneRes.body.data.token;
+  // rawPhoneToken was captured from mockDeliveryAdapter during invite creation
   const cancelRes = await request(app.getHttpServer())
     .post(`/api/v1/invitations/${phoneInviteId}/cancel`)
     .set('Authorization', `Bearer ${ownerToken}`);

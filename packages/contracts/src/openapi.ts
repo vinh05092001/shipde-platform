@@ -1330,10 +1330,7 @@ export interface components {
       created_at: string;
     };
     SendInvitationResponse: {
-      data: components['schemas']['InvitationItem'] & {
-        invitation_url?: string;
-        token?: string;
-      };
+      data: components['schemas']['InvitationItem'];
       meta: components['schemas']['Meta'];
     };
     ListInvitationsResponse: {
@@ -1352,7 +1349,6 @@ export interface components {
         status: components['schemas']['InvitationStatus'];
         /** Format: date-time */
         expires_at: string;
-        token?: string;
       };
       meta: components['schemas']['Meta'];
     };
