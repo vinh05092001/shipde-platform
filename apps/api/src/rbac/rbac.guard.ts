@@ -47,7 +47,5 @@ export class PermissionsGuard implements CanActivate {
 
     req.actorContext = actor;
     return true;
-
-    return true;
   }
 }

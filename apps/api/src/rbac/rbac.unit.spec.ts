@@ -5,6 +5,8 @@ import { PLATFORM_PERMISSIONS, SYSTEM_ROLES } from './rbac.constants';
 import { CanonicalApiException as BaseCanonicalApiException } from '../auth/auth.service';
 import { CanonicalApiException } from './rbac.service';
 import { RbacExceptionFilter } from './rbac-exception.filter';
+import { RbacController } from './rbac.controller';
+import { PermissionsGuard } from './rbac.guard';
 import { assertNoSensitiveData } from '@shipde/testkit';
 
 /**
@@ -2927,5 +2929,32 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
       assert.strictEqual(err.getStatus(), 400);
       assert.strictEqual(err.code, 'VALIDATION_ERROR');
     }
+  });
+
+  test('Finding 6 (Round 10): RbacController uses strictly prefixed api/v1 route and PermissionsGuard has clean return', async () => {
+    // 1. Verify RbacController route prefix metadata
+    const pathMetadata = Reflect.getMetadata('path', RbacController);
+    assert.strictEqual(pathMetadata, 'api/v1', 'RbacController must only listen on api/v1');
+
+    // 2. Verify PermissionsGuard returns cleanly
+    const mockReflector = {
+      getAllAndOverride: () => ['order:view_create'],
+    };
+    const guard = new PermissionsGuard(mockReflector as any, service);
+
+    const mockExecutionContext: any = {
+      switchToHttp: () => ({
+        getRequest: () => ({
+          userId: 'user-owner-1',
+          merchantId: MERCHANT_A,
+          userRole: 'OWNER',
+        }),
+      }),
+      getHandler: () => ({}),
+      getClass: () => ({}),
+    };
+
+    const allowed = await guard.canActivate(mockExecutionContext);
+    assert.strictEqual(allowed, true);
   });
 });

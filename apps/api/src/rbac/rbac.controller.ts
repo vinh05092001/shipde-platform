@@ -20,7 +20,7 @@ import { RbacExceptionFilter } from './rbac-exception.filter';
 import { normalizeCorrelationId } from '@shipde/config';
 import { extractClientIp } from '../utils/ip.util';
 
-@Controller(['api/v1', ''])
+@Controller('api/v1')
 @UseGuards(SessionGuard)
 @UseFilters(RbacExceptionFilter)
 export class RbacController {
