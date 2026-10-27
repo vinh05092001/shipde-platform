@@ -185,27 +185,38 @@ export class RbacService {
   async getPermissions(correlationId: string) {
     await this.ensurePlatformSeed();
 
-    const dbPermissions = await this.prisma.permission.findMany({
-      orderBy: [{ category: 'asc' }, { code: 'asc' }],
-    });
+    try {
+      const dbPermissions = await this.prisma.permission.findMany({
+        orderBy: [{ category: 'asc' }, { code: 'asc' }],
+      });
 
-    const categories = Array.from(new Set(dbPermissions.map((p) => p.category)));
+      const categories = Array.from(new Set(dbPermissions.map((p) => p.category)));
 
-    return {
-      data: {
-        permissions: dbPermissions.map((p) => ({
-          id: p.id,
-          code: p.code,
-          name: p.name,
-          description: p.description,
-          category: p.category,
-        })),
-        categories,
-      },
-      meta: {
-        correlation_id: correlationId,
-      },
-    };
+      return {
+        data: {
+          permissions: dbPermissions.map((p) => ({
+            id: p.id,
+            code: p.code,
+            name: p.name,
+            description: p.description,
+            category: p.category,
+          })),
+          categories,
+        },
+        meta: {
+          correlation_id: correlationId,
+        },
+      };
+    } catch (err: any) {
+      if (err instanceof CanonicalApiException) throw err;
+      throw new CanonicalApiException(
+        HttpStatus.INTERNAL_SERVER_ERROR,
+        'INTERNAL_SERVER_ERROR',
+        'Không thể tải danh mục quyền hạn',
+        true,
+        'Vui lòng thử lại sau hoặc liên hệ hỗ trợ'
+      );
+    }
   }
 
   /**
@@ -398,81 +409,92 @@ export class RbacService {
       ? await this.actorHasPermissions(actor, ['iam:manage_users'])
       : false;
 
-    // Fetch system roles and merchant custom roles from database
-    const roles = await this.prisma.role.findMany({
-      where: {
-        OR: [{ is_system: true }, { merchant_id: merchantId }],
-      },
-      include: {
-        permissions: {
-          include: { permission: true },
+    try {
+      // Fetch system roles and merchant custom roles from database
+      const roles = await this.prisma.role.findMany({
+        where: {
+          OR: [{ is_system: true }, { merchant_id: merchantId }],
         },
-      },
-      orderBy: [{ is_system: 'desc' }, { created_at: 'asc' }],
-    });
+        include: {
+          permissions: {
+            include: { permission: true },
+          },
+        },
+        orderBy: [{ is_system: 'desc' }, { created_at: 'asc' }],
+      });
 
-    // Get active user counts for each role in this merchant
-    const roleItems = await Promise.all(
-      roles.map(async (role) => {
-        let userCount = 0;
-        if (role.is_system) {
-          if (isRoleEnumValue(role.code)) {
+      // Get active user counts for each role in this merchant
+      const roleItems = await Promise.all(
+        roles.map(async (role) => {
+          let userCount = 0;
+          if (role.is_system) {
+            if (isRoleEnumValue(role.code)) {
+              userCount = await this.prisma.user.count({
+                where: {
+                  merchant_id: merchantId,
+                  role: role.code,
+                  custom_role_id: null,
+                  status: ACTIVE_USER_STATUS_FILTER,
+                },
+              });
+            }
+          } else {
             userCount = await this.prisma.user.count({
               where: {
                 merchant_id: merchantId,
-                role: role.code,
-                custom_role_id: null,
+                custom_role_id: role.id,
                 status: ACTIVE_USER_STATUS_FILTER,
               },
             });
           }
-        } else {
-          userCount = await this.prisma.user.count({
-            where: {
-              merchant_id: merchantId,
-              custom_role_id: role.id,
-              status: ACTIVE_USER_STATUS_FILTER,
-            },
-          });
-        }
 
-        const perms = (role.permissions || []).map((rp: any) => ({
-          id: rp.permission.id,
-          code: rp.permission.code,
-          name: rp.permission.name,
-          description: rp.permission.description,
-          category: rp.permission.category,
-        }));
+          const perms = (role.permissions || []).map((rp: any) => ({
+            id: rp.permission.id,
+            code: rp.permission.code,
+            name: rp.permission.name,
+            description: rp.permission.description,
+            category: rp.permission.category,
+          }));
 
-        return {
-          id: role.id,
-          code: role.code || null,
-          name: role.name,
-          description: role.description || null,
-          is_system: Boolean(role.is_system),
-          merchant_id: role.merchant_id || null,
-          permissions_count: perms.length,
-          permissions: perms,
-          user_count: userCount,
-          created_at: role.created_at
-            ? new Date(role.created_at).toISOString()
-            : new Date().toISOString(),
-          updated_at: role.updated_at
-            ? new Date(role.updated_at).toISOString()
-            : new Date().toISOString(),
-        };
-      })
-    );
+          return {
+            id: role.id,
+            code: role.code || null,
+            name: role.name,
+            description: role.description || null,
+            is_system: Boolean(role.is_system),
+            merchant_id: role.merchant_id || null,
+            permissions_count: perms.length,
+            permissions: perms,
+            user_count: userCount,
+            created_at: role.created_at
+              ? new Date(role.created_at).toISOString()
+              : new Date().toISOString(),
+            updated_at: role.updated_at
+              ? new Date(role.updated_at).toISOString()
+              : new Date().toISOString(),
+          };
+        })
+      );
 
-    return {
-      data: {
-        roles: roleItems,
-        can_manage_roles: canManageRoles,
-      },
-      meta: {
-        correlation_id: correlationId,
-      },
-    };
+      return {
+        data: {
+          roles: roleItems,
+          can_manage_roles: canManageRoles,
+        },
+        meta: {
+          correlation_id: correlationId,
+        },
+      };
+    } catch (err: any) {
+      if (err instanceof CanonicalApiException) throw err;
+      throw new CanonicalApiException(
+        HttpStatus.INTERNAL_SERVER_ERROR,
+        'INTERNAL_SERVER_ERROR',
+        'Không thể tải danh sách vai trò phân quyền',
+        true,
+        'Vui lòng thử lại sau hoặc liên hệ hỗ trợ'
+      );
+    }
   }
 
   /**
@@ -481,86 +503,97 @@ export class RbacService {
   async getRoleById(roleId: string, actor: ActorContext, correlationId: string) {
     await this.ensurePlatformSeed();
 
-    const role = await this.prisma.role.findUnique({
-      where: { id: roleId },
-      include: {
-        permissions: {
-          include: { permission: true },
+    try {
+      const role = await this.prisma.role.findUnique({
+        where: { id: roleId },
+        include: {
+          permissions: {
+            include: { permission: true },
+          },
         },
-      },
-    });
+      });
 
-    if (!role) {
-      throw new CanonicalApiException(
-        HttpStatus.NOT_FOUND,
-        'ROLE_NOT_FOUND',
-        'Không tìm thấy vai trò phân quyền'
-      );
-    }
+      if (!role) {
+        throw new CanonicalApiException(
+          HttpStatus.NOT_FOUND,
+          'ROLE_NOT_FOUND',
+          'Không tìm thấy vai trò phân quyền'
+        );
+      }
 
-    // BR-RBAC-04 / AC-RBAC-01-11: Tenant Isolation (Finding 9)
-    if (!role.is_system && (!actor.merchantId || role.merchant_id !== actor.merchantId)) {
-      throw new CanonicalApiException(
-        HttpStatus.FORBIDDEN,
-        'FORBIDDEN',
-        'Không có quyền truy cập vai trò của đơn vị khác'
-      );
-    }
+      // BR-RBAC-04 / AC-RBAC-01-11: Tenant Isolation (Finding 9)
+      if (!role.is_system && (!actor.merchantId || role.merchant_id !== actor.merchantId)) {
+        throw new CanonicalApiException(
+          HttpStatus.FORBIDDEN,
+          'FORBIDDEN',
+          'Không có quyền truy cập vai trò của đơn vị khác'
+        );
+      }
 
-    let userCount = 0;
-    if (role.is_system) {
-      if (isRoleEnumValue(role.code)) {
+      let userCount = 0;
+      if (role.is_system) {
+        if (isRoleEnumValue(role.code)) {
+          userCount = await this.prisma.user.count({
+            where: {
+              merchant_id: actor.merchantId,
+              role: role.code,
+              custom_role_id: null,
+              status: ACTIVE_USER_STATUS_FILTER,
+            },
+          });
+        }
+      } else {
         userCount = await this.prisma.user.count({
           where: {
             merchant_id: actor.merchantId,
-            role: role.code,
-            custom_role_id: null,
+            custom_role_id: role.id,
             status: ACTIVE_USER_STATUS_FILTER,
           },
         });
       }
-    } else {
-      userCount = await this.prisma.user.count({
-        where: {
-          merchant_id: actor.merchantId,
-          custom_role_id: role.id,
-          status: ACTIVE_USER_STATUS_FILTER,
+
+      const perms = (role.permissions || []).map((rp: any) => ({
+        id: rp.permission.id,
+        code: rp.permission.code,
+        name: rp.permission.name,
+        description: rp.permission.description,
+        category: rp.permission.category,
+      }));
+
+      return {
+        data: {
+          role: {
+            id: role.id,
+            code: role.code || null,
+            name: role.name,
+            description: role.description || null,
+            is_system: Boolean(role.is_system),
+            merchant_id: role.merchant_id || null,
+            permissions_count: perms.length,
+            permissions: perms,
+            user_count: userCount,
+            created_at: role.created_at
+              ? new Date(role.created_at).toISOString()
+              : new Date().toISOString(),
+            updated_at: role.updated_at
+              ? new Date(role.updated_at).toISOString()
+              : new Date().toISOString(),
+          },
         },
-      });
+        meta: {
+          correlation_id: correlationId,
+        },
+      };
+    } catch (err: any) {
+      if (err instanceof CanonicalApiException) throw err;
+      throw new CanonicalApiException(
+        HttpStatus.INTERNAL_SERVER_ERROR,
+        'INTERNAL_SERVER_ERROR',
+        'Không thể tải thông tin vai trò phân quyền',
+        true,
+        'Vui lòng thử lại sau hoặc liên hệ hỗ trợ'
+      );
     }
-
-    const perms = (role.permissions || []).map((rp: any) => ({
-      id: rp.permission.id,
-      code: rp.permission.code,
-      name: rp.permission.name,
-      description: rp.permission.description,
-      category: rp.permission.category,
-    }));
-
-    return {
-      data: {
-        role: {
-          id: role.id,
-          code: role.code || null,
-          name: role.name,
-          description: role.description || null,
-          is_system: Boolean(role.is_system),
-          merchant_id: role.merchant_id || null,
-          permissions_count: perms.length,
-          permissions: perms,
-          user_count: userCount,
-          created_at: role.created_at
-            ? new Date(role.created_at).toISOString()
-            : new Date().toISOString(),
-          updated_at: role.updated_at
-            ? new Date(role.updated_at).toISOString()
-            : new Date().toISOString(),
-        },
-      },
-      meta: {
-        correlation_id: correlationId,
-      },
-    };
   }
 
   /**

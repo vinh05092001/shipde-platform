@@ -1721,28 +1721,60 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
     );
   });
 
-  // Finding 6 (P2 Round 2): Database user count failures throw instead of silently reporting 0 users
-  test('Finding 6 / BR-RBAC-03: User count database failure in getRoles or getRoleById throws instead of masking as 0 users', async () => {
+  // Finding 6 (P2 Round 2 / Updated Round 5): Database user count failures fail closed with canonical 500
+  test('Finding 6 / BR-RBAC-03: User count database failure in getRoles or getRoleById fails closed with canonical 500 without leaking raw driver errors', async () => {
     mockPrisma.shouldFailUserCount = true;
 
-    // getRoles must throw rather than swallowing count error
+    // getRoles must throw canonical 500 rather than raw driver error
     await assert.rejects(
       async () => {
         await service.getRoles(MERCHANT_A, 'corr-f6-roles');
       },
       (err: any) => {
-        assert.strictEqual(err.message, 'Simulated database user count error');
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 500);
+        assert.strictEqual(err.code, 'INTERNAL_SERVER_ERROR');
+        assert.ok(!err.message.includes('Simulated'));
+        assert.ok(!err.message.includes('database'));
         return true;
       }
     );
 
-    // getRoleById must throw rather than swallowing count error
+    // getRoleById must throw canonical 500 rather than raw driver error
     await assert.rejects(
       async () => {
         await service.getRoleById(SYSTEM_ROLE_IDS.OWNER, OWNER_ACTOR, 'corr-f6-role-by-id');
       },
       (err: any) => {
-        assert.strictEqual(err.message, 'Simulated database user count error');
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 500);
+        assert.strictEqual(err.code, 'INTERNAL_SERVER_ERROR');
+        assert.ok(!err.message.includes('Simulated'));
+        assert.ok(!err.message.includes('database'));
+        return true;
+      }
+    );
+  });
+
+  // Finding 3 Proving Test (Round 5): Post-seed read failures map to canonical 500 without leaking SQL or driver text
+  test('Finding 3 / Round 5 / Canonical Error Contract: Post-seed getPermissions database read failure maps to canonical 500 without leaking SQL or driver text', async () => {
+    // Seed first
+    await service.ensurePlatformSeed();
+    assert.strictEqual((service as any).isSeeded, true);
+
+    // Force driver error on subsequent permission.findMany
+    mockPrisma.shouldFailPermissionFindMany = true;
+
+    await assert.rejects(
+      async () => {
+        await service.getPermissions('corr-r5-f3-perms');
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 500);
+        assert.strictEqual(err.code, 'INTERNAL_SERVER_ERROR');
+        assert.strictEqual(err.message, 'Không thể tải danh mục quyền hạn');
+        assert.ok(!err.message.includes('Database read failure'));
         return true;
       }
     );
