@@ -562,7 +562,17 @@ async function runInvitationsSupertestSuite() {
 
   // [TEST 17 / AC-USR-01-17] Scope authorization enforcement on accepted user
   console.log('[TEST 17 / AC-USR-01-17] Scope authorization enforcement on accepted user');
-  const newUserToken = await makeSessionToken(newUserId, merchant.id);
+  // Finding 5: Log in with the password set at accept (StrongPassword123!) rather than forging session
+  const loginRes = await request(app.getHttpServer())
+    .post('/auth/login')
+    .send({
+      identifier: `operator.${testSuffix}@shipde.vn`,
+      password: 'StrongPassword123!',
+    });
+  assert.strictEqual(loginRes.status, 200);
+  assert.strictEqual(loginRes.body.data.status, 'AUTHENTICATED');
+  const newUserToken = loginRes.body.data.access_token;
+  assert.ok(newUserToken);
 
   // Access within assigned warehouse scope
   const authScopeRes = await request(app.getHttpServer())
