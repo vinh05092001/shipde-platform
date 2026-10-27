@@ -3551,7 +3551,11 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
       (a) => a.action === 'SYSTEM_ROLE_PERMISSIONS_RECONCILED'
     );
     assert.ok(platformAudit, 'Platform seed reconciliation audit must exist');
-    assert.strictEqual(platformAudit.merchant_id, null, 'Platform audit must have null merchant_id');
+    assert.strictEqual(
+      platformAudit.merchant_id,
+      null,
+      'Platform audit must have null merchant_id'
+    );
     assert.strictEqual(platformAudit.user_id, null, 'Platform audit must have null user_id');
   });
 
@@ -3736,6 +3740,10 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
       'OpenAPI must declare /roles route under base server'
     );
     const controllerPath = Reflect.getMetadata('path', RbacController);
-    assert.strictEqual(controllerPath, 'api/v1', 'RbacController route prefix must match OpenAPI server base URL');
+    assert.strictEqual(
+      controllerPath,
+      'api/v1',
+      'RbacController route prefix must match OpenAPI server base URL'
+    );
   });
 });

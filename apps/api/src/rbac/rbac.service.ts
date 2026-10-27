@@ -1594,7 +1594,9 @@ export class RbacService implements OnModuleInit {
         }
         const effectiveDescription =
           dto.description !== undefined
-            ? dto.description ? sanitizeRoleTextInput(dto.description) || null : null
+            ? dto.description
+              ? sanitizeRoleTextInput(dto.description) || null
+              : null
             : lockedTargetRole.description;
 
         // If permissions were not explicitly passed in dto, keep current locked permissions
