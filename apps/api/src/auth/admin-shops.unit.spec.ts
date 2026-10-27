@@ -52,21 +52,29 @@ function createMockPrismaService() {
       count: async () => merchants.length,
       create: async ({ data }: any) => mockTx.merchant.create({ data }),
     },
+    passwordResetToken: {
+      create: async ({ data }: any) => mockTx.passwordResetToken.create({ data }),
+    },
     user: {
-      findMany: async ({ where }: any) => {
+      findMany: async ({ where, include }: any) => {
         if (!where?.OR) return [];
-        return users.filter((u) =>
-          where.OR.some((condition: any) => {
-            if (
-              condition.email &&
-              u.email &&
-              condition.email.toLowerCase() === u.email.toLowerCase()
-            )
-              return true;
-            if (condition.phone && u.phone && condition.phone === u.phone) return true;
-            return false;
-          })
-        );
+        return users
+          .filter((u) =>
+            where.OR.some((condition: any) => {
+              if (
+                condition.email &&
+                u.email &&
+                condition.email.toLowerCase() === u.email.toLowerCase()
+              )
+                return true;
+              if (condition.phone && u.phone && condition.phone === u.phone) return true;
+              return false;
+            })
+          )
+          .map((u) => ({
+            ...u,
+            merchant: include?.merchant ? merchants.find((m) => m.id === u.merchant_id) : undefined,
+          }));
       },
     },
     auditLog: {
@@ -75,7 +83,22 @@ function createMockPrismaService() {
         return data;
       },
     },
-    $transaction: async (cb: any) => cb(mockTx),
+    $transaction: async (cb: any) => {
+      const snapshotMerchants = [...merchants];
+      const snapshotUsers = [...users];
+      const snapshotTokens = [...passwordResetTokens];
+      try {
+        return await cb(mockTx);
+      } catch (err) {
+        merchants.length = 0;
+        merchants.push(...snapshotMerchants);
+        users.length = 0;
+        users.push(...snapshotUsers);
+        passwordResetTokens.length = 0;
+        passwordResetTokens.push(...snapshotTokens);
+        throw err;
+      }
+    },
   } as any;
 }
 
@@ -373,6 +396,108 @@ describe('FEAT-AUTH-02: Admin-Created Shop Account Unit Tests', () => {
         assert.strictEqual(err.code, 'VALIDATION_ERROR');
         const fields = err.getResponse()?.error?.fields;
         assert.ok(fields.some((f: any) => f.field === 'email' && f.code === 'DUPLICATE'));
+        return true;
+      }
+    );
+  });
+
+  // Finding 4: Delivery adapter failure rolls back the transaction atomically
+  it('Finding 4: Delivery adapter failure rolls back transaction without committing merchant or user', async () => {
+    const mockPrisma = createMockPrismaService();
+    const failingDeliveryAdapter = {
+      sendVerification: async () => {
+        throw new Error('SMTP connection timed out');
+      },
+    };
+    const service = new AuthService(
+      mockPrisma,
+      createMockRateLimitService(),
+      failingDeliveryAdapter as any
+    );
+
+    await assert.rejects(
+      async () =>
+        service.adminCreateShop(
+          { merchant_name: 'Shop Delivery Fail', email: 'fail@example.com' },
+          '127.0.0.1',
+          'corr-fail'
+        ),
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 503);
+        assert.strictEqual(err.code, 'DELIVERY_FAILED');
+        return true;
+      }
+    );
+
+    // Verify rollback: no merchant or user was committed to database
+    assert.strictEqual(mockPrisma.merchants.length, 0);
+    assert.strictEqual(mockPrisma.users.length, 0);
+    assert.strictEqual(mockPrisma.passwordResetTokens.length, 0);
+  });
+
+  // Finding 4: Canonical retry for the same merchant resends setup token without creating a second shop
+  it('Finding 4: Canonical retry for the same merchant resends one-time setup without second shop', async () => {
+    const mockPrisma = createMockPrismaService();
+    const sentMessages: any[] = [];
+    const mockDelivery = {
+      sendVerification: async (msg: any) => {
+        sentMessages.push(msg);
+      },
+    };
+    const service = new AuthService(mockPrisma, createMockRateLimitService(), mockDelivery as any);
+
+    // Initial creation
+    const res1 = await service.adminCreateShop(
+      { merchant_name: 'Shop Recovery Test', email: 'recover@example.com' },
+      '127.0.0.1',
+      'corr-rec-1'
+    );
+    assert.strictEqual(res1.success, true);
+    assert.strictEqual(mockPrisma.merchants.length, 1);
+    assert.strictEqual(mockPrisma.users.length, 1);
+    assert.strictEqual(sentMessages.length, 1);
+    assert.strictEqual((res1.data as any).temporary_password, undefined);
+
+    // Operator retries provisioning for the same shop to recover the setup link
+    const res2 = await service.adminCreateShop(
+      { merchant_name: 'Shop Recovery Test', email: 'recover@example.com' },
+      '127.0.0.1',
+      'corr-rec-2'
+    );
+    assert.strictEqual(res2.success, true);
+    // Crucial: No duplicate/second shop created
+    assert.strictEqual(mockPrisma.merchants.length, 1);
+    assert.strictEqual(mockPrisma.users.length, 1);
+    // New setup token delivered
+    assert.strictEqual(sentMessages.length, 2);
+    // Never reveals plaintext password
+    assert.strictEqual((res2.data as any).temporary_password, undefined);
+  });
+
+  // Finding 4: Code collision exhaustion throws canonical 409 CONFLICT rather than raw Error
+  it('Finding 4: Code collision exhaustion throws canonical 409 CONFLICT rather than raw Error', async () => {
+    const mockPrisma = createMockPrismaService();
+    // Simulate persistent unique constraint collision on merchant code
+    mockPrisma.$transaction = async () => {
+      const err: any = new Error('Unique constraint failed on the fields: (`code`)');
+      err.code = 'P2002';
+      err.meta = { target: ['code'] };
+      throw err;
+    };
+    const service = new AuthService(mockPrisma, createMockRateLimitService());
+
+    await assert.rejects(
+      async () =>
+        service.adminCreateShop(
+          { merchant_name: 'Shop Collision', email: 'collision@example.com' },
+          '127.0.0.1',
+          'corr-coll'
+        ),
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 409);
+        assert.strictEqual(err.code, 'MERCHANT_CODE_COLLISION');
         return true;
       }
     );

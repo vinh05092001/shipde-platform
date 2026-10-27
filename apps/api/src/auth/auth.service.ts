@@ -3183,15 +3183,119 @@ export class AuthService {
       );
     }
 
-    // 4. Duplicate identifier check (AC-ADMIN-08)
+    const passwordIsTemporary = !customPassword;
+
+    // 4. Duplicate identifier check & Idempotent setup retry (AC-ADMIN-08, Finding 4)
     const existingUsers = await this.prisma.user.findMany({
       where: {
         OR: [...(email ? [{ email }] : []), ...(phone ? [{ phone }] : [])],
+      },
+      include: {
+        merchant: true,
       },
     });
 
     if (existingUsers.length > 0) {
       const match = existingUsers[0];
+      const isSameMerchantRetry =
+        existingUsers.length === 1 &&
+        match.merchant &&
+        match.merchant.name.trim().toLowerCase() === dto.merchant_name.trim().toLowerCase() &&
+        match.role === RoleEnum.OWNER;
+
+      if (isSameMerchantRetry) {
+        // Canonical retry that resends the one-time setup without creating a second shop
+        if (passwordIsTemporary) {
+          const rawRetrySetupToken = randomBytes(32).toString('hex');
+          const hashedToken = this.hashSecret(rawRetrySetupToken);
+          const ttlSeconds = this.config?.PASSWORD_RESET_TTL_SECONDS || 3600 * 24;
+          const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
+          const channel = email ? 'email' : 'phone';
+          const identifier = (email || phone)!;
+
+          await this.prisma.passwordResetToken.create({
+            data: {
+              user_id: match.id,
+              token: hashedToken,
+              channel,
+              identifier,
+              expires_at: expiresAt,
+            },
+          });
+
+          if (this.deliveryAdapter) {
+            const baseUrl = this.config?.FRONTEND_URL || 'http://localhost:3000';
+            try {
+              await this.deliveryAdapter.sendVerification({
+                channel,
+                recipient: identifier,
+                purpose: 'password_reset',
+                link: `${baseUrl}/reset-password?token=${rawRetrySetupToken}`,
+              });
+            } catch {
+              throw new CanonicalApiException(
+                HttpStatus.SERVICE_UNAVAILABLE,
+                'DELIVERY_FAILED',
+                'Không thể gửi liên kết thiết lập tài khoản qua email/số điện thoại',
+                true,
+                'Vui lòng thử lại sau'
+              );
+            }
+          }
+        }
+
+        await this.logAudit({
+          merchantId: match.merchant.id,
+          userId: match.id,
+          actor: 'admin:provisioning',
+          action: 'ADMIN_RETRY_SHOP_SETUP',
+          resource: `merchant:${match.merchant.id}`,
+          correlationId,
+          ipAddress: this.hashIp(clientIp),
+          details: {
+            merchant_code: match.merchant.code,
+            password_is_temporary: passwordIsTemporary,
+            is_retry: true,
+          },
+        });
+
+        return {
+          success: true,
+          data: {
+            merchant: {
+              id: match.merchant.id,
+              name: match.merchant.name,
+              code: match.merchant.code,
+              status: match.merchant.status,
+              created_at: match.merchant.created_at,
+            },
+            user: {
+              id: match.id,
+              merchant_id: match.merchant_id,
+              full_name: match.full_name,
+              email: match.email,
+              phone: match.phone,
+              role: match.role,
+              status: match.status,
+              email_verified_at: match.email_verified_at
+                ? typeof match.email_verified_at === 'string'
+                  ? match.email_verified_at
+                  : match.email_verified_at.toISOString()
+                : null,
+              phone_verified_at: match.phone_verified_at
+                ? typeof match.phone_verified_at === 'string'
+                  ? match.phone_verified_at
+                  : match.phone_verified_at.toISOString()
+                : null,
+            },
+            password_is_temporary: passwordIsTemporary,
+          },
+          meta: {
+            correlation_id: correlationId,
+          },
+        };
+      }
+
       const conflictField = match.email && match.email === email ? 'email' : 'phone';
       throw new CanonicalApiException(
         HttpStatus.BAD_REQUEST,
@@ -3210,7 +3314,6 @@ export class AuthService {
     }
 
     // 5. Password generation & hashing
-    const passwordIsTemporary = !customPassword;
     const finalPassword = customPassword || this.generateTemporaryPassword();
     const passwordHash = await hashPassword(finalPassword);
     const rawSetupToken = passwordIsTemporary ? randomBytes(32).toString('hex') : undefined;
@@ -3266,6 +3369,34 @@ export class AuthService {
                 expires_at: expiresAt,
               },
             });
+
+            // Deliver setup verification atomically with transaction outcome (Finding 4)
+            if (this.deliveryAdapter) {
+              const baseUrl = this.config?.FRONTEND_URL || 'http://localhost:3000';
+              try {
+                await this.deliveryAdapter.sendVerification({
+                  channel,
+                  recipient: identifier,
+                  purpose: 'password_reset',
+                  link: `${baseUrl}/reset-password?token=${rawSetupToken}`,
+                });
+              } catch (deliverErr: any) {
+                throw new CanonicalApiException(
+                  HttpStatus.SERVICE_UNAVAILABLE,
+                  'DELIVERY_FAILED',
+                  'Không thể gửi liên kết thiết lập tài khoản qua email/số điện thoại',
+                  true,
+                  'Vui lòng thử lại sau',
+                  [
+                    {
+                      field: channel,
+                      code: 'DELIVERY_FAILED',
+                      message: 'Gửi thông báo thiết lập thất bại',
+                    },
+                  ]
+                );
+              }
+            }
           }
 
           return { merchant: newMerchant, user: newUser };
@@ -3276,6 +3407,9 @@ export class AuthService {
         break;
       } catch (err: unknown) {
         lastError = err;
+        if (err instanceof CanonicalApiException) {
+          throw err;
+        }
         if (this.isUniqueConstraintViolation(err)) {
           const target = (err as { meta?: { target?: string[] | string } })?.meta?.target;
           const isMerchantCodeCollision =
@@ -3306,23 +3440,16 @@ export class AuthService {
     }
 
     if (!merchant || !user) {
-      throw (
-        lastError ||
-        new Error('Failed to create merchant and owner account due to unresolvable code collision.')
+      if (lastError instanceof CanonicalApiException) {
+        throw lastError;
+      }
+      throw new CanonicalApiException(
+        HttpStatus.CONFLICT,
+        'MERCHANT_CODE_COLLISION',
+        'Không thể tạo mã cửa hàng duy nhất sau nhiều lần thử',
+        true,
+        'Vui lòng thử lại với tên cửa hàng khác'
       );
-    }
-
-    // Deliver one-time password setup/reset mechanism (BR-AUTH-05: never return plaintext credential)
-    if (passwordIsTemporary && rawSetupToken && this.deliveryAdapter) {
-      const baseUrl = this.config?.FRONTEND_URL || 'http://localhost:3000';
-      const channel = email ? 'email' : 'phone';
-      const identifier = (email || phone)!;
-      await this.deliveryAdapter.sendVerification({
-        channel,
-        recipient: identifier,
-        purpose: 'password_reset',
-        link: `${baseUrl}/reset-password?token=${rawSetupToken}`,
-      });
     }
 
     // 7. Audit log (No PII)
