@@ -2,6 +2,7 @@ import {
   Controller,
   Post,
   Get,
+  Query,
   UseGuards,
   Body,
   Req,
@@ -30,10 +31,13 @@ import {
   MfaChallengeVerifyDto,
   MfaRecoveryVerifyDto,
   MfaRegenerateRecoveryCodesDto,
+  AdminCreateShopDto,
+  AdminListShopsQuery,
 } from './auth.service';
 import { CanonicalExceptionFilter } from './canonical-exception.filter';
 import { normalizeCorrelationId } from '@shipde/config';
 import { SessionGuard } from '../session/session.guard';
+import { AdminAuthGuard } from './admin-auth.guard';
 
 @Controller('auth')
 @UseFilters(CanonicalExceptionFilter)
@@ -263,5 +267,38 @@ export class AuthController {
       clientIp,
       correlationId
     );
+  }
+
+  /**
+   * POST /auth/admin/shops (API-ADMIN-SHOP-CREATE, FEAT-AUTH-02)
+   */
+  @Post('admin/shops')
+  @UseGuards(AdminAuthGuard)
+  @HttpCode(HttpStatus.CREATED)
+  async adminCreateShop(
+    @Body() dto: AdminCreateShopDto,
+    @Req() req: Request,
+    @Res() res: Response
+  ): Promise<Response> {
+    const correlationId = (req as any).correlationId || normalizeCorrelationId();
+    const clientIp = extractClientIp(req);
+    const result = await this.authService.adminCreateShop(dto, clientIp, correlationId);
+    return res.status(HttpStatus.CREATED).json(result);
+  }
+
+  /**
+   * GET /auth/admin/shops (API-ADMIN-SHOP-LIST, FEAT-AUTH-02)
+   */
+  @Get('admin/shops')
+  @UseGuards(AdminAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  async adminListShops(
+    @Query() query: AdminListShopsQuery,
+    @Req() req: Request,
+    @Res() res: Response
+  ): Promise<Response> {
+    const correlationId = (req as any).correlationId || normalizeCorrelationId();
+    const result = await this.authService.adminListShops(query, correlationId);
+    return res.status(HttpStatus.OK).json(result);
   }
 }

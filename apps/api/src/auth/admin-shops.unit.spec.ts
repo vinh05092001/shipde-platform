@@ -1,0 +1,342 @@
+import { test, describe, it } from 'node:test';
+import * as assert from 'node:assert';
+import { AuthService, CanonicalApiException } from './auth.service';
+import { validateAdminKey, extractAdminKey, getExpectedAdminKey } from './admin-auth.guard';
+import { AdminCreateShopDto } from './admin-shops.dto';
+import { RoleEnum } from '@prisma/client';
+import { verifyPassword } from './password.util';
+
+// In-memory mock Prisma for offline unit tests
+function createMockPrismaService() {
+  const merchants: any[] = [];
+  const users: any[] = [];
+  const auditLogs: any[] = [];
+
+  const mockTx = {
+    merchant: {
+      create: async ({ data }: any) => {
+        const record = { id: `m-${Date.now()}-${Math.random()}`, ...data, created_at: new Date() };
+        merchants.push(record);
+        return record;
+      },
+    },
+    user: {
+      create: async ({ data }: any) => {
+        const record = { id: `u-${Date.now()}-${Math.random()}`, ...data, created_at: new Date() };
+        users.push(record);
+        return record;
+      },
+    },
+  };
+
+  return {
+    merchants,
+    users,
+    auditLogs,
+    merchant: {
+      findMany: async () => merchants,
+      count: async () => merchants.length,
+      create: async ({ data }: any) => mockTx.merchant.create({ data }),
+    },
+    user: {
+      findMany: async ({ where }: any) => {
+        if (!where?.OR) return [];
+        return users.filter((u) =>
+          where.OR.some((condition: any) => {
+            if (
+              condition.email &&
+              u.email &&
+              condition.email.toLowerCase() === u.email.toLowerCase()
+            )
+              return true;
+            if (condition.phone && u.phone && condition.phone === u.phone) return true;
+            return false;
+          })
+        );
+      },
+    },
+    auditLog: {
+      create: async ({ data }: any) => {
+        auditLogs.push(data);
+        return data;
+      },
+    },
+    $transaction: async (cb: any) => cb(mockTx),
+  } as any;
+}
+
+function createMockRateLimitService() {
+  return {} as any;
+}
+
+describe('FEAT-AUTH-02: Admin-Created Shop Account Unit Tests', () => {
+  const originalEnvKey = process.env.ADMIN_API_KEY;
+
+  test('setup test environment', () => {
+    process.env.ADMIN_API_KEY = 'test-admin-secret-key-40-chars';
+  });
+
+  // AC-ADMIN-01: Missing admin key returns 403 Forbidden
+  it('AC-ADMIN-01: Missing admin key throws 403 Forbidden', () => {
+    assert.throws(
+      () => validateAdminKey(undefined),
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 403);
+        assert.strictEqual(err.code, 'FORBIDDEN');
+        return true;
+      }
+    );
+  });
+
+  // AC-ADMIN-02: Invalid admin key returns 403 Forbidden
+  it('AC-ADMIN-02: Invalid admin key throws 403 Forbidden', () => {
+    assert.throws(
+      () => validateAdminKey('wrong-admin-key'),
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 403);
+        assert.strictEqual(err.code, 'FORBIDDEN');
+        return true;
+      }
+    );
+
+    // Valid key does not throw
+    assert.doesNotThrow(() => validateAdminKey('test-admin-secret-key-40-chars'));
+  });
+
+  // AC-ADMIN-09: Missing both email and phone returns 400 VALIDATION_ERROR
+  it('AC-ADMIN-09: Missing both email and phone returns 400 VALIDATION_ERROR', async () => {
+    const mockPrisma = createMockPrismaService();
+    const service = new AuthService(mockPrisma, createMockRateLimitService());
+
+    const dto: AdminCreateShopDto = {
+      merchant_name: 'Shop No Contact',
+    };
+
+    await assert.rejects(
+      async () => service.adminCreateShop(dto, '127.0.0.1', 'corr-09'),
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 400);
+        assert.strictEqual(err.code, 'VALIDATION_ERROR');
+        const fields = err.getResponse()?.error?.fields;
+        assert.ok(fields.some((f: any) => f.field === 'email' && f.code === 'REQUIRED'));
+        return true;
+      }
+    );
+  });
+
+  // AC-ADMIN-10: Invalid email format returns 400 VALIDATION_ERROR
+  it('AC-ADMIN-10: Invalid email format returns 400 VALIDATION_ERROR', async () => {
+    const mockPrisma = createMockPrismaService();
+    const service = new AuthService(mockPrisma, createMockRateLimitService());
+
+    const dto: AdminCreateShopDto = {
+      merchant_name: 'Shop Invalid Email',
+      email: 'not-an-email',
+    };
+
+    await assert.rejects(
+      async () => service.adminCreateShop(dto, '127.0.0.1', 'corr-10'),
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 400);
+        assert.strictEqual(err.code, 'VALIDATION_ERROR');
+        const fields = err.getResponse()?.error?.fields;
+        assert.ok(fields.some((f: any) => f.field === 'email' && f.code === 'INVALID_FORMAT'));
+        return true;
+      }
+    );
+  });
+
+  // AC-ADMIN-11: Invalid phone format returns 400 VALIDATION_ERROR
+  it('AC-ADMIN-11: Invalid phone format returns 400 VALIDATION_ERROR', async () => {
+    const mockPrisma = createMockPrismaService();
+    const service = new AuthService(mockPrisma, createMockRateLimitService());
+
+    const dto: AdminCreateShopDto = {
+      merchant_name: 'Shop Invalid Phone',
+      phone: '12345',
+    };
+
+    await assert.rejects(
+      async () => service.adminCreateShop(dto, '127.0.0.1', 'corr-11'),
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 400);
+        assert.strictEqual(err.code, 'VALIDATION_ERROR');
+        const fields = err.getResponse()?.error?.fields;
+        assert.ok(fields.some((f: any) => f.field === 'phone' && f.code === 'INVALID_FORMAT'));
+        return true;
+      }
+    );
+  });
+
+  // AC-ADMIN-12: Password shorter than 8 characters returns 400 VALIDATION_ERROR
+  it('AC-ADMIN-12: Password shorter than 8 characters returns 400 VALIDATION_ERROR', async () => {
+    const mockPrisma = createMockPrismaService();
+    const service = new AuthService(mockPrisma, createMockRateLimitService());
+
+    const dto: AdminCreateShopDto = {
+      merchant_name: 'Shop Short Pass',
+      email: 'shortpass@example.com',
+      password: '123',
+    };
+
+    await assert.rejects(
+      async () => service.adminCreateShop(dto, '127.0.0.1', 'corr-12'),
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 400);
+        assert.strictEqual(err.code, 'VALIDATION_ERROR');
+        const fields = err.getResponse()?.error?.fields;
+        assert.ok(fields.some((f: any) => f.field === 'password' && f.code === 'TOO_SHORT'));
+        return true;
+      }
+    );
+  });
+
+  // AC-ADMIN-13: merchant_name longer than 255 characters returns 400 VALIDATION_ERROR
+  it('AC-ADMIN-13: merchant_name longer than 255 characters returns 400 VALIDATION_ERROR', async () => {
+    const mockPrisma = createMockPrismaService();
+    const service = new AuthService(mockPrisma, createMockRateLimitService());
+
+    const dto: AdminCreateShopDto = {
+      merchant_name: 'A'.repeat(256),
+      email: 'longname@example.com',
+    };
+
+    await assert.rejects(
+      async () => service.adminCreateShop(dto, '127.0.0.1', 'corr-13'),
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 400);
+        assert.strictEqual(err.code, 'VALIDATION_ERROR');
+        const fields = err.getResponse()?.error?.fields;
+        assert.ok(fields.some((f: any) => f.field === 'merchant_name' && f.code === 'MAX_LENGTH'));
+        return true;
+      }
+    );
+  });
+
+  // AC-ADMIN-03: Valid admin key with email-only creates verified active user and shop
+  // AC-ADMIN-04: Database records verification (active status and verified timestamps)
+  // AC-ADMIN-05: Generated merchant code unique and follows standard format
+  it('AC-ADMIN-03, 04, 05: Valid admin key with email-only creates active verified shop and owner', async () => {
+    const mockPrisma = createMockPrismaService();
+    const service = new AuthService(mockPrisma, createMockRateLimitService());
+
+    const dto: AdminCreateShopDto = {
+      merchant_name: 'Tiệm Bánh Mì Sài Gòn',
+      email: 'banhmi@saigon.vn',
+    };
+
+    const res = await service.adminCreateShop(dto, '127.0.0.1', 'corr-03');
+
+    assert.strictEqual(res.success, true);
+    assert.strictEqual(res.data.merchant.name, 'Tiệm Bánh Mì Sài Gòn');
+    assert.strictEqual(res.data.merchant.status, 'active');
+    assert.ok(res.data.merchant.code.startsWith('TIEM_BANH_MI_SAI_GON_'));
+    assert.strictEqual(res.data.user.email, 'banhmi@saigon.vn');
+    assert.strictEqual(res.data.user.role, RoleEnum.OWNER);
+    assert.strictEqual(res.data.user.status, 'active');
+    assert.ok(res.data.user.email_verified_at instanceof Date);
+    assert.strictEqual(res.data.user.phone_verified_at, null);
+
+    // Auto-generated temporary password was created
+    assert.strictEqual(res.data.password_is_temporary, true);
+    assert.ok(res.data.temporary_password);
+    assert.ok(res.data.temporary_password.length >= 12);
+
+    // Stored in mock db
+    assert.strictEqual(mockPrisma.merchants.length, 1);
+    assert.strictEqual(mockPrisma.users.length, 1);
+    assert.strictEqual(mockPrisma.merchants[0].status, 'active');
+    assert.strictEqual(mockPrisma.users[0].status, 'active');
+  });
+
+  // AC-ADMIN-06: Phone-only registration supported with verified status
+  it('AC-ADMIN-06: Phone-only registration creates active verified user and shop', async () => {
+    const mockPrisma = createMockPrismaService();
+    const service = new AuthService(mockPrisma, createMockRateLimitService());
+
+    const dto: AdminCreateShopDto = {
+      merchant_name: 'Shop Điện Thoại 99',
+      phone: '0987654321',
+    };
+
+    const res = await service.adminCreateShop(dto, '127.0.0.1', 'corr-06');
+
+    assert.strictEqual(res.success, true);
+    assert.strictEqual(res.data.merchant.status, 'active');
+    assert.strictEqual(res.data.user.phone, '0987654321');
+    assert.strictEqual(res.data.user.email, null);
+    assert.strictEqual(res.data.user.status, 'active');
+    assert.ok(res.data.user.phone_verified_at instanceof Date);
+    assert.strictEqual(res.data.user.email_verified_at, null);
+  });
+
+  // AC-ADMIN-07: Custom password provided bypasses temporary password generation
+  it('AC-ADMIN-07: Custom password provided bypasses temporary password generation', async () => {
+    const mockPrisma = createMockPrismaService();
+    const service = new AuthService(mockPrisma, createMockRateLimitService());
+
+    const customPass = 'MyStrongPassword123!';
+    const dto: AdminCreateShopDto = {
+      merchant_name: 'Shop Thời Trang ABC',
+      email: 'owner@abc.vn',
+      password: customPass,
+    };
+
+    const res = await service.adminCreateShop(dto, '127.0.0.1', 'corr-07');
+
+    assert.strictEqual(res.success, true);
+    assert.strictEqual(res.data.password_is_temporary, false);
+    assert.strictEqual(res.data.temporary_password, undefined);
+
+    // Verify stored password hash matches the custom password
+    const storedUser = mockPrisma.users[0];
+    const match = await verifyPassword(customPass, storedUser.password_hash);
+    assert.strictEqual(match, true);
+  });
+
+  // AC-ADMIN-08: Duplicate email provided returns 400 VALIDATION_ERROR
+  it('AC-ADMIN-08: Duplicate email provided returns 400 VALIDATION_ERROR', async () => {
+    const mockPrisma = createMockPrismaService();
+    const service = new AuthService(mockPrisma, createMockRateLimitService());
+
+    // First creation
+    await service.adminCreateShop(
+      { merchant_name: 'Shop First', email: 'dup@example.com' },
+      '127.0.0.1',
+      'corr-08-1'
+    );
+
+    // Duplicate email
+    await assert.rejects(
+      async () =>
+        service.adminCreateShop(
+          { merchant_name: 'Shop Second', email: 'dup@example.com' },
+          '127.0.0.1',
+          'corr-08-2'
+        ),
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 400);
+        assert.strictEqual(err.code, 'VALIDATION_ERROR');
+        const fields = err.getResponse()?.error?.fields;
+        assert.ok(fields.some((f: any) => f.field === 'email' && f.code === 'DUPLICATE'));
+        return true;
+      }
+    );
+  });
+
+  test('teardown test environment', () => {
+    if (originalEnvKey !== undefined) {
+      process.env.ADMIN_API_KEY = originalEnvKey;
+    } else {
+      delete process.env.ADMIN_API_KEY;
+    }
+  });
+});
