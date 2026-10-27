@@ -994,4 +994,32 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
     const preserved = mockPrisma.roles.find((r) => r.id === roleId);
     assert.ok(preserved, 'Role must not be deleted when active users are assigned');
   });
+
+  // Finding 6 (P1): Exact permission set match and resolved code ceiling check
+  test('Finding 6 / AC-RBAC-01-03/08/13: Partially matching permissions reject with 400 VALIDATION_ERROR instead of dropping missing codes', async () => {
+    // 1. Partial match: 1 valid code, 1 bogus code -> rejected, role NOT created
+    await assert.rejects(
+      async () => {
+        await service.createRole(
+          {
+            name: 'Role With Bogus Code',
+            permissions: ['order:view_create', 'invalid_bogus_code_123'],
+          },
+          OWNER_ACTOR,
+          '127.0.0.1',
+          'corr-perm-exact'
+        );
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 400);
+        assert.strictEqual(err.code, 'VALIDATION_ERROR');
+        return true;
+      }
+    );
+
+    // Assert role was not created
+    const found = mockPrisma.roles.find((r) => r.name === 'Role With Bogus Code');
+    assert.strictEqual(found, undefined, 'Must not partially save role with dropped codes');
+  });
 });

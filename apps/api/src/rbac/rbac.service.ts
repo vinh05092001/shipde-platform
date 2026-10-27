@@ -548,40 +548,50 @@ export class RbacService {
       );
     }
 
-    // 5. Privilege Ceiling: Actor cannot grant permissions they do not possess (BR-RBAC-02, AC-RBAC-01-05)
-    const actorPerms = await this.getActorPermissions(actor);
-    const actorPermSet = new Set(actorPerms);
-
-    const unauthorizedPerms = dto.permissions.filter((p) => !actorPermSet.has(p));
-    if (unauthorizedPerms.length > 0) {
-      throw new CanonicalApiException(
-        HttpStatus.FORBIDDEN,
-        'PRIVILEGE_ESCALATION_DENIED',
-        'Không thể cấp quyền vượt quá thẩm quyền của bạn',
-        false,
-        `Bạn không có các quyền sau: ${unauthorizedPerms.join(', ')}`
-      );
-    }
-
-    // Resolve permissions from DB (by code or id)
+    // 5. Resolve permissions from DB (by code or id) first and verify exact match
     const permissionsInDb = await this.prisma.permission.findMany({
       where: buildPermissionFilter(dto.permissions),
     });
 
-    if (permissionsInDb.length === 0) {
+    const resolvedCodeSet = new Set(permissionsInDb.map((p) => p.code));
+    const resolvedIdSet = new Set(permissionsInDb.map((p) => p.id));
+
+    const missingOrInvalid = dto.permissions.filter(
+      (requested) => !resolvedCodeSet.has(requested) && !resolvedIdSet.has(requested)
+    );
+
+    if (missingOrInvalid.length > 0 || permissionsInDb.length === 0) {
       throw new CanonicalApiException(
         HttpStatus.BAD_REQUEST,
         'VALIDATION_ERROR',
         'Các quyền hạn đã chọn không hợp lệ',
         false,
-        undefined,
+        `Quyền hạn sau không tồn tại trên hệ thống: ${missingOrInvalid.join(', ')}`,
         [
           {
             field: 'permissions',
             code: 'INVALID',
-            message: 'Quyền hạn không tồn tại trên hệ thống',
+            message: `Quyền hạn không tồn tại trên hệ thống: ${missingOrInvalid.join(', ')}`,
           },
         ]
+      );
+    }
+
+    // 6. Privilege Ceiling: Actor cannot grant permissions they do not possess (BR-RBAC-02, AC-RBAC-01-05)
+    const actorPerms = await this.getActorPermissions(actor);
+    const actorPermSet = new Set(actorPerms);
+
+    const unauthorizedResolvedCodes = permissionsInDb
+      .map((p) => p.code)
+      .filter((code) => !actorPermSet.has(code));
+
+    if (unauthorizedResolvedCodes.length > 0) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'PRIVILEGE_ESCALATION_DENIED',
+        'Không thể cấp quyền vượt quá thẩm quyền của bạn',
+        false,
+        `Bạn không có các quyền sau: ${unauthorizedResolvedCodes.join(', ')}`
       );
     }
 
@@ -803,38 +813,48 @@ export class RbacService {
         );
       }
 
-      const actorPerms = await this.getActorPermissions(actor);
-      const actorPermSet = new Set(actorPerms);
-
-      const unauthorizedPerms = dto.permissions.filter((p) => !actorPermSet.has(p));
-      if (unauthorizedPerms.length > 0) {
-        throw new CanonicalApiException(
-          HttpStatus.FORBIDDEN,
-          'PRIVILEGE_ESCALATION_DENIED',
-          'Không thể cấp quyền vượt quá thẩm quyền của bạn',
-          false,
-          `Bạn không có các quyền sau: ${unauthorizedPerms.join(', ')}`
-        );
-      }
-
       permissionsInDb = await this.prisma.permission.findMany({
         where: buildPermissionFilter(dto.permissions),
       });
 
-      if (permissionsInDb.length === 0) {
+      const resolvedCodeSet = new Set(permissionsInDb.map((p) => p.code));
+      const resolvedIdSet = new Set(permissionsInDb.map((p) => p.id));
+
+      const missingOrInvalid = dto.permissions.filter(
+        (requested) => !resolvedCodeSet.has(requested) && !resolvedIdSet.has(requested)
+      );
+
+      if (missingOrInvalid.length > 0 || permissionsInDb.length === 0) {
         throw new CanonicalApiException(
           HttpStatus.BAD_REQUEST,
           'VALIDATION_ERROR',
           'Các quyền hạn đã chọn không hợp lệ',
           false,
-          undefined,
+          `Quyền hạn sau không tồn tại trên hệ thống: ${missingOrInvalid.join(', ')}`,
           [
             {
               field: 'permissions',
               code: 'INVALID',
-              message: 'Quyền hạn không tồn tại trên hệ thống',
+              message: `Quyền hạn không tồn tại trên hệ thống: ${missingOrInvalid.join(', ')}`,
             },
           ]
+        );
+      }
+
+      const actorPerms = await this.getActorPermissions(actor);
+      const actorPermSet = new Set(actorPerms);
+
+      const unauthorizedResolvedCodes = permissionsInDb
+        .map((p) => p.code)
+        .filter((code) => !actorPermSet.has(code));
+
+      if (unauthorizedResolvedCodes.length > 0) {
+        throw new CanonicalApiException(
+          HttpStatus.FORBIDDEN,
+          'PRIVILEGE_ESCALATION_DENIED',
+          'Không thể cấp quyền vượt quá thẩm quyền của bạn',
+          false,
+          `Bạn không có các quyền sau: ${unauthorizedResolvedCodes.join(', ')}`
         );
       }
     }
