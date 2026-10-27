@@ -7,6 +7,7 @@ import { randomBytes, createHash } from 'node:crypto';
 import { VERIFICATION_ADAPTER } from '../auth/auth.tokens';
 import type { IVerificationDeliveryAdapter } from '@shipde/contracts';
 import { SendInvitationRequest, AcceptInvitationRequest, InvitationItem } from '@shipde/contracts';
+import { RateLimitService } from '../auth/rate-limit.service';
 
 export function maskIdentifier(identifier?: string | null): string {
   if (!identifier) return '';
@@ -52,7 +53,10 @@ export class InvitationsService {
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Optional()
     @Inject(VERIFICATION_ADAPTER)
-    private readonly deliveryAdapter?: IVerificationDeliveryAdapter
+    private readonly deliveryAdapter?: IVerificationDeliveryAdapter,
+    @Optional()
+    @Inject(RateLimitService)
+    private readonly rateLimitService?: RateLimitService
   ) {}
 
   private hashToken(rawToken: string): string {
@@ -118,6 +122,27 @@ export class InvitationsService {
   ) {
     const email = dto.email ? dto.email.trim().toLowerCase() : undefined;
     const phone = dto.phone ? dto.phone.trim().replace(/[\s-]/g, '') : undefined;
+    const recipient = email || phone;
+
+    // Rate limiting: Anti-abuse dispatch limit (SECURITY-NFR)
+    if (this.rateLimitService) {
+      const rateLimit = await this.rateLimitService.checkInvitationDispatchLimit(
+        clientIp,
+        recipient
+      );
+      if (!rateLimit.allowed) {
+        throw new CanonicalApiException(
+          HttpStatus.TOO_MANY_REQUESTS,
+          'RATE_LIMITED',
+          rateLimit.reason || 'Quá nhiều yêu cầu gửi lời mời. Vui lòng thử lại sau.',
+          false,
+          undefined,
+          undefined,
+          rateLimit.retryAfterSeconds
+        );
+      }
+      await this.rateLimitService.recordInvitationDispatchAttempt(clientIp, recipient);
+    }
 
     // 1. Validation: At least one recipient identifier required (AC-USR-01-07)
     if (!email && !phone) {
@@ -292,22 +317,48 @@ export class InvitationsService {
     // 6. Expiry: 7 days (168 hours) from now (BR-INV-03)
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
-    // 7. Persist invitation in DB (enforcing partial unique pending index under concurrency)
+    // 7. Persist invitation and immutable audit log in single database transaction (BR-INV-04, BR-INV-09)
     let invitation: any;
     try {
-      invitation = await this.prisma.invitation.create({
-        data: {
-          merchant_id: actor.merchantId,
-          email: email || null,
-          phone: phone || null,
-          role: dto.role as RoleEnum,
-          store_scopes: dto.store_scopes || [],
-          warehouse_scopes: dto.warehouse_scopes || [],
-          token_hash: tokenHash,
-          status: InvitationStatusEnum.PENDING,
-          invited_by_user_id: actor.userId,
-          expires_at: expiresAt,
-        },
+      invitation = await this.prisma.$transaction(async (tx) => {
+        const inv = await tx.invitation.create({
+          data: {
+            merchant_id: actor.merchantId,
+            email: email || null,
+            phone: phone || null,
+            role: dto.role as RoleEnum,
+            store_scopes: dto.store_scopes || [],
+            warehouse_scopes: dto.warehouse_scopes || [],
+            token_hash: tokenHash,
+            status: InvitationStatusEnum.PENDING,
+            invited_by_user_id: actor.userId,
+            expires_at: expiresAt,
+          },
+        });
+
+        // 8. Immutable Audit Trail (BR-INV-09, AC-USR-01-01, AC-USR-01-18)
+        // Committed atomically with the invitation record; never log raw token or password
+        await tx.auditLog.create({
+          data: {
+            merchant_id: actor.merchantId,
+            user_id: actor.userId,
+            action: 'INVITATION_SENT',
+            entity_type: 'Invitation',
+            entity_id: inv.id,
+            ip_address: clientIp,
+            new_value: {
+              invitation_id: inv.id,
+              role: inv.role,
+              store_scopes: inv.store_scopes,
+              warehouse_scopes: inv.warehouse_scopes,
+              expires_at: inv.expires_at.toISOString(),
+              target_identifier_masked: maskIdentifier(email || phone),
+              correlation_id: correlationId,
+            },
+          },
+        });
+
+        return inv;
       });
     } catch (err: any) {
       if (err?.code === 'P2002' || err?.message?.includes('invitations_merchant_pending')) {
@@ -321,28 +372,6 @@ export class InvitationsService {
       }
       throw err;
     }
-
-    // 8. Immutable Audit Trail (BR-INV-09, AC-USR-01-01, AC-USR-01-18)
-    // Never log raw token or password
-    await this.prisma.auditLog.create({
-      data: {
-        merchant_id: actor.merchantId,
-        user_id: actor.userId,
-        action: 'INVITATION_SENT',
-        entity_type: 'Invitation',
-        entity_id: invitation.id,
-        ip_address: clientIp,
-        new_value: {
-          invitation_id: invitation.id,
-          role: invitation.role,
-          store_scopes: invitation.store_scopes,
-          warehouse_scopes: invitation.warehouse_scopes,
-          expires_at: invitation.expires_at.toISOString(),
-          target_identifier_masked: maskIdentifier(email || phone),
-          correlation_id: correlationId,
-        },
-      },
-    });
 
     const invitationUrl = `${baseUrl}/invite/accept?token=${rawToken}`;
 
@@ -551,74 +580,99 @@ export class InvitationsService {
       );
     }
 
+    // Rate limiting: Anti-abuse dispatch limit (SECURITY-NFR)
+    if (this.rateLimitService) {
+      const recipient = invitation.email || invitation.phone || undefined;
+      const rateLimit = await this.rateLimitService.checkInvitationDispatchLimit(
+        clientIp,
+        recipient
+      );
+      if (!rateLimit.allowed) {
+        throw new CanonicalApiException(
+          HttpStatus.TOO_MANY_REQUESTS,
+          'RATE_LIMITED',
+          rateLimit.reason || 'Quá nhiều yêu cầu gửi lại lời mời. Vui lòng thử lại sau.',
+          false,
+          undefined,
+          undefined,
+          rateLimit.retryAfterSeconds
+        );
+      }
+      await this.rateLimitService.recordInvitationDispatchAttempt(clientIp, recipient);
+    }
+
     // Regenerate 32-byte token and reset expiry 7 days
     const rawToken = randomBytes(32).toString('hex');
     const tokenHash = this.hashToken(rawToken);
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
-    // Conditional atomic updateMany (BR-INV-04, BR-INV-05): status must be PENDING or EXPIRED, consumed_at null
-    const result = await this.prisma.invitation.updateMany({
-      where: {
-        id: invitationId,
-        merchant_id: actor.merchantId,
-        status: { in: [InvitationStatusEnum.PENDING, InvitationStatusEnum.EXPIRED] },
-        consumed_at: null,
-      },
-      data: {
-        token_hash: tokenHash,
-        status: InvitationStatusEnum.PENDING,
-        expires_at: expiresAt,
-        updated_at: new Date(),
-      },
-    });
+    // Conditional atomic updateMany + audit log in single transaction (BR-INV-04, BR-INV-05, BR-INV-09)
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const result = await tx.invitation.updateMany({
+        where: {
+          id: invitationId,
+          merchant_id: actor.merchantId,
+          status: { in: [InvitationStatusEnum.PENDING, InvitationStatusEnum.EXPIRED] },
+          consumed_at: null,
+        },
+        data: {
+          token_hash: tokenHash,
+          status: InvitationStatusEnum.PENDING,
+          expires_at: expiresAt,
+          updated_at: new Date(),
+        },
+      });
 
-    if (result.count === 0) {
-      const current = await this.prisma.invitation.findUnique({ where: { id: invitationId } });
-      if (!current || current.merchant_id !== actor.merchantId) {
-        throw new CanonicalApiException(
-          HttpStatus.NOT_FOUND,
-          'INVITATION_NOT_FOUND',
-          'Không tìm thấy lời mời',
-          false
-        );
-      }
-      if (current.status === InvitationStatusEnum.ACCEPTED || current.consumed_at) {
+      if (result.count === 0) {
+        const current = await tx.invitation.findUnique({ where: { id: invitationId } });
+        if (!current || current.merchant_id !== actor.merchantId) {
+          throw new CanonicalApiException(
+            HttpStatus.NOT_FOUND,
+            'INVITATION_NOT_FOUND',
+            'Không tìm thấy lời mời',
+            false
+          );
+        }
+        if (current.status === InvitationStatusEnum.ACCEPTED || current.consumed_at) {
+          throw new CanonicalApiException(
+            HttpStatus.BAD_REQUEST,
+            'INVITATION_ALREADY_USED',
+            'Lời mời đã được chấp nhận trước đó',
+            false
+          );
+        }
         throw new CanonicalApiException(
           HttpStatus.BAD_REQUEST,
-          'INVITATION_ALREADY_USED',
-          'Lời mời đã được chấp nhận trước đó',
+          'INVALID_STATE',
+          'Không thể gửi lại lời mời ở trạng thái hiện tại',
           false
         );
       }
-      throw new CanonicalApiException(
-        HttpStatus.BAD_REQUEST,
-        'INVALID_STATE',
-        'Không thể gửi lại lời mời ở trạng thái hiện tại',
-        false
-      );
-    }
 
-    const updated = (await this.prisma.invitation.findUnique({
-      where: { id: invitationId },
-    }))!;
+      const inv = (await tx.invitation.findUnique({
+        where: { id: invitationId },
+      }))!;
 
-    // Audit log (BR-INV-09, AC-USR-01-09)
-    await this.prisma.auditLog.create({
-      data: {
-        merchant_id: actor.merchantId,
-        user_id: actor.userId,
-        action: 'INVITATION_RESENT',
-        entity_type: 'Invitation',
-        entity_id: updated.id,
-        ip_address: clientIp,
-        new_value: {
-          invitation_id: updated.id,
-          role: updated.role,
-          status: updated.status,
-          expires_at: updated.expires_at.toISOString(),
-          correlation_id: correlationId,
+      // Audit log (BR-INV-09, AC-USR-01-09) committed atomically with state change
+      await tx.auditLog.create({
+        data: {
+          merchant_id: actor.merchantId,
+          user_id: actor.userId,
+          action: 'INVITATION_RESENT',
+          entity_type: 'Invitation',
+          entity_id: inv.id,
+          ip_address: clientIp,
+          new_value: {
+            invitation_id: inv.id,
+            role: inv.role,
+            status: inv.status,
+            expires_at: inv.expires_at.toISOString(),
+            correlation_id: correlationId,
+          },
         },
-      },
+      });
+
+      return inv;
     });
 
     const invitationUrl = `${baseUrl}/invite/accept?token=${rawToken}`;
@@ -717,66 +771,70 @@ export class InvitationsService {
       .update(`cancelled:${invitationId}:${Date.now()}:${randomBytes(16).toString('hex')}`)
       .digest('hex');
 
-    // Conditional atomic updateMany (BR-INV-04, BR-INV-05, AC-USR-01-10): status must be PENDING, consumed_at null
-    const result = await this.prisma.invitation.updateMany({
-      where: {
-        id: invitationId,
-        merchant_id: actor.merchantId,
-        status: InvitationStatusEnum.PENDING,
-        consumed_at: null,
-      },
-      data: {
-        status: InvitationStatusEnum.CANCELLED,
-        token_hash: cancelledTokenHash,
-        updated_at: new Date(),
-      },
-    });
+    // Conditional atomic updateMany + audit log in single transaction (BR-INV-04, BR-INV-05, BR-INV-09, AC-USR-01-10)
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const result = await tx.invitation.updateMany({
+        where: {
+          id: invitationId,
+          merchant_id: actor.merchantId,
+          status: InvitationStatusEnum.PENDING,
+          consumed_at: null,
+        },
+        data: {
+          status: InvitationStatusEnum.CANCELLED,
+          token_hash: cancelledTokenHash,
+          updated_at: new Date(),
+        },
+      });
 
-    if (result.count === 0) {
-      const current = await this.prisma.invitation.findUnique({ where: { id: invitationId } });
-      if (!current || current.merchant_id !== actor.merchantId) {
-        throw new CanonicalApiException(
-          HttpStatus.NOT_FOUND,
-          'INVITATION_NOT_FOUND',
-          'Không tìm thấy lời mời',
-          false
-        );
-      }
-      if (current.status === InvitationStatusEnum.ACCEPTED || current.consumed_at) {
+      if (result.count === 0) {
+        const current = await tx.invitation.findUnique({ where: { id: invitationId } });
+        if (!current || current.merchant_id !== actor.merchantId) {
+          throw new CanonicalApiException(
+            HttpStatus.NOT_FOUND,
+            'INVITATION_NOT_FOUND',
+            'Không tìm thấy lời mời',
+            false
+          );
+        }
+        if (current.status === InvitationStatusEnum.ACCEPTED || current.consumed_at) {
+          throw new CanonicalApiException(
+            HttpStatus.BAD_REQUEST,
+            'INVITATION_ALREADY_USED',
+            'Lời mời đã được chấp nhận trước đó và không thể hủy',
+            false
+          );
+        }
         throw new CanonicalApiException(
           HttpStatus.BAD_REQUEST,
-          'INVITATION_ALREADY_USED',
-          'Lời mời đã được chấp nhận trước đó và không thể hủy',
+          'INVALID_STATE',
+          'Chỉ có thể hủy lời mời đang ở trạng thái PENDING',
           false
         );
       }
-      throw new CanonicalApiException(
-        HttpStatus.BAD_REQUEST,
-        'INVALID_STATE',
-        'Chỉ có thể hủy lời mời đang ở trạng thái PENDING',
-        false
-      );
-    }
 
-    const updated = (await this.prisma.invitation.findUnique({
-      where: { id: invitationId },
-    }))!;
+      const inv = (await tx.invitation.findUnique({
+        where: { id: invitationId },
+      }))!;
 
-    // Audit log (BR-INV-09, AC-USR-01-10)
-    await this.prisma.auditLog.create({
-      data: {
-        merchant_id: actor.merchantId,
-        user_id: actor.userId,
-        action: 'INVITATION_CANCELLED',
-        entity_type: 'Invitation',
-        entity_id: updated.id,
-        ip_address: clientIp,
-        new_value: {
-          invitation_id: updated.id,
-          status: updated.status,
-          correlation_id: correlationId,
+      // Audit log (BR-INV-09, AC-USR-01-10) committed atomically with state change
+      await tx.auditLog.create({
+        data: {
+          merchant_id: actor.merchantId,
+          user_id: actor.userId,
+          action: 'INVITATION_CANCELLED',
+          entity_type: 'Invitation',
+          entity_id: inv.id,
+          ip_address: clientIp,
+          new_value: {
+            invitation_id: inv.id,
+            status: inv.status,
+            correlation_id: correlationId,
+          },
         },
-      },
+      });
+
+      return inv;
     });
 
     return {
@@ -795,7 +853,23 @@ export class InvitationsService {
    * BR-INV-06: Non-enumeration on public endpoints returns identical 404 for invalid,
    * expired, cancelled, or nonexistent tokens (AC-USR-01-12, AC-USR-01-13).
    */
-  async verifyInvitation(rawToken: string, correlationId: string) {
+  async verifyInvitation(rawToken: string, correlationId: string, clientIp?: string) {
+    // Rate limiting: Anti-enumeration verification limit (SECURITY-NFR)
+    if (this.rateLimitService && clientIp) {
+      const rateLimit = await this.rateLimitService.checkInvitationVerifyLimit(clientIp);
+      if (!rateLimit.allowed) {
+        throw new CanonicalApiException(
+          HttpStatus.TOO_MANY_REQUESTS,
+          'RATE_LIMITED',
+          rateLimit.reason || 'Quá nhiều yêu cầu kiểm tra lời mời từ địa chỉ IP này. Vui lòng thử lại sau.',
+          false,
+          undefined,
+          undefined,
+          rateLimit.retryAfterSeconds
+        );
+      }
+      await this.rateLimitService.recordInvitationVerifyAttempt(clientIp);
+    }
     if (!rawToken || typeof rawToken !== 'string' || rawToken.trim().length === 0) {
       throw new CanonicalApiException(
         HttpStatus.NOT_FOUND,
@@ -850,6 +924,23 @@ export class InvitationsService {
    * BR-INV-04, BR-INV-05, BR-INV-09, AC-USR-01-14, AC-USR-01-15, AC-USR-01-16.
    */
   async acceptInvitation(dto: AcceptInvitationRequest, clientIp: string, correlationId: string) {
+    // 0. Rate limiting: Anti-brute-force acceptance gate (SECURITY-NFR)
+    if (this.rateLimitService) {
+      const tokenHash = dto.token ? this.hashToken(dto.token.trim()) : undefined;
+      const rateLimit = await this.rateLimitService.checkInvitationAcceptLimit(clientIp, tokenHash);
+      if (!rateLimit.allowed) {
+        throw new CanonicalApiException(
+          HttpStatus.TOO_MANY_REQUESTS,
+          'RATE_LIMITED',
+          rateLimit.reason || 'Quá nhiều yêu cầu chấp nhận lời mời từ địa chỉ IP này. Vui lòng thử lại sau.',
+          false,
+          undefined,
+          undefined,
+          rateLimit.retryAfterSeconds
+        );
+      }
+      await this.rateLimitService.recordInvitationAcceptAttempt(clientIp, tokenHash);
+    }
     // 1. Validate token
     if (!dto.token || typeof dto.token !== 'string' || dto.token.trim().length === 0) {
       throw new CanonicalApiException(

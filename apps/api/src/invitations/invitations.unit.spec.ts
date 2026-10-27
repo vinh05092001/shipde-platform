@@ -1275,4 +1275,132 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
       assert.ok(auditPayloadStr.includes('s****k@example.com'));
     });
   });
+
+  // Finding 9: Rate limiting on dispatch/accept and transactional audit log commit
+  describe('Finding 9: Rate limiting and transactional audit commit', () => {
+    it('enforces dispatch rate limit on createInvitation with 429 RATE_LIMITED', async () => {
+      const mockRateLimit = {
+        checkInvitationDispatchLimit: async () => ({
+          allowed: false,
+          retryAfterSeconds: 45,
+          reason: 'Too many requests',
+        }),
+        recordInvitationDispatchAttempt: async () => {},
+      };
+
+      const limitedService = new InvitationsService(
+        mockPrisma,
+        undefined,
+        mockRateLimit as any
+      );
+
+      await assert.rejects(
+        async () => {
+          await limitedService.createInvitation(
+            { email: 'ratelimited@shipde.vn', role: RoleEnum.OPS_CSKH },
+            { userId: OWNER_USER_ID, merchantId: MERCHANT_ID, role: 'OWNER' },
+            '192.168.1.1',
+            'corr-rate-limit'
+          );
+        },
+        (err: any) => {
+          assert.ok(err instanceof CanonicalApiException);
+          assert.strictEqual(err.getStatus(), HttpStatus.TOO_MANY_REQUESTS);
+          assert.strictEqual(err.code, 'RATE_LIMITED');
+          assert.strictEqual(err.retryAfterSeconds, 45);
+          return true;
+        }
+      );
+    });
+
+    it('enforces accept rate limit on acceptInvitation with 429 RATE_LIMITED', async () => {
+      const mockRateLimit = {
+        checkInvitationAcceptLimit: async () => ({
+          allowed: false,
+          retryAfterSeconds: 60,
+          reason: 'Too many accept attempts',
+        }),
+        recordInvitationAcceptAttempt: async () => {},
+      };
+
+      const limitedService = new InvitationsService(
+        mockPrisma,
+        undefined,
+        mockRateLimit as any
+      );
+
+      await assert.rejects(
+        async () => {
+          await limitedService.acceptInvitation(
+            {
+              token: 'testtoken'.repeat(8),
+              full_name: 'Test Name',
+              password: 'Password123!',
+            },
+            '192.168.1.1',
+            'corr-rate-limit-accept'
+          );
+        },
+        (err: any) => {
+          assert.ok(err instanceof CanonicalApiException);
+          assert.strictEqual(err.getStatus(), HttpStatus.TOO_MANY_REQUESTS);
+          assert.strictEqual(err.code, 'RATE_LIMITED');
+          assert.strictEqual(err.retryAfterSeconds, 60);
+          return true;
+        }
+      );
+    });
+
+    it('proves createInvitation commits mutation and audit log inside single $transaction', async () => {
+      let transactionCalled = false;
+      let invitationCreatedInTx = false;
+      let auditCreatedInTx = false;
+
+      const txPrisma = {
+        ...mockPrisma,
+        invitation: {
+          ...mockPrisma.invitation,
+          create: async (args: any) => {
+            assert.ok(transactionCalled, 'invitation.create must be called inside $transaction');
+            invitationCreatedInTx = true;
+            return {
+              id: 'tx-invite-id',
+              created_at: new Date(),
+              updated_at: new Date(),
+              consumed_at: null,
+              ...args.data,
+            };
+          },
+        },
+        auditLog: {
+          create: async (args: any) => {
+            assert.ok(transactionCalled, 'auditLog.create must be called inside $transaction');
+            auditCreatedInTx = true;
+            return { id: 'tx-audit-id', ...args.data };
+          },
+        },
+      };
+
+      const customPrisma = {
+        ...txPrisma,
+        $transaction: async (cb: any) => {
+          transactionCalled = true;
+          return cb(txPrisma);
+        },
+      };
+
+      const txService = new InvitationsService(customPrisma as any);
+      const res = await txService.createInvitation(
+        { email: 'txcheck@shipde.vn', role: RoleEnum.OPS_CSKH },
+        { userId: OWNER_USER_ID, merchantId: MERCHANT_ID, role: 'OWNER' },
+        '10.0.0.2',
+        'corr-tx-1'
+      );
+
+      assert.ok(res.data.id);
+      assert.strictEqual(transactionCalled, true);
+      assert.strictEqual(invitationCreatedInTx, true);
+      assert.strictEqual(auditCreatedInTx, true);
+    });
+  });
 });

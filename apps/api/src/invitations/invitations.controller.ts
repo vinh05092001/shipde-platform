@@ -130,7 +130,8 @@ export class InvitationsController {
   async verifyInvitation(@Query('token') token: string, @Req() req: any) {
     const correlationId =
       req.headers?.['x-correlation-id'] || req.correlationId || normalizeCorrelationId();
-    return this.invitationsService.verifyInvitation(token, correlationId);
+    const clientIp = extractClientIp(req);
+    return this.invitationsService.verifyInvitation(token, correlationId, clientIp);
   }
 
   /**

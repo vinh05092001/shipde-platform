@@ -511,6 +511,128 @@ export class RateLimitService {
   async resetMfaChallengeFailures(challengeHash: string): Promise<void> {
     await this.resetKey(`ratelimit:mfa:challenge:${challengeHash}`);
   }
+
+  // --- FEAT-USR-01: invitation rate limits (SECURITY-NFR / BR-INV-09) ---
+
+  /**
+   * Check invitation dispatch limits (create and resend):
+   * - IP: max 20 dispatch requests per hour
+   * - Recipient identifier (email or phone): 60s cooldown + max 5 per hour
+   */
+  async checkInvitationDispatchLimit(ip: string, identifier?: string): Promise<RateLimitResult> {
+    const windowSeconds = 3600;
+    const ipKey = `ratelimit:invite:dispatch:ip:${ip}`;
+    const ipCheck = await this.getAttempts(ipKey, windowSeconds);
+    if (ipCheck.count >= 20) {
+      return {
+        allowed: false,
+        retryAfterSeconds: ipCheck.retryAfterSeconds,
+        reason: 'Quá nhiều yêu cầu gửi lời mời từ địa chỉ IP này. Vui lòng thử lại sau.',
+      };
+    }
+
+    if (identifier) {
+      const cleanId = identifier.toLowerCase().trim();
+      const cooldownKey = `ratelimit:invite:dispatch:cooldown:${cleanId}`;
+      const cooldown = await this.getCooldown(cooldownKey);
+      if (cooldown !== null && cooldown > 0) {
+        return {
+          allowed: false,
+          retryAfterSeconds: cooldown,
+          reason: `Vui lòng chờ ${cooldown} giây trước khi gửi lại lời mời đến thông tin này.`,
+        };
+      }
+
+      const hourlyKey = `ratelimit:invite:dispatch:hourly:${cleanId}`;
+      const hourlyCheck = await this.getAttempts(hourlyKey, windowSeconds);
+      if (hourlyCheck.count >= 5) {
+        return {
+          allowed: false,
+          retryAfterSeconds: hourlyCheck.retryAfterSeconds,
+          reason: 'Đã vượt quá số lần gửi lời mời cho người dùng này trong 1 giờ. Vui lòng thử lại sau.',
+        };
+      }
+    }
+
+    return { allowed: true };
+  }
+
+  async recordInvitationDispatchAttempt(
+    ip: string,
+    identifier?: string,
+    cooldownSeconds = 60
+  ): Promise<void> {
+    const windowSeconds = 3600;
+    await this.recordAttemptKey(`ratelimit:invite:dispatch:ip:${ip}`, windowSeconds);
+    if (identifier) {
+      const cleanId = identifier.toLowerCase().trim();
+      await this.setCooldown(`ratelimit:invite:dispatch:cooldown:${cleanId}`, cooldownSeconds);
+      await this.recordAttemptKey(`ratelimit:invite:dispatch:hourly:${cleanId}`, windowSeconds);
+    }
+  }
+
+  /**
+   * Check invitation verification check limits:
+   * - IP: max 30 verification checks per 15 minutes
+   */
+  async checkInvitationVerifyLimit(ip: string): Promise<RateLimitResult> {
+    const windowSeconds = 900;
+    const key = `ratelimit:invite:verify:ip:${ip}`;
+    const check = await this.getAttempts(key, windowSeconds);
+    if (check.count >= 30) {
+      return {
+        allowed: false,
+        retryAfterSeconds: check.retryAfterSeconds,
+        reason: 'Quá nhiều yêu cầu kiểm tra lời mời từ địa chỉ IP này. Vui lòng thử lại sau.',
+      };
+    }
+    return { allowed: true };
+  }
+
+  async recordInvitationVerifyAttempt(ip: string): Promise<void> {
+    await this.recordAttemptKey(`ratelimit:invite:verify:ip:${ip}`, 900);
+  }
+
+  /**
+   * Check invitation acceptance rate limits:
+   * - IP: max 10 accept attempts per 15 minutes
+   * - Token: max 5 accept attempts per 15 minutes
+   */
+  async checkInvitationAcceptLimit(ip: string, tokenHash?: string): Promise<RateLimitResult> {
+    const windowSeconds = 900;
+    const ipKey = `ratelimit:invite:accept:ip:${ip}`;
+    const ipCheck = await this.getAttempts(ipKey, windowSeconds);
+    if (ipCheck.count >= 10) {
+      return {
+        allowed: false,
+        retryAfterSeconds: ipCheck.retryAfterSeconds,
+        reason: 'Quá nhiều yêu cầu chấp nhận lời mời từ địa chỉ IP này. Vui lòng thử lại sau.',
+      };
+    }
+
+    if (tokenHash) {
+      const tokenKey = `ratelimit:invite:accept:token:${tokenHash}`;
+      const tokenCheck = await this.getAttempts(tokenKey, windowSeconds);
+      if (tokenCheck.count >= 5) {
+        return {
+          allowed: false,
+          retryAfterSeconds: tokenCheck.retryAfterSeconds,
+          reason: 'Quá nhiều lần thử kích hoạt lời mời này. Vui lòng thử lại sau.',
+        };
+      }
+    }
+
+    return { allowed: true };
+  }
+
+  async recordInvitationAcceptAttempt(ip: string, tokenHash?: string): Promise<void> {
+    const windowSeconds = 900;
+    await this.recordAttemptKey(`ratelimit:invite:accept:ip:${ip}`, windowSeconds);
+    if (tokenHash) {
+      await this.recordAttemptKey(`ratelimit:invite:accept:token:${tokenHash}`, windowSeconds);
+    }
+  }
+
   clear(): void {
     this.memoryStore.clear();
     this.cooldownStore.clear();
