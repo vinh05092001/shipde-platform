@@ -3418,8 +3418,14 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
 
     it('Finding 7: migration guard ensures partial unique pending indexes survive prisma migrate diff without drift', async () => {
       // 1. Verify index names are protected
-      assert.strictEqual(isProtectedPartialIndex('invitations_merchant_pending_email_unique'), true);
-      assert.strictEqual(isProtectedPartialIndex('invitations_merchant_pending_phone_unique'), true);
+      assert.strictEqual(
+        isProtectedPartialIndex('invitations_merchant_pending_email_unique'),
+        true
+      );
+      assert.strictEqual(
+        isProtectedPartialIndex('invitations_merchant_pending_phone_unique'),
+        true
+      );
       assert.strictEqual(isProtectedPartialIndex('invitations_token_hash_key'), false);
 
       // 2. Verify drift check passes on authoritative migration directory
@@ -3442,7 +3448,10 @@ CREATE INDEX "some_other_idx" ON "invitations"("created_at");
         false,
         'sanitized diff must strip forbidden DROP INDEX'
       );
-      assert.ok(sanitized.includes('some_other_idx'), 'unrelated index statement must be preserved');
+      assert.ok(
+        sanitized.includes('some_other_idx'),
+        'unrelated index statement must be preserved'
+      );
     });
   });
 });

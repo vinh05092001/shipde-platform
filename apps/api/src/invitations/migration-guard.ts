@@ -23,7 +23,10 @@ export function validateMigrationSqlSafety(sql: string): {
 } {
   const violations: string[] = [];
   for (const idx of PROTECTED_PARTIAL_INDEXES) {
-    const dropPattern = new RegExp(`DROP\\s+INDEX\\s+(?:IF\\s+EXISTS\\s+)?(?:["']?${idx}["']?)`, 'i');
+    const dropPattern = new RegExp(
+      `DROP\\s+INDEX\\s+(?:IF\\s+EXISTS\\s+)?(?:["']?${idx}["']?)`,
+      'i'
+    );
     if (dropPattern.test(sql)) {
       violations.push(idx);
     }
@@ -46,7 +49,10 @@ export function sanitizePrismaMigrateDiff(diffSql: string): string {
   for (const line of lines) {
     let shouldDrop = false;
     for (const idx of PROTECTED_PARTIAL_INDEXES) {
-      const dropPattern = new RegExp(`DROP\\s+INDEX\\s+(?:IF\\s+EXISTS\\s+)?(?:["']?${idx}["']?)`, 'i');
+      const dropPattern = new RegExp(
+        `DROP\\s+INDEX\\s+(?:IF\\s+EXISTS\\s+)?(?:["']?${idx}["']?)`,
+        'i'
+      );
       if (dropPattern.test(line)) {
         shouldDrop = true;
         break;
@@ -65,8 +71,7 @@ export function sanitizePrismaMigrateDiff(diffSql: string): string {
  * indexes and no migration file contains a DROP INDEX statement for them.
  */
 export function assertNoMigrationIndexDrift(migrationsDir?: string): void {
-  const targetDir =
-    migrationsDir || path.resolve(__dirname, '../../../../prisma/migrations');
+  const targetDir = migrationsDir || path.resolve(__dirname, '../../../../prisma/migrations');
 
   if (!fs.existsSync(targetDir)) {
     throw new Error(`[MIGRATION_GUARD] Migrations directory not found: ${targetDir}`);
