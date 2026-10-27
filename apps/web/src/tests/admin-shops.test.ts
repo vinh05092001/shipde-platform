@@ -9,7 +9,7 @@ import { createHmac, randomUUID } from 'node:crypto';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { NextRequest } from 'next/server';
-import { GET, POST, verifyAdminAuthorization, getAdminApiKey } from '../app/api/admin/shops/route';
+import { GET, POST, verifyAdminAuthorization } from '../app/api/admin/shops/route';
 import {
   AdminShopsView,
   validateShopForm,
@@ -219,31 +219,14 @@ async function runAdminShopsFrontendSuite() {
   console.log('✅ Finding 1: Platform-admin role enforcement strictly verified');
 
   // ---------------------------------------------------------------------------
-  // 4. Admin API Key Validation: Valid key accepted, invalid rejected, unconfigured fails closed
+  // 4. ADMIN_API_KEY Path Removal: x-admin-key alone is rejected, requires session
   // ---------------------------------------------------------------------------
-  console.log('🧪 Testing Admin Key validation: direct header authorization...');
-  const validAdminKeyReq = new NextRequest('http://localhost:3000/api/admin/shops', {
+  console.log('🧪 Testing ADMIN_API_KEY path removal: static key rejected without session...');
+  const keyOnlyReq = new NextRequest('http://localhost:3000/api/admin/shops', {
     headers: { 'x-admin-key': TEST_ADMIN_KEY },
   });
-  assert.strictEqual(verifyAdminAuthorization(validAdminKeyReq).authorized, true);
-
-  const invalidAdminKeyReq = new NextRequest('http://localhost:3000/api/admin/shops', {
-    headers: { 'x-admin-key': 'incorrect-key' },
-  });
-  assert.strictEqual(verifyAdminAuthorization(invalidAdminKeyReq).authorized, false);
-
-  // Unconfigured server fails closed
-  delete process.env.ADMIN_API_KEY;
-  delete process.env.ADMIN_KEY;
-  assert.strictEqual(getAdminApiKey(), undefined);
-  const unconfiguredReq = new NextRequest('http://localhost:3000/api/admin/shops', {
-    headers: { 'x-admin-key': TEST_ADMIN_KEY },
-  });
-  const unconfiguredAuth = verifyAdminAuthorization(unconfiguredReq);
-  assert.strictEqual(unconfiguredAuth.authorized, false);
-  assert.strictEqual(unconfiguredAuth.statusCode, 403);
-  process.env.ADMIN_API_KEY = TEST_ADMIN_KEY;
-  console.log('✅ Admin key authorization & fail-closed behavior verified');
+  assert.strictEqual(verifyAdminAuthorization(keyOnlyReq).authorized, false);
+  console.log('✅ ADMIN_API_KEY path removed, session authorization required');
 
   // ---------------------------------------------------------------------------
   // 5. Finding 4 / AC-ADMIN-14: Upstream Failure Preservation (Never fabricated 200)
@@ -255,7 +238,7 @@ async function runAdminShopsFrontendSuite() {
   const authGetReq = new NextRequest('http://localhost:3000/api/admin/shops', {
     method: 'GET',
     headers: {
-      'x-admin-key': TEST_ADMIN_KEY,
+      Authorization: `Bearer ${platformAdminToken}`,
       Accept: 'application/json',
     },
   });
@@ -278,7 +261,7 @@ async function runAdminShopsFrontendSuite() {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'x-admin-key': TEST_ADMIN_KEY,
+      Authorization: `Bearer ${platformAdminToken}`,
       Accept: 'application/json',
     },
     body: JSON.stringify({ merchant_name: 'Shop Upstream Test' }),

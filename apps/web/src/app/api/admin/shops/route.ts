@@ -4,48 +4,14 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 const API_BASE =
   process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
-export function getAdminApiKey(): string | undefined {
-  const key = process.env.ADMIN_API_KEY || process.env.ADMIN_KEY;
-  if (typeof key === 'string' && key.trim().length > 0) {
-    return key.trim();
-  }
-  return undefined;
-}
-
 export interface AuthResult {
   authorized: boolean;
   statusCode: number;
+  token?: string;
   message: string;
 }
 
 export function verifyAdminAuthorization(req: NextRequest, isMutation = false): AuthResult {
-  // 1. Direct admin API key check
-  const adminKeyHeader =
-    req.headers.get('x-admin-key')?.trim() || req.headers.get('x-api-key')?.trim();
-
-  if (adminKeyHeader) {
-    const configuredKey = getAdminApiKey();
-    if (!configuredKey) {
-      return {
-        authorized: false,
-        statusCode: 403,
-        message: 'Khóa quản trị viên chưa được cấu hình trên máy chủ',
-      };
-    }
-    const keyBuf = Buffer.from(adminKeyHeader);
-    const expBuf = Buffer.from(configuredKey);
-    const isKeyValid = keyBuf.length === expBuf.length && timingSafeEqual(keyBuf, expBuf);
-
-    if (isKeyValid) {
-      return { authorized: true, statusCode: 200, message: 'OK' };
-    }
-    return {
-      authorized: false,
-      statusCode: 403,
-      message: 'Khóa quản trị viên không hợp lệ',
-    };
-  }
-
   // State-changing requests must not be authorized by cookies alone (CSRF/origin protection)
   if (isMutation) {
     const origin = req.headers.get('origin');
@@ -70,7 +36,7 @@ export function verifyAdminAuthorization(req: NextRequest, isMutation = false): 
     }
   }
 
-  // 2. Validate signed session token (Bearer token only for mutations; cookies disallowed for mutations)
+  // Validate signed session token (Bearer token only for mutations; cookies disallowed for mutations)
   let rawToken: string | undefined;
   const authHeader = req.headers.get('authorization');
   if (authHeader && authHeader.startsWith('Bearer ')) {
@@ -157,11 +123,11 @@ export function verifyAdminAuthorization(req: NextRequest, isMutation = false): 
     return {
       authorized: false,
       statusCode: 403,
-      message: 'Truy cập bị từ chối: Yêu cầu quyền quản trị viên nền tảng (Backoffice/Admin)',
+      message: 'Truy cập bị từ chối: Yêu cầu quyền quản trị viên nền tảng (PLATFORM_ADMIN)',
     };
   }
 
-  return { authorized: true, statusCode: 200, message: 'OK' };
+  return { authorized: true, statusCode: 200, token: rawToken, message: 'OK' };
 }
 
 export async function GET(req: NextRequest) {
@@ -178,19 +144,6 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const adminApiKey = getAdminApiKey();
-  if (!adminApiKey) {
-    return NextResponse.json(
-      {
-        error: {
-          code: 'INTERNAL_SERVER_ERROR',
-          message: 'Khóa quản trị viên chưa được cấu hình trên máy chủ proxy',
-        },
-      },
-      { status: 500 }
-    );
-  }
-
   const searchParams = req.nextUrl.searchParams;
   const limit = searchParams.get('limit') || '20';
   const offset = searchParams.get('offset') || '0';
@@ -198,11 +151,15 @@ export async function GET(req: NextRequest) {
 
   try {
     const query = new URLSearchParams({ limit, offset, ...(search ? { search } : {}) });
+    const forwardHeaders: Record<string, string> = {
+      Accept: 'application/json',
+    };
+    if (auth.token) {
+      forwardHeaders['Authorization'] = `Bearer ${auth.token}`;
+    }
+
     const res = await fetch(`${API_BASE}/admin/shops?${query.toString()}`, {
-      headers: {
-        'x-admin-key': adminApiKey,
-        Accept: 'application/json',
-      },
+      headers: forwardHeaders,
       cache: 'no-store',
     });
 
@@ -235,29 +192,19 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const adminApiKey = getAdminApiKey();
-  if (!adminApiKey) {
-    return NextResponse.json(
-      {
-        error: {
-          code: 'INTERNAL_SERVER_ERROR',
-          message: 'Khóa quản trị viên chưa được cấu hình trên máy chủ proxy',
-        },
-      },
-      { status: 500 }
-    );
-  }
-
   try {
     const body = await req.json();
+    const forwardHeaders: Record<string, string> = {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    };
+    if (auth.token) {
+      forwardHeaders['Authorization'] = `Bearer ${auth.token}`;
+    }
 
     const res = await fetch(`${API_BASE}/admin/shops`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-admin-key': adminApiKey,
-        Accept: 'application/json',
-      },
+      headers: forwardHeaders,
       body: JSON.stringify(body),
     });
 
