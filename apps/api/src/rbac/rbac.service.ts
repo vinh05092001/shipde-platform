@@ -1520,12 +1520,36 @@ export class RbacService {
           );
         }
 
-        // Re-read current role permissions under lock (Finding 1 / Round 6)
-        const currentRolePermsInTx = await tx.rolePermission.findMany({
-          where: { role_id: roleId },
-          include: { permission: true },
+        // Re-read current role under lock (Finding 1 / Round 9)
+        const lockedTargetRole = await tx.role.findUnique({
+          where: { id: roleId },
+          include: {
+            permissions: {
+              include: { permission: true },
+            },
+          },
         });
-        const currentRolePermCodes = currentRolePermsInTx.map((rp) => rp.permission.code);
+
+        if (!lockedTargetRole) {
+          throw new CanonicalApiException(
+            HttpStatus.NOT_FOUND,
+            'ROLE_NOT_FOUND',
+            'Không tìm thấy vai trò phân quyền'
+          );
+        }
+
+        if (lockedTargetRole.is_system) {
+          throw new CanonicalApiException(
+            HttpStatus.FORBIDDEN,
+            'SYSTEM_ROLE_IMMUTABLE',
+            'Không thể xóa vai trò mặc định của hệ thống',
+            false,
+            'Chỉ có thể xóa các vai trò tùy chỉnh do cửa hàng tạo'
+          );
+        }
+
+        const currentRolePermsInTx = lockedTargetRole.permissions || [];
+        const currentRolePermCodes = currentRolePermsInTx.map((rp: any) => rp.permission.code);
         const customPermCodes = new Set(currentRolePermCodes);
 
         // Lock actor, target role, and role_permissions in consistent order (Finding 2 / Round 8)
@@ -1681,7 +1705,7 @@ export class RbacService {
           where: { id: roleId },
         });
 
-        // Write immutable audit log
+        // Write immutable audit log with locked before-image (Finding 1 / Round 9)
         await tx.auditLog.create({
           data: {
             merchant_id: actorSnapshot.merchantId,
@@ -1690,9 +1714,9 @@ export class RbacService {
             entity_type: 'Role',
             entity_id: roleId,
             old_value: {
-              id: existingRole.id,
-              name: existingRole.name,
-              description: existingRole.description,
+              id: lockedTargetRole.id,
+              name: lockedTargetRole.name,
+              description: lockedTargetRole.description,
               permissions: currentRolePermCodes,
               correlation_id: correlationId,
             },

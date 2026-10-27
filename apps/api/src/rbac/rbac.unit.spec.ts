@@ -2448,4 +2448,60 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
       'Audit old_value must record locked row description'
     );
   });
+
+  // Finding 1 Proving Test (Round 9): deleteRole re-reads role under row lock and audits locked before-image
+  test('Finding 1 / Round 9 / BR-RBAC-07 / AC-RBAC-01-10: deleteRole re-reads role under lock and audits locked before-image rather than stale pre-lock snapshot', async () => {
+    // 1. Create a custom role
+    const initialCreate = await service.createRole(
+      {
+        name: 'Vai Trò Ban Đầu Cho Delete F1',
+        description: 'Mô tả ban đầu trước khi xóa',
+        permissions: ['order:view_create'],
+      },
+      OWNER_ACTOR,
+      '127.0.0.1',
+      'corr-r9-f1-setup'
+    );
+    const roleId = initialCreate.data.role.id;
+
+    // 2. Intercept transaction lock to simulate concurrent rename & description change committing before delete lock re-read
+    const origQueryRaw = mockPrisma.$queryRaw.bind(mockPrisma);
+    mockPrisma.$queryRaw = async (strings: TemplateStringsArray, ...values: any[]) => {
+      const sql = strings.join('?');
+      if (sql.includes('FROM roles') && sql.includes('FOR UPDATE')) {
+        const role = mockPrisma.roles.find((r) => r.id === roleId);
+        if (role) {
+          role.name = 'Tên Đã Đổi Đồng Thời Trước Khi Xóa';
+          role.name_lower = 'tên đã đổi đồng thời trước khi xóa';
+          role.description = 'Mô tả đã đổi đồng thời trước khi xóa';
+        }
+      }
+      return origQueryRaw(strings, ...values);
+    };
+
+    // 3. Execute deleteRole
+    const deleteRes = await service.deleteRole(
+      roleId,
+      OWNER_ACTOR,
+      '127.0.0.1',
+      'corr-r9-f1-delete'
+    );
+    assert.strictEqual(deleteRes.data.deleted, true);
+
+    // Verify audit log old_value captured the locked snapshot, not stale pre-lock initial name
+    const deleteAudit = mockPrisma.auditLogs.find(
+      (a) => a.action === 'ROLE_DELETED' && a.entity_id === roleId
+    );
+    assert.ok(deleteAudit, 'ROLE_DELETED audit log must be created');
+    assert.strictEqual(
+      deleteAudit.old_value.name,
+      'Tên Đã Đổi Đồng Thời Trước Khi Xóa',
+      'Audit old_value must record locked row name, not stale pre-lock name'
+    );
+    assert.strictEqual(
+      deleteAudit.old_value.description,
+      'Mô tả đã đổi đồng thời trước khi xóa',
+      'Audit old_value must record locked row description'
+    );
+  });
 });
