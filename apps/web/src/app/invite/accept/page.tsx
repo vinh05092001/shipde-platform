@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, Suspense, useCallback } from 'react';
+import React, { useState, useEffect, Suspense, useCallback, useRef } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
@@ -81,6 +81,22 @@ export function stripTokenFromAddressBar(windowObj?: {
   }
 }
 
+/**
+ * Resolves invitation token keeping in-memory reference across React Strict Mode remounts (Round 10 Finding 4).
+ * If the token has already been extracted into memory/ref before the URL hash was stripped,
+ * keeps the resolved token and avoids re-triggering strip or falsy empty-hash errors.
+ */
+export function resolveTokenWithMemoryFallback(params: {
+  rawHash: string | null;
+  memoryToken: string | null;
+}): { token: string | null; shouldStrip: boolean } {
+  if (params.memoryToken) {
+    return { token: params.memoryToken, shouldStrip: false };
+  }
+  const resolved = extractInvitationToken({ hash: params.rawHash });
+  return { token: resolved, shouldStrip: Boolean(resolved) };
+}
+
 export type AcceptInviteUIState = 'verifying' | 'verify_error' | 'submitting' | 'success' | 'form';
 
 export function resolveAcceptInviteUIState(params: {
@@ -111,6 +127,7 @@ function AcceptInvitationContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const [token, setToken] = useState<string | null>(null);
+  const tokenRef = useRef<string | null>(null);
 
   const [verifying, setVerifying] = useState(true);
   const [invitation, setInvitation] = useState<InvitationDetails | null>(null);
@@ -150,23 +167,33 @@ function AcceptInvitationContent() {
   }, []);
 
   useEffect(() => {
-    const rawHash = typeof window !== 'undefined' ? window.location.hash : null;
-    const resolved = extractInvitationToken({ hash: rawHash });
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- Client-side invitation token extraction from URL fragment
-    setToken(resolved);
-
-    if (resolved && typeof window !== 'undefined') {
-      stripTokenFromAddressBar(window);
+    // Round 10 Finding 4: In React Strict Mode (dev), effects run twice on mount.
+    // Preserve token in memory/ref across remount so the second run (which sees an empty hash
+    // because stripTokenFromAddressBar already ran) does NOT destroy the valid token or show an invalid-link error.
+    if (tokenRef.current) {
+      return;
     }
 
-    if (!resolved) {
+    const rawHash = typeof window !== 'undefined' ? window.location.hash : null;
+    const { token: resolved, shouldStrip } = resolveTokenWithMemoryFallback({
+      rawHash,
+      memoryToken: tokenRef.current,
+    });
+
+    if (resolved) {
+      tokenRef.current = resolved;
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- Client-side invitation token extraction from URL fragment
+      setToken(resolved);
+      if (shouldStrip && typeof window !== 'undefined') {
+        stripTokenFromAddressBar(window);
+      }
+      void verifyToken(resolved);
+    } else {
       setVerifying(false);
       setVerifyError(
         'Mã lời mời không tồn tại trong đường dẫn. Vui lòng kiểm tra lại liên kết trong email hoặc tin nhắn của bạn.'
       );
-      return;
     }
-    void verifyToken(resolved);
   }, [verifyToken]);
 
   // Password rules helper
@@ -174,7 +201,8 @@ function AcceptInvitationContent() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!token) return;
+    const activeToken = token || tokenRef.current;
+    if (!activeToken) return;
 
     setSubmitting(true);
     setSubmitError(null);
@@ -203,7 +231,7 @@ function AcceptInvitationContent() {
         headers: { 'Content-Type': 'application/json' },
         referrerPolicy: 'no-referrer',
         body: JSON.stringify({
-          token,
+          token: activeToken,
           full_name: fullName.trim(),
           password,
           password_confirm: passwordConfirm,

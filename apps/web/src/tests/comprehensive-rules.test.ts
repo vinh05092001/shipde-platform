@@ -52,6 +52,7 @@ import {
   canRetryAcceptVerification,
   extractInvitationToken,
   stripTokenFromAddressBar,
+  resolveTokenWithMemoryFallback,
 } from '../app/invite/accept/page';
 
 interface TestResult {
@@ -1760,6 +1761,33 @@ export async function runComprehensiveRulesAudit(): Promise<{
         Boolean(hasNoReferrerHeader) &&
         Boolean(hasNoStoreHeader),
       'Trích xuất token chỉ từ fragment, lờ đi query param, xóa khỏi address bar và áp dụng document headers bảo mật'
+    );
+
+    // Round 10 Finding 4: In React Strict Mode, first run extracts token and strips hash; second run sees empty hash but memory fallback preserves token
+    const firstRun = resolveTokenWithMemoryFallback({
+      rawHash: '#token=strict_mode_tok_123',
+      memoryToken: null,
+    });
+    const secondRun = resolveTokenWithMemoryFallback({
+      rawHash: '',
+      memoryToken: firstRun.token,
+    });
+    const missingRun = resolveTokenWithMemoryFallback({
+      rawHash: '',
+      memoryToken: null,
+    });
+
+    assertTest(
+      'UI & ACCEPTANCE',
+      'FEAT-USR-01-STRICT-MODE-MEMORY-TOKEN-PRESERVATION',
+      'Giữ token trong bộ nhớ qua các lần re-mount của React Strict Mode và không ghi đè lỗi khi hash đã bị strip',
+      firstRun.token === 'strict_mode_tok_123' &&
+        firstRun.shouldStrip === true &&
+        secondRun.token === 'strict_mode_tok_123' &&
+        secondRun.shouldStrip === false &&
+        missingRun.token === null &&
+        missingRun.shouldStrip === false,
+      'Token được giữ trong ref/memory không bị mất khi Strict Mode chạy mount lần 2'
     );
   }
 
