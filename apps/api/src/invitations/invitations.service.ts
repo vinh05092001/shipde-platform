@@ -110,6 +110,69 @@ export class InvitationsService {
     return actorUser?.role;
   }
 
+  private enforcePrivilegeCeiling(
+    actorUser: { role: RoleEnum | string; store_scopes: string[]; warehouse_scopes: string[] },
+    targetRole: RoleEnum | string,
+    targetStoreScopes: string[] = [],
+    targetWarehouseScopes: string[] = [],
+    actionLabel: string = 'mời'
+  ) {
+    if (actorUser.role === RoleEnum.OWNER) {
+      return;
+    }
+
+    if (targetRole === RoleEnum.OWNER) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        `Vượt quá hạn mức phân quyền: Bạn không có quyền ${actionLabel} người dùng với vai trò Chủ cửa hàng (OWNER)`,
+        false
+      );
+    }
+
+    // Non-owner cannot grant/re-issue roles they do not hold (e.g. OPS_CSKH cannot invite/resend/cancel ACCOUNTANT or WAREHOUSE)
+    if (targetRole !== actorUser.role) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        `Vượt quá hạn mức phân quyền: Bạn không thể phân quyền vai trò ${targetRole} vượt quá quyền hạn của mình`,
+        false
+      );
+    }
+
+    // Non-owner cannot grant/re-issue store scopes outside their own scope
+    if (targetStoreScopes && targetStoreScopes.length > 0) {
+      const actorStores = new Set(actorUser.store_scopes || []);
+      if (!actorStores.has('*')) {
+        const unauthorizedStores = targetStoreScopes.filter((s) => !actorStores.has(s));
+        if (unauthorizedStores.length > 0) {
+          throw new CanonicalApiException(
+            HttpStatus.FORBIDDEN,
+            'FORBIDDEN',
+            `Vượt quá hạn mức phân quyền: Chi nhánh không thuộc phạm vi quản lý (${unauthorizedStores.join(', ')})`,
+            false
+          );
+        }
+      }
+    }
+
+    // Non-owner cannot grant/re-issue warehouse scopes outside their own scope
+    if (targetWarehouseScopes && targetWarehouseScopes.length > 0) {
+      const actorWarehouses = new Set(actorUser.warehouse_scopes || []);
+      if (!actorWarehouses.has('*')) {
+        const unauthorizedWarehouses = targetWarehouseScopes.filter((w) => !actorWarehouses.has(w));
+        if (unauthorizedWarehouses.length > 0) {
+          throw new CanonicalApiException(
+            HttpStatus.FORBIDDEN,
+            'FORBIDDEN',
+            `Vượt quá hạn mức phân quyền: Kho hàng không thuộc phạm vi quản lý (${unauthorizedWarehouses.join(', ')})`,
+            false
+          );
+        }
+      }
+    }
+  }
+
   /**
    * Send a new team member invitation (POST /api/v1/invitations)
    * BR-INV-01, BR-INV-02, BR-INV-03, BR-INV-08, BR-INV-09.
@@ -219,60 +282,13 @@ export class InvitationsService {
     }
 
     // 3. Privilege Ceiling (BR-INV-01, AC-USR-01-03)
-    if (!isOwner) {
-      if (dto.role === RoleEnum.OWNER) {
-        throw new CanonicalApiException(
-          HttpStatus.FORBIDDEN,
-          'FORBIDDEN',
-          'Vượt quá hạn mức phân quyền: Bạn không có quyền mời người dùng với vai trò Chủ cửa hàng (OWNER)',
-          false
-        );
-      }
-
-      // Non-owner cannot grant roles they do not hold (e.g. OPS_CSKH cannot invite ACCOUNTANT or WAREHOUSE)
-      if (dto.role !== actorUser.role) {
-        throw new CanonicalApiException(
-          HttpStatus.FORBIDDEN,
-          'FORBIDDEN',
-          `Vượt quá hạn mức phân quyền: Bạn không thể phân quyền vai trò ${dto.role} vượt quá quyền hạn của mình`,
-          false
-        );
-      }
-
-      // Non-owner cannot grant store scopes outside their own scope
-      if (dto.store_scopes && dto.store_scopes.length > 0) {
-        const actorStores = new Set(actorUser.store_scopes);
-        if (!actorStores.has('*')) {
-          const unauthorizedStores = dto.store_scopes.filter((s) => !actorStores.has(s));
-          if (unauthorizedStores.length > 0) {
-            throw new CanonicalApiException(
-              HttpStatus.FORBIDDEN,
-              'FORBIDDEN',
-              `Vượt quá hạn mức phân quyền: Chi nhánh không thuộc phạm vi quản lý (${unauthorizedStores.join(', ')})`,
-              false
-            );
-          }
-        }
-      }
-
-      // Non-owner cannot grant warehouse scopes outside their own scope
-      if (dto.warehouse_scopes && dto.warehouse_scopes.length > 0) {
-        const actorWarehouses = new Set(actorUser.warehouse_scopes);
-        if (!actorWarehouses.has('*')) {
-          const unauthorizedWarehouses = dto.warehouse_scopes.filter(
-            (w) => !actorWarehouses.has(w)
-          );
-          if (unauthorizedWarehouses.length > 0) {
-            throw new CanonicalApiException(
-              HttpStatus.FORBIDDEN,
-              'FORBIDDEN',
-              `Vượt quá hạn mức phân quyền: Kho hàng không thuộc phạm vi quản lý (${unauthorizedWarehouses.join(', ')})`,
-              false
-            );
-          }
-        }
-      }
-    }
+    this.enforcePrivilegeCeiling(
+      actorUser,
+      dto.role as RoleEnum,
+      dto.store_scopes,
+      dto.warehouse_scopes,
+      'mời'
+    );
 
     // 4. Duplicate checks (BR-INV-08)
     // 4a. Check active user with same email or phone in merchant (AC-USR-01-05)
@@ -525,10 +541,11 @@ export class InvitationsService {
     correlationId: string,
     baseUrl = 'http://localhost:3000'
   ) {
-    const actorRole = await this.resolveActorRole(actor);
+    const actorUser = await this.resolveActorUser(actor);
+    const actorRole = actorUser?.role;
     const isOwner = actorRole === RoleEnum.OWNER || actorRole === 'OWNER';
     const isOps = actorRole === RoleEnum.OPS_CSKH || actorRole === 'OPS_CSKH';
-    if (!isOwner && !isOps) {
+    if (!actorUser || (!isOwner && !isOps)) {
       throw new CanonicalApiException(
         HttpStatus.FORBIDDEN,
         'FORBIDDEN',
@@ -560,15 +577,14 @@ export class InvitationsService {
       );
     }
 
-    // Privilege Ceiling (BR-INV-01)
-    if (!isOwner && invitation.role === RoleEnum.OWNER) {
-      throw new CanonicalApiException(
-        HttpStatus.FORBIDDEN,
-        'FORBIDDEN',
-        'Vượt quá hạn mức phân quyền: Bạn không thể gửi lại lời mời của Chủ cửa hàng',
-        false
-      );
-    }
+    // Privilege Ceiling (BR-INV-01, AC-USR-01-03)
+    this.enforcePrivilegeCeiling(
+      actorUser,
+      invitation.role,
+      invitation.store_scopes,
+      invitation.warehouse_scopes,
+      'gửi lại lời mời'
+    );
 
     if (invitation.status === InvitationStatusEnum.ACCEPTED || invitation.consumed_at) {
       throw new CanonicalApiException(
@@ -725,10 +741,11 @@ export class InvitationsService {
     clientIp: string,
     correlationId: string
   ) {
-    const actorRole = await this.resolveActorRole(actor);
+    const actorUser = await this.resolveActorUser(actor);
+    const actorRole = actorUser?.role;
     const isOwner = actorRole === RoleEnum.OWNER || actorRole === 'OWNER';
     const isOps = actorRole === RoleEnum.OPS_CSKH || actorRole === 'OPS_CSKH';
-    if (!isOwner && !isOps) {
+    if (!actorUser || (!isOwner && !isOps)) {
       throw new CanonicalApiException(
         HttpStatus.FORBIDDEN,
         'FORBIDDEN',
@@ -760,15 +777,14 @@ export class InvitationsService {
       );
     }
 
-    // Privilege Ceiling (BR-INV-01)
-    if (!isOwner && invitation.role === RoleEnum.OWNER) {
-      throw new CanonicalApiException(
-        HttpStatus.FORBIDDEN,
-        'FORBIDDEN',
-        'Vượt quá hạn mức phân quyền: Bạn không thể hủy lời mời của Chủ cửa hàng',
-        false
-      );
-    }
+    // Privilege Ceiling (BR-INV-01, AC-USR-01-03)
+    this.enforcePrivilegeCeiling(
+      actorUser,
+      invitation.role,
+      invitation.store_scopes,
+      invitation.warehouse_scopes,
+      'hủy lời mời'
+    );
 
     if (invitation.status === InvitationStatusEnum.ACCEPTED || invitation.consumed_at) {
       throw new CanonicalApiException(

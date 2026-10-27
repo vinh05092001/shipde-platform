@@ -814,6 +814,66 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
         }
       );
     });
+
+    it('rejects non-owner resending invitation with role or scope exceeding actor privilege ceiling (Finding 3)', async () => {
+      const opsActor = {
+        userId: 'ops-actor-id',
+        merchantId: MERCHANT_ID,
+        role: RoleEnum.OPS_CSKH,
+        store_scopes: ['STORE-1'],
+        warehouse_scopes: ['WH-1'],
+      };
+
+      // Case 1: OPS_CSKH trying to resend WAREHOUSE role invitation
+      mockPrisma.invitation.findUnique = async () => ({
+        id: 'wh-inv-id',
+        merchant_id: MERCHANT_ID,
+        role: RoleEnum.WAREHOUSE,
+        store_scopes: [],
+        warehouse_scopes: ['WH-1'],
+        status: InvitationStatusEnum.PENDING,
+        consumed_at: null,
+      });
+
+      await assert.rejects(
+        async () => {
+          await service.resendInvitation('wh-inv-id', opsActor, '127.0.0.1', 'test-corr-resend-role');
+        },
+        (err: any) => {
+          assert.ok(err instanceof CanonicalApiException);
+          assert.strictEqual(err.getStatus(), HttpStatus.FORBIDDEN);
+          assert.strictEqual(err.code, 'FORBIDDEN');
+          const resp = err.getResponse() as any;
+          assert.ok(resp?.error?.message.includes('vượt quá quyền hạn'));
+          return true;
+        }
+      );
+
+      // Case 2: OPS_CSKH trying to resend invite with warehouse outside their scope
+      mockPrisma.invitation.findUnique = async () => ({
+        id: 'scope-inv-id',
+        merchant_id: MERCHANT_ID,
+        role: RoleEnum.OPS_CSKH,
+        store_scopes: ['STORE-1'],
+        warehouse_scopes: ['WH-UNAUTHORIZED'],
+        status: InvitationStatusEnum.PENDING,
+        consumed_at: null,
+      });
+
+      await assert.rejects(
+        async () => {
+          await service.resendInvitation('scope-inv-id', opsActor, '127.0.0.1', 'test-corr-resend-scope');
+        },
+        (err: any) => {
+          assert.ok(err instanceof CanonicalApiException);
+          assert.strictEqual(err.getStatus(), HttpStatus.FORBIDDEN);
+          assert.strictEqual(err.code, 'FORBIDDEN');
+          const resp = err.getResponse() as any;
+          assert.ok(resp?.error?.message.includes('Kho hàng không thuộc phạm vi quản lý'));
+          return true;
+        }
+      );
+    });
   });
 
   // AC-USR-01-10: Owner cancels a pending invitation
@@ -899,6 +959,66 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
           assert.ok(err instanceof CanonicalApiException);
           assert.strictEqual(err.getStatus(), HttpStatus.BAD_REQUEST);
           assert.strictEqual(err.code, 'INVITATION_ALREADY_USED');
+          return true;
+        }
+      );
+    });
+
+    it('rejects non-owner cancelling invitation with role or scope exceeding actor privilege ceiling (Finding 3)', async () => {
+      const opsActor = {
+        userId: 'ops-actor-id',
+        merchantId: MERCHANT_ID,
+        role: RoleEnum.OPS_CSKH,
+        store_scopes: ['STORE-1'],
+        warehouse_scopes: ['WH-1'],
+      };
+
+      // Case 1: OPS_CSKH trying to cancel WAREHOUSE role invitation
+      mockPrisma.invitation.findUnique = async () => ({
+        id: 'wh-cancel-inv-id',
+        merchant_id: MERCHANT_ID,
+        role: RoleEnum.WAREHOUSE,
+        store_scopes: [],
+        warehouse_scopes: ['WH-1'],
+        status: InvitationStatusEnum.PENDING,
+        consumed_at: null,
+      });
+
+      await assert.rejects(
+        async () => {
+          await service.cancelInvitation('wh-cancel-inv-id', opsActor, '127.0.0.1', 'test-corr-cancel-role');
+        },
+        (err: any) => {
+          assert.ok(err instanceof CanonicalApiException);
+          assert.strictEqual(err.getStatus(), HttpStatus.FORBIDDEN);
+          assert.strictEqual(err.code, 'FORBIDDEN');
+          const resp = err.getResponse() as any;
+          assert.ok(resp?.error?.message.includes('vượt quá quyền hạn'));
+          return true;
+        }
+      );
+
+      // Case 2: OPS_CSKH trying to cancel invite with store outside their scope
+      mockPrisma.invitation.findUnique = async () => ({
+        id: 'scope-cancel-inv-id',
+        merchant_id: MERCHANT_ID,
+        role: RoleEnum.OPS_CSKH,
+        store_scopes: ['STORE-UNAUTHORIZED'],
+        warehouse_scopes: ['WH-1'],
+        status: InvitationStatusEnum.PENDING,
+        consumed_at: null,
+      });
+
+      await assert.rejects(
+        async () => {
+          await service.cancelInvitation('scope-cancel-inv-id', opsActor, '127.0.0.1', 'test-corr-cancel-scope');
+        },
+        (err: any) => {
+          assert.ok(err instanceof CanonicalApiException);
+          assert.strictEqual(err.getStatus(), HttpStatus.FORBIDDEN);
+          assert.strictEqual(err.code, 'FORBIDDEN');
+          const resp = err.getResponse() as any;
+          assert.ok(resp?.error?.message.includes('Chi nhánh không thuộc phạm vi quản lý'));
           return true;
         }
       );
