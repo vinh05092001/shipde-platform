@@ -3992,11 +3992,7 @@ CREATE INDEX "some_other_idx" ON "invitations"("created_at");
         'nullclient@shipde.vn',
         MERCHANT_ID
       );
-      assert.strictEqual(
-        resNull.allowed,
-        false,
-        'Must fail closed when getClient() returns null'
-      );
+      assert.strictEqual(resNull.allowed, false, 'Must fail closed when getClient() returns null');
       assert.strictEqual(resNull.retryAfterSeconds, 60);
 
       // Verify in-memory store was not touched
@@ -4011,11 +4007,7 @@ CREATE INDEX "some_other_idx" ON "invitations"("created_at");
       };
       const throwLimiter = new RateLimitService(mockThrowRedisService);
       const resThrow = await throwLimiter.checkInvitationVerifyLimit('10.0.0.2');
-      assert.strictEqual(
-        resThrow.allowed,
-        false,
-        'Must fail closed when getClient() throws'
-      );
+      assert.strictEqual(resThrow.allowed, false, 'Must fail closed when getClient() throws');
       assert.strictEqual(resThrow.retryAfterSeconds, 60);
       assert.strictEqual(
         ((throwLimiter as any).memoryStore as Map<string, number[]>).size,
@@ -4034,7 +4026,12 @@ CREATE INDEX "some_other_idx" ON "invitations"("created_at");
       let queriedStatusFilter: any = null;
       mockPrisma.user.findFirst = async (args: any) => {
         if (args?.where?.id) {
-          return { id: OWNER_USER_ID, role: RoleEnum.OWNER, status: 'active', merchant_id: MERCHANT_ID };
+          return {
+            id: OWNER_USER_ID,
+            role: RoleEnum.OWNER,
+            status: 'active',
+            merchant_id: MERCHANT_ID,
+          };
         }
         queriedStatusFilter = args?.where?.status;
         // Simulating a suspended user exists: should not trigger USER_ALREADY_EXISTS

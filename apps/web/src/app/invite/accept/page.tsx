@@ -182,7 +182,6 @@ function AcceptInvitationContent() {
 
     if (resolved) {
       tokenRef.current = resolved;
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- Client-side invitation token extraction from URL fragment
       setToken(resolved);
       if (shouldStrip && typeof window !== 'undefined') {
         stripTokenFromAddressBar(window);

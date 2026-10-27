@@ -66,8 +66,7 @@ export function sanitizePrismaMigrateDiff(diffSql: string): string {
  * as non-unique @@index maps, which would cause Prisma to drop partial unique constraints (Round 10 Finding 1).
  */
 export function assertNoSchemaIndexNameConflict(schemaPath?: string): void {
-  const targetFile =
-    schemaPath || path.resolve(__dirname, '../../../../prisma/schema.prisma');
+  const targetFile = schemaPath || path.resolve(__dirname, '../../../../prisma/schema.prisma');
   if (!fs.existsSync(targetFile)) {
     throw new Error(`[MIGRATION_GUARD] Schema file not found: ${targetFile}`);
   }

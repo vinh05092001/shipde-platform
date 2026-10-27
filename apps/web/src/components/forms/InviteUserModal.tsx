@@ -111,11 +111,9 @@ export const InviteUserModal: React.FC<Props> = ({ isOpen, onClose, onUserInvite
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   // Ensure role is bounded to live grantable roles (BR-INV-01 / Round 10 Finding 5)
-  React.useEffect(() => {
-    if (grantableRoles.length > 0 && !grantableRoles.some((r) => r.value === role)) {
-      setRole(grantableRoles[0].value);
-    }
-  }, [user?.role, grantableRoles, role]);
+  const effectiveRole = grantableRoles.some((r) => r.value === role)
+    ? role
+    : grantableRoles[0]?.value || 'OPS_CSKH';
 
   if (!isOpen) return null;
 
@@ -137,7 +135,7 @@ export const InviteUserModal: React.FC<Props> = ({ isOpen, onClose, onUserInvite
       const payload = {
         email: channel === 'email' ? email.trim() : undefined,
         phone: channel === 'phone' ? phone.trim().replace(/[\s-]/g, '') : undefined,
-        role,
+        role: effectiveRole,
         store_scopes: parseScopeInput(storeScopeInput),
         warehouse_scopes: parseScopeInput(whScopeInput),
       };
@@ -317,7 +315,7 @@ export const InviteUserModal: React.FC<Props> = ({ isOpen, onClose, onUserInvite
             </label>
             <select
               id="invite-role"
-              value={role}
+              value={effectiveRole}
               onChange={(e) => setRole(e.target.value as any)}
               className={`w-full px-3 py-2 border rounded-lg text-xs font-semibold outline-none focus:border-blue-500 bg-white ${
                 fieldErrors.role
@@ -336,7 +334,8 @@ export const InviteUserModal: React.FC<Props> = ({ isOpen, onClose, onUserInvite
             )}
             {!isOwner && (
               <p className="text-[11px] text-slate-500 mt-1 italic">
-                * Theo hạn mức phân quyền (BR-INV-01), bạn chỉ có thể mời thành viên với vai trò và phạm vi không vượt quá tài khoản của mình.
+                * Theo hạn mức phân quyền (BR-INV-01), bạn chỉ có thể mời thành viên với vai trò và
+                phạm vi không vượt quá tài khoản của mình.
               </p>
             )}
           </div>
@@ -363,11 +362,14 @@ export const InviteUserModal: React.FC<Props> = ({ isOpen, onClose, onUserInvite
             {fieldErrors.store_scopes && (
               <p className="text-red-500 text-[11px] mt-1">{fieldErrors.store_scopes}</p>
             )}
-            {!isOwner && user?.store_scopes && user.store_scopes.length > 0 && !user.store_scopes.includes('*') && (
-              <p className="text-[11px] text-slate-500 mt-1 italic">
-                * Phạm vi chi nhánh tối đa bạn có thể phân quyền: {user.store_scopes.join(', ')}
-              </p>
-            )}
+            {!isOwner &&
+              user?.store_scopes &&
+              user.store_scopes.length > 0 &&
+              !user.store_scopes.includes('*') && (
+                <p className="text-[11px] text-slate-500 mt-1 italic">
+                  * Phạm vi chi nhánh tối đa bạn có thể phân quyền: {user.store_scopes.join(', ')}
+                </p>
+              )}
           </div>
 
           <div>
@@ -392,11 +394,15 @@ export const InviteUserModal: React.FC<Props> = ({ isOpen, onClose, onUserInvite
             {fieldErrors.warehouse_scopes && (
               <p className="text-red-500 text-[11px] mt-1">{fieldErrors.warehouse_scopes}</p>
             )}
-            {!isOwner && user?.warehouse_scopes && user.warehouse_scopes.length > 0 && !user.warehouse_scopes.includes('*') && (
-              <p className="text-[11px] text-slate-500 mt-1 italic">
-                * Phạm vi kho hàng tối đa bạn có thể phân quyền: {user.warehouse_scopes.join(', ')}
-              </p>
-            )}
+            {!isOwner &&
+              user?.warehouse_scopes &&
+              user.warehouse_scopes.length > 0 &&
+              !user.warehouse_scopes.includes('*') && (
+                <p className="text-[11px] text-slate-500 mt-1 italic">
+                  * Phạm vi kho hàng tối đa bạn có thể phân quyền:{' '}
+                  {user.warehouse_scopes.join(', ')}
+                </p>
+              )}
           </div>
 
           <div className="pt-3 border-t border-slate-100 flex justify-end gap-2.5">
