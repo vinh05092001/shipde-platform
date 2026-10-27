@@ -223,35 +223,21 @@ export default function AdminNewShopPage() {
               </div>
             </div>
 
-            {createdSuccess.password_is_temporary && createdSuccess.temporary_password && (
-              <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl mb-6">
+            {createdSuccess.password_is_temporary && (
+              <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl mb-6">
                 <div className="flex items-center gap-2 mb-2">
-                  <Key className="w-5 h-5 text-amber-600" />
-                  <span className="text-xs font-bold text-amber-900 uppercase tracking-wider">
-                    Mật khẩu đăng nhập tạm thời
+                  <Key className="w-5 h-5 text-blue-600" />
+                  <span className="text-xs font-bold text-blue-900 uppercase tracking-wider">
+                    Thiết lập mật khẩu lần đầu
                   </span>
                 </div>
-                <div className="flex items-center justify-between gap-3 bg-white p-3 rounded-lg border border-amber-200">
-                  <code className="text-base font-mono font-bold text-amber-950">
-                    {createdSuccess.temporary_password}
-                  </code>
-                  <button
-                    onClick={() => copyTemporaryPassword(createdSuccess.temporary_password!)}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-amber-100 hover:bg-amber-200 text-amber-900 rounded-md transition-colors"
-                  >
-                    {copiedPass ? (
-                      <>
-                        <Check className="w-3.5 h-3.5 text-emerald-600" />
-                        Đã chép
-                      </>
-                    ) : (
-                      <>
-                        <Copy className="w-3.5 h-3.5" />
-                        Sao chép
-                      </>
-                    )}
-                  </button>
-                </div>
+                <p className="text-xs text-blue-800 leading-relaxed">
+                  Liên kết thiết lập mật khẩu bảo mật một lần đã được gửi đến{' '}
+                  <strong className="font-semibold text-blue-950">
+                    {createdSuccess.user.email || createdSuccess.user.phone}
+                  </strong>
+                  . Chủ cửa hàng có thể sử dụng liên kết này để hoàn tất thiết lập mật khẩu ban đầu.
+                </p>
               </div>
             )}
 

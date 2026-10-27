@@ -867,7 +867,6 @@ export interface components {
           /** Format: date-time */
           phone_verified_at?: string | null;
         };
-        temporary_password?: string | null;
         password_is_temporary: boolean;
       };
       meta?: components['schemas']['Meta'];

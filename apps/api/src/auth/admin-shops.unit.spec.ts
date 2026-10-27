@@ -5,12 +5,14 @@ import { validateAdminKey, extractAdminKey, getExpectedAdminKey } from './admin-
 import { AdminCreateShopDto } from './admin-shops.dto';
 import { RoleEnum } from '@prisma/client';
 import { verifyPassword } from './password.util';
+import { MockVerificationDeliveryAdapter } from '@shipde/testkit';
 
 // In-memory mock Prisma for offline unit tests
 function createMockPrismaService() {
   const merchants: any[] = [];
   const users: any[] = [];
   const auditLogs: any[] = [];
+  const passwordResetTokens: any[] = [];
 
   const mockTx = {
     merchant: {
@@ -27,12 +29,20 @@ function createMockPrismaService() {
         return record;
       },
     },
+    passwordResetToken: {
+      create: async ({ data }: any) => {
+        const record = { id: `prt-${Date.now()}-${Math.random()}`, ...data, created_at: new Date() };
+        passwordResetTokens.push(record);
+        return record;
+      },
+    },
   };
 
   return {
     merchants,
     users,
     auditLogs,
+    passwordResetTokens,
     merchant: {
       findMany: async () => merchants,
       count: async () => merchants.length,
@@ -246,7 +256,8 @@ describe('FEAT-AUTH-02: Admin-Created Shop Account Unit Tests', () => {
   // AC-ADMIN-05: Generated merchant code unique and follows standard format
   it('AC-ADMIN-03, 04, 05: Valid admin key with email-only creates active verified shop and owner', async () => {
     const mockPrisma = createMockPrismaService();
-    const service = new AuthService(mockPrisma, createMockRateLimitService());
+    const mockDelivery = new MockVerificationDeliveryAdapter();
+    const service = new AuthService(mockPrisma, createMockRateLimitService(), mockDelivery);
 
     const dto: AdminCreateShopDto = {
       merchant_name: 'Tiệm Bánh Mì Sài Gòn',
@@ -265,16 +276,26 @@ describe('FEAT-AUTH-02: Admin-Created Shop Account Unit Tests', () => {
     assert.ok(res.data.user.email_verified_at instanceof Date);
     assert.strictEqual(res.data.user.phone_verified_at, null);
 
-    // Auto-generated temporary password was created
+    // BR-AUTH-05: Plaintext password is NEVER returned in response
     assert.strictEqual(res.data.password_is_temporary, true);
-    assert.ok(res.data.temporary_password);
-    assert.ok(res.data.temporary_password.length >= 12);
+    assert.strictEqual((res.data as any).temporary_password, undefined);
 
     // Stored in mock db
     assert.strictEqual(mockPrisma.merchants.length, 1);
     assert.strictEqual(mockPrisma.users.length, 1);
     assert.strictEqual(mockPrisma.merchants[0].status, 'active');
     assert.strictEqual(mockPrisma.users[0].status, 'active');
+    assert.strictEqual(mockPrisma.passwordResetTokens.length, 1);
+    assert.strictEqual(mockPrisma.passwordResetTokens[0].channel, 'email');
+    assert.strictEqual(mockPrisma.passwordResetTokens[0].identifier, 'banhmi@saigon.vn');
+
+    // One-time setup link delivered via deliveryAdapter
+    const lastMsg = mockDelivery.getLastMessage();
+    assert.ok(lastMsg);
+    assert.strictEqual(lastMsg.channel, 'email');
+    assert.strictEqual(lastMsg.recipient, 'banhmi@saigon.vn');
+    assert.strictEqual(lastMsg.purpose, 'password_reset');
+    assert.ok(lastMsg.link?.includes('/reset-password?token='));
   });
 
   // AC-ADMIN-06: Phone-only registration supported with verified status

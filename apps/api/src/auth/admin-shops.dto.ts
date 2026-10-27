@@ -31,6 +31,5 @@ export interface AdminCreatedShopResult {
     email_verified_at: Date | null;
     phone_verified_at: Date | null;
   };
-  temporary_password?: string;
   password_is_temporary: boolean;
 }

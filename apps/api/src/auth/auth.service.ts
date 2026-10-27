@@ -3213,6 +3213,7 @@ export class AuthService {
     const passwordIsTemporary = !customPassword;
     const finalPassword = customPassword || this.generateTemporaryPassword();
     const passwordHash = await hashPassword(finalPassword);
+    const rawSetupToken = passwordIsTemporary ? randomBytes(32).toString('hex') : undefined;
 
     const fullName = dto.full_name?.trim() || dto.merchant_name.trim();
     let merchant: any = null;
@@ -3248,6 +3249,24 @@ export class AuthService {
               terms_version: 'v1.0',
             },
           });
+
+          if (passwordIsTemporary && rawSetupToken) {
+            const hashedToken = this.hashSecret(rawSetupToken);
+            const ttlSeconds = this.config?.PASSWORD_RESET_TTL_SECONDS || 3600 * 24;
+            const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
+            const channel = email ? 'email' : 'phone';
+            const identifier = (email || phone)!;
+
+            await tx.passwordResetToken.create({
+              data: {
+                user_id: newUser.id,
+                token: hashedToken,
+                channel,
+                identifier,
+                expires_at: expiresAt,
+              },
+            });
+          }
 
           return { merchant: newMerchant, user: newUser };
         });
@@ -3293,6 +3312,19 @@ export class AuthService {
       );
     }
 
+    // Deliver one-time password setup/reset mechanism (BR-AUTH-05: never return plaintext credential)
+    if (passwordIsTemporary && rawSetupToken && this.deliveryAdapter) {
+      const baseUrl = this.config?.FRONTEND_URL || 'http://localhost:3000';
+      const channel = email ? 'email' : 'phone';
+      const identifier = (email || phone)!;
+      await this.deliveryAdapter.sendVerification({
+        channel,
+        recipient: identifier,
+        purpose: 'password_reset',
+        link: `${baseUrl}/reset-password?token=${rawSetupToken}`,
+      });
+    }
+
     // 7. Audit log (No PII)
     await this.logAudit({
       merchantId: merchant.id,
@@ -3331,7 +3363,6 @@ export class AuthService {
           email_verified_at: user.email_verified_at,
           phone_verified_at: user.phone_verified_at,
         },
-        ...(passwordIsTemporary ? { temporary_password: finalPassword } : {}),
         password_is_temporary: passwordIsTemporary,
       },
       meta: {

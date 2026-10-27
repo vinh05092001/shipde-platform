@@ -250,7 +250,7 @@ async function runAdminShopsSupertestSuite() {
     assert.ok(resEmailOnly.body?.data?.user?.email_verified_at);
     assert.strictEqual(resEmailOnly.body?.data?.user?.phone_verified_at, null);
     assert.strictEqual(resEmailOnly.body?.data?.password_is_temporary, true);
-    assert.ok(resEmailOnly.body?.data?.temporary_password);
+    assert.strictEqual(resEmailOnly.body?.data?.temporary_password, undefined);
 
     // Verify DB records directly (AC-ADMIN-04)
     const dbUser = await prisma.user.findUnique({

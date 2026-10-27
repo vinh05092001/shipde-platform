@@ -54,7 +54,6 @@ export interface CreatedShopSuccessData {
     email_verified_at: string | null;
     phone_verified_at: string | null;
   };
-  temporary_password?: string;
   password_is_temporary: boolean;
 }
 
@@ -351,36 +350,19 @@ export default function AdminShopsPage() {
                   </div>
                 </div>
 
-                {/* Temporary Password Display */}
-                {createdSuccess.password_is_temporary && createdSuccess.temporary_password && (
-                  <div className="mt-4 p-4 bg-amber-50 border border-amber-200 rounded-lg flex items-center justify-between gap-4">
-                    <div className="flex items-center gap-3">
-                      <Key className="w-5 h-5 text-amber-600 shrink-0" />
-                      <div>
-                        <span className="text-xs font-medium text-amber-900 block">
-                          Mật khẩu tạm thời đã cấp (Cung cấp cho chủ cửa hàng đăng nhập lần đầu):
-                        </span>
-                        <code className="text-sm font-mono font-bold text-amber-950 bg-amber-100 px-2 py-0.5 rounded">
-                          {createdSuccess.temporary_password}
-                        </code>
-                      </div>
+                {/* Initial Setup Notification */}
+                {createdSuccess.password_is_temporary && (
+                  <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg flex items-center gap-3">
+                    <Key className="w-5 h-5 text-blue-600 shrink-0" />
+                    <div>
+                      <span className="text-xs font-semibold text-blue-900 block">
+                        Thiết lập mật khẩu lần đầu:
+                      </span>
+                      <p className="text-xs text-blue-800 leading-relaxed mt-0.5">
+                        Liên kết thiết lập mật khẩu một lần bảo mật đã được gửi tới chủ cửa hàng qua{' '}
+                        <strong>{createdSuccess.user.email || createdSuccess.user.phone}</strong>.
+                      </p>
                     </div>
-                    <button
-                      onClick={() => copyTemporaryPassword(createdSuccess.temporary_password!)}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-white border border-amber-300 text-amber-800 rounded-md hover:bg-amber-100 shadow-xs transition-colors shrink-0"
-                    >
-                      {copiedPass ? (
-                        <>
-                          <Check className="w-3.5 h-3.5 text-emerald-600" />
-                          Đã sao chép
-                        </>
-                      ) : (
-                        <>
-                          <Copy className="w-3.5 h-3.5" />
-                          Sao chép mật khẩu
-                        </>
-                      )}
-                    </button>
                   </div>
                 )}
               </div>

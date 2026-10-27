@@ -1089,9 +1089,6 @@ components:
                   type: string
                   format: date-time
                   nullable: true
-            temporary_password:
-              type: string
-              nullable: true
             password_is_temporary:
               type: boolean
         meta:
