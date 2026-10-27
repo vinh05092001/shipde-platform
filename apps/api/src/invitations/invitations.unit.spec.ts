@@ -2440,7 +2440,7 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
             'corr-phone-dup'
           ),
         (err: any) => {
-          assert.strictEqual(err.status, 400);
+          assert.strictEqual(err.getStatus(), 400);
           assert.strictEqual(err.code, 'USER_ALREADY_EXISTS');
           return true;
         }
@@ -3349,6 +3349,65 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
       // Valid page within bounds succeeds
       const res = await svc.listInvitations(actor, { page: '100' }, 'corr-r7-5c');
       assert.strictEqual(res.meta.page, 100);
+    });
+
+    it('Finding 6: case-insensitive email match and canonical phone variants prevent duplicate users and invites', async () => {
+      let queriedUserWhere: any = null;
+      const testOwnerUser = {
+        id: OWNER_USER_ID,
+        merchant_id: MERCHANT_ID,
+        role: RoleEnum.OWNER,
+        store_scopes: ['*'],
+        warehouse_scopes: ['*'],
+        status: 'active',
+      };
+      const prisma: any = {
+        ...mockPrisma,
+        user: {
+          ...mockPrisma.user,
+          findFirst: async (args: any) => {
+            if (args?.where?.id === OWNER_USER_ID) return testOwnerUser;
+            queriedUserWhere = args?.where;
+            const or = args?.where?.OR || [];
+            for (const cond of or) {
+              if (cond.email?.mode === 'insensitive' && cond.email?.equals === 'owner@shop.vn') {
+                return { id: 'existing-owner', email: 'Owner@Shop.vn', merchant_id: MERCHANT_ID };
+              }
+            }
+            return null;
+          },
+        },
+        invitation: {
+          ...mockPrisma.invitation,
+          findFirst: async () => null,
+        },
+        $transaction: async (fn: any) => fn(prisma),
+      };
+
+      const svc = new InvitationsService(
+        prisma,
+        { sendVerification: async () => ({ success: true }) } as any,
+        new RateLimitService()
+      );
+      const actor = { userId: OWNER_USER_ID, merchantId: MERCHANT_ID, role: 'OWNER' };
+
+      // Case-insensitive email rejection
+      await assert.rejects(
+        () =>
+          svc.createInvitation(
+            { email: 'owner@shop.vn', role: RoleEnum.OPS_CSKH },
+            actor,
+            '10.7.6.1',
+            'corr-r7-6'
+          ),
+        (err: any) => {
+          assert.strictEqual(err.getStatus(), 400);
+          assert.strictEqual(err.code, 'USER_ALREADY_EXISTS');
+          return true;
+        }
+      );
+      assert.ok(queriedUserWhere);
+      assert.strictEqual(queriedUserWhere.OR[0].email.mode, 'insensitive');
     });
   });
 });

@@ -443,12 +443,42 @@ export class InvitationsService {
       'mời'
     );
 
-    // 4. Duplicate checks (BR-INV-08)
-    // 4a. Check active user with same email or phone in merchant (AC-USR-01-05)
+    // 4. Duplicate checks (BR-INV-08 / Round 7 Finding 6)
+    const buildUserOrConditions = () => {
+      const or: any[] = [];
+      if (email) {
+        or.push({ email: { equals: email, mode: 'insensitive' } });
+      }
+      if (phone) {
+        or.push({ phone });
+        if (phone.startsWith('0')) {
+          or.push({ phone: `+84${phone.slice(1)}` });
+          or.push({ phone: `84${phone.slice(1)}` });
+        }
+      }
+      return or;
+    };
+
+    const buildInviteOrConditions = () => {
+      const or: any[] = [];
+      if (email) {
+        or.push({ email: { equals: email, mode: 'insensitive' } });
+      }
+      if (phone) {
+        or.push({ phone });
+        if (phone.startsWith('0')) {
+          or.push({ phone: `+84${phone.slice(1)}` });
+          or.push({ phone: `84${phone.slice(1)}` });
+        }
+      }
+      return or;
+    };
+
+    // 4a. Check active user with case-insensitive email or canonical phone variants (AC-USR-01-05)
     const existingUser = await this.prisma.user.findFirst({
       where: {
         merchant_id: actor.merchantId,
-        OR: [...(email ? [{ email }] : []), ...(phone ? [{ phone }] : [])],
+        OR: buildUserOrConditions(),
       },
     });
 
@@ -467,7 +497,7 @@ export class InvitationsService {
         merchant_id: actor.merchantId,
         status: InvitationStatusEnum.PENDING,
         expires_at: { gt: new Date() },
-        OR: [...(email ? [{ email }] : []), ...(phone ? [{ phone }] : [])],
+        OR: buildInviteOrConditions(),
       },
     });
 
@@ -528,6 +558,34 @@ export class InvitationsService {
     let invitation: any;
     try {
       invitation = await this.prisma.$transaction(async (tx) => {
+        // Finding 6 (Round 7): Case-insensitive email and canonical phone checks inside insertion transaction (BR-INV-08)
+        const inTxExistingUser = await tx.user.findFirst({
+          where: {
+            merchant_id: actor.merchantId,
+            OR: buildUserOrConditions(),
+          },
+        });
+        if (inTxExistingUser) {
+          throw new CanonicalApiException(
+            HttpStatus.BAD_REQUEST,
+            'USER_ALREADY_EXISTS',
+            'Người dùng với thông tin định danh này đã tồn tại trong cửa hàng',
+            false
+          );
+        }
+
+        const inTxPendingInvite = await tx.invitation.findFirst({
+          where: {
+            merchant_id: actor.merchantId,
+            status: InvitationStatusEnum.PENDING,
+            expires_at: { gt: new Date() },
+            OR: buildInviteOrConditions(),
+          },
+        });
+        if (inTxPendingInvite) {
+          throw this.alreadyPendingException();
+        }
+
         // Finding 3: In-transaction expiration of time-elapsed PENDING invitations (BR-INV-08 / AC-USR-01-06)
         // Avoids unique partial index collision (P2002) when creating an invite for a previously expired pending recipient
         await tx.invitation.updateMany({
