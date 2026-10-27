@@ -630,6 +630,13 @@ export class RateLimitService {
         client = null;
       }
       if (client) {
+        if (client.status === 'wait') {
+          try {
+            await client.connect();
+          } catch {
+            // connection failed
+          }
+        }
         if (client.status === 'ready') {
           try {
             const clearBefore = now - windowMs;
