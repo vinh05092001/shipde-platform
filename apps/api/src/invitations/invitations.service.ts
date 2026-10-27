@@ -1319,8 +1319,8 @@ export class InvitationsService {
           status: 'active',
           email_verified_at: invitation.email ? now : null,
           phone_verified_at: invitation.phone ? now : null,
-          terms_accepted_at: now,
-          terms_version: 'v1.0',
+          terms_accepted_at: null,
+          terms_version: null,
         },
       });
 

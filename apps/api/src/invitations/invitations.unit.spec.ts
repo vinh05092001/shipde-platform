@@ -1436,6 +1436,8 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
         'Password must be hashed with scrypt'
       );
       assert.deepStrictEqual(createdUserRecord.warehouse_scopes, ['WH1']);
+      assert.strictEqual(createdUserRecord.terms_accepted_at, null, 'Uncaptured terms must not be recorded');
+      assert.strictEqual(createdUserRecord.terms_version, null);
 
       assert.ok(auditLogRecord);
       assert.strictEqual(auditLogRecord.action, 'INVITATION_ACCEPTED');

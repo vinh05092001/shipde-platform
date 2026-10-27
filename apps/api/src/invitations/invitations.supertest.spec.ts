@@ -518,9 +518,20 @@ async function runInvitationsSupertestSuite() {
   assert.ok(userRow);
   assert.notStrictEqual(userRow.password_hash, 'StrongPassword123!');
   assert.ok(
-    userRow.password_hash.startsWith('$scrypt$') || userRow.password_hash.length >= 40,
-    'Password must be hashed'
+    userRow.password_hash.startsWith('scrypt$'),
+    'Password must have real scrypt$ hash prefix'
   );
+  assert.deepStrictEqual(userRow.warehouse_scopes, ['wh-north']);
+  assert.strictEqual(userRow.terms_accepted_at, null, 'Terms not captured on form must not be recorded');
+  assert.strictEqual(userRow.terms_version, null);
+
+  const acceptedInvite = await prisma.invitation.findUnique({
+    where: { id: invitationId },
+  });
+  assert.ok(acceptedInvite);
+  assert.strictEqual(acceptedInvite.status, 'ACCEPTED');
+  assert.ok(acceptedInvite.consumed_at);
+
   const auditAccepted = await prisma.auditLog.findFirst({
     where: { entity_id: invitationId, action: 'INVITATION_ACCEPTED' },
   });
