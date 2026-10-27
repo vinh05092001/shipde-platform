@@ -175,6 +175,18 @@ class MockPrismaService {
       return r;
     },
     create: async (args: any) => {
+      const duplicate = this.roles.find(
+        (r) =>
+          r.merchant_id === args.data.merchant_id &&
+          r.name.trim().toLowerCase() === args.data.name.trim().toLowerCase()
+      );
+      if (duplicate) {
+        const error: any = new Error(
+          'Unique constraint failed on the constraint: roles_merchant_id_lower_name_key'
+        );
+        error.code = 'P2002';
+        throw error;
+      }
       const created = {
         id: args.data.id || `custom-role-${this.roles.length + 1}`,
         ...args.data,
@@ -894,6 +906,41 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
         assert.ok(err instanceof CanonicalApiException);
         assert.strictEqual(err.getStatus(), 503);
         assert.strictEqual(err.code, 'SERVICE_UNAVAILABLE');
+        return true;
+      }
+    );
+  });
+
+  // Finding 4 (P1): Case-insensitive uniqueness inside transaction & P2002 mapping
+  test('Finding 4 / BR-RBAC-05: Case-insensitive unique role name inside transaction maps to 400 ROLE_NAME_EXISTS', async () => {
+    // 1. Create initial role "Admin Support"
+    await service.createRole(
+      {
+        name: 'Admin Support',
+        permissions: ['order:view_create'],
+      },
+      OWNER_ACTOR,
+      '127.0.0.1',
+      'corr-admin-1'
+    );
+
+    // 2. Attempt to create concurrent "admin support" (different casing)
+    await assert.rejects(
+      async () => {
+        await service.createRole(
+          {
+            name: 'admin support',
+            permissions: ['order:view_create'],
+          },
+          OWNER_ACTOR,
+          '127.0.0.1',
+          'corr-admin-2'
+        );
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 400);
+        assert.strictEqual(err.code, 'ROLE_NAME_EXISTS');
         return true;
       }
     );

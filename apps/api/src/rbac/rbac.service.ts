@@ -586,47 +586,81 @@ export class RbacService {
     }
 
     // 6. Execute in transaction with Audit Log (AC-RBAC-01-03, AC-RBAC-01-15)
-    const createdRole = await this.prisma.$transaction(async (tx) => {
-      const role = await tx.role.create({
-        data: {
-          merchant_id: actor.merchantId,
-          name: trimmedName,
-          description: dto.description?.trim() || null,
-          is_system: false,
-        },
-      });
-
-      // Insert role_permissions
-      for (const perm of permissionsInDb) {
-        await tx.rolePermission.create({
-          data: {
-            role_id: role.id,
-            permission_id: perm.id,
+    let createdRole: any;
+    try {
+      createdRole = await this.prisma.$transaction(async (tx) => {
+        const existingInTx = await tx.role.findFirst({
+          where: {
+            merchant_id: actor.merchantId,
+            name: { equals: trimmedName, mode: 'insensitive' },
           },
         });
-      }
 
-      // Write immutable audit log
-      await tx.auditLog.create({
-        data: {
-          merchant_id: actor.merchantId,
-          user_id: actor.userId,
-          action: 'ROLE_CREATED',
-          entity_type: 'Role',
-          entity_id: role.id,
-          new_value: {
-            id: role.id,
-            name: role.name,
-            description: role.description,
-            permissions: permissionsInDb.map((p) => p.code),
-            correlation_id: correlationId,
+        if (existingInTx) {
+          throw new CanonicalApiException(
+            HttpStatus.BAD_REQUEST,
+            'ROLE_NAME_EXISTS',
+            'Tên vai trò đã tồn tại trong cửa hàng',
+            false,
+            'Vui lòng chọn tên vai trò khác',
+            [{ field: 'name', code: 'DUPLICATE', message: 'Tên vai trò đã tồn tại' }]
+          );
+        }
+
+        const role = await tx.role.create({
+          data: {
+            merchant_id: actor.merchantId,
+            name: trimmedName,
+            description: dto.description?.trim() || null,
+            is_system: false,
           },
-          ip_address: clientIp,
-        },
-      });
+        });
 
-      return role;
-    });
+        // Insert role_permissions
+        for (const perm of permissionsInDb) {
+          await tx.rolePermission.create({
+            data: {
+              role_id: role.id,
+              permission_id: perm.id,
+            },
+          });
+        }
+
+        // Write immutable audit log
+        await tx.auditLog.create({
+          data: {
+            merchant_id: actor.merchantId,
+            user_id: actor.userId,
+            action: 'ROLE_CREATED',
+            entity_type: 'Role',
+            entity_id: role.id,
+            new_value: {
+              id: role.id,
+              name: role.name,
+              description: role.description,
+              permissions: permissionsInDb.map((p) => p.code),
+              correlation_id: correlationId,
+            },
+            ip_address: clientIp,
+          },
+        });
+
+        return role;
+      });
+    } catch (err: any) {
+      if (err instanceof CanonicalApiException) throw err;
+      if (err?.code === 'P2002' || /unique/i.test(err?.message || '')) {
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'ROLE_NAME_EXISTS',
+          'Tên vai trò đã tồn tại trong cửa hàng',
+          false,
+          'Vui lòng chọn tên vai trò khác',
+          [{ field: 'name', code: 'DUPLICATE', message: 'Tên vai trò đã tồn tại' }]
+        );
+      }
+      throw err;
+    }
 
     return {
       data: {
@@ -809,60 +843,97 @@ export class RbacService {
     const newPermissions = permissionsInDb.map((p) => p.code);
 
     // 5. Transaction: Update Role, Permissions & Audit Log (AC-RBAC-01-08)
-    const updatedRole = await this.prisma.$transaction(async (tx) => {
-      const updated = await tx.role.update({
-        where: { id: roleId },
-        data: {
-          name: updatedName,
-          description:
-            dto.description !== undefined
-              ? dto.description?.trim() || null
-              : existingRole.description,
-        },
-      });
-
-      if (dto.permissions !== undefined) {
-        // Clear old mappings
-        await tx.rolePermission.deleteMany({
-          where: { role_id: roleId },
-        });
-
-        // Insert new mappings
-        for (const p of permissionsInDb) {
-          await tx.rolePermission.create({
-            data: {
-              role_id: roleId,
-              permission_id: p.id,
+    let updatedRole: any;
+    try {
+      updatedRole = await this.prisma.$transaction(async (tx) => {
+        if (dto.name !== undefined) {
+          const duplicateInTx = await tx.role.findFirst({
+            where: {
+              merchant_id: actor.merchantId,
+              id: { not: roleId },
+              name: { equals: updatedName, mode: 'insensitive' },
             },
           });
+
+          if (duplicateInTx) {
+            throw new CanonicalApiException(
+              HttpStatus.BAD_REQUEST,
+              'ROLE_NAME_EXISTS',
+              'Tên vai trò đã tồn tại trong cửa hàng',
+              false,
+              undefined,
+              [{ field: 'name', code: 'DUPLICATE', message: 'Tên vai trò đã tồn tại' }]
+            );
+          }
         }
-      }
 
-      // Write immutable audit log
-      await tx.auditLog.create({
-        data: {
-          merchant_id: actor.merchantId,
-          user_id: actor.userId,
-          action: 'ROLE_UPDATED',
-          entity_type: 'Role',
-          entity_id: roleId,
-          old_value: {
-            name: existingRole.name,
-            description: existingRole.description,
-            permissions: beforePermissions,
+        const updated = await tx.role.update({
+          where: { id: roleId },
+          data: {
+            name: updatedName,
+            description:
+              dto.description !== undefined
+                ? dto.description?.trim() || null
+                : existingRole.description,
           },
-          new_value: {
-            name: updated.name,
-            description: updated.description,
-            permissions: newPermissions,
-            correlation_id: correlationId,
+        });
+
+        if (dto.permissions !== undefined) {
+          // Clear old mappings
+          await tx.rolePermission.deleteMany({
+            where: { role_id: roleId },
+          });
+
+          // Insert new mappings
+          for (const p of permissionsInDb) {
+            await tx.rolePermission.create({
+              data: {
+                role_id: roleId,
+                permission_id: p.id,
+              },
+            });
+          }
+        }
+
+        // Write immutable audit log
+        await tx.auditLog.create({
+          data: {
+            merchant_id: actor.merchantId,
+            user_id: actor.userId,
+            action: 'ROLE_UPDATED',
+            entity_type: 'Role',
+            entity_id: roleId,
+            old_value: {
+              name: existingRole.name,
+              description: existingRole.description,
+              permissions: beforePermissions,
+            },
+            new_value: {
+              name: updated.name,
+              description: updated.description,
+              permissions: newPermissions,
+              correlation_id: correlationId,
+            },
+            ip_address: clientIp,
           },
-          ip_address: clientIp,
-        },
+        });
+
+        return updated;
       });
-
-      return updated;
-    });
+    } catch (err: any) {
+      if (err instanceof CanonicalApiException) throw err;
+      if (err?.code === 'P2002' || /unique/i.test(err?.message || '')) {
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'ROLE_NAME_EXISTS',
+          'Tên vai trò đã tồn tại trong cửa hàng',
+          false,
+          'Vui lòng chọn tên vai trò khác',
+          [{ field: 'name', code: 'DUPLICATE', message: 'Tên vai trò đã tồn tại' }]
+        );
+      }
+      throw err;
+    }
 
     const activeUserCount = await this.prisma.user.count({
       where: {
