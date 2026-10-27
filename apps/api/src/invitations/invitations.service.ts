@@ -348,6 +348,20 @@ export class InvitationsService {
     let invitation: any;
     try {
       invitation = await this.prisma.$transaction(async (tx) => {
+        // Finding 3: In-transaction expiration of time-elapsed PENDING invitations (BR-INV-08 / AC-USR-01-06)
+        // Avoids unique partial index collision (P2002) when creating an invite for a previously expired pending recipient
+        await tx.invitation.updateMany({
+          where: {
+            merchant_id: actor.merchantId,
+            status: InvitationStatusEnum.PENDING,
+            expires_at: { lte: new Date() },
+            OR: [...(email ? [{ email }] : []), ...(phone ? [{ phone }] : [])],
+          },
+          data: {
+            status: InvitationStatusEnum.EXPIRED,
+          },
+        });
+
         const inv = await tx.invitation.create({
           data: {
             merchant_id: actor.merchantId,

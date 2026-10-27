@@ -739,7 +739,7 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
             },
             actor,
             '127.0.0.1',
-            'test-corr-06-p2002'
+            'test-corr-06b'
           );
         },
         (err: any) => {
@@ -749,6 +749,38 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
           return true;
         }
       );
+    });
+
+    it('expires time-elapsed PENDING invitations in-transaction before insert, preventing P2002 collision (Finding 3)', async () => {
+      let updateManyCalledWith: any = null;
+      let createdInvite: any = null;
+      mockPrisma.invitation.findFirst = async () => null; // unexpired pending check returns null
+      mockPrisma.invitation.updateMany = async (args: any) => {
+        updateManyCalledWith = args;
+        return { count: 1 };
+      };
+      mockPrisma.invitation.create = async (args: any) => {
+        createdInvite = {
+          id: 'fresh-invite-uuid',
+          ...args.data,
+          created_at: new Date(),
+        };
+        return createdInvite;
+      };
+
+      const actor = { userId: OWNER_USER_ID, merchantId: MERCHANT_ID, role: RoleEnum.OWNER };
+      const res = await service.createInvitation(
+        { email: 'expired_prev@shipde.vn', role: RoleEnum.OPS_CSKH },
+        actor,
+        '127.0.0.1',
+        'test-corr-expire-first'
+      );
+
+      assert.strictEqual(res.data.id, 'fresh-invite-uuid');
+      assert.ok(updateManyCalledWith);
+      assert.strictEqual(updateManyCalledWith.where.status, InvitationStatusEnum.PENDING);
+      assert.ok(updateManyCalledWith.where.expires_at.lte);
+      assert.strictEqual(updateManyCalledWith.data.status, InvitationStatusEnum.EXPIRED);
     });
   });
 
