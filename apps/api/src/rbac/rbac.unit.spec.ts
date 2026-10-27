@@ -1093,4 +1093,53 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
       'Catalog must match authz evaluation identically'
     );
   });
+
+  // Finding 9 (P2): Server-side merchantId requirement and strict foreign tenant rejection (BR-RBAC-04 / AC-RBAC-01-11)
+  test('Finding 9 / BR-RBAC-04 / AC-RBAC-01-11: Server-side merchantId required and non-system role with null/mismatched merchantId rejected', async () => {
+    // 1. User without merchant_id in DB is rejected
+    mockPrisma.users.push({
+      id: 'user-no-merchant',
+      merchant_id: null,
+      role: 'OPS_CSKH',
+      custom_role_id: null,
+      status: 'active',
+    });
+
+    await assert.rejects(
+      async () => {
+        await service.resolveActorFromSession({ userId: 'user-no-merchant' });
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 403);
+        assert.strictEqual(err.code, 'FORBIDDEN');
+        return true;
+      }
+    );
+
+    // 2. Non-system role with merchant_id = null is forbidden to actor
+    const orphanedRole = {
+      id: 'role-null-merchant-custom',
+      merchant_id: null,
+      code: null,
+      name: 'Orphaned Custom Role',
+      description: null,
+      is_system: false,
+      created_at: new Date(),
+      updated_at: new Date(),
+    };
+    mockPrisma.roles.push(orphanedRole);
+
+    await assert.rejects(
+      async () => {
+        await service.getRoleById(orphanedRole.id, OWNER_ACTOR, 'corr-f9-null');
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 403);
+        assert.strictEqual(err.code, 'FORBIDDEN');
+        return true;
+      }
+    );
+  });
 });

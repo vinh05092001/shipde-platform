@@ -218,6 +218,16 @@ export class RbacService {
       );
     }
 
+    if (!user.merchant_id) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Người dùng không thuộc tổ chức hợp lệ',
+        false,
+        'Vui lòng liên hệ quản trị viên'
+      );
+    }
+
     if (req.merchantId && user.merchant_id !== req.merchantId) {
       throw new CanonicalApiException(
         HttpStatus.FORBIDDEN,
@@ -442,8 +452,8 @@ export class RbacService {
       );
     }
 
-    // BR-RBAC-04 / AC-RBAC-01-11: Tenant Isolation
-    if (!role.is_system && role.merchant_id && role.merchant_id !== actor.merchantId) {
+    // BR-RBAC-04 / AC-RBAC-01-11: Tenant Isolation (Finding 9)
+    if (!role.is_system && (!actor.merchantId || role.merchant_id !== actor.merchantId)) {
       throw new CanonicalApiException(
         HttpStatus.FORBIDDEN,
         'FORBIDDEN',
@@ -777,7 +787,7 @@ export class RbacService {
     }
 
     // BR-RBAC-04 / AC-RBAC-01-11: Tenant Isolation
-    if (existingRole.merchant_id !== actor.merchantId) {
+    if (!existingRole.merchant_id || existingRole.merchant_id !== actor.merchantId) {
       throw new CanonicalApiException(
         HttpStatus.FORBIDDEN,
         'FORBIDDEN',
@@ -1062,7 +1072,7 @@ export class RbacService {
     }
 
     // BR-RBAC-04 / AC-RBAC-01-11: Tenant Isolation
-    if (existingRole.merchant_id !== actor.merchantId) {
+    if (!existingRole.merchant_id || existingRole.merchant_id !== actor.merchantId) {
       throw new CanonicalApiException(
         HttpStatus.FORBIDDEN,
         'FORBIDDEN',
