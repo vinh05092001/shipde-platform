@@ -548,11 +548,14 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
         token_hash: 'old-hash',
       };
 
-      mockPrisma.invitation.findUnique = async () => existingExpired;
-      let updateData: any = null;
-      mockPrisma.invitation.update = async (args: any) => {
-        updateData = args.data;
-        return { ...existingExpired, ...args.data };
+      let updateManyCalledWith: any = null;
+      mockPrisma.invitation.findUnique = async () => ({
+        ...existingExpired,
+        status: updateManyCalledWith ? InvitationStatusEnum.PENDING : existingExpired.status,
+      });
+      mockPrisma.invitation.updateMany = async (args: any) => {
+        updateManyCalledWith = args;
+        return { count: 1 };
       };
 
       let auditCreated: any = null;
@@ -571,30 +574,81 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
 
       assert.strictEqual(res.data.status, InvitationStatusEnum.PENDING);
       assert.ok(res.data.token);
-      assert.strictEqual(updateData.status, InvitationStatusEnum.PENDING);
-      assert.notStrictEqual(updateData.token_hash, 'old-hash');
+      assert.deepStrictEqual(updateManyCalledWith.where.status, {
+        in: [InvitationStatusEnum.PENDING, InvitationStatusEnum.EXPIRED],
+      });
+      assert.strictEqual(updateManyCalledWith.where.consumed_at, null);
+      assert.strictEqual(updateManyCalledWith.data.status, InvitationStatusEnum.PENDING);
+      assert.notStrictEqual(updateManyCalledWith.data.token_hash, 'old-hash');
 
       assert.ok(auditCreated);
       assert.strictEqual(auditCreated.action, 'INVITATION_RESENT');
+    });
+
+    it('rejects resend with 400 INVITATION_ALREADY_USED when concurrent accept committed (count === 0)', async () => {
+      const existingAccepted = {
+        id: 'concurrent-accepted-id',
+        merchant_id: MERCHANT_ID,
+        email: 'concurrent@shipde.vn',
+        role: RoleEnum.OPS_CSKH,
+        status: InvitationStatusEnum.ACCEPTED,
+        consumed_at: new Date(),
+        token_hash: 'token-hash',
+      };
+
+      // Initial read before race sees PENDING, but atomic updateMany finds 0 rows because accepted
+      let readCount = 0;
+      mockPrisma.invitation.findUnique = async () => {
+        readCount++;
+        if (readCount === 1) {
+          return { ...existingAccepted, status: InvitationStatusEnum.PENDING, consumed_at: null };
+        }
+        return existingAccepted;
+      };
+      mockPrisma.invitation.updateMany = async () => ({ count: 0 });
+
+      const actor = { userId: OWNER_USER_ID, merchantId: MERCHANT_ID, role: RoleEnum.OWNER };
+      await assert.rejects(
+        async () => {
+          await service.resendInvitation(
+            'concurrent-accepted-id',
+            actor,
+            '127.0.0.1',
+            'test-corr-09-race'
+          );
+        },
+        (err: any) => {
+          assert.ok(err instanceof CanonicalApiException);
+          assert.strictEqual(err.getStatus(), HttpStatus.BAD_REQUEST);
+          assert.strictEqual(err.code, 'INVITATION_ALREADY_USED');
+          return true;
+        }
+      );
     });
   });
 
   // AC-USR-01-10: Owner cancels a pending invitation
   describe('AC-USR-01-10: Owner cancels pending invitation', () => {
-    it('transitions status PENDING -> CANCELLED and logs INVITATION_CANCELLED', async () => {
+    it('transitions status PENDING -> CANCELLED, rotates token_hash, and logs INVITATION_CANCELLED', async () => {
       const pendingInvite = {
         id: 'pending-inv-id',
         merchant_id: MERCHANT_ID,
         role: RoleEnum.OPS_CSKH,
         status: InvitationStatusEnum.PENDING,
         consumed_at: null,
+        token_hash: 'initial-pending-hash',
       };
 
-      mockPrisma.invitation.findUnique = async () => pendingInvite;
-      mockPrisma.invitation.update = async (args: any) => ({
+      let updateManyCalledWith: any = null;
+      mockPrisma.invitation.findUnique = async () => ({
         ...pendingInvite,
-        ...args.data,
+        status: InvitationStatusEnum.CANCELLED,
+        token_hash: updateManyCalledWith?.data?.token_hash,
       });
+      mockPrisma.invitation.updateMany = async (args: any) => {
+        updateManyCalledWith = args;
+        return { count: 1 };
+      };
 
       let auditCreated: any = null;
       mockPrisma.auditLog.create = async (args: any) => {
@@ -611,8 +665,54 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
       );
 
       assert.strictEqual(res.data.status, InvitationStatusEnum.CANCELLED);
+      assert.strictEqual(updateManyCalledWith.where.status, InvitationStatusEnum.PENDING);
+      assert.strictEqual(updateManyCalledWith.where.consumed_at, null);
+      assert.strictEqual(updateManyCalledWith.data.status, InvitationStatusEnum.CANCELLED);
+      // Prove token_hash was rotated
+      assert.ok(updateManyCalledWith.data.token_hash);
+      assert.notStrictEqual(updateManyCalledWith.data.token_hash, 'initial-pending-hash');
+
       assert.ok(auditCreated);
       assert.strictEqual(auditCreated.action, 'INVITATION_CANCELLED');
+    });
+
+    it('rejects cancel with 400 INVITATION_ALREADY_USED when concurrent accept committed (count === 0)', async () => {
+      const acceptedInvite = {
+        id: 'concurrent-cancel-id',
+        merchant_id: MERCHANT_ID,
+        role: RoleEnum.OPS_CSKH,
+        status: InvitationStatusEnum.ACCEPTED,
+        consumed_at: new Date(),
+        token_hash: 'accepted-hash',
+      };
+
+      let readCount = 0;
+      mockPrisma.invitation.findUnique = async () => {
+        readCount++;
+        if (readCount === 1) {
+          return { ...acceptedInvite, status: InvitationStatusEnum.PENDING, consumed_at: null };
+        }
+        return acceptedInvite;
+      };
+      mockPrisma.invitation.updateMany = async () => ({ count: 0 });
+
+      const actor = { userId: OWNER_USER_ID, merchantId: MERCHANT_ID, role: RoleEnum.OWNER };
+      await assert.rejects(
+        async () => {
+          await service.cancelInvitation(
+            'concurrent-cancel-id',
+            actor,
+            '127.0.0.1',
+            'test-corr-10-race'
+          );
+        },
+        (err: any) => {
+          assert.ok(err instanceof CanonicalApiException);
+          assert.strictEqual(err.getStatus(), HttpStatus.BAD_REQUEST);
+          assert.strictEqual(err.code, 'INVITATION_ALREADY_USED');
+          return true;
+        }
+      );
     });
   });
 

@@ -503,8 +503,14 @@ export class InvitationsService {
     const tokenHash = this.hashToken(rawToken);
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
-    const updated = await this.prisma.invitation.update({
-      where: { id: invitationId },
+    // Conditional atomic updateMany (BR-INV-04, BR-INV-05): status must be PENDING or EXPIRED, consumed_at null
+    const result = await this.prisma.invitation.updateMany({
+      where: {
+        id: invitationId,
+        merchant_id: actor.merchantId,
+        status: { in: [InvitationStatusEnum.PENDING, InvitationStatusEnum.EXPIRED] },
+        consumed_at: null,
+      },
       data: {
         token_hash: tokenHash,
         status: InvitationStatusEnum.PENDING,
@@ -512,6 +518,36 @@ export class InvitationsService {
         updated_at: new Date(),
       },
     });
+
+    if (result.count === 0) {
+      const current = await this.prisma.invitation.findUnique({ where: { id: invitationId } });
+      if (!current || current.merchant_id !== actor.merchantId) {
+        throw new CanonicalApiException(
+          HttpStatus.NOT_FOUND,
+          'INVITATION_NOT_FOUND',
+          'Không tìm thấy lời mời',
+          false
+        );
+      }
+      if (current.status === InvitationStatusEnum.ACCEPTED || current.consumed_at) {
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'INVITATION_ALREADY_USED',
+          'Lời mời đã được chấp nhận trước đó',
+          false
+        );
+      }
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'INVALID_STATE',
+        'Không thể gửi lại lời mời ở trạng thái hiện tại',
+        false
+      );
+    }
+
+    const updated = (await this.prisma.invitation.findUnique({
+      where: { id: invitationId },
+    }))!;
 
     // Audit log (BR-INV-09, AC-USR-01-09)
     await this.prisma.auditLog.create({
@@ -610,13 +646,55 @@ export class InvitationsService {
       );
     }
 
-    const updated = await this.prisma.invitation.update({
-      where: { id: invitationId },
+    // Invalidate token hash on cancellation to prevent verification or acceptance
+    const cancelledTokenHash = createHash('sha256')
+      .update(`cancelled:${invitationId}:${Date.now()}:${randomBytes(16).toString('hex')}`)
+      .digest('hex');
+
+    // Conditional atomic updateMany (BR-INV-04, BR-INV-05, AC-USR-01-10): status must be PENDING, consumed_at null
+    const result = await this.prisma.invitation.updateMany({
+      where: {
+        id: invitationId,
+        merchant_id: actor.merchantId,
+        status: InvitationStatusEnum.PENDING,
+        consumed_at: null,
+      },
       data: {
         status: InvitationStatusEnum.CANCELLED,
+        token_hash: cancelledTokenHash,
         updated_at: new Date(),
       },
     });
+
+    if (result.count === 0) {
+      const current = await this.prisma.invitation.findUnique({ where: { id: invitationId } });
+      if (!current || current.merchant_id !== actor.merchantId) {
+        throw new CanonicalApiException(
+          HttpStatus.NOT_FOUND,
+          'INVITATION_NOT_FOUND',
+          'Không tìm thấy lời mời',
+          false
+        );
+      }
+      if (current.status === InvitationStatusEnum.ACCEPTED || current.consumed_at) {
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'INVITATION_ALREADY_USED',
+          'Lời mời đã được chấp nhận trước đó và không thể hủy',
+          false
+        );
+      }
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'INVALID_STATE',
+        'Chỉ có thể hủy lời mời đang ở trạng thái PENDING',
+        false
+      );
+    }
+
+    const updated = (await this.prisma.invitation.findUnique({
+      where: { id: invitationId },
+    }))!;
 
     // Audit log (BR-INV-09, AC-USR-01-10)
     await this.prisma.auditLog.create({
