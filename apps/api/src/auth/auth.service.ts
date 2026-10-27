@@ -27,6 +27,9 @@ import type { IVerificationDeliveryAdapter } from '@shipde/contracts';
 import { formatStructuredLog, AppConfig } from '@shipde/config';
 import { APP_CONFIG } from '../config.token';
 import { RoleEnum } from '@prisma/client';
+import { AdminCreateShopDto, AdminListShopsQuery, AdminCreatedShopResult } from './admin-shops.dto';
+
+export type { AdminCreateShopDto, AdminListShopsQuery, AdminCreatedShopResult };
 
 export interface RegisterDto {
   merchant_name: string;
@@ -3063,6 +3066,390 @@ export class AuthService {
         recovery_codes: newPlaintextCodes,
       },
       meta: { correlation_id: correlationId },
+    };
+  }
+
+  /**
+   * Generates a strong temporary password (>= 12 characters) with upper, lower, digits, and symbols.
+   */
+  public generateTemporaryPassword(): string {
+    const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+    const lower = 'abcdefghijkmnopqrstuvwxyz';
+    const digits = '23456789';
+    const special = '!@#$%^&*';
+
+    const getChars = (set: string, count: number) => {
+      let res = '';
+      const bytes = randomBytes(count);
+      for (let i = 0; i < count; i++) {
+        res += set[bytes[i] % set.length];
+      }
+      return res;
+    };
+
+    const combined = [
+      getChars(upper, 3),
+      getChars(lower, 4),
+      getChars(digits, 3),
+      getChars(special, 2),
+    ].join('');
+
+    return combined
+      .split('')
+      .sort(() => Math.random() - 0.5)
+      .join('');
+  }
+
+  /**
+   * FEAT-AUTH-02: Admin-created shop account (AC-ADMIN-01..13)
+   * Platform operator provisions initial shop owner accounts without exposing public self-registration.
+   */
+  async adminCreateShop(
+    dto: AdminCreateShopDto,
+    clientIp: string,
+    correlationId: string
+  ): Promise<{
+    success: boolean;
+    data: AdminCreatedShopResult;
+    meta: { correlation_id: string };
+  }> {
+    const fields: CanonicalFieldError[] = [];
+
+    // 1. Merchant name validation (AC-ADMIN-13)
+    if (!dto.merchant_name || dto.merchant_name.trim().length < 2) {
+      fields.push({
+        field: 'merchant_name',
+        code: 'REQUIRED',
+        message: 'Tên cửa hàng phải có ít nhất 2 ký tự',
+      });
+    } else if (dto.merchant_name.trim().length > 255) {
+      fields.push({
+        field: 'merchant_name',
+        code: 'MAX_LENGTH',
+        message: 'Tên cửa hàng không được vượt quá 255 ký tự',
+      });
+    }
+
+    const email = dto.email ? dto.email.trim().toLowerCase() : undefined;
+    const phone = dto.phone ? dto.phone.trim() : undefined;
+
+    // 2. Contact identifiers validation (AC-ADMIN-09, AC-ADMIN-10, AC-ADMIN-11)
+    if (!email && !phone) {
+      fields.push({
+        field: 'email',
+        code: 'REQUIRED',
+        message: 'Phải cung cấp ít nhất email hoặc số điện thoại',
+      });
+    }
+
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      fields.push({
+        field: 'email',
+        code: 'INVALID_FORMAT',
+        message: 'Định dạng email không hợp lệ',
+      });
+    }
+
+    if (phone && !/^(0|\+84)[3|5|7|8|9][0-9]{8}$/.test(phone.replace(/\s+/g, ''))) {
+      fields.push({
+        field: 'phone',
+        code: 'INVALID_FORMAT',
+        message: 'Số điện thoại không hợp lệ theo định dạng Việt Nam',
+      });
+    }
+
+    // 3. Password validation (AC-ADMIN-07, AC-ADMIN-12)
+    const customPassword =
+      dto.password !== undefined && dto.password !== null && dto.password !== ''
+        ? dto.password
+        : undefined;
+
+    if (customPassword && customPassword.length < 8) {
+      fields.push({
+        field: 'password',
+        code: 'TOO_SHORT',
+        message: 'Mật khẩu phải có độ dài tối thiểu 8 ký tự',
+      });
+    }
+
+    if (fields.length > 0) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Dữ liệu đăng ký cửa hàng không hợp lệ',
+        false,
+        'Vui lòng sửa các trường bị lỗi và thử lại',
+        fields
+      );
+    }
+
+    // 4. Duplicate identifier check (AC-ADMIN-08)
+    const existingUsers = await this.prisma.user.findMany({
+      where: {
+        OR: [...(email ? [{ email }] : []), ...(phone ? [{ phone }] : [])],
+      },
+    });
+
+    if (existingUsers.length > 0) {
+      const match = existingUsers[0];
+      const conflictField = match.email && match.email === email ? 'email' : 'phone';
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Email hoặc số điện thoại đã tồn tại trên hệ thống',
+        false,
+        'Vui lòng sử dụng thông tin khác hoặc liên hệ bộ phận hỗ trợ',
+        [
+          {
+            field: conflictField,
+            code: 'DUPLICATE',
+            message: `${conflictField === 'email' ? 'Email' : 'Số điện thoại'} đã tồn tại trên hệ thống`,
+          },
+        ]
+      );
+    }
+
+    // 5. Password generation & hashing
+    const passwordIsTemporary = !customPassword;
+    const finalPassword = customPassword || this.generateTemporaryPassword();
+    const passwordHash = await hashPassword(finalPassword);
+    const rawSetupToken = passwordIsTemporary ? randomBytes(32).toString('hex') : undefined;
+
+    const fullName = dto.full_name?.trim() || dto.merchant_name.trim();
+    let merchant: any = null;
+    let user: any = null;
+    let lastError: unknown = null;
+
+    // 6. Atomic creation with collision retry for merchant code (AC-ADMIN-03, 04, 05, 06)
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const merchantCode = this.generateMerchantCode(dto.merchant_name);
+        const created = await this.prisma.$transaction(async (tx) => {
+          const newMerchant = await tx.merchant.create({
+            data: {
+              name: dto.merchant_name.trim(),
+              code: merchantCode,
+              status: 'active',
+            },
+          });
+
+          const now = new Date();
+          const newUser = await tx.user.create({
+            data: {
+              merchant_id: newMerchant.id,
+              full_name: fullName,
+              email: email || null,
+              phone: phone || null,
+              password_hash: passwordHash,
+              role: RoleEnum.OWNER,
+              status: 'active',
+              email_verified_at: email ? now : null,
+              phone_verified_at: phone ? now : null,
+              terms_accepted_at: now,
+              terms_version: 'v1.0',
+            },
+          });
+
+          if (passwordIsTemporary && rawSetupToken) {
+            const hashedToken = this.hashSecret(rawSetupToken);
+            const ttlSeconds = this.config?.PASSWORD_RESET_TTL_SECONDS || 3600 * 24;
+            const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
+            const channel = email ? 'email' : 'phone';
+            const identifier = (email || phone)!;
+
+            await tx.passwordResetToken.create({
+              data: {
+                user_id: newUser.id,
+                token: hashedToken,
+                channel,
+                identifier,
+                expires_at: expiresAt,
+              },
+            });
+          }
+
+          return { merchant: newMerchant, user: newUser };
+        });
+
+        merchant = created.merchant;
+        user = created.user;
+        break;
+      } catch (err: unknown) {
+        lastError = err;
+        if (this.isUniqueConstraintViolation(err)) {
+          const target = (err as { meta?: { target?: string[] | string } })?.meta?.target;
+          const isMerchantCodeCollision =
+            (Array.isArray(target) && target.includes('code')) ||
+            (typeof target === 'string' && target.includes('merchants_code_key'));
+
+          if (isMerchantCodeCollision) {
+            continue;
+          }
+
+          throw new CanonicalApiException(
+            HttpStatus.BAD_REQUEST,
+            'VALIDATION_ERROR',
+            'Email hoặc số điện thoại đã tồn tại trên hệ thống',
+            false,
+            'Vui lòng sử dụng thông tin khác',
+            [
+              {
+                field: email ? 'email' : 'phone',
+                code: 'DUPLICATE',
+                message: `${email ? 'Email' : 'Số điện thoại'} đã tồn tại trên hệ thống`,
+              },
+            ]
+          );
+        }
+        throw err;
+      }
+    }
+
+    if (!merchant || !user) {
+      throw (
+        lastError ||
+        new Error('Failed to create merchant and owner account due to unresolvable code collision.')
+      );
+    }
+
+    // Deliver one-time password setup/reset mechanism (BR-AUTH-05: never return plaintext credential)
+    if (passwordIsTemporary && rawSetupToken && this.deliveryAdapter) {
+      const baseUrl = this.config?.FRONTEND_URL || 'http://localhost:3000';
+      const channel = email ? 'email' : 'phone';
+      const identifier = (email || phone)!;
+      await this.deliveryAdapter.sendVerification({
+        channel,
+        recipient: identifier,
+        purpose: 'password_reset',
+        link: `${baseUrl}/reset-password?token=${rawSetupToken}`,
+      });
+    }
+
+    // 7. Audit log (No PII)
+    await this.logAudit({
+      merchantId: merchant.id,
+      userId: user.id,
+      actor: 'admin:provisioning',
+      action: 'ADMIN_CREATE_SHOP',
+      resource: `merchant:${merchant.id}`,
+      correlationId,
+      ipAddress: this.hashIp(clientIp),
+      details: {
+        merchant_code: merchant.code,
+        password_is_temporary: passwordIsTemporary,
+        has_email: Boolean(email),
+        has_phone: Boolean(phone),
+      },
+    });
+
+    return {
+      success: true,
+      data: {
+        merchant: {
+          id: merchant.id,
+          name: merchant.name,
+          code: merchant.code,
+          status: merchant.status,
+          created_at: merchant.created_at,
+        },
+        user: {
+          id: user.id,
+          merchant_id: user.merchant_id,
+          full_name: user.full_name,
+          email: user.email,
+          phone: user.phone,
+          role: user.role,
+          status: user.status,
+          email_verified_at: user.email_verified_at,
+          phone_verified_at: user.phone_verified_at,
+        },
+        password_is_temporary: passwordIsTemporary,
+      },
+      meta: {
+        correlation_id: correlationId,
+      },
+    };
+  }
+
+  /**
+   * FEAT-AUTH-02: Admin list shops
+   */
+  async adminListShops(
+    query: AdminListShopsQuery,
+    correlationId: string
+  ): Promise<{
+    success: boolean;
+    data: { shops: any[]; total: number };
+    meta: { correlation_id: string };
+  }> {
+    const limit = Math.min(Math.max(Number(query.limit) || 20, 1), 100);
+    const offset = Math.max(Number(query.offset) || 0, 0);
+    const search = query.search?.trim();
+
+    const where: any = search
+      ? {
+          OR: [
+            { name: { contains: search, mode: 'insensitive' } },
+            { code: { contains: search, mode: 'insensitive' } },
+          ],
+        }
+      : {};
+
+    const [total, merchants] = await Promise.all([
+      this.prisma.merchant.count({ where }),
+      this.prisma.merchant.findMany({
+        where,
+        take: limit,
+        skip: offset,
+        orderBy: { created_at: 'desc' },
+        include: {
+          users: {
+            where: { role: RoleEnum.OWNER },
+            take: 1,
+            select: {
+              id: true,
+              full_name: true,
+              email: true,
+              phone: true,
+              status: true,
+            },
+          },
+          _count: {
+            select: { users: true },
+          },
+        },
+      }),
+    ]);
+
+    const formattedShops = merchants.map((m) => {
+      const owner = m.users[0] || null;
+      return {
+        id: m.id,
+        name: m.name,
+        code: m.code,
+        status: m.status,
+        created_at: m.created_at,
+        user_count: m._count.users,
+        owner: owner
+          ? {
+              id: owner.id,
+              full_name: owner.full_name,
+              email: owner.email,
+              phone: owner.phone,
+            }
+          : null,
+      };
+    });
+
+    return {
+      success: true,
+      data: {
+        shops: formattedShops,
+        total,
+      },
+      meta: {
+        correlation_id: correlationId,
+      },
     };
   }
 }
