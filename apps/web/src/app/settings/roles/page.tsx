@@ -51,9 +51,7 @@ export function validateRoleForm(
     errors.name = 'Vui lòng nhập tên vai trò';
   } else {
     const duplicate = existingRoles.find(
-      (r) =>
-        r.name.trim().toLowerCase() === name.trim().toLowerCase() &&
-        r.id !== editingRoleId
+      (r) => r.name.trim().toLowerCase() === name.trim().toLowerCase() && r.id !== editingRoleId
     );
     if (duplicate) {
       errors.name = 'Tên vai trò đã tồn tại trong cửa hàng';
@@ -81,7 +79,7 @@ export default function RolesSettingsPage({
   const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
   // Role & permission catalog data
-  const [loading, setLoading] = useState<boolean>(initialLoading ?? (initialRoles === undefined));
+  const [loading, setLoading] = useState<boolean>(initialLoading ?? initialRoles === undefined);
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(initialError ?? null);
   const [successMsg, setSuccessMsg] = useState<string | null>(initialSuccess ?? null);

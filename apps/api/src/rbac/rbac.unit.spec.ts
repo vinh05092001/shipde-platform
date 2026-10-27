@@ -342,7 +342,11 @@ class MockPrismaService {
       let updatedCount = 0;
       for (const u of this.users) {
         if (args.where.merchant_id && u.merchant_id !== args.where.merchant_id) continue;
-        if (args.where.custom_role_id !== undefined && u.custom_role_id !== args.where.custom_role_id) continue;
+        if (
+          args.where.custom_role_id !== undefined &&
+          u.custom_role_id !== args.where.custom_role_id
+        )
+          continue;
         if (args.data.custom_role_id !== undefined) {
           u.custom_role_id = args.data.custom_role_id;
         }
@@ -762,7 +766,12 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
     // Finding 1 Proving Test (Round 4): Delegated actor attempts to delete above-ceiling role with no active users
     await assert.rejects(
       async () => {
-        await service.deleteRole(highRole.data.role.id, delegatedActor, '127.0.0.1', 'corr-r4-f1-del');
+        await service.deleteRole(
+          highRole.data.role.id,
+          delegatedActor,
+          '127.0.0.1',
+          'corr-r4-f1-del'
+        );
       },
       (err: any) => {
         assert.ok(err instanceof CanonicalApiException);
@@ -884,7 +893,11 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
       'corr-r4-f2-d'
     );
 
-    assert.strictEqual(deleteRes.data.deleted, true, 'Delete must succeed when only held by inactive users');
+    assert.strictEqual(
+      deleteRes.data.deleted,
+      true,
+      'Delete must succeed when only held by inactive users'
+    );
 
     // DB Proof: Role row was deleted
     const roleInDb = mockPrisma.roles.find((r) => r.id === customRoleId);
@@ -892,7 +905,11 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
 
     // DB Proof: Inactive user was detached in the same transaction
     const userInDb = mockPrisma.users.find((u) => u.id === inactiveUserId);
-    assert.strictEqual(userInDb?.custom_role_id, null, 'Inactive user custom_role_id must be detached (null)');
+    assert.strictEqual(
+      userInDb?.custom_role_id,
+      null,
+      'Inactive user custom_role_id must be detached (null)'
+    );
 
     // DB Proof: Audit log exists
     const audit = mockPrisma.auditLogs.find(
@@ -928,7 +945,9 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
       );
 
       // DB Proof: Role was rolled back and not persisted
-      const roleInDb = mockPrisma.roles.find((r) => r.name === 'Vai trò Lỗi Role Permissions Unique');
+      const roleInDb = mockPrisma.roles.find(
+        (r) => r.name === 'Vai trò Lỗi Role Permissions Unique'
+      );
       assert.strictEqual(roleInDb, undefined, 'Role must not be persisted on 500 failure');
 
       // 2. In updateRole
@@ -965,10 +984,15 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
       );
 
       // DB Proof: Role permissions remain unchanged
-      const rps = mockPrisma.rolePermissions.filter((rp) => rp.role_id === initialRole.data.role.id);
+      const rps = mockPrisma.rolePermissions.filter(
+        (rp) => rp.role_id === initialRole.data.role.id
+      );
       const permIds = rps.map((rp) => rp.permission_id);
       const orderViewPerm = mockPrisma.permissions.find((p) => p.code === 'order:view_create');
-      assert.ok(permIds.includes(orderViewPerm?.id || ''), 'Permissions must remain unchanged on 500 rollback');
+      assert.ok(
+        permIds.includes(orderViewPerm?.id || ''),
+        'Permissions must remain unchanged on 500 rollback'
+      );
     } finally {
       mockPrisma.shouldFailRolePermissionUnique = false;
     }

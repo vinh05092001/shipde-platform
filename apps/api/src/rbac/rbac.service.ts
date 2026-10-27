@@ -26,7 +26,9 @@ export function isRoleNameUniqueViolation(err: any): boolean {
   if (err?.code !== 'P2002') return false;
   const target = err?.meta?.target;
   if (Array.isArray(target)) {
-    return target.includes('name_lower') || (target.includes('merchant_id') && target.includes('name'));
+    return (
+      target.includes('name_lower') || (target.includes('merchant_id') && target.includes('name'))
+    );
   }
   if (typeof target === 'string') {
     return target.includes('name_lower') || target.includes('roles_merchant_id_name_lower_key');

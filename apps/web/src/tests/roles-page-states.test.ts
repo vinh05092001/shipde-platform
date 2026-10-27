@@ -83,7 +83,8 @@ async function runTest() {
     'Loading state must render loading skeleton with animate-pulse'
   );
   assert.ok(
-    loadingHtml.includes('Vai Trò &amp; Phân Quyền') || loadingHtml.includes('Vai Trò & Phân Quyền'),
+    loadingHtml.includes('Vai Trò &amp; Phân Quyền') ||
+      loadingHtml.includes('Vai Trò & Phân Quyền'),
     'Loading state must render page header'
   );
 
@@ -127,10 +128,7 @@ async function runTest() {
     errorHtml.includes('role="alert"') && errorHtml.includes('Lỗi kết nối máy chủ'),
     'Error state must render role="alert" banner with server error message'
   );
-  assert.ok(
-    errorHtml.includes('Thử lại'),
-    'Error state must provide retry recovery action'
-  );
+  assert.ok(errorHtml.includes('Thử lại'), 'Error state must provide retry recovery action');
 
   // 5. UI State: SUCCESS banner
   const successHtml = renderPage({
@@ -139,7 +137,8 @@ async function runTest() {
     initialRoles: mockPayload,
   });
   assert.ok(
-    successHtml.includes('role="status"') && successHtml.includes('Đã lưu vai trò phân quyền thành công'),
+    successHtml.includes('role="status"') &&
+      successHtml.includes('Đã lưu vai trò phân quyền thành công'),
     'Success state must render role="status" feedback banner'
   );
 
@@ -185,9 +184,16 @@ async function runTest() {
 
   const emptyPermsResult = validateRoleForm('Vai trò mới', [], mockPayload);
   assert.strictEqual(emptyPermsResult.isValid, false);
-  assert.strictEqual(emptyPermsResult.errors.permissions, 'Cần chọn ít nhất một quyền hạn từ danh mục');
+  assert.strictEqual(
+    emptyPermsResult.errors.permissions,
+    'Cần chọn ít nhất một quyền hạn từ danh mục'
+  );
 
-  const duplicateNameResult = validateRoleForm('nhân viên kiểm hàng', ['order:view_create'], mockPayload);
+  const duplicateNameResult = validateRoleForm(
+    'nhân viên kiểm hàng',
+    ['order:view_create'],
+    mockPayload
+  );
   assert.strictEqual(duplicateNameResult.isValid, false);
   assert.strictEqual(duplicateNameResult.errors.name, 'Tên vai trò đã tồn tại trong cửa hàng');
 
@@ -195,7 +201,9 @@ async function runTest() {
   assert.strictEqual(validResult.isValid, true);
   assert.strictEqual(Object.keys(validResult.errors).length, 0);
 
-  console.log('✅ Finding 4: SCR-RBAC-01 Roles page real component rendering & UI states proved successfully!');
+  console.log(
+    '✅ Finding 4: SCR-RBAC-01 Roles page real component rendering & UI states proved successfully!'
+  );
 }
 
 runTest().catch((err) => {
