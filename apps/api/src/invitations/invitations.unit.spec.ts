@@ -1579,6 +1579,63 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
 
       assert.strictEqual(result.data.authorized, true);
     });
+
+    it('rejects empty scope check omitting both store_id and warehouse_id with 400 VALIDATION_ERROR (Finding 6)', async () => {
+      const usersService = new UsersService(mockPrisma as any, {} as any);
+      mockPrisma.user.findFirst = async () => ({
+        id: 'operator-user-1',
+        merchant_id: MERCHANT_ID,
+        role: RoleEnum.OPS_CSKH,
+        status: 'active',
+        store_scopes: ['store-alpha'],
+        warehouse_scopes: ['wh-north'],
+      });
+
+      await assert.rejects(
+        async () => {
+          await usersService.checkScopeAccess(
+            'operator-user-1',
+            MERCHANT_ID,
+            {}, // Empty scope!
+            'corr-empty-scope'
+          );
+        },
+        (err: any) => {
+          assert.ok(err instanceof CanonicalApiException);
+          assert.strictEqual(err.getStatus(), HttpStatus.BAD_REQUEST);
+          assert.strictEqual(err.code, 'VALIDATION_ERROR');
+          return true;
+        }
+      );
+    });
+
+    it('authorizes operator with wildcard "*" warehouse and store scopes (Finding 6)', async () => {
+      const usersService = new UsersService(mockPrisma as any, {} as any);
+      mockPrisma.user.findFirst = async () => ({
+        id: 'operator-user-wildcard',
+        merchant_id: MERCHANT_ID,
+        role: RoleEnum.OPS_CSKH,
+        status: 'active',
+        store_scopes: ['*'],
+        warehouse_scopes: ['*'],
+      });
+
+      const resWarehouse = await usersService.checkScopeAccess(
+        'operator-user-wildcard',
+        MERCHANT_ID,
+        { warehouse_id: 'any-wh-123' },
+        'corr-wildcard-wh'
+      );
+      assert.strictEqual(resWarehouse.data.authorized, true);
+
+      const resStore = await usersService.checkScopeAccess(
+        'operator-user-wildcard',
+        MERCHANT_ID,
+        { store_id: 'any-store-456' },
+        'corr-wildcard-store'
+      );
+      assert.strictEqual(resStore.data.authorized, true);
+    });
   });
 
   // AC-USR-01-18: Inspection of logs, audit entries, and database secrecy
