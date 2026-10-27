@@ -488,7 +488,7 @@ async function runSessionSupertestSuite() {
     console.log('  PASS: AC-SESS-11 Nonexistent UUID returns canonical 404 SESSION_NOT_FOUND');
 
     // -------------------------------------------------------------------------
-    // AC-SESS-12: Malformed UUID
+    // AC-SESS-12: Malformed UUID Full-Envelope Equality (BR-SESS-10)
     // -------------------------------------------------------------------------
     console.log('[TEST AC-SESS-12] User requests revocation with malformed ID');
     const res12 = await request(server)
@@ -496,9 +496,32 @@ async function runSessionSupertestSuite() {
       .set('Authorization', `Bearer ${tok1.raw}`)
       .expect(404);
     assert.strictEqual(res12.body.error.code, 'SESSION_NOT_FOUND');
-    assert.strictEqual(res12.body.error.message, res11.body.error.message);
+    assert.deepStrictEqual(
+      res12.body.error,
+      res11.body.error,
+      'Malformed ID and nonexistent UUID error envelopes must match identically'
+    );
+    assert.strictEqual(
+      res12.body.error.details,
+      undefined,
+      'Error envelope must omit details to prevent identifier enumeration'
+    );
+    assert.strictEqual(
+      JSON.stringify(res12.body).includes('invalid-uuid-format'),
+      false,
+      'Malformed ID must never be echoed anywhere in response body'
+    );
+    const stripMeta = (b: any) => {
+      const { meta: _m, ...rest } = b;
+      return rest;
+    };
+    assert.deepStrictEqual(
+      stripMeta(res12.body),
+      stripMeta(res11.body),
+      'Full envelope without correlation meta must be identical between malformed and missing IDs'
+    );
     console.log(
-      '  PASS: AC-SESS-12 Malformed ID returns 404 SESSION_NOT_FOUND identical to nonexistent UUID'
+      '  PASS: AC-SESS-12 Malformed ID returns 404 SESSION_NOT_FOUND full-envelope identical to nonexistent UUID'
     );
 
     // -------------------------------------------------------------------------
