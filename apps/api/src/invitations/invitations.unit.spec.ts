@@ -2928,5 +2928,43 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
       assert.strictEqual(failed.new_value.reason, 'DELIVERY_FAILED');
       assert.strictEqual(JSON.stringify(audits).includes('token='), false);
     });
+
+    it('Finding 7: list rejects non-integer pagination with 400 VALIDATION_ERROR instead of 500', async () => {
+      let findManyArgs: any = null;
+      const prisma: any = {
+        user: { findFirst: async (a: any) => (a?.where?.id === OWNER_USER_ID ? ownerUser : null) },
+        invitation: {
+          updateMany: async () => ({ count: 0 }),
+          count: async () => 0,
+          findMany: async (a: any) => {
+            findManyArgs = a;
+            return [];
+          },
+        },
+      };
+      const svc = new InvitationsService(prisma, undefined as any, new RateLimitService());
+      const actor = { userId: OWNER_USER_ID, merchantId: MERCHANT_ID, role: 'OWNER' };
+      for (const bad of [
+        { page: 'abc' },
+        { limit: 'xyz' },
+        { page: '1.5' },
+        { page: '0' },
+        { limit: '-3' },
+      ]) {
+        await assert.rejects(
+          () => svc.listInvitations(actor, bad as any, 'corr-r6-7'),
+          (err: any) => {
+            assert.strictEqual(err.status, 400, JSON.stringify(bad));
+            assert.strictEqual(err.code, 'VALIDATION_ERROR');
+            return true;
+          }
+        );
+      }
+      const ok = await svc.listInvitations(actor, { page: '2', limit: '500' }, 'corr-r6-7b');
+      assert.strictEqual(ok.meta.page, 2);
+      assert.strictEqual(ok.meta.limit, 100);
+      assert.strictEqual(findManyArgs.skip, 100);
+      assert.strictEqual(findManyArgs.where.merchant_id, MERCHANT_ID);
+    });
   });
 });

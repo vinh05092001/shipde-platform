@@ -100,6 +100,32 @@ export class InvitationsService {
     return !/token_hash|_pkey/.test(targetText);
   }
 
+  /**
+   * Strict positive-integer pagination parsing (Round 6 Finding 7): non-integer input such as
+   * `page=abc` is rejected with 400 VALIDATION_ERROR instead of producing NaN; limit is capped.
+   */
+  private parsePaginationParam(
+    raw: number | string | undefined,
+    field: 'page' | 'limit',
+    fallback: number,
+    max: number
+  ): number {
+    if (raw === undefined || raw === null || raw === '') return fallback;
+    const text = typeof raw === 'number' ? String(raw) : raw.trim();
+    const value = /^[0-9]+$/.test(text) ? Number(text) : NaN;
+    if (!Number.isSafeInteger(value) || value < 1) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Tham số phân trang không hợp lệ',
+        false,
+        undefined,
+        [{ field, code: 'INVALID_INTEGER', message: `${field} phải là số nguyên dương` }]
+      );
+    }
+    return Math.min(max, value);
+  }
+
   private alreadyPendingException(): CanonicalApiException {
     return new CanonicalApiException(
       HttpStatus.BAD_REQUEST,
@@ -593,7 +619,7 @@ export class InvitationsService {
    */
   async listInvitations(
     actor: { userId: string; merchantId: string; role?: string },
-    filter: { status?: string; page?: number; limit?: number },
+    filter: { status?: string; page?: number | string; limit?: number | string },
     correlationId: string
   ) {
     const actorRole = await this.resolveActorRole(actor);
@@ -608,8 +634,8 @@ export class InvitationsService {
       );
     }
 
-    const page = Math.max(1, filter.page || 1);
-    const limit = Math.min(100, Math.max(1, filter.limit || 20));
+    const page = this.parsePaginationParam(filter.page, 'page', 1, Number.MAX_SAFE_INTEGER);
+    const limit = this.parsePaginationParam(filter.limit, 'limit', 20, 100);
     const skip = (page - 1) * limit;
 
     const now = new Date();

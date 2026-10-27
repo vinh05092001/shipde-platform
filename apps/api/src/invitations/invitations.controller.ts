@@ -73,8 +73,9 @@ export class InvitationsController {
       actor,
       {
         status,
-        page: page ? parseInt(page, 10) : undefined,
-        limit: limit ? parseInt(limit, 10) : undefined,
+        // Raw strings: the service strictly validates and rejects non-integers with 400
+        page,
+        limit,
       },
       correlationId
     );
