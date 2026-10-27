@@ -422,25 +422,20 @@ async function runAdminShopsFrontendSuite() {
     'Error state must display upstream error message'
   );
 
-  // State 6: Success State (Shop Listing)
-  const mockShop: ShopRecord = {
+  // State 6: Success State (Shop Listing rendered from exact API payload shape - Finding 2)
+  const mockShopFromApi: ShopRecord = {
     id: 'm-shop-1',
     name: 'GUMAC Flagship Store',
     code: 'GUMAC_STORE_001',
     status: 'active',
     created_at: new Date().toISOString(),
-    users: [
-      {
-        id: 'u-owner-1',
-        full_name: 'Nguyen Van A',
-        email: 'owner@gumac.vn',
-        phone: '0987654321',
-        role: 'OWNER',
-        status: 'active',
-        email_verified_at: new Date().toISOString(),
-        phone_verified_at: null,
-      },
-    ],
+    user_count: 1,
+    owner: {
+      id: 'u-owner-1',
+      full_name: 'Nguyen Van A',
+      email: 'owner@gumac.vn',
+      phone: '0987654321',
+    },
   };
   const successListHtml = renderToStaticMarkup(
     React.createElement(AdminShopsView, {
@@ -448,7 +443,7 @@ async function runAdminShopsFrontendSuite() {
       user: { role: 'BACKOFFICE', full_name: 'Platform Operator' },
       isPlatformAdmin: true,
       isHydrating: false,
-      shops: [mockShop],
+      shops: [mockShopFromApi],
       isLoading: false,
       listError: null,
       searchQuery: '',
@@ -461,6 +456,18 @@ async function runAdminShopsFrontendSuite() {
   );
   assert.ok(successListHtml.includes('GUMAC Flagship Store'), 'Must render shop name');
   assert.ok(successListHtml.includes('GUMAC_STORE_001'), 'Must render merchant code');
+  assert.ok(
+    successListHtml.includes('Nguyen Van A'),
+    'Must render owner full_name from API payload owner object'
+  );
+  assert.ok(
+    successListHtml.includes('owner@gumac.vn'),
+    'Must render owner email from API payload owner object'
+  );
+  assert.ok(
+    !successListHtml.includes('Chưa gán'),
+    'Must not render Chưa gán when owner is provided by API payload'
+  );
 
   // State 7: Validation State (Create Shop Modal)
   const validationModalHtml = renderToStaticMarkup(

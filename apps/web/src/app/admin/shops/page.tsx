@@ -24,7 +24,14 @@ export interface ShopRecord {
   code: string;
   status: string;
   created_at: string;
-  users: Array<{
+  user_count?: number;
+  owner?: {
+    id: string;
+    full_name: string;
+    email: string | null;
+    phone: string | null;
+  } | null;
+  users?: Array<{
     id: string;
     full_name: string;
     email: string | null;
@@ -583,7 +590,8 @@ export function AdminShopsView({
                 </thead>
                 <tbody className="divide-y divide-slate-200 text-slate-700">
                   {shops.map((s) => {
-                    const owner = s.users?.find((u) => u.role === 'OWNER') || s.users?.[0];
+                    const owner =
+                      s.owner || s.users?.find((u) => u.role === 'OWNER') || s.users?.[0];
                     return (
                       <tr key={s.id} className="hover:bg-slate-50/80 transition-colors">
                         <td className="px-6 py-4 font-semibold text-slate-900">{s.name}</td>
