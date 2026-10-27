@@ -129,6 +129,10 @@ async function runTest() {
     'Error state must render role="alert" banner with server error message'
   );
   assert.ok(errorHtml.includes('Thử lại'), 'Error state must provide retry recovery action');
+  assert.ok(
+    !errorHtml.includes('Chưa có vai trò tùy chỉnh nào'),
+    'Error state must NOT display "Chưa có vai trò tùy chỉnh nào" empty callout during server outage (Finding 4 / Round 6)'
+  );
 
   // 5. UI State: SUCCESS banner
   const successHtml = renderPage({

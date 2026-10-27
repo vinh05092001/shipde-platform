@@ -44,6 +44,7 @@ export interface RolesSettingsPageProps {
   initialModalError?: string | null;
   initialDeleteModalError?: string | null;
   initialFormState?: FormState;
+  initialHasLoadedSuccessfully?: boolean;
 }
 
 export function validateRoleForm(
@@ -85,6 +86,7 @@ export default function RolesSettingsPage({
   initialModalError,
   initialDeleteModalError,
   initialFormState,
+  initialHasLoadedSuccessfully,
 }: RolesSettingsPageProps = {}) {
   const { user, merchant } = useAuth();
   const token = typeof window !== 'undefined' ? localStorage.getItem('shipde_token') : null;
@@ -92,6 +94,9 @@ export default function RolesSettingsPage({
 
   // Role & permission catalog data
   const [loading, setLoading] = useState<boolean>(initialLoading ?? initialRoles === undefined);
+  const [hasLoadedSuccessfully, setHasLoadedSuccessfully] = useState<boolean>(
+    initialHasLoadedSuccessfully ?? (initialRoles !== undefined && !initialError)
+  );
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(initialError ?? null);
   const [successMsg, setSuccessMsg] = useState<string | null>(initialSuccess ?? null);
@@ -160,8 +165,10 @@ export default function RolesSettingsPage({
       setCategories(permsJson.data.categories || []);
       setRoles(rolesJson.data.roles || []);
       setCanManageRoles(Boolean(rolesJson.data?.can_manage_roles ?? user?.role === 'OWNER'));
+      setHasLoadedSuccessfully(true);
     } catch (err: any) {
       setErrorMsg(err.message || 'Lỗi kết nối máy chủ khi tải dữ liệu phân quyền');
+      setHasLoadedSuccessfully(false);
     } finally {
       setLoading(false);
     }
@@ -501,7 +508,7 @@ export default function RolesSettingsPage({
               </h2>
             </div>
 
-            {totalCustomRoles.length === 0 ? (
+            {!hasLoadedSuccessfully && errorMsg ? null : totalCustomRoles.length === 0 ? (
               // UI State: EMPTY
               <div className="modern-card p-8 text-center bg-slate-50/60 border border-dashed border-slate-200 rounded-xl space-y-3">
                 <div className="w-10 h-10 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center mx-auto">
