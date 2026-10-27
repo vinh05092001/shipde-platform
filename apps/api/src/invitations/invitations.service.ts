@@ -893,10 +893,10 @@ export class InvitationsService {
     correlationId: string
   ) {
     const safeCorrelationId = sanitizeCorrelationId(correlationId);
-    const actorRole = await this.resolveActorRole(actor);
-    const isOwner = actorRole === RoleEnum.OWNER || actorRole === 'OWNER';
-    const isOps = actorRole === RoleEnum.OPS_CSKH || actorRole === 'OPS_CSKH';
-    if (!isOwner && !isOps) {
+    const actorUser = await this.resolveActorUser(actor);
+    const isOwner = actorUser?.role === RoleEnum.OWNER || actorUser?.role === 'OWNER';
+    const isOps = actorUser?.role === RoleEnum.OPS_CSKH || actorUser?.role === 'OPS_CSKH';
+    if (!actorUser || (!isOwner && !isOps)) {
       throw new CanonicalApiException(
         HttpStatus.FORBIDDEN,
         'FORBIDDEN',
@@ -955,6 +955,49 @@ export class InvitationsService {
       where.expires_at = { gte: now };
     } else if (filter.status && filter.status !== 'ALL') {
       where.status = filter.status as InvitationStatusEnum;
+    }
+
+    // RBAC Scope Enforcement for Non-Owner Actors (Finding 1 / RBAC-APPROVAL-MATRIX / SECURITY-NFR)
+    // Non-owner actors (e.g. OPS_CSKH) can only see invitations intersecting their live scopes,
+    // or invitations they personally sent.
+    if (!isOwner) {
+      const actorStores = actorUser.store_scopes || [];
+      const actorWarehouses = actorUser.warehouse_scopes || [];
+      const hasStoreWildcard = actorStores.includes('*');
+      const hasWarehouseWildcard = actorWarehouses.includes('*');
+
+      if (!hasStoreWildcard || !hasWarehouseWildcard) {
+        const scopeConditions: any[] = [];
+        if (actorUser.id) {
+          scopeConditions.push({ invited_by_user_id: actorUser.id });
+        }
+        if (hasStoreWildcard) {
+          scopeConditions.push({ store_scopes: { isEmpty: false } });
+        } else {
+          const concreteStores = actorStores.filter((s) => s !== '*');
+          if (concreteStores.length > 0) {
+            scopeConditions.push({ store_scopes: { hasSome: concreteStores } });
+          }
+        }
+        if (hasWarehouseWildcard) {
+          scopeConditions.push({ warehouse_scopes: { isEmpty: false } });
+        } else {
+          const concreteWarehouses = actorWarehouses.filter((w) => w !== '*');
+          if (concreteWarehouses.length > 0) {
+            scopeConditions.push({ warehouse_scopes: { hasSome: concreteWarehouses } });
+          }
+        }
+
+        if (scopeConditions.length > 0) {
+          where.AND = [{ OR: scopeConditions }];
+        } else {
+          if (actorUser.id) {
+            where.invited_by_user_id = actorUser.id;
+          } else {
+            where.id = '__none__';
+          }
+        }
+      }
     }
 
     const [total, records] = await Promise.all([

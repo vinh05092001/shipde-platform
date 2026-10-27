@@ -945,6 +945,55 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
       assert.strictEqual(res.data.length, 1);
       assert.strictEqual(res.data[0].status, InvitationStatusEnum.EXPIRED);
     });
+
+    it('filters invitations by store and warehouse scopes for scoped non-owner OPS_CSKH (Finding 1)', async () => {
+      let findManyWhere: any = null;
+      mockPrisma.invitation.findMany = async (args: any) => {
+        findManyWhere = args.where;
+        return [];
+      };
+      mockPrisma.invitation.count = async () => 0;
+
+      const actor = {
+        userId: OPS_USER_ID,
+        merchantId: MERCHANT_ID,
+        role: RoleEnum.OPS_CSKH,
+      };
+      await service.listInvitations(actor, { page: 1, limit: 10 }, 'test-corr-scope-filter');
+
+      assert.ok(findManyWhere);
+      assert.strictEqual(findManyWhere.merchant_id, MERCHANT_ID);
+      assert.ok(findManyWhere.AND, 'Non-owner must have scope filter conditions in where.AND');
+      assert.ok(Array.isArray(findManyWhere.AND));
+      const scopeOr = findManyWhere.AND[0]?.OR;
+      assert.ok(Array.isArray(scopeOr));
+      // Should include invited_by_user_id, store_scopes hasSome, warehouse_scopes hasSome
+      const hasInvitedBy = scopeOr.some((c: any) => c.invited_by_user_id === OPS_USER_ID);
+      const hasStoreScope = scopeOr.some((c: any) => c.store_scopes?.hasSome?.includes('STORE-01'));
+      const hasWarehouseScope = scopeOr.some((c: any) =>
+        c.warehouse_scopes?.hasSome?.includes('WH-01')
+      );
+      assert.strictEqual(hasInvitedBy, true, 'Must include actor own invitations');
+      assert.strictEqual(hasStoreScope, true, 'Must intersect actor store scopes');
+      assert.strictEqual(hasWarehouseScope, true, 'Must intersect actor warehouse scopes');
+    });
+
+    it('rejects listInvitations with 403 FORBIDDEN for unauthorized non-manager roles (Finding 1)', async () => {
+      const actor = {
+        userId: WAREHOUSE_USER_ID,
+        merchantId: MERCHANT_ID,
+        role: RoleEnum.WAREHOUSE,
+      };
+
+      await assert.rejects(
+        () => service.listInvitations(actor, { page: 1 }, 'test-corr-unauth'),
+        (err: any) => {
+          assert.strictEqual(err.getStatus(), HttpStatus.FORBIDDEN);
+          assert.strictEqual(err.code, 'FORBIDDEN');
+          return true;
+        }
+      );
+    });
   });
 
   // AC-USR-01-09: Owner resends an expired invitation
