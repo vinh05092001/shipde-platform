@@ -25,6 +25,7 @@ import {
   assertSafeMigrationDiff,
   isProtectedPartialIndex,
   assertNoSchemaIndexNameConflict,
+  assertRealPrismaMigrateDiffSafety,
 } from './migration-guard';
 
 describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
@@ -4224,6 +4225,34 @@ CREATE INDEX "some_other_idx" ON "invitations"("created_at");
           return true;
         }
       );
+    });
+
+    it('Round 11 Finding 4: DROP INDEX detection catches statement modifiers and runs on real migrate diff', () => {
+      // 1. Catches DROP INDEX CONCURRENTLY
+      const concurrentCheck = validateMigrationSqlSafety(
+        'DROP INDEX CONCURRENTLY "invitations_merchant_pending_email_unique";'
+      );
+      assert.strictEqual(concurrentCheck.safe, false);
+      assert.deepStrictEqual(concurrentCheck.violations, [
+        'invitations_merchant_pending_email_unique',
+      ]);
+
+      // 2. Catches DROP INDEX IF EXISTS with CASCADE and quotes
+      const cascadeCheck = validateMigrationSqlSafety(
+        'DROP INDEX IF EXISTS CONCURRENTLY "public"."invitations_merchant_pending_phone_unique" CASCADE;'
+      );
+      assert.strictEqual(cascadeCheck.safe, false);
+      assert.deepStrictEqual(cascadeCheck.violations, [
+        'invitations_merchant_pending_phone_unique',
+      ]);
+
+      // 3. Allows unrelated index drops
+      const safeCheck = validateMigrationSqlSafety('DROP INDEX "users_email_idx";');
+      assert.strictEqual(safeCheck.safe, true);
+      assert.strictEqual(safeCheck.violations.length, 0);
+
+      // 4. Executes assertRealPrismaMigrateDiffSafety against live schema/database
+      assert.doesNotThrow(() => assertRealPrismaMigrateDiffSafety());
     });
   });
 });

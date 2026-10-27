@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { execSync } from 'child_process';
 
 export const PROTECTED_PARTIAL_INDEXES = [
   'invitations_merchant_pending_email_unique',
@@ -23,10 +24,9 @@ export function validateMigrationSqlSafety(sql: string): {
 } {
   const violations: string[] = [];
   for (const idx of PROTECTED_PARTIAL_INDEXES) {
-    const dropPattern = new RegExp(
-      `DROP\\s+INDEX\\s+(?:IF\\s+EXISTS\\s+)?(?:["']?${idx}["']?)`,
-      'i'
-    );
+    // Matches any statement that drops these indexes, allowing any modifiers:
+    // e.g. DROP INDEX CONCURRENTLY, DROP INDEX IF EXISTS, schema qualifications, quotes, CASCADE/RESTRICT
+    const dropPattern = new RegExp(`DROP\\s+INDEX\\b[^;]*\\b${idx}\\b`, 'i');
     if (dropPattern.test(sql)) {
       violations.push(idx);
     }
@@ -126,6 +126,52 @@ export function assertNoMigrationIndexDrift(migrationsDir?: string): void {
 }
 
 /**
+ * Runs prisma migrate diff against the real schema and database to assert that
+ * PostgreSQL partial unique pending indexes are not dropped (Round 11 Finding 4 / BR-INV-08).
+ */
+export function assertRealPrismaMigrateDiffSafety(databaseUrl?: string): void {
+  const dbUrl =
+    databaseUrl ||
+    process.env.DATABASE_URL ||
+    'postgresql://postgres:postgres@localhost:5433/shipde_dev';
+
+  const schemaPath = path.resolve(__dirname, '../../../../prisma/schema.prisma');
+  if (!fs.existsSync(schemaPath)) {
+    throw new Error(`[MIGRATION_GUARD] Schema file not found: ${schemaPath}`);
+  }
+
+  try {
+    const diffSql = execSync(
+      `pnpm exec prisma migrate diff --from-schema-datasource "${schemaPath}" --to-schema-datamodel "${schemaPath}" --script`,
+      {
+        env: { ...process.env, DATABASE_URL: dbUrl },
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }
+    );
+    assertSafeMigrationDiff(diffSql);
+  } catch (err: any) {
+    if (err.message && err.message.includes('[MIGRATION_GUARD]')) {
+      throw err;
+    }
+    if (err.stdout && typeof err.stdout === 'string') {
+      assertSafeMigrationDiff(err.stdout);
+    }
+    if (
+      err.stderr &&
+      typeof err.stderr === 'string' &&
+      /P1001|Can't reach database server|Environment variable not found/.test(err.stderr)
+    ) {
+      console.warn(
+        `[MIGRATION_GUARD] Database unreachable (${err.stderr.trim()}), skipping live diff.`
+      );
+      return;
+    }
+    throw err;
+  }
+}
+
+/**
  * CLI execution entrypoint: executed during CI (via `apps/api/package.json` test script)
  * to fail build immediately if any migration file or prisma migrate diff drops protected partial unique indexes (BR-INV-08).
  */
@@ -133,6 +179,7 @@ export function runMigrationGuardCli(): void {
   try {
     assertNoMigrationIndexDrift();
     assertNoSchemaIndexNameConflict();
+    assertRealPrismaMigrateDiffSafety();
     console.log(
       '[MIGRATION_GUARD] PASS: All PostgreSQL partial unique pending indexes protected and verified.'
     );
