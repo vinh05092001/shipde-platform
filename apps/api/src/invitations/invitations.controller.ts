@@ -20,9 +20,9 @@ import { CanonicalExceptionFilter } from '../auth/canonical-exception.filter';
 import { normalizeCorrelationId } from '@shipde/config';
 import { extractClientIp } from '../utils/ip.util';
 import { SendInvitationRequest, AcceptInvitationRequest } from '@shipde/contracts';
-import { resolveFrontendBaseUrl } from './invitation-url.util';
+import { resolveFrontendBaseUrl, sanitizeCorrelationId } from './invitation-url.util';
 
-export { resolveFrontendBaseUrl };
+export { resolveFrontendBaseUrl, sanitizeCorrelationId };
 
 @Controller(['api/v1/invitations', 'invitations'])
 @UseFilters(CanonicalExceptionFilter)
@@ -31,6 +31,15 @@ export class InvitationsController {
     @Inject(InvitationsService) private readonly invitationsService: InvitationsService
   ) {}
 
+  private extractCorrelationId(req: any): string {
+    const rawCandidate =
+      req?.correlationId ||
+      (Array.isArray(req?.headers?.['x-correlation-id'])
+        ? req.headers['x-correlation-id'][0]
+        : req?.headers?.['x-correlation-id']);
+    return sanitizeCorrelationId(rawCandidate);
+  }
+
   /**
    * POST /api/v1/invitations — Send team member invitation (API-USR-INVITE-SEND)
    */
@@ -38,8 +47,7 @@ export class InvitationsController {
   @UseGuards(SessionGuard)
   @HttpCode(HttpStatus.CREATED)
   async createInvitation(@Body() dto: SendInvitationRequest, @Req() req: any) {
-    const correlationId =
-      req.headers?.['x-correlation-id'] || req.correlationId || normalizeCorrelationId();
+    const correlationId = this.extractCorrelationId(req);
     const clientIp = extractClientIp(req);
     // Backend is authoritative: do not trust stale token claims; service resolves live role & scopes from DB
     const actor = {
@@ -63,8 +71,7 @@ export class InvitationsController {
     @Query('limit') limit: string | undefined,
     @Req() req: any
   ) {
-    const correlationId =
-      req.headers?.['x-correlation-id'] || req.correlationId || normalizeCorrelationId();
+    const correlationId = this.extractCorrelationId(req);
     const actor = {
       userId: req.userId as string,
       merchantId: req.merchantId as string,
@@ -89,8 +96,7 @@ export class InvitationsController {
   @UseGuards(SessionGuard)
   @HttpCode(HttpStatus.OK)
   async resendInvitation(@Param('id') id: string, @Req() req: any) {
-    const correlationId =
-      req.headers?.['x-correlation-id'] || req.correlationId || normalizeCorrelationId();
+    const correlationId = this.extractCorrelationId(req);
     const clientIp = extractClientIp(req);
     const actor = {
       userId: req.userId as string,
@@ -108,8 +114,7 @@ export class InvitationsController {
   @UseGuards(SessionGuard)
   @HttpCode(HttpStatus.OK)
   async cancelInvitation(@Param('id') id: string, @Req() req: any) {
-    const correlationId =
-      req.headers?.['x-correlation-id'] || req.correlationId || normalizeCorrelationId();
+    const correlationId = this.extractCorrelationId(req);
     const clientIp = extractClientIp(req);
     const actor = {
       userId: req.userId as string,
@@ -129,8 +134,7 @@ export class InvitationsController {
   @Header('Cache-Control', 'no-store')
   @Header('Referrer-Policy', 'no-referrer')
   async verifyInvitation(@Body() body: { token?: unknown } | undefined, @Req() req: any) {
-    const correlationId =
-      req.headers?.['x-correlation-id'] || req.correlationId || normalizeCorrelationId();
+    const correlationId = this.extractCorrelationId(req);
     const clientIp = extractClientIp(req);
     const token = typeof body?.token === 'string' ? body.token : '';
     return this.invitationsService.verifyInvitation(token, correlationId, clientIp);
@@ -144,8 +148,7 @@ export class InvitationsController {
   @Header('Cache-Control', 'no-store')
   @Header('Referrer-Policy', 'no-referrer')
   async acceptInvitation(@Body() dto: AcceptInvitationRequest, @Req() req: any) {
-    const correlationId =
-      req.headers?.['x-correlation-id'] || req.correlationId || normalizeCorrelationId();
+    const correlationId = this.extractCorrelationId(req);
     const clientIp = extractClientIp(req);
     return this.invitationsService.acceptInvitation(dto, clientIp, correlationId);
   }

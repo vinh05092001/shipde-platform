@@ -8,6 +8,7 @@ import {
   validatePasswordStrength,
   canonicalizePhoneNumber,
   resolveCanonicalIdentity,
+  sanitizeCorrelationId,
 } from './invitations.service';
 import { InvitationsController } from './invitations.controller';
 import { resolveFrontendBaseUrl } from './invitation-url.util';
@@ -978,7 +979,7 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
         'expired-inv-id',
         actor,
         '127.0.0.1',
-        'test-corr-09'
+        '00000000-0000-0000-0000-000000000009'
       );
 
       assert.strictEqual(res.data.status, InvitationStatusEnum.PENDING);
@@ -997,7 +998,7 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
       assert.strictEqual(auditCreated.new_value.target_identifier_masked, 'e****d@shipde.vn');
       assert.strictEqual(auditCreated.new_value.merchant_id, MERCHANT_ID);
       assert.strictEqual(auditCreated.new_value.actor_id, OWNER_USER_ID);
-      assert.strictEqual(auditCreated.new_value.correlation_id, 'test-corr-09');
+      assert.strictEqual(auditCreated.new_value.correlation_id, '00000000-0000-0000-0000-000000000009');
     });
 
     it('rejects resend with 400 INVITATION_ALREADY_USED when concurrent accept committed (count === 0)', async () => {
@@ -1144,7 +1145,7 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
         'pending-inv-id',
         actor,
         '127.0.0.1',
-        'test-corr-10'
+        '00000000-0000-0000-0000-000000000010'
       );
 
       assert.strictEqual(res.data.status, InvitationStatusEnum.CANCELLED);
@@ -1161,7 +1162,7 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
       assert.strictEqual(auditCreated.new_value.target_identifier_masked, 'c****g@shipde.vn');
       assert.strictEqual(auditCreated.new_value.merchant_id, MERCHANT_ID);
       assert.strictEqual(auditCreated.new_value.actor_id, OWNER_USER_ID);
-      assert.strictEqual(auditCreated.new_value.correlation_id, 'test-corr-10');
+      assert.strictEqual(auditCreated.new_value.correlation_id, '00000000-0000-0000-0000-000000000010');
     });
 
     it('rejects cancel with 400 INVITATION_ALREADY_USED when concurrent accept committed (count === 0)', async () => {
@@ -3813,6 +3814,95 @@ CREATE INDEX "some_other_idx" ON "invitations"("created_at");
       const unconfiguredLimiter = new RateLimitService(undefined);
       const res2 = await unconfiguredLimiter.checkInvitationDispatchLimit('192.168.1.2', 'user2@shipde.vn', MERCHANT_ID);
       assert.strictEqual(res2.allowed, true);
+    });
+
+    it('Round 9 Finding 1: Hostile correlation ID (password, token, script) cannot land in audit log and is replaced with UUID', async () => {
+      // 1. sanitizeCorrelationId unit tests
+      assert.strictEqual(
+        sanitizeCorrelationId('12345678-1234-4234-8234-123456789abc'),
+        '12345678-1234-4234-8234-123456789abc'
+      );
+      // Plain password discarded
+      const sanitizedPw = sanitizeCorrelationId('MySecretPassword123!');
+      assert.notStrictEqual(sanitizedPw, 'MySecretPassword123!');
+      assert.strictEqual(sanitizedPw.length, 36);
+      assert.match(sanitizedPw, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+
+      // Raw token discarded
+      const rawToken64 = 'd41d8cd98f00b204e9800998ecf8427ed41d8cd98f00b204e9800998ecf8427e';
+      const sanitizedToken = sanitizeCorrelationId(rawToken64);
+      assert.notStrictEqual(sanitizedToken, rawToken64);
+      assert.strictEqual(sanitizedToken.length, 36);
+
+      // Script injection discarded
+      const sanitizedScript = sanitizeCorrelationId('<script>alert("xss")</script>');
+      assert.notStrictEqual(sanitizedScript, '<script>alert("xss")</script>');
+      assert.strictEqual(sanitizedScript.length, 36);
+
+      // 2. Controller extractCorrelationId replaces hostile x-correlation-id header with UUID
+      const controller = new InvitationsController(service);
+      const hostileReq: any = {
+        headers: {
+          'x-correlation-id': 'HostileTokenOrPassword1234567890abcdef',
+        },
+      };
+      const extracted = (controller as any).extractCorrelationId(hostileReq);
+      assert.notStrictEqual(extracted, 'HostileTokenOrPassword1234567890abcdef');
+      assert.strictEqual(extracted.length, 36);
+
+      // 3. Service audit persistence rejects hostile correlationId in acceptInvitation
+      let auditWritten: any = null;
+      mockPrisma.auditLog.create = async (args: any) => {
+        auditWritten = args.data;
+        return { id: 'audit-accept-hostile', ...args.data };
+      };
+      const expectedTokenHash = service.hashToken('hostile_raw_token_xyz');
+      mockPrisma.invitation.findFirst = async () => ({
+        id: 'hostile-inv-id',
+        merchant_id: MERCHANT_ID,
+        email: 'hostile-recipient@shipde.vn',
+        phone: null,
+        role: RoleEnum.OPS_CSKH,
+        store_scopes: [],
+        warehouse_scopes: [],
+        token_hash: expectedTokenHash,
+        status: InvitationStatusEnum.PENDING,
+        consumed_at: null,
+        expires_at: new Date(Date.now() + 86400000),
+      });
+      mockPrisma.invitation.findUnique = mockPrisma.invitation.findFirst;
+      mockPrisma.invitation.updateMany = async () => ({ count: 1 });
+      mockPrisma.user.findFirst = async () => null;
+      mockPrisma.user.create = async (args: any) => ({
+        id: 'new-user-id',
+        ...args.data,
+      });
+
+      const acceptRes = await service.acceptInvitation(
+        {
+          token: 'hostile_raw_token_xyz',
+          full_name: 'Nguyen Van Test',
+          password: 'Password123!',
+          password_confirm: 'Password123!',
+        },
+        '127.0.0.1',
+        'hostile-password-or-token-12345'
+      );
+
+      assert.ok(auditWritten);
+      assert.strictEqual(auditWritten.action, 'INVITATION_ACCEPTED');
+      // Hostile correlation ID must NEVER land in audit
+      assert.notStrictEqual(auditWritten.new_value.correlation_id, 'hostile-password-or-token-12345');
+      assert.strictEqual(auditWritten.new_value.correlation_id.length, 36);
+      assert.match(
+        auditWritten.new_value.correlation_id,
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+      );
+      // Zero passwords or raw tokens in audit
+      assert.strictEqual(JSON.stringify(auditWritten).includes('Password123!'), false);
+      assert.strictEqual(JSON.stringify(auditWritten).includes('hostile_raw_token_xyz'), false);
+      // Meta correlation_id is also sanitized
+      assert.strictEqual(acceptRes.meta.correlation_id, auditWritten.new_value.correlation_id);
     });
   });
 });

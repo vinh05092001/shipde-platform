@@ -9,7 +9,9 @@ import type { IVerificationDeliveryAdapter } from '@shipde/contracts';
 import { SendInvitationRequest, AcceptInvitationRequest, InvitationItem } from '@shipde/contracts';
 import { RateLimitService } from '../auth/rate-limit.service';
 import type { InvitationDispatchReservation } from '../auth/rate-limit.service';
-import { resolveFrontendBaseUrl } from './invitation-url.util';
+import { resolveFrontendBaseUrl, sanitizeCorrelationId } from './invitation-url.util';
+
+export { sanitizeCorrelationId };
 
 /**
  * Canonicalizes Vietnamese phone numbers to standard national format (e.g. 0901234567).
@@ -331,6 +333,7 @@ export class InvitationsService {
     correlationId: string,
     baseUrl = 'http://localhost:3000'
   ) {
+    const safeCorrelationId = sanitizeCorrelationId(correlationId);
     if (!dto || typeof dto !== 'object') {
       throw new CanonicalApiException(
         HttpStatus.BAD_REQUEST,
@@ -683,7 +686,7 @@ export class InvitationsService {
                 warehouse_scopes: inv.warehouse_scopes,
                 expires_at: inv.expires_at.toISOString(),
                 target_identifier_masked: maskIdentifier(email || phone),
-                correlation_id: correlationId,
+                correlation_id: safeCorrelationId,
               },
             },
           });
@@ -769,7 +772,7 @@ export class InvitationsService {
                 merchant_id: actor.merchantId,
                 actor_id: actor.userId,
                 target_identifier_masked: maskIdentifier(email || phone),
-                correlation_id: correlationId,
+                correlation_id: safeCorrelationId,
                 reason,
               },
             },
@@ -824,7 +827,7 @@ export class InvitationsService {
         invited_by_user_id: invitation.invited_by_user_id,
       },
       meta: {
-        correlation_id: correlationId,
+        correlation_id: safeCorrelationId,
       },
     };
   }
@@ -838,6 +841,7 @@ export class InvitationsService {
     filter: { status?: string; page?: number | string; limit?: number | string },
     correlationId: string
   ) {
+    const safeCorrelationId = sanitizeCorrelationId(correlationId);
     const actorRole = await this.resolveActorRole(actor);
     const isOwner = actorRole === RoleEnum.OWNER || actorRole === 'OWNER';
     const isOps = actorRole === RoleEnum.OPS_CSKH || actorRole === 'OPS_CSKH';
@@ -939,7 +943,7 @@ export class InvitationsService {
         total,
         page,
         limit,
-        correlation_id: correlationId,
+        correlation_id: safeCorrelationId,
       },
     };
   }
@@ -955,6 +959,7 @@ export class InvitationsService {
     correlationId: string,
     baseUrl = 'http://localhost:3000'
   ) {
+    const safeCorrelationId = sanitizeCorrelationId(correlationId);
     const actorUser = await this.resolveActorUser(actor);
     const actorRole = actorUser?.role;
     const isOwner = actorRole === RoleEnum.OWNER || actorRole === 'OWNER';
@@ -1182,7 +1187,7 @@ export class InvitationsService {
               role: inv.role,
               status: InvitationStatusEnum.PENDING,
               expires_at: expiresAt.toISOString(),
-              correlation_id: correlationId,
+              correlation_id: safeCorrelationId,
             },
           },
         });
@@ -1239,7 +1244,7 @@ export class InvitationsService {
                 invitation_id: invitationId,
                 merchant_id: actor.merchantId,
                 actor_id: actor.userId,
-                correlation_id: correlationId,
+                correlation_id: safeCorrelationId,
                 reason,
               },
             },
@@ -1286,7 +1291,7 @@ export class InvitationsService {
         expires_at: updated.expires_at.toISOString(),
       },
       meta: {
-        correlation_id: correlationId,
+        correlation_id: safeCorrelationId,
       },
     };
   }
@@ -1301,6 +1306,7 @@ export class InvitationsService {
     clientIp: string,
     correlationId: string
   ) {
+    const safeCorrelationId = sanitizeCorrelationId(correlationId);
     const actorUser = await this.resolveActorUser(actor);
     const actorRole = actorUser?.role;
     const isOwner = actorRole === RoleEnum.OWNER || actorRole === 'OWNER';
@@ -1421,7 +1427,7 @@ export class InvitationsService {
             actor_id: actor.userId,
             target_identifier_masked: maskIdentifier(inv.email || inv.phone),
             status: inv.status,
-            correlation_id: correlationId,
+            correlation_id: safeCorrelationId,
           },
         },
       });
@@ -1435,7 +1441,7 @@ export class InvitationsService {
         status: updated.status,
       },
       meta: {
-        correlation_id: correlationId,
+        correlation_id: safeCorrelationId,
       },
     };
   }
@@ -1446,6 +1452,7 @@ export class InvitationsService {
    * expired, cancelled, or nonexistent tokens (AC-USR-01-12, AC-USR-01-13).
    */
   async verifyInvitation(rawToken: string, correlationId: string, clientIp?: string) {
+    const safeCorrelationId = sanitizeCorrelationId(correlationId);
     // Rate limiting: Anti-enumeration verification limit (SECURITY-NFR) - fail closed
     if (!this.rateLimitService) {
       throw new CanonicalApiException(
@@ -1512,7 +1519,7 @@ export class InvitationsService {
         identifier: masked,
       },
       meta: {
-        correlation_id: correlationId,
+        correlation_id: safeCorrelationId,
       },
     };
   }
@@ -1522,6 +1529,7 @@ export class InvitationsService {
    * BR-INV-04, BR-INV-05, BR-INV-09, AC-USR-01-14, AC-USR-01-15, AC-USR-01-16.
    */
   async acceptInvitation(dto: AcceptInvitationRequest, clientIp: string, correlationId: string) {
+    const safeCorrelationId = sanitizeCorrelationId(correlationId);
     // 0. Rate limiting: Anti-brute-force acceptance gate (SECURITY-NFR) - fail closed
     if (!this.rateLimitService) {
       throw new CanonicalApiException(
@@ -1755,7 +1763,7 @@ export class InvitationsService {
             role: newUser.role,
             store_scopes: newUser.store_scopes,
             warehouse_scopes: newUser.warehouse_scopes,
-            correlation_id: correlationId,
+            correlation_id: safeCorrelationId,
           },
         },
       });
@@ -1774,7 +1782,7 @@ export class InvitationsService {
         message: 'Tài khoản của bạn đã được kích hoạt thành công',
       },
       meta: {
-        correlation_id: correlationId,
+        correlation_id: safeCorrelationId,
       },
     };
   }
