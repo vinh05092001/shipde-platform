@@ -2805,5 +2805,50 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
         assert.strictEqual(r.allowed, true, `slot ${i + 1} available after refund`);
       }
     });
+
+    it('Finding 4: create losing the pending-unique race refunds the consumed dispatch quota', async () => {
+      const p2002: any = new Error('Unique constraint failed');
+      p2002.code = 'P2002';
+      p2002.meta = { target: 'invitations_merchant_pending_email_unique' };
+      const prisma: any = {
+        user: { findFirst: async (a: any) => (a?.where?.id === OWNER_USER_ID ? ownerUser : null) },
+        invitation: {
+          findFirst: async () => null,
+          updateMany: async () => ({ count: 0 }),
+          create: async () => {
+            throw p2002;
+          },
+        },
+        auditLog: { create: async (a: any) => ({ id: 'a', ...a.data }) },
+        $transaction: async (fn: any) => fn(prisma),
+      };
+      const rl = new RateLimitService();
+      const svc = new InvitationsService(
+        prisma,
+        { sendVerification: async () => ({ success: true }) } as any,
+        rl
+      );
+      await assert.rejects(
+        () =>
+          svc.createInvitation(
+            { email: 'r6-race@shipde.vn', role: RoleEnum.OPS_CSKH },
+            { userId: OWNER_USER_ID, merchantId: MERCHANT_ID, role: 'OWNER' },
+            '10.6.4.1',
+            'corr-r6-4'
+          ),
+        (err: any) => {
+          assert.strictEqual(err.code, 'INVITATION_ALREADY_PENDING');
+          return true;
+        }
+      );
+      for (let i = 0; i < 5; i++) {
+        const r = await rl.checkInvitationDispatchLimit(
+          '10.6.4.1',
+          'r6-race@shipde.vn',
+          MERCHANT_ID
+        );
+        assert.strictEqual(r.allowed, true, `recipient slot ${i + 1} not burned by lost race`);
+      }
+    });
   });
 });

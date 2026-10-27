@@ -453,6 +453,9 @@ export class InvitationsService {
         return inv;
       });
     } catch (err: any) {
+      // Transaction rolled back: no invite committed, so refund exactly this request's quota
+      // slots (Round 6 Finding 4)
+      await this.refundDispatchQuota(rateLimit.reservation);
       if (err?.code === 'P2002' || err?.message?.includes('invitations_merchant_pending')) {
         throw new CanonicalApiException(
           HttpStatus.BAD_REQUEST,
