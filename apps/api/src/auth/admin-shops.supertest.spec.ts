@@ -1,5 +1,6 @@
 import 'reflect-metadata';
 import * as assert from 'node:assert';
+import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { Test, TestingModule } from '@nestjs/testing';
@@ -138,9 +139,10 @@ async function runAdminShopsSupertestSuite() {
     // AC-ADMIN-02: Invalid admin key returns 403 Forbidden
     // -------------------------------------------------------------------------
     console.log('🧪 Testing AC-ADMIN-02: Invalid admin key returns 403 Forbidden...');
+    const runtimeInvalidKey = `invalid-admin-key-${randomUUID()}`;
     const resBadKey = await request(app.getHttpServer())
       .post('/admin/shops')
-      .set('x-admin-key', 'incorrect-key-1234')
+      .set('x-admin-key', runtimeInvalidKey)
       .send({
         merchant_name: `Shop Bad Key ${testSuffix}`,
         email: `badkey_${testSuffix}@example.com`,

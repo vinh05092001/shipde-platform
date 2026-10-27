@@ -89,6 +89,27 @@ describe('FEAT-AUTH-02: Admin-Created Shop Account Unit Tests', () => {
     );
   });
 
+  it('AC-ADMIN-01: Unconfigured admin credential fails closed with 403 Forbidden', () => {
+    delete process.env.ADMIN_API_KEY;
+    delete process.env.ADMIN_KEY;
+    try {
+      assert.strictEqual(getExpectedAdminKey(), undefined);
+      assert.throws(
+        () => validateAdminKey('some-key'),
+        (err: any) => {
+          assert.ok(err instanceof CanonicalApiException);
+          assert.strictEqual(err.getStatus(), 403);
+          assert.strictEqual(err.code, 'FORBIDDEN');
+          const response = err.getResponse() as any;
+          assert.ok(response?.error?.message?.includes('chưa được cấu hình'));
+          return true;
+        }
+      );
+    } finally {
+      process.env.ADMIN_API_KEY = 'test-admin-secret-key-40-chars';
+    }
+  });
+
   // AC-ADMIN-02: Invalid admin key returns 403 Forbidden
   it('AC-ADMIN-02: Invalid admin key throws 403 Forbidden', () => {
     assert.throws(

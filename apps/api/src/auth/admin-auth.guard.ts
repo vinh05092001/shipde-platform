@@ -1,11 +1,14 @@
 import { CanActivate, ExecutionContext, Injectable, HttpStatus } from '@nestjs/common';
 import { Request } from 'express';
+import { timingSafeEqual } from 'node:crypto';
 import { CanonicalApiException } from './auth.service';
 
-export function getExpectedAdminKey(): string {
-  return (
-    process.env.ADMIN_API_KEY || process.env.ADMIN_KEY || 'shipde-admin-dev-secret-key-32-chars'
-  );
+export function getExpectedAdminKey(): string | undefined {
+  const key = process.env.ADMIN_API_KEY || process.env.ADMIN_KEY;
+  if (typeof key === 'string' && key.trim().length > 0) {
+    return key.trim();
+  }
+  return undefined;
 }
 
 export function extractAdminKey(req: Request): string | undefined {
@@ -29,6 +32,17 @@ export function extractAdminKey(req: Request): string | undefined {
 }
 
 export function validateAdminKey(key: string | undefined): void {
+  const expectedKey = getExpectedAdminKey();
+  if (!expectedKey) {
+    throw new CanonicalApiException(
+      HttpStatus.FORBIDDEN,
+      'FORBIDDEN',
+      'Khóa quản trị viên chưa được cấu hình trên máy chủ',
+      false,
+      'Vui lòng cấu hình biến môi trường ADMIN_API_KEY hợp lệ'
+    );
+  }
+
   if (!key) {
     throw new CanonicalApiException(
       HttpStatus.FORBIDDEN,
@@ -39,8 +53,12 @@ export function validateAdminKey(key: string | undefined): void {
     );
   }
 
-  const expectedKey = getExpectedAdminKey();
-  if (key !== expectedKey) {
+  const keyBuf = Buffer.from(key);
+  const expectedBuf = Buffer.from(expectedKey);
+  const isValid =
+    keyBuf.length === expectedBuf.length && timingSafeEqual(keyBuf, expectedBuf);
+
+  if (!isValid) {
     throw new CanonicalApiException(
       HttpStatus.FORBIDDEN,
       'FORBIDDEN',
