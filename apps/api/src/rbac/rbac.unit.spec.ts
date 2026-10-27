@@ -1261,26 +1261,56 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
       status: 'INACTIVE',
     });
 
-    // Actor is OPS_CSKH who lacks FINANCE permissions
-    const cskhActor: ActorContext = {
-      userId: 'user-cskh-actor-r6',
+    // Actor holds iam:manage_users and order:view_create (ceiling over target role), but lacks FINANCE permissions
+    const delegatedAdminRoleId = 'role-delegated-admin-r6';
+    const pManage = mockPrisma.permissions.find((p) => p.code === 'iam:manage_users')!;
+    const pOrder = mockPrisma.permissions.find((p) => p.code === 'order:view_create')!;
+    mockPrisma.roles.push({
+      id: delegatedAdminRoleId,
+      merchant_id: MERCHANT_A,
+      code: null,
+      name: 'Delegated Admin R6',
+      name_lower: 'delegated admin r6',
+      description: 'Delegated Admin',
+      is_system: false,
+      created_at: new Date(),
+      updated_at: new Date(),
+    });
+    mockPrisma.rolePermissions.push(
+      {
+        id: `rp-${delegatedAdminRoleId}-1`,
+        role_id: delegatedAdminRoleId,
+        permission_id: pManage.id,
+      },
+      {
+        id: `rp-${delegatedAdminRoleId}-2`,
+        role_id: delegatedAdminRoleId,
+        permission_id: pOrder.id,
+      }
+    );
+
+    const delegatedActor: ActorContext = {
+      userId: 'user-delegated-actor-r6',
       merchantId: MERCHANT_A,
       role: 'OPS_CSKH',
+      customRoleId: delegatedAdminRoleId,
     };
     mockPrisma.users.push({
-      id: 'user-cskh-actor-r6',
+      id: 'user-delegated-actor-r6',
       merchant_id: MERCHANT_A,
       role: 'OPS_CSKH',
+      custom_role_id: delegatedAdminRoleId,
       status: 'ACTIVE',
     });
 
     await assert.rejects(
       async () => {
-        await service.deleteRole(customRoleId, cskhActor, '127.0.0.1', 'corr-r6-f1-del-actor');
+        await service.deleteRole(customRoleId, delegatedActor, '127.0.0.1', 'corr-r6-f1-del-actor');
       },
       (err: any) => {
         assert.ok(err instanceof CanonicalApiException);
-        assert.ok([400, 403].includes(err.getStatus()));
+        assert.strictEqual(err.getStatus(), 400);
+        assert.strictEqual(err.code, 'ROLE_IN_USE');
         return true;
       }
     );
