@@ -429,14 +429,41 @@ export class InvitationsService {
         'Dịch vụ gửi thông báo lời mời không khả dụng'
       );
     }
-    const dispatchRes = await this.deliveryAdapter.sendVerification({
-      channel: email ? 'email' : 'phone',
-      recipient: (email || phone) as string,
-      token: rawToken,
-      purpose: 'invitation',
-      link: invitationUrl,
-    });
+
+    let dispatchRes;
+    try {
+      dispatchRes = await this.deliveryAdapter.sendVerification({
+        channel: email ? 'email' : 'phone',
+        recipient: (email || phone) as string,
+        token: rawToken,
+        purpose: 'invitation',
+        link: invitationUrl,
+      });
+    } catch (deliveryErr: any) {
+      // Compensate: delete undispatched row and audit log so retry doesn't hit INVITATION_ALREADY_PENDING
+      // and do not audit a send that did not happen (Finding 1)
+      await this.prisma.$transaction([
+        this.prisma.auditLog.deleteMany({
+          where: { entity_type: 'Invitation', entity_id: invitation.id },
+        }),
+        this.prisma.invitation.delete({
+          where: { id: invitation.id },
+        }),
+      ]);
+      throw deliveryErr;
+    }
+
     if (!dispatchRes || !dispatchRes.success) {
+      // Compensate: delete undispatched row and audit log so retry doesn't hit INVITATION_ALREADY_PENDING
+      // and do not audit a send that did not happen (Finding 1)
+      await this.prisma.$transaction([
+        this.prisma.auditLog.deleteMany({
+          where: { entity_type: 'Invitation', entity_id: invitation.id },
+        }),
+        this.prisma.invitation.delete({
+          where: { id: invitation.id },
+        }),
+      ]);
       throw new CanonicalApiException(
         HttpStatus.BAD_GATEWAY,
         'DELIVERY_FAILED',
@@ -663,6 +690,19 @@ export class InvitationsService {
     const rawToken = randomBytes(32).toString('hex');
     const tokenHash = this.hashToken(rawToken);
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    const previousTokenHash = invitation.token_hash;
+    const previousStatus = invitation.status;
+    const previousExpiresAt = invitation.expires_at;
+    const resendAuditTime = new Date();
+
+    // Fail closed early if delivery adapter unavailable before updating DB
+    if (!this.deliveryAdapter) {
+      throw new CanonicalApiException(
+        HttpStatus.SERVICE_UNAVAILABLE,
+        'DELIVERY_UNAVAILABLE',
+        'Dịch vụ gửi lại thông báo lời mời không khả dụng'
+      );
+    }
 
     // Conditional atomic updateMany + audit log in single transaction (BR-INV-04, BR-INV-05, BR-INV-09)
     const updated = await this.prisma.$transaction(async (tx) => {
@@ -745,21 +785,58 @@ export class InvitationsService {
     const invitationUrl = `${safeBaseUrl}/invite/accept?token=${rawToken}`;
 
     // Dispatch verification via configured delivery adapter (BR-INV-02, SECURITY-NFR) - fail closed
-    if (!this.deliveryAdapter) {
-      throw new CanonicalApiException(
-        HttpStatus.SERVICE_UNAVAILABLE,
-        'DELIVERY_UNAVAILABLE',
-        'Dịch vụ gửi lại thông báo lời mời không khả dụng'
-      );
+    let dispatchRes;
+    try {
+      dispatchRes = await this.deliveryAdapter.sendVerification({
+        channel: updated.email ? 'email' : 'phone',
+        recipient: (updated.email || updated.phone) as string,
+        token: rawToken,
+        purpose: 'invitation',
+        link: invitationUrl,
+      });
+    } catch (deliveryErr: any) {
+      // Compensate: restore prior token hash, status, expiry and delete un-dispatched audit log (Finding 1)
+      await this.prisma.$transaction([
+        this.prisma.invitation.update({
+          where: { id: invitationId },
+          data: {
+            token_hash: previousTokenHash,
+            status: previousStatus,
+            expires_at: previousExpiresAt,
+          },
+        }),
+        this.prisma.auditLog.deleteMany({
+          where: {
+            entity_type: 'Invitation',
+            entity_id: invitationId,
+            action: 'INVITATION_RESENT',
+            created_at: { gte: resendAuditTime },
+          },
+        }),
+      ]);
+      throw deliveryErr;
     }
-    const dispatchRes = await this.deliveryAdapter.sendVerification({
-      channel: updated.email ? 'email' : 'phone',
-      recipient: (updated.email || updated.phone) as string,
-      token: rawToken,
-      purpose: 'invitation',
-      link: invitationUrl,
-    });
+
     if (!dispatchRes || !dispatchRes.success) {
+      // Compensate: restore prior token hash, status, expiry and delete un-dispatched audit log (Finding 1)
+      await this.prisma.$transaction([
+        this.prisma.invitation.update({
+          where: { id: invitationId },
+          data: {
+            token_hash: previousTokenHash,
+            status: previousStatus,
+            expires_at: previousExpiresAt,
+          },
+        }),
+        this.prisma.auditLog.deleteMany({
+          where: {
+            entity_type: 'Invitation',
+            entity_id: invitationId,
+            action: 'INVITATION_RESENT',
+            created_at: { gte: resendAuditTime },
+          },
+        }),
+      ]);
       throw new CanonicalApiException(
         HttpStatus.BAD_GATEWAY,
         'DELIVERY_FAILED',

@@ -83,6 +83,8 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
           ...args.data,
         }),
         updateMany: async () => ({ count: 1 }),
+        update: async (args: any) => ({ id: args?.where?.id, ...args?.data }),
+        delete: async (args: any) => ({ id: args?.where?.id }),
       },
       merchant: {
         findUnique: async () => ({
@@ -96,8 +98,10 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
           id: 'audit-log-uuid',
           ...args.data,
         }),
+        deleteMany: async () => ({ count: 0 }),
       },
-      $transaction: async (cb: any) => cb(mockPrisma),
+      $transaction: async (arg: any) =>
+        typeof arg === 'function' ? arg(mockPrisma) : Promise.all(arg),
     };
 
     const defaultDeliveryAdapter = {
@@ -1921,6 +1925,182 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
       assert.strictEqual(transactionCalled, true);
       assert.strictEqual(invitationCreatedInTx, true);
       assert.strictEqual(auditCreatedInTx, true);
+    });
+
+    it('Finding 1: createInvitation compensates by deleting undispatched row and audit on delivery failure', async () => {
+      let invitationDeleted = false;
+      let auditDeleted = false;
+
+      const mockPrismaWithCompensation = {
+        user: {
+          findFirst: async (args: any) => {
+            if (args?.where?.id === OWNER_USER_ID) {
+              return {
+                id: OWNER_USER_ID,
+                merchant_id: MERCHANT_ID,
+                role: 'OWNER',
+                status: 'active',
+                store_scopes: [],
+                warehouse_scopes: [],
+              };
+            }
+            return null;
+          },
+        },
+        invitation: {
+          findFirst: async () => null,
+          updateMany: async () => ({ count: 0 }),
+          create: async (args: any) => ({
+            id: 'failed-dispatch-id',
+            ...args.data,
+            created_at: new Date(),
+            updated_at: new Date(),
+            consumed_at: null,
+          }),
+          delete: async (args: any) => {
+            if (args.where.id === 'failed-dispatch-id') {
+              invitationDeleted = true;
+            }
+            return { id: args.where.id };
+          },
+        },
+        auditLog: {
+          create: async (args: any) => ({ id: 'failed-audit-id', ...args.data }),
+          deleteMany: async (args: any) => {
+            if (args.where.entity_id === 'failed-dispatch-id') {
+              auditDeleted = true;
+            }
+            return { count: 1 };
+          },
+        },
+        $transaction: async (arg: any) => {
+          if (Array.isArray(arg)) {
+            for (const item of arg) {
+              await item;
+            }
+            return [];
+          }
+          if (typeof arg === 'function') {
+            return arg(mockPrismaWithCompensation);
+          }
+        },
+      };
+
+      const failingService = new InvitationsService(
+        mockPrismaWithCompensation as any,
+        {
+          sendVerification: async () => ({ success: false, error: 'Provider outage' }),
+        } as any
+      );
+
+      await assert.rejects(
+        () =>
+          failingService.createInvitation(
+            { email: 'delivery-fail@shipde.vn', role: RoleEnum.OPS_CSKH },
+            { userId: OWNER_USER_ID, merchantId: MERCHANT_ID, role: 'OWNER' },
+            '10.0.0.1',
+            'corr-del-fail'
+          ),
+        (err: any) => {
+          assert.strictEqual(err.status, 502);
+          assert.strictEqual(err.code, 'DELIVERY_FAILED');
+          return true;
+        }
+      );
+
+      assert.strictEqual(invitationDeleted, true, 'Undispatched invitation row must be deleted on delivery failure');
+      assert.strictEqual(auditDeleted, true, 'Audit log must be cleaned up on delivery failure');
+    });
+
+    it('Finding 1: resendInvitation restores prior token hash and cleans up audit on delivery failure', async () => {
+      let restoredTokenHash: string | null = null;
+      let auditCleaned = false;
+      const initialHash = 'initial-hash-123';
+      const initialExpiry = new Date(Date.now() + 86400000);
+
+      const mockPrismaWithCompensation = {
+        user: {
+          findFirst: async (args: any) => {
+            if (args?.where?.id === OWNER_USER_ID) {
+              return {
+                id: OWNER_USER_ID,
+                merchant_id: MERCHANT_ID,
+                role: 'OWNER',
+                status: 'active',
+                store_scopes: [],
+                warehouse_scopes: [],
+              };
+            }
+            return null;
+          },
+        },
+        invitation: {
+          findUnique: async () => ({
+            id: 'resend-fail-id',
+            merchant_id: MERCHANT_ID,
+            email: 'resend-fail@shipde.vn',
+            role: 'OPS_CSKH',
+            status: 'PENDING',
+            token_hash: initialHash,
+            expires_at: initialExpiry,
+            consumed_at: null,
+            store_scopes: [],
+            warehouse_scopes: [],
+          }),
+          updateMany: async () => ({ count: 1 }),
+          update: async (args: any) => {
+            if (args.where.id === 'resend-fail-id') {
+              restoredTokenHash = args.data.token_hash;
+            }
+            return { id: args.where.id, ...args.data };
+          },
+        },
+        auditLog: {
+          create: async (args: any) => ({ id: 'resend-audit-id', ...args.data }),
+          deleteMany: async (args: any) => {
+            if (args.where.entity_id === 'resend-fail-id') {
+              auditCleaned = true;
+            }
+            return { count: 1 };
+          },
+        },
+        $transaction: async (arg: any) => {
+          if (Array.isArray(arg)) {
+            for (const item of arg) {
+              await item;
+            }
+            return [];
+          }
+          if (typeof arg === 'function') {
+            return arg(mockPrismaWithCompensation);
+          }
+        },
+      };
+
+      const failingService = new InvitationsService(
+        mockPrismaWithCompensation as any,
+        {
+          sendVerification: async () => ({ success: false, error: 'Network timeout' }),
+        } as any
+      );
+
+      await assert.rejects(
+        () =>
+          failingService.resendInvitation(
+            'resend-fail-id',
+            { userId: OWNER_USER_ID, merchantId: MERCHANT_ID, role: 'OWNER' },
+            '10.0.0.1',
+            'corr-resend-fail'
+          ),
+        (err: any) => {
+          assert.strictEqual(err.status, 502);
+          assert.strictEqual(err.code, 'DELIVERY_FAILED');
+          return true;
+        }
+      );
+
+      assert.strictEqual(restoredTokenHash, initialHash, 'Prior token hash must be restored on delivery failure');
+      assert.strictEqual(auditCleaned, true, 'Resend audit log must be cleaned up on delivery failure');
     });
   });
 });
