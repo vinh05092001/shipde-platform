@@ -2966,5 +2966,82 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
       assert.strictEqual(findManyArgs.skip, 100);
       assert.strictEqual(findManyArgs.where.merchant_id, MERCHANT_ID);
     });
+
+    it('Finding 3: INVITATION_SENT and INVITATION_RESENT audits commit inside the state-change transaction before dispatch', async () => {
+      const events: string[] = [];
+      const makeClient = (scope: 'root' | 'tx'): any => ({
+        user: { findFirst: async (a: any) => (a?.where?.id === OWNER_USER_ID ? ownerUser : null) },
+        invitation: {
+          findFirst: async () => null,
+          findUnique: async () => ({
+            id: 'r6-f3',
+            merchant_id: MERCHANT_ID,
+            email: 'r6-f3@shipde.vn',
+            phone: null,
+            role: 'OPS_CSKH',
+            status: 'EXPIRED',
+            token_hash: 'old',
+            expires_at: new Date(Date.now() - 1000),
+            consumed_at: null,
+            store_scopes: [],
+            warehouse_scopes: [],
+            created_at: new Date(),
+          }),
+          updateMany: async () => ({ count: 1 }),
+          create: async (a: any) => {
+            events.push(`${scope}:invitation.create`);
+            return { id: 'r6-f3', ...a.data, created_at: new Date(), consumed_at: null };
+          },
+        },
+        auditLog: {
+          create: async (a: any) => {
+            events.push(`${scope}:audit:${a.data.action}`);
+            return { id: 'a', ...a.data };
+          },
+        },
+      });
+      const tx = makeClient('tx');
+      const root = makeClient('root');
+      root.$transaction = async (fn: any) => {
+        events.push('tx:begin');
+        const r = await fn(tx);
+        events.push('tx:commit');
+        return r;
+      };
+      const svc = new InvitationsService(
+        root,
+        {
+          sendVerification: async () => {
+            events.push('dispatch');
+            return { success: true };
+          },
+        } as any,
+        new RateLimitService()
+      );
+      const actor = { userId: OWNER_USER_ID, merchantId: MERCHANT_ID, role: 'OWNER' };
+
+      await svc.createInvitation(
+        { email: 'r6-f3-new@shipde.vn', role: RoleEnum.OPS_CSKH },
+        actor,
+        '10.6.3.1',
+        'corr-r6-3'
+      );
+      assert.deepStrictEqual(events, [
+        'tx:begin',
+        'tx:invitation.create',
+        'tx:audit:INVITATION_SENT',
+        'tx:commit',
+        'dispatch',
+      ]);
+
+      events.length = 0;
+      await svc.resendInvitation('r6-f3', actor, '10.6.3.1', 'corr-r6-3b');
+      assert.deepStrictEqual(events, [
+        'tx:begin',
+        'tx:audit:INVITATION_RESENT',
+        'tx:commit',
+        'dispatch',
+      ]);
+    });
   });
 });

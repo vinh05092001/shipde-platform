@@ -479,6 +479,32 @@ export class InvitationsService {
           },
         });
 
+        // 8. Immutable Audit Trail committed atomically with the invitation row
+        // (BR-INV-09, AC-USR-01-01, AC-USR-01-18; Round 6 Finding 3): a crash after commit can
+        // never leave a live invite without audit. A failed delivery appends a compensating
+        // INVITATION_DELIVERY_FAILED event; audit rows are never deleted. Never logs raw token.
+        await tx.auditLog.create({
+          data: {
+            merchant_id: actor.merchantId,
+            user_id: actor.userId,
+            action: 'INVITATION_SENT',
+            entity_type: 'Invitation',
+            entity_id: inv.id,
+            ip_address: clientIp,
+            new_value: {
+              invitation_id: inv.id,
+              merchant_id: actor.merchantId,
+              actor_id: actor.userId,
+              role: inv.role,
+              store_scopes: inv.store_scopes,
+              warehouse_scopes: inv.warehouse_scopes,
+              expires_at: inv.expires_at.toISOString(),
+              target_identifier_masked: maskIdentifier(email || phone),
+              correlation_id: correlationId,
+            },
+          },
+        });
+
         return inv;
       });
     } catch (err: any) {
@@ -567,29 +593,7 @@ export class InvitationsService {
       );
     }
 
-    // 8. Immutable Audit Trail (BR-INV-09, AC-USR-01-01, AC-USR-01-18)
-    // Write success audit only after delivery succeeds; never log raw token or password
-    await this.prisma.auditLog.create({
-      data: {
-        merchant_id: actor.merchantId,
-        user_id: actor.userId,
-        action: 'INVITATION_SENT',
-        entity_type: 'Invitation',
-        entity_id: invitation.id,
-        ip_address: clientIp,
-        new_value: {
-          invitation_id: invitation.id,
-          merchant_id: actor.merchantId,
-          actor_id: actor.userId,
-          role: invitation.role,
-          store_scopes: invitation.store_scopes,
-          warehouse_scopes: invitation.warehouse_scopes,
-          expires_at: invitation.expires_at.toISOString(),
-          target_identifier_masked: maskIdentifier(email || phone),
-          correlation_id: correlationId,
-        },
-      },
-    });
+    // Success audit (INVITATION_SENT) was committed inside the creation transaction above
 
     // Zero plaintext token leakage in admin responses (BR-INV-02 / SECURITY-NFR)
     return {
@@ -916,6 +920,29 @@ export class InvitationsService {
           where: { id: invitationId },
         }))!;
 
+        // Audit (BR-INV-09, AC-USR-01-09) committed atomically with the token rotation
+        // (Round 6 Finding 3); a failed delivery appends INVITATION_RESEND_FAILED, never deletes
+        await tx.auditLog.create({
+          data: {
+            merchant_id: actor.merchantId,
+            user_id: actor.userId,
+            action: 'INVITATION_RESENT',
+            entity_type: 'Invitation',
+            entity_id: inv.id,
+            ip_address: clientIp,
+            new_value: {
+              invitation_id: inv.id,
+              merchant_id: actor.merchantId,
+              actor_id: actor.userId,
+              target_identifier_masked: maskIdentifier(inv.email || inv.phone),
+              role: inv.role,
+              status: InvitationStatusEnum.PENDING,
+              expires_at: expiresAt.toISOString(),
+              correlation_id: correlationId,
+            },
+          },
+        });
+
         return inv;
       });
     } catch (err: any) {
@@ -1001,27 +1028,7 @@ export class InvitationsService {
       );
     }
 
-    // Audit log (BR-INV-09, AC-USR-01-09) written only after delivery succeeds
-    await this.prisma.auditLog.create({
-      data: {
-        merchant_id: actor.merchantId,
-        user_id: actor.userId,
-        action: 'INVITATION_RESENT',
-        entity_type: 'Invitation',
-        entity_id: updated.id,
-        ip_address: clientIp,
-        new_value: {
-          invitation_id: updated.id,
-          merchant_id: actor.merchantId,
-          actor_id: actor.userId,
-          target_identifier_masked: maskIdentifier(updated.email || updated.phone),
-          role: updated.role,
-          status: updated.status,
-          expires_at: updated.expires_at.toISOString(),
-          correlation_id: correlationId,
-        },
-      },
-    });
+    // Audit (INVITATION_RESENT) was committed inside the resend transaction above
 
     // Zero plaintext token leakage in admin responses (BR-INV-02 / SECURITY-NFR)
     return {
