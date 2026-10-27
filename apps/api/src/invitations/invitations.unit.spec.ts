@@ -2107,9 +2107,11 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
       );
     });
 
-    it('Finding 1: resendInvitation restores prior token hash and cleans up audit on delivery failure', async () => {
-      let restoredTokenHash: string | null = null;
-      let auditCleaned = false;
+    it('Finding 2: resendInvitation restores prior token hash with updateMany predicates and records compensating audit without deleting audit history on delivery failure', async () => {
+      let updateManyWhere: any = null;
+      let updateManyData: any = null;
+      let auditDeletedCalled = false;
+      let compensatingAudit: any = null;
       const initialHash = 'initial-hash-123';
       const initialExpiry = new Date(Date.now() + 86400000);
 
@@ -2142,20 +2144,24 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
             store_scopes: [],
             warehouse_scopes: [],
           }),
-          updateMany: async () => ({ count: 1 }),
-          update: async (args: any) => {
-            if (args.where.id === 'resend-fail-id') {
-              restoredTokenHash = args.data.token_hash;
+          updateMany: async (args: any) => {
+            if (args.data?.token_hash === initialHash) {
+              // This is the compensation restore call
+              updateManyWhere = args.where;
+              updateManyData = args.data;
             }
-            return { id: args.where.id, ...args.data };
+            return { count: 1 };
           },
         },
         auditLog: {
-          create: async (args: any) => ({ id: 'resend-audit-id', ...args.data }),
-          deleteMany: async (args: any) => {
-            if (args.where.entity_id === 'resend-fail-id') {
-              auditCleaned = true;
+          create: async (args: any) => {
+            if (args.data?.action === 'INVITATION_RESEND_FAILED') {
+              compensatingAudit = args.data;
             }
+            return { id: 'resend-audit-id', ...args.data };
+          },
+          deleteMany: async () => {
+            auditDeletedCalled = true;
             return { count: 1 };
           },
         },
@@ -2194,15 +2200,99 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
         }
       );
 
-      assert.strictEqual(
-        restoredTokenHash,
-        initialHash,
-        'Prior token hash must be restored on delivery failure'
+      assert.ok(updateManyWhere, 'Compensation updateMany must be called');
+      assert.strictEqual(updateManyWhere.id, 'resend-fail-id');
+      assert.strictEqual(updateManyWhere.merchant_id, MERCHANT_ID);
+      assert.strictEqual(updateManyWhere.status, 'PENDING');
+      assert.strictEqual(updateManyWhere.consumed_at, null);
+      assert.ok(updateManyWhere.token_hash, 'Must assert new token_hash predicate');
+      assert.strictEqual(updateManyData.token_hash, initialHash);
+      assert.strictEqual(auditDeletedCalled, false, 'Audit history must NEVER be deleted');
+      assert.ok(compensatingAudit, 'Must record compensating INVITATION_RESEND_FAILED audit');
+      assert.strictEqual(compensatingAudit.action, 'INVITATION_RESEND_FAILED');
+    });
+
+    it('Finding 2: resendInvitation delivery failure does not overwrite row if concurrent accept committed (updateMany count === 0)', async () => {
+      let compensatingAuditCreated = false;
+      const initialHash = 'initial-hash-concurrent';
+      const initialExpiry = new Date(Date.now() + 86400000);
+
+      const mockPrismaConcurrent = {
+        user: {
+          findFirst: async (args: any) => {
+            if (args?.where?.id === OWNER_USER_ID) {
+              return {
+                id: OWNER_USER_ID,
+                merchant_id: MERCHANT_ID,
+                role: 'OWNER',
+                status: 'active',
+                store_scopes: [],
+                warehouse_scopes: [],
+              };
+            }
+            return null;
+          },
+        },
+        invitation: {
+          findUnique: async () => ({
+            id: 'resend-concurrent-id',
+            merchant_id: MERCHANT_ID,
+            email: 'resend-concurrent@shipde.vn',
+            role: 'OPS_CSKH',
+            status: 'PENDING',
+            token_hash: initialHash,
+            expires_at: initialExpiry,
+            consumed_at: null,
+            store_scopes: [],
+            warehouse_scopes: [],
+          }),
+          updateMany: async (args: any) => {
+            if (args.data?.token_hash === initialHash) {
+              // Concurrent accept already committed, so status is ACCEPTED and token_hash is consumed
+              return { count: 0 };
+            }
+            return { count: 1 };
+          },
+        },
+        auditLog: {
+          create: async (args: any) => {
+            if (args.data?.action === 'INVITATION_RESEND_FAILED') {
+              compensatingAuditCreated = true;
+            }
+            return { id: 'audit-id', ...args.data };
+          },
+          deleteMany: async () => {
+            throw new Error('Audit deletion prohibited');
+          },
+        },
+        $transaction: async (cb: any) => cb(mockPrismaConcurrent),
+      };
+
+      const failingService = new InvitationsService(
+        mockPrismaConcurrent as any,
+        {
+          sendVerification: async () => ({ success: false, error: 'Network timeout' }),
+        } as any
       );
+
+      await assert.rejects(
+        () =>
+          failingService.resendInvitation(
+            'resend-concurrent-id',
+            { userId: OWNER_USER_ID, merchantId: MERCHANT_ID, role: 'OWNER' },
+            '10.0.0.1',
+            'corr-resend-concurrent'
+          ),
+        (err: any) => {
+          assert.strictEqual(err.status, 502);
+          return true;
+        }
+      );
+
       assert.strictEqual(
-        auditCleaned,
-        true,
-        'Resend audit log must be cleaned up on delivery failure'
+        compensatingAuditCreated,
+        false,
+        'Should not record resend failure compensation audit if already accepted'
       );
     });
 

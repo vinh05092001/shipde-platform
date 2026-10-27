@@ -809,28 +809,6 @@ export class InvitationsService {
         where: { id: invitationId },
       }))!;
 
-      // Audit log (BR-INV-09, AC-USR-01-09) committed atomically with state change
-      await tx.auditLog.create({
-        data: {
-          merchant_id: actor.merchantId,
-          user_id: actor.userId,
-          action: 'INVITATION_RESENT',
-          entity_type: 'Invitation',
-          entity_id: inv.id,
-          ip_address: clientIp,
-          new_value: {
-            invitation_id: inv.id,
-            merchant_id: actor.merchantId,
-            actor_id: actor.userId,
-            target_identifier_masked: maskIdentifier(inv.email || inv.phone),
-            role: inv.role,
-            status: inv.status,
-            expires_at: inv.expires_at.toISOString(),
-            correlation_id: correlationId,
-          },
-        },
-      });
-
       return inv;
     });
 
@@ -841,6 +819,46 @@ export class InvitationsService {
 
     const safeBaseUrl = resolveFrontendBaseUrl(baseUrl);
     const invitationUrl = `${safeBaseUrl}/invite/accept?token=${rawToken}`;
+
+    const compensateFailedResend = async (reason: string) => {
+      // Compensate: restore prior token hash, status, expiry conditionally using updateMany predicates
+      // Never delete audit history; record compensating audit event instead (Finding 2)
+      await this.prisma.$transaction(async (tx) => {
+        const restored = await tx.invitation.updateMany({
+          where: {
+            id: invitationId,
+            merchant_id: actor.merchantId,
+            token_hash: tokenHash,
+            status: InvitationStatusEnum.PENDING,
+            consumed_at: null,
+          },
+          data: {
+            token_hash: previousTokenHash,
+            status: previousStatus,
+            expires_at: previousExpiresAt,
+          },
+        });
+        if (restored.count > 0) {
+          await tx.auditLog.create({
+            data: {
+              merchant_id: actor.merchantId,
+              user_id: actor.userId,
+              action: 'INVITATION_RESEND_FAILED',
+              entity_type: 'Invitation',
+              entity_id: invitationId,
+              ip_address: clientIp,
+              new_value: {
+                invitation_id: invitationId,
+                merchant_id: actor.merchantId,
+                actor_id: actor.userId,
+                correlation_id: correlationId,
+                reason,
+              },
+            },
+          });
+        }
+      });
+    };
 
     // Dispatch verification via configured delivery adapter (BR-INV-02, SECURITY-NFR) - fail closed
     let dispatchRes;
@@ -853,54 +871,40 @@ export class InvitationsService {
         link: invitationUrl,
       });
     } catch (deliveryErr: any) {
-      // Compensate: restore prior token hash, status, expiry and delete un-dispatched audit log (Finding 1)
-      await this.prisma.$transaction([
-        this.prisma.invitation.update({
-          where: { id: invitationId },
-          data: {
-            token_hash: previousTokenHash,
-            status: previousStatus,
-            expires_at: previousExpiresAt,
-          },
-        }),
-        this.prisma.auditLog.deleteMany({
-          where: {
-            entity_type: 'Invitation',
-            entity_id: invitationId,
-            action: 'INVITATION_RESENT',
-            created_at: { gte: resendAuditTime },
-          },
-        }),
-      ]);
+      await compensateFailedResend(deliveryErr?.message || 'DELIVERY_EXCEPTION');
       throw deliveryErr;
     }
 
     if (!dispatchRes || !dispatchRes.success) {
-      // Compensate: restore prior token hash, status, expiry and delete un-dispatched audit log (Finding 1)
-      await this.prisma.$transaction([
-        this.prisma.invitation.update({
-          where: { id: invitationId },
-          data: {
-            token_hash: previousTokenHash,
-            status: previousStatus,
-            expires_at: previousExpiresAt,
-          },
-        }),
-        this.prisma.auditLog.deleteMany({
-          where: {
-            entity_type: 'Invitation',
-            entity_id: invitationId,
-            action: 'INVITATION_RESENT',
-            created_at: { gte: resendAuditTime },
-          },
-        }),
-      ]);
+      await compensateFailedResend(dispatchRes?.error || 'DELIVERY_FAILED');
       throw new CanonicalApiException(
         HttpStatus.BAD_GATEWAY,
         'DELIVERY_FAILED',
         'Không thể gửi lại thông báo lời mời tới người nhận'
       );
     }
+
+    // Audit log (BR-INV-09, AC-USR-01-09) written only after delivery succeeds
+    await this.prisma.auditLog.create({
+      data: {
+        merchant_id: actor.merchantId,
+        user_id: actor.userId,
+        action: 'INVITATION_RESENT',
+        entity_type: 'Invitation',
+        entity_id: updated.id,
+        ip_address: clientIp,
+        new_value: {
+          invitation_id: updated.id,
+          merchant_id: actor.merchantId,
+          actor_id: actor.userId,
+          target_identifier_masked: maskIdentifier(updated.email || updated.phone),
+          role: updated.role,
+          status: updated.status,
+          expires_at: updated.expires_at.toISOString(),
+          correlation_id: correlationId,
+        },
+      },
+    });
 
     // Zero plaintext token leakage in admin responses (BR-INV-02 / SECURITY-NFR)
     return {
