@@ -329,6 +329,18 @@ class MockPrismaService {
     findUnique: async (args: any) => {
       return this.users.find((u) => u.id === args.where.id) || null;
     },
+    updateMany: async (args: any) => {
+      let updatedCount = 0;
+      for (const u of this.users) {
+        if (args.where.merchant_id && u.merchant_id !== args.where.merchant_id) continue;
+        if (args.where.custom_role_id !== undefined && u.custom_role_id !== args.where.custom_role_id) continue;
+        if (args.data.custom_role_id !== undefined) {
+          u.custom_role_id = args.data.custom_role_id;
+        }
+        updatedCount++;
+      }
+      return { count: updatedCount };
+    },
   };
 
   auditLog = {
@@ -347,6 +359,7 @@ class MockPrismaService {
     const snapshotRoles = JSON.parse(JSON.stringify(this.roles));
     const snapshotRolePerms = JSON.parse(JSON.stringify(this.rolePermissions));
     const snapshotAuditLogs = JSON.parse(JSON.stringify(this.auditLogs));
+    const snapshotUsers = JSON.parse(JSON.stringify(this.users));
 
     try {
       return await fn(this);
@@ -355,6 +368,7 @@ class MockPrismaService {
       this.roles = snapshotRoles;
       this.rolePermissions = snapshotRolePerms;
       this.auditLogs = snapshotAuditLogs;
+      this.users = snapshotUsers;
       throw err;
     }
   };
@@ -829,6 +843,53 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
       (a) => a.action === 'ROLE_DELETED' && a.entity_id === createRes.data.role.id
     );
     assert.ok(audit, 'ROLE_DELETED audit log must be written');
+  });
+
+  // Finding 2 Proving Test (Round 4): BR-RBAC-03
+  test('Finding 2 / BR-RBAC-03: Role held only by inactive users detaches them in transaction and completes delete', async () => {
+    const createRes = await service.createRole(
+      {
+        name: 'Vai trò Chỉ Gán Cho Inactive',
+        permissions: ['order:view_create'],
+      },
+      OWNER_ACTOR,
+      '127.0.0.1',
+      'corr-r4-f2-c'
+    );
+    const customRoleId = createRes.data.role.id;
+
+    // Simulate an inactive user assigned to this role
+    const inactiveUserId = 'user-inactive-assignee';
+    mockPrisma.users.push({
+      id: inactiveUserId,
+      merchant_id: MERCHANT_A,
+      role: 'OPS_CSKH',
+      custom_role_id: customRoleId,
+      status: 'INACTIVE',
+    });
+
+    const deleteRes = await service.deleteRole(
+      customRoleId,
+      OWNER_ACTOR,
+      '127.0.0.1',
+      'corr-r4-f2-d'
+    );
+
+    assert.strictEqual(deleteRes.data.deleted, true, 'Delete must succeed when only held by inactive users');
+
+    // DB Proof: Role row was deleted
+    const roleInDb = mockPrisma.roles.find((r) => r.id === customRoleId);
+    assert.strictEqual(roleInDb, undefined, 'Role row must be deleted from DB');
+
+    // DB Proof: Inactive user was detached in the same transaction
+    const userInDb = mockPrisma.users.find((u) => u.id === inactiveUserId);
+    assert.strictEqual(userInDb?.custom_role_id, null, 'Inactive user custom_role_id must be detached (null)');
+
+    // DB Proof: Audit log exists
+    const audit = mockPrisma.auditLogs.find(
+      (a) => a.action === 'ROLE_DELETED' && a.entity_id === customRoleId
+    );
+    assert.ok(audit, 'ROLE_DELETED audit log must be created');
   });
 
   // AC-RBAC-01-11

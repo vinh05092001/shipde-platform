@@ -1184,6 +1184,17 @@ export class RbacService {
           );
         }
 
+        // Detach inactive users in the same transaction so foreign key ON DELETE RESTRICT is satisfied
+        await tx.user.updateMany({
+          where: {
+            merchant_id: actor.merchantId,
+            custom_role_id: roleId,
+          },
+          data: {
+            custom_role_id: null,
+          },
+        });
+
         // Remove role_permissions
         await tx.rolePermission.deleteMany({
           where: { role_id: roleId },
@@ -1224,22 +1235,23 @@ export class RbacService {
               status: ACTIVE_USER_STATUS_FILTER,
             },
           })
-          .catch(() => 1);
-        const resolvedCount = fallbackCount > 0 ? fallbackCount : 1;
-        throw new CanonicalApiException(
-          HttpStatus.BAD_REQUEST,
-          'ROLE_IN_USE',
-          `Không thể xóa vai trò đang được gán cho ${resolvedCount} người dùng đang hoạt động`,
-          false,
-          'Vui lòng chuyển vai trò của các người dùng sang vai trò khác trước khi xóa',
-          [
-            {
-              field: 'role_id',
-              code: 'IN_USE',
-              message: `Vai trò đang được gán cho ${resolvedCount} người dùng`,
-            },
-          ]
-        );
+          .catch(() => 0);
+        if (fallbackCount > 0) {
+          throw new CanonicalApiException(
+            HttpStatus.BAD_REQUEST,
+            'ROLE_IN_USE',
+            `Không thể xóa vai trò đang được gán cho ${fallbackCount} người dùng đang hoạt động`,
+            false,
+            'Vui lòng chuyển vai trò của các người dùng sang vai trò khác trước khi xóa',
+            [
+              {
+                field: 'role_id',
+                code: 'IN_USE',
+                message: `Vai trò đang được gán cho ${fallbackCount} người dùng`,
+              },
+            ]
+          );
+        }
       }
       throw new CanonicalApiException(
         HttpStatus.INTERNAL_SERVER_ERROR,
