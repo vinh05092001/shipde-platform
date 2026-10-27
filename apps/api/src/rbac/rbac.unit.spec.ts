@@ -3,6 +3,7 @@ import { test, describe, beforeEach } from 'node:test';
 import { RbacService, SYSTEM_ROLE_IDS } from './rbac.service';
 import { PLATFORM_PERMISSIONS, SYSTEM_ROLES } from './rbac.constants';
 import { CanonicalApiException } from '../auth/auth.service';
+import { assertNoSensitiveData } from '@shipde/testkit';
 
 /**
  * In-memory Mock Prisma Service for testing RBAC business rules,
@@ -841,6 +842,30 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
     assert.ok(!jsonStr.includes('password_hash'), 'No password hashes exposed');
     assert.ok(!jsonStr.includes('secret_ciphertext'), 'No MFA secrets exposed');
     assert.ok(!jsonStr.includes('token_hash'), 'No session token hashes exposed');
+    assert.ok(!jsonStr.includes('session_token'), 'No session tokens exposed');
+  });
+
+  // Finding 8 (P2 Round 2): Security verification of audit logs and role data without hardcoded secrets
+  test('Finding 8 / AC-RBAC-01-16: Role payloads and audit logs contain no tokens, password hashes or MFA secrets verified with assertNoSensitiveData', async () => {
+    const createdRole = await service.createRole(
+      {
+        name: 'Secured Role AC-16',
+        permissions: ['order:view_create'],
+      },
+      OWNER_ACTOR,
+      '127.0.0.1',
+      'corr-f8'
+    );
+    assertNoSensitiveData(createdRole.data);
+
+    const auditEntry = mockPrisma.auditLogs.find(
+      (a: any) => a.entity_id === createdRole.data.role.id
+    );
+    assert.ok(auditEntry, 'Audit log entry must be recorded');
+    assertNoSensitiveData(auditEntry.new_value);
+
+    const auditStr = JSON.stringify(auditEntry);
+    assert.doesNotMatch(auditStr, /password_hash|secret_ciphertext|mfa_secret|raw_token/i);
   });
 
   // Finding 1 (P0): Server-authoritative actor resolution and custom role ceiling

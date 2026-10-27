@@ -600,7 +600,7 @@ async function main() {
   const secInspectStr = JSON.stringify(secInspectRes.body.data);
   assert.doesNotMatch(
     secInspectStr,
-    /password_hash|secret_ciphertext|mfa_secret|bearer|raw_token/i
+    /password_hash|secret_ciphertext|mfa_secret|bearer|raw_token|session_token/i
   );
 
   // Query audit logs and verify payload has no tokens or password hashes
@@ -611,7 +611,12 @@ async function main() {
   });
   for (const log of recentAudits) {
     const auditStr = JSON.stringify(log);
-    assert.doesNotMatch(auditStr, /password_hash|secret_ciphertext|mfa_secret|raw_token/i);
+    assert.doesNotMatch(
+      auditStr,
+      /password_hash|secret_ciphertext|mfa_secret|raw_token|session_token/i
+    );
+    assert.ok(!auditStr.includes('password_hash'));
+    assert.ok(!auditStr.includes('secret_ciphertext'));
   }
 
   // Cleanup helper fixtures
