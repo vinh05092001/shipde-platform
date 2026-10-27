@@ -96,6 +96,7 @@ export function SessionsTab({
     initialValidationMessage ?? null
   );
 
+  const [isFetching, setIsFetching] = useState(false);
   const [revokingId, setRevokingId] = useState<string | null>(null);
   const [revokeAllOpen, setRevokeAllOpen] = useState(false);
   const [revokeAllLoading, setRevokeAllLoading] = useState(false);
@@ -105,12 +106,20 @@ export function SessionsTab({
   const baseUrl = apiUrl || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
   const fetchSessions = useCallback(async () => {
+    if (isFetching) return;
     if (!token) {
-      setFetchState('forbidden');
+      if (sessions.length === 0) {
+        setFetchState('forbidden');
+      } else {
+        setActionError('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
+      }
       return;
     }
     try {
-      setFetchState('loading');
+      setIsFetching(true);
+      if (sessions.length === 0) {
+        setFetchState('loading');
+      }
       setErrorMessage(null);
       setValidationMessage(null);
       setActionError(null);
@@ -123,7 +132,11 @@ export function SessionsTab({
       });
 
       if (res.status === 401 || res.status === 403) {
-        setFetchState('forbidden');
+        if (sessions.length === 0) {
+          setFetchState('forbidden');
+        } else {
+          setActionError('Không có quyền truy cập hoặc phiên đã hết hạn (403 FORBIDDEN).');
+        }
         return;
       }
 
@@ -143,8 +156,10 @@ export function SessionsTab({
     } catch (err: any) {
       setErrorMessage(err?.message || 'Đã xảy ra lỗi khi tải danh sách phiên làm việc.');
       setFetchState('error');
+    } finally {
+      setIsFetching(false);
     }
-  }, [baseUrl, token]);
+  }, [baseUrl, token, sessions.length, isFetching]);
 
   useEffect(() => {
     if (!initialSessions && !initialState) {
@@ -381,20 +396,30 @@ export function SessionsTab({
           <button
             type="button"
             data-testid="retry-fetch-button"
+            disabled={isFetching}
             onClick={() => void fetchSessions()}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-red-100 hover:bg-red-200 text-red-800 transition-colors"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-red-100 hover:bg-red-200 text-red-800 transition-colors disabled:opacity-50"
           >
-            <RefreshCw className="w-3.5 h-3.5" />
-            Thử lại
+            {isFetching ? (
+              <>
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                <span>Đang thử lại...</span>
+              </>
+            ) : (
+              <>
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Thử lại</span>
+              </>
+            )}
           </button>
         </div>
       )}
 
-      {/* Loading state */}
-      {fetchState === 'loading' && renderLoadingSkeleton()}
+      {/* Loading state - only show full skeleton on initial empty load */}
+      {fetchState === 'loading' && sessions.length === 0 && renderLoadingSkeleton()}
 
-      {/* Loaded sessions view */}
-      {fetchState !== 'loading' && fetchState !== 'forbidden' && (
+      {/* Loaded sessions view - never blanked during retry or error if sessions exist */}
+      {(sessions.length > 0 || (fetchState !== 'loading' && fetchState !== 'forbidden')) && (
         <div className="space-y-6">
           {/* Section 1: Current Active Device */}
           <div className="space-y-3">
