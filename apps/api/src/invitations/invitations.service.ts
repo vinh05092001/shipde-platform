@@ -501,7 +501,7 @@ export class InvitationsService {
     }
 
     if (!dispatchRes || !dispatchRes.success) {
-      await compensateFailedCreate(dispatchRes?.error || 'DELIVERY_FAILED');
+      await compensateFailedCreate((dispatchRes as any)?.error || 'DELIVERY_FAILED');
       throw new CanonicalApiException(
         HttpStatus.BAD_GATEWAY,
         'DELIVERY_FAILED',
@@ -891,7 +891,7 @@ export class InvitationsService {
     }
 
     if (!dispatchRes || !dispatchRes.success) {
-      await compensateFailedResend(dispatchRes?.error || 'DELIVERY_FAILED');
+      await compensateFailedResend((dispatchRes as any)?.error || 'DELIVERY_FAILED');
       throw new CanonicalApiException(
         HttpStatus.BAD_GATEWAY,
         'DELIVERY_FAILED',
