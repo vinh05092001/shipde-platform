@@ -26,6 +26,7 @@ import {
   Layers,
   Loader2,
   RefreshCw,
+  AlertCircle,
 } from 'lucide-react';
 import { RoleItem } from '@shipde/contracts';
 import { InviteUserModal } from './forms/InviteUserModal';
@@ -188,77 +189,42 @@ export const UserManagementTab: React.FC = () => {
       code: 'pii:unmask',
       feature: 'Xem & Mở che số điện thoại khách hàng (PII)',
       rule: 'BR-42 · Ghi nhật ký Audit Trail',
-      owner: true,
-      manager: true,
-      cskh: true,
-      accountant: false,
-      warehouse: false,
     },
     {
       id: 'p_reattempt',
       code: 'shipment:cancel_redeliver',
       feature: 'Gửi lệnh cứu đơn & yêu cầu giao lại qua Open API',
       rule: 'CN-10 · L2 Execute / L1 Assist',
-      owner: true,
-      manager: true,
-      cskh: true,
-      accountant: false,
-      warehouse: false,
     },
     {
       id: 'p_discrepancy',
       code: 'reconciliation:approve_rate_policy',
       feature: 'Duyệt xử lý sai lệch đối soát (Maker-Checker)',
       rule: 'BR-12 · Tách quyền tài chính cấp bản ghi',
-      owner: true,
-      manager: false,
-      cskh: false, // Strictly false for CSKH (Maker-Checker invariant)
-      accountant: true,
-      warehouse: false,
     },
     {
       id: 'p_close_period',
       code: 'reconciliation:run_review_audit',
       feature: 'Khóa sổ kỳ đối soát COD & Cước',
       rule: 'BR-11 · Bất biến không sửa đổi sau khi chốt',
-      owner: true,
-      manager: false,
-      cskh: false,
-      accountant: true,
-      warehouse: false,
     },
     {
       id: 'p_return_scan',
       code: 'shipment:receive_return',
       feature: 'Quét nhận hàng hoàn kho ngoại tuyến SQLite',
       rule: 'BR-40 / BR-36 · Khử trùng lặp lũy đẳng',
-      owner: true,
-      manager: true,
-      cskh: false,
-      accountant: false,
-      warehouse: true,
     },
     {
       id: 'p_api_config',
       code: 'iam:shop_config',
       feature: 'Khai báo API Hãng, Webhook Key & Biểu giá',
       rule: 'BR-51 · Quyền quản trị kết nối cấp Shop',
-      owner: true,
-      manager: false,
-      cskh: false,
-      accountant: false,
-      warehouse: false,
     },
     {
       id: 'p_export_ledgers',
       code: 'reconciliation:allocate_bank_receipt',
       feature: 'Xuất dữ liệu Ba Sổ Giá Trị & File Báo Cáo',
       rule: 'BR-45 · Quyền truy xuất số liệu kế toán',
-      owner: true,
-      manager: true,
-      cskh: false,
-      accountant: true,
-      warehouse: false,
     },
   ]);
 
@@ -681,123 +647,122 @@ export const UserManagementTab: React.FC = () => {
             </div>
           </div>
 
-          {matrixLoading && liveRoles.length === 0 && (
-            <div className="modern-card p-6 flex items-center justify-center gap-2 text-slate-500 text-xs">
-              <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
-              <span>Đang đồng bộ ma trận phân quyền từ máy chủ (GET /roles)...</span>
+          {matrixLoading && liveRoles.length === 0 ? (
+            <div className="modern-card p-8 flex flex-col items-center justify-center gap-3 text-slate-500 text-xs">
+              <Loader2 className="w-5 h-5 animate-spin text-blue-600" />
+              <span className="font-medium">
+                Đang tải ma trận phân quyền từ máy chủ (GET /roles)...
+              </span>
+              <div className="w-full max-w-md space-y-2 pt-2 animate-pulse">
+                <div className="h-4 bg-slate-200 rounded w-3/4 mx-auto" />
+                <div className="h-4 bg-slate-100 rounded w-1/2 mx-auto" />
+              </div>
             </div>
-          )}
-
-          {matrixError && liveRoles.length === 0 && (
-            <div className="modern-card p-4 bg-rose-50 border border-rose-200 text-rose-700 text-xs flex justify-between items-center">
-              <span>{matrixError}</span>
+          ) : matrixError && liveRoles.length === 0 ? (
+            <div className="modern-card p-6 bg-rose-50 border border-rose-200 text-rose-700 text-xs flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
+                <div>
+                  <p className="font-bold">Không thể tải dữ liệu phân quyền</p>
+                  <p className="text-[11px] text-rose-600">{matrixError}</p>
+                </div>
+              </div>
               <button
                 type="button"
                 onClick={() => void fetchLiveRoles()}
-                className="font-bold underline ml-2"
+                className="btn-secondary text-xs py-1.5 px-3 bg-white border border-rose-300 text-rose-700 hover:bg-rose-100 font-semibold"
               >
                 Thử lại
               </button>
             </div>
-          )}
-
-          <div className="modern-card overflow-hidden">
-            <div className="p-3 bg-slate-50/50 border-b border-slate-200 flex items-center justify-between text-xs">
-              <div className="flex items-center gap-2">
-                <span className="font-semibold text-slate-700">Mô hình phân quyền hoạt động:</span>
-                {liveRoles.length > 0 ? (
+          ) : liveRoles.length === 0 ? (
+            <div className="modern-card p-8 text-center text-slate-500 text-xs space-y-3">
+              <ShieldAlert className="w-8 h-8 text-slate-400 mx-auto" />
+              <p className="font-semibold text-slate-700">
+                Chưa có vai trò nào được cấu hình từ máy chủ
+              </p>
+              <button
+                type="button"
+                onClick={() => void fetchLiveRoles()}
+                className="btn-secondary text-xs py-1.5 px-3 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700"
+              >
+                Tải lại
+              </button>
+            </div>
+          ) : (
+            <div className="modern-card overflow-hidden">
+              <div className="p-3 bg-slate-50/50 border-b border-slate-200 flex items-center justify-between text-xs">
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold text-slate-700">
+                    Mô hình phân quyền hoạt động:
+                  </span>
                   <span className="badge-ok text-[11px]">
                     Live RBAC: {liveRoles.length} vai trò (
                     {liveRoles.filter((r) => !r.is_system).length} tùy chỉnh)
                   </span>
-                ) : (
-                  <span className="text-slate-400 text-[11px]">Đang sử dụng cấu hình mặc định</span>
-                )}
+                </div>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr className="bg-slate-50/80 border-b border-slate-200 text-slate-600 font-bold uppercase text-[11px] tracking-wider">
+                      <th className="py-3 px-4 w-1/3">Tính Năng & Nghiệp Vụ</th>
+                      <th className="py-3 px-4">Quy Tắc Ràng Buộc</th>
+                      {liveRoles.map((r) => (
+                        <th key={r.id} className="py-3 px-3 text-center whitespace-nowrap">
+                          <div className="flex flex-col items-center">
+                            <span className="font-bold text-slate-800">{r.name}</span>
+                            <span
+                              className={`text-[9px] font-medium px-1.5 py-0.2 rounded mt-0.5 ${
+                                r.is_system
+                                  ? 'bg-slate-100 text-slate-500'
+                                  : 'bg-blue-50 text-blue-600 border border-blue-200'
+                              }`}
+                            >
+                              {r.is_system ? 'Mặc định' : 'Tùy chỉnh'}
+                            </span>
+                          </div>
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {permissionsMatrix.map((row) => (
+                      <tr key={row.id} className="hover:bg-slate-50/80 transition">
+                        <td className="py-3 px-4 font-semibold text-slate-900">{row.feature}</td>
+                        <td className="py-3 px-4 text-slate-500 font-mono text-[11px]">
+                          {row.rule}
+                        </td>
+                        {liveRoles.map((role) => {
+                          const hasPerm = (role.permissions || []).some(
+                            (p) => p.code === row.code || p.id === row.id
+                          );
+                          return (
+                            <td key={role.id} className="py-3 px-3 text-center">
+                              <span
+                                className={`w-6 h-6 mx-auto rounded-md inline-flex items-center justify-center ${
+                                  hasPerm
+                                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                    : 'bg-slate-100 text-slate-400 border border-slate-200'
+                                }`}
+                                title={
+                                  hasPerm
+                                    ? `Được cấp quyền: ${role.name}`
+                                    : `Không có quyền: ${role.name}`
+                                }
+                              >
+                                {hasPerm ? <Check className="w-3.5 h-3.5 stroke-[3]" /> : '✕'}
+                              </span>
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse text-xs">
-                <thead>
-                  <tr className="bg-slate-50/80 border-b border-slate-200 text-slate-600 font-bold uppercase text-[11px] tracking-wider">
-                    <th className="py-3 px-4 w-1/3">Tính Năng & Nghiệp Vụ</th>
-                    <th className="py-3 px-4">Quy Tắc Ràng Buộc</th>
-                    {liveRoles.length > 0
-                      ? liveRoles.map((r) => (
-                          <th key={r.id} className="py-3 px-3 text-center whitespace-nowrap">
-                            <div className="flex flex-col items-center">
-                              <span className="font-bold text-slate-800">{r.name}</span>
-                              <span
-                                className={`text-[9px] font-medium px-1.5 py-0.2 rounded mt-0.5 ${
-                                  r.is_system
-                                    ? 'bg-slate-100 text-slate-500'
-                                    : 'bg-blue-50 text-blue-600 border border-blue-200'
-                                }`}
-                              >
-                                {r.is_system ? 'Mặc định' : 'Tùy chỉnh'}
-                              </span>
-                            </div>
-                          </th>
-                        ))
-                      : ['Chủ Shop', 'Quản Lý', 'CSKH', 'Kế Toán', 'Thủ Kho'].map((name) => (
-                          <th key={name} className="py-3 px-3 text-center">
-                            {name}
-                          </th>
-                        ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {permissionsMatrix.map((row) => (
-                    <tr key={row.id} className="hover:bg-slate-50/80 transition">
-                      <td className="py-3 px-4 font-semibold text-slate-900">{row.feature}</td>
-                      <td className="py-3 px-4 text-slate-500 font-mono text-[11px]">{row.rule}</td>
-                      {liveRoles.length > 0
-                        ? liveRoles.map((role) => {
-                            const hasPerm = (role.permissions || []).some(
-                              (p) => p.code === row.code || p.id === row.id
-                            );
-                            return (
-                              <td key={role.id} className="py-3 px-3 text-center">
-                                <span
-                                  className={`w-6 h-6 mx-auto rounded-md inline-flex items-center justify-center ${
-                                    hasPerm
-                                      ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                                      : 'bg-slate-100 text-slate-400 border border-slate-200'
-                                  }`}
-                                  title={
-                                    hasPerm
-                                      ? `Được cấp quyền: ${role.name}`
-                                      : `Không có quyền: ${role.name}`
-                                  }
-                                >
-                                  {hasPerm ? <Check className="w-3.5 h-3.5 stroke-[3]" /> : '✕'}
-                                </span>
-                              </td>
-                            );
-                          })
-                        : ['owner', 'manager', 'cskh', 'accountant', 'warehouse'].map(
-                            (roleKey: any) => {
-                              const hasPerm = (row as any)[roleKey];
-                              return (
-                                <td key={roleKey} className="py-3 px-3 text-center">
-                                  <span
-                                    className={`w-6 h-6 mx-auto rounded-md inline-flex items-center justify-center ${
-                                      hasPerm
-                                        ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                                        : 'bg-slate-100 text-slate-400 border border-slate-200'
-                                    }`}
-                                  >
-                                    {hasPerm ? <Check className="w-3.5 h-3.5 stroke-[3]" /> : '✕'}
-                                  </span>
-                                </td>
-                              );
-                            }
-                          )}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
+          )}
         </div>
       )}
 

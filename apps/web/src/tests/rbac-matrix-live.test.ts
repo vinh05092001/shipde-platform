@@ -173,6 +173,21 @@ async function runTest() {
     'Warehouse must have shipment:receive_return'
   );
 
+  // 4. Round 3 Finding 1: When liveRoles is empty (in-flight, failed, or empty catalog),
+  // resolveMatrixForLiveRoles returns 0 role grants. Never paint fallback roles or fake grants.
+  const emptyResolved = resolveMatrixForLiveRoles([], canonicalMatrixRows);
+  assert.strictEqual(emptyResolved.length, canonicalMatrixRows.length);
+  for (const row of emptyResolved) {
+    assert.strictEqual(
+      Object.keys(row.roles).length,
+      0,
+      `Row ${row.code} must not contain any role grants when live roles are empty`
+    );
+  }
+
+  console.log(
+    '✅ Finding 1 (Round 3): Zero fake grants painted when live roles are empty/in-flight.'
+  );
   console.log('✅ Finding 2 & 10: Canonical RBAC Matrix live resolution proved successfully!');
 }
 
