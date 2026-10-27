@@ -3617,7 +3617,7 @@ CREATE INDEX "some_other_idx" ON "invitations"("created_at");
     it('Round 8 Finding 4: Redis errors in rate limiter fail closed and verifyInvitation consumes bucket without clientIp', async () => {
       // 1. Redis error in consumeAttemptKey returns allowed: false (fails closed, no fallback to local memory)
       const mockFailingRedisClient = {
-        status: 'connecting',
+        status: 'ready',
         eval: async () => {
           throw new Error('Redis connection lost');
         },

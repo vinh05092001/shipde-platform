@@ -1733,8 +1733,10 @@ export async function runComprehensiveRulesAudit(): Promise<{
     };
     stripTokenFromAddressBar(fakeWindow as any);
 
-    const nextConfigModule = await import('../../next.config.mjs');
-    const customHeaders = await nextConfigModule.default.headers();
+    const nextConfigModule = (await import('../../next.config.mjs')) as any;
+    const customHeaders = nextConfigModule.default.headers
+      ? await nextConfigModule.default.headers()
+      : [];
     const acceptHeaderEntry = customHeaders.find((h: any) => h.source === '/invite/accept');
     const hasNoReferrerHeader = acceptHeaderEntry?.headers?.some(
       (h: any) => h.key === 'Referrer-Policy' && h.value === 'no-referrer'

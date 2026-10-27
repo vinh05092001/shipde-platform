@@ -613,15 +613,16 @@ export class RateLimitService {
     member?: string;
     timestamp?: number;
     reservation?: AttemptReservation;
+    reason?: string;
   }> {
     const now = Date.now();
     const windowMs = windowSeconds * 1000;
     const member = `${now}:${Math.random().toString(36).substring(2, 8)}`;
 
     if (this.redisService) {
-      try {
-        const client = this.redisService.getClient();
-        if (client.status === 'ready') {
+      const client = this.redisService.getClient();
+      if (client && client.status === 'ready') {
+        try {
           const clearBefore = now - windowMs;
           const lua = `
             local key = KEYS[1]
@@ -664,8 +665,8 @@ export class RateLimitService {
             timestamp: now,
             reservation: allowed ? { key, member, timestamp: now, backend: 'redis' } : undefined,
           };
-        } else {
-          // Redis configured but client not ready: fail closed across instances (SECURITY-NFR / Round 8 Finding 4)
+        } catch {
+          // Redis execution error while ready: fail closed across instances (SECURITY-NFR / Round 8 Finding 4)
           return {
             allowed: false,
             retryAfterSeconds: 60,
@@ -673,14 +674,6 @@ export class RateLimitService {
             reason: 'Dịch vụ kiểm soát tần suất gặp sự cố. Vui lòng thử lại sau.',
           };
         }
-      } catch {
-        // Redis error: fail closed across instances (SECURITY-NFR / Round 8 Finding 4)
-        return {
-          allowed: false,
-          retryAfterSeconds: 60,
-          count: limit,
-          reason: 'Dịch vụ kiểm soát tần suất gặp sự cố. Vui lòng thử lại sau.',
-        };
       }
     }
 
