@@ -1904,9 +1904,12 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
         },
       };
 
-      const txService = new InvitationsService(customPrisma as any, {
-        sendVerification: async () => ({ success: true, messageId: 'msg-tx' }),
-      } as any);
+      const txService = new InvitationsService(
+        customPrisma as any,
+        {
+          sendVerification: async () => ({ success: true, messageId: 'msg-tx' }),
+        } as any
+      );
       const res = await txService.createInvitation(
         { email: 'txcheck@shipde.vn', role: RoleEnum.OPS_CSKH },
         { userId: OWNER_USER_ID, merchantId: MERCHANT_ID, role: 'OWNER' },

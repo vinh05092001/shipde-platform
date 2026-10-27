@@ -31,8 +31,17 @@ import {
   Discrepancy,
 } from '../types/domain';
 import { ERROR_CATALOG, ShipDeAppError } from '../types/error-codes';
-import { formatStoreScopeLabel, INVITE_SUCCESS_TOAST } from '../components/UserManagementTab';
-import { parseScopeInput } from '../components/forms/InviteUserModal';
+import {
+  formatStoreScopeLabel,
+  INVITE_SUCCESS_TOAST,
+  INVITATIONS_EMPTY_STATE_TEXT,
+  INVITATIONS_FORBIDDEN_TEXT,
+  INVITATIONS_RETRY_LABEL,
+  isManageUsersForbidden,
+  resolveInvitationsUIState,
+} from '../components/UserManagementTab';
+import { parseScopeInput, validateInviteForm } from '../components/forms/InviteUserModal';
+import { validateAcceptPassword, resolveAcceptInviteUIState } from '../app/invite/accept/page';
 
 interface TestResult {
   group: string;
@@ -1564,6 +1573,116 @@ export async function runComprehensiveRulesAudit(): Promise<{
       'Toast thành công phải khớp UI contract "Đã gửi lời mời thành công"',
       INVITE_SUCCESS_TOAST === 'Đã gửi lời mời thành công',
       'Khớp 100% UI contract quy định tại FEAT-USR-01.md.'
+    );
+
+    assertTest(
+      'User Management UI States',
+      'FEAT-USR-01-UI-LOADING',
+      'Xác định trạng thái Loading khi danh sách lời mời hoặc mã token đang tải',
+      resolveInvitationsUIState({
+        isForbidden: false,
+        error: null,
+        loading: true,
+        itemCount: 0,
+      }) === 'loading' &&
+        resolveInvitationsUIState({
+          isForbidden: false,
+          error: null,
+          loading: true,
+          itemCount: 10,
+        }) === 'loading' &&
+        resolveAcceptInviteUIState({
+          verifying: true,
+          verifyError: null,
+          submitting: false,
+          success: false,
+          hasInvitation: false,
+        }) === 'verifying',
+      'Khóa nút bấm và hiển thị skeleton / spinner khi đang tải.'
+    );
+
+    assertTest(
+      'User Management UI States',
+      'FEAT-USR-01-UI-EMPTY',
+      'Xác định trạng thái Empty và hiển thị đúng thông điệp tiếng Việt',
+      resolveInvitationsUIState({
+        isForbidden: false,
+        error: null,
+        loading: false,
+        itemCount: 0,
+      }) === 'empty' && INVITATIONS_EMPTY_STATE_TEXT === 'Chưa có lời mời nào đang chờ xử lý',
+      'Hiển thị placeholder trống khi không có lời mời nào đang chờ xử lý.'
+    );
+
+    assertTest(
+      'User Management UI States',
+      'FEAT-USR-01-UI-FORBIDDEN',
+      'Chặn quyền truy cập người dùng không phải OWNER/OPS_CSKH và hiển thị banner 403',
+      isManageUsersForbidden('OWNER') === false &&
+        isManageUsersForbidden('OPS_CSKH') === false &&
+        isManageUsersForbidden('WAREHOUSE') === true &&
+        isManageUsersForbidden('ACCOUNTANT') === true &&
+        isManageUsersForbidden(null) === false &&
+        resolveInvitationsUIState({
+          isForbidden: true,
+          error: null,
+          loading: false,
+          itemCount: 5,
+        }) === 'forbidden' &&
+        INVITATIONS_FORBIDDEN_TEXT === '403 — Không Có Quyền Truy Cập',
+      'Chỉ OWNER và OPS_CSKH mới có quyền truy cập tab lời mời.'
+    );
+
+    assertTest(
+      'User Management UI States',
+      'FEAT-USR-01-UI-RETRY',
+      'Hiển thị banner lỗi có nút "Thử lại" khi gọi API thất bại',
+      resolveInvitationsUIState({
+        isForbidden: false,
+        error: 'Network timeout',
+        loading: false,
+        itemCount: 0,
+      }) === 'error' &&
+        INVITATIONS_RETRY_LABEL === 'Thử lại' &&
+        resolveAcceptInviteUIState({
+          verifying: false,
+          verifyError: 'Token expired',
+          submitting: false,
+          success: false,
+          hasInvitation: false,
+        }) === 'verify_error',
+      'Cho phép người dùng nhấn Thử lại mà không mất dữ liệu đã nhập.'
+    );
+
+    assertTest(
+      'User Management UI States',
+      'FEAT-USR-01-UI-VALIDATION',
+      'Kiểm tra tính hợp lệ form lời mời và độ mạnh mật khẩu trang chấp nhận',
+      validateInviteForm({ channel: 'email', email: '', phone: '' }).isValid === false &&
+        validateInviteForm({ channel: 'email', email: 'invalid-email', phone: '' }).isValid ===
+          false &&
+        validateInviteForm({ channel: 'email', email: 'valid@shipde.vn', phone: '' }).isValid ===
+          true &&
+        validateInviteForm({ channel: 'phone', email: '', phone: '0901234567' }).isValid === true &&
+        validateInviteForm({ channel: 'phone', email: '', phone: '123' }).isValid === false &&
+        validateAcceptPassword('weak', 'weak').isValid === false &&
+        validateAcceptPassword('Admin@1234', 'Admin@1234').isValid === true &&
+        validateAcceptPassword('Admin@1234', 'Mismatch@1234').isValid === false,
+      'Kiểm duyệt chặt chẽ email, phone định dạng VN và password chuẩn 8 ký tự, hoa, thường, số, ký tự đặc biệt.'
+    );
+
+    assertTest(
+      'User Management UI States',
+      'FEAT-USR-01-UI-SUCCESS',
+      'Chuyển trạng thái giao diện thành công khi kích hoạt tài khoản',
+      resolveAcceptInviteUIState({
+        verifying: false,
+        verifyError: null,
+        submitting: false,
+        success: true,
+        hasInvitation: true,
+      }) === 'success',
+      'Hiển thị màn hình chào mừng kích hoạt tài khoản thành công.'
     );
   }
 

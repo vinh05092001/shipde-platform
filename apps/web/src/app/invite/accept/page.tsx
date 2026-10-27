@@ -20,6 +20,47 @@ import {
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
+export interface PasswordValidationRules {
+  length: boolean;
+  upper: boolean;
+  lower: boolean;
+  digit: boolean;
+  special: boolean;
+  match: boolean;
+  isValid: boolean;
+}
+
+export function validateAcceptPassword(
+  password: string,
+  passwordConfirm: string
+): PasswordValidationRules {
+  const length = password.length >= 8;
+  const upper = /[A-Z]/.test(password);
+  const lower = /[a-z]/.test(password);
+  const digit = /[0-9]/.test(password);
+  const special = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password);
+  const match = Boolean(password && password === passwordConfirm);
+  const isValid = length && upper && lower && digit && special && match;
+  return { length, upper, lower, digit, special, match, isValid };
+}
+
+export type AcceptInviteUIState = 'verifying' | 'verify_error' | 'submitting' | 'success' | 'form';
+
+export function resolveAcceptInviteUIState(params: {
+  verifying: boolean;
+  verifyError: string | null;
+  submitting: boolean;
+  success: boolean;
+  hasInvitation: boolean;
+}): AcceptInviteUIState {
+  if (params.verifying) return 'verifying';
+  if (params.verifyError) return 'verify_error';
+  if (params.success) return 'success';
+  if (params.submitting) return 'submitting';
+  if (params.hasInvitation) return 'form';
+  return 'verifying';
+}
+
 interface InvitationDetails {
   valid: boolean;
   tenant_name: string;
@@ -80,14 +121,7 @@ function AcceptInvitationContent() {
   }, [token, verifyToken]);
 
   // Password rules helper
-  const rules = {
-    length: password.length >= 8,
-    upper: /[A-Z]/.test(password),
-    lower: /[a-z]/.test(password),
-    digit: /[0-9]/.test(password),
-    special: /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password),
-    match: Boolean(password && password === passwordConfirm),
-  };
+  const rules = validateAcceptPassword(password, passwordConfirm);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

@@ -36,6 +36,28 @@ import { InviteUserModal } from './forms/InviteUserModal';
 
 // Available Stores in the system
 export const INVITE_SUCCESS_TOAST = 'Đã gửi lời mời thành công';
+export const INVITATIONS_EMPTY_STATE_TEXT = 'Chưa có lời mời nào đang chờ xử lý';
+export const INVITATIONS_FORBIDDEN_TEXT = '403 — Không Có Quyền Truy Cập';
+export const INVITATIONS_RETRY_LABEL = 'Thử lại';
+
+export function isManageUsersForbidden(userRole?: string | null): boolean {
+  return Boolean(userRole && userRole !== 'OWNER' && userRole !== 'OPS_CSKH');
+}
+
+export type InvitationsUIState = 'forbidden' | 'error' | 'loading' | 'empty' | 'ready';
+
+export function resolveInvitationsUIState(params: {
+  isForbidden: boolean;
+  error: string | null;
+  loading: boolean;
+  itemCount: number;
+}): InvitationsUIState {
+  if (params.isForbidden) return 'forbidden';
+  if (params.error) return 'error';
+  if (params.loading) return 'loading';
+  if (params.itemCount === 0) return 'empty';
+  return 'ready';
+}
 
 export interface StoreItem {
   id: string;
@@ -84,7 +106,7 @@ export const UserManagementTab: React.FC = () => {
   const [invitationsStatusFilter, setInvitationsStatusFilter] = useState<string>('ALL');
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
 
-  const isForbidden = user && user.role !== 'OWNER' && user.role !== 'OPS_CSKH';
+  const isForbidden = isManageUsersForbidden(user?.role);
 
   const fetchInvitations = useCallback(async () => {
     if (isForbidden) return;
@@ -704,7 +726,7 @@ export const UserManagementTab: React.FC = () => {
           {isForbidden ? (
             <div className="p-8 text-center bg-amber-50/60 border border-amber-200 rounded-2xl space-y-2 animate-in fade-in">
               <ShieldAlert className="w-10 h-10 text-amber-600 mx-auto" />
-              <h4 className="font-bold text-sm text-slate-800">403 — Không Có Quyền Truy Cập</h4>
+              <h4 className="font-bold text-sm text-slate-800">{INVITATIONS_FORBIDDEN_TEXT}</h4>
               <p className="text-xs text-slate-600 max-w-md mx-auto">
                 Tài khoản của bạn ({user?.role || 'Người dùng'}) không có quyền Quản lý người dùng
                 và vai trò (Manage users/roles). Vui lòng liên hệ Chủ cửa hàng (OWNER) để được cấp
@@ -726,7 +748,7 @@ export const UserManagementTab: React.FC = () => {
                       onClick={() => void fetchInvitations()}
                       className="px-2.5 py-1 bg-red-100 hover:bg-red-200 text-red-800 rounded font-semibold transition"
                     >
-                      Thử lại
+                      {INVITATIONS_RETRY_LABEL}
                     </button>
                     <button
                       type="button"
@@ -803,7 +825,7 @@ export const UserManagementTab: React.FC = () => {
                   <div className="text-center py-12 px-4">
                     <Mail className="w-12 h-12 text-slate-300 mx-auto mb-3" />
                     <h4 className="font-bold text-sm text-slate-700">
-                      Chưa có lời mời nào đang chờ xử lý
+                      {INVITATIONS_EMPTY_STATE_TEXT}
                     </h4>
                     <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
                       Hiện không có lời mời nào trong mục này. Bạn có thể nhấn &quot;Gửi Lời Mời

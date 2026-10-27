@@ -29,6 +29,28 @@ export function parseScopeInput(input: string): string[] {
     .filter(Boolean);
 }
 
+export function validateInviteForm(params: {
+  channel: 'email' | 'phone';
+  email: string;
+  phone: string;
+}): { isValid: boolean; errors: Record<string, string> } {
+  const errors: Record<string, string> = {};
+  if (params.channel === 'email') {
+    if (!params.email.trim()) {
+      errors.email = 'Vui lòng nhập địa chỉ email';
+    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(params.email.trim())) {
+      errors.email = 'Địa chỉ email không đúng định dạng';
+    }
+  } else {
+    if (!params.phone.trim()) {
+      errors.phone = 'Vui lòng nhập số điện thoại';
+    } else if (!/^(?:\+84|0)(?:3|5|7|8|9)\d{8}$/.test(params.phone.trim().replace(/[\s-]/g, ''))) {
+      errors.phone = 'Số điện thoại không đúng định dạng Việt Nam';
+    }
+  }
+  return { isValid: Object.keys(errors).length === 0, errors };
+}
+
 export const InviteUserModal: React.FC<Props> = ({ isOpen, onClose, onUserInvited }) => {
   const { token, user } = useAuth();
 
@@ -54,22 +76,8 @@ export const InviteUserModal: React.FC<Props> = ({ isOpen, onClose, onUserInvite
     setFieldErrors({});
 
     // Client validation
-    const errors: Record<string, string> = {};
-    if (channel === 'email') {
-      if (!email.trim()) {
-        errors.email = 'Vui lòng nhập địa chỉ email';
-      } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
-        errors.email = 'Địa chỉ email không đúng định dạng';
-      }
-    } else {
-      if (!phone.trim()) {
-        errors.phone = 'Vui lòng nhập số điện thoại';
-      } else if (!/^(?:\+84|0)(?:3|5|7|8|9)\d{8}$/.test(phone.trim().replace(/[\s-]/g, ''))) {
-        errors.phone = 'Số điện thoại không đúng định dạng Việt Nam';
-      }
-    }
-
-    if (Object.keys(errors).length > 0) {
+    const { isValid, errors } = validateInviteForm({ channel, email, phone });
+    if (!isValid) {
       setFieldErrors(errors);
       setLoading(false);
       return;

@@ -12,7 +12,7 @@
 | Assigned author | `GEMINI` |
 | Risk            | `HIGH` |
 | Risk domains    | `auth`, `security`, `tenant isolation`, `database ownership` |
-| Allowed paths   | `prisma/schema.prisma`, `prisma/migrations/*`, `apps/api/src/users/*`, `apps/api/src/invitations/*`, `apps/api/src/auth/rate-limit.service.ts`, `apps/api/src/app.module.ts`, `packages/contracts/src/*`, `docs/product-spec/contracts/openapi.yaml`, `docs/product-spec/work-items/FEAT-USR-01.md`, `apps/web/src/components/forms/InviteUserModal.tsx`, `apps/web/src/components/UserManagementTab.tsx`, `apps/web/src/app/settings/users/*`, `apps/web/src/app/invite/accept/*` |
+| Allowed paths   | `prisma/schema.prisma`, `prisma/migrations/*`, `apps/api/src/users/*`, `apps/api/src/invitations/*`, `apps/api/src/auth/rate-limit.service.ts`, `apps/api/src/app.module.ts`, `packages/contracts/src/*`, `docs/product-spec/contracts/openapi.yaml`, `docs/product-spec/work-items/FEAT-USR-01.md`, `apps/web/src/components/forms/InviteUserModal.tsx`, `apps/web/src/components/UserManagementTab.tsx`, `apps/web/src/app/settings/users/*`, `apps/web/src/app/invite/accept/*`, `apps/api/package.json`, `apps/web/src/tests/comprehensive-rules.test.ts` |
 | Reviewer        | Codex — fresh independent task |
 | Branch          | `feat/feat-usr-01-user-invitations` |
 | Pull Request    | Pending |
@@ -46,6 +46,9 @@ A shop owner or authorized operations manager can invite new team members by ema
 `GEMINI` is required because user invitations span database migrations, cryptographic token generation and verification, transactional user account creation, fine-grained RBAC privilege boundary checks, and multi-state UI flows.
 
 - **Rate Limit Service boundary (Finding 10):** Invitation endpoints require rate limiting to prevent invitation flooding, email exhaustion, and acceptance brute forcing per `SECURITY-NFR-OBSERVABILITY.md`. Rather than duplicating rate limiting mechanics, `InvitationsService` reuses `RateLimitService` in `apps/api/src/auth/rate-limit.service.ts`, tracked explicitly in allowed paths.
+- **API Package Test Runner boundary (Finding 7 / AC-USR-01-18):** `apps/api/package.json` is modified solely to register the invitations unit test runner (`invitations.unit.spec.ts`) and supertest HTTP integration suite (`invitations.supertest.spec.ts`) under the package `"test"` script for automated quality gates.
+- **Web Comprehensive Test Suite boundary (Finding 7 / AC-USR-01-18):** `apps/web/src/tests/comprehensive-rules.test.ts` is the authoritative `@shipde/web` test harness, updated to verify frontend store scope formatting, scope parsing, and UI state contract (loading, empty, forbidden, retry/error, and validation).
+- **Secret Scan Gate Separation (Finding 7 / AC-USR-01-18):** `pnpm security:secrets` is a repository-wide root security gate defined in root `package.json` (`tsx scripts/verify-secrets.ts`) that scans the full git repository via a host-native `gitleaks` CLI binary. It is deliberately maintained as a root pipeline gate rather than invoked from package-level test scripts (`apps/api` or `apps/web`) to keep package tests hermetic and prevent failures on development environments lacking the native `gitleaks` binary in PATH; in-process secrecy invariants (zero plaintext tokens in DB/audit logs, scrypt password hashing, and token masking) are proved deterministically by the invitations test suites.
 
 ## In scope
 
