@@ -3131,9 +3131,44 @@ export class AuthService {
     }
 
     const email = dto.email ? dto.email.trim().toLowerCase() : undefined;
-    const phone = dto.phone ? dto.phone.trim() : undefined;
 
-    // 2. Contact identifiers validation (AC-ADMIN-09, AC-ADMIN-10, AC-ADMIN-11)
+    // 2. Canonical phone validation & normalization (AC-ADMIN-11, Finding 5)
+    let canonicalPhone: string | undefined;
+    if (dto.phone !== undefined && dto.phone !== null) {
+      const rawPhone = String(dto.phone).trim();
+      if (rawPhone.length > 0) {
+        // Reject non-numeric characters (excluding leading '+' and common whitespace/dash separators)
+        if (/[^0-9+\s.-]/.test(rawPhone)) {
+          fields.push({
+            field: 'phone',
+            code: 'INVALID_FORMAT',
+            message: 'Số điện thoại không hợp lệ theo định dạng Việt Nam',
+          });
+        } else {
+          const cleanDigits = rawPhone.replace(/[\s.-]/g, '');
+          let normalized = cleanDigits;
+          if (cleanDigits.startsWith('+84')) {
+            normalized = `0${cleanDigits.slice(3)}`;
+          } else if (cleanDigits.startsWith('84') && cleanDigits.length === 11) {
+            normalized = `0${cleanDigits.slice(2)}`;
+          }
+
+          // Strict Vietnamese mobile pattern: starts with 0, followed by 3, 5, 7, 8, 9, then 8 digits
+          if (!/^0[35789][0-9]{8}$/.test(normalized)) {
+            fields.push({
+              field: 'phone',
+              code: 'INVALID_FORMAT',
+              message: 'Số điện thoại không hợp lệ theo định dạng Việt Nam',
+            });
+          } else {
+            canonicalPhone = normalized;
+          }
+        }
+      }
+    }
+    const phone = canonicalPhone;
+
+    // Contact identifiers requirement (AC-ADMIN-09, AC-ADMIN-10)
     if (!email && !phone) {
       fields.push({
         field: 'email',
@@ -3147,14 +3182,6 @@ export class AuthService {
         field: 'email',
         code: 'INVALID_FORMAT',
         message: 'Định dạng email không hợp lệ',
-      });
-    }
-
-    if (phone && !/^(0|\+84)[3|5|7|8|9][0-9]{8}$/.test(phone.replace(/\s+/g, ''))) {
-      fields.push({
-        field: 'phone',
-        code: 'INVALID_FORMAT',
-        message: 'Số điện thoại không hợp lệ theo định dạng Việt Nam',
       });
     }
 

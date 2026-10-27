@@ -85,8 +85,21 @@ export function validateShopForm(
     errors.email = 'Định dạng email không hợp lệ';
   }
 
-  if (trimmedPhone && !/^(0|\+84)[3|5|7|8|9][0-9]{8}$/.test(trimmedPhone.replace(/\s+/g, ''))) {
-    errors.phone = 'Số điện thoại không hợp lệ theo định dạng Việt Nam';
+  if (trimmedPhone) {
+    if (/[^0-9+\s.-]/.test(trimmedPhone)) {
+      errors.phone = 'Số điện thoại không hợp lệ theo định dạng Việt Nam';
+    } else {
+      const cleanDigits = trimmedPhone.replace(/[\s.-]/g, '');
+      let normalized = cleanDigits;
+      if (cleanDigits.startsWith('+84')) {
+        normalized = `0${cleanDigits.slice(3)}`;
+      } else if (cleanDigits.startsWith('84') && cleanDigits.length === 11) {
+        normalized = `0${cleanDigits.slice(2)}`;
+      }
+      if (!/^0[35789][0-9]{8}$/.test(normalized)) {
+        errors.phone = 'Số điện thoại không hợp lệ theo định dạng Việt Nam';
+      }
+    }
   }
 
   if (password && password.length < 8) {

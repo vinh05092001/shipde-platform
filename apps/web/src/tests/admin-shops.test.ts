@@ -281,6 +281,10 @@ async function runAdminShopsFrontendSuite() {
   const errShortPass = validateShopForm('Shop Valid', 'test@example.com', '', 'short');
   assert.ok(errShortPass.password, 'Password < 8 chars must produce error');
 
+  // Finding 5: Rejects non-numeric phone with pipe (0|87654321)
+  const errPipePhone = validateShopForm('Shop Valid', '', '0|87654321');
+  assert.ok(errPipePhone.phone, 'Phone with pipe character must produce error');
+
   // Valid email only
   const validEmailOnly = validateShopForm('Shop Valid', 'test@example.com', '');
   assert.strictEqual(Object.keys(validEmailOnly).length, 0, 'Valid email-only must have 0 errors');

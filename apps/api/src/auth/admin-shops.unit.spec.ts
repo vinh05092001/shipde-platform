@@ -231,6 +231,62 @@ describe('FEAT-AUTH-02: Admin-Created Shop Account Unit Tests', () => {
     );
   });
 
+  // Finding 5: Pipe characters and non-numeric forms in phone are rejected
+  it('Finding 5: Rejects non-numeric phone with pipe character (e.g. 0|87654321)', async () => {
+    const mockPrisma = createMockPrismaService();
+    const service = new AuthService(mockPrisma, createMockRateLimitService());
+
+    await assert.rejects(
+      async () =>
+        service.adminCreateShop(
+          { merchant_name: 'Shop Pipe Phone', phone: '0|87654321' },
+          '127.0.0.1',
+          'corr-pipe'
+        ),
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 400);
+        assert.strictEqual(err.code, 'VALIDATION_ERROR');
+        const fields = err.getResponse()?.error?.fields;
+        assert.ok(fields.some((f: any) => f.field === 'phone' && f.code === 'INVALID_FORMAT'));
+        return true;
+      }
+    );
+  });
+
+  // Finding 5: Canonical phone normalization persists 0-prefixed form and detects cross-format duplicates
+  it('Finding 5: Persists canonical phone and detects +84 vs 0 duplicate collision', async () => {
+    const mockPrisma = createMockPrismaService();
+    const service = new AuthService(mockPrisma, createMockRateLimitService());
+
+    // Create first shop with 0-prefixed phone
+    const res1 = await service.adminCreateShop(
+      { merchant_name: 'Shop Phone One', phone: '0987654321' },
+      '127.0.0.1',
+      'corr-p1'
+    );
+    assert.strictEqual(res1.success, true);
+    assert.strictEqual(mockPrisma.users[0].phone, '0987654321');
+
+    // Attempt second shop with +84 formatted equivalent of the same number
+    await assert.rejects(
+      async () =>
+        service.adminCreateShop(
+          { merchant_name: 'Shop Phone Two', phone: '+84 987 654 321' },
+          '127.0.0.1',
+          'corr-p2'
+        ),
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 400);
+        assert.strictEqual(err.code, 'VALIDATION_ERROR');
+        const fields = err.getResponse()?.error?.fields;
+        assert.ok(fields.some((f: any) => f.field === 'phone' && f.code === 'DUPLICATE'));
+        return true;
+      }
+    );
+  });
+
   // AC-ADMIN-12: Password shorter than 8 characters returns 400 VALIDATION_ERROR
   it('AC-ADMIN-12: Password shorter than 8 characters returns 400 VALIDATION_ERROR', async () => {
     const mockPrisma = createMockPrismaService();
