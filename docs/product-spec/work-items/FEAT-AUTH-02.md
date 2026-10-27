@@ -6,13 +6,13 @@
 | --------------- | ---------------------------------------------------------------------------------------------------- |
 | Work Item ID    | FEAT-AUTH-02                                                                                         |
 | Feature ID      | FEAT-AUTH-02                                                                                         |
-| Status          | READY_FOR_AUTHOR                                                                                     |
+| Status          | READY_FOR_CODEX                                                                                      |
 | Delivery order  | 6                                                                                                    |
 | Dependencies    | TASK-FOUND-04                                                                                        |
 | Assigned author | GEMINI                                                                                               |
 | Risk            | HIGH                                                                                                 |
 | Allowed paths   | `docs/product-spec/work-items/FEAT-AUTH-02.md`; `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`; `docs/product-spec/contracts/openapi.yaml`; `packages/contracts/**`; `prisma/schema.prisma`; `prisma/migrations/**`; `apps/api/package.json`; `apps/api/src/auth/**`; `apps/web/package.json`; `apps/web/eslint.config.mjs`; `apps/web/src/app/admin/**`; `apps/web/src/app/api/admin/**`; `apps/web/src/tests/**`; `eslint.config.mjs`; `package.json`; `pnpm-lock.yaml` |
-| Branch          | feat/feat-auth-02                                                                                    |
+| Branch          | feat/feat-auth-02-admin-shop                                                                         |
 | Pull Request    | Pending                                                                                              |
 
 ## Business Outcome
