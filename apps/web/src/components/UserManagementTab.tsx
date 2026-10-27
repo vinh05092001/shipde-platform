@@ -737,8 +737,12 @@ export const UserManagementTab: React.FC = () => {
                     {permissionsMatrix.map((row) => (
                       <tr key={row.id} className="hover:bg-slate-50/80 transition">
                         <td className="py-3 px-4">
-                          <div className="font-semibold text-slate-900">{row.name || row.feature}</div>
-                          <div className="text-[11px] font-mono text-blue-600 font-normal">{row.code}</div>
+                          <div className="font-semibold text-slate-900">
+                            {row.name || row.feature}
+                          </div>
+                          <div className="text-[11px] font-mono text-blue-600 font-normal">
+                            {row.code}
+                          </div>
                         </td>
                         <td className="py-3 px-4 text-slate-500 font-mono text-[11px]">
                           {row.rule}

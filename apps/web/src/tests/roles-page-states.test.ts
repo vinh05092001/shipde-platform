@@ -267,10 +267,7 @@ async function runTest() {
       refreshErrorHtml.includes('Lỗi kết nối máy chủ khi làm mới dữ liệu'),
     'Refresh error must display error alert banner with retry'
   );
-  assert.ok(
-    refreshErrorHtml.includes('Thử lại'),
-    'Refresh error must display retry action'
-  );
+  assert.ok(refreshErrorHtml.includes('Thử lại'), 'Refresh error must display retry action');
   assert.ok(
     refreshErrorHtml.includes('Nhân viên kiểm hàng'),
     'Refresh error must keep existing custom roles mounted instead of unmounting to blank/stale state'

@@ -107,7 +107,12 @@ async function runTest() {
   ];
 
   const canonicalMatrixRows = [
-    { id: 'p_pii', code: 'pii:unmask', name: 'Mở che thông tin khách hàng (PII)', feature: 'Mở che thông tin khách hàng (PII)' },
+    {
+      id: 'p_pii',
+      code: 'pii:unmask',
+      name: 'Mở che thông tin khách hàng (PII)',
+      feature: 'Mở che thông tin khách hàng (PII)',
+    },
     {
       id: 'p_reattempt',
       code: 'shipment:cancel_redeliver',

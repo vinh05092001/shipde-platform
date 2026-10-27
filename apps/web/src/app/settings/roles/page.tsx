@@ -174,7 +174,7 @@ export default function RolesSettingsPage({
     } finally {
       setLoading(false);
     }
-  }, [API_BASE, token, user]);
+  }, [API_BASE, token]);
 
   useEffect(() => {
     if (initialRoles === undefined) {

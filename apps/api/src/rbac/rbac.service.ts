@@ -1453,7 +1453,13 @@ export class RbacService {
 
         // Lock all current assignees for this role across the database (Finding 2 / Round 7)
         const assignees = await tx.$queryRaw<
-          Array<{ id: string; status: string; role: string; custom_role_id: string; merchant_id: string }>
+          Array<{
+            id: string;
+            status: string;
+            role: string;
+            custom_role_id: string;
+            merchant_id: string;
+          }>
         >`SELECT id, status, role, custom_role_id, merchant_id FROM users WHERE custom_role_id = ${roleId}::uuid FOR UPDATE`;
 
         const crossTenantAssignees = assignees.filter((u) => u.merchant_id !== actor.merchantId);
