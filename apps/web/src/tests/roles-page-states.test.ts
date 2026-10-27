@@ -237,6 +237,12 @@ async function runTest() {
     modalSaveErrorHtml.includes('Thử lại'),
     'Modal must provide retry button to resubmit the failed form'
   );
+  assert.ok(
+    modalSaveErrorHtml.includes('role="dialog"') &&
+      modalSaveErrorHtml.includes('aria-modal="true"') &&
+      modalSaveErrorHtml.includes('aria-label="Đóng cửa sổ vai trò"'),
+    'Create/edit modal must have role="dialog", aria-modal="true", and accessible close button'
+  );
 
   // 10. UI State: Round 5 Finding 2 - Delete Modal Error & Retry
   const modalDeleteErrorHtml = renderPage({
@@ -256,6 +262,12 @@ async function runTest() {
   assert.ok(
     modalDeleteErrorHtml.includes('Thử lại'),
     'Delete modal must provide in-dialog retry button'
+  );
+  assert.ok(
+    modalDeleteErrorHtml.includes('role="dialog"') &&
+      modalDeleteErrorHtml.includes('aria-modal="true"') &&
+      modalDeleteErrorHtml.includes('aria-label="Đóng cửa sổ xác nhận xóa"'),
+    'Delete modal must have role="dialog", aria-modal="true", and accessible close button'
   );
 
   // 11. UI State: Round 7 Finding 3 - Refresh Error preserves custom roles list & shows error banner
@@ -291,6 +303,24 @@ async function runTest() {
     !inFlightFetchHtml.includes('Bạn chỉ có quyền') &&
       !inFlightFetchHtml.includes('iam:manage_users'),
     'In-flight catalogue fetch must not render false forbidden callout before load completes (SCR-RBAC-01)'
+  );
+
+  // 13. UI State: Round 10 Finding 7 - View Modal Accessibility (role="dialog", aria-modal, aria-label)
+  const viewModalHtml = renderPage({
+    initialLoading: false,
+    initialCanManageRoles: true,
+    initialRoles: mockPayload,
+    initialViewingRole: mockPayload[0],
+  });
+  assert.ok(
+    viewModalHtml.includes('role="dialog"') &&
+      viewModalHtml.includes('aria-modal="true"') &&
+      viewModalHtml.includes('aria-label="Đóng chi tiết vai trò"'),
+    'View modal must have role="dialog", aria-modal="true", and accessible close button'
+  );
+
+  console.log(
+    '✅ Finding 7 (Round 10): Accessible dialog roles, aria-modal, and close button labels proved successfully!'
   );
 
   console.log(

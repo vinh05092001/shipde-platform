@@ -40,6 +40,7 @@ export interface RolesSettingsPageProps {
   initialSuccess?: string | null;
   initialCreateOpen?: boolean;
   initialEditingRole?: RoleItem | null;
+  initialViewingRole?: RoleItem | null;
   initialDeletingRole?: RoleItem | null;
   initialModalError?: string | null;
   initialDeleteModalError?: string | null;
@@ -82,6 +83,7 @@ export default function RolesSettingsPage({
   initialSuccess,
   initialCreateOpen,
   initialEditingRole,
+  initialViewingRole,
   initialDeletingRole,
   initialModalError,
   initialDeleteModalError,
@@ -112,7 +114,7 @@ export default function RolesSettingsPage({
   // Modals state
   const [isCreateOpen, setIsCreateOpen] = useState<boolean>(initialCreateOpen ?? false);
   const [editingRole, setEditingRole] = useState<RoleItem | null>(initialEditingRole ?? null);
-  const [viewingRole, setViewingRole] = useState<RoleItem | null>(null);
+  const [viewingRole, setViewingRole] = useState<RoleItem | null>(initialViewingRole ?? null);
   const [deletingRole, setDeletingRole] = useState<RoleItem | null>(initialDeletingRole ?? null);
   const [modalError, setModalError] = useState<string | null>(initialModalError ?? null);
   const [deleteModalError, setDeleteModalError] = useState<string | null>(
@@ -694,7 +696,12 @@ export default function RolesSettingsPage({
       {/* MODAL: VIEW ROLE DETAILS */}
       {viewingRole && (
         <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
-          <div className="bg-white rounded-2xl border border-slate-200 max-w-2xl w-full p-6 space-y-4 shadow-2xl text-xs max-h-[90vh] flex flex-col animate-in zoom-in-95">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="view-role-title"
+            className="bg-white rounded-2xl border border-slate-200 max-w-2xl w-full p-6 space-y-4 shadow-2xl text-xs max-h-[90vh] flex flex-col animate-in zoom-in-95"
+          >
             <div className="flex justify-between items-start pb-3 border-b border-slate-100">
               <div className="flex items-center gap-2.5">
                 <div
@@ -711,7 +718,7 @@ export default function RolesSettingsPage({
                   )}
                 </div>
                 <div>
-                  <h3 className="font-bold text-base text-slate-900">{viewingRole.name}</h3>
+                  <h3 id="view-role-title" className="font-bold text-base text-slate-900">{viewingRole.name}</h3>
                   <p className="text-[11px] text-slate-500">
                     {viewingRole.is_system
                       ? 'Vai trò bảo vệ hệ thống'
@@ -723,6 +730,7 @@ export default function RolesSettingsPage({
               <button
                 type="button"
                 onClick={() => setViewingRole(null)}
+                aria-label="Đóng chi tiết vai trò"
                 className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center font-bold text-xs"
               >
                 ✕
@@ -790,14 +798,19 @@ export default function RolesSettingsPage({
       {/* MODAL: CREATE OR EDIT CUSTOM ROLE */}
       {(isCreateOpen || editingRole) && (
         <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
-          <div className="bg-white rounded-2xl border border-slate-200 max-w-3xl w-full p-6 space-y-4 shadow-2xl text-xs max-h-[92vh] flex flex-col animate-in zoom-in-95">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="create-edit-role-title"
+            className="bg-white rounded-2xl border border-slate-200 max-w-3xl w-full p-6 space-y-4 shadow-2xl text-xs max-h-[92vh] flex flex-col animate-in zoom-in-95"
+          >
             <div className="flex justify-between items-center pb-3 border-b border-slate-100">
               <div className="flex items-center gap-2.5">
                 <div className="w-9 h-9 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
                   <Sliders className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="font-bold text-base text-slate-900">
+                  <h3 id="create-edit-role-title" className="font-bold text-base text-slate-900">
                     {editingRole ? 'Chỉnh Sửa Vai Trò Tùy Chỉnh' : 'Tạo Vai Trò Tùy Chỉnh Mới'}
                   </h3>
                   <p className="text-[11px] text-slate-500">
@@ -811,6 +824,7 @@ export default function RolesSettingsPage({
                   setIsCreateOpen(false);
                   setEditingRole(null);
                 }}
+                aria-label="Đóng cửa sổ vai trò"
                 className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center font-bold text-xs"
               >
                 ✕
@@ -994,15 +1008,33 @@ export default function RolesSettingsPage({
       {/* MODAL: DELETE ROLE CONFIRMATION */}
       {deletingRole && (
         <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
-          <div className="bg-white rounded-2xl border border-slate-200 max-w-md w-full p-6 space-y-4 shadow-2xl text-xs animate-in zoom-in-95">
-            <div className="flex items-center gap-3 text-rose-600">
-              <div className="w-10 h-10 rounded-xl bg-rose-50 flex items-center justify-center shrink-0">
-                <AlertTriangle className="w-5 h-5 text-rose-600" />
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-role-title"
+            className="bg-white rounded-2xl border border-slate-200 max-w-md w-full p-6 space-y-4 shadow-2xl text-xs animate-in zoom-in-95"
+          >
+            <div className="flex items-center justify-between pb-1 border-b border-slate-100">
+              <div className="flex items-center gap-3 text-rose-600">
+                <div className="w-10 h-10 rounded-xl bg-rose-50 flex items-center justify-center shrink-0">
+                  <AlertTriangle className="w-5 h-5 text-rose-600" />
+                </div>
+                <div>
+                  <h3 id="delete-role-title" className="font-bold text-sm text-slate-900">Xác Nhận Xóa Vai Trò Tùy Chỉnh</h3>
+                  <p className="text-[11px] text-slate-500 font-mono">{deletingRole.name}</p>
+                </div>
               </div>
-              <div>
-                <h3 className="font-bold text-sm text-slate-900">Xác Nhận Xóa Vai Trò Tùy Chỉnh</h3>
-                <p className="text-[11px] text-slate-500 font-mono">{deletingRole.name}</p>
-              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setDeletingRole(null);
+                  setDeleteModalError(null);
+                }}
+                aria-label="Đóng cửa sổ xác nhận xóa"
+                className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center font-bold text-xs"
+              >
+                ✕
+              </button>
             </div>
 
             {/* Delete Modal Error Banner with In-Dialog Retry */}
