@@ -1124,6 +1124,80 @@ describe('FEAT-USR-01 — User Invitations Unit Specification', () => {
         }
       );
     });
+
+    it('pins token_hash, consumed_at null, and unexpired date in updateMany predicate (Finding 2)', async () => {
+      const rawToken = 'pendingtoken123456789012345678901234567890123456789012345678';
+      let capturedWhere: any = null;
+
+      mockPrisma.invitation.findUnique = async () => ({
+        id: 'inv-atomic-check',
+        merchant_id: MERCHANT_ID,
+        role: RoleEnum.OPS_CSKH,
+        email: 'atomic@shipde.vn',
+        status: InvitationStatusEnum.PENDING,
+        consumed_at: null,
+        expires_at: new Date(Date.now() + 86400000),
+      });
+
+      mockPrisma.invitation.updateMany = async (args: any) => {
+        capturedWhere = args.where;
+        return { count: 1 };
+      };
+
+      await service.acceptInvitation(
+        {
+          token: rawToken,
+          full_name: 'Nguyen Van Atomic',
+          password: 'StrongPassword123!',
+        },
+        '127.0.0.1',
+        'test-corr-atomic-accept'
+      );
+
+      assert.ok(capturedWhere, 'updateMany must have been called');
+      assert.strictEqual(capturedWhere.id, 'inv-atomic-check');
+      assert.strictEqual(capturedWhere.status, InvitationStatusEnum.PENDING);
+      assert.strictEqual(capturedWhere.consumed_at, null);
+      assert.ok(capturedWhere.token_hash, 'must pin token_hash');
+      assert.ok(capturedWhere.expires_at?.gt, 'must pin unexpired expires_at');
+    });
+
+    it('rejects in-flight rotated or expired token when updateCount is 0 (Finding 2)', async () => {
+      const rawToken = 'pendingtoken123456789012345678901234567890123456789012345678';
+
+      mockPrisma.invitation.findUnique = async () => ({
+        id: 'inv-race-check',
+        merchant_id: MERCHANT_ID,
+        role: RoleEnum.OPS_CSKH,
+        email: 'race@shipde.vn',
+        status: InvitationStatusEnum.PENDING,
+        consumed_at: null,
+        expires_at: new Date(Date.now() + 86400000),
+      });
+
+      // updateMany returns 0 because token_hash was rotated concurrently by resend
+      mockPrisma.invitation.updateMany = async () => ({ count: 0 });
+
+      await assert.rejects(
+        async () => {
+          await service.acceptInvitation(
+            {
+              token: rawToken,
+              full_name: 'Nguyen Van Race',
+              password: 'StrongPassword123!',
+            },
+            '127.0.0.1',
+            'test-corr-race'
+          );
+        },
+        (err: any) => {
+          assert.ok(err instanceof CanonicalApiException);
+          assert.strictEqual(err.getStatus(), HttpStatus.BAD_REQUEST);
+          assert.strictEqual(err.code, 'INVITATION_ALREADY_USED');
+          return true;
+        }
+      );
+    });
   });
 
   // AC-USR-01-16: Recipient provides weak password during acceptance

@@ -1041,11 +1041,14 @@ export class InvitationsService {
     const hashedPassword = await hashPassword(dto.password);
 
     const result = await this.prisma.$transaction(async (tx) => {
-      // Atomic concurrency guard
+      // Atomic concurrency guard pinning token_hash, unconsumed status, and unexpired expires_at (Finding 2 / BR-INV-03, BR-INV-04, BR-INV-05)
       const updateCount = await tx.invitation.updateMany({
         where: {
           id: invitation.id,
+          token_hash: tokenHash,
           status: InvitationStatusEnum.PENDING,
+          consumed_at: null,
+          expires_at: { gt: now },
         },
         data: {
           status: InvitationStatusEnum.ACCEPTED,
@@ -1055,10 +1058,32 @@ export class InvitationsService {
       });
 
       if (updateCount.count === 0) {
+        const current = await tx.invitation.findUnique({
+          where: { id: invitation.id },
+        });
+        if (
+          current?.status === InvitationStatusEnum.EXPIRED ||
+          (current?.expires_at && current.expires_at <= now)
+        ) {
+          throw new CanonicalApiException(
+            HttpStatus.BAD_REQUEST,
+            'INVITATION_EXPIRED',
+            'Lời mời đã hết hạn. Vui lòng liên hệ quản trị viên để nhận lời mời mới.',
+            false
+          );
+        }
+        if (current?.consumed_at || current?.status === InvitationStatusEnum.ACCEPTED) {
+          throw new CanonicalApiException(
+            HttpStatus.BAD_REQUEST,
+            'INVITATION_ALREADY_USED',
+            'Lời mời đã được chấp nhận bởi một yêu cầu khác',
+            false
+          );
+        }
         throw new CanonicalApiException(
           HttpStatus.BAD_REQUEST,
           'INVITATION_ALREADY_USED',
-          'Lời mời đã được chấp nhận bởi một yêu cầu khác',
+          'Lời mời đã bị thay thế hoặc không còn khả dụng',
           false
         );
       }
