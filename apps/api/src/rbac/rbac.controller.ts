@@ -27,32 +27,7 @@ export class RbacController {
   constructor(@Inject(RbacService) private readonly rbacService: RbacService) {}
 
   private async resolveActor(req: any): Promise<ActorContext> {
-    let role = req.userRole || req.jwtClaims?.role;
-    let customRoleId = req.customRoleId;
-
-    if (!role && req.userId) {
-      try {
-        const user = await (this.rbacService as any).prisma.user.findUnique({
-          where: { id: req.userId },
-          select: { role: true, custom_role_id: true },
-        });
-        if (user) {
-          role = user.role;
-          customRoleId = user.custom_role_id;
-        }
-      } catch {
-        // Continue with whatever is present
-      }
-    }
-
-    return {
-      userId: req.userId as string,
-      merchantId: req.merchantId as string,
-      role,
-      customRoleId,
-      authAssurance: req.authAssurance || req.jwtClaims?.auth_assurance,
-      mfaVerifiedAt: req.mfaVerifiedAt || req.jwtClaims?.mfa_verified_at,
-    };
+    return this.rbacService.resolveActorFromSession(req);
   }
 
   /**

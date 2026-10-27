@@ -56,7 +56,29 @@ class MockPrismaService {
       }
     }
 
-    this.users = [];
+    this.users = [
+      {
+        id: 'user-owner-1',
+        merchant_id: 'merchant-aaa-111',
+        role: 'OWNER',
+        custom_role_id: null,
+        status: 'ACTIVE',
+      },
+      {
+        id: 'user-cskh-2',
+        merchant_id: 'merchant-aaa-111',
+        role: 'OPS_CSKH',
+        custom_role_id: null,
+        status: 'ACTIVE',
+      },
+      {
+        id: 'user-warehouse-3',
+        merchant_id: 'merchant-aaa-111',
+        role: 'WAREHOUSE',
+        custom_role_id: null,
+        status: 'ACTIVE',
+      },
+    ];
     this.auditLogs = [];
     this.shouldFailAudit = false;
   }
@@ -728,5 +750,100 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
     assert.ok(!jsonStr.includes('password_hash'), 'No password hashes exposed');
     assert.ok(!jsonStr.includes('secret_ciphertext'), 'No MFA secrets exposed');
     assert.ok(!jsonStr.includes('token_hash'), 'No session token hashes exposed');
+  });
+
+  // Finding 1 (P0): Server-authoritative actor resolution and custom role ceiling
+  test('Finding 1 / BR-RBAC-02: resolveActorFromSession discards client/JWT claims, evaluates DB role and custom_role_id, and enforces ceiling', async () => {
+    // 1. Demoted owner with stale JWT claim
+    mockPrisma.users.push({
+      id: 'user-demoted-owner',
+      merchant_id: MERCHANT_A,
+      role: 'OPS_CSKH',
+      custom_role_id: null,
+      status: 'ACTIVE',
+    });
+
+    const fakeClientReq = {
+      userId: 'user-demoted-owner',
+      merchantId: MERCHANT_A,
+      userRole: 'OWNER', // Stale claim
+      jwtClaims: { role: 'OWNER', sub: 'user-demoted-owner', mid: MERCHANT_A },
+    };
+
+    const resolved = await service.resolveActorFromSession(fakeClientReq as any);
+    assert.strictEqual(
+      resolved.role,
+      'OPS_CSKH',
+      'Must ignore client/JWT claim and load authoritative DB role'
+    );
+    assert.strictEqual(resolved.customRoleId, undefined);
+
+    // 2. User with custom role assigned in DB
+    mockPrisma.roles.push({
+      id: 'role-limited-custom',
+      name: 'Custom Limited',
+      is_system: false,
+      merchant_id: MERCHANT_A,
+      created_at: new Date(),
+      updated_at: new Date(),
+    });
+    mockPrisma.rolePermissions.push({
+      id: 'rp-lim-1',
+      role_id: 'role-limited-custom',
+      permission_id: mockPrisma.permissions.find((p) => p.code === 'order:view_create').id,
+    });
+    mockPrisma.users.push({
+      id: 'user-custom-delegated',
+      merchant_id: MERCHANT_A,
+      role: 'OWNER', // DB enum might say OWNER, but custom_role_id is assigned
+      custom_role_id: 'role-limited-custom',
+      status: 'ACTIVE',
+    });
+
+    const customReq = {
+      userId: 'user-custom-delegated',
+      merchantId: MERCHANT_A,
+    };
+    const resolvedCustom = await service.resolveActorFromSession(customReq as any);
+    assert.strictEqual(resolvedCustom.customRoleId, 'role-limited-custom');
+
+    const perms = await service.getActorPermissions(resolvedCustom);
+    assert.deepStrictEqual(
+      perms,
+      ['order:view_create'],
+      'Must enforce custom role ceiling even if role enum is OWNER'
+    );
+
+    // 3. Fail closed if user does not exist in DB
+    await assert.rejects(
+      async () => {
+        await service.resolveActorFromSession({
+          userId: 'user-non-existent',
+          merchantId: MERCHANT_A,
+        } as any);
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.code, 'FORBIDDEN');
+        assert.strictEqual(err.getStatus(), 403);
+        return true;
+      }
+    );
+
+    // 4. Fail closed on cross-tenant mismatch
+    await assert.rejects(
+      async () => {
+        await service.resolveActorFromSession({
+          userId: 'user-demoted-owner',
+          merchantId: MERCHANT_B,
+        } as any);
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.code, 'FORBIDDEN');
+        assert.strictEqual(err.getStatus(), 403);
+        return true;
+      }
+    );
   });
 });

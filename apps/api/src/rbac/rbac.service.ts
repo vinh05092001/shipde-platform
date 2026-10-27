@@ -172,37 +172,135 @@ export class RbacService {
   }
 
   /**
+   * Resolves the authoritative actor context from the server session userId.
+   * Discards client/JWT-supplied roles to prevent privilege escalation via stale claims.
+   */
+  async resolveActorFromSession(req: {
+    userId?: string;
+    merchantId?: string;
+    authAssurance?: string;
+    mfaVerifiedAt?: any;
+    jwtClaims?: any;
+    userRole?: string;
+    customRoleId?: string;
+  }): Promise<ActorContext> {
+    if (!req.userId) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Phiên làm việc không có định danh người dùng hợp lệ',
+        false,
+        'Vui lòng đăng nhập lại'
+      );
+    }
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: req.userId },
+      select: {
+        id: true,
+        role: true,
+        custom_role_id: true,
+        merchant_id: true,
+        status: true,
+      },
+    });
+
+    if (!user) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Người dùng không tồn tại hoặc đã bị thu hồi quyền',
+        false,
+        'Vui lòng liên hệ quản trị viên'
+      );
+    }
+
+    if (req.merchantId && user.merchant_id !== req.merchantId) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Người dùng không thuộc tổ chức hiện tại',
+        false,
+        'Vui lòng kiểm tra lại quyền truy cập'
+      );
+    }
+
+    return {
+      userId: user.id,
+      merchantId: user.merchant_id,
+      role: user.role,
+      customRoleId: user.custom_role_id ?? undefined,
+      authAssurance: req.authAssurance || req.jwtClaims?.auth_assurance,
+      mfaVerifiedAt: req.mfaVerifiedAt || req.jwtClaims?.mfa_verified_at,
+    };
+  }
+
+  /**
    * Resolves effective permission codes held by the given actor.
    */
   async getActorPermissions(actor: ActorContext): Promise<string[]> {
     await this.ensurePlatformSeed();
 
-    // Owner holds all 20 canonical permissions unconditionally
-    if (actor.role === 'OWNER') {
-      return PLATFORM_PERMISSIONS.map((p) => p.code);
+    let customRoleId = actor.customRoleId;
+    let role = actor.role;
+    let merchantId = actor.merchantId;
+
+    if (actor.userId && (!role || customRoleId === undefined)) {
+      try {
+        const user = await this.prisma.user.findUnique({
+          where: { id: actor.userId },
+          select: { role: true, custom_role_id: true, merchant_id: true },
+        });
+        if (user) {
+          role = user.role;
+          customRoleId = user.custom_role_id ?? undefined;
+          merchantId = user.merchant_id || merchantId;
+        }
+      } catch (err) {
+        if (err instanceof CanonicalApiException) throw err;
+        throw new CanonicalApiException(
+          HttpStatus.SERVICE_UNAVAILABLE,
+          'SERVICE_UNAVAILABLE',
+          'Không thể tải thông tin người dùng lúc này',
+          true
+        );
+      }
     }
 
-    // If user has a custom role
-    if (actor.customRoleId) {
+    // Custom role ceiling takes precedence over enum role
+    if (customRoleId) {
+      let customRole: any = null;
       try {
-        const customRole = await this.prisma.role.findFirst({
-          where: { id: actor.customRoleId, merchant_id: actor.merchantId },
+        customRole = await this.prisma.role.findFirst({
+          where: { id: customRoleId, merchant_id: merchantId },
           include: {
             permissions: {
               include: { permission: true },
             },
           },
         });
-        if (customRole) {
-          return customRole.permissions.map((rp) => rp.permission.code);
-        }
-      } catch {
-        // Fallback
+      } catch (err) {
+        if (err instanceof CanonicalApiException) throw err;
+        throw new CanonicalApiException(
+          HttpStatus.SERVICE_UNAVAILABLE,
+          'SERVICE_UNAVAILABLE',
+          'Không thể tải thông tin vai trò tùy chỉnh lúc này',
+          true
+        );
       }
+      if (!customRole) {
+        return [];
+      }
+      return customRole.permissions.map((rp: any) => rp.permission.code);
+    }
+
+    // Owner holds all 20 canonical permissions unconditionally
+    if (role === 'OWNER') {
+      return PLATFORM_PERMISSIONS.map((p) => p.code);
     }
 
     // If user has a standard system role
-    const systemRoleDef = SYSTEM_ROLES.find((r) => r.code === actor.role);
+    const systemRoleDef = SYSTEM_ROLES.find((r) => r.code === role);
     if (systemRoleDef) {
       return systemRoleDef.permissions;
     }

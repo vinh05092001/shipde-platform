@@ -32,30 +32,7 @@ export class PermissionsGuard implements CanActivate {
     }
 
     const req = context.switchToHttp().getRequest();
-    let role = req.userRole || req.jwtClaims?.role;
-    let customRoleId = req.customRoleId;
-
-    if (!role && req.userId) {
-      try {
-        const user = await (this.rbacService as any).prisma.user.findUnique({
-          where: { id: req.userId },
-          select: { role: true, custom_role_id: true },
-        });
-        if (user) {
-          role = user.role;
-          customRoleId = user.custom_role_id;
-        }
-      } catch {
-        // Continue
-      }
-    }
-
-    const actor = {
-      userId: req.userId as string,
-      merchantId: req.merchantId as string,
-      role,
-      customRoleId,
-    };
+    const actor = await this.rbacService.resolveActorFromSession(req);
 
     const hasAll = await this.rbacService.actorHasPermissions(actor, requiredPermissions);
     if (!hasAll) {
@@ -67,6 +44,9 @@ export class PermissionsGuard implements CanActivate {
         'Vui lòng liên hệ Chủ Shop để được cấp quyền'
       );
     }
+
+    req.actorContext = actor;
+    return true;
 
     return true;
   }
