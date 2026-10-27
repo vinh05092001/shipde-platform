@@ -14,8 +14,8 @@
 | Risk domains    | `auth`, `security`, `tenant isolation`, `database ownership` |
 | Allowed paths   | `prisma/schema.prisma`, `prisma/migrations/*`, `apps/api/src/session/*`, `apps/api/src/app.module.ts`, `packages/testkit/src/msw/handlers.ts`, `packages/contracts/src/index.ts`, `docs/product-spec/contracts/openapi.yaml`, `docs/product-spec/work-items/FEAT-AUTH-06.md`, `apps/web/src/app/sessions/*`, `apps/web/src/components/sessions/*` |
 | Reviewer        | Codex — fresh independent task |
-| Branch          | `feat/feat-auth-06-sessions-c-230216` |
-| Pull Request    | [#126](https://github.com/vinh05092001/shipde-platform/pull/126) |
+| Branch          | `feat/feat-auth-06-sessions` |
+| Pull Request    | [#446](https://github.com/vinh05092001/shipde-platform/pull/446) |
 
 ## Business outcome
 
