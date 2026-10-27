@@ -87,6 +87,10 @@ async function runTest() {
       loadingHtml.includes('Vai Trò & Phân Quyền'),
     'Loading state must render page header'
   );
+  assert.ok(
+    !loadingHtml.includes('Bạn chỉ có quyền') && !loadingHtml.includes('iam:manage_users'),
+    'Loading state must NOT render false forbidden callout before catalogue fetch completes (Finding 4 / Round 8)'
+  );
 
   // 2. UI State: FORBIDDEN / Read-only warning (actor lacks iam:manage_users)
   const forbiddenHtml = renderPage({
@@ -275,6 +279,21 @@ async function runTest() {
   assert.ok(
     refreshErrorHtml.includes('Chủ Shop'),
     'Refresh error must keep system roles list mounted'
+  );
+
+  // 12. UI State: Round 8 Finding 4 - Catalogue fetch in flight does not show false forbidden state to owner
+  const inFlightFetchHtml = renderPage({
+    initialLoading: true,
+    initialCanManageRoles: false,
+    initialHasLoadedSuccessfully: false,
+  });
+  assert.ok(
+    !inFlightFetchHtml.includes('Bạn chỉ có quyền') && !inFlightFetchHtml.includes('iam:manage_users'),
+    'In-flight catalogue fetch must not render false forbidden callout before load completes (SCR-RBAC-01)'
+  );
+
+  console.log(
+    '✅ Finding 4 (Round 8): SCR-RBAC-01 Forbidden callout hidden during loading and only rendered on successful load proved successfully!'
   );
 
   console.log(

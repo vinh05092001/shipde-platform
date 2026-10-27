@@ -457,8 +457,8 @@ export default function RolesSettingsPage({
         </div>
       )}
 
-      {/* Non-authorized Warning Callout */}
-      {!canManageRoles && (
+      {/* Non-authorized Warning Callout (Finding 4 / Round 8: hide until successful load) */}
+      {!loading && hasLoadedSuccessfully && !canManageRoles && (
         <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs flex items-center gap-2.5">
           <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0" />
           <span>
