@@ -6,13 +6,13 @@
 | --------------- | ----- |
 | Work Item ID    | `FEAT-RBAC-01` |
 | Feature ID      | `FEAT-RBAC-01` |
-| Status          | `READY_FOR_AUTHOR` |
+| Status          | `IN_PROGRESS` |
 | Delivery order  | 13 |
 | Dependencies    | `TASK-FOUND-04` (merged) |
 | Assigned author | `GEMINI` |
 | Risk            | `HIGH` |
 | Risk domains    | `auth`, `security`, `tenant isolation`, `database ownership` |
-| Allowed paths   | `prisma/schema.prisma`, `prisma/migrations/*`, `apps/api/src/rbac/*`, `apps/api/src/users/*`, `apps/api/src/app.module.ts`, `packages/contracts/src/index.ts`, `docs/product-spec/contracts/openapi.yaml`, `docs/product-spec/work-items/FEAT-RBAC-01.md`, `apps/web/src/components/UserManagementTab.tsx`, `apps/web/src/app/settings/roles/*` |
+| Allowed paths   | `prisma/schema.prisma`, `prisma/migrations/*`, `apps/api/src/rbac/*`, `apps/api/src/users/*`, `apps/api/src/app.module.ts`, `packages/contracts/src/index.ts`, `packages/contracts/src/openapi.ts`, `docs/product-spec/contracts/openapi.yaml`, `docs/product-spec/work-items/FEAT-RBAC-01.md`, `apps/web/src/components/UserManagementTab.tsx`, `apps/web/src/app/settings/roles/*` |
 | Reviewer        | Codex — fresh independent task |
 | Branch          | `feat/feat-rbac-01-roles-permissions` |
 | Pull Request    | Pending |

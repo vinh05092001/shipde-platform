@@ -135,6 +135,7 @@ model Merchant {
   mfa_factors       MfaFactor[]
   mfa_challenges    MfaChallenge[]
   mfa_admin_reset_idempotency MfaAdminResetIdempotency[]
+  roles             Role[]
 
   @@map("merchants")
 }
@@ -154,10 +155,12 @@ model User {
   phone_verified_at DateTime?         @db.Timestamptz
   terms_accepted_at DateTime?         @db.Timestamptz
   terms_version     String?           @db.VarChar(32)
+  custom_role_id    String?           @db.Uuid
   created_at        DateTime          @default(now()) @db.Timestamptz
   updated_at        DateTime          @updatedAt @db.Timestamptz
 
   merchant              Merchant              @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
+  custom_role           Role?                 @relation(fields: [custom_role_id], references: [id], onDelete: SetNull)
   assigned_cases        ExceptionCase[]       @relation("CaseAssignee")
   contact_logs          ExceptionContactLog[]
   device_sessions       DeviceSession[]
@@ -167,6 +170,7 @@ model User {
   mfa_challenges        MfaChallenge[]
 
   @@index([merchant_id, role])
+  @@index([merchant_id, custom_role_id])
   @@map("users")
 }
 
@@ -321,6 +325,58 @@ model MfaChallenge {
   @@index([user_id, consumed_at, expires_at])
   @@index([challenge_hash])
   @@map("mfa_challenges")
+}
+
+// ----------------------------------------------------------------------------
+// 1c. Roles & Permissions (FEAT-RBAC-01: Role, Permission, RolePermission)
+// ----------------------------------------------------------------------------
+
+model Role {
+  id                String            @id @default(uuid()) @db.Uuid
+  merchant_id       String?           @db.Uuid
+  code              String?           @db.VarChar(64)
+  name              String            @db.VarChar(255)
+  description       String?           @db.Text
+  is_system         Boolean           @default(false)
+  created_at        DateTime          @default(now()) @db.Timestamptz
+  updated_at        DateTime          @updatedAt @db.Timestamptz
+
+  merchant          Merchant?         @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
+  permissions       RolePermission[]
+  users             User[]
+
+  @@unique([merchant_id, name])
+  @@index([merchant_id, is_system])
+  @@map("roles")
+}
+
+model Permission {
+  id                String            @id @default(uuid()) @db.Uuid
+  code              String            @unique @db.VarChar(128)
+  name              String            @db.VarChar(255)
+  description       String?           @db.Text
+  category          String            @db.VarChar(64)
+  created_at        DateTime          @default(now()) @db.Timestamptz
+
+  role_permissions  RolePermission[]
+
+  @@index([category])
+  @@map("permissions")
+}
+
+model RolePermission {
+  id                String            @id @default(uuid()) @db.Uuid
+  role_id           String            @db.Uuid
+  permission_id     String            @db.Uuid
+  created_at        DateTime          @default(now()) @db.Timestamptz
+
+  role              Role              @relation(fields: [role_id], references: [id], onDelete: Cascade)
+  permission        Permission        @relation(fields: [permission_id], references: [id], onDelete: Cascade)
+
+  @@unique([role_id, permission_id])
+  @@index([role_id])
+  @@index([permission_id])
+  @@map("role_permissions")
 }
 
 // ----------------------------------------------------------------------------
