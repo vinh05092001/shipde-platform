@@ -469,5 +469,17 @@ export type AcceptInvitationRequest = components['schemas']['AcceptInvitationReq
 export type AcceptInvitationResponse = components['schemas']['AcceptInvitationResponse'];
 export type CheckScopeRequest = components['schemas']['CheckScopeRequest'];
 export type CheckScopeResponse = components['schemas']['CheckScopeResponse'];
+
+// --- Personal Profile (FEAT-PRO-01) Types ---
+export type UserProfile = components['schemas']['UserProfile'];
+export type NotificationPreferences = components['schemas']['NotificationPreferences'];
+export type UserPreferences = components['schemas']['UserPreferences'];
+export type GetMeResponse = components['schemas']['GetMeResponse'];
+export type UpdateMeRequest = components['schemas']['UpdateMeRequest'];
+export type UpdateMeResponse = components['schemas']['UpdateMeResponse'];
+export type GetPreferencesResponse = components['schemas']['GetPreferencesResponse'];
+export type UpdatePreferencesRequest = components['schemas']['UpdatePreferencesRequest'];
+export type UpdatePreferencesResponse = components['schemas']['UpdatePreferencesResponse'];
+
 // --- Generated OpenAPI Schema Types ---
 export type * from './openapi';

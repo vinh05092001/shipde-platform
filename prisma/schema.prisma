@@ -168,6 +168,11 @@ model User {
   // ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED (so merchant cascade and in-use role delete have one defined outcome).
   // Kept unmanaged by Prisma relation to ensure prisma db push / migrate diff cannot replace or drop the deferrable constraint.
   custom_role_id    String?           @db.Uuid
+  avatar_url        String?           @db.VarChar(512)
+  language          String            @default("vi") @db.VarChar(10)
+  timezone          String            @default("Asia/Ho_Chi_Minh") @db.VarChar(64)
+  notification_preferences Json?          @db.JsonB
+  default_warehouse_id String?          @db.Uuid
   created_at        DateTime          @default(now()) @db.Timestamptz
   updated_at        DateTime          @updatedAt @db.Timestamptz
 

@@ -850,11 +850,85 @@ paths:
           $ref: '#/components/responses/Error'
   /me:
     get:
-      tags: [Auth]
+      tags: [Auth, Profile]
+      summary: Get current authenticated user profile and preferences (FEAT-PRO-01)
       operationId: getMe
       responses:
         '200':
-          description: Current user and memberships
+          description: Current user profile, merchant metadata, and personal preferences
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetMeResponse'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+    patch:
+      tags: [Auth, Profile]
+      summary: Update current authenticated user profile (FEAT-PRO-01)
+      operationId: updateMe
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateMeRequest'
+      responses:
+        '200':
+          description: Profile updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UpdateMeResponse'
+        '400':
+          description: Validation error or invalid phone/timezone format
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          description: Privilege escalation denied or warehouse scope unauthorized
+          $ref: '#/components/responses/Error'
+        '409':
+          description: Phone number already exists
+          $ref: '#/components/responses/Error'
+  /me/preferences:
+    get:
+      tags: [Auth, Profile]
+      summary: Get current user personal preferences (FEAT-PRO-01)
+      operationId: getMyPreferences
+      responses:
+        '200':
+          description: Current user preferences
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetPreferencesResponse'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+    patch:
+      tags: [Auth, Profile]
+      summary: Update current user personal preferences (FEAT-PRO-01)
+      operationId: updateMyPreferences
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdatePreferencesRequest'
+      responses:
+        '200':
+          description: Preferences updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UpdatePreferencesResponse'
+        '400':
+          description: Validation error or critical notification cannot be disabled
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          description: Warehouse scope unauthorized
+          $ref: '#/components/responses/Error'
   /sessions:
     get:
       tags: [Auth]
@@ -2645,5 +2719,197 @@ components:
               type: array
               items:
                 type: string
+        meta:
+          $ref: '#/components/schemas/Meta'
+    NotificationChannels:
+      type: object
+      properties:
+        email:
+          type: boolean
+        in_app:
+          type: boolean
+        push:
+          type: boolean
+    NotificationSubscriptions:
+      type: object
+      properties:
+        delivery_fail:
+          type: boolean
+        rate_discrepancy:
+          type: boolean
+        cod_overdue:
+          type: boolean
+        claim_deadline_warning:
+          type: boolean
+        abnormal_return:
+          type: boolean
+        security_alerts:
+          type: boolean
+        create_unknown:
+          type: boolean
+    NotificationPreferences:
+      type: object
+      properties:
+        channels:
+          $ref: '#/components/schemas/NotificationChannels'
+        digest_window_minutes:
+          type: integer
+          example: 15
+        subscriptions:
+          $ref: '#/components/schemas/NotificationSubscriptions'
+    UserProfile:
+      type: object
+      required:
+        - id
+        - full_name
+        - role
+        - language
+        - timezone
+      properties:
+        id:
+          type: string
+          format: uuid
+        merchant_id:
+          type: string
+          format: uuid
+          nullable: true
+        email:
+          type: string
+          format: email
+          nullable: true
+        phone:
+          type: string
+          nullable: true
+        full_name:
+          type: string
+        role:
+          type: string
+        status:
+          type: string
+        avatar_url:
+          type: string
+          nullable: true
+        language:
+          type: string
+          example: "vi"
+        timezone:
+          type: string
+          example: "Asia/Ho_Chi_Minh"
+        default_warehouse_id:
+          type: string
+          format: uuid
+          nullable: true
+        store_scopes:
+          type: array
+          items:
+            type: string
+        warehouse_scopes:
+          type: array
+          items:
+            type: string
+        custom_role_id:
+          type: string
+          format: uuid
+          nullable: true
+        notification_preferences:
+          $ref: '#/components/schemas/NotificationPreferences'
+        merchant:
+          type: object
+          nullable: true
+          properties:
+            id:
+              type: string
+              format: uuid
+            name:
+              type: string
+        created_at:
+          type: string
+          format: date-time
+    UserPreferences:
+      type: object
+      required:
+        - language
+        - timezone
+      properties:
+        language:
+          type: string
+          example: "vi"
+        timezone:
+          type: string
+          example: "Asia/Ho_Chi_Minh"
+        default_warehouse_id:
+          type: string
+          format: uuid
+          nullable: true
+        notification_preferences:
+          $ref: '#/components/schemas/NotificationPreferences'
+    GetMeResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          $ref: '#/components/schemas/UserProfile'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    UpdateMeRequest:
+      type: object
+      properties:
+        full_name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        phone:
+          type: string
+          nullable: true
+        avatar_url:
+          type: string
+          nullable: true
+        language:
+          type: string
+          enum: [vi, en]
+        timezone:
+          type: string
+        default_warehouse_id:
+          type: string
+          format: uuid
+          nullable: true
+        notification_preferences:
+          $ref: '#/components/schemas/NotificationPreferences'
+    UpdateMeResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          $ref: '#/components/schemas/UserProfile'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    GetPreferencesResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          $ref: '#/components/schemas/UserPreferences'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    UpdatePreferencesRequest:
+      type: object
+      properties:
+        language:
+          type: string
+          enum: [vi, en]
+        timezone:
+          type: string
+        default_warehouse_id:
+          type: string
+          format: uuid
+          nullable: true
+        notification_preferences:
+          $ref: '#/components/schemas/NotificationPreferences'
+    UpdatePreferencesResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          $ref: '#/components/schemas/UserPreferences'
         meta:
           $ref: '#/components/schemas/Meta'
