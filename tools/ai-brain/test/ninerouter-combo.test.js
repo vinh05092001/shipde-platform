@@ -113,7 +113,7 @@ test('priorFor candidate with comboMembers resolves to the best member score', (
 
   const prior = priorFor(candidate, 'writer', priorsData, Date.now());
   assert.ok(prior);
-  assert.equal(prior.score, 76);
+  assert.equal(prior.score, 15);
 });
 
 test('no secret is exposed in module exports or return structures', () => {

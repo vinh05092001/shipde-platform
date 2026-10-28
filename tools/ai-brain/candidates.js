@@ -81,19 +81,28 @@ function resolveComboLimits(source, registry, opts, comboName, members) {
   const metaLookup = (src, id) => {
     if (!src || !src.modelMeta || !id) return null;
     if (src.modelMeta[id]) return src.modelMeta[id];
-    const stripped = id.startsWith('ninerouter/') ? id.slice('ninerouter/'.length) : null;
+    const slash = id.indexOf('/');
+    const stripped = slash !== -1 ? id.slice(slash + 1) : null;
     if (stripped && src.modelMeta[stripped]) return src.modelMeta[stripped];
-    if (!id.startsWith('ninerouter/') && src.modelMeta[`ninerouter/${id}`]) {
-      return src.modelMeta[`ninerouter/${id}`];
+    for (const [key, val] of Object.entries(src.modelMeta)) {
+      if (key.endsWith('/' + id) || key === id) return val;
     }
     return null;
   };
 
-  const directMeta =
-    metaLookup(source, comboName) ||
-    (opts &&
-      opts.modelMeta &&
-      (opts.modelMeta[comboName] || opts.modelMeta[`ninerouter/${comboName}`]));
+  let directMeta = metaLookup(source, comboName);
+  if (!directMeta && opts && opts.modelMeta) {
+    if (opts.modelMeta[comboName]) {
+      directMeta = opts.modelMeta[comboName];
+    } else {
+      for (const [key, val] of Object.entries(opts.modelMeta)) {
+        if (key.endsWith('/' + comboName) || key === comboName) {
+          directMeta = val;
+          break;
+        }
+      }
+    }
+  }
 
   let memberCw = undefined;
   let memberMaxOut = undefined;
