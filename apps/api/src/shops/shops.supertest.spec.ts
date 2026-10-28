@@ -344,6 +344,21 @@ async function runShopsSupertestSuite() {
     console.log('  PASS: AC-ORG-01-08 verified.');
 
     // ========================================================================
+    // AC-ORG-01-08b: Validation error on invalid timezone and currency
+    // ========================================================================
+    console.log('🧪 Testing AC-ORG-01-08b: Invalid timezone and currency...');
+    const resInvalidTzCurr = await request(app.getHttpServer())
+      .patch('/api/v1/shops/profile')
+      .set('Authorization', `Bearer ${ownerTokenA}`)
+      .send({ timezone: 'Invalid/Timezone_Fake', currency: 'USD' })
+      .expect(400);
+
+    assert.strictEqual(resInvalidTzCurr.body.error.code, 'VALIDATION_ERROR');
+    assert.ok(resInvalidTzCurr.body.error.fields.some((f: any) => f.field === 'timezone'));
+    assert.ok(resInvalidTzCurr.body.error.fields.some((f: any) => f.field === 'currency'));
+    console.log('  PASS: AC-ORG-01-08b verified invalid timezone and currency.');
+
+    // ========================================================================
     // AC-ORG-01-09: User lacking iam:shop_config capability (WAREHOUSE) -> 403
     // ========================================================================
     console.log('🧪 Testing AC-ORG-01-09: Unauthorized role (WAREHOUSE) attempting mutation...');

@@ -145,7 +145,7 @@ model Merchant {
   default_fee_payer   String            @default("SHOP") @db.VarChar(32)
   default_weight_unit String            @default("g") @db.VarChar(16)
   auto_routing_enabled Boolean          @default(false)
-  operating_notes     String?           @db.Text
+  operating_notes     String?           @db.VarChar(1000)
 
   users             User[]
   carrier_accounts  CarrierAccount[]

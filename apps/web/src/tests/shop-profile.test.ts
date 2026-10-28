@@ -97,6 +97,16 @@ async function runShopProfileWebTestSuite() {
   assert.strictEqual(invalidBankRes.isValid, false);
   assert.ok(invalidBankRes.errors.bank_account_number);
 
+  // Invalid timezone and currency
+  const invalidTzCurr = validateShopProfileForm({
+    ...validState,
+    timezone: 'Invalid/Zone',
+    currency: 'USD',
+  });
+  assert.strictEqual(invalidTzCurr.isValid, false);
+  assert.ok(invalidTzCurr.errors.timezone);
+  assert.ok(invalidTzCurr.errors.currency);
+
   console.log('  PASS: Form validation logic verified.');
 
   // 2. React Static Markup: Loading State

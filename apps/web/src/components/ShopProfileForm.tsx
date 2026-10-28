@@ -108,6 +108,20 @@ export function validateShopProfileForm(form: ShopProfileFormState): {
     }
   }
 
+  if (form.timezone && form.timezone.trim()) {
+    const trimmed = form.timezone.trim();
+    if (trimmed !== 'Asia/Ho_Chi_Minh' && trimmed !== 'UTC') {
+      errors.timezone = 'Múi giờ không hợp lệ';
+    }
+  }
+
+  if (form.currency && form.currency.trim()) {
+    const trimmed = form.currency.trim();
+    if (trimmed !== 'VND') {
+      errors.currency = 'Đơn vị tiền tệ mặc định phải là VND';
+    }
+  }
+
   if (form.operating_notes && form.operating_notes.length > 1000) {
     errors.operating_notes = 'Ghi chú vận hành không được vượt quá 1000 ký tự';
   }

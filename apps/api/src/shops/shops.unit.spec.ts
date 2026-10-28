@@ -204,6 +204,32 @@ describe('FEAT-ORG-01: Shop Profile Unit Test Suite', () => {
       assert.strictEqual(err[0].field, 'operating_notes');
       assert.strictEqual(err[0].code, 'MAX_LENGTH');
     });
+
+    it('should reject invalid timezone format or non-standard list', () => {
+      const err = validateUpdateShopProfileDto({ timezone: 'Invalid/Zone_Fake' });
+      assert.strictEqual(err.length, 1);
+      assert.strictEqual(err[0].field, 'timezone');
+      assert.strictEqual(err[0].code, 'INVALID_FORMAT');
+    });
+
+    it('should accept valid standard IANA timezones (Asia/Ho_Chi_Minh and UTC)', () => {
+      const errHcm = validateUpdateShopProfileDto({ timezone: 'Asia/Ho_Chi_Minh' });
+      assert.strictEqual(errHcm.length, 0);
+      const errUtc = validateUpdateShopProfileDto({ timezone: 'UTC' });
+      assert.strictEqual(errUtc.length, 0);
+    });
+
+    it('should reject invalid currency (must be VND)', () => {
+      const err = validateUpdateShopProfileDto({ currency: 'USD' });
+      assert.strictEqual(err.length, 1);
+      assert.strictEqual(err[0].field, 'currency');
+      assert.strictEqual(err[0].code, 'INVALID_ENUM');
+    });
+
+    it('should accept valid currency VND', () => {
+      const err = validateUpdateShopProfileDto({ currency: 'VND' });
+      assert.strictEqual(err.length, 0);
+    });
   });
 
   describe('ShopsService Operations', () => {

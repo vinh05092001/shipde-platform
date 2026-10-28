@@ -17,7 +17,7 @@ ALTER TABLE "merchants" ADD COLUMN IF NOT EXISTS "currency" VARCHAR(16) NOT NULL
 ALTER TABLE "merchants" ADD COLUMN IF NOT EXISTS "default_fee_payer" VARCHAR(32) NOT NULL DEFAULT 'SHOP';
 ALTER TABLE "merchants" ADD COLUMN IF NOT EXISTS "default_weight_unit" VARCHAR(16) NOT NULL DEFAULT 'g';
 ALTER TABLE "merchants" ADD COLUMN IF NOT EXISTS "auto_routing_enabled" BOOLEAN NOT NULL DEFAULT false;
-ALTER TABLE "merchants" ADD COLUMN IF NOT EXISTS "operating_notes" TEXT;
+ALTER TABLE "merchants" ADD COLUMN IF NOT EXISTS "operating_notes" VARCHAR(1000);
 
 -- CreateIndex
 CREATE INDEX IF NOT EXISTS "merchants_tax_code_idx" ON "merchants"("tax_code");

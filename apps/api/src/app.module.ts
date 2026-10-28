@@ -17,14 +17,7 @@ import { UsersModule } from './users/users.module';
 import { ShopsModule } from './shops/shops.module';
 
 @Module({
-  imports: [
-    AuthModule,
-    SessionModule,
-    RbacModule,
-    InvitationsModule,
-    UsersModule,
-    ShopsModule,
-  ],
+  imports: [AuthModule, SessionModule, RbacModule, InvitationsModule, UsersModule, ShopsModule],
   controllers: [HealthController],
   providers: [
     {

@@ -55,6 +55,18 @@ const PHONE_REGEX = /^(0|\+84)[35789][0-9]{8}$/;
 // Bank account number: 6 to 30 alphanumeric characters
 const BANK_ACCOUNT_REGEX = /^[0-9A-Za-z]{6,30}$/;
 
+export function isValidTimeZone(tz: string): boolean {
+  if (!tz || typeof tz !== 'string') return false;
+  const trimmed = tz.trim();
+  if (trimmed.length === 0 || trimmed.length > 64) return false;
+  try {
+    new Intl.DateTimeFormat(undefined, { timeZone: trimmed });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function validateUpdateShopProfileDto(dto: UpdateShopProfileDto): CanonicalFieldError[] {
   const fields: CanonicalFieldError[] = [];
 
@@ -154,6 +166,27 @@ export function validateUpdateShopProfileDto(dto: UpdateShopProfileDto): Canonic
         field: 'bank_name',
         code: 'MAX_LENGTH',
         message: 'Tên ngân hàng không được vượt quá 128 ký tự',
+      });
+    }
+  }
+
+  if (dto.timezone !== undefined) {
+    const trimmedTz = typeof dto.timezone === 'string' ? dto.timezone.trim() : '';
+    if (!isValidTimeZone(trimmedTz)) {
+      fields.push({
+        field: 'timezone',
+        code: 'INVALID_FORMAT',
+        message: 'Múi giờ không hợp lệ theo chuẩn IANA (ví dụ: Asia/Ho_Chi_Minh hoặc UTC)',
+      });
+    }
+  }
+
+  if (dto.currency !== undefined) {
+    if (dto.currency !== 'VND') {
+      fields.push({
+        field: 'currency',
+        code: 'INVALID_ENUM',
+        message: 'Đơn vị tiền tệ mặc định phải là VND',
       });
     }
   }

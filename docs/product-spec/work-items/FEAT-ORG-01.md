@@ -132,22 +132,23 @@ The shop profile interface in `SCR-SHOP-01` (`/settings/shop`) must implement:
 ## Verification commands
 
 - `pnpm install --frozen-lockfile` — PASSED (dependencies up-to-date)
-- `pnpm db:generate` — PASSED (Prisma Client v6.19.3 generated in 213ms)
+- `pnpm db:generate` — PASSED (Prisma Client v6.19.3 generated in 336ms)
 - `pnpm lint` — PASSED (12 tasks successful, 0 errors)
 - `pnpm format:check` — PASSED (all 14 changed files 100% compliant)
 - `pnpm typecheck` — PASSED (12 tasks successful, 0 errors)
-- `pnpm --filter @shipde/api test` — PASSED (all 19 unit tests and all 14 supertest acceptance criteria passed)
-- `pnpm --filter @shipde/web test` — PASSED (all 57 comprehensive rules + admin-shops + live rbac + roles page + shop-profile UI test suite passed)
-- `pnpm contract:check` — PASSED (51 endpoints validated, 0 drift between OpenAPI 3.1.0 and @shipde/contracts)
-- `pnpm build` — PASSED (8 tasks successful, Next.js build compiled in 6.5s, /settings/shop static page generated)
-- `git diff --check` — PASSED (clean, 0 whitespace errors)
+- `pnpm --filter @shipde/api exec tsx --tsconfig tsconfig.json --test src/shops/shops.unit.spec.ts` — PASSED (all 23 unit tests passed)
+- `pnpm --filter @shipde/api exec tsx --tsconfig tsconfig.json src/shops/shops.supertest.spec.ts` — PASSED (all 15 supertest acceptance criteria AC-01..14 + AC-08b passed)
+- `pnpm --filter @shipde/web exec tsx src/tests/shop-profile.test.ts` — PASSED (all 9 UI state and form validation tests passed)
+- `pnpm contract:check` — PASSED (56 endpoints validated, 0 drift between OpenAPI 3.1.0 and @shipde/contracts)
 - `node scripts/ai/check-no-hardcode.mjs` — PASSED (0 raw instances, 0 new)
+- `git diff --check` — PASSED (clean, 0 whitespace errors)
 
 ## Codex review record
 
 | Review round | Commit | Verdict | Findings resolved |
 |---|---|---|---|
-| 1 | `b66bdd13f0300ba9291199264f4a22b0e5621fe4` | Pending | Pending independent Codex review |
+| 1 | `9aa1a1fdaf56d527db6a1dab61f756c8260b3219` | `CHANGES_REQUIRED` | Resolved in Round 2: (1) P0 Blocker: Added missing `operating_notes VARCHAR(1000)` column to `migration.sql`; (2) P2 Medium: Validated `timezone` against IANA standard list (`isValidTimeZone`) rejecting invalid formats/zones; (3) P2 Medium: Validated `currency` strictly to `VND` in `validateUpdateShopProfileDto` and web form; (4) P2 Low: Aligned `operating_notes` column to `@db.VarChar(1000)` in `prisma/schema.prisma` matching DTO and specification constraints. Merged `origin/main` (FEAT-USR-02). |
+| 2 | Pending | Pending | Ready for independent Codex review |
 
 ## Residual limitations
 
