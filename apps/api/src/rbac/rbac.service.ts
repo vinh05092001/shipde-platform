@@ -1004,26 +1004,7 @@ export class RbacService implements OnModuleInit {
         ? sanitizeRoleTextInput(dto.description) || null
         : null;
 
-    // 4. Duplicate name check within tenant (BR-RBAC-05, AC-RBAC-01-04)
-    const existing = await this.prisma.role.findFirst({
-      where: {
-        merchant_id: actor.merchantId,
-        name: { equals: trimmedName, mode: 'insensitive' },
-      },
-    });
-
-    if (existing) {
-      throw new CanonicalApiException(
-        HttpStatus.BAD_REQUEST,
-        'ROLE_NAME_EXISTS',
-        'Tên vai trò đã tồn tại trong cửa hàng',
-        false,
-        'Vui lòng chọn tên vai trò khác',
-        [{ field: 'name', code: 'DUPLICATE', message: 'Tên vai trò đã tồn tại' }]
-      );
-    }
-
-    // 5. Resolve permissions from DB (by code or id) first and verify exact match
+    // 4. Resolve permissions from DB (by code or id) first and verify exact match
     const permissionsInDb = await this.prisma.permission.findMany({
       where: buildPermissionFilter(dto.permissions),
     });
@@ -1052,50 +1033,12 @@ export class RbacService implements OnModuleInit {
       );
     }
 
-    // 6. Privilege Ceiling: Actor cannot grant permissions they do not possess (BR-RBAC-02, AC-RBAC-01-05)
-    const actorPerms = await this.getActorPermissions(actor);
-    const actorPermSet = new Set(actorPerms);
-
-    const unauthorizedResolvedCodes = permissionsInDb
-      .map((p) => p.code)
-      .filter((code) => !actorPermSet.has(code));
-
-    if (unauthorizedResolvedCodes.length > 0) {
-      throw new CanonicalApiException(
-        HttpStatus.FORBIDDEN,
-        'PRIVILEGE_ESCALATION_DENIED',
-        'Không thể cấp quyền vượt quá thẩm quyền của bạn',
-        false,
-        `Bạn không có các quyền sau: ${unauthorizedResolvedCodes.join(', ')}`
-      );
-    }
-
     // Step-up / fresh assurance check for sensitive capabilities (Finding 2 / Round 10 / Finding 1 / Round 11 / Finding 3 / Round 14 / RBAC-APPROVAL-MATRIX)
     const hasSensitiveGrants = permissionsInDb.some((p) =>
       SENSITIVE_CAPABILITY_PERMISSIONS.has(p.code)
     );
-    if (hasSensitiveGrants) {
-      if (!actor.sessionId) {
-        throw new CanonicalApiException(
-          HttpStatus.FORBIDDEN,
-          'MFA_FRESH_AUTH_REQUIRED',
-          'Thao tác gán quyền hạn nhạy cảm yêu cầu phiên làm việc đã xác thực MFA',
-          false,
-          'Vui lòng xác thực hai yếu tố trước khi gán các quyền hạn nhạy cảm'
-        );
-      }
-      if (actor.authAssurance && !isMfaAssuranceFresh(actor.authAssurance, actor.mfaVerifiedAt)) {
-        throw new CanonicalApiException(
-          HttpStatus.FORBIDDEN,
-          'MFA_FRESH_AUTH_REQUIRED',
-          'Thao tác gán quyền hạn nhạy cảm yêu cầu phiên làm việc đã xác thực MFA',
-          false,
-          'Vui lòng xác thực hai yếu tố trước khi gán các quyền hạn nhạy cảm'
-        );
-      }
-    }
 
-    // 6. Execute in transaction with Audit Log (AC-RBAC-01-03, AC-RBAC-01-15)
+    // 5. Execute in transaction with authoritative locks, privilege ceiling, duplicate check, and Audit Log (AC-RBAC-01-03, AC-RBAC-01-15, P1-01)
     let createdRole: any;
     try {
       createdRole = await this.prisma.$transaction(async (tx) => {

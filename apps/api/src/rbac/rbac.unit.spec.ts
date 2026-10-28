@@ -3746,4 +3746,110 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
       'RbacController route prefix must match OpenAPI server base URL'
     );
   });
+
+  // Finding 1 (Round 15 / P1-01): createRole removes misleading pre-transaction checks, relying on authoritative in-transaction locks
+  test('Finding 1 (Round 15 / P1-01): createRole relies on authoritative in-transaction locks for privilege ceiling and duplicate checks without TOCTOU window', async () => {
+    // 1. In-transaction duplicate name check correctly catches existing role under lock with 400 ROLE_NAME_EXISTS
+    const dupRoleName = `Authoritative Role ${Date.now()}`;
+    await service.createRole(
+      {
+        name: dupRoleName,
+        permissions: ['order:view_create'],
+      },
+      OWNER_ACTOR,
+      '127.0.0.1',
+      'corr-p1-01-initial'
+    );
+
+    await assert.rejects(
+      async () => {
+        await service.createRole(
+          {
+            name: dupRoleName,
+            permissions: ['order:view_create'],
+          },
+          OWNER_ACTOR,
+          '127.0.0.1',
+          'corr-p1-01-dup'
+        );
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 400);
+        assert.strictEqual(err.code, 'ROLE_NAME_EXISTS');
+        return true;
+      }
+    );
+
+    // 2. In-transaction privilege ceiling check under lock catches unauthorized permission escalation with 403 PRIVILEGE_ESCALATION_DENIED
+    const delegatedRoleId = `role-delegated-${Date.now()}`;
+    mockPrisma.roles.push({
+      id: delegatedRoleId,
+      code: null,
+      name: `Delegated Admin ${Date.now()}`,
+      description: 'Admin with order create only',
+      is_system: false,
+      merchant_id: MERCHANT_A,
+      created_at: new Date(),
+      updated_at: new Date(),
+    });
+    mockPrisma.rolePermissions.push(
+      {
+        id: `rp-${delegatedRoleId}-1`,
+        role_id: delegatedRoleId,
+        permission_id: mockPrisma.permissions.find((p: any) => p.code === 'iam:manage_users').id,
+      },
+      {
+        id: `rp-${delegatedRoleId}-2`,
+        role_id: delegatedRoleId,
+        permission_id: mockPrisma.permissions.find((p: any) => p.code === 'order:view_create').id,
+      }
+    );
+    const delegatedUserId = `user-delegated-${Date.now()}`;
+    mockPrisma.users.push({
+      id: delegatedUserId,
+      merchant_id: MERCHANT_A,
+      role: 'OPS_CSKH',
+      custom_role_id: delegatedRoleId,
+      status: 'ACTIVE',
+    });
+    const delegatedSessionId = `session-mfa-delegated-${Date.now()}`;
+    mockPrisma.deviceSessions.push({
+      id: delegatedSessionId,
+      user_id: delegatedUserId,
+      auth_assurance: 'MFA',
+      mfa_verified_at: new Date(),
+      status: 'ACTIVE',
+      expires_at: new Date(Date.now() + 86400000),
+    });
+
+    const delegatedActor = {
+      userId: delegatedUserId,
+      merchantId: MERCHANT_A,
+      role: 'OPS_CSKH',
+      customRoleId: delegatedRoleId,
+      sessionId: delegatedSessionId,
+    };
+
+    await assert.rejects(
+      async () => {
+        await service.createRole(
+          {
+            name: `Escalation Attempt ${Date.now()}`,
+            // delegatedActor lacks reconciliation:allocate_bank_receipt
+            permissions: ['order:view_create', 'reconciliation:allocate_bank_receipt'],
+          },
+          delegatedActor,
+          '127.0.0.1',
+          'corr-p1-01-escalate'
+        );
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 403);
+        assert.strictEqual(err.code, 'PRIVILEGE_ESCALATION_DENIED');
+        return true;
+      }
+    );
+  });
 });
