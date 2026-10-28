@@ -621,7 +621,8 @@ function createPlanningServices(ctx) {
     if (!authorKey) {
       return {
         verdict: 'BLOCKED',
-        reason: 'AUTHOR_UNKNOWN: an author or writer candidate key is required for independent review',
+        reason:
+          'AUTHOR_UNKNOWN: an author or writer candidate key is required for independent review',
       };
     }
     const state = newState();

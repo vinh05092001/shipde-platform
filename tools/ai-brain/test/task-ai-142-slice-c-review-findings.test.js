@@ -55,9 +55,7 @@ test('Finding 1: resume after draft publication does not skip CI verification an
           exitCode: 0,
           stdout: JSON.stringify({
             headRefOid: sha,
-            statusCheckRollup: [
-              { name: 'contract', status: 'COMPLETED', conclusion: 'FAILURE' },
-            ],
+            statusCheckRollup: [{ name: 'contract', status: 'COMPLETED', conclusion: 'FAILURE' }],
           }),
           stderr: '',
         };
@@ -68,19 +66,16 @@ test('Finding 1: resume after draft publication does not skip CI verification an
       return { exitCode: 1, stdout: '', stderr: '' };
     };
 
-    const result = await orchestrate.runOrchestration(
-      workItemId,
-      {
-        specs: [{ id: workItemId }],
-        checkpointFile,
-        decisionDir: dir,
-        ghRunner,
-        ciGate: true,
-        ciSleep: async () => {},
-        ciPollIntervalMs: 1,
-        ciTimeoutMs: 100,
-      }
-    );
+    const result = await orchestrate.runOrchestration(workItemId, {
+      specs: [{ id: workItemId }],
+      checkpointFile,
+      decisionDir: dir,
+      ghRunner,
+      ciGate: true,
+      ciSleep: async () => {},
+      ciPollIntervalMs: 1,
+      ciTimeoutMs: 100,
+    });
 
     assert.equal(ciCalled, true, 'CI gate must be called on resume');
     const outcome = (result.outcomes || []).find((o) => o.workItemId === workItemId);
@@ -182,12 +177,18 @@ test('Finding 3: two workers sharing cache update workspace links to their own c
     // Worker A updates links
     updateLinksForWorker(workerA);
     const linkAfterA = fs.readlinkSync(pkgLink);
-    assert.equal(path.resolve(path.dirname(pkgLink), linkAfterA).toLowerCase(), contractsA.toLowerCase());
+    assert.equal(
+      path.resolve(path.dirname(pkgLink), linkAfterA).toLowerCase(),
+      contractsA.toLowerCase()
+    );
 
     // Worker B updates links sharing the same depsDir
     updateLinksForWorker(workerB);
     const linkAfterB = fs.readlinkSync(pkgLink);
-    assert.equal(path.resolve(path.dirname(pkgLink), linkAfterB).toLowerCase(), contractsB.toLowerCase());
+    assert.equal(
+      path.resolve(path.dirname(pkgLink), linkAfterB).toLowerCase(),
+      contractsB.toLowerCase()
+    );
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
@@ -214,7 +215,11 @@ test('Finding 4: unknown author fails closed for independent review', async () =
     authorKey: null,
     gh: () => ({
       ok: true,
-      stdout: JSON.stringify({ headRefOid: sha, title: '[FEAT-UNKNOWN-01] test', headRefName: 'feat/x' }),
+      stdout: JSON.stringify({
+        headRefOid: sha,
+        title: '[FEAT-UNKNOWN-01] test',
+        headRefName: 'feat/x',
+      }),
       stderr: '',
     }),
     git: () => ({ ok: true, stdout: '', stderr: '' }),
@@ -238,7 +243,9 @@ test('Finding 5: bearer tokens are redacted in launcher diagnostics and CI logs'
     assert.doesNotMatch(findings[0].detail, /sk-synthetic-token/);
     assert.match(findings[0].detail, /\[REDACTED_SECRET\]/);
 
-    const saved = JSON.parse(fs.readFileSync(path.join(dir, 'ci-failure-FEAT-SECRET-01.json'), 'utf8'));
+    const saved = JSON.parse(
+      fs.readFileSync(path.join(dir, 'ci-failure-FEAT-SECRET-01.json'), 'utf8')
+    );
     assert.doesNotMatch(saved.log, /sk-synthetic-token/);
     assert.match(saved.log, /\[REDACTED_SECRET\]/);
   } finally {
@@ -322,9 +329,15 @@ test('Finding 7: generic PR reviewer receives actual Work Item requirements, not
     });
 
     assert.ok(receivedItem, 'Review lane must receive an item');
-    assert.ok(receivedItem.allowedPaths.includes('apps/api/custom.js'), 'Must load actual allowed paths from Work Item');
+    assert.ok(
+      receivedItem.allowedPaths.includes('apps/api/custom.js'),
+      'Must load actual allowed paths from Work Item'
+    );
     assert.ok(receivedItem.allowedPaths.includes('packages/contracts/spec.json'));
-    assert.ok(receivedItem.acceptanceCriteria.some((ac) => ac.includes('API returns 201')), 'Must load actual acceptance criteria');
+    assert.ok(
+      receivedItem.acceptanceCriteria.some((ac) => ac.includes('API returns 201')),
+      'Must load actual acceptance criteria'
+    );
 
     // Planning review (isPlanReview = true)
     receivedItem = null;
@@ -337,8 +350,16 @@ test('Finding 7: generic PR reviewer receives actual Work Item requirements, not
       isPlanReview: true,
     });
     assert.ok(receivedItem, 'Review lane must receive an item');
-    assert.ok(receivedItem.allowedPaths.includes('docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv'));
-    assert.ok(receivedItem.acceptanceCriteria[0].includes('Only the Work Item document and the register row'));
+    assert.ok(
+      receivedItem.allowedPaths.includes(
+        'docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv'
+      )
+    );
+    assert.ok(
+      receivedItem.acceptanceCriteria[0].includes(
+        'Only the Work Item document and the register row'
+      )
+    );
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

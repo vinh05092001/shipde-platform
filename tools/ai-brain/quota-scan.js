@@ -773,9 +773,10 @@ async function scanAllQuotas(options = {}) {
 
   if (options.ifDue || options['if-due'] || options.gate) {
     const dispatchConfig =
-      registry && sourcesApi.getDispatchConfig ? sourcesApi.getDispatchConfig(registry, options) : {};
-    const intervalMin =
-      Number(options.intervalMin ?? dispatchConfig.quotaScanIntervalMin) || 60;
+      registry && sourcesApi.getDispatchConfig
+        ? sourcesApi.getDispatchConfig(registry, options)
+        : {};
+    const intervalMin = Number(options.intervalMin ?? dispatchConfig.quotaScanIntervalMin) || 60;
     const dueSource = options.source || null;
     if (!isQuotaScanDue(quotaState, intervalMin, now, dueSource) && !options.force) {
       return {

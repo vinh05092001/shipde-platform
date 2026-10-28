@@ -428,12 +428,10 @@ function getDispatchConfig(registry, options = {}) {
     blockedNoRouteTimeoutMs: configuredLimit('blockedNoRouteTimeoutMs'),
     blockedNoRoutePollIntervalMs: configuredLimit('blockedNoRoutePollIntervalMs'),
     retainedRootMaxAgeMs: configuredLimit('retainedRootMaxAgeMs'),
-    ciRequiredChecks:
-      options.ciRequiredChecks ??
+    ciRequiredChecks: options.ciRequiredChecks ??
       options.requiredChecks ??
       dispatch.ciGate?.requiredChecks ??
-      defaults.ciGate?.requiredChecks ??
-      ['contract', 'application-gate'],
+      defaults.ciGate?.requiredChecks ?? ['contract', 'application-gate'],
     headroomUnknownPenalty: configuredNonNegativeLimit(
       'headroomUnknownPenalty',
       'unknownHeadroomPenalty'

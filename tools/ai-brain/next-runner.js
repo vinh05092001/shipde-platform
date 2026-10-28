@@ -1018,7 +1018,10 @@ async function nextLoop(options, deps) {
   const noRouteWaitTracker = opts.noRouteWaitTracker || d.noRouteWaitTracker || new Map();
 
   const dispatchConfig =
-    (sourcesApi && sourcesApi.getDispatchConfig && sourcesApi.getDispatchConfig(opts.registry || d.registry, opts)) || {};
+    (sourcesApi &&
+      sourcesApi.getDispatchConfig &&
+      sourcesApi.getDispatchConfig(opts.registry || d.registry, opts)) ||
+    {};
   const blockedNoRouteTimeoutMs =
     opts.blockedNoRouteTimeoutMs !== undefined
       ? Number(opts.blockedNoRouteTimeoutMs)

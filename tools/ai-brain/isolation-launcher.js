@@ -285,57 +285,50 @@ function retainedRootHasOwnWriterRecord(opts, extra = {}) {
     const baseId = String(opts.workItemId).replace(/-(repair-\d+|review)$/, '');
     const targetRoot = extra.workerRoot || opts.workerRoot;
     const targetSha =
-      extra.retainedHeadSha ||
-      extra.retainWorkerHead ||
-      opts.retainWorkerHead ||
-      opts.baseSha;
+      extra.retainedHeadSha || extra.retainWorkerHead || opts.retainWorkerHead || opts.baseSha;
     const targetRun = extra.runId || opts.runId;
     let maxAgeMs = 3600000;
     try {
       maxAgeMs = require('./sources').getDispatchConfig().retainedRootMaxAgeMs || 3600000;
     } catch {}
     const now = Date.now();
-    return decisions
-      .readDecisionsSafe({ dir: opts.decisionDir || undefined })
-      .some(
-        (rec) => {
-          if (!rec || !rec.workItemId) return false;
-          if (String(rec.workItemId).replace(/-(repair-\d+|review)$/, '') !== baseId) return false;
-          const validStage =
-            rec.stage === 'writer-launch-result' ||
-            (rec.stage === decisions.Stage.LAUNCHED && !!rec.sha);
-          if (!validStage) return false;
+    return decisions.readDecisionsSafe({ dir: opts.decisionDir || undefined }).some((rec) => {
+      if (!rec || !rec.workItemId) return false;
+      if (String(rec.workItemId).replace(/-(repair-\d+|review)$/, '') !== baseId) return false;
+      const validStage =
+        rec.stage === 'writer-launch-result' ||
+        (rec.stage === decisions.Stage.LAUNCHED && !!rec.sha);
+      if (!validStage) return false;
 
-          if (targetRoot && (rec.workerRoot || rec.root)) {
-            const recRoot = rec.workerRoot || rec.root;
-            if (path.resolve(recRoot).toLowerCase() !== path.resolve(targetRoot).toLowerCase()) {
-              return false;
-            }
-          }
-
-          if (targetSha && (rec.sha || rec.baseSha || rec.headSha)) {
-            const recSha = String(rec.sha || rec.baseSha || rec.headSha).toLowerCase();
-            const expSha = String(targetSha).toLowerCase();
-            if (recSha !== expSha) {
-              return false;
-            }
-          }
-
-          if (targetRun && rec.runId && rec.runId !== targetRun) {
-            return false;
-          }
-
-          const recTime = rec.at || rec.timestamp || rec.time;
-          if (recTime) {
-            const age = now - new Date(recTime).getTime();
-            if (Number.isFinite(age) && age > maxAgeMs) {
-              return false;
-            }
-          }
-
-          return true;
+      if (targetRoot && (rec.workerRoot || rec.root)) {
+        const recRoot = rec.workerRoot || rec.root;
+        if (path.resolve(recRoot).toLowerCase() !== path.resolve(targetRoot).toLowerCase()) {
+          return false;
         }
-      );
+      }
+
+      if (targetSha && (rec.sha || rec.baseSha || rec.headSha)) {
+        const recSha = String(rec.sha || rec.baseSha || rec.headSha).toLowerCase();
+        const expSha = String(targetSha).toLowerCase();
+        if (recSha !== expSha) {
+          return false;
+        }
+      }
+
+      if (targetRun && rec.runId && rec.runId !== targetRun) {
+        return false;
+      }
+
+      const recTime = rec.at || rec.timestamp || rec.time;
+      if (recTime) {
+        const age = now - new Date(recTime).getTime();
+        if (Number.isFinite(age) && age > maxAgeMs) {
+          return false;
+        }
+      }
+
+      return true;
+    });
   } catch {
     return false;
   }
@@ -2685,7 +2678,9 @@ function getIsolatedLauncher() {
                     if (normTarget.startsWith(normDeps)) {
                       sub = absTarget.slice(depsDir.length).replace(/^[\\/]/, '');
                     } else {
-                      const match = absTarget.match(/[\\/](packages[\\/][^\\/]+|apps[\\/][^\\/]+)(?:[\\/].*)?$/i);
+                      const match = absTarget.match(
+                        /[\\/](packages[\\/][^\\/]+|apps[\\/][^\\/]+)(?:[\\/].*)?$/i
+                      );
                       if (match) {
                         sub = match[0].replace(/^[\\/]/, '');
                       }

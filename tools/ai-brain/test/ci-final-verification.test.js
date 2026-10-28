@@ -154,7 +154,8 @@ test('awaitCi polls until terminal and times out as not-pass', async () => {
 test('a recorded CI failure feeds repair findings only for that exact SHA and redacts bearer credentials', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-gate-'));
   try {
-    const rawLog = 'Error: Bearer sk-mysecretkey12345678 failed to authenticate token=ghp_secrettoken99999999';
+    const rawLog =
+      'Error: Bearer sk-mysecretkey12345678 failed to authenticate token=ghp_secrettoken99999999';
     ci.writeCiFailure(dir, 'FEAT-X-01', { sha: SHA, failed: ['verify'], log: rawLog });
     const f = ci.ciFindingsFor(dir, 'FEAT-X-01', SHA);
     assert.equal(f.length, 1);

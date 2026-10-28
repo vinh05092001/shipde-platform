@@ -69,7 +69,9 @@ function classifyRollup(rollup, requiredChecks = []) {
     for (const req of requiredChecks) {
       const reqName = String(req).trim().toLowerCase();
       const match = rollup.find((chk) => {
-        const name = String(chk.name || chk.context || '').trim().toLowerCase();
+        const name = String(chk.name || chk.context || '')
+          .trim()
+          .toLowerCase();
         return name === reqName;
       });
       if (!match) {

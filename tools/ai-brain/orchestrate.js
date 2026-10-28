@@ -6775,79 +6775,88 @@ async function runOrchestration(goal, opts) {
       published = recordedPublication;
       entry.publication = recordedPublication;
     } else {
-
-    // RT-R04: a publish attempt already failed or timed out in this run, and
-    // isReplayable('publish') says that attempt may never be made again.
-    if (publishGuard.failed && !isReplayable('publish')) {
-      const refused = {
-        status: PublicationStatus.REFUSED,
-        workItemId: entry.workItemId,
-        reason:
-          'PUBLISH_NOT_REPLAYABLE: publish cannot be replayed after a failed or timed-out attempt (' +
-          publishGuard.failed.workItemId +
-          ': ' +
-          publishGuard.failed.reason +
-          ')',
-      };
-      log.publications.push(refused);
-      entry.publication = refused;
-      if (liveSteps[entry.workItemId]) {
-        liveSteps[entry.workItemId].publication = refused;
-      }
-      recordPublishDecision(entry, refused);
-      continue;
-    }
-
-    const published = publication(o, entry, publishGuard, publishedByItem);
-    log.publications.push(published);
-
-    // The publication record lives on the entry as well, so this run's guard and
-    // a later resume both see what the attempt actually did.
-    entry.publication = published;
-    if (liveSteps[entry.workItemId]) {
-      liveSteps[entry.workItemId].publication = published;
-    }
-
-    if (published.status === PublicationStatus.PUBLISHED_DRAFT) {
-      persistStep(entry.workItemId, 'publication', { publication: published });
-      if (published.result && typeof published.result.then === 'function') {
-        // CK-R03 keeps the draft receipt exactly as written. The attempt itself is
-        // awaited so a failed or timed-out publish marks the guard before this loop
-        // can reach the next entry, and so the record stops claiming a draft that
-        // never landed.
-        try {
-          await published.result;
-        } catch (_) {
-          // publication() already corrected the record and marked the guard.
+      // RT-R04: a publish attempt already failed or timed out in this run, and
+      // isReplayable('publish') says that attempt may never be made again.
+      if (publishGuard.failed && !isReplayable('publish')) {
+        const refused = {
+          status: PublicationStatus.REFUSED,
+          workItemId: entry.workItemId,
+          reason:
+            'PUBLISH_NOT_REPLAYABLE: publish cannot be replayed after a failed or timed-out attempt (' +
+            publishGuard.failed.workItemId +
+            ': ' +
+            publishGuard.failed.reason +
+            ')',
+        };
+        log.publications.push(refused);
+        entry.publication = refused;
+        if (liveSteps[entry.workItemId]) {
+          liveSteps[entry.workItemId].publication = refused;
         }
+        recordPublishDecision(entry, refused);
+        continue;
       }
-      // PI-R03: record the published branch so a dependent can stack on it.
-      // Only a draft that still stands counts: an attempt that failed after the
-      // record was written publishes no branch.
-      const publishedBranch =
-        published.status === PublicationStatus.PUBLISHED_DRAFT
-          ? published.branch ||
-            (published.result && published.result.branch) ||
-            (entry && entry.branch) ||
-            null
-          : null;
-      if (publishedBranch) {
-        publishedByItem.set(
-          entry.workItemId,
-          String(publishedBranch).replace(/^refs\/heads\//, '')
-        );
+
+      published = publication(o, entry, publishGuard, publishedByItem);
+      log.publications.push(published);
+
+      // The publication record lives on the entry as well, so this run's guard and
+      // a later resume both see what the attempt actually did.
+      entry.publication = published;
+      if (liveSteps[entry.workItemId]) {
+        liveSteps[entry.workItemId].publication = published;
+      }
+
+      if (published.status === PublicationStatus.PUBLISHED_DRAFT) {
+        persistStep(entry.workItemId, 'publication', { publication: published });
+        if (published.result && typeof published.result.then === 'function') {
+          // CK-R03 keeps the draft receipt exactly as written. The attempt itself is
+          // awaited so a failed or timed-out publish marks the guard before this loop
+          // can reach the next entry, and so the record stops claiming a draft that
+          // never landed.
+          try {
+            await published.result;
+          } catch (_) {
+            // publication() already corrected the record and marked the guard.
+          }
+        }
+        // PI-R03: record the published branch so a dependent can stack on it.
+        // Only a draft that still stands counts: an attempt that failed after the
+        // record was written publishes no branch.
+        const publishedBranch =
+          published.status === PublicationStatus.PUBLISHED_DRAFT
+            ? published.branch ||
+              (published.result && published.result.branch) ||
+              (entry && entry.branch) ||
+              null
+            : null;
+        if (publishedBranch) {
+          publishedByItem.set(
+            entry.workItemId,
+            String(publishedBranch).replace(/^refs\/heads\//, '')
+          );
+        }
       }
       recordPublishDecision(entry, published);
     }
-  }
 
     // CI is the final verification: the item is complete only when CI is green on
     // the exact reviewed head SHA. Review PASS alone never completes or merges it.
     entry.ci = null;
+    const isSimulatedOrTestMode = Boolean(
+      (published &&
+        published.result &&
+        (published.result.simulated ||
+          (published.result.draft && published.result.draft.status === 'simulated_draft'))) ||
+      (o.publication && o.publication.testMode) ||
+      o.testMode
+    );
     if (
+      published &&
       published.status === PublicationStatus.PUBLISHED_DRAFT &&
       o.ciGate !== false &&
-      ciGate.ciGateConfig().enabled
+      ciGate.ciGateConfig(o.dispatch || o.registry?.dispatch).enabled &&
+      (!isSimulatedOrTestMode || Boolean(o.ghRunner) || o.ciGate === true)
     ) {
       const draft = (published.result && (published.result.draft || published.result)) || {};
       const ci = await ciGate.awaitCi({
