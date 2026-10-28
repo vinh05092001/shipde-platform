@@ -8,6 +8,7 @@ import {
   executeFetchSessions,
   executeRevokeSession,
   executeRevokeAll,
+  formatDisplayIp,
   type SessionItem,
 } from './SessionsTab';
 
@@ -805,6 +806,51 @@ async function runAsyncTests() {
   console.log(
     '  PASS: AC-SESS-04 Loader2 inline spinner successfully rendered across all in-flight states'
   );
+
+  // 15: Finding 2 / Finding 9: 64-char HMAC hash is omitted from UI display
+  const hmacHex = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+  assert.strictEqual(
+    formatDisplayIp(hmacHex),
+    null,
+    'formatDisplayIp must return null for 64-char HMAC hash'
+  );
+  assert.strictEqual(
+    formatDisplayIp('192.168.1.1'),
+    '192.168.1.1',
+    'formatDisplayIp must preserve regular IP strings'
+  );
+
+  const sessionWithHmac: SessionItem = {
+    ...mockRemoteSession1,
+    ip_address: hmacHex,
+  };
+  const htmlWithHmac = renderWithAuth(
+    React.createElement(SessionsTab, {
+      initialState: 'success',
+      initialSessions: [mockCurrentSession, sessionWithHmac],
+      authToken: 'dummy-token',
+    })
+  );
+  assert.ok(
+    !htmlWithHmac.includes(hmacHex),
+    'UI must not render raw 64-char hex HMAC string as IP'
+  );
+  console.log('  PASS: Finding 9 - HMAC hash is omitted from UI display to avoid confusing user');
+
+  // 16: Finding 10: executeFetchSessions handles missing isFetching gracefully
+  let setFetchCalled = false;
+  await executeFetchSessions({
+    baseUrl: 'http://localhost',
+    token: null,
+    setFetchState: () => { setFetchCalled = true; },
+    setSessions: () => {},
+    setErrorMessage: () => {},
+    setValidationMessage: () => {},
+    setActionError: () => {},
+    setIsFetching: () => {},
+  });
+  assert.strictEqual(setFetchCalled, true, 'executeFetchSessions works when isFetching is undefined');
+  console.log('  PASS: Finding 10 - executeFetchSessions handles undefined isFetching gracefully');
 
   console.log('================================================================');
   console.log('ALL SESSIONS TAB UI & ACTION TESTS PASSED 100%');

@@ -80,6 +80,15 @@ function formatDate(iso: string): string {
   }
 }
 
+export function formatDisplayIp(ip: string | undefined | null): string | null {
+  if (!ip) return null;
+  // If it's a 64-character hex hash, omit from user display to avoid confusion and PII disclosure (Finding 2 / Finding 9)
+  if (/^[a-f0-9]{64}$/i.test(ip.trim())) {
+    return null;
+  }
+  return ip;
+}
+
 export async function executeFetchSessions(options: {
   baseUrl: string;
   token?: string | null;
@@ -95,7 +104,8 @@ export async function executeFetchSessions(options: {
   setActionError: (msg: string | null) => void;
   setIsFetching: (fetching: boolean) => void;
 }): Promise<{ executed: boolean; locked?: boolean; success?: boolean; error?: string }> {
-  if (options.isFetching || options.isFetchingRef?.current) {
+  const isFetchingNow = Boolean(options.isFetching) || Boolean(options.isFetchingRef?.current);
+  if (isFetchingNow) {
     return { executed: false, locked: true };
   }
   if (options.isFetchingRef) {
@@ -759,10 +769,10 @@ export function SessionsTab({
                       </span>
                     </div>
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
-                      {currentSession.ip_address && (
+                      {formatDisplayIp(currentSession.ip_address) && (
                         <span className="inline-flex items-center gap-1">
                           <Globe className="w-3 h-3 text-slate-400" />
-                          IP: {currentSession.ip_address}
+                          IP: {formatDisplayIp(currentSession.ip_address)}
                         </span>
                       )}
                       <span className="inline-flex items-center gap-1">
@@ -823,10 +833,10 @@ export function SessionsTab({
                           </span>
                         </div>
                         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
-                          {session.ip_address && (
+                          {formatDisplayIp(session.ip_address) && (
                             <span className="inline-flex items-center gap-1 font-mono text-[10px]">
                               <Globe className="w-3 h-3 text-slate-400" />
-                              {session.ip_address}
+                              {formatDisplayIp(session.ip_address)}
                             </span>
                           )}
                           <span className="inline-flex items-center gap-1">
