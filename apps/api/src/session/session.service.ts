@@ -269,11 +269,16 @@ export class SessionService implements OnApplicationBootstrap {
       }
       return result;
     } catch (err) {
+      const isAuditFailure =
+        (err as any)?.message?.includes('AUDIT_IDENTIFIER_HMAC_KEY') ||
+        (err as any)?.message?.toLowerCase().includes('audit');
       console.error(
         formatStructuredLog({
           level: 'error',
           service: 'api',
-          message: `AUDIT_ROLLBACK: Transaction rolled back during revocation of Session:${sessionId}`,
+          message: isAuditFailure
+            ? `AUDIT_ROLLBACK: Transaction rolled back during revocation of Session:${sessionId}`
+            : `SESSION_REVOCATION_ROLLBACK: Transaction rolled back during revocation of Session:${sessionId}`,
           metadata: { sessionId, merchantId, userId, correlationId, error: (err as any)?.message },
         })
       );
@@ -347,11 +352,16 @@ export class SessionService implements OnApplicationBootstrap {
       }
       return result;
     } catch (err) {
+      const isAuditFailure =
+        (err as any)?.message?.includes('AUDIT_IDENTIFIER_HMAC_KEY') ||
+        (err as any)?.message?.toLowerCase().includes('audit');
       console.error(
         formatStructuredLog({
           level: 'error',
           service: 'api',
-          message: `AUDIT_ROLLBACK: Transaction rolled back during revoke-all for User:${userId}`,
+          message: isAuditFailure
+            ? `AUDIT_ROLLBACK: Transaction rolled back during revoke-all for User:${userId}`
+            : `SESSION_REVOCATION_ROLLBACK: Transaction rolled back during revoke-all for User:${userId}`,
           metadata: { merchantId, userId, correlationId, error: (err as any)?.message },
         })
       );

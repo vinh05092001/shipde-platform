@@ -788,4 +788,40 @@ describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
       );
     });
   });
+
+  describe('Finding 8: Differentiate audit rollback from general mutation rollback', () => {
+    it('logs SESSION_REVOCATION_ROLLBACK when error originates outside audit logging', async () => {
+      const errorLogs: string[] = [];
+      const origConsoleError = console.error;
+      console.error = (...args: any[]) => {
+        errorLogs.push(args.join(' '));
+        origConsoleError(...args);
+      };
+
+      try {
+        const mockPrisma: any = {
+          deviceSession: {
+            findUnique: async () => ({
+              id: 'sess-db-err',
+              user_id: 'user-1',
+              merchant_id: 'merch-1',
+              status: SessionStatusEnum.ACTIVE,
+            }),
+          },
+          $transaction: async () => {
+            throw new Error('Connection pool exhausted');
+          },
+        };
+        const service = new SessionService(mockPrisma);
+        await assert.rejects(
+          async () => service.revoke('sess-db-err', 'user-1', 'merch-1', 'c-err'),
+          /Connection pool exhausted/
+        );
+        const rollbackLog = errorLogs.find((l) => l.includes('SESSION_REVOCATION_ROLLBACK'));
+        assert.ok(rollbackLog, 'Error log must specify SESSION_REVOCATION_ROLLBACK rather than AUDIT_ROLLBACK');
+      } finally {
+        console.error = origConsoleError;
+      }
+    });
+  });
 });
