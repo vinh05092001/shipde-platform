@@ -195,6 +195,19 @@ interface AuthContextType {
   }>;
   logout: () => void;
   switchRole: (role: Role) => void;
+  getProfile: () => Promise<{ success: boolean; data?: any; error?: string }>;
+  updateProfile: (payload: any) => Promise<{
+    success: boolean;
+    data?: any;
+    error?: string;
+    code?: string;
+  }>;
+  updatePreferences: (payload: any) => Promise<{
+    success: boolean;
+    data?: any;
+    error?: string;
+    code?: string;
+  }>;
 }
 
 /** 403 status codes that must surface as dedicated login states (FEAT-AUTH-03 CD-6). */
@@ -869,6 +882,79 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     localStorage.setItem('shipde_user', JSON.stringify(updated));
   };
 
+  const getProfile = async () => {
+    try {
+      const res = await fetch('/api/v1/me', {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        return { success: false, error: data?.error?.message || 'Không thể tải thông tin hồ sơ' };
+      }
+      return { success: true, data: data.data };
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Lỗi mạng khi tải hồ sơ' };
+    }
+  };
+
+  const updateProfile = async (payload: any) => {
+    try {
+      const res = await fetch('/api/v1/me', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        return {
+          success: false,
+          error: data?.error?.message || 'Không thể cập nhật hồ sơ',
+          code: data?.error?.code,
+        };
+      }
+      if (data.data) {
+        const updated = mapUser({ ...user, ...data.data });
+        setUser(updated);
+        localStorage.setItem('shipde_user', JSON.stringify(updated));
+      }
+      return { success: true, data: data.data };
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Lỗi kết nối máy chủ' };
+    }
+  };
+
+  const updatePreferences = async (payload: any) => {
+    try {
+      const res = await fetch('/api/v1/me/preferences', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        return {
+          success: false,
+          error: data?.error?.message || 'Không thể cập nhật tùy chọn',
+          code: data?.error?.code,
+        };
+      }
+      if (data.data && user) {
+        const updated = mapUser({ ...user, ...data.data });
+        setUser(updated);
+        localStorage.setItem('shipde_user', JSON.stringify(updated));
+      }
+      return { success: true, data: data.data };
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Lỗi kết nối máy chủ' };
+    }
+  };
+
   return (
     <AuthContext.Provider
       value={{
@@ -895,6 +981,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         startMfaSetup,
         verifyMfaSetup,
         regenerateMfaRecoveryCodes,
+        getProfile,
+        updateProfile,
+        updatePreferences,
       }}
     >
       {children}
