@@ -139,6 +139,36 @@ $ tsx scripts/verify-secrets.ts
 ✅ Quét secret hoàn tất: 0 phát hiện vi phạm bí mật trên commit history và working tree.
 ```
 
+## audit_logs.merchant_id nullability
+
+### Why `merchant_id` is nullable
+The `audit_logs.merchant_id` column was made nullable (`DROP NOT NULL`) specifically to support platform-level bootstrap events (such as `SYSTEM_ROLE_PERMISSIONS_RECONCILED` logged during `ensurePlatformSeed`), which run at server initialization or migration time when no customer merchant exists. Decoupling system role reconciliation from customer tenant data prevents bootstrap failure on clean installs.
+
+### Complete Reader & Writer Inventory (file:line)
+
+| Type | File & Line | Context | How it handles `null` |
+| --- | --- | --- | --- |
+| Writer | `apps/api/src/rbac/rbac.service.ts:261` | `ensurePlatformSeed` | Intentionally passes `merchant_id: null` and `user_id: null` for platform-level system bootstrap. |
+| Writer | `apps/api/src/rbac/rbac.service.ts:1115` | `createRole` (`ROLE_CREATED`) | Tenant write: strictly populates non-null `actorSnapshot.merchantId`. |
+| Writer | `apps/api/src/rbac/rbac.service.ts:1521` | `updateRole` (`ROLE_UPDATED`) | Tenant write: strictly populates non-null `actorSnapshot.merchantId`. |
+| Writer | `apps/api/src/rbac/rbac.service.ts:1792` | `deleteRole` (`USER_ROLE_DETACHED`) | Tenant write: strictly populates non-null `actorSnapshot.merchantId`. |
+| Writer | `apps/api/src/rbac/rbac.service.ts:1826` | `deleteRole` (`ROLE_DELETED`) | Tenant write: strictly populates non-null `actorSnapshot.merchantId`. |
+| Writer | `apps/api/src/rbac/rbac.service.ts:1850` | `deleteRole` (`ROLE_DELETE_BLOCKED_INACTIVE_WIDENING`) | Tenant write: strictly populates non-null `actorSnapshot.merchantId`. |
+| Writer | `apps/api/src/auth/auth.service.ts:2343` | `logAuditEvent` | Tenant write: populates `meta.merchantId` (if present) or `null`. |
+| Writer | `apps/api/src/session/session.service.ts:415` | `recordAuditLog` | Tenant write: populates `meta.merchantId`. |
+| Writer | `apps/api/src/users/users.service.ts:181` | `recordAuditLog` | Tenant write: populates `actor.merchantId`. |
+| Reader | `apps/api/src/rbac/rbac.supertest.spec.ts:263, 454, 524` | `createRole`, `updateRole`, `deleteRole` AC checks | Asserts non-null `merchant_id === MERCHANT_ID_A` for tenant audit rows. |
+| Reader | `apps/api/src/rbac/rbac.supertest.spec.ts:757` | Security inspection AC-16 | Filters `where: { merchant_id: SEED_MERCHANT_ID }`. PostgreSQL SQL equality `merchant_id = $1` filters out all null rows; null platform rows never leak into tenant results. |
+| Reader | `apps/api/src/auth/auth.login.supertest.spec.ts:221, 325, 688` | Auth login audit verification | Filters `where: { action }` and `where: { entity_id }`. Does not assume non-null merchant_id. |
+| Reader | `apps/api/src/auth/auth.supertest.spec.ts:799, 1201` | Auth password reset verification | Filters `where: { entity_id }`. Safe against null values. |
+| Reader | `apps/api/src/users/users.mfa-reset.supertest.spec.ts:121` | Admin MFA reset audit count | Filters `where: { action, entity_id }`. Safe against null values. |
+| Reader | `apps/api/src/rbac/rbac.unit.spec.ts:3512, 3915` | Unit test suite | Proves strict tenant isolation and null-safety across all readers. |
+
+### Proving Tests
+1. `Finding 1 (Round 14 / P1-01): audit_logs contract ensures tenant mutations populate non-null merchant_id while platform seed logs without merchant dependency` (`apps/api/src/rbac/rbac.unit.spec.ts:3512`)
+2. `Finding 3 (Round 15 / P1-03): audit_logs.merchant_id readers and writers are null-safe and downstream queries isolate properly` (`apps/api/src/rbac/rbac.unit.spec.ts:3915`)
+3. `AC-RBAC-01-03, 08, 10, 16` (`apps/api/src/rbac/rbac.supertest.spec.ts`)
+
 ## Open questions
 
 1. **Role Inheritance vs. Flat Roles:** Current specification defines roles with flat permission arrays. Whether custom roles can inherit from a base system role (e.g. `OPS_CSKH` plus `pii:unmask`) is deferred to future authorization refactoring.
