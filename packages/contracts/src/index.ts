@@ -481,6 +481,33 @@ export type UpdateShopProfileInput = components['schemas']['UpdateShopProfileInp
 export type ShopProfileResponse = components['schemas']['ShopProfileResponse'];
 export type ListShopsResponse = components['schemas']['ListShopsResponse'];
 
+// --- Canonical Timezones (FEAT-ORG-01) ---
+export interface SupportedTimeZoneOption {
+  value: string;
+  label: string;
+}
+
+export const SUPPORTED_TIMEZONES: readonly SupportedTimeZoneOption[] = [
+  { value: 'Asia/Ho_Chi_Minh', label: 'Asia/Ho_Chi_Minh (UTC+7)' },
+  { value: 'UTC', label: 'UTC (UTC+0)' },
+] as const;
+
+export const SUPPORTED_TIMEZONE_VALUES: readonly string[] = SUPPORTED_TIMEZONES.map(
+  (tz) => tz.value
+);
+
+export function isValidTimeZone(tz: unknown): boolean {
+  if (!tz || typeof tz !== 'string') return false;
+  const trimmed = tz.trim();
+  if (!SUPPORTED_TIMEZONE_VALUES.includes(trimmed)) return false;
+  try {
+    new Intl.DateTimeFormat(undefined, { timeZone: trimmed });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // --- User Lifecycle Contracts (FEAT-USR-02) ---
 export const UserLifecycleAuditEvent = {
   USER_UPDATED: 'USER_UPDATED',

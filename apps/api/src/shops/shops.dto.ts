@@ -55,17 +55,9 @@ const PHONE_REGEX = /^(0|\+84)[35789][0-9]{8}$/;
 // Bank account number: 6 to 30 alphanumeric characters
 const BANK_ACCOUNT_REGEX = /^[0-9A-Za-z]{6,30}$/;
 
-export function isValidTimeZone(tz: string): boolean {
-  if (!tz || typeof tz !== 'string') return false;
-  const trimmed = tz.trim();
-  if (trimmed.length === 0 || trimmed.length > 64) return false;
-  try {
-    new Intl.DateTimeFormat(undefined, { timeZone: trimmed });
-    return true;
-  } catch {
-    return false;
-  }
-}
+import { isValidTimeZone, SUPPORTED_TIMEZONES, SUPPORTED_TIMEZONE_VALUES } from '@shipde/contracts';
+
+export { isValidTimeZone, SUPPORTED_TIMEZONES, SUPPORTED_TIMEZONE_VALUES };
 
 export function validateUpdateShopProfileDto(dto: UpdateShopProfileDto): CanonicalFieldError[] {
   const fields: CanonicalFieldError[] = [];

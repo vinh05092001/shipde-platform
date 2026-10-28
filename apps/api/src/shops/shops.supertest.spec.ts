@@ -10,7 +10,7 @@ import { AppModule } from '../app.module';
 import { PrismaService } from '../prisma/prisma.service';
 import { RoleEnum, SessionStatusEnum } from '@prisma/client';
 import { signAccessToken, resolveAccessTokenSecret } from '../auth/token.util';
-import { RbacService } from '../rbac/rbac.service';
+import { RbacService, SYSTEM_ROLE_IDS } from '../rbac/rbac.service';
 
 async function runShopsSupertestSuite() {
   console.log('================================================================');
@@ -120,7 +120,8 @@ async function runShopsSupertestSuite() {
     const setupUserSession = async (
       mId: string,
       role: RoleEnum,
-      emailSuffix: string
+      emailSuffix: string,
+      customRoleId?: string
     ): Promise<{ userId: string; token: string }> => {
       const uId = randomUUID();
       const sId = randomUUID();
@@ -142,9 +143,10 @@ async function runShopsSupertestSuite() {
           id: uId,
           merchant_id: mId,
           email: `user_${emailSuffix}_${testSuffix}@shipde.vn`,
-          full_name: `Test User ${role}`,
+          full_name: `Test User ${customRoleId ? 'FINANCE' : role}`,
           password_hash: 'hashed',
           role,
+          custom_role_id: customRoleId || null,
           status: 'active',
         },
       });
@@ -169,6 +171,25 @@ async function runShopsSupertestSuite() {
       merchantIdA,
       RoleEnum.WAREHOUSE,
       'wh_a'
+    );
+
+    const financeRoleId = randomUUID();
+    await prisma.role.create({
+      data: {
+        id: financeRoleId,
+        merchant_id: merchantIdA,
+        name: 'Finance Approver',
+        name_lower: 'finance approver',
+        description: 'Finance department with view-only shop profile access',
+        is_system: false,
+      },
+    });
+
+    const { token: financeTokenA } = await setupUserSession(
+      merchantIdA,
+      RoleEnum.ACCOUNTANT,
+      'finance_a',
+      financeRoleId
     );
     const { token: ownerTokenB } = await setupUserSession(merchantIdB, RoleEnum.OWNER, 'owner_b');
 
@@ -372,6 +393,55 @@ async function runShopsSupertestSuite() {
     console.log('  PASS: AC-ORG-01-09 verified with 403 FORBIDDEN.');
 
     // ========================================================================
+    // AC-ORG-01-09b: FINANCE role view-only access and mutation denial (P1 RBAC Matrix)
+    // ========================================================================
+    console.log('🧪 Testing AC-ORG-01-09b: FINANCE role view-only access and mutation denial...');
+    // 1. FINANCE user can GET /api/v1/shops/profile (200 OK)
+    const resFinanceGetProfile = await request(app.getHttpServer())
+      .get('/api/v1/shops/profile')
+      .set('Authorization', `Bearer ${financeTokenA}`)
+      .expect(200);
+    assert.strictEqual(resFinanceGetProfile.body.success, true);
+    assert.strictEqual(resFinanceGetProfile.body.data.id, merchantIdA);
+
+    // 2. FINANCE user can GET /api/v1/shops (200 OK)
+    const resFinanceList = await request(app.getHttpServer())
+      .get('/api/v1/shops')
+      .set('Authorization', `Bearer ${financeTokenA}`)
+      .expect(200);
+    assert.strictEqual(resFinanceList.body.success, true);
+    assert.strictEqual(resFinanceList.body.data.shops[0].id, merchantIdA);
+
+    // 3. FINANCE user can GET /api/v1/shops/:id (200 OK)
+    const resFinanceGetById = await request(app.getHttpServer())
+      .get(`/api/v1/shops/${merchantIdA}`)
+      .set('Authorization', `Bearer ${financeTokenA}`)
+      .expect(200);
+    assert.strictEqual(resFinanceGetById.body.success, true);
+    assert.strictEqual(resFinanceGetById.body.data.id, merchantIdA);
+
+    // 4. FINANCE user CANNOT mutate /api/v1/shops/profile (403 FORBIDDEN)
+    const resFinancePatchProfile = await request(app.getHttpServer())
+      .patch('/api/v1/shops/profile')
+      .set('Authorization', `Bearer ${financeTokenA}`)
+      .send({ name: 'Finance Mutated Profile Name' })
+      .expect(403);
+    assert.strictEqual(resFinancePatchProfile.body.error.code, 'FORBIDDEN');
+
+    // 5. FINANCE user CANNOT mutate /api/v1/shops/:id (403 FORBIDDEN)
+    const resFinancePatchById = await request(app.getHttpServer())
+      .patch(`/api/v1/shops/${merchantIdA}`)
+      .set('Authorization', `Bearer ${financeTokenA}`)
+      .send({ name: 'Finance Mutated By Id' })
+      .expect(403);
+    assert.strictEqual(resFinancePatchById.body.error.code, 'FORBIDDEN');
+
+    // Verify DB was not mutated by finance user attempt
+    const dbMerchantAfterFinance = await prisma.merchant.findUnique({ where: { id: merchantIdA } });
+    assert.notStrictEqual(dbMerchantAfterFinance?.name, 'Finance Mutated Profile Name');
+    console.log('  PASS: AC-ORG-01-09b verified FINANCE view-only and mutation denial.');
+
+    // ========================================================================
     // AC-ORG-01-10: Cross-tenant isolation
     // ========================================================================
     console.log(
@@ -441,9 +511,9 @@ async function runShopsSupertestSuite() {
     console.log('  PASS: AC-ORG-01-13 verified alias routing.');
 
     // ========================================================================
-    // AC-ORG-01-14: Audit log integrity
+    // AC-ORG-01-14: Audit log integrity and sensitive fields masking
     // ========================================================================
-    console.log('🧪 Testing AC-ORG-01-14: Audit log security inspection...');
+    console.log('🧪 Testing AC-ORG-01-14: Audit log security inspection & masking...');
     const finalAuditLogs = await prisma.auditLog.findMany({
       where: { merchant_id: merchantIdA },
     });
@@ -451,9 +521,27 @@ async function runShopsSupertestSuite() {
       assert.strictEqual(log.merchant_id, merchantIdA);
       assert.ok(!JSON.stringify(log).includes('password_hash'));
       assert.ok(!JSON.stringify(log).includes('session_token'));
+      // Masking verification: plaintext bank account number must never appear in audit diffs
+      assert.ok(
+        !JSON.stringify(log.old_value).includes('0071001234567'),
+        'Plaintext bank account number must not appear in audit old_value'
+      );
+      assert.ok(
+        !JSON.stringify(log.new_value).includes('0071001234567'),
+        'Plaintext bank account number must not appear in audit new_value'
+      );
     }
+
+    // Verify the billing update audit record masked the bank account number
+    const billingAudit = finalAuditLogs.find((log) => (log.new_value as any)?.bank_account_number);
+    assert.ok(billingAudit, 'Expected audit log recording bank_account_number change');
+    assert.strictEqual(
+      (billingAudit.new_value as any).bank_account_number,
+      '007****567',
+      'Bank account number must be masked in audit new_value'
+    );
     console.log(
-      `  PASS: AC-ORG-01-14 verified ${finalAuditLogs.length} audit logs clean of secrets.`
+      `  PASS: AC-ORG-01-14 verified ${finalAuditLogs.length} audit logs clean of secrets and sensitive fields masked.`
     );
 
     console.log('================================================================');

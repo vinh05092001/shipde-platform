@@ -8,6 +8,23 @@ import {
   FormattedShopProfile,
   validateUpdateShopProfileDto,
 } from './shops.dto';
+import { maskIdentifier } from '../invitations/invitations.service';
+
+export const SENSITIVE_AUDIT_FIELDS = new Set([
+  'bank_account_number',
+  'bank_account_name',
+  'contact_phone',
+  'contact_email',
+  'billing_email',
+]);
+
+export function maskAuditValue(field: string, val: unknown): unknown {
+  if (val === null || val === undefined) return val;
+  if (typeof val === 'string' && SENSITIVE_AUDIT_FIELDS.has(field)) {
+    return maskIdentifier(val);
+  }
+  return val;
+}
 
 @Injectable()
 export class ShopsService {
@@ -204,8 +221,8 @@ export class ShopsService {
       const afterDiff: Record<string, any> = {};
 
       for (const field of updatedFields) {
-        beforeDiff[field] = (existing as any)[field];
-        afterDiff[field] = (result as any)[field];
+        beforeDiff[field] = maskAuditValue(field, (existing as any)[field]);
+        afterDiff[field] = maskAuditValue(field, (result as any)[field]);
       }
 
       await tx.auditLog.create({

@@ -122,22 +122,22 @@ The shop profile interface in `SCR-SHOP-01` (`/settings/shop`) must implement:
 | `AC-ORG-01-06` | Update request with invalid contact email or phone | 400 `VALIDATION_ERROR` with field details on `contact_email` / `contact_phone` | PASS — Verified in `shops.unit.spec.ts` & `shops.supertest.spec.ts` (returns 400 VALIDATION_ERROR) |
 | `AC-ORG-01-07` | Update request with invalid bank account number format | 400 `VALIDATION_ERROR` with field details on `bank_account_number` | PASS — Verified in `shops.unit.spec.ts` & `shops.supertest.spec.ts` (returns 400 VALIDATION_ERROR) |
 | `AC-ORG-01-08` | Update request with invalid `default_fee_payer` enum | 400 `VALIDATION_ERROR` with field details on `default_fee_payer` | PASS — Verified in `shops.unit.spec.ts` & `shops.supertest.spec.ts` (returns 400 VALIDATION_ERROR) |
-| `AC-ORG-01-09` | User lacking `iam:shop_config` attempts profile update | 403 `FORBIDDEN` canonical error; profile unmodified | PASS — Verified in `shops.supertest.spec.ts` (WAREHOUSE role rejected with 403 FORBIDDEN, DB values unchanged) |
+| `AC-ORG-01-09` | User lacking `iam:shop_config` attempts profile update; FINANCE user gets view-only access | 403 `FORBIDDEN` on mutation; 200 OK on GET for FINANCE | PASS — Verified in `shops.supertest.spec.ts` (WAREHOUSE role rejected with 403 FORBIDDEN; FINANCE user view-only GET verified with 200 OK and mutation rejected with 403 FORBIDDEN per RBAC matrix) |
 | `AC-ORG-01-10` | Cross-tenant actor attempts to view or update foreign shop profile (`/api/v1/shops/:foreignId`) | 403 `FORBIDDEN` canonical error; foreign profile unmodified | PASS — Verified in `shops.supertest.spec.ts` (cross-tenant access rejected with 403 FORBIDDEN) |
 | `AC-ORG-01-11` | Unauthenticated request to shop endpoints | 401 `SESSION_INVALID` / `UNAUTHORIZED` canonical error | PASS — Verified in `shops.supertest.spec.ts` (returns 401 UNAUTHORIZED) |
 | `AC-ORG-01-12` | List shops query (`GET /api/v1/shops`) | 200 OK with list containing caller's shop profile | PASS — Verified in `shops.supertest.spec.ts` (returns 200 with single-tenant list of 1 shop) |
 | `AC-ORG-01-13` | UI state contract on `/settings/shop` (loading, view, edit, validation errors, server error retry, forbidden banner, success toast) | All mandatory states verified in component test harness | PASS — Verified in `apps/web/src/tests/shop-profile.test.ts` (all 8 states rendered and asserted via `renderToStaticMarkup`) |
-| `AC-ORG-01-14` | Audit log security inspection | No plaintext secrets logged, actor context and correlation ID present | PASS — Verified in `shops.supertest.spec.ts` (4 audit entries validated, clean of secrets, SHA-256 IP hash and correlation ID present) |
+| `AC-ORG-01-14` | Audit log security inspection & masking | No plaintext secrets logged, sensitive fields (full bank account numbers, phone, email) masked in old/new values | PASS — Verified in `shops.supertest.spec.ts` & `shops.unit.spec.ts` (sensitive fields like `bank_account_number: '007****567'` masked in audit diffs; full plaintext account numbers never logged) |
 
 ## Verification commands
 
 - `pnpm install --frozen-lockfile` — PASSED (dependencies up-to-date)
-- `pnpm db:generate` — PASSED (Prisma Client v6.19.3 generated in 336ms)
+- `pnpm db:generate` — PASSED (Prisma Client v6.19.3 generated)
 - `pnpm lint` — PASSED (12 tasks successful, 0 errors)
 - `pnpm format:check` — PASSED (all 14 changed files 100% compliant)
 - `pnpm typecheck` — PASSED (12 tasks successful, 0 errors)
-- `pnpm --filter @shipde/api exec tsx --tsconfig tsconfig.json --test src/shops/shops.unit.spec.ts` — PASSED (all 23 unit tests passed)
-- `pnpm --filter @shipde/api exec tsx --tsconfig tsconfig.json src/shops/shops.supertest.spec.ts` — PASSED (all 15 supertest acceptance criteria AC-01..14 + AC-08b passed)
+- `pnpm --filter @shipde/api exec tsx --tsconfig tsconfig.json --test src/shops/shops.unit.spec.ts` — PASSED (all 25 unit tests passed)
+- `pnpm --filter @shipde/api exec tsx --tsconfig tsconfig.json src/shops/shops.supertest.spec.ts` — PASSED (all 16 supertest acceptance criteria passed including FINANCE view-only and audit masking)
 - `pnpm --filter @shipde/web exec tsx src/tests/shop-profile.test.ts` — PASSED (all 9 UI state and form validation tests passed)
 - `pnpm contract:check` — PASSED (56 endpoints validated, 0 drift between OpenAPI 3.1.0 and @shipde/contracts)
 - `node scripts/ai/check-no-hardcode.mjs` — PASSED (0 raw instances, 0 new)
@@ -148,7 +148,8 @@ The shop profile interface in `SCR-SHOP-01` (`/settings/shop`) must implement:
 | Review round | Commit | Verdict | Findings resolved |
 |---|---|---|---|
 | 1 | `9aa1a1fdaf56d527db6a1dab61f756c8260b3219` | `CHANGES_REQUIRED` | Resolved in Round 2: (1) P0 Blocker: Added missing `operating_notes VARCHAR(1000)` column to `migration.sql`; (2) P2 Medium: Validated `timezone` against IANA standard list (`isValidTimeZone`) rejecting invalid formats/zones; (3) P2 Medium: Validated `currency` strictly to `VND` in `validateUpdateShopProfileDto` and web form; (4) P2 Low: Aligned `operating_notes` column to `@db.VarChar(1000)` in `prisma/schema.prisma` matching DTO and specification constraints. Merged `origin/main` (FEAT-USR-02). |
-| 2 | Pending | Pending | Ready for independent Codex review |
+| 2 | `6c401a8d1024d9000ffc2e9e623f546713871b83` | `CHANGES_REQUIRED` | Resolved in Round 3: (1) P1: Added supertest coverage for FINANCE user GET shop profile (view-only) and mutation rejection (403) per RBAC matrix, with custom role resolution in ShopsController; (2) P2: Audit logs mask sensitive fields such as bank account number, phone, email, and bank account name using maskIdentifier in before/after diffs; (3) P2: Aligned timezone validation between API and web using single source list SUPPORTED_TIMEZONES and isValidTimeZone from @shipde/contracts. |
+| 3 | Pending | Pending | Ready for independent Codex review |
 
 ## Residual limitations
 

@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert';
-import { ShopsService } from './shops.service';
-import { validateUpdateShopProfileDto, UpdateShopProfileDto } from './shops.dto';
+import { ShopsService, maskAuditValue, SENSITIVE_AUDIT_FIELDS } from './shops.service';
+import { validateUpdateShopProfileDto, UpdateShopProfileDto, isValidTimeZone } from './shops.dto';
 import { CanonicalApiException } from '../auth/auth.service';
 import type { ActorContext } from '../rbac/rbac.dto';
 
@@ -326,6 +326,16 @@ describe('FEAT-ORG-01: Shop Profile Unit Test Suite', () => {
       assert.strictEqual(res.data.bank_name, 'Techcombank');
       assert.strictEqual(res.data.bank_account_number, '1903123456789');
       assert.strictEqual(res.data.bank_account_name, 'CTY CP GUMAC SAIGON');
+
+      // Verify audit log diff has sensitive fields masked (BR-ORG-06 / P2 finding)
+      assert.strictEqual(mockPrisma.auditLogs.length, 1);
+      const audit = mockPrisma.auditLogs[0];
+      assert.strictEqual(audit.new_value.bank_account_number, '190****789');
+      assert.strictEqual(audit.new_value.billing_email, 'b****g@gumac.vn');
+      assert.ok(
+        !JSON.stringify(audit).includes('1903123456789'),
+        'Unmasked bank account number must never be persisted in audit diff'
+      );
     });
 
     it('AC-ORG-01-04: should update operating defaults', async () => {
@@ -418,6 +428,24 @@ describe('FEAT-ORG-01: Shop Profile Unit Test Suite', () => {
       assert.strictEqual(res.success, true);
       assert.strictEqual(res.data.shops.length, 1);
       assert.strictEqual(res.data.shops[0].id, 'm-tenant-1');
+    });
+  });
+
+  describe('Audit Log Masking: maskAuditValue', () => {
+    it('masks sensitive fields including bank account number, phone, email, and bank account name', () => {
+      assert.strictEqual(maskAuditValue('bank_account_number', '0071001234567'), '007****567');
+      assert.strictEqual(maskAuditValue('bank_account_name', 'CTY CP GUMAC'), 'CTY****MAC');
+      assert.strictEqual(maskAuditValue('contact_phone', '0901234567'), '090****567');
+      assert.strictEqual(maskAuditValue('contact_email', 'support@gumac.vn'), 's****t@gumac.vn');
+      assert.strictEqual(maskAuditValue('billing_email', 'finance@gumac.vn'), 'f****e@gumac.vn');
+    });
+
+    it('preserves non-sensitive fields and null/undefined values unmasked', () => {
+      assert.strictEqual(maskAuditValue('name', 'Gumac Flagship'), 'Gumac Flagship');
+      assert.strictEqual(maskAuditValue('timezone', 'Asia/Ho_Chi_Minh'), 'Asia/Ho_Chi_Minh');
+      assert.strictEqual(maskAuditValue('bank_name', 'Vietcombank'), 'Vietcombank');
+      assert.strictEqual(maskAuditValue('bank_account_number', null), null);
+      assert.strictEqual(maskAuditValue('bank_account_number', undefined), undefined);
     });
   });
 });

@@ -22,6 +22,7 @@ import type { ActorContext } from '../rbac/rbac.dto';
 import { normalizeCorrelationId } from '@shipde/config';
 import { extractClientIp } from '../utils/ip.util';
 import { CanonicalApiException } from '../auth/auth.service';
+import { PrismaService } from '../prisma/prisma.service';
 
 @Controller(['api/v1/shops', 'shops'])
 @UseGuards(RbacSeedGuard, SessionGuard, PermissionsGuard)
@@ -29,7 +30,8 @@ import { CanonicalApiException } from '../auth/auth.service';
 export class ShopsController {
   constructor(
     @Inject(ShopsService) private readonly shopsService: ShopsService,
-    @Inject(RbacService) private readonly rbacService: RbacService
+    @Inject(RbacService) private readonly rbacService: RbacService,
+    @Inject(PrismaService) private readonly prisma: PrismaService
   ) {}
 
   private async resolveActor(req: any): Promise<ActorContext> {
@@ -44,7 +46,23 @@ export class ShopsController {
   private async assertCanViewShopConfig(actor: ActorContext): Promise<void> {
     const hasPerm = await this.rbacService.actorHasPermissions(actor, ['iam:shop_config']);
     const allowedRoles = ['OWNER', 'OPS_CSKH', 'FINANCE'];
-    if (!hasPerm && (!actor.role || !allowedRoles.includes(actor.role))) {
+    let roleCode = actor.role;
+    if (actor.customRoleId) {
+      const customRole = await this.prisma.role.findUnique({
+        where: { id: actor.customRoleId },
+        select: { code: true, name: true },
+      });
+      if (customRole?.code) {
+        roleCode = customRole.code;
+      } else if (
+        customRole?.name &&
+        (customRole.name.toUpperCase().includes('FINANCE') ||
+          customRole.name.toUpperCase().includes('TÀI CHÍNH'))
+      ) {
+        roleCode = 'FINANCE';
+      }
+    }
+    if (!hasPerm && (!roleCode || !allowedRoles.includes(roleCode))) {
       throw new CanonicalApiException(
         HttpStatus.FORBIDDEN,
         'FORBIDDEN',

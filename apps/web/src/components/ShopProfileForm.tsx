@@ -23,6 +23,7 @@ import {
   MapPin,
 } from 'lucide-react';
 import type { ShopProfile, UpdateShopProfileInput } from '@shipde/contracts';
+import { SUPPORTED_TIMEZONES, isValidTimeZone } from '@shipde/contracts';
 
 export interface ShopProfileFormState {
   name: string;
@@ -109,8 +110,7 @@ export function validateShopProfileForm(form: ShopProfileFormState): {
   }
 
   if (form.timezone && form.timezone.trim()) {
-    const trimmed = form.timezone.trim();
-    if (trimmed !== 'Asia/Ho_Chi_Minh' && trimmed !== 'UTC') {
+    if (!isValidTimeZone(form.timezone)) {
       errors.timezone = 'Múi giờ không hợp lệ';
     }
   }
@@ -887,8 +887,11 @@ export function ShopProfileForm({
                     data-testid="select-timezone"
                     className="w-full px-3 py-2 border border-slate-300 rounded-xl outline-hidden text-xs focus:border-orange-500 focus:ring-1 focus:ring-orange-500 bg-white"
                   >
-                    <option value="Asia/Ho_Chi_Minh">Asia/Ho_Chi_Minh (UTC+7)</option>
-                    <option value="UTC">UTC (UTC+0)</option>
+                    {SUPPORTED_TIMEZONES.map((tz) => (
+                      <option key={tz.value} value={tz.value}>
+                        {tz.label}
+                      </option>
+                    ))}
                   </select>
                 </div>
 
