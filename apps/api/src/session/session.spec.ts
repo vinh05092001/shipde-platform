@@ -728,4 +728,64 @@ describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
       }
     });
   });
+
+  describe('Finding 6: Persist EXPIRED status to DB at guard validation time (BR-SESS-03 / BR-SESS-04)', () => {
+    it('persists EXPIRED status in DB when validateSession detects 30-day inactivity', async () => {
+      let updatedStatus: SessionStatusEnum | null = null;
+      const mockPrisma: any = {
+        deviceSession: {
+          findFirst: async () => ({
+            id: 'sess-inactive-31d',
+            user_id: 'user-1',
+            merchant_id: 'merch-1',
+            status: SessionStatusEnum.ACTIVE,
+            last_active_at: new Date(Date.now() - 31 * 24 * 60 * 60 * 1000),
+            expires_at: new Date(Date.now() + 50 * 24 * 60 * 60 * 1000),
+          }),
+          updateMany: async ({ data }: any) => {
+            updatedStatus = data.status;
+            return { count: 1 };
+          },
+        },
+      };
+
+      const service = new SessionService(mockPrisma);
+      const res = await service.validateSession('token-hash-inactive');
+      assert.strictEqual(res, null, 'validateSession must return null for inactive session');
+      assert.strictEqual(
+        updatedStatus,
+        SessionStatusEnum.EXPIRED,
+        'Database record must be transitioned to EXPIRED status at guard validation time'
+      );
+    });
+
+    it('persists EXPIRED status in DB when validateSession detects 90-day absolute expiry', async () => {
+      let updatedStatus: SessionStatusEnum | null = null;
+      const mockPrisma: any = {
+        deviceSession: {
+          findFirst: async () => ({
+            id: 'sess-lifetime-91d',
+            user_id: 'user-1',
+            merchant_id: 'merch-1',
+            status: SessionStatusEnum.ACTIVE,
+            last_active_at: new Date(),
+            expires_at: new Date(Date.now() - 1000), // past expiry
+          }),
+          updateMany: async ({ data }: any) => {
+            updatedStatus = data.status;
+            return { count: 1 };
+          },
+        },
+      };
+
+      const service = new SessionService(mockPrisma);
+      const res = await service.validateSession('token-hash-expired');
+      assert.strictEqual(res, null, 'validateSession must return null for lifetime-expired session');
+      assert.strictEqual(
+        updatedStatus,
+        SessionStatusEnum.EXPIRED,
+        'Database record must be transitioned to EXPIRED status at guard validation time'
+      );
+    });
+  });
 });

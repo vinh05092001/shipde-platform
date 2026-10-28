@@ -122,13 +122,20 @@ export class SessionService implements OnApplicationBootstrap {
     const session = await this.prisma.deviceSession.findFirst({
       where: {
         session_token_hash: tokenHash,
-        status: SessionStatusEnum.ACTIVE,
-        expires_at: { gt: now },
-        last_active_at: { gt: inactivityThreshold },
       },
     });
 
-    if (!session) {
+    if (!session || session.status !== SessionStatusEnum.ACTIVE) {
+      return null;
+    }
+
+    const isExpired = session.expires_at <= now || session.last_active_at <= inactivityThreshold;
+    if (isExpired) {
+      // BR-SESS-03 / BR-SESS-04: Persist EXPIRED status to DB at guard time (Finding 6)
+      await this.prisma.deviceSession.updateMany({
+        where: { id: session.id, status: SessionStatusEnum.ACTIVE },
+        data: { status: SessionStatusEnum.EXPIRED },
+      });
       return null;
     }
 
