@@ -7,7 +7,8 @@ import { SessionService } from './session.service';
 import { SessionStatusEnum } from '@prisma/client';
 
 describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
-  const getTestHmacKey = () => process.env.AUDIT_IDENTIFIER_HMAC_KEY || randomBytes(32).toString('hex');
+  const getTestHmacKey = () =>
+    process.env.AUDIT_IDENTIFIER_HMAC_KEY || randomBytes(32).toString('hex');
   // ---------------------------------------------------------------------------
   // Finding 2: AC-SESS-06 next_action must be 'LOGIN' on SESSION_INVALID
   // ---------------------------------------------------------------------------

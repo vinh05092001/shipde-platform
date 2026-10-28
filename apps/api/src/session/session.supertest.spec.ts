@@ -991,7 +991,9 @@ async function runSessionSupertestSuite() {
         'Remote sessions must remain ACTIVE when revokeAll audit rolls back'
       );
 
-      const leakedRevokeAllAudit = stdoutLogs.some((l) => l.includes('AUDIT: SESSIONS_REVOKED_ALL'));
+      const leakedRevokeAllAudit = stdoutLogs.some((l) =>
+        l.includes('AUDIT: SESSIONS_REVOKED_ALL')
+      );
       assert.strictEqual(
         leakedRevokeAllAudit,
         false,
