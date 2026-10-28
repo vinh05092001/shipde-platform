@@ -276,7 +276,10 @@ function loadEffortVariants(ranking) {
         const m = row.name.match(/\(([^)]+)\)/);
         if (m) {
           for (const part of m[1].split(/[\/,]/)) {
-            const trimmed = part.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-');
+            const trimmed = part
+              .trim()
+              .toLowerCase()
+              .replace(/[^a-z0-9]+/g, '-');
             if (trimmed) variants.add(trimmed);
           }
         }
