@@ -207,6 +207,7 @@ export async function seedDatabase(client?: PrismaClient): Promise<{
   merchantsCount: number;
   usersCount: number;
   accountsCount: number;
+  tokensCount: number;
 }> {
   const prisma = client || new PrismaClient();
   try {

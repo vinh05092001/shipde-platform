@@ -465,6 +465,112 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/users/check-scope': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Check user scope authorization (API-USR-CHECK-SCOPE, FEAT-USR-01) */
+    post: operations['checkUserScope'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/invitations': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List user invitations for merchant (API-USR-INVITE-LIST, FEAT-USR-01) */
+    get: operations['listInvitations'];
+    put?: never;
+    /** Send team member invitation (API-USR-INVITE-SEND, FEAT-USR-01) */
+    post: operations['createInvitation'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/invitations/{id}/resend': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Resend user invitation (API-USR-INVITE-RESEND, FEAT-USR-01) */
+    post: operations['resendInvitation'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/invitations/{id}/cancel': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Cancel pending user invitation (API-USR-INVITE-CANCEL, FEAT-USR-01) */
+    post: operations['cancelInvitation'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/invitations/verify': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Public verification of invitation token (API-USR-INVITE-VERIFY, FEAT-USR-01)
+     * @description Token is sent in the JSON body, never in the URL, so access logs, proxies and Referer never retain the plaintext secret (SECURITY-NFR / AC-USR-01-18).
+     */
+    post: operations['verifyInvitation'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/invitations/accept': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Public acceptance of invitation and account setup (API-USR-INVITE-ACCEPT, FEAT-USR-01) */
+    post: operations['acceptInvitation'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/me': {
     parameters: {
       query?: never;
@@ -560,6 +666,27 @@ export interface paths {
     get: operations['listShops'];
     put?: never;
     post: operations['createShop'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/admin/shops': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List all shops (admin) (API-ADMIN-SHOP-LIST, FEAT-AUTH-02) */
+    get: operations['listAdminShops'];
+    put?: never;
+    /**
+     * Admin-created shop account (API-ADMIN-SHOP-CREATE, FEAT-AUTH-02)
+     * @description Platform operator provisions initial shop owner account without exposing public self-registration.
+     */
+    post: operations['createAdminShop'];
     delete?: never;
     options?: never;
     head?: never;
@@ -810,6 +937,70 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
   schemas: {
+    AdminCreateShopInput: {
+      merchant_name: string;
+      full_name?: string;
+      /** Format: email */
+      email?: string;
+      phone?: string;
+      password?: string;
+    };
+    AdminCreateShopResponse: {
+      /** @example true */
+      success: boolean;
+      data: {
+        merchant: {
+          /** Format: uuid */
+          id: string;
+          name: string;
+          code: string;
+          status: string;
+          /** Format: date-time */
+          created_at: string;
+        };
+        user: {
+          /** Format: uuid */
+          id: string;
+          /** Format: uuid */
+          merchant_id: string;
+          full_name: string;
+          email?: string | null;
+          phone?: string | null;
+          role: string;
+          status: string;
+          /** Format: date-time */
+          email_verified_at?: string | null;
+          /** Format: date-time */
+          phone_verified_at?: string | null;
+        };
+        password_is_temporary: boolean;
+      };
+      meta?: components['schemas']['Meta'];
+    };
+    AdminListShopsResponse: {
+      /** @example true */
+      success: boolean;
+      data: {
+        shops: {
+          /** Format: uuid */
+          id: string;
+          name: string;
+          code: string;
+          status: string;
+          /** Format: date-time */
+          created_at: string;
+          user_count?: number;
+          owner?: {
+            id?: string;
+            full_name?: string;
+            email?: string | null;
+            phone?: string | null;
+          } | null;
+        }[];
+        total: number;
+      };
+      meta?: components['schemas']['Meta'];
+    };
     RegisterRequest: {
       merchant_name: string;
       full_name: string;
@@ -1191,6 +1382,114 @@ export interface components {
         reset: boolean;
         revoked_sessions_count: number;
         message: string;
+      };
+      meta: components['schemas']['Meta'];
+    };
+    /** @enum {string} */
+    InvitationStatus: 'PENDING' | 'ACCEPTED' | 'EXPIRED' | 'CANCELLED';
+    SendInvitationRequest: {
+      /** Format: email */
+      email?: string;
+      phone?: string;
+      /** @enum {string} */
+      role: 'OWNER' | 'OPS_CSKH' | 'WAREHOUSE' | 'ACCOUNTANT';
+      store_scopes?: string[];
+      warehouse_scopes?: string[];
+    };
+    InvitationItem: {
+      /** Format: uuid */
+      id: string;
+      /** Format: uuid */
+      merchant_id: string;
+      email?: string | null;
+      phone?: string | null;
+      /** @enum {string} */
+      role: 'OWNER' | 'OPS_CSKH' | 'WAREHOUSE' | 'ACCOUNTANT';
+      store_scopes?: string[];
+      warehouse_scopes?: string[];
+      status: components['schemas']['InvitationStatus'];
+      /** Format: uuid */
+      invited_by_user_id?: string | null;
+      /** Format: date-time */
+      expires_at: string;
+      /** Format: date-time */
+      consumed_at?: string | null;
+      /** Format: date-time */
+      created_at: string;
+    };
+    SendInvitationResponse: {
+      data: components['schemas']['InvitationItem'];
+      meta: components['schemas']['Meta'];
+    };
+    ListInvitationsResponse: {
+      data: components['schemas']['InvitationItem'][];
+      meta: {
+        total: number;
+        page: number;
+        limit: number;
+        correlation_id: string;
+      };
+    };
+    ResendInvitationResponse: {
+      data: {
+        /** Format: uuid */
+        id: string;
+        status: components['schemas']['InvitationStatus'];
+        /** Format: date-time */
+        expires_at: string;
+      };
+      meta: components['schemas']['Meta'];
+    };
+    CancelInvitationResponse: {
+      data: {
+        /** Format: uuid */
+        id: string;
+        status: components['schemas']['InvitationStatus'];
+      };
+      meta: components['schemas']['Meta'];
+    };
+    VerifyInvitationResponse: {
+      data: {
+        valid: boolean;
+        tenant_name: string;
+        role: string;
+        identifier: string;
+        store_scopes?: string[];
+        warehouse_scopes?: string[];
+      };
+      meta: components['schemas']['Meta'];
+    };
+    AcceptInvitationRequest: {
+      token: string;
+      full_name: string;
+      password: string;
+      password_confirm?: string;
+    };
+    AcceptInvitationResponse: {
+      data: {
+        /** Format: uuid */
+        user_id: string;
+        email?: string | null;
+        phone?: string | null;
+        full_name: string;
+        role: string;
+        status: string;
+        message: string;
+      };
+      meta: components['schemas']['Meta'];
+    };
+    CheckScopeRequest: {
+      store_id?: string;
+      warehouse_id?: string;
+    };
+    CheckScopeResponse: {
+      data: {
+        authorized: boolean;
+        /** Format: uuid */
+        user_id: string;
+        role: string;
+        store_scopes: string[];
+        warehouse_scopes: string[];
       };
       meta: components['schemas']['Meta'];
     };
@@ -1679,6 +1978,194 @@ export interface operations {
       409: components['responses']['Error'];
     };
   };
+  checkUserScope: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['CheckScopeRequest'];
+      };
+    };
+    responses: {
+      /** @description Scope authorization successful */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['CheckScopeResponse'];
+        };
+      };
+      401: components['responses']['Error'];
+      /** @description Scope access denied */
+      403: components['responses']['Error'];
+    };
+  };
+  listInvitations: {
+    parameters: {
+      query?: {
+        status?: 'PENDING' | 'ACCEPTED' | 'EXPIRED' | 'CANCELLED' | 'ALL';
+        page?: number;
+        limit?: number;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description List of invitations */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ListInvitationsResponse'];
+        };
+      };
+      401: components['responses']['Error'];
+      403: components['responses']['Error'];
+    };
+  };
+  createInvitation: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['SendInvitationRequest'];
+      };
+    };
+    responses: {
+      /** @description Invitation created and sent */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['SendInvitationResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['Error'];
+      403: components['responses']['Error'];
+    };
+  };
+  resendInvitation: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Invitation resent and expiration extended */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ResendInvitationResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['Error'];
+      403: components['responses']['Error'];
+      404: components['responses']['Error'];
+    };
+  };
+  cancelInvitation: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Invitation cancelled */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['CancelInvitationResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['Error'];
+      403: components['responses']['Error'];
+      404: components['responses']['Error'];
+    };
+  };
+  verifyInvitation: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': {
+          token: string;
+        };
+      };
+    };
+    responses: {
+      /** @description Token is valid and unexpired */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['VerifyInvitationResponse'];
+        };
+      };
+      /** @description Token not found, expired, cancelled, or already used */
+      404: components['responses']['Error'];
+    };
+  };
+  acceptInvitation: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['AcceptInvitationRequest'];
+      };
+    };
+    responses: {
+      /** @description Invitation accepted and account activated */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AcceptInvitationResponse'];
+        };
+      };
+      /** @description Invalid password, expired token, or token already used */
+      400: components['responses']['Error'];
+      /** @description Token not found or cancelled */
+      404: components['responses']['Error'];
+    };
+  };
   getMe: {
     parameters: {
       query?: never;
@@ -1839,6 +2326,59 @@ export interface operations {
         content?: never;
       };
       400: components['responses']['Error'];
+    };
+  };
+  listAdminShops: {
+    parameters: {
+      query?: {
+        limit?: number;
+        offset?: number;
+        search?: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description List of shops */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AdminListShopsResponse'];
+        };
+      };
+      401: components['responses']['Error'];
+      403: components['responses']['Error'];
+    };
+  };
+  createAdminShop: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['AdminCreateShopInput'];
+      };
+    };
+    responses: {
+      /** @description Shop and owner created successfully */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AdminCreateShopResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['Error'];
+      403: components['responses']['Error'];
     };
   };
   listCarrierAccounts: {

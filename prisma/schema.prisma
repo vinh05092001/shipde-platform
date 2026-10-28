@@ -18,6 +18,7 @@ enum RoleEnum {
   OPS_CSKH
   WAREHOUSE
   ACCOUNTANT
+  PLATFORM_ADMIN
 }
 
 enum CarrierCodeEnum {
@@ -108,6 +109,13 @@ enum SessionStatusEnum {
   INACTIVE
 }
 
+enum InvitationStatusEnum {
+  PENDING
+  ACCEPTED
+  EXPIRED
+  CANCELLED
+}
+
 // ----------------------------------------------------------------------------
 // 1. IAM & Multi-tenant Organization
 // ----------------------------------------------------------------------------
@@ -135,13 +143,14 @@ model Merchant {
   mfa_factors       MfaFactor[]
   mfa_challenges    MfaChallenge[]
   mfa_admin_reset_idempotency MfaAdminResetIdempotency[]
+  invitations       Invitation[]
 
   @@map("merchants")
 }
 
 model User {
   id                String            @id @default(uuid()) @db.Uuid
-  merchant_id       String            @db.Uuid
+  merchant_id       String?           @db.Uuid
   email             String?           @unique @db.VarChar(255)
   phone             String?           @unique @db.VarChar(32)
   full_name         String            @db.VarChar(255)
@@ -157,7 +166,7 @@ model User {
   created_at        DateTime          @default(now()) @db.Timestamptz
   updated_at        DateTime          @updatedAt @db.Timestamptz
 
-  merchant              Merchant              @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
+  merchant              Merchant?             @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
   assigned_cases        ExceptionCase[]       @relation("CaseAssignee")
   contact_logs          ExceptionContactLog[]
   device_sessions       DeviceSession[]
@@ -165,6 +174,7 @@ model User {
   password_reset_tokens PasswordResetToken[]
   mfa_factors           MfaFactor[]
   mfa_challenges        MfaChallenge[]
+  invitations_sent      Invitation[]          @relation("InvitationsSent")
 
   @@index([merchant_id, role])
   @@map("users")
@@ -208,10 +218,41 @@ model PasswordResetToken {
   @@map("password_reset_tokens")
 }
 
+model Invitation {
+  id                 String               @id @default(uuid()) @db.Uuid
+  merchant_id        String               @db.Uuid
+  email              String?              @db.VarChar(255)
+  phone              String?              @db.VarChar(32)
+  role               RoleEnum
+  store_scopes       String[]             @default([])
+  warehouse_scopes   String[]             @default([])
+  token_hash         String               @unique @db.VarChar(255)
+  status             InvitationStatusEnum @default(PENDING)
+  invited_by_user_id String?              @db.Uuid
+  expires_at         DateTime             @db.Timestamptz
+  consumed_at        DateTime?            @db.Timestamptz
+  created_at         DateTime             @default(now()) @db.Timestamptz
+  updated_at         DateTime             @updatedAt @db.Timestamptz
+
+  merchant           Merchant             @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
+  invited_by         User?                @relation("InvitationsSent", fields: [invited_by_user_id], references: [id], onDelete: SetNull)
+
+  // Authoritative schema & migration path (Round 6 Finding 8 / BR-INV-08) (Round 10 Finding 1):
+  // Partial unique indexes "invitations_merchant_pending_email_unique" and
+  // "invitations_merchant_pending_phone_unique" (WHERE status = 'PENDING' AND email/phone IS NOT NULL)
+  // are created exclusively via PostgreSQL migration DDL in prisma/migrations/...
+  // They are strictly omitted from schema.prisma because Prisma does not support partial indexes;
+  // declaring non-unique @@index with these names would drop the partial unique constraints.
+  // Guarded against drift by migration-guard.ts and CI validation.
+  @@index([merchant_id, status])
+  @@index([expires_at])
+  @@map("invitations")
+}
+
 model DeviceSession {
   id                 String            @id @default(uuid()) @db.Uuid
   user_id            String            @db.Uuid
-  merchant_id        String            @db.Uuid
+  merchant_id        String?           @db.Uuid
   session_token_hash String            @unique @db.VarChar(512)
   device_id          String            @db.VarChar(255)
   device_model       String?           @db.VarChar(255)
@@ -230,7 +271,7 @@ model DeviceSession {
   created_at         DateTime          @default(now()) @db.Timestamptz
 
   user               User              @relation(fields: [user_id], references: [id], onDelete: Cascade)
-  merchant           Merchant          @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
+  merchant           Merchant?         @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
 
   @@index([merchant_id, user_id, status])
   @@index([user_id, status])
@@ -643,8 +684,9 @@ model Claim {
 
 model AuditLog {
   id                   String            @id @default(uuid()) @db.Uuid
-  merchant_id          String            @db.Uuid
+  merchant_id          String?           @db.Uuid
   user_id              String?           @db.VarChar(255)
+  actor                String?           @db.VarChar(255)
   action               String            @db.VarChar(128)
   entity_type          String            @db.VarChar(64)
   entity_id            String            @db.VarChar(255)
@@ -654,7 +696,7 @@ model AuditLog {
   ip_address           String?           @db.VarChar(64)
   created_at           DateTime          @default(now()) @db.Timestamptz // Bất biến (BR-02, BR-21)
 
-  merchant             Merchant          @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
+  merchant             Merchant?         @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
 
   @@index([merchant_id, entity_type, entity_id])
   @@index([merchant_id, created_at])

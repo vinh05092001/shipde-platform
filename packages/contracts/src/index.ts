@@ -31,6 +31,15 @@ export type UserStatus = (typeof UserStatus)[keyof typeof UserStatus];
 export const CanonicalUserStatus = UserStatus;
 export type CanonicalUserStatus = UserStatus;
 
+/**
+ * Shared helper to verify if a user status string represents an active account.
+ * Case-insensitive comparison matching DATA-DICTIONARY ('ACTIVE') and legacy/in-flight ('active').
+ * AC-USR-01-17 / DATA-DICTIONARY User.status
+ */
+export function isActiveStatus(status?: string | null): boolean {
+  return typeof status === 'string' && status.trim().toLowerCase() === 'active';
+}
+
 // --- Verification Channels ---
 export const VerificationChannel = {
   EMAIL: 'email',
@@ -43,7 +52,7 @@ export type VerificationChannel = (typeof VerificationChannel)[keyof typeof Veri
 export interface VerificationMessage {
   channel: 'email' | 'phone';
   recipient: string;
-  purpose?: 'account_verification' | 'password_reset';
+  purpose?: 'account_verification' | 'password_reset' | 'invitation';
   link?: string;
   token?: string;
   otp?: string;
@@ -360,6 +369,50 @@ export const MfaAuditEvent = {
 } as const;
 
 export type MfaAuditEvent = (typeof MfaAuditEvent)[keyof typeof MfaAuditEvent];
+
+// --- User Invitations Contracts (FEAT-USR-01) ---
+export const InvitationStatus = {
+  PENDING: 'PENDING',
+  ACCEPTED: 'ACCEPTED',
+  EXPIRED: 'EXPIRED',
+  CANCELLED: 'CANCELLED',
+} as const;
+
+export type InvitationStatus = (typeof InvitationStatus)[keyof typeof InvitationStatus];
+
+export const InvitationErrorCode = {
+  INVITATION_NOT_FOUND: 'INVITATION_NOT_FOUND',
+  INVITATION_EXPIRED: 'INVITATION_EXPIRED',
+  INVITATION_ALREADY_USED: 'INVITATION_ALREADY_USED',
+  INVITATION_ALREADY_PENDING: 'INVITATION_ALREADY_PENDING',
+  USER_ALREADY_EXISTS: 'USER_ALREADY_EXISTS',
+  PRIVILEGE_CEILING_EXCEEDED: 'PRIVILEGE_CEILING_EXCEEDED',
+  FORBIDDEN: 'FORBIDDEN',
+  VALIDATION_ERROR: 'VALIDATION_ERROR',
+} as const;
+
+export type InvitationErrorCode = (typeof InvitationErrorCode)[keyof typeof InvitationErrorCode];
+
+export const InvitationAuditEvent = {
+  INVITATION_SENT: 'INVITATION_SENT',
+  INVITATION_RESENT: 'INVITATION_RESENT',
+  INVITATION_CANCELLED: 'INVITATION_CANCELLED',
+  INVITATION_ACCEPTED: 'INVITATION_ACCEPTED',
+} as const;
+
+export type InvitationAuditEvent = (typeof InvitationAuditEvent)[keyof typeof InvitationAuditEvent];
+
+export type InvitationItem = components['schemas']['InvitationItem'];
+export type SendInvitationRequest = components['schemas']['SendInvitationRequest'];
+export type SendInvitationResponse = components['schemas']['SendInvitationResponse'];
+export type ListInvitationsResponse = components['schemas']['ListInvitationsResponse'];
+export type ResendInvitationResponse = components['schemas']['ResendInvitationResponse'];
+export type CancelInvitationResponse = components['schemas']['CancelInvitationResponse'];
+export type VerifyInvitationResponse = components['schemas']['VerifyInvitationResponse'];
+export type AcceptInvitationRequest = components['schemas']['AcceptInvitationRequest'];
+export type AcceptInvitationResponse = components['schemas']['AcceptInvitationResponse'];
+export type CheckScopeRequest = components['schemas']['CheckScopeRequest'];
+export type CheckScopeResponse = components['schemas']['CheckScopeResponse'];
 
 // --- Generated OpenAPI Schema Types ---
 export type * from './openapi';
