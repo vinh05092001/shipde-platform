@@ -17,6 +17,11 @@
 | Branch          | `feat/feat-auth-06-sessions` |
 | Pull Request    | [#446](https://github.com/vinh05092001/shipde-platform/pull/446) |
 
+### Kept out-of-path files
+
+- `packages/contracts/src/openapi.ts`: Generated TypeScript definitions for session schemas and 401 error responses from `docs/product-spec/contracts/openapi.yaml`; required to satisfy `pnpm contract:check` zero-drift gate.
+- `apps/api/src/invitations/invitations.supertest.spec.ts`: Updated test harness helper to mint valid `v1.` session tokens with SHA-256 hash to satisfy global `SessionGuard` authentication requirements without test regressions.
+
 ## Business outcome
 
 An authenticated merchant user can list all active sessions across devices, revoke any specific session, revoke all other sessions at once (logout everywhere), and maintain active session freshness via heartbeat while inactive (30 days) and expired (90 days) sessions are systematically terminated and rejected.

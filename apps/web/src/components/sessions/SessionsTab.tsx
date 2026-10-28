@@ -216,15 +216,17 @@ export async function executeRevokeSession(options: {
   setSessions: React.Dispatch<React.SetStateAction<SessionItem[]>>;
   onToast?: (msg: string) => void;
 }): Promise<{ executed: boolean; locked?: boolean; success?: boolean; message?: string }> {
-  if (
-    options.revokingId ||
-    options.revokingIdRef?.current ||
-    options.revokeAllLoading ||
-    options.revokeAllLoadingRef?.current ||
-    options.isFetching ||
-    options.isFetchingRef?.current ||
-    options.fetchState === 'loading'
-  ) {
+  const isRevokingLocked = options.revokingIdRef
+    ? Boolean(options.revokingIdRef.current)
+    : Boolean(options.revokingId);
+  const isRevokeAllLocked = options.revokeAllLoadingRef
+    ? Boolean(options.revokeAllLoadingRef.current)
+    : Boolean(options.revokeAllLoading);
+  const isFetchLocked = options.isFetchingRef
+    ? Boolean(options.isFetchingRef.current)
+    : Boolean(options.isFetching);
+
+  if (isRevokingLocked || isRevokeAllLocked || isFetchLocked || options.fetchState === 'loading') {
     return { executed: false, locked: true };
   }
   if (options.revokingIdRef) {
@@ -317,15 +319,17 @@ export async function executeRevokeAll(options: {
   revokedCount?: number;
   message?: string;
 }> {
-  if (
-    options.revokeAllLoading ||
-    options.revokeAllLoadingRef?.current ||
-    options.revokingId ||
-    options.revokingIdRef?.current ||
-    options.isFetching ||
-    options.isFetchingRef?.current ||
-    options.fetchState === 'loading'
-  ) {
+  const isRevokeAllLocked = options.revokeAllLoadingRef
+    ? Boolean(options.revokeAllLoadingRef.current)
+    : Boolean(options.revokeAllLoading);
+  const isRevokingLocked = options.revokingIdRef
+    ? Boolean(options.revokingIdRef.current)
+    : Boolean(options.revokingId);
+  const isFetchLocked = options.isFetchingRef
+    ? Boolean(options.isFetchingRef.current)
+    : Boolean(options.isFetching);
+
+  if (isRevokeAllLocked || isRevokingLocked || isFetchLocked || options.fetchState === 'loading') {
     return { executed: false, locked: true };
   }
   if (options.revokeAllLoadingRef) {
@@ -405,6 +409,73 @@ export async function executeRevokeAll(options: {
   }
 }
 
+export function createSessionHandlers(options: {
+  baseUrl: string;
+  token?: string | null;
+  includeCurrent?: boolean;
+  revokeAllIncludeCurrent?: boolean;
+  revokingId?: string | null;
+  revokingIdRef: React.MutableRefObject<string | null> | { current: string | null };
+  revokeAllLoading?: boolean;
+  revokeAllLoadingRef: React.MutableRefObject<boolean> | { current: boolean };
+  isFetching?: boolean;
+  isFetchingRef: React.MutableRefObject<boolean> | { current: boolean };
+  fetchState?: 'loading' | 'error' | 'forbidden' | 'unauthenticated' | 'validation' | 'success';
+  setRevokingId: (id: string | null) => void;
+  setRevokeAllLoading: (loading: boolean) => void;
+  setActionError: (msg: string | null) => void;
+  setValidationMessage: (msg: string | null) => void;
+  setSessions: React.Dispatch<React.SetStateAction<SessionItem[]>>;
+  setFetchState: (
+    state: 'loading' | 'error' | 'forbidden' | 'unauthenticated' | 'validation' | 'success'
+  ) => void;
+  setRevokeAllOpen: (open: boolean) => void;
+  onToast?: (msg: string) => void;
+}) {
+  const handleRevoke = async (sessionId: string) => {
+    return await executeRevokeSession({
+      sessionId,
+      baseUrl: options.baseUrl,
+      token: options.token,
+      revokingId: options.revokingId ?? options.revokingIdRef.current,
+      revokingIdRef: options.revokingIdRef,
+      revokeAllLoading: options.revokeAllLoading ?? options.revokeAllLoadingRef.current,
+      revokeAllLoadingRef: options.revokeAllLoadingRef,
+      isFetching: options.isFetching ?? options.isFetchingRef.current,
+      isFetchingRef: options.isFetchingRef,
+      fetchState: options.fetchState,
+      setRevokingId: options.setRevokingId,
+      setActionError: options.setActionError,
+      setValidationMessage: options.setValidationMessage,
+      setSessions: options.setSessions,
+      onToast: options.onToast,
+    });
+  };
+
+  const handleRevokeAll = async () => {
+    return await executeRevokeAll({
+      baseUrl: options.baseUrl,
+      token: options.token,
+      includeCurrent: options.includeCurrent ?? options.revokeAllIncludeCurrent ?? false,
+      revokeAllLoading: options.revokeAllLoading ?? options.revokeAllLoadingRef.current,
+      revokeAllLoadingRef: options.revokeAllLoadingRef,
+      revokingId: options.revokingId ?? options.revokingIdRef.current,
+      revokingIdRef: options.revokingIdRef,
+      isFetching: options.isFetching ?? options.isFetchingRef.current,
+      isFetchingRef: options.isFetchingRef,
+      fetchState: options.fetchState,
+      setRevokeAllLoading: options.setRevokeAllLoading,
+      setActionError: options.setActionError,
+      setSessions: options.setSessions,
+      setFetchState: options.setFetchState,
+      setRevokeAllOpen: options.setRevokeAllOpen,
+      onToast: options.onToast,
+    });
+  };
+
+  return { handleRevoke, handleRevokeAll };
+}
+
 export function SessionsTab({
   onToast,
   initialSessions,
@@ -481,19 +552,7 @@ export function SessionsTab({
   }, [fetchSessions, initialSessions, initialState]);
 
   const handleRevoke = async (sessionId: string) => {
-    if (
-      revokingIdRef.current ||
-      revokingId ||
-      revokeAllLoadingRef.current ||
-      revokeAllLoading ||
-      isFetchingRef.current ||
-      isFetching ||
-      fetchState === 'loading'
-    ) {
-      return;
-    }
-    revokingIdRef.current = sessionId;
-    await executeRevokeSession({
+    return await executeRevokeSession({
       sessionId,
       baseUrl,
       token,
@@ -513,19 +572,7 @@ export function SessionsTab({
   };
 
   const handleRevokeAll = async () => {
-    if (
-      revokeAllLoadingRef.current ||
-      revokeAllLoading ||
-      revokingIdRef.current ||
-      revokingId ||
-      isFetchingRef.current ||
-      isFetching ||
-      fetchState === 'loading'
-    ) {
-      return;
-    }
-    revokeAllLoadingRef.current = true;
-    await executeRevokeAll({
+    return await executeRevokeAll({
       baseUrl,
       token,
       includeCurrent: revokeAllIncludeCurrent,

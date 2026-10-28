@@ -5,6 +5,7 @@ import { AuthProvider } from '@/context/AuthContext';
 import SessionsPage from '@/app/sessions/page';
 import {
   SessionsTab,
+  createSessionHandlers,
   executeFetchSessions,
   executeRevokeSession,
   executeRevokeAll,
@@ -857,6 +858,297 @@ async function runAsyncTests() {
     'executeFetchSessions works when isFetching is undefined'
   );
   console.log('  PASS: Finding 10 - executeFetchSessions handles undefined isFetching gracefully');
+
+  // ---------------------------------------------------------------------------
+  // TEST 17: Handler driver for single revoke (handleRevoke)
+  // (click -> fetch called once, spinner, failure clears lock, retry works, double-click does one request)
+  // ---------------------------------------------------------------------------
+  console.log(
+    '[TEST 17] Driver for handleRevoke: first-click dispatches, spinner, double-click locks, failure clears lock, retry works'
+  );
+  try {
+    let revokingIdState: string | null = null;
+    const revokingIdRef = { current: null as string | null };
+    const revokeAllLoadingRef = { current: false };
+    const isFetchingRef = { current: false };
+    let targetSessions = [mockCurrentSession, mockRemoteSession1];
+    let fetchCount = 0;
+    let toastMsg: string | null = null;
+    let actionErrMsg: string | null = null;
+
+    let resolveFetch: ((res: Response) => void) | null = null;
+
+    global.fetch = (() => {
+      fetchCount++;
+      return new Promise<Response>((resolve) => {
+        resolveFetch = resolve;
+      });
+    }) as any;
+
+    const handlers = createSessionHandlers({
+      baseUrl: 'http://localhost:3001',
+      token: 'dummy-token',
+      revokingIdRef,
+      revokeAllLoadingRef,
+      isFetchingRef,
+      fetchState: 'success',
+      setRevokingId: (id) => {
+        revokingIdState = id;
+      },
+      setRevokeAllLoading: () => {},
+      setActionError: (msg) => {
+        actionErrMsg = msg;
+      },
+      setValidationMessage: () => {},
+      setSessions: (updater: any) => {
+        targetSessions = updater(targetSessions);
+      },
+      setFetchState: () => {},
+      setRevokeAllOpen: () => {},
+      onToast: (msg) => {
+        toastMsg = msg;
+      },
+    });
+
+    // 17a: First click dispatches fetch once and shows spinner (revokingId set synchronously)
+    const pendingPromise = handlers.handleRevoke(mockRemoteSession1.session_id);
+
+    assert.strictEqual(fetchCount, 1, 'First click must call fetch exactly once');
+    assert.strictEqual(
+      revokingIdRef.current,
+      mockRemoteSession1.session_id,
+      'revokingIdRef must be locked to sessionId immediately on click'
+    );
+    assert.strictEqual(
+      revokingIdState,
+      mockRemoteSession1.session_id,
+      'setRevokingId must be called to display spinner on first click'
+    );
+
+    // 17b: Double-click while in flight is locked and does NOT dispatch a second request
+    const doubleClickPromise = handlers.handleRevoke(mockRemoteSession1.session_id);
+    const doubleClickResult = await doubleClickPromise;
+
+    assert.strictEqual(fetchCount, 1, 'Double-click must not dispatch a second fetch');
+    assert.strictEqual(
+      doubleClickResult.executed,
+      false,
+      'Double-click must return executed=false'
+    );
+    assert.strictEqual(doubleClickResult.locked, true, 'Double-click must return locked=true');
+
+    // Resolve the in-flight request
+    resolveFetch!(
+      new Response(
+        JSON.stringify({
+          session_id: mockRemoteSession1.session_id,
+          status: 'REVOKED',
+          message: 'Đã thu hồi 1 phiên làm việc',
+        }),
+        { status: 200 }
+      )
+    );
+
+    const firstClickResult = await pendingPromise;
+    assert.strictEqual(firstClickResult.executed, true);
+    assert.strictEqual(firstClickResult.success, true);
+    assert.strictEqual(
+      revokingIdRef.current,
+      null,
+      'revokingIdRef must be cleared in finally after success'
+    );
+    assert.strictEqual(
+      revokingIdState,
+      null,
+      'revokingId state must be reset to null after completion'
+    );
+
+    // 17c: Failure clears lock and enables retry
+    global.fetch = (async () => {
+      fetchCount++;
+      throw new Error('Network timeout failure');
+    }) as any;
+
+    const failedAttempt = await handlers.handleRevoke(mockRemoteSession1.session_id);
+    assert.strictEqual(failedAttempt.executed, true);
+    assert.strictEqual(failedAttempt.success, false);
+    assert.strictEqual(
+      revokingIdRef.current,
+      null,
+      'Failure must clear revokingIdRef in finally so retry is not blocked'
+    );
+    assert.strictEqual(
+      revokingIdState,
+      null,
+      'Failure must clear revokingId state so spinner is removed'
+    );
+    assert.ok(String(actionErrMsg).includes('Network timeout failure'), 'Action error must be set');
+
+    // 17d: Retry after failure succeeds
+    global.fetch = (async () => {
+      fetchCount++;
+      return new Response(
+        JSON.stringify({
+          session_id: mockRemoteSession1.session_id,
+          status: 'REVOKED',
+          message: 'Đã thu hồi 1 phiên làm việc',
+        }),
+        { status: 200 }
+      );
+    }) as any;
+
+    const retryAttempt = await handlers.handleRevoke(mockRemoteSession1.session_id);
+    assert.strictEqual(retryAttempt.executed, true, 'Retry must execute');
+    assert.strictEqual(retryAttempt.success, true, 'Retry must succeed');
+    assert.strictEqual(revokingIdRef.current, null, 'Lock must be clear after retry');
+    console.log(
+      '  PASS: handleRevoke first click dispatches fetch, shows spinner, double-click locks, failure clears lock, retry succeeds'
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
+
+  // ---------------------------------------------------------------------------
+  // TEST 18: Handler driver for revoke all (handleRevokeAll)
+  // (click -> fetch called once, spinner, failure clears lock, retry works, double-click does one request)
+  // ---------------------------------------------------------------------------
+  console.log(
+    '[TEST 18] Driver for handleRevokeAll: first-click dispatches, spinner, double-click locks, failure clears lock, retry works'
+  );
+  try {
+    let revokeAllLoadingState = false;
+    const revokeAllLoadingRef = { current: false };
+    const revokingIdRef = { current: null as string | null };
+    const isFetchingRef = { current: false };
+    let targetSessions = [mockCurrentSession, mockRemoteSession1, mockRemoteSession2];
+    let fetchCount = 0;
+    let toastMsg: string | null = null;
+    let actionErrMsg: string | null = null;
+    let dialogOpen = true;
+
+    let resolveFetch: ((res: Response) => void) | null = null;
+
+    global.fetch = (() => {
+      fetchCount++;
+      return new Promise<Response>((resolve) => {
+        resolveFetch = resolve;
+      });
+    }) as any;
+
+    const handlers = createSessionHandlers({
+      baseUrl: 'http://localhost:3001',
+      token: 'dummy-token',
+      includeCurrent: false,
+      revokeAllLoadingRef,
+      revokingIdRef,
+      isFetchingRef,
+      fetchState: 'success',
+      setRevokingId: () => {},
+      setRevokeAllLoading: (loading) => {
+        revokeAllLoadingState = loading;
+      },
+      setActionError: (msg) => {
+        actionErrMsg = msg;
+      },
+      setValidationMessage: () => {},
+      setSessions: (updater: any) => {
+        targetSessions = updater(targetSessions);
+      },
+      setFetchState: () => {},
+      setRevokeAllOpen: (open) => {
+        dialogOpen = open;
+      },
+      onToast: (msg) => {
+        toastMsg = msg;
+      },
+    });
+
+    // 18a: First click dispatches fetch once and shows spinner
+    const pendingPromise = handlers.handleRevokeAll();
+
+    assert.strictEqual(fetchCount, 1, 'First click on handleRevokeAll must dispatch fetch once');
+    assert.strictEqual(
+      revokeAllLoadingRef.current,
+      true,
+      'revokeAllLoadingRef must lock immediately on first click'
+    );
+    assert.strictEqual(
+      revokeAllLoadingState,
+      true,
+      'revokeAllLoading state must be set to true to display spinner'
+    );
+
+    // 18b: Double-click while in flight is locked and does NOT dispatch
+    const doubleClickResult = await handlers.handleRevokeAll();
+    assert.strictEqual(fetchCount, 1, 'Double-click must not call fetch a second time');
+    assert.strictEqual(doubleClickResult.executed, false);
+    assert.strictEqual(doubleClickResult.locked, true);
+
+    // Resolve in-flight fetch
+    resolveFetch!(
+      new Response(
+        JSON.stringify({
+          revoked_count: 2,
+          message: 'Đã thu hồi 2 phiên làm việc',
+        }),
+        { status: 200 }
+      )
+    );
+
+    const firstResult = await pendingPromise;
+    assert.strictEqual(firstResult.executed, true);
+    assert.strictEqual(firstResult.success, true);
+    assert.strictEqual(
+      revokeAllLoadingRef.current,
+      false,
+      'revokeAllLoadingRef must be cleared in finally'
+    );
+    assert.strictEqual(
+      revokeAllLoadingState,
+      false,
+      'revokeAllLoading state must reset to false after completion'
+    );
+
+    // 18c: Failure clears lock so retry works
+    global.fetch = (async () => {
+      fetchCount++;
+      return new Response(JSON.stringify({ error: { message: '500 Server error' } }), {
+        status: 500,
+      });
+    }) as any;
+
+    const failedAttempt = await handlers.handleRevokeAll();
+    assert.strictEqual(failedAttempt.executed, true);
+    assert.strictEqual(failedAttempt.success, false);
+    assert.strictEqual(
+      revokeAllLoadingRef.current,
+      false,
+      'Failure must clear revokeAllLoadingRef in finally'
+    );
+    assert.strictEqual(revokeAllLoadingState, false, 'Failure must clear revokeAllLoading state');
+
+    // 18d: Retry succeeds
+    global.fetch = (async () => {
+      fetchCount++;
+      return new Response(
+        JSON.stringify({
+          revoked_count: 2,
+          message: 'Đã thu hồi 2 phiên làm việc',
+        }),
+        { status: 200 }
+      );
+    }) as any;
+
+    const retryAttempt = await handlers.handleRevokeAll();
+    assert.strictEqual(retryAttempt.executed, true, 'Retry must execute');
+    assert.strictEqual(retryAttempt.success, true, 'Retry must succeed');
+    assert.strictEqual(revokeAllLoadingRef.current, false, 'Lock must be released');
+    console.log(
+      '  PASS: handleRevokeAll first click dispatches fetch, shows spinner, double-click locks, failure clears lock, retry succeeds'
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
 
   console.log('================================================================');
   console.log('ALL SESSIONS TAB UI & ACTION TESTS PASSED 100%');
