@@ -69,7 +69,7 @@ async function runSessionSupertestSuite() {
   }
   process.env.DATABASE_URL = databaseUrl;
   if (!process.env.AUDIT_IDENTIFIER_HMAC_KEY) {
-    process.env.AUDIT_IDENTIFIER_HMAC_KEY = 'test-audit-hmac-key-placeholder-32-chars';
+    process.env.AUDIT_IDENTIFIER_HMAC_KEY = randomBytes(32).toString('hex');
   }
 
   const testConfig: AppConfig = {
@@ -1040,8 +1040,8 @@ async function runSessionSupertestSuite() {
     assert.ok(auditKeyed.ip_address, 'Keyed audit IP must not be null');
 
     const { createHmac } = await import('node:crypto');
-    const configuredKey =
-      process.env.AUDIT_IDENTIFIER_HMAC_KEY || 'test-audit-hmac-key-placeholder-32-chars';
+    const configuredKey = process.env.AUDIT_IDENTIFIER_HMAC_KEY!;
+    assert.ok(configuredKey, 'AUDIT_IDENTIFIER_HMAC_KEY must be configured in environment');
     const expectedPseudonym = createHmac('sha256', configuredKey).update(testRawIp).digest('hex');
 
     assert.strictEqual(

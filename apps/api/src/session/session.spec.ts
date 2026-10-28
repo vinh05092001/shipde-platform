@@ -7,6 +7,7 @@ import { SessionService } from './session.service';
 import { SessionStatusEnum } from '@prisma/client';
 
 describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
+  const getTestHmacKey = () => process.env.AUDIT_IDENTIFIER_HMAC_KEY || randomBytes(32).toString('hex');
   // ---------------------------------------------------------------------------
   // Finding 2: AC-SESS-06 next_action must be 'LOGIN' on SESSION_INVALID
   // ---------------------------------------------------------------------------
@@ -113,7 +114,7 @@ describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
   // ---------------------------------------------------------------------------
   describe('SessionService Concurrency Safety (BR-SESS-06 / AC-SESS-08 / Finding 3)', () => {
     it('concurrent revocations result in atomic state update and exactly ONE audit log', async () => {
-      process.env.AUDIT_IDENTIFIER_HMAC_KEY = 'test-audit-hmac-key-placeholder-32-chars';
+      process.env.AUDIT_IDENTIFIER_HMAC_KEY = getTestHmacKey();
 
       const sessionId = 'session-uuid-concurrent-1';
       const userId = 'user-uuid-1';
@@ -192,7 +193,7 @@ describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
   // ---------------------------------------------------------------------------
   describe('Transactional Audit Logging & Explicit Rollback (BR-SESS-07 / AC-SESS-20)', () => {
     it('emits AUDIT: SESSION_REVOKED to stdout only after transaction commit', async () => {
-      process.env.AUDIT_IDENTIFIER_HMAC_KEY = 'test-audit-hmac-key-placeholder-32-chars';
+      process.env.AUDIT_IDENTIFIER_HMAC_KEY = getTestHmacKey();
       const stdoutEvents: string[] = [];
       const origLog = console.log;
       console.log = (...args: any[]) => {
@@ -253,7 +254,7 @@ describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
     });
 
     it('does not emit stdout success audit and logs AUDIT_ROLLBACK when audit creation fails', async () => {
-      process.env.AUDIT_IDENTIFIER_HMAC_KEY = 'test-audit-hmac-key-placeholder-32-chars';
+      process.env.AUDIT_IDENTIFIER_HMAC_KEY = getTestHmacKey();
       const stdoutEvents: string[] = [];
       const stderrEvents: string[] = [];
       const origLog = console.log;
@@ -315,7 +316,7 @@ describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
     });
 
     it('rolls back updateMany and logs AUDIT_ROLLBACK when audit creation fails during revokeAll (F-04)', async () => {
-      process.env.AUDIT_IDENTIFIER_HMAC_KEY = 'test-audit-hmac-key-placeholder-32-chars';
+      process.env.AUDIT_IDENTIFIER_HMAC_KEY = getTestHmacKey();
       const stdoutEvents: string[] = [];
       const stderrEvents: string[] = [];
       const origLog = console.log;
@@ -501,8 +502,8 @@ describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
   // ---------------------------------------------------------------------------
   describe('Audit IP Keyed Pseudonymization (AC-SESS-21 / Finding 6)', () => {
     it('verifies that IP pseudonymization strictly uses keyed HMAC-SHA256', async () => {
-      const key1 = 'test-audit-hmac-key-placeholder-32-chars';
-      const key2 = 'different-audit-hmac-key-32-chars-xyz';
+      const key1 = randomBytes(32).toString('hex');
+      const key2 = randomBytes(32).toString('hex');
       const rawIp = '203.0.113.195';
 
       process.env.AUDIT_IDENTIFIER_HMAC_KEY = key1;
@@ -567,7 +568,7 @@ describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
   // ---------------------------------------------------------------------------
   describe('SessionService Creation (AC-SESS-01 / Finding 1)', () => {
     it('creates active session with SHA-256 token hash, 90-day expiry, and last_active_at', async () => {
-      process.env.AUDIT_IDENTIFIER_HMAC_KEY = 'test-audit-hmac-key-placeholder-32-chars';
+      process.env.AUDIT_IDENTIFIER_HMAC_KEY = getTestHmacKey();
       const rawToken = 'test-raw-bearer-token-random-value-xyz';
       const expectedHash = createHash('sha256').update(rawToken).digest('hex');
       let createdPayload: any = null;
