@@ -13,9 +13,10 @@ import { AuthModule } from './auth/auth.module';
 import { SessionModule } from './session/session.module';
 import { RbacModule } from './rbac/rbac.module';
 import { InvitationsModule } from './invitations/invitations.module';
+import { UsersModule } from './users/users.module';
 
 @Module({
-  imports: [AuthModule, SessionModule, RbacModule, InvitationsModule],
+  imports: [AuthModule, SessionModule, RbacModule, InvitationsModule, UsersModule],
   controllers: [HealthController],
   providers: [
     {
