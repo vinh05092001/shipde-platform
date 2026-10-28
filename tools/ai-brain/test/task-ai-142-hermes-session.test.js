@@ -2638,7 +2638,7 @@ test('H3-07: launchHermesSession and chatCommand accept injected resolver input 
   }
 });
 
-test('Hermes supplies the actual LATENCY_FIRST weights to ranking for planner.default', () => {
+test('Hermes supplies the actual QUALITY_FIRST weights to ranking for planner.default', () => {
   let observed;
   selectReasoningCandidate(
     { skipDecisionLog: true },
@@ -2652,7 +2652,7 @@ test('Hermes supplies the actual LATENCY_FIRST weights to ranking for planner.de
       },
     }
   );
-  assert.deepEqual(observed.weights, require('../routing').WEIGHT_PROFILES.LATENCY_FIRST);
+  assert.deepEqual(observed.weights, require('../routing').WEIGHT_PROFILES.QUALITY_FIRST);
   assert.equal(observed.renormalizeKnownScores, true);
 });
 

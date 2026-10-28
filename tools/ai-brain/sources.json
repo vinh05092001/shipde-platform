@@ -358,7 +358,7 @@
     "hermesOrchestrator": {
       "qualityFloor": 60,
       "costCeiling": 100000,
-      "weightProfile": "LATENCY_FIRST",
+      "weightProfile": "QUALITY_FIRST",
       "complexity": "standard",
       "maxProbes": 16,
       "maxRoutesPerAccount": 3

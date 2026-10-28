@@ -892,15 +892,22 @@ async function executeIntakeForItem(item, options, deps, logOpts) {
         (entry) => entry.workItemId === item.work_item_id
       );
       if (
-        checkpointData.status === 'BLOCKED_NO_ROUTE' ||
-        (itemOutcome &&
-          (itemOutcome.status === 'BLOCKED_NO_ROUTE' ||
-            itemOutcome.reasonCode === 'BLOCKED_NO_ROUTE'))
+        itemOutcome &&
+        (itemOutcome.status === 'BLOCKED_NO_ROUTE' || itemOutcome.reasonCode === 'BLOCKED_NO_ROUTE')
       ) {
         isBlockedNoRoute = true;
-        if (itemOutcome && Array.isArray(itemOutcome.triedRoutes)) {
+        if (Array.isArray(itemOutcome.triedRoutes)) {
           triedRoutes = itemOutcome.triedRoutes;
-        } else if (checkpointData.triedRoutes && Array.isArray(checkpointData.triedRoutes)) {
+        } else if (Array.isArray(checkpointData.triedRoutes)) {
+          triedRoutes = checkpointData.triedRoutes;
+        }
+      } else if (
+        !itemOutcome &&
+        checkpointData.status === 'BLOCKED_NO_ROUTE' &&
+        checkpointData.workItemId === item.work_item_id
+      ) {
+        isBlockedNoRoute = true;
+        if (Array.isArray(checkpointData.triedRoutes)) {
           triedRoutes = checkpointData.triedRoutes;
         }
       }
@@ -909,6 +916,7 @@ async function executeIntakeForItem(item, options, deps, logOpts) {
     if (!isBlockedNoRoute) {
       if (
         intakeResult &&
+        (intakeResult.workItemId === undefined || intakeResult.workItemId === item.work_item_id) &&
         (intakeResult.status === 'BLOCKED_NO_ROUTE' ||
           intakeResult.reasonCode === 'BLOCKED_NO_ROUTE' ||
           intakeResult.isBlockedNoRoute === true)
@@ -1009,20 +1017,29 @@ async function nextLoop(options, deps) {
   const terminalWorkItems = opts.terminalWorkItems || d.terminalWorkItems || new Map();
   const dispatchConfig =
     (d && d.dispatchConfig) ||
-    (sourcesApi.getDispatchConfig ? sourcesApi.getDispatchConfig(undefined, opts) : {}) ||
+    (sourcesApi.getDispatchConfig
+      ? sourcesApi.getDispatchConfig(d.registry || opts.registry, opts)
+      : {}) ||
     {};
-  const blockedNoRouteTimeoutMs = Number(
-    opts.blockedNoRouteTimeoutMs ||
-      d.blockedNoRouteTimeoutMs ||
-      dispatchConfig.blockedNoRouteTimeoutMs ||
-      3600000
-  );
-  const blockedNoRoutePollIntervalMs = Number(
-    opts.blockedNoRoutePollIntervalMs ||
-      d.blockedNoRoutePollIntervalMs ||
-      dispatchConfig.blockedNoRoutePollIntervalMs ||
-      30000
-  );
+  const rawTimeout =
+    opts.blockedNoRouteTimeoutMs ??
+    d.blockedNoRouteTimeoutMs ??
+    dispatchConfig.blockedNoRouteTimeoutMs;
+  const blockedNoRouteTimeoutMs = Number(rawTimeout);
+  if (!Number.isSafeInteger(blockedNoRouteTimeoutMs) || blockedNoRouteTimeoutMs <= 0) {
+    throw new Error('DISPATCH_CONFIG_INVALID: blockedNoRouteTimeoutMs must be a positive integer');
+  }
+
+  const rawPollInterval =
+    opts.blockedNoRoutePollIntervalMs ??
+    d.blockedNoRoutePollIntervalMs ??
+    dispatchConfig.blockedNoRoutePollIntervalMs;
+  const blockedNoRoutePollIntervalMs = Number(rawPollInterval);
+  if (!Number.isSafeInteger(blockedNoRoutePollIntervalMs) || blockedNoRoutePollIntervalMs <= 0) {
+    throw new Error(
+      'DISPATCH_CONFIG_INVALID: blockedNoRoutePollIntervalMs must be a positive integer'
+    );
+  }
 
   const noRouteWaitTracker = new Map();
 

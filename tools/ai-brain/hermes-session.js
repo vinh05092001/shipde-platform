@@ -2013,12 +2013,18 @@ function buildHermesArgv(candidate, session, options) {
     (opts.goal ? defaultGoalPrompt(opts.goal) : null);
   if (query) {
     args.push('-q', String(query));
-    if (opts.yolo !== false) {
-      args.push('--yolo');
-    }
-    if (opts.acceptHooks !== false) {
-      args.push('--accept-hooks');
-    }
+  }
+
+  const isExplicitGoal = Boolean(opts.goal || opts.headlessGoal);
+  const enableYolo = opts.yolo === true || (isExplicitGoal && opts.yolo !== false);
+  const enableAcceptHooks =
+    opts.acceptHooks === true || (isExplicitGoal && opts.acceptHooks !== false);
+
+  if (enableYolo) {
+    args.push('--yolo');
+  }
+  if (enableAcceptHooks) {
+    args.push('--accept-hooks');
   }
 
   if (Array.isArray(opts.extraArgs)) {
@@ -2355,7 +2361,8 @@ async function launchHermesSession(options, deps) {
     const shouldReselect = Boolean(opts.reselect) || isRetry || !session.candidateKey;
     const preferredCandidateKey = shouldReselect ? null : session.candidateKey;
 
-    const selection = selectReasoningCandidate(
+    const selectFn = d.selectReasoningCandidate || selectReasoningCandidate;
+    const selection = selectFn(
       Object.assign({}, opts, {
         sessionId: session.sessionId,
         forbiddenFailureDomains: forbiddenDomains,
@@ -2429,29 +2436,6 @@ async function launchHermesSession(options, deps) {
       qualifiedRoutes.push(c);
     }
 
-    // Order routes with recent COMPLETION evidence first
-    qualifiedRoutes.sort((a, b) => {
-      const scopeA = quotaScanApi.getQuotaScopeState(a, sessionQuotaState, {
-        ...opts,
-        now: nowProbe,
-      });
-      const scopeB = quotaScanApi.getQuotaScopeState(b, sessionQuotaState, {
-        ...opts,
-        now: nowProbe,
-      });
-      const evA =
-        (scopeA && scopeA.code === 'OK' && scopeA.evidence === 'COMPLETION') ||
-        a.routeSelection?.knownGood ||
-        (Array.isArray(a.evidence) &&
-          a.evidence.some((e) => e.status === 'passed' || e.proofLevel === 'WORK_ITEM_PASS'));
-      const evB =
-        (scopeB && scopeB.code === 'OK' && scopeB.evidence === 'COMPLETION') ||
-        b.routeSelection?.knownGood ||
-        (Array.isArray(b.evidence) &&
-          b.evidence.some((e) => e.status === 'passed' || e.proofLevel === 'WORK_ITEM_PASS'));
-      return Number(Boolean(evB)) - Number(Boolean(evA));
-    });
-
     // Cap the number of probe candidates
     const maxHermesProbes =
       opts.maxHermesProbes ||
@@ -2473,7 +2457,17 @@ async function launchHermesSession(options, deps) {
     const accountRouteCounts = new Map();
     const candidatePool = [];
     const overflowRoutes = [];
+
+    // Controller-ranked route is probed first and must never be dropped by account caps
+    const chosenRoute = qualifiedRoutes.find((c) => c.candidateKey === selection.chosen);
+    if (chosenRoute) {
+      const accKey = probeAccountKey(chosenRoute);
+      accountRouteCounts.set(accKey, 1);
+      candidatePool.push(chosenRoute);
+    }
+
     for (const route of qualifiedRoutes) {
+      if (chosenRoute && route.candidateKey === chosenRoute.candidateKey) continue;
       const accKey = probeAccountKey(route);
       const count = accountRouteCounts.get(accKey) || 0;
       if (count < maxRoutesPerAccount) {
@@ -2483,8 +2477,7 @@ async function launchHermesSession(options, deps) {
         overflowRoutes.push(route);
       }
     }
-    const combined = candidatePool.concat(overflowRoutes);
-    const ordered = combined.slice(0, Math.max(maxHermesProbes * 4, 32));
+    const ordered = candidatePool.concat(overflowRoutes);
 
     if (!ordered.length) {
       const err = new Error(
@@ -2496,9 +2489,6 @@ async function launchHermesSession(options, deps) {
       err.reasons = probeReasons.slice();
       throw err;
     }
-
-    const preferredIndex = ordered.findIndex((c) => c.candidateKey === selection.chosen);
-    if (preferredIndex > 0) ordered.unshift(...ordered.splice(preferredIndex, 1));
     // Probe accounts whose failure was account-wide (credit, login, provider dead).
     const exhaustedProbeAccounts = new Set();
     const runProbe = async (candidate) => {
@@ -2814,9 +2804,6 @@ async function launchHermesSession(options, deps) {
 
     env.HERMES_MODEL = String(configResult.modelId || candidate.modelId);
     env.HERMES_PROVIDER = String(configResult.providerName);
-    if (configResult.baseUrl) {
-      env.OPENAI_BASE_URL = String(configResult.baseUrl);
-    }
 
     const argv = opts.acp
       ? ['acp']
@@ -3134,7 +3121,8 @@ async function goalSessionCommand(args, deps) {
     const shouldReselect = !session || Boolean(opts.reselect) || !session.candidateKey;
     const preferredCandidateKey = shouldReselect ? null : session.candidateKey;
 
-    const selection = selectReasoningCandidate(
+    const selectFn = d.selectReasoningCandidate || selectReasoningCandidate;
+    const selection = selectFn(
       Object.assign({}, opts, {
         sessionId: (session && session.sessionId) || opts.session || undefined,
         preferredCandidateKey,

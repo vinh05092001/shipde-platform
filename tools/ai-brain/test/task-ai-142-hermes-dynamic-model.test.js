@@ -17,7 +17,7 @@ function makeTempDir(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix || 'hermes-dyn-model-'));
 }
 
-test('TASK-AI-142: orchestrator profile defaults to modest quality floor 60 and LATENCY_FIRST for planner.default', () => {
+test('TASK-AI-142: orchestrator profile defaults to modest quality floor 60 and QUALITY_FIRST for planner.default', () => {
   let observedProfile;
   let observedAssessment;
   selectReasoningCandidate(
@@ -35,8 +35,8 @@ test('TASK-AI-142: orchestrator profile defaults to modest quality floor 60 and 
 
   assert.equal(observedProfile.role, 'planner.default');
   assert.equal(observedProfile.qualityFloor, 60, 'orchestrator quality floor must be 60');
-  assert.equal(observedAssessment.weightProfile, 'LATENCY_FIRST');
-  assert.deepEqual(observedAssessment.weights, routing.WEIGHT_PROFILES.LATENCY_FIRST);
+  assert.equal(observedAssessment.weightProfile, 'QUALITY_FIRST');
+  assert.deepEqual(observedAssessment.weights, routing.WEIGHT_PROFILES.QUALITY_FIRST);
 });
 
 test('TASK-AI-142: launchHermesSession picks Controller route from fixture quota-state + priors, never config default', async () => {

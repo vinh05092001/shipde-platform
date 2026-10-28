@@ -1443,7 +1443,7 @@ Aggregator gateways like 9router failed rolling onboarding entirely when an init
 ### H3 live: Hermes orchestrator model selection from live routes (2026-10-28)
 
 - Outcome: Split slice (B) Hermes orchestrator model selection:
-  - Dynamic orchestrator model selection for `planner.default` role reads `dispatch.hermesOrchestrator` (`qualityFloor: 60`, `costCeiling: 100000`, `weightProfile: LATENCY_FIRST`, `complexity: standard`, `maxProbes: 16`, `maxRoutesPerAccount: 3`) from sources registry. Fails closed with `CONFIG_MISSING` if absent.
+  - Dynamic orchestrator model selection for `planner.default` role reads `dispatch.hermesOrchestrator` (`qualityFloor: 60`, `costCeiling: 100000`, `weightProfile: QUALITY_FIRST`, `complexity: standard`, `maxProbes: 16`, `maxRoutesPerAccount: 3`) from sources registry. Fails closed with `CONFIG_MISSING` if absent.
   - Headless goal launch: `buildHermesArgv` supplies `-q`, `--yolo`, and `--accept-hooks` with `defaultGoalPrompt` for autonomous execution.
   - BLOCKED_NO_ROUTE retry loop in `next-runner.js`: `executeIntakeForItem` detects `BLOCKED_NO_ROUTE`, records `Stage.COOLED` with tried routes, and `nextLoop` retries until `blockedNoRouteTimeoutMs` (3,600,000ms), scanning quotas if due and sleeping `blockedNoRoutePollIntervalMs` (30,000ms), terminating cleanly with `BLOCKED_NO_ROUTE_TIMEOUT` and `Stage.FAILED`.
   - Hermes ACP turns handle custom model binding `custom:<model>` and reselect on missing credentials extracted from ACP RPC error details.

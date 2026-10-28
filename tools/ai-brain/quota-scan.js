@@ -416,11 +416,6 @@ function getQuotaScopeState(candidate, quotaState, options = {}) {
         }
       }
     }
-    // If a model-level entry was explicitly found and not blocked, model is usable
-    if (activeModelEntry && !isScopeBlocked(activeModelEntry, now, opts)) {
-      const source = scopes[sid] || null;
-      return { source, upstream: activeModelEntry, blocked: null };
-    }
 
     // 2. Check upstream and source entries across all aliases
     let foundSource = null;

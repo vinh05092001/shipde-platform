@@ -482,7 +482,11 @@ function isCandidateBlocked(data, candidate, opts) {
   try {
     const quotaScan = require('./quota-scan');
     const quotaState =
-      opts?.quotaState || (opts?.loadQuotaState !== false ? quotaScan.loadQuotaState(opts) : null);
+      opts?.quotaState !== undefined
+        ? opts.quotaState
+        : opts?.loadQuotaState === true || opts?.quotaStateFile
+          ? quotaScan.loadQuotaState(opts)
+          : null;
     if (quotaState) {
       const scopeState = quotaScan.getQuotaScopeState(candObj, quotaState);
       if (scopeState && quotaScan.isScopeBlocked(scopeState, now)) {

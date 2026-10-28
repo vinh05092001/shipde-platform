@@ -2452,13 +2452,13 @@ function mergeCandidates(a, b) {
  */
 function annotateCandidates(candidates, evidenceData, opts) {
   const annotOpts =
-    opts && opts.quotaState
+    opts && opts.quotaState !== undefined
       ? opts
       : Object.assign({}, opts, {
           quotaState:
-            opts && opts.loadQuotaState === false
-              ? null
-              : require('./quota-scan').loadQuotaState(opts),
+            opts && (opts.loadQuotaState === true || opts.quotaStateFile)
+              ? require('./quota-scan').loadQuotaState(opts)
+              : null,
         });
   for (const c of candidates) {
     if (c.legacy) {

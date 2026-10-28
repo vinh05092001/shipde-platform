@@ -150,7 +150,6 @@ function bySource(registry) {
   return map;
 }
 
-let defaultRegistryCache = null;
 const aliasCache = new WeakMap();
 
 /**
@@ -178,14 +177,7 @@ function getSourceAliases(id, registryOrOptions) {
         registry = null;
       }
     } else {
-      if (!defaultRegistryCache) {
-        try {
-          defaultRegistryCache = loadSources();
-        } catch (_) {
-          defaultRegistryCache = null;
-        }
-      }
-      registry = defaultRegistryCache;
+      registry = null;
     }
   }
 
@@ -584,18 +576,8 @@ function getDispatchConfig(registry, options = {}) {
       Number(options.quotaBlockTtlMs ?? dispatch.quotaBlockTtlMs) > 0
         ? Number(options.quotaBlockTtlMs ?? dispatch.quotaBlockTtlMs)
         : configuredLimit('quotaBlockTtlMin') * 60 * 1000,
-    blockedNoRouteTimeoutMs:
-      Number(
-        options.blockedNoRouteTimeoutMs ??
-          dispatch.blockedNoRouteTimeoutMs ??
-          defaults.blockedNoRouteTimeoutMs
-      ) || 3600000,
-    blockedNoRoutePollIntervalMs:
-      Number(
-        options.blockedNoRoutePollIntervalMs ??
-          dispatch.blockedNoRoutePollIntervalMs ??
-          defaults.blockedNoRoutePollIntervalMs
-      ) || 30000,
+    blockedNoRouteTimeoutMs: configuredLimit('blockedNoRouteTimeoutMs'),
+    blockedNoRoutePollIntervalMs: configuredLimit('blockedNoRoutePollIntervalMs'),
     maxPromptCommandOutputChars: configuredLimit('maxPromptCommandOutputChars'),
     maxHostGateSummaryChars: configuredLimit('maxHostGateSummaryChars'),
     rateLimitCooldownMs: configuredLimit('rateLimitCooldownMs'),

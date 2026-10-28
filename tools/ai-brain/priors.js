@@ -265,28 +265,6 @@ function loadEffortVariants(ranking) {
     }
   } catch (_) {}
 
-  if (Array.isArray(ranking)) {
-    for (const row of ranking) {
-      if (!row) continue;
-      if (row.matchedBaseId && row.canonical && row.canonical.startsWith(row.matchedBaseId + '-')) {
-        const suff = row.canonical.slice(row.matchedBaseId.length + 1).toLowerCase();
-        if (suff) variants.add(suff);
-      }
-      if (typeof row.name === 'string') {
-        const m = row.name.match(/\(([^)]+)\)/);
-        if (m) {
-          for (const part of m[1].split(/[\/,]/)) {
-            const trimmed = part
-              .trim()
-              .toLowerCase()
-              .replace(/[^a-z0-9]+/g, '-');
-            if (trimmed) variants.add(trimmed);
-          }
-        }
-      }
-    }
-  }
-
   return Array.from(variants).sort((a, b) => b.length - a.length);
 }
 
