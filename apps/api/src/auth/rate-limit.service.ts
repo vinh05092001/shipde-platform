@@ -1,10 +1,27 @@
 import { Injectable, Optional, Inject } from '@nestjs/common';
 import { RedisService } from '../redis/redis.service';
 
+/**
+ * Exact slot consumed by an atomic consume call. Refunds must target this slot only so a
+ * concurrent request's slot is never removed (FEAT-USR-01 SECURITY-NFR invitation rate limit).
+ */
+export interface AttemptReservation {
+  key: string;
+  member: string;
+  timestamp: number;
+  backend: 'redis' | 'memory';
+}
+
+/** Slots consumed by one invitation dispatch quota check; refunded at most once. */
+export interface InvitationDispatchReservation {
+  attempts: AttemptReservation[];
+}
+
 export interface RateLimitResult {
   allowed: boolean;
   retryAfterSeconds?: number;
   reason?: string;
+  reservation?: InvitationDispatchReservation;
 }
 
 @Injectable()
@@ -511,6 +528,310 @@ export class RateLimitService {
   async resetMfaChallengeFailures(challengeHash: string): Promise<void> {
     await this.resetKey(`ratelimit:mfa:challenge:${challengeHash}`);
   }
+
+  // --- FEAT-USR-01: invitation rate limits (SECURITY-NFR / BR-INV-09) ---
+
+  /**
+   * Check invitation dispatch limits (create and resend) with atomic consume-before-dispatch:
+   * - IP: max 20 dispatch requests per hour
+   * - Recipient identifier (email or phone): max 5 per hour, tenant-scoped
+   */
+  async checkInvitationDispatchLimit(
+    ip: string,
+    identifier?: string,
+    merchantId?: string
+  ): Promise<RateLimitResult> {
+    const windowSeconds = 3600;
+    const safeIp = ip && ip.trim() ? ip.trim() : 'unknown';
+    const ipKey = `ratelimit:invite:dispatch:ip:${safeIp}`;
+
+    // 1. Atomic consume IP limit (20/hour)
+    const ipConsume = await this.consumeAttemptKey(ipKey, 20, windowSeconds);
+    if (!ipConsume.allowed) {
+      return {
+        allowed: false,
+        retryAfterSeconds: ipConsume.retryAfterSeconds,
+        reason:
+          ipConsume.reason ||
+          'Quá nhiều yêu cầu gửi lời mời từ địa chỉ IP này. Vui lòng thử lại sau.',
+      };
+    }
+    const attempts: AttemptReservation[] = [];
+    if (ipConsume.reservation) attempts.push(ipConsume.reservation);
+
+    // 2. Atomic consume tenant-scoped recipient limit (5/hour per recipient in merchant)
+    if (identifier) {
+      const cleanId = identifier.toLowerCase().trim();
+      const tenantPrefix = merchantId ? `merchant:${merchantId}:` : '';
+      const recipientKey = `ratelimit:invite:dispatch:${tenantPrefix}recipient:${cleanId}`;
+      const recipientConsume = await this.consumeAttemptKey(recipientKey, 5, windowSeconds);
+      if (!recipientConsume.allowed) {
+        // Revert only the IP slot just added if recipient quota was exceeded (Finding 4)
+        await this.revertInvitationDispatchAttempt({ attempts });
+        return {
+          allowed: false,
+          retryAfterSeconds: recipientConsume.retryAfterSeconds,
+          reason:
+            recipientConsume.reason ||
+            'Đã vượt quá số lần gửi lời mời cho người dùng này trong 1 giờ. Vui lòng thử lại sau.',
+        };
+      }
+      if (recipientConsume.reservation) attempts.push(recipientConsume.reservation);
+    }
+
+    return { allowed: true, reservation: { attempts } };
+  }
+
+  async recordInvitationDispatchAttempt(
+    ip: string,
+    identifier?: string,
+    merchantId?: string
+  ): Promise<void> {
+    // No-op to avoid double counting since checkInvitationDispatchLimit atomically consumes quota upfront
+  }
+
+  /**
+   * Refund exactly the slots captured by checkInvitationDispatchLimit (Round 6 Finding 2).
+   * Never removes another request's slot; a reservation is refunded at most once.
+   */
+  async revertInvitationDispatchAttempt(
+    reservation?: InvitationDispatchReservation
+  ): Promise<void> {
+    if (!reservation) return;
+    // Detach slots before awaiting so a concurrent/double refund cannot remove them twice
+    const attempts = reservation.attempts.splice(0, reservation.attempts.length);
+    for (const attempt of attempts) {
+      await this.revertAttemptKey(attempt.key, attempt.member, attempt.timestamp, attempt.backend);
+    }
+  }
+
+  private async consumeAttemptKey(
+    key: string,
+    limit: number,
+    windowSeconds: number
+  ): Promise<{
+    allowed: boolean;
+    retryAfterSeconds?: number;
+    count: number;
+    member?: string;
+    timestamp?: number;
+    reservation?: AttemptReservation;
+    reason?: string;
+  }> {
+    const now = Date.now();
+    const windowMs = windowSeconds * 1000;
+    const member = `${now}:${Math.random().toString(36).substring(2, 8)}`;
+
+    if (this.redisService) {
+      let client: any = null;
+      try {
+        client = this.redisService.getClient();
+      } catch {
+        client = null;
+      }
+      if (!client) {
+        // Redis is configured but client cannot be obtained: fail closed across instances (SECURITY-NFR / Round 10 Finding 2)
+        return {
+          allowed: false,
+          retryAfterSeconds: 60,
+          count: limit,
+          reason: 'Dịch vụ kiểm soát tần suất gặp sự cố. Vui lòng thử lại sau.',
+        };
+      }
+      if (client.status === 'wait') {
+        try {
+          await client.connect();
+        } catch {
+          // connection failed
+        }
+      }
+      if (client.status === 'ready') {
+        try {
+          const clearBefore = now - windowMs;
+          const lua = `
+              local key = KEYS[1]
+              local now = tonumber(ARGV[1])
+              local clearBefore = tonumber(ARGV[2])
+              local limit = tonumber(ARGV[3])
+              local windowSeconds = tonumber(ARGV[4])
+              local member = ARGV[5]
+
+              redis.call('zremrangebyscore', key, '-inf', clearBefore)
+              local count = redis.call('zcard', key)
+              if count >= limit then
+                local oldest = redis.call('zrange', key, 0, 0, 'WITHSCORES')
+                local earliest = (oldest and oldest[2]) and oldest[2] or now
+                return {0, count, earliest}
+              end
+              redis.call('zadd', key, now, member)
+              redis.call('expire', key, windowSeconds + 60)
+              return {1, count + 1, now}
+            `;
+          const res = (await client.eval(
+            lua,
+            1,
+            key,
+            now.toString(),
+            clearBefore.toString(),
+            limit.toString(),
+            windowSeconds.toString(),
+            member
+          )) as [number, number, number];
+          const allowed = res[0] === 1;
+          const count = res[1];
+          const earliest = Number(res[2]);
+          const retryAfter = Math.max(1, Math.ceil((earliest + windowMs - now) / 1000));
+          return {
+            allowed,
+            retryAfterSeconds: retryAfter,
+            count,
+            member,
+            timestamp: now,
+            reservation: allowed ? { key, member, timestamp: now, backend: 'redis' } : undefined,
+          };
+        } catch {
+          // Redis execution error while ready: fail closed across instances (SECURITY-NFR / Round 8 Finding 4)
+          return {
+            allowed: false,
+            retryAfterSeconds: 60,
+            count: limit,
+            reason: 'Dịch vụ kiểm soát tần suất gặp sự cố. Vui lòng thử lại sau.',
+          };
+        }
+      } else {
+        // Redis is configured but not usable (e.g. status !== 'ready'): fail closed across instances (Round 9 Finding 2)
+        return {
+          allowed: false,
+          retryAfterSeconds: 60,
+          count: limit,
+          reason: 'Dịch vụ kiểm soát tần suất gặp sự cố. Vui lòng thử lại sau.',
+        };
+      }
+    }
+
+    // In-memory atomic check-and-consume
+    const existing = this.memoryStore.get(key) || [];
+    const valid = existing.filter((ts) => now - ts < windowMs);
+    if (valid.length >= limit) {
+      const earliest = valid[0];
+      const retryAfter = Math.max(1, Math.ceil((earliest + windowMs - now) / 1000));
+      this.memoryStore.set(key, valid);
+      return { allowed: false, retryAfterSeconds: retryAfter, count: valid.length };
+    }
+    valid.push(now);
+    this.memoryStore.set(key, valid);
+    return {
+      allowed: true,
+      count: valid.length,
+      member,
+      timestamp: now,
+      reservation: { key, member, timestamp: now, backend: 'memory' },
+    };
+  }
+
+  /**
+   * Remove exactly one previously consumed slot. Without a captured member/timestamp nothing is
+   * removed: refunding "the latest" slot could drop a concurrent request's slot (Round 6 Finding 2).
+   */
+  private async revertAttemptKey(
+    key: string,
+    member?: string,
+    timestamp?: number,
+    backend?: 'redis' | 'memory'
+  ): Promise<void> {
+    if (!member && timestamp === undefined) return;
+    if (backend !== 'redis' && timestamp !== undefined) {
+      // In-memory slots are stored as timestamps; equal timestamps are interchangeable slots
+      const existing = this.memoryStore.get(key);
+      const idx = existing ? existing.lastIndexOf(timestamp) : -1;
+      if (existing && idx !== -1) {
+        existing.splice(idx, 1);
+        if (existing.length === 0) {
+          this.memoryStore.delete(key);
+        } else {
+          this.memoryStore.set(key, existing);
+        }
+      }
+    }
+    if (backend !== 'memory' && member && this.redisService) {
+      try {
+        const client = this.redisService.getClient();
+        if (client.status === 'ready') {
+          await client.zrem(key, member);
+        }
+      } catch {
+        // Fallback ignore
+      }
+    }
+  }
+
+  /**
+   * Check invitation verification check limits:
+   * - IP: max 30 verification checks per 15 minutes (atomic consume upfront to prevent race conditions)
+   */
+  async checkInvitationVerifyLimit(ip: string): Promise<RateLimitResult> {
+    const windowSeconds = 900;
+    const safeIp = ip && ip.trim() ? ip.trim() : 'unknown';
+    const key = `ratelimit:invite:verify:ip:${safeIp}`;
+    const ipConsume = await this.consumeAttemptKey(key, 30, windowSeconds);
+    if (!ipConsume.allowed) {
+      return {
+        allowed: false,
+        retryAfterSeconds: ipConsume.retryAfterSeconds,
+        reason: 'Quá nhiều yêu cầu kiểm tra lời mời từ địa chỉ IP này. Vui lòng thử lại sau.',
+      };
+    }
+    return { allowed: true };
+  }
+
+  async recordInvitationVerifyAttempt(ip: string): Promise<void> {
+    // No-op to avoid double counting since checkInvitationVerifyLimit atomically consumes quota upfront (Finding 4)
+  }
+
+  /**
+   * Check invitation acceptance rate limits:
+   * - IP: max 10 accept attempts per 15 minutes (atomic consume)
+   * - Token: max 5 accept attempts per 15 minutes (atomic consume)
+   */
+  async checkInvitationAcceptLimit(ip: string, tokenHash?: string): Promise<RateLimitResult> {
+    const windowSeconds = 900;
+    const safeIp = ip && ip.trim() ? ip.trim() : 'unknown';
+    const ipKey = `ratelimit:invite:accept:ip:${safeIp}`;
+    const ipConsume = await this.consumeAttemptKey(ipKey, 10, windowSeconds);
+    if (!ipConsume.allowed) {
+      return {
+        allowed: false,
+        retryAfterSeconds: ipConsume.retryAfterSeconds,
+        reason: 'Quá nhiều yêu cầu chấp nhận lời mời từ địa chỉ IP này. Vui lòng thử lại sau.',
+      };
+    }
+
+    if (tokenHash) {
+      const tokenKey = `ratelimit:invite:accept:token:${tokenHash}`;
+      const tokenConsume = await this.consumeAttemptKey(tokenKey, 5, windowSeconds);
+      if (!tokenConsume.allowed) {
+        // Revert only the IP attempt just added (Finding 4)
+        await this.revertAttemptKey(
+          ipKey,
+          ipConsume.member,
+          ipConsume.timestamp,
+          ipConsume.reservation?.backend
+        );
+        return {
+          allowed: false,
+          retryAfterSeconds: tokenConsume.retryAfterSeconds,
+          reason: 'Quá nhiều lần thử kích hoạt lời mời này. Vui lòng thử lại sau.',
+        };
+      }
+    }
+
+    return { allowed: true };
+  }
+
+  async recordInvitationAcceptAttempt(ip: string, tokenHash?: string): Promise<void> {
+    // No-op to avoid double counting since checkInvitationAcceptLimit atomically consumes quota upfront (Finding 4)
+  }
+
   clear(): void {
     this.memoryStore.clear();
     this.cooldownStore.clear();

@@ -1,0 +1,1970 @@
+import { Injectable, Inject, Optional, HttpStatus } from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
+import { CanonicalApiException } from '../auth/auth.service';
+import { hashPassword } from '../auth/password.util';
+import { RoleEnum, InvitationStatusEnum, Prisma } from '@prisma/client';
+import { randomBytes, createHash } from 'node:crypto';
+import { VERIFICATION_ADAPTER } from '../auth/auth.tokens';
+import type { IVerificationDeliveryAdapter } from '@shipde/contracts';
+import {
+  SendInvitationRequest,
+  AcceptInvitationRequest,
+  InvitationItem,
+  isActiveStatus,
+} from '@shipde/contracts';
+import { RateLimitService } from '../auth/rate-limit.service';
+import type { InvitationDispatchReservation } from '../auth/rate-limit.service';
+import { resolveFrontendBaseUrl, sanitizeCorrelationId } from './invitation-url.util';
+
+export { sanitizeCorrelationId };
+
+/**
+ * Canonicalizes Vietnamese phone numbers to standard national format (e.g. 0901234567).
+ * BR-INV-08, AC-USR-01-05.
+ */
+export function canonicalizePhoneNumber(rawPhone?: string): string | undefined {
+  if (!rawPhone) return undefined;
+  let cleaned = rawPhone.trim().replace(/[\s-]/g, '');
+  if (cleaned.startsWith('+84')) {
+    cleaned = '0' + cleaned.slice(3);
+  } else if (cleaned.startsWith('84') && cleaned.length === 11) {
+    cleaned = '0' + cleaned.slice(2);
+  }
+  return cleaned;
+}
+
+export interface CanonicalIdentity {
+  rawEmail?: string;
+  rawPhone?: string;
+  email?: string;
+  phone?: string;
+  recipient?: string;
+  buildUserOrConditions: () => Array<{
+    email?: { equals: string; mode: 'insensitive' };
+    phone?: string;
+  }>;
+  buildInvitationOrConditions: () => Array<{
+    email?: { equals: string; mode: 'insensitive' };
+    phone?: string;
+  }>;
+}
+
+/**
+ * ONE shared canonical identity helper (lowercase email, canonical VN phone)
+ * used across createInvitation, resendInvitation, and acceptInvitation (Round 8 Finding 2 / BR-INV-08 / AC-USR-01-05).
+ */
+export function resolveCanonicalIdentity(params: {
+  email?: string | null;
+  phone?: string | null;
+}): CanonicalIdentity {
+  const rawEmail = typeof params.email === 'string' ? params.email.trim() : undefined;
+  const rawPhone = typeof params.phone === 'string' ? params.phone.trim() : undefined;
+  const email = rawEmail && rawEmail.length > 0 ? rawEmail.toLowerCase() : undefined;
+  const phone = rawPhone ? canonicalizePhoneNumber(rawPhone) : undefined;
+  const recipient = email || phone;
+
+  const buildConditions = () => {
+    const or: Array<{ email?: { equals: string; mode: 'insensitive' }; phone?: string }> = [];
+    if (email) {
+      or.push({ email: { equals: email, mode: 'insensitive' } });
+    }
+    if (phone) {
+      or.push({ phone });
+      if (phone.startsWith('0')) {
+        or.push({ phone: `+84${phone.slice(1)}` });
+        or.push({ phone: `84${phone.slice(1)}` });
+      }
+    }
+    return or;
+  };
+
+  return {
+    rawEmail,
+    rawPhone,
+    email,
+    phone,
+    recipient,
+    buildUserOrConditions: buildConditions,
+    buildInvitationOrConditions: buildConditions,
+  };
+}
+
+export function maskIdentifier(identifier?: string | null): string {
+  if (!identifier) return '';
+  if (identifier.includes('@')) {
+    const [name, domain] = identifier.split('@');
+    if (!name || !domain) return '***';
+    if (name.length <= 2) {
+      return `${name[0]}*@${domain}`;
+    }
+    return `${name[0]}${'*'.repeat(Math.min(name.length - 2, 4))}${name[name.length - 1]}@${domain}`;
+  }
+  if (identifier.length >= 7) {
+    const start = identifier.slice(0, 3);
+    const end = identifier.slice(-3);
+    return `${start}****${end}`;
+  }
+  return '***';
+}
+
+export function validatePasswordStrength(password: string): { valid: boolean; errors: string[] } {
+  const errors: string[] = [];
+  if (!password || password.length < 8) {
+    errors.push('Mật khẩu phải có độ dài tối thiểu 8 ký tự');
+  }
+  if (password && password.length > 128) {
+    errors.push('Mật khẩu không được vượt quá 128 ký tự');
+  }
+  if (password && !/[A-Z]/.test(password)) {
+    errors.push('Mật khẩu phải chứa ít nhất 1 chữ hoa');
+  }
+  if (password && !/[a-z]/.test(password)) {
+    errors.push('Mật khẩu phải chứa ít nhất 1 chữ thường');
+  }
+  if (password && !/[0-9]/.test(password)) {
+    errors.push('Mật khẩu phải chứa ít nhất 1 chữ số');
+  }
+  if (password && !/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password)) {
+    errors.push('Mật khẩu phải chứa ít nhất 1 ký tự đặc biệt');
+  }
+  return { valid: errors.length === 0, errors };
+}
+
+/** Fixed audit reason codes for delivery compensation; never provider-supplied text. */
+type DeliveryFailureReason = 'DELIVERY_EXCEPTION' | 'DELIVERY_FAILED';
+
+@Injectable()
+export class InvitationsService {
+  constructor(
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Inject(VERIFICATION_ADAPTER)
+    private readonly deliveryAdapter: IVerificationDeliveryAdapter,
+    @Inject(RateLimitService)
+    private readonly rateLimitService: RateLimitService = new RateLimitService()
+  ) {}
+
+  private hashToken(rawToken: string): string {
+    return createHash('sha256').update(rawToken).digest('hex');
+  }
+
+  /**
+   * Refund exactly the dispatch quota slots consumed by this request when no invitation
+   * dispatch was committed (Round 6 Findings 2 and 4).
+   */
+  private async refundDispatchQuota(reservation?: InvitationDispatchReservation): Promise<void> {
+    if (!reservation || !this.rateLimitService) return;
+    if (typeof this.rateLimitService.revertInvitationDispatchAttempt !== 'function') return;
+    await this.rateLimitService.revertInvitationDispatchAttempt(reservation);
+  }
+
+  /** Prisma P2002 on the BR-INV-08 partial unique pending indexes. */
+  private isPendingUniqueViolation(err: any): boolean {
+    if (err?.code !== 'P2002') return false;
+    const target = err?.meta?.target;
+    const targetText = Array.isArray(target) ? target.join(',') : String(target ?? '');
+    // Invitation has no other unique constraints besides id/token_hash; treat unknown target as pending
+    return !/token_hash|_pkey/.test(targetText);
+  }
+
+  /**
+   * Strict positive-integer pagination parsing (Round 6 Finding 7): non-integer input such as
+   * `page=abc` is rejected with 400 VALIDATION_ERROR instead of producing NaN; limit is capped.
+   */
+  private parsePaginationParam(
+    raw: number | string | undefined,
+    field: 'page' | 'limit',
+    fallback: number,
+    max: number
+  ): number {
+    if (raw === undefined || raw === null || raw === '') return fallback;
+    const text = typeof raw === 'number' ? String(raw) : raw.trim();
+    const value = /^[0-9]+$/.test(text) ? Number(text) : NaN;
+    if (!Number.isSafeInteger(value) || value < 1) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Tham số phân trang không hợp lệ',
+        false,
+        undefined,
+        [{ field, code: 'INVALID_INTEGER', message: `${field} phải là số nguyên dương` }]
+      );
+    }
+    if (field === 'page' && value > max) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Tham số phân trang vượt quá giới hạn cho phép',
+        false,
+        undefined,
+        [{ field: 'page', code: 'OUT_OF_RANGE', message: `page không được vượt quá ${max}` }]
+      );
+    }
+    return Math.min(max, value);
+  }
+
+  private alreadyPendingException(): CanonicalApiException {
+    return new CanonicalApiException(
+      HttpStatus.BAD_REQUEST,
+      'INVITATION_ALREADY_PENDING',
+      'Đã có lời mời đang chờ xử lý cho người dùng này. Vui lòng sử dụng tính năng gửi lại nếu cần.',
+      false,
+      'Vui lòng sử dụng tính năng gửi lại lời mời'
+    );
+  }
+
+  /**
+   * Bounded string validation for store and warehouse scope arrays (Round 11 Finding 5 / SECURITY-NFR):
+   * Rejects non-strings, empty elements, and caps both element count and string length.
+   */
+  private validateScopeArray(
+    scopes: any,
+    fieldName: 'store_scopes' | 'warehouse_scopes',
+    maxCount = 50,
+    maxLength = 64
+  ): void {
+    if (scopes === undefined || scopes === null) return;
+    if (!Array.isArray(scopes)) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        `${fieldName} phải là một mảng chuỗi`,
+        false,
+        undefined,
+        [{ field: fieldName, code: 'INVALID_TYPE', message: `${fieldName} phải là một mảng chuỗi` }]
+      );
+    }
+    if (scopes.length > maxCount) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        `Số lượng phần tử trong ${fieldName} không được vượt quá ${maxCount}`,
+        false,
+        undefined,
+        [
+          {
+            field: fieldName,
+            code: 'OUT_OF_RANGE',
+            message: `Số lượng phần tử trong ${fieldName} không được vượt quá ${maxCount}`,
+          },
+        ]
+      );
+    }
+    for (let i = 0; i < scopes.length; i++) {
+      const item = scopes[i];
+      if (typeof item !== 'string' || item.trim().length === 0) {
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'VALIDATION_ERROR',
+          `Phần tử thứ ${i} trong ${fieldName} phải là chuỗi không rỗng`,
+          false,
+          undefined,
+          [
+            {
+              field: `${fieldName}[${i}]`,
+              code: 'INVALID_TYPE',
+              message: `Phần tử trong ${fieldName} phải là chuỗi không rỗng`,
+            },
+          ]
+        );
+      }
+      if (item.trim().length > maxLength) {
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'VALIDATION_ERROR',
+          `Phần tử trong ${fieldName} không được vượt quá ${maxLength} ký tự`,
+          false,
+          undefined,
+          [
+            {
+              field: `${fieldName}[${i}]`,
+              code: 'OUT_OF_RANGE',
+              message: `Phần tử trong ${fieldName} không được vượt quá ${maxLength} ký tự`,
+            },
+          ]
+        );
+      }
+    }
+  }
+
+  private async resolveActorUser(actor: {
+    userId: string;
+    merchantId: string;
+    role?: string;
+    store_scopes?: string[];
+    warehouse_scopes?: string[];
+  }): Promise<{
+    id: string;
+    role: RoleEnum | string;
+    store_scopes: string[];
+    warehouse_scopes: string[];
+  } | null> {
+    if (actor.userId) {
+      const user = await this.prisma.user.findFirst({
+        where: { id: actor.userId, merchant_id: actor.merchantId },
+        select: { id: true, role: true, store_scopes: true, warehouse_scopes: true, status: true },
+      });
+      if (user) {
+        const isUserActive = isActiveStatus(user.status);
+        if (!isUserActive) {
+          throw new CanonicalApiException(
+            HttpStatus.FORBIDDEN,
+            'FORBIDDEN',
+            'Tài khoản người dùng đã bị vô hiệu hóa hoặc chưa kích hoạt',
+            false
+          );
+        }
+        if (user.role) {
+          return {
+            id: user.id,
+            role: user.role,
+            store_scopes: user.store_scopes || [],
+            warehouse_scopes: user.warehouse_scopes || [],
+          };
+        }
+      }
+    }
+    // Backend is authoritative (Finding 5 / SECURITY-NFR):
+    // Never fall back to caller-supplied claims; authorize ONLY from tenant-scoped user row
+    return null;
+  }
+
+  private async resolveActorRole(actor: {
+    userId: string;
+    merchantId: string;
+    role?: string;
+  }): Promise<RoleEnum | string | undefined> {
+    const actorUser = await this.resolveActorUser(actor);
+    return actorUser?.role;
+  }
+
+  private enforcePrivilegeCeiling(
+    actorUser: { role: RoleEnum | string; store_scopes: string[]; warehouse_scopes: string[] },
+    targetRole: RoleEnum | string,
+    targetStoreScopes: string[] = [],
+    targetWarehouseScopes: string[] = [],
+    actionLabel: string = 'mời'
+  ) {
+    if (actorUser.role === RoleEnum.OWNER) {
+      return;
+    }
+
+    if (targetRole === RoleEnum.OWNER) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        `Vượt quá hạn mức phân quyền: Bạn không có quyền ${actionLabel} người dùng với vai trò Chủ cửa hàng (OWNER)`,
+        false
+      );
+    }
+
+    // Non-owner cannot grant/re-issue roles they do not hold (e.g. OPS_CSKH cannot invite/resend/cancel ACCOUNTANT or WAREHOUSE)
+    if (targetRole !== actorUser.role) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        `Vượt quá hạn mức phân quyền: Bạn không thể phân quyền vai trò ${targetRole} vượt quá quyền hạn của mình`,
+        false
+      );
+    }
+
+    // Non-owner cannot grant/re-issue store scopes outside their own scope
+    if (targetStoreScopes && targetStoreScopes.length > 0) {
+      const actorStores = new Set(actorUser.store_scopes || []);
+      if (!actorStores.has('*')) {
+        const unauthorizedStores = targetStoreScopes.filter((s) => !actorStores.has(s));
+        if (unauthorizedStores.length > 0) {
+          throw new CanonicalApiException(
+            HttpStatus.FORBIDDEN,
+            'FORBIDDEN',
+            `Vượt quá hạn mức phân quyền: Chi nhánh không thuộc phạm vi quản lý (${unauthorizedStores.join(', ')})`,
+            false
+          );
+        }
+      }
+    }
+
+    // Non-owner cannot grant/re-issue warehouse scopes outside their own scope
+    if (targetWarehouseScopes && targetWarehouseScopes.length > 0) {
+      const actorWarehouses = new Set(actorUser.warehouse_scopes || []);
+      if (!actorWarehouses.has('*')) {
+        const unauthorizedWarehouses = targetWarehouseScopes.filter((w) => !actorWarehouses.has(w));
+        if (unauthorizedWarehouses.length > 0) {
+          throw new CanonicalApiException(
+            HttpStatus.FORBIDDEN,
+            'FORBIDDEN',
+            `Vượt quá hạn mức phân quyền: Kho hàng không thuộc phạm vi quản lý (${unauthorizedWarehouses.join(', ')})`,
+            false
+          );
+        }
+      }
+    }
+  }
+
+  /**
+   * Send a new team member invitation (POST /api/v1/invitations)
+   * BR-INV-01, BR-INV-02, BR-INV-03, BR-INV-08, BR-INV-09.
+   */
+  async createInvitation(
+    dto: SendInvitationRequest,
+    actor: { userId: string; merchantId: string; role?: string },
+    clientIp: string,
+    correlationId: string,
+    baseUrl = 'http://localhost:3000'
+  ) {
+    const safeCorrelationId = sanitizeCorrelationId(correlationId);
+    if (!dto || typeof dto !== 'object') {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Dữ liệu yêu cầu không hợp lệ',
+        false
+      );
+    }
+
+    if (dto.email !== undefined && dto.email !== null && typeof dto.email !== 'string') {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Địa chỉ email phải là chuỗi ký tự',
+        false,
+        undefined,
+        [{ field: 'email', code: 'INVALID_TYPE', message: 'Email phải là chuỗi ký tự' }]
+      );
+    }
+
+    if (dto.phone !== undefined && dto.phone !== null && typeof dto.phone !== 'string') {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Số điện thoại phải là chuỗi ký tự',
+        false,
+        undefined,
+        [{ field: 'phone', code: 'INVALID_TYPE', message: 'Số điện thoại phải là chuỗi ký tự' }]
+      );
+    }
+
+    this.validateScopeArray(dto.store_scopes, 'store_scopes');
+    this.validateScopeArray(dto.warehouse_scopes, 'warehouse_scopes');
+
+    const identity = resolveCanonicalIdentity({ email: dto.email, phone: dto.phone });
+    const email = identity.email;
+    const phone = identity.phone;
+    const recipient = identity.recipient;
+
+    // 1. Validation: Exactly one recipient identifier required (AC-USR-01-07 / Security-NFR Finding 3)
+    if (!email && !phone) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Vui lòng cung cấp email hoặc số điện thoại người nhận',
+        false,
+        undefined,
+        [
+          {
+            field: 'identifier',
+            code: 'REQUIRED',
+            message: 'Vui lòng cung cấp email hoặc số điện thoại',
+          },
+        ]
+      );
+    }
+
+    if (email && phone) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Vui lòng chỉ cung cấp một phương thức nhận duy nhất (email hoặc số điện thoại)',
+        false,
+        undefined,
+        [
+          {
+            field: 'identifier',
+            code: 'EXCLUSIVE_IDENTIFIER',
+            message: 'Chỉ được cung cấp email hoặc số điện thoại, không được cung cấp cả hai',
+          },
+        ]
+      );
+    }
+
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Địa chỉ email không đúng định dạng',
+        false,
+        undefined,
+        [{ field: 'email', code: 'INVALID_FORMAT', message: 'Địa chỉ email không hợp lệ' }]
+      );
+    }
+
+    if (phone && !/^0(?:3|5|7|8|9)\d{8}$/.test(phone)) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Số điện thoại không đúng định dạng Việt Nam',
+        false,
+        undefined,
+        [{ field: 'phone', code: 'INVALID_FORMAT', message: 'Số điện thoại không hợp lệ' }]
+      );
+    }
+
+    // Role validation
+    const validRoles = [RoleEnum.OWNER, RoleEnum.OPS_CSKH, RoleEnum.WAREHOUSE, RoleEnum.ACCOUNTANT];
+    if (!dto.role || !validRoles.includes(dto.role as RoleEnum)) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Vai trò được chỉ định không hợp lệ',
+        false,
+        undefined,
+        [{ field: 'role', code: 'INVALID_ROLE', message: 'Vai trò là bắt buộc và phải hợp lệ' }]
+      );
+    }
+
+    // 2. Authorization: Caller must have "Manage users/roles" permission (AC-USR-01-04)
+    const actorUser = await this.resolveActorUser(actor);
+    if (!actorUser) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Bạn không có quyền quản lý người dùng và vai trò',
+        false
+      );
+    }
+    const isOwner = actorUser.role === RoleEnum.OWNER || actorUser.role === 'OWNER';
+    const isOps = actorUser.role === RoleEnum.OPS_CSKH || actorUser.role === 'OPS_CSKH';
+    if (!isOwner && !isOps) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Bạn không có quyền quản lý người dùng và vai trò',
+        false
+      );
+    }
+
+    // 3. Privilege Ceiling (BR-INV-01, AC-USR-01-03)
+    this.enforcePrivilegeCeiling(
+      actorUser,
+      dto.role as RoleEnum,
+      dto.store_scopes,
+      dto.warehouse_scopes,
+      'mời'
+    );
+
+    // 4. Duplicate checks using shared canonical identity helper (BR-INV-08 / Round 7 Finding 6 / Round 8 Finding 2 / Round 10 Finding 3)
+    // 4a. Check active user with case-insensitive email or canonical phone variants (AC-USR-01-05)
+    const existingUser = await this.prisma.user.findFirst({
+      where: {
+        merchant_id: actor.merchantId,
+        status: { in: ['active', 'ACTIVE'] },
+        OR: identity.buildUserOrConditions(),
+      },
+    });
+
+    if (existingUser) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'USER_ALREADY_EXISTS',
+        'Người dùng với thông tin định danh này đã tồn tại trong cửa hàng',
+        false
+      );
+    }
+
+    // 4b. Check unexpired pending invitation in merchant (AC-USR-01-06)
+    const pendingInvite = await this.prisma.invitation.findFirst({
+      where: {
+        merchant_id: actor.merchantId,
+        status: InvitationStatusEnum.PENDING,
+        expires_at: { gt: new Date() },
+        OR: identity.buildInvitationOrConditions(),
+      },
+    });
+
+    if (pendingInvite) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'INVITATION_ALREADY_PENDING',
+        'Đã có lời mời đang chờ xử lý cho người dùng này. Vui lòng sử dụng tính năng gửi lại nếu cần.',
+        false,
+        'Vui lòng sử dụng tính năng gửi lại lời mời'
+      );
+    }
+
+    // 5. Generate secure 32-byte token and SHA-256 hash (BR-INV-02)
+    const rawToken = randomBytes(32).toString('hex');
+    const tokenHash = this.hashToken(rawToken);
+
+    // 6. Expiry: 7 days (168 hours) from now (BR-INV-03)
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
+    // Rate limiting: Anti-abuse dispatch limit (SECURITY-NFR) - fail closed
+    // Quota consumed only after validation, authorization, ceiling, and duplicate checks pass (Finding 3)
+    if (!this.rateLimitService) {
+      throw new CanonicalApiException(
+        HttpStatus.TOO_MANY_REQUESTS,
+        'RATE_LIMITED',
+        'Dịch vụ kiểm soát tần suất không khả dụng. Vui lòng thử lại sau.'
+      );
+    }
+    const rateLimit = await this.rateLimitService.checkInvitationDispatchLimit(
+      clientIp,
+      recipient,
+      actor.merchantId
+    );
+    if (!rateLimit.allowed) {
+      throw new CanonicalApiException(
+        HttpStatus.TOO_MANY_REQUESTS,
+        'RATE_LIMITED',
+        rateLimit.reason || 'Quá nhiều yêu cầu gửi lời mời. Vui lòng thử lại sau.',
+        false,
+        undefined,
+        undefined,
+        rateLimit.retryAfterSeconds
+      );
+    }
+
+    // Fail closed early if delivery adapter unavailable before creating DB record
+    if (!this.deliveryAdapter) {
+      await this.refundDispatchQuota(rateLimit.reservation);
+      throw new CanonicalApiException(
+        HttpStatus.SERVICE_UNAVAILABLE,
+        'DELIVERY_UNAVAILABLE',
+        'Dịch vụ gửi thông báo lời mời không khả dụng'
+      );
+    }
+
+    // 7. Persist invitation record in database transaction (BR-INV-04, BR-INV-09)
+    let invitation: any;
+    try {
+      invitation = await this.prisma.$transaction(
+        async (tx) => {
+          // Finding 6 (Round 7 / Round 10 Finding 3): Case-insensitive email and canonical phone checks for active users inside insertion transaction (BR-INV-08)
+          const inTxExistingUser = await tx.user.findFirst({
+            where: {
+              merchant_id: actor.merchantId,
+              status: { in: ['active', 'ACTIVE'] },
+              OR: identity.buildUserOrConditions(),
+            },
+          });
+          if (inTxExistingUser) {
+            throw new CanonicalApiException(
+              HttpStatus.BAD_REQUEST,
+              'USER_ALREADY_EXISTS',
+              'Người dùng với thông tin định danh này đã tồn tại trong cửa hàng',
+              false
+            );
+          }
+
+          const inTxPendingInvite = await tx.invitation.findFirst({
+            where: {
+              merchant_id: actor.merchantId,
+              status: InvitationStatusEnum.PENDING,
+              expires_at: { gt: new Date() },
+              OR: identity.buildInvitationOrConditions(),
+            },
+          });
+          if (inTxPendingInvite) {
+            throw this.alreadyPendingException();
+          }
+
+          // Finding 3: In-transaction expiration of time-elapsed PENDING invitations (BR-INV-08 / AC-USR-01-06)
+          // Avoids unique partial index collision (P2002) when creating an invite for a previously expired pending recipient
+          await tx.invitation.updateMany({
+            where: {
+              merchant_id: actor.merchantId,
+              status: InvitationStatusEnum.PENDING,
+              expires_at: { lte: new Date() },
+              OR: [...(email ? [{ email }] : []), ...(phone ? [{ phone }] : [])],
+            },
+            data: {
+              status: InvitationStatusEnum.EXPIRED,
+            },
+          });
+
+          // Round 9 Finding 4 / Round 10 Finding 3: Re-check active user under serializable transaction before inserting pending invite (BR-INV-08 / AC-USR-01-05)
+          const recheckUser = await tx.user.findFirst({
+            where: {
+              merchant_id: actor.merchantId,
+              status: { in: ['active', 'ACTIVE'] },
+              OR: identity.buildUserOrConditions(),
+            },
+          });
+          if (recheckUser) {
+            throw new CanonicalApiException(
+              HttpStatus.BAD_REQUEST,
+              'USER_ALREADY_EXISTS',
+              'Người dùng với thông tin định danh này đã tồn tại trong cửa hàng',
+              false
+            );
+          }
+
+          const inv = await tx.invitation.create({
+            data: {
+              merchant_id: actor.merchantId,
+              email: email || null,
+              phone: phone || null,
+              role: dto.role as RoleEnum,
+              store_scopes: dto.store_scopes || [],
+              warehouse_scopes: dto.warehouse_scopes || [],
+              token_hash: tokenHash,
+              status: InvitationStatusEnum.PENDING,
+              invited_by_user_id: actor.userId,
+              expires_at: expiresAt,
+            },
+          });
+
+          // 8. Immutable Audit Trail committed atomically with the invitation row
+          // (BR-INV-09, AC-USR-01-01, AC-USR-01-18; Round 6 Finding 3): a crash after commit can
+          // never leave a live invite without audit. A failed delivery appends a compensating
+          // INVITATION_DELIVERY_FAILED event; audit rows are never deleted. Never logs raw token.
+          await tx.auditLog.create({
+            data: {
+              merchant_id: actor.merchantId,
+              user_id: actor.userId,
+              action: 'INVITATION_SENT',
+              entity_type: 'Invitation',
+              entity_id: inv.id,
+              ip_address: clientIp,
+              new_value: {
+                invitation_id: inv.id,
+                merchant_id: actor.merchantId,
+                actor_id: actor.userId,
+                role: inv.role,
+                store_scopes: inv.store_scopes,
+                warehouse_scopes: inv.warehouse_scopes,
+                expires_at: inv.expires_at.toISOString(),
+                target_identifier_masked: maskIdentifier(email || phone),
+                correlation_id: safeCorrelationId,
+              },
+            },
+          });
+
+          return inv;
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }
+      );
+    } catch (err: any) {
+      // Transaction rolled back: no invite committed, so refund exactly this request's quota
+      // slots (Round 6 Finding 4)
+      await this.refundDispatchQuota(rateLimit.reservation);
+      if (
+        err?.code === 'P2034' ||
+        err?.code === '40001' ||
+        err?.message?.includes('could not serialize') ||
+        err?.message?.includes('serialization')
+      ) {
+        throw new CanonicalApiException(
+          HttpStatus.CONFLICT,
+          'CONFLICT',
+          'Xung đột dữ liệu khi tạo lời mời đồng thời. Vui lòng thử lại.',
+          true,
+          'Vui lòng thử lại'
+        );
+      }
+      if (err?.code === 'P2002') {
+        const target = Array.isArray(err?.meta?.target)
+          ? err.meta.target.join(',')
+          : String(err?.meta?.target || '');
+        const modelName = String(err?.meta?.modelName || '');
+        if (modelName === 'User' || target.includes('users_')) {
+          throw new CanonicalApiException(
+            HttpStatus.BAD_REQUEST,
+            'USER_ALREADY_EXISTS',
+            'Người dùng với thông tin định danh này đã tồn tại trong cửa hàng',
+            false
+          );
+        }
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'INVITATION_ALREADY_PENDING',
+          'Đã có lời mời đang chờ xử lý cho người dùng này. Vui lòng sử dụng tính năng gửi lại nếu cần.',
+          false,
+          'Vui lòng sử dụng tính năng gửi lại lời mời'
+        );
+      }
+      throw err;
+    }
+
+    if (this.rateLimitService) {
+      const recipient = invitation.email || invitation.phone || undefined;
+      await this.rateLimitService.recordInvitationDispatchAttempt(clientIp, recipient);
+    }
+
+    const safeBaseUrl = resolveFrontendBaseUrl(baseUrl);
+    const invitationUrl = `${safeBaseUrl}/invite/accept#token=${rawToken}`;
+
+    // Fixed reason codes only: provider errors may echo the link or raw token (Round 6 Finding 5)
+    const compensateFailedCreate = async (reason: DeliveryFailureReason) => {
+      await this.refundDispatchQuota(rateLimit.reservation);
+
+      // Conditionally retire row only if still unconsumed pending token
+      // Never delete audit rows to compensate; record a compensating audit event instead (Finding 1)
+      await this.prisma.$transaction(async (tx) => {
+        const deleted = await tx.invitation.deleteMany({
+          where: {
+            id: invitation.id,
+            merchant_id: actor.merchantId,
+            status: InvitationStatusEnum.PENDING,
+            token_hash: tokenHash,
+            consumed_at: null,
+          },
+        });
+        if (deleted.count > 0) {
+          await tx.auditLog.create({
+            data: {
+              merchant_id: actor.merchantId,
+              user_id: actor.userId,
+              action: 'INVITATION_DELIVERY_FAILED',
+              entity_type: 'Invitation',
+              entity_id: invitation.id,
+              ip_address: clientIp,
+              new_value: {
+                invitation_id: invitation.id,
+                merchant_id: actor.merchantId,
+                actor_id: actor.userId,
+                target_identifier_masked: maskIdentifier(email || phone),
+                correlation_id: safeCorrelationId,
+                reason,
+              },
+            },
+          });
+        }
+      });
+    };
+
+    let dispatchRes;
+    try {
+      dispatchRes = await this.deliveryAdapter.sendVerification({
+        channel: email ? 'email' : 'phone',
+        recipient: (email || phone) as string,
+        token: rawToken,
+        purpose: 'invitation',
+        link: invitationUrl,
+      });
+    } catch (deliveryErr: any) {
+      await compensateFailedCreate('DELIVERY_EXCEPTION');
+      throw new CanonicalApiException(
+        HttpStatus.BAD_GATEWAY,
+        'DELIVERY_FAILED',
+        'Không thể gửi thông báo lời mời tới người nhận'
+      );
+    }
+
+    if (!dispatchRes || !dispatchRes.success) {
+      await compensateFailedCreate('DELIVERY_FAILED');
+      throw new CanonicalApiException(
+        HttpStatus.BAD_GATEWAY,
+        'DELIVERY_FAILED',
+        'Không thể gửi thông báo lời mời tới người nhận'
+      );
+    }
+
+    // Success audit (INVITATION_SENT) was committed inside the creation transaction above
+
+    // Zero plaintext token leakage in admin responses (BR-INV-02 / SECURITY-NFR)
+    return {
+      data: {
+        id: invitation.id,
+        merchant_id: invitation.merchant_id,
+        email: invitation.email,
+        phone: invitation.phone,
+        role: invitation.role,
+        store_scopes: invitation.store_scopes,
+        warehouse_scopes: invitation.warehouse_scopes,
+        status: invitation.status,
+        expires_at: invitation.expires_at.toISOString(),
+        created_at: invitation.created_at.toISOString(),
+        consumed_at: invitation.consumed_at ? invitation.consumed_at.toISOString() : null,
+        invited_by_user_id: invitation.invited_by_user_id,
+      },
+      meta: {
+        correlation_id: safeCorrelationId,
+      },
+    };
+  }
+
+  /**
+   * List invitations for caller's merchant tenant (GET /api/v1/invitations)
+   * Scoped to merchant; raw tokens strictly omitted (AC-USR-01-08).
+   */
+  async listInvitations(
+    actor: { userId: string; merchantId: string; role?: string },
+    filter: { status?: string; page?: number | string; limit?: number | string },
+    correlationId: string
+  ) {
+    const safeCorrelationId = sanitizeCorrelationId(correlationId);
+    const actorUser = await this.resolveActorUser(actor);
+    const isOwner = actorUser?.role === RoleEnum.OWNER || actorUser?.role === 'OWNER';
+    const isOps = actorUser?.role === RoleEnum.OPS_CSKH || actorUser?.role === 'OPS_CSKH';
+    if (!actorUser || (!isOwner && !isOps)) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Bạn không có quyền quản lý người dùng và vai trò',
+        false
+      );
+    }
+
+    const validStatuses = [
+      'ALL',
+      InvitationStatusEnum.PENDING,
+      InvitationStatusEnum.ACCEPTED,
+      InvitationStatusEnum.EXPIRED,
+      InvitationStatusEnum.CANCELLED,
+    ];
+    if (filter.status && !validStatuses.includes(filter.status as any)) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Trạng thái lọc lời mời không hợp lệ',
+        false,
+        undefined,
+        [{ field: 'status', code: 'INVALID_STATUS', message: 'Trạng thái lời mời không hợp lệ' }]
+      );
+    }
+
+    const page = this.parsePaginationParam(filter.page, 'page', 1, 1000);
+    const limit = this.parsePaginationParam(filter.limit, 'limit', 20, 100);
+    const skip = (page - 1) * limit;
+
+    const now = new Date();
+
+    // Persist expired status for time-elapsed pending invitations in caller's merchant (Finding 8)
+    await this.prisma.invitation.updateMany({
+      where: {
+        merchant_id: actor.merchantId,
+        status: InvitationStatusEnum.PENDING,
+        expires_at: { lt: now },
+      },
+      data: {
+        status: InvitationStatusEnum.EXPIRED,
+      },
+    });
+
+    const where: any = {
+      merchant_id: actor.merchantId,
+    };
+
+    if (filter.status === 'EXPIRED' || filter.status === InvitationStatusEnum.EXPIRED) {
+      where.OR = [
+        { status: InvitationStatusEnum.EXPIRED },
+        { status: InvitationStatusEnum.PENDING, expires_at: { lt: now } },
+      ];
+    } else if (filter.status === 'PENDING' || filter.status === InvitationStatusEnum.PENDING) {
+      where.status = InvitationStatusEnum.PENDING;
+      where.expires_at = { gte: now };
+    } else if (filter.status && filter.status !== 'ALL') {
+      where.status = filter.status as InvitationStatusEnum;
+    }
+
+    // RBAC Scope Enforcement for Non-Owner Actors (Finding 1 / RBAC-APPROVAL-MATRIX / SECURITY-NFR)
+    // Non-owner actors (e.g. OPS_CSKH) can only see invitations intersecting their live scopes,
+    // or invitations they personally sent.
+    if (!isOwner) {
+      const actorStores = actorUser.store_scopes || [];
+      const actorWarehouses = actorUser.warehouse_scopes || [];
+      const hasStoreWildcard = actorStores.includes('*');
+      const hasWarehouseWildcard = actorWarehouses.includes('*');
+
+      if (!hasStoreWildcard || !hasWarehouseWildcard) {
+        const scopeConditions: any[] = [];
+        if (actorUser.id) {
+          scopeConditions.push({ invited_by_user_id: actorUser.id });
+        }
+        if (hasStoreWildcard) {
+          scopeConditions.push({ store_scopes: { isEmpty: false } });
+        } else {
+          const concreteStores = actorStores.filter((s) => s !== '*');
+          if (concreteStores.length > 0) {
+            scopeConditions.push({ store_scopes: { hasSome: concreteStores } });
+          }
+        }
+        if (hasWarehouseWildcard) {
+          scopeConditions.push({ warehouse_scopes: { isEmpty: false } });
+        } else {
+          const concreteWarehouses = actorWarehouses.filter((w) => w !== '*');
+          if (concreteWarehouses.length > 0) {
+            scopeConditions.push({ warehouse_scopes: { hasSome: concreteWarehouses } });
+          }
+        }
+
+        if (scopeConditions.length > 0) {
+          where.AND = [{ OR: scopeConditions }];
+        } else {
+          if (actorUser.id) {
+            where.invited_by_user_id = actorUser.id;
+          } else {
+            where.id = '__none__';
+          }
+        }
+      }
+    }
+
+    const [total, records] = await Promise.all([
+      this.prisma.invitation.count({ where }),
+      this.prisma.invitation.findMany({
+        where,
+        orderBy: { created_at: 'desc' },
+        skip,
+        take: limit,
+      }),
+    ]);
+
+    const items: InvitationItem[] = records.map((rec) => {
+      let displayStatus = rec.status;
+      if (rec.status === InvitationStatusEnum.PENDING && rec.expires_at < now) {
+        displayStatus = InvitationStatusEnum.EXPIRED;
+      }
+      return {
+        id: rec.id,
+        merchant_id: rec.merchant_id,
+        email: rec.email,
+        phone: rec.phone,
+        role: rec.role,
+        store_scopes: rec.store_scopes,
+        warehouse_scopes: rec.warehouse_scopes,
+        status: displayStatus,
+        invited_by_user_id: rec.invited_by_user_id,
+        expires_at: rec.expires_at.toISOString(),
+        consumed_at: rec.consumed_at ? rec.consumed_at.toISOString() : null,
+        created_at: rec.created_at.toISOString(),
+      };
+    });
+
+    return {
+      data: items,
+      meta: {
+        total,
+        page,
+        limit,
+        correlation_id: safeCorrelationId,
+      },
+    };
+  }
+
+  /**
+   * Resend an invitation (POST /api/v1/invitations/:id/resend)
+   * Regenerates token, extends expiry 7 days, transitions EXPIRED -> PENDING (AC-USR-01-09).
+   */
+  async resendInvitation(
+    invitationId: string,
+    actor: { userId: string; merchantId: string; role?: string },
+    clientIp: string,
+    correlationId: string,
+    baseUrl = 'http://localhost:3000'
+  ) {
+    const safeCorrelationId = sanitizeCorrelationId(correlationId);
+    const actorUser = await this.resolveActorUser(actor);
+    const actorRole = actorUser?.role;
+    const isOwner = actorRole === RoleEnum.OWNER || actorRole === 'OWNER';
+    const isOps = actorRole === RoleEnum.OPS_CSKH || actorRole === 'OPS_CSKH';
+    if (!actorUser || (!isOwner && !isOps)) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Bạn không có quyền quản lý người dùng và vai trò',
+        false
+      );
+    }
+
+    const invitation = await this.prisma.invitation.findUnique({
+      where: { id: invitationId },
+    });
+
+    if (!invitation) {
+      throw new CanonicalApiException(
+        HttpStatus.NOT_FOUND,
+        'INVITATION_NOT_FOUND',
+        'Không tìm thấy lời mời',
+        false
+      );
+    }
+
+    // Cross-tenant check (BR-INV-07, AC-USR-01-11)
+    if (invitation.merchant_id !== actor.merchantId) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Bạn không có quyền truy cập lời mời của cửa hàng khác',
+        false
+      );
+    }
+
+    // Privilege Ceiling (BR-INV-01, AC-USR-01-03)
+    this.enforcePrivilegeCeiling(
+      actorUser,
+      invitation.role,
+      invitation.store_scopes,
+      invitation.warehouse_scopes,
+      'gửi lại lời mời'
+    );
+
+    if (invitation.status === InvitationStatusEnum.ACCEPTED || invitation.consumed_at) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'INVITATION_ALREADY_USED',
+        'Lời mời đã được chấp nhận trước đó',
+        false
+      );
+    }
+
+    if (invitation.status === InvitationStatusEnum.CANCELLED) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'INVALID_STATE',
+        'Không thể gửi lại lời mời đã bị hủy',
+        false
+      );
+    }
+
+    // Shared canonical identity helper (Round 8 Finding 2 / BR-INV-08 / AC-USR-01-05)
+    const identity = resolveCanonicalIdentity({ email: invitation.email, phone: invitation.phone });
+
+    // Re-check active user before rotating token or consuming quota (BR-INV-08 / Round 10 Finding 3)
+    const existingActiveUser = await this.prisma.user.findFirst({
+      where: {
+        merchant_id: actor.merchantId,
+        status: { in: ['active', 'ACTIVE'] },
+        OR: identity.buildUserOrConditions(),
+      },
+    });
+    if (existingActiveUser) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'USER_ALREADY_EXISTS',
+        'Người dùng với thông tin định danh này đã tồn tại trong cửa hàng',
+        false
+      );
+    }
+
+    // Round 6 Finding 1: a replacement pending invite for the same recipient blocks resend
+    // (BR-INV-08 / AC-USR-01-09) before any quota is consumed or the target row is touched
+    const pendingSibling = await this.prisma.invitation.findFirst({
+      where: {
+        merchant_id: actor.merchantId,
+        id: { not: invitationId },
+        status: InvitationStatusEnum.PENDING,
+        expires_at: { gt: new Date() },
+        OR: identity.buildInvitationOrConditions(),
+      },
+    });
+    if (pendingSibling) {
+      throw this.alreadyPendingException();
+    }
+
+    // Rate limiting: Anti-abuse dispatch limit (SECURITY-NFR) - fail closed
+    if (!this.rateLimitService) {
+      throw new CanonicalApiException(
+        HttpStatus.TOO_MANY_REQUESTS,
+        'RATE_LIMITED',
+        'Dịch vụ kiểm soát tần suất không khả dụng. Vui lòng thử lại sau.'
+      );
+    }
+    const recipient = invitation.email || invitation.phone || undefined;
+    const rateLimit = await this.rateLimitService.checkInvitationDispatchLimit(
+      clientIp,
+      recipient,
+      actor.merchantId
+    );
+    if (!rateLimit.allowed) {
+      throw new CanonicalApiException(
+        HttpStatus.TOO_MANY_REQUESTS,
+        'RATE_LIMITED',
+        rateLimit.reason || 'Quá nhiều yêu cầu gửi lại lời mời. Vui lòng thử lại sau.',
+        false,
+        undefined,
+        undefined,
+        rateLimit.retryAfterSeconds
+      );
+    }
+
+    // Regenerate 32-byte token and reset expiry 7 days
+    const rawToken = randomBytes(32).toString('hex');
+    const tokenHash = this.hashToken(rawToken);
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    const previousTokenHash = invitation.token_hash;
+    const previousStatus = invitation.status;
+    const previousExpiresAt = invitation.expires_at;
+    const resendAuditTime = new Date();
+
+    // Fail closed early if delivery adapter unavailable before updating DB
+    if (!this.deliveryAdapter) {
+      await this.refundDispatchQuota(rateLimit.reservation);
+      throw new CanonicalApiException(
+        HttpStatus.SERVICE_UNAVAILABLE,
+        'DELIVERY_UNAVAILABLE',
+        'Dịch vụ gửi lại thông báo lời mời không khả dụng'
+      );
+    }
+
+    // Conditional atomic updateMany + audit log in single transaction (BR-INV-04, BR-INV-05, BR-INV-09)
+    // Any failure rolls back the whole transaction, so the target row stays unchanged and the
+    // consumed dispatch quota is refunded (Round 6 Finding 1)
+    let updated: any;
+    try {
+      updated = await this.prisma.$transaction(async (tx) => {
+        // Persist EXPIRED for time-elapsed pending siblings so they cannot collide on the
+        // partial unique index (BR-INV-08); tenant-scoped and never touching the target row
+        const inviteConditions = identity.buildInvitationOrConditions();
+        if (inviteConditions.length > 0) {
+          await tx.invitation.updateMany({
+            where: {
+              merchant_id: actor.merchantId,
+              id: { not: invitationId },
+              status: InvitationStatusEnum.PENDING,
+              expires_at: { lte: new Date() },
+              OR: inviteConditions,
+            },
+            data: { status: InvitationStatusEnum.EXPIRED },
+          });
+        }
+
+        const result = await tx.invitation.updateMany({
+          where: {
+            id: invitationId,
+            merchant_id: actor.merchantId,
+            status: { in: [InvitationStatusEnum.PENDING, InvitationStatusEnum.EXPIRED] },
+            consumed_at: null,
+          },
+          data: {
+            token_hash: tokenHash,
+            status: InvitationStatusEnum.PENDING,
+            expires_at: expiresAt,
+            updated_at: new Date(),
+          },
+        });
+
+        if (result.count === 0) {
+          const current = await tx.invitation.findUnique({ where: { id: invitationId } });
+          if (!current || current.merchant_id !== actor.merchantId) {
+            throw new CanonicalApiException(
+              HttpStatus.NOT_FOUND,
+              'INVITATION_NOT_FOUND',
+              'Không tìm thấy lời mời',
+              false
+            );
+          }
+          if (current.status === InvitationStatusEnum.ACCEPTED || current.consumed_at) {
+            throw new CanonicalApiException(
+              HttpStatus.BAD_REQUEST,
+              'INVITATION_ALREADY_USED',
+              'Lời mời đã được chấp nhận trước đó',
+              false
+            );
+          }
+          throw new CanonicalApiException(
+            HttpStatus.BAD_REQUEST,
+            'INVALID_STATE',
+            'Không thể gửi lại lời mời ở trạng thái hiện tại',
+            false
+          );
+        }
+
+        const inv = (await tx.invitation.findUnique({
+          where: { id: invitationId },
+        }))!;
+
+        // Audit (BR-INV-09, AC-USR-01-09) committed atomically with the token rotation
+        // (Round 6 Finding 3); a failed delivery appends INVITATION_RESEND_FAILED, never deletes
+        await tx.auditLog.create({
+          data: {
+            merchant_id: actor.merchantId,
+            user_id: actor.userId,
+            action: 'INVITATION_RESENT',
+            entity_type: 'Invitation',
+            entity_id: inv.id,
+            ip_address: clientIp,
+            new_value: {
+              invitation_id: inv.id,
+              merchant_id: actor.merchantId,
+              actor_id: actor.userId,
+              target_identifier_masked: maskIdentifier(inv.email || inv.phone),
+              role: inv.role,
+              status: InvitationStatusEnum.PENDING,
+              expires_at: expiresAt.toISOString(),
+              correlation_id: safeCorrelationId,
+            },
+          },
+        });
+
+        return inv;
+      });
+    } catch (err: any) {
+      await this.refundDispatchQuota(rateLimit.reservation);
+      if (this.isPendingUniqueViolation(err)) {
+        throw this.alreadyPendingException();
+      }
+      throw err;
+    }
+
+    if (this.rateLimitService) {
+      const recipient = invitation.email || invitation.phone || undefined;
+      await this.rateLimitService.recordInvitationDispatchAttempt(clientIp, recipient);
+    }
+
+    const safeBaseUrl = resolveFrontendBaseUrl(baseUrl);
+    const invitationUrl = `${safeBaseUrl}/invite/accept#token=${rawToken}`;
+
+    // Fixed reason codes only: provider errors may echo the link or raw token (Round 6 Finding 5)
+    const compensateFailedResend = async (reason: DeliveryFailureReason) => {
+      await this.refundDispatchQuota(rateLimit.reservation);
+
+      // Compensate: restore prior token hash, status, expiry conditionally using updateMany predicates
+      // Never delete audit history; record compensating audit event instead (Finding 2)
+      await this.prisma.$transaction(async (tx) => {
+        const restored = await tx.invitation.updateMany({
+          where: {
+            id: invitationId,
+            merchant_id: actor.merchantId,
+            token_hash: tokenHash,
+            status: InvitationStatusEnum.PENDING,
+            consumed_at: null,
+          },
+          data: {
+            token_hash: previousTokenHash,
+            status: previousStatus,
+            expires_at: previousExpiresAt,
+          },
+        });
+        if (restored.count > 0) {
+          await tx.auditLog.create({
+            data: {
+              merchant_id: actor.merchantId,
+              user_id: actor.userId,
+              action: 'INVITATION_RESEND_FAILED',
+              entity_type: 'Invitation',
+              entity_id: invitationId,
+              ip_address: clientIp,
+              new_value: {
+                invitation_id: invitationId,
+                merchant_id: actor.merchantId,
+                actor_id: actor.userId,
+                correlation_id: safeCorrelationId,
+                reason,
+              },
+            },
+          });
+        }
+      });
+    };
+
+    // Dispatch verification via configured delivery adapter (BR-INV-02, SECURITY-NFR) - fail closed
+    let dispatchRes;
+    try {
+      dispatchRes = await this.deliveryAdapter.sendVerification({
+        channel: updated.email ? 'email' : 'phone',
+        recipient: (updated.email || updated.phone) as string,
+        token: rawToken,
+        purpose: 'invitation',
+        link: invitationUrl,
+      });
+    } catch (deliveryErr: any) {
+      await compensateFailedResend('DELIVERY_EXCEPTION');
+      throw new CanonicalApiException(
+        HttpStatus.BAD_GATEWAY,
+        'DELIVERY_FAILED',
+        'Không thể gửi thông báo lời mời tới người nhận'
+      );
+    }
+
+    if (!dispatchRes || !dispatchRes.success) {
+      await compensateFailedResend('DELIVERY_FAILED');
+      throw new CanonicalApiException(
+        HttpStatus.BAD_GATEWAY,
+        'DELIVERY_FAILED',
+        'Không thể gửi lại thông báo lời mời tới người nhận'
+      );
+    }
+
+    // Audit (INVITATION_RESENT) was committed inside the resend transaction above
+
+    // Zero plaintext token leakage in admin responses (BR-INV-02 / SECURITY-NFR)
+    return {
+      data: {
+        id: updated.id,
+        status: updated.status,
+        expires_at: updated.expires_at.toISOString(),
+      },
+      meta: {
+        correlation_id: safeCorrelationId,
+      },
+    };
+  }
+
+  /**
+   * Cancel a pending invitation (POST /api/v1/invitations/:id/cancel)
+   * PENDING -> CANCELLED (AC-USR-01-10).
+   */
+  async cancelInvitation(
+    invitationId: string,
+    actor: { userId: string; merchantId: string; role?: string },
+    clientIp: string,
+    correlationId: string
+  ) {
+    const safeCorrelationId = sanitizeCorrelationId(correlationId);
+    const actorUser = await this.resolveActorUser(actor);
+    const actorRole = actorUser?.role;
+    const isOwner = actorRole === RoleEnum.OWNER || actorRole === 'OWNER';
+    const isOps = actorRole === RoleEnum.OPS_CSKH || actorRole === 'OPS_CSKH';
+    if (!actorUser || (!isOwner && !isOps)) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Bạn không có quyền quản lý người dùng và vai trò',
+        false
+      );
+    }
+
+    const invitation = await this.prisma.invitation.findUnique({
+      where: { id: invitationId },
+    });
+
+    if (!invitation) {
+      throw new CanonicalApiException(
+        HttpStatus.NOT_FOUND,
+        'INVITATION_NOT_FOUND',
+        'Không tìm thấy lời mời',
+        false
+      );
+    }
+
+    // Cross-tenant check (BR-INV-07, AC-USR-01-11)
+    if (invitation.merchant_id !== actor.merchantId) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Bạn không có quyền truy cập lời mời của cửa hàng khác',
+        false
+      );
+    }
+
+    // Privilege Ceiling (BR-INV-01, AC-USR-01-03)
+    this.enforcePrivilegeCeiling(
+      actorUser,
+      invitation.role,
+      invitation.store_scopes,
+      invitation.warehouse_scopes,
+      'hủy lời mời'
+    );
+
+    if (invitation.status === InvitationStatusEnum.ACCEPTED || invitation.consumed_at) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'INVITATION_ALREADY_USED',
+        'Lời mời đã được chấp nhận trước đó và không thể hủy',
+        false
+      );
+    }
+
+    // Invalidate token hash on cancellation to prevent verification or acceptance
+    const cancelledTokenHash = createHash('sha256')
+      .update(`cancelled:${invitationId}:${Date.now()}:${randomBytes(16).toString('hex')}`)
+      .digest('hex');
+
+    // Conditional atomic updateMany + audit log in single transaction (BR-INV-04, BR-INV-05, BR-INV-09, AC-USR-01-10)
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const result = await tx.invitation.updateMany({
+        where: {
+          id: invitationId,
+          merchant_id: actor.merchantId,
+          status: InvitationStatusEnum.PENDING,
+          consumed_at: null,
+        },
+        data: {
+          status: InvitationStatusEnum.CANCELLED,
+          token_hash: cancelledTokenHash,
+          updated_at: new Date(),
+        },
+      });
+
+      if (result.count === 0) {
+        const current = await tx.invitation.findUnique({ where: { id: invitationId } });
+        if (!current || current.merchant_id !== actor.merchantId) {
+          throw new CanonicalApiException(
+            HttpStatus.NOT_FOUND,
+            'INVITATION_NOT_FOUND',
+            'Không tìm thấy lời mời',
+            false
+          );
+        }
+        if (current.status === InvitationStatusEnum.ACCEPTED || current.consumed_at) {
+          throw new CanonicalApiException(
+            HttpStatus.BAD_REQUEST,
+            'INVITATION_ALREADY_USED',
+            'Lời mời đã được chấp nhận trước đó và không thể hủy',
+            false
+          );
+        }
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'INVALID_STATE',
+          'Chỉ có thể hủy lời mời đang ở trạng thái PENDING',
+          false
+        );
+      }
+
+      const inv = (await tx.invitation.findUnique({
+        where: { id: invitationId },
+      }))!;
+
+      // Audit log (BR-INV-09, AC-USR-01-10) committed atomically with state change
+      await tx.auditLog.create({
+        data: {
+          merchant_id: actor.merchantId,
+          user_id: actor.userId,
+          action: 'INVITATION_CANCELLED',
+          entity_type: 'Invitation',
+          entity_id: inv.id,
+          ip_address: clientIp,
+          new_value: {
+            invitation_id: inv.id,
+            merchant_id: actor.merchantId,
+            actor_id: actor.userId,
+            target_identifier_masked: maskIdentifier(inv.email || inv.phone),
+            status: inv.status,
+            correlation_id: safeCorrelationId,
+          },
+        },
+      });
+
+      return inv;
+    });
+
+    return {
+      data: {
+        id: updated.id,
+        status: updated.status,
+      },
+      meta: {
+        correlation_id: safeCorrelationId,
+      },
+    };
+  }
+
+  /**
+   * Public verification of invitation token (POST /api/v1/invitations/verify, token in JSON body)
+   * BR-INV-06: Non-enumeration on public endpoints returns identical 404 for invalid,
+   * expired, cancelled, or nonexistent tokens (AC-USR-01-12, AC-USR-01-13).
+   */
+  async verifyInvitation(rawToken: string, correlationId: string, clientIp?: string) {
+    const safeCorrelationId = sanitizeCorrelationId(correlationId);
+    // Rate limiting: Anti-enumeration verification limit (SECURITY-NFR) - fail closed
+    if (!this.rateLimitService) {
+      throw new CanonicalApiException(
+        HttpStatus.TOO_MANY_REQUESTS,
+        'RATE_LIMITED',
+        'Dịch vụ kiểm soát tần suất không khả dụng. Vui lòng thử lại sau.'
+      );
+    }
+    // Missing IP still consumes a bucket (SECURITY-NFR / Round 8 Finding 4)
+    const effectiveIp = clientIp && clientIp.trim() ? clientIp.trim() : 'unknown';
+    const rateLimit = await this.rateLimitService.checkInvitationVerifyLimit(effectiveIp);
+    if (!rateLimit.allowed) {
+      throw new CanonicalApiException(
+        HttpStatus.TOO_MANY_REQUESTS,
+        'RATE_LIMITED',
+        rateLimit.reason ||
+          'Quá nhiều yêu cầu kiểm tra lời mời từ địa chỉ IP này. Vui lòng thử lại sau.',
+        false,
+        undefined,
+        undefined,
+        rateLimit.retryAfterSeconds
+      );
+    }
+    await this.rateLimitService.recordInvitationVerifyAttempt(effectiveIp);
+    if (!rawToken || typeof rawToken !== 'string' || rawToken.trim().length === 0) {
+      throw new CanonicalApiException(
+        HttpStatus.NOT_FOUND,
+        'INVITATION_NOT_FOUND',
+        'Liên kết lời mời không hợp lệ hoặc đã hết hạn',
+        false
+      );
+    }
+
+    const tokenHash = this.hashToken(rawToken.trim());
+    const invitation = await this.prisma.invitation.findUnique({
+      where: { token_hash: tokenHash },
+      include: { merchant: true },
+    });
+
+    // Non-enumeration: 404 for not found, cancelled, consumed, or expired (BR-INV-06)
+    if (
+      !invitation ||
+      invitation.status === InvitationStatusEnum.CANCELLED ||
+      invitation.status === InvitationStatusEnum.ACCEPTED ||
+      invitation.consumed_at !== null ||
+      invitation.expires_at < new Date()
+    ) {
+      throw new CanonicalApiException(
+        HttpStatus.NOT_FOUND,
+        'INVITATION_NOT_FOUND',
+        'Liên kết lời mời không hợp lệ hoặc đã hết hạn',
+        false
+      );
+    }
+
+    const rawIdentifier = invitation.email || invitation.phone || '';
+    const masked = maskIdentifier(rawIdentifier);
+
+    return {
+      data: {
+        valid: true,
+        tenant_name: invitation.merchant.name,
+        role: invitation.role,
+        identifier: masked,
+      },
+      meta: {
+        correlation_id: safeCorrelationId,
+      },
+    };
+  }
+
+  /**
+   * Public acceptance of invitation (POST /api/v1/invitations/accept)
+   * BR-INV-04, BR-INV-05, BR-INV-09, AC-USR-01-14, AC-USR-01-15, AC-USR-01-16.
+   */
+  async acceptInvitation(dto: AcceptInvitationRequest, clientIp: string, correlationId: string) {
+    const safeCorrelationId = sanitizeCorrelationId(correlationId);
+
+    // 0. Validate request body and token shape first (Finding 4 / SECURITY-NFR)
+    if (!dto || typeof dto !== 'object' || Array.isArray(dto)) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Dữ liệu yêu cầu không hợp lệ',
+        false
+      );
+    }
+
+    if (!dto.token || typeof dto.token !== 'string' || dto.token.trim().length === 0) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Mã token lời mời là bắt buộc',
+        false,
+        undefined,
+        [{ field: 'token', code: 'REQUIRED', message: 'Token là bắt buộc' }]
+      );
+    }
+
+    if (dto.token.length > 256) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Mã token lời mời vượt quá độ dài cho phép',
+        false,
+        undefined,
+        [{ field: 'token', code: 'MAX_LENGTH_EXCEEDED', message: 'Token vượt quá độ dài cho phép' }]
+      );
+    }
+
+    // 1. Rate limiting: Anti-brute-force acceptance gate (SECURITY-NFR) - fail closed
+    if (!this.rateLimitService) {
+      throw new CanonicalApiException(
+        HttpStatus.TOO_MANY_REQUESTS,
+        'RATE_LIMITED',
+        'Dịch vụ kiểm soát tần suất không khả dụng. Vui lòng thử lại sau.'
+      );
+    }
+    const tokenHash = this.hashToken(dto.token.trim());
+    const rateLimit = await this.rateLimitService.checkInvitationAcceptLimit(clientIp, tokenHash);
+    if (!rateLimit.allowed) {
+      throw new CanonicalApiException(
+        HttpStatus.TOO_MANY_REQUESTS,
+        'RATE_LIMITED',
+        rateLimit.reason ||
+          'Quá nhiều yêu cầu chấp nhận lời mời từ địa chỉ IP này. Vui lòng thử lại sau.',
+        false,
+        undefined,
+        undefined,
+        rateLimit.retryAfterSeconds
+      );
+    }
+    await this.rateLimitService.recordInvitationAcceptAttempt(clientIp, tokenHash);
+
+    // 2. Validate full name (AC-USR-01-07 / Round 11 Finding 5 / SECURITY-NFR)
+    if (typeof dto.full_name !== 'string' || dto.full_name.trim().length === 0) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Họ và tên không được để trống',
+        false,
+        undefined,
+        [{ field: 'full_name', code: 'REQUIRED', message: 'Vui lòng nhập họ và tên' }]
+      );
+    }
+    if (dto.full_name.trim().length > 100) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Họ và tên không được vượt quá 100 ký tự',
+        false,
+        undefined,
+        [
+          {
+            field: 'full_name',
+            code: 'OUT_OF_RANGE',
+            message: 'Họ và tên không được vượt quá 100 ký tự',
+          },
+        ]
+      );
+    }
+
+    // 3. Validate password strength and bounded length (SECURITY-NFR / Round 8 Finding 3)
+    if (!dto.password || typeof dto.password !== 'string' || dto.password.length > 128) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Mật khẩu phải có độ dài từ 8 đến 128 ký tự',
+        false,
+        undefined,
+        [
+          {
+            field: 'password',
+            code: 'OUT_OF_RANGE',
+            message: 'Mật khẩu phải có độ dài từ 8 đến 128 ký tự',
+          },
+        ]
+      );
+    }
+
+    const strength = validatePasswordStrength(dto.password);
+    if (!strength.valid) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Mật khẩu không đáp ứng tiêu chuẩn bảo mật',
+        false,
+        undefined,
+        strength.errors.map((msg) => ({ field: 'password', code: 'WEAK_PASSWORD', message: msg }))
+      );
+    }
+
+    if (dto.password_confirm && dto.password !== dto.password_confirm) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Mật khẩu xác nhận không khớp',
+        false,
+        undefined,
+        [{ field: 'password_confirm', code: 'MISMATCH', message: 'Mật khẩu xác nhận không khớp' }]
+      );
+    }
+
+    const resolvedTokenHash = tokenHash || this.hashToken(dto.token.trim());
+    const invitation = await this.prisma.invitation.findUnique({
+      where: { token_hash: resolvedTokenHash },
+    });
+
+    if (!invitation || invitation.status === InvitationStatusEnum.CANCELLED) {
+      throw new CanonicalApiException(
+        HttpStatus.NOT_FOUND,
+        'INVITATION_NOT_FOUND',
+        'Lời mời không tồn tại hoặc đã bị hủy',
+        false
+      );
+    }
+
+    // Replay protection (BR-INV-05, AC-USR-01-15)
+    if (invitation.status === InvitationStatusEnum.ACCEPTED || invitation.consumed_at) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'INVITATION_ALREADY_USED',
+        'Lời mời này đã được chấp nhận trước đó. Vui lòng đăng nhập.',
+        false
+      );
+    }
+
+    // Expiry check (BR-INV-03)
+    if (invitation.status === InvitationStatusEnum.EXPIRED || invitation.expires_at < new Date()) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'INVITATION_EXPIRED',
+        'Lời mời đã hết hạn. Vui lòng liên hệ quản trị viên để nhận lời mời mới.',
+        false
+      );
+    }
+
+    // 4. Atomic Acceptance Transaction (BR-INV-04)
+    const now = new Date();
+    const hashedPassword = await hashPassword(dto.password);
+
+    let result: any;
+    try {
+      result = await this.prisma.$transaction(
+        async (tx) => {
+          // Atomic concurrency guard pinning token_hash, unconsumed status, and unexpired expires_at (Finding 2 / BR-INV-03, BR-INV-04, BR-INV-05)
+          const updateCount = await tx.invitation.updateMany({
+            where: {
+              id: invitation.id,
+              token_hash: resolvedTokenHash,
+              status: InvitationStatusEnum.PENDING,
+              consumed_at: null,
+              expires_at: { gt: now },
+            },
+            data: {
+              status: InvitationStatusEnum.ACCEPTED,
+              consumed_at: now,
+              updated_at: now,
+            },
+          });
+
+          if (updateCount.count === 0) {
+            const current = await tx.invitation.findUnique({
+              where: { id: invitation.id },
+            });
+            if (
+              current?.status === InvitationStatusEnum.EXPIRED ||
+              (current?.expires_at && current.expires_at <= now)
+            ) {
+              throw new CanonicalApiException(
+                HttpStatus.BAD_REQUEST,
+                'INVITATION_EXPIRED',
+                'Lời mời đã hết hạn. Vui lòng liên hệ quản trị viên để nhận lời mời mới.',
+                false
+              );
+            }
+            if (current?.consumed_at || current?.status === InvitationStatusEnum.ACCEPTED) {
+              throw new CanonicalApiException(
+                HttpStatus.BAD_REQUEST,
+                'INVITATION_ALREADY_USED',
+                'Lời mời đã được chấp nhận bởi một yêu cầu khác',
+                false
+              );
+            }
+            throw new CanonicalApiException(
+              HttpStatus.BAD_REQUEST,
+              'INVITATION_ALREADY_USED',
+              'Lời mời đã bị thay thế hoặc không còn khả dụng',
+              false
+            );
+          }
+
+          // Check existing active user conflict in merchant using shared canonical identity helper (Round 8 Finding 2 / BR-INV-08 / AC-USR-01-05 / Round 10 Finding 3)
+          const identity = resolveCanonicalIdentity({
+            email: invitation.email,
+            phone: invitation.phone,
+          });
+          const duplicateUser = await tx.user.findFirst({
+            where: {
+              merchant_id: invitation.merchant_id,
+              status: { in: ['active', 'ACTIVE'] },
+              OR: identity.buildUserOrConditions(),
+            },
+          });
+
+          if (duplicateUser) {
+            throw new CanonicalApiException(
+              HttpStatus.BAD_REQUEST,
+              'USER_ALREADY_EXISTS',
+              'Người dùng với thông tin này đã được kích hoạt trong cửa hàng',
+              false
+            );
+          }
+
+          // Create User with ACTIVE status and assigned scopes
+          const newUser = await tx.user.create({
+            data: {
+              merchant_id: invitation.merchant_id,
+              email: identity.email || null,
+              phone: identity.phone || null,
+              full_name: dto.full_name.trim(),
+              password_hash: hashedPassword,
+              role: invitation.role,
+              store_scopes: invitation.store_scopes,
+              warehouse_scopes: invitation.warehouse_scopes,
+              status: 'ACTIVE',
+              email_verified_at: invitation.email ? now : null,
+              phone_verified_at: invitation.phone ? now : null,
+              terms_accepted_at: null,
+              terms_version: null,
+            },
+          });
+
+          // Immutable audit log (BR-INV-09, AC-USR-01-14, AC-USR-01-18)
+          // Zero passwords or raw tokens
+          await tx.auditLog.create({
+            data: {
+              merchant_id: invitation.merchant_id,
+              user_id: newUser.id,
+              action: 'INVITATION_ACCEPTED',
+              entity_type: 'Invitation',
+              entity_id: invitation.id,
+              ip_address: clientIp,
+              new_value: {
+                invitation_id: invitation.id,
+                merchant_id: invitation.merchant_id,
+                actor_id: newUser.id,
+                target_identifier_masked: maskIdentifier(invitation.email || invitation.phone),
+                user_id: newUser.id,
+                role: newUser.role,
+                store_scopes: newUser.store_scopes,
+                warehouse_scopes: newUser.warehouse_scopes,
+                correlation_id: safeCorrelationId,
+              },
+            },
+          });
+
+          return newUser;
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }
+      );
+    } catch (err: any) {
+      if (err instanceof CanonicalApiException) throw err;
+      const isSerialization =
+        err?.code === 'P2034' ||
+        err?.code === '40001' ||
+        err?.message?.includes('could not serialize') ||
+        err?.message?.includes('serialization');
+
+      if (isSerialization) {
+        throw new CanonicalApiException(
+          HttpStatus.CONFLICT,
+          'CONFLICT',
+          'Xung đột dữ liệu khi xử lý đồng thời. Lời mời vẫn đang chờ xử lý, vui lòng thử lại.',
+          true,
+          'Vui lòng thử lại'
+        );
+      }
+
+      if (err?.code === 'P2002') {
+        const target = Array.isArray(err?.meta?.target)
+          ? err.meta.target.join(',')
+          : String(err?.meta?.target || '');
+        const modelName = String(err?.meta?.modelName || '');
+        const message = String(err?.message || '');
+        if (
+          modelName === 'User' ||
+          target.includes('users_') ||
+          target.includes('email') ||
+          target.includes('phone') ||
+          message.includes('Unique constraint failed on user') ||
+          message.includes('Unique constraint failed on the fields')
+        ) {
+          throw new CanonicalApiException(
+            HttpStatus.BAD_REQUEST,
+            'USER_ALREADY_EXISTS',
+            'Người dùng với thông tin này đã được kích hoạt trong cửa hàng',
+            false
+          );
+        }
+      }
+      throw err;
+    }
+
+    return {
+      data: {
+        user_id: result.id,
+        email: result.email,
+        phone: result.phone,
+        full_name: result.full_name,
+        role: result.role,
+        status: 'ACTIVE',
+        message: 'Tài khoản của bạn đã được kích hoạt thành công',
+      },
+      meta: {
+        correlation_id: safeCorrelationId,
+      },
+    };
+  }
+}
