@@ -508,6 +508,17 @@ export function isValidTimeZone(tz: unknown): boolean {
   }
 }
 
+// --- Personal Profile (FEAT-PRO-01) Types ---
+export type UserProfile = components['schemas']['UserProfile'];
+export type NotificationPreferences = components['schemas']['NotificationPreferences'];
+export type UserPreferences = components['schemas']['UserPreferences'];
+export type GetMeResponse = components['schemas']['GetMeResponse'];
+export type UpdateMeRequest = components['schemas']['UpdateMeRequest'];
+export type UpdateMeResponse = components['schemas']['UpdateMeResponse'];
+export type GetPreferencesResponse = components['schemas']['GetPreferencesResponse'];
+export type UpdatePreferencesRequest = components['schemas']['UpdatePreferencesRequest'];
+export type UpdatePreferencesResponse = components['schemas']['UpdatePreferencesResponse'];
+
 // --- User Lifecycle Contracts (FEAT-USR-02) ---
 export const UserLifecycleAuditEvent = {
   USER_UPDATED: 'USER_UPDATED',
