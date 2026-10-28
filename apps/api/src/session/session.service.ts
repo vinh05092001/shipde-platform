@@ -1,4 +1,10 @@
-import { Injectable, Inject, ForbiddenException, NotFoundException, OnApplicationBootstrap } from '@nestjs/common';
+import {
+  Injectable,
+  Inject,
+  ForbiddenException,
+  NotFoundException,
+  OnApplicationBootstrap,
+} from '@nestjs/common';
 import { randomBytes, createHash, createHmac } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { SessionStatusEnum } from '@prisma/client';

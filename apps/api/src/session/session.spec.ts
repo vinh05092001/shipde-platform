@@ -678,7 +678,11 @@ describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
           ipAddress: '192.168.1.100',
         });
         assert.ok(result);
-        assert.strictEqual(createdData.ip_address, null, 'ip_address should be null when key is absent');
+        assert.strictEqual(
+          createdData.ip_address,
+          null,
+          'ip_address should be null when key is absent'
+        );
         assert.strictEqual(createdData.status, SessionStatusEnum.ACTIVE);
       } finally {
         if (prevKey !== undefined) process.env.AUDIT_IDENTIFIER_HMAC_KEY = prevKey;
@@ -698,9 +702,7 @@ describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
       try {
         const mockPrisma: any = {
           deviceSession: {
-            findMany: async () => [
-              { id: 'sess-target-1', status: SessionStatusEnum.ACTIVE },
-            ],
+            findMany: async () => [{ id: 'sess-target-1', status: SessionStatusEnum.ACTIVE }],
             updateMany: async () => ({ count: 1 }),
           },
           auditLog: {
@@ -780,7 +782,11 @@ describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
 
       const service = new SessionService(mockPrisma);
       const res = await service.validateSession('token-hash-expired');
-      assert.strictEqual(res, null, 'validateSession must return null for lifetime-expired session');
+      assert.strictEqual(
+        res,
+        null,
+        'validateSession must return null for lifetime-expired session'
+      );
       assert.strictEqual(
         updatedStatus,
         SessionStatusEnum.EXPIRED,
@@ -818,7 +824,10 @@ describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
           /Connection pool exhausted/
         );
         const rollbackLog = errorLogs.find((l) => l.includes('SESSION_REVOCATION_ROLLBACK'));
-        assert.ok(rollbackLog, 'Error log must specify SESSION_REVOCATION_ROLLBACK rather than AUDIT_ROLLBACK');
+        assert.ok(
+          rollbackLog,
+          'Error log must specify SESSION_REVOCATION_ROLLBACK rather than AUDIT_ROLLBACK'
+        );
       } finally {
         console.error = origConsoleError;
       }

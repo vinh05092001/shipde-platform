@@ -842,14 +842,20 @@ async function runAsyncTests() {
   await executeFetchSessions({
     baseUrl: 'http://localhost',
     token: null,
-    setFetchState: () => { setFetchCalled = true; },
+    setFetchState: () => {
+      setFetchCalled = true;
+    },
     setSessions: () => {},
     setErrorMessage: () => {},
     setValidationMessage: () => {},
     setActionError: () => {},
     setIsFetching: () => {},
   });
-  assert.strictEqual(setFetchCalled, true, 'executeFetchSessions works when isFetching is undefined');
+  assert.strictEqual(
+    setFetchCalled,
+    true,
+    'executeFetchSessions works when isFetching is undefined'
+  );
   console.log('  PASS: Finding 10 - executeFetchSessions handles undefined isFetching gracefully');
 
   console.log('================================================================');

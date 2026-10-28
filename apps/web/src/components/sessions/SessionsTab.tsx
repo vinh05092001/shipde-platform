@@ -609,10 +609,7 @@ export function SessionsTab({
             type="button"
             data-testid="revoke-all-button"
             disabled={
-              fetchState === 'loading' ||
-              isFetching ||
-              revokeAllLoading ||
-              revokingId !== null
+              fetchState === 'loading' || isFetching || revokeAllLoading || revokingId !== null
             }
             onClick={() => setRevokeAllOpen(true)}
             className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold bg-red-600 text-white hover:bg-red-700 active:bg-red-800 disabled:opacity-50 transition-colors shadow-xs"
@@ -974,11 +971,7 @@ export function SessionsTab({
               <button
                 type="button"
                 data-testid="confirm-revoke-all-button"
-                disabled={
-                  revokeAllLoading ||
-                  isFetching ||
-                  fetchState === 'loading'
-                }
+                disabled={revokeAllLoading || isFetching || fetchState === 'loading'}
                 onClick={handleRevokeAll}
                 className="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold bg-red-600 text-white hover:bg-red-700 active:bg-red-800 disabled:opacity-50 transition-colors shadow-xs"
               >
