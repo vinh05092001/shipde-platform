@@ -128,6 +128,25 @@ model Merchant {
   created_at        DateTime          @default(now()) @db.Timestamptz
   updated_at        DateTime          @updatedAt @db.Timestamptz
 
+  // Shop profile (FEAT-ORG-01: legal, billing, and operating defaults)
+  legal_name          String?           @db.VarChar(255)
+  tax_code            String?           @db.VarChar(32)
+  contact_email       String?           @db.VarChar(255)
+  contact_phone       String?           @db.VarChar(32)
+  legal_address       String?           @db.Text
+  billing_email       String?           @db.VarChar(255)
+  billing_address     String?           @db.Text
+  bank_name           String?           @db.VarChar(128)
+  bank_account_number String?           @db.VarChar(64)
+  bank_account_name   String?           @db.VarChar(255)
+  bank_branch         String?           @db.VarChar(255)
+  timezone            String            @default("Asia/Ho_Chi_Minh") @db.VarChar(64)
+  currency            String            @default("VND") @db.VarChar(16)
+  default_fee_payer   String            @default("SHOP") @db.VarChar(32)
+  default_weight_unit String            @default("g") @db.VarChar(16)
+  auto_routing_enabled Boolean          @default(false)
+  operating_notes     String?           @db.VarChar(1000)
+
   users             User[]
   carrier_accounts  CarrierAccount[]
   rate_cards        RateCard[]
@@ -146,6 +165,7 @@ model Merchant {
   invitations       Invitation[]
   roles             Role[]
 
+  @@index([tax_code])
   @@map("merchants")
 }
 

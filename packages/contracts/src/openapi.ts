@@ -823,6 +823,7 @@ export interface paths {
       path?: never;
       cookie?: never;
     };
+    /** List authorized shops (FEAT-ORG-01) */
     get: operations['listShops'];
     put?: never;
     post: operations['createShop'];
@@ -830,6 +831,54 @@ export interface paths {
     options?: never;
     head?: never;
     patch?: never;
+    trace?: never;
+  };
+  '/shops/profile': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get current shop profile (FEAT-ORG-01)
+     * @description Returns the legal, billing and operating defaults of the caller's authorized shop.
+     */
+    get: operations['getShopProfile'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    /**
+     * Update current shop profile (FEAT-ORG-01)
+     * @description Updates legal, billing and operating defaults. Requires iam:shop_config capability.
+     */
+    patch: operations['updateShopProfile'];
+    trace?: never;
+  };
+  '/shops/{id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get shop profile by ID (FEAT-ORG-01)
+     * @description Returns the shop profile by ID with strict server-side tenant scoping.
+     */
+    get: operations['getShopById'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    /**
+     * Update shop profile by ID (FEAT-ORG-01)
+     * @description Updates shop profile by ID with strict server-side tenant scoping and permission enforcement.
+     */
+    patch: operations['updateShopById'];
     trace?: never;
   };
   '/admin/shops': {
@@ -1303,6 +1352,79 @@ export interface components {
       tax_code?: string;
       /** @default Asia/Ho_Chi_Minh */
       timezone: string;
+    };
+    ShopProfile: {
+      /** Format: uuid */
+      id: string;
+      name: string;
+      code: string;
+      status: string;
+      legal_name?: string | null;
+      tax_code?: string | null;
+      contact_email?: string | null;
+      contact_phone?: string | null;
+      legal_address?: string | null;
+      billing_email?: string | null;
+      billing_address?: string | null;
+      bank_name?: string | null;
+      bank_account_number?: string | null;
+      bank_account_name?: string | null;
+      bank_branch?: string | null;
+      /** @default Asia/Ho_Chi_Minh */
+      timezone: string;
+      /** @default VND */
+      currency: string;
+      /**
+       * @default SHOP
+       * @enum {string}
+       */
+      default_fee_payer: 'SHOP' | 'RECIPIENT';
+      /**
+       * @default g
+       * @enum {string}
+       */
+      default_weight_unit: 'g' | 'kg';
+      /** @default false */
+      auto_routing_enabled: boolean;
+      operating_notes?: string | null;
+      /** Format: date-time */
+      created_at: string;
+      /** Format: date-time */
+      updated_at: string;
+    };
+    UpdateShopProfileInput: {
+      name?: string;
+      legal_name?: string | null;
+      tax_code?: string | null;
+      contact_email?: string | null;
+      contact_phone?: string | null;
+      legal_address?: string | null;
+      billing_email?: string | null;
+      billing_address?: string | null;
+      bank_name?: string | null;
+      bank_account_number?: string | null;
+      bank_account_name?: string | null;
+      bank_branch?: string | null;
+      timezone?: string;
+      currency?: string;
+      /** @enum {string} */
+      default_fee_payer?: 'SHOP' | 'RECIPIENT';
+      /** @enum {string} */
+      default_weight_unit?: 'g' | 'kg';
+      auto_routing_enabled?: boolean;
+      operating_notes?: string | null;
+    };
+    ShopProfileResponse: {
+      success: boolean;
+      data: components['schemas']['ShopProfile'];
+      meta: components['schemas']['Meta'];
+    };
+    ListShopsResponse: {
+      success: boolean;
+      data: {
+        shops: components['schemas']['ShopProfile'][];
+      };
+      meta: components['schemas']['Meta'];
     };
     CarrierAccountInput: {
       /** @enum {string} */
@@ -3158,8 +3280,12 @@ export interface operations {
         headers: {
           [name: string]: unknown;
         };
-        content?: never;
+        content: {
+          'application/json': components['schemas']['ListShopsResponse'];
+        };
       };
+      401: components['responses']['SessionInvalid'];
+      403: components['responses']['Error'];
     };
   };
   createShop: {
@@ -3183,6 +3309,110 @@ export interface operations {
         content?: never;
       };
       400: components['responses']['Error'];
+    };
+  };
+  getShopProfile: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Current shop profile */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ShopProfileResponse'];
+        };
+      };
+      401: components['responses']['SessionInvalid'];
+      403: components['responses']['Error'];
+    };
+  };
+  updateShopProfile: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['UpdateShopProfileInput'];
+      };
+    };
+    responses: {
+      /** @description Updated shop profile */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ShopProfileResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['SessionInvalid'];
+      403: components['responses']['Error'];
+    };
+  };
+  getShopById: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: components['parameters']['Id'];
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Shop profile */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ShopProfileResponse'];
+        };
+      };
+      401: components['responses']['SessionInvalid'];
+      403: components['responses']['Error'];
+      404: components['responses']['Error'];
+    };
+  };
+  updateShopById: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: components['parameters']['Id'];
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['UpdateShopProfileInput'];
+      };
+    };
+    responses: {
+      /** @description Updated shop profile */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ShopProfileResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['SessionInvalid'];
+      403: components['responses']['Error'];
+      404: components['responses']['Error'];
     };
   };
   listAdminShops: {

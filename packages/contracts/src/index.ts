@@ -469,6 +469,45 @@ export type AcceptInvitationRequest = components['schemas']['AcceptInvitationReq
 export type AcceptInvitationResponse = components['schemas']['AcceptInvitationResponse'];
 export type CheckScopeRequest = components['schemas']['CheckScopeRequest'];
 export type CheckScopeResponse = components['schemas']['CheckScopeResponse'];
+// --- Shop Profile Contracts (FEAT-ORG-01) ---
+export const ShopAuditEvent = {
+  SHOP_PROFILE_UPDATED: 'SHOP_PROFILE_UPDATED',
+} as const;
+
+export type ShopAuditEvent = (typeof ShopAuditEvent)[keyof typeof ShopAuditEvent];
+
+export type ShopProfile = components['schemas']['ShopProfile'];
+export type UpdateShopProfileInput = components['schemas']['UpdateShopProfileInput'];
+export type ShopProfileResponse = components['schemas']['ShopProfileResponse'];
+export type ListShopsResponse = components['schemas']['ListShopsResponse'];
+
+// --- Canonical Timezones (FEAT-ORG-01) ---
+export interface SupportedTimeZoneOption {
+  value: string;
+  label: string;
+}
+
+export const SUPPORTED_TIMEZONES: readonly SupportedTimeZoneOption[] = [
+  { value: 'Asia/Ho_Chi_Minh', label: 'Asia/Ho_Chi_Minh (UTC+7)' },
+  { value: 'UTC', label: 'UTC (UTC+0)' },
+] as const;
+
+export const SUPPORTED_TIMEZONE_VALUES: readonly string[] = SUPPORTED_TIMEZONES.map(
+  (tz) => tz.value
+);
+
+export function isValidTimeZone(tz: unknown): boolean {
+  if (!tz || typeof tz !== 'string') return false;
+  const trimmed = tz.trim();
+  if (!SUPPORTED_TIMEZONE_VALUES.includes(trimmed)) return false;
+  try {
+    new Intl.DateTimeFormat(undefined, { timeZone: trimmed });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // --- Personal Profile (FEAT-PRO-01) Types ---
 export type UserProfile = components['schemas']['UserProfile'];
 export type NotificationPreferences = components['schemas']['NotificationPreferences'];
