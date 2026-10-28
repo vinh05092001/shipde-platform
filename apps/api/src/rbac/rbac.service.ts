@@ -82,14 +82,22 @@ export function createConcurrencyConflictException(): CanonicalApiException {
   );
 }
 
-// Input sanitization helper to strip raw HTML and script tags from text inputs before persisting (Finding 4 / Round 14 / P2-05)
+// Input sanitization helper to strip raw HTML, nested tags, and angle brackets from text inputs before persisting (Finding 4 / Round 14 / P2-01)
 export function sanitizeRoleTextInput(text: string): string {
   if (typeof text !== 'string') return text;
-  return text
-    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-    .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
-    .replace(/<[^>]*>/g, '')
-    .trim();
+  let sanitized = text;
+  let prev = '';
+  // Iterative pass to neutralize nested tags like <scr<script>ipt> or <<img src=x>
+  while (prev !== sanitized) {
+    prev = sanitized;
+    sanitized = sanitized
+      .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+      .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
+      .replace(/<[^>]*>/g, '');
+  }
+  // Strip any remaining orphan angle brackets to guarantee zero executable HTML injection in DB/audit
+  sanitized = sanitized.replace(/[<>]/g, '');
+  return sanitized.trim();
 }
 
 // Deterministic UUID generator for canonical platform permissions & system roles

@@ -1,7 +1,7 @@
 import * as assert from 'node:assert';
 import { test, describe, beforeEach } from 'node:test';
 import type { ActorContext } from './rbac.dto';
-import { RbacService, SYSTEM_ROLE_IDS } from './rbac.service';
+import { RbacService, SYSTEM_ROLE_IDS, sanitizeRoleTextInput } from './rbac.service';
 import { PLATFORM_PERMISSIONS, SYSTEM_ROLES } from './rbac.constants';
 import { CanonicalApiException as BaseCanonicalApiException } from '../auth/auth.service';
 import { CanonicalApiException } from './rbac.service';
@@ -3964,5 +3964,39 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
         'All audit log merchant_id values must be string or null'
       );
     }
+  });
+
+  // Finding 4 (Round 15 / P2-01): sanitizeRoleTextInput neutralizes nested bypasses and strips all angle brackets
+  test('Finding 4 (Round 15 / P2-01): sanitizeRoleTextInput neutralizes nested tag bypasses and eliminates all angle brackets', async () => {
+    // 1. Nested script tag bypass
+    const nestedScript = '<scr<script>ipt>alert("bypass")</script>';
+    const sanitizedNested = sanitizeRoleTextInput(nestedScript);
+    assert.strictEqual(sanitizedNested.includes('<'), false);
+    assert.strictEqual(sanitizedNested.includes('>'), false);
+    assert.strictEqual(sanitizedNested.includes('script'), false);
+
+    // 2. Nested img event handler bypass
+    const nestedImg = '<<img src=x onerror=alert(1)>Nested Tag';
+    const sanitizedImg = sanitizeRoleTextInput(nestedImg);
+    assert.strictEqual(sanitizedImg.includes('<'), false);
+    assert.strictEqual(sanitizedImg.includes('>'), false);
+    assert.strictEqual(sanitizedImg, 'Nested Tag');
+
+    // 3. Create role with nested bypass payload in name and description
+    const res = await service.createRole(
+      {
+        name: `<scr<script>ipt>alert("x")</script>Role Protected ${Date.now()}`,
+        description: `<<img src="x" onerror="evil()">Safe description text`,
+        permissions: ['order:view_create'],
+      },
+      OWNER_ACTOR,
+      '127.0.0.1',
+      'corr-p2-01'
+    );
+    assert.ok(res.data.role.id);
+    assert.strictEqual(res.data.role.name.includes('<'), false);
+    assert.strictEqual(res.data.role.name.includes('>'), false);
+    assert.strictEqual(res.data.role.description.includes('<'), false);
+    assert.strictEqual(res.data.role.description.includes('>'), false);
   });
 });
