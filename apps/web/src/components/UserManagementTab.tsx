@@ -42,6 +42,11 @@ export const INVITATIONS_EMPTY_STATE_TEXT = 'Chưa có lời mời nào đang ch
 export const INVITATIONS_FORBIDDEN_TEXT = '403 — Không Có Quyền Truy Cập';
 export const INVITATIONS_RETRY_LABEL = 'Thử lại';
 
+export const USERS_EMPTY_STATE_TEXT = 'Chưa có nhân viên nào trong cửa hàng';
+export const USERS_FORBIDDEN_TEXT = '403 — Không Có Quyền Truy Cập';
+export const USERS_RETRY_LABEL = 'Thử lại';
+export const USERS_SCOPE_SUCCESS_TOAST = 'Đã cập nhật phạm vi quyền hạn thành công';
+
 export function isManageUsersForbidden(userRole?: string | null): boolean {
   if (!userRole) return true;
   return userRole !== 'OWNER' && userRole !== 'OPS_CSKH';
@@ -105,21 +110,53 @@ export interface UserWithStores {
   full_name: string;
   email: string;
   phone: string;
-  role: 'OWNER' | 'STORE_MANAGER' | 'OPS_CSKH' | 'ACCOUNTANT' | 'WAREHOUSE';
+  role: string;
+  custom_role_id?: string | null;
+  custom_role?: { id: string; name: string } | null;
   assigned_stores: string[]; // ['*'] for all, or store IDs ['store_01', 'store_02']
+  warehouse_scopes?: string[];
+  carrier_account_scopes?: string[];
   custom_permissions?: { [key: string]: boolean };
-  status: 'ACTIVE' | 'LOCKED' | 'INVITED';
+  status: string;
   last_login?: string;
   created_at: string;
 }
 
-export const UserManagementTab: React.FC = () => {
+export interface UserManagementTabProps {
+  initialUsers?: UserWithStores[];
+  initialLoading?: boolean;
+  initialError?: string | null;
+  initialForbidden?: boolean;
+  initialEditingUser?: UserWithStores | null;
+  initialToastMessage?: string | null;
+  initialScopeError?: string | null;
+  initialScopeLoading?: boolean;
+  initialActiveSubTab?: 'matrix' | 'stores' | 'members' | 'devices' | 'invitations';
+}
+
+export const UserManagementTab: React.FC<UserManagementTabProps> = ({
+  initialUsers,
+  initialLoading,
+  initialError,
+  initialForbidden,
+  initialEditingUser,
+  initialToastMessage,
+  initialScopeError,
+  initialScopeLoading,
+  initialActiveSubTab,
+} = {}) => {
   const { token, user } = useAuth();
   const [activeSubTab, setActiveSubTab] = useState<
     'matrix' | 'stores' | 'members' | 'devices' | 'invitations'
-  >('members');
+  >(initialActiveSubTab ?? 'members');
   const [isInviteOpen, setIsInviteOpen] = useState(false);
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [toastMessage, setToastMessage] = useState<string | null>(initialToastMessage ?? null);
+
+  // Users & scopes state (FEAT-RBAC-02)
+  const [usersLoading, setUsersLoading] = useState<boolean>(initialLoading ?? false);
+  const [usersError, setUsersError] = useState<string | null>(initialError ?? null);
+  const [scopeSaveLoading, setScopeSaveLoading] = useState(initialScopeLoading ?? false);
+  const [scopeSaveError, setScopeSaveError] = useState<string | null>(initialScopeError ?? null);
 
   // Invitations state (FEAT-USR-01)
   const [invitations, setInvitations] = useState<any[]>([]);
@@ -128,7 +165,7 @@ export const UserManagementTab: React.FC = () => {
   const [invitationsStatusFilter, setInvitationsStatusFilter] = useState<string>('ALL');
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
 
-  const isForbidden = isManageUsersForbidden(user?.role);
+  const isForbidden = initialForbidden ?? isManageUsersForbidden(user?.role);
 
   const fetchInvitations = useCallback(async () => {
     if (isForbidden) return;
@@ -217,7 +254,16 @@ export const UserManagementTab: React.FC = () => {
   };
 
   // Modal edit user state
-  const [editingUser, setEditingUser] = useState<UserWithStores | null>(null);
+  const [editingUser, setEditingUser] = useState<UserWithStores | null>(initialEditingUser ?? null);
+  const [editStoreScopes, setEditStoreScopes] = useState<string[]>(
+    initialEditingUser?.assigned_stores ?? []
+  );
+  const [editWarehouseScopes, setEditWarehouseScopes] = useState<string[]>(
+    initialEditingUser?.warehouse_scopes ?? []
+  );
+  const [editCarrierScopes, setEditCarrierScopes] = useState<string[]>(
+    initialEditingUser?.carrier_account_scopes ?? []
+  );
 
   // Modal new store state
   const [isNewStoreModalOpen, setIsNewStoreModalOpen] = useState(false);
@@ -271,63 +317,130 @@ export const UserManagementTab: React.FC = () => {
   ]);
 
   // Users List with Store Scoping
-  const [users, setUsers] = useState<UserWithStores[]>([
-    {
-      id: 'usr_01',
-      full_name: 'Nguyễn Văn An',
-      email: 'owner@ananboutique.vn',
-      phone: '0901234567',
-      role: 'OWNER',
-      assigned_stores: ['*'], // All stores
-      status: 'ACTIVE',
-      last_login: 'Vừa xong (IP: 118.69.182.10)',
-      created_at: '01/01/2026',
-    },
-    {
-      id: 'usr_02',
-      full_name: 'Trần Thị Hoa',
-      email: 'cskh_hoa@ananboutique.vn',
-      phone: '0909876543',
-      role: 'OPS_CSKH',
-      assigned_stores: ['store_01', 'store_04'], // Q3 & Da Nang
-      status: 'ACTIVE',
-      last_login: '10 phút trước',
-      created_at: '15/01/2026',
-    },
-    {
-      id: 'usr_03',
-      full_name: 'Lê Minh Kế Toán',
-      email: 'ketoan_minh@ananboutique.vn',
-      phone: '0903334444',
-      role: 'ACCOUNTANT',
-      assigned_stores: ['*'], // Accountant audits all stores
-      status: 'ACTIVE',
-      last_login: '1 giờ trước',
-      created_at: '02/02/2026',
-    },
-    {
-      id: 'usr_04',
-      full_name: 'Phạm Văn Kho',
-      email: 'thukho_tb@ananboutique.vn',
-      phone: '0904445555',
-      role: 'WAREHOUSE',
-      assigned_stores: ['store_02'], // Only Tan Binh Warehouse
-      status: 'ACTIVE',
-      last_login: 'Hôm nay lúc 08:30',
-      created_at: '10/02/2026',
-    },
-    {
-      id: 'usr_05',
-      full_name: 'Vũ Quốc Quản Lý',
-      email: 'manager_hn@ananboutique.vn',
-      phone: '0906667777',
-      role: 'STORE_MANAGER',
-      assigned_stores: ['store_03'], // Only Hanoi Branch
-      status: 'ACTIVE',
-      last_login: 'Hôm qua',
-      created_at: '20/03/2026',
-    },
-  ]);
+  const [users, setUsers] = useState<UserWithStores[]>(
+    initialUsers ?? [
+      {
+        id: 'usr_01',
+        full_name: 'Nguyễn Văn An',
+        email: 'owner@ananboutique.vn',
+        phone: '0901234567',
+        role: 'OWNER',
+        assigned_stores: ['*'], // All stores
+        warehouse_scopes: ['*'],
+        carrier_account_scopes: ['*'],
+        status: 'ACTIVE',
+        last_login: 'Vừa xong (IP: 118.69.182.10)',
+        created_at: '01/01/2026',
+      },
+      {
+        id: 'usr_02',
+        full_name: 'Trần Thị Hoa',
+        email: 'cskh_hoa@ananboutique.vn',
+        phone: '0909876543',
+        role: 'OPS_CSKH',
+        assigned_stores: ['store_01', 'store_04'], // Q3 & Da Nang
+        warehouse_scopes: [],
+        carrier_account_scopes: [],
+        status: 'ACTIVE',
+        last_login: '10 phút trước',
+        created_at: '15/01/2026',
+      },
+      {
+        id: 'usr_03',
+        full_name: 'Lê Minh Kế Toán',
+        email: 'ketoan_minh@ananboutique.vn',
+        phone: '0903334444',
+        role: 'ACCOUNTANT',
+        assigned_stores: ['*'], // Accountant audits all stores
+        warehouse_scopes: ['*'],
+        carrier_account_scopes: ['*'],
+        status: 'ACTIVE',
+        last_login: '1 giờ trước',
+        created_at: '02/02/2026',
+      },
+      {
+        id: 'usr_04',
+        full_name: 'Phạm Văn Kho',
+        email: 'thukho_tb@ananboutique.vn',
+        phone: '0904445555',
+        role: 'WAREHOUSE',
+        assigned_stores: ['store_02'], // Only Tan Binh Warehouse
+        warehouse_scopes: ['wh_01'],
+        carrier_account_scopes: [],
+        status: 'ACTIVE',
+        last_login: 'Hôm nay lúc 08:30',
+        created_at: '10/02/2026',
+      },
+      {
+        id: 'usr_05',
+        full_name: 'Vũ Quốc Quản Lý',
+        email: 'manager_hn@ananboutique.vn',
+        phone: '0906667777',
+        role: 'STORE_MANAGER',
+        assigned_stores: ['store_03'], // Only Hanoi Branch
+        warehouse_scopes: [],
+        carrier_account_scopes: [],
+        status: 'ACTIVE',
+        last_login: 'Hôm qua',
+        created_at: '20/03/2026',
+      },
+    ]
+  );
+
+  const fetchUsers = useCallback(async () => {
+    if (isForbidden) return;
+    setUsersLoading(true);
+    setUsersError(null);
+    try {
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+      const res = await fetch(`${apiBase}/api/v1/users`, {
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => null);
+        throw new Error(errJson?.error?.message || 'Không thể tải danh sách người dùng');
+      }
+      const data = await res.json();
+      const mappedUsers: UserWithStores[] = (data.data?.users || []).map((u: any) => ({
+        id: u.id,
+        full_name: u.full_name,
+        email: u.email,
+        phone: u.phone || '',
+        role: u.role,
+        custom_role_id: u.custom_role_id,
+        custom_role: u.custom_role,
+        assigned_stores: u.store_scopes || [],
+        warehouse_scopes: u.warehouse_scopes || [],
+        carrier_account_scopes: u.carrier_account_scopes || [],
+        status: u.status || 'ACTIVE',
+        last_login: u.last_login_at || 'Chưa đăng nhập',
+        created_at: u.created_at,
+      }));
+      setUsers(mappedUsers);
+    } catch (err: any) {
+      setUsersError(err.message || 'Lỗi kết nối khi tải danh sách người dùng');
+    } finally {
+      setUsersLoading(false);
+    }
+  }, [token, isForbidden]);
+
+  useEffect(() => {
+    if (activeSubTab === 'members' && !initialUsers) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- Client-side users list initial fetch
+      void fetchUsers();
+    }
+  }, [activeSubTab, fetchUsers, initialUsers]);
+
+  const handleOpenEditUser = (u: UserWithStores) => {
+    setEditingUser(u);
+    setEditStoreScopes(u.assigned_stores || []);
+    setEditWarehouseScopes(u.warehouse_scopes || []);
+    setEditCarrierScopes(u.carrier_account_scopes || []);
+    setScopeSaveError(null);
+  };
 
   // Live dynamic RBAC Roles state from GET /api/v1/roles (Finding 10 / SCR-USR-01)
   const [liveRoles, setLiveRoles] = useState<RoleItem[]>([]);
@@ -463,17 +576,53 @@ export const UserManagementTab: React.FC = () => {
     setTimeout(() => setToastMessage(null), 5000);
   };
 
-  const handleSaveUserPermissions = (e: React.FormEvent) => {
+  const handleSaveUserScopes = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingUser) return;
-
-    setUsers((prev) => prev.map((u) => (u.id === editingUser.id ? editingUser : u)));
-    setToastMessage(
-      `Đã cập nhật phạm vi cửa hàng và phân quyền cho nhân viên [${editingUser.full_name}].`
-    );
-    setEditingUser(null);
-    setTimeout(() => setToastMessage(null), 4000);
+    setScopeSaveLoading(true);
+    setScopeSaveError(null);
+    try {
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+      const res = await fetch(`${apiBase}/api/v1/users/${editingUser.id}/scopes`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          store_scopes: editStoreScopes,
+          warehouse_scopes: editWarehouseScopes,
+          carrier_account_scopes: editCarrierScopes,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error?.message || 'Không thể cập nhật phạm vi người dùng');
+      }
+      setUsers((prev) =>
+        prev.map((u) =>
+          u.id === editingUser.id
+            ? {
+                ...u,
+                role: editingUser.role,
+                assigned_stores: data.data?.store_scopes ?? editStoreScopes,
+                warehouse_scopes: data.data?.warehouse_scopes ?? editWarehouseScopes,
+                carrier_account_scopes: data.data?.carrier_account_scopes ?? editCarrierScopes,
+              }
+            : u
+        )
+      );
+      setToastMessage(USERS_SCOPE_SUCCESS_TOAST);
+      setEditingUser(null);
+      setTimeout(() => setToastMessage(null), 4000);
+    } catch (err: any) {
+      setScopeSaveError(err.message || 'Lỗi khi lưu phạm vi truy cập');
+    } finally {
+      setScopeSaveLoading(false);
+    }
   };
+
+  const handleSaveUserPermissions = handleSaveUserScopes;
 
   const handleCreateStore = (e: React.FormEvent) => {
     e.preventDefault();
@@ -612,126 +761,263 @@ export const UserManagementTab: React.FC = () => {
         })}
       </div>
 
-      {/* SUBTAB 1: MEMBERS & STORE SCOPING */}
+      {/* SUBTAB 1: MEMBERS & SCOPE ASSIGNMENT */}
       {activeSubTab === 'members' && (
         <div className="space-y-4">
-          <div className="modern-card p-4 flex justify-between items-center bg-slate-50/60">
-            <div className="text-xs text-slate-600">
-              Tổng số <strong>{users.length}</strong> nhân sự trong hệ thống · Mỗi nhân sự được giới
-              hạn truy cập theo chi nhánh chỉ định để bảo mật dữ liệu khách hàng.
+          {usersLoading ? (
+            <div
+              data-testid="users-loading-skeleton"
+              className="modern-card p-6 space-y-3 animate-pulse"
+            >
+              <div className="h-4 bg-slate-200 rounded w-1/4" />
+              <div className="h-10 bg-slate-100 rounded" />
+              <div className="h-10 bg-slate-100 rounded" />
+              <div className="h-10 bg-slate-100 rounded" />
             </div>
-          </div>
+          ) : isForbidden ? (
+            <div
+              data-testid="users-forbidden-callout"
+              className="p-8 text-center bg-amber-50/60 border border-amber-200 rounded-2xl space-y-2 animate-in fade-in"
+            >
+              <ShieldAlert className="w-10 h-10 text-amber-600 mx-auto" />
+              <h4 className="font-bold text-sm text-slate-800">{USERS_FORBIDDEN_TEXT}</h4>
+              <p className="text-xs text-slate-600 max-w-md mx-auto">
+                Tài khoản của bạn ({user?.role || 'Người dùng'}) không có quyền Quản lý người dùng
+                và gán phạm vi (iam:manage_users). Vui lòng liên hệ Chủ cửa hàng (OWNER) để được cấp
+                quyền.
+              </p>
+            </div>
+          ) : (
+            <>
+              {/* Error banner with retry */}
+              {usersError && (
+                <div
+                  data-testid="users-error-banner"
+                  className="p-3.5 bg-red-50 border border-red-200 text-red-700 rounded-xl flex items-center justify-between text-xs"
+                >
+                  <div className="flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 shrink-0" />
+                    <span>{usersError}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      data-testid="users-retry-button"
+                      onClick={() => void fetchUsers()}
+                      className="px-2.5 py-1 bg-red-100 hover:bg-red-200 text-red-800 rounded font-semibold transition"
+                    >
+                      {USERS_RETRY_LABEL}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setUsersError(null)}
+                      className="text-red-500 hover:text-red-700 font-bold ml-1"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </div>
+              )}
 
-          <div className="modern-card overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse text-xs">
-                <thead>
-                  <tr className="bg-slate-50/80 border-b border-slate-200 text-slate-600 font-bold uppercase text-[11px] tracking-wider">
-                    <th className="py-3 px-4">Nhân Viên / Email</th>
-                    <th className="py-3 px-4">Vai Trò Chính</th>
-                    <th className="py-3 px-4">Phạm Vi Cửa Hàng / Chi Nhánh</th>
-                    <th className="py-3 px-4">Đăng Nhập Gần Nhất</th>
-                    <th className="py-3 px-4">Trạng Thái</th>
-                    <th className="py-3 px-4 text-right">Thao Tác</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {users.map((u) => {
-                    const isAllStores = u.assigned_stores.includes('*');
-                    const assignedStoreObjs = isAllStores
-                      ? stores
-                      : stores.filter((s) => u.assigned_stores.includes(s.id));
+              <div className="modern-card p-4 flex justify-between items-center bg-slate-50/60">
+                <div className="text-xs text-slate-600">
+                  Tổng số <strong>{users.length}</strong> nhân sự trong hệ thống · Mỗi nhân sự được
+                  giới hạn truy cập theo chi nhánh, kho vận và tài khoản vận chuyển chỉ định để bảo
+                  mật dữ liệu.
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void fetchUsers()}
+                  disabled={usersLoading}
+                  className="p-1.5 border border-slate-200 bg-white hover:bg-slate-50 rounded-lg text-slate-600 text-xs transition"
+                  title="Làm mới danh sách nhân sự"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${usersLoading ? 'animate-spin' : ''}`} />
+                </button>
+              </div>
 
-                    return (
-                      <tr key={u.id} className="hover:bg-slate-50/80 transition">
-                        <td className="py-3.5 px-4">
-                          <div className="flex items-center gap-3">
-                            <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center font-bold text-xs shrink-0">
-                              {u.full_name.charAt(0)}
-                            </div>
-                            <div>
-                              <strong className="text-slate-900 text-xs block">
-                                {u.full_name}
-                              </strong>
-                              <span className="font-mono text-[11px] text-slate-500">
-                                {u.email}
-                              </span>
-                            </div>
-                          </div>
-                        </td>
+              {users.length === 0 && !usersError ? (
+                <div data-testid="users-empty-state" className="modern-card text-center py-12 px-4">
+                  <UserCheck className="w-12 h-12 text-slate-300 mx-auto mb-3" />
+                  <h4 className="font-bold text-sm text-slate-700">{USERS_EMPTY_STATE_TEXT}</h4>
+                  <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+                    Hiện không có nhân sự nào trong cửa hàng. Bạn có thể nhấn &quot;Mời Thành Viên
+                    Mới&quot; để bổ sung người dùng vào hệ thống.
+                  </p>
+                </div>
+              ) : (
+                <div className="modern-card overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table
+                      className="w-full text-left border-collapse text-xs"
+                      data-testid="users-table"
+                    >
+                      <thead>
+                        <tr className="bg-slate-50/80 border-b border-slate-200 text-slate-600 font-bold uppercase text-[11px] tracking-wider">
+                          <th className="py-3 px-4">Nhân Viên / Email</th>
+                          <th className="py-3 px-4">Vai Trò Chính</th>
+                          <th className="py-3 px-4">Phạm Vi Chi Nhánh</th>
+                          <th className="py-3 px-4">Phạm Vi Kho Hàng</th>
+                          <th className="py-3 px-4">Phạm Vi TK Vận Chuyển</th>
+                          <th className="py-3 px-4">Đăng Nhập Gần Nhất</th>
+                          <th className="py-3 px-4">Trạng Thái</th>
+                          <th className="py-3 px-4 text-right">Thao Tác</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {users.map((u) => {
+                          const isAllStores = u.assigned_stores.includes('*');
+                          const isAllWarehouses = (u.warehouse_scopes || []).includes('*');
+                          const isAllCarriers = (u.carrier_account_scopes || []).includes('*');
 
-                        <td className="py-3.5 px-4">
-                          <span
-                            className={`badge-muted text-[11px] font-bold ${
-                              u.role === 'OWNER'
-                                ? 'bg-purple-50 text-purple-700 border-purple-200'
-                                : u.role === 'ACCOUNTANT'
-                                  ? 'bg-blue-50 text-blue-700 border-blue-200'
-                                  : u.role === 'OPS_CSKH'
-                                    ? 'bg-amber-50 text-amber-700 border-amber-200'
-                                    : u.role === 'STORE_MANAGER'
-                                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                      : 'bg-slate-100 text-slate-700'
-                            }`}
-                          >
-                            {u.role === 'OWNER'
-                              ? '👑 Chủ Shop (Owner)'
-                              : u.role === 'ACCOUNTANT'
-                                ? '💼 Kế Toán (Maker-Checker)'
-                                : u.role === 'OPS_CSKH'
-                                  ? '🎧 CSKH / Cứu Đơn'
-                                  : u.role === 'STORE_MANAGER'
-                                    ? '🏢 Quản Lý Chi Nhánh'
-                                    : '📦 Thủ Kho'}
-                          </span>
-                        </td>
+                          return (
+                            <tr key={u.id} className="hover:bg-slate-50/80 transition">
+                              <td className="py-3.5 px-4">
+                                <div className="flex items-center gap-3">
+                                  <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center font-bold text-xs shrink-0">
+                                    {u.full_name.charAt(0)}
+                                  </div>
+                                  <div>
+                                    <strong className="text-slate-900 text-xs block">
+                                      {u.full_name}
+                                    </strong>
+                                    <span className="font-mono text-[11px] text-slate-500">
+                                      {u.email}
+                                    </span>
+                                  </div>
+                                </div>
+                              </td>
 
-                        <td className="py-3.5 px-4">
-                          <div className="flex flex-wrap gap-1">
-                            {isAllStores ? (
-                              <span className="px-2 py-0.5 rounded-md bg-indigo-50 border border-indigo-200 text-indigo-700 font-bold text-[10px] flex items-center gap-1">
-                                <Building2 className="w-3 h-3" />
-                                <span>Toàn Hệ Thống (Tất cả 4 chi nhánh)</span>
-                              </span>
-                            ) : (
-                              assignedStoreObjs.map((s) => (
+                              <td className="py-3.5 px-4">
                                 <span
-                                  key={s.id}
-                                  className="px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-slate-700 font-medium text-[10px] flex items-center gap-1"
+                                  className={`badge-muted text-[11px] font-bold ${
+                                    u.role === 'OWNER'
+                                      ? 'bg-purple-50 text-purple-700 border-purple-200'
+                                      : u.role === 'ACCOUNTANT'
+                                        ? 'bg-blue-50 text-blue-700 border-blue-200'
+                                        : u.role === 'OPS_CSKH'
+                                          ? 'bg-amber-50 text-amber-700 border-amber-200'
+                                          : u.role === 'STORE_MANAGER'
+                                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                            : 'bg-slate-100 text-slate-700'
+                                  }`}
                                 >
-                                  <Store className="w-3 h-3 text-slate-400" />
-                                  <span>{s.name.split('(')[0]}</span>
+                                  {u.custom_role?.name
+                                    ? u.custom_role.name
+                                    : u.role === 'OWNER'
+                                      ? '👑 Chủ Shop (Owner)'
+                                      : u.role === 'ACCOUNTANT'
+                                        ? '💼 Kế Toán (Maker-Checker)'
+                                        : u.role === 'OPS_CSKH'
+                                          ? '🎧 CSKH / Cứu Đơn'
+                                          : u.role === 'STORE_MANAGER'
+                                            ? '🏢 Quản Lý Chi Nhánh'
+                                            : '📦 Thủ Kho'}
                                 </span>
-                              ))
-                            )}
-                          </div>
-                        </td>
+                              </td>
 
-                        <td className="py-3.5 px-4 font-mono text-[11px] text-slate-500">
-                          {u.last_login || 'Chưa đăng nhập'}
-                        </td>
+                              <td className="py-3.5 px-4">
+                                <div className="flex flex-wrap gap-1">
+                                  {isAllStores ? (
+                                    <span className="px-2 py-0.5 rounded-md bg-indigo-50 border border-indigo-200 text-indigo-700 font-bold text-[10px] flex items-center gap-1">
+                                      <Building2 className="w-3 h-3" />
+                                      <span>Toàn Hệ Thống (*)</span>
+                                    </span>
+                                  ) : u.assigned_stores.length === 0 ? (
+                                    <span className="text-[10px] text-slate-400">
+                                      không gán phạm vi
+                                    </span>
+                                  ) : (
+                                    u.assigned_stores.map((s) => (
+                                      <span
+                                        key={s}
+                                        className="px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-slate-700 font-medium text-[10px] flex items-center gap-1"
+                                      >
+                                        <Store className="w-3 h-3 text-slate-400" />
+                                        <span>{s}</span>
+                                      </span>
+                                    ))
+                                  )}
+                                </div>
+                              </td>
 
-                        <td className="py-3.5 px-4">
-                          <span className="badge-ok text-[10px]">Hoạt động</span>
-                        </td>
+                              <td className="py-3.5 px-4">
+                                <div className="flex flex-wrap gap-1">
+                                  {isAllWarehouses ? (
+                                    <span className="px-2 py-0.5 rounded-md bg-purple-50 border border-purple-200 text-purple-700 font-bold text-[10px] flex items-center gap-1">
+                                      <Warehouse className="w-3 h-3" />
+                                      <span>Tất Cả Kho (*)</span>
+                                    </span>
+                                  ) : !u.warehouse_scopes?.length ? (
+                                    <span className="text-[10px] text-slate-400">
+                                      không gán phạm vi
+                                    </span>
+                                  ) : (
+                                    u.warehouse_scopes.map((w) => (
+                                      <span
+                                        key={w}
+                                        className="px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-slate-700 font-medium text-[10px] flex items-center gap-1"
+                                      >
+                                        <Warehouse className="w-3 h-3 text-slate-400" />
+                                        <span>{w}</span>
+                                      </span>
+                                    ))
+                                  )}
+                                </div>
+                              </td>
 
-                        <td className="py-3.5 px-4 text-right">
-                          <button
-                            type="button"
-                            onClick={() => setEditingUser(u)}
-                            className="btn-secondary text-xs py-1 px-2.5 text-blue-600 hover:text-blue-700"
-                          >
-                            <Sliders className="w-3.5 h-3.5" />
-                            <span>Phân Quyền</span>
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
+                              <td className="py-3.5 px-4">
+                                <div className="flex flex-wrap gap-1">
+                                  {isAllCarriers ? (
+                                    <span className="px-2 py-0.5 rounded-md bg-emerald-50 border border-emerald-200 text-emerald-700 font-bold text-[10px] flex items-center gap-1">
+                                      <span>Tất Cả TK Vận Chuyển (*)</span>
+                                    </span>
+                                  ) : !u.carrier_account_scopes?.length ? (
+                                    <span className="text-[10px] text-slate-400">
+                                      không gán phạm vi
+                                    </span>
+                                  ) : (
+                                    u.carrier_account_scopes.map((c) => (
+                                      <span
+                                        key={c}
+                                        className="px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-slate-700 font-medium text-[10px] flex items-center gap-1"
+                                      >
+                                        <span>{c}</span>
+                                      </span>
+                                    ))
+                                  )}
+                                </div>
+                              </td>
+
+                              <td className="py-3.5 px-4 font-mono text-[11px] text-slate-500">
+                                {u.last_login || 'Chưa đăng nhập'}
+                              </td>
+
+                              <td className="py-3.5 px-4">
+                                <span className="badge-ok text-[10px]">Hoạt động</span>
+                              </td>
+
+                              <td className="py-3.5 px-4 text-right">
+                                <button
+                                  type="button"
+                                  data-testid={`edit-scopes-btn-${u.id}`}
+                                  onClick={() => handleOpenEditUser(u)}
+                                  className="btn-secondary text-xs py-1 px-2.5 text-blue-600 hover:text-blue-700 inline-flex items-center gap-1"
+                                >
+                                  <Sliders className="w-3.5 h-3.5" />
+                                  <span>Gán Phạm Vi</span>
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
         </div>
       )}
 
@@ -1298,10 +1584,13 @@ export const UserManagementTab: React.FC = () => {
         </div>
       )}
 
-      {/* MODAL: EDIT USER PERMISSIONS & STORE SCOPES */}
+      {/* MODAL: EDIT USER PERMISSIONS & SCOPES */}
       {editingUser && (
-        <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
-          <div className="bg-white rounded-2xl border border-slate-200 max-w-lg w-full p-6 space-y-4 shadow-2xl text-xs animate-in zoom-in-95">
+        <div
+          data-testid="scope-edit-modal"
+          className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in"
+        >
+          <div className="bg-white rounded-2xl border border-slate-200 max-w-lg w-full p-6 space-y-4 shadow-2xl text-xs animate-in zoom-in-95 max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center pb-3 border-b border-slate-100">
               <div className="flex items-center gap-2.5">
                 <div className="w-9 h-9 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
@@ -1309,7 +1598,7 @@ export const UserManagementTab: React.FC = () => {
                 </div>
                 <div>
                   <h3 className="font-bold text-sm text-slate-900">
-                    Phân Quyền & Cửa Hàng Cho Nhân Viên
+                    Phân Quyền & Gán Phạm Vi Cho Nhân Viên
                   </h3>
                   <p className="text-[11px] text-slate-500 font-mono">
                     {editingUser.full_name} ({editingUser.email})
@@ -1325,7 +1614,17 @@ export const UserManagementTab: React.FC = () => {
               </button>
             </div>
 
-            <form onSubmit={handleSaveUserPermissions} className="space-y-4">
+            {scopeSaveError && (
+              <div
+                data-testid="scope-save-error"
+                className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-xl text-xs flex items-center gap-2"
+              >
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{scopeSaveError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleSaveUserScopes} className="space-y-4">
               <div>
                 <label className="font-bold text-slate-700 block mb-1">Vai Trò Phân Quyền:</label>
                 <select
@@ -1341,54 +1640,145 @@ export const UserManagementTab: React.FC = () => {
                 </select>
               </div>
 
+              {/* 1. Branch / Store Scopes */}
               <div>
                 <label className="font-bold text-slate-700 block mb-1.5">
-                  Phạm Vi Cửa Hàng / Chi Nhánh Được Phép Truy Cập:
+                  Phạm Vi Cửa Hàng / Chi Nhánh:
                 </label>
                 <div className="space-y-2 p-3 bg-slate-50 rounded-xl border border-slate-200">
                   <label className="flex items-center gap-2 cursor-pointer font-bold text-slate-900 pb-1.5 border-b border-slate-200">
                     <input
                       type="checkbox"
-                      checked={editingUser.assigned_stores.includes('*')}
+                      data-testid="store-scope-wildcard"
+                      checked={editStoreScopes.includes('*')}
                       onChange={(e) => {
                         if (e.target.checked) {
-                          setEditingUser({ ...editingUser, assigned_stores: ['*'] });
+                          setEditStoreScopes(['*']);
                         } else {
-                          setEditingUser({ ...editingUser, assigned_stores: ['store_01'] });
+                          setEditStoreScopes([]);
                         }
                       }}
                       className="rounded text-blue-600"
                     />
-                    <span>Toàn Hệ Thống (Tất Cả Chi Nhánh)</span>
+                    <span>Toàn Hệ Thống (Tất Cả Chi Nhánh: *)</span>
                   </label>
 
-                  {!editingUser.assigned_stores.includes('*') && (
+                  {!editStoreScopes.includes('*') && (
                     <div className="space-y-1.5 pt-1">
-                      {stores.map((s) => {
-                        const isChecked = editingUser.assigned_stores.includes(s.id);
-                        return (
-                          <label
-                            key={s.id}
-                            className="flex items-center gap-2 text-slate-700 cursor-pointer"
-                          >
-                            <input
-                              type="checkbox"
-                              checked={isChecked}
-                              onChange={(e) => {
-                                let newStores = [...editingUser.assigned_stores];
-                                if (e.target.checked) {
-                                  newStores.push(s.id);
-                                } else {
-                                  newStores = newStores.filter((id) => id !== s.id);
-                                }
-                                setEditingUser({ ...editingUser, assigned_stores: newStores });
-                              }}
-                              className="rounded text-blue-600"
-                            />
-                            <span>{s.name}</span>
-                          </label>
-                        );
-                      })}
+                      <input
+                        type="text"
+                        data-testid="store-scopes-input"
+                        placeholder="Mã chi nhánh phân cách bởi dấu phẩy (vd: store_01, store_02)"
+                        value={editStoreScopes.join(', ')}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          const items = val
+                            .split(',')
+                            .map((s) => s.trim())
+                            .filter(Boolean);
+                          setEditStoreScopes(items);
+                        }}
+                        className="modern-input w-full text-xs font-mono"
+                      />
+                      <span className="text-[10px] text-slate-400 block">
+                        Nhập danh sách mã chi nhánh được phép truy cập
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* 2. Warehouse Scopes */}
+              <div>
+                <label className="font-bold text-slate-700 block mb-1.5">
+                  Phạm Vi Kho Hàng (Warehouse):
+                </label>
+                <div className="space-y-2 p-3 bg-slate-50 rounded-xl border border-slate-200">
+                  <label className="flex items-center gap-2 cursor-pointer font-bold text-slate-900 pb-1.5 border-b border-slate-200">
+                    <input
+                      type="checkbox"
+                      data-testid="warehouse-scope-wildcard"
+                      checked={editWarehouseScopes.includes('*')}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setEditWarehouseScopes(['*']);
+                        } else {
+                          setEditWarehouseScopes([]);
+                        }
+                      }}
+                      className="rounded text-blue-600"
+                    />
+                    <span>Tất Cả Kho Hàng (*)</span>
+                  </label>
+
+                  {!editWarehouseScopes.includes('*') && (
+                    <div className="space-y-1.5 pt-1">
+                      <input
+                        type="text"
+                        data-testid="warehouse-scopes-input"
+                        placeholder="Mã kho phân cách bởi dấu phẩy (vd: wh_01, wh_02)"
+                        value={editWarehouseScopes.join(', ')}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          const items = val
+                            .split(',')
+                            .map((s) => s.trim())
+                            .filter(Boolean);
+                          setEditWarehouseScopes(items);
+                        }}
+                        className="modern-input w-full text-xs font-mono"
+                      />
+                      <span className="text-[10px] text-slate-400 block">
+                        Nhập danh sách mã kho được phép quản lý và quét hàng
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* 3. Carrier Account Scopes */}
+              <div>
+                <label className="font-bold text-slate-700 block mb-1.5">
+                  Phạm Vi Tài Khoản Vận Chuyển (Carrier Accounts):
+                </label>
+                <div className="space-y-2 p-3 bg-slate-50 rounded-xl border border-slate-200">
+                  <label className="flex items-center gap-2 cursor-pointer font-bold text-slate-900 pb-1.5 border-b border-slate-200">
+                    <input
+                      type="checkbox"
+                      data-testid="carrier-scope-wildcard"
+                      checked={editCarrierScopes.includes('*')}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setEditCarrierScopes(['*']);
+                        } else {
+                          setEditCarrierScopes([]);
+                        }
+                      }}
+                      className="rounded text-blue-600"
+                    />
+                    <span>Tất Cả Tài Khoản Vận Chuyển (*)</span>
+                  </label>
+
+                  {!editCarrierScopes.includes('*') && (
+                    <div className="space-y-1.5 pt-1">
+                      <input
+                        type="text"
+                        data-testid="carrier-scopes-input"
+                        placeholder="UUID tài khoản vận chuyển (vd: c0000000-0000-0000-0000-000000000001)"
+                        value={editCarrierScopes.join(', ')}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          const items = val
+                            .split(',')
+                            .map((s) => s.trim())
+                            .filter(Boolean);
+                          setEditCarrierScopes(items);
+                        }}
+                        className="modern-input w-full text-xs font-mono"
+                      />
+                      <span className="text-[10px] text-slate-400 block">
+                        Nhập danh sách mã tài khoản vận chuyển được phép thao tác
+                      </span>
                     </div>
                   )}
                 </div>
@@ -1402,8 +1792,14 @@ export const UserManagementTab: React.FC = () => {
                 >
                   Hủy
                 </button>
-                <button type="submit" className="btn-primary text-xs">
-                  Lưu Phân Quyền
+                <button
+                  type="submit"
+                  disabled={scopeSaveLoading}
+                  data-testid="save-scopes-submit-btn"
+                  className="btn-primary text-xs inline-flex items-center gap-1.5"
+                >
+                  {scopeSaveLoading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  <span>Lưu Phân Quyền & Phạm Vi</span>
                 </button>
               </div>
             </form>

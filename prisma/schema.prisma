@@ -157,8 +157,9 @@ model User {
   full_name         String            @db.VarChar(255)
   password_hash     String            @db.VarChar(255)
   role              RoleEnum
-  store_scopes      String[]          @default([])
-  warehouse_scopes  String[]          @default([])
+  store_scopes            String[]          @default([])
+  warehouse_scopes        String[]          @default([])
+  carrier_account_scopes  String[]          @default([])
   status            String            @default("pending_verification") @db.VarChar(32)
   email_verified_at DateTime?         @db.Timestamptz
   phone_verified_at DateTime?         @db.Timestamptz
@@ -230,8 +231,9 @@ model Invitation {
   email              String?              @db.VarChar(255)
   phone              String?              @db.VarChar(32)
   role               RoleEnum
-  store_scopes       String[]             @default([])
-  warehouse_scopes   String[]             @default([])
+  store_scopes            String[]             @default([])
+  warehouse_scopes        String[]             @default([])
+  carrier_account_scopes  String[]             @default([])
   token_hash         String               @unique @db.VarChar(255)
   status             InvitationStatusEnum @default(PENDING)
   invited_by_user_id String?              @db.Uuid

@@ -519,6 +519,41 @@ export interface paths {
     patch: operations['updateRole'];
     trace?: never;
   };
+  '/users': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List users and their assigned scopes (API-USR-LIST, FEAT-RBAC-02) */
+    get: operations['listUsers'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/users/{id}/scopes': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get user scope assignments (API-USR-GET-SCOPES, FEAT-RBAC-02) */
+    get: operations['getUserScopes'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    /** Update user scope assignments (API-USR-UPDATE-SCOPES, FEAT-RBAC-02) */
+    patch: operations['updateUserScopes'];
+    trace?: never;
+  };
   '/users/check-scope': {
     parameters: {
       query?: never;
@@ -1518,6 +1553,7 @@ export interface components {
       role: 'OWNER' | 'OPS_CSKH' | 'WAREHOUSE' | 'ACCOUNTANT';
       store_scopes?: string[];
       warehouse_scopes?: string[];
+      carrier_account_scopes?: string[];
     };
     InvitationItem: {
       /** Format: uuid */
@@ -1530,6 +1566,7 @@ export interface components {
       role: 'OWNER' | 'OPS_CSKH' | 'WAREHOUSE' | 'ACCOUNTANT';
       store_scopes?: string[];
       warehouse_scopes?: string[];
+      carrier_account_scopes?: string[];
       status: components['schemas']['InvitationStatus'];
       /** Format: uuid */
       invited_by_user_id?: string | null;
@@ -1601,9 +1638,53 @@ export interface components {
       };
       meta: components['schemas']['Meta'];
     };
+    UserListItem: {
+      /** Format: uuid */
+      id: string;
+      email?: string | null;
+      phone?: string | null;
+      full_name: string;
+      role: string;
+      /** Format: uuid */
+      custom_role_id?: string | null;
+      custom_role?: {
+        /** Format: uuid */
+        id?: string;
+        name?: string;
+      } | null;
+      store_scopes: string[];
+      warehouse_scopes: string[];
+      carrier_account_scopes: string[];
+      status: string;
+      /** Format: date-time */
+      created_at: string;
+    };
+    UserListResponse: {
+      data: components['schemas']['UserListItem'][];
+      meta: components['schemas']['Meta'];
+    };
+    UserScopesResponse: {
+      data: {
+        /** Format: uuid */
+        id: string;
+        role: string;
+        /** Format: uuid */
+        custom_role_id?: string | null;
+        store_scopes: string[];
+        warehouse_scopes: string[];
+        carrier_account_scopes: string[];
+      };
+      meta: components['schemas']['Meta'];
+    };
+    UpdateUserScopesRequest: {
+      store_scopes?: string[];
+      warehouse_scopes?: string[];
+      carrier_account_scopes?: string[];
+    };
     CheckScopeRequest: {
       store_id?: string;
       warehouse_id?: string;
+      carrier_account_id?: string;
     };
     CheckScopeResponse: {
       data: {
@@ -1613,6 +1694,7 @@ export interface components {
         role: string;
         store_scopes: string[];
         warehouse_scopes: string[];
+        carrier_account_scopes: string[];
       };
       meta: components['schemas']['Meta'];
     };
@@ -2274,6 +2356,83 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['RoleDetailResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['Error'];
+      403: components['responses']['Error'];
+      404: components['responses']['Error'];
+    };
+  };
+  listUsers: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description List of tenant users with scope assignments */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UserListResponse'];
+        };
+      };
+      401: components['responses']['Error'];
+      403: components['responses']['Error'];
+    };
+  };
+  getUserScopes: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description User scope assignments */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UserScopesResponse'];
+        };
+      };
+      401: components['responses']['Error'];
+      403: components['responses']['Error'];
+      404: components['responses']['Error'];
+    };
+  };
+  updateUserScopes: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['UpdateUserScopesRequest'];
+      };
+    };
+    responses: {
+      /** @description Updated user scope assignments */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UserScopesResponse'];
         };
       };
       400: components['responses']['Error'];

@@ -1,5 +1,7 @@
 import {
   Controller,
+  Get,
+  Patch,
   Post,
   Param,
   Body,
@@ -11,22 +13,81 @@ import {
   UseGuards,
   UseFilters,
 } from '@nestjs/common';
-import { Request } from 'express';
-import { UsersService, AdminResetMfaDto, CheckScopeDto } from './users.service';
+import {
+  UsersService,
+  AdminResetMfaDto,
+  CheckScopeDto,
+  UpdateUserScopesDto,
+} from './users.service';
 import { SessionGuard } from '../session/session.guard';
+import { PermissionsGuard, RequirePermissions } from '../rbac/rbac.guard';
 import { CanonicalExceptionFilter } from '../auth/canonical-exception.filter';
 import { normalizeCorrelationId } from '@shipde/config';
 import { extractClientIp } from '../utils/ip.util';
 
 @Controller(['api/v1/users', 'users'])
-@UseGuards(SessionGuard)
+@UseGuards(SessionGuard, PermissionsGuard)
 @UseFilters(CanonicalExceptionFilter)
 export class UsersController {
   constructor(@Inject(UsersService) private readonly usersService: UsersService) {}
 
   /**
+   * GET /users (and /api/v1/users)
+   * List users in current tenant with assigned scopes (API-USR-LIST, FEAT-RBAC-02, FEAT-USR-02).
+   */
+  @Get()
+  @RequirePermissions('iam:manage_users')
+  async listUsers(@Req() req: any) {
+    const correlationId = (req as any).correlationId || normalizeCorrelationId();
+    const merchantId = req.merchantId as string;
+    return this.usersService.listUsers(merchantId, correlationId);
+  }
+
+  /**
+   * GET /users/:id/scopes (and /api/v1/users/:id/scopes)
+   * Get specific user's assigned scopes (API-USR-GET-SCOPES, FEAT-RBAC-02).
+   */
+  @Get(':id/scopes')
+  @RequirePermissions('iam:manage_users')
+  async getUserScopes(@Param('id') userId: string, @Req() req: any) {
+    const correlationId = (req as any).correlationId || normalizeCorrelationId();
+    const merchantId = req.merchantId as string;
+    return this.usersService.getUserScopes(userId, merchantId, correlationId);
+  }
+
+  /**
+   * PATCH /users/:id/scopes (and /api/v1/users/:id/scopes)
+   * Update scope assignments for a user (API-USR-UPDATE-SCOPES, FEAT-RBAC-02).
+   */
+  @Patch(':id/scopes')
+  @RequirePermissions('iam:manage_users')
+  async updateUserScopes(
+    @Param('id') userId: string,
+    @Body() dto: UpdateUserScopesDto,
+    @Req() req: any
+  ) {
+    const correlationId = (req as any).correlationId || normalizeCorrelationId();
+    const merchantId = req.merchantId as string;
+    const clientIp = extractClientIp(req);
+    const actor = {
+      userId: req.userId as string,
+      merchantId,
+      role: req.userRole || req.jwtClaims?.role,
+    };
+
+    return this.usersService.updateUserScopes(
+      userId,
+      merchantId,
+      dto,
+      actor,
+      correlationId,
+      clientIp
+    );
+  }
+
+  /**
    * POST /users/check-scope (and /api/v1/users/check-scope)
-   * Verify scope authorization for current user (AC-USR-01, AC-USR-01-17).
+   * Verify scope authorization for current user (AC-USR-01, AC-USR-01-17, AC-RBAC-02-09..16).
    */
   @Post('check-scope')
   @HttpCode(HttpStatus.OK)

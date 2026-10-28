@@ -4,6 +4,10 @@ import { SessionService } from '../session/session.service';
 import { CanonicalApiException } from '../auth/auth.service';
 import { RoleEnum } from '@prisma/client';
 import { isActiveStatus } from '@shipde/contracts';
+import {
+  isDeadlockOrSerializationError,
+  createConcurrencyConflictException,
+} from '../rbac/rbac.service';
 
 export { isActiveStatus };
 
@@ -14,6 +18,199 @@ export interface AdminResetMfaDto {
 export interface CheckScopeDto {
   store_id?: string;
   warehouse_id?: string;
+  carrier_account_id?: string;
+}
+
+export interface UpdateUserScopesDto {
+  store_scopes?: string[];
+  warehouse_scopes?: string[];
+  carrier_account_scopes?: string[];
+}
+
+export const FORBIDDEN_CHARACTERS_REGEX = /[<>\u0000-\u001F\u007F]/;
+
+/**
+ * Validates array bounds, element types, and rejects control characters/HTML tags.
+ */
+export function validateScopeArray(
+  scopes: any,
+  fieldName: 'store_scopes' | 'warehouse_scopes' | 'carrier_account_scopes',
+  maxCount = 50,
+  maxLength = 64
+): void {
+  if (scopes === undefined || scopes === null) return;
+  if (!Array.isArray(scopes)) {
+    throw new CanonicalApiException(
+      HttpStatus.BAD_REQUEST,
+      'VALIDATION_ERROR',
+      `${fieldName} phải là một mảng chuỗi`,
+      false,
+      undefined,
+      [{ field: fieldName, code: 'INVALID_TYPE', message: `${fieldName} phải là một mảng chuỗi` }]
+    );
+  }
+  if (scopes.length > maxCount) {
+    throw new CanonicalApiException(
+      HttpStatus.BAD_REQUEST,
+      'VALIDATION_ERROR',
+      `Số lượng phần tử trong ${fieldName} không được vượt quá ${maxCount}`,
+      false,
+      undefined,
+      [{ field: fieldName, code: 'ARRAY_TOO_LONG', message: `Tối đa ${maxCount} phần tử` }]
+    );
+  }
+  for (let i = 0; i < scopes.length; i++) {
+    const item = scopes[i];
+    if (typeof item !== 'string') {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        `Phần tử thứ ${i + 1} trong ${fieldName} phải là chuỗi ký tự`,
+        false,
+        undefined,
+        [{ field: `${fieldName}[${i}]`, code: 'INVALID_TYPE', message: 'Phải là chuỗi ký tự' }]
+      );
+    }
+    const trimmed = item.trim();
+    if (trimmed.length === 0) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        `Phần tử trong ${fieldName} không được để trống`,
+        false,
+        undefined,
+        [{ field: `${fieldName}[${i}]`, code: 'EMPTY_STRING', message: 'Không được để trống' }]
+      );
+    }
+    if (trimmed.length > maxLength) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        `Phần tử trong ${fieldName} không được vượt quá ${maxLength} ký tự`,
+        false,
+        undefined,
+        [
+          {
+            field: `${fieldName}[${i}]`,
+            code: 'STRING_TOO_LONG',
+            message: `Tối đa ${maxLength} ký tự`,
+          },
+        ]
+      );
+    }
+    if (FORBIDDEN_CHARACTERS_REGEX.test(trimmed)) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        `Phần tử trong ${fieldName} chứa ký tự không hợp lệ`,
+        false,
+        undefined,
+        [
+          {
+            field: `${fieldName}[${i}]`,
+            code: 'INVALID_CHARACTERS',
+            message: 'Chứa ký tự không hợp lệ',
+          },
+        ]
+      );
+    }
+  }
+}
+
+/**
+ * Enforces scope privilege ceiling: an actor cannot grant scopes they do not possess.
+ */
+export function enforceScopePrivilegeCeiling(
+  dto: UpdateUserScopesDto,
+  actor: {
+    role?: string;
+    store_scopes: string[];
+    warehouse_scopes: string[];
+    carrier_account_scopes: string[];
+  }
+): void {
+  // Owner has universal privilege ceiling
+  if (actor.role === RoleEnum.OWNER || actor.role === 'OWNER') {
+    return;
+  }
+
+  // 1. Branch / store scopes
+  if (dto.store_scopes !== undefined) {
+    const actorStores = new Set(actor.store_scopes || []);
+    const actorHasWildcard = actorStores.has('*');
+    if (!actorHasWildcard) {
+      if (dto.store_scopes.includes('*')) {
+        throw new CanonicalApiException(
+          HttpStatus.FORBIDDEN,
+          'PRIVILEGE_ESCALATION_DENIED',
+          'Bạn không có quyền toàn bộ chi nhánh để cấp quyền wildcard (*)',
+          false
+        );
+      }
+      for (const store of dto.store_scopes) {
+        if (!actorStores.has(store)) {
+          throw new CanonicalApiException(
+            HttpStatus.FORBIDDEN,
+            'PRIVILEGE_ESCALATION_DENIED',
+            `Bạn không thể cấp quyền truy cập chi nhánh [${store}] vì không thuộc phạm vi của bạn`,
+            false
+          );
+        }
+      }
+    }
+  }
+
+  // 2. Warehouse scopes
+  if (dto.warehouse_scopes !== undefined) {
+    const actorWarehouses = new Set(actor.warehouse_scopes || []);
+    const actorHasWildcard = actorWarehouses.has('*');
+    if (!actorHasWildcard) {
+      if (dto.warehouse_scopes.includes('*')) {
+        throw new CanonicalApiException(
+          HttpStatus.FORBIDDEN,
+          'PRIVILEGE_ESCALATION_DENIED',
+          'Bạn không có quyền toàn bộ kho hàng để cấp quyền wildcard (*)',
+          false
+        );
+      }
+      for (const wh of dto.warehouse_scopes) {
+        if (!actorWarehouses.has(wh)) {
+          throw new CanonicalApiException(
+            HttpStatus.FORBIDDEN,
+            'PRIVILEGE_ESCALATION_DENIED',
+            `Bạn không thể cấp quyền truy cập kho hàng [${wh}] vì không thuộc phạm vi của bạn`,
+            false
+          );
+        }
+      }
+    }
+  }
+
+  // 3. Carrier account scopes
+  if (dto.carrier_account_scopes !== undefined) {
+    const actorCarrierAccounts = new Set(actor.carrier_account_scopes || []);
+    const actorHasWildcard = actorCarrierAccounts.has('*');
+    if (!actorHasWildcard) {
+      if (dto.carrier_account_scopes.includes('*')) {
+        throw new CanonicalApiException(
+          HttpStatus.FORBIDDEN,
+          'PRIVILEGE_ESCALATION_DENIED',
+          'Bạn không có quyền toàn bộ tài khoản vận chuyển để cấp quyền wildcard (*)',
+          false
+        );
+      }
+      for (const ca of dto.carrier_account_scopes) {
+        if (!actorCarrierAccounts.has(ca)) {
+          throw new CanonicalApiException(
+            HttpStatus.FORBIDDEN,
+            'PRIVILEGE_ESCALATION_DENIED',
+            `Bạn không thể cấp quyền truy cập tài khoản vận chuyển [${ca}] vì không thuộc phạm vi của bạn`,
+            false
+          );
+        }
+      }
+    }
+  }
 }
 
 @Injectable()
@@ -22,6 +219,449 @@ export class UsersService {
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(SessionService) private readonly sessionService: SessionService
   ) {}
+
+  /**
+   * Validate that all non-wildcard carrier account IDs exist and belong to the tenant.
+   */
+  async validateCarrierAccountScopes(
+    carrierAccountScopes: string[] | undefined,
+    merchantId: string,
+    txClient?: any
+  ): Promise<void> {
+    if (!carrierAccountScopes || carrierAccountScopes.length === 0) return;
+    const concreteIds = carrierAccountScopes.filter((id) => id !== '*');
+    if (concreteIds.length === 0) return;
+
+    const client = txClient || this.prisma;
+    const existingAccounts = await client.carrierAccount.findMany({
+      where: {
+        merchant_id: merchantId,
+        id: { in: concreteIds },
+      },
+      select: { id: true },
+    });
+
+    const existingSet = new Set(existingAccounts.map((a: { id: string }) => a.id));
+    const invalidIds = concreteIds.filter((id) => !existingSet.has(id));
+    if (invalidIds.length > 0) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        `Tài khoản vận chuyển không tồn tại hoặc không thuộc cửa hàng này: ${invalidIds.join(', ')}`,
+        false,
+        undefined,
+        [
+          {
+            field: 'carrier_account_scopes',
+            code: 'INVALID_CARRIER_ACCOUNT',
+            message: `Tài khoản ${invalidIds[0]} không hợp lệ`,
+          },
+        ]
+      );
+    }
+  }
+
+  /**
+   * List users in current tenant with assigned scopes (FEAT-RBAC-02, FEAT-USR-02).
+   */
+  async listUsers(merchantId: string, correlationId: string) {
+    const users = await this.prisma.user.findMany({
+      where: { merchant_id: merchantId },
+      select: {
+        id: true,
+        email: true,
+        phone: true,
+        full_name: true,
+        role: true,
+        custom_role_id: true,
+        store_scopes: true,
+        warehouse_scopes: true,
+        carrier_account_scopes: true,
+        status: true,
+        created_at: true,
+      },
+      orderBy: { created_at: 'asc' },
+    });
+
+    const customRoleIds = Array.from(
+      new Set(users.map((u) => u.custom_role_id).filter((id): id is string => Boolean(id)))
+    );
+
+    const customRolesMap = new Map<string, string>();
+    if (customRoleIds.length > 0) {
+      const roles = await this.prisma.role.findMany({
+        where: { id: { in: customRoleIds } },
+        select: { id: true, name: true },
+      });
+      for (const r of roles) {
+        customRolesMap.set(r.id, r.name);
+      }
+    }
+
+    const data = users.map((u) => ({
+      id: u.id,
+      email: u.email,
+      phone: u.phone,
+      full_name: u.full_name,
+      role: u.role,
+      custom_role_id: u.custom_role_id,
+      custom_role: u.custom_role_id
+        ? {
+            id: u.custom_role_id,
+            name: customRolesMap.get(u.custom_role_id) || 'Tùy chỉnh',
+          }
+        : null,
+      store_scopes: u.store_scopes || [],
+      warehouse_scopes: u.warehouse_scopes || [],
+      carrier_account_scopes: u.carrier_account_scopes || [],
+      status: u.status,
+      created_at: u.created_at.toISOString(),
+    }));
+
+    return {
+      data,
+      meta: {
+        correlation_id: correlationId,
+      },
+    };
+  }
+
+  /**
+   * Get specific user's assigned scopes in current merchant (FEAT-RBAC-02).
+   */
+  async getUserScopes(userId: string, merchantId: string, correlationId: string) {
+    const user = await this.prisma.user.findFirst({
+      where: { id: userId, merchant_id: merchantId },
+      select: {
+        id: true,
+        role: true,
+        custom_role_id: true,
+        store_scopes: true,
+        warehouse_scopes: true,
+        carrier_account_scopes: true,
+      },
+    });
+
+    if (!user) {
+      throw new CanonicalApiException(
+        HttpStatus.NOT_FOUND,
+        'USER_NOT_FOUND',
+        'Không tìm thấy người dùng trong cửa hàng',
+        false
+      );
+    }
+
+    return {
+      data: {
+        id: user.id,
+        role: user.role,
+        custom_role_id: user.custom_role_id,
+        store_scopes: user.store_scopes || [],
+        warehouse_scopes: user.warehouse_scopes || [],
+        carrier_account_scopes: user.carrier_account_scopes || [],
+      },
+      meta: {
+        correlation_id: correlationId,
+      },
+    };
+  }
+
+  /**
+   * Update scope assignments for a tenant user with transaction locking and audit trail.
+   */
+  async updateUserScopes(
+    targetUserId: string,
+    merchantId: string,
+    dto: UpdateUserScopesDto,
+    actor: {
+      userId: string;
+      merchantId: string;
+      role?: string;
+    },
+    correlationId: string,
+    clientIp: string
+  ) {
+    // 1. Array validation
+    validateScopeArray(dto.store_scopes, 'store_scopes');
+    validateScopeArray(dto.warehouse_scopes, 'warehouse_scopes');
+    validateScopeArray(dto.carrier_account_scopes, 'carrier_account_scopes');
+
+    // 2. Fetch actor user scopes for privilege ceiling check
+    const actorUser = await this.prisma.user.findFirst({
+      where: { id: actor.userId, merchant_id: merchantId },
+      select: {
+        id: true,
+        role: true,
+        store_scopes: true,
+        warehouse_scopes: true,
+        carrier_account_scopes: true,
+      },
+    });
+
+    if (!actorUser) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Người thực hiện không tồn tại hoặc không thuộc cửa hàng này',
+        false
+      );
+    }
+
+    // 3. Enforce privilege ceiling
+    enforceScopePrivilegeCeiling(dto, {
+      role: actorUser.role,
+      store_scopes: actorUser.store_scopes || [],
+      warehouse_scopes: actorUser.warehouse_scopes || [],
+      carrier_account_scopes: actorUser.carrier_account_scopes || [],
+    });
+
+    // 4. Validate carrier accounts belong to merchant
+    await this.validateCarrierAccountScopes(dto.carrier_account_scopes, merchantId);
+
+    // 5. Atomic transaction with row locking
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        let targetUser: any;
+        try {
+          const lockedRows = await tx.$queryRaw<any[]>`
+            SELECT id, merchant_id, role, custom_role_id, store_scopes, warehouse_scopes, carrier_account_scopes
+            FROM users
+            WHERE id = ${targetUserId}::uuid
+            FOR UPDATE
+          `;
+          if (lockedRows && lockedRows.length > 0) {
+            targetUser = lockedRows[0];
+          }
+        } catch {
+          targetUser = await tx.user.findUnique({
+            where: { id: targetUserId },
+          });
+        }
+
+        if (!targetUser) {
+          throw new CanonicalApiException(
+            HttpStatus.NOT_FOUND,
+            'USER_NOT_FOUND',
+            'Không tìm thấy người dùng được chỉ định',
+            false
+          );
+        }
+
+        // Strict tenant boundary check
+        if (targetUser.merchant_id !== merchantId) {
+          throw new CanonicalApiException(
+            HttpStatus.FORBIDDEN,
+            'FORBIDDEN',
+            'Không có quyền chỉnh sửa người dùng của cửa hàng khác',
+            false
+          );
+        }
+
+        const beforeScopes = {
+          store_scopes: targetUser.store_scopes || [],
+          warehouse_scopes: targetUser.warehouse_scopes || [],
+          carrier_account_scopes: targetUser.carrier_account_scopes || [],
+        };
+
+        const newStoreScopes =
+          dto.store_scopes !== undefined
+            ? Array.from(new Set(dto.store_scopes))
+            : beforeScopes.store_scopes;
+        const newWarehouseScopes =
+          dto.warehouse_scopes !== undefined
+            ? Array.from(new Set(dto.warehouse_scopes))
+            : beforeScopes.warehouse_scopes;
+        const newCarrierAccountScopes =
+          dto.carrier_account_scopes !== undefined
+            ? Array.from(new Set(dto.carrier_account_scopes))
+            : beforeScopes.carrier_account_scopes;
+
+        const updatedUser = await tx.user.update({
+          where: { id: targetUserId },
+          data: {
+            store_scopes: newStoreScopes,
+            warehouse_scopes: newWarehouseScopes,
+            carrier_account_scopes: newCarrierAccountScopes,
+          },
+          select: {
+            id: true,
+            role: true,
+            custom_role_id: true,
+            store_scopes: true,
+            warehouse_scopes: true,
+            carrier_account_scopes: true,
+          },
+        });
+
+        // Write immutable audit log
+        await tx.auditLog.create({
+          data: {
+            merchant_id: merchantId,
+            user_id: actor.userId,
+            action: 'USER_SCOPE_UPDATED',
+            entity_type: 'User',
+            entity_id: targetUserId,
+            ip_address: clientIp,
+            old_value: beforeScopes,
+            new_value: {
+              store_scopes: newStoreScopes,
+              warehouse_scopes: newWarehouseScopes,
+              carrier_account_scopes: newCarrierAccountScopes,
+              correlation_id: correlationId,
+            },
+          },
+        });
+
+        return {
+          data: {
+            id: updatedUser.id,
+            role: updatedUser.role,
+            custom_role_id: updatedUser.custom_role_id,
+            store_scopes: updatedUser.store_scopes,
+            warehouse_scopes: updatedUser.warehouse_scopes,
+            carrier_account_scopes: updatedUser.carrier_account_scopes,
+          },
+          meta: {
+            correlation_id: correlationId,
+          },
+        };
+      });
+    } catch (err: any) {
+      if (err instanceof CanonicalApiException) {
+        throw err;
+      }
+      if (isDeadlockOrSerializationError(err)) {
+        throw createConcurrencyConflictException();
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Scope authorization enforcement (AC-USR-01, AC-USR-01-17, AC-RBAC-02-09..16, BR-RBAC)
+   * Validates if the authenticated user has access to a specific warehouse, store, or carrier account scope.
+   */
+  async checkScopeAccess(
+    userId: string,
+    merchantId: string,
+    requestedScope: CheckScopeDto,
+    correlationId: string
+  ) {
+    const user = await this.prisma.user.findFirst({
+      where: { id: userId, merchant_id: merchantId },
+    });
+
+    if (!user) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Người dùng không tồn tại hoặc không thuộc cửa hàng này',
+        false
+      );
+    }
+
+    if (!isActiveStatus(user.status)) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Tài khoản người dùng chưa kích hoạt hoặc đã bị khóa',
+        false
+      );
+    }
+
+    // Validate at least one scope target is requested
+    if (
+      !requestedScope.warehouse_id &&
+      !requestedScope.store_id &&
+      !requestedScope.carrier_account_id
+    ) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Yêu cầu phải chỉ định ít nhất store_id, warehouse_id hoặc carrier_account_id để kiểm tra phạm vi quyền hạn',
+        false
+      );
+    }
+
+    const userWarehouseScopes = user.warehouse_scopes || [];
+    const userStoreScopes = user.store_scopes || [];
+    const userCarrierAccountScopes = user.carrier_account_scopes || [];
+
+    // Owner role has full access across all stores, warehouses, and carrier accounts
+    if (user.role === RoleEnum.OWNER) {
+      return {
+        data: {
+          authorized: true,
+          user_id: user.id,
+          role: user.role,
+          store_scopes: userStoreScopes,
+          warehouse_scopes: userWarehouseScopes,
+          carrier_account_scopes: userCarrierAccountScopes,
+        },
+        meta: {
+          correlation_id: correlationId,
+        },
+      };
+    }
+
+    // Warehouse scope enforcement (* or explicit membership)
+    if (requestedScope.warehouse_id) {
+      const allowed =
+        userWarehouseScopes.includes('*') ||
+        userWarehouseScopes.includes(requestedScope.warehouse_id);
+      if (!allowed) {
+        throw new CanonicalApiException(
+          HttpStatus.FORBIDDEN,
+          'FORBIDDEN',
+          'Người dùng không có quyền truy cập kho hàng được yêu cầu',
+          false
+        );
+      }
+    }
+
+    // Store scope enforcement (* or explicit membership)
+    if (requestedScope.store_id) {
+      const allowed =
+        userStoreScopes.includes('*') || userStoreScopes.includes(requestedScope.store_id);
+      if (!allowed) {
+        throw new CanonicalApiException(
+          HttpStatus.FORBIDDEN,
+          'FORBIDDEN',
+          'Người dùng không có quyền truy cập chi nhánh cửa hàng được yêu cầu',
+          false
+        );
+      }
+    }
+
+    // Carrier account scope enforcement (* or explicit membership)
+    if (requestedScope.carrier_account_id) {
+      const allowed =
+        userCarrierAccountScopes.includes('*') ||
+        userCarrierAccountScopes.includes(requestedScope.carrier_account_id);
+      if (!allowed) {
+        throw new CanonicalApiException(
+          HttpStatus.FORBIDDEN,
+          'FORBIDDEN',
+          'Người dùng không có quyền truy cập tài khoản vận chuyển được yêu cầu',
+          false
+        );
+      }
+    }
+
+    return {
+      data: {
+        authorized: true,
+        user_id: user.id,
+        role: user.role,
+        store_scopes: userStoreScopes,
+        warehouse_scopes: userWarehouseScopes,
+        carrier_account_scopes: userCarrierAccountScopes,
+      },
+      meta: {
+        correlation_id: correlationId,
+      },
+    };
+  }
 
   /**
    * Tenant-scoped admin reset of another user's lost factor (BR-AUTH-19, AC-AUTH-05-14..15, AC-AUTH-05-21).
@@ -95,8 +735,6 @@ export class UsersService {
       );
     }
 
-    // Durable, tenant-scoped idempotency record (BR-AUTH-19): survives restarts and is shared
-    // across API instances. The unique (merchant_id, idempotency_key) index arbitrates races.
     const replay = await this.findIdempotentReplay(
       actor.merchantId,
       idempotencyKey.trim(),
@@ -198,18 +836,20 @@ export class UsersService {
             new_value: {
               target_user_id: targetUserId,
               actor_user_id: actor.userId,
-              factors_reset_count: targetFactors.length,
+              reason: dto.reason.trim(),
               revoked_sessions_count: revokedCount,
               correlation_id: correlationId,
             },
           },
         });
 
-        const result = {
+        const resData = {
           data: {
-            target_user_id: targetUserId,
+            user_id: targetUserId,
+            status: 'RESET',
             reset: true,
             revoked_sessions_count: revokedCount,
+            reset_at: now.toISOString(),
             message: 'Đã đặt lại xác thực hai yếu tố cho người dùng thành công',
           },
           meta: {
@@ -217,31 +857,30 @@ export class UsersService {
           },
         };
 
-        // F. Persist the idempotency record in the same transaction as the effect.
+        // F. Save idempotent replay result
         await tx.mfaAdminResetIdempotency.create({
           data: {
             merchant_id: actor.merchantId,
             idempotency_key: idempotencyKey.trim(),
-            actor_user_id: actor.userId,
             target_user_id: targetUserId,
+            actor_user_id: actor.userId,
             reason: dto.reason.trim(),
-            response: result,
+            response: resData,
           },
         });
 
-        return result;
+        return resData;
       });
     } catch (err: any) {
-      // A concurrent request with the same key won the unique (merchant_id, idempotency_key) race.
-      if (err?.code === 'P2002') {
-        const replay = await this.findIdempotentReplay(
+      if (err.code === 'P2002') {
+        const raceReplay = await this.findIdempotentReplay(
           actor.merchantId,
           idempotencyKey.trim(),
           targetUserId,
           dto.reason.trim()
         );
-        if (replay) {
-          return replay;
+        if (raceReplay) {
+          return raceReplay;
         }
       }
       throw err;
@@ -272,110 +911,5 @@ export class UsersService {
       'IDEMPOTENCY_CONFLICT',
       'Khóa Idempotency-Key đã được sử dụng cho một yêu cầu khác'
     );
-  }
-
-  /**
-   * Scope authorization enforcement (AC-USR-01, AC-USR-01-17, BR-RBAC)
-   * Validates if the authenticated user has access to a specific warehouse or store scope.
-   */
-  async checkScopeAccess(
-    userId: string,
-    merchantId: string,
-    requestedScope: CheckScopeDto,
-    correlationId: string
-  ) {
-    const user = await this.prisma.user.findFirst({
-      where: { id: userId, merchant_id: merchantId },
-    });
-
-    if (!user) {
-      throw new CanonicalApiException(
-        HttpStatus.FORBIDDEN,
-        'FORBIDDEN',
-        'Người dùng không tồn tại hoặc không thuộc cửa hàng này',
-        false
-      );
-    }
-
-    if (!isActiveStatus(user.status)) {
-      throw new CanonicalApiException(
-        HttpStatus.FORBIDDEN,
-        'FORBIDDEN',
-        'Tài khoản người dùng chưa kích hoạt hoặc đã bị khóa',
-        false
-      );
-    }
-
-    // Validate at least one scope target is requested (Finding 6 / AC-USR-01-17)
-    if (!requestedScope.warehouse_id && !requestedScope.store_id) {
-      throw new CanonicalApiException(
-        HttpStatus.BAD_REQUEST,
-        'VALIDATION_ERROR',
-        'Yêu cầu phải chỉ định ít nhất store_id hoặc warehouse_id để kiểm tra phạm vi quyền hạn',
-        false
-      );
-    }
-
-    // Robustness: default null/undefined scopes to empty array for legacy/external users (Finding 3 / AC-USR-01-17 / SECURITY-NFR)
-    const userWarehouseScopes = user.warehouse_scopes || [];
-    const userStoreScopes = user.store_scopes || [];
-
-    // Owner role has full access across all stores and warehouses
-    if (user.role === RoleEnum.OWNER) {
-      return {
-        data: {
-          authorized: true,
-          user_id: user.id,
-          role: user.role,
-          store_scopes: userStoreScopes,
-          warehouse_scopes: userWarehouseScopes,
-        },
-        meta: {
-          correlation_id: correlationId,
-        },
-      };
-    }
-
-    // Warehouse scope enforcement (* or explicit membership)
-    if (requestedScope.warehouse_id) {
-      const allowed =
-        userWarehouseScopes.includes('*') ||
-        userWarehouseScopes.includes(requestedScope.warehouse_id);
-      if (!allowed) {
-        throw new CanonicalApiException(
-          HttpStatus.FORBIDDEN,
-          'FORBIDDEN',
-          'Người dùng không có quyền truy cập kho hàng được yêu cầu',
-          false
-        );
-      }
-    }
-
-    // Store scope enforcement (* or explicit membership)
-    if (requestedScope.store_id) {
-      const allowed =
-        userStoreScopes.includes('*') || userStoreScopes.includes(requestedScope.store_id);
-      if (!allowed) {
-        throw new CanonicalApiException(
-          HttpStatus.FORBIDDEN,
-          'FORBIDDEN',
-          'Người dùng không có quyền truy cập chi nhánh cửa hàng được yêu cầu',
-          false
-        );
-      }
-    }
-
-    return {
-      data: {
-        authorized: true,
-        user_id: user.id,
-        role: user.role,
-        store_scopes: userStoreScopes,
-        warehouse_scopes: userWarehouseScopes,
-      },
-      meta: {
-        correlation_id: correlationId,
-      },
-    };
   }
 }

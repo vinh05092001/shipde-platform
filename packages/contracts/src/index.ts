@@ -469,5 +469,11 @@ export type AcceptInvitationRequest = components['schemas']['AcceptInvitationReq
 export type AcceptInvitationResponse = components['schemas']['AcceptInvitationResponse'];
 export type CheckScopeRequest = components['schemas']['CheckScopeRequest'];
 export type CheckScopeResponse = components['schemas']['CheckScopeResponse'];
+
+// --- Scope Assignment Contracts (FEAT-RBAC-02) ---
+export type UserListItem = components['schemas']['UserListItem'];
+export type UserListResponse = components['schemas']['UserListResponse'];
+export type UserScopesResponse = components['schemas']['UserScopesResponse'];
+export type UpdateUserScopesRequest = components['schemas']['UpdateUserScopesRequest'];
 // --- Generated OpenAPI Schema Types ---
 export type * from './openapi';
