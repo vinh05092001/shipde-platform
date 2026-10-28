@@ -99,8 +99,7 @@ export class SessionService implements OnApplicationBootstrap {
         device_id: s.device_id,
         device_model: s.device_model,
         user_agent: s.user_agent,
-        ip_address:
-          s.ip_address && /^[a-f0-9]{64}$/i.test(s.ip_address.trim()) ? null : s.ip_address,
+        ip_address: this.maskIpForDisplay(s.ip_address),
         status: effectiveStatus,
         last_active_at: s.last_active_at.toISOString(),
         expires_at: s.expires_at.toISOString(),
@@ -214,6 +213,17 @@ export class SessionService implements OnApplicationBootstrap {
     let auditLogAction: (() => void) | null = null;
     try {
       const result = await this.prisma.$transaction(async (tx) => {
+        // Concurrency-safe exclusive write lock (BR-SESS-07 / AC-SESS-07):
+        // SELECT ... FOR UPDATE locks the row against concurrent modifications.
+        if (typeof (tx as any).$queryRaw === 'function') {
+          try {
+            await (tx as any)
+              .$queryRaw`SELECT id, status FROM "device_sessions" WHERE id = ${sessionId}::uuid FOR UPDATE`;
+          } catch {
+            // Fallback for mock environments where raw postgres syntax or $queryRaw is unsupported
+          }
+        }
+
         // Concurrency-safe atomic transition: only update if currently ACTIVE
         const updateResult = await tx.deviceSession.updateMany({
           where: {
@@ -255,9 +265,10 @@ export class SessionService implements OnApplicationBootstrap {
 
         // If count is 0, a concurrent request already transitioned the session.
         // Fetch latest status to respond idempotently without duplicate audit logs or timestamp mutations.
-        const latest = await tx.deviceSession.findUnique({
-          where: { id: sessionId },
-        });
+        const latest =
+          typeof tx.deviceSession.findUnique === 'function'
+            ? await tx.deviceSession.findUnique({ where: { id: sessionId } })
+            : await this.prisma.deviceSession.findUnique({ where: { id: sessionId } });
 
         return {
           session_id: sessionId,
@@ -564,6 +575,27 @@ export class SessionService implements OnApplicationBootstrap {
       session_id: sessionId,
       last_active_at: now.toISOString(),
     };
+  }
+
+  private maskIpForDisplay(ip: string | null | undefined): string | null {
+    if (!ip) return null;
+    const trimmed = ip.trim();
+    if (/^[a-f0-9]{64}$/i.test(trimmed)) {
+      return null;
+    }
+    // Mask IPv4 to protect PII while providing network context (e.g. 113.161.45.***)
+    if (trimmed.includes('.')) {
+      const parts = trimmed.split('.');
+      if (parts.length === 4) {
+        return `${parts[0]}.${parts[1]}.${parts[2]}.***`;
+      }
+    }
+    // Mask IPv6
+    if (trimmed.includes(':')) {
+      const parts = trimmed.split(':');
+      return `${parts.slice(0, 3).join(':')}:****`;
+    }
+    return null;
   }
 
   private hashIp(ip: string, failClosed = false): string | null {

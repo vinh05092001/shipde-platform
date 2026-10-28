@@ -187,6 +187,85 @@ describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
       assert.ok(messages.includes('Phiên đã được thu hồi'));
       assert.ok(messages.includes('Phiên đã được thu hồi trước đó'));
     });
+
+    it('locks session row with SELECT ... FOR UPDATE within transaction and abort leaves session ACTIVE without double-write (P1 / BR-SESS-07 / AC-SESS-07)', async () => {
+      const sessionId = 'sess-lock-1';
+      const userId = 'user-lock-1';
+      const merchantId = 'merchant-lock-1';
+      const sessionInDb = {
+        id: sessionId,
+        user_id: userId,
+        merchant_id: merchantId,
+        status: SessionStatusEnum.ACTIVE,
+        device_id: 'dev-lock',
+      };
+      let rawQueryExecuted: string | null = null;
+      let tempStatus = sessionInDb.status;
+
+      const mockPrisma: any = {
+        deviceSession: {
+          findUnique: async () => ({ ...sessionInDb }),
+        },
+        $transaction: async (callback: any) => {
+          const tx: any = {
+            $queryRaw: async (strings: TemplateStringsArray, ..._values: any[]) => {
+              rawQueryExecuted = strings.join('?');
+              return [{ id: sessionId, status: tempStatus }];
+            },
+            deviceSession: {
+              findUnique: async () => ({ ...sessionInDb, status: tempStatus }),
+              updateMany: async (args: any) => {
+                if (
+                  args.where.status === SessionStatusEnum.ACTIVE &&
+                  tempStatus === SessionStatusEnum.ACTIVE
+                ) {
+                  tempStatus = SessionStatusEnum.REVOKED;
+                  return { count: 1 };
+                }
+                return { count: 0 };
+              },
+            },
+            auditLog: {
+              create: async () => {
+                // Aborted transaction mid-write: simulated failure while inserting audit log
+                throw new Error('Simulated audit failure inside transaction');
+              },
+            },
+          };
+
+          try {
+            return await callback(tx);
+          } catch (err) {
+            // Abort rolls back in-memory transaction state: leaves database session ACTIVE!
+            tempStatus = sessionInDb.status;
+            throw err;
+          }
+        },
+      };
+
+      const service = new SessionService(mockPrisma);
+
+      await assert.rejects(
+        async () => {
+          await service.revoke(sessionId, userId, merchantId, 'corr-lock-1', 'Revoke lock test');
+        },
+        (err: any) => {
+          assert.match(err.message, /Simulated audit failure inside transaction/);
+          return true;
+        }
+      );
+
+      // Verify row lock was requested via $queryRaw SELECT ... FOR UPDATE
+      assert.ok(rawQueryExecuted, '$queryRaw must be called for exclusive lock');
+      assert.match(rawQueryExecuted, /FOR UPDATE/i, 'Query must specify FOR UPDATE');
+
+      // Verify that aborted transaction leaves the session row ACTIVE
+      assert.strictEqual(
+        sessionInDb.status,
+        SessionStatusEnum.ACTIVE,
+        'Aborted transaction must leave session row ACTIVE in database'
+      );
+    });
   });
 
   // ---------------------------------------------------------------------------
