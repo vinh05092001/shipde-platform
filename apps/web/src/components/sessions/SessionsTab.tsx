@@ -611,11 +611,8 @@ export function SessionsTab({
             disabled={
               fetchState === 'loading' ||
               isFetching ||
-              isFetchingRef.current ||
               revokeAllLoading ||
-              revokeAllLoadingRef.current ||
-              revokingId !== null ||
-              revokingIdRef.current !== null
+              revokingId !== null
             }
             onClick={() => setRevokeAllOpen(true)}
             className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold bg-red-600 text-white hover:bg-red-700 active:bg-red-800 disabled:opacity-50 transition-colors shadow-xs"
@@ -860,18 +857,14 @@ export function SessionsTab({
                       data-testid={`revoke-btn-${session.session_id}`}
                       disabled={
                         revokingId !== null ||
-                        revokingIdRef.current !== null ||
                         revokeAllLoading ||
-                        revokeAllLoadingRef.current ||
                         isFetching ||
-                        isFetchingRef.current ||
                         fetchState === 'loading'
                       }
                       onClick={() => handleRevoke(session.session_id)}
                       className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-red-200 bg-red-50/50 text-red-700 hover:bg-red-100 active:bg-red-200 disabled:opacity-50 transition-colors self-end sm:self-center"
                     >
-                      {revokingId === session.session_id ||
-                      revokingIdRef.current === session.session_id ? (
+                      {revokingId === session.session_id ? (
                         <>
                           <Loader2 className="w-3.5 h-3.5 animate-spin text-red-600" />
                           <span>Đang thu hồi...</span>
@@ -943,7 +936,7 @@ export function SessionsTab({
               <button
                 type="button"
                 onClick={() => setRevokeAllOpen(false)}
-                disabled={revokeAllLoading || Boolean(revokeAllLoadingRef.current)}
+                disabled={revokeAllLoading}
                 className="text-slate-400 hover:text-slate-600 p-1 rounded-lg"
               >
                 <X className="w-4 h-4" />
@@ -973,7 +966,7 @@ export function SessionsTab({
               <button
                 type="button"
                 onClick={() => setRevokeAllOpen(false)}
-                disabled={revokeAllLoading || Boolean(revokeAllLoadingRef.current)}
+                disabled={revokeAllLoading}
                 className="px-4 py-2 rounded-lg text-xs font-semibold text-slate-600 hover:bg-slate-100 transition-colors disabled:opacity-50"
               >
                 Hủy
@@ -983,9 +976,7 @@ export function SessionsTab({
                 data-testid="confirm-revoke-all-button"
                 disabled={
                   revokeAllLoading ||
-                  Boolean(revokeAllLoadingRef.current) ||
                   isFetching ||
-                  Boolean(isFetchingRef.current) ||
                   fetchState === 'loading'
                 }
                 onClick={handleRevokeAll}
