@@ -73,8 +73,18 @@ const {
   candidateAccountKey,
   PROVIDER_LEVEL_FAILURE_CAUSES,
 } = require('./hermes-session');
-// Safety invariant: reviewer canonical-model probe cap
-const PROBE_BUDGET_MS = 180000;
+const {
+  launchFailureText,
+  failureMessageOf,
+  failedDecisionDetail,
+  markIsolationVerdictStop,
+} = require('./orchestrate/decisions-log');
+const {
+  PROBE_BUDGET_MS,
+  resolveLaunchRoute,
+  stripOpencodeProviderPrefix,
+  routeProbeCandidate,
+} = require('./orchestrate/route-probe');
 
 function providerFailureBodyMatches(body) {
   return [...PROVIDER_LEVEL_FAILURE_CAUSES].some((cause) => {
@@ -356,25 +366,6 @@ function harnessFor(candidate) {
   }
 }
 
-/**
- * TASK-AI-121 LF-R01: the launcher's own message for a failed launch — the
- * error a throw carried, the refusal a route returned, then the process text.
- * This is the "real error message" the failed decision entry must keep.
- */
-function launchFailureText(res) {
-  return String((res && (res.stderr || res.refusal || res.failureReason || res.body)) || '');
-}
-
-/**
- * A "failed" decision entry keeps the classified cause for provider failures,
- * but for a local launch infrastructure failure (LF-R01) the cause alone threw
- * the real message away — the exact thing a supervisor needs. The message is
- * scrubbed of secrets and capped at 300 chars.
- */
-function failureMessageOf(res) {
-  return decisions.scrubText(launchFailureText(res)).trim().slice(0, 300);
-}
-
 // Record actual writer invocations before downstream verification can fail.
 // A checkpoint replay is not a new invocation and must not duplicate this event.
 function recordWriterResult(job, result, kind, logOpts, env) {
@@ -400,105 +391,6 @@ function recordWriterResult(job, result, kind, logOpts, env) {
     },
     logOpts
   );
-}
-
-function failedDecisionDetail(classification, res) {
-  const message = failureMessageOf(res);
-  if (classification.scope === 'local' && message) return message;
-  return classification.cause;
-}
-
-/**
- * LF-R02: a stale or missing isolation verdict fails every candidate the same
- * way, so the run records why it stopped and the operator action that clears
- * it. The first detection wins; the stop travels on the run log.
- */
-function markIsolationVerdictStop(log, res, classification) {
-  if (!log || (classification && classification.scope !== 'local')) return null;
-  const reasonCode = isolationVerdictBlockReason(launchFailureText(res));
-  if (!reasonCode) return null;
-  if (!log.isolationStop) {
-    log.isolationStop = {
-      reasonCode,
-      reason: failureMessageOf(res) || reasonCode,
-      humanAction: ISOLATION_VERDICT_HUMAN_ACTION,
-    };
-  }
-  return log.isolationStop;
-}
-
-function resolveLaunchRoute(candidate, options, registry) {
-  const { resolveRoute } = require('./executor');
-  return resolveRoute(
-    {
-      provider: candidate && (candidate.source || candidate.upstream || candidate.gateway),
-      model: candidate && candidate.modelId,
-      harness: candidate && candidate.harness,
-    },
-    { isolatedWorker: Boolean(options && options.isolatedWorker) },
-    registry
-  );
-}
-
-/** An OpenCode provider's models are addressed `<providerKey>/<model>`; the wire id has no key. */
-function stripOpencodeProviderPrefix(modelId, source) {
-  const key = source && (source.opencodeProvider || source.id);
-  return key && String(modelId).startsWith(key + '/')
-    ? String(modelId).slice(key.length + 1)
-    : modelId;
-}
-
-function routeProbeCandidate(candidate, route, registry, allowModelFallback = true) {
-  const sources = (registry && registry.sources) || [];
-  const routeSource = [candidate.gateway, candidate.source, route && route.provider]
-    .map((id) => sources.find((entry) => entry.id === id))
-    .find(
-      (entry) => entry && (entry.endpoint || /^https?:\/\//i.test(String(entry.accessPath || '')))
-    );
-  const exactModel = String((route && route.model) || candidate.modelId || candidate.model || '');
-  const upstreamModel = stripOpencodeProviderPrefix(
-    exactModel.replace(/^ninerouter\//i, ''),
-    routeSource
-  );
-  const modelSource = sources.find(
-    (entry) =>
-      entry &&
-      (entry.endpoint || /^https?:\/\//i.test(String(entry.accessPath || ''))) &&
-      Array.isArray(entry.models) &&
-      (entry.models.includes(exactModel) || entry.models.includes(upstreamModel))
-  );
-  let source = routeSource || (allowModelFallback && modelSource) || null;
-  if (!source && candidate.upstream) {
-    source = sources.find(
-      (entry) =>
-        entry.id === candidate.upstream &&
-        (entry.endpoint || /^https?:\/\//i.test(String(entry.accessPath || '')))
-    );
-  }
-  if (
-    source &&
-    !source.endpoint &&
-    !/^https?:\/\//i.test(String(source.accessPath || '')) &&
-    source.reachedVia
-  ) {
-    source = sources.find((entry) => entry.id === source.reachedVia) || source;
-  }
-  const accessPath =
-    (source &&
-      (source.endpoint ||
-        (/^https?:\/\//i.test(String(source.accessPath || '')) && source.accessPath))) ||
-    candidate.accessPath ||
-    candidate.sourceEndpoint;
-  const apiKeyEnv = source && source.credential && source.credential.env;
-  if (!accessPath || !apiKeyEnv || !/^[A-Za-z0-9_]+$/.test(apiKeyEnv)) return null;
-  return {
-    accessPath,
-    // OpenCode's provider prefix is local configuration, not a gateway alias.
-    modelId: upstreamModel,
-    maxOutputTokens: candidate.maxOutputTokens || candidate.max_output_tokens,
-    apiKeyEnv,
-    ...(source.headers && typeof source.headers === 'object' ? { headers: source.headers } : {}),
-  };
 }
 
 /**
