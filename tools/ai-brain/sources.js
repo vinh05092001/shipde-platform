@@ -570,7 +570,37 @@ function getDispatchConfig(registry, options = {}) {
     throw new Error('CONFIG_MISSING: dispatch.hermesOrchestrator is required');
   }
 
+  const fullRouteScanDefaults = defaults.fullRouteScan || {};
+  const fullRouteScanRaw = dispatch.fullRouteScan || {};
+  const fullRouteScan = {
+    timeoutMs: Number(
+      options.fullScanTimeoutMs ?? fullRouteScanRaw.timeoutMs ?? fullRouteScanDefaults.timeoutMs
+    ),
+    maxTokens: Number(
+      options.fullScanMaxTokens ?? fullRouteScanRaw.maxTokens ?? fullRouteScanDefaults.maxTokens
+    ),
+    concurrency: Number(
+      options.concurrency ?? fullRouteScanRaw.concurrency ?? fullRouteScanDefaults.concurrency
+    ),
+    nineRouterConcurrency: Number(
+      fullRouteScanRaw.nineRouterConcurrency ?? fullRouteScanDefaults.nineRouterConcurrency
+    ),
+    nineRouterModelsTimeoutMs: Number(
+      fullRouteScanRaw.nineRouterModelsTimeoutMs ?? fullRouteScanDefaults.nineRouterModelsTimeoutMs
+    ),
+    gatewayModelsTimeoutMs: Number(
+      fullRouteScanRaw.gatewayModelsTimeoutMs ?? fullRouteScanDefaults.gatewayModelsTimeoutMs
+    ),
+    externalModelsTimeoutMs: Number(
+      fullRouteScanRaw.externalModelsTimeoutMs ?? fullRouteScanDefaults.externalModelsTimeoutMs
+    ),
+  };
+
   return {
+    fullRouteScan,
+    fullScanTimeoutMs: fullRouteScan.timeoutMs,
+    fullScanMaxTokens: fullRouteScan.maxTokens,
+    fullScanConcurrency: fullRouteScan.concurrency,
     ...(hermesOrchestrator ? { hermesOrchestrator } : {}),
     routeEvidenceMaxAgeMs,
     ...(weightProfileByRole && typeof weightProfileByRole === 'object'

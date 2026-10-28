@@ -377,6 +377,15 @@
       "contextWindow": 128000,
       "maxOutputTokens": 8192
     },
+    "fullRouteScan": {
+      "timeoutMs": 45000,
+      "maxTokens": 5,
+      "concurrency": 8,
+      "nineRouterConcurrency": 2,
+      "nineRouterModelsTimeoutMs": 10000,
+      "gatewayModelsTimeoutMs": 5000,
+      "externalModelsTimeoutMs": 4000
+    },
     "routeEvidenceMaxAgeMs": 86400000,
     "maxWriterSelectionRounds": 12,
     "maxLocalWriterFallbacks": 3,

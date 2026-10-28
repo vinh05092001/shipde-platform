@@ -2688,10 +2688,13 @@ function getIsolatedLauncher() {
       };
       if (selectedSource.options && typeof selectedSource.options === 'object') {
         Object.assign(providerOptions, selectedSource.options);
-        // Ensure apiKey is strictly {env:credentialEnv} and never leaked/overwritten
-        if (credentialEnv) {
-          providerOptions.apiKey = `{env:${credentialEnv}}`;
-        }
+      }
+      // Ensure apiKey is strictly {env:credentialEnv} and never leaked/overwritten.
+      // On the keyless branch, delete any apiKey copied from options so no literal key is written.
+      if (credentialEnv) {
+        providerOptions.apiKey = `{env:${credentialEnv}}`;
+      } else {
+        delete providerOptions.apiKey;
       }
 
       // Permission scoping: strictly worker root and report dir; no whole-machine wildcard

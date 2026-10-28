@@ -746,15 +746,16 @@ async function scanScope(target, options = {}) {
   const registry = options.registry || sourcesApi.loadSources?.(options.sourceOpts);
   const dispatchConfig =
     registry && sourcesApi.getDispatchConfig ? sourcesApi.getDispatchConfig(registry, options) : {};
+  const fullScanLimits = dispatchConfig.fullRouteScan || {};
   const timeoutMs =
     options.timeoutMs ??
     (options.full
-      ? 45000
+      ? (dispatchConfig.fullScanTimeoutMs ?? fullScanLimits.timeoutMs)
       : requireConfiguredLimit(dispatchConfig.probeTimeoutMs, 'probeTimeoutMs'));
   const probePrompt =
     options.full || options.probePrompt === 'say ok' ? 'say ok' : options.probePrompt || 'ping';
   const maxTokens = options.full
-    ? (options.quotaScanMaxTokens ?? 5)
+    ? (options.quotaScanMaxTokens ?? dispatchConfig.fullScanMaxTokens ?? fullScanLimits.maxTokens)
     : requireConfiguredLimit(
         options.quotaScanMaxTokens ?? dispatchConfig.quotaScanMaxTokens,
         'quotaScanMaxTokens'
@@ -1067,52 +1068,15 @@ async function scanAllFullRoutes(options = {}) {
   const s2 = fs.existsSync(s2Path) ? JSON.parse(fs.readFileSync(s2Path, 'utf8')) : {};
   const oc = fs.existsSync(ocPath) ? JSON.parse(fs.readFileSync(ocPath, 'utf8')) : {};
 
-  const canonicalExternalSources = [
-    { id: 'poolside', endpoint: 'https://inference.poolside.ai/v1', env: 'POOLSIDE_API_KEY' },
-    { id: 'internlm', endpoint: 'https://chat.intern-ai.org.cn/api/v1', env: 'INTERNLM_API_KEY' },
-    {
-      id: 'iteracompute',
-      endpoint: 'https://api.iteracompute.com/v1',
-      env: 'ITERACOMPUTE_API_KEY',
-    },
-    { id: 'inception', endpoint: 'https://api.inceptionlabs.ai/v1', env: 'INCEPTION_API_KEY' },
-    { id: 'regolo', endpoint: 'https://api.regolo.ai/v1', env: 'REGOLO_API_KEY' },
-    { id: 'thegrid', endpoint: 'https://api.thegrid.ai/v1', env: 'THEGRID_API_KEY' },
-    { id: 'tokenharbor', endpoint: 'https://tokenharbor.ai/v1', env: 'TOKENHARBOR_API_KEY' },
-    {
-      id: 'tencent-tokenhub',
-      endpoint: 'https://tokenhub-intl.tencentcloudmaas.com/v1',
-      env: 'TENCENT_TOKENHUB_API_KEY',
-    },
-    { id: 'agentrouter', endpoint: 'https://agentrouter.org/v1', env: 'AGENTROUTER_API_KEY' },
-    { id: 'aihubmix', endpoint: 'https://aihubmix.com/v1', env: 'AIHUBMIX_API_KEY' },
-    { id: 'cohere', endpoint: 'https://api.cohere.ai/compatibility/v1', env: 'COHERE_API_KEY' },
-    { id: 'baseten', endpoint: 'https://inference.baseten.co/v1', env: 'BASETEN_API_KEY' },
-    {
-      id: 'amd-radeon',
-      endpoint: 'https://developer.amd.com.cn/radeon/api/v1',
-      env: 'AMD_RADEON_API_KEY',
-    },
-    { id: 'dahl', endpoint: 'https://inference.dahl.global/v1', env: 'DAHL_API_KEY' },
-    { id: 'pgsgrove', endpoint: 'https://api.pgsgrove.com/v1', env: 'PGSGROVE_API_KEY' },
-    {
-      id: 'scaleway',
-      endpoint: 'https://api.scaleway.ai/288bd67e-0973-43a5-b8e1-87b5d5a57110/v1',
-      env: 'SCALEWAY_API_KEY',
-    },
-    { id: 'xkiro', endpoint: 'https://api.xkiro.com/v1', env: 'XKIRO_API_KEY' },
-    { id: 'explabs', endpoint: 'https://api.experientiallabs.ai/v1', env: 'XPL_API_KEY' },
-    { id: 'llmtr', endpoint: 'https://llmtr.com/v1', env: 'LLMTR_API_KEY' },
-    { id: 'requesty', endpoint: 'https://router.requesty.ai/v1', env: 'REQUESTY_API_KEY' },
-    { id: 'sovinfra', endpoint: 'https://api.sovinfra.ai/v1', env: 'SOVINFRA_API_KEY' },
-    { id: 'llm7-free', endpoint: 'https://api.llm7.io/v1', env: 'LLM7_FREE_TOKEN' },
-    { id: 'bai1', endpoint: 'https://api.b.ai/v1', env: 'BAI_API_KEY' },
-    { id: 'bai2', endpoint: 'https://api.b.ai/v1', env: 'BAI_API_KEY_2' },
-    { id: 'bai3', endpoint: 'https://api.b.ai/v1', env: 'BAI_API_KEY_3' },
-    { id: 'bai4', endpoint: 'https://api.b.ai/v1', env: 'BAI_API_KEY_4' },
-    { id: 'bai5', endpoint: 'https://api.b.ai/v1', env: 'BAI_API_KEY_5' },
-    { id: 'bai6', endpoint: 'https://api.b.ai/v1', env: 'BAI_API_KEY_6' },
-    { id: 'bai7', endpoint: 'https://api.b.ai/v1', env: 'BAI_API_KEY_7' },
+  const registry = options.registry || sourcesApi.loadSources?.(options.sourceOpts);
+  const dispatchConfig =
+    registry && sourcesApi.getDispatchConfig ? sourcesApi.getDispatchConfig(registry, options) : {};
+  const fullScanLimits = dispatchConfig.fullRouteScan || {};
+
+  const allRegSources = [
+    ...(Array.isArray(registry?.sources) ? registry.sources : []),
+    ...(Array.isArray(s1?.sources) ? s1.sources : []),
+    ...(Array.isArray(s2?.sources) ? s2.sources : []),
   ];
 
   const allItems = [];
@@ -1137,10 +1101,14 @@ async function scanAllFullRoutes(options = {}) {
     return sourceStats.get(sourceId);
   }
 
+  const concurrency =
+    options.concurrency || dispatchConfig.fullScanConcurrency || fullScanLimits.concurrency;
+
   const semaphores = new Map();
   function getSemaphore(sourceId) {
     if (!semaphores.has(sourceId)) {
-      const maxConcurrent = sourceId === '9router' ? 2 : options.concurrency || 8;
+      const maxConcurrent =
+        sourceId === '9router' ? fullScanLimits.nineRouterConcurrency : concurrency;
       let active = 0;
       const waitQueue = [];
       semaphores.set(sourceId, {
@@ -1294,7 +1262,7 @@ async function scanAllFullRoutes(options = {}) {
       try {
         const res = await fetchFn('http://127.0.0.1:20128/v1/models', {
           headers: nrKey ? { authorization: 'Bearer ' + nrKey } : {},
-          signal: AbortSignal.timeout(10000),
+          signal: AbortSignal.timeout(fullScanLimits.nineRouterModelsTimeoutMs),
         });
         if (res.ok) {
           const d = await res.json();
@@ -1325,7 +1293,7 @@ async function scanAllFullRoutes(options = {}) {
       try {
         const res = await fetchFn('http://127.0.0.1:20140/v1/models', {
           headers: gwKey ? { authorization: 'Bearer ' + gwKey } : {},
-          signal: AbortSignal.timeout(5000),
+          signal: AbortSignal.timeout(fullScanLimits.gatewayModelsTimeoutMs),
         });
         if (res.ok) {
           const d = await res.json();
@@ -1353,28 +1321,62 @@ async function scanAllFullRoutes(options = {}) {
       }
     }
 
-    // 3. External sources
-    for (const src of canonicalExternalSources) {
-      if (options.source && options.source !== src.id) continue;
+    // 3. External sources enumerated from registry
+    const externalSources = [];
+    const knownSourceIds = new Set();
+
+    for (const src of allRegSources) {
+      if (!src || !src.id || knownSourceIds.has(src.id)) continue;
+      knownSourceIds.add(src.id);
+      if (src.id === '9router' || src.id === 'agy-gateway' || src.id === 'agy-pool') continue;
+      if (
+        src.servesModels === false ||
+        src.disposition === 'retired' ||
+        src.disposition === 'deferred'
+      )
+        continue;
+      if (!src.endpoint) continue;
+
+      const envName = src.credential?.env || src.apiKeyEnv;
+      if (src.credential?.keyDirs && Array.isArray(src.credential.keyDirs)) {
+        for (let i = 0; i < src.credential.keyDirs.length; i++) {
+          const kd = src.credential.keyDirs[i];
+          const envSuffix = i === 0 ? envName : `${envName}_${i + 1}`;
+          externalSources.push({
+            id: kd,
+            sourceId: src.id,
+            endpoint: src.endpoint,
+            env: envSuffix,
+          });
+        }
+      } else {
+        externalSources.push({
+          id: src.id,
+          sourceId: src.id,
+          endpoint: src.endpoint,
+          env: envName,
+        });
+      }
+    }
+
+    for (const src of externalSources) {
+      if (options.source && options.source !== src.id && options.source !== src.sourceId) continue;
       const stats = initStats(src.id);
       const modelSet = new Set();
-      for (const entry of s1.sources || []) {
-        if (entry.id === src.id || entry.credential?.env === src.env) {
+      for (const entry of allRegSources) {
+        if (entry.id === src.id || entry.id === src.sourceId || entry.credential?.env === src.env) {
           for (const m of entry.models || []) modelSet.add(m);
-        }
-      }
-      for (const entry of s2.sources || []) {
-        if (
-          entry.id === src.id ||
-          entry.opencodeProvider === src.id ||
-          entry.credential?.name === src.env
-        ) {
-          for (const m of entry.models || []) modelSet.add(m);
+          if (entry.verify?.model) modelSet.add(entry.verify.model);
+          if (entry.modelMeta) {
+            for (const m of Object.keys(entry.modelMeta)) modelSet.add(m);
+          }
         }
       }
       const ocProv =
         oc.provider &&
-        (oc.provider[src.id] || (src.id.startsWith('bai') ? oc.provider[src.id] : null));
+        (oc.provider[src.id] ||
+          oc.provider[src.sourceId] ||
+          (src.id.startsWith('bai') ? oc.provider[src.id] : null));
       if (ocProv && ocProv.models) {
         for (const m of Object.keys(ocProv.models)) modelSet.add(m);
       }
@@ -1383,7 +1385,7 @@ async function scanAllFullRoutes(options = {}) {
         try {
           const res = await fetchFn(src.endpoint.replace(/\/+$/, '') + '/models', {
             headers: { authorization: 'Bearer ' + key },
-            signal: AbortSignal.timeout(4000),
+            signal: AbortSignal.timeout(fullScanLimits.externalModelsTimeoutMs),
           });
           if (res.ok) {
             const d = await res.json();
@@ -1408,7 +1410,7 @@ async function scanAllFullRoutes(options = {}) {
       }
     }
 
-    // 4. agy-pool accounts (agy01-10)
+    // 4. agy-pool accounts
     if (!options.source || options.source === 'agy-pool') {
       const poolStats = initStats('agy-pool');
       let poolRt = null;
@@ -1416,21 +1418,13 @@ async function scanAllFullRoutes(options = {}) {
         poolRt = require('./agy-pool-runtime');
       } catch {}
       const poolModels = poolRt && poolRt.discoverPoolModels ? poolRt.discoverPoolModels() : [];
+      const poolSource = allRegSources.find((s) => s.id === 'agy-pool');
       const poolAccounts =
         poolRt && poolRt.discoverAccounts
           ? poolRt.discoverAccounts()
-          : [
-              'agy01',
-              'agy02',
-              'agy03',
-              'agy04',
-              'agy05',
-              'agy06',
-              'agy07',
-              'agy08',
-              'agy09',
-              'agy10',
-            ];
+          : poolSource && Array.isArray(poolSource.accounts)
+            ? poolSource.accounts
+            : [];
       for (const acc of poolAccounts) {
         for (const modelId of poolModels) {
           poolStats.listed++;
@@ -1446,10 +1440,8 @@ async function scanAllFullRoutes(options = {}) {
   }
 
   console.log(
-    `[FULL ROUTE SCAN] Beginning scan of ${allItems.length} callable routes across ${sourceStats.size} sources with concurrency 8...`
+    `[FULL ROUTE SCAN] Beginning scan of ${allItems.length} callable routes across ${sourceStats.size} sources with concurrency ${concurrency}...`
   );
-
-  const concurrency = options.concurrency || 8;
 
   async function processItem(item) {
     const sem = getSemaphore(item.sourceId);
@@ -1459,76 +1451,63 @@ async function scanAllFullRoutes(options = {}) {
       let result = null;
 
       if (item.type === 'pool') {
-        const isUnauthed = ['agy08', 'agy09', 'agy10'].includes(item.accountId);
-        if (isUnauthed) {
+        let poolRt = null;
+        try {
+          poolRt = require('./agy-pool-runtime');
+        } catch {}
+        const reading = poolRt ? poolRt.quotaReading(item.accountId) : null;
+        if (!reading || reading.available === false) {
+          const isAuth =
+            reading?.reason === 'AUTH_FAILED' ||
+            reading?.reason === 'AUTH_NEEDED' ||
+            reading?.reason === 'login-required';
           result = {
             at: itemAt,
             sourceId: item.sourceId,
             accountId: item.accountId,
             modelId: item.modelId,
-            httpStatus: 401,
-            reason: 'AUTH',
-            code: 'AUTH',
+            httpStatus: isAuth ? 401 : 500,
+            reason: isAuth ? 'AUTH' : 'ERROR',
+            code: isAuth ? 'AUTH' : 'ERROR',
             elapsedMs: 0,
             evidence: 'QUOTA_READING',
-            errorSnippet: 'AUTH_NEEDED: account not logged in',
+            errorSnippet: sanitizeErrorSnippet(
+              reading?.reason || 'pool account unavailable',
+              200,
+              options.env
+            ),
           };
         } else {
-          let poolRt = null;
-          try {
-            poolRt = require('./agy-pool-runtime');
-          } catch {}
-          const reading = poolRt ? poolRt.quotaReading(item.accountId) : null;
-          if (!reading || reading.available === false) {
+          const { familyOf } = require('./agy-quota');
+          const fam = familyOf(item.modelId);
+          const row = (reading.rows || []).find((r) => (fam ? r.family === fam : true));
+          const ok = row && row.remainingPercent > 0 && !row.disabled;
+          if (ok) {
             result = {
               at: itemAt,
               sourceId: item.sourceId,
               accountId: item.accountId,
               modelId: item.modelId,
-              httpStatus: 500,
-              reason: 'ERROR',
-              code: 'ERROR',
+              httpStatus: 200,
+              reason: 'OK',
+              code: 'OK',
               elapsedMs: 0,
               evidence: 'QUOTA_READING',
-              errorSnippet: sanitizeErrorSnippet(
-                reading?.reason || 'pool account unavailable',
-                200,
-                options.env
-              ),
+              errorSnippet: '',
             };
           } else {
-            const isGemini = item.modelId.startsWith('gemini');
-            const row = (reading.rows || []).find((r) =>
-              isGemini ? r.family?.includes('gemini') : !r.family?.includes('gemini')
-            );
-            const ok = row && row.remainingPercent > 0 && !row.disabled;
-            if (ok) {
-              result = {
-                at: itemAt,
-                sourceId: item.sourceId,
-                accountId: item.accountId,
-                modelId: item.modelId,
-                httpStatus: 200,
-                reason: 'OK',
-                code: 'OK',
-                elapsedMs: 0,
-                evidence: 'QUOTA_READING',
-                errorSnippet: '',
-              };
-            } else {
-              result = {
-                at: itemAt,
-                sourceId: item.sourceId,
-                accountId: item.accountId,
-                modelId: item.modelId,
-                httpStatus: 402,
-                reason: 'QUOTA',
-                code: 'QUOTA',
-                elapsedMs: 0,
-                evidence: 'QUOTA_READING',
-                errorSnippet: `${isGemini ? 'gemini' : row?.family || 'pool'} quota exhausted (${row?.remainingPercent ?? 0}%)`,
-              };
-            }
+            result = {
+              at: itemAt,
+              sourceId: item.sourceId,
+              accountId: item.accountId,
+              modelId: item.modelId,
+              httpStatus: 402,
+              reason: 'QUOTA',
+              code: 'QUOTA',
+              elapsedMs: 0,
+              evidence: 'QUOTA_READING',
+              errorSnippet: `${fam || row?.family || 'pool'} quota exhausted (${row?.remainingPercent ?? 0}%)`,
+            };
           }
         }
       } else {
@@ -1542,8 +1521,12 @@ async function scanAllFullRoutes(options = {}) {
         };
         const scopeRes = await scanScope(scopeTarget, {
           ...options,
-          timeoutMs: options.timeoutMs || 45000,
-          quotaScanMaxTokens: options.quotaScanMaxTokens || 5,
+          timeoutMs:
+            options.timeoutMs || dispatchConfig.fullScanTimeoutMs || fullScanLimits.timeoutMs,
+          quotaScanMaxTokens:
+            options.quotaScanMaxTokens ||
+            dispatchConfig.fullScanMaxTokens ||
+            fullScanLimits.maxTokens,
           full: true,
         });
         result = {

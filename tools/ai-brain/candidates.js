@@ -2344,31 +2344,14 @@ function poolAccountCandidates(opts) {
               : null);
       if (!family) continue;
 
-      const isLiveDefaultPool =
-        hasRunsDir &&
-        !o.fakeRunsDir &&
-        !o.runsDir &&
-        !o.models &&
-        !o.spawnSync &&
-        !o.agyBin &&
-        !o.bin;
-      if (isLiveDefaultPool) {
-        if (/^gemini-3(?:\.[1567]|-flash)|^gemini-pro-agent$|^gemini-3\.8-flash$/.test(model)) {
-          continue;
-        }
-      }
-
       // Keep exhausted routes in the candidate set so Controller can record
       // the quota rejection in the structured dispatch decision.
       let quotaExhausted = false;
       if (hasRunsDir && quotaReading && Array.isArray(quotaReading.rows)) {
-        const hasArgonBucket = quotaReading.rows.some((r) => r.family === 'argon');
-        if (isLiveDefaultPool && quotaReading.rows.length > 0) {
-          if (family === 'argon' && !hasArgonBucket) continue;
-          if (/^claude-(?:opus|sonnet)-5-5/.test(model) && !hasArgonBucket) continue;
-          if (/^claude-(?:opus|sonnet)-4-6/.test(model) && hasArgonBucket) continue;
-        }
         const familyRows = quotaReading.rows.filter((r) => r.family === family);
+        if (quotaReading.rows.length > 0 && familyRows.length === 0) {
+          continue;
+        }
         if (familyRows.length > 0) {
           const isZero = familyRows.some(
             (r) => r.remainingPercent === 0 || r.remainingPercent <= 0 || r.disabled === true
