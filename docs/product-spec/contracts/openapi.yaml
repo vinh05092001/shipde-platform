@@ -951,10 +951,21 @@ paths:
   /shops:
     get:
       tags: [Organization]
+      summary: List authorized shops (FEAT-ORG-01)
       operationId: listShops
+      security:
+        - bearerAuth: []
       responses:
         '200':
           description: Authorized shops
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListShopsResponse'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          $ref: '#/components/responses/Error'
     post:
       tags: [Organization]
       operationId: createShop
@@ -968,6 +979,104 @@ paths:
         '201':
           description: Created
         '400':
+          $ref: '#/components/responses/Error'
+  /shops/profile:
+    get:
+      tags: [Organization]
+      summary: Get current shop profile (FEAT-ORG-01)
+      description: Returns the legal, billing and operating defaults of the caller's authorized shop.
+      operationId: getShopProfile
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Current shop profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShopProfileResponse'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          $ref: '#/components/responses/Error'
+    patch:
+      tags: [Organization]
+      summary: Update current shop profile (FEAT-ORG-01)
+      description: Updates legal, billing and operating defaults. Requires iam:shop_config capability.
+      operationId: updateShopProfile
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateShopProfileInput'
+      responses:
+        '200':
+          description: Updated shop profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShopProfileResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          $ref: '#/components/responses/Error'
+  /shops/{id}:
+    get:
+      tags: [Organization]
+      summary: Get shop profile by ID (FEAT-ORG-01)
+      description: Returns the shop profile by ID with strict server-side tenant scoping.
+      operationId: getShopById
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Shop profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShopProfileResponse'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+    patch:
+      tags: [Organization]
+      summary: Update shop profile by ID (FEAT-ORG-01)
+      description: Updates shop profile by ID with strict server-side tenant scoping and permission enforcement.
+      operationId: updateShopById
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateShopProfileInput'
+      responses:
+        '200':
+          description: Updated shop profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShopProfileResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
           $ref: '#/components/responses/Error'
   /admin/shops:
     get:
@@ -1792,6 +1901,187 @@ components:
         timezone:
           type: string
           default: Asia/Ho_Chi_Minh
+    ShopProfile:
+      type: object
+      required:
+        - id
+        - name
+        - code
+        - status
+        - timezone
+        - currency
+        - default_fee_payer
+        - default_weight_unit
+        - auto_routing_enabled
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        code:
+          type: string
+        status:
+          type: string
+        legal_name:
+          type: string
+          nullable: true
+        tax_code:
+          type: string
+          nullable: true
+        contact_email:
+          type: string
+          nullable: true
+        contact_phone:
+          type: string
+          nullable: true
+        legal_address:
+          type: string
+          nullable: true
+        billing_email:
+          type: string
+          nullable: true
+        billing_address:
+          type: string
+          nullable: true
+        bank_name:
+          type: string
+          nullable: true
+        bank_account_number:
+          type: string
+          nullable: true
+        bank_account_name:
+          type: string
+          nullable: true
+        bank_branch:
+          type: string
+          nullable: true
+        timezone:
+          type: string
+          default: Asia/Ho_Chi_Minh
+        currency:
+          type: string
+          default: VND
+        default_fee_payer:
+          type: string
+          enum: [SHOP, RECIPIENT]
+          default: SHOP
+        default_weight_unit:
+          type: string
+          enum: [g, kg]
+          default: g
+        auto_routing_enabled:
+          type: boolean
+          default: false
+        operating_notes:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    UpdateShopProfileInput:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 255
+        legal_name:
+          type: string
+          maxLength: 255
+          nullable: true
+        tax_code:
+          type: string
+          maxLength: 32
+          nullable: true
+        contact_email:
+          type: string
+          maxLength: 255
+          nullable: true
+        contact_phone:
+          type: string
+          maxLength: 32
+          nullable: true
+        legal_address:
+          type: string
+          nullable: true
+        billing_email:
+          type: string
+          maxLength: 255
+          nullable: true
+        billing_address:
+          type: string
+          nullable: true
+        bank_name:
+          type: string
+          maxLength: 128
+          nullable: true
+        bank_account_number:
+          type: string
+          maxLength: 64
+          nullable: true
+        bank_account_name:
+          type: string
+          maxLength: 255
+          nullable: true
+        bank_branch:
+          type: string
+          maxLength: 255
+          nullable: true
+        timezone:
+          type: string
+        currency:
+          type: string
+        default_fee_payer:
+          type: string
+          enum: [SHOP, RECIPIENT]
+        default_weight_unit:
+          type: string
+          enum: [g, kg]
+        auto_routing_enabled:
+          type: boolean
+        operating_notes:
+          type: string
+          maxLength: 1000
+          nullable: true
+    ShopProfileResponse:
+      type: object
+      required:
+        - success
+        - data
+        - meta
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: '#/components/schemas/ShopProfile'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    ListShopsResponse:
+      type: object
+      required:
+        - success
+        - data
+        - meta
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          required:
+            - shops
+          properties:
+            shops:
+              type: array
+              items:
+                $ref: '#/components/schemas/ShopProfile'
+        meta:
+          $ref: '#/components/schemas/Meta'
     CarrierAccountInput:
       type: object
       required: [carrier_code, alias, permission_profile, credential]

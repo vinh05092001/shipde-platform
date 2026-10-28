@@ -469,5 +469,18 @@ export type AcceptInvitationRequest = components['schemas']['AcceptInvitationReq
 export type AcceptInvitationResponse = components['schemas']['AcceptInvitationResponse'];
 export type CheckScopeRequest = components['schemas']['CheckScopeRequest'];
 export type CheckScopeResponse = components['schemas']['CheckScopeResponse'];
+
+// --- Shop Profile Contracts (FEAT-ORG-01) ---
+export const ShopAuditEvent = {
+  SHOP_PROFILE_UPDATED: 'SHOP_PROFILE_UPDATED',
+} as const;
+
+export type ShopAuditEvent = (typeof ShopAuditEvent)[keyof typeof ShopAuditEvent];
+
+export type ShopProfile = components['schemas']['ShopProfile'];
+export type UpdateShopProfileInput = components['schemas']['UpdateShopProfileInput'];
+export type ShopProfileResponse = components['schemas']['ShopProfileResponse'];
+export type ListShopsResponse = components['schemas']['ListShopsResponse'];
+
 // --- Generated OpenAPI Schema Types ---
 export type * from './openapi';
