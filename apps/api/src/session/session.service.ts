@@ -377,6 +377,7 @@ export class SessionService implements OnApplicationBootstrap {
 
   /**
    * Revoke all sessions for a specific target user in the tenant (FEAT-AUTH-05 Admin MFA Reset).
+   * Ensures atomic revocation and audit log creation inside a Prisma transaction (BR-SESS-07).
    */
   async revokeTargetUserSessions(
     targetUserId: string,
@@ -387,49 +388,65 @@ export class SessionService implements OnApplicationBootstrap {
     ipAddress?: string,
     tx?: any
   ): Promise<number> {
-    const client = tx || this.prisma;
-    const activeSessions = await client.deviceSession.findMany({
-      where: {
-        merchant_id: merchantId,
-        user_id: targetUserId,
-        status: SessionStatusEnum.ACTIVE,
-      },
-    });
+    const executeInTransaction = async (prismaTx: any) => {
+      const activeSessions = await prismaTx.deviceSession.findMany({
+        where: {
+          merchant_id: merchantId,
+          user_id: targetUserId,
+          status: SessionStatusEnum.ACTIVE,
+        },
+      });
 
-    if (activeSessions.length === 0) {
-      return 0;
+      if (activeSessions.length === 0) {
+        return { count: 0, emitLog: null };
+      }
+
+      const now = new Date();
+      await prismaTx.deviceSession.updateMany({
+        where: { id: { in: activeSessions.map((s: any) => s.id) } },
+        data: {
+          status: SessionStatusEnum.REVOKED,
+          is_revoked: true,
+          revoked_at: now,
+          revoked_by: actorUserId,
+          revoke_reason: reason,
+        },
+      });
+
+      const emitLog = await this.logAudit(
+        {
+          merchantId,
+          userId: targetUserId,
+          actor: actorUserId,
+          action: 'SESSIONS_REVOKED_ALL',
+          resource: `User:${targetUserId}`,
+          details: { revoked_count: activeSessions.length, reason },
+          correlationId,
+          ipAddress,
+        },
+        prismaTx
+      );
+
+      return { count: activeSessions.length, emitLog };
+    };
+
+    if (tx) {
+      const result = await executeInTransaction(tx);
+      return result.count;
     }
 
-    const now = new Date();
-    await client.deviceSession.updateMany({
-      where: { id: { in: activeSessions.map((s: any) => s.id) } },
-      data: {
-        status: SessionStatusEnum.REVOKED,
-        is_revoked: true,
-        revoked_at: now,
-        revoked_by: actorUserId,
-        revoke_reason: reason,
-      },
+    let auditAction: (() => void) | null = null;
+    const count = await this.prisma.$transaction(async (prismaTx) => {
+      const result = await executeInTransaction(prismaTx);
+      auditAction = result.emitLog;
+      return result.count;
     });
 
-    const auditAction = await this.logAudit(
-      {
-        merchantId,
-        userId: targetUserId,
-        actor: actorUserId,
-        action: 'SESSIONS_REVOKED_ALL',
-        resource: `User:${targetUserId}`,
-        details: { revoked_count: activeSessions.length, reason },
-        correlationId,
-        ipAddress,
-      },
-      client
-    );
-    if (!tx && typeof auditAction === 'function') {
-      auditAction();
+    if (typeof auditAction === 'function') {
+      (auditAction as () => void)();
     }
 
-    return activeSessions.length;
+    return count;
   }
   async heartbeat(
     sessionId: string,

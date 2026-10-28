@@ -690,8 +690,8 @@ describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
     });
   });
 
-  describe('Finding 3: Single audit log emission on non-transactional revocation path', () => {
-    it('emits structured audit log exactly once in revokeTargetUserSessions without transaction', async () => {
+  describe('Finding 3 & F-01: Transactional audit logging for revokeTargetUserSessions (BR-SESS-07)', () => {
+    it('executes inside Prisma transaction and emits structured audit log exactly once after commit', async () => {
       const logs: string[] = [];
       const origConsoleLog = console.log;
       console.log = (...args: any[]) => {
@@ -700,7 +700,12 @@ describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
       };
 
       try {
+        let transactionExecuted = false;
         const mockPrisma: any = {
+          $transaction: async (fn: any) => {
+            transactionExecuted = true;
+            return fn(mockPrisma);
+          },
           deviceSession: {
             findMany: async () => [{ id: 'sess-target-1', status: SessionStatusEnum.ACTIVE }],
             updateMany: async () => ({ count: 1 }),
@@ -719,15 +724,61 @@ describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
         );
 
         assert.strictEqual(count, 1);
+        assert.strictEqual(
+          transactionExecuted,
+          true,
+          'revokeTargetUserSessions must execute inside Prisma transaction'
+        );
         const auditLogs = logs.filter((l) => l.includes('AUDIT: SESSIONS_REVOKED_ALL'));
         assert.strictEqual(
           auditLogs.length,
           1,
-          'Audit log must be emitted exactly once on non-transactional path (no double emission)'
+          'Audit log must be emitted exactly once after transaction commit'
         );
       } finally {
         console.log = origConsoleLog;
       }
+    });
+
+    it('rolls back and propagates error if audit logging fails during revokeTargetUserSessions', async () => {
+      let rolledBack = false;
+      const mockPrisma: any = {
+        $transaction: async (fn: any) => {
+          try {
+            return await fn(mockPrisma);
+          } catch (err) {
+            rolledBack = true;
+            throw err;
+          }
+        },
+        deviceSession: {
+          findMany: async () => [{ id: 'sess-target-1', status: SessionStatusEnum.ACTIVE }],
+          updateMany: async () => ({ count: 1 }),
+        },
+        auditLog: {
+          create: async () => {
+            throw new Error('Audit service unavailable');
+          },
+        },
+      };
+
+      const service = new SessionService(mockPrisma);
+      await assert.rejects(
+        async () =>
+          service.revokeTargetUserSessions(
+            'user-target-1',
+            'merchant-1',
+            'actor-1',
+            'Admin reset',
+            'corr-fail'
+          ),
+        /Audit service unavailable/
+      );
+      assert.strictEqual(
+        rolledBack,
+        true,
+        'Transaction must roll back when audit logging fails in revokeTargetUserSessions'
+      );
     });
   });
 
