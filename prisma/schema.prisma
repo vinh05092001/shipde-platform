@@ -108,6 +108,13 @@ enum SessionStatusEnum {
   INACTIVE
 }
 
+enum InvitationStatusEnum {
+  PENDING
+  ACCEPTED
+  EXPIRED
+  CANCELLED
+}
+
 // ----------------------------------------------------------------------------
 // 1. IAM & Multi-tenant Organization
 // ----------------------------------------------------------------------------
@@ -135,6 +142,7 @@ model Merchant {
   mfa_factors       MfaFactor[]
   mfa_challenges    MfaChallenge[]
   mfa_admin_reset_idempotency MfaAdminResetIdempotency[]
+  invitations       Invitation[]
 
   @@map("merchants")
 }
@@ -165,6 +173,7 @@ model User {
   password_reset_tokens PasswordResetToken[]
   mfa_factors           MfaFactor[]
   mfa_challenges        MfaChallenge[]
+  invitations_sent      Invitation[]          @relation("InvitationsSent")
 
   @@index([merchant_id, role])
   @@map("users")
@@ -206,6 +215,37 @@ model PasswordResetToken {
   @@index([user_id])
   @@index([identifier, channel])
   @@map("password_reset_tokens")
+}
+
+model Invitation {
+  id                 String               @id @default(uuid()) @db.Uuid
+  merchant_id        String               @db.Uuid
+  email              String?              @db.VarChar(255)
+  phone              String?              @db.VarChar(32)
+  role               RoleEnum
+  store_scopes       String[]             @default([])
+  warehouse_scopes   String[]             @default([])
+  token_hash         String               @unique @db.VarChar(255)
+  status             InvitationStatusEnum @default(PENDING)
+  invited_by_user_id String?              @db.Uuid
+  expires_at         DateTime             @db.Timestamptz
+  consumed_at        DateTime?            @db.Timestamptz
+  created_at         DateTime             @default(now()) @db.Timestamptz
+  updated_at         DateTime             @updatedAt @db.Timestamptz
+
+  merchant           Merchant             @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
+  invited_by         User?                @relation("InvitationsSent", fields: [invited_by_user_id], references: [id], onDelete: SetNull)
+
+  // Authoritative schema & migration path (Round 6 Finding 8 / BR-INV-08) (Round 10 Finding 1):
+  // Partial unique indexes "invitations_merchant_pending_email_unique" and
+  // "invitations_merchant_pending_phone_unique" (WHERE status = 'PENDING' AND email/phone IS NOT NULL)
+  // are created exclusively via PostgreSQL migration DDL in prisma/migrations/...
+  // They are strictly omitted from schema.prisma because Prisma does not support partial indexes;
+  // declaring non-unique @@index with these names would drop the partial unique constraints.
+  // Guarded against drift by migration-guard.ts and CI validation.
+  @@index([merchant_id, status])
+  @@index([expires_at])
+  @@map("invitations")
 }
 
 model DeviceSession {

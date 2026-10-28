@@ -3,9 +3,17 @@ import { PrismaService } from '../prisma/prisma.service';
 import { SessionService } from '../session/session.service';
 import { CanonicalApiException } from '../auth/auth.service';
 import { RoleEnum } from '@prisma/client';
+import { isActiveStatus } from '@shipde/contracts';
+
+export { isActiveStatus };
 
 export interface AdminResetMfaDto {
   reason: string;
+}
+
+export interface CheckScopeDto {
+  store_id?: string;
+  warehouse_id?: string;
 }
 
 @Injectable()
@@ -264,5 +272,110 @@ export class UsersService {
       'IDEMPOTENCY_CONFLICT',
       'Khóa Idempotency-Key đã được sử dụng cho một yêu cầu khác'
     );
+  }
+
+  /**
+   * Scope authorization enforcement (AC-USR-01, AC-USR-01-17, BR-RBAC)
+   * Validates if the authenticated user has access to a specific warehouse or store scope.
+   */
+  async checkScopeAccess(
+    userId: string,
+    merchantId: string,
+    requestedScope: CheckScopeDto,
+    correlationId: string
+  ) {
+    const user = await this.prisma.user.findFirst({
+      where: { id: userId, merchant_id: merchantId },
+    });
+
+    if (!user) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Người dùng không tồn tại hoặc không thuộc cửa hàng này',
+        false
+      );
+    }
+
+    if (!isActiveStatus(user.status)) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Tài khoản người dùng chưa kích hoạt hoặc đã bị khóa',
+        false
+      );
+    }
+
+    // Validate at least one scope target is requested (Finding 6 / AC-USR-01-17)
+    if (!requestedScope.warehouse_id && !requestedScope.store_id) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Yêu cầu phải chỉ định ít nhất store_id hoặc warehouse_id để kiểm tra phạm vi quyền hạn',
+        false
+      );
+    }
+
+    // Robustness: default null/undefined scopes to empty array for legacy/external users (Finding 3 / AC-USR-01-17 / SECURITY-NFR)
+    const userWarehouseScopes = user.warehouse_scopes || [];
+    const userStoreScopes = user.store_scopes || [];
+
+    // Owner role has full access across all stores and warehouses
+    if (user.role === RoleEnum.OWNER) {
+      return {
+        data: {
+          authorized: true,
+          user_id: user.id,
+          role: user.role,
+          store_scopes: userStoreScopes,
+          warehouse_scopes: userWarehouseScopes,
+        },
+        meta: {
+          correlation_id: correlationId,
+        },
+      };
+    }
+
+    // Warehouse scope enforcement (* or explicit membership)
+    if (requestedScope.warehouse_id) {
+      const allowed =
+        userWarehouseScopes.includes('*') ||
+        userWarehouseScopes.includes(requestedScope.warehouse_id);
+      if (!allowed) {
+        throw new CanonicalApiException(
+          HttpStatus.FORBIDDEN,
+          'FORBIDDEN',
+          'Người dùng không có quyền truy cập kho hàng được yêu cầu',
+          false
+        );
+      }
+    }
+
+    // Store scope enforcement (* or explicit membership)
+    if (requestedScope.store_id) {
+      const allowed =
+        userStoreScopes.includes('*') || userStoreScopes.includes(requestedScope.store_id);
+      if (!allowed) {
+        throw new CanonicalApiException(
+          HttpStatus.FORBIDDEN,
+          'FORBIDDEN',
+          'Người dùng không có quyền truy cập chi nhánh cửa hàng được yêu cầu',
+          false
+        );
+      }
+    }
+
+    return {
+      data: {
+        authorized: true,
+        user_id: user.id,
+        role: user.role,
+        store_scopes: userStoreScopes,
+        warehouse_scopes: userWarehouseScopes,
+      },
+      meta: {
+        correlation_id: correlationId,
+      },
+    };
   }
 }
