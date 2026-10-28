@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
+import Link from 'next/link';
 import {
   UserCheck,
   UserPlus,
@@ -31,6 +32,7 @@ import {
   Clock,
   Warehouse,
 } from 'lucide-react';
+import { RoleItem } from '@shipde/contracts';
 import { useAuth } from '@/context/AuthContext';
 import { InviteUserModal } from './forms/InviteUserModal';
 
@@ -327,79 +329,97 @@ export const UserManagementTab: React.FC = () => {
     },
   ]);
 
-  // RBAC Granular Matrix State
-  const [permissionsMatrix, setPermissionsMatrix] = useState([
+  // Live dynamic RBAC Roles state from GET /api/v1/roles (Finding 10 / SCR-USR-01)
+  const [liveRoles, setLiveRoles] = useState<RoleItem[]>([]);
+  const [matrixLoading, setMatrixLoading] = useState<boolean>(false);
+  const [matrixError, setMatrixError] = useState<string | null>(null);
+
+  // RBAC Granular Matrix State with Canonical Permission Codes (Finding 4 / Round 7 / BR-RBAC-06 / SCR-USR-01)
+  const [permissionsMatrix] = useState([
     {
       id: 'p_pii',
-      feature: 'Xem & Mở che số điện thoại khách hàng (PII)',
-      rule: 'BR-42 · Ghi nhật ký Audit Trail',
-      owner: true,
-      manager: true,
-      cskh: true,
-      accountant: false,
-      warehouse: false,
+      code: 'pii:unmask',
+      name: 'Mở che thông tin khách hàng (PII)',
+      feature: 'Mở che thông tin khách hàng (PII)',
+      rule: 'BR-42 · Ghi nhật ký Audit Trail bất biến khi xem SĐT/địa chỉ',
     },
     {
       id: 'p_reattempt',
-      feature: 'Gửi lệnh cứu đơn & yêu cầu giao lại qua Open API',
-      rule: 'CN-10 · L2 Execute / L1 Assist',
-      owner: true,
-      manager: true,
-      cskh: true,
-      accountant: false,
-      warehouse: false,
+      code: 'shipment:cancel_redeliver',
+      name: 'Hủy đơn và yêu cầu giao lại',
+      feature: 'Hủy đơn và yêu cầu giao lại (Cứu đơn)',
+      rule: 'CN-10 · L2 Execute / L1 Assist cứu đơn & giao lại',
     },
     {
       id: 'p_discrepancy',
-      feature: 'Duyệt xử lý sai lệch đối soát (Maker-Checker)',
-      rule: 'BR-12 · Tách quyền tài chính cấp bản ghi',
-      owner: true,
-      manager: false,
-      cskh: false, // Strictly false for CSKH (Maker-Checker invariant)
-      accountant: true,
-      warehouse: false,
+      code: 'reconciliation:approve_rate_policy',
+      name: 'Phê duyệt chính sách đối soát',
+      feature: 'Phê duyệt chính sách đối soát',
+      rule: 'BR-12 · Tách quyền SoD Maker-Checker (Checker phê duyệt chính sách)',
     },
     {
       id: 'p_close_period',
-      feature: 'Khóa sổ kỳ đối soát COD & Cước',
-      rule: 'BR-11 · Bất biến không sửa đổi sau khi chốt',
-      owner: true,
-      manager: false,
-      cskh: false,
-      accountant: true,
-      warehouse: false,
+      code: 'reconciliation:run_review_audit',
+      name: 'Chạy và đối chiếu kiểm toán',
+      feature: 'Chạy và đối chiếu kiểm toán',
+      rule: 'BR-11 / D1-D7 · Kích hoạt khớp 6 quy tắc và rà soát sai lệch cước/COD',
     },
     {
       id: 'p_return_scan',
-      feature: 'Quét nhận hàng hoàn kho ngoại tuyến SQLite',
-      rule: 'BR-40 / BR-36 · Khử trùng lặp lũy đẳng',
-      owner: true,
-      manager: true,
-      cskh: false,
-      accountant: false,
-      warehouse: true,
+      code: 'shipment:receive_return',
+      name: 'Nhận hàng hoàn và quét bằng chứng',
+      feature: 'Nhận hàng hoàn và quét bằng chứng',
+      rule: 'BR-40 / BR-36 · Quét hoàn ngoại tuyến SQLite & đối soát kiện trả',
     },
     {
       id: 'p_api_config',
-      feature: 'Khai báo API Hãng, Webhook Key & Biểu giá',
-      rule: 'BR-51 · Quyền quản trị kết nối cấp Shop',
-      owner: true,
-      manager: false,
-      cskh: false,
-      accountant: false,
-      warehouse: false,
+      code: 'iam:shop_config',
+      name: 'Cấu hình cửa hàng',
+      feature: 'Cấu hình cửa hàng',
+      rule: 'BR-51 · Quyền quản trị kết nối Shop và biểu phí',
     },
     {
       id: 'p_export_ledgers',
-      feature: 'Xuất dữ liệu Ba Sổ Giá Trị & File Báo Cáo',
-      rule: 'BR-45 · Quyền truy xuất số liệu kế toán',
-      owner: true,
-      manager: true,
-      cskh: false,
-      accountant: true,
-      warehouse: false,
+      code: 'reconciliation:allocate_bank_receipt',
+      name: 'Phân bổ dòng tiền thực nhận',
+      feature: 'Phân bổ dòng tiền thực nhận',
+      rule: 'BR-45 · Khớp số tiền ngân hàng thực nhận vào kỳ đối soát',
     },
   ]);
+
+  // Fetch live roles from GET /api/v1/roles (Finding 10)
+  const fetchLiveRoles = useCallback(async () => {
+    setMatrixLoading(true);
+    setMatrixError(null);
+    try {
+      const token = typeof window !== 'undefined' ? localStorage.getItem('shipde_token') : null;
+      const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      const res = await fetch(`${API_BASE}/api/v1/roles`, { headers });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => null);
+        throw new Error(errJson?.error?.message || 'Không thể tải danh sách vai trò từ máy chủ');
+      }
+      const json = await res.json();
+      if (json?.data?.roles) {
+        setLiveRoles(json.data.roles);
+      }
+    } catch (err: any) {
+      setMatrixError(err.message || 'Lỗi kết nối khi đồng bộ vai trò từ máy chủ');
+    } finally {
+      setMatrixLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeSubTab === 'matrix') {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- initial live roles fetch
+      void fetchLiveRoles();
+    }
+  }, [activeSubTab, fetchLiveRoles]);
 
   // Active Device Sessions
   const [deviceSessions, setDeviceSessions] = useState([
@@ -441,31 +461,6 @@ export const UserManagementTab: React.FC = () => {
       `[BR-08]: Đã thu hồi quyền truy cập của thiết bị [${userName}]. Mọi lệnh quét offline từ máy này sẽ bị từ chối với mã 401 device_revoked.`
     );
     setTimeout(() => setToastMessage(null), 5000);
-  };
-
-  const handleTogglePermission = (
-    featureId: string,
-    roleKey: 'owner' | 'manager' | 'cskh' | 'accountant' | 'warehouse'
-  ) => {
-    // Invariant check: CSKH cannot have p_discrepancy (Maker-Checker BR-12)
-    if (featureId === 'p_discrepancy' && roleKey === 'cskh') {
-      alert(
-        '[Bất biến Maker-Checker BR-12]: Nhân viên CSKH can thiệp đơn hàng KHÔNG ĐƯỢC PHÉP tự duyệt chênh lệch tài chính. Hệ thống chặn thay đổi quyền này.'
-      );
-      return;
-    }
-
-    setPermissionsMatrix((prev) =>
-      prev.map((item) => {
-        if (item.id === featureId) {
-          return { ...item, [roleKey]: !item[roleKey] };
-        }
-        return item;
-      })
-    );
-
-    setToastMessage('Đã cập nhật ma trận phân quyền RBAC thời gian thực.');
-    setTimeout(() => setToastMessage(null), 3000);
   };
 
   const handleSaveUserPermissions = (e: React.FormEvent) => {
@@ -1080,74 +1075,162 @@ export const UserManagementTab: React.FC = () => {
       {/* SUBTAB 3: RBAC MATRIX */}
       {activeSubTab === 'matrix' && (
         <div className="space-y-4">
-          <div className="modern-card p-4 bg-slate-50/70 border border-slate-200 text-xs space-y-2">
-            <div className="flex items-center gap-2 font-bold text-slate-900">
-              <ShieldAlert className="w-4 h-4 text-blue-600" />
-              <span>Bảo Vệ Tính Toàn Vẹn Quyền Hạn (Invariants Guard)</span>
+          <div className="modern-card p-4 bg-slate-50/70 border border-slate-200 text-xs flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2 font-bold text-slate-900">
+                <ShieldAlert className="w-4 h-4 text-blue-600" />
+                <span>Bảo Vệ Tính Toàn Vẹn Quyền Hạn (Invariants Guard)</span>
+              </div>
+              <p className="text-slate-600 text-[11px] leading-relaxed">
+                Hệ thống thực thi nguyên tắc phân chia trách nhiệm (Segregation of Duties). Quy tắc{' '}
+                <strong>Maker-Checker (BR-12)</strong> khóa cứng không cho phép vai trò CSKH tự
+                duyệt sai lệch đối soát tài chính nhằm phòng ngừa gian lận.
+              </p>
             </div>
-            <p className="text-slate-600 text-[11px] leading-relaxed">
-              Hệ thống thực thi nguyên tắc phân chia trách nhiệm (Segregation of Duties). Quy tắc{' '}
-              <strong>Maker-Checker (BR-12)</strong> khóa cứng không cho phép vai trò CSKH tự duyệt
-              sai lệch đối soát tài chính nhằm phòng ngừa gian lận.
-            </p>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void fetchLiveRoles()}
+                disabled={matrixLoading}
+                className="btn-secondary text-xs py-1.5 px-3 flex items-center gap-1.5 text-slate-700 bg-white border border-slate-300 hover:bg-slate-50"
+                title="Tải lại ma trận quyền từ API /roles"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${matrixLoading ? 'animate-spin' : ''}`} />
+                <span>Đồng bộ Live</span>
+              </button>
+              <Link
+                href="/settings/roles"
+                className="btn-secondary text-xs py-1.5 px-3 whitespace-nowrap flex items-center gap-1.5 font-semibold text-blue-600 hover:text-blue-700 bg-white border border-blue-200 shadow-sm"
+              >
+                <Sliders className="w-3.5 h-3.5" />
+                <span>Quản Lý Vai Trò Cửa Hàng →</span>
+              </Link>
+            </div>
           </div>
 
-          <div className="modern-card overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse text-xs">
-                <thead>
-                  <tr className="bg-slate-50/80 border-b border-slate-200 text-slate-600 font-bold uppercase text-[11px] tracking-wider">
-                    <th className="py-3 px-4 w-1/3">Tính Năng & Nghiệp Vụ</th>
-                    <th className="py-3 px-4">Quy Tắc Ràng Buộc</th>
-                    <th className="py-3 px-3 text-center">Chủ Shop</th>
-                    <th className="py-3 px-3 text-center">Quản Lý</th>
-                    <th className="py-3 px-3 text-center">CSKH</th>
-                    <th className="py-3 px-3 text-center">Kế Toán</th>
-                    <th className="py-3 px-3 text-center">Thủ Kho</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {permissionsMatrix.map((row) => (
-                    <tr key={row.id} className="hover:bg-slate-50/80 transition">
-                      <td className="py-3 px-4 font-semibold text-slate-900">{row.feature}</td>
-                      <td className="py-3 px-4 text-slate-500 font-mono text-[11px]">{row.rule}</td>
-                      {['owner', 'manager', 'cskh', 'accountant', 'warehouse'].map(
-                        (roleKey: any) => {
-                          const hasPerm = (row as any)[roleKey];
-                          const isCskhDiscrepancy =
-                            row.id === 'p_discrepancy' && roleKey === 'cskh';
-
+          {matrixLoading && liveRoles.length === 0 ? (
+            <div className="modern-card p-8 flex flex-col items-center justify-center gap-3 text-slate-500 text-xs">
+              <Loader2 className="w-5 h-5 animate-spin text-blue-600" />
+              <span className="font-medium">
+                Đang tải ma trận phân quyền từ máy chủ (GET /roles)...
+              </span>
+              <div className="w-full max-w-md space-y-2 pt-2 animate-pulse">
+                <div className="h-4 bg-slate-200 rounded w-3/4 mx-auto" />
+                <div className="h-4 bg-slate-100 rounded w-1/2 mx-auto" />
+              </div>
+            </div>
+          ) : matrixError && liveRoles.length === 0 ? (
+            <div className="modern-card p-6 bg-rose-50 border border-rose-200 text-rose-700 text-xs flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
+                <div>
+                  <p className="font-bold">Không thể tải dữ liệu phân quyền</p>
+                  <p className="text-[11px] text-rose-600">{matrixError}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => void fetchLiveRoles()}
+                className="btn-secondary text-xs py-1.5 px-3 bg-white border border-rose-300 text-rose-700 hover:bg-rose-100 font-semibold"
+              >
+                Thử lại
+              </button>
+            </div>
+          ) : liveRoles.length === 0 ? (
+            <div className="modern-card p-8 text-center text-slate-500 text-xs space-y-3">
+              <ShieldAlert className="w-8 h-8 text-slate-400 mx-auto" />
+              <p className="font-semibold text-slate-700">
+                Chưa có vai trò nào được cấu hình từ máy chủ
+              </p>
+              <button
+                type="button"
+                onClick={() => void fetchLiveRoles()}
+                className="btn-secondary text-xs py-1.5 px-3 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700"
+              >
+                Tải lại
+              </button>
+            </div>
+          ) : (
+            <div className="modern-card overflow-hidden">
+              <div className="p-3 bg-slate-50/50 border-b border-slate-200 flex items-center justify-between text-xs">
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold text-slate-700">
+                    Mô hình phân quyền hoạt động:
+                  </span>
+                  <span className="badge-ok text-[11px]">
+                    Live RBAC: {liveRoles.length} vai trò (
+                    {liveRoles.filter((r) => !r.is_system).length} tùy chỉnh)
+                  </span>
+                </div>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr className="bg-slate-50/80 border-b border-slate-200 text-slate-600 font-bold uppercase text-[11px] tracking-wider">
+                      <th className="py-3 px-4 w-1/3">Tính Năng & Nghiệp Vụ</th>
+                      <th className="py-3 px-4">Quy Tắc Ràng Buộc</th>
+                      {liveRoles.map((r) => (
+                        <th key={r.id} className="py-3 px-3 text-center whitespace-nowrap">
+                          <div className="flex flex-col items-center">
+                            <span className="font-bold text-slate-800">{r.name}</span>
+                            <span
+                              className={`text-[9px] font-medium px-1.5 py-0.2 rounded mt-0.5 ${
+                                r.is_system
+                                  ? 'bg-slate-100 text-slate-500'
+                                  : 'bg-blue-50 text-blue-600 border border-blue-200'
+                              }`}
+                            >
+                              {r.is_system ? 'Mặc định' : 'Tùy chỉnh'}
+                            </span>
+                          </div>
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {permissionsMatrix.map((row) => (
+                      <tr key={row.id} className="hover:bg-slate-50/80 transition">
+                        <td className="py-3 px-4">
+                          <div className="font-semibold text-slate-900">
+                            {row.name || row.feature}
+                          </div>
+                          <div className="text-[11px] font-mono text-blue-600 font-normal">
+                            {row.code}
+                          </div>
+                        </td>
+                        <td className="py-3 px-4 text-slate-500 font-mono text-[11px]">
+                          {row.rule}
+                        </td>
+                        {liveRoles.map((role) => {
+                          const hasPerm = (role.permissions || []).some(
+                            (p) => p.code === row.code || p.id === row.id
+                          );
                           return (
-                            <td key={roleKey} className="py-3 px-3 text-center">
-                              <button
-                                type="button"
-                                onClick={() => handleTogglePermission(row.id, roleKey)}
-                                disabled={isCskhDiscrepancy}
-                                className={`w-6 h-6 rounded-md inline-flex items-center justify-center transition cursor-pointer ${
-                                  isCskhDiscrepancy
-                                    ? 'bg-rose-50 text-rose-300 border border-rose-200 cursor-not-allowed'
-                                    : hasPerm
-                                      ? 'bg-emerald-100 text-emerald-800 border border-emerald-300 hover:bg-emerald-200'
-                                      : 'bg-slate-100 text-slate-400 border border-slate-200 hover:bg-slate-200'
+                            <td key={role.id} className="py-3 px-3 text-center">
+                              <span
+                                className={`w-6 h-6 mx-auto rounded-md inline-flex items-center justify-center ${
+                                  hasPerm
+                                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                    : 'bg-slate-100 text-slate-400 border border-slate-200'
                                 }`}
                                 title={
-                                  isCskhDiscrepancy
-                                    ? 'Bị khóa bởi quy tắc Maker-Checker BR-12'
-                                    : 'Bấm để đổi quyền'
+                                  hasPerm
+                                    ? `Được cấp quyền: ${role.name}`
+                                    : `Không có quyền: ${role.name}`
                                 }
                               >
                                 {hasPerm ? <Check className="w-3.5 h-3.5 stroke-[3]" /> : '✕'}
-                              </button>
+                              </span>
                             </td>
                           );
-                        }
-                      )}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
-          </div>
+          )}
         </div>
       )}
 
@@ -1435,3 +1518,24 @@ export const UserManagementTab: React.FC = () => {
     </div>
   );
 };
+
+export function resolveMatrixForLiveRoles(
+  liveRoles: RoleItem[],
+  matrixRows: Array<{ id: string; code: string; feature: string; name?: string }>
+) {
+  return matrixRows.map((row) => {
+    const rolePermissions: Record<string, boolean> = {};
+    for (const role of liveRoles) {
+      rolePermissions[role.id] = (role.permissions || []).some(
+        (p) => p.code === row.code || p.id === row.id
+      );
+    }
+    return {
+      id: row.id,
+      code: row.code,
+      name: row.name || row.feature,
+      feature: row.feature,
+      roles: rolePermissions,
+    };
+  });
+}

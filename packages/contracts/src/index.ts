@@ -370,6 +370,62 @@ export const MfaAuditEvent = {
 
 export type MfaAuditEvent = (typeof MfaAuditEvent)[keyof typeof MfaAuditEvent];
 
+// --- Roles & Permissions (RBAC) Contracts (FEAT-RBAC-01) ---
+export const CanonicalPermissionCode = {
+  IAM_SHOP_CONFIG: 'iam:shop_config',
+  IAM_MANAGE_USERS: 'iam:manage_users',
+  IAM_CONNECT_OBSERVE_TOKEN: 'iam:connect_observe_token',
+  IAM_GRANT_ACTION_PERMISSION: 'iam:grant_action_permission',
+  ORDER_VIEW_CREATE: 'order:view_create',
+  SHIPMENT_QUOTE_CARRIER: 'shipment:quote_carrier',
+  SHIPMENT_CREATE_UPDATE: 'shipment:create_update',
+  SHIPMENT_CANCEL_REDELIVER: 'shipment:cancel_redeliver',
+  SHIPMENT_PRINT_HANDOVER: 'shipment:print_handover',
+  SHIPMENT_TRACK_EXCEPTIONS: 'shipment:track_exceptions',
+  SHIPMENT_RECEIVE_RETURN: 'shipment:receive_return',
+  RECONCILIATION_VIEW_CONTRACT_RATES: 'reconciliation:view_contract_rates',
+  RECONCILIATION_AUTHOR_RATE_POLICY: 'reconciliation:author_rate_policy',
+  RECONCILIATION_APPROVE_RATE_POLICY: 'reconciliation:approve_rate_policy',
+  RECONCILIATION_IMPORT_SETTLEMENT_BANK: 'reconciliation:import_settlement_bank',
+  RECONCILIATION_RUN_REVIEW_AUDIT: 'reconciliation:run_review_audit',
+  RECONCILIATION_ALLOCATE_BANK_RECEIPT: 'reconciliation:allocate_bank_receipt',
+  CLAIM_VERIFY_SUBMIT: 'claim:verify_submit',
+  PII_UNMASK: 'pii:unmask',
+  AUDIT_VIEW: 'audit:view',
+} as const;
+
+export type CanonicalPermissionCode =
+  (typeof CanonicalPermissionCode)[keyof typeof CanonicalPermissionCode];
+
+export const RbacErrorCode = {
+  SYSTEM_ROLE_IMMUTABLE: 'SYSTEM_ROLE_IMMUTABLE',
+  PRIVILEGE_ESCALATION_DENIED: 'PRIVILEGE_ESCALATION_DENIED',
+  ROLE_IN_USE: 'ROLE_IN_USE',
+  ROLE_NAME_EXISTS: 'ROLE_NAME_EXISTS',
+  ROLE_NOT_FOUND: 'ROLE_NOT_FOUND',
+  VALIDATION_ERROR: 'VALIDATION_ERROR',
+  FORBIDDEN: 'FORBIDDEN',
+} as const;
+
+export type RbacErrorCode = (typeof RbacErrorCode)[keyof typeof RbacErrorCode];
+
+export const RbacAuditEvent = {
+  ROLE_CREATED: 'ROLE_CREATED',
+  ROLE_UPDATED: 'ROLE_UPDATED',
+  ROLE_DELETED: 'ROLE_DELETED',
+} as const;
+
+export type RbacAuditEvent = (typeof RbacAuditEvent)[keyof typeof RbacAuditEvent];
+
+export type PermissionItem = components['schemas']['PermissionItem'];
+export type PermissionsResponse = components['schemas']['PermissionsResponse'];
+export type RoleItem = components['schemas']['RoleItem'];
+export type RolesResponse = components['schemas']['RolesResponse'];
+export type RoleDetailResponse = components['schemas']['RoleDetailResponse'];
+export type CreateRoleRequest = components['schemas']['CreateRoleRequest'];
+export type UpdateRoleRequest = components['schemas']['UpdateRoleRequest'];
+export type DeleteRoleResponse = components['schemas']['DeleteRoleResponse'];
+
 // --- User Invitations Contracts (FEAT-USR-01) ---
 export const InvitationStatus = {
   PENDING: 'PENDING',
@@ -413,6 +469,5 @@ export type AcceptInvitationRequest = components['schemas']['AcceptInvitationReq
 export type AcceptInvitationResponse = components['schemas']['AcceptInvitationResponse'];
 export type CheckScopeRequest = components['schemas']['CheckScopeRequest'];
 export type CheckScopeResponse = components['schemas']['CheckScopeResponse'];
-
 // --- Generated OpenAPI Schema Types ---
 export type * from './openapi';

@@ -9,6 +9,80 @@ import { RedisService } from './redis/redis.service';
 import { StorageService } from './storage/storage.service';
 import { APP_CONFIG } from './config.token';
 
+function createMockPrismaForHarness(readiness: 'up' | 'down' = 'up') {
+  const permissions: any[] = [];
+  const roles: any[] = [];
+  const rolePermissions: any[] = [];
+  const auditLogs: any[] = [];
+
+  const tx = {
+    permission: {
+      upsert: async ({ where, create, update }: any) => {
+        let p = permissions.find((x) => x.code === where?.code);
+        if (!p) {
+          p = { id: create?.id, ...create };
+          permissions.push(p);
+        } else {
+          Object.assign(p, update);
+        }
+        return p;
+      },
+      findMany: async () => [...permissions],
+    },
+    role: {
+      upsert: async ({ where, create, update }: any) => {
+        let r = roles.find((x) => x.code === where?.code);
+        if (!r) {
+          r = { id: create?.id, ...create };
+          roles.push(r);
+        } else {
+          Object.assign(r, update);
+        }
+        return r;
+      },
+    },
+    rolePermission: {
+      findMany: async ({ where }: any) =>
+        rolePermissions.filter((rp) => rp.role_id === where?.role_id),
+      deleteMany: async ({ where }: any) => {
+        const ids = where?.permission_id?.in || [];
+        for (let i = rolePermissions.length - 1; i >= 0; i--) {
+          if (
+            rolePermissions[i].role_id === where?.role_id &&
+            ids.includes(rolePermissions[i].permission_id)
+          ) {
+            rolePermissions.splice(i, 1);
+          }
+        }
+      },
+      create: async ({ data }: any) => {
+        const record = { id: `rp-${data.role_id}-${data.permission_id}`, ...data };
+        rolePermissions.push(record);
+        return record;
+      },
+    },
+    auditLog: {
+      create: async ({ data }: any) => {
+        const record = { id: `audit-${auditLogs.length + 1}`, ...data };
+        auditLogs.push(record);
+        return record;
+      },
+    },
+  };
+
+  return {
+    checkReadiness: async () => readiness,
+    $connect: async () => {},
+    $disconnect: async () => {},
+    $transaction: async (fn: (client: any) => Promise<any>) => {
+      if (readiness === 'down') {
+        throw new Error('Database connection failed');
+      }
+      return fn(tx);
+    },
+  };
+}
+
 async function runSupertestSuite() {
   console.log('================================================================');
   console.log('SHIP DE - SUPERTEST & NESTJS TESTING HARNESS (AC-FOUND-04-05)');
@@ -35,11 +109,7 @@ async function runSupertestSuite() {
     .overrideProvider(APP_CONFIG)
     .useValue(mockConfig)
     .overrideProvider(PrismaService)
-    .useValue({
-      checkReadiness: async () => 'up',
-      $connect: async () => {},
-      $disconnect: async () => {},
-    })
+    .useValue(createMockPrismaForHarness('up'))
     .overrideProvider(RedisService)
     .useValue({
       checkReadiness: async () => 'up',
@@ -69,6 +139,7 @@ async function runSupertestSuite() {
     assert.strictEqual(readyRes.body.checks.database, 'up', 'Database check must be up');
     assert.strictEqual(readyRes.body.checks.redis, 'up', 'Redis check must be up');
     assert.strictEqual(readyRes.body.checks.storage, 'up', 'Storage check must be up');
+    assert.strictEqual(readyRes.body.checks.rbac, 'up', 'RBAC check must be up');
     console.log('  PASS: /health/ready responded 200 with all dependencies up');
 
     // 3. Test Correlation ID propagation
@@ -93,11 +164,7 @@ async function runSupertestSuite() {
       .overrideProvider(APP_CONFIG)
       .useValue(mockConfig)
       .overrideProvider(PrismaService)
-      .useValue({
-        checkReadiness: async () => 'down',
-        $connect: async () => {},
-        $disconnect: async () => {},
-      })
+      .useValue(createMockPrismaForHarness('down'))
       .overrideProvider(RedisService)
       .useValue({
         checkReadiness: async () => 'up',
@@ -115,6 +182,11 @@ async function runSupertestSuite() {
     const degradedRes = await request(brokenApp.getHttpServer()).get('/health/ready').expect(503);
     assert.strictEqual(degradedRes.body.status, 'error', 'Status must be error');
     assert.strictEqual(degradedRes.body.checks.database, 'down', 'Database must be down');
+    assert.strictEqual(
+      degradedRes.body.checks.rbac,
+      'down',
+      'RBAC check must be down when DB is down'
+    );
     console.log('  PASS: Outage simulation correctly returned 503 degraded');
     await brokenApp.close();
 

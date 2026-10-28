@@ -144,6 +144,7 @@ model Merchant {
   mfa_challenges    MfaChallenge[]
   mfa_admin_reset_idempotency MfaAdminResetIdempotency[]
   invitations       Invitation[]
+  roles             Role[]
 
   @@map("merchants")
 }
@@ -163,6 +164,10 @@ model User {
   phone_verified_at DateTime?         @db.Timestamptz
   terms_accepted_at DateTime?         @db.Timestamptz
   terms_version     String?           @db.VarChar(32)
+  // Database-ownership / BR-RBAC-04: FK users_custom_role_id_fkey is defined authoritatively in migration.sql as
+  // ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED (so merchant cascade and in-use role delete have one defined outcome).
+  // Kept unmanaged by Prisma relation to ensure prisma db push / migrate diff cannot replace or drop the deferrable constraint.
+  custom_role_id    String?           @db.Uuid
   created_at        DateTime          @default(now()) @db.Timestamptz
   updated_at        DateTime          @updatedAt @db.Timestamptz
 
@@ -177,6 +182,7 @@ model User {
   invitations_sent      Invitation[]          @relation("InvitationsSent")
 
   @@index([merchant_id, role])
+  @@index([merchant_id, custom_role_id])
   @@map("users")
 }
 
@@ -362,6 +368,58 @@ model MfaChallenge {
   @@index([user_id, consumed_at, expires_at])
   @@index([challenge_hash])
   @@map("mfa_challenges")
+}
+
+// ----------------------------------------------------------------------------
+// 1c. Roles & Permissions (FEAT-RBAC-01: Role, Permission, RolePermission)
+// ----------------------------------------------------------------------------
+
+model Role {
+  id                String            @id @default(uuid()) @db.Uuid
+  merchant_id       String?           @db.Uuid
+  code              String?           @unique @db.VarChar(64)
+  name              String            @db.VarChar(255)
+  name_lower        String?           @db.VarChar(255)
+  description       String?           @db.Text
+  is_system         Boolean           @default(false)
+  created_at        DateTime          @default(now()) @db.Timestamptz
+  updated_at        DateTime          @updatedAt @db.Timestamptz
+
+  merchant          Merchant?         @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
+  permissions       RolePermission[]
+
+  @@unique([merchant_id, name_lower])
+  @@index([merchant_id, is_system])
+  @@map("roles")
+}
+
+model Permission {
+  id                String            @id @default(uuid()) @db.Uuid
+  code              String            @unique @db.VarChar(128)
+  name              String            @db.VarChar(255)
+  description       String?           @db.Text
+  category          String            @db.VarChar(64)
+  created_at        DateTime          @default(now()) @db.Timestamptz
+
+  role_permissions  RolePermission[]
+
+  @@index([category])
+  @@map("permissions")
+}
+
+model RolePermission {
+  id                String            @id @default(uuid()) @db.Uuid
+  role_id           String            @db.Uuid
+  permission_id     String            @db.Uuid
+  created_at        DateTime          @default(now()) @db.Timestamptz
+
+  role              Role              @relation(fields: [role_id], references: [id], onDelete: Cascade)
+  permission        Permission        @relation(fields: [permission_id], references: [id], onDelete: Cascade)
+
+  @@unique([role_id, permission_id])
+  @@index([role_id])
+  @@index([permission_id])
+  @@map("role_permissions")
 }
 
 // ----------------------------------------------------------------------------
@@ -684,6 +742,8 @@ model Claim {
 
 model AuditLog {
   id                   String            @id @default(uuid()) @db.Uuid
+  // merchant_id is nullable strictly for platform-level system audit events (such as system role seed reconciliation).
+  // All tenant-scoped actions (roles, users, sessions) strictly require and populate merchant_id (Finding 1 / Round 14 / BR-RBAC-07 / BR-RBAC-04).
   merchant_id          String?           @db.Uuid
   user_id              String?           @db.VarChar(255)
   actor                String?           @db.VarChar(255)

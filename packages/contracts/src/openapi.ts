@@ -465,6 +465,60 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/permissions': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List platform capability permissions catalog (FEAT-RBAC-01) */
+    get: operations['listPermissions'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/roles': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List system and custom roles for tenant (FEAT-RBAC-01) */
+    get: operations['listRoles'];
+    put?: never;
+    /** Create a custom role for tenant (FEAT-RBAC-01) */
+    post: operations['createRole'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/roles/{id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get detailed role definition by id (FEAT-RBAC-01) */
+    get: operations['getRoleById'];
+    put?: never;
+    post?: never;
+    /** Delete an unassigned custom role (FEAT-RBAC-01) */
+    delete: operations['deleteRole'];
+    options?: never;
+    head?: never;
+    /** Update custom role definition (FEAT-RBAC-01) */
+    patch: operations['updateRole'];
+    trace?: never;
+  };
   '/users/check-scope': {
     parameters: {
       query?: never;
@@ -1389,6 +1443,71 @@ export interface components {
       };
       meta: components['schemas']['Meta'];
     };
+    PermissionItem: {
+      /** Format: uuid */
+      id: string;
+      code: string;
+      name: string;
+      description?: string | null;
+      category: string;
+    };
+    PermissionsResponse: {
+      data: {
+        permissions: components['schemas']['PermissionItem'][];
+        categories: string[];
+      };
+      meta: components['schemas']['Meta'];
+    };
+    RoleItem: {
+      /** Format: uuid */
+      id: string;
+      code?: string | null;
+      name: string;
+      description?: string | null;
+      is_system: boolean;
+      /** Format: uuid */
+      merchant_id?: string | null;
+      permissions_count: number;
+      permissions: components['schemas']['PermissionItem'][];
+      user_count: number;
+      /** Format: date-time */
+      created_at: string;
+      /** Format: date-time */
+      updated_at: string;
+    };
+    RolesResponse: {
+      data: {
+        roles: components['schemas']['RoleItem'][];
+        /** @description Whether the authenticated actor has server permission iam:manage_users to modify roles */
+        can_manage_roles?: boolean;
+      };
+      meta: components['schemas']['Meta'];
+    };
+    RoleDetailResponse: {
+      data: {
+        role: components['schemas']['RoleItem'];
+      };
+      meta: components['schemas']['Meta'];
+    };
+    CreateRoleRequest: {
+      name: string;
+      description?: string | null;
+      permissions: string[];
+    };
+    UpdateRoleRequest: {
+      name?: string;
+      description?: string | null;
+      permissions?: string[];
+    };
+    DeleteRoleResponse: {
+      data: {
+        /** Format: uuid */
+        id: string;
+        deleted: boolean;
+        message: string;
+      };
+      meta: components['schemas']['Meta'];
+    };
     /** @enum {string} */
     InvitationStatus: 'PENDING' | 'ACCEPTED' | 'EXPIRED' | 'CANCELLED';
     SendInvitationRequest: {
@@ -2010,6 +2129,157 @@ export interface operations {
       404: components['responses']['Error'];
       /** @description Idempotency conflict */
       409: components['responses']['Error'];
+    };
+  };
+  listPermissions: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description List of all canonical platform capability permissions grouped by category */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['PermissionsResponse'];
+        };
+      };
+      401: components['responses']['Error'];
+    };
+  };
+  listRoles: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description List of system roles and merchant-scoped custom roles */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['RolesResponse'];
+        };
+      };
+      401: components['responses']['Error'];
+      403: components['responses']['Error'];
+    };
+  };
+  createRole: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['CreateRoleRequest'];
+      };
+    };
+    responses: {
+      /** @description Role created successfully */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['RoleDetailResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['Error'];
+      403: components['responses']['Error'];
+    };
+  };
+  getRoleById: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Role detail including capability permissions and assigned user count */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['RoleDetailResponse'];
+        };
+      };
+      401: components['responses']['Error'];
+      403: components['responses']['Error'];
+      404: components['responses']['Error'];
+    };
+  };
+  deleteRole: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Role deleted successfully */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['DeleteRoleResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['Error'];
+      403: components['responses']['Error'];
+      404: components['responses']['Error'];
+    };
+  };
+  updateRole: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['UpdateRoleRequest'];
+      };
+    };
+    responses: {
+      /** @description Role updated successfully */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['RoleDetailResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['Error'];
+      403: components['responses']['Error'];
+      404: components['responses']['Error'];
     };
   };
   checkUserScope: {
