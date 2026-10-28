@@ -670,12 +670,7 @@ export function AdminShopsView({
 export default function AdminShopsPage() {
   const { user, token, isAuthenticated, isHydrating } = useAuth();
 
-  const isPlatformAdmin = Boolean(
-    user &&
-    ((user.role as string) === 'BACKOFFICE' ||
-      (user.role as string) === 'PLATFORM_ADMIN' ||
-      (user.role as string) === 'ADMIN')
-  );
+  const isPlatformAdmin = Boolean(user && (user.role as string) === 'PLATFORM_ADMIN');
 
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [shops, setShops] = useState<ShopRecord[]>([]);

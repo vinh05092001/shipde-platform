@@ -10,12 +10,7 @@ export default function AdminPage() {
   const router = useRouter();
   const { user, isAuthenticated, isHydrating } = useAuth();
 
-  const isPlatformAdmin = Boolean(
-    user &&
-    ((user.role as string) === 'BACKOFFICE' ||
-      (user.role as string) === 'PLATFORM_ADMIN' ||
-      (user.role as string) === 'ADMIN')
-  );
+  const isPlatformAdmin = Boolean(user && (user.role as string) === 'PLATFORM_ADMIN');
 
   useEffect(() => {
     if (isAuthenticated && user && isPlatformAdmin) {

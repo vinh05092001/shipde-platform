@@ -360,12 +360,7 @@ export default function AdminNewShopPage() {
   const router = useRouter();
   const { user, token, isAuthenticated, isHydrating } = useAuth();
 
-  const isPlatformAdmin = Boolean(
-    user &&
-    ((user.role as string) === 'BACKOFFICE' ||
-      (user.role as string) === 'PLATFORM_ADMIN' ||
-      (user.role as string) === 'ADMIN')
-  );
+  const isPlatformAdmin = Boolean(user && (user.role as string) === 'PLATFORM_ADMIN');
 
   const [merchantName, setMerchantName] = useState('');
   const [fullName, setFullName] = useState('');

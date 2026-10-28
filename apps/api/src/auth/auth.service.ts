@@ -2343,23 +2343,21 @@ export class AuthService {
       })
     );
 
-    if (meta.merchantId) {
-      try {
-        await this.prisma.auditLog.create({
-          data: {
-            merchant_id: meta.merchantId,
-            user_id: meta.userId || null,
-            actor: meta.actor || null,
-            action: meta.action,
-            entity_type: meta.resource.split(':')[0] || 'Auth',
-            entity_id: meta.resource.split(':')[1] || meta.userId || 'system',
-            new_value: meta.details ? JSON.parse(JSON.stringify(meta.details)) : null,
-            ip_address: meta.ipAddress || null,
-          },
-        });
-      } catch (err) {
-        console.error('Failed to persist audit log to database:', err);
-      }
+    try {
+      await this.prisma.auditLog.create({
+        data: {
+          merchant_id: meta.merchantId || null,
+          user_id: meta.userId || null,
+          actor: meta.actor || null,
+          action: meta.action,
+          entity_type: meta.resource.split(':')[0] || 'Auth',
+          entity_id: meta.resource.split(':')[1] || meta.userId || 'system',
+          new_value: meta.details ? JSON.parse(JSON.stringify(meta.details)) : null,
+          ip_address: meta.ipAddress || null,
+        },
+      });
+    } catch (err) {
+      console.error('Failed to persist audit log to database:', err);
     }
   }
 
@@ -3396,34 +3394,6 @@ export class AuthService {
                 expires_at: expiresAt,
               },
             });
-
-            // Deliver setup verification atomically with transaction outcome (Finding 4)
-            if (this.deliveryAdapter) {
-              const baseUrl = this.config?.FRONTEND_URL || 'http://localhost:3000';
-              try {
-                await this.deliveryAdapter.sendVerification({
-                  channel,
-                  recipient: identifier,
-                  purpose: 'password_reset',
-                  link: `${baseUrl}/reset-password?token=${rawSetupToken}`,
-                });
-              } catch (deliverErr: any) {
-                throw new CanonicalApiException(
-                  HttpStatus.SERVICE_UNAVAILABLE,
-                  'DELIVERY_FAILED',
-                  'Không thể gửi liên kết thiết lập tài khoản qua email/số điện thoại',
-                  true,
-                  'Vui lòng thử lại sau',
-                  [
-                    {
-                      field: channel,
-                      code: 'DELIVERY_FAILED',
-                      message: 'Gửi thông báo thiết lập thất bại',
-                    },
-                  ]
-                );
-              }
-            }
           }
 
           return { merchant: newMerchant, user: newUser };
@@ -3477,6 +3447,37 @@ export class AuthService {
         true,
         'Vui lòng thử lại với tên cửa hàng khác'
       );
+    }
+
+    // 7. Post-commit setup token delivery with reconciliation support (Finding 5)
+    // External delivery adapter is invoked outside $transaction after DB commit.
+    if (passwordIsTemporary && rawSetupToken && this.deliveryAdapter) {
+      const baseUrl = this.config?.FRONTEND_URL || 'http://localhost:3000';
+      const channel = email ? 'email' : 'phone';
+      const identifier = (email || phone)!;
+      try {
+        await this.deliveryAdapter.sendVerification({
+          channel,
+          recipient: identifier,
+          purpose: 'password_reset',
+          link: `${baseUrl}/reset-password?token=${rawSetupToken}`,
+        });
+      } catch (deliverErr: any) {
+        throw new CanonicalApiException(
+          HttpStatus.SERVICE_UNAVAILABLE,
+          'DELIVERY_FAILED',
+          'Không thể gửi liên kết thiết lập tài khoản qua email/số điện thoại',
+          true,
+          'Vui lòng thử lại sau',
+          [
+            {
+              field: channel,
+              code: 'DELIVERY_FAILED',
+              message: 'Gửi thông báo thiết lập thất bại',
+            },
+          ]
+        );
+      }
     }
 
     // 7. Audit log (No PII)

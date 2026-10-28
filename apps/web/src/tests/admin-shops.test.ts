@@ -36,7 +36,7 @@ function generateTestV1Token(
     sub: claims.sub || 'u-admin-test',
     sid: claims.sid || 's-admin-test',
     mid: claims.mid || 'm-admin-test',
-    role: claims.role || 'BACKOFFICE',
+    role: claims.role || 'PLATFORM_ADMIN',
     st: 'active',
     iat: now,
     exp: claims.exp !== undefined ? claims.exp : now + 3600,
@@ -117,7 +117,7 @@ async function runAdminShopsFrontendSuite() {
   assert.strictEqual(fakeCookieRes.status, 403, 'Arbitrary cookie must return 403 Forbidden');
 
   // Finding 3: Cookie-only POST must NOT be authorized (CSRF defense)
-  const validTokenForCookie = generateTestV1Token({ role: 'BACKOFFICE' }, TEST_AUTH_SECRET);
+  const validTokenForCookie = generateTestV1Token({ role: 'PLATFORM_ADMIN' }, TEST_AUTH_SECRET);
   const cookieOnlyPostReq = new NextRequest('http://localhost:3000/api/admin/shops', {
     method: 'POST',
     headers: {
@@ -154,7 +154,7 @@ async function runAdminShopsFrontendSuite() {
   );
 
   // Tampered signature on valid payload
-  const validToken = generateTestV1Token({ role: 'BACKOFFICE' }, TEST_AUTH_SECRET);
+  const validToken = generateTestV1Token({ role: 'PLATFORM_ADMIN' }, TEST_AUTH_SECRET);
   const [ver, pay] = validToken.split('.');
   const tamperedToken = `${ver}.${pay}.tampered_signature_bytes`;
   const tamperedReq = new NextRequest('http://localhost:3000/api/admin/shops', {
@@ -166,7 +166,7 @@ async function runAdminShopsFrontendSuite() {
 
   // Expired token
   const expiredToken = generateTestV1Token(
-    { role: 'BACKOFFICE', exp: Math.floor(Date.now() / 1000) - 100 },
+    { role: 'PLATFORM_ADMIN', exp: Math.floor(Date.now() / 1000) - 100 },
     TEST_AUTH_SECRET
   );
   const expiredReq = new NextRequest('http://localhost:3000/api/admin/shops', {
@@ -181,40 +181,33 @@ async function runAdminShopsFrontendSuite() {
   // 3. Finding 1 / Role Enforcement: Non-platform-admin roles are rejected
   // ---------------------------------------------------------------------------
   console.log(
-    '🧪 Testing Finding 1: Non-platform-admin roles (OWNER, OPS_CSKH, etc.) are rejected...'
+    '🧪 Testing Finding 1 & 4: Non-platform-admin roles (OWNER, BACKOFFICE, ADMIN, etc.) are rejected...'
   );
-  const tenantRoles = ['OWNER', 'OPS_CSKH', 'WAREHOUSE', 'ACCOUNTANT'];
-  for (const role of tenantRoles) {
-    const tenantToken = generateTestV1Token({ role }, TEST_AUTH_SECRET);
-    const tenantReq = new NextRequest('http://localhost:3000/api/admin/shops', {
+  const nonPlatformRoles = ['OWNER', 'OPS_CSKH', 'WAREHOUSE', 'ACCOUNTANT', 'BACKOFFICE', 'ADMIN'];
+  for (const role of nonPlatformRoles) {
+    const roleToken = generateTestV1Token({ role }, TEST_AUTH_SECRET);
+    const roleReq = new NextRequest('http://localhost:3000/api/admin/shops', {
       method: 'GET',
-      headers: { Authorization: `Bearer ${tenantToken}`, Accept: 'application/json' },
+      headers: { Authorization: `Bearer ${roleToken}`, Accept: 'application/json' },
     });
-    const tenantRes = await GET(tenantReq);
+    const roleRes = await GET(roleReq);
     assert.strictEqual(
-      tenantRes.status,
+      roleRes.status,
       403,
-      `User with tenant role "${role}" must be rejected with 403 Forbidden from admin endpoints`
+      `User with role "${role}" must be rejected with 403 Forbidden from admin endpoints`
     );
-    const tenantJson = await tenantRes.json();
-    assert.strictEqual(tenantJson?.error?.code, 'FORBIDDEN');
+    const roleJson = await roleRes.json();
+    assert.strictEqual(roleJson?.error?.code, 'FORBIDDEN');
   }
 
-  // Platform admin roles are authorized
-  const backofficeToken = generateTestV1Token({ role: 'BACKOFFICE' }, TEST_AUTH_SECRET);
-  const backofficeReq = new NextRequest('http://localhost:3000/api/admin/shops', {
-    headers: { Authorization: `Bearer ${backofficeToken}` },
-  });
-  const backofficeAuth = verifyAdminAuthorization(backofficeReq);
-  assert.strictEqual(backofficeAuth.authorized, true, 'BACKOFFICE role must be authorized');
-
+  // Only PLATFORM_ADMIN role is authorized
   const platformAdminToken = generateTestV1Token({ role: 'PLATFORM_ADMIN' }, TEST_AUTH_SECRET);
   const platformAdminReq = new NextRequest('http://localhost:3000/api/admin/shops', {
     headers: { Authorization: `Bearer ${platformAdminToken}` },
   });
   const platformAdminAuth = verifyAdminAuthorization(platformAdminReq);
   assert.strictEqual(platformAdminAuth.authorized, true, 'PLATFORM_ADMIN role must be authorized');
-  console.log('✅ Finding 1: Platform-admin role enforcement strictly verified');
+  console.log('✅ Finding 1 & 4: Only PLATFORM_ADMIN role is authorized; other roles rejected');
 
   // ---------------------------------------------------------------------------
   // 4. Legacy static header rejection: header alone is rejected, requires session
@@ -395,7 +388,7 @@ async function runAdminShopsFrontendSuite() {
   const loadingHtml = renderToStaticMarkup(
     React.createElement(AdminShopsView, {
       isAuthenticated: true,
-      user: { role: 'BACKOFFICE', full_name: 'Platform Operator' },
+      user: { role: 'PLATFORM_ADMIN', full_name: 'Platform Operator' },
       isPlatformAdmin: true,
       isHydrating: false,
       shops: [],
@@ -411,7 +404,7 @@ async function runAdminShopsFrontendSuite() {
   const emptyHtml = renderToStaticMarkup(
     React.createElement(AdminShopsView, {
       isAuthenticated: true,
-      user: { role: 'BACKOFFICE', full_name: 'Platform Operator' },
+      user: { role: 'PLATFORM_ADMIN', full_name: 'Platform Operator' },
       isPlatformAdmin: true,
       isHydrating: false,
       shops: [],
@@ -428,7 +421,7 @@ async function runAdminShopsFrontendSuite() {
   const errorHtml = renderToStaticMarkup(
     React.createElement(AdminShopsView, {
       isAuthenticated: true,
-      user: { role: 'BACKOFFICE', full_name: 'Platform Operator' },
+      user: { role: 'PLATFORM_ADMIN', full_name: 'Platform Operator' },
       isPlatformAdmin: true,
       isHydrating: false,
       shops: [],
@@ -471,7 +464,7 @@ async function runAdminShopsFrontendSuite() {
   const successListHtml = renderToStaticMarkup(
     React.createElement(AdminShopsView, {
       isAuthenticated: true,
-      user: { role: 'BACKOFFICE', full_name: 'Platform Operator' },
+      user: { role: 'PLATFORM_ADMIN', full_name: 'Platform Operator' },
       isPlatformAdmin: true,
       isHydrating: false,
       shops: [mockShopFromApi],
@@ -504,7 +497,7 @@ async function runAdminShopsFrontendSuite() {
   const validationModalHtml = renderToStaticMarkup(
     React.createElement(AdminShopsView, {
       isAuthenticated: true,
-      user: { role: 'BACKOFFICE', full_name: 'Platform Operator' },
+      user: { role: 'PLATFORM_ADMIN', full_name: 'Platform Operator' },
       isPlatformAdmin: true,
       isHydrating: false,
       shops: [],
@@ -546,7 +539,7 @@ async function runAdminShopsFrontendSuite() {
   const creationSuccessHtml = renderToStaticMarkup(
     React.createElement(AdminShopsView, {
       isAuthenticated: true,
-      user: { role: 'BACKOFFICE', full_name: 'Platform Operator' },
+      user: { role: 'PLATFORM_ADMIN', full_name: 'Platform Operator' },
       isPlatformAdmin: true,
       isHydrating: false,
       shops: [],
@@ -597,7 +590,7 @@ async function runAdminShopsFrontendSuite() {
   const newShopSuccessHtml = renderToStaticMarkup(
     React.createElement(AdminNewShopView, {
       isAuthenticated: true,
-      user: { role: 'BACKOFFICE' },
+      user: { role: 'PLATFORM_ADMIN' },
       isPlatformAdmin: true,
       isHydrating: false,
       merchantName: '',

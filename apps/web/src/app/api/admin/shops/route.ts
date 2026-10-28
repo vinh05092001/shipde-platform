@@ -118,8 +118,7 @@ export function verifyAdminAuthorization(req: NextRequest, isMutation = false): 
     };
   }
 
-  const PLATFORM_ADMIN_ROLES = ['BACKOFFICE', 'PLATFORM_ADMIN', 'ADMIN'];
-  if (!claims.role || !PLATFORM_ADMIN_ROLES.includes(claims.role)) {
+  if (claims.role !== 'PLATFORM_ADMIN') {
     return {
       authorized: false,
       statusCode: 403,

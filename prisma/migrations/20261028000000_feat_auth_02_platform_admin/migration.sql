@@ -9,3 +9,6 @@ ALTER TABLE "device_sessions" ALTER COLUMN "merchant_id" DROP NOT NULL;
 
 -- AlterTable
 ALTER TABLE "audit_logs" ADD COLUMN "actor" VARCHAR(255);
+
+-- AlterTable
+ALTER TABLE "audit_logs" ALTER COLUMN "merchant_id" DROP NOT NULL;

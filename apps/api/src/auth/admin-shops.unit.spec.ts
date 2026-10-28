@@ -15,6 +15,7 @@ function createMockPrismaService() {
   const users: any[] = [];
   const auditLogs: any[] = [];
   const passwordResetTokens: any[] = [];
+  const deviceSessions: any[] = [];
 
   const mockTx = {
     merchant: {
@@ -49,6 +50,7 @@ function createMockPrismaService() {
     users,
     auditLogs,
     passwordResetTokens,
+    deviceSessions,
     merchant: {
       findMany: async () => merchants,
       count: async () => merchants.length,
@@ -56,6 +58,38 @@ function createMockPrismaService() {
     },
     passwordResetToken: {
       create: async ({ data }: any) => mockTx.passwordResetToken.create({ data }),
+    },
+    deviceSession: {
+      findFirst: async ({ where, include }: any) => {
+        const found = deviceSessions.find((s) => {
+          if (where.status && s.status !== where.status) return false;
+          if (where.expires_at?.gt && !(s.expires_at > where.expires_at.gt)) return false;
+          if (where.OR) {
+            const matchesOr = where.OR.some((cond: any) => {
+              if (cond.session_token_hash && s.session_token_hash === cond.session_token_hash)
+                return true;
+              if (cond.id && s.id === cond.id) return true;
+              return false;
+            });
+            if (!matchesOr) return false;
+          }
+          return true;
+        });
+        if (!found) return null;
+        return {
+          ...found,
+          user: include?.user ? users.find((u) => u.id === found.user_id) : undefined,
+        };
+      },
+      create: async ({ data }: any) => {
+        const record = {
+          id: `sess-${Date.now()}-${Math.random()}`,
+          ...data,
+          created_at: new Date(),
+        };
+        deviceSessions.push(record);
+        return record;
+      },
     },
     user: {
       findMany: async ({ where, include }: any) => {
@@ -127,7 +161,8 @@ describe('FEAT-AUTH-02: Admin-Created Shop Account Unit Tests', () => {
 
   // AC-ADMIN-01: Missing or invalid session returns 401 SESSION_INVALID
   it('AC-ADMIN-01: Missing session header returns 401 SESSION_INVALID', async () => {
-    const guard = new AdminAuthGuard();
+    const mockPrisma = createMockPrismaService();
+    const guard = new AdminAuthGuard(mockPrisma as any);
     const { context } = createMockContext({});
     await assert.rejects(
       async () => guard.canActivate(context),
@@ -141,7 +176,8 @@ describe('FEAT-AUTH-02: Admin-Created Shop Account Unit Tests', () => {
   });
 
   it('AC-ADMIN-01: Empty or malformed session returns 401 SESSION_INVALID', async () => {
-    const guard = new AdminAuthGuard();
+    const mockPrisma = createMockPrismaService();
+    const guard = new AdminAuthGuard(mockPrisma as any);
     const { context } = createMockContext({ authorization: 'Bearer ' });
     await assert.rejects(
       async () => guard.canActivate(context),
@@ -155,7 +191,8 @@ describe('FEAT-AUTH-02: Admin-Created Shop Account Unit Tests', () => {
   });
 
   it('AC-ADMIN-01: Expired session token returns 401 SESSION_INVALID', async () => {
-    const guard = new AdminAuthGuard();
+    const mockPrisma = createMockPrismaService();
+    const guard = new AdminAuthGuard(mockPrisma as any);
     const { token } = signAccessToken(
       {
         sub: 'u-operator-admin',
@@ -181,11 +218,21 @@ describe('FEAT-AUTH-02: Admin-Created Shop Account Unit Tests', () => {
 
   // AC-ADMIN-02: Missing PLATFORM_ADMIN role returns 403 FORBIDDEN
   it('AC-ADMIN-02: Merchant OWNER role returns 403 FORBIDDEN', async () => {
-    const guard = new AdminAuthGuard();
+    const mockPrisma = createMockPrismaService();
+    const guard = new AdminAuthGuard(mockPrisma as any);
+    const sessionId = randomUUID();
+    const userId = 'u-merchant-owner';
+    mockPrisma.users.push({ id: userId, role: RoleEnum.OWNER });
+    mockPrisma.deviceSessions.push({
+      id: sessionId,
+      user_id: userId,
+      status: SessionStatusEnum.ACTIVE,
+      expires_at: new Date(Date.now() + 3600 * 1000),
+    });
     const { token } = signAccessToken(
       {
-        sub: 'u-merchant-owner',
-        sid: randomUUID(),
+        sub: userId,
+        sid: sessionId,
         mid: 'm-tenant-123',
         role: RoleEnum.OWNER,
         st: 'active',
@@ -208,12 +255,21 @@ describe('FEAT-AUTH-02: Admin-Created Shop Account Unit Tests', () => {
 
   // AC-ADMIN-03: PLATFORM_ADMIN role is authorized (200/true) with actor from session
   it('AC-ADMIN-03: Valid PLATFORM_ADMIN session is authorized and sets actor from session', async () => {
-    const guard = new AdminAuthGuard();
+    const mockPrisma = createMockPrismaService();
+    const guard = new AdminAuthGuard(mockPrisma as any);
     const operatorId = 'u-operator-admin-uuid';
+    const sessionId = randomUUID();
+    mockPrisma.users.push({ id: operatorId, role: RoleEnum.PLATFORM_ADMIN });
+    mockPrisma.deviceSessions.push({
+      id: sessionId,
+      user_id: operatorId,
+      status: SessionStatusEnum.ACTIVE,
+      expires_at: new Date(Date.now() + 3600 * 1000),
+    });
     const { token } = signAccessToken(
       {
         sub: operatorId,
-        sid: randomUUID(),
+        sid: sessionId,
         role: RoleEnum.PLATFORM_ADMIN,
         st: 'active',
       },
@@ -226,6 +282,42 @@ describe('FEAT-AUTH-02: Admin-Created Shop Account Unit Tests', () => {
     assert.strictEqual(isAllowed, true);
     assert.strictEqual(req.userId, operatorId);
     assert.strictEqual(req.adminActor, operatorId);
+  });
+
+  // Finding 2 (Proving Test): Guard validates DB session; revoked session in DB returns 401 SESSION_INVALID
+  it('Finding 2: Valid token signature but revoked/missing DB session returns 401 SESSION_INVALID', async () => {
+    const mockPrisma = createMockPrismaService();
+    const guard = new AdminAuthGuard(mockPrisma as any);
+    const operatorId = 'u-revoked-operator';
+    const sessionId = randomUUID();
+    mockPrisma.users.push({ id: operatorId, role: RoleEnum.PLATFORM_ADMIN });
+    mockPrisma.deviceSessions.push({
+      id: sessionId,
+      user_id: operatorId,
+      status: SessionStatusEnum.REVOKED,
+      expires_at: new Date(Date.now() + 3600 * 1000),
+    });
+    const { token } = signAccessToken(
+      {
+        sub: operatorId,
+        sid: sessionId,
+        role: RoleEnum.PLATFORM_ADMIN,
+        st: 'active',
+      },
+      TEST_SECRET,
+      3600
+    );
+
+    const { context } = createMockContext({ authorization: `Bearer ${token}` });
+    await assert.rejects(
+      async () => guard.canActivate(context),
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 401);
+        assert.strictEqual(err.code, 'SESSION_INVALID');
+        return true;
+      }
+    );
   });
 
   // AC-ADMIN-09: Missing both email and phone returns 400 VALIDATION_ERROR
@@ -541,12 +633,17 @@ describe('FEAT-AUTH-02: Admin-Created Shop Account Unit Tests', () => {
     );
   });
 
-  // Finding 4: Delivery adapter failure rolls back the transaction atomically
-  it('Finding 4: Delivery adapter failure rolls back transaction without committing merchant or user', async () => {
+  // Finding 5: Delivery failure after commit preserves shop in DB and enables canonical retry reconciliation
+  it('Finding 5: Delivery failure after commit preserves shop in DB and enables canonical retry', async () => {
     const mockPrisma = createMockPrismaService();
+    let deliveryCalls = 0;
     const failingDeliveryAdapter = {
       sendVerification: async () => {
-        throw new Error('SMTP connection timed out');
+        deliveryCalls++;
+        if (deliveryCalls === 1) {
+          throw new Error('SMTP connection timed out');
+        }
+        return true;
       },
     };
     const service = new AuthService(
@@ -570,10 +667,40 @@ describe('FEAT-AUTH-02: Admin-Created Shop Account Unit Tests', () => {
       }
     );
 
-    // Verify rollback: no merchant or user was committed to database
-    assert.strictEqual(mockPrisma.merchants.length, 0);
-    assert.strictEqual(mockPrisma.users.length, 0);
-    assert.strictEqual(mockPrisma.passwordResetTokens.length, 0);
+    // Database transaction committed safely before external delivery
+    assert.strictEqual(mockPrisma.merchants.length, 1);
+    assert.strictEqual(mockPrisma.users.length, 1);
+    assert.strictEqual(mockPrisma.passwordResetTokens.length, 1);
+
+    // Canonical retry reconciles delivery without creating a duplicate shop
+    const retryRes = await service.adminCreateShop(
+      { merchant_name: 'Shop Delivery Fail', email: 'fail@example.com' },
+      '127.0.0.1',
+      'corr-retry'
+    );
+    assert.strictEqual(retryRes.success, true);
+    assert.strictEqual(mockPrisma.merchants.length, 1);
+    assert.strictEqual(mockPrisma.users.length, 1);
+    assert.strictEqual(deliveryCalls, 2);
+  });
+
+  // Finding 1 & 10: Audit log persists platform actions with null merchant_id
+  it('Finding 1 & 10: Audit log persists platform-level action with null merchant_id', async () => {
+    const mockPrisma = createMockPrismaService();
+    const service = new AuthService(mockPrisma, createMockRateLimitService());
+
+    await (service as any).logAudit({
+      merchantId: null,
+      userId: 'u-platform-admin',
+      actor: 'u-platform-admin',
+      action: 'PLATFORM_SYSTEM_CONFIG_UPDATE',
+      resource: 'system:config',
+      details: { setting: 'value' },
+    });
+
+    assert.strictEqual(mockPrisma.auditLogs.length, 1);
+    assert.strictEqual(mockPrisma.auditLogs[0].merchant_id, null);
+    assert.strictEqual(mockPrisma.auditLogs[0].action, 'PLATFORM_SYSTEM_CONFIG_UPDATE');
   });
 
   // Finding 4: Canonical retry for the same merchant resends setup token without creating a second shop

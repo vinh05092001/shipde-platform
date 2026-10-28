@@ -391,7 +391,7 @@ export class SessionService {
 
   private async logAudit(
     meta: {
-      merchantId: string;
+      merchantId?: string | null;
       userId?: string;
       actor: string;
       action: string;
@@ -414,7 +414,7 @@ export class SessionService {
     try {
       await tx.auditLog.create({
         data: {
-          merchant_id: meta.merchantId,
+          merchant_id: meta.merchantId || null,
           user_id: meta.userId || null,
           action: meta.action,
           entity_type: meta.resource.split(':')[0] || 'Session',
