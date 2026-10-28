@@ -42,7 +42,7 @@ export const INVITATIONS_EMPTY_STATE_TEXT = 'Chưa có lời mời nào đang ch
 export const INVITATIONS_FORBIDDEN_TEXT = '403 — Không Có Quyền Truy Cập';
 export const INVITATIONS_RETRY_LABEL = 'Thử lại';
 
-export const USERS_EMPTY_STATE_TEXT = 'Không tìm thấy người dùng phù hợp';
+export const USERS_EMPTY_STATE_TEXT = 'Chưa có nhân viên nào trong cửa hàng';
 export const USERS_FORBIDDEN_TEXT = '403 — Không Có Quyền Truy Cập';
 export const USERS_RETRY_LABEL = 'Thử lại';
 export const USERS_SCOPE_SUCCESS_TOAST = 'Đã cập nhật phạm vi quyền hạn thành công';
@@ -210,6 +210,7 @@ export interface UserManagementTabProps {
   initialToastMessage?: string | null;
   initialScopeError?: string | null;
   initialScopeLoading?: boolean;
+  initialFieldErrors?: Record<string, string>;
   initialActiveSubTab?: 'matrix' | 'stores' | 'members' | 'devices' | 'invitations';
   initialSubTab?: 'matrix' | 'stores' | 'members' | 'devices' | 'invitations';
 }
@@ -374,6 +375,9 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
   const [scopeSaveLoading, setScopeSaveLoading] = useState<boolean>(
     props.initialScopeLoading ?? false
   );
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>(
+    props.initialFieldErrors ?? {}
+  );
 
   // Modal suspend user state
   const [suspendingUser, setSuspendingUser] = useState<UserListItem | null>(null);
@@ -442,6 +446,7 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
     setEditCarrierScopes(u.carrier_account_scopes || []);
     setEditError(null);
     setScopeSaveError(null);
+    setFieldErrors({});
   };
 
   const handleSaveUserPermissions = async (e: React.FormEvent) => {
@@ -450,14 +455,56 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
 
     if (!editFullName || editFullName.trim().length === 0) {
       setEditError('Họ và tên không được để trống');
+      setFieldErrors({ full_name: 'Họ và tên không được để trống' });
       return;
     }
 
     setMutationLoading(true);
+    setScopeSaveLoading(true);
     setEditError(null);
+    setScopeSaveError(null);
+    setFieldErrors({});
+
     try {
       const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
-      const res = await fetch(`${apiBase}/api/v1/users/${editingUser.id}`, {
+
+      // 1. Save scopes to dedicated scopes endpoint (PATCH /api/v1/users/:id/scopes) (AC-RBAC-02-20)
+      const scopesRes = await fetch(`${apiBase}/api/v1/users/${editingUser.id}/scopes`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          store_scopes: editStoreScopes,
+          warehouse_scopes: editWarehouseScopes,
+          carrier_account_scopes: editCarrierScopes,
+        }),
+      });
+
+      if (!scopesRes.ok) {
+        const errorData = await scopesRes.json().catch(() => ({}));
+        const msg =
+          errorData.error?.message || errorData.message || 'Không thể cập nhật phạm vi quyền hạn';
+        setScopeSaveError(msg);
+
+        // Map field validation errors
+        if (Array.isArray(errorData.error?.details)) {
+          const map: Record<string, string> = {};
+          for (const d of errorData.error.details) {
+            if (d.field) {
+              const baseField = d.field.replace(/\[\d+\]$/, '');
+              map[baseField] = d.message || msg;
+              map[d.field] = d.message || msg;
+            }
+          }
+          setFieldErrors(map);
+        }
+        return;
+      }
+
+      // 2. Save user profile & role to PATCH /api/v1/users/:id
+      const userRes = await fetch(`${apiBase}/api/v1/users/${editingUser.id}`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -468,20 +515,28 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
           role: editRole,
           store_scopes: editStoreScopes,
           warehouse_scopes: editWarehouseScopes,
+          carrier_account_scopes: editCarrierScopes,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error?.message || 'Không thể cập nhật thông tin người dùng');
+
+      if (!userRes.ok) {
+        const errorData = await userRes.json().catch(() => ({}));
+        throw new Error(
+          errorData.error?.message || errorData.message || 'Không thể cập nhật thông tin người dùng'
+        );
       }
-      setToastMessage(USER_UPDATE_SUCCESS_TOAST);
+
+      // Success toast only after 200 OK
+      setToastMessage(USERS_SCOPE_SUCCESS_TOAST);
       setEditingUser(null);
       void fetchUsers();
       setTimeout(() => setToastMessage(null), 4000);
     } catch (err: any) {
+      setScopeSaveError(err.message || 'Lỗi khi cập nhật phạm vi quyền hạn');
       setEditError(err.message || 'Lỗi khi cập nhật người dùng');
     } finally {
       setMutationLoading(false);
+      setScopeSaveLoading(false);
     }
   };
 
@@ -1906,6 +1961,11 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
                   className="modern-input w-full text-xs font-semibold"
                   data-testid="edit-fullname-input"
                 />
+                {fieldErrors.full_name && (
+                  <p className="text-xs text-rose-600 mt-1" data-testid="field-error-full-name">
+                    {fieldErrors.full_name}
+                  </p>
+                )}
               </div>
 
               <div>
@@ -1978,6 +2038,11 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
                     </div>
                   )}
                 </div>
+                {fieldErrors.store_scopes && (
+                  <p className="text-xs text-rose-600 mt-1" data-testid="field-error-store-scopes">
+                    {fieldErrors.store_scopes}
+                  </p>
+                )}
               </div>
 
               <div>
@@ -2032,6 +2097,14 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
                     </div>
                   )}
                 </div>
+                {fieldErrors.warehouse_scopes && (
+                  <p
+                    className="text-xs text-rose-600 mt-1"
+                    data-testid="field-error-warehouse-scopes"
+                  >
+                    {fieldErrors.warehouse_scopes}
+                  </p>
+                )}
               </div>
 
               {/* 3. Carrier Account Scopes */}
@@ -2080,6 +2153,14 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
                     </div>
                   )}
                 </div>
+                {fieldErrors.carrier_account_scopes && (
+                  <p
+                    className="text-xs text-rose-600 mt-1"
+                    data-testid="field-error-carrier-scopes"
+                  >
+                    {fieldErrors.carrier_account_scopes}
+                  </p>
+                )}
               </div>
 
               <div className="pt-3 border-t border-slate-100 flex justify-end gap-2.5">

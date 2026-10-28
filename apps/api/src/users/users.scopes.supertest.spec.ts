@@ -11,6 +11,7 @@ import { signAccessToken, resolveAccessTokenSecret } from '../auth/token.util';
 import { MockVerificationDeliveryAdapter, createValidTestConfig } from '@shipde/testkit';
 import { seedDatabase, SEED_MERCHANT_ID } from '../../../../infra/docker/seed';
 import { RbacService } from '../rbac/rbac.service';
+import { UsersService } from './users.service';
 import { RoleEnum } from '@prisma/client';
 
 /**
@@ -247,6 +248,7 @@ async function main() {
         password_hash: 'x',
         status: u.status,
         role: u.role,
+        created_at: new Date(),
         custom_role_id: (u as any).custom_role_id ?? null,
         store_scopes: u.store_scopes,
         warehouse_scopes: u.warehouse_scopes,
@@ -260,6 +262,7 @@ async function main() {
         password_hash: 'x',
         status: u.status,
         role: u.role,
+        created_at: new Date(),
         custom_role_id: (u as any).custom_role_id ?? null,
         store_scopes: u.store_scopes,
         warehouse_scopes: u.warehouse_scopes,
@@ -639,31 +642,68 @@ async function main() {
 
   // AC-RBAC-02-19: Audit failure during scope update rolls back transaction
   {
-    // To simulate audit failure, temporarily replace prisma.auditLog.create in a transaction test
     const targetUserId = TARGET_USER_ID;
-    const initialScopes = await prisma.user.findUnique({
+    const initialUser = await prisma.user.findUnique({
       where: { id: targetUserId },
-      select: { store_scopes: true },
+      select: {
+        store_scopes: true,
+        warehouse_scopes: true,
+        carrier_account_scopes: true,
+      },
     });
+    assert.ok(initialUser);
 
-    // Verify transactional integrity: if error thrown after update, update does not persist
-    await assert.rejects(
-      prisma.$transaction(async (tx: any) => {
-        await tx.user.update({
-          where: { id: targetUserId },
-          data: { store_scopes: ['simulated-rollback-scope'] },
+    const usersService = app.get(UsersService);
+    const servicePrisma = (usersService as any).prisma;
+
+    // Force auditLog.create to fail inside the transaction
+    const originalTransaction = servicePrisma.$transaction.bind(servicePrisma);
+    servicePrisma.$transaction = (async (arg: any, options?: any) => {
+      if (typeof arg === 'function') {
+        return originalTransaction(async (tx: any) => {
+          tx.auditLog.create = async () => {
+            throw new Error('INJECTED_AUDIT_LOG_DATABASE_FAILURE');
+          };
+          return arg(tx);
+        }, options);
+      }
+      return originalTransaction(arg, options);
+    }) as any;
+
+    try {
+      const res = await request(server)
+        .patch(`/api/v1/users/${targetUserId}/scopes`)
+        .set('Authorization', `Bearer ${ownerToken}`)
+        .send({
+          store_scopes: ['store-rollback-test'],
+          warehouse_scopes: ['wh-rollback-test'],
+          carrier_account_scopes: [VALID_CARRIER_ACCOUNT_ID],
         });
-        throw new Error('SIMULATED_AUDIT_FAILURE');
-      }),
-      /SIMULATED_AUDIT_FAILURE/
-    );
 
+      assert.strictEqual(res.status, 500);
+      assert.strictEqual(res.body.error.code, 'INTERNAL_SERVER_ERROR');
+    } finally {
+      servicePrisma.$transaction = originalTransaction;
+    }
+
+    // Assert scopes in database remain completely unchanged
     const postRollbackUser = await prisma.user.findUnique({
       where: { id: targetUserId },
-      select: { store_scopes: true },
+      select: {
+        store_scopes: true,
+        warehouse_scopes: true,
+        carrier_account_scopes: true,
+      },
     });
-    assert.deepStrictEqual(postRollbackUser?.store_scopes, initialScopes?.store_scopes);
-    console.log('PASS: AC-RBAC-02-19 Audit failure transaction rollback verified');
+    assert.deepStrictEqual(postRollbackUser?.store_scopes, initialUser.store_scopes);
+    assert.deepStrictEqual(postRollbackUser?.warehouse_scopes, initialUser.warehouse_scopes);
+    assert.deepStrictEqual(
+      postRollbackUser?.carrier_account_scopes,
+      initialUser.carrier_account_scopes
+    );
+    console.log(
+      'PASS: AC-RBAC-02-19 Real updateUserScopes transaction rolls back on audit failure and returns 500'
+    );
   }
 
   await app.close();

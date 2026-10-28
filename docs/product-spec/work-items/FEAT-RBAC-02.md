@@ -168,7 +168,9 @@ The user scope assignment interface in `SCR-USR-01` (`/settings/users`) implemen
 
 | Review round | Commit | Verdict | Findings resolved |
 | --- | --- | --- | --- |
-| 1 | `1a2c91e1` | Pending | Initial implementation of FEAT-RBAC-02 vertical slice |
+| 1 | `1a2c91e1` | CHANGES_REQUIRED | Initial implementation of FEAT-RBAC-02 vertical slice |
+| 2 | `2222ed94` | CHANGES_REQUIRED | Review r3: 4 P1 findings (wire carrier scopes, real rollback test, shared scope validation, restore MFA reset contract) |
+| 3 | HEAD | READY_FOR_CODEX | Wire carrier scopes & success toast in modal, real updateUserScopes rollback test with injected audit failure, unified validateScopeArray & row-lock across scope writes, restore exact origin/main adminResetMfa contract |
 
 ## Residual limitations
 

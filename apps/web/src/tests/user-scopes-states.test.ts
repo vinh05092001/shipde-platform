@@ -271,6 +271,27 @@ async function runTest() {
     'Modal must remain open upon error allowing user recovery and re-submission'
   );
 
+  // 10. UI State: FIELD-LEVEL VALIDATION ERRORS (Finding 9)
+  console.log('Testing 10. UI State: FIELD-LEVEL VALIDATION ERRORS...');
+  const modalFieldErrorHtml = renderComponent({
+    initialLoading: false,
+    initialForbidden: false,
+    initialUsers: mockUsers,
+    initialEditingUser: mockUsers[1],
+    initialFieldErrors: {
+      carrier_account_scopes: 'Phần tử trong carrier_account_scopes chứa ký tự không hợp lệ',
+      store_scopes: 'Phần tử trong store_scopes chứa ký tự không hợp lệ',
+    },
+  });
+  assert.ok(
+    modalFieldErrorHtml.includes('data-testid="field-error-carrier-scopes"'),
+    'Modal must render field error for carrier_account_scopes'
+  );
+  assert.ok(
+    modalFieldErrorHtml.includes('data-testid="field-error-store-scopes"'),
+    'Modal must render field error for store_scopes'
+  );
+
   console.log(
     'All FEAT-RBAC-02 User Management & Scope Assignment UI States tests passed successfully!'
   );
