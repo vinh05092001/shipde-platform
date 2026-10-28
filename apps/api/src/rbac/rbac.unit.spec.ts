@@ -6,6 +6,7 @@ import { PLATFORM_PERMISSIONS, SYSTEM_ROLES } from './rbac.constants';
 import { CanonicalApiException as BaseCanonicalApiException } from '../auth/auth.service';
 import { CanonicalApiException } from './rbac.service';
 import { RbacExceptionFilter } from './rbac-exception.filter';
+import { CreateRolePipe, UpdateRolePipe } from './rbac-validation.pipe';
 import { RbacController } from './rbac.controller';
 import { PermissionsGuard } from './rbac.guard';
 import { assertNoSensitiveData } from '@shipde/testkit';
@@ -4166,5 +4167,101 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
         return true;
       }
     );
+  });
+
+  // Finding (Round 16 / P2-03): DTO validation pipes reject bad bodies, extra fields, and invalid formats with 400 field errors
+  test('Finding (Round 16 / P2-03): CreateRolePipe and UpdateRolePipe reject bad bodies, unknown fields, and invalid formats', () => {
+    const createPipe = new CreateRolePipe();
+    const updatePipe = new UpdateRolePipe();
+
+    // 1. Non-object body rejects with 400 VALIDATION_ERROR
+    assert.throws(
+      () => createPipe.transform(null),
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 400);
+        assert.strictEqual(err.code, 'VALIDATION_ERROR');
+        assert.ok(err.fields?.some((f: any) => f.field === 'body' && f.code === 'INVALID_BODY'));
+        return true;
+      }
+    );
+
+    // 2. Extra unexpected field rejects with 400 VALIDATION_ERROR
+    assert.throws(
+      () =>
+        createPipe.transform({
+          name: 'Valid Name',
+          permissions: ['order:view_create'],
+          malicious_payload: 'injection',
+          is_admin: true,
+        }),
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 400);
+        assert.strictEqual(err.code, 'VALIDATION_ERROR');
+        assert.ok(
+          err.fields?.some(
+            (f: any) => f.field === 'malicious_payload' && f.code === 'UNEXPECTED_FIELD'
+          )
+        );
+        assert.ok(
+          err.fields?.some((f: any) => f.field === 'is_admin' && f.code === 'UNEXPECTED_FIELD')
+        );
+        return true;
+      }
+    );
+
+    // 3. Name with forbidden <script> characters rejects with 400 VALIDATION_ERROR
+    assert.throws(
+      () =>
+        createPipe.transform({
+          name: '<script>alert(1)</script>',
+          permissions: ['order:view_create'],
+        }),
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 400);
+        assert.strictEqual(err.code, 'VALIDATION_ERROR');
+        assert.ok(
+          err.fields?.some((f: any) => f.field === 'name' && f.code === 'INVALID_CHARACTERS')
+        );
+        return true;
+      }
+    );
+
+    // 4. UpdateRolePipe rejects extra unexpected field
+    assert.throws(
+      () =>
+        updatePipe.transform({
+          name: 'Updated Name',
+          unknown_patch_field: 42,
+        }),
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 400);
+        assert.strictEqual(err.code, 'VALIDATION_ERROR');
+        assert.ok(
+          err.fields?.some(
+            (f: any) => f.field === 'unknown_patch_field' && f.code === 'UNEXPECTED_FIELD'
+          )
+        );
+        return true;
+      }
+    );
+
+    // 5. Valid body passes through cleanly
+    const validCreate = createPipe.transform({
+      name: 'Thủ Kho Trưởng',
+      description: 'Quản lý xuất nhập tồn kho',
+      permissions: ['order:view_create'],
+    });
+    assert.strictEqual(validCreate.name, 'Thủ Kho Trưởng');
+    assert.strictEqual(validCreate.description, 'Quản lý xuất nhập tồn kho');
+    assert.deepStrictEqual(validCreate.permissions, ['order:view_create']);
+
+    const validUpdate = updatePipe.transform({
+      description: 'Mô tả cập nhật',
+    });
+    assert.strictEqual(validUpdate.description, 'Mô tả cập nhật');
   });
 });

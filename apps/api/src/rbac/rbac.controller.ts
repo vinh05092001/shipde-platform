@@ -15,6 +15,7 @@ import {
 } from '@nestjs/common';
 import { RbacService } from './rbac.service';
 import { CreateRoleDto, UpdateRoleDto, ActorContext } from './rbac.dto';
+import { CreateRolePipe, UpdateRolePipe } from './rbac-validation.pipe';
 import { SessionGuard } from '../session/session.guard';
 import { RbacExceptionFilter } from './rbac-exception.filter';
 import { normalizeCorrelationId } from '@shipde/config';
@@ -66,7 +67,7 @@ export class RbacController {
    */
   @Post('roles')
   @HttpCode(HttpStatus.CREATED)
-  async createRole(@Body() dto: CreateRoleDto, @Req() req: any) {
+  async createRole(@Body(CreateRolePipe) dto: CreateRoleDto, @Req() req: any) {
     const correlationId = (req as any).correlationId || normalizeCorrelationId();
     const clientIp = extractClientIp(req);
     const actor = await this.resolveActor(req);
@@ -78,7 +79,11 @@ export class RbacController {
    */
   @Patch('roles/:id')
   @HttpCode(HttpStatus.OK)
-  async updateRole(@Param('id') id: string, @Body() dto: UpdateRoleDto, @Req() req: any) {
+  async updateRole(
+    @Param('id') id: string,
+    @Body(UpdateRolePipe) dto: UpdateRoleDto,
+    @Req() req: any
+  ) {
     const correlationId = (req as any).correlationId || normalizeCorrelationId();
     const clientIp = extractClientIp(req);
     const actor = await this.resolveActor(req);
