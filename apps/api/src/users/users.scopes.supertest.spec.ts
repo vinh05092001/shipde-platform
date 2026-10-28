@@ -635,8 +635,8 @@ async function main() {
       .set('Authorization', `Bearer ${otherOwnerToken}`)
       .send({ store_scopes: ['*'] });
 
-    assert.strictEqual(patchRes.status, 403);
-    assert.strictEqual(patchRes.body.error.code, 'FORBIDDEN');
+    assert.strictEqual(patchRes.status, 404);
+    assert.strictEqual(patchRes.body.error.code, 'USER_NOT_FOUND');
     console.log('PASS: AC-RBAC-02-18 Cross-tenant user access fails closed');
   }
 

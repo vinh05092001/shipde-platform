@@ -8,6 +8,7 @@ import {
   USERS_FORBIDDEN_TEXT,
   USERS_RETRY_LABEL,
   USERS_SCOPE_SUCCESS_TOAST,
+  mapCanonicalFieldErrors,
 } from '@/components/UserManagementTab';
 import { AuthProvider } from '@/context/AuthContext';
 
@@ -290,6 +291,83 @@ async function runTest() {
   assert.ok(
     modalFieldErrorHtml.includes('data-testid="field-error-store-scopes"'),
     'Modal must render field error for store_scopes'
+  );
+
+  // 11. UI State: LIVE CANONICAL ERROR BODY MAPPING (AC-RBAC-02-20, Grok Round 4 Finding 2)
+  console.log('Testing 11. UI State: LIVE CANONICAL ERROR BODY MAPPING...');
+  const realApiErrorBody = {
+    error: {
+      code: 'VALIDATION_ERROR',
+      message: 'Tài khoản vận chuyển không tồn tại hoặc không thuộc cửa hàng này: ca-invalid-999',
+      retryable: false,
+      fields: [
+        {
+          field: 'carrier_account_scopes',
+          code: 'INVALID_CARRIER_ACCOUNT',
+          message: 'Tài khoản ca-invalid-999 không hợp lệ',
+        },
+        {
+          field: 'store_scopes[0]',
+          code: 'INVALID_CHARACTERS',
+          message: 'Chứa ký tự không hợp lệ trong chi nhánh',
+        },
+      ],
+    },
+  };
+
+  // 11a. Test pure mapping function against real error shape
+  const mapped = mapCanonicalFieldErrors(realApiErrorBody);
+  assert.strictEqual(
+    mapped.carrier_account_scopes,
+    'Tài khoản ca-invalid-999 không hợp lệ',
+    'mapCanonicalFieldErrors must map carrier_account_scopes'
+  );
+  assert.strictEqual(
+    mapped.store_scopes,
+    'Chứa ký tự không hợp lệ trong chi nhánh',
+    'mapCanonicalFieldErrors must strip array index and map store_scopes'
+  );
+  assert.strictEqual(
+    mapped['store_scopes[0]'],
+    'Chứa ký tự không hợp lệ trong chi nhánh',
+    'mapCanonicalFieldErrors must keep exact field path'
+  );
+
+  // 11b. Feed real API error body shape to UserManagementTab component
+  const modalRealErrorHtml = renderComponent({
+    initialLoading: false,
+    initialForbidden: false,
+    initialUsers: mockUsers,
+    initialEditingUser: mockUsers[1],
+    initialScopeErrorBody: realApiErrorBody,
+  });
+
+  // Must preserve banner
+  assert.ok(
+    modalRealErrorHtml.includes('data-testid="scope-save-error"'),
+    'Modal must keep alert banner when live API error is returned'
+  );
+  assert.ok(
+    modalRealErrorHtml.includes('Tài khoản vận chuyển không tồn tại'),
+    'Modal alert banner must display server error message'
+  );
+
+  // Must render field errors mapped onto field-error-*
+  assert.ok(
+    modalRealErrorHtml.includes('data-testid="field-error-carrier-scopes"'),
+    'Modal must render field error for carrier_account_scopes from canonical fields array'
+  );
+  assert.ok(
+    modalRealErrorHtml.includes('Tài khoản ca-invalid-999 không hợp lệ'),
+    'Modal carrier scope field error must display exact message from fields array'
+  );
+  assert.ok(
+    modalRealErrorHtml.includes('data-testid="field-error-store-scopes"'),
+    'Modal must render field error for store_scopes from canonical fields array'
+  );
+  assert.ok(
+    modalRealErrorHtml.includes('Chứa ký tự không hợp lệ trong chi nhánh'),
+    'Modal store scope field error must display exact message from fields array'
   );
 
   console.log(

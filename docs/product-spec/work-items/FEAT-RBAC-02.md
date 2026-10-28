@@ -144,9 +144,9 @@ The user scope assignment interface in `SCR-USR-01` (`/settings/users`) implemen
 | `AC-RBAC-02-15` | User with wildcard `*` checks any store, warehouse, or carrier account | 200 OK with `authorized: true` | Supertest integration test | PASS |
 | `AC-RBAC-02-16` | Suspended or pending user attempts scope check | 403 `FORBIDDEN` canonical error | Supertest integration test | PASS |
 | `AC-RBAC-02-17` | Actor lacking `iam:manage_users` permission attempts scope mutation | 403 `FORBIDDEN` canonical error | Supertest integration test | PASS |
-| `AC-RBAC-02-18` | Cross-tenant actor attempts to view or update scopes of another merchant's user | 404 `USER_NOT_FOUND` / 403 `FORBIDDEN` canonical error | Supertest integration test | PASS |
+| `AC-RBAC-02-18` | Cross-tenant actor attempts to view or update scopes of another merchant's user | 404 `USER_NOT_FOUND` canonical error (no cross-tenant existence oracle) | Supertest integration test | PASS |
 | `AC-RBAC-02-19` | Audit failure during scope update transaction | Transaction rolls back; 500 error returned; user scopes unchanged | Supertest integration test | PASS |
-| `AC-RBAC-02-20` | Web UI renders Loading, Empty, Validation, Error, Forbidden, and Success states | All component state snapshots verified | Web test harness (`user-scopes-states.test.ts`) | PASS |
+| `AC-RBAC-02-20` | Web UI renders Loading, Empty, Validation, Error, Forbidden, and Success states | All component state snapshots & live canonical error mapping verified | Web test harness (`user-scopes-states.test.ts`) | PASS |
 | `AC-RBAC-02-21` | Security secret scanner run | 0 secrets or sensitive tokens detected | `pnpm security:secrets` | PASS |
 
 ## Verification commands
@@ -158,7 +158,7 @@ The user scope assignment interface in `SCR-USR-01` (`/settings/users`) implemen
 - `pnpm typecheck` — 12/12 packages passed with 0 TypeScript errors.
 - `pnpm contract:check` — 51 endpoints verified against OpenAPI 3.1.0 specification with 0 drift.
 - `pnpm --filter @shipde/api test` — 18/18 scope assignment unit tests passed; 19/19 scope assignment supertest integration tests passed (`AC-RBAC-02-01` to `AC-RBAC-02-19`).
-- `pnpm --filter @shipde/web test` — All 9 UI states verified (`user-scopes-states.test.ts` passed 100%).
+- `pnpm --filter @shipde/web test` — All 11 UI states verified (`user-scopes-states.test.ts` passed 100%).
 - `pnpm build` — Full monorepo build succeeded (8/8 tasks completed, Next.js Turbopack output generated cleanly).
 - `pnpm security:secrets` — Gitleaks scanner completed with 0 secrets detected across commit history and working tree.
 - `git diff --check` — Clean whitespace and no conflict markers.
@@ -170,7 +170,8 @@ The user scope assignment interface in `SCR-USR-01` (`/settings/users`) implemen
 | --- | --- | --- | --- |
 | 1 | `1a2c91e1` | CHANGES_REQUIRED | Initial implementation of FEAT-RBAC-02 vertical slice |
 | 2 | `2222ed94` | CHANGES_REQUIRED | Review r3: 4 P1 findings (wire carrier scopes, real rollback test, shared scope validation, restore MFA reset contract) |
-| 3 | HEAD | READY_FOR_CODEX | Wire carrier scopes & success toast in modal, real updateUserScopes rollback test with injected audit failure, unified validateScopeArray & row-lock across scope writes, restore exact origin/main adminResetMfa contract |
+| 3 | `b8bfebd0` | CHANGES_REQUIRED | Wire carrier scopes & success toast in modal, real updateUserScopes rollback test with injected audit failure, unified validateScopeArray & row-lock across scope writes, restore exact origin/main adminResetMfa contract |
+| 4 | HEAD | READY_FOR_CODEX | Grok round 4: remove cross-tenant findUnique existence oracle on scope mutation (return 404 USER_NOT_FOUND), map canonical fields array onto field-error-* while keeping modal alert banner |
 
 ## Residual limitations
 

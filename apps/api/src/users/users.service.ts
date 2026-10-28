@@ -766,18 +766,6 @@ export class UsersService {
         }
 
         if (!lockedTargetUser) {
-          const crossTenant = await tx.user.findUnique({
-            where: { id: targetUserId },
-            select: { id: true, merchant_id: true },
-          });
-          if (crossTenant) {
-            throw new CanonicalApiException(
-              HttpStatus.FORBIDDEN,
-              'FORBIDDEN',
-              'Không có quyền chỉnh sửa người dùng của cửa hàng khác',
-              false
-            );
-          }
           throw new CanonicalApiException(
             HttpStatus.NOT_FOUND,
             'USER_NOT_FOUND',
@@ -957,18 +945,6 @@ export class UsersService {
         }
 
         if (!targetUser) {
-          const crossTenant = await tx.user.findUnique({
-            where: { id: targetUserId },
-            select: { id: true, merchant_id: true },
-          });
-          if (crossTenant) {
-            throw new CanonicalApiException(
-              HttpStatus.FORBIDDEN,
-              'FORBIDDEN',
-              'Không có quyền chỉnh sửa người dùng của cửa hàng khác',
-              false
-            );
-          }
           throw new CanonicalApiException(
             HttpStatus.NOT_FOUND,
             'USER_NOT_FOUND',

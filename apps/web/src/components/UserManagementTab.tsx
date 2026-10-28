@@ -201,6 +201,40 @@ export interface UserWithStores {
   created_at: string;
 }
 
+/**
+ * Maps canonical API error response (fields/details) onto field-error-* dictionary.
+ * Supports canonical error.fields from validateScopeArray/validateCarrierAccountScopes,
+ * as well as legacy/fallback details/fields formats.
+ */
+export function mapCanonicalFieldErrors(
+  errorData: any,
+  fallbackMessage = 'Đã có lỗi xảy ra'
+): Record<string, string> {
+  const fields =
+    errorData?.error?.fields ||
+    errorData?.fields ||
+    errorData?.error?.details ||
+    errorData?.details;
+
+  if (!Array.isArray(fields)) return {};
+
+  const map: Record<string, string> = {};
+  for (const d of fields) {
+    if (d && d.field) {
+      const baseField = d.field.replace(/\[\d+\]$/, '');
+      const msg = d.message || errorData?.error?.message || errorData?.message || fallbackMessage;
+      map[baseField] = msg;
+      map[d.field] = msg;
+      if (baseField === 'carrier_account_scopes') {
+        map['carrier_scopes'] = msg;
+      } else if (baseField === 'carrier_scopes') {
+        map['carrier_account_scopes'] = msg;
+      }
+    }
+  }
+  return map;
+}
+
 export interface UserManagementTabProps {
   initialUsers?: (UserListItem | UserWithStores)[];
   initialLoading?: boolean;
@@ -210,6 +244,7 @@ export interface UserManagementTabProps {
   initialToastMessage?: string | null;
   initialScopeError?: string | null;
   initialScopeLoading?: boolean;
+  initialScopeErrorBody?: any;
   initialFieldErrors?: Record<string, string>;
   initialActiveSubTab?: 'matrix' | 'stores' | 'members' | 'devices' | 'invitations';
   initialSubTab?: 'matrix' | 'stores' | 'members' | 'devices' | 'invitations';
@@ -370,14 +405,21 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
   );
   const [editError, setEditError] = useState<string | null>(null);
   const [scopeSaveError, setScopeSaveError] = useState<string | null>(
-    props.initialScopeError ?? null
+    props.initialScopeError ??
+      props.initialScopeErrorBody?.error?.message ??
+      props.initialScopeErrorBody?.message ??
+      null
   );
   const [scopeSaveLoading, setScopeSaveLoading] = useState<boolean>(
     props.initialScopeLoading ?? false
   );
-  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>(
-    props.initialFieldErrors ?? {}
-  );
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>(() => {
+    if (props.initialFieldErrors) return props.initialFieldErrors;
+    if (props.initialScopeErrorBody) {
+      return mapCanonicalFieldErrors(props.initialScopeErrorBody);
+    }
+    return {};
+  });
 
   // Modal suspend user state
   const [suspendingUser, setSuspendingUser] = useState<UserListItem | null>(null);
@@ -488,16 +530,9 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
           errorData.error?.message || errorData.message || 'Không thể cập nhật phạm vi quyền hạn';
         setScopeSaveError(msg);
 
-        // Map field validation errors
-        if (Array.isArray(errorData.error?.details)) {
-          const map: Record<string, string> = {};
-          for (const d of errorData.error.details) {
-            if (d.field) {
-              const baseField = d.field.replace(/\[\d+\]$/, '');
-              map[baseField] = d.message || msg;
-              map[d.field] = d.message || msg;
-            }
-          }
+        // Map field validation errors from canonical error body's fields array (AC-RBAC-02-20)
+        const map = mapCanonicalFieldErrors(errorData, msg);
+        if (Object.keys(map).length > 0) {
           setFieldErrors(map);
         }
         return;
@@ -521,9 +556,14 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
 
       if (!userRes.ok) {
         const errorData = await userRes.json().catch(() => ({}));
-        throw new Error(
-          errorData.error?.message || errorData.message || 'Không thể cập nhật thông tin người dùng'
-        );
+        const msg =
+          errorData.error?.message || errorData.message || 'Không thể cập nhật thông tin người dùng';
+        setEditError(msg);
+        const map = mapCanonicalFieldErrors(errorData, msg);
+        if (Object.keys(map).length > 0) {
+          setFieldErrors(map);
+        }
+        return;
       }
 
       // Success toast only after 200 OK
