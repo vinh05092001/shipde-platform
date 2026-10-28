@@ -42,10 +42,6 @@ function normaliseCanonical(value) {
   canonical = canonical.split('@')[0];
   canonical = canonical.replace(/(?::free|-free)$/, '');
   canonical = canonical.replace(/\s*\([^)]*\)/g, '').replace(/[._\s]+/g, '-');
-  canonical = canonical.replace(
-    /-(?:thinking|agentic|high|medium|low|minimal|max|xhigh|none|reasoning|non-reasoning)$/,
-    ''
-  );
   return canonical || null;
 }
 
@@ -251,6 +247,57 @@ function leaderboardModelId(value) {
     .replace(/[._\s]+/g, '-');
 }
 
+function loadEffortVariants(ranking) {
+  const variants = new Set();
+  try {
+    const sourcesPath = path.join(__dirname, 'sources.json');
+    if (fs.existsSync(sourcesPath)) {
+      const parsed = JSON.parse(fs.readFileSync(sourcesPath, 'utf8'));
+      const list =
+        parsed && (parsed.effortVariants || (parsed.dispatch && parsed.dispatch.effortVariants));
+      if (Array.isArray(list)) {
+        for (const item of list) {
+          if (typeof item === 'string' && item.trim()) {
+            variants.add(item.trim().toLowerCase());
+          }
+        }
+      }
+    }
+  } catch (_) {}
+
+  if (Array.isArray(ranking)) {
+    for (const row of ranking) {
+      if (!row) continue;
+      if (row.matchedBaseId && row.canonical && row.canonical.startsWith(row.matchedBaseId + '-')) {
+        const suff = row.canonical.slice(row.matchedBaseId.length + 1).toLowerCase();
+        if (suff) variants.add(suff);
+      }
+      if (typeof row.name === 'string') {
+        const m = row.name.match(/\(([^)]+)\)/);
+        if (m) {
+          for (const part of m[1].split(/[\/,]/)) {
+            const trimmed = part.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-');
+            if (trimmed) variants.add(trimmed);
+          }
+        }
+      }
+    }
+  }
+
+  return Array.from(variants).sort((a, b) => b.length - a.length);
+}
+
+function stripTrailingEffort(id, suffixes) {
+  if (!id || typeof id !== 'string') return null;
+  for (const suffix of suffixes) {
+    const pattern = '-' + suffix;
+    if (id.endsWith(pattern) && id.length > pattern.length) {
+      return id.slice(0, -pattern.length);
+    }
+  }
+  return null;
+}
+
 function matchModelPrior(modelId, ranking) {
   const id = leaderboardModelId(modelId);
   const byId = new Map(
@@ -259,16 +306,18 @@ function matchModelPrior(modelId, ranking) {
   if (byId.has(id)) return { entry: byId.get(id) };
   const queue = [{ id, reasoning: false }];
   const seen = new Set([id]);
+  const effortSuffixes = loadEffortVariants(ranking);
   for (const current of queue) {
     if (!current.id) continue;
     const deployment = current.id.replace(
       /(?::(?:batch|flex|cloud)|-?\[\d+(?:-\d+)?[km]\]|-(?:fast|latest|volc|turbo|\d{4}-\d{2}-\d{2}|\d{8}|\d{6}|\d{4}))$/,
       ''
     );
-    const reasoning = current.id.replace(
-      /-(?:thinking|agentic|high|medium|low|minimal|max|xhigh|none|reasoning|non-reasoning)$/,
-      ''
-    );
+    let reasoning = current.id;
+    if (!byId.has(current.id)) {
+      const stripped = stripTrailingEffort(current.id, effortSuffixes);
+      if (stripped) reasoning = stripped;
+    }
     for (const [base, effort] of [
       [deployment, false],
       [reasoning, true],

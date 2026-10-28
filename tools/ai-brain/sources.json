@@ -2,6 +2,19 @@
   "version": 2,
   "updatedAt": "2026-10-03",
   "note": "Adding a source is an entry here plus a qualification probe. Nothing in the dispatch path may branch on a source id.",
+  "effortVariants": [
+    "thinking",
+    "agentic",
+    "high",
+    "medium",
+    "low",
+    "minimal",
+    "max",
+    "xhigh",
+    "none",
+    "reasoning",
+    "non-reasoning"
+  ],
   "sources": [
     {
       "id": "9router",
