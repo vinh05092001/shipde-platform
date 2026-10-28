@@ -951,6 +951,52 @@ describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
         console.error = origConsoleError;
       }
     });
+
+    it('sanitizes Prisma error details in error log metadata (F-10)', async () => {
+      const errorLogs: string[] = [];
+      const origConsoleError = console.error;
+      console.error = (...args: any[]) => {
+        errorLogs.push(args.join(' '));
+        origConsoleError(...args);
+      };
+
+      try {
+        const prismaError = new Error(
+          'Unique constraint failed on the fields: (`session_token_hash`) at SELECT * FROM "DeviceSession" WHERE raw SQL'
+        );
+        (prismaError as any).code = 'P2002';
+        (prismaError as any).name = 'PrismaClientKnownRequestError';
+
+        const mockPrisma: any = {
+          deviceSession: {
+            findUnique: async () => ({
+              id: 'sess-prisma-err',
+              user_id: 'user-1',
+              merchant_id: 'merch-1',
+              status: SessionStatusEnum.ACTIVE,
+            }),
+          },
+          $transaction: async () => {
+            throw prismaError;
+          },
+        };
+        const service = new SessionService(mockPrisma);
+        await assert.rejects(
+          async () => service.revoke('sess-prisma-err', 'user-1', 'merch-1', 'c-prisma'),
+          /Unique constraint failed/
+        );
+        const logEntry = errorLogs.find((l) => l.includes('SESSION_REVOCATION_ROLLBACK'));
+        assert.ok(logEntry, 'Must log rollback event');
+        assert.ok(logEntry.includes('PRISMA_P2002'), 'Must log sanitized Prisma code');
+        assert.strictEqual(
+          logEntry.includes('SELECT * FROM'),
+          false,
+          'Must not leak raw SQL query fragments in log metadata'
+        );
+      } finally {
+        console.error = origConsoleError;
+      }
+    });
   });
 
   describe('Finding F-03: Boundary consistency between validateSession and heartbeat (BR-SESS-03 / BR-SESS-04)', () => {

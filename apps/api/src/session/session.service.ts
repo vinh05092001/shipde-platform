@@ -286,7 +286,13 @@ export class SessionService implements OnApplicationBootstrap {
           message: isAuditFailure
             ? `AUDIT_ROLLBACK: Transaction rolled back during revocation of Session:${sessionId}`
             : `SESSION_REVOCATION_ROLLBACK: Transaction rolled back during revocation of Session:${sessionId}`,
-          metadata: { sessionId, merchantId, userId, correlationId, error: (err as any)?.message },
+          metadata: {
+            sessionId,
+            merchantId,
+            userId,
+            correlationId,
+            error: this.sanitizeError(err),
+          },
         })
       );
       throw err;
@@ -369,7 +375,12 @@ export class SessionService implements OnApplicationBootstrap {
           message: isAuditFailure
             ? `AUDIT_ROLLBACK: Transaction rolled back during revoke-all for User:${userId}`
             : `SESSION_REVOCATION_ROLLBACK: Transaction rolled back during revoke-all for User:${userId}`,
-          metadata: { merchantId, userId, correlationId, error: (err as any)?.message },
+          metadata: {
+            merchantId,
+            userId,
+            correlationId,
+            error: this.sanitizeError(err),
+          },
         })
       );
       throw err;
@@ -613,12 +624,41 @@ export class SessionService implements OnApplicationBootstrap {
           level: 'error',
           service: 'api',
           message: `AUDIT_FAILED: Failed to persist audit log for ${meta.action} on ${meta.resource}`,
-          metadata: { ...safeMeta, ipAddress: hashedIp, error: (err as any)?.message },
+          metadata: { ...safeMeta, ipAddress: hashedIp, error: this.sanitizeError(err) },
         })
       );
       throw err;
     }
 
     return emitLog;
+  }
+
+  private sanitizeError(err: unknown): string {
+    if (!err) return 'UNKNOWN_ERROR';
+    const anyErr = err as any;
+    if (anyErr?.code && typeof anyErr.code === 'string' && anyErr.code.startsWith('P')) {
+      return `PRISMA_${anyErr.code}`;
+    }
+    if (anyErr?.name && typeof anyErr.name === 'string') {
+      if (anyErr.name.includes('Prisma')) {
+        return anyErr.code ? `PRISMA_${anyErr.code}` : 'PRISMA_DATABASE_ERROR';
+      }
+      return anyErr.name;
+    }
+    if (typeof anyErr?.message === 'string') {
+      if (anyErr.message.includes('AUDIT_IDENTIFIER_HMAC_KEY')) {
+        return 'AUDIT_IDENTIFIER_HMAC_KEY_MISSING';
+      }
+      if (anyErr.message.toLowerCase().includes('audit')) {
+        return 'AUDIT_PERSISTENCE_FAILED';
+      }
+      if (
+        anyErr.message.toLowerCase().includes('pool') ||
+        anyErr.message.toLowerCase().includes('connection')
+      ) {
+        return 'DATABASE_CONNECTION_ERROR';
+      }
+    }
+    return 'INTERNAL_ERROR';
   }
 }
