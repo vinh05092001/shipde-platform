@@ -355,6 +355,17 @@
     "maxHostGateSummaryChars": 500,
     "rateLimitCooldownMs": 300000,
     "agyPoolTimeoutMs": 1800000,
+    "verification": {
+      "infraDependentScripts": ["test", "test:e2e", "test:integration"],
+      "infraFreeSupplements": ["contract:check"],
+      "note": "Scripts needing PostgreSQL/Redis/MinIO are deferred to GitHub CI; the isolated worker has none. Supplements run only when present in package.json."
+    },
+    "ciGate": {
+      "enabled": true,
+      "pollIntervalMs": 30000,
+      "timeoutMs": 1800000,
+      "maxLogChars": 12000
+    },
     "headroomUnknownPenalty": 15,
     "headroomTightPenalty": 10,
     "note": "How a registry account's `provider` reaches a running session. This table is why the executor needs no provider branch: a new provider is a row here.",

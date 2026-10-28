@@ -275,6 +275,29 @@ function hookedControllerGit(options) {
   return controllerGit(options, true);
 }
 
+/**
+ * True when the decision log shows a writer or repair turn for this work item:
+ * the evidence that a dirty retained root holds this item's own output.
+ */
+function retainedRootHasOwnWriterRecord(opts) {
+  try {
+    const decisions = require('./decisions');
+    const baseId = String(opts.workItemId).replace(/-(repair-\d+|review)$/, '');
+    return decisions
+      .readDecisionsSafe({ dir: opts.decisionDir || undefined })
+      .some(
+        (rec) =>
+          rec &&
+          rec.workItemId &&
+          String(rec.workItemId).replace(/-(repair-\d+|review)$/, '') === baseId &&
+          (rec.stage === 'writer-launch-result' ||
+            (rec.stage === decisions.Stage.LAUNCHED && !!rec.sha))
+      );
+  } catch {
+    return false;
+  }
+}
+
 function commitNativeWriterChanges(options) {
   const o = options || {};
   const checked = hookedControllerGit(o);
@@ -678,6 +701,7 @@ if (\`$LASTEXITCODE -ne 0) {
     'CommonProgramFiles(x86)',
     'PUBLIC',
     'PATHEXT',
+    'pnpm_config_verify_deps_before_run',
   ];
   // DS-R04: add only the selected source's credential env to the allowlist
   if (options.adapterId === 'opencode-direct') {
@@ -699,6 +723,7 @@ $env:SHIPDE_ISOLATION_VERDICT = [Text.Encoding]::UTF8.GetString($verdictBytes)
 $markerPath = "${markerPath}"
 $completionNonce = "${completionNonce}"
 $usageLogPath = '${String(usageLogPath).replace(/'/g, "''")}'
+$workerRoot = "${workerRoot}"
 $env:HOME = "${workerRoot}"
 $env:USERPROFILE = "${workerRoot}"
 $wrapperPid = 0
@@ -715,6 +740,14 @@ $wrapperStartTime = Get-Date
 \`$env:TEMP = "${workerRoot}\\temp"
 \`$env:TMP = "${workerRoot}\\temp"
 if (-not \`$env:OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX) { \`$env:OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX = "4096" }
+\`$env:pnpm_config_verify_deps_before_run = "warn"
+\`$workerNpm = "C:\\ShipDeWorker\\npm"
+if (Test-Path \`$workerNpm) {
+  \`$env:PATH = "\`$workerNpm;" + \`$env:PATH
+}
+# The worker root is recreated per launch; a Codex login must live outside it.
+\`$workerCodexHome = "C:\\ShipDeWorker\\codex-home"
+if (Test-Path \`$workerCodexHome) { \`$env:CODEX_HOME = \`$workerCodexHome }
 if (-not (Test-Path "${workerRoot}\\temp")) { New-Item -ItemType Directory -Path "${workerRoot}\\temp" | Out-Null }
 if (-not (Test-Path "${workerRoot}\\.shipde")) { New-Item -ItemType Directory -Path "${workerRoot}\\.shipde" | Out-Null }
 Set-Location -Path "${workerRoot}"
@@ -750,6 +783,9 @@ foreach ($key in $allowed) {
     if ([Environment]::GetEnvironmentVariable($key)) {
         $psi.EnvironmentVariables[$key] = [Environment]::GetEnvironmentVariable($key)
     }
+}
+if (Test-Path "C:\\ShipDeWorker\\npm") {
+    $psi.EnvironmentVariables["PATH"] = "C:\\ShipDeWorker\\npm;" + $psi.EnvironmentVariables["PATH"]
 }
 ${rtkPathPrepend ? `$psi.EnvironmentVariables["PATH"] = "${rtkPathPrepend.replace(/\\/g, '\\\\')}" + ";" + $psi.EnvironmentVariables["PATH"]` : ''}
 
@@ -849,10 +885,11 @@ function Stop-WorkerTree {
 # it look like one.
 function Get-DescendantProcessIds {
     param([int]$AncestorPid, [datetime]$NotBefore)
-    $rows = @(Get-CimInstance Win32_Process -Property ProcessId, ParentProcessId, CreationDate -ErrorAction SilentlyContinue)
+    $rows = @(Get-CimInstance Win32_Process -Property ProcessId, ParentProcessId, CreationDate, Name -ErrorAction SilentlyContinue)
     $children = @{}
     $created = @{}
     foreach ($row in $rows) {
+        if ($row.Name -ieq "conhost.exe") { continue }
         $rowPid = [int]$row.ProcessId
         $created[$rowPid] = $row.CreationDate
         $rowParent = [int]$row.ParentProcessId
@@ -944,6 +981,7 @@ function Update-SessionProgress {
             if ([string]::IsNullOrWhiteSpace($trimmed)) { continue }
             $is413 = $false
             $matchText = ""
+            $skipRaw413 = $false
             if ($trimmed.StartsWith('{') -and $trimmed.EndsWith('}')) {
                 try {
                     $ev = $trimmed | ConvertFrom-Json
@@ -957,6 +995,9 @@ function Update-SessionProgress {
                         $err = $null
                         if ($ev.type -eq "error" -and $null -ne $ev.error) { $err = $ev.error }
                         elseif ($null -ne $ev.error) { $err = $ev.error }
+                        # A structured event without an error field is worker content (tool input/output,
+                        # model text); a branch name or log line inside it must not read as an HTTP 413.
+                        if ($null -eq $err -and $ev.type -ne "error") { $skipRaw413 = $true }
                         if ($null -ne $err) {
                             $code = $null
                             if ($null -ne $err.data -and $null -ne $err.data.statusCode) { $code = [int]$err.data.statusCode }
@@ -998,7 +1039,7 @@ function Update-SessionProgress {
                     }
                 } catch {}
             }
-            if (-not $is413) {
+            if (-not $is413 -and -not $skipRaw413) {
                 if ($trimmed -match '(?i)\b413\b.*(?:request|payload|entity|too\s+large|tpm)|(?:request|payload|entity)\s+(?:is\s+)?too\s+large|\b413\s+Request|\b413\s+Payload|rate\s+limit.*tokens?\s+per\s+minute|\bTPM\b.*limit|limit.*on.*TPM') {
                     $is413 = $true
                     $matchText = $trimmed
@@ -1131,7 +1172,11 @@ if ($stderrTask.Wait(15000)) { $stderr = $stderrTask.Result } else { $stderr = "
 if (-not $script:requestTooLarge) {
     Update-SessionProgress
     if (-not $script:requestTooLarge) {
-        $combined = $stdout + [Environment]::NewLine + $stderr
+        # Structured JSON events (tool calls, model text) are worker content, not transport errors.
+        $combinedLines = @([regex]::Split(($stdout + [Environment]::NewLine + $stderr), '\\r?\\n') | Where-Object {
+            -not ($_.TrimStart().StartsWith('{"type":"') -and -not $_.TrimStart().StartsWith('{"type":"error"'))
+        })
+        $combined = $combinedLines -join [Environment]::NewLine
         if ($combined -match '(?i)\b413\b.*(?:request|payload|entity|too\s+large|tpm)|(?:request|payload|entity)\s+(?:is\s+)?too\s+large|\b413\s+Request|\b413\s+Payload|rate\s+limit.*tokens?\s+per\s+minute|\bTPM\b.*limit|limit.*on.*TPM') {
             $script:requestTooLarge = $true
             $script:requestTooLargeDetail = "worker output indicated 413 / request too large / TPM limit"
@@ -1523,12 +1568,16 @@ function captureFailBefore(workerRoot, options) {
     }
   }
 
-  const command =
+  let command =
     (o.verification && o.verification.command) || o.exerciseCommand || `node --test ${runnerPosix}`;
+  command = command.replace(/^pnpm\s+install(\s+--[a-z0-9-]+)*\s*&&\s*/i, '');
+  command = command.replace(/^pnpm\s+install(\s+--[a-z0-9-]+)*\s*&&\s*/i, '');
 
   const childEnv = Object.assign({}, process.env, o.env || {});
   delete childEnv.NODE_TEST_CONTEXT;
   delete childEnv.NODE_TEST_WORKER_ID;
+  childEnv.TURBO_ENV_MODE = 'loose';
+  childEnv.IS_WEBPACK_TEST = '1';
 
   let res;
   if (!o.verification && !o.exerciseCommand) {
@@ -1936,6 +1985,72 @@ function getIsolatedLauncher() {
       }
 
       const { isTreeDirty } = require('./orchestrate');
+      // A repair turn that edited the retained root but left it uncommitted is
+      // this item's own output: keep it as a commit (the same restore commit the
+      // carry-over uses) so the next repair or gate runs on a clean HEAD. A dirty
+      // tree with no writer/repair record for this item stays dirty and fails
+      // closed below.
+      appendGitInfoExclude(workerRoot, [
+        '.shipde/',
+        'run-target.ps1',
+        'run-target.complete.json',
+        'temp/',
+        '.config/',
+        '.local/',
+        'Microsoft/',
+        'AppData/',
+        '.cache/',
+        '.upstream-tmp/',
+      ]);
+      if (
+        retainedHeadSha &&
+        retainedHeadSha.toLowerCase() === retainWorkerHead.toLowerCase() &&
+        opts.workItemId &&
+        isTreeDirty(workerRoot) &&
+        retainedRootHasOwnWriterRecord(opts)
+      ) {
+        try {
+          const checked = hookedControllerGit({
+            hostRoot: hostCwd,
+            workerRoot,
+            failure: 'WORKER_COMMIT_FAILED',
+          });
+          checked(['add', '--all']);
+          checked(['commit', '-m', 'Restore interrupted writer work']);
+          const committed = checked(['rev-parse', '--verify', 'HEAD^{commit}']);
+          if (/^[a-f0-9]{40}$/i.test(committed) && !isTreeDirty(workerRoot)) {
+            const requestedSha = retainWorkerHead;
+            retainedHeadSha = committed;
+            retainWorkerHead = committed;
+            const baseId = String(opts.workItemId).replace(/-(repair-\d+|review)$/, '');
+            if (opts.checkpoint) {
+              const cli = require('./cli');
+              const onDisk = cli.readCheckpoint(opts.checkpoint);
+              const step = onDisk && onDisk.liveSteps && onDisk.liveSteps[baseId];
+              if (step) {
+                if (step.launch) step.launch.workerSha = committed;
+                if (step.repair) step.repair.sha = committed;
+                cli.writeJsonFile(opts.checkpoint, onDisk);
+              }
+            }
+            require('./decisions').recordDecision(
+              {
+                stage: 'adopted_repair_head',
+                workItemId: opts.workItemId,
+                branch: opts.branch || null,
+                worktree: workerRoot,
+                detail: 'committed uncommitted repair output',
+                requestedSha,
+                adoptedSha: committed,
+              },
+              { dir: opts.decisionDir || undefined }
+            );
+          }
+        } catch {
+          // Fail closed: the dirty tree is reported as WORKER_HEAD_MISMATCH below.
+        }
+      }
+
       if (
         !retainedHeadSha ||
         retainedHeadSha.toLowerCase() !== retainWorkerHead.toLowerCase() ||
@@ -2338,15 +2453,20 @@ function getIsolatedLauncher() {
         // rename it into place. pnpm creates Windows junctions/hard links
         // without requiring the symlink privilege needed by recursive copies.
         if (!cacheReady()) {
-          const stagingDir =
-            depsDir + '.staging-' + process.pid + '-' + Math.random().toString(36).slice(2, 8);
-          fs.mkdirSync(stagingDir, { recursive: true });
+          if (fs.existsSync(depsDir)) {
+            fs.rmSync(depsDir, { recursive: true, force: true });
+          }
+          const isWin = process.platform === 'win32';
+          const targetDir = isWin
+            ? depsDir
+            : depsDir + '.staging-' + process.pid + '-' + Math.random().toString(36).slice(2, 8);
+          fs.mkdirSync(targetDir, { recursive: true });
           let failedPath = 'pnpm-lock.yaml';
           try {
             for (const entry of hashEntries) {
               failedPath = entry.rel;
               const hostManifest = path.join(hostCwd, entry.rel);
-              const stagedManifest = path.join(stagingDir, entry.rel);
+              const stagedManifest = path.join(targetDir, entry.rel);
               if (!fs.existsSync(hostManifest)) {
                 const missing = new Error('host workspace manifest is missing');
                 missing.code = 'WORKER_DEPS_SOURCE_MISSING';
@@ -2358,7 +2478,7 @@ function getIsolatedLauncher() {
             const hostWorkspaceFile = path.join(hostCwd, 'pnpm-workspace.yaml');
             if (fs.existsSync(hostWorkspaceFile)) {
               failedPath = 'pnpm-workspace.yaml';
-              fs.copyFileSync(hostWorkspaceFile, path.join(stagingDir, 'pnpm-workspace.yaml'));
+              fs.copyFileSync(hostWorkspaceFile, path.join(targetDir, 'pnpm-workspace.yaml'));
             }
 
             failedPath = 'node_modules';
@@ -2367,7 +2487,7 @@ function getIsolatedLauncher() {
               if (offline) args.push('--offline');
               const pnpmExecutable = resolvePnpmCommand();
               const result = cp.spawnSync(pnpmExecutable, args, {
-                cwd: stagingDir,
+                cwd: targetDir,
                 encoding: 'utf8',
                 windowsHide: true,
                 timeout: 600000,
@@ -2392,25 +2512,27 @@ function getIsolatedLauncher() {
               runPnpmInstall(false);
             }
 
-            if (!fs.existsSync(path.join(stagingDir, 'node_modules'))) {
+            if (!fs.existsSync(path.join(targetDir, 'node_modules'))) {
               const error = new Error('pnpm install completed without node_modules');
               error.code = 'WORKER_DEPS_SOURCE_MISSING';
               throw error;
             }
-            fs.writeFileSync(path.join(stagingDir, '.shipde-deps-ready'), 'ready', 'utf8');
-            try {
-              if (fs.existsSync(depsDir)) {
-                fs.rmSync(depsDir, { recursive: true, force: true });
+            fs.writeFileSync(path.join(targetDir, '.shipde-deps-ready'), 'ready', 'utf8');
+            if (!isWin) {
+              try {
+                if (fs.existsSync(depsDir)) {
+                  fs.rmSync(depsDir, { recursive: true, force: true });
+                }
+                fs.renameSync(targetDir, depsDir);
+              } catch (renameErr) {
+                // A concurrent launch finished first: its complete tree wins.
+                fs.rmSync(targetDir, { recursive: true, force: true });
+                if (!cacheReady()) throw renameErr;
               }
-              fs.renameSync(stagingDir, depsDir);
-            } catch (renameErr) {
-              // A concurrent launch finished first: its complete tree wins.
-              fs.rmSync(stagingDir, { recursive: true, force: true });
-              if (!cacheReady()) throw renameErr;
             }
           } catch (provisionError) {
             provisionError.relativePath = failedPath.split(path.sep).join('/');
-            fs.rmSync(stagingDir, { recursive: true, force: true });
+            fs.rmSync(targetDir, { recursive: true, force: true });
             throw provisionError;
           }
         }
@@ -2465,6 +2587,83 @@ function getIsolatedLauncher() {
         if (excluded.length > 0) {
           appendGitInfoExclude(workerRoot, excluded);
         }
+
+        const stateFile = path.join(depsNodeModules, '.pnpm-workspace-state-v1.json');
+        if (fs.existsSync(stateFile)) {
+          try {
+            const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+            if (state && state.projects) {
+              const oldKeys = Object.keys(state.projects);
+              if (oldKeys.length > 0) {
+                const rootKey = oldKeys.reduce(
+                  (a, b) => (a.length <= b.length ? a : b),
+                  oldKeys[0]
+                );
+                const newProjects = {};
+                for (const [k, v] of Object.entries(state.projects)) {
+                  const sub = k.slice(rootKey.length);
+                  newProjects[workerRoot + sub] = v;
+                }
+                state.projects = newProjects;
+                fs.writeFileSync(stateFile, JSON.stringify(state, null, 2), 'utf8');
+              }
+            }
+          } catch {}
+        }
+
+        const depsShipdeDirs = [
+          path.join(depsNodeModules, '.pnpm', 'node_modules', '@shipde'),
+          path.join(depsDir, 'apps', 'api', 'node_modules', '@shipde'),
+          path.join(depsDir, 'apps', 'web', 'node_modules', '@shipde'),
+          path.join(depsDir, 'apps', 'worker', 'node_modules', '@shipde'),
+          path.join(depsDir, 'packages', 'contracts', 'node_modules', '@shipde'),
+          path.join(depsDir, 'packages', 'testkit', 'node_modules', '@shipde'),
+          path.join(depsDir, 'packages', 'ui', 'node_modules', '@shipde'),
+        ];
+        for (const shipdeDir of depsShipdeDirs) {
+          if (fs.existsSync(shipdeDir)) {
+            try {
+              const pkgs = fs.readdirSync(shipdeDir, { withFileTypes: true });
+              for (const pkg of pkgs) {
+                const pkgPath = path.join(shipdeDir, pkg.name);
+                try {
+                  const st = fs.lstatSync(pkgPath);
+                  if (st.isSymbolicLink()) {
+                    const currentTarget = fs.readlinkSync(pkgPath);
+                    const absTarget = path.resolve(path.dirname(pkgPath), currentTarget);
+                    const normDeps = depsDir.replace(/\\/g, '/').toLowerCase();
+                    const normTarget = absTarget.replace(/\\/g, '/').toLowerCase();
+                    if (normTarget.startsWith(normDeps)) {
+                      const sub = absTarget.slice(depsDir.length);
+                      const newTarget = workerRoot + sub;
+                      fs.unlinkSync(pkgPath);
+                      fs.symlinkSync(newTarget, pkgPath, 'junction');
+                    }
+                  }
+                } catch {}
+              }
+            } catch {}
+          }
+        }
+
+        const depsConfigDir = path.join(depsDir, 'packages', 'config');
+        const workerConfigDir = path.join(workerRoot, 'packages', 'config');
+        if (fs.existsSync(depsConfigDir) && fs.existsSync(workerConfigDir)) {
+          try {
+            const cfgFiles = fs.readdirSync(workerConfigDir);
+            for (const f of cfgFiles) {
+              const srcFile = path.join(workerConfigDir, f);
+              const dstFile = path.join(depsConfigDir, f);
+              if (fs.statSync(srcFile).isFile() && !fs.existsSync(dstFile)) {
+                fs.copyFileSync(srcFile, dstFile);
+              }
+            }
+          } catch {}
+        }
+
+        try {
+          fs.rmSync(path.join(workerRoot, '.local'), { recursive: true, force: true });
+        } catch {}
       } catch (err) {
         recordWorkerDepsUnavailable(opts, workerRoot, err);
       }
@@ -2595,7 +2794,19 @@ function getIsolatedLauncher() {
           endpoint.startsWith('http://127.0.0.1') ||
           endpoint.startsWith('http://localhost'));
 
-      if (!isHttpsOrLocalhost || !credentialEnv) {
+      // OpenCode's built-in provider (Zen free tier) needs neither a key nor a
+      // provider block: opencode resolves `opencode/<model>` itself.
+      const builtin = Boolean(
+        selectedSource.opencodeBuiltin && selectedSource.credential?.type === 'none'
+      );
+      if (builtin) {
+        const builtinProvider = selectedSource.opencodeProvider;
+        if (pinnedModel && !pinnedModel.startsWith(builtinProvider + '/')) {
+          directModelRewrite = builtinProvider + '/' + pinnedModel;
+        }
+      }
+
+      if (!builtin && (!isHttpsOrLocalhost || !credentialEnv)) {
         const err = new Error(
           `OPENCODE_DIRECT_SOURCE_UNSUPPORTED: source '${sourceId}' does not have a valid https endpoint (or http://127.0.0.1 / localhost) and credential.env`
         );
@@ -2606,7 +2817,7 @@ function getIsolatedLauncher() {
       const isRouter = selectedSource.kind === 'router' || Boolean(selectedSource.modelPrefix);
 
       // DS-R04: verify that the credential is available in the host environment before spawning (direct sources only; router never checked)
-      if (!isRouter && !process.env[credentialEnv]) {
+      if (!builtin && !isRouter && !process.env[credentialEnv]) {
         const err = new Error(
           `OPENCODE_DIRECT_CREDENTIAL_MISSING: environment variable ${credentialEnv} is not set`
         );
@@ -2615,7 +2826,7 @@ function getIsolatedLauncher() {
       }
 
       // Store for later use in buildWorkerLaunchScript
-      selectedCredentialEnv = credentialEnv;
+      selectedCredentialEnv = builtin ? null : credentialEnv;
 
       // DS-R03: for direct sources, provider id must be the source id, not the model name
       const providerId =
@@ -2687,12 +2898,18 @@ function getIsolatedLauncher() {
         providerOptions.apiKey = `{env:${credentialEnv}}`;
       }
 
-      // Permission scoping: strictly worker root and report dir; no whole-machine wildcard
+      // Permission scoping: strictly worker root, shared deps and report dir; no whole-machine wildcard
       const normWorker = path.resolve(workerRoot).replace(/\\/g, '/');
       const workerPattern = normWorker.endsWith('/') ? normWorker + '**' : normWorker + '/**';
       const extDirPerms = {
         [workerPattern]: 'allow',
       };
+      const depsBase = path.join(path.dirname(workerRoot), 'deps');
+      if (fs.existsSync(depsBase)) {
+        const normDeps = path.resolve(depsBase).replace(/\\/g, '/');
+        const depsPattern = normDeps.endsWith('/') ? normDeps + '**' : normDeps + '/**';
+        extDirPerms[depsPattern] = 'allow';
+      }
       if (opts && opts.usageDir) {
         const normUsage = path.resolve(opts.usageDir).replace(/\\/g, '/');
         const usagePattern = normUsage.endsWith('/') ? normUsage + '**' : normUsage + '/**';
@@ -2711,17 +2928,43 @@ function getIsolatedLauncher() {
         permission: {
           external_directory: extDirPerms,
         },
-        provider: {
-          [providerId]: {
-            npm: '@ai-sdk/openai-compatible',
-            name: selectedSource.label || providerId,
-            options: providerOptions,
-            models: modelsMap,
-          },
-        },
+        ...(builtin
+          ? {}
+          : {
+              provider: {
+                [providerId]: {
+                  npm: '@ai-sdk/openai-compatible',
+                  name: selectedSource.label || providerId,
+                  options: providerOptions,
+                  models: modelsMap,
+                },
+              },
+            }),
       });
       fs.writeFileSync(configPath, configData, 'utf8');
       appendGitInfoExclude(workerRoot, ['opencode.json']);
+      const hostRg = path.join(os.homedir(), '.cache', 'opencode', 'bin', 'rg.exe');
+      if (fs.existsSync(hostRg)) {
+        try {
+          const workerRgDir = path.join(workerRoot, '.cache', 'opencode', 'bin');
+          fs.mkdirSync(workerRgDir, { recursive: true });
+          const workerRg = path.join(workerRgDir, 'rg.exe');
+          if (!fs.existsSync(workerRg)) fs.copyFileSync(hostRg, workerRg);
+          appendGitInfoExclude(workerRoot, ['.cache/']);
+        } catch {}
+      }
+      if (builtin) {
+        // opencode resolves its built-in provider from the public models.dev catalogue
+        // cached at ~/.cache/opencode/models.json; without it (the worker's USERPROFILE is
+        // the worker root and cannot fetch it) every Zen call is "Unexpected server error".
+        const hostCatalogue = path.join(os.homedir(), '.cache', 'opencode', 'models.json');
+        const workerCache = path.join(workerRoot, '.cache', 'opencode');
+        if (fs.existsSync(hostCatalogue)) {
+          fs.mkdirSync(workerCache, { recursive: true });
+          fs.copyFileSync(hostCatalogue, path.join(workerCache, 'models.json'));
+          appendGitInfoExclude(workerRoot, ['.cache/']);
+        }
+      }
     }
 
     let exerciseResult = null;
@@ -2924,6 +3167,9 @@ function getIsolatedLauncher() {
       '.config/',
       '.local/',
       'Microsoft/',
+      'AppData/',
+      '.cache/',
+      '.upstream-tmp/',
     ]);
     const payloadArgsPath = path.join(payloadDir, 'launch-args-' + completionNonce + '.json');
 
@@ -3128,6 +3374,26 @@ function getIsolatedLauncher() {
  * timed-out or unproven result is a failed launch (exitCode -1), and only a
  * completed job carrying THIS launch's nonce returns the job's own exit code.
  */
+function opencodeErrorFromStdout(stdout) {
+  const found = [];
+  for (const line of String(stdout || '').split(/\r?\n/)) {
+    const text = line.trim();
+    if (!text.startsWith('{')) continue;
+    let ev;
+    try {
+      ev = JSON.parse(text);
+    } catch {
+      continue;
+    }
+    if (!ev || ev.type !== 'error' || !ev.error) continue;
+    const data = ev.error.data || {};
+    const msg = data.message || ev.error.message || ev.error.name || 'error';
+    const status = data.statusCode ? ' (HTTP ' + data.statusCode + ')' : '';
+    found.push('OPENCODE_ERROR: ' + String(msg).slice(0, 500) + status);
+  }
+  return found.slice(-3).join('\n');
+}
+
 function readLaunchResult(launchResultPath, completionNonce, hostRes) {
   const hostFailure = (reason) => ({
     exitCode: -1,
@@ -3184,7 +3450,15 @@ function readLaunchResult(launchResultPath, completionNonce, hostRes) {
   return {
     exitCode: resJson.localFailure ? 1 : jobExit,
     stdout: String(resJson.stdout || ''),
-    stderr: [String(resJson.localFailure || ''), String(resJson.stderr || '')]
+    stderr: [
+      String(resJson.localFailure || ''),
+      String(resJson.stderr || ''),
+      // opencode reports API errors as JSON events on stdout and leaves stderr
+      // empty; keep the real message so a failed launch is never only a budget note.
+      (resJson.localFailure ? 1 : jobExit) !== 0 && !String(resJson.stderr || '').trim()
+        ? opencodeErrorFromStdout(resJson.stdout)
+        : '',
+    ]
       .filter(Boolean)
       .join('\n'),
     localFailure: resJson.localFailure ? String(resJson.localFailure) : null,

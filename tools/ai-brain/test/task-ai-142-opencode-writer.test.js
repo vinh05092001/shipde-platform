@@ -265,11 +265,73 @@ describe('TASK-AI-142: opencode-direct writer configuration and execution', () =
         assert.equal(extDirs[p], 'allow');
         const matchesWorker = p.startsWith(normWorker);
         const matchesReports = p.startsWith(normReports);
+        const matchesDeps = p.startsWith(
+          path.resolve(path.join(path.dirname(fakeWorkerRoot), 'deps')).replace(/\\/g, '/')
+        );
         assert.ok(
-          matchesWorker || matchesReports,
-          'permission pattern must strictly scope to worker or report dir: ' + p
+          matchesWorker || matchesReports || matchesDeps,
+          'permission pattern must strictly scope to worker, deps or report dir: ' + p
         );
       }
+    } finally {
+      delete process.env.TEST_PERM_KEY;
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test('deps directory is included in external_directory permissions when present', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-142-deps-perm-'));
+    process.env.TEST_PERM_KEY = 'secret-should-not-leak';
+    try {
+      const { fakeHostCwd, fakeWorkerRoot, fakeUsageDir, verdictFile } = makeFakeWorker(tmpDir);
+      const fakeDepsDir = path.join(path.dirname(fakeWorkerRoot), 'deps');
+      fs.mkdirSync(fakeDepsDir, { recursive: true });
+      const directAdapter = getHarness('opencode-direct');
+      const runIso = isoMod.getIsolatedLauncher();
+
+      const permSource = {
+        id: 'perm-provider-source',
+        label: 'Perm Test Source',
+        kind: 'model-source',
+        endpoint: 'https://api.perm.test/v1',
+        credential: { type: 'api-key', env: 'TEST_PERM_KEY' },
+        opencodeProvider: 'perm-provider',
+      };
+
+      const args = directAdapter.launch({
+        isolatedWorker: true,
+        model: 'perm-provider/test-perm-model',
+        cwd: fakeWorkerRoot,
+        prompt: 'test prompt',
+      });
+
+      const usageFile = path.join(fakeUsageDir, 'usage-session.json');
+
+      try {
+        runIso(directAdapter, args, {
+          cwd: fakeHostCwd,
+          workerRoot: fakeWorkerRoot,
+          verdictPath: verdictFile,
+          getWorkerSid: () => 'TEST-SID',
+          verifyBoundary: () => true,
+          baseSha: '0123456789012345678901234567890123456789',
+          workerTimeoutMs: 1000,
+          usageFile,
+          selectedSource: permSource,
+          sourceId: permSource.id,
+        });
+      } catch (_) {}
+
+      const cfgPath = path.join(fakeWorkerRoot, 'opencode.json');
+      assert.ok(fs.existsSync(cfgPath), 'opencode.json must exist');
+      const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+      const extDirs = cfg.permission.external_directory;
+      const normDeps = path.resolve(fakeDepsDir).replace(/\\/g, '/');
+      const found = Object.keys(extDirs).some((p) => p.startsWith(normDeps));
+      assert.ok(
+        found,
+        'deps pattern must be present in external_directory when deps directory exists'
+      );
     } finally {
       delete process.env.TEST_PERM_KEY;
       fs.rmSync(tmpDir, { recursive: true, force: true });

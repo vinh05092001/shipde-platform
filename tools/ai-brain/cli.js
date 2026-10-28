@@ -1953,7 +1953,15 @@ async function dispatchProfileCommand(args, deps) {
     : require('./accounts').listAccounts() || [];
 
   const evidenceDir =
-    (deps && deps.evidenceDir) || args['evidence-dir'] || path.join(__dirname, 'data', 'evidence');
+    (deps && deps.evidenceDir) ||
+    args['evidence-dir'] ||
+    (args.root && fs.existsSync(path.join(args.root, 'tools', 'ai-brain', 'data', 'evidence'))
+      ? path.join(args.root, 'tools', 'ai-brain', 'data', 'evidence')
+      : null) ||
+    (args.root && fs.existsSync(path.join(args.root, 'evidence'))
+      ? path.join(args.root, 'evidence')
+      : null) ||
+    path.join(__dirname, 'data', 'evidence');
   let evidenceData;
   try {
     evidenceData = require('./evidence').loadEvidence(evidenceDir);
@@ -2257,7 +2265,15 @@ function dispatchCommand(args, deps = {}) {
 
   const registry = (deps && deps.registry) || sourcesApi.loadSources();
   const evidenceDir =
-    (deps && deps.evidenceDir) || args['evidence-dir'] || path.join(__dirname, 'data', 'evidence');
+    (deps && deps.evidenceDir) ||
+    args['evidence-dir'] ||
+    (args.root && fs.existsSync(path.join(args.root, 'tools', 'ai-brain', 'data', 'evidence'))
+      ? path.join(args.root, 'tools', 'ai-brain', 'data', 'evidence')
+      : null) ||
+    (args.root && fs.existsSync(path.join(args.root, 'evidence'))
+      ? path.join(args.root, 'evidence')
+      : null) ||
+    path.join(__dirname, 'data', 'evidence');
   const decisionDir = (deps && deps.decisionDir) || args['decision-dir'] || undefined;
 
   // 1. Candidates from discovery + offerings
@@ -2279,7 +2295,10 @@ function dispatchCommand(args, deps = {}) {
   const env = (deps && deps.env) || process.env;
   const evidenceData = (deps && deps.evidenceData) || evidence.loadEvidence(evidenceDir);
   const newSources =
-    (deps && deps.onboardingPrepared) || isCandidateInjected
+    (deps && deps.onboardingPrepared) ||
+    isCandidateInjected ||
+    args['onboarding-prepared'] ||
+    args.onboardingPrepared
       ? []
       : rollingOnboard.detectNewSources(registry, evidenceData, env);
 
@@ -3688,10 +3707,15 @@ function reviewCommand(args, deps) {
   const sub = args._[1];
   const action = args._[2];
 
+  if (sub === 'pr') return reviewPrCommand(args, d);
+
   if (sub !== 'manifest' || action !== 'validate') {
     error('Lệnh không rõ: review ' + [sub, action].filter(Boolean).join(' '));
     error(
       'Dùng: review manifest validate --manifest <file> --artifact <file.md> --work-item <id> --sha <40-hex> [--json]'
+    );
+    error(
+      'Hoặc: review pr --pr <n> --sha <40-hex> [--work-item <id>] [--writer <candidateKey>] [--json]'
     );
     if (exit === process.exit) process.exitCode = 2;
     else exit(2);
@@ -3742,6 +3766,66 @@ function reviewCommand(args, deps) {
   if (exit === process.exit) process.exitCode = code;
   else exit(code);
   return { exitCode: code, result };
+}
+
+/**
+ * review pr: an independent review of an EXISTING Pull Request at its exact head.
+ *
+ *   node tools/ai-brain/cli.js review pr --pr <n> --sha <40-hex>
+ *     [--work-item <id>] [--writer <candidateKey>] [--external-workers <list>] [--json]
+ *
+ * The Controller selects the reviewer outside the author's candidate and failure
+ * domain, the verdict is bound to --sha (a PR whose head moved is refused), and the
+ * verdict lands in the decision log and in the review manifest the merge
+ * preflight reads. Exit 0 on PASS, 1 on CHANGES_REQUIRED / BLOCKED, 2 on bad argv.
+ */
+async function reviewPrCommand(args, deps) {
+  const d = deps || {};
+  const log = d.log || console.log;
+  const error = d.error || console.error;
+  const exit = d.exit || process.exit;
+  const finish = (code, result) => {
+    if (exit === process.exit) process.exitCode = code;
+    else exit(code);
+    return { exitCode: code, result };
+  };
+  const pr = args.pr;
+  const sha = args.sha;
+  if (
+    !/^\d+$/.test(String(pr === undefined ? '' : pr)) ||
+    typeof sha !== 'string' ||
+    !/^[0-9a-f]{40}$/i.test(sha.trim())
+  ) {
+    error('review pr requires --pr <number> and --sha <40-character commit>');
+    return finish(2);
+  }
+  const rootDir = args.root || d.rootDir || process.cwd();
+  const services = d.planningServices
+    ? d.planningServices
+    : require('./planning-services').createPlanningServices(
+        Object.assign({ rootDir }, d.servicesContext || {}, {
+          externalWorkers: args['external-workers'] || args.externalWorkers,
+          decisionDir: args['decision-dir'] || args.decisionDir,
+          repo: args.repo,
+          base: args.base,
+        })
+      );
+  let result;
+  try {
+    result = await services.reviewPullRequest({
+      pr: String(pr),
+      sha: sha.trim().toLowerCase(),
+      workItemId: args['work-item'] || args.workItem,
+      authorKey: args.writer,
+    });
+  } catch (err) {
+    result = { verdict: 'BLOCKED', reason: (err && err.message) || String(err) };
+  }
+  if (args.json) log(JSON.stringify(result, null, 2));
+  else if (result.verdict === 'PASS')
+    log('PASS: PR #' + pr + ' at ' + result.sha + ' by ' + result.reviewer);
+  else error(result.verdict + ': ' + (result.reason || 'review did not pass'));
+  return finish(result.verdict === 'PASS' ? 0 : 1, result);
 }
 
 /**
@@ -3804,6 +3888,9 @@ async function orchestrateCommand(args, deps = {}) {
   const readJsonArg = (value) =>
     typeof value === 'string' && value ? JSON.parse(fsx.readFileSync(value, 'utf8')) : null;
   const inputAccounts = readJsonArg(args.accounts) || (Array.isArray(d.accounts) ? d.accounts : []);
+  if (args['isolated-worker'] && args['external-workers'] === undefined) {
+    args['external-workers'] = 'agy-pool';
+  }
   const poolEnabled =
     typeof args['external-workers'] === 'string' &&
     args['external-workers']
@@ -3921,7 +4008,7 @@ async function orchestrateCommand(args, deps = {}) {
     evidenceDir,
     run: d.run,
     tests: d.tests,
-    reviewer: d.reviewer,
+    reviewer: d.reviewer || args.reviewer,
     measureFailBefore: d.measureFailBefore,
     home: typeof args.home === 'string' ? args.home : undefined,
     enforceProofFloors: true,
@@ -4169,9 +4256,13 @@ function intakeCommand(args, deps = {}) {
   const workItem = typeof args['work-item'] === 'string' ? args['work-item'] : null;
   const run = Boolean(args.run);
   const publish = Boolean(args.publish);
+  const wait = Boolean(args.wait);
+  const externalWorkers = args['external-workers'] || args.externalWorkers;
 
   return Promise.resolve()
-    .then(() => runIntake({ workItem, run, publish }, { liveDiscovery: true, ...d }))
+    .then(() =>
+      runIntake({ workItem, run, publish, wait, externalWorkers }, { liveDiscovery: true, ...d })
+    )
     .then((result) => {
       for (const warning of result.warnings || []) {
         log('CẢNH catalogue source ' + warning.source + ': ' + warning.error);
@@ -4179,6 +4270,11 @@ function intakeCommand(args, deps = {}) {
       if (run) {
         log('Inputs dir: ' + result.runDir);
         log('Started orchestrate with ' + result.command);
+        if (wait && typeof result.exitCode === 'number' && result.exitCode !== 0) {
+          if (result.stderrTail) error(result.stderrTail);
+          if (exit === process.exit) process.exitCode = result.exitCode;
+          else exit(result.exitCode);
+        }
         return result;
       }
       log('Inputs dir: ' + result.runDir);
@@ -4646,6 +4742,19 @@ function main(argv = process.argv.slice(2), deps = {}) {
       });
     return;
   }
+  // docs (GOAL-AUTOCLAW-REPOS-4): Context7 library docs lookup with source citations
+  if (command === 'docs') {
+    require('./context7')
+      .runDocsCli(process.argv.slice(3))
+      .then(
+        (code) => process.exit(code),
+        (err) => {
+          console.error(err.message);
+          process.exit(1);
+        }
+      );
+    return;
+  }
   // serena (TASK-AI-32): Serena read-only pilot for code retrieval
   // Symbol and reference lookup for authors, measured against TokenPerMergedItem
   if (command === 'serena') {
@@ -4932,7 +5041,7 @@ function main(argv = process.argv.slice(2), deps = {}) {
 
   console.error('Lệnh không rõ: ' + command);
   console.error(
-    'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | discovery | account | probe | qualify | serena | sources | evidence | review | orchestrate | intake | plan | next | merge | goal | priors refresh | chat | goal session'
+    'Dùng: reconcile | manifest | prove | quota | dispatch | shadow | discovery | account | probe | qualify | serena | docs | sources | evidence | review | orchestrate | intake | plan | next | merge | goal | priors refresh | chat | goal session'
   );
   process.exit(2);
 }

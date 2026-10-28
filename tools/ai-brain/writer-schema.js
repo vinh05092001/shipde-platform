@@ -39,12 +39,36 @@ function prepareJob(job) {
   };
 }
 
+// opencode `--format json` prints one event per line; the model's answer is the
+// text of its last text part, not the whole stream.
+function opencodeEventText(text) {
+  let last = null;
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const trimmed = line.replace(/^\uFEFF/, '').trim();
+    if (!trimmed.startsWith('{')) continue;
+    try {
+      const event = JSON.parse(trimmed);
+      const part = event && event.part;
+      if (part && part.type === 'text' && typeof part.text === 'string') last = part.text;
+    } catch {}
+  }
+  return last;
+}
+
 function validate(text, schema) {
   let value;
+  const eventText = opencodeEventText(text);
+  if (eventText !== null) text = eventText;
   try {
     value = JSON.parse(String(text || '').replace(/^\uFEFF/, ''));
   } catch {
-    return { ok: false, reason: 'WRITER_RESULT_INVALID_JSON' };
+    const match = String(text || '').match(/\{[\s\S]*\}/);
+    if (match) {
+      try {
+        value = JSON.parse(match[0]);
+      } catch {}
+    }
+    if (!value) return { ok: false, reason: 'WRITER_RESULT_INVALID_JSON' };
   }
   if (!value || typeof value !== 'object' || Array.isArray(value))
     return { ok: false, reason: 'WRITER_RESULT_NOT_OBJECT' };
@@ -74,7 +98,10 @@ function poolResultText(text) {
   // is only process telemetry (state, exitCode, startedAt, finishedAt).
   try {
     const envelope = JSON.parse(String(text || '').replace(/^\uFEFF/, ''));
-    if (typeof envelope.response === 'string') return envelope.response;
+    if (typeof envelope.response === 'string') {
+      const match = envelope.response.match(/\{[\s\S]*\}/);
+      return match ? match[0] : envelope.response;
+    }
   } catch {}
   return text;
 }

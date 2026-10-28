@@ -47,7 +47,7 @@ function writeDiscoveryCatalogue(dir, candidates) {
 }
 
 function runDispatch(tmpDir, args) {
-  return spawnSync(process.execPath, [CLI, 'dispatch', ...args], {
+  return spawnSync(process.execPath, [CLI, 'dispatch', '--onboarding-prepared', ...args], {
     encoding: 'utf8',
     cwd: tmpDir,
     env: {
@@ -71,6 +71,10 @@ describe('MVP controller fallback contract supplements', () => {
     evidenceDir = path.join(tmpDir, 'evidence');
     fs.mkdirSync(discoveryDir, { recursive: true });
     fs.mkdirSync(evidenceDir, { recursive: true });
+    const realEvidence = path.join(__dirname, '..', 'data', 'evidence', 'evidence.json');
+    if (fs.existsSync(realEvidence)) {
+      fs.copyFileSync(realEvidence, path.join(evidenceDir, 'evidence.json'));
+    }
     fs.mkdirSync(path.join(tmpDir, 'home'), { recursive: true });
     fs.mkdirSync(path.join(tmpDir, 'appdata'), { recursive: true });
   });

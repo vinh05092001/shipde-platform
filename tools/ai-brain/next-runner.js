@@ -29,6 +29,7 @@ const { parseDependencies } = require('./reconcile');
 const { CONCURRENCY_CEILING, DEFAULTS, isGovernedDecision } = require('./scheduler');
 const evidenceApi = require('./evidence');
 const intakeApi = require('./intake');
+const sourcesApi = require('./sources');
 
 function defaultSleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -251,6 +252,16 @@ function resolveRunPid(runDir, workItemId, rootDir, opts, d, fsApi = fs) {
 function getOpenRuns(options, deps) {
   const opts = options || {};
   const d = deps || {};
+  if (Array.isArray(opts.openRuns)) return opts.openRuns;
+  if (Array.isArray(d.openRuns)) return d.openRuns;
+  if (typeof d.getOpenRuns === 'function') return d.getOpenRuns(options, deps);
+  if (
+    (Array.isArray(opts.records) || Array.isArray(d.records)) &&
+    !opts.intakeDir &&
+    !d.intakeDir
+  ) {
+    return [];
+  }
   const fsApi = (d && d.fs) || (opts && opts.fs) || fs;
   const rootDir = path.resolve(opts.rootDir || (d && d.rootDir) || process.cwd());
   const intakeBase =
@@ -833,27 +844,38 @@ async function executeIntakeForItem(item, options, deps, logOpts) {
       : null;
     let reason =
       intakeResult && (intakeResult.reason || intakeResult.message || intakeResult.error);
-    if (outcome !== 'completed' && outcome !== 'published') {
-      reason = intakeResult.stderrTail || reason;
+
+    let checkpointData = null;
+    if (intakeResult && intakeResult.checkpoint && typeof intakeResult.checkpoint === 'object') {
+      checkpointData = intakeResult.checkpoint;
+    } else {
       const checkpointFile =
         intakeResult && intakeResult.runFiles && intakeResult.runFiles.checkpoint;
-      if (!reason && checkpointFile) {
+      if (checkpointFile) {
         try {
-          const checkpoint = JSON.parse(fs.readFileSync(checkpointFile, 'utf8'));
-          const step = checkpoint.liveSteps && checkpoint.liveSteps[item.work_item_id];
-          const failures = (step && step.failures) || [];
-          const failure = failures[failures.length - 1];
-          reason = (step && step.reason) || (failure && (failure.reason || failure.cause));
-          if (!reason) {
-            const itemOutcome = (checkpoint.outcomes || []).find(
-              (entry) => entry.workItemId === item.work_item_id
-            );
-            reason = itemOutcome && itemOutcome.reason;
+          if (typeof checkpointFile === 'object') {
+            checkpointData = checkpointFile;
+          } else if (fs.existsSync(checkpointFile)) {
+            checkpointData = JSON.parse(fs.readFileSync(checkpointFile, 'utf8'));
           }
-        } catch (_) {
-          /* A missing checkpoint still gets a named exit reason. */
+        } catch (_) {}
+      }
+    }
+
+    if (outcome !== 'completed' && outcome !== 'published') {
+      if (!reason && checkpointData) {
+        const step = checkpointData.liveSteps && checkpointData.liveSteps[item.work_item_id];
+        const failures = (step && step.failures) || [];
+        const failure = failures[failures.length - 1];
+        reason = (step && step.reason) || (failure && (failure.reason || failure.cause));
+        if (!reason) {
+          const itemOutcome = (checkpointData.outcomes || []).find(
+            (entry) => entry.workItemId === item.work_item_id
+          );
+          reason = itemOutcome && itemOutcome.reason;
         }
       }
+      reason = reason || intakeResult.stderrTail;
       reason = decisions
         .scrubText(
           require('./route-probe').failureReason(
@@ -863,10 +885,53 @@ async function executeIntakeForItem(item, options, deps, logOpts) {
         .slice(0, 500);
     }
 
-    const stage =
-      outcome === 'completed' || outcome === 'published'
+    let isBlockedNoRoute = false;
+    let triedRoutes = [];
+    if (checkpointData) {
+      const itemOutcome = (checkpointData.outcomes || []).find(
+        (entry) => entry.workItemId === item.work_item_id
+      );
+      if (
+        checkpointData.status === 'BLOCKED_NO_ROUTE' ||
+        (itemOutcome &&
+          (itemOutcome.status === 'BLOCKED_NO_ROUTE' ||
+            itemOutcome.reasonCode === 'BLOCKED_NO_ROUTE'))
+      ) {
+        isBlockedNoRoute = true;
+        if (itemOutcome && Array.isArray(itemOutcome.triedRoutes)) {
+          triedRoutes = itemOutcome.triedRoutes;
+        } else if (checkpointData.triedRoutes && Array.isArray(checkpointData.triedRoutes)) {
+          triedRoutes = checkpointData.triedRoutes;
+        }
+      }
+    }
+
+    if (!isBlockedNoRoute) {
+      if (
+        intakeResult &&
+        (intakeResult.status === 'BLOCKED_NO_ROUTE' ||
+          intakeResult.reasonCode === 'BLOCKED_NO_ROUTE' ||
+          intakeResult.isBlockedNoRoute)
+      ) {
+        isBlockedNoRoute = true;
+        if (Array.isArray(intakeResult.triedRoutes)) {
+          triedRoutes = intakeResult.triedRoutes;
+        }
+      } else if (
+        /BLOCKED_NO_ROUTE/.test(String(reason || '')) ||
+        /NO_ELIGIBLE_CANDIDATE/.test(String(reason || ''))
+      ) {
+        isBlockedNoRoute = true;
+      }
+    }
+
+    const finalOutcome = isBlockedNoRoute ? 'blocked_no_route' : outcome;
+
+    const stage = isBlockedNoRoute
+      ? decisions.Stage.COOLED
+      : finalOutcome === 'completed' || finalOutcome === 'published'
         ? decisions.Stage.COMPLETED
-        : outcome === 'refused'
+        : finalOutcome === 'refused'
           ? decisions.Stage.REFUSED
           : decisions.Stage.FAILED;
 
@@ -874,31 +939,44 @@ async function executeIntakeForItem(item, options, deps, logOpts) {
       {
         stage,
         workItemId: item.work_item_id,
-        outcome,
+        outcome: finalOutcome,
         exitCode,
-        detail: reason || undefined,
+        detail: isBlockedNoRoute ? reason || 'BLOCKED_NO_ROUTE' : reason || undefined,
         stderrTail: stderrTail || undefined,
+        triedRoutes: triedRoutes.length > 0 ? triedRoutes : undefined,
       },
       logOpts
     );
 
     return {
-      success: exitCode === 0 && (outcome === 'completed' || outcome === 'published'),
-      outcome,
+      success: exitCode === 0 && (finalOutcome === 'completed' || finalOutcome === 'published'),
+      outcome: finalOutcome,
       exitCode,
       intakeResult,
-      reason: reason || null,
+      reason: reason || (isBlockedNoRoute ? 'BLOCKED_NO_ROUTE' : null),
       stderrTail,
+      isBlockedNoRoute,
+      triedRoutes,
     };
   } catch (err) {
+    const isNoRoute =
+      err &&
+      (err.code === 'BLOCKED_NO_ROUTE' ||
+        err.code === 'NO_ELIGIBLE_CANDIDATE' ||
+        /BLOCKED_NO_ROUTE|NO_ELIGIBLE_CANDIDATE/.test(String(err.message || '')));
     const isRefusal =
+      !isNoRoute &&
       err &&
       (err.code === 'INTAKE_INCOMPLETE' ||
         err.code === 'PROOF_FLOOR_NOT_MET' ||
         String(err.code || '').startsWith('ISOLATION_') ||
         err.code === 'BASE_SHA_NOT_IN_LOCAL_MAIN');
-    const outcome = isRefusal ? 'refused' : 'failed';
-    const stage = isRefusal ? decisions.Stage.REFUSED : decisions.Stage.FAILED;
+    const outcome = isNoRoute ? 'blocked_no_route' : isRefusal ? 'refused' : 'failed';
+    const stage = isNoRoute
+      ? decisions.Stage.COOLED
+      : isRefusal
+        ? decisions.Stage.REFUSED
+        : decisions.Stage.FAILED;
     const reason = decisions
       .scrubText(String((err && (err.message || err.code)) || 'INTAKE_EXECUTION_ERROR'))
       .slice(0, 500);
@@ -910,11 +988,20 @@ async function executeIntakeForItem(item, options, deps, logOpts) {
         outcome,
         detail: reason,
         code: err && err.code,
+        triedRoutes: (err && err.triedRoutes) || undefined,
       },
       logOpts
     );
 
-    return { success: false, outcome, exitCode: 1, error: err, reason };
+    return {
+      success: false,
+      outcome,
+      exitCode: 1,
+      error: err,
+      reason,
+      isBlockedNoRoute: isNoRoute,
+      triedRoutes: (err && err.triedRoutes) || [],
+    };
   }
 }
 
@@ -928,6 +1015,22 @@ async function nextLoop(options, deps) {
   const maxIterations = opts.maxIterations !== undefined ? Number(opts.maxIterations) : Infinity;
   const pollIntervalMs = getPollingInterval(opts, d);
   const terminalWorkItems = opts.terminalWorkItems || d.terminalWorkItems || new Map();
+  const noRouteWaitTracker = opts.noRouteWaitTracker || d.noRouteWaitTracker || new Map();
+
+  const dispatchConfig =
+    (sourcesApi && sourcesApi.getDispatchConfig && sourcesApi.getDispatchConfig()) || {};
+  const blockedNoRouteTimeoutMs =
+    opts.blockedNoRouteTimeoutMs !== undefined
+      ? Number(opts.blockedNoRouteTimeoutMs)
+      : d.blockedNoRouteTimeoutMs !== undefined
+        ? Number(d.blockedNoRouteTimeoutMs)
+        : Number(dispatchConfig.blockedNoRouteTimeoutMs || 3600000);
+  const blockedNoRoutePollIntervalMs =
+    opts.blockedNoRoutePollIntervalMs !== undefined
+      ? Number(opts.blockedNoRoutePollIntervalMs)
+      : d.blockedNoRoutePollIntervalMs !== undefined
+        ? Number(d.blockedNoRoutePollIntervalMs)
+        : Number(dispatchConfig.blockedNoRoutePollIntervalMs || 30000);
 
   let iteration = 0;
   while (iteration < maxIterations) {
@@ -1017,7 +1120,7 @@ async function nextLoop(options, deps) {
       const planningPromise = planning.planWorkItem(
         planningItem.work_item_id,
         { rootDir, run: true },
-        d.planningDeps || d
+        planningDepsFor(d, opts, rootDir)
       );
       const authorItem = findResult.item;
       if (authorItem && authorItem !== planningItem) {
@@ -1065,7 +1168,7 @@ async function nextLoop(options, deps) {
         const planned = await planning.planWorkItem(
           item.work_item_id,
           { rootDir, run: true, reviewExisting: fs.existsSync(workItemPath) },
-          d.planningDeps || d
+          planningDepsFor(d, opts, rootDir)
         );
         const governed =
           planned &&
@@ -1231,7 +1334,7 @@ async function nextLoop(options, deps) {
       }
 
       // 4. Check ceiling
-      const ceilingStatus = checkCeiling({ ...opts, now }, d);
+      const ceilingStatus = checkCeiling(opts, d);
       if (!ceilingStatus.allowed) {
         decisions.recordDecision(
           {
@@ -1333,6 +1436,82 @@ async function nextLoop(options, deps) {
           }
         }
       }
+
+      if (execResult.isBlockedNoRoute) {
+        const itemId = item.work_item_id;
+        const currentNow = getNow();
+        if (!noRouteWaitTracker.has(itemId)) {
+          noRouteWaitTracker.set(itemId, currentNow);
+        }
+        const firstBlockedAt = noRouteWaitTracker.get(itemId);
+        const elapsed = currentNow - firstBlockedAt;
+
+        const triedSummary =
+          Array.isArray(execResult.triedRoutes) && execResult.triedRoutes.length > 0
+            ? execResult.triedRoutes
+                .map(
+                  (r) =>
+                    `${r.candidateKey || r.route || r.offeringId || r.key}: ${r.reason || r.reasonCode || r.cause || 'failed'}`
+                )
+                .join('; ')
+            : execResult.reason || 'no eligible route available';
+
+        if (elapsed >= blockedNoRouteTimeoutMs) {
+          log(
+            `BLOCKED_NO_ROUTE_TIMEOUT: Work Item ${itemId} exceeded waiting timeout of ${blockedNoRouteTimeoutMs}ms (waited ${elapsed}ms). Stopping loop.`
+          );
+          decisions.recordDecision(
+            {
+              stage: decisions.Stage.FAILED,
+              workItemId: itemId,
+              detail: 'BLOCKED_NO_ROUTE_TIMEOUT',
+              elapsedMs: elapsed,
+              timeoutMs: blockedNoRouteTimeoutMs,
+              triedRoutes: execResult.triedRoutes,
+            },
+            logOpts
+          );
+          terminalWorkItems.set(itemId, 'blocked_no_route_timeout');
+          return {
+            stopped: true,
+            reason: 'BLOCKED_NO_ROUTE_TIMEOUT',
+            workItemId: itemId,
+            elapsedMs: elapsed,
+            timeoutMs: blockedNoRouteTimeoutMs,
+            iteration,
+            triedRoutes: execResult.triedRoutes,
+          };
+        }
+
+        log(
+          `BLOCKED_NO_ROUTE: Work Item ${itemId} has no available routes (${triedSummary}). Waited ${elapsed}ms / ${blockedNoRouteTimeoutMs}ms. Waiting ${blockedNoRoutePollIntervalMs}ms before retry...`
+        );
+
+        try {
+          const quotaScan = d.quotaScan || require('./quota-scan');
+          if (quotaScan && typeof quotaScan.scanAllQuotas === 'function') {
+            await quotaScan.scanAllQuotas({ ifDue: true, cwd: rootDir }).catch(() => {});
+          }
+        } catch (_) {}
+
+        await sleepFn(blockedNoRoutePollIntervalMs);
+        if (opts.workItem || opts['work-item']) {
+          if (iteration < maxIterations) {
+            continue;
+          }
+          return {
+            stopped: true,
+            reason: 'BLOCKED_NO_ROUTE',
+            workItemId: itemId,
+            elapsedMs: elapsed,
+            iteration,
+            triedRoutes: execResult.triedRoutes,
+          };
+        }
+        continue;
+      }
+
+      noRouteWaitTracker.delete(item.work_item_id);
 
       const outcome = execResult.outcome || 'completed';
       terminalWorkItems.set(item.work_item_id, outcome);
@@ -1477,7 +1656,8 @@ async function runNext(options, deps) {
   }
 
   // 4. Check concurrency ceiling (NX-R02)
-  const ceilingStatus = checkCeiling(opts, d);
+  const ceilingFn = typeof d.checkCeiling === 'function' ? d.checkCeiling : checkCeiling;
+  const ceilingStatus = ceilingFn(opts, d);
   if (!ceilingStatus.allowed) {
     decisions.recordDecision(
       {
@@ -1512,7 +1692,27 @@ async function runNext(options, deps) {
     ran: true,
     status: execResult.outcome,
     exitCode: execResult.exitCode,
+    isBlockedNoRoute: Boolean(execResult.isBlockedNoRoute),
+    triedRoutes: execResult.triedRoutes || [],
   };
+}
+
+/**
+ * Planning dependencies for the governed planning lane. Injected dependencies
+ * (tests, embedding callers) win; otherwise the real services are built from the
+ * Controller's own machinery so an unattended loop does not stop at the first plan.
+ */
+function planningDepsFor(d, opts, rootDir) {
+  if (d && d.planningDeps) return d.planningDeps;
+  if (d && typeof d.runPlanning === 'function') return d;
+  const planning = require('./work-item-planner');
+  return planning.defaultPlanningDeps(
+    rootDir,
+    Object.assign({}, d || {}, {
+      externalWorkers: (opts && (opts.externalWorkers || opts['external-workers'])) || undefined,
+      decisionDir: (opts && opts.decisionDir) || undefined,
+    })
+  );
 }
 
 function nextCommand(args, deps) {
@@ -1558,6 +1758,7 @@ module.exports = {
   runNext,
   nextLoop,
   nextCommand,
+  executeIntakeForItem,
   CONCURRENCY_CEILING,
   loadConfig,
   getPollingInterval,

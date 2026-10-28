@@ -78,6 +78,8 @@ test('TASK-AI-142: (b) one extra failure -> HOST_GATE_FAILED listing it', () => 
       if (args && args[0] === 'rev-parse') return { status: 0, stdout: baseSha + '\n', stderr: '' };
       return { status: 0, stdout: '', stderr: '' };
     }
+    // A confirmation rerun of the candidate (name pattern) fails again: a real regression.
+    if ((args || []).some((a) => String(a).startsWith('--test-name-pattern='))) return workerOutput;
     nodeCalls++;
     if (nodeCalls === 1) return workerOutput;
     return baseOutput;
@@ -92,6 +94,8 @@ test('TASK-AI-142: (b) one extra failure -> HOST_GATE_FAILED listing it', () => 
     'AF-R01: worker prettier .cmd launches',
     'AF-R02: repair logic changes',
   ]);
+  assert.equal(result.baselineFailureCount, 2);
+  assert.equal(result.newFailureCount, 1);
   assert.equal(result.hostGateFailures[0], 'worker introduced regression');
   assert.equal(result.hostGateFailures.join(', '), 'worker introduced regression');
 });
@@ -368,4 +372,78 @@ test('TASK-AI-142: baseline runs at the merge-base of HEAD and the ref, not the 
   assert.deepEqual(result.hostGateFailures.newFailures, []);
   assert.ok(customCache.has(shaA));
   assert.ok(!customCache.has(shaB));
+});
+
+function gateMocks(baseSha, headOut, baseOut, rerunOut) {
+  const calls = [];
+  const spawnSync = (cmd, args, opts) => {
+    if (cmd === 'git') {
+      if (args && args[0] === 'rev-parse') return { status: 0, stdout: baseSha + '\n', stderr: '' };
+      return { status: 0, stdout: '', stderr: '' };
+    }
+    const rerun = (args || []).some((a) => String(a).startsWith('--test-name-pattern='));
+    calls.push({ rerun, env: opts && opts.env });
+    if (rerun) return rerunOut;
+    return calls.filter((c) => !c.rerun).length === 1 ? headOut : baseOut;
+  };
+  return { spawnSync, calls };
+}
+
+test('TASK-AI-142: head and base runs use the identical environment', () => {
+  const baseSha = 'd'.repeat(40);
+  const out = { status: 1, stdout: 'not ok 1 - old\n' };
+  const { spawnSync, calls } = gateMocks(baseSha, out, out, out);
+  runHostBrainGate({ baseSha }, { spawnSync, baseCache: new Map() });
+  const runs = calls.filter((c) => !c.rerun);
+  assert.equal(runs.length, 2);
+  for (const key of [
+    'AI_BRAIN_DISCOVERED_SOURCES',
+    'AI_BRAIN_MACHINE_DATA',
+    'NINEROUTER_API_KEY',
+  ]) {
+    assert.equal(runs[0].env[key], runs[1].env[key], key);
+  }
+  assert.equal(runs[1].env.AI_BRAIN_MACHINE_DATA, 'none');
+});
+
+test('TASK-AI-142: a candidate that passes when rerun alone is flaky, not new', () => {
+  const baseSha = 'e'.repeat(40);
+  const head = { status: 1, stdout: 'not ok 1 - old\nnot ok 2 - racy\n' };
+  const base = { status: 1, stdout: 'not ok 1 - old\n' };
+  const rerunPass = { status: 0, stdout: 'ℹ pass 1\nℹ fail 0\n' };
+  const { spawnSync, calls } = gateMocks(baseSha, head, base, rerunPass);
+  const r = runHostBrainGate({ baseSha }, { spawnSync, baseCache: new Map() });
+  assert.equal(r.pass, true);
+  assert.deepEqual(r.flakyRecovered, ['racy']);
+  assert.equal(r.baselineFailureCount, 1);
+  assert.equal(r.newFailureCount, 0);
+  assert.equal(r.flakyRecoveredCount, 1);
+  assert.ok(calls.find((c) => c.rerun));
+});
+
+test('TASK-AI-142: an unreadable confirmation rerun keeps the candidate (fail closed)', () => {
+  const baseSha = 'f'.repeat(40);
+  const head = { status: 1, stdout: 'not ok 1 - old\nnot ok 2 - racy\n' };
+  const base = { status: 1, stdout: 'not ok 1 - old\n' };
+  const { spawnSync } = gateMocks(baseSha, head, base, { status: 1, stdout: 'boom' });
+  const r = runHostBrainGate({ baseSha }, { spawnSync, baseCache: new Map() });
+  assert.equal(r.pass, false);
+  assert.deepEqual(r.newFailures, ['racy']);
+});
+
+test('TASK-AI-142: baseline unavailable fails closed with a distinct reason', () => {
+  const baseSha = '1'.repeat(40);
+  const head = { status: 1, stdout: 'not ok 1 - old\n' };
+  const spawnSync = (cmd, args) => {
+    if (cmd === 'git') {
+      if (args && args[0] === 'worktree' && args[1] === 'add' && /host-gate-base-/.test(args[3]))
+        return { status: 1, stdout: '', stderr: 'no' };
+      return { status: 0, stdout: baseSha + '\n', stderr: '' };
+    }
+    return head;
+  };
+  const r = runHostBrainGate({ baseSha }, { spawnSync, baseCache: new Map() });
+  assert.equal(r.pass, false);
+  assert.equal(r.reason, 'BASELINE_UNAVAILABLE');
+  assert.deepEqual(r.newFailures, ['old']);
 });

@@ -49,6 +49,7 @@ const planner = require('./planner');
 const { compilePrompt, compileReviewPrompt } = require('./prompt-compiler');
 const { classifySession, Status: SessionStatus, progressFromWorkerRoot } = require('./supervisor');
 const { runReviewLoop, Status: ReviewStatus } = require('./review-loop');
+const ciGate = require('./ci-gate');
 const ranking = require('./ranking');
 const routing = require('./routing');
 const evidence = require('./evidence');
@@ -222,7 +223,7 @@ function resolveLauncher(o, isolatedLauncher) {
       }
     }
     const writerSchema = require('./writer-schema');
-    if (['codex', 'agy-pool'].includes(job.harness) && !job.resultSchema) {
+    if (['codex', 'agy-pool'].includes(job.harness) && !job.resultSchema && !job.isReview) {
       job = writerSchema.prepareJob(job);
     }
     if (job.harness === 'codex' && o.isolatedWorker) {
@@ -236,7 +237,8 @@ function resolveLauncher(o, isolatedLauncher) {
       Boolean(
         o.registry?.dispatch?.agyPoolWriterEnabled ||
         o.dispatch?.agyPoolWriterEnabled ||
-        o.allowAgyPoolWriter
+        o.allowAgyPoolWriter ||
+        require('./sources').isAgyPoolWriterEnabled(o.registry, o)
       )
     ) {
       const pool = require('./agy-pool-runtime');
@@ -405,7 +407,7 @@ function recordWriterResult(job, result, kind, logOpts, env) {
 function runVerificationCommand(item, options) {
   const o = options || {};
   const verification = (item && item.verification) || null;
-  const command = verification && verification.command;
+  let command = verification && verification.command;
   if (!command) {
     return {
       pass: false,
@@ -419,9 +421,31 @@ function runVerificationCommand(item, options) {
       ],
     };
   }
+  if (o.isolatedWorker || o.workerRoot) {
+    command = command.replace(/^pnpm\s+install(\s+--[a-z0-9-]+)*\s*&&\s*/i, '');
+    command = command.replace(/^pnpm\s+install(\s+--[a-z0-9-]+)*\s*&&\s*/i, '');
+  }
   const cwd = o.workerRoot || o.cwd || process.cwd();
+  // Operator decision: CI is the final verification. The isolated worker has no
+  // PostgreSQL/Redis/object storage, so scripts that need them (sources.json
+  // dispatch.verification) are deferred to CI instead of failing here forever.
+  let deferredToCi = [];
+  if (o.isolatedWorker || o.workerRoot) {
+    const split = require('./verification-split').deriveInfraFreeCommand(command, { cwd });
+    if (split.command) {
+      command = split.command;
+      deferredToCi = split.deferred;
+    }
+  }
+  const env = { ...process.env, ...(o.env || {}) };
+  if (o.isolatedWorker || o.workerRoot) {
+    env.TURBO_ENV_MODE = 'loose';
+    env.IS_WEBPACK_TEST = '1';
+    env.pnpm_config_verify_deps_before_run = 'warn';
+  }
   const res = spawnSync(command, {
     cwd,
+    env,
     encoding: 'utf8',
     shell: true,
     windowsHide: true,
@@ -436,6 +460,7 @@ function runVerificationCommand(item, options) {
     return {
       pass: false,
       cause: exitOk ? 'VERIFICATION_EXPECT_MISSING' : 'VERIFICATION_EXIT',
+      deferredToCi,
       command,
       expect,
       exitCode: res ? res.status : null,
@@ -459,6 +484,7 @@ function runVerificationCommand(item, options) {
     return {
       pass: false,
       cause: 'NO_LOCAL_COMMIT',
+      deferredToCi,
       findings: [
         {
           id: 'NO_LOCAL_COMMIT',
@@ -479,6 +505,7 @@ function runVerificationCommand(item, options) {
   return {
     pass: true,
     cause: null,
+    deferredToCi,
     command,
     expect,
     exitCode: res ? res.status : null,
@@ -504,7 +531,14 @@ function provisionReviewRoot(workerRoot, reviewRoot, targetSha, options) {
   }
 
   if (fs.existsSync(reviewRoot)) {
-    fs.rmSync(reviewRoot, { recursive: true, force: true });
+    // Windows reports transient EPERM/EBUSY while a large tree is being released.
+    try {
+      fs.rmSync(reviewRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
+    } catch (err) {
+      // A process whose working directory is inside the old root blocks deletion
+      // but not a rename; move it aside so the fresh clone can proceed.
+      fs.renameSync(reviewRoot, reviewRoot + '-stale-' + Date.now());
+    }
   }
 
   const { withCleanGitEnv, safeGit, getEffectiveEolConfig } = require('./supervisor');
@@ -827,12 +861,20 @@ function reviewLane(
       } else if (Date.now() - reviewerProbeStartedAt >= PROBE_BUDGET_MS) {
         result = { ok: false, status: 0, body: 'Probe budget exhausted' };
       }
+      if (result) {
+        require('./route-health').rememberProbe(candidate, result, {
+          ...o,
+          workItemId: (item ? item.id : 'item') + '-review',
+        });
+      }
       if (!result || result.ok !== true) {
         const reasonCode = sharedRouteProbe.failureReason(
           sharedRouteProbe.classifyProbeFailure(result)
         );
         const failure = {
           exitCode: 1,
+          httpStatus: result ? result.status : undefined,
+          body: (result && result.body) || 'REVIEWER_ROUTE_PROBE_FAILED ' + reasonCode,
           stderr: 'REVIEWER_ROUTE_PROBE_FAILED ' + reasonCode,
           failureReason: 'REVIEWER_ROUTE_PROBE_FAILED',
         };
@@ -854,6 +896,7 @@ function reviewLane(
           cause: 'REVIEWER_ROUTE_PROBE_FAILED',
           verdict: 'REFUSED',
           reviewer: reviewerIdentity,
+          launchFailed: true,
           findings: [{ id: 'REVIEWER_ROUTE_PROBE_FAILED', open: true, detail: reasonCode }],
         };
       }
@@ -888,10 +931,32 @@ function reviewLane(
               const dRes = safeGit(
                 safeGitDir,
                 reviewWorkerRoot,
-                ['diff', baseSha + '..' + targetSha],
+                ['diff', '--no-ext-diff', '--no-textconv', baseSha + '..' + targetSha],
                 20000
               );
-              return dRes && dRes.status === 0 ? dRes.stdout : '';
+              const fullDiff = dRes && dRes.status === 0 ? dRes.stdout : '';
+              if (o.isolatedWorker && fullDiff.length > 24000) {
+                const statRes = safeGit(
+                  safeGitDir,
+                  reviewWorkerRoot,
+                  ['diff', '--no-ext-diff', '--no-textconv', '--stat', baseSha + '..' + targetSha],
+                  20000
+                );
+                const statText = statRes && statRes.status === 0 ? statRes.stdout : '';
+                try {
+                  const patchDir = path.join(reviewWorkerRoot, '.shipde');
+                  fs.mkdirSync(patchDir, { recursive: true });
+                  fs.writeFileSync(path.join(patchDir, 'review-diff.patch'), fullDiff, 'utf8');
+                } catch {}
+                return (
+                  '# Large diff (' +
+                  fullDiff.length +
+                  ' chars). Summary:\n' +
+                  statText +
+                  '\n# Full patch saved to .shipde/review-diff.patch in review root'
+                );
+              }
+              return fullDiff;
             },
             { workerWritable: true }
           ) || '';
@@ -1083,6 +1148,23 @@ function reviewLane(
       const altFile = path.join(reviewWorkerRoot, 'review-verdict.json');
       if (fs.existsSync(altFile)) {
         effectiveVerdictFile = altFile;
+      } else if (res && typeof res.stdout === 'string' && res.stdout.trim()) {
+        try {
+          const text = require('./writer-schema').poolResultText(res.stdout);
+          const match = String(text || '').match(/\{[\s\S]*\}/);
+          if (match) {
+            const candidateJson = JSON.parse(match[0]);
+            if (
+              candidateJson &&
+              typeof candidateJson === 'object' &&
+              typeof candidateJson.verdict === 'string' &&
+              typeof candidateJson.sha === 'string'
+            ) {
+              fs.writeFileSync(verdictFile, JSON.stringify(candidateJson, null, 2), 'utf8');
+              effectiveVerdictFile = verdictFile;
+            }
+          }
+        } catch {}
       }
     }
 
@@ -1824,6 +1906,51 @@ function checkoutCleanCommit(root, ref, { run, fs: fileSystem }) {
   };
 }
 
+// The head run and the base run must see the identical environment, or a test that is
+// environment-sensitive reads as a new failure (or a fixed one) purely from the mismatch.
+function hostGateEnv(nodePaths) {
+  return Object.assign({}, process.env, {
+    // The suite must see what CI sees: no router key, no machine discovery data.
+    NINEROUTER_API_KEY: undefined,
+    AI_BRAIN_DISCOVERED_SOURCES: 'none',
+    AI_BRAIN_MACHINE_DATA: 'none',
+    NODE_PATH: [].concat(nodePaths, [process.env.NODE_PATH]).filter(Boolean).join(path.delimiter),
+  });
+}
+
+// A test that fails on the worker commit but not on the base may be a parallel-file race
+// (several files share one data directory). Re-run only those tests alone on the same clean
+// checkout; a failure that repeats is confirmed, one that passes is recorded as flaky. Any
+// rerun that cannot be read confirms every candidate (fail closed).
+function confirmNewFailures(candidates, ctx) {
+  const unconfirmed = { confirmed: [...candidates], flaky: [] };
+  if (!ctx.cwd || candidates.length === 0) return unconfirmed;
+  const escape = (name) => '^' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$';
+  const args = ['--test'];
+  for (const name of candidates) args.push('--test-name-pattern=' + escape(name));
+  args.push(...ctx.suiteFiles);
+  let res;
+  try {
+    res = ctx.run(ctx.node, args, {
+      cwd: ctx.cwd,
+      encoding: 'utf8',
+      timeout: ctx.timeout,
+      maxBuffer: 64 * 1024 * 1024,
+      env: ctx.env,
+    });
+  } catch (_) {
+    return unconfirmed;
+  }
+  if (!res || res.error || typeof res.status !== 'number') return unconfirmed;
+  const again = parseFailedTestNames(String(res.stdout || '') + '\n' + String(res.stderr || ''));
+  if (res.status !== 0 && again.length === 0) return unconfirmed;
+  const againSet = new Set(again);
+  return {
+    confirmed: candidates.filter((name) => againSet.has(name)),
+    flaky: candidates.filter((name) => !againSet.has(name)),
+  };
+}
+
 function runHostBrainGate(job, options = {}) {
   const requestedRoot = options.hostCwd || options.cwd || process.cwd();
   const root =
@@ -1846,26 +1973,54 @@ function runHostBrainGate(job, options = {}) {
     };
   }
   const command = 'node --test ' + suiteFiles.join(' ');
+  if (
+    !options.spawnSync &&
+    !options.brainSuite &&
+    job &&
+    job.workerRoot &&
+    fs.existsSync(job.workerRoot)
+  ) {
+    const workerDiffRef =
+      job.baseSha && /^[0-9a-f]{40}$/i.test(String(job.baseSha).trim())
+        ? String(job.baseSha).trim() + '..HEAD'
+        : 'HEAD~1..HEAD';
+    const diffRes = run('git', ['diff', '--name-only', workerDiffRef, '--', 'tools/ai-brain'], {
+      cwd: job.workerRoot,
+      encoding: 'utf8',
+    });
+    if (diffRes && diffRes.status === 0 && !String(diffRes.stdout || '').trim()) {
+      const hostGateFailures = Object.assign([], { newFailures: [], baselineFailures: [] });
+      return {
+        pass: true,
+        command,
+        failures: [],
+        hostGateFailures,
+        newFailures: [],
+        baselineFailures: [],
+        summary: ['ℹ pass (no tools/ai-brain changes in worker commit)'],
+        cleanupErrors: [],
+        cleanupError: null,
+      };
+    }
+  }
+  const extraTestFlags =
+    !options.spawnSync && !options.brainSuite
+      ? ['--test-concurrency=6', '--test-timeout=60000']
+      : [];
   // The host checkout carries live Controller state (intake runs, goals, locks) under
   // tools/ai-brain/data, which the base run's clean worktree does not. Run the suite on
   // a clean checkout of the same HEAD so that state never shows up as a new failure.
   const headClean = checkoutCleanCommit(root, 'HEAD', { run, fs: options.fs || fs });
-  const result = run(node, ['--test', ...suiteFiles], {
+  const headEnv = hostGateEnv(headClean.dir ? [path.join(root, 'node_modules')] : []);
+  const result = run(node, ['--test', ...extraTestFlags, ...suiteFiles], {
     cwd: headClean.dir || root,
     encoding: 'utf8',
     timeout: options.brainGateTimeoutMs || 30 * 60 * 1000,
     maxBuffer: 64 * 1024 * 1024,
-    // The suite must see what CI sees: no router key, no machine discovery data.
-    env: Object.assign({}, process.env, {
-      NINEROUTER_API_KEY: undefined,
-      AI_BRAIN_DISCOVERED_SOURCES: 'none',
-      AI_BRAIN_MACHINE_DATA: 'none',
-      NODE_PATH: [headClean.dir && path.join(root, 'node_modules'), process.env.NODE_PATH]
-        .filter(Boolean)
-        .join(path.delimiter),
-    }),
+    env: headEnv,
   });
-  const headCleanupErrors = headClean.cleanup();
+  let headCleanupErrors = null;
+  const cleanupHead = () => headCleanupErrors || (headCleanupErrors = headClean.cleanup());
   const output = String(result.stdout || '') + '\n' + String(result.stderr || '');
   const failed = parseFailedTestNames(output);
   const summary = output.split(/\r?\n/).filter((line) => /^ℹ (?:pass|fail)\b|^✖ /.test(line));
@@ -1880,8 +2035,8 @@ function runHostBrainGate(job, options = {}) {
       newFailures: [],
       baselineFailures: [],
       summary,
-      cleanupErrors: headCleanupErrors,
-      cleanupError: headCleanupErrors[0] || null,
+      cleanupErrors: cleanupHead(),
+      cleanupError: cleanupHead()[0] || null,
     };
   }
 
@@ -1892,6 +2047,21 @@ function runHostBrainGate(job, options = {}) {
       baselineFailures: [],
     });
     const repairDetails = options.onHostGateFailure ? options.onHostGateFailure(failures) : null;
+    // The token stays fail-closed, but the record must say what really ended the
+    // suite: exit status, signal, spawn error and the last output lines.
+    const unparsedSummary = [
+      'exit status=' +
+        (result.status === null || result.status === undefined ? 'none' : result.status) +
+        ' signal=' +
+        (result.signal || 'none') +
+        (result.error ? ' spawnError=' + String(result.error.message || result.error) : ''),
+    ].concat(
+      output
+        .split(/\r?\n/)
+        .filter((line) => line.trim())
+        .slice(-15)
+        .map((line) => line.slice(0, 300))
+    );
     return {
       pass: false,
       command,
@@ -1901,10 +2071,10 @@ function runHostBrainGate(job, options = {}) {
       hostGateFailures,
       newFailures: [...failures],
       baselineFailures: [],
-      summary,
+      summary: summary.length ? summary : unparsedSummary,
       repairDetails,
-      cleanupErrors: headCleanupErrors,
-      cleanupError: headCleanupErrors[0] || null,
+      cleanupErrors: cleanupHead(),
+      cleanupError: cleanupHead()[0] || null,
     };
   }
 
@@ -1952,7 +2122,7 @@ function runHostBrainGate(job, options = {}) {
     baseRan = true;
   }
 
-  const cleanupErrors = [...headCleanupErrors];
+  const cleanupErrors = [];
   const fileSystem = options.fs || fs;
 
   if (!baseRan && baseSha) {
@@ -1971,16 +2141,10 @@ function runHostBrainGate(job, options = {}) {
         worktreeAdded = true;
         const wtFiles = resolveSuiteFiles(tempWorktree, suite);
         const filesToRun = wtFiles.length > 0 ? wtFiles : suiteFiles;
-        const nodeEnv = Object.assign({}, process.env, {
-          NINEROUTER_API_KEY: undefined,
-          NODE_PATH: [
-            path.join(tempWorktree, 'node_modules'),
-            path.join(root, 'node_modules'),
-            process.env.NODE_PATH,
-          ]
-            .filter(Boolean)
-            .join(path.delimiter),
-        });
+        const nodeEnv = hostGateEnv([
+          path.join(tempWorktree, 'node_modules'),
+          path.join(root, 'node_modules'),
+        ]);
         const baseResult = run(node, ['--test', ...filesToRun], {
           cwd: tempWorktree,
           encoding: 'utf8',
@@ -2038,30 +2202,55 @@ function runHostBrainGate(job, options = {}) {
     }
   }
 
+  const baselineKnown = baseRan && Array.isArray(baseFailed);
+  const baseSet = new Set(baselineKnown ? baseFailed : []);
+  const candidates = Array.from(new Set(failed.filter((name) => !baseSet.has(name))));
+  // Confirm on the still-present clean head checkout, then release it.
+  const confirmation = baselineKnown
+    ? confirmNewFailures(candidates, {
+        run,
+        node,
+        suiteFiles,
+        cwd: headClean.dir,
+        env: headEnv,
+        timeout: options.brainGateTimeoutMs || 30 * 60 * 1000,
+      })
+    : { confirmed: [...failed], flaky: [] };
+  cleanupErrors.push(...cleanupHead());
   const cleanupMessages = cleanupErrors;
   const cleanupError = cleanupErrors.length > 0 ? cleanupErrors[0] : null;
 
-  if (baseRan && Array.isArray(baseFailed)) {
-    const baseSet = new Set(baseFailed);
-    const newFailures = Array.from(new Set(failed.filter((name) => !baseSet.has(name))));
+  if (baselineKnown) {
+    const newFailures = confirmation.confirmed;
+    const flakyRecovered = confirmation.flaky;
     const baselineFailures = Array.from(new Set(baseFailed));
+    // The decision record carries both numbers: what failed before this commit, and what is new.
+    const counts = {
+      baselineFailureCount: baselineFailures.length,
+      newFailureCount: newFailures.length,
+      flakyRecoveredCount: flakyRecovered.length,
+    };
 
     if (newFailures.length === 0) {
       const hostGateFailures = Object.assign([], {
         newFailures: [],
         baselineFailures,
       });
-      return {
-        pass: true,
-        command,
-        failures: [],
-        hostGateFailures,
-        newFailures: [],
-        baselineFailures,
-        summary,
-        cleanupErrors: cleanupMessages,
-        cleanupError,
-      };
+      return Object.assign(
+        {
+          pass: true,
+          command,
+          failures: [],
+          hostGateFailures,
+          newFailures: [],
+          baselineFailures,
+          flakyRecovered,
+          summary,
+          cleanupErrors: cleanupMessages,
+          cleanupError,
+        },
+        counts
+      );
     }
 
     const hostGateFailures = Object.assign([...newFailures], {
@@ -2069,21 +2258,26 @@ function runHostBrainGate(job, options = {}) {
       baselineFailures,
     });
     const repairDetails = options.onHostGateFailure ? options.onHostGateFailure(newFailures) : null;
-    return {
-      pass: false,
-      command,
-      failures: [...newFailures],
-      output,
-      hostGateFailures,
-      newFailures,
-      baselineFailures,
-      summary,
-      repairDetails,
-      cleanupErrors: cleanupMessages,
-      cleanupError,
-    };
+    return Object.assign(
+      {
+        pass: false,
+        command,
+        failures: [...newFailures],
+        output,
+        hostGateFailures,
+        newFailures,
+        baselineFailures,
+        flakyRecovered,
+        summary,
+        repairDetails,
+        cleanupErrors: cleanupMessages,
+        cleanupError,
+      },
+      counts
+    );
   }
 
+  // The baseline could not be computed: fail closed on every failure, say why.
   const hostGateFailures = Object.assign([...failed], {
     newFailures: [...failed],
     baselineFailures: [],
@@ -2092,11 +2286,15 @@ function runHostBrainGate(job, options = {}) {
   return {
     pass: false,
     command,
+    reason: 'BASELINE_UNAVAILABLE',
     failures: [...failed],
     output,
     hostGateFailures,
     newFailures: [...failed],
     baselineFailures: [],
+    baselineFailureCount: 0,
+    newFailureCount: failed.length,
+    flakyRecoveredCount: 0,
     summary,
     repairDetails,
     cleanupErrors: cleanupMessages,
@@ -2226,7 +2424,10 @@ function extractCheckpointReview(checkpoint, workItemId) {
     branch: typeof branch === 'string' ? branch : null,
     baseSha: typeof baseSha === 'string' ? baseSha.trim() : null,
     writerCandidateKey: typeof writerCandidateKey === 'string' ? writerCandidateKey.trim() : null,
-    draftTitle: typeof draftTitle === 'string' ? draftTitle.trim() : null,
+    // Verbatim: the integrity digest covers the stored title, and a title cut at
+    // the 72-character limit can end in a space. Trimming here made the digest
+    // of an untampered receipt differ from the one written with it.
+    draftTitle: typeof draftTitle === 'string' ? draftTitle : null,
     tests: raw.tests && typeof raw.tests === 'object' ? raw.tests : null,
     reviewRounds: receiptCount(raw.reviewRounds),
     openFindings: receiptCount(raw.openFindings),
@@ -2333,6 +2534,9 @@ function compactTestEvidence(result, failBefore) {
     '';
   return {
     command: (result && result.command) || (failBefore && failBefore.command) || null,
+    ...(result && Array.isArray(result.deferredToCi) && result.deferredToCi.length
+      ? { deferredToCi: result.deferredToCi }
+      : {}),
     baseExitCode: baseExit,
     headExitCode: headExit,
     outputDigest: digestObject({
@@ -2375,7 +2579,7 @@ function draftTitleFor(workItemId, outcome, fallback) {
   const clean = withoutIds === raw ? raw : withoutIds.replace(/\s{2,}/g, ' ').trim();
   const body = clean || String(fallback || 'verified work item');
   const title = '[' + id + '] ' + body;
-  return title.length > DRAFT_TITLE_LIMIT ? title.slice(0, DRAFT_TITLE_LIMIT) : title;
+  return title.length > DRAFT_TITLE_LIMIT ? title.slice(0, DRAFT_TITLE_LIMIT).trimEnd() : title;
 }
 
 function draftTitleForItem(item, goal) {
@@ -6634,6 +6838,96 @@ async function runOrchestration(goal, opts) {
     }
     recordPublishDecision(entry, published);
 
+    // CI is the final verification: the item is complete only when CI is green on
+    // the exact reviewed head SHA. Review PASS alone never completes or merges it.
+    entry.ci = null;
+    if (
+      published.status === PublicationStatus.PUBLISHED_DRAFT &&
+      o.ciGate !== false &&
+      ciGate.ciGateConfig().enabled
+    ) {
+      const draft = (published.result && (published.result.draft || published.result)) || {};
+      const ci = await ciGate.awaitCi({
+        sha: entry.sha,
+        prNumber: draft.number,
+        branch: published.branch || entry.branch,
+        repo: o.repo,
+        cwd: o.repoCwd || o.cwd,
+        ghRunner: o.ghRunner,
+        sleep: o.ciSleep,
+        pollIntervalMs: o.ciPollIntervalMs,
+        timeoutMs: o.ciTimeoutMs,
+      });
+      entry.ci = {
+        state: ci.state,
+        sha: ci.sha,
+        failed: ci.failed || [],
+        reason: ci.reason || null,
+      };
+      let failureFile = null;
+      if (ci.state === 'FAIL') {
+        failureFile = ciGate.writeCiFailure(
+          (logOpts && logOpts.dir) || o.decisionDir,
+          entry.workItemId,
+          ci
+        );
+      }
+      if (logOpts) {
+        decisions.recordDecision(
+          {
+            stage: decisions.Stage.CI_GATE,
+            workItemId: entry.workItemId,
+            sha: entry.sha,
+            ciState: ci.state,
+            failed: ci.failed || [],
+            failureFile,
+          },
+          logOpts
+        );
+      }
+      if (ci.state !== 'PASS') {
+        const failure = {
+          exitCode: 1,
+          stderr:
+            'CI_GATE_FAILED (' +
+            ci.state +
+            ') on ' +
+            entry.sha +
+            ': ' +
+            (ci.failed || []).join(', '),
+          failureReason: 'CI_GATE_FAILED',
+        };
+        const itemRole = roleOf(entry.item || entry);
+        decisions.recordDecision(
+          {
+            stage: decisions.Stage.FAILED,
+            workItemId: entry.workItemId,
+            role: itemRole,
+            detail: failure.stderr,
+          },
+          logOpts
+        );
+        recordStepFailure(
+          entry.workItemId,
+          'ci-gate',
+          failure,
+          { role: itemRole },
+          0,
+          0,
+          entry.sha,
+          null
+        );
+        log.outcomes.push({
+          workItemId: entry.workItemId,
+          status: ItemStatus.BLOCKED,
+          reason: failure.stderr,
+          reasonCode: 'CI_GATE_FAILED',
+        });
+        statusOf.set(entry.workItemId, ItemStatus.BLOCKED);
+        break;
+      }
+    }
+
     // GM-R05 (TASK-AI-133): the next-item loop calls merge after publish when the item is eligible.
     if (o.mergeAfterPublish || o.autoMerge || o.merge) {
       const { governedMerge, isEligibleForMerge } = require('./governed-merge');
@@ -7910,11 +8204,20 @@ async function reviewItem(
   const runTestsForReview =
     typeof o.tests === 'function'
       ? o.tests
-      : () =>
-          runVerificationCommand(
+      : () => {
+          // A CI failure recorded for exactly this head SHA is fed to the repair
+          // loop before anything else: green local checks do not override red CI.
+          const ciDir = (logOpts && logOpts.dir) || o.decisionDir;
+          const head = workerRoot ? headShaOf(workerRoot) : null;
+          const ciFindings = head ? ciGate.ciFindingsFor(ciDir, item.id, head) : [];
+          if (ciFindings.length) {
+            return { pass: false, cause: 'CI_FAILED', findings: ciFindings, detail: 'CI_FAILED' };
+          }
+          return runVerificationCommand(
             item,
             Object.assign({}, o, { workerRoot, baseSha: session.baseSha || o.baseSha })
           );
+        };
   const captureRunTests = () => {
     lastTestResult = runTestsForReview();
     return lastTestResult;
@@ -9263,6 +9566,7 @@ module.exports = {
   runFormatGateForTest,
   repairSpec,
   resolveLauncher,
+  resolveIsolatedWorkerRoot,
   headShaOf,
   verifyCommitSha,
   measureFailBefore,
@@ -9281,6 +9585,9 @@ module.exports = {
   reviewItem,
   draftTitleForItem,
   normalizeReviewForCheckpoint,
+  extractCheckpointReview,
+  verifyReceiptIntegrity,
+  attachReceiptIntegrity,
   provisionReviewRoot,
   publishCwdForReceipt,
   resolvePublishCwd,

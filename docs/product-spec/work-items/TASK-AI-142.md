@@ -1,5 +1,34 @@
 # TASK-AI-142 — Hermes chat brain wired to the Controller
 
+## Slice (C): Governed planner, PR reviewer, docs-only merge executor and CI-gated completion (2026-10-28)
+
+Implementation of split slice (C) delivers:
+- Governed planning services (`tools/ai-brain/planning-services.js`) providing isolated planner execution, docs-only diff verification, unattended planning dependencies for `next-runner.js`, and integration with `work-item-planner.js`.
+- Independent PR reviewer (`review pr --pr <n> --sha <40-hex>`) verifying exact head SHAs in isolated review roots with structured verdict output.
+- Docs-only merge executor and preflight wiring for safe autonomous loop progression.
+- CI-gated completion (`tools/ai-brain/ci-gate.js`, `tools/ai-brain/verification-split.js`) deferring infrastructure-dependent test suites to GitHub Actions and feeding failing job logs to the repair loop.
+- Supporting tooling and utilities: Context7 library docs retrieval (`tools/ai-brain/context7.js`), task-scoped Repomix packaging (`tools/ai-brain/context-pack.js`, `tools/repomix/`), output parsing in `writer-schema.js`, dirty retained root repair in `isolation-launcher.js`, and tool catalog entries in `data/tool-manifest.json`.
+
+Allowed paths for Slice (C):
+- `tools/ai-brain/planning-services.js`
+- `tools/ai-brain/work-item-planner.js`
+- `tools/ai-brain/next-runner.js`
+- `tools/ai-brain/ci-gate.js`
+- `tools/ai-brain/verification-split.js`
+- `tools/ai-brain/orchestrate.js`
+- `tools/ai-brain/isolation-launcher.js`
+- `tools/ai-brain/cli.js`
+- `tools/ai-brain/context7.js`
+- `tools/ai-brain/context-pack.js`
+- `tools/ai-brain/prompt-compiler.js`
+- `tools/ai-brain/writer-schema.js`
+- `tools/repomix/*`
+- `tools/ai-brain/data/tool-manifest.json`
+- `tools/ai-brain/sources.json`
+- `tools/ai-brain/ninerouter-combo.js`
+- `docs/product-spec/work-items/TASK-AI-142.md`
+- and slice (C) test suites under `tools/ai-brain/test/`.
+
 ## Orchestrate module split, steps 1-2 (2026-10-28)
 
 Steps 1-2 of the orchestrate module split extract `route-probe` and `decisions-log` helpers verbatim from `tools/ai-brain/orchestrate.js` into dedicated modules: `tools/ai-brain/orchestrate/route-probe.js` and `tools/ai-brain/orchestrate/decisions-log.js`.

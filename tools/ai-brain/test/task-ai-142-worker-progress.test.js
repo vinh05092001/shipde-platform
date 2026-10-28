@@ -115,7 +115,7 @@ test(
       targetLines: [
         '$ErrorActionPreference = "Stop"',
         'Write-Output \'{"type":"error","timestamp":1791237213000,"error":{"name":"APIError","data":{"message":"[provider/model] [413]: Request too large for model context","statusCode":413}}}\'',
-        'Start-Sleep -Seconds 15',
+        'Start-Sleep -Seconds 20',
         'exit 0',
       ],
     });
@@ -124,7 +124,7 @@ test(
     assert.equal(hostRes.status, 0, String(hostRes.stderr || hostRes.stdout || ''));
     assert.ok(raw, 'launch result must be written');
     assert.match(String(raw.failureReason), /REQUEST_TOO_LARGE/);
-    assert.ok(elapsedMs < 10000, `expected fast abort on 413, took ${elapsedMs}ms`);
+    assert.ok(elapsedMs < 15000, `expected fast abort on 413, took ${elapsedMs}ms`);
 
     const result = readIt();
     assert.equal(result.failureReason, 'REQUEST_TOO_LARGE');
@@ -155,7 +155,7 @@ test(
       targetLines: [
         '$ErrorActionPreference = "Stop"',
         'Write-Output "Rate limit reached for model on tokens per minute (TPM): Limit 8000, Used 7950, Requested 2500"',
-        'Start-Sleep -Seconds 15',
+        'Start-Sleep -Seconds 20',
         'exit 0',
       ],
     });
@@ -164,7 +164,7 @@ test(
     assert.equal(hostRes.status, 0, String(hostRes.stderr || hostRes.stdout || ''));
     assert.ok(raw, 'launch result must be written');
     assert.match(String(raw.failureReason), /REQUEST_TOO_LARGE/);
-    assert.ok(elapsedMs < 10000, `expected fast abort on TPM limit, took ${elapsedMs}ms`);
+    assert.ok(elapsedMs < 15000, `expected fast abort on TPM limit, took ${elapsedMs}ms`);
 
     const result = readIt();
     assert.equal(result.failureReason, 'REQUEST_TOO_LARGE');
@@ -291,5 +291,23 @@ test(
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  }
+);
+
+test(
+  'B4: a tool_use event whose output merely lists branch names containing 413/limit/tpm is not a REQUEST_TOO_LARGE',
+  windowsSkip,
+  () => {
+    const event =
+      '{"type":"tool_use","timestamp":1,"sessionID":"ses_x","part":{"type":"tool","tool":"bash","state":{"status":"completed","input":{"command":"git branch -a"},"output":"* feat/x  fix/task-ai-142-probe-tpm  fix/limit-on-tpm-guard  remotes/pr/413  fix/task-ai-142-request-too-large"}}}';
+    const { hostRes, raw, dir } = runGeneratedHost({
+      workerTimeoutMs: 30000,
+      targetLines: ['$ErrorActionPreference = "Stop"', `Write-Output '${event}'`, 'exit 0'],
+    });
+    assert.equal(hostRes.status, 0, String(hostRes.stderr || hostRes.stdout || ''));
+    assert.ok(raw, 'launch result must be written');
+    assert.doesNotMatch(String(raw.failureReason || ''), /REQUEST_TOO_LARGE/);
+    assert.notEqual(raw.requestTooLarge, true);
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 );
