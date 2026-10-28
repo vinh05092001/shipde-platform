@@ -293,7 +293,7 @@ export class AuthService {
     let merchant: { id: string } | null = null;
     let user: {
       id: string;
-      merchant_id: string;
+      merchant_id: string | null;
       email: string | null;
       phone: string | null;
     } | null = null;
@@ -1686,7 +1686,7 @@ export class AuthService {
         data: {
           challenge_hash: challengeHash,
           user_id: tokenRecord.user.id,
-          merchant_id: tokenRecord.user.merchant_id,
+          merchant_id: tokenRecord.user.merchant_id!,
           login_transaction_ref: correlationId,
           purpose: 'MFA_LOGIN',
           expires_at: new Date(Date.now() + challengeTtlSeconds * 1000),
@@ -1891,7 +1891,7 @@ export class AuthService {
         data: {
           challenge_hash: challengeHash,
           user_id: user.id,
-          merchant_id: user.merchant_id,
+          merchant_id: user.merchant_id!,
           login_transaction_ref: correlationId,
           purpose: 'MFA_LOGIN',
           expires_at: new Date(Date.now() + challengeTtlSeconds * 1000),
@@ -1957,7 +1957,7 @@ export class AuthService {
   private async resolveExistingAccountConflict(
     existingUsers: Array<{
       id: string;
-      merchant_id: string;
+      merchant_id: string | null;
       email: string | null;
       phone: string | null;
       status: string;
@@ -2040,7 +2040,7 @@ export class AuthService {
    * Every blocked attempt is audited without credentials.
    */
   private async assertStatusAllowsLogin(
-    user: { id: string; merchant_id: string; status: string },
+    user: { id: string; merchant_id: string | null; status: string },
     clientIp: string,
     correlationId: string
   ): Promise<void> {
@@ -2130,7 +2130,7 @@ export class AuthService {
   private async createLoginSessionAndResponse(
     user: {
       id: string;
-      merchant_id: string;
+      merchant_id: string | null;
       full_name: string;
       email: string | null;
       phone: string | null;
@@ -2145,7 +2145,7 @@ export class AuthService {
         code: string;
         status: string;
         created_at: Date;
-      };
+      } | null;
     },
     rememberDevice: boolean,
     clientIp: string,
@@ -2218,13 +2218,15 @@ export class AuthService {
           auth_assurance: authAssurance,
           mfa_verified_at: mfaVerifiedAt ? mfaVerifiedAt.toISOString() : null,
         },
-        merchant: {
-          id: merchant.id,
-          name: merchant.name,
-          business_code: merchant.code,
-          status: merchant.status,
-          created_at: merchant.created_at.toISOString(),
-        },
+        merchant: merchant
+          ? {
+              id: merchant.id,
+              name: merchant.name,
+              business_code: merchant.code,
+              status: merchant.status,
+              created_at: merchant.created_at.toISOString(),
+            }
+          : null,
       },
       meta: {
         correlation_id: correlationId,
@@ -2320,8 +2322,8 @@ export class AuthService {
   }
 
   private async logAudit(meta: {
-    merchantId?: string;
-    userId?: string;
+    merchantId?: string | null;
+    userId?: string | null;
     actor: string;
     action: string;
     resource: string;
@@ -3229,13 +3231,14 @@ export class AuthService {
 
     if (existingUsers.length > 0) {
       const match = existingUsers[0];
+      const matchMerchant = match.merchant;
       const isSameMerchantRetry =
         existingUsers.length === 1 &&
-        match.merchant &&
-        match.merchant.name.trim().toLowerCase() === dto.merchant_name.trim().toLowerCase() &&
+        matchMerchant != null &&
+        matchMerchant.name.trim().toLowerCase() === dto.merchant_name.trim().toLowerCase() &&
         match.role === RoleEnum.OWNER;
 
-      if (isSameMerchantRetry) {
+      if (isSameMerchantRetry && matchMerchant != null) {
         // Canonical retry that resends the one-time setup without creating a second shop
         if (passwordIsTemporary) {
           const rawRetrySetupToken = randomBytes(32).toString('hex');
@@ -3277,15 +3280,15 @@ export class AuthService {
         }
 
         await this.logAudit({
-          merchantId: match.merchant.id,
+          merchantId: matchMerchant.id,
           userId: match.id,
           actor: actor || 'operator',
           action: 'ADMIN_RETRY_SHOP_SETUP',
-          resource: `merchant:${match.merchant.id}`,
+          resource: `merchant:${matchMerchant.id}`,
           correlationId,
           ipAddress: this.hashIp(clientIp),
           details: {
-            merchant_code: match.merchant.code,
+            merchant_code: matchMerchant.code,
             password_is_temporary: passwordIsTemporary,
             is_retry: true,
           },
@@ -3295,30 +3298,22 @@ export class AuthService {
           success: true,
           data: {
             merchant: {
-              id: match.merchant.id,
-              name: match.merchant.name,
-              code: match.merchant.code,
-              status: match.merchant.status,
-              created_at: match.merchant.created_at,
+              id: matchMerchant.id,
+              name: matchMerchant.name,
+              code: matchMerchant.code,
+              status: matchMerchant.status,
+              created_at: matchMerchant.created_at,
             },
             user: {
               id: match.id,
-              merchant_id: match.merchant_id,
+              merchant_id: match.merchant_id || matchMerchant.id,
               full_name: match.full_name,
               email: match.email,
               phone: match.phone,
               role: match.role,
               status: match.status,
-              email_verified_at: match.email_verified_at
-                ? typeof match.email_verified_at === 'string'
-                  ? match.email_verified_at
-                  : match.email_verified_at.toISOString()
-                : null,
-              phone_verified_at: match.phone_verified_at
-                ? typeof match.phone_verified_at === 'string'
-                  ? match.phone_verified_at
-                  : match.phone_verified_at.toISOString()
-                : null,
+              email_verified_at: match.email_verified_at,
+              phone_verified_at: match.phone_verified_at,
             },
             password_is_temporary: passwordIsTemporary,
           },

@@ -62,7 +62,7 @@ export class SessionService {
 
   async validateSession(tokenHash: string): Promise<{
     userId: string;
-    merchantId: string;
+    merchantId: string | null;
     sessionId: string;
     authAssurance: string;
     mfaVerifiedAt: Date | null;
