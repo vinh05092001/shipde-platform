@@ -139,6 +139,35 @@ $ tsx scripts/verify-secrets.ts
 ✅ Quét secret hoàn tất: 0 phát hiện vi phạm bí mật trên commit history và working tree.
 ```
 
+### E2E and build evidence
+
+**Timestamp**: 2026-10-28 07:49:00
+**HEAD**: `7293eab0fff70a1e4c50b6fe4ce58ca4f4c28716`
+
+#### 1. `pnpm contract:check`
+- **Exit Code**: `0`
+- **Summary**:
+  - OpenAPI Spec Version: `3.1.0`
+  - Total endpoints verified: `42` (100% synced with `@shipde/contracts`)
+  - Drift count: `0`
+
+#### 2. `pnpm build`
+- **Exit Code**: `0`
+- **Summary**:
+  - Turbo tasks: `8 successful, 8 total` (4 cached, 4 executed, 0 failed)
+  - Packages: `@shipde/api`, `@shipde/config`, `@shipde/contracts`, `@shipde/testkit`, `@shipde/ui`, `@shipde/web`, `@shipde/worker`
+  - Next.js static pages: `21/21` generated (`0` errors)
+  - Prisma Client: Generated (`v6.19.3`)
+  - Build duration: `16.429s`
+
+#### 3. `pnpm test:e2e`
+- **Exit Code**: `0`
+- **Summary**:
+  - Turbo tasks: `1 successful, 1 total` (`0` failed)
+  - E2E scenarios (`E2E-01` to `E2E-12`): `12/12` passed (`0` failed, 100%)
+  - Comprehensive business rules audit: `42/42` passed (`0` failed, 100%)
+  - Execution duration: `1.049s`
+
 ## audit_logs.merchant_id nullability
 
 ### Why `merchant_id` is nullable

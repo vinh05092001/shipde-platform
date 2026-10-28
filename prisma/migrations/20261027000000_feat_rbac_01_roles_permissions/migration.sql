@@ -164,10 +164,9 @@ CREATE TRIGGER trg_check_user_custom_role_same_merchant
 DO $$
 BEGIN
     IF EXISTS (
-        SELECT 1 FROM information_schema.columns 
+        SELECT 1 FROM information_schema.columns
         WHERE table_name = 'audit_logs' AND column_name = 'merchant_id' AND is_nullable = 'NO'
     ) THEN
         ALTER TABLE "audit_logs" ALTER COLUMN "merchant_id" DROP NOT NULL;
     END IF;
 END $$;
-
