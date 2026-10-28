@@ -1669,6 +1669,7 @@ export class RbacService implements OnModuleInit {
    */
   async deleteRole(roleId: string, actor: ActorContext, clientIp: string, correlationId: string) {
     // All database reads, decisions, privilege checks, and assignment checks are inside the transaction after row locks (P1-02)
+    let validatedActorSnapshot: ActorContext | undefined;
     try {
       await this.prisma.$transaction(async (tx) => {
         // 1. Lock in ONE global order: actor user -> actor role -> role_permissions -> target role (Finding 2 / Round 9)
@@ -1678,6 +1679,7 @@ export class RbacService implements OnModuleInit {
           ['iam:manage_users'],
           roleId
         );
+        validatedActorSnapshot = actorSnapshot;
 
         // 2. Re-read current role under lock (Finding 1 / Round 9)
         const lockedTargetRole = await tx.role.findUnique({
@@ -1747,7 +1749,9 @@ export class RbacService implements OnModuleInit {
           }>
         >`SELECT id, status, role, custom_role_id, merchant_id FROM users WHERE custom_role_id = ${roleId}::uuid FOR UPDATE`;
 
-        const crossTenantAssignees = assignees.filter((u) => u.merchant_id !== actor.merchantId);
+        const crossTenantAssignees = assignees.filter(
+          (u) => u.merchant_id !== actorSnapshot.merchantId
+        );
         if (crossTenantAssignees.length > 0) {
           throw new CanonicalApiException(
             HttpStatus.BAD_REQUEST,
@@ -1827,7 +1831,10 @@ export class RbacService implements OnModuleInit {
                 },
               ],
               undefined,
-              { broaderUsers }
+              {
+                broaderUsers,
+                actorMerchantId: actorSnapshot.merchantId,
+              }
             );
           }
 
@@ -1894,11 +1901,25 @@ export class RbacService implements OnModuleInit {
       if (err instanceof CanonicalApiException) {
         if (err.code === 'ROLE_IN_USE' && err.extra?.broaderUsers) {
           const broaderUsers = err.extra.broaderUsers as string[];
+          const auditMerchantId =
+            (typeof err.extra.actorMerchantId === 'string' && err.extra.actorMerchantId.trim()) ||
+            (validatedActorSnapshot?.merchantId && validatedActorSnapshot.merchantId.trim()) ||
+            (actor.merchantId && actor.merchantId.trim());
+
+          if (!auditMerchantId) {
+            throw new CanonicalApiException(
+              HttpStatus.INTERNAL_SERVER_ERROR,
+              'INTERNAL_SERVER_ERROR',
+              'Không thể xác định đơn vị hợp lệ cho vết kiểm toán bảo mật',
+              true
+            );
+          }
+
           try {
             await this.prisma.$transaction(async (auditTx: any) => {
               await auditTx.auditLog.create({
                 data: {
-                  merchant_id: actor.merchantId || '',
+                  merchant_id: auditMerchantId,
                   user_id: actor.userId,
                   action: 'ROLE_DELETE_BLOCKED_INACTIVE_WIDENING',
                   entity_type: 'Role',
@@ -1933,7 +1954,7 @@ export class RbacService implements OnModuleInit {
         const fallbackCount = await this.prisma.user
           .count({
             where: {
-              merchant_id: actor.merchantId,
+              merchant_id: validatedActorSnapshot?.merchantId || actor.merchantId,
               custom_role_id: roleId,
               status: ACTIVE_USER_STATUS_FILTER,
             },

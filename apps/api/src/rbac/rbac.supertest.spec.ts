@@ -500,10 +500,46 @@ async function main() {
   });
   assert.strictEqual(activeCount, 1, 'Assigned user count must be preserved');
 
+  // =========================================================================
+  // Finding P1 / Inactive widening guard: Deleting role with inactive assignee whose fallback enum is broader
+  // blocks with 400 ROLE_IN_USE and writes audit log with actor tenant merchant_id
+  // =========================================================================
+  await prisma.user.update({
+    where: { id: ASSIGNED_USER_ID },
+    data: { custom_role_id: createdRoleId, status: 'INACTIVE' },
+  });
+
+  const inactiveWideningRes = await request(server)
+    .delete(`/api/v1/roles/${createdRoleId}`)
+    .set('Authorization', `Bearer ${ownerToken}`)
+    .expect(400);
+
+  assert.strictEqual(inactiveWideningRes.body.error.code, 'ROLE_IN_USE');
+
+  const wideningAudit = await prisma.auditLog.findFirst({
+    where: {
+      action: 'ROLE_DELETE_BLOCKED_INACTIVE_WIDENING',
+      entity_id: createdRoleId,
+      entity_type: 'Role',
+    },
+    orderBy: { created_at: 'desc' },
+  });
+  assert.ok(wideningAudit, 'Audit log for ROLE_DELETE_BLOCKED_INACTIVE_WIDENING must exist');
+  assert.strictEqual(
+    wideningAudit.merchant_id,
+    SEED_MERCHANT_ID,
+    'Audit row merchant_id must equal the actor tenant'
+  );
+  assert.notStrictEqual(
+    wideningAudit.merchant_id,
+    '',
+    'Audit row merchant_id must never be empty string'
+  );
+
   // Unassign the user so role can be safely deleted in AC-10
   await prisma.user.update({
     where: { id: ASSIGNED_USER_ID },
-    data: { custom_role_id: null },
+    data: { custom_role_id: null, status: 'ACTIVE' },
   });
 
   // =========================================================================

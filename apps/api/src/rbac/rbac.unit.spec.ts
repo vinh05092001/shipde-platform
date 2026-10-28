@@ -2793,17 +2793,86 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
       assert.ok(roleField.message.includes('1'), 'Client error message must contain user count');
     }
 
-    // 4. Verify audit row retained the raw user IDs safely server-side
+    // 4. Verify audit row retained the raw user IDs safely server-side and has non-empty merchant_id
     const wideningAudit = mockPrisma.auditLogs.find(
       (a) => a.action === 'ROLE_DELETE_BLOCKED_INACTIVE_WIDENING' && a.entity_id === roleId
     );
     assert.ok(wideningAudit, 'Audit log for blocked widening must be recorded');
+    assert.strictEqual(
+      wideningAudit.merchant_id,
+      MERCHANT_A,
+      'Audit row merchant_id must equal the actor tenant'
+    );
+    assert.notStrictEqual(
+      wideningAudit.merchant_id,
+      '',
+      'Audit row merchant_id must never be empty string'
+    );
     assert.strictEqual(wideningAudit.old_value.broader_user_count, 1);
     assert.strictEqual(wideningAudit.old_value.correlation_id, 'corr-r9-f4-delete');
     assert.ok(
       wideningAudit.old_value.broader_user_ids.includes(sensitiveInactiveUserId),
       'Audit log must retain user IDs for administrative traceability'
     );
+  });
+
+  // Review Finding P1: deleteRole audit write for ROLE_DELETE_BLOCKED_INACTIVE_WIDENING uses validated actorSnapshot.merchantId and never writes empty string
+  test('Review Finding P1: deleteRole audit write for ROLE_DELETE_BLOCKED_INACTIVE_WIDENING uses validated actorSnapshot.merchantId and never writes empty string', async () => {
+    // 1. Create a custom role with limited permission
+    const createRes = await service.createRole(
+      {
+        name: 'P1 Widening Audit Test Role',
+        permissions: ['order:view_create'],
+      },
+      OWNER_ACTOR,
+      '127.0.0.1',
+      'corr-p1-setup'
+    );
+    const roleId = createRes.data.role.id;
+
+    // 2. Add an inactive user with broader enum role (FINANCE)
+    const inactiveUserId = 'user-inactive-p1-widening';
+    mockPrisma.users.push({
+      id: inactiveUserId,
+      merchant_id: MERCHANT_A,
+      role: 'FINANCE',
+      custom_role_id: roleId,
+      status: 'INACTIVE',
+    });
+
+    // 3. Invoke deleteRole with an actor that omits merchantId
+    // The service must resolve the actor tenant under lock and write the non-empty validated merchantId to audit_logs
+    const actorWithoutMerchantId: ActorContext = {
+      userId: OWNER_ACTOR.userId,
+      role: 'OWNER',
+    };
+
+    try {
+      await service.deleteRole(roleId, actorWithoutMerchantId, '127.0.0.1', 'corr-p1-delete-blocked');
+      assert.fail('Should have thrown ROLE_IN_USE exception');
+    } catch (err: any) {
+      assert.ok(err instanceof CanonicalApiException);
+      assert.strictEqual(err.getStatus(), 400);
+      assert.strictEqual(err.code, 'ROLE_IN_USE');
+    }
+
+    // 4. Assert the post-transaction audit log has non-null, non-empty merchant_id matching actor's validated tenant
+    const auditRow = mockPrisma.auditLogs.find(
+      (a) => a.action === 'ROLE_DELETE_BLOCKED_INACTIVE_WIDENING' && a.entity_id === roleId
+    );
+    assert.ok(auditRow, 'ROLE_DELETE_BLOCKED_INACTIVE_WIDENING audit log must be recorded');
+    assert.strictEqual(
+      auditRow.merchant_id,
+      MERCHANT_A,
+      'Audit row merchant_id must equal the actor tenant from lockAndAuthorizeActor'
+    );
+    assert.notStrictEqual(
+      auditRow.merchant_id,
+      '',
+      'Audit row merchant_id must never be empty string'
+    );
+    assert.strictEqual(typeof auditRow.merchant_id, 'string');
+    assert.ok(auditRow.merchant_id.length > 0);
   });
 
   test('Finding 1 (Round 10): Durable audit log on inactive widening block does not discard failure and records correlation_id on USER_ROLE_DETACHED', async () => {
