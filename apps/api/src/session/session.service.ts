@@ -99,7 +99,7 @@ export class SessionService implements OnApplicationBootstrap {
         device_id: s.device_id,
         device_model: s.device_model,
         user_agent: s.user_agent,
-        ip_address: this.maskIpForDisplay(s.ip_address),
+        ip_address: this.resolveSafeIpForDisplay(s.ip_address),
         status: effectiveStatus,
         last_active_at: s.last_active_at.toISOString(),
         expires_at: s.expires_at.toISOString(),
@@ -116,19 +116,13 @@ export class SessionService implements OnApplicationBootstrap {
   }
 
   /**
-   * Validates an active device session by its SHA-256 token hash.
-   *
-   * BR-SESS-01 Scoping:
-   * When caller context is available (e.g. verified JWT claims from SessionGuard),
-   * the optional `scope` ({ userId, merchantId }) is passed to strictly scope the DB lookup
-   * to the caller's tenant and user.
-   * When validating opaque tokens or when claims are not yet resolved, the lookup is keyed
-   * by session_token_hash (enforced by a unique DB constraint) to derive identity context,
-   * serving as the documented initial identity resolution exception to BR-SESS-01.
+   * Validates an active device session by its SHA-256 token hash strictly scoped
+   * by user and merchant tenant (BR-SESS-01).
+   * Unscoped session lookups are strictly prohibited to prevent cross-tenant token exploitation.
    */
   async validateSession(
     tokenHash: string,
-    scope?: { userId?: string; merchantId?: string | null }
+    scope: { userId: string; merchantId?: string | null }
   ): Promise<{
     userId: string;
     merchantId: string | null;
@@ -136,21 +130,23 @@ export class SessionService implements OnApplicationBootstrap {
     authAssurance: string;
     mfaVerifiedAt: Date | null;
   } | null> {
+    if (!scope || !scope.userId) {
+      return null;
+    }
+
     const now = new Date();
     const inactivityThreshold = new Date(now.getTime() - INACTIVITY_DAYS * 24 * 60 * 60 * 1000);
 
     const where: {
       session_token_hash: string;
-      user_id?: string;
+      user_id: string;
       merchant_id?: string | null;
     } = {
       session_token_hash: tokenHash,
+      user_id: scope.userId,
     };
 
-    if (scope?.userId) {
-      where.user_id = scope.userId;
-    }
-    if (scope?.merchantId !== undefined) {
+    if (scope.merchantId !== undefined) {
       where.merchant_id = scope.merchantId;
     }
 
@@ -246,8 +242,31 @@ export class SessionService implements OnApplicationBootstrap {
           try {
             await (tx as any)
               .$queryRaw`SELECT id, status FROM "device_sessions" WHERE id = ${sessionId}::uuid FOR UPDATE`;
-          } catch {
-            // Fallback for mock environments where raw postgres syntax or $queryRaw is unsupported
+          } catch (lockErr: any) {
+            // Rethrow on Postgres; only skip where documented unsupported (e.g. SQLite or mock drivers lacking Postgres syntax support)
+            const dbUrl = process.env.DATABASE_URL || '';
+            const isPostgres =
+              dbUrl.startsWith('postgresql:') ||
+              dbUrl.startsWith('postgres:') ||
+              (!dbUrl && process.env.NODE_ENV === 'production');
+            const errorMessage = String(lockErr?.message || lockErr || '');
+            const isDocumentedUnsupported =
+              errorMessage.includes('NOT_IMPLEMENTED_FOR_UPDATE') ||
+              errorMessage.includes('sqlite') ||
+              errorMessage.includes('near "FOR": syntax error') ||
+              errorMessage.includes('near "::": syntax error');
+
+            if (isPostgres && !isDocumentedUnsupported) {
+              console.error(
+                formatStructuredLog({
+                  level: 'error',
+                  service: 'api',
+                  message: `ROW_LOCK_FAILED: Failed to acquire exclusive lock on session ${sessionId}`,
+                  metadata: { sessionId, error: this.sanitizeError(lockErr) },
+                })
+              );
+              throw lockErr;
+            }
           }
         }
 
@@ -603,24 +622,13 @@ export class SessionService implements OnApplicationBootstrap {
     };
   }
 
-  private maskIpForDisplay(ip: string | null | undefined): string | null {
-    if (!ip) return null;
-    const trimmed = ip.trim();
-    if (/^[a-f0-9]{64}$/i.test(trimmed)) {
-      return null;
-    }
-    // Mask IPv4 to protect PII while providing network context (e.g. 113.161.45.***)
-    if (trimmed.includes('.')) {
-      const parts = trimmed.split('.');
-      if (parts.length === 4) {
-        return `${parts[0]}.${parts[1]}.${parts[2]}.***`;
-      }
-    }
-    // Mask IPv6
-    if (trimmed.includes(':')) {
-      const parts = trimmed.split(':');
-      return `${parts.slice(0, 3).join(':')}:****`;
-    }
+  /**
+   * BR-SESS-09 / AC-SESS-21: Zero Secret / PII Disclosure.
+   * Client-facing list responses must never return IP data derived from raw values (no masking of raw IPs).
+   * Device sessions store HMAC-SHA256 hashed IPs in the database.
+   * Per zero disclosure, raw IPs are never echoed or masked; returns null for all client-facing responses.
+   */
+  private resolveSafeIpForDisplay(_ip: string | null | undefined): string | null {
     return null;
   }
 

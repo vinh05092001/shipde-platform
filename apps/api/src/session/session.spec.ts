@@ -1053,7 +1053,10 @@ describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
       };
 
       const service = new SessionService(mockPrisma);
-      const res = await service.validateSession('token-hash-inactive');
+      const res = await service.validateSession('token-hash-inactive', {
+        userId: 'user-1',
+        merchantId: 'merch-1',
+      });
       assert.strictEqual(res, null, 'validateSession must return null for inactive session');
       assert.strictEqual(
         updatedStatus,
@@ -1082,7 +1085,10 @@ describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
       };
 
       const service = new SessionService(mockPrisma);
-      const res = await service.validateSession('token-hash-expired');
+      const res = await service.validateSession('token-hash-expired', {
+        userId: 'user-1',
+        merchantId: 'merch-1',
+      });
       assert.strictEqual(
         res,
         null,
@@ -1256,36 +1262,143 @@ describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
       assert.strictEqual(capturedWhere.merchant_id, 'merch-1');
     });
 
-    it('scopes findFirst query by session_token_hash alone when scope is omitted (opaque tokens)', async () => {
-      let capturedWhere: any = null;
+    it('rejects validateSession lookup when scope is omitted or missing userId (BR-SESS-01)', async () => {
+      let findFirstCalled = false;
       const mockPrisma: any = {
         deviceSession: {
-          findFirst: async ({ where }: any) => {
-            capturedWhere = where;
-            return {
-              id: 'sess-opaque-1',
-              user_id: 'user-2',
-              merchant_id: 'merch-2',
-              session_token_hash: 'token-hash-opaque',
-              status: SessionStatusEnum.ACTIVE,
-              last_active_at: new Date(),
-              expires_at: new Date(Date.now() + 80 * 24 * 60 * 60 * 1000),
-              auth_assurance: 'PASSWORD',
-              mfa_verified_at: null,
-            };
+          findFirst: async () => {
+            findFirstCalled = true;
+            return null;
           },
         },
       };
 
       const service = new SessionService(mockPrisma);
-      const res = await service.validateSession('token-hash-opaque');
+      const res = await service.validateSession('token-hash-opaque', undefined as any);
 
-      assert.ok(res);
-      assert.strictEqual(res.userId, 'user-2');
-      assert.strictEqual(res.merchantId, 'merch-2');
-      assert.strictEqual(capturedWhere.session_token_hash, 'token-hash-opaque');
-      assert.strictEqual(capturedWhere.user_id, undefined);
-      assert.strictEqual(capturedWhere.merchant_id, undefined);
+      assert.strictEqual(res, null, 'validateSession must return null when scope is omitted');
+      assert.strictEqual(findFirstCalled, false, 'DB query must not be executed without user/tenant scope');
+    });
+
+    it('rejects validateSession lookup when session in DB belongs to a different tenant (BR-SESS-01)', async () => {
+      const mockPrisma: any = {
+        deviceSession: {
+          findFirst: async ({ where }: any) => {
+            if (where.merchant_id === 'merch-owner' && where.user_id === 'user-owner') {
+              return {
+                id: 'sess-owner',
+                user_id: 'user-owner',
+                merchant_id: 'merch-owner',
+                session_token_hash: 'token-hash-cross',
+                status: SessionStatusEnum.ACTIVE,
+                last_active_at: new Date(),
+                expires_at: new Date(Date.now() + 80 * 24 * 60 * 60 * 1000),
+                auth_assurance: 'PASSWORD',
+                mfa_verified_at: null,
+              };
+            }
+            return null;
+          },
+        },
+      };
+
+      const service = new SessionService(mockPrisma);
+      const res = await service.validateSession('token-hash-cross', {
+        userId: 'user-evil',
+        merchantId: 'merch-evil',
+      });
+
+      assert.strictEqual(res, null, 'Cross-tenant validateSession must return null');
+    });
+
+    it('SessionGuard rejects opaque tokens without claims with 401 SESSION_INVALID', async () => {
+      const mockSessionService: any = {
+        validateSession: async () => null,
+      };
+      const guard = new SessionGuard(mockSessionService);
+      const mockReq: any = {
+        headers: {
+          authorization: 'Bearer opaque-token-without-claims-abc-123',
+        },
+      };
+      const mockContext: any = {
+        switchToHttp: () => ({
+          getRequest: () => mockReq,
+        }),
+      };
+
+      await assert.rejects(
+        async () => {
+          await guard.canActivate(mockContext);
+        },
+        (err: any) => {
+          assert.strictEqual(err.status, 401);
+          assert.strictEqual(err.response?.error?.code, 'SESSION_INVALID');
+          return true;
+        }
+      );
+    });
+
+    it('SessionGuard rejects cross-tenant token with 401 SESSION_INVALID', async () => {
+      const { signAccessToken, resolveAccessTokenSecret } = await import('../auth/token.util');
+      const testSecret = resolveAccessTokenSecret('test-secret-at-least-32-chars-long-enough-for-security');
+      const prevSecret = process.env.AUTH_TOKEN_SECRET;
+      try {
+        process.env.AUTH_TOKEN_SECRET = testSecret;
+
+        const { token: crossTenantToken } = signAccessToken(
+          {
+            sub: 'user-evil',
+            sid: 'sess-evil',
+            mid: 'merch-evil',
+            role: 'OPS_CSKH' as any,
+            st: 'active',
+          },
+          testSecret,
+          3600
+        );
+
+        let validatedScope: any = null;
+        const mockSessionService: any = {
+          validateSession: async (_tokenHash: string, scope: any) => {
+            validatedScope = scope;
+            return null;
+          },
+        };
+
+        const guard = new SessionGuard(mockSessionService);
+        const mockReq: any = {
+          headers: {
+            authorization: `Bearer ${crossTenantToken}`,
+          },
+        };
+        const mockContext: any = {
+          switchToHttp: () => ({
+            getRequest: () => mockReq,
+          }),
+        };
+
+        await assert.rejects(
+          async () => {
+            await guard.canActivate(mockContext);
+          },
+          (err: any) => {
+            assert.strictEqual(err.status, 401);
+            assert.strictEqual(err.response?.error?.code, 'SESSION_INVALID');
+            return true;
+          }
+        );
+
+        assert.ok(validatedScope, 'SessionGuard passed scope to validateSession');
+        assert.strictEqual(validatedScope.userId, 'user-evil');
+        assert.strictEqual(validatedScope.merchantId, 'merch-evil');
+      } finally {
+        if (prevSecret !== undefined) {
+          process.env.AUTH_TOKEN_SECRET = prevSecret;
+        } else {
+          delete process.env.AUTH_TOKEN_SECRET;
+        }
+      }
     });
 
     it('SessionGuard passes verified JWT claims as scope to validateSession', async () => {
@@ -1345,6 +1458,148 @@ describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
           process.env.AUTH_TOKEN_SECRET = prevSecret;
         } else {
           delete process.env.AUTH_TOKEN_SECRET;
+        }
+      }
+    });
+  });
+
+  describe('P2-1 / BR-SESS-09: list() zero secret/PII disclosure', () => {
+    it('returns ip_address: null in list() even if raw IP or hash exists in database row', async () => {
+      const mockPrisma: any = {
+        deviceSession: {
+          findMany: async () => [
+            {
+              id: 'sess-raw-ip',
+              device_id: 'web-1',
+              device_model: 'Chrome',
+              user_agent: 'Mozilla/5.0',
+              ip_address: '113.161.45.22', // Raw IPv4 in legacy/migrated row
+              status: SessionStatusEnum.ACTIVE,
+              last_active_at: new Date(),
+              expires_at: new Date(Date.now() + 80 * 24 * 60 * 60 * 1000),
+              created_at: new Date(),
+              session_token_hash: 'hash-1',
+            },
+            {
+              id: 'sess-hashed-ip',
+              device_id: 'web-2',
+              device_model: 'Firefox',
+              user_agent: 'Mozilla/5.0',
+              ip_address: 'a'.repeat(64), // Stored HMAC hash
+              status: SessionStatusEnum.ACTIVE,
+              last_active_at: new Date(),
+              expires_at: new Date(Date.now() + 80 * 24 * 60 * 60 * 1000),
+              created_at: new Date(),
+              session_token_hash: 'hash-2',
+            },
+          ],
+        },
+      };
+
+      const service = new SessionService(mockPrisma);
+      const res = await service.list('user-1', 'merch-1', 'hash-1');
+
+      assert.strictEqual(res.data.length, 2);
+      assert.strictEqual(res.data[0].ip_address, null, 'Raw IP must not be returned or masked');
+      assert.strictEqual(res.data[1].ip_address, null, 'Stored HMAC hash must not be returned');
+    });
+  });
+
+  describe('P2-3 / BR-SESS-07: SELECT ... FOR UPDATE error handling', () => {
+    it('rethrows when Postgres row lock acquisition fails', async () => {
+      const prevDbUrl = process.env.DATABASE_URL;
+      try {
+        process.env.DATABASE_URL = 'postgresql://postgres:password@localhost:5432/shipde_dev';
+
+        const mockPrisma: any = {
+          deviceSession: {
+            findUnique: async () => ({
+              id: 'sess-lock-fail',
+              user_id: 'user-lock',
+              merchant_id: 'merch-lock',
+              status: SessionStatusEnum.ACTIVE,
+              device_id: 'dev-lock',
+            }),
+          },
+          $transaction: async (cb: any) => {
+            const tx: any = {
+              $queryRaw: async () => {
+                throw new Error('deadlock detected on row lock');
+              },
+            };
+            return cb(tx);
+          },
+        };
+
+        const service = new SessionService(mockPrisma);
+        await assert.rejects(
+          async () => {
+            await service.revoke('sess-lock-fail', 'user-lock', 'merch-lock', 'corr-lock-pg');
+          },
+          (err: any) => {
+            assert.match(err.message, /deadlock detected/);
+            return true;
+          }
+        );
+      } finally {
+        if (prevDbUrl !== undefined) {
+          process.env.DATABASE_URL = prevDbUrl;
+        } else {
+          delete process.env.DATABASE_URL;
+        }
+      }
+    });
+
+    it('gracefully skips row lock when raw syntax is documented unsupported (e.g. SQLite / mock)', async () => {
+      const prevDbUrl = process.env.DATABASE_URL;
+      try {
+        process.env.DATABASE_URL = 'file:./dev.db';
+
+        let updateCalled = false;
+        const mockPrisma: any = {
+          deviceSession: {
+            findUnique: async () => ({
+              id: 'sess-lock-sqlite',
+              user_id: 'user-sqlite',
+              merchant_id: 'merch-sqlite',
+              status: SessionStatusEnum.ACTIVE,
+              device_id: 'dev-sqlite',
+            }),
+          },
+          $transaction: async (cb: any) => {
+            const tx: any = {
+              $queryRaw: async () => {
+                throw new Error('near "FOR": syntax error');
+              },
+              deviceSession: {
+                updateMany: async () => {
+                  updateCalled = true;
+                  return { count: 1 };
+                },
+              },
+              auditLog: {
+                create: async () => ({ id: 'audit-sqlite' }),
+              },
+            };
+            return cb(tx);
+          },
+        };
+
+        const service = new SessionService(mockPrisma);
+        const res = await service.revoke(
+          'sess-lock-sqlite',
+          'user-sqlite',
+          'merch-sqlite',
+          'corr-sqlite'
+        );
+
+        assert.strictEqual(updateCalled, true);
+        assert.strictEqual(res.status, SessionStatusEnum.REVOKED);
+      } finally {
+        if (prevDbUrl !== undefined) {
+          process.env.DATABASE_URL = prevDbUrl;
+        } else {
+          delete process.env.DATABASE_URL;
         }
       }
     });

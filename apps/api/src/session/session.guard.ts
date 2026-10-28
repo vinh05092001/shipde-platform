@@ -46,63 +46,83 @@ export class SessionGuard implements CanActivate {
       });
     }
 
+    // BR-SESS-01: Derive tenant/user scope for all accepted tokens. Reject token formats without claims.
+    if (!rawToken.startsWith('v1.')) {
+      throw new UnauthorizedException({
+        error: {
+          code: 'SESSION_INVALID',
+          message: 'Phiên đăng nhập không hợp lệ hoặc định dạng token không được hỗ trợ',
+          retryable: false,
+          next_action: 'LOGIN',
+        },
+      });
+    }
+
     let jwtClaims: any;
-    // Check if it's a signed JWT (v1.<payload>.<signature>)
-    if (rawToken.startsWith('v1.')) {
-      try {
-        const secret = resolveAccessTokenSecret(process.env.AUTH_TOKEN_SECRET);
-        const claims = verifyAccessToken(rawToken, secret);
+    try {
+      const secret = resolveAccessTokenSecret(process.env.AUTH_TOKEN_SECRET);
+      jwtClaims = verifyAccessToken(rawToken, secret);
 
-        if (claims.scope === 'setup') {
-          // Bounded setup token (AC-AUTH-05-12)
-          const url = req.originalUrl || req.url || '';
-          const isAllowedSetupRoute =
-            url.includes('/auth/mfa/status') ||
-            url.includes('/auth/mfa/setup') ||
-            url.includes('/auth/logout');
+      if (jwtClaims.scope === 'setup') {
+        // Bounded setup token (AC-AUTH-05-12)
+        const url = req.originalUrl || req.url || '';
+        const isAllowedSetupRoute =
+          url.includes('/auth/mfa/status') ||
+          url.includes('/auth/mfa/setup') ||
+          url.includes('/auth/logout');
 
-          if (!isAllowedSetupRoute) {
-            throw new ForbiddenException({
-              error: {
-                code: 'FORBIDDEN',
-                message:
-                  'Tài khoản của bạn bắt buộc phải hoàn tất thiết lập MFA trước khi truy cập ứng dụng',
-                retryable: false,
-                next_action: 'Vui lòng hoàn thành thiết lập xác thực hai yếu tố',
-              },
-            });
-          }
-
-          (req as any).userId = claims.sub;
-          (req as any).merchantId = claims.mid;
-          (req as any).userRole = claims.role;
-          (req as any).isSetupOnly = true;
-          return true;
+        if (!isAllowedSetupRoute) {
+          throw new ForbiddenException({
+            error: {
+              code: 'FORBIDDEN',
+              message:
+                'Tài khoản của bạn bắt buộc phải hoàn tất thiết lập MFA trước khi truy cập ứng dụng',
+              retryable: false,
+              next_action: 'Vui lòng hoàn thành thiết lập xác thực hai yếu tố',
+            },
+          });
         }
 
-        // For non-setup tokens, continue to validate against DeviceSession
-        jwtClaims = claims;
-        (req as any).jwtClaims = claims;
-      } catch (err: any) {
-        if (err instanceof ForbiddenException) throw err;
-        throw new UnauthorizedException({
-          error: {
-            code: 'SESSION_INVALID',
-            message: 'Phiên đăng nhập đã hết hạn hoặc không hợp lệ',
-            retryable: false,
-            next_action: 'LOGIN',
-          },
-        });
+        (req as any).userId = jwtClaims.sub;
+        (req as any).merchantId = jwtClaims.mid ?? null;
+        (req as any).userRole = jwtClaims.role;
+        (req as any).isSetupOnly = true;
+        return true;
       }
+
+      // For non-setup tokens, continue to validate against DeviceSession
+      (req as any).jwtClaims = jwtClaims;
+    } catch (err: any) {
+      if (err instanceof ForbiddenException) throw err;
+      throw new UnauthorizedException({
+        error: {
+          code: 'SESSION_INVALID',
+          message: 'Phiên đăng nhập đã hết hạn hoặc không hợp lệ',
+          retryable: false,
+          next_action: 'LOGIN',
+        },
+      });
+    }
+
+    if (!jwtClaims || !jwtClaims.sub) {
+      throw new UnauthorizedException({
+        error: {
+          code: 'SESSION_INVALID',
+          message: 'Phiên đăng nhập không hợp lệ',
+          retryable: false,
+          next_action: 'LOGIN',
+        },
+      });
     }
 
     const { createHash } = await import('node:crypto');
     const tokenHash = createHash('sha256').update(rawToken).digest('hex');
 
-    const session = await this.sessionService.validateSession(
-      tokenHash,
-      jwtClaims ? { userId: jwtClaims.sub, merchantId: jwtClaims.mid } : undefined
-    );
+    // Scoped DB validation enforced by user and tenant claims (BR-SESS-01)
+    const session = await this.sessionService.validateSession(tokenHash, {
+      userId: jwtClaims.sub,
+      merchantId: jwtClaims.mid ?? null,
+    });
     if (!session) {
       throw new UnauthorizedException({
         error: {

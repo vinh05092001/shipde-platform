@@ -2,7 +2,7 @@ import 'reflect-metadata';
 import * as assert from 'node:assert';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { randomBytes, createHash } from 'node:crypto';
+import { randomBytes, createHash, randomUUID } from 'node:crypto';
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
@@ -16,12 +16,7 @@ import { SessionStatusEnum, RoleEnum } from '@prisma/client';
 import { hashPassword } from '../auth/password.util';
 import { VERIFICATION_ADAPTER } from '../auth/auth.tokens';
 import { MockVerificationDeliveryAdapter } from '@shipde/testkit';
-
-function createSessionToken(): { raw: string; hash: string } {
-  const raw = randomBytes(48).toString('hex');
-  const hash = createHash('sha256').update(raw).digest('hex');
-  return { raw, hash };
-}
+import { signAccessToken, resolveAccessTokenSecret } from '../auth/token.util';
 
 async function runSessionSupertestSuite() {
   console.log('================================================================');
@@ -177,6 +172,30 @@ async function runSessionSupertestSuite() {
     },
   });
 
+  function createSessionToken(
+    userParam?: { id: string; role?: any },
+    merchantParam?: { id: string }
+  ): { raw: string; hash: string } {
+    const secret = resolveAccessTokenSecret(process.env.AUTH_TOKEN_SECRET);
+    const uId = userParam?.id ?? user.id;
+    const mId = merchantParam?.id ?? merchant.id;
+    const role = userParam?.role ?? 'OPS_CSKH';
+
+    const { token } = signAccessToken(
+      {
+        sub: uId,
+        sid: randomUUID(),
+        mid: mId,
+        role,
+        st: 'ACTIVE',
+      },
+      secret,
+      43200
+    );
+    const hash = createHash('sha256').update(token).digest('hex');
+    return { raw: token, hash };
+  }
+
   const server = app.getHttpServer();
 
   try {
@@ -278,7 +297,7 @@ async function runSessionSupertestSuite() {
     console.log(
       '[TEST AC-SESS-03] User with only current session requests list (Empty remote state)'
     );
-    const tok3 = createSessionToken();
+    const tok3 = createSessionToken(user3, merchant2);
     const sessUser3 = await prisma.deviceSession.create({
       data: {
         user_id: user3.id,
@@ -450,7 +469,7 @@ async function runSessionSupertestSuite() {
     console.log(
       '[TEST AC-SESS-09] User attempts to revoke session of another user (Forbidden cross-user)'
     );
-    const tokUser2 = createSessionToken();
+    const tokUser2 = createSessionToken(user2, merchant);
     const sessUser2 = await prisma.deviceSession.create({
       data: {
         user_id: user2.id,
@@ -881,6 +900,45 @@ async function runSessionSupertestSuite() {
     const res19 = await request(server).get('/api/v1/sessions').expect(401);
     assert.strictEqual(res19.body.error.code, 'UNAUTHENTICATED');
     console.log('  PASS: AC-SESS-19 Unauthenticated request returns 401 UNAUTHENTICATED');
+
+    // -------------------------------------------------------------------------
+    // BR-SESS-01 / P1-1: Reject token formats without claims & cross-tenant token validation
+    // -------------------------------------------------------------------------
+    console.log('[TEST BR-SESS-01 / P1-1] Token format without claims is rejected with 401 SESSION_INVALID');
+    const opaqueToken = randomBytes(48).toString('hex');
+    const resOpaque = await request(server)
+      .get('/api/v1/sessions')
+      .set('Authorization', `Bearer ${opaqueToken}`)
+      .expect(401);
+    assert.strictEqual(resOpaque.body.error.code, 'SESSION_INVALID');
+    assert.strictEqual(resOpaque.body.error.next_action, 'LOGIN');
+    console.log('  PASS: BR-SESS-01 Opaque token format without claims rejected with 401 SESSION_INVALID');
+
+    console.log('[TEST BR-SESS-01 / P1-1] Cross-tenant token rejected with 401 SESSION_INVALID');
+    const tokCrossTenant = createSessionToken(user3, merchant2);
+    const sessCrossTenant = await prisma.deviceSession.create({
+      data: {
+        user_id: user.id,
+        merchant_id: merchant.id,
+        session_token_hash: tokCrossTenant.hash,
+        device_id: 'probe_cross_tenant_device',
+        status: SessionStatusEnum.ACTIVE,
+        expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+      },
+    });
+
+    const resCross = await request(server)
+      .get('/api/v1/sessions')
+      .set('Authorization', `Bearer ${tokCrossTenant.raw}`)
+      .expect(401);
+    assert.strictEqual(resCross.body.error.code, 'SESSION_INVALID');
+    assert.strictEqual(resCross.body.error.next_action, 'LOGIN');
+
+    const dbCross = await prisma.deviceSession.findUnique({ where: { id: sessCrossTenant.id } });
+    assert.ok(dbCross);
+    assert.strictEqual(dbCross.status, SessionStatusEnum.ACTIVE);
+    await prisma.deviceSession.delete({ where: { id: sessCrossTenant.id } });
+    console.log('  PASS: BR-SESS-01 Cross-tenant token rejected with 401 SESSION_INVALID and target session unaffected');
 
     // -------------------------------------------------------------------------
     // AC-SESS-20: Audit rollback on failure
