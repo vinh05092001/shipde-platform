@@ -875,7 +875,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ListSessionsResponse'
         '401':
-          $ref: '#/components/responses/Error'
+          $ref: '#/components/responses/SessionInvalid'
   /sessions/{sessionId}:
     delete:
       tags: [Auth]
@@ -894,7 +894,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/RevokeSessionResponse'
         '401':
-          $ref: '#/components/responses/Error'
+          $ref: '#/components/responses/SessionInvalid'
         '403':
           description: Not owner of session or cross-tenant
           $ref: '#/components/responses/Error'
@@ -918,7 +918,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/HeartbeatSessionResponse'
         '401':
-          $ref: '#/components/responses/Error'
+          $ref: '#/components/responses/SessionInvalid'
         '403':
           description: Session not active or not owned by caller
           $ref: '#/components/responses/Error'
@@ -947,7 +947,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/RevokeAllSessionsResponse'
         '401':
-          $ref: '#/components/responses/Error'
+          $ref: '#/components/responses/SessionInvalid'
   /shops:
     get:
       tags: [Organization]
@@ -1316,6 +1316,45 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
+    Unauthenticated:
+      description: Unauthenticated request — missing or empty authorization header (UNAUTHENTICATED under AC-SESS-19)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: UNAUTHENTICATED
+              message: Vui lòng đăng nhập để tiếp tục
+              retryable: false
+            meta:
+              correlation_id: 123e4567-e89b-12d3-a456-426614174000
+    SessionInvalid:
+      description: Unauthorized request — missing token (UNAUTHENTICATED under AC-SESS-19) or expired/revoked/invalid session (SESSION_INVALID with next_action LOGIN under AC-SESS-06)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            unauthenticated:
+              summary: Missing or empty authorization header (AC-SESS-19)
+              value:
+                error:
+                  code: UNAUTHENTICATED
+                  message: Vui lòng đăng nhập để tiếp tục
+                  retryable: false
+                meta:
+                  correlation_id: 123e4567-e89b-12d3-a456-426614174000
+            session_invalid:
+              summary: Session expired, revoked, or token invalid (AC-SESS-06)
+              value:
+                error:
+                  code: SESSION_INVALID
+                  message: Phiên đăng nhập đã hết hạn hoặc không hợp lệ
+                  retryable: false
+                  next_action: LOGIN
+                meta:
+                  correlation_id: 123e4567-e89b-12d3-a456-426614174000
     RateLimited:
       description: Rate limit exceeded (RATE_LIMITED)
       content:
@@ -1907,6 +1946,8 @@ components:
               type: boolean
             next_action:
               type: string
+              description: Next action instructed for the client (e.g. 'LOGIN' on 401 SESSION_INVALID under AC-SESS-06)
+              example: LOGIN
             fields:
               type: array
               items:

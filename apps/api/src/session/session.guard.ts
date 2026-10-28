@@ -11,6 +11,21 @@ import { SessionService } from './session.service';
 import { verifyAccessToken, resolveAccessTokenSecret } from '../auth/token.util';
 
 /**
+ * Exact pathname allowlist for bounded setup-only tokens (FEAT-AUTH-05 AC-AUTH-05-12 / BR-SESS-01).
+ * Matches req.path only (excluding query string) to prevent query string bypass.
+ */
+const SETUP_TOKEN_ALLOWED_PATHNAMES = new Set([
+  '/auth/mfa/status',
+  '/auth/mfa/setup',
+  '/auth/mfa/setup/verify',
+  '/auth/logout',
+  '/api/v1/auth/mfa/status',
+  '/api/v1/auth/mfa/setup',
+  '/api/v1/auth/mfa/setup/verify',
+  '/api/v1/auth/logout',
+]);
+
+/**
  * Session and Access-Token Auth Guard.
  * Supports:
  * 1. Standard active device sessions via SHA-256 token hash.
@@ -46,65 +61,95 @@ export class SessionGuard implements CanActivate {
       });
     }
 
-    // Check if it's a signed JWT (v1.<payload>.<signature>)
-    if (rawToken.startsWith('v1.')) {
-      try {
-        const secret = resolveAccessTokenSecret(process.env.AUTH_TOKEN_SECRET);
-        const claims = verifyAccessToken(rawToken, secret);
+    // BR-SESS-01: Derive tenant/user scope for all accepted tokens. Reject token formats without claims.
+    if (!rawToken.startsWith('v1.')) {
+      throw new UnauthorizedException({
+        error: {
+          code: 'SESSION_INVALID',
+          message: 'Phiên đăng nhập không hợp lệ hoặc định dạng token không được hỗ trợ',
+          retryable: false,
+          next_action: 'LOGIN',
+        },
+      });
+    }
 
-        if (claims.scope === 'setup') {
-          // Bounded setup token (AC-AUTH-05-12)
-          const url = req.originalUrl || req.url || '';
-          const isAllowedSetupRoute =
-            url.includes('/auth/mfa/status') ||
-            url.includes('/auth/mfa/setup') ||
-            url.includes('/auth/logout');
+    let jwtClaims: any;
+    try {
+      const secret = resolveAccessTokenSecret(process.env.AUTH_TOKEN_SECRET);
+      jwtClaims = verifyAccessToken(rawToken, secret);
 
-          if (!isAllowedSetupRoute) {
-            throw new ForbiddenException({
-              error: {
-                code: 'FORBIDDEN',
-                message:
-                  'Tài khoản của bạn bắt buộc phải hoàn tất thiết lập MFA trước khi truy cập ứng dụng',
-                retryable: false,
-                next_action: 'Vui lòng hoàn thành thiết lập xác thực hai yếu tố',
-              },
-            });
-          }
+      if (jwtClaims.scope === 'setup') {
+        // Bounded setup token (AC-AUTH-05-12, BR-SESS-01)
+        // Match req.path only against exact pathname allowlist to prevent query parameter bypass.
+        const rawPath =
+          typeof req.path === 'string'
+            ? req.path
+            : typeof (req as any).url === 'string'
+              ? (req as any).url.split('?')[0]
+              : '';
+        const normalizedPath =
+          rawPath.length > 1 && rawPath.endsWith('/') ? rawPath.slice(0, -1) : rawPath;
+        const isAllowedSetupRoute = SETUP_TOKEN_ALLOWED_PATHNAMES.has(normalizedPath);
 
-          (req as any).userId = claims.sub;
-          (req as any).merchantId = claims.mid;
-          (req as any).userRole = claims.role;
-          (req as any).isSetupOnly = true;
-          return true;
+        if (!isAllowedSetupRoute) {
+          throw new ForbiddenException({
+            error: {
+              code: 'FORBIDDEN',
+              message:
+                'Tài khoản của bạn bắt buộc phải hoàn tất thiết lập MFA trước khi truy cập ứng dụng',
+              retryable: false,
+              next_action: 'Vui lòng hoàn thành thiết lập xác thực hai yếu tố',
+            },
+          });
         }
 
-        // For non-setup tokens, continue to validate against DeviceSession
-        (req as any).jwtClaims = claims;
-      } catch (err: any) {
-        if (err instanceof ForbiddenException) throw err;
-        throw new UnauthorizedException({
-          error: {
-            code: 'SESSION_INVALID',
-            message: 'Phiên đăng nhập đã hết hạn hoặc không hợp lệ',
-            retryable: false,
-            next_action: 'Vui lòng đăng nhập lại',
-          },
-        });
+        (req as any).userId = jwtClaims.sub;
+        (req as any).merchantId = jwtClaims.mid ?? null;
+        (req as any).userRole = jwtClaims.role;
+        (req as any).isSetupOnly = true;
+        return true;
       }
+
+      // For non-setup tokens, continue to validate against DeviceSession
+      (req as any).jwtClaims = jwtClaims;
+    } catch (err: any) {
+      if (err instanceof ForbiddenException) throw err;
+      throw new UnauthorizedException({
+        error: {
+          code: 'SESSION_INVALID',
+          message: 'Phiên đăng nhập đã hết hạn hoặc không hợp lệ',
+          retryable: false,
+          next_action: 'LOGIN',
+        },
+      });
+    }
+
+    if (!jwtClaims || !jwtClaims.sub) {
+      throw new UnauthorizedException({
+        error: {
+          code: 'SESSION_INVALID',
+          message: 'Phiên đăng nhập không hợp lệ',
+          retryable: false,
+          next_action: 'LOGIN',
+        },
+      });
     }
 
     const { createHash } = await import('node:crypto');
     const tokenHash = createHash('sha256').update(rawToken).digest('hex');
 
-    const session = await this.sessionService.validateSession(tokenHash);
+    // Scoped DB validation enforced by user and tenant claims (BR-SESS-01)
+    const session = await this.sessionService.validateSession(tokenHash, {
+      userId: jwtClaims.sub,
+      merchantId: jwtClaims.mid ?? null,
+    });
     if (!session) {
       throw new UnauthorizedException({
         error: {
           code: 'SESSION_INVALID',
           message: 'Phiên đăng nhập đã hết hạn hoặc bị thu hồi',
           retryable: false,
-          next_action: 'Vui lòng đăng nhập lại',
+          next_action: 'LOGIN',
         },
       });
     }

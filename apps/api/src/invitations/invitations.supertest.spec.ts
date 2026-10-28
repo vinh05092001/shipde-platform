@@ -3,7 +3,7 @@ import * as assert from 'node:assert';
 import { test } from 'node:test';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { randomBytes, createHash } from 'node:crypto';
+import { randomBytes, createHash, randomUUID } from 'node:crypto';
 import { Test, TestingModule } from '@nestjs/testing';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import request from 'supertest';
@@ -14,12 +14,7 @@ import { VERIFICATION_ADAPTER } from '../auth/auth.tokens';
 import { AppConfig } from '@shipde/config';
 import { MockVerificationDeliveryAdapter } from '@shipde/testkit';
 import { RoleEnum, SessionStatusEnum, InvitationStatusEnum } from '@prisma/client';
-
-function createSessionToken(): { raw: string; hash: string } {
-  const raw = randomBytes(48).toString('hex');
-  const hash = createHash('sha256').update(raw).digest('hex');
-  return { raw, hash };
-}
+import { signAccessToken, resolveAccessTokenSecret } from '../auth/token.util';
 
 /**
  * FEAT-USR-01 — Supertest integration harness for user invitations.
@@ -184,13 +179,29 @@ async function runInvitationsSupertestSuite() {
   });
 
   // Helper to create session
-  const makeSessionToken = async (userId: string, merchantId: string) => {
-    const tok = createSessionToken();
+  const makeSessionToken = async (
+    userId: string,
+    merchantId: string,
+    role: RoleEnum = RoleEnum.OWNER
+  ) => {
+    const secret = resolveAccessTokenSecret(process.env.AUTH_TOKEN_SECRET);
+    const { token } = signAccessToken(
+      {
+        sub: userId,
+        sid: randomUUID(),
+        mid: merchantId,
+        role,
+        st: 'ACTIVE',
+      },
+      secret,
+      43200
+    );
+    const tokenHash = createHash('sha256').update(token).digest('hex');
     await prisma.deviceSession.create({
       data: {
         user_id: userId,
         merchant_id: merchantId,
-        session_token_hash: tok.hash,
+        session_token_hash: tokenHash,
         device_id: 'supertest_client',
         device_model: 'Supertest',
         user_agent: 'Supertest Test Harness',
@@ -198,13 +209,13 @@ async function runInvitationsSupertestSuite() {
         expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
       },
     });
-    return tok.raw;
+    return token;
   };
 
-  const ownerToken = await makeSessionToken(owner.id, merchant.id);
-  const opsToken = await makeSessionToken(opsUser.id, merchant.id);
-  const whToken = await makeSessionToken(whUser.id, merchant.id);
-  const otherToken = await makeSessionToken(otherOwner.id, otherMerchant.id);
+  const ownerToken = await makeSessionToken(owner.id, merchant.id, RoleEnum.OWNER);
+  const opsToken = await makeSessionToken(opsUser.id, merchant.id, RoleEnum.OPS_CSKH);
+  const whToken = await makeSessionToken(whUser.id, merchant.id, RoleEnum.WAREHOUSE);
+  const otherToken = await makeSessionToken(otherOwner.id, otherMerchant.id, RoleEnum.OWNER);
 
   // [TEST 1 / AC-USR-01-01] Owner creates invitation with email & warehouse scope
   console.log(
