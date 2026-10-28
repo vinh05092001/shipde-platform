@@ -99,7 +99,8 @@ export class SessionService implements OnApplicationBootstrap {
         device_id: s.device_id,
         device_model: s.device_model,
         user_agent: s.user_agent,
-        ip_address: s.ip_address,
+        ip_address:
+          s.ip_address && /^[a-f0-9]{64}$/i.test(s.ip_address.trim()) ? null : s.ip_address,
         status: effectiveStatus,
         last_active_at: s.last_active_at.toISOString(),
         expires_at: s.expires_at.toISOString(),

@@ -256,6 +256,11 @@ async function runSessionSupertestSuite() {
     assert.strictEqual(listed2.session_token, undefined, 'raw token must NOT appear in list');
     assert.strictEqual(listed2.session_token_hash, undefined, 'token hash must NOT appear in list');
     assert.strictEqual(
+      /^[a-f0-9]{64}$/i.test(listed2.ip_address || ''),
+      false,
+      '64-character HMAC hash must NOT be returned in client-facing ip_address'
+    );
+    assert.strictEqual(
       listed2.is_current,
       true,
       'caller session must be marked as is_current=true'
