@@ -638,4 +638,51 @@ describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
       );
     });
   });
+
+  describe('Finding 1: AUDIT_IDENTIFIER_HMAC_KEY validation and graceful session creation', () => {
+    it('throws on application bootstrap in production if AUDIT_IDENTIFIER_HMAC_KEY is unset', () => {
+      const prevEnv = process.env.NODE_ENV;
+      const prevKey = process.env.AUDIT_IDENTIFIER_HMAC_KEY;
+      try {
+        process.env.NODE_ENV = 'production';
+        delete process.env.AUDIT_IDENTIFIER_HMAC_KEY;
+        const service = new SessionService({} as any);
+        assert.throws(
+          () => service.onApplicationBootstrap(),
+          /AUDIT_IDENTIFIER_HMAC_KEY is required in production/
+        );
+      } finally {
+        process.env.NODE_ENV = prevEnv;
+        if (prevKey !== undefined) process.env.AUDIT_IDENTIFIER_HMAC_KEY = prevKey;
+      }
+    });
+
+    it('creates session gracefully with null ip_address when AUDIT_IDENTIFIER_HMAC_KEY is unset without 500', async () => {
+      const prevKey = process.env.AUDIT_IDENTIFIER_HMAC_KEY;
+      try {
+        delete process.env.AUDIT_IDENTIFIER_HMAC_KEY;
+        let createdData: any = null;
+        const mockPrisma: any = {
+          deviceSession: {
+            create: async ({ data }: any) => {
+              createdData = data;
+              return { id: 'sess-new', ...data };
+            },
+          },
+        };
+        const service = new SessionService(mockPrisma);
+        const result = await service.create({
+          userId: 'user-1',
+          merchantId: 'merch-1',
+          token: 'test-raw-token',
+          ipAddress: '192.168.1.100',
+        });
+        assert.ok(result);
+        assert.strictEqual(createdData.ip_address, null, 'ip_address should be null when key is absent');
+        assert.strictEqual(createdData.status, SessionStatusEnum.ACTIVE);
+      } finally {
+        if (prevKey !== undefined) process.env.AUDIT_IDENTIFIER_HMAC_KEY = prevKey;
+      }
+    });
+  });
 });

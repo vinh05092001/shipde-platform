@@ -1,4 +1,4 @@
-import { Injectable, Inject, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { Injectable, Inject, ForbiddenException, NotFoundException, OnApplicationBootstrap } from '@nestjs/common';
 import { randomBytes, createHash, createHmac } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { SessionStatusEnum } from '@prisma/client';
@@ -12,8 +12,17 @@ const ABSOLUTE_LIFETIME_DAYS = 90;
 const INACTIVITY_DAYS = 30;
 
 @Injectable()
-export class SessionService {
+export class SessionService implements OnApplicationBootstrap {
   constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+
+  onApplicationBootstrap() {
+    const key = process.env.AUDIT_IDENTIFIER_HMAC_KEY;
+    if (process.env.NODE_ENV === 'production' && (!key || key.trim().length === 0)) {
+      throw new Error(
+        'AUDIT_IDENTIFIER_HMAC_KEY is required in production for IP pseudonymization; refusing to start application'
+      );
+    }
+  }
 
   /**
    * Internal creation of session records during successful login (AC-SESS-01).
@@ -247,8 +256,9 @@ export class SessionService {
       });
 
       // Emitted only after transaction successfully commits
-      if (typeof auditLogAction === 'function') {
-        auditLogAction();
+      const emitAction = auditLogAction as (() => void) | null;
+      if (emitAction) {
+        emitAction();
       }
       return result;
     } catch (err) {
@@ -324,8 +334,9 @@ export class SessionService {
       });
 
       // Emitted only after transaction successfully commits
-      if (typeof auditLogAction === 'function') {
-        auditLogAction();
+      const emitAction = auditLogAction as (() => void) | null;
+      if (emitAction) {
+        emitAction();
       }
       return result;
     } catch (err) {
@@ -503,12 +514,15 @@ export class SessionService {
     };
   }
 
-  private hashIp(ip: string): string {
+  private hashIp(ip: string, failClosed = false): string | null {
     const key = process.env.AUDIT_IDENTIFIER_HMAC_KEY;
     if (!key || key.trim().length === 0) {
-      throw new Error(
-        'AUDIT_IDENTIFIER_HMAC_KEY is required for IP pseudonymization; refusing to fallback to predictable key'
-      );
+      if (failClosed) {
+        throw new Error(
+          'AUDIT_IDENTIFIER_HMAC_KEY is required for IP pseudonymization; refusing to fallback to predictable key'
+        );
+      }
+      return null;
     }
     return createHmac('sha256', key.trim()).update(ip).digest('hex');
   }
@@ -526,7 +540,7 @@ export class SessionService {
     },
     tx: any = this.prisma
   ): Promise<() => void> {
-    const hashedIp = meta.ipAddress ? this.hashIp(meta.ipAddress) : null;
+    const hashedIp = meta.ipAddress ? this.hashIp(meta.ipAddress, true) : null;
     const { ipAddress: _rawIp, ...safeMeta } = meta;
 
     const emitLog = () => {
