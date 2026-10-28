@@ -6,7 +6,7 @@
 | --------------- | ----- |
 | Work Item ID    | `FEAT-RBAC-02` |
 | Feature ID      | `FEAT-RBAC-02` |
-| Status          | `IN_PROGRESS` |
+| Status          | `READY_FOR_CODEX` |
 | Delivery order  | 14 |
 | Dependencies    | `TASK-FOUND-04`, `FEAT-RBAC-01`, `FEAT-USR-01` |
 | Assigned author | `GEMINI` |
@@ -125,45 +125,50 @@ The user scope assignment interface in `SCR-USR-01` (`/settings/users`) implemen
 
 ## Acceptance matrix
 
-| AC/Test ID | Scenario | Expected result | Evidence required |
-| --- | --- | --- | --- |
-| `AC-RBAC-02-01` | Authenticated owner requests list of tenant users | 200 OK with list of users including `store_scopes`, `warehouse_scopes`, and `carrier_account_scopes` | Supertest integration test |
-| `AC-RBAC-02-02` | Actor requests scopes for a specific user in tenant | 200 OK with user ID, role, and current scope arrays | Supertest integration test |
-| `AC-RBAC-02-03` | Owner updates user scopes with valid branches, warehouses, and carrier accounts | 200 OK with updated user scopes; audit `USER_SCOPE_UPDATED` written to DB | Supertest integration test + DB assertion |
-| `AC-RBAC-02-04` | Owner assigns wildcard `*` to store, warehouse, and carrier-account scopes | 200 OK; user receives `*` wildcard scope across all resources | Supertest integration test |
-| `AC-RBAC-02-05` | Non-owner actor with restricted scope attempts to grant scopes outside their ceiling | 403 `PRIVILEGE_ESCALATION_DENIED` canonical error; no scopes changed | Supertest integration test |
-| `AC-RBAC-02-06` | Actor attempts to assign a carrier account ID not owned by tenant | 400 `VALIDATION_ERROR` canonical error; no scopes changed | Supertest integration test |
-| `AC-RBAC-02-07` | Scope update payload with invalid characters (`<script>`) or exceeding 64 chars | 400 `VALIDATION_ERROR` canonical error | Supertest integration test |
-| `AC-RBAC-02-08` | Scope update payload with more than 50 items in scope array | 400 `VALIDATION_ERROR` canonical error | Supertest integration test |
-| `AC-RBAC-02-09` | Actor checks scope access for matching `store_id` | 200 OK with `authorized: true` | Supertest integration test |
-| `AC-RBAC-02-10` | Actor checks scope access for non-matching `store_id` | 403 `FORBIDDEN` canonical error | Supertest integration test |
-| `AC-RBAC-02-11` | Actor checks scope access for matching `warehouse_id` | 200 OK with `authorized: true` | Supertest integration test |
-| `AC-RBAC-02-12` | Actor checks scope access for non-matching `warehouse_id` | 403 `FORBIDDEN` canonical error | Supertest integration test |
-| `AC-RBAC-02-13` | Actor checks scope access for matching `carrier_account_id` | 200 OK with `authorized: true` | Supertest integration test |
-| `AC-RBAC-02-14` | Actor checks scope access for non-matching `carrier_account_id` | 403 `FORBIDDEN` canonical error | Supertest integration test |
-| `AC-RBAC-02-15` | User with wildcard `*` checks any store, warehouse, or carrier account | 200 OK with `authorized: true` | Supertest integration test |
-| `AC-RBAC-02-16` | Suspended or pending user attempts scope check | 403 `FORBIDDEN` canonical error | Supertest integration test |
-| `AC-RBAC-02-17` | Actor lacking `iam:manage_users` permission attempts scope mutation | 403 `FORBIDDEN` canonical error | Supertest integration test |
-| `AC-RBAC-02-18` | Cross-tenant actor attempts to view or update scopes of another merchant's user | 404 `USER_NOT_FOUND` / 403 `FORBIDDEN` canonical error | Supertest integration test |
-| `AC-RBAC-02-19` | Audit failure during scope update transaction | Transaction rolls back; 500 error returned; user scopes unchanged | Supertest integration test |
-| `AC-RBAC-02-20` | Web UI renders Loading, Empty, Validation, Error, Forbidden, and Success states | All component state snapshots verified | Web test harness |
-| `AC-RBAC-02-21` | Security secret scanner run | 0 secrets or sensitive tokens detected | `pnpm security:secrets` |
+| AC/Test ID | Scenario | Expected result | Evidence required | Status |
+| --- | --- | --- | --- | --- |
+| `AC-RBAC-02-01` | Authenticated owner requests list of tenant users | 200 OK with list of users including `store_scopes`, `warehouse_scopes`, and `carrier_account_scopes` | Supertest integration test | PASS |
+| `AC-RBAC-02-02` | Actor requests scopes for a specific user in tenant | 200 OK with user ID, role, and current scope arrays | Supertest integration test | PASS |
+| `AC-RBAC-02-03` | Owner updates user scopes with valid branches, warehouses, and carrier accounts | 200 OK with updated user scopes; audit `USER_SCOPE_UPDATED` written to DB | Supertest integration test + DB assertion | PASS |
+| `AC-RBAC-02-04` | Owner assigns wildcard `*` to store, warehouse, and carrier-account scopes | 200 OK; user receives `*` wildcard scope across all resources | Supertest integration test | PASS |
+| `AC-RBAC-02-05` | Non-owner actor with restricted scope attempts to grant scopes outside their ceiling | 403 `PRIVILEGE_ESCALATION_DENIED` canonical error; no scopes changed | Supertest integration test | PASS |
+| `AC-RBAC-02-06` | Actor attempts to assign a carrier account ID not owned by tenant | 400 `VALIDATION_ERROR` canonical error; no scopes changed | Supertest integration test | PASS |
+| `AC-RBAC-02-07` | Scope update payload with invalid characters (`<script>`) or exceeding 64 chars | 400 `VALIDATION_ERROR` canonical error | Supertest integration test | PASS |
+| `AC-RBAC-02-08` | Scope update payload with more than 50 items in scope array | 400 `VALIDATION_ERROR` canonical error | Supertest integration test | PASS |
+| `AC-RBAC-02-09` | Actor checks scope access for matching `store_id` | 200 OK with `authorized: true` | Supertest integration test | PASS |
+| `AC-RBAC-02-10` | Actor checks scope access for non-matching `store_id` | 403 `FORBIDDEN` canonical error | Supertest integration test | PASS |
+| `AC-RBAC-02-11` | Actor checks scope access for matching `warehouse_id` | 200 OK with `authorized: true` | Supertest integration test | PASS |
+| `AC-RBAC-02-12` | Actor checks scope access for non-matching `warehouse_id` | 403 `FORBIDDEN` canonical error | Supertest integration test | PASS |
+| `AC-RBAC-02-13` | Actor checks scope access for matching `carrier_account_id` | 200 OK with `authorized: true` | Supertest integration test | PASS |
+| `AC-RBAC-02-14` | Actor checks scope access for non-matching `carrier_account_id` | 403 `FORBIDDEN` canonical error | Supertest integration test | PASS |
+| `AC-RBAC-02-15` | User with wildcard `*` checks any store, warehouse, or carrier account | 200 OK with `authorized: true` | Supertest integration test | PASS |
+| `AC-RBAC-02-16` | Suspended or pending user attempts scope check | 403 `FORBIDDEN` canonical error | Supertest integration test | PASS |
+| `AC-RBAC-02-17` | Actor lacking `iam:manage_users` permission attempts scope mutation | 403 `FORBIDDEN` canonical error | Supertest integration test | PASS |
+| `AC-RBAC-02-18` | Cross-tenant actor attempts to view or update scopes of another merchant's user | 404 `USER_NOT_FOUND` / 403 `FORBIDDEN` canonical error | Supertest integration test | PASS |
+| `AC-RBAC-02-19` | Audit failure during scope update transaction | Transaction rolls back; 500 error returned; user scopes unchanged | Supertest integration test | PASS |
+| `AC-RBAC-02-20` | Web UI renders Loading, Empty, Validation, Error, Forbidden, and Success states | All component state snapshots verified | Web test harness (`user-scopes-states.test.ts`) | PASS |
+| `AC-RBAC-02-21` | Security secret scanner run | 0 secrets or sensitive tokens detected | `pnpm security:secrets` | PASS |
 
 ## Verification commands
 
-- `pnpm install --frozen-lockfile`
-- `pnpm db:generate`
-- `pnpm lint`
-- `pnpm format:check`
-- `pnpm typecheck`
-- `pnpm test`
-- `pnpm build`
+- `pnpm install --frozen-lockfile` — Clean install completed with lockfile preserved.
+- `pnpm db:generate` — Generated Prisma Client v6.19.3.
+- `pnpm lint` — 12/12 monorepo packages and scripts passed with 0 errors.
+- `pnpm format:check` — 11 changed files 100% compliant with Prettier.
+- `pnpm typecheck` — 12/12 packages passed with 0 TypeScript errors.
+- `pnpm contract:check` — 51 endpoints verified against OpenAPI 3.1.0 specification with 0 drift.
+- `pnpm --filter @shipde/api test` — 18/18 scope assignment unit tests passed; 19/19 scope assignment supertest integration tests passed (`AC-RBAC-02-01` to `AC-RBAC-02-19`).
+- `pnpm --filter @shipde/web test` — All 9 UI states verified (`user-scopes-states.test.ts` passed 100%).
+- `pnpm build` — Full monorepo build succeeded (8/8 tasks completed, Next.js Turbopack output generated cleanly).
+- `pnpm security:secrets` — Gitleaks scanner completed with 0 secrets detected across commit history and working tree.
+- `git diff --check` — Clean whitespace and no conflict markers.
+- `node scripts/ai/check-no-hardcode.mjs` — PASS: 0 hardcoded values detected.
 
 ## Codex review record
 
 | Review round | Commit | Verdict | Findings resolved |
 | --- | --- | --- | --- |
-| 1 | Pending | Pending | Initial implementation of FEAT-RBAC-02 |
+| 1 | `1a2c91e1` | Pending | Initial implementation of FEAT-RBAC-02 vertical slice |
 
 ## Residual limitations
 
