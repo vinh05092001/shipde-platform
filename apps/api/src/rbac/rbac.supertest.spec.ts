@@ -2,13 +2,14 @@ import 'reflect-metadata';
 import * as assert from 'node:assert';
 import * as path from 'node:path';
 import { execSync } from 'node:child_process';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import request from 'supertest';
 import { Test, TestingModule } from '@nestjs/testing';
 import { AppModule } from '../app.module';
 import { PrismaService } from '../prisma/prisma.service';
 import { APP_CONFIG } from '../config.token';
 import { VERIFICATION_ADAPTER } from '../auth/auth.tokens';
+import { signAccessToken, resolveAccessTokenSecret } from '../auth/token.util';
 import {
   MockVerificationDeliveryAdapter,
   createValidTestConfig,
@@ -124,14 +125,41 @@ async function main() {
     userId: string,
     merchantId: string,
     authAssurance: 'PASSWORD' | 'MFA' = 'PASSWORD',
-    mfaVerifiedAt: Date | null = null
+    mfaVerifiedAt: Date | null = null,
+    role?: RoleEnum
   ): Promise<string> => {
-    const raw = randomBytes(48).toString('hex');
-    const hash = createHash('sha256').update(raw).digest('hex');
+    let effectiveRole = role;
+    if (!effectiveRole) {
+      const u = await prisma.user.findUnique({ where: { id: userId }, select: { role: true } });
+      effectiveRole = u?.role ?? RoleEnum.OWNER;
+    }
+    const sid = randomUUID();
+    const secret = resolveAccessTokenSecret(process.env.AUTH_TOKEN_SECRET);
+    const { token } = signAccessToken(
+      {
+        sub: userId,
+        sid,
+        mid: merchantId,
+        role: effectiveRole,
+        st: 'ACTIVE',
+        auth_assurance: authAssurance,
+        mfa_verified_at: mfaVerifiedAt ? mfaVerifiedAt.toISOString() : undefined,
+      },
+      secret,
+      43200
+    );
+    const hash = createHash('sha256').update(token).digest('hex');
     await prisma.deviceSession.upsert({
       where: { session_token_hash: hash },
-      update: { status: 'ACTIVE', auth_assurance: authAssurance, mfa_verified_at: mfaVerifiedAt },
+      update: {
+        status: 'ACTIVE',
+        auth_assurance: authAssurance,
+        mfa_verified_at: mfaVerifiedAt,
+        last_active_at: new Date(),
+        expires_at: new Date(Date.now() + 3600000),
+      },
       create: {
+        id: sid,
         user_id: userId,
         merchant_id: merchantId,
         session_token_hash: hash,
@@ -142,20 +170,40 @@ async function main() {
         status: 'ACTIVE',
         auth_assurance: authAssurance,
         mfa_verified_at: mfaVerifiedAt,
+        last_active_at: new Date(),
         expires_at: new Date(Date.now() + 3600000),
       },
     });
-    return raw;
+    return token;
   };
 
-  const ownerToken = await createSession(OWNER_ID, SEED_MERCHANT_ID, 'PASSWORD', null);
-  const ownerMfaToken = await createSession(OWNER_ID, SEED_MERCHANT_ID, 'MFA', new Date());
-  const opsToken = await createSession(OPS_ID, SEED_MERCHANT_ID, 'PASSWORD', null);
+  const ownerToken = await createSession(
+    OWNER_ID,
+    SEED_MERCHANT_ID,
+    'PASSWORD',
+    null,
+    RoleEnum.OWNER
+  );
+  const ownerMfaToken = await createSession(
+    OWNER_ID,
+    SEED_MERCHANT_ID,
+    'MFA',
+    new Date(),
+    RoleEnum.OWNER
+  );
+  const opsToken = await createSession(
+    OPS_ID,
+    SEED_MERCHANT_ID,
+    'PASSWORD',
+    null,
+    RoleEnum.OPS_CSKH
+  );
   const otherOwnerToken = await createSession(
     OTHER_TENANT_OWNER_ID,
     OTHER_MERCHANT_ID,
     'PASSWORD',
-    null
+    null,
+    RoleEnum.OWNER
   );
 
   // Cleanup previous test roles if any
