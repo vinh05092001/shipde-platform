@@ -156,8 +156,11 @@ CREATE TRIGGER trg_check_user_custom_role_same_merchant
     FOR EACH ROW
     EXECUTE FUNCTION check_user_custom_role_same_merchant();
 
--- Allow platform-level system audit logs without customer merchant binding (Finding 1 / Round 12 / Finding 1 / Round 14 / BR-RBAC-07 / BR-RBAC-04)
--- Existing customer audit log rows retain their non-null merchant_id; only platform-level bootstrap events omit merchant_id.
+-- Allow platform-level system audit logs without customer merchant binding (Finding 1 / Round 12 / Finding 1 / Round 14 / P1-03 / BR-RBAC-07 / BR-RBAC-04)
+-- Downstream consumer compatibility & null-safety:
+-- 1. Existing customer audit log rows retain their non-null merchant_id; only platform-level bootstrap events omit merchant_id.
+-- 2. Downstream tenant queries (WHERE merchant_id = :tenant_id) continue to return tenant-scoped events without regression.
+-- 3. Downstream platform audit consumers must handle nullable merchant_id (WHERE merchant_id IS NULL or merchant_id IS NOT NULL).
 DO $$
 BEGIN
     IF EXISTS (

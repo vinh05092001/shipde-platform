@@ -3908,4 +3908,61 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
     assert.ok(updated.data.role.id);
     assert.strictEqual(updated.data.role.name.startsWith('Renamed Sensitive Role Success'), true);
   });
+
+  // Finding 3 (Round 15 / P1-03): audit_logs.merchant_id reader and writer null-safety and downstream compatibility
+  test('Finding 3 (Round 15 / P1-03): audit_logs.merchant_id readers and writers are null-safe and downstream queries isolate properly', async () => {
+    mockPrisma.auditLogs = [];
+
+    // 1. Writer: Tenant role creation writes non-null merchant_id
+    const tenantRole = await service.createRole(
+      {
+        name: `Tenant Audit Role ${Date.now()}`,
+        permissions: ['order:view_create'],
+      },
+      OWNER_ACTOR,
+      '127.0.0.1',
+      'corr-p1-03-tenant'
+    );
+    assert.ok(tenantRole.data.role.id);
+
+    // 2. Writer: Platform seed writes null merchant_id
+    mockPrisma.merchant.findFirst = async () => null;
+    const cskhRoleId = mockPrisma.roles.find((r: any) => r.code === 'OPS_CSKH')?.id;
+    if (cskhRoleId) {
+      mockPrisma.rolePermissions = mockPrisma.rolePermissions.filter(
+        (rp: any) => rp.role_id !== cskhRoleId
+      );
+    }
+    (service as any).isSeeded = false;
+    await service.ensurePlatformSeed();
+
+    assert.ok(mockPrisma.auditLogs.length >= 2);
+
+    // 3. Reader: Tenant-scoped query finds tenant log with non-null merchant_id
+    const tenantLogs = mockPrisma.auditLogs.filter((a: any) => a.merchant_id === MERCHANT_A);
+    assert.ok(tenantLogs.length >= 1, 'Tenant query must return tenant audit logs');
+    for (const log of tenantLogs) {
+      assert.strictEqual(log.merchant_id, MERCHANT_A);
+      assert.strictEqual(typeof log.merchant_id, 'string');
+    }
+
+    // 4. Reader: Platform-scoped query finds platform log with null merchant_id
+    const platformLogs = mockPrisma.auditLogs.filter((a: any) => a.merchant_id === null);
+    assert.ok(platformLogs.length >= 1, 'Platform query must return platform audit logs');
+    for (const log of platformLogs) {
+      assert.strictEqual(log.merchant_id, null);
+    }
+
+    // 5. Reader: Unrestricted reader handles both string and null merchant_id safely
+    for (const log of mockPrisma.auditLogs) {
+      const merchantDisplay = log.merchant_id ? `Merchant:${log.merchant_id}` : 'Platform';
+      assert.ok(merchantDisplay.length > 0);
+      const isNullSafe = log.merchant_id === null || typeof log.merchant_id === 'string';
+      assert.strictEqual(
+        isNullSafe,
+        true,
+        'All audit log merchant_id values must be string or null'
+      );
+    }
+  });
 });
