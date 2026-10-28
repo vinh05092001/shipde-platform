@@ -42,6 +42,10 @@ function normaliseCanonical(value) {
   canonical = canonical.split('@')[0];
   canonical = canonical.replace(/(?::free|-free)$/, '');
   canonical = canonical.replace(/\s*\([^)]*\)/g, '').replace(/[._\s]+/g, '-');
+  canonical = canonical.replace(
+    /-(?:thinking|agentic|high|medium|low|minimal|max|xhigh|none|reasoning|non-reasoning)$/,
+    ''
+  );
   return canonical || null;
 }
 
@@ -86,10 +90,13 @@ function priorFor(candidate, role, priors, now) {
       ? sourceDates.some((date) => isStale(date, now))
       : isStale(retrievalDate, now));
 
-  const result = { canonical: match.canonical, tier, bonus: stale ? 0 : bonus };
+  const resolvedBaseId = resolved.matchedBaseId || match.matchedBaseId;
+  const canonicalId =
+    resolvedBaseId || normaliseCanonical(match.canonical) || canonical || match.canonical;
+  const result = { canonical: canonicalId, tier, bonus: stale ? 0 : bonus };
   if (resolved.matchedVia || match.matchedVia) {
     result.matchedVia = resolved.matchedVia || match.matchedVia;
-    result.matchedBaseId = resolved.matchedBaseId || match.matchedBaseId;
+    result.matchedBaseId = resolvedBaseId || canonicalId;
   }
   if (weighted.coverage > 0) {
     result.coverage = weighted.coverage;

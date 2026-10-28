@@ -1558,7 +1558,12 @@ async function nextLoop(options, deps) {
 async function runNext(options, deps) {
   const opts = options || {};
   const d = deps || {};
-  const rootDir = path.resolve(opts.rootDir || process.cwd());
+  const rootDir = path.resolve(
+    opts.rootDir ||
+      (d && d.rootDir) ||
+      (opts.registerPath && path.dirname(opts.registerPath)) ||
+      process.cwd()
+  );
   const log = d.log || console.log;
   const now = typeof d.now === 'function' ? d.now() : d.now || opts.now || Date.now();
   const logOpts = { dir: opts.decisionDir || d.decisionDir || decisions.DEFAULT_DIR, now };
