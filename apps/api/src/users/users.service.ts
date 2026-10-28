@@ -1,13 +1,21 @@
-import { Injectable, Inject, HttpStatus } from '@nestjs/common';
+import { Injectable, Inject, Optional, HttpStatus } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { SessionService } from '../session/session.service';
+import {
+  RbacService,
+  isDeadlockOrSerializationError,
+  createConcurrencyConflictException,
+} from '../rbac/rbac.service';
 import { CanonicalApiException } from '../auth/auth.service';
 import { RoleEnum } from '@prisma/client';
 import { isActiveStatus } from '@shipde/contracts';
 import {
-  isDeadlockOrSerializationError,
-  createConcurrencyConflictException,
-} from '../rbac/rbac.service';
+  ListUsersQueryDto,
+  UpdateUserDto,
+  SuspendUserDto,
+  ActivateUserDto,
+  DeactivateUserDto,
+} from './users.dto';
 
 export { isActiveStatus };
 
@@ -214,11 +222,66 @@ export function enforceScopePrivilegeCeiling(
 }
 
 @Injectable()
+@Injectable()
 export class UsersService {
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
-    @Inject(SessionService) private readonly sessionService: SessionService
+    @Inject(SessionService) private readonly sessionService: SessionService,
+    @Optional() @Inject(RbacService) private readonly rbacService?: RbacService
   ) {}
+
+  public async checkActorManageUsersPermission(actor: {
+    userId: string;
+    merchantId: string;
+    role?: string;
+  }): Promise<void> {
+    if (actor.role === RoleEnum.OWNER || actor.role === 'OWNER') {
+      return;
+    }
+
+    const dbActor = await this.prisma.user.findFirst({
+      where: { id: actor.userId, merchant_id: actor.merchantId },
+    });
+    if (!dbActor) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Người dùng không tồn tại hoặc không thuộc cửa hàng này',
+        false
+      );
+    }
+    if (dbActor.role === RoleEnum.OWNER) {
+      return;
+    }
+
+    if (this.rbacService) {
+      const actorContext = await this.rbacService.resolveActorFromSession({
+        userId: actor.userId,
+        merchantId: actor.merchantId,
+        userRole: dbActor.role,
+        customRoleId: dbActor.custom_role_id || undefined,
+      });
+      const hasPermission = await this.rbacService.actorHasPermissions(actorContext, [
+        'iam:manage_users',
+      ]);
+      if (hasPermission) {
+        return;
+      }
+    }
+
+    throw new CanonicalApiException(
+      HttpStatus.FORBIDDEN,
+      'FORBIDDEN',
+      'Bạn không có quyền quản lý người dùng và vai trò',
+      false,
+      'Vui lòng liên hệ Chủ Shop để được cấp quyền'
+    );
+  }
+
+  /**
+   * GET /api/v1/users — List merchant users with pagination and filters (AC-USR-02-01).
+   * Strictly scopes by caller merchant_id; passwords and tokens are never returned.
+   */
 
   /**
    * Validate that all non-wildcard carrier account IDs exist and belong to the tenant.
@@ -262,33 +325,88 @@ export class UsersService {
   }
 
   /**
-   * List users in current tenant with assigned scopes (FEAT-RBAC-02, FEAT-USR-02).
+   * GET /api/v1/users — List merchant users with pagination and filters (AC-USR-02-01, FEAT-RBAC-02).
+   * Strictly scopes by caller merchant_id; passwords and tokens are never returned.
    */
-  async listUsers(merchantId: string, correlationId: string) {
-    const users = await this.prisma.user.findMany({
-      where: { merchant_id: merchantId },
-      select: {
-        id: true,
-        email: true,
-        phone: true,
-        full_name: true,
-        role: true,
-        custom_role_id: true,
-        store_scopes: true,
-        warehouse_scopes: true,
-        carrier_account_scopes: true,
-        status: true,
-        created_at: true,
-      },
-      orderBy: { created_at: 'asc' },
-    });
+  async listUsers(
+    merchantId: string,
+    queryOrCorrelationId?: ListUsersQueryDto | string,
+    maybeCorrelationId?: string
+  ) {
+    const isQuery = typeof queryOrCorrelationId === 'object' && queryOrCorrelationId !== null;
+    const query: ListUsersQueryDto = isQuery ? queryOrCorrelationId : {};
+    const correlationId = isQuery
+      ? maybeCorrelationId || ''
+      : typeof queryOrCorrelationId === 'string'
+        ? queryOrCorrelationId
+        : '';
+
+    const page = Math.max(1, Number(query.page) || 1);
+    const limit = Math.min(100, Math.max(1, Number(query.limit) || 20));
+    const skip = (page - 1) * limit;
+
+    const where: any = {
+      merchant_id: merchantId,
+    };
+
+    if (query.role) {
+      where.role = query.role as RoleEnum;
+    }
+
+    if (query.status) {
+      where.status = {
+        equals: query.status.trim(),
+        mode: 'insensitive',
+      };
+    }
+
+    if (query.search && query.search.trim().length > 0) {
+      const search = query.search.trim();
+      where.OR = [
+        { full_name: { contains: search, mode: 'insensitive' } },
+        { email: { contains: search, mode: 'insensitive' } },
+        { phone: { contains: search, mode: 'insensitive' } },
+      ];
+    }
+
+    const [total, users] = await Promise.all([
+      this.prisma.user.count({ where }),
+      this.prisma.user.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { created_at: 'desc' },
+        select: {
+          id: true,
+          full_name: true,
+          email: true,
+          phone: true,
+          role: true,
+          custom_role_id: true,
+          status: true,
+          store_scopes: true,
+          warehouse_scopes: true,
+          carrier_account_scopes: true,
+          created_at: true,
+          device_sessions: {
+            take: 1,
+            orderBy: { last_active_at: 'desc' },
+            select: { last_active_at: true },
+          },
+        },
+      }),
+    ]);
 
     const customRoleIds = Array.from(
       new Set(users.map((u) => u.custom_role_id).filter((id): id is string => Boolean(id)))
     );
 
-    const customRolesMap = new Map<string, string>();
-    if (customRoleIds.length > 0) {
+    const customRolesMap = new Map();
+    if (
+      customRoleIds.length > 0 &&
+      this.prisma.role &&
+      typeof this.prisma.role.findMany === 'function'
+    ) {
       const roles = await this.prisma.role.findMany({
         where: { id: { in: customRoleIds } },
         select: { id: true, name: true },
@@ -298,11 +416,11 @@ export class UsersService {
       }
     }
 
-    const data = users.map((u) => ({
+    const formattedUsers = users.map((u) => ({
       id: u.id,
+      full_name: u.full_name,
       email: u.email,
       phone: u.phone,
-      full_name: u.full_name,
       role: u.role,
       custom_role_id: u.custom_role_id,
       custom_role: u.custom_role_id
@@ -311,15 +429,99 @@ export class UsersService {
             name: customRolesMap.get(u.custom_role_id) || 'Tùy chỉnh',
           }
         : null,
+      status: (u.status || 'ACTIVE').toUpperCase(),
       store_scopes: u.store_scopes || [],
       warehouse_scopes: u.warehouse_scopes || [],
       carrier_account_scopes: u.carrier_account_scopes || [],
-      status: u.status,
       created_at: u.created_at.toISOString(),
+      last_active_at: u.device_sessions?.[0]?.last_active_at?.toISOString() || null,
     }));
 
     return {
-      data,
+      data: formattedUsers,
+      meta: {
+        page,
+        limit,
+        total,
+        total_pages: Math.ceil(total / limit),
+        correlation_id: correlationId,
+      },
+    };
+  }
+
+  /**
+   * GET /api/v1/users/:id — Get user details by ID (AC-USR-02-02, FEAT-RBAC-02).
+   */
+  async getUser(targetUserId: string, merchantId: string, correlationId: string) {
+    const user = await this.prisma.user.findFirst({
+      where: {
+        id: targetUserId,
+        merchant_id: merchantId,
+      },
+      select: {
+        id: true,
+        merchant_id: true,
+        full_name: true,
+        email: true,
+        phone: true,
+        role: true,
+        custom_role_id: true,
+        status: true,
+        store_scopes: true,
+        warehouse_scopes: true,
+        carrier_account_scopes: true,
+        created_at: true,
+        updated_at: true,
+        device_sessions: {
+          take: 1,
+          orderBy: { last_active_at: 'desc' },
+          select: { last_active_at: true },
+        },
+      },
+    });
+
+    if (!user) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Người dùng không tồn tại hoặc không thuộc cửa hàng này',
+        false
+      );
+    }
+
+    let customRole = null;
+    if (
+      user.custom_role_id &&
+      this.prisma.role &&
+      typeof this.prisma.role.findUnique === 'function'
+    ) {
+      const role = await this.prisma.role.findUnique({
+        where: { id: user.custom_role_id },
+        select: { id: true, name: true },
+      });
+      if (role) {
+        customRole = role;
+      }
+    }
+
+    return {
+      data: {
+        id: user.id,
+        merchant_id: user.merchant_id,
+        full_name: user.full_name,
+        email: user.email,
+        phone: user.phone,
+        role: user.role,
+        custom_role_id: user.custom_role_id,
+        custom_role: customRole,
+        status: (user.status || 'ACTIVE').toUpperCase(),
+        store_scopes: user.store_scopes || [],
+        warehouse_scopes: user.warehouse_scopes || [],
+        carrier_account_scopes: user.carrier_account_scopes || [],
+        created_at: user.created_at.toISOString(),
+        updated_at: user.updated_at.toISOString(),
+        last_active_at: user.device_sessions?.[0]?.last_active_at?.toISOString() || null,
+      },
       meta: {
         correlation_id: correlationId,
       },
@@ -359,6 +561,272 @@ export class UsersService {
         store_scopes: user.store_scopes || [],
         warehouse_scopes: user.warehouse_scopes || [],
         carrier_account_scopes: user.carrier_account_scopes || [],
+      },
+      meta: {
+        correlation_id: correlationId,
+      },
+    };
+  }
+
+  /**
+   * PATCH /api/v1/users/:id — Update user profile and scopes (AC-USR-02-03, AC-USR-02-14).
+   */
+  async updateUser(
+    targetUserId: string,
+    dto: UpdateUserDto,
+    actor: { userId: string; merchantId: string; role?: string },
+    clientIp: string,
+    correlationId: string
+  ) {
+    await this.checkActorManageUsersPermission(actor);
+
+    const targetUser = await this.prisma.user.findFirst({
+      where: {
+        id: targetUserId,
+        merchant_id: actor.merchantId,
+      },
+    });
+
+    if (!targetUser) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Người dùng không tồn tại hoặc không thuộc cửa hàng này',
+        false
+      );
+    }
+
+    const actorUser = await this.prisma.user.findFirst({
+      where: { id: actor.userId, merchant_id: actor.merchantId },
+    });
+    const isActorOwner = String(actorUser?.role) === 'OWNER';
+
+    if (String(targetUser.role) === 'OWNER' && !isActorOwner) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Vượt quá hạn mức phân quyền: Bạn không có quyền sửa đổi thông tin của Chủ cửa hàng',
+        false
+      );
+    }
+
+    const dataToUpdate: any = {};
+
+    if (dto.full_name !== undefined) {
+      if (
+        typeof dto.full_name !== 'string' ||
+        dto.full_name.trim().length === 0 ||
+        dto.full_name.length > 255
+      ) {
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'VALIDATION_ERROR',
+          'Họ và tên người dùng không hợp lệ',
+          false,
+          'Vui lòng nhập họ và tên từ 1 đến 255 ký tự',
+          [{ field: 'full_name', code: 'INVALID', message: 'Họ và tên không được để trống' }]
+        );
+      }
+      dataToUpdate.full_name = dto.full_name.trim();
+    }
+
+    if (dto.role !== undefined) {
+      const validRoles = Object.values(RoleEnum);
+      if (!validRoles.includes(dto.role as RoleEnum)) {
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'VALIDATION_ERROR',
+          'Vai trò không hợp lệ',
+          false,
+          `Vai trò phải thuộc danh sách: ${validRoles.join(', ')}`,
+          [{ field: 'role', code: 'INVALID', message: 'Vai trò người dùng không hợp lệ' }]
+        );
+      }
+
+      // Privilege ceiling: Non-owner cannot assign OWNER role (BR-USR-05, AC-USR-02-14)
+      if (!isActorOwner) {
+        if (String(dto.role) === 'OWNER') {
+          throw new CanonicalApiException(
+            HttpStatus.FORBIDDEN,
+            'FORBIDDEN',
+            'Vượt quá hạn mức phân quyền: Bạn không có quyền chỉ định vai trò Chủ cửa hàng (OWNER)',
+            false
+          );
+        }
+        if (dto.role !== actorUser?.role) {
+          throw new CanonicalApiException(
+            HttpStatus.FORBIDDEN,
+            'FORBIDDEN',
+            `Vượt quá hạn mức phân quyền: Bạn không thể phân quyền vai trò ${dto.role} vượt quá quyền hạn của mình`,
+            false
+          );
+        }
+      }
+
+      // Last Owner Invariant (BR-USR-01): Demoting sole remaining active owner is prohibited
+      if (
+        String(targetUser.role) === 'OWNER' &&
+        dto.role !== RoleEnum.OWNER &&
+        isActiveStatus(targetUser.status)
+      ) {
+        const activeOwnersCount = await this.prisma.user.count({
+          where: {
+            merchant_id: actor.merchantId,
+            role: RoleEnum.OWNER,
+            status: { in: ['active', 'ACTIVE'] },
+          },
+        });
+        if (activeOwnersCount <= 1) {
+          throw new CanonicalApiException(
+            HttpStatus.BAD_REQUEST,
+            'CANNOT_REMOVE_LAST_OWNER',
+            'Không thể hạ quyền chủ sở hữu duy nhất còn hoạt động của cửa hàng',
+            false,
+            'Vui lòng chỉ định một chủ sở hữu (Owner) khác trước khi thực hiện thao tác này'
+          );
+        }
+      }
+
+      dataToUpdate.role = dto.role as RoleEnum;
+    }
+
+    if (dto.store_scopes !== undefined) {
+      if (!Array.isArray(dto.store_scopes)) {
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'VALIDATION_ERROR',
+          'store_scopes phải là một danh sách chuỗi'
+        );
+      }
+      if (!isActorOwner) {
+        const actorStores = new Set(actorUser?.store_scopes || []);
+        if (!actorStores.has('*')) {
+          const unauthorized = dto.store_scopes.filter((s) => !actorStores.has(s));
+          if (unauthorized.length > 0) {
+            throw new CanonicalApiException(
+              HttpStatus.FORBIDDEN,
+              'FORBIDDEN',
+              `Vượt quá hạn mức phân quyền: Bạn không thể gán phạm vi chi nhánh [${unauthorized.join(', ')}] vượt quá quyền hạn của mình`,
+              false
+            );
+          }
+        }
+      }
+      dataToUpdate.store_scopes = dto.store_scopes;
+    }
+
+    if (dto.warehouse_scopes !== undefined) {
+      if (!Array.isArray(dto.warehouse_scopes)) {
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'VALIDATION_ERROR',
+          'warehouse_scopes phải là một danh sách chuỗi'
+        );
+      }
+      if (!isActorOwner) {
+        const actorWarehouses = new Set(actorUser?.warehouse_scopes || []);
+        if (!actorWarehouses.has('*')) {
+          const unauthorized = dto.warehouse_scopes.filter((w) => !actorWarehouses.has(w));
+          if (unauthorized.length > 0) {
+            throw new CanonicalApiException(
+              HttpStatus.FORBIDDEN,
+              'FORBIDDEN',
+              `Vượt quá hạn mức phân quyền: Bạn không thể gán phạm vi kho hàng [${unauthorized.join(', ')}] vượt quá quyền hạn của mình`,
+              false
+            );
+          }
+        }
+      }
+      dataToUpdate.warehouse_scopes = dto.warehouse_scopes;
+    }
+
+    if (dto.carrier_account_scopes !== undefined) {
+      if (!Array.isArray(dto.carrier_account_scopes)) {
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'VALIDATION_ERROR',
+          'carrier_account_scopes phải là một danh sách chuỗi'
+        );
+      }
+      if (!isActorOwner) {
+        const actorCarriers = new Set(actorUser?.carrier_account_scopes || []);
+        if (!actorCarriers.has('*')) {
+          const unauthorized = dto.carrier_account_scopes.filter((c) => !actorCarriers.has(c));
+          if (unauthorized.length > 0) {
+            throw new CanonicalApiException(
+              HttpStatus.FORBIDDEN,
+              'FORBIDDEN',
+              `Vượt quá hạn mức phân quyền: Bạn không thể gán phạm vi tài khoản vận chuyển [${unauthorized.join(', ')}] vượt quá quyền hạn của mình`,
+              false
+            );
+          }
+        }
+      }
+      await this.validateCarrierAccountScopes(dto.carrier_account_scopes, actor.merchantId);
+      dataToUpdate.carrier_account_scopes = dto.carrier_account_scopes;
+    }
+
+    let updatedUser: any;
+    try {
+      updatedUser = await this.prisma.$transaction(async (tx) => {
+        const updated = await tx.user.update({
+          where: { id: targetUserId },
+          data: dataToUpdate,
+        });
+
+        await tx.auditLog.create({
+          data: {
+            merchant_id: actor.merchantId,
+            user_id: actor.userId,
+            action: 'USER_UPDATED',
+            entity_type: 'User',
+            entity_id: targetUserId,
+            reason: 'Cập nhật thông tin và phân quyền người dùng',
+            ip_address: clientIp,
+            old_value: {
+              full_name: targetUser.full_name,
+              role: targetUser.role,
+              store_scopes: targetUser.store_scopes,
+              warehouse_scopes: targetUser.warehouse_scopes,
+              carrier_account_scopes: targetUser.carrier_account_scopes,
+            },
+            new_value: {
+              full_name: updated.full_name,
+              role: updated.role,
+              store_scopes: updated.store_scopes,
+              warehouse_scopes: updated.warehouse_scopes,
+              carrier_account_scopes: updated.carrier_account_scopes,
+              correlation_id: correlationId,
+            },
+          },
+        });
+
+        return updated;
+      });
+    } catch (err: any) {
+      if (err instanceof CanonicalApiException) throw err;
+      throw new CanonicalApiException(
+        HttpStatus.INTERNAL_SERVER_ERROR,
+        'INTERNAL_SERVER_ERROR',
+        'Cập nhật người dùng thất bại do lỗi hệ thống',
+        false
+      );
+    }
+
+    return {
+      data: {
+        id: updatedUser.id,
+        merchant_id: updatedUser.merchant_id,
+        full_name: updatedUser.full_name,
+        email: updatedUser.email,
+        phone: updatedUser.phone,
+        role: updatedUser.role,
+        status: (updatedUser.status || 'ACTIVE').toUpperCase(),
+        store_scopes: updatedUser.store_scopes || [],
+        warehouse_scopes: updatedUser.warehouse_scopes || [],
+        created_at: updatedUser.created_at.toISOString(),
+        updated_at: updatedUser.updated_at.toISOString(),
+        last_active_at: null,
       },
       meta: {
         correlation_id: correlationId,
@@ -535,6 +1003,423 @@ export class UsersService {
       }
       throw err;
     }
+  }
+
+  /**
+   * POST /api/v1/users/:id/suspend — Suspend active user and atomically revoke device sessions (AC-USR-02-04).
+   */
+  async suspendUser(
+    targetUserId: string,
+    dto: SuspendUserDto,
+    actor: { userId: string; merchantId: string; role?: string },
+    clientIp: string,
+    correlationId: string
+  ) {
+    // 1. Mandatory Suspension Reason (BR-USR-07, AC-USR-02-12)
+    if (!dto?.reason || typeof dto.reason !== 'string' || dto.reason.trim().length === 0) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Lý do tạm dừng người dùng là bắt buộc',
+        false,
+        'Vui lòng nhập lý do tạm dừng hợp lệ',
+        [{ field: 'reason', code: 'REQUIRED', message: 'Lý do tạm dừng không được để trống' }]
+      );
+    }
+
+    // 2. Self-Disruption Prohibition (BR-USR-02, AC-USR-02-10)
+    if (targetUserId === actor.userId) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'SELF_SUSPENSION_PROHIBITED',
+        'Bạn không thể tự tạm dừng tài khoản của chính mình',
+        false,
+        'Vui lòng yêu cầu một quản trị viên khác thực hiện thao tác này'
+      );
+    }
+
+    // 3. Actor Permission Check (AC-USR-02-16)
+    await this.checkActorManageUsersPermission(actor);
+
+    // 4. Strict Tenant Scoping (BR-USR-06, AC-USR-02-15)
+    const targetUser = await this.prisma.user.findFirst({
+      where: {
+        id: targetUserId,
+        merchant_id: actor.merchantId,
+      },
+    });
+
+    if (!targetUser) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Người dùng không tồn tại hoặc không thuộc cửa hàng này',
+        false
+      );
+    }
+
+    const actorUser = await this.prisma.user.findFirst({
+      where: { id: actor.userId, merchant_id: actor.merchantId },
+    });
+    const isActorOwner = String(actorUser?.role) === 'OWNER';
+
+    if (String(targetUser.role) === 'OWNER' && !isActorOwner) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Vượt quá hạn mức phân quyền: Bạn không có quyền tạm dừng tài khoản của Chủ cửa hàng',
+        false
+      );
+    }
+
+    // 5. Status Transition Safety: only ACTIVE -> SUSPENDED (BR-USR-04, AC-USR-02-13)
+    if (!isActiveStatus(targetUser.status)) {
+      throw new CanonicalApiException(
+        HttpStatus.CONFLICT,
+        'INVALID_STATUS_TRANSITION',
+        `Không thể tạm dừng người dùng có trạng thái hiện tại là ${targetUser.status.toUpperCase()}`,
+        false,
+        'Chỉ có thể tạm dừng tài khoản đang ở trạng thái ACTIVE'
+      );
+    }
+
+    // 6. Sole Owner Protection (BR-USR-01, AC-USR-02-11)
+    if (String(targetUser.role) === 'OWNER') {
+      const activeOwnersCount = await this.prisma.user.count({
+        where: {
+          merchant_id: actor.merchantId,
+          role: RoleEnum.OWNER,
+          status: { in: ['active', 'ACTIVE'] },
+        },
+      });
+      if (activeOwnersCount <= 1) {
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'CANNOT_REMOVE_LAST_OWNER',
+          'Không thể tạm dừng chủ sở hữu duy nhất còn hoạt động của cửa hàng',
+          false,
+          'Vui lòng chỉ định một chủ sở hữu (Owner) khác trước khi thực hiện thao tác này'
+        );
+      }
+    }
+
+    // 7. Atomic Execution in Database Transaction (BR-USR-03, BR-USR-08, AC-USR-02-04, AC-USR-02-17)
+    let result: any;
+    try {
+      result = await this.prisma.$transaction(async (tx) => {
+        await tx.user.update({
+          where: { id: targetUserId },
+          data: { status: 'suspended' },
+        });
+
+        const revokedCount = await this.sessionService.revokeTargetUserSessions(
+          targetUserId,
+          actor.merchantId,
+          actor.userId,
+          `Admin suspended: ${dto.reason.trim()}`,
+          correlationId,
+          clientIp,
+          tx
+        );
+
+        await tx.auditLog.create({
+          data: {
+            merchant_id: actor.merchantId,
+            user_id: actor.userId,
+            action: 'USER_SUSPENDED',
+            entity_type: 'User',
+            entity_id: targetUserId,
+            reason: dto.reason.trim(),
+            ip_address: clientIp,
+            old_value: { status: targetUser.status.toUpperCase() },
+            new_value: {
+              status: 'SUSPENDED',
+              target_user_id: targetUserId,
+              actor_user_id: actor.userId,
+              revoked_sessions_count: revokedCount,
+              correlation_id: correlationId,
+            },
+          },
+        });
+
+        return {
+          id: targetUserId,
+          status: 'SUSPENDED',
+          revoked_sessions_count: revokedCount,
+          message: 'Đã tạm dừng người dùng thành công',
+        };
+      });
+    } catch (err: any) {
+      if (err instanceof CanonicalApiException) throw err;
+      throw new CanonicalApiException(
+        HttpStatus.INTERNAL_SERVER_ERROR,
+        'INTERNAL_SERVER_ERROR',
+        'Thao tác tạm dừng người dùng thất bại do lỗi hệ thống',
+        false
+      );
+    }
+
+    return {
+      data: result,
+      meta: {
+        correlation_id: correlationId,
+      },
+    };
+  }
+
+  /**
+   * POST /api/v1/users/:id/activate — Reinstate suspended user to active status (AC-USR-02-07).
+   */
+  async activateUser(
+    targetUserId: string,
+    dto: ActivateUserDto,
+    actor: { userId: string; merchantId: string; role?: string },
+    clientIp: string,
+    correlationId: string
+  ) {
+    await this.checkActorManageUsersPermission(actor);
+
+    const targetUser = await this.prisma.user.findFirst({
+      where: {
+        id: targetUserId,
+        merchant_id: actor.merchantId,
+      },
+    });
+
+    if (!targetUser) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Người dùng không tồn tại hoặc không thuộc cửa hàng này',
+        false
+      );
+    }
+
+    const actorUser = await this.prisma.user.findFirst({
+      where: { id: actor.userId, merchant_id: actor.merchantId },
+    });
+    const isActorOwner = String(actorUser?.role) === 'OWNER';
+
+    if (String(targetUser.role) === 'OWNER' && !isActorOwner) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Vượt quá hạn mức phân quyền: Bạn không có quyền kích hoạt lại tài khoản của Chủ cửa hàng',
+        false
+      );
+    }
+
+    // Status Transition Safety: only SUSPENDED -> ACTIVE (BR-USR-04, AC-USR-02-13)
+    const normalizedStatus = (targetUser.status || '').toLowerCase();
+    if (normalizedStatus !== 'suspended') {
+      throw new CanonicalApiException(
+        HttpStatus.CONFLICT,
+        'INVALID_STATUS_TRANSITION',
+        `Không thể kích hoạt lại người dùng có trạng thái hiện tại là ${targetUser.status.toUpperCase()}`,
+        false,
+        'Chỉ có thể kích hoạt lại tài khoản đang ở trạng thái SUSPENDED'
+      );
+    }
+
+    let result: any;
+    try {
+      result = await this.prisma.$transaction(async (tx) => {
+        await tx.user.update({
+          where: { id: targetUserId },
+          data: { status: 'active' },
+        });
+
+        await tx.auditLog.create({
+          data: {
+            merchant_id: actor.merchantId,
+            user_id: actor.userId,
+            action: 'USER_ACTIVATED',
+            entity_type: 'User',
+            entity_id: targetUserId,
+            reason: dto?.reason?.trim() || 'Kích hoạt lại người dùng',
+            ip_address: clientIp,
+            old_value: { status: 'SUSPENDED' },
+            new_value: {
+              status: 'ACTIVE',
+              target_user_id: targetUserId,
+              actor_user_id: actor.userId,
+              correlation_id: correlationId,
+            },
+          },
+        });
+
+        return {
+          id: targetUserId,
+          status: 'ACTIVE',
+          message: 'Đã kích hoạt lại người dùng thành công',
+        };
+      });
+    } catch (err: any) {
+      if (err instanceof CanonicalApiException) throw err;
+      throw new CanonicalApiException(
+        HttpStatus.INTERNAL_SERVER_ERROR,
+        'INTERNAL_SERVER_ERROR',
+        'Thao tác kích hoạt lại người dùng thất bại do lỗi hệ thống',
+        false
+      );
+    }
+
+    return {
+      data: result,
+      meta: {
+        correlation_id: correlationId,
+      },
+    };
+  }
+
+  /**
+   * POST /api/v1/users/:id/deactivate — Deactivate user account and revoke sessions (AC-USR-02-08, AC-USR-02-09).
+   */
+  async deactivateUser(
+    targetUserId: string,
+    dto: DeactivateUserDto,
+    actor: { userId: string; merchantId: string; role?: string },
+    clientIp: string,
+    correlationId: string
+  ) {
+    // Self-Disruption Prohibition (BR-USR-02, AC-USR-02-10)
+    if (targetUserId === actor.userId) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'SELF_SUSPENSION_PROHIBITED',
+        'Bạn không thể tự vô hiệu hóa tài khoản của chính mình',
+        false,
+        'Vui lòng yêu cầu một quản trị viên khác thực hiện thao tác này'
+      );
+    }
+
+    await this.checkActorManageUsersPermission(actor);
+
+    const targetUser = await this.prisma.user.findFirst({
+      where: {
+        id: targetUserId,
+        merchant_id: actor.merchantId,
+      },
+    });
+
+    if (!targetUser) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Người dùng không tồn tại hoặc không thuộc cửa hàng này',
+        false
+      );
+    }
+
+    const actorUser = await this.prisma.user.findFirst({
+      where: { id: actor.userId, merchant_id: actor.merchantId },
+    });
+    const isActorOwner = String(actorUser?.role) === 'OWNER';
+
+    if (String(targetUser.role) === 'OWNER' && !isActorOwner) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Vượt quá hạn mức phân quyền: Bạn không có quyền vô hiệu hóa tài khoản của Chủ cửa hàng',
+        false
+      );
+    }
+
+    // Status Transition Safety: ACTIVE or SUSPENDED -> DISABLED (BR-USR-04, AC-USR-02-13)
+    const normalizedStatus = (targetUser.status || '').toLowerCase();
+    if (normalizedStatus !== 'active' && normalizedStatus !== 'suspended') {
+      throw new CanonicalApiException(
+        HttpStatus.CONFLICT,
+        'INVALID_STATUS_TRANSITION',
+        normalizedStatus === 'disabled'
+          ? 'Tài khoản người dùng đã bị vô hiệu hóa trước đó'
+          : `Không thể vô hiệu hóa tài khoản có trạng thái là ${targetUser.status.toUpperCase()}`,
+        false,
+        'Chỉ có thể vô hiệu hóa tài khoản đang ở trạng thái ACTIVE hoặc SUSPENDED'
+      );
+    }
+
+    // Sole Owner Protection (BR-USR-01, AC-USR-02-11)
+    if (String(targetUser.role) === 'OWNER' && isActiveStatus(targetUser.status)) {
+      const activeOwnersCount = await this.prisma.user.count({
+        where: {
+          merchant_id: actor.merchantId,
+          role: RoleEnum.OWNER,
+          status: { in: ['active', 'ACTIVE'] },
+        },
+      });
+      if (activeOwnersCount <= 1) {
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'CANNOT_REMOVE_LAST_OWNER',
+          'Không thể vô hiệu hóa chủ sở hữu duy nhất còn hoạt động của cửa hàng',
+          false,
+          'Vui lòng chỉ định một chủ sở hữu (Owner) khác trước khi thực hiện thao tác này'
+        );
+      }
+    }
+
+    let result: any;
+    try {
+      result = await this.prisma.$transaction(async (tx) => {
+        await tx.user.update({
+          where: { id: targetUserId },
+          data: { status: 'disabled' },
+        });
+
+        const revokedCount = await this.sessionService.revokeTargetUserSessions(
+          targetUserId,
+          actor.merchantId,
+          actor.userId,
+          `Admin deactivated: ${dto?.reason?.trim() || 'Admin deactivation'}`,
+          correlationId,
+          clientIp,
+          tx
+        );
+
+        await tx.auditLog.create({
+          data: {
+            merchant_id: actor.merchantId,
+            user_id: actor.userId,
+            action: 'USER_DEACTIVATED',
+            entity_type: 'User',
+            entity_id: targetUserId,
+            reason: dto?.reason?.trim() || 'Vô hiệu hóa tài khoản',
+            ip_address: clientIp,
+            old_value: { status: targetUser.status.toUpperCase() },
+            new_value: {
+              status: 'DISABLED',
+              target_user_id: targetUserId,
+              actor_user_id: actor.userId,
+              revoked_sessions_count: revokedCount,
+              correlation_id: correlationId,
+            },
+          },
+        });
+
+        return {
+          id: targetUserId,
+          status: 'DISABLED',
+          revoked_sessions_count: revokedCount,
+          message: 'Đã vô hiệu hóa tài khoản người dùng thành công',
+        };
+      });
+    } catch (err: any) {
+      if (err instanceof CanonicalApiException) throw err;
+      throw new CanonicalApiException(
+        HttpStatus.INTERNAL_SERVER_ERROR,
+        'INTERNAL_SERVER_ERROR',
+        'Thao tác vô hiệu hóa tài khoản thất bại do lỗi hệ thống',
+        false
+      );
+    }
+
+    return {
+      data: result,
+      meta: {
+        correlation_id: correlationId,
+      },
+    };
   }
 
   /**

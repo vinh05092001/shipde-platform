@@ -661,15 +661,96 @@ paths:
   /users:
     get:
       tags: [Users]
-      summary: List users and their assigned scopes (API-USR-LIST, FEAT-RBAC-02)
+      summary: List merchant users (API-USR-LIST, FEAT-USR-02, FEAT-RBAC-02)
       operationId: listUsers
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: role
+          in: query
+          schema:
+            type: string
+            enum: [OWNER, OPS_CSKH, WAREHOUSE, ACCOUNTANT, FINANCE]
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [ACTIVE, SUSPENDED, DISABLED, PENDING_VERIFICATION, INVITED]
+        - name: search
+          in: query
+          schema:
+            type: string
       responses:
         '200':
-          description: List of tenant users with scope assignments
+          description: List of tenant users
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/UserListResponse'
+                $ref: '#/components/schemas/ListUsersResponse'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+  /users/{id}:
+    get:
+      tags: [Users]
+      summary: Get user details (API-USR-GET, FEAT-USR-02)
+      operationId: getUser
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: User profile and scopes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserDetailResponse'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+    patch:
+      tags: [Users]
+      summary: Update user profile and scopes (API-USR-UPDATE, FEAT-USR-02)
+      operationId: updateUser
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateUserRequest'
+      responses:
+        '200':
+          description: Updated user profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserDetailResponse'
+        '400':
+          $ref: '#/components/responses/Error'
         '401':
           $ref: '#/components/responses/Error'
         '403':
@@ -730,6 +811,105 @@ paths:
         '403':
           $ref: '#/components/responses/Error'
         '404':
+          $ref: '#/components/responses/Error'
+  /users/{id}/suspend:
+    post:
+      tags: [Users]
+      summary: Suspend user account (API-USR-SUSPEND, FEAT-USR-02)
+      operationId: suspendUser
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SuspendUserRequest'
+      responses:
+        '200':
+          description: User suspended and sessions revoked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuspendUserResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+  /users/{id}/activate:
+    post:
+      tags: [Users]
+      summary: Reinstate suspended user (API-USR-ACTIVATE, FEAT-USR-02)
+      operationId: activateUser
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ActivateUserRequest'
+      responses:
+        '200':
+          description: User reinstated to active status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActivateUserResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+  /users/{id}/deactivate:
+    post:
+      tags: [Users]
+      summary: Deactivate user account (API-USR-DEACTIVATE, FEAT-USR-02)
+      operationId: deactivateUser
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeactivateUserRequest'
+      responses:
+        '200':
+          description: User deactivated and sessions revoked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeactivateUserResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
           $ref: '#/components/responses/Error'
   /users/check-scope:
     post:
@@ -2743,6 +2923,10 @@ components:
         created_at:
           type: string
           format: date-time
+        last_active_at:
+          type: string
+          format: date-time
+          nullable: true
     UserListResponse:
       type: object
       required: [data, meta]
@@ -2835,5 +3019,189 @@ components:
               type: array
               items:
                 type: string
+        meta:
+          $ref: '#/components/schemas/Meta'
+    ListUsersResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/UserListItem'
+        meta:
+          type: object
+          required: [total, page, limit, total_pages, correlation_id]
+          properties:
+            total:
+              type: integer
+            page:
+              type: integer
+            limit:
+              type: integer
+            total_pages:
+              type: integer
+            correlation_id:
+              type: string
+    UserDetail:
+      type: object
+      required: [id, merchant_id, full_name, role, status, store_scopes, warehouse_scopes, carrier_account_scopes, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        merchant_id:
+          type: string
+          format: uuid
+        full_name:
+          type: string
+        email:
+          type: string
+          nullable: true
+        phone:
+          type: string
+          nullable: true
+        role:
+          type: string
+        custom_role_id:
+          type: string
+          format: uuid
+          nullable: true
+        custom_role:
+          type: object
+          nullable: true
+          properties:
+            id:
+              type: string
+              format: uuid
+            name:
+              type: string
+        status:
+          type: string
+        store_scopes:
+          type: array
+          items:
+            type: string
+        warehouse_scopes:
+          type: array
+          items:
+            type: string
+        carrier_account_scopes:
+          type: array
+          items:
+            type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        last_active_at:
+          type: string
+          format: date-time
+          nullable: true
+    UserDetailResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/UserDetail'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    UpdateUserRequest:
+      type: object
+      properties:
+        full_name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        role:
+          type: string
+        custom_role_id:
+          type: string
+          format: uuid
+          nullable: true
+        store_scopes:
+          type: array
+          items:
+            type: string
+        warehouse_scopes:
+          type: array
+          items:
+            type: string
+        carrier_account_scopes:
+          type: array
+          items:
+            type: string
+    SuspendUserRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          minLength: 1
+    SuspendUserResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          required: [id, status, revoked_sessions_count, message]
+          properties:
+            id:
+              type: string
+              format: uuid
+            status:
+              type: string
+            revoked_sessions_count:
+              type: integer
+            message:
+              type: string
+        meta:
+          $ref: '#/components/schemas/Meta'
+    ActivateUserRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+    ActivateUserResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          required: [id, status, message]
+          properties:
+            id:
+              type: string
+              format: uuid
+            status:
+              type: string
+            message:
+              type: string
+        meta:
+          $ref: '#/components/schemas/Meta'
+    DeactivateUserRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+    DeactivateUserResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          required: [id, status, revoked_sessions_count, message]
+          properties:
+            id:
+              type: string
+              format: uuid
+            status:
+              type: string
+            revoked_sessions_count:
+              type: integer
+            message:
+              type: string
         meta:
           $ref: '#/components/schemas/Meta'
