@@ -502,6 +502,7 @@ class MockPrismaService {
 
   $transaction = async (fn: (tx: any) => Promise<any>) => {
     // Snapshot state for atomic rollback simulation
+    const snapshotPermissions = JSON.parse(JSON.stringify(this.permissions));
     const snapshotRoles = JSON.parse(JSON.stringify(this.roles));
     const snapshotRolePerms = JSON.parse(JSON.stringify(this.rolePermissions));
     const snapshotAuditLogs = JSON.parse(JSON.stringify(this.auditLogs));
@@ -511,6 +512,7 @@ class MockPrismaService {
       return await fn(this);
     } catch (err) {
       // Rollback state on error
+      this.permissions = snapshotPermissions;
       this.roles = snapshotRoles;
       this.rolePermissions = snapshotRolePerms;
       this.auditLogs = snapshotAuditLogs;
@@ -3998,5 +4000,151 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
     assert.strictEqual(res.data.role.name.includes('>'), false);
     assert.strictEqual(res.data.role.description.includes('<'), false);
     assert.strictEqual(res.data.role.description.includes('>'), false);
+  });
+
+  // Finding (Round 16 / P1-02, P1-03, P1-04): In-transaction decision reads under row lock
+  test('Finding (Round 16 / P1-02): updateRole and deleteRole authorize iam:manage_users inside transaction under actor row lock', async () => {
+    // Create custom role to test update and delete
+    const roleRes = await service.createRole(
+      {
+        name: `In-Tx Authz Target ${Date.now()}`,
+        permissions: ['order:view_create'],
+      },
+      OWNER_ACTOR,
+      '127.0.0.1',
+      'corr-p1-02-setup'
+    );
+    const targetRoleId = roleRes.data.role.id;
+
+    // Simulate an actor whose user row in DB does not have iam:manage_users
+    // (e.g. WAREHOUSE user user-warehouse-3)
+    const unauthorizedActor: ActorContext = {
+      userId: 'user-warehouse-3',
+      merchantId: MERCHANT_A,
+      role: 'WAREHOUSE',
+    };
+
+    // 1. updateRole rejects with 403 FORBIDDEN inside transaction
+    await assert.rejects(
+      async () => {
+        await service.updateRole(
+          targetRoleId,
+          { name: `Updated Unauthorized ${Date.now()}` },
+          unauthorizedActor,
+          '127.0.0.1',
+          'corr-p1-02-update'
+        );
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 403);
+        assert.strictEqual(err.code, 'FORBIDDEN');
+        return true;
+      }
+    );
+
+    // 2. deleteRole rejects with 403 FORBIDDEN inside transaction
+    await assert.rejects(
+      async () => {
+        await service.deleteRole(targetRoleId, unauthorizedActor, '127.0.0.1', 'corr-p1-02-delete');
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 403);
+        assert.strictEqual(err.code, 'FORBIDDEN');
+        return true;
+      }
+    );
+  });
+
+  test('Finding (Round 16 / P1-03): updateRole and createRole resolve permissionsInDb strictly inside transaction under row lock', async () => {
+    // 1. createRole rejects with 400 VALIDATION_ERROR when permission does not exist in DB
+    await assert.rejects(
+      async () => {
+        await service.createRole(
+          {
+            name: `Nonexistent Perm Role ${Date.now()}`,
+            permissions: ['nonexistent:permission_code'],
+          },
+          OWNER_ACTOR,
+          '127.0.0.1',
+          'corr-p1-03-create'
+        );
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 400);
+        assert.strictEqual(err.code, 'VALIDATION_ERROR');
+        return true;
+      }
+    );
+
+    // 2. Create custom role
+    const roleRes = await service.createRole(
+      {
+        name: `Perm Resolution Target ${Date.now()}`,
+        permissions: ['order:view_create'],
+      },
+      OWNER_ACTOR,
+      '127.0.0.1',
+      'corr-p1-03-setup'
+    );
+    const targetRoleId = roleRes.data.role.id;
+
+    // 3. updateRole resolves permissions inside transaction; rejects invalid permission with 400 VALIDATION_ERROR
+    await assert.rejects(
+      async () => {
+        await service.updateRole(
+          targetRoleId,
+          { permissions: ['invalid:perm_code_in_tx'] },
+          OWNER_ACTOR,
+          '127.0.0.1',
+          'corr-p1-03-update-invalid'
+        );
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 400);
+        assert.strictEqual(err.code, 'VALIDATION_ERROR');
+        return true;
+      }
+    );
+  });
+
+  test('Finding (Round 16 / P1-04): updateRole catches duplicate name inside transaction under row lock without pre-tx read', async () => {
+    const role1Name = `Unique Role One ${Date.now()}`;
+    const role2Name = `Unique Role Two ${Date.now()}`;
+
+    await service.createRole(
+      { name: role1Name, permissions: ['order:view_create'] },
+      OWNER_ACTOR,
+      '127.0.0.1',
+      'corr-p1-04-r1'
+    );
+    const role2Res = await service.createRole(
+      { name: role2Name, permissions: ['order:view_create'] },
+      OWNER_ACTOR,
+      '127.0.0.1',
+      'corr-p1-04-r2'
+    );
+
+    // Attempt to update role 2 to have the same name as role 1 (case-insensitive duplicate)
+    await assert.rejects(
+      async () => {
+        await service.updateRole(
+          role2Res.data.role.id,
+          { name: role1Name.toLowerCase() },
+          OWNER_ACTOR,
+          '127.0.0.1',
+          'corr-p1-04-dup'
+        );
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 400);
+        assert.strictEqual(err.code, 'ROLE_NAME_EXISTS');
+        return true;
+      }
+    );
   });
 });

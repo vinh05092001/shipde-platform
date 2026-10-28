@@ -892,17 +892,7 @@ export class RbacService implements OnModuleInit {
     clientIp: string,
     correlationId: string
   ) {
-    // 1. Authorization: Actor must hold 'iam:manage_users' (AC-RBAC-01-14)
-    const canManageUsers = await this.actorHasPermissions(actor, ['iam:manage_users']);
-    if (!canManageUsers) {
-      throw new CanonicalApiException(
-        HttpStatus.FORBIDDEN,
-        'FORBIDDEN',
-        'Bạn không có quyền quản lý vai trò và phân quyền'
-      );
-    }
-
-    // 2. Validation: role name type, empty, and max length (AC-RBAC-01-12, Finding 5 / Round 8)
+    // Synchronous format/type validation
     if (typeof dto.name !== 'string' || dto.name.trim().length === 0) {
       throw new CanonicalApiException(
         HttpStatus.BAD_REQUEST,
@@ -1012,46 +1002,41 @@ export class RbacService implements OnModuleInit {
         ? sanitizeRoleTextInput(dto.description) || null
         : null;
 
-    // 4. Resolve permissions from DB (by code or id) first and verify exact match
-    const permissionsInDb = await this.prisma.permission.findMany({
-      where: buildPermissionFilter(dto.permissions),
-    });
-
-    const resolvedCodeSet = new Set(permissionsInDb.map((p) => p.code));
-    const resolvedIdSet = new Set(permissionsInDb.map((p) => p.id));
-
-    const missingOrInvalid = dto.permissions.filter(
-      (requested) => !resolvedCodeSet.has(requested) && !resolvedIdSet.has(requested)
-    );
-
-    if (missingOrInvalid.length > 0 || permissionsInDb.length === 0) {
-      throw new CanonicalApiException(
-        HttpStatus.BAD_REQUEST,
-        'VALIDATION_ERROR',
-        'Các quyền hạn đã chọn không hợp lệ',
-        false,
-        `Quyền hạn sau không tồn tại trên hệ thống: ${missingOrInvalid.join(', ')}`,
-        [
-          {
-            field: 'permissions',
-            code: 'INVALID',
-            message: `Quyền hạn không tồn tại trên hệ thống: ${missingOrInvalid.join(', ')}`,
-          },
-        ]
-      );
-    }
-
-    // Step-up / fresh assurance check for sensitive capabilities (Finding 2 / Round 10 / Finding 1 / Round 11 / Finding 3 / Round 14 / RBAC-APPROVAL-MATRIX)
-    const hasSensitiveGrants = permissionsInDb.some((p) =>
-      SENSITIVE_CAPABILITY_PERMISSIONS.has(p.code)
-    );
-
-    // 5. Execute in transaction with authoritative locks, privilege ceiling, duplicate check, and Audit Log (AC-RBAC-01-03, AC-RBAC-01-15, P1-01)
+    // 5. Execute in transaction with authoritative locks, privilege ceiling, duplicate check, and Audit Log (AC-RBAC-01-03, AC-RBAC-01-15, P1-02, P1-03, P1-04)
     let createdRole: any;
     try {
       createdRole = await this.prisma.$transaction(async (tx) => {
-        // Lock and reload actor row in transaction to ensure actor is active and holds iam:manage_users (Finding 1 / Round 7)
+        // Lock and reload actor row in transaction to ensure actor is active and holds iam:manage_users (Finding 1 / Round 7, P1-02)
         const { actorSnapshot, permSet } = await this.lockAndAuthorizeActor(tx, actor);
+
+        // Resolve permissions from DB under transaction (P1-03)
+        const permissionsInDb = await tx.permission.findMany({
+          where: buildPermissionFilter(dto.permissions),
+        });
+
+        const resolvedCodeSet = new Set(permissionsInDb.map((p) => p.code));
+        const resolvedIdSet = new Set(permissionsInDb.map((p) => p.id));
+
+        const missingOrInvalid = dto.permissions.filter(
+          (requested) => !resolvedCodeSet.has(requested) && !resolvedIdSet.has(requested)
+        );
+
+        if (missingOrInvalid.length > 0 || permissionsInDb.length === 0) {
+          throw new CanonicalApiException(
+            HttpStatus.BAD_REQUEST,
+            'VALIDATION_ERROR',
+            'Các quyền hạn đã chọn không hợp lệ',
+            false,
+            `Quyền hạn sau không tồn tại trên hệ thống: ${missingOrInvalid.join(', ')}`,
+            [
+              {
+                field: 'permissions',
+                code: 'INVALID',
+                message: `Quyền hạn không tồn tại trên hệ thống: ${missingOrInvalid.join(', ')}`,
+              },
+            ]
+          );
+        }
 
         // In-transaction privilege ceiling re-check (Finding 1 / Round 7)
         const unauthorizedInTx = permissionsInDb
@@ -1069,6 +1054,9 @@ export class RbacService implements OnModuleInit {
 
         // In-transaction fresh MFA assurance check for sensitive capabilities (Finding 2 / Round 12)
         // Sensitive grants must load auth_assurance and mfa_verified_at only from caller's active, unexpired device_sessions row under FOR UPDATE, and reject when that row is missing
+        const hasSensitiveGrants = permissionsInDb.some((p) =>
+          SENSITIVE_CAPABILITY_PERMISSIONS.has(p.code)
+        );
         if (hasSensitiveGrants) {
           if (
             !actorSnapshot.sessionId ||
@@ -1142,7 +1130,7 @@ export class RbacService implements OnModuleInit {
           },
         });
 
-        return { role, actorSnapshot };
+        return { role, permissionsInDb, actorSnapshot };
       });
     } catch (err: any) {
       if (err instanceof CanonicalApiException) throw err;
@@ -1177,8 +1165,8 @@ export class RbacService implements OnModuleInit {
           description: createdRole.role.description,
           is_system: false,
           merchant_id: createdRole.actorSnapshot.merchantId,
-          permissions_count: permissionsInDb.length,
-          permissions: permissionsInDb.map((p) => ({
+          permissions_count: createdRole.permissionsInDb.length,
+          permissions: createdRole.permissionsInDb.map((p: any) => ({
             id: p.id,
             code: p.code,
             name: p.name,
@@ -1216,54 +1204,7 @@ export class RbacService implements OnModuleInit {
     clientIp: string,
     correlationId: string
   ) {
-    // 1. Authorization: Actor must hold 'iam:manage_users'
-    const canManageUsers = await this.actorHasPermissions(actor, ['iam:manage_users']);
-    if (!canManageUsers) {
-      throw new CanonicalApiException(
-        HttpStatus.FORBIDDEN,
-        'FORBIDDEN',
-        'Bạn không có quyền quản lý vai trò và phân quyền'
-      );
-    }
-
-    // 2. Find target role
-    const existingRole = await this.prisma.role.findUnique({
-      where: { id: roleId },
-      include: {
-        permissions: {
-          include: { permission: true },
-        },
-      },
-    });
-
-    if (!existingRole) {
-      throw new CanonicalApiException(
-        HttpStatus.NOT_FOUND,
-        'ROLE_NOT_FOUND',
-        'Không tìm thấy vai trò cần cập nhật'
-      );
-    }
-
-    // BR-RBAC-01 / AC-RBAC-01-06: System Role Immutability
-    if (existingRole.is_system) {
-      throw new CanonicalApiException(
-        HttpStatus.FORBIDDEN,
-        'SYSTEM_ROLE_IMMUTABLE',
-        'Vai trò mặc định của hệ thống không thể chỉnh sửa hoặc xóa'
-      );
-    }
-
-    // BR-RBAC-04 / AC-RBAC-01-11: Tenant Isolation
-    if (!existingRole.merchant_id || existingRole.merchant_id !== actor.merchantId) {
-      throw new CanonicalApiException(
-        HttpStatus.FORBIDDEN,
-        'FORBIDDEN',
-        'Không có quyền truy cập vai trò của đơn vị khác'
-      );
-    }
-
-    // 3. Name validation & uniqueness check
-    let updatedName = existingRole.name;
+    // Synchronous format/type validation
     if (dto.name !== undefined) {
       if (typeof dto.name !== 'string' || dto.name.trim().length === 0) {
         throw new CanonicalApiException(
@@ -1289,26 +1230,6 @@ export class RbacService implements OnModuleInit {
               message: 'Tên vai trò không được vượt quá 255 ký tự',
             },
           ]
-        );
-      }
-      updatedName = dto.name.trim();
-
-      const duplicate = await this.prisma.role.findFirst({
-        where: {
-          merchant_id: actor.merchantId,
-          id: { not: roleId },
-          name: { equals: updatedName, mode: 'insensitive' },
-        },
-      });
-
-      if (duplicate) {
-        throw new CanonicalApiException(
-          HttpStatus.BAD_REQUEST,
-          'ROLE_NAME_EXISTS',
-          'Tên vai trò đã tồn tại trong cửa hàng',
-          false,
-          undefined,
-          [{ field: 'name', code: 'DUPLICATE', message: 'Tên vai trò đã tồn tại' }]
         );
       }
     }
@@ -1349,8 +1270,7 @@ export class RbacService implements OnModuleInit {
       }
     }
 
-    // 4. Permissions validation & privilege ceiling check (BR-RBAC-02, AC-RBAC-01-05)
-    let permissionsInDb = existingRole.permissions.map((rp) => rp.permission);
+    // Permissions validation: array bounds check
     if (dto.permissions !== undefined) {
       if (!Array.isArray(dto.permissions) || dto.permissions.length === 0) {
         throw new CanonicalApiException(
@@ -1384,95 +1304,13 @@ export class RbacService implements OnModuleInit {
           ]
         );
       }
-
-      permissionsInDb = await this.prisma.permission.findMany({
-        where: buildPermissionFilter(dto.permissions),
-      });
-
-      const resolvedCodeSet = new Set(permissionsInDb.map((p) => p.code));
-      const resolvedIdSet = new Set(permissionsInDb.map((p) => p.id));
-
-      const missingOrInvalid = dto.permissions.filter(
-        (requested) => !resolvedCodeSet.has(requested) && !resolvedIdSet.has(requested)
-      );
-
-      if (missingOrInvalid.length > 0 || permissionsInDb.length === 0) {
-        throw new CanonicalApiException(
-          HttpStatus.BAD_REQUEST,
-          'VALIDATION_ERROR',
-          'Các quyền hạn đã chọn không hợp lệ',
-          false,
-          `Quyền hạn sau không tồn tại trên hệ thống: ${missingOrInvalid.join(', ')}`,
-          [
-            {
-              field: 'permissions',
-              code: 'INVALID',
-              message: `Quyền hạn không tồn tại trên hệ thống: ${missingOrInvalid.join(', ')}`,
-            },
-          ]
-        );
-      }
     }
 
-    // Privilege Ceiling (BR-RBAC-02 / in-scope item 7):
-    // 1. Actor must hold EVERY permission currently assigned to the role before modifying it.
-    // 2. Resulting permission set must also strictly be a subset of the actor's permissions.
-    const actorPerms = await this.getActorPermissions(actor);
-    const actorPermSet = new Set(actorPerms);
-
-    const unauthorizedCurrentCodes = existingRole.permissions
-      .map((rp) => rp.permission.code)
-      .filter((code) => !actorPermSet.has(code));
-
-    if (unauthorizedCurrentCodes.length > 0) {
-      throw new CanonicalApiException(
-        HttpStatus.FORBIDDEN,
-        'PRIVILEGE_ESCALATION_DENIED',
-        'Không thể sửa vai trò có quyền hạn vượt quá thẩm quyền của bạn',
-        false,
-        `Bạn không có các quyền hiện tại của vai trò: ${unauthorizedCurrentCodes.join(', ')}`
-      );
-    }
-
-    const unauthorizedResolvedCodes = permissionsInDb
-      .map((p) => p.code)
-      .filter((code) => !actorPermSet.has(code));
-
-    if (unauthorizedResolvedCodes.length > 0) {
-      throw new CanonicalApiException(
-        HttpStatus.FORBIDDEN,
-        'PRIVILEGE_ESCALATION_DENIED',
-        'Không thể cấp quyền vượt quá thẩm quyền của bạn',
-        false,
-        `Bạn không có các quyền sau: ${unauthorizedResolvedCodes.join(', ')}`
-      );
-    }
-
-    const beforePermissions = existingRole.permissions.map((rp) => rp.permission.code);
-    const newPermissions = permissionsInDb.map((p) => p.code);
-
-    // Step-up / fresh assurance check for sensitive capabilities (Finding 2 / Round 10 / Finding 1 / Round 11 / P1-02 / RBAC-APPROVAL-MATRIX)
-    // Enforce MFA for any mutation touching a role that contains or will contain sensitive permissions
-    const touchesSensitiveGrants =
-      newPermissions.some((code) => SENSITIVE_CAPABILITY_PERMISSIONS.has(code)) ||
-      beforePermissions.some((code) => SENSITIVE_CAPABILITY_PERMISSIONS.has(code));
-    if (touchesSensitiveGrants) {
-      if (!actor.sessionId) {
-        throw new CanonicalApiException(
-          HttpStatus.FORBIDDEN,
-          'MFA_FRESH_AUTH_REQUIRED',
-          'Thao tác thay đổi vai trò có quyền hạn nhạy cảm yêu cầu phiên làm việc đã xác thực MFA',
-          false,
-          'Vui lòng xác thực hai yếu tố trước khi thao tác trên các vai trò có quyền hạn nhạy cảm'
-        );
-      }
-    }
-
-    // 5. Transaction: Update Role, Permissions & Audit Log (AC-RBAC-01-08, BR-RBAC-02)
+    // All database reads, decisions, privilege checks, and duplicate checks are inside the transaction after row locks (P1-02, P1-03, P1-04)
     let updatedRole: any;
     try {
       updatedRole = await this.prisma.$transaction(async (tx) => {
-        // Lock in ONE global order: actor user -> actor role -> role_permissions -> target role (Finding 2 / Round 9)
+        // Lock in ONE global order: actor user -> actor role -> role_permissions -> target role (Finding 2 / Round 9, P1-02)
         const { actorSnapshot, permSet: actorPermSetInTx } = await this.lockAndAuthorizeActor(
           tx,
           actor,
@@ -1557,11 +1395,40 @@ export class RbacService implements OnModuleInit {
               : null
             : lockedTargetRole.description;
 
-        // If permissions were not explicitly passed in dto, keep current locked permissions
-        const targetPermissions =
-          dto.permissions !== undefined
-            ? permissionsInDb
-            : currentRolePermsInTx.map((rp: any) => rp.permission);
+        // Resolve permissions from DB under transaction (P1-03)
+        let targetPermissions: any[];
+        if (dto.permissions !== undefined) {
+          const permissionsInDb = await tx.permission.findMany({
+            where: buildPermissionFilter(dto.permissions),
+          });
+
+          const resolvedCodeSet = new Set(permissionsInDb.map((p) => p.code));
+          const resolvedIdSet = new Set(permissionsInDb.map((p) => p.id));
+
+          const missingOrInvalid = dto.permissions.filter(
+            (requested) => !resolvedCodeSet.has(requested) && !resolvedIdSet.has(requested)
+          );
+
+          if (missingOrInvalid.length > 0 || permissionsInDb.length === 0) {
+            throw new CanonicalApiException(
+              HttpStatus.BAD_REQUEST,
+              'VALIDATION_ERROR',
+              'Các quyền hạn đã chọn không hợp lệ',
+              false,
+              `Quyền hạn sau không tồn tại trên hệ thống: ${missingOrInvalid.join(', ')}`,
+              [
+                {
+                  field: 'permissions',
+                  code: 'INVALID',
+                  message: `Quyền hạn không tồn tại trên hệ thống: ${missingOrInvalid.join(', ')}`,
+                },
+              ]
+            );
+          }
+          targetPermissions = permissionsInDb;
+        } else {
+          targetPermissions = currentRolePermsInTx.map((rp: any) => rp.permission);
+        }
 
         // Privilege ceiling check 2: Target permission set must be a subset of actor's permissions
         const unauthorizedTargetCodes = targetPermissions
@@ -1752,72 +1619,7 @@ export class RbacService implements OnModuleInit {
    * DELETE /api/v1/roles/:id (AC-RBAC-01-07, 09, 10, 11)
    */
   async deleteRole(roleId: string, actor: ActorContext, clientIp: string, correlationId: string) {
-    // 1. Authorization: Actor must hold 'iam:manage_users'
-    const canManageUsers = await this.actorHasPermissions(actor, ['iam:manage_users']);
-    if (!canManageUsers) {
-      throw new CanonicalApiException(
-        HttpStatus.FORBIDDEN,
-        'FORBIDDEN',
-        'Bạn không có quyền quản lý vai trò và phân quyền'
-      );
-    }
-
-    // 2. Find target role
-    const existingRole = await this.prisma.role.findUnique({
-      where: { id: roleId },
-      include: {
-        permissions: {
-          include: { permission: true },
-        },
-      },
-    });
-
-    if (!existingRole) {
-      throw new CanonicalApiException(
-        HttpStatus.NOT_FOUND,
-        'ROLE_NOT_FOUND',
-        'Không tìm thấy vai trò cần xóa'
-      );
-    }
-
-    // BR-RBAC-01 / AC-RBAC-01-07: System Role Immutability
-    if (existingRole.is_system) {
-      throw new CanonicalApiException(
-        HttpStatus.FORBIDDEN,
-        'SYSTEM_ROLE_IMMUTABLE',
-        'Vai trò mặc định của hệ thống không thể chỉnh sửa hoặc xóa'
-      );
-    }
-
-    // BR-RBAC-04 / AC-RBAC-01-11: Tenant Isolation
-    if (!existingRole.merchant_id || existingRole.merchant_id !== actor.merchantId) {
-      throw new CanonicalApiException(
-        HttpStatus.FORBIDDEN,
-        'FORBIDDEN',
-        'Không có quyền truy cập vai trò của đơn vị khác'
-      );
-    }
-
-    // Privilege Ceiling (BR-RBAC-02 / in-scope item 7):
-    // Actor must hold EVERY permission currently assigned to the role before deleting it.
-    const actorPerms = await this.getActorPermissions(actor);
-    const actorPermSet = new Set(actorPerms);
-
-    const unauthorizedRoleCodes = existingRole.permissions
-      .map((rp) => rp.permission.code)
-      .filter((code) => !actorPermSet.has(code));
-
-    if (unauthorizedRoleCodes.length > 0) {
-      throw new CanonicalApiException(
-        HttpStatus.FORBIDDEN,
-        'PRIVILEGE_ESCALATION_DENIED',
-        'Không thể xóa vai trò có quyền hạn vượt quá thẩm quyền của bạn',
-        false,
-        `Bạn không có các quyền hiện tại của vai trò: ${unauthorizedRoleCodes.join(', ')}`
-      );
-    }
-
-    // 3. Transaction: Guard active assignments inside transaction with row locks, Delete Role & Write Audit Log (BR-RBAC-03, BR-RBAC-02, BR-RBAC-07)
+    // All database reads, decisions, privilege checks, and assignment checks are inside the transaction after row locks (P1-02)
     try {
       await this.prisma.$transaction(async (tx) => {
         // 1. Lock in ONE global order: actor user -> actor role -> role_permissions -> target role (Finding 2 / Round 9)
