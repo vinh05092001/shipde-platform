@@ -1,7 +1,7 @@
 import * as assert from 'node:assert';
 import { test, describe, beforeEach } from 'node:test';
 import type { ActorContext } from './rbac.dto';
-import { RbacService, SYSTEM_ROLE_IDS, sanitizeRoleTextInput } from './rbac.service';
+import { RbacService, SYSTEM_ROLE_IDS, hasForbiddenRoleTextCharacters } from './rbac.service';
 import { PLATFORM_PERMISSIONS, SYSTEM_ROLES } from './rbac.constants';
 import { CanonicalApiException as BaseCanonicalApiException } from '../auth/auth.service';
 import { CanonicalApiException } from './rbac.service';
@@ -3663,39 +3663,77 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
     );
   });
 
-  // Finding 4 (Round 14 / P2-05): Input sanitization strips raw HTML and XSS injection payloads from name and description
-  test('Finding 4 (Round 14 / P2-05): sanitizeRoleTextInput strips raw HTML/XSS injections before persisting in createRole and updateRole', async () => {
-    // 1. Create role with XSS injection in name and description
-    const res = await service.createRole(
-      {
-        name: `<script>alert("xss")</script>Sanitized Role ${Date.now()}`,
-        description: `<p>Valid description</p><img src=x onerror=alert(1)>`,
-        permissions: ['order:view_create'],
-      },
-      OWNER_ACTOR,
-      '127.0.0.1',
-      'corr-p2-05'
-    );
-    assert.ok(res.data.role.id);
-    assert.strictEqual(res.data.role.name.includes('<script>'), false);
-    assert.strictEqual(res.data.role.name.startsWith('Sanitized Role'), true);
-
-    const savedRole = mockPrisma.roles.find((r) => r.id === res.data.role.id);
-    assert.ok(savedRole);
-    assert.strictEqual(savedRole.name.includes('<script>'), false);
-    assert.strictEqual(savedRole.description, 'Valid description');
-
-    // 2. Purely HTML name strips down to empty string and rejects with 400 VALIDATION_ERROR
+  // Finding 4 (Round 14 / P2-05 / P2-01): Plain validation rejects < > and control characters with VALIDATION_ERROR
+  test('Finding 4 (Round 14 / P2-05 / P2-01): Plain validation rejects < > control characters with VALIDATION_ERROR', async () => {
+    // 1. Role name with <script> tag rejects with 400 VALIDATION_ERROR
     await assert.rejects(
       async () => {
         await service.createRole(
           {
-            name: '   <script>alert(1)</script>   ',
+            name: `<script>alert("xss")</script>Sanitized Role ${Date.now()}`,
             permissions: ['order:view_create'],
           },
           OWNER_ACTOR,
           '127.0.0.1',
-          'corr-p2-05-pure-xss'
+          'corr-p2-01-name-xss'
+        );
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 400);
+        assert.strictEqual(err.code, 'VALIDATION_ERROR');
+        assert.ok(
+          err.fields?.some((f: any) => f.field === 'name' && f.code === 'INVALID_CHARACTERS')
+        );
+        return true;
+      }
+    );
+
+    // 2. Role description with HTML tag rejects with 400 VALIDATION_ERROR
+    await assert.rejects(
+      async () => {
+        await service.createRole(
+          {
+            name: `Valid Role Name ${Date.now()}`,
+            description: `<p>Valid description</p><img src=x onerror=alert(1)>`,
+            permissions: ['order:view_create'],
+          },
+          OWNER_ACTOR,
+          '127.0.0.1',
+          'corr-p2-01-desc-xss'
+        );
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 400);
+        assert.strictEqual(err.code, 'VALIDATION_ERROR');
+        assert.ok(
+          err.fields?.some((f: any) => f.field === 'description' && f.code === 'INVALID_CHARACTERS')
+        );
+        return true;
+      }
+    );
+
+    // 3. updateRole with HTML payload also rejects with 400 VALIDATION_ERROR
+    const validRole = await service.createRole(
+      {
+        name: `Valid Update Target ${Date.now()}`,
+        description: `Clean initial description`,
+        permissions: ['order:view_create'],
+      },
+      OWNER_ACTOR,
+      '127.0.0.1',
+      'corr-p2-01-clean'
+    );
+
+    await assert.rejects(
+      async () => {
+        await service.updateRole(
+          validRole.data.role.id,
+          { name: `<b>Updated Bold Role</b>` },
+          OWNER_ACTOR,
+          '127.0.0.1',
+          'corr-p2-01-patch-name'
         );
       },
       (err: any) => {
@@ -3705,20 +3743,6 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
         return true;
       }
     );
-
-    // 3. updateRole with HTML payload also sanitizes before persisting
-    const updated = await service.updateRole(
-      res.data.role.id,
-      {
-        name: `<b>Updated Bold Role</b>`,
-        description: `<span>Updated Description</span>`,
-      },
-      OWNER_ACTOR,
-      '127.0.0.1',
-      'corr-p2-05-patch'
-    );
-    assert.strictEqual(updated.data.role.name, 'Updated Bold Role');
-    assert.strictEqual(updated.data.role.description, 'Updated Description');
   });
 
   // Finding 5 (Round 14 / P2-07): OpenAPI specification specifies /api/v1 base server URL aligning /roles and /permissions with RbacController route prefix
@@ -3968,38 +3992,34 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
     }
   });
 
-  // Finding 4 (Round 15 / P2-01): sanitizeRoleTextInput neutralizes nested bypasses and strips all angle brackets
-  test('Finding 4 (Round 15 / P2-01): sanitizeRoleTextInput neutralizes nested tag bypasses and eliminates all angle brackets', async () => {
-    // 1. Nested script tag bypass
-    const nestedScript = '<scr<script>ipt>alert("bypass")</script>';
-    const sanitizedNested = sanitizeRoleTextInput(nestedScript);
-    assert.strictEqual(sanitizedNested.includes('<'), false);
-    assert.strictEqual(sanitizedNested.includes('>'), false);
-    assert.strictEqual(sanitizedNested.includes('script'), false);
+  // Finding 4 (Round 15 / Round 16 / P2-01): Plain validation rejects < > control characters without regex stripping
+  test('Finding 4 (Round 15 / Round 16 / P2-01): hasForbiddenRoleTextCharacters detects <, >, control chars and plain validation rejects', async () => {
+    // 1. Forbidden characters detection
+    assert.strictEqual(hasForbiddenRoleTextCharacters('<script>'), true);
+    assert.strictEqual(hasForbiddenRoleTextCharacters('nested > tag'), true);
+    assert.strictEqual(hasForbiddenRoleTextCharacters('null\u0000byte'), true);
+    assert.strictEqual(hasForbiddenRoleTextCharacters('control\u001Fchar'), true);
+    assert.strictEqual(
+      hasForbiddenRoleTextCharacters('Safe Role Name — Tiếng Việt Hợp Lệ 123!'),
+      false
+    );
 
-    // 2. Nested img event handler bypass
-    const nestedImg = '<<img src=x onerror=alert(1)>Nested Tag';
-    const sanitizedImg = sanitizeRoleTextInput(nestedImg);
-    assert.strictEqual(sanitizedImg.includes('<'), false);
-    assert.strictEqual(sanitizedImg.includes('>'), false);
-    assert.strictEqual(sanitizedImg, 'Nested Tag');
-
-    // 3. Create role with nested bypass payload in name and description
+    // 2. Valid role name and description without forbidden characters creates and persists cleanly
+    const safeName = `Nhân Viên Hỗ Trợ ${Date.now()}`;
+    const safeDesc = `Mô tả vai trò hỗ trợ đơn hàng và đối soát tiếng Việt`;
     const res = await service.createRole(
       {
-        name: `<scr<script>ipt>alert("x")</script>Role Protected ${Date.now()}`,
-        description: `<<img src="x" onerror="evil()">Safe description text`,
+        name: safeName,
+        description: safeDesc,
         permissions: ['order:view_create'],
       },
       OWNER_ACTOR,
       '127.0.0.1',
-      'corr-p2-01'
+      'corr-p2-01-valid'
     );
     assert.ok(res.data.role.id);
-    assert.strictEqual(res.data.role.name.includes('<'), false);
-    assert.strictEqual(res.data.role.name.includes('>'), false);
-    assert.strictEqual(res.data.role.description.includes('<'), false);
-    assert.strictEqual(res.data.role.description.includes('>'), false);
+    assert.strictEqual(res.data.role.name, safeName);
+    assert.strictEqual(res.data.role.description, safeDesc);
   });
 
   // Finding (Round 16 / P1-02, P1-03, P1-04): In-transaction decision reads under row lock

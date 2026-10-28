@@ -82,22 +82,13 @@ export function createConcurrencyConflictException(): CanonicalApiException {
   );
 }
 
-// Input sanitization helper to strip raw HTML, nested tags, and angle brackets from text inputs before persisting (Finding 4 / Round 14 / P2-01)
-export function sanitizeRoleTextInput(text: string): string {
-  if (typeof text !== 'string') return text;
-  let sanitized = text;
-  let prev = '';
-  // Iterative pass to neutralize nested tags like <scr<script>ipt> or <<img src=x>
-  while (prev !== sanitized) {
-    prev = sanitized;
-    sanitized = sanitized
-      .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-      .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
-      .replace(/<[^>]*>/g, '');
-  }
-  // Strip any remaining orphan angle brackets to guarantee zero executable HTML injection in DB/audit
-  sanitized = sanitized.replace(/[<>]/g, '');
-  return sanitized.trim();
+// Validation helper rejecting angle brackets (<, >) and ASCII control characters (Finding / P2-01)
+// Defense-in-depth: backend rejects dangerous characters with VALIDATION_ERROR; React handles standard output escaping.
+export const FORBIDDEN_CHARACTERS_REGEX = /[<>\u0000-\u001F\u007F]/;
+
+export function hasForbiddenRoleTextCharacters(text?: string | null): boolean {
+  if (typeof text !== 'string') return false;
+  return FORBIDDEN_CHARACTERS_REGEX.test(text);
 }
 
 // Deterministic UUID generator for canonical platform permissions & system roles
@@ -985,21 +976,47 @@ export class RbacService implements OnModuleInit {
       );
     }
 
-    const sanitizedName = sanitizeRoleTextInput(dto.name);
-    if (sanitizedName.length === 0) {
+    if (hasForbiddenRoleTextCharacters(dto.name)) {
       throw new CanonicalApiException(
         HttpStatus.BAD_REQUEST,
         'VALIDATION_ERROR',
-        'Tên vai trò không được để trống',
+        'Tên vai trò không được chứa ký tự <, > hoặc ký tự điều khiển',
         false,
-        'Vui lòng nhập tên vai trò hợp lệ',
-        [{ field: 'name', code: 'REQUIRED', message: 'Tên vai trò không được để trống' }]
+        'Vui lòng nhập tên vai trò hợp lệ không chứa ký tự đặc biệt',
+        [
+          {
+            field: 'name',
+            code: 'INVALID_CHARACTERS',
+            message: 'Tên vai trò không được chứa ký tự <, > hoặc ký tự điều khiển',
+          },
+        ]
       );
     }
-    const trimmedName = sanitizedName;
+    const trimmedName = dto.name.trim();
+
+    if (
+      dto.description !== undefined &&
+      dto.description !== null &&
+      hasForbiddenRoleTextCharacters(dto.description)
+    ) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        'Mô tả vai trò không được chứa ký tự <, > hoặc ký tự điều khiển',
+        false,
+        'Vui lòng nhập mô tả hợp lệ không chứa ký tự đặc biệt',
+        [
+          {
+            field: 'description',
+            code: 'INVALID_CHARACTERS',
+            message: 'Mô tả vai trò không được chứa ký tự <, > hoặc ký tự điều khiển',
+          },
+        ]
+      );
+    }
     const sanitizedDescription =
       dto.description !== undefined && dto.description !== null
-        ? sanitizeRoleTextInput(dto.description) || null
+        ? dto.description.trim() || null
         : null;
 
     // 5. Execute in transaction with authoritative locks, privilege ceiling, duplicate check, and Audit Log (AC-RBAC-01-03, AC-RBAC-01-15, P1-02, P1-03, P1-04)
@@ -1232,6 +1249,22 @@ export class RbacService implements OnModuleInit {
           ]
         );
       }
+      if (hasForbiddenRoleTextCharacters(dto.name)) {
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'VALIDATION_ERROR',
+          'Tên vai trò không được chứa ký tự <, > hoặc ký tự điều khiển',
+          false,
+          'Vui lòng nhập tên vai trò hợp lệ không chứa ký tự đặc biệt',
+          [
+            {
+              field: 'name',
+              code: 'INVALID_CHARACTERS',
+              message: 'Tên vai trò không được chứa ký tự <, > hoặc ký tự điều khiển',
+            },
+          ]
+        );
+      }
     }
 
     // Validation: description type and max length (Finding 5 / Round 10)
@@ -1264,6 +1297,22 @@ export class RbacService implements OnModuleInit {
               field: 'description',
               code: 'MAX_LENGTH',
               message: 'Mô tả vai trò không được vượt quá 1000 ký tự',
+            },
+          ]
+        );
+      }
+      if (hasForbiddenRoleTextCharacters(dto.description)) {
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'VALIDATION_ERROR',
+          'Mô tả vai trò không được chứa ký tự <, > hoặc ký tự điều khiển',
+          false,
+          'Vui lòng nhập mô tả hợp lệ không chứa ký tự đặc biệt',
+          [
+            {
+              field: 'description',
+              code: 'INVALID_CHARACTERS',
+              message: 'Mô tả vai trò không được chứa ký tự <, > hoặc ký tự điều khiển',
             },
           ]
         );
@@ -1375,23 +1424,12 @@ export class RbacService implements OnModuleInit {
           );
         }
 
-        // Compute writes from lockedTargetRole snapshot (Finding 3 / Round 8) with input sanitization (Finding 4 / Round 14 / P2-05)
-        const effectiveName =
-          dto.name !== undefined ? sanitizeRoleTextInput(dto.name) : lockedTargetRole.name;
-        if (dto.name !== undefined && effectiveName.length === 0) {
-          throw new CanonicalApiException(
-            HttpStatus.BAD_REQUEST,
-            'VALIDATION_ERROR',
-            'Tên vai trò không được để trống',
-            false,
-            'Vui lòng nhập tên vai trò hợp lệ',
-            [{ field: 'name', code: 'REQUIRED', message: 'Tên vai trò không được để trống' }]
-          );
-        }
+        // Compute writes from lockedTargetRole snapshot (Finding 3 / Round 8)
+        const effectiveName = dto.name !== undefined ? dto.name.trim() : lockedTargetRole.name;
         const effectiveDescription =
           dto.description !== undefined
             ? dto.description
-              ? sanitizeRoleTextInput(dto.description) || null
+              ? dto.description.trim() || null
               : null
             : lockedTargetRole.description;
 
