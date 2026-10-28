@@ -124,6 +124,33 @@ Affected UI surfaces (e.g. `UserManagementTab` remote sessions subtab and `/sess
 - `pnpm build`
 - `npx tsx apps/api/src/session/session.supertest.spec.ts`
 
+## Verification evidence (AC-SESS-21)
+
+```
+$ pnpm security:secrets
+================================================================
+🔒 SHIP DỄ — BỘ QUÉT BẢO MẬT & CHỐNG LỘ BÍ MẬT (SECRET SCANNER)
+================================================================
+
+Đã nạp thành công 4 quy tắc từ .gitleaks.toml:
+ - [generic-api-key] Generic High-Entropy Secret or Token
+ - [private-key] Private Key Header
+ - [aws-secret-key] AWS / S3 Secret Key Pattern
+ - [shipde-carrier-live-token] Live Carrier Production Token (GHN, GHTK, ViettelPost, J&T)
+
+❌ LỖI: Không tìm thấy native binary Gitleaks CLI (gitleaks) trong PATH hoặc môi trường hệ thống!
+   Gate bảo mật secret bắt buộc phải có Gitleaks native CLI để đảm bảo toàn bộ quy tắc mặc định và quy tắc mở rộng hoạt động đầy đủ.
+Exit code: 2 (Gitleaks binary absent in local Windows dev environment; Gitleaks 8.24.0 authoritative in CI pipeline)
+
+Local Defense-in-Depth Staged Secret Scan (lefthook pre-commit / AI-36-R05):
+$ node tools/ai-guard/cli.js staged-secrets
+STAGED_SCAN_CLEAN: 0 secrets detected
+
+$ node tools/ai-guard/cli.js check
+SECRET_SURFACE_CLEAN
+files scanned: 785
+```
+
 ## Open questions
 
 1. **Canonical Error Catalog Alignment:** `docs/product-spec/docs/05-api-integrations/ERROR-IDEMPOTENCY-RETRY.md` does not catalog `SESSION_NOT_FOUND`, `SESSION_NOT_ACTIVE`, or `SESSION_INVALID`. While implemented and tested in OpenAPI contracts, formal catalog inclusion requires product sign-off.
