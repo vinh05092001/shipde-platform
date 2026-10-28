@@ -243,7 +243,7 @@ describe('FEAT-AUTH-02: Admin-Created Shop Account Unit Tests', () => {
         assert.ok(err instanceof CanonicalApiException);
         assert.strictEqual(err.getStatus(), 400);
         assert.strictEqual(err.code, 'VALIDATION_ERROR');
-        const fields = err.getResponse()?.error?.fields;
+        const fields = (err.getResponse() as any)?.error?.fields;
         assert.ok(fields.some((f: any) => f.field === 'email' && f.code === 'REQUIRED'));
         return true;
       }
@@ -266,7 +266,7 @@ describe('FEAT-AUTH-02: Admin-Created Shop Account Unit Tests', () => {
         assert.ok(err instanceof CanonicalApiException);
         assert.strictEqual(err.getStatus(), 400);
         assert.strictEqual(err.code, 'VALIDATION_ERROR');
-        const fields = err.getResponse()?.error?.fields;
+        const fields = (err.getResponse() as any)?.error?.fields;
         assert.ok(fields.some((f: any) => f.field === 'email' && f.code === 'INVALID_FORMAT'));
         return true;
       }
@@ -289,7 +289,7 @@ describe('FEAT-AUTH-02: Admin-Created Shop Account Unit Tests', () => {
         assert.ok(err instanceof CanonicalApiException);
         assert.strictEqual(err.getStatus(), 400);
         assert.strictEqual(err.code, 'VALIDATION_ERROR');
-        const fields = err.getResponse()?.error?.fields;
+        const fields = (err.getResponse() as any)?.error?.fields;
         assert.ok(fields.some((f: any) => f.field === 'phone' && f.code === 'INVALID_FORMAT'));
         return true;
       }
@@ -312,7 +312,7 @@ describe('FEAT-AUTH-02: Admin-Created Shop Account Unit Tests', () => {
         assert.ok(err instanceof CanonicalApiException);
         assert.strictEqual(err.getStatus(), 400);
         assert.strictEqual(err.code, 'VALIDATION_ERROR');
-        const fields = err.getResponse()?.error?.fields;
+        const fields = (err.getResponse() as any)?.error?.fields;
         assert.ok(fields.some((f: any) => f.field === 'phone' && f.code === 'INVALID_FORMAT'));
         return true;
       }
@@ -345,7 +345,7 @@ describe('FEAT-AUTH-02: Admin-Created Shop Account Unit Tests', () => {
         assert.ok(err instanceof CanonicalApiException);
         assert.strictEqual(err.getStatus(), 400);
         assert.strictEqual(err.code, 'VALIDATION_ERROR');
-        const fields = err.getResponse()?.error?.fields;
+        const fields = (err.getResponse() as any)?.error?.fields;
         assert.ok(fields.some((f: any) => f.field === 'phone' && f.code === 'DUPLICATE'));
         return true;
       }
@@ -369,7 +369,7 @@ describe('FEAT-AUTH-02: Admin-Created Shop Account Unit Tests', () => {
         assert.ok(err instanceof CanonicalApiException);
         assert.strictEqual(err.getStatus(), 400);
         assert.strictEqual(err.code, 'VALIDATION_ERROR');
-        const fields = err.getResponse()?.error?.fields;
+        const fields = (err.getResponse() as any)?.error?.fields;
         assert.ok(fields.some((f: any) => f.field === 'password' && f.code === 'TOO_SHORT'));
         return true;
       }
@@ -392,7 +392,7 @@ describe('FEAT-AUTH-02: Admin-Created Shop Account Unit Tests', () => {
         assert.ok(err instanceof CanonicalApiException);
         assert.strictEqual(err.getStatus(), 400);
         assert.strictEqual(err.code, 'VALIDATION_ERROR');
-        const fields = err.getResponse()?.error?.fields;
+        const fields = (err.getResponse() as any)?.error?.fields;
         assert.ok(fields.some((f: any) => f.field === 'merchant_name' && f.code === 'MAX_LENGTH'));
         return true;
       }
@@ -502,7 +502,7 @@ describe('FEAT-AUTH-02: Admin-Created Shop Account Unit Tests', () => {
 
     assert.strictEqual(res.success, true);
     assert.strictEqual(res.data.password_is_temporary, false);
-    assert.strictEqual(res.data.temporary_password, undefined);
+    assert.strictEqual((res.data as any).temporary_password, undefined);
 
     // Verify stored password hash matches the custom password
     const storedUser = mockPrisma.users[0];
@@ -534,7 +534,7 @@ describe('FEAT-AUTH-02: Admin-Created Shop Account Unit Tests', () => {
         assert.ok(err instanceof CanonicalApiException);
         assert.strictEqual(err.getStatus(), 400);
         assert.strictEqual(err.code, 'VALIDATION_ERROR');
-        const fields = err.getResponse()?.error?.fields;
+        const fields = (err.getResponse() as any)?.error?.fields;
         assert.ok(fields.some((f: any) => f.field === 'email' && f.code === 'DUPLICATE'));
         return true;
       }
