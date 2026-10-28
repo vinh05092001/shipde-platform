@@ -89,8 +89,8 @@ export class SessionService implements OnApplicationBootstrap {
     const inactivityThreshold = new Date(now.getTime() - INACTIVITY_DAYS * 24 * 60 * 60 * 1000);
 
     const results = sessions.map((s) => {
-      const isExpiredByInactivity = s.last_active_at < inactivityThreshold;
-      const isExpiredByAbsolute = s.expires_at < now;
+      const isExpiredByInactivity = s.last_active_at <= inactivityThreshold;
+      const isExpiredByAbsolute = s.expires_at <= now;
       const isExpired = isExpiredByInactivity || isExpiredByAbsolute;
       const effectiveStatus = isExpired ? SessionStatusEnum.EXPIRED : s.status;
 
@@ -490,7 +490,7 @@ export class SessionService implements OnApplicationBootstrap {
 
     const now = new Date();
     const inactivityThreshold = new Date(now.getTime() - INACTIVITY_DAYS * 24 * 60 * 60 * 1000);
-    const isExpired = session.expires_at < now || session.last_active_at < inactivityThreshold;
+    const isExpired = session.expires_at <= now || session.last_active_at <= inactivityThreshold;
 
     if (session.status !== SessionStatusEnum.ACTIVE || isExpired) {
       if (session.status === SessionStatusEnum.ACTIVE && isExpired) {

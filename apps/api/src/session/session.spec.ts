@@ -884,4 +884,43 @@ describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
       }
     });
   });
+
+  describe('Finding F-03: Boundary consistency between validateSession and heartbeat (BR-SESS-03 / BR-SESS-04)', () => {
+    it('treats exact-boundary timestamp (<=) as expired in heartbeat identically to validateSession', async () => {
+      const now = new Date();
+      const exactInactivityThreshold = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+      let updatedStatus: SessionStatusEnum | null = null;
+
+      const mockPrisma: any = {
+        deviceSession: {
+          findUnique: async () => ({
+            id: 'sess-boundary',
+            user_id: 'user-1',
+            merchant_id: 'merch-1',
+            status: SessionStatusEnum.ACTIVE,
+            last_active_at: exactInactivityThreshold,
+            expires_at: new Date(now.getTime() + 10000),
+          }),
+          updateMany: async ({ data }: any) => {
+            updatedStatus = data.status;
+            return { count: 1 };
+          },
+        },
+      };
+
+      const service = new SessionService(mockPrisma);
+      await assert.rejects(
+        async () => service.heartbeat('sess-boundary', 'user-1', 'merch-1', 'sess-boundary'),
+        (err: any) => {
+          assert.strictEqual(err.response?.error?.code, 'SESSION_NOT_ACTIVE');
+          return true;
+        }
+      );
+      assert.strictEqual(
+        updatedStatus,
+        SessionStatusEnum.EXPIRED,
+        'Exact boundary inactivity must transition to EXPIRED in DB'
+      );
+    });
+  });
 });
