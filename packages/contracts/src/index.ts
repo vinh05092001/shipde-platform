@@ -469,7 +469,6 @@ export type AcceptInvitationRequest = components['schemas']['AcceptInvitationReq
 export type AcceptInvitationResponse = components['schemas']['AcceptInvitationResponse'];
 export type CheckScopeRequest = components['schemas']['CheckScopeRequest'];
 export type CheckScopeResponse = components['schemas']['CheckScopeResponse'];
-
 // --- Personal Profile (FEAT-PRO-01) Types ---
 export type UserProfile = components['schemas']['UserProfile'];
 export type NotificationPreferences = components['schemas']['NotificationPreferences'];
@@ -481,5 +480,36 @@ export type GetPreferencesResponse = components['schemas']['GetPreferencesRespon
 export type UpdatePreferencesRequest = components['schemas']['UpdatePreferencesRequest'];
 export type UpdatePreferencesResponse = components['schemas']['UpdatePreferencesResponse'];
 
+// --- User Lifecycle Contracts (FEAT-USR-02) ---
+export const UserLifecycleAuditEvent = {
+  USER_UPDATED: 'USER_UPDATED',
+  USER_SUSPENDED: 'USER_SUSPENDED',
+  USER_ACTIVATED: 'USER_ACTIVATED',
+  USER_DEACTIVATED: 'USER_DEACTIVATED',
+} as const;
+export type UserLifecycleAuditEvent =
+  (typeof UserLifecycleAuditEvent)[keyof typeof UserLifecycleAuditEvent];
+
+export const UserErrorCode = {
+  CANNOT_REMOVE_LAST_OWNER: 'CANNOT_REMOVE_LAST_OWNER',
+  SELF_SUSPENSION_PROHIBITED: 'SELF_SUSPENSION_PROHIBITED',
+  INVALID_STATUS_TRANSITION: 'INVALID_STATUS_TRANSITION',
+  PRIVILEGE_CEILING_EXCEEDED: 'PRIVILEGE_CEILING_EXCEEDED',
+  FORBIDDEN: 'FORBIDDEN',
+  VALIDATION_ERROR: 'VALIDATION_ERROR',
+} as const;
+export type UserErrorCode = (typeof UserErrorCode)[keyof typeof UserErrorCode];
+
+export type UserListItem = components['schemas']['UserListItem'];
+export type ListUsersResponse = components['schemas']['ListUsersResponse'];
+export type UserDetail = components['schemas']['UserDetail'];
+export type UserDetailResponse = components['schemas']['UserDetailResponse'];
+export type UpdateUserRequest = components['schemas']['UpdateUserRequest'];
+export type SuspendUserRequest = components['schemas']['SuspendUserRequest'];
+export type SuspendUserResponse = components['schemas']['SuspendUserResponse'];
+export type ActivateUserRequest = components['schemas']['ActivateUserRequest'];
+export type ActivateUserResponse = components['schemas']['ActivateUserResponse'];
+export type DeactivateUserRequest = components['schemas']['DeactivateUserRequest'];
+export type DeactivateUserResponse = components['schemas']['DeactivateUserResponse'];
 // --- Generated OpenAPI Schema Types ---
 export type * from './openapi';
