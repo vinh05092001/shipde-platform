@@ -930,6 +930,53 @@ async function runSessionSupertestSuite() {
       console.log(
         '  PASS: AC-SESS-20 Transaction rolls back on audit failure; session remains ACTIVE and rollback is logged explicitly'
       );
+
+      // F-04: Verify POST /api/v1/sessions/revoke-all audit rollback path
+      const tok20All = createSessionToken();
+      const sess20All = await prisma.deviceSession.create({
+        data: {
+          user_id: user.id,
+          merchant_id: merchant.id,
+          session_token_hash: tok20All.hash,
+          device_id: 'audit_rollback_device_all',
+          status: SessionStatusEnum.ACTIVE,
+          expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+        },
+      });
+
+      stdoutLogs.length = 0;
+      stderrLogs.length = 0;
+
+      await request(server)
+        .post('/api/v1/sessions/revoke-all')
+        .set('Authorization', `Bearer ${tok20Caller.raw}`)
+        .send({ include_current: false })
+        .expect(500);
+
+      const check20All = await prisma.deviceSession.findUnique({ where: { id: sess20All.id } });
+      assert.strictEqual(
+        check20All?.status,
+        SessionStatusEnum.ACTIVE,
+        'Remote sessions must remain ACTIVE when revokeAll audit rolls back'
+      );
+
+      const leakedRevokeAllAudit = stdoutLogs.some((l) => l.includes('AUDIT: SESSIONS_REVOKED_ALL'));
+      assert.strictEqual(
+        leakedRevokeAllAudit,
+        false,
+        'stdout must not record SESSIONS_REVOKED_ALL audit when revokeAll transaction rolls back'
+      );
+
+      const loggedRevokeAllRollback = stderrLogs.some(
+        (l) => l.includes('AUDIT_ROLLBACK') && l.includes(user.id)
+      );
+      assert.ok(
+        loggedRevokeAllRollback,
+        'stderr must record AUDIT_ROLLBACK for revokeAll transaction failure'
+      );
+      console.log(
+        '  PASS: AC-SESS-20 (F-04) revokeAll rolls back updateMany when audit logging fails'
+      );
     } finally {
       (sessionService as any).logAudit = originalLogAudit;
       console.log = origConsoleLog;

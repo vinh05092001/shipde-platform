@@ -313,6 +313,73 @@ describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
         console.error = origErr;
       }
     });
+
+    it('rolls back updateMany and logs AUDIT_ROLLBACK when audit creation fails during revokeAll (F-04)', async () => {
+      process.env.AUDIT_IDENTIFIER_HMAC_KEY = 'test-audit-hmac-key-placeholder-32-chars';
+      const stdoutEvents: string[] = [];
+      const stderrEvents: string[] = [];
+      const origLog = console.log;
+      const origErr = console.error;
+      console.log = (...args: any[]) => {
+        stdoutEvents.push(args.join(' '));
+        origLog(...args);
+      };
+      console.error = (...args: any[]) => {
+        stderrEvents.push(args.join(' '));
+        origErr(...args);
+      };
+
+      try {
+        let rolledBack = false;
+        const mockPrisma: any = {
+          $transaction: async (cb: any) => {
+            const tx: any = {
+              deviceSession: {
+                updateMany: async () => ({ count: 2 }),
+              },
+              auditLog: {
+                create: async () => {
+                  throw new Error('Audit table deadlock');
+                },
+              },
+            };
+            try {
+              return await cb(tx);
+            } catch (err) {
+              rolledBack = true;
+              throw err;
+            }
+          },
+        };
+
+        const service = new SessionService(mockPrisma);
+        await assert.rejects(
+          async () =>
+            service.revokeAll(
+              'user-1',
+              'merchant-1',
+              'sess-current',
+              { include_current: false },
+              'c-revoke-all-fail'
+            ),
+          /Audit table deadlock/
+        );
+
+        assert.strictEqual(rolledBack, true, 'revokeAll transaction must roll back');
+        assert.strictEqual(
+          stdoutEvents.some((l) => l.includes('AUDIT: SESSIONS_REVOKED_ALL')),
+          false,
+          'stdout must not record SESSIONS_REVOKED_ALL audit when revokeAll write fails'
+        );
+        assert.ok(
+          stderrEvents.some((l) => l.includes('AUDIT_FAILED') || l.includes('AUDIT_ROLLBACK')),
+          'stderr must explicitly log failure and rollback for revokeAll'
+        );
+      } finally {
+        console.log = origLog;
+        console.error = origErr;
+      }
+    });
   });
 
   // ---------------------------------------------------------------------------
