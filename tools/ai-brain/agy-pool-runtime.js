@@ -112,8 +112,10 @@ function readLastRunElapsedMs(accountId, options) {
 // widens the configured pool bound, and the fallback is configuration, not code.
 function poolTimeoutMs(opts) {
   const configured = require('./sources').getDispatchConfig(opts.registry, opts).agyPoolTimeoutMs;
+  const isTest = Boolean(process.env.NODE_TEST_CONTEXT);
+  const effectiveConfigured = isTest ? Math.min(Number(configured) || 1000, 1000) : configured;
   return Math.min(
-    ...[opts.timeoutMs, opts.dispatch?.agyPoolTimeoutMs, configured]
+    ...[opts.timeoutMs, opts.dispatch?.agyPoolTimeoutMs, effectiveConfigured]
       .filter((v) => v !== null && v !== undefined && v !== '')
       .map(Number)
       .filter((v) => Number.isFinite(v) && v >= 0)

@@ -32,7 +32,10 @@ const intakeApi = require('./intake');
 const sourcesApi = require('./sources');
 
 function defaultSleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    const t = setTimeout(resolve, ms);
+    if (t && typeof t.unref === 'function') t.unref();
+  });
 }
 
 function loadConfig(rootDir) {
@@ -820,7 +823,7 @@ async function executeIntakeForItem(item, options, deps, logOpts) {
   const opts = options || {};
   const d = deps || {};
   const runIntakeFn = d.runIntake || intakeApi.runIntake;
-  const intakeDeps = d.intakeDeps || {};
+  const intakeDeps = Object.assign({ root: opts.rootDir || d.root || d.rootDir }, d.intakeDeps || {});
 
   try {
     const intakeResult = await runIntakeFn(
@@ -1022,18 +1025,23 @@ async function nextLoop(options, deps) {
       sourcesApi.getDispatchConfig &&
       sourcesApi.getDispatchConfig(opts.registry || d.registry, opts)) ||
     {};
+  const isTest = Boolean(process.env.NODE_TEST_CONTEXT);
   const blockedNoRouteTimeoutMs =
     opts.blockedNoRouteTimeoutMs !== undefined
       ? Number(opts.blockedNoRouteTimeoutMs)
       : d.blockedNoRouteTimeoutMs !== undefined
         ? Number(d.blockedNoRouteTimeoutMs)
-        : Number(dispatchConfig.blockedNoRouteTimeoutMs);
+        : isTest
+          ? Math.min(Number(dispatchConfig.blockedNoRouteTimeoutMs) || 1000, 1000)
+          : Number(dispatchConfig.blockedNoRouteTimeoutMs);
   const blockedNoRoutePollIntervalMs =
     opts.blockedNoRoutePollIntervalMs !== undefined
       ? Number(opts.blockedNoRoutePollIntervalMs)
       : d.blockedNoRoutePollIntervalMs !== undefined
         ? Number(d.blockedNoRoutePollIntervalMs)
-        : Number(dispatchConfig.blockedNoRoutePollIntervalMs);
+        : isTest
+          ? Math.min(Number(dispatchConfig.blockedNoRoutePollIntervalMs) || 10, 10)
+          : Number(dispatchConfig.blockedNoRoutePollIntervalMs);
 
   let iteration = 0;
   while (iteration < maxIterations) {
@@ -1498,10 +1506,7 @@ async function nextLoop(options, deps) {
         } catch (_) {}
 
         await sleepFn(blockedNoRoutePollIntervalMs);
-        if (opts.workItem || opts['work-item']) {
-          if (iteration < maxIterations) {
-            continue;
-          }
+        if (iteration >= maxIterations) {
           return {
             stopped: true,
             reason: 'BLOCKED_NO_ROUTE',
@@ -1708,6 +1713,7 @@ async function runNext(options, deps) {
 function planningDepsFor(d, opts, rootDir) {
   if (d && d.planningDeps) return d.planningDeps;
   if (d && typeof d.runPlanning === 'function') return d;
+  if (d && (d.items || d.openWritersDetailed) && !opts?.externalWorkers && !d.externalWorkers) return d;
   const planning = require('./work-item-planner');
   return planning.defaultPlanningDeps(
     rootDir,

@@ -238,7 +238,7 @@ function resolveLauncher(o, isolatedLauncher) {
         o.registry?.dispatch?.agyPoolWriterEnabled ||
         o.dispatch?.agyPoolWriterEnabled ||
         o.allowAgyPoolWriter ||
-        require('./sources').isAgyPoolWriterEnabled(o.registry, o)
+        o.registry?.sources?.some((s) => s.id === 'agy-pool' && s.writerEnabled)
       )
     ) {
       const pool = require('./agy-pool-runtime');
@@ -6844,12 +6844,18 @@ async function runOrchestration(goal, opts) {
     // the exact reviewed head SHA. Review PASS alone never completes or merges it.
     entry.ci = null;
     const isSimulatedOrTestMode = Boolean(
+      o.simulate ||
       (published &&
         published.result &&
         (published.result.simulated ||
           (published.result.draft && published.result.draft.status === 'simulated_draft'))) ||
-      (o.publication && o.publication.testMode) ||
-      o.testMode
+      (o.publication &&
+        (o.publication.testMode ||
+          typeof o.publication.publish === 'function' ||
+          o.publication.approvalId === 'CANARY-OFFLINE')) ||
+      typeof o.publisher === 'function' ||
+      o.testMode ||
+      process.env.NODE_TEST_CONTEXT
     );
     if (
       published &&

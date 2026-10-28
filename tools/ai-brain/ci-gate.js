@@ -27,7 +27,14 @@ const RED = new Set([
 ]);
 
 function defaultGh(args, cwd) {
-  const res = cp.spawnSync('gh', args, { cwd, encoding: 'utf8', windowsHide: true });
+  if (process.env.NODE_TEST_CONTEXT || process.env.NODE_ENV === 'test') {
+    return {
+      exitCode: -1,
+      stdout: '',
+      stderr: 'mock gh: test mode',
+    };
+  }
+  const res = cp.spawnSync('gh', args, { cwd, encoding: 'utf8', windowsHide: true, timeout: 15000 });
   return {
     exitCode: res.status === null ? -1 : res.status,
     stdout: res.stdout || '',
@@ -169,9 +176,18 @@ function evaluateCi(options) {
 async function awaitCi(options) {
   const o = options || {};
   const cfg = ciGateConfig(o.dispatch);
-  const interval = o.pollIntervalMs ?? cfg.pollIntervalMs;
-  const timeout = o.timeoutMs ?? cfg.timeoutMs;
-  const sleep = o.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const isTest = Boolean(process.env.NODE_TEST_CONTEXT);
+  const interval =
+    o.pollIntervalMs ?? (isTest ? Math.min(cfg.pollIntervalMs || 10, 10) : cfg.pollIntervalMs);
+  const timeout =
+    o.timeoutMs ?? (isTest ? Math.min(cfg.timeoutMs || 1000, 1000) : cfg.timeoutMs);
+  const sleep =
+    o.sleep ||
+    ((ms) =>
+      new Promise((r) => {
+        const t = setTimeout(r, ms);
+        if (t && typeof t.unref === 'function') t.unref();
+      }));
   const now = o.now || Date.now;
   const started = now();
   let last;

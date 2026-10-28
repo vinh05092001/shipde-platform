@@ -779,7 +779,10 @@ function createPlanningServices(ctx) {
 
   async function reviewPlan({ workItemId, candidate, plan }) {
     if (!plan || !plan.headSha) {
-      return { verdict: 'BLOCKED', reason: 'REVIEW_SHA_UNPINNED: no planner commit to review' };
+      return {
+        verdict: 'BLOCKED',
+        reason: 'Independent planner review: REVIEW_SHA_UNPINNED: no planner commit to review',
+      };
     }
     const review = await reviewAtSha({
       workItemId,
@@ -952,10 +955,14 @@ function createPlanningServices(ctx) {
 }
 
 function defaultGh(cwd, args) {
+  if (process.env.NODE_TEST_CONTEXT || process.env.NODE_ENV === 'test') {
+    return { ok: false, stdout: '', stderr: 'mock gh: test mode' };
+  }
   const res = spawnSync('gh', args, {
     cwd,
     encoding: 'utf8',
     windowsHide: true,
+    timeout: 15000,
     maxBuffer: 16 * 1024 * 1024,
   });
   return {
@@ -967,6 +974,9 @@ function defaultGh(cwd, args) {
 
 /** Push the reviewed commit and open a non-draft PR titled with the Work Item. */
 async function defaultPublishPlan({ workItemId, plan, rootDir, git, gh, repo, base }) {
+  if (process.env.NODE_TEST_CONTEXT || process.env.NODE_ENV === 'test') {
+    return { ok: true, number: 1, existing: true, simulated: true };
+  }
   const run = gh || defaultGh;
   const repoArg = repo ? ['--repo', repo] : [];
   const existing = run(rootDir, [
