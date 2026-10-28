@@ -736,13 +736,33 @@ export interface paths {
       path?: never;
       cookie?: never;
     };
+    /** Get current authenticated user profile and preferences (FEAT-PRO-01) */
     get: operations['getMe'];
     put?: never;
     post?: never;
     delete?: never;
     options?: never;
     head?: never;
-    patch?: never;
+    /** Update current authenticated user profile (FEAT-PRO-01) */
+    patch: operations['updateMe'];
+    trace?: never;
+  };
+  '/me/preferences': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get current user personal preferences (FEAT-PRO-01) */
+    get: operations['getMyPreferences'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    /** Update current user personal preferences (FEAT-PRO-01) */
+    patch: operations['updateMyPreferences'];
     trace?: never;
   };
   '/sessions': {
@@ -1768,6 +1788,101 @@ export interface components {
         carrier_account_scopes: string[];
       };
       meta: components['schemas']['Meta'];
+    };
+    NotificationChannels: {
+      email?: boolean;
+      in_app?: boolean;
+      push?: boolean;
+    };
+    NotificationSubscriptions: {
+      delivery_fail?: boolean;
+      rate_discrepancy?: boolean;
+      cod_overdue?: boolean;
+      claim_deadline_warning?: boolean;
+      abnormal_return?: boolean;
+      security_alerts?: boolean;
+      create_unknown?: boolean;
+    };
+    NotificationPreferences: {
+      channels?: components['schemas']['NotificationChannels'];
+      /** @example 15 */
+      digest_window_minutes?: number;
+      subscriptions?: components['schemas']['NotificationSubscriptions'];
+    };
+    UserProfile: {
+      /** Format: uuid */
+      id: string;
+      /** Format: uuid */
+      merchant_id?: string | null;
+      /** Format: email */
+      email?: string | null;
+      phone?: string | null;
+      full_name: string;
+      role: string;
+      status?: string;
+      avatar_url?: string | null;
+      /** @example vi */
+      language: string;
+      /** @example Asia/Ho_Chi_Minh */
+      timezone: string;
+      /** Format: uuid */
+      default_warehouse_id?: string | null;
+      store_scopes?: string[];
+      warehouse_scopes?: string[];
+      /** Format: uuid */
+      custom_role_id?: string | null;
+      notification_preferences?: components['schemas']['NotificationPreferences'];
+      merchant?: {
+        /** Format: uuid */
+        id?: string;
+        name?: string;
+      } | null;
+      /** Format: date-time */
+      created_at?: string;
+    };
+    UserPreferences: {
+      /** @example vi */
+      language: string;
+      /** @example Asia/Ho_Chi_Minh */
+      timezone: string;
+      /** Format: uuid */
+      default_warehouse_id?: string | null;
+      notification_preferences?: components['schemas']['NotificationPreferences'];
+    };
+    GetMeResponse: {
+      data: components['schemas']['UserProfile'];
+      meta?: components['schemas']['Meta'];
+    };
+    UpdateMeRequest: {
+      full_name?: string;
+      phone?: string | null;
+      avatar_url?: string | null;
+      /** @enum {string} */
+      language?: 'vi' | 'en';
+      timezone?: string;
+      /** Format: uuid */
+      default_warehouse_id?: string | null;
+      notification_preferences?: components['schemas']['NotificationPreferences'];
+    };
+    UpdateMeResponse: {
+      data: components['schemas']['UserProfile'];
+      meta?: components['schemas']['Meta'];
+    };
+    GetPreferencesResponse: {
+      data: components['schemas']['UserPreferences'];
+      meta?: components['schemas']['Meta'];
+    };
+    UpdatePreferencesRequest: {
+      /** @enum {string} */
+      language?: 'vi' | 'en';
+      timezone?: string;
+      /** Format: uuid */
+      default_warehouse_id?: string | null;
+      notification_preferences?: components['schemas']['NotificationPreferences'];
+    };
+    UpdatePreferencesResponse: {
+      data: components['schemas']['UserPreferences'];
+      meta?: components['schemas']['Meta'];
     };
     ListUsersResponse: {
       data: components['schemas']['UserListItem'][];
@@ -2946,13 +3061,97 @@ export interface operations {
     };
     requestBody?: never;
     responses: {
-      /** @description Current user and memberships */
+      /** @description Current user profile, merchant metadata, and personal preferences */
       200: {
         headers: {
           [name: string]: unknown;
         };
-        content?: never;
+        content: {
+          'application/json': components['schemas']['GetMeResponse'];
+        };
       };
+      401: components['responses']['SessionInvalid'];
+    };
+  };
+  updateMe: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['UpdateMeRequest'];
+      };
+    };
+    responses: {
+      /** @description Profile updated successfully */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpdateMeResponse'];
+        };
+      };
+      /** @description Validation error or invalid phone/timezone format */
+      400: components['responses']['Error'];
+      401: components['responses']['SessionInvalid'];
+      /** @description Privilege escalation denied or warehouse scope unauthorized */
+      403: components['responses']['Error'];
+      /** @description Phone number already exists */
+      409: components['responses']['Error'];
+    };
+  };
+  getMyPreferences: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Current user preferences */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['GetPreferencesResponse'];
+        };
+      };
+      401: components['responses']['SessionInvalid'];
+    };
+  };
+  updateMyPreferences: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['UpdatePreferencesRequest'];
+      };
+    };
+    responses: {
+      /** @description Preferences updated successfully */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpdatePreferencesResponse'];
+        };
+      };
+      /** @description Validation error or critical notification cannot be disabled */
+      400: components['responses']['Error'];
+      401: components['responses']['SessionInvalid'];
+      /** @description Warehouse scope unauthorized */
+      403: components['responses']['Error'];
     };
   };
   listSessions: {
