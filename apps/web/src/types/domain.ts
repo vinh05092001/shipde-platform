@@ -56,6 +56,11 @@ export interface User {
   store_scopes?: string[];
   warehouse_scopes?: string[];
   status?: 'active' | 'suspended' | 'ACTIVE';
+  avatar_url?: string | null;
+  language?: string;
+  timezone?: string;
+  default_warehouse_id?: string | null;
+  notification_preferences?: any;
   created_at: Date;
 }
 
