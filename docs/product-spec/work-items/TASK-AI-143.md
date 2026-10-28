@@ -1,17 +1,17 @@
-# TASK-FOUND-07 — Patch body-parser and multer HIGH CVEs via pnpm overrides
+# TASK-AI-143 — Patch body-parser and multer HIGH CVEs via pnpm overrides
 
 ## Control
 
 | Field | Value |
 |---|---|
-| Work Item ID | `TASK-FOUND-07` |
+| Work Item ID | `TASK-AI-143` |
 | Feature ID | `N/A — security and dependency baseline maintenance` |
 | Status | `READY_FOR_CODEX` |
 | Delivery order | `263` |
 | Dependencies | `TASK-FOUND-04` |
 | Assigned author | `GEMINI` |
 | Risk | `LOW` |
-| Allowed paths | `pnpm-workspace.yaml`; `pnpm-lock.yaml`; `docs/product-spec/work-items/TASK-FOUND-07.md` |
+| Allowed paths | `pnpm-workspace.yaml`; `pnpm-lock.yaml`; `docs/product-spec/work-items/TASK-AI-143.md` |
 | Reviewer | `Codex — fresh independent task` |
 | Branch | `fix/task-found-sec-deps-cve` |
 | Pull Request | `N/A — local authoring stage` |
@@ -85,17 +85,17 @@ None. No database migrations, API routes, events, or queues are touched. All API
 Evidence captured from `C:/Users/gumac/AI/shipde-platform/.worktrees/logs/night/agy02-sec-deps.status`:
 
 ```text
-WORK_ITEM=TASK-FOUND-07
+WORK_ITEM=TASK-AI-143
 BRANCH=fix/task-found-sec-deps-cve
 PREVIOUS_HEAD=90d23d1abcab763c1042b072ee80c3da2e7a86d9
 HEAD=ee98778850d1756d68baf6ae5fd42483b5985464
 STATUS=SUCCESS
 TIMESTAMP=2026-10-28T17:02:13+07:00
 
-COMMIT_MESSAGE=[TASK-FOUND-07] fix(deps): patch body-parser and multer HIGH CVEs
+COMMIT_MESSAGE=[TASK-AI-143] fix(deps): patch body-parser and multer HIGH CVEs
 
 COMMITS_ADDED:
-- ee987788 [TASK-FOUND-07] fix(deps): patch body-parser and multer HIGH CVEs
+- ee987788 [TASK-AI-143] fix(deps): patch body-parser and multer HIGH CVEs
 
 DIFF_VERIFICATION:
 - pnpm-workspace.yaml:
