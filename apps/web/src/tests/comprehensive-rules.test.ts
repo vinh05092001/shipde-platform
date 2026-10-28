@@ -31,6 +31,31 @@ import {
   Discrepancy,
 } from '../types/domain';
 import { ERROR_CATALOG, ShipDeAppError } from '../types/error-codes';
+import {
+  formatStoreScopeLabel,
+  isInvitationResendable,
+  INVITE_SUCCESS_TOAST,
+  INVITATIONS_EMPTY_STATE_TEXT,
+  INVITATIONS_FORBIDDEN_TEXT,
+  INVITATIONS_RETRY_LABEL,
+  isManageUsersForbidden,
+  resolveInvitationsUIState,
+  shouldDisplayInvitationsEmptyState,
+} from '../components/UserManagementTab';
+import {
+  parseScopeInput,
+  validateInviteForm,
+  canRetryInviteSubmission,
+  getGrantableRoles,
+} from '../components/forms/InviteUserModal';
+import {
+  validateAcceptPassword,
+  resolveAcceptInviteUIState,
+  canRetryAcceptVerification,
+  extractInvitationToken,
+  stripTokenFromAddressBar,
+  resolveTokenWithMemoryFallback,
+} from '../app/invite/accept/page';
 
 interface TestResult {
   group: string;
@@ -1519,6 +1544,290 @@ export async function runComprehensiveRulesAudit(): Promise<{
       'Hàm validate ném lỗi chặn ngay khi phát hiện trường tổng cộng dồn',
       caughtForbiddenField,
       'Phát hiện từ khóa cấm total_value và chặn lập tức.'
+    );
+  }
+
+  // ==========================================================================
+  // NHÓM 8: PHẠM VI TRUY CẬP & GIAO DIỆN LỜI MỜI (FEAT-USR-01)
+  // ==========================================================================
+  console.log('\n--- [NHÓM 8] PHẠM VI TRUY CẬP & GIAO DIỆN LỜI MỜI (FEAT-USR-01) ---');
+  {
+    assertTest(
+      'User Management Scope',
+      'FEAT-USR-01-SCOPE-01',
+      'Empty store_scopes phải hiển thị "không gán phạm vi" thay vì toàn bộ chi nhánh',
+      formatStoreScopeLabel([]) === 'không gán phạm vi' &&
+        formatStoreScopeLabel(null) === 'không gán phạm vi' &&
+        formatStoreScopeLabel(undefined) === 'không gán phạm vi',
+      'Chặn nhận vơ quyền toàn bộ chi nhánh khi người dùng chưa được gán phạm vi.'
+    );
+
+    assertTest(
+      'User Management Scope',
+      'FEAT-USR-01-SCOPE-02',
+      'Gán đúng danh sách chi nhánh khi store_scopes có phần tử',
+      formatStoreScopeLabel(['HCM-Q3', 'HN-CG']) === 'HCM-Q3, HN-CG',
+      'Hiển thị chính xác danh sách chi nhánh được gán.'
+    );
+
+    assertTest(
+      'User Management Scope',
+      'FEAT-USR-01-SCOPE-03',
+      'parseScopeInput tách chuỗi phạm vi kho và chi nhánh chính xác',
+      JSON.stringify(parseScopeInput('wh-north, wh-south')) ===
+        JSON.stringify(['wh-north', 'wh-south']) &&
+        JSON.stringify(parseScopeInput('')) === JSON.stringify([]) &&
+        JSON.stringify(parseScopeInput('   ')) === JSON.stringify([]),
+      'Chuyển đổi input chuỗi thành mảng scope không hardcode.'
+    );
+
+    assertTest(
+      'User Management Scope',
+      'FEAT-USR-01-UI-01',
+      'Toast thành công phải khớp UI contract "Đã gửi lời mời thành công"',
+      INVITE_SUCCESS_TOAST === 'Đã gửi lời mời thành công',
+      'Khớp 100% UI contract quy định tại FEAT-USR-01.md.'
+    );
+
+    assertTest(
+      'User Management UI States',
+      'FEAT-USR-01-UI-LOADING',
+      'Xác định trạng thái Loading khi danh sách lời mời hoặc mã token đang tải',
+      resolveInvitationsUIState({
+        isForbidden: false,
+        error: null,
+        loading: true,
+        itemCount: 0,
+      }) === 'loading' &&
+        resolveInvitationsUIState({
+          isForbidden: false,
+          error: null,
+          loading: true,
+          itemCount: 10,
+        }) === 'loading' &&
+        resolveAcceptInviteUIState({
+          verifying: true,
+          verifyError: null,
+          submitting: false,
+          success: false,
+          hasInvitation: false,
+        }) === 'verifying',
+      'Khóa nút bấm và hiển thị skeleton / spinner khi đang tải.'
+    );
+
+    assertTest(
+      'User Management UI States',
+      'FEAT-USR-01-UI-EMPTY',
+      'Xác định trạng thái Empty và hiển thị đúng thông điệp tiếng Việt',
+      resolveInvitationsUIState({
+        isForbidden: false,
+        error: null,
+        loading: false,
+        itemCount: 0,
+      }) === 'empty' &&
+        INVITATIONS_EMPTY_STATE_TEXT === 'Chưa có lời mời nào đang chờ xử lý' &&
+        shouldDisplayInvitationsEmptyState({ error: null, loading: false, itemCount: 0 }) ===
+          true &&
+        shouldDisplayInvitationsEmptyState({
+          error: 'Connection timeout',
+          loading: false,
+          itemCount: 0,
+        }) === false &&
+        shouldDisplayInvitationsEmptyState({
+          error: 'Outage 500',
+          loading: false,
+          itemCount: 5,
+        }) === false &&
+        shouldDisplayInvitationsEmptyState({ error: null, loading: true, itemCount: 0 }) === false,
+      'Hiển thị placeholder trống khi không có lời mời nào đang chờ xử lý và không có lỗi.'
+    );
+
+    assertTest(
+      'User Management UI States',
+      'FEAT-USR-01-UI-FORBIDDEN',
+      'Chặn quyền truy cập người dùng không phải OWNER/OPS_CSKH và hiển thị banner 403',
+      isManageUsersForbidden('OWNER') === false &&
+        isManageUsersForbidden('OPS_CSKH') === false &&
+        isManageUsersForbidden('WAREHOUSE') === true &&
+        isManageUsersForbidden('ACCOUNTANT') === true &&
+        isManageUsersForbidden(null) === true &&
+        isManageUsersForbidden(undefined) === true &&
+        isManageUsersForbidden('') === true &&
+        resolveInvitationsUIState({
+          isForbidden: true,
+          error: null,
+          loading: false,
+          itemCount: 5,
+        }) === 'forbidden' &&
+        INVITATIONS_FORBIDDEN_TEXT === '403 — Không Có Quyền Truy Cập',
+      'Chỉ OWNER và OPS_CSKH mới có quyền truy cập tab lời mời.'
+    );
+
+    assertTest(
+      'User Management UI States',
+      'FEAT-USR-01-UI-RETRY',
+      'Hiển thị banner lỗi có nút "Thử lại" khi gọi API thất bại và cho phép retry gửi form lời mời',
+      resolveInvitationsUIState({
+        isForbidden: false,
+        error: 'Network timeout',
+        loading: false,
+        itemCount: 0,
+      }) === 'error' &&
+        INVITATIONS_RETRY_LABEL === 'Thử lại' &&
+        canRetryInviteSubmission({ loading: false, errorMsg: 'Lỗi kết nối máy chủ' }) === true &&
+        canRetryInviteSubmission({ loading: true, errorMsg: 'Lỗi kết nối máy chủ' }) === false &&
+        canRetryInviteSubmission({ loading: false, errorMsg: null }) === false &&
+        resolveAcceptInviteUIState({
+          verifying: false,
+          verifyError: 'Token expired',
+          submitting: false,
+          success: false,
+          hasInvitation: false,
+        }) === 'verify_error',
+      'Cho phép người dùng nhấn Thử lại mà không mất dữ liệu đã nhập trong modal và tab quản trị.'
+    );
+
+    assertTest(
+      'User Management UI States',
+      'FEAT-USR-01-UI-VALIDATION',
+      'Kiểm tra tính hợp lệ form lời mời và độ mạnh mật khẩu trang chấp nhận',
+      validateInviteForm({ channel: 'email', email: '', phone: '' }).isValid === false &&
+        validateInviteForm({ channel: 'email', email: 'invalid-email', phone: '' }).isValid ===
+          false &&
+        validateInviteForm({ channel: 'email', email: 'valid@shipde.vn', phone: '' }).isValid ===
+          true &&
+        validateInviteForm({ channel: 'phone', email: '', phone: '0901234567' }).isValid === true &&
+        validateInviteForm({ channel: 'phone', email: '', phone: '123' }).isValid === false &&
+        validateAcceptPassword('weak', 'weak').isValid === false &&
+        validateAcceptPassword('Admin@1234', 'Admin@1234').isValid === true &&
+        validateAcceptPassword('Admin@1234', 'Mismatch@1234').isValid === false,
+      'Kiểm duyệt chặt chẽ email, phone định dạng VN và password chuẩn 8 ký tự, hoa, thường, số, ký tự đặc biệt.'
+    );
+
+    assertTest(
+      'User Management UI States',
+      'FEAT-USR-01-UI-SUCCESS',
+      'Chuyển trạng thái giao diện thành công khi kích hoạt tài khoản',
+      resolveAcceptInviteUIState({
+        verifying: false,
+        verifyError: null,
+        submitting: false,
+        success: true,
+        hasInvitation: true,
+      }) === 'success',
+      'Hiển thị màn hình chào mừng kích hoạt tài khoản thành công.'
+    );
+
+    assertTest(
+      'User Management UI Recovery',
+      'FEAT-USR-01-UI-RESEND-RECOVERY',
+      'Cho phép gửi lại cho cả PENDING (khi gửi thất bại) và EXPIRED, nhưng chặn khi đã ACCEPTED',
+      isInvitationResendable('PENDING', null) === true &&
+        isInvitationResendable('EXPIRED', null) === true &&
+        isInvitationResendable('PENDING', '2026-10-27T00:00:00Z') === false &&
+        isInvitationResendable('ACCEPTED', '2026-10-27T00:00:00Z') === false &&
+        isInvitationResendable('CANCELLED', null) === false,
+      'Nút "Gửi lại" hiển thị cho unconsumed PENDING và EXPIRED để phục hồi khi thông báo chưa đến.'
+    );
+
+    assertTest(
+      'Accept Invite Verification Recovery',
+      'FEAT-USR-01-UI-VERIFY-RETRY',
+      'Hiển thị nút "Thử lại" khi xác thực token thất bại do sự cố mạng, giữ nguyên token',
+      canRetryAcceptVerification('valid-token-123', 'Mạng lỗi kết nối') === true &&
+        canRetryAcceptVerification(null, 'Thiếu token') === false &&
+        canRetryAcceptVerification('valid-token-123', null) === false,
+      'Cho phép người dùng thử lại ngay lập tức khi mạng lỗi mà không làm mất token trong URL.'
+    );
+
+    // Finding 2 (Round 7): Fragment token extraction and stripping from address bar
+    let replacedUrl: string | null = null;
+    const fakeWindow = {
+      history: {
+        replaceState: (_data: any, _unused: string, url?: string | URL | null) => {
+          replacedUrl = String(url);
+        },
+      },
+      location: { pathname: '/invite/accept' },
+    };
+    stripTokenFromAddressBar(fakeWindow as any);
+
+    const nextConfigModule = (await import('../../next.config.mjs')) as any;
+    const customHeaders = nextConfigModule.default.headers
+      ? await nextConfigModule.default.headers()
+      : [];
+    const acceptHeaderEntry = customHeaders.find((h: any) => h.source === '/invite/accept');
+    const hasNoReferrerHeader = acceptHeaderEntry?.headers?.some(
+      (h: any) => h.key === 'Referrer-Policy' && h.value === 'no-referrer'
+    );
+    const hasNoStoreHeader = acceptHeaderEntry?.headers?.some(
+      (h: any) => h.key === 'Cache-Control' && h.value === 'no-store'
+    );
+
+    assertTest(
+      'UI & SECURITY',
+      'FEAT-USR-01-UI-FRAGMENT-TOKEN-SECURITY',
+      'Xác thực token lời mời từ URL fragment duy nhất, bỏ qua query token, cấu hình Referrer-Policy và Cache-Control',
+      extractInvitationToken({ hash: '#token=secret_frag_token' }) === 'secret_frag_token' &&
+        extractInvitationToken({ hash: '#secret_raw_token' }) === 'secret_raw_token' &&
+        extractInvitationToken({ searchToken: 'query_tok' }) === null &&
+        extractInvitationToken({ hash: '#token=secret_frag_token', searchToken: 'query_tok' }) ===
+          'secret_frag_token' &&
+        replacedUrl === '/invite/accept' &&
+        Boolean(hasNoReferrerHeader) &&
+        Boolean(hasNoStoreHeader),
+      'Trích xuất token chỉ từ fragment, lờ đi query param, xóa khỏi address bar và áp dụng document headers bảo mật'
+    );
+
+    // Round 10 Finding 4: In React Strict Mode, first run extracts token and strips hash; second run sees empty hash but memory fallback preserves token
+    const firstRun = resolveTokenWithMemoryFallback({
+      rawHash: '#token=strict_mode_tok_123',
+      memoryToken: null,
+    });
+    const secondRun = resolveTokenWithMemoryFallback({
+      rawHash: '',
+      memoryToken: firstRun.token,
+    });
+    const missingRun = resolveTokenWithMemoryFallback({
+      rawHash: '',
+      memoryToken: null,
+    });
+
+    assertTest(
+      'UI & ACCEPTANCE',
+      'FEAT-USR-01-STRICT-MODE-MEMORY-TOKEN-PRESERVATION',
+      'Giữ token trong bộ nhớ qua các lần re-mount của React Strict Mode và không ghi đè lỗi khi hash đã bị strip',
+      firstRun.token === 'strict_mode_tok_123' &&
+        firstRun.shouldStrip === true &&
+        secondRun.token === 'strict_mode_tok_123' &&
+        secondRun.shouldStrip === false &&
+        missingRun.token === null &&
+        missingRun.shouldStrip === false,
+      'Token được giữ trong ref/memory không bị mất khi Strict Mode chạy mount lần 2'
+    );
+
+    // Round 10 Finding 5: getGrantableRoles bounds non-owners to roles at or below live actor role (BR-INV-01)
+    const ownerRoles = getGrantableRoles('OWNER');
+    const opsRoles = getGrantableRoles('OPS_CSKH');
+    const whRoles = getGrantableRoles('WAREHOUSE');
+    const accountantRoles = getGrantableRoles('ACCOUNTANT');
+    const guestRoles = getGrantableRoles(null);
+
+    assertTest(
+      'UI & PRIVILEGE CEILING',
+      'FEAT-USR-01-UI-PRIVILEGE-CEILING-ROLES',
+      'Giới hạn danh sách vai trò có thể mời không vượt quá vai trò của tài khoản đang đăng nhập (BR-INV-01)',
+      ownerRoles.length === 4 &&
+        ownerRoles.some((r) => r.value === 'OWNER') &&
+        ownerRoles.some((r) => r.value === 'OPS_CSKH') &&
+        opsRoles.length === 1 &&
+        opsRoles[0].value === 'OPS_CSKH' &&
+        whRoles.length === 1 &&
+        whRoles[0].value === 'WAREHOUSE' &&
+        accountantRoles.length === 1 &&
+        accountantRoles[0].value === 'ACCOUNTANT' &&
+        guestRoles.length === 0,
+      'Chỉ hiển thị các vai trò bằng hoặc thấp hơn quyền của actor, không hiển thị vai trò vượt cấp'
     );
   }
 
