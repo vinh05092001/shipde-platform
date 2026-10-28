@@ -1154,18 +1154,24 @@ function selectReasoningCandidate(options, deps) {
   }
 
   const cooldownRejected = [];
+  const routeHealthMod = require('./route-health');
+  const routeHealthFile =
+    opts.routeHealthFile ||
+    d.routeHealthFile ||
+    path.join(rootDir, 'tools', 'ai-brain', 'data', 'model-route-health.json');
+  const routeStore =
+    d.routeHealth ||
+    opts.routeHealth ||
+    routeHealthMod.loadStore(routeHealthFile, { allowMissing: true });
+  const healthOpts = {
+    ...opts,
+    routeHealth: routeStore,
+    routeHealthFile,
+  };
   poolCandidates = poolCandidates.filter((candidate) => {
-    const healthOpts = {
-      ...opts,
-      routeHealth: d.routeHealth || opts.routeHealth,
-      routeHealthFile:
-        opts.routeHealthFile ||
-        d.routeHealthFile ||
-        path.join(resolveRootDir(opts, d), 'tools', 'ai-brain', 'data', 'model-route-health.json'),
-    };
     const reason =
-      require('./route-health').probeCooldown(candidate, healthOpts) ||
-      require('./route-health').contextOverflowObserved(candidate, healthOpts);
+      routeHealthMod.probeCooldown(candidate, healthOpts) ||
+      routeHealthMod.contextOverflowObserved(candidate, healthOpts);
     if (reason)
       cooldownRejected.push({
         candidateKey: candidate.candidateKey || candidateKey(candidate),
@@ -1271,6 +1277,22 @@ function selectReasoningCandidate(options, deps) {
         !excludedModels.has(canonicalHermesModelId(c.modelId || c.model))
     )
     .filter((c) => {
+      const isAgyLane =
+        c.gateway === 'agy-gateway' ||
+        c.sourceId === 'agy-gateway' ||
+        c.source === 'agy-gateway' ||
+        c.harness === 'agy-pool' ||
+        (typeof c.accountId === 'string' && /^agy\d{2}$/.test(c.accountId));
+      if (
+        isAgyLane &&
+        typeof (c.modelId || c.model) === 'string' &&
+        (c.modelId || c.model).includes('/')
+      ) {
+        return false;
+      }
+      return true;
+    })
+    .filter((c) => {
       const provKey = getCandidateProviderKey(c);
       if (
         provKey &&
@@ -1309,19 +1331,53 @@ function selectReasoningCandidate(options, deps) {
       return true;
     });
 
-  const annotated = candidatesMod.annotateCandidates(hermesCandidates, evidenceData, { now });
+  const quotaScanMod = d.quotaScan || require('./quota-scan');
+  const quotaState =
+    opts.quotaState || d.quotaState || quotaScanMod.loadQuotaState({ ...opts, ...d, rootDir });
+
+  const annotated = candidatesMod.annotateCandidates(hermesCandidates, evidenceData, {
+    now,
+    quotaState,
+  });
+
+  const getDispatchCfg =
+    (sourcesMod && sourcesMod.getDispatchConfig) || sourcesApi.getDispatchConfig;
+  const dispatchConfig =
+    opts.dispatchConfig ||
+    d.dispatchConfig ||
+    (getDispatchCfg ? getDispatchCfg(registry, opts) : null) ||
+    {};
+
+  const isPlannerDefault = (opts.role || 'planner.default') === 'planner.default';
+  const hermesOrch = dispatchConfig.hermesOrchestrator;
+
+  if (isPlannerDefault && !hermesOrch) {
+    throw new Error(
+      'CONFIG_MISSING: dispatch.hermesOrchestrator is required for planner.default model selection'
+    );
+  }
 
   const profile = {
     taskId: opts.taskId || opts.sessionId || 'hermes-reasoning-session',
     role: opts.role || 'planner.default',
-    complexity: 'complex',
+    complexity: opts.complexity || (isPlannerDefault ? hermesOrch.complexity : 'complex'),
     riskDomains: opts.riskDomains || ['reasoning', 'planning'],
-    qualityFloor: opts.qualityFloor !== undefined ? opts.qualityFloor : 80,
+    qualityFloor:
+      opts.qualityFloor !== undefined
+        ? opts.qualityFloor
+        : isPlannerDefault
+          ? hermesOrch.qualityFloor
+          : 80,
     // Operator decision 2026-10-12: drop the proof floor for model selection;
     // the output gates (independent exact-SHA review and CI) stay.
     proofFloor: opts.proofFloor || 'NONE',
     contextSize: opts.contextSize !== undefined ? opts.contextSize : HERMES_MIN_CONTEXT,
-    costCeiling: opts.costCeiling !== undefined ? opts.costCeiling : 5000,
+    costCeiling:
+      opts.costCeiling !== undefined
+        ? opts.costCeiling
+        : isPlannerDefault
+          ? hermesOrch.costCeiling
+          : 5000,
     currentWorkload: 0,
     resourceCeiling: 100,
     requiredHarness: 'hermes',
@@ -1329,9 +1385,25 @@ function selectReasoningCandidate(options, deps) {
     requiredCapabilities: [],
   };
 
+  const defaultWeightProfile = isPlannerDefault ? hermesOrch.weightProfile : 'QUALITY_FIRST';
+  const weightProfileName =
+    opts.weightProfile ||
+    (opts.assessment && opts.assessment.weightProfile) ||
+    defaultWeightProfile;
+
+  const weights =
+    (opts.assessment && opts.assessment.weights) ||
+    opts.weights ||
+    routingApi.WEIGHT_PROFILES[weightProfileName];
+  if (!weights) {
+    throw new Error(
+      `DISPATCH_CONFIG_INVALID: weightProfile "${weightProfileName}" is not defined in routing.WEIGHT_PROFILES`
+    );
+  }
+
   const assessment = {
-    weightProfile: 'QUALITY_FIRST',
-    weights: routingApi.WEIGHT_PROFILES.QUALITY_FIRST,
+    weightProfile: weightProfileName,
+    weights,
     renormalizeKnownScores: true,
   };
   const rankCtx = {
@@ -1340,6 +1412,7 @@ function selectReasoningCandidate(options, deps) {
     evidenceData,
     accounts,
     useStoredQuota: true,
+    quotaState,
     explorationBudget: opts.explorationBudget !== undefined ? Number(opts.explorationBudget) : 0,
     enforceKnownQuota: opts.enforceKnownQuota,
   };
@@ -1357,15 +1430,7 @@ function selectReasoningCandidate(options, deps) {
     ...deadProviderRejected,
   ];
   // Model quality excludes route price, latency, quota and route count.
-  const health = require('./route-health');
-  const routeStore =
-    d.routeHealth ||
-    health.loadStore(
-      opts.routeHealthFile ||
-        d.routeHealthFile ||
-        path.join(rootDir, 'tools', 'ai-brain', 'data', 'model-route-health.json'),
-      { allowMissing: true }
-    );
+  const health = routeHealthMod;
   const groups = new Map();
   for (const c of rankResult.ranking) {
     const model = canonicalHermesModelId(c.modelId || c.model);
@@ -1712,9 +1777,24 @@ function writeProvidersConfig(candidate, options, deps) {
     }
   }
 
-  let baseUrl = (candidate && candidate.accessPath) || (parsed && parsed.accessPath) || '';
-  if (!baseUrl || baseUrl === 'cli' || baseUrl.startsWith('cli-') || baseUrl === '*') {
-    baseUrl = (src && (src.accessPath || src.endpoint)) || '';
+  let baseUrl =
+    (/^https?:\/\//i.test(candidate?.accessPath) && candidate.accessPath) ||
+    candidate?.endpoint ||
+    candidate?.sourceEndpoint ||
+    (/^https?:\/\//i.test(parsed?.accessPath) && parsed.accessPath) ||
+    '';
+  if (
+    !baseUrl ||
+    baseUrl === 'cli' ||
+    baseUrl.startsWith('cli-') ||
+    baseUrl === '*' ||
+    baseUrl === 'direct'
+  ) {
+    baseUrl =
+      (/^https?:\/\//i.test(src?.accessPath) && src.accessPath) ||
+      src?.endpoint ||
+      (src && (src.accessPath || src.endpoint)) ||
+      '';
   }
 
   // Refusal on unknown or missing endpoint — NEVER fall back to 9router http://127.0.0.1:20128/v1
@@ -1863,6 +1943,19 @@ async function probeHermesCandidate(candidate, apiKeyEnv, env, options) {
 }
 
 /**
+ * Returns default prompt for Hermes when orchestrating a goal.
+ */
+function defaultGoalPrompt(goalId) {
+  return (
+    `You are the interactive orchestrator for goal ${goalId}. ` +
+    `Read and follow the ${CONTROLLER_SKILL_NAME} skill. ` +
+    `Check the current state via "node tools/ai-brain/cli.js goal status ${goalId}". ` +
+    `If items need planning, submit the plan. Then start or resume execution via "node tools/ai-brain/cli.js goal run ${goalId}". ` +
+    `Monitor execution progress and report completion or blockers with concrete evidence.`
+  );
+}
+
+/**
  * Builds the Hermes command arguments:
  * 'chat -m <modelId> --provider <provider-name> --continue <sessionId> --create-if-missing' plus skill file.
  */
@@ -1911,6 +2004,21 @@ function buildHermesArgv(candidate, session, options) {
         ? rawSkill
         : CONTROLLER_SKILL_NAME;
     args.push('-s', skillName);
+  }
+
+  const query =
+    opts.query ||
+    opts.q ||
+    (opts.acp ? undefined : opts.prompt) ||
+    (opts.goal ? defaultGoalPrompt(opts.goal) : null);
+  if (query) {
+    args.push('-q', String(query));
+    if (opts.yolo !== false) {
+      args.push('--yolo');
+    }
+    if (opts.acceptHooks !== false) {
+      args.push('--accept-hooks');
+    }
   }
 
   if (Array.isArray(opts.extraArgs)) {
@@ -2002,6 +2110,11 @@ async function probeRankedRoutes(
     deadline = Infinity,
     now = Date.now,
     maxConcurrentProbes = 8,
+    maxProbes = Infinity,
+    // When given, a failed probe only settles its account if the failure was
+    // account-wide; a model-level failure (e.g. 404 alias) leaves the account's
+    // other, possibly stronger, routes in contention.
+    accountExhausted = null,
   }
 ) {
   if (accountKey === undefined) accountKey = candidateAccountKey;
@@ -2010,6 +2123,7 @@ async function probeRankedRoutes(
   const busyAccounts = new Set();
   let winner = null;
   let firstNonRouteError = null;
+  let probesStarted = 0;
   try {
     while (!winner) {
       let bestSuccess = ordered.findIndex((c) => outcomes.get(c.candidateKey) === true);
@@ -2027,9 +2141,11 @@ async function probeRankedRoutes(
           (bestSuccess >= 0 && index > bestSuccess) ||
           inFlight.size >= maxConcurrentProbes ||
           busyAccounts.has(account) ||
-          now() >= deadline
+          now() >= deadline ||
+          probesStarted >= maxProbes
         )
           continue;
+        probesStarted += 1;
         busyAccounts.add(account);
         const promise = runProbe(route)
           .then((ok) => ({ route, account, ok }))
@@ -2042,7 +2158,13 @@ async function probeRankedRoutes(
       const resolvedAccounts = new Set(
         ordered
           .slice(0, Math.max(bestSuccess, 0))
-          .filter((c) => outcomes.has(c.candidateKey))
+          .filter(
+            (c) =>
+              outcomes.has(c.candidateKey) &&
+              (typeof accountExhausted !== 'function' ||
+                outcomes.get(c.candidateKey) === true ||
+                accountExhausted(accountKey(c)))
+          )
           .map((c) => accountKey(c))
       );
       if (
@@ -2265,9 +2387,6 @@ async function launchHermesSession(options, deps) {
     initialModelRanking ||= selection.modelRanking;
     initialRejected ||= selection.rejected;
 
-    const ordered = [...selection.ranking];
-    const preferredIndex = ordered.findIndex((c) => c.candidateKey === selection.chosen);
-    if (preferredIndex > 0) ordered.unshift(...ordered.splice(preferredIndex, 1));
     const outcomes = new Map();
     let winner = null;
     let firstNonRouteError = null;
@@ -2282,6 +2401,106 @@ async function launchHermesSession(options, deps) {
       const logError = recordProbeRefusal(candidate, reason);
       if (logError) probeReasons.push(logError.message);
     };
+
+    // Drop candidates whose canonical quota-state scope is QUOTA/AUTH/NO_CHANNEL/REGION
+    const quotaScanApi = d.quotaScan || require('./quota-scan');
+    const sessionQuotaState =
+      opts.quotaState || d.quotaState || quotaScanApi.loadQuotaState({ ...opts, ...d, rootDir });
+    const nowProbe = Date.now();
+    const blockedCodes = new Set(['QUOTA', 'AUTH', 'NO_CHANNEL', 'REGION']);
+
+    const qualifiedRoutes = [];
+    for (const c of selection.ranking) {
+      const scopeState = quotaScanApi.getQuotaScopeState(c, sessionQuotaState, {
+        ...opts,
+        now: nowProbe,
+      });
+      const isBlocked =
+        scopeState &&
+        blockedCodes.has(scopeState.code) &&
+        (quotaScanApi.isScopeBlocked
+          ? quotaScanApi.isScopeBlocked(scopeState, nowProbe, opts)
+          : true);
+      if (isBlocked) {
+        const reason = `QUOTA_SCOPE_${scopeState.code}: ${scopeState.scope || scopeState.source || scopeState.reason || 'blocked'}`;
+        refusal(c, reason, { exclude: true });
+        continue;
+      }
+      qualifiedRoutes.push(c);
+    }
+
+    // Order routes with recent COMPLETION evidence first
+    qualifiedRoutes.sort((a, b) => {
+      const scopeA = quotaScanApi.getQuotaScopeState(a, sessionQuotaState, {
+        ...opts,
+        now: nowProbe,
+      });
+      const scopeB = quotaScanApi.getQuotaScopeState(b, sessionQuotaState, {
+        ...opts,
+        now: nowProbe,
+      });
+      const evA =
+        (scopeA && scopeA.code === 'OK' && scopeA.evidence === 'COMPLETION') ||
+        a.routeSelection?.knownGood ||
+        (Array.isArray(a.evidence) &&
+          a.evidence.some((e) => e.status === 'passed' || e.proofLevel === 'WORK_ITEM_PASS'));
+      const evB =
+        (scopeB && scopeB.code === 'OK' && scopeB.evidence === 'COMPLETION') ||
+        b.routeSelection?.knownGood ||
+        (Array.isArray(b.evidence) &&
+          b.evidence.some((e) => e.status === 'passed' || e.proofLevel === 'WORK_ITEM_PASS'));
+      return Number(Boolean(evB)) - Number(Boolean(evA));
+    });
+
+    // Cap the number of probe candidates
+    const maxHermesProbes =
+      opts.maxHermesProbes ||
+      dispatchConfig.hermesOrchestrator?.maxProbes ||
+      dispatchConfig.maxHermesProbes;
+
+    if (!maxHermesProbes) {
+      throw new Error('CONFIG_MISSING: dispatch.hermesOrchestrator.maxProbes is required');
+    }
+
+    const maxRoutesPerAccount =
+      opts.maxRoutesPerAccount || dispatchConfig.hermesOrchestrator?.maxRoutesPerAccount;
+
+    if (!maxRoutesPerAccount) {
+      throw new Error(
+        'CONFIG_MISSING: dispatch.hermesOrchestrator.maxRoutesPerAccount is required'
+      );
+    }
+    const accountRouteCounts = new Map();
+    const candidatePool = [];
+    const overflowRoutes = [];
+    for (const route of qualifiedRoutes) {
+      const accKey = probeAccountKey(route);
+      const count = accountRouteCounts.get(accKey) || 0;
+      if (count < maxRoutesPerAccount) {
+        accountRouteCounts.set(accKey, count + 1);
+        candidatePool.push(route);
+      } else {
+        overflowRoutes.push(route);
+      }
+    }
+    const combined = candidatePool.concat(overflowRoutes);
+    const ordered = combined.slice(0, Math.max(maxHermesProbes * 4, 32));
+
+    if (!ordered.length) {
+      const err = new Error(
+        probeReasons.length
+          ? `NO_REASONING_CANDIDATE: ${probeReasons.join('; ')}`
+          : 'NO_REASONING_CANDIDATE: no qualified live route for orchestrator'
+      );
+      err.code = 'NO_REASONING_CANDIDATE';
+      err.reasons = probeReasons.slice();
+      throw err;
+    }
+
+    const preferredIndex = ordered.findIndex((c) => c.candidateKey === selection.chosen);
+    if (preferredIndex > 0) ordered.unshift(...ordered.splice(preferredIndex, 1));
+    // Probe accounts whose failure was account-wide (credit, login, provider dead).
+    const exhaustedProbeAccounts = new Set();
     const runProbe = async (candidate) => {
       let config;
       try {
@@ -2296,6 +2515,23 @@ async function launchHermesSession(options, deps) {
         return false;
       }
       if (opts.dryRun && !opts.probe) return true;
+      const isAgyLane =
+        candidate.gateway === 'agy-gateway' ||
+        candidate.sourceId === 'agy-gateway' ||
+        candidate.source === 'agy-gateway' ||
+        candidate.harness === 'agy-pool' ||
+        (typeof candidate.accountId === 'string' && /^agy\d{2}$/.test(candidate.accountId));
+      if (
+        isAgyLane &&
+        typeof (candidate.modelId || candidate.model) === 'string' &&
+        (candidate.modelId || candidate.model).includes('/')
+      ) {
+        refusal(
+          candidate,
+          'HERMES_ROUTE_PROBE_FAILED 9router model ids must never reach agy lanes'
+        );
+        return false;
+      }
       const isCodexProvider =
         (candidate &&
           (candidate.provider === 'openai-codex' ||
@@ -2433,14 +2669,17 @@ async function launchHermesSession(options, deps) {
         }
         const provKey = getCandidateProviderKey(candidate);
         if (provKey) deadProviders.set(provKey, { cause, account: specificAcc });
+        exhaustedProbeAccounts.add(probeAccountKey(candidate));
       }
       return false;
     };
     const probeBatch = await probeRankedRoutes(ordered, {
       runProbe,
       accountKey: probeAccountKey,
+      accountExhausted: (account) => exhaustedProbeAccounts.has(account),
       refusal,
       maxConcurrentProbes: dispatchConfig.maxConcurrentProbes,
+      maxProbes: maxHermesProbes,
       deadline: opts.dryRun && !opts.probe ? Infinity : probeDeadline,
       skip: (route, account) => {
         const specificAcc = health.extractAccountKey(route, {
@@ -2479,14 +2718,17 @@ async function launchHermesSession(options, deps) {
         winner = ordered[bestSuccess];
       }
     }
-    for (const route of ordered) {
+    const winnerIndex = winner ? ordered.indexOf(winner) : -1;
+    for (const [index, route] of ordered.entries()) {
       if (!outcomes.has(route.candidateKey)) {
         const higherWon = Boolean(winner && Date.now() < probeDeadline);
         refusal(
           route,
-          higherWon
-            ? 'HERMES_ROUTE_PROBE_SKIPPED higher-ranked route succeeded'
-            : 'HERMES_ROUTE_PROBE_SKIPPED wall-clock budget exhausted',
+          !higherWon
+            ? 'HERMES_ROUTE_PROBE_SKIPPED wall-clock budget exhausted'
+            : index < winnerIndex
+              ? 'HERMES_ROUTE_PROBE_SKIPPED account already settled by an account-level failure'
+              : 'HERMES_ROUTE_PROBE_SKIPPED higher-ranked route succeeded',
           { exclude: !higherWon }
         );
       }
@@ -2542,6 +2784,40 @@ async function launchHermesSession(options, deps) {
     } catch {}
     attempt += 1;
 
+    const chosenModelId = candidate.modelId || candidate.model;
+    const chosenScore =
+      candidate.score !== undefined ? candidate.score : (selection.chosenRoute?.score ?? 'unknown');
+    const chosenWhy =
+      candidate.routeSelection?.reason ||
+      candidate.reason ||
+      (selection.chosenRoute && selection.chosenRoute.reason) ||
+      'Controller selected live route';
+    const decisionLine = `[HERMES_DISPATCH] model=${chosenModelId} score=${chosenScore} provider=${configResult.providerName} reason=${chosenWhy}`;
+    console.log(decisionLine);
+
+    if (opts.goal || (session.goalIds && session.goalIds.length)) {
+      try {
+        const goalId = String(opts.goal || session.goalIds[0]);
+        const goalsMod = d.goals || require('./goals');
+        const goalsDir =
+          opts.goalsDir ||
+          (goalsMod.resolveGoalsDir
+            ? goalsMod.resolveGoalsDir(rootDir, opts)
+            : path.join(rootDir, 'data', 'goals'));
+        const goalDir = path.join(goalsDir, goalId);
+        const fsMod = opts.fs || d.fs || fs;
+        fsMod.mkdirSync(goalDir, { recursive: true });
+        const runLogPath = path.join(goalDir, 'run.log');
+        fsMod.appendFileSync(runLogPath, `[${new Date().toISOString()}] ${decisionLine}\n`, 'utf8');
+      } catch {}
+    }
+
+    env.HERMES_MODEL = String(configResult.modelId || candidate.modelId);
+    env.HERMES_PROVIDER = String(configResult.providerName);
+    if (configResult.baseUrl) {
+      env.OPENAI_BASE_URL = String(configResult.baseUrl);
+    }
+
     const argv = opts.acp
       ? ['acp']
       : buildHermesArgv(candidate, session, {
@@ -2552,6 +2828,10 @@ async function launchHermesSession(options, deps) {
           extraArgs: opts.extraArgs,
           skillName: opts.skillName,
           skill: opts.skill,
+          goal: opts.goal,
+          query: opts.query || opts.q || (opts.acp ? undefined : opts.prompt),
+          yolo: opts.yolo,
+          acceptHooks: opts.acceptHooks,
         });
 
     const resolverInput = Object.assign(
@@ -2610,6 +2890,7 @@ async function launchHermesSession(options, deps) {
     if (opts.dryRun) {
       return {
         status: 'dry_run',
+        decisionLine,
         modelRanking: initialModelRanking,
         chosenRoute: selection.chosenRoute,
         sessionId: session.sessionId,
@@ -2628,29 +2909,51 @@ async function launchHermesSession(options, deps) {
     if (opts.acp) {
       const statusPath = path.join(getHermesDir(rootDir), 'acp-status.json');
       const fsApi = opts.fs || d.fs || fs;
-      const acpStatus = await (d.runAcpTurn || require('./hermes-acp').runAcpTurn)(
-        resolved.command,
-        resolved.args,
-        {
-          cwd: rootDir,
-          env,
-          modelId: candidate.modelId,
-          providerName: configResult.providerName,
-          prompt: `Read and follow the ${CONTROLLER_SKILL_NAME} skill before acting.\n${opts.prompt}`,
-          timeoutMs: opts.acpTimeoutMs,
-          onStatus: (status) => {
-            fsApi.mkdirSync(path.dirname(statusPath), { recursive: true });
-            const temp = statusPath + '.tmp';
-            fsApi.writeFileSync(
-              temp,
-              JSON.stringify({ ...status, sessionId: session.sessionId }),
-              'utf8'
-            );
-            atomicRenameSync(temp, statusPath, { fs: fsApi });
+      let acpStatus;
+      try {
+        acpStatus = await (d.runAcpTurn || require('./hermes-acp').runAcpTurn)(
+          resolved.command,
+          resolved.args,
+          {
+            cwd: rootDir,
+            env,
+            modelId: candidate.modelId,
+            providerName: configResult.providerName,
+            prompt: `Read and follow the ${CONTROLLER_SKILL_NAME} skill before acting.\n${opts.prompt}`,
+            timeoutMs: opts.acpTimeoutMs,
+            onStatus: (status) => {
+              fsApi.mkdirSync(path.dirname(statusPath), { recursive: true });
+              const temp = statusPath + '.tmp';
+              fsApi.writeFileSync(
+                temp,
+                JSON.stringify({ ...status, sessionId: session.sessionId }),
+                'utf8'
+              );
+              atomicRenameSync(temp, statusPath, { fs: fsApi });
+            },
           },
-        },
-        d
-      );
+          d
+        );
+      } catch (acpErr) {
+        // A missing Hermes-side provider login (reported in the ACP error details) is
+        // account-scoped: remember it, drop this route and reselect, as the chat path does.
+        const missing = String((acpErr && acpErr.message) || '').match(
+          /No [a-z0-9 -]*credentials stored\b[^\r\n]*/i
+        );
+        if (!missing) throw acpErr;
+        health.rememberAccountCooldown(candidate, 'account_auth_failed', undefined, {
+          ...opts,
+          registry: d.registry || opts.registry,
+          routeHealth,
+          routeHealthFile,
+        });
+        excludedCandidates.push(candidate.candidateKey);
+        if (candidate._preRewriteKey) excludedCandidates.push(candidate._preRewriteKey);
+        const runtimeReason = `HERMES_RUNTIME_ROUTE_FAILURE ${missing[0].slice(0, 400)}`;
+        probeReasons.push(`${candidate.candidateKey}: ${runtimeReason}`);
+        recordProbeRefusal(candidate, runtimeReason);
+        continue;
+      }
       return {
         status: acpStatus.state,
         exitCode: acpStatus.stopReason === 'end_turn' ? 0 : 1,
@@ -2910,6 +3213,15 @@ async function chatCommand(args, deps) {
   if (args.execPath) opts.execPath = args.execPath;
   if (args.resolveHermesCommand) opts.resolveHermesCommand = args.resolveHermesCommand;
   if (args.resolveHermesLaunch) opts.resolveHermesLaunch = args.resolveHermesLaunch;
+  if (args.query) opts.query = args.query;
+  if (args.q) opts.query = args.q;
+  if (args.prompt) opts.prompt = args.prompt;
+  if (args.yolo !== undefined) opts.yolo = Boolean(args.yolo);
+  if (args['accept-hooks'] !== undefined) opts.acceptHooks = Boolean(args['accept-hooks']);
+  if (Array.isArray(args._) && args._.length > 1) {
+    const trailing = args._.slice(1).join(' ').trim();
+    if (trailing && !opts.query && !opts.prompt) opts.query = trailing;
+  }
 
   try {
     const result = await launchHermesSession(opts, d);
@@ -2954,6 +3266,7 @@ module.exports = {
   selectReasoningCandidate,
   refreshReasoningContext,
   writeProvidersConfig,
+  defaultGoalPrompt,
   buildHermesArgv,
   probeHermesCandidate,
   resolveHermesLaunchCommand,

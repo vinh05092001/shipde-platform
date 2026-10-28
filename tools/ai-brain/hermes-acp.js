@@ -128,7 +128,11 @@ function runAcpTurn(command, args, options = {}, deps = {}) {
         entry.reject(
           new Error(
             'ACP_RPC_ERROR_' +
-              (Number.isInteger(message.error.code) ? message.error.code : 'UNKNOWN')
+              (Number.isInteger(message.error.code) ? message.error.code : 'UNKNOWN') +
+              // Hermes puts the actionable cause (e.g. a missing provider login) in data.details.
+              (message.error.data && typeof message.error.data.details === 'string'
+                ? ': ' + message.error.data.details.slice(0, 400)
+                : '')
           )
         );
       else if (Object.hasOwn(message, 'result')) entry.resolve(message.result);
@@ -189,6 +193,9 @@ function runAcpTurn(command, args, options = {}, deps = {}) {
       const expectedModels = [
         `${options.providerName}:${options.modelId}`,
         `custom:${options.providerName}:${options.modelId}`,
+        // Hermes 0.21 reports the Controller-written custom provider as custom:<model>
+        // (the config holds only that provider, so the model id still binds exactly).
+        `custom:${options.modelId}`,
       ];
       if (
         typeof session?.sessionId !== 'string' ||

@@ -21,7 +21,8 @@ readline.createInterface({input:process.stdin}).on('line', line => {
     if(mode === 'rpcerror') return send({id:m.id,error:{code:-32000,message:'SECRET'}});
     return reply({protocolVersion:1});
   }
-  if(m.method === 'session/new') return reply({sessionId:'s1',models:{currentModelId:mode === 'wrongmodel' ? 'other:chosen' : 'router:chosen'}});
+  if(m.method === 'session/new' && mode === 'nologin') return send({id:m.id,error:{code:-32603,message:'Internal error',data:{details:'No Codex credentials stored. Run hermes auth add openai-codex'}}});
+  if(m.method === 'session/new') return reply({sessionId:'s1',models:{currentModelId:mode === 'wrongmodel' ? 'other:chosen' : mode === 'custommodel' ? 'custom:chosen' : 'router:chosen'}});
   if(m.method === 'session/prompt') {
     if(mode === 'wrongmodel') process.exit(5);
     const event = (id,update) => send({method:'session/update',params:{sessionId:id,update}});
@@ -105,4 +106,13 @@ for (const [mode, expected] of [
 
 test('ACP missing prompt refuses before launching a process', async () => {
   await assert.rejects(run('ok', { prompt: '' }).promise, /ACP_PROMPT_REQUIRED/);
+});
+
+test('ACP accepts the custom:<model> binding Hermes reports for the Controller provider', async () => {
+  const status = await run('custommodel').promise;
+  assert.equal(status.stopReason, 'end_turn');
+});
+
+test('ACP RPC errors carry the Hermes details so a missing login can be reselected', async () => {
+  await assert.rejects(run('nologin').promise, /ACP_RPC_ERROR_-32603: No Codex credentials stored/);
 });

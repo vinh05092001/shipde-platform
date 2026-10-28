@@ -96,6 +96,7 @@ function providerFailureBodyMatches(body) {
 const ItemStatus = Object.freeze({
   COMPLETED: 'completed',
   BLOCKED: 'blocked',
+  BLOCKED_NO_ROUTE: 'BLOCKED_NO_ROUTE',
   DEFERRED: 'deferred',
   // DT-R02: an item the format gate stopped before review. It is neither
   // completed nor an infrastructure block — the work exists, it is unformatted,
@@ -107,6 +108,7 @@ const RunStatus = Object.freeze({
   PUBLISHED_DRAFT: 'PUBLISHED_DRAFT',
   COMPLETED: 'COMPLETED',
   BLOCKED: 'BLOCKED',
+  BLOCKED_NO_ROUTE: 'BLOCKED_NO_ROUTE',
   REFUSED: 'REFUSED',
   FAILED: 'FAILED',
 });
@@ -9180,7 +9182,12 @@ function finish(log, statusOf, ctx) {
     if (status === ItemStatus.COMPLETED) completed.push(item.id);
     // A format-gate refusal is a stop the next run re-attempts after the files
     // are formatted, so it is reported beside the blocks and never as deferred.
-    else if (status === ItemStatus.BLOCKED || status === ItemStatus.REFUSED) blocked.push(item.id);
+    else if (
+      status === ItemStatus.BLOCKED ||
+      status === ItemStatus.BLOCKED_NO_ROUTE ||
+      status === ItemStatus.REFUSED
+    )
+      blocked.push(item.id);
     else deferred.push(item.id);
   }
   log.reconciliation = {
@@ -9211,7 +9218,10 @@ function finish(log, statusOf, ctx) {
   ) {
     log.status = RunStatus.PUBLISHED_DRAFT;
   } else if (blocked.length > 0) {
-    log.status = RunStatus.BLOCKED;
+    const hasBlockedNoRoute = (log.outcomes || []).some(
+      (o) => o.status === ItemStatus.BLOCKED_NO_ROUTE || o.reasonCode === 'BLOCKED_NO_ROUTE'
+    );
+    log.status = hasBlockedNoRoute ? RunStatus.BLOCKED_NO_ROUTE : RunStatus.BLOCKED;
   } else {
     log.status = RunStatus.COMPLETED;
   }

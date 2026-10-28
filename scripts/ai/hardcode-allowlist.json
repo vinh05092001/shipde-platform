@@ -18,5 +18,10 @@
     "file": "tools/ai-brain/sources.json",
     "pattern": "probeBudgetMs|schemaProbeBudgetMs",
     "reason": "Operator configurable probe budget limits in sources.json dispatch configuration (TASK-AI-142)"
+  },
+  {
+    "file": "tools/ai-brain/sources.json",
+    "pattern": "^(qualityFloor|maxProbes): \\d+$",
+    "reason": "Operator configurable Hermes orchestrator profile and probe limits in sources.json dispatch configuration (TASK-AI-142)"
   }
 ]
