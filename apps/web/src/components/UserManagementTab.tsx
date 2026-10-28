@@ -557,7 +557,9 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
       if (!userRes.ok) {
         const errorData = await userRes.json().catch(() => ({}));
         const msg =
-          errorData.error?.message || errorData.message || 'Không thể cập nhật thông tin người dùng';
+          errorData.error?.message ||
+          errorData.message ||
+          'Không thể cập nhật thông tin người dùng';
         setEditError(msg);
         const map = mapCanonicalFieldErrors(errorData, msg);
         if (Object.keys(map).length > 0) {
