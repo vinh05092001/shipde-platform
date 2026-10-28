@@ -198,3 +198,104 @@ test('unprobed combo candidate is treated as recentRouteSuccess and prioritized 
   assert.equal(ordered.length, 1);
   assert.equal(ordered[0].modelId, 'shipde-writer');
 });
+
+test('generateCandidates preserves individual 9router candidates when nineRouterWriterCombo is absent or null', () => {
+  const sources = require('../sources');
+  const candidatesApi = require('../candidates');
+  const registry = sources.loadSources();
+  const regWithoutCombo = JSON.parse(JSON.stringify(registry));
+  delete regWithoutCombo.dispatch.nineRouterWriterCombo;
+
+  const mockAccounts = [
+    {
+      id: '9router',
+      source: '9router',
+      capabilities: { tools: true },
+    },
+  ];
+
+  const candsWithout = candidatesApi.generateCandidates({
+    registry: regWithoutCombo,
+    accounts: mockAccounts,
+    catalogue: ['ninerouter/gh/gpt-4o'],
+    sourceModels: { '9router': ['ninerouter/gh/gpt-4o'] },
+    forWriter: true,
+  });
+
+  const individualPreserved = candsWithout.filter((c) =>
+    candidatesApi.isIndividualNineRouterCandidate(c, null)
+  );
+  assert.ok(
+    individualPreserved.length > 0,
+    'Individual 9router candidates must be preserved when combo is absent'
+  );
+
+  // When nineRouterWriterCombo is present, individual candidates are filtered
+  const regWithCombo = JSON.parse(JSON.stringify(registry));
+  regWithCombo.dispatch.nineRouterWriterCombo = 'shipde-writer';
+
+  const candsWith = candidatesApi.generateCandidates({
+    registry: regWithCombo,
+    accounts: mockAccounts,
+    catalogue: ['ninerouter/gh/gpt-4o'],
+    sourceModels: { '9router': ['ninerouter/gh/gpt-4o'] },
+    forWriter: true,
+  });
+
+  const individualFiltered = candsWith.filter((c) =>
+    candidatesApi.isIndividualNineRouterCandidate(c, 'shipde-writer')
+  );
+  assert.equal(
+    individualFiltered.length,
+    0,
+    'Individual 9router candidates must be filtered when combo is active'
+  );
+});
+
+test('combo candidate limits are sourced from live source modelMeta or registry config without hardcoded values', () => {
+  const candidatesApi = require('../candidates');
+  const reg = {
+    dispatch: {
+      nineRouterWriterCombo: 'shipde-writer',
+      nineRouterWriterComboLimits: {
+        contextWindow: 128000,
+        maxOutputTokens: 8192,
+      },
+    },
+    sources: [
+      {
+        id: '9router',
+        kind: 'router',
+        endpoint: 'http://127.0.0.1:20128/v1',
+        modelMeta: {
+          'shipde-writer': { contextWindow: 200000, maxOutputTokens: 16384 },
+        },
+      },
+    ],
+  };
+
+  const cands = candidatesApi.generateCandidates({
+    registry: reg,
+    accounts: [{ id: '9router', source: '9router' }],
+    catalogue: ['ninerouter/model-x'],
+    forWriter: true,
+  });
+
+  const combo = cands.find((c) => c.comboMembers);
+  assert.ok(combo, 'Combo candidate must be generated');
+  assert.equal(combo.contextWindow, 200000, 'Live source modelMeta should take precedence');
+  assert.equal(combo.maxOutputTokens, 16384);
+
+  // When live modelMeta is absent, registry config limits are used
+  delete reg.sources[0].modelMeta['shipde-writer'];
+  const candsConfig = candidatesApi.generateCandidates({
+    registry: reg,
+    accounts: [{ id: '9router', source: '9router' }],
+    catalogue: ['ninerouter/model-x'],
+    forWriter: true,
+  });
+  const comboConfig = candsConfig.find((c) => c.comboMembers);
+  assert.ok(comboConfig);
+  assert.equal(comboConfig.contextWindow, 128000, 'Registry config limits should be used');
+  assert.equal(comboConfig.maxOutputTokens, 8192);
+});

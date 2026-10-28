@@ -68,6 +68,72 @@ function resolveComboMembers(opts, registry) {
   return comboLib.resolveComboMembers(opts, registry, getWriterComboName);
 }
 
+function resolveComboLimits(source, registry, opts, comboName, members) {
+  const regDispatch =
+    (registry && registry.dispatch) ||
+    (opts && opts.registry && opts.registry.dispatch) ||
+    {};
+
+  const configLimits =
+    regDispatch.nineRouterWriterComboLimits ||
+    regDispatch.writerComboLimits ||
+    regDispatch.comboLimits ||
+    {};
+
+  const metaLookup = (src, id) => {
+    if (!src || !src.modelMeta || !id) return null;
+    if (src.modelMeta[id]) return src.modelMeta[id];
+    const stripped = id.startsWith('ninerouter/') ? id.slice('ninerouter/'.length) : null;
+    if (stripped && src.modelMeta[stripped]) return src.modelMeta[stripped];
+    if (!id.startsWith('ninerouter/') && src.modelMeta[`ninerouter/${id}`]) {
+      return src.modelMeta[`ninerouter/${id}`];
+    }
+    return null;
+  };
+
+  const directMeta =
+    metaLookup(source, comboName) ||
+    (opts &&
+      opts.modelMeta &&
+      (opts.modelMeta[comboName] || opts.modelMeta[`ninerouter/${comboName}`]));
+
+  let memberCw = undefined;
+  let memberMaxOut = undefined;
+  if (Array.isArray(members) && members.length > 0) {
+    const memberWindows = [];
+    const memberOutputs = [];
+    for (const m of members) {
+      const mMeta = metaLookup(source, m) || (opts && opts.modelMeta && opts.modelMeta[m]);
+      if (mMeta) {
+        const cw = toPositiveInteger(mMeta.contextWindow ?? mMeta.capabilities?.contextWindow);
+        const mo = toPositiveInteger(mMeta.maxOutputTokens ?? mMeta.capabilities?.maxOutputTokens);
+        if (cw !== undefined) memberWindows.push(cw);
+        if (mo !== undefined) memberOutputs.push(mo);
+      }
+    }
+    if (memberWindows.length > 0) memberCw = Math.min(...memberWindows);
+    if (memberOutputs.length > 0) memberMaxOut = Math.min(...memberOutputs);
+  }
+
+  const contextWindow = toPositiveInteger(
+    directMeta?.contextWindow ??
+      directMeta?.capabilities?.contextWindow ??
+      memberCw ??
+      opts?.contextWindow ??
+      configLimits.contextWindow
+  );
+
+  const maxOutputTokens = toPositiveInteger(
+    directMeta?.maxOutputTokens ??
+      directMeta?.capabilities?.maxOutputTokens ??
+      memberMaxOut ??
+      opts?.maxOutputTokens ??
+      configLimits.maxOutputTokens
+  );
+
+  return { contextWindow, maxOutputTokens };
+}
+
 /**
  * Parse upstream prefix from a gateway model id.
  * e.g. "gh/gpt-4o" → { upstream: "gh", model: "gpt-4o" }
@@ -1014,6 +1080,7 @@ function pushOpencodeProviderWriters(out, source, o, bound) {
   if (comboName && isNineRouter) {
     const members = resolveComboMembers(o, reg);
     const comboModelId = `${key}/${comboName}`;
+    const comboLimits = resolveComboLimits(source, reg, opts, comboName, members);
     const existing = out.find((c) => c.harness === 'opencode-direct' && c.modelId === comboModelId);
     if (!existing) {
       out.push({
@@ -1030,8 +1097,12 @@ function pushOpencodeProviderWriters(out, source, o, bound) {
         sourceEndpoint: source.endpoint,
         kind: source.kind,
         capabilities: { tools: true, jsonSchema: true },
-        contextWindow: 128000,
-        maxOutputTokens: 8192,
+        ...(comboLimits.contextWindow !== undefined
+          ? { contextWindow: comboLimits.contextWindow }
+          : {}),
+        ...(comboLimits.maxOutputTokens !== undefined
+          ? { maxOutputTokens: comboLimits.maxOutputTokens }
+          : {}),
         sharedQuota: 'unknown',
         comboMembers: members,
         ...(isMissing
@@ -1267,6 +1338,7 @@ function generateCandidatesWithCatalog(opts) {
         const harness = harnessOf(source, registry) || 'paseo';
         const accessPath = accessPathOf(source, registry) || source.endpoint;
         const members = resolveComboMembers(o, registry);
+        const comboLimits = resolveComboLimits(source, registry, o, comboName, members);
         const acc = bound[0];
         candidates.push({
           harness,
@@ -1282,8 +1354,12 @@ function generateCandidatesWithCatalog(opts) {
           sourceEndpoint: source.endpoint,
           kind: source.kind,
           capabilities: { tools: true, jsonSchema: true },
-          contextWindow: 128000,
-          maxOutputTokens: 8192,
+          ...(comboLimits.contextWindow !== undefined
+            ? { contextWindow: comboLimits.contextWindow }
+            : {}),
+          ...(comboLimits.maxOutputTokens !== undefined
+            ? { maxOutputTokens: comboLimits.maxOutputTokens }
+            : {}),
           sharedQuota: 'unknown',
           comboMembers: members,
           ...(acc && acc.credentialEnvMissing
@@ -1514,6 +1590,7 @@ function generateCandidatesWithCatalog(opts) {
         const isNineRouter = comboLib.isNineRouterSource(source);
         if (comboName && isNineRouter) {
           const members = resolveComboMembers(o, registry);
+          const comboLimits = resolveComboLimits(source, registry, o, comboName, members);
           const acc = bound[0];
           candidates.push({
             harness: 'direct-http',
@@ -1529,8 +1606,12 @@ function generateCandidatesWithCatalog(opts) {
             sourceEndpoint: source.endpoint,
             kind: source.kind,
             capabilities: { tools: true, jsonSchema: true },
-            contextWindow: 128000,
-            maxOutputTokens: 8192,
+            ...(comboLimits.contextWindow !== undefined
+              ? { contextWindow: comboLimits.contextWindow }
+              : {}),
+            ...(comboLimits.maxOutputTokens !== undefined
+              ? { maxOutputTokens: comboLimits.maxOutputTokens }
+              : {}),
             sharedQuota: 'unknown',
             comboMembers: members,
             ...(acc && acc.credentialEnvMissing

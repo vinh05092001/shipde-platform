@@ -27,6 +27,201 @@ Allowed paths:
 - `docs/product-spec/work-items/TASK-AI-142.md`
 - Tests: `tools/ai-brain/test/task-ai-142-quota-scan.test.js`, `task-ai-142-account-quota-scope.test.js`, `task-ai-142-aa-priors.test.js`, `task-ai-142-priors-matching.test.js`, `task-ai-142-priors-ranking.test.js`, `task-ai-142-unscoped-ranking.test.js`, `task-ai-142-capability-probe.test.js`, `task-ai-142-candidate-filter-alias.test.js`, `task-ai-142-iteracompute.test.js`, `task-ai-142-route-health-isolation.test.js`, `ninerouter-combo.test.js`, `candidates.test.js`.
 
+### Acceptance matrix (Slice A — 2026-10-28)
+
+| AC/Test ID | Scenario | Expected result | Evidence required / Test suites | Status |
+| --- | --- | --- | --- | --- |
+| `AC-AI-142-A-01` | Quota scan | Periodic quota scanning across upstream scopes and agent CLI lanes; maps HTTP statuses and body signals to canonical codes (`OK`, `AUTH`, `QUOTA`, `TIER`, `RATE`, `REGION`, `NO_CHANNEL`); extracts `retryAfter`; isolates exhausted account scopes without leaking failures to other accounts; validates streaming SSE completions without accepting empty metadata-only chunks; isolates route-scan files per run. | `tools/ai-brain/test/task-ai-142-quota-scan.test.js`, `tools/ai-brain/test/task-ai-142-account-quota-scope.test.js` | PASS |
+| `AC-AI-142-A-02` | Quota-aware ranking | Candidate filtering via `preferKnownGood` removes candidates in blocked quota scopes and records them in rejected; ranks unscoped CLI routes appropriately below verified live routes; ensures route health store immutability and test isolation; scores models with coverage shrinkage toward ranking mean, fallback benchmarks, and fresh route evidence prioritization. | `tools/ai-brain/test/task-ai-142-unscoped-ranking.test.js`, `tools/ai-brain/test/task-ai-142-route-health-isolation.test.js`, `tools/ai-brain/test/task-ai-142-aa-priors.test.js`, `tools/ai-brain/test/task-ai-142-priors-matching.test.js`, `tools/ai-brain/test/task-ai-142-priors-ranking.test.js` | PASS |
+| `AC-AI-142-A-03` | Combo filter | `buildWriterComboModels` orders 9Router models by benchmark score descending and requires `tools.ok` proof; `generateCandidates` filters out individual 9Router candidates when `nineRouterWriterCombo` is configured, while preserving them when combo is absent or null; candidate limits (`contextWindow`, `maxOutputTokens`) are resolved dynamically from live source model metadata or registry config (`nineRouterWriterComboLimits`) without hardcoded values. | `tools/ai-brain/test/ninerouter-combo.test.js`, `tools/ai-brain/test/candidates.test.js` | PASS |
+| `AC-AI-142-A-04` | Alias resolution | Dynamic model discovery and source alias resolution across gateways and providers (iteracompute, llm7-free tier, tokenharbor, opencode-provider-* options); `getQuotaScopeState` maps canonical vendor aliases and handles free-tier vs paid model billing exemptions without throwing invalid URLs. | `tools/ai-brain/test/task-ai-142-candidate-filter-alias.test.js`, `tools/ai-brain/test/task-ai-142-iteracompute.test.js`, `tools/ai-brain/test/task-ai-142-capability-probe.test.js` | PASS |
+
+### Verification evidence (Slice A — 2026-10-28)
+
+#### Row 1: Quota scan (`AC-AI-142-A-01`)
+Command:
+```
+node --test tools/ai-brain/test/task-ai-142-quota-scan.test.js tools/ai-brain/test/task-ai-142-account-quota-scope.test.js
+```
+Evidence output:
+```
+✔ agy-pool exit 3 with bare "quota" is an account-scoped quota failure
+✔ an exhausted account blocks its own models only, not the other pool accounts
+✔ OpenCode built-in source yields keyless writers from the live opencode model list
+✔ agy-pool POOL_TIMEOUT indicts the model, not the upstream
+✔ writer result is read from the last opencode text event, not the whole JSON stream
+✔ a paid model's credit refusal does not cool down the gateway's free-tier models
+✔ a source modelsFilter keeps only the listing rows the provider marks free
+✔ an operator weight profile for the role overrides JEV and the Controller preset
+✔ classifyQuotaResponse maps HTTP codes and body hints to canonical status codes and extracts retryAfter
+✔ quota-scan splits 9Router by upstream prefix using /v1/models and 1-token /v1/chat/completions
+✔ isScopeBlocked and getQuotaScopeState identify blocked scopes until retryAfter expires
+✔ capability-probe and dispatch --dry-run skip candidates whose scope is in QUOTA, AUTH, or REGION
+✔ preferKnownGood removes candidates in blocked quota scopes and records them in rejected
+✔ cli.js quotaScanCommand runs scan and writes quota-state.json
+✔ isCompletionBody and validateCompletion accept SSE stream chunk bodies with delta content and reasoning
+ℹ tests 15
+ℹ suites 0
+ℹ pass 15
+ℹ fail 0
+```
+
+#### Row 2: Quota-aware ranking (`AC-AI-142-A-02`)
+Command:
+```
+node --test tools/ai-brain/test/task-ai-142-unscoped-ranking.test.js tools/ai-brain/test/task-ai-142-route-health-isolation.test.js tools/ai-brain/test/task-ai-142-aa-priors.test.js tools/ai-brain/test/task-ai-142-priors-matching.test.js tools/ai-brain/test/task-ai-142-priors-ranking.test.js
+```
+Evidence output:
+```
+✔ AA model priors preserve exact rounded indices and per-number provenance
+✔ planner prior ranks GPT-6 Astra and Claude Opus 5.5 above DeepSeek V4.1 Flash
+✔ no benchmark present in origin/main is removed or changed
+✔ missing role benchmarks add zero rather than renormalizing available weights
+✔ writer profile weights coding more heavily than intelligence
+✔ reviewer profile weights intelligence and coding equally, without agentic weight
+✔ zero role-profile coverage has no score and cannot inherit benchmarkScore
+✔ prior shrinks the benchmark score toward the ranking mean by its coverage and marks low coverage as INDIRECT
+✔ AA Agentic Index rows carry the supplied October 12 scores and source
+✔ a single-benchmark prior cannot outrank a well-covered model of similar strength
+✔ priorFor matches <prefix>/gemini-3.8-flash-high to canonical gemini-3-8-flash
+✔ priorFor matches ag/gemini-3.8-flash to canonical gemini-3-8-flash
+✔ step4ScoreModels scores ag/gemini-3.8-flash as SCORED, not QUALITY_UNKNOWN
+✔ writer prior order: claude-opus-5-5 > gpt-5-6-sol > claude-opus-4-6 > qwen3.8-27b
+✔ qwen3.8-27b must NOT get qwen3-8-max score; an ID without same-model benchmark stays priorUnknown
+✔ reasoning-effort variants still map to base model without matching across tiers
+✔ live priors ranking satisfies Opus 5.5 > GPT-5.6-sol
+✔ nextCommand with explicit routeHealthFile and route-health flag leaves default file untouched
+✔ nextCommand with root option derives isolated path under root and leaves default file untouched
+✔ probeMemoryFile honors explicit routeHealthFile, route-health flag, root, and cwd
+✔ failure during probeRoute does not corrupt default file or leave leftover temp files
+✔ cleanup and deletion of isolated test directories never impacts the default production store
+✔ assembleForDispatch and dispatchCommand honor isolated routeHealthFile and root without touching default store
+✔ task-ai-142-probe-config test suite does not touch default route-health file
+✔ dispatchCommand: an explicit args health file wins over deps
+✔ TASK-AI-142: UNSCOPED CLI route with high prior ranks below OK+COMPLETION route with lower prior
+✔ TASK-AI-142: scanCliLanes records UNSCOPED explicitly with reason for CLI lanes without cheap check
+ℹ tests 28
+ℹ suites 1
+ℹ pass 28
+ℹ fail 0
+```
+
+#### Row 3: Combo filter (`AC-AI-142-A-03`)
+Command:
+```
+node --test tools/ai-brain/test/ninerouter-combo.test.js tools/ai-brain/test/candidates.test.js
+```
+Evidence output:
+```
+✔ extractModelId strips ninerouter prefix
+✔ buildWriterComboModels filters by live listing and tools.ok proof
+✔ buildWriterComboModels orders models with benchmark scores desc, unknown last
+✔ priorFor candidate with comboMembers resolves to the best member score
+✔ no secret is exposed in module exports or return structures
+✔ run-7 inputs produce writer combo candidates, 0 individual 9router candidates, and coverage-weighted score ~83
+✔ unprobed combo candidate is treated as recentRouteSuccess and prioritized by orderProbeRoutes
+✔ generateCandidates preserves individual 9router candidates when nineRouterWriterCombo is absent or null
+✔ combo candidate limits are sourced from live source modelMeta or registry config without hardcoded values
+✔ loads empty evidence when file does not exist
+✔ records a probe and updates upstream status
+✔ blocks upstream on 402, scoped to that upstream only
+✔ block expires after TTL
+✔ records aliases with verified flag
+✔ shared-quota defaults to unknown
+✔ candidateKey produces seven-part identity everywhere matching candidates.candidateKey
+✔ cross-account: 401 on one account does not block unrelated accounts on same upstream
+✔ cross-account: failure recorded for one account does not infect other accounts
+✔ cross-account: success on one account is not inherited as verified by another
+✔ migration: legacy 4-field evidence is migrated fail-closed as unverified history
+✔ headroomScore: unpacks object readings from quota.accountHeadroom
+✔ generates candidates from gateway catalogue without hard-coded models
+✔ generates agy candidates from agent-cli sources
+✔ generates agy-pool candidates with the right 7-part key
+✔ native agy candidates use the live agy model list, declared ids when it is unavailable
+✔ OpenCode alias and HTTP id are separate candidates
+✔ candidatesFromEvidence recovers models not in the live catalogue
+✔ mergeCandidates deduplicates by seven-part key
+✔ adding a source through data only (no code change) produces candidates
+✔ model-source candidate carries router endpoint as accessPath, not source id (F2)
+✔ a quota result with 0% excludes that account until reset
+✔ login-required excluded
+✔ the adapter writes the expected job.json and maps each result state
+✔ ranks candidates and selects winner with stated reason
+✔ rejects blocked upstream, scoped to that upstream only
+✔ rejects candidate with absent credential
+✔ refuses when no candidate qualifies
+✔ spreads load across providers using current sessions and reservations
+✔ records decision through decisions.js
+✔ rejects candidate whose modelId is not in the catalogue
+✔ cli candidates are exempt from catalogue validation; resolved wildcard is concrete
+✔ validates candidate against its own access path catalogue
+✔ same upstream model under two different ids validated against its own path
+✔ cli path without catalogue marks status unknown but allows candidate
+✔ buildCatalogueSet strips trailing CR from Windows command output
+✔ T1 two accounts on the same upstream are distinct candidates
+✔ T2 harness and accessPath are read from the registry, not hard-coded
+✔ T3 unresolved wildcard is rejected with a named cause
+✔ T4 headroom score reads real quota readings, missing quota is fifty-less unknown
+✔ T5 unknown cost is excluded from the total; known cost drives the cheap pick
+✔ T6 spread counts active load and reservations, not the candidate set
+✔ T7 unproven capability is refused unless an exploration budget allows it
+✔ candidate list has agy, multiple 9Router upstreams, 402 rejection, unknown, and stated reason
+✔ adding a source through data only, with no code change, still produces candidates
+✔ dispatching with no model, account or harness named in input
+✔ catalogue snapshot exists and has provenance
+✔ acceptance run with real catalogue: chosen model exists in snapshot
+✔ stale model id is rejected with MODEL_NOT_IN_CATALOG when validated against snapshot
+✔ an exhausted account is excluded while another account on the same upstream stays eligible
+✔ unknown quota ranks below known-available quota and is not unlimited
+✔ a held reservation lowers the candidate's headroom
+✔ load counts live sessions, not catalogue entries
+ℹ tests 62
+ℹ suites 10
+ℹ pass 62
+ℹ fail 0
+```
+
+#### Row 4: Alias resolution (`AC-AI-142-A-04`)
+Command:
+```
+node --test tools/ai-brain/test/task-ai-142-candidate-filter-alias.test.js tools/ai-brain/test/task-ai-142-iteracompute.test.js tools/ai-brain/test/task-ai-142-capability-probe.test.js
+```
+Evidence output:
+```
+✔ getQuotaScopeState resolves canonical vendor aliases for opencode-provider options
+✔ preferKnownGood filters out candidate whose alias is in blocked quota scope
+✔ probeRoute handles direct-http candidate without throwing invalid URL on accessPath: direct
+✔ iteracompute source is declared with direct-http harness and dynamic model discovery
+✔ discovery adapter enumerates models dynamically for iteracompute
+✔ candidates are generated with direct-http harness from dynamic discovery
+✔ quota scope state distinguishes alive completion from blocked quota on iteracompute
+✔ undefined capabilities are pending verification, never CAPABILITY_MISSING or ranked
+✔ account registry caps are declarations, not per-model probe proof
+✔ HTTP schema and forced tool-call probes persist distinct timestamped evidence and reuse it
+✔ agy authorization and exhausted budget remain unknown without running or caching false
+✔ failed HTTP probe records false with the upstream reason; declarations never bypass verification
+✔ CLI tools require observed tool execution as well as valid final JSON
+✔ capability budget is shared across checks and does not cache unattempted routes as false
+✔ a declared false is unverified until a real negative probe exists
+✔ cached pool proof cannot bypass a revoked externalWorkers permission
+✔ HTTP error status survives an unreadable body during a capability probe
+✔ evidence history plus account declarations still requires a real capability probe
+✔ reviewer candidates also verify unknown capabilities before ranking
+✔ direct-source discovery HTTP identities use HTTP probes, not a CLI launch gate
+✔ item dry-run probes declared capabilities instead of treating them as evidence
+✔ review P1: daemon URL stays on CLI capability seam
+✔ review P1: dispatch dry-run honors injected probe and never uses ambient fetch
+✔ review P2: selection without registry never reads host sources or probes HTTP
+✔ review P3: pool schema proof uses configured worker timeout within remaining budget
+✔ review P1: profile dispatch also honors injected capability probe
+✔ a forced tool call wrapped as {"data": ...} with a trailing [DONE] marker is observed
+✔ a forced tool call streamed as SSE chunks (non-stream request) is observed
+ℹ tests 28
+ℹ suites 0
+ℹ pass 28
+ℹ fail 0
+```
+
 ## Orchestrate module split, steps 1-2 (2026-10-28)
 
 Steps 1-2 of the orchestrate module split extract `route-probe` and `decisions-log` helpers verbatim from `tools/ai-brain/orchestrate.js` into dedicated modules: `tools/ai-brain/orchestrate/route-probe.js` and `tools/ai-brain/orchestrate/decisions-log.js`.

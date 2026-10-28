@@ -20,6 +20,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const sourcesApi = require('./sources');
 
 const DEFAULT_QUOTA_STATE_FILE = path.join(__dirname, 'data', 'quota-state.json');
@@ -210,7 +211,7 @@ function isCompletionBody(body) {
 
   if (typeof body === 'string') {
     const sse = parseSseBody(body);
-    if (sse && sse.ok) return true;
+    if (sse && sse.ok && ((sse.text && sse.text.trim().length > 0) || sse.hasToolCall)) return true;
   }
 
   return false;
@@ -1051,8 +1052,9 @@ async function scanAllFullRoutes(options = {}) {
     fs.mkdirSync(logsDir, { recursive: true });
   }
 
-  const jsonlFile = options.jsonlFile || path.join(logsDir, `route-scan-${tsStr}.jsonl`);
-  const mdFile = options.mdFile || path.join(logsDir, `route-scan-${tsStr}.md`);
+  const uniqueRunId = `${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
+  const jsonlFile = options.jsonlFile || path.join(logsDir, `route-scan-${tsStr}-${uniqueRunId}.jsonl`);
+  const mdFile = options.mdFile || path.join(logsDir, `route-scan-${tsStr}-${uniqueRunId}.md`);
 
   fs.writeFileSync(jsonlFile, '', 'utf8');
 
@@ -2383,7 +2385,7 @@ function validateCompletion(bodyText) {
     body = JSON.parse(bodyText);
   } catch {
     const sse = parseSseBody(bodyText);
-    if (sse && sse.ok) {
+    if (sse && sse.ok && ((sse.text && sse.text.trim().length > 0) || sse.hasToolCall)) {
       return { ok: true };
     }
     return { ok: false, reason: 'COMPLETION_UNREADABLE' };

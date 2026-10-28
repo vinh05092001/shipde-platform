@@ -381,6 +381,10 @@
       "maxRoutesPerAccount": 3
     },
     "nineRouterWriterCombo": "shipde-writer",
+    "nineRouterWriterComboLimits": {
+      "contextWindow": 128000,
+      "maxOutputTokens": 8192
+    },
     "weightProfileByRole": { "writer": "BENCHMARK_ONLY" },
     "operatorWeightProfiles": {
       "BENCHMARK_ONLY": {
