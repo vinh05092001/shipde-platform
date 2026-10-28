@@ -65,13 +65,14 @@ function parsePrefix(modelId) {
  */
 function resolveRouterModel(modelId, routerSource, registry, cliSource) {
   if (!modelId) return null;
+  const routerId = routerSource && routerSource.id;
+  if (routerId === 'agy-gateway' || (cliSource && cliSource.id === 'agy-gateway')) return null;
   const raw =
     typeof modelId === 'string'
       ? modelId
       : (modelId && (modelId.modelId || modelId.model || modelId.id)) || '';
   if (!raw) return null;
 
-  const routerId = routerSource && routerSource.id;
   const prefixes = new Set();
   if (routerSource && routerSource.modelPrefix) prefixes.add(routerSource.modelPrefix);
   if (cliSource && cliSource.modelPrefix) prefixes.add(cliSource.modelPrefix);
@@ -555,7 +556,7 @@ function openAiCompatibleCandidates(opts) {
         }
       }
     }
-    if (source.kind === 'router' && source.servesModels !== false) {
+    if (source.kind === 'router' && source.servesModels !== false && source.id !== 'agy-gateway') {
       if (Array.isArray(catalogue)) {
         for (const item of catalogue) {
           const id =
@@ -598,6 +599,24 @@ function openAiCompatibleCandidates(opts) {
       }
     }
 
+    if (source.id === 'agy-gateway') {
+      if (modelSet.size === 0 && o.discoverPool !== false) {
+        const pool = require('./agy-pool-runtime');
+        const accounts = pool.discoverAccounts(o);
+        for (const acc of accounts) {
+          const models =
+            typeof pool.readAccountModels === 'function' ? pool.readAccountModels(acc, o) : [];
+          for (const m of models) modelSet.add(m);
+        }
+        if (modelSet.size === 0) {
+          for (const m of pool.discoverPoolModels(o)) modelSet.add(m);
+        }
+      }
+      for (const m of Array.from(modelSet)) {
+        if (typeof m === 'string' && m.includes('/')) modelSet.delete(m);
+      }
+    }
+
     if (modelSet.size === 0) continue;
 
     let bound = accountsFor(accounts, source.id, registry).filter((a) => a && a.id && a.id !== '*');
@@ -636,6 +655,9 @@ function openAiCompatibleCandidates(opts) {
         .replace(/-options$/, '');
 
     for (const modelId of modelSet) {
+      if (source.id === 'agy-gateway' && typeof modelId === 'string' && modelId.includes('/')) {
+        continue;
+      }
       const parsed = parsePrefix(modelId);
       const upstream = (parsed && parsed.upstream) || defaultUpstream || source.id;
 
