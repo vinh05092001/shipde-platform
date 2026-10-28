@@ -22,11 +22,32 @@ const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_TIMEOUT_MS = 300000;
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
 
+function isNineRouterModelId(model) {
+  if (typeof model !== 'string') return false;
+  return model.includes('/');
+}
+
 function realPool(options) {
   const rt = require('./agy-pool-runtime');
   return {
     accounts: () => rt.discoverAccounts(options),
-    models: () => rt.discoverPoolModels(options),
+    models: () => {
+      const accounts = rt.discoverAccounts(options);
+      const all = new Set();
+      for (const id of accounts) {
+        const mList =
+          typeof rt.readAccountModels === 'function' ? rt.readAccountModels(id, options) : [];
+        for (const m of mList) all.add(m);
+      }
+      if (all.size > 0) return [...all].sort();
+      return rt.discoverPoolModels(options);
+    },
+    accountModels: (id) => {
+      const list =
+        typeof rt.readAccountModels === 'function' ? rt.readAccountModels(id, options) : [];
+      if (Array.isArray(list) && list.length > 0) return list;
+      return rt.discoverPoolModels(options);
+    },
     quota: (id) => {
       // Prefer the Controller's persisted store; chat jobs overwrite out.txt.
       const stored = require('./quota-store').loadStore(options && options.quotaStore).accounts[id];
@@ -40,8 +61,22 @@ function realPool(options) {
     },
     readOut: (id) => rt.readOutText(id, options),
     // submitJob blocks, so it runs in a child process to keep the server live.
-    submit: (id, job, opts) =>
-      new Promise((resolve) => {
+    submit: (id, job, opts) => {
+      if (job && isNineRouterModelId(job.model)) {
+        return Promise.resolve({ state: 'error', reason: '9ROUTER_MODEL_REJECTED' });
+      }
+      const allowed =
+        typeof rt.readAccountModels === 'function' ? rt.readAccountModels(id, options) : [];
+      if (
+        Array.isArray(allowed) &&
+        allowed.length > 0 &&
+        job &&
+        job.model &&
+        !allowed.includes(job.model)
+      ) {
+        return Promise.resolve({ state: 'error', reason: 'UNSUPPORTED_ACCOUNT_MODEL' });
+      }
+      return new Promise((resolve) => {
         const code =
           "const rt=require('./agy-pool-runtime');const a=JSON.parse(process.argv[1]);" +
           'process.stdout.write(JSON.stringify(rt.submitJob(a.id,a.job,a.opts)))';
@@ -60,7 +95,8 @@ function realPool(options) {
             resolve({ state: 'error', reason: 'CORRUPT_RESULT' });
           }
         });
-      }),
+      });
+    },
   };
 }
 
@@ -199,13 +235,30 @@ function createGateway(opts) {
   const busy = new Set();
   const workDir = o.workDir || path.join(os.tmpdir(), 'agy-gateway');
 
+  function accountAllowedModels(accountId) {
+    if (typeof pool.accountModels === 'function') {
+      const list = pool.accountModels(accountId);
+      if (Array.isArray(list)) return list;
+    }
+    if (typeof pool.models === 'function') {
+      const m = pool.models(accountId);
+      if (Array.isArray(m)) return m;
+      const all = pool.models();
+      if (Array.isArray(all)) return all;
+    }
+    return null;
+  }
+
   // Accounts with an unreadable quota are allowed but rank last, because the
   // pool's out.txt holds the latest job output rather than a quota table.
   function pickAccount(model, skipped) {
+    if (isNineRouterModelId(model)) return null;
     const family = familyOf(model);
     let best = null;
     for (const id of pool.accounts()) {
       if (busy.has(id) || (skipped && skipped.has(id))) continue;
+      const allowed = accountAllowedModels(id);
+      if (Array.isArray(allowed) && !allowed.includes(model)) continue;
       try {
         if (pool.state && pool.state(id) === 'running') continue;
       } catch {}
@@ -232,6 +285,23 @@ function createGateway(opts) {
     const model = req.model;
     if (!model || !Array.isArray(req.messages))
       return errorBody(400, 'invalid_request', 'model and messages are required');
+    if (isNineRouterModelId(model))
+      return errorBody(
+        404,
+        'model_not_found',
+        `model '${model}' is a 9router model id and cannot be dispatched to agy lanes`
+      );
+    const accounts = pool.accounts();
+    let anyAccountSupports = false;
+    for (const id of accounts) {
+      const allowed = accountAllowedModels(id);
+      if (!Array.isArray(allowed) || allowed.includes(model)) {
+        anyAccountSupports = true;
+        break;
+      }
+    }
+    if (!anyAccountSupports)
+      return errorBody(404, 'model_not_found', `model '${model}' not found in agy pool`);
     const timeoutMs = Number(req.timeout_ms) > 0 ? Number(req.timeout_ms) : defaultTimeout;
     const prompt = buildPrompt(req.messages, req.tools);
     const skipped = new Set();
@@ -380,6 +450,7 @@ module.exports = {
   start,
   buildPrompt,
   interpret,
+  isNineRouterModelId,
   DEFAULT_PORT,
   DEFAULT_HOST,
   DEFAULT_TIMEOUT_MS,
