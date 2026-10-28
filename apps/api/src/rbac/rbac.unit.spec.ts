@@ -8,8 +8,11 @@ import { CanonicalApiException } from './rbac.service';
 import { RbacExceptionFilter } from './rbac-exception.filter';
 import { CreateRolePipe, UpdateRolePipe } from './rbac-validation.pipe';
 import { RbacController } from './rbac.controller';
-import { PermissionsGuard } from './rbac.guard';
-import { assertNoSensitiveData } from '@shipde/testkit';
+import { PermissionsGuard, RbacSeedGuard } from './rbac.guard';
+import { HealthService } from '../health/health.service';
+import { HealthController } from '../health/health.controller';
+import { assertNoSensitiveData, createValidTestConfig } from '@shipde/testkit';
+import { validateConfig } from '@shipde/config';
 
 /**
  * In-memory Mock Prisma Service for testing RBAC business rules,
@@ -4398,5 +4401,294 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
       mockPrisma.user.groupBy = origGroupBy;
       mockPrisma.user.count = origCount;
     }
+  });
+
+  // Seed Resilience & Fail-Closed Suite (FEAT-RBAC-01 / AC-FOUND-03-04 / AC-FOUND-03-06)
+  test('RBAC platform seed: failure logged via structured logger with no secrets on DB failure', async () => {
+    const errorLogs: string[] = [];
+    const originalConsoleError = console.error;
+    console.error = (msg?: any) => {
+      errorLogs.push(String(msg));
+    };
+
+    try {
+      const testPrisma = new MockPrismaService();
+      testPrisma.shouldFailPermissionFindMany = true;
+      const testService = new RbacService(testPrisma as any, {
+        ...createValidTestConfig(),
+        RBAC_SEED_RETRY_INTERVAL_MS: 10,
+        RBAC_SEED_MAX_ATTEMPTS: 2,
+        RBAC_SEED_BACKOFF_FACTOR: 1.0,
+      });
+
+      await testService.executePlatformSeedWithRetry();
+
+      assert.strictEqual(
+        testService.isReady(),
+        false,
+        'Service must not be ready when seed failed'
+      );
+      assert.ok(errorLogs.length >= 2, 'Should have logged each retry attempt failure');
+
+      // Parse structured log
+      const firstLog = JSON.parse(errorLogs[0]);
+      assert.strictEqual(firstLog.level, 'error');
+      assert.strictEqual(firstLog.service, 'api');
+      assert.ok(firstLog.message.includes('RBAC platform seed attempt 1/2 failed'));
+      assert.strictEqual(firstLog.metadata.attempt, 1);
+      assert.strictEqual(firstLog.metadata.maxAttempts, 2);
+
+      // Verify no sensitive credentials or tokens
+      for (const log of errorLogs) {
+        assertNoSensitiveData(log);
+      }
+    } finally {
+      console.error = originalConsoleError;
+    }
+  });
+
+  test('RBAC platform seed: retry succeeds later after initial failure with bounded backoff', async () => {
+    const infoLogs: string[] = [];
+    const errorLogs: string[] = [];
+    const originalConsoleInfo = console.info;
+    const originalConsoleError = console.error;
+    console.info = (msg?: any) => infoLogs.push(String(msg));
+    console.error = (msg?: any) => errorLogs.push(String(msg));
+
+    try {
+      const testPrisma = new MockPrismaService();
+      let attemptCount = 0;
+      // Fail first attempt, succeed on second attempt
+      const originalTx = testPrisma.$transaction;
+      testPrisma.$transaction = async (fn: any) => {
+        attemptCount++;
+        if (attemptCount === 1) {
+          throw new Error('Transient DB connection failure at boot');
+        }
+        return originalTx(fn);
+      };
+
+      const testService = new RbacService(testPrisma as any, {
+        ...createValidTestConfig(),
+        RBAC_SEED_RETRY_INTERVAL_MS: 10,
+        RBAC_SEED_MAX_ATTEMPTS: 3,
+        RBAC_SEED_BACKOFF_FACTOR: 1.5,
+      });
+
+      assert.strictEqual(testService.isReady(), false);
+      await testService.executePlatformSeedWithRetry();
+
+      assert.strictEqual(
+        testService.isReady(),
+        true,
+        'Service must become ready after retry succeeds'
+      );
+      assert.strictEqual(attemptCount, 2, 'Should have retried after first failure');
+      assert.ok(errorLogs.length >= 1, 'Initial failure must be logged');
+      assert.ok(infoLogs.length >= 1, 'Success must be logged');
+      assert.ok(
+        infoLogs[0].includes('RBAC platform permissions and system roles seeded successfully')
+      );
+    } finally {
+      console.info = originalConsoleInfo;
+      console.error = originalConsoleError;
+    }
+  });
+
+  test('RBAC platform seed: /health/ready reports not-ready (checks.rbac down) while pending and 200 after seed succeeds', async () => {
+    const mockPrismaReady: any = {
+      checkReadiness: async () => 'up' as const,
+    };
+    const mockRedisReady: any = {
+      checkReadiness: async () => 'up' as const,
+    };
+    const mockStorageReady: any = {
+      checkReadiness: async () => 'up' as const,
+    };
+
+    const testPrisma = new MockPrismaService();
+    const testService = new RbacService(testPrisma as any);
+    (testService as any).isSeeded = false;
+
+    const healthService = new HealthService(
+      mockPrismaReady,
+      mockRedisReady,
+      mockStorageReady,
+      testService
+    );
+    const healthController = new HealthController(healthService);
+
+    // 1. While RBAC seed is pending: readiness returns 503 error with checks.rbac = 'down'
+    const mockReq: any = { correlationId: 'corr-health-test' };
+    let statusCaptured: number = 0;
+    let bodyCaptured: any = null;
+    const mockRes: any = {
+      status(code: number) {
+        statusCaptured = code;
+        return this;
+      },
+      json(body: any) {
+        bodyCaptured = body;
+        return this;
+      },
+    };
+
+    await healthController.getReady(mockReq, mockRes);
+    assert.strictEqual(statusCaptured, 503, 'Readiness must return 503 while RBAC seed is pending');
+    assert.strictEqual(bodyCaptured.status, 'error');
+    assert.strictEqual(
+      bodyCaptured.checks.rbac,
+      'down',
+      'checks.rbac must be down when seed pending'
+    );
+    assert.strictEqual(bodyCaptured.checks.database, 'up');
+
+    // 2. Once RBAC seed succeeds: readiness returns 200 ok with checks.rbac = 'up'
+    await testService.ensurePlatformSeed();
+    assert.strictEqual(testService.isReady(), true);
+
+    await healthController.getReady(mockReq, mockRes);
+    assert.strictEqual(statusCaptured, 200, 'Readiness must return 200 once RBAC seed succeeds');
+    assert.strictEqual(bodyCaptured.status, 'ok');
+    assert.strictEqual(
+      bodyCaptured.checks.rbac,
+      'up',
+      'checks.rbac must be up when seed completed'
+    );
+  });
+
+  test('RBAC endpoints: RbacSeedGuard and assertPlatformSeedReady fail closed with canonical 503 SERVICE_UNAVAILABLE while seed is pending', async () => {
+    const testPrisma = new MockPrismaService();
+    const testService = new RbacService(testPrisma as any);
+    (testService as any).isSeeded = false;
+
+    const guard = new RbacSeedGuard(testService);
+
+    // 1. Guard throws 503 CanonicalApiException while seed is pending
+    try {
+      guard.canActivate();
+      assert.fail('RbacSeedGuard must throw when seed is pending');
+    } catch (err: any) {
+      assert.ok(err instanceof CanonicalApiException, 'Must throw CanonicalApiException');
+      assert.strictEqual(err.getStatus(), 503);
+      assert.strictEqual(err.code, 'SERVICE_UNAVAILABLE');
+      assert.strictEqual(err.retryable, true);
+      assert.strictEqual(err.next_action, 'Vui lòng thử lại sau');
+    }
+
+    // 2. assertPlatformSeedReady also throws 503 CanonicalApiException while pending
+    assert.throws(
+      () => testService.assertPlatformSeedReady(),
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 503);
+        assert.strictEqual(err.code, 'SERVICE_UNAVAILABLE');
+        return true;
+      }
+    );
+
+    // 3. Once seed succeeds, RbacSeedGuard allows request through
+    await testService.ensurePlatformSeed();
+    assert.strictEqual(testService.isReady(), true);
+    assert.strictEqual(guard.canActivate(), true, 'Guard must return true once seed completed');
+    assert.doesNotThrow(() => testService.assertPlatformSeedReady());
+  });
+
+  test('RBAC platform seed: onModuleInit is non-blocking on failure and initiates background retry', async () => {
+    const errorLogs: string[] = [];
+    const originalConsoleError = console.error;
+    console.error = (msg?: any) => errorLogs.push(String(msg));
+
+    try {
+      const testPrisma = new MockPrismaService();
+      testPrisma.shouldFailPermissionFindMany = true;
+      const testService = new RbacService(testPrisma as any, {
+        ...createValidTestConfig(),
+        RBAC_SEED_RETRY_INTERVAL_MS: 10,
+        RBAC_SEED_MAX_ATTEMPTS: 2,
+        RBAC_SEED_BACKOFF_FACTOR: 1.0,
+      });
+
+      // onModuleInit must resolve immediately without throwing
+      await assert.doesNotReject(async () => {
+        await testService.onModuleInit();
+      });
+
+      assert.strictEqual(
+        testService.isReady(),
+        false,
+        'Service must remain not-ready immediately after onModuleInit returns'
+      );
+
+      // Await background retry completion
+      await testService.seedPromise;
+      assert.strictEqual(
+        testService.isReady(),
+        false,
+        'Service remains not-ready after retry exhaustion'
+      );
+      assert.ok(errorLogs.length >= 2, 'Failures must be logged during background retry');
+
+      testService.onModuleDestroy();
+    } finally {
+      console.error = originalConsoleError;
+    }
+  });
+
+  test('RBAC platform seed: onModuleDestroy cancels pending retry delay immediately', async () => {
+    const testPrisma = new MockPrismaService();
+    testPrisma.shouldFailPermissionFindMany = true;
+    const testService = new RbacService(testPrisma as any, {
+      ...createValidTestConfig(),
+      RBAC_SEED_RETRY_INTERVAL_MS: 60000,
+      RBAC_SEED_MAX_ATTEMPTS: 5,
+      RBAC_SEED_BACKOFF_FACTOR: 2.0,
+    });
+
+    const seedPromise = testService.executePlatformSeedWithRetry();
+    // Yield to let the first attempt fail and enter delay
+    await new Promise((r) => setImmediate(r));
+    assert.strictEqual(testService.isReady(), false);
+
+    // Call onModuleDestroy: must resolve immediately without waiting 60s
+    testService.onModuleDestroy();
+    await seedPromise;
+    assert.strictEqual(testService.isReady(), false);
+  });
+
+  test('RBAC config: validateConfig accepts valid RBAC seed settings and rejects invalid ones', () => {
+    const testConfig = createValidTestConfig();
+    const baseRawEnv: Record<string, string> = {};
+    for (const [k, v] of Object.entries(testConfig)) {
+      if (v !== undefined && v !== null) {
+        baseRawEnv[k] = String(v);
+      }
+    }
+
+    const valid = validateConfig({
+      ...baseRawEnv,
+      RBAC_SEED_RETRY_INTERVAL_MS: '500',
+      RBAC_SEED_MAX_ATTEMPTS: '5',
+      RBAC_SEED_BACKOFF_FACTOR: '2.0',
+    });
+    assert.strictEqual(valid.RBAC_SEED_RETRY_INTERVAL_MS, 500);
+    assert.strictEqual(valid.RBAC_SEED_MAX_ATTEMPTS, 5);
+    assert.strictEqual(valid.RBAC_SEED_BACKOFF_FACTOR, 2.0);
+
+    assert.throws(
+      () =>
+        validateConfig({
+          ...baseRawEnv,
+          RBAC_SEED_RETRY_INTERVAL_MS: 'not-a-number',
+          RBAC_SEED_MAX_ATTEMPTS: '-3',
+          RBAC_SEED_BACKOFF_FACTOR: '0.8',
+        }),
+      (err: any) => {
+        assert.ok(err.message.includes('RBAC_SEED_RETRY_INTERVAL_MS'));
+        assert.ok(err.message.includes('RBAC_SEED_MAX_ATTEMPTS'));
+        assert.ok(err.message.includes('RBAC_SEED_BACKOFF_FACTOR'));
+        return true;
+      }
+    );
   });
 });

@@ -1,7 +1,21 @@
-import { Injectable, Inject, HttpStatus, OnModuleInit } from '@nestjs/common';
+import {
+  Injectable,
+  Inject,
+  Optional,
+  HttpStatus,
+  OnModuleInit,
+  OnModuleDestroy,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { RoleEnum } from '@prisma/client';
 import { CanonicalApiException as BaseCanonicalApiException } from '../auth/auth.service';
+import {
+  formatStructuredLog,
+  sanitizeErrorMessage,
+  AppConfig,
+  WORKSPACE_ENV,
+} from '@shipde/config';
+import { APP_CONFIG } from '../config.token';
 
 export class CanonicalApiException extends BaseCanonicalApiException {
   constructor(
@@ -143,20 +157,166 @@ export function isMfaAssuranceFresh(
 }
 
 @Injectable()
-export class RbacService implements OnModuleInit {
+export class RbacService implements OnModuleInit, OnModuleDestroy {
   private isSeeded = false;
+  private isDestroyed = false;
+  private retryTimeoutHandle: NodeJS.Timeout | null = null;
+  private retryResolve: (() => void) | null = null;
+  public seedPromise: Promise<void> | null = null;
 
-  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Optional() @Inject(APP_CONFIG) private readonly config?: AppConfig
+  ) {}
+
+  isReady(): boolean {
+    return this.isSeeded;
+  }
+
+  assertPlatformSeedReady(): void {
+    if (!this.isReady()) {
+      throw new CanonicalApiException(
+        HttpStatus.SERVICE_UNAVAILABLE,
+        'SERVICE_UNAVAILABLE',
+        'Danh mục phân quyền hệ thống đang được khởi tạo, vui lòng thử lại sau',
+        true,
+        'Vui lòng thử lại sau'
+      );
+    }
+  }
+
+  private resolveRetryIntervalMs(): number {
+    const envVal = process.env.RBAC_SEED_RETRY_INTERVAL_MS;
+    if (envVal !== undefined && envVal !== '') {
+      const parsed = Number(envVal);
+      if (Number.isSafeInteger(parsed) && parsed > 0) {
+        return parsed;
+      }
+    }
+    return (
+      this.config?.RBAC_SEED_RETRY_INTERVAL_MS ?? WORKSPACE_ENV.DEFAULT_RBAC_SEED_RETRY_INTERVAL_MS
+    );
+  }
+
+  private resolveMaxAttempts(): number {
+    const envVal = process.env.RBAC_SEED_MAX_ATTEMPTS;
+    if (envVal !== undefined && envVal !== '') {
+      const parsed = Number(envVal);
+      if (Number.isSafeInteger(parsed) && parsed > 0) {
+        return parsed;
+      }
+    }
+    return this.config?.RBAC_SEED_MAX_ATTEMPTS ?? WORKSPACE_ENV.DEFAULT_RBAC_SEED_MAX_ATTEMPTS;
+  }
+
+  private resolveBackoffFactor(): number {
+    const envVal = process.env.RBAC_SEED_BACKOFF_FACTOR;
+    if (envVal !== undefined && envVal !== '') {
+      const parsed = Number(envVal);
+      if (!Number.isNaN(parsed) && parsed >= 1.0) {
+        return parsed;
+      }
+    }
+    return this.config?.RBAC_SEED_BACKOFF_FACTOR ?? WORKSPACE_ENV.DEFAULT_RBAC_SEED_BACKOFF_FACTOR;
+  }
 
   async onModuleInit(): Promise<void> {
     if (typeof this.prisma?.$transaction !== 'function') {
+      this.isSeeded = true;
       return;
     }
-    // Non-blocking platform seed: do not block or crash startup if the database is unreachable or slow.
-    // Liveness must never depend on external dependencies (AC-FOUND-03-04, AC-FOUND-03-06).
-    void this.ensurePlatformSeed().catch(() => {
-      // Detached seed failure is handled gracefully; readiness probe will report down.
+    // Startup is non-blocking (AC-FOUND-03-04, AC-FOUND-03-06).
+    // Bounded retry loop runs in background until platform seed succeeds.
+    this.seedPromise = this.executePlatformSeedWithRetry();
+    void this.seedPromise.catch(() => {
+      // Unhandled rejection safety
     });
+  }
+
+  async executePlatformSeedWithRetry(): Promise<void> {
+    if (this.isSeeded) return;
+
+    const retryIntervalMs = this.resolveRetryIntervalMs();
+    const maxAttempts = this.resolveMaxAttempts();
+    const backoffFactor = this.resolveBackoffFactor();
+
+    let currentDelayMs = retryIntervalMs;
+
+    for (
+      let attempt = 1;
+      attempt <= maxAttempts && !this.isSeeded && !this.isDestroyed;
+      attempt++
+    ) {
+      try {
+        await this.ensurePlatformSeed();
+        console.info(
+          formatStructuredLog({
+            level: 'info',
+            service: 'api',
+            message: 'RBAC platform permissions and system roles seeded successfully',
+            metadata: { attempt },
+          })
+        );
+        return;
+      } catch (err: unknown) {
+        this.isSeeded = false;
+        const isLastAttempt = attempt >= maxAttempts;
+        console.error(
+          formatStructuredLog({
+            level: 'error',
+            service: 'api',
+            message: `RBAC platform seed attempt ${attempt}/${maxAttempts} failed: ${sanitizeErrorMessage(err)}`,
+            metadata: {
+              attempt,
+              maxAttempts,
+              retryable: !isLastAttempt,
+              nextRetryDelayMs: isLastAttempt ? null : currentDelayMs,
+            },
+          })
+        );
+
+        if (!isLastAttempt && !this.isDestroyed) {
+          await this.delay(currentDelayMs);
+          currentDelayMs = Math.round(currentDelayMs * backoffFactor);
+        }
+      }
+    }
+
+    if (!this.isSeeded && !this.isDestroyed) {
+      console.error(
+        formatStructuredLog({
+          level: 'error',
+          service: 'api',
+          message:
+            'RBAC platform seed exhausted all retry attempts without succeeding; RBAC endpoints will fail closed',
+          metadata: { maxAttempts },
+        })
+      );
+    }
+  }
+
+  private async delay(ms: number): Promise<void> {
+    return new Promise<void>((resolve) => {
+      this.retryResolve = resolve;
+      this.retryTimeoutHandle = setTimeout(() => {
+        this.retryTimeoutHandle = null;
+        this.retryResolve = null;
+        resolve();
+      }, ms);
+    });
+  }
+
+  onModuleDestroy(): void {
+    this.isDestroyed = true;
+    if (this.retryTimeoutHandle) {
+      clearTimeout(this.retryTimeoutHandle);
+      this.retryTimeoutHandle = null;
+    }
+    if (this.retryResolve) {
+      const resolve = this.retryResolve;
+      this.retryResolve = null;
+      resolve();
+    }
   }
 
   /**

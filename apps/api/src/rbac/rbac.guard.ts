@@ -7,12 +7,21 @@ import {
   Inject,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { RbacService } from './rbac.service';
-import { CanonicalApiException } from '../auth/auth.service';
+import { RbacService, CanonicalApiException } from './rbac.service';
 
 export const PERMISSIONS_KEY = 'rbac_required_permissions';
 export const RequirePermissions = (...permissions: string[]) =>
   SetMetadata(PERMISSIONS_KEY, permissions);
+
+@Injectable()
+export class RbacSeedGuard implements CanActivate {
+  constructor(@Inject(RbacService) private readonly rbacService: RbacService) {}
+
+  canActivate(): boolean {
+    this.rbacService.assertPlatformSeedReady();
+    return true;
+  }
+}
 
 @Injectable()
 export class PermissionsGuard implements CanActivate {

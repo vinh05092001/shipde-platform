@@ -9,6 +9,9 @@ export const WORKSPACE_ENV = {
   DEFAULT_PNPM_VERSION: '11.23.0',
   DEFAULT_TIMEZONE: 'Asia/Ho_Chi_Minh',
   DEFAULT_CURRENCY: 'VND',
+  DEFAULT_RBAC_SEED_RETRY_INTERVAL_MS: 1000,
+  DEFAULT_RBAC_SEED_MAX_ATTEMPTS: 10,
+  DEFAULT_RBAC_SEED_BACKOFF_FACTOR: 1.5,
 } as const;
 
 export type WorkspaceEnvironment = typeof WORKSPACE_ENV;
@@ -49,6 +52,12 @@ export interface AppConfig {
   TRUST_PROXY_HOPS: number;
   /** Dedicated encryption key for MFA factor seeds at rest (FEAT-AUTH-05). Required in production (>= 32 chars). */
   MFA_ENCRYPTION_KEY?: string;
+  /** Initial retry interval for RBAC platform seed in ms */
+  RBAC_SEED_RETRY_INTERVAL_MS?: number;
+  /** Maximum retry attempts for RBAC platform seed */
+  RBAC_SEED_MAX_ATTEMPTS?: number;
+  /** Backoff multiplier for RBAC platform seed */
+  RBAC_SEED_BACKOFF_FACTOR?: number;
 }
 
 export class ConfigValidationError extends Error {
@@ -288,6 +297,51 @@ export function validateConfig(rawEnv: NodeJS.ProcessEnv = process.env): AppConf
     rawEnv.FRONTEND_URL ||
     (NODE_ENV === 'production' ? 'https://shipde.vn' : 'http://localhost:3000');
 
+  const rbacRetryIntervalRaw = rawEnv.RBAC_SEED_RETRY_INTERVAL_MS;
+  let RBAC_SEED_RETRY_INTERVAL_MS: number = WORKSPACE_ENV.DEFAULT_RBAC_SEED_RETRY_INTERVAL_MS;
+  if (rbacRetryIntervalRaw !== undefined && rbacRetryIntervalRaw !== '') {
+    if (!/^\d+$/.test(rbacRetryIntervalRaw)) {
+      invalidFields.push('RBAC_SEED_RETRY_INTERVAL_MS (must be a positive integer)');
+    } else {
+      const parsed = Number(rbacRetryIntervalRaw);
+      if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+        invalidFields.push('RBAC_SEED_RETRY_INTERVAL_MS (must be a positive integer)');
+      } else {
+        RBAC_SEED_RETRY_INTERVAL_MS = parsed;
+      }
+    }
+  }
+
+  const rbacMaxAttemptsRaw = rawEnv.RBAC_SEED_MAX_ATTEMPTS;
+  let RBAC_SEED_MAX_ATTEMPTS: number = WORKSPACE_ENV.DEFAULT_RBAC_SEED_MAX_ATTEMPTS;
+  if (rbacMaxAttemptsRaw !== undefined && rbacMaxAttemptsRaw !== '') {
+    if (!/^\d+$/.test(rbacMaxAttemptsRaw)) {
+      invalidFields.push('RBAC_SEED_MAX_ATTEMPTS (must be a positive integer)');
+    } else {
+      const parsed = Number(rbacMaxAttemptsRaw);
+      if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+        invalidFields.push('RBAC_SEED_MAX_ATTEMPTS (must be a positive integer)');
+      } else {
+        RBAC_SEED_MAX_ATTEMPTS = parsed;
+      }
+    }
+  }
+
+  const rbacBackoffFactorRaw = rawEnv.RBAC_SEED_BACKOFF_FACTOR;
+  let RBAC_SEED_BACKOFF_FACTOR: number = WORKSPACE_ENV.DEFAULT_RBAC_SEED_BACKOFF_FACTOR;
+  if (rbacBackoffFactorRaw !== undefined && rbacBackoffFactorRaw !== '') {
+    if (!/^\d+(\.\d+)?$/.test(rbacBackoffFactorRaw)) {
+      invalidFields.push('RBAC_SEED_BACKOFF_FACTOR (must be a positive number >= 1.0)');
+    } else {
+      const parsed = Number(rbacBackoffFactorRaw);
+      if (Number.isNaN(parsed) || parsed < 1.0) {
+        invalidFields.push('RBAC_SEED_BACKOFF_FACTOR (must be a positive number >= 1.0)');
+      } else {
+        RBAC_SEED_BACKOFF_FACTOR = parsed;
+      }
+    }
+  }
+
   if (invalidFields.length > 0) {
     throw new ConfigValidationError(invalidFields);
   }
@@ -316,6 +370,9 @@ export function validateConfig(rawEnv: NodeJS.ProcessEnv = process.env): AppConf
     TRUST_PROXY_HOPS,
     FRONTEND_URL,
     MFA_ENCRYPTION_KEY,
+    RBAC_SEED_RETRY_INTERVAL_MS,
+    RBAC_SEED_MAX_ATTEMPTS,
+    RBAC_SEED_BACKOFF_FACTOR,
   };
 }
 

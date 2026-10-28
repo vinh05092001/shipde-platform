@@ -183,6 +183,9 @@ export function createValidTestConfig(overrides: Partial<AppConfig> = {}): AppCo
     FRONTEND_URL: 'http://localhost:3000',
     AUDIT_IDENTIFIER_HMAC_KEY: 'test-audit-hmac-key-placeholder-32-chars',
     TRUST_PROXY_HOPS: 0,
+    RBAC_SEED_RETRY_INTERVAL_MS: 1000,
+    RBAC_SEED_MAX_ATTEMPTS: 10,
+    RBAC_SEED_BACKOFF_FACTOR: 1.5,
     ...overrides,
   };
 }

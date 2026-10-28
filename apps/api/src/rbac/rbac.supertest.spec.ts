@@ -73,6 +73,9 @@ async function main() {
     stdio: 'pipe',
   });
 
+  // Reconcile platform seed once migrations are deployed
+  await app.get(RbacService).ensurePlatformSeed();
+
   // Create additional tenant for cross-tenant testing (AC-11)
   await prisma.merchant.upsert({
     where: { id: OTHER_MERCHANT_ID },
@@ -896,6 +899,56 @@ async function main() {
   await prisma.role.deleteMany({
     where: { id: delegRole.id },
   });
+
+  // Verify HTTP endpoint and readiness probe fail-closed behavior when seed is pending
+  const rbacService = app.get(RbacService);
+  (rbacService as any).isSeeded = false;
+
+  const pendingReadyRes = await request(server).get('/health/ready');
+  assert.strictEqual(
+    pendingReadyRes.status,
+    503,
+    '/health/ready must return 503 while seed is pending'
+  );
+  assert.strictEqual(pendingReadyRes.body.checks.rbac, 'down', 'checks.rbac must report down');
+
+  const pendingPermsRes = await request(server)
+    .get('/api/v1/permissions')
+    .set('Authorization', `Bearer ${ownerToken}`);
+  assert.strictEqual(
+    pendingPermsRes.status,
+    503,
+    'RBAC endpoint /api/v1/permissions must fail closed with 503 while seed is pending'
+  );
+  assert.strictEqual(pendingPermsRes.body.error.code, 'SERVICE_UNAVAILABLE');
+  assert.strictEqual(pendingPermsRes.body.error.retryable, true);
+
+  const pendingCreateRoleRes = await request(server)
+    .post('/api/v1/roles')
+    .set('Authorization', `Bearer ${ownerToken}`)
+    .send({ name: 'Pending Role Creation', permissions: ['orders:view'] });
+  assert.strictEqual(
+    pendingCreateRoleRes.status,
+    503,
+    'RBAC mutation endpoint POST /api/v1/roles must fail closed with 503 while seed is pending'
+  );
+  assert.strictEqual(pendingCreateRoleRes.body.error.code, 'SERVICE_UNAVAILABLE');
+  assert.strictEqual(pendingCreateRoleRes.body.error.retryable, true);
+
+  // Restore seeded state
+  (rbacService as any).isSeeded = true;
+  const restoredReadyRes = await request(server).get('/health/ready');
+  assert.strictEqual(
+    restoredReadyRes.body.checks.rbac,
+    'up',
+    'checks.rbac must report up once seed restored'
+  );
+
+  // When seeded, /api/v1/permissions succeeds (200 OK)
+  await request(server)
+    .get('/api/v1/permissions')
+    .set('Authorization', `Bearer ${ownerToken}`)
+    .expect(200);
 
   console.log(
     '✅ All RBAC Supertest HTTP assertions (AC-01 to AC-16) passed successfully with DB & audit proofs!'
