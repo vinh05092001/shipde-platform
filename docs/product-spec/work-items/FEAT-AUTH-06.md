@@ -138,17 +138,19 @@ $ pnpm security:secrets
  - [aws-secret-key] AWS / S3 Secret Key Pattern
  - [shipde-carrier-live-token] Live Carrier Production Token (GHN, GHTK, ViettelPost, J&T)
 
-❌ LỖI: Không tìm thấy native binary Gitleaks CLI (gitleaks) trong PATH hoặc môi trường hệ thống!
-   Gate bảo mật secret bắt buộc phải có Gitleaks native CLI để đảm bảo toàn bộ quy tắc mặc định và quy tắc mở rộng hoạt động đầy đủ.
-Exit code: 2 (Gitleaks binary absent in local Windows dev environment; Gitleaks 8.24.0 authoritative in CI pipeline)
+🔍 Thực thi Gitleaks native binary CLI...
+🔍 [Gitleaks git] Quét lịch sử commit PR (fa5f0946d4db0449929f883246c0816fef00ee06...HEAD)...
+🔍 [Gitleaks dir] Quét working tree các thư mục và tệp mã nguồn...
 
-Local Defense-in-Depth Staged Secret Scan (lefthook pre-commit / AI-36-R05):
-$ node tools/ai-guard/cli.js staged-secrets
-STAGED_SCAN_CLEAN: 0 secrets detected
+✅ Quét secret hoàn tất: 0 phát hiện vi phạm bí mật trên commit history và working tree.
+Exit code: 0 (Gitleaks 8.30.1 CLI scan clean)
 
-$ node tools/ai-guard/cli.js check
-SECRET_SURFACE_CLEAN
-files scanned: 785
+Demonstrated Negative Failure Proof:
+$ pnpm security:secrets --test-negative
+🧪 Chạy kiểm thử âm tính (Demonstrated Negative Failure Proof)...
+🚨 VI PHẠM ĐÃ ĐƯỢC BẮT CHÍNH XÁC QUA RULE: [shipde-carrier-live-token] "Live Carrier Production Token (GHN, GHTK, ViettelPost, J&T)"
+   [AC-FOUND-01-06 Evidence] Đã chứng minh gate thoát mã lỗi non-zero (exit code 1) khi phát hiện fixture rò rỉ secret thực tế.
+Exit code: 1 (Negative test cleanly caught deliberate violation)
 ```
 
 ## Open questions

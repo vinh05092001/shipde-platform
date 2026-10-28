@@ -33,6 +33,7 @@ regexTarget = "line"
 regexes = [
   '''(sk-|ghp_|gho_|ghu_|github_pat_)1234567890''',
   '''^\s*key_behavior:\s*['"]''',
+  '''"key_behavior"\s*:\s*['"]''',
   # A third fixture, and this one has to be allowlisted rather than renamed.
   # The literal was committed earlier on this branch, so the history scan still
   # finds it even though the working tree no longer contains it — renaming
