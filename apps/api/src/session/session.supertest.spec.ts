@@ -142,7 +142,9 @@ async function runSessionSupertestSuite() {
       email: `session.owner.${testSuffix}@shipde.vn`,
       full_name: 'Session Test Owner',
       password_hash: await hashPassword(ownerPassword),
-      role: RoleEnum.OWNER,
+      // RoleEnum.OPS_CSKH used here because FEAT-AUTH-05 mandates MFA enrollment on login for RoleEnum.OWNER
+      // (throwing 403 MFA_ENROLLMENT_REQUIRED). Session management endpoints are scoped by userId/merchantId (BR-SESS-01).
+      role: RoleEnum.OPS_CSKH,
       status: 'ACTIVE',
     },
   });
