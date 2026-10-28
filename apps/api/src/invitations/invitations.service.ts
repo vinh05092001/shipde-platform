@@ -509,8 +509,13 @@ export class InvitationsService {
     }
 
     // Role validation
-    const validRoles = [RoleEnum.OWNER, RoleEnum.OPS_CSKH, RoleEnum.WAREHOUSE, RoleEnum.ACCOUNTANT];
-    if (!dto.role || !validRoles.includes(dto.role as RoleEnum)) {
+    const validRoles: readonly string[] = [
+      RoleEnum.OWNER,
+      RoleEnum.OPS_CSKH,
+      RoleEnum.WAREHOUSE,
+      RoleEnum.ACCOUNTANT,
+    ];
+    if (!dto.role || !validRoles.includes(dto.role)) {
       throw new CanonicalApiException(
         HttpStatus.BAD_REQUEST,
         'VALIDATION_ERROR',
@@ -1020,7 +1025,7 @@ export class InvitationsService {
         merchant_id: rec.merchant_id,
         email: rec.email,
         phone: rec.phone,
-        role: rec.role,
+        role: rec.role as InvitationItem['role'],
         store_scopes: rec.store_scopes,
         warehouse_scopes: rec.warehouse_scopes,
         status: displayStatus,

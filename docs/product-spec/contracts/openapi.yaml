@@ -828,6 +828,68 @@ paths:
           description: Created
         '400':
           $ref: '#/components/responses/Error'
+  /admin/shops:
+    get:
+      tags: [Admin]
+      summary: List all shops (admin) (API-ADMIN-SHOP-LIST, FEAT-AUTH-02)
+      operationId: listAdminShops
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 20
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 0
+        - name: search
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of shops
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminListShopsResponse'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [Admin]
+      summary: Admin-created shop account (API-ADMIN-SHOP-CREATE, FEAT-AUTH-02)
+      description: Platform operator provisions initial shop owner account without exposing public self-registration.
+      operationId: createAdminShop
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminCreateShopInput'
+      responses:
+        '201':
+          description: Shop and owner created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminCreateShopResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
   /carrier-accounts:
     get:
       tags: [Carriers]
@@ -1126,6 +1188,159 @@ components:
           schema:
             $ref: '#/components/schemas/CommandResponse'
   schemas:
+    AdminCreateShopInput:
+      type: object
+      required:
+        - merchant_name
+      properties:
+        merchant_name:
+          type: string
+          minLength: 2
+          maxLength: 255
+        full_name:
+          type: string
+        email:
+          type: string
+          format: email
+        phone:
+          type: string
+        password:
+          type: string
+          minLength: 8
+    AdminCreateShopResponse:
+      type: object
+      required:
+        - success
+        - data
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          required:
+            - merchant
+            - user
+            - password_is_temporary
+          properties:
+            merchant:
+              type: object
+              required:
+                - id
+                - name
+                - code
+                - status
+                - created_at
+              properties:
+                id:
+                  type: string
+                  format: uuid
+                name:
+                  type: string
+                code:
+                  type: string
+                status:
+                  type: string
+                created_at:
+                  type: string
+                  format: date-time
+            user:
+              type: object
+              required:
+                - id
+                - merchant_id
+                - full_name
+                - role
+                - status
+              properties:
+                id:
+                  type: string
+                  format: uuid
+                merchant_id:
+                  type: string
+                  format: uuid
+                full_name:
+                  type: string
+                email:
+                  type: string
+                  nullable: true
+                phone:
+                  type: string
+                  nullable: true
+                role:
+                  type: string
+                status:
+                  type: string
+                email_verified_at:
+                  type: string
+                  format: date-time
+                  nullable: true
+                phone_verified_at:
+                  type: string
+                  format: date-time
+                  nullable: true
+            password_is_temporary:
+              type: boolean
+        meta:
+          $ref: '#/components/schemas/Meta'
+    AdminListShopsResponse:
+      type: object
+      required:
+        - success
+        - data
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          required:
+            - shops
+            - total
+          properties:
+            shops:
+              type: array
+              items:
+                type: object
+                required:
+                  - id
+                  - name
+                  - code
+                  - status
+                  - created_at
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                  name:
+                    type: string
+                  code:
+                    type: string
+                  status:
+                    type: string
+                  created_at:
+                    type: string
+                    format: date-time
+                  user_count:
+                    type: integer
+                  owner:
+                    type: object
+                    nullable: true
+                    properties:
+                      id:
+                        type: string
+                      full_name:
+                        type: string
+                      email:
+                        type: string
+                        nullable: true
+                      phone:
+                        type: string
+                        nullable: true
+            total:
+              type: integer
+        meta:
+          $ref: '#/components/schemas/Meta'
     RegisterRequest:
       type: object
       required: [merchant_name, full_name, password, terms_accepted, terms_version]
