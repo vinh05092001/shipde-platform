@@ -853,6 +853,17 @@ async function runSessionSupertestSuite() {
     // AC-SESS-20: Audit rollback on failure
     // -------------------------------------------------------------------------
     console.log('[TEST AC-SESS-20] Audit logging fails during revocation (Error rollback)');
+    const tok20Caller = createSessionToken();
+    await prisma.deviceSession.create({
+      data: {
+        user_id: user.id,
+        merchant_id: merchant.id,
+        session_token_hash: tok20Caller.hash,
+        device_id: 'audit_rollback_caller_device',
+        status: SessionStatusEnum.ACTIVE,
+        expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+      },
+    });
     const tok20 = createSessionToken();
     const sess20 = await prisma.deviceSession.create({
       data: {
@@ -887,7 +898,7 @@ async function runSessionSupertestSuite() {
     try {
       await request(server)
         .delete(`/api/v1/sessions/${sess20.id}`)
-        .set('Authorization', `Bearer ${tok18.raw}`)
+        .set('Authorization', `Bearer ${tok20Caller.raw}`)
         .expect(500);
 
       const check20 = await prisma.deviceSession.findUnique({ where: { id: sess20.id } });
