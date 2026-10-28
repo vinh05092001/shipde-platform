@@ -585,10 +585,22 @@ function discoverPoolModels(options) {
   return [];
 }
 
+function readAccountModels(accountId, options) {
+  if (!isValidAccountId(accountId)) return [];
+  const mFile = path.join(exp.accountDir(accountId, options), 'models-out.txt');
+  try {
+    if (fs.existsSync(mFile)) {
+      return exp.parseCliModels(fs.readFileSync(mFile, 'utf8'));
+    }
+  } catch {}
+  return [];
+}
+
 const exp = {
   runsDir,
   accountDir,
   discoverAccounts,
+  readAccountModels,
   readResult,
   readOutText,
   waitForResult,

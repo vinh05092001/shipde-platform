@@ -263,3 +263,125 @@ describe('agy gateway quota source', () => {
     assert.deepStrictEqual(pool.used, ['agy02']);
   });
 });
+
+describe('agy lane account model gating and 9router isolation', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const { createGateway: make } = require('../agy-gateway');
+
+  test('an agy lane may only be probed/dispatched with model ids listed in that account models-out.txt', async () => {
+    const runsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-models-'));
+    fs.mkdirSync(path.join(runsDir, 'agy01'));
+    fs.mkdirSync(path.join(runsDir, 'agy02'));
+    fs.writeFileSync(
+      path.join(runsDir, 'agy01', 'models-out.txt'),
+      'gemini-3.8-flash-high\tGemini 3.8 Flash (High)\n',
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(runsDir, 'agy02', 'models-out.txt'),
+      'claude-opus-5-5-high\tClaude Opus 5.5 (High)\n',
+      'utf8'
+    );
+
+    const rows = [
+      { family: 'gemini', window: 'weekly', remainingPercent: 50, known: true },
+      { family: 'claude-gpt', window: 'weekly', remainingPercent: 50, known: true },
+    ];
+    const quotaFile = path.join(runsDir, 'q.json');
+    fs.writeFileSync(
+      quotaFile,
+      JSON.stringify({ accounts: { agy01: { rows }, agy02: { rows } } }),
+      'utf8'
+    );
+
+    const gw = make({
+      token: TOKEN,
+      poolOptions: { runsDir, quotaStore: { path: quotaFile } },
+    });
+
+    const dispatched = [];
+    gw.pool.submit = async (id, job) => {
+      dispatched.push({ id, model: job.model });
+      return { state: 'ok', exitCode: 0 };
+    };
+    gw.pool.readOut = () => 'ok';
+
+    // 1. Model listed only in agy01 dispatches to agy01
+    const r1 = await gw.complete({
+      model: 'gemini-3.8-flash-high',
+      messages: [{ role: 'user', content: 'hello' }],
+    });
+    assert.strictEqual(r1.status, 200);
+    assert.strictEqual(dispatched.length, 1);
+    assert.strictEqual(dispatched[0].id, 'agy01');
+    assert.strictEqual(dispatched[0].model, 'gemini-3.8-flash-high');
+
+    // 2. Model listed only in agy02 dispatches to agy02
+    const r2 = await gw.complete({
+      model: 'claude-opus-5-5-high',
+      messages: [{ role: 'user', content: 'hello' }],
+    });
+    assert.strictEqual(r2.status, 200);
+    assert.strictEqual(dispatched.length, 2);
+    assert.strictEqual(dispatched[1].id, 'agy02');
+    assert.strictEqual(dispatched[1].model, 'claude-opus-5-5-high');
+
+    // 3. Model not listed in any account models-out.txt returns 404 model_not_found
+    const r3 = await gw.complete({
+      model: 'unlisted-model-x',
+      messages: [{ role: 'user', content: 'hello' }],
+    });
+    assert.strictEqual(r3.status, 404);
+    assert.strictEqual(r3.body.error.code, 'model_not_found');
+    assert.strictEqual(dispatched.length, 2); // submit never called
+  });
+
+  test('9router ids ("prefix/model") must never reach agy lanes', async () => {
+    const runsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-router-'));
+    fs.mkdirSync(path.join(runsDir, 'agy01'));
+    fs.mkdirSync(path.join(runsDir, 'agy02'));
+    fs.writeFileSync(
+      path.join(runsDir, 'agy01', 'models-out.txt'),
+      'gemini-3.8-flash-high\tGemini 3.8 Flash (High)\n',
+      'utf8'
+    );
+
+    const rows = [{ family: 'claude-gpt', window: 'weekly', remainingPercent: 90, known: true }];
+    const quotaFile = path.join(runsDir, 'q.json');
+    fs.writeFileSync(
+      quotaFile,
+      JSON.stringify({ accounts: { agy01: { rows }, agy02: { rows } } }),
+      'utf8'
+    );
+
+    const gw = make({
+      token: TOKEN,
+      poolOptions: { runsDir, quotaStore: { path: quotaFile } },
+    });
+
+    let submitCalled = false;
+    gw.pool.submit = async () => {
+      submitCalled = true;
+      return { state: 'ok', exitCode: 0 };
+    };
+
+    const routerIds = [
+      'cl/anthropic/claude-opus-4.7',
+      'bzl/claude-opus-4.7',
+      'kr/claude-opus-4.7',
+      'ninerouter/gemini-3.8-flash-high',
+    ];
+
+    for (const model of routerIds) {
+      const res = await gw.complete({
+        model,
+        messages: [{ role: 'user', content: 'probe' }],
+      });
+      assert.strictEqual(res.status, 404, `Expected 404 for 9router id ${model}`);
+      assert.strictEqual(res.body.error.code, 'model_not_found');
+      assert.strictEqual(submitCalled, false, `submit must not be called for 9router id ${model}`);
+    }
+  });
+});
