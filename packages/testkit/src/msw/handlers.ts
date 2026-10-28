@@ -362,7 +362,7 @@ export const handlers = [
           device_id: 'dev_mobile_iphone',
           device_model: 'iPhone 16 Pro',
           user_agent: 'Mozilla/5.0 (iPhone)',
-          ip_address: 'hashed_ip_002',
+          ip_address: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
           status: 'ACTIVE',
           last_active_at: new Date(Date.now() - 3600 * 1000).toISOString(),
           expires_at: new Date(Date.now() + 89 * 24 * 60 * 60 * 1000).toISOString(),
