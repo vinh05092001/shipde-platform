@@ -54,10 +54,8 @@ async function runAdminShopsFrontendSuite() {
   console.log('SHIP DỄ — ADMIN SHOPS UI & API ACCEPTANCE TEST SUITE (FEAT-AUTH-02)');
   console.log('================================================================\n');
 
-  const TEST_ADMIN_KEY = `test-admin-key-${randomUUID()}`;
   const TEST_AUTH_SECRET = 'test-token-secret-must-be-long-32-chars-at-least';
 
-  process.env.ADMIN_API_KEY = TEST_ADMIN_KEY;
   process.env.AUTH_TOKEN_SECRET = TEST_AUTH_SECRET;
 
   // ---------------------------------------------------------------------------
@@ -219,14 +217,14 @@ async function runAdminShopsFrontendSuite() {
   console.log('✅ Finding 1: Platform-admin role enforcement strictly verified');
 
   // ---------------------------------------------------------------------------
-  // 4. ADMIN_API_KEY Path Removal: x-admin-key alone is rejected, requires session
+  // 4. Legacy static header rejection: header alone is rejected, requires session
   // ---------------------------------------------------------------------------
-  console.log('🧪 Testing ADMIN_API_KEY path removal: static key rejected without session...');
+  console.log('🧪 Testing legacy header rejection: static key rejected without session...');
   const keyOnlyReq = new NextRequest('http://localhost:3000/api/admin/shops', {
-    headers: { 'x-admin-key': TEST_ADMIN_KEY },
+    headers: { 'x-admin-key': 'legacy-deprecated-key' },
   });
   assert.strictEqual(verifyAdminAuthorization(keyOnlyReq).authorized, false);
-  console.log('✅ ADMIN_API_KEY path removed, session authorization required');
+  console.log('✅ Legacy static key rejected, session authorization required');
 
   // ---------------------------------------------------------------------------
   // 5. Finding 4 / AC-ADMIN-14: Upstream Failure Preservation (Never fabricated 200)
