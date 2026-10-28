@@ -2421,7 +2421,7 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
     // Read migration.sql to prove constraint is defined as DEFERRABLE INITIALLY DEFERRED
     const migrationPath = path.resolve(
       __dirname,
-      '../../../../prisma/migrations/20261027000000_feat_rbac_01_roles_permissions/migration.sql'
+      '../../../../prisma/migrations/20261028000000_feat_rbac_01_roles_permissions/migration.sql'
     );
     const migrationContent = fs.readFileSync(migrationPath, 'utf8');
     assert.match(

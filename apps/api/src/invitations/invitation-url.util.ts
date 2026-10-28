@@ -1,0 +1,61 @@
+import { randomUUID } from 'node:crypto';
+
+const STRICT_UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Strict correlation ID sanitizer for invitation flows (BR-INV-09 / AC-USR-01-18 / Round 9 Finding 1).
+ * Accepts ONLY strict UUID strings (length exactly 36).
+ * Any non-UUID (e.g. passwords, tokens, oversized strings, HTML) is safely discarded
+ * and replaced with a cryptographically secure server-generated UUID.
+ */
+export function sanitizeCorrelationId(candidate?: unknown): string {
+  if (typeof candidate !== 'string') {
+    return randomUUID();
+  }
+  const trimmed = candidate.trim();
+  if (trimmed.length === 36 && STRICT_UUID_REGEX.test(trimmed)) {
+    return trimmed.toLowerCase();
+  }
+  return randomUUID();
+}
+
+/**
+ * Resolves the frontend base URL strictly from allowlisted environment configurations.
+ * Prevents host-header/Origin injection attacks that could leak raw tokens to attacker servers (SECURITY-NFR / BR-INV-02).
+ */
+export function resolveFrontendBaseUrl(requestOrigin?: string): string {
+  const isProd = process.env.NODE_ENV === 'production';
+  const configured = [
+    process.env.FRONTEND_URL,
+    process.env.APP_BASE_URL,
+    ...(isProd ? [] : ['http://localhost:3000', 'http://localhost:3001', 'http://127.0.0.1:3000']),
+  ].filter(Boolean) as string[];
+
+  const defaultBaseUrl =
+    process.env.FRONTEND_URL ||
+    process.env.APP_BASE_URL ||
+    (isProd ? 'https://app.shipde.vn' : 'http://localhost:3000');
+
+  if (!requestOrigin) {
+    return defaultBaseUrl;
+  }
+
+  try {
+    const originHost = new URL(requestOrigin).origin;
+    const isAllowlisted = configured.some((allowed) => {
+      try {
+        return new URL(allowed).origin === originHost;
+      } catch {
+        return false;
+      }
+    });
+
+    if (isAllowlisted) {
+      return originHost;
+    }
+  } catch {
+    // Malformed origin header
+  }
+
+  return defaultBaseUrl;
+}

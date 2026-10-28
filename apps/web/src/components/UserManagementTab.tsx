@@ -24,14 +24,57 @@ import {
   ChevronRight,
   Filter,
   Layers,
-  Loader2,
-  RefreshCw,
+  Mail,
+  Phone,
   AlertCircle,
+  RefreshCw,
+  Loader2,
+  Clock,
+  Warehouse,
 } from 'lucide-react';
 import { RoleItem } from '@shipde/contracts';
+import { useAuth } from '@/context/AuthContext';
 import { InviteUserModal } from './forms/InviteUserModal';
 
 // Available Stores in the system
+export const INVITE_SUCCESS_TOAST = 'Đã gửi lời mời thành công';
+export const INVITATIONS_EMPTY_STATE_TEXT = 'Chưa có lời mời nào đang chờ xử lý';
+export const INVITATIONS_FORBIDDEN_TEXT = '403 — Không Có Quyền Truy Cập';
+export const INVITATIONS_RETRY_LABEL = 'Thử lại';
+
+export function isManageUsersForbidden(userRole?: string | null): boolean {
+  if (!userRole) return true;
+  return userRole !== 'OWNER' && userRole !== 'OPS_CSKH';
+}
+
+export type InvitationsUIState = 'forbidden' | 'error' | 'loading' | 'empty' | 'ready';
+
+export function resolveInvitationsUIState(params: {
+  isForbidden: boolean;
+  error: string | null;
+  loading: boolean;
+  itemCount: number;
+}): InvitationsUIState {
+  if (params.isForbidden) return 'forbidden';
+  if (params.error) return 'error';
+  if (params.loading) return 'loading';
+  if (params.itemCount === 0) return 'empty';
+  return 'ready';
+}
+
+/**
+ * Empty state contract helper (Round 11 Finding 3 / SCR-USR-01):
+ * Never show empty copy during an outage or error; empty state is only shown
+ * when the request succeeded with zero rows.
+ */
+export function shouldDisplayInvitationsEmptyState(params: {
+  error: string | null;
+  loading: boolean;
+  itemCount: number;
+}): boolean {
+  return !params.error && !params.loading && params.itemCount === 0;
+}
+
 export interface StoreItem {
   id: string;
   code: string;
@@ -44,6 +87,19 @@ export interface StoreItem {
 }
 
 // User with Store Scoping & Custom Overrides
+export function formatStoreScopeLabel(storeScopes?: string[] | null): string {
+  if (storeScopes && storeScopes.length > 0) {
+    return storeScopes.join(', ');
+  }
+  return 'không gán phạm vi';
+}
+
+export function isInvitationResendable(status: string, consumedAt?: string | null): boolean {
+  if (consumedAt) return false;
+  const s = status.toUpperCase();
+  return s === 'PENDING' || s === 'EXPIRED';
+}
+
 export interface UserWithStores {
   id: string;
   full_name: string;
@@ -58,11 +114,107 @@ export interface UserWithStores {
 }
 
 export const UserManagementTab: React.FC = () => {
-  const [activeSubTab, setActiveSubTab] = useState<'matrix' | 'stores' | 'members' | 'devices'>(
-    'members'
-  );
+  const { token, user } = useAuth();
+  const [activeSubTab, setActiveSubTab] = useState<
+    'matrix' | 'stores' | 'members' | 'devices' | 'invitations'
+  >('members');
   const [isInviteOpen, setIsInviteOpen] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // Invitations state (FEAT-USR-01)
+  const [invitations, setInvitations] = useState<any[]>([]);
+  const [invitationsLoading, setInvitationsLoading] = useState(false);
+  const [invitationsError, setInvitationsError] = useState<string | null>(null);
+  const [invitationsStatusFilter, setInvitationsStatusFilter] = useState<string>('ALL');
+  const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
+
+  const isForbidden = isManageUsersForbidden(user?.role);
+
+  const fetchInvitations = useCallback(async () => {
+    if (isForbidden) return;
+    setInvitationsLoading(true);
+    setInvitationsError(null);
+    try {
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+      const url = new URL(`${apiBase}/api/v1/invitations`);
+      if (invitationsStatusFilter !== 'ALL') {
+        url.searchParams.set('status', invitationsStatusFilter);
+      }
+      const res = await fetch(url.toString(), {
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error?.message || 'Không thể tải danh sách lời mời');
+      }
+      setInvitations(data.data || []);
+    } catch (err: any) {
+      setInvitationsError(err.message || 'Lỗi kết nối khi tải lời mời');
+    } finally {
+      setInvitationsLoading(false);
+    }
+  }, [token, invitationsStatusFilter, isForbidden]);
+
+  useEffect(() => {
+    if (activeSubTab === 'invitations') {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- Client-side invitations list initial fetch
+      void fetchInvitations();
+    }
+  }, [activeSubTab, fetchInvitations]);
+
+  const handleResendInvite = async (inviteId: string) => {
+    setActionLoadingId(inviteId);
+    setInvitationsError(null);
+    try {
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+      const res = await fetch(`${apiBase}/api/v1/invitations/${inviteId}/resend`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error?.message || 'Không thể gửi lại lời mời');
+      }
+      setToastMessage('Đã cấp lại lời mời thành công và gia hạn 7 ngày');
+      void fetchInvitations();
+    } catch (err: any) {
+      setInvitationsError(err.message || 'Thao tác gửi lại lời mời thất bại. Vui lòng thử lại.');
+    } finally {
+      setActionLoadingId(null);
+    }
+  };
+
+  const handleCancelInvite = async (inviteId: string) => {
+    if (!confirm('Bạn có chắc chắn muốn hủy lời mời này?')) return;
+    setActionLoadingId(inviteId);
+    setInvitationsError(null);
+    try {
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+      const res = await fetch(`${apiBase}/api/v1/invitations/${inviteId}/cancel`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error?.message || 'Không thể hủy lời mời');
+      }
+      setToastMessage('Đã hủy lời mời thành công');
+      void fetchInvitations();
+    } catch (err: any) {
+      setInvitationsError(err.message || 'Thao tác hủy lời mời thất bại. Vui lòng thử lại.');
+    } finally {
+      setActionLoadingId(null);
+    }
+  };
 
   // Modal edit user state
   const [editingUser, setEditingUser] = useState<UserWithStores | null>(null);
@@ -394,7 +546,9 @@ export const UserManagementTab: React.FC = () => {
           <button
             type="button"
             onClick={() => setIsInviteOpen(true)}
-            className="btn-primary text-xs"
+            disabled={Boolean(isForbidden)}
+            className={`btn-primary text-xs ${isForbidden ? 'opacity-50 cursor-not-allowed' : ''}`}
+            title={isForbidden ? 'Bạn không có quyền mời thành viên mới' : ''}
           >
             <UserPlus className="w-3.5 h-3.5" />
             <span>+ Mời Thành Viên Mới</span>
@@ -402,8 +556,8 @@ export const UserManagementTab: React.FC = () => {
         </div>
       </div>
 
-      {/* 4-SubTab Navigation */}
-      <div className="flex border-b border-slate-200 space-x-2 text-xs font-bold">
+      {/* 5-SubTab Navigation */}
+      <div className="flex border-b border-slate-200 space-x-2 text-xs font-bold overflow-x-auto">
         {[
           {
             id: 'members',
@@ -412,15 +566,21 @@ export const UserManagementTab: React.FC = () => {
             count: users.length,
           },
           {
+            id: 'invitations',
+            label: '2. Lời Mời Đội Ngũ (FEAT-USR-01)',
+            icon: Mail,
+            count: invitations.length,
+          },
+          {
             id: 'stores',
-            label: '2. Quản Lý Cửa Hàng / Chi Nhánh',
+            label: '3. Quản Lý Cửa Hàng / Chi Nhánh',
             icon: Store,
             count: stores.length,
           },
-          { id: 'matrix', label: '3. Ma Trận Quyền Nghiệp Vụ (RBAC)', icon: Sliders },
+          { id: 'matrix', label: '4. Ma Trận Quyền Nghiệp Vụ (RBAC)', icon: Sliders },
           {
             id: 'devices',
-            label: '4. Phiên Thiết Bị & Thu Hồi Từ Xa (BR-08)',
+            label: '5. Phiên Thiết Bị & Thu Hồi Từ Xa (BR-08)',
             icon: Smartphone,
             count: deviceSessions.length,
           },
@@ -572,6 +732,300 @@ export const UserManagementTab: React.FC = () => {
               </table>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* SUBTAB: INVITATIONS (FEAT-USR-01) */}
+      {activeSubTab === 'invitations' && (
+        <div className="space-y-4">
+          {isForbidden ? (
+            <div className="p-8 text-center bg-amber-50/60 border border-amber-200 rounded-2xl space-y-2 animate-in fade-in">
+              <ShieldAlert className="w-10 h-10 text-amber-600 mx-auto" />
+              <h4 className="font-bold text-sm text-slate-800">{INVITATIONS_FORBIDDEN_TEXT}</h4>
+              <p className="text-xs text-slate-600 max-w-md mx-auto">
+                Tài khoản của bạn ({user?.role || 'Người dùng'}) không có quyền Quản lý người dùng
+                và vai trò (Manage users/roles). Vui lòng liên hệ Chủ cửa hàng (OWNER) để được cấp
+                quyền.
+              </p>
+            </div>
+          ) : (
+            <>
+              {/* Error banner with retry */}
+              {invitationsError && (
+                <div className="p-3.5 bg-red-50 border border-red-200 text-red-700 rounded-xl flex items-center justify-between text-xs">
+                  <div className="flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 shrink-0" />
+                    <span>{invitationsError}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void fetchInvitations()}
+                      className="px-2.5 py-1 bg-red-100 hover:bg-red-200 text-red-800 rounded font-semibold transition"
+                    >
+                      {INVITATIONS_RETRY_LABEL}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setInvitationsError(null)}
+                      className="text-red-500 hover:text-red-700 font-bold ml-1"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Filter and stats bar */}
+              <div className="modern-card p-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 bg-slate-50/60">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold text-slate-700">Lọc theo trạng thái:</span>
+                  <div className="flex flex-wrap gap-1">
+                    {[
+                      { key: 'ALL', label: 'Tất cả' },
+                      { key: 'PENDING', label: 'Đang chờ' },
+                      { key: 'EXPIRED', label: 'Hết hạn' },
+                      { key: 'ACCEPTED', label: 'Đã chấp nhận' },
+                      { key: 'CANCELLED', label: 'Đã hủy' },
+                    ].map((f) => (
+                      <button
+                        key={f.key}
+                        type="button"
+                        onClick={() => setInvitationsStatusFilter(f.key)}
+                        className={`px-2.5 py-1 rounded-md text-xs font-semibold transition ${
+                          invitationsStatusFilter === f.key
+                            ? 'bg-blue-600 text-white shadow-sm'
+                            : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+                        }`}
+                      >
+                        {f.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void fetchInvitations()}
+                    disabled={invitationsLoading}
+                    className="p-1.5 border border-slate-200 bg-white hover:bg-slate-50 rounded-lg text-slate-600 text-xs transition"
+                    title="Làm mới danh sách"
+                  >
+                    <RefreshCw
+                      className={`w-3.5 h-3.5 ${invitationsLoading ? 'animate-spin' : ''}`}
+                    />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsInviteOpen(true)}
+                    className="btn-primary text-xs"
+                  >
+                    <UserPlus className="w-3.5 h-3.5" />
+                    <span>+ Gửi Lời Mời Mới</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Table / List: dismissible retry alert only on error with zero rows; keep last successful rows on refresh failure */}
+              {!(invitationsError && invitations.length === 0) && (
+                <div className="modern-card overflow-hidden">
+                  {invitationsLoading ? (
+                    <div className="p-6 space-y-3 animate-pulse">
+                      <div className="h-4 bg-slate-200 rounded w-1/4" />
+                      <div className="h-10 bg-slate-100 rounded" />
+                      <div className="h-10 bg-slate-100 rounded" />
+                      <div className="h-10 bg-slate-100 rounded" />
+                    </div>
+                  ) : invitations.length === 0 ? (
+                    <div className="text-center py-12 px-4">
+                      <Mail className="w-12 h-12 text-slate-300 mx-auto mb-3" />
+                      <h4 className="font-bold text-sm text-slate-700">
+                        {INVITATIONS_EMPTY_STATE_TEXT}
+                      </h4>
+                      <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+                        Hiện không có lời mời nào trong mục này. Bạn có thể nhấn &quot;Gửi Lời Mời
+                        Mới&quot; để mời thêm nhân sự vào cửa hàng.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => setIsInviteOpen(true)}
+                        className="btn-primary text-xs mt-4 inline-flex items-center gap-1.5"
+                      >
+                        <UserPlus className="w-3.5 h-3.5" /> Gửi Lời Mời Mới
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left border-collapse text-xs">
+                        <thead>
+                          <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider text-[10px]">
+                            <th className="py-3 px-4">Người Nhận</th>
+                            <th className="py-3 px-4">Vai Trò Chỉ Định</th>
+                            <th className="py-3 px-4">Phạm Vi Chi Nhánh / Kho</th>
+                            <th className="py-3 px-4">Trạng Thái</th>
+                            <th className="py-3 px-4">Thời Gian Hết Hạn</th>
+                            <th className="py-3 px-4 text-right">Thao Tác</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {invitations.map((inv) => {
+                            const isExpired = inv.status === 'EXPIRED';
+                            const isPending = inv.status === 'PENDING';
+                            const isAccepted = inv.status === 'ACCEPTED';
+                            const isCancelled = inv.status === 'CANCELLED';
+                            const isLoadingAction = actionLoadingId === inv.id;
+
+                            return (
+                              <tr key={inv.id} className="hover:bg-slate-50/80 transition">
+                                <td className="py-3 px-4">
+                                  <div className="font-bold text-slate-900 flex items-center gap-1.5">
+                                    {inv.email ? (
+                                      <>
+                                        <Mail className="w-3.5 h-3.5 text-blue-500 shrink-0" />
+                                        <span>{inv.email}</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <Phone className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                                        <span>{inv.phone}</span>
+                                      </>
+                                    )}
+                                  </div>
+                                  <div className="text-[11px] text-slate-400 mt-0.5">
+                                    Tạo ngày: {new Date(inv.created_at).toLocaleDateString('vi-VN')}
+                                  </div>
+                                </td>
+
+                                <td className="py-3 px-4">
+                                  <span className="inline-block px-2 py-0.5 rounded text-[11px] font-bold bg-slate-100 text-slate-700">
+                                    {inv.role === 'OWNER' && 'Chủ Cửa Hàng'}
+                                    {inv.role === 'OPS_CSKH' && 'CSKH / Vận Hành'}
+                                    {inv.role === 'WAREHOUSE' && 'Thủ Kho'}
+                                    {inv.role === 'ACCOUNTANT' && 'Kế Toán'}
+                                  </span>
+                                </td>
+
+                                <td className="py-3 px-4">
+                                  <div className="space-y-1">
+                                    <div className="flex flex-wrap gap-1">
+                                      {inv.store_scopes?.length > 0 ? (
+                                        inv.store_scopes.map((sc: string) => (
+                                          <span
+                                            key={sc}
+                                            className="text-[10px] bg-blue-50 text-blue-700 px-1.5 py-0.2 rounded font-medium"
+                                          >
+                                            {sc}
+                                          </span>
+                                        ))
+                                      ) : (
+                                        <span className="text-[10px] text-slate-400">
+                                          không gán phạm vi
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="flex flex-wrap gap-1">
+                                      {inv.warehouse_scopes?.length > 0 &&
+                                        inv.warehouse_scopes.map((wh: string) => (
+                                          <span
+                                            key={wh}
+                                            className="text-[10px] bg-indigo-50 text-indigo-700 px-1.5 py-0.2 rounded font-medium"
+                                          >
+                                            {wh}
+                                          </span>
+                                        ))}
+                                    </div>
+                                  </div>
+                                </td>
+
+                                <td className="py-3 px-4">
+                                  {isPending && (
+                                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+                                      <Clock className="w-3 h-3" /> Đang chờ xử lý
+                                    </span>
+                                  )}
+                                  {isAccepted && (
+                                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                      <Check className="w-3 h-3" /> Đã chấp nhận
+                                    </span>
+                                  )}
+                                  {isExpired && (
+                                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-red-50 text-red-700 border border-red-200">
+                                      <AlertCircle className="w-3 h-3" /> Đã hết hạn
+                                    </span>
+                                  )}
+                                  {isCancelled && (
+                                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-600 border border-slate-200">
+                                      Đã hủy
+                                    </span>
+                                  )}
+                                </td>
+
+                                <td className="py-3 px-4 text-slate-600">
+                                  <div>{new Date(inv.expires_at).toLocaleDateString('vi-VN')}</div>
+                                  <div className="text-[10px] text-slate-400">
+                                    {new Date(inv.expires_at).toLocaleTimeString('vi-VN')}
+                                  </div>
+                                </td>
+
+                                <td className="py-3 px-4 text-right">
+                                  <div className="flex items-center justify-end gap-1.5">
+                                    {/* Recovery: Resend button for unconsumed PENDING and EXPIRED (Finding 5) */}
+                                    {isInvitationResendable(inv.status, inv.consumed_at) && (
+                                      <button
+                                        type="button"
+                                        onClick={() => void handleResendInvite(inv.id)}
+                                        disabled={isLoadingAction}
+                                        className="px-2.5 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded font-semibold text-xs flex items-center gap-1 transition"
+                                      >
+                                        {isLoadingAction ? (
+                                          <Loader2 className="w-3 h-3 animate-spin" />
+                                        ) : (
+                                          <RefreshCw className="w-3 h-3" />
+                                        )}
+                                        <span>Gửi lại</span>
+                                      </button>
+                                    )}
+
+                                    {/* Cancel button for PENDING */}
+                                    {isPending && (
+                                      <button
+                                        type="button"
+                                        onClick={() => void handleCancelInvite(inv.id)}
+                                        disabled={isLoadingAction}
+                                        className="px-2.5 py-1 bg-slate-100 hover:bg-red-50 hover:text-red-700 hover:border-red-200 text-slate-600 border border-slate-200 rounded font-semibold text-xs flex items-center gap-1 transition"
+                                      >
+                                        {isLoadingAction ? (
+                                          <Loader2 className="w-3 h-3 animate-spin" />
+                                        ) : (
+                                          <span>Hủy lời mời</span>
+                                        )}
+                                      </button>
+                                    )}
+
+                                    {isAccepted && (
+                                      <span className="text-[11px] text-slate-400 italic">
+                                        Đã kích hoạt
+                                      </span>
+                                    )}
+                                    {isCancelled && (
+                                      <span className="text-[11px] text-slate-400 italic">
+                                        Đã hủy bỏ
+                                      </span>
+                                    )}
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          )}
         </div>
       )}
 
@@ -1053,24 +1507,11 @@ export const UserManagementTab: React.FC = () => {
       <InviteUserModal
         isOpen={isInviteOpen}
         onClose={() => setIsInviteOpen(false)}
-        onUserInvited={(newUser: any) => {
-          setUsers((prev) => [
-            ...prev,
-            {
-              id: `usr_${Date.now().toString().slice(-4)}`,
-              full_name: newUser.name,
-              email: newUser.email,
-              phone: '0901234888',
-              role: newUser.role,
-              assigned_stores: ['store_01'],
-              status: 'ACTIVE',
-              last_login: 'Vừa mời',
-              created_at: new Date().toLocaleDateString('vi-VN'),
-            },
-          ]);
-          setToastMessage(
-            `Đã gửi thư mời kèm link kích hoạt cho [${newUser.email}]. Token hết hạn sau 7 ngày (CN-24).`
-          );
+        onUserInvited={(_invited: any) => {
+          setIsInviteOpen(false);
+          setToastMessage(INVITE_SUCCESS_TOAST);
+          setActiveSubTab('invitations');
+          void fetchInvitations();
           setTimeout(() => setToastMessage(null), 5000);
         }}
       />
