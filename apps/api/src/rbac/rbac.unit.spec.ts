@@ -3214,6 +3214,7 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
     assert.strictEqual(pathMetadata, 'api/v1', 'RbacController must only listen on api/v1');
 
     // 2. Verify PermissionsGuard returns cleanly
+    await service.ensurePlatformSeed();
     const mockReflector = {
       getAllAndOverride: () => ['order:view_create'],
     };
@@ -4442,6 +4443,7 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
       for (const log of errorLogs) {
         assertNoSensitiveData(log);
       }
+      testService.onModuleDestroy();
     } finally {
       console.error = originalConsoleError;
     }
@@ -4587,6 +4589,27 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
       }
     );
 
+    // 2b. PermissionsGuard also calls assertPlatformSeedReady and throws 503 while pending (Finding / r20)
+    const permGuard = new PermissionsGuard(
+      { getAllAndOverride: () => ['order:view_create'] } as any,
+      testService
+    );
+    await assert.rejects(
+      async () => {
+        await permGuard.canActivate({
+          switchToHttp: () => ({ getRequest: () => ({}) }),
+          getHandler: () => ({}),
+          getClass: () => ({}),
+        } as any);
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 503);
+        assert.strictEqual(err.code, 'SERVICE_UNAVAILABLE');
+        return true;
+      }
+    );
+
     // 3. Once seed succeeds, RbacSeedGuard allows request through
     await testService.ensurePlatformSeed();
     assert.strictEqual(testService.isReady(), true);
@@ -4625,7 +4648,7 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
       assert.strictEqual(
         testService.isReady(),
         false,
-        'Service remains not-ready after retry exhaustion'
+        'Service remains not-ready after initial retry exhaustion'
       );
       assert.ok(errorLogs.length >= 2, 'Failures must be logged during background retry');
 

@@ -27,10 +27,19 @@ export class HealthService {
       storage,
     };
 
-    let isRbacReady = true;
+    let isRbacReady = false;
     if (this.rbacService) {
+      if (!this.rbacService.isReady() && (this.rbacService as any).inFlightSeedPromise) {
+        try {
+          await (this.rbacService as any).inFlightSeedPromise;
+        } catch {
+          // in-flight seed failed; fail closed
+        }
+      }
       isRbacReady = this.rbacService.isReady();
       checks.rbac = isRbacReady ? 'up' : 'down';
+    } else {
+      checks.rbac = 'down';
     }
 
     const isReady = database === 'up' && redis === 'up' && storage === 'up' && isRbacReady;

@@ -200,8 +200,11 @@ async function runApiTests() {
     const mockStorage: any = {
       checkReadiness: async () => 'up' as const,
     };
+    const mockRbac: any = {
+      isReady: () => true,
+    };
 
-    const healthService = new HealthService(mockPrisma, mockRedis, mockStorage);
+    const healthService = new HealthService(mockPrisma, mockRedis, mockStorage, mockRbac);
     const healthController = new HealthController(healthService);
 
     // Test liveness probe

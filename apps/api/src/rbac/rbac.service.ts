@@ -156,12 +156,16 @@ export function isMfaAssuranceFresh(
   return ageMs >= -60000 && ageMs <= MFA_FRESH_WINDOW_MS;
 }
 
+export const NODE_MAX_TIMER_MS = 2_147_483_647;
+export const MAX_RETRY_BACKOFF_MS = 30_000;
+
 @Injectable()
 export class RbacService implements OnModuleInit, OnModuleDestroy {
   private isSeeded = false;
   private isDestroyed = false;
   private retryTimeoutHandle: NodeJS.Timeout | null = null;
   private retryResolve: (() => void) | null = null;
+  public inFlightSeedPromise: Promise<void> | null = null;
   public seedPromise: Promise<void> | null = null;
 
   constructor(
@@ -186,43 +190,22 @@ export class RbacService implements OnModuleInit, OnModuleDestroy {
   }
 
   private resolveRetryIntervalMs(): number {
-    const envVal = process.env.RBAC_SEED_RETRY_INTERVAL_MS;
-    if (envVal !== undefined && envVal !== '') {
-      const parsed = Number(envVal);
-      if (Number.isSafeInteger(parsed) && parsed > 0) {
-        return parsed;
-      }
-    }
-    return (
-      this.config?.RBAC_SEED_RETRY_INTERVAL_MS ?? WORKSPACE_ENV.DEFAULT_RBAC_SEED_RETRY_INTERVAL_MS
-    );
+    const val =
+      this.config?.RBAC_SEED_RETRY_INTERVAL_MS ?? WORKSPACE_ENV.DEFAULT_RBAC_SEED_RETRY_INTERVAL_MS;
+    return Math.min(Math.max(1, val), NODE_MAX_TIMER_MS);
   }
 
   private resolveMaxAttempts(): number {
-    const envVal = process.env.RBAC_SEED_MAX_ATTEMPTS;
-    if (envVal !== undefined && envVal !== '') {
-      const parsed = Number(envVal);
-      if (Number.isSafeInteger(parsed) && parsed > 0) {
-        return parsed;
-      }
-    }
     return this.config?.RBAC_SEED_MAX_ATTEMPTS ?? WORKSPACE_ENV.DEFAULT_RBAC_SEED_MAX_ATTEMPTS;
   }
 
   private resolveBackoffFactor(): number {
-    const envVal = process.env.RBAC_SEED_BACKOFF_FACTOR;
-    if (envVal !== undefined && envVal !== '') {
-      const parsed = Number(envVal);
-      if (!Number.isNaN(parsed) && parsed >= 1.0) {
-        return parsed;
-      }
-    }
     return this.config?.RBAC_SEED_BACKOFF_FACTOR ?? WORKSPACE_ENV.DEFAULT_RBAC_SEED_BACKOFF_FACTOR;
   }
 
   async onModuleInit(): Promise<void> {
     if (typeof this.prisma?.$transaction !== 'function') {
-      this.isSeeded = true;
+      this.isSeeded = false;
       return;
     }
     // Startup is non-blocking (AC-FOUND-03-04, AC-FOUND-03-06).
@@ -259,13 +242,16 @@ export class RbacService implements OnModuleInit, OnModuleDestroy {
         );
         return;
       } catch (err: unknown) {
-        this.isSeeded = false;
+        // A failed attempt never clears a newer success (Finding 2)
         const isLastAttempt = attempt >= maxAttempts;
+        const originalError = (err as any)?.originalError ?? err;
+        const sanitizedCause = sanitizeErrorMessage(originalError);
+
         console.error(
           formatStructuredLog({
             level: 'error',
             service: 'api',
-            message: `RBAC platform seed attempt ${attempt}/${maxAttempts} failed: ${sanitizeErrorMessage(err)}`,
+            message: `RBAC platform seed attempt ${attempt}/${maxAttempts} failed: ${sanitizedCause}`,
             metadata: {
               attempt,
               maxAttempts,
@@ -275,9 +261,12 @@ export class RbacService implements OnModuleInit, OnModuleDestroy {
           })
         );
 
-        if (!isLastAttempt && !this.isDestroyed) {
+        if (!isLastAttempt && !this.isDestroyed && !this.isSeeded) {
           await this.delay(currentDelayMs);
-          currentDelayMs = Math.round(currentDelayMs * backoffFactor);
+          currentDelayMs = Math.min(
+            Math.round(currentDelayMs * backoffFactor),
+            MAX_RETRY_BACKOFF_MS
+          );
         }
       }
     }
@@ -288,21 +277,71 @@ export class RbacService implements OnModuleInit, OnModuleDestroy {
           level: 'error',
           service: 'api',
           message:
-            'RBAC platform seed exhausted all retry attempts without succeeding; RBAC endpoints will fail closed',
+            'RBAC platform seed exhausted initial retry attempts; continuing background retries with capped backoff',
           metadata: { maxAttempts },
         })
+      );
+
+      // Keep retrying in background with capped backoff instead of giving up permanently (Residual risk recovery)
+      void this.continueIndefiniteBackgroundRetry(currentDelayMs, backoffFactor, maxAttempts).catch(
+        () => {}
       );
     }
   }
 
+  private async continueIndefiniteBackgroundRetry(
+    initialDelayMs: number,
+    backoffFactor: number,
+    initialAttempts: number
+  ): Promise<void> {
+    let currentDelayMs = Math.min(Math.round(initialDelayMs * backoffFactor), MAX_RETRY_BACKOFF_MS);
+    let attempt = initialAttempts + 1;
+
+    while (!this.isSeeded && !this.isDestroyed) {
+      await this.delay(currentDelayMs);
+      if (this.isSeeded || this.isDestroyed) break;
+
+      try {
+        await this.ensurePlatformSeed();
+        console.info(
+          formatStructuredLog({
+            level: 'info',
+            service: 'api',
+            message: 'RBAC platform permissions and system roles seeded successfully',
+            metadata: { attempt },
+          })
+        );
+        return;
+      } catch (err: unknown) {
+        const originalError = (err as any)?.originalError ?? err;
+        const sanitizedCause = sanitizeErrorMessage(originalError);
+        console.error(
+          formatStructuredLog({
+            level: 'error',
+            service: 'api',
+            message: `RBAC platform seed background retry attempt ${attempt} failed: ${sanitizedCause}`,
+            metadata: {
+              attempt,
+              retryable: true,
+              nextRetryDelayMs: currentDelayMs,
+            },
+          })
+        );
+        currentDelayMs = Math.min(Math.round(currentDelayMs * backoffFactor), MAX_RETRY_BACKOFF_MS);
+        attempt++;
+      }
+    }
+  }
+
   private async delay(ms: number): Promise<void> {
+    const clampedMs = Math.min(Math.max(0, ms), NODE_MAX_TIMER_MS);
     return new Promise<void>((resolve) => {
       this.retryResolve = resolve;
       this.retryTimeoutHandle = setTimeout(() => {
         this.retryTimeoutHandle = null;
         this.retryResolve = null;
         resolve();
-      }, ms);
+      }, clampedMs);
     });
   }
 
@@ -322,129 +361,159 @@ export class RbacService implements OnModuleInit, OnModuleDestroy {
   /**
    * Ensures platform permissions and system roles are populated in the database.
    * Runs as a single atomic transaction reconciling system roles and permissions (Finding 8 / BR-RBAC-01).
+   * Shares a single in-flight promise to prevent concurrent duplicate execution (Finding 2).
    */
   async ensurePlatformSeed(): Promise<void> {
     if (this.isSeeded) return;
 
-    try {
-      await this.prisma.$transaction(async (tx) => {
-        // 1. Upsert all canonical platform permissions
-        for (let i = 0; i < PLATFORM_PERMISSIONS.length; i++) {
-          const p = PLATFORM_PERMISSIONS[i];
-          const permId = deterministicUuid(PERMISSION_UUID_PREFIX, i + 1);
-          await tx.permission.upsert({
-            where: { code: p.code },
-            update: {
-              name: p.name,
-              description: p.description,
-              category: p.category,
-            },
-            create: {
-              id: permId,
-              code: p.code,
-              name: p.name,
-              description: p.description,
-              category: p.category,
-            },
-          });
-        }
-
-        // Fetch all permission mappings by code within the transaction
-        const allPerms = await tx.permission.findMany();
-        const permMap = new Map<string, string>(allPerms.map((p) => [p.code, p.id]));
-
-        // 2. Reconcile all built-in system roles transactionally
-        for (let i = 0; i < SYSTEM_ROLES.length; i++) {
-          const sr = SYSTEM_ROLES[i];
-          const roleId =
-            SYSTEM_ROLE_IDS[sr.code] || deterministicUuid(SYSTEM_ROLE_UUID_PREFIX, i + 1);
-
-          const role = await tx.role.upsert({
-            where: { code: sr.code },
-            update: {
-              name: sr.name,
-              name_lower: sr.name.toLowerCase(),
-              description: sr.description,
-              is_system: true,
-            },
-            create: {
-              id: roleId,
-              code: sr.code,
-              name: sr.name,
-              name_lower: sr.name.toLowerCase(),
-              description: sr.description,
-              is_system: true,
-              merchant_id: null,
-            },
-          });
-
-          // Reconcile role_permissions: add missing, delete obsolete
-          const desiredPermIds = new Set(
-            sr.permissions.map((code) => permMap.get(code)).filter(Boolean) as string[]
-          );
-          const existingRolePerms = await tx.rolePermission.findMany({
-            where: { role_id: role.id },
-          });
-
-          // Delete permissions no longer in SYSTEM_ROLES
-          const toDelete = existingRolePerms.filter((rp) => !desiredPermIds.has(rp.permission_id));
-          if (toDelete.length > 0) {
-            await tx.rolePermission.deleteMany({
-              where: {
-                role_id: role.id,
-                permission_id: { in: toDelete.map((rp) => rp.permission_id) },
-              },
-            });
-          }
-
-          // Insert missing permissions
-          const existingPermIdSet = new Set(existingRolePerms.map((rp) => rp.permission_id));
-          const toInsert = Array.from(desiredPermIds).filter((pid) => !existingPermIdSet.has(pid));
-          for (const pId of toInsert) {
-            await tx.rolePermission.create({
-              data: {
-                role_id: role.id,
-                permission_id: pId,
-              },
-            });
-          }
-
-          // Append audit record for every system-role permission change (Finding 1 / Round 12 / BR-RBAC-07 / BR-RBAC-04)
-          // Platform seed audit must not depend on a customer merchant; uses nullable platform actor matching audit schema
-          if (toDelete.length > 0 || toInsert.length > 0) {
-            await tx.auditLog.create({
-              data: {
-                merchant_id: null,
-                user_id: null,
-                action: 'SYSTEM_ROLE_PERMISSIONS_RECONCILED',
-                entity_type: 'Role',
-                entity_id: role.id,
-                old_value: {
-                  code: sr.code,
-                  permissions: existingRolePerms.map((rp) => rp.permission_id),
-                },
-                new_value: {
-                  code: sr.code,
-                  permissions: Array.from(desiredPermIds),
-                },
-                reason: 'System role seed reconciliation',
-              },
-            });
-          }
-        }
-      });
-
-      this.isSeeded = true;
-    } catch (err: any) {
-      this.isSeeded = false;
-      throw new CanonicalApiException(
-        HttpStatus.SERVICE_UNAVAILABLE,
-        'SERVICE_UNAVAILABLE',
-        'Không thể khởi tạo danh mục quyền hệ thống',
-        true,
-        'Vui lòng thử lại sau'
-      );
+    if (this.inFlightSeedPromise) {
+      return this.inFlightSeedPromise;
     }
+
+    const runSeed = async (): Promise<void> => {
+      try {
+        if (typeof this.prisma?.$transaction !== 'function') {
+          throw new Error('Prisma $transaction is not available');
+        }
+
+        await this.prisma.$transaction(async (tx) => {
+          // 1. Upsert all canonical platform permissions
+          for (let i = 0; i < PLATFORM_PERMISSIONS.length; i++) {
+            const p = PLATFORM_PERMISSIONS[i];
+            const permId = deterministicUuid(PERMISSION_UUID_PREFIX, i + 1);
+            await tx.permission.upsert({
+              where: { code: p.code },
+              update: {
+                name: p.name,
+                description: p.description,
+                category: p.category,
+              },
+              create: {
+                id: permId,
+                code: p.code,
+                name: p.name,
+                description: p.description,
+                category: p.category,
+              },
+            });
+          }
+
+          // Fetch all permission mappings by code within the transaction
+          const allPerms = await tx.permission.findMany();
+          const permMap = new Map<string, string>(allPerms.map((p) => [p.code, p.id]));
+
+          // 2. Reconcile all built-in system roles transactionally
+          for (let i = 0; i < SYSTEM_ROLES.length; i++) {
+            const sr = SYSTEM_ROLES[i];
+            const roleId =
+              SYSTEM_ROLE_IDS[sr.code] || deterministicUuid(SYSTEM_ROLE_UUID_PREFIX, i + 1);
+
+            const role = await tx.role.upsert({
+              where: { code: sr.code },
+              update: {
+                name: sr.name,
+                name_lower: sr.name.toLowerCase(),
+                description: sr.description,
+                is_system: true,
+              },
+              create: {
+                id: roleId,
+                code: sr.code,
+                name: sr.name,
+                name_lower: sr.name.toLowerCase(),
+                description: sr.description,
+                is_system: true,
+                merchant_id: null,
+              },
+            });
+
+            // Reconcile role_permissions: add missing, delete obsolete
+            const desiredPermIds = new Set(
+              sr.permissions.map((code) => permMap.get(code)).filter(Boolean) as string[]
+            );
+            const existingRolePerms = await tx.rolePermission.findMany({
+              where: { role_id: role.id },
+            });
+
+            // Delete permissions no longer in SYSTEM_ROLES
+            const toDelete = existingRolePerms.filter(
+              (rp) => !desiredPermIds.has(rp.permission_id)
+            );
+            if (toDelete.length > 0) {
+              await tx.rolePermission.deleteMany({
+                where: {
+                  role_id: role.id,
+                  permission_id: { in: toDelete.map((rp) => rp.permission_id) },
+                },
+              });
+            }
+
+            // Insert missing permissions
+            const existingPermIdSet = new Set(existingRolePerms.map((rp) => rp.permission_id));
+            const toInsert = Array.from(desiredPermIds).filter(
+              (pid) => !existingPermIdSet.has(pid)
+            );
+            for (const pId of toInsert) {
+              await tx.rolePermission.create({
+                data: {
+                  role_id: role.id,
+                  permission_id: pId,
+                },
+              });
+            }
+
+            // Append audit record for every system-role permission change (Finding 1 / Round 12 / BR-RBAC-07 / BR-RBAC-04)
+            // Platform seed audit must not depend on a customer merchant; uses nullable platform actor matching audit schema
+            if (toDelete.length > 0 || toInsert.length > 0) {
+              await tx.auditLog.create({
+                data: {
+                  merchant_id: null,
+                  user_id: null,
+                  action: 'SYSTEM_ROLE_PERMISSIONS_RECONCILED',
+                  entity_type: 'Role',
+                  entity_id: role.id,
+                  old_value: {
+                    code: sr.code,
+                    permissions: existingRolePerms.map((rp) => rp.permission_id),
+                  },
+                  new_value: {
+                    code: sr.code,
+                    permissions: Array.from(desiredPermIds),
+                  },
+                  reason: 'System role seed reconciliation',
+                },
+              });
+            }
+          }
+        });
+
+        this.isSeeded = true;
+      } catch (err: any) {
+        // Finding 2 & Finding 5:
+        // A failed attempt NEVER clears an existing success (e.g. if another caller committed)!
+        // Preserve original error cause sanitized for observability.
+        const originalError = err;
+        const sanitizedCause = sanitizeErrorMessage(originalError);
+        const canonicalEx = new CanonicalApiException(
+          HttpStatus.SERVICE_UNAVAILABLE,
+          'SERVICE_UNAVAILABLE',
+          'Không thể khởi tạo danh mục quyền hệ thống',
+          true,
+          'Vui lòng thử lại sau',
+          undefined,
+          undefined,
+          { originalCause: sanitizedCause }
+        );
+        (canonicalEx as any).originalError = originalError;
+        throw canonicalEx;
+      } finally {
+        this.inFlightSeedPromise = null;
+      }
+    };
+
+    const promise = runSeed();
+    this.inFlightSeedPromise = promise;
+    return promise;
   }
 
   /**

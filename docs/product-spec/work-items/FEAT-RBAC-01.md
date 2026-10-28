@@ -141,32 +141,50 @@ $ tsx scripts/verify-secrets.ts
 
 ### E2E and build evidence
 
-**Timestamp**: 2026-10-28 07:49:00
-**HEAD**: `7293eab0fff70a1e4c50b6fe4ce58ca4f4c28716`
+**Timestamp**: 2026-10-28 15:24:00
+**Reviewed Base HEAD**: `e2e75ba2a5198cbc130a934b16812b06029f373a`
 
 #### 1. `pnpm contract:check`
 - **Exit Code**: `0`
 - **Summary**:
   - OpenAPI Spec Version: `3.1.0`
-  - Total endpoints verified: `42` (100% synced with `@shipde/contracts`)
+  - Total endpoints verified: `49` (100% synced with `@shipde/contracts`)
   - Drift count: `0`
 
 #### 2. `pnpm build`
 - **Exit Code**: `0`
 - **Summary**:
-  - Turbo tasks: `8 successful, 8 total` (4 cached, 4 executed, 0 failed)
+  - Turbo tasks: `8 successful, 8 total` (0 failed)
   - Packages: `@shipde/api`, `@shipde/config`, `@shipde/contracts`, `@shipde/testkit`, `@shipde/ui`, `@shipde/web`, `@shipde/worker`
-  - Next.js static pages: `21/21` generated (`0` errors)
+  - Next.js static pages: `27/27` generated (`0` errors)
   - Prisma Client: Generated (`v6.19.3`)
-  - Build duration: `16.429s`
+  - Build duration: `16.239s`
 
 #### 3. `pnpm test:e2e`
 - **Exit Code**: `0`
 - **Summary**:
   - Turbo tasks: `1 successful, 1 total` (`0` failed)
   - E2E scenarios (`E2E-01` to `E2E-12`): `12/12` passed (`0` failed, 100%)
-  - Comprehensive business rules audit: `42/42` passed (`0` failed, 100%)
-  - Execution duration: `1.049s`
+  - Comprehensive business rules audit: `57/57` passed (`0` failed, 100%)
+  - Execution duration: `1.267s`
+
+#### 4. `rbac unit` (`apps/api/src/rbac/rbac.unit.spec.ts`)
+- **Exit Code**: `0`
+- **Summary**:
+  - Tests: `79/79` passed (`0` failed, 100%)
+  - Seed retry loop, single in-flight promise, sanitized cause logging, fail-closed 503 assertions, PermissionsGuard seed check, and config validation proven.
+
+#### 5. `rbac supertest` (`apps/api/src/rbac/rbac.supertest.spec.ts`)
+- **Exit Code**: `0`
+- **Summary**:
+  - AC-01 through AC-16 HTTP endpoints verified with DB and audit proofs.
+  - Fail-closed HTTP 503 endpoints and readiness probe integration verified.
+
+#### 6. Verification gates (`lint`, `typecheck`, `format:check`, `git diff --check`)
+- `pnpm lint`: `12 successful, 12 total` (`0` warnings, `0` errors)
+- `pnpm typecheck`: `12 successful, 12 total` (`0` errors)
+- `pnpm format:check`: `23/23` files compliant with Prettier (`0` unformatted)
+- `git diff --check`: clean (no whitespace or conflict marker errors)
 
 ## audit_logs.merchant_id nullability
 
