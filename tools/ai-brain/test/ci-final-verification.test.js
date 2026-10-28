@@ -53,12 +53,15 @@ function gh(rollup, head = SHA, logText = 'FAIL: storage down') {
 }
 
 test('CI green on the exact SHA passes; red fails with the job log; pending/none never pass', () => {
-  const ok = [{ name: 'verify', status: 'COMPLETED', conclusion: 'SUCCESS' }];
+  const ok = [
+    { name: 'contract', status: 'COMPLETED', conclusion: 'SUCCESS' },
+    { name: 'application-gate', status: 'COMPLETED', conclusion: 'SUCCESS' },
+  ];
   assert.equal(ci.evaluateCi({ sha: SHA, prNumber: 1, ghRunner: gh(ok) }).state, 'PASS');
 
   const bad = [
     {
-      name: 'verify',
+      name: 'contract',
       status: 'COMPLETED',
       conclusion: 'FAILURE',
       detailsUrl: 'https://github.com/o/r/actions/runs/123/job/9',
@@ -80,6 +83,30 @@ test('CI green on the exact SHA passes; red fails with the job log; pending/none
   );
 });
 
+test('missing required checks or SKIPPED/NEUTRAL checks fail closed', () => {
+  // A sole unrelated success returns PENDING, not PASS
+  const unrelated = [{ name: 'unrelated-job', status: 'COMPLETED', conclusion: 'SUCCESS' }];
+  assert.equal(ci.evaluateCi({ sha: SHA, prNumber: 1, ghRunner: gh(unrelated) }).state, 'PENDING');
+
+  // One required check missing returns PENDING
+  const partial = [{ name: 'contract', status: 'COMPLETED', conclusion: 'SUCCESS' }];
+  assert.equal(ci.evaluateCi({ sha: SHA, prNumber: 1, ghRunner: gh(partial) }).state, 'PENDING');
+
+  // SKIPPED check returns FAIL
+  const skipped = [
+    { name: 'contract', status: 'COMPLETED', conclusion: 'SUCCESS' },
+    { name: 'application-gate', status: 'COMPLETED', conclusion: 'SKIPPED' },
+  ];
+  assert.equal(ci.evaluateCi({ sha: SHA, prNumber: 1, ghRunner: gh(skipped) }).state, 'FAIL');
+
+  // NEUTRAL check returns FAIL
+  const neutral = [
+    { name: 'contract', status: 'COMPLETED', conclusion: 'NEUTRAL' },
+    { name: 'application-gate', status: 'COMPLETED', conclusion: 'SUCCESS' },
+  ];
+  assert.equal(ci.evaluateCi({ sha: SHA, prNumber: 1, ghRunner: gh(neutral) }).state, 'FAIL');
+});
+
 test('awaitCi polls until terminal and times out as not-pass', async () => {
   let n = 0;
   const runner = (args) => {
@@ -87,8 +114,11 @@ test('awaitCi polls until terminal and times out as not-pass', async () => {
     n += 1;
     const roll =
       n < 3
-        ? [{ name: 'v', status: 'IN_PROGRESS' }]
-        : [{ name: 'v', status: 'COMPLETED', conclusion: 'SUCCESS' }];
+        ? [{ name: 'contract', status: 'IN_PROGRESS' }]
+        : [
+            { name: 'contract', status: 'COMPLETED', conclusion: 'SUCCESS' },
+            { name: 'application-gate', status: 'COMPLETED', conclusion: 'SUCCESS' },
+          ];
     return {
       exitCode: 0,
       stdout: JSON.stringify({ headRefOid: SHA, statusCheckRollup: roll }),
@@ -121,14 +151,23 @@ test('awaitCi polls until terminal and times out as not-pass', async () => {
   assert.equal(stuck.timedOut, true);
 });
 
-test('a recorded CI failure feeds repair findings only for that exact SHA', () => {
+test('a recorded CI failure feeds repair findings only for that exact SHA and redacts bearer credentials', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-gate-'));
   try {
-    ci.writeCiFailure(dir, 'FEAT-X-01', { sha: SHA, failed: ['verify'], log: 'boom' });
+    const rawLog = 'Error: Bearer sk-mysecretkey12345678 failed to authenticate token=ghp_secrettoken99999999';
+    ci.writeCiFailure(dir, 'FEAT-X-01', { sha: SHA, failed: ['verify'], log: rawLog });
     const f = ci.ciFindingsFor(dir, 'FEAT-X-01', SHA);
     assert.equal(f.length, 1);
     assert.equal(f[0].id, 'CI_FAILED');
-    assert.match(f[0].detail, /boom/);
+    assert.doesNotMatch(f[0].detail, /sk-mysecretkey/);
+    assert.doesNotMatch(f[0].detail, /ghp_secrettoken/);
+    assert.match(f[0].detail, /\[REDACTED_SECRET\]/);
+
+    const saved = JSON.parse(fs.readFileSync(path.join(dir, 'ci-failure-FEAT-X-01.json'), 'utf8'));
+    assert.doesNotMatch(saved.log, /sk-mysecretkey/);
+    assert.doesNotMatch(saved.log, /ghp_secrettoken/);
+    assert.match(saved.log, /\[REDACTED_SECRET\]/);
+
     assert.deepEqual(ci.ciFindingsFor(dir, 'FEAT-X-01', 'c'.repeat(40)), []);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });

@@ -523,12 +523,13 @@ function createPlanningServices(ctx) {
               };
             }
           } else {
-            lastReason =
-              'PLANNER_LAUNCH_FAILED: ' +
-              String(
-                (res && (res.stderr || res.failureReason)) || 'exit ' + (res && res.exitCode)
-              ).slice(0, 300);
-            noteFailure(state, current, res);
+            const redact = decisions.createSecretRedactor(process.env);
+            const rawDiag =
+              (res && (res.stderr || res.failureReason)) || 'exit ' + (res && res.exitCode);
+            const safeDiag = redact(String(rawDiag));
+            lastReason = ('PLANNER_LAUNCH_FAILED: ' + safeDiag).slice(0, 300);
+            const safeRes = res ? { ...res, stderr: redact(String(res.stderr || '')) } : res;
+            noteFailure(state, current, safeRes);
           }
         }
       }
@@ -545,8 +546,8 @@ function createPlanningServices(ctx) {
     return { success: false, reason: lastReason };
   }
 
-  /** Item the review lane judges: bounded acceptance for a documentation change. */
-  function reviewItemFor(workItemId, title) {
+  /** Item the review lane judges for a documentation-only planning change. */
+  function planReviewItemFor(workItemId, title) {
     return {
       id: workItemId,
       title: title || workItemId,
@@ -561,16 +562,66 @@ function createPlanningServices(ctx) {
     };
   }
 
+  /** Item the review lane judges for an implementation change: load actual Work Item requirements. */
+  function implementationReviewItemFor(workItemId, title, authorRootDir) {
+    const itemPath = path.join(
+      authorRootDir || rootDir,
+      'docs',
+      'product-spec',
+      'work-items',
+      workItemId + '.md'
+    );
+    let allowedPaths = [];
+    let acceptanceCriteria = [];
+    if (fs.existsSync(itemPath)) {
+      try {
+        const text = fs.readFileSync(itemPath, 'utf8');
+        const intake = require('./intake');
+        allowedPaths = intake.deriveAllowedPaths(text);
+        acceptanceCriteria = intake.deriveAcceptanceCriteria(text);
+      } catch {}
+    }
+    return {
+      id: workItemId,
+      title: title || workItemId,
+      role: 'reviewer',
+      allowedPaths:
+        allowedPaths.length > 0 ? allowedPaths : [workItemRel(workItemId), REGISTER_REL],
+      acceptanceCriteria:
+        acceptanceCriteria.length > 0
+          ? acceptanceCriteria
+          : [
+              'Implementation satisfies the Work Item requirements and acceptance criteria.',
+              'All changes are confined to the allowed paths of the Work Item.',
+            ],
+    };
+  }
+
   /**
    * One independent review at an exact SHA. The Controller selects the reviewer
    * (never the author's candidate or failure domain), a launch failure excludes
    * that reviewer and selects the next, and the verdict is bound to the SHA.
    */
-  async function reviewAtSha({ workItemId, sha, baseSha, authorKey, authorRoot, title, branch }) {
+  async function reviewAtSha({
+    workItemId,
+    sha,
+    baseSha,
+    authorKey,
+    authorRoot,
+    title,
+    branch,
+    isPlanReview,
+  }) {
     if (!sha || !SHA_40.test(String(sha))) {
       return {
         verdict: 'BLOCKED',
         reason: 'REVIEW_SHA_UNPINNED: a 40-character commit is required',
+      };
+    }
+    if (!authorKey) {
+      return {
+        verdict: 'BLOCKED',
+        reason: 'AUTHOR_UNKNOWN: an author or writer candidate key is required for independent review',
       };
     }
     const state = newState();
@@ -584,7 +635,9 @@ function createPlanningServices(ctx) {
     const pool = poolOf();
     const orch = orchestrate();
     const launcher = launcherFor(o0);
-    const item = reviewItemFor(workItemId, title);
+    const item = isPlanReview
+      ? planReviewItemFor(workItemId, title)
+      : implementationReviewItemFor(workItemId, title, authorRoot || rootDir);
     const parsedAuthor = authorKey
       ? require('./discovery/identity').parseCandidateKey(authorKey)
       : null;
@@ -734,6 +787,7 @@ function createPlanningServices(ctx) {
       authorKey: plan.candidateKey || candidateKeyOf(candidate),
       authorRoot: plan.workerRoot,
       branch: plan.branch,
+      isPlanReview: true,
     });
     return Object.assign({}, review, { headSha: plan.headSha });
   }
@@ -824,8 +878,11 @@ function createPlanningServices(ctx) {
   }
 
   /** `review pr --pr <n> --sha <40hex>`: review an existing PR at its exact head. */
-  async function reviewPullRequest({ pr, sha, workItemId, authorKey }) {
-    const gh = c.gh || defaultGh;
+  async function reviewPullRequest(opts) {
+    const o = opts || {};
+    const { pr, sha, workItemId, authorKey } = o;
+    const gh = o.gh || c.gh || defaultGh;
+    const gitRunner = o.git || git;
     const view = gh(rootDir, [
       'pr',
       'view',
@@ -849,23 +906,31 @@ function createPlanningServices(ctx) {
     }
     const id =
       workItemId || (String(info.title || '').match(/^\[([A-Z0-9-]+)\]/) || [])[1] || 'PR-' + pr;
-    const fetched = git(rootDir, ['fetch', 'origin', 'pull/' + pr + '/head']);
+    const fetched = gitRunner(rootDir, ['fetch', 'origin', 'pull/' + pr + '/head']);
     if (!fetched.ok) return { verdict: 'BLOCKED', reason: 'PR_FETCH_FAILED: ' + fetched.stderr };
     const baseSha =
       info.baseRefOid ||
-      git(rootDir, ['merge-base', sha, 'origin/' + (c.base || 'main')]).stdout ||
+      gitRunner(rootDir, ['merge-base', sha, 'origin/' + (c.base || 'main')]).stdout ||
       null;
     const writers = authorKey
       ? [authorKey]
       : require('./governed-merge').getWritersFromDecisionLog(id, decisionDir).filter(Boolean);
+    const resolvedAuthor = writers[0] || null;
+    if (!resolvedAuthor) {
+      return {
+        verdict: 'BLOCKED',
+        reason: 'AUTHOR_UNKNOWN: an author or writer candidate key is required to review PR ' + pr,
+      };
+    }
     const review = await reviewAtSha({
       workItemId: id,
       sha,
       baseSha,
-      authorKey: writers[0] || null,
+      authorKey: resolvedAuthor,
       authorRoot: rootDir,
       title: info.title,
       branch: info.headRefName,
+      isPlanReview: false,
     });
     if (review.verdict === 'PASS' || review.verdict === 'CHANGES_REQUIRED') {
       if (review.author) {

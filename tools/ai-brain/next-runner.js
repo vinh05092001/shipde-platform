@@ -1018,19 +1018,19 @@ async function nextLoop(options, deps) {
   const noRouteWaitTracker = opts.noRouteWaitTracker || d.noRouteWaitTracker || new Map();
 
   const dispatchConfig =
-    (sourcesApi && sourcesApi.getDispatchConfig && sourcesApi.getDispatchConfig()) || {};
+    (sourcesApi && sourcesApi.getDispatchConfig && sourcesApi.getDispatchConfig(opts.registry || d.registry, opts)) || {};
   const blockedNoRouteTimeoutMs =
     opts.blockedNoRouteTimeoutMs !== undefined
       ? Number(opts.blockedNoRouteTimeoutMs)
       : d.blockedNoRouteTimeoutMs !== undefined
         ? Number(d.blockedNoRouteTimeoutMs)
-        : Number(dispatchConfig.blockedNoRouteTimeoutMs || 3600000);
+        : Number(dispatchConfig.blockedNoRouteTimeoutMs);
   const blockedNoRoutePollIntervalMs =
     opts.blockedNoRoutePollIntervalMs !== undefined
       ? Number(opts.blockedNoRoutePollIntervalMs)
       : d.blockedNoRoutePollIntervalMs !== undefined
         ? Number(d.blockedNoRoutePollIntervalMs)
-        : Number(dispatchConfig.blockedNoRoutePollIntervalMs || 30000);
+        : Number(dispatchConfig.blockedNoRoutePollIntervalMs);
 
   let iteration = 0;
   while (iteration < maxIterations) {

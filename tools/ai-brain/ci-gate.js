@@ -11,8 +11,9 @@
 const cp = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const { createSecretRedactor } = require('./decisions');
 
-const GREEN = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED']);
+const GREEN = new Set(['SUCCESS']);
 const RED = new Set([
   'FAILURE',
   'ERROR',
@@ -21,6 +22,8 @@ const RED = new Set([
   'ACTION_REQUIRED',
   'STARTUP_FAILURE',
   'STALE',
+  'SKIPPED',
+  'NEUTRAL',
 ]);
 
 function defaultGh(args, cwd) {
@@ -40,11 +43,12 @@ function ciGateConfig(dispatch) {
     pollIntervalMs: Number(c.pollIntervalMs),
     timeoutMs: Number(c.timeoutMs),
     maxLogChars: Number(c.maxLogChars),
+    requiredChecks: Array.isArray(c.requiredChecks) ? c.requiredChecks : [],
   };
 }
 
 /** Classify a rollup into PASS | FAIL | PENDING | MISSING. */
-function classifyRollup(rollup) {
+function classifyRollup(rollup, requiredChecks = []) {
   if (!Array.isArray(rollup) || rollup.length === 0) return { state: 'MISSING', failed: [] };
   const failed = [];
   let pending = false;
@@ -60,6 +64,28 @@ function classifyRollup(rollup) {
     }
   }
   if (failed.length) return { state: 'FAIL', failed };
+
+  if (Array.isArray(requiredChecks) && requiredChecks.length > 0) {
+    for (const req of requiredChecks) {
+      const reqName = String(req).trim().toLowerCase();
+      const match = rollup.find((chk) => {
+        const name = String(chk.name || chk.context || '').trim().toLowerCase();
+        return name === reqName;
+      });
+      if (!match) {
+        return { state: 'PENDING', failed: [], missingChecks: [req] };
+      }
+      const status = String(match.status || 'COMPLETED').toUpperCase();
+      const conclusion = String(match.conclusion || match.state || '').toUpperCase();
+      if (status !== 'COMPLETED' || conclusion !== 'SUCCESS') {
+        if (RED.has(conclusion)) {
+          return { state: 'FAIL', failed: [match] };
+        }
+        return { state: 'PENDING', failed: [] };
+      }
+    }
+  }
+
   return { state: pending ? 'PENDING' : 'PASS', failed: [] };
 }
 
@@ -71,6 +97,7 @@ function runIdOf(chk) {
 function fetchFailedLog(failed, options) {
   const o = options || {};
   const gh = o.ghRunner || defaultGh;
+  const redact = createSecretRedactor(o.env || process.env);
   const max = Number.isFinite(o.maxLogChars) && o.maxLogChars > 0 ? o.maxLogChars : 12000;
   const ids = Array.from(new Set(failed.map(runIdOf).filter(Boolean)));
   const parts = [];
@@ -79,7 +106,7 @@ function fetchFailedLog(failed, options) {
     const res = gh(args, o.cwd);
     if (res && res.exitCode === 0 && res.stdout) parts.push('# run ' + id + '\n' + res.stdout);
   }
-  const text = parts.join('\n');
+  const text = redact(parts.join('\n'));
   return text.length > max ? text.slice(-max) : text;
 }
 
@@ -116,7 +143,9 @@ function evaluateCi(options) {
       reason: 'PR head is not the reviewed SHA',
     };
   }
-  const cls = classifyRollup(data.statusCheckRollup);
+  const cfg = ciGateConfig(o.dispatch);
+  const requiredChecks = o.requiredChecks !== undefined ? o.requiredChecks : cfg.requiredChecks;
+  const cls = classifyRollup(data.statusCheckRollup, requiredChecks);
   const out = {
     state: cls.state,
     sha,
@@ -129,6 +158,7 @@ function evaluateCi(options) {
       repo: o.repo,
       cwd: o.cwd,
       maxLogChars: o.maxLogChars,
+      env: o.env,
     });
   }
   return out;
@@ -152,14 +182,16 @@ async function awaitCi(options) {
 }
 
 /** Persist the failing CI log so the next repair round is fed with it. */
-function writeCiFailure(dir, workItemId, result) {
+function writeCiFailure(dir, workItemId, result, env) {
   if (!dir) return null;
   fs.mkdirSync(dir, { recursive: true });
+  const redact = createSecretRedactor(env || process.env);
+  const safeLog = redact(String(result.log || ''));
   const file = path.join(dir, 'ci-failure-' + workItemId + '.json');
   fs.writeFileSync(
     file,
     JSON.stringify(
-      { workItemId, sha: result.sha, failed: result.failed || [], log: result.log || '' },
+      { workItemId, sha: result.sha, failed: result.failed || [], log: safeLog },
       null,
       2
     ),
@@ -169,9 +201,10 @@ function writeCiFailure(dir, workItemId, result) {
 }
 
 /** Findings for the repair loop from a CI failure recorded for exactly this SHA. */
-function ciFindingsFor(dir, workItemId, sha) {
+function ciFindingsFor(dir, workItemId, sha, env) {
   if (!dir) return [];
   try {
+    const redact = createSecretRedactor(env || process.env);
     const rec = JSON.parse(
       fs.readFileSync(path.join(dir, 'ci-failure-' + workItemId + '.json'), 'utf8')
     );
@@ -184,7 +217,7 @@ function ciFindingsFor(dir, workItemId, sha) {
           'GitHub CI failed on this exact commit (' +
           (rec.failed || []).join(', ') +
           '). Fix the failures shown in the log:\n' +
-          String(rec.log || '').slice(-4000),
+          redact(String(rec.log || '')).slice(-4000),
       },
     ];
   } catch (_) {

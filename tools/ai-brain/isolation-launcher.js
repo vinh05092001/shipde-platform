@@ -279,19 +279,62 @@ function hookedControllerGit(options) {
  * True when the decision log shows a writer or repair turn for this work item:
  * the evidence that a dirty retained root holds this item's own output.
  */
-function retainedRootHasOwnWriterRecord(opts) {
+function retainedRootHasOwnWriterRecord(opts, extra = {}) {
   try {
     const decisions = require('./decisions');
     const baseId = String(opts.workItemId).replace(/-(repair-\d+|review)$/, '');
+    const targetRoot = extra.workerRoot || opts.workerRoot;
+    const targetSha =
+      extra.retainedHeadSha ||
+      extra.retainWorkerHead ||
+      opts.retainWorkerHead ||
+      opts.baseSha;
+    const targetRun = extra.runId || opts.runId;
+    let maxAgeMs = 3600000;
+    try {
+      maxAgeMs = require('./sources').getDispatchConfig().retainedRootMaxAgeMs || 3600000;
+    } catch {}
+    const now = Date.now();
     return decisions
       .readDecisionsSafe({ dir: opts.decisionDir || undefined })
       .some(
-        (rec) =>
-          rec &&
-          rec.workItemId &&
-          String(rec.workItemId).replace(/-(repair-\d+|review)$/, '') === baseId &&
-          (rec.stage === 'writer-launch-result' ||
-            (rec.stage === decisions.Stage.LAUNCHED && !!rec.sha))
+        (rec) => {
+          if (!rec || !rec.workItemId) return false;
+          if (String(rec.workItemId).replace(/-(repair-\d+|review)$/, '') !== baseId) return false;
+          const validStage =
+            rec.stage === 'writer-launch-result' ||
+            (rec.stage === decisions.Stage.LAUNCHED && !!rec.sha);
+          if (!validStage) return false;
+
+          if (targetRoot && (rec.workerRoot || rec.root)) {
+            const recRoot = rec.workerRoot || rec.root;
+            if (path.resolve(recRoot).toLowerCase() !== path.resolve(targetRoot).toLowerCase()) {
+              return false;
+            }
+          }
+
+          if (targetSha && (rec.sha || rec.baseSha || rec.headSha)) {
+            const recSha = String(rec.sha || rec.baseSha || rec.headSha).toLowerCase();
+            const expSha = String(targetSha).toLowerCase();
+            if (recSha !== expSha) {
+              return false;
+            }
+          }
+
+          if (targetRun && rec.runId && rec.runId !== targetRun) {
+            return false;
+          }
+
+          const recTime = rec.at || rec.timestamp || rec.time;
+          if (recTime) {
+            const age = now - new Date(recTime).getTime();
+            if (Number.isFinite(age) && age > maxAgeMs) {
+              return false;
+            }
+          }
+
+          return true;
+        }
       );
   } catch {
     return false;
@@ -2007,7 +2050,12 @@ function getIsolatedLauncher() {
         retainedHeadSha.toLowerCase() === retainWorkerHead.toLowerCase() &&
         opts.workItemId &&
         isTreeDirty(workerRoot) &&
-        retainedRootHasOwnWriterRecord(opts)
+        retainedRootHasOwnWriterRecord(opts, {
+          workerRoot,
+          retainedHeadSha,
+          retainWorkerHead,
+          runId: opts.runId,
+        })
       ) {
         try {
           const checked = hookedControllerGit({
@@ -2633,11 +2681,21 @@ function getIsolatedLauncher() {
                     const absTarget = path.resolve(path.dirname(pkgPath), currentTarget);
                     const normDeps = depsDir.replace(/\\/g, '/').toLowerCase();
                     const normTarget = absTarget.replace(/\\/g, '/').toLowerCase();
+                    let sub = null;
                     if (normTarget.startsWith(normDeps)) {
-                      const sub = absTarget.slice(depsDir.length);
-                      const newTarget = workerRoot + sub;
-                      fs.unlinkSync(pkgPath);
-                      fs.symlinkSync(newTarget, pkgPath, 'junction');
+                      sub = absTarget.slice(depsDir.length).replace(/^[\\/]/, '');
+                    } else {
+                      const match = absTarget.match(/[\\/](packages[\\/][^\\/]+|apps[\\/][^\\/]+)(?:[\\/].*)?$/i);
+                      if (match) {
+                        sub = match[0].replace(/^[\\/]/, '');
+                      }
+                    }
+                    if (sub) {
+                      const newTarget = path.join(workerRoot, sub);
+                      if (normTarget !== newTarget.replace(/\\/g, '/').toLowerCase()) {
+                        fs.unlinkSync(pkgPath);
+                        fs.symlinkSync(newTarget, pkgPath, 'junction');
+                      }
                     }
                   }
                 } catch {}

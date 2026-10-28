@@ -1395,6 +1395,8 @@ module.exports = {
   runIntake,
   DEFAULT_TOKEN_BUDGETS,
   deriveSpec,
+  deriveAllowedPaths,
+  deriveAcceptanceCriteria,
   deriveRiskDomains,
   resolveDependencies,
   buildCatalogue,

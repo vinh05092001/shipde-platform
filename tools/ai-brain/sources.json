@@ -355,6 +355,9 @@
     "maxHostGateSummaryChars": 500,
     "rateLimitCooldownMs": 300000,
     "agyPoolTimeoutMs": 1800000,
+    "blockedNoRouteTimeoutMs": 3600000,
+    "blockedNoRoutePollIntervalMs": 30000,
+    "retainedRootMaxAgeMs": 3600000,
     "verification": {
       "infraDependentScripts": ["test", "test:e2e", "test:integration"],
       "infraFreeSupplements": ["contract:check"],
@@ -364,7 +367,8 @@
       "enabled": true,
       "pollIntervalMs": 30000,
       "timeoutMs": 1800000,
-      "maxLogChars": 12000
+      "maxLogChars": 12000,
+      "requiredChecks": ["contract", "application-gate"]
     },
     "headroomUnknownPenalty": 15,
     "headroomTightPenalty": 10,

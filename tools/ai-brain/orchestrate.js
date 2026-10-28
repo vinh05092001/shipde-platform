@@ -6754,6 +6754,7 @@ async function runOrchestration(goal, opts) {
       itemStep.publication && itemStep.publication.status === PublicationStatus.PUBLISHED_DRAFT
         ? itemStep.publication
         : null;
+    let published;
     if (recordedPublication) {
       if (!log.publications.some((saved) => saved.workItemId === entry.workItemId)) {
         log.publications.push(recordedPublication);
@@ -6771,8 +6772,9 @@ async function runOrchestration(goal, opts) {
         workItemId: entry.workItemId,
         from: 'publication',
       };
-      continue;
-    }
+      published = recordedPublication;
+      entry.publication = recordedPublication;
+    } else {
 
     // RT-R04: a publish attempt already failed or timed out in this run, and
     // isReplayable('publish') says that attempt may never be made again.
@@ -6835,8 +6837,9 @@ async function runOrchestration(goal, opts) {
           String(publishedBranch).replace(/^refs\/heads\//, '')
         );
       }
+      recordPublishDecision(entry, published);
     }
-    recordPublishDecision(entry, published);
+  }
 
     // CI is the final verification: the item is complete only when CI is green on
     // the exact reviewed head SHA. Review PASS alone never completes or merges it.
@@ -6907,16 +6910,12 @@ async function runOrchestration(goal, opts) {
           },
           logOpts
         );
-        recordStepFailure(
-          entry.workItemId,
-          'ci-gate',
-          failure,
-          { role: itemRole },
-          0,
-          0,
-          entry.sha,
-          null
-        );
+        persistStep(entry.workItemId, 'ci_gate_failed', { failure, ci });
+        for (let i = log.outcomes.length - 1; i >= 0; i -= 1) {
+          if (log.outcomes[i].workItemId === entry.workItemId) {
+            log.outcomes.splice(i, 1);
+          }
+        }
         log.outcomes.push({
           workItemId: entry.workItemId,
           status: ItemStatus.BLOCKED,
@@ -6925,6 +6924,8 @@ async function runOrchestration(goal, opts) {
         });
         statusOf.set(entry.workItemId, ItemStatus.BLOCKED);
         break;
+      } else {
+        persistStep(entry.workItemId, 'ci_gate_passed', { ci });
       }
     }
 
@@ -9508,13 +9509,13 @@ function finish(log, statusOf, ctx) {
         ? log.publication
         : null);
     log.refusal = (refusedPublication && refusedPublication.reason) || 'PUBLICATION_REFUSED';
+  } else if (blocked.length > 0) {
+    log.status = RunStatus.BLOCKED;
   } else if (
     publications.some((p) => p.status === PublicationStatus.PUBLISHED_DRAFT) ||
     (log.publication && log.publication.status === PublicationStatus.PUBLISHED_DRAFT)
   ) {
     log.status = RunStatus.PUBLISHED_DRAFT;
-  } else if (blocked.length > 0) {
-    log.status = RunStatus.BLOCKED;
   } else {
     log.status = RunStatus.COMPLETED;
   }

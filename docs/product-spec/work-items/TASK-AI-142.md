@@ -1464,3 +1464,17 @@ Aggregator gateways like 9router failed rolling onboarding entirely when an init
     - `onboardSourceRolling` executes forced tool call probe, sets `combo.capabilities.tools = true`, and stores `capabilityProbes` with matching binding.
     - `dispatch --dry-run` with writer role requiring tools admits onboarded model without `CAPABILITY_UNVERIFIED:tools`.
     - Failed tool probe fails closed without granting tools capability.
+
+### Review repair: Slice (C) planner and CI gate review findings addressed (2026-10-28)
+
+- Fixed 9 independent review findings for slice C:
+  1. Orchestrate resume path: execute CI verification instead of skipping when publication draft exists in checkpoint.
+  2. CI gate checks: require all configured requiredChecks ('contract', 'application-gate') to report and succeed; reject SKIPPED/NEUTRAL checks.
+  3. Shared dependencies link rewriting: dynamically match packages/apps subpaths so two workers sharing cache link to their own roots.
+  4. Review author verification: fail closed with AUTHOR_UNKNOWN when author is missing or unknown.
+  5. Diagnostics & log sanitization: redact credentials and synthetic bearer tokens in planner diagnostics and CI failure logs using createSecretRedactor.
+  6. Historical writer events: check workerRoot, head SHA, runId, and freshness against retainedRootMaxAgeMs in retainedRootHasOwnWriterRecord.
+  7. PR review contracts: load actual Work Item requirements via intake for implementation reviews and reserve doc-only criteria for plan reviews.
+  8. Configurable no-route limits: expose blockedNoRouteTimeoutMs and blockedNoRoutePollIntervalMs via getDispatchConfig without hardcoded fallbacks.
+  9. Quota-scan freshness: implement ifDue directly in scanAllQuotas to prevent unnecessary provider scanning.
+- Regression tests added in `tools/ai-brain/test/task-ai-142-slice-c-review-findings.test.js` and updated in `tools/ai-brain/test/ci-final-verification.test.js`.
