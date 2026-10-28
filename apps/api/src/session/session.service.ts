@@ -19,9 +19,42 @@ const INACTIVITY_DAYS = 30;
 
 @Injectable()
 export class SessionService implements OnApplicationBootstrap {
-  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {
+    this.wrapPrismaTransactionForAudit(prisma);
+  }
+
+  private wrapPrismaTransactionForAudit(prisma: any) {
+    if (!prisma || prisma.__auditWrapped) return;
+    const origTransaction = prisma.$transaction?.bind(prisma);
+    if (!origTransaction) return;
+
+    prisma.$transaction = async (...args: any[]) => {
+      const [arg1, arg2] = args;
+      if (typeof arg1 === 'function') {
+        const onCommitHooks: Array<() => void> = [];
+        const result = await origTransaction(async (tx: any) => {
+          if (tx && !tx.__onCommitHooks) {
+            tx.__onCommitHooks = onCommitHooks;
+          }
+          return arg1(tx);
+        }, arg2);
+
+        for (const hook of onCommitHooks) {
+          try {
+            hook();
+          } catch (e) {
+            console.error('Audit onCommit hook error:', e);
+          }
+        }
+        return result;
+      }
+      return origTransaction(...args);
+    };
+    prisma.__auditWrapped = true;
+  }
 
   onApplicationBootstrap() {
+    this.wrapPrismaTransactionForAudit(this.prisma);
     const key = process.env.AUDIT_IDENTIFIER_HMAC_KEY;
     if (process.env.NODE_ENV === 'production' && (!key || key.trim().length === 0)) {
       throw new Error(
@@ -72,7 +105,7 @@ export class SessionService implements OnApplicationBootstrap {
 
   async list(
     userId: string,
-    merchantId: string,
+    merchantId: string | null,
     currentSessionTokenHash?: string,
     correlationId?: string
   ) {
@@ -180,7 +213,7 @@ export class SessionService implements OnApplicationBootstrap {
   async revoke(
     sessionId: string,
     userId: string,
-    merchantId: string,
+    merchantId: string | null,
     correlationId: string,
     reason = 'User requested revocation',
     ipAddress?: string
@@ -358,7 +391,7 @@ export class SessionService implements OnApplicationBootstrap {
 
   async revokeAll(
     userId: string,
-    merchantId: string,
+    merchantId: string | null,
     currentSessionId: string | undefined,
     dto: RevokeAllDto,
     correlationId: string,
@@ -497,8 +530,14 @@ export class SessionService implements OnApplicationBootstrap {
 
     if (tx) {
       const result = await executeInTransaction(tx);
-      if (typeof result.emitLog === 'function') {
-        result.emitLog();
+      // BR-SESS-07: Never emit audit log before outer transaction commits.
+      if (Array.isArray((tx as any).__onCommitHooks) && typeof result.emitLog === 'function') {
+        (tx as any).__onCommitHooks.push(result.emitLog);
+      } else if (
+        typeof (tx as any).onCommit === 'function' &&
+        typeof result.emitLog === 'function'
+      ) {
+        (tx as any).onCommit(result.emitLog);
       }
       return result.count;
     }
@@ -519,7 +558,7 @@ export class SessionService implements OnApplicationBootstrap {
   async heartbeat(
     sessionId: string,
     userId: string,
-    merchantId: string,
+    merchantId: string | null,
     currentSessionId?: string
   ) {
     const session = await this.prisma.deviceSession.findUnique({

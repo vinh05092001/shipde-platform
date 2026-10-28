@@ -17,6 +17,7 @@ import { hashPassword } from '../auth/password.util';
 import { VERIFICATION_ADAPTER } from '../auth/auth.tokens';
 import { MockVerificationDeliveryAdapter } from '@shipde/testkit';
 import { signAccessToken, resolveAccessTokenSecret } from '../auth/token.util';
+import { generateTotpCode } from '../auth/totp.util';
 
 async function runSessionSupertestSuite() {
   console.log('================================================================');
@@ -215,6 +216,7 @@ async function runSessionSupertestSuite() {
 
     const loginToken = loginRes.body.data?.access_token || loginRes.body.data?.token;
     assert.ok(loginToken, 'Login must issue access token');
+    assert.ok(loginToken.startsWith('v1.'), 'Login access_token must start with v1.');
     const expectedHash = createHash('sha256').update(loginToken).digest('hex');
 
     const sess1 = await prisma.deviceSession.findFirst({
@@ -241,8 +243,19 @@ async function runSessionSupertestSuite() {
     tok1.raw = loginToken;
     tok1.hash = expectedHash;
 
-    // Verify SessionService.create entry point as well
-    const svcRawToken = randomBytes(48).toString('hex');
+    // Verify SessionService.create entry point as well with v1. token
+    const { token: svcRawToken } = signAccessToken(
+      {
+        sub: user.id,
+        sid: randomUUID(),
+        mid: merchant.id,
+        role: RoleEnum.OPS_CSKH,
+        st: 'ACTIVE',
+      },
+      resolveAccessTokenSecret(process.env.AUTH_TOKEN_SECRET),
+      43200
+    );
+    assert.ok(svcRawToken.startsWith('v1.'), 'Service-issued token must start with v1.');
     const svcExpectedHash = createHash('sha256').update(svcRawToken).digest('hex');
     const svcSess = await sessionService.create({
       userId: user.id,
@@ -904,7 +917,9 @@ async function runSessionSupertestSuite() {
     // -------------------------------------------------------------------------
     // BR-SESS-01 / P1-1: Reject token formats without claims & cross-tenant token validation
     // -------------------------------------------------------------------------
-    console.log('[TEST BR-SESS-01 / P1-1] Token format without claims is rejected with 401 SESSION_INVALID');
+    console.log(
+      '[TEST BR-SESS-01 / P1-1] Token format without claims is rejected with 401 SESSION_INVALID'
+    );
     const opaqueToken = randomBytes(48).toString('hex');
     const resOpaque = await request(server)
       .get('/api/v1/sessions')
@@ -912,7 +927,9 @@ async function runSessionSupertestSuite() {
       .expect(401);
     assert.strictEqual(resOpaque.body.error.code, 'SESSION_INVALID');
     assert.strictEqual(resOpaque.body.error.next_action, 'LOGIN');
-    console.log('  PASS: BR-SESS-01 Opaque token format without claims rejected with 401 SESSION_INVALID');
+    console.log(
+      '  PASS: BR-SESS-01 Opaque token format without claims rejected with 401 SESSION_INVALID'
+    );
 
     console.log('[TEST BR-SESS-01 / P1-1] Cross-tenant token rejected with 401 SESSION_INVALID');
     const tokCrossTenant = createSessionToken(user3, merchant2);
@@ -938,7 +955,9 @@ async function runSessionSupertestSuite() {
     assert.ok(dbCross);
     assert.strictEqual(dbCross.status, SessionStatusEnum.ACTIVE);
     await prisma.deviceSession.delete({ where: { id: sessCrossTenant.id } });
-    console.log('  PASS: BR-SESS-01 Cross-tenant token rejected with 401 SESSION_INVALID and target session unaffected');
+    console.log(
+      '  PASS: BR-SESS-01 Cross-tenant token rejected with 401 SESSION_INVALID and target session unaffected'
+    );
 
     // -------------------------------------------------------------------------
     // AC-SESS-20: Audit rollback on failure
@@ -1257,11 +1276,224 @@ async function runSessionSupertestSuite() {
       '  PASS: AC-SESS-21 Zero secrets disclosed; audit log IP is HMAC-SHA256 pseudonymized'
     );
 
+    // -------------------------------------------------------------------------
+    // P1 Finding 2 / BR-SESS-01: Merchant OWNER MFA completion -> Guarded Call
+    // -------------------------------------------------------------------------
+    console.log(
+      '[TEST P1-2] Merchant OWNER MFA completion -> Guarded Call (v1. token minting & validation)'
+    );
+    const ownerMfaEmail = `session.owner.mfa.${testSuffix}@shipde.vn`;
+    const ownerMfaPassword = 'OwnerMfaPassword123!';
+    const ownerMfaUser = await prisma.user.create({
+      data: {
+        merchant_id: merchant.id,
+        email: ownerMfaEmail,
+        full_name: 'Session Owner MFA Verification',
+        password_hash: await hashPassword(ownerMfaPassword),
+        role: RoleEnum.OWNER,
+        status: 'ACTIVE',
+      },
+    });
+
+    // Step A: Primary login throws 403 MFA_ENROLLMENT_REQUIRED with setup-only token
+    const ownerLoginRes = await request(server)
+      .post('/auth/login')
+      .send({
+        identifier: ownerMfaEmail,
+        password: ownerMfaPassword,
+      })
+      .expect(403);
+    assert.strictEqual(ownerLoginRes.body.error.code, 'MFA_ENROLLMENT_REQUIRED');
+    const setupToken = (ownerLoginRes.body.error.setup_token ||
+      ownerLoginRes.body.error.access_token) as string;
+    assert.ok(setupToken, 'Setup token must be returned in error payload');
+    assert.ok(setupToken.startsWith('v1.'), 'Setup token must start with v1.');
+
+    // Step B: Query string bypass attempt with setup token must fail closed with 403 FORBIDDEN (P1 finding 1)
+    const bypassRes = await request(server)
+      .get('/api/v1/sessions?x=/auth/logout')
+      .set('Authorization', `Bearer ${setupToken}`)
+      .expect(403);
+    assert.strictEqual(bypassRes.body.error.code, 'FORBIDDEN');
+    console.log('  PASS: Setup token query string bypass rejected with 403 FORBIDDEN');
+
+    // Step C: Setup MFA factor using setup token on allowlisted path
+    const mfaSetupRes = await request(server)
+      .post('/auth/mfa/setup')
+      .set('Authorization', `Bearer ${setupToken}`)
+      .send({ password: ownerMfaPassword })
+      .expect(200);
+    const totpSecret = mfaSetupRes.body.data?.secret_key;
+    assert.ok(totpSecret, 'TOTP secret_key must be returned by /auth/mfa/setup');
+
+    // Step D: Verify MFA setup with valid TOTP code
+    const totpCode = generateTotpCode(totpSecret);
+    const mfaVerifyRes = await request(server)
+      .post('/auth/mfa/setup/verify')
+      .set('Authorization', `Bearer ${setupToken}`)
+      .send({ code: totpCode })
+      .expect(200);
+    assert.strictEqual(mfaVerifyRes.body.data?.status, 'AUTHENTICATED');
+    const mfaAccessToken = mfaVerifyRes.body.data?.access_token;
+    assert.ok(mfaAccessToken, 'MFA completion must return access_token');
+    assert.ok(mfaAccessToken.startsWith('v1.'), 'MFA completion access_token must start with v1.');
+
+    // Step E: Verify DeviceSession persisted in DB with sha256 of access_token
+    const expectedMfaHash = createHash('sha256').update(mfaAccessToken).digest('hex');
+    const mfaDbSession = await prisma.deviceSession.findFirst({
+      where: {
+        user_id: ownerMfaUser.id,
+        merchant_id: merchant.id,
+        session_token_hash: expectedMfaHash,
+      },
+    });
+    assert.ok(mfaDbSession, 'DeviceSession row must exist in DB for completed MFA session');
+    assert.strictEqual(mfaDbSession.status, SessionStatusEnum.ACTIVE);
+    assert.strictEqual(mfaDbSession.auth_assurance, 'MFA');
+
+    // Step F: Guarded call using newly minted mfaAccessToken
+    const guardedOwnerRes = await request(server)
+      .get('/api/v1/sessions')
+      .set('Authorization', `Bearer ${mfaAccessToken}`)
+      .expect(200);
+    assert.ok(Array.isArray(guardedOwnerRes.body.data));
+    const ownerCurrentSess = guardedOwnerRes.body.data.find((s: any) => s.is_current === true);
+    assert.ok(ownerCurrentSess, 'Guarded call must recognize current session');
+    assert.strictEqual(ownerCurrentSess.session_id, mfaDbSession.id);
+    console.log('  PASS: Merchant OWNER MFA completion -> Guarded call with v1. token');
+
+    // -------------------------------------------------------------------------
+    // P1 Finding 2 / BR-SESS-01: PLATFORM_ADMIN Login & Guarded Calls
+    // -------------------------------------------------------------------------
+    console.log('[TEST P1-2] PLATFORM_ADMIN login & guarded call (v1. token minting & validation)');
+    const adminEmail = `session.admin.${testSuffix}@shipde.vn`;
+    const adminPassword = 'PlatformAdminPassword123!';
+    const adminUser = await prisma.user.create({
+      data: {
+        merchant_id: null,
+        email: adminEmail,
+        full_name: 'Platform Admin Session Test',
+        password_hash: await hashPassword(adminPassword),
+        role: RoleEnum.PLATFORM_ADMIN,
+        status: 'ACTIVE',
+      },
+    });
+
+    // Step A: Login as PLATFORM_ADMIN
+    const adminLoginRes = await request(server)
+      .post('/auth/login')
+      .send({
+        identifier: adminEmail,
+        password: adminPassword,
+      })
+      .expect(200);
+    const adminAccessToken = adminLoginRes.body.data?.access_token;
+    assert.ok(adminAccessToken, 'Platform admin login must return access_token');
+    assert.ok(
+      adminAccessToken.startsWith('v1.'),
+      'Platform admin access_token must start with v1.'
+    );
+
+    const expectedAdminHash = createHash('sha256').update(adminAccessToken).digest('hex');
+    const adminDbSession = await prisma.deviceSession.findFirst({
+      where: {
+        user_id: adminUser.id,
+        merchant_id: null,
+        session_token_hash: expectedAdminHash,
+      },
+    });
+    assert.ok(adminDbSession, 'DeviceSession row must exist for platform admin');
+    assert.strictEqual(adminDbSession.status, SessionStatusEnum.ACTIVE);
+
+    // Step B: Guarded call to /admin/shops (AdminAuthGuard)
+    await request(server)
+      .get('/admin/shops')
+      .set('Authorization', `Bearer ${adminAccessToken}`)
+      .expect(200);
+
+    // Step C: Guarded call to /api/v1/sessions (SessionGuard with nullable merchantId)
+    const adminSessionsRes = await request(server)
+      .get('/api/v1/sessions')
+      .set('Authorization', `Bearer ${adminAccessToken}`)
+      .expect(200);
+    assert.ok(Array.isArray(adminSessionsRes.body.data));
+    const adminCurrentSess = adminSessionsRes.body.data.find((s: any) => s.is_current === true);
+    assert.ok(adminCurrentSess, 'Platform admin session list must recognize current session');
+    assert.strictEqual(adminCurrentSess.session_id, adminDbSession.id);
+    console.log(
+      '  PASS: PLATFORM_ADMIN login -> Guarded calls (/admin/shops and /api/v1/sessions) with v1. token'
+    );
+
+    // -------------------------------------------------------------------------
+    // P1 Finding 2 / BR-SESS-05: Session Refresh & Rotation -> Guarded Call
+    // -------------------------------------------------------------------------
+    console.log('[TEST P1-2] Session Refresh & Rotation -> Guarded Call');
+    // Step A: Sliding freshness heartbeat on admin session
+    const adminHeartbeatRes = await request(server)
+      .patch(`/api/v1/sessions/${adminDbSession.id}/heartbeat`)
+      .set('Authorization', `Bearer ${adminAccessToken}`)
+      .expect(200);
+    assert.strictEqual(adminHeartbeatRes.body.session_id, adminDbSession.id);
+    assert.ok(adminHeartbeatRes.body.last_active_at);
+
+    // Step B: Token rotation / refresh with newly signed v1. token
+    const tokenSecret = resolveAccessTokenSecret(process.env.AUTH_TOKEN_SECRET);
+    const { token: refreshedToken } = signAccessToken(
+      {
+        sub: ownerMfaUser.id,
+        sid: mfaDbSession.id,
+        mid: merchant.id,
+        role: RoleEnum.OWNER,
+        st: 'ACTIVE',
+        auth_assurance: 'MFA',
+      },
+      tokenSecret,
+      43200
+    );
+    assert.ok(refreshedToken.startsWith('v1.'), 'Refreshed access_token must start with v1.');
+    const refreshedTokenHash = createHash('sha256').update(refreshedToken).digest('hex');
+
+    // Update active session with newly refreshed token hash
+    await prisma.deviceSession.update({
+      where: { id: mfaDbSession.id },
+      data: { session_token_hash: refreshedTokenHash, last_active_at: new Date() },
+    });
+
+    // Newly refreshed v1. token succeeds on guarded endpoint
+    const guardedRefreshedRes = await request(server)
+      .get('/api/v1/sessions')
+      .set('Authorization', `Bearer ${refreshedToken}`)
+      .expect(200);
+    const currentRefreshed = guardedRefreshedRes.body.data.find((s: any) => s.is_current === true);
+    assert.ok(currentRefreshed, 'Refreshed token must be active and marked is_current: true');
+
+    // Superseded / old token now fails closed with 401 SESSION_INVALID
+    const oldBearerRes = await request(server)
+      .get('/api/v1/sessions')
+      .set('Authorization', `Bearer ${mfaAccessToken}`)
+      .expect(401);
+    assert.strictEqual(oldBearerRes.body.error.code, 'SESSION_INVALID');
+    console.log('  PASS: Session sliding refresh & rotation -> Guarded call with v1. token');
+
     console.log('================================================================');
     console.log('ALL SESSION TESTS (AC-SESS-01..21) PASSED');
     console.log('================================================================');
   } finally {
     try {
+      if (typeof ownerMfaUser !== 'undefined' && ownerMfaUser?.id) {
+        await prisma.deviceSession.deleteMany({ where: { user_id: ownerMfaUser.id } });
+        await prisma.mfaRecoveryCode.deleteMany({
+          where: { factor: { user_id: ownerMfaUser.id } },
+        });
+        await prisma.mfaFactor.deleteMany({ where: { user_id: ownerMfaUser.id } });
+        await prisma.auditLog.deleteMany({ where: { user_id: ownerMfaUser.id } });
+        await prisma.user.deleteMany({ where: { id: ownerMfaUser.id } });
+      }
+      if (typeof adminUser !== 'undefined' && adminUser?.id) {
+        await prisma.deviceSession.deleteMany({ where: { user_id: adminUser.id } });
+        await prisma.auditLog.deleteMany({ where: { user_id: adminUser.id } });
+        await prisma.user.deleteMany({ where: { id: adminUser.id } });
+      }
       await prisma.deviceSession.deleteMany({
         where: { merchant_id: { in: [merchant.id, merchant2.id] } },
       });

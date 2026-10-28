@@ -886,7 +886,9 @@ describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
           ipAddress: '192.168.1.100',
         });
         assert.ok(result);
-        const expectedHashedIp = createHmac('sha256', testKey).update('192.168.1.100').digest('hex');
+        const expectedHashedIp = createHmac('sha256', testKey)
+          .update('192.168.1.100')
+          .digest('hex');
         assert.strictEqual(createdData.ip_address, expectedHashedIp);
         assert.strictEqual(createdData.status, SessionStatusEnum.ACTIVE);
       } finally {
@@ -988,7 +990,11 @@ describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
       );
 
       assert.strictEqual(count, 0);
-      assert.strictEqual(auditCreated, false, 'No audit log should be created when revoked_count is 0');
+      assert.strictEqual(
+        auditCreated,
+        false,
+        'No audit log should be created when revoked_count is 0'
+      );
     });
 
     it('rolls back and propagates error if audit logging fails during revokeTargetUserSessions', async () => {
@@ -1029,6 +1035,122 @@ describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
         true,
         'Transaction must roll back when audit logging fails in revokeTargetUserSessions'
       );
+    });
+
+    it('does not emit audit log prematurely when outer transaction client (tx) is passed, and emits only after outer commit', async () => {
+      const logs: string[] = [];
+      const origConsoleLog = console.log;
+      console.log = (...args: any[]) => {
+        logs.push(args.join(' '));
+        origConsoleLog(...args);
+      };
+
+      try {
+        let txUpdateManyCalled = false;
+        let txAuditCreateCalled = false;
+        const mockPrisma: any = {
+          $transaction: async (fn: any) => fn(mockPrisma),
+          deviceSession: {
+            updateMany: async () => {
+              txUpdateManyCalled = true;
+              return { count: 3 };
+            },
+          },
+          auditLog: {
+            create: async () => {
+              txAuditCreateCalled = true;
+              return { id: 'audit-nested' };
+            },
+          },
+        };
+
+        const service = new SessionService(mockPrisma);
+
+        // Caller runs outer transaction
+        await mockPrisma.$transaction(async (outerTx: any) => {
+          const count = await service.revokeTargetUserSessions(
+            'user-outer-1',
+            'merchant-1',
+            'actor-outer',
+            'Admin reset via outer tx',
+            'corr-outer-commit',
+            undefined,
+            outerTx
+          );
+
+          assert.strictEqual(count, 3);
+          assert.strictEqual(txUpdateManyCalled, true);
+          assert.strictEqual(txAuditCreateCalled, true);
+
+          // Before outer transaction commits, emitLog must NOT have fired into stdout!
+          const uncommittedLogs = logs.filter((l) => l.includes('AUDIT: SESSIONS_REVOKED_ALL'));
+          assert.strictEqual(
+            uncommittedLogs.length,
+            0,
+            'Audit log must NOT be emitted before the outer transaction commits'
+          );
+        });
+
+        // After outer transaction commits, emitLog must have fired exactly once!
+        const committedLogs = logs.filter((l) => l.includes('AUDIT: SESSIONS_REVOKED_ALL'));
+        assert.strictEqual(
+          committedLogs.length,
+          1,
+          'Audit log must be emitted exactly once after the outer transaction commits'
+        );
+      } finally {
+        console.log = origConsoleLog;
+      }
+    });
+
+    it('does not emit audit log when outer transaction rolls back', async () => {
+      const logs: string[] = [];
+      const origConsoleLog = console.log;
+      console.log = (...args: any[]) => {
+        logs.push(args.join(' '));
+        origConsoleLog(...args);
+      };
+
+      try {
+        const mockPrisma: any = {
+          $transaction: async (fn: any) => fn(mockPrisma),
+          deviceSession: {
+            updateMany: async () => ({ count: 2 }),
+          },
+          auditLog: {
+            create: async () => ({ id: 'audit-aborted' }),
+          },
+        };
+
+        const service = new SessionService(mockPrisma);
+
+        await assert.rejects(async () => {
+          await mockPrisma.$transaction(async (outerTx: any) => {
+            await service.revokeTargetUserSessions(
+              'user-outer-2',
+              'merchant-1',
+              'actor-outer',
+              'Admin reset with abort',
+              'corr-outer-rollback',
+              undefined,
+              outerTx
+            );
+
+            // Simulate failure in subsequent step inside outer tx (e.g. step E)
+            throw new Error('Outer transaction step failed');
+          });
+        }, /Outer transaction step failed/);
+
+        // Transaction rolled back, emitLog must NEVER fire!
+        const auditLogs = logs.filter((l) => l.includes('AUDIT: SESSIONS_REVOKED_ALL'));
+        assert.strictEqual(
+          auditLogs.length,
+          0,
+          'Audit log must NOT be emitted when outer transaction rolls back'
+        );
+      } finally {
+        console.log = origConsoleLog;
+      }
     });
   });
 
@@ -1277,7 +1399,11 @@ describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
       const res = await service.validateSession('token-hash-opaque', undefined as any);
 
       assert.strictEqual(res, null, 'validateSession must return null when scope is omitted');
-      assert.strictEqual(findFirstCalled, false, 'DB query must not be executed without user/tenant scope');
+      assert.strictEqual(
+        findFirstCalled,
+        false,
+        'DB query must not be executed without user/tenant scope'
+      );
     });
 
     it('rejects validateSession lookup when session in DB belongs to a different tenant (BR-SESS-01)', async () => {
@@ -1341,7 +1467,9 @@ describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
 
     it('SessionGuard rejects cross-tenant token with 401 SESSION_INVALID', async () => {
       const { signAccessToken, resolveAccessTokenSecret } = await import('../auth/token.util');
-      const testSecret = resolveAccessTokenSecret('test-secret-at-least-32-chars-long-enough-for-security');
+      const testSecret = resolveAccessTokenSecret(
+        'test-secret-at-least-32-chars-long-enough-for-security'
+      );
       const prevSecret = process.env.AUTH_TOKEN_SECRET;
       try {
         process.env.AUTH_TOKEN_SECRET = testSecret;
@@ -1403,7 +1531,9 @@ describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
 
     it('SessionGuard passes verified JWT claims as scope to validateSession', async () => {
       const { signAccessToken, resolveAccessTokenSecret } = await import('../auth/token.util');
-      const testSecret = resolveAccessTokenSecret('test-secret-at-least-32-chars-long-enough-for-security');
+      const testSecret = resolveAccessTokenSecret(
+        'test-secret-at-least-32-chars-long-enough-for-security'
+      );
       const prevSecret = process.env.AUTH_TOKEN_SECRET;
       try {
         process.env.AUTH_TOKEN_SECRET = testSecret;
@@ -1453,6 +1583,127 @@ describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
         assert.strictEqual(passedScope.merchantId, 'merch-jwt-1');
         assert.strictEqual(mockReq.userId, 'user-jwt-1');
         assert.strictEqual(mockReq.merchantId, 'merch-jwt-1');
+      } finally {
+        if (prevSecret !== undefined) {
+          process.env.AUTH_TOKEN_SECRET = prevSecret;
+        } else {
+          delete process.env.AUTH_TOKEN_SECRET;
+        }
+      }
+    });
+
+    it('SessionGuard rejects setup-token query string bypass and non-allowlisted routes with 403 FORBIDDEN', async () => {
+      const { signAccessToken, resolveAccessTokenSecret } = await import('../auth/token.util');
+      const testSecret = resolveAccessTokenSecret(
+        'test-secret-at-least-32-chars-long-enough-for-security'
+      );
+      const prevSecret = process.env.AUTH_TOKEN_SECRET;
+      try {
+        process.env.AUTH_TOKEN_SECRET = testSecret;
+
+        const { token: setupToken } = signAccessToken(
+          {
+            sub: 'user-setup-1',
+            sid: 'sess-setup-1',
+            mid: 'merch-setup-1',
+            role: 'OWNER' as any,
+            st: 'active',
+            scope: 'setup',
+          },
+          testSecret,
+          600
+        );
+
+        const mockSessionService: any = {
+          validateSession: async () => {
+            throw new Error('validateSession must not be called for setup-only tokens');
+          },
+        };
+        const guard = new SessionGuard(mockSessionService);
+
+        // 1. Query string bypass attempt: path is /api/v1/sessions with ?x=/auth/logout
+        const mockReqQueryBypass: any = {
+          path: '/api/v1/sessions',
+          url: '/api/v1/sessions?x=/auth/logout',
+          originalUrl: '/api/v1/sessions?x=/auth/logout',
+          headers: { authorization: `Bearer ${setupToken}` },
+        };
+        await assert.rejects(
+          async () => {
+            await guard.canActivate({
+              switchToHttp: () => ({ getRequest: () => mockReqQueryBypass }),
+            } as any);
+          },
+          (err: any) => {
+            assert.strictEqual(err.status, 403);
+            assert.strictEqual(err.response?.error?.code, 'FORBIDDEN');
+            return true;
+          }
+        );
+
+        // 2. Query string bypass attempt: /api/v1/sessions?returnUrl=/auth/mfa/status
+        const mockReqQueryBypass2: any = {
+          path: '/api/v1/sessions',
+          url: '/api/v1/sessions?returnUrl=/auth/mfa/status',
+          originalUrl: '/api/v1/sessions?returnUrl=/auth/mfa/status',
+          headers: { authorization: `Bearer ${setupToken}` },
+        };
+        await assert.rejects(
+          async () => {
+            await guard.canActivate({
+              switchToHttp: () => ({ getRequest: () => mockReqQueryBypass2 }),
+            } as any);
+          },
+          (err: any) => {
+            assert.strictEqual(err.status, 403);
+            assert.strictEqual(err.response?.error?.code, 'FORBIDDEN');
+            return true;
+          }
+        );
+
+        // 3. Ordinary unauthorized route
+        const mockReqForbidden: any = {
+          path: '/api/v1/sessions',
+          url: '/api/v1/sessions',
+          headers: { authorization: `Bearer ${setupToken}` },
+        };
+        await assert.rejects(
+          async () => {
+            await guard.canActivate({
+              switchToHttp: () => ({ getRequest: () => mockReqForbidden }),
+            } as any);
+          },
+          (err: any) => {
+            assert.strictEqual(err.status, 403);
+            assert.strictEqual(err.response?.error?.code, 'FORBIDDEN');
+            return true;
+          }
+        );
+
+        // 4. Exact allowlisted paths are accepted
+        const allowedPaths = [
+          '/auth/mfa/status',
+          '/auth/mfa/setup',
+          '/auth/mfa/setup/verify',
+          '/auth/logout',
+        ];
+        for (const allowedPath of allowedPaths) {
+          const reqAllowed: any = {
+            path: allowedPath,
+            url: allowedPath,
+            headers: { authorization: `Bearer ${setupToken}` },
+          };
+          const activated = await guard.canActivate({
+            switchToHttp: () => ({ getRequest: () => reqAllowed }),
+          } as any);
+          assert.strictEqual(
+            activated,
+            true,
+            `Path ${allowedPath} must be allowed for setup token`
+          );
+          assert.strictEqual(reqAllowed.userId, 'user-setup-1');
+          assert.strictEqual(reqAllowed.isSetupOnly, true);
+        }
       } finally {
         if (prevSecret !== undefined) {
           process.env.AUTH_TOKEN_SECRET = prevSecret;

@@ -82,19 +82,13 @@ export function getGitleaksBinary(): string | null {
   } catch {}
 
   // Check local test path on Windows
-  if (process.platform === 'win32') {
-    const candidatePaths = [
-      'C:\\Tools\\gitleaks.exe',
-      'C:\\Tools\\gitleaks\\gitleaks.exe',
-      path.join(process.env.TEMP || '', 'gitleaks', 'gitleaks.exe'),
-    ];
-    for (const localExe of candidatePaths) {
-      if (localExe && fs.existsSync(localExe)) {
-        try {
-          execFileSync(localExe, ['version'], { stdio: 'ignore', shell: false });
-          return localExe;
-        } catch {}
-      }
+  if (process.platform === 'win32' && process.env.TEMP) {
+    const localExe = path.join(process.env.TEMP, 'gitleaks', 'gitleaks.exe');
+    if (fs.existsSync(localExe)) {
+      try {
+        execFileSync(localExe, ['version'], { stdio: 'ignore', shell: false });
+        return localExe;
+      } catch {}
     }
   }
 

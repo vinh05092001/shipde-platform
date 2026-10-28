@@ -11,6 +11,21 @@ import { SessionService } from './session.service';
 import { verifyAccessToken, resolveAccessTokenSecret } from '../auth/token.util';
 
 /**
+ * Exact pathname allowlist for bounded setup-only tokens (FEAT-AUTH-05 AC-AUTH-05-12 / BR-SESS-01).
+ * Matches req.path only (excluding query string) to prevent query string bypass.
+ */
+const SETUP_TOKEN_ALLOWED_PATHNAMES = new Set([
+  '/auth/mfa/status',
+  '/auth/mfa/setup',
+  '/auth/mfa/setup/verify',
+  '/auth/logout',
+  '/api/v1/auth/mfa/status',
+  '/api/v1/auth/mfa/setup',
+  '/api/v1/auth/mfa/setup/verify',
+  '/api/v1/auth/logout',
+]);
+
+/**
  * Session and Access-Token Auth Guard.
  * Supports:
  * 1. Standard active device sessions via SHA-256 token hash.
@@ -64,12 +79,17 @@ export class SessionGuard implements CanActivate {
       jwtClaims = verifyAccessToken(rawToken, secret);
 
       if (jwtClaims.scope === 'setup') {
-        // Bounded setup token (AC-AUTH-05-12)
-        const url = req.originalUrl || req.url || '';
-        const isAllowedSetupRoute =
-          url.includes('/auth/mfa/status') ||
-          url.includes('/auth/mfa/setup') ||
-          url.includes('/auth/logout');
+        // Bounded setup token (AC-AUTH-05-12, BR-SESS-01)
+        // Match req.path only against exact pathname allowlist to prevent query parameter bypass.
+        const rawPath =
+          typeof req.path === 'string'
+            ? req.path
+            : typeof (req as any).url === 'string'
+              ? (req as any).url.split('?')[0]
+              : '';
+        const normalizedPath =
+          rawPath.length > 1 && rawPath.endsWith('/') ? rawPath.slice(0, -1) : rawPath;
+        const isAllowedSetupRoute = SETUP_TOKEN_ALLOWED_PATHNAMES.has(normalizedPath);
 
         if (!isAllowedSetupRoute) {
           throw new ForbiddenException({
