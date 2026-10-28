@@ -519,6 +519,92 @@ export interface paths {
     patch: operations['updateRole'];
     trace?: never;
   };
+  '/users': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List merchant users (API-USR-LIST, FEAT-USR-02) */
+    get: operations['listUsers'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/users/{id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get user details (API-USR-GET, FEAT-USR-02) */
+    get: operations['getUser'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    /** Update user profile and scopes (API-USR-UPDATE, FEAT-USR-02) */
+    patch: operations['updateUser'];
+    trace?: never;
+  };
+  '/users/{id}/suspend': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Suspend user account (API-USR-SUSPEND, FEAT-USR-02) */
+    post: operations['suspendUser'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/users/{id}/activate': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Reinstate suspended user (API-USR-ACTIVATE, FEAT-USR-02) */
+    post: operations['activateUser'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/users/{id}/deactivate': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Deactivate user account (API-USR-DEACTIVATE, FEAT-USR-02) */
+    post: operations['deactivateUser'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/users/check-scope': {
     parameters: {
       query?: never;
@@ -1738,6 +1824,103 @@ export interface components {
       };
       meta: components['schemas']['Meta'];
     };
+    UserListItem: {
+      /** Format: uuid */
+      id: string;
+      full_name: string;
+      email?: string | null;
+      phone?: string | null;
+      /** @enum {string} */
+      role: 'OWNER' | 'OPS_CSKH' | 'WAREHOUSE' | 'ACCOUNTANT' | 'FINANCE';
+      /** @enum {string} */
+      status: 'ACTIVE' | 'SUSPENDED' | 'DISABLED' | 'PENDING_VERIFICATION' | 'INVITED';
+      store_scopes: string[];
+      warehouse_scopes: string[];
+      /** Format: date-time */
+      created_at: string;
+      /** Format: date-time */
+      last_active_at?: string | null;
+    };
+    ListUsersResponse: {
+      data: components['schemas']['UserListItem'][];
+      meta: {
+        total: number;
+        page: number;
+        limit: number;
+        total_pages: number;
+        correlation_id: string;
+      };
+    };
+    UserDetail: {
+      /** Format: uuid */
+      id: string;
+      /** Format: uuid */
+      merchant_id: string;
+      full_name: string;
+      email?: string | null;
+      phone?: string | null;
+      /** @enum {string} */
+      role: 'OWNER' | 'OPS_CSKH' | 'WAREHOUSE' | 'ACCOUNTANT' | 'FINANCE';
+      /** @enum {string} */
+      status: 'ACTIVE' | 'SUSPENDED' | 'DISABLED' | 'PENDING_VERIFICATION' | 'INVITED';
+      store_scopes: string[];
+      warehouse_scopes: string[];
+      /** Format: date-time */
+      created_at: string;
+      /** Format: date-time */
+      updated_at: string;
+      /** Format: date-time */
+      last_active_at?: string | null;
+    };
+    UserDetailResponse: {
+      data: components['schemas']['UserDetail'];
+      meta: components['schemas']['Meta'];
+    };
+    UpdateUserRequest: {
+      full_name?: string;
+      /** @enum {string} */
+      role?: 'OWNER' | 'OPS_CSKH' | 'WAREHOUSE' | 'ACCOUNTANT' | 'FINANCE';
+      store_scopes?: string[];
+      warehouse_scopes?: string[];
+    };
+    SuspendUserRequest: {
+      reason: string;
+    };
+    SuspendUserResponse: {
+      data: {
+        /** Format: uuid */
+        id: string;
+        status: string;
+        revoked_sessions_count: number;
+        message: string;
+      };
+      meta: components['schemas']['Meta'];
+    };
+    ActivateUserRequest: {
+      reason?: string;
+    };
+    ActivateUserResponse: {
+      data: {
+        /** Format: uuid */
+        id: string;
+        status: string;
+        message: string;
+      };
+      meta: components['schemas']['Meta'];
+    };
+    DeactivateUserRequest: {
+      reason?: string;
+    };
+    DeactivateUserResponse: {
+      data: {
+        /** Format: uuid */
+        id: string;
+        status: string;
+        revoked_sessions_count: number;
+        message: string;
+      };
+      meta: components['schemas']['Meta'];
+    };
   };
   responses: {
     /** @description Canonical error */
@@ -2402,6 +2585,177 @@ export interface operations {
       401: components['responses']['Error'];
       403: components['responses']['Error'];
       404: components['responses']['Error'];
+    };
+  };
+  listUsers: {
+    parameters: {
+      query?: {
+        page?: number;
+        limit?: number;
+        role?: 'OWNER' | 'OPS_CSKH' | 'WAREHOUSE' | 'ACCOUNTANT' | 'FINANCE';
+        status?: 'ACTIVE' | 'SUSPENDED' | 'DISABLED' | 'PENDING_VERIFICATION' | 'INVITED';
+        search?: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description List of tenant users */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ListUsersResponse'];
+        };
+      };
+      401: components['responses']['Error'];
+      403: components['responses']['Error'];
+    };
+  };
+  getUser: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description User profile and scopes */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UserDetailResponse'];
+        };
+      };
+      401: components['responses']['Error'];
+      403: components['responses']['Error'];
+    };
+  };
+  updateUser: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['UpdateUserRequest'];
+      };
+    };
+    responses: {
+      /** @description Updated user profile */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UserDetailResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['Error'];
+      403: components['responses']['Error'];
+    };
+  };
+  suspendUser: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['SuspendUserRequest'];
+      };
+    };
+    responses: {
+      /** @description User suspended and sessions revoked */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['SuspendUserResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['Error'];
+      403: components['responses']['Error'];
+      409: components['responses']['Error'];
+    };
+  };
+  activateUser: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: {
+      content: {
+        'application/json': components['schemas']['ActivateUserRequest'];
+      };
+    };
+    responses: {
+      /** @description User reinstated to active status */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ActivateUserResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['Error'];
+      403: components['responses']['Error'];
+      409: components['responses']['Error'];
+    };
+  };
+  deactivateUser: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: {
+      content: {
+        'application/json': components['schemas']['DeactivateUserRequest'];
+      };
+    };
+    responses: {
+      /** @description User deactivated and sessions revoked */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['DeactivateUserResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['Error'];
+      403: components['responses']['Error'];
+      409: components['responses']['Error'];
     };
   };
   checkUserScope: {

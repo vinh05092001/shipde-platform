@@ -11,6 +11,7 @@ import { VERIFICATION_ADAPTER } from '../auth/auth.tokens';
 import { AppConfig } from '@shipde/config';
 import { MockVerificationDeliveryAdapter } from '@shipde/testkit';
 import { seedDatabase, SEED_MERCHANT_ID } from '../../../../infra/docker/seed';
+import { runUsersSupertestSuite } from './users.supertest.spec';
 
 /**
  * FEAT-AUTH-05 — database-backed proof for AC-AUTH-05-21 (durable admin-reset idempotency,
@@ -174,6 +175,9 @@ async function main() {
 
   await app.close();
   console.log('MFA reset idempotency suite complete');
+
+  // FEAT-USR-02: Run User Lifecycle Supertest suite (AC-USR-02-01 .. AC-USR-02-18)
+  await runUsersSupertestSuite();
 }
 
 main().catch((err) => {

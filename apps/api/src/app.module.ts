@@ -13,10 +13,18 @@ import { AuthModule } from './auth/auth.module';
 import { SessionModule } from './session/session.module';
 import { RbacModule } from './rbac/rbac.module';
 import { InvitationsModule } from './invitations/invitations.module';
+import { UsersModule } from './users/users.module';
 import { ShopsModule } from './shops/shops.module';
 
 @Module({
-  imports: [AuthModule, SessionModule, RbacModule, InvitationsModule, ShopsModule],
+  imports: [
+    AuthModule,
+    SessionModule,
+    RbacModule,
+    InvitationsModule,
+    UsersModule,
+    ShopsModule,
+  ],
   controllers: [HealthController],
   providers: [
     {
