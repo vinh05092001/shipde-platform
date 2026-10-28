@@ -18,6 +18,7 @@ enum RoleEnum {
   OPS_CSKH
   WAREHOUSE
   ACCOUNTANT
+  PLATFORM_ADMIN
 }
 
 enum CarrierCodeEnum {
@@ -150,7 +151,7 @@ model Merchant {
 
 model User {
   id                String            @id @default(uuid()) @db.Uuid
-  merchant_id       String            @db.Uuid
+  merchant_id       String?           @db.Uuid
   email             String?           @unique @db.VarChar(255)
   phone             String?           @unique @db.VarChar(32)
   full_name         String            @db.VarChar(255)
@@ -170,7 +171,7 @@ model User {
   created_at        DateTime          @default(now()) @db.Timestamptz
   updated_at        DateTime          @updatedAt @db.Timestamptz
 
-  merchant              Merchant              @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
+  merchant              Merchant?             @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
   assigned_cases        ExceptionCase[]       @relation("CaseAssignee")
   contact_logs          ExceptionContactLog[]
   device_sessions       DeviceSession[]
@@ -257,7 +258,7 @@ model Invitation {
 model DeviceSession {
   id                 String            @id @default(uuid()) @db.Uuid
   user_id            String            @db.Uuid
-  merchant_id        String            @db.Uuid
+  merchant_id        String?           @db.Uuid
   session_token_hash String            @unique @db.VarChar(512)
   device_id          String            @db.VarChar(255)
   device_model       String?           @db.VarChar(255)
@@ -276,7 +277,7 @@ model DeviceSession {
   created_at         DateTime          @default(now()) @db.Timestamptz
 
   user               User              @relation(fields: [user_id], references: [id], onDelete: Cascade)
-  merchant           Merchant          @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
+  merchant           Merchant?         @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
 
   @@index([merchant_id, user_id, status])
   @@index([user_id, status])
@@ -745,6 +746,7 @@ model AuditLog {
   // All tenant-scoped actions (roles, users, sessions) strictly require and populate merchant_id (Finding 1 / Round 14 / BR-RBAC-07 / BR-RBAC-04).
   merchant_id          String?           @db.Uuid
   user_id              String?           @db.VarChar(255)
+  actor                String?           @db.VarChar(255)
   action               String            @db.VarChar(128)
   entity_type          String            @db.VarChar(64)
   entity_id            String            @db.VarChar(255)

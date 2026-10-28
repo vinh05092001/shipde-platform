@@ -726,6 +726,27 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/admin/shops': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List all shops (admin) (API-ADMIN-SHOP-LIST, FEAT-AUTH-02) */
+    get: operations['listAdminShops'];
+    put?: never;
+    /**
+     * Admin-created shop account (API-ADMIN-SHOP-CREATE, FEAT-AUTH-02)
+     * @description Platform operator provisions initial shop owner account without exposing public self-registration.
+     */
+    post: operations['createAdminShop'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/carrier-accounts': {
     parameters: {
       query?: never;
@@ -970,6 +991,70 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
   schemas: {
+    AdminCreateShopInput: {
+      merchant_name: string;
+      full_name?: string;
+      /** Format: email */
+      email?: string;
+      phone?: string;
+      password?: string;
+    };
+    AdminCreateShopResponse: {
+      /** @example true */
+      success: boolean;
+      data: {
+        merchant: {
+          /** Format: uuid */
+          id: string;
+          name: string;
+          code: string;
+          status: string;
+          /** Format: date-time */
+          created_at: string;
+        };
+        user: {
+          /** Format: uuid */
+          id: string;
+          /** Format: uuid */
+          merchant_id: string;
+          full_name: string;
+          email?: string | null;
+          phone?: string | null;
+          role: string;
+          status: string;
+          /** Format: date-time */
+          email_verified_at?: string | null;
+          /** Format: date-time */
+          phone_verified_at?: string | null;
+        };
+        password_is_temporary: boolean;
+      };
+      meta?: components['schemas']['Meta'];
+    };
+    AdminListShopsResponse: {
+      /** @example true */
+      success: boolean;
+      data: {
+        shops: {
+          /** Format: uuid */
+          id: string;
+          name: string;
+          code: string;
+          status: string;
+          /** Format: date-time */
+          created_at: string;
+          user_count?: number;
+          owner?: {
+            id?: string;
+            full_name?: string;
+            email?: string | null;
+            phone?: string | null;
+          } | null;
+        }[];
+        total: number;
+      };
+      meta?: components['schemas']['Meta'];
+    };
     RegisterRequest: {
       merchant_name: string;
       full_name: string;
@@ -2511,6 +2596,59 @@ export interface operations {
         content?: never;
       };
       400: components['responses']['Error'];
+    };
+  };
+  listAdminShops: {
+    parameters: {
+      query?: {
+        limit?: number;
+        offset?: number;
+        search?: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description List of shops */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AdminListShopsResponse'];
+        };
+      };
+      401: components['responses']['Error'];
+      403: components['responses']['Error'];
+    };
+  };
+  createAdminShop: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['AdminCreateShopInput'];
+      };
+    };
+    responses: {
+      /** @description Shop and owner created successfully */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AdminCreateShopResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['Error'];
+      403: components['responses']['Error'];
     };
   };
   listCarrierAccounts: {

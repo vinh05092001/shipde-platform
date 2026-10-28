@@ -18,9 +18,9 @@ export interface AccessTokenClaims {
   sub: string;
   /** Device session id (device_sessions.id) */
   sid: string;
-  /** Merchant id */
-  mid: string;
-  /** Canonical role (OWNER | OPS_CSKH | WAREHOUSE | ACCOUNTANT) */
+  /** Merchant id (optional/null for platform operators) */
+  mid?: string | null;
+  /** Canonical role (OWNER | OPS_CSKH | WAREHOUSE | ACCOUNTANT | PLATFORM_ADMIN) */
   role: string;
   /** User status at issuance */
   st: string;
@@ -129,7 +129,7 @@ export function verifyAccessToken(token: string, secret: string): AccessTokenCla
   if (
     !sub ||
     !sid ||
-    !mid ||
+    (!mid && role !== 'PLATFORM_ADMIN') ||
     !role ||
     !st ||
     typeof iat !== 'number' ||
