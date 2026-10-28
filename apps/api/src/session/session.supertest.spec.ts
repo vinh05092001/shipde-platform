@@ -541,6 +541,32 @@ async function runSessionSupertestSuite() {
       '  PASS: AC-SESS-12 Malformed ID returns 404 SESSION_NOT_FOUND full-envelope identical to nonexistent UUID'
     );
 
+    // F-07: BR-SESS-10 Malformed identifier protection for heartbeat endpoint
+    const resHeartbeatNonexistent = await request(server)
+      .patch('/api/v1/sessions/00000000-0000-0000-0000-000000000000/heartbeat')
+      .set('Authorization', `Bearer ${tok1.raw}`)
+      .expect(404);
+    assert.strictEqual(resHeartbeatNonexistent.body.error.code, 'SESSION_NOT_FOUND');
+
+    const resHeartbeatMalformed = await request(server)
+      .patch('/api/v1/sessions/invalid-uuid-format/heartbeat')
+      .set('Authorization', `Bearer ${tok1.raw}`)
+      .expect(404);
+    assert.strictEqual(resHeartbeatMalformed.body.error.code, 'SESSION_NOT_FOUND');
+    assert.deepStrictEqual(
+      stripMeta(resHeartbeatMalformed.body),
+      stripMeta(resHeartbeatNonexistent.body),
+      'Heartbeat malformed ID and nonexistent UUID error envelopes must match identically'
+    );
+    assert.strictEqual(
+      JSON.stringify(resHeartbeatMalformed.body).includes('invalid-uuid-format'),
+      false,
+      'Heartbeat malformed ID must never be echoed anywhere in response body'
+    );
+    console.log(
+      '  PASS: AC-SESS-12 (F-07) Heartbeat malformed ID returns 404 SESSION_NOT_FOUND full-envelope identical to nonexistent UUID'
+    );
+
     // -------------------------------------------------------------------------
     // AC-SESS-13: Heartbeat on current session
     // -------------------------------------------------------------------------
