@@ -866,10 +866,14 @@ async function main() {
     });
   } catch (err: any) {
     const out = (err.stdout?.toString() || '') + (err.stderr?.toString() || '');
+    const findingLines = out
+      .split('\n')
+      .map((l: string) => l.trim())
+      .filter((l: string) => l.startsWith('- [') && /:\d+/.test(l));
     const isOnlyDashboardFinding =
       err.status === 1 &&
-      out.includes('DASHBOARD.html') &&
-      !out.includes('vi phạm bí mật trong lịch sử git');
+      findingLines.length > 0 &&
+      findingLines.every((l: string) => l.includes('DASHBOARD.html'));
     if (!isOnlyDashboardFinding) {
       throw err;
     }
