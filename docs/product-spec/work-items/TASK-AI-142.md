@@ -1,5 +1,11 @@
 # TASK-AI-142 — Hermes chat brain wired to the Controller
 
+## Orchestrate module split, steps 1-2 (2026-10-28)
+
+Steps 1-2 of the orchestrate module split extract `route-probe` and `decisions-log` helpers verbatim from `tools/ai-brain/orchestrate.js` into dedicated modules: `tools/ai-brain/orchestrate/route-probe.js` and `tools/ai-brain/orchestrate/decisions-log.js`.
+
+The export surface of `orchestrate.js` remains unchanged, re-exporting the extracted symbols to preserve backwards compatibility for existing callers. The probe budget (`PROBE_BUDGET_MS`) is read directly from dispatch configuration in `sources.json`. The decomposition plan and function inventory are documented in `docs/product-spec/docs/10-ai-collaboration/ORCHESTRATE-MODULE-MAP.md`. Allowed paths for this task are extended to include `tools/ai-brain/orchestrate.js`, `tools/ai-brain/orchestrate/route-probe.js`, `tools/ai-brain/orchestrate/decisions-log.js`, and `docs/product-spec/docs/10-ai-collaboration/ORCHESTRATE-MODULE-MAP.md`. Verification evidence demonstrates full `ai-brain` test suite parity with `origin/main`.
+
 ## Operator ACP assignment (2026-10-16)
 
 Codex is assigned to let the Controller observe Hermes through structured ACP events.

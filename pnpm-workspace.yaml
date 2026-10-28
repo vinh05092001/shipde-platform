@@ -62,8 +62,9 @@ allowBuilds:
 # GOAL-AUTOCLAW-REPOS-7: transitive versions raised to the first release that
 # fixes the HIGH/CRITICAL advisories Trivy reports (pnpm security:trivy).
 overrides:
+  body-parser: ^2.4.0
   deepmerge-ts: ^8.0.0
-  multer: ^2.3.0
+  multer: ^2.5.0
   postcss: ^8.5.18
   proxy-addr: ^2.0.8
   sharp: ^0.35.5
