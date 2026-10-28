@@ -1178,12 +1178,18 @@ export class RbacService implements OnModuleInit {
             category: p.category,
           })),
           user_count: 0,
-          created_at: createdRole.role.created_at
-            ? createdRole.role.created_at.toISOString()
-            : new Date().toISOString(),
-          updated_at: createdRole.role.updated_at
-            ? createdRole.role.updated_at.toISOString()
-            : new Date().toISOString(),
+          created_at:
+            createdRole.role.created_at instanceof Date
+              ? createdRole.role.created_at.toISOString()
+              : typeof createdRole.role.created_at === 'string'
+                ? createdRole.role.created_at
+                : new Date().toISOString(),
+          updated_at:
+            createdRole.role.updated_at instanceof Date
+              ? createdRole.role.updated_at.toISOString()
+              : typeof createdRole.role.updated_at === 'string'
+                ? createdRole.role.updated_at
+                : new Date().toISOString(),
         },
       },
       meta: {
@@ -1437,18 +1443,19 @@ export class RbacService implements OnModuleInit {
     const beforePermissions = existingRole.permissions.map((rp) => rp.permission.code);
     const newPermissions = permissionsInDb.map((p) => p.code);
 
-    // Step-up / fresh assurance check for sensitive capabilities (Finding 2 / Round 10 / Finding 1 / Round 11 / RBAC-APPROVAL-MATRIX)
-    const addsSensitiveGrants = newPermissions.some(
-      (code) => SENSITIVE_CAPABILITY_PERMISSIONS.has(code) && !beforePermissions.includes(code)
-    );
-    if (addsSensitiveGrants) {
+    // Step-up / fresh assurance check for sensitive capabilities (Finding 2 / Round 10 / Finding 1 / Round 11 / P1-02 / RBAC-APPROVAL-MATRIX)
+    // Enforce MFA for any mutation touching a role that contains or will contain sensitive permissions
+    const touchesSensitiveGrants =
+      newPermissions.some((code) => SENSITIVE_CAPABILITY_PERMISSIONS.has(code)) ||
+      beforePermissions.some((code) => SENSITIVE_CAPABILITY_PERMISSIONS.has(code));
+    if (touchesSensitiveGrants) {
       if (!actor.sessionId) {
         throw new CanonicalApiException(
           HttpStatus.FORBIDDEN,
           'MFA_FRESH_AUTH_REQUIRED',
-          'Thao tác gán quyền hạn nhạy cảm yêu cầu phiên làm việc đã xác thực MFA',
+          'Thao tác thay đổi vai trò có quyền hạn nhạy cảm yêu cầu phiên làm việc đã xác thực MFA',
           false,
-          'Vui lòng xác thực hai yếu tố trước khi gán các quyền hạn nhạy cảm'
+          'Vui lòng xác thực hai yếu tố trước khi thao tác trên các vai trò có quyền hạn nhạy cảm'
         );
       }
     }
@@ -1566,14 +1573,13 @@ export class RbacService implements OnModuleInit {
         const beforePermissions = currentRolePermCodes;
         const newPermissions = targetPermissions.map((p: any) => p.code);
 
-        // In-transaction fresh MFA assurance check for newly added sensitive capabilities (Finding 1 / Round 11)
-        const newlyAddedSensitiveInTx = newPermissions.filter(
-          (code: string) =>
-            SENSITIVE_CAPABILITY_PERMISSIONS.has(code) && !beforePermissions.includes(code)
-        );
-        // In-transaction fresh MFA assurance check for newly added sensitive capabilities (Finding 2 / Round 12)
-        // Sensitive grants must load auth_assurance and mfa_verified_at only from caller's active, unexpired device_sessions row under FOR UPDATE, and reject when that row is missing
-        if (newlyAddedSensitiveInTx.length > 0) {
+        // In-transaction fresh MFA assurance check for sensitive capabilities (Finding 1 / Round 11 / Finding 2 / Round 12 / P1-02)
+        // Enforce MFA for any mutation touching a role that contains or will contain sensitive permissions
+        const touchesSensitiveGrantsInTx =
+          newPermissions.some((code: string) => SENSITIVE_CAPABILITY_PERMISSIONS.has(code)) ||
+          beforePermissions.some((code: string) => SENSITIVE_CAPABILITY_PERMISSIONS.has(code));
+
+        if (touchesSensitiveGrantsInTx) {
           if (
             !actorSnapshot.sessionId ||
             !actorSnapshot.authAssurance ||
@@ -1582,9 +1588,9 @@ export class RbacService implements OnModuleInit {
             throw new CanonicalApiException(
               HttpStatus.FORBIDDEN,
               'MFA_FRESH_AUTH_REQUIRED',
-              'Thao tác gán quyền hạn nhạy cảm yêu cầu phiên làm việc đã xác thực MFA',
+              'Thao tác thay đổi vai trò có quyền hạn nhạy cảm yêu cầu phiên làm việc đã xác thực MFA',
               false,
-              'Vui lòng xác thực hai yếu tố trước khi gán các quyền hạn nhạy cảm'
+              'Vui lòng xác thực hai yếu tố trước khi thao tác trên các vai trò có quyền hạn nhạy cảm'
             );
           }
         }
@@ -1714,12 +1720,18 @@ export class RbacService implements OnModuleInit {
             category: p.category,
           })),
           user_count: activeUserCount,
-          created_at: updatedRole.updated.created_at
-            ? updatedRole.updated.created_at.toISOString()
-            : new Date().toISOString(),
-          updated_at: updatedRole.updated.updated_at
-            ? updatedRole.updated.updated_at.toISOString()
-            : new Date().toISOString(),
+          created_at:
+            updatedRole.updated.created_at instanceof Date
+              ? updatedRole.updated.created_at.toISOString()
+              : typeof updatedRole.updated.created_at === 'string'
+                ? updatedRole.updated.created_at
+                : new Date().toISOString(),
+          updated_at:
+            updatedRole.updated.updated_at instanceof Date
+              ? updatedRole.updated.updated_at.toISOString()
+              : typeof updatedRole.updated.updated_at === 'string'
+                ? updatedRole.updated.updated_at
+                : new Date().toISOString(),
         },
       },
       meta: {

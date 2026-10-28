@@ -3852,4 +3852,60 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
       }
     );
   });
+
+  // Finding 2 (Round 15 / P1-02): updateRole enforces MFA step-up when touching roles containing sensitive permissions
+  test('Finding 2 (Round 15 / P1-02): updateRole requires fresh MFA when modifying or retaining sensitive permissions on a role', async () => {
+    // 1. Create a role with pii:unmask using valid MFA session
+    const sensitiveRoleName = `Sensitive Role Retain ${Date.now()}`;
+    const created = await service.createRole(
+      {
+        name: sensitiveRoleName,
+        permissions: ['order:view_create', 'pii:unmask'],
+      },
+      OWNER_ACTOR,
+      '127.0.0.1',
+      'corr-p1-02-create'
+    );
+    const roleId = created.data.role.id;
+
+    // 2. Password session actor attempts to PATCH name/description retaining pii:unmask -> 403 MFA_FRESH_AUTH_REQUIRED
+    const passwordOwnerActor = {
+      ...OWNER_ACTOR,
+      sessionId: 'session-password-owner',
+    };
+
+    await assert.rejects(
+      async () => {
+        await service.updateRole(
+          roleId,
+          {
+            name: `Renamed Sensitive Role ${Date.now()}`,
+            // Omitting permissions retains current permissions (which include pii:unmask)
+          },
+          passwordOwnerActor,
+          '127.0.0.1',
+          'corr-p1-02-patch-pwd'
+        );
+      },
+      (err: any) => {
+        assert.ok(err instanceof CanonicalApiException);
+        assert.strictEqual(err.getStatus(), 403);
+        assert.strictEqual(err.code, 'MFA_FRESH_AUTH_REQUIRED');
+        return true;
+      }
+    );
+
+    // 3. MFA verified session actor succeeds in renaming the sensitive role
+    const updated = await service.updateRole(
+      roleId,
+      {
+        name: `Renamed Sensitive Role Success ${Date.now()}`,
+      },
+      OWNER_ACTOR,
+      '127.0.0.1',
+      'corr-p1-02-patch-mfa'
+    );
+    assert.ok(updated.data.role.id);
+    assert.strictEqual(updated.data.role.name.startsWith('Renamed Sensitive Role Success'), true);
+  });
 });
