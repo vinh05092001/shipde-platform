@@ -29,6 +29,9 @@ Allowed paths for Slice (C):
 - `docs/product-spec/work-items/TASK-AI-142.md`
 - and slice (C) test suites under `tools/ai-brain/test/`.
 
+## AGY lane model gating and 9router isolation fix (2026-10-28)
+
+Gates agy lane models by each account's `models-out.txt` and isolates agy lanes from 9router model IDs (`prefix/model`). An agy lane may only be probed or dispatched with models advertised by that account's CLI discovery (`models-out.txt`), returning 404 `model_not_found` when no account supports the model. Requests containing 9router model prefixes are rejected early from reaching agy lanes. Allowed paths for this fix: `tools/ai-brain/agy-gateway.js`, `tools/ai-brain/agy-pool-runtime.js`, `tools/ai-brain/candidates.js`, `tools/ai-brain/hermes-session.js`, `tools/ai-brain/test/task-ai-142-agy-gateway.test.js`, and `docs/product-spec/work-items/TASK-AI-142.md`.
 ## Orchestrate module split, steps 1-2 (2026-10-28)
 
 Steps 1-2 of the orchestrate module split extract `route-probe` and `decisions-log` helpers verbatim from `tools/ai-brain/orchestrate.js` into dedicated modules: `tools/ai-brain/orchestrate/route-probe.js` and `tools/ai-brain/orchestrate/decisions-log.js`.
@@ -69,7 +72,7 @@ The implementation expands router inventory independently of OpenCode declaratio
 | Assigned author | `GEMINI`                                                                                                                                                                                                                                               |
 | Risk            | `MEDIUM`                                                                                                                                                                                                                                               |
 | Complexity      | `standard`                                                                                                                                                                                                                                             |
-| Allowed paths   | `tools/ai-brain/hermes-session.js`; `tools/ai-brain/cli.js`; `tools/ai-brain/skills/shipde-controller/SKILL.md`; `scripts/ai/hermes-chat.ps1`; `tools/ai-brain/test/task-ai-142-hermes-session.test.js`; `docs/product-spec/work-items/TASK-AI-142.md` |
+| Allowed paths   | `tools/ai-brain/hermes-session.js`; `tools/ai-brain/cli.js`; `tools/ai-brain/skills/shipde-controller/SKILL.md`; `scripts/ai/hermes-chat.ps1`; `tools/ai-brain/test/task-ai-142-hermes-session.test.js`; `tools/ai-brain/agy-gateway.js`; `tools/ai-brain/agy-pool-runtime.js`; `tools/ai-brain/candidates.js`; `tools/ai-brain/test/task-ai-142-agy-gateway.test.js`; `docs/product-spec/work-items/TASK-AI-142.md` |
 | Reviewer        | `Codex — fresh independent task`                                                                                                                                                                                                                       |
 | Branch          | `feat/task-ai-142-hermes-session`                                                                                                                                                                                                                      |
 | Pull Request    | `Pending`                                                                                                                                                                                                                                              |
