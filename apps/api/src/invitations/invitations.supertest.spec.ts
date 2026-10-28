@@ -665,9 +665,9 @@ async function runInvitationsSupertestSuite() {
   console.log(
     '[TEST 19 / Round 6 Finding 8] Partial unique pending indexes enforce BR-INV-08 idempotency'
   );
-  const dbIndexes: Array<{ indexname: string; indexdef: string }> = await prisma.$queryRawUnsafe(
-    "SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'invitations' AND indexname LIKE 'invitations_merchant_pending_%'"
-  );
+  const dbIndexes = await prisma.$queryRaw<
+    Array<{ indexname: string; indexdef: string }>
+  >`SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'invitations' AND indexname LIKE 'invitations_merchant_pending_%'`;
   const emailIndex = dbIndexes.find(
     (x) => x.indexname === 'invitations_merchant_pending_email_unique'
   );
