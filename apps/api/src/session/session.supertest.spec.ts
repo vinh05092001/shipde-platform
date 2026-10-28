@@ -143,7 +143,7 @@ async function runSessionSupertestSuite() {
       full_name: 'Session Test Owner',
       password_hash: await hashPassword(ownerPassword),
       role: RoleEnum.OPS_CSKH,
-      status: 'active',
+      status: 'ACTIVE',
     },
   });
 
