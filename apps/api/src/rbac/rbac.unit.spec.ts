@@ -2848,7 +2848,12 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
     };
 
     try {
-      await service.deleteRole(roleId, actorWithoutMerchantId, '127.0.0.1', 'corr-p1-delete-blocked');
+      await service.deleteRole(
+        roleId,
+        actorWithoutMerchantId,
+        '127.0.0.1',
+        'corr-p1-delete-blocked'
+      );
       assert.fail('Should have thrown ROLE_IN_USE exception');
     } catch (err: any) {
       assert.ok(err instanceof CanonicalApiException);
