@@ -34,7 +34,7 @@ describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
         },
         (err: any) => {
           assert.ok(err instanceof UnauthorizedException);
-          const response = err.getResponse();
+          const response = err.getResponse() as any;
           assert.strictEqual(response.error.code, 'SESSION_INVALID');
           assert.strictEqual(
             response.error.next_action,
@@ -69,7 +69,7 @@ describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
         },
         (err: any) => {
           assert.ok(err instanceof UnauthorizedException);
-          const response = err.getResponse();
+          const response = err.getResponse() as any;
           assert.strictEqual(response.error.code, 'SESSION_INVALID');
           assert.strictEqual(
             response.error.next_action,
@@ -100,7 +100,7 @@ describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
         },
         (err: any) => {
           assert.ok(err instanceof UnauthorizedException);
-          const response = err.getResponse();
+          const response = err.getResponse() as any;
           assert.strictEqual(response.error.code, 'UNAUTHENTICATED');
           return true;
         }
