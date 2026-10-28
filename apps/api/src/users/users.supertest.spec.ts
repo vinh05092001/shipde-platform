@@ -14,7 +14,7 @@ import { hashPassword } from '../auth/password.util';
 import {
   MockVerificationDeliveryAdapter,
   createValidTestConfig,
-  assertNoSensitiveData,
+  assertNoSecretValues,
 } from '@shipde/testkit';
 import { seedDatabase, SEED_MERCHANT_ID } from '../../../../infra/docker/seed';
 import { RbacService } from '../rbac/rbac.service';
@@ -26,11 +26,92 @@ const OWNER_ID = randomUUID();
 const SECOND_OWNER_ID = randomUUID();
 const OPERATOR_ID = randomUUID();
 const DELEGATED_ADMIN_ID = randomUUID();
+const TOKEN_USER_ID = randomUUID();
 const OTHER_TENANT_OWNER_ID = randomUUID();
 const OTHER_TENANT_USER_ID = randomUUID();
 const OTHER_MERCHANT_ID = randomUUID();
 
 const DEFAULT_PASSWORD = 'UserSupertestPass123!';
+
+/**
+ * Sensitive key patterns that must never appear as object keys in responses or logs.
+ * Scans strictly for password, hash, secret, token, authorization, and apikey fields.
+ */
+const SENSITIVE_KEY_PATTERNS = [
+  /password/i,
+  /hash/i,
+  /secret/i,
+  /token/i,
+  /authorization/i,
+  /apikey/i,
+];
+
+/**
+ * Infrastructure connection patterns that must never appear in values.
+ */
+const INFRA_VALUE_PATTERNS = [
+  /connection.*string/i,
+  /postgres:\/\//i,
+  /redis:\/\//i,
+  /minioadmin/i,
+];
+
+/**
+ * Asserts that a payload contains no sensitive information:
+ * - Detects leakage by sensitive KEYS (password/hash/secret/token/authorization/apikey fields).
+ * - Detects leakage by the actual secret values created by the test (password hash, session tokens/hashes, TOTP secrets).
+ * - Detects infrastructure secret patterns (postgres://, redis://, minioadmin).
+ * - Does NOT perform regex over arbitrary display-name values (e.g. /token/i), preventing false positives
+ *   when other suites or fixtures create users whose full_name contains words like 'token'.
+ */
+function assertNoSensitiveDisclosures(data: unknown, secretValues: string[], path = ''): void {
+  if (data === null || data === undefined) {
+    return;
+  }
+  if (typeof data === 'string') {
+    for (const secret of secretValues) {
+      if (secret && data.includes(secret)) {
+        throw new Error(
+          `Sensitive secret value leaked at "${path}": created secret was found in value`
+        );
+      }
+    }
+    for (const pattern of INFRA_VALUE_PATTERNS) {
+      if (pattern.test(data)) {
+        throw new Error(
+          `Sensitive infrastructure pattern leaked at "${path}": matches pattern ${pattern}`
+        );
+      }
+    }
+    return;
+  }
+  if (Array.isArray(data)) {
+    for (let i = 0; i < data.length; i++) {
+      assertNoSensitiveDisclosures(data[i], secretValues, path ? `${path}.${i}` : `${i}`);
+    }
+    return;
+  }
+  if (typeof data === 'object') {
+    for (const [key, value] of Object.entries(data as Record<string, unknown>)) {
+      const currentPath = path ? `${path}.${key}` : key;
+      for (const pattern of SENSITIVE_KEY_PATTERNS) {
+        if (pattern.test(key)) {
+          throw new Error(
+            `Sensitive key leaked at "${currentPath}": key matches pattern ${pattern}`
+          );
+        }
+      }
+      for (const secret of secretValues) {
+        if (secret && key.includes(secret)) {
+          throw new Error(
+            `Sensitive secret value leaked in key at "${currentPath}": created secret found in key`
+          );
+        }
+      }
+      assertNoSensitiveDisclosures(value, secretValues, currentPath);
+    }
+  }
+}
 
 export async function runUsersSupertestSuite() {
   console.log('================================================================');
@@ -94,8 +175,17 @@ export async function runUsersSupertestSuite() {
   });
 
   const passwordHash = await hashPassword(DEFAULT_PASSWORD);
+  const TEST_TOTP_SECRET = 'JBSWY3DPEHPK3PXP';
+  const TEST_TOTP_CIPHERTEXT = 'v1:supertest-totp-secret-ciphertext-scoped';
+  const createdSecretValues: string[] = [
+    DEFAULT_PASSWORD,
+    passwordHash,
+    TEST_TOTP_SECRET,
+    TEST_TOTP_CIPHERTEXT,
+  ];
 
-  // Upsert test users in SEED_MERCHANT_ID
+  // Upsert test users in SEED_MERCHANT_ID (including a fixture whose full_name contains 'token'
+  // to prove that display names containing 'token' do NOT trip sensitive data scans)
   for (const [id, email, role, full_name] of [
     [OWNER_ID, `owner.${SUITE_SUFFIX}@shipde.vn`, RoleEnum.OWNER, 'Supertest Shop Owner'],
     [SECOND_OWNER_ID, `owner2.${SUITE_SUFFIX}@shipde.vn`, RoleEnum.OWNER, 'Supertest Second Owner'],
@@ -105,6 +195,12 @@ export async function runUsersSupertestSuite() {
       `admin.${SUITE_SUFFIX}@shipde.vn`,
       RoleEnum.OPS_CSKH,
       'Supertest Delegated Admin',
+    ],
+    [
+      TOKEN_USER_ID,
+      `tokenfixture.${SUITE_SUFFIX}@shipde.vn`,
+      RoleEnum.OPS_CSKH,
+      'Supertest Token Fixture User',
     ],
   ] as const) {
     await prisma.user.upsert({
@@ -132,6 +228,22 @@ export async function runUsersSupertestSuite() {
       },
     });
   }
+
+  // Set up an active TOTP factor on TOKEN_USER_ID to ensure TOTP secrets are verified against leakage
+  await prisma.mfaFactor.deleteMany({
+    where: {
+      user_id: { in: [OWNER_ID, SECOND_OWNER_ID, OPERATOR_ID, DELEGATED_ADMIN_ID, TOKEN_USER_ID] },
+    },
+  });
+  await prisma.mfaFactor.create({
+    data: {
+      user_id: TOKEN_USER_ID,
+      merchant_id: SEED_MERCHANT_ID,
+      type: 'TOTP',
+      status: 'ACTIVE',
+      secret_ciphertext: TEST_TOTP_CIPHERTEXT,
+    },
+  });
 
   // Create users in OTHER_MERCHANT_ID
   for (const [id, email, role, full_name] of [
@@ -200,6 +312,7 @@ export async function runUsersSupertestSuite() {
       43200
     );
     const hash = createHash('sha256').update(token).digest('hex');
+    createdSecretValues.push(token, hash);
     await prisma.deviceSession.upsert({
       where: { session_token_hash: hash },
       update: {
@@ -727,8 +840,11 @@ export async function runUsersSupertestSuite() {
     // AC-USR-02-18: Zero secret disclosure across all responses
     // -------------------------------------------------------------------------
     console.log('[TEST AC-USR-02-18] Security & secret disclosure check');
+    const validSecrets = createdSecretValues.filter((s) => typeof s === 'string' && s.length >= 6);
+
     for (const body of responsesToInspect) {
-      assertNoSensitiveData(body);
+      assertNoSensitiveDisclosures(body, validSecrets);
+      assertNoSecretValues(JSON.stringify(body), validSecrets);
     }
     const userAuditLogs = await prisma.auditLog.findMany({
       where: {
@@ -740,8 +856,14 @@ export async function runUsersSupertestSuite() {
       },
     });
     for (const log of userAuditLogs) {
-      if (log.old_value) assertNoSensitiveData(log.old_value);
-      if (log.new_value) assertNoSensitiveData(log.new_value);
+      if (log.old_value) {
+        assertNoSensitiveDisclosures(log.old_value, validSecrets);
+        assertNoSecretValues(JSON.stringify(log.old_value), validSecrets);
+      }
+      if (log.new_value) {
+        assertNoSensitiveDisclosures(log.new_value, validSecrets);
+        assertNoSecretValues(JSON.stringify(log.new_value), validSecrets);
+      }
     }
     console.log(
       '  PASS: AC-USR-02-18 Zero secret disclosure validated across all user endpoint payloads & audit logs'
@@ -751,6 +873,13 @@ export async function runUsersSupertestSuite() {
     console.log('🎉 ALL 18 FEAT-USR-02 ACCEPTANCE CRITERIA PASSED SUCCESSFULLY!');
     console.log('================================================================');
   } finally {
+    await prisma.mfaFactor.deleteMany({
+      where: {
+        user_id: {
+          in: [OWNER_ID, SECOND_OWNER_ID, OPERATOR_ID, DELEGATED_ADMIN_ID, TOKEN_USER_ID],
+        },
+      },
+    });
     await app.close();
   }
 }

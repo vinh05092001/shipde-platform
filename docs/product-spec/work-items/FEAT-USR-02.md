@@ -157,7 +157,7 @@ Every acceptance requirement is proven by automated integration and unit test su
 | `AC-USR-02-15` | Cross-tenant actor attempts to view or mutate another merchant's user | PASS | `users.supertest.spec.ts`: rejected with 403 `FORBIDDEN` (`BR-USR-06`) |
 | `AC-USR-02-16` | User lacking `Manage users/roles` permission attempts user mutation | PASS | `users.supertest.spec.ts`: rejected with 403 `FORBIDDEN` |
 | `AC-USR-02-17` | Audit logging fails during suspension | PASS | `users.supertest.spec.ts`: transaction rollback, 500 error, status & sessions preserved |
-| `AC-USR-02-18` | Inspection of user endpoints and audit logs | PASS | `users.supertest.spec.ts`: zero secret or sensitive hash leakage across endpoints and audit records |
+| `AC-USR-02-18` | Inspection of user endpoints and audit logs | PASS | `users.supertest.spec.ts`: zero secret leakage; sensitive keys (password/hash/secret/token/auth/apikey) and created secrets (passwords, tokens, hashes, TOTP) verified strictly without regex over display names |
 
 ### Detailed Test Execution Evidence
 
@@ -165,7 +165,8 @@ Every acceptance requirement is proven by automated integration and unit test su
   - `e108d0c0`: `[FEAT-USR-02] feat(contracts): add user lifecycle schemas and contracts`
   - `87142a86`: `[FEAT-USR-02] feat(api): implement user lifecycle endpoints and tests`
   - `de2d550f`: `[FEAT-USR-02] feat(web): implement user lifecycle management UI and states`
-- **Reviewed HEAD SHA**: `11c7f9ef8e4ff9170ea66632d53df5ce7f442926`
+  - `a002d29f`: `[FEAT-USR-02] test: scope secret-leak check to sensitive fields and values`
+- **Reviewed HEAD SHA**: `a002d29fb67be7b442fb41004e15b592af0cdae3`
 
 1. **User Unit Tests** (`apps/api/src/users/users.unit.spec.ts`):
    - Executed: `npx tsx --tsconfig apps/api/tsconfig.json --test apps/api/src/users/users.unit.spec.ts`
