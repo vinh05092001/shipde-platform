@@ -366,6 +366,29 @@ class MockPrismaService {
   };
 
   user = {
+    groupBy: async (args: any) => {
+      if (this.shouldFailUserCount) {
+        throw new Error('Simulated database user count error');
+      }
+      const map = new Map<
+        string,
+        { role: string; custom_role_id: string | null; _count: { _all: number } }
+      >();
+      for (const u of this.users) {
+        if (args?.where?.merchant_id && u.merchant_id !== args.where.merchant_id) continue;
+        if (args?.where?.status) {
+          const filter = args.where.status;
+          const expected = typeof filter === 'string' ? filter : filter.equals;
+          if (expected && u.status?.toLowerCase() !== expected.toLowerCase()) continue;
+        }
+        const key = `${u.role}:::${u.custom_role_id}`;
+        if (!map.has(key)) {
+          map.set(key, { role: u.role, custom_role_id: u.custom_role_id, _count: { _all: 0 } });
+        }
+        map.get(key)!._count._all++;
+      }
+      return Array.from(map.values());
+    },
     count: async (args: any) => {
       if (this.shouldFailUserCount) {
         throw new Error('Simulated database user count error');
@@ -4263,5 +4286,38 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
       description: 'Mô tả cập nhật',
     });
     assert.strictEqual(validUpdate.description, 'Mô tả cập nhật');
+  });
+
+  // Finding (Round 16 / P2-04): getRoles uses single grouped query instead of N+1 user count queries
+  test('Finding (Round 16 / P2-04): getRoles performs a single grouped query for active user counts across all roles', async () => {
+    let groupByCalls = 0;
+    let countCalls = 0;
+    const origGroupBy = mockPrisma.user.groupBy;
+    const origCount = mockPrisma.user.count;
+
+    mockPrisma.user.groupBy = async (args: any) => {
+      groupByCalls++;
+      return origGroupBy(args);
+    };
+    mockPrisma.user.count = async (args: any) => {
+      countCalls++;
+      return origCount(args);
+    };
+
+    try {
+      const res = await service.getRoles(MERCHANT_A, 'corr-p2-04', OWNER_ACTOR);
+      assert.ok(res.data.roles.length >= 5, 'Must return at least 5 system roles');
+      // Proves single grouped query executed and 0 individual count queries executed
+      assert.strictEqual(groupByCalls, 1, 'Exactly one grouped query must be issued');
+      assert.strictEqual(countCalls, 0, 'No individual count queries should be issued (no N+1)');
+
+      // Verify counts are populated correctly
+      const ownerRole = res.data.roles.find((r) => r.code === 'OWNER');
+      assert.ok(ownerRole);
+      assert.ok(typeof ownerRole.user_count === 'number');
+    } finally {
+      mockPrisma.user.groupBy = origGroupBy;
+      mockPrisma.user.count = origCount;
+    }
   });
 });

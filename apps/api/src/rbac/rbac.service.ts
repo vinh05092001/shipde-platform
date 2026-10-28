@@ -703,58 +703,69 @@ export class RbacService implements OnModuleInit {
         orderBy: [{ is_system: 'desc' }, { created_at: 'asc' }],
       });
 
-      // Get active user counts for each role in this merchant
-      const roleItems = await Promise.all(
-        roles.map(async (role) => {
-          let userCount = 0;
-          if (role.is_system) {
-            if (isRoleEnumValue(role.code)) {
-              userCount = await this.prisma.user.count({
-                where: {
-                  merchant_id: merchantId,
-                  role: role.code,
-                  custom_role_id: null,
-                  status: ACTIVE_USER_STATUS_FILTER,
-                },
-              });
-            }
-          } else {
-            userCount = await this.prisma.user.count({
-              where: {
-                merchant_id: merchantId,
-                custom_role_id: role.id,
-                status: ACTIVE_USER_STATUS_FILTER,
-              },
-            });
+      // Single grouped query fetching active user counts across all roles for this merchant (P2-04)
+      const userCounts = await this.prisma.user.groupBy({
+        by: ['role', 'custom_role_id'],
+        where: {
+          merchant_id: merchantId,
+          status: ACTIVE_USER_STATUS_FILTER,
+        },
+        _count: {
+          _all: true,
+        },
+      });
+
+      const systemUserCounts = new Map<string, number>();
+      const customUserCounts = new Map<string, number>();
+
+      for (const entry of userCounts) {
+        const count = entry._count?._all || 0;
+        if (entry.custom_role_id) {
+          customUserCounts.set(
+            entry.custom_role_id,
+            (customUserCounts.get(entry.custom_role_id) || 0) + count
+          );
+        } else if (entry.role) {
+          systemUserCounts.set(entry.role, (systemUserCounts.get(entry.role) || 0) + count);
+        }
+      }
+
+      const roleItems = roles.map((role) => {
+        let userCount = 0;
+        if (role.is_system) {
+          if (role.code) {
+            userCount = systemUserCounts.get(role.code) || 0;
           }
+        } else {
+          userCount = customUserCounts.get(role.id) || 0;
+        }
 
-          const perms = (role.permissions || []).map((rp: any) => ({
-            id: rp.permission.id,
-            code: rp.permission.code,
-            name: rp.permission.name,
-            description: rp.permission.description,
-            category: rp.permission.category,
-          }));
+        const perms = (role.permissions || []).map((rp: any) => ({
+          id: rp.permission.id,
+          code: rp.permission.code,
+          name: rp.permission.name,
+          description: rp.permission.description,
+          category: rp.permission.category,
+        }));
 
-          return {
-            id: role.id,
-            code: role.code || null,
-            name: role.name,
-            description: role.description || null,
-            is_system: Boolean(role.is_system),
-            merchant_id: role.merchant_id || null,
-            permissions_count: perms.length,
-            permissions: perms,
-            user_count: userCount,
-            created_at: role.created_at
-              ? new Date(role.created_at).toISOString()
-              : new Date().toISOString(),
-            updated_at: role.updated_at
-              ? new Date(role.updated_at).toISOString()
-              : new Date().toISOString(),
-          };
-        })
-      );
+        return {
+          id: role.id,
+          code: role.code || null,
+          name: role.name,
+          description: role.description || null,
+          is_system: Boolean(role.is_system),
+          merchant_id: role.merchant_id || null,
+          permissions_count: perms.length,
+          permissions: perms,
+          user_count: userCount,
+          created_at: role.created_at
+            ? new Date(role.created_at).toISOString()
+            : new Date().toISOString(),
+          updated_at: role.updated_at
+            ? new Date(role.updated_at).toISOString()
+            : new Date().toISOString(),
+        };
+      });
 
       return {
         data: {
