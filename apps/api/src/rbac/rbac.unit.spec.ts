@@ -3279,8 +3279,8 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
     }
   });
 
-  // Finding 1 (Round 12): BR-RBAC-07 / BR-RBAC-01 / BR-RBAC-04: Platform seed and audit must not depend on customer merchants, use nullable actor, and onModuleInit must fail startup visibly
-  test('Finding 1 (Round 12): Platform seed audit uses nullable platform actor without customer merchant dependency, and onModuleInit fails visibly on seed failure', async () => {
+  // Finding 1 (Round 12 / AC-FOUND-03-04 / AC-FOUND-03-06): Platform seed audit uses nullable platform actor without customer merchant dependency, ensurePlatformSeed fails visibly on seed failure, and onModuleInit does not abort API bootstrap
+  test('Finding 1 (Round 12 / AC-FOUND-03-04): Platform seed audit uses nullable platform actor without customer merchant dependency, ensurePlatformSeed fails visibly, and onModuleInit does not crash startup', async () => {
     // 1. Clear merchant findFirst to prove platform seed does not depend on a customer merchant
     mockPrisma.merchant.findFirst = async () => null;
     mockPrisma.auditLogs = [];
@@ -3311,18 +3311,23 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
       'Platform audit user_id must be null for system bootstrap'
     );
 
-    // 2. onModuleInit must fail startup visibly if ensurePlatformSeed fails, rather than swallowing error
+    // 2. ensurePlatformSeed must fail visibly if DB operations fail
     (service as any).isSeeded = false;
     mockPrisma.shouldFailPermissionFindMany = true;
     await assert.rejects(
       async () => {
-        await service.onModuleInit();
+        await service.ensurePlatformSeed();
       },
       (err: any) => {
-        assert.ok(err, 'onModuleInit must reject when seed fails');
+        assert.ok(err, 'ensurePlatformSeed must reject when seed fails');
         return true;
       }
     );
+
+    // 3. onModuleInit must NOT abort API bootstrap or crash process when DB is unreachable (AC-FOUND-03-04, AC-FOUND-03-06)
+    (service as any).isSeeded = false;
+    await service.onModuleInit(); // Must resolve gracefully without throwing
+
     mockPrisma.shouldFailPermissionFindMany = false;
   });
 

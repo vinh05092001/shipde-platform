@@ -152,8 +152,11 @@ export class RbacService implements OnModuleInit {
     if (typeof this.prisma?.$transaction !== 'function') {
       return;
     }
-    // Startup must fail visibly if platform seed fails instead of swallowing and serving unseeded catalog (Finding 1 / Round 12)
-    await this.ensurePlatformSeed();
+    // Non-blocking platform seed: do not block or crash startup if the database is unreachable or slow.
+    // Liveness must never depend on external dependencies (AC-FOUND-03-04, AC-FOUND-03-06).
+    void this.ensurePlatformSeed().catch(() => {
+      // Detached seed failure is handled gracefully; readiness probe will report down.
+    });
   }
 
   /**
