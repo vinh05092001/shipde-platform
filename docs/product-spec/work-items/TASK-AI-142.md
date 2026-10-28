@@ -1,5 +1,32 @@
 # TASK-AI-142 — Hermes chat brain wired to the Controller
 
+## Quota scanner and route ranking slice (2026-10-28)
+
+Slice (A) implements the live quota scanner and quota-aware route ranking subsystem. It delivers periodic quota scanning across upstream scopes and agent CLI lanes, dynamic model discovery and source alias resolution (including iteracompute and llm7 free tier), the benchmark-ordered 9Router writer combo candidate filter, coverage shrinkage and fallback benchmark evaluation for model priors, and fresh route evidence prioritization.
+
+Allowed paths:
+- `tools/ai-brain/quota-scan.js`
+- `tools/ai-brain/priors.js`
+- `tools/ai-brain/routing.js`
+- `tools/ai-brain/ranking.js`
+- `tools/ai-brain/capability-probe.js`
+- `tools/ai-brain/route-evidence.js`
+- `tools/ai-brain/route-health.js`
+- `tools/ai-brain/probe-order.js`
+- `tools/ai-brain/ninerouter-combo.js`
+- `tools/ai-brain/sources.js`
+- `tools/ai-brain/sources.json`
+- `tools/ai-brain/source-discovery.js`
+- `tools/ai-brain/rolling-onboard.js`
+- `tools/ai-brain/candidates.js`
+- `tools/ai-brain/agy-pool-runtime.js`
+- `tools/ai-brain/failure-classifier.js`
+- `tools/ai-brain/route-probe.js` (minimal adapter: direct URL resolution)
+- `tools/ai-brain/writer-schema.js` (minimal adapter: JSON stream parsing for opencode text events)
+- `tools/ai-brain/orchestrate.js` (minimal adapter: exhausted account scope handling)
+- `docs/product-spec/work-items/TASK-AI-142.md`
+- Tests: `tools/ai-brain/test/task-ai-142-quota-scan.test.js`, `task-ai-142-account-quota-scope.test.js`, `task-ai-142-aa-priors.test.js`, `task-ai-142-priors-matching.test.js`, `task-ai-142-priors-ranking.test.js`, `task-ai-142-unscoped-ranking.test.js`, `task-ai-142-capability-probe.test.js`, `task-ai-142-candidate-filter-alias.test.js`, `task-ai-142-iteracompute.test.js`, `task-ai-142-route-health-isolation.test.js`, `ninerouter-combo.test.js`, `candidates.test.js`.
+
 ## Orchestrate module split, steps 1-2 (2026-10-28)
 
 Steps 1-2 of the orchestrate module split extract `route-probe` and `decisions-log` helpers verbatim from `tools/ai-brain/orchestrate.js` into dedicated modules: `tools/ai-brain/orchestrate/route-probe.js` and `tools/ai-brain/orchestrate/decisions-log.js`.

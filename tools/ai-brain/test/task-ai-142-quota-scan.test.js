@@ -384,6 +384,7 @@ test('capability-probe and dispatch --dry-run skip candidates whose scope is in 
       registry,
       quotaStateFile: quotaFile,
       now,
+      capabilitiesPrepared: true,
       log: () => {},
       exit: () => {},
     }
@@ -507,4 +508,42 @@ test('cli.js quotaScanCommand runs scan and writes quota-state.json', async (t) 
   assert.equal(res.blockedCount, 0);
   const data = JSON.parse(fs.readFileSync(quotaFile, 'utf8'));
   assert.equal(data.scopes.bai.code, 'OK');
+});
+
+test('isCompletionBody and validateCompletion accept SSE stream chunk bodies with delta content and reasoning', () => {
+  const { isCompletionBody, validateCompletion, classifyQuotaResponse } = require('../quota-scan');
+
+  // SSE stream fixture with delta content across multiple data chunks
+  const sseBody = [
+    'data: {"id":"chatcmpl-sse-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant"}}]}',
+    'data: {"id":"chatcmpl-sse-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"o"}}]}',
+    'data: {"id":"chatcmpl-sse-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"k"}}]}',
+    'data: [DONE]',
+  ].join('\n');
+
+  assert.equal(isCompletionBody(sseBody), true);
+  assert.deepEqual(validateCompletion(sseBody), { ok: true });
+
+  const classified = classifyQuotaResponse(200, sseBody, new Map());
+  assert.equal(classified.code, 'OK');
+  assert.equal(classified.status, 200);
+
+  // SSE stream with reasoning_content (e.g. thinking models)
+  const sseReasoningBody = [
+    'data: {"id":"chatcmpl-sse-2","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant"}}]}',
+    'data: {"id":"chatcmpl-sse-2","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"reasoning_content":"reasoning thought"}}]}',
+    'data: [DONE]',
+  ].join('\n');
+
+  assert.equal(isCompletionBody(sseReasoningBody), true);
+  assert.deepEqual(validateCompletion(sseReasoningBody), { ok: true });
+
+  // Empty SSE stream without text content or tool call must be rejected
+  const emptySseBody = [
+    'data: {"id":"chatcmpl-sse-3","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant"}}]}',
+    'data: [DONE]',
+  ].join('\n');
+
+  assert.equal(isCompletionBody(emptySseBody), false);
+  assert.equal(validateCompletion(emptySseBody).ok, false);
 });

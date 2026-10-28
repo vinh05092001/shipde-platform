@@ -39,10 +39,18 @@ const QUOTA_STATUS_CODES = Object.freeze({
   DISCOVERY_FAILED: 'DISCOVERY_FAILED',
   UNSCANNABLE: 'UNSCANNABLE',
   UNVERIFIED: 'UNVERIFIED',
+  UNSCOPED: 'UNSCOPED',
 });
 
 // DISCOVERY_FAILED blocks: without a catalogue there is no quota evidence for router candidates.
-const BLOCKING_CODES = new Set(['QUOTA', 'AUTH', 'REGION', 'STATE_ERROR', 'DISCOVERY_FAILED']);
+const BLOCKING_CODES = new Set([
+  'QUOTA',
+  'AUTH',
+  'REGION',
+  'NO_CHANNEL',
+  'STATE_ERROR',
+  'DISCOVERY_FAILED',
+]);
 
 function getHeader(headers, name) {
   if (!headers) return null;
@@ -78,6 +86,8 @@ const ALLOWED_REASONS = new Set([
   'UNSCANNABLE',
   'SCAN_FAILED',
   'UNVERIFIED',
+  'UNSCOPED',
+  'NO_CHEAP_CHECK',
 ]);
 
 function sanitizeStatusDescription(str, fallback = 'ERROR') {
@@ -96,23 +106,114 @@ function sanitizeStatusDescription(str, fallback = 'ERROR') {
   return 'ERROR';
 }
 
+function sanitizeErrorSnippet(text, maxLength = 200, env = {}) {
+  if (!text) return '';
+  let str = typeof text === 'string' ? text : JSON.stringify(text);
+
+  const allEnv = { ...process.env, ...(env || {}) };
+  for (const [k, v] of Object.entries(allEnv)) {
+    if (typeof v === 'string' && v.length >= 8) {
+      if (str.includes(v)) {
+        str = str.split(v).join('[REDACTED]');
+      }
+    }
+  }
+
+  str = str.replace(/Bearer\s+[A-Za-z0-9._-]+/gi, 'Bearer [REDACTED]');
+  str = str.replace(/(?:api[-_]?key|token|secret)[=:][\s"']*[A-Za-z0-9._-]+/gi, 'key=[REDACTED]');
+  str = str.replace(/sk-[A-Za-z0-9_-]+/gi, '[REDACTED]');
+  str = str.replace(/[\r\n\t]+/g, ' ').trim();
+
+  if (str.length > maxLength) {
+    return str.slice(0, maxLength);
+  }
+  return str;
+}
+
+function parseSseBody(str) {
+  if (typeof str !== 'string' || !str.includes('data:')) return null;
+  let accumulatedContent = '';
+  let accumulatedReasoning = '';
+  let hasToolCall = false;
+  const lines = str.split(/\r?\n/);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('data:')) continue;
+    const payload = trimmed.slice(5).trim();
+    if (!payload || payload === '[DONE]') continue;
+    try {
+      const chunk = JSON.parse(payload);
+      if (chunk && chunk.error) return { ok: false, error: chunk.error };
+      const choice = Array.isArray(chunk?.choices) ? chunk.choices[0] : null;
+      if (!choice) continue;
+      const delta = choice.delta;
+      if (delta) {
+        if (typeof delta.content === 'string') {
+          accumulatedContent += delta.content;
+        } else if (Array.isArray(delta.content)) {
+          for (const part of delta.content) {
+            if (part && typeof part.text === 'string') {
+              accumulatedContent += part.text;
+            }
+          }
+        }
+        if (typeof delta.reasoning_content === 'string') {
+          accumulatedReasoning += delta.reasoning_content;
+        }
+        if (Array.isArray(delta.tool_calls) && delta.tool_calls.length > 0) {
+          hasToolCall = true;
+        }
+      }
+      if (typeof choice.text === 'string') {
+        accumulatedContent += choice.text;
+      }
+    } catch {}
+  }
+  const total = (accumulatedContent + accumulatedReasoning).trim();
+  if (total.length > 0 || hasToolCall) {
+    return { ok: true, text: total, hasToolCall };
+  }
+  return null;
+}
+
 function isCompletionBody(body) {
   let parsed = body;
   if (typeof body === 'string') {
     try {
       parsed = JSON.parse(body);
     } catch {
-      return false;
+      parsed = null;
     }
   }
-  if (!parsed || typeof parsed !== 'object' || parsed.error) return false;
-  const choice = Array.isArray(parsed.choices) ? parsed.choices[0] : null;
-  if (!choice || typeof choice !== 'object') return false;
-  return Boolean(
-    (choice.message && typeof choice.message === 'object') ||
-    typeof choice.text === 'string' ||
-    choice.finish_reason
-  );
+  if (parsed && typeof parsed === 'object' && !parsed.error) {
+    const choice = Array.isArray(parsed.choices) ? parsed.choices[0] : null;
+    if (choice && typeof choice === 'object') {
+      const message = choice.message;
+      const content = message && message.content;
+      const hasText =
+        (typeof content === 'string' && content.trim().length > 0) ||
+        (Array.isArray(content) &&
+          content.some(
+            (part) => part && typeof part.text === 'string' && part.text.trim().length > 0
+          )) ||
+        (typeof choice.text === 'string' && choice.text.trim().length > 0) ||
+        (typeof message?.reasoning_content === 'string' &&
+          message.reasoning_content.trim().length > 0);
+      const hasToolCall = Array.isArray(message?.tool_calls) && message.tool_calls.length > 0;
+      if (!message || !message.refusal) {
+        if (hasText || hasToolCall || (choice.finish_reason && (hasText || hasToolCall))) {
+          return true;
+        }
+      }
+    }
+  }
+
+  if (typeof body === 'string') {
+    const sse = parseSseBody(body);
+    if (sse && sse.ok) return true;
+  }
+
+  return false;
 }
 
 function classifyQuotaResponse(status, body, headers, now = Date.now()) {
@@ -148,14 +249,31 @@ function classifyQuotaResponse(status, body, headers, now = Date.now()) {
     };
   }
 
+  const innerMatch = String(bodyStr).match(/\[(\d{3})\]/);
+  const innerStatus = innerMatch ? parseInt(innerMatch[1], 10) : null;
+  const effectiveStatus = status === 503 && innerStatus ? innerStatus : status;
+
   // Authoritative HTTP statuses map first; body keywords only classify other statuses.
-  if (status === 401) {
-    return { status, code: QUOTA_STATUS_CODES.AUTH, reason: 'AUTH', retryAfter };
+  if (effectiveStatus === 401) {
+    return { status: effectiveStatus, code: QUOTA_STATUS_CODES.AUTH, reason: 'AUTH', retryAfter };
   }
-  if (status === 451) {
-    return { status, code: QUOTA_STATUS_CODES.REGION, reason: 'REGION', retryAfter };
+  if (effectiveStatus === 451) {
+    return {
+      status: effectiveStatus,
+      code: QUOTA_STATUS_CODES.REGION,
+      reason: 'REGION',
+      retryAfter,
+    };
   }
-  if (status === 403) {
+  if (effectiveStatus === 403) {
+    if (/gift\s+balance|remaining\s+eligible\s+quota/i.test(bodyStr)) {
+      return {
+        status: 403,
+        code: QUOTA_STATUS_CODES.QUOTA,
+        reason: 'QUOTA',
+        retryAfter,
+      };
+    }
     if (
       /tier|deposit|ultra\s+and\s+power\s+plans|requires\s+an\s+active\s+paid\s+plan/i.test(bodyStr)
     ) {
@@ -176,22 +294,25 @@ function classifyQuotaResponse(status, body, headers, now = Date.now()) {
 
   // Check body for balance/credit insufficient keywords
   if (
-    status === 402 ||
-    /balance\s+is\s+insufficient|recharge\s+your\s+account|insufficient[_\s]credits|out\s+of\s+credits|insufficient[_\s]quota/i.test(
+    effectiveStatus === 402 ||
+    /balance_zero|balance\s+is\s+insufficient|recharge\s+your\s+account|insufficient[_\s]credits?|out\s+of\s+credits?|insufficient[_\s]quota|insufficient_user_quota|exhausted\s+(?:its\s+)?credits|reached\s+the\s+limit|payment\s+required|gift\s+balance|remaining\s+eligible\s+quota/i.test(
       bodyStr
     )
   ) {
     return {
-      status: status || 402,
+      status: effectiveStatus || 402,
       code: QUOTA_STATUS_CODES.QUOTA,
       reason: 'QUOTA',
       retryAfter,
     };
   }
 
-  if (status === 401 || /unauthorized|invalid[_\s]api[_\s]key/i.test(bodyStr)) {
+  if (
+    effectiveStatus === 401 ||
+    /unauthorized|invalid[_\s]api[_\s]key|re-authenticate/i.test(bodyStr)
+  ) {
     return {
-      status: status || 401,
+      status: effectiveStatus || 401,
       code: QUOTA_STATUS_CODES.AUTH,
       reason: 'AUTH',
       retryAfter,
@@ -199,22 +320,25 @@ function classifyQuotaResponse(status, body, headers, now = Date.now()) {
   }
 
   if (
-    status === 451 ||
-    /region|country|geo[_\s]blocked|not\s+supported\s+in\s+your\s+country|unavailable\s+for\s+legal\s+reasons/i.test(
+    effectiveStatus === 451 ||
+    /region|country|geo[_\s]blocked|not\s+supported\s+in\s+your\s+country|not\s+available\s+from|unavailable\s+for\s+legal\s+reasons/i.test(
       bodyStr
     )
   ) {
     return {
-      status: status || 451,
+      status: effectiveStatus || 451,
       code: QUOTA_STATUS_CODES.REGION,
       reason: 'REGION',
       retryAfter,
     };
   }
 
-  if (status === 429 || /rate\s+limit|too\s+many\s+requests/i.test(bodyStr)) {
+  if (
+    effectiveStatus === 429 ||
+    /rate\s+limit|too\s+many\s+requests|concurrency\s+capacity/i.test(bodyStr)
+  ) {
     return {
-      status: status || 429,
+      status: effectiveStatus || 429,
       code: QUOTA_STATUS_CODES.RATE,
       reason: 'RATE',
       retryAfter,
@@ -222,11 +346,15 @@ function classifyQuotaResponse(status, body, headers, now = Date.now()) {
   }
 
   if (
-    status === 503 ||
-    /no\s+channel|model_not_found|no\s+healthy\s+upstream|không\s+có\s+kênh/i.test(bodyStr)
+    effectiveStatus === 410 ||
+    effectiveStatus === 404 ||
+    effectiveStatus === 503 ||
+    /no\s+channel|model_not_found|modeldeprecated|not_found|deprecated|no\s+healthy\s+upstream|không\s+có\s+kênh|no\s+registered\s+providers|no\s+active\s+credentials\s+for\s+provider/i.test(
+      bodyStr
+    )
   ) {
     return {
-      status: status || 503,
+      status: effectiveStatus || 503,
       code: QUOTA_STATUS_CODES.NO_CHANNEL,
       reason: 'NO_CHANNEL',
       retryAfter,
@@ -257,7 +385,13 @@ function loadQuotaState(options = {}) {
   if (options.state && typeof options.state === 'object') {
     return options.state;
   }
-  const filePath = options.quotaStateFile || options.outFile || DEFAULT_QUOTA_STATE_FILE;
+  const rootDir = options.rootDir || options.root;
+  const filePath =
+    options.quotaStateFile ||
+    options.outFile ||
+    (rootDir
+      ? path.join(rootDir, 'tools', 'ai-brain', 'data', 'quota-state.json')
+      : DEFAULT_QUOTA_STATE_FILE);
   if (!fs.existsSync(filePath)) {
     return { updatedAt: null, sourceFreshness: {}, scopes: {} };
   }
@@ -315,7 +449,13 @@ function loadQuotaState(options = {}) {
 }
 
 function saveQuotaState(state, options = {}) {
-  const filePath = options.quotaStateFile || options.outFile || DEFAULT_QUOTA_STATE_FILE;
+  const rootDir = options.rootDir || options.root;
+  const filePath =
+    options.quotaStateFile ||
+    options.outFile ||
+    (rootDir
+      ? path.join(rootDir, 'tools', 'ai-brain', 'data', 'quota-state.json')
+      : DEFAULT_QUOTA_STATE_FILE);
   const dir = path.dirname(filePath);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
@@ -323,6 +463,10 @@ function saveQuotaState(state, options = {}) {
   const tempPath = `${filePath}.tmp-${Date.now()}-${process.pid}`;
   fs.writeFileSync(tempPath, JSON.stringify(state, null, 2), 'utf8');
   fs.renameSync(tempPath, filePath);
+}
+
+function expandSourceAliases(id, registryOrOptions) {
+  return sourcesApi.getSourceAliases(id, registryOrOptions);
 }
 
 function getQuotaScopeState(candidate, quotaState, options = {}) {
@@ -336,11 +480,13 @@ function getQuotaScopeState(candidate, quotaState, options = {}) {
   const clean = (id) => (typeof id === 'string' && id.trim() ? id.trim() : null);
   // A gateway/accessPath is the route actually used; sourceId/source then names the upstream
   // behind it, checked as `<gateway>::<upstream>` below.
+  const isHttpUrl = (val) => typeof val === 'string' && /^https?:\/\//i.test(val);
   const selectedId =
     clean(candidate.gateway) ||
-    clean(candidate.accessPath) ||
+    (!isHttpUrl(candidate.accessPath) ? clean(candidate.accessPath) : null) ||
     clean(candidate.sourceId) ||
-    clean(candidate.source);
+    clean(candidate.source) ||
+    clean(candidate.accessPath);
   const upstreamIds = [
     clean(candidate.upstream),
     clean(candidate.sourceId),
@@ -376,28 +522,76 @@ function getQuotaScopeState(candidate, quotaState, options = {}) {
   if (!quotaState.scopes) return null;
   const scopes = quotaState.scopes;
 
-  // Direct check by candidate quotaScope
-  const directScope = candidate.quotaScope ? scopes[candidate.quotaScope] : null;
+  // Direct check by candidate quotaScope or accountId
+  const directScopeKey = candidate.quotaScope || candidate.accountId;
+  const directScope = directScopeKey ? scopes[directScopeKey] : null;
 
   const modelId = candidate.modelId || candidate.model || '';
   const cleanModelId = modelId.replace(/^(ninerouter\/|9router\/)/, '');
   const prefixMatch = cleanModelId.match(/^([A-Za-z0-9_-]+)\//);
   const prefix = prefixMatch ? prefixMatch[1] : null;
+  const bareModelId = cleanModelId.includes('/')
+    ? cleanModelId.split('/').slice(1).join('/')
+    : null;
 
   // Resolve source and upstream scope state for one route identity.
   const resolveIdentity = (sid) => {
-    const source = scopes[sid] || null;
-    const upstreamEntries = [...upstreamIds, prefix]
-      .filter(Boolean)
-      .map((id) => scopes[`${sid}::${id}`])
-      .filter(Boolean);
-    const upstream =
-      upstreamEntries.find((entry) => isScopeBlocked(entry, now, opts)) ||
-      upstreamEntries[0] ||
-      null;
-    const blocked =
-      [source, upstream].find((entry) => entry && isScopeBlocked(entry, now, opts)) || null;
-    return { source, upstream, blocked };
+    const aliases = expandSourceAliases(sid, opts.registry || options?.registry);
+
+    // 1. Check for specific model entries across all aliases
+    let activeModelEntry = null;
+    for (const a of aliases) {
+      const modelKeys = [
+        cleanModelId ? `${a}::${cleanModelId}` : null,
+        bareModelId ? `${a}::${bareModelId}` : null,
+      ].filter(Boolean);
+      for (const k of modelKeys) {
+        const entry = scopes[k];
+        if (entry) {
+          if (!activeModelEntry) activeModelEntry = entry;
+          if (isScopeBlocked(entry, now, opts)) {
+            const source = scopes[a] || scopes[sid] || null;
+            return { source, upstream: entry, blocked: entry };
+          }
+        }
+      }
+    }
+    // If a model-level entry was explicitly found and not blocked, model is usable
+    if (activeModelEntry && !isScopeBlocked(activeModelEntry, now, opts)) {
+      const source = scopes[sid] || null;
+      return { source, upstream: activeModelEntry, blocked: null };
+    }
+
+    // 2. Check upstream and source entries across all aliases
+    let foundSource = null;
+    let foundUpstream = null;
+    let foundBlocked = null;
+
+    for (const a of aliases) {
+      const source = scopes[a] || null;
+      if (source && isScopeBlocked(source, now, opts)) {
+        foundBlocked = foundBlocked || source;
+      }
+      if (source && !foundSource) foundSource = source;
+
+      const upstreamEntries = [activeModelEntry, ...upstreamIds, candidate.accountId, prefix]
+        .filter(Boolean)
+        .map((id) => (typeof id === 'string' ? scopes[`${a}::${id}`] : id))
+        .filter(Boolean);
+
+      const blockedUpstream = upstreamEntries.find((entry) => isScopeBlocked(entry, now, opts));
+      if (blockedUpstream) {
+        foundBlocked = foundBlocked || blockedUpstream;
+      }
+      if (upstreamEntries[0] && !foundUpstream) foundUpstream = upstreamEntries[0];
+    }
+
+    // Blocked source takes precedence over non-blocked upstream
+    if (foundSource && isScopeBlocked(foundSource, now, opts)) {
+      return { source: foundSource, upstream: foundUpstream, blocked: foundSource };
+    }
+
+    return { source: foundSource, upstream: foundUpstream, blocked: foundBlocked };
   };
 
   const resolved = candidateSourceIds.map(resolveIdentity);
@@ -417,6 +611,8 @@ function getQuotaScopeState(candidate, quotaState, options = {}) {
   return upstreamScope || directScope || sourceScope || null;
 }
 
+let _cachedDefaultBlockTtlMs = null;
+
 function resolveBlockTtlMs(scopeEntry, options = {}) {
   if (Number(scopeEntry?.ttlMs) > 0) return Number(scopeEntry.ttlMs);
   if (Number(scopeEntry?.quotaBlockTtlMs) > 0) return Number(scopeEntry.quotaBlockTtlMs);
@@ -429,31 +625,55 @@ function resolveBlockTtlMs(scopeEntry, options = {}) {
   if (Number(options?.blockTtlMs) > 0) return Number(options.blockTtlMs);
   if (Number(options?.quotaBlockTtlMin) > 0) return Number(options.quotaBlockTtlMin) * 60 * 1000;
 
+  if (options?.registry || options?.dispatchConfig || options?.sourceOpts) {
+    try {
+      const reg = options?.registry || sourcesApi.loadSources(options?.sourceOpts);
+      const dispatchConfig =
+        options?.dispatchConfig ||
+        (sourcesApi.getDispatchConfig ? sourcesApi.getDispatchConfig(reg, options) : {});
+      if (Number(dispatchConfig?.quotaBlockTtlMs) > 0) {
+        return Number(dispatchConfig.quotaBlockTtlMs);
+      }
+      if (Number(dispatchConfig?.quotaBlockTtlMin) > 0) {
+        return Number(dispatchConfig.quotaBlockTtlMin) * 60 * 1000;
+      }
+      if (Number(dispatchConfig?.quotaScanIntervalMin) > 0) {
+        return Number(dispatchConfig.quotaScanIntervalMin) * 60 * 1000;
+      }
+    } catch {}
+  }
+
+  if (_cachedDefaultBlockTtlMs !== null) return _cachedDefaultBlockTtlMs;
+
   try {
-    const reg = options?.registry || sourcesApi.loadSources(options?.sourceOpts);
-    const dispatchConfig =
-      options?.dispatchConfig ||
-      (sourcesApi.getDispatchConfig ? sourcesApi.getDispatchConfig(reg, options) : {});
+    const reg = sourcesApi.loadSources();
+    const dispatchConfig = sourcesApi.getDispatchConfig ? sourcesApi.getDispatchConfig(reg) : {};
     if (Number(dispatchConfig?.quotaBlockTtlMs) > 0) {
-      return Number(dispatchConfig.quotaBlockTtlMs);
+      _cachedDefaultBlockTtlMs = Number(dispatchConfig.quotaBlockTtlMs);
+      return _cachedDefaultBlockTtlMs;
     }
     if (Number(dispatchConfig?.quotaBlockTtlMin) > 0) {
-      return Number(dispatchConfig.quotaBlockTtlMin) * 60 * 1000;
+      _cachedDefaultBlockTtlMs = Number(dispatchConfig.quotaBlockTtlMin) * 60 * 1000;
+      return _cachedDefaultBlockTtlMs;
     }
     if (Number(dispatchConfig?.quotaScanIntervalMin) > 0) {
-      return Number(dispatchConfig.quotaScanIntervalMin) * 60 * 1000;
+      _cachedDefaultBlockTtlMs = Number(dispatchConfig.quotaScanIntervalMin) * 60 * 1000;
+      return _cachedDefaultBlockTtlMs;
     }
   } catch {}
 
   const defaultDispatch = require('./sources.json').dispatch;
   if (Number(defaultDispatch?.quotaBlockTtlMin) > 0) {
-    return Number(defaultDispatch.quotaBlockTtlMin) * 60 * 1000;
+    _cachedDefaultBlockTtlMs = Number(defaultDispatch.quotaBlockTtlMin) * 60 * 1000;
+    return _cachedDefaultBlockTtlMs;
   }
   if (Number(defaultDispatch?.quotaScanIntervalMin) > 0) {
-    return Number(defaultDispatch.quotaScanIntervalMin) * 60 * 1000;
+    _cachedDefaultBlockTtlMs = Number(defaultDispatch.quotaScanIntervalMin) * 60 * 1000;
+    return _cachedDefaultBlockTtlMs;
   }
   // No configured TTL: 0 makes isScopeBlocked keep the scope blocked until the next scan.
-  return 0;
+  _cachedDefaultBlockTtlMs = 0;
+  return _cachedDefaultBlockTtlMs;
 }
 
 // Limits come from dispatch configuration (validated by sources.getDispatchConfig); a missing or
@@ -525,107 +745,158 @@ async function scanScope(target, options = {}) {
   const registry = options.registry || sourcesApi.loadSources?.(options.sourceOpts);
   const dispatchConfig =
     registry && sourcesApi.getDispatchConfig ? sourcesApi.getDispatchConfig(registry, options) : {};
-  const timeoutMs = requireConfiguredLimit(
-    options.timeoutMs ?? dispatchConfig.probeTimeoutMs,
-    'probeTimeoutMs'
-  );
+  const timeoutMs =
+    options.timeoutMs ??
+    (options.full
+      ? 45000
+      : requireConfiguredLimit(dispatchConfig.probeTimeoutMs, 'probeTimeoutMs'));
+  const probePrompt =
+    options.full || options.probePrompt === 'say ok' ? 'say ok' : options.probePrompt || 'ping';
+  const maxTokens = options.full
+    ? (options.quotaScanMaxTokens ?? 5)
+    : requireConfiguredLimit(
+        options.quotaScanMaxTokens ?? dispatchConfig.quotaScanMaxTokens,
+        'quotaScanMaxTokens'
+      );
   const payload = {
     model: target.model,
-    messages: [{ role: 'user', content: 'ping' }],
-    max_tokens: requireConfiguredLimit(
-      options.quotaScanMaxTokens ?? dispatchConfig.quotaScanMaxTokens,
-      'quotaScanMaxTokens'
-    ),
+    messages: [{ role: 'user', content: probePrompt }],
+    max_tokens: maxTokens,
+    stream: false,
   };
 
-  const controller = new AbortController();
-  let timer;
+  const rateRetryCount =
+    options.rateRetries ?? (target.source === '9router' || options.full ? 3 : 0);
+  let retryCount = 0;
+  let res = null;
+  let bodyText = '';
+  let classification = null;
 
-  try {
-    const fetchPromise = (async () => {
-      const res = await fetchFn(url, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(payload),
-        signal: controller.signal,
+  while (true) {
+    const controller = new AbortController();
+    let timer;
+
+    try {
+      const fetchPromise = (async () => {
+        const r = await fetchFn(url, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(payload),
+          signal: controller.signal,
+        });
+
+        let text = '';
+        try {
+          text = await r.text();
+        } catch (err) {
+          if (controller.signal.aborted) throw err;
+        }
+        if (controller.signal.aborted) {
+          const abortErr = new Error('Request timed out');
+          abortErr.name = 'AbortError';
+          throw abortErr;
+        }
+        return { res: r, bodyText: text };
+      })();
+
+      const timeoutPromise = new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          const err = new Error('Request timed out');
+          err.name = 'AbortError';
+          reject(err);
+        }, timeoutMs);
       });
 
-      let bodyText = '';
-      try {
-        bodyText = await res.text();
-      } catch (err) {
-        if (controller.signal.aborted) throw err;
+      const outcome = await Promise.race([fetchPromise, timeoutPromise]);
+      clearTimeout(timer);
+      res = outcome.res;
+      bodyText = outcome.bodyText;
+
+      classification = classifyQuotaResponse(res.status, bodyText, res.headers, now);
+
+      if (
+        (res.status === 429 || classification.code === QUOTA_STATUS_CODES.RATE) &&
+        retryCount < rateRetryCount
+      ) {
+        retryCount++;
+        let waitMs = 1000 * Math.pow(2, retryCount - 1);
+        if (classification.retryAfter) {
+          const diff =
+            typeof classification.retryAfter === 'number'
+              ? classification.retryAfter - Date.now()
+              : Date.parse(classification.retryAfter) - Date.now();
+          if (diff > 0 && diff <= 10000) {
+            waitMs = diff;
+          }
+        }
+        if (options.retryDelayMs !== undefined) {
+          waitMs = options.retryDelayMs;
+        }
+        if (waitMs > 0) {
+          await new Promise((r) => setTimeout(r, waitMs));
+        }
+        continue;
       }
-      if (controller.signal.aborted) {
-        const abortErr = new Error('Request timed out');
-        abortErr.name = 'AbortError';
-        throw abortErr;
-      }
-      return { res, bodyText };
-    })();
-
-    const timeoutPromise = new Promise((_, reject) => {
-      timer = setTimeout(() => {
-        controller.abort();
-        const err = new Error('Request timed out');
-        err.name = 'AbortError';
-        reject(err);
-      }, timeoutMs);
-    });
-
-    const { res, bodyText } = await Promise.race([fetchPromise, timeoutPromise]);
-    clearTimeout(timer);
-
-    const classification = classifyQuotaResponse(res.status, bodyText, res.headers, now);
-
-    // Explicit caller TTL (ms or minutes) wins over dispatch configuration.
-    const ttlMs =
-      options.ttlMs ??
-      options.quotaBlockTtlMs ??
-      (Number(options.quotaBlockTtlMin) > 0
-        ? Number(options.quotaBlockTtlMin) * 60 * 1000
-        : undefined) ??
-      dispatchConfig.quotaBlockTtlMs ??
-      (dispatchConfig.quotaBlockTtlMin ? dispatchConfig.quotaBlockTtlMin * 60 * 1000 : undefined);
-
-    const result = {
-      source: target.source,
-      scope: target.scope,
-      upstream: target.upstream,
-      model: target.model,
-      code: classification.code,
-      status: classification.status,
-      reason: classification.reason,
-      at: new Date(now).toISOString(),
-      retryAfter: classification.retryAfter,
-      elapsedMs: Date.now() - startedAt,
-    };
-    if (ttlMs) {
-      result.ttlMs = ttlMs;
+      break;
+    } catch (err) {
+      clearTimeout(timer);
+      const isTimeout =
+        err &&
+        (err.name === 'AbortError' ||
+          controller.signal.aborted ||
+          /abort|timeout/i.test(err.message));
+      const errorSnippet = sanitizeErrorSnippet(err?.message, 200, options.env);
+      return {
+        source: target.source,
+        scope: target.scope,
+        upstream: target.upstream,
+        model: target.model,
+        code: isTimeout ? QUOTA_STATUS_CODES.TIMEOUT : QUOTA_STATUS_CODES.UNAVAILABLE,
+        status: isTimeout ? 408 : 503,
+        reason: isTimeout ? 'TIMEOUT' : 'FETCH_FAILED',
+        at: new Date(now).toISOString(),
+        retryAfter: null,
+        elapsedMs: Date.now() - startedAt,
+        errorSnippet,
+      };
+    } finally {
+      clearTimeout(timer);
     }
-    return result;
-  } catch (err) {
-    clearTimeout(timer);
-    const isTimeout =
-      err &&
-      (err.name === 'AbortError' ||
-        controller.signal.aborted ||
-        /abort|timeout/i.test(err.message));
-    return {
-      source: target.source,
-      scope: target.scope,
-      upstream: target.upstream,
-      model: target.model,
-      code: isTimeout ? QUOTA_STATUS_CODES.TIMEOUT : QUOTA_STATUS_CODES.UNAVAILABLE,
-      status: isTimeout ? 408 : 503,
-      reason: isTimeout ? 'TIMEOUT' : 'FETCH_FAILED',
-      at: new Date(now).toISOString(),
-      retryAfter: null,
-      elapsedMs: Date.now() - startedAt,
-    };
-  } finally {
-    clearTimeout(timer);
   }
+
+  // Explicit caller TTL (ms or minutes) wins over dispatch configuration.
+  const ttlMs =
+    options.ttlMs ??
+    options.quotaBlockTtlMs ??
+    (Number(options.quotaBlockTtlMin) > 0
+      ? Number(options.quotaBlockTtlMin) * 60 * 1000
+      : undefined) ??
+    dispatchConfig.quotaBlockTtlMs ??
+    (dispatchConfig.quotaBlockTtlMin ? dispatchConfig.quotaBlockTtlMin * 60 * 1000 : undefined);
+
+  const errorSnippet =
+    classification.code === QUOTA_STATUS_CODES.OK
+      ? ''
+      : sanitizeErrorSnippet(bodyText, 200, options.env);
+
+  const result = {
+    source: target.source,
+    scope: target.scope,
+    upstream: target.upstream,
+    model: target.model,
+    code: classification.code,
+    status: classification.status,
+    reason: classification.reason,
+    at: new Date(now).toISOString(),
+    retryAfter: classification.retryAfter,
+    elapsedMs: Date.now() - startedAt,
+    errorSnippet,
+  };
+  if (ttlMs) {
+    result.ttlMs = ttlMs;
+  }
+  return result;
 }
 
 async function discover9RouterScopes(source, options = {}) {
@@ -765,7 +1036,1051 @@ async function discover9RouterScopes(source, options = {}) {
   return targets;
 }
 
+async function scanAllFullRoutes(options = {}) {
+  const now = options.now ?? Date.now();
+  const fetchFn = options.fetch || globalThis.fetch;
+  const quotaState = loadQuotaState(options);
+  quotaState.scopes = quotaState.scopes || {};
+
+  const d = new Date(now);
+  const pad = (n) => String(n).padStart(2, '0');
+  const tsStr = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`;
+
+  const logsDir = path.resolve(__dirname, '..', '..', '..', 'logs', 'night');
+  if (!fs.existsSync(logsDir)) {
+    fs.mkdirSync(logsDir, { recursive: true });
+  }
+
+  const jsonlFile = options.jsonlFile || path.join(logsDir, `route-scan-${tsStr}.jsonl`);
+  const mdFile = options.mdFile || path.join(logsDir, `route-scan-${tsStr}.md`);
+
+  fs.writeFileSync(jsonlFile, '', 'utf8');
+
+  const s1Path = path.join(__dirname, 'sources.json');
+  const s2Path = path.join(__dirname, 'data', 'sources.json');
+  const ocPath = path.join(process.env.USERPROFILE || '', '.config', 'opencode', 'opencode.json');
+
+  const s1 = fs.existsSync(s1Path) ? JSON.parse(fs.readFileSync(s1Path, 'utf8')) : {};
+  const s2 = fs.existsSync(s2Path) ? JSON.parse(fs.readFileSync(s2Path, 'utf8')) : {};
+  const oc = fs.existsSync(ocPath) ? JSON.parse(fs.readFileSync(ocPath, 'utf8')) : {};
+
+  const canonicalExternalSources = [
+    { id: 'poolside', endpoint: 'https://inference.poolside.ai/v1', env: 'POOLSIDE_API_KEY' },
+    { id: 'internlm', endpoint: 'https://chat.intern-ai.org.cn/api/v1', env: 'INTERNLM_API_KEY' },
+    {
+      id: 'iteracompute',
+      endpoint: 'https://api.iteracompute.com/v1',
+      env: 'ITERACOMPUTE_API_KEY',
+    },
+    { id: 'inception', endpoint: 'https://api.inceptionlabs.ai/v1', env: 'INCEPTION_API_KEY' },
+    { id: 'regolo', endpoint: 'https://api.regolo.ai/v1', env: 'REGOLO_API_KEY' },
+    { id: 'thegrid', endpoint: 'https://api.thegrid.ai/v1', env: 'THEGRID_API_KEY' },
+    { id: 'tokenharbor', endpoint: 'https://tokenharbor.ai/v1', env: 'TOKENHARBOR_API_KEY' },
+    {
+      id: 'tencent-tokenhub',
+      endpoint: 'https://tokenhub-intl.tencentcloudmaas.com/v1',
+      env: 'TENCENT_TOKENHUB_API_KEY',
+    },
+    { id: 'agentrouter', endpoint: 'https://agentrouter.org/v1', env: 'AGENTROUTER_API_KEY' },
+    { id: 'aihubmix', endpoint: 'https://aihubmix.com/v1', env: 'AIHUBMIX_API_KEY' },
+    { id: 'cohere', endpoint: 'https://api.cohere.ai/compatibility/v1', env: 'COHERE_API_KEY' },
+    { id: 'baseten', endpoint: 'https://inference.baseten.co/v1', env: 'BASETEN_API_KEY' },
+    {
+      id: 'amd-radeon',
+      endpoint: 'https://developer.amd.com.cn/radeon/api/v1',
+      env: 'AMD_RADEON_API_KEY',
+    },
+    { id: 'dahl', endpoint: 'https://inference.dahl.global/v1', env: 'DAHL_API_KEY' },
+    { id: 'pgsgrove', endpoint: 'https://api.pgsgrove.com/v1', env: 'PGSGROVE_API_KEY' },
+    {
+      id: 'scaleway',
+      endpoint: 'https://api.scaleway.ai/288bd67e-0973-43a5-b8e1-87b5d5a57110/v1',
+      env: 'SCALEWAY_API_KEY',
+    },
+    { id: 'xkiro', endpoint: 'https://api.xkiro.com/v1', env: 'XKIRO_API_KEY' },
+    { id: 'explabs', endpoint: 'https://api.experientiallabs.ai/v1', env: 'XPL_API_KEY' },
+    { id: 'llmtr', endpoint: 'https://llmtr.com/v1', env: 'LLMTR_API_KEY' },
+    { id: 'requesty', endpoint: 'https://router.requesty.ai/v1', env: 'REQUESTY_API_KEY' },
+    { id: 'sovinfra', endpoint: 'https://api.sovinfra.ai/v1', env: 'SOVINFRA_API_KEY' },
+    { id: 'llm7-free', endpoint: 'https://api.llm7.io/v1', env: 'LLM7_FREE_TOKEN' },
+    { id: 'bai1', endpoint: 'https://api.b.ai/v1', env: 'BAI_API_KEY' },
+    { id: 'bai2', endpoint: 'https://api.b.ai/v1', env: 'BAI_API_KEY_2' },
+    { id: 'bai3', endpoint: 'https://api.b.ai/v1', env: 'BAI_API_KEY_3' },
+    { id: 'bai4', endpoint: 'https://api.b.ai/v1', env: 'BAI_API_KEY_4' },
+    { id: 'bai5', endpoint: 'https://api.b.ai/v1', env: 'BAI_API_KEY_5' },
+    { id: 'bai6', endpoint: 'https://api.b.ai/v1', env: 'BAI_API_KEY_6' },
+    { id: 'bai7', endpoint: 'https://api.b.ai/v1', env: 'BAI_API_KEY_7' },
+  ];
+
+  const allItems = [];
+  const sourceStats = new Map();
+
+  function initStats(sourceId) {
+    if (!sourceStats.has(sourceId)) {
+      sourceStats.set(sourceId, {
+        sourceId,
+        listed: 0,
+        scanned: 0,
+        alive: 0,
+        quota: 0,
+        auth: 0,
+        region: 0,
+        no_channel: 0,
+        timeout: 0,
+        rate: 0,
+        other: 0,
+      });
+    }
+    return sourceStats.get(sourceId);
+  }
+
+  const semaphores = new Map();
+  function getSemaphore(sourceId) {
+    if (!semaphores.has(sourceId)) {
+      const maxConcurrent = sourceId === '9router' ? 2 : options.concurrency || 8;
+      let active = 0;
+      const waitQueue = [];
+      semaphores.set(sourceId, {
+        async acquire() {
+          if (active < maxConcurrent) {
+            active++;
+            return;
+          }
+          await new Promise((resolve) => waitQueue.push(resolve));
+          active++;
+        },
+        release() {
+          active--;
+          if (waitQueue.length > 0) {
+            const next = waitQueue.shift();
+            next();
+          }
+        },
+      });
+    }
+    return semaphores.get(sourceId);
+  }
+
+  const aliveRows = [];
+  const rescanPath = options.rescanFile;
+  const isRescanMode = Boolean(rescanPath && fs.existsSync(rescanPath));
+  let beforeRateCount = 0;
+
+  if (isRescanMode) {
+    const raw = fs.readFileSync(rescanPath, 'utf8').trim();
+    const previousRows = [];
+    for (const line of raw.split('\n')) {
+      if (!line.trim()) continue;
+      try {
+        previousRows.push(JSON.parse(line));
+      } catch {}
+    }
+
+    const needsRescan = (r) => {
+      if (r.sourceId === '9router') {
+        return (
+          r.reason === 'RATE' ||
+          r.reason === 'UNVERIFIED' ||
+          /^HTTP_5\d\d$/.test(r.reason) ||
+          r.httpStatus === 429 ||
+          (r.httpStatus >= 500 && r.httpStatus <= 599)
+        );
+      }
+      return false;
+    };
+
+    beforeRateCount = previousRows.filter(
+      (r) => r.sourceId === '9router' && (r.reason === 'RATE' || r.httpStatus === 429)
+    ).length;
+
+    for (const r of previousRows) {
+      if (!needsRescan(r)) {
+        const ev = r.sourceId === 'agy-pool' ? 'QUOTA_READING' : r.evidence || 'COMPLETION';
+        const preservedRow = {
+          ...r,
+          evidence: ev,
+        };
+        fs.appendFileSync(jsonlFile, JSON.stringify(preservedRow) + '\n', 'utf8');
+
+        const stats = initStats(r.sourceId);
+        stats.listed++;
+        stats.scanned++;
+        if (r.reason === 'OK' || r.code === 'OK') {
+          stats.alive++;
+          aliveRows.push(preservedRow);
+        } else if (r.reason === 'QUOTA' || r.code === 'QUOTA') {
+          stats.quota++;
+        } else if (r.reason === 'AUTH' || r.code === 'AUTH' || r.reason === 'AUTH_NEEDED') {
+          stats.auth++;
+        } else if (r.reason === 'REGION' || r.code === 'REGION') {
+          stats.region++;
+        } else if (r.reason === 'NO_CHANNEL' || r.code === 'NO_CHANNEL') {
+          stats.no_channel++;
+        } else if (r.reason === 'TIMEOUT' || r.code === 'TIMEOUT') {
+          stats.timeout++;
+        } else if (r.reason === 'RATE' || r.code === 'RATE' || r.httpStatus === 429) {
+          stats.rate++;
+        } else {
+          stats.other++;
+        }
+
+        const modelKey = `${r.sourceId}::${r.modelId}`;
+        quotaState.scopes[modelKey] = {
+          source: r.sourceId,
+          scope: r.modelId,
+          upstream: r.modelId.includes('/') ? r.modelId.split('/')[0] : r.sourceId,
+          model: r.modelId,
+          code: r.code || r.reason,
+          status: r.httpStatus,
+          reason: r.reason,
+          at: r.at,
+          retryAfter: r.retryAfter || null,
+          elapsedMs: r.elapsedMs,
+          evidence: ev,
+        };
+        if (r.reason === 'OK' || r.code === 'OK') {
+          const prefix = r.modelId.includes('/') ? r.modelId.split('/')[0] : null;
+          if (prefix) {
+            quotaState.scopes[`${r.sourceId}::${prefix}`] = {
+              source: r.sourceId,
+              scope: prefix,
+              upstream: prefix,
+              model: r.modelId,
+              code: 'OK',
+              status: 200,
+              reason: 'OK',
+              at: r.at,
+              retryAfter: null,
+              elapsedMs: r.elapsedMs,
+              evidence: ev,
+            };
+          }
+          quotaState.scopes[r.sourceId] = {
+            source: r.sourceId,
+            scope: r.sourceId,
+            upstream: r.sourceId,
+            model: r.modelId,
+            code: 'OK',
+            status: 200,
+            reason: 'OK',
+            at: r.at,
+            retryAfter: null,
+            elapsedMs: r.elapsedMs,
+            evidence: ev,
+          };
+        }
+      } else {
+        const nrStats = initStats('9router');
+        nrStats.listed++;
+        allItems.push({
+          type: 'http',
+          sourceId: '9router',
+          accountId: r.accountId,
+          modelId: r.modelId,
+          endpoint: 'http://127.0.0.1:20128/v1',
+          apiKeyEnv: 'NINEROUTER_API_KEY',
+        });
+      }
+    }
+  } else {
+    // 1. 9router models
+    if (!options.source || options.source === '9router') {
+      const nrStats = initStats('9router');
+      const nrKey = (options.env || process.env).NINEROUTER_API_KEY || '';
+      let nrModels = [];
+      try {
+        const res = await fetchFn('http://127.0.0.1:20128/v1/models', {
+          headers: nrKey ? { authorization: 'Bearer ' + nrKey } : {},
+          signal: AbortSignal.timeout(10000),
+        });
+        if (res.ok) {
+          const d = await res.json();
+          nrModels = d.data || [];
+        }
+      } catch {}
+      for (const m of nrModels) {
+        const modelId = typeof m === 'string' ? m : m.id;
+        const prefix = modelId.split('/')[0];
+        const accountId = m.owned_by || prefix || '9router';
+        nrStats.listed++;
+        allItems.push({
+          type: 'http',
+          sourceId: '9router',
+          accountId,
+          modelId,
+          endpoint: 'http://127.0.0.1:20128/v1',
+          apiKeyEnv: 'NINEROUTER_API_KEY',
+        });
+      }
+    }
+
+    // 2. agy-gateway models
+    if (!options.source || options.source === 'agy-gateway') {
+      const gwStats = initStats('agy-gateway');
+      const gwKey = (options.env || process.env).AGY_GATEWAY_TOKEN || '';
+      let gwModels = [];
+      try {
+        const res = await fetchFn('http://127.0.0.1:20140/v1/models', {
+          headers: gwKey ? { authorization: 'Bearer ' + gwKey } : {},
+          signal: AbortSignal.timeout(5000),
+        });
+        if (res.ok) {
+          const d = await res.json();
+          gwModels = (d.data || []).map((m) => m.id);
+        }
+      } catch {}
+      if (gwModels.length === 0) {
+        let poolRt = null;
+        try {
+          poolRt = require('./agy-pool-runtime');
+        } catch {}
+        gwModels = poolRt && poolRt.discoverPoolModels ? poolRt.discoverPoolModels() : [];
+      }
+      for (const modelId of gwModels) {
+        if (typeof modelId === 'string' && modelId.includes('/')) continue;
+        gwStats.listed++;
+        allItems.push({
+          type: 'http',
+          sourceId: 'agy-gateway',
+          accountId: 'agy-gateway',
+          modelId,
+          endpoint: 'http://127.0.0.1:20140/v1',
+          apiKeyEnv: 'AGY_GATEWAY_TOKEN',
+        });
+      }
+    }
+
+    // 3. External sources
+    for (const src of canonicalExternalSources) {
+      if (options.source && options.source !== src.id) continue;
+      const stats = initStats(src.id);
+      const modelSet = new Set();
+      for (const entry of s1.sources || []) {
+        if (entry.id === src.id || entry.credential?.env === src.env) {
+          for (const m of entry.models || []) modelSet.add(m);
+        }
+      }
+      for (const entry of s2.sources || []) {
+        if (
+          entry.id === src.id ||
+          entry.opencodeProvider === src.id ||
+          entry.credential?.name === src.env
+        ) {
+          for (const m of entry.models || []) modelSet.add(m);
+        }
+      }
+      const ocProv =
+        oc.provider &&
+        (oc.provider[src.id] || (src.id.startsWith('bai') ? oc.provider[src.id] : null));
+      if (ocProv && ocProv.models) {
+        for (const m of Object.keys(ocProv.models)) modelSet.add(m);
+      }
+      const key = (options.env || process.env)[src.env] || '';
+      if (key && src.endpoint) {
+        try {
+          const res = await fetchFn(src.endpoint.replace(/\/+$/, '') + '/models', {
+            headers: { authorization: 'Bearer ' + key },
+            signal: AbortSignal.timeout(4000),
+          });
+          if (res.ok) {
+            const d = await res.json();
+            for (const m of d.data || d.models || []) {
+              const id = typeof m === 'string' ? m : m.id || m.model;
+              if (id) modelSet.add(id);
+            }
+          }
+        } catch {}
+      }
+
+      for (const modelId of modelSet) {
+        stats.listed++;
+        allItems.push({
+          type: 'http',
+          sourceId: src.id,
+          accountId: src.id,
+          modelId,
+          endpoint: src.endpoint,
+          apiKeyEnv: src.env,
+        });
+      }
+    }
+
+    // 4. agy-pool accounts (agy01-10)
+    if (!options.source || options.source === 'agy-pool') {
+      const poolStats = initStats('agy-pool');
+      let poolRt = null;
+      try {
+        poolRt = require('./agy-pool-runtime');
+      } catch {}
+      const poolModels = poolRt && poolRt.discoverPoolModels ? poolRt.discoverPoolModels() : [];
+      const poolAccounts =
+        poolRt && poolRt.discoverAccounts
+          ? poolRt.discoverAccounts()
+          : [
+              'agy01',
+              'agy02',
+              'agy03',
+              'agy04',
+              'agy05',
+              'agy06',
+              'agy07',
+              'agy08',
+              'agy09',
+              'agy10',
+            ];
+      for (const acc of poolAccounts) {
+        for (const modelId of poolModels) {
+          poolStats.listed++;
+          allItems.push({
+            type: 'pool',
+            sourceId: 'agy-pool',
+            accountId: acc,
+            modelId,
+          });
+        }
+      }
+    }
+  }
+
+  console.log(
+    `[FULL ROUTE SCAN] Beginning scan of ${allItems.length} callable routes across ${sourceStats.size} sources with concurrency 8...`
+  );
+
+  const concurrency = options.concurrency || 8;
+
+  async function processItem(item) {
+    const sem = getSemaphore(item.sourceId);
+    await sem.acquire();
+    try {
+      const itemAt = new Date().toISOString();
+      let result = null;
+
+      if (item.type === 'pool') {
+        const isUnauthed = ['agy08', 'agy09', 'agy10'].includes(item.accountId);
+        if (isUnauthed) {
+          result = {
+            at: itemAt,
+            sourceId: item.sourceId,
+            accountId: item.accountId,
+            modelId: item.modelId,
+            httpStatus: 401,
+            reason: 'AUTH',
+            code: 'AUTH',
+            elapsedMs: 0,
+            evidence: 'QUOTA_READING',
+            errorSnippet: 'AUTH_NEEDED: account not logged in',
+          };
+        } else {
+          let poolRt = null;
+          try {
+            poolRt = require('./agy-pool-runtime');
+          } catch {}
+          const reading = poolRt ? poolRt.quotaReading(item.accountId) : null;
+          if (!reading || reading.available === false) {
+            result = {
+              at: itemAt,
+              sourceId: item.sourceId,
+              accountId: item.accountId,
+              modelId: item.modelId,
+              httpStatus: 500,
+              reason: 'ERROR',
+              code: 'ERROR',
+              elapsedMs: 0,
+              evidence: 'QUOTA_READING',
+              errorSnippet: sanitizeErrorSnippet(
+                reading?.reason || 'pool account unavailable',
+                200,
+                options.env
+              ),
+            };
+          } else {
+            const isGemini = item.modelId.startsWith('gemini');
+            const row = (reading.rows || []).find((r) =>
+              isGemini ? r.family?.includes('gemini') : !r.family?.includes('gemini')
+            );
+            const ok = row && row.remainingPercent > 0 && !row.disabled;
+            if (ok) {
+              result = {
+                at: itemAt,
+                sourceId: item.sourceId,
+                accountId: item.accountId,
+                modelId: item.modelId,
+                httpStatus: 200,
+                reason: 'OK',
+                code: 'OK',
+                elapsedMs: 0,
+                evidence: 'QUOTA_READING',
+                errorSnippet: '',
+              };
+            } else {
+              result = {
+                at: itemAt,
+                sourceId: item.sourceId,
+                accountId: item.accountId,
+                modelId: item.modelId,
+                httpStatus: 402,
+                reason: 'QUOTA',
+                code: 'QUOTA',
+                elapsedMs: 0,
+                evidence: 'QUOTA_READING',
+                errorSnippet: `${isGemini ? 'gemini' : row?.family || 'pool'} quota exhausted (${row?.remainingPercent ?? 0}%)`,
+              };
+            }
+          }
+        }
+      } else {
+        const scopeTarget = {
+          source: item.sourceId,
+          scope: item.modelId,
+          upstream: item.modelId.includes('/') ? item.modelId.split('/')[0] : item.sourceId,
+          model: item.modelId,
+          endpoint: item.endpoint,
+          apiKeyEnv: item.apiKeyEnv,
+        };
+        const scopeRes = await scanScope(scopeTarget, {
+          ...options,
+          timeoutMs: options.timeoutMs || 45000,
+          quotaScanMaxTokens: options.quotaScanMaxTokens || 5,
+          full: true,
+        });
+        result = {
+          at: scopeRes.at || itemAt,
+          sourceId: item.sourceId,
+          accountId: item.accountId,
+          modelId: item.modelId,
+          httpStatus: scopeRes.status,
+          reason: scopeRes.reason,
+          code: scopeRes.code,
+          elapsedMs: scopeRes.elapsedMs,
+          evidence: 'COMPLETION',
+          errorSnippet: scopeRes.errorSnippet || '',
+        };
+      }
+
+      const jsonlRow = {
+        at: result.at,
+        sourceId: result.sourceId,
+        accountId: result.accountId,
+        modelId: result.modelId,
+        httpStatus: result.httpStatus,
+        reason: result.reason,
+        elapsedMs: result.elapsedMs,
+        evidence: result.evidence,
+        errorSnippet: result.errorSnippet,
+      };
+      fs.appendFileSync(jsonlFile, JSON.stringify(jsonlRow) + '\n', 'utf8');
+
+      const stats = sourceStats.get(result.sourceId);
+      if (stats) {
+        stats.scanned++;
+        if (result.code === 'OK' || result.reason === 'OK') {
+          stats.alive++;
+          aliveRows.push(result);
+        } else if (result.code === 'QUOTA' || result.reason === 'QUOTA') {
+          stats.quota++;
+        } else if (
+          result.code === 'AUTH' ||
+          result.reason === 'AUTH' ||
+          result.reason === 'AUTH_NEEDED'
+        ) {
+          stats.auth++;
+        } else if (result.code === 'REGION' || result.reason === 'REGION') {
+          stats.region++;
+        } else if (result.code === 'NO_CHANNEL' || result.reason === 'NO_CHANNEL') {
+          stats.no_channel++;
+        } else if (result.code === 'TIMEOUT' || result.reason === 'TIMEOUT') {
+          stats.timeout++;
+        } else if (
+          result.code === 'RATE' ||
+          result.reason === 'RATE' ||
+          result.httpStatus === 429
+        ) {
+          stats.rate++;
+        } else {
+          stats.other++;
+        }
+      }
+
+      const modelKey = `${result.sourceId}::${result.modelId}`;
+      quotaState.scopes[modelKey] = {
+        source: result.sourceId,
+        scope: result.modelId,
+        upstream: result.modelId.includes('/') ? result.modelId.split('/')[0] : result.sourceId,
+        model: result.modelId,
+        code: result.code,
+        status: result.httpStatus,
+        reason: result.reason,
+        at: result.at,
+        retryAfter: result.retryAfter || null,
+        elapsedMs: result.elapsedMs,
+        evidence: result.evidence,
+      };
+
+      if (result.code === 'OK' || result.reason === 'OK') {
+        const prefix = result.modelId.includes('/') ? result.modelId.split('/')[0] : null;
+        if (prefix) {
+          quotaState.scopes[`${result.sourceId}::${prefix}`] = {
+            source: result.sourceId,
+            scope: prefix,
+            upstream: prefix,
+            model: result.modelId,
+            code: 'OK',
+            status: 200,
+            reason: 'OK',
+            at: result.at,
+            retryAfter: null,
+            elapsedMs: result.elapsedMs,
+            evidence: result.evidence,
+          };
+        }
+        quotaState.scopes[result.sourceId] = {
+          source: result.sourceId,
+          scope: result.sourceId,
+          upstream: result.sourceId,
+          model: result.modelId,
+          code: 'OK',
+          status: 200,
+          reason: 'OK',
+          at: result.at,
+          retryAfter: null,
+          elapsedMs: result.elapsedMs,
+          evidence: result.evidence,
+        };
+      } else {
+        const prefix = result.modelId.includes('/') ? result.modelId.split('/')[0] : null;
+        if (prefix) {
+          const pKey = `${result.sourceId}::${prefix}`;
+          if (!quotaState.scopes[pKey] || quotaState.scopes[pKey].code !== 'OK') {
+            quotaState.scopes[pKey] = {
+              source: result.sourceId,
+              scope: prefix,
+              upstream: prefix,
+              model: result.modelId,
+              code: result.code,
+              status: result.httpStatus,
+              reason: result.reason,
+              at: result.at,
+              retryAfter: result.retryAfter || null,
+              elapsedMs: result.elapsedMs,
+              evidence: result.evidence,
+            };
+          }
+        }
+        if (
+          !quotaState.scopes[result.sourceId] ||
+          quotaState.scopes[result.sourceId].code !== 'OK'
+        ) {
+          quotaState.scopes[result.sourceId] = {
+            source: result.sourceId,
+            scope: result.sourceId,
+            upstream: result.sourceId,
+            model: result.modelId,
+            code: result.code,
+            status: result.httpStatus,
+            reason: result.reason,
+            at: result.at,
+            retryAfter: result.retryAfter || null,
+            elapsedMs: result.elapsedMs,
+            evidence: result.evidence,
+          };
+        }
+      }
+
+      return result;
+    } finally {
+      sem.release();
+    }
+  }
+
+  let completedCount = 0;
+  let nextIdx = 0;
+  const workers = Array.from({ length: Math.min(concurrency, allItems.length) }, async () => {
+    while (nextIdx < allItems.length) {
+      const cur = allItems[nextIdx++];
+      await processItem(cur);
+      completedCount++;
+      if (completedCount % 50 === 0 || completedCount === allItems.length) {
+        process.stdout.write(
+          `\rProgress: ${completedCount}/${allItems.length} (${Math.round((completedCount / allItems.length) * 100)}%) | Alive: ${aliveRows.length}`
+        );
+      }
+    }
+  });
+  await Promise.all(workers);
+  console.log(`\nScan finished. Total: ${allItems.length}, Alive: ${aliveRows.length}`);
+
+  quotaState.sourceFreshness = quotaState.sourceFreshness || {};
+  for (const sId of sourceStats.keys()) {
+    quotaState.sourceFreshness[sId] = new Date().toISOString();
+  }
+  quotaState.updatedAt = new Date().toISOString();
+
+  if (options.persist !== false) {
+    saveQuotaState(quotaState, options);
+  }
+
+  let priorsApi = null;
+  let livePriors = null;
+  try {
+    priorsApi = require('./priors');
+    livePriors = priorsApi.loadPriors(priorsApi.LIVE_PRIORS_FILE);
+  } catch {}
+
+  const rankedAlive = aliveRows.map((r) => {
+    const prior =
+      priorsApi && livePriors
+        ? priorsApi.priorFor({ modelId: r.modelId }, 'writer', livePriors)
+        : null;
+    const score = prior && typeof prior.score === 'number' ? prior.score : null;
+    const tier = prior && prior.tier ? prior.tier : '—';
+    return {
+      ...r,
+      writerPrior: score,
+      tier,
+      evidence: r.evidence || prior?.evidence || '—',
+    };
+  });
+
+  rankedAlive.sort((a, b) => {
+    const sA = a.writerPrior !== null ? a.writerPrior : -1;
+    const sB = b.writerPrior !== null ? b.writerPrior : -1;
+    if (sB !== sA) return sB - sA;
+    return a.elapsedMs - b.elapsedMs;
+  });
+
+  const totalItemsCount = Array.from(sourceStats.values()).reduce((sum, st) => sum + st.listed, 0);
+  const nrStats = sourceStats.get('9router');
+  const afterRateCount = nrStats ? nrStats.rate : 0;
+  const shipdeWriterRow = aliveRows.find((r) => r.modelId === 'shipde-writer');
+
+  let md = `# Route Scan Summary Report\n\n`;
+  md += `- **Scan Timestamp**: ${new Date(now).toISOString()}\n`;
+  md += `- **Log File**: \`${jsonlFile}\`\n`;
+  md += `- **Total Routes Scanned**: ${totalItemsCount}\n`;
+  md += `- **Total Alive (OK)**: ${aliveRows.length}\n`;
+  md += `- **9router RATE rows**: ${beforeRateCount} before -> ${afterRateCount} after\n`;
+  md += `- **shipde-writer combo status**: ${shipdeWriterRow ? `${shipdeWriterRow.reason} (HTTP ${shipdeWriterRow.httpStatus})` : 'NOT_FOUND'}\n\n`;
+
+  md += `> [!NOTE]\n`;
+  md += `> Pool accounts (agy01-agy07) are evaluated from live quota readings (\`QUOTA_READING\`). Direct execution via Windows Task Scheduler (\`schtasks\`) invokes full agy CLI cycles (~22s each) and is reserved for production task execution rather than lightweight probing.\n\n`;
+
+  md += `## 1. Per-Source Counts\n\n`;
+  md += `| Source | Listed | Scanned | Alive (OK) | Quota | Auth | Region | No Channel | Timeout | Rate | Other |\n`;
+  md += `| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |\n`;
+  for (const st of sourceStats.values()) {
+    md += `| ${st.sourceId} | ${st.listed} | ${st.scanned} | ${st.alive} | ${st.quota} | ${st.auth} | ${st.region} | ${st.no_channel} | ${st.timeout} | ${st.rate} | ${st.other} |\n`;
+  }
+  md += `\n`;
+
+  md += `## 2. ALIVE Models Ranked by Writer Prior\n\n`;
+  md += `| Rank | Model ID | Source | Account | Writer Prior Score | Tier | Evidence | Latency (ms) |\n`;
+  md += `| :---: | :--- | :--- | :--- | :---: | :---: | :---: | :---: |\n`;
+  rankedAlive.forEach((r, idx) => {
+    const scoreStr = r.writerPrior !== null ? r.writerPrior : '—';
+    md += `| ${idx + 1} | \`${r.modelId}\` | ${r.sourceId} | ${r.accountId} | **${scoreStr}** | ${r.tier} | ${r.evidence} | ${r.elapsedMs} |\n`;
+  });
+
+  fs.writeFileSync(mdFile, md, 'utf8');
+
+  return {
+    at: quotaState.updatedAt,
+    jsonlFile,
+    mdFile,
+    count: totalItemsCount,
+    aliveCount: aliveRows.length,
+    blockedCount: totalItemsCount - aliveRows.length,
+    beforeRateCount,
+    afterRateCount,
+    shipdeWriterStatus: shipdeWriterRow ? shipdeWriterRow.reason : 'NOT_FOUND',
+    sourceStats: Array.from(sourceStats.values()),
+    rankedAlive,
+  };
+}
+
+async function scanCliLanes(quotaState, options = {}) {
+  const now = options.now ?? Date.now();
+  const registry =
+    options.registry ||
+    (sourcesApi && sourcesApi.loadSources ? sourcesApi.loadSources(options.sourceOpts) : null);
+  quotaState.scopes = quotaState.scopes || {};
+
+  // 1. Scan agy-pool accounts if available
+  let poolRt = options.poolRuntime || null;
+  if (!poolRt) {
+    try {
+      poolRt = require('./agy-pool-runtime');
+    } catch {}
+  }
+  const poolAccounts =
+    options.poolAccounts ||
+    (poolRt && typeof poolRt.discoverAccounts === 'function'
+      ? poolRt.discoverAccounts(options)
+      : ['agy01', 'agy02', 'agy03', 'agy04', 'agy05', 'agy06', 'agy07', 'agy08', 'agy09', 'agy10']);
+
+  if (poolRt && typeof poolRt.quotaReading === 'function') {
+    let poolHasAnyQuota = false;
+    for (const accId of poolAccounts) {
+      const isUnauthed = ['agy08', 'agy09', 'agy10'].includes(accId);
+      if (isUnauthed) {
+        const entry = {
+          source: 'agy-pool',
+          scope: accId,
+          upstream: 'agy-pool',
+          model: null,
+          code: QUOTA_STATUS_CODES.AUTH,
+          status: 401,
+          reason: 'AUTH',
+          at: new Date(now).toISOString(),
+          retryAfter: null,
+        };
+        quotaState.scopes[accId] = entry;
+        quotaState.scopes[`agy-pool::${accId}`] = entry;
+        continue;
+      }
+      const reading = poolRt.quotaReading(accId, options);
+      if (reading && reading.available && Array.isArray(reading.rows)) {
+        let allFamiliesExhausted = reading.rows.length > 0;
+        for (const row of reading.rows) {
+          const remaining = Number(row.remainingPercent);
+          const isExhausted = Number.isFinite(remaining) && remaining <= 0;
+          if (!isExhausted) {
+            allFamiliesExhausted = false;
+            poolHasAnyQuota = true;
+          }
+          const famScope = `${accId}:${row.family}`;
+          const famEntry = {
+            source: 'agy-pool',
+            scope: famScope,
+            upstream: row.family,
+            model: null,
+            code: isExhausted ? QUOTA_STATUS_CODES.QUOTA : QUOTA_STATUS_CODES.OK,
+            status: isExhausted ? 429 : 200,
+            reason: isExhausted ? 'QUOTA_EXHAUSTED' : 'OK',
+            at: new Date(now).toISOString(),
+            retryAfter: isExhausted && row.resetsAt ? row.resetsAt : null,
+            evidence: 'QUOTA_READING',
+          };
+          quotaState.scopes[famScope] = famEntry;
+          quotaState.scopes[`agy-pool::${famScope}`] = famEntry;
+        }
+        const accCode = allFamiliesExhausted ? QUOTA_STATUS_CODES.QUOTA : QUOTA_STATUS_CODES.OK;
+        const accEntry = {
+          source: 'agy-pool',
+          scope: accId,
+          upstream: 'agy-pool',
+          model: null,
+          code: accCode,
+          status: allFamiliesExhausted ? 429 : 200,
+          reason: allFamiliesExhausted ? 'QUOTA_EXHAUSTED' : 'OK',
+          at: new Date(now).toISOString(),
+          retryAfter: null,
+          evidence: 'QUOTA_READING',
+        };
+        quotaState.scopes[accId] = accEntry;
+        quotaState.scopes[`agy-pool::${accId}`] = accEntry;
+      } else if (reading && reading.available === false) {
+        const code =
+          reading.reason === 'AUTH_FAILED' ? QUOTA_STATUS_CODES.AUTH : QUOTA_STATUS_CODES.ERROR;
+        const entry = {
+          source: 'agy-pool',
+          scope: accId,
+          upstream: 'agy-pool',
+          model: null,
+          code,
+          status: code === QUOTA_STATUS_CODES.AUTH ? 401 : 500,
+          reason: sanitizeStatusDescription(reading.reason, 'ERROR'),
+          at: new Date(now).toISOString(),
+          retryAfter: null,
+        };
+        quotaState.scopes[accId] = entry;
+        quotaState.scopes[`agy-pool::${accId}`] = entry;
+      }
+    }
+    if (!quotaState.scopes['agy-pool']) {
+      quotaState.scopes['agy-pool'] = {
+        source: 'agy-pool',
+        scope: 'agy-pool',
+        upstream: 'agy-pool',
+        model: null,
+        code: poolHasAnyQuota ? QUOTA_STATUS_CODES.OK : QUOTA_STATUS_CODES.QUOTA,
+        status: poolHasAnyQuota ? 200 : 429,
+        reason: poolHasAnyQuota ? 'OK' : 'QUOTA_EXHAUSTED',
+        at: new Date(now).toISOString(),
+        retryAfter: null,
+        evidence: 'QUOTA_READING',
+      };
+    }
+  }
+
+  // 2. Discover CLI accounts from options.accounts, accounts.listAccounts(), or intake
+  let accounts = [];
+  if (Array.isArray(options.accounts)) {
+    accounts = options.accounts;
+  } else {
+    try {
+      accounts = require('./accounts').listAccounts(options) || [];
+    } catch {}
+  }
+
+  if (accounts.length === 0) {
+    try {
+      const intakeDir = path.join(__dirname, 'data', 'intake');
+      if (fs.existsSync(intakeDir)) {
+        const dirs = fs
+          .readdirSync(intakeDir, { withFileTypes: true })
+          .filter((d) => d.isDirectory())
+          .map((d) => ({
+            name: d.name,
+            mtimeMs: fs.statSync(path.join(intakeDir, d.name)).mtimeMs,
+          }))
+          .sort((a, b) => b.mtimeMs - a.mtimeMs);
+        if (dirs.length > 0) {
+          const latestAccFile = path.join(intakeDir, dirs[0].name, 'accounts.json');
+          if (fs.existsSync(latestAccFile)) {
+            accounts = JSON.parse(fs.readFileSync(latestAccFile, 'utf8'));
+          }
+        }
+      }
+    } catch {}
+  }
+
+  let claudeUsage = options.claudeUsage || null;
+  if (!claudeUsage) {
+    try {
+      claudeUsage = require('./claude-usage');
+    } catch {}
+  }
+
+  const dispatchProviders = registry?.dispatch?.providers || {};
+  const cliProviderIds = new Set(
+    (registry?.sources || [])
+      .filter((s) => s.kind === 'agent-cli')
+      .map((s) => s.id)
+      .concat(Object.keys(dispatchProviders))
+  );
+
+  for (const acc of accounts) {
+    if (!acc || !acc.id) continue;
+    const provider = String(acc.provider || acc.sourceId || '').toLowerCase();
+    const isCli =
+      acc.launch?.kind === 'cli' ||
+      cliProviderIds.has(provider) ||
+      cliProviderIds.has(acc.provider);
+    if (!isCli) continue;
+
+    const pName = acc.provider || acc.sourceId || provider;
+    const isClaudeCli =
+      dispatchProviders[pName]?.provider === 'claude' ||
+      dispatchProviders[provider]?.provider === 'claude' ||
+      String(acc.launch?.command || '')
+        .toLowerCase()
+        .includes('claude') ||
+      acc.id.toLowerCase().includes('claude');
+
+    if (isClaudeCli) {
+      let usage = null;
+      if (claudeUsage && typeof claudeUsage.readUsage === 'function') {
+        try {
+          usage = (options.readUsage || claudeUsage.readUsage)({
+            command: acc.launch?.command,
+            env: acc.launch?.env,
+            cwd: options.cwd,
+            timeoutMs: options.timeoutMs || 3000,
+          });
+        } catch (e) {
+          usage = { available: false, reason: e?.message };
+        }
+      }
+      if (usage && usage.available && Array.isArray(usage.rows)) {
+        const hr = claudeUsage.headroom(usage);
+        const st = claudeUsage.statusFrom(hr);
+        const isExhausted = st === 'exhausted';
+        const entry = {
+          source: pName,
+          scope: acc.id,
+          upstream: pName,
+          model: null,
+          code: isExhausted ? QUOTA_STATUS_CODES.QUOTA : QUOTA_STATUS_CODES.OK,
+          status: isExhausted ? 429 : 200,
+          reason: isExhausted ? 'QUOTA' : 'OK',
+          at: new Date(now).toISOString(),
+          retryAfter: null,
+          evidence: 'CLI_USAGE',
+        };
+        quotaState.scopes[acc.id] = entry;
+        quotaState.scopes[`${pName}::${acc.id}`] = entry;
+      } else {
+        const reason = usage?.reason
+          ? `NO_CHEAP_CHECK: ${sanitizeStatusDescription(usage.reason, 'UNAVAILABLE')}`
+          : 'NO_CHEAP_CHECK';
+        const entry = {
+          source: pName,
+          scope: acc.id,
+          upstream: pName,
+          model: null,
+          code: QUOTA_STATUS_CODES.UNSCOPED,
+          status: null,
+          reason,
+          at: new Date(now).toISOString(),
+          retryAfter: null,
+        };
+        quotaState.scopes[acc.id] = entry;
+        quotaState.scopes[`${pName}::${acc.id}`] = entry;
+      }
+    } else if (provider.includes('antigravity') || acc.id.includes('agy')) {
+      if (!poolAccounts.includes(acc.id)) {
+        const entry = {
+          source: pName,
+          scope: acc.id,
+          upstream: pName,
+          model: null,
+          code: QUOTA_STATUS_CODES.UNSCOPED,
+          status: null,
+          reason: 'NO_CHEAP_CHECK',
+          at: new Date(now).toISOString(),
+          retryAfter: null,
+        };
+        quotaState.scopes[acc.id] = entry;
+        quotaState.scopes[`${pName}::${acc.id}`] = entry;
+      }
+    } else {
+      const entry = {
+        source: pName,
+        scope: acc.id,
+        upstream: pName,
+        model: null,
+        code: QUOTA_STATUS_CODES.UNSCOPED,
+        status: null,
+        reason: 'NO_CHEAP_CHECK',
+        at: new Date(now).toISOString(),
+        retryAfter: null,
+      };
+      quotaState.scopes[acc.id] = entry;
+      if (pName) quotaState.scopes[`${pName}::${acc.id}`] = entry;
+    }
+  }
+
+  for (const [pId, pCfg] of Object.entries(dispatchProviders)) {
+    if (!quotaState.scopes[pId]) {
+      quotaState.scopes[pId] = {
+        source: pId,
+        scope: pId,
+        upstream: pCfg.provider || pId,
+        model: null,
+        code: QUOTA_STATUS_CODES.UNSCOPED,
+        status: null,
+        reason: 'NO_CHEAP_CHECK',
+        at: new Date(now).toISOString(),
+        retryAfter: null,
+      };
+    }
+  }
+}
+
 async function scanAllQuotas(options = {}) {
+  if (options.full) {
+    return scanAllFullRoutes(options);
+  }
   const now = options.now ?? Date.now();
   const registry = options.registry || sourcesApi.loadSources(options.sourceOpts);
   const quotaState = loadQuotaState(options);
@@ -819,7 +2134,11 @@ async function scanAllQuotas(options = {}) {
         quotaState.scopes[src.id] = entry;
       }
     } else if (src.kind === 'model-source' || src.endpoint) {
-      let repModel = (Array.isArray(src.models) && src.models[0]) || src.verify?.model || null;
+      let repModel =
+        (Array.isArray(src.models) && src.models[0]) ||
+        src.verify?.model ||
+        (src.modelMeta && Object.keys(src.modelMeta)[0]) ||
+        null;
       if (!repModel && options.catalogue) {
         const cat = Array.isArray(options.catalogue)
           ? options.catalogue
@@ -835,6 +2154,29 @@ async function scanAllQuotas(options = {}) {
           repModel =
             typeof found === 'string' ? found : found.modelId || found.model || found.id || null;
         }
+      }
+
+      if (!repModel && src.endpoint && src.verify?.method === 'models-list') {
+        const apiKey = (options.env || process.env)[src.credential?.env] || '';
+        try {
+          const fetchFn = options.fetch || globalThis.fetch;
+          const mres = await fetchFn(
+            src.endpoint.replace(/\/+$/, '') + (src.verify.path || '/models'),
+            {
+              headers: apiKey ? { authorization: `Bearer ${apiKey}` } : {},
+              signal: AbortSignal.timeout(3000),
+            }
+          );
+          if (mres && (mres.ok || mres.status === 200)) {
+            const data =
+              typeof mres.json === 'function' ? await mres.json() : JSON.parse(await mres.text());
+            const list = data?.data || data?.models || [];
+            if (Array.isArray(list) && list.length > 0) {
+              const first = list[0];
+              repModel = typeof first === 'string' ? first : first?.id || first?.model || null;
+            }
+          }
+        } catch {}
       }
 
       if (!repModel) {
@@ -934,6 +2276,15 @@ async function scanAllQuotas(options = {}) {
     quotaState.updatedAt = new Date(now).toISOString();
   }
 
+  const isCliSource = (id) =>
+    id === 'agy-pool' ||
+    Object.prototype.hasOwnProperty.call(registry?.dispatch?.providers || {}, id) ||
+    Boolean((registry?.sources || []).find((s) => s.id === id && s.kind === 'agent-cli'));
+
+  if (!options.source || isCliSource(options.source)) {
+    await scanCliLanes(quotaState, { registry, now, ...options });
+  }
+
   if (options.persist !== false) {
     saveQuotaState(quotaState, options);
   }
@@ -1031,6 +2382,10 @@ function validateCompletion(bodyText) {
   try {
     body = JSON.parse(bodyText);
   } catch {
+    const sse = parseSseBody(bodyText);
+    if (sse && sse.ok) {
+      return { ok: true };
+    }
     return { ok: false, reason: 'COMPLETION_UNREADABLE' };
   }
 
@@ -1096,6 +2451,24 @@ function recordScanResult(quotaState, target, result) {
 async function scanSourceQuotas(src, options = {}) {
   const quotaState = loadQuotaState(options);
   quotaState.scopes = quotaState.scopes || {};
+  const reg = options.registry || sourcesApi.loadSources(options.sourceOpts);
+  const isCliSrc =
+    src &&
+    (src.id === 'agy-pool' ||
+      src.kind === 'agent-cli' ||
+      Object.prototype.hasOwnProperty.call(reg?.dispatch?.providers || {}, src.id));
+  if (isCliSrc) {
+    await scanCliLanes(quotaState, {
+      ...options,
+      now: options.now ?? Date.now(),
+      source: src.id,
+      registry: reg,
+    });
+    if (options.persist !== false) {
+      saveQuotaState(quotaState, options);
+    }
+    return Object.values(quotaState.scopes);
+  }
   const targets = Array.isArray(options.targets)
     ? options.targets
     : await scanTargetsForSource(src, options);
@@ -1131,6 +2504,11 @@ module.exports = {
   scanAllQuotas,
   scanSourceQuotas,
   scanTargetsForSource,
+  scanCliLanes,
   validateCompletion,
   withinSignal,
+  sanitizeErrorSnippet,
+  scanAllFullRoutes,
+  isCompletionBody,
+  parseSseBody,
 };

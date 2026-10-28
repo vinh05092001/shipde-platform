@@ -8,15 +8,17 @@ const sources = require('./sources');
 // Work proof is bound to the entire transport identity. Missing fields are not wildcards.
 function matchesCandidate(candidate, combination) {
   if (!candidate || !combination) return false;
+  const cand =
+    typeof candidate.candidateKey === 'string'
+      ? parseCandidateKey(candidate.candidateKey)
+      : candidate;
   const identity =
     typeof combination.candidateKey === 'string'
       ? parseCandidateKey(combination.candidateKey)
       : combination;
-  if (!identity || candidateKey(candidate) !== candidateKey(identity)) return false;
+  if (!cand || !identity || candidateKey(cand) !== candidateKey(identity)) return false;
   const source = (value) => value.sourceId || value.source || value.gateway || '';
-  return (
-    (!combination.sourceId && !combination.source) || source(candidate) === source(combination)
-  );
+  return (!combination.sourceId && !combination.source) || source(cand) === source(combination);
 }
 
 function hasPriorWorkPass(candidate, combinations) {
@@ -56,6 +58,15 @@ function routeRecord(candidate, store) {
 function recentRouteSuccess(candidate, store, options = {}) {
   if (health.probeCooldown(candidate, { ...options, routeHealth: store || { paths: {} } }))
     return false;
+  if (candidate && candidate.harness === 'agy-pool' && candidate.accountId && !candidate.blocked) {
+    if (sources.isAgyPoolWriterEnabled(options.registry, options)) {
+      try {
+        const pool = require('./agy-pool-runtime');
+        const res = pool.readResult(candidate.accountId, options);
+        if (res && res.state === 'ok') return true;
+      } catch {}
+    }
+  }
   const record = routeRecord(candidate, store);
   const id = health.probeIdentity(candidate);
   const gateway = store?.paths?.[health.healthKey(id.model, id.route.id)];
@@ -72,6 +83,12 @@ function recentRouteSuccess(candidate, store, options = {}) {
     age <= sources.getDispatchConfig(options.registry, options).routeEvidenceMaxAgeMs
   )
     return true;
+  if (
+    Array.isArray(candidate?.comboMembers) &&
+    candidate.comboMembers.length > 0 &&
+    (!record || record.status === 'AVAILABLE' || health.unverifiedRecord(record))
+  )
+    return true;
   return (evidenceData(options).combinations || []).some(
     (combo) =>
       matchesCandidate(candidate, combo) &&
@@ -82,8 +99,8 @@ function recentRouteSuccess(candidate, store, options = {}) {
             e.proofLevel === 'WORK_ITEM_PASS' ||
             (e.status === 'passed' && [1, 2, 3, 'API'].includes(e.level))) &&
           !e.cause &&
-          (options.now ?? Date.now()) >= Date.parse(e.observedAt || e.timestamp || e.at) &&
-          (options.now ?? Date.now()) - Date.parse(e.observedAt || e.timestamp || e.at) <=
+          (options.now ?? Date.now()) >= Date.parse(e.observedAt || e.timestamp || e.at || e.ts) &&
+          (options.now ?? Date.now()) - Date.parse(e.observedAt || e.timestamp || e.at || e.ts) <=
             sources.getDispatchConfig(options.registry, options).routeEvidenceMaxAgeMs
       )
   );
@@ -107,6 +124,86 @@ function measuredProbeCost(candidate, store, options = {}) {
   );
 }
 
+function hasFreshOkOrCompletion(candidate, quotaState, options = {}) {
+  if (!candidate) return false;
+  const now = options.now ?? Date.now();
+  const reg =
+    options.registry || (options.sources && options.sources.sources ? options.sources : undefined);
+  const dispatchConfig =
+    options.dispatchConfig ||
+    (sources && sources.getDispatchConfig ? sources.getDispatchConfig(reg, options) : {});
+  const maxAgeMs = dispatchConfig.routeEvidenceMaxAgeMs;
+
+  // 1. Quota-state record check
+  const qs = quotaState || options.quotaState;
+  try {
+    const quotaScan = require('./quota-scan');
+    if (qs && quotaScan && typeof quotaScan.getQuotaScopeState === 'function') {
+      const scopeState = quotaScan.getQuotaScopeState(candidate, qs, {
+        ...options,
+        now,
+        registry: reg,
+      });
+      if (scopeState && scopeState.code === 'OK') {
+        const atMs = Date.parse(
+          scopeState.at || scopeState.timestamp || scopeState.observedAt || ''
+        );
+        if (
+          Number.isFinite(atMs) &&
+          now >= atMs &&
+          (!Number.isFinite(maxAgeMs) || now - atMs <= maxAgeMs)
+        ) {
+          return true;
+        }
+      }
+    }
+  } catch {}
+
+  // 2. Completion evidence check in candidate or evidenceData
+  if (Array.isArray(candidate.evidence)) {
+    const hasCompletion = candidate.evidence.some((e) => {
+      if (!e || e.cause || (e.status !== 'passed' && e.proofLevel !== 'WORK_ITEM_PASS'))
+        return false;
+      const atMs = Date.parse(e.observedAt || e.timestamp || e.at || e.ts || '');
+      if (
+        Number.isFinite(atMs) &&
+        now >= atMs &&
+        (!Number.isFinite(maxAgeMs) || now - atMs <= maxAgeMs)
+      ) {
+        return true;
+      }
+      return false;
+    });
+    if (hasCompletion) return true;
+  }
+
+  const evData = options.evidenceData || evidenceData(options);
+  if (evData && Array.isArray(evData.combinations)) {
+    const hasStoreCompletion = evData.combinations.some((combo) => {
+      if (!matchesCandidate(candidate, combo)) return false;
+      return (combo.evidence || []).some((e) => {
+        if (!e || e.cause) return false;
+        const isPass =
+          e.proofLevel === 'WORK_ITEM_PASS' ||
+          (e.status === 'passed' && (e.level === 2 || e.level === 3 || e.level === 'WORK_ITEM'));
+        if (!isPass) return false;
+        const atMs = Date.parse(e.observedAt || e.timestamp || e.at || e.ts || '');
+        if (
+          Number.isFinite(atMs) &&
+          now >= atMs &&
+          (!Number.isFinite(maxAgeMs) || now - atMs <= maxAgeMs)
+        ) {
+          return true;
+        }
+        return false;
+      });
+    });
+    if (hasStoreCompletion) return true;
+  }
+
+  return false;
+}
+
 module.exports = {
   matchesCandidate,
   hasPriorWorkPass,
@@ -114,4 +211,5 @@ module.exports = {
   routeRecord,
   recentRouteSuccess,
   measuredProbeCost,
+  hasFreshOkOrCompletion,
 };

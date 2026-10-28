@@ -2,11 +2,11 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { loadPriors, priorFor } = require('../priors');
+const { loadPriors, priorFor, DEFAULT_PRIORS_FILE } = require('../priors');
 const { step4ScoreModels } = require('../source-onboarding');
 
 test('priorFor matches <prefix>/gemini-3.8-flash-high to canonical gemini-3-8-flash', () => {
-  const priors = loadPriors();
+  const priors = loadPriors(DEFAULT_PRIORS_FILE);
   assert.ok(priors, 'priors document must load');
 
   const candidateWithPrefix = { modelId: 'custom-prefix/gemini-3.8-flash-high' };
@@ -21,7 +21,7 @@ test('priorFor matches <prefix>/gemini-3.8-flash-high to canonical gemini-3-8-fl
 });
 
 test('priorFor matches ag/gemini-3.8-flash to canonical gemini-3-8-flash', () => {
-  const priors = loadPriors();
+  const priors = loadPriors(DEFAULT_PRIORS_FILE);
   const candidate = { modelId: 'ag/gemini-3.8-flash' };
   const prior = priorFor(candidate, 'writer', priors);
 
@@ -33,7 +33,7 @@ test('priorFor matches ag/gemini-3.8-flash to canonical gemini-3-8-flash', () =>
 });
 
 test('step4ScoreModels scores ag/gemini-3.8-flash as SCORED, not QUALITY_UNKNOWN', () => {
-  const priors = loadPriors();
+  const priors = loadPriors(DEFAULT_PRIORS_FILE);
   const probedResults = [
     {
       modelId: 'ag/gemini-3.8-flash',

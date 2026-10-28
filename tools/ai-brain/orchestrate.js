@@ -86,6 +86,12 @@ const {
   routeProbeCandidate,
 } = require('./orchestrate/route-probe');
 
+// failedKeys entry that blocks every model on one exhausted account.
+function exhaustedAccountKey(c) {
+  if (!c || !c.accountId || c.accountId === '*') return null;
+  return `account-exhausted::${c.harness || ''}::${c.accountId}`;
+}
+
 function providerFailureBodyMatches(body) {
   return [...PROVIDER_LEVEL_FAILURE_CAUSES].some((cause) => {
     const escaped = String(cause).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -3320,6 +3326,14 @@ async function selectCandidateForProfile(
           blocked: true,
           blockReason: 'LAUNCH_FAILED',
           blockScope: 'candidate',
+        });
+      }
+      const accountMark = exhaustedAccountKey(c);
+      if (accountMark && failedKeySet.has(accountMark)) {
+        return Object.assign({}, c, {
+          blocked: true,
+          blockReason: 'ACCOUNT_QUOTA_EXHAUSTED',
+          blockScope: 'account',
         });
       }
       const cDomain = routing.canonicalFailureDomain(c);

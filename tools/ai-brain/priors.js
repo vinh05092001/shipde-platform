@@ -8,6 +8,10 @@ const LIVE_PRIORS_FILE = path.join(__dirname, 'data', 'model-priors-live.json');
 const TIER_BONUSES = Object.freeze({ T1: 6, T2: 4, T3: 2, T4: 0 });
 const STALE_AFTER_MS = 30 * 24 * 60 * 60 * 1000;
 
+// General benchmarks used only when a model has none of its role's weighted ones.
+const FALLBACK_BENCHMARKS = Object.freeze(['aggregate', 'benchlm', 'liveBench']);
+// Reported as indirect evidence (below the 0.5 coverage line).
+const FALLBACK_COVERAGE = 0.25;
 const ROLE_BENCHMARK_WEIGHTS = Object.freeze({
   planner: Object.freeze({ intelligenceIndex: 0.5, aaAgenticIndex: 0.3, aaCodingIndex: 0.2 }),
   writer: Object.freeze({ aaCodingIndex: 0.6, aaAgenticIndex: 0.25, intelligenceIndex: 0.15 }),
@@ -23,6 +27,19 @@ function loadPriors(file) {
   try {
     const parsed = JSON.parse(fs.readFileSync(target, 'utf8'));
     if (parsed && typeof parsed === 'object' && Array.isArray(parsed.ranking)) {
+      // The live refresh does not cover every model the curated baseline knows;
+      // keep curated entries for models the live file lacks.
+      if (!file && target === LIVE_PRIORS_FILE && fs.existsSync(DEFAULT_PRIORS_FILE)) {
+        try {
+          const curated = JSON.parse(fs.readFileSync(DEFAULT_PRIORS_FILE, 'utf8'));
+          const known = new Set(parsed.ranking.map((m) => m && m.canonical));
+          for (const m of (curated && curated.ranking) || []) {
+            if (m && m.canonical && !known.has(m.canonical)) parsed.ranking.push(m);
+          }
+        } catch (_) {
+          /* curated baseline unreadable: live file alone */
+        }
+      }
       return parsed;
     }
   } catch (_) {
@@ -54,6 +71,21 @@ function normaliseCanonical(value) {
  * itself carries no modelId (a genuine caller error).
  */
 function priorFor(candidate, role, priors, now) {
+  if (candidate && Array.isArray(candidate.comboMembers) && candidate.comboMembers.length > 0) {
+    let best = null;
+    for (const member of candidate.comboMembers) {
+      const p = priorFor({ modelId: member }, role, priors, now);
+      if (p && typeof p.score === 'number') {
+        if (!best || typeof best.score !== 'number' || p.score > best.score) {
+          best = p;
+        }
+      } else if (!best) {
+        best = p;
+      }
+    }
+    if (best) return best;
+  }
+
   const modelId = candidate && (candidate.modelId || candidate.model);
   const canonical = normaliseCanonical(modelId);
   if (!canonical) return null;
@@ -70,9 +102,46 @@ function priorFor(candidate, role, priors, now) {
 
   const profile = roleBenchmarkProfile(role);
   const rankingMaxima = benchmarkMaxima(ranking);
-  const weighted = weightedBenchmarkScore(match, profile, rankingMaxima);
-  // Zero role coverage must NOT inherit benchmarkScore.
-  const priorScore = weighted.coverage > 0 ? weighted.score : null;
+  let weighted = weightedBenchmarkScore(match, profile, rankingMaxima);
+  if (weighted.coverage === 0) {
+    // No role-weighted benchmark for this model: use the first general benchmark it
+    // does have, normalised against the same benchmark across the ranking.
+    for (const name of FALLBACK_BENCHMARKS) {
+      const value = benchmarkValue(match, name);
+      if (value !== null && rankingMaxima[name]) {
+        const rawScore = (100 * value * FALLBACK_COVERAGE) / rankingMaxima[name];
+        weighted = {
+          score: Math.round(rawScore),
+          raw: rawScore,
+          coverage: FALLBACK_COVERAGE,
+          rawCoverage: FALLBACK_COVERAGE,
+          fallback: name,
+        };
+        break;
+      }
+    }
+  }
+  // The score is the benchmark result over the benchmarks the model actually has;
+  // missing ones are not counted as zero. Low coverage is reported (INDIRECT), not
+  // subtracted. Zero role coverage must NOT inherit benchmarkScore.
+  // Confidence weighting: the renormalised score is shrunk toward the ranking's
+  // own mean in proportion to the coverage that backs it, so a prior resting on one
+  // benchmark cannot outrank a well-covered model with a similar underlying score.
+  // When a model relies on a general fallback benchmark and carries its own measured
+  // score, shrink toward that measured score so fallback coverage does not invert
+  // top-ranking models below lower-tier ones.
+  const shrinkageTarget =
+    weighted.fallback && Number.isFinite(match.score)
+      ? match.score
+      : rankingMeanScore(ranking, profile, rankingMaxima);
+  const priorScore =
+    weighted.coverage > 0
+      ? shrinkByCoverage(
+          (weighted.raw ?? weighted.score) / Math.min(1, weighted.rawCoverage ?? weighted.coverage),
+          Math.min(1, weighted.rawCoverage ?? weighted.coverage),
+          shrinkageTarget
+        )
+      : null;
   const sourceDates = (match.sources || [])
     .map((source) => source && source.retrievedAt)
     .filter(Boolean);
@@ -199,10 +268,28 @@ function benchmarkValue(match, name) {
   return Number.isFinite(score) ? score : null;
 }
 
+function rankingMeanScore(ranking, profile, maxima) {
+  let sum = 0;
+  let n = 0;
+  for (const row of ranking) {
+    const w = weightedBenchmarkScore(row, profile, maxima);
+    if (w.rawCoverage > 0) {
+      sum += w.raw / Math.min(1, w.rawCoverage);
+      n += 1;
+    }
+  }
+  return n > 0 ? sum / n : null;
+}
+
+function shrinkByCoverage(renormalised, coverage, mean) {
+  if (mean === null) return Math.round(renormalised);
+  return Math.round(renormalised * coverage + mean * (1 - coverage));
+}
+
 function benchmarkMaxima(ranking) {
   const maxima = {};
   for (const row of ranking) {
-    for (const name of Object.keys(ROLE_BENCHMARK_WEIGHTS.planner)) {
+    for (const name of [...Object.keys(ROLE_BENCHMARK_WEIGHTS.planner), ...FALLBACK_BENCHMARKS]) {
       const score = benchmarkValue(row, name);
       if (score !== null) maxima[name] = Math.max(maxima[name] || 0, score);
     }
@@ -220,7 +307,12 @@ function weightedBenchmarkScore(match, weights, maxima) {
     score += (value / max) * weight;
     coverage += weight;
   }
-  return { score: Math.round(100 * score), coverage: Math.round(coverage * 1000) / 1000 };
+  return {
+    score: Math.round(100 * score),
+    raw: 100 * score,
+    coverage: Math.round(coverage * 1000) / 1000,
+    rawCoverage: coverage,
+  };
 }
 
 function normaliseModelId(value) {
@@ -259,7 +351,7 @@ function matchModelPrior(modelId, ranking) {
       ''
     );
     const reasoning = current.id.replace(
-      /-(?:thinking|agentic|high|medium|low|minimal|max|xhigh|none|reasoning|non-reasoning)$/,
+      /-(?:thinking|agentic|high|medium|low|minimal|xhigh|none|reasoning|non-reasoning)$/,
       ''
     );
     for (const [base, effort] of [

@@ -136,7 +136,7 @@ test('zero role-profile coverage has no score and cannot inherit benchmarkScore'
   assert.equal(prior.bonus, 6);
 });
 
-test('prior reports coverage and marks low coverage as INDIRECT', () => {
+test('prior shrinks the benchmark score toward the ranking mean by its coverage and marks low coverage as INDIRECT', () => {
   const prior = priorFor(
     { modelId: 'partial-evidence' },
     'writer',
@@ -157,7 +157,7 @@ test('prior reports coverage and marks low coverage as INDIRECT', () => {
     },
     Date.parse('2026-10-13T12:00:00Z')
   );
-  assert.equal(prior.score, 8);
+  assert.equal(prior.score, 71);
   assert.equal(prior.coverage, 0.15);
   assert.equal(prior.evidence, 'INDIRECT');
 });
@@ -178,4 +178,57 @@ test('AA Agentic Index rows carry the supplied October 12 scores and source', ()
     assert.equal(benchmark.score, score);
     assert.equal(benchmark.source.url, 'https://benchlm.ai/benchmarks/aaagenticindex');
   }
+});
+
+test('a single-benchmark prior cannot outrank a well-covered model of similar strength', () => {
+  const ranking = [
+    {
+      canonical: 'thin-evidence',
+      codingTier: 'T2',
+      benchmarks: [{ name: 'liveBench', score: 96 }],
+      retrievedAt: '2026-10-13T00:00:00Z',
+    },
+    {
+      canonical: 'well-covered',
+      codingTier: 'T2',
+      benchmarks: [
+        { name: 'aaCodingIndex', score: 85 },
+        { name: 'aaAgenticIndex', score: 85 },
+        { name: 'intelligenceIndex', score: 85 },
+        { name: 'liveBench', score: 85 },
+      ],
+      retrievedAt: '2026-10-13T00:00:00Z',
+    },
+    {
+      canonical: 'weak-a',
+      codingTier: 'T3',
+      benchmarks: [
+        { name: 'aaCodingIndex', score: 40 },
+        { name: 'aaAgenticIndex', score: 40 },
+        { name: 'intelligenceIndex', score: 40 },
+      ],
+    },
+    {
+      canonical: 'weak-b',
+      codingTier: 'T3',
+      benchmarks: [
+        { name: 'aaCodingIndex', score: 40 },
+        { name: 'aaAgenticIndex', score: 40 },
+        { name: 'intelligenceIndex', score: 40 },
+      ],
+    },
+    {
+      canonical: 'benchmark-max',
+      benchmarks: [
+        { name: 'aaCodingIndex', score: 100 },
+        { name: 'aaAgenticIndex', score: 100 },
+        { name: 'intelligenceIndex', score: 100 },
+        { name: 'liveBench', score: 100 },
+      ],
+    },
+  ];
+  const now = Date.parse('2026-10-13T12:00:00Z');
+  const thin = priorFor({ modelId: 'thin-evidence' }, 'writer', { ranking }, now);
+  const solid = priorFor({ modelId: 'well-covered' }, 'writer', { ranking }, now);
+  assert.ok(solid.score > thin.score, `${solid.score} should exceed ${thin.score}`);
 });

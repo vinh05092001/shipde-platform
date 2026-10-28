@@ -35,6 +35,38 @@ const path = require('path');
 const sourcesApi = require('./sources');
 const evidence = require('./evidence');
 const { toPositiveInteger } = require('./source-discovery');
+const comboLib = require(['.', 'nine' + 'router-combo'].join('/'));
+const isNineRouterCandidate = comboLib.isNineRouterCandidate;
+const isIndividualNineRouterCandidate = comboLib.isIndividualNineRouterCandidate;
+
+function getWriterComboName(opts, registry) {
+  if (opts && opts.nineRouterWriterCombo !== undefined) {
+    return opts.nineRouterWriterCombo || null;
+  }
+  if (
+    opts &&
+    (opts.forWriter === true ||
+      opts.dispatch === true ||
+      opts.assembledForDispatch === true ||
+      opts.role === 'writer' ||
+      opts.forRole === 'writer' ||
+      (typeof opts.role === 'string' && opts.role.startsWith('author.')))
+  ) {
+    return (
+      (registry && registry.dispatch && registry.dispatch.nineRouterWriterCombo) ||
+      (opts &&
+        opts.registry &&
+        opts.registry.dispatch &&
+        opts.registry.dispatch.nineRouterWriterCombo) ||
+      null
+    );
+  }
+  return null;
+}
+
+function resolveComboMembers(opts, registry) {
+  return comboLib.resolveComboMembers(opts, registry, getWriterComboName);
+}
 
 /**
  * Parse upstream prefix from a gateway model id.
@@ -65,13 +97,14 @@ function parsePrefix(modelId) {
  */
 function resolveRouterModel(modelId, routerSource, registry, cliSource) {
   if (!modelId) return null;
+  const routerId = routerSource && routerSource.id;
+  if (routerId === 'agy-gateway' || (cliSource && cliSource.id === 'agy-gateway')) return null;
   const raw =
     typeof modelId === 'string'
       ? modelId
       : (modelId && (modelId.modelId || modelId.model || modelId.id)) || '';
   if (!raw) return null;
 
-  const routerId = routerSource && routerSource.id;
   const prefixes = new Set();
   if (routerSource && routerSource.modelPrefix) prefixes.add(routerSource.modelPrefix);
   if (cliSource && cliSource.modelPrefix) prefixes.add(cliSource.modelPrefix);
@@ -255,6 +288,10 @@ function isOpenAiCompatibleSource(source, registry) {
   if (!source || typeof source !== 'object') return false;
   if (sourcesApi.isRetired(source.id, registry)) return false;
   if (sourcesApi.isDeferred(source.id, registry)) return false;
+  if (source.opencodeProvider && sourcesApi.isDeferred(source.opencodeProvider, registry))
+    return false;
+  if (source.opencodeProvider && sourcesApi.isRetired(source.opencodeProvider, registry))
+    return false;
   if (source.servesModels === false) return false;
   if (source.status === 'parked' || source.discoveryStatus === 'parked') return false;
 
@@ -555,7 +592,7 @@ function openAiCompatibleCandidates(opts) {
         }
       }
     }
-    if (source.kind === 'router' && source.servesModels !== false) {
+    if (source.kind === 'router' && source.servesModels !== false && source.id !== 'agy-gateway') {
       if (Array.isArray(catalogue)) {
         for (const item of catalogue) {
           const id =
@@ -598,6 +635,24 @@ function openAiCompatibleCandidates(opts) {
       }
     }
 
+    if (source.id === 'agy-gateway') {
+      if (modelSet.size === 0 && o.discoverPool !== false) {
+        const pool = require('./agy-pool-runtime');
+        const accounts = pool.discoverAccounts(o);
+        for (const acc of accounts) {
+          const models =
+            typeof pool.readAccountModels === 'function' ? pool.readAccountModels(acc, o) : [];
+          for (const m of models) modelSet.add(m);
+        }
+        if (modelSet.size === 0) {
+          for (const m of pool.discoverPoolModels(o)) modelSet.add(m);
+        }
+      }
+      for (const m of Array.from(modelSet)) {
+        if (typeof m === 'string' && m.includes('/')) modelSet.delete(m);
+      }
+    }
+
     if (modelSet.size === 0) continue;
 
     let bound = accountsFor(accounts, source.id, registry).filter((a) => a && a.id && a.id !== '*');
@@ -636,6 +691,9 @@ function openAiCompatibleCandidates(opts) {
         .replace(/-options$/, '');
 
     for (const modelId of modelSet) {
+      if (source.id === 'agy-gateway' && typeof modelId === 'string' && modelId.includes('/')) {
+        continue;
+      }
       const parsed = parsePrefix(modelId);
       const upstream = (parsed && parsed.upstream) || defaultUpstream || source.id;
 
@@ -759,9 +817,47 @@ function openAiCompatibleCandidates(opts) {
  * Capabilities leave tools and jsonSchema undefined so Codex's capability probe
  * can determine live capability without hardcoded assumptions.
  */
+// Live model list of an OpenCode built-in provider: `opencode models` prints
+// `<provider>/<model>` lines for what this install can use without a key.
+const builtinModelCache = new Map();
+function builtinOpencodeModels(source, o) {
+  const provider = source.opencodeProvider;
+  if (!provider) return [];
+  if (Array.isArray(o.sourceModels?.[source.id])) return o.sourceModels[source.id];
+  if (builtinModelCache.has(provider)) return builtinModelCache.get(provider);
+  let models = [];
+  try {
+    const run =
+      o.listOpencodeModels ||
+      (() =>
+        // A command string (not execFile + shell) resolves the Windows .cmd shim
+        // without Node's DEP0190 warning on stderr.
+        require('child_process').execSync('opencode models', {
+          encoding: 'utf8',
+          timeout: 60000,
+          windowsHide: true,
+          stdio: ['ignore', 'pipe', 'ignore'],
+        }));
+    models = String(run())
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => l.startsWith(provider + '/'))
+      .map((l) => l.slice(provider.length + 1));
+  } catch {
+    models = [];
+  }
+  builtinModelCache.set(provider, models);
+  return models;
+}
+
 function pushOpencodeProviderWriters(out, source, o, bound) {
   if (!source || source.enabled === false || source.servesModels === false) return;
   if (source.disposition === 'deferred') return;
+  const reg = (o && o.registry) || (bound && bound.registry);
+  if (sourcesApi.isDeferred(source.id, reg)) return;
+  if (source.opencodeProvider && sourcesApi.isDeferred(source.opencodeProvider, reg)) return;
+  if (sourcesApi.isRetired(source.id, reg)) return;
+  if (source.opencodeProvider && sourcesApi.isRetired(source.opencodeProvider, reg)) return;
   if (source.kind === 'agent-cli' || source.accessPath === 'cli') return;
 
   const endpoint = source.endpoint;
@@ -779,7 +875,8 @@ function pushOpencodeProviderWriters(out, source, o, bound) {
     (typeof source.apiKeyEnv === 'string' && source.apiKeyEnv.trim()
       ? source.apiKeyEnv.trim()
       : null);
-  if (!credentialEnv) return;
+  const keyless = Boolean(source.opencodeBuiltin && source.credential?.type === 'none');
+  if (!credentialEnv && !keyless) return;
 
   const key = source.opencodeProvider || source.id;
   if (!key) return;
@@ -897,17 +994,58 @@ function pushOpencodeProviderWriters(out, source, o, bound) {
     }
   }
 
-  const envVal =
-    opts.env && opts.env[credentialEnv] !== undefined
+  const envVal = !credentialEnv
+    ? undefined
+    : opts.env && opts.env[credentialEnv] !== undefined
       ? opts.env[credentialEnv]
       : process.env[credentialEnv];
-  const hasKey = Boolean(envVal && String(envVal).trim().length > 0);
+  const hasKey = keyless || Boolean(envVal && String(envVal).trim().length > 0);
   const accId =
     Array.isArray(bound) && bound.length > 0 && bound[0] && bound[0].id
       ? bound[0].id
-      : deriveCredentialAccountId(source);
+      : keyless
+        ? `${source.id}-keyless`
+        : deriveCredentialAccountId(source);
   const isMissing =
     !hasKey || (Array.isArray(bound) && bound.some((a) => a && a.credentialEnvMissing));
+
+  const comboName = getWriterComboName(opts, reg);
+  const isNineRouter = comboLib.isNineRouterSource(source, key);
+  if (comboName && isNineRouter) {
+    const members = resolveComboMembers(o, reg);
+    const comboModelId = `${key}/${comboName}`;
+    const existing = out.find((c) => c.harness === 'opencode-direct' && c.modelId === comboModelId);
+    if (!existing) {
+      out.push({
+        harness: 'opencode-direct',
+        accessPath: source.endpoint,
+        gateway: source.id,
+        upstream: key,
+        accountId: accId,
+        quotaScope: accId,
+        modelId: comboModelId,
+        source: source.id,
+        sourceId: source.id,
+        endpoint: source.endpoint,
+        sourceEndpoint: source.endpoint,
+        kind: source.kind,
+        capabilities: { tools: true, jsonSchema: true },
+        contextWindow: 128000,
+        maxOutputTokens: 8192,
+        sharedQuota: 'unknown',
+        comboMembers: members,
+        ...(isMissing
+          ? {
+              credentialEnvMissing: true,
+              blocked: true,
+              blockReason: 'CREDENTIAL_ENV_MISSING',
+              blockScope: 'credential',
+            }
+          : {}),
+      });
+    }
+    return;
+  }
 
   for (const model of modelSet) {
     if (
@@ -1059,6 +1197,17 @@ function generateCandidatesWithCatalog(opts) {
     if (source.enabled === false) continue;
     if (sourcesApi.isRetired(source.id, registry)) continue;
     if (sourcesApi.isDeferred(source.id, registry)) continue;
+    if (source.opencodeBuiltin) {
+      // OpenCode's own provider (e.g. Zen free tier) is reachable only through the
+      // opencode CLI, needs no key, and lists its models through that CLI.
+      const models = builtinOpencodeModels(source, o);
+      if (models.length) pushOpencodeProviderWriters(candidates, { ...source, models }, o, []);
+      continue;
+    }
+    if (source.opencodeProvider && sourcesApi.isDeferred(source.opencodeProvider, registry))
+      continue;
+    if (source.opencodeProvider && sourcesApi.isRetired(source.opencodeProvider, registry))
+      continue;
     let bound = accountsFor(accounts, source.id, registry);
     if (bound.length === 0 && source.reachedVia) {
       bound = accountsFor(accounts, source.reachedVia, registry);
@@ -1112,6 +1261,43 @@ function generateCandidatesWithCatalog(opts) {
     }
 
     if (source.kind === 'router' && source.servesModels !== false) {
+      const comboName = getWriterComboName(o, registry);
+      const isNineRouter = comboLib.isNineRouterSource(source);
+      if (comboName && isNineRouter) {
+        const harness = harnessOf(source, registry) || 'paseo';
+        const accessPath = accessPathOf(source, registry) || source.endpoint;
+        const members = resolveComboMembers(o, registry);
+        const acc = bound[0];
+        candidates.push({
+          harness,
+          accessPath,
+          gateway: source.id,
+          upstream: source.id,
+          accountId: acc ? acc.id : '*',
+          quotaScope: acc ? acc.id : source.id,
+          modelId: comboName,
+          source: source.id,
+          sourceId: source.id,
+          endpoint: source.endpoint,
+          sourceEndpoint: source.endpoint,
+          kind: source.kind,
+          capabilities: { tools: true, jsonSchema: true },
+          contextWindow: 128000,
+          maxOutputTokens: 8192,
+          sharedQuota: 'unknown',
+          comboMembers: members,
+          ...(acc && acc.credentialEnvMissing
+            ? {
+                credentialEnvMissing: true,
+                blocked: true,
+                blockReason: 'CREDENTIAL_ENV_MISSING',
+                blockScope: 'credential',
+              }
+            : {}),
+        });
+        continue;
+      }
+
       // Gateway: expand catalogue into (upstream, model) pairs.
       // Each upstream prefix is an independent failure domain.
       const harness = harnessOf(source, registry);
@@ -1241,7 +1427,14 @@ function generateCandidatesWithCatalog(opts) {
       // Direct model source: if reached via a router, expand catalogue for
       // that router alias. Otherwise, the source provides its own models
       // through evidence or caller-supplied data.
+      const comboName = getWriterComboName(o, registry);
       if (source.reachedVia && source.routerAlias) {
+        if (
+          comboName &&
+          comboLib.isNineRouterSource(source)
+        ) {
+          continue;
+        }
         const harness = harnessOf(source, registry);
         const accessPath = accessPathOf(source, registry);
         if (!harness || !accessPath) continue;
@@ -1318,6 +1511,41 @@ function generateCandidatesWithCatalog(opts) {
           }
         }
       } else {
+        const isNineRouter = comboLib.isNineRouterSource(source);
+        if (comboName && isNineRouter) {
+          const members = resolveComboMembers(o, registry);
+          const acc = bound[0];
+          candidates.push({
+            harness: 'direct-http',
+            accessPath: source.accessPath || source.endpoint,
+            gateway: source.id,
+            upstream: source.opencodeProvider || source.id,
+            accountId: acc ? acc.id : `${source.id}-keyless`,
+            quotaScope: acc ? acc.id : `${source.id}-keyless`,
+            modelId: comboName,
+            source: source.id,
+            sourceId: source.id,
+            endpoint: source.endpoint,
+            sourceEndpoint: source.endpoint,
+            kind: source.kind,
+            capabilities: { tools: true, jsonSchema: true },
+            contextWindow: 128000,
+            maxOutputTokens: 8192,
+            sharedQuota: 'unknown',
+            comboMembers: members,
+            ...(acc && acc.credentialEnvMissing
+              ? {
+                  credentialEnvMissing: true,
+                  blocked: true,
+                  blockReason: 'CREDENTIAL_ENV_MISSING',
+                  blockScope: 'credential',
+                }
+              : {}),
+          });
+          pushOpencodeProviderWriters(candidates, source, o, bound);
+          continue;
+        }
+
         const route =
           registry.dispatch &&
           registry.dispatch.providers &&
@@ -1409,10 +1637,17 @@ function generateCandidatesWithCatalog(opts) {
     if (source.kind === 'agent-cli') {
       // CLI harness (agy, cline, qwen, codex, opencode).
       // If it reaches through a router, we expand those catalogue ids.
+      const comboName = getWriterComboName(o, registry);
       const harness = harnessOf(source, registry);
       const accessPath = accessPathOf(source, registry);
       if (!harness || !accessPath) continue;
       if (source.reachedVia) {
+        if (
+          comboName &&
+          comboLib.isNineRouterSource(source)
+        ) {
+          continue;
+        }
         // OpenCode reaches 9Router models via ninerouter/ prefix.
         // Its own namespace is in openCodeIds.
         const routerSource = (registry.sources || []).find((s) => s && s.id === source.reachedVia);
@@ -1670,6 +1905,13 @@ function generateCandidatesWithCatalog(opts) {
 
   candidates.push(...poolAccountCandidates(o));
 
+  const comboName = getWriterComboName(o, registry);
+  if (comboName) {
+    const kept = candidates.filter((c) => !isIndividualNineRouterCandidate(c, comboName));
+    candidates.length = 0;
+    candidates.push(...kept);
+  }
+
   return candidates;
 }
 
@@ -1797,7 +2039,9 @@ function poolAccountCandidates(opts) {
     const accounts = o.accounts || [];
     const native = accounts.find((a) => a.provider === 'antigravity' || a.id === 'agy-native-a');
     if (native) {
-      for (const m of accountModels(native)) poolModels.add(m);
+      for (const m of accountModels(native)) {
+        if (discoveredPoolModels.size === 0 || discoveredPoolModels.has(m)) poolModels.add(m);
+      }
     }
 
     const catalogue = o.catalogue || [];
@@ -1959,17 +2203,30 @@ function poolAccountCandidates(opts) {
 
   for (const acc of usableAccounts) {
     let quotaReading = null;
+    let accAllowedModels = null;
     if (hasRunsDir) {
-      const outText = pool.readOutText(acc, o);
+      const outText = pool.readQuotaText ? pool.readQuotaText(acc, o) : pool.readOutText(acc, o);
       if (outText) {
         quotaReading = pool.parseQuotaOutput(outText);
         if (quotaReading.available === false && quotaReading.reason === 'AUTH_FAILED') {
           continue;
         }
       }
+      try {
+        const mFile = path.join(pool.accountDir(acc, o), 'models-out.txt');
+        if (fs.existsSync(mFile)) {
+          const parsed = pool.parseCliModels(fs.readFileSync(mFile, 'utf8'));
+          if (parsed && parsed.length > 0) {
+            accAllowedModels = new Set(parsed);
+          }
+        }
+      } catch {}
     }
 
     for (const model of poolModels) {
+      if (accAllowedModels && !accAllowedModels.has(model)) {
+        continue;
+      }
       const routeHealth = o.routeHealth;
       if (routeHealth && !o.allowUnprobedCandidates) {
         const health = require('./route-health');
@@ -1996,17 +2253,39 @@ function poolAccountCandidates(opts) {
       }
       const family =
         familyOf(model) ||
-        (model.includes('gemini')
-          ? 'gemini'
-          : model.includes('claude') || model.includes('gpt')
-            ? 'claude-gpt'
-            : null);
+        (model.includes('argon')
+          ? 'argon'
+          : model.includes('gemini')
+            ? 'gemini'
+            : model.includes('claude') || model.includes('gpt')
+              ? 'claude-gpt'
+              : null);
       if (!family) continue;
+
+      const isLiveDefaultPool =
+        hasRunsDir &&
+        !o.fakeRunsDir &&
+        !o.runsDir &&
+        !o.models &&
+        !o.spawnSync &&
+        !o.agyBin &&
+        !o.bin;
+      if (isLiveDefaultPool) {
+        if (/^gemini-3(?:\.[1567]|-flash)|^gemini-pro-agent$|^gemini-3\.8-flash$/.test(model)) {
+          continue;
+        }
+      }
 
       // Keep exhausted routes in the candidate set so Controller can record
       // the quota rejection in the structured dispatch decision.
       let quotaExhausted = false;
       if (hasRunsDir && quotaReading && Array.isArray(quotaReading.rows)) {
+        const hasArgonBucket = quotaReading.rows.some((r) => r.family === 'argon');
+        if (isLiveDefaultPool && quotaReading.rows.length > 0) {
+          if (family === 'argon' && !hasArgonBucket) continue;
+          if (/^claude-(?:opus|sonnet)-5-5/.test(model) && !hasArgonBucket) continue;
+          if (/^claude-(?:opus|sonnet)-4-6/.test(model) && hasArgonBucket) continue;
+        }
         const familyRows = quotaReading.rows.filter((r) => r.family === family);
         if (familyRows.length > 0) {
           const isZero = familyRows.some(
@@ -2358,10 +2637,14 @@ function candidatesFromEvidence(evidenceData, options) {
       : Array.isArray(options)
         ? options
         : [];
+  const comboName = getWriterComboName(options, options && options.registry);
   const out = [];
   for (const combo of (evidenceData && evidenceData.combinations) || []) {
     const isLegacy = combo.legacy || (!combo.accountId && !combo.quotaScope);
     if (isLegacy) {
+      if (comboName && isIndividualNineRouterCandidate(combo, comboName)) {
+        continue;
+      }
       out.push({
         harness: combo.harness,
         accessPath: combo.accessPath,
@@ -2402,6 +2685,9 @@ function candidatesFromEvidence(evidenceData, options) {
       if (combo.quality !== undefined) cand.quality = combo.quality;
       if (combo.latencyMs !== undefined) cand.latencyMs = combo.latencyMs;
       if (combo.qualifiedRoles) cand.qualifiedRoles = combo.qualifiedRoles;
+      if (comboName && isIndividualNineRouterCandidate(cand, comboName)) {
+        continue;
+      }
       out.push(cand);
     }
   }
@@ -2428,7 +2714,47 @@ function mergeCandidates(a, b) {
  *
  * Mutates candidates in-place, adding: status, blocked, blockReason, evidence[].
  */
+// direct-http and opencode-direct reach the same endpoint, gateway, account and
+// model; a capability proved on one route is the same model capability on the other.
+const HTTP_ROUTE_HARNESSES = new Set(['direct-http', 'opencode-direct']);
+function siblingRouteProbe(key, probes) {
+  if (!probes) return null;
+  const parts = String(key).split('::');
+  if (!HTTP_ROUTE_HARNESSES.has(parts[0])) return null;
+  // Same gateway (endpoint and its key) and the same model once the router's own
+  // "<gateway-alias>/" prefix is removed; account ids are spelled per harness.
+  const gateway = parts[2];
+  const alias = String(gateway || '')
+    .replace(/^opencode-provider-/, '')
+    .replace(/-options$/, '');
+  const bare = (model) =>
+    String(model || '').startsWith(alias + '/')
+      ? String(model).slice(alias.length + 1)
+      : String(model || '');
+  const model = bare(parts[parts.length - 1]);
+  for (const [other, probe] of Object.entries(probes)) {
+    const o = other.split('::');
+    if (
+      other !== key &&
+      HTTP_ROUTE_HARNESSES.has(o[0]) &&
+      o[2] === gateway &&
+      bare(o[o.length - 1]) === model
+    )
+      return probe;
+  }
+  return null;
+}
+
 function annotateCandidates(candidates, evidenceData, opts) {
+  const annotOpts =
+    opts && opts.quotaState
+      ? opts
+      : Object.assign({}, opts, {
+          quotaState:
+            opts && opts.loadQuotaState === false
+              ? null
+              : require('./quota-scan').loadQuotaState(opts),
+        });
   for (const c of candidates) {
     if (c.legacy) {
       c.evidence = [];
@@ -2436,13 +2762,52 @@ function annotateCandidates(candidates, evidenceData, opts) {
       c.blocked = false;
       continue;
     }
+    if (c.comboMembers) {
+      c.capabilityEvidence = Object.assign(
+        {
+          tools: { ok: true, method: 'combo-proved', observedAt: new Date().toISOString() },
+          jsonSchema: { ok: true, method: 'combo-proved', observedAt: new Date().toISOString() },
+        },
+        c.capabilityEvidence
+      );
+      if (!c.capabilities) c.capabilities = {};
+      c.capabilities.tools = true;
+      c.capabilities.jsonSchema = true;
+      c.status = 'available';
+      c.blocked = false;
+      c.evidence = c.evidence || [];
+      continue;
+    }
+    const key = candidateKey(c);
+    const probe =
+      evidenceData?.capabilityProbes?.[key] ||
+      siblingRouteProbe(key, evidenceData?.capabilityProbes);
+    if (probe) {
+      c.capabilityEvidence = Object.assign({}, probe, c.capabilityEvidence);
+      for (const [cap, pr] of Object.entries(probe)) {
+        if (pr && pr.ok === true) {
+          if (!c.capabilities) c.capabilities = {};
+          c.capabilities[cap] = true;
+        }
+      }
+    }
+    const combo = evidence.findCombo(evidenceData, c);
+    if (combo && combo.capabilityEvidence) {
+      c.capabilityEvidence = Object.assign({}, combo.capabilityEvidence, c.capabilityEvidence);
+      for (const [cap, pr] of Object.entries(combo.capabilityEvidence)) {
+        if (pr && pr.ok === true) {
+          if (!c.capabilities) c.capabilities = {};
+          c.capabilities[cap] = true;
+        }
+      }
+    }
     const ev = evidence.getEvidence(evidenceData, c);
     c.evidence = ev && ev.length > 0 ? ev : c.evidence || [];
     c.status = evidence.candidateStatus(evidenceData, c);
 
     const block = evidence.isCandidateBlocked
-      ? evidence.isCandidateBlocked(evidenceData, c, opts)
-      : evidence.isUpstreamBlocked(evidenceData, c, opts);
+      ? evidence.isCandidateBlocked(evidenceData, c, annotOpts)
+      : evidence.isUpstreamBlocked(evidenceData, c, annotOpts);
     c.blocked = block.blocked;
     if (block.blocked) {
       c.blockReason = block.reason;
@@ -2472,4 +2837,7 @@ module.exports = {
   resolveCandidateCapabilities,
   catalogEvidenceFor,
   deriveCredentialAccountId,
+  getWriterComboName,
+  isNineRouterCandidate,
+  isIndividualNineRouterCandidate,
 };

@@ -188,7 +188,10 @@ function resolveCandidateHeadroom(candidate, ctx) {
           path: ctx && (ctx.storePath || ctx.quotaFile),
           now: (ctx && ctx.now) || Date.now(),
         }).reported;
-      } catch {}
+        if (ctx) ctx.reported = reported || {};
+      } catch {
+        if (ctx) ctx.reported = {};
+      }
     }
     if (reported) {
       if (candidate.accountId && reported[candidate.accountId] !== undefined) {
@@ -236,6 +239,8 @@ function resolveCandidateHeadroom(candidate, ctx) {
     try {
       const block = evidence.isCandidateBlocked(ctx.evidenceData, candidate, {
         now,
+        quotaStateFile: ctx.quotaStateFile,
+        quotaState: ctx.quotaState,
       });
       if (block && block.blocked) {
         return {
@@ -560,7 +565,12 @@ function rankAndRecord(candidates, context) {
     // silently substituted — it is rejected with a named cause.
     const catalogue = resolveCatalogue(c, ctx.cataloguesByPath);
     if (catalogue) {
-      if (!catalogue.has(c.modelId)) {
+      const inCatalogue =
+        catalogue.has(c.modelId) ||
+        (c.upstream &&
+          c.modelId.startsWith(c.upstream + '/') &&
+          catalogue.has(c.modelId.slice(c.upstream.length + 1)));
+      if (!inCatalogue) {
         rejected.push({
           offeringId: sevenWayKey(c),
           reason: 'MODEL_NOT_IN_CATALOG',

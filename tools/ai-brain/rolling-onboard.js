@@ -51,7 +51,7 @@ function sourceHasPassingEvidence(combinations, sourceId, fingerprint) {
   });
 }
 
-function detectNewSources(registry, evidenceData, env) {
+function detectNewSources(registry, evidenceData, env, options = {}) {
   const sources = (registry && registry.sources) || [];
   const envObj = env || process.env;
   const newSources = [];
@@ -61,8 +61,8 @@ function detectNewSources(registry, evidenceData, env) {
 
     // Check credential if required
     const apiKeyEnv = src.credential?.env;
-    if (apiKeyEnv && !envObj[apiKeyEnv]) {
-      continue; // Key not in env, cannot onboard
+    if (!apiKeyEnv || !envObj[apiKeyEnv]) {
+      continue; // Key not in env or source has no env credential, cannot onboard
     }
 
     // A failed latest observation is not onboarding proof, and neither is a pass
@@ -70,8 +70,15 @@ function detectNewSources(registry, evidenceData, env) {
     const combinations = evidenceData?.combinations || [];
     const fingerprint = credentialFingerprint(apiKeyEnv ? envObj[apiKeyEnv] : null);
     const hasEvidence = sourceHasPassingEvidence(combinations, src.id, fingerprint);
+    const lacksTools =
+      options.requireTools === true &&
+      !combinations.some(
+        (c) =>
+          [c.source, c.sourceId, c.gateway].includes(src.id) &&
+          (c.capabilities?.tools === true || c.capabilityEvidence?.tools?.ok === true)
+      );
 
-    if (!hasEvidence) {
+    if (!hasEvidence || lacksTools) {
       newSources.push(src);
     }
   }
@@ -136,6 +143,7 @@ async function onboardSourceRolling(src, options = {}) {
             model: modelToProbe,
             messages: [{ role: 'user', content: 'ping' }],
             max_tokens: dispatchConfig.quotaProbeMaxOutputTokens,
+            stream: false,
           }),
           signal: controller.signal,
         }),
@@ -234,7 +242,8 @@ async function onboardSourceRolling(src, options = {}) {
             ],
             tools,
             tool_choice: { type: 'function', function: { name: TOOL_NAME } },
-            max_tokens: dispatchConfig.quotaProbeMaxOutputTokens || 128,
+            max_tokens: options.toolProbeMaxOutputTokens || 128,
+            stream: false,
           }),
           signal: controller.signal,
         }),
@@ -420,9 +429,7 @@ async function onboardSourceRolling(src, options = {}) {
         const tools = combo.capabilityEvidence.tools;
         recordProof(combo, tools);
         for (const acc of allBound) {
-          if (acc.id && acc.id !== combo.accountId) {
-            recordProof({ ...combo, accountId: acc.id, quotaScope: acc.id }, tools);
-          }
+          recordProof({ ...combo, accountId: acc.id, quotaScope: acc.id }, tools);
         }
         if (src.kind === 'router') {
           for (const acc of allBound.length ? allBound : [{ id: bound ? bound.id : null }]) {
@@ -456,6 +463,13 @@ async function onboardSourceRolling(src, options = {}) {
         { ok: true, status: probeStatus, body: probeBody },
         { ...healthOptions, routeHealth: store, now }
       );
+      for (const acc of allBound) {
+        routeHealthApi.rememberProbe(
+          { ...combo, accountId: acc.id, quotaScope: acc.id },
+          { ok: true, status: probeStatus, body: probeBody },
+          { ...healthOptions, routeHealth: store, now }
+        );
+      }
     }
 
     return {

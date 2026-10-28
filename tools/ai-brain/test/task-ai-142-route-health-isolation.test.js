@@ -316,22 +316,27 @@ describe('TASK-AI-142: Route health isolation and default store immutability', (
   });
 
   test('task-ai-142-probe-config test suite does not touch default route-health file', () => {
-    fs.writeFileSync(
-      DEFAULT_HEALTH_PATH,
-      JSON.stringify({ version: 1, paths: {}, events: [] }, null, 2)
-    );
-    const cleanHash = hashFile(DEFAULT_HEALTH_PATH);
-    const child = require('node:child_process').spawnSync(
-      process.execPath,
-      ['--test', path.resolve(__dirname, 'task-ai-142-probe-config.test.js')],
-      { stdio: 'pipe' }
-    );
-    assert.equal(child.status, 0);
-    assert.equal(
-      hashFile(DEFAULT_HEALTH_PATH),
-      cleanHash,
-      'Default file was modified by probe-config test'
-    );
+    const originalContent = fs.readFileSync(DEFAULT_HEALTH_PATH, 'utf8');
+    try {
+      fs.writeFileSync(
+        DEFAULT_HEALTH_PATH,
+        JSON.stringify({ version: 1, paths: {}, events: [] }, null, 2)
+      );
+      const cleanHash = hashFile(DEFAULT_HEALTH_PATH);
+      const child = require('node:child_process').spawnSync(
+        process.execPath,
+        ['--test', path.resolve(__dirname, 'task-ai-142-probe-config.test.js')],
+        { stdio: 'pipe' }
+      );
+      assert.equal(child.status, 0);
+      assert.equal(
+        hashFile(DEFAULT_HEALTH_PATH),
+        cleanHash,
+        'Default file was modified by probe-config test'
+      );
+    } finally {
+      fs.writeFileSync(DEFAULT_HEALTH_PATH, originalContent, 'utf8');
+    }
   });
 });
 
