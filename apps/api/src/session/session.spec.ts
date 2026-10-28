@@ -685,4 +685,47 @@ describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
       }
     });
   });
+
+  describe('Finding 3: Single audit log emission on non-transactional revocation path', () => {
+    it('emits structured audit log exactly once in revokeTargetUserSessions without transaction', async () => {
+      const logs: string[] = [];
+      const origConsoleLog = console.log;
+      console.log = (...args: any[]) => {
+        logs.push(args.join(' '));
+        origConsoleLog(...args);
+      };
+
+      try {
+        const mockPrisma: any = {
+          deviceSession: {
+            findMany: async () => [
+              { id: 'sess-target-1', status: SessionStatusEnum.ACTIVE },
+            ],
+            updateMany: async () => ({ count: 1 }),
+          },
+          auditLog: {
+            create: async () => ({ id: 'audit-target-1' }),
+          },
+        };
+        const service = new SessionService(mockPrisma);
+        const count = await service.revokeTargetUserSessions(
+          'user-target-1',
+          'merchant-1',
+          'actor-1',
+          'Admin reset',
+          'corr-single-emit'
+        );
+
+        assert.strictEqual(count, 1);
+        const auditLogs = logs.filter((l) => l.includes('AUDIT: SESSIONS_REVOKED_ALL'));
+        assert.strictEqual(
+          auditLogs.length,
+          1,
+          'Audit log must be emitted exactly once on non-transactional path (no double emission)'
+        );
+      } finally {
+        console.log = origConsoleLog;
+      }
+    });
+  });
 });

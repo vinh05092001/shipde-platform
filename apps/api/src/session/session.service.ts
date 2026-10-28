@@ -578,10 +578,6 @@ export class SessionService implements OnApplicationBootstrap {
       throw err;
     }
 
-    if (tx === this.prisma) {
-      emitLog();
-    }
-
     return emitLog;
   }
 }
