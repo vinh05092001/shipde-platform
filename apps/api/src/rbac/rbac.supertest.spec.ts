@@ -15,7 +15,7 @@ import {
   assertNoSensitiveData,
 } from '@shipde/testkit';
 import { seedDatabase, SEED_MERCHANT_ID } from '../../../../infra/docker/seed';
-import { SYSTEM_ROLE_IDS } from './rbac.service';
+import { SYSTEM_ROLE_IDS, RbacService } from './rbac.service';
 import { RoleEnum } from '@prisma/client';
 
 /**
@@ -54,7 +54,7 @@ async function main() {
   const app = moduleFixture.createNestApplication();
   await app.init();
   const server = app.getHttpServer();
-  const prisma = app.get(PrismaService);
+  const prisma = (app.get(RbacService) as any).prisma || app.get(PrismaService);
 
   if ((await prisma.checkReadiness()) !== 'up') {
     await app.close();
