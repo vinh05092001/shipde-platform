@@ -46,6 +46,7 @@ export class SessionGuard implements CanActivate {
       });
     }
 
+    let jwtClaims: any;
     // Check if it's a signed JWT (v1.<payload>.<signature>)
     if (rawToken.startsWith('v1.')) {
       try {
@@ -80,6 +81,7 @@ export class SessionGuard implements CanActivate {
         }
 
         // For non-setup tokens, continue to validate against DeviceSession
+        jwtClaims = claims;
         (req as any).jwtClaims = claims;
       } catch (err: any) {
         if (err instanceof ForbiddenException) throw err;
@@ -97,7 +99,10 @@ export class SessionGuard implements CanActivate {
     const { createHash } = await import('node:crypto');
     const tokenHash = createHash('sha256').update(rawToken).digest('hex');
 
-    const session = await this.sessionService.validateSession(tokenHash);
+    const session = await this.sessionService.validateSession(
+      tokenHash,
+      jwtClaims ? { userId: jwtClaims.sub, merchantId: jwtClaims.mid } : undefined
+    );
     if (!session) {
       throw new UnauthorizedException({
         error: {

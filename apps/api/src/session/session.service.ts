@@ -115,7 +115,21 @@ export class SessionService implements OnApplicationBootstrap {
     };
   }
 
-  async validateSession(tokenHash: string): Promise<{
+  /**
+   * Validates an active device session by its SHA-256 token hash.
+   *
+   * BR-SESS-01 Scoping:
+   * When caller context is available (e.g. verified JWT claims from SessionGuard),
+   * the optional `scope` ({ userId, merchantId }) is passed to strictly scope the DB lookup
+   * to the caller's tenant and user.
+   * When validating opaque tokens or when claims are not yet resolved, the lookup is keyed
+   * by session_token_hash (enforced by a unique DB constraint) to derive identity context,
+   * serving as the documented initial identity resolution exception to BR-SESS-01.
+   */
+  async validateSession(
+    tokenHash: string,
+    scope?: { userId?: string; merchantId?: string | null }
+  ): Promise<{
     userId: string;
     merchantId: string | null;
     sessionId: string;
@@ -125,10 +139,23 @@ export class SessionService implements OnApplicationBootstrap {
     const now = new Date();
     const inactivityThreshold = new Date(now.getTime() - INACTIVITY_DAYS * 24 * 60 * 60 * 1000);
 
+    const where: {
+      session_token_hash: string;
+      user_id?: string;
+      merchant_id?: string | null;
+    } = {
+      session_token_hash: tokenHash,
+    };
+
+    if (scope?.userId) {
+      where.user_id = scope.userId;
+    }
+    if (scope?.merchantId !== undefined) {
+      where.merchant_id = scope.merchantId;
+    }
+
     const session = await this.prisma.deviceSession.findFirst({
-      where: {
-        session_token_hash: tokenHash,
-      },
+      where,
     });
 
     if (!session || session.status !== SessionStatusEnum.ACTIVE) {
@@ -412,21 +439,13 @@ export class SessionService implements OnApplicationBootstrap {
     tx?: any
   ): Promise<number> {
     const executeInTransaction = async (prismaTx: any) => {
-      const activeSessions = await prismaTx.deviceSession.findMany({
+      const now = new Date();
+      const updateResult = await prismaTx.deviceSession.updateMany({
         where: {
           merchant_id: merchantId,
           user_id: targetUserId,
           status: SessionStatusEnum.ACTIVE,
         },
-      });
-
-      if (activeSessions.length === 0) {
-        return { count: 0, emitLog: null };
-      }
-
-      const now = new Date();
-      await prismaTx.deviceSession.updateMany({
-        where: { id: { in: activeSessions.map((s: any) => s.id) } },
         data: {
           status: SessionStatusEnum.REVOKED,
           is_revoked: true,
@@ -436,6 +455,10 @@ export class SessionService implements OnApplicationBootstrap {
         },
       });
 
+      if (updateResult.count === 0) {
+        return { count: 0, emitLog: null };
+      }
+
       const emitLog = await this.logAudit(
         {
           merchantId,
@@ -443,18 +466,21 @@ export class SessionService implements OnApplicationBootstrap {
           actor: actorUserId,
           action: 'SESSIONS_REVOKED_ALL',
           resource: `User:${targetUserId}`,
-          details: { revoked_count: activeSessions.length, reason },
+          details: { revoked_count: updateResult.count, reason },
           correlationId,
           ipAddress,
         },
         prismaTx
       );
 
-      return { count: activeSessions.length, emitLog };
+      return { count: updateResult.count, emitLog };
     };
 
     if (tx) {
       const result = await executeInTransaction(tx);
+      if (typeof result.emitLog === 'function') {
+        result.emitLog();
+      }
       return result.count;
     }
 
@@ -598,15 +624,12 @@ export class SessionService implements OnApplicationBootstrap {
     return null;
   }
 
-  private hashIp(ip: string, failClosed = false): string | null {
+  private hashIp(ip: string): string {
     const key = process.env.AUDIT_IDENTIFIER_HMAC_KEY;
     if (!key || key.trim().length === 0) {
-      if (failClosed) {
-        throw new Error(
-          'AUDIT_IDENTIFIER_HMAC_KEY is required for IP pseudonymization; refusing to fallback to predictable key'
-        );
-      }
-      return null;
+      throw new Error(
+        'AUDIT_IDENTIFIER_HMAC_KEY is required for IP pseudonymization; refusing to fallback to predictable key'
+      );
     }
     return createHmac('sha256', key.trim()).update(ip).digest('hex');
   }
@@ -624,7 +647,7 @@ export class SessionService implements OnApplicationBootstrap {
     },
     tx: any = this.prisma
   ): Promise<() => void> {
-    const hashedIp = meta.ipAddress ? this.hashIp(meta.ipAddress, true) : null;
+    const hashedIp = meta.ipAddress ? this.hashIp(meta.ipAddress) : null;
     const { ipAddress: _rawIp, ...safeMeta } = meta;
 
     const emitLog = () => {

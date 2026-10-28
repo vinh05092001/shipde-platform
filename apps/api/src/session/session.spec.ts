@@ -9,6 +9,9 @@ import { SessionStatusEnum } from '@prisma/client';
 describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
   const getTestHmacKey = () =>
     process.env.AUDIT_IDENTIFIER_HMAC_KEY || randomBytes(32).toString('hex');
+  if (!process.env.AUDIT_IDENTIFIER_HMAC_KEY) {
+    process.env.AUDIT_IDENTIFIER_HMAC_KEY = randomBytes(32).toString('hex');
+  }
   // ---------------------------------------------------------------------------
   // Finding 2: AC-SESS-06 next_action must be 'LOGIN' on SESSION_INVALID
   // ---------------------------------------------------------------------------
@@ -805,7 +808,32 @@ describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
       }
     });
 
-    it('creates session gracefully with null ip_address when AUDIT_IDENTIFIER_HMAC_KEY is unset without 500', async () => {
+    it('fails closed when AUDIT_IDENTIFIER_HMAC_KEY is unset and ipAddress is provided during create', async () => {
+      const prevKey = process.env.AUDIT_IDENTIFIER_HMAC_KEY;
+      try {
+        delete process.env.AUDIT_IDENTIFIER_HMAC_KEY;
+        const mockPrisma: any = {
+          deviceSession: {
+            create: async ({ data }: any) => ({ id: 'sess-new', ...data }),
+          },
+        };
+        const service = new SessionService(mockPrisma);
+        await assert.rejects(
+          async () =>
+            service.create({
+              userId: 'user-1',
+              merchantId: 'merch-1',
+              token: 'test-raw-token',
+              ipAddress: '192.168.1.100',
+            }),
+          /AUDIT_IDENTIFIER_HMAC_KEY is required for IP pseudonymization/
+        );
+      } finally {
+        if (prevKey !== undefined) process.env.AUDIT_IDENTIFIER_HMAC_KEY = prevKey;
+      }
+    });
+
+    it('creates session gracefully with null ip_address when AUDIT_IDENTIFIER_HMAC_KEY is unset and ipAddress is omitted', async () => {
       const prevKey = process.env.AUDIT_IDENTIFIER_HMAC_KEY;
       try {
         delete process.env.AUDIT_IDENTIFIER_HMAC_KEY;
@@ -823,14 +851,43 @@ describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
           userId: 'user-1',
           merchantId: 'merch-1',
           token: 'test-raw-token',
-          ipAddress: '192.168.1.100',
         });
         assert.ok(result);
         assert.strictEqual(
           createdData.ip_address,
           null,
-          'ip_address should be null when key is absent'
+          'ip_address should be null when ipAddress is omitted'
         );
+        assert.strictEqual(createdData.status, SessionStatusEnum.ACTIVE);
+      } finally {
+        if (prevKey !== undefined) process.env.AUDIT_IDENTIFIER_HMAC_KEY = prevKey;
+      }
+    });
+
+    it('stores HMAC-SHA256 hashed IP when AUDIT_IDENTIFIER_HMAC_KEY is set and ipAddress is provided', async () => {
+      const prevKey = process.env.AUDIT_IDENTIFIER_HMAC_KEY;
+      const testKey = 'test-audit-key-32-bytes-length-xyz';
+      try {
+        process.env.AUDIT_IDENTIFIER_HMAC_KEY = testKey;
+        let createdData: any = null;
+        const mockPrisma: any = {
+          deviceSession: {
+            create: async ({ data }: any) => {
+              createdData = data;
+              return { id: 'sess-new', ...data };
+            },
+          },
+        };
+        const service = new SessionService(mockPrisma);
+        const result = await service.create({
+          userId: 'user-1',
+          merchantId: 'merch-1',
+          token: 'test-raw-token',
+          ipAddress: '192.168.1.100',
+        });
+        assert.ok(result);
+        const expectedHashedIp = createHmac('sha256', testKey).update('192.168.1.100').digest('hex');
+        assert.strictEqual(createdData.ip_address, expectedHashedIp);
         assert.strictEqual(createdData.status, SessionStatusEnum.ACTIVE);
       } finally {
         if (prevKey !== undefined) process.env.AUDIT_IDENTIFIER_HMAC_KEY = prevKey;
@@ -839,7 +896,7 @@ describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
   });
 
   describe('Finding 3 & F-01: Transactional audit logging for revokeTargetUserSessions (BR-SESS-07)', () => {
-    it('executes inside Prisma transaction and emits structured audit log exactly once after commit', async () => {
+    it('executes single atomic updateMany inside Prisma transaction and emits structured audit log exactly once after commit', async () => {
       const logs: string[] = [];
       const origConsoleLog = console.log;
       console.log = (...args: any[]) => {
@@ -849,14 +906,22 @@ describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
 
       try {
         let transactionExecuted = false;
+        let findManyCalled = false;
+        let updateManyCalledWith: any = null;
         const mockPrisma: any = {
           $transaction: async (fn: any) => {
             transactionExecuted = true;
             return fn(mockPrisma);
           },
           deviceSession: {
-            findMany: async () => [{ id: 'sess-target-1', status: SessionStatusEnum.ACTIVE }],
-            updateMany: async () => ({ count: 1 }),
+            findMany: async () => {
+              findManyCalled = true;
+              return [{ id: 'sess-target-1', status: SessionStatusEnum.ACTIVE }];
+            },
+            updateMany: async (args: any) => {
+              updateManyCalledWith = args;
+              return { count: 2 };
+            },
           },
           auditLog: {
             create: async () => ({ id: 'audit-target-1' }),
@@ -871,7 +936,17 @@ describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
           'corr-single-emit'
         );
 
-        assert.strictEqual(count, 1);
+        assert.strictEqual(count, 2);
+        assert.strictEqual(
+          findManyCalled,
+          false,
+          'revokeTargetUserSessions must not call findMany (single atomic updateMany)'
+        );
+        assert.deepStrictEqual(updateManyCalledWith.where, {
+          merchant_id: 'merchant-1',
+          user_id: 'user-target-1',
+          status: SessionStatusEnum.ACTIVE,
+        });
         assert.strictEqual(
           transactionExecuted,
           true,
@@ -888,6 +963,34 @@ describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
       }
     });
 
+    it('returns 0 and skips audit log when no active sessions exist for target user', async () => {
+      let auditCreated = false;
+      const mockPrisma: any = {
+        $transaction: async (fn: any) => fn(mockPrisma),
+        deviceSession: {
+          updateMany: async () => ({ count: 0 }),
+        },
+        auditLog: {
+          create: async () => {
+            auditCreated = true;
+            return { id: 'audit-1' };
+          },
+        },
+      };
+
+      const service = new SessionService(mockPrisma);
+      const count = await service.revokeTargetUserSessions(
+        'user-no-sessions',
+        'merchant-1',
+        'actor-1',
+        'Admin reset',
+        'corr-zero'
+      );
+
+      assert.strictEqual(count, 0);
+      assert.strictEqual(auditCreated, false, 'No audit log should be created when revoked_count is 0');
+    });
+
     it('rolls back and propagates error if audit logging fails during revokeTargetUserSessions', async () => {
       let rolledBack = false;
       const mockPrisma: any = {
@@ -900,7 +1003,6 @@ describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
           }
         },
         deviceSession: {
-          findMany: async () => [{ id: 'sess-target-1', status: SessionStatusEnum.ACTIVE }],
           updateMany: async () => ({ count: 1 }),
         },
         auditLog: {
@@ -1115,6 +1217,136 @@ describe('FEAT-AUTH-06 Session Management Unit & Concurrency Suite', () => {
         SessionStatusEnum.EXPIRED,
         'Exact boundary inactivity must transition to EXPIRED in DB'
       );
+    });
+  });
+
+  describe('P2 / BR-SESS-01: Scoped validateSession lookup by session token hash + tenant/user', () => {
+    it('scopes findFirst query by user_id and merchant_id when scope is provided (BR-SESS-01)', async () => {
+      let capturedWhere: any = null;
+      const mockPrisma: any = {
+        deviceSession: {
+          findFirst: async ({ where }: any) => {
+            capturedWhere = where;
+            return {
+              id: 'sess-scoped-1',
+              user_id: 'user-1',
+              merchant_id: 'merch-1',
+              session_token_hash: 'token-hash-scoped',
+              status: SessionStatusEnum.ACTIVE,
+              last_active_at: new Date(),
+              expires_at: new Date(Date.now() + 80 * 24 * 60 * 60 * 1000),
+              auth_assurance: 'PASSWORD',
+              mfa_verified_at: null,
+            };
+          },
+        },
+      };
+
+      const service = new SessionService(mockPrisma);
+      const res = await service.validateSession('token-hash-scoped', {
+        userId: 'user-1',
+        merchantId: 'merch-1',
+      });
+
+      assert.ok(res);
+      assert.strictEqual(res.userId, 'user-1');
+      assert.strictEqual(res.merchantId, 'merch-1');
+      assert.strictEqual(capturedWhere.session_token_hash, 'token-hash-scoped');
+      assert.strictEqual(capturedWhere.user_id, 'user-1');
+      assert.strictEqual(capturedWhere.merchant_id, 'merch-1');
+    });
+
+    it('scopes findFirst query by session_token_hash alone when scope is omitted (opaque tokens)', async () => {
+      let capturedWhere: any = null;
+      const mockPrisma: any = {
+        deviceSession: {
+          findFirst: async ({ where }: any) => {
+            capturedWhere = where;
+            return {
+              id: 'sess-opaque-1',
+              user_id: 'user-2',
+              merchant_id: 'merch-2',
+              session_token_hash: 'token-hash-opaque',
+              status: SessionStatusEnum.ACTIVE,
+              last_active_at: new Date(),
+              expires_at: new Date(Date.now() + 80 * 24 * 60 * 60 * 1000),
+              auth_assurance: 'PASSWORD',
+              mfa_verified_at: null,
+            };
+          },
+        },
+      };
+
+      const service = new SessionService(mockPrisma);
+      const res = await service.validateSession('token-hash-opaque');
+
+      assert.ok(res);
+      assert.strictEqual(res.userId, 'user-2');
+      assert.strictEqual(res.merchantId, 'merch-2');
+      assert.strictEqual(capturedWhere.session_token_hash, 'token-hash-opaque');
+      assert.strictEqual(capturedWhere.user_id, undefined);
+      assert.strictEqual(capturedWhere.merchant_id, undefined);
+    });
+
+    it('SessionGuard passes verified JWT claims as scope to validateSession', async () => {
+      const { signAccessToken, resolveAccessTokenSecret } = await import('../auth/token.util');
+      const testSecret = resolveAccessTokenSecret('test-secret-at-least-32-chars-long-enough-for-security');
+      const prevSecret = process.env.AUTH_TOKEN_SECRET;
+      try {
+        process.env.AUTH_TOKEN_SECRET = testSecret;
+
+        const { token: jwtToken } = signAccessToken(
+          {
+            sub: 'user-jwt-1',
+            sid: 'sess-jwt-1',
+            mid: 'merch-jwt-1',
+            role: 'OWNER' as any,
+            st: 'active',
+          },
+          testSecret,
+          3600
+        );
+
+        let passedScope: any = null;
+        const mockSessionService: any = {
+          validateSession: async (_tokenHash: string, scope?: any) => {
+            passedScope = scope;
+            return {
+              userId: 'user-jwt-1',
+              merchantId: 'merch-jwt-1',
+              sessionId: 'sess-jwt-1',
+              authAssurance: 'PASSWORD',
+              mfaVerifiedAt: null,
+            };
+          },
+        };
+
+        const guard = new SessionGuard(mockSessionService);
+        const mockReq: any = {
+          headers: {
+            authorization: `Bearer ${jwtToken}`,
+          },
+        };
+        const mockContext: any = {
+          switchToHttp: () => ({
+            getRequest: () => mockReq,
+          }),
+        };
+
+        const activated = await guard.canActivate(mockContext);
+        assert.strictEqual(activated, true);
+        assert.ok(passedScope, 'SessionGuard must pass scope to validateSession');
+        assert.strictEqual(passedScope.userId, 'user-jwt-1');
+        assert.strictEqual(passedScope.merchantId, 'merch-jwt-1');
+        assert.strictEqual(mockReq.userId, 'user-jwt-1');
+        assert.strictEqual(mockReq.merchantId, 'merch-jwt-1');
+      } finally {
+        if (prevSecret !== undefined) {
+          process.env.AUTH_TOKEN_SECRET = prevSecret;
+        } else {
+          delete process.env.AUTH_TOKEN_SECRET;
+        }
+      }
     });
   });
 });

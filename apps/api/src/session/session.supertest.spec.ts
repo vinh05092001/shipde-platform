@@ -93,7 +93,7 @@ async function runSessionSupertestSuite() {
     AUTH_LOGIN_OTP_ENABLED: false,
     PASSWORD_RESET_TTL_SECONDS: 3600,
     FRONTEND_URL: 'http://localhost:3000',
-    AUDIT_IDENTIFIER_HMAC_KEY: 'test-key-32-chars-long-audit-hmac',
+    AUDIT_IDENTIFIER_HMAC_KEY: process.env.AUDIT_IDENTIFIER_HMAC_KEY,
     TRUST_PROXY_HOPS: 1,
   };
   process.env.AUTH_TOKEN_SECRET = testConfig.AUTH_TOKEN_SECRET;
