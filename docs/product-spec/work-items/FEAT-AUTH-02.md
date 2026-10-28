@@ -65,3 +65,40 @@ Platform operator provisions initial shop owner accounts without exposing public
 
 Platform operators are real users authenticated through the normal login/session flow and authorized by a platform-scoped role PLATFORM_ADMIN in RBAC. NOT a static ADMIN_API_KEY.
 
+## E2E and build evidence
+
+- **Timestamp**: 2026-10-28T07:41:00+07:00
+- **Workspace**: `C:/Users/gumac/AI/shipde-platform/.worktrees/p-auth-02`
+- **HEAD Commit**: `c0c6a393`
+
+### 1. `pnpm build`
+- **Exit Code**: `0`
+- **Summary**:
+  - Tasks: 8 successful, 8 total
+  - Cached: 0 cached, 8 total
+  - Counts: 8 passed, 0 failed
+  - Time: 36.858s
+  - Summary Lines:
+    ```
+    Tasks:    8 successful, 8 total
+    Cached:    0 cached, 8 total
+      Time:    36.858s
+    ```
+
+### 2. `pnpm test:e2e`
+- **Exit Code**: `0`
+- **Summary**:
+  - Tasks: 1 successful, 1 total
+  - Cached: 0 cached, 1 total
+  - Counts: 1 task passed, 0 failed
+  - E2E Scenarios (E2E-01 .. E2E-12): 12 passed, 0 failed (100%)
+  - Comprehensive Audit Rules (BR-01 .. BR-50): 42 passed, 0 failed (100%)
+  - Time: 2.026s
+  - Summary Lines:
+    ```
+    KẾT QUẢ: 12/12 KỊCH BẢN ĐẠT CHUẨN (100%)
+    🏁 KẾT QUẢ KIỂM TOÁN: 42/42 QUY TẮC ĐẠT CHUẨN (100%)
+    Tasks:    1 successful, 1 total
+    Cached:    0 cached, 1 total
+      Time:    2.026s
+    ```
