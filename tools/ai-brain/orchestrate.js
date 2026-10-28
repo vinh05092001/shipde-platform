@@ -366,7 +366,6 @@ function harnessFor(candidate) {
   }
 }
 
-
 // Record actual writer invocations before downstream verification can fail.
 // A checkpoint replay is not a new invocation and must not duplicate this event.
 function recordWriterResult(job, result, kind, logOpts, env) {
@@ -393,9 +392,6 @@ function recordWriterResult(job, result, kind, logOpts, env) {
     logOpts
   );
 }
-
-
-
 
 /**
  * The host-side test gate: the item's own verification command, run here.
