@@ -1053,7 +1053,8 @@ async function scanAllFullRoutes(options = {}) {
   }
 
   const uniqueRunId = `${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
-  const jsonlFile = options.jsonlFile || path.join(logsDir, `route-scan-${tsStr}-${uniqueRunId}.jsonl`);
+  const jsonlFile =
+    options.jsonlFile || path.join(logsDir, `route-scan-${tsStr}-${uniqueRunId}.jsonl`);
   const mdFile = options.mdFile || path.join(logsDir, `route-scan-${tsStr}-${uniqueRunId}.md`);
 
   fs.writeFileSync(jsonlFile, '', 'utf8');

@@ -312,7 +312,10 @@ function isNineRouterSource(source, key) {
 
 function resolveComboMembers(opts, registry, getWriterComboName) {
   if (Array.isArray(opts && opts.nineRouterComboMembers)) return opts.nineRouterComboMembers;
-  const comboName = typeof getWriterComboName === 'function' ? getWriterComboName(opts, registry) : opts?.nineRouterWriterCombo;
+  const comboName =
+    typeof getWriterComboName === 'function'
+      ? getWriterComboName(opts, registry)
+      : opts?.nineRouterWriterCombo;
   if (!comboName) return [];
   try {
     const evidenceDir = (opts && opts.evidenceDir) || path.join(__dirname, 'data', 'evidence');
@@ -320,7 +323,9 @@ function resolveComboMembers(opts, registry, getWriterComboName) {
     const priorsApi = require('./priors');
     const priorsData = (opts && opts.priors) || priorsApi.loadPriors();
     const listing =
-      (opts && opts.sourceModels && (opts.sourceModels['9router'] || opts.sourceModels['ninerouter'])) ||
+      (opts &&
+        opts.sourceModels &&
+        (opts.sourceModels['9router'] || opts.sourceModels['ninerouter'])) ||
       (opts && opts.catalogue) ||
       [];
     return buildWriterComboModels(listing, evidenceData, priorsData);

@@ -502,9 +502,7 @@ function getDispatchConfig(registry, options = {}) {
   const isExplicitFixture = Boolean(
     registry &&
     ((registry.file && registry.file !== DEFAULT_PATH) ||
-      (dispatch &&
-        'hermesOrchestrator' in dispatch &&
-        !dispatch.hermesOrchestrator) ||
+      (dispatch && 'hermesOrchestrator' in dispatch && !dispatch.hermesOrchestrator) ||
       registry.isFixture)
   );
 
@@ -544,7 +542,9 @@ function getDispatchConfig(registry, options = {}) {
         'DISPATCH_CONFIG_INVALID: hermesOrchestrator.complexity must be a non-empty string'
       );
     }
-    const maxProbes = Number(hermesOrchRaw.maxProbes);
+    const maxProbes = Number(
+      hermesOrchRaw.maxProbes ?? dispatch.maxHermesProbes ?? defaults.maxHermesProbes
+    );
     if (!Number.isSafeInteger(maxProbes) || maxProbes <= 0) {
       throw new Error(
         'DISPATCH_CONFIG_INVALID: hermesOrchestrator.maxProbes must be a positive integer'

@@ -70,9 +70,7 @@ function resolveComboMembers(opts, registry) {
 
 function resolveComboLimits(source, registry, opts, comboName, members) {
   const regDispatch =
-    (registry && registry.dispatch) ||
-    (opts && opts.registry && opts.registry.dispatch) ||
-    {};
+    (registry && registry.dispatch) || (opts && opts.registry && opts.registry.dispatch) || {};
 
   const configLimits =
     regDispatch.nineRouterWriterComboLimits ||
@@ -1505,10 +1503,7 @@ function generateCandidatesWithCatalog(opts) {
       // through evidence or caller-supplied data.
       const comboName = getWriterComboName(o, registry);
       if (source.reachedVia && source.routerAlias) {
-        if (
-          comboName &&
-          comboLib.isNineRouterSource(source)
-        ) {
+        if (comboName && comboLib.isNineRouterSource(source)) {
           continue;
         }
         const harness = harnessOf(source, registry);
@@ -1723,10 +1718,7 @@ function generateCandidatesWithCatalog(opts) {
       const accessPath = accessPathOf(source, registry);
       if (!harness || !accessPath) continue;
       if (source.reachedVia) {
-        if (
-          comboName &&
-          comboLib.isNineRouterSource(source)
-        ) {
+        if (comboName && comboLib.isNineRouterSource(source)) {
           continue;
         }
         // OpenCode reaches 9Router models via ninerouter/ prefix.

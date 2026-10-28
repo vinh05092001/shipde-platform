@@ -372,28 +372,10 @@
     }
   ],
   "dispatch": {
-    "hermesOrchestrator": {
-      "qualityFloor": 60,
-      "costCeiling": 100000,
-      "weightProfile": "LATENCY_FIRST",
-      "complexity": "standard",
-      "maxProbes": 16,
-      "maxRoutesPerAccount": 3
-    },
     "nineRouterWriterCombo": "shipde-writer",
     "nineRouterWriterComboLimits": {
       "contextWindow": 128000,
       "maxOutputTokens": 8192
-    },
-    "weightProfileByRole": { "writer": "BENCHMARK_ONLY" },
-    "operatorWeightProfiles": {
-      "BENCHMARK_ONLY": {
-        "quality": 100,
-        "reliability": 0,
-        "latency": 0,
-        "cost": 0,
-        "applyPenalties": false
-      }
     },
     "routeEvidenceMaxAgeMs": 86400000,
     "maxWriterSelectionRounds": 12,
