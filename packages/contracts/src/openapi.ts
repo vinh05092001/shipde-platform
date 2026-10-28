@@ -543,7 +543,10 @@ export interface paths {
     };
     get?: never;
     put?: never;
-    /** Public verification of invitation token (API-USR-INVITE-VERIFY, FEAT-USR-01) */
+    /**
+     * Public verification of invitation token (API-USR-INVITE-VERIFY, FEAT-USR-01)
+     * @description Token is sent in the JSON body, never in the URL, so access logs, proxies and Referer never retain the plaintext secret (SECURITY-NFR / AC-USR-01-18).
+     */
     post: operations['verifyInvitation'];
     delete?: never;
     options?: never;
