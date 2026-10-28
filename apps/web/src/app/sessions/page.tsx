@@ -12,13 +12,17 @@ export default function SessionsPage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 relative">
+    <div className="min-h-screen bg-slate-50 relative" data-testid="sessions-page-wrapper">
       <div className="max-w-[1600px] mx-auto px-4 sm:px-6 py-6">
         <SessionsTab onToast={handleToast} />
       </div>
 
       {toast && (
-        <div className="fixed bottom-4 right-4 bg-slate-800 text-white px-4 py-2 rounded shadow-lg transition-opacity">
+        <div
+          role="status"
+          data-testid="session-toast"
+          className="fixed bottom-4 right-4 bg-slate-800 text-white px-4 py-2 rounded shadow-lg transition-opacity text-xs font-medium"
+        >
           {toast}
         </div>
       )}
