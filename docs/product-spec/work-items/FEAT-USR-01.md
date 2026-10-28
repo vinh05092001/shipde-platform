@@ -165,6 +165,27 @@ The invitations modal and list in `SCR-USR-01` (`/settings/users`) and public ac
   ```
   *Note on git history*: The 2 historical detections were mock test token string literals committed in commits prior to Repair Round 12. Working tree test literals were neutralized in `4300e6de` and `8b21dc74` so `[Gitleaks dir]` found 0 leaks. In accordance with the shared agent contract ("Never git reset/clean/stash/push/--no-verify"), git history is not rewritten by the author; history is squashed on merge to `main`.
 
+### E2E and build evidence
+
+**Timestamp**: 2026-10-28 07:21:00
+**HEAD**: `de1dc8442ea440863a08c23e1196ea16ce4e94f8`
+
+### pnpm build
+- **Exit Code**: 0
+- **Summary**:
+  - `Tasks: 8 successful, 8 total`
+  - `Cached: 4 cached, 8 total`
+  - `Time: 22.108s`
+
+### pnpm test:e2e
+- **Exit Code**: 0
+- **Summary**:
+  - `KẾT QUẢ: 12/12 KỊCH BẢN ĐẠT CHUẨN (100%)`
+  - `KẾT QUẢ KIỂM TOÁN: 57/57 QUY TẮC ĐẠT CHUẨN (100%)`
+  - `Tasks: 1 successful, 1 total`
+  - `Cached: 0 cached, 1 total`
+  - `Time: 3.39s`
+
 ## Open questions
 
 1. **Multi-tenant Identity Sharing:** When an email address already registered under Merchant A is invited to Merchant B, should the user accept the invite into a shared platform identity with multiple `Membership` rows, or must user accounts remain strictly isolated with independent credentials per merchant? (Current implementation uses merchant-scoped users; full multi-tenant shared identity depends on future identity model unification).
