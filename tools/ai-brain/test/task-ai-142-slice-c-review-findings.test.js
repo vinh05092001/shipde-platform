@@ -1245,27 +1245,98 @@ test('completed checkpoints with missing or invalid receipts block completion an
 });
 
 test('published draft without PR number or injected runner still requires CI', async (t) => {
+  const cp = require('node:child_process');
   const orchestrate = require('../orchestrate');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'draft-missing-ci-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const repoDir = path.join(dir, 'repo');
+  fs.mkdirSync(repoDir);
+  cp.execSync('git init -b main', { cwd: repoDir, stdio: 'ignore' });
+  cp.execSync('git config user.name "Test"', { cwd: repoDir, stdio: 'ignore' });
+  cp.execSync('git config user.email "test@example.com"', { cwd: repoDir, stdio: 'ignore' });
+  fs.writeFileSync(path.join(repoDir, 'a.txt'), 'base\n');
+  cp.execSync('git add . && git commit -m "base"', { cwd: repoDir, stdio: 'ignore' });
+  const baseSha = cp.execSync('git rev-parse HEAD', { cwd: repoDir, encoding: 'utf8' }).trim();
   const checkpointFile = path.join(dir, 'checkpoint.json');
-  const sha = 'a'.repeat(40);
-  fs.writeFileSync(
+
+  const writerCand = {
+    harness: 'hermes',
+    accessPath: 'cli-64a',
+    gateway: '9router',
+    upstream: 'kgw',
+    accountId: 'codex',
+    quotaScope: 'codex',
+    modelId: 'ninerouter/kgw/nvidia/nemotron-3-super-120b-a12b:free',
+    source: '9router',
+    kind: 'router',
+    qualifiedRoles: ['author.foundation'],
+    capabilities: { contextWindow: 64000 },
+    cost: 1,
+    quality: 95,
+  };
+  const reviewerCand = {
+    harness: 'hermes',
+    accessPath: 'cli-64a',
+    gateway: '9router',
+    upstream: 'ocz',
+    accountId: 'codex',
+    quotaScope: 'codex',
+    modelId: 'ninerouter/ocz/big-pickle',
+    source: '9router',
+    kind: 'router',
+    qualifiedRoles: ['reviewer.primary'],
+    capabilities: { contextWindow: 64000 },
+    cost: 1,
+    quality: 80,
+  };
+
+  const res1 = await orchestrate.runOrchestration('setup', {
+    specs: [{ id: 'A', files: ['a.txt'], acceptanceCriteria: ['a works'] }],
     checkpointFile,
-    JSON.stringify({
-      completed: ['A'],
-      reviews: [{ workItemId: 'A', sha, verdict: 'PASS' }],
-      liveSteps: {
-        A: {
-          publication: {
-            status: orchestrate.PublicationStatus.PUBLISHED_DRAFT,
-            branch: 'feat/missing-pr',
-            result: {},
-          },
-        },
+    decisionDir: dir,
+    workerRoot: repoDir,
+    baseSha,
+    candidates: [writerCand, reviewerCand],
+    ranking: { headrooms: { codex: { status: 'available' } } },
+    tests: () => ({
+      pass: true,
+      command: 'node -e "process.exit(0)"',
+      baseExitCode: 1,
+      headExitCode: 0,
+      detail: '',
+      baseOutput: '',
+    }),
+    run: (job) => {
+      if (job.usageFile) {
+        fs.writeFileSync(job.usageFile, JSON.stringify({ session_id: 'sess-' + Date.now() }));
+      }
+      if (job.isReview) {
+        fs.writeFileSync(
+          job.verdictFile || path.join(job.cwd, 'verdict.json'),
+          JSON.stringify({ sha: job.baseSha, verdict: 'PASS', findings: [] })
+        );
+        return { exitCode: 0, stdout: 'review pass' };
+      }
+      fs.writeFileSync(path.join(job.cwd, 'a.txt'), 'changed\n');
+      cp.execSync('git add . && git commit -m "commit"', { cwd: job.cwd, stdio: 'ignore' });
+      return { exitCode: 0, stdout: 'done' };
+    },
+  });
+  assert.equal(res1.outcomes[0].status, 'completed');
+
+  const ckpt = JSON.parse(fs.readFileSync(checkpointFile, 'utf8'));
+  const sha = ckpt.reviews[0].sha;
+  ckpt.liveSteps = {
+    A: {
+      publication: {
+        status: orchestrate.PublicationStatus.PUBLISHED_DRAFT,
+        branch: 'feat/missing-pr',
+        result: {},
       },
-    })
-  );
+    },
+  };
+  fs.writeFileSync(checkpointFile, JSON.stringify(ckpt), 'utf8');
+
   let checked = false;
   t.mock.method(ciGate, 'awaitCi', async (options) => {
     checked = true;

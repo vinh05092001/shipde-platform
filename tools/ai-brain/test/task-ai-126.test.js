@@ -532,7 +532,12 @@ describe('TASK-AI-126', () => {
 
     try {
       const launcher = orch.resolveLauncher(
-        { externalWorkers: 'agy-pool', allowAgyPoolWriter: true },
+        {
+          externalWorkers: 'agy-pool',
+          dispatch: { agyPoolWriterEnabled: true },
+          allowAgyPoolWriter: true,
+          platform: 'win32',
+        },
         null
       );
       const res = launcher({
