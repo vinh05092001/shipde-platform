@@ -136,9 +136,6 @@ function hasFreshOkOrCompletion(candidate, quotaState, options = {}) {
       if (scopeState && scopeState.code === 'OK') {
         const candModel = candidate.modelId || candidate.model || '';
         const cleanCandModel = candModel.replace(/^(ninerouter\/|9router\/)/, '');
-        const bareCandModel = cleanCandModel.includes('/')
-          ? cleanCandModel.split('/').slice(1).join('/')
-          : cleanCandModel;
 
         const isBlanketSource =
           (scopeState.scope === candidate.source ||
@@ -146,15 +143,22 @@ function hasFreshOkOrCompletion(candidate, quotaState, options = {}) {
             scopeState.scope === candidate.gateway) &&
           !scopeState.model;
 
+        const configuredAliases = new Set([
+          candModel,
+          cleanCandModel,
+          ...(Array.isArray(candidate.aliases) ? candidate.aliases : []),
+          ...(Array.isArray(candidate.modelAliases) ? candidate.modelAliases : []),
+        ]);
+        if (candidate.canonicalModel) {
+          configuredAliases.add(candidate.canonicalModel);
+        }
+
         let matchesCandidateScope = false;
         if (candModel) {
-          matchesCandidateScope =
-            scopeState.model === candModel ||
-            scopeState.model === cleanCandModel ||
-            scopeState.model === bareCandModel ||
-            scopeState.scope === candModel ||
-            scopeState.scope === cleanCandModel ||
-            scopeState.scope === bareCandModel;
+          const modelMatches = scopeState.model && configuredAliases.has(scopeState.model);
+          const scopeMatches =
+            !scopeState.model && scopeState.scope && configuredAliases.has(scopeState.scope);
+          matchesCandidateScope = Boolean(modelMatches || scopeMatches);
         } else {
           matchesCandidateScope =
             !scopeState.model &&

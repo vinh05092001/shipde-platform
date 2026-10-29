@@ -898,9 +898,17 @@ function builtinOpencodeModels(source, o) {
   if (Array.isArray(o?.sourceModels?.[source.id])) return o.sourceModels[source.id];
   let models = [];
   try {
-    const timeoutMs =
-      (o && o.registry && o.registry.dispatch && o.registry.dispatch.opencodeModelsTimeoutMs) ||
-      (o && o.dispatchConfig && o.dispatchConfig.opencodeModelsTimeoutMs);
+    const dispatch = (o && o.registry && o.registry.dispatch) || (o && o.dispatchConfig) || {};
+    const configuredTimeout =
+      dispatch.opencodeModelsTimeoutMs || dispatch.modelsTimeoutMs || dispatch.probeTimeoutMs;
+    const timeoutMs = Number(configuredTimeout);
+
+    if (!o?.listOpencodeModels) {
+      if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+        return [];
+      }
+    }
+
     const run =
       o?.listOpencodeModels ||
       (() =>
@@ -2890,4 +2898,5 @@ module.exports = {
   getWriterComboName,
   isNineRouterCandidate,
   isIndividualNineRouterCandidate,
+  builtinOpencodeModels,
 };

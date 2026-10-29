@@ -372,12 +372,42 @@ function classifyQuotaResponse(status, body, headers, now = Date.now()) {
   };
 }
 
-function loadQuotaState(options = {}) {
-  if (options.quotaState && typeof options.quotaState === 'object') {
-    return options.quotaState;
+function migrateQuotaScopes(scopes) {
+  if (!scopes || typeof scopes !== 'object' || Array.isArray(scopes)) return scopes || {};
+  const cleaned = {};
+  for (const [key, entry] of Object.entries(scopes)) {
+    if (!entry || typeof entry !== 'object') continue;
+    // Invalidate previously promoted prefix/blanket entries where NO_CHANNEL was stamped
+    const isPromotedPrefixNoChannel =
+      entry.code === 'NO_CHANNEL' &&
+      entry.scope &&
+      !entry.scope.includes('/') &&
+      entry.model &&
+      entry.model.includes('/');
+    const isPromotedBlanketNoChannel =
+      entry.code === 'NO_CHANNEL' &&
+      entry.source &&
+      (entry.scope === entry.source || key === entry.source);
+    if (isPromotedPrefixNoChannel || isPromotedBlanketNoChannel) {
+      continue;
+    }
+    cleaned[key] = entry;
   }
-  if (options.state && typeof options.state === 'object') {
-    return options.state;
+  return cleaned;
+}
+
+function loadQuotaState(options = {}) {
+  let state = null;
+  if (options.quotaState && typeof options.quotaState === 'object') {
+    state = options.quotaState;
+  } else if (options.state && typeof options.state === 'object') {
+    state = options.state;
+  }
+  if (state) {
+    if (state.scopes && typeof state.scopes === 'object') {
+      state.scopes = migrateQuotaScopes(state.scopes);
+    }
+    return state;
   }
   const rootDir = options.rootDir || options.root;
   const filePath =
@@ -406,7 +436,7 @@ function loadQuotaState(options = {}) {
           !Array.isArray(data.sourceFreshness) &&
           data.sourceFreshness) ||
         {},
-      scopes: (data && typeof data.scopes === 'object' && data.scopes) || {},
+      scopes: (data && typeof data.scopes === 'object' && migrateQuotaScopes(data.scopes)) || {},
     };
   } catch (err) {
     if (options.throwOnError) {
@@ -531,6 +561,7 @@ function getQuotaScopeState(candidate, quotaState, options = {}) {
   // Resolve source and upstream scope state for one route identity.
   const resolveIdentity = (sid) => {
     const aliases = expandSourceAliases(sid, opts.registry || options?.registry);
+    const blockOpts = { ...opts, candidate, modelId, cleanModelId };
 
     // 1. Check for specific model entries across all aliases
     let activeModelEntry = null;
@@ -543,7 +574,7 @@ function getQuotaScopeState(candidate, quotaState, options = {}) {
         const entry = scopes[k];
         if (entry) {
           if (!activeModelEntry) activeModelEntry = entry;
-          if (isScopeBlocked(entry, now, opts)) {
+          if (isScopeBlocked(entry, now, blockOpts)) {
             const source = scopes[a] || scopes[sid] || null;
             return { source, upstream: entry, blocked: entry };
           }
@@ -551,7 +582,7 @@ function getQuotaScopeState(candidate, quotaState, options = {}) {
       }
     }
     // If a model-level entry was explicitly found and not blocked, model is usable
-    if (activeModelEntry && !isScopeBlocked(activeModelEntry, now, opts)) {
+    if (activeModelEntry && !isScopeBlocked(activeModelEntry, now, blockOpts)) {
       const source = scopes[sid] || null;
       return { source, upstream: activeModelEntry, blocked: null };
     }
@@ -563,7 +594,7 @@ function getQuotaScopeState(candidate, quotaState, options = {}) {
 
     for (const a of aliases) {
       const source = scopes[a] || null;
-      if (source && isScopeBlocked(source, now, opts)) {
+      if (source && isScopeBlocked(source, now, blockOpts)) {
         foundBlocked = foundBlocked || source;
       }
       if (source && !foundSource) foundSource = source;
@@ -573,7 +604,9 @@ function getQuotaScopeState(candidate, quotaState, options = {}) {
         .map((id) => (typeof id === 'string' ? scopes[`${a}::${id}`] : id))
         .filter(Boolean);
 
-      const blockedUpstream = upstreamEntries.find((entry) => isScopeBlocked(entry, now, opts));
+      const blockedUpstream = upstreamEntries.find((entry) =>
+        isScopeBlocked(entry, now, blockOpts)
+      );
       if (blockedUpstream) {
         foundBlocked = foundBlocked || blockedUpstream;
       }
@@ -581,7 +614,7 @@ function getQuotaScopeState(candidate, quotaState, options = {}) {
     }
 
     // Blocked source takes precedence over non-blocked upstream
-    if (foundSource && isScopeBlocked(foundSource, now, opts)) {
+    if (foundSource && isScopeBlocked(foundSource, now, blockOpts)) {
       return { source: foundSource, upstream: foundUpstream, blocked: foundSource };
     }
 
@@ -594,10 +627,19 @@ function getQuotaScopeState(candidate, quotaState, options = {}) {
   if (routeBlocked) return resolved[0].blocked;
   const usable = resolved.find((r) => !r.blocked) || null;
   const sourceScope = usable ? usable.source : null;
-  const upstreamScope = usable ? usable.upstream : null;
+  const rawUpstream = usable ? usable.upstream : null;
+  const upstreamScope =
+    rawUpstream &&
+    rawUpstream.code === 'NO_CHANNEL' &&
+    !isScopeBlocked(rawUpstream, now, { ...opts, candidate, modelId, cleanModelId })
+      ? null
+      : rawUpstream;
 
   // If direct quotaScope is blocked, return direct
-  if (directScope && isScopeBlocked(directScope, now, opts)) {
+  if (
+    directScope &&
+    isScopeBlocked(directScope, now, { ...opts, candidate, modelId, cleanModelId })
+  ) {
     return directScope;
   }
 
@@ -679,6 +721,26 @@ function isScopeBlocked(scopeEntry, now = Date.now(), options = {}) {
   const isModelScoped = !isSourceScoped && Boolean(scopeEntry.model || scopeEntry.scope);
   if (scopeEntry.code === 'NO_CHANNEL') {
     if (!isModelScoped) return false;
+    const cand = options.candidate || options.cand;
+    const candModel = cand
+      ? cand.modelId || cand.model || ''
+      : options.modelId || options.cleanModelId;
+    if (candModel) {
+      const clean = candModel.replace(/^(ninerouter\/|9router\/)/, '');
+      const isExact =
+        scopeEntry.model === candModel ||
+        scopeEntry.model === clean ||
+        scopeEntry.scope === candModel ||
+        scopeEntry.scope === clean;
+      if (!isExact) return false;
+    } else if (
+      scopeEntry.scope &&
+      !scopeEntry.scope.includes('/') &&
+      scopeEntry.model &&
+      scopeEntry.model.includes('/')
+    ) {
+      return false;
+    }
   } else if (!BLOCKING_CODES.has(scopeEntry.code)) {
     return false;
   }
@@ -2064,13 +2126,17 @@ async function scanAllQuotas(options = {}) {
 
       if (!repModel && src.endpoint && src.verify?.method === 'models-list') {
         const apiKey = (options.env || process.env)[src.credential?.env] || '';
-        const discoveryTimeoutMs =
+        const discoveryTimeoutMs = Number(
           src.verify?.timeoutMs ||
-          dispatchConfig.modelsTimeoutMs ||
-          dispatchConfig.fullRouteScan?.externalModelsTimeoutMs ||
-          dispatchConfig.externalModelsTimeoutMs ||
-          dispatchConfig.probeTimeoutMs ||
-          3000;
+            dispatchConfig.modelsTimeoutMs ||
+            dispatchConfig.fullRouteScan?.externalModelsTimeoutMs ||
+            dispatchConfig.externalModelsTimeoutMs ||
+            dispatchConfig.probeTimeoutMs
+        );
+        if (!Number.isFinite(discoveryTimeoutMs) || discoveryTimeoutMs <= 0) {
+          // Fail closed: require finite positive configured timeout before discovery
+          continue;
+        }
         try {
           const fetchFn = options.fetchFn || options.fetch || globalThis.fetch;
           const mres = await fetchFn(

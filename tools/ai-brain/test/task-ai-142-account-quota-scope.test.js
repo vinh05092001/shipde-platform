@@ -319,13 +319,23 @@ test('TASK-AI-142 Finding 7: readQuotaText does not treat model name Argon as qu
 
     // Test models-out.txt filtering and unknown family exclusion in candidates
     const candidatesApi = require('../candidates');
-    fs.writeFileSync(path.join(accDir, 'models-out.txt'), 'gemini-2.5-pro\n');
-    const catalog = ['gemini-2.5-pro', 'gemini-2.5-flash', 'unknown-mystery-model'];
+    fs.writeFileSync(
+      path.join(accDir, 'models-out.txt'),
+      'gemini-2.5-pro\nunknown-mystery-model\nag/gemini-unmapped-custom\n'
+    );
+    const catalog = [
+      'gemini-2.5-pro',
+      'gemini-2.5-flash',
+      'unknown-mystery-model',
+      'ag/gemini-unmapped-custom',
+    ];
+    const rejections = [];
     const poolCandidates = candidatesApi.poolAccountCandidates({
       runsDir: tempDir,
       models: catalog,
       allowUnprobedCandidates: true,
       catalogue: catalog,
+      candidateGenerationRejections: rejections,
       registry: {
         sources: [
           {
@@ -353,7 +363,18 @@ test('TASK-AI-142 Finding 7: readQuotaText does not treat model name Argon as qu
     assert.equal(
       emittedModels.includes('unknown-mystery-model'),
       false,
-      'must not emit unknown family model'
+      'must not emit unknown family model even when listed in models-out.txt inventory'
+    );
+    assert.equal(
+      emittedModels.includes('ag/gemini-unmapped-custom'),
+      false,
+      'must not emit inventory-listed unmapped model containing gemini substring'
+    );
+    assert.ok(
+      rejections.some(
+        (r) => r.reasonCode === 'UNKNOWN_MODEL_FAMILY' || r.reasonCode === 'AGY_MODEL_ID_UNMAPPED'
+      ),
+      'must record rejection for inventory-listed unmapped or unknown family models'
     );
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });

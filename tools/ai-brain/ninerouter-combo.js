@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
+const https = require('https');
 const crypto = require('crypto');
 const { loadPriors, priorFor } = require('./priors');
 const evidenceApi = require('./evidence');
@@ -18,16 +19,28 @@ function resolveEndpoint(opts = {}) {
     } catch {}
   }
   if (!endpoint) {
-    return { host: opts.host || null, port: opts.port ? Number(opts.port) : null };
+    const protocol = opts.protocol ? String(opts.protocol).toLowerCase() : null;
+    const defaultPort = protocol === 'https:' ? 443 : protocol === 'http:' ? 80 : null;
+    return {
+      protocol,
+      host: opts.host || null,
+      port: opts.port ? Number(opts.port) : defaultPort,
+    };
   }
   try {
     const url = new URL(endpoint);
+    const protocol = (opts.protocol || url.protocol || '').toLowerCase();
+    if (protocol !== 'http:' && protocol !== 'https:') {
+      return { protocol: null, host: null, port: null };
+    }
+    const defaultPort = protocol === 'https:' ? 443 : 80;
     return {
+      protocol,
       host: opts.host || url.hostname,
-      port: opts.port ? Number(opts.port) : url.port ? Number(url.port) : 80,
+      port: opts.port ? Number(opts.port) : url.port ? Number(url.port) : defaultPort,
     };
   } catch {
-    return { host: opts.host || null, port: opts.port ? Number(opts.port) : null };
+    return { protocol: null, host: null, port: null };
   }
 }
 
@@ -159,19 +172,38 @@ function buildWriterComboModels(listing, evidenceData, priorsData, now = Date.no
   return scored.map((s) => s.modelId);
 }
 
-function httpRequest({ host, port, path: reqPath, method, headers, body, endpoint, registry }) {
-  const resolved = resolveEndpoint({ host, port, endpoint, registry });
-  if (!resolved.host || !resolved.port) {
-    return Promise.reject(new Error('CONFIG_MISSING: 9router host and port are required'));
+function httpRequest({
+  host,
+  port,
+  protocol,
+  path: reqPath,
+  method,
+  headers,
+  body,
+  endpoint,
+  registry,
+}) {
+  const resolved = resolveEndpoint({ host, port, protocol, endpoint, registry });
+  if (!resolved.host || !resolved.port || !resolved.protocol) {
+    return Promise.reject(
+      new Error('CONFIG_MISSING: 9router host, port, and valid protocol are required')
+    );
   }
+  if (resolved.protocol !== 'http:' && resolved.protocol !== 'https:') {
+    return Promise.reject(
+      new Error(`INVALID_PROTOCOL: Only http: and https: are supported, got ${resolved.protocol}`)
+    );
+  }
+  const transport = resolved.protocol === 'https:' ? https : http;
   return new Promise((resolve, reject) => {
     const payload = body ? (typeof body === 'string' ? body : JSON.stringify(body)) : null;
     const reqHeaders = { ...headers };
     if (payload && !reqHeaders['Content-Length']) {
       reqHeaders['Content-Length'] = Buffer.byteLength(payload);
     }
-    const req = http.request(
+    const req = transport.request(
       {
+        protocol: resolved.protocol,
         hostname: resolved.host,
         port: resolved.port,
         path: reqPath,
@@ -196,12 +228,15 @@ function httpRequest({ host, port, path: reqPath, method, headers, body, endpoin
   });
 }
 
-async function fetchLiveModels({ host, port, apiKey }) {
+async function fetchLiveModels({ host, port, protocol, apiKey, endpoint, registry }) {
   const key = apiKey || process.env.NINEROUTER_API_KEY || '';
   const headers = key ? { Authorization: `Bearer ${key}` } : {};
   const res = await httpRequest({
     host,
     port,
+    protocol,
+    endpoint,
+    registry,
     path: '/v1/models',
     method: 'GET',
     headers,
@@ -228,9 +263,9 @@ async function syncWriterCombo(opts = {}) {
   if (!name) {
     throw new Error('CONFIG_MISSING: writer combo name is required');
   }
-  const { host, port } = resolveEndpoint(opts);
-  if (!host || !port) {
-    throw new Error('CONFIG_MISSING: 9router host and port are required');
+  const resolved = resolveEndpoint(opts);
+  if (!resolved.host || !resolved.port || !resolved.protocol) {
+    throw new Error('CONFIG_MISSING: 9router host, port, and valid protocol are required');
   }
 
   let models = opts.models;
@@ -238,7 +273,14 @@ async function syncWriterCombo(opts = {}) {
     const evidenceDir = opts.evidenceDir || path.join(__dirname, 'data', 'evidence');
     const evidenceData = evidenceApi.loadEvidence(evidenceDir);
     const priorsData = loadPriors();
-    const liveListing = await fetchLiveModels({ host, port, apiKey: opts.apiKey });
+    const liveListing = await fetchLiveModels({
+      host: resolved.host,
+      port: resolved.port,
+      protocol: resolved.protocol,
+      apiKey: opts.apiKey,
+      endpoint: opts.endpoint,
+      registry: opts.registry,
+    });
     models = buildWriterComboModels(liveListing, evidenceData, priorsData);
   }
 
@@ -259,8 +301,9 @@ async function syncWriterCombo(opts = {}) {
 
   // Get existing combos
   const listRes = await httpRequest({
-    host,
-    port,
+    host: resolved.host,
+    port: resolved.port,
+    protocol: resolved.protocol,
     path: '/api/combos',
     method: 'GET',
     headers: adminHeaders,
@@ -276,8 +319,9 @@ async function syncWriterCombo(opts = {}) {
   if (existing && existing.id) {
     // Update combo
     const updateRes = await httpRequest({
-      host,
-      port,
+      host: resolved.host,
+      port: resolved.port,
+      protocol: resolved.protocol,
       path: `/api/combos/${existing.id}`,
       method: 'PUT',
       headers: adminHeaders,
@@ -290,8 +334,9 @@ async function syncWriterCombo(opts = {}) {
   } else {
     // Create combo
     const createRes = await httpRequest({
-      host,
-      port,
+      host: resolved.host,
+      port: resolved.port,
+      protocol: resolved.protocol,
       path: '/api/combos',
       method: 'POST',
       headers: adminHeaders,
@@ -382,4 +427,6 @@ module.exports = {
   isIndividualNineRouterCandidate,
   isNineRouterSource,
   resolveComboMembers,
+  resolveEndpoint,
+  httpRequest,
 };
