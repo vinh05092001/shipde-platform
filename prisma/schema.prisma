@@ -191,61 +191,6 @@ model Branch {
   @@map("branches")
 }
 
-model Warehouse {
-  id                          String    @id @default(uuid()) @db.Uuid
-  merchant_id                 String    @db.Uuid
-  name                        String    @db.VarChar(255)
-  code                        String    @db.VarChar(64)
-  status                      String    @default("active") @db.VarChar(32)
-  is_default                  Boolean   @default(false)
-
-  // Pickup address
-  contact_name                String    @db.VarChar(255)
-  contact_phone               String    @db.VarChar(32)
-  contact_email               String?   @db.VarChar(255)
-  address_line                String    @db.Text
-  ward                        String?   @db.VarChar(128)
-  district                    String    @db.VarChar(128)
-  city                        String    @db.VarChar(128)
-  postal_code                 String?   @db.VarChar(32)
-  address_json                Json      @db.JsonB
-
-  // Return address (custom if use_different_return_address is true, else mirrors pickup)
-  use_different_return_address Boolean   @default(false)
-  return_contact_name         String?   @db.VarChar(255)
-  return_contact_phone        String?   @db.VarChar(32)
-  return_address_line         String?   @db.Text
-  return_ward                 String?   @db.VarChar(128)
-  return_district             String?   @db.VarChar(128)
-  return_city                 String?   @db.VarChar(128)
-  return_address_json         Json?     @db.JsonB
-
-  // Schedule & operating hours
-  operating_hours             Json?     @db.JsonB
-  cutoff_time                 String?   @db.VarChar(10)
-  schedule_notes              String?   @db.VarChar(500)
-
-  // Contacts (secondary/escalation contacts)
-  contacts_json               Json?     @db.JsonB
-
-  // Printer defaults
-  printer_paper_size          String    @default("A6") @db.VarChar(32)
-  printer_dpi                 Int       @default(203)
-  printer_name                String?   @db.VarChar(255)
-  printer_auto_print          Boolean   @default(false)
-  printer_config              Json?     @db.JsonB
-
-  created_at                  DateTime  @default(now()) @db.Timestamptz
-  updated_at                  DateTime  @updatedAt @db.Timestamptz
-
-  merchant                    Merchant  @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
-
-  @@unique([merchant_id, code])
-  @@index([merchant_id, status])
-  @@index([merchant_id, is_default])
-  @@map("warehouses")
-}
-
 model BulkActionBatch {
   id              String    @id @default(uuid()) @db.Uuid
   merchant_id     String    @db.Uuid

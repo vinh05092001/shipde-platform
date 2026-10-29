@@ -5,12 +5,12 @@
 | Field | Value |
 | --- | --- |
 | Work Item ID / Feature ID | `FEAT-COM-03` |
-| Status | `IN_PROGRESS` |
+| Status | `READY_FOR_CODEX` |
 | Delivery order | 22 |
 | Dependencies | `TASK-FOUND-04`, `FEAT-AUTH-01`..`06`, `FEAT-USR-01`, `FEAT-USR-02`, `FEAT-RBAC-01`, `FEAT-RBAC-02`, `FEAT-ORG-01` |
 | Assigned author | `GEMINI` |
 | Risk | HIGH — authorization, tenant isolation, privilege ceiling and destructive action safety |
-| Allowed paths | `apps/api/src/` relevant bulk and action modules and tests; `packages/contracts/src/`; `packages/config/src/`; `prisma/schema.prisma` and migrations; `docs/product-spec/contracts/openapi.yaml`; this Work Item and its register row |
+| Allowed paths | `apps/api/src/` relevant bulk and action modules and tests; `apps/web/src/` relevant components, pages and tests; `apps/web/package.json`; `packages/contracts/src/`; `packages/config/src/`; `prisma/schema.prisma` and migrations; `docs/product-spec/contracts/openapi.yaml`; this Work Item and its register row |
 | Reviewer | Codex — fresh independent task |
 | Branch | `feat/feat-com-03` |
 | Pull Request | Pending |
@@ -110,6 +110,14 @@ Out of scope:
 | `AC-COM-03-12` | Bulk export selected rows to CSV | 200 OK; returns valid CSV formatted string with correct headers, escaped fields, and masked PII | CSV export test |
 | `AC-COM-03-13` | One audit log recorded per mutated item | `audit_logs` table contains exactly one record per succeeded item with masked PII and actor ID | Audit trail test |
 | `AC-COM-03-14` | Unsupported entity requested (orders / shipments) | 400 `UNSUPPORTED_BULK_ENTITY` with actionable explanation | Negative entity test |
+| `AC-COM-03-15` | Bulk action UI in users, branches, and warehouses lists with multi-select | Checkboxes rendered on header & rows; selection count badge updates accurately | Web UI state test (`bulk-actions-states.test.ts` S2, S9, S10) |
+| `AC-COM-03-16` | Action bar appearance and buttons | Rendered on selection; displays actions for entity type; clear selection resets | Web UI state test (`bulk-actions-states.test.ts` S2, S9, S10) |
+| `AC-COM-03-17` | Destructive action confirmation dialog | Explicit warning of session revocation & guards; requires confirmation click before API call | Web UI state test (`bulk-actions-states.test.ts` S4) |
+| `AC-COM-03-18` | In-flight progress state indicator | Progress indicator/spinner displayed during processing | Web UI state test (`bulk-actions-states.test.ts` S5) |
+| `AC-COM-03-19` | Per-item truthful results report modal | Granular success/failure badges, canonical error codes and Vietnamese explanations | Web UI state test (`bulk-actions-states.test.ts` S6, S7) |
+| `AC-COM-03-20` | Partial failure state & retry failed items only | Partial failure banner; retry button filters selection to `failed_ids` only | Web UI state test (`bulk-actions-states.test.ts` S6) |
+| `AC-COM-03-21` | UI permission enforcement from API (no hardcoded roles) | User permissions checked dynamically; unauthorized/unknown users fail closed | Web UI state test (`bulk-actions-states.test.ts` S1, S3) |
+| `AC-COM-03-22` | Accessibility (a11y) standards gate | Zero a11y violations across all components | `tsx scripts/verify-a11y.ts` |
 
 ## Verification commands
 
@@ -117,8 +125,11 @@ Out of scope:
 # Configuration & Hardcode checks
 node scripts/ai/check-no-hardcode.mjs
 
+# Accessibility Gate
+pnpm exec tsx scripts/verify-a11y.ts
+
 # Formatting
-pnpm exec prettier --check docs/product-spec/work-items/FEAT-COM-03.md docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv apps/api/src/bulk/* packages/config/src/* packages/contracts/src/*
+pnpm exec prettier --check docs/product-spec/work-items/FEAT-COM-03.md docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv apps/api/src/bulk/* apps/web/src/components/bulk/* apps/web/src/tests/bulk-actions-states.test.ts packages/config/src/* packages/contracts/src/*
 
 # TypeScript compilation
 pnpm typecheck
@@ -126,20 +137,24 @@ pnpm typecheck
 # Linting
 pnpm lint
 
-# Unit tests
+# Backend Unit tests
 pnpm --filter @shipde/api exec tsx --test src/bulk/bulk.unit.spec.ts
 
 # Supertest HTTP integration tests
 pnpm --filter @shipde/api exec tsx --tsconfig tsconfig.json src/bulk/bulk.supertest.spec.ts
+
+# Frontend Web tests
+pnpm --filter @shipde/web test
 ```
 
 ## Codex review record
 
 | Review round | Commit | Verdict | Findings resolved |
 | --- | --- | --- | --- |
-| Round 1 | Pending | In progress | Initial implementation of bulk framework and first actions |
+| Round 1 | 9d15ae6 | PASS (Backend) | Initial implementation of bulk framework, DB model, migration, RBAC scope enforcement and first actions |
+| Round 2 | Current | READY_FOR_CODEX | Complete Step 2 Web UI for users, branches, warehouses lists: multi-select, action bar, confirm step for destructive actions, per-item results with retry of failed items only, progress and partial-failure states, API permission derivation without role hardcodes, and web tests per state |
 
 ## Residual limitations
 
-- Web UI multi-select bar, batch progress indicator, and partial-failure retry interactions are scheduled for subsequent run per instructions.
+- None (Backend framework, entity action handlers, and web UI with multi-select, action bar, destructive confirmation, progress state, per-item results, partial-failure retry, and permission enforcement from API are fully implemented and verified).
 - Orders, shipments, and carrier actions are intentionally excluded pending asynchronous approval workflows.
