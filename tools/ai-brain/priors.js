@@ -88,12 +88,39 @@ function getDeploymentSuffixes(config) {
   return [];
 }
 
+function loadRegistrySourceIds() {
+  const ids = new Set();
+  try {
+    const sourcesPath = path.join(__dirname, 'sources.json');
+    if (fs.existsSync(sourcesPath)) {
+      const parsed = JSON.parse(fs.readFileSync(sourcesPath, 'utf8'));
+      if (Array.isArray(parsed && parsed.sources)) {
+        for (const s of parsed.sources) {
+          if (s && typeof s.id === 'string' && s.id.trim()) {
+            ids.add(s.id.trim().toLowerCase());
+          }
+        }
+      }
+    }
+  } catch (_) {}
+  return ids;
+}
+
 function getRouterPrefixes(config) {
-  const cfg = config || defaultDescriptor;
-  if (Array.isArray(cfg && cfg.routerPrefixes) && cfg.routerPrefixes.length) {
-    return new Set(cfg.routerPrefixes.map((p) => p.toLowerCase()));
+  if (
+    config &&
+    config !== defaultDescriptor &&
+    Object.prototype.hasOwnProperty.call(config, 'routerPrefixes')
+  ) {
+    if (Array.isArray(config.routerPrefixes)) {
+      return new Set(config.routerPrefixes.map((p) => p.toLowerCase()));
+    }
+    return new Set();
   }
-  return new Set();
+  const registrySources = loadRegistrySourceIds();
+  const cfg = config || defaultDescriptor;
+  const fromConfig = Array.isArray(cfg && cfg.routerPrefixes) ? cfg.routerPrefixes : [];
+  return new Set([...fromConfig.map((p) => p.toLowerCase()), ...registrySources]);
 }
 
 function splitModelEffort(value, config) {
@@ -235,8 +262,8 @@ function priorFor(candidate, role, priors, now) {
   const bonus = TIER_BONUSES[tier] ?? null;
   if (bonus === null) return neutralPrior(canonical);
 
-  const profile = roleBenchmarkProfile(role);
-  const rankingMaxima = benchmarkMaxima(ranking);
+  const profile = roleBenchmarkProfile(role, priors?.roleWeights ? priors : priors?.config);
+  const rankingMaxima = benchmarkMaxima(ranking, profile);
   const weighted = weightedBenchmarkScore(match, profile, rankingMaxima);
   // Zero role coverage must NOT inherit benchmarkScore.
   const priorScore = weighted.coverage > 0 ? weighted.score : null;
@@ -356,7 +383,25 @@ function benchmarkScore(match) {
       : null;
 }
 
-function roleBenchmarkProfile(role) {
+function roleBenchmarkProfile(role, config) {
+  const weightsSource = config && (config.roleWeights || config.sources ? config : null);
+  if (weightsSource && weightsSource.roleWeights) {
+    if (role === 'planner' || role === 'planner.default') {
+      if (weightsSource.roleWeights.planner) return weightsSource.roleWeights.planner;
+    }
+    if (role === 'reviewer' || role === 'security-review' || role === 'review') {
+      if (weightsSource.roleWeights.review) return weightsSource.roleWeights.review;
+      if (weightsSource.roleWeights.reviewer) return weightsSource.roleWeights.reviewer;
+    }
+    if (
+      role === 'writer' ||
+      role === 'coding' ||
+      (typeof role === 'string' && role.startsWith('author.'))
+    ) {
+      if (weightsSource.roleWeights.coding) return weightsSource.roleWeights.coding;
+      if (weightsSource.roleWeights.writer) return weightsSource.roleWeights.writer;
+    }
+  }
   if (role === 'planner' || role === 'planner.default') return ROLE_BENCHMARK_WEIGHTS.planner;
   if (role === 'reviewer' || role === 'security-review') return ROLE_BENCHMARK_WEIGHTS.reviewer;
   if (role === 'writer' || (typeof role === 'string' && role.startsWith('author.')))
@@ -376,10 +421,41 @@ function benchmarkValue(match, name) {
   return Number.isFinite(score) ? score : null;
 }
 
-function benchmarkMaxima(ranking) {
+function benchmarkMaxima(ranking, profile) {
   const maxima = {};
-  for (const row of ranking) {
-    for (const name of Object.keys(ROLE_BENCHMARK_WEIGHTS.planner)) {
+  const metricNames = new Set(Object.keys(ROLE_BENCHMARK_WEIGHTS.planner));
+  if (profile && typeof profile === 'object') {
+    for (const k of Object.keys(profile)) metricNames.add(k);
+  }
+  const rows = Array.isArray(ranking)
+    ? ranking
+    : ranking && Array.isArray(ranking.ranking)
+      ? ranking.ranking
+      : [];
+  for (const row of rows) {
+    if (Array.isArray(row.benchmarks)) {
+      for (const b of row.benchmarks) {
+        if (b && b.name && Number.isFinite(b.score)) metricNames.add(b.name);
+      }
+    } else if (row.benchmarks && typeof row.benchmarks === 'object') {
+      for (const [k, v] of Object.entries(row.benchmarks)) {
+        if (Number.isFinite(Number(v))) metricNames.add(k);
+      }
+    }
+    for (const eff of Object.values(row.efforts || {})) {
+      if (Array.isArray(eff.benchmarks)) {
+        for (const b of eff.benchmarks) {
+          if (b && b.name && Number.isFinite(b.score)) metricNames.add(b.name);
+        }
+      } else if (eff.benchmarks && typeof eff.benchmarks === 'object') {
+        for (const [k, v] of Object.entries(eff.benchmarks)) {
+          if (Number.isFinite(Number(v))) metricNames.add(k);
+        }
+      }
+    }
+  }
+  for (const row of rows) {
+    for (const name of metricNames) {
       const score = benchmarkValue(row, name);
       if (score !== null) maxima[name] = Math.max(maxima[name] || 0, score);
       for (const eff of Object.values(row.efforts || {})) {
@@ -520,6 +596,16 @@ function matchModelPrior(modelId, ranking, options) {
       if (config && config.aliasRules) {
         const hyphenated = applyDigitBoundaryHyphen(row.canonical, config.aliasRules);
         if (hyphenated) byCanonical.set(hyphenated, row);
+      }
+    }
+    if (Array.isArray(row.aliases)) {
+      for (const alias of row.aliases) {
+        if (typeof alias !== 'string') continue;
+        byCanonical.set(alias, row);
+        const norm = leaderboardModelId(alias, config);
+        if (norm) byCanonical.set(norm, row);
+        const { base: aliasBase } = splitModelEffort(alias, config);
+        if (aliasBase) byCanonical.set(aliasBase, row);
       }
     }
   }
@@ -777,12 +863,24 @@ function getBenchmarkStreamKey(b) {
 
 function applyNormalizationAndTiers(rows, config, now) {
   const method = getNormalizationMethod(config);
+  const provMultiplier =
+    typeof config?.provisionalWeightMultiplier === 'number'
+      ? config.provisionalWeightMultiplier
+      : 0.5;
 
   // 1. Deduplicate benchmarks on each row and effort
   for (const row of rows) {
     row.benchmarks = dedupeBenchmarks(row.benchmarks);
+    const nonFallback = (row.benchmarks || []).filter((b) => !b.fallback);
+    if (nonFallback.length > 0 && nonFallback.every((b) => b.provisional)) {
+      row.provisional = true;
+    }
     for (const effData of Object.values(row.efforts || {})) {
       effData.benchmarks = dedupeBenchmarks(effData.benchmarks);
+      const effNonFallback = (effData.benchmarks || []).filter((b) => !b.fallback);
+      if (effNonFallback.length > 0 && effNonFallback.every((b) => b.provisional)) {
+        effData.provisional = true;
+      }
     }
   }
 
@@ -827,7 +925,12 @@ function applyNormalizationAndTiers(rows, config, now) {
     }
 
     // 4. Derive aggregate score from normalized scores
-    const normScores = (row.benchmarks || []).map((b) => b.normalizedScore).filter(Number.isFinite);
+    const normScores = (row.benchmarks || [])
+      .map((b) => {
+        if (!Number.isFinite(b.normalizedScore)) return null;
+        return b.provisional ? b.normalizedScore * provMultiplier : b.normalizedScore;
+      })
+      .filter((s) => s !== null);
     const score = normScores.length
       ? Math.round((normScores.reduce((sum, v) => sum + v, 0) / normScores.length) * 10) / 10
       : null;
@@ -841,8 +944,11 @@ function applyNormalizationAndTiers(rows, config, now) {
 
     for (const effData of Object.values(row.efforts || {})) {
       const effNormScores = (effData.benchmarks || [])
-        .map((b) => b.normalizedScore)
-        .filter(Number.isFinite);
+        .map((b) => {
+          if (!Number.isFinite(b.normalizedScore)) return null;
+          return b.provisional ? b.normalizedScore * provMultiplier : b.normalizedScore;
+        })
+        .filter((s) => s !== null);
       effData.score = effNormScores.length
         ? Math.round((effNormScores.reduce((sum, v) => sum + v, 0) / effNormScores.length) * 10) /
           10
@@ -863,8 +969,29 @@ function applyNormalizationAndTiers(rows, config, now) {
     }
   }
 
-  // 5. Derive codingTier / reviewTier from the normalized aggregate
+  // 5. Provisional scores can never outrank official scores
+  const officialScores = rows
+    .filter((r) => !r.provisional && r.score !== null && Number.isFinite(r.score))
+    .map((r) => r.score);
+  const minOfficialScore = officialScores.length ? Math.min(...officialScores) : null;
+  if (minOfficialScore !== null) {
+    for (const row of rows) {
+      if (row.provisional && row.score !== null && row.score >= minOfficialScore) {
+        row.score = Math.max(0, Math.round((minOfficialScore - 0.1) * 10) / 10);
+        row.normalizedScore = row.score;
+      }
+      for (const effData of Object.values(row.efforts || {})) {
+        if (effData.provisional && effData.score !== null && effData.score >= minOfficialScore) {
+          effData.score = Math.max(0, Math.round((minOfficialScore - 0.1) * 10) / 10);
+          effData.normalizedScore = effData.score;
+        }
+      }
+    }
+  }
+
+  // 6. Derive codingTier / reviewTier from the normalized aggregate
   assignQuartileTiers(rows);
+
   return rows;
 }
 
@@ -893,6 +1020,9 @@ function mergePriorDocuments(documents, now, options) {
           efforts: {},
           sources: [],
         };
+      }
+      if (Array.isArray(item.aliases) && item.aliases.length) {
+        row.aliases = Array.from(new Set([...(row.aliases || []), ...item.aliases]));
       }
 
       const docSources = (document && document.sources) || [];
@@ -929,7 +1059,15 @@ function mergePriorDocuments(documents, now, options) {
                 new Date(now || Date.now()).toISOString(),
             }
           : null;
-        const benchEntry = { name, score, source: normalizedBenchmarkSource };
+        const isProvisional = Boolean(
+          (value && typeof value === 'object' && value.provisional) || item.provisional
+        );
+        const benchEntry = {
+          name,
+          score,
+          source: normalizedBenchmarkSource,
+          ...(isProvisional ? { provisional: true } : {}),
+        };
         targetBenchmarks.push(benchEntry);
         if (normalizedBenchmarkSource && normalizedBenchmarkSource.url) {
           row.sources.push(normalizedBenchmarkSource);
@@ -993,14 +1131,22 @@ function mergePriorDocuments(documents, now, options) {
 
   const rows = Array.from(byCanonical.values());
   applyNormalizationAndTiers(rows, config, now);
+  const official = [];
+  const provisional = [];
+  for (const row of rows) {
+    if (row.provisional) provisional.push(row);
+    else official.push(row);
+  }
+  const rankedRows = provisional.length > 0 ? official.concat(provisional) : rows;
   const method = getNormalizationMethod(config);
   return {
     label: 'EXTERNAL_PRIOR',
     generatedAt: new Date(now || Date.now()).toISOString(),
     normalizationMethod: method,
     normalization: { method },
+    roleWeights: config.roleWeights,
     sources,
-    ranking: rows,
+    ranking: rankedRows,
   };
 }
 
