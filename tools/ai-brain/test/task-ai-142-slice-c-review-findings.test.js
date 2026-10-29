@@ -1862,3 +1862,77 @@ test('Round 5 Finding 8: retained root recovery fails closed when allowedPaths c
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+// Round 7 Finding 16 (P1): defaultGit hook enforcement must not skip non-string argv tokens
+test('Round 7 Finding 16: defaultGit hook enforcement coerces/rejects non-string argv tokens and fails closed', () => {
+  const { defaultGit } = require('../planning-services');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'git-hooks-r7-'));
+  try {
+    const cp = require('node:child_process');
+    cp.execSync('git init -b main', { cwd: tmp, stdio: 'ignore' });
+    cp.execSync('git config user.name "Test"', { cwd: tmp, stdio: 'ignore' });
+    cp.execSync('git config user.email "test@example.com"', { cwd: tmp, stdio: 'ignore' });
+
+    // 1. Non-string token carrying core.hooksPath override (boxed String)
+    const r1 = defaultGit(tmp, ['-c', new String('core.hooksPath=NUL'), 'commit', '-m', 'bypass']);
+    assert.equal(r1.ok, false);
+    assert.match(
+      r1.stderr,
+      /HOOK_CHECK_FAILED: core\.hooksPath bypass or --no-verify is prohibited/
+    );
+
+    // 2. Non-string token carrying core.hooksPath with --config-env
+    const r2 = defaultGit(tmp, [
+      '--config-env',
+      new String('core.hooksPath=SOME_ENV'),
+      'commit',
+      '-m',
+      'bypass',
+    ]);
+    assert.equal(r2.ok, false);
+    assert.match(
+      r2.stderr,
+      /HOOK_CHECK_FAILED: core\.hooksPath bypass or --no-verify is prohibited/
+    );
+
+    // 3. Non-string token carrying combined short-form no-verify (-qn)
+    const r3 = defaultGit(tmp, ['commit', new String('-qn'), '-m', 'bypass']);
+    assert.equal(r3.ok, false);
+    assert.match(
+      r3.stderr,
+      /HOOK_CHECK_FAILED: core\.hooksPath bypass or --no-verify is prohibited/
+    );
+
+    // 4. Non-string token carrying long-form no-verify (--no-verify)
+    const r4 = defaultGit(tmp, ['commit', new String('--no-verify'), '-m', 'bypass']);
+    assert.equal(r4.ok, false);
+    assert.match(
+      r4.stderr,
+      /HOOK_CHECK_FAILED: core\.hooksPath bypass or --no-verify is prohibited/
+    );
+
+    // 5. Non-string token for commit verb itself with no-verify
+    const r5 = defaultGit(tmp, [new String('commit'), new String('-n'), '-m', 'bypass']);
+    assert.equal(r5.ok, false);
+    assert.match(
+      r5.stderr,
+      /HOOK_CHECK_FAILED: core\.hooksPath bypass or --no-verify is prohibited/
+    );
+
+    // 6. Non-string token with throwing toString fails closed
+    const r6 = defaultGit(tmp, [
+      'commit',
+      {
+        toString() {
+          throw new Error('evil argument');
+        },
+      },
+      '-m',
+      'bypass',
+    ]);
+    assert.equal(r6.ok, false);
+    assert.match(r6.stderr, /HOOK_CHECK_FAILED/);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});

@@ -73,9 +73,25 @@ function defaultGit(cwd, args) {
     extra.push('-c', 'core.filemode=false');
     extra.push('-c', 'core.autocrlf=true');
   }
-  if (args.includes('commit')) {
-    const isNoVerify = args.some((a) => {
-      if (typeof a !== 'string') return false;
+  if (!Array.isArray(args)) {
+    return { ok: false, stdout: '', stderr: 'HOOK_CHECK_FAILED: argv must be an array' };
+  }
+  let normalizedArgs;
+  try {
+    normalizedArgs = args.map((a) => (typeof a === 'string' ? a : String(a ?? '')));
+  } catch {
+    return { ok: false, stdout: '', stderr: 'HOOK_CHECK_FAILED: invalid argv entry' };
+  }
+  const hasHooksPathOverride = normalizedArgs.some((a) => /core\.hooksPath/i.test(a));
+  if (hasHooksPathOverride) {
+    return {
+      ok: false,
+      stdout: '',
+      stderr: 'HOOK_CHECK_FAILED: core.hooksPath bypass or --no-verify is prohibited',
+    };
+  }
+  if (normalizedArgs.includes('commit')) {
+    const isNoVerify = normalizedArgs.some((a) => {
       if (a === '--no-verify' || a.startsWith('--no-verify') || a.startsWith('--no-ver')) {
         return true;
       }
@@ -88,8 +104,7 @@ function defaultGit(cwd, args) {
       }
       return false;
     });
-    const hasHooksPathOverride = args.some((a) => /core\.hooksPath/i.test(a));
-    if (isNoVerify || hasHooksPathOverride) {
+    if (isNoVerify) {
       return {
         ok: false,
         stdout: '',
@@ -106,7 +121,7 @@ function defaultGit(cwd, args) {
     'git',
     ['-c', 'safe.directory=' + posix(path.resolve(cwd)), '-c', 'core.fsmonitor=false'].concat(
       extra,
-      args
+      normalizedArgs
     ),
     {
       cwd,
