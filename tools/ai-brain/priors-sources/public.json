@@ -37,7 +37,11 @@
     "tokenrouter",
     "ocg",
     "ocz",
-    "bzl"
+    "bzl",
+    "gw",
+    "gateway",
+    "custom-prefix",
+    "some-prefix"
   ],
   "aliasRules": {
     "stripSuffixes": [":free", "-free", ":batch", ":flex", ":cloud"],

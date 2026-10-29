@@ -174,6 +174,9 @@ function splitModelEffort(value, config) {
   let effort = null;
   let raw = value.trim().toLowerCase();
 
+  // Strip account prefixes (delimited by ::) before router prefix checking
+  raw = raw.split('::').pop();
+
   // Strip configured and derived router prefixes strictly
   const routerPrefixes = getRouterPrefixes(cfg);
   let changed = true;
@@ -183,16 +186,6 @@ function splitModelEffort(value, config) {
     if (slashIdx !== -1) {
       const pfx = raw.slice(0, slashIdx);
       const rest = raw.slice(slashIdx + 1);
-      if (routerPrefixes.has(pfx)) {
-        raw = rest;
-        changed = true;
-        continue;
-      }
-    }
-    const colonIdx = raw.indexOf('::');
-    if (colonIdx !== -1) {
-      const pfx = raw.slice(0, colonIdx);
-      const rest = raw.slice(colonIdx + 2);
       if (routerPrefixes.has(pfx)) {
         raw = rest;
         changed = true;
@@ -305,8 +298,6 @@ function splitModelEffort(value, config) {
 
 function normaliseCanonical(value) {
   if (typeof value !== 'string' || !value.trim()) return null;
-  const parsed = splitModelEffort(value);
-  if (parsed.base) return parsed.base.split('/').pop();
   let canonical = value
     .trim()
     .toLowerCase()
@@ -333,7 +324,16 @@ function priorFor(candidate, role, priors, now) {
   if (!canonical) return null;
 
   const ranking = priors && Array.isArray(priors.ranking) ? priors.ranking : [];
-  const resolved = matchModelPrior(modelId, ranking);
+  const candidatePrefixes = [];
+  if (candidate && typeof candidate === 'object') {
+    for (const key of ['gateway', 'upstream', 'sourceId', 'provider', 'accessPath', 'harness']) {
+      if (candidate[key] && typeof candidate[key] === 'string') {
+        candidatePrefixes.push(candidate[key]);
+      }
+    }
+  }
+  const matchOptions = candidatePrefixes.length ? { routerPrefixes: candidatePrefixes } : undefined;
+  const resolved = matchModelPrior(modelId, ranking, matchOptions);
   const match = resolved && resolved.entry;
   if (!match) return neutralPrior(canonical);
 
@@ -361,8 +361,7 @@ function priorFor(candidate, role, priors, now) {
       : isStale(retrievalDate, now));
 
   const resolvedBaseId = resolved.matchedBaseId || match.matchedBaseId;
-  const canonicalId =
-    resolvedBaseId || normaliseCanonical(match.canonical) || canonical || match.canonical;
+  const canonicalId = resolvedBaseId || match.canonical || canonical;
   const result = { canonical: canonicalId, tier, bonus: stale ? 0 : bonus };
   if (resolved.matchedVia || match.matchedVia) {
     result.matchedVia = resolved.matchedVia || match.matchedVia;
@@ -526,6 +525,9 @@ function leaderboardModelId(value, config) {
     .toLowerCase()
     .replace(/\s*\(([^)]*)\)/g, (_, effort) => '-' + effort.replace(/[^a-z0-9]+/g, '-'));
 
+  // Strip account prefixes (delimited by ::) before router prefix checking
+  raw = raw.split('::').pop();
+
   const routerPrefixes = getRouterPrefixes(cfg);
   let changed = true;
   while (changed) {
@@ -534,16 +536,6 @@ function leaderboardModelId(value, config) {
     if (slashIdx !== -1) {
       const pfx = raw.slice(0, slashIdx);
       const rest = raw.slice(slashIdx + 1);
-      if (routerPrefixes.has(pfx)) {
-        raw = rest;
-        changed = true;
-        continue;
-      }
-    }
-    const colonIdx = raw.indexOf('::');
-    if (colonIdx !== -1) {
-      const pfx = raw.slice(0, colonIdx);
-      const rest = raw.slice(colonIdx + 2);
       if (routerPrefixes.has(pfx)) {
         raw = rest;
         changed = true;
@@ -613,7 +605,11 @@ function tierForScore(score, ranking) {
 
 function matchModelPrior(modelId, ranking, options) {
   if (!modelId || !Array.isArray(ranking)) return null;
-  const config = (options && (options.config || options.descriptor)) || defaultDescriptor;
+  let config = (options && (options.config || options.descriptor)) || defaultDescriptor;
+  if (options && Array.isArray(options.routerPrefixes) && options.routerPrefixes.length) {
+    const existing = Array.isArray(config.routerPrefixes) ? config.routerPrefixes : [];
+    config = { ...config, routerPrefixes: [...existing, ...options.routerPrefixes] };
+  }
   const { base, effort } = splitModelEffort(modelId, config);
   const exactId = leaderboardModelId(modelId, config);
 
