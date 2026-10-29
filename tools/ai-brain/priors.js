@@ -43,7 +43,7 @@ function applyDigitBoundaryHyphen(str, aliasRules) {
   let res = str.replace(/([a-z]{2,})(\d)/g, '$1-$2');
   const singleLetters = Array.isArray(aliasRules.singleLetterPrefixes)
     ? aliasRules.singleLetterPrefixes
-    : ['o'];
+    : [];
   if (singleLetters.length) {
     const pattern = new RegExp(
       `(?:^|[-_\\/])(${singleLetters.map((p) => p.toLowerCase()).join('|')})(\\d)`,
@@ -96,14 +96,52 @@ function getDeploymentSuffixes(config) {
   return [];
 }
 
+function stripAliasSuffixes(value, config, preserveDeployment = false) {
+  const suffixes = config && config.aliasRules && config.aliasRules.stripSuffixes;
+  for (const suffix of Array.isArray(suffixes) ? suffixes : []) {
+    if (
+      preserveDeployment &&
+      getDeploymentSuffixes(config).some((dep) => suffix === ':' + dep || suffix === '-' + dep)
+    )
+      continue;
+    if (typeof suffix === 'string' && suffix && value.endsWith(suffix)) {
+      value = value.slice(0, -suffix.length);
+    }
+  }
+  return value;
+}
+
+function stripDeploymentPattern(value, config) {
+  if (!value) return value;
+  const patterns = config && config.deploymentSuffixPatterns;
+  for (const pattern of Array.isArray(patterns) ? patterns : []) {
+    try {
+      const match = value.match(new RegExp(`(?:${pattern})$`));
+      if (match && match[0]) return value.slice(0, match.index);
+    } catch {
+      // Invalid configuration grants no normalization rule.
+    }
+  }
+  return value;
+}
+
+function addModelPrefixes(prefixes, id) {
+  if (typeof id !== 'string') return;
+  for (const accountPart of id.toLowerCase().split('::')) {
+    for (const prefix of accountPart.split('/').slice(0, -1)) {
+      if (prefix) prefixes.add(prefix);
+    }
+  }
+}
+
 let cachedRegistryPrefixes = null;
-function loadRegistryPrefixes() {
-  if (cachedRegistryPrefixes) return cachedRegistryPrefixes;
+function loadRegistryPrefixes(registry) {
+  if (!registry && cachedRegistryPrefixes) return cachedRegistryPrefixes;
   const prefixes = new Set();
   try {
     const sourcesPath = path.join(__dirname, 'sources.json');
-    if (fs.existsSync(sourcesPath)) {
-      const parsed = JSON.parse(fs.readFileSync(sourcesPath, 'utf8'));
+    if (registry || fs.existsSync(sourcesPath)) {
+      const parsed = registry || JSON.parse(fs.readFileSync(sourcesPath, 'utf8'));
       if (Array.isArray(parsed && parsed.sources)) {
         for (const s of parsed.sources) {
           if (s && s.id) prefixes.add(String(s.id).toLowerCase());
@@ -114,9 +152,9 @@ function loadRegistryPrefixes() {
           }
           if (s && s.routerAlias) prefixes.add(String(s.routerAlias).toLowerCase());
           if (s && s.modelPrefix) {
-            const clean = String(s.modelPrefix).replace(/\/+$/, '').toLowerCase();
-            if (clean) prefixes.add(clean);
+            addModelPrefixes(prefixes, s.modelPrefix);
           }
+          for (const model of (s && s.models) || []) addModelPrefixes(prefixes, model);
         }
       }
       if (parsed && parsed.dispatch && parsed.dispatch.providers) {
@@ -124,14 +162,13 @@ function loadRegistryPrefixes() {
           prefixes.add(pKey.toLowerCase());
           if (pVal && pVal.provider) prefixes.add(String(pVal.provider).toLowerCase());
           if (pVal && pVal.modelPrefix) {
-            const clean = String(pVal.modelPrefix).replace(/\/+$/, '').toLowerCase();
-            if (clean) prefixes.add(clean);
+            addModelPrefixes(prefixes, pVal.modelPrefix);
           }
         }
       }
     }
   } catch (_) {}
-  cachedRegistryPrefixes = prefixes;
+  if (!registry) cachedRegistryPrefixes = prefixes;
   return prefixes;
 }
 
@@ -146,18 +183,24 @@ function getRouterPrefixes(config) {
   }
 
   // Derive router prefixes from registry sources (e.g. qwen, 9router, kr from sources.json)
-  const registryPrefixes = loadRegistryPrefixes();
+  const registryPrefixes = loadRegistryPrefixes(cfg && cfg.registry);
   for (const p of registryPrefixes) {
     prefixes.add(p);
   }
 
   // Derive router/upstream prefixes from live IDs if provided
-  const liveList = (cfg && (cfg.liveModels || cfg.liveIds)) || [];
+  let liveList = cfg && (cfg.liveModels || cfg.liveIds);
+  if (!liveList) {
+    try {
+      liveList = require('./priors-public').liveModelIds();
+    } catch {
+      liveList = [];
+    }
+  }
   if (Array.isArray(liveList)) {
     for (const id of liveList) {
       if (typeof id === 'string') {
-        const slashIdx = id.indexOf('/');
-        if (slashIdx > 0) prefixes.add(id.slice(0, slashIdx).toLowerCase());
+        addModelPrefixes(prefixes, id);
         const colonIdx = id.indexOf('::');
         if (colonIdx > 0) prefixes.add(id.slice(0, colonIdx).toLowerCase());
       }
@@ -178,7 +221,7 @@ function splitModelEffort(value, config) {
   raw = raw.split('::').pop();
 
   // Strip configured and derived router prefixes strictly
-  const routerPrefixes = getRouterPrefixes(cfg);
+  const routerPrefixes = raw.includes('/') ? getRouterPrefixes(cfg) : new Set();
   let changed = true;
   while (changed) {
     changed = false;
@@ -196,15 +239,7 @@ function splitModelEffort(value, config) {
 
   raw = raw.split('@')[0];
 
-  const stripSuffixes = (cfg && cfg.aliasRules && cfg.aliasRules.stripSuffixes) || [
-    ':free',
-    '-free',
-  ];
-  for (const sfx of stripSuffixes) {
-    if (raw.endsWith(sfx)) {
-      raw = raw.slice(0, -sfx.length);
-    }
-  }
+  raw = stripAliasSuffixes(raw, cfg);
 
   // Strip trailing suffixes only (deployment suffixes and recognized effort suffixes)
   const depSuffixes = getDeploymentSuffixes(cfg);
@@ -305,7 +340,7 @@ function normaliseCanonical(value) {
   canonical = canonical.split('::').pop();
   canonical = canonical.split('/').pop();
   canonical = canonical.split('@')[0];
-  canonical = canonical.replace(/(?::free|-free)$/, '');
+  canonical = stripAliasSuffixes(canonical, defaultDescriptor, true);
   canonical = canonical.replace(/\s*\([^)]*\)/g, '').replace(/[._\s]+/g, '-');
   return canonical || null;
 }
@@ -528,7 +563,7 @@ function leaderboardModelId(value, config) {
   // Strip account prefixes (delimited by ::) before router prefix checking
   raw = raw.split('::').pop();
 
-  const routerPrefixes = getRouterPrefixes(cfg);
+  const routerPrefixes = raw.includes('/') ? getRouterPrefixes(cfg) : new Set();
   let changed = true;
   while (changed) {
     changed = false;
@@ -545,7 +580,7 @@ function leaderboardModelId(value, config) {
   }
 
   raw = raw.split('@')[0];
-  raw = raw.replace(/(?::free|-free)$/, '');
+  raw = stripAliasSuffixes(raw, cfg, true);
   if (cfg && cfg.aliasRules) {
     raw = applyDigitBoundaryHyphen(raw, cfg.aliasRules);
   }
@@ -631,9 +666,7 @@ function matchModelPrior(modelId, ranking, options) {
   if (exactId && byCanonical.has(exactId)) {
     return { entry: byCanonical.get(exactId) };
   }
-  const depSuffixPattern =
-    /(?::(?:batch|flex|cloud)|-?\[\d+(?:\.\d+)?(?:-\d+)?[km]\]|-(?:fast|latest|volc|turbo|\d{4}-\d{2}-\d{2}|\d{8}|\d{6}|\d{4}))$/;
-  let depStrippedId = exactId ? exactId.replace(depSuffixPattern, '') : null;
+  let depStrippedId = stripDeploymentPattern(exactId, config);
   if (!depStrippedId || depStrippedId === exactId) {
     const depSuffixes = getDeploymentSuffixes(config);
     depStrippedId = exactId;
@@ -674,7 +707,7 @@ function matchModelPrior(modelId, ranking, options) {
     const depSuffixes = getDeploymentSuffixes(config);
     for (const current of queue) {
       if (!current.id) continue;
-      let deployment = current.id.replace(depSuffixPattern, '');
+      let deployment = stripDeploymentPattern(current.id, config);
       if (deployment === current.id) {
         for (const dep of depSuffixes) {
           const s1 = ':' + dep;

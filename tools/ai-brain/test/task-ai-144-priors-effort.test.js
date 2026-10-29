@@ -16,8 +16,100 @@ const {
   splitModelEffort,
   getEffortVariants,
   getRouterPrefixes,
+  leaderboardModelId,
 } = require('../priors');
 const config = require('../priors-sources/public.json');
+
+test('R5: nested vendor and account prefixes come from registry model inventory', () => {
+  const cfg = {
+    ...config,
+    registry: { sources: [{ id: 'relay', models: ['account/vendor-x/widget-7'] }] },
+    liveModels: [],
+    routerPrefixes: [],
+  };
+  const row = { canonical: 'widget-7' };
+  for (const id of ['vendor-x/widget-7', 'account/vendor-x/widget-7']) {
+    assert.equal(splitModelEffort(id, cfg).base, row.canonical);
+    assert.equal(leaderboardModelId(id, cfg), row.canonical);
+    assert.equal(matchModelPrior(id, [row], { config: cfg }).entry, row);
+  }
+  assert.equal(matchModelPrior('unlisted/widget-7', [row], { config: cfg }), null);
+  assert.equal(matchModelPrior('account/unlisted/widget-7', [row], { config: cfg }), null);
+});
+
+test('R5: live inventory restores prior evidence for slash-separated fixture vendors', (t) => {
+  const liveModels = require('./fixtures/sources/9router/models.json');
+  t.mock.method(require('../priors-public'), 'liveModelIds', () => liveModels);
+  const cfg = { ...config, liveModels };
+  for (const [id, canonical] of [
+    ['tokenrouter/deepseek/deepseek-v4-pro', 'deepseek-v4-pro'],
+    ['tokenrouter/moonshotai/kimi-k3-free', 'kimi-k3'],
+    ['tokenrouter/z-ai/glm-5.2', 'glm-5-2'],
+    ['tokenrouter/x-ai/grok-4.5', 'grok-4-5'],
+    ['kimchi/kimi-k3', 'kimi-k3'],
+    ['cc/claude-opus-5-5', 'claude-opus-5-5'],
+  ]) {
+    const row = { canonical, codingTier: 'T1', benchmarks: { aaCodingIndex: 70 } };
+    assert.equal(splitModelEffort(id, cfg).base, canonical);
+    assert.equal(leaderboardModelId(id, cfg), canonical);
+    assert.equal(matchModelPrior(id, [row], { config: cfg }).entry, row);
+    // Direct matcher calls also consult the local discovery catalogue.
+    assert.equal(matchModelPrior(id, [row]).entry, row);
+    const prior = priorFor({ modelId: id }, 'writer', { ranking: [row] });
+    assert.equal(prior.canonical, canonical);
+    assert.equal(prior.tier, 'T1');
+    assert.ok(Number.isFinite(prior.score));
+    assert.equal(prior.priorUnknown, undefined);
+  }
+});
+
+test('R5: unavailable discovery inventory grants no vendor-prefix normalization', (t) => {
+  t.mock.method(require('../priors-public'), 'liveModelIds', () => {
+    throw new Error('unavailable');
+  });
+  const cfg = { registry: { sources: [] }, routerPrefixes: [] };
+  assert.equal(
+    matchModelPrior('unlisted/widget-7', [{ canonical: 'widget-7' }], { config: cfg }),
+    null
+  );
+});
+
+test('R5: missing alias and deployment vocabulary fails closed', () => {
+  const cfg = {
+    registry: { sources: [] },
+    liveModels: [],
+    aliasRules: { digitBoundaryHyphen: true },
+  };
+  const row = { canonical: 'o-3' };
+  assert.equal(matchModelPrior('o3', [row], { config: cfg }), null);
+  assert.equal(
+    matchModelPrior('o3', [row], {
+      config: { ...cfg, aliasRules: { digitBoundaryHyphen: true, singleLetterPrefixes: ['o'] } },
+    }).entry,
+    row
+  );
+  for (const suffix of [':free', '-free', ':batch', '-latest', '-20250514', '[128k]']) {
+    assert.notEqual(splitModelEffort('widget-7' + suffix, cfg).base, 'widget-7');
+    assert.notEqual(leaderboardModelId('widget-7' + suffix, cfg), 'widget-7');
+    assert.equal(
+      matchModelPrior('widget-7' + suffix, [{ canonical: 'widget-7' }], { config: cfg }),
+      null
+    );
+  }
+  const custom = {
+    ...cfg,
+    aliasRules: { stripSuffixes: [':community'] },
+    deploymentSuffixes: ['edge'],
+    deploymentSuffixPatterns: ['-r[0-9]+$'],
+  };
+  for (const suffix of [':community', '-edge', '-r42']) {
+    assert.equal(
+      matchModelPrior('widget-7' + suffix, [{ canonical: 'widget-7' }], { config: custom }).entry
+        .canonical,
+      'widget-7'
+    );
+  }
+});
 
 test('Defect 1: mergePriorDocuments merges effort rows into single canonical model entry with per-effort benchmarks', () => {
   const docs = [
