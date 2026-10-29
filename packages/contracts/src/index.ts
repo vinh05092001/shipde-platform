@@ -582,5 +582,65 @@ export type BranchResponse = components['schemas']['BranchResponse'];
 export type ListBranchesResponse = components['schemas']['ListBranchesResponse'];
 export type DeleteBranchResponse = components['schemas']['DeleteBranchResponse'];
 
+export const BRANCH_CODE_REGEX = /^[A-Za-z0-9_-]{2,64}$/;
+export const VIETNAMESE_PHONE_REGEX = /^(0|\+84)[35789][0-9]{8}$/;
+
+export function isValidBranchCode(code: unknown): boolean {
+  if (typeof code !== 'string') return false;
+  return BRANCH_CODE_REGEX.test(code.trim());
+}
+
+export function isValidBranchPhone(phone: unknown): boolean {
+  if (typeof phone !== 'string') return false;
+  const cleanPhone = phone.trim().replace(/[\s.-]/g, '');
+  return cleanPhone.length === 0 || VIETNAMESE_PHONE_REGEX.test(cleanPhone);
+}
+
+export interface BranchFormState {
+  name: string;
+  code: string;
+  address: string;
+  phone: string;
+  is_default: boolean;
+  status: 'ACTIVE' | 'INACTIVE';
+}
+
+export function validateBranchForm(form: BranchFormState): {
+  isValid: boolean;
+  errors: Record<string, string>;
+} {
+  const errors: Record<string, string> = {};
+
+  if (!form.name || form.name.trim().length < 2) {
+    errors.name = 'Tên chi nhánh là bắt buộc và phải có ít nhất 2 ký tự';
+  } else if (form.name.trim().length > 255) {
+    errors.name = 'Tên chi nhánh không được vượt quá 255 ký tự';
+  }
+
+  if (!form.code || !isValidBranchCode(form.code)) {
+    errors.code = 'Mã chi nhánh là bắt buộc, từ 2 đến 64 ký tự (chữ, số, "-" hoặc "_")';
+  }
+
+  if (form.address && form.address.trim().length > 1000) {
+    errors.address = 'Địa chỉ chi nhánh không được vượt quá 1000 ký tự';
+  }
+
+  if (form.phone && form.phone.trim()) {
+    const cleanPhone = form.phone.trim().replace(/[\s.-]/g, '');
+    if (!VIETNAMESE_PHONE_REGEX.test(cleanPhone)) {
+      errors.phone = 'Số điện thoại không hợp lệ theo định dạng Việt Nam';
+    }
+  }
+
+  if (form.status && form.status !== 'ACTIVE' && form.status !== 'INACTIVE') {
+    errors.status = 'Trạng thái chi nhánh chỉ có thể là ACTIVE hoặc INACTIVE';
+  }
+
+  return {
+    isValid: Object.keys(errors).length === 0,
+    errors,
+  };
+}
+
 // --- Generated OpenAPI Schema Types ---
 export type * from './openapi';

@@ -6,13 +6,13 @@
 | --------------- | ----- |
 | Work Item ID    | `FEAT-ORG-02` |
 | Feature ID      | `FEAT-ORG-02` |
-| Status          | `IN_PROGRESS` |
+| Status          | `READY_FOR_CODEX` |
 | Delivery order  | 16 |
 | Dependencies    | `TASK-FOUND-04` (merged), `FEAT-AUTH-01` (merged), `FEAT-AUTH-06` (merged), `FEAT-RBAC-01` (merged), `FEAT-RBAC-02` (merged), `FEAT-ORG-01` (merged) |
 | Assigned author | `GEMINI` |
 | Risk            | `HIGH` |
 | Risk domains    | `tenant isolation`, `database ownership`, `auth`, `audit` |
-| Allowed paths   | `docs/product-spec/work-items/FEAT-ORG-02.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`, `docs/product-spec/contracts/openapi.yaml`, `packages/contracts/src/*`, `prisma/schema.prisma`, `prisma/migrations/*`, `apps/api/src/app.module.ts`, `apps/api/src/branches/*` |
+| Allowed paths   | `docs/product-spec/work-items/FEAT-ORG-02.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`, `docs/product-spec/contracts/openapi.yaml`, `packages/contracts/src/*`, `prisma/schema.prisma`, `prisma/migrations/*`, `apps/api/src/app.module.ts`, `apps/api/src/branches/*`, `apps/web/src/components/BranchManagementView.tsx`, `apps/web/src/app/settings/branches/page.tsx`, `apps/web/src/tests/branches-page-states.test.ts`, `apps/web/package.json` |
 | Reviewer        | Codex — fresh independent task |
 | Branch          | `feat/feat-org-02-branches` |
 | Pull Request    | Pending |
@@ -72,13 +72,18 @@ A shop owner (`OWNER`) or authorized administrator (holding the `iam:shop_config
 12. Comprehensive automated tests:
     - Unit tests (`branches.unit.spec.ts`) validating DTOs, code normalization, phone validation, and scope filtering logic.
     - Supertest integration tests (`branches.supertest.spec.ts`) validating all endpoints, tenant isolation, RBAC checks, store scoping, audit logs, and canonical error cases.
+13. Web UI Branches Settings screen (`SCR-WH-01` / `/settings/branches`):
+    - Multi-branch listing grid, search input, status filtering tabs (`ALL`, `ACTIVE`, `INACTIVE`), and quick-switch settings navigation.
+    - Create branch modal dialog and edit branch modal dialog with code uppercase normalization, default branch toggle, phone, address.
+    - Set default branch action with atomic guarantee and protection against deactivating default branch.
+    - Complete AGENTS.md state coverage: loading skeleton, empty state, inline validation error messages, server error banner with retry/recovery, forbidden banner for view-only/unauthorized roles, scoped access notification banner for restricted `store_scopes`, and success notification banners.
+    - Automated UI state suite (`branches-page-states.test.ts`) covering all 8 AGENTS.md states.
 
 ## Out of scope
 
-1. Multi-branch Web UI screen (Step 2 next run).
-2. Warehouse inventory assignment per branch (`FEAT-WH-01`).
-3. Carrier account routing assignment per branch (`FEAT-CAR-01`).
-4. Order routing engine multi-branch fulfillment logic (`FEAT-ORD-01`).
+1. Warehouse inventory assignment per branch (`FEAT-WH-01`).
+2. Carrier account routing assignment per branch (`FEAT-CAR-01`).
+3. Order routing engine multi-branch fulfillment logic (`FEAT-ORD-01`).
 
 ## Business rules and edge cases
 
@@ -111,6 +116,14 @@ A shop owner (`OWNER`) or authorized administrator (holding the `iam:shop_config
 | `AC-ORG-02-14` | Unauthenticated request to branch endpoints | 401 `UNAUTHORIZED` canonical error | PASS — Verified in `branches.supertest.spec.ts` (returns 401 UNAUTHORIZED) |
 | `AC-ORG-02-15` | Audit logs capture diffs with masked phone numbers | Audit log verified; plaintext phone never logged | PASS — Verified in `branches.supertest.spec.ts` & `branches.unit.spec.ts` (phone masked e.g. 090****567) |
 | `AC-ORG-02-16` | Route alias without `/api/v1` prefix (`GET /branches`, `POST /branches`) | 200 OK / 201 Created | PASS — Verified in `branches.supertest.spec.ts` (/branches returns 200) |
+| `AC-ORG-02-17` | Loading state skeleton rendered during branch list fetch (`data-testid="branch-loading-state"`) | Skeleton loader displayed with pulse animation | PASS — Verified in `branches-page-states.test.ts` (renders loading skeleton) |
+| `AC-ORG-02-18` | Empty state rendered when tenant has no branches (`data-testid="branch-empty-state"`) | Informative empty card displayed with CTA button to create first branch | PASS — Verified in `branches-page-states.test.ts` (renders empty state with CTA) |
+| `AC-ORG-02-19` | Client/inline validation error messages for name, code, phone, address in modal form | Inline errors displayed under each invalid input field | PASS — Verified in `branches-page-states.test.ts` (validation errors rendered inline) |
+| `AC-ORG-02-20` | Server error banner with retry/recovery control (`data-testid="branch-error-banner"`) | Error banner displayed with retry and dismiss buttons | PASS — Verified in `branches-page-states.test.ts` (error banner and retry action rendered) |
+| `AC-ORG-02-21` | Forbidden banner rendered for unauthorized roles (`canEdit: false`) with mutation actions hidden | Warning banner displayed; create/edit/status toggle buttons suppressed | PASS — Verified in `branches-page-states.test.ts` (forbidden banner rendered, mutations hidden) |
+| `AC-ORG-02-22` | Scoped store banner displayed for users with restricted `store_scopes` | Explanatory banner displayed listing assigned store scopes | PASS — Verified in `branches-page-states.test.ts` (scoped store notification verified) |
+| `AC-ORG-02-23` | Success notification banner displayed upon create/update/activate/deactivate | Alert banner displayed with descriptive success text | PASS — Verified in `branches-page-states.test.ts` (success notification verified) |
+| `AC-ORG-02-24` | Full page container and breadcrumb navigation at `/settings/branches` | Page container renders breadcrumbs, sibling settings tabs, and branch management view | PASS — Verified in `branches-page-states.test.ts` (full page container verified) |
 
 ## Verification commands
 
@@ -121,6 +134,8 @@ A shop owner (`OWNER`) or authorized administrator (holding the `iam:shop_config
 - `pnpm typecheck`
 - `pnpm --filter @shipde/api exec tsx --tsconfig tsconfig.json --test src/branches/branches.unit.spec.ts`
 - `pnpm --filter @shipde/api exec tsx --tsconfig tsconfig.json src/branches/branches.supertest.spec.ts`
+- `pnpm --filter @shipde/web exec tsx src/tests/branches-page-states.test.ts`
+- `pnpm --filter @shipde/web test`
 - `node scripts/ai/check-no-hardcode.mjs`
 - `pnpm contract:check`
 
@@ -128,8 +143,8 @@ A shop owner (`OWNER`) or authorized administrator (holding the `iam:shop_config
 
 | Review round | Commit | Verdict | Findings resolved |
 |---|---|---|---|
-| 1 | Pending | Pending | Initial implementation of Branches API and persistence |
+| 1 | Pending | Pending | Initial implementation of Branches API, persistence, and Web UI settings screen |
 
 ## Residual limitations
 
-- UI screen (`SCR-BRANCH-01` or Settings Branch tab) scheduled for Step 2 next run.
+- None. Full vertical slice complete: Backend API, DB persistence, migrations, tenant scoping, store scoping, RBAC guards, audit logs, contract synchronization, and Web UI settings screen (`SCR-WH-01` / `/settings/branches`) with full AGENTS.md states implemented and verified.
