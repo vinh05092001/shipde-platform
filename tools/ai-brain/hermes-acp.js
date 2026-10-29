@@ -124,14 +124,24 @@ function runAcpTurn(command, args, options = {}, deps = {}) {
       const entry = pending.get(message.id);
       if (!entry) return;
       pending.delete(message.id);
-      if (message.error)
+      if (message.error) {
+        let detailsSnippet = '';
+        if (message.error.data && typeof message.error.data.details === 'string') {
+          const match = message.error.data.details.match(
+            /No [a-z0-9 -]*credentials stored\b[^\r\n]*/i
+          );
+          if (match) {
+            detailsSnippet = ': ' + match[0];
+          }
+        }
         entry.reject(
           new Error(
             'ACP_RPC_ERROR_' +
-              (Number.isInteger(message.error.code) ? message.error.code : 'UNKNOWN')
+              (Number.isInteger(message.error.code) ? message.error.code : 'UNKNOWN') +
+              detailsSnippet
           )
         );
-      else if (Object.hasOwn(message, 'result')) entry.resolve(message.result);
+      } else if (Object.hasOwn(message, 'result')) entry.resolve(message.result);
       else entry.reject(new Error('ACP_INVALID_RESPONSE'));
     };
     try {
@@ -189,6 +199,9 @@ function runAcpTurn(command, args, options = {}, deps = {}) {
       const expectedModels = [
         `${options.providerName}:${options.modelId}`,
         `custom:${options.providerName}:${options.modelId}`,
+        // Hermes 0.21 reports the Controller-written custom provider as custom:<model>
+        // (the config holds only that provider, so the model id still binds exactly).
+        `custom:${options.modelId}`,
       ];
       if (
         typeof session?.sessionId !== 'string' ||

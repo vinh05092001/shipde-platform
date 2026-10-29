@@ -86,10 +86,13 @@ function priorFor(candidate, role, priors, now) {
       ? sourceDates.some((date) => isStale(date, now))
       : isStale(retrievalDate, now));
 
-  const result = { canonical: match.canonical, tier, bonus: stale ? 0 : bonus };
+  const resolvedBaseId = resolved.matchedBaseId || match.matchedBaseId;
+  const canonicalId =
+    resolvedBaseId || normaliseCanonical(match.canonical) || canonical || match.canonical;
+  const result = { canonical: canonicalId, tier, bonus: stale ? 0 : bonus };
   if (resolved.matchedVia || match.matchedVia) {
     result.matchedVia = resolved.matchedVia || match.matchedVia;
-    result.matchedBaseId = resolved.matchedBaseId || match.matchedBaseId;
+    result.matchedBaseId = resolvedBaseId || canonicalId;
   }
   if (weighted.coverage > 0) {
     result.coverage = weighted.coverage;
@@ -244,6 +247,38 @@ function leaderboardModelId(value) {
     .replace(/[._\s]+/g, '-');
 }
 
+function loadEffortVariants(ranking) {
+  const variants = new Set();
+  try {
+    const sourcesPath = path.join(__dirname, 'sources.json');
+    if (fs.existsSync(sourcesPath)) {
+      const parsed = JSON.parse(fs.readFileSync(sourcesPath, 'utf8'));
+      const list =
+        parsed && (parsed.effortVariants || (parsed.dispatch && parsed.dispatch.effortVariants));
+      if (Array.isArray(list)) {
+        for (const item of list) {
+          if (typeof item === 'string' && item.trim()) {
+            variants.add(item.trim().toLowerCase());
+          }
+        }
+      }
+    }
+  } catch (_) {}
+
+  return Array.from(variants).sort((a, b) => b.length - a.length);
+}
+
+function stripTrailingEffort(id, suffixes) {
+  if (!id || typeof id !== 'string') return null;
+  for (const suffix of suffixes) {
+    const pattern = '-' + suffix;
+    if (id.endsWith(pattern) && id.length > pattern.length) {
+      return id.slice(0, -pattern.length);
+    }
+  }
+  return null;
+}
+
 function matchModelPrior(modelId, ranking) {
   const id = leaderboardModelId(modelId);
   const byId = new Map(
@@ -252,16 +287,18 @@ function matchModelPrior(modelId, ranking) {
   if (byId.has(id)) return { entry: byId.get(id) };
   const queue = [{ id, reasoning: false }];
   const seen = new Set([id]);
+  const effortSuffixes = loadEffortVariants(ranking);
   for (const current of queue) {
     if (!current.id) continue;
     const deployment = current.id.replace(
       /(?::(?:batch|flex|cloud)|-?\[\d+(?:-\d+)?[km]\]|-(?:fast|latest|volc|turbo|\d{4}-\d{2}-\d{2}|\d{8}|\d{6}|\d{4}))$/,
       ''
     );
-    const reasoning = current.id.replace(
-      /-(?:thinking|agentic|high|medium|low|minimal|max|xhigh|none|reasoning|non-reasoning)$/,
-      ''
-    );
+    let reasoning = current.id;
+    if (!byId.has(current.id)) {
+      const stripped = stripTrailingEffort(current.id, effortSuffixes);
+      if (stripped) reasoning = stripped;
+    }
     for (const [base, effort] of [
       [deployment, false],
       [reasoning, true],
