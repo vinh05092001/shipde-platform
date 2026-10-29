@@ -567,6 +567,9 @@ function getQuotaScopeState(candidate, quotaState, options = {}) {
     let activeModelEntry = null;
     for (const a of aliases) {
       const modelKeys = [
+        candidate.accountId && cleanModelId
+          ? `${a}::${candidate.accountId}::${cleanModelId}`
+          : null,
         cleanModelId ? `${a}::${cleanModelId}` : null,
         bareModelId ? `${a}::${bareModelId}` : null,
       ].filter(Boolean);
@@ -1402,10 +1405,15 @@ async function scanAllFullRoutes(options = {}) {
           stats.other++;
         }
 
-        const modelKey = `${r.sourceId}::${r.modelId}`;
+        const isPoolRow = ev === 'QUOTA_READING' && Boolean(r.accountId);
+        const modelKey = isPoolRow
+          ? `${r.sourceId}::${r.accountId}::${r.modelId}`
+          : `${r.sourceId}::${r.modelId}`;
+        if (isPoolRow) delete quotaState.scopes[`${r.sourceId}::${r.modelId}`];
         quotaState.scopes[modelKey] = {
           source: r.sourceId,
-          scope: r.modelId,
+          ...(isPoolRow ? { accountId: r.accountId } : {}),
+          scope: isPoolRow ? r.accountId : r.modelId,
           upstream: r.modelId.includes('/') ? r.modelId.split('/')[0] : r.sourceId,
           model: r.modelId,
           code: r.code || r.reason,
@@ -1455,19 +1463,53 @@ async function scanAllFullRoutes(options = {}) {
         continue;
       }
 
-      if (src.id === 'agy-pool' || src.kind === 'agent-cli') {
+      if (src.kind === 'agent-cli' && src.id !== 'agy-pool') {
+        await scanCliLanes(quotaState, { ...options, registry, now, source: src.id });
+        const cliStats = initStats(src.id);
+        const entries = Object.entries(quotaState.scopes)
+          .filter(([key, entry]) => key.startsWith(`${src.id}::`) && entry.source === src.id)
+          .map(([, entry]) => entry);
+        cliStats.listed = entries.length;
+        cliStats.scanned = entries.length;
+        for (const entry of entries) {
+          if (entry.code === QUOTA_STATUS_CODES.OK) cliStats.alive++;
+          else if (entry.code === QUOTA_STATUS_CODES.QUOTA) cliStats.quota++;
+          else if (entry.code === QUOTA_STATUS_CODES.AUTH) cliStats.auth++;
+          else cliStats.other++;
+        }
+        scannedSources.add(src.id);
+        continue;
+      }
+
+      if (src.id === 'agy-pool') {
         const poolStats = initStats(src.id);
-        let poolRt = null;
-        try {
-          poolRt = require('./agy-pool-runtime');
-        } catch {}
-        const poolModels = poolRt && poolRt.discoverPoolModels ? poolRt.discoverPoolModels() : [];
+        let poolRt = options.poolRuntime || null;
+        if (!poolRt) {
+          try {
+            poolRt = require('./agy-pool-runtime');
+          } catch {}
+        }
+        const poolModels =
+          poolRt && poolRt.discoverPoolModels ? poolRt.discoverPoolModels(options) : [];
         const poolAccounts =
-          poolRt && poolRt.discoverAccounts
-            ? poolRt.discoverAccounts()
+          options.poolAccounts ||
+          (poolRt && poolRt.discoverAccounts
+            ? poolRt.discoverAccounts(options)
             : Array.isArray(src.accounts)
               ? src.accounts
-              : [];
+              : []);
+        await scanCliLanes(quotaState, {
+          ...options,
+          registry,
+          now,
+          source: src.id,
+          poolRuntime: poolRt,
+          poolAccounts,
+        });
+        for (const modelId of poolModels) {
+          // Remove legacy account-collapsed observations before recording individual accounts.
+          delete quotaState.scopes[`${src.id}::${modelId}`];
+        }
         for (const acc of poolAccounts) {
           for (const modelId of poolModels) {
             poolStats.listed++;
@@ -1475,9 +1517,10 @@ async function scanAllFullRoutes(options = {}) {
               type: 'pool',
               sourceId: src.id,
               accountId: acc,
-              scope: src.id,
+              scope: acc,
               upstream: src.id,
               modelId,
+              poolRuntime: poolRt,
             });
           }
         }
@@ -1533,6 +1576,11 @@ async function scanAllFullRoutes(options = {}) {
         }
 
         scannedSources.add(src.id);
+        for (const key of [src.id, `${src.id}::${src.id}`]) {
+          if (quotaState.scopes[key]?.code === QUOTA_STATUS_CODES.DISCOVERY_FAILED) {
+            delete quotaState.scopes[key];
+          }
+        }
         const ownPrefixes = getSourcePrefixes(src);
 
         for (const mId of modelsList) {
@@ -1682,11 +1730,8 @@ async function scanAllFullRoutes(options = {}) {
   async function processItem(item) {
     if (item.type === 'pool') {
       const itemAt = new Date(now).toISOString();
-      let poolRt = null;
-      try {
-        poolRt = require('./agy-pool-runtime');
-      } catch {}
-      const reading = poolRt ? poolRt.quotaReading(item.accountId) : null;
+      const poolRt = item.poolRuntime;
+      const reading = poolRt ? poolRt.quotaReading(item.accountId, options) : null;
       let result = null;
       if (!reading || reading.available === false) {
         const isAuth =
@@ -1760,10 +1805,11 @@ async function scanAllFullRoutes(options = {}) {
         else stats.other++;
       }
 
-      const modelKey = `${result.sourceId}::${result.modelId}`;
+      const modelKey = `${result.sourceId}::${result.accountId}::${result.modelId}`;
       quotaState.scopes[modelKey] = {
         source: result.sourceId,
-        scope: result.modelId,
+        accountId: result.accountId,
+        scope: item.scope,
         upstream: item.upstream,
         model: result.modelId,
         code: result.code,
@@ -1774,6 +1820,9 @@ async function scanAllFullRoutes(options = {}) {
         elapsedMs: 0,
         evidence: result.evidence,
       };
+      if (options.jsonlFile) {
+        fs.appendFileSync(jsonlFile, JSON.stringify(result) + '\n', 'utf8');
+      }
       return;
     }
 
@@ -1837,6 +1886,9 @@ async function scanAllFullRoutes(options = {}) {
     }
 
     const modelKey = `${item.sourceId}::${item.modelId}`;
+    if (result.code === QUOTA_STATUS_CODES.NO_CHANNEL) {
+      result = { ...result, scope: item.modelId };
+    }
     quotaState.scopes[modelKey] = result;
 
     const scopeKey = `${item.sourceId}::${item.scope}`;
@@ -1898,7 +1950,13 @@ async function scanAllFullRoutes(options = {}) {
   );
   await Promise.all(workers);
 
-  function aggregateScopeOutcome(items) {
+  function aggregateScopeOutcome(items, existing, modelScopedOnly = false) {
+    if (modelScopedOnly) {
+      items = items.filter((it) => it.result.code !== QUOTA_STATUS_CODES.NO_CHANNEL);
+      if (items.length === 0) {
+        return existing?.code === QUOTA_STATUS_CODES.DISCOVERY_FAILED ? null : existing || null;
+      }
+    }
     if (!items || items.length === 0) return null;
     const okItem = items.find((it) => it.result.code === QUOTA_STATUS_CODES.OK);
     if (okItem) return okItem.result;
@@ -1921,18 +1979,19 @@ async function scanAllFullRoutes(options = {}) {
   for (const [scopeKey, items] of scopeResults.entries()) {
     const firstTarget = items[0]?.target;
     const srcObj = (registry?.sources || []).find((s) => s.id === firstTarget?.source);
-    if (srcObj && srcObj.kind === 'router') {
-      continue;
-    }
-    quotaState.scopes[scopeKey] = aggregateScopeOutcome(items);
+    const agg = aggregateScopeOutcome(
+      items,
+      quotaState.scopes[scopeKey],
+      srcObj?.kind === 'router'
+    );
+    if (agg) quotaState.scopes[scopeKey] = agg;
+    else delete quotaState.scopes[scopeKey];
   }
 
   for (const [srcId, items] of sourceResults.entries()) {
     const srcObj = (registry?.sources || []).find((s) => s.id === srcId);
-    if (srcObj && srcObj.kind === 'router') {
-      continue;
-    }
-    const agg = aggregateScopeOutcome(items);
+    const agg = aggregateScopeOutcome(items, quotaState.scopes[srcId], srcObj?.kind === 'router');
+    if (!agg) continue;
     quotaState.scopes[srcId] = agg;
     if (
       quotaState.scopes[`${srcId}::${srcId}`] === undefined ||
@@ -2057,18 +2116,19 @@ async function scanCliLanes(quotaState, options = {}) {
 
   // 1. Scan agy-pool accounts if available
   let poolRt = options.poolRuntime || null;
-  if (!poolRt) {
+  const scanPool = !options.source || options.source === 'agy-pool';
+  if (scanPool && !poolRt) {
     try {
       poolRt = require('./agy-pool-runtime');
     } catch {}
   }
   const poolAccounts =
-    options.poolAccounts ||
-    (poolRt && typeof poolRt.discoverAccounts === 'function'
+    (scanPool && options.poolAccounts) ||
+    (scanPool && poolRt && typeof poolRt.discoverAccounts === 'function'
       ? poolRt.discoverAccounts(options)
       : []);
 
-  if (poolRt && typeof poolRt.quotaReading === 'function') {
+  if (scanPool && poolRt && typeof poolRt.quotaReading === 'function') {
     let poolHasAnyQuota = false;
     for (const accId of poolAccounts) {
       const reading = poolRt.quotaReading(accId, options);
@@ -2081,6 +2141,7 @@ async function scanCliLanes(quotaState, options = {}) {
       ) {
         const entry = {
           source: 'agy-pool',
+          accountId: accId,
           scope: accId,
           upstream: 'agy-pool',
           model: null,
@@ -2106,6 +2167,8 @@ async function scanCliLanes(quotaState, options = {}) {
           const famScope = `${accId}:${row.family}`;
           const famEntry = {
             source: 'agy-pool',
+            accountId: accId,
+            family: row.family,
             scope: famScope,
             upstream: row.family,
             model: null,
@@ -2122,6 +2185,7 @@ async function scanCliLanes(quotaState, options = {}) {
         const accCode = allFamiliesExhausted ? QUOTA_STATUS_CODES.QUOTA : QUOTA_STATUS_CODES.OK;
         const accEntry = {
           source: 'agy-pool',
+          accountId: accId,
           scope: accId,
           upstream: 'agy-pool',
           model: null,
@@ -2139,6 +2203,7 @@ async function scanCliLanes(quotaState, options = {}) {
           reading.reason === 'AUTH_FAILED' ? QUOTA_STATUS_CODES.AUTH : QUOTA_STATUS_CODES.ERROR;
         const entry = {
           source: 'agy-pool',
+          accountId: accId,
           scope: accId,
           upstream: 'agy-pool',
           model: null,
@@ -2152,21 +2217,21 @@ async function scanCliLanes(quotaState, options = {}) {
         quotaState.scopes[`agy-pool::${accId}`] = entry;
       }
     }
-    if (!quotaState.scopes['agy-pool']) {
-      quotaState.scopes['agy-pool'] = {
-        source: 'agy-pool',
-        scope: 'agy-pool',
-        upstream: 'agy-pool',
-        model: null,
-        code: poolHasAnyQuota ? QUOTA_STATUS_CODES.OK : QUOTA_STATUS_CODES.QUOTA,
-        status: poolHasAnyQuota ? 200 : 429,
-        reason: poolHasAnyQuota ? 'OK' : 'QUOTA_EXHAUSTED',
-        at: new Date(now).toISOString(),
-        retryAfter: null,
-        evidence: 'QUOTA_READING',
-      };
-    }
+    quotaState.scopes['agy-pool'] = {
+      source: 'agy-pool',
+      scope: 'agy-pool',
+      upstream: 'agy-pool',
+      model: null,
+      code: poolHasAnyQuota ? QUOTA_STATUS_CODES.OK : QUOTA_STATUS_CODES.QUOTA,
+      status: poolHasAnyQuota ? 200 : 429,
+      reason: poolHasAnyQuota ? 'OK' : 'QUOTA_EXHAUSTED',
+      at: new Date(now).toISOString(),
+      retryAfter: null,
+      evidence: 'QUOTA_READING',
+    };
   }
+
+  if (options.source === 'agy-pool') return;
 
   // 2. Discover CLI accounts from options.accounts, accounts.listAccounts(), or intake
   let accounts = [];
@@ -2225,6 +2290,7 @@ async function scanCliLanes(quotaState, options = {}) {
     if (!isCli) continue;
 
     const pName = acc.provider || acc.sourceId || provider;
+    if (options.source && pName !== options.source) continue;
     const isClaudeCli =
       dispatchProviders[pName]?.provider === 'claude' ||
       dispatchProviders[provider]?.provider === 'claude' ||
@@ -2316,7 +2382,14 @@ async function scanCliLanes(quotaState, options = {}) {
     }
   }
 
-  for (const [pId, pCfg] of Object.entries(dispatchProviders)) {
+  const cliProviders = { ...dispatchProviders };
+  for (const src of registry?.sources || []) {
+    if (src.kind === 'agent-cli' && src.id !== 'agy-pool') {
+      cliProviders[src.id] = cliProviders[src.id] || {};
+    }
+  }
+  for (const [pId, pCfg] of Object.entries(cliProviders)) {
+    if (options.source && pId !== options.source) continue;
     if (!quotaState.scopes[pId]) {
       quotaState.scopes[pId] = {
         source: pId,

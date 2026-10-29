@@ -963,6 +963,8 @@ test('TASK-AI-147 Review R3: dispatch launch does not record execution success; 
     { execute: true, item: 'TASK-TEST-HEALTH-SUCCESS' },
     {
       candidates: [candA],
+      quotaStateFile: path.join(dir, 'quota-state.json'),
+      decisionDir: path.join(dir, 'decisions'),
       run: () => ({
         exitCode: 0,
         stdout: JSON.stringify({ id: 'sess-01', status: 'running' }),
@@ -992,6 +994,8 @@ test('TASK-AI-147 Review R3: dispatch launch does not record execution success; 
     { execute: true, item: 'TASK-TEST-HEALTH-FAIL' },
     {
       candidates: [candA],
+      quotaStateFile: path.join(dir, 'quota-state.json'),
+      decisionDir: path.join(dir, 'decisions'),
       run: () => ({ exitCode: 1, stderr: 'Request timed out after 30000ms', elapsedMs: 30000 }),
       routeHealthFile: healthFile,
       evidenceDir,
@@ -1038,6 +1042,7 @@ test('TASK-AI-147 Review R3: dispatch launch does not record execution success; 
     { 'report-outcome': outcomeFile },
     {
       routeHealthFile: healthFile,
+      decisionDir: path.join(dir, 'decisions'),
       evidenceDir,
       home: dir,
       exit: () => {},
@@ -1165,6 +1170,8 @@ test('TASK-AI-147 Review R4: production default destination is restored and reco
     { execute: true, item: 'TASK-TEST-HEALTH-PROD-FAIL' },
     {
       candidates: [candProd],
+      quotaStateFile: path.join(dir, 'quota-state.json'),
+      decisionDir: path.join(dir, 'decisions'),
       run: () => ({ exitCode: 1, stderr: 'Upstream gateway error 502', elapsedMs: 500 }),
       evidenceDir,
       home: dir,
@@ -1215,6 +1222,7 @@ test('TASK-AI-147 Review R4: production default destination is restored and reco
     { 'report-outcome': outcomeFile },
     {
       evidenceDir,
+      decisionDir: path.join(dir, 'decisions'),
       home: dir,
       exit: () => {},
     }
@@ -1267,6 +1275,7 @@ test('TASK-AI-147 Review R4: production default destination is restored and reco
     { 'report-outcome': memoryOutcomeFile },
     {
       routeHealth: memoryStore,
+      decisionDir: path.join(dir, 'decisions'),
       evidenceDir,
       home: dir,
       exit: () => {},
