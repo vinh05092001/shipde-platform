@@ -130,7 +130,7 @@ Any authenticated merchant user can perform unified global search across primary
 | `AC-COM-01-27` | FEAT-RBAC-02 Branch Scope: User scoped to specific branch | Only orders belonging to that branch returned in search; other branch orders excluded | PASS — Verified in `search.supertest.spec.ts` & `search.unit.spec.ts` |
 | `AC-COM-01-28` | FEAT-RBAC-02 Warehouse Scope: User scoped to specific warehouse | Only shipments belonging to that warehouse returned in search; other warehouse shipments excluded | PASS — Verified in `search.supertest.spec.ts` & `search.unit.spec.ts` |
 | `AC-COM-01-29` | Empty Scope Fail-Closed: Non-owner with empty scopes | Receives zero results; search fail-closed prevents unauthorized tenant data exposure | PASS — Verified in `search.supertest.spec.ts` & `search.unit.spec.ts` |
-| `AC-COM-01-30` | Universal Scope Access: OWNER or wildcard `*` scope | Searches all tenant resources across all branches and warehouses without restriction | PASS — Verified in `search.supertest.spec.ts` & `search.unit.spec.ts` |
+| `AC-COM-01-30` | Registry permission `search:tenant_wide` | Permission grants tenant-wide search including unassigned records. Role names or wildcard scopes alone do not grant access to unassigned records. | Regression tests added; execution blocked by local dependency access errors |
 
 ## Verification commands
 

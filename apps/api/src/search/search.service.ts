@@ -7,7 +7,6 @@ import type { ActorContext } from '../rbac/rbac.dto';
 import { SearchQueryDto, validateSearchQueryDto, ParsedSearchQuery } from './search.dto';
 import { SearchEntityType, SearchResultItem, SearchResponse } from '@shipde/contracts';
 import { isActiveStatus } from '@shipde/contracts';
-import { RoleEnum } from '@prisma/client';
 import { maskIdentifier } from '../invitations/invitations.service';
 
 export function maskQueryPii(query: string): string {
@@ -58,7 +57,7 @@ export class SearchService {
 
     const user = await this.prisma.user.findFirst({
       where: { id: actor.userId, merchant_id: actor.merchantId },
-      select: { role: true, status: true, store_scopes: true, warehouse_scopes: true },
+      select: { status: true, store_scopes: true, warehouse_scopes: true },
     });
 
     if (!user || !isActiveStatus(user.status)) {
@@ -68,9 +67,9 @@ export class SearchService {
     const storeScopes = user.store_scopes || [];
     const warehouseScopes = user.warehouse_scopes || [];
 
-    const isOwner = user.role === RoleEnum.OWNER;
-    const hasUniversalAccess =
-      isOwner || (storeScopes.includes('*') && warehouseScopes.includes('*'));
+    const hasUniversalAccess = await this.rbacService.actorHasPermissions(actor, [
+      'search:tenant_wide',
+    ]);
 
     return {
       hasUniversalAccess,
@@ -86,10 +85,6 @@ export class SearchService {
 
     const hasStoreWildcard = scopes.storeScopes.includes('*');
     const hasWarehouseWildcard = scopes.warehouseScopes.includes('*');
-
-    if (hasStoreWildcard && hasWarehouseWildcard) {
-      return null;
-    }
 
     // Every present resource dimension must be authorized. Unknown dimensions
     // cannot establish access, even when a user has a wildcard in one domain.

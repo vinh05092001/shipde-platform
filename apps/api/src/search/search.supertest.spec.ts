@@ -82,6 +82,63 @@ async function runSearchSupertestSuite() {
     return;
   }
 
+  // Execute the real migration against transaction-local tables, never tenant data.
+  await prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe('SET LOCAL search_path TO pg_temp');
+    const tables = [
+      'orders',
+      'shipments',
+      'carrier_statements',
+      'exception_cases',
+      'discrepancies',
+      'claims',
+    ];
+    for (const table of tables) {
+      await tx.$executeRawUnsafe(`CREATE TEMP TABLE "${table}" (
+        id TEXT PRIMARY KEY, merchant_id TEXT, order_id TEXT, shipment_id TEXT,
+        branch_id VARCHAR(128), warehouse_id VARCHAR(128)
+      ) ON COMMIT DROP`);
+      await tx.$executeRawUnsafe(
+        `INSERT INTO "${table}" (id, merchant_id) VALUES ('unknown', 'migration-test')`
+      );
+    }
+    await tx.$executeRawUnsafe(`INSERT INTO "orders" (id, merchant_id, branch_id, warehouse_id)
+      VALUES ('assigned', 'migration-test', 'branch-known', 'warehouse-known')`);
+    await tx.$executeRawUnsafe(`INSERT INTO "shipments" (id, merchant_id, order_id)
+      VALUES ('assigned', 'migration-test', 'assigned')`);
+    for (const table of ['exception_cases', 'discrepancies', 'claims']) {
+      await tx.$executeRawUnsafe(`INSERT INTO "${table}" (id, merchant_id, shipment_id)
+        VALUES ('assigned', 'migration-test', 'assigned')`);
+    }
+    const migration = fs.readFileSync(
+      path.resolve(
+        __dirname,
+        '../../../../prisma/migrations/20261029141500_feat_com_01_search_scopes/migration.sql'
+      ),
+      'utf8'
+    );
+    for (const statement of migration.split(';').filter((part) => part.trim())) {
+      await tx.$executeRawUnsafe(statement);
+    }
+    for (const table of tables) {
+      const rows = await tx.$queryRawUnsafe<
+        Array<{ id: string; branch_id: string | null; warehouse_id: string | null }>
+      >(`SELECT id, branch_id, warehouse_id FROM "${table}" ORDER BY id`);
+      assert.deepStrictEqual(
+        rows.find((row) => row.id === 'unknown'),
+        { id: 'unknown', branch_id: null, warehouse_id: null },
+        `${table}: unknown ownership must remain NULL`
+      );
+      if (table !== 'carrier_statements') {
+        assert.deepStrictEqual(
+          rows.find((row) => row.id === 'assigned'),
+          { id: 'assigned', branch_id: 'branch-known', warehouse_id: 'warehouse-known' },
+          `${table}: authoritative parent ownership must propagate`
+        );
+      }
+    }
+  });
+
   await app.get(RbacService).ensurePlatformSeed();
 
   const testSuffix = Date.now().toString().slice(-6);
@@ -640,7 +697,7 @@ async function runSearchSupertestSuite() {
     );
 
     // =========================================================================
-    // AC-COM-01-31: Non-owner with wildcard scopes receives universal access and sees unassigned records
+    // Wildcard scopes alone cannot authorize unassigned records
     // =========================================================================
     const resWildcardOrder = await request(server)
       .get(`/api/v1/search?q=${legacyOrderCodeA}&type=ORDER`)
@@ -648,8 +705,15 @@ async function runSearchSupertestSuite() {
       .expect(200);
 
     assert.strictEqual(resWildcardOrder.body.success, true);
-    assert.strictEqual(resWildcardOrder.body.data.total, 1);
-    assert.strictEqual(resWildcardOrder.body.data.items[0].code, legacyOrderCodeA);
+    assert.strictEqual(resWildcardOrder.body.data.total, 0);
+    assert.deepStrictEqual(resWildcardOrder.body.data.items, []);
+
+    const resTenantWide = await request(server)
+      .get(`/api/v1/search?q=${legacyOrderCodeA}&type=ORDER`)
+      .set('Authorization', `Bearer ${ownerTokenA}`)
+      .expect(200);
+    assert.strictEqual(resTenantWide.body.data.total, 1);
+    assert.strictEqual(resTenantWide.body.data.items[0].id, legacyOrderIdA);
 
     console.log('🎉 All Search Supertest Acceptance Criteria Passed Successfully!');
   } finally {

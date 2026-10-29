@@ -51,36 +51,7 @@ SET "branch_id" = COALESCE(c."branch_id", s."branch_id"),
 FROM "shipments" s
 WHERE c."shipment_id" = s."id";
 
--- 5. Fallback for remaining unassigned aggregates
-UPDATE "orders"
-SET "branch_id" = COALESCE("branch_id", 'default'),
-    "warehouse_id" = COALESCE("warehouse_id", 'default')
-WHERE "branch_id" IS NULL AND "warehouse_id" IS NULL;
-
-UPDATE "shipments"
-SET "branch_id" = COALESCE("branch_id", 'default'),
-    "warehouse_id" = COALESCE("warehouse_id", 'default')
-WHERE "branch_id" IS NULL AND "warehouse_id" IS NULL;
-
-UPDATE "carrier_statements"
-SET "branch_id" = COALESCE("branch_id", 'default'),
-    "warehouse_id" = COALESCE("warehouse_id", 'default')
-WHERE "branch_id" IS NULL AND "warehouse_id" IS NULL;
-
-UPDATE "exception_cases"
-SET "branch_id" = COALESCE("branch_id", 'default'),
-    "warehouse_id" = COALESCE("warehouse_id", 'default')
-WHERE "branch_id" IS NULL AND "warehouse_id" IS NULL;
-
-UPDATE "discrepancies"
-SET "branch_id" = COALESCE("branch_id", 'default'),
-    "warehouse_id" = COALESCE("warehouse_id", 'default')
-WHERE "branch_id" IS NULL AND "warehouse_id" IS NULL;
-
-UPDATE "claims"
-SET "branch_id" = COALESCE("branch_id", 'default'),
-    "warehouse_id" = COALESCE("warehouse_id", 'default')
-WHERE "branch_id" IS NULL AND "warehouse_id" IS NULL;
+-- Unknown ownership stays NULL. Only authoritative parent mappings above may backfill scopes.
 
 -- CreateIndex
 CREATE INDEX IF NOT EXISTS "orders_merchant_id_branch_id_idx" ON "orders"("merchant_id", "branch_id");

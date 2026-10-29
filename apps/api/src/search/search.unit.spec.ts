@@ -257,7 +257,7 @@ describe('FEAT-COM-01: Global Search Unit Test Suite', () => {
           },
         ],
       });
-      const rbac = createMockRbacService(['order:view_create', 'pii:unmask']);
+      const rbac = createMockRbacService(['search:tenant_wide', 'order:view_create', 'pii:unmask']);
       const service = new SearchService(mock.prisma, rbac);
 
       const res = await service.search(
@@ -288,7 +288,7 @@ describe('FEAT-COM-01: Global Search Unit Test Suite', () => {
           },
         ],
       });
-      const rbac = createMockRbacService(['shipment:track_exceptions']);
+      const rbac = createMockRbacService(['search:tenant_wide', 'shipment:track_exceptions']);
       const service = new SearchService(mock.prisma, rbac);
 
       const res = await service.search(
@@ -319,7 +319,7 @@ describe('FEAT-COM-01: Global Search Unit Test Suite', () => {
           },
         ],
       });
-      const rbac = createMockRbacService(['reconciliation:run_review_audit']);
+      const rbac = createMockRbacService(['search:tenant_wide', 'reconciliation:run_review_audit']);
       const service = new SearchService(mock.prisma, rbac);
 
       const res = await service.search(
@@ -356,7 +356,7 @@ describe('FEAT-COM-01: Global Search Unit Test Suite', () => {
           },
         ],
       });
-      const rbac = createMockRbacService(['shipment:track_exceptions']);
+      const rbac = createMockRbacService(['search:tenant_wide', 'shipment:track_exceptions']);
       const service = new SearchService(mock.prisma, rbac);
 
       const res = await service.search(
@@ -385,7 +385,10 @@ describe('FEAT-COM-01: Global Search Unit Test Suite', () => {
           },
         ],
       });
-      const rbac = createMockRbacService(['reconciliation:view_contract_rates']);
+      const rbac = createMockRbacService([
+        'search:tenant_wide',
+        'reconciliation:view_contract_rates',
+      ]);
       const service = new SearchService(mock.prisma, rbac);
 
       const res = await service.search(
@@ -439,7 +442,7 @@ describe('FEAT-COM-01: Global Search Unit Test Suite', () => {
           },
         ],
       });
-      const rbac = createMockRbacService(['order:view_create']);
+      const rbac = createMockRbacService(['search:tenant_wide', 'order:view_create']);
       const service = new SearchService(mock.prisma, rbac);
 
       // Caller from Tenant A searches for exact order code
@@ -480,7 +483,11 @@ describe('FEAT-COM-01: Global Search Unit Test Suite', () => {
         ],
       });
       // WAREHOUSE actor without reconciliation capabilities
-      const rbac = createMockRbacService(['order:view_create', 'shipment:track_exceptions']);
+      const rbac = createMockRbacService([
+        'search:tenant_wide',
+        'order:view_create',
+        'shipment:track_exceptions',
+      ]);
       const service = new SearchService(mock.prisma, rbac);
 
       const res = await service.search(
@@ -533,7 +540,7 @@ describe('FEAT-COM-01: Global Search Unit Test Suite', () => {
         ],
       });
       // Actor lacks pii:unmask
-      const rbac = createMockRbacService(['order:view_create']);
+      const rbac = createMockRbacService(['search:tenant_wide', 'order:view_create']);
       const service = new SearchService(mock.prisma, rbac);
 
       const res = await service.search(
@@ -563,7 +570,7 @@ describe('FEAT-COM-01: Global Search Unit Test Suite', () => {
           },
         ],
       });
-      const rbac = createMockRbacService(['order:view_create']);
+      const rbac = createMockRbacService(['search:tenant_wide', 'order:view_create']);
       const service = new SearchService(mock.prisma, rbac);
 
       // Search with phone number
@@ -807,24 +814,49 @@ describe('FEAT-COM-01: Global Search Unit Test Suite', () => {
       assert.ok(result.data.items.every((item: any) => item.id === 'allowed'));
     });
 
-    it('AC-COM-01-30: OWNER role bypasses scope predicate for universal tenant access', async () => {
+    it('tenant-wide registry grant reveals unscoped records within the tenant', async () => {
       const mock = createMockPrismaService({
-        orders: [],
+        users: [{ id: 'usr-1', role: 'OPS_CSKH', store_scopes: [], warehouse_scopes: [] }],
+        orders: [
+          {
+            id: 'legacy',
+            merchant_id: TENANT_A,
+            order_code: 'ORD',
+            branch_id: null,
+            warehouse_id: null,
+          },
+          {
+            id: 'foreign',
+            merchant_id: TENANT_B,
+            order_code: 'ORD',
+            branch_id: null,
+            warehouse_id: null,
+          },
+        ],
       });
-      const rbac = createMockRbacService(['order:view_create']);
+      const rbac = createMockRbacService(['order:view_create', 'search:tenant_wide']);
       const service = new SearchService(mock.prisma, rbac);
 
-      await service.search(ACTOR_OWNER_A, { q: 'ORD', type: 'ORDER' }, '127.0.0.1', 'corr-owner');
+      const result = await service.search(
+        { ...ACTOR_OWNER_A, role: 'OPS_CSKH' },
+        { q: 'ORD', type: 'ORDER' },
+        '127.0.0.1',
+        'corr-permission'
+      );
+      assert.deepStrictEqual(
+        result.data.items.map((item) => item.id),
+        ['legacy']
+      );
 
       const queryArg = mock.queriesRecorded.order[0];
       assert.strictEqual(
         queryArg.where.AND,
         undefined,
-        'OWNER query must not have scope AND restriction'
+        'Registry permission must grant tenant-wide search'
       );
     });
 
-    it('AC-COM-01-31: Non-owner with wildcard scopes receives universal access and finds unassigned/legacy records', async () => {
+    it('wildcard scopes without tenant-wide permission exclude unassigned records', async () => {
       const mock = createMockPrismaService({
         users: [
           {
@@ -857,8 +889,8 @@ describe('FEAT-COM-01: Global Search Unit Test Suite', () => {
       };
 
       const scopes = await service.resolveActorScopes(actorWildcard);
-      assert.strictEqual(scopes.hasUniversalAccess, true);
-      assert.strictEqual(service.buildScopePredicate(scopes), null);
+      assert.strictEqual(scopes.hasUniversalAccess, false);
+      assert.notStrictEqual(service.buildScopePredicate(scopes), null);
 
       const res = await service.search(
         actorWildcard,
@@ -867,8 +899,55 @@ describe('FEAT-COM-01: Global Search Unit Test Suite', () => {
         'corr-wildcard'
       );
       assert.strictEqual(res.success, true);
-      assert.strictEqual(res.data.total, 1);
-      assert.strictEqual(res.data.items[0].id, 'ord-unassigned');
+      assert.strictEqual(res.data.total, 0);
+      assert.deepStrictEqual(res.data.items, []);
+    });
+
+    it('OWNER alone cannot bypass scopes or reveal unscoped records', async () => {
+      const mock = createMockPrismaService({
+        users: [
+          {
+            id: 'usr-1',
+            role: 'OWNER',
+            store_scopes: ['default'],
+            warehouse_scopes: ['default'],
+          },
+        ],
+        orders: [
+          {
+            id: 'legacy',
+            merchant_id: TENANT_A,
+            order_code: 'ORD',
+            branch_id: null,
+            warehouse_id: null,
+          },
+          {
+            id: 'outside',
+            merchant_id: TENANT_A,
+            order_code: 'ORD',
+            branch_id: 'other',
+            warehouse_id: 'other',
+          },
+          {
+            id: 'allowed',
+            merchant_id: TENANT_A,
+            order_code: 'ORD',
+            branch_id: 'default',
+            warehouse_id: 'default',
+          },
+        ],
+      });
+      const service = new SearchService(mock.prisma, createMockRbacService(['order:view_create']));
+      const result = await service.search(
+        ACTOR_OWNER_A,
+        { q: 'ORD', type: 'ORDER' },
+        '127.0.0.1',
+        'corr-no-grant'
+      );
+      assert.deepStrictEqual(
+        result.data.items.map((item) => item.id),
+        ['allowed']
+      );
     });
   });
 });
