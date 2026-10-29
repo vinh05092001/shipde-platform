@@ -135,8 +135,8 @@ test('Finding 2: missing required checks return PENDING; SKIPPED or NEUTRAL retu
   assert.equal(r6.state, 'PASS', 'Path-filtered unrelated check must stay non-failing');
 });
 
-// Finding 3: Two workers sharing cache update workspace links to their own checkout
-test('Finding 3: two workers sharing cache update workspace links to their own checkout', () => {
+// Finding 3: Provisioning is per-worker; shared cache stays immutable and worker 1 links keep pointing to worker 1 after worker 2 is provisioned
+test('Finding 3: two workers sharing cache keep independent workspace links pointing to their own checkout', () => {
   const { retargetSharedDepsWorkspaceLinks } = require('../isolation-launcher');
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'shared-deps-test-'));
   try {
@@ -155,23 +155,73 @@ test('Finding 3: two workers sharing cache update workspace links to their own c
     // Initial link in shared deps points to deps itself
     const initialTarget = path.join(depsDir, 'packages', 'contracts');
     fs.mkdirSync(initialTarget, { recursive: true });
-    const pkgLink = path.join(shipdeInDeps, 'contracts');
-    fs.symlinkSync(initialTarget, pkgLink, 'junction');
+    const pkgLinkInDeps = path.join(shipdeInDeps, 'contracts');
+    fs.symlinkSync(initialTarget, pkgLinkInDeps, 'junction');
 
-    // Worker A updates links using the real isolation-launcher implementation
+    // Worker A provisions links using the isolation-launcher implementation
     retargetSharedDepsWorkspaceLinks(depsDir, workerA);
-    const linkAfterA = fs.readlinkSync(pkgLink);
+
+    // Shared deps must remain untouched and immutable
+    const depsLinkTarget = path.resolve(
+      path.dirname(pkgLinkInDeps),
+      fs.readlinkSync(pkgLinkInDeps)
+    );
     assert.equal(
-      path.resolve(path.dirname(pkgLink), linkAfterA).toLowerCase(),
-      contractsA.toLowerCase()
+      depsLinkTarget.toLowerCase(),
+      initialTarget.toLowerCase(),
+      'Shared deps cache entry must remain immutable'
     );
 
-    // Worker B updates links sharing the same depsDir
-    retargetSharedDepsWorkspaceLinks(depsDir, workerB);
-    const linkAfterB = fs.readlinkSync(pkgLink);
+    // Worker A link resolves to Worker A's checkout
+    const pkgLinkA = path.join(
+      workerA,
+      'packages',
+      'contracts',
+      'node_modules',
+      '@shipde',
+      'contracts'
+    );
+    assert.ok(fs.existsSync(pkgLinkA), 'Worker A workspace link must exist in worker checkout');
+    const linkAfterA = fs.readlinkSync(pkgLinkA);
     assert.equal(
-      path.resolve(path.dirname(pkgLink), linkAfterB).toLowerCase(),
-      contractsB.toLowerCase()
+      path.resolve(path.dirname(pkgLinkA), linkAfterA).toLowerCase(),
+      contractsA.toLowerCase(),
+      'Worker A workspace link must point to worker A'
+    );
+
+    // Worker B provisions links sharing the same depsDir
+    retargetSharedDepsWorkspaceLinks(depsDir, workerB);
+
+    // Shared deps must still remain untouched and immutable
+    assert.equal(
+      path.resolve(path.dirname(pkgLinkInDeps), fs.readlinkSync(pkgLinkInDeps)).toLowerCase(),
+      initialTarget.toLowerCase(),
+      'Shared deps cache entry must stay immutable after worker B provision'
+    );
+
+    // Worker B link resolves to Worker B's checkout
+    const pkgLinkB = path.join(
+      workerB,
+      'packages',
+      'contracts',
+      'node_modules',
+      '@shipde',
+      'contracts'
+    );
+    assert.ok(fs.existsSync(pkgLinkB), 'Worker B workspace link must exist in worker checkout');
+    const linkAfterB = fs.readlinkSync(pkgLinkB);
+    assert.equal(
+      path.resolve(path.dirname(pkgLinkB), linkAfterB).toLowerCase(),
+      contractsB.toLowerCase(),
+      'Worker B workspace link must point to worker B'
+    );
+
+    // Concurrent/sequential isolation: Worker A's link MUST STILL resolve to Worker A's checkout!
+    const linkAfterBForA = fs.readlinkSync(pkgLinkA);
+    assert.equal(
+      path.resolve(path.dirname(pkgLinkA), linkAfterBForA).toLowerCase(),
+      contractsA.toLowerCase(),
+      'Worker A workspace link must still point to worker A after worker B is provisioned'
     );
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });

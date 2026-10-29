@@ -291,52 +291,145 @@ function hookedControllerGit(options) {
 }
 
 function retargetSharedDepsWorkspaceLinks(depsDir, workerRoot) {
-  const depsNodeModules = path.join(depsDir, 'node_modules');
-  const depsShipdeDirs = [
-    path.join(depsNodeModules, '.pnpm', 'node_modules', '@shipde'),
-    path.join(depsDir, 'apps', 'api', 'node_modules', '@shipde'),
-    path.join(depsDir, 'apps', 'web', 'node_modules', '@shipde'),
-    path.join(depsDir, 'apps', 'worker', 'node_modules', '@shipde'),
-    path.join(depsDir, 'packages', 'contracts', 'node_modules', '@shipde'),
-    path.join(depsDir, 'packages', 'testkit', 'node_modules', '@shipde'),
-    path.join(depsDir, 'packages', 'ui', 'node_modules', '@shipde'),
+  const candidateRelDirs = [
+    path.join('apps', 'api', 'node_modules', '@shipde'),
+    path.join('apps', 'web', 'node_modules', '@shipde'),
+    path.join('apps', 'worker', 'node_modules', '@shipde'),
+    path.join('packages', 'contracts', 'node_modules', '@shipde'),
+    path.join('packages', 'testkit', 'node_modules', '@shipde'),
+    path.join('packages', 'ui', 'node_modules', '@shipde'),
   ];
-  for (const shipdeDir of depsShipdeDirs) {
-    if (fs.existsSync(shipdeDir)) {
+
+  for (const ws of ['apps', 'packages']) {
+    const wsDirInDeps = path.join(depsDir, ws);
+    if (fs.existsSync(wsDirInDeps)) {
       try {
-        const pkgs = fs.readdirSync(shipdeDir, { withFileTypes: true });
-        for (const pkg of pkgs) {
-          const pkgPath = path.join(shipdeDir, pkg.name);
-          try {
-            const st = fs.lstatSync(pkgPath);
-            if (st.isSymbolicLink()) {
-              const currentTarget = fs.readlinkSync(pkgPath);
-              const absTarget = path.resolve(path.dirname(pkgPath), currentTarget);
-              const normDeps = depsDir.replace(/\\/g, '/').toLowerCase();
-              const normTarget = absTarget.replace(/\\/g, '/').toLowerCase();
-              let sub = null;
-              if (normTarget.startsWith(normDeps)) {
-                sub = absTarget.slice(depsDir.length).replace(/^[\\/]/, '');
-              } else {
-                const match = absTarget.match(
-                  /[\\/](packages[\\/][^\\/]+|apps[\\/][^\\/]+)(?:[\\/].*)?$/i
-                );
-                if (match) {
-                  sub = match[0].replace(/^[\\/]/, '');
-                }
-              }
-              if (sub) {
-                const newTarget = path.join(workerRoot, sub);
-                if (normTarget !== newTarget.replace(/\\/g, '/').toLowerCase()) {
-                  fs.unlinkSync(pkgPath);
-                  fs.symlinkSync(newTarget, pkgPath, 'junction');
-                }
-              }
+        const items = fs.readdirSync(wsDirInDeps, { withFileTypes: true });
+        for (const item of items) {
+          if (item.isDirectory()) {
+            const rel = path.join(ws, item.name, 'node_modules', '@shipde');
+            if (!candidateRelDirs.includes(rel)) {
+              candidateRelDirs.push(rel);
             }
-          } catch {}
+          }
         }
       } catch {}
     }
+  }
+
+  for (const relShipde of candidateRelDirs) {
+    const depsShipdeDir = path.join(depsDir, relShipde);
+    if (!fs.existsSync(depsShipdeDir)) continue;
+
+    const workerShipdeDir = path.join(workerRoot, relShipde);
+    const workerNmDir = path.dirname(workerShipdeDir);
+    const depsNmDir = path.join(depsDir, path.dirname(relShipde));
+
+    try {
+      const st = fs.lstatSync(workerNmDir);
+      if (st.isSymbolicLink()) {
+        fs.rmSync(workerNmDir, { recursive: true, force: true });
+      }
+    } catch {}
+
+    fs.mkdirSync(workerNmDir, { recursive: true });
+
+    if (fs.existsSync(depsNmDir)) {
+      try {
+        const entries = fs.readdirSync(depsNmDir, { withFileTypes: true });
+        for (const entry of entries) {
+          if (entry.name === '@shipde') continue;
+          const srcPath = path.join(depsNmDir, entry.name);
+          const dstPath = path.join(workerNmDir, entry.name);
+          let exists = false;
+          try {
+            fs.lstatSync(dstPath);
+            exists = true;
+          } catch {
+            exists = false;
+          }
+          if (!exists) {
+            if (entry.isDirectory()) {
+              try {
+                fs.symlinkSync(srcPath, dstPath, 'junction');
+              } catch {}
+            } else {
+              try {
+                fs.copyFileSync(srcPath, dstPath);
+              } catch {}
+            }
+          }
+        }
+      } catch {}
+    }
+
+    fs.mkdirSync(workerShipdeDir, { recursive: true });
+
+    try {
+      const pkgs = fs.readdirSync(depsShipdeDir, { withFileTypes: true });
+      for (const pkg of pkgs) {
+        const pkgInDepsPath = path.join(depsShipdeDir, pkg.name);
+        let sub = null;
+        try {
+          const st = fs.lstatSync(pkgInDepsPath);
+          if (st.isSymbolicLink()) {
+            const currentTarget = fs.readlinkSync(pkgInDepsPath);
+            const absTarget = path.resolve(depsShipdeDir, currentTarget);
+            const normDeps = depsDir.replace(/\\/g, '/').toLowerCase();
+            const normTarget = absTarget.replace(/\\/g, '/').toLowerCase();
+            if (normTarget.startsWith(normDeps)) {
+              sub = absTarget.slice(depsDir.length).replace(/^[\\/]/, '');
+            } else {
+              const match = absTarget.match(
+                /[\\/](packages[\\/][^\\/]+|apps[\\/][^\\/]+)(?:[\\/].*)?$/i
+              );
+              if (match) {
+                sub = match[0].replace(/^[\\/]/, '');
+              }
+            }
+          }
+        } catch {}
+        if (!sub) {
+          if (fs.existsSync(path.join(workerRoot, 'packages', pkg.name))) {
+            sub = path.join('packages', pkg.name);
+          } else if (fs.existsSync(path.join(workerRoot, 'apps', pkg.name))) {
+            sub = path.join('apps', pkg.name);
+          } else if (fs.existsSync(path.join(depsDir, 'packages', pkg.name))) {
+            sub = path.join('packages', pkg.name);
+          } else if (fs.existsSync(path.join(depsDir, 'apps', pkg.name))) {
+            sub = path.join('apps', pkg.name);
+          }
+        }
+        if (sub) {
+          const workerTarget = path.join(workerRoot, sub);
+          const pkgInWorkerPath = path.join(workerShipdeDir, pkg.name);
+          let needsLink = true;
+          try {
+            const stW = fs.lstatSync(pkgInWorkerPath);
+            if (stW.isSymbolicLink()) {
+              const curW = fs.readlinkSync(pkgInWorkerPath);
+              const absCurW = path.resolve(workerShipdeDir, curW);
+              if (
+                absCurW.replace(/\\/g, '/').toLowerCase() ===
+                workerTarget.replace(/\\/g, '/').toLowerCase()
+              ) {
+                needsLink = false;
+              }
+            }
+          } catch {
+            needsLink = true;
+          }
+          if (needsLink) {
+            try {
+              fs.rmSync(pkgInWorkerPath, { recursive: true, force: true });
+            } catch {}
+            try {
+              fs.symlinkSync(workerTarget, pkgInWorkerPath, 'junction');
+            } catch {}
+          }
+        }
+      }
+    } catch {}
   }
 }
 
@@ -2781,8 +2874,14 @@ function getIsolatedLauncher() {
             const pkgs = fs.readdirSync(workerWsPath, { withFileTypes: true });
             for (const pkg of pkgs) {
               if (pkg.isDirectory()) {
-                const excl = setupJunction(path.join(ws, pkg.name, 'node_modules'));
-                if (excl) excluded.push(excl.replace(/\\/g, '/'));
+                const relNm = path.join(ws, pkg.name, 'node_modules');
+                const shipdeInDeps = path.join(depsDir, relNm, '@shipde');
+                if (fs.existsSync(shipdeInDeps)) {
+                  excluded.push((relNm + '/').replace(/\\/g, '/'));
+                } else {
+                  const excl = setupJunction(relNm);
+                  if (excl) excluded.push(excl.replace(/\\/g, '/'));
+                }
               }
             }
           }
@@ -2792,45 +2891,7 @@ function getIsolatedLauncher() {
           appendGitInfoExclude(workerRoot, excluded);
         }
 
-        const stateFile = path.join(depsNodeModules, '.pnpm-workspace-state-v1.json');
-        if (fs.existsSync(stateFile)) {
-          try {
-            const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
-            if (state && state.projects) {
-              const oldKeys = Object.keys(state.projects);
-              if (oldKeys.length > 0) {
-                const rootKey = oldKeys.reduce(
-                  (a, b) => (a.length <= b.length ? a : b),
-                  oldKeys[0]
-                );
-                const newProjects = {};
-                for (const [k, v] of Object.entries(state.projects)) {
-                  const sub = k.slice(rootKey.length);
-                  newProjects[workerRoot + sub] = v;
-                }
-                state.projects = newProjects;
-                fs.writeFileSync(stateFile, JSON.stringify(state, null, 2), 'utf8');
-              }
-            }
-          } catch {}
-        }
-
         retargetSharedDepsWorkspaceLinks(depsDir, workerRoot);
-
-        const depsConfigDir = path.join(depsDir, 'packages', 'config');
-        const workerConfigDir = path.join(workerRoot, 'packages', 'config');
-        if (fs.existsSync(depsConfigDir) && fs.existsSync(workerConfigDir)) {
-          try {
-            const cfgFiles = fs.readdirSync(workerConfigDir);
-            for (const f of cfgFiles) {
-              const srcFile = path.join(workerConfigDir, f);
-              const dstFile = path.join(depsConfigDir, f);
-              if (fs.statSync(srcFile).isFile() && !fs.existsSync(dstFile)) {
-                fs.copyFileSync(srcFile, dstFile);
-              }
-            }
-          } catch {}
-        }
 
         try {
           fs.rmSync(path.join(workerRoot, '.local'), { recursive: true, force: true });
