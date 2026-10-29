@@ -672,6 +672,20 @@ async function quotaScanCommand(args, deps = {}) {
   const intervalMin =
     args?.intervalMin ?? args?.interval ?? deps.intervalMin ?? dispatchConfig.quotaScanIntervalMin;
 
+  if (args?.['sync-opencode'] || args?.syncOpencode || deps?.syncOpencode) {
+    const syncRes = await quotaScan.syncNinerouterModelsToOpenCode({
+      ...deps,
+      registry,
+      opencodePath: args?.['opencode-path'] || args?.opencodePath || deps?.opencodePath,
+      backupPath: args?.['backup-path'] || args?.backupPath || deps?.backupPath,
+      fetch: deps.fetch,
+    });
+    console.log(
+      `Synced ${syncRes.modelCount} models to opencode.json (backup: ${syncRes.backupPath})`
+    );
+    return syncRes;
+  }
+
   if (args?.periodic || args?.loop || deps.periodic || deps.loop) {
     const runner = quotaScan.schedulePeriodicQuotaScan({
       ...deps,
@@ -711,11 +725,30 @@ async function quotaScanCommand(args, deps = {}) {
     }
   }
 
+  const isFull = Boolean(args?.full || args?.['--full'] || deps?.full);
+  if (isFull) {
+    const result = await quotaScan.scanAllFullRoutes({
+      ...deps,
+      registry,
+      quotaStateFile: args?.out || args?.file || deps?.quotaStateFile,
+      source: args?.source || deps?.source,
+      jsonlFile: args?.jsonl || deps?.jsonlFile,
+      mdFile: args?.md || deps?.mdFile,
+      now: deps.now,
+    });
+    console.log(
+      `Full route scan complete: scanned ${result.count} routes (${result.aliveCount} alive, ${result.blockedCount} blocked)`
+    );
+    return result;
+  }
+
   const result = await quotaScan.scanAllQuotas({
     ...deps,
     registry,
     quotaStateFile: args?.out || args?.file || deps?.quotaStateFile,
     source: args?.source || deps?.source,
+    jsonlFile: args?.jsonl || deps?.jsonlFile,
+    mdFile: args?.md || deps?.mdFile,
   });
   console.log(
     `Quota scan complete: scanned ${result.count} scopes (${result.blockedCount} blocked)`
@@ -2839,6 +2872,8 @@ function dispatchCommand(args, deps = {}) {
         storePath: deps && deps.storePath,
         accounts,
         now,
+        ...(quotaStateFile ? { quotaStateFile } : {}),
+        ...(deps?.quotaState ? { quotaState: deps.quotaState } : {}),
       };
 
       const decision = ranking.rankAndRecord(annotated, rankingContext);
@@ -3208,6 +3243,48 @@ function dispatchCommand(args, deps = {}) {
         stderr: rawFail.stderr,
         accountId: finalChosenCandidate.accountId,
       });
+      const isTimeout =
+        classification?.cause === 'TIMEOUT' ||
+        /timeout|stall|hang/i.test(
+          String(rawFail.body || rawFail.stderr || (thrownError && thrownError.message) || '')
+        );
+      try {
+        const routeHealthApi = require('./route-health');
+        const storeOrPath = routeHealthApi.resolveRouteHealthFile(args, deps);
+        const modelId =
+          finalChosenCandidate.modelId || finalChosenCandidate.model || finalChosenCandidate.id;
+        const routeId =
+          finalChosenCandidate.upstream ||
+          finalChosenCandidate.source ||
+          finalChosenCandidate.gateway;
+        const concurrency =
+          deps && typeof deps.concurrency === 'number'
+            ? deps.concurrency
+            : deps && deps.load && typeof deps.load.activeWriters === 'number'
+              ? deps.load.activeWriters
+              : Array.isArray(deps && deps.load)
+                ? deps.load.length
+                : undefined;
+        routeHealthApi.recordExecutionResult(
+          storeOrPath,
+          modelId,
+          routeId,
+          {
+            status: isTimeout ? 408 : rawFail.httpStatus || 500,
+            ok: false,
+            timedOut: Boolean(isTimeout),
+            reason: rawFail.body || rawFail.stderr || (thrownError && thrownError.message),
+            elapsedMs: launchRes ? launchRes.elapsedMs : undefined,
+            concurrency,
+          },
+          {
+            now,
+            persist: deps && deps.persistRouteHealth !== false,
+            loadStore: deps && (deps.loadStore || deps.loader),
+            saveStore: deps && (deps.saveStore || deps.saver),
+          }
+        );
+      } catch (_) {}
       const parsedOutcome = launchRes && launchRes.stdout ? parseLastJson(launchRes.stdout) : null;
       const outcome =
         parsedOutcome && parsedOutcome.candidateKey
@@ -5053,7 +5130,7 @@ function createRefreshRouteHealth(routeArgs = {}, routeDeps = {}) {
         routeDeps.quotaStateFile || path.join(__dirname, 'data', 'quota-state.json');
       const quotaState = quotaScan.loadQuotaState({ quotaStateFile: quotaFile });
       if (quotaScan.isQuotaScanDue(quotaState, intervalMin, now)) {
-        const scanResult = await quotaScan.scanAllQuotas({
+        const scanResult = await quotaScan.scanAllFullRoutes({
           registry,
           quotaStateFile: quotaFile,
           now,
