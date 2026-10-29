@@ -54,9 +54,18 @@ function getDeploymentSuffixes(config) {
   return [];
 }
 
+function getRouterPrefixes(config) {
+  const cfg = config || defaultDescriptor;
+  if (Array.isArray(cfg && cfg.routerPrefixes) && cfg.routerPrefixes.length) {
+    return new Set(cfg.routerPrefixes.map((p) => p.toLowerCase()));
+  }
+  return new Set();
+}
+
 function splitModelEffort(value, config) {
   if (typeof value !== 'string' || !value.trim()) return { base: null, effort: null };
-  const efforts = getEffortVariants(config);
+  const cfg = config || defaultDescriptor;
+  const efforts = getEffortVariants(cfg);
   let effort = null;
   let raw = value.trim().toLowerCase();
 
@@ -72,11 +81,32 @@ function splitModelEffort(value, config) {
     raw = raw.replace(/\s*\([^)]*\)/g, '');
   }
 
-  raw = raw.split('::').pop();
-  raw = raw.split('/').pop();
+  const routerPrefixes = getRouterPrefixes(cfg);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    const slashIdx = raw.indexOf('/');
+    if (slashIdx !== -1) {
+      const pfx = raw.slice(0, slashIdx);
+      if (routerPrefixes.has(pfx)) {
+        raw = raw.slice(slashIdx + 1);
+        changed = true;
+        continue;
+      }
+    }
+    const colonIdx = raw.indexOf('::');
+    if (colonIdx !== -1) {
+      const pfx = raw.slice(0, colonIdx);
+      if (routerPrefixes.has(pfx)) {
+        raw = raw.slice(colonIdx + 2);
+        changed = true;
+        continue;
+      }
+    }
+  }
+
   raw = raw.split('@')[0];
 
-  const cfg = config || defaultDescriptor;
   const stripSuffixes = (cfg && cfg.aliasRules && cfg.aliasRules.stripSuffixes) || [
     ':free',
     '-free',
@@ -87,25 +117,38 @@ function splitModelEffort(value, config) {
     }
   }
 
-  raw = raw.replace(/[._\s]+/g, '-').replace(/^-+|-+$/g, '');
-
-  if (!effort) {
-    for (const eff of efforts) {
-      const suffix = '-' + eff;
-      if (raw.endsWith(suffix)) {
-        effort = eff;
-        raw = raw.slice(0, -suffix.length);
-        break;
-      }
-    }
+  if (cfg && cfg.aliasRules && cfg.aliasRules.digitBoundaryHyphen) {
+    raw = raw.replace(/([a-z]{2,})(\d)/g, '$1-$2');
   }
 
-  const depSuffixes = getDeploymentSuffixes(config);
-  for (const dep of depSuffixes) {
-    const s1 = ':' + dep;
-    const s2 = '-' + dep;
-    if (raw.endsWith(s1)) raw = raw.slice(0, -s1.length);
-    else if (raw.endsWith(s2)) raw = raw.slice(0, -s2.length);
+  raw = raw.replace(/[._\s]+/g, '-').replace(/^-+|-+$/g, '');
+
+  const depSuffixes = getDeploymentSuffixes(cfg);
+  let suffixChanged = true;
+  while (suffixChanged) {
+    suffixChanged = false;
+    for (const dep of depSuffixes) {
+      const s1 = ':' + dep;
+      const s2 = '-' + dep;
+      if (raw.endsWith(s1)) {
+        raw = raw.slice(0, -s1.length);
+        suffixChanged = true;
+      } else if (raw.endsWith(s2)) {
+        raw = raw.slice(0, -s2.length);
+        suffixChanged = true;
+      }
+    }
+    if (!effort) {
+      for (const eff of efforts) {
+        const suffix = '-' + eff;
+        if (raw.endsWith(suffix)) {
+          effort = eff;
+          raw = raw.slice(0, -suffix.length);
+          suffixChanged = true;
+          break;
+        }
+      }
+    }
   }
 
   raw = raw.replace(/^-+|-+$/g, '');
@@ -325,32 +368,77 @@ function normaliseModelId(value) {
 }
 
 // Preserve effort labels for exact leaderboard lookup; routing identity stays compatible.
-function leaderboardModelId(value) {
+function leaderboardModelId(value, config) {
   if (typeof value !== 'string' || !value.trim()) return null;
+  const cfg = config || defaultDescriptor;
   let raw = value
     .trim()
     .toLowerCase()
     .replace(/\s*\(([^)]*)\)/g, (_, effort) => '-' + effort.replace(/[^a-z0-9]+/g, '-'));
-  raw = raw.split('::').pop();
-  raw = raw.split('/').pop();
-  return raw
-    .split('@')[0]
-    .replace(/(?::free|-free)$/, '')
-    .replace(/[._\s]+/g, '-');
+
+  const routerPrefixes = getRouterPrefixes(cfg);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    const slashIdx = raw.indexOf('/');
+    if (slashIdx !== -1) {
+      const pfx = raw.slice(0, slashIdx);
+      if (routerPrefixes.has(pfx)) {
+        raw = raw.slice(slashIdx + 1);
+        changed = true;
+        continue;
+      }
+    }
+    const colonIdx = raw.indexOf('::');
+    if (colonIdx !== -1) {
+      const pfx = raw.slice(0, colonIdx);
+      if (routerPrefixes.has(pfx)) {
+        raw = raw.slice(colonIdx + 2);
+        changed = true;
+        continue;
+      }
+    }
+  }
+
+  raw = raw.split('@')[0];
+  raw = raw.replace(/(?::free|-free)$/, '');
+  if (cfg && cfg.aliasRules && cfg.aliasRules.digitBoundaryHyphen) {
+    raw = raw.replace(/([a-z]{2,})(\d)/g, '$1-$2');
+  }
+  return raw.replace(/[._\s]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+function tierForScore(score, ranking) {
+  if (score === null || score === undefined || !Number.isFinite(score)) return null;
+  if (!Array.isArray(ranking) || ranking.length === 0) return null;
+  const scores = ranking
+    .map((row) =>
+      row.normalizedScore !== undefined && row.normalizedScore !== null
+        ? row.normalizedScore
+        : row.score
+    )
+    .filter(Number.isFinite)
+    .sort((a, b) => a - b);
+  if (scores.length === 0) return null;
+  const tiers = ['T4', 'T3', 'T2', 'T1'];
+  const quartiles = tiers
+    .slice(1)
+    .map((_, index) => scores[Math.ceil(((index + 1) * scores.length) / tiers.length) - 1]);
+  return tiers[quartiles.filter((threshold) => score > threshold).length];
 }
 
 function matchModelPrior(modelId, ranking, options) {
   if (!modelId || !Array.isArray(ranking)) return null;
   const config = (options && (options.config || options.descriptor)) || defaultDescriptor;
   const { base, effort } = splitModelEffort(modelId, config);
-  const exactId = leaderboardModelId(modelId);
+  const exactId = leaderboardModelId(modelId, config);
 
   const byCanonical = new Map();
   for (const row of ranking) {
     if (!row) continue;
     if (row.canonical) {
       byCanonical.set(row.canonical, row);
-      const norm = leaderboardModelId(row.canonical);
+      const norm = leaderboardModelId(row.canonical, config);
       if (norm) byCanonical.set(norm, row);
       if (config && config.aliasRules && config.aliasRules.digitBoundaryHyphen) {
         byCanonical.set(row.canonical.replace(/([a-z])(\d)/g, '$1-$2'), row);
@@ -362,12 +450,24 @@ function matchModelPrior(modelId, ranking, options) {
   if (exactId && byCanonical.has(exactId)) {
     return { entry: byCanonical.get(exactId) };
   }
-  const depStrippedId = exactId
-    ? exactId.replace(
-        /(?::(?:batch|flex|cloud)|-?\[\d+(?:-\d+)?[km]\]|-(?:fast|latest|volc|turbo|\d{4}-\d{2}-\d{2}|\d{8}|\d{6}|\d{4}))$/,
-        ''
-      )
-    : null;
+  const depSuffixPattern =
+    /(?::(?:batch|flex|cloud)|-?\[\d+(?:\.\d+)?(?:-\d+)?[km]\]|-(?:fast|latest|volc|turbo|\d{4}-\d{2}-\d{2}|\d{8}|\d{6}|\d{4}))$/;
+  let depStrippedId = exactId ? exactId.replace(depSuffixPattern, '') : null;
+  if (!depStrippedId || depStrippedId === exactId) {
+    const depSuffixes = getDeploymentSuffixes(config);
+    depStrippedId = exactId;
+    for (const dep of depSuffixes) {
+      const s1 = ':' + dep;
+      const s2 = '-' + dep;
+      if (depStrippedId.endsWith(s1)) {
+        depStrippedId = depStrippedId.slice(0, -s1.length);
+        break;
+      } else if (depStrippedId.endsWith(s2)) {
+        depStrippedId = depStrippedId.slice(0, -s2.length);
+        break;
+      }
+    }
+  }
   if (depStrippedId && depStrippedId !== exactId && byCanonical.has(depStrippedId)) {
     return {
       entry: byCanonical.get(depStrippedId),
@@ -390,22 +490,38 @@ function matchModelPrior(modelId, ranking, options) {
     matchedEntry = byCanonical.get(withHyphen) || byCanonical.get(withoutHyphen);
   }
 
-  // 3. Fallback queue for legacy unmerged deployment/reasoning suffixes
+  // 3. Fallback queue for unmerged deployment/reasoning suffixes (using configured vocabulary only)
   let matchedVia = undefined;
   let matchedBaseId = undefined;
   if (!matchedEntry && exactId) {
     const queue = [{ id: exactId, reasoning: false }];
     const seen = new Set([exactId]);
+    const efforts = getEffortVariants(config);
+    const depSuffixes = getDeploymentSuffixes(config);
     for (const current of queue) {
       if (!current.id) continue;
-      const deployment = current.id.replace(
-        /(?::(?:batch|flex|cloud)|-?\[\d+(?:-\d+)?[km]\]|-(?:fast|latest|volc|turbo|\d{4}-\d{2}-\d{2}|\d{8}|\d{6}|\d{4}))$/,
-        ''
-      );
-      const reasoning = current.id.replace(
-        /-(?:thinking|agentic|high|medium|low|minimal|max|xhigh|none|reasoning|non-reasoning)$/,
-        ''
-      );
+      let deployment = current.id.replace(depSuffixPattern, '');
+      if (deployment === current.id) {
+        for (const dep of depSuffixes) {
+          const s1 = ':' + dep;
+          const s2 = '-' + dep;
+          if (deployment.endsWith(s1)) {
+            deployment = deployment.slice(0, -s1.length);
+            break;
+          } else if (deployment.endsWith(s2)) {
+            deployment = deployment.slice(0, -s2.length);
+            break;
+          }
+        }
+      }
+      let reasoning = current.id;
+      for (const eff of efforts) {
+        const sfx = '-' + eff;
+        if (reasoning.endsWith(sfx)) {
+          reasoning = reasoning.slice(0, -sfx.length);
+          break;
+        }
+      }
       for (const [b, effFlag] of [
         [deployment, false],
         [reasoning, true],
@@ -461,16 +577,27 @@ function matchModelPrior(modelId, ranking, options) {
       combinedBenchmarks = effortBenchmarks.slice();
       for (const baseB of baseBenchmarks) {
         if (!combinedBenchmarks.some((b) => b.name === baseB.name)) {
-          combinedBenchmarks.push({ ...baseB, fallback: true, fallbackFrom: 'base' });
+          combinedBenchmarks.push(baseB);
           hasFallback = true;
         }
       }
     }
 
-    const effScores = combinedBenchmarks.map((b) => b.score).filter(Number.isFinite);
-    const effScore = effScores.length
-      ? Math.round((effScores.reduce((s, v) => s + v, 0) / effScores.length) * 10) / 10
+    const normScores = combinedBenchmarks
+      .map((b) =>
+        b.normalizedScore !== undefined && b.normalizedScore !== null ? b.normalizedScore : b.score
+      )
+      .filter(Number.isFinite);
+    const effScore = normScores.length
+      ? Math.round((normScores.reduce((s, v) => s + v, 0) / normScores.length) * 10) / 10
       : matchedEntry.score;
+
+    const rawScores = combinedBenchmarks.map((b) => b.score).filter(Number.isFinite);
+    const rawScore = rawScores.length
+      ? Math.round((rawScores.reduce((s, v) => s + v, 0) / rawScores.length) * 10) / 10
+      : matchedEntry.rawScore;
+
+    const tier = tierForScore(effScore, ranking) || matchedEntry.codingTier;
 
     return {
       entry: {
@@ -478,6 +605,10 @@ function matchModelPrior(modelId, ranking, options) {
         benchmarks: combinedBenchmarks,
         effort,
         score: effScore,
+        normalizedScore: effScore,
+        rawScore,
+        codingTier: tier,
+        reviewTier: tier,
         fallback: hasFallback,
       },
       effort,
@@ -542,22 +673,27 @@ function benchmarkTimestamp(b) {
 }
 
 function dedupeBenchmarks(benchmarks) {
-  const byName = new Map();
+  const byKey = new Map();
   for (const b of benchmarks || []) {
     if (!b || typeof b !== 'object' || typeof b.name !== 'string') continue;
-    const existing = byName.get(b.name);
+    const key = getBenchmarkStreamKey(b);
+    const existing = byKey.get(key);
     if (!existing) {
-      byName.set(b.name, b);
+      byKey.set(key, b);
     } else {
       const tsExisting = benchmarkTimestamp(existing);
       const tsNew = benchmarkTimestamp(b);
       // Replace if new is newer or equal (latest value per source, deterministic)
       if (tsNew >= tsExisting) {
-        byName.set(b.name, b);
+        byKey.set(key, b);
       }
     }
   }
-  return Array.from(byName.values()).sort((a, b) => a.name.localeCompare(b.name));
+  return Array.from(byKey.values()).sort((a, b) =>
+    a.name === b.name
+      ? getBenchmarkStreamKey(a).localeCompare(getBenchmarkStreamKey(b))
+      : a.name.localeCompare(b.name)
+  );
 }
 
 function getBenchmarkStreamKey(b) {
@@ -578,10 +714,11 @@ function applyNormalizationAndTiers(rows, config, now) {
     }
   }
 
-  // 2. Collect distribution of scores per benchmark source
+  // 2. Collect distribution of scores per benchmark source (excluding synthetic fallbacks)
   const streamScores = new Map();
   for (const row of rows) {
     for (const b of row.benchmarks || []) {
+      if (b.fallback) continue;
       if (Number.isFinite(b.score)) {
         const key = getBenchmarkStreamKey(b);
         if (!streamScores.has(key)) streamScores.set(key, []);
@@ -590,6 +727,7 @@ function applyNormalizationAndTiers(rows, config, now) {
     }
     for (const effData of Object.values(row.efforts || {})) {
       for (const eb of effData.benchmarks || []) {
+        if (eb.fallback) continue;
         if (Number.isFinite(eb.score)) {
           const key = getBenchmarkStreamKey(eb);
           if (!streamScores.has(key)) streamScores.set(key, []);
@@ -671,14 +809,23 @@ function mergePriorDocuments(documents, now, options) {
       const { base: canonical, effort } = splitModelEffort(rawId, config);
       if (!canonical) continue;
 
-      const row = byCanonical.get(canonical) || {
-        canonical,
-        benchmarks: [],
-        efforts: {},
-        sources: [],
-      };
+      let row = byCanonical.get(canonical);
+      if (!row && config && config.aliasRules && config.aliasRules.digitBoundaryHyphen) {
+        const withHyphen = canonical.replace(/^([a-z]{2,})(\d)/, '$1-$2');
+        const withoutHyphen = canonical.replace(/^([a-z]{2,})-+(\d)/, '$1$2');
+        row = byCanonical.get(withHyphen) || byCanonical.get(withoutHyphen);
+      }
+      if (!row) {
+        row = {
+          canonical,
+          benchmarks: [],
+          efforts: {},
+          sources: [],
+        };
+      }
 
-      const sourceRows = (item.sources || (item.source ? [item.source] : [])).filter(
+      const docSources = (document && document.sources) || [];
+      const sourceRows = (item.sources || (item.source ? [item.source] : docSources)).filter(
         (source) => source && source.url
       );
       for (const source of sourceRows) {
@@ -691,11 +838,7 @@ function mergePriorDocuments(documents, now, options) {
       }
 
       const benchmarks = item.benchmarks || {};
-      if (!effort && row.benchmarks.some((b) => b.fallback)) {
-        // Real base model row arrived after earlier effort row populated fallback benchmarks
-        row.benchmarks = row.benchmarks.filter((b) => !b.fallback);
-      }
-      const targetBenchmarks = effort ? [] : row.benchmarks;
+      const targetBenchmarks = effort ? [] : row.benchmarks.filter((b) => !b.fallback);
 
       for (const [name, value] of Object.entries(benchmarks)) {
         const score = Number(value && typeof value === 'object' ? value.score : value);
@@ -723,7 +866,7 @@ function mergePriorDocuments(documents, now, options) {
       }
 
       const directScore = benchmarkScore(item);
-      if (directScore !== null && targetBenchmarks.length === 0) {
+      if (directScore !== null && Object.keys(benchmarks).length === 0) {
         const directSource = sourceRows[0]
           ? {
               ...(sourceRows[0].id
@@ -748,11 +891,8 @@ function mergePriorDocuments(documents, now, options) {
       if (effort) {
         row.efforts[effort] = row.efforts[effort] || { benchmarks: [] };
         row.efforts[effort].benchmarks.push(...targetBenchmarks);
-        if (row.benchmarks.length === 0) {
-          for (const b of targetBenchmarks) {
-            row.benchmarks.push({ ...b, fallback: true, fallbackFrom: effort });
-          }
-        }
+      } else {
+        row.benchmarks = targetBenchmarks;
       }
 
       if (item.releaseDate) row.releaseDate = item.releaseDate;
@@ -761,6 +901,23 @@ function mergePriorDocuments(documents, now, options) {
       byCanonical.set(canonical, row);
     }
   }
+
+  // Derive base fallbacks from deduplicated efforts when base benchmarks are empty
+  for (const row of byCanonical.values()) {
+    if (row.benchmarks.length === 0) {
+      for (const [effName, effData] of Object.entries(row.efforts || {})) {
+        const effBenchmarks = dedupeBenchmarks(effData.benchmarks);
+        for (const b of effBenchmarks) {
+          if (
+            !row.benchmarks.some((rb) => getBenchmarkStreamKey(rb) === getBenchmarkStreamKey(b))
+          ) {
+            row.benchmarks.push({ ...b, fallback: true, fallbackFrom: effName });
+          }
+        }
+      }
+    }
+  }
+
   const rows = Array.from(byCanonical.values());
   applyNormalizationAndTiers(rows, config, now);
   const method = getNormalizationMethod(config);
@@ -797,11 +954,25 @@ function assignQuartileTiers(rows) {
       row.score = null;
       row.codingTier = null;
       row.reviewTier = null;
-      continue;
+    } else {
+      const tier = tiers[quartiles.filter((threshold) => s > threshold).length];
+      row.codingTier = tier;
+      row.reviewTier = tier;
     }
-    const tier = tiers[quartiles.filter((threshold) => s > threshold).length];
-    row.codingTier = tier;
-    row.reviewTier = tier;
+    for (const effData of Object.values(row.efforts || {})) {
+      const es =
+        effData.normalizedScore !== undefined && effData.normalizedScore !== null
+          ? effData.normalizedScore
+          : effData.score;
+      if (es === null || es === undefined || !Number.isFinite(es)) {
+        effData.codingTier = null;
+        effData.reviewTier = null;
+      } else {
+        const tier = tiers[quartiles.filter((threshold) => es > threshold).length];
+        effData.codingTier = tier;
+        effData.reviewTier = tier;
+      }
+    }
   }
   return rows;
 }
@@ -831,14 +1002,46 @@ async function refreshPriors(options) {
   if (!Array.isArray(results)) throw new Error('PRIORS_SEARCH_RESULT_INVALID');
   const document = mergePriorDocuments(results, opts.now, { ...opts, config });
   if (opts.preserveHistory) {
-    for (const row of loadPriors(output).ranking) {
-      const fresh = document.ranking.find((item) => item.canonical === row.canonical);
+    const historicalRanking = loadPriors(output).ranking || [];
+    for (const row of historicalRanking) {
+      // Canonicalize historical row into base + effort structure to avoid obsolete rows (e.g. grok-4-7-high)
+      const { base: histCanonical, effort: histEffort } = splitModelEffort(row.canonical, config);
+      const canonicalKey = histCanonical || row.canonical;
+
+      let fresh = document.ranking.find((item) => item.canonical === canonicalKey);
       if (!fresh) {
-        document.ranking.push(row);
+        fresh = {
+          canonical: canonicalKey,
+          benchmarks: [],
+          efforts: {},
+          sources: (row.sources || []).slice(),
+          releaseDate: row.releaseDate,
+          contextWindow: row.contextWindow,
+        };
+        document.ranking.push(fresh);
+      }
+
+      if (histEffort) {
+        fresh.efforts = fresh.efforts || {};
+        fresh.efforts[histEffort] = fresh.efforts[histEffort] || { benchmarks: [] };
+        const mergedEff = (fresh.efforts[histEffort].benchmarks || []).slice();
+        for (const oldB of row.benchmarks || []) {
+          const oldKey = getBenchmarkStreamKey(oldB);
+          const idx = mergedEff.findIndex((b) => getBenchmarkStreamKey(b) === oldKey);
+          if (idx === -1) {
+            mergedEff.push(oldB);
+          } else {
+            if (benchmarkTimestamp(oldB) > benchmarkTimestamp(mergedEff[idx])) {
+              mergedEff[idx] = oldB;
+            }
+          }
+        }
+        fresh.efforts[histEffort].benchmarks = dedupeBenchmarks(mergedEff);
       } else {
         const mergedBenchmarks = fresh.benchmarks ? fresh.benchmarks.slice() : [];
         for (const oldB of row.benchmarks || []) {
-          const freshIdx = mergedBenchmarks.findIndex((b) => b.name === oldB.name);
+          const oldKey = getBenchmarkStreamKey(oldB);
+          const freshIdx = mergedBenchmarks.findIndex((b) => getBenchmarkStreamKey(b) === oldKey);
           if (freshIdx === -1) {
             mergedBenchmarks.push(oldB);
           } else {
@@ -849,38 +1052,56 @@ async function refreshPriors(options) {
           }
         }
         fresh.benchmarks = dedupeBenchmarks(mergedBenchmarks);
+      }
 
-        if (row.efforts) {
-          fresh.efforts = fresh.efforts || {};
-          for (const [effName, effData] of Object.entries(row.efforts)) {
-            if (!fresh.efforts[effName]) {
-              fresh.efforts[effName] = effData;
-            } else {
-              const mergedEff = (fresh.efforts[effName].benchmarks || []).slice();
-              for (const oldB of effData.benchmarks || []) {
-                const idx = mergedEff.findIndex((b) => b.name === oldB.name);
-                if (idx === -1) {
-                  mergedEff.push(oldB);
-                } else {
-                  if (benchmarkTimestamp(oldB) > benchmarkTimestamp(mergedEff[idx])) {
-                    mergedEff[idx] = oldB;
-                  }
+      if (row.efforts) {
+        fresh.efforts = fresh.efforts || {};
+        for (const [effName, effData] of Object.entries(row.efforts)) {
+          if (!fresh.efforts[effName]) {
+            fresh.efforts[effName] = { benchmarks: (effData.benchmarks || []).slice() };
+          } else {
+            const mergedEff = (fresh.efforts[effName].benchmarks || []).slice();
+            for (const oldB of effData.benchmarks || []) {
+              const oldKey = getBenchmarkStreamKey(oldB);
+              const idx = mergedEff.findIndex((b) => getBenchmarkStreamKey(b) === oldKey);
+              if (idx === -1) {
+                mergedEff.push(oldB);
+              } else {
+                if (benchmarkTimestamp(oldB) > benchmarkTimestamp(mergedEff[idx])) {
+                  mergedEff[idx] = oldB;
                 }
               }
-              fresh.efforts[effName].benchmarks = dedupeBenchmarks(mergedEff);
             }
+            fresh.efforts[effName].benchmarks = dedupeBenchmarks(mergedEff);
           }
         }
+      }
 
-        const existingUrls = new Set((fresh.sources || []).map((s) => s.url));
-        for (const s of row.sources || []) {
-          if (s && s.url && !existingUrls.has(s.url)) {
-            fresh.sources.push(s);
-            existingUrls.add(s.url);
+      const existingUrls = new Set((fresh.sources || []).map((s) => s.url));
+      for (const s of row.sources || []) {
+        if (s && s.url && !existingUrls.has(s.url)) {
+          fresh.sources.push(s);
+          existingUrls.add(s.url);
+        }
+      }
+    }
+
+    // Populate base fallbacks for models without direct base benchmarks
+    for (const row of document.ranking) {
+      if (row.benchmarks.length === 0) {
+        for (const [effName, effData] of Object.entries(row.efforts || {})) {
+          const effBenchmarks = dedupeBenchmarks(effData.benchmarks);
+          for (const b of effBenchmarks) {
+            if (
+              !row.benchmarks.some((rb) => getBenchmarkStreamKey(rb) === getBenchmarkStreamKey(b))
+            ) {
+              row.benchmarks.push({ ...b, fallback: true, fallbackFrom: effName });
+            }
           }
         }
       }
     }
+
     applyNormalizationAndTiers(document.ranking, config, opts.now);
   }
   document.normalizationMethod = method;

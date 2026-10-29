@@ -96,7 +96,7 @@ N/A — Controller brain routing and priors logic; no user interface is modified
 
 | Review round | Commit | Verdict | Findings resolved |
 |---|---|---|---|
-| 1 | pending | pending | Initial authoring |
+| 1 | `5f9921a3` | `CHANGES_REQUIRED` | Resolved all 6 P1 findings (normalized effort lookup, deduplication by source+metric, strict configured routerPrefixes/effort vocabulary, alias convergence on ingestion, exclusion of synthetic fallbacks from source percentiles, and canonicalization of obsolete historical effort rows during refresh) and P2.7/P2.9. |
 
 ## Residual limitations
 

@@ -22,7 +22,12 @@
   "routerPrefixes": [
     "gcli",
     "cl",
+    "gh",
     "ag",
+    "agy",
+    "qwen",
+    "provider",
+    "openai",
     "ninerouter",
     "9router",
     "openrouter",

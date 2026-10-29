@@ -13,6 +13,7 @@ const {
   getNormalizationMethod,
   normalizeScore,
   dedupeBenchmarks,
+  splitModelEffort,
 } = require('../priors');
 const config = require('../priors-sources/public.json');
 
@@ -444,4 +445,256 @@ test('New defect: priors refresh preserves newer historical benchmark if incomin
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('P1.1 regression: effort lookup aggregates normalized scores and keeps tier consistent', () => {
+  const docs = [
+    {
+      sources: [{ id: 'benchlm', url: 'https://benchlm.ai/data/models.json' }],
+      models: [
+        { modelId: 'model-a', benchmarks: { swe: 10 } },
+        { modelId: 'model-a-high', benchmarks: { swe: 100 } },
+        { modelId: 'model-b', benchmarks: { swe: 50 } },
+        { modelId: 'model-b-high', benchmarks: { swe: 200 } },
+      ],
+    },
+  ];
+
+  const merged = mergePriorDocuments(docs);
+  // Population scores: swe: 10 (25%), 50 (50%), 100 (75%), 200 (100%)
+  // model-a base score is 25 (T4)
+  // model-a-high normalized score is 75 (T2)
+  const matchHigh = matchModelPrior('model-a-high', merged.ranking);
+  assert.ok(matchHigh);
+  assert.equal(matchHigh.effort, 'high');
+  // Must NOT be the raw score 100
+  assert.equal(matchHigh.entry.score, 75, 'effort score must be normalized aggregate');
+  assert.equal(matchHigh.entry.normalizedScore, 75);
+  // Must NOT inherit the base entry's T4 tier
+  assert.equal(matchHigh.entry.codingTier, 'T1');
+  assert.equal(matchHigh.entry.reviewTier, 'T1');
+});
+
+test('P1.2 regression: deduplication preserves independent sources for the same benchmark metric', () => {
+  const docs = [
+    {
+      sources: [{ id: 'benchlm', url: 'https://benchlm.ai/data/models.json' }],
+      models: [{ modelId: 'model-x', benchmarks: { sweBench: 70 } }],
+    },
+    {
+      sources: [
+        { id: 'artificial-analysis', url: 'https://artificialanalysis.ai/leaderboards/models' },
+      ],
+      models: [{ modelId: 'model-x', benchmarks: { sweBench: 80 } }],
+    },
+  ];
+
+  const merged = mergePriorDocuments(docs);
+  const row = merged.ranking.find((r) => r.canonical === 'model-x');
+  assert.ok(row);
+  // Both sources must be preserved on model-x benchmarks (deduped by source+name, not name alone)
+  assert.equal(row.benchmarks.length, 2, 'independent sources for same metric must not overwrite');
+  const benchlm = row.benchmarks.find((b) => b.source && b.source.id === 'benchlm');
+  const aa = row.benchmarks.find((b) => b.source && b.source.id === 'artificial-analysis');
+  assert.ok(benchlm && aa);
+  assert.equal(benchlm.score, 70);
+  assert.equal(aa.score, 80);
+});
+
+test('P1.3 regression: prefix stripping respects routerPrefixes and excluded vocabulary stays unmatched', () => {
+  const docs = [
+    {
+      sources: [{ id: 'benchlm', url: 'https://benchlm.ai/data/models.json' }],
+      models: [
+        { modelId: 'qwen-3-8', benchmarks: { swe: 80 } },
+        { modelId: 'grok-4-7', benchmarks: { swe: 85 } },
+      ],
+    },
+  ];
+
+  const merged = mergePriorDocuments(docs);
+
+  // 1. Unknown router prefix must NOT be stripped (fail closed)
+  const unknownMatch = matchModelPrior('unknownrouter/grok-4.7', merged.ranking);
+  assert.equal(unknownMatch, null, 'unknown router prefix must stay unmatched');
+
+  // 2. Vocabulary not in configured effortVariants (e.g. 'max') must NOT be stripped as effort
+  const maxMatch = matchModelPrior('qwen-3-8-max', merged.ranking);
+  assert.equal(maxMatch, null, 'excluded vocabulary max must not match base qwen-3-8');
+});
+
+test('P1.4 regression: configured aliases with digitBoundaryHyphen converge to one canonical row', () => {
+  const docs = [
+    {
+      sources: [{ id: 'benchlm', url: 'https://benchlm.ai/data/models.json' }],
+      models: [
+        { modelId: 'Qwen 3.8 Max', benchmarks: { swe: 80 } },
+        { modelId: 'qwen3.8-max-high', benchmarks: { swe: 90 } },
+      ],
+    },
+  ];
+
+  const merged = mergePriorDocuments(docs);
+  // Both Qwen 3.8 Max and qwen3.8-max-high must merge into one canonical row
+  const qwenRows = merged.ranking.filter((r) => r.canonical.includes('qwen'));
+  assert.equal(qwenRows.length, 1, 'aliases must converge into exactly one canonical row');
+  assert.equal(qwenRows[0].canonical, 'qwen-3-8-max');
+  assert.ok(qwenRows[0].efforts && qwenRows[0].efforts.high, 'effort high must be under efforts');
+});
+
+test('P1.5 regression: synthetic fallback copies must not enter source percentiles', () => {
+  const docs = [
+    {
+      sources: [{ id: 'benchlm', url: 'https://benchlm.ai/data/models.json' }],
+      models: [
+        // Effort-only model: scores 10 on high effort
+        { modelId: 'model-effort-only (high)', benchmarks: { swe: 10 } },
+        // Base-only model: scores 20
+        { modelId: 'model-base-only', benchmarks: { swe: 20 } },
+      ],
+    },
+  ];
+
+  const merged = mergePriorDocuments(docs);
+  const m1 = merged.ranking.find((r) => r.canonical === 'model-effort-only');
+  const m2 = merged.ranking.find((r) => r.canonical === 'model-base-only');
+
+  // Actual observations are only two: [10, 20].
+  // Score 10 percentile must be (1/2)*100 = 50.0, NOT (2/3)*100 = 66.7 from synthetic fallback duplication
+  assert.equal(m1.score, 50);
+  assert.equal(m2.score, 100);
+});
+
+test('P1.6 regression: refresh drops obsolete effort rows superseded by canonical entries', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'priors-obsolete-'));
+  const file = path.join(dir, 'priors.json');
+
+  try {
+    // Historical priors has obsolete unmerged grok-4-7-high row
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        sources: [{ id: 'benchlm', url: 'https://benchlm.ai/data/models.json' }],
+        ranking: [
+          {
+            canonical: 'grok-4-7-high',
+            score: 80,
+            sources: [
+              {
+                id: 'benchlm',
+                url: 'https://benchlm.ai/data/models.json',
+                retrievedAt: '2026-10-10T00:00:00Z',
+              },
+            ],
+            benchmarks: [
+              {
+                name: 'swe',
+                score: 80,
+                source: {
+                  id: 'benchlm',
+                  url: 'https://benchlm.ai/data/models.json',
+                  retrievedAt: '2026-10-10T00:00:00Z',
+                },
+              },
+            ],
+          },
+        ],
+      })
+    );
+
+    // Fresh refresh merges grok-4-7 with efforts
+    const refreshed = await refreshPriors({
+      file,
+      preserveHistory: true,
+      search: async () => [
+        {
+          sources: [{ id: 'benchlm', url: 'https://benchlm.ai/data/models.json' }],
+          models: [
+            {
+              modelId: 'grok-4.7',
+              benchmarks: { swe: 85 },
+              source: {
+                id: 'benchlm',
+                url: 'https://benchlm.ai/data/models.json',
+                retrievedAt: '2026-10-29T00:00:00Z',
+              },
+            },
+          ],
+        },
+      ],
+      liveModels: ['grok-4-7'],
+    });
+
+    // Obsolete effort row grok-4-7-high must NOT survive in refreshed ranking
+    const obsoleteRow = refreshed.ranking.find((r) => r.canonical === 'grok-4-7-high');
+    assert.equal(obsoleteRow, undefined, 'obsolete effort row grok-4-7-high must not survive');
+
+    const canonicalRow = refreshed.ranking.find((r) => r.canonical === 'grok-4-7');
+    assert.ok(canonicalRow, 'canonical row grok-4-7 must exist');
+    assert.equal(refreshed.ranking.length, 1, 'ranking must have exactly one row');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('P2.7 regression: base fallbacks reflect latest deduplicated effort values, not superseded ones', () => {
+  const docs = [
+    {
+      sources: [
+        {
+          id: 'benchlm',
+          url: 'https://benchlm.ai/data/models.json',
+          retrievedAt: '2026-10-10T00:00:00Z',
+        },
+      ],
+      models: [
+        {
+          modelId: 'effort-model (high)',
+          benchmarks: { swe: 50 },
+          source: {
+            id: 'benchlm',
+            url: 'https://benchlm.ai/data/models.json',
+            retrievedAt: '2026-10-10T00:00:00Z',
+          },
+        },
+      ],
+    },
+    {
+      sources: [
+        {
+          id: 'benchlm',
+          url: 'https://benchlm.ai/data/models.json',
+          retrievedAt: '2026-10-20T00:00:00Z',
+        },
+      ],
+      models: [
+        {
+          modelId: 'effort-model (high)',
+          benchmarks: { swe: 80 },
+          source: {
+            id: 'benchlm',
+            url: 'https://benchlm.ai/data/models.json',
+            retrievedAt: '2026-10-20T00:00:00Z',
+          },
+        },
+      ],
+    },
+  ];
+
+  const merged = mergePriorDocuments(docs);
+  const row = merged.ranking.find((r) => r.canonical === 'effort-model');
+  assert.ok(row);
+  assert.equal(row.benchmarks.length, 1);
+  assert.equal(row.benchmarks[0].score, 80, 'base fallback must reflect latest deduplicated value');
+  assert.equal(row.benchmarks[0].fallback, true);
+});
+
+test('P2.9 regression: combined configured deployment and effort suffixes resolve effort identity', () => {
+  const { base: b1, effort: e1 } = splitModelEffort('deepseek-high-fast');
+  assert.equal(b1, 'deepseek');
+  assert.equal(e1, 'high');
+
+  const { base: b2, effort: e2 } = splitModelEffort('deepseek-fast-high');
+  assert.equal(b2, 'deepseek');
+  assert.equal(e2, 'high');
 });
