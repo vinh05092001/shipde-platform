@@ -290,3 +290,47 @@ test('TASK-AI-142: intake refreshes discovery only when an env key has no source
   await loadDiscoveredSources(root, { discover, discoverSources: () => more });
   assert.equal(calls, 2);
 });
+
+test('TASK-AI-142 Finding 7: recentRouteSuccess requires exact seven-part route identity and age <= routeEvidenceMaxAgeMs', () => {
+  const { recentRouteSuccess } = require('../route-evidence');
+  const now = Date.now();
+  const c1 = {
+    harness: 'agy-pool',
+    gateway: 'agy-gateway',
+    upstream: 'antigravity',
+    accountId: 'agy01',
+    modelId: 'claude-sonnet-4',
+  };
+  c1.candidateKey = candidateKey(c1);
+
+  const c2 = {
+    harness: 'agy-pool',
+    gateway: 'agy-gateway',
+    upstream: 'antigravity',
+    accountId: 'agy01',
+    modelId: 'claude-opus-4',
+  };
+  c2.candidateKey = candidateKey(c2);
+
+  const store = { version: 1, paths: {}, events: [] };
+  // Record success only for c1 (claude-sonnet-4)
+  health.recordResult(
+    store,
+    c1.modelId,
+    { id: c1.gateway, accountId: c1.accountId },
+    { ok: true, status: 200 },
+    now
+  );
+
+  const registry = {
+    sources: [],
+    dispatch: { routeEvidenceMaxAgeMs: 60000 },
+  };
+
+  // c1 within maxAge is true
+  assert.equal(recentRouteSuccess(c1, store, { now, registry }), true);
+  // c2 (different model on same account) must NOT be recentRouteSuccess
+  assert.equal(recentRouteSuccess(c2, store, { now, registry }), false);
+  // c1 beyond maxAge (now + 60001) must NOT be recentRouteSuccess
+  assert.equal(recentRouteSuccess(c1, store, { now: now + 60001, registry }), false);
+});

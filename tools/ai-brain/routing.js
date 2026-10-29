@@ -489,7 +489,27 @@ async function assessTask(profile, opts) {
     weightSource = 'preset:QUALITY_FIRST';
     dimensionWeightSources = null;
   }
-  const decidedBy = qualityOverride ? 'controller' : jevDecided ? 'jev' : 'controller';
+  // Operator weighting comes from config (dispatch.weightProfileByRole naming one of
+  // dispatch.operatorWeightProfiles); it is never offered to JEV.
+  const operatorProfile =
+    profile.weightProfileOverride &&
+    profile.weightOverride &&
+    typeof profile.weightOverride === 'object'
+      ? profile.weightProfileOverride
+      : null;
+  if (operatorProfile) {
+    chosenProfile = operatorProfile;
+    weights = { ...profile.weightOverride };
+    weightSource = 'operator:' + operatorProfile;
+    dimensionWeightSources = null;
+  }
+  const decidedBy = operatorProfile
+    ? 'operator'
+    : qualityOverride
+      ? 'controller'
+      : jevDecided
+        ? 'jev'
+        : 'controller';
 
   const reasonCodes = [];
   if (jevDecided) reasonCodes.push('JEV_DECIDED');
@@ -497,7 +517,9 @@ async function assessTask(profile, opts) {
     reasonCodes.push(
       'JEV_UNDECIDED:' + String((result.jev && result.jev.reason) || result.reason || 'UNKNOWN')
     );
-  if (weightSource.startsWith('mixed:')) {
+  if (operatorProfile) {
+    reasonCodes.push('WEIGHTS_' + operatorProfile + '_OPERATOR');
+  } else if (weightSource.startsWith('mixed:')) {
     reasonCodes.push('WEIGHTS_JEV_MIXED');
   } else if (weightSource === 'jev-score') {
     reasonCodes.push('WEIGHTS_JEV_SCORE');
@@ -581,7 +603,16 @@ function failureDomainFromCandidateKey(key) {
 }
 
 let upstreamGatewayIndex = null;
-function getUpstreamGatewayIndex() {
+function getUpstreamGatewayIndex(registry) {
+  if (registry && Array.isArray(registry.sources)) {
+    const idx = new Map();
+    for (const src of registry.sources) {
+      if (src.routerAlias && src.reachedVia && !idx.has(src.routerAlias)) {
+        idx.set(src.routerAlias, src.reachedVia);
+      }
+    }
+    return idx;
+  }
   if (upstreamGatewayIndex) return upstreamGatewayIndex;
   upstreamGatewayIndex = new Map();
   try {
@@ -611,15 +642,18 @@ function getUpstreamGatewayIndex() {
   return upstreamGatewayIndex;
 }
 
-function resolveGatewayForUpstream(upstream) {
+function resolveGatewayForUpstream(upstream, registry) {
   if (!upstream || upstream === '*') return '';
-  const idx = getUpstreamGatewayIndex();
+  const idx = getUpstreamGatewayIndex(registry);
   return idx.get(upstream) || '';
 }
 
-function canonicalFailureDomain(x) {
+function canonicalFailureDomain(x, registry) {
   if (!x) return 'unknown';
   if (typeof x === 'object') {
+    if (x.failureDomain && typeof x.failureDomain === 'string' && x.failureDomain !== 'unknown') {
+      return x.failureDomain;
+    }
     if (x.gateway && x.upstream && x.gateway !== '*') {
       return `${x.gateway}/${x.upstream}`;
     }
@@ -627,7 +661,11 @@ function canonicalFailureDomain(x) {
       const fromKey = failureDomainFromCandidateKey(x.candidateKey);
       if (fromKey && fromKey !== 'unknown') return fromKey;
     }
-    const gw = x.gateway && x.gateway !== '*' ? x.gateway : resolveGatewayForUpstream(x.upstream);
+    if (!x.gateway && x.upstream && x.upstream.startsWith('agy')) {
+      return `agy/${x.upstream}`;
+    }
+    const gw =
+      x.gateway && x.gateway !== '*' ? x.gateway : resolveGatewayForUpstream(x.upstream, registry);
     const up = x.upstream && x.upstream !== '*' ? x.upstream : '';
     const parts = [gw, up].filter(Boolean);
     return parts.length ? parts.join('/') : 'unknown';
@@ -1257,7 +1295,13 @@ function scoreForProfile(candidate, assessment, ctx) {
   )
     ? UNKNOWN_EVIDENCE_PENALTY
     : 0;
-  score = Math.max(0, score - busyPenalty - agePenalty - headroomPenalty - contextPenalty);
+  // An operator profile may rank on its weighted dimensions alone (no availability
+  // penalties or tier bonus), e.g. writers on benchmark quality.
+  const pureWeights = Boolean(
+    assessment && assessment.weights && assessment.weights.applyPenalties === false
+  );
+  if (!pureWeights)
+    score = Math.max(0, score - busyPenalty - agePenalty - headroomPenalty - contextPenalty);
   // A scored prior is already blended into quality above. Only legacy priors
   // without a numeric score retain the standalone tier bonus.
   const weightedPriorContribution =
@@ -1268,7 +1312,7 @@ function scoreForProfile(candidate, assessment, ctx) {
         : 0;
   const priorScoreIsBlended = effectivePriorUsable && priorHasScore;
   const scorePriorContribution = priorScoreIsBlended ? 0 : weightedPriorContribution;
-  if (scorePriorContribution) score += scorePriorContribution;
+  if (scorePriorContribution && !pureWeights) score += scorePriorContribution;
   if (prior) {
     if (priorHasScore || prior.score === null) {
       prior.contribution = scorePriorContribution;
@@ -1315,6 +1359,11 @@ function scoreForProfile(candidate, assessment, ctx) {
  */
 function rankForProfile(candidates, profile, assessment, ctx) {
   const context = ctx || {};
+  if (!context.quotaState && context.loadQuotaState !== false && context.useStoredQuota !== false) {
+    try {
+      context.quotaState = require('./quota-scan').loadQuotaState(context);
+    } catch {}
+  }
   const dispatchConfig =
     context.dispatchConfig || sourceRegistry.getDispatchConfig(context.registry, context);
   const now = context.now || Date.now();
@@ -1470,12 +1519,23 @@ function rankForProfile(candidates, profile, assessment, ctx) {
     }
     if (headroom.status === 'exhausted' || headroom.status === 'cooling') {
       reject(
-        headroom.status === 'exhausted' ? 'QUOTA_EXHAUSTED' : 'COOLDOWN_ACTIVE',
+        headroom.status === 'exhausted' || /QUOTA|EXHAUST/.test(headroom.reason || '')
+          ? 'QUOTA_EXHAUSTED'
+          : 'COOLDOWN_ACTIVE',
         c.accountId && c.accountId !== '*' ? 'account' : 'quotaScope'
       );
       continue;
     }
-    const candidateBlock = evidence.isCandidateBlocked(context.evidenceData, c);
+    const candidateBlock = evidence.isCandidateBlocked(context.evidenceData, c, {
+      now: context.now,
+      quotaStateFile: context.quotaStateFile,
+      quotaState:
+        context.quotaState !== undefined
+          ? context.quotaState
+          : context.useStoredQuota === false
+            ? null
+            : undefined,
+    });
     if (
       candidateBlock.blocked ||
       c.blocked ||
@@ -1574,6 +1634,8 @@ function rankForProfile(candidates, profile, assessment, ctx) {
     const scored = scoreForProfile(c, assessment, scoreContext);
     const isQualityUnknown =
       scored.breakdown.qualityLabel === 'QUALITY_UNKNOWN' || scored.breakdown.quality === null;
+    const routeEvidenceApi = require('./route-evidence');
+    const hasFresh = routeEvidenceApi.hasFreshOkOrCompletion(c, context.quotaState, scoreContext);
     ranked.push(
       Object.assign({}, c, {
         candidateKey: key,
@@ -1584,6 +1646,7 @@ function rankForProfile(candidates, profile, assessment, ctx) {
         headroomStatus: headroom.status,
         probation: admittedOnProbation,
         probationRequiresIndependentReview: admittedOnProbation,
+        hasFreshEvidence: hasFresh,
       })
     );
   }
@@ -1594,6 +1657,9 @@ function rankForProfile(candidates, profile, assessment, ctx) {
     const bKnown =
       Number.isFinite(b.scoreBreakdown.quality) && b.qualityLabel !== 'QUALITY_UNKNOWN';
     if (aKnown !== bKnown) return Number(bKnown) - Number(aKnown);
+    const aProven = Boolean(a.hasFreshEvidence);
+    const bProven = Boolean(b.hasFreshEvidence);
+    if (aProven !== bProven) return Number(bProven) - Number(aProven);
     if (b.score !== a.score) return b.score - a.score;
     const aPriorBonus = Number(a.scoreBreakdown.prior && a.scoreBreakdown.prior.bonus) || 0;
     const bPriorBonus = Number(b.scoreBreakdown.prior && b.scoreBreakdown.prior.bonus) || 0;
