@@ -672,6 +672,70 @@ function rememberProbe(candidate, result, options) {
   return record;
 }
 
+function recordExecutionResult(storeOrFile, modelId, routeId, outcome, options = {}) {
+  const isFile = typeof storeOrFile === 'string';
+  const store = isFile ? loadStore(storeOrFile, { allowMissing: true }) : storeOrFile;
+  const now = options.now ?? Date.now();
+
+  let probeResult;
+  const isSuccess =
+    outcome === 'success' ||
+    outcome?.ok === true ||
+    outcome?.status === 200 ||
+    outcome?.success === true;
+  const isTimeout =
+    outcome === 'timeout' ||
+    outcome === 'stalled' ||
+    outcome === 'hang' ||
+    outcome?.timedOut === true ||
+    outcome?.status === 408 ||
+    /timeout|stall|hang/i.test(String(outcome?.reason || outcome?.message || ''));
+
+  if (isSuccess) {
+    probeResult = {
+      ok: true,
+      status: 200,
+      elapsedMs: typeof outcome === 'object' ? outcome.elapsedMs : undefined,
+    };
+  } else if (isTimeout) {
+    probeResult = {
+      ok: false,
+      status: 408,
+      message:
+        (typeof outcome === 'object' && (outcome.message || outcome.reason)) ||
+        'EXECUTION_TIMEOUT_OR_STALL',
+      elapsedMs: typeof outcome === 'object' ? outcome.elapsedMs : undefined,
+    };
+  } else {
+    probeResult = {
+      ok: false,
+      status: (typeof outcome === 'object' && outcome.status) || 500,
+      message:
+        (typeof outcome === 'object' && (outcome.message || outcome.reason)) || 'EXECUTION_FAILED',
+      elapsedMs: typeof outcome === 'object' ? outcome.elapsedMs : undefined,
+    };
+  }
+
+  const recorded = recordResult(store, modelId, routeId, probeResult, now, options);
+  const key = recorded.key;
+  if (store.paths && store.paths[key]) {
+    if (typeof outcome === 'object' && outcome !== null) {
+      if (Number.isFinite(outcome.concurrency)) {
+        store.paths[key].concurrency = outcome.concurrency;
+      }
+      if (outcome.executionOutcome) {
+        store.paths[key].executionOutcome = outcome.executionOutcome;
+      }
+    }
+  }
+
+  if (isFile && options.persist !== false) {
+    saveStore(storeOrFile, store, options);
+  }
+
+  return { store, recorded, key };
+}
+
 function healthKey(modelId, routeId) {
   const pathId =
     routeId && typeof routeId === 'object'
@@ -1358,6 +1422,7 @@ module.exports = {
   loadStore,
   saveStore,
   recordResult,
+  recordExecutionResult,
   healthKey,
   getPathRecord,
   isEligible,

@@ -672,6 +672,20 @@ async function quotaScanCommand(args, deps = {}) {
   const intervalMin =
     args?.intervalMin ?? args?.interval ?? deps.intervalMin ?? dispatchConfig.quotaScanIntervalMin;
 
+  if (args?.['sync-opencode'] || args?.syncOpencode || deps?.syncOpencode) {
+    const syncRes = await quotaScan.syncNinerouterModelsToOpenCode({
+      ...deps,
+      registry,
+      opencodePath: args?.['opencode-path'] || args?.opencodePath || deps?.opencodePath,
+      backupPath: args?.['backup-path'] || args?.backupPath || deps?.backupPath,
+      fetch: deps.fetch,
+    });
+    console.log(
+      `Synced ${syncRes.modelCount} models to opencode.json (backup: ${syncRes.backupPath})`
+    );
+    return syncRes;
+  }
+
   if (args?.periodic || args?.loop || deps.periodic || deps.loop) {
     const runner = quotaScan.schedulePeriodicQuotaScan({
       ...deps,
@@ -711,11 +725,30 @@ async function quotaScanCommand(args, deps = {}) {
     }
   }
 
+  const isFull = Boolean(args?.full || args?.['--full'] || deps?.full);
+  if (isFull) {
+    const result = await quotaScan.scanAllFullRoutes({
+      ...deps,
+      registry,
+      quotaStateFile: args?.out || args?.file || deps?.quotaStateFile,
+      source: args?.source || deps?.source,
+      jsonlFile: args?.jsonl || deps?.jsonlFile,
+      mdFile: args?.md || deps?.mdFile,
+      now: deps.now,
+    });
+    console.log(
+      `Full route scan complete: scanned ${result.count} routes (${result.aliveCount} alive, ${result.blockedCount} blocked)`
+    );
+    return result;
+  }
+
   const result = await quotaScan.scanAllQuotas({
     ...deps,
     registry,
     quotaStateFile: args?.out || args?.file || deps?.quotaStateFile,
     source: args?.source || deps?.source,
+    jsonlFile: args?.jsonl || deps?.jsonlFile,
+    mdFile: args?.md || deps?.mdFile,
   });
   console.log(
     `Quota scan complete: scanned ${result.count} scopes (${result.blockedCount} blocked)`
@@ -5051,7 +5084,7 @@ function createRefreshRouteHealth(routeArgs = {}, routeDeps = {}) {
         routeDeps.quotaStateFile || path.join(__dirname, 'data', 'quota-state.json');
       const quotaState = quotaScan.loadQuotaState({ quotaStateFile: quotaFile });
       if (quotaScan.isQuotaScanDue(quotaState, intervalMin, now)) {
-        const scanResult = await quotaScan.scanAllQuotas({
+        const scanResult = await quotaScan.scanAllFullRoutes({
           registry,
           quotaStateFile: quotaFile,
           now,

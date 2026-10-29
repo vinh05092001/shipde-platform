@@ -293,12 +293,35 @@ async function adviseModelChoice(result, profile, options) {
       : undefined,
   });
   const eligible = new Set(top.map((candidate) => candidate.candidateKey));
-  const chosen =
+  let chosen = result.chosen;
+  if (
     advised.handledBy === 'jev' &&
     advised.outcome === jev.Outcome.DECIDED &&
     eligible.has(advised.choice)
-      ? advised.choice
-      : result.chosen;
+  ) {
+    chosen = advised.choice;
+  } else if (advised.outcome === jev.Outcome.UNDECIDED || advised.outcome === 'UNDECIDED') {
+    // TASK-AI-147: When Jev is UNDECIDED, Controller deterministically selects the highest-scoring candidate among alive/unblocked routes
+    const ranking = (result && result.ranking) || [];
+    const aliveCandidates = ranking.filter(
+      (c) =>
+        c &&
+        c.isAlive === true &&
+        !c.blocked &&
+        c.status !== 'blocked' &&
+        c.headroomStatus !== 'exhausted' &&
+        c.headroomStatus !== 'cooling'
+    );
+    if (aliveCandidates.length > 0) {
+      aliveCandidates.sort((a, b) => {
+        const sA = Number(a.score) || 0;
+        const sB = Number(b.score) || 0;
+        if (sB !== sA) return sB - sA;
+        return String(a.candidateKey).localeCompare(String(b.candidateKey));
+      });
+      chosen = aliveCandidates[0].candidateKey;
+    }
+  }
   const providerFailure = advised.handledBy !== 'jev' && jev.isProviderFailure(advised.reason);
   return {
     chosen,
@@ -2467,6 +2490,7 @@ module.exports = {
   isIndependentReviewerCandidate,
   findIndependentReviewerCandidate,
   jevModelChoiceQuestion,
+  adviseModelChoice,
   adviseRankedModelChoice,
   candidateKey,
   formatTopEntry,
