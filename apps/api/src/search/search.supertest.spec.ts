@@ -9,6 +9,7 @@ import request from 'supertest';
 import { AppModule } from '../app.module';
 import { PrismaService } from '../prisma/prisma.service';
 import {
+  Prisma,
   RoleEnum,
   SessionStatusEnum,
   CarrierCodeEnum,
@@ -84,7 +85,7 @@ async function runSearchSupertestSuite() {
 
   // Execute the real migration against transaction-local tables, never tenant data.
   await prisma.$transaction(async (tx) => {
-    await tx.$executeRawUnsafe('SET LOCAL search_path TO pg_temp');
+    await tx.$executeRaw`SET LOCAL search_path TO pg_temp`;
     const tables = [
       'orders',
       'shipments',
@@ -92,24 +93,50 @@ async function runSearchSupertestSuite() {
       'exception_cases',
       'discrepancies',
       'claims',
-    ];
-    for (const table of tables) {
-      await tx.$executeRawUnsafe(`CREATE TEMP TABLE "${table}" (
-        id TEXT PRIMARY KEY, merchant_id TEXT, order_id TEXT, shipment_id TEXT,
-        branch_id VARCHAR(128), warehouse_id VARCHAR(128)
-      ) ON COMMIT DROP`);
-      await tx.$executeRawUnsafe(
-        `INSERT INTO "${table}" (id, merchant_id) VALUES ('unknown', 'migration-test')`
-      );
-    }
-    await tx.$executeRawUnsafe(`INSERT INTO "orders" (id, merchant_id, branch_id, warehouse_id)
-      VALUES ('assigned', 'migration-test', 'branch-known', 'warehouse-known')`);
-    await tx.$executeRawUnsafe(`INSERT INTO "shipments" (id, merchant_id, order_id)
-      VALUES ('assigned', 'migration-test', 'assigned')`);
-    for (const table of ['exception_cases', 'discrepancies', 'claims']) {
-      await tx.$executeRawUnsafe(`INSERT INTO "${table}" (id, merchant_id, shipment_id)
-        VALUES ('assigned', 'migration-test', 'assigned')`);
-    }
+    ] as const;
+    await tx.$executeRaw`CREATE TEMP TABLE "orders" (
+      id TEXT PRIMARY KEY, merchant_id TEXT, order_id TEXT, shipment_id TEXT,
+      branch_id VARCHAR(128), warehouse_id VARCHAR(128)
+    ) ON COMMIT DROP`;
+    await tx.$executeRaw`CREATE TEMP TABLE "shipments" (
+      id TEXT PRIMARY KEY, merchant_id TEXT, order_id TEXT, shipment_id TEXT,
+      branch_id VARCHAR(128), warehouse_id VARCHAR(128)
+    ) ON COMMIT DROP`;
+    await tx.$executeRaw`CREATE TEMP TABLE "carrier_statements" (
+      id TEXT PRIMARY KEY, merchant_id TEXT, order_id TEXT, shipment_id TEXT,
+      branch_id VARCHAR(128), warehouse_id VARCHAR(128)
+    ) ON COMMIT DROP`;
+    await tx.$executeRaw`CREATE TEMP TABLE "exception_cases" (
+      id TEXT PRIMARY KEY, merchant_id TEXT, order_id TEXT, shipment_id TEXT,
+      branch_id VARCHAR(128), warehouse_id VARCHAR(128)
+    ) ON COMMIT DROP`;
+    await tx.$executeRaw`CREATE TEMP TABLE "discrepancies" (
+      id TEXT PRIMARY KEY, merchant_id TEXT, order_id TEXT, shipment_id TEXT,
+      branch_id VARCHAR(128), warehouse_id VARCHAR(128)
+    ) ON COMMIT DROP`;
+    await tx.$executeRaw`CREATE TEMP TABLE "claims" (
+      id TEXT PRIMARY KEY, merchant_id TEXT, order_id TEXT, shipment_id TEXT,
+      branch_id VARCHAR(128), warehouse_id VARCHAR(128)
+    ) ON COMMIT DROP`;
+
+    await tx.$executeRaw`INSERT INTO "orders" (id, merchant_id) VALUES ('unknown', 'migration-test')`;
+    await tx.$executeRaw`INSERT INTO "shipments" (id, merchant_id) VALUES ('unknown', 'migration-test')`;
+    await tx.$executeRaw`INSERT INTO "carrier_statements" (id, merchant_id) VALUES ('unknown', 'migration-test')`;
+    await tx.$executeRaw`INSERT INTO "exception_cases" (id, merchant_id) VALUES ('unknown', 'migration-test')`;
+    await tx.$executeRaw`INSERT INTO "discrepancies" (id, merchant_id) VALUES ('unknown', 'migration-test')`;
+    await tx.$executeRaw`INSERT INTO "claims" (id, merchant_id) VALUES ('unknown', 'migration-test')`;
+
+    await tx.$executeRaw`INSERT INTO "orders" (id, merchant_id, branch_id, warehouse_id)
+      VALUES ('assigned', 'migration-test', 'branch-known', 'warehouse-known')`;
+    await tx.$executeRaw`INSERT INTO "shipments" (id, merchant_id, order_id)
+      VALUES ('assigned', 'migration-test', 'assigned')`;
+    await tx.$executeRaw`INSERT INTO "exception_cases" (id, merchant_id, shipment_id)
+      VALUES ('assigned', 'migration-test', 'assigned')`;
+    await tx.$executeRaw`INSERT INTO "discrepancies" (id, merchant_id, shipment_id)
+      VALUES ('assigned', 'migration-test', 'assigned')`;
+    await tx.$executeRaw`INSERT INTO "claims" (id, merchant_id, shipment_id)
+      VALUES ('assigned', 'migration-test', 'assigned')`;
+
     const migration = fs.readFileSync(
       path.resolve(
         __dirname,
@@ -118,12 +145,31 @@ async function runSearchSupertestSuite() {
       'utf8'
     );
     for (const statement of migration.split(';').filter((part) => part.trim())) {
-      await tx.$executeRawUnsafe(statement);
+      await tx.$executeRaw(Prisma.raw(statement));
     }
+    type ScopeRow = { id: string; branch_id: string | null; warehouse_id: string | null };
+    const queryMap: Record<string, () => Promise<ScopeRow[]>> = {
+      orders: () =>
+        tx.$queryRaw<ScopeRow[]>`SELECT id, branch_id, warehouse_id FROM "orders" ORDER BY id`,
+      shipments: () =>
+        tx.$queryRaw<ScopeRow[]>`SELECT id, branch_id, warehouse_id FROM "shipments" ORDER BY id`,
+      carrier_statements: () =>
+        tx.$queryRaw<
+          ScopeRow[]
+        >`SELECT id, branch_id, warehouse_id FROM "carrier_statements" ORDER BY id`,
+      exception_cases: () =>
+        tx.$queryRaw<
+          ScopeRow[]
+        >`SELECT id, branch_id, warehouse_id FROM "exception_cases" ORDER BY id`,
+      discrepancies: () =>
+        tx.$queryRaw<
+          ScopeRow[]
+        >`SELECT id, branch_id, warehouse_id FROM "discrepancies" ORDER BY id`,
+      claims: () =>
+        tx.$queryRaw<ScopeRow[]>`SELECT id, branch_id, warehouse_id FROM "claims" ORDER BY id`,
+    };
     for (const table of tables) {
-      const rows = await tx.$queryRawUnsafe<
-        Array<{ id: string; branch_id: string | null; warehouse_id: string | null }>
-      >(`SELECT id, branch_id, warehouse_id FROM "${table}" ORDER BY id`);
+      const rows = await queryMap[table]();
       assert.deepStrictEqual(
         rows.find((row) => row.id === 'unknown'),
         { id: 'unknown', branch_id: null, warehouse_id: null },
