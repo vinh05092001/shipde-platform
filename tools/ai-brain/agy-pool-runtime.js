@@ -76,6 +76,29 @@ function readResult(accountId, options) {
   }
 }
 
+function readQuotaText(accountId, options) {
+  if (!isValidAccountId(accountId)) return '';
+  const dir = exp.accountDir(accountId, options);
+  const quotaFile = path.join(dir, 'quota-out.txt');
+  const outFile = path.join(dir, 'out.txt');
+  try {
+    if (fs.existsSync(outFile) && fs.existsSync(quotaFile)) {
+      const outStat = fs.statSync(outFile);
+      const qStat = fs.statSync(quotaFile);
+      if (outStat.mtimeMs > qStat.mtimeMs) {
+        const outText = fs.readFileSync(outFile, 'utf8').replace(/^\uFEFF/, '');
+        if (/Limit Remaining|"buckets"/i.test(outText)) {
+          return outText;
+        }
+      }
+    }
+    if (fs.existsSync(quotaFile)) {
+      return fs.readFileSync(quotaFile, 'utf8').replace(/^\uFEFF/, '');
+    }
+  } catch {}
+  return exp.readOutText(accountId, options);
+}
+
 function readOutText(accountId, options) {
   if (!isValidAccountId(accountId)) return '';
   const file = path.join(exp.accountDir(accountId, options), 'out.txt');
@@ -401,7 +424,7 @@ function quotaReading(accountId, options) {
   if (result.state !== 'ok' && result.state !== 'quota') {
     return { available: false, reason: result.reason || result.state || 'FAILED', rows: [] };
   }
-  const parsed = parseQuotaOutput(exp.readOutText(accountId, opts));
+  const parsed = parseQuotaOutput(exp.readQuotaText(accountId, opts));
   if (!parsed.available) return parsed;
   return Object.assign({}, parsed, {
     account: { known: true, email: accountId, source: 'pool' },
@@ -413,7 +436,7 @@ function modelIdsFromRuntime(options) {
   const opts = options || {};
   const out = new Set();
   for (const accountId of exp.discoverAccounts(opts)) {
-    const parsed = parseQuotaOutput(exp.readOutText(accountId, opts));
+    const parsed = parseQuotaOutput(exp.readQuotaText(accountId, opts));
     for (const model of parsed.models || []) out.add(model);
   }
   return [...out].sort();
@@ -603,6 +626,7 @@ const exp = {
   readAccountModels,
   readResult,
   readOutText,
+  readQuotaText,
   waitForResult,
   runAdapter,
   submitJob,

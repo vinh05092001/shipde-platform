@@ -15,6 +15,10 @@ const LIVE_PRIORS_FILE = path.join(__dirname, 'data', 'model-priors-live.json');
 const TIER_BONUSES = Object.freeze({ T1: 6, T2: 4, T3: 2, T4: 0 });
 const STALE_AFTER_MS = 30 * 24 * 60 * 60 * 1000;
 
+// General benchmarks used only when a model has none of its role's weighted ones.
+const FALLBACK_BENCHMARKS = Object.freeze(['aggregate', 'benchlm']);
+// Reported as indirect evidence (below the 0.5 coverage line).
+const FALLBACK_COVERAGE = 0.25;
 const ROLE_BENCHMARK_WEIGHTS = Object.freeze({
   planner: Object.freeze({ intelligenceIndex: 0.5, aaAgenticIndex: 0.3, aaCodingIndex: 0.2 }),
   writer: Object.freeze({ aaCodingIndex: 0.6, aaAgenticIndex: 0.25, intelligenceIndex: 0.15 }),
@@ -30,6 +34,19 @@ function loadPriors(file) {
   try {
     const parsed = JSON.parse(fs.readFileSync(target, 'utf8'));
     if (parsed && typeof parsed === 'object' && Array.isArray(parsed.ranking)) {
+      // The live refresh does not cover every model the curated baseline knows;
+      // keep curated entries for models the live file lacks.
+      if (!file && target === LIVE_PRIORS_FILE && fs.existsSync(DEFAULT_PRIORS_FILE)) {
+        try {
+          const curated = JSON.parse(fs.readFileSync(DEFAULT_PRIORS_FILE, 'utf8'));
+          const known = new Set(parsed.ranking.map((m) => m && m.canonical));
+          for (const m of (curated && curated.ranking) || []) {
+            if (m && m.canonical && !known.has(m.canonical)) parsed.ranking.push(m);
+          }
+        } catch (_) {
+          /* curated baseline unreadable: live file alone */
+        }
+      }
       return parsed;
     }
   } catch (_) {
@@ -43,7 +60,7 @@ function applyDigitBoundaryHyphen(str, aliasRules) {
   let res = str.replace(/([a-z]{2,})(\d)/g, '$1-$2');
   const singleLetters = Array.isArray(aliasRules.singleLetterPrefixes)
     ? aliasRules.singleLetterPrefixes
-    : ['o'];
+    : [];
   if (singleLetters.length) {
     const pattern = new RegExp(
       `(?:^|[-_\\/])(${singleLetters.map((p) => p.toLowerCase()).join('|')})(\\d)`,
@@ -58,26 +75,34 @@ function applyDigitBoundaryHyphen(str, aliasRules) {
 }
 
 function getEffortVariants(config) {
-  // Explicit configuration override passed by caller (including empty array [])
-  if (
-    config &&
-    config !== defaultDescriptor &&
-    Object.prototype.hasOwnProperty.call(config, 'effortVariants')
-  ) {
-    if (Array.isArray(config.effortVariants)) {
-      return config.effortVariants.slice().sort((a, b) => b.length - a.length);
+  const cfg = config || defaultDescriptor;
+  const exclusions = new Set(
+    (
+      (cfg && (cfg.excludeEffortVariants || cfg.excludedEffortVariants)) ||
+      (defaultDescriptor &&
+        (defaultDescriptor.excludeEffortVariants || defaultDescriptor.excludedEffortVariants)) ||
+      []
+    ).map((e) => String(e).toLowerCase())
+  );
+
+  // Explicit configuration override passed by caller or configured on descriptor
+  if (cfg && Object.prototype.hasOwnProperty.call(cfg, 'effortVariants')) {
+    if (Array.isArray(cfg.effortVariants)) {
+      if (cfg.effortVariants.length === 0) return [];
+      return cfg.effortVariants
+        .map((e) => String(e).toLowerCase())
+        .filter((e) => !exclusions.has(e))
+        .sort((a, b) => b.length - a.length);
     }
     return [];
   }
-  // Consult registry (sources.json)
+
+  // Otherwise consult registry (sources.json)
   const fromSources = loadEffortVariants();
-  const cfg = config || defaultDescriptor;
-  const fromConfig = Array.isArray(cfg && cfg.effortVariants) ? cfg.effortVariants : [];
-  // Exclude 'max' so base model names like Qwen 3.8 Max / qwen-3-8-max remain canonical,
-  // while preserving any other registry effort variants from sources.json
-  const registryEfforts = fromSources.filter((e) => e !== 'max');
-  const combined = new Set([...fromConfig, ...registryEfforts]);
-  return Array.from(combined).sort((a, b) => b.length - a.length);
+  return fromSources
+    .map((e) => String(e).toLowerCase())
+    .filter((e) => !exclusions.has(e))
+    .sort((a, b) => b.length - a.length);
 }
 
 function getDeploymentSuffixes(config) {
@@ -88,39 +113,118 @@ function getDeploymentSuffixes(config) {
   return [];
 }
 
-function loadRegistrySourceIds() {
-  const ids = new Set();
+function stripAliasSuffixes(value, config, preserveDeployment = false) {
+  const suffixes = config && config.aliasRules && config.aliasRules.stripSuffixes;
+  for (const suffix of Array.isArray(suffixes) ? suffixes : []) {
+    if (
+      preserveDeployment &&
+      getDeploymentSuffixes(config).some((dep) => suffix === ':' + dep || suffix === '-' + dep)
+    )
+      continue;
+    if (typeof suffix === 'string' && suffix && value.endsWith(suffix)) {
+      value = value.slice(0, -suffix.length);
+    }
+  }
+  return value;
+}
+
+function stripDeploymentPattern(value, config) {
+  if (!value) return value;
+  const patterns = config && config.deploymentSuffixPatterns;
+  for (const pattern of Array.isArray(patterns) ? patterns : []) {
+    try {
+      const match = value.match(new RegExp(`(?:${pattern})$`));
+      if (match && match[0]) return value.slice(0, match.index);
+    } catch {
+      // Invalid configuration grants no normalization rule.
+    }
+  }
+  return value;
+}
+
+function addModelPrefixes(prefixes, id) {
+  if (typeof id !== 'string') return;
+  for (const accountPart of id.toLowerCase().split('::')) {
+    for (const prefix of accountPart.split('/').slice(0, -1)) {
+      if (prefix) prefixes.add(prefix);
+    }
+  }
+}
+
+let cachedRegistryPrefixes = null;
+function loadRegistryPrefixes(registry) {
+  if (!registry && cachedRegistryPrefixes) return cachedRegistryPrefixes;
+  const prefixes = new Set();
   try {
     const sourcesPath = path.join(__dirname, 'sources.json');
-    if (fs.existsSync(sourcesPath)) {
-      const parsed = JSON.parse(fs.readFileSync(sourcesPath, 'utf8'));
+    if (registry || fs.existsSync(sourcesPath)) {
+      const parsed = registry || JSON.parse(fs.readFileSync(sourcesPath, 'utf8'));
       if (Array.isArray(parsed && parsed.sources)) {
         for (const s of parsed.sources) {
-          if (s && typeof s.id === 'string' && s.id.trim()) {
-            ids.add(s.id.trim().toLowerCase());
+          if (s && s.id) prefixes.add(String(s.id).toLowerCase());
+          if (s && Array.isArray(s.aliases)) {
+            for (const a of s.aliases) {
+              if (a) prefixes.add(String(a).toLowerCase());
+            }
+          }
+          if (s && s.routerAlias) prefixes.add(String(s.routerAlias).toLowerCase());
+          if (s && s.modelPrefix) {
+            addModelPrefixes(prefixes, s.modelPrefix);
+          }
+          for (const model of (s && s.models) || []) addModelPrefixes(prefixes, model);
+        }
+      }
+      if (parsed && parsed.dispatch && parsed.dispatch.providers) {
+        for (const [pKey, pVal] of Object.entries(parsed.dispatch.providers)) {
+          prefixes.add(pKey.toLowerCase());
+          if (pVal && pVal.provider) prefixes.add(String(pVal.provider).toLowerCase());
+          if (pVal && pVal.modelPrefix) {
+            addModelPrefixes(prefixes, pVal.modelPrefix);
           }
         }
       }
     }
   } catch (_) {}
-  return ids;
+  if (!registry) cachedRegistryPrefixes = prefixes;
+  return prefixes;
 }
 
 function getRouterPrefixes(config) {
-  if (
-    config &&
-    config !== defaultDescriptor &&
-    Object.prototype.hasOwnProperty.call(config, 'routerPrefixes')
-  ) {
-    if (Array.isArray(config.routerPrefixes)) {
-      return new Set(config.routerPrefixes.map((p) => p.toLowerCase()));
-    }
-    return new Set();
-  }
-  const registrySources = loadRegistrySourceIds();
   const cfg = config || defaultDescriptor;
-  const fromConfig = Array.isArray(cfg && cfg.routerPrefixes) ? cfg.routerPrefixes : [];
-  return new Set([...fromConfig.map((p) => p.toLowerCase()), ...registrySources]);
+  const prefixes = new Set();
+
+  if (Array.isArray(cfg && cfg.routerPrefixes)) {
+    for (const p of cfg.routerPrefixes) {
+      if (p) prefixes.add(String(p).toLowerCase());
+    }
+  }
+
+  // Derive router prefixes from registry sources (e.g. qwen, 9router, kr from sources.json)
+  const registryPrefixes = loadRegistryPrefixes(cfg && cfg.registry);
+  for (const p of registryPrefixes) {
+    prefixes.add(p);
+  }
+
+  // Derive router/upstream prefixes from live IDs if provided
+  let liveList = cfg && (cfg.liveModels || cfg.liveIds);
+  if (!liveList) {
+    try {
+      liveList = require('./priors-public').liveModelIds();
+    } catch {
+      liveList = [];
+    }
+  }
+  if (Array.isArray(liveList)) {
+    for (const id of liveList) {
+      if (typeof id === 'string') {
+        addModelPrefixes(prefixes, id);
+        const colonIdx = id.indexOf('::');
+        if (colonIdx > 0) prefixes.add(id.slice(0, colonIdx).toLowerCase());
+      }
+    }
+  }
+
+  return prefixes;
 }
 
 function splitModelEffort(value, config) {
@@ -130,23 +234,11 @@ function splitModelEffort(value, config) {
   let effort = null;
   let raw = value.trim().toLowerCase();
 
-  const parenMatch = raw.match(/\s*\(([^)]*)\)/);
-  if (parenMatch) {
-    const inside = parenMatch[1].trim();
-    for (const eff of efforts) {
-      if (inside === eff || inside.includes(eff)) {
-        effort = eff;
-        break;
-      }
-    }
-    if (effort) {
-      raw = raw.replace(/\s*\([^)]*\)/g, '');
-    } else {
-      raw = raw.replace(/\s*\(([^)]*)\)/g, (_, val) => '-' + val.replace(/[^a-z0-9]+/g, '-'));
-    }
-  }
+  // Strip account prefixes (delimited by ::) before router prefix checking
+  raw = raw.split('::').pop();
 
-  const routerPrefixes = getRouterPrefixes(cfg);
+  // Strip configured and derived router prefixes strictly
+  const routerPrefixes = raw.includes('/') ? getRouterPrefixes(cfg) : new Set();
   let changed = true;
   while (changed) {
     changed = false;
@@ -160,29 +252,62 @@ function splitModelEffort(value, config) {
         continue;
       }
     }
-    const colonIdx = raw.indexOf('::');
-    if (colonIdx !== -1) {
-      const pfx = raw.slice(0, colonIdx);
-      const rest = raw.slice(colonIdx + 2);
-      if (routerPrefixes.has(pfx)) {
-        raw = rest;
-        changed = true;
-        continue;
-      }
-    }
   }
 
   raw = raw.split('@')[0];
 
-  const stripSuffixes = (cfg && cfg.aliasRules && cfg.aliasRules.stripSuffixes) || [
-    ':free',
-    '-free',
-  ];
-  for (const sfx of stripSuffixes) {
-    if (raw.endsWith(sfx)) {
-      raw = raw.slice(0, -sfx.length);
+  raw = stripAliasSuffixes(raw, cfg);
+
+  // Strip trailing suffixes only (deployment suffixes and recognized effort suffixes)
+  const depSuffixes = getDeploymentSuffixes(cfg);
+  let suffixChanged = true;
+  while (suffixChanged) {
+    suffixChanged = false;
+    for (const dep of depSuffixes) {
+      const s1 = ':' + dep;
+      const s2 = '-' + dep;
+      if (raw.endsWith(s1)) {
+        raw = raw.slice(0, -s1.length).trim();
+        suffixChanged = true;
+      } else if (raw.endsWith(s2)) {
+        raw = raw.slice(0, -s2.length).trim();
+        suffixChanged = true;
+      }
+    }
+
+    if (!effort && efforts.length > 0) {
+      // Check for trailing parenthesized effort (e.g. "model (high)" or "model (reasoning: high)")
+      const trailingParenMatch = raw.match(/\s*\(([^)]*)\)\s*$/);
+      if (trailingParenMatch) {
+        const inside = trailingParenMatch[1].trim();
+        for (const eff of efforts) {
+          if (inside === eff || new RegExp(`(?:^|[^a-z0-9])${eff}(?:$|[^a-z0-9])`).test(inside)) {
+            effort = eff;
+            raw = raw.slice(0, trailingParenMatch.index).trim();
+            suffixChanged = true;
+            break;
+          }
+        }
+      }
+    }
+
+    if (!effort && efforts.length > 0) {
+      // Check for trailing hyphenated effort (e.g. "model-high")
+      for (const eff of efforts) {
+        const suffix = '-' + eff;
+        if (raw.endsWith(suffix)) {
+          effort = eff;
+          raw = raw.slice(0, -suffix.length).trim();
+          suffixChanged = true;
+          break;
+        }
+      }
     }
   }
+
+  // Preserve remaining parenthesized qualifiers as hyphenated tokens
+  // (e.g. "model (max)" -> "model-max")
+  raw = raw.replace(/\s*\(([^)]*)\)/g, (_, val) => '-' + val.replace(/[^a-z0-9]+/g, '-'));
 
   if (cfg && cfg.aliasRules) {
     raw = applyDigitBoundaryHyphen(raw, cfg.aliasRules);
@@ -190,8 +315,8 @@ function splitModelEffort(value, config) {
 
   raw = raw.replace(/[._\s]+/g, '-').replace(/^-+|-+$/g, '');
 
-  const depSuffixes = getDeploymentSuffixes(cfg);
-  let suffixChanged = true;
+  // Second pass on trailing suffixes after delimiter normalization (e.g. model_high -> model-high)
+  suffixChanged = true;
   while (suffixChanged) {
     suffixChanged = false;
     for (const dep of depSuffixes) {
@@ -205,7 +330,7 @@ function splitModelEffort(value, config) {
         suffixChanged = true;
       }
     }
-    if (!effort) {
+    if (!effort && efforts.length > 0) {
       for (const eff of efforts) {
         const suffix = '-' + eff;
         if (raw.endsWith(suffix)) {
@@ -225,8 +350,6 @@ function splitModelEffort(value, config) {
 
 function normaliseCanonical(value) {
   if (typeof value !== 'string' || !value.trim()) return null;
-  const parsed = splitModelEffort(value);
-  if (parsed.base) return parsed.base.split('/').pop();
   let canonical = value
     .trim()
     .toLowerCase()
@@ -234,7 +357,7 @@ function normaliseCanonical(value) {
   canonical = canonical.split('::').pop();
   canonical = canonical.split('/').pop();
   canonical = canonical.split('@')[0];
-  canonical = canonical.replace(/(?::free|-free)$/, '');
+  canonical = stripAliasSuffixes(canonical, defaultDescriptor, true);
   canonical = canonical.replace(/\s*\([^)]*\)/g, '').replace(/[._\s]+/g, '-');
   return canonical || null;
 }
@@ -248,12 +371,36 @@ function normaliseCanonical(value) {
  * itself carries no modelId (a genuine caller error).
  */
 function priorFor(candidate, role, priors, now) {
+  if (candidate && Array.isArray(candidate.comboMembers) && candidate.comboMembers.length > 0) {
+    let best = null;
+    for (const member of candidate.comboMembers) {
+      const p = priorFor({ modelId: member }, role, priors, now);
+      if (p && typeof p.score === 'number') {
+        if (!best || typeof best.score !== 'number' || p.score > best.score) {
+          best = p;
+        }
+      } else if (!best) {
+        best = p;
+      }
+    }
+    if (best) return best;
+  }
+
   const modelId = candidate && (candidate.modelId || candidate.model);
   const canonical = normaliseCanonical(modelId);
   if (!canonical) return null;
 
   const ranking = priors && Array.isArray(priors.ranking) ? priors.ranking : [];
-  const resolved = matchModelPrior(modelId, ranking);
+  const candidatePrefixes = [];
+  if (candidate && typeof candidate === 'object') {
+    for (const key of ['gateway', 'upstream', 'sourceId', 'provider', 'accessPath', 'harness']) {
+      if (candidate[key] && typeof candidate[key] === 'string') {
+        candidatePrefixes.push(candidate[key]);
+      }
+    }
+  }
+  const matchOptions = candidatePrefixes.length ? { routerPrefixes: candidatePrefixes } : undefined;
+  const resolved = matchModelPrior(modelId, ranking, matchOptions);
   const match = resolved && resolved.entry;
   if (!match) return neutralPrior(canonical);
 
@@ -264,8 +411,25 @@ function priorFor(candidate, role, priors, now) {
 
   const profile = roleBenchmarkProfile(role, priors?.roleWeights ? priors : priors?.config);
   const rankingMaxima = benchmarkMaxima(ranking, profile);
-  const weighted = weightedBenchmarkScore(match, profile, rankingMaxima);
-  // Zero role coverage must NOT inherit benchmarkScore.
+  let weighted = weightedBenchmarkScore(match, profile, rankingMaxima);
+  if (weighted.coverage === 0) {
+    // No role-weighted benchmark for this model: use the first general benchmark it
+    // does have, normalised against the same benchmark across the ranking.
+    for (const name of FALLBACK_BENCHMARKS) {
+      const value = benchmarkValue(match, name);
+      if (value !== null && rankingMaxima[name]) {
+        const rawScore = Number.isFinite(match.score)
+          ? match.score
+          : (100 * value) / rankingMaxima[name];
+        weighted = {
+          score: Math.round(rawScore),
+          coverage: FALLBACK_COVERAGE,
+          fallback: name,
+        };
+        break;
+      }
+    }
+  }
   const priorScore = weighted.coverage > 0 ? weighted.score : null;
   const sourceDates = (match.sources || [])
     .map((source) => source && source.retrievedAt)
@@ -281,8 +445,7 @@ function priorFor(candidate, role, priors, now) {
       : isStale(retrievalDate, now));
 
   const resolvedBaseId = resolved.matchedBaseId || match.matchedBaseId;
-  const canonicalId =
-    resolvedBaseId || normaliseCanonical(match.canonical) || canonical || match.canonical;
+  const canonicalId = resolvedBaseId || match.canonical || canonical;
   const result = { canonical: canonicalId, tier, bonus: stale ? 0 : bonus };
   if (resolved.matchedVia || match.matchedVia) {
     result.matchedVia = resolved.matchedVia || match.matchedVia;
@@ -423,7 +586,10 @@ function benchmarkValue(match, name) {
 
 function benchmarkMaxima(ranking, profile) {
   const maxima = {};
-  const metricNames = new Set(Object.keys(ROLE_BENCHMARK_WEIGHTS.planner));
+  const metricNames = new Set([
+    ...Object.keys(ROLE_BENCHMARK_WEIGHTS.planner),
+    ...FALLBACK_BENCHMARKS,
+  ]);
   if (profile && typeof profile === 'object') {
     for (const k of Object.keys(profile)) metricNames.add(k);
   }
@@ -495,7 +661,10 @@ function leaderboardModelId(value, config) {
     .toLowerCase()
     .replace(/\s*\(([^)]*)\)/g, (_, effort) => '-' + effort.replace(/[^a-z0-9]+/g, '-'));
 
-  const routerPrefixes = getRouterPrefixes(cfg);
+  // Strip account prefixes (delimited by ::) before router prefix checking
+  raw = raw.split('::').pop();
+
+  const routerPrefixes = raw.includes('/') ? getRouterPrefixes(cfg) : new Set();
   let changed = true;
   while (changed) {
     changed = false;
@@ -509,20 +678,10 @@ function leaderboardModelId(value, config) {
         continue;
       }
     }
-    const colonIdx = raw.indexOf('::');
-    if (colonIdx !== -1) {
-      const pfx = raw.slice(0, colonIdx);
-      const rest = raw.slice(colonIdx + 2);
-      if (routerPrefixes.has(pfx)) {
-        raw = rest;
-        changed = true;
-        continue;
-      }
-    }
   }
 
   raw = raw.split('@')[0];
-  raw = raw.replace(/(?::free|-free)$/, '');
+  raw = stripAliasSuffixes(raw, cfg, true);
   if (cfg && cfg.aliasRules) {
     raw = applyDigitBoundaryHyphen(raw, cfg.aliasRules);
   }
@@ -582,7 +741,11 @@ function tierForScore(score, ranking) {
 
 function matchModelPrior(modelId, ranking, options) {
   if (!modelId || !Array.isArray(ranking)) return null;
-  const config = (options && (options.config || options.descriptor)) || defaultDescriptor;
+  let config = (options && (options.config || options.descriptor)) || defaultDescriptor;
+  if (options && Array.isArray(options.routerPrefixes) && options.routerPrefixes.length) {
+    const existing = Array.isArray(config.routerPrefixes) ? config.routerPrefixes : [];
+    config = { ...config, routerPrefixes: [...existing, ...options.routerPrefixes] };
+  }
   const { base, effort } = splitModelEffort(modelId, config);
   const exactId = leaderboardModelId(modelId, config);
 
@@ -614,9 +777,7 @@ function matchModelPrior(modelId, ranking, options) {
   if (exactId && byCanonical.has(exactId)) {
     return { entry: byCanonical.get(exactId) };
   }
-  const depSuffixPattern =
-    /(?::(?:batch|flex|cloud)|-?\[\d+(?:\.\d+)?(?:-\d+)?[km]\]|-(?:fast|latest|volc|turbo|\d{4}-\d{2}-\d{2}|\d{8}|\d{6}|\d{4}))$/;
-  let depStrippedId = exactId ? exactId.replace(depSuffixPattern, '') : null;
+  let depStrippedId = stripDeploymentPattern(exactId, config);
   if (!depStrippedId || depStrippedId === exactId) {
     const depSuffixes = getDeploymentSuffixes(config);
     depStrippedId = exactId;
@@ -657,7 +818,7 @@ function matchModelPrior(modelId, ranking, options) {
     const depSuffixes = getDeploymentSuffixes(config);
     for (const current of queue) {
       if (!current.id) continue;
-      let deployment = current.id.replace(depSuffixPattern, '');
+      let deployment = stripDeploymentPattern(current.id, config);
       if (deployment === current.id) {
         for (const dep of depSuffixes) {
           const s1 = ':' + dep;
@@ -991,7 +1152,6 @@ function applyNormalizationAndTiers(rows, config, now) {
 
   // 6. Derive codingTier / reviewTier from the normalized aggregate
   assignQuartileTiers(rows);
-
   return rows;
 }
 
@@ -1408,6 +1568,8 @@ module.exports = {
   DEFAULT_PRIORS_FILE,
   LIVE_PRIORS_FILE,
   splitModelEffort,
+  getEffortVariants,
+  getRouterPrefixes,
   getNormalizationMethod,
   normalizeScore,
   dedupeBenchmarks,

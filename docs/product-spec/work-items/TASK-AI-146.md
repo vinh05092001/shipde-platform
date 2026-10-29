@@ -7,7 +7,7 @@
 | Work Item ID | `TASK-AI-146` |
 | Feature ID | `N/A — controller priors coding-agent benchmark sources and provisional weighting` |
 | Status | `IN_PROGRESS` |
-| Delivery order | `265` |
+| Delivery order | `266` |
 | Dependencies | `TASK-AI-144` |
 | Assigned author | `GEMINI` |
 | Risk | `LOW` |

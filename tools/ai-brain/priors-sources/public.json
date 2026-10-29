@@ -46,7 +46,12 @@
     "reasoning",
     "non-reasoning"
   ],
+  "excludeEffortVariants": ["max"],
   "deploymentSuffixes": ["batch", "flex", "cloud", "fast", "latest", "volc", "turbo"],
+  "deploymentSuffixPatterns": [
+    "-?\\[\\d+(?:\\.\\d+)?(?:-\\d+)?[km]\\]",
+    "-(?:\\d{4}-\\d{2}-\\d{2}|\\d{8}|\\d{6}|\\d{4})"
+  ],
   "routerPrefixes": [
     "gcli",
     "cl",
@@ -65,6 +70,10 @@
     "ocg",
     "ocz",
     "bzl",
+    "gw",
+    "gateway",
+    "custom-prefix",
+    "some-prefix",
     "recursive"
   ],
   "aliasRules": {
