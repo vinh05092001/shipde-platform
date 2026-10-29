@@ -899,6 +899,78 @@ export interface paths {
     patch: operations['updateShopById'];
     trace?: never;
   };
+  '/warehouses': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List warehouses (FEAT-WH-01)
+     * @description List authorized warehouses for caller's merchant. Users with * or iam:shop_config view all; scoped users see only permitted warehouses.
+     */
+    get: operations['listWarehouses'];
+    put?: never;
+    /**
+     * Create a new warehouse (FEAT-WH-01)
+     * @description Creates a warehouse with pickup/return address, schedule, contacts, and printer defaults. Requires iam:shop_config.
+     */
+    post: operations['createWarehouse'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/warehouses/{id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get warehouse by ID (FEAT-WH-01)
+     * @description Returns warehouse detail with strict server-side tenant scoping and warehouse_scopes evaluation.
+     */
+    get: operations['getWarehouseById'];
+    put?: never;
+    post?: never;
+    /**
+     * Deactivate warehouse (FEAT-WH-01)
+     * @description Deactivates a warehouse. Requires iam:shop_config.
+     */
+    delete: operations['deactivateWarehouse'];
+    options?: never;
+    head?: never;
+    /**
+     * Update warehouse by ID (FEAT-WH-01)
+     * @description Updates warehouse attributes. Requires iam:shop_config.
+     */
+    patch: operations['updateWarehouseById'];
+    trace?: never;
+  };
+  '/warehouses/{id}/default': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Set warehouse as default (FEAT-WH-01)
+     * @description Sets warehouse as default pickup warehouse. Requires iam:shop_config.
+     */
+    post: operations['setDefaultWarehouse'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/admin/shops': {
     parameters: {
       query?: never;
@@ -1443,6 +1515,133 @@ export interface components {
         shops: components['schemas']['ShopProfile'][];
       };
       meta: components['schemas']['Meta'];
+    };
+    Warehouse: {
+      /** Format: uuid */
+      id: string;
+      /** Format: uuid */
+      merchant_id: string;
+      name: string;
+      code: string;
+      /** @enum {string} */
+      status: 'active' | 'inactive';
+      is_default: boolean;
+      contact_name: string;
+      contact_phone: string;
+      contact_email?: string | null;
+      address_line: string;
+      ward?: string | null;
+      district: string;
+      city: string;
+      postal_code?: string | null;
+      address_json: Record<string, never>;
+      use_different_return_address: boolean;
+      return_contact_name?: string | null;
+      return_contact_phone?: string | null;
+      return_address_line?: string | null;
+      return_ward?: string | null;
+      return_district?: string | null;
+      return_city?: string | null;
+      return_address_json?: Record<string, never> | null;
+      operating_hours?: Record<string, never> | null;
+      cutoff_time?: string | null;
+      schedule_notes?: string | null;
+      contacts_json?: Record<string, never> | null;
+      /**
+       * @default A6
+       * @enum {string}
+       */
+      printer_paper_size: 'A6' | 'A5' | 'A4' | 'K80';
+      /**
+       * @default 203
+       * @enum {integer}
+       */
+      printer_dpi: 203 | 300;
+      printer_name?: string | null;
+      /** @default false */
+      printer_auto_print: boolean;
+      printer_config?: Record<string, never> | null;
+      /** Format: date-time */
+      created_at: string;
+      /** Format: date-time */
+      updated_at: string;
+    };
+    CreateWarehouseInput: {
+      name: string;
+      code?: string;
+      is_default?: boolean;
+      contact_name: string;
+      contact_phone: string;
+      contact_email?: string | null;
+      address_line: string;
+      ward?: string | null;
+      district: string;
+      city: string;
+      postal_code?: string | null;
+      use_different_return_address?: boolean;
+      return_contact_name?: string | null;
+      return_contact_phone?: string | null;
+      return_address_line?: string | null;
+      return_ward?: string | null;
+      return_district?: string | null;
+      return_city?: string | null;
+      operating_hours?: Record<string, never> | null;
+      cutoff_time?: string | null;
+      schedule_notes?: string | null;
+      contacts_json?: Record<string, never> | null;
+      /** @enum {string} */
+      printer_paper_size?: 'A6' | 'A5' | 'A4' | 'K80';
+      /** @enum {integer} */
+      printer_dpi?: 203 | 300;
+      printer_name?: string | null;
+      printer_auto_print?: boolean;
+      printer_config?: Record<string, never> | null;
+    };
+    UpdateWarehouseInput: {
+      name?: string;
+      code?: string;
+      /** @enum {string} */
+      status?: 'active' | 'inactive';
+      is_default?: boolean;
+      contact_name?: string;
+      contact_phone?: string;
+      contact_email?: string | null;
+      address_line?: string;
+      ward?: string | null;
+      district?: string;
+      city?: string;
+      postal_code?: string | null;
+      use_different_return_address?: boolean;
+      return_contact_name?: string | null;
+      return_contact_phone?: string | null;
+      return_address_line?: string | null;
+      return_ward?: string | null;
+      return_district?: string | null;
+      return_city?: string | null;
+      operating_hours?: Record<string, never> | null;
+      cutoff_time?: string | null;
+      schedule_notes?: string | null;
+      contacts_json?: Record<string, never> | null;
+      /** @enum {string} */
+      printer_paper_size?: 'A6' | 'A5' | 'A4' | 'K80';
+      /** @enum {integer} */
+      printer_dpi?: 203 | 300;
+      printer_name?: string | null;
+      printer_auto_print?: boolean;
+      printer_config?: Record<string, never> | null;
+    };
+    WarehouseResponse: {
+      success: boolean;
+      data: components['schemas']['Warehouse'];
+      meta: components['schemas']['Meta'];
+    };
+    ListWarehousesResponse: {
+      success: boolean;
+      data: components['schemas']['Warehouse'][];
+      meta: {
+        correlation_id: string;
+        total: number;
+      };
     };
     CarrierAccountInput: {
       /** @enum {string} */
@@ -3523,6 +3722,161 @@ export interface operations {
         };
       };
       400: components['responses']['Error'];
+      401: components['responses']['SessionInvalid'];
+      403: components['responses']['Error'];
+      404: components['responses']['Error'];
+    };
+  };
+  listWarehouses: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description List of authorized warehouses */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ListWarehousesResponse'];
+        };
+      };
+      401: components['responses']['SessionInvalid'];
+      403: components['responses']['Error'];
+    };
+  };
+  createWarehouse: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['CreateWarehouseInput'];
+      };
+    };
+    responses: {
+      /** @description Warehouse created */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['WarehouseResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['SessionInvalid'];
+      403: components['responses']['Error'];
+      409: components['responses']['Error'];
+    };
+  };
+  getWarehouseById: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: components['parameters']['Id'];
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Warehouse details */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['WarehouseResponse'];
+        };
+      };
+      401: components['responses']['SessionInvalid'];
+      403: components['responses']['Error'];
+      404: components['responses']['Error'];
+    };
+  };
+  deactivateWarehouse: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: components['parameters']['Id'];
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Warehouse deactivated */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['WarehouseResponse'];
+        };
+      };
+      401: components['responses']['SessionInvalid'];
+      403: components['responses']['Error'];
+      404: components['responses']['Error'];
+    };
+  };
+  updateWarehouseById: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: components['parameters']['Id'];
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['UpdateWarehouseInput'];
+      };
+    };
+    responses: {
+      /** @description Warehouse updated */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['WarehouseResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['SessionInvalid'];
+      403: components['responses']['Error'];
+      404: components['responses']['Error'];
+    };
+  };
+  setDefaultWarehouse: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: components['parameters']['Id'];
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Warehouse set as default */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['WarehouseResponse'];
+        };
+      };
       401: components['responses']['SessionInvalid'];
       403: components['responses']['Error'];
       404: components['responses']['Error'];

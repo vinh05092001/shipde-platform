@@ -487,6 +487,22 @@ export type UpdateShopProfileInput = components['schemas']['UpdateShopProfileInp
 export type ShopProfileResponse = components['schemas']['ShopProfileResponse'];
 export type ListShopsResponse = components['schemas']['ListShopsResponse'];
 
+// --- Warehouse Contracts (FEAT-WH-01) ---
+export const WarehouseAuditEvent = {
+  WAREHOUSE_CREATED: 'WAREHOUSE_CREATED',
+  WAREHOUSE_UPDATED: 'WAREHOUSE_UPDATED',
+  WAREHOUSE_DEACTIVATED: 'WAREHOUSE_DEACTIVATED',
+  WAREHOUSE_SET_DEFAULT: 'WAREHOUSE_SET_DEFAULT',
+} as const;
+
+export type WarehouseAuditEvent = (typeof WarehouseAuditEvent)[keyof typeof WarehouseAuditEvent];
+
+export type Warehouse = components['schemas']['Warehouse'];
+export type CreateWarehouseInput = components['schemas']['CreateWarehouseInput'];
+export type UpdateWarehouseInput = components['schemas']['UpdateWarehouseInput'];
+export type WarehouseResponse = components['schemas']['WarehouseResponse'];
+export type ListWarehousesResponse = components['schemas']['ListWarehousesResponse'];
+
 // --- Canonical Timezones (FEAT-ORG-01) ---
 export interface SupportedTimeZoneOption {
   value: string;
