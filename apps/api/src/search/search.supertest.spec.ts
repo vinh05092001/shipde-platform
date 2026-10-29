@@ -224,6 +224,12 @@ async function runSearchSupertestSuite() {
       'empty_scoped',
       { store_scopes: [], warehouse_scopes: [] }
     );
+    const { token: wildcardToken } = await setupUserSession(
+      merchantIdA,
+      RoleEnum.OPS_CSKH,
+      'wildcard_scoped',
+      { store_scopes: ['*'], warehouse_scopes: ['*'] }
+    );
 
     // Seed domain aggregates for Merchant A
     const orderCodeA = `ORD-A-${testSuffix}`;
@@ -268,6 +274,7 @@ async function runSearchSupertestSuite() {
       data: {
         id: shipmentIdA,
         merchant_id: merchantIdA,
+        branch_id: branch1Id,
         warehouse_id: wh1Id,
         order_id: orderIdA,
         order_code: orderCodeA,
@@ -301,6 +308,8 @@ async function runSearchSupertestSuite() {
       data: {
         id: statementIdA,
         merchant_id: merchantIdA,
+        branch_id: branch1Id,
+        warehouse_id: wh1Id,
         carrier_account_id: carrierAccountIdA,
         checksum: statementChecksumA,
         period_start: new Date('2026-09-01'),
@@ -315,6 +324,8 @@ async function runSearchSupertestSuite() {
       data: {
         id: exceptionIdA,
         merchant_id: merchantIdA,
+        branch_id: branch1Id,
+        warehouse_id: wh1Id,
         shipment_id: shipmentIdA,
         tracking_code: trackingCodeA,
         exception_type: ExceptionTypeEnum.DELIVERY_FAIL,
@@ -328,6 +339,8 @@ async function runSearchSupertestSuite() {
       data: {
         id: claimIdA,
         merchant_id: merchantIdA,
+        branch_id: branch1Id,
+        warehouse_id: wh1Id,
         shipment_id: shipmentIdA,
         claim_type: 'DAMAGED',
         carrier_ticket: claimTicketA,
@@ -340,6 +353,8 @@ async function runSearchSupertestSuite() {
       data: {
         id: discrepancyIdA,
         merchant_id: merchantIdA,
+        branch_id: branch1Id,
+        warehouse_id: wh1Id,
         shipment_id: shipmentIdA,
         tracking_code: trackingCodeA,
         type: DiscrepancyTypeEnum.D1_WEIGHT,
@@ -354,11 +369,32 @@ async function runSearchSupertestSuite() {
       data: {
         id: orderIdB,
         merchant_id: merchantIdB,
+        branch_id: 'branch-b-1',
+        warehouse_id: 'wh-b-1',
         order_code: orderCodeB,
         recipient_name: 'Trần Thị Beta',
         recipient_phone: '0909999888',
         recipient_province: 'Hà Nội',
         recipient_address: '456 Cầu Giấy',
+        created_at: new Date(),
+      },
+    });
+
+    // Seed legacy unassigned entity for Merchant A (both scope dimensions null)
+    const legacyOrderCodeA = `ORD-LEGACY-${testSuffix}`;
+    const legacyOrderIdA = randomUUID();
+    await prisma.order.create({
+      data: {
+        id: legacyOrderIdA,
+        merchant_id: merchantIdA,
+        branch_id: null,
+        warehouse_id: null,
+        order_code: legacyOrderCodeA,
+        recipient_name: 'Khách Hàng Unassigned',
+        recipient_phone: '0901234567',
+        recipient_province: 'TP Hồ Chí Minh',
+        recipient_address: '100 Lê Duẩn',
+        cod_amount: 100000n,
         created_at: new Date(),
       },
     });
@@ -603,36 +639,44 @@ async function runSearchSupertestSuite() {
       'Formatted phone number must be masked in audit log'
     );
 
+    // =========================================================================
+    // AC-COM-01-31: Non-owner with wildcard scopes receives universal access and sees unassigned records
+    // =========================================================================
+    const resWildcardOrder = await request(server)
+      .get(`/api/v1/search?q=${legacyOrderCodeA}&type=ORDER`)
+      .set('Authorization', `Bearer ${wildcardToken}`)
+      .expect(200);
+
+    assert.strictEqual(resWildcardOrder.body.success, true);
+    assert.strictEqual(resWildcardOrder.body.data.total, 1);
+    assert.strictEqual(resWildcardOrder.body.data.items[0].code, legacyOrderCodeA);
+
     console.log('🎉 All Search Supertest Acceptance Criteria Passed Successfully!');
   } finally {
-    try {
-      const tenantIds = [merchantIdA, merchantIdB];
-      await prisma.auditLog.deleteMany({ where: { merchant_id: { in: tenantIds } } });
-      await prisma.claim.deleteMany({ where: { merchant_id: { in: tenantIds } } });
-      await prisma.discrepancy.deleteMany({ where: { merchant_id: { in: tenantIds } } });
-      await prisma.statementRow.deleteMany({
-        where: { statement: { merchant_id: { in: tenantIds } } },
-      });
-      await prisma.carrierStatement.deleteMany({ where: { merchant_id: { in: tenantIds } } });
-      await prisma.exceptionContactLog.deleteMany({
-        where: { user: { merchant_id: { in: tenantIds } } },
-      });
-      await prisma.exceptionCase.deleteMany({ where: { merchant_id: { in: tenantIds } } });
-      await prisma.shipmentEvent.deleteMany({
-        where: { shipment: { merchant_id: { in: tenantIds } } },
-      });
-      await prisma.returnRecord.deleteMany({ where: { merchant_id: { in: tenantIds } } });
-      await prisma.shipment.deleteMany({ where: { merchant_id: { in: tenantIds } } });
-      await prisma.order.deleteMany({ where: { merchant_id: { in: tenantIds } } });
-      await prisma.carrierAccount.deleteMany({ where: { merchant_id: { in: tenantIds } } });
-      await prisma.deviceSession.deleteMany({
-        where: { user: { merchant_id: { in: tenantIds } } },
-      });
-      await prisma.user.deleteMany({ where: { merchant_id: { in: tenantIds } } });
-      await prisma.merchant.deleteMany({ where: { id: { in: tenantIds } } });
-    } catch (cleanupErr) {
-      console.warn('⚠️ Search Supertest cleanup warning:', cleanupErr);
-    }
+    const tenantIds = [merchantIdA, merchantIdB];
+    await prisma.auditLog.deleteMany({ where: { merchant_id: { in: tenantIds } } });
+    await prisma.claim.deleteMany({ where: { merchant_id: { in: tenantIds } } });
+    await prisma.discrepancy.deleteMany({ where: { merchant_id: { in: tenantIds } } });
+    await prisma.statementRow.deleteMany({
+      where: { statement: { merchant_id: { in: tenantIds } } },
+    });
+    await prisma.carrierStatement.deleteMany({ where: { merchant_id: { in: tenantIds } } });
+    await prisma.exceptionContactLog.deleteMany({
+      where: { user: { merchant_id: { in: tenantIds } } },
+    });
+    await prisma.exceptionCase.deleteMany({ where: { merchant_id: { in: tenantIds } } });
+    await prisma.shipmentEvent.deleteMany({
+      where: { shipment: { merchant_id: { in: tenantIds } } },
+    });
+    await prisma.returnRecord.deleteMany({ where: { merchant_id: { in: tenantIds } } });
+    await prisma.shipment.deleteMany({ where: { merchant_id: { in: tenantIds } } });
+    await prisma.order.deleteMany({ where: { merchant_id: { in: tenantIds } } });
+    await prisma.carrierAccount.deleteMany({ where: { merchant_id: { in: tenantIds } } });
+    await prisma.deviceSession.deleteMany({
+      where: { user: { merchant_id: { in: tenantIds } } },
+    });
+    await prisma.user.deleteMany({ where: { merchant_id: { in: tenantIds } } });
+    await prisma.merchant.deleteMany({ where: { id: { in: tenantIds } } });
     await app.close();
   }
 }

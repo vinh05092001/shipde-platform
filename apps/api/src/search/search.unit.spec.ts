@@ -176,49 +176,37 @@ describe('FEAT-COM-01: Global Search Unit Test Suite', () => {
           order: {
             findMany: async (args: any) => {
               queriesRecorded.order.push(args);
-              return (fixtures.orders || []).filter(
-                (o) => visible(o, args.where)
-              );
+              return (fixtures.orders || []).filter((o) => visible(o, args.where));
             },
           },
           shipment: {
             findMany: async (args: any) => {
               queriesRecorded.shipment.push(args);
-              return (fixtures.shipments || []).filter(
-                (s) => visible(s, args.where)
-              );
+              return (fixtures.shipments || []).filter((s) => visible(s, args.where));
             },
           },
           carrierStatement: {
             findMany: async (args: any) => {
               queriesRecorded.carrierStatement.push(args);
-              return (fixtures.carrierStatements || []).filter(
-                (b) => visible(b, args.where)
-              );
+              return (fixtures.carrierStatements || []).filter((b) => visible(b, args.where));
             },
           },
           exceptionCase: {
             findMany: async (args: any) => {
               queriesRecorded.exceptionCase.push(args);
-              return (fixtures.exceptionCases || []).filter(
-                (e) => visible(e, args.where)
-              );
+              return (fixtures.exceptionCases || []).filter((e) => visible(e, args.where));
             },
           },
           claim: {
             findMany: async (args: any) => {
               queriesRecorded.claim.push(args);
-              return (fixtures.claims || []).filter(
-                (c) => visible(c, args.where)
-              );
+              return (fixtures.claims || []).filter((c) => visible(c, args.where));
             },
           },
           discrepancy: {
             findMany: async (args: any) => {
               queriesRecorded.discrepancy.push(args);
-              return (fixtures.discrepancies || []).filter(
-                (d) => visible(d, args.where)
-              );
+              return (fixtures.discrepancies || []).filter((d) => visible(d, args.where));
             },
           },
           auditLog: {
@@ -646,7 +634,9 @@ describe('FEAT-COM-01: Global Search Unit Test Suite', () => {
 
       const queryArg = mock.queriesRecorded.order[0];
       assert.ok(queryArg.where.AND, 'Query where clause must include AND predicate for scope');
-      assert.deepStrictEqual(queryArg.where.AND[0].AND[1], { OR: [{ branch_id: null }, { branch_id: { in: ['branch-north-1'] } }] });
+      assert.deepStrictEqual(queryArg.where.AND[0].AND[1], {
+        OR: [{ branch_id: null }, { branch_id: { in: ['branch-north-1'] } }],
+      });
     });
 
     it('AC-COM-01-28: should apply warehouse scope predicate when user has warehouse_scopes', async () => {
@@ -687,7 +677,9 @@ describe('FEAT-COM-01: Global Search Unit Test Suite', () => {
         queryArg.where.AND,
         'Query where clause must include AND predicate for warehouse scope'
       );
-      assert.deepStrictEqual(queryArg.where.AND[0].AND[2], { OR: [{ warehouse_id: null }, { warehouse_id: { in: ['wh-north-1'] } }] });
+      assert.deepStrictEqual(queryArg.where.AND[0].AND[2], {
+        OR: [{ warehouse_id: null }, { warehouse_id: { in: ['wh-north-1'] } }],
+      });
     });
 
     it('AC-COM-01-29: should return empty scope predicate when non-owner has empty scopes', async () => {
@@ -723,31 +715,94 @@ describe('FEAT-COM-01: Global Search Unit Test Suite', () => {
         queryArg.where.AND,
         'Query where clause must block access when user has empty scopes'
       );
-      assert.deepStrictEqual(queryArg.where.AND[0].AND[1], { OR: [{ branch_id: null }, { branch_id: { in: [] } }] });
+      assert.deepStrictEqual(queryArg.where.AND[0].AND[1], {
+        OR: [{ branch_id: null }, { branch_id: { in: [] } }],
+      });
     });
 
     it('filters every entity and requires both assigned dimensions to match', async () => {
       const makeRows = (extra: any) => [
-        { ...extra, id: 'allowed', merchant_id: TENANT_A, branch_id: 'north', warehouse_id: 'wh-a' },
-        { ...extra, id: 'wrong-warehouse', merchant_id: TENANT_A, branch_id: 'north', warehouse_id: 'wh-b' },
-        { ...extra, id: 'wrong-branch', merchant_id: TENANT_A, branch_id: 'south', warehouse_id: 'wh-a' },
+        {
+          ...extra,
+          id: 'allowed',
+          merchant_id: TENANT_A,
+          branch_id: 'north',
+          warehouse_id: 'wh-a',
+        },
+        {
+          ...extra,
+          id: 'wrong-warehouse',
+          merchant_id: TENANT_A,
+          branch_id: 'north',
+          warehouse_id: 'wh-b',
+        },
+        {
+          ...extra,
+          id: 'wrong-branch',
+          merchant_id: TENANT_A,
+          branch_id: 'south',
+          warehouse_id: 'wh-a',
+        },
         { ...extra, id: 'unknown', merchant_id: TENANT_A },
-        { ...extra, id: 'other-tenant', merchant_id: TENANT_B, branch_id: 'north', warehouse_id: 'wh-a' },
+        {
+          ...extra,
+          id: 'other-tenant',
+          merchant_id: TENANT_B,
+          branch_id: 'north',
+          warehouse_id: 'wh-a',
+        },
       ];
       const mock = createMockPrismaService({
-        users: [{ id: 'scoped', role: 'OPS_CSKH', store_scopes: ['north'], warehouse_scopes: ['wh-a'] }],
-        orders: makeRows({ order_code: 'ORD', recipient_name: 'Name', recipient_phone: '0901234567' }),
-        shipments: makeRows({ tracking_code: 'TRACK', order_code: 'ORD', carrier_code: 'GHN', current_status: 'IN_TRANSIT' }),
-        carrierStatements: makeRows({ checksum: 'CHECK', status: 'OPEN', period_start: new Date(), period_end: new Date() }),
-        exceptionCases: makeRows({ tracking_code: 'TRACK', exception_type: 'OTHER', status: 'OPEN' }),
+        users: [
+          { id: 'scoped', role: 'OPS_CSKH', store_scopes: ['north'], warehouse_scopes: ['wh-a'] },
+        ],
+        orders: makeRows({
+          order_code: 'ORD',
+          recipient_name: 'Name',
+          recipient_phone: '0901234567',
+        }),
+        shipments: makeRows({
+          tracking_code: 'TRACK',
+          order_code: 'ORD',
+          carrier_code: 'GHN',
+          current_status: 'IN_TRANSIT',
+        }),
+        carrierStatements: makeRows({
+          checksum: 'CHECK',
+          status: 'OPEN',
+          period_start: new Date(),
+          period_end: new Date(),
+        }),
+        exceptionCases: makeRows({
+          tracking_code: 'TRACK',
+          exception_type: 'OTHER',
+          status: 'OPEN',
+        }),
         claims: makeRows({ carrier_ticket: 'TICKET', claim_type: 'LOST', status: 'OPEN' }),
-        discrepancies: makeRows({ tracking_code: 'TRACK', discrepancy_type: 'OTHER', status: 'OPEN', amount: 0n }),
+        discrepancies: makeRows({
+          tracking_code: 'TRACK',
+          discrepancy_type: 'OTHER',
+          status: 'OPEN',
+          amount: 0n,
+        }),
       });
-      const service = new SearchService(mock.prisma, createMockRbacService([
-        'order:view_create', 'shipment:track_exceptions', 'reconciliation:view_contract_rates',
-        'reconciliation:run_review_audit', 'claim:verify_submit', 'audit:view',
-      ]));
-      const result = await service.search({ userId: 'scoped', merchantId: TENANT_A, role: 'OPS_CSKH' }, { q: 'TR', type: 'ALL' }, '127.0.0.1', 'scope');
+      const service = new SearchService(
+        mock.prisma,
+        createMockRbacService([
+          'order:view_create',
+          'shipment:track_exceptions',
+          'reconciliation:view_contract_rates',
+          'reconciliation:run_review_audit',
+          'claim:verify_submit',
+          'audit:view',
+        ])
+      );
+      const result = await service.search(
+        { userId: 'scoped', merchantId: TENANT_A, role: 'OPS_CSKH' },
+        { q: 'TR', type: 'ALL' },
+        '127.0.0.1',
+        'scope'
+      );
       assert.equal(result.data.items.length, 6);
       assert.ok(result.data.items.every((item: any) => item.id === 'allowed'));
     });
@@ -767,6 +822,53 @@ describe('FEAT-COM-01: Global Search Unit Test Suite', () => {
         undefined,
         'OWNER query must not have scope AND restriction'
       );
+    });
+
+    it('AC-COM-01-31: Non-owner with wildcard scopes receives universal access and finds unassigned/legacy records', async () => {
+      const mock = createMockPrismaService({
+        users: [
+          {
+            id: 'usr-wildcard-ops',
+            role: 'OPS_CSKH',
+            store_scopes: ['*'],
+            warehouse_scopes: ['*'],
+          },
+        ],
+        orders: [
+          {
+            id: 'ord-unassigned',
+            merchant_id: TENANT_A,
+            branch_id: null,
+            warehouse_id: null,
+            order_code: 'ORD-UNASSIGNED',
+            recipient_name: 'Khách Tự Do',
+            recipient_phone: '0901234567',
+            source_type: 'pancake',
+          },
+        ],
+      });
+      const rbac = createMockRbacService(['order:view_create']);
+      const service = new SearchService(mock.prisma, rbac);
+
+      const actorWildcard: ActorContext = {
+        userId: 'usr-wildcard-ops',
+        merchantId: TENANT_A,
+        role: 'OPS_CSKH',
+      };
+
+      const scopes = await service.resolveActorScopes(actorWildcard);
+      assert.strictEqual(scopes.hasUniversalAccess, true);
+      assert.strictEqual(service.buildScopePredicate(scopes), null);
+
+      const res = await service.search(
+        actorWildcard,
+        { q: 'ORD', type: 'ORDER' },
+        '127.0.0.1',
+        'corr-wildcard'
+      );
+      assert.strictEqual(res.success, true);
+      assert.strictEqual(res.data.total, 1);
+      assert.strictEqual(res.data.items[0].id, 'ord-unassigned');
     });
   });
 });

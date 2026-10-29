@@ -7,6 +7,7 @@ import type { ActorContext } from '../rbac/rbac.dto';
 import { SearchQueryDto, validateSearchQueryDto, ParsedSearchQuery } from './search.dto';
 import { SearchEntityType, SearchResultItem, SearchResponse } from '@shipde/contracts';
 import { isActiveStatus } from '@shipde/contracts';
+import { RoleEnum } from '@prisma/client';
 import { maskIdentifier } from '../invitations/invitations.service';
 
 export function maskQueryPii(query: string): string {
@@ -64,15 +65,15 @@ export class SearchService {
       return { hasUniversalAccess: false, storeScopes: [], warehouseScopes: [] };
     }
 
-    if (user.role === 'OWNER') {
-      return { hasUniversalAccess: true, storeScopes: [], warehouseScopes: [] };
-    }
-
     const storeScopes = user.store_scopes || [];
     const warehouseScopes = user.warehouse_scopes || [];
 
+    const isOwner = user.role === RoleEnum.OWNER;
+    const hasUniversalAccess =
+      isOwner || (storeScopes.includes('*') && warehouseScopes.includes('*'));
+
     return {
-      hasUniversalAccess: false,
+      hasUniversalAccess,
       storeScopes,
       warehouseScopes,
     };
@@ -83,15 +84,22 @@ export class SearchService {
       return null;
     }
 
+    const hasStoreWildcard = scopes.storeScopes.includes('*');
+    const hasWarehouseWildcard = scopes.warehouseScopes.includes('*');
+
+    if (hasStoreWildcard && hasWarehouseWildcard) {
+      return null;
+    }
+
     // Every present resource dimension must be authorized. Unknown dimensions
     // cannot establish access, even when a user has a wildcard in one domain.
     return {
       AND: [
         { OR: [{ branch_id: { not: null } }, { warehouse_id: { not: null } }] },
-        ...(scopes.storeScopes.includes('*')
+        ...(hasStoreWildcard
           ? []
           : [{ OR: [{ branch_id: null }, { branch_id: { in: scopes.storeScopes } }] }]),
-        ...(scopes.warehouseScopes.includes('*')
+        ...(hasWarehouseWildcard
           ? []
           : [{ OR: [{ warehouse_id: null }, { warehouse_id: { in: scopes.warehouseScopes } }] }]),
       ],
@@ -193,7 +201,7 @@ export class SearchService {
           title: `Đơn hàng ${ord.order_code}`,
           subtitle: `Khách hàng: ${ord.recipient_name} | SĐT: ${phoneDisplay}`,
           code: ord.order_code,
-          status: ord.source_type.toUpperCase(),
+          status: ord.source_type ? ord.source_type.toUpperCase() : 'PANCAKE',
           url: `/orders/${ord.id}`,
           metadata: {
             order_code: ord.order_code,
