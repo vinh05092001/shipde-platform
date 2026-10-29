@@ -188,13 +188,15 @@ async function runSearchSupertestSuite() {
   await app.get(RbacService).ensurePlatformSeed();
 
   const testSuffix = Date.now().toString().slice(-6);
+  let merchantIdA = '';
+  let merchantIdB = '';
 
   try {
     const tokenSecret = 'test-token-secret-for-search-supertest-32-chars';
     process.env.AUTH_TOKEN_SECRET = tokenSecret;
 
-    const merchantIdA = randomUUID();
-    const merchantIdB = randomUUID();
+    merchantIdA = randomUUID();
+    merchantIdB = randomUUID();
 
     await prisma.merchant.createMany({
       data: [
@@ -763,30 +765,32 @@ async function runSearchSupertestSuite() {
 
     console.log('🎉 All Search Supertest Acceptance Criteria Passed Successfully!');
   } finally {
-    const tenantIds = [merchantIdA, merchantIdB];
-    await prisma.auditLog.deleteMany({ where: { merchant_id: { in: tenantIds } } });
-    await prisma.claim.deleteMany({ where: { merchant_id: { in: tenantIds } } });
-    await prisma.discrepancy.deleteMany({ where: { merchant_id: { in: tenantIds } } });
-    await prisma.statementRow.deleteMany({
-      where: { statement: { merchant_id: { in: tenantIds } } },
-    });
-    await prisma.carrierStatement.deleteMany({ where: { merchant_id: { in: tenantIds } } });
-    await prisma.exceptionContactLog.deleteMany({
-      where: { user: { merchant_id: { in: tenantIds } } },
-    });
-    await prisma.exceptionCase.deleteMany({ where: { merchant_id: { in: tenantIds } } });
-    await prisma.shipmentEvent.deleteMany({
-      where: { shipment: { merchant_id: { in: tenantIds } } },
-    });
-    await prisma.returnRecord.deleteMany({ where: { merchant_id: { in: tenantIds } } });
-    await prisma.shipment.deleteMany({ where: { merchant_id: { in: tenantIds } } });
-    await prisma.order.deleteMany({ where: { merchant_id: { in: tenantIds } } });
-    await prisma.carrierAccount.deleteMany({ where: { merchant_id: { in: tenantIds } } });
-    await prisma.deviceSession.deleteMany({
-      where: { user: { merchant_id: { in: tenantIds } } },
-    });
-    await prisma.user.deleteMany({ where: { merchant_id: { in: tenantIds } } });
-    await prisma.merchant.deleteMany({ where: { id: { in: tenantIds } } });
+    const tenantIds = [merchantIdA, merchantIdB].filter(Boolean);
+    if (tenantIds.length > 0) {
+      await prisma.auditLog.deleteMany({ where: { merchant_id: { in: tenantIds } } });
+      await prisma.claim.deleteMany({ where: { merchant_id: { in: tenantIds } } });
+      await prisma.discrepancy.deleteMany({ where: { merchant_id: { in: tenantIds } } });
+      await prisma.statementRow.deleteMany({
+        where: { statement: { merchant_id: { in: tenantIds } } },
+      });
+      await prisma.carrierStatement.deleteMany({ where: { merchant_id: { in: tenantIds } } });
+      await prisma.exceptionContactLog.deleteMany({
+        where: { user: { merchant_id: { in: tenantIds } } },
+      });
+      await prisma.exceptionCase.deleteMany({ where: { merchant_id: { in: tenantIds } } });
+      await prisma.shipmentEvent.deleteMany({
+        where: { shipment: { merchant_id: { in: tenantIds } } },
+      });
+      await prisma.returnRecord.deleteMany({ where: { merchant_id: { in: tenantIds } } });
+      await prisma.shipment.deleteMany({ where: { merchant_id: { in: tenantIds } } });
+      await prisma.order.deleteMany({ where: { merchant_id: { in: tenantIds } } });
+      await prisma.carrierAccount.deleteMany({ where: { merchant_id: { in: tenantIds } } });
+      await prisma.deviceSession.deleteMany({
+        where: { user: { merchant_id: { in: tenantIds } } },
+      });
+      await prisma.user.deleteMany({ where: { merchant_id: { in: tenantIds } } });
+      await prisma.merchant.deleteMany({ where: { id: { in: tenantIds } } });
+    }
     await app.close();
   }
 }
