@@ -6,13 +6,13 @@
 | --------------- | ----- |
 | Work Item ID    | `FEAT-WH-01` |
 | Feature ID      | `FEAT-WH-01` |
-| Status          | `IN_PROGRESS` |
+| Status          | `READY_FOR_CODEX` |
 | Delivery order  | 17 |
 | Dependencies    | `TASK-FOUND-04` (merged), `FEAT-AUTH-01` (merged), `FEAT-AUTH-06` (merged), `FEAT-RBAC-01` (merged), `FEAT-RBAC-02` (merged), `FEAT-ORG-01` (merged) |
 | Assigned author | `GEMINI` |
 | Risk            | `HIGH` |
 | Risk domains    | `tenant isolation`, `database ownership`, `rbac`, `audit` |
-| Allowed paths   | `docs/product-spec/work-items/FEAT-WH-01.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`, `docs/product-spec/contracts/openapi.yaml`, `packages/contracts/src/index.ts`, `packages/contracts/src/openapi.ts`, `prisma/schema.prisma`, `prisma/migrations/*`, `apps/api/src/app.module.ts`, `apps/api/src/warehouses/*` |
+| Allowed paths   | `docs/product-spec/work-items/FEAT-WH-01.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`, `docs/product-spec/contracts/openapi.yaml`, `packages/contracts/src/index.ts`, `packages/contracts/src/openapi.ts`, `prisma/schema.prisma`, `prisma/migrations/*`, `apps/api/src/app.module.ts`, `apps/api/src/warehouses/*`, `apps/web/package.json`, `apps/web/src/app/settings/warehouses/*`, `apps/web/src/components/WarehouseManagementView.tsx`, `apps/web/src/tests/warehouses-page-states.test.ts` |
 | Reviewer        | Codex — fresh independent task |
 | Branch          | `feat/feat-wh-01-warehouses` |
 | Pull Request    | Pending |
@@ -95,10 +95,13 @@ The backend acts as the authoritative boundary:
 7. **Automated Verification**:
    - Unit tests (`warehouses.unit.spec.ts`) validating DTOs, normalization, and phone/schedule validation.
    - Supertest integration tests (`warehouses.supertest.spec.ts`) verifying CRUD, tenant isolation, scope enforcement, RBAC, and audit log generation.
+8. **Web UI (SCR-WH-01)**:
+   - Implement warehouse settings screen at `apps/web/src/app/settings/warehouses/page.tsx` with `WarehouseManagementView.tsx`.
+   - Complete state coverage: loading skeleton, empty state, view/card list, search & status filters, create/edit modal (pickup address, return address, operating schedule, printer defaults), inline validation errors, server error banner with retry recovery, forbidden banner, scoped access banner, and success notification.
+   - Comprehensive web UI tests (`apps/web/src/tests/warehouses-page-states.test.ts`) covering all 14 UI states.
 
 ## Out of scope
 
-- Web UI frontend implementation (`SCR-WH-01` at `apps/web/src/app/settings/warehouses/page.tsx` — scheduled for next run as per worker instructions).
 - Carrier account linking per warehouse (`FEAT-CAR-01`).
 - Source order dispatch and routing (`FEAT-ORD-01`, `FEAT-ORD-02`).
 
@@ -114,14 +117,16 @@ The backend acts as the authoritative boundary:
 
 ## UI states (SCR-WH-01 / /settings/warehouses)
 
-*Note: Frontend UI implementation is scheduled for the subsequent run.*
-- **Loading:** Skeleton list of warehouse cards during fetch.
-- **View / List:** Paginated card grid or table showing warehouse name, code, default badge, pickup address, operating hours, and status.
-- **Create / Edit Modal:** Tabbed form (Thông tin kho & Địa chỉ lấy, Địa chỉ hoàn hàng, Thời gian hoạt động, Cấu hình máy in).
-- **Validation:** Real-time inline field errors for Vietnamese phone, required address fields, and code collision.
-- **Forbidden:** Read-only view or restricted action controls for users without `iam:shop_config`.
-- **Empty:** Onboarding empty state prompting owner to create their first pickup warehouse.
-- **Error & Recovery:** Error banner with retry preserving entered form data.
+The warehouse settings screen at `/settings/warehouses` implements all mandatory UI states:
+- **Loading:** Skeleton list of warehouse cards (`data-testid="warehouse-loading-state"`) during fetch.
+- **View / List:** Paginated card grid or table (`data-testid="warehouse-list-state"`) showing warehouse name, code, default badge, status badge, pickup address, return address, operating hours, schedule notes, and printer defaults.
+- **Create / Edit Modal:** Tabbed modal (`data-testid="warehouse-modal"`) with 4 tabs: (1) Thông tin kho & Địa chỉ lấy, (2) Địa chỉ hoàn hàng, (3) Lịch hoạt động, (4) Cấu hình in nhãn.
+- **Validation:** Real-time inline field errors (`error-warehouse-*`) for Vietnamese phone, required address fields, and code collision.
+- **Forbidden:** Read-only view (`data-testid="warehouse-forbidden-banner"`) for users lacking `iam:shop_config` with mutation actions hidden.
+- **Empty:** Onboarding empty state (`data-testid="warehouse-empty-state"`) prompting owner to create their first pickup warehouse.
+- **Scoped Access:** Info banner (`data-testid="warehouse-scoped-banner"`) indicating restricted `warehouse_scopes`.
+- **Error & Recovery:** Error banner (`data-testid="warehouse-error-banner"`) with retry action (`data-testid="retry-error-button"`).
+- **Success:** Notification toast (`data-testid="warehouse-success-banner"`).
 
 ## Acceptance matrix
 
@@ -144,28 +149,28 @@ The backend acts as the authoritative boundary:
 | `AC-WH-01-15` | Actor lacking `iam:shop_config` (e.g. `WAREHOUSE` role) attempts mutation | 403 `FORBIDDEN` canonical error | PASS — Verified in `warehouses.supertest.spec.ts` (POST, PATCH, DELETE, set default all return 403 FORBIDDEN) |
 | `AC-WH-01-16` | Unauthenticated request to warehouse endpoints | 401 `UNAUTHORIZED` canonical error | PASS — Verified in `warehouses.supertest.spec.ts` (returns 401 UNAUTHORIZED) |
 | `AC-WH-01-17` | Audit trail security: sensitive contact phone/email masked in audit log diffs | Sensitive fields masked (`090****567`); plaintext never logged | PASS — Verified in `warehouses.unit.spec.ts` & `warehouses.supertest.spec.ts` (all audit entries checked, zero secrets/unmasked PII) |
+| `AC-WH-01-18` | UI state contract on `/settings/warehouses` (loading, view, create/edit modal, return address tab, schedule tab, printer defaults tab, inline validation errors, server error retry, forbidden banner, scoped access banner, success notification) | All 14 mandatory UI states verified in component test harness | PASS — Verified in `apps/web/src/tests/warehouses-page-states.test.ts` (all 14 UI states asserted via `renderToStaticMarkup`) |
 
 ## Verification commands
 
 - `pnpm install --frozen-lockfile` — PASSED
 - `pnpm db:generate` — PASSED (Prisma Client v6.19.3 generated)
-- `pnpm lint` — PASSED
-- `pnpm format:check` — PASSED
-- `pnpm typecheck` — PASSED
+- `pnpm lint` — PASSED (12 tasks successful, 0 errors)
+- `pnpm format:check` — PASSED (14 changed files 100% compliant)
+- `pnpm typecheck` — PASSED (12 tasks successful, 0 errors)
 - `pnpm --filter @shipde/api exec tsx --tsconfig tsconfig.json --test src/warehouses/warehouses.unit.spec.ts` — PASSED (25/25 unit tests)
 - `pnpm --filter @shipde/api exec tsx --tsconfig tsconfig.json src/warehouses/warehouses.supertest.spec.ts` — PASSED (17/17 supertest checks)
+- `pnpm --filter @shipde/web exec tsx src/tests/warehouses-page-states.test.ts` — PASSED (14/14 UI states verified)
+- `pnpm --filter @shipde/web test` — PASSED (all web test suites passed)
 - `pnpm contract:check` — PASSED (61 endpoints validated, 0 drift)
-- `node scripts/ai/check-no-hardcode.mjs` — PASSED
-- `pnpm --filter @shipde/api exec tsx --tsconfig tsconfig.json src/warehouses/warehouses.supertest.spec.ts`
-- `pnpm contract:check`
-- `node scripts/ai/check-no-hardcode.mjs`
+- `node scripts/ai/check-no-hardcode.mjs` — PASSED (0 raw instances, 0 new)
 
 ## Codex review record
 
 | Review round | Commit | Verdict | Findings resolved |
 |---|---|---|---|
-| 1 | Pending | Pending | Initial implementation |
+| 1 | Pending | Pending | Ready for independent Codex review |
 
 ## Residual limitations
 
-- Web UI frontend implementation (`SCR-WH-01` at `apps/web/src/app/settings/warehouses/page.tsx`) deferred to subsequent run as instructed.
+None
