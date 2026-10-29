@@ -1895,38 +1895,28 @@ function reportDispatchOutcome(args, deps) {
 
     try {
       const routeHealthApi = require('./route-health');
-      const storeOrPath =
-        (args && (args['route-health'] || args.routeHealthFile)) ||
-        d.routeHealth ||
-        d.routeHealthFile ||
-        d['route-health'] ||
-        (args && args.root
-          ? path.join(args.root, 'tools', 'ai-brain', 'data', 'model-route-health.json')
-          : null) ||
-        (d.root ? path.join(d.root, 'tools', 'ai-brain', 'data', 'model-route-health.json') : null);
-      if (storeOrPath) {
-        const modelId = candidate.modelId || candidate.model;
-        const routeId = candidate.upstream || candidate.gateway || candidate.accessPath;
-        const isTimeout =
-          stall.stalled ||
-          String(outcome.status).toLowerCase() === 'timeout' ||
-          outcome.timedOut === true ||
-          /timeout|stall|hang/i.test(String(outcome.reason || outcome.errorClass || ''));
-        routeHealthApi.recordExecutionResult(
-          storeOrPath,
-          modelId,
-          routeId,
-          {
-            status: passed ? 200 : isTimeout ? 408 : Number(outcome.httpStatus) || 500,
-            ok: passed,
-            timedOut: Boolean(isTimeout),
-            reason: typeof outcome.reason === 'string' ? outcome.reason : outcome.errorClass,
-            elapsedMs: Number(outcome.elapsedMs) || undefined,
-            concurrency: Number(outcome.concurrency) || undefined,
-          },
-          { now, persist: d.persistRouteHealth !== false }
-        );
-      }
+      const storeOrPath = routeHealthApi.resolveRouteHealthFile(args, d);
+      const modelId = candidate.modelId || candidate.model;
+      const routeId = candidate.upstream || candidate.gateway || candidate.accessPath;
+      const isTimeout =
+        stall.stalled ||
+        String(outcome.status).toLowerCase() === 'timeout' ||
+        outcome.timedOut === true ||
+        /timeout|stall|hang/i.test(String(outcome.reason || outcome.errorClass || ''));
+      routeHealthApi.recordExecutionResult(
+        storeOrPath,
+        modelId,
+        routeId,
+        {
+          status: passed ? 200 : isTimeout ? 408 : Number(outcome.httpStatus) || 500,
+          ok: passed,
+          timedOut: Boolean(isTimeout),
+          reason: typeof outcome.reason === 'string' ? outcome.reason : outcome.errorClass,
+          elapsedMs: Number(outcome.elapsedMs) || undefined,
+          concurrency: Number(outcome.concurrency) || undefined,
+        },
+        { now, persist: d.persistRouteHealth !== false }
+      );
     } catch (_) {}
   }
 

@@ -249,6 +249,44 @@ function recordResult(store, modelId, routeId, result, now, options) {
   return { key, eligible: false, reason };
 }
 
+const DEFAULT_ROUTE_HEALTH_PATH = path.join(__dirname, 'data', 'model-route-health.json');
+
+function resolveRouteHealthFile(args = {}, deps = {}) {
+  const a = args || {};
+  const d = deps || {};
+  if (a['route-health'] || a.routeHealthFile) {
+    return a['route-health'] || a.routeHealthFile;
+  }
+  if (d.routeHealth) {
+    return d.routeHealth;
+  }
+  if (d.routeHealthFile || d['route-health']) {
+    return d.routeHealthFile || d['route-health'];
+  }
+  if (a.root) {
+    return path.join(a.root, 'tools', 'ai-brain', 'data', 'model-route-health.json');
+  }
+  if (d.root) {
+    return path.join(d.root, 'tools', 'ai-brain', 'data', 'model-route-health.json');
+  }
+  if (a.cwd || d.cwd) {
+    return path.join(a.cwd || d.cwd, 'tools', 'ai-brain', 'data', 'model-route-health.json');
+  }
+  const reg = (d.registry && d.registry.dispatch) || (a.registry && a.registry.dispatch);
+  const cfg = reg?.routeHealthFile;
+  if (cfg) {
+    return path.isAbsolute(cfg) ? cfg : path.resolve(__dirname, '..', '..', cfg);
+  }
+  try {
+    const defaultDispatch = require('./sources.json').dispatch;
+    if (defaultDispatch?.routeHealthFile) {
+      const df = defaultDispatch.routeHealthFile;
+      return path.isAbsolute(df) ? df : path.resolve(__dirname, '..', '..', df);
+    }
+  } catch (_) {}
+  return DEFAULT_ROUTE_HEALTH_PATH;
+}
+
 function probeMemoryFile(o) {
   const opts = o || {};
   return (
@@ -257,7 +295,7 @@ function probeMemoryFile(o) {
     (opts.cwd || opts.root
       ? path.join(opts.cwd || opts.root, 'tools', 'ai-brain', 'data', 'model-route-health.json')
       : null) ||
-    path.join(__dirname, 'data', 'model-route-health.json')
+    DEFAULT_ROUTE_HEALTH_PATH
   );
 }
 function probeIdentity(c) {
@@ -674,7 +712,8 @@ function rememberProbe(candidate, result, options) {
 
 function recordExecutionResult(storeOrFile, modelId, routeId, outcome, options = {}) {
   const isFile = typeof storeOrFile === 'string';
-  const store = isFile ? loadStore(storeOrFile, { allowMissing: true }) : storeOrFile;
+  const loader = (module.exports && module.exports.loadStore) || loadStore;
+  const store = isFile ? loader(storeOrFile, { allowMissing: true }) : storeOrFile;
   const now = options.now ?? Date.now();
 
   let probeResult;
@@ -730,7 +769,8 @@ function recordExecutionResult(storeOrFile, modelId, routeId, outcome, options =
   }
 
   if (isFile && options.persist !== false) {
-    saveStore(storeOrFile, store, options);
+    const saver = (module.exports && module.exports.saveStore) || saveStore;
+    saver(storeOrFile, store, options);
   }
 
   return { store, recorded, key };
@@ -1407,6 +1447,8 @@ async function runDueCli(options) {
 
 module.exports = {
   atomicRenameSync,
+  DEFAULT_ROUTE_HEALTH_PATH,
+  resolveRouteHealthFile,
   probeCooldown,
   probeMemoryFile,
   rememberProbe,

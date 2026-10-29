@@ -355,6 +355,7 @@
     }
   ],
   "dispatch": {
+    "routeHealthFile": "tools/ai-brain/data/model-route-health.json",
     "hermesOrchestrator": {
       "qualityFloor": 60,
       "costCeiling": 100000,

@@ -3246,45 +3246,35 @@ function dispatchCommand(args, deps = {}) {
         );
       try {
         const routeHealthApi = require('./route-health');
-        const storeOrPath =
-          (args && (args['route-health'] || args.routeHealthFile)) ||
-          (deps && (deps.routeHealth || deps.routeHealthFile || deps['route-health'])) ||
-          (args && args.root
-            ? path.join(args.root, 'tools', 'ai-brain', 'data', 'model-route-health.json')
-            : null) ||
-          (deps && deps.root
-            ? path.join(deps.root, 'tools', 'ai-brain', 'data', 'model-route-health.json')
-            : null);
-        if (storeOrPath) {
-          const modelId =
-            finalChosenCandidate.modelId || finalChosenCandidate.model || finalChosenCandidate.id;
-          const routeId =
-            finalChosenCandidate.upstream ||
-            finalChosenCandidate.source ||
-            finalChosenCandidate.gateway;
-          const concurrency =
-            deps && typeof deps.concurrency === 'number'
-              ? deps.concurrency
-              : deps && deps.load && typeof deps.load.activeWriters === 'number'
-                ? deps.load.activeWriters
-                : Array.isArray(deps && deps.load)
-                  ? deps.load.length
-                  : undefined;
-          routeHealthApi.recordExecutionResult(
-            storeOrPath,
-            modelId,
-            routeId,
-            {
-              status: isTimeout ? 408 : rawFail.httpStatus || 500,
-              ok: false,
-              timedOut: Boolean(isTimeout),
-              reason: rawFail.body || rawFail.stderr || (thrownError && thrownError.message),
-              elapsedMs: launchRes ? launchRes.elapsedMs : undefined,
-              concurrency,
-            },
-            { now, persist: deps && deps.persistRouteHealth !== false }
-          );
-        }
+        const storeOrPath = routeHealthApi.resolveRouteHealthFile(args, deps);
+        const modelId =
+          finalChosenCandidate.modelId || finalChosenCandidate.model || finalChosenCandidate.id;
+        const routeId =
+          finalChosenCandidate.upstream ||
+          finalChosenCandidate.source ||
+          finalChosenCandidate.gateway;
+        const concurrency =
+          deps && typeof deps.concurrency === 'number'
+            ? deps.concurrency
+            : deps && deps.load && typeof deps.load.activeWriters === 'number'
+              ? deps.load.activeWriters
+              : Array.isArray(deps && deps.load)
+                ? deps.load.length
+                : undefined;
+        routeHealthApi.recordExecutionResult(
+          storeOrPath,
+          modelId,
+          routeId,
+          {
+            status: isTimeout ? 408 : rawFail.httpStatus || 500,
+            ok: false,
+            timedOut: Boolean(isTimeout),
+            reason: rawFail.body || rawFail.stderr || (thrownError && thrownError.message),
+            elapsedMs: launchRes ? launchRes.elapsedMs : undefined,
+            concurrency,
+          },
+          { now, persist: deps && deps.persistRouteHealth !== false }
+        );
       } catch (_) {}
       const parsedOutcome = launchRes && launchRes.stdout ? parseLastJson(launchRes.stdout) : null;
       const outcome =

@@ -15,7 +15,9 @@ const {
   scanAllQuotas,
   schedulePeriodicQuotaScan,
 } = require('../quota-scan');
-const { recordExecutionResult, loadStore } = require('../route-health');
+const routeHealthApi = require('../route-health');
+const { recordExecutionResult, loadStore, resolveRouteHealthFile, DEFAULT_ROUTE_HEALTH_PATH } =
+  routeHealthApi;
 const routingApi = require('../routing');
 const { quotaScanCommand, dispatchCommand } = require('../cli');
 
@@ -1051,4 +1053,146 @@ test('TASK-AI-147 Review R3: dispatch launch does not record execution success; 
   assert.equal(healthRecReport.status, 'AVAILABLE');
   assert.equal(healthRecReport.elapsedMs, 220);
   assert.equal(healthRecReport.concurrency, 3);
+});
+
+test('TASK-AI-147 Review R4: production default destination is restored and records outcomes without injected store', async (t) => {
+  const dir = fixture(t);
+  const evidenceDir = path.join(dir, 'evidence');
+
+  // 1. resolveRouteHealthFile resolves real default destination when dependencies are empty or omitted
+  assert.equal(
+    resolveRouteHealthFile({}, {}),
+    DEFAULT_ROUTE_HEALTH_PATH,
+    'empty args and deps must resolve to DEFAULT_ROUTE_HEALTH_PATH'
+  );
+  assert.equal(
+    resolveRouteHealthFile(),
+    DEFAULT_ROUTE_HEALTH_PATH,
+    'omitted args and deps must resolve to DEFAULT_ROUTE_HEALTH_PATH'
+  );
+  assert.ok(
+    DEFAULT_ROUTE_HEALTH_PATH.endsWith(
+      path.join('tools', 'ai-brain', 'data', 'model-route-health.json')
+    ),
+    'DEFAULT_ROUTE_HEALTH_PATH must point to model-route-health.json'
+  );
+
+  // 2. Intercept saveStore to verify production-style invocation without injected dependencies persists outcomes
+  let interceptedFile = null;
+  let interceptedStore = null;
+  t.mock.method(routeHealthApi, 'saveStore', (file, store) => {
+    interceptedFile = file;
+    interceptedStore = store;
+  });
+
+  const candProd = {
+    harness: 'paseo',
+    accessPath: 'http://127.0.0.1:20128/v1',
+    gateway: '9router',
+    upstream: 'mock-up-prod',
+    accountId: 'mock-scope-prod',
+    quotaScope: 'mock-scope-prod',
+    modelId: 'm-prod-fail',
+    qualifiedRoles: ['author.foundation'],
+    cost: 5,
+    quality: 90,
+  };
+  candProd.candidateKey = [
+    candProd.harness,
+    candProd.accessPath,
+    candProd.gateway,
+    candProd.upstream,
+    candProd.accountId,
+    candProd.quotaScope,
+    candProd.modelId,
+  ].join('\u241f');
+
+  // Dispatch launch failure without injected routeHealth / routeHealthFile / root
+  let exitCode = -1;
+  dispatchCommand(
+    { execute: true, item: 'TASK-TEST-HEALTH-PROD-FAIL' },
+    {
+      candidates: [candProd],
+      run: () => ({ exitCode: 1, stderr: 'Upstream gateway error 502', elapsedMs: 500 }),
+      evidenceDir,
+      home: dir,
+      exit: (code) => {
+        exitCode = code;
+      },
+      log: () => {},
+      maxAttempts: 1,
+      concurrency: 1,
+    }
+  );
+
+  assert.equal(exitCode, 1);
+  assert.equal(
+    interceptedFile,
+    DEFAULT_ROUTE_HEALTH_PATH,
+    'dispatch failure without injected store must persist to DEFAULT_ROUTE_HEALTH_PATH'
+  );
+  assert.ok(interceptedStore.paths['m-prod-fail|mock-up-prod']);
+  assert.notEqual(interceptedStore.paths['m-prod-fail|mock-up-prod'].status, 'AVAILABLE');
+
+  // Outcome report without injected routeHealth / routeHealthFile / root
+  interceptedFile = null;
+  interceptedStore = null;
+  const outcomeFile = path.join(dir, 'outcome-prod.json');
+  fs.writeFileSync(
+    outcomeFile,
+    JSON.stringify({
+      candidateKey: candProd.candidateKey,
+      status: 'completed',
+      elapsedMs: 350,
+      concurrency: 2,
+    })
+  );
+
+  routingApi.reportDispatchOutcome(
+    { 'report-outcome': outcomeFile },
+    {
+      evidenceDir,
+      home: dir,
+      exit: () => {},
+    }
+  );
+
+  assert.equal(
+    interceptedFile,
+    DEFAULT_ROUTE_HEALTH_PATH,
+    'reportDispatchOutcome without injected store must persist to DEFAULT_ROUTE_HEALTH_PATH'
+  );
+  assert.ok(interceptedStore.paths['m-prod-fail|mock-up-prod']);
+  assert.equal(interceptedStore.paths['m-prod-fail|mock-up-prod'].status, 'AVAILABLE');
+  assert.equal(interceptedStore.paths['m-prod-fail|mock-up-prod'].elapsedMs, 350);
+  assert.equal(interceptedStore.paths['m-prod-fail|mock-up-prod'].concurrency, 2);
+
+  // 3. Injected in-memory store object is mutated without disk file writes
+  const memoryStore = { version: 1, paths: {}, events: [] };
+  const memoryOutcomeFile = path.join(dir, 'outcome-mem.json');
+  fs.writeFileSync(
+    memoryOutcomeFile,
+    JSON.stringify({
+      candidateKey: candProd.candidateKey,
+      status: 'completed',
+      elapsedMs: 180,
+      concurrency: 4,
+    })
+  );
+
+  interceptedFile = null;
+  routingApi.reportDispatchOutcome(
+    { 'report-outcome': memoryOutcomeFile },
+    {
+      routeHealth: memoryStore,
+      evidenceDir,
+      home: dir,
+      exit: () => {},
+    }
+  );
+
+  assert.equal(interceptedFile, null, 'in-memory routeHealth store must not call saveStore');
+  assert.ok(memoryStore.paths['m-prod-fail|mock-up-prod']);
+  assert.equal(memoryStore.paths['m-prod-fail|mock-up-prod'].status, 'AVAILABLE');
+  assert.equal(memoryStore.paths['m-prod-fail|mock-up-prod'].elapsedMs, 180);
 });
