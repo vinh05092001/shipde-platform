@@ -634,6 +634,7 @@ export interface OnboardingStateResponseDto {
   steps: OnboardingStepDto[];
   completed_at: string | null;
   updated_at: string;
+  can_edit?: boolean;
 }
 
 export interface CompleteStepDto {

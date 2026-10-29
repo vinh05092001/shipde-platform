@@ -6,13 +6,13 @@
 | --------------- | ----- |
 | Work Item ID    | `FEAT-ONB-01` |
 | Feature ID      | `FEAT-ONB-01` |
-| Status          | `IN_PROGRESS` |
+| Status          | `READY_FOR_CODEX` |
 | Delivery order  | 18 |
 | Dependencies    | `TASK-FOUND-04` (merged), `FEAT-AUTH-01` (merged), `FEAT-AUTH-06` (merged), `FEAT-RBAC-01` (merged), `FEAT-RBAC-02` (merged), `FEAT-USR-01` (merged), `FEAT-ORG-01` (merged) |
 | Assigned author | `GEMINI` |
 | Risk            | `HIGH` |
 | Risk domains    | `tenant isolation`, `database ownership`, `auth`, `audit` |
-| Allowed paths   | `docs/product-spec/work-items/FEAT-ONB-01.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`, `packages/contracts/src/index.ts`, `prisma/schema.prisma`, `prisma/migrations/*`, `apps/api/src/app.module.ts`, `apps/api/src/onboarding/*` |
+| Allowed paths   | `docs/product-spec/work-items/FEAT-ONB-01.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`, `packages/contracts/src/index.ts`, `prisma/schema.prisma`, `prisma/migrations/*`, `apps/api/src/app.module.ts`, `apps/api/src/onboarding/*`, `apps/web/package.json`, `apps/web/src/app/page.tsx`, `apps/web/src/app/settings/shop/page.tsx`, `apps/web/src/components/SettingsWorkspace.tsx`, `apps/web/src/app/onboarding/*`, `apps/web/src/components/OnboardingFlow.tsx`, `apps/web/src/tests/onboarding-page-states.test.ts` |
 | Reviewer        | Codex — fresh independent task |
 | Branch          | `feat/feat-onb-01` |
 | Pull Request    | Pending |
@@ -89,10 +89,16 @@ The onboarding checklist is resumable, strictly tenant-isolated, RBAC-protected 
 13. Comprehensive tests:
     - Unit tests (`onboarding.unit.spec.ts`) validating state calculations, dependency blocking logic, and DTO validation.
     - Supertest integration tests (`onboarding.supertest.spec.ts`) validating all endpoints, tenant isolation, RBAC enforcement, prerequisites validation, and audit log generation.
+14. Web UI Guided Onboarding Screen (`SCR-ONB-01` at `/onboarding`) & Component (`OnboardingFlow.tsx`):
+    - Resumable 6-step checklist with persistent progress, step linking to settings (shop profile, branches/warehouse, team/roles, carrier connections, operating defaults, test order), and dependency blocking.
+    - Inline warehouse creation form validating name, contact phone (VN regex), and address with live API completion.
+    - Server-authoritative edit rights (`can_edit: boolean` from API) without hardcoded role names; unknown or unauthorized users fail closed to view-only mode.
+    - Complete AGENTS.md state coverage: Loading, Empty, Partial, Validation, Error with Retry, Forbidden View-Only, Success, and Celebration states.
+    - Accessibility (A11y) gate verified with zero violations (progressbar, dialog, aria-label, labels).
+    - 11 proving tests covering all UI states in `apps/web/src/tests/onboarding-page-states.test.ts`.
 
 ## Out of scope
 
-- Web UI wizard implementation (`SCR-ONB-01` on `/onboarding` — planned for the next run as authorized in prompt).
 - Full multi-warehouse CRUD management (`FEAT-WH-01`).
 - Real third-party carrier OAuth / token exchanges (`FEAT-CAR-01` live API integration).
 - Real order ingestion and fulfillment pipeline (`FEAT-ORD-01`, `FEAT-SHIP-01`).
@@ -136,16 +142,27 @@ The onboarding checklist is resumable, strictly tenant-isolated, RBAC-protected 
 | `AC-ONB-01-13` | Cross-tenant actor attempts to access or mutate foreign onboarding state | 403 `FORBIDDEN`; strict server-side tenant scoping enforced | PASS — Verified in `onboarding.supertest.spec.ts` (tenant B receives its own isolated onboarding state, cross-tenant isolation verified) |
 | `AC-ONB-01-14` | Submitting invalid warehouse payload (invalid phone or missing address) | 400 `VALIDATION_ERROR` with specific field error details | PASS — Verified in `onboarding.supertest.spec.ts` & `onboarding.unit.spec.ts` (returns 400 VALIDATION_ERROR on invalid warehouse payload) |
 | `AC-ONB-01-15` | FINANCE user retrieves onboarding state (view-only access per RBAC matrix) | 200 OK on GET; mutation rejected with 403 `FORBIDDEN` | PASS — Verified in `onboarding.supertest.spec.ts` (FINANCE user receives 200 OK view-only on GET; mutation rejected with 403 FORBIDDEN) |
+| `AC-ONB-01-16` | Web UI loading and empty states render accessible skeletons and initial setup CTA without premature forbidden alerts | Loading renders `role="status"` and pulse skeletons; empty renders initial setup CTA | PASS — Verified in `onboarding-page-states.test.ts` (loading and empty states render accurately) |
+| `AC-ONB-01-17` | Resumable checklist renders step order 1..6, progress percentage bar, badges for required vs optional, and links to settings pages | All 6 steps rendered with order, description, progressbar, and correct navigation links | PASS — Verified in `onboarding-page-states.test.ts` (renders full checklist, progress bar, and external links) |
+| `AC-ONB-01-18` | Blocked dependencies visibly display exact prerequisite reasons and disable completion action | Blocked step displays warning alert with exact prerequisites list; button disabled | PASS — Verified in `onboarding-page-states.test.ts` (renders blocking reasons alert and disables button) |
+| `AC-ONB-01-19` | Inline warehouse form validates name, VN phone regex, address, and submits payload to complete step | Valid inputs pass; invalid name/phone/address produce inline errors; submits warehouse payload | PASS — Verified in `onboarding-page-states.test.ts` (validates all fields and renders accessible inputs) |
+| `AC-ONB-01-20` | Server-authoritative view-only mode (`can_edit: false` from API) disables/suppresses mutations with clear warning banner without hardcoded role checks | Warning banner explains `iam:shop_config` requirement; mutations disabled | PASS — Verified in `onboarding-page-states.test.ts` (enforces view-only without hardcoded role checks) |
+| `AC-ONB-01-21` | Error state renders actionable retry button for recovery; success state renders role="status" feedback | Server errors render alert banner with retry; success renders dismissible status banner | PASS — Verified in `onboarding-page-states.test.ts` (error recovery and success alerts verified) |
+| `AC-ONB-01-22` | 100% completed status displays celebration banner with create order CTA and dismiss action; reset modal prompts confirmation | Celebration banner renders with order link & dismiss; reset modal requires confirmation | PASS — Verified in `onboarding-page-states.test.ts` (celebration banner and reset modal verified) |
 
 ## Verification commands
 
 - `pnpm install --frozen-lockfile` — PASSED
 - `pnpm db:generate` — PASSED
 - `pnpm --filter @shipde/api lint` — PASSED (0 errors, 0 warnings)
-- `pnpm exec prettier --check apps/api/src/app.module.ts apps/api/src/onboarding/* packages/contracts/src/index.ts prisma/schema.prisma docs/product-spec/work-items/FEAT-ONB-01.md` — PASSED (100% compliant)
-- `.\node_modules\.bin\tsc.cmd -p apps/api/tsconfig.json --noEmit` — PASSED (0 errors)
-- `.\node_modules\.bin\tsx.cmd --tsconfig apps/api/tsconfig.json --test apps/api/src/onboarding/onboarding.unit.spec.ts` — PASSED (16/16 unit tests passed)
-- `.\node_modules\.bin\tsx.cmd --tsconfig apps/api/tsconfig.json apps/api/src/onboarding/onboarding.supertest.spec.ts` — PASSED (15/15 supertest acceptance criteria passed)
+- `pnpm --filter @shipde/web lint` — PASSED (0 errors, 0 warnings)
+- `pnpm exec prettier --check apps/api/src/app.module.ts apps/api/src/onboarding/* packages/contracts/src/index.ts prisma/schema.prisma docs/product-spec/work-items/FEAT-ONB-01.md apps/web/src/app/onboarding/* apps/web/src/components/OnboardingFlow.tsx apps/web/src/tests/onboarding-page-states.test.ts` — PASSED (100% compliant)
+- `pnpm typecheck` — PASSED (12/12 packages clean)
+- `npx tsx --tsconfig apps/api/tsconfig.json --test apps/api/src/onboarding/onboarding.unit.spec.ts` — PASSED (16/16 unit tests passed)
+- `npx tsx --tsconfig apps/api/tsconfig.json apps/api/src/onboarding/onboarding.supertest.spec.ts` — PASSED (15/15 supertest acceptance criteria passed)
+- `npx tsx apps/web/src/tests/onboarding-page-states.test.ts` — PASSED (11/11 web UI state tests passed)
+- `pnpm --filter @shipde/web test` — PASSED (all web test suites passed)
+- `npx tsx scripts/verify-a11y.ts` — PASSED (Accessibility / A11y gate clean)
 - `node scripts/ai/check-no-hardcode.mjs` — PASSED (0 raw instances, 0 new)
 
 ## Codex review record

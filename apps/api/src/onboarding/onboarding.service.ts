@@ -159,7 +159,11 @@ export class OnboardingService {
   /**
    * Build complete OnboardingStateResponseDto
    */
-  private buildResponse(state: any, liveSatisfied: Set<string>): OnboardingStateResponseDto {
+  private buildResponse(
+    state: any,
+    liveSatisfied: Set<string>,
+    canEdit: boolean = true
+  ): OnboardingStateResponseDto {
     const skippedSet = new Set<string>(state.skipped_steps || []);
     const stepData = (state.step_data as Record<string, any>) || {};
 
@@ -250,6 +254,7 @@ export class OnboardingService {
       steps: stepsDto,
       completed_at: state.completed_at ? new Date(state.completed_at).toISOString() : null,
       updated_at: new Date(state.updated_at || Date.now()).toISOString(),
+      can_edit: canEdit,
     };
   }
 
@@ -259,7 +264,8 @@ export class OnboardingService {
   async getOnboardingState(
     merchantId: string,
     correlationId?: string,
-    clientIp?: string
+    clientIp?: string,
+    canEdit: boolean = true
   ): Promise<{
     success: boolean;
     data: OnboardingStateResponseDto;
@@ -267,7 +273,7 @@ export class OnboardingService {
   }> {
     const state = await this.getOrCreateState(merchantId, correlationId, clientIp);
     const liveSatisfied = await this.evaluateLiveCompleteness(merchantId, state);
-    const responseDto = this.buildResponse(state, liveSatisfied);
+    const responseDto = this.buildResponse(state, liveSatisfied, canEdit);
 
     // Persist completed status if transition occurred
     if (

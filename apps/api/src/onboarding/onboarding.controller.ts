@@ -86,11 +86,13 @@ export class OnboardingController {
     const clientIp = extractClientIp(req);
     const actor = await this.resolveActor(req);
     await this.assertCanViewOnboarding(actor);
+    const canEdit = await this.rbacService.actorHasPermissions(actor, ['iam:shop_config']);
 
     const result = await this.onboardingService.getOnboardingState(
       actor.merchantId,
       correlationId,
-      clientIp
+      clientIp,
+      canEdit
     );
     return res.status(HttpStatus.OK).json(result);
   }
