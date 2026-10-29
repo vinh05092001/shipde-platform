@@ -18,6 +18,7 @@
     "reasoning",
     "non-reasoning"
   ],
+  "excludeEffortVariants": ["max"],
   "deploymentSuffixes": ["batch", "flex", "cloud", "fast", "latest", "volc", "turbo"],
   "routerPrefixes": [
     "gcli",
@@ -25,7 +26,6 @@
     "gh",
     "ag",
     "agy",
-    "qwen",
     "provider",
     "openai",
     "ninerouter",

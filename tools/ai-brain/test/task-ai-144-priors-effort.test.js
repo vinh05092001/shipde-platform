@@ -14,6 +14,8 @@ const {
   normalizeScore,
   dedupeBenchmarks,
   splitModelEffort,
+  getEffortVariants,
+  getRouterPrefixes,
 } = require('../priors');
 const config = require('../priors-sources/public.json');
 
@@ -904,4 +906,117 @@ test('R2 Item 9 regression: synthetic fallbacks do not evict real historical bas
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('R3 P1.3 regression: effort suffix stripped only as trailing suffix and remaining qualifiers preserved', () => {
+  // 1. Recognized trailing effort group (high) is removed; unconfigured (max) is preserved as qualifier
+  const r1 = splitModelEffort('custom-model (max) (high)');
+  assert.equal(
+    r1.base,
+    'custom-model-max',
+    'base model must preserve unconfigured (max) qualifier'
+  );
+  assert.equal(r1.effort, 'high', 'trailing (high) must be recognized as effort');
+
+  // 2. Non-trailing effort (high) followed by unconfigured (max) is NOT stripped as effort
+  const r2 = splitModelEffort('custom-model (high) (max)');
+  assert.equal(
+    r2.base,
+    'custom-model-high-max',
+    'non-trailing effort followed by qualifier must not be stripped globally'
+  );
+  assert.equal(r2.effort, null, 'effort must be null when not a trailing suffix');
+
+  // 3. Recognized trailing effort with other qualifier like (preview)
+  const r3 = splitModelEffort('custom-model (preview) (high)');
+  assert.equal(r3.base, 'custom-model-preview', 'qualifier (preview) must be preserved');
+  assert.equal(r3.effort, 'high');
+
+  // 4. Lookup matching: custom-model (max) (high) must NOT match base custom-model
+  const baseOnlyRanking = [{ canonical: 'custom-model', score: 80 }];
+  const matchBaseOnly = matchModelPrior('custom-model (max) (high)', baseOnlyRanking);
+  assert.equal(
+    matchBaseOnly,
+    null,
+    'custom-model (max) (high) must fail closed against base-only custom-model'
+  );
+
+  // 5. Lookup matching: custom-model (max) (high) correctly matches custom-model-max
+  const maxRanking = [
+    {
+      canonical: 'custom-model-max',
+      score: 85,
+      benchmarks: [{ name: 'swe', score: 85 }],
+      efforts: { high: { benchmarks: [{ name: 'swe', score: 95 }] } },
+    },
+  ];
+  const matchMax = matchModelPrior('custom-model (max) (high)', maxRanking);
+  assert.ok(matchMax, 'must match canonical custom-model-max');
+  assert.equal(matchMax.entry.canonical, 'custom-model-max');
+  assert.equal(matchMax.effort, 'high');
+});
+
+test('R3 Item 7 regression: explicit-empty descriptor handling does not depend on object identity and exclusions use configuration', () => {
+  // 1. Explicit empty effortVariants on a descriptor object identical to defaultDescriptor
+  const mutatedDefault = Object.assign({}, config, { effortVariants: [] });
+  const efforts = getEffortVariants(mutatedDefault);
+  assert.deepEqual(
+    efforts,
+    [],
+    'setting effortVariants: [] on default-like descriptor must return [] and not reach registry union'
+  );
+
+  const resEmpty = splitModelEffort('model-high', mutatedDefault);
+  assert.equal(
+    resEmpty.base,
+    'model-high',
+    'effort parsing must be disabled when effortVariants is explicitly empty'
+  );
+  assert.equal(resEmpty.effort, null);
+
+  // 2. Exclusions configured via excludeEffortVariants in descriptor
+  const cfgWithExclusion = {
+    effortVariants: ['high', 'medium', 'low'],
+    excludeEffortVariants: ['medium'],
+  };
+  const filteredEfforts = getEffortVariants(cfgWithExclusion);
+  assert.ok(!filteredEfforts.includes('medium'), 'medium must be excluded by configuration');
+  assert.ok(filteredEfforts.includes('high'), 'high must be retained');
+  assert.ok(filteredEfforts.includes('low'), 'low must be retained');
+
+  // 3. Fallback to registry (sources.json) applies excludeEffortVariants from configuration
+  const registryCfg = { excludeEffortVariants: ['max'] };
+  const fromRegistry = getEffortVariants(registryCfg);
+  assert.ok(!fromRegistry.includes('max'), 'max must be excluded from registry via configuration');
+});
+
+test('R3 Hardcode Guard regression: router prefixes derived dynamically from data (registry sources / live IDs)', () => {
+  // 1. public.json does NOT contain literal qwen in routerPrefixes
+  assert.ok(
+    !config.routerPrefixes.includes('qwen'),
+    'public.json must not list model family name qwen in routerPrefixes'
+  );
+
+  // 2. getRouterPrefixes derives qwen from registry sources (sources.json)
+  const prefixes = getRouterPrefixes();
+  assert.ok(
+    prefixes.has('qwen'),
+    'qwen must be derived as router prefix from sources.json registry source id'
+  );
+
+  // 3. Router-prefixed model ID matches canonical row using derived registry prefix
+  const ranking = [{ canonical: 'qwen-3-8-max', score: 90 }];
+  const matched = matchModelPrior('qwen/qwen3.8-max:free', ranking);
+  assert.ok(matched, 'qwen/qwen3.8-max:free must match canonical qwen-3-8-max via derived prefix');
+  assert.equal(matched.entry.canonical, 'qwen-3-8-max');
+
+  // 4. Live IDs / models provide derived upstream prefixes
+  const dynamicCfg = { liveModels: ['livedata/deep-model'] };
+  const dynamicPrefixes = getRouterPrefixes(dynamicCfg);
+  assert.ok(
+    dynamicPrefixes.has('livedata'),
+    'livedata must be derived as prefix from liveModels data'
+  );
+  const parsedLive = splitModelEffort('livedata/deep-model', dynamicCfg);
+  assert.equal(parsedLive.base, 'deep-model', 'derived live prefix must be stripped');
 });

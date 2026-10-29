@@ -98,6 +98,7 @@ N/A — Controller brain routing and priors logic; no user interface is modified
 |---|---|---|---|
 | 1 | `5f9921a3` | `CHANGES_REQUIRED` | Resolved all 6 P1 findings (normalized effort lookup, deduplication by source+metric, strict configured routerPrefixes/effort vocabulary, alias convergence on ingestion, exclusion of synthetic fallbacks from source percentiles, and canonicalization of obsolete historical effort rows during refresh) and P2.7/P2.9. |
 | 2 | `38eae611` | `CHANGES_REQUIRED` | Keyed effort lookup by (source, metric) retaining base stream benchmarks; prefix stripping restricted strictly to configured routerPrefixes without startsWith bypass and fail-closed parens; digit-boundary hyphenation handles single-letter prefixes as configured; respected explicit effortVariants: [] and registry sources; restored openai router prefix; preserved historical base observations against synthetic fallbacks. |
+| 3 | `9b5a2b24` | `CHANGES_REQUIRED` | Stripped effort suffix strictly as a trailing suffix preserving unconfigured parenthesized qualifiers (R3 P1.3); honored explicit-empty effortVariants without object identity check and expressed exclusions via configuration (R3 Item 7); derived router prefixes dynamically from registry sources and live data eliminating literal model family name from public.json and passing no-hardcode guard. |
 
 ## Residual limitations
 

@@ -58,26 +58,34 @@ function applyDigitBoundaryHyphen(str, aliasRules) {
 }
 
 function getEffortVariants(config) {
-  // Explicit configuration override passed by caller (including empty array [])
-  if (
-    config &&
-    config !== defaultDescriptor &&
-    Object.prototype.hasOwnProperty.call(config, 'effortVariants')
-  ) {
-    if (Array.isArray(config.effortVariants)) {
-      return config.effortVariants.slice().sort((a, b) => b.length - a.length);
+  const cfg = config || defaultDescriptor;
+  const exclusions = new Set(
+    (
+      (cfg && (cfg.excludeEffortVariants || cfg.excludedEffortVariants)) ||
+      (defaultDescriptor &&
+        (defaultDescriptor.excludeEffortVariants || defaultDescriptor.excludedEffortVariants)) ||
+      []
+    ).map((e) => String(e).toLowerCase())
+  );
+
+  // Explicit configuration override passed by caller or configured on descriptor
+  if (cfg && Object.prototype.hasOwnProperty.call(cfg, 'effortVariants')) {
+    if (Array.isArray(cfg.effortVariants)) {
+      if (cfg.effortVariants.length === 0) return [];
+      return cfg.effortVariants
+        .map((e) => String(e).toLowerCase())
+        .filter((e) => !exclusions.has(e))
+        .sort((a, b) => b.length - a.length);
     }
     return [];
   }
-  // Consult registry (sources.json)
+
+  // Otherwise consult registry (sources.json)
   const fromSources = loadEffortVariants();
-  const cfg = config || defaultDescriptor;
-  const fromConfig = Array.isArray(cfg && cfg.effortVariants) ? cfg.effortVariants : [];
-  // Exclude 'max' so base model names like Qwen 3.8 Max / qwen-3-8-max remain canonical,
-  // while preserving any other registry effort variants from sources.json
-  const registryEfforts = fromSources.filter((e) => e !== 'max');
-  const combined = new Set([...fromConfig, ...registryEfforts]);
-  return Array.from(combined).sort((a, b) => b.length - a.length);
+  return fromSources
+    .map((e) => String(e).toLowerCase())
+    .filter((e) => !exclusions.has(e))
+    .sort((a, b) => b.length - a.length);
 }
 
 function getDeploymentSuffixes(config) {
@@ -88,12 +96,75 @@ function getDeploymentSuffixes(config) {
   return [];
 }
 
+let cachedRegistryPrefixes = null;
+function loadRegistryPrefixes() {
+  if (cachedRegistryPrefixes) return cachedRegistryPrefixes;
+  const prefixes = new Set();
+  try {
+    const sourcesPath = path.join(__dirname, 'sources.json');
+    if (fs.existsSync(sourcesPath)) {
+      const parsed = JSON.parse(fs.readFileSync(sourcesPath, 'utf8'));
+      if (Array.isArray(parsed && parsed.sources)) {
+        for (const s of parsed.sources) {
+          if (s && s.id) prefixes.add(String(s.id).toLowerCase());
+          if (s && Array.isArray(s.aliases)) {
+            for (const a of s.aliases) {
+              if (a) prefixes.add(String(a).toLowerCase());
+            }
+          }
+          if (s && s.routerAlias) prefixes.add(String(s.routerAlias).toLowerCase());
+          if (s && s.modelPrefix) {
+            const clean = String(s.modelPrefix).replace(/\/+$/, '').toLowerCase();
+            if (clean) prefixes.add(clean);
+          }
+        }
+      }
+      if (parsed && parsed.dispatch && parsed.dispatch.providers) {
+        for (const [pKey, pVal] of Object.entries(parsed.dispatch.providers)) {
+          prefixes.add(pKey.toLowerCase());
+          if (pVal && pVal.provider) prefixes.add(String(pVal.provider).toLowerCase());
+          if (pVal && pVal.modelPrefix) {
+            const clean = String(pVal.modelPrefix).replace(/\/+$/, '').toLowerCase();
+            if (clean) prefixes.add(clean);
+          }
+        }
+      }
+    }
+  } catch (_) {}
+  cachedRegistryPrefixes = prefixes;
+  return prefixes;
+}
+
 function getRouterPrefixes(config) {
   const cfg = config || defaultDescriptor;
-  if (Array.isArray(cfg && cfg.routerPrefixes) && cfg.routerPrefixes.length) {
-    return new Set(cfg.routerPrefixes.map((p) => p.toLowerCase()));
+  const prefixes = new Set();
+
+  if (Array.isArray(cfg && cfg.routerPrefixes)) {
+    for (const p of cfg.routerPrefixes) {
+      if (p) prefixes.add(String(p).toLowerCase());
+    }
   }
-  return new Set();
+
+  // Derive router prefixes from registry sources (e.g. qwen, 9router, kr from sources.json)
+  const registryPrefixes = loadRegistryPrefixes();
+  for (const p of registryPrefixes) {
+    prefixes.add(p);
+  }
+
+  // Derive router/upstream prefixes from live IDs if provided
+  const liveList = (cfg && (cfg.liveModels || cfg.liveIds)) || [];
+  if (Array.isArray(liveList)) {
+    for (const id of liveList) {
+      if (typeof id === 'string') {
+        const slashIdx = id.indexOf('/');
+        if (slashIdx > 0) prefixes.add(id.slice(0, slashIdx).toLowerCase());
+        const colonIdx = id.indexOf('::');
+        if (colonIdx > 0) prefixes.add(id.slice(0, colonIdx).toLowerCase());
+      }
+    }
+  }
+
+  return prefixes;
 }
 
 function splitModelEffort(value, config) {
@@ -103,22 +174,7 @@ function splitModelEffort(value, config) {
   let effort = null;
   let raw = value.trim().toLowerCase();
 
-  const parenMatch = raw.match(/\s*\(([^)]*)\)/);
-  if (parenMatch) {
-    const inside = parenMatch[1].trim();
-    for (const eff of efforts) {
-      if (inside === eff || inside.includes(eff)) {
-        effort = eff;
-        break;
-      }
-    }
-    if (effort) {
-      raw = raw.replace(/\s*\([^)]*\)/g, '');
-    } else {
-      raw = raw.replace(/\s*\(([^)]*)\)/g, (_, val) => '-' + val.replace(/[^a-z0-9]+/g, '-'));
-    }
-  }
-
+  // Strip configured and derived router prefixes strictly
   const routerPrefixes = getRouterPrefixes(cfg);
   let changed = true;
   while (changed) {
@@ -157,14 +213,65 @@ function splitModelEffort(value, config) {
     }
   }
 
+  // Strip trailing suffixes only (deployment suffixes and recognized effort suffixes)
+  const depSuffixes = getDeploymentSuffixes(cfg);
+  let suffixChanged = true;
+  while (suffixChanged) {
+    suffixChanged = false;
+    for (const dep of depSuffixes) {
+      const s1 = ':' + dep;
+      const s2 = '-' + dep;
+      if (raw.endsWith(s1)) {
+        raw = raw.slice(0, -s1.length).trim();
+        suffixChanged = true;
+      } else if (raw.endsWith(s2)) {
+        raw = raw.slice(0, -s2.length).trim();
+        suffixChanged = true;
+      }
+    }
+
+    if (!effort && efforts.length > 0) {
+      // Check for trailing parenthesized effort (e.g. "model (high)" or "model (reasoning: high)")
+      const trailingParenMatch = raw.match(/\s*\(([^)]*)\)\s*$/);
+      if (trailingParenMatch) {
+        const inside = trailingParenMatch[1].trim();
+        for (const eff of efforts) {
+          if (inside === eff || new RegExp(`(?:^|[^a-z0-9])${eff}(?:$|[^a-z0-9])`).test(inside)) {
+            effort = eff;
+            raw = raw.slice(0, trailingParenMatch.index).trim();
+            suffixChanged = true;
+            break;
+          }
+        }
+      }
+    }
+
+    if (!effort && efforts.length > 0) {
+      // Check for trailing hyphenated effort (e.g. "model-high")
+      for (const eff of efforts) {
+        const suffix = '-' + eff;
+        if (raw.endsWith(suffix)) {
+          effort = eff;
+          raw = raw.slice(0, -suffix.length).trim();
+          suffixChanged = true;
+          break;
+        }
+      }
+    }
+  }
+
+  // Preserve remaining parenthesized qualifiers as hyphenated tokens
+  // (e.g. "model (max)" -> "model-max")
+  raw = raw.replace(/\s*\(([^)]*)\)/g, (_, val) => '-' + val.replace(/[^a-z0-9]+/g, '-'));
+
   if (cfg && cfg.aliasRules) {
     raw = applyDigitBoundaryHyphen(raw, cfg.aliasRules);
   }
 
   raw = raw.replace(/[._\s]+/g, '-').replace(/^-+|-+$/g, '');
 
-  const depSuffixes = getDeploymentSuffixes(cfg);
-  let suffixChanged = true;
+  // Second pass on trailing suffixes after delimiter normalization (e.g. model_high -> model-high)
+  suffixChanged = true;
   while (suffixChanged) {
     suffixChanged = false;
     for (const dep of depSuffixes) {
@@ -178,7 +285,7 @@ function splitModelEffort(value, config) {
         suffixChanged = true;
       }
     }
-    if (!effort) {
+    if (!effort && efforts.length > 0) {
       for (const eff of efforts) {
         const suffix = '-' + eff;
         if (raw.endsWith(suffix)) {
@@ -1262,6 +1369,8 @@ module.exports = {
   DEFAULT_PRIORS_FILE,
   LIVE_PRIORS_FILE,
   splitModelEffort,
+  getEffortVariants,
+  getRouterPrefixes,
   getNormalizationMethod,
   normalizeScore,
   dedupeBenchmarks,
