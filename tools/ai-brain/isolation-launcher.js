@@ -349,7 +349,12 @@ function retargetSharedDepsWorkspaceLinks(depsDir, workerRoot) {
           targetStat = fs.statSync(localTarget);
         }
       }
-      fs.symlinkSync(localTarget, dst, targetStat.isDirectory() ? 'junction' : 'file');
+      const linkType = targetStat.isDirectory()
+        ? process.platform === 'win32'
+          ? 'junction'
+          : 'dir'
+        : 'file';
+      fs.symlinkSync(localTarget, dst, linkType);
     } else if (stat.isDirectory()) {
       fs.mkdirSync(dst, { recursive: true });
       for (const name of fs.readdirSync(src)) copyEntry(path.join(src, name), path.join(dst, name));
@@ -3376,10 +3381,7 @@ function getIsolatedLauncher() {
       usageFile: opts.usageFile || null,
     });
 
-    const tempScript = path.join(
-      process.env.TEMP || 'C:\\temp',
-      'isolated-launch-' + Date.now() + '.ps1'
-    );
+    const tempScript = path.join(os.tmpdir(), 'isolated-launch-' + Date.now() + '.ps1');
     fs.writeFileSync(tempScript, scriptContent, 'utf8');
 
     const hostRes = cp.spawnSync(

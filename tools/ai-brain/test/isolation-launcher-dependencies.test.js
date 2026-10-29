@@ -21,7 +21,7 @@ function writeFile(root, rel, content) {
 function directoryLink(root, rel, target) {
   const file = path.join(root, rel);
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.symlinkSync(path.join(root, target), file, 'junction');
+  fs.symlinkSync(path.join(root, target), file, process.platform === 'win32' ? 'junction' : 'dir');
 }
 
 function snapshot(root) {
@@ -46,6 +46,7 @@ function snapshot(root) {
 function fixture(t) {
   const area = fs.mkdtempSync(path.join(os.tmpdir(), 'worker-local-deps-'));
   t.after(() => fs.rmSync(area, { recursive: true, force: true }));
+  t.mock.method(os, 'tmpdir', () => area);
   const localAppData = process.env.LOCALAPPDATA;
   process.env.LOCALAPPDATA = area;
   t.after(() => {
@@ -101,6 +102,11 @@ function fixture(t) {
       return { status: 1, stdout: '' };
     }
     if (command === 'powershell.exe') {
+      assert.equal(
+        path.dirname(args[args.length - 1]),
+        area,
+        'launch script uses the OS temp directory'
+      );
       const script = fs.readFileSync(args[args.length - 1], 'utf8');
       const nonce = script.match(/\$completionNonce = "([^"]+)"/)[1];
       const output = script.match(/\$output \| ConvertTo-Json.*Out-File "([^"]+)"/)[1];
@@ -184,7 +190,11 @@ test('sequential worker provisioning isolates root, workspace and pnpm transitiv
   provision(workerA);
   resolveFrom(workerA, '.', 'consumer');
   // A retained worker can still have the old root junction into the cache.
-  fs.symlinkSync(path.join(cache, 'node_modules'), path.join(workerB, 'node_modules'), 'junction');
+  fs.symlinkSync(
+    path.join(cache, 'node_modules'),
+    path.join(workerB, 'node_modules'),
+    process.platform === 'win32' ? 'junction' : 'dir'
+  );
   provision(workerB);
   for (const worker of [workerA, workerB]) {
     resolveFrom(worker, '.', '@shipde/contracts');

@@ -1195,6 +1195,98 @@ test('Round 4 Finding 3: resolveLauncher refuses agy-pool without externalWorker
   assert.match(res2.stderr, /LAUNCH_REFUSED: agy-pool writer is disabled by configuration/);
 });
 
+test('agy-pool external selection without dispatch configuration does not authorize launch', (t) => {
+  const orchestrate = require('../orchestrate');
+  const harness = require('../harness');
+  let launched = false;
+  t.mock.method(harness, 'getHarness', () => {
+    launched = true;
+    throw new Error('unauthorized harness lookup');
+  });
+  for (const options of [
+    { externalWorkers: 'agy-pool' },
+    { externalWorkers: 'agy-pool', registry: { sources: [] } },
+    { externalWorkers: 'agy-pool', dispatch: { agyPoolWriterEnabled: false } },
+  ]) {
+    const launcher = orchestrate.resolveLauncher(options, () => {
+      launched = true;
+    });
+    const result = launcher({ harness: 'agy-pool', isReview: true });
+    assert.equal(result.exitCode, 1);
+    assert.match(result.refusal, /WRITER_LAUNCH_NOT_AUTHORIZED/);
+  }
+  assert.equal(launched, false, 'authorization must precede any harness or worker launch');
+});
+
+test('completed checkpoints with missing or invalid receipts block completion and dependents', async (t) => {
+  const orchestrate = require('../orchestrate');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'completed-receipt-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  for (const reviews of [[], [{ workItemId: 'A', sha: 'invalid', verdict: 'PASS' }]]) {
+    const checkpointFile = path.join(dir, 'checkpoint.json');
+    fs.writeFileSync(checkpointFile, JSON.stringify({ completed: ['A'], reviews }));
+    const calls = [];
+    const result = await orchestrate.runOrchestration('resume completed receipt', {
+      specs: [{ id: 'A' }, { id: 'B', dependencies: ['A'] }],
+      checkpointFile,
+      decisionDir: dir,
+      publication: { publish: () => calls.push('publish') },
+      mergeAfterPublish: true,
+      run: (job) => calls.push(job.workItemId),
+    });
+    const outcome = result.outcomes.find((entry) => entry.workItemId === 'A');
+    assert.equal(outcome.status, orchestrate.ItemStatus.BLOCKED);
+    assert.equal(outcome.reasonCode, 'CHECKPOINT_RECEIPT_INVALID');
+    assert.ok(!result.reconciliation.completed.includes('A'));
+    assert.ok(!result.reconciliation.completed.includes('B'));
+    assert.deepEqual(calls, [], 'no dependent launch or publication is authorized');
+    assert.deepEqual(result.merges || [], []);
+  }
+});
+
+test('published draft without PR number or injected runner still requires CI', async (t) => {
+  const orchestrate = require('../orchestrate');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'draft-missing-ci-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const checkpointFile = path.join(dir, 'checkpoint.json');
+  const sha = 'a'.repeat(40);
+  fs.writeFileSync(
+    checkpointFile,
+    JSON.stringify({
+      completed: ['A'],
+      reviews: [{ workItemId: 'A', sha, verdict: 'PASS' }],
+      liveSteps: {
+        A: {
+          publication: {
+            status: orchestrate.PublicationStatus.PUBLISHED_DRAFT,
+            branch: 'feat/missing-pr',
+            result: {},
+          },
+        },
+      },
+    })
+  );
+  let checked = false;
+  t.mock.method(ciGate, 'awaitCi', async (options) => {
+    checked = true;
+    assert.equal(options.sha, sha);
+    assert.equal(options.prNumber, undefined);
+    assert.equal(options.ghRunner, undefined);
+    return { state: 'MISSING', sha };
+  });
+  const result = await orchestrate.runOrchestration('missing CI metadata', {
+    specs: [{ id: 'A' }],
+    checkpointFile,
+    decisionDir: dir,
+  });
+  assert.equal(checked, true);
+  assert.equal(result.reviews[0].ci.state, 'MISSING');
+  const outcome = result.outcomes.find((entry) => entry.workItemId === 'A');
+  assert.equal(outcome.status, orchestrate.ItemStatus.BLOCKED);
+  assert.equal(outcome.reasonCode, 'CI_GATE_FAILED');
+  assert.ok(!result.reconciliation.completed.includes('A'));
+});
+
 // Round 4 Finding 4 (P1): dispatch does not load evidence from target workspace --root
 test('Round 4 Finding 4: dispatch evidenceDir is loaded from controller store, not hostile --root', async () => {
   const cli = require('../cli');

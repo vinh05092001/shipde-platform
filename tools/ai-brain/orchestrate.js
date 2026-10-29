@@ -218,16 +218,13 @@ function resolveLauncher(o, isolatedLauncher) {
   const { getHarness } = require('./harness');
   return (job) => {
     if (job.harness === 'agy-pool') {
-      const hasExplicitDispatch = Boolean(o.dispatch || o.registry?.dispatch);
       const isAuthorized =
         externalWorkers.includes('agy-pool') &&
-        (hasExplicitDispatch
-          ? Boolean(
-              o.allowAgyPoolWriter ||
-              o.dispatch?.agyPoolWriterEnabled ||
-              o.registry?.dispatch?.agyPoolWriterEnabled
-            )
-          : true);
+        Boolean(
+          o.allowAgyPoolWriter ||
+          o.dispatch?.agyPoolWriterEnabled ||
+          o.registry?.dispatch?.agyPoolWriterEnabled
+        );
       if (!isAuthorized) {
         return {
           exitCode: 1,
@@ -279,6 +276,7 @@ function resolveLauncher(o, isolatedLauncher) {
         exitCode: result.state === 'ok' ? result.exitCode : result.exitCode || 1,
         stdout: result.jobId && result.state === 'ok' ? pool.readOutText(job.accountId, o) : '',
         stderr: result.reason || (result.state === 'ok' ? '' : result.state || ''),
+        refusal: result.state === 'error' ? result.reason : undefined,
         launchHandle: result.jobId || null,
       };
     }
@@ -2891,7 +2889,7 @@ function verifyReceiptIntegrity(rec) {
   return null;
 }
 
-function verifyReceiptCommit(rec, publishCwd) {
+function verifyReceiptCommit(rec, publishCwd, resume) {
   // The publish cwd is rebuilt from the receipt, so it has to be present and it
   // has to be a directory the publisher may run from: an isolated run's worker
   // root sits inside the worker boundary and `publisher.js` refuses it. The
@@ -2905,10 +2903,21 @@ function verifyReceiptCommit(rec, publishCwd) {
       '); the publisher runs operator-side only'
     );
   }
-  const workerRoot = rec && rec.workerRoot;
+  let workerRoot = rec && rec.workerRoot;
   if (!workerRoot) return 'PUBLISH_REFUSED: receipt missing workerRoot';
   if (!fs.existsSync(workerRoot) || !fs.existsSync(path.join(workerRoot, '.git'))) {
-    return 'PUBLISH_REFUSED: receipt workerRoot is not a git repository: ' + String(workerRoot);
+    // A completed worker may have been retired after its reviewed commit was
+    // imported. Trust only the exact namespaced ref in the explicit host repo,
+    // then perform the same commit and ancestry checks there.
+    const expectedRef = 'refs/shipde/passed/' + rec.workItemId + '/' + rec.sha;
+    if (!resume || !resume.hostCwd || resume.passedRef !== expectedRef) {
+      return 'PUBLISH_REFUSED: receipt workerRoot is not a git repository: ' + String(workerRoot);
+    }
+    const imported = runHardenedGit(resume.hostCwd, ['rev-parse', expectedRef + '^{commit}']);
+    if (!imported || imported.status !== 0 || String(imported.stdout).trim() !== rec.sha) {
+      return 'PUBLISH_REFUSED: recorded passed ref does not confirm reviewed commit';
+    }
+    workerRoot = resume.hostCwd;
   }
   if (!publishCwd) return 'PUBLISH_REFUSED: missing publish cwd for receipt check';
   if (path.resolve(publishCwd) !== path.resolve(rec.publishCwd)) {
@@ -3035,7 +3044,7 @@ function verifyReceiptDecisionLog(rec, workItemId) {
   return null;
 }
 
-function validateCheckpointReceipt(rec, item, o) {
+function validateCheckpointReceipt(rec, item, o, resume) {
   if (!rec) return 'NO_REVIEWED_COMMIT: missing review record in checkpoint for ' + item.id;
   if (!rec.sha || !SHA_40.test(rec.sha)) {
     return 'PUBLISH_REFUSED: invalid reviewedSha in checkpoint for ' + item.id + ': ' + rec.sha;
@@ -3060,7 +3069,7 @@ function validateCheckpointReceipt(rec, item, o) {
   if (!rec.draftTitle) return 'PUBLISH_REFUSED: receipt missing draft title';
   return (
     verifyReceiptIntegrity(rec) ||
-    verifyReceiptCommit(rec, resolvePublishCwd(o, rec)) ||
+    verifyReceiptCommit(rec, resolvePublishCwd(o, rec), resume) ||
     verifyReceiptTests(rec) ||
     verifyReceiptReviewerSeparation(rec) ||
     verifyReceiptDecisionLog(rec, item.id)
@@ -4385,11 +4394,18 @@ async function runOrchestration(goal, opts) {
       };
       const savedStep = liveSteps[item.id];
       const rec = extractCheckpointReview(checkpointOnDisk, item.id, logOpts);
-      const checkpointReviewError = validateCheckpointReceipt(rec, item, o);
+      const checkpointReviewError = validateCheckpointReceipt(rec, item, o, {
+        hostCwd,
+        passedRef: recordedPassedRefOf(savedStep, savedStep && savedStep.review?.entry),
+      });
       const checkpointSha = rec && rec.sha ? rec.sha : null;
       const ciConfig = ciGate.ciGateConfig(o.dispatch || o.registry?.dispatch);
       const isCiDisabled = o.ciGate === false || !ciConfig.enabled;
-      if (completedBefore.has(item.id)) {
+      if (completedBefore.has(item.id) && (!checkpointSha || checkpointReviewError)) {
+        outcome(item, ItemStatus.BLOCKED, checkpointReviewError || 'NO_REVIEWED_COMMIT', {
+          reasonCode: 'CHECKPOINT_RECEIPT_INVALID',
+        });
+      } else if (completedBefore.has(item.id)) {
         outcome(item, ItemStatus.COMPLETED, 'CHECKPOINT_COMPLETED');
       } else if (publishedBefore.has(item.id) && isCiDisabled) {
         outcome(
@@ -4462,7 +4478,9 @@ async function runOrchestration(goal, opts) {
       // still be missing its passed ref — the interrupt that created this
       // checkpoint could land after the outcome and before the import. Import
       // now, before anything depends on the commit.
-      const completedPassedRef = importPassedRefFor(item.id, reviewEntry, savedStep);
+      const completedPassedRef = !checkpointReviewError
+        ? importPassedRefFor(item.id, reviewEntry, savedStep)
+        : null;
       if (completedPassedRef && !reviewEntry.passedRef) {
         reviewEntry.passedRef = completedPassedRef;
         persistStep(item.id, 'review_completed', {
@@ -6965,10 +6983,7 @@ async function runOrchestration(goal, opts) {
     // CI is the final verification: the item is complete only when CI is green on
     // the exact reviewed head SHA. Review PASS alone never completes or merges it.
     entry.ci = null;
-    const draft =
-      (published && published.result && (published.result.draft || published.result)) || {};
-    const hasDraftPr = Boolean(draft.number != null || o.ghRunner || o.ciGate === true);
-    if (published && published.status === PublicationStatus.PUBLISHED_DRAFT && hasDraftPr) {
+    if (published && published.status === PublicationStatus.PUBLISHED_DRAFT) {
       const ciConfig = ciGate.ciGateConfig(o.dispatch || o.registry?.dispatch);
       const isCiDisabled = o.ciGate === false || !ciConfig.enabled;
       if (isCiDisabled) {
@@ -7082,7 +7097,7 @@ async function runOrchestration(goal, opts) {
       }
     }
 
-    if (!completedBefore.has(entry.workItemId) && entry.checkpointReviewError) {
+    if (entry.checkpointReviewError) {
       for (let i = log.outcomes.length - 1; i >= 0; i -= 1) {
         if (log.outcomes[i].workItemId === entry.workItemId) {
           log.outcomes.splice(i, 1);
