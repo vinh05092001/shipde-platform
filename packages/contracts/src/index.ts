@@ -487,6 +487,176 @@ export type UpdateShopProfileInput = components['schemas']['UpdateShopProfileInp
 export type ShopProfileResponse = components['schemas']['ShopProfileResponse'];
 export type ListShopsResponse = components['schemas']['ListShopsResponse'];
 
+// --- Warehouse Contracts (FEAT-WH-01) ---
+export const WarehouseAuditEvent = {
+  WAREHOUSE_CREATED: 'WAREHOUSE_CREATED',
+  WAREHOUSE_UPDATED: 'WAREHOUSE_UPDATED',
+  WAREHOUSE_DEACTIVATED: 'WAREHOUSE_DEACTIVATED',
+  WAREHOUSE_SET_DEFAULT: 'WAREHOUSE_SET_DEFAULT',
+} as const;
+
+export type WarehouseAuditEvent = (typeof WarehouseAuditEvent)[keyof typeof WarehouseAuditEvent];
+
+export const WarehouseErrorCode = {
+  WAREHOUSE_NOT_FOUND: 'WAREHOUSE_NOT_FOUND',
+  WAREHOUSE_CODE_EXISTS: 'WAREHOUSE_CODE_EXISTS',
+  WAREHOUSE_SCOPE_UNAUTHORIZED: 'WAREHOUSE_SCOPE_UNAUTHORIZED',
+  FORBIDDEN: 'FORBIDDEN',
+  VALIDATION_ERROR: 'VALIDATION_ERROR',
+} as const;
+export type WarehouseErrorCode = (typeof WarehouseErrorCode)[keyof typeof WarehouseErrorCode];
+
+export type Warehouse = components['schemas']['Warehouse'];
+export type CreateWarehouseInput = components['schemas']['CreateWarehouseInput'];
+export type UpdateWarehouseInput = components['schemas']['UpdateWarehouseInput'];
+export type WarehouseResponse = components['schemas']['WarehouseResponse'];
+export type ListWarehousesResponse = components['schemas']['ListWarehousesResponse'];
+
+export const WAREHOUSE_CODE_REGEX = /^[A-Za-z0-9_-]{2,64}$/;
+export const WAREHOUSE_PHONE_REGEX = /^(0|\+84)[35789][0-9]{8}$/;
+export const WAREHOUSE_CUTOFF_TIME_REGEX = /^([01][0-9]|2[0-3]):[0-5][0-9]$/;
+export const ALLOWED_WAREHOUSE_PAPER_SIZES = ['A6', 'A5', 'A4', 'K80'] as const;
+export const ALLOWED_WAREHOUSE_DPIS = [203, 300] as const;
+
+export function isValidWarehouseCode(code: unknown): boolean {
+  if (typeof code !== 'string') return false;
+  return WAREHOUSE_CODE_REGEX.test(code.trim());
+}
+
+export function isValidWarehousePhone(phone: unknown): boolean {
+  if (typeof phone !== 'string') return false;
+  const cleanPhone = phone.trim().replace(/[\s.-]/g, '');
+  return WAREHOUSE_PHONE_REGEX.test(cleanPhone);
+}
+
+export function isValidCutoffTime(time: unknown): boolean {
+  if (!time || typeof time !== 'string') return false;
+  return WAREHOUSE_CUTOFF_TIME_REGEX.test(time.trim());
+}
+
+export interface WarehouseFormState {
+  name: string;
+  code: string;
+  status: 'active' | 'inactive';
+  is_default: boolean;
+  contact_name: string;
+  contact_phone: string;
+  contact_email: string;
+  address_line: string;
+  ward: string;
+  district: string;
+  city: string;
+  postal_code: string;
+  use_different_return_address: boolean;
+  return_contact_name: string;
+  return_contact_phone: string;
+  return_address_line: string;
+  return_ward: string;
+  return_district: string;
+  return_city: string;
+  cutoff_time: string;
+  schedule_notes: string;
+  printer_paper_size: 'A6' | 'A5' | 'A4' | 'K80';
+  printer_dpi: 203 | 300;
+  printer_name: string;
+  printer_auto_print: boolean;
+}
+
+export function validateWarehouseForm(form: WarehouseFormState): {
+  isValid: boolean;
+  errors: Record<string, string>;
+} {
+  const errors: Record<string, string> = {};
+
+  if (!form.name || form.name.trim().length < 2) {
+    errors.name = 'Tên kho hàng là bắt buộc và phải có ít nhất 2 ký tự';
+  } else if (form.name.trim().length > 255) {
+    errors.name = 'Tên kho hàng không được vượt quá 255 ký tự';
+  }
+
+  if (form.code && form.code.trim().length > 0) {
+    if (!isValidWarehouseCode(form.code)) {
+      errors.code = 'Mã kho hàng phải từ 2 đến 64 ký tự (chữ cái, số, "-" hoặc "_")';
+    }
+  }
+
+  if (!form.contact_name || form.contact_name.trim().length < 2) {
+    errors.contact_name = 'Tên người liên hệ kho là bắt buộc và phải từ 2 đến 255 ký tự';
+  } else if (form.contact_name.trim().length > 255) {
+    errors.contact_name = 'Tên người liên hệ kho không được vượt quá 255 ký tự';
+  }
+
+  if (!form.contact_phone || !isValidWarehousePhone(form.contact_phone)) {
+    errors.contact_phone = 'Số điện thoại không hợp lệ theo định dạng Việt Nam';
+  }
+
+  if (form.contact_email && form.contact_email.trim().length > 0) {
+    const trimmed = form.contact_email.trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed) || trimmed.length > 255) {
+      errors.contact_email = 'Email liên hệ không đúng định dạng';
+    }
+  }
+
+  if (!form.address_line || form.address_line.trim().length < 3) {
+    errors.address_line = 'Địa chỉ lấy hàng phải từ 3 đến 500 ký tự';
+  } else if (form.address_line.trim().length > 500) {
+    errors.address_line = 'Địa chỉ lấy hàng không được vượt quá 500 ký tự';
+  }
+
+  if (!form.district || form.district.trim().length === 0) {
+    errors.district = 'Quận/Huyện lấy hàng không được để trống';
+  }
+
+  if (!form.city || form.city.trim().length === 0) {
+    errors.city = 'Tỉnh/Thành phố lấy hàng không được để trống';
+  }
+
+  if (form.use_different_return_address) {
+    if (!form.return_contact_name || form.return_contact_name.trim().length < 2) {
+      errors.return_contact_name = 'Tên người nhận hoàn là bắt buộc';
+    } else if (form.return_contact_name.trim().length > 255) {
+      errors.return_contact_name = 'Tên người nhận hoàn không được vượt quá 255 ký tự';
+    }
+
+    if (!form.return_contact_phone || !isValidWarehousePhone(form.return_contact_phone)) {
+      errors.return_contact_phone = 'Số điện thoại nhận hoàn không hợp lệ theo định dạng Việt Nam';
+    }
+
+    if (!form.return_address_line || form.return_address_line.trim().length < 3) {
+      errors.return_address_line = 'Địa chỉ nhận hoàn là bắt buộc';
+    } else if (form.return_address_line.trim().length > 500) {
+      errors.return_address_line = 'Địa chỉ nhận hoàn không được vượt quá 500 ký tự';
+    }
+
+    if (!form.return_district || form.return_district.trim().length === 0) {
+      errors.return_district = 'Quận/Huyện nhận hoàn không được để trống';
+    }
+
+    if (!form.return_city || form.return_city.trim().length === 0) {
+      errors.return_city = 'Tỉnh/Thành phố nhận hoàn không được để trống';
+    }
+  }
+
+  if (form.cutoff_time && form.cutoff_time.trim().length > 0) {
+    if (!isValidCutoffTime(form.cutoff_time)) {
+      errors.cutoff_time = 'Giờ cắt ca lấy hàng phải có định dạng HH:mm (ví dụ: 16:00)';
+    }
+  }
+
+  if (form.printer_paper_size && !ALLOWED_WAREHOUSE_PAPER_SIZES.includes(form.printer_paper_size)) {
+    errors.printer_paper_size = `Khổ giấy in không hợp lệ. Cho phép: ${ALLOWED_WAREHOUSE_PAPER_SIZES.join(', ')}`;
+  }
+
+  if (form.printer_dpi && !ALLOWED_WAREHOUSE_DPIS.includes(form.printer_dpi)) {
+    errors.printer_dpi = `Độ phân giải máy in không hợp lệ. Cho phép: ${ALLOWED_WAREHOUSE_DPIS.join(', ')}`;
+  }
+
+  return {
+    isValid: Object.keys(errors).length === 0,
+    errors,
+  };
+}
+
 // --- Canonical Timezones (FEAT-ORG-01) ---
 export interface SupportedTimeZoneOption {
   value: string;

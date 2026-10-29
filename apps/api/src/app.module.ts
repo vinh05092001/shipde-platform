@@ -16,6 +16,7 @@ import { InvitationsModule } from './invitations/invitations.module';
 import { UsersModule } from './users/users.module';
 import { ShopsModule } from './shops/shops.module';
 import { OnboardingModule } from './onboarding/onboarding.module';
+import { WarehousesModule } from './warehouses/warehouses.module';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { OnboardingModule } from './onboarding/onboarding.module';
     InvitationsModule,
     UsersModule,
     ShopsModule,
+    WarehousesModule,
     OnboardingModule,
   ],
   controllers: [HealthController],
