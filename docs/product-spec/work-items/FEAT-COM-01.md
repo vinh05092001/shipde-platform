@@ -6,7 +6,7 @@
 | --------------- | ----- |
 | Work Item ID    | `FEAT-COM-01` |
 | Feature ID      | `FEAT-COM-01` |
-| Status          | `IN_PROGRESS` |
+| Status          | `READY_FOR_CODEX` |
 | Delivery order  | 20 |
 | Dependencies    | `TASK-FOUND-04` (merged), `FEAT-AUTH-01` (merged), `FEAT-AUTH-06` (merged), `FEAT-RBAC-01` (merged), `FEAT-RBAC-02` (merged), `FEAT-ORG-01` (merged) |
 | Assigned author | `GEMINI` |
@@ -86,12 +86,16 @@ Any authenticated merchant user can perform unified global search across primary
 
 ## UI states
 
-- **Loading:** Search modal displays inline spinner / skeleton during debounced API request.
-- **Empty:** "Không tìm thấy kết quả phù hợp cho '<query>'" with suggestion to check spelling or filter type.
-- **Active / Results:** Categorized list of matched results with icon, entity code, title, status tag, and deep link.
-- **Validation Error:** Inline feedback when query is fewer than 2 characters.
-- **Server Error:** Error banner with retry option.
-- **Forbidden:** Clear notification when trying to access restricted entity types.
+- **Loading:** Search modal and standalone screen display animated skeletons, `RefreshCw` spinner, and `aria-busy="true"` during in-flight search queries.
+- **Empty:** Initial welcome prompt "Tra Cứu Nhanh Toàn Hệ Thống" explaining minimum 2 characters requirement, quick search suggestions chips (`ORD-`, `GHN`, `GHTK`, `Bảng kê`, `Ngoại lệ`), and keyboard shortcuts guide.
+- **No-Results:** Distinct notification when search finishes with 0 matches for queried keyword, actionable guidance to check spelling or filter type, and clear/reset buttons.
+- **Validation Error:** Inline feedback when query is fewer than 2 characters (`Vui lòng nhập ít nhất 2 ký tự`), `role="alert"`, minimum character badge, and `aria-invalid="true"`.
+- **Server / Network Error:** Amber error banner ("Lỗi Truy Vấn Dữ Liệu") with actionable Vietnamese description and interactive `Thử Lại` retry button.
+- **Forbidden (403):** Clear authorization banner explaining missing RBAC capabilities (e.g. `reconciliation:view_contract_rates`) when attempting to search restricted entity types (`BATCH`, `TRANSACTION`), with `Quay lại danh mục Tất Cả` recovery button.
+- **Partial Results:** Bounded results badge (`Hiển thị X/Y kết quả`) when matches exceed display limits or category scopes.
+- **Success / Active Results:** Rich multi-entity cards (`ORDER`, `WAYBILL`, `BATCH`, `CASE`, `TRANSACTION`) with dedicated color-coded icons, entity code badges, translated status pills, PII-masked contact details (`0901****567`), and deep-link navigation.
+- **Recovery:** Actionable recovery pathways across all failure and edge states (retry query button, reset filter to ALL button, clear query keyword button).
+- **Keyboard Access & ARIA:** Full WCAG/ARIA compliance with `role="dialog"`, `aria-modal="true"`, `role="searchbox"`, `role="listbox"`, `role="option"`, `aria-selected="true"`, `ArrowUp` / `ArrowDown` navigation, `Enter` to open profile/submit, and `Esc` key to dismiss.
 
 ## Acceptance matrix
 
@@ -112,16 +116,29 @@ Any authenticated merchant user can perform unified global search across primary
 | `AC-COM-01-13` | PII Protection in Audit: Search query containing customer phone is executed | Audit log created with `action: GLOBAL_SEARCH_QUERY`, but logged query term is masked | PASS — Verified in `search.supertest.spec.ts` & `search.unit.spec.ts` |
 | `AC-COM-01-14` | Unauthenticated request (`GET /api/v1/search?q=test`) | 401 `UNAUTHORIZED` / `SESSION_INVALID` | PASS — Verified in `search.supertest.spec.ts` |
 | `AC-COM-01-15` | Route alias check: `GET /search?q=test` behaves identically to `/api/v1/search` | 200 OK with same canonical payload | PASS — Verified in `search.supertest.spec.ts` |
+| `AC-COM-01-16` | UI Loading State: Query in-flight | Renders skeleton cards with `animate-pulse`, spinner, and `aria-busy="true"` | PASS — Verified in `global-search-states.test.ts` |
+| `AC-COM-01-17` | UI Empty State: No query entered yet | Renders welcome guide, minimum 2-char rule, sample chips, and keyboard shortcut tips | PASS — Verified in `global-search-states.test.ts` |
+| `AC-COM-01-18` | UI No-Results State: Query returned zero matches | Displays clear feedback with queried term, spelling advice, and clear-query button | PASS — Verified in `global-search-states.test.ts` |
+| `AC-COM-01-19` | UI Validation Error State: Query < 2 chars | Displays inline alert badge, role="alert", and marks input `aria-invalid="true"` | PASS — Verified in `global-search-states.test.ts` |
+| `AC-COM-01-20` | UI Server/Network Error State: API failure | Displays error alert banner with Vietnamese message and interactive `Thử Lại` retry button | PASS — Verified in `global-search-states.test.ts` |
+| `AC-COM-01-21` | UI Forbidden (403) State: Restricted category without permission | Displays 403 shield banner explaining required permission and `Quay lại danh mục Tất Cả` recovery button | PASS — Verified in `global-search-states.test.ts` |
+| `AC-COM-01-22` | UI Partial State: Results truncated by limit | Displays partial badge indicating rendered count vs total available count | PASS — Verified in `global-search-states.test.ts` |
+| `AC-COM-01-23` | UI Success State: Multi-entity results | Renders distinct cards for ORDER, WAYBILL, BATCH, CASE, TRANSACTION with status badges and masked PII | PASS — Verified in `global-search-states.test.ts` |
+| `AC-COM-01-24` | UI Recovery State: Recovery pathways | Provides retry button, reset-to-all button, clear input button across all error/empty states | PASS — Verified in `global-search-states.test.ts` |
+| `AC-COM-01-25` | UI Keyboard & Accessibility: Dialog & listbox | Fully implements `role="dialog"`, `aria-modal="true"`, `role="searchbox"`, `role="listbox"`, `role="option"`, `aria-selected="true"`, ArrowUp/Down, Enter, Esc | PASS — Verified in `global-search-states.test.ts` |
+| `AC-COM-01-26` | Standalone Search Page: `/search` screen | Standalone search interface rendered with header navigation and breadcrumbs back to main dashboard | PASS — Verified in `global-search-states.test.ts` |
 
 ## Verification commands
 
 - `pnpm install --frozen-lockfile` — PASSED (dependencies up-to-date)
 - `pnpm db:generate` — PASSED (Prisma Client v6.19.3 generated)
-- `pnpm lint` — PASSED (12 tasks successful, 0 errors)
+- `pnpm lint` — PASSED (12 tasks successful, 0 errors, 0 warnings)
 - `pnpm format:check` — PASSED (all changed files 100% compliant)
 - `pnpm typecheck` — PASSED (12 tasks successful, 0 errors)
 - `pnpm --filter @shipde/api exec tsx --tsconfig tsconfig.json --test src/search/search.unit.spec.ts` — PASSED (all 24 unit tests passed)
 - `pnpm --filter @shipde/api exec tsx --tsconfig tsconfig.json src/search/search.supertest.spec.ts` — PASSED (all 15 supertest acceptance criteria passed)
+- `pnpm --filter @shipde/web exec tsx src/tests/global-search-states.test.ts` — PASSED (all 12 UI states & accessibility scenarios passed)
+- `pnpm --filter @shipde/web test` — PASSED (all web component and state suites green)
 - `pnpm contract:check` — PASSED (59 endpoints validated, 0 drift between OpenAPI 3.1.0 and @shipde/contracts)
 - `node scripts/ai/check-no-hardcode.mjs` — PASSED (0 raw instances, 0 new)
 
