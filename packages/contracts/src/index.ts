@@ -469,6 +469,12 @@ export type AcceptInvitationRequest = components['schemas']['AcceptInvitationReq
 export type AcceptInvitationResponse = components['schemas']['AcceptInvitationResponse'];
 export type CheckScopeRequest = components['schemas']['CheckScopeRequest'];
 export type CheckScopeResponse = components['schemas']['CheckScopeResponse'];
+// --- Scope Assignment Contracts (FEAT-RBAC-02) ---
+export type UserListItem = components['schemas']['UserListItem'];
+export type UserListResponse = components['schemas']['UserListResponse'];
+export type UserScopesResponse = components['schemas']['UserScopesResponse'];
+export type UpdateUserScopesRequest = components['schemas']['UpdateUserScopesRequest'];
+
 // --- Shop Profile Contracts (FEAT-ORG-01) ---
 export const ShopAuditEvent = {
   SHOP_PROFILE_UPDATED: 'SHOP_PROFILE_UPDATED',
@@ -507,7 +513,6 @@ export function isValidTimeZone(tz: unknown): boolean {
     return false;
   }
 }
-
 // --- Personal Profile (FEAT-PRO-01) Types ---
 export type UserProfile = components['schemas']['UserProfile'];
 export type NotificationPreferences = components['schemas']['NotificationPreferences'];
@@ -539,7 +544,6 @@ export const UserErrorCode = {
 } as const;
 export type UserErrorCode = (typeof UserErrorCode)[keyof typeof UserErrorCode];
 
-export type UserListItem = components['schemas']['UserListItem'];
 export type ListUsersResponse = components['schemas']['ListUsersResponse'];
 export type UserDetail = components['schemas']['UserDetail'];
 export type UserDetailResponse = components['schemas']['UserDetailResponse'];

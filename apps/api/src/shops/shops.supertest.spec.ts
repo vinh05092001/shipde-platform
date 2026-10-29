@@ -20,7 +20,9 @@ async function runShopsSupertestSuite() {
   const envPaths = [
     path.resolve(process.cwd(), '.env'),
     path.resolve(process.cwd(), '../../.env'),
+    path.resolve(process.cwd(), '../../../../.env'),
     path.resolve(__dirname, '../../../../.env'),
+    path.resolve(__dirname, '../../../../../../.env'),
   ];
   for (const envPath of envPaths) {
     if (fs.existsSync(envPath)) {

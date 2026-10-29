@@ -661,7 +661,7 @@ paths:
   /users:
     get:
       tags: [Users]
-      summary: List merchant users (API-USR-LIST, FEAT-USR-02)
+      summary: List merchant users (API-USR-LIST, FEAT-USR-02, FEAT-RBAC-02)
       operationId: listUsers
       parameters:
         - name: page
@@ -754,6 +754,63 @@ paths:
         '401':
           $ref: '#/components/responses/Error'
         '403':
+          $ref: '#/components/responses/Error'
+  /users/{id}/scopes:
+    get:
+      tags: [Users]
+      summary: Get user scope assignments (API-USR-GET-SCOPES, FEAT-RBAC-02)
+      operationId: getUserScopes
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: User scope assignments
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserScopesResponse'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+    patch:
+      tags: [Users]
+      summary: Update user scope assignments (API-USR-UPDATE-SCOPES, FEAT-RBAC-02)
+      operationId: updateUserScopes
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateUserScopesRequest'
+      responses:
+        '200':
+          description: Updated user scope assignments
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserScopesResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
           $ref: '#/components/responses/Error'
   /users/{id}/suspend:
     post:
@@ -3003,6 +3060,10 @@ components:
           type: array
           items:
             type: string
+        carrier_account_scopes:
+          type: array
+          items:
+            type: string
     InvitationItem:
       type: object
       required: [id, merchant_id, role, status, expires_at, created_at]
@@ -3027,6 +3088,10 @@ components:
           items:
             type: string
         warehouse_scopes:
+          type: array
+          items:
+            type: string
+        carrier_account_scopes:
           type: array
           items:
             type: string
@@ -3175,6 +3240,113 @@ components:
               type: string
         meta:
           $ref: '#/components/schemas/Meta'
+    UserListItem:
+      type: object
+      required: [id, full_name, role, status, store_scopes, warehouse_scopes, carrier_account_scopes, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          nullable: true
+        phone:
+          type: string
+          nullable: true
+        full_name:
+          type: string
+        role:
+          type: string
+        custom_role_id:
+          type: string
+          format: uuid
+          nullable: true
+        custom_role:
+          type: object
+          nullable: true
+          properties:
+            id:
+              type: string
+              format: uuid
+            name:
+              type: string
+        store_scopes:
+          type: array
+          items:
+            type: string
+        warehouse_scopes:
+          type: array
+          items:
+            type: string
+        carrier_account_scopes:
+          type: array
+          items:
+            type: string
+        status:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        last_active_at:
+          type: string
+          format: date-time
+          nullable: true
+    UserListResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/UserListItem'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    UserScopesResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          required: [id, role, store_scopes, warehouse_scopes, carrier_account_scopes]
+          properties:
+            id:
+              type: string
+              format: uuid
+            role:
+              type: string
+            custom_role_id:
+              type: string
+              format: uuid
+              nullable: true
+            store_scopes:
+              type: array
+              items:
+                type: string
+            warehouse_scopes:
+              type: array
+              items:
+                type: string
+            carrier_account_scopes:
+              type: array
+              items:
+                type: string
+        meta:
+          $ref: '#/components/schemas/Meta'
+    UpdateUserScopesRequest:
+      type: object
+      properties:
+        store_scopes:
+          type: array
+          items:
+            type: string
+        warehouse_scopes:
+          type: array
+          items:
+            type: string
+        carrier_account_scopes:
+          type: array
+          items:
+            type: string
     CheckScopeRequest:
       type: object
       properties:
@@ -3182,13 +3354,15 @@ components:
           type: string
         warehouse_id:
           type: string
+        carrier_account_id:
+          type: string
     CheckScopeResponse:
       type: object
       required: [data, meta]
       properties:
         data:
           type: object
-          required: [authorized, user_id, role, store_scopes, warehouse_scopes]
+          required: [authorized, user_id, role, store_scopes, warehouse_scopes, carrier_account_scopes]
           properties:
             authorized:
               type: boolean
@@ -3202,6 +3376,10 @@ components:
               items:
                 type: string
             warehouse_scopes:
+              type: array
+              items:
+                type: string
+            carrier_account_scopes:
               type: array
               items:
                 type: string
@@ -3399,42 +3577,6 @@ components:
           $ref: '#/components/schemas/UserPreferences'
         meta:
           $ref: '#/components/schemas/Meta'
-    UserListItem:
-      type: object
-      required: [id, full_name, role, status, store_scopes, warehouse_scopes, created_at]
-      properties:
-        id:
-          type: string
-          format: uuid
-        full_name:
-          type: string
-        email:
-          type: string
-          nullable: true
-        phone:
-          type: string
-          nullable: true
-        role:
-          type: string
-          enum: [OWNER, OPS_CSKH, WAREHOUSE, ACCOUNTANT, FINANCE]
-        status:
-          type: string
-          enum: [ACTIVE, SUSPENDED, DISABLED, PENDING_VERIFICATION, INVITED]
-        store_scopes:
-          type: array
-          items:
-            type: string
-        warehouse_scopes:
-          type: array
-          items:
-            type: string
-        created_at:
-          type: string
-          format: date-time
-        last_active_at:
-          type: string
-          format: date-time
-          nullable: true
     ListUsersResponse:
       type: object
       required: [data, meta]
@@ -3459,7 +3601,7 @@ components:
               type: string
     UserDetail:
       type: object
-      required: [id, merchant_id, full_name, role, status, store_scopes, warehouse_scopes, created_at, updated_at]
+      required: [id, merchant_id, full_name, role, status, store_scopes, warehouse_scopes, carrier_account_scopes, created_at, updated_at]
       properties:
         id:
           type: string
@@ -3477,15 +3619,30 @@ components:
           nullable: true
         role:
           type: string
-          enum: [OWNER, OPS_CSKH, WAREHOUSE, ACCOUNTANT, FINANCE]
+        custom_role_id:
+          type: string
+          format: uuid
+          nullable: true
+        custom_role:
+          type: object
+          nullable: true
+          properties:
+            id:
+              type: string
+              format: uuid
+            name:
+              type: string
         status:
           type: string
-          enum: [ACTIVE, SUSPENDED, DISABLED, PENDING_VERIFICATION, INVITED]
         store_scopes:
           type: array
           items:
             type: string
         warehouse_scopes:
+          type: array
+          items:
+            type: string
+        carrier_account_scopes:
           type: array
           items:
             type: string
@@ -3516,12 +3673,19 @@ components:
           maxLength: 255
         role:
           type: string
-          enum: [OWNER, OPS_CSKH, WAREHOUSE, ACCOUNTANT, FINANCE]
+        custom_role_id:
+          type: string
+          format: uuid
+          nullable: true
         store_scopes:
           type: array
           items:
             type: string
         warehouse_scopes:
+          type: array
+          items:
+            type: string
+        carrier_account_scopes:
           type: array
           items:
             type: string

@@ -11,8 +11,10 @@ export interface ListUsersQueryDto {
 export interface UpdateUserDto {
   full_name?: string;
   role?: RoleEnum | string;
+  custom_role_id?: string;
   store_scopes?: string[];
   warehouse_scopes?: string[];
+  carrier_account_scopes?: string[];
 }
 
 export interface SuspendUserDto {

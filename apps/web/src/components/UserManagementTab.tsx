@@ -42,7 +42,10 @@ export const INVITATIONS_EMPTY_STATE_TEXT = 'Chưa có lời mời nào đang ch
 export const INVITATIONS_FORBIDDEN_TEXT = '403 — Không Có Quyền Truy Cập';
 export const INVITATIONS_RETRY_LABEL = 'Thử lại';
 
-export const USERS_EMPTY_STATE_TEXT = 'Không tìm thấy người dùng phù hợp';
+export const USERS_EMPTY_STATE_TEXT = 'Chưa có nhân viên nào trong cửa hàng';
+export const USERS_FORBIDDEN_TEXT = '403 — Không Có Quyền Truy Cập';
+export const USERS_RETRY_LABEL = 'Thử lại';
+export const USERS_SCOPE_SUCCESS_TOAST = 'Đã cập nhật phạm vi quyền hạn thành công';
 export const USER_SUSPEND_SUCCESS_TOAST = 'Đã tạm dừng người dùng thành công';
 export const USER_ACTIVATE_SUCCESS_TOAST = 'Đã kích hoạt lại người dùng thành công';
 export const USER_DEACTIVATE_SUCCESS_TOAST = 'Đã vô hiệu hóa tài khoản người dùng thành công';
@@ -184,19 +187,66 @@ export interface UserWithStores {
   full_name: string;
   email: string;
   phone: string;
-  role: 'OWNER' | 'STORE_MANAGER' | 'OPS_CSKH' | 'ACCOUNTANT' | 'WAREHOUSE';
+  role: string;
+  custom_role_id?: string | null;
+  custom_role?: { id: string; name: string } | null;
   assigned_stores: string[]; // ['*'] for all, or store IDs ['store_01', 'store_02']
+  store_scopes?: string[];
+  warehouse_scopes?: string[];
+  carrier_account_scopes?: string[];
   custom_permissions?: { [key: string]: boolean };
-  status: 'ACTIVE' | 'LOCKED' | 'INVITED';
+  status: string;
   last_login?: string;
+  last_active_at?: string | null;
   created_at: string;
 }
 
+/**
+ * Maps canonical API error response (fields/details) onto field-error-* dictionary.
+ * Supports canonical error.fields from validateScopeArray/validateCarrierAccountScopes,
+ * as well as legacy/fallback details/fields formats.
+ */
+export function mapCanonicalFieldErrors(
+  errorData: any,
+  fallbackMessage = 'Đã có lỗi xảy ra'
+): Record<string, string> {
+  const fields =
+    errorData?.error?.fields ||
+    errorData?.fields ||
+    errorData?.error?.details ||
+    errorData?.details;
+
+  if (!Array.isArray(fields)) return {};
+
+  const map: Record<string, string> = {};
+  for (const d of fields) {
+    if (d && d.field) {
+      const baseField = d.field.replace(/\[\d+\]$/, '');
+      const msg = d.message || errorData?.error?.message || errorData?.message || fallbackMessage;
+      map[baseField] = msg;
+      map[d.field] = msg;
+      if (baseField === 'carrier_account_scopes') {
+        map['carrier_scopes'] = msg;
+      } else if (baseField === 'carrier_scopes') {
+        map['carrier_account_scopes'] = msg;
+      }
+    }
+  }
+  return map;
+}
+
 export interface UserManagementTabProps {
-  initialUsers?: UserListItem[];
+  initialUsers?: (UserListItem | UserWithStores)[];
   initialLoading?: boolean;
   initialError?: string | null;
   initialForbidden?: boolean;
+  initialEditingUser?: (UserListItem | UserWithStores) | null;
+  initialToastMessage?: string | null;
+  initialScopeError?: string | null;
+  initialScopeLoading?: boolean;
+  initialScopeErrorBody?: any;
+  initialFieldErrors?: Record<string, string>;
+  initialActiveSubTab?: 'matrix' | 'stores' | 'members' | 'devices' | 'invitations';
   initialSubTab?: 'matrix' | 'stores' | 'members' | 'devices' | 'invitations';
 }
 
@@ -204,9 +254,11 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
   const { token, user } = useAuth();
   const [activeSubTab, setActiveSubTab] = useState<
     'matrix' | 'stores' | 'members' | 'devices' | 'invitations'
-  >('members');
+  >(props.initialActiveSubTab ?? props.initialSubTab ?? 'members');
   const [isInviteOpen, setIsInviteOpen] = useState(false);
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [toastMessage, setToastMessage] = useState<string | null>(
+    props.initialToastMessage ?? null
+  );
 
   // Invitations state (FEAT-USR-01)
   const [invitations, setInvitations] = useState<any[]>([]);
@@ -309,7 +361,15 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
   };
 
   // Users list and filter state (FEAT-USR-02)
-  const [users, setUsers] = useState<UserListItem[]>(props.initialUsers || []);
+  const [users, setUsers] = useState<UserListItem[]>(() => {
+    if (!props.initialUsers) return [];
+    return (props.initialUsers as any[]).map((u) => ({
+      ...u,
+      store_scopes: u.store_scopes || u.assigned_stores || [],
+      warehouse_scopes: u.warehouse_scopes || [],
+      carrier_account_scopes: u.carrier_account_scopes || [],
+    })) as UserListItem[];
+  });
   const [usersLoading, setUsersLoading] = useState<boolean>(
     props.initialLoading ?? !props.initialUsers
   );
@@ -327,12 +387,39 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
   const [newStorePhone, setNewStorePhone] = useState('0908889999');
 
   // Modal edit user state
-  const [editingUser, setEditingUser] = useState<UserListItem | null>(null);
-  const [editFullName, setEditFullName] = useState<string>('');
-  const [editRole, setEditRole] = useState<string>('');
-  const [editStoreScopes, setEditStoreScopes] = useState<string[]>([]);
-  const [editWarehouseScopes, setEditWarehouseScopes] = useState<string[]>([]);
+  const [editingUser, setEditingUser] = useState<any | null>(props.initialEditingUser ?? null);
+  const [editFullName, setEditFullName] = useState<string>(
+    props.initialEditingUser?.full_name || ''
+  );
+  const [editRole, setEditRole] = useState<string>(props.initialEditingUser?.role || 'OPS_CSKH');
+  const [editStoreScopes, setEditStoreScopes] = useState<string[]>(
+    (props.initialEditingUser as any)?.store_scopes ||
+      (props.initialEditingUser as any)?.assigned_stores ||
+      []
+  );
+  const [editWarehouseScopes, setEditWarehouseScopes] = useState<string[]>(
+    props.initialEditingUser?.warehouse_scopes || []
+  );
+  const [editCarrierScopes, setEditCarrierScopes] = useState<string[]>(
+    (props.initialEditingUser as any)?.carrier_account_scopes || []
+  );
   const [editError, setEditError] = useState<string | null>(null);
+  const [scopeSaveError, setScopeSaveError] = useState<string | null>(
+    props.initialScopeError ??
+      props.initialScopeErrorBody?.error?.message ??
+      props.initialScopeErrorBody?.message ??
+      null
+  );
+  const [scopeSaveLoading, setScopeSaveLoading] = useState<boolean>(
+    props.initialScopeLoading ?? false
+  );
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>(() => {
+    if (props.initialFieldErrors) return props.initialFieldErrors;
+    if (props.initialScopeErrorBody) {
+      return mapCanonicalFieldErrors(props.initialScopeErrorBody);
+    }
+    return {};
+  });
 
   // Modal suspend user state
   const [suspendingUser, setSuspendingUser] = useState<UserListItem | null>(null);
@@ -392,13 +479,16 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
     }
   }, [activeSubTab, fetchUsers, props.initialUsers]);
 
-  const handleOpenEdit = (u: UserListItem) => {
+  const handleOpenEdit = (u: any) => {
     setEditingUser(u);
     setEditFullName(u.full_name || '');
     setEditRole(u.role || '');
-    setEditStoreScopes(u.store_scopes || []);
+    setEditStoreScopes(u.store_scopes || u.assigned_stores || []);
     setEditWarehouseScopes(u.warehouse_scopes || []);
+    setEditCarrierScopes(u.carrier_account_scopes || []);
     setEditError(null);
+    setScopeSaveError(null);
+    setFieldErrors({});
   };
 
   const handleSaveUserPermissions = async (e: React.FormEvent) => {
@@ -407,14 +497,49 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
 
     if (!editFullName || editFullName.trim().length === 0) {
       setEditError('Họ và tên không được để trống');
+      setFieldErrors({ full_name: 'Họ và tên không được để trống' });
       return;
     }
 
     setMutationLoading(true);
+    setScopeSaveLoading(true);
     setEditError(null);
+    setScopeSaveError(null);
+    setFieldErrors({});
+
     try {
       const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
-      const res = await fetch(`${apiBase}/api/v1/users/${editingUser.id}`, {
+
+      // 1. Save scopes to dedicated scopes endpoint (PATCH /api/v1/users/:id/scopes) (AC-RBAC-02-20)
+      const scopesRes = await fetch(`${apiBase}/api/v1/users/${editingUser.id}/scopes`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          store_scopes: editStoreScopes,
+          warehouse_scopes: editWarehouseScopes,
+          carrier_account_scopes: editCarrierScopes,
+        }),
+      });
+
+      if (!scopesRes.ok) {
+        const errorData = await scopesRes.json().catch(() => ({}));
+        const msg =
+          errorData.error?.message || errorData.message || 'Không thể cập nhật phạm vi quyền hạn';
+        setScopeSaveError(msg);
+
+        // Map field validation errors from canonical error body's fields array (AC-RBAC-02-20)
+        const map = mapCanonicalFieldErrors(errorData, msg);
+        if (Object.keys(map).length > 0) {
+          setFieldErrors(map);
+        }
+        return;
+      }
+
+      // 2. Save user profile & role to PATCH /api/v1/users/:id
+      const userRes = await fetch(`${apiBase}/api/v1/users/${editingUser.id}`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -425,20 +550,35 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
           role: editRole,
           store_scopes: editStoreScopes,
           warehouse_scopes: editWarehouseScopes,
+          carrier_account_scopes: editCarrierScopes,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error?.message || 'Không thể cập nhật thông tin người dùng');
+
+      if (!userRes.ok) {
+        const errorData = await userRes.json().catch(() => ({}));
+        const msg =
+          errorData.error?.message ||
+          errorData.message ||
+          'Không thể cập nhật thông tin người dùng';
+        setEditError(msg);
+        const map = mapCanonicalFieldErrors(errorData, msg);
+        if (Object.keys(map).length > 0) {
+          setFieldErrors(map);
+        }
+        return;
       }
-      setToastMessage(USER_UPDATE_SUCCESS_TOAST);
+
+      // Success toast only after 200 OK
+      setToastMessage(USERS_SCOPE_SUCCESS_TOAST);
       setEditingUser(null);
       void fetchUsers();
       setTimeout(() => setToastMessage(null), 4000);
     } catch (err: any) {
+      setScopeSaveError(err.message || 'Lỗi khi cập nhật phạm vi quyền hạn');
       setEditError(err.message || 'Lỗi khi cập nhật người dùng');
     } finally {
       setMutationLoading(false);
+      setScopeSaveLoading(false);
     }
   };
 
@@ -893,15 +1033,17 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
           {isForbidden ? (
             <div
               className="p-8 text-center bg-amber-50/60 border border-amber-200 rounded-2xl space-y-2 animate-in fade-in"
-              data-testid="users-forbidden-state"
+              data-testid="users-forbidden-callout"
             >
-              <ShieldAlert className="w-10 h-10 text-amber-600 mx-auto" />
-              <h4 className="font-bold text-sm text-slate-800">{INVITATIONS_FORBIDDEN_TEXT}</h4>
-              <p className="text-xs text-slate-600 max-w-md mx-auto">
-                Tài khoản của bạn ({user?.role || 'Người dùng'}) không có quyền Quản lý người dùng
-                và vai trò (Manage users/roles). Vui lòng liên hệ Chủ cửa hàng (OWNER) để được cấp
-                quyền.
-              </p>
+              <div data-testid="users-forbidden-state">
+                <ShieldAlert className="w-10 h-10 text-amber-600 mx-auto" />
+                <h4 className="font-bold text-sm text-slate-800">{USERS_FORBIDDEN_TEXT}</h4>
+                <p className="text-xs text-slate-600 max-w-md mx-auto">
+                  Tài khoản của bạn ({user?.role || 'Người dùng'}) không có quyền Quản lý người dùng
+                  và vai trò (Manage users/roles - yêu cầu quyền <code>iam:manage_users</code>). Vui
+                  lòng liên hệ Chủ cửa hàng (OWNER) để được cấp quyền.
+                </p>
+              </div>
             </div>
           ) : usersError ? (
             /* Error State with persistent retry banner */
@@ -916,10 +1058,11 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
               </div>
               <button
                 type="button"
+                data-testid="users-retry-button"
                 onClick={() => void fetchUsers()}
                 className="btn-secondary text-xs py-1 px-3 bg-white hover:bg-slate-50"
               >
-                Thử lại
+                {USERS_RETRY_LABEL}
               </button>
             </div>
           ) : usersLoading ? (
@@ -944,22 +1087,30 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
             /* Populated Table State */
             <div className="modern-card overflow-hidden">
               <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse text-xs">
+                <table
+                  className="w-full text-left border-collapse text-xs"
+                  data-testid="users-table"
+                >
                   <thead>
                     <tr className="bg-slate-50/80 border-b border-slate-200 text-slate-600 font-bold uppercase text-[11px] tracking-wider">
                       <th className="py-3 px-4">Nhân Viên / Email</th>
                       <th className="py-3 px-4">Vai Trò Chính</th>
-                      <th className="py-3 px-4">Phạm Vi Chi Nhánh &amp; Kho</th>
+                      <th className="py-3 px-4">Phạm Vi Chi Nhánh</th>
+                      <th className="py-3 px-4">Phạm Vi Kho Hàng</th>
+                      <th className="py-3 px-4">Phạm Vi TK Vận Chuyển</th>
                       <th className="py-3 px-4">Đăng Nhập Gần Nhất</th>
                       <th className="py-3 px-4">Trạng Thái</th>
                       <th className="py-3 px-4 text-right">Thao Tác</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {users.map((u) => {
-                      const userStores = u.store_scopes || [];
-                      const userWarehouses = u.warehouse_scopes || [];
+                    {users.map((u: any) => {
+                      const userStores: string[] = u.store_scopes || u.assigned_stores || [];
+                      const userWarehouses: string[] = u.warehouse_scopes || [];
+                      const userCarriers: string[] = u.carrier_account_scopes || [];
                       const isAllStores = userStores.includes('*');
+                      const isAllWarehouses = userWarehouses.includes('*');
+                      const isAllCarriers = userCarriers.includes('*');
                       const assignedStoreObjs = isAllStores
                         ? stores
                         : stores.filter((s) => userStores.includes(s.id));
@@ -1025,34 +1176,78 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
                             </span>
                           </td>
 
+                          {/* Branch / Store Scopes */}
                           <td className="py-3.5 px-4">
                             <div className="flex flex-wrap gap-1">
                               {isAllStores ? (
                                 <span className="px-2 py-0.5 rounded-md bg-indigo-50 border border-indigo-200 text-indigo-700 font-bold text-[10px] flex items-center gap-1">
                                   <Building2 className="w-3 h-3" />
-                                  <span>Toàn Hệ Thống</span>
+                                  <span>Toàn Hệ Thống (*)</span>
                                 </span>
-                              ) : assignedStoreObjs.length > 0 ? (
-                                assignedStoreObjs.map((s) => (
+                              ) : !userStores.length ? (
+                                <span className="text-[10px] text-slate-400">
+                                  không gán phạm vi
+                                </span>
+                              ) : (
+                                userStores.map((s) => (
                                   <span
-                                    key={s.id}
+                                    key={s}
                                     className="px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-slate-700 font-medium text-[10px] flex items-center gap-1"
                                   >
                                     <Store className="w-3 h-3 text-slate-400" />
-                                    <span>{s.name.split('(')[0]}</span>
+                                    <span>{s}</span>
                                   </span>
                                 ))
-                              ) : (
-                                <span className="text-[10px] text-slate-400 italic">
-                                  Không gán chi nhánh
-                                </span>
                               )}
+                            </div>
+                          </td>
 
-                              {userWarehouses.length > 0 && (
-                                <span className="px-2 py-0.5 rounded-md bg-amber-50 border border-amber-200 text-amber-800 font-medium text-[10px] flex items-center gap-1">
-                                  <Warehouse className="w-3 h-3 text-amber-600" />
-                                  <span>{userWarehouses.join(', ')}</span>
+                          {/* Warehouse Scopes */}
+                          <td className="py-3.5 px-4">
+                            <div className="flex flex-wrap gap-1">
+                              {isAllWarehouses ? (
+                                <span className="px-2 py-0.5 rounded-md bg-purple-50 border border-purple-200 text-purple-700 font-bold text-[10px] flex items-center gap-1">
+                                  <Warehouse className="w-3 h-3" />
+                                  <span>Tất Cả Kho (*)</span>
                                 </span>
+                              ) : !userWarehouses.length ? (
+                                <span className="text-[10px] text-slate-400">
+                                  không gán phạm vi
+                                </span>
+                              ) : (
+                                userWarehouses.map((w) => (
+                                  <span
+                                    key={w}
+                                    className="px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-slate-700 font-medium text-[10px] flex items-center gap-1"
+                                  >
+                                    <Warehouse className="w-3 h-3 text-slate-400" />
+                                    <span>{w}</span>
+                                  </span>
+                                ))
+                              )}
+                            </div>
+                          </td>
+
+                          {/* Carrier Account Scopes */}
+                          <td className="py-3.5 px-4">
+                            <div className="flex flex-wrap gap-1">
+                              {isAllCarriers ? (
+                                <span className="px-2 py-0.5 rounded-md bg-emerald-50 border border-emerald-200 text-emerald-700 font-bold text-[10px] flex items-center gap-1">
+                                  <span>Tất Cả TK Vận Chuyển (*)</span>
+                                </span>
+                              ) : !userCarriers.length ? (
+                                <span className="text-[10px] text-slate-400">
+                                  không gán phạm vi
+                                </span>
+                              ) : (
+                                userCarriers.map((c) => (
+                                  <span
+                                    key={c}
+                                    className="px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-slate-700 font-medium text-[10px] flex items-center gap-1"
+                                  >
+                                    <span>{c}</span>
+                                  </span>
+                                ))
                               )}
                             </div>
                           </td>
@@ -1106,6 +1301,15 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
                               >
                                 <Sliders className="w-3.5 h-3.5" />
                                 <span>Phân Quyền</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                data-testid={`edit-scopes-btn-${u.id}`}
+                                onClick={() => handleOpenEdit(u)}
+                                className="btn-secondary text-xs py-1 px-2.5 text-indigo-600 hover:text-indigo-700 inline-flex items-center gap-1"
+                              >
+                                <span>Gán Phạm Vi</span>
                               </button>
 
                               {normalizedStatus === 'ACTIVE' && (
@@ -1749,7 +1953,7 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
       {editingUser && (
         <div
           className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in"
-          data-testid="edit-user-modal"
+          data-testid="scope-edit-modal"
         >
           <div className="bg-white rounded-2xl border border-slate-200 max-w-lg w-full p-6 space-y-4 shadow-2xl text-xs animate-in zoom-in-95">
             <div className="flex justify-between items-center pb-3 border-b border-slate-100">
@@ -1759,7 +1963,7 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
                 </div>
                 <div>
                   <h3 className="font-bold text-sm text-slate-900">
-                    Phân Quyền &amp; Cửa Hàng Cho Nhân Viên
+                    Phân Quyền & Gán Phạm Vi Cho Nhân Viên
                   </h3>
                   <p className="text-[11px] text-slate-500 font-mono">
                     {editingUser.full_name} ({editingUser.email || editingUser.phone})
@@ -1775,14 +1979,14 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
               </button>
             </div>
 
-            {editError && (
+            {(scopeSaveError || editError) && (
               <div
                 role="alert"
                 className="p-3 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs flex items-center gap-2"
-                data-testid="edit-user-error"
+                data-testid="scope-save-error"
               >
                 <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
-                <span>{editError}</span>
+                <span>{scopeSaveError || editError}</span>
               </div>
             )}
 
@@ -1799,6 +2003,11 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
                   className="modern-input w-full text-xs font-semibold"
                   data-testid="edit-fullname-input"
                 />
+                {fieldErrors.full_name && (
+                  <p className="text-xs text-rose-600 mt-1" data-testid="field-error-full-name">
+                    {fieldErrors.full_name}
+                  </p>
+                )}
               </div>
 
               <div>
@@ -1827,6 +2036,7 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
                   <label className="flex items-center gap-2 cursor-pointer font-bold text-slate-900 pb-1.5 border-b border-slate-200">
                     <input
                       type="checkbox"
+                      data-testid="store-scope-wildcard"
                       checked={editStoreScopes.includes('*')}
                       onChange={(e) => {
                         if (e.target.checked) {
@@ -1870,6 +2080,11 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
                     </div>
                   )}
                 </div>
+                {fieldErrors.store_scopes && (
+                  <p className="text-xs text-rose-600 mt-1" data-testid="field-error-store-scopes">
+                    {fieldErrors.store_scopes}
+                  </p>
+                )}
               </div>
 
               <div>
@@ -1880,6 +2095,7 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
                   <label className="flex items-center gap-2 cursor-pointer font-bold text-slate-900 pb-1.5 border-b border-slate-200">
                     <input
                       type="checkbox"
+                      data-testid="warehouse-scope-wildcard"
                       checked={editWarehouseScopes.includes('*')}
                       onChange={(e) => {
                         if (e.target.checked) {
@@ -1923,6 +2139,70 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
                     </div>
                   )}
                 </div>
+                {fieldErrors.warehouse_scopes && (
+                  <p
+                    className="text-xs text-rose-600 mt-1"
+                    data-testid="field-error-warehouse-scopes"
+                  >
+                    {fieldErrors.warehouse_scopes}
+                  </p>
+                )}
+              </div>
+
+              {/* 3. Carrier Account Scopes */}
+              <div>
+                <label className="font-bold text-slate-700 block mb-1.5">
+                  Phạm Vi Tài Khoản Vận Chuyển (Carrier Accounts):
+                </label>
+                <div className="space-y-2 p-3 bg-slate-50 rounded-xl border border-slate-200">
+                  <label className="flex items-center gap-2 cursor-pointer font-bold text-slate-900 pb-1.5 border-b border-slate-200">
+                    <input
+                      type="checkbox"
+                      data-testid="carrier-scope-wildcard"
+                      checked={editCarrierScopes.includes('*')}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setEditCarrierScopes(['*']);
+                        } else {
+                          setEditCarrierScopes([]);
+                        }
+                      }}
+                      className="rounded text-blue-600"
+                    />
+                    <span>Tất Cả Tài Khoản Vận Chuyển (*)</span>
+                  </label>
+
+                  {!editCarrierScopes.includes('*') && (
+                    <div className="space-y-1.5 pt-1">
+                      <input
+                        type="text"
+                        data-testid="carrier-scopes-input"
+                        placeholder="UUID tài khoản vận chuyển phân cách bởi dấu phẩy"
+                        value={editCarrierScopes.join(', ')}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          const items = val
+                            .split(',')
+                            .map((s) => s.trim())
+                            .filter(Boolean);
+                          setEditCarrierScopes(items);
+                        }}
+                        className="modern-input w-full text-xs font-mono"
+                      />
+                      <span className="text-[10px] text-slate-400 block">
+                        Nhập UUID tài khoản vận chuyển (vd: c0000000-0000-0000-0000-000000000001)
+                      </span>
+                    </div>
+                  )}
+                </div>
+                {fieldErrors.carrier_account_scopes && (
+                  <p
+                    className="text-xs text-rose-600 mt-1"
+                    data-testid="field-error-carrier-scopes"
+                  >
+                    {fieldErrors.carrier_account_scopes}
+                  </p>
+                )}
               </div>
 
               <div className="pt-3 border-t border-slate-100 flex justify-end gap-2.5">
@@ -1936,12 +2216,14 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
                 </button>
                 <button
                   type="submit"
-                  disabled={mutationLoading}
+                  disabled={mutationLoading || scopeSaveLoading}
                   className="btn-primary text-xs flex items-center gap-1.5"
-                  data-testid="edit-user-save-btn"
+                  data-testid="save-scopes-submit-btn"
                 >
-                  {mutationLoading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                  <span>Lưu Phân Quyền</span>
+                  {(mutationLoading || scopeSaveLoading) && (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  )}
+                  <span>Lưu Phân Quyền &amp; Phạm Vi</span>
                 </button>
               </div>
             </form>
