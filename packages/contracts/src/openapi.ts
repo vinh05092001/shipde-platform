@@ -1584,6 +1584,8 @@ export interface components {
       success: boolean;
       data: {
         branches: components['schemas']['Branch'][];
+        /** @description Server-derived capability flag. True only when the caller holds iam:shop_config. The web UI must derive edit rights from this field, never from hardcoded role names. */
+        can_edit: boolean;
       };
       meta: components['schemas']['Meta'];
     };

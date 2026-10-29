@@ -2723,11 +2723,18 @@ components:
           type: object
           required:
             - branches
+            - can_edit
           properties:
             branches:
               type: array
               items:
                 $ref: '#/components/schemas/Branch'
+            can_edit:
+              type: boolean
+              description: >-
+                Server-derived capability flag. True only when the caller holds
+                iam:shop_config. The web UI must derive edit rights from this
+                field, never from hardcoded role names.
         meta:
           $ref: '#/components/schemas/Meta'
     DeleteBranchResponse:

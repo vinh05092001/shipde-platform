@@ -43,7 +43,7 @@ export interface BranchManagementViewProps {
 export function BranchManagementView({
   branches = [],
   loading = false,
-  canEdit = true,
+  canEdit = false,
   scopedStores = null,
   error = null,
   success = null,
@@ -199,8 +199,8 @@ export function BranchManagementView({
             is_default: formState.is_default,
             status: formState.status,
           });
+          setViewSuccess(`Đã cập nhật chi nhánh "${formState.name}" thành công`);
         }
-        setViewSuccess(`Đã cập nhật chi nhánh "${formState.name}" thành công`);
       } else {
         if (onCreate) {
           await onCreate({
@@ -211,8 +211,8 @@ export function BranchManagementView({
             is_default: formState.is_default,
             status: formState.status,
           });
+          setViewSuccess(`Đã tạo mới chi nhánh "${formState.name}" thành công`);
         }
-        setViewSuccess(`Đã tạo mới chi nhánh "${formState.name}" thành công`);
       }
       handleCloseForm();
     } catch (err: any) {
@@ -238,8 +238,8 @@ export function BranchManagementView({
       try {
         if (onDeactivate) {
           await onDeactivate(branch.id);
+          setViewSuccess(`Đã tạm ngưng hoạt động chi nhánh "${branch.name}"`);
         }
-        setViewSuccess(`Đã tạm ngưng hoạt động chi nhánh "${branch.name}"`);
       } catch (err: any) {
         setViewError(err?.message || 'Không thể tạm ngưng chi nhánh');
       } finally {
@@ -251,8 +251,8 @@ export function BranchManagementView({
       try {
         if (onActivate) {
           await onActivate(branch.id);
+          setViewSuccess(`Đã kích hoạt hoạt động chi nhánh "${branch.name}"`);
         }
-        setViewSuccess(`Đã kích hoạt hoạt động chi nhánh "${branch.name}"`);
       } catch (err: any) {
         setViewError(err?.message || 'Không thể kích hoạt chi nhánh');
       } finally {
@@ -269,8 +269,8 @@ export function BranchManagementView({
     try {
       if (onUpdate) {
         await onUpdate(branch.id, { is_default: true });
+        setViewSuccess(`Đã đặt chi nhánh "${branch.name}" làm mặc định`);
       }
-      setViewSuccess(`Đã đặt chi nhánh "${branch.name}" làm mặc định`);
     } catch (err: any) {
       setViewError(err?.message || 'Không thể đặt chi nhánh làm mặc định');
     } finally {
@@ -492,10 +492,12 @@ export function BranchManagementView({
         <div className="relative w-full sm:w-72">
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
           <input
+            id="branch-search-input"
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Tìm theo tên, mã, SĐT..."
+            aria-label="Tìm kiếm chi nhánh theo tên, mã hoặc số điện thoại"
             data-testid="branch-search-input"
             className="w-full pl-9 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition"
           />
@@ -687,6 +689,9 @@ export function BranchManagementView({
         <div
           className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs animate-in fade-in duration-150"
           data-testid="branch-form-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="modal-title"
         >
           <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 space-y-5 animate-in zoom-in-95 duration-150">
             {/* Modal Header */}
@@ -696,7 +701,11 @@ export function BranchManagementView({
                   <Building2 className="w-4 h-4" />
                 </div>
                 <div>
-                  <h3 className="text-sm font-bold text-slate-900" data-testid="modal-title">
+                  <h3
+                    className="text-sm font-bold text-slate-900"
+                    id="modal-title"
+                    data-testid="modal-title"
+                  >
                     {editingBranch ? 'Chỉnh sửa thông tin chi nhánh' : 'Thêm chi nhánh mới'}
                   </h3>
                   <p className="text-[11px] text-slate-500">
@@ -734,10 +743,14 @@ export function BranchManagementView({
             <form onSubmit={handleFormSubmit} className="space-y-4" data-testid="branch-form">
               {/* Branch Name */}
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
+                <label
+                  htmlFor="input-branch-name"
+                  className="block text-xs font-bold text-slate-700 mb-1"
+                >
                   Tên chi nhánh <span className="text-rose-500">*</span>
                 </label>
                 <input
+                  id="input-branch-name"
                   type="text"
                   value={formState.name}
                   onChange={(e) => handleFormFieldChange('name', e.target.value)}
@@ -759,10 +772,14 @@ export function BranchManagementView({
 
               {/* Branch Code */}
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
+                <label
+                  htmlFor="input-branch-code"
+                  className="block text-xs font-bold text-slate-700 mb-1"
+                >
                   Mã chi nhánh (Định danh duy nhất) <span className="text-rose-500">*</span>
                 </label>
                 <input
+                  id="input-branch-code"
                   type="text"
                   value={formState.code}
                   onChange={(e) => handleFormFieldChange('code', e.target.value)}
@@ -787,10 +804,14 @@ export function BranchManagementView({
 
               {/* Contact Phone */}
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
+                <label
+                  htmlFor="input-branch-phone"
+                  className="block text-xs font-bold text-slate-700 mb-1"
+                >
                   Số điện thoại liên hệ
                 </label>
                 <input
+                  id="input-branch-phone"
                   type="text"
                   value={formState.phone}
                   onChange={(e) => handleFormFieldChange('phone', e.target.value)}
@@ -812,10 +833,14 @@ export function BranchManagementView({
 
               {/* Address */}
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
+                <label
+                  htmlFor="input-branch-address"
+                  className="block text-xs font-bold text-slate-700 mb-1"
+                >
                   Địa chỉ chi nhánh / kho
                 </label>
                 <textarea
+                  id="input-branch-address"
                   rows={2}
                   value={formState.address}
                   onChange={(e) => handleFormFieldChange('address', e.target.value)}
@@ -837,8 +862,12 @@ export function BranchManagementView({
 
               {/* Options: Default & Status */}
               <div className="pt-2 border-t border-slate-100 space-y-3">
-                <label className="flex items-center gap-2 cursor-pointer">
+                <label
+                  htmlFor="input-branch-default"
+                  className="flex items-center gap-2 cursor-pointer"
+                >
                   <input
+                    id="input-branch-default"
                     type="checkbox"
                     checked={formState.is_default}
                     onChange={(e) => handleFormFieldChange('is_default', e.target.checked)}
@@ -857,10 +886,14 @@ export function BranchManagementView({
                 </label>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                  <label
+                    htmlFor="input-branch-status"
+                    className="block text-xs font-bold text-slate-700 mb-1"
+                  >
                     Trạng thái hoạt động
                   </label>
                   <select
+                    id="input-branch-status"
                     value={formState.status}
                     onChange={(e) =>
                       handleFormFieldChange('status', e.target.value as 'ACTIVE' | 'INACTIVE')

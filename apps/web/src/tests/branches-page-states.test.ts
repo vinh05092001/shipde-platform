@@ -186,6 +186,22 @@ async function runBranchesWebTestSuite() {
     })
   );
   assert.ok(createModalMarkup.includes('data-testid="branch-form-modal"'));
+  assert.ok(createModalMarkup.includes('role="dialog"'));
+  assert.ok(createModalMarkup.includes('aria-modal="true"'));
+  assert.ok(createModalMarkup.includes('aria-labelledby="modal-title"'));
+  assert.ok(createModalMarkup.includes('for="input-branch-name"'));
+  assert.ok(createModalMarkup.includes('id="input-branch-name"'));
+  assert.ok(createModalMarkup.includes('for="input-branch-code"'));
+  assert.ok(createModalMarkup.includes('id="input-branch-code"'));
+  assert.ok(createModalMarkup.includes('for="input-branch-phone"'));
+  assert.ok(createModalMarkup.includes('id="input-branch-phone"'));
+  assert.ok(createModalMarkup.includes('for="input-branch-address"'));
+  assert.ok(createModalMarkup.includes('id="input-branch-address"'));
+  assert.ok(createModalMarkup.includes('for="input-branch-status"'));
+  assert.ok(createModalMarkup.includes('id="input-branch-status"'));
+  assert.ok(
+    createModalMarkup.includes('aria-label="Tìm kiếm chi nhánh theo tên, mã hoặc số điện thoại"')
+  );
   assert.ok(createModalMarkup.includes('Thêm chi nhánh mới'));
   assert.ok(createModalMarkup.includes('data-testid="input-branch-name"'));
   assert.ok(createModalMarkup.includes('data-testid="input-branch-code"'));
@@ -194,7 +210,7 @@ async function runBranchesWebTestSuite() {
   assert.ok(createModalMarkup.includes('data-testid="input-branch-default"'));
   assert.ok(createModalMarkup.includes('data-testid="submit-branch-button"'));
   assert.ok(createModalMarkup.includes('Tạo chi nhánh'));
-  console.log('  PASS: Create Branch modal verified.');
+  console.log('  PASS: Create Branch modal and accessibility attributes verified.');
 
   // 6. Edit Branch Modal
   console.log('🧪 6. Testing UI State: Edit Branch modal dialog...');
@@ -269,6 +285,38 @@ async function runBranchesWebTestSuite() {
   );
   console.log('  PASS: Forbidden state verified.');
 
+  // 9b. FEAT-ORG-02 review P1: canEdit must FAIL CLOSED (false) by default.
+  // The web layer must derive edit rights from the server's `can_edit` flag
+  // (derived from iam:shop_config), never from hardcoded role names, and never
+  // default to true before the server resolves the actor's permissions.
+  const noEditMarkup = renderToStaticMarkup(
+    React.createElement(BranchManagementView, {
+      branches: allBranches,
+      canEdit: undefined,
+    })
+  );
+  assert.ok(noEditMarkup.includes('data-testid="branch-forbidden-banner"'));
+  assert.ok(!noEditMarkup.includes('data-testid="create-branch-button"'));
+  assert.ok(
+    !noEditMarkup.includes('data-testid="edit-branch-button-11111111-aaaa-bbbb-cccc-000000000001"')
+  );
+  console.log('  PASS: canEdit fails closed (false) by default; no mutation controls rendered.');
+
+  const pageNoEditMarkup = renderToStaticMarkup(
+    React.createElement(
+      AuthProvider,
+      null,
+      React.createElement(BranchesSettingsPage, {
+        initialBranches: allBranches,
+        initialLoading: false,
+      })
+    )
+  );
+  assert.ok(!pageNoEditMarkup.includes('data-testid="create-branch-button"'));
+  console.log(
+    '  PASS: BranchesSettingsPage fails closed (no edit controls) when no can_edit is provided.'
+  );
+
   // 10. Scoped Access (Partial view / restricted store_scopes)
   console.log('🧪 10. Testing UI State: Scoped access info banner...');
   const scopedMarkup = renderToStaticMarkup(
@@ -295,6 +343,25 @@ async function runBranchesWebTestSuite() {
   assert.ok(successMarkup.includes('Đã tạo mới chi nhánh Kho Miền Trung thành công'));
   console.log('  PASS: Success notification verified.');
 
+  // 11b. FEAT-ORG-02 Review P2: Success banner requires real mutation
+  console.log('🧪 11b. Testing UI State: Success banner requires real mutation...');
+  const noActionSuccessMarkup = renderToStaticMarkup(
+    React.createElement(BranchManagementView, {
+      branches: allBranches,
+      canEdit: true,
+      onCreate: undefined,
+      onUpdate: undefined,
+      onActivate: undefined,
+      onDeactivate: undefined,
+      success: null,
+    })
+  );
+  assert.ok(
+    !noActionSuccessMarkup.includes('data-testid="branch-success-banner"'),
+    'Success banner must never appear without a completed mutation'
+  );
+  console.log('  PASS: No spurious success banner rendered.');
+
   // 12. Full Page Container: BranchesSettingsPage
   console.log('🧪 12. Testing Full Page Container: BranchesSettingsPage...');
   const pageMarkup = renderToStaticMarkup(
@@ -316,6 +383,23 @@ async function runBranchesWebTestSuite() {
   assert.ok(pageMarkup.includes('Kho Tổng TP.HCM'));
   assert.ok(pageMarkup.includes('HCM-MAIN-01'));
   console.log('  PASS: BranchesSettingsPage full container verified.');
+
+  // 12b. First paint when initialBranches is null defaults to loading skeleton
+  console.log('🧪 12b. Testing First Paint: loading skeleton when initialBranches is null...');
+  const firstPaintMarkup = renderToStaticMarkup(
+    React.createElement(AuthProvider, null, React.createElement(BranchesSettingsPage, null))
+  );
+  assert.ok(
+    firstPaintMarkup.includes('data-testid="branch-loading-state"'),
+    'First paint must render loading skeleton by default'
+  );
+  assert.ok(
+    !firstPaintMarkup.includes('data-testid="branch-empty-state"'),
+    'First paint must not flash empty state before data loads'
+  );
+  console.log(
+    '  PASS: First paint correctly renders loading skeleton when initialBranches is null.'
+  );
 
   console.log('================================================================');
   console.log('🎉 ALL WEB BRANCHES UI STATES VERIFIED 100%!');

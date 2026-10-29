@@ -62,6 +62,40 @@ export class BranchesController {
   }
 
   /**
+   * FEAT-ORG-02 §9: Read endpoints permit OWNER, OPS_CSKH, FINANCE, or any
+   * authenticated member holding iam:shop_config. Otherwise fail closed with 403.
+   */
+  private async assertCanViewBranches(actor: ActorContext): Promise<void> {
+    const hasPerm = await this.rbacService.actorHasPermissions(actor, ['iam:shop_config']);
+    const allowedRoles = ['OWNER', 'OPS_CSKH', 'FINANCE'];
+    let roleCode = actor.role;
+    if (actor.customRoleId) {
+      const customRole = await this.prisma.role.findUnique({
+        where: { id: actor.customRoleId },
+        select: { code: true, name: true },
+      });
+      if (customRole?.code) {
+        roleCode = customRole.code;
+      } else if (
+        customRole?.name &&
+        (customRole.name.toUpperCase().includes('FINANCE') ||
+          customRole.name.toUpperCase().includes('TÀI CHÍNH'))
+      ) {
+        roleCode = 'FINANCE';
+      }
+    }
+    if (!hasPerm && (!roleCode || !allowedRoles.includes(roleCode))) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Bạn không có quyền xem danh sách chi nhánh',
+        false,
+        'Vui lòng liên hệ Chủ Shop để được cấp quyền'
+      );
+    }
+  }
+
+  /**
    * GET /api/v1/branches (AC-ORG-02-01, AC-ORG-02-02)
    */
   @Get()
@@ -73,6 +107,7 @@ export class BranchesController {
     const correlationId = (req as any).correlationId || normalizeCorrelationId();
     const actor = await this.resolveActor(req);
     this.assertTenantMembership(actor);
+    await this.assertCanViewBranches(actor);
 
     const result = await this.branchesService.listBranches(
       actor.merchantId,
@@ -120,6 +155,7 @@ export class BranchesController {
     const correlationId = (req as any).correlationId || normalizeCorrelationId();
     const actor = await this.resolveActor(req);
     this.assertTenantMembership(actor);
+    await this.assertCanViewBranches(actor);
 
     const result = await this.branchesService.getBranchById(id, actor, correlationId);
     return res.status(HttpStatus.OK).json(result);

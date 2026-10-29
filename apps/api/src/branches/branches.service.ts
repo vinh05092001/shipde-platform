@@ -2,6 +2,7 @@ import { Injectable, HttpStatus, Inject } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { RbacService } from '../rbac/rbac.service';
 import { CanonicalApiException } from '../auth/auth.service';
 import type { ActorContext } from '../rbac/rbac.dto';
 import {
@@ -31,7 +32,10 @@ export function maskAuditValue(field: string, val: unknown): any {
 
 @Injectable()
 export class BranchesService {
-  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Inject(RbacService) private readonly rbacService: RbacService
+  ) {}
 
   private hashIp(ip: string): string {
     if (!ip) return 'unknown';
@@ -102,6 +106,18 @@ export class BranchesService {
   }
 
   /**
+   * Server-authoritative capability flag for the web UI (mirrors can_manage_roles
+   * in FEAT-RBAC-01). True only when the actor holds iam:shop_config; never derived
+   * from hardcoded role names on the client.
+   */
+  private async canActorEditBranches(actor: ActorContext): Promise<boolean> {
+    if (!this.rbacService) {
+      return actor.role === 'OWNER';
+    }
+    return this.rbacService.actorHasPermissions(actor, ['iam:shop_config']);
+  }
+
+  /**
    * GET /api/v1/branches (AC-ORG-02-01, AC-ORG-02-02)
    * Lists branches for the caller's merchant tenant, filtered by store_scopes if scoped.
    */
@@ -112,7 +128,7 @@ export class BranchesService {
     correlationId: string
   ): Promise<{
     success: boolean;
-    data: { branches: FormattedBranch[] };
+    data: { branches: FormattedBranch[]; can_edit: boolean };
     meta: { correlation_id: string };
   }> {
     if (!merchantId) {
@@ -131,6 +147,22 @@ export class BranchesService {
     };
 
     if (query?.status) {
+      if (query.status !== 'ACTIVE' && query.status !== 'INACTIVE') {
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'VALIDATION_ERROR',
+          'Trạng thái chi nhánh không hợp lệ. Chỉ chấp nhận ACTIVE hoặc INACTIVE',
+          false,
+          'Vui lòng chỉ định trạng thái ACTIVE hoặc INACTIVE',
+          [
+            {
+              field: 'status',
+              code: 'INVALID_VALUE',
+              message: 'Trạng thái chi nhánh chỉ có thể là ACTIVE hoặc INACTIVE',
+            },
+          ]
+        );
+      }
       whereClause.status = query.status;
     }
 
@@ -160,10 +192,13 @@ export class BranchesService {
       orderBy: [{ is_default: 'desc' }, { created_at: 'asc' }],
     });
 
+    const canEdit = await this.canActorEditBranches(actor);
+
     return {
       success: true,
       data: {
         branches: branches.map((b) => this.formatBranch(b)),
+        can_edit: canEdit,
       },
       meta: { correlation_id: correlationId },
     };
@@ -292,6 +327,23 @@ export class BranchesService {
       );
     }
 
+    // BR-BRANCH-05: A scoped actor may only create a branch inside their assigned
+    // store_scopes. Creating a branch outside that scope is a privilege escalation
+    // and must fail closed with 403 even though the actor holds iam:shop_config.
+    const scopedIdentifiers = await this.getActorStoreScopes(actor);
+    if (scopedIdentifiers !== null) {
+      const scopedSet = new Set(scopedIdentifiers);
+      if (!scopedSet.has(normalizedCode)) {
+        throw new CanonicalApiException(
+          HttpStatus.FORBIDDEN,
+          'FORBIDDEN',
+          'Người dùng không có quyền tạo chi nhánh ngoài phạm vi được phân quyền',
+          false,
+          'Vui lòng liên hệ quản trị viên để được phân quyền chi nhánh'
+        );
+      }
+    }
+
     // Check if this is the first branch; if so, make it default automatically
     const existingCount = await this.prisma.branch.count({
       where: { merchant_id: merchantId },
@@ -299,57 +351,73 @@ export class BranchesService {
 
     const isDefault = existingCount === 0 ? true : Boolean(dto.is_default);
 
-    const created = await this.prisma.$transaction(async (tx) => {
-      if (isDefault) {
-        await tx.branch.updateMany({
-          where: { merchant_id: merchantId },
-          data: { is_default: false },
-        });
-      }
+    try {
+      const created = await this.prisma.$transaction(async (tx) => {
+        if (isDefault) {
+          await tx.branch.updateMany({
+            where: { merchant_id: merchantId },
+            data: { is_default: false },
+          });
+        }
 
-      const newBranch = await tx.branch.create({
-        data: {
-          merchant_id: merchantId,
-          name: dto.name.trim(),
-          code: normalizedCode,
-          address: dto.address ? dto.address.trim() : null,
-          phone: dto.phone ? dto.phone.trim().replace(/[\s.-]/g, '') : null,
-          is_default: isDefault,
-          status: dto.status || 'ACTIVE',
-        },
-      });
-
-      await tx.auditLog.create({
-        data: {
-          merchant_id: merchantId,
-          user_id: actor.userId,
-          actor: actor.role || 'OWNER',
-          action: 'BRANCH_CREATED',
-          entity_type: 'branch',
-          entity_id: newBranch.id,
-          old_value: Prisma.DbNull,
-          new_value: {
-            id: newBranch.id,
-            name: newBranch.name,
-            code: newBranch.code,
-            address: newBranch.address,
-            phone: maskAuditValue('phone', newBranch.phone),
-            is_default: newBranch.is_default,
-            status: newBranch.status,
+        const newBranch = await tx.branch.create({
+          data: {
+            merchant_id: merchantId,
+            name: dto.name.trim(),
+            code: normalizedCode,
+            address: dto.address ? dto.address.trim() : null,
+            phone: dto.phone ? dto.phone.trim().replace(/[\s.-]/g, '') : null,
+            is_default: isDefault,
+            status: dto.status || 'ACTIVE',
           },
-          reason: correlationId ? `correlation_id:${correlationId}` : null,
-          ip_address: this.hashIp(clientIp),
-        },
+        });
+
+        await tx.auditLog.create({
+          data: {
+            merchant_id: merchantId,
+            user_id: actor.userId,
+            actor: actor.role || 'OWNER',
+            action: 'BRANCH_CREATED',
+            entity_type: 'branch',
+            entity_id: newBranch.id,
+            old_value: Prisma.DbNull,
+            new_value: {
+              id: newBranch.id,
+              name: newBranch.name,
+              code: newBranch.code,
+              address: newBranch.address,
+              phone: maskAuditValue('phone', newBranch.phone),
+              is_default: newBranch.is_default,
+              status: newBranch.status,
+            },
+            reason: correlationId ? `correlation_id:${correlationId}` : null,
+            ip_address: this.hashIp(clientIp),
+          },
+        });
+
+        return newBranch;
       });
 
-      return newBranch;
-    });
-
-    return {
-      success: true,
-      data: this.formatBranch(created),
-      meta: { correlation_id: correlationId },
-    };
+      return {
+        success: true,
+        data: this.formatBranch(created),
+        meta: { correlation_id: correlationId },
+      };
+    } catch (err: any) {
+      if (err instanceof CanonicalApiException) {
+        throw err;
+      }
+      if (err?.code === 'P2002') {
+        throw new CanonicalApiException(
+          HttpStatus.CONFLICT,
+          'BRANCH_CODE_EXISTS',
+          `Mã chi nhánh "${normalizedCode}" đã tồn tại trong cửa hàng`,
+          false,
+          'Vui lòng chọn một mã chi nhánh khác'
+        );
+      }
+      throw err;
+    }
   }
 
   /**
@@ -480,54 +548,70 @@ export class BranchesService {
     if (dto.is_default !== undefined) dataToUpdate.is_default = dto.is_default;
     if (dto.status !== undefined) dataToUpdate.status = dto.status;
 
-    const updated = await this.prisma.$transaction(async (tx) => {
-      if (dto.is_default === true) {
-        await tx.branch.updateMany({
-          where: {
-            merchant_id: merchantId,
-            id: { not: branchId },
-          },
-          data: { is_default: false },
+    try {
+      const updated = await this.prisma.$transaction(async (tx) => {
+        if (dto.is_default === true) {
+          await tx.branch.updateMany({
+            where: {
+              merchant_id: merchantId,
+              id: { not: branchId },
+            },
+            data: { is_default: false },
+          });
+        }
+
+        const result = await tx.branch.update({
+          where: { id: branchId },
+          data: dataToUpdate,
         });
-      }
 
-      const result = await tx.branch.update({
-        where: { id: branchId },
-        data: dataToUpdate,
+        const updatedFields = Object.keys(dataToUpdate);
+        const beforeDiff: Record<string, any> = {};
+        const afterDiff: Record<string, any> = {};
+
+        for (const field of updatedFields) {
+          beforeDiff[field] = maskAuditValue(field, (existing as any)[field]);
+          afterDiff[field] = maskAuditValue(field, (result as any)[field]);
+        }
+
+        await tx.auditLog.create({
+          data: {
+            merchant_id: merchantId,
+            user_id: actor.userId,
+            actor: actor.role || 'OWNER',
+            action: 'BRANCH_UPDATED',
+            entity_type: 'branch',
+            entity_id: branchId,
+            old_value: beforeDiff,
+            new_value: afterDiff,
+            reason: correlationId ? `correlation_id:${correlationId}` : null,
+            ip_address: this.hashIp(clientIp),
+          },
+        });
+
+        return result;
       });
 
-      const updatedFields = Object.keys(dataToUpdate);
-      const beforeDiff: Record<string, any> = {};
-      const afterDiff: Record<string, any> = {};
-
-      for (const field of updatedFields) {
-        beforeDiff[field] = maskAuditValue(field, (existing as any)[field]);
-        afterDiff[field] = maskAuditValue(field, (result as any)[field]);
+      return {
+        success: true,
+        data: this.formatBranch(updated),
+        meta: { correlation_id: correlationId },
+      };
+    } catch (err: any) {
+      if (err instanceof CanonicalApiException) {
+        throw err;
       }
-
-      await tx.auditLog.create({
-        data: {
-          merchant_id: merchantId,
-          user_id: actor.userId,
-          actor: actor.role || 'OWNER',
-          action: 'BRANCH_UPDATED',
-          entity_type: 'branch',
-          entity_id: branchId,
-          old_value: beforeDiff,
-          new_value: afterDiff,
-          reason: correlationId ? `correlation_id:${correlationId}` : null,
-          ip_address: this.hashIp(clientIp),
-        },
-      });
-
-      return result;
-    });
-
-    return {
-      success: true,
-      data: this.formatBranch(updated),
-      meta: { correlation_id: correlationId },
-    };
+      if (err?.code === 'P2002') {
+        throw new CanonicalApiException(
+          HttpStatus.CONFLICT,
+          'BRANCH_CODE_EXISTS',
+          `Mã chi nhánh "${normalizedCode || dto.code}" đã tồn tại trong cửa hàng`,
+          false,
+          'Vui lòng chọn một mã chi nhánh khác'
+        );
+      }
+      throw err;
+    }
   }
 
   /**
@@ -562,6 +646,16 @@ export class BranchesService {
         HttpStatus.NOT_FOUND,
         'BRANCH_NOT_FOUND',
         'Không tìm thấy thông tin chi nhánh',
+        false
+      );
+    }
+
+    const hasScope = await this.checkActorBranchScope(actor, existing);
+    if (!hasScope) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Người dùng không có quyền kích hoạt chi nhánh được yêu cầu',
         false
       );
     }
@@ -643,6 +737,16 @@ export class BranchesService {
       );
     }
 
+    const hasScope = await this.checkActorBranchScope(actor, existing);
+    if (!hasScope) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Người dùng không có quyền vô hiệu hóa chi nhánh được yêu cầu',
+        false
+      );
+    }
+
     const updated = await this.prisma.$transaction(async (tx) => {
       const result = await tx.branch.update({
         where: { id: branchId },
@@ -717,6 +821,16 @@ export class BranchesService {
         'Không thể xóa chi nhánh mặc định',
         false,
         'Vui lòng chỉ định một chi nhánh khác làm mặc định trước khi xóa chi nhánh này'
+      );
+    }
+
+    const hasScope = await this.checkActorBranchScope(actor, existing);
+    if (!hasScope) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Người dùng không có quyền xóa chi nhánh được yêu cầu',
+        false
       );
     }
 

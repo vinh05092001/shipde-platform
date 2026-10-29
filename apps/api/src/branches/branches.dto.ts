@@ -61,25 +61,53 @@ export function validateCreateBranchDto(dto: CreateBranchDto): CanonicalFieldErr
   }
 
   if (dto.address !== undefined && dto.address !== null) {
-    const trimmed = dto.address.trim();
-    if (trimmed.length > 1000) {
+    if (typeof dto.address !== 'string') {
       fields.push({
         field: 'address',
-        code: 'MAX_LENGTH',
-        message: 'Địa chỉ không được vượt quá 1000 ký tự',
+        code: 'INVALID_TYPE',
+        message: 'Địa chỉ chi nhánh phải là chuỗi ký tự',
       });
+    } else {
+      const trimmed = dto.address.trim();
+      if (trimmed.length > 1000) {
+        fields.push({
+          field: 'address',
+          code: 'MAX_LENGTH',
+          message: 'Địa chỉ không được vượt quá 1000 ký tự',
+        });
+      }
     }
   }
 
   if (dto.phone !== undefined && dto.phone !== null) {
-    const rawPhone = dto.phone.trim().replace(/[\s.-]/g, '');
-    if (rawPhone.length > 0 && !PHONE_REGEX.test(rawPhone)) {
+    if (typeof dto.phone !== 'string') {
       fields.push({
         field: 'phone',
-        code: 'INVALID_FORMAT',
-        message: 'Số điện thoại chi nhánh không hợp lệ theo định dạng Việt Nam',
+        code: 'INVALID_TYPE',
+        message: 'Số điện thoại chi nhánh phải là chuỗi ký tự',
       });
+    } else {
+      const rawPhone = dto.phone.trim().replace(/[\s.-]/g, '');
+      if (rawPhone.length > 0 && !PHONE_REGEX.test(rawPhone)) {
+        fields.push({
+          field: 'phone',
+          code: 'INVALID_FORMAT',
+          message: 'Số điện thoại chi nhánh không hợp lệ theo định dạng Việt Nam',
+        });
+      }
     }
+  }
+
+  if (
+    dto.is_default !== undefined &&
+    dto.is_default !== null &&
+    typeof dto.is_default !== 'boolean'
+  ) {
+    fields.push({
+      field: 'is_default',
+      code: 'INVALID_TYPE',
+      message: 'Trạng thái mặc định phải là giá trị boolean',
+    });
   }
 
   if (dto.status !== undefined && dto.status !== null) {
@@ -99,47 +127,91 @@ export function validateUpdateBranchDto(dto: UpdateBranchDto): CanonicalFieldErr
   const fields: CanonicalFieldError[] = [];
 
   if (dto.name !== undefined) {
-    const trimmed = dto.name.trim();
-    if (trimmed.length < 2 || trimmed.length > 255) {
+    if (typeof dto.name !== 'string') {
       fields.push({
         field: 'name',
-        code: 'INVALID_LENGTH',
-        message: 'Tên chi nhánh phải từ 2 đến 255 ký tự',
+        code: 'INVALID_TYPE',
+        message: 'Tên chi nhánh phải là chuỗi ký tự',
       });
+    } else {
+      const trimmed = dto.name.trim();
+      if (trimmed.length < 2 || trimmed.length > 255) {
+        fields.push({
+          field: 'name',
+          code: 'INVALID_LENGTH',
+          message: 'Tên chi nhánh phải từ 2 đến 255 ký tự',
+        });
+      }
     }
   }
 
   if (dto.code !== undefined) {
-    const trimmed = dto.code.trim();
-    if (!BRANCH_CODE_REGEX.test(trimmed)) {
+    if (typeof dto.code !== 'string') {
       fields.push({
         field: 'code',
-        code: 'INVALID_FORMAT',
-        message: 'Mã chi nhánh phải từ 2 đến 64 ký tự chữ, số, gạch ngang (-) hoặc gạch dưới (_)',
+        code: 'INVALID_TYPE',
+        message: 'Mã chi nhánh phải là chuỗi ký tự',
       });
+    } else {
+      const trimmed = dto.code.trim();
+      if (!BRANCH_CODE_REGEX.test(trimmed)) {
+        fields.push({
+          field: 'code',
+          code: 'INVALID_FORMAT',
+          message: 'Mã chi nhánh phải từ 2 đến 64 ký tự chữ, số, gạch ngang (-) hoặc gạch dưới (_)',
+        });
+      }
     }
   }
 
   if (dto.address !== undefined && dto.address !== null) {
-    const trimmed = dto.address.trim();
-    if (trimmed.length > 1000) {
+    if (typeof dto.address !== 'string') {
       fields.push({
         field: 'address',
-        code: 'MAX_LENGTH',
-        message: 'Địa chỉ không được vượt quá 1000 ký tự',
+        code: 'INVALID_TYPE',
+        message: 'Địa chỉ chi nhánh phải là chuỗi ký tự',
       });
+    } else {
+      const trimmed = dto.address.trim();
+      if (trimmed.length > 1000) {
+        fields.push({
+          field: 'address',
+          code: 'MAX_LENGTH',
+          message: 'Địa chỉ không được vượt quá 1000 ký tự',
+        });
+      }
     }
   }
 
   if (dto.phone !== undefined && dto.phone !== null) {
-    const rawPhone = dto.phone.trim().replace(/[\s.-]/g, '');
-    if (rawPhone.length > 0 && !PHONE_REGEX.test(rawPhone)) {
+    if (typeof dto.phone !== 'string') {
       fields.push({
         field: 'phone',
-        code: 'INVALID_FORMAT',
-        message: 'Số điện thoại chi nhánh không hợp lệ theo định dạng Việt Nam',
+        code: 'INVALID_TYPE',
+        message: 'Số điện thoại chi nhánh phải là chuỗi ký tự',
       });
+    } else {
+      const rawPhone = dto.phone.trim().replace(/[\s.-]/g, '');
+      if (rawPhone.length > 0 && !PHONE_REGEX.test(rawPhone)) {
+        fields.push({
+          field: 'phone',
+          code: 'INVALID_FORMAT',
+          message: 'Số điện thoại chi nhánh không hợp lệ theo định dạng Việt Nam',
+        });
+      }
     }
+  }
+
+  if (
+    dto.is_default !== undefined &&
+    dto.is_default !== null &&
+    typeof dto.is_default !== 'boolean'
+  ) {
+    fields.push({
+      field: 'is_default',
+      code: 'INVALID_TYPE',
+      message: 'Trạng thái mặc định phải là giá trị boolean',
+    });
   }
 
   if (dto.status !== undefined && dto.status !== null) {

@@ -272,6 +272,28 @@ describe('FEAT-ORG-02: Branches Unit Test Suite', () => {
         true
       );
     });
+
+    it('rejects non-string or non-boolean types in create DTO with INVALID_TYPE', () => {
+      const errors = validateCreateBranchDto({
+        name: 'Chi Nhánh Test',
+        code: 'TEST-01',
+        address: 12345 as any,
+        phone: { number: '0901234567' } as any,
+        is_default: 'true' as any,
+      });
+      assert.strictEqual(
+        errors.some((e) => e.field === 'address' && e.code === 'INVALID_TYPE'),
+        true
+      );
+      assert.strictEqual(
+        errors.some((e) => e.field === 'phone' && e.code === 'INVALID_TYPE'),
+        true
+      );
+      assert.strictEqual(
+        errors.some((e) => e.field === 'is_default' && e.code === 'INVALID_TYPE'),
+        true
+      );
+    });
   });
 
   describe('DTO Validation: validateUpdateBranchDto', () => {
@@ -289,6 +311,36 @@ describe('FEAT-ORG-02: Branches Unit Test Suite', () => {
       const errors = validateUpdateBranchDto(dto);
       assert.strictEqual(
         errors.some((e) => e.field === 'code'),
+        true
+      );
+    });
+
+    it('rejects non-string or non-boolean types in update DTO with INVALID_TYPE without throwing', () => {
+      const errors = validateUpdateBranchDto({
+        name: 12345 as any,
+        code: { bad: 'code' } as any,
+        address: true as any,
+        phone: ['0901234567'] as any,
+        is_default: 'false' as any,
+      });
+      assert.strictEqual(
+        errors.some((e) => e.field === 'name' && e.code === 'INVALID_TYPE'),
+        true
+      );
+      assert.strictEqual(
+        errors.some((e) => e.field === 'code' && e.code === 'INVALID_TYPE'),
+        true
+      );
+      assert.strictEqual(
+        errors.some((e) => e.field === 'address' && e.code === 'INVALID_TYPE'),
+        true
+      );
+      assert.strictEqual(
+        errors.some((e) => e.field === 'phone' && e.code === 'INVALID_TYPE'),
+        true
+      );
+      assert.strictEqual(
+        errors.some((e) => e.field === 'is_default' && e.code === 'INVALID_TYPE'),
         true
       );
     });
@@ -489,6 +541,196 @@ describe('FEAT-ORG-02: Branches Unit Test Suite', () => {
         (err: any) => {
           assert.strictEqual(err.getStatus(), 404);
           assert.strictEqual(err.code, 'BRANCH_NOT_FOUND');
+          return true;
+        }
+      );
+    });
+
+    it('Finding 8: listBranches rejects invalid status query with 400 VALIDATION_ERROR', async () => {
+      const mockPrisma = createMockPrismaService();
+      const service = new BranchesService(mockPrisma as any);
+
+      const actor: ActorContext = {
+        userId: 'u-owner-1',
+        merchantId: 'm-tenant-1',
+        role: 'OWNER',
+      };
+
+      await assert.rejects(
+        async () => {
+          await service.listBranches(
+            'm-tenant-1',
+            actor,
+            { status: 'INVALID_STATUS' as any },
+            'corr-invalid-status'
+          );
+        },
+        (err: any) => {
+          assert.strictEqual(err.getStatus(), 400);
+          assert.strictEqual(err.code, 'VALIDATION_ERROR');
+          return true;
+        }
+      );
+    });
+
+    it('Finding 7: createBranch maps concurrent P2002 error to 409 BRANCH_CODE_EXISTS', async () => {
+      const mockPrisma = createMockPrismaService();
+      mockPrisma.$transaction = async () => {
+        const p2002Error: any = new Error(
+          'Unique constraint failed on the fields: (`merchant_id`,`code`)'
+        );
+        p2002Error.code = 'P2002';
+        throw p2002Error;
+      };
+      const service = new BranchesService(mockPrisma as any);
+
+      const actor: ActorContext = {
+        userId: 'u-owner-1',
+        merchantId: 'm-tenant-1',
+        role: 'OWNER',
+      };
+
+      await assert.rejects(
+        async () => {
+          await service.createBranch(
+            'm-tenant-1',
+            actor,
+            { name: 'Chi Nhánh Đua Lệnh', code: 'HCM-RACE' },
+            '127.0.0.1',
+            'corr-p2002'
+          );
+        },
+        (err: any) => {
+          assert.strictEqual(err.getStatus(), 409);
+          assert.strictEqual(err.code, 'BRANCH_CODE_EXISTS');
+          return true;
+        }
+      );
+    });
+
+    it('Finding 7: updateBranch maps concurrent P2002 error to 409 BRANCH_CODE_EXISTS', async () => {
+      const mockPrisma = createMockPrismaService();
+      mockPrisma.$transaction = async () => {
+        const p2002Error: any = new Error('Unique constraint failed');
+        p2002Error.code = 'P2002';
+        throw p2002Error;
+      };
+      const service = new BranchesService(mockPrisma as any);
+
+      const actor: ActorContext = {
+        userId: 'u-owner-1',
+        merchantId: 'm-tenant-1',
+        role: 'OWNER',
+      };
+
+      await assert.rejects(
+        async () => {
+          await service.updateBranch(
+            B1_ID,
+            'm-tenant-1',
+            actor,
+            { code: 'HCM-RACE-UPDATED' },
+            '127.0.0.1',
+            'corr-p2002-upd'
+          );
+        },
+        (err: any) => {
+          assert.strictEqual(err.getStatus(), 409);
+          assert.strictEqual(err.code, 'BRANCH_CODE_EXISTS');
+          return true;
+        }
+      );
+    });
+
+    it('Finding 3: createBranch rejects out-of-scope creation by scoped actor with 403 FORBIDDEN', async () => {
+      const mockPrisma = createMockPrismaService();
+      const service = new BranchesService(mockPrisma as any);
+
+      const actor: ActorContext = {
+        userId: 'u-scoped-1',
+        merchantId: 'm-tenant-1',
+        role: 'OPS_CSKH',
+      };
+
+      await assert.rejects(
+        async () => {
+          await service.createBranch(
+            'm-tenant-1',
+            actor,
+            { name: 'Chi nhánh ngoài phạm vi', code: 'OUT-OF-SCOPE' },
+            '127.0.0.1',
+            'corr-create-out'
+          );
+        },
+        (err: any) => {
+          assert.strictEqual(err.getStatus(), 403);
+          assert.strictEqual(err.code, 'FORBIDDEN');
+          return true;
+        }
+      );
+    });
+
+    it('Finding 1: activateBranch rejects out-of-scope branch for scoped actor with 403 FORBIDDEN', async () => {
+      const mockPrisma = createMockPrismaService();
+      const service = new BranchesService(mockPrisma as any);
+
+      const actor: ActorContext = {
+        userId: 'u-scoped-1',
+        merchantId: 'm-tenant-1',
+        role: 'OPS_CSKH',
+      };
+
+      await assert.rejects(
+        async () => {
+          await service.activateBranch(B2_ID, 'm-tenant-1', actor, '127.0.0.1', 'corr-act-out');
+        },
+        (err: any) => {
+          assert.strictEqual(err.getStatus(), 403);
+          assert.strictEqual(err.code, 'FORBIDDEN');
+          return true;
+        }
+      );
+    });
+
+    it('Finding 1: deactivateBranch rejects out-of-scope branch for scoped actor with 403 FORBIDDEN', async () => {
+      const mockPrisma = createMockPrismaService();
+      const service = new BranchesService(mockPrisma as any);
+
+      const actor: ActorContext = {
+        userId: 'u-scoped-1',
+        merchantId: 'm-tenant-1',
+        role: 'OPS_CSKH',
+      };
+
+      await assert.rejects(
+        async () => {
+          await service.deactivateBranch(B2_ID, 'm-tenant-1', actor, '127.0.0.1', 'corr-deact-out');
+        },
+        (err: any) => {
+          assert.strictEqual(err.getStatus(), 403);
+          assert.strictEqual(err.code, 'FORBIDDEN');
+          return true;
+        }
+      );
+    });
+
+    it('Finding 1: deleteBranch rejects out-of-scope branch for scoped actor with 403 FORBIDDEN', async () => {
+      const mockPrisma = createMockPrismaService();
+      const service = new BranchesService(mockPrisma as any);
+
+      const actor: ActorContext = {
+        userId: 'u-scoped-1',
+        merchantId: 'm-tenant-1',
+        role: 'OPS_CSKH',
+      };
+
+      await assert.rejects(
+        async () => {
+          await service.deleteBranch(B2_ID, 'm-tenant-1', actor, '127.0.0.1', 'corr-del-out');
+        },
+        (err: any) => {
+          assert.strictEqual(err.getStatus(), 403);
+          assert.strictEqual(err.code, 'FORBIDDEN');
           return true;
         }
       );

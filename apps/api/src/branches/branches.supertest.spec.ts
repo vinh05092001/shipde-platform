@@ -109,7 +109,8 @@ async function runBranchesSupertestSuite() {
       mId: string,
       role: RoleEnum,
       emailSuffix: string,
-      storeScopes: string[] = []
+      storeScopes: string[] = [],
+      customRoleId: string | null = null
     ): Promise<{ userId: string; token: string }> => {
       const uId = randomUUID();
       const sId = randomUUID();
@@ -134,6 +135,7 @@ async function runBranchesSupertestSuite() {
           full_name: `Test User ${role}`,
           password_hash: 'hashed',
           role,
+          custom_role_id: customRoleId,
           store_scopes: storeScopes,
           status: 'active',
         },
@@ -408,6 +410,132 @@ async function runBranchesSupertestSuite() {
     console.log('  PASS: Scoped user successfully accesses assigned branch.');
 
     // ========================================================================
+    // FEAT-ORG-02 review P0 / BR-BRANCH-05: activate/deactivate/delete must
+    // enforce the branch scope check, not only the iam:shop_config permission.
+    // A scoped iam:shop_config holder may only mutate branches inside their
+    // store_scopes; out-of-scope mutations must fail closed with 403.
+    // ========================================================================
+    const scopedConfigRoleRes = await request(app.getHttpServer())
+      .post('/api/v1/roles')
+      .set('Authorization', `Bearer ${ownerTokenA}`)
+      .send({
+        name: `Scoped Branch Config ${testSuffix}`,
+        description: 'Scoped iam:shop_config role for branch mutation scope tests',
+        permissions: ['iam:shop_config'],
+      })
+      .expect(201);
+    const scopedConfigRoleId = scopedConfigRoleRes.body.data.role.id;
+
+    const { token: scopedConfigTokenA } = await setupUserSession(
+      merchantIdA,
+      RoleEnum.OPS_CSKH,
+      'scoped_config_a',
+      ['HCM-Q3'],
+      scopedConfigRoleId
+    );
+
+    // Scoped config holder (scope HCM-Q3) must NOT activate out-of-scope branch 2 (HCM-TB)
+    const resActOutOfScope = await request(app.getHttpServer())
+      .post(`/api/v1/branches/${branch2Id}/activate`)
+      .set('Authorization', `Bearer ${scopedConfigTokenA}`)
+      .expect(403);
+    assert.strictEqual(resActOutOfScope.body.error.code, 'FORBIDDEN');
+    console.log(
+      '  PASS: Scoped iam:shop_config holder cannot activate an out-of-scope branch (403).'
+    );
+
+    // Scoped config holder must NOT deactivate out-of-scope branch 2 (HCM-TB)
+    const resDeactOutOfScope = await request(app.getHttpServer())
+      .post(`/api/v1/branches/${branch2Id}/deactivate`)
+      .set('Authorization', `Bearer ${scopedConfigTokenA}`)
+      .expect(403);
+    assert.strictEqual(resDeactOutOfScope.body.error.code, 'FORBIDDEN');
+    console.log(
+      '  PASS: Scoped iam:shop_config holder cannot deactivate an out-of-scope branch (403).'
+    );
+
+    // Scoped config holder must NOT delete out-of-scope branch 2 (HCM-TB)
+    const resDeleteOutOfScope = await request(app.getHttpServer())
+      .delete(`/api/v1/branches/${branch2Id}`)
+      .set('Authorization', `Bearer ${scopedConfigTokenA}`)
+      .expect(403);
+    assert.strictEqual(resDeleteOutOfScope.body.error.code, 'FORBIDDEN');
+    // Branch 2 must still exist after the rejected delete
+    const branch2AfterDeniedDelete = await prisma.branch.findUnique({
+      where: { id: branch2Id },
+    });
+    assert.ok(branch2AfterDeniedDelete, 'Branch 2 must remain after a denied out-of-scope delete');
+    console.log(
+      '  PASS: Scoped iam:shop_config holder cannot delete an out-of-scope branch (403).'
+    );
+
+    // ========================================================================
+    // FEAT-ORG-02 review P1: createBranch must respect store_scopes. A scoped
+    // iam:shop_config holder cannot create a branch outside their scope.
+    // ========================================================================
+    const resCreateOutOfScope = await request(app.getHttpServer())
+      .post('/api/v1/branches')
+      .set('Authorization', `Bearer ${scopedConfigTokenA}`)
+      .send({
+        name: 'Chi nhánh ngoài phạm vi',
+        code: 'HCM-TB',
+        address: 'Ngoài phạm vi',
+      })
+      .expect(403);
+    assert.strictEqual(resCreateOutOfScope.body.error.code, 'FORBIDDEN');
+    console.log(
+      '  PASS: Scoped iam:shop_config holder cannot create an out-of-scope branch (403).'
+    );
+
+    // ========================================================================
+    // FEAT-ORG-02 review P1: GET /branches and GET /branches/:id require the
+    // read guard. A WAREHOUSE role (no iam:shop_config, not in allow-list) must
+    // be rejected with 403, while FINANCE (view-only allow-list) may read.
+    // ========================================================================
+    const resWarehouseListDenied = await request(app.getHttpServer())
+      .get('/api/v1/branches')
+      .set('Authorization', `Bearer ${warehouseTokenA}`)
+      .expect(403);
+    assert.strictEqual(resWarehouseListDenied.body.error.code, 'FORBIDDEN');
+    console.log('  PASS: WAREHOUSE role cannot read branch list (403 read guard).');
+
+    const resWarehouseGetDenied = await request(app.getHttpServer())
+      .get(`/api/v1/branches/${branch1Id}`)
+      .set('Authorization', `Bearer ${warehouseTokenA}`)
+      .expect(403);
+    assert.strictEqual(resWarehouseGetDenied.body.error.code, 'FORBIDDEN');
+    console.log('  PASS: WAREHOUSE role cannot read branch detail (403 read guard).');
+
+    // FINANCE role (view-only in RBAC matrix) may read the list but the server
+    // must report can_edit: false (no iam:shop_config on the FINANCE system role).
+    const { token: financeTokenA } = await setupUserSession(merchantIdA, RoleEnum.FINANCE, 'fin_a');
+    const resFinanceList = await request(app.getHttpServer())
+      .get('/api/v1/branches')
+      .set('Authorization', `Bearer ${financeTokenA}`)
+      .expect(200);
+    assert.strictEqual(resFinanceList.body.success, true);
+    assert.strictEqual(resFinanceList.body.data.can_edit, false);
+    console.log('  PASS: FINANCE role reads branch list with server-derived can_edit=false.');
+
+    // Owner (holds iam:shop_config) must receive can_edit: true on the list
+    const resOwnerList = await request(app.getHttpServer())
+      .get('/api/v1/branches')
+      .set('Authorization', `Bearer ${ownerTokenA}`)
+      .expect(200);
+    assert.strictEqual(resOwnerList.body.data.can_edit, true);
+    console.log('  PASS: OWNER receives server-derived can_edit=true.');
+
+    // Scoped iam:shop_config holder (custom role) must receive can_edit: true
+    const resScopedConfigList = await request(app.getHttpServer())
+      .get('/api/v1/branches')
+      .set('Authorization', `Bearer ${scopedConfigTokenA}`)
+      .expect(200);
+    assert.strictEqual(resScopedConfigList.body.data.can_edit, true);
+    assert.strictEqual(resScopedConfigList.body.data.branches.length, 1);
+    assert.strictEqual(resScopedConfigList.body.data.branches[0].code, 'HCM-Q3');
+    console.log('  PASS: Scoped iam:shop_config holder gets can_edit=true and filtered list.');
+
+    // ========================================================================
     // AC-ORG-02-12: Cross-tenant isolation
     // ========================================================================
     console.log(
@@ -489,23 +617,39 @@ async function runBranchesSupertestSuite() {
     console.log('🎉 ALL FEAT-ORG-02 SUPERTEST CHECKS PASSED (AC-01..16)!');
     console.log('================================================================');
   } finally {
-    // Cleanup fixtures
+    // Cleanup ONLY fixture tenant rows. Never delete another tenant's audit rows.
     await prisma.auditLog.deleteMany({
       where: {
-        entity_type: 'branch',
+        merchant_id: {
+          in: [merchantIdA, merchantIdB],
+        },
       },
     });
     await prisma.branch.deleteMany({
       where: {
-        code: {
-          contains: testSuffix,
+        merchant_id: {
+          in: [merchantIdA, merchantIdB],
+        },
+      },
+    });
+    await prisma.deviceSession.deleteMany({
+      where: {
+        merchant_id: {
+          in: [merchantIdA, merchantIdB],
+        },
+      },
+    });
+    await prisma.user.deleteMany({
+      where: {
+        merchant_id: {
+          in: [merchantIdA, merchantIdB],
         },
       },
     });
     await prisma.merchant.deleteMany({
       where: {
-        code: {
-          contains: testSuffix,
+        id: {
+          in: [merchantIdA, merchantIdB],
         },
       },
     });

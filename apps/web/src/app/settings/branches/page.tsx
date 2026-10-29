@@ -19,7 +19,7 @@ export interface BranchesSettingsPageProps {
 
 export default function BranchesSettingsPage({
   initialBranches = null,
-  initialLoading = false,
+  initialLoading,
   initialCanEdit,
   initialError = null,
   initialScopedStores = null,
@@ -27,21 +27,16 @@ export default function BranchesSettingsPage({
   const { user } = useAuth();
   const token = typeof window !== 'undefined' ? localStorage.getItem('shipde_token') : null;
 
-  // By default, OWNER and OPS_CSKH have mutation access; others are read-only
-  const derivedCanEdit =
-    initialCanEdit !== undefined
-      ? initialCanEdit
-      : user
-        ? user.role === 'OWNER' || user.role === 'OPS_CSKH'
-        : true;
-
+  // Edit rights are server-authoritative: the branches list endpoint returns
+  // `can_edit`, derived from the actor's `iam:shop_config` permission. We never
+  // infer capability from hardcoded role names, and we fail closed (false) until
+  // the server resolves the actor's permissions.
   const derivedScopedStores =
     initialScopedStores !== null ? initialScopedStores : user?.store_scopes || null;
 
   const [branches, setBranches] = useState<Branch[]>(initialBranches || []);
-  const [loading, setLoading] = useState<boolean>(
-    initialBranches ? false : (initialLoading ?? true)
-  );
+  const [canEdit, setCanEdit] = useState<boolean>(initialCanEdit ?? false);
+  const [loading, setLoading] = useState<boolean>(initialLoading ?? initialBranches === null);
   const [error, setError] = useState<string | null>(initialError);
 
   const fetchBranches = useCallback(async () => {
@@ -70,6 +65,7 @@ export default function BranchesSettingsPage({
       const json = await res.json();
       if (json.success && json.data?.branches) {
         setBranches(json.data.branches);
+        setCanEdit(Boolean(json.data.can_edit));
       }
     } catch (err: any) {
       setError(err?.message || 'Lỗi khi kết nối với máy chủ quản lý chi nhánh');
@@ -229,7 +225,7 @@ export default function BranchesSettingsPage({
         <BranchManagementView
           branches={branches}
           loading={loading}
-          canEdit={derivedCanEdit}
+          canEdit={canEdit}
           scopedStores={derivedScopedStores}
           error={error}
           onRefresh={fetchBranches}
