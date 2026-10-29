@@ -526,7 +526,12 @@ function parseModelListing(output) {
       .trim()
       .replace(/^[-*]\s+/, '')
       .replace(/^["']|["']$/g, '');
-    if (t && !/\s/.test(t)) models.push(t);
+    if (!t) continue;
+    if (/^fetching available models/i.test(t)) continue;
+    const firstToken = t.split(/[\t\s]+/)[0];
+    if (firstToken && !/^(?:fetching|available|model|id|name)$/i.test(firstToken)) {
+      models.push(firstToken);
+    }
   }
   return models;
 }

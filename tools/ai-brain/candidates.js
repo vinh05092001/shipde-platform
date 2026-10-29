@@ -2451,6 +2451,15 @@ function mergeCandidates(a, b) {
  * Mutates candidates in-place, adding: status, blocked, blockReason, evidence[].
  */
 function annotateCandidates(candidates, evidenceData, opts) {
+  const annotOpts =
+    opts && Object.prototype.hasOwnProperty.call(opts, 'quotaState')
+      ? opts
+      : Object.assign({}, opts, {
+          quotaState:
+            !opts || opts.loadQuotaState !== false
+              ? require('./quota-scan').loadQuotaState(opts || {})
+              : null,
+        });
   for (const c of candidates) {
     if (c.legacy) {
       c.evidence = [];
@@ -2463,8 +2472,8 @@ function annotateCandidates(candidates, evidenceData, opts) {
     c.status = evidence.candidateStatus(evidenceData, c);
 
     const block = evidence.isCandidateBlocked
-      ? evidence.isCandidateBlocked(evidenceData, c, opts)
-      : evidence.isUpstreamBlocked(evidenceData, c, opts);
+      ? evidence.isCandidateBlocked(evidenceData, c, annotOpts)
+      : evidence.isUpstreamBlocked(evidenceData, c, annotOpts);
     c.blocked = block.blocked;
     if (block.blocked) {
       c.blockReason = block.reason;

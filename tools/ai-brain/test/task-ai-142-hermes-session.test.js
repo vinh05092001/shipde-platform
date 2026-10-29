@@ -2638,7 +2638,7 @@ test('H3-07: launchHermesSession and chatCommand accept injected resolver input 
   }
 });
 
-test('Hermes supplies the actual QUALITY_FIRST weights to ranking', () => {
+test('Hermes supplies the actual QUALITY_FIRST weights to ranking for planner.default', () => {
   let observed;
   selectReasoningCandidate(
     { skipDecisionLog: true },
@@ -3262,7 +3262,14 @@ test('TASK-AI-142: a live route beyond one hundred failed probes ignores legacy 
     let probes = 0;
     let active = 0;
     const result = await launchHermesSession(
-      { rootDir: root, dryRun: true, probe: true, skipDecisionLog: true, maxAttempts: 1 },
+      {
+        rootDir: root,
+        dryRun: true,
+        probe: true,
+        skipDecisionLog: true,
+        maxAttempts: 1,
+        maxHermesProbes: 200,
+      },
       {
         candidates,
         registry: sampleRegistry(),

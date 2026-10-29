@@ -43,6 +43,8 @@ function getEffortVariants(config) {
   if (Array.isArray(cfg && cfg.effortVariants) && cfg.effortVariants.length) {
     return cfg.effortVariants.slice().sort((a, b) => b.length - a.length);
   }
+  const fromSources = loadEffortVariants();
+  if (fromSources && fromSources.length) return fromSources;
   return [];
 }
 
@@ -88,8 +90,9 @@ function splitModelEffort(value, config) {
     const slashIdx = raw.indexOf('/');
     if (slashIdx !== -1) {
       const pfx = raw.slice(0, slashIdx);
-      if (routerPrefixes.has(pfx)) {
-        raw = raw.slice(slashIdx + 1);
+      const rest = raw.slice(slashIdx + 1);
+      if (routerPrefixes.has(pfx) || rest.startsWith(pfx)) {
+        raw = rest;
         changed = true;
         continue;
       }
@@ -97,8 +100,9 @@ function splitModelEffort(value, config) {
     const colonIdx = raw.indexOf('::');
     if (colonIdx !== -1) {
       const pfx = raw.slice(0, colonIdx);
-      if (routerPrefixes.has(pfx)) {
-        raw = raw.slice(colonIdx + 2);
+      const rest = raw.slice(colonIdx + 2);
+      if (routerPrefixes.has(pfx) || rest.startsWith(pfx)) {
+        raw = rest;
         changed = true;
         continue;
       }
@@ -159,7 +163,7 @@ function splitModelEffort(value, config) {
 function normaliseCanonical(value) {
   if (typeof value !== 'string' || !value.trim()) return null;
   const parsed = splitModelEffort(value);
-  if (parsed.base) return parsed.base;
+  if (parsed.base) return parsed.base.split('/').pop();
   let canonical = value
     .trim()
     .toLowerCase()
@@ -213,10 +217,13 @@ function priorFor(candidate, role, priors, now) {
       ? sourceDates.some((date) => isStale(date, now))
       : isStale(retrievalDate, now));
 
-  const result = { canonical: match.canonical, tier, bonus: stale ? 0 : bonus };
+  const resolvedBaseId = resolved.matchedBaseId || match.matchedBaseId;
+  const canonicalId =
+    resolvedBaseId || normaliseCanonical(match.canonical) || canonical || match.canonical;
+  const result = { canonical: canonicalId, tier, bonus: stale ? 0 : bonus };
   if (resolved.matchedVia || match.matchedVia) {
     result.matchedVia = resolved.matchedVia || match.matchedVia;
-    result.matchedBaseId = resolved.matchedBaseId || match.matchedBaseId;
+    result.matchedBaseId = resolvedBaseId || canonicalId;
   }
   if (
     resolved.fallback ||
@@ -383,8 +390,9 @@ function leaderboardModelId(value, config) {
     const slashIdx = raw.indexOf('/');
     if (slashIdx !== -1) {
       const pfx = raw.slice(0, slashIdx);
-      if (routerPrefixes.has(pfx)) {
-        raw = raw.slice(slashIdx + 1);
+      const rest = raw.slice(slashIdx + 1);
+      if (routerPrefixes.has(pfx) || rest.startsWith(pfx)) {
+        raw = rest;
         changed = true;
         continue;
       }
@@ -392,8 +400,9 @@ function leaderboardModelId(value, config) {
     const colonIdx = raw.indexOf('::');
     if (colonIdx !== -1) {
       const pfx = raw.slice(0, colonIdx);
-      if (routerPrefixes.has(pfx)) {
-        raw = raw.slice(colonIdx + 2);
+      const rest = raw.slice(colonIdx + 2);
+      if (routerPrefixes.has(pfx) || rest.startsWith(pfx)) {
+        raw = rest;
         changed = true;
         continue;
       }
@@ -406,6 +415,38 @@ function leaderboardModelId(value, config) {
     raw = raw.replace(/([a-z]{2,})(\d)/g, '$1-$2');
   }
   return raw.replace(/[._\s]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+function loadEffortVariants(ranking) {
+  const variants = new Set();
+  try {
+    const sourcesPath = path.join(__dirname, 'sources.json');
+    if (fs.existsSync(sourcesPath)) {
+      const parsed = JSON.parse(fs.readFileSync(sourcesPath, 'utf8'));
+      const list =
+        parsed && (parsed.effortVariants || (parsed.dispatch && parsed.dispatch.effortVariants));
+      if (Array.isArray(list)) {
+        for (const item of list) {
+          if (typeof item === 'string' && item.trim()) {
+            variants.add(item.trim().toLowerCase());
+          }
+        }
+      }
+    }
+  } catch (_) {}
+
+  return Array.from(variants).sort((a, b) => b.length - a.length);
+}
+
+function stripTrailingEffort(id, suffixes) {
+  if (!id || typeof id !== 'string') return null;
+  for (const suffix of suffixes || []) {
+    const pattern = '-' + suffix;
+    if (id.endsWith(pattern) && id.length > pattern.length) {
+      return id.slice(0, -pattern.length);
+    }
+  }
+  return null;
 }
 
 function tierForScore(score, ranking) {
@@ -1181,4 +1222,5 @@ module.exports = {
   getNormalizationMethod,
   normalizeScore,
   dedupeBenchmarks,
+  loadEffortVariants,
 };

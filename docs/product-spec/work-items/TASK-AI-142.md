@@ -1439,3 +1439,34 @@ Aggregator gateways like 9router failed rolling onboarding entirely when an init
     - `onboardSourceRolling` executes forced tool call probe, sets `combo.capabilities.tools = true`, and stores `capabilityProbes` with matching binding.
     - `dispatch --dry-run` with writer role requiring tools admits onboarded model without `CAPABILITY_UNVERIFIED:tools`.
     - Failed tool probe fails closed without granting tools capability.
+
+### H3 live: Hermes orchestrator model selection from live routes (2026-10-28)
+
+- Outcome: Split slice (B) Hermes orchestrator model selection:
+  - Dynamic orchestrator model selection for `planner.default` role reads `dispatch.hermesOrchestrator` (`qualityFloor: 60`, `costCeiling: 100000`, `weightProfile: QUALITY_FIRST`, `complexity: standard`, `maxProbes: 16`, `maxRoutesPerAccount: 3`) from sources registry. Fails closed with `CONFIG_MISSING` if absent.
+  - Headless goal launch: `buildHermesArgv` supplies `-q`, `--yolo`, and `--accept-hooks` with `defaultGoalPrompt` for autonomous execution.
+  - BLOCKED_NO_ROUTE retry loop in `next-runner.js`: `executeIntakeForItem` detects `BLOCKED_NO_ROUTE`, records `Stage.COOLED` with tried routes, and `nextLoop` retries until `blockedNoRouteTimeoutMs` (3,600,000ms), scanning quotas if due and sleeping `blockedNoRoutePollIntervalMs` (30,000ms), terminating cleanly with `BLOCKED_NO_ROUTE_TIMEOUT` and `Stage.FAILED`.
+  - Hermes ACP turns handle custom model binding `custom:<model>` and reselect on missing credentials extracted from ACP RPC error details.
+  - Dynamic alias derivation in `sources.js` via `getSourceAliases` and minimal adapter in `quota-scan.js` for alias-aware quota scope matching.
+- Allowed paths in this slice:
+  - `tools/ai-brain/hermes-session.js`
+  - `tools/ai-brain/hermes-acp.js`
+  - `tools/ai-brain/harness.js`
+  - `tools/ai-brain/intake.js` (Hermes model listing parsing)
+  - `tools/ai-brain/next-runner.js` (BLOCKED_NO_ROUTE retry loop)
+  - `tools/ai-brain/orchestrate.js` (BLOCKED_NO_ROUTE ItemStatus/RunStatus)
+  - `tools/ai-brain/sources.js` (hermesOrchestrator config validation & getSourceAliases)
+  - `tools/ai-brain/sources.json` (hermesOrchestrator dispatch profile & source aliases)
+  - `tools/ai-brain/candidates.js` (annotateCandidates quotaState forwarding)
+  - `tools/ai-brain/quota-scan.js` (minimal adapter: alias-aware getQuotaScopeState)
+  - `scripts/ai/hardcode-allowlist.json` (sources.json qualityFloor and maxProbes numeric cap allowlist)
+  - `docs/product-spec/work-items/TASK-AI-142.md` (slice documentation)
+  - `tools/ai-brain/test/task-ai-142-hermes-session.test.js`
+  - `tools/ai-brain/test/task-ai-142-hermes-acp.test.js`
+  - `tools/ai-brain/test/task-ai-142-hermes-candidates.test.js`
+  - `tools/ai-brain/test/task-ai-142-hermes-dynamic-model.test.js`
+  - `tools/ai-brain/test/task-ai-142-hermes-goal-launch.test.js`
+  - `tools/ai-brain/test/task-ai-142-blocked-no-route.test.js`
+  - `tools/ai-brain/test/task-ai-142-jev-weights.test.js` (verified pass against baseline)
+- Verification:
+  - All 148 tests passing across all theme test suites (`node --test`).

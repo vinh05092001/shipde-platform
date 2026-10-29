@@ -325,6 +325,10 @@ function saveQuotaState(state, options = {}) {
   fs.renameSync(tempPath, filePath);
 }
 
+function expandSourceAliases(id, registryOrOptions) {
+  return sourcesApi.getSourceAliases(id, registryOrOptions);
+}
+
 function getQuotaScopeState(candidate, quotaState, options = {}) {
   if (!candidate || !quotaState) return null;
   const now = typeof options === 'number' ? options : ((options && options.now) ?? Date.now());
@@ -336,11 +340,13 @@ function getQuotaScopeState(candidate, quotaState, options = {}) {
   const clean = (id) => (typeof id === 'string' && id.trim() ? id.trim() : null);
   // A gateway/accessPath is the route actually used; sourceId/source then names the upstream
   // behind it, checked as `<gateway>::<upstream>` below.
+  const isHttpUrl = (val) => typeof val === 'string' && /^https?:\/\//i.test(val);
   const selectedId =
     clean(candidate.gateway) ||
-    clean(candidate.accessPath) ||
+    (!isHttpUrl(candidate.accessPath) ? clean(candidate.accessPath) : null) ||
     clean(candidate.sourceId) ||
-    clean(candidate.source);
+    clean(candidate.source) ||
+    clean(candidate.accessPath);
   const upstreamIds = [
     clean(candidate.upstream),
     clean(candidate.sourceId),
@@ -376,28 +382,71 @@ function getQuotaScopeState(candidate, quotaState, options = {}) {
   if (!quotaState.scopes) return null;
   const scopes = quotaState.scopes;
 
-  // Direct check by candidate quotaScope
-  const directScope = candidate.quotaScope ? scopes[candidate.quotaScope] : null;
+  // Direct check by candidate quotaScope or accountId
+  const directScopeKey = candidate.quotaScope || candidate.accountId;
+  const directScope = directScopeKey ? scopes[directScopeKey] : null;
 
   const modelId = candidate.modelId || candidate.model || '';
   const cleanModelId = modelId.replace(/^(ninerouter\/|9router\/)/, '');
   const prefixMatch = cleanModelId.match(/^([A-Za-z0-9_-]+)\//);
   const prefix = prefixMatch ? prefixMatch[1] : null;
+  const bareModelId = cleanModelId.includes('/')
+    ? cleanModelId.split('/').slice(1).join('/')
+    : null;
 
   // Resolve source and upstream scope state for one route identity.
   const resolveIdentity = (sid) => {
-    const source = scopes[sid] || null;
-    const upstreamEntries = [...upstreamIds, prefix]
-      .filter(Boolean)
-      .map((id) => scopes[`${sid}::${id}`])
-      .filter(Boolean);
-    const upstream =
-      upstreamEntries.find((entry) => isScopeBlocked(entry, now, opts)) ||
-      upstreamEntries[0] ||
-      null;
-    const blocked =
-      [source, upstream].find((entry) => entry && isScopeBlocked(entry, now, opts)) || null;
-    return { source, upstream, blocked };
+    const aliases = expandSourceAliases(sid, opts.registry || options?.registry);
+
+    // 1. Check for specific model entries across all aliases
+    let activeModelEntry = null;
+    for (const a of aliases) {
+      const modelKeys = [
+        cleanModelId ? `${a}::${cleanModelId}` : null,
+        bareModelId ? `${a}::${bareModelId}` : null,
+      ].filter(Boolean);
+      for (const k of modelKeys) {
+        const entry = scopes[k];
+        if (entry) {
+          if (!activeModelEntry) activeModelEntry = entry;
+          if (isScopeBlocked(entry, now, opts)) {
+            const source = scopes[a] || scopes[sid] || null;
+            return { source, upstream: entry, blocked: entry };
+          }
+        }
+      }
+    }
+
+    // 2. Check upstream and source entries across all aliases
+    let foundSource = null;
+    let foundUpstream = null;
+    let foundBlocked = null;
+
+    for (const a of aliases) {
+      const source = scopes[a] || null;
+      if (source && isScopeBlocked(source, now, opts)) {
+        foundBlocked = foundBlocked || source;
+      }
+      if (source && !foundSource) foundSource = source;
+
+      const upstreamEntries = [activeModelEntry, ...upstreamIds, candidate.accountId, prefix]
+        .filter(Boolean)
+        .map((id) => (typeof id === 'string' ? scopes[`${a}::${id}`] : id))
+        .filter(Boolean);
+
+      const blockedUpstream = upstreamEntries.find((entry) => isScopeBlocked(entry, now, opts));
+      if (blockedUpstream) {
+        foundBlocked = foundBlocked || blockedUpstream;
+      }
+      if (upstreamEntries[0] && !foundUpstream) foundUpstream = upstreamEntries[0];
+    }
+
+    // Blocked source takes precedence over non-blocked upstream
+    if (foundSource && isScopeBlocked(foundSource, now, opts)) {
+      return { source: foundSource, upstream: foundUpstream, blocked: foundSource };
+    }
+
+    return { source: foundSource, upstream: foundUpstream, blocked: foundBlocked };
   };
 
   const resolved = candidateSourceIds.map(resolveIdentity);
