@@ -14,6 +14,7 @@ const {
   saveQuotaState,
   isScopeBlocked,
   getQuotaScopeState,
+  scanAllFullRoutes,
 } = require('../quota-scan');
 
 function fixture(t) {
@@ -384,6 +385,7 @@ test('capability-probe and dispatch --dry-run skip candidates whose scope is in 
       registry,
       quotaStateFile: quotaFile,
       now,
+      capabilitiesPrepared: true,
       log: () => {},
       exit: () => {},
     }
@@ -507,4 +509,177 @@ test('cli.js quotaScanCommand runs scan and writes quota-state.json', async (t) 
   assert.equal(res.blockedCount, 0);
   const data = JSON.parse(fs.readFileSync(quotaFile, 'utf8'));
   assert.equal(data.scopes.bai.code, 'OK');
+});
+
+test('isCompletionBody and validateCompletion accept SSE stream chunk bodies with delta content and reasoning', () => {
+  const { isCompletionBody, validateCompletion, classifyQuotaResponse } = require('../quota-scan');
+
+  // SSE stream fixture with delta content across multiple data chunks
+  const sseBody = [
+    'data: {"id":"chatcmpl-sse-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant"}}]}',
+    'data: {"id":"chatcmpl-sse-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"o"}}]}',
+    'data: {"id":"chatcmpl-sse-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"k"}}]}',
+    'data: [DONE]',
+  ].join('\n');
+
+  assert.equal(isCompletionBody(sseBody), true);
+  assert.deepEqual(validateCompletion(sseBody), { ok: true });
+
+  const classified = classifyQuotaResponse(200, sseBody, new Map());
+  assert.equal(classified.code, 'OK');
+  assert.equal(classified.status, 200);
+
+  // SSE stream with reasoning_content (e.g. thinking models)
+  const sseReasoningBody = [
+    'data: {"id":"chatcmpl-sse-2","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant"}}]}',
+    'data: {"id":"chatcmpl-sse-2","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"reasoning_content":"reasoning thought"}}]}',
+    'data: [DONE]',
+  ].join('\n');
+
+  assert.equal(isCompletionBody(sseReasoningBody), true);
+  assert.deepEqual(validateCompletion(sseReasoningBody), { ok: true });
+
+  // Empty SSE stream without text content or tool call must be rejected
+  const emptySseBody = [
+    'data: {"id":"chatcmpl-sse-3","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant"}}]}',
+    'data: [DONE]',
+  ].join('\n');
+
+  assert.equal(isCompletionBody(emptySseBody), false);
+  assert.equal(validateCompletion(emptySseBody).ok, false);
+});
+
+test('TASK-AI-142 Finding 8: NO_CHANNEL stays model-scoped and does not block source scope or sibling models', () => {
+  const now = Date.now();
+  const sourceEntry = {
+    source: 'src-a',
+    scope: 'src-a',
+    model: 'rep-model',
+    code: 'NO_CHANNEL',
+    status: 404,
+    reason: 'NO_CHANNEL',
+    at: new Date(now).toISOString(),
+  };
+  const modelEntry = {
+    source: 'src-a',
+    scope: 'model-fail',
+    model: 'model-fail',
+    code: 'NO_CHANNEL',
+    status: 404,
+    reason: 'NO_CHANNEL',
+    at: new Date(now).toISOString(),
+  };
+
+  // Source-scoped NO_CHANNEL is NOT blocked (isScopeBlocked returns false)
+  assert.equal(isScopeBlocked(sourceEntry, now), false);
+  // Model-scoped NO_CHANNEL IS blocked (isScopeBlocked returns true)
+  assert.equal(isScopeBlocked(modelEntry, now), true);
+
+  const quotaState = {
+    scopes: {
+      'src-a': sourceEntry,
+      'src-a::src-a': sourceEntry,
+      'src-a::model-fail': modelEntry,
+    },
+  };
+
+  const candFail = { gateway: 'src-a', modelId: 'model-fail' };
+  const candSibling = { gateway: 'src-a', modelId: 'model-sibling' };
+
+  // Candidate with failed model is blocked by its model-scoped entry
+  const stateFail = getQuotaScopeState(candFail, quotaState, { now });
+  assert.equal(stateFail?.code, 'NO_CHANNEL');
+  assert.equal(isScopeBlocked(stateFail, now), true);
+
+  // Sibling candidate on same source is NOT blocked
+  const stateSibling = getQuotaScopeState(candSibling, quotaState, { now });
+  assert.equal(isScopeBlocked(stateSibling, now), false);
+});
+
+test('TASK-AI-142 Finding 6: scanAllFullRoutes does not promote model failure to prefix or source scope', async (t) => {
+  const quotaState = { scopes: {} };
+  const now = Date.now();
+  const registry = {
+    sources: [
+      {
+        id: '9router',
+        kind: 'router',
+        harness: 'paseo',
+        endpoint: 'http://127.0.0.1:20128/v1',
+        credential: { env: 'TEST_KEY' },
+        servesModels: true,
+      },
+    ],
+    dispatch: {
+      routeEvidenceMaxAgeMs: 60000,
+      fullRouteScan: {
+        timeoutMs: 1000,
+        maxTokens: 5,
+        concurrency: 1,
+        nineRouterConcurrency: 1,
+        nineRouterModelsTimeoutMs: 1000,
+        gatewayModelsTimeoutMs: 1000,
+        externalModelsTimeoutMs: 1000,
+      },
+    },
+  };
+
+  const fetchFn = async (url) => {
+    if (url.includes('/models')) {
+      return {
+        ok: true,
+        json: async () => ({
+          data: [{ id: 'anthropic/claude-3-opus', owned_by: 'anthropic' }],
+        }),
+      };
+    }
+    // Probe fails with 404 NO_CHANNEL
+    return {
+      status: 404,
+      ok: false,
+      text: async () =>
+        JSON.stringify({ error: { message: 'no channel available for this model' } }),
+      headers: { get: () => null },
+    };
+  };
+
+  const dir = fixture(t);
+  const tmpLog = path.join(dir, 'scan.jsonl');
+  try {
+    await scanAllFullRoutes({
+      quotaState,
+      registry,
+      jsonlFile: tmpLog,
+      mdFile: path.join(dir, 'scan.md'),
+      quotaStateFile: path.join(dir, 'quota-state.json'),
+      now,
+      fetchFn,
+      source: '9router',
+      env: { TEST_KEY: 'mock-key' },
+    });
+
+    // 1. Model key must be recorded
+    assert.ok(
+      quotaState.scopes['9router::anthropic/claude-3-opus'],
+      'exact model key must be recorded'
+    );
+    assert.equal(quotaState.scopes['9router::anthropic/claude-3-opus'].code, 'NO_CHANNEL');
+
+    // 2. Prefix scope and source scope must NOT be stamped
+    assert.equal(quotaState.scopes['9router::anthropic'], undefined, 'must not stamp prefix scope');
+    assert.equal(quotaState.scopes['9router'], undefined, 'must not stamp blanket source scope');
+
+    // 3. Sibling model must remain unblocked
+    const candSibling = { gateway: '9router', modelId: 'anthropic/claude-3-5-sonnet' };
+    const siblingScope = getQuotaScopeState(candSibling, quotaState, { now });
+    assert.equal(
+      isScopeBlocked(siblingScope, now),
+      false,
+      'sibling model must not be blocked by unscanned prefix'
+    );
+  } finally {
+    try {
+      fs.unlinkSync(tmpLog);
+    } catch {}
+  }
 });

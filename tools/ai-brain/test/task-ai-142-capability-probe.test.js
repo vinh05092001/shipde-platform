@@ -559,3 +559,121 @@ test('review P1: profile dispatch also honors injected capability probe', async 
     /INJECTED_PROFILE_PROBE/
   );
 });
+
+test('a forced tool call wrapped as {"data": ...} with a trailing [DONE] marker is observed', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-probe-wrap-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const wrapped = (payload) => ({
+    ok: true,
+    status: 200,
+    text: async () => JSON.stringify({ data: payload }) + '\n\ndata: [DONE]\n',
+  });
+  const api = require('../capability-probe');
+  const c = candidate();
+  await api.probeCapabilities([c], profile, {
+    registry,
+    evidenceDir: dir,
+    env: { FIXTURE_KEY: 'fixture-only' },
+    fetch: async (_url, init) => {
+      const req = JSON.parse(init.body);
+      if (req.response_format) {
+        const props = req.response_format.json_schema.schema.properties;
+        return wrapped({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  candidateKey: props.candidateKey.enum[0],
+                  nonce: props.nonce.enum[0],
+                  status: 'completed',
+                  artifacts: [],
+                }),
+              },
+            },
+          ],
+        });
+      }
+      const tool = req.tools[0].function;
+      return wrapped({
+        choices: [
+          {
+            message: {
+              tool_calls: [
+                {
+                  type: 'function',
+                  function: {
+                    name: tool.name,
+                    arguments: JSON.stringify({ nonce: tool.parameters.properties.nonce.enum[0] }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      });
+    },
+  });
+  assert.equal(c.capabilities.tools, true);
+  assert.equal(c.capabilities.jsonSchema, true);
+});
+
+test('a forced tool call streamed as SSE chunks (non-stream request) is observed', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-probe-sse-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const sse = (events) => ({
+    ok: true,
+    status: 200,
+    text: async () =>
+      events.map((e) => 'data: ' + JSON.stringify(e)).join('\n\n') + '\n\ndata: [DONE]\n',
+  });
+  const api = require('../capability-probe');
+  const c = candidate();
+  await api.probeCapabilities([c], profile, {
+    registry,
+    evidenceDir: dir,
+    env: { FIXTURE_KEY: 'fixture-only' },
+    fetch: async (_url, init) => {
+      const req = JSON.parse(init.body);
+      if (req.response_format) {
+        const props = req.response_format.json_schema.schema.properties;
+        const answer = JSON.stringify({
+          candidateKey: props.candidateKey.enum[0],
+          nonce: props.nonce.enum[0],
+          status: 'completed',
+          artifacts: [],
+        });
+        return sse([
+          { choices: [{ delta: { content: answer.slice(0, 20) } }] },
+          { choices: [{ delta: { content: answer.slice(20) } }] },
+        ]);
+      }
+      const tool = req.tools[0].function;
+      const args = JSON.stringify({ nonce: tool.parameters.properties.nonce.enum[0] });
+      return sse([
+        {
+          choices: [
+            {
+              delta: {
+                tool_calls: [
+                  { index: 0, type: 'function', function: { name: tool.name, arguments: '' } },
+                ],
+              },
+            },
+          ],
+        },
+        {
+          choices: [
+            { delta: { tool_calls: [{ index: 0, function: { arguments: args.slice(0, 5) } }] } },
+          ],
+        },
+        {
+          choices: [
+            { delta: { tool_calls: [{ index: 0, function: { arguments: args.slice(5) } }] } },
+          ],
+        },
+      ]);
+    },
+  });
+  assert.equal(c.capabilities.tools, true);
+  assert.equal(c.capabilities.jsonSchema, true);
+});
