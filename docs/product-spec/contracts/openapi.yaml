@@ -1426,6 +1426,151 @@ paths:
           $ref: '#/components/responses/Error'
         '404':
           $ref: '#/components/responses/Error'
+  /warehouses:
+    get:
+      tags: [Warehouse]
+      summary: List warehouses (FEAT-WH-01)
+      description: List authorized warehouses for caller's merchant. Users with * or iam:shop_config view all; scoped users see only permitted warehouses.
+      operationId: listWarehouses
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: List of authorized warehouses
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListWarehousesResponse'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [Warehouse]
+      summary: Create a new warehouse (FEAT-WH-01)
+      description: Creates a warehouse with pickup/return address, schedule, contacts, and printer defaults. Requires iam:shop_config.
+      operationId: createWarehouse
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateWarehouseInput'
+      responses:
+        '201':
+          description: Warehouse created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WarehouseResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+  /warehouses/{id}:
+    get:
+      tags: [Warehouse]
+      summary: Get warehouse by ID (FEAT-WH-01)
+      description: Returns warehouse detail with strict server-side tenant scoping and warehouse_scopes evaluation.
+      operationId: getWarehouseById
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Warehouse details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WarehouseResponse'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+    patch:
+      tags: [Warehouse]
+      summary: Update warehouse by ID (FEAT-WH-01)
+      description: Updates warehouse attributes. Requires iam:shop_config.
+      operationId: updateWarehouseById
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateWarehouseInput'
+      responses:
+        '200':
+          description: Warehouse updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WarehouseResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+    delete:
+      tags: [Warehouse]
+      summary: Deactivate warehouse (FEAT-WH-01)
+      description: Deactivates a warehouse. Requires iam:shop_config.
+      operationId: deactivateWarehouse
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Warehouse deactivated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WarehouseResponse'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /warehouses/{id}/default:
+    post:
+      tags: [Warehouse]
+      summary: Set warehouse as default (FEAT-WH-01)
+      description: Sets warehouse as default pickup warehouse. Requires iam:shop_config.
+      operationId: setDefaultWarehouse
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Warehouse set as default
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WarehouseResponse'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
   /admin/shops:
     get:
       tags: [Admin]
@@ -2430,6 +2575,352 @@ components:
                 $ref: '#/components/schemas/ShopProfile'
         meta:
           $ref: '#/components/schemas/Meta'
+    Warehouse:
+      type: object
+      required:
+        - id
+        - merchant_id
+        - name
+        - code
+        - status
+        - is_default
+        - contact_name
+        - contact_phone
+        - address_line
+        - district
+        - city
+        - address_json
+        - use_different_return_address
+        - printer_paper_size
+        - printer_dpi
+        - printer_auto_print
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        merchant_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        code:
+          type: string
+        status:
+          type: string
+          enum: [active, inactive]
+        is_default:
+          type: boolean
+        contact_name:
+          type: string
+        contact_phone:
+          type: string
+        contact_email:
+          type: string
+          nullable: true
+        address_line:
+          type: string
+        ward:
+          type: string
+          nullable: true
+        district:
+          type: string
+        city:
+          type: string
+        postal_code:
+          type: string
+          nullable: true
+        address_json:
+          type: object
+        use_different_return_address:
+          type: boolean
+        return_contact_name:
+          type: string
+          nullable: true
+        return_contact_phone:
+          type: string
+          nullable: true
+        return_address_line:
+          type: string
+          nullable: true
+        return_ward:
+          type: string
+          nullable: true
+        return_district:
+          type: string
+          nullable: true
+        return_city:
+          type: string
+          nullable: true
+        return_address_json:
+          type: object
+          nullable: true
+        operating_hours:
+          type: object
+          nullable: true
+        cutoff_time:
+          type: string
+          nullable: true
+        schedule_notes:
+          type: string
+          nullable: true
+        contacts_json:
+          type: object
+          nullable: true
+        printer_paper_size:
+          type: string
+          enum: [A6, A5, A4, K80]
+          default: A6
+        printer_dpi:
+          type: integer
+          enum: [203, 300]
+          default: 203
+        printer_name:
+          type: string
+          nullable: true
+        printer_auto_print:
+          type: boolean
+          default: false
+        printer_config:
+          type: object
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    CreateWarehouseInput:
+      type: object
+      required:
+        - name
+        - contact_name
+        - contact_phone
+        - address_line
+        - district
+        - city
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 255
+        code:
+          type: string
+          maxLength: 64
+        is_default:
+          type: boolean
+        contact_name:
+          type: string
+          maxLength: 255
+        contact_phone:
+          type: string
+          maxLength: 32
+        contact_email:
+          type: string
+          maxLength: 255
+          nullable: true
+        address_line:
+          type: string
+        ward:
+          type: string
+          maxLength: 128
+          nullable: true
+        district:
+          type: string
+          maxLength: 128
+        city:
+          type: string
+          maxLength: 128
+        postal_code:
+          type: string
+          maxLength: 32
+          nullable: true
+        use_different_return_address:
+          type: boolean
+        return_contact_name:
+          type: string
+          maxLength: 255
+          nullable: true
+        return_contact_phone:
+          type: string
+          maxLength: 32
+          nullable: true
+        return_address_line:
+          type: string
+          nullable: true
+        return_ward:
+          type: string
+          maxLength: 128
+          nullable: true
+        return_district:
+          type: string
+          maxLength: 128
+          nullable: true
+        return_city:
+          type: string
+          maxLength: 128
+          nullable: true
+        operating_hours:
+          type: object
+          nullable: true
+        cutoff_time:
+          type: string
+          maxLength: 10
+          nullable: true
+        schedule_notes:
+          type: string
+          maxLength: 500
+          nullable: true
+        contacts_json:
+          type: object
+          nullable: true
+        printer_paper_size:
+          type: string
+          enum: [A6, A5, A4, K80]
+        printer_dpi:
+          type: integer
+          enum: [203, 300]
+        printer_name:
+          type: string
+          maxLength: 255
+          nullable: true
+        printer_auto_print:
+          type: boolean
+        printer_config:
+          type: object
+          nullable: true
+    UpdateWarehouseInput:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 255
+        code:
+          type: string
+          maxLength: 64
+        status:
+          type: string
+          enum: [active, inactive]
+        is_default:
+          type: boolean
+        contact_name:
+          type: string
+          maxLength: 255
+        contact_phone:
+          type: string
+          maxLength: 32
+        contact_email:
+          type: string
+          maxLength: 255
+          nullable: true
+        address_line:
+          type: string
+        ward:
+          type: string
+          maxLength: 128
+          nullable: true
+        district:
+          type: string
+          maxLength: 128
+        city:
+          type: string
+          maxLength: 128
+        postal_code:
+          type: string
+          maxLength: 32
+          nullable: true
+        use_different_return_address:
+          type: boolean
+        return_contact_name:
+          type: string
+          maxLength: 255
+          nullable: true
+        return_contact_phone:
+          type: string
+          maxLength: 32
+          nullable: true
+        return_address_line:
+          type: string
+          nullable: true
+        return_ward:
+          type: string
+          maxLength: 128
+          nullable: true
+        return_district:
+          type: string
+          maxLength: 128
+          nullable: true
+        return_city:
+          type: string
+          maxLength: 128
+          nullable: true
+        operating_hours:
+          type: object
+          nullable: true
+        cutoff_time:
+          type: string
+          maxLength: 10
+          nullable: true
+        schedule_notes:
+          type: string
+          maxLength: 500
+          nullable: true
+        contacts_json:
+          type: object
+          nullable: true
+        printer_paper_size:
+          type: string
+          enum: [A6, A5, A4, K80]
+        printer_dpi:
+          type: integer
+          enum: [203, 300]
+        printer_name:
+          type: string
+          maxLength: 255
+          nullable: true
+        printer_auto_print:
+          type: boolean
+        printer_config:
+          type: object
+          nullable: true
+    WarehouseResponse:
+      type: object
+      required:
+        - success
+        - data
+        - meta
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: '#/components/schemas/Warehouse'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    ListWarehousesResponse:
+      type: object
+      required:
+        - success
+        - data
+        - meta
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Warehouse'
+        meta:
+          type: object
+          required:
+            - correlation_id
+            - total
+          properties:
+            correlation_id:
+              type: string
+            total:
+              type: integer
     CarrierAccountInput:
       type: object
       required: [carrier_code, alias, permission_profile, credential]
