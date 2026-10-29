@@ -234,6 +234,10 @@ async function main() {
     .set('Authorization', `Bearer ${ownerToken}`)
     .expect(200);
   assert.strictEqual(permRes.body.data.permissions.length, PLATFORM_PERMISSIONS.length);
+  assert.deepStrictEqual(
+    permRes.body.data.permissions.map((permission: { code: string }) => permission.code).sort(),
+    PLATFORM_PERMISSIONS.map((permission) => permission.code).sort()
+  );
   assert.ok(permRes.body.data.categories.length >= 6);
 
   // =========================================================================
