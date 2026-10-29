@@ -58,6 +58,8 @@ export interface AppConfig {
   RBAC_SEED_MAX_ATTEMPTS?: number;
   /** Backoff multiplier for RBAC platform seed */
   RBAC_SEED_BACKOFF_FACTOR?: number;
+  /** Maximum number of items accepted in a single bulk action batch (FEAT-COM-03). Default 100, bounded 1..1000. */
+  BULK_ACTION_MAX_ITEMS: number;
 }
 
 export class ConfigValidationError extends Error {
@@ -342,6 +344,28 @@ export function validateConfig(rawEnv: NodeJS.ProcessEnv = process.env): AppConf
     }
   }
 
+  // --- FEAT-COM-03: Bulk action max items ---
+  const bulkActionMaxItemsRaw = rawEnv.BULK_ACTION_MAX_ITEMS;
+  let bulkActionMaxItemsParsed: number | null = 100;
+  if (bulkActionMaxItemsRaw !== undefined && bulkActionMaxItemsRaw !== '') {
+    if (!/^\d+$/.test(bulkActionMaxItemsRaw)) {
+      bulkActionMaxItemsParsed = null;
+    } else {
+      const maxNum = Number(bulkActionMaxItemsRaw);
+      if (!Number.isSafeInteger(maxNum) || maxNum < 1 || maxNum > 1000) {
+        bulkActionMaxItemsParsed = null;
+      } else {
+        bulkActionMaxItemsParsed = maxNum;
+      }
+    }
+  }
+  if (bulkActionMaxItemsParsed === null) {
+    invalidFields.push(
+      'BULK_ACTION_MAX_ITEMS (must be an integer between 1 and 1000 when provided)'
+    );
+  }
+  const BULK_ACTION_MAX_ITEMS = bulkActionMaxItemsParsed ?? 100;
+
   if (invalidFields.length > 0) {
     throw new ConfigValidationError(invalidFields);
   }
@@ -373,7 +397,37 @@ export function validateConfig(rawEnv: NodeJS.ProcessEnv = process.env): AppConf
     RBAC_SEED_RETRY_INTERVAL_MS,
     RBAC_SEED_MAX_ATTEMPTS,
     RBAC_SEED_BACKOFF_FACTOR,
+    BULK_ACTION_MAX_ITEMS,
   };
+}
+
+/**
+ * Resolves the configured maximum items per bulk action batch (FEAT-COM-03).
+ * Fails closed on invalid configuration.
+ */
+export function resolveBulkActionMaxItems(override?: number): number {
+  if (override !== undefined) {
+    if (!Number.isSafeInteger(override) || override < 1 || override > 1000) {
+      throw new ConfigValidationError([
+        'BULK_ACTION_MAX_ITEMS (override must be between 1 and 1000)',
+      ]);
+    }
+    return override;
+  }
+  const raw = process.env.BULK_ACTION_MAX_ITEMS;
+  if (raw !== undefined && raw !== '') {
+    if (!/^\d+$/.test(raw)) {
+      throw new ConfigValidationError([
+        'BULK_ACTION_MAX_ITEMS (must be an integer between 1 and 1000)',
+      ]);
+    }
+    const parsed = Number(raw);
+    if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 1000) {
+      throw new ConfigValidationError(['BULK_ACTION_MAX_ITEMS (must be between 1 and 1000)']);
+    }
+    return parsed;
+  }
+  return 100;
 }
 
 // --- Correlation Identification ---

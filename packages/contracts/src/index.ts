@@ -554,5 +554,108 @@ export type ActivateUserRequest = components['schemas']['ActivateUserRequest'];
 export type ActivateUserResponse = components['schemas']['ActivateUserResponse'];
 export type DeactivateUserRequest = components['schemas']['DeactivateUserRequest'];
 export type DeactivateUserResponse = components['schemas']['DeactivateUserResponse'];
+
+// --- Shared Bulk Actions Framework (FEAT-COM-03) ---
+export const BulkEntityType = {
+  USERS: 'users',
+  BRANCHES: 'branches',
+  WAREHOUSES: 'warehouses',
+} as const;
+export type BulkEntityType = (typeof BulkEntityType)[keyof typeof BulkEntityType];
+
+export const BulkActionType = {
+  ACTIVATE: 'activate',
+  DEACTIVATE: 'deactivate',
+  ASSIGN_SCOPES: 'assign_scopes',
+  EXPORT_CSV: 'export_csv',
+} as const;
+export type BulkActionType = (typeof BulkActionType)[keyof typeof BulkActionType];
+
+export const BulkItemStatus = {
+  SUCCEEDED: 'SUCCEEDED',
+  FAILED: 'FAILED',
+} as const;
+export type BulkItemStatus = (typeof BulkItemStatus)[keyof typeof BulkItemStatus];
+
+export const BulkBatchStatus = {
+  COMPLETED: 'COMPLETED',
+  PARTIAL_FAILURE: 'PARTIAL_FAILURE',
+  FAILED: 'FAILED',
+} as const;
+export type BulkBatchStatus = (typeof BulkBatchStatus)[keyof typeof BulkBatchStatus];
+
+export const BulkErrorCode = {
+  VALIDATION_ERROR: 'VALIDATION_ERROR',
+  MAX_ITEMS_EXCEEDED: 'MAX_ITEMS_EXCEEDED',
+  EMPTY_ID_LIST: 'EMPTY_ID_LIST',
+  UNSUPPORTED_BULK_ENTITY: 'UNSUPPORTED_BULK_ENTITY',
+  UNSUPPORTED_BULK_ACTION: 'UNSUPPORTED_BULK_ACTION',
+  CONFIRMATION_REQUIRED: 'CONFIRMATION_REQUIRED',
+  IDEMPOTENCY_CONFLICT: 'IDEMPOTENCY_CONFLICT',
+  FORBIDDEN: 'FORBIDDEN',
+  SCOPE_FORBIDDEN: 'SCOPE_FORBIDDEN',
+  ITEM_NOT_FOUND: 'ITEM_NOT_FOUND',
+  CANNOT_REMOVE_LAST_OWNER: 'CANNOT_REMOVE_LAST_OWNER',
+  SELF_SUSPENSION_PROHIBITED: 'SELF_SUSPENSION_PROHIBITED',
+  CANNOT_DEACTIVATE_DEFAULT_BRANCH: 'CANNOT_DEACTIVATE_DEFAULT_BRANCH',
+  CANNOT_DEACTIVATE_DEFAULT_WAREHOUSE: 'CANNOT_DEACTIVATE_DEFAULT_WAREHOUSE',
+  PRIVILEGE_CEILING_EXCEEDED: 'PRIVILEGE_CEILING_EXCEEDED',
+} as const;
+export type BulkErrorCode = (typeof BulkErrorCode)[keyof typeof BulkErrorCode];
+
+export interface BulkActionItemError {
+  code: string;
+  message: string;
+  details?: unknown;
+}
+
+export interface BulkActionItemResult<T = unknown> {
+  id: string;
+  status: BulkItemStatus;
+  data?: T;
+  error?: BulkActionItemError;
+}
+
+export interface BulkActionRequest {
+  entity_type: BulkEntityType | string;
+  action: BulkActionType | string;
+  ids: string[];
+  params?: {
+    store_scopes?: string[];
+    warehouse_scopes?: string[];
+    carrier_account_scopes?: string[];
+    reason?: string;
+    [key: string]: unknown;
+  };
+  confirm?: boolean;
+  idempotency_key?: string;
+}
+
+export interface BulkActionResponseData {
+  batch_id: string;
+  entity_type: string;
+  action: string;
+  total_count: number;
+  success_count: number;
+  failure_count: number;
+  is_partial_failure: boolean;
+  results: BulkActionItemResult[];
+  succeeded_ids: string[];
+  failed_ids: string[];
+  export_payload?: string;
+}
+
+export interface BulkActionResponse {
+  data: BulkActionResponseData;
+  meta: {
+    correlation_id: string;
+    timestamp: string;
+  };
+}
+
+export function isDestructiveBulkAction(action: string): boolean {
+  return action === BulkActionType.DEACTIVATE;
+}
+
 // --- Generated OpenAPI Schema Types ---
 export type * from './openapi';
