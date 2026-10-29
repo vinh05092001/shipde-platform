@@ -151,6 +151,13 @@ function terminalBenchRows(html, config) {
       try {
         return JSON.parse(m[1])[1] || '';
       } catch {
+        try {
+          const raw = m[1].trim();
+          const match = raw.match(/^\[\s*\d+\s*,\s*'(.*)'\s*,?\s*\]$/s);
+          if (match) {
+            return match[1].replace(/\\n/g, '\n').replace(/\\'/g, "'");
+          }
+        } catch {}
         return '';
       }
     })
@@ -332,30 +339,58 @@ function benchlmRows(json, config) {
     const alias = resolveCreatorModelAlias(creator, model, config);
 
     // Official vs provisional displayScore
-    const officialScore = Number(item.displayScore);
-    const provScore = Number(item.provisionalDisplayScore);
+    const rawOfficial = item.displayScore;
+    const rawProv = item.provisionalDisplayScore;
+    const officialScore =
+      typeof rawOfficial === 'number'
+        ? rawOfficial
+        : typeof rawOfficial === 'string' && rawOfficial.trim() !== ''
+          ? Number(rawOfficial)
+          : null;
+    const provScore =
+      typeof rawProv === 'number'
+        ? rawProv
+        : typeof rawProv === 'string' && rawProv.trim() !== ''
+          ? Number(rawProv)
+          : null;
     const isProvisionalOnly =
-      item.rankingEligible === false ||
-      item.displayScore === null ||
-      item.displayScore === undefined;
+      item.rankingEligible === false || rawOfficial === null || rawOfficial === undefined;
 
     if (
       !isProvisionalOnly &&
+      officialScore !== null &&
       Number.isFinite(officialScore) &&
       officialScore >= 0 &&
       officialScore <= 100
     ) {
       benchmarks.benchlm = { score: Math.round(officialScore * 10) / 10, provisional: false };
-    } else if (Number.isFinite(provScore) && provScore >= 0 && provScore <= 100) {
+    } else if (
+      provScore !== null &&
+      Number.isFinite(provScore) &&
+      provScore >= 0 &&
+      provScore <= 100
+    ) {
       benchmarks.benchlm = { score: Math.round(provScore * 10) / 10, provisional: true };
     }
 
     if (item.benchmarks && typeof item.benchmarks === 'object') {
-      const ag = Number(item.benchmarks.agentic?.aaAgenticIndex);
-      if (Number.isFinite(ag) && ag >= 0 && ag <= 100)
+      const rawAg = item.benchmarks.agentic?.aaAgenticIndex;
+      const ag =
+        typeof rawAg === 'number'
+          ? rawAg
+          : typeof rawAg === 'string' && rawAg.trim() !== ''
+            ? Number(rawAg)
+            : null;
+      if (ag !== null && Number.isFinite(ag) && ag >= 0 && ag <= 100)
         benchmarks.aaAgenticIndex = Math.round(ag * 10) / 10;
-      const cd = Number(item.benchmarks.coding?.aaCodingIndex);
-      if (Number.isFinite(cd) && cd >= 0 && cd <= 100)
+      const rawCd = item.benchmarks.coding?.aaCodingIndex;
+      const cd =
+        typeof rawCd === 'number'
+          ? rawCd
+          : typeof rawCd === 'string' && rawCd.trim() !== ''
+            ? Number(rawCd)
+            : null;
+      if (cd !== null && Number.isFinite(cd) && cd >= 0 && cd <= 100)
         benchmarks.aaCodingIndex = Math.round(cd * 10) / 10;
     }
 
@@ -377,8 +412,8 @@ function benchlmRows(json, config) {
   return rows;
 }
 
-function resolveDescriptorSources(config) {
-  if (Array.isArray(config && config.sources) && config.sources.length) {
+function resolveDescriptorSources(config, isExplicit = true) {
+  if (isExplicit && Array.isArray(config && config.sources) && config.sources.length) {
     return config.sources
       .map((s) => {
         if (!s) return null;
@@ -430,11 +465,12 @@ function resolveDescriptorSources(config) {
 }
 
 async function publicDocuments(options = {}) {
+  const isExplicit = Boolean(options.descriptor);
   const config = options.descriptor || descriptor;
   const fetcher = options.fetch || globalThis.fetch;
   const retrievedAt = new Date(options.now || Date.now()).toISOString();
   const documents = [];
-  const entries = resolveDescriptorSources(config);
+  const entries = resolveDescriptorSources(config, isExplicit);
 
   for (const entry of entries) {
     const { kind, url, id } = entry;
@@ -465,7 +501,14 @@ async function publicDocuments(options = {}) {
       .map((row) => {
         let benchmarks = {};
         if (row.benchmarks && typeof row.benchmarks === 'object') {
-          benchmarks = row.benchmarks;
+          benchmarks = {};
+          for (const [k, v] of Object.entries(row.benchmarks)) {
+            if (v && typeof v === 'object' && v.score !== undefined && !v.provisional) {
+              benchmarks[k] = v.score;
+            } else {
+              benchmarks[k] = v;
+            }
+          }
         } else if (kind === 'aa') {
           benchmarks.intelligenceIndex = row.intelligenceIndex;
         } else {
