@@ -3,6 +3,13 @@
 const fs = require('fs');
 const path = require('path');
 
+let defaultDescriptor;
+try {
+  defaultDescriptor = require('./priors-sources/public.json');
+} catch {
+  defaultDescriptor = {};
+}
+
 const DEFAULT_PRIORS_FILE = path.join(__dirname, 'data', 'model-priors.json');
 const LIVE_PRIORS_FILE = path.join(__dirname, 'data', 'model-priors-live.json');
 const TIER_BONUSES = Object.freeze({ T1: 6, T2: 4, T3: 2, T4: 0 });
@@ -31,8 +38,85 @@ function loadPriors(file) {
   return { ranking: [] };
 }
 
+function getEffortVariants(config) {
+  const cfg = config || defaultDescriptor;
+  if (Array.isArray(cfg && cfg.effortVariants) && cfg.effortVariants.length) {
+    return cfg.effortVariants.slice().sort((a, b) => b.length - a.length);
+  }
+  return [];
+}
+
+function getDeploymentSuffixes(config) {
+  const cfg = config || defaultDescriptor;
+  if (Array.isArray(cfg && cfg.deploymentSuffixes) && cfg.deploymentSuffixes.length) {
+    return cfg.deploymentSuffixes.slice().sort((a, b) => b.length - a.length);
+  }
+  return [];
+}
+
+function splitModelEffort(value, config) {
+  if (typeof value !== 'string' || !value.trim()) return { base: null, effort: null };
+  const efforts = getEffortVariants(config);
+  let effort = null;
+  let raw = value.trim().toLowerCase();
+
+  const parenMatch = raw.match(/\s*\(([^)]*)\)/);
+  if (parenMatch) {
+    const inside = parenMatch[1].trim();
+    for (const eff of efforts) {
+      if (inside === eff || inside.includes(eff)) {
+        effort = eff;
+        break;
+      }
+    }
+    raw = raw.replace(/\s*\([^)]*\)/g, '');
+  }
+
+  raw = raw.split('::').pop();
+  raw = raw.split('/').pop();
+  raw = raw.split('@')[0];
+
+  const cfg = config || defaultDescriptor;
+  const stripSuffixes = (cfg && cfg.aliasRules && cfg.aliasRules.stripSuffixes) || [
+    ':free',
+    '-free',
+  ];
+  for (const sfx of stripSuffixes) {
+    if (raw.endsWith(sfx)) {
+      raw = raw.slice(0, -sfx.length);
+    }
+  }
+
+  raw = raw.replace(/[._\s]+/g, '-').replace(/^-+|-+$/g, '');
+
+  if (!effort) {
+    for (const eff of efforts) {
+      const suffix = '-' + eff;
+      if (raw.endsWith(suffix)) {
+        effort = eff;
+        raw = raw.slice(0, -suffix.length);
+        break;
+      }
+    }
+  }
+
+  const depSuffixes = getDeploymentSuffixes(config);
+  for (const dep of depSuffixes) {
+    const s1 = ':' + dep;
+    const s2 = '-' + dep;
+    if (raw.endsWith(s1)) raw = raw.slice(0, -s1.length);
+    else if (raw.endsWith(s2)) raw = raw.slice(0, -s2.length);
+  }
+
+  raw = raw.replace(/^-+|-+$/g, '');
+
+  return { base: raw || null, effort };
+}
+
 function normaliseCanonical(value) {
   if (typeof value !== 'string' || !value.trim()) return null;
+  const parsed = splitModelEffort(value);
+  if (parsed.base) return parsed.base;
   let canonical = value
     .trim()
     .toLowerCase()
@@ -90,6 +174,13 @@ function priorFor(candidate, role, priors, now) {
   if (resolved.matchedVia || match.matchedVia) {
     result.matchedVia = resolved.matchedVia || match.matchedVia;
     result.matchedBaseId = resolved.matchedBaseId || match.matchedBaseId;
+  }
+  if (
+    resolved.fallback ||
+    match.fallback ||
+    (Array.isArray(match.benchmarks) && match.benchmarks.some((b) => b.fallback))
+  ) {
+    result.fallback = true;
   }
   if (weighted.coverage > 0) {
     result.coverage = weighted.coverage;
@@ -205,6 +296,10 @@ function benchmarkMaxima(ranking) {
     for (const name of Object.keys(ROLE_BENCHMARK_WEIGHTS.planner)) {
       const score = benchmarkValue(row, name);
       if (score !== null) maxima[name] = Math.max(maxima[name] || 0, score);
+      for (const eff of Object.values(row.efforts || {})) {
+        const effScore = benchmarkValue(eff, name);
+        if (effScore !== null) maxima[name] = Math.max(maxima[name] || 0, effScore);
+      }
     }
   }
   return maxima;
@@ -244,44 +339,173 @@ function leaderboardModelId(value) {
     .replace(/[._\s]+/g, '-');
 }
 
-function matchModelPrior(modelId, ranking) {
-  const id = leaderboardModelId(modelId);
-  const byId = new Map(
-    ranking.filter(Boolean).map((row) => [leaderboardModelId(row.canonical), row])
-  );
-  if (byId.has(id)) return { entry: byId.get(id) };
-  const queue = [{ id, reasoning: false }];
-  const seen = new Set([id]);
-  for (const current of queue) {
-    if (!current.id) continue;
-    const deployment = current.id.replace(
-      /(?::(?:batch|flex|cloud)|-?\[\d+(?:-\d+)?[km]\]|-(?:fast|latest|volc|turbo|\d{4}-\d{2}-\d{2}|\d{8}|\d{6}|\d{4}))$/,
-      ''
-    );
-    const reasoning = current.id.replace(
-      /-(?:thinking|agentic|high|medium|low|minimal|max|xhigh|none|reasoning|non-reasoning)$/,
-      ''
-    );
-    for (const [base, effort] of [
-      [deployment, false],
-      [reasoning, true],
-    ]) {
-      if (base === current.id || seen.has(base)) continue;
-      seen.add(base);
-      const usedReasoning = current.reasoning || effort;
-      if (byId.has(base))
-        return {
-          entry: byId.get(base),
-          matchedVia: usedReasoning ? 'reasoning-variant' : 'variant-suffix',
-          matchedBaseId: byId.get(base).canonical,
-        };
-      queue.push({ id: base, reasoning: usedReasoning });
+function matchModelPrior(modelId, ranking, options) {
+  if (!modelId || !Array.isArray(ranking)) return null;
+  const config = (options && (options.config || options.descriptor)) || defaultDescriptor;
+  const { base, effort } = splitModelEffort(modelId, config);
+  const exactId = leaderboardModelId(modelId);
+
+  const byCanonical = new Map();
+  for (const row of ranking) {
+    if (!row) continue;
+    if (row.canonical) {
+      byCanonical.set(row.canonical, row);
+      const norm = leaderboardModelId(row.canonical);
+      if (norm) byCanonical.set(norm, row);
+      if (config && config.aliasRules && config.aliasRules.digitBoundaryHyphen) {
+        byCanonical.set(row.canonical.replace(/([a-z])(\d)/g, '$1-$2'), row);
+      }
     }
   }
-  return null;
+
+  // 1. Exact match on raw ID or exactId (prioritizes exact published entries)
+  if (exactId && byCanonical.has(exactId)) {
+    return { entry: byCanonical.get(exactId) };
+  }
+  const depStrippedId = exactId
+    ? exactId.replace(
+        /(?::(?:batch|flex|cloud)|-?\[\d+(?:-\d+)?[km]\]|-(?:fast|latest|volc|turbo|\d{4}-\d{2}-\d{2}|\d{8}|\d{6}|\d{4}))$/,
+        ''
+      )
+    : null;
+  if (depStrippedId && depStrippedId !== exactId && byCanonical.has(depStrippedId)) {
+    return {
+      entry: byCanonical.get(depStrippedId),
+      matchedVia: 'variant-suffix',
+      matchedBaseId: byCanonical.get(depStrippedId).canonical,
+    };
+  }
+
+  // 2. Direct match on base canonical
+  let matchedEntry = base ? byCanonical.get(base) : null;
+  if (
+    !matchedEntry &&
+    base &&
+    config &&
+    config.aliasRules &&
+    config.aliasRules.digitBoundaryHyphen
+  ) {
+    const withHyphen = base.replace(/^([a-z]+)(\d)/, '$1-$2');
+    const withoutHyphen = base.replace(/^([a-z]+)-(\d)/, '$1$2');
+    matchedEntry = byCanonical.get(withHyphen) || byCanonical.get(withoutHyphen);
+  }
+
+  // 3. Fallback queue for legacy unmerged deployment/reasoning suffixes
+  let matchedVia = undefined;
+  let matchedBaseId = undefined;
+  if (!matchedEntry && exactId) {
+    const queue = [{ id: exactId, reasoning: false }];
+    const seen = new Set([exactId]);
+    for (const current of queue) {
+      if (!current.id) continue;
+      const deployment = current.id.replace(
+        /(?::(?:batch|flex|cloud)|-?\[\d+(?:-\d+)?[km]\]|-(?:fast|latest|volc|turbo|\d{4}-\d{2}-\d{2}|\d{8}|\d{6}|\d{4}))$/,
+        ''
+      );
+      const reasoning = current.id.replace(
+        /-(?:thinking|agentic|high|medium|low|minimal|max|xhigh|none|reasoning|non-reasoning)$/,
+        ''
+      );
+      for (const [b, effFlag] of [
+        [deployment, false],
+        [reasoning, true],
+      ]) {
+        if (b === current.id || seen.has(b)) continue;
+        seen.add(b);
+        const usedReasoning = current.reasoning || effFlag;
+        if (byCanonical.has(b)) {
+          matchedEntry = byCanonical.get(b);
+          matchedVia = usedReasoning ? 'reasoning-variant' : 'variant-suffix';
+          matchedBaseId = matchedEntry.canonical;
+          break;
+        }
+        queue.push({ id: b, reasoning: usedReasoning });
+      }
+      if (matchedEntry) break;
+    }
+  }
+
+  if (!matchedEntry) return null;
+
+  // Plain legacy row without .efforts or array .benchmarks
+  if (
+    !matchedEntry.efforts &&
+    (!matchedEntry.benchmarks || !Array.isArray(matchedEntry.benchmarks))
+  ) {
+    return {
+      entry: matchedEntry,
+      matchedVia:
+        matchedVia ||
+        (effort
+          ? 'reasoning-variant'
+          : exactId !== matchedEntry.canonical
+            ? 'variant-suffix'
+            : undefined),
+      matchedBaseId: matchedBaseId || matchedEntry.canonical,
+    };
+  }
+
+  // If effort is requested on canonical entry with per-effort benchmarks
+  if (effort) {
+    const effortData = matchedEntry.efforts && matchedEntry.efforts[effort];
+    const effortBenchmarks =
+      effortData && Array.isArray(effortData.benchmarks) ? effortData.benchmarks.slice() : [];
+    const baseBenchmarks = Array.isArray(matchedEntry.benchmarks) ? matchedEntry.benchmarks : [];
+
+    let hasFallback = false;
+    let combinedBenchmarks;
+    if (effortBenchmarks.length === 0) {
+      combinedBenchmarks = baseBenchmarks;
+      hasFallback = true;
+    } else {
+      combinedBenchmarks = effortBenchmarks.slice();
+      for (const baseB of baseBenchmarks) {
+        if (!combinedBenchmarks.some((b) => b.name === baseB.name)) {
+          combinedBenchmarks.push({ ...baseB, fallback: true, fallbackFrom: 'base' });
+          hasFallback = true;
+        }
+      }
+    }
+
+    const effScores = combinedBenchmarks.map((b) => b.score).filter(Number.isFinite);
+    const effScore = effScores.length
+      ? Math.round((effScores.reduce((s, v) => s + v, 0) / effScores.length) * 10) / 10
+      : matchedEntry.score;
+
+    return {
+      entry: {
+        ...matchedEntry,
+        benchmarks: combinedBenchmarks,
+        effort,
+        score: effScore,
+        fallback: hasFallback,
+      },
+      effort,
+      matchedVia: 'reasoning-variant',
+      matchedBaseId: matchedEntry.canonical,
+      fallback: hasFallback,
+    };
+  }
+
+  // Base model query
+  const hasFallback =
+    Array.isArray(matchedEntry.benchmarks) && matchedEntry.benchmarks.some((b) => b.fallback);
+  return {
+    entry: matchedEntry,
+    matchedVia:
+      matchedVia ||
+      (exactId !== matchedEntry.canonical
+        ? hasFallback
+          ? 'reasoning-variant'
+          : 'variant-suffix'
+        : undefined),
+    matchedBaseId: matchedBaseId || matchedEntry.canonical,
+    fallback: hasFallback,
+  };
 }
 
-function mergePriorDocuments(documents, now) {
+function mergePriorDocuments(documents, now, options) {
+  const config = (options && (options.config || options.descriptor)) || defaultDescriptor;
   const byCanonical = new Map();
   const sources = [];
   for (const document of documents || []) {
@@ -289,9 +513,17 @@ function mergePriorDocuments(documents, now) {
       if (source && source.url) sources.push(Object.assign({}, source));
     }
     for (const item of (document && document.models) || (document && document.ranking) || []) {
-      const canonical = leaderboardModelId(item && (item.modelId || item.model || item.canonical));
+      const rawId = item && (item.modelId || item.model || item.canonical);
+      const { base: canonical, effort } = splitModelEffort(rawId, config);
       if (!canonical) continue;
-      const row = byCanonical.get(canonical) || { canonical, benchmarks: [], sources: [] };
+
+      const row = byCanonical.get(canonical) || {
+        canonical,
+        benchmarks: [],
+        efforts: {},
+        sources: [],
+      };
+
       const sourceRows = (item.sources || (item.source ? [item.source] : [])).filter(
         (source) => source && source.url
       );
@@ -303,7 +535,14 @@ function mergePriorDocuments(documents, now) {
             source.retrievedAt || document.retrievedAt || new Date(now || Date.now()).toISOString(),
         });
       }
+
       const benchmarks = item.benchmarks || {};
+      if (!effort && row.benchmarks.some((b) => b.fallback)) {
+        // Real base model row arrived after earlier effort row populated fallback benchmarks
+        row.benchmarks = row.benchmarks.filter((b) => !b.fallback);
+      }
+      const targetBenchmarks = effort ? [] : row.benchmarks;
+
       for (const [name, value] of Object.entries(benchmarks)) {
         const score = Number(value && typeof value === 'object' ? value.score : value);
         if (!Number.isFinite(score)) continue;
@@ -322,11 +561,13 @@ function mergePriorDocuments(documents, now) {
                 new Date(now || Date.now()).toISOString(),
             }
           : null;
-        row.benchmarks.push({ name, score, source: normalizedBenchmarkSource });
+        const benchEntry = { name, score, source: normalizedBenchmarkSource };
+        targetBenchmarks.push(benchEntry);
         if (normalizedBenchmarkSource && normalizedBenchmarkSource.url) {
           row.sources.push(normalizedBenchmarkSource);
         }
       }
+
       const directScore = benchmarkScore(item);
       if (directScore !== null) {
         const directSource = sourceRows[0]
@@ -343,12 +584,23 @@ function mergePriorDocuments(documents, now) {
                 new Date(now || Date.now()).toISOString(),
             }
           : null;
-        row.benchmarks.push({
+        targetBenchmarks.push({
           name: 'aggregate',
           score: directScore,
           source: directSource,
         });
       }
+
+      if (effort) {
+        row.efforts[effort] = row.efforts[effort] || { benchmarks: [] };
+        row.efforts[effort].benchmarks.push(...targetBenchmarks);
+        if (row.benchmarks.length === 0) {
+          for (const b of targetBenchmarks) {
+            row.benchmarks.push({ ...b, fallback: true, fallbackFrom: effort });
+          }
+        }
+      }
+
       if (item.releaseDate) row.releaseDate = item.releaseDate;
       if (Number.isFinite(Number(item.contextWindow)))
         row.contextWindow = Number(item.contextWindow);
@@ -360,6 +612,14 @@ function mergePriorDocuments(documents, now) {
     const score = scores.length
       ? scores.reduce((sum, value) => sum + value, 0) / scores.length
       : null;
+
+    for (const [effName, effData] of Object.entries(row.efforts || {})) {
+      const effScores = (effData.benchmarks || []).map((b) => b.score);
+      effData.score = effScores.length
+        ? Math.round((effScores.reduce((sum, v) => sum + v, 0) / effScores.length) * 10) / 10
+        : null;
+    }
+
     return Object.assign(row, {
       score: score === null ? null : Math.round(score * 10) / 10,
       codingTier: null,
@@ -514,4 +774,5 @@ module.exports = {
   weightedBenchmarkScore,
   DEFAULT_PRIORS_FILE,
   LIVE_PRIORS_FILE,
+  splitModelEffort,
 };

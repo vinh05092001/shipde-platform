@@ -2,6 +2,38 @@
   "kind": "public-leaderboards",
   "endpoint": "https://artificialanalysis.ai/leaderboards/models",
   "benchlm": "https://benchlm.ai/data/models.json",
+  "effortVariants": [
+    "high",
+    "medium",
+    "low",
+    "minimal",
+    "xhigh",
+    "thinking",
+    "agentic",
+    "none",
+    "reasoning",
+    "non-reasoning"
+  ],
+  "deploymentSuffixes": ["batch", "flex", "cloud", "fast", "latest", "volc", "turbo"],
+  "routerPrefixes": [
+    "gcli",
+    "cl",
+    "ag",
+    "ninerouter",
+    "9router",
+    "openrouter",
+    "nebius",
+    "xai",
+    "alims-intl",
+    "tokenrouter",
+    "ocg",
+    "ocz",
+    "bzl"
+  ],
+  "aliasRules": {
+    "stripSuffixes": [":free", "-free", ":batch", ":flex", ":cloud"],
+    "digitBoundaryHyphen": true
+  },
   "sources": [
     {
       "id": "artificial-analysis",
