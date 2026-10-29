@@ -147,6 +147,24 @@
       "comment": "OpenAI-compatible models API and base URL: https://internlm.intern-ai.org.cn/docEn/docs/Models/."
     },
     {
+      "id": "iteracompute",
+      "label": "IteraCompute",
+      "kind": "model-source",
+      "servesModels": true,
+      "harness": "direct-http",
+      "accessPath": "direct",
+      "endpoint": "https://api.iteracompute.com/v1",
+      "credential": {
+        "type": "api-key",
+        "env": "ITERACOMPUTE_API_KEY"
+      },
+      "verify": {
+        "method": "models-list",
+        "path": "/models"
+      },
+      "comment": "OpenAI-compatible models API: https://iteracompute.com; dynamic model discovery via /v1/models."
+    },
+    {
       "id": "agy-local",
       "accountProviders": ["antigravity"],
       "label": "agy (local)",
@@ -501,6 +519,18 @@
       "disposition": "deferred",
       "dispositionReason": "COMPROMISED_CREDENTIAL",
       "comment": "Credential is compromised; recorded for audit but never dispatched to."
+    },
+    {
+      "id": "opencode-zen",
+      "label": "OpenCode Zen (built-in, keyless free tier)",
+      "kind": "model-source",
+      "servesModels": true,
+      "endpoint": "https://opencode.ai/zen/v1",
+      "opencodeProvider": "opencode",
+      "opencodeBuiltin": true,
+      "credential": { "type": "none" },
+      "verify": { "method": "version-command", "command": "opencode --version" },
+      "comment": "Usable only from the opencode CLI: the HTTP endpoint answers FreeTierError. Models are the live opencode/* lines of `opencode models`."
     }
   ],
   "dispatch": {
@@ -511,6 +541,20 @@
       "complexity": "standard",
       "maxProbes": 16,
       "maxRoutesPerAccount": 3
+    },
+    "nineRouterWriterCombo": "shipde-writer",
+    "nineRouterWriterComboLimits": {
+      "contextWindow": 128000,
+      "maxOutputTokens": 8192
+    },
+    "fullRouteScan": {
+      "timeoutMs": 45000,
+      "maxTokens": 5,
+      "concurrency": 8,
+      "nineRouterConcurrency": 2,
+      "nineRouterModelsTimeoutMs": 10000,
+      "gatewayModelsTimeoutMs": 5000,
+      "externalModelsTimeoutMs": 4000
     },
     "routeEvidenceMaxAgeMs": 86400000,
     "maxWriterSelectionRounds": 12,
@@ -534,8 +578,6 @@
     "maxHostGateSummaryChars": 500,
     "rateLimitCooldownMs": 300000,
     "agyPoolTimeoutMs": 1800000,
-    "blockedNoRouteTimeoutMs": 3600000,
-    "blockedNoRoutePollIntervalMs": 30000,
     "retainedRootMaxAgeMs": 3600000,
     "verification": {
       "infraDependentScripts": ["test", "test:e2e", "test:integration"],

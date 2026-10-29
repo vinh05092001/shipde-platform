@@ -230,7 +230,6 @@ function getSourceAliases(id, registryOrOptions) {
   }
   return [...set];
 }
-
 /** The source with this id, or null. Retired ids resolve to null by design. */
 function getSource(id, registry) {
   if (!registry) return null;
@@ -468,7 +467,10 @@ function getDispatchConfig(registry, options = {}) {
       dispatch.routeEvidenceMaxAgeMs ??
       DEFAULT_DISPATCH.routeEvidenceMaxAgeMs
   );
-  const defaults = require('./sources.json').dispatch;
+  const defaults =
+    options.defaults !== undefined
+      ? options.defaults?.dispatch || options.defaults || {}
+      : require('./sources.json').dispatch;
   const configuredLimit = (key) => {
     const value = Number(options[key] ?? dispatch[key] ?? defaults[key]);
     if (!Number.isSafeInteger(value) || value <= 0) {
@@ -486,21 +488,17 @@ function getDispatchConfig(registry, options = {}) {
     }
     return value;
   };
-  const isExplicitFixture = Boolean(
-    registry &&
-    ((registry.file && registry.file !== DEFAULT_PATH) ||
-      (dispatch && 'hermesOrchestrator' in dispatch && !dispatch.hermesOrchestrator) ||
-      registry.isFixture)
-  );
+  const weightProfileByRole =
+    // Only an explicit registry/option choice: a fixture registry without it keeps
+    // the JEV/Controller weighting contract.
+    options.weightProfileByRole ?? dispatch.weightProfileByRole;
 
   const hermesOrchRaw =
     options.hermesOrchestrator !== undefined
       ? options.hermesOrchestrator
       : dispatch.hermesOrchestrator !== undefined
         ? dispatch.hermesOrchestrator
-        : isExplicitFixture
-          ? undefined
-          : defaults.hermesOrchestrator;
+        : defaults.hermesOrchestrator;
 
   let hermesOrchestrator = undefined;
   if (hermesOrchRaw) {
@@ -529,7 +527,9 @@ function getDispatchConfig(registry, options = {}) {
         'DISPATCH_CONFIG_INVALID: hermesOrchestrator.complexity must be a non-empty string'
       );
     }
-    const maxProbes = Number(hermesOrchRaw.maxProbes);
+    const maxProbes = Number(
+      hermesOrchRaw.maxProbes ?? dispatch.maxHermesProbes ?? defaults.maxHermesProbes
+    );
     if (!Number.isSafeInteger(maxProbes) || maxProbes <= 0) {
       throw new Error(
         'DISPATCH_CONFIG_INVALID: hermesOrchestrator.maxProbes must be a positive integer'
@@ -555,9 +555,45 @@ function getDispatchConfig(registry, options = {}) {
     throw new Error('CONFIG_MISSING: dispatch.hermesOrchestrator is required');
   }
 
+  const fullRouteScanDefaults = defaults.fullRouteScan || {};
+  const fullRouteScanRaw = dispatch.fullRouteScan || {};
+  const fullRouteScan = {
+    timeoutMs: Number(
+      options.fullScanTimeoutMs ?? fullRouteScanRaw.timeoutMs ?? fullRouteScanDefaults.timeoutMs
+    ),
+    maxTokens: Number(
+      options.fullScanMaxTokens ?? fullRouteScanRaw.maxTokens ?? fullRouteScanDefaults.maxTokens
+    ),
+    concurrency: Number(
+      options.concurrency ?? fullRouteScanRaw.concurrency ?? fullRouteScanDefaults.concurrency
+    ),
+    nineRouterConcurrency: Number(
+      fullRouteScanRaw.nineRouterConcurrency ?? fullRouteScanDefaults.nineRouterConcurrency
+    ),
+    nineRouterModelsTimeoutMs: Number(
+      fullRouteScanRaw.nineRouterModelsTimeoutMs ?? fullRouteScanDefaults.nineRouterModelsTimeoutMs
+    ),
+    gatewayModelsTimeoutMs: Number(
+      fullRouteScanRaw.gatewayModelsTimeoutMs ?? fullRouteScanDefaults.gatewayModelsTimeoutMs
+    ),
+    externalModelsTimeoutMs: Number(
+      fullRouteScanRaw.externalModelsTimeoutMs ?? fullRouteScanDefaults.externalModelsTimeoutMs
+    ),
+  };
+
   return {
+    fullRouteScan,
+    fullScanTimeoutMs: fullRouteScan.timeoutMs,
+    fullScanMaxTokens: fullRouteScan.maxTokens,
+    fullScanConcurrency: fullRouteScan.concurrency,
     ...(hermesOrchestrator ? { hermesOrchestrator } : {}),
     routeEvidenceMaxAgeMs,
+    ...(weightProfileByRole && typeof weightProfileByRole === 'object'
+      ? { weightProfileByRole: { ...weightProfileByRole } }
+      : {}),
+    ...(dispatch.operatorWeightProfiles && typeof dispatch.operatorWeightProfiles === 'object'
+      ? { operatorWeightProfiles: { ...dispatch.operatorWeightProfiles } }
+      : {}),
     maxWriterSelectionRounds: configuredLimit('maxWriterSelectionRounds'),
     maxLocalWriterFallbacks: configuredNonNegativeLimit('maxLocalWriterFallbacks'),
     maxHermesProbes: configuredLimit('maxHermesProbes'),
@@ -674,11 +710,16 @@ function resolveProbeTimeout(candidate, record, dispatchConfig, remainingMs) {
     } catch {}
   }
   const fallbackTimeout =
-    candidate?.harness === 'agy-pool'
+    // A 9router combo fails over across its members inside one call.
+    candidate?.harness === 'agy-pool' ||
+    (Array.isArray(candidate?.comboMembers) && candidate.comboMembers.length > 0)
       ? Number(cfg.schemaProbeBudgetMs) || defaultTimeout
       : defaultTimeout;
+  // A combo's latency depends on which member 9router reaches, so one
+  // measured call does not bound the next.
+  const isCombo = Array.isArray(candidate?.comboMembers) && candidate.comboMembers.length > 0;
   const baseTimeout =
-    Number.isFinite(measuredElapsedMs) && measuredElapsedMs > 0
+    !isCombo && Number.isFinite(measuredElapsedMs) && measuredElapsedMs > 0
       ? measuredElapsedMs + safetyMarginMs
       : fallbackTimeout;
   return Number.isFinite(remainingMs)

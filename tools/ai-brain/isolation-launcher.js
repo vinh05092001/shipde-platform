@@ -2953,6 +2953,11 @@ function getIsolatedLauncher() {
       }
 
       // DS-R02: validate that the source has an https endpoint (or http://127.0.0.1 / localhost) and credential.env
+      const isKeyless = Boolean(
+        selectedSource.opencodeBuiltin &&
+        selectedSource.credential &&
+        selectedSource.credential.type === 'none'
+      );
       const endpoint = selectedSource.endpoint;
       const credentialEnv =
         (selectedSource.credential &&
@@ -2967,9 +2972,7 @@ function getIsolatedLauncher() {
 
       // OpenCode's built-in provider (Zen free tier) needs neither a key nor a
       // provider block: opencode resolves `opencode/<model>` itself.
-      const builtin = Boolean(
-        selectedSource.opencodeBuiltin && selectedSource.credential?.type === 'none'
-      );
+      const builtin = isKeyless;
       if (builtin) {
         const builtinProvider = selectedSource.opencodeProvider;
         if (pinnedModel && !pinnedModel.startsWith(builtinProvider + '/')) {
@@ -3058,15 +3061,20 @@ function getIsolatedLauncher() {
 
       const providerOptions = {
         baseURL: selectedSource.endpoint,
-        apiKey: `{env:${credentialEnv}}`,
+        ...(credentialEnv ? { apiKey: `{env:${credentialEnv}}` } : {}),
         ...(selectedSource.headers && typeof selectedSource.headers === 'object'
           ? { headers: selectedSource.headers }
           : {}),
       };
       if (selectedSource.options && typeof selectedSource.options === 'object') {
         Object.assign(providerOptions, selectedSource.options);
-        // Ensure apiKey is strictly {env:credentialEnv} and never leaked/overwritten
+      }
+      // Ensure apiKey is strictly {env:credentialEnv} and never leaked/overwritten.
+      // On the keyless branch, delete any apiKey copied from options so no literal key is written.
+      if (credentialEnv) {
         providerOptions.apiKey = `{env:${credentialEnv}}`;
+      } else {
+        delete providerOptions.apiKey;
       }
 
       // Permission scoping: strictly worker root, shared deps and report dir; no whole-machine wildcard
@@ -3099,18 +3107,14 @@ function getIsolatedLauncher() {
         permission: {
           external_directory: extDirPerms,
         },
-        ...(builtin
-          ? {}
-          : {
-              provider: {
-                [providerId]: {
-                  npm: '@ai-sdk/openai-compatible',
-                  name: selectedSource.label || providerId,
-                  options: providerOptions,
-                  models: modelsMap,
-                },
-              },
-            }),
+        provider: {
+          [providerId]: {
+            npm: '@ai-sdk/openai-compatible',
+            name: selectedSource.label || providerId,
+            options: providerOptions,
+            models: modelsMap,
+          },
+        },
       });
       fs.writeFileSync(configPath, configData, 'utf8');
       appendGitInfoExclude(workerRoot, ['opencode.json']);
