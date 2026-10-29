@@ -596,7 +596,7 @@ test('TASK-AI-142 Finding 8: NO_CHANNEL stays model-scoped and does not block so
   assert.equal(isScopeBlocked(stateSibling, now), false);
 });
 
-test('TASK-AI-142 Finding 6: scanAllFullRoutes does not promote model failure to prefix or source scope', async () => {
+test('TASK-AI-142 Finding 6: scanAllFullRoutes does not promote model failure to prefix or source scope', async (t) => {
   const quotaState = { scopes: {} };
   const now = Date.now();
   const registry = {
@@ -643,12 +643,15 @@ test('TASK-AI-142 Finding 6: scanAllFullRoutes does not promote model failure to
     };
   };
 
-  const tmpLog = path.join(os.tmpdir(), `test-scan-${Date.now()}.jsonl`);
+  const dir = fixture(t);
+  const tmpLog = path.join(dir, 'scan.jsonl');
   try {
     await scanAllFullRoutes({
       quotaState,
       registry,
       jsonlFile: tmpLog,
+      mdFile: path.join(dir, 'scan.md'),
+      quotaStateFile: path.join(dir, 'quota-state.json'),
       now,
       fetchFn,
       source: '9router',

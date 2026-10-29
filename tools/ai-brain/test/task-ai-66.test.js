@@ -354,6 +354,8 @@ describe('TASK-AI-66 the Controller can see the sources that actually work', () 
         },
         evidenceDir: dirs.evidence,
         decisionDir: dirs.decisions,
+        home: dirs.home,
+        storePath: dirs.storePath,
         now: NOW,
       }
     );
@@ -403,7 +405,16 @@ describe('TASK-AI-66 the Controller can see the sources that actually work', () 
     );
     dispatchCommand(
       { 'report-outcome': outcomeFile, root: dirs.root },
-      { log: () => {}, error: () => {}, exit: () => {}, evidenceDir: dirs.evidence, now: NOW }
+      {
+        log: () => {},
+        error: () => {},
+        exit: () => {},
+        evidenceDir: dirs.evidence,
+        decisionDir: dirs.decisions,
+        home: dirs.home,
+        storePath: dirs.storePath,
+        now: NOW,
+      }
     );
 
     const data = evidence.loadEvidence(dirs.evidence);
@@ -447,7 +458,16 @@ describe('TASK-AI-66 the Controller can see the sources that actually work', () 
     );
     dispatchCommand(
       { 'report-outcome': outcomeFile, root: dirs.root },
-      { log: () => {}, error: () => {}, exit: () => {}, evidenceDir: dirs.evidence, now: NOW }
+      {
+        log: () => {},
+        error: () => {},
+        exit: () => {},
+        evidenceDir: dirs.evidence,
+        decisionDir: dirs.decisions,
+        home: dirs.home,
+        storePath: dirs.storePath,
+        now: NOW,
+      }
     );
 
     const data = evidence.loadEvidence(dirs.evidence);

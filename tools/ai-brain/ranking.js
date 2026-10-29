@@ -139,8 +139,9 @@ function reservationsForCandidate(candidate, reservations) {
  */
 function resolveCandidateHeadroom(candidate, ctx) {
   if (candidate.blocked) {
+    const isExhausted = candidate.blockReason === 'QUOTA_EXHAUSTED';
     return {
-      status: 'cooling',
+      status: isExhausted ? 'exhausted' : 'cooling',
       reason: candidate.blockReason || 'upstream/candidate blocked',
       worstRatio: 1,
       reservationsHeld: 0,
@@ -240,7 +241,14 @@ function resolveCandidateHeadroom(candidate, ctx) {
       const block = evidence.isCandidateBlocked(ctx.evidenceData, candidate, {
         now,
         quotaStateFile: ctx.quotaStateFile,
-        quotaState: ctx.quotaState,
+        quotaState:
+          ctx.quotaState !== undefined
+            ? ctx.quotaState
+            : ctx.useStoredQuota === false
+              ? null
+              : undefined,
+        useStoredQuota: ctx.useStoredQuota,
+        loadQuotaState: ctx.loadQuotaState,
       });
       if (block && block.blocked) {
         return {

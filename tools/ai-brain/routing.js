@@ -1359,7 +1359,7 @@ function scoreForProfile(candidate, assessment, ctx) {
  */
 function rankForProfile(candidates, profile, assessment, ctx) {
   const context = ctx || {};
-  if (!context.quotaState && context.loadQuotaState !== false) {
+  if (!context.quotaState && context.loadQuotaState !== false && context.useStoredQuota !== false) {
     try {
       context.quotaState = require('./quota-scan').loadQuotaState(context);
     } catch {}
@@ -1519,7 +1519,9 @@ function rankForProfile(candidates, profile, assessment, ctx) {
     }
     if (headroom.status === 'exhausted' || headroom.status === 'cooling') {
       reject(
-        headroom.status === 'exhausted' ? 'QUOTA_EXHAUSTED' : 'COOLDOWN_ACTIVE',
+        headroom.status === 'exhausted' || /QUOTA|EXHAUST/.test(headroom.reason || '')
+          ? 'QUOTA_EXHAUSTED'
+          : 'COOLDOWN_ACTIVE',
         c.accountId && c.accountId !== '*' ? 'account' : 'quotaScope'
       );
       continue;
@@ -1527,7 +1529,12 @@ function rankForProfile(candidates, profile, assessment, ctx) {
     const candidateBlock = evidence.isCandidateBlocked(context.evidenceData, c, {
       now: context.now,
       quotaStateFile: context.quotaStateFile,
-      quotaState: context.quotaState,
+      quotaState:
+        context.quotaState !== undefined
+          ? context.quotaState
+          : context.useStoredQuota === false
+            ? null
+            : undefined,
     });
     if (
       candidateBlock.blocked ||

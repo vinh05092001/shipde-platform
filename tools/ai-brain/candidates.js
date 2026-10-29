@@ -35,7 +35,7 @@ const path = require('path');
 const sourcesApi = require('./sources');
 const evidence = require('./evidence');
 const { toPositiveInteger } = require('./source-discovery');
-const comboLib = require('./ninerouter-combo');
+const comboLib = require('./writer-combo');
 const isNineRouterCandidate = comboLib.isNineRouterCandidate;
 const isIndividualNineRouterCandidate = comboLib.isIndividualNineRouterCandidate;
 
@@ -2833,9 +2833,9 @@ function annotateCandidates(candidates, evidenceData, opts) {
       ? opts
       : Object.assign({}, opts, {
           quotaState:
-            !opts || opts.loadQuotaState !== false
-              ? require('./quota-scan').loadQuotaState(opts || {})
-              : null,
+            opts && (opts.loadQuotaState === false || opts.useStoredQuota === false)
+              ? null
+              : require('./quota-scan').loadQuotaState(opts || {}),
         });
   for (const c of candidates) {
     if (c.legacy) {
