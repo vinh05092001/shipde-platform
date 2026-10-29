@@ -646,7 +646,12 @@ function executableFor(command, options) {
   // join() emits forward slashes, so a win32 test — or any caller that pins
   // platform — must resolve with path.win32 to see the real shim layout.
   const p = path.win32;
-  const dirs = (opts.path || process.env.PATH || '').split(p.delimiter).filter(Boolean);
+  const env = opts.env || process.env;
+  const dirs = (opts.path || env.PATH || '').split(p.delimiter).filter(Boolean);
+  const workerNpm = opts.workerNpmPath || env.SHIPDE_WORKER_NPM;
+  if (!opts.path && workerNpm && exists(workerNpm) && !dirs.includes(workerNpm)) {
+    dirs.unshift(workerNpm);
+  }
   for (const dir of dirs) {
     const shim = p.join(dir, command + '.cmd');
     if (!exists(shim)) continue;

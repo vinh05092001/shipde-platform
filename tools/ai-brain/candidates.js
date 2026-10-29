@@ -2821,13 +2821,13 @@ function siblingRouteProbe(key, probes) {
 
 function annotateCandidates(candidates, evidenceData, opts) {
   const annotOpts =
-    opts && opts.quotaState
+    opts && Object.prototype.hasOwnProperty.call(opts, 'quotaState')
       ? opts
       : Object.assign({}, opts, {
           quotaState:
-            opts && opts.loadQuotaState === false
-              ? null
-              : require('./quota-scan').loadQuotaState(opts),
+            !opts || opts.loadQuotaState !== false
+              ? require('./quota-scan').loadQuotaState(opts || {})
+              : null,
         });
   for (const c of candidates) {
     if (c.legacy) {

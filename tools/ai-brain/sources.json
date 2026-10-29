@@ -2,6 +2,19 @@
   "version": 2,
   "updatedAt": "2026-10-03",
   "note": "Adding a source is an entry here plus a qualification probe. Nothing in the dispatch path may branch on a source id.",
+  "effortVariants": [
+    "thinking",
+    "agentic",
+    "high",
+    "medium",
+    "low",
+    "minimal",
+    "max",
+    "xhigh",
+    "none",
+    "reasoning",
+    "non-reasoning"
+  ],
   "sources": [
     {
       "id": "9router",
@@ -372,6 +385,14 @@
     }
   ],
   "dispatch": {
+    "hermesOrchestrator": {
+      "qualityFloor": 60,
+      "costCeiling": 100000,
+      "weightProfile": "QUALITY_FIRST",
+      "complexity": "standard",
+      "maxProbes": 16,
+      "maxRoutesPerAccount": 3
+    },
     "nineRouterWriterCombo": "shipde-writer",
     "nineRouterWriterComboLimits": {
       "contextWindow": 128000,

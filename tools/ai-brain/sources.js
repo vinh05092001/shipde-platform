@@ -150,7 +150,6 @@ function bySource(registry) {
   return map;
 }
 
-let defaultRegistryCache = null;
 const aliasCache = new WeakMap();
 
 /**
@@ -178,14 +177,7 @@ function getSourceAliases(id, registryOrOptions) {
         registry = null;
       }
     } else {
-      if (!defaultRegistryCache) {
-        try {
-          defaultRegistryCache = loadSources();
-        } catch (_) {
-          defaultRegistryCache = null;
-        }
-      }
-      registry = defaultRegistryCache;
+      registry = null;
     }
   }
 
@@ -238,7 +230,6 @@ function getSourceAliases(id, registryOrOptions) {
   }
   return [...set];
 }
-
 /** The source with this id, or null. Retired ids resolve to null by design. */
 function getSource(id, registry) {
   if (!registry) return null;

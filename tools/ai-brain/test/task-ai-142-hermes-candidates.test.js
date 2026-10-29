@@ -862,7 +862,7 @@ test('TASK-AI-142 H3: context window unknown without documented source in hermes
   // Undocumented context window: candidate has undefined contextWindow
   const candidates = hermesSessionApi.assembleOpenAiCodexCandidates(
     { homeDir: fakeHome },
-    { fs: mockFs }
+    { fs: mockFs, registry: { sources: [] } }
   );
   assert.equal(candidates[0].contextWindow, undefined);
 
@@ -874,6 +874,9 @@ test('TASK-AI-142 H3: context window unknown without documented source in hermes
       candidateList: candidates,
       registry: { sources: [] },
       priorsData: { ranking: [] },
+      // Isolated from the machine's live route-health store (a real run may have
+      // put this account in cooldown).
+      routeHealth: { version: 1, paths: {}, accounts: {}, providers: {}, events: [] },
     }
   );
   assert.ok(selection.candidate, 'unknown context stays eligible');
