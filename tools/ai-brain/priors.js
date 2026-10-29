@@ -14,6 +14,7 @@ const DEFAULT_PRIORS_FILE = path.join(__dirname, 'data', 'model-priors.json');
 const LIVE_PRIORS_FILE = path.join(__dirname, 'data', 'model-priors-live.json');
 const TIER_BONUSES = Object.freeze({ T1: 6, T2: 4, T3: 2, T4: 0 });
 const STALE_AFTER_MS = 30 * 24 * 60 * 60 * 1000;
+const CLOCK_SKEW_TOLERANCE_MS = 5000;
 
 // General benchmarks used only when a model has none of its role's weighted ones.
 const FALLBACK_BENCHMARKS = Object.freeze(['aggregate', 'benchlm']);
@@ -419,12 +420,7 @@ function priorFor(candidate, role, priors, now) {
   const profile = roleBenchmarkProfile(role, priors?.roleWeights ? priors : priors?.config);
   const rankingMaxima = benchmarkMaxima(ranking, profile);
   const weighted = resolveRoutingBenchmark(match, profile, rankingMaxima);
-  let priorScore =
-    weighted.coverage > 0
-      ? weighted.score
-      : Number.isFinite(match.score)
-        ? Math.round(Math.max(0, Math.min(100, match.score)))
-        : null;
+  let priorScore = weighted.coverage > 0 ? weighted.score : null;
 
   if (isMatchProvisional && Number.isFinite(priorScore)) {
     const officialRows = ranking.filter((r) => !r.provisional && r !== match);
@@ -541,7 +537,7 @@ function isStale(retrievedAt, now) {
   const currentTime = now || Date.now();
   return (
     !Number.isFinite(timestamp) ||
-    timestamp > currentTime ||
+    timestamp > currentTime + CLOCK_SKEW_TOLERANCE_MS ||
     currentTime - timestamp > STALE_AFTER_MS
   );
 }
