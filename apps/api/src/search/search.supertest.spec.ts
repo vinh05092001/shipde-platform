@@ -379,7 +379,7 @@ async function runSearchSupertestSuite() {
       data: {
         id: shipmentIdA,
         merchant_id: merchantIdA,
-        branch_id: branch1Id,
+        branch_id: null,
         warehouse_id: wh1Id,
         order_id: orderIdA,
         order_code: orderCodeA,
@@ -390,7 +390,7 @@ async function runSearchSupertestSuite() {
       },
     });
 
-    const trackingCodeA2 = `GHN${testSuffix}A2`;
+    const trackingCodeA2 = `GHN${testSuffix}B`;
     const shipmentIdA2 = randomUUID();
     await prisma.shipment.create({
       data: {
