@@ -467,7 +467,10 @@ function getDispatchConfig(registry, options = {}) {
       dispatch.routeEvidenceMaxAgeMs ??
       DEFAULT_DISPATCH.routeEvidenceMaxAgeMs
   );
-  const defaults = require('./sources.json').dispatch;
+  const defaults =
+    options.defaults !== undefined
+      ? options.defaults?.dispatch || options.defaults || {}
+      : require('./sources.json').dispatch;
   const configuredLimit = (key) => {
     const value = Number(options[key] ?? dispatch[key] ?? defaults[key]);
     if (!Number.isSafeInteger(value) || value <= 0) {
@@ -493,7 +496,9 @@ function getDispatchConfig(registry, options = {}) {
   const hermesOrchRaw =
     options.hermesOrchestrator !== undefined
       ? options.hermesOrchestrator
-      : dispatch.hermesOrchestrator;
+      : dispatch.hermesOrchestrator !== undefined
+        ? dispatch.hermesOrchestrator
+        : defaults.hermesOrchestrator;
 
   let hermesOrchestrator = undefined;
   if (hermesOrchRaw) {
