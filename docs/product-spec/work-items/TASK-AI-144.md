@@ -7,7 +7,7 @@
 | Work Item ID | `TASK-AI-144` |
 | Feature ID | `N/A — controller priors normalization and effort variant resolution` |
 | Status | `IN_PROGRESS` |
-| Delivery order | `264` |
+| Delivery order | `265` |
 | Dependencies | `TASK-AI-143` |
 | Assigned author | `GEMINI` |
 | Risk | `LOW` |
