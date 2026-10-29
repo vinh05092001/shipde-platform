@@ -2381,7 +2381,7 @@ function receiptCount(value) {
  * Extracts and normalizes the recorded review result for one work item from a checkpoint.
  * Supports checkpoint.reviews as array or object, as well as completedReviews/reviewResults.
  */
-function extractCheckpointReview(checkpoint, workItemId) {
+function extractCheckpointReview(checkpoint, workItemId, logOpts) {
   if (!checkpoint) return null;
   let raw = null;
   if (Array.isArray(checkpoint.reviews)) {
@@ -2406,6 +2406,18 @@ function extractCheckpointReview(checkpoint, workItemId) {
     );
   } else if (!raw && checkpoint.reviewResults && typeof checkpoint.reviewResults === 'object') {
     raw = checkpoint.reviewResults[workItemId];
+  }
+  if (!raw && checkpoint.liveSteps && checkpoint.liveSteps[workItemId]) {
+    const liveStep = checkpoint.liveSteps[workItemId];
+    if (liveStep && liveStep.review) {
+      if (liveStep.review.receipt) {
+        raw = liveStep.review.receipt;
+      } else if (liveStep.review.entry && logOpts) {
+        raw = normalizeReviewForCheckpoint(liveStep.review.entry, workItemId, logOpts);
+      } else if (liveStep.review.entry) {
+        raw = liveStep.review.entry;
+      }
+    }
   }
   if (!raw || typeof raw !== 'object') return null;
 
@@ -4340,19 +4352,9 @@ async function runOrchestration(goal, opts) {
         from: checkpointOnDisk.step || 'completed',
       };
       const savedStep = liveSteps[item.id];
-      const rec = extractCheckpointReview(checkpointOnDisk, item.id);
-      const isAlreadyPublished = publishedBefore.has(item.id);
-      const checkpointReviewError = isAlreadyPublished
-        ? null
-        : validateCheckpointReceipt(rec, item, o);
-      const checkpointSha =
-        (rec && rec.sha) ||
-        (savedStep &&
-          savedStep.review &&
-          (savedStep.review.entry?.sha || savedStep.review.finalSha || savedStep.review.sha)) ||
-        (savedStep && savedStep.launch && savedStep.launch.workerSha) ||
-        (savedStep && savedStep.passedRef && savedStep.passedRef.split('/').pop()) ||
-        null;
+      const rec = extractCheckpointReview(checkpointOnDisk, item.id, logOpts);
+      const checkpointReviewError = validateCheckpointReceipt(rec, item, o);
+      const checkpointSha = rec && rec.sha ? rec.sha : null;
       const anchoredEvidence =
         !checkpointReviewError && rec && rec.decisionLog && rec.decisionLog.dir
           ? decisionLogEvidenceFor(
@@ -4368,35 +4370,15 @@ async function runOrchestration(goal, opts) {
         workItemId: item.id,
         sha: checkpointSha,
         reviewedSha: checkpointSha,
-        reviewerIdentity: rec
-          ? rec.reviewer
-          : (savedStep && savedStep.review && savedStep.review.entry?.reviewerIdentity) || null,
-        reviewer: rec
-          ? rec.reviewer
-          : (savedStep && savedStep.review && savedStep.review.entry?.reviewer) || null,
-        writerCandidateKey: rec
-          ? rec.writerCandidateKey
-          : (savedStep && savedStep.review && savedStep.review.entry?.writerCandidateKey) || null,
-        workerRoot: rec
-          ? rec.workerRoot
-          : (savedStep && savedStep.review && savedStep.review.entry?.workerRoot) || null,
-        publishCwd: rec
-          ? rec.publishCwd
-          : (savedStep && savedStep.review && savedStep.review.entry?.publishCwd) || null,
-        branch: rec
-          ? rec.branch
-          : (savedStep && savedStep.review && savedStep.review.entry?.branch) ||
-            (savedStep && savedStep.publication && savedStep.publication.branch) ||
-            null,
-        baseSha: rec
-          ? rec.baseSha
-          : (savedStep && savedStep.review && savedStep.review.entry?.baseSha) || null,
-        draftTitle: rec
-          ? rec.draftTitle
-          : (savedStep && savedStep.review && savedStep.review.entry?.draftTitle) || null,
-        tests: rec
-          ? rec.tests
-          : (savedStep && savedStep.review && savedStep.review.entry?.tests) || null,
+        reviewerIdentity: rec ? rec.reviewer : null,
+        reviewer: rec ? rec.reviewer : null,
+        writerCandidateKey: rec ? rec.writerCandidateKey : null,
+        workerRoot: rec ? rec.workerRoot : null,
+        publishCwd: rec ? rec.publishCwd : null,
+        branch: rec ? rec.branch : null,
+        baseSha: rec ? rec.baseSha : null,
+        draftTitle: rec ? rec.draftTitle : null,
+        tests: rec ? rec.tests : null,
         reviewRounds: rec ? rec.reviewRounds : null,
         repairCount: rec ? rec.repairCount : null,
         openFindings: rec ? rec.openFindings : null,
@@ -6681,8 +6663,9 @@ async function runOrchestration(goal, opts) {
     if (reviewEntry && reviewEntry.workItemId === item.id) {
       // The interrupt window (TASK-AI-120 RI-R01): the PASS is checkpointed
       // before the import, so a kill here resumes into a step with no passedRef.
+      const receipt = normalizeReviewForCheckpoint(reviewEntry, item.id, logOpts);
       persistStep(item.id, 'review_completed', {
-        review: { status: reviewed.status, entry: reviewEntry },
+        review: { status: reviewed.status, entry: reviewEntry, receipt },
       });
     }
     if (reviewed.status === ReviewStatus.COMPLETED) {
@@ -6693,10 +6676,12 @@ async function runOrchestration(goal, opts) {
         : null;
       if (reviewEntry) {
         if (passedRef) reviewEntry.passedRef = passedRef;
+        const receipt = normalizeReviewForCheckpoint(reviewEntry, item.id, logOpts);
         persistStep(item.id, 'review_completed', {
           review: {
             status: reviewed.status,
             entry: reviewEntry,
+            receipt,
             passedRef: passedRef || undefined,
           },
         });

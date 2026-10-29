@@ -1936,3 +1936,61 @@ test('Round 7 Finding 16: defaultGit hook enforcement coerces/rejects non-string
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test('Round 8 Finding 1: published checkpoint entries retain receipt validation and do not adopt launch/passedRef fallback SHAs', async () => {
+  const orchestrate = require('../orchestrate');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'r8-f1-receipt-'));
+  try {
+    const workItemId = 'FEAT-R8-RECEIPT-01';
+    const launchSha = '2'.repeat(40);
+    const passedSha = '3'.repeat(40);
+    const checkpointFile = path.join(tmp, 'checkpoint.json');
+
+    // Checkpoint has publication in liveSteps, but NO review record
+    const checkpointData = {
+      liveSteps: {
+        [workItemId]: {
+          launch: {
+            workerSha: launchSha,
+          },
+          passedRef: `refs/shipde/passed/${workItemId}/${passedSha}`,
+          publication: {
+            status: orchestrate.PublicationStatus.PUBLISHED_DRAFT,
+            branch: 'feat/test-r8',
+            result: { number: 99, branch: 'feat/test-r8' },
+          },
+        },
+      },
+    };
+    fs.writeFileSync(checkpointFile, JSON.stringify(checkpointData), 'utf8');
+
+    const result = await orchestrate.runOrchestration(workItemId, {
+      specs: [{ id: workItemId }],
+      checkpointFile,
+      decisionDir: tmp,
+      ciSleep: async () => {},
+      ciPollIntervalMs: 1,
+      ciTimeoutMs: 10,
+    });
+
+    const review = result.reviews && result.reviews[0];
+    assert.ok(review, 'review entry reconstructed from checkpoint');
+    assert.match(
+      String(review.checkpointReviewError || ''),
+      /NO_REVIEWED_COMMIT: missing review record in checkpoint/,
+      'receipt validation was not bypassed for published checkpoint'
+    );
+    assert.equal(
+      review.sha,
+      null,
+      'reviewed SHA must not fall back to launch.workerSha or passedRef'
+    );
+    assert.equal(
+      review.reviewedSha,
+      null,
+      'reviewed SHA must not fall back to launch.workerSha or passedRef'
+    );
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
