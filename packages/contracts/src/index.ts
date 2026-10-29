@@ -554,5 +554,33 @@ export type ActivateUserRequest = components['schemas']['ActivateUserRequest'];
 export type ActivateUserResponse = components['schemas']['ActivateUserResponse'];
 export type DeactivateUserRequest = components['schemas']['DeactivateUserRequest'];
 export type DeactivateUserResponse = components['schemas']['DeactivateUserResponse'];
+
+// --- Branch Contracts (FEAT-ORG-02) ---
+export const BranchAuditEvent = {
+  BRANCH_CREATED: 'BRANCH_CREATED',
+  BRANCH_UPDATED: 'BRANCH_UPDATED',
+  BRANCH_ACTIVATED: 'BRANCH_ACTIVATED',
+  BRANCH_DEACTIVATED: 'BRANCH_DEACTIVATED',
+  BRANCH_DELETED: 'BRANCH_DELETED',
+} as const;
+export type BranchAuditEvent = (typeof BranchAuditEvent)[keyof typeof BranchAuditEvent];
+
+export const BranchErrorCode = {
+  BRANCH_NOT_FOUND: 'BRANCH_NOT_FOUND',
+  BRANCH_CODE_EXISTS: 'BRANCH_CODE_EXISTS',
+  CANNOT_DEACTIVATE_DEFAULT_BRANCH: 'CANNOT_DEACTIVATE_DEFAULT_BRANCH',
+  CANNOT_DELETE_DEFAULT_BRANCH: 'CANNOT_DELETE_DEFAULT_BRANCH',
+  FORBIDDEN: 'FORBIDDEN',
+  VALIDATION_ERROR: 'VALIDATION_ERROR',
+} as const;
+export type BranchErrorCode = (typeof BranchErrorCode)[keyof typeof BranchErrorCode];
+
+export type Branch = components['schemas']['Branch'];
+export type CreateBranchInput = components['schemas']['CreateBranchInput'];
+export type UpdateBranchInput = components['schemas']['UpdateBranchInput'];
+export type BranchResponse = components['schemas']['BranchResponse'];
+export type ListBranchesResponse = components['schemas']['ListBranchesResponse'];
+export type DeleteBranchResponse = components['schemas']['DeleteBranchResponse'];
+
 // --- Generated OpenAPI Schema Types ---
 export type * from './openapi';

@@ -899,6 +899,98 @@ export interface paths {
     patch: operations['updateShopById'];
     trace?: never;
   };
+  '/branches': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List branches (FEAT-ORG-02)
+     * @description Returns branches for the authenticated tenant. Filtered by user store_scopes when scoped.
+     */
+    get: operations['listBranches'];
+    put?: never;
+    /**
+     * Create branch (FEAT-ORG-02)
+     * @description Creates a new branch under the merchant. Requires iam:shop_config capability.
+     */
+    post: operations['createBranch'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/branches/{id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get branch by ID (FEAT-ORG-02)
+     * @description Returns branch details by ID with tenant and store scope enforcement.
+     */
+    get: operations['getBranchById'];
+    put?: never;
+    post?: never;
+    /**
+     * Delete branch (FEAT-ORG-02)
+     * @description Deletes branch by ID. Requires iam:shop_config capability. Default branch cannot be deleted.
+     */
+    delete: operations['deleteBranch'];
+    options?: never;
+    head?: never;
+    /**
+     * Update branch (FEAT-ORG-02)
+     * @description Updates branch information. Requires iam:shop_config capability.
+     */
+    patch: operations['updateBranch'];
+    trace?: never;
+  };
+  '/branches/{id}/activate': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Activate branch (FEAT-ORG-02)
+     * @description Sets branch status to ACTIVE. Requires iam:shop_config capability.
+     */
+    post: operations['activateBranch'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/branches/{id}/deactivate': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Deactivate branch (FEAT-ORG-02)
+     * @description Sets branch status to INACTIVE. Default branch cannot be deactivated. Requires iam:shop_config capability.
+     */
+    post: operations['deactivateBranch'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/admin/shops': {
     parameters: {
       query?: never;
@@ -1442,6 +1534,62 @@ export interface components {
       data: {
         shops: components['schemas']['ShopProfile'][];
       };
+      meta: components['schemas']['Meta'];
+    };
+    Branch: {
+      /** Format: uuid */
+      id: string;
+      /** Format: uuid */
+      merchant_id: string;
+      name: string;
+      code: string;
+      address?: string | null;
+      phone?: string | null;
+      is_default: boolean;
+      /** @enum {string} */
+      status: 'ACTIVE' | 'INACTIVE';
+      /** Format: date-time */
+      created_at: string;
+      /** Format: date-time */
+      updated_at: string;
+    };
+    CreateBranchInput: {
+      name: string;
+      code: string;
+      address?: string | null;
+      phone?: string | null;
+      /** @default false */
+      is_default: boolean;
+      /**
+       * @default ACTIVE
+       * @enum {string}
+       */
+      status: 'ACTIVE' | 'INACTIVE';
+    };
+    UpdateBranchInput: {
+      name?: string;
+      code?: string;
+      address?: string | null;
+      phone?: string | null;
+      is_default?: boolean;
+      /** @enum {string} */
+      status?: 'ACTIVE' | 'INACTIVE';
+    };
+    BranchResponse: {
+      success: boolean;
+      data: components['schemas']['Branch'];
+      meta: components['schemas']['Meta'];
+    };
+    ListBranchesResponse: {
+      success: boolean;
+      data: {
+        branches: components['schemas']['Branch'][];
+      };
+      meta: components['schemas']['Meta'];
+    };
+    DeleteBranchResponse: {
+      success: boolean;
+      message: string;
       meta: components['schemas']['Meta'];
     };
     CarrierAccountInput: {
@@ -3520,6 +3668,192 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['ShopProfileResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['SessionInvalid'];
+      403: components['responses']['Error'];
+      404: components['responses']['Error'];
+    };
+  };
+  listBranches: {
+    parameters: {
+      query?: {
+        status?: 'ACTIVE' | 'INACTIVE';
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description List of branches */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ListBranchesResponse'];
+        };
+      };
+      401: components['responses']['SessionInvalid'];
+      403: components['responses']['Error'];
+    };
+  };
+  createBranch: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['CreateBranchInput'];
+      };
+    };
+    responses: {
+      /** @description Created branch */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['BranchResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['SessionInvalid'];
+      403: components['responses']['Error'];
+      409: components['responses']['Error'];
+    };
+  };
+  getBranchById: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Branch details */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['BranchResponse'];
+        };
+      };
+      401: components['responses']['SessionInvalid'];
+      403: components['responses']['Error'];
+      404: components['responses']['Error'];
+    };
+  };
+  deleteBranch: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Deleted branch confirmation */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['DeleteBranchResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['SessionInvalid'];
+      403: components['responses']['Error'];
+      404: components['responses']['Error'];
+    };
+  };
+  updateBranch: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['UpdateBranchInput'];
+      };
+    };
+    responses: {
+      /** @description Updated branch */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['BranchResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['SessionInvalid'];
+      403: components['responses']['Error'];
+      404: components['responses']['Error'];
+      409: components['responses']['Error'];
+    };
+  };
+  activateBranch: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Activated branch */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['BranchResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['SessionInvalid'];
+      403: components['responses']['Error'];
+      404: components['responses']['Error'];
+    };
+  };
+  deactivateBranch: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Deactivated branch */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['BranchResponse'];
         };
       };
       400: components['responses']['Error'];
