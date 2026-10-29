@@ -38,8 +38,8 @@ function preferKnownGood(result, candidates, options = {}) {
     result.rejected = result.rejected || [];
     for (const row of result.ranking) {
       const c = byKey.get(row.candidateKey) || row;
-      const scopeState = quotaScan.getQuotaScopeState(c, quotaState);
-      if (scopeState && quotaScan.isScopeBlocked(scopeState, now)) {
+      const scopeState = quotaScan.getQuotaScopeState(c, quotaState, { ...options, now });
+      if (scopeState && quotaScan.isScopeBlocked(scopeState, now, options)) {
         result.rejected.push({
           candidateKey: row.candidateKey,
           reasonCode: `QUOTA_SCOPE_${scopeState.code}`,
@@ -60,16 +60,29 @@ function preferKnownGood(result, candidates, options = {}) {
   result.ranking = result.ranking
     .map((row, index) => {
       const c = byKey.get(row.candidateKey) || row;
+      const proven =
+        c.hasFreshEvidence !== undefined
+          ? Boolean(c.hasFreshEvidence)
+          : routeEvidence.hasFreshOkOrCompletion(c, quotaState, {
+              ...context,
+              now,
+              evidenceData: data,
+              routeHealth: store,
+            });
       return {
         row,
         index,
+        proven,
         live: recentRouteSuccess(c, store, context),
         work: routeEvidence.hasPriorWorkPass(c, data.combinations),
       };
     })
     .sort(
       (a, b) =>
-        Number(b.work) - Number(a.work) || Number(b.live) - Number(a.live) || a.index - b.index
+        Number(b.work) - Number(a.work) ||
+        Number(b.live) - Number(a.live) ||
+        Number(b.proven) - Number(a.proven) ||
+        a.index - b.index
     )
     .map(({ row }) => row);
   result.chosen = result.ranking[0].candidateKey;

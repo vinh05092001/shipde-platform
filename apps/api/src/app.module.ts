@@ -15,6 +15,7 @@ import { RbacModule } from './rbac/rbac.module';
 import { InvitationsModule } from './invitations/invitations.module';
 import { UsersModule } from './users/users.module';
 import { ShopsModule } from './shops/shops.module';
+import { WarehousesModule } from './warehouses/warehouses.module';
 import { SearchModule } from './search/search.module';
 
 @Module({
@@ -25,6 +26,7 @@ import { SearchModule } from './search/search.module';
     InvitationsModule,
     UsersModule,
     ShopsModule,
+    WarehousesModule,
     SearchModule,
   ],
   controllers: [HealthController],

@@ -471,3 +471,84 @@ test('PR C (Item 1): probeRankedRoutes enforces maxConcurrentProbes from configu
 
   assert.equal(maxObservedInFlight, 3, 'concurrency must be capped at 3');
 });
+
+test('TASK-AI-142 Finding 8: sources.js does not contain test-only isFixture branches', () => {
+  const sourcesCode = fs.readFileSync(path.join(__dirname, '..', 'sources.js'), 'utf8');
+  assert.equal(
+    sourcesCode.includes('isFixture'),
+    false,
+    'production code must not contain isFixture check'
+  );
+  assert.equal(
+    sourcesCode.includes('isExplicitFixture'),
+    false,
+    'production code must not contain isExplicitFixture'
+  );
+
+  // Verify hermesOrchestrator is derived strictly from options/dispatch/defaults
+  const orchConfig = {
+    qualityFloor: 70,
+    costCeiling: 1000,
+    weightProfile: 'BALANCED',
+    complexity: 'standard',
+    maxProbes: 3,
+    maxRoutesPerAccount: 2,
+  };
+  const regWithOrch = { dispatch: { hermesOrchestrator: orchConfig } };
+  const cfg = sourcesApi.getDispatchConfig(regWithOrch);
+  assert.deepEqual(cfg.hermesOrchestrator, orchConfig);
+});
+
+test('TASK-AI-142 Finding 14: hermesOrchestrator falls back to defaults when unconfigured, fails closed when missing everywhere', () => {
+  const defaults = require('../sources.json').dispatch;
+
+  // 1. Default-only case: no options override, no registry override -> defaults.hermesOrchestrator is preserved
+  const defaultCfg = sourcesApi.getDispatchConfig({ dispatch: {} });
+  assert.ok(
+    defaultCfg.hermesOrchestrator,
+    'default hermesOrchestrator configuration must not be discarded'
+  );
+  assert.deepEqual(defaultCfg.hermesOrchestrator, {
+    qualityFloor: Number(defaults.hermesOrchestrator.qualityFloor),
+    costCeiling: Number(defaults.hermesOrchestrator.costCeiling),
+    weightProfile: defaults.hermesOrchestrator.weightProfile,
+    complexity: defaults.hermesOrchestrator.complexity,
+    maxProbes: Number(defaults.hermesOrchestrator.maxProbes),
+    maxRoutesPerAccount: Number(defaults.hermesOrchestrator.maxRoutesPerAccount),
+  });
+
+  // 2. Options override beats dispatch and defaults
+  const optionsOrch = {
+    qualityFloor: 85,
+    costCeiling: 50000,
+    weightProfile: 'LATENCY_FIRST',
+    complexity: 'standard',
+    maxProbes: 4,
+    maxRoutesPerAccount: 1,
+  };
+  const overriddenCfg = sourcesApi.getDispatchConfig(
+    { dispatch: { hermesOrchestrator: { ...optionsOrch, qualityFloor: 50 } } },
+    { hermesOrchestrator: optionsOrch }
+  );
+  assert.deepEqual(overriddenCfg.hermesOrchestrator, optionsOrch);
+
+  // 3. Explicitly null in dispatch leaves hermesOrchestrator undefined and fails closed when required
+  const nullReg = { dispatch: { hermesOrchestrator: null } };
+  const nullCfg = sourcesApi.getDispatchConfig(nullReg);
+  assert.equal(nullCfg.hermesOrchestrator, undefined);
+  assert.throws(
+    () => sourcesApi.getDispatchConfig(nullReg, { requireHermesOrchestrator: true }),
+    /CONFIG_MISSING: dispatch\.hermesOrchestrator is required/
+  );
+
+  // 4. Missing everywhere (options, dispatch, and defaults omitted) fails closed when required
+  const missingEverywhereReg = { dispatch: {} };
+  assert.throws(
+    () =>
+      sourcesApi.getDispatchConfig(missingEverywhereReg, {
+        defaults: {},
+        requireHermesOrchestrator: true,
+      }),
+    /CONFIG_MISSING: dispatch\.hermesOrchestrator is required/
+  );
+});
