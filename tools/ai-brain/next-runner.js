@@ -255,13 +255,6 @@ function getOpenRuns(options, deps) {
   if (Array.isArray(opts.openRuns)) return opts.openRuns;
   if (Array.isArray(d.openRuns)) return d.openRuns;
   if (typeof d.getOpenRuns === 'function') return d.getOpenRuns(options, deps);
-  if (
-    (Array.isArray(opts.records) || Array.isArray(d.records)) &&
-    !opts.intakeDir &&
-    !d.intakeDir
-  ) {
-    return [];
-  }
   const fsApi = (d && d.fs) || (opts && opts.fs) || fs;
   const rootDir = path.resolve(opts.rootDir || (d && d.rootDir) || process.cwd());
   const intakeBase =

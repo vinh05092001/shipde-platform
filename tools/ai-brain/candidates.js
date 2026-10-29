@@ -2452,12 +2452,12 @@ function mergeCandidates(a, b) {
  */
 function annotateCandidates(candidates, evidenceData, opts) {
   const annotOpts =
-    opts && opts.quotaState !== undefined
+    opts && Object.prototype.hasOwnProperty.call(opts, 'quotaState')
       ? opts
       : Object.assign({}, opts, {
           quotaState:
-            opts && (opts.loadQuotaState === true || opts.quotaStateFile)
-              ? require('./quota-scan').loadQuotaState(opts)
+            !opts || opts.loadQuotaState !== false
+              ? require('./quota-scan').loadQuotaState(opts || {})
               : null,
         });
   for (const c of candidates) {

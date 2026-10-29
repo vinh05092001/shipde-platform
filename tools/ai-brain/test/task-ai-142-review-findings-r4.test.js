@@ -10,6 +10,7 @@ const hermesSessionApi = require('../hermes-session');
 const quotaScanApi = require('../quota-scan');
 const sourcesApi = require('../sources');
 const candidatesApi = require('../candidates');
+const evidenceApi = require('../evidence');
 const harnessApi = require('../harness');
 const priorsApi = require('../priors');
 const nextRunnerApi = require('../next-runner');
@@ -62,27 +63,25 @@ test('P0: buildHermesArgv does not add --yolo or --accept-hooks for one-shot pro
     'explicit acceptHooks: true must add --accept-hooks'
   );
 
-  // 4. Goal launch: explicit goal includes --yolo and --accept-hooks by default
+  // 4. A goal id selects the goal; it is not consent to skip confirmation or accept hooks
   const argvGoal = hermesSessionApi.buildHermesArgv(candidate, session, {
     goal: 'FEAT-TEST-01',
   });
-  assert.ok(argvGoal.includes('--yolo'), 'goal launch includes --yolo');
-  assert.ok(argvGoal.includes('--accept-hooks'), 'goal launch includes --accept-hooks');
-
-  // 5. Goal launch with explicit yolo: false suppresses --yolo
-  const argvGoalNoYolo = hermesSessionApi.buildHermesArgv(candidate, session, {
-    goal: 'FEAT-TEST-01',
-    yolo: false,
-  });
+  assert.equal(argvGoal.includes('--yolo'), false, 'goal alone must not add --yolo');
   assert.equal(
-    argvGoalNoYolo.includes('--yolo'),
+    argvGoal.includes('--accept-hooks'),
     false,
-    'goal launch with yolo: false must suppress --yolo'
+    'goal alone must not add --accept-hooks'
   );
-  assert.ok(
-    argvGoalNoYolo.includes('--accept-hooks'),
-    'goal launch with yolo: false still includes --accept-hooks'
-  );
+
+  // 5. Headless opt-in is a separate boolean, not implied by the goal
+  const argvGoalHeadless = hermesSessionApi.buildHermesArgv(candidate, session, {
+    goal: 'FEAT-TEST-01',
+    yolo: true,
+    acceptHooks: true,
+  });
+  assert.ok(argvGoalHeadless.includes('--yolo'), 'yolo: true adds --yolo');
+  assert.ok(argvGoalHeadless.includes('--accept-hooks'), 'acceptHooks: true adds --accept-hooks');
 });
 
 // ---------------------------------------------------------------------------
@@ -316,34 +315,132 @@ test('P1: next-runner.js nextLoop throws DISPATCH_CONFIG_INVALID for invalid blo
 // ---------------------------------------------------------------------------
 // 6. P1: annotateCandidates must not load host quota state when quotaState is passed
 // ---------------------------------------------------------------------------
-test('P1: annotateCandidates does not call loadQuotaState when quotaState: null is explicitly passed', () => {
-  let loadQuotaStateCalled = false;
+test('P1: annotateCandidates loads host quota state unless quotaState is passed or load is disabled', () => {
+  let loadQuotaStateCalled = 0;
   const origLoadQuotaState = quotaScanApi.loadQuotaState;
   quotaScanApi.loadQuotaState = () => {
-    loadQuotaStateCalled = true;
+    loadQuotaStateCalled += 1;
     return { scopes: {} };
   };
 
-  try {
-    const candidates = [
-      {
-        candidateKey: 'direct-http::http://127.0.0.1::direct::openai::acc1::q1::gpt-4o',
-        gateway: 'direct',
-        upstream: 'openai',
-        accountId: 'acc1',
-        modelId: 'gpt-4o',
-      },
-    ];
+  const candidates = [
+    {
+      candidateKey: 'direct-http::http://127.0.0.1::direct::openai::acc1::q1::gpt-4o',
+      gateway: 'direct',
+      upstream: 'openai',
+      accountId: 'acc1',
+      modelId: 'gpt-4o',
+    },
+  ];
 
-    // Explicitly pass quotaState: null
+  try {
     candidatesApi.annotateCandidates(candidates, {}, { quotaState: null });
     assert.equal(
       loadQuotaStateCalled,
-      false,
-      'annotateCandidates must not load host quota state when quotaState: null is passed'
+      0,
+      'an explicit quotaState, including null, must not load the host file'
+    );
+
+    candidatesApi.annotateCandidates(candidates, {}, { loadQuotaState: false });
+    assert.equal(loadQuotaStateCalled, 0, 'loadQuotaState: false must not load the host file');
+
+    candidatesApi.annotateCandidates(candidates, {}, {});
+    assert.equal(
+      loadQuotaStateCalled,
+      1,
+      'omitting quotaState must keep the production default load'
+    );
+
+    candidatesApi.annotateCandidates(candidates, {});
+    assert.equal(
+      loadQuotaStateCalled,
+      2,
+      'omitting opts entirely must keep the production default load'
     );
   } finally {
     quotaScanApi.loadQuotaState = origLoadQuotaState;
+  }
+});
+
+test('P1: isCandidateBlocked loads host quota state when the key is absent and honors an explicit null', () => {
+  const now = 1700000000000;
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'quota-default-load-'));
+  try {
+    const quotaFile = path.join(tmpDir, 'quota-state.json');
+    fs.writeFileSync(
+      quotaFile,
+      JSON.stringify({
+        scopes: {
+          '9router': {
+            source: '9router',
+            code: 'QUOTA',
+            status: 429,
+            at: new Date(now).toISOString(),
+            retryAfter: now + 60000,
+          },
+        },
+      }),
+      'utf8'
+    );
+    const candidate = { gateway: '9router', modelId: 'ag/claude-sonnet-4' };
+
+    const loaded = evidenceApi.isCandidateBlocked({}, candidate, {
+      now,
+      quotaStateFile: quotaFile,
+    });
+    assert.equal(loaded.blocked, true, 'absent quotaState must load and apply the host file');
+
+    const injected = evidenceApi.isCandidateBlocked({}, candidate, {
+      now,
+      quotaState: null,
+      quotaStateFile: quotaFile,
+    });
+    assert.equal(injected.blocked, false, 'explicit null quotaState must not read the host file');
+
+    const disabled = evidenceApi.isCandidateBlocked({}, candidate, {
+      now,
+      loadQuotaState: false,
+      quotaStateFile: quotaFile,
+    });
+    assert.equal(disabled.blocked, false, 'loadQuotaState: false must suppress host file load');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('P1: getOpenRuns still scans the intake directory when only in-memory register rows are set', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'open-runs-records-'));
+  try {
+    const intakeDir = path.join(root, 'tools', 'ai-brain', 'data', 'intake');
+    const runDir = path.join(intakeDir, 'FEAT-LIVE-01-2026-01-01T00-00-00');
+    fs.mkdirSync(runDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(runDir, 'specs.json'),
+      JSON.stringify([{ id: 'FEAT-LIVE-01' }]),
+      'utf8'
+    );
+
+    // Call without intakeDir in opts or deps: old buggy code returned [] when records was set
+    const runs = nextRunnerApi.getOpenRuns(
+      { rootDir: root, records: [{ workItemId: 'FEAT-OTHER', stage: 'SELECTED' }] },
+      { now: Date.now(), isPidAlive: () => true }
+    );
+    assert.ok(
+      runs.some((run) => run.workItemId === 'FEAT-LIVE-01'),
+      'in-memory register rows must not hide a live intake run when intakeDir is omitted'
+    );
+
+    const injected = nextRunnerApi.getOpenRuns(
+      { rootDir: root, records: [], openRuns: [{ workItemId: 'FEAT-INJECTED' }] },
+      { now: Date.now() }
+    );
+    assert.deepEqual(
+      injected.map((run) => run.workItemId),
+      ['FEAT-INJECTED'],
+      'an injected openRuns list remains the override'
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
@@ -489,40 +586,38 @@ test('P1: launchHermesSession does not set OPENAI_BASE_URL on child env', async 
 // 10. P1: checkpointData status does not mark unrelated work item as BLOCKED_NO_ROUTE
 // ---------------------------------------------------------------------------
 test('P1: executeIntakeForItem does not mark item as BLOCKED_NO_ROUTE from unrelated checkpoint status', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'item-checkpoint-test-'));
+  const item = {
+    work_item_id: 'FEAT-WORK-02',
+    title: 'Work item 2',
+    status: 'IN_PROGRESS',
+  };
+
+  const checkpointData = {
+    status: 'BLOCKED_NO_ROUTE',
+    workItemId: 'FEAT-WORK-01',
+    outcomes: [
+      {
+        workItemId: 'FEAT-WORK-02',
+        status: 'FAILED',
+        reason: 'Syntax error in code',
+        reasonCode: 'SYNTAX_ERROR',
+      },
+    ],
+  };
+
+  const decDir = fs.mkdtempSync(path.join(os.tmpdir(), 'item-checkpoint-dec-'));
   try {
-    const item = {
-      work_item_id: 'FEAT-WORK-02',
-      title: 'Work item 2',
-      status: 'IN_PROGRESS',
-    };
-
-    // checkpointData has global status BLOCKED_NO_ROUTE, but outcomes shows work item 2 failed with another error
-    const checkpointData = {
-      status: 'BLOCKED_NO_ROUTE',
-      workItemId: 'FEAT-WORK-01', // different item
-      outcomes: [
-        {
-          workItemId: 'FEAT-WORK-02',
-          status: 'FAILED',
-          reason: 'Syntax error in code',
-          reasonCode: 'SYNTAX_ERROR',
-        },
-      ],
-    };
-
     const res = await nextRunnerApi.executeIntakeForItem(
       item,
-      { rootDir: root, dryRun: true },
+      {},
       {
-        rootDir: root,
-        readCheckpoint: () => checkpointData,
-        spawnIntakeChild: () => ({
-          status: 1,
-          stdoutTail: '',
-          stderrTail: 'Syntax error in code',
+        runIntake: async () => ({
+          status: 'failed',
+          exitCode: 1,
+          checkpoint: checkpointData,
         }),
-      }
+      },
+      { dir: decDir }
     );
 
     assert.equal(
@@ -531,8 +626,40 @@ test('P1: executeIntakeForItem does not mark item as BLOCKED_NO_ROUTE from unrel
       'item must not be marked as isBlockedNoRoute from unrelated checkpoint'
     );
     assert.notEqual(res.outcome, 'blocked_no_route');
+    assert.equal(res.outcome, 'failed');
+    assert.equal(res.reason, 'Syntax error in code');
+
+    // Also verify when checkpoint status is BLOCKED_NO_ROUTE for a different workItemId and outcomes has no record for this item
+    const unrelatedCheckpoint = {
+      status: 'BLOCKED_NO_ROUTE',
+      workItemId: 'FEAT-WORK-01',
+      outcomes: [
+        {
+          workItemId: 'FEAT-WORK-01',
+          status: 'BLOCKED_NO_ROUTE',
+          reasonCode: 'BLOCKED_NO_ROUTE',
+        },
+      ],
+    };
+    const resUnrelated = await nextRunnerApi.executeIntakeForItem(
+      item,
+      {},
+      {
+        runIntake: async () => ({
+          status: 'failed',
+          exitCode: 1,
+          checkpoint: unrelatedCheckpoint,
+        }),
+      },
+      { dir: decDir }
+    );
+    assert.equal(
+      resUnrelated.isBlockedNoRoute,
+      false,
+      'unrelated checkpoint workItemId must not mark different item as isBlockedNoRoute'
+    );
   } finally {
-    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(decDir, { recursive: true, force: true });
   }
 });
 

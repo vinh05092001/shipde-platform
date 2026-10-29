@@ -2015,15 +2015,10 @@ function buildHermesArgv(candidate, session, options) {
     args.push('-q', String(query));
   }
 
-  const isExplicitGoal = Boolean(opts.goal || opts.headlessGoal);
-  const enableYolo = opts.yolo === true || (isExplicitGoal && opts.yolo !== false);
-  const enableAcceptHooks =
-    opts.acceptHooks === true || (isExplicitGoal && opts.acceptHooks !== false);
-
-  if (enableYolo) {
+  if (opts.yolo === true) {
     args.push('--yolo');
   }
-  if (enableAcceptHooks) {
+  if (opts.acceptHooks === true) {
     args.push('--accept-hooks');
   }
 
