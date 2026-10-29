@@ -982,43 +982,44 @@ test('Round 4 Finding 1: runOrchestration CI gate is not skipped under simulate 
     fs.writeFileSync(checkpointFile, JSON.stringify(checkpointData), 'utf8');
 
     let ciEvaluated = false;
-    const ghRunner = (args) => {
+    const ciGate = require('../ci-gate');
+    const originalAwaitCi = ciGate.awaitCi;
+    ciGate.awaitCi = async (opts) => {
       ciEvaluated = true;
-      if (args[0] === 'pr') {
-        return {
-          exitCode: 0,
-          stdout: JSON.stringify({
-            headRefOid: sha,
-            statusCheckRollup: [{ name: 'contract', status: 'COMPLETED', conclusion: 'FAILURE' }],
-          }),
-          stderr: '',
-        };
-      }
-      return { exitCode: 1, stdout: '', stderr: '' };
+      return {
+        state: 'FAIL',
+        sha: opts.sha,
+        failed: ['contract'],
+        reason: 'simulated failure',
+      };
     };
 
-    // Pass simulate: true and testMode: true without ciGate: true
-    const result = await orchestrate.runOrchestration(workItemId, {
-      specs: [{ id: workItemId }],
-      checkpointFile,
-      decisionDir: tmp,
-      ghRunner,
-      simulate: true,
-      testMode: true,
-      ciSleep: async () => {},
-      ciPollIntervalMs: 1,
-      ciTimeoutMs: 100,
-    });
+    try {
+      // Pass simulate: true and testMode: true without ghRunner and without ciGate: true
+      const result = await orchestrate.runOrchestration(workItemId, {
+        specs: [{ id: workItemId }],
+        checkpointFile,
+        decisionDir: tmp,
+        // No ghRunner supplied: old predicate (!isSimulatedOrTestMode || Boolean(o.ghRunner) || o.ciGate === true) skipped CI
+        simulate: true,
+        testMode: true,
+        ciSleep: async () => {},
+        ciPollIntervalMs: 1,
+        ciTimeoutMs: 100,
+      });
 
-    assert.equal(
-      ciEvaluated,
-      true,
-      'CI gate must be evaluated even with simulate: true / testMode: true'
-    );
-    const outcome = (result.outcomes || []).find((o) => o.workItemId === workItemId);
-    assert.ok(outcome, 'Outcome must be recorded');
-    assert.equal(outcome.status, orchestrate.ItemStatus.BLOCKED);
-    assert.equal(outcome.reasonCode, 'CI_GATE_FAILED');
+      assert.equal(
+        ciEvaluated,
+        true,
+        'CI gate must be evaluated even with simulate: true / testMode: true and no ghRunner'
+      );
+      const outcome = (result.outcomes || []).find((o) => o.workItemId === workItemId);
+      assert.ok(outcome, 'Outcome must be recorded');
+      assert.equal(outcome.status, orchestrate.ItemStatus.BLOCKED);
+      assert.equal(outcome.reasonCode, 'CI_GATE_FAILED');
+    } finally {
+      ciGate.awaitCi = originalAwaitCi;
+    }
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
@@ -1110,7 +1111,14 @@ test('Round 4 Finding 3: resolveLauncher refuses agy-pool without externalWorker
 test('Round 4 Finding 4: dispatch evidenceDir is loaded from controller store, not hostile --root', async () => {
   const cli = require('../cli');
   const orchestrate = require('../orchestrate');
+  const evidence = require('../evidence');
   const hostileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hostile-evidence-'));
+  const origLoadEvidence = evidence.loadEvidence;
+  let observedEvidenceDir = null;
+  evidence.loadEvidence = (dir) => {
+    observedEvidenceDir = dir;
+    return origLoadEvidence(dir);
+  };
   try {
     const plantedDir = path.join(hostileDir, 'tools', 'ai-brain', 'data', 'evidence');
     fs.mkdirSync(plantedDir, { recursive: true });
@@ -1132,8 +1140,19 @@ test('Round 4 Finding 4: dispatch evidenceDir is loaded from controller store, n
       { root: hostileDir, profile: 'test-profile.json', stdout },
       { candidates: [], exit: () => {} }
     );
+    assert.ok(observedEvidenceDir, 'loadEvidence must be called');
+    assert.ok(
+      !observedEvidenceDir.startsWith(hostileDir),
+      `evidenceDir must not come from hostile root, got: ${observedEvidenceDir}`
+    );
+    assert.equal(
+      observedEvidenceDir,
+      path.join(__dirname, '..', 'data', 'evidence'),
+      'evidenceDir must be controller evidence store'
+    );
     assert.doesNotMatch(output, /planted/);
   } finally {
+    evidence.loadEvidence = origLoadEvidence;
     fs.rmSync(hostileDir, { recursive: true, force: true });
   }
 });
@@ -1141,18 +1160,23 @@ test('Round 4 Finding 4: dispatch evidenceDir is loaded from controller store, n
 // Round 4 Finding 5 (P1): runHostBrainGate does not short-circuit on empty diff
 test('Round 4 Finding 5: runHostBrainGate runs the test suite and does not return pass on empty diff', () => {
   const orchestrate = require('../orchestrate');
+  const cp = require('node:child_process');
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'host-gate-diff-'));
+  const origSpawnSync = cp.spawnSync;
   try {
     const baseSha = '3'.repeat(40);
     let suiteExecuted = false;
-    const spawnSync = (_node, args) => {
-      suiteExecuted = true;
-      return { status: 0, stdout: 'ℹ pass 1\nℹ fail 0\n', stderr: '' };
+    cp.spawnSync = (cmd, args, opts) => {
+      if (args && args.includes('--test')) {
+        suiteExecuted = true;
+        return { status: 0, stdout: 'ℹ pass 1\nℹ fail 0\n', stderr: '' };
+      }
+      return origSpawnSync(cmd, args, opts);
     };
 
     const res = orchestrate.runHostBrainGate(
       { baseSha, workerRoot: tmp },
-      { spawnSync, baseCache: new Map() }
+      { baseCache: new Map() }
     );
     assert.equal(
       suiteExecuted,
@@ -1161,6 +1185,7 @@ test('Round 4 Finding 5: runHostBrainGate runs the test suite and does not retur
     );
     assert.doesNotMatch(res.summary.join('\n'), /no changes in worker diff/);
   } finally {
+    cp.spawnSync = origSpawnSync;
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
@@ -1307,7 +1332,299 @@ test('Round 4 Finding 8: retained root repair fails closed on dirty .env or dirt
     fs.mkdirSync(hostCwd, { recursive: true });
     fs.mkdirSync(workerRoot, { recursive: true });
 
-    // Initialize host repo
+    // Initialize host repo with init.txt and tracked .env
+    cp.execSync('git init -b main', { cwd: hostCwd, stdio: 'ignore' });
+    cp.execSync('git config user.name "Test"', { cwd: hostCwd, stdio: 'ignore' });
+    cp.execSync('git config user.email "test@example.com"', { cwd: hostCwd, stdio: 'ignore' });
+    cp.execSync('git config commit.gpgsign false', { cwd: hostCwd, stdio: 'ignore' });
+    fs.writeFileSync(path.join(hostCwd, 'init.txt'), 'init\n', 'utf8');
+    fs.writeFileSync(path.join(hostCwd, '.env'), 'SECRET_BASE=init\n', 'utf8');
+    cp.execSync('git add init.txt .env', { cwd: hostCwd, stdio: 'ignore' });
+    cp.execSync('git commit -m "init"', { cwd: hostCwd, stdio: 'ignore' });
+    const headSha = cp.execSync('git rev-parse HEAD', { cwd: hostCwd, encoding: 'utf8' }).trim();
+
+    // Install functioning pre-commit hook in host repo (.git/hooks/pre-commit)
+    const hooksDir = cp
+      .execSync('git rev-parse --path-format=absolute --git-path hooks', {
+        cwd: hostCwd,
+        encoding: 'utf8',
+      })
+      .trim();
+    fs.mkdirSync(hooksDir, { recursive: true });
+    const hookFile = path.join(hooksDir, 'pre-commit');
+    fs.writeFileSync(hookFile, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+
+    // Clone worker
+    cp.execSync(`git clone ${hostCwd} ${workerRoot}`, { stdio: 'ignore' });
+    cp.execSync('git config user.name "Test"', { cwd: workerRoot, stdio: 'ignore' });
+    cp.execSync('git config user.email "test@example.com"', { cwd: workerRoot, stdio: 'ignore' });
+
+    // 1. Test dirty secret file (.env) alone:
+    fs.writeFileSync(path.join(workerRoot, '.env'), 'SECRET_API_KEY=leak\n', 'utf8');
+
+    const decisions = require('../decisions');
+    const decisionDir = path.join(tmp, 'decisions');
+    fs.mkdirSync(decisionDir, { recursive: true });
+    decisions.recordDecision(
+      {
+        stage: 'writer-launch-result',
+        workItemId: 'FEAT-RETAIN-01',
+        workerRoot,
+        worktree: workerRoot,
+        sha: headSha,
+        baseSha: headSha,
+        runId: 'RUN-1',
+        at: new Date().toISOString(),
+        detail: 'writer output',
+      },
+      { dir: decisionDir }
+    );
+
+    const verdictPath = path.join(tmp, 'verdict.json');
+    const isoDir = path.join(hostCwd, 'scripts', 'ai', 'isolation');
+    fs.mkdirSync(isoDir, { recursive: true });
+    fs.writeFileSync(path.join(isoDir, 'policy.txt'), 'policy', 'utf8');
+    fs.writeFileSync(
+      verdictPath,
+      JSON.stringify({
+        worktree: hostCwd,
+        verdict: 'CLOSED',
+        timestamp: new Date().toISOString(),
+        policyHash: getFolderHash(isoDir),
+        sid: 'SID-TEST',
+        details: { Test: 'PASS' },
+      }),
+      'utf8'
+    );
+
+    const opts1 = {
+      baseSha: headSha,
+      retainWorkerHead: headSha,
+      cwd: hostCwd,
+      hostCwd,
+      workerRoot,
+      decisionDir,
+      workItemId: 'FEAT-RETAIN-01',
+      verdictPath,
+      getWorkerSid: () => 'SID-TEST',
+      verifyBoundary: () => true,
+      runId: 'RUN-1',
+      dispatchConfig: { retainedRootMaxAgeMs: 60000 },
+      allowedPaths: ['init.txt'],
+    };
+
+    // Secret file must cause refusal even with functioning hooks and valid allowedPaths
+    await assert.rejects(
+      () => Promise.resolve().then(() => getIsolatedLauncher()({ id: 'test' }, null, opts1)),
+      /WORKER_HEAD_MISMATCH.*is dirty/
+    );
+
+    let workerHead = cp
+      .execSync('git rev-parse HEAD', { cwd: workerRoot, encoding: 'utf8' })
+      .trim();
+    assert.equal(workerHead, headSha, 'HEAD must not advance by committing secrets');
+
+    // Remove .env and test dirty unauthorized file alone
+    fs.unlinkSync(path.join(workerRoot, '.env'));
+    fs.writeFileSync(path.join(workerRoot, 'unauthorized.txt'), 'illegal content\n', 'utf8');
+
+    const opts2 = {
+      ...opts1,
+      workItemId: 'FEAT-RETAIN-01',
+      allowedPaths: ['docs/product-spec/work-items/FEAT-RETAIN-01.md'],
+    };
+
+    // Unauthorized file outside allowedPaths must cause refusal
+    await assert.rejects(
+      () => Promise.resolve().then(() => getIsolatedLauncher()({ id: 'test' }, null, opts2)),
+      /WORKER_HEAD_MISMATCH.*is dirty/
+    );
+
+    workerHead = cp.execSync('git rev-parse HEAD', { cwd: workerRoot, encoding: 'utf8' }).trim();
+    assert.equal(workerHead, headSha, 'HEAD must not advance by committing unauthorized file');
+
+    // Assert that .git/info/exclude contains .env and credential patterns
+    const excludeFile = path.join(workerRoot, '.git', 'info', 'exclude');
+    assert.ok(fs.existsSync(excludeFile));
+    const excludeText = fs.readFileSync(excludeFile, 'utf8');
+    assert.ok(excludeText.includes('.env'));
+    assert.ok(excludeText.includes('*credential*'));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// Round 5 Finding 1 (P0): CI gate disabled via ciGate: false or config blocks completion
+test('Round 5 Finding 1: CI gate disabled via ciGate: false or config blocks completion', async () => {
+  const orchestrate = require('../orchestrate');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-gate-disabled-'));
+  try {
+    const workItemId = 'FEAT-CI-DIS-01';
+    const checkpointFile = path.join(tmp, 'checkpoint.json');
+    const sha = '1'.repeat(40);
+    const checkpointData = {
+      reviews: [
+        {
+          workItemId,
+          sha,
+          verdict: 'PASS',
+          reviewer: 'test-reviewer',
+          openFindings: 0,
+          reviewRounds: 1,
+          branch: 'feat/test-ci-gate',
+          draftTitle: 'test draft',
+        },
+      ],
+      liveSteps: {
+        [workItemId]: {
+          publication: {
+            status: orchestrate.PublicationStatus.PUBLISHED_DRAFT,
+            branch: 'feat/test-ci-gate',
+            result: { number: 99, branch: 'feat/test-ci-gate' },
+          },
+        },
+      },
+    };
+    fs.writeFileSync(checkpointFile, JSON.stringify(checkpointData), 'utf8');
+
+    // 1. ciGate: false explicitly passed
+    const res1 = await orchestrate.runOrchestration(workItemId, {
+      specs: [{ id: workItemId }],
+      checkpointFile,
+      decisionDir: tmp,
+      ciGate: false,
+    });
+    const outcome1 = (res1.outcomes || []).find((o) => o.workItemId === workItemId);
+    assert.ok(outcome1, 'Outcome 1 must be recorded');
+    assert.equal(outcome1.status, orchestrate.ItemStatus.BLOCKED);
+    assert.equal(outcome1.reasonCode, 'CI_GATE_DISABLED');
+
+    // 2. dispatch config ciGate.enabled: false
+    const res2 = await orchestrate.runOrchestration(workItemId, {
+      specs: [{ id: workItemId }],
+      checkpointFile,
+      decisionDir: tmp,
+      dispatch: { ciGate: { enabled: false } },
+    });
+    const outcome2 = (res2.outcomes || []).find((o) => o.workItemId === workItemId);
+    assert.ok(outcome2, 'Outcome 2 must be recorded');
+    assert.equal(outcome2.status, orchestrate.ItemStatus.BLOCKED);
+    assert.equal(outcome2.reasonCode, 'CI_GATE_DISABLED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// Round 5 Finding 2 (P0): defaultGit rejects ANY core.hooksPath override anywhere in argv
+test('Round 5 Finding 2: defaultGit rejects ANY core.hooksPath override anywhere in argv', () => {
+  const { defaultGit } = require('../planning-services');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'git-hooks-r5-'));
+  try {
+    const cp = require('node:child_process');
+    cp.execSync('git init -b main', { cwd: tmp, stdio: 'ignore' });
+    cp.execSync('git config user.name "Test"', { cwd: tmp, stdio: 'ignore' });
+    cp.execSync('git config user.email "test@example.com"', { cwd: tmp, stdio: 'ignore' });
+
+    const validHookDir = path.join(tmp, 'valid-hooks');
+    fs.mkdirSync(validHookDir, { recursive: true });
+    const hookScript = path.join(validHookDir, 'pre-commit');
+    fs.writeFileSync(hookScript, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+
+    // 1. Multiple overrides: valid directory followed by NUL override
+    const r1 = defaultGit(tmp, [
+      '-c',
+      `core.hooksPath=${validHookDir}`,
+      '-c',
+      'core.hooksPath=NUL',
+      'commit',
+      '-m',
+      'bypass',
+    ]);
+    assert.equal(r1.ok, false);
+    assert.match(
+      r1.stderr,
+      /HOOK_CHECK_FAILED: core\.hooksPath bypass or --no-verify is prohibited/
+    );
+
+    // 2. Arbitrary executable hook override
+    const r2 = defaultGit(tmp, ['-c', `core.hooksPath=${validHookDir}`, 'commit', '-m', 'bypass']);
+    assert.equal(r2.ok, false);
+    assert.match(
+      r2.stderr,
+      /HOOK_CHECK_FAILED: core\.hooksPath bypass or --no-verify is prohibited/
+    );
+
+    // 3. --config-env=core.hooksPath form
+    const r3 = defaultGit(tmp, ['--config-env=core.hooksPath=SOME_ENV', 'commit', '-m', 'bypass']);
+    assert.equal(r3.ok, false);
+    assert.match(
+      r3.stderr,
+      /HOOK_CHECK_FAILED: core\.hooksPath bypass or --no-verify is prohibited/
+    );
+
+    // 4. --config-env core.hooksPath form (separate args)
+    const r4 = defaultGit(tmp, [
+      '--config-env',
+      'core.hooksPath=SOME_ENV',
+      'commit',
+      '-m',
+      'bypass',
+    ]);
+    assert.equal(r4.ok, false);
+    assert.match(
+      r4.stderr,
+      /HOOK_CHECK_FAILED: core\.hooksPath bypass or --no-verify is prohibited/
+    );
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// Round 5 Finding 12 (P1): controllerGit redacts subprocess output in thrown exceptions
+test('Round 5 Finding 12: controllerGit redacts credentials in subprocess errors', () => {
+  const { controllerGit } = require('../isolation-launcher');
+  const secretToken = 'ghp_secretTokenVal1234567890';
+  process.env.TEST_SECRET_TOKEN = secretToken;
+  try {
+    const gitWithSecret = controllerGit({
+      run: () => ({
+        status: 1,
+        stderr: `fatal: remote rejected token ${secretToken} denied`,
+        stdout: `Authorization: Bearer ${secretToken}`,
+      }),
+      failure: 'CUSTOM_GIT_FAILURE',
+    });
+    assert.throws(
+      () => gitWithSecret(['push']),
+      (err) => {
+        assert.ok(
+          !err.message.includes(secretToken),
+          'Error message must not contain secret token'
+        );
+        assert.ok(
+          err.message.includes('[REDACTED_SECRET]'),
+          'Error message must contain redacted placeholder'
+        );
+        return true;
+      }
+    );
+  } finally {
+    delete process.env.TEST_SECRET_TOKEN;
+  }
+});
+
+// Round 5 Finding 8 & 13 & 14: retained root recovery with functioning hook, wildcard scopes, and fails closed on missing contract
+test('Round 5 Finding 13: retained root recovery succeeds with wildcard allowedPaths and functioning pre-commit hook', async () => {
+  const { getIsolatedLauncher, getFolderHash } = require('../isolation-launcher');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'retained-repair-wildcard-'));
+  try {
+    const cp = require('node:child_process');
+    const hostCwd = path.join(tmp, 'host');
+    const workerRoot = path.join(tmp, 'worker');
+    fs.mkdirSync(hostCwd, { recursive: true });
+    fs.mkdirSync(workerRoot, { recursive: true });
+
+    // Host repo setup with functioning pre-commit hook
     cp.execSync('git init -b main', { cwd: hostCwd, stdio: 'ignore' });
     cp.execSync('git config user.name "Test"', { cwd: hostCwd, stdio: 'ignore' });
     cp.execSync('git config user.email "test@example.com"', { cwd: hostCwd, stdio: 'ignore' });
@@ -1317,15 +1634,26 @@ test('Round 4 Finding 8: retained root repair fails closed on dirty .env or dirt
     cp.execSync('git commit -m "init"', { cwd: hostCwd, stdio: 'ignore' });
     const headSha = cp.execSync('git rev-parse HEAD', { cwd: hostCwd, encoding: 'utf8' }).trim();
 
+    // Create functioning pre-commit hook in host repo (.git/hooks/pre-commit)
+    const hooksDir = cp
+      .execSync('git rev-parse --path-format=absolute --git-path hooks', {
+        cwd: hostCwd,
+        encoding: 'utf8',
+      })
+      .trim();
+    fs.mkdirSync(hooksDir, { recursive: true });
+    const hookFile = path.join(hooksDir, 'pre-commit');
+    fs.writeFileSync(hookFile, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+
     // Clone worker
     cp.execSync(`git clone ${hostCwd} ${workerRoot}`, { stdio: 'ignore' });
     cp.execSync('git config user.name "Test"', { cwd: workerRoot, stdio: 'ignore' });
     cp.execSync('git config user.email "test@example.com"', { cwd: workerRoot, stdio: 'ignore' });
-    cp.execSync('git config commit.gpgsign false', { cwd: workerRoot, stdio: 'ignore' });
 
-    // Plant dirty secret file (.env) and dirty unauthorized file in workerRoot
-    fs.writeFileSync(path.join(workerRoot, '.env'), 'SECRET_API_KEY=leak\n', 'utf8');
-    fs.writeFileSync(path.join(workerRoot, 'unauthorized.txt'), 'illegal content\n', 'utf8');
+    // Plant dirty file matching wildcard: docs/product-spec/example.md
+    const docDir = path.join(workerRoot, 'docs', 'product-spec');
+    fs.mkdirSync(docDir, { recursive: true });
+    fs.writeFileSync(path.join(docDir, 'example.md'), '# Example Spec\n', 'utf8');
 
     const decisions = require('../decisions');
     const decisionDir = path.join(tmp, 'decisions');
@@ -1333,7 +1661,8 @@ test('Round 4 Finding 8: retained root repair fails closed on dirty .env or dirt
     decisions.recordDecision(
       {
         stage: 'writer-launch-result',
-        workItemId: 'FEAT-RETAIN-01',
+        workItemId: 'FEAT-WILDCARD-01',
+        workerRoot,
         worktree: workerRoot,
         sha: headSha,
         baseSha: headSha,
@@ -1368,31 +1697,128 @@ test('Round 4 Finding 8: retained root repair fails closed on dirty .env or dirt
       hostCwd,
       workerRoot,
       decisionDir,
-      workItemId: 'FEAT-RETAIN-01',
+      workItemId: 'FEAT-WILDCARD-01',
       verdictPath,
       getWorkerSid: () => 'SID-TEST',
       verifyBoundary: () => true,
       runId: 'RUN-1',
       dispatchConfig: { retainedRootMaxAgeMs: 60000 },
-      isDocsOnly: true,
+      allowedPaths: ['docs/product-spec/**'],
     };
 
+    // With wildcard support, this should recover and NOT throw WORKER_HEAD_MISMATCH!
+    // It should commit the dirty file.
+    getIsolatedLauncher()({ id: 'test' }, null, opts);
+    const workerHead = cp
+      .execSync('git rev-parse HEAD', { cwd: workerRoot, encoding: 'utf8' })
+      .trim();
+    assert.notEqual(workerHead, headSha, 'HEAD must advance with committed repair');
+    const commitMsg = cp
+      .execSync('git log -1 --format=%s', { cwd: workerRoot, encoding: 'utf8' })
+      .trim();
+    assert.equal(commitMsg, 'Restore interrupted writer work');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('Round 5 Finding 8: retained root recovery fails closed when allowedPaths contract is missing or empty', async () => {
+  const { getIsolatedLauncher, getFolderHash } = require('../isolation-launcher');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'retained-repair-empty-contract-'));
+  try {
+    const cp = require('node:child_process');
+    const hostCwd = path.join(tmp, 'host');
+    const workerRoot = path.join(tmp, 'worker');
+    fs.mkdirSync(hostCwd, { recursive: true });
+    fs.mkdirSync(workerRoot, { recursive: true });
+
+    cp.execSync('git init -b main', { cwd: hostCwd, stdio: 'ignore' });
+    cp.execSync('git config user.name "Test"', { cwd: hostCwd, stdio: 'ignore' });
+    cp.execSync('git config user.email "test@example.com"', { cwd: hostCwd, stdio: 'ignore' });
+    cp.execSync('git config commit.gpgsign false', { cwd: hostCwd, stdio: 'ignore' });
+    fs.writeFileSync(path.join(hostCwd, 'init.txt'), 'init\n', 'utf8');
+    cp.execSync('git add init.txt', { cwd: hostCwd, stdio: 'ignore' });
+    cp.execSync('git commit -m "init"', { cwd: hostCwd, stdio: 'ignore' });
+    const headSha = cp.execSync('git rev-parse HEAD', { cwd: hostCwd, encoding: 'utf8' }).trim();
+
+    const hooksDir = cp
+      .execSync('git rev-parse --path-format=absolute --git-path hooks', {
+        cwd: hostCwd,
+        encoding: 'utf8',
+      })
+      .trim();
+    fs.mkdirSync(hooksDir, { recursive: true });
+    const hookFile = path.join(hooksDir, 'pre-commit');
+    fs.writeFileSync(hookFile, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+
+    cp.execSync(`git clone ${hostCwd} ${workerRoot}`, { stdio: 'ignore' });
+    cp.execSync('git config user.name "Test"', { cwd: workerRoot, stdio: 'ignore' });
+    cp.execSync('git config user.email "test@example.com"', { cwd: workerRoot, stdio: 'ignore' });
+
+    // Plant dirty file in worker
+    fs.writeFileSync(path.join(workerRoot, 'dirty.txt'), 'some dirty work\n', 'utf8');
+
+    const decisions = require('../decisions');
+    const decisionDir = path.join(tmp, 'decisions');
+    fs.mkdirSync(decisionDir, { recursive: true });
+    decisions.recordDecision(
+      {
+        stage: 'writer-launch-result',
+        workItemId: 'FEAT-EMPTY-CONTRACT-01',
+        workerRoot,
+        worktree: workerRoot,
+        sha: headSha,
+        baseSha: headSha,
+        runId: 'RUN-1',
+        at: new Date().toISOString(),
+        detail: 'writer output',
+      },
+      { dir: decisionDir }
+    );
+
+    const verdictPath = path.join(tmp, 'verdict.json');
+    const isoDir = path.join(hostCwd, 'scripts', 'ai', 'isolation');
+    fs.mkdirSync(isoDir, { recursive: true });
+    fs.writeFileSync(path.join(isoDir, 'policy.txt'), 'policy', 'utf8');
+    fs.writeFileSync(
+      verdictPath,
+      JSON.stringify({
+        worktree: hostCwd,
+        verdict: 'CLOSED',
+        timestamp: new Date().toISOString(),
+        policyHash: getFolderHash(isoDir),
+        sid: 'SID-TEST',
+        details: { Test: 'PASS' },
+      }),
+      'utf8'
+    );
+
+    const opts = {
+      baseSha: headSha,
+      retainWorkerHead: headSha,
+      cwd: hostCwd,
+      hostCwd,
+      workerRoot,
+      decisionDir,
+      workItemId: 'FEAT-EMPTY-CONTRACT-01',
+      verdictPath,
+      getWorkerSid: () => 'SID-TEST',
+      verifyBoundary: () => true,
+      runId: 'RUN-1',
+      dispatchConfig: { retainedRootMaxAgeMs: 60000 },
+      allowedPaths: [], // explicitly empty allowedPaths!
+    };
+
+    // Empty allowedPaths contract must fail closed: cannot commit dirty files!
     await assert.rejects(
       () => Promise.resolve().then(() => getIsolatedLauncher()({ id: 'test' }, null, opts)),
-      /WORKER_HEAD_MISMATCH.*is dirty/
+      /WORKER_HEAD_MISMATCH/
     );
 
     const workerHead = cp
       .execSync('git rev-parse HEAD', { cwd: workerRoot, encoding: 'utf8' })
       .trim();
-    assert.equal(workerHead, headSha, 'HEAD must not advance by committing secrets');
-
-    // Assert that .git/info/exclude contains .env and credential patterns
-    const excludeFile = path.join(workerRoot, '.git', 'info', 'exclude');
-    assert.ok(fs.existsSync(excludeFile));
-    const excludeText = fs.readFileSync(excludeFile, 'utf8');
-    assert.ok(excludeText.includes('.env'));
-    assert.ok(excludeText.includes('*credential*'));
+    assert.equal(workerHead, headSha, 'HEAD must NOT advance when allowedPaths contract is empty');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

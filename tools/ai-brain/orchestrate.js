@@ -1575,7 +1575,11 @@ function getTreeStatus(cwd, options) {
     return withCleanGitEnv(
       cwd,
       (tmpDir) => {
-        const res = safeGit(tmpDir, cwd, ['status', '--porcelain'], 20000, options);
+        const statusArgs = ['status', '--porcelain'];
+        if (options && (options.untracked === 'all' || options.untrackedFiles === 'all')) {
+          statusArgs.push('-uall');
+        }
+        const res = safeGit(tmpDir, cwd, statusArgs, 20000, options);
         if (!res || res.status !== 0) return { isDirty: false, dirtyPaths: [], lines: [] };
         const raw = String(res.stdout || '').trim();
         if (!raw) return { isDirty: false, dirtyPaths: [], lines: [] };
@@ -1995,7 +1999,7 @@ function runHostBrainGate(job, options = {}) {
       : requestedRoot;
   const node = options.nodeExecutable || process.execPath;
   const suite = options.brainSuite || 'tools/ai-brain/test/*.test.js';
-  const run = options.spawnSync || spawnSync;
+  const run = options.spawnSync || require('child_process').spawnSync;
   const suiteFiles = resolveSuiteFiles(root, suite);
   if (suiteFiles.length === 0) {
     return {
@@ -6851,12 +6855,40 @@ async function runOrchestration(goal, opts) {
     // CI is the final verification: the item is complete only when CI is green on
     // the exact reviewed head SHA. Review PASS alone never completes or merges it.
     entry.ci = null;
-    if (
-      published &&
-      published.status === PublicationStatus.PUBLISHED_DRAFT &&
-      o.ciGate !== false &&
-      ciGate.ciGateConfig(o.dispatch || o.registry?.dispatch).enabled
-    ) {
+    if (published && published.status === PublicationStatus.PUBLISHED_DRAFT) {
+      const ciConfig = ciGate.ciGateConfig(o.dispatch || o.registry?.dispatch);
+      const isCiDisabled = o.ciGate === false || !ciConfig.enabled;
+      if (isCiDisabled) {
+        const failure = {
+          exitCode: 1,
+          stderr: 'CI_GATE_DISABLED: verification disabled but required for completion',
+          failureReason: 'CI_GATE_DISABLED',
+        };
+        const itemRole = roleOf(entry.item || entry);
+        decisions.recordDecision(
+          {
+            stage: decisions.Stage.FAILED,
+            workItemId: entry.workItemId,
+            role: itemRole,
+            detail: failure.stderr,
+          },
+          logOpts
+        );
+        persistStep(entry.workItemId, 'ci_gate_failed', { failure, ci: null });
+        for (let i = log.outcomes.length - 1; i >= 0; i -= 1) {
+          if (log.outcomes[i].workItemId === entry.workItemId) {
+            log.outcomes.splice(i, 1);
+          }
+        }
+        log.outcomes.push({
+          workItemId: entry.workItemId,
+          status: ItemStatus.BLOCKED,
+          reason: failure.stderr,
+          reasonCode: 'CI_GATE_DISABLED',
+        });
+        statusOf.set(entry.workItemId, ItemStatus.BLOCKED);
+        break;
+      }
       const draft = (published.result && (published.result.draft || published.result)) || {};
       const ci = await ciGate.awaitCi({
         sha: entry.sha,
@@ -6940,7 +6972,7 @@ async function runOrchestration(goal, opts) {
     // GM-R05 (TASK-AI-133): the next-item loop calls merge after publish when the item is eligible.
     if (o.mergeAfterPublish || o.autoMerge || o.merge) {
       const { governedMerge, isEligibleForMerge } = require('./governed-merge');
-      if (isEligibleForMerge(entry, published, o)) {
+      if (entry.ci && entry.ci.state === 'PASS' && isEligibleForMerge(entry, published, o)) {
         log.merges = log.merges || [];
         const mergeResult = await governedMerge({
           workItemId: entry.workItemId,

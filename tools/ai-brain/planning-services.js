@@ -74,60 +74,22 @@ function defaultGit(cwd, args) {
     extra.push('-c', 'core.autocrlf=true');
   }
   if (args.includes('commit')) {
-    if (args.some((a) => a === '--no-verify' || a === '-n')) {
+    const isNoVerify = args.some(
+      (a) => a === '--no-verify' || a === '-n' || a.startsWith('--no-verify')
+    );
+    const hasHooksPathOverride = args.some((a) => /core\.hooksPath/i.test(a));
+    if (isNoVerify || hasHooksPathOverride) {
       return {
         ok: false,
         stdout: '',
         stderr: 'HOOK_CHECK_FAILED: core.hooksPath bypass or --no-verify is prohibited',
       };
     }
-    const hooksArg = args.find((a) => a.startsWith('core.hooksPath='));
-    if (hooksArg) {
-      const targetPath = hooksArg.slice('core.hooksPath='.length).trim();
-      const isNull =
-        !targetPath ||
-        /^nul$/i.test(targetPath) ||
-        targetPath === '/dev/null' ||
-        targetPath === 'NUL';
-      if (isNull) {
-        return {
-          ok: false,
-          stdout: '',
-          stderr: 'HOOK_CHECK_FAILED: core.hooksPath bypass or --no-verify is prohibited',
-        };
-      }
-      const hook = path.join(targetPath, 'pre-commit');
-      if (!fs.existsSync(hook)) {
-        return {
-          ok: false,
-          stdout: '',
-          stderr: 'HOOK_CHECK_FAILED: installed pre-commit hook missing',
-        };
-      }
-      try {
-        const stat = fs.statSync(hook);
-        if (!stat.isFile() || (process.platform !== 'win32' && (stat.mode & 0o111) === 0)) {
-          return {
-            ok: false,
-            stdout: '',
-            stderr: 'HOOK_CHECK_FAILED: installed pre-commit hook not executable',
-          };
-        }
-        fs.accessSync(hook, fs.constants.X_OK);
-      } catch {
-        return {
-          ok: false,
-          stdout: '',
-          stderr: 'HOOK_CHECK_FAILED: installed pre-commit hook not executable',
-        };
-      }
-    } else {
-      const hookCheck = resolveInstalledHook(cwd);
-      if (!hookCheck.ok) {
-        return { ok: false, stdout: '', stderr: 'HOOK_CHECK_FAILED: ' + hookCheck.reason };
-      }
-      extra.push('-c', 'core.hooksPath=' + hookCheck.hooksDir);
+    const hookCheck = resolveInstalledHook(cwd);
+    if (!hookCheck.ok) {
+      return { ok: false, stdout: '', stderr: 'HOOK_CHECK_FAILED: ' + hookCheck.reason };
     }
+    extra.push('-c', 'core.hooksPath=' + hookCheck.hooksDir);
   }
   const res = spawnSync(
     'git',
@@ -470,6 +432,15 @@ function createPlanningServices(ctx) {
     if (!dirty.ok || !dirty.stdout) return null;
     const hookCheck = resolveInstalledHook(rootDir);
     if (!hookCheck.ok) return null;
+    const planHooksDir = path.join(planRoot, '.git', 'hooks');
+    fs.mkdirSync(planHooksDir, { recursive: true });
+    const planHook = path.join(planHooksDir, 'pre-commit');
+    if (!fs.existsSync(planHook)) {
+      fs.copyFileSync(hookCheck.hook, planHook);
+      try {
+        fs.chmodSync(planHook, 0o755);
+      } catch {}
+    }
     const ident = c.gitIdentity || {
       name: 'Ship De Controller',
       email: 'controller@shipde.invalid',
@@ -478,8 +449,6 @@ function createPlanningServices(ctx) {
     const added = git(planRoot, ['add', '-A']);
     if (!added.ok) return null;
     const done = git(planRoot, [
-      '-c',
-      'core.hooksPath=' + hookCheck.hooksDir,
       '-c',
       'user.name=' + ident.name,
       '-c',

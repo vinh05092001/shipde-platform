@@ -221,18 +221,16 @@ function resolveInstalledHook(hostRoot, env, failure) {
 function controllerGit(options, requireHook) {
   const o = options || {};
   const failure = o.failure || 'NATIVE_WRITER_COMMIT_FAILED';
+  const decisions = require('./decisions');
   if (o.run) {
     return (args) => {
       const result = o.run(args);
       if (!result || result.status !== 0) {
+        const redact = decisions.createSecretRedactor(process.env);
+        const safeStderr = redact(String((result && result.stderr) || ''));
+        const safeStdout = redact(String((result && result.stdout) || ''));
         throw new Error(
-          failure +
-            ': ' +
-            args[0] +
-            ' stderr: ' +
-            (result && result.stderr) +
-            ' stdout: ' +
-            (result && result.stdout)
+          failure + ': ' + args[0] + ' stderr: ' + safeStderr + ' stdout: ' + safeStdout
         );
       }
       return String(result.stdout || '').trim();
@@ -277,14 +275,11 @@ function controllerGit(options, requireHook) {
       maxBuffer: 1024 * 1024,
     });
     if (!result || result.status !== 0) {
+      const redact = decisions.createSecretRedactor(env || process.env);
+      const safeStderr = redact(String((result && result.stderr) || ''));
+      const safeStdout = redact(String((result && result.stdout) || ''));
       throw new Error(
-        failure +
-          ': ' +
-          args[0] +
-          ' stderr: ' +
-          (result && result.stderr) +
-          ' stdout: ' +
-          (result && result.stdout)
+        failure + ': ' + args[0] + ' stderr: ' + safeStderr + ' stdout: ' + safeStdout
       );
     }
     return String(result.stdout || '').trim();
@@ -2152,7 +2147,7 @@ function getIsolatedLauncher() {
       ) {
         try {
           const { getTreeStatus } = require('./orchestrate');
-          const status = getTreeStatus(workerRoot);
+          const status = getTreeStatus(workerRoot, { untracked: 'all' });
           const dirtyPaths = status.dirtyPaths || [];
           const isSecretPath = (p) => {
             const norm = String(p).replace(/\\/g, '/');
@@ -2184,7 +2179,14 @@ function getIsolatedLauncher() {
                 const text = fs.readFileSync(itemPath, 'utf8');
                 const intake = require('./intake');
                 allowedPaths = intake.deriveAllowedPaths(text);
-              } catch {}
+              } catch (err) {
+                throw new Error(
+                  'WORKER_COMMIT_REFUSED: failed to read allowed paths from ' +
+                    itemPath +
+                    ': ' +
+                    err.message
+                );
+              }
             }
           }
           if (opts.isDocsOnly || opts.isPlanReview) {
@@ -2194,11 +2196,18 @@ function getIsolatedLauncher() {
               'docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv',
             ];
           }
-          if (Array.isArray(allowedPaths) && allowedPaths.length > 0) {
-            const normAllowed = new Set(allowedPaths.map((p) => String(p).replace(/\\/g, '/')));
+          if (dirtyPaths.length > 0) {
+            if (!Array.isArray(allowedPaths) || allowedPaths.length === 0) {
+              throw new Error('WORKER_COMMIT_REFUSED: allowed paths contract missing or empty');
+            }
+            const { matchGlobs } = require('./scope-gate');
+            const normAllowed = allowedPaths.map((p) =>
+              String(p).replace(/\\/g, '/').replace(/^\.\//, '')
+            );
             for (const p of dirtyPaths) {
-              const normP = String(p).replace(/\\/g, '/');
-              if (!normAllowed.has(normP)) {
+              const normP = String(p).replace(/\\/g, '/').replace(/^\.\//, '');
+              const isAllowed = normAllowed.includes(normP) || matchGlobs(normAllowed, normP);
+              if (!isAllowed) {
                 throw new Error(`WORKER_COMMIT_REFUSED: dirty file ${normP} outside allowed paths`);
               }
             }
@@ -3658,4 +3667,6 @@ module.exports = {
   DEFAULT_WORKER_TIMEOUT_MS,
   enforceTokenBudget,
   ensureGoalRegistrationInWorker,
+  controllerGit,
+  hookedControllerGit,
 };
