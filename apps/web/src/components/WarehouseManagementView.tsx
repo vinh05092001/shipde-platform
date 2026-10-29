@@ -57,7 +57,7 @@ export interface WarehouseManagementViewProps {
 export function WarehouseManagementView({
   warehouses = [],
   loading = false,
-  canEdit = true,
+  canEdit = false,
   scopedWarehouses = null,
   error = null,
   success = null,
@@ -366,9 +366,10 @@ export function WarehouseManagementView({
           printer_auto_print: formState.printer_auto_print,
         };
 
-        if (onUpdate) {
-          await onUpdate(editingWarehouse.id, updatePayload);
+        if (!onUpdate) {
+          throw new Error('Chức năng cập nhật kho hàng chưa được hỗ trợ.');
         }
+        await onUpdate(editingWarehouse.id, updatePayload);
         setViewSuccess(`Đã cập nhật kho hàng "${formState.name}" thành công.`);
       } else {
         const createPayload: CreateWarehouseInput = {
@@ -410,9 +411,10 @@ export function WarehouseManagementView({
           printer_auto_print: formState.printer_auto_print,
         };
 
-        if (onCreate) {
-          await onCreate(createPayload);
+        if (!onCreate) {
+          throw new Error('Chức năng thêm mới kho hàng chưa được hỗ trợ.');
         }
+        await onCreate(createPayload);
         setViewSuccess(`Đã thêm mới kho hàng "${formState.name}" thành công.`);
       }
 
@@ -493,6 +495,8 @@ export function WarehouseManagementView({
               onClick={() => setViewError(null)}
               data-testid="dismiss-error-button"
               className="p-1 hover:bg-rose-100 rounded-lg text-rose-600 transition cursor-pointer"
+              aria-label="Đóng thông báo lỗi"
+              title="Đóng thông báo lỗi"
             >
               <X className="w-4 h-4" />
             </button>
@@ -515,6 +519,8 @@ export function WarehouseManagementView({
             onClick={() => setViewSuccess(null)}
             data-testid="dismiss-success-button"
             className="p-1 hover:bg-emerald-100 rounded-lg text-emerald-600 transition cursor-pointer"
+            aria-label="Đóng thông báo thành công"
+            title="Đóng thông báo thành công"
           >
             <X className="w-4 h-4" />
           </button>
@@ -577,6 +583,7 @@ export function WarehouseManagementView({
               data-testid="refresh-warehouses-button"
               disabled={loading}
               className="p-2 text-slate-500 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-xl transition cursor-pointer disabled:opacity-50"
+              aria-label="Làm mới danh sách kho hàng"
               title="Làm mới danh sách"
             >
               <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
@@ -603,6 +610,8 @@ export function WarehouseManagementView({
           <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <input
             type="text"
+            id="input-search-warehouse"
+            aria-label="Tìm kiếm kho hàng"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Tìm theo tên kho, mã kho, người liên hệ, địa chỉ..."
@@ -612,8 +621,12 @@ export function WarehouseManagementView({
         </div>
 
         <div className="flex items-center gap-2">
-          <label className="text-xs text-slate-500 font-medium">Trạng thái:</label>
+          <label htmlFor="filter-status" className="text-xs text-slate-500 font-medium">
+            Trạng thái:
+          </label>
           <select
+            id="filter-status"
+            aria-label="Lọc theo trạng thái kho hàng"
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value as any)}
             data-testid="filter-status"
@@ -743,6 +756,7 @@ export function WarehouseManagementView({
                         onClick={() => handleOpenEdit(wh)}
                         data-testid={`edit-warehouse-button-${wh.id}`}
                         className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition cursor-pointer"
+                        aria-label={`Chỉnh sửa kho ${wh.name}`}
                         title="Chỉnh sửa kho"
                       >
                         <Edit3 className="w-4 h-4" />
@@ -905,6 +919,9 @@ export function WarehouseManagementView({
       {/* Modal Dialog Form (Create / Edit) */}
       {isFormOpen && (
         <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="warehouse-modal-title"
           data-testid="warehouse-modal"
           className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto"
         >
@@ -916,7 +933,7 @@ export function WarehouseManagementView({
                   <WarehouseIcon className="w-4 h-4" />
                 </div>
                 <div>
-                  <h3 className="text-sm font-bold text-slate-900">
+                  <h3 id="warehouse-modal-title" className="text-sm font-bold text-slate-900">
                     {editingWarehouse ? 'Chỉnh sửa kho hàng' : 'Thêm mới kho hàng'}
                   </h3>
                   <p className="text-[11px] text-slate-500">
@@ -932,6 +949,8 @@ export function WarehouseManagementView({
                 data-testid="close-modal-button"
                 disabled={submitting}
                 className="p-1 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-100 transition cursor-pointer"
+                aria-label="Đóng cửa sổ"
+                title="Đóng cửa sổ"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -1008,11 +1027,15 @@ export function WarehouseManagementView({
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     {/* Warehouse Name */}
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                      <label
+                        htmlFor="input-warehouse-name"
+                        className="block text-xs font-bold text-slate-700 mb-1"
+                      >
                         Tên kho hàng <span className="text-rose-600">*</span>
                       </label>
                       <input
                         type="text"
+                        id="input-warehouse-name"
                         value={formState.name}
                         onChange={(e) => handleFormFieldChange('name', e.target.value)}
                         placeholder="VD: Kho Tổng TP.HCM, Kho Hà Nội..."
@@ -1035,11 +1058,15 @@ export function WarehouseManagementView({
 
                     {/* Warehouse Code */}
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                      <label
+                        htmlFor="input-warehouse-code"
+                        className="block text-xs font-bold text-slate-700 mb-1"
+                      >
                         Mã kho hàng (Mã định danh)
                       </label>
                       <input
                         type="text"
+                        id="input-warehouse-code"
                         value={formState.code}
                         onChange={(e) => handleFormFieldChange('code', e.target.value)}
                         placeholder="VD: KHO_HCM_01 (tự sinh nếu để trống)"
@@ -1064,11 +1091,15 @@ export function WarehouseManagementView({
                   {/* Contact Name & Phone */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                      <label
+                        htmlFor="input-warehouse-contact-name"
+                        className="block text-xs font-bold text-slate-700 mb-1"
+                      >
                         Người liên hệ tại kho <span className="text-rose-600">*</span>
                       </label>
                       <input
                         type="text"
+                        id="input-warehouse-contact-name"
                         value={formState.contact_name}
                         onChange={(e) => handleFormFieldChange('contact_name', e.target.value)}
                         placeholder="Họ và tên thủ kho / quản lý"
@@ -1090,11 +1121,15 @@ export function WarehouseManagementView({
                     </div>
 
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                      <label
+                        htmlFor="input-warehouse-contact-phone"
+                        className="block text-xs font-bold text-slate-700 mb-1"
+                      >
                         Số điện thoại liên hệ <span className="text-rose-600">*</span>
                       </label>
                       <input
                         type="text"
+                        id="input-warehouse-contact-phone"
                         value={formState.contact_phone}
                         onChange={(e) => handleFormFieldChange('contact_phone', e.target.value)}
                         placeholder="VD: 0901234567"
@@ -1118,11 +1153,15 @@ export function WarehouseManagementView({
 
                   {/* Contact Email */}
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                    <label
+                      htmlFor="input-warehouse-contact-email"
+                      className="block text-xs font-bold text-slate-700 mb-1"
+                    >
                       Email liên hệ kho (tùy chọn)
                     </label>
                     <input
                       type="email"
+                      id="input-warehouse-contact-email"
                       value={formState.contact_email}
                       onChange={(e) => handleFormFieldChange('contact_email', e.target.value)}
                       placeholder="kho@example.com"
@@ -1145,11 +1184,15 @@ export function WarehouseManagementView({
 
                   {/* Street Address */}
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                    <label
+                      htmlFor="input-warehouse-address-line"
+                      className="block text-xs font-bold text-slate-700 mb-1"
+                    >
                       Địa chỉ số nhà, tên đường lấy hàng <span className="text-rose-600">*</span>
                     </label>
                     <input
                       type="text"
+                      id="input-warehouse-address-line"
                       value={formState.address_line}
                       onChange={(e) => handleFormFieldChange('address_line', e.target.value)}
                       placeholder="Số nhà, tên đường, tòa nhà hoặc cụm công nghiệp..."
@@ -1173,11 +1216,15 @@ export function WarehouseManagementView({
                   {/* Ward, District, City */}
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                      <label
+                        htmlFor="input-warehouse-ward"
+                        className="block text-xs font-bold text-slate-700 mb-1"
+                      >
                         Phường / Xã
                       </label>
                       <input
                         type="text"
+                        id="input-warehouse-ward"
                         value={formState.ward}
                         onChange={(e) => handleFormFieldChange('ward', e.target.value)}
                         placeholder="Phường/Xã"
@@ -1187,11 +1234,15 @@ export function WarehouseManagementView({
                     </div>
 
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                      <label
+                        htmlFor="input-warehouse-district"
+                        className="block text-xs font-bold text-slate-700 mb-1"
+                      >
                         Quận / Huyện <span className="text-rose-600">*</span>
                       </label>
                       <input
                         type="text"
+                        id="input-warehouse-district"
                         value={formState.district}
                         onChange={(e) => handleFormFieldChange('district', e.target.value)}
                         placeholder="Quận/Huyện"
@@ -1213,11 +1264,15 @@ export function WarehouseManagementView({
                     </div>
 
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                      <label
+                        htmlFor="input-warehouse-city"
+                        className="block text-xs font-bold text-slate-700 mb-1"
+                      >
                         Tỉnh / Thành phố <span className="text-rose-600">*</span>
                       </label>
                       <input
                         type="text"
+                        id="input-warehouse-city"
                         value={formState.city}
                         onChange={(e) => handleFormFieldChange('city', e.target.value)}
                         placeholder="Tỉnh/Thành phố"
@@ -1241,9 +1296,13 @@ export function WarehouseManagementView({
 
                   {/* Default & Status Checkboxes */}
                   <div className="pt-2 border-t border-slate-100 space-y-2">
-                    <label className="flex items-center gap-2 cursor-pointer">
+                    <label
+                      htmlFor="checkbox-warehouse-default"
+                      className="flex items-center gap-2 cursor-pointer"
+                    >
                       <input
                         type="checkbox"
+                        id="checkbox-warehouse-default"
                         checked={formState.is_default}
                         onChange={(e) => handleFormFieldChange('is_default', e.target.checked)}
                         data-testid="checkbox-warehouse-default"
@@ -1266,9 +1325,13 @@ export function WarehouseManagementView({
               {activeTab === 'return' && (
                 <div className="space-y-4">
                   <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
-                    <label className="flex items-center gap-2.5 cursor-pointer">
+                    <label
+                      htmlFor="checkbox-warehouse-different-return"
+                      className="flex items-center gap-2.5 cursor-pointer"
+                    >
                       <input
                         type="checkbox"
+                        id="checkbox-warehouse-different-return"
                         checked={formState.use_different_return_address}
                         onChange={(e) =>
                           handleFormFieldChange('use_different_return_address', e.target.checked)
@@ -1290,11 +1353,15 @@ export function WarehouseManagementView({
                     <div className="space-y-3 pt-2">
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div>
-                          <label className="block text-xs font-bold text-slate-700 mb-1">
+                          <label
+                            htmlFor="input-warehouse-return-contact-name"
+                            className="block text-xs font-bold text-slate-700 mb-1"
+                          >
                             Người nhận hàng hoàn <span className="text-rose-600">*</span>
                           </label>
                           <input
                             type="text"
+                            id="input-warehouse-return-contact-name"
                             value={formState.return_contact_name}
                             onChange={(e) =>
                               handleFormFieldChange('return_contact_name', e.target.value)
@@ -1318,11 +1385,15 @@ export function WarehouseManagementView({
                         </div>
 
                         <div>
-                          <label className="block text-xs font-bold text-slate-700 mb-1">
+                          <label
+                            htmlFor="input-warehouse-return-contact-phone"
+                            className="block text-xs font-bold text-slate-700 mb-1"
+                          >
                             SĐT nhận hoàn <span className="text-rose-600">*</span>
                           </label>
                           <input
                             type="text"
+                            id="input-warehouse-return-contact-phone"
                             value={formState.return_contact_phone}
                             onChange={(e) =>
                               handleFormFieldChange('return_contact_phone', e.target.value)
@@ -1347,11 +1418,15 @@ export function WarehouseManagementView({
                       </div>
 
                       <div>
-                        <label className="block text-xs font-bold text-slate-700 mb-1">
+                        <label
+                          htmlFor="input-warehouse-return-address-line"
+                          className="block text-xs font-bold text-slate-700 mb-1"
+                        >
                           Địa chỉ hoàn hàng chi tiết <span className="text-rose-600">*</span>
                         </label>
                         <input
                           type="text"
+                          id="input-warehouse-return-address-line"
                           value={formState.return_address_line}
                           onChange={(e) =>
                             handleFormFieldChange('return_address_line', e.target.value)
@@ -1376,11 +1451,15 @@ export function WarehouseManagementView({
 
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                         <div>
-                          <label className="block text-xs font-bold text-slate-700 mb-1">
+                          <label
+                            htmlFor="input-warehouse-return-ward"
+                            className="block text-xs font-bold text-slate-700 mb-1"
+                          >
                             Phường / Xã
                           </label>
                           <input
                             type="text"
+                            id="input-warehouse-return-ward"
                             value={formState.return_ward}
                             onChange={(e) => handleFormFieldChange('return_ward', e.target.value)}
                             placeholder="Phường/Xã"
@@ -1390,11 +1469,15 @@ export function WarehouseManagementView({
                         </div>
 
                         <div>
-                          <label className="block text-xs font-bold text-slate-700 mb-1">
+                          <label
+                            htmlFor="input-warehouse-return-district"
+                            className="block text-xs font-bold text-slate-700 mb-1"
+                          >
                             Quận / Huyện <span className="text-rose-600">*</span>
                           </label>
                           <input
                             type="text"
+                            id="input-warehouse-return-district"
                             value={formState.return_district}
                             onChange={(e) =>
                               handleFormFieldChange('return_district', e.target.value)
@@ -1418,11 +1501,15 @@ export function WarehouseManagementView({
                         </div>
 
                         <div>
-                          <label className="block text-xs font-bold text-slate-700 mb-1">
+                          <label
+                            htmlFor="input-warehouse-return-city"
+                            className="block text-xs font-bold text-slate-700 mb-1"
+                          >
                             Tỉnh / Thành phố <span className="text-rose-600">*</span>
                           </label>
                           <input
                             type="text"
+                            id="input-warehouse-return-city"
                             value={formState.return_city}
                             onChange={(e) => handleFormFieldChange('return_city', e.target.value)}
                             placeholder="Tỉnh/Thành phố"
@@ -1452,11 +1539,15 @@ export function WarehouseManagementView({
               {activeTab === 'schedule' && (
                 <div className="space-y-4">
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                    <label
+                      htmlFor="input-warehouse-cutoff-time"
+                      className="block text-xs font-bold text-slate-700 mb-1"
+                    >
                       Giờ cắt ca lấy hàng (Cutoff Time)
                     </label>
                     <input
                       type="text"
+                      id="input-warehouse-cutoff-time"
                       value={formState.cutoff_time}
                       onChange={(e) => handleFormFieldChange('cutoff_time', e.target.value)}
                       placeholder="VD: 16:00 hoặc 18:30 (định dạng HH:mm)"
@@ -1482,11 +1573,15 @@ export function WarehouseManagementView({
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                    <label
+                      htmlFor="textarea-warehouse-schedule-notes"
+                      className="block text-xs font-bold text-slate-700 mb-1"
+                    >
                       Chỉ dẫn &amp; Ghi chú cho bưu tá đến lấy
                     </label>
                     <textarea
                       rows={3}
+                      id="textarea-warehouse-schedule-notes"
                       value={formState.schedule_notes}
                       onChange={(e) => handleFormFieldChange('schedule_notes', e.target.value)}
                       placeholder="VD: Bấm chuông cửa sau, kho nằm trong hẻm xe tải 2.5T, gọi trước 15 phút..."
@@ -1502,10 +1597,14 @@ export function WarehouseManagementView({
                 <div className="space-y-4">
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                      <label
+                        htmlFor="select-warehouse-printer-paper-size"
+                        className="block text-xs font-bold text-slate-700 mb-1"
+                      >
                         Khổ giấy in nhãn chuẩn
                       </label>
                       <select
+                        id="select-warehouse-printer-paper-size"
                         value={formState.printer_paper_size}
                         onChange={(e) =>
                           handleFormFieldChange('printer_paper_size', e.target.value as any)
@@ -1522,10 +1621,14 @@ export function WarehouseManagementView({
                     </div>
 
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                      <label
+                        htmlFor="select-warehouse-printer-dpi"
+                        className="block text-xs font-bold text-slate-700 mb-1"
+                      >
                         Độ phân giải máy in (DPI)
                       </label>
                       <select
+                        id="select-warehouse-printer-dpi"
                         value={formState.printer_dpi}
                         onChange={(e) =>
                           handleFormFieldChange('printer_dpi', parseInt(e.target.value, 10) as any)
@@ -1543,11 +1646,15 @@ export function WarehouseManagementView({
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                    <label
+                      htmlFor="input-warehouse-printer-name"
+                      className="block text-xs font-bold text-slate-700 mb-1"
+                    >
                       Tên máy in nhãn liên kết (tùy chọn)
                     </label>
                     <input
                       type="text"
+                      id="input-warehouse-printer-name"
                       value={formState.printer_name}
                       onChange={(e) => handleFormFieldChange('printer_name', e.target.value)}
                       placeholder="VD: Xprinter XP-420B, HPRT N41..."
@@ -1557,9 +1664,13 @@ export function WarehouseManagementView({
                   </div>
 
                   <div className="pt-2">
-                    <label className="flex items-center gap-2 cursor-pointer">
+                    <label
+                      htmlFor="checkbox-warehouse-printer-auto-print"
+                      className="flex items-center gap-2 cursor-pointer"
+                    >
                       <input
                         type="checkbox"
+                        id="checkbox-warehouse-printer-auto-print"
                         checked={formState.printer_auto_print}
                         onChange={(e) =>
                           handleFormFieldChange('printer_auto_print', e.target.checked)

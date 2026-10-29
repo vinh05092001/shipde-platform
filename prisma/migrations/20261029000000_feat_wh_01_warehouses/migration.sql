@@ -41,5 +41,7 @@ CREATE TABLE IF NOT EXISTS "warehouses" (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS "warehouses_merchant_id_code_key" ON "warehouses"("merchant_id", "code");
+CREATE UNIQUE INDEX IF NOT EXISTS "warehouses_id_merchant_id_key" ON "warehouses"("id", "merchant_id");
+CREATE UNIQUE INDEX IF NOT EXISTS "warehouses_merchant_id_is_default_unique" ON "warehouses"("merchant_id") WHERE ("is_default" = true);
 CREATE INDEX IF NOT EXISTS "warehouses_merchant_id_status_idx" ON "warehouses"("merchant_id", "status");
 CREATE INDEX IF NOT EXISTS "warehouses_merchant_id_is_default_idx" ON "warehouses"("merchant_id", "is_default");

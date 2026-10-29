@@ -78,14 +78,16 @@ async function runWarehousesSupertestSuite() {
   await app.get(RbacService).ensurePlatformSeed();
 
   const testSuffix = Date.now().toString().slice(-6);
+  let merchantIdA = '';
+  let merchantIdB = '';
 
   try {
     const tokenSecret = 'test-token-secret-for-warehouses-supertest-32-chars';
     process.env.AUTH_TOKEN_SECRET = tokenSecret;
 
     // 1. Fixture: Merchant A & Merchant B
-    const merchantIdA = randomUUID();
-    const merchantIdB = randomUUID();
+    merchantIdA = randomUUID();
+    merchantIdB = randomUUID();
 
     await prisma.merchant.createMany({
       data: [
@@ -112,7 +114,7 @@ async function runWarehousesSupertestSuite() {
       mId: string,
       role: RoleEnum,
       emailSuffix: string,
-      warehouseScopes: string[] = []
+      warehouseScopes: string[] = role === RoleEnum.OWNER ? ['*'] : []
     ): Promise<{ token: string; userId: string; sessionId: string }> => {
       const userId = randomUUID();
       const sessionId = randomUUID();
@@ -226,9 +228,16 @@ async function runWarehousesSupertestSuite() {
     });
     assert.ok(auditCreated);
     assert.strictEqual((auditCreated.new_value as any).code, warehouseCode1);
-    // Sensitive contact phone must be masked
+    // Sensitive contact phone must be masked at top-level and nested in address_json
     assert.strictEqual((auditCreated.new_value as any).contact_phone, '090****567');
-    console.log('  PASS: AC-WH-01-06 & 07 verified first warehouse creation and auto-default.');
+    assert.strictEqual((auditCreated.new_value as any).address_json.contact_phone, '090****567');
+    assert.strictEqual(
+      (auditCreated.new_value as any).address_json.contact_email,
+      'k****h@gumac.vn'
+    );
+    console.log(
+      '  PASS: AC-WH-01-06 & 07 verified first warehouse creation, auto-default, and audit masking.'
+    );
 
     // ========================================================================
     // AC-WH-01-08: Reject create warehouse with duplicate code
@@ -427,7 +436,9 @@ async function runWarehousesSupertestSuite() {
     assert.ok(auditUpdated);
     assert.strictEqual((auditUpdated.old_value as any).contact_phone, '090****567');
     assert.strictEqual((auditUpdated.new_value as any).contact_phone, '091****456');
-    console.log('  PASS: AC-WH-01-12 verified update and audit log.');
+    assert.strictEqual((auditUpdated.old_value as any).address_json.contact_phone, '090****567');
+    assert.strictEqual((auditUpdated.new_value as any).address_json.contact_phone, '091****456');
+    console.log('  PASS: AC-WH-01-12 verified update and audit log with nested masking.');
 
     // ========================================================================
     // AC-WH-01-13: Set warehouse as default
@@ -546,13 +557,32 @@ async function runWarehousesSupertestSuite() {
       const str = JSON.stringify(log);
       assert.ok(!str.includes('password_hash'));
       assert.ok(!str.includes('session_token'));
+      // Raw PII must never be present in audit diffs (Finding 1)
+      assert.ok(!str.includes('0901234567'), 'Raw phone 0901234567 leaked in audit log');
+      assert.ok(!str.includes('0919123456'), 'Raw phone 0919123456 leaked in audit log');
+      assert.ok(!str.includes('kho.tanbinh@gumac.vn'), 'Raw email leaked in audit log');
     }
-    console.log(`  PASS: AC-WH-01-17 verified ${allWhAudits.length} audit logs clean of secrets.`);
+    console.log(
+      `  PASS: AC-WH-01-17 verified ${allWhAudits.length} audit logs clean of secrets and PII.`
+    );
 
     console.log('================================================================');
     console.log('🎉 ALL FEAT-WH-01 SUPERTEST CHECKS PASSED (AC-01..17)!');
     console.log('================================================================');
   } finally {
+    // Finding 5: Clean up all tenant rows created during the test run
+    try {
+      if (merchantIdA && merchantIdB) {
+        const tenantIds = [merchantIdA, merchantIdB];
+        await prisma.auditLog.deleteMany({ where: { merchant_id: { in: tenantIds } } });
+        await prisma.warehouse.deleteMany({ where: { merchant_id: { in: tenantIds } } });
+        await prisma.deviceSession.deleteMany({ where: { merchant_id: { in: tenantIds } } });
+        await prisma.user.deleteMany({ where: { merchant_id: { in: tenantIds } } });
+        await prisma.merchant.deleteMany({ where: { id: { in: tenantIds } } });
+      }
+    } catch (cleanupErr) {
+      console.warn('⚠️ Test cleanup warning:', cleanupErr);
+    }
     await app.close();
   }
 }

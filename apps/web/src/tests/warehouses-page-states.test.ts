@@ -514,6 +514,38 @@ async function runWarehousesWebTestSuite() {
   assert.ok(pageMarkup.includes('WH-HCM-01'));
   console.log('  PASS: WarehousesSettingsPage full container verified.');
 
+  // 15. Finding 3: canEdit defaults to false (fail-closed)
+  console.log('🧪 15. Testing UI Edit Rights: canEdit defaults to false (Finding 3)...');
+  const readOnlyMarkup = renderToStaticMarkup(
+    React.createElement(WarehouseManagementView, {
+      warehouses: allWarehouses,
+      // canEdit omitted, must default to false
+    })
+  );
+  assert.ok(readOnlyMarkup.includes('data-testid="warehouse-forbidden-banner"'));
+  assert.ok(readOnlyMarkup.includes('Giới hạn quyền cấu hình kho hàng'));
+  assert.ok(!readOnlyMarkup.includes('data-testid="create-warehouse-button"'));
+  console.log('  PASS: canEdit defaults to false verified.');
+
+  // 16. Finding 7: Icon-only buttons have accessible aria-labels
+  console.log(
+    '🧪 16. Testing Accessibility: icon-only buttons have accessible aria-labels (Finding 7)...'
+  );
+  const a11yMarkup = renderToStaticMarkup(
+    React.createElement(WarehouseManagementView, {
+      warehouses: allWarehouses,
+      canEdit: true,
+      error: 'Có lỗi xảy ra',
+      success: 'Thành công',
+      onRefresh: () => {},
+    })
+  );
+  assert.ok(a11yMarkup.includes('aria-label="Đóng thông báo lỗi"'));
+  assert.ok(a11yMarkup.includes('aria-label="Đóng thông báo thành công"'));
+  assert.ok(a11yMarkup.includes('aria-label="Làm mới danh sách kho hàng"'));
+  assert.ok(a11yMarkup.includes('aria-label="Chỉnh sửa kho '));
+  console.log('  PASS: Icon-only button aria-labels verified.');
+
   console.log('================================================================');
   console.log('🎉 ALL WEB WAREHOUSES UI STATES VERIFIED 100%!');
   console.log('================================================================');

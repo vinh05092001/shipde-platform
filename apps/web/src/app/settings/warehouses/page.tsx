@@ -34,13 +34,15 @@ export default function WarehousesSettingsPage({
   const { user } = useAuth();
   const token = typeof window !== 'undefined' ? localStorage.getItem('shipde_token') : null;
 
-  // By default, OWNER and OPS_CSKH have mutation access; others are read-only
+  // Mutation access strictly requires the iam:shop_config permission, never defaults to true
   const derivedCanEdit =
     initialCanEdit !== undefined
       ? initialCanEdit
-      : user
-        ? user.role === 'OWNER' || user.role === 'OPS_CSKH'
-        : true;
+      : Boolean(
+          user &&
+          Array.isArray((user as any).permissions) &&
+          (user as any).permissions.includes('iam:shop_config')
+        );
 
   const derivedScopedWarehouses =
     initialScopedWarehouses !== null ? initialScopedWarehouses : user?.warehouse_scopes || null;

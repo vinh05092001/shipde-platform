@@ -18,6 +18,9 @@ export const SENSITIVE_WAREHOUSE_AUDIT_FIELDS = new Set([
   'contact_phone',
   'contact_email',
   'return_contact_phone',
+  'return_contact_email',
+  'phone',
+  'email',
 ]);
 
 export function maskWarehouseAuditValue(field: string, val: unknown): unknown {
@@ -25,7 +28,26 @@ export function maskWarehouseAuditValue(field: string, val: unknown): unknown {
   if (typeof val === 'string' && SENSITIVE_WAREHOUSE_AUDIT_FIELDS.has(field)) {
     return maskIdentifier(val);
   }
+  if (Array.isArray(val)) {
+    return val.map((item) =>
+      typeof item === 'object' && item !== null
+        ? maskWarehouseAuditObject(item as Record<string, unknown>)
+        : item
+    );
+  }
+  if (typeof val === 'object') {
+    return maskWarehouseAuditObject(val as Record<string, unknown>);
+  }
   return val;
+}
+
+export function maskWarehouseAuditObject(obj: Record<string, unknown>): Record<string, unknown> {
+  if (!obj || typeof obj !== 'object') return obj;
+  const result: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    result[k] = maskWarehouseAuditValue(k, v);
+  }
+  return result;
 }
 
 @Injectable()
@@ -82,19 +104,13 @@ export class WarehousesService {
    * Fetches the actor's live warehouse scopes from the database
    */
   public async getActorWarehouseScopes(actor: ActorContext): Promise<string[]> {
-    if (actor.role === 'OWNER') {
-      return ['*'];
-    }
     if (!actor.userId) {
       return [];
     }
-    const user = await this.prisma.user.findUnique({
-      where: { id: actor.userId },
+    const user = await this.prisma.user.findFirst({
+      where: { id: actor.userId, merchant_id: actor.merchantId },
       select: { role: true, warehouse_scopes: true },
     });
-    if (user?.role === 'OWNER') {
-      return ['*'];
-    }
     return user?.warehouse_scopes || [];
   }
 
@@ -117,9 +133,8 @@ export class WarehousesService {
     hasConfigPermission: boolean,
     correlationId: string
   ) {
-    const isOwner = actor.role === 'OWNER';
     const scopes = await this.getActorWarehouseScopes(actor);
-    const hasUniversalAccess = isOwner || hasConfigPermission || scopes.includes('*');
+    const hasUniversalAccess = scopes.includes('*');
 
     let whereClause: any = {
       merchant_id: merchantId,
@@ -181,9 +196,8 @@ export class WarehousesService {
       );
     }
 
-    const isOwner = actor.role === 'OWNER';
     const scopes = await this.getActorWarehouseScopes(actor);
-    const hasUniversalAccess = isOwner || hasConfigPermission || scopes.includes('*');
+    const hasUniversalAccess = scopes.includes('*');
 
     if (!hasUniversalAccess && !this.hasWarehouseAccess(scopes, warehouse)) {
       throw new CanonicalApiException(
@@ -237,6 +251,17 @@ export class WarehousesService {
       code = `WH-${slug || 'KHO'}-${randomSuffix}`;
     }
 
+    // Check scope: non-wildcard actors cannot create outside permitted warehouse scopes
+    const scopes = await this.getActorWarehouseScopes(actor);
+    if (!scopes.includes('*') && (!dto.code || !scopes.includes(code))) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'WAREHOUSE_SCOPE_UNAUTHORIZED',
+        'Người dùng không có quyền tạo kho hàng ngoài phạm vi kho được phân công',
+        false
+      );
+    }
+
     // Check unique code in tenant
     const existingCode = await this.prisma.warehouse.findUnique({
       where: {
@@ -257,14 +282,6 @@ export class WarehousesService {
         [{ field: 'code', code: 'DUPLICATE', message: `Mã kho hàng '${code}' đã tồn tại` }]
       );
     }
-
-    // Check if this is the first warehouse for this merchant
-    const existingCount = await this.prisma.warehouse.count({
-      where: { merchant_id: merchantId },
-    });
-
-    const isFirst = existingCount === 0;
-    const isDefault = isFirst ? true : Boolean(dto.is_default);
 
     const addressJson = {
       contact_name: dto.contact_name.trim(),
@@ -289,95 +306,133 @@ export class WarehousesService {
         }
       : null;
 
-    const created = await this.prisma.$transaction(async (tx) => {
-      if (isDefault && existingCount > 0) {
-        await tx.warehouse.updateMany({
-          where: { merchant_id: merchantId, is_default: true },
-          data: { is_default: false },
+    try {
+      const created = await this.prisma.$transaction(async (tx) => {
+        // Evaluate default count strictly inside transaction to prevent race conditions
+        const existingCount = await tx.warehouse.count({
+          where: { merchant_id: merchantId },
         });
-      }
 
-      const record = await tx.warehouse.create({
-        data: {
-          merchant_id: merchantId,
-          name: dto.name.trim(),
-          code,
-          status: 'active',
-          is_default: isDefault,
-          contact_name: dto.contact_name.trim(),
-          contact_phone: dto.contact_phone.trim(),
-          contact_email: dto.contact_email?.trim() || null,
-          address_line: dto.address_line.trim(),
-          ward: dto.ward?.trim() || null,
-          district: dto.district.trim(),
-          city: dto.city.trim(),
-          postal_code: dto.postal_code?.trim() || null,
-          address_json: addressJson as unknown as Prisma.InputJsonValue,
-          use_different_return_address: useDiffReturn,
-          return_contact_name: useDiffReturn ? dto.return_contact_name?.trim() || null : null,
-          return_contact_phone: useDiffReturn ? dto.return_contact_phone?.trim() || null : null,
-          return_address_line: useDiffReturn ? dto.return_address_line?.trim() || null : null,
-          return_ward: useDiffReturn ? dto.return_ward?.trim() || null : null,
-          return_district: useDiffReturn ? dto.return_district?.trim() || null : null,
-          return_city: useDiffReturn ? dto.return_city?.trim() || null : null,
+        const isFirst = existingCount === 0;
+        const isDefault = isFirst ? true : Boolean(dto.is_default);
+
+        if (isDefault && existingCount > 0) {
+          await tx.warehouse.updateMany({
+            where: { merchant_id: merchantId, is_default: true },
+            data: { is_default: false },
+          });
+        }
+
+        const record = await tx.warehouse.create({
+          data: {
+            merchant_id: merchantId,
+            name: dto.name.trim(),
+            code,
+            status: 'active',
+            is_default: isDefault,
+            contact_name: dto.contact_name.trim(),
+            contact_phone: dto.contact_phone.trim(),
+            contact_email: dto.contact_email?.trim() || null,
+            address_line: dto.address_line.trim(),
+            ward: dto.ward?.trim() || null,
+            district: dto.district.trim(),
+            city: dto.city.trim(),
+            postal_code: dto.postal_code?.trim() || null,
+            address_json: addressJson as unknown as Prisma.InputJsonValue,
+            use_different_return_address: useDiffReturn,
+            return_contact_name: useDiffReturn ? dto.return_contact_name?.trim() || null : null,
+            return_contact_phone: useDiffReturn ? dto.return_contact_phone?.trim() || null : null,
+            return_address_line: useDiffReturn ? dto.return_address_line?.trim() || null : null,
+            return_ward: useDiffReturn ? dto.return_ward?.trim() || null : null,
+            return_district: useDiffReturn ? dto.return_district?.trim() || null : null,
+            return_city: useDiffReturn ? dto.return_city?.trim() || null : null,
+            return_address_json: returnAddressJson
+              ? (returnAddressJson as unknown as Prisma.InputJsonValue)
+              : Prisma.JsonNull,
+            operating_hours: dto.operating_hours
+              ? (dto.operating_hours as unknown as Prisma.InputJsonValue)
+              : Prisma.JsonNull,
+            cutoff_time: dto.cutoff_time?.trim() || null,
+            schedule_notes: dto.schedule_notes?.trim() || null,
+            contacts_json: dto.contacts_json
+              ? (dto.contacts_json as unknown as Prisma.InputJsonValue)
+              : Prisma.JsonNull,
+            printer_paper_size: dto.printer_paper_size || 'A6',
+            printer_dpi: dto.printer_dpi || 203,
+            printer_name: dto.printer_name?.trim() || null,
+            printer_auto_print: dto.printer_auto_print ?? false,
+            printer_config: dto.printer_config
+              ? (dto.printer_config as unknown as Prisma.InputJsonValue)
+              : Prisma.JsonNull,
+          },
+        });
+
+        // Audit trail with masked PII across top-level and nested JSON objects
+        const auditPayload: Record<string, unknown> = {
+          name: record.name,
+          code: record.code,
+          status: record.status,
+          is_default: record.is_default,
+          contact_name: record.contact_name,
+          contact_phone: maskWarehouseAuditValue('contact_phone', record.contact_phone),
+          contact_email: maskWarehouseAuditValue('contact_email', record.contact_email),
+          address_line: record.address_line,
+          district: record.district,
+          city: record.city,
+          address_json: maskWarehouseAuditValue('address_json', addressJson),
+          use_different_return_address: record.use_different_return_address,
           return_address_json: returnAddressJson
-            ? (returnAddressJson as unknown as Prisma.InputJsonValue)
-            : Prisma.JsonNull,
-          operating_hours: dto.operating_hours
-            ? (dto.operating_hours as unknown as Prisma.InputJsonValue)
-            : Prisma.JsonNull,
-          cutoff_time: dto.cutoff_time?.trim() || null,
-          schedule_notes: dto.schedule_notes?.trim() || null,
-          contacts_json: dto.contacts_json
-            ? (dto.contacts_json as unknown as Prisma.InputJsonValue)
-            : Prisma.JsonNull,
-          printer_paper_size: dto.printer_paper_size || 'A6',
-          printer_dpi: dto.printer_dpi || 203,
-          printer_name: dto.printer_name?.trim() || null,
-          printer_auto_print: dto.printer_auto_print ?? false,
-          printer_config: dto.printer_config
-            ? (dto.printer_config as unknown as Prisma.InputJsonValue)
-            : Prisma.JsonNull,
-        },
+            ? maskWarehouseAuditValue('return_address_json', returnAddressJson)
+            : null,
+        };
+
+        await tx.auditLog.create({
+          data: {
+            merchant_id: merchantId,
+            user_id: actor.userId,
+            actor: actor.role || actor.userId || null,
+            action: WarehouseAuditEvent.WAREHOUSE_CREATED,
+            entity_type: 'warehouse',
+            entity_id: record.id,
+            old_value: Prisma.JsonNull,
+            new_value: auditPayload as unknown as Prisma.InputJsonValue,
+            reason: correlationId ? `correlation_id:${correlationId}` : null,
+            ip_address: this.hashIp(clientIp),
+          },
+        });
+
+        return record;
       });
 
-      // Audit trail
-      const auditPayload: Record<string, unknown> = {
-        name: record.name,
-        code: record.code,
-        status: record.status,
-        is_default: record.is_default,
-        contact_name: record.contact_name,
-        contact_phone: maskWarehouseAuditValue('contact_phone', record.contact_phone),
-        contact_email: maskWarehouseAuditValue('contact_email', record.contact_email),
-        address_line: record.address_line,
-        district: record.district,
-        city: record.city,
+      return {
+        success: true,
+        data: this.formatWarehouse(created),
+        meta: { correlation_id: correlationId },
       };
-
-      await tx.auditLog.create({
-        data: {
-          merchant_id: merchantId,
-          user_id: actor.userId,
-          actor: actor.role || 'OWNER',
-          action: WarehouseAuditEvent.WAREHOUSE_CREATED,
-          entity_type: 'warehouse',
-          entity_id: record.id,
-          old_value: Prisma.JsonNull,
-          new_value: auditPayload as unknown as Prisma.InputJsonValue,
-          reason: correlationId ? `correlation_id:${correlationId}` : null,
-          ip_address: this.hashIp(clientIp),
-        },
-      });
-
-      return record;
-    });
-
-    return {
-      success: true,
-      data: this.formatWarehouse(created),
-      meta: { correlation_id: correlationId },
-    };
+    } catch (err: any) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        const target = Array.isArray(err.meta?.target)
+          ? err.meta.target.join(',')
+          : String(err.meta?.target || '');
+        if (target.includes('code') || target.includes('merchant_id_code')) {
+          throw new CanonicalApiException(
+            HttpStatus.CONFLICT,
+            'WAREHOUSE_CODE_EXISTS',
+            `Mã kho hàng '${code}' đã tồn tại trong cửa hàng`,
+            false,
+            undefined,
+            [{ field: 'code', code: 'DUPLICATE', message: `Mã kho hàng '${code}' đã tồn tại` }]
+          );
+        }
+        throw new CanonicalApiException(
+          HttpStatus.CONFLICT,
+          'CONFLICT',
+          'Xung đột dữ liệu kho hàng duy nhất (mã kho hoặc kho mặc định)',
+          false
+        );
+      }
+      throw err;
+    }
   }
 
   /**
@@ -412,6 +467,17 @@ export class WarehousesService {
         HttpStatus.NOT_FOUND,
         'WAREHOUSE_NOT_FOUND',
         'Kho hàng không tồn tại hoặc không thuộc cửa hàng này',
+        false
+      );
+    }
+
+    // Enforce FEAT-RBAC-02 warehouse scope server-side
+    const scopes = await this.getActorWarehouseScopes(actor);
+    if (!this.hasWarehouseAccess(scopes, existing)) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'WAREHOUSE_SCOPE_UNAUTHORIZED',
+        'Người dùng không có quyền chỉnh sửa kho hàng này',
         false
       );
     }
@@ -560,52 +626,75 @@ export class WarehousesService {
       dataToUpdate.return_address_json = Prisma.JsonNull;
     }
 
-    const updated = await this.prisma.$transaction(async (tx) => {
-      if (dataToUpdate.is_default === true) {
-        await tx.warehouse.updateMany({
-          where: { merchant_id: merchantId, is_default: true, id: { not: id } },
-          data: { is_default: false },
+    try {
+      const updated = await this.prisma.$transaction(async (tx) => {
+        if (dataToUpdate.is_default === true) {
+          await tx.warehouse.updateMany({
+            where: { merchant_id: merchantId, is_default: true, id: { not: id } },
+            data: { is_default: false },
+          });
+        }
+
+        const result = await tx.warehouse.update({
+          where: { id_merchant_id: { id, merchant_id: merchantId } },
+          data: dataToUpdate,
         });
-      }
 
-      const result = await tx.warehouse.update({
-        where: { id },
-        data: dataToUpdate,
+        // Build before/after diff for audit
+        const updatedFields = Object.keys(dataToUpdate);
+        const beforeDiff: Record<string, any> = {};
+        const afterDiff: Record<string, any> = {};
+
+        for (const field of updatedFields) {
+          beforeDiff[field] = maskWarehouseAuditValue(field, (existing as any)[field]);
+          afterDiff[field] = maskWarehouseAuditValue(field, (result as any)[field]);
+        }
+
+        await tx.auditLog.create({
+          data: {
+            merchant_id: merchantId,
+            user_id: actor.userId,
+            actor: actor.role || actor.userId || null,
+            action: WarehouseAuditEvent.WAREHOUSE_UPDATED,
+            entity_type: 'warehouse',
+            entity_id: id,
+            old_value: beforeDiff as unknown as Prisma.InputJsonValue,
+            new_value: afterDiff as unknown as Prisma.InputJsonValue,
+            reason: correlationId ? `correlation_id:${correlationId}` : null,
+            ip_address: this.hashIp(clientIp),
+          },
+        });
+
+        return result;
       });
 
-      // Build before/after diff for audit
-      const updatedFields = Object.keys(dataToUpdate);
-      const beforeDiff: Record<string, any> = {};
-      const afterDiff: Record<string, any> = {};
-
-      for (const field of updatedFields) {
-        beforeDiff[field] = maskWarehouseAuditValue(field, (existing as any)[field]);
-        afterDiff[field] = maskWarehouseAuditValue(field, (result as any)[field]);
+      return {
+        success: true,
+        data: this.formatWarehouse(updated),
+        meta: { correlation_id: correlationId },
+      };
+    } catch (err: any) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        const target = Array.isArray(err.meta?.target)
+          ? err.meta.target.join(',')
+          : String(err.meta?.target || '');
+        if (target.includes('code') || target.includes('merchant_id_code')) {
+          throw new CanonicalApiException(
+            HttpStatus.CONFLICT,
+            'WAREHOUSE_CODE_EXISTS',
+            'Mã kho hàng đã tồn tại trong cửa hàng',
+            false
+          );
+        }
+        throw new CanonicalApiException(
+          HttpStatus.CONFLICT,
+          'CONFLICT',
+          'Xung đột dữ liệu kho hàng duy nhất (mã kho hoặc kho mặc định)',
+          false
+        );
       }
-
-      await tx.auditLog.create({
-        data: {
-          merchant_id: merchantId,
-          user_id: actor.userId,
-          actor: actor.role || 'OWNER',
-          action: WarehouseAuditEvent.WAREHOUSE_UPDATED,
-          entity_type: 'warehouse',
-          entity_id: id,
-          old_value: beforeDiff as unknown as Prisma.InputJsonValue,
-          new_value: afterDiff as unknown as Prisma.InputJsonValue,
-          reason: correlationId ? `correlation_id:${correlationId}` : null,
-          ip_address: this.hashIp(clientIp),
-        },
-      });
-
-      return result;
-    });
-
-    return {
-      success: true,
-      data: this.formatWarehouse(updated),
-      meta: { correlation_id: correlationId },
-    };
+      throw err;
+    }
   }
 
   /**
@@ -631,41 +720,64 @@ export class WarehousesService {
       );
     }
 
-    const updated = await this.prisma.$transaction(async (tx) => {
-      // Unset previous defaults
-      await tx.warehouse.updateMany({
-        where: { merchant_id: merchantId, is_default: true, id: { not: id } },
-        data: { is_default: false },
+    // Enforce FEAT-RBAC-02 warehouse scope server-side
+    const scopes = await this.getActorWarehouseScopes(actor);
+    if (!this.hasWarehouseAccess(scopes, existing)) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'WAREHOUSE_SCOPE_UNAUTHORIZED',
+        'Người dùng không có quyền đặt kho hàng này làm mặc định',
+        false
+      );
+    }
+
+    try {
+      const updated = await this.prisma.$transaction(async (tx) => {
+        // Unset previous defaults
+        await tx.warehouse.updateMany({
+          where: { merchant_id: merchantId, is_default: true, id: { not: id } },
+          data: { is_default: false },
+        });
+
+        const res = await tx.warehouse.update({
+          where: { id_merchant_id: { id, merchant_id: merchantId } },
+          data: { is_default: true },
+        });
+
+        await tx.auditLog.create({
+          data: {
+            merchant_id: merchantId,
+            user_id: actor.userId,
+            actor: actor.role || actor.userId || null,
+            action: WarehouseAuditEvent.WAREHOUSE_SET_DEFAULT,
+            entity_type: 'warehouse',
+            entity_id: id,
+            old_value: { is_default: existing.is_default } as unknown as Prisma.InputJsonValue,
+            new_value: { is_default: true } as unknown as Prisma.InputJsonValue,
+            reason: correlationId ? `correlation_id:${correlationId}` : null,
+            ip_address: this.hashIp(clientIp),
+          },
+        });
+
+        return res;
       });
 
-      const res = await tx.warehouse.update({
-        where: { id },
-        data: { is_default: true },
-      });
-
-      await tx.auditLog.create({
-        data: {
-          merchant_id: merchantId,
-          user_id: actor.userId,
-          actor: actor.role || 'OWNER',
-          action: WarehouseAuditEvent.WAREHOUSE_SET_DEFAULT,
-          entity_type: 'warehouse',
-          entity_id: id,
-          old_value: { is_default: existing.is_default } as unknown as Prisma.InputJsonValue,
-          new_value: { is_default: true } as unknown as Prisma.InputJsonValue,
-          reason: correlationId ? `correlation_id:${correlationId}` : null,
-          ip_address: this.hashIp(clientIp),
-        },
-      });
-
-      return res;
-    });
-
-    return {
-      success: true,
-      data: this.formatWarehouse(updated),
-      meta: { correlation_id: correlationId },
-    };
+      return {
+        success: true,
+        data: this.formatWarehouse(updated),
+        meta: { correlation_id: correlationId },
+      };
+    } catch (err: any) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        throw new CanonicalApiException(
+          HttpStatus.CONFLICT,
+          'CONFLICT',
+          'Xung đột dữ liệu kho mặc định',
+          false
+        );
+      }
+      throw err;
+    }
   }
 
   /**
@@ -691,9 +803,20 @@ export class WarehousesService {
       );
     }
 
+    // Enforce FEAT-RBAC-02 warehouse scope server-side
+    const scopes = await this.getActorWarehouseScopes(actor);
+    if (!this.hasWarehouseAccess(scopes, existing)) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'WAREHOUSE_SCOPE_UNAUTHORIZED',
+        'Người dùng không có quyền ngưng hoạt động kho hàng này',
+        false
+      );
+    }
+
     const updated = await this.prisma.$transaction(async (tx) => {
       const res = await tx.warehouse.update({
-        where: { id },
+        where: { id_merchant_id: { id, merchant_id: merchantId } },
         data: { status: 'inactive' },
       });
 
@@ -701,7 +824,7 @@ export class WarehousesService {
         data: {
           merchant_id: merchantId,
           user_id: actor.userId,
-          actor: actor.role || 'OWNER',
+          actor: actor.role || actor.userId || null,
           action: WarehouseAuditEvent.WAREHOUSE_DEACTIVATED,
           entity_type: 'warehouse',
           entity_id: id,
