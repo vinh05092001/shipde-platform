@@ -36,7 +36,6 @@ export const PLATFORM_PERMISSIONS: CanonicalPermissionDefinition[] = [
     description: 'Ủy quyền cho nhân viên gửi lệnh L2 Execute trực tiếp tới hãng',
     category: 'IAM',
   },
-
   {
     code: 'search:tenant_wide',
     name: 'Tìm kiếm toàn cửa hàng',
@@ -149,6 +148,12 @@ export const PLATFORM_PERMISSIONS: CanonicalPermissionDefinition[] = [
     description: 'Tra cứu lịch sử thao tác hệ thống, thay đổi vai trò và hành động nhân viên',
     category: 'AUDIT',
   },
+  {
+    code: 'iam:shop_view',
+    name: 'Xem cấu hình cửa hàng',
+    description: 'Xem thông tin cấu hình cửa hàng và chi nhánh trong phạm vi được phân quyền',
+    category: 'IAM',
+  },
 ];
 
 export interface SystemRoleDefinition {
@@ -163,7 +168,7 @@ export const SYSTEM_ROLES: SystemRoleDefinition[] = [
     code: 'OWNER',
     name: 'Chủ Shop (Owner)',
     description: 'Toàn quyền điều hành, phân quyền nhân sự và cấu hình tổ chức',
-    // Owner receives the canonical registry grants
+    // Owner possesses every canonical capability permission.
     permissions: PLATFORM_PERMISSIONS.map((p) => p.code),
   },
   {
@@ -171,6 +176,7 @@ export const SYSTEM_ROLES: SystemRoleDefinition[] = [
     name: 'Vận Hành & CSKH (Ops/CSKH)',
     description: 'Tiếp nhận đơn hàng, tra cứu giá, cứu đơn và mở che SĐT khách khi xử lý sự cố',
     permissions: [
+      'iam:shop_view',
       'order:view_create',
       'shipment:quote_carrier',
       'shipment:create_update',
@@ -212,6 +218,7 @@ export const SYSTEM_ROLES: SystemRoleDefinition[] = [
     description:
       'Phê duyệt chính sách bảng giá, duyệt giải tỏa sai lệch tài chính và kiểm tra dòng tiền (Checker)',
     permissions: [
+      'iam:shop_view',
       'reconciliation:view_contract_rates',
       'reconciliation:approve_rate_policy',
       'reconciliation:import_settlement_bank',
