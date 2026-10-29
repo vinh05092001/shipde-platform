@@ -698,3 +698,210 @@ test('P2.9 regression: combined configured deployment and effort suffixes resolv
   assert.equal(b2, 'deepseek');
   assert.equal(e2, 'high');
 });
+
+test('R2 P1.2 regression: effort lookup keys by (source, metric) and retains independent base stream as fallback', () => {
+  const ranking = [
+    {
+      canonical: 'stream-model',
+      score: 75,
+      normalizedScore: 75,
+      codingTier: 'T2',
+      reviewTier: 'T2',
+      benchmarks: [
+        { name: 'swe', score: 70, source: { id: 'sourceA', url: 'https://source-a.org' } },
+        { name: 'swe', score: 80, source: { id: 'sourceB', url: 'https://source-b.org' } },
+      ],
+      efforts: {
+        high: {
+          benchmarks: [
+            { name: 'swe', score: 90, source: { id: 'sourceB', url: 'https://source-b.org' } },
+          ],
+        },
+      },
+    },
+  ];
+
+  const matched = matchModelPrior('stream-model-high', ranking);
+  assert.ok(matched, 'model-high must resolve');
+  assert.equal(matched.effort, 'high');
+  assert.equal(
+    matched.fallback,
+    true,
+    'must mark fallback because sourceA base benchmark was retained'
+  );
+  const bList = matched.entry.benchmarks;
+  assert.equal(
+    bList.length,
+    2,
+    'both sourceA (base fallback) and sourceB (effort) benchmarks must be present'
+  );
+  const fromA = bList.find((b) => b.source && b.source.id === 'sourceA');
+  const fromB = bList.find((b) => b.source && b.source.id === 'sourceB');
+  assert.ok(fromA, 'sourceA base observation must be retained as fallback');
+  assert.equal(fromA.score, 70);
+  assert.ok(fromB, 'sourceB effort observation must be used');
+  assert.equal(fromB.score, 90);
+});
+
+test('R2 P1.3 regression: prefix stripping only for configured routerPrefixes and unknown parens stay unmatched', () => {
+  const ranking = [
+    { canonical: 'grok-4-7', score: 80 },
+    { canonical: 'qwen-3-8', score: 85 },
+  ];
+
+  // 1. Unlisted router prefix grok/grok-4-7 must NOT match grok-4-7
+  const unlistedMatch = matchModelPrior('grok/grok-4-7', ranking);
+  assert.equal(unlistedMatch, null, 'unlisted prefix grok/ must fail closed and stay unmatched');
+
+  // Both parsers must reject unlisted prefix
+  const { base: grokBase } = splitModelEffort('grok/grok-4-7');
+  assert.equal(grokBase, 'grok/grok-4-7', 'splitModelEffort must not strip unlisted prefix');
+
+  // 2. Unknown parenthesized qualifier qwen-3-8 (max) must stay unmatched when max is excluded
+  const parenMatch = matchModelPrior('qwen-3-8 (max)', ranking);
+  assert.equal(
+    parenMatch,
+    null,
+    'qwen-3-8 (max) must not match base qwen-3-8 when max is excluded'
+  );
+});
+
+test('R2 P1.4 regression: digit-boundary hyphen rule handles single-letter prefixes as configured (o3 and o-3-high)', () => {
+  const docs = [
+    {
+      sources: [{ id: 'benchlm', url: 'https://benchlm.ai/data/models.json' }],
+      models: [
+        { modelId: 'o3', benchmarks: { swe: 82 } },
+        { modelId: 'o-3-high', benchmarks: { swe: 92 } },
+      ],
+    },
+  ];
+
+  const merged = mergePriorDocuments(docs);
+  const oRows = merged.ranking.filter((r) => r.canonical.startsWith('o-3') || r.canonical === 'o3');
+  assert.equal(oRows.length, 1, 'o3 and o-3-high must converge to exactly one canonical row');
+  assert.equal(oRows[0].canonical, 'o-3', 'canonical ID must be o-3');
+  assert.ok(
+    oRows[0].efforts && oRows[0].efforts.high,
+    'high effort must be recorded under efforts'
+  );
+
+  // Lookup for o3 and o-3 must both match canonical o-3
+  const matchO3 = matchModelPrior('o3', merged.ranking);
+  assert.ok(matchO3);
+  assert.equal(matchO3.entry.canonical, 'o-3');
+
+  const matchO3High = matchModelPrior('o-3-high', merged.ranking);
+  assert.ok(matchO3High);
+  assert.equal(matchO3High.effort, 'high');
+  assert.equal(matchO3High.entry.canonical, 'o-3');
+});
+
+test('R2 Item 7 regression: explicit effortVariants: [] disables effort parsing and registry overrides are respected', () => {
+  // Explicit override: empty array disables effort parsing
+  const emptyOverride = { effortVariants: [] };
+  const resEmpty = splitModelEffort('model-high', emptyOverride);
+  assert.equal(resEmpty.base, 'model-high', 'empty effortVariants override must not strip -high');
+  assert.equal(resEmpty.effort, null);
+
+  // Explicit override: custom effort variant
+  const customOverride = { effortVariants: ['custom-effort'] };
+  const resCustom = splitModelEffort('model-custom-effort', customOverride);
+  assert.equal(resCustom.base, 'model');
+  assert.equal(resCustom.effort, 'custom-effort');
+
+  const resIgnored = splitModelEffort('model-high', customOverride);
+  assert.equal(
+    resIgnored.base,
+    'model-high',
+    'unlisted -high must not be stripped with custom override'
+  );
+  assert.equal(resIgnored.effort, null);
+});
+
+test('R2 Item 8 regression: openai router prefix is restored and matches base row', () => {
+  const ranking = [{ canonical: 'gpt-5', score: 95 }];
+  const matched = matchModelPrior('openai/gpt-5', ranking);
+  assert.ok(matched, 'openai/gpt-5 must match canonical gpt-5');
+  assert.equal(matched.entry.canonical, 'gpt-5');
+});
+
+test('R2 Item 9 regression: synthetic fallbacks do not evict real historical base observations', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'priors-fallback-history-'));
+  const file = path.join(dir, 'priors.json');
+  try {
+    // History contains an actual base observation of score 20 from sourceA (timestamp: 2026-10-10)
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        ranking: [
+          {
+            canonical: 'persist-model',
+            score: 20,
+            normalizedScore: 20,
+            codingTier: 'T4',
+            reviewTier: 'T4',
+            sources: [
+              { id: 'sourceA', url: 'https://source-a.org', retrievedAt: '2026-10-10T00:00:00Z' },
+            ],
+            benchmarks: [
+              {
+                name: 'swe',
+                score: 20,
+                source: {
+                  id: 'sourceA',
+                  url: 'https://source-a.org',
+                  retrievedAt: '2026-10-10T00:00:00Z',
+                },
+              },
+            ],
+            efforts: {},
+          },
+        ],
+      })
+    );
+
+    // Fresh scrape only has persist-model (high) with score 90 from sourceA (newer timestamp: 2026-10-25)
+    const refreshed = await refreshPriors({
+      file,
+      preserveHistory: true,
+      search: async () => [
+        {
+          sources: [{ id: 'sourceA', url: 'https://source-a.org' }],
+          models: [
+            {
+              modelId: 'persist-model (high)',
+              benchmarks: { swe: 90 },
+              source: {
+                id: 'sourceA',
+                url: 'https://source-a.org',
+                retrievedAt: '2026-10-25T00:00:00Z',
+              },
+            },
+          ],
+        },
+      ],
+      liveModels: ['persist-model'],
+    });
+
+    const row = refreshed.ranking.find((r) => r.canonical === 'persist-model');
+    assert.ok(row, 'persist-model row must exist');
+
+    // Base benchmark must retain the actual historical base observation (score 20), NOT evicted by fallback 90
+    assert.ok(row.benchmarks && row.benchmarks.length >= 1, 'must have base benchmark');
+    const baseSwe = row.benchmarks.find((b) => b.name === 'swe');
+    assert.equal(baseSwe.score, 20, 'actual historical base score 20 must be preserved');
+    assert.equal(
+      baseSwe.fallback,
+      undefined,
+      'must be actual base observation, not synthetic fallback'
+    );
+
+    // Effort high must have score 90
+    assert.ok(row.efforts && row.efforts.high, 'high effort must be recorded');
+    const effSwe = row.efforts.high.benchmarks.find((b) => b.name === 'swe');
+    assert.equal(effSwe.score, 90, 'effort benchmark must be 90');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

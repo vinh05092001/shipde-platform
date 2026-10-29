@@ -25,7 +25,9 @@
     "gh",
     "ag",
     "agy",
+    "qwen",
     "provider",
+    "openai",
     "ninerouter",
     "9router",
     "openrouter",
@@ -39,7 +41,8 @@
   ],
   "aliasRules": {
     "stripSuffixes": [":free", "-free", ":batch", ":flex", ":cloud"],
-    "digitBoundaryHyphen": true
+    "digitBoundaryHyphen": true,
+    "singleLetterPrefixes": ["o"]
   },
   "sources": [
     {

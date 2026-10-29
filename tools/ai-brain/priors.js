@@ -38,14 +38,46 @@ function loadPriors(file) {
   return { ranking: [] };
 }
 
-function getEffortVariants(config) {
-  const cfg = config || defaultDescriptor;
-  if (Array.isArray(cfg && cfg.effortVariants) && cfg.effortVariants.length) {
-    return cfg.effortVariants.slice().sort((a, b) => b.length - a.length);
+function applyDigitBoundaryHyphen(str, aliasRules) {
+  if (!str || !aliasRules || !aliasRules.digitBoundaryHyphen) return str;
+  let res = str.replace(/([a-z]{2,})(\d)/g, '$1-$2');
+  const singleLetters = Array.isArray(aliasRules.singleLetterPrefixes)
+    ? aliasRules.singleLetterPrefixes
+    : ['o'];
+  if (singleLetters.length) {
+    const pattern = new RegExp(
+      `(?:^|[-_\\/])(${singleLetters.map((p) => p.toLowerCase()).join('|')})(\\d)`,
+      'g'
+    );
+    res = res.replace(pattern, (match, p1, p2) => {
+      const pfx = match.slice(0, match.length - p1.length - p2.length);
+      return `${pfx}${p1}-${p2}`;
+    });
   }
+  return res;
+}
+
+function getEffortVariants(config) {
+  // Explicit configuration override passed by caller (including empty array [])
+  if (
+    config &&
+    config !== defaultDescriptor &&
+    Object.prototype.hasOwnProperty.call(config, 'effortVariants')
+  ) {
+    if (Array.isArray(config.effortVariants)) {
+      return config.effortVariants.slice().sort((a, b) => b.length - a.length);
+    }
+    return [];
+  }
+  // Consult registry (sources.json)
   const fromSources = loadEffortVariants();
-  if (fromSources && fromSources.length) return fromSources;
-  return [];
+  const cfg = config || defaultDescriptor;
+  const fromConfig = Array.isArray(cfg && cfg.effortVariants) ? cfg.effortVariants : [];
+  // Exclude 'max' so base model names like Qwen 3.8 Max / qwen-3-8-max remain canonical,
+  // while preserving any other registry effort variants from sources.json
+  const registryEfforts = fromSources.filter((e) => e !== 'max');
+  const combined = new Set([...fromConfig, ...registryEfforts]);
+  return Array.from(combined).sort((a, b) => b.length - a.length);
 }
 
 function getDeploymentSuffixes(config) {
@@ -80,7 +112,11 @@ function splitModelEffort(value, config) {
         break;
       }
     }
-    raw = raw.replace(/\s*\([^)]*\)/g, '');
+    if (effort) {
+      raw = raw.replace(/\s*\([^)]*\)/g, '');
+    } else {
+      raw = raw.replace(/\s*\(([^)]*)\)/g, (_, val) => '-' + val.replace(/[^a-z0-9]+/g, '-'));
+    }
   }
 
   const routerPrefixes = getRouterPrefixes(cfg);
@@ -91,7 +127,7 @@ function splitModelEffort(value, config) {
     if (slashIdx !== -1) {
       const pfx = raw.slice(0, slashIdx);
       const rest = raw.slice(slashIdx + 1);
-      if (routerPrefixes.has(pfx) || rest.startsWith(pfx)) {
+      if (routerPrefixes.has(pfx)) {
         raw = rest;
         changed = true;
         continue;
@@ -101,7 +137,7 @@ function splitModelEffort(value, config) {
     if (colonIdx !== -1) {
       const pfx = raw.slice(0, colonIdx);
       const rest = raw.slice(colonIdx + 2);
-      if (routerPrefixes.has(pfx) || rest.startsWith(pfx)) {
+      if (routerPrefixes.has(pfx)) {
         raw = rest;
         changed = true;
         continue;
@@ -121,8 +157,8 @@ function splitModelEffort(value, config) {
     }
   }
 
-  if (cfg && cfg.aliasRules && cfg.aliasRules.digitBoundaryHyphen) {
-    raw = raw.replace(/([a-z]{2,})(\d)/g, '$1-$2');
+  if (cfg && cfg.aliasRules) {
+    raw = applyDigitBoundaryHyphen(raw, cfg.aliasRules);
   }
 
   raw = raw.replace(/[._\s]+/g, '-').replace(/^-+|-+$/g, '');
@@ -391,7 +427,7 @@ function leaderboardModelId(value, config) {
     if (slashIdx !== -1) {
       const pfx = raw.slice(0, slashIdx);
       const rest = raw.slice(slashIdx + 1);
-      if (routerPrefixes.has(pfx) || rest.startsWith(pfx)) {
+      if (routerPrefixes.has(pfx)) {
         raw = rest;
         changed = true;
         continue;
@@ -401,7 +437,7 @@ function leaderboardModelId(value, config) {
     if (colonIdx !== -1) {
       const pfx = raw.slice(0, colonIdx);
       const rest = raw.slice(colonIdx + 2);
-      if (routerPrefixes.has(pfx) || rest.startsWith(pfx)) {
+      if (routerPrefixes.has(pfx)) {
         raw = rest;
         changed = true;
         continue;
@@ -411,8 +447,8 @@ function leaderboardModelId(value, config) {
 
   raw = raw.split('@')[0];
   raw = raw.replace(/(?::free|-free)$/, '');
-  if (cfg && cfg.aliasRules && cfg.aliasRules.digitBoundaryHyphen) {
-    raw = raw.replace(/([a-z]{2,})(\d)/g, '$1-$2');
+  if (cfg && cfg.aliasRules) {
+    raw = applyDigitBoundaryHyphen(raw, cfg.aliasRules);
   }
   return raw.replace(/[._\s]+/g, '-').replace(/^-+|-+$/g, '');
 }
@@ -481,8 +517,9 @@ function matchModelPrior(modelId, ranking, options) {
       byCanonical.set(row.canonical, row);
       const norm = leaderboardModelId(row.canonical, config);
       if (norm) byCanonical.set(norm, row);
-      if (config && config.aliasRules && config.aliasRules.digitBoundaryHyphen) {
-        byCanonical.set(row.canonical.replace(/([a-z])(\d)/g, '$1-$2'), row);
+      if (config && config.aliasRules) {
+        const hyphenated = applyDigitBoundaryHyphen(row.canonical, config.aliasRules);
+        if (hyphenated) byCanonical.set(hyphenated, row);
       }
     }
   }
@@ -519,16 +556,9 @@ function matchModelPrior(modelId, ranking, options) {
 
   // 2. Direct match on base canonical
   let matchedEntry = base ? byCanonical.get(base) : null;
-  if (
-    !matchedEntry &&
-    base &&
-    config &&
-    config.aliasRules &&
-    config.aliasRules.digitBoundaryHyphen
-  ) {
-    const withHyphen = base.replace(/^([a-z]+)(\d)/, '$1-$2');
-    const withoutHyphen = base.replace(/^([a-z]+)-(\d)/, '$1$2');
-    matchedEntry = byCanonical.get(withHyphen) || byCanonical.get(withoutHyphen);
+  if (!matchedEntry && base && config && config.aliasRules) {
+    const withHyphen = applyDigitBoundaryHyphen(base, config.aliasRules);
+    matchedEntry = byCanonical.get(withHyphen);
   }
 
   // 3. Fallback queue for unmerged deployment/reasoning suffixes (using configured vocabulary only)
@@ -616,8 +646,9 @@ function matchModelPrior(modelId, ranking, options) {
       hasFallback = true;
     } else {
       combinedBenchmarks = effortBenchmarks.slice();
+      const effortStreamKeys = new Set(effortBenchmarks.map(getBenchmarkStreamKey));
       for (const baseB of baseBenchmarks) {
-        if (!combinedBenchmarks.some((b) => b.name === baseB.name)) {
+        if (!effortStreamKeys.has(getBenchmarkStreamKey(baseB))) {
           combinedBenchmarks.push(baseB);
           hasFallback = true;
         }
@@ -851,10 +882,9 @@ function mergePriorDocuments(documents, now, options) {
       if (!canonical) continue;
 
       let row = byCanonical.get(canonical);
-      if (!row && config && config.aliasRules && config.aliasRules.digitBoundaryHyphen) {
-        const withHyphen = canonical.replace(/^([a-z]{2,})(\d)/, '$1-$2');
-        const withoutHyphen = canonical.replace(/^([a-z]{2,})-+(\d)/, '$1$2');
-        row = byCanonical.get(withHyphen) || byCanonical.get(withoutHyphen);
+      if (!row && config && config.aliasRules) {
+        const withHyphen = applyDigitBoundaryHyphen(canonical, config.aliasRules);
+        row = byCanonical.get(withHyphen);
       }
       if (!row) {
         row = {
@@ -944,15 +974,17 @@ function mergePriorDocuments(documents, now, options) {
   }
 
   // Derive base fallbacks from deduplicated efforts when base benchmarks are empty
-  for (const row of byCanonical.values()) {
-    if (row.benchmarks.length === 0) {
-      for (const [effName, effData] of Object.entries(row.efforts || {})) {
-        const effBenchmarks = dedupeBenchmarks(effData.benchmarks);
-        for (const b of effBenchmarks) {
-          if (
-            !row.benchmarks.some((rb) => getBenchmarkStreamKey(rb) === getBenchmarkStreamKey(b))
-          ) {
-            row.benchmarks.push({ ...b, fallback: true, fallbackFrom: effName });
+  if (!options || options.deriveFallbacks !== false) {
+    for (const row of byCanonical.values()) {
+      if (row.benchmarks.length === 0) {
+        for (const [effName, effData] of Object.entries(row.efforts || {})) {
+          const effBenchmarks = dedupeBenchmarks(effData.benchmarks);
+          for (const b of effBenchmarks) {
+            if (
+              !row.benchmarks.some((rb) => getBenchmarkStreamKey(rb) === getBenchmarkStreamKey(b))
+            ) {
+              row.benchmarks.push({ ...b, fallback: true, fallbackFrom: effName });
+            }
           }
         }
       }
@@ -1041,7 +1073,11 @@ async function refreshPriors(options) {
     'coding agent model benchmarks SWE-bench Aider Terminal-Bench';
   const results = await opts.search(query);
   if (!Array.isArray(results)) throw new Error('PRIORS_SEARCH_RESULT_INVALID');
-  const document = mergePriorDocuments(results, opts.now, { ...opts, config });
+  const document = mergePriorDocuments(results, opts.now, {
+    ...opts,
+    config,
+    deriveFallbacks: !opts.preserveHistory,
+  });
   if (opts.preserveHistory) {
     const historicalRanking = loadPriors(output).ranking || [];
     for (const row of historicalRanking) {
@@ -1067,6 +1103,7 @@ async function refreshPriors(options) {
         fresh.efforts[histEffort] = fresh.efforts[histEffort] || { benchmarks: [] };
         const mergedEff = (fresh.efforts[histEffort].benchmarks || []).slice();
         for (const oldB of row.benchmarks || []) {
+          if (oldB.fallback) continue;
           const oldKey = getBenchmarkStreamKey(oldB);
           const idx = mergedEff.findIndex((b) => getBenchmarkStreamKey(b) === oldKey);
           if (idx === -1) {
@@ -1079,8 +1116,11 @@ async function refreshPriors(options) {
         }
         fresh.efforts[histEffort].benchmarks = dedupeBenchmarks(mergedEff);
       } else {
-        const mergedBenchmarks = fresh.benchmarks ? fresh.benchmarks.slice() : [];
+        const mergedBenchmarks = fresh.benchmarks
+          ? fresh.benchmarks.filter((b) => !b.fallback)
+          : [];
         for (const oldB of row.benchmarks || []) {
+          if (oldB.fallback) continue;
           const oldKey = getBenchmarkStreamKey(oldB);
           const freshIdx = mergedBenchmarks.findIndex((b) => getBenchmarkStreamKey(b) === oldKey);
           if (freshIdx === -1) {
@@ -1099,10 +1139,13 @@ async function refreshPriors(options) {
         fresh.efforts = fresh.efforts || {};
         for (const [effName, effData] of Object.entries(row.efforts)) {
           if (!fresh.efforts[effName]) {
-            fresh.efforts[effName] = { benchmarks: (effData.benchmarks || []).slice() };
+            fresh.efforts[effName] = {
+              benchmarks: (effData.benchmarks || []).filter((b) => !b.fallback),
+            };
           } else {
             const mergedEff = (fresh.efforts[effName].benchmarks || []).slice();
             for (const oldB of effData.benchmarks || []) {
+              if (oldB.fallback) continue;
               const oldKey = getBenchmarkStreamKey(oldB);
               const idx = mergedEff.findIndex((b) => getBenchmarkStreamKey(b) === oldKey);
               if (idx === -1) {
