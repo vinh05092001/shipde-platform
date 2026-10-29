@@ -290,147 +290,108 @@ function hookedControllerGit(options) {
   return controllerGit(options, true);
 }
 
+/** Materialise the dependency graph locally, including pnpm's virtual store.
+ * Linking a package directory to the cache would make Node resolve its peers
+ * and workspace dependencies there, bypassing worker-local @shipde links.
+ * Only symlinks are recreated; ordinary files are copied, never hard-linked.
+ */
 function retargetSharedDepsWorkspaceLinks(depsDir, workerRoot) {
-  const candidateRelDirs = [
-    path.join('apps', 'api', 'node_modules', '@shipde'),
-    path.join('apps', 'web', 'node_modules', '@shipde'),
-    path.join('apps', 'worker', 'node_modules', '@shipde'),
-    path.join('packages', 'contracts', 'node_modules', '@shipde'),
-    path.join('packages', 'testkit', 'node_modules', '@shipde'),
-    path.join('packages', 'ui', 'node_modules', '@shipde'),
-  ];
-
-  for (const ws of ['apps', 'packages']) {
-    const wsDirInDeps = path.join(depsDir, ws);
-    if (fs.existsSync(wsDirInDeps)) {
-      try {
-        const items = fs.readdirSync(wsDirInDeps, { withFileTypes: true });
-        for (const item of items) {
-          if (item.isDirectory()) {
-            const rel = path.join(ws, item.name, 'node_modules', '@shipde');
-            if (!candidateRelDirs.includes(rel)) {
-              candidateRelDirs.push(rel);
-            }
-          }
-        }
-      } catch {}
-    }
+  const cacheRoot = path.resolve(depsDir);
+  const checkout = path.resolve(workerRoot);
+  const relativeInside = (root, target) => {
+    const rel = path.relative(root, target);
+    return rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel) ? rel : null;
+  };
+  if (
+    relativeInside(cacheRoot, checkout) !== null ||
+    relativeInside(checkout, cacheRoot) !== null
+  ) {
+    throw new Error('WORKER_DEPS_INVALID: cache and checkout must be separate trees');
   }
 
-  for (const relShipde of candidateRelDirs) {
-    const depsShipdeDir = path.join(depsDir, relShipde);
-    if (!fs.existsSync(depsShipdeDir)) continue;
-
-    const workerShipdeDir = path.join(workerRoot, relShipde);
-    const workerNmDir = path.dirname(workerShipdeDir);
-    const depsNmDir = path.join(depsDir, path.dirname(relShipde));
-
-    try {
-      const st = fs.lstatSync(workerNmDir);
-      if (st.isSymbolicLink()) {
-        fs.rmSync(workerNmDir, { recursive: true, force: true });
+  const mapTarget = (target) => {
+    const rel = relativeInside(cacheRoot, target);
+    if (rel !== null) return path.join(checkout, rel);
+    const staged = relativeInside(path.dirname(cacheRoot), target);
+    if (staged !== null) {
+      const [root, ...parts] = staged.split(path.sep);
+      if (root.startsWith(path.basename(cacheRoot) + '.staging-')) {
+        return path.join(checkout, ...parts);
       }
-    } catch {}
-
-    fs.mkdirSync(workerNmDir, { recursive: true });
-
-    if (fs.existsSync(depsNmDir)) {
-      try {
-        const entries = fs.readdirSync(depsNmDir, { withFileTypes: true });
-        for (const entry of entries) {
-          if (entry.name === '@shipde') continue;
-          const srcPath = path.join(depsNmDir, entry.name);
-          const dstPath = path.join(workerNmDir, entry.name);
-          let exists = false;
-          try {
-            fs.lstatSync(dstPath);
-            exists = true;
-          } catch {
-            exists = false;
-          }
-          if (!exists) {
-            if (entry.isDirectory()) {
-              try {
-                fs.symlinkSync(srcPath, dstPath, 'junction');
-              } catch {}
-            } else {
-              try {
-                fs.copyFileSync(srcPath, dstPath);
-              } catch {}
-            }
-          }
-        }
-      } catch {}
     }
+    // Older caches can contain absolute workspace junctions to the staging
+    // tree or host checkout. Resolve them against this worker's workspaces.
+    const workspace = target.match(/[\\/](packages[\\/][^\\/]+|apps[\\/][^\\/]+)([\\/].*)?$/i);
+    if (workspace) {
+      const local = path.join(checkout, workspace[1], workspace[2] || '');
+      if (!fs.existsSync(local)) throw new Error('WORKER_DEPS_WORKSPACE_MISSING');
+      return local;
+    }
+    throw new Error('WORKER_DEPS_LINK_OUTSIDE_CACHE');
+  };
 
-    fs.mkdirSync(workerShipdeDir, { recursive: true });
-
-    try {
-      const pkgs = fs.readdirSync(depsShipdeDir, { withFileTypes: true });
-      for (const pkg of pkgs) {
-        const pkgInDepsPath = path.join(depsShipdeDir, pkg.name);
-        let sub = null;
+  const copyEntry = (src, dst) => {
+    const stat = fs.lstatSync(src);
+    if (stat.isSymbolicLink()) {
+      const target = path.resolve(path.dirname(src), fs.readlinkSync(src));
+      const localTarget = mapTarget(target);
+      let targetStat;
+      try {
+        targetStat = fs.statSync(src);
+      } catch (err) {
+        // pnpm can leave absolute workspace junctions to the now-renamed
+        // staging directory. The worker checkout supplies their target type.
+        if (err.code !== 'ENOENT') throw err;
         try {
-          const st = fs.lstatSync(pkgInDepsPath);
-          if (st.isSymbolicLink()) {
-            const currentTarget = fs.readlinkSync(pkgInDepsPath);
-            const absTarget = path.resolve(depsShipdeDir, currentTarget);
-            const normDeps = depsDir.replace(/\\/g, '/').toLowerCase();
-            const normTarget = absTarget.replace(/\\/g, '/').toLowerCase();
-            if (normTarget.startsWith(normDeps)) {
-              sub = absTarget.slice(depsDir.length).replace(/^[\\/]/, '');
-            } else {
-              const match = absTarget.match(
-                /[\\/](packages[\\/][^\\/]+|apps[\\/][^\\/]+)(?:[\\/].*)?$/i
-              );
-              if (match) {
-                sub = match[0].replace(/^[\\/]/, '');
-              }
-            }
-          }
-        } catch {}
-        if (!sub) {
-          if (fs.existsSync(path.join(workerRoot, 'packages', pkg.name))) {
-            sub = path.join('packages', pkg.name);
-          } else if (fs.existsSync(path.join(workerRoot, 'apps', pkg.name))) {
-            sub = path.join('apps', pkg.name);
-          } else if (fs.existsSync(path.join(depsDir, 'packages', pkg.name))) {
-            sub = path.join('packages', pkg.name);
-          } else if (fs.existsSync(path.join(depsDir, 'apps', pkg.name))) {
-            sub = path.join('apps', pkg.name);
-          }
-        }
-        if (sub) {
-          const workerTarget = path.join(workerRoot, sub);
-          const pkgInWorkerPath = path.join(workerShipdeDir, pkg.name);
-          let needsLink = true;
-          try {
-            const stW = fs.lstatSync(pkgInWorkerPath);
-            if (stW.isSymbolicLink()) {
-              const curW = fs.readlinkSync(pkgInWorkerPath);
-              const absCurW = path.resolve(workerShipdeDir, curW);
-              if (
-                absCurW.replace(/\\/g, '/').toLowerCase() ===
-                workerTarget.replace(/\\/g, '/').toLowerCase()
-              ) {
-                needsLink = false;
-              }
-            }
-          } catch {
-            needsLink = true;
-          }
-          if (needsLink) {
-            try {
-              fs.rmSync(pkgInWorkerPath, { recursive: true, force: true });
-            } catch {}
-            try {
-              fs.symlinkSync(workerTarget, pkgInWorkerPath, 'junction');
-            } catch {}
-          }
+          targetStat = fs.statSync(path.join(cacheRoot, path.relative(checkout, localTarget)));
+        } catch (cacheErr) {
+          if (cacheErr.code !== 'ENOENT') throw cacheErr;
+          targetStat = fs.statSync(localTarget);
         }
       }
-    } catch {}
+      fs.symlinkSync(localTarget, dst, targetStat.isDirectory() ? 'junction' : 'file');
+    } else if (stat.isDirectory()) {
+      fs.mkdirSync(dst, { recursive: true });
+      for (const name of fs.readdirSync(src)) copyEntry(path.join(src, name), path.join(dst, name));
+    } else if (stat.isFile()) {
+      fs.copyFileSync(src, dst);
+    } else {
+      throw new Error('WORKER_DEPS_ENTRY_UNSUPPORTED');
+    }
+  };
+
+  const candidates = ['node_modules'];
+  for (const ws of ['apps', 'packages']) {
+    const wsDir = path.join(cacheRoot, ws);
+    if (!fs.existsSync(wsDir)) continue;
+    for (const item of fs.readdirSync(wsDir, { withFileTypes: true })) {
+      if (item.isDirectory()) candidates.push(path.join(ws, item.name, 'node_modules'));
+    }
   }
+  const excluded = [];
+  for (const rel of candidates) {
+    const src = path.join(cacheRoot, rel);
+    if (!fs.existsSync(src)) continue;
+    const dst = path.join(checkout, rel);
+    // Check parent directories before removing anything: a retained worker
+    // may still have a junction from the former shared-dependency layout.
+    let parent = checkout;
+    for (const part of path.dirname(rel).split(path.sep)) {
+      if (part === '.') continue;
+      parent = path.join(parent, part);
+      if (fs.existsSync(parent) && fs.lstatSync(parent).isSymbolicLink()) {
+        throw new Error('WORKER_DEPS_PARENT_LINK');
+      }
+    }
+    fs.rmSync(dst, { recursive: true, force: true });
+    fs.mkdirSync(path.dirname(dst), { recursive: true });
+    // node_modules itself may be a link; materialise its directory contents
+    // rather than recreating a junction over a worker-owned directory.
+    fs.mkdirSync(dst, { recursive: true });
+    for (const name of fs.readdirSync(src)) copyEntry(path.join(src, name), path.join(dst, name));
+    excluded.push((rel + '/').split(path.sep).join('/'));
+  }
+  return excluded;
 }
 
 /**
@@ -2834,64 +2795,10 @@ function getIsolatedLauncher() {
           }
         }
 
-        // WD-R02 junctions: the worker root must point at the shared tree. An
-        // existing path that is not that junction (a real directory left
-        // behind) is replaced, never silently kept without a warning.
-        const setupJunction = (relPath) => {
-          const depsNm = path.join(depsDir, relPath);
-          const workerNm = path.join(workerRoot, relPath);
-          if (!fs.existsSync(depsNm)) return null;
-          let linked = false;
-          if (fs.existsSync(workerNm)) {
-            try {
-              const st = fs.lstatSync(workerNm);
-              const target = st.isSymbolicLink() ? fs.readlinkSync(workerNm) : null;
-              linked =
-                target !== null &&
-                path.resolve(target).toLowerCase() === path.resolve(depsNm).toLowerCase();
-            } catch {
-              linked = false;
-            }
-            if (!linked) {
-              fs.rmSync(workerNm, { recursive: true, force: true });
-            }
-          }
-          if (!linked) {
-            fs.mkdirSync(path.dirname(workerNm), { recursive: true });
-            fs.symlinkSync(depsNm, workerNm, 'junction');
-          }
-          return relPath + '/';
-        };
-
-        const excluded = [];
-        const rootExcl = setupJunction('node_modules');
-        if (rootExcl) excluded.push(rootExcl);
-
-        const workspaces = ['apps', 'packages'];
-        for (const ws of workspaces) {
-          const workerWsPath = path.join(workerRoot, ws);
-          if (fs.existsSync(workerWsPath)) {
-            const pkgs = fs.readdirSync(workerWsPath, { withFileTypes: true });
-            for (const pkg of pkgs) {
-              if (pkg.isDirectory()) {
-                const relNm = path.join(ws, pkg.name, 'node_modules');
-                const shipdeInDeps = path.join(depsDir, relNm, '@shipde');
-                if (fs.existsSync(shipdeInDeps)) {
-                  excluded.push((relNm + '/').replace(/\\/g, '/'));
-                } else {
-                  const excl = setupJunction(relNm);
-                  if (excl) excluded.push(excl.replace(/\\/g, '/'));
-                }
-              }
-            }
-          }
-        }
-
-        if (excluded.length > 0) {
-          appendGitInfoExclude(workerRoot, excluded);
-        }
-
-        retargetSharedDepsWorkspaceLinks(depsDir, workerRoot);
+        // Provision the entire graph into this checkout. No worker path may
+        // resolve through shared pnpm workspace links or mutable cache files.
+        const excluded = retargetSharedDepsWorkspaceLinks(depsDir, workerRoot);
+        if (excluded.length > 0) appendGitInfoExclude(workerRoot, excluded);
 
         try {
           fs.rmSync(path.join(workerRoot, '.local'), { recursive: true, force: true });
