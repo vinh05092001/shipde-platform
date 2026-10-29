@@ -165,6 +165,8 @@ model Merchant {
   invitations       Invitation[]
   roles             Role[]
   warehouses        Warehouse[]
+  branches          Branch[]
+  imports           Import[]
 
   @@index([tax_code])
   @@map("merchants")
@@ -508,6 +510,89 @@ model Warehouse {
   @@index([merchant_id, status])
   @@index([merchant_id, is_default])
   @@map("warehouses")
+}
+
+// ----------------------------------------------------------------------------
+// FEAT-COM-04: Branches & Imports Data Models
+// ----------------------------------------------------------------------------
+
+model Branch {
+  id                          String    @id @default(uuid()) @db.Uuid
+  merchant_id                 String    @db.Uuid
+  name                        String    @db.VarChar(255)
+  code                        String    @db.VarChar(64)
+  status                      String    @default("active") @db.VarChar(32)
+  is_default                  Boolean   @default(false)
+
+  // Contact & Address
+  contact_name                String?   @db.VarChar(255)
+  contact_phone               String?   @db.VarChar(32)
+  address_line                String?   @db.Text
+  ward                        String?   @db.VarChar(128)
+  district                    String?   @db.VarChar(128)
+  city                        String?   @db.VarChar(128)
+
+  created_at                  DateTime  @default(now()) @db.Timestamptz
+  updated_at                  DateTime  @updatedAt @db.Timestamptz
+
+  merchant                    Merchant  @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
+
+  @@unique([merchant_id, code])
+  @@unique([id, merchant_id])
+  @@index([merchant_id, status])
+  @@map("branches")
+}
+
+model Import {
+  id                          String    @id @default(uuid()) @db.Uuid
+  merchant_id                 String    @db.Uuid
+  template_type               String    @db.VarChar(64)
+  file_name                   String    @db.VarChar(255)
+  file_size                   Int
+  file_hash                   String    @db.VarChar(64)
+  mime_type                   String    @db.VarChar(128)
+  storage_path                String?   @db.VarChar(512)
+  status                      String    @default("UPLOADED") @db.VarChar(32)
+  revision                    Int       @default(1)
+  idempotency_key             String?   @db.VarChar(255)
+  total_rows                  Int       @default(0)
+  valid_rows                  Int       @default(0)
+  error_rows                  Int       @default(0)
+  warning_rows                Int       @default(0)
+  control_totals              Json?     @db.JsonB
+  created_by_user_id          String?   @db.Uuid
+  promoted_by_user_id         String?   @db.Uuid
+  promoted_at                 DateTime? @db.Timestamptz
+  created_at                  DateTime  @default(now()) @db.Timestamptz
+  updated_at                  DateTime  @updatedAt @db.Timestamptz
+
+  merchant                    Merchant  @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
+  rows                        ImportRow[]
+
+  @@unique([merchant_id, template_type, revision])
+  @@index([merchant_id, template_type])
+  @@index([merchant_id, file_hash])
+  @@index([merchant_id, idempotency_key])
+  @@index([merchant_id, status])
+  @@map("imports")
+}
+
+model ImportRow {
+  id                          String    @id @default(uuid()) @db.Uuid
+  import_id                   String    @db.Uuid
+  row_number                  Int
+  raw_data                    Json      @db.JsonB
+  normalized_data             Json?     @db.JsonB
+  status                      String    @db.VarChar(32)
+  scope_identifier            String?   @db.VarChar(64)
+  issues_json                 Json?     @db.JsonB
+  created_at                  DateTime  @default(now()) @db.Timestamptz
+
+  import                      Import    @relation(fields: [import_id], references: [id], onDelete: Cascade)
+
+  @@index([import_id, status])
+  @@index([import_id, row_number])
+  @@map("import_rows")
 }
 
 // ----------------------------------------------------------------------------

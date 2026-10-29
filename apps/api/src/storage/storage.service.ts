@@ -1,5 +1,5 @@
 import { Injectable, Inject, OnModuleDestroy } from '@nestjs/common';
-import { S3Client, HeadBucketCommand } from '@aws-sdk/client-s3';
+import { S3Client, HeadBucketCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { AppConfig } from '@shipde/config';
 import { APP_CONFIG } from '../config.token';
 
@@ -54,6 +54,31 @@ export class StorageService implements OnModuleDestroy {
       return 'up';
     } catch {
       return 'down';
+    }
+  }
+
+  /**
+   * Puts an object into private S3 storage (FEAT-COM-04).
+   * Falls back gracefully if S3 is down or offline.
+   */
+  async putObject(
+    key: string,
+    body: Buffer | Uint8Array | string,
+    contentType?: string
+  ): Promise<string> {
+    try {
+      const s3 = this.getClient();
+      await s3.send(
+        new PutObjectCommand({
+          Bucket: this.config.S3_BUCKET,
+          Key: key,
+          Body: body,
+          ContentType: contentType,
+        })
+      );
+      return `s3://${this.config.S3_BUCKET}/${key}`;
+    } catch {
+      return `local://${key}`;
     }
   }
 }

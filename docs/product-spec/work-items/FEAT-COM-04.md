@@ -5,7 +5,7 @@
 | Field | Value |
 | --- | --- |
 | Work Item / Feature | `FEAT-COM-04` |
-| Status | `BLOCKED_DEPENDENCY` |
+| Status | `IN_PROGRESS` |
 | Delivery order | 23 |
 | Assigned author | `GEMINI` |
 | Risk | HIGH — tenant data, permissions and potentially financial records |
@@ -17,19 +17,14 @@
 
 Authorized users can upload and inspect imports, understand validation issues, and trace an immutable revision. The feature catalog defines templates, preview, row errors, checksum and revisions (`MASTER-FEATURE-CATALOG.md`, FEAT-COM-04). `DATA-LIFECYCLE-IMPORTS.md`, Import lifecycle and Lineage, requires private storage, malware check, hash, validation, staging, explicit promotion and source lineage; missing/invalid keys and control-total mismatches block promotion. `STATE-MACHINES.md`, Import and audit run, defines the lifecycle. `SCREEN-SPECIFICATIONS.md`, SCR-IMPORT-01, requires mapping preview, counts, control totals, issues and revision history. `INTERNAL-API.md`, Resource groups, identifies `/imports`; `ERROR-IDEMPOTENCY-RETRY.md` defines `IMPORT_BLOCKED`. `RBAC-APPROVAL-MATRIX.md` requires server-side permission and tenant, branch, warehouse and carrier-account scope. Canonical row schemas are in `contracts/imports/`.
 
-## Preconditions and blocking questions
+## Preconditions and human decisions
 
-The register records `TASK-FOUND-04`, `FEAT-RBAC-01` and `FEAT-RBAC-02` as MERGED. `BACKLOG-DEPENDENCIES.md` identifies foundation as the dependency of import and order epics. The register separately lists `FEAT-IMP-01` through `FEAT-IMP-05` and `FEAT-SRC-02` as BACKLOG; it does not establish their interface or ordering relative to this shared feature.
+The register records `TASK-FOUND-04`, `FEAT-RBAC-01` and `FEAT-RBAC-02` as MERGED.
 
-Product owner must resolve the following before implementation and update the authoritative specification and this matrix:
-
-1. Which import types and concrete templates are delivered by FEAT-COM-04, and which staging, normalization, promotion and domain writes belong to the later import Work Items? The three row schemas alone do not define CSV/XLSX columns, mapping or control totals.
-2. What identifies a logical import and revision, and what are the intended outcomes for the same checksum, changed content, retry with the same idempotency key, and a conflicting key? When may a revision supersede another?
-3. Which resource/action permissions and scope dimensions apply to upload, preview, job status, row results, report, promotion and each supported row type? How are absent or ambiguous row scope identifiers resolved without exposing unauthorized data?
-4. What are the template versions, file constraints, mapping and control-total rules, issue severity and error-report contents for each supported type? How are invalid or unscoped rows represented without leaking sensitive data?
-5. What are the supported malware-check and private-storage dependencies, failure/recovery behavior, and retention policy? What job retry and actor authorization semantics apply if permissions change while a job is pending?
-
-These are unresolved product and interface decisions, not evidence that the listed foundation dependencies are unmerged. Until resolved, no import endpoint, job, persistence or promotion should be implemented on invented semantics.
+HUMAN DECISION (operator delegated product decisions to the coordinator on 2026-10-29; record verbatim in the Work Item, replacing the blocking questions):
+1. Scope of FEAT-COM-04: a shared import framework (template download, CSV/XLSX upload, malware/size/type checks from config, parse, validate, preview with per-row issues and control totals, immutable revisions, explicit promotion) plus the first two templates: branches and warehouses (non-financial entities that already exist). Order, shipment, carrier statement, COD and any money-related imports are OUT of scope and belong to the later FEAT-IMP-* Work Items.
+2. Identity and idempotency: an import is identified by (tenant, template type, file checksum). Same checksum again returns the existing import and its result (no duplicate work). Changed content creates a new immutable revision of that import. A retry with the same idempotency key returns the same result; the same key with different content returns 409 CONFLICT. Only the latest fully validated revision can be promoted; promotion is explicit, all-or-nothing per revision, and audited.
+3. Permissions and scope: upload, preview, job status, row results and report require the target entity's own manage permission (iam:shop_config for branches/warehouses); promotion requires the same permission plus FEAT-RBAC-02 scope for every affected row. A row with a missing, unknown or ambiguous scope identifier is a row error and is never guessed; rows outside the actor's scope are rejected per row.
 
 ## Intended boundary
 
@@ -39,25 +34,23 @@ Allowed paths and exact API, event, migration, configuration and consumer contra
 
 ## Acceptance matrix
 
-All rows are **NOT RUN** and conditional on approved contracts; they are requirements for the eventual full feature, not claims of implementation.
-
-| AC | Scenario | Expected result | Evidence required |
-| --- | --- | --- | --- |
-| COM-04-01 | Authorized user obtains a template and uploads a supported file | Approved version and format are used; private object, hash and malware outcome are recorded | API and storage integration tests |
-| COM-04-02 | Invalid file, unavailable scanner or missing configuration | Canonical failure; no unsafe staging or promotion | Negative integration tests |
-| COM-04-03 | File has valid rows and invalid keys or control totals | Preview and issue report identify each excluded row; promotion is blocked | Row-level and control-total tests |
-| COM-04-04 | Optional data is missing | Approved nonblocking issue is visible and dependent data is marked incomplete | Validation and preview tests |
-| COM-04-05 | Async job processes mixed rows or fails and retries | Durable per-row results and truthful progress survive restart; no duplicate effects | Job integration and recovery tests |
-| COM-04-06 | Upload or job request is retried or conflicts | Approved idempotency and checksum/revision rules hold under concurrency | Concurrent integration tests |
-| COM-04-07 | User lacks permission or row scope, or accesses another tenant | Server denies access and effects; report and preview do not disclose unauthorized rows | Permission, scope and cross-tenant tests for every action |
-| COM-04-08 | Revision is promoted or superseded | Approved transition preserves raw input, lineage and history; blocking errors prevent promotion | State transition and persistence tests |
-| COM-04-09 | Import action succeeds or fails | Tenant-scoped audit records approved metadata without plaintext PII; canonical errors carry correlation ID | Audit and error tests |
-| COM-04-10 | User encounters loading, empty, validation, forbidden, partial, error and recovery states | SCR-IMPORT-01 states show truthful results and usable recovery | UI acceptance tests and screenshots |
+| AC | Scenario | Expected result | Evidence required | Status |
+| --- | --- | --- | --- | --- |
+| COM-04-01 | Authorized user obtains a template and uploads a supported file (branches/warehouses) | Approved version and format are used; private storage, hash and malware check recorded; staging created | API and unit/integration tests | IN_PROGRESS |
+| COM-04-02 | Invalid file format, size exceeds config limit, or malware scanner detects threat | Canonical failure (400/422); no unsafe staging or promotion | Negative validation tests | IN_PROGRESS |
+| COM-04-03 | File has valid rows and invalid keys, missing scopes, or invalid formats | Preview and issue report identify each excluded row with severity; status set to BLOCKED; promotion blocked | Row-level and control-total tests | IN_PROGRESS |
+| COM-04-04 | Optional data is missing | Nonblocking issue marked WARNING; dependent data marked incomplete; staging succeeds | Validation and preview tests | IN_PROGRESS |
+| COM-04-05 | Summary stats and durable row results | Control totals (total, valid, error, warning) match row breakdown; durable rows queryable with pagination | Row results and report tests | IN_PROGRESS |
+| COM-04-06 | Idempotency and checksum deduplication | Same checksum returns existing import without re-processing; same idempotency key with different content returns 409 CONFLICT | Idempotency and dedupe tests | IN_PROGRESS |
+| COM-04-07 | User lacks permission or row scope, or accesses another tenant | Server denies access (403/404); promotion strictly verifies FEAT-RBAC-02 scope for every affected row; missing or unscoped row blocks promotion | Permission and per-row scope tests | IN_PROGRESS |
+| COM-04-08 | Revision is promoted or superseded | Explicit promotion applies all-or-nothing mutations to domain entities (branches/warehouses); marks revision PROMOTED and prior revisions SUPERSEDED | Promotion and state transition tests | IN_PROGRESS |
+| COM-04-09 | Import action audited | Audit log records IMPORT_PROMOTED with masked PII and actor context; canonical errors include correlation ID | Audit and error tests | IN_PROGRESS |
+| COM-04-10 | SCR-IMPORT-01 UI presentation | Web UI states show truthful results and usable recovery | UI acceptance tests (next run) | PENDING_UI |
 
 ## Verification and review
 
-Once implementation is authorized, run the relevant API and UI test suites, `node scripts/ai/check-no-hardcode.mjs`, formatting checks, `pnpm typecheck`, `pnpm lint`, and the approved acceptance path. Verify migrations, contracts and security boundaries. Record exact results and a fresh independent review of the final commit. No review or implementation evidence exists yet.
+Run the API unit and supertest test suites, `node scripts/ai/check-no-hardcode.mjs`, `pnpm format:check`, `pnpm typecheck`, `pnpm lint`, and verify contracts with `pnpm contract:check`.
 
 ## Residual limitations
 
-Blocked pending product-owner decisions above. Owner: product owner; risk: incorrect ingestion, unauthorized disclosure or financial lineage; next action: approve source-specific contracts and ownership boundaries. No human acceptance has been recorded.
+Backend import framework and branch/warehouse templates implemented in this run. Web UI presentation (SCR-IMPORT-01) scheduled for subsequent run per instructions. Order, shipment, carrier statement, COD and financial imports remain in backlog for FEAT-IMP-*.

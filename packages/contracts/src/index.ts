@@ -724,5 +724,68 @@ export type ActivateUserRequest = components['schemas']['ActivateUserRequest'];
 export type ActivateUserResponse = components['schemas']['ActivateUserResponse'];
 export type DeactivateUserRequest = components['schemas']['DeactivateUserRequest'];
 export type DeactivateUserResponse = components['schemas']['DeactivateUserResponse'];
+// --- Import Framework Contracts (FEAT-COM-04) ---
+export const ImportTemplateType = {
+  BRANCHES: 'branches',
+  WAREHOUSES: 'warehouses',
+} as const;
+export type ImportTemplateType = (typeof ImportTemplateType)[keyof typeof ImportTemplateType];
+
+export const ImportStatus = {
+  UPLOADED: 'UPLOADED',
+  VALIDATING: 'VALIDATING',
+  STAGED: 'STAGED',
+  BLOCKED: 'BLOCKED',
+  PROMOTED: 'PROMOTED',
+  SUPERSEDED: 'SUPERSEDED',
+  FAILED: 'FAILED',
+} as const;
+export type ImportStatus = (typeof ImportStatus)[keyof typeof ImportStatus];
+
+export const ImportRowStatus = {
+  VALID: 'VALID',
+  ERROR: 'ERROR',
+  WARNING: 'WARNING',
+} as const;
+export type ImportRowStatus = (typeof ImportRowStatus)[keyof typeof ImportRowStatus];
+
+export const ImportIssueSeverity = {
+  BLOCKING: 'BLOCKING',
+  WARNING: 'WARNING',
+} as const;
+export type ImportIssueSeverity = (typeof ImportIssueSeverity)[keyof typeof ImportIssueSeverity];
+
+export const ImportAuditEvent = {
+  IMPORT_UPLOADED: 'IMPORT_UPLOADED',
+  IMPORT_PROMOTED: 'IMPORT_PROMOTED',
+} as const;
+export type ImportAuditEvent = (typeof ImportAuditEvent)[keyof typeof ImportAuditEvent];
+
+export const ImportErrorCode = {
+  IMPORT_NOT_FOUND: 'IMPORT_NOT_FOUND',
+  IMPORT_BLOCKED: 'IMPORT_BLOCKED',
+  IMPORT_ALREADY_PROMOTED: 'IMPORT_ALREADY_PROMOTED',
+  IDEMPOTENCY_CONFLICT: 'IDEMPOTENCY_CONFLICT',
+  REVISION_NOT_LATEST: 'REVISION_NOT_LATEST',
+  SCOPE_UNAUTHORIZED: 'SCOPE_UNAUTHORIZED',
+  FILE_TOO_LARGE: 'FILE_TOO_LARGE',
+  INVALID_FILE_TYPE: 'INVALID_FILE_TYPE',
+  MALWARE_DETECTED: 'MALWARE_DETECTED',
+  EMPTY_FILE: 'EMPTY_FILE',
+  FORBIDDEN: 'FORBIDDEN',
+  VALIDATION_ERROR: 'VALIDATION_ERROR',
+} as const;
+export type ImportErrorCode = (typeof ImportErrorCode)[keyof typeof ImportErrorCode];
+
+export type UploadImportInput = components['schemas']['UploadImportInput'];
+export type ImportControlTotals = components['schemas']['ImportControlTotals'];
+export type ImportRowIssue = components['schemas']['ImportRowIssue'];
+export type ImportSummary = components['schemas']['ImportSummary'];
+export type ImportRow = components['schemas']['ImportRow'];
+export type ImportDetailResponse = components['schemas']['ImportDetailResponse'];
+export type ListImportsResponse = components['schemas']['ListImportsResponse'];
+export type ListImportRowsResponse = components['schemas']['ListImportRowsResponse'];
+export type PromoteImportResponse = components['schemas']['PromoteImportResponse'];
+
 // --- Generated OpenAPI Schema Types ---
 export type * from './openapi';
