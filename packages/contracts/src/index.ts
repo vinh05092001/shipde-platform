@@ -812,5 +812,30 @@ export function validateBranchForm(form: BranchFormState): {
   };
 }
 
+// --- Global Search Contracts (FEAT-COM-01) ---
+export const SearchEntityType = {
+  ALL: 'ALL',
+  ORDER: 'ORDER',
+  WAYBILL: 'WAYBILL',
+  BATCH: 'BATCH',
+  CASE: 'CASE',
+  TRANSACTION: 'TRANSACTION',
+} as const;
+export type SearchEntityType = (typeof SearchEntityType)[keyof typeof SearchEntityType];
+
+export const SearchAuditEvent = {
+  GLOBAL_SEARCH_QUERY: 'GLOBAL_SEARCH_QUERY',
+} as const;
+export type SearchAuditEvent = (typeof SearchAuditEvent)[keyof typeof SearchAuditEvent];
+
+export const SearchErrorCode = {
+  VALIDATION_ERROR: 'VALIDATION_ERROR',
+  FORBIDDEN: 'FORBIDDEN',
+} as const;
+export type SearchErrorCode = (typeof SearchErrorCode)[keyof typeof SearchErrorCode];
+
+export type SearchResultItem = components['schemas']['SearchResultItem'];
+export type SearchResponseData = components['schemas']['SearchResponseData'];
+export type SearchResponse = components['schemas']['SearchResponse'];
 // --- Generated OpenAPI Schema Types ---
 export type * from './openapi';

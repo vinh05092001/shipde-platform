@@ -21,7 +21,55 @@ tags:
   - name: Reconciliation
   - name: Claims
   - name: Health
+  - name: Search
 paths:
+  /search:
+    get:
+      tags: [Search]
+      summary: Global search (FEAT-COM-01)
+      description: Search across orders, waybills, batches, cases and transactions with tenant scoping and RBAC enforcement.
+      operationId: globalSearch
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: Search keyword (minimum 2 characters)
+          schema:
+            type: string
+            minLength: 2
+            maxLength: 100
+        - name: type
+          in: query
+          required: false
+          description: Filter entity type
+          schema:
+            type: string
+            enum: [ALL, ORDER, WAYBILL, BATCH, CASE, TRANSACTION]
+            default: ALL
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of results to return
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 20
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          $ref: '#/components/responses/Error'
   /health/live:
     servers:
       - url: /
@@ -4591,5 +4639,63 @@ components:
               type: integer
             message:
               type: string
+        meta:
+          $ref: '#/components/schemas/Meta'
+    SearchResultItem:
+      type: object
+      required:
+        - id
+        - type
+        - title
+        - subtitle
+        - code
+        - status
+        - url
+      properties:
+        id:
+          type: string
+          format: uuid
+        type:
+          type: string
+          enum: [ORDER, WAYBILL, BATCH, CASE, TRANSACTION]
+        title:
+          type: string
+        subtitle:
+          type: string
+        code:
+          type: string
+        status:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        url:
+          type: string
+    SearchResponseData:
+      type: object
+      required:
+        - query
+        - total
+        - items
+      properties:
+        query:
+          type: string
+        total:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SearchResultItem'
+    SearchResponse:
+      type: object
+      required:
+        - success
+        - data
+        - meta
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: '#/components/schemas/SearchResponseData'
         meta:
           $ref: '#/components/schemas/Meta'

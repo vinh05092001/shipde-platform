@@ -227,12 +227,13 @@ async function main() {
   console.log('--- Running RBAC Supertest End-to-End HTTP tests ---');
 
   // =========================================================================
-  // AC-RBAC-01-01: List permissions returns the canonical registry across categories
+  // AC-RBAC-01-01: List permissions returns all canonical permissions across categories
   // =========================================================================
   const permRes = await request(server)
     .get('/api/v1/permissions')
     .set('Authorization', `Bearer ${ownerToken}`)
     .expect(200);
+  assert.strictEqual(permRes.body.data.permissions.length, PLATFORM_PERMISSIONS.length);
   assert.deepStrictEqual(
     permRes.body.data.permissions.map((permission: { code: string }) => permission.code).sort(),
     PLATFORM_PERMISSIONS.map((permission) => permission.code).sort()

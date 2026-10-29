@@ -598,6 +598,8 @@ model RateTier {
 model Order {
   id                   String         @id @default(uuid()) @db.Uuid
   merchant_id          String         @db.Uuid
+  branch_id            String?        @db.VarChar(128)
+  warehouse_id         String?        @db.VarChar(128)
   source_type          String         @default("pancake") @db.VarChar(32)
   order_code           String         @db.VarChar(128)
   created_at           DateTime       @db.Timestamptz
@@ -621,6 +623,8 @@ model Order {
 model Shipment {
   id                   String             @id @default(uuid()) @db.Uuid
   merchant_id          String             @db.Uuid
+  branch_id            String?            @db.VarChar(128)
+  warehouse_id         String?            @db.VarChar(128)
   order_id             String             @db.Uuid
   order_code           String             @db.VarChar(128)
   carrier_code         CarrierCodeEnum
@@ -679,6 +683,8 @@ model ShipmentEvent {
 model ExceptionCase {
   id                   String                  @id @default(uuid()) @db.Uuid
   merchant_id          String                  @db.Uuid
+  branch_id            String?                 @db.VarChar(128)
+  warehouse_id         String?                 @db.VarChar(128)
   shipment_id          String                  @db.Uuid
   tracking_code        String                  @db.VarChar(128)
   exception_type       ExceptionTypeEnum
@@ -751,6 +757,8 @@ model ReturnRecord {
 model CarrierStatement {
   id                   String            @id @default(uuid()) @db.Uuid
   merchant_id          String            @db.Uuid
+  branch_id            String?           @db.VarChar(128)
+  warehouse_id         String?           @db.VarChar(128)
   carrier_account_id   String            @db.Uuid
   period_start         DateTime          @db.Date
   period_end           DateTime          @db.Date
@@ -798,6 +806,8 @@ model StatementRow {
 model Discrepancy {
   id                   String                @id @default(uuid()) @db.Uuid
   merchant_id          String                @db.Uuid
+  branch_id            String?               @db.VarChar(128)
+  warehouse_id         String?               @db.VarChar(128)
   statement_row_id     String?               @db.Uuid
   shipment_id          String                @db.Uuid
   tracking_code        String                @db.VarChar(128)
@@ -827,6 +837,8 @@ model Discrepancy {
 model Claim {
   id                   String            @id @default(uuid()) @db.Uuid
   merchant_id          String            @db.Uuid
+  branch_id            String?           @db.VarChar(128)
+  warehouse_id         String?           @db.VarChar(128)
   shipment_id          String            @db.Uuid
   discrepancy_id       String?           @db.Uuid
   claim_type           String            @db.VarChar(32) // LOST, DAMAGED, FEE, COD

@@ -25,6 +25,7 @@ import { SettingsWorkspace } from '@/components/SettingsWorkspace';
 import { UnifiedTrackingModal } from '@/components/UnifiedTrackingModal';
 import { UploadStatementModal } from '@/components/UploadStatementModal';
 import { CreateOrderModal } from '@/components/CreateOrderModal';
+import { GlobalSearchModal } from '@/components/GlobalSearchModal';
 
 import {
   Package,
@@ -62,7 +63,6 @@ export default function ShipDeConsoleApp() {
   const [createOrderOpen, setCreateOrderOpen] = useState(false);
   const [uploadStatementOpen, setUploadStatementOpen] = useState(false);
   const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
-  const [globalSearchCode, setGlobalSearchCode] = useState('');
   const [selectedGlobalTracking, setSelectedGlobalTracking] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [syncingPancake, setSyncingPancake] = useState(false);
@@ -95,14 +95,6 @@ export default function ShipDeConsoleApp() {
 
   const handleUpdateClaim = (updated: UIClaimItem) => {
     setClaims((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
-  };
-
-  const handleGlobalSearchSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!globalSearchCode.trim()) return;
-    setSelectedGlobalTracking(globalSearchCode.trim().toUpperCase());
-    setGlobalSearchOpen(false);
-    setGlobalSearchCode('');
   };
 
   const handleSyncPancake = async () => {
@@ -616,44 +608,29 @@ export default function ShipDeConsoleApp() {
         </div>
       </footer>
 
-      {/* Global Quick Search Modal ⌘K */}
-      {globalSearchOpen && (
-        <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 space-y-4 animate-in fade-in zoom-in-95 duration-150">
-            <div className="flex justify-between items-center pb-2 border-b border-slate-100">
-              <div className="flex items-center gap-2 font-bold text-sm text-slate-900">
-                <Search className="w-4 h-4 text-[#c23807]" />
-                <span>Tra Cứu Mã Vận Đơn Nhanh</span>
-              </div>
-              <button
-                type="button"
-                onClick={() => setGlobalSearchOpen(false)}
-                className="w-7 h-7 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center font-bold text-xs"
-              >
-                ✕
-              </button>
-            </div>
-
-            <form onSubmit={handleGlobalSearchSubmit} className="space-y-3">
-              <input
-                type="text"
-                value={globalSearchCode}
-                onChange={(e) => setGlobalSearchCode(e.target.value)}
-                placeholder="Nhập mã vận đơn (GHN88291042, GHTK77129031)..."
-                className="modern-input w-full font-mono uppercase font-bold text-sm"
-                autoFocus
-              />
-
-              <div className="flex justify-between items-center text-xs text-slate-500">
-                <span>Gợi ý: GHN88291042, GHTK77129031</span>
-                <button type="submit" className="btn-primary text-xs">
-                  Mở Hồ Sơ
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      {/* Global Search Modal ⌘K (FEAT-COM-01) */}
+      <GlobalSearchModal
+        isOpen={globalSearchOpen}
+        onClose={() => setGlobalSearchOpen(false)}
+        onSelectResult={(item) => {
+          setGlobalSearchOpen(false);
+          if (item.type === 'WAYBILL') {
+            setSelectedGlobalTracking(item.code);
+          } else if (item.type === 'ORDER') {
+            setActiveTab('shipments');
+            showToast(`Đã mở đơn hàng ${item.code}`);
+          } else if (item.type === 'BATCH') {
+            setActiveTab('reconciliation');
+            showToast(`Đã mở bảng kê ${item.code}`);
+          } else if (item.type === 'CASE') {
+            setActiveTab('exceptions');
+            showToast(`Đã mở ngoại lệ ${item.code}`);
+          } else if (item.type === 'TRANSACTION') {
+            setActiveTab('reconciliation');
+            showToast(`Đã mở giao dịch ${item.code}`);
+          }
+        }}
+      />
 
       {/* Statement Upload Modal */}
       <UploadStatementModal
