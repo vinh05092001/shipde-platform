@@ -21,7 +21,7 @@ const REGISTER = services.REGISTER_REL;
 const DOC = services.workItemRel(ID);
 
 const WRITER = 'opencode::api::gw-a::up-a::acct-a::scope-a::model-a';
-const WRITER_2 = 'opencode::api::gw-b::up-b::acct-b::scope-b::model-b';
+const WRITER_2 = 'claude::cli::gw-b::up-b::acct-b::scope-b::model-b';
 const REVIEWER = 'codex::cli::::up-r::acct-r::scope-r::model-r';
 
 function sh(cwd, ...args) {
@@ -53,9 +53,9 @@ function makeRepo() {
   return { dir, base: sh(dir, 'rev-parse', 'HEAD') };
 }
 
-function commitDoc(dir, { register = true, extra } = {}) {
+function commitDoc(dir, { register = true, extra, text } = {}) {
   fs.mkdirSync(path.dirname(path.join(dir, DOC)), { recursive: true });
-  fs.writeFileSync(path.join(dir, DOC), '# ' + ID + '\n\nComplete.\n');
+  fs.writeFileSync(path.join(dir, DOC), text || '# ' + ID + '\n\nComplete.\n');
   if (register) {
     const p = path.join(dir, REGISTER);
     fs.writeFileSync(p, fs.readFileSync(p, 'utf8').replace(/"BACKLOG"/, '"READY_FOR_AUTHOR"'));
@@ -304,7 +304,7 @@ test('independent reviewer: excludes the author, binds the verdict to the exact 
   assert.equal(out.sha, sha);
   assert.equal(out.reviewer, REVIEWER);
   assert.equal(selection.item.roleRequirement.role, 'reviewer');
-  assert.deepEqual(selection.forbidden, ['up-a']);
+  assert.deepEqual(selection.forbidden, ['up-a', 'gw-a', 'acct-a', 'opencode', 'gw-a/up-a']);
   assert.equal(selection.item.writerCandidateKey, WRITER);
 });
 
@@ -551,14 +551,88 @@ test('docs-only merge executor: refuses non-docs changes and relays a failed pre
   assert.match(r2.reason, /CHECK_NOT_SUCCESS/);
 });
 
-test('planWorkItem --run reaches READY_FOR_AUTHOR with the real service wiring (stubbed externals)', async () => {
+const VALID_DRAFT_TEXT = `# FEAT-AUTH-02
+
+## Business outcome
+
+> Some spec content.
+
+## Source references
+
+- docs/product-spec/docs/01-product/PRODUCT-VISION-SCOPE.md
+
+## Preconditions and dependencies
+
+- None
+
+## Author boundary
+
+- None
+
+## In scope
+
+- None
+
+## Out of scope
+
+- None
+
+## Business rules and edge cases
+
+- None
+
+## UI states
+
+- None
+
+## API, event and data impact
+
+- None
+
+## Acceptance matrix
+
+| AC | Scenario | Expected | Evidence |
+| --- | --- | --- | --- |
+
+## Verification commands
+
+- None
+
+## Codex review record
+
+| Round | Commit | Verdict | Findings |
+| --- | --- | --- | --- |
+
+## Residual limitations
+
+- None
+`;
+
+function setupValidSourceRepo() {
   const host = makeRepo();
+  const specFile = path.join(
+    host.dir,
+    'docs',
+    'product-spec',
+    'docs',
+    '01-product',
+    'PRODUCT-VISION-SCOPE.md'
+  );
+  fs.mkdirSync(path.dirname(specFile), { recursive: true });
+  fs.writeFileSync(specFile, '# Product Vision\n\nSome spec content.', 'utf8');
+  sh(host.dir, 'add', '-A');
+  sh(host.dir, 'commit', '-m', 'chore: add spec source');
+  return host;
+}
+
+test('planWorkItem --run reaches READY_FOR_AUTHOR with the real service wiring (stubbed externals)', async () => {
+  const host = setupValidSourceRepo();
   const workerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'plansvc-worker-'));
   sh(host.dir, 'clone', '-q', host.dir, workerDir);
   sh(workerDir, 'config', 'user.email', 't@example.test');
   sh(workerDir, 'config', 'user.name', 't');
   sh(workerDir, 'config', 'commit.gpgsign', 'false');
-  const head = commitDoc(workerDir);
+  const head = commitDoc(workerDir, { text: VALID_DRAFT_TEXT });
   const gitFn = (cwd, args) => {
     const r = spawnSync('git', args, { cwd, encoding: 'utf8' });
     return {
@@ -570,7 +644,12 @@ test('planWorkItem --run reaches READY_FOR_AUTHOR with the real service wiring (
   const calls = [];
   const deps = planner.defaultPlanningDeps(host.dir, {
     items: [{ work_item_id: ID, status: 'BACKLOG' }],
-    draftWorkItem: async () => ({ id: ID, status: 'DRAFT', blocking: false, text: 'draft' }),
+    draftWorkItem: async () => ({
+      id: ID,
+      status: 'DRAFT',
+      blocking: false,
+      text: VALID_DRAFT_TEXT,
+    }),
     rankPlanner: async () => cand(WRITER),
     servicesContext: {
       plannerRoot: workerDir,
@@ -588,30 +667,67 @@ test('planWorkItem --run reaches READY_FOR_AUTHOR with the real service wiring (
         selectCandidateForProfile: async () => ({ chosen: REVIEWER }),
         reviewLane: () => async (t) => ({ pass: true, verdict: 'PASS', sha: t, findings: [] }),
       }),
-      launcher: () => ({ exitCode: 0, workerSha: head }),
+      launcher: () => ({ exitCode: 0, workerSha: head, draftText: VALID_DRAFT_TEXT }),
       publishPlan: async () => (calls.push('publish'), { ok: true }),
       governedMerge: async () => (calls.push('merge'), { ok: true, headSha: head }),
     },
   });
   const result = await planner.planWorkItem(ID, { rootDir: host.dir, run: true }, deps);
-  assert.doesNotMatch(String(result.reason || ''), /not configured|PLAN_EXECUTOR/);
-  // Source-backing validation of the stub text is the planner's own gate; when it
-  // passes, the review and the governed merge must both have run in order.
-  if (result.status === 'READY_FOR_AUTHOR') assert.deepEqual(calls, ['publish', 'merge']);
-  else assert.equal(result.status, 'BLOCKED');
+  assert.equal(result.status, 'READY_FOR_AUTHOR');
+  assert.deepEqual(calls, ['publish', 'merge']);
 });
 
-test('next-runner builds the real planning services instead of stopping with PLAN_EXECUTOR_REQUIRED', () => {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'next-runner.js'), 'utf8');
-  assert.match(src, /planningDepsFor\(d, opts, rootDir\)/);
-  const deps = planner.defaultPlanningDeps(process.cwd(), { externalWorkers: 'agy-pool' });
-  for (const fn of [
-    'rankPlanner',
-    'runIsolatedPlanner',
-    'reviewPlan',
-    'mergePlan',
-    'runPlanning',
-  ]) {
-    assert.equal(typeof deps[fn], 'function', fn);
-  }
+test('next-runner builds the real planning services and reaches review and governed merge', async () => {
+  const { planningDepsFor } = require('../next-runner');
+  const host = setupValidSourceRepo();
+  const workerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'plansvc-runner-worker-'));
+  sh(host.dir, 'clone', '-q', host.dir, workerDir);
+  sh(workerDir, 'config', 'user.email', 't@example.test');
+  sh(workerDir, 'config', 'user.name', 't');
+  sh(workerDir, 'config', 'commit.gpgsign', 'false');
+  const head = commitDoc(workerDir, { text: VALID_DRAFT_TEXT });
+  const gitFn = (cwd, args) => {
+    const r = spawnSync('git', args, { cwd, encoding: 'utf8' });
+    return {
+      ok: r.status === 0,
+      stdout: String(r.stdout || '').trim(),
+      stderr: String(r.stderr || ''),
+    };
+  };
+  const calls = [];
+  const baseDeps = {
+    items: [{ work_item_id: ID, status: 'BACKLOG' }],
+    draftWorkItem: async () => ({
+      id: ID,
+      status: 'DRAFT',
+      blocking: false,
+      text: VALID_DRAFT_TEXT,
+    }),
+    rankPlanner: async () => cand(WRITER),
+    servicesContext: {
+      plannerRoot: workerDir,
+      decisionDir: fs.mkdtempSync(path.join(os.tmpdir(), 'plandec2-')),
+      probe: false,
+      git: gitFn,
+      loadPool: () => ({
+        annotated: [cand(REVIEWER, { harness: 'codex' })],
+        evidenceData: {},
+        accounts: [],
+        registry: { sources: [] },
+      }),
+      orchestrate: fakeOrchestrate({
+        resolveIsolatedWorkerRoot: () => workerDir,
+        selectCandidateForProfile: async () => ({ chosen: REVIEWER }),
+        reviewLane: () => async (t) => ({ pass: true, verdict: 'PASS', sha: t, findings: [] }),
+      }),
+      launcher: () => ({ exitCode: 0, workerSha: head, draftText: VALID_DRAFT_TEXT }),
+      publishPlan: async () => (calls.push('publish'), { ok: true }),
+      governedMerge: async () => (calls.push('merge'), { ok: true, headSha: head }),
+    },
+  };
+  const resolved = planningDepsFor(baseDeps, { externalWorkers: 'agy-pool' }, host.dir);
+  assert.equal(typeof resolved.runPlanning, 'function');
+  const result = await planner.planWorkItem(ID, { rootDir: host.dir, run: true }, resolved);
+  assert.equal(result.status, 'READY_FOR_AUTHOR');
+  assert.deepEqual(calls, ['publish', 'merge']);
 });

@@ -115,7 +115,7 @@ test(
       targetLines: [
         '$ErrorActionPreference = "Stop"',
         'Write-Output \'{"type":"error","timestamp":1791237213000,"error":{"name":"APIError","data":{"message":"[provider/model] [413]: Request too large for model context","statusCode":413}}}\'',
-        'Start-Sleep -Seconds 20',
+        'Start-Sleep -Seconds 15',
         'exit 0',
       ],
     });
@@ -124,7 +124,7 @@ test(
     assert.equal(hostRes.status, 0, String(hostRes.stderr || hostRes.stdout || ''));
     assert.ok(raw, 'launch result must be written');
     assert.match(String(raw.failureReason), /REQUEST_TOO_LARGE/);
-    assert.ok(elapsedMs < 15000, `expected fast abort on 413, took ${elapsedMs}ms`);
+    assert.ok(elapsedMs < 10000, `expected fast abort on 413, took ${elapsedMs}ms`);
 
     const result = readIt();
     assert.equal(result.failureReason, 'REQUEST_TOO_LARGE');
@@ -155,7 +155,7 @@ test(
       targetLines: [
         '$ErrorActionPreference = "Stop"',
         'Write-Output "Rate limit reached for model on tokens per minute (TPM): Limit 8000, Used 7950, Requested 2500"',
-        'Start-Sleep -Seconds 20',
+        'Start-Sleep -Seconds 15',
         'exit 0',
       ],
     });
@@ -164,7 +164,7 @@ test(
     assert.equal(hostRes.status, 0, String(hostRes.stderr || hostRes.stdout || ''));
     assert.ok(raw, 'launch result must be written');
     assert.match(String(raw.failureReason), /REQUEST_TOO_LARGE/);
-    assert.ok(elapsedMs < 15000, `expected fast abort on TPM limit, took ${elapsedMs}ms`);
+    assert.ok(elapsedMs < 10000, `expected fast abort on TPM limit, took ${elapsedMs}ms`);
 
     const result = readIt();
     assert.equal(result.failureReason, 'REQUEST_TOO_LARGE');

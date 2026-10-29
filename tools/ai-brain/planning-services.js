@@ -316,6 +316,51 @@ function resolveBaseSha(git, rootDir, base) {
   return null;
 }
 
+function isReviewerIndependent(authorKey, reviewerKey) {
+  if (!authorKey || !reviewerKey) return false;
+  if (authorKey === reviewerKey) return false;
+  const identity = require('./discovery/identity');
+  const parsedAuthor = identity.parseCandidateKey(authorKey);
+  const parsedReviewer = identity.parseCandidateKey(reviewerKey);
+  if (parsedAuthor && parsedReviewer) {
+    if (
+      parsedAuthor.harness &&
+      parsedReviewer.harness &&
+      parsedAuthor.harness === parsedReviewer.harness
+    ) {
+      return false;
+    }
+    if (
+      parsedAuthor.account &&
+      parsedReviewer.account &&
+      parsedAuthor.account === parsedReviewer.account
+    ) {
+      return false;
+    }
+    if (
+      parsedAuthor.upstream &&
+      parsedReviewer.upstream &&
+      parsedAuthor.upstream === parsedReviewer.upstream
+    ) {
+      return false;
+    }
+    if (
+      parsedAuthor.gateway &&
+      parsedReviewer.gateway &&
+      parsedAuthor.gateway === parsedReviewer.gateway
+    ) {
+      return false;
+    }
+  }
+  const routing = require('./routing');
+  const dAuthor = routing.canonicalFailureDomain(authorKey);
+  const dReviewer = routing.canonicalFailureDomain(reviewerKey);
+  if (dAuthor && dReviewer && dAuthor === dReviewer) {
+    return false;
+  }
+  return true;
+}
+
 function createPlanningServices(ctx) {
   const c = ctx || {};
   const rootDir = path.resolve(c.rootDir || process.cwd());
@@ -686,9 +731,14 @@ function createPlanningServices(ctx) {
     const parsedAuthor = authorKey
       ? require('./discovery/identity').parseCandidateKey(authorKey)
       : null;
-    const forbidden = [parsedAuthor && (parsedAuthor.upstream || parsedAuthor.gateway)].filter(
-      Boolean
-    );
+    const authorDomain = authorKey ? require('./routing').canonicalFailureDomain(authorKey) : null;
+    const forbidden = [
+      parsedAuthor && parsedAuthor.upstream,
+      parsedAuthor && parsedAuthor.gateway,
+      parsedAuthor && parsedAuthor.account,
+      parsedAuthor && parsedAuthor.harness,
+      authorDomain,
+    ].filter(Boolean);
     const select = c.selectCandidate || orch.selectCandidateForProfile;
     const lane = c.reviewLane || orch.reviewLane;
     const usageDir = c.usageDir || path.join(os.tmpdir(), 'shipde-plan-review');
@@ -723,6 +773,12 @@ function createPlanningServices(ctx) {
       }
       if (authorKey && reviewerKey === authorKey) {
         return { verdict: 'BLOCKED', reason: 'REVIEWER_EQUALS_AUTHOR' };
+      }
+      if (authorKey && !isReviewerIndependent(authorKey, reviewerKey)) {
+        return {
+          verdict: 'BLOCKED',
+          reason: 'REVIEWER_NOT_INDEPENDENT: reviewer shares identity dimensions with author',
+        };
       }
       const reviewerCandidate =
         pool.annotated.find((cand) => candidateKeyOf(cand) === reviewerKey) || null;
@@ -861,7 +917,11 @@ function createPlanningServices(ctx) {
       );
     }
     const authorKey = plan.candidateKey || candidateKeyOf(candidate);
-    if (!review.reviewer || review.reviewer === authorKey) {
+    if (
+      !review.reviewer ||
+      review.reviewer === authorKey ||
+      !isReviewerIndependent(authorKey, review.reviewer)
+    ) {
       return refuse('MERGE_REVIEWER_NOT_INDEPENDENT');
     }
     const scope = verifyDocsOnlyChange({
@@ -960,10 +1020,37 @@ function createPlanningServices(ctx) {
       info.baseRefOid ||
       gitRunner(rootDir, ['merge-base', sha, 'origin/' + (c.base || 'main')]).stdout ||
       null;
-    const writers = authorKey
-      ? [authorKey]
-      : require('./governed-merge').getWritersFromDecisionLog(id, decisionDir).filter(Boolean);
-    const resolvedAuthor = writers[0] || null;
+    const logWriters = require('./governed-merge')
+      .getWritersFromDecisionLog(id, decisionDir)
+      .filter(Boolean);
+    let resolvedAuthor = null;
+    if (logWriters.length > 0) {
+      if (authorKey && !logWriters.includes(authorKey)) {
+        return {
+          verdict: 'BLOCKED',
+          reason:
+            'AUTHOR_MISMATCH: caller-supplied author ' +
+            authorKey +
+            ' does not match recorded decision log writer(s)',
+        };
+      }
+      resolvedAuthor = logWriters[0];
+    } else {
+      const prBody = String(info.body || '');
+      const bodyMatch = prBody.match(/(?:author|writer)(?: candidate key)?:\s*([^\r\n]+)/i);
+      const prAuthor = bodyMatch ? bodyMatch[1].trim() : null;
+      if (prAuthor) {
+        if (authorKey && authorKey !== prAuthor) {
+          return {
+            verdict: 'BLOCKED',
+            reason: 'AUTHOR_MISMATCH: caller-supplied author does not match PR body',
+          };
+        }
+        resolvedAuthor = prAuthor;
+      } else if (authorKey) {
+        resolvedAuthor = authorKey;
+      }
+    }
     if (!resolvedAuthor) {
       return {
         verdict: 'BLOCKED',
@@ -1080,4 +1167,5 @@ module.exports = {
   defaultGh,
   defaultPublishPlan,
   resolveInstalledHook,
+  isReviewerIndependent,
 };

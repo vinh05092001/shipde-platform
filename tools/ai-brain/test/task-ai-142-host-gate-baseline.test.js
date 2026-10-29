@@ -406,17 +406,18 @@ test('TASK-AI-142: head and base runs use the identical environment', () => {
   assert.equal(runs[1].env.AI_BRAIN_MACHINE_DATA, 'none');
 });
 
-test('TASK-AI-142: a candidate that passes when rerun alone is flaky, not new', () => {
+test('TASK-AI-142: a full-suite failure that passes alone remains a new failure (a failed confirmation stays failed)', () => {
   const baseSha = 'e'.repeat(40);
   const head = { status: 1, stdout: 'not ok 1 - old\nnot ok 2 - racy\n' };
   const base = { status: 1, stdout: 'not ok 1 - old\n' };
   const rerunPass = { status: 0, stdout: 'ℹ pass 1\nℹ fail 0\n' };
   const { spawnSync, calls } = gateMocks(baseSha, head, base, rerunPass);
   const r = runHostBrainGate({ baseSha }, { spawnSync, baseCache: new Map() });
-  assert.equal(r.pass, true);
+  assert.equal(r.pass, false);
+  assert.deepEqual(r.newFailures, ['racy']);
   assert.deepEqual(r.flakyRecovered, ['racy']);
   assert.equal(r.baselineFailureCount, 1);
-  assert.equal(r.newFailureCount, 0);
+  assert.equal(r.newFailureCount, 1);
   assert.equal(r.flakyRecoveredCount, 1);
   assert.ok(calls.find((c) => c.rerun));
 });

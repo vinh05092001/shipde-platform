@@ -784,6 +784,25 @@ if (\`$LASTEXITCODE -ne 0) {
 `
     : '';
 
+  const configuredNpmDir = options.workerNpmDir || options.npmDir || null;
+  const workerNpmSnippet = configuredNpmDir
+    ? `\`$workerNpm = "${configuredNpmDir.replace(/\\/g, '\\\\')}"
+if (Test-Path \`$workerNpm) {
+  \`$env:PATH = "\`$workerNpm;" + \`$env:PATH
+}`
+    : '';
+  const psiNpmSnippet = configuredNpmDir
+    ? `if (Test-Path "${configuredNpmDir.replace(/\\/g, '\\\\')}") {
+    $psi.EnvironmentVariables["PATH"] = "${configuredNpmDir.replace(/\\/g, '\\\\')};" + $psi.EnvironmentVariables["PATH"]
+}`
+    : '';
+  const configuredCodexHome = options.codexHome || `${workerRoot}\\.codex`;
+  const codexHomeSnippet = configuredCodexHome
+    ? `\`$workerCodexHome = "${configuredCodexHome.replace(/\\/g, '\\\\')}"
+if (-not (Test-Path \`$workerCodexHome)) { New-Item -ItemType Directory -Path \`$workerCodexHome | Out-Null }
+\`$env:CODEX_HOME = \`$workerCodexHome`
+    : '';
+
   const envAllowed = [
     'PATH',
     'SystemRoot',
@@ -838,13 +857,8 @@ $wrapperStartTime = Get-Date
 \`$env:TMP = "${workerRoot}\\temp"
 if (-not \`$env:OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX) { \`$env:OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX = "4096" }
 \`$env:pnpm_config_verify_deps_before_run = "warn"
-\`$workerNpm = "C:\\ShipDeWorker\\npm"
-if (Test-Path \`$workerNpm) {
-  \`$env:PATH = "\`$workerNpm;" + \`$env:PATH
-}
-# The worker root is recreated per launch; a Codex login must live outside it.
-\`$workerCodexHome = "C:\\ShipDeWorker\\codex-home"
-if (Test-Path \`$workerCodexHome) { \`$env:CODEX_HOME = \`$workerCodexHome }
+${workerNpmSnippet}
+${codexHomeSnippet}
 if (-not (Test-Path "${workerRoot}\\temp")) { New-Item -ItemType Directory -Path "${workerRoot}\\temp" | Out-Null }
 if (-not (Test-Path "${workerRoot}\\.shipde")) { New-Item -ItemType Directory -Path "${workerRoot}\\.shipde" | Out-Null }
 Set-Location -Path "${workerRoot}"
@@ -881,9 +895,7 @@ foreach ($key in $allowed) {
         $psi.EnvironmentVariables[$key] = [Environment]::GetEnvironmentVariable($key)
     }
 }
-if (Test-Path "C:\\ShipDeWorker\\npm") {
-    $psi.EnvironmentVariables["PATH"] = "C:\\ShipDeWorker\\npm;" + $psi.EnvironmentVariables["PATH"]
-}
+${psiNpmSnippet}
 ${rtkPathPrepend ? `$psi.EnvironmentVariables["PATH"] = "${rtkPathPrepend.replace(/\\/g, '\\\\')}" + ";" + $psi.EnvironmentVariables["PATH"]` : ''}
 
 $process = [System.Diagnostics.Process]::Start($psi)
@@ -2551,13 +2563,8 @@ function getIsolatedLauncher() {
         // rename it into place. pnpm creates Windows junctions/hard links
         // without requiring the symlink privilege needed by recursive copies.
         if (!cacheReady()) {
-          if (fs.existsSync(depsDir)) {
-            fs.rmSync(depsDir, { recursive: true, force: true });
-          }
-          const isWin = process.platform === 'win32';
-          const targetDir = isWin
-            ? depsDir
-            : depsDir + '.staging-' + process.pid + '-' + Math.random().toString(36).slice(2, 8);
+          const targetDir =
+            depsDir + '.staging-' + process.pid + '-' + Math.random().toString(36).slice(2, 8);
           fs.mkdirSync(targetDir, { recursive: true });
           let failedPath = 'pnpm-lock.yaml';
           try {
@@ -2616,17 +2623,15 @@ function getIsolatedLauncher() {
               throw error;
             }
             fs.writeFileSync(path.join(targetDir, '.shipde-deps-ready'), 'ready', 'utf8');
-            if (!isWin) {
-              try {
-                if (fs.existsSync(depsDir)) {
-                  fs.rmSync(depsDir, { recursive: true, force: true });
-                }
-                fs.renameSync(targetDir, depsDir);
-              } catch (renameErr) {
-                // A concurrent launch finished first: its complete tree wins.
-                fs.rmSync(targetDir, { recursive: true, force: true });
-                if (!cacheReady()) throw renameErr;
+            try {
+              if (fs.existsSync(depsDir)) {
+                fs.rmSync(depsDir, { recursive: true, force: true });
               }
+              fs.renameSync(targetDir, depsDir);
+            } catch (renameErr) {
+              // A concurrent launch finished first: its complete tree wins.
+              fs.rmSync(targetDir, { recursive: true, force: true });
+              if (!cacheReady()) throw renameErr;
             }
           } catch (provisionError) {
             provisionError.relativePath = failedPath.split(path.sep).join('/');

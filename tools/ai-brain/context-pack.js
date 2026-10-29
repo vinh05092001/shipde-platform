@@ -106,7 +106,7 @@ function createContextPack(items, options = {}) {
       encoding: 'utf8',
       timeout: 120000,
       windowsHide: true,
-      shell: process.platform === 'win32',
+      shell: false,
     });
     if (result.status === 0 && fs.existsSync(output)) {
       content = fs.readFileSync(output, 'utf8');
@@ -171,7 +171,7 @@ async function createContextPackAsync(items, options = {}) {
         cwd: root,
         stdio: 'ignore',
         windowsHide: true,
-        shell: process.platform === 'win32',
+        shell: false,
       });
       const timer = setTimeout(() => {
         child.kill();

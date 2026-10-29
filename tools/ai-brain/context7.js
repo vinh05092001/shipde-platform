@@ -15,8 +15,8 @@ function ctx7Command(env = process.env) {
 function runCtx7(args, { env = process.env, timeoutMs = 60000 } = {}) {
   const { cmd, prefix } = ctx7Command(env);
   return new Promise((resolve) => {
-    const child = spawn(quoteForShell(cmd), [...prefix, ...args].map(quoteForShell), {
-      shell: process.platform === 'win32',
+    const child = spawn(cmd, [...prefix, ...args], {
+      shell: false,
       windowsHide: true,
       env: { ...env, NO_COLOR: '1' },
     });
@@ -34,14 +34,6 @@ function runCtx7(args, { env = process.env, timeoutMs = 60000 } = {}) {
       resolve({ code, stdout, stderr });
     });
   });
-}
-
-// Windows runs the .cmd shim through cmd.exe; drop the characters cmd.exe would
-// interpret inside quotes (" and %) so a query can never become a command.
-function quoteForShell(arg) {
-  if (process.platform !== 'win32') return arg;
-  const value = String(arg).replace(/["%]/g, '');
-  return /[\s&|<>^()]/.test(value) ? '"' + value + '"' : value;
 }
 
 function parseJson(text) {

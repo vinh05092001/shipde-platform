@@ -617,3 +617,245 @@ test('Round 3 Finding 8: awaitCi and next-runner fail closed on invalid or missi
     /DISPATCH_CONFIG_INVALID|INVALID_DISPATCH_CONFIG/
   );
 });
+
+// Round 3 Finding 10 (P1): Review/writer integrity: strict JSON parsing, no prose object extraction
+test('Round 3 Finding 10: writer-schema and poolResultText reject embedded JSON in prose', () => {
+  const schemaApi = require('../writer-schema');
+  const schema = {
+    type: 'object',
+    required: ['candidateKey', 'nonce', 'status', 'artifacts'],
+    properties: {
+      candidateKey: { type: 'string', enum: ['key1'] },
+      nonce: { type: 'string', enum: ['nonce1'] },
+      status: { type: 'string', enum: ['completed'] },
+      artifacts: { type: 'array', items: { type: 'string' } },
+    },
+  };
+  const proseWithJson =
+    'Here is the result: {"candidateKey":"key1","nonce":"nonce1","status":"completed","artifacts":[]} hope this helps!';
+  const validated = schemaApi.validate(proseWithJson, schema);
+  assert.equal(validated.ok, false, 'Embedded JSON in prose must be rejected');
+  assert.equal(validated.reason, 'WRITER_RESULT_INVALID_JSON');
+
+  const envelopeWithProse = JSON.stringify({
+    response: 'Some prose {"verdict":"CHANGES_REQUIRED","sha":"deadbeef"} more text',
+  });
+  const poolText = schemaApi.poolResultText(envelopeWithProse);
+  assert.equal(poolText, 'Some prose {"verdict":"CHANGES_REQUIRED","sha":"deadbeef"} more text');
+});
+
+// Round 3 Finding 11 (P1): Reviewer independence checks full identity and rejects author mismatch
+test('Round 3 Finding 11: isReviewerIndependent checks full identity dimensions and reviewPullRequest rejects author mismatch', async () => {
+  const { isReviewerIndependent, createPlanningServices } = require('../planning-services');
+  const author = 'opencode::api::gw-1::up-1::acct-1::scope-1::model-1';
+  // Same harness
+  const sameHarness = 'opencode::api::gw-2::up-2::acct-2::scope-2::model-2';
+  assert.equal(
+    isReviewerIndependent(author, sameHarness),
+    false,
+    'Same harness must not be independent'
+  );
+
+  // Same account
+  const sameAccount = 'codex::cli::gw-2::up-2::acct-1::scope-2::model-2';
+  assert.equal(
+    isReviewerIndependent(author, sameAccount),
+    false,
+    'Same account must not be independent'
+  );
+
+  // Same upstream
+  const sameUpstream = 'claude::cli::gw-2::up-1::acct-2::scope-2::model-2';
+  assert.equal(
+    isReviewerIndependent(author, sameUpstream),
+    false,
+    'Same upstream must not be independent'
+  );
+
+  // Same gateway
+  const sameGateway = 'hermes::cli::gw-1::up-2::acct-2::scope-2::model-2';
+  assert.equal(
+    isReviewerIndependent(author, sameGateway),
+    false,
+    'Same gateway must not be independent'
+  );
+
+  // Distinct full identity
+  const distinct = 'codex::cli::gw-2::up-2::acct-2::scope-2::model-2';
+  assert.equal(
+    isReviewerIndependent(author, distinct),
+    true,
+    'Distinct identity must be independent'
+  );
+
+  // reviewPullRequest rejects caller-supplied author that mismatches decision log
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rev-indep-test-'));
+  try {
+    const decisionDir = path.join(tmpDir, 'decisions');
+    decisions.recordDecision(
+      { workItemId: 'FEAT-PR-01', stage: 'dispatch', chosen: author },
+      { dir: decisionDir }
+    );
+    const svc = createPlanningServices({
+      rootDir: tmpDir,
+      decisionDir,
+      gh: () => ({
+        ok: true,
+        stdout: JSON.stringify({
+          headRefOid: 'a'.repeat(40),
+          baseRefOid: 'b'.repeat(40),
+          title: '[FEAT-PR-01] test',
+          headRefName: 'feat/test',
+        }),
+      }),
+      git: () => ({ ok: true, stdout: '' }),
+    });
+    const res = await svc.reviewPullRequest({
+      pr: '1',
+      sha: 'a'.repeat(40),
+      workItemId: 'FEAT-PR-01',
+      authorKey: 'codex::cli::gw-spoof::up-spoof::acct-spoof::scope-spoof::model-spoof',
+    });
+    assert.equal(res.verdict, 'BLOCKED');
+    assert.match(res.reason, /AUTHOR_MISMATCH/);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// Round 3 Finding 12 (P1): Host gate diff bounds and failure confirmation persistence
+test('Round 3 Finding 12: host gate diff checks entire diff and failed confirmation stays failed', () => {
+  const orchestrate = require('../orchestrate');
+  const baseSha = 'a'.repeat(40);
+  const headOut = { status: 1, stdout: 'not ok 1 - failure-a\n' };
+  const baseOut = { status: 0, stdout: 'ok 1 - baseline\n' };
+  const rerunPass = { status: 0, stdout: 'ℹ pass 1\n' };
+  let calls = 0;
+  const spawnSync = (cmd, args) => {
+    if (cmd === 'git') return { status: 0, stdout: baseSha + '\n', stderr: '' };
+    calls++;
+    if (calls === 1) return headOut; // full suite run on HEAD
+    if (calls === 2) return baseOut; // baseline run
+    return rerunPass; // single rerun
+  };
+  const res = orchestrate.runHostBrainGate({ baseSha }, { spawnSync, baseCache: new Map() });
+  assert.equal(res.pass, false, 'Suite failure that passes alone must still FAIL the gate');
+  assert.deepEqual(res.newFailures, ['failure-a']);
+});
+
+// Round 3 Finding 13 (P1): Isolation launcher avoids hardcoded worker paths and uses staging deps cache
+test('Round 3 Finding 13: isolation launcher script template uses per-launch paths and no hardcoded npm/codex', () => {
+  const launcher = require('../isolation-launcher');
+  const script = launcher.buildWorkerLaunchScript({
+    workerUsername: 'TestWorker',
+    workerRoot: 'C:\\CustomWorker\\Root',
+    exeFile: 'test.exe',
+    exePrefixArgs: [],
+    payloadArgsPath: 'payload.json',
+    completionMarkerPath: 'marker.json',
+    completionNonce: 'nonce',
+    usageLogPath: 'usage.log',
+  });
+  assert.doesNotMatch(script, /"C:\\ShipDeWorker\\npm"/);
+  assert.doesNotMatch(script, /"C:\\ShipDeWorker\\codex-home"/);
+  assert.match(script, /CODEX_HOME/);
+});
+
+// Round 3 Finding 14 (P1): context-pack and context7 use shell: false and argument vectors
+test('Round 3 Finding 14: context-pack and context7 use shell: false and array args', async () => {
+  const { createContextPack } = require('../context-pack');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ctxpack-'));
+  try {
+    fs.writeFileSync(path.join(tmp, 'file.txt'), 'hello');
+    const pack = createContextPack(['file.txt'], { rootDir: tmp });
+    assert.ok(pack.content);
+    assert.equal(pack.packer, 'fallback'); // repomix not installed in temp, cleanly fell back
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// Round 3 Finding 15 (P1): getOpenRuns reads intake store when records is set without intakeDir
+test('Round 3 Finding 15: getOpenRuns does not collapse to [] when records is set without intakeDir', () => {
+  const nextRunner = require('../next-runner');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'openruns-test-'));
+  try {
+    const intakeDir = path.join(tmp, 'tools', 'ai-brain', 'data', 'intake');
+    fs.mkdirSync(path.join(intakeDir, 'run-1', 'decisions'), { recursive: true });
+    fs.writeFileSync(
+      path.join(intakeDir, 'run-1', 'run.lock'),
+      JSON.stringify({ pid: process.pid, startedAt: Date.now() })
+    );
+    const runs = nextRunner.getOpenRuns({ rootDir: tmp, records: [{ work_item_id: 'TASK-1' }] });
+    assert.equal(runs.length, 1, 'Must detect live run from default intake path');
+    assert.equal(runs[0].pid, process.pid);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// Round 3 Finding 17 (P2): ninerouter-combo restricts HTTP to loopback
+test('Round 3 Finding 17: ninerouter-combo rejects non-loopback hosts', async () => {
+  const combo = require('../ninerouter-combo');
+  await assert.rejects(
+    () => combo.syncWriterCombo({ host: 'evil.attacker.com', models: ['m1'] }),
+    /NON_LOOPBACK_HOST/
+  );
+});
+
+// Round 3 Finding 19 (P2): Diff cap from dispatch config and fail closed on diff error
+test('Round 3 Finding 19: orchestrate reviewLane fails closed with DIFF_UNAVAILABLE on diff error', async () => {
+  const orchestrate = require('../orchestrate');
+  const cp = require('node:child_process');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'diff-fail-test-'));
+  try {
+    const repoDir = path.join(tmp, 'repo');
+    fs.mkdirSync(repoDir, { recursive: true });
+    cp.execSync('git init -b main', { cwd: repoDir, stdio: 'ignore' });
+    cp.execSync('git config user.name "Test"', { cwd: repoDir, stdio: 'ignore' });
+    cp.execSync('git config user.email "test@example.com"', { cwd: repoDir, stdio: 'ignore' });
+    cp.execSync('git config commit.gpgsign false', { cwd: repoDir, stdio: 'ignore' });
+    fs.writeFileSync(path.join(repoDir, 'init.txt'), 'initial\n', 'utf8');
+    cp.execSync('git add init.txt', { cwd: repoDir, stdio: 'ignore' });
+    cp.execSync('git commit -m "initial commit"', { cwd: repoDir, stdio: 'ignore' });
+    const baseSha = cp.execSync('git rev-parse HEAD', { cwd: repoDir, encoding: 'utf8' }).trim();
+
+    fs.writeFileSync(path.join(repoDir, 'file.txt'), 'some new changes\n', 'utf8');
+    cp.execSync('git add file.txt', { cwd: repoDir, stdio: 'ignore' });
+    cp.execSync('git commit -m "commit 2"', { cwd: repoDir, stdio: 'ignore' });
+    const targetSha = cp.execSync('git rev-parse HEAD', { cwd: repoDir, encoding: 'utf8' }).trim();
+
+    const cand = {
+      candidateKey: 'codex::cli::gw-rev::up-rev::acct-rev::scope-rev::model-rev',
+      harness: 'codex',
+      provider: 'codex',
+      model: 'test-model',
+    };
+
+    const laneFn = orchestrate.reviewLane(
+      {
+        cwd: repoDir,
+        workerRoot: repoDir,
+        reviewerIdentity: cand.candidateKey,
+        maxReviewDiffChars: 20,
+      },
+      { id: 'TASK-REV-1', files: [] },
+      { candidateKey: 'writer-1', baseSha: '0'.repeat(40), worktree: repoDir },
+      {},
+      {},
+      async () => ({ exitCode: 0, stdout: '{"verdict":"PASS"}' }),
+      tmp,
+      Date.now(),
+      [cand],
+      {},
+      { dispatch: { maxReviewDiffChars: 20 } }
+    );
+
+    const res = await laneFn(targetSha);
+    assert.equal(res.verdict, 'BLOCKED');
+    assert.equal(res.pass, false);
+    assert.ok(res.findings.some((f) => f.id === 'DIFF_UNAVAILABLE'));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});

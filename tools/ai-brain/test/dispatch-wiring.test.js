@@ -436,13 +436,8 @@ describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
     );
 
     assert.equal(launcherCalled, false, 'dry-run must not launch');
-    // Which candidate ranks first comes from live benchmark priors; the contract is
-    // that the first choice fails and the other one is the fallback.
-    const keys = [candidateKey(cand1), candidateKey(cand2)];
-    const firstKey = first.decision.chosen;
-    const otherKey = keys.find((k) => k !== firstKey);
-    assert.ok(keys.includes(firstKey));
-    assert.equal(first.fallback.chosen, otherKey);
+    assert.equal(first.decision.chosen, candidateKey(cand1));
+    assert.equal(first.fallback.chosen, candidateKey(cand2));
     assert.ok(fs.existsSync(checkpointFile), 'checkpoint written');
     assert.ok(fs.existsSync(decisionLogFile), 'decision log written');
 
@@ -450,7 +445,7 @@ describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
     assert.equal(firstLog.dryRunDispatch.launched, false);
     assert.equal(firstLog.simulatedFailure.innermostCause, 'upstream_credit_exhausted');
     assert.equal(firstLog.simulatedFailure.classifierScope, 'upstream');
-    assert.equal(firstLog.fallback.chosen, otherKey);
+    assert.equal(firstLog.fallback.chosen, candidateKey(cand2));
     assert.ok(
       firstLog.candidates.every((c) => c.status !== 'PASS'),
       'untested candidates are not treated as PASS'
@@ -475,11 +470,11 @@ describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
       }
     );
 
-    assert.equal(second.decision.chosen, otherKey, 'resume skips the failed first choice');
+    assert.equal(second.decision.chosen, candidateKey(cand2), 'resume skips cand1');
     assert.equal(second.simulatedFailure, null, 'resume does not repeat simulated failure');
     const secondLog = JSON.parse(fs.readFileSync(decisionLogFile, 'utf8'));
     assert.equal(secondLog.resumed, true);
-    assert.equal(secondLog.selectedCandidate, otherKey);
+    assert.equal(secondLog.selectedCandidate, candidateKey(cand2));
   });
 
   test('explicit --model/--account/--harness pin filters candidates and is recorded as PINNED', () => {

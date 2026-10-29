@@ -925,8 +925,35 @@ function reviewLane(
                 ['diff', '--no-ext-diff', '--no-textconv', baseSha + '..' + targetSha],
                 20000
               );
-              const fullDiff = dRes && dRes.status === 0 ? dRes.stdout : '';
-              if (o.isolatedWorker && fullDiff.length > 24000) {
+              if (!dRes || dRes.status !== 0) {
+                throw new Error(
+                  'DIFF_FAILED: git diff returned status ' +
+                    (dRes ? dRes.status : 'null') +
+                    (dRes && dRes.stderr ? ': ' + dRes.stderr.trim() : '')
+                );
+              }
+              const fullDiff = dRes.stdout;
+              const dispatchCfg =
+                sourcesApi && sourcesApi.getDispatchConfig
+                  ? sourcesApi.getDispatchConfig(o.registry, o)
+                  : {};
+              const maxDiffChars = Number(
+                o.maxReviewDiffChars ?? dispatchCfg.maxReviewDiffChars ?? 24000
+              );
+              if (o.isolatedWorker && fullDiff.length > maxDiffChars) {
+                const patchDir = path.join(reviewWorkerRoot, '.shipde');
+                const patchFile = path.join(patchDir, 'review-diff.patch');
+                try {
+                  fs.mkdirSync(patchDir, { recursive: true });
+                  fs.writeFileSync(patchFile, fullDiff, 'utf8');
+                } catch (writeErr) {
+                  throw new Error(
+                    'PATCH_WRITE_FAILED: could not write full patch for review: ' + writeErr.message
+                  );
+                }
+                if (!fs.existsSync(patchFile)) {
+                  throw new Error('PATCH_MISSING: reviewer cannot access patch file');
+                }
                 const statRes = safeGit(
                   safeGitDir,
                   reviewWorkerRoot,
@@ -934,11 +961,6 @@ function reviewLane(
                   20000
                 );
                 const statText = statRes && statRes.status === 0 ? statRes.stdout : '';
-                try {
-                  const patchDir = path.join(reviewWorkerRoot, '.shipde');
-                  fs.mkdirSync(patchDir, { recursive: true });
-                  fs.writeFileSync(path.join(patchDir, 'review-diff.patch'), fullDiff, 'utf8');
-                } catch {}
                 return (
                   '# Large diff (' +
                   fullDiff.length +
@@ -951,8 +973,20 @@ function reviewLane(
             },
             { workerWritable: true }
           ) || '';
-      } catch {
-        diffText = '';
+      } catch (err) {
+        return {
+          pass: false,
+          sha: targetSha,
+          verdict: 'BLOCKED',
+          reviewer: reviewerIdentity,
+          findings: [
+            {
+              id: 'DIFF_UNAVAILABLE',
+              open: true,
+              detail: 'Reviewer failed to receive diff: ' + ((err && err.message) || err),
+            },
+          ],
+        };
       }
     }
 
@@ -1142,18 +1176,16 @@ function reviewLane(
       } else if (res && typeof res.stdout === 'string' && res.stdout.trim()) {
         try {
           const text = require('./writer-schema').poolResultText(res.stdout);
-          const match = String(text || '').match(/\{[\s\S]*\}/);
-          if (match) {
-            const candidateJson = JSON.parse(match[0]);
-            if (
-              candidateJson &&
-              typeof candidateJson === 'object' &&
-              typeof candidateJson.verdict === 'string' &&
-              typeof candidateJson.sha === 'string'
-            ) {
-              fs.writeFileSync(verdictFile, JSON.stringify(candidateJson, null, 2), 'utf8');
-              effectiveVerdictFile = verdictFile;
-            }
+          // Strict parse of the whole payload only; no embedded JSON extraction from prose.
+          const candidateJson = JSON.parse(String(text || '').trim());
+          if (
+            candidateJson &&
+            typeof candidateJson === 'object' &&
+            typeof candidateJson.verdict === 'string' &&
+            typeof candidateJson.sha === 'string'
+          ) {
+            fs.writeFileSync(verdictFile, JSON.stringify(candidateJson, null, 2), 'utf8');
+            effectiveVerdictFile = verdictFile;
           }
         } catch {}
       }
@@ -1971,27 +2003,29 @@ function runHostBrainGate(job, options = {}) {
     job.workerRoot &&
     fs.existsSync(job.workerRoot)
   ) {
-    const workerDiffRef =
+    const baseShaVal =
       job.baseSha && /^[0-9a-f]{40}$/i.test(String(job.baseSha).trim())
-        ? String(job.baseSha).trim() + '..HEAD'
-        : 'HEAD~1..HEAD';
-    const diffRes = run('git', ['diff', '--name-only', workerDiffRef, '--', 'tools/ai-brain'], {
-      cwd: job.workerRoot,
-      encoding: 'utf8',
-    });
-    if (diffRes && diffRes.status === 0 && !String(diffRes.stdout || '').trim()) {
-      const hostGateFailures = Object.assign([], { newFailures: [], baselineFailures: [] });
-      return {
-        pass: true,
-        command,
-        failures: [],
-        hostGateFailures,
-        newFailures: [],
-        baselineFailures: [],
-        summary: ['ℹ pass (no tools/ai-brain changes in worker commit)'],
-        cleanupErrors: [],
-        cleanupError: null,
-      };
+        ? String(job.baseSha).trim()
+        : null;
+    if (baseShaVal) {
+      const diffRes = run('git', ['diff', '--name-only', baseShaVal + '..HEAD'], {
+        cwd: job.workerRoot,
+        encoding: 'utf8',
+      });
+      if (diffRes && diffRes.status === 0 && !String(diffRes.stdout || '').trim()) {
+        const hostGateFailures = Object.assign([], { newFailures: [], baselineFailures: [] });
+        return {
+          pass: true,
+          command,
+          failures: [],
+          hostGateFailures,
+          newFailures: [],
+          baselineFailures: [],
+          summary: ['ℹ pass (no changes in worker diff)'],
+          cleanupErrors: [],
+          cleanupError: null,
+        };
+      }
     }
   }
   const extraTestFlags =
@@ -2212,7 +2246,7 @@ function runHostBrainGate(job, options = {}) {
   const cleanupError = cleanupErrors.length > 0 ? cleanupErrors[0] : null;
 
   if (baselineKnown) {
-    const newFailures = confirmation.confirmed;
+    const newFailures = candidates;
     const flakyRecovered = confirmation.flaky;
     const baselineFailures = Array.from(new Set(baseFailed));
     // The decision record carries both numbers: what failed before this commit, and what is new.
