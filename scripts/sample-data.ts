@@ -72,6 +72,8 @@ export function generateShopData(
     const order: Order = {
       id: `ord_${merchantId}_${i}`,
       merchant_id: merchantId,
+      branch_id: 'default_branch',
+      warehouse_id: 'default_wh',
       order_code: orderCode,
       created_at: new Date(now - (90 - Math.floor(i / 35)) * 24 * 3600 * 1000),
       cod_amount: codAmount,
@@ -92,6 +94,8 @@ export function generateShopData(
     const shipment: Shipment = {
       id: `ship_${merchantId}_${i}`,
       merchant_id: merchantId,
+      branch_id: order.branch_id,
+      warehouse_id: order.warehouse_id,
       order_id: order.id,
       order_code: orderCode,
       carrier_code: CarrierCode.GHN,

@@ -66,6 +66,8 @@ export async function POST(req: NextRequest) {
     const newOrder: Order = {
       id: `ord_${Date.now()}`,
       merchant_id: db.merchant.id,
+      branch_id: body.branch_id || 'default_branch',
+      warehouse_id: body.warehouse_id || 'default_wh',
       order_code: order_code.toUpperCase(),
       created_at: new Date(),
       cod_amount: Number(cod_amount) || 0,
@@ -84,6 +86,8 @@ export async function POST(req: NextRequest) {
       const newShipment: Shipment = {
         id: `ship_${Date.now()}`,
         merchant_id: db.merchant.id,
+        branch_id: newOrder.branch_id,
+        warehouse_id: newOrder.warehouse_id,
         order_id: newOrder.id,
         order_code: newOrder.order_code,
         carrier_code: (carrier_code as CarrierCode) || CarrierCode.GHN,

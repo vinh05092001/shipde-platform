@@ -37,6 +37,13 @@ export const PLATFORM_PERMISSIONS: CanonicalPermissionDefinition[] = [
     category: 'IAM',
   },
 
+  {
+    code: 'search:tenant_wide',
+    name: 'Tìm kiếm toàn cửa hàng',
+    description: 'Search all tenant branches, warehouses and records with unassigned scope',
+    category: 'IAM',
+  },
+
   // 2. Orders Domain
   {
     code: 'order:view_create',
@@ -156,7 +163,7 @@ export const SYSTEM_ROLES: SystemRoleDefinition[] = [
     code: 'OWNER',
     name: 'Chủ Shop (Owner)',
     description: 'Toàn quyền điều hành, phân quyền nhân sự và cấu hình tổ chức',
-    // Owner possesses all 20 canonical capability permissions
+    // Owner receives the canonical registry grants
     permissions: PLATFORM_PERMISSIONS.map((p) => p.code),
   },
   {

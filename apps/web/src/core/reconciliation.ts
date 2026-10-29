@@ -136,9 +136,14 @@ export class ReconciliationEngine {
         // Dòng đầu tiên là hợp lệ, từ dòng thứ 2 trở đi là trùng lặp
         for (let i = 1; i < duplicateRows.length; i++) {
           const dupRow = duplicateRows[i];
+          const matchedShip = shipments.find(
+            (s) => s.id === dupRow.matched_shipment_id || s.tracking_code === dupRow.tracking_code
+          );
           discrepancies.push({
             id: `disc_D4_${dupRow.id}`,
             merchant_id: merchantId,
+            branch_id: matchedShip?.branch_id || 'default_branch',
+            warehouse_id: matchedShip?.warehouse_id || 'default_wh',
             statement_row_id: dupRow.id,
             shipment_id: dupRow.matched_shipment_id || '',
             tracking_code: dupRow.tracking_code,
@@ -186,6 +191,8 @@ export class ReconciliationEngine {
         discrepancies.push({
           id: `disc_D1_${row.id}`,
           merchant_id: merchantId,
+          branch_id: shipment.branch_id || 'default_branch',
+          warehouse_id: shipment.warehouse_id || 'default_wh',
           statement_row_id: row.id,
           shipment_id: shipment.id,
           tracking_code: row.tracking_code,
@@ -211,6 +218,8 @@ export class ReconciliationEngine {
           discrepancies.push({
             id: `disc_D2_${row.id}`,
             merchant_id: merchantId,
+            branch_id: shipment.branch_id || 'default_branch',
+            warehouse_id: shipment.warehouse_id || 'default_wh',
             statement_row_id: row.id,
             shipment_id: shipment.id,
             tracking_code: row.tracking_code,
@@ -231,6 +240,8 @@ export class ReconciliationEngine {
           discrepancies.push({
             id: `disc_D5_${row.id}`,
             merchant_id: merchantId,
+            branch_id: shipment.branch_id || 'default_branch',
+            warehouse_id: shipment.warehouse_id || 'default_wh',
             statement_row_id: row.id,
             shipment_id: shipment.id,
             tracking_code: row.tracking_code,
@@ -264,6 +275,8 @@ export class ReconciliationEngine {
           discrepancies.push({
             id: `disc_D6_${shipment.id}`,
             merchant_id: merchantId,
+            branch_id: shipment.branch_id || 'default_branch',
+            warehouse_id: shipment.warehouse_id || 'default_wh',
             shipment_id: shipment.id,
             tracking_code: shipment.tracking_code,
             type: DiscrepancyType.D6_OVERDUE_COD,
@@ -284,6 +297,8 @@ export class ReconciliationEngine {
         discrepancies.push({
           id: `disc_D7_${shipment.id}`,
           merchant_id: merchantId,
+          branch_id: shipment.branch_id || 'default_branch',
+          warehouse_id: shipment.warehouse_id || 'default_wh',
           shipment_id: shipment.id,
           tracking_code: shipment.tracking_code,
           type: DiscrepancyType.D7_MISSING_STATEMENT_ROW,
