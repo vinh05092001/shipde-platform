@@ -389,7 +389,7 @@
     "routeEvidenceMaxAgeMs": 86400000,
     "maxWriterSelectionRounds": 12,
     "maxLocalWriterFallbacks": 3,
-    "maxItemDurationMs": 7200000,
+    "maxItemDurationMs": 3600000,
     "probeBudgetMs": 180000,
     "maxConcurrentProbes": 8,
     "maxHermesProbes": 16,
@@ -408,7 +408,6 @@
     "maxHostGateSummaryChars": 500,
     "rateLimitCooldownMs": 300000,
     "agyPoolTimeoutMs": 1800000,
-    "agyPoolWriterEnabled": true,
     "verification": {
       "infraDependentScripts": ["test", "test:e2e", "test:integration"],
       "infraFreeSupplements": ["contract:check"],

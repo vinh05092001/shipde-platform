@@ -58,15 +58,6 @@ function routeRecord(candidate, store) {
 function recentRouteSuccess(candidate, store, options = {}) {
   if (health.probeCooldown(candidate, { ...options, routeHealth: store || { paths: {} } }))
     return false;
-  if (candidate && candidate.harness === 'agy-pool' && candidate.accountId && !candidate.blocked) {
-    if (sources.isAgyPoolWriterEnabled(options.registry, options)) {
-      try {
-        const pool = require('./agy-pool-runtime');
-        const res = pool.readResult(candidate.accountId, options);
-        if (res && res.state === 'ok') return true;
-      } catch {}
-    }
-  }
   const record = routeRecord(candidate, store);
   const id = health.probeIdentity(candidate);
   const gateway = store?.paths?.[health.healthKey(id.model, id.route.id)];

@@ -59,6 +59,109 @@ test('an exhausted account blocks its own models only, not the other pool accoun
   }
 });
 
+test('account quota failure path writes exhaustedAccountKey into failedKeys without pre-seeding', async () => {
+  const orchestrate = require('../orchestrate');
+  const mk = (accountId, modelId, quality) => {
+    const c = {
+      harness: 'agy-pool',
+      gateway: 'g',
+      upstream: 'antigravity',
+      accountId,
+      modelId,
+      quality,
+    };
+    c.candidateKey = candidateKey(c);
+    return c;
+  };
+  const a1 = mk('fixture-acct-fail', 'claude-opus', 95);
+  const a2 = mk('fixture-acct-fail', 'claude-sonnet', 94);
+  const b1 = mk('fixture-acct-other', 'claude-opus', 93);
+
+  const failedKeys = new Set();
+  const item = { id: 'ITEM-ACCT-FAIL', roleRequirement: { role: 'reviewer' }, failedKeys };
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'acct-fail-path-'));
+
+  try {
+    const decision1 = await selectCandidateForProfile(
+      item,
+      [a1, a2, b1],
+      [],
+      null,
+      {
+        registry: { sources: [] },
+        jevAsk: async () => {
+          throw new Error('no JEV');
+        },
+      },
+      { dir, now: Date.now() },
+      Date.now(),
+      { failedKeys, decisionDir: dir }
+    );
+    assert.equal(decision1.chosen, a1.candidateKey);
+
+    let attempts = 0;
+    const fakeLauncher = async (job) => {
+      attempts += 1;
+      if (job.accountId === 'fixture-acct-fail' || attempts === 1) {
+        return { exitCode: 3, stderr: 'quota', stdout: '' };
+      }
+      if (job.verdictFile) {
+        fs.writeFileSync(
+          job.verdictFile,
+          JSON.stringify({ verdict: 'PASS', pass: true, findings: [] })
+        );
+      }
+      return { exitCode: 0, stdout: '', stderr: '' };
+    };
+    const logObj = { stage: () => {}, formatChecks: [], reviews: [] };
+    const session = { headSha: '0123456789012345678901234567890123456789', worktree: dir };
+
+    await orchestrate.reviewItem(
+      { cwd: dir, formatCheck: false, isolatedWorker: false, tests: () => ({ pass: true }) },
+      item,
+      session,
+      logObj,
+      { dir },
+      fakeLauncher,
+      path.join(dir, 'usage'),
+      Date.now(),
+      [a1, a2, b1],
+      {},
+      { sources: [] },
+      { failedKeys, decisionDir: dir }
+    );
+
+    const expectedExhaustedMark = 'account-exhausted::agy-pool::fixture-acct-fail';
+    assert.ok(
+      failedKeys.has(expectedExhaustedMark),
+      'failedKeys must contain the account-exhausted mark'
+    );
+
+    const decision2 = await selectCandidateForProfile(
+      item,
+      [a1, a2, b1],
+      [],
+      null,
+      {
+        registry: { sources: [] },
+        jevAsk: async () => {
+          throw new Error('no JEV');
+        },
+      },
+      { dir, now: Date.now() },
+      Date.now(),
+      { failedKeys, decisionDir: dir }
+    );
+    assert.equal(
+      decision2.chosen,
+      b1.candidateKey,
+      'subsequent selection isolates the exhausted account'
+    );
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('OpenCode built-in source yields keyless writers from the live opencode model list', () => {
   const { generateCandidates } = require('../candidates');
   const registry = {

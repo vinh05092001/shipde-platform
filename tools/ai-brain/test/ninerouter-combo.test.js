@@ -130,14 +130,8 @@ test('run-7 inputs produce writer combo candidates, 0 individual 9router candida
   const orch = require('../orchestrate');
   const candidatesApi = require('../candidates');
   const priorsApi = require('../priors');
-  const runDir = path.join(
-    __dirname,
-    '..',
-    'data',
-    'intake',
-    'FEAT-AUTH-05-2026-10-22T15-24-35-818Z'
-  );
-  if (!fs.existsSync(runDir)) return;
+  const runDir = path.join(__dirname, 'fixtures', 'ninerouter-run-7');
+  assert.ok(fs.existsSync(runDir), 'run-7 fixture directory must exist in repo');
   const accounts = JSON.parse(fs.readFileSync(path.join(runDir, 'accounts.json'), 'utf8'));
   const catalogue = JSON.parse(fs.readFileSync(path.join(runDir, 'catalogue.json'), 'utf8'));
   const sourceModels = JSON.parse(
@@ -150,6 +144,8 @@ test('run-7 inputs produce writer combo candidates, 0 individual 9router candida
     catalogue,
     sourceModels,
     externalWorkers: ['agy-pool'],
+    forWriter: true,
+    evidenceDir: runDir,
   });
   const individual9R = candidates.filter((c) =>
     candidatesApi.isIndividualNineRouterCandidate(c, 'shipde-writer')

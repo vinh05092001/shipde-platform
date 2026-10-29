@@ -547,3 +547,50 @@ test('isCompletionBody and validateCompletion accept SSE stream chunk bodies wit
   assert.equal(isCompletionBody(emptySseBody), false);
   assert.equal(validateCompletion(emptySseBody).ok, false);
 });
+
+test('TASK-AI-142 Finding 8: NO_CHANNEL stays model-scoped and does not block source scope or sibling models', () => {
+  const now = Date.now();
+  const sourceEntry = {
+    source: 'src-a',
+    scope: 'src-a',
+    model: 'rep-model',
+    code: 'NO_CHANNEL',
+    status: 404,
+    reason: 'NO_CHANNEL',
+    at: new Date(now).toISOString(),
+  };
+  const modelEntry = {
+    source: 'src-a',
+    scope: 'model-fail',
+    model: 'model-fail',
+    code: 'NO_CHANNEL',
+    status: 404,
+    reason: 'NO_CHANNEL',
+    at: new Date(now).toISOString(),
+  };
+
+  // Source-scoped NO_CHANNEL is NOT blocked (isScopeBlocked returns false)
+  assert.equal(isScopeBlocked(sourceEntry, now), false);
+  // Model-scoped NO_CHANNEL IS blocked (isScopeBlocked returns true)
+  assert.equal(isScopeBlocked(modelEntry, now), true);
+
+  const quotaState = {
+    scopes: {
+      'src-a': sourceEntry,
+      'src-a::src-a': sourceEntry,
+      'src-a::model-fail': modelEntry,
+    },
+  };
+
+  const candFail = { gateway: 'src-a', modelId: 'model-fail' };
+  const candSibling = { gateway: 'src-a', modelId: 'model-sibling' };
+
+  // Candidate with failed model is blocked by its model-scoped entry
+  const stateFail = getQuotaScopeState(candFail, quotaState, { now });
+  assert.equal(stateFail?.code, 'NO_CHANNEL');
+  assert.equal(isScopeBlocked(stateFail, now), true);
+
+  // Sibling candidate on same source is NOT blocked
+  const stateSibling = getQuotaScopeState(candSibling, quotaState, { now });
+  assert.equal(isScopeBlocked(stateSibling, now), false);
+});

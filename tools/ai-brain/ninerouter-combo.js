@@ -89,9 +89,8 @@ function buildWriterComboModels(listing, evidenceData, priorsData, now = Date.no
 
     const is9router =
       gateway === '9router' ||
-      gateway === 'opencode-provider-ninerouter-options' ||
-      endpoint.includes('20128') ||
-      key.includes('9router');
+      gateway === 'ninerouter' ||
+      gateway === 'opencode-provider-ninerouter-options';
 
     if (!is9router) continue;
 
@@ -276,9 +275,6 @@ function isNineRouterCandidate(c) {
     c.upstream === '9router' ||
     (typeof c.modelId === 'string' &&
       (c.modelId.startsWith('ninerouter/') || c.modelId.startsWith('9router/'))) ||
-    (typeof c.accessPath === 'string' && c.accessPath.includes('20128')) ||
-    (typeof c.endpoint === 'string' && c.endpoint.includes('20128')) ||
-    (typeof c.sourceEndpoint === 'string' && c.sourceEndpoint.includes('20128')) ||
     c.accountId === 'ninerouter' ||
     c.quotaScope === 'ninerouter'
   );
@@ -305,8 +301,7 @@ function isNineRouterSource(source, key) {
     source?.id === 'opencode-provider-ninerouter-options' ||
     source?.opencodeProvider === 'ninerouter' ||
     source?.reachedVia === '9router' ||
-    source?.reachedVia === 'ninerouter' ||
-    (source?.endpoint && source.endpoint.includes('20128'))
+    source?.reachedVia === 'ninerouter'
   );
 }
 

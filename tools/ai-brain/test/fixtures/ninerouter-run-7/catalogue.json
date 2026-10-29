@@ -1,0 +1,8 @@
+[
+  {
+    "id": "ninerouter/ag/gemini-4-argon",
+    "model": "ninerouter/ag/gemini-4-argon",
+    "gateway": "9router",
+    "source": "9router"
+  }
+]

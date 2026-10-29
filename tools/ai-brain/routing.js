@@ -644,7 +644,6 @@ function getUpstreamGatewayIndex(registry) {
 
 function resolveGatewayForUpstream(upstream, registry) {
   if (!upstream || upstream === '*') return '';
-  if (upstream.startsWith('agy')) return 'agy';
   const idx = getUpstreamGatewayIndex(registry);
   return idx.get(upstream) || '';
 }

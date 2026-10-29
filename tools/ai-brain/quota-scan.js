@@ -44,14 +44,7 @@ const QUOTA_STATUS_CODES = Object.freeze({
 });
 
 // DISCOVERY_FAILED blocks: without a catalogue there is no quota evidence for router candidates.
-const BLOCKING_CODES = new Set([
-  'QUOTA',
-  'AUTH',
-  'REGION',
-  'NO_CHANNEL',
-  'STATE_ERROR',
-  'DISCOVERY_FAILED',
-]);
+const BLOCKING_CODES = new Set(['QUOTA', 'AUTH', 'REGION', 'STATE_ERROR', 'DISCOVERY_FAILED']);
 
 function getHeader(headers, name) {
   if (!headers) return null;
@@ -691,7 +684,14 @@ function isScopeBlocked(scopeEntry, now = Date.now(), options = {}) {
   if (!scopeEntry) return false;
   if (scopeEntry.error && !scopeEntry.code) return true;
   if (!scopeEntry.code) return false;
-  if (!BLOCKING_CODES.has(scopeEntry.code)) return false;
+  const isSourceScoped =
+    scopeEntry.source && (scopeEntry.scope === scopeEntry.source || !scopeEntry.scope);
+  const isModelScoped = !isSourceScoped && Boolean(scopeEntry.model || scopeEntry.scope);
+  if (scopeEntry.code === 'NO_CHANNEL') {
+    if (!isModelScoped) return false;
+  } else if (!BLOCKING_CODES.has(scopeEntry.code)) {
+    return false;
+  }
 
   // Check retryAfter / expiresAt
   const retryMs = scopeEntry.retryAfter
@@ -1060,24 +1060,20 @@ async function scanAllFullRoutes(options = {}) {
 
   fs.writeFileSync(jsonlFile, '', 'utf8');
 
-  const s1Path = path.join(__dirname, 'sources.json');
-  const s2Path = path.join(__dirname, 'data', 'sources.json');
-  const ocPath = path.join(process.env.USERPROFILE || '', '.config', 'opencode', 'opencode.json');
-
-  const s1 = fs.existsSync(s1Path) ? JSON.parse(fs.readFileSync(s1Path, 'utf8')) : {};
-  const s2 = fs.existsSync(s2Path) ? JSON.parse(fs.readFileSync(s2Path, 'utf8')) : {};
-  const oc = fs.existsSync(ocPath) ? JSON.parse(fs.readFileSync(ocPath, 'utf8')) : {};
-
-  const registry = options.registry || sourcesApi.loadSources?.(options.sourceOpts);
+  const registry =
+    options.registry ||
+    (sourcesApi.loadSources ? sourcesApi.loadSources(options.sourceOpts) : null);
   const dispatchConfig =
     registry && sourcesApi.getDispatchConfig ? sourcesApi.getDispatchConfig(registry, options) : {};
   const fullScanLimits = dispatchConfig.fullRouteScan || {};
 
-  const allRegSources = [
-    ...(Array.isArray(registry?.sources) ? registry.sources : []),
-    ...(Array.isArray(s1?.sources) ? s1.sources : []),
-    ...(Array.isArray(s2?.sources) ? s2.sources : []),
-  ];
+  const allRegSources = Array.isArray(registry?.sources) ? registry.sources : [];
+  const nrSrc = allRegSources.find(
+    (s) => s.id === '9router' || (Array.isArray(s.aliases) && s.aliases.includes('9router'))
+  );
+  const gwSrc = allRegSources.find(
+    (s) => s.id === 'agy-gateway' || (Array.isArray(s.aliases) && s.aliases.includes('agy-gateway'))
+  );
 
   const allItems = [];
   const sourceStats = new Map();
@@ -1240,29 +1236,39 @@ async function scanAllFullRoutes(options = {}) {
             evidence: ev,
           };
         }
-      } else {
-        const nrStats = initStats('9router');
+      } else if (nrSrc?.endpoint) {
+        const nrStats = initStats(nrSrc.id || '9router');
         nrStats.listed++;
         allItems.push({
           type: 'http',
-          sourceId: '9router',
+          sourceId: nrSrc.id || '9router',
           accountId: r.accountId,
           modelId: r.modelId,
-          endpoint: 'http://127.0.0.1:20128/v1',
-          apiKeyEnv: 'NINEROUTER_API_KEY',
+          endpoint: nrSrc.endpoint,
+          apiKeyEnv: nrSrc.credential?.env || 'NINEROUTER_API_KEY',
         });
       }
     }
   } else {
     // 1. 9router models
-    if (!options.source || options.source === '9router') {
-      const nrStats = initStats('9router');
-      const nrKey = (options.env || process.env).NINEROUTER_API_KEY || '';
+    if (
+      (!options.source || options.source === '9router' || options.source === nrSrc?.id) &&
+      nrSrc?.endpoint
+    ) {
+      const nrStats = initStats(nrSrc.id || '9router');
+      const nrKey =
+        (options.env || process.env)[nrSrc.credential?.env || 'NINEROUTER_API_KEY'] || '';
+      const timeoutMs =
+        fullScanLimits.nineRouterModelsTimeoutMs ||
+        dispatchConfig.nineRouterModelsTimeoutMs ||
+        dispatchConfig.modelsTimeoutMs ||
+        10000;
       let nrModels = [];
       try {
-        const res = await fetchFn('http://127.0.0.1:20128/v1/models', {
+        const nrModelsUrl = nrSrc.endpoint.replace(/\/+$/, '') + (nrSrc.verify?.path || '/models');
+        const res = await fetchFn(nrModelsUrl, {
           headers: nrKey ? { authorization: 'Bearer ' + nrKey } : {},
-          signal: AbortSignal.timeout(fullScanLimits.nineRouterModelsTimeoutMs),
+          signal: AbortSignal.timeout(timeoutMs),
         });
         if (res.ok) {
           const d = await res.json();
@@ -1272,28 +1278,38 @@ async function scanAllFullRoutes(options = {}) {
       for (const m of nrModels) {
         const modelId = typeof m === 'string' ? m : m.id;
         const prefix = modelId.split('/')[0];
-        const accountId = m.owned_by || prefix || '9router';
+        const accountId = m.owned_by || prefix || nrSrc.id || '9router';
         nrStats.listed++;
         allItems.push({
           type: 'http',
-          sourceId: '9router',
+          sourceId: nrSrc.id || '9router',
           accountId,
           modelId,
-          endpoint: 'http://127.0.0.1:20128/v1',
-          apiKeyEnv: 'NINEROUTER_API_KEY',
+          endpoint: nrSrc.endpoint,
+          apiKeyEnv: nrSrc.credential?.env || 'NINEROUTER_API_KEY',
         });
       }
     }
 
     // 2. agy-gateway models
-    if (!options.source || options.source === 'agy-gateway') {
-      const gwStats = initStats('agy-gateway');
-      const gwKey = (options.env || process.env).AGY_GATEWAY_TOKEN || '';
+    if (
+      (!options.source || options.source === 'agy-gateway' || options.source === gwSrc?.id) &&
+      gwSrc?.endpoint
+    ) {
+      const gwStats = initStats(gwSrc.id || 'agy-gateway');
+      const gwKey =
+        (options.env || process.env)[gwSrc.credential?.env || 'AGY_GATEWAY_TOKEN'] || '';
+      const timeoutMs =
+        fullScanLimits.gatewayModelsTimeoutMs ||
+        dispatchConfig.gatewayModelsTimeoutMs ||
+        dispatchConfig.modelsTimeoutMs ||
+        5000;
       let gwModels = [];
       try {
-        const res = await fetchFn('http://127.0.0.1:20140/v1/models', {
+        const gwModelsUrl = gwSrc.endpoint.replace(/\/+$/, '') + (gwSrc.verify?.path || '/models');
+        const res = await fetchFn(gwModelsUrl, {
           headers: gwKey ? { authorization: 'Bearer ' + gwKey } : {},
-          signal: AbortSignal.timeout(fullScanLimits.gatewayModelsTimeoutMs),
+          signal: AbortSignal.timeout(timeoutMs),
         });
         if (res.ok) {
           const d = await res.json();
@@ -1312,11 +1328,11 @@ async function scanAllFullRoutes(options = {}) {
         gwStats.listed++;
         allItems.push({
           type: 'http',
-          sourceId: 'agy-gateway',
-          accountId: 'agy-gateway',
+          sourceId: gwSrc.id || 'agy-gateway',
+          accountId: gwSrc.id || 'agy-gateway',
           modelId,
-          endpoint: 'http://127.0.0.1:20140/v1',
-          apiKeyEnv: 'AGY_GATEWAY_TOKEN',
+          endpoint: gwSrc.endpoint,
+          apiKeyEnv: gwSrc.credential?.env || 'AGY_GATEWAY_TOKEN',
         });
       }
     }
@@ -1801,13 +1817,19 @@ async function scanCliLanes(quotaState, options = {}) {
     options.poolAccounts ||
     (poolRt && typeof poolRt.discoverAccounts === 'function'
       ? poolRt.discoverAccounts(options)
-      : ['agy01', 'agy02', 'agy03', 'agy04', 'agy05', 'agy06', 'agy07', 'agy08', 'agy09', 'agy10']);
+      : []);
 
   if (poolRt && typeof poolRt.quotaReading === 'function') {
     let poolHasAnyQuota = false;
     for (const accId of poolAccounts) {
-      const isUnauthed = ['agy08', 'agy09', 'agy10'].includes(accId);
-      if (isUnauthed) {
+      const reading = poolRt.quotaReading(accId, options);
+      if (
+        reading &&
+        reading.available === false &&
+        (reading.reason === 'AUTH_FAILED' ||
+          reading.reason === 'AUTH' ||
+          reading.state === 'login-required')
+      ) {
         const entry = {
           source: 'agy-pool',
           scope: accId,
@@ -1823,7 +1845,6 @@ async function scanCliLanes(quotaState, options = {}) {
         quotaState.scopes[`agy-pool::${accId}`] = entry;
         continue;
       }
-      const reading = poolRt.quotaReading(accId, options);
       if (reading && reading.available && Array.isArray(reading.rows)) {
         let allFamiliesExhausted = reading.rows.length > 0;
         for (const row of reading.rows) {
@@ -2069,6 +2090,8 @@ async function scanAllQuotas(options = {}) {
   }
   const now = options.now ?? Date.now();
   const registry = options.registry || sourcesApi.loadSources(options.sourceOpts);
+  const dispatchConfig =
+    registry && sourcesApi.getDispatchConfig ? sourcesApi.getDispatchConfig(registry, options) : {};
   const quotaState = loadQuotaState(options);
   quotaState.scopes = quotaState.scopes || {};
 
@@ -2144,13 +2167,20 @@ async function scanAllQuotas(options = {}) {
 
       if (!repModel && src.endpoint && src.verify?.method === 'models-list') {
         const apiKey = (options.env || process.env)[src.credential?.env] || '';
+        const discoveryTimeoutMs =
+          src.verify?.timeoutMs ||
+          dispatchConfig.modelsTimeoutMs ||
+          dispatchConfig.fullRouteScan?.externalModelsTimeoutMs ||
+          dispatchConfig.externalModelsTimeoutMs ||
+          dispatchConfig.probeTimeoutMs ||
+          3000;
         try {
           const fetchFn = options.fetch || globalThis.fetch;
           const mres = await fetchFn(
             src.endpoint.replace(/\/+$/, '') + (src.verify.path || '/models'),
             {
               headers: apiKey ? { authorization: `Bearer ${apiKey}` } : {},
-              signal: AbortSignal.timeout(3000),
+              signal: AbortSignal.timeout(discoveryTimeoutMs),
             }
           );
           if (mres && (mres.ok || mres.status === 200)) {

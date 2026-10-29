@@ -892,22 +892,22 @@ function openAiCompatibleCandidates(opts) {
  */
 // Live model list of an OpenCode built-in provider: `opencode models` prints
 // `<provider>/<model>` lines for what this install can use without a key.
-const builtinModelCache = new Map();
 function builtinOpencodeModels(source, o) {
   const provider = source.opencodeProvider;
   if (!provider) return [];
-  if (Array.isArray(o.sourceModels?.[source.id])) return o.sourceModels[source.id];
-  if (builtinModelCache.has(provider)) return builtinModelCache.get(provider);
+  if (Array.isArray(o?.sourceModels?.[source.id])) return o.sourceModels[source.id];
   let models = [];
   try {
+    const timeoutMs =
+      (o && o.registry && o.registry.dispatch && o.registry.dispatch.opencodeModelsTimeoutMs) ||
+      (o && o.dispatchConfig && o.dispatchConfig.opencodeModelsTimeoutMs) ||
+      3000;
     const run =
-      o.listOpencodeModels ||
+      o?.listOpencodeModels ||
       (() =>
-        // A command string (not execFile + shell) resolves the Windows .cmd shim
-        // without Node's DEP0190 warning on stderr.
-        require('child_process').execSync('opencode models', {
+        require('child_process').execFileSync('opencode', ['models'], {
           encoding: 'utf8',
-          timeout: 60000,
+          timeout: timeoutMs,
           windowsHide: true,
           stdio: ['ignore', 'pipe', 'ignore'],
         }));
@@ -919,7 +919,6 @@ function builtinOpencodeModels(source, o) {
   } catch {
     models = [];
   }
-  builtinModelCache.set(provider, models);
   return models;
 }
 
@@ -1103,7 +1102,7 @@ function pushOpencodeProviderWriters(out, source, o, bound) {
         endpoint: source.endpoint,
         sourceEndpoint: source.endpoint,
         kind: source.kind,
-        capabilities: { tools: true, jsonSchema: true },
+        capabilities: {},
         ...(comboLimits.contextWindow !== undefined
           ? { contextWindow: comboLimits.contextWindow }
           : {}),
@@ -2333,25 +2332,15 @@ function poolAccountCandidates(opts) {
         )
           continue;
       }
-      const family =
-        familyOf(model) ||
-        (model.includes('argon')
-          ? 'argon'
-          : model.includes('gemini')
-            ? 'gemini'
-            : model.includes('claude') || model.includes('gpt')
-              ? 'claude-gpt'
-              : null);
-      if (!family) continue;
+      const family = familyOf(model);
 
       // Keep exhausted routes in the candidate set so Controller can record
       // the quota rejection in the structured dispatch decision.
       let quotaExhausted = false;
       if (hasRunsDir && quotaReading && Array.isArray(quotaReading.rows)) {
-        const familyRows = quotaReading.rows.filter((r) => r.family === family);
-        if (quotaReading.rows.length > 0 && familyRows.length === 0) {
-          continue;
-        }
+        const familyRows = quotaReading.rows.filter(
+          (r) => (family && r.family === family) || r.family === model || r.model === model
+        );
         if (familyRows.length > 0) {
           const isZero = familyRows.some(
             (r) => r.remainingPercent === 0 || r.remainingPercent <= 0 || r.disabled === true
@@ -2789,6 +2778,9 @@ function siblingRouteProbe(key, probes) {
   // Same gateway (endpoint and its key) and the same model once the router's own
   // "<gateway-alias>/" prefix is removed; account ids are spelled per harness.
   const gateway = parts[2];
+  const upstream = parts[3];
+  const account = parts[4];
+  if (!account || account === '*') return null;
   const alias = String(gateway || '')
     .replace(/^opencode-provider-/, '')
     .replace(/-options$/, '');
@@ -2803,6 +2795,9 @@ function siblingRouteProbe(key, probes) {
       other !== key &&
       HTTP_ROUTE_HARNESSES.has(o[0]) &&
       o[2] === gateway &&
+      o[3] === upstream &&
+      o[4] === account &&
+      o[4] !== '*' &&
       bare(o[o.length - 1]) === model
     )
       return probe;
@@ -2825,22 +2820,6 @@ function annotateCandidates(candidates, evidenceData, opts) {
       c.evidence = [];
       c.status = 'unknown';
       c.blocked = false;
-      continue;
-    }
-    if (c.comboMembers) {
-      c.capabilityEvidence = Object.assign(
-        {
-          tools: { ok: true, method: 'combo-proved', observedAt: new Date().toISOString() },
-          jsonSchema: { ok: true, method: 'combo-proved', observedAt: new Date().toISOString() },
-        },
-        c.capabilityEvidence
-      );
-      if (!c.capabilities) c.capabilities = {};
-      c.capabilities.tools = true;
-      c.capabilities.jsonSchema = true;
-      c.status = 'available';
-      c.blocked = false;
-      c.evidence = c.evidence || [];
       continue;
     }
     const key = candidateKey(c);

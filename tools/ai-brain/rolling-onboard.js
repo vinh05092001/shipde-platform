@@ -242,7 +242,11 @@ async function onboardSourceRolling(src, options = {}) {
             ],
             tools,
             tool_choice: { type: 'function', function: { name: TOOL_NAME } },
-            max_tokens: options.toolProbeMaxOutputTokens || 128,
+            max_tokens:
+              options.dispatchConfig?.quotaProbeMaxOutputTokens ??
+              options.registry?.dispatch?.quotaProbeMaxOutputTokens ??
+              options.toolProbeMaxOutputTokens ??
+              1,
             stream: false,
           }),
           signal: controller.signal,
@@ -428,24 +432,19 @@ async function onboardSourceRolling(src, options = {}) {
       if (combo.capabilities?.tools === true && combo.capabilityEvidence?.tools) {
         const tools = combo.capabilityEvidence.tools;
         recordProof(combo, tools);
-        for (const acc of allBound) {
-          recordProof({ ...combo, accountId: acc.id, quotaScope: acc.id }, tools);
-        }
-        if (src.kind === 'router') {
-          for (const acc of allBound.length ? allBound : [{ id: bound ? bound.id : null }]) {
-            recordProof(
-              {
-                harness: 'opencode',
-                accessPath: 'cli',
-                gateway: src.id,
-                upstream: combo.upstream,
-                accountId: acc.id,
-                quotaScope: acc.id,
-                modelId: `${prefix}${stripPrefix(combo.modelId)}`,
-              },
-              tools
-            );
-          }
+        if (src.kind === 'router' && combo.accountId) {
+          recordProof(
+            {
+              harness: 'opencode',
+              accessPath: 'cli',
+              gateway: src.id,
+              upstream: combo.upstream,
+              accountId: combo.accountId,
+              quotaScope: combo.accountId,
+              modelId: `${prefix}${stripPrefix(combo.modelId)}`,
+            },
+            tools
+          );
         }
       }
     }

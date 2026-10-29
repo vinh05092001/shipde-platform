@@ -438,14 +438,7 @@ async function probeCapabilities(candidates, profile, options = {}) {
   // Probes run concurrently up to dispatch.maxConcurrentProbes so the strongest
   // candidates late in the probe order are still reached inside the schema budget.
   const probeOne = async (c) => {
-    if (
-      c.blocked ||
-      c.credentialEnvMissing ||
-      !c.accountId ||
-      c.accountId === '*' ||
-      c.comboMembers
-    )
-      return;
+    if (c.blocked || c.credentialEnvMissing || !c.accountId || c.accountId === '*') return;
     const key = candidateKey(c);
     const route =
       typeof o.httpRoute === 'function'
