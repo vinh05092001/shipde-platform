@@ -108,8 +108,9 @@ function sweBenchRows(html, config) {
     throw new Error('PRIORS_SWEBENCH_SCHEMA_CHANGED');
   }
   if (!Array.isArray(data) || !data.length) throw new Error('PRIORS_SWEBENCH_SCHEMA_CHANGED');
-  const board = data.find((b) => b && (b.name === 'Verified' || b.name === 'Lite')) || data[0];
-  const results = board && Array.isArray(board.results) ? board.results : [];
+  const board = data.find((b) => b && b.name === 'Verified');
+  if (!board) throw new Error('PRIORS_SWEBENCH_SCHEMA_CHANGED');
+  const results = Array.isArray(board.results) ? board.results : [];
   if (!results.length) throw new Error('PRIORS_SWEBENCH_SCHEMA_CHANGED');
 
   const rows = [];

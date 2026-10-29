@@ -266,4 +266,204 @@ describe('TASK-AI-146: Coding-agent benchmark sources and provisional weighting'
     const priorCoding = priorFor({ modelId: 'gpt-6-astra' }, 'coding', merged);
     assert.ok(priorCoding.score > 0, 'prior score must be positive');
   });
+
+  test('P1 Review 1: SWE-bench parser takes ONLY Verified split, ignores Lite in Lite-first, and fails closed when Verified is absent', () => {
+    // 1. Lite-first fixture: must extract ONLY the Verified split and ignore Lite
+    const liteFirstHtml = fs.readFileSync(
+      path.join(FIXTURES_DIR, 'swebench-lite-first.html'),
+      'utf8'
+    );
+    const liteFirstRows = sweBenchRows(liteFirstHtml, testConfig);
+    assert.equal(liteFirstRows.length, 1);
+    assert.ok(liteFirstRows[0].modelId.includes('claude-opus-4-5'));
+    assert.equal(liteFirstRows[0].benchmarks.sweBenchVerified, 79.2);
+    assert.equal(
+      liteFirstRows.some((r) => r.modelId.includes('fake-lite')),
+      false,
+      'Lite board results must never be emitted as verified scores'
+    );
+
+    // 2. Missing-Verified fixture: must throw PRIORS_SWEBENCH_SCHEMA_CHANGED and record no score (fail closed)
+    const missingVerifiedHtml = fs.readFileSync(
+      path.join(FIXTURES_DIR, 'swebench-missing-verified.html'),
+      'utf8'
+    );
+    assert.throws(
+      () => sweBenchRows(missingVerifiedHtml, testConfig),
+      /PRIORS_SWEBENCH_SCHEMA_CHANGED/,
+      'must throw when Verified split is absent'
+    );
+  });
+
+  test('P1 Review 2: priorFor enforces provisional precedence so higher-scoring provisional candidates never outrank official candidates', () => {
+    const priors = {
+      label: 'EXTERNAL_PRIOR',
+      roleWeights: testConfig.roleWeights,
+      ranking: [
+        {
+          canonical: 'official-low',
+          score: 60.0,
+          codingTier: 'T3',
+          reviewTier: 'T3',
+          benchmarks: [{ name: 'sweBenchVerified', score: 60.0, provisional: false }],
+        },
+        {
+          canonical: 'provisional-high',
+          provisional: true,
+          score: 59.9,
+          codingTier: 'T4',
+          reviewTier: 'T4',
+          benchmarks: [{ name: 'sweBenchVerified', score: 95.0, provisional: true }],
+        },
+      ],
+    };
+
+    const offPrior = priorFor({ modelId: 'official-low' }, 'coding', priors);
+    const provPrior = priorFor({ modelId: 'provisional-high' }, 'coding', priors);
+
+    assert.ok(offPrior, 'official prior must exist');
+    assert.ok(provPrior, 'provisional prior must exist');
+    assert.equal(provPrior.provisional, true, 'provisional prior must flag provisional: true');
+    assert.ok(
+      offPrior.score > provPrior.score,
+      `Official routing score (${offPrior.score}) must strictly exceed provisional routing score (${provPrior.score})`
+    );
+  });
+
+  test('P1 Review 2: Official score of zero produces strictly lower provisional routing score, never equality', () => {
+    // Official model has score of 0
+    const docs = [
+      {
+        sources: [{ id: 'benchlm', url: 'https://benchlm.ai/data/models.json' }],
+        models: [
+          {
+            modelId: 'official-zero',
+            benchmarks: { benchlm: 0.0 },
+            rankingEligible: true,
+          },
+          {
+            modelId: 'provisional-model',
+            benchmarks: { benchlm: 90.0 },
+            rankingEligible: false,
+            provisional: true,
+          },
+        ],
+      },
+    ];
+
+    const minMaxConfig = {
+      ...testConfig,
+      normalization: { method: 'min-max' },
+      normalizationMethod: 'min-max',
+    };
+    const merged = mergePriorDocuments(docs, undefined, { config: minMaxConfig });
+    const mOfficial = merged.ranking.find((r) => r.canonical === 'official-zero');
+    const mProv = merged.ranking.find((r) => r.canonical === 'provisional-model');
+
+    assert.ok(mOfficial, 'official model must exist');
+    assert.ok(mProv, 'provisional model must exist');
+    assert.equal(mOfficial.score, 0.0, 'official score is 0');
+    assert.ok(
+      mProv.score < 0,
+      `Provisional score (${mProv.score}) must be strictly lower than 0 when official score is 0`
+    );
+    assert.equal(mProv.score, -0.1);
+    assert.ok(
+      mOfficial.score > mProv.score,
+      `Official score (${mOfficial.score}) must be strictly greater than provisional score (${mProv.score})`
+    );
+
+    // priorFor routing score must also be strictly lower than 0
+    const offPrior = priorFor({ modelId: 'official-zero' }, 'coding', merged);
+    const provPrior = priorFor({ modelId: 'provisional-model' }, 'coding', merged);
+
+    assert.equal(offPrior.score, 0);
+    assert.ok(
+      provPrior.score < 0,
+      `Provisional routing score (${provPrior.score}) must be strictly lower than 0`
+    );
+    assert.equal(provPrior.score, -0.1);
+    assert.ok(offPrior.score > provPrior.score);
+  });
+
+  test('P1 Review 2: Provisional precedence applies across every score path: per-row benchmarks, effort aggregates, and ranking ordering', () => {
+    const docs = [
+      {
+        sources: [{ id: 'benchlm', url: 'https://benchlm.ai/data/models.json' }],
+        models: [
+          {
+            modelId: 'official-baseline',
+            benchmarks: { benchlm: 70.0 },
+            rankingEligible: true,
+          },
+          {
+            modelId: 'prov-base',
+            benchmarks: { benchlm: 98.0 },
+            rankingEligible: false,
+            provisional: true,
+          },
+          {
+            modelId: 'prov-with-effort (high)',
+            benchmarks: { benchlm: 99.0 },
+            rankingEligible: false,
+            provisional: true,
+          },
+        ],
+      },
+    ];
+
+    const merged = mergePriorDocuments(docs, undefined, { config: testConfig });
+    const mOfficial = merged.ranking.find((r) => r.canonical === 'official-baseline');
+    const mProvBase = merged.ranking.find((r) => r.canonical === 'prov-base');
+    const mProvEff = merged.ranking.find((r) => r.canonical.includes('prov-with-effort'));
+
+    assert.ok(mOfficial);
+    assert.ok(mProvBase);
+    assert.ok(mProvEff);
+
+    // 1. Per-row score and rawScore
+    assert.ok(mProvBase.score < mOfficial.score, 'row.score must be strictly less than official');
+    assert.ok(
+      mProvBase.rawScore < mOfficial.score,
+      'row.rawScore must be strictly less than official'
+    );
+
+    // 2. Per-row individual benchmarks
+    for (const b of mProvBase.benchmarks) {
+      assert.ok(
+        b.score < mOfficial.score,
+        `benchmark ${b.name} score (${b.score}) must be < official (${mOfficial.score})`
+      );
+      assert.ok(
+        b.normalizedScore < mOfficial.score,
+        `benchmark ${b.name} normalizedScore (${b.normalizedScore}) must be < official (${mOfficial.score})`
+      );
+    }
+
+    // 3. Effort aggregates and effort benchmarks
+    assert.ok(mProvEff.efforts && mProvEff.efforts.high, 'high effort must exist');
+    const highEffort = mProvEff.efforts.high;
+    assert.ok(highEffort.score < mOfficial.score, 'effort aggregate score must be < official');
+    assert.ok(
+      highEffort.rawScore < mOfficial.score,
+      'effort aggregate rawScore must be < official'
+    );
+    for (const eb of highEffort.benchmarks) {
+      assert.ok(eb.score < mOfficial.score, `effort benchmark ${eb.name} score must be < official`);
+      assert.ok(
+        eb.normalizedScore < mOfficial.score,
+        `effort benchmark ${eb.name} normalizedScore must be < official`
+      );
+    }
+
+    // 4. Final ranking ordering: all official models strictly precede all provisional models
+    const lastOfficialIdx = merged.ranking.findLastIndex((r) => !r.provisional);
+    const firstProvIdx = merged.ranking.findIndex((r) => r.provisional);
+    assert.ok(lastOfficialIdx !== -1, 'must have official model');
+    assert.ok(firstProvIdx !== -1, 'must have provisional model');
+    assert.ok(
+      lastOfficialIdx < firstProvIdx,
+      'all official models must precede all provisional models in ranking'
+    );
+  });
 });

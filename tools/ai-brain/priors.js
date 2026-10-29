@@ -404,6 +404,13 @@ function priorFor(candidate, role, priors, now) {
   const match = resolved && resolved.entry;
   if (!match) return neutralPrior(canonical);
 
+  const isMatchProvisional = Boolean(
+    match.provisional ||
+    (Array.isArray(match.benchmarks) &&
+      match.benchmarks.length > 0 &&
+      match.benchmarks.every((b) => b.provisional))
+  );
+
   const tier =
     role === 'reviewer' || role === 'security-review' ? match.reviewTier : match.codingTier;
   const bonus = TIER_BONUSES[tier] ?? null;
@@ -417,10 +424,12 @@ function priorFor(candidate, role, priors, now) {
     // does have, normalised against the same benchmark across the ranking.
     for (const name of FALLBACK_BENCHMARKS) {
       const value = benchmarkValue(match, name);
-      if (value !== null && rankingMaxima[name]) {
+      if (value !== null && Number.isFinite(rankingMaxima[name])) {
         const rawScore = Number.isFinite(match.score)
           ? match.score
-          : (100 * value) / rankingMaxima[name];
+          : rankingMaxima[name] <= 0
+            ? 0
+            : (100 * value) / rankingMaxima[name];
         weighted = {
           score: Math.round(rawScore),
           coverage: FALLBACK_COVERAGE,
@@ -430,7 +439,32 @@ function priorFor(candidate, role, priors, now) {
       }
     }
   }
-  const priorScore = weighted.coverage > 0 ? weighted.score : null;
+  let priorScore = weighted.coverage > 0 ? weighted.score : null;
+
+  if (isMatchProvisional && Number.isFinite(priorScore)) {
+    const officialRows = ranking.filter((r) => !r.provisional && r !== match);
+    if (officialRows.length > 0) {
+      let minOfficial = null;
+      for (const offRow of officialRows) {
+        let offScore = null;
+        const offWeighted = weightedBenchmarkScore(offRow, profile, rankingMaxima);
+        if (offWeighted.coverage > 0) {
+          offScore = Math.round(Math.max(0, Math.min(100, offWeighted.score)));
+        } else if (Number.isFinite(offRow.score)) {
+          offScore = offRow.score;
+        }
+        if (offScore !== null && Number.isFinite(offScore)) {
+          if (minOfficial === null || offScore < minOfficial) {
+            minOfficial = offScore;
+          }
+        }
+      }
+      if (minOfficial !== null && priorScore >= minOfficial) {
+        priorScore = Math.round((minOfficial - 0.1) * 10) / 10;
+      }
+    }
+  }
+
   const sourceDates = (match.sources || [])
     .map((source) => source && source.retrievedAt)
     .filter(Boolean);
@@ -447,6 +481,9 @@ function priorFor(candidate, role, priors, now) {
   const resolvedBaseId = resolved.matchedBaseId || match.matchedBaseId;
   const canonicalId = resolvedBaseId || match.canonical || canonical;
   const result = { canonical: canonicalId, tier, bonus: stale ? 0 : bonus };
+  if (isMatchProvisional) {
+    result.provisional = true;
+  }
   if (resolved.matchedVia || match.matchedVia) {
     result.matchedVia = resolved.matchedVia || match.matchedVia;
     result.matchedBaseId = resolvedBaseId || canonicalId;
@@ -477,7 +514,11 @@ function priorFor(candidate, role, priors, now) {
     result.source = match.source || (priors && priors.label) || 'model-priors';
   }
   if (Number.isFinite(priorScore)) {
-    result.score = Math.round(Math.max(0, Math.min(100, priorScore)));
+    if (isMatchProvisional) {
+      result.score = Math.round(priorScore * 10) / 10;
+    } else {
+      result.score = Math.round(Math.max(0, Math.min(100, priorScore)));
+    }
   } else if (match.benchmarks || Number.isFinite(match.score) || match.score === null) {
     result.score = null;
     result.qualityLabel = 'QUALITY_UNKNOWN';
@@ -639,8 +680,8 @@ function weightedBenchmarkScore(match, weights, maxima) {
   for (const [name, weight] of Object.entries(weights)) {
     const value = benchmarkValue(match, name);
     const max = maxima[name];
-    if (value === null || !max) continue;
-    score += (value / max) * weight;
+    if (value === null || !Number.isFinite(max)) continue;
+    score += max <= 0 ? 0 : (value / max) * weight;
     coverage += weight;
   }
   return { score: Math.round(100 * score), coverage: Math.round(coverage * 1000) / 1000 };
@@ -1070,28 +1111,47 @@ function applyNormalizationAndTiers(rows, config, now) {
 
   // 3. Normalize each benchmark independently within its source
   for (const row of rows) {
+    const isRowProv = Boolean(row.provisional);
     for (const b of row.benchmarks || []) {
+      const isProv = Boolean(b.provisional || isRowProv);
       const key = getBenchmarkStreamKey(b);
       const pool = streamScores.get(key) || [b.score];
       const norm = normalizeScore(b.score, pool, method);
-      b.normalizedScore = norm === null ? null : Math.round(norm * 10) / 10;
+      let nScore = norm === null ? null : Math.round(norm * 10) / 10;
+      if (isProv) {
+        if (Number.isFinite(b.score)) {
+          b.score = Math.round(b.score * provMultiplier * 10) / 10;
+        }
+        if (Number.isFinite(nScore)) {
+          nScore = Math.round(nScore * provMultiplier * 10) / 10;
+        }
+      }
+      b.normalizedScore = nScore;
     }
     for (const effData of Object.values(row.efforts || {})) {
+      const isEffProv = Boolean(effData.provisional || isRowProv);
       for (const eb of effData.benchmarks || []) {
+        const isProv = Boolean(eb.provisional || isEffProv);
         const key = getBenchmarkStreamKey(eb);
         const pool = streamScores.get(key) || [eb.score];
         const norm = normalizeScore(eb.score, pool, method);
-        eb.normalizedScore = norm === null ? null : Math.round(norm * 10) / 10;
+        let nScore = norm === null ? null : Math.round(norm * 10) / 10;
+        if (isProv) {
+          if (Number.isFinite(eb.score)) {
+            eb.score = Math.round(eb.score * provMultiplier * 10) / 10;
+          }
+          if (Number.isFinite(nScore)) {
+            nScore = Math.round(nScore * provMultiplier * 10) / 10;
+          }
+        }
+        eb.normalizedScore = nScore;
       }
     }
 
     // 4. Derive aggregate score from normalized scores
     const normScores = (row.benchmarks || [])
-      .map((b) => {
-        if (!Number.isFinite(b.normalizedScore)) return null;
-        return b.provisional ? b.normalizedScore * provMultiplier : b.normalizedScore;
-      })
-      .filter((s) => s !== null);
+      .map((b) => b.normalizedScore)
+      .filter((s) => s !== null && Number.isFinite(s));
     const score = normScores.length
       ? Math.round((normScores.reduce((sum, v) => sum + v, 0) / normScores.length) * 10) / 10
       : null;
@@ -1105,11 +1165,8 @@ function applyNormalizationAndTiers(rows, config, now) {
 
     for (const effData of Object.values(row.efforts || {})) {
       const effNormScores = (effData.benchmarks || [])
-        .map((b) => {
-          if (!Number.isFinite(b.normalizedScore)) return null;
-          return b.provisional ? b.normalizedScore * provMultiplier : b.normalizedScore;
-        })
-        .filter((s) => s !== null);
+        .map((b) => b.normalizedScore)
+        .filter((s) => s !== null && Number.isFinite(s));
       effData.score = effNormScores.length
         ? Math.round((effNormScores.reduce((sum, v) => sum + v, 0) / effNormScores.length) * 10) /
           10
@@ -1136,15 +1193,46 @@ function applyNormalizationAndTiers(rows, config, now) {
     .map((r) => r.score);
   const minOfficialScore = officialScores.length ? Math.min(...officialScores) : null;
   if (minOfficialScore !== null) {
+    const provisionalCap = Math.round((minOfficialScore - 0.1) * 10) / 10;
     for (const row of rows) {
-      if (row.provisional && row.score !== null && row.score >= minOfficialScore) {
-        row.score = Math.max(0, Math.round((minOfficialScore - 0.1) * 10) / 10);
-        row.normalizedScore = row.score;
+      if (row.provisional) {
+        if (row.score !== null && row.score >= minOfficialScore) {
+          row.score = provisionalCap;
+          row.normalizedScore = provisionalCap;
+        }
+        if (row.rawScore !== null && row.rawScore >= minOfficialScore) {
+          row.rawScore = provisionalCap;
+        }
+      }
+      for (const b of row.benchmarks || []) {
+        if (b.provisional || row.provisional) {
+          if (Number.isFinite(b.score) && b.score >= minOfficialScore) {
+            b.score = provisionalCap;
+          }
+          if (Number.isFinite(b.normalizedScore) && b.normalizedScore >= minOfficialScore) {
+            b.normalizedScore = provisionalCap;
+          }
+        }
       }
       for (const effData of Object.values(row.efforts || {})) {
-        if (effData.provisional && effData.score !== null && effData.score >= minOfficialScore) {
-          effData.score = Math.max(0, Math.round((minOfficialScore - 0.1) * 10) / 10);
-          effData.normalizedScore = effData.score;
+        if (effData.provisional || row.provisional) {
+          if (effData.score !== null && effData.score >= minOfficialScore) {
+            effData.score = provisionalCap;
+            effData.normalizedScore = provisionalCap;
+          }
+          if (effData.rawScore !== null && effData.rawScore >= minOfficialScore) {
+            effData.rawScore = provisionalCap;
+          }
+        }
+        for (const eb of effData.benchmarks || []) {
+          if (eb.provisional || effData.provisional || row.provisional) {
+            if (Number.isFinite(eb.score) && eb.score >= minOfficialScore) {
+              eb.score = provisionalCap;
+            }
+            if (Number.isFinite(eb.normalizedScore) && eb.normalizedScore >= minOfficialScore) {
+              eb.normalizedScore = provisionalCap;
+            }
+          }
         }
       }
     }
@@ -1180,6 +1268,9 @@ function mergePriorDocuments(documents, now, options) {
           efforts: {},
           sources: [],
         };
+      }
+      if (item.provisional) {
+        row.provisional = true;
       }
       if (Array.isArray(item.aliases) && item.aliases.length) {
         row.aliases = Array.from(new Set([...(row.aliases || []), ...item.aliases]));
@@ -1259,6 +1350,9 @@ function mergePriorDocuments(documents, now, options) {
 
       if (effort) {
         row.efforts[effort] = row.efforts[effort] || { benchmarks: [] };
+        if (item.provisional) {
+          row.efforts[effort].provisional = true;
+        }
         row.efforts[effort].benchmarks.push(...targetBenchmarks);
       } else {
         row.benchmarks = targetBenchmarks;
