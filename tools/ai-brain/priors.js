@@ -3,6 +3,13 @@
 const fs = require('fs');
 const path = require('path');
 
+let defaultDescriptor;
+try {
+  defaultDescriptor = require('./priors-sources/public.json');
+} catch {
+  defaultDescriptor = {};
+}
+
 const DEFAULT_PRIORS_FILE = path.join(__dirname, 'data', 'model-priors.json');
 const LIVE_PRIORS_FILE = path.join(__dirname, 'data', 'model-priors-live.json');
 const TIER_BONUSES = Object.freeze({ T1: 6, T2: 4, T3: 2, T4: 0 });
@@ -48,6 +55,299 @@ function loadPriors(file) {
   return { ranking: [] };
 }
 
+function applyDigitBoundaryHyphen(str, aliasRules) {
+  if (!str || !aliasRules || !aliasRules.digitBoundaryHyphen) return str;
+  let res = str.replace(/([a-z]{2,})(\d)/g, '$1-$2');
+  const singleLetters = Array.isArray(aliasRules.singleLetterPrefixes)
+    ? aliasRules.singleLetterPrefixes
+    : [];
+  if (singleLetters.length) {
+    const pattern = new RegExp(
+      `(?:^|[-_\\/])(${singleLetters.map((p) => p.toLowerCase()).join('|')})(\\d)`,
+      'g'
+    );
+    res = res.replace(pattern, (match, p1, p2) => {
+      const pfx = match.slice(0, match.length - p1.length - p2.length);
+      return `${pfx}${p1}-${p2}`;
+    });
+  }
+  return res;
+}
+
+function getEffortVariants(config) {
+  const cfg = config || defaultDescriptor;
+  const exclusions = new Set(
+    (
+      (cfg && (cfg.excludeEffortVariants || cfg.excludedEffortVariants)) ||
+      (defaultDescriptor &&
+        (defaultDescriptor.excludeEffortVariants || defaultDescriptor.excludedEffortVariants)) ||
+      []
+    ).map((e) => String(e).toLowerCase())
+  );
+
+  // Explicit configuration override passed by caller or configured on descriptor
+  if (cfg && Object.prototype.hasOwnProperty.call(cfg, 'effortVariants')) {
+    if (Array.isArray(cfg.effortVariants)) {
+      if (cfg.effortVariants.length === 0) return [];
+      return cfg.effortVariants
+        .map((e) => String(e).toLowerCase())
+        .filter((e) => !exclusions.has(e))
+        .sort((a, b) => b.length - a.length);
+    }
+    return [];
+  }
+
+  // Otherwise consult registry (sources.json)
+  const fromSources = loadEffortVariants();
+  return fromSources
+    .map((e) => String(e).toLowerCase())
+    .filter((e) => !exclusions.has(e))
+    .sort((a, b) => b.length - a.length);
+}
+
+function getDeploymentSuffixes(config) {
+  const cfg = config || defaultDescriptor;
+  if (Array.isArray(cfg && cfg.deploymentSuffixes) && cfg.deploymentSuffixes.length) {
+    return cfg.deploymentSuffixes.slice().sort((a, b) => b.length - a.length);
+  }
+  return [];
+}
+
+function stripAliasSuffixes(value, config, preserveDeployment = false) {
+  const suffixes = config && config.aliasRules && config.aliasRules.stripSuffixes;
+  for (const suffix of Array.isArray(suffixes) ? suffixes : []) {
+    if (
+      preserveDeployment &&
+      getDeploymentSuffixes(config).some((dep) => suffix === ':' + dep || suffix === '-' + dep)
+    )
+      continue;
+    if (typeof suffix === 'string' && suffix && value.endsWith(suffix)) {
+      value = value.slice(0, -suffix.length);
+    }
+  }
+  return value;
+}
+
+function stripDeploymentPattern(value, config) {
+  if (!value) return value;
+  const patterns = config && config.deploymentSuffixPatterns;
+  for (const pattern of Array.isArray(patterns) ? patterns : []) {
+    try {
+      const match = value.match(new RegExp(`(?:${pattern})$`));
+      if (match && match[0]) return value.slice(0, match.index);
+    } catch {
+      // Invalid configuration grants no normalization rule.
+    }
+  }
+  return value;
+}
+
+function addModelPrefixes(prefixes, id) {
+  if (typeof id !== 'string') return;
+  for (const accountPart of id.toLowerCase().split('::')) {
+    for (const prefix of accountPart.split('/').slice(0, -1)) {
+      if (prefix) prefixes.add(prefix);
+    }
+  }
+}
+
+let cachedRegistryPrefixes = null;
+function loadRegistryPrefixes(registry) {
+  if (!registry && cachedRegistryPrefixes) return cachedRegistryPrefixes;
+  const prefixes = new Set();
+  try {
+    const sourcesPath = path.join(__dirname, 'sources.json');
+    if (registry || fs.existsSync(sourcesPath)) {
+      const parsed = registry || JSON.parse(fs.readFileSync(sourcesPath, 'utf8'));
+      if (Array.isArray(parsed && parsed.sources)) {
+        for (const s of parsed.sources) {
+          if (s && s.id) prefixes.add(String(s.id).toLowerCase());
+          if (s && Array.isArray(s.aliases)) {
+            for (const a of s.aliases) {
+              if (a) prefixes.add(String(a).toLowerCase());
+            }
+          }
+          if (s && s.routerAlias) prefixes.add(String(s.routerAlias).toLowerCase());
+          if (s && s.modelPrefix) {
+            addModelPrefixes(prefixes, s.modelPrefix);
+          }
+          for (const model of (s && s.models) || []) addModelPrefixes(prefixes, model);
+        }
+      }
+      if (parsed && parsed.dispatch && parsed.dispatch.providers) {
+        for (const [pKey, pVal] of Object.entries(parsed.dispatch.providers)) {
+          prefixes.add(pKey.toLowerCase());
+          if (pVal && pVal.provider) prefixes.add(String(pVal.provider).toLowerCase());
+          if (pVal && pVal.modelPrefix) {
+            addModelPrefixes(prefixes, pVal.modelPrefix);
+          }
+        }
+      }
+    }
+  } catch (_) {}
+  if (!registry) cachedRegistryPrefixes = prefixes;
+  return prefixes;
+}
+
+function getRouterPrefixes(config) {
+  const cfg = config || defaultDescriptor;
+  const prefixes = new Set();
+
+  if (Array.isArray(cfg && cfg.routerPrefixes)) {
+    for (const p of cfg.routerPrefixes) {
+      if (p) prefixes.add(String(p).toLowerCase());
+    }
+  }
+
+  // Derive router prefixes from registry sources (e.g. qwen, 9router, kr from sources.json)
+  const registryPrefixes = loadRegistryPrefixes(cfg && cfg.registry);
+  for (const p of registryPrefixes) {
+    prefixes.add(p);
+  }
+
+  // Derive router/upstream prefixes from live IDs if provided
+  let liveList = cfg && (cfg.liveModels || cfg.liveIds);
+  if (!liveList) {
+    try {
+      liveList = require('./priors-public').liveModelIds();
+    } catch {
+      liveList = [];
+    }
+  }
+  if (Array.isArray(liveList)) {
+    for (const id of liveList) {
+      if (typeof id === 'string') {
+        addModelPrefixes(prefixes, id);
+        const colonIdx = id.indexOf('::');
+        if (colonIdx > 0) prefixes.add(id.slice(0, colonIdx).toLowerCase());
+      }
+    }
+  }
+
+  return prefixes;
+}
+
+function splitModelEffort(value, config) {
+  if (typeof value !== 'string' || !value.trim()) return { base: null, effort: null };
+  const cfg = config || defaultDescriptor;
+  const efforts = getEffortVariants(cfg);
+  let effort = null;
+  let raw = value.trim().toLowerCase();
+
+  // Strip account prefixes (delimited by ::) before router prefix checking
+  raw = raw.split('::').pop();
+
+  // Strip configured and derived router prefixes strictly
+  const routerPrefixes = raw.includes('/') ? getRouterPrefixes(cfg) : new Set();
+  let changed = true;
+  while (changed) {
+    changed = false;
+    const slashIdx = raw.indexOf('/');
+    if (slashIdx !== -1) {
+      const pfx = raw.slice(0, slashIdx);
+      const rest = raw.slice(slashIdx + 1);
+      if (routerPrefixes.has(pfx)) {
+        raw = rest;
+        changed = true;
+        continue;
+      }
+    }
+  }
+
+  raw = raw.split('@')[0];
+
+  raw = stripAliasSuffixes(raw, cfg);
+
+  // Strip trailing suffixes only (deployment suffixes and recognized effort suffixes)
+  const depSuffixes = getDeploymentSuffixes(cfg);
+  let suffixChanged = true;
+  while (suffixChanged) {
+    suffixChanged = false;
+    for (const dep of depSuffixes) {
+      const s1 = ':' + dep;
+      const s2 = '-' + dep;
+      if (raw.endsWith(s1)) {
+        raw = raw.slice(0, -s1.length).trim();
+        suffixChanged = true;
+      } else if (raw.endsWith(s2)) {
+        raw = raw.slice(0, -s2.length).trim();
+        suffixChanged = true;
+      }
+    }
+
+    if (!effort && efforts.length > 0) {
+      // Check for trailing parenthesized effort (e.g. "model (high)" or "model (reasoning: high)")
+      const trailingParenMatch = raw.match(/\s*\(([^)]*)\)\s*$/);
+      if (trailingParenMatch) {
+        const inside = trailingParenMatch[1].trim();
+        for (const eff of efforts) {
+          if (inside === eff || new RegExp(`(?:^|[^a-z0-9])${eff}(?:$|[^a-z0-9])`).test(inside)) {
+            effort = eff;
+            raw = raw.slice(0, trailingParenMatch.index).trim();
+            suffixChanged = true;
+            break;
+          }
+        }
+      }
+    }
+
+    if (!effort && efforts.length > 0) {
+      // Check for trailing hyphenated effort (e.g. "model-high")
+      for (const eff of efforts) {
+        const suffix = '-' + eff;
+        if (raw.endsWith(suffix)) {
+          effort = eff;
+          raw = raw.slice(0, -suffix.length).trim();
+          suffixChanged = true;
+          break;
+        }
+      }
+    }
+  }
+
+  // Preserve remaining parenthesized qualifiers as hyphenated tokens
+  // (e.g. "model (max)" -> "model-max")
+  raw = raw.replace(/\s*\(([^)]*)\)/g, (_, val) => '-' + val.replace(/[^a-z0-9]+/g, '-'));
+
+  if (cfg && cfg.aliasRules) {
+    raw = applyDigitBoundaryHyphen(raw, cfg.aliasRules);
+  }
+
+  raw = raw.replace(/[._\s]+/g, '-').replace(/^-+|-+$/g, '');
+
+  // Second pass on trailing suffixes after delimiter normalization (e.g. model_high -> model-high)
+  suffixChanged = true;
+  while (suffixChanged) {
+    suffixChanged = false;
+    for (const dep of depSuffixes) {
+      const s1 = ':' + dep;
+      const s2 = '-' + dep;
+      if (raw.endsWith(s1)) {
+        raw = raw.slice(0, -s1.length);
+        suffixChanged = true;
+      } else if (raw.endsWith(s2)) {
+        raw = raw.slice(0, -s2.length);
+        suffixChanged = true;
+      }
+    }
+    if (!effort && efforts.length > 0) {
+      for (const eff of efforts) {
+        const suffix = '-' + eff;
+        if (raw.endsWith(suffix)) {
+          effort = eff;
+          raw = raw.slice(0, -suffix.length);
+          suffixChanged = true;
+          break;
+        }
+      }
+    }
+  }
+
+  raw = raw.replace(/^-+|-+$/g, '');
+
+  return { base: raw || null, effort };
+}
+
 function normaliseCanonical(value) {
   if (typeof value !== 'string' || !value.trim()) return null;
   let canonical = value
@@ -57,7 +357,7 @@ function normaliseCanonical(value) {
   canonical = canonical.split('::').pop();
   canonical = canonical.split('/').pop();
   canonical = canonical.split('@')[0];
-  canonical = canonical.replace(/(?::free|-free)$/, '');
+  canonical = stripAliasSuffixes(canonical, defaultDescriptor, true);
   canonical = canonical.replace(/\s*\([^)]*\)/g, '').replace(/[._\s]+/g, '-');
   return canonical || null;
 }
@@ -91,7 +391,16 @@ function priorFor(candidate, role, priors, now) {
   if (!canonical) return null;
 
   const ranking = priors && Array.isArray(priors.ranking) ? priors.ranking : [];
-  const resolved = matchModelPrior(modelId, ranking);
+  const candidatePrefixes = [];
+  if (candidate && typeof candidate === 'object') {
+    for (const key of ['gateway', 'upstream', 'sourceId', 'provider', 'accessPath', 'harness']) {
+      if (candidate[key] && typeof candidate[key] === 'string') {
+        candidatePrefixes.push(candidate[key]);
+      }
+    }
+  }
+  const matchOptions = candidatePrefixes.length ? { routerPrefixes: candidatePrefixes } : undefined;
+  const resolved = matchModelPrior(modelId, ranking, matchOptions);
   const match = resolved && resolved.entry;
   if (!match) return neutralPrior(canonical);
 
@@ -136,12 +445,18 @@ function priorFor(candidate, role, priors, now) {
       : isStale(retrievalDate, now));
 
   const resolvedBaseId = resolved.matchedBaseId || match.matchedBaseId;
-  const canonicalId =
-    resolvedBaseId || normaliseCanonical(match.canonical) || canonical || match.canonical;
+  const canonicalId = resolvedBaseId || match.canonical || canonical;
   const result = { canonical: canonicalId, tier, bonus: stale ? 0 : bonus };
   if (resolved.matchedVia || match.matchedVia) {
     result.matchedVia = resolved.matchedVia || match.matchedVia;
     result.matchedBaseId = resolvedBaseId || canonicalId;
+  }
+  if (
+    resolved.fallback ||
+    match.fallback ||
+    (Array.isArray(match.benchmarks) && match.benchmarks.some((b) => b.fallback))
+  ) {
+    result.fallback = true;
   }
   if (weighted.coverage > 0) {
     result.coverage = weighted.coverage;
@@ -257,6 +572,10 @@ function benchmarkMaxima(ranking) {
     for (const name of [...Object.keys(ROLE_BENCHMARK_WEIGHTS.planner), ...FALLBACK_BENCHMARKS]) {
       const score = benchmarkValue(row, name);
       if (score !== null) maxima[name] = Math.max(maxima[name] || 0, score);
+      for (const eff of Object.values(row.efforts || {})) {
+        const effScore = benchmarkValue(eff, name);
+        if (effScore !== null) maxima[name] = Math.max(maxima[name] || 0, effScore);
+      }
     }
   }
   return maxima;
@@ -282,18 +601,39 @@ function normaliseModelId(value) {
 }
 
 // Preserve effort labels for exact leaderboard lookup; routing identity stays compatible.
-function leaderboardModelId(value) {
+function leaderboardModelId(value, config) {
   if (typeof value !== 'string' || !value.trim()) return null;
+  const cfg = config || defaultDescriptor;
   let raw = value
     .trim()
     .toLowerCase()
     .replace(/\s*\(([^)]*)\)/g, (_, effort) => '-' + effort.replace(/[^a-z0-9]+/g, '-'));
+
+  // Strip account prefixes (delimited by ::) before router prefix checking
   raw = raw.split('::').pop();
-  raw = raw.split('/').pop();
-  return raw
-    .split('@')[0]
-    .replace(/(?::free|-free)$/, '')
-    .replace(/[._\s]+/g, '-');
+
+  const routerPrefixes = raw.includes('/') ? getRouterPrefixes(cfg) : new Set();
+  let changed = true;
+  while (changed) {
+    changed = false;
+    const slashIdx = raw.indexOf('/');
+    if (slashIdx !== -1) {
+      const pfx = raw.slice(0, slashIdx);
+      const rest = raw.slice(slashIdx + 1);
+      if (routerPrefixes.has(pfx)) {
+        raw = rest;
+        changed = true;
+        continue;
+      }
+    }
+  }
+
+  raw = raw.split('@')[0];
+  raw = stripAliasSuffixes(raw, cfg, true);
+  if (cfg && cfg.aliasRules) {
+    raw = applyDigitBoundaryHyphen(raw, cfg.aliasRules);
+  }
+  return raw.replace(/[._\s]+/g, '-').replace(/^-+|-+$/g, '');
 }
 
 function loadEffortVariants(ranking) {
@@ -319,7 +659,7 @@ function loadEffortVariants(ranking) {
 
 function stripTrailingEffort(id, suffixes) {
   if (!id || typeof id !== 'string') return null;
-  for (const suffix of suffixes) {
+  for (const suffix of suffixes || []) {
     const pattern = '-' + suffix;
     if (id.endsWith(pattern) && id.length > pattern.length) {
       return id.slice(0, -pattern.length);
@@ -328,46 +668,393 @@ function stripTrailingEffort(id, suffixes) {
   return null;
 }
 
-function matchModelPrior(modelId, ranking) {
-  const id = leaderboardModelId(modelId);
-  const byId = new Map(
-    ranking.filter(Boolean).map((row) => [leaderboardModelId(row.canonical), row])
-  );
-  if (byId.has(id)) return { entry: byId.get(id) };
-  const queue = [{ id, reasoning: false }];
-  const seen = new Set([id]);
-  const effortSuffixes = loadEffortVariants(ranking);
-  for (const current of queue) {
-    if (!current.id) continue;
-    const deployment = current.id.replace(
-      /(?::(?:batch|flex|cloud)|-?\[\d+(?:-\d+)?[km]\]|-(?:fast|latest|volc|turbo|\d{4}-\d{2}-\d{2}|\d{8}|\d{6}|\d{4}))$/,
-      ''
-    );
-    let reasoning = current.id;
-    if (!byId.has(current.id)) {
-      const stripped = stripTrailingEffort(current.id, effortSuffixes);
-      if (stripped) reasoning = stripped;
-    }
-    for (const [base, effort] of [
-      [deployment, false],
-      [reasoning, true],
-    ]) {
-      if (base === current.id || seen.has(base)) continue;
-      seen.add(base);
-      const usedReasoning = current.reasoning || effort;
-      if (byId.has(base))
-        return {
-          entry: byId.get(base),
-          matchedVia: usedReasoning ? 'reasoning-variant' : 'variant-suffix',
-          matchedBaseId: byId.get(base).canonical,
-        };
-      queue.push({ id: base, reasoning: usedReasoning });
-    }
-  }
-  return null;
+function tierForScore(score, ranking) {
+  if (score === null || score === undefined || !Number.isFinite(score)) return null;
+  if (!Array.isArray(ranking) || ranking.length === 0) return null;
+  const scores = ranking
+    .map((row) =>
+      row.normalizedScore !== undefined && row.normalizedScore !== null
+        ? row.normalizedScore
+        : row.score
+    )
+    .filter(Number.isFinite)
+    .sort((a, b) => a - b);
+  if (scores.length === 0) return null;
+  const tiers = ['T4', 'T3', 'T2', 'T1'];
+  const quartiles = tiers
+    .slice(1)
+    .map((_, index) => scores[Math.ceil(((index + 1) * scores.length) / tiers.length) - 1]);
+  return tiers[quartiles.filter((threshold) => score > threshold).length];
 }
 
-function mergePriorDocuments(documents, now) {
+function matchModelPrior(modelId, ranking, options) {
+  if (!modelId || !Array.isArray(ranking)) return null;
+  let config = (options && (options.config || options.descriptor)) || defaultDescriptor;
+  if (options && Array.isArray(options.routerPrefixes) && options.routerPrefixes.length) {
+    const existing = Array.isArray(config.routerPrefixes) ? config.routerPrefixes : [];
+    config = { ...config, routerPrefixes: [...existing, ...options.routerPrefixes] };
+  }
+  const { base, effort } = splitModelEffort(modelId, config);
+  const exactId = leaderboardModelId(modelId, config);
+
+  const byCanonical = new Map();
+  for (const row of ranking) {
+    if (!row) continue;
+    if (row.canonical) {
+      byCanonical.set(row.canonical, row);
+      const norm = leaderboardModelId(row.canonical, config);
+      if (norm) byCanonical.set(norm, row);
+      if (config && config.aliasRules) {
+        const hyphenated = applyDigitBoundaryHyphen(row.canonical, config.aliasRules);
+        if (hyphenated) byCanonical.set(hyphenated, row);
+      }
+    }
+  }
+
+  // 1. Exact match on raw ID or exactId (prioritizes exact published entries)
+  if (exactId && byCanonical.has(exactId)) {
+    return { entry: byCanonical.get(exactId) };
+  }
+  let depStrippedId = stripDeploymentPattern(exactId, config);
+  if (!depStrippedId || depStrippedId === exactId) {
+    const depSuffixes = getDeploymentSuffixes(config);
+    depStrippedId = exactId;
+    for (const dep of depSuffixes) {
+      const s1 = ':' + dep;
+      const s2 = '-' + dep;
+      if (depStrippedId.endsWith(s1)) {
+        depStrippedId = depStrippedId.slice(0, -s1.length);
+        break;
+      } else if (depStrippedId.endsWith(s2)) {
+        depStrippedId = depStrippedId.slice(0, -s2.length);
+        break;
+      }
+    }
+  }
+  if (depStrippedId && depStrippedId !== exactId && byCanonical.has(depStrippedId)) {
+    return {
+      entry: byCanonical.get(depStrippedId),
+      matchedVia: 'variant-suffix',
+      matchedBaseId: byCanonical.get(depStrippedId).canonical,
+    };
+  }
+
+  // 2. Direct match on base canonical
+  let matchedEntry = base ? byCanonical.get(base) : null;
+  if (!matchedEntry && base && config && config.aliasRules) {
+    const withHyphen = applyDigitBoundaryHyphen(base, config.aliasRules);
+    matchedEntry = byCanonical.get(withHyphen);
+  }
+
+  // 3. Fallback queue for unmerged deployment/reasoning suffixes (using configured vocabulary only)
+  let matchedVia = undefined;
+  let matchedBaseId = undefined;
+  if (!matchedEntry && exactId) {
+    const queue = [{ id: exactId, reasoning: false }];
+    const seen = new Set([exactId]);
+    const efforts = getEffortVariants(config);
+    const depSuffixes = getDeploymentSuffixes(config);
+    for (const current of queue) {
+      if (!current.id) continue;
+      let deployment = stripDeploymentPattern(current.id, config);
+      if (deployment === current.id) {
+        for (const dep of depSuffixes) {
+          const s1 = ':' + dep;
+          const s2 = '-' + dep;
+          if (deployment.endsWith(s1)) {
+            deployment = deployment.slice(0, -s1.length);
+            break;
+          } else if (deployment.endsWith(s2)) {
+            deployment = deployment.slice(0, -s2.length);
+            break;
+          }
+        }
+      }
+      let reasoning = current.id;
+      for (const eff of efforts) {
+        const sfx = '-' + eff;
+        if (reasoning.endsWith(sfx)) {
+          reasoning = reasoning.slice(0, -sfx.length);
+          break;
+        }
+      }
+      for (const [b, effFlag] of [
+        [deployment, false],
+        [reasoning, true],
+      ]) {
+        if (b === current.id || seen.has(b)) continue;
+        seen.add(b);
+        const usedReasoning = current.reasoning || effFlag;
+        if (byCanonical.has(b)) {
+          matchedEntry = byCanonical.get(b);
+          matchedVia = usedReasoning ? 'reasoning-variant' : 'variant-suffix';
+          matchedBaseId = matchedEntry.canonical;
+          break;
+        }
+        queue.push({ id: b, reasoning: usedReasoning });
+      }
+      if (matchedEntry) break;
+    }
+  }
+
+  if (!matchedEntry) return null;
+
+  // Plain legacy row without .efforts or array .benchmarks
+  if (
+    !matchedEntry.efforts &&
+    (!matchedEntry.benchmarks || !Array.isArray(matchedEntry.benchmarks))
+  ) {
+    return {
+      entry: matchedEntry,
+      matchedVia:
+        matchedVia ||
+        (effort
+          ? 'reasoning-variant'
+          : exactId !== matchedEntry.canonical
+            ? 'variant-suffix'
+            : undefined),
+      matchedBaseId: matchedBaseId || matchedEntry.canonical,
+    };
+  }
+
+  // If effort is requested on canonical entry with per-effort benchmarks
+  if (effort) {
+    const effortData = matchedEntry.efforts && matchedEntry.efforts[effort];
+    const effortBenchmarks =
+      effortData && Array.isArray(effortData.benchmarks) ? effortData.benchmarks.slice() : [];
+    const baseBenchmarks = Array.isArray(matchedEntry.benchmarks) ? matchedEntry.benchmarks : [];
+
+    let hasFallback = false;
+    let combinedBenchmarks;
+    if (effortBenchmarks.length === 0) {
+      combinedBenchmarks = baseBenchmarks;
+      hasFallback = true;
+    } else {
+      combinedBenchmarks = effortBenchmarks.slice();
+      const effortStreamKeys = new Set(effortBenchmarks.map(getBenchmarkStreamKey));
+      for (const baseB of baseBenchmarks) {
+        if (!effortStreamKeys.has(getBenchmarkStreamKey(baseB))) {
+          combinedBenchmarks.push(baseB);
+          hasFallback = true;
+        }
+      }
+    }
+
+    const normScores = combinedBenchmarks
+      .map((b) =>
+        b.normalizedScore !== undefined && b.normalizedScore !== null ? b.normalizedScore : b.score
+      )
+      .filter(Number.isFinite);
+    const effScore = normScores.length
+      ? Math.round((normScores.reduce((s, v) => s + v, 0) / normScores.length) * 10) / 10
+      : matchedEntry.score;
+
+    const rawScores = combinedBenchmarks.map((b) => b.score).filter(Number.isFinite);
+    const rawScore = rawScores.length
+      ? Math.round((rawScores.reduce((s, v) => s + v, 0) / rawScores.length) * 10) / 10
+      : matchedEntry.rawScore;
+
+    const tier = tierForScore(effScore, ranking) || matchedEntry.codingTier;
+
+    return {
+      entry: {
+        ...matchedEntry,
+        benchmarks: combinedBenchmarks,
+        effort,
+        score: effScore,
+        normalizedScore: effScore,
+        rawScore,
+        codingTier: tier,
+        reviewTier: tier,
+        fallback: hasFallback,
+      },
+      effort,
+      matchedVia: 'reasoning-variant',
+      matchedBaseId: matchedEntry.canonical,
+      fallback: hasFallback,
+    };
+  }
+
+  // Base model query
+  const hasFallback =
+    Array.isArray(matchedEntry.benchmarks) && matchedEntry.benchmarks.some((b) => b.fallback);
+  return {
+    entry: matchedEntry,
+    matchedVia:
+      matchedVia ||
+      (exactId !== matchedEntry.canonical
+        ? hasFallback
+          ? 'reasoning-variant'
+          : 'variant-suffix'
+        : undefined),
+    matchedBaseId: matchedBaseId || matchedEntry.canonical,
+    fallback: hasFallback,
+  };
+}
+
+function getNormalizationMethod(config) {
+  const cfg = config || defaultDescriptor;
+  return (
+    (cfg && cfg.normalization && cfg.normalization.method) ||
+    (cfg && cfg.normalizationMethod) ||
+    (typeof cfg?.normalization === 'string' ? cfg.normalization : 'percentile')
+  );
+}
+
+function normalizeScore(score, allScores, method) {
+  if (!Number.isFinite(score)) return null;
+  if (!Array.isArray(allScores) || allScores.length === 0) return score;
+  const m = (method || 'percentile').toLowerCase();
+  if (m === 'none' || m === 'raw') {
+    return score;
+  }
+  if (m === 'min-max') {
+    const min = Math.min(...allScores);
+    const max = Math.max(...allScores);
+    if (max === min) return 100;
+    return ((score - min) / (max - min)) * 100;
+  }
+  // 'percentile': percentile within source distribution (percentage of observed scores <= score)
+  const n = allScores.length;
+  if (n <= 1) return 100;
+  const countLe = allScores.filter((s) => s <= score).length;
+  return (countLe / n) * 100;
+}
+
+function benchmarkTimestamp(b) {
+  if (b && b.source && typeof b.source.retrievedAt === 'string') {
+    const ts = Date.parse(b.source.retrievedAt);
+    if (Number.isFinite(ts)) return ts;
+  }
+  return 0;
+}
+
+function dedupeBenchmarks(benchmarks) {
+  const byKey = new Map();
+  for (const b of benchmarks || []) {
+    if (!b || typeof b !== 'object' || typeof b.name !== 'string') continue;
+    const key = getBenchmarkStreamKey(b);
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, b);
+    } else {
+      const tsExisting = benchmarkTimestamp(existing);
+      const tsNew = benchmarkTimestamp(b);
+      // Replace if new is newer or equal (latest value per source, deterministic)
+      if (tsNew >= tsExisting) {
+        byKey.set(key, b);
+      }
+    }
+  }
+  return Array.from(byKey.values()).sort((a, b) =>
+    a.name === b.name
+      ? getBenchmarkStreamKey(a).localeCompare(getBenchmarkStreamKey(b))
+      : a.name.localeCompare(b.name)
+  );
+}
+
+function getBenchmarkStreamKey(b) {
+  if (!b) return '';
+  const sourceId = (b.source && (b.source.id || b.source.url)) || '';
+  const name = b.name || 'aggregate';
+  return sourceId ? `${sourceId}::${name}` : name;
+}
+
+function applyNormalizationAndTiers(rows, config, now) {
+  const method = getNormalizationMethod(config);
+
+  // 1. Deduplicate benchmarks on each row and effort
+  for (const row of rows) {
+    row.benchmarks = dedupeBenchmarks(row.benchmarks);
+    for (const effData of Object.values(row.efforts || {})) {
+      effData.benchmarks = dedupeBenchmarks(effData.benchmarks);
+    }
+  }
+
+  // 2. Collect distribution of scores per benchmark source (excluding synthetic fallbacks)
+  const streamScores = new Map();
+  for (const row of rows) {
+    for (const b of row.benchmarks || []) {
+      if (b.fallback) continue;
+      if (Number.isFinite(b.score)) {
+        const key = getBenchmarkStreamKey(b);
+        if (!streamScores.has(key)) streamScores.set(key, []);
+        streamScores.get(key).push(b.score);
+      }
+    }
+    for (const effData of Object.values(row.efforts || {})) {
+      for (const eb of effData.benchmarks || []) {
+        if (eb.fallback) continue;
+        if (Number.isFinite(eb.score)) {
+          const key = getBenchmarkStreamKey(eb);
+          if (!streamScores.has(key)) streamScores.set(key, []);
+          streamScores.get(key).push(eb.score);
+        }
+      }
+    }
+  }
+
+  // 3. Normalize each benchmark independently within its source
+  for (const row of rows) {
+    for (const b of row.benchmarks || []) {
+      const key = getBenchmarkStreamKey(b);
+      const pool = streamScores.get(key) || [b.score];
+      const norm = normalizeScore(b.score, pool, method);
+      b.normalizedScore = norm === null ? null : Math.round(norm * 10) / 10;
+    }
+    for (const effData of Object.values(row.efforts || {})) {
+      for (const eb of effData.benchmarks || []) {
+        const key = getBenchmarkStreamKey(eb);
+        const pool = streamScores.get(key) || [eb.score];
+        const norm = normalizeScore(eb.score, pool, method);
+        eb.normalizedScore = norm === null ? null : Math.round(norm * 10) / 10;
+      }
+    }
+
+    // 4. Derive aggregate score from normalized scores
+    const normScores = (row.benchmarks || []).map((b) => b.normalizedScore).filter(Number.isFinite);
+    const score = normScores.length
+      ? Math.round((normScores.reduce((sum, v) => sum + v, 0) / normScores.length) * 10) / 10
+      : null;
+    row.score = score;
+    row.normalizedScore = score;
+
+    const rawScores = (row.benchmarks || []).map((b) => b.score).filter(Number.isFinite);
+    row.rawScore = rawScores.length
+      ? Math.round((rawScores.reduce((sum, v) => sum + v, 0) / rawScores.length) * 10) / 10
+      : null;
+
+    for (const effData of Object.values(row.efforts || {})) {
+      const effNormScores = (effData.benchmarks || [])
+        .map((b) => b.normalizedScore)
+        .filter(Number.isFinite);
+      effData.score = effNormScores.length
+        ? Math.round((effNormScores.reduce((sum, v) => sum + v, 0) / effNormScores.length) * 10) /
+          10
+        : null;
+      effData.normalizedScore = effData.score;
+
+      const effRawScores = (effData.benchmarks || []).map((b) => b.score).filter(Number.isFinite);
+      effData.rawScore = effRawScores.length
+        ? Math.round((effRawScores.reduce((sum, v) => sum + v, 0) / effRawScores.length) * 10) / 10
+        : null;
+    }
+
+    if (now) {
+      row.stale =
+        !row.sources ||
+        row.sources.length === 0 ||
+        row.sources.some((source) => isStale(source.retrievedAt, now));
+    }
+  }
+
+  // 5. Derive codingTier / reviewTier from the normalized aggregate
+  assignQuartileTiers(rows);
+  return rows;
+}
+
+function mergePriorDocuments(documents, now, options) {
+  const config = (options && (options.config || options.descriptor)) || defaultDescriptor;
   const byCanonical = new Map();
   const sources = [];
   for (const document of documents || []) {
@@ -375,10 +1062,26 @@ function mergePriorDocuments(documents, now) {
       if (source && source.url) sources.push(Object.assign({}, source));
     }
     for (const item of (document && document.models) || (document && document.ranking) || []) {
-      const canonical = leaderboardModelId(item && (item.modelId || item.model || item.canonical));
+      const rawId = item && (item.modelId || item.model || item.canonical);
+      const { base: canonical, effort } = splitModelEffort(rawId, config);
       if (!canonical) continue;
-      const row = byCanonical.get(canonical) || { canonical, benchmarks: [], sources: [] };
-      const sourceRows = (item.sources || (item.source ? [item.source] : [])).filter(
+
+      let row = byCanonical.get(canonical);
+      if (!row && config && config.aliasRules) {
+        const withHyphen = applyDigitBoundaryHyphen(canonical, config.aliasRules);
+        row = byCanonical.get(withHyphen);
+      }
+      if (!row) {
+        row = {
+          canonical,
+          benchmarks: [],
+          efforts: {},
+          sources: [],
+        };
+      }
+
+      const docSources = (document && document.sources) || [];
+      const sourceRows = (item.sources || (item.source ? [item.source] : docSources)).filter(
         (source) => source && source.url
       );
       for (const source of sourceRows) {
@@ -389,7 +1092,10 @@ function mergePriorDocuments(documents, now) {
             source.retrievedAt || document.retrievedAt || new Date(now || Date.now()).toISOString(),
         });
       }
+
       const benchmarks = item.benchmarks || {};
+      const targetBenchmarks = effort ? [] : row.benchmarks.filter((b) => !b.fallback);
+
       for (const [name, value] of Object.entries(benchmarks)) {
         const score = Number(value && typeof value === 'object' ? value.score : value);
         if (!Number.isFinite(score)) continue;
@@ -408,13 +1114,15 @@ function mergePriorDocuments(documents, now) {
                 new Date(now || Date.now()).toISOString(),
             }
           : null;
-        row.benchmarks.push({ name, score, source: normalizedBenchmarkSource });
+        const benchEntry = { name, score, source: normalizedBenchmarkSource };
+        targetBenchmarks.push(benchEntry);
         if (normalizedBenchmarkSource && normalizedBenchmarkSource.url) {
           row.sources.push(normalizedBenchmarkSource);
         }
       }
+
       const directScore = benchmarkScore(item);
-      if (directScore !== null) {
+      if (directScore !== null && Object.keys(benchmarks).length === 0) {
         const directSource = sourceRows[0]
           ? {
               ...(sourceRows[0].id
@@ -429,35 +1137,53 @@ function mergePriorDocuments(documents, now) {
                 new Date(now || Date.now()).toISOString(),
             }
           : null;
-        row.benchmarks.push({
+        targetBenchmarks.push({
           name: 'aggregate',
           score: directScore,
           source: directSource,
         });
       }
+
+      if (effort) {
+        row.efforts[effort] = row.efforts[effort] || { benchmarks: [] };
+        row.efforts[effort].benchmarks.push(...targetBenchmarks);
+      } else {
+        row.benchmarks = targetBenchmarks;
+      }
+
       if (item.releaseDate) row.releaseDate = item.releaseDate;
       if (Number.isFinite(Number(item.contextWindow)))
         row.contextWindow = Number(item.contextWindow);
       byCanonical.set(canonical, row);
     }
   }
-  const rows = Array.from(byCanonical.values()).map((row) => {
-    const scores = row.benchmarks.map((benchmark) => benchmark.score);
-    const score = scores.length
-      ? scores.reduce((sum, value) => sum + value, 0) / scores.length
-      : null;
-    return Object.assign(row, {
-      score: score === null ? null : Math.round(score * 10) / 10,
-      codingTier: null,
-      reviewTier: null,
-      stale:
-        row.sources.length === 0 || row.sources.some((source) => isStale(source.retrievedAt, now)),
-    });
-  });
-  assignQuartileTiers(rows);
+
+  // Derive base fallbacks from deduplicated efforts when base benchmarks are empty
+  if (!options || options.deriveFallbacks !== false) {
+    for (const row of byCanonical.values()) {
+      if (row.benchmarks.length === 0) {
+        for (const [effName, effData] of Object.entries(row.efforts || {})) {
+          const effBenchmarks = dedupeBenchmarks(effData.benchmarks);
+          for (const b of effBenchmarks) {
+            if (
+              !row.benchmarks.some((rb) => getBenchmarkStreamKey(rb) === getBenchmarkStreamKey(b))
+            ) {
+              row.benchmarks.push({ ...b, fallback: true, fallbackFrom: effName });
+            }
+          }
+        }
+      }
+    }
+  }
+
+  const rows = Array.from(byCanonical.values());
+  applyNormalizationAndTiers(rows, config, now);
+  const method = getNormalizationMethod(config);
   return {
     label: 'EXTERNAL_PRIOR',
     generatedAt: new Date(now || Date.now()).toISOString(),
+    normalizationMethod: method,
+    normalization: { method },
     sources,
     ranking: rows,
   };
@@ -465,7 +1191,11 @@ function mergePriorDocuments(documents, now) {
 
 function assignQuartileTiers(rows) {
   const scores = rows
-    .map((row) => row.score)
+    .map((row) =>
+      row.normalizedScore !== undefined && row.normalizedScore !== null
+        ? row.normalizedScore
+        : row.score
+    )
     .filter(Number.isFinite)
     .sort((a, b) => a - b);
   // Nearest-rank quartiles of the scored population; ties share a tier.
@@ -474,21 +1204,41 @@ function assignQuartileTiers(rows) {
     .slice(1)
     .map((_, index) => scores[Math.ceil(((index + 1) * scores.length) / tiers.length) - 1]);
   for (const row of rows) {
-    if (row.score === null || row.score === undefined || !Number.isFinite(row.score)) {
+    const s =
+      row.normalizedScore !== undefined && row.normalizedScore !== null
+        ? row.normalizedScore
+        : row.score;
+    if (s === null || s === undefined || !Number.isFinite(s)) {
       row.score = null;
       row.codingTier = null;
       row.reviewTier = null;
-      continue;
+    } else {
+      const tier = tiers[quartiles.filter((threshold) => s > threshold).length];
+      row.codingTier = tier;
+      row.reviewTier = tier;
     }
-    const tier = tiers[quartiles.filter((threshold) => row.score > threshold).length];
-    row.codingTier = tier;
-    row.reviewTier = tier;
+    for (const effData of Object.values(row.efforts || {})) {
+      const es =
+        effData.normalizedScore !== undefined && effData.normalizedScore !== null
+          ? effData.normalizedScore
+          : effData.score;
+      if (es === null || es === undefined || !Number.isFinite(es)) {
+        effData.codingTier = null;
+        effData.reviewTier = null;
+      } else {
+        const tier = tiers[quartiles.filter((threshold) => es > threshold).length];
+        effData.codingTier = tier;
+        effData.reviewTier = tier;
+      }
+    }
   }
   return rows;
 }
 
 async function refreshPriors(options) {
   const opts = options || {};
+  const config = (opts && (opts.config || opts.descriptor)) || defaultDescriptor;
+  const method = getNormalizationMethod(config);
   const output =
     opts.file ||
     (opts.root
@@ -508,27 +1258,123 @@ async function refreshPriors(options) {
     'coding agent model benchmarks SWE-bench Aider Terminal-Bench';
   const results = await opts.search(query);
   if (!Array.isArray(results)) throw new Error('PRIORS_SEARCH_RESULT_INVALID');
-  const document = mergePriorDocuments(results, opts.now);
+  const document = mergePriorDocuments(results, opts.now, {
+    ...opts,
+    config,
+    deriveFallbacks: !opts.preserveHistory,
+  });
   if (opts.preserveHistory) {
-    for (const row of loadPriors(output).ranking) {
-      const fresh = document.ranking.find((item) => item.canonical === row.canonical);
+    const historicalRanking = loadPriors(output).ranking || [];
+    for (const row of historicalRanking) {
+      // Canonicalize historical row into base + effort structure to avoid obsolete rows (e.g. grok-4-7-high)
+      const { base: histCanonical, effort: histEffort } = splitModelEffort(row.canonical, config);
+      const canonicalKey = histCanonical || row.canonical;
+
+      let fresh = document.ranking.find((item) => item.canonical === canonicalKey);
       if (!fresh) {
-        document.ranking.push(row);
+        fresh = {
+          canonical: canonicalKey,
+          benchmarks: [],
+          efforts: {},
+          sources: (row.sources || []).slice(),
+          releaseDate: row.releaseDate,
+          contextWindow: row.contextWindow,
+        };
+        document.ranking.push(fresh);
+      }
+
+      if (histEffort) {
+        fresh.efforts = fresh.efforts || {};
+        fresh.efforts[histEffort] = fresh.efforts[histEffort] || { benchmarks: [] };
+        const mergedEff = (fresh.efforts[histEffort].benchmarks || []).slice();
+        for (const oldB of row.benchmarks || []) {
+          if (oldB.fallback) continue;
+          const oldKey = getBenchmarkStreamKey(oldB);
+          const idx = mergedEff.findIndex((b) => getBenchmarkStreamKey(b) === oldKey);
+          if (idx === -1) {
+            mergedEff.push(oldB);
+          } else {
+            if (benchmarkTimestamp(oldB) > benchmarkTimestamp(mergedEff[idx])) {
+              mergedEff[idx] = oldB;
+            }
+          }
+        }
+        fresh.efforts[histEffort].benchmarks = dedupeBenchmarks(mergedEff);
       } else {
-        const added = (row.benchmarks || []).filter(
-          (b) => !fresh.benchmarks.some((n) => JSON.stringify(n) === JSON.stringify(b))
-        );
-        if (added.length) {
-          fresh.benchmarks.push(...added);
-          const scores = fresh.benchmarks.map((b) => b.score).filter(Number.isFinite);
-          fresh.score = scores.length
-            ? Math.round((scores.reduce((sum, v) => sum + v, 0) / scores.length) * 10) / 10
-            : null;
+        const mergedBenchmarks = fresh.benchmarks
+          ? fresh.benchmarks.filter((b) => !b.fallback)
+          : [];
+        for (const oldB of row.benchmarks || []) {
+          if (oldB.fallback) continue;
+          const oldKey = getBenchmarkStreamKey(oldB);
+          const freshIdx = mergedBenchmarks.findIndex((b) => getBenchmarkStreamKey(b) === oldKey);
+          if (freshIdx === -1) {
+            mergedBenchmarks.push(oldB);
+          } else {
+            const freshB = mergedBenchmarks[freshIdx];
+            if (benchmarkTimestamp(oldB) > benchmarkTimestamp(freshB)) {
+              mergedBenchmarks[freshIdx] = oldB;
+            }
+          }
+        }
+        fresh.benchmarks = dedupeBenchmarks(mergedBenchmarks);
+      }
+
+      if (row.efforts) {
+        fresh.efforts = fresh.efforts || {};
+        for (const [effName, effData] of Object.entries(row.efforts)) {
+          if (!fresh.efforts[effName]) {
+            fresh.efforts[effName] = {
+              benchmarks: (effData.benchmarks || []).filter((b) => !b.fallback),
+            };
+          } else {
+            const mergedEff = (fresh.efforts[effName].benchmarks || []).slice();
+            for (const oldB of effData.benchmarks || []) {
+              if (oldB.fallback) continue;
+              const oldKey = getBenchmarkStreamKey(oldB);
+              const idx = mergedEff.findIndex((b) => getBenchmarkStreamKey(b) === oldKey);
+              if (idx === -1) {
+                mergedEff.push(oldB);
+              } else {
+                if (benchmarkTimestamp(oldB) > benchmarkTimestamp(mergedEff[idx])) {
+                  mergedEff[idx] = oldB;
+                }
+              }
+            }
+            fresh.efforts[effName].benchmarks = dedupeBenchmarks(mergedEff);
+          }
+        }
+      }
+
+      const existingUrls = new Set((fresh.sources || []).map((s) => s.url));
+      for (const s of row.sources || []) {
+        if (s && s.url && !existingUrls.has(s.url)) {
+          fresh.sources.push(s);
+          existingUrls.add(s.url);
         }
       }
     }
-    assignQuartileTiers(document.ranking);
+
+    // Populate base fallbacks for models without direct base benchmarks
+    for (const row of document.ranking) {
+      if (row.benchmarks.length === 0) {
+        for (const [effName, effData] of Object.entries(row.efforts || {})) {
+          const effBenchmarks = dedupeBenchmarks(effData.benchmarks);
+          for (const b of effBenchmarks) {
+            if (
+              !row.benchmarks.some((rb) => getBenchmarkStreamKey(rb) === getBenchmarkStreamKey(b))
+            ) {
+              row.benchmarks.push({ ...b, fallback: true, fallbackFrom: effName });
+            }
+          }
+        }
+      }
+    }
+
+    applyNormalizationAndTiers(document.ranking, config, opts.now);
   }
+  document.normalizationMethod = method;
+  document.normalization = { method };
   const liveModels = opts.liveModels || require('./priors-public').liveModelIds();
   const scoredRows = document.ranking.filter((row) => !row.matchedVia);
   document.ranking = scoredRows.slice();
@@ -600,4 +1446,11 @@ module.exports = {
   weightedBenchmarkScore,
   DEFAULT_PRIORS_FILE,
   LIVE_PRIORS_FILE,
+  splitModelEffort,
+  getEffortVariants,
+  getRouterPrefixes,
+  getNormalizationMethod,
+  normalizeScore,
+  dedupeBenchmarks,
+  loadEffortVariants,
 };
