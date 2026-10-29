@@ -724,5 +724,8 @@ export type ActivateUserRequest = components['schemas']['ActivateUserRequest'];
 export type ActivateUserResponse = components['schemas']['ActivateUserResponse'];
 export type DeactivateUserRequest = components['schemas']['DeactivateUserRequest'];
 export type DeactivateUserResponse = components['schemas']['DeactivateUserResponse'];
+// --- Export Contracts (FEAT-COM-05) ---
+export * from './exports';
+
 // --- Generated OpenAPI Schema Types ---
 export type * from './openapi';

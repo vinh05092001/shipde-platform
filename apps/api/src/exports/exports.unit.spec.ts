@@ -1,0 +1,782 @@
+import { describe, it } from 'node:test';
+import * as assert from 'node:assert';
+import {
+  ExportFormat,
+  ExportResource,
+  ExportJobStatus,
+  ExportErrorCode,
+  ExportAuditEvent,
+  ExportGenerationMetadata,
+} from '@shipde/contracts';
+import { CanonicalApiException } from '../auth/auth.service';
+import type { ActorContext } from '../rbac/rbac.dto';
+import { validateCreateExportJobDto, validateListExportJobsQuery } from './exports.dto';
+import { generateCsv, escapeCsvCell } from './generators/csv.generator';
+import { generateXlsx, escapeXml } from './generators/xlsx.generator';
+import { generatePdf } from './generators/pdf.generator';
+import { ExportsService } from './exports.service';
+
+function createMockPrismaService() {
+  const users: any[] = [
+    {
+      id: 'u-1',
+      merchant_id: 'm-tenant-1',
+      full_name: 'Nguyễn Văn Chủ',
+      email: 'owner@shopde.test',
+      phone: '0912345678',
+      role: 'OWNER',
+      warehouse_scopes: ['*'],
+      status: 'active',
+      created_at: new Date('2026-09-01T08:00:00Z'),
+    },
+    {
+      id: 'u-2',
+      merchant_id: 'm-tenant-1',
+      full_name: 'Trần Kho',
+      email: 'kho@shopde.test',
+      phone: '0987654321',
+      role: 'WAREHOUSE',
+      warehouse_scopes: ['wh-1'],
+      status: 'active',
+      created_at: new Date('2026-09-02T08:00:00Z'),
+    },
+    {
+      id: 'u-other',
+      merchant_id: 'm-tenant-other',
+      full_name: 'Other Shop User',
+      email: 'other@other.test',
+      phone: '0933333333',
+      role: 'OWNER',
+      warehouse_scopes: ['*'],
+      status: 'active',
+      created_at: new Date('2026-09-01T08:00:00Z'),
+    },
+  ];
+
+  const warehouses: any[] = [
+    {
+      id: 'wh-1',
+      merchant_id: 'm-tenant-1',
+      name: 'Kho Tân Bình',
+      code: 'WH-01',
+      status: 'active',
+      is_default: true,
+      contact_name: 'Trần Kho',
+      contact_phone: '0901234567',
+      contact_email: 'kho1@gumac.vn',
+      city: 'TP. Hồ Chí Minh',
+      district: 'Quận Tân Bình',
+      address_line: '128 Đường Trường Chinh',
+      created_at: new Date('2026-09-01T09:00:00Z'),
+    },
+    {
+      id: 'wh-2',
+      merchant_id: 'm-tenant-1',
+      name: 'Kho Hà Nội',
+      code: 'WH-02',
+      status: 'active',
+      is_default: false,
+      contact_name: 'Lê Kho Bắc',
+      contact_phone: '0909876543',
+      contact_email: 'kho2@gumac.vn',
+      city: 'Hà Nội',
+      district: 'Quận Cầu Giấy',
+      address_line: '88 Đường Cầu Giấy',
+      created_at: new Date('2026-09-02T09:00:00Z'),
+    },
+    {
+      id: 'wh-other',
+      merchant_id: 'm-tenant-other',
+      name: 'Kho Tenant Khác',
+      code: 'WH-OTHER',
+      status: 'active',
+      is_default: true,
+      contact_name: 'Alien Contact',
+      contact_phone: '0911111111',
+      contact_email: 'alien@other.vn',
+      city: 'Đà Nẵng',
+      district: 'Quận Hải Châu',
+      address_line: '10 Nguyễn Văn Linh',
+      created_at: new Date('2026-09-01T09:00:00Z'),
+    },
+  ];
+
+  const auditLogs: any[] = [
+    {
+      id: 'log-1',
+      merchant_id: 'm-tenant-1',
+      user_id: 'u-1',
+      actor: 'OWNER',
+      action: 'WAREHOUSE_CREATED',
+      entity_type: 'warehouse',
+      entity_id: 'wh-1',
+      ip_address: 'd9b35b64...',
+      created_at: new Date('2026-09-01T09:00:00Z'),
+    },
+  ];
+
+  const exportJobs: any[] = [];
+
+  return {
+    users,
+    warehouses,
+    auditLogs,
+    exportJobs,
+    user: {
+      findFirst: async ({ where }: any) => {
+        return (
+          users.find((u) => {
+            if (where.id && u.id !== where.id) return false;
+            if (where.merchant_id && u.merchant_id !== where.merchant_id) return false;
+            return true;
+          }) || null
+        );
+      },
+      findMany: async ({ where, take }: any) => {
+        let res = users.filter((u) => {
+          if (where.merchant_id && u.merchant_id !== where.merchant_id) return false;
+          return true;
+        });
+        if (take) res = res.slice(0, take);
+        return res;
+      },
+    },
+    warehouse: {
+      findMany: async ({ where, take }: any) => {
+        let res = warehouses.filter((w) => {
+          if (where.merchant_id && w.merchant_id !== where.merchant_id) return false;
+          return true;
+        });
+        if (take) res = res.slice(0, take);
+        return res;
+      },
+    },
+    auditLog: {
+      create: async ({ data }: any) => {
+        const item = { id: `log-${auditLogs.length + 1}`, ...data, created_at: new Date() };
+        auditLogs.push(item);
+        return item;
+      },
+      findMany: async ({ where, take }: any) => {
+        let res = auditLogs.filter((l) => {
+          if (where.merchant_id && l.merchant_id !== where.merchant_id) return false;
+          return true;
+        });
+        if (take) res = res.slice(0, take);
+        return res;
+      },
+    },
+    exportJob: {
+      create: async ({ data }: any) => {
+        const item = { ...data, created_at: new Date(), updated_at: new Date() };
+        exportJobs.push(item);
+        return item;
+      },
+      update: async ({ where, data }: any) => {
+        const idx = exportJobs.findIndex((j) => j.id === where.id);
+        if (idx === -1) throw new Error('Not found');
+        exportJobs[idx] = { ...exportJobs[idx], ...data, updated_at: new Date() };
+        return exportJobs[idx];
+      },
+      findFirst: async ({ where }: any) => {
+        return (
+          exportJobs.find((j) => {
+            if (where.id && j.id !== where.id) return false;
+            if (where.merchant_id && j.merchant_id !== where.merchant_id) return false;
+            return true;
+          }) || null
+        );
+      },
+      findMany: async ({ where, skip = 0, take = 20 }: any) => {
+        let res = exportJobs.filter((j) => {
+          if (where.merchant_id && j.merchant_id !== where.merchant_id) return false;
+          if (where.status && j.status !== where.status) return false;
+          if (where.resource && j.resource !== where.resource) return false;
+          return true;
+        });
+        return res.slice(skip, skip + take);
+      },
+      count: async ({ where }: any) => {
+        return exportJobs.filter((j) => {
+          if (where.merchant_id && j.merchant_id !== where.merchant_id) return false;
+          if (where.status && j.status !== where.status) return false;
+          if (where.resource && j.resource !== where.resource) return false;
+          return true;
+        }).length;
+      },
+    },
+  };
+}
+
+function createMockRbacService(grantedPermissions: string[] = []) {
+  return {
+    actorHasPermissions: async (_actor: ActorContext, required: string[]) => {
+      const set = new Set(grantedPermissions);
+      return required.every((r) => set.has(r));
+    },
+  };
+}
+
+describe('FEAT-COM-05: Exports Unit Test Suite', () => {
+  describe('DTO Validation: validateCreateExportJobDto', () => {
+    it('should validate valid DTO for users CSV export', () => {
+      const res = validateCreateExportJobDto({
+        resource: 'users',
+        format: 'csv',
+        filters: { role: 'OPERATOR' },
+        sync: true,
+      });
+      assert.strictEqual(res.valid, true);
+      assert.strictEqual(res.errors.length, 0);
+      assert.strictEqual(res.dto?.resource, ExportResource.USERS);
+      assert.strictEqual(res.dto?.format, ExportFormat.CSV);
+    });
+
+    it('should validate valid DTO for warehouses XLSX export', () => {
+      const res = validateCreateExportJobDto({
+        resource: 'warehouses',
+        format: 'xlsx',
+      });
+      assert.strictEqual(res.valid, true);
+      assert.strictEqual(res.dto?.format, ExportFormat.XLSX);
+    });
+
+    it('should validate valid DTO for ledgers PDF export', () => {
+      const res = validateCreateExportJobDto({
+        resource: 'ledgers',
+        format: 'pdf',
+      });
+      assert.strictEqual(res.valid, true);
+      assert.strictEqual(res.dto?.format, ExportFormat.PDF);
+    });
+
+    it('should reject invalid body (non-object or null)', () => {
+      const res1 = validateCreateExportJobDto(null);
+      assert.strictEqual(res1.valid, false);
+      assert.strictEqual(res1.errors[0].code, 'INVALID_BODY');
+
+      const res2 = validateCreateExportJobDto('string-body');
+      assert.strictEqual(res2.valid, false);
+      assert.strictEqual(res2.errors[0].code, 'INVALID_BODY');
+    });
+
+    it('should reject missing or non-string resource', () => {
+      const res1 = validateCreateExportJobDto({ format: 'csv' });
+      assert.strictEqual(res1.valid, false);
+      assert.strictEqual(
+        res1.errors.some((e) => e.field === 'resource' && e.code === 'REQUIRED'),
+        true
+      );
+
+      const res2 = validateCreateExportJobDto({ resource: 12345, format: 'csv' });
+      assert.strictEqual(res2.valid, false);
+      assert.strictEqual(
+        res2.errors.some((e) => e.field === 'resource' && e.code === 'INVALID_TYPE'),
+        true
+      );
+    });
+
+    it('should reject unsupported resource with UNSUPPORTED_RESOURCE', () => {
+      const res = validateCreateExportJobDto({ resource: 'secret_keys', format: 'csv' });
+      assert.strictEqual(res.valid, false);
+      assert.strictEqual(
+        res.errors.some((e) => e.field === 'resource' && e.code === 'UNSUPPORTED_RESOURCE'),
+        true
+      );
+    });
+
+    it('should reject missing or unsupported format', () => {
+      const res1 = validateCreateExportJobDto({ resource: 'users' });
+      assert.strictEqual(res1.valid, false);
+      assert.strictEqual(
+        res1.errors.some((e) => e.field === 'format' && e.code === 'REQUIRED'),
+        true
+      );
+
+      const res2 = validateCreateExportJobDto({ resource: 'users', format: 'exe' });
+      assert.strictEqual(res2.valid, false);
+      assert.strictEqual(
+        res2.errors.some((e) => e.field === 'format' && e.code === 'UNSUPPORTED_FORMAT'),
+        true
+      );
+    });
+
+    it('should reject invalid filters (array instead of object)', () => {
+      const res = validateCreateExportJobDto({
+        resource: 'users',
+        format: 'csv',
+        filters: ['invalid', 'array'],
+      });
+      assert.strictEqual(res.valid, false);
+      assert.strictEqual(
+        res.errors.some((e) => e.field === 'filters' && e.code === 'INVALID_TYPE'),
+        true
+      );
+    });
+
+    it('should reject non-boolean sync option', () => {
+      const res = validateCreateExportJobDto({
+        resource: 'users',
+        format: 'csv',
+        sync: 'true',
+      });
+      assert.strictEqual(res.valid, false);
+      assert.strictEqual(
+        res.errors.some((e) => e.field === 'sync' && e.code === 'INVALID_TYPE'),
+        true
+      );
+    });
+  });
+
+  describe('Query Validation: validateListExportJobsQuery', () => {
+    it('should validate valid pagination parameters', () => {
+      const res = validateListExportJobsQuery({
+        page: '2',
+        limit: '50',
+        status: 'completed',
+        resource: 'users',
+      });
+      assert.strictEqual(res.valid, true);
+      assert.strictEqual(res.page, 2);
+      assert.strictEqual(res.limit, 50);
+      assert.strictEqual(res.status, 'completed');
+      assert.strictEqual(res.resource, 'users');
+    });
+
+    it('should reject invalid page or limit', () => {
+      const res1 = validateListExportJobsQuery({ page: '0' });
+      assert.strictEqual(res1.valid, false);
+      assert.strictEqual(
+        res1.errors.some((e) => e.field === 'page'),
+        true
+      );
+
+      const res2 = validateListExportJobsQuery({ limit: '200' });
+      assert.strictEqual(res2.valid, false);
+      assert.strictEqual(
+        res2.errors.some((e) => e.field === 'limit'),
+        true
+      );
+    });
+  });
+
+  describe('Format Generators', () => {
+    const mockMetadata: ExportGenerationMetadata = {
+      export_id: 'exp-test-uuid-001',
+      generated_at: '2026-10-29T10:00:00Z',
+      merchant_id: 'm-tenant-1',
+      requested_by: 'u-1',
+      user_role: 'OWNER',
+      resource: ExportResource.USERS,
+      format: ExportFormat.CSV,
+      filters: {},
+      rule_version: 'RULES_V1_2026',
+      total_rows: 2,
+      succeeded_rows: 2,
+      failed_rows: 0,
+      checksum_sha256: 'a1b2c3d4e5f6',
+    };
+
+    const mockHeaders = [
+      { key: 'name', label: 'Tên người dùng' },
+      { key: 'email', label: 'Email' },
+      { key: 'notes', label: 'Ghi chú' },
+    ];
+
+    const mockRows = [
+      { name: 'Nguyễn Văn A', email: 'a@test.vn', notes: 'Dòng thường' },
+      {
+        name: 'Trần "Bão", Cường',
+        email: 'b@test.vn',
+        notes: 'Có dấu phẩy, nháy "kép" và\nxuống dòng',
+      },
+    ];
+
+    it('escapeCsvCell correctly quotes and doubles quotes', () => {
+      assert.strictEqual(escapeCsvCell('simple'), 'simple');
+      assert.strictEqual(escapeCsvCell('with,comma'), '"with,comma"');
+      assert.strictEqual(escapeCsvCell('with"quotes"'), '"with""quotes"""');
+      assert.strictEqual(escapeCsvCell('with\nnewline'), '"with\nnewline"');
+      assert.strictEqual(escapeCsvCell(null), '');
+    });
+
+    it('generateCsv produces valid CSV with UTF-8 BOM, metadata header, and CRLF line breaks', () => {
+      const buf = generateCsv(mockMetadata, mockHeaders, mockRows);
+      // Check BOM bytes (\uFEFF: 0xEF, 0xBB, 0xBF)
+      assert.strictEqual(buf[0], 0xef);
+      assert.strictEqual(buf[1], 0xbb);
+      assert.strictEqual(buf[2], 0xbf);
+
+      const text = buf.subarray(3).toString('utf-8');
+      assert.strictEqual(text.includes('# --- SHIP DE EXPORT METADATA ---'), true);
+      assert.strictEqual(text.includes('# Export ID: exp-test-uuid-001'), true);
+      assert.strictEqual(text.includes('# Checksum: a1b2c3d4e5f6'), true);
+      assert.strictEqual(text.includes('Tên người dùng,Email,Ghi chú'), true);
+      assert.strictEqual(text.includes('"Trần ""Bão"", Cường"'), true);
+    });
+
+    it('escapeXml safely handles special XML characters', () => {
+      assert.strictEqual(
+        escapeXml('A & B < C > D "quote" \'single\''),
+        'A &amp; B &lt; C &gt; D &quot;quote&quot; &apos;single&apos;'
+      );
+      assert.strictEqual(escapeXml(null), '');
+    });
+
+    it('generateXlsx produces conformant SpreadsheetML XML with Data and Metadata sheets', () => {
+      const buf = generateXlsx(mockMetadata, mockHeaders, mockRows);
+      const xml = buf.toString('utf-8');
+
+      assert.strictEqual(xml.includes('<?xml version="1.0" encoding="UTF-8"?>'), true);
+      assert.strictEqual(
+        xml.includes('xmlns="urn:schemas-microsoft-com:office:spreadsheet"'),
+        true
+      );
+      assert.strictEqual(xml.includes('<Worksheet ss:Name="Data">'), true);
+      assert.strictEqual(xml.includes('<Worksheet ss:Name="Metadata">'), true);
+      assert.strictEqual(xml.includes('exp-test-uuid-001'), true);
+      assert.strictEqual(xml.includes('Nguyễn Văn A'), true);
+    });
+
+    it('generatePdf produces valid PDF 1.4 document with catalog, font objects, xref, and %%EOF', () => {
+      const buf = generatePdf(mockMetadata, mockHeaders, mockRows);
+      const pdfText = buf.toString('binary');
+
+      assert.strictEqual(pdfText.startsWith('%PDF-1.4'), true);
+      assert.strictEqual(pdfText.includes('/Type /Catalog'), true);
+      assert.strictEqual(pdfText.includes('/Type /Pages'), true);
+      assert.strictEqual(pdfText.includes('/Type /Font'), true);
+      assert.strictEqual(pdfText.includes('SHIP DE - EXPORT REPORT'), true);
+      assert.strictEqual(pdfText.includes('xref'), true);
+      assert.strictEqual(pdfText.includes('trailer'), true);
+      assert.strictEqual(pdfText.endsWith('%%EOF\n'), true);
+    });
+  });
+
+  describe('ExportsService Operations & Security Invariants', () => {
+    it('AC-COM-05-01: Owner can create export job and receives completed job with accurate counts', async () => {
+      const mockPrisma = createMockPrismaService();
+      const mockRbac = createMockRbacService();
+      const service = new ExportsService(mockPrisma as any, mockRbac as any);
+
+      const ownerActor: ActorContext = {
+        userId: 'u-1',
+        merchantId: 'm-tenant-1',
+        role: 'OWNER',
+      };
+
+      const result = await service.createExportJob(
+        'm-tenant-1',
+        ownerActor,
+        {
+          resource: ExportResource.USERS,
+          format: ExportFormat.CSV,
+          sync: true,
+        },
+        '127.0.0.1',
+        'corr-01'
+      );
+
+      assert.strictEqual(result.data.status, ExportJobStatus.COMPLETED);
+      assert.strictEqual(result.data.resource, ExportResource.USERS);
+      assert.strictEqual(result.data.format, ExportFormat.CSV);
+      assert.strictEqual(result.data.total_rows, 2);
+      assert.strictEqual(result.data.succeeded_rows, 2);
+      assert.strictEqual(result.data.failed_rows, 0);
+      assert.ok(result.data.checksum_sha256);
+      assert.ok(result.data.download_url);
+
+      // Verify audit log created
+      assert.strictEqual(
+        mockPrisma.auditLogs.some((l) => l.action === ExportAuditEvent.EXPORT_REQUESTED),
+        true
+      );
+    });
+
+    it('AC-COM-05-06: Operator lacking capability permission is rejected with 403 FORBIDDEN', async () => {
+      const mockPrisma = createMockPrismaService();
+      // Operator has no permissions
+      const mockRbac = createMockRbacService([]);
+      const service = new ExportsService(mockPrisma as any, mockRbac as any);
+
+      const opActor: ActorContext = {
+        userId: 'u-2',
+        merchantId: 'm-tenant-1',
+        role: 'WAREHOUSE',
+      };
+
+      await assert.rejects(
+        async () => {
+          await service.createExportJob(
+            'm-tenant-1',
+            opActor,
+            { resource: ExportResource.USERS, format: ExportFormat.CSV },
+            '127.0.0.1',
+            'corr-forbidden'
+          );
+        },
+        (err: any) => {
+          assert.strictEqual(err instanceof CanonicalApiException, true);
+          assert.strictEqual(err.getStatus(), 403);
+          assert.strictEqual(err.code, ExportErrorCode.FORBIDDEN);
+          return true;
+        }
+      );
+    });
+
+    it('AC-COM-05-05: FEAT-RBAC-02 scoped actor exports warehouses: out-of-scope rows are omitted and recorded in row_results', async () => {
+      const mockPrisma = createMockPrismaService();
+      // Actor has iam:shop_config but scoped only to wh-1
+      const mockRbac = createMockRbacService(['iam:shop_config']);
+      const service = new ExportsService(mockPrisma as any, mockRbac as any);
+
+      const scopedActor: ActorContext = {
+        userId: 'u-2', // u-2 has warehouse_scopes: ['wh-1'] in mockPrisma
+        merchantId: 'm-tenant-1',
+        role: 'WAREHOUSE',
+      };
+
+      const result = await service.createExportJob(
+        'm-tenant-1',
+        scopedActor,
+        {
+          resource: ExportResource.WAREHOUSES,
+          format: ExportFormat.XLSX,
+          sync: true,
+        },
+        '127.0.0.1',
+        'corr-scoped'
+      );
+
+      assert.strictEqual(result.data.status, ExportJobStatus.COMPLETED);
+      assert.strictEqual(result.data.total_rows, 2);
+      assert.strictEqual(result.data.succeeded_rows, 1); // wh-1 succeeded
+      assert.strictEqual(result.data.failed_rows, 1); // wh-2 forbidden
+
+      // Check per-row results
+      const failedResult = result.data.row_results?.find((r) => r.entity_id === 'wh-2');
+      assert.ok(failedResult);
+      assert.strictEqual(failedResult.status, 'failed');
+      assert.strictEqual(failedResult.error_code, ExportErrorCode.SCOPE_FORBIDDEN);
+    });
+
+    it('BR-COM05-04: Actor without pii:unmask receives masked identifiers in exported rows', async () => {
+      const mockPrisma = createMockPrismaService();
+      // Has iam:manage_users but NOT pii:unmask
+      const mockRbac = createMockRbacService(['iam:manage_users']);
+      const service = new ExportsService(mockPrisma as any, mockRbac as any);
+
+      const opActor: ActorContext = {
+        userId: 'u-2',
+        merchantId: 'm-tenant-1',
+        role: 'MEMBER',
+      };
+
+      const result = await service.createExportJob(
+        'm-tenant-1',
+        opActor,
+        {
+          resource: ExportResource.USERS,
+          format: ExportFormat.CSV,
+          sync: true,
+        },
+        '127.0.0.1',
+        'corr-mask'
+      );
+
+      // Download file to inspect content
+      const download = await service.downloadExport(
+        'm-tenant-1',
+        opActor,
+        result.data.id,
+        '127.0.0.1',
+        'corr-dl'
+      );
+      const csvContent = download.fileBuffer.toString('utf-8');
+
+      // Email and phone must be masked
+      assert.strictEqual(csvContent.includes('owner@shopde.test'), false);
+      assert.strictEqual(csvContent.includes('0912345678'), false);
+      assert.strictEqual(
+        csvContent.includes('o***r@shopde.test') || csvContent.includes('o*@shopde.test'),
+        true
+      );
+      assert.strictEqual(csvContent.includes('091****678'), true);
+    });
+
+    it('AC-COM-05-13: Actor with pii:unmask receives plaintext identifiers in exported rows', async () => {
+      const mockPrisma = createMockPrismaService();
+      // Has both iam:manage_users AND pii:unmask
+      const mockRbac = createMockRbacService(['iam:manage_users', 'pii:unmask']);
+      const service = new ExportsService(mockPrisma as any, mockRbac as any);
+
+      const unmaskActor: ActorContext = {
+        userId: 'u-2',
+        merchantId: 'm-tenant-1',
+        role: 'MEMBER',
+      };
+
+      const result = await service.createExportJob(
+        'm-tenant-1',
+        unmaskActor,
+        {
+          resource: ExportResource.USERS,
+          format: ExportFormat.CSV,
+          sync: true,
+        },
+        '127.0.0.1',
+        'corr-unmask'
+      );
+
+      const download = await service.downloadExport(
+        'm-tenant-1',
+        unmaskActor,
+        result.data.id,
+        '127.0.0.1',
+        'corr-dl-unmask'
+      );
+      const csvContent = download.fileBuffer.toString('utf-8');
+
+      // Email and phone must be plaintext
+      assert.strictEqual(csvContent.includes('owner@shopde.test'), true);
+      assert.strictEqual(csvContent.includes('0912345678'), true);
+    });
+
+    it('AC-COM-05-07: Cross-tenant query returns 404 EXPORT_NOT_FOUND', async () => {
+      const mockPrisma = createMockPrismaService();
+      const mockRbac = createMockRbacService();
+      const service = new ExportsService(mockPrisma as any, mockRbac as any);
+
+      const ownerTenant1: ActorContext = {
+        userId: 'u-1',
+        merchantId: 'm-tenant-1',
+        role: 'OWNER',
+      };
+
+      // Create job in tenant 1
+      const created = await service.createExportJob(
+        'm-tenant-1',
+        ownerTenant1,
+        { resource: ExportResource.USERS, format: ExportFormat.CSV },
+        '127.0.0.1',
+        'corr-t1'
+      );
+
+      const otherTenantActor: ActorContext = {
+        userId: 'u-other',
+        merchantId: 'm-tenant-other',
+        role: 'OWNER',
+      };
+
+      // Other tenant queries job
+      await assert.rejects(
+        async () => {
+          await service.getExportJob('m-tenant-other', created.data.id, 'corr-t2');
+        },
+        (err: any) => {
+          assert.strictEqual(err instanceof CanonicalApiException, true);
+          assert.strictEqual(err.getStatus(), 404);
+          assert.strictEqual(err.code, ExportErrorCode.EXPORT_NOT_FOUND);
+          return true;
+        }
+      );
+
+      // Other tenant downloads job
+      await assert.rejects(
+        async () => {
+          await service.downloadExport(
+            'm-tenant-other',
+            otherTenantActor,
+            created.data.id,
+            '127.0.0.1',
+            'corr-t2'
+          );
+        },
+        (err: any) => {
+          assert.strictEqual(err instanceof CanonicalApiException, true);
+          assert.strictEqual(err.getStatus(), 404);
+          assert.strictEqual(err.code, ExportErrorCode.EXPORT_NOT_FOUND);
+          return true;
+        }
+      );
+    });
+
+    it('AC-COM-05-09: Downloading pending export job throws 409 EXPORT_NOT_READY', async () => {
+      const mockPrisma = createMockPrismaService();
+      const mockRbac = createMockRbacService();
+      const service = new ExportsService(mockPrisma as any, mockRbac as any);
+
+      // Manually push pending export job
+      mockPrisma.exportJobs.push({
+        id: 'job-pending',
+        merchant_id: 'm-tenant-1',
+        user_id: 'u-1',
+        resource: 'users',
+        format: 'csv',
+        status: ExportJobStatus.PENDING,
+        created_at: new Date(),
+      });
+
+      const ownerActor: ActorContext = {
+        userId: 'u-1',
+        merchantId: 'm-tenant-1',
+        role: 'OWNER',
+      };
+
+      await assert.rejects(
+        async () => {
+          await service.downloadExport(
+            'm-tenant-1',
+            ownerActor,
+            'job-pending',
+            '127.0.0.1',
+            'corr-pending'
+          );
+        },
+        (err: any) => {
+          assert.strictEqual(err instanceof CanonicalApiException, true);
+          assert.strictEqual(err.getStatus(), 409);
+          assert.strictEqual(err.code, ExportErrorCode.EXPORT_NOT_READY);
+          return true;
+        }
+      );
+    });
+
+    it('AC-COM-05-12: Download records EXPORT_DOWNLOADED audit log with file metadata', async () => {
+      const mockPrisma = createMockPrismaService();
+      const mockRbac = createMockRbacService();
+      const service = new ExportsService(mockPrisma as any, mockRbac as any);
+
+      const ownerActor: ActorContext = {
+        userId: 'u-1',
+        merchantId: 'm-tenant-1',
+        role: 'OWNER',
+      };
+
+      const created = await service.createExportJob(
+        'm-tenant-1',
+        ownerActor,
+        { resource: ExportResource.AUDIT_LOGS, format: ExportFormat.CSV },
+        '127.0.0.1',
+        'corr-audit-create'
+      );
+
+      const dl = await service.downloadExport(
+        'm-tenant-1',
+        ownerActor,
+        created.data.id,
+        '127.0.0.1',
+        'corr-audit-dl'
+      );
+      assert.ok(dl.fileBuffer);
+      assert.strictEqual(dl.mimeType, 'text/csv; charset=utf-8');
+
+      // Check audit log for download
+      const dlLog = mockPrisma.auditLogs.find(
+        (l) => l.action === ExportAuditEvent.EXPORT_DOWNLOADED
+      );
+      assert.ok(dlLog);
+      assert.strictEqual(dlLog.entity_id, created.data.id);
+    });
+  });
+});
