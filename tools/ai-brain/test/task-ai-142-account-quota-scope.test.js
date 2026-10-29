@@ -137,8 +137,13 @@ test('account quota failure path writes exhaustedAccountKey into failedKeys with
       'failedKeys must contain the account-exhausted mark'
     );
 
+    const subsequentItem = {
+      id: 'ITEM-ACCT-FAIL-SUBSEQUENT',
+      roleRequirement: { role: 'reviewer' },
+      failedKeys,
+    };
     const decision2 = await selectCandidateForProfile(
-      item,
+      subsequentItem,
       [a1, a2, b1],
       [],
       null,
