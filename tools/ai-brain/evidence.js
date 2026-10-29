@@ -481,8 +481,11 @@ function isCandidateBlocked(data, candidate, opts) {
   // 4. Quota state check (TASK-AI-142 T4)
   try {
     const quotaScan = require('./quota-scan');
-    const quotaState =
-      opts?.quotaState || (opts?.loadQuotaState !== false ? quotaScan.loadQuotaState(opts) : null);
+    const quotaState = Object.prototype.hasOwnProperty.call(opts || {}, 'quotaState')
+      ? opts.quotaState
+      : opts?.loadQuotaState === false
+        ? null
+        : quotaScan.loadQuotaState(opts || {});
     if (quotaState) {
       const scopeState = quotaScan.getQuotaScopeState(candObj, quotaState);
       if (scopeState && quotaScan.isScopeBlocked(scopeState, now)) {

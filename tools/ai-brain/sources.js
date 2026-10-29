@@ -145,17 +145,101 @@ function loadSources(options) {
 
 function bySource(registry) {
   const map = new Map();
+  if (!registry || !Array.isArray(registry.sources)) return map;
   for (const source of registry.sources) map.set(source.id, source);
   return map;
 }
 
+const aliasCache = new WeakMap();
+
+/**
+ * Resolves all known aliases for a source identity (sourceId, gateway, provider options).
+ * Matches against source.id, source.aliases, and source.routerAlias in the registry.
+ *
+ * @param {string} id
+ * @param {object} [registryOrOptions]
+ * @returns {string[]}
+ */
+function getSourceAliases(id, registryOrOptions) {
+  if (!id || typeof id !== 'string') return [];
+  const trimmed = id.trim();
+  if (!trimmed) return [];
+
+  let registry = registryOrOptions;
+  if (registry && registry.registry) {
+    registry = registry.registry;
+  }
+  if (!registry || !Array.isArray(registry.sources)) {
+    if (typeof registryOrOptions === 'object' && registryOrOptions && !registryOrOptions.sources) {
+      try {
+        registry = loadSources(registryOrOptions);
+      } catch (_) {
+        registry = null;
+      }
+    } else {
+      registry = null;
+    }
+  }
+
+  if (registry && typeof registry === 'object') {
+    let map = aliasCache.get(registry);
+    if (!map) {
+      map = new Map();
+      const sources = Array.isArray(registry.sources) ? registry.sources : [];
+      for (const src of sources) {
+        if (!src || !src.id) continue;
+        const aliases = Array.isArray(src.aliases) ? src.aliases : [];
+        const names = [src.id, ...aliases];
+        if (src.routerAlias) names.push(src.routerAlias);
+        for (const name of names) {
+          const strippedName = name.replace(/^opencode-provider-/, '').replace(/-options$/, '');
+          let existing = map.get(name);
+          if (!existing) {
+            existing = new Set();
+            map.set(name, existing);
+          }
+          for (const n of names) existing.add(n);
+          if (strippedName && strippedName !== name) {
+            let strippedExisting = map.get(strippedName);
+            if (!strippedExisting) {
+              strippedExisting = new Set();
+              map.set(strippedName, strippedExisting);
+            }
+            for (const n of names) strippedExisting.add(n);
+          }
+        }
+      }
+      aliasCache.set(registry, map);
+    }
+
+    const stripped = trimmed.replace(/^opencode-provider-/, '').replace(/-options$/, '');
+    const matched = map.get(trimmed) || (stripped ? map.get(stripped) : null);
+    if (matched) {
+      const set = new Set(matched);
+      set.add(trimmed);
+      if (stripped) set.add(stripped);
+      return [...set];
+    }
+  }
+
+  const set = new Set();
+  set.add(trimmed);
+  const stripped = trimmed.replace(/^opencode-provider-/, '').replace(/-options$/, '');
+  if (stripped) {
+    set.add(stripped);
+  }
+  return [...set];
+}
+
 /** The source with this id, or null. Retired ids resolve to null by design. */
 function getSource(id, registry) {
+  if (!registry) return null;
   return bySource(registry).get(String(id)) || null;
 }
 
 function isRetired(id, registry) {
-  return (registry.retired || []).some((r) => r.id === String(id));
+  if (!registry || !Array.isArray(registry.retired)) return false;
+  return registry.retired.some((r) => r.id === String(id));
 }
 
 /**
@@ -402,10 +486,81 @@ function getDispatchConfig(registry, options = {}) {
     }
     return value;
   };
+  const isExplicitFixture = Boolean(
+    registry &&
+    ((registry.file && registry.file !== DEFAULT_PATH) ||
+      (dispatch && 'hermesOrchestrator' in dispatch && !dispatch.hermesOrchestrator) ||
+      registry.isFixture)
+  );
+
+  const hermesOrchRaw =
+    options.hermesOrchestrator !== undefined
+      ? options.hermesOrchestrator
+      : dispatch.hermesOrchestrator !== undefined
+        ? dispatch.hermesOrchestrator
+        : isExplicitFixture
+          ? undefined
+          : defaults.hermesOrchestrator;
+
+  let hermesOrchestrator = undefined;
+  if (hermesOrchRaw) {
+    if (typeof hermesOrchRaw !== 'object') {
+      throw new Error('DISPATCH_CONFIG_INVALID: hermesOrchestrator must be an object');
+    }
+    const qualityFloor = Number(hermesOrchRaw.qualityFloor);
+    if (!Number.isFinite(qualityFloor) || qualityFloor < 0 || qualityFloor > 100) {
+      throw new Error(
+        'DISPATCH_CONFIG_INVALID: hermesOrchestrator.qualityFloor must be a number between 0 and 100'
+      );
+    }
+    const costCeiling = Number(hermesOrchRaw.costCeiling);
+    if (!Number.isFinite(costCeiling) || costCeiling <= 0) {
+      throw new Error(
+        'DISPATCH_CONFIG_INVALID: hermesOrchestrator.costCeiling must be a positive number'
+      );
+    }
+    if (typeof hermesOrchRaw.weightProfile !== 'string' || !hermesOrchRaw.weightProfile) {
+      throw new Error(
+        'DISPATCH_CONFIG_INVALID: hermesOrchestrator.weightProfile must be a non-empty string'
+      );
+    }
+    if (typeof hermesOrchRaw.complexity !== 'string' || !hermesOrchRaw.complexity) {
+      throw new Error(
+        'DISPATCH_CONFIG_INVALID: hermesOrchestrator.complexity must be a non-empty string'
+      );
+    }
+    const maxProbes = Number(hermesOrchRaw.maxProbes);
+    if (!Number.isSafeInteger(maxProbes) || maxProbes <= 0) {
+      throw new Error(
+        'DISPATCH_CONFIG_INVALID: hermesOrchestrator.maxProbes must be a positive integer'
+      );
+    }
+    const maxRoutesPerAccount = Number(hermesOrchRaw.maxRoutesPerAccount);
+    if (!Number.isSafeInteger(maxRoutesPerAccount) || maxRoutesPerAccount <= 0) {
+      throw new Error(
+        'DISPATCH_CONFIG_INVALID: hermesOrchestrator.maxRoutesPerAccount must be a positive integer'
+      );
+    }
+    hermesOrchestrator = {
+      qualityFloor,
+      costCeiling,
+      weightProfile: hermesOrchRaw.weightProfile,
+      complexity: hermesOrchRaw.complexity,
+      maxProbes,
+      maxRoutesPerAccount,
+    };
+  }
+
+  if (options.requireHermesOrchestrator && !hermesOrchestrator) {
+    throw new Error('CONFIG_MISSING: dispatch.hermesOrchestrator is required');
+  }
+
   return {
+    ...(hermesOrchestrator ? { hermesOrchestrator } : {}),
     routeEvidenceMaxAgeMs,
     maxWriterSelectionRounds: configuredLimit('maxWriterSelectionRounds'),
     maxLocalWriterFallbacks: configuredNonNegativeLimit('maxLocalWriterFallbacks'),
+    maxHermesProbes: configuredLimit('maxHermesProbes'),
     maxItemDurationMs: configuredLimit('maxItemDurationMs'),
     probeBudgetMs,
     maxConcurrentProbes,
@@ -421,6 +576,8 @@ function getDispatchConfig(registry, options = {}) {
       Number(options.quotaBlockTtlMs ?? dispatch.quotaBlockTtlMs) > 0
         ? Number(options.quotaBlockTtlMs ?? dispatch.quotaBlockTtlMs)
         : configuredLimit('quotaBlockTtlMin') * 60 * 1000,
+    blockedNoRouteTimeoutMs: configuredLimit('blockedNoRouteTimeoutMs'),
+    blockedNoRoutePollIntervalMs: configuredLimit('blockedNoRoutePollIntervalMs'),
     maxPromptCommandOutputChars: configuredLimit('maxPromptCommandOutputChars'),
     maxReviewDiffChars:
       options.maxReviewDiffChars !== undefined || dispatch.maxReviewDiffChars !== undefined
@@ -533,6 +690,8 @@ module.exports = {
   DEFAULT_PATH,
   loadSources,
   getSource,
+  getSourceAliases,
+  expandSourceAliases: getSourceAliases,
   isRetired,
   isDeferred,
   refuseReason,

@@ -2,10 +2,24 @@
   "version": 2,
   "updatedAt": "2026-10-03",
   "note": "Adding a source is an entry here plus a qualification probe. Nothing in the dispatch path may branch on a source id.",
+  "effortVariants": [
+    "thinking",
+    "agentic",
+    "high",
+    "medium",
+    "low",
+    "minimal",
+    "max",
+    "xhigh",
+    "none",
+    "reasoning",
+    "non-reasoning"
+  ],
   "sources": [
     {
       "id": "9router",
       "label": "9Router",
+      "aliases": ["ninerouter"],
       "kind": "router",
       "servesModels": true,
       "harness": "paseo",
@@ -80,6 +94,7 @@
     {
       "id": "thegrid",
       "label": "TheGrid",
+      "aliases": ["the-grid-ai"],
       "kind": "model-source",
       "servesModels": true,
       "harness": "direct-http",
@@ -275,6 +290,7 @@
     {
       "id": "tencent",
       "label": "Tencent",
+      "aliases": ["tencent-tokenhub"],
       "kind": "model-source",
       "servesModels": true,
       "endpoint": "https://tokenhub-intl.tencentcloudmaas.com/v1",
@@ -289,6 +305,7 @@
     {
       "id": "rqsty",
       "label": "Requesty",
+      "aliases": ["requesty"],
       "kind": "router",
       "servesModels": true,
       "harness": "paseo",
@@ -304,6 +321,7 @@
     {
       "id": "thb",
       "label": "TokenHarbor",
+      "aliases": ["tokenharbor"],
       "kind": "router",
       "servesModels": true,
       "harness": "paseo",
@@ -441,6 +459,7 @@
     {
       "id": "regolo",
       "label": "Regolo",
+      "aliases": ["regolo-ai"],
       "kind": "model-source",
       "servesModels": true,
       "endpoint": "https://api.regolo.ai/v1",
@@ -485,12 +504,21 @@
     }
   ],
   "dispatch": {
+    "hermesOrchestrator": {
+      "qualityFloor": 60,
+      "costCeiling": 100000,
+      "weightProfile": "QUALITY_FIRST",
+      "complexity": "standard",
+      "maxProbes": 16,
+      "maxRoutesPerAccount": 3
+    },
     "routeEvidenceMaxAgeMs": 86400000,
     "maxWriterSelectionRounds": 12,
     "maxLocalWriterFallbacks": 3,
     "maxItemDurationMs": 3600000,
     "probeBudgetMs": 180000,
     "maxConcurrentProbes": 8,
+    "maxHermesProbes": 16,
     "probeTimeoutMs": 8000,
     "gitConfigCheckTimeoutMs": 15000,
     "probeSafetyMarginMs": 2000,
@@ -500,6 +528,8 @@
     "quotaScanIntervalMin": 60,
     "quotaBlockTtlMin": 60,
     "quotaScanMaxTokens": 1,
+    "blockedNoRouteTimeoutMs": 3600000,
+    "blockedNoRoutePollIntervalMs": 30000,
     "maxPromptCommandOutputChars": 4000,
     "maxHostGateSummaryChars": 500,
     "rateLimitCooldownMs": 300000,

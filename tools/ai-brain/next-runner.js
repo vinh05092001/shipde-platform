@@ -32,10 +32,7 @@ const intakeApi = require('./intake');
 const sourcesApi = require('./sources');
 
 function defaultSleep(ms) {
-  return new Promise((resolve) => {
-    const t = setTimeout(resolve, ms);
-    if (t && typeof t.unref === 'function') t.unref();
-  });
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function loadConfig(rootDir) {
@@ -816,10 +813,7 @@ async function executeIntakeForItem(item, options, deps, logOpts) {
   const opts = options || {};
   const d = deps || {};
   const runIntakeFn = d.runIntake || intakeApi.runIntake;
-  const intakeDeps = Object.assign(
-    { root: opts.rootDir || d.root || d.rootDir },
-    d.intakeDeps || {}
-  );
+  const intakeDeps = d.intakeDeps || {};
 
   try {
     const intakeResult = await runIntakeFn(
@@ -891,15 +885,22 @@ async function executeIntakeForItem(item, options, deps, logOpts) {
         (entry) => entry.workItemId === item.work_item_id
       );
       if (
-        checkpointData.status === 'BLOCKED_NO_ROUTE' ||
-        (itemOutcome &&
-          (itemOutcome.status === 'BLOCKED_NO_ROUTE' ||
-            itemOutcome.reasonCode === 'BLOCKED_NO_ROUTE'))
+        itemOutcome &&
+        (itemOutcome.status === 'BLOCKED_NO_ROUTE' || itemOutcome.reasonCode === 'BLOCKED_NO_ROUTE')
       ) {
         isBlockedNoRoute = true;
-        if (itemOutcome && Array.isArray(itemOutcome.triedRoutes)) {
+        if (Array.isArray(itemOutcome.triedRoutes)) {
           triedRoutes = itemOutcome.triedRoutes;
-        } else if (checkpointData.triedRoutes && Array.isArray(checkpointData.triedRoutes)) {
+        } else if (Array.isArray(checkpointData.triedRoutes)) {
+          triedRoutes = checkpointData.triedRoutes;
+        }
+      } else if (
+        !itemOutcome &&
+        checkpointData.status === 'BLOCKED_NO_ROUTE' &&
+        checkpointData.workItemId === item.work_item_id
+      ) {
+        isBlockedNoRoute = true;
+        if (Array.isArray(checkpointData.triedRoutes)) {
           triedRoutes = checkpointData.triedRoutes;
         }
       }
@@ -908,61 +909,54 @@ async function executeIntakeForItem(item, options, deps, logOpts) {
     if (!isBlockedNoRoute) {
       if (
         intakeResult &&
+        (intakeResult.workItemId === undefined || intakeResult.workItemId === item.work_item_id) &&
         (intakeResult.status === 'BLOCKED_NO_ROUTE' ||
           intakeResult.reasonCode === 'BLOCKED_NO_ROUTE' ||
-          intakeResult.isBlockedNoRoute)
+          intakeResult.isBlockedNoRoute === true)
       ) {
         isBlockedNoRoute = true;
-        if (Array.isArray(intakeResult.triedRoutes)) {
-          triedRoutes = intakeResult.triedRoutes;
-        }
-      } else if (
-        /BLOCKED_NO_ROUTE/.test(String(reason || '')) ||
-        /NO_ELIGIBLE_CANDIDATE/.test(String(reason || ''))
-      ) {
-        isBlockedNoRoute = true;
+        triedRoutes = Array.isArray(intakeResult.triedRoutes) ? intakeResult.triedRoutes : [];
       }
     }
 
-    const finalOutcome = isBlockedNoRoute ? 'blocked_no_route' : outcome;
-
     const stage = isBlockedNoRoute
       ? decisions.Stage.COOLED
-      : finalOutcome === 'completed' || finalOutcome === 'published'
+      : outcome === 'completed' || outcome === 'published'
         ? decisions.Stage.COMPLETED
-        : finalOutcome === 'refused'
+        : outcome === 'refused'
           ? decisions.Stage.REFUSED
           : decisions.Stage.FAILED;
+
+    const statusReason = isBlockedNoRoute
+      ? 'BLOCKED_NO_ROUTE: no available routes for work item'
+      : reason;
 
     decisions.recordDecision(
       {
         stage,
         workItemId: item.work_item_id,
-        outcome: finalOutcome,
+        outcome: isBlockedNoRoute ? 'blocked_no_route' : outcome,
         exitCode,
-        detail: isBlockedNoRoute ? reason || 'BLOCKED_NO_ROUTE' : reason || undefined,
+        detail: statusReason || undefined,
         stderrTail: stderrTail || undefined,
-        triedRoutes: triedRoutes.length > 0 ? triedRoutes : undefined,
+        triedRoutes: isBlockedNoRoute ? triedRoutes : undefined,
       },
       logOpts
     );
 
     return {
-      success: exitCode === 0 && (finalOutcome === 'completed' || finalOutcome === 'published'),
-      outcome: finalOutcome,
+      success:
+        !isBlockedNoRoute && exitCode === 0 && (outcome === 'completed' || outcome === 'published'),
+      outcome: isBlockedNoRoute ? 'blocked_no_route' : outcome,
       exitCode,
       intakeResult,
-      reason: reason || (isBlockedNoRoute ? 'BLOCKED_NO_ROUTE' : null),
+      reason: statusReason || null,
       stderrTail,
       isBlockedNoRoute,
       triedRoutes,
     };
   } catch (err) {
-    const isNoRoute =
-      err &&
-      (err.code === 'BLOCKED_NO_ROUTE' ||
-        err.code === 'NO_ELIGIBLE_CANDIDATE' ||
-        /BLOCKED_NO_ROUTE|NO_ELIGIBLE_CANDIDATE/.test(String(err.message || '')));
+    const isNoRoute = err && (err.code === 'BLOCKED_NO_ROUTE' || err.isBlockedNoRoute === true);
     const isRefusal =
       !isNoRoute &&
       err &&
@@ -985,9 +979,9 @@ async function executeIntakeForItem(item, options, deps, logOpts) {
         stage,
         workItemId: item.work_item_id,
         outcome,
+        exitCode: 1,
         detail: reason,
-        code: err && err.code,
-        triedRoutes: (err && err.triedRoutes) || undefined,
+        triedRoutes: isNoRoute && Array.isArray(err.triedRoutes) ? err.triedRoutes : undefined,
       },
       logOpts
     );
@@ -998,8 +992,8 @@ async function executeIntakeForItem(item, options, deps, logOpts) {
       exitCode: 1,
       error: err,
       reason,
-      isBlockedNoRoute: isNoRoute,
-      triedRoutes: (err && err.triedRoutes) || [],
+      isBlockedNoRoute: Boolean(isNoRoute),
+      triedRoutes: isNoRoute && Array.isArray(err.triedRoutes) ? err.triedRoutes : [],
     };
   }
 }
@@ -1014,36 +1008,33 @@ async function nextLoop(options, deps) {
   const maxIterations = opts.maxIterations !== undefined ? Number(opts.maxIterations) : Infinity;
   const pollIntervalMs = getPollingInterval(opts, d);
   const terminalWorkItems = opts.terminalWorkItems || d.terminalWorkItems || new Map();
-  const noRouteWaitTracker = opts.noRouteWaitTracker || d.noRouteWaitTracker || new Map();
-
   const dispatchConfig =
-    (sourcesApi &&
-      sourcesApi.getDispatchConfig &&
-      sourcesApi.getDispatchConfig(opts.registry || d.registry, opts)) ||
+    (d && d.dispatchConfig) ||
+    (sourcesApi.getDispatchConfig
+      ? sourcesApi.getDispatchConfig(d.registry || opts.registry, opts)
+      : {}) ||
     {};
-  const blockedNoRouteTimeoutMs =
-    opts.blockedNoRouteTimeoutMs !== undefined
-      ? Number(opts.blockedNoRouteTimeoutMs)
-      : d.blockedNoRouteTimeoutMs !== undefined
-        ? Number(d.blockedNoRouteTimeoutMs)
-        : Number(dispatchConfig.blockedNoRouteTimeoutMs);
-  const blockedNoRoutePollIntervalMs =
-    opts.blockedNoRoutePollIntervalMs !== undefined
-      ? Number(opts.blockedNoRoutePollIntervalMs)
-      : d.blockedNoRoutePollIntervalMs !== undefined
-        ? Number(d.blockedNoRoutePollIntervalMs)
-        : Number(dispatchConfig.blockedNoRoutePollIntervalMs);
+  const rawTimeout =
+    opts.blockedNoRouteTimeoutMs ??
+    d.blockedNoRouteTimeoutMs ??
+    dispatchConfig.blockedNoRouteTimeoutMs;
+  const blockedNoRouteTimeoutMs = Number(rawTimeout);
+  if (!Number.isSafeInteger(blockedNoRouteTimeoutMs) || blockedNoRouteTimeoutMs <= 0) {
+    throw new Error('DISPATCH_CONFIG_INVALID: blockedNoRouteTimeoutMs must be a positive integer');
+  }
 
-  if (
-    !Number.isFinite(blockedNoRouteTimeoutMs) ||
-    blockedNoRouteTimeoutMs <= 0 ||
-    !Number.isFinite(blockedNoRoutePollIntervalMs) ||
-    blockedNoRoutePollIntervalMs <= 0
-  ) {
+  const rawPollInterval =
+    opts.blockedNoRoutePollIntervalMs ??
+    d.blockedNoRoutePollIntervalMs ??
+    dispatchConfig.blockedNoRoutePollIntervalMs;
+  const blockedNoRoutePollIntervalMs = Number(rawPollInterval);
+  if (!Number.isSafeInteger(blockedNoRoutePollIntervalMs) || blockedNoRoutePollIntervalMs <= 0) {
     throw new Error(
-      'INVALID_DISPATCH_CONFIG: blockedNoRouteTimeoutMs and blockedNoRoutePollIntervalMs must be positive numbers'
+      'DISPATCH_CONFIG_INVALID: blockedNoRoutePollIntervalMs must be a positive integer'
     );
   }
+
+  const noRouteWaitTracker = new Map();
 
   let iteration = 0;
   while (iteration < maxIterations) {
@@ -1133,7 +1124,7 @@ async function nextLoop(options, deps) {
       const planningPromise = planning.planWorkItem(
         planningItem.work_item_id,
         { rootDir, run: true },
-        planningDepsFor(d, opts, rootDir)
+        d.planningDeps || d
       );
       const authorItem = findResult.item;
       if (authorItem && authorItem !== planningItem) {
@@ -1181,7 +1172,7 @@ async function nextLoop(options, deps) {
         const planned = await planning.planWorkItem(
           item.work_item_id,
           { rootDir, run: true, reviewExisting: fs.existsSync(workItemPath) },
-          planningDepsFor(d, opts, rootDir)
+          d.planningDeps || d
         );
         const governed =
           planned &&
@@ -1347,7 +1338,7 @@ async function nextLoop(options, deps) {
       }
 
       // 4. Check ceiling
-      const ceilingStatus = checkCeiling(opts, d);
+      const ceilingStatus = checkCeiling({ ...opts, now }, d);
       if (!ceilingStatus.allowed) {
         decisions.recordDecision(
           {
@@ -1508,7 +1499,10 @@ async function nextLoop(options, deps) {
         } catch (_) {}
 
         await sleepFn(blockedNoRoutePollIntervalMs);
-        if (iteration >= maxIterations) {
+        if (opts.workItem || opts['work-item']) {
+          if (iteration < maxIterations) {
+            continue;
+          }
           return {
             stopped: true,
             reason: 'BLOCKED_NO_ROUTE',
@@ -1574,7 +1568,12 @@ async function nextLoop(options, deps) {
 async function runNext(options, deps) {
   const opts = options || {};
   const d = deps || {};
-  const rootDir = path.resolve(opts.rootDir || process.cwd());
+  const rootDir = path.resolve(
+    opts.rootDir ||
+      (d && d.rootDir) ||
+      (opts.registerPath && path.dirname(opts.registerPath)) ||
+      process.cwd()
+  );
   const log = d.log || console.log;
   const now = typeof d.now === 'function' ? d.now() : d.now || opts.now || Date.now();
   const logOpts = { dir: opts.decisionDir || d.decisionDir || decisions.DEFAULT_DIR, now };
@@ -1707,26 +1706,6 @@ async function runNext(options, deps) {
   };
 }
 
-/**
- * Planning dependencies for the governed planning lane. Injected dependencies
- * (tests, embedding callers) win; otherwise the real services are built from the
- * Controller's own machinery so an unattended loop does not stop at the first plan.
- */
-function planningDepsFor(d, opts, rootDir) {
-  if (d && d.planningDeps) return d.planningDeps;
-  if (d && typeof d.runPlanning === 'function') return d;
-  if (d && (d.items || d.openWritersDetailed) && !opts?.externalWorkers && !d.externalWorkers)
-    return d;
-  const planning = require('./work-item-planner');
-  return planning.defaultPlanningDeps(
-    rootDir,
-    Object.assign({}, d || {}, {
-      externalWorkers: (opts && (opts.externalWorkers || opts['external-workers'])) || undefined,
-      decisionDir: (opts && opts.decisionDir) || undefined,
-    })
-  );
-}
-
 function nextCommand(args, deps) {
   const rootDir = args.root || process.cwd();
   const registerArg = args.register || args.csv;
@@ -1778,5 +1757,4 @@ module.exports = {
   collectAllDecisionRecords,
   getOpenRuns,
   isOpenRun,
-  planningDepsFor,
 };
