@@ -91,6 +91,12 @@ describe('FEAT-COM-01: Global Search Unit Test Suite', () => {
       assert.strictEqual(maskQueryPii('0901234567'), '090****567');
       assert.strictEqual(maskQueryPii('+84901234567'), '+84****567');
       assert.strictEqual(maskQueryPii('tìm SĐT 0912345678 ngay'), 'tìm SĐT 091****678 ngay');
+      assert.strictEqual(maskQueryPii('090 123 4567'), '090****567');
+      assert.strictEqual(maskQueryPii('090-123-4567'), '090****567');
+      assert.strictEqual(
+        maskQueryPii('user@example.com call 090 123 4567'),
+        'u**r@example.com call 090****567'
+      );
     });
 
     it('should mask email addresses in search query for audit logs', () => {
@@ -121,6 +127,7 @@ describe('FEAT-COM-01: Global Search Unit Test Suite', () => {
       exceptionCases?: any[];
       claims?: any[];
       discrepancies?: any[];
+      users?: any[];
     }) {
       const auditLogs: any[] = [];
       const queriesRecorded: Record<string, any[]> = {
@@ -132,15 +139,45 @@ describe('FEAT-COM-01: Global Search Unit Test Suite', () => {
         discrepancy: [],
       };
 
+      const matchesScope = (row: any, predicate: any): boolean => {
+        if (predicate.AND) return predicate.AND.every((part: any) => matchesScope(row, part));
+        if (predicate.OR) return predicate.OR.some((part: any) => matchesScope(row, part));
+        return Object.entries(predicate).every(([key, value]: [string, any]) => {
+          const actual = row[key] ?? null;
+          if (value === null) return actual === null;
+          if ('not' in value) return actual !== value.not;
+          return value.in.includes(actual);
+        });
+      };
+      const visible = (row: any, where: any) =>
+        row.merchant_id === where.merchant_id &&
+        (!where.AND || where.AND.every((part: any) => matchesScope(row, part)));
+
       return {
         auditLogs,
         queriesRecorded,
         prisma: {
+          user: {
+            findFirst: async ({ where }: any) => {
+              if (fixtures.users) {
+                const found = fixtures.users.find((u) => u.id === where.id);
+                if (found) return { status: 'active', ...found };
+                return null;
+              }
+              return {
+                id: where.id,
+                role: 'OWNER',
+                status: 'active',
+                store_scopes: ['*'],
+                warehouse_scopes: ['*'],
+              };
+            },
+          },
           order: {
             findMany: async (args: any) => {
               queriesRecorded.order.push(args);
               return (fixtures.orders || []).filter(
-                (o) => o.merchant_id === args.where.merchant_id
+                (o) => visible(o, args.where)
               );
             },
           },
@@ -148,7 +185,7 @@ describe('FEAT-COM-01: Global Search Unit Test Suite', () => {
             findMany: async (args: any) => {
               queriesRecorded.shipment.push(args);
               return (fixtures.shipments || []).filter(
-                (s) => s.merchant_id === args.where.merchant_id
+                (s) => visible(s, args.where)
               );
             },
           },
@@ -156,7 +193,7 @@ describe('FEAT-COM-01: Global Search Unit Test Suite', () => {
             findMany: async (args: any) => {
               queriesRecorded.carrierStatement.push(args);
               return (fixtures.carrierStatements || []).filter(
-                (b) => b.merchant_id === args.where.merchant_id
+                (b) => visible(b, args.where)
               );
             },
           },
@@ -164,7 +201,7 @@ describe('FEAT-COM-01: Global Search Unit Test Suite', () => {
             findMany: async (args: any) => {
               queriesRecorded.exceptionCase.push(args);
               return (fixtures.exceptionCases || []).filter(
-                (e) => e.merchant_id === args.where.merchant_id
+                (e) => visible(e, args.where)
               );
             },
           },
@@ -172,7 +209,7 @@ describe('FEAT-COM-01: Global Search Unit Test Suite', () => {
             findMany: async (args: any) => {
               queriesRecorded.claim.push(args);
               return (fixtures.claims || []).filter(
-                (c) => c.merchant_id === args.where.merchant_id
+                (c) => visible(c, args.where)
               );
             },
           },
@@ -180,7 +217,7 @@ describe('FEAT-COM-01: Global Search Unit Test Suite', () => {
             findMany: async (args: any) => {
               queriesRecorded.discrepancy.push(args);
               return (fixtures.discrepancies || []).filter(
-                (d) => d.merchant_id === args.where.merchant_id
+                (d) => visible(d, args.where)
               );
             },
           },
@@ -558,6 +595,178 @@ describe('FEAT-COM-01: Global Search Unit Test Suite', () => {
       // Plaintext phone number must be masked in audit log
       assert.strictEqual(log.new_value.query, '090****567');
       assert.strictEqual(log.new_value.total_results, 1);
+    });
+
+    it('AC-COM-01-27: should apply branch scope predicate when user has store_scopes', async () => {
+      const mock = createMockPrismaService({
+        users: [
+          {
+            id: 'usr-branch-north',
+            role: 'OPS_CSKH',
+            store_scopes: ['branch-north-1'],
+            warehouse_scopes: [],
+          },
+        ],
+        orders: [
+          {
+            id: 'ord-1',
+            merchant_id: TENANT_A,
+            branch_id: 'branch-north-1',
+            order_code: 'ORD-NORTH',
+            recipient_name: 'Khách Bắc',
+            recipient_phone: '0901234567',
+            source_type: 'pancake',
+          },
+          {
+            id: 'ord-2',
+            merchant_id: TENANT_A,
+            branch_id: 'branch-south-2',
+            order_code: 'ORD-SOUTH',
+            recipient_name: 'Khách Nam',
+            recipient_phone: '0909876543',
+            source_type: 'pancake',
+          },
+        ],
+      });
+      const rbac = createMockRbacService(['order:view_create']);
+      const service = new SearchService(mock.prisma, rbac);
+
+      const actorBranchScoped: ActorContext = {
+        userId: 'usr-branch-north',
+        merchantId: TENANT_A,
+        role: 'OPS_CSKH',
+      };
+
+      await service.search(
+        actorBranchScoped,
+        { q: 'ORD', type: 'ORDER' },
+        '127.0.0.1',
+        'corr-branch'
+      );
+
+      const queryArg = mock.queriesRecorded.order[0];
+      assert.ok(queryArg.where.AND, 'Query where clause must include AND predicate for scope');
+      assert.deepStrictEqual(queryArg.where.AND[0].AND[1], { OR: [{ branch_id: null }, { branch_id: { in: ['branch-north-1'] } }] });
+    });
+
+    it('AC-COM-01-28: should apply warehouse scope predicate when user has warehouse_scopes', async () => {
+      const mock = createMockPrismaService({
+        users: [
+          {
+            id: 'usr-wh-north',
+            role: 'WAREHOUSE',
+            store_scopes: [],
+            warehouse_scopes: ['wh-north-1'],
+          },
+        ],
+        shipments: [
+          {
+            id: 'ship-1',
+            merchant_id: TENANT_A,
+            warehouse_id: 'wh-north-1',
+            tracking_code: 'GHNNORTH',
+            order_code: 'ORD-1',
+            carrier_code: 'GHN',
+            current_status: 'IN_TRANSIT',
+          },
+        ],
+      });
+      const rbac = createMockRbacService(['shipment:track_exceptions']);
+      const service = new SearchService(mock.prisma, rbac);
+
+      const actorWhScoped: ActorContext = {
+        userId: 'usr-wh-north',
+        merchantId: TENANT_A,
+        role: 'WAREHOUSE',
+      };
+
+      await service.search(actorWhScoped, { q: 'GHN', type: 'WAYBILL' }, '127.0.0.1', 'corr-wh');
+
+      const queryArg = mock.queriesRecorded.shipment[0];
+      assert.ok(
+        queryArg.where.AND,
+        'Query where clause must include AND predicate for warehouse scope'
+      );
+      assert.deepStrictEqual(queryArg.where.AND[0].AND[2], { OR: [{ warehouse_id: null }, { warehouse_id: { in: ['wh-north-1'] } }] });
+    });
+
+    it('AC-COM-01-29: should return empty scope predicate when non-owner has empty scopes', async () => {
+      const mock = createMockPrismaService({
+        users: [
+          {
+            id: 'usr-empty-scopes',
+            role: 'OPS_CSKH',
+            store_scopes: [],
+            warehouse_scopes: [],
+          },
+        ],
+        orders: [],
+      });
+      const rbac = createMockRbacService(['order:view_create']);
+      const service = new SearchService(mock.prisma, rbac);
+
+      const actorEmptyScoped: ActorContext = {
+        userId: 'usr-empty-scopes',
+        merchantId: TENANT_A,
+        role: 'OPS_CSKH',
+      };
+
+      await service.search(
+        actorEmptyScoped,
+        { q: 'ORD', type: 'ORDER' },
+        '127.0.0.1',
+        'corr-empty'
+      );
+
+      const queryArg = mock.queriesRecorded.order[0];
+      assert.ok(
+        queryArg.where.AND,
+        'Query where clause must block access when user has empty scopes'
+      );
+      assert.deepStrictEqual(queryArg.where.AND[0].AND[1], { OR: [{ branch_id: null }, { branch_id: { in: [] } }] });
+    });
+
+    it('filters every entity and requires both assigned dimensions to match', async () => {
+      const makeRows = (extra: any) => [
+        { ...extra, id: 'allowed', merchant_id: TENANT_A, branch_id: 'north', warehouse_id: 'wh-a' },
+        { ...extra, id: 'wrong-warehouse', merchant_id: TENANT_A, branch_id: 'north', warehouse_id: 'wh-b' },
+        { ...extra, id: 'wrong-branch', merchant_id: TENANT_A, branch_id: 'south', warehouse_id: 'wh-a' },
+        { ...extra, id: 'unknown', merchant_id: TENANT_A },
+        { ...extra, id: 'other-tenant', merchant_id: TENANT_B, branch_id: 'north', warehouse_id: 'wh-a' },
+      ];
+      const mock = createMockPrismaService({
+        users: [{ id: 'scoped', role: 'OPS_CSKH', store_scopes: ['north'], warehouse_scopes: ['wh-a'] }],
+        orders: makeRows({ order_code: 'ORD', recipient_name: 'Name', recipient_phone: '0901234567' }),
+        shipments: makeRows({ tracking_code: 'TRACK', order_code: 'ORD', carrier_code: 'GHN', current_status: 'IN_TRANSIT' }),
+        carrierStatements: makeRows({ checksum: 'CHECK', status: 'OPEN', period_start: new Date(), period_end: new Date() }),
+        exceptionCases: makeRows({ tracking_code: 'TRACK', exception_type: 'OTHER', status: 'OPEN' }),
+        claims: makeRows({ carrier_ticket: 'TICKET', claim_type: 'LOST', status: 'OPEN' }),
+        discrepancies: makeRows({ tracking_code: 'TRACK', discrepancy_type: 'OTHER', status: 'OPEN', amount: 0n }),
+      });
+      const service = new SearchService(mock.prisma, createMockRbacService([
+        'order:view_create', 'shipment:track_exceptions', 'reconciliation:view_contract_rates',
+        'reconciliation:run_review_audit', 'claim:verify_submit', 'audit:view',
+      ]));
+      const result = await service.search({ userId: 'scoped', merchantId: TENANT_A, role: 'OPS_CSKH' }, { q: 'TR', type: 'ALL' }, '127.0.0.1', 'scope');
+      assert.equal(result.data.items.length, 6);
+      assert.ok(result.data.items.every((item: any) => item.id === 'allowed'));
+    });
+
+    it('AC-COM-01-30: OWNER role bypasses scope predicate for universal tenant access', async () => {
+      const mock = createMockPrismaService({
+        orders: [],
+      });
+      const rbac = createMockRbacService(['order:view_create']);
+      const service = new SearchService(mock.prisma, rbac);
+
+      await service.search(ACTOR_OWNER_A, { q: 'ORD', type: 'ORDER' }, '127.0.0.1', 'corr-owner');
+
+      const queryArg = mock.queriesRecorded.order[0];
+      assert.strictEqual(
+        queryArg.where.AND,
+        undefined,
+        'OWNER query must not have scope AND restriction'
+      );
     });
   });
 });

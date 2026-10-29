@@ -407,6 +407,7 @@ export const GlobalSearchContent: React.FC<GlobalSearchProps> = ({
                 key={tab.id}
                 type="button"
                 data-testid={`type-filter-${tab.id}`}
+                aria-pressed={isActive}
                 onClick={() => {
                   setActiveType(tab.id);
                   if (query.trim().length >= 2) {

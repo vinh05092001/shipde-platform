@@ -101,7 +101,7 @@ async function runSearchSupertestSuite() {
           code: `ALPHA_SRCH_${testSuffix}`,
           status: 'active',
           legal_name: 'CTY CP ALPHA SEARCH',
-          tax_code: '0312345678',
+          tax_code: `03${testSuffix}`,
         },
         {
           id: merchantIdB,
@@ -109,7 +109,7 @@ async function runSearchSupertestSuite() {
           code: `BETA_SRCH_${testSuffix}`,
           status: 'active',
           legal_name: 'CTY CP BETA SEARCH',
-          tax_code: '0101234567',
+          tax_code: `01${testSuffix}`,
         },
       ],
     });
@@ -136,11 +136,12 @@ async function runSearchSupertestSuite() {
       ],
     });
 
-    // Helper to create user + session token
+    // Helper to create user + session token with optional FEAT-RBAC-02 scopes
     const setupUserSession = async (
       mId: string,
       role: RoleEnum,
-      emailSuffix: string
+      emailSuffix: string,
+      scopes?: { store_scopes?: string[]; warehouse_scopes?: string[] }
     ): Promise<{ userId: string; token: string }> => {
       const uId = randomUUID();
       const sId = randomUUID();
@@ -166,6 +167,8 @@ async function runSearchSupertestSuite() {
           password_hash: 'hashed',
           role,
           status: 'active',
+          store_scopes: scopes?.store_scopes ?? ['*'],
+          warehouse_scopes: scopes?.warehouse_scopes ?? ['*'],
         },
       });
 
@@ -184,6 +187,11 @@ async function runSearchSupertestSuite() {
       return { userId: uId, token };
     };
 
+    const branch1Id = `branch-north-${testSuffix}`;
+    const branch2Id = `branch-south-${testSuffix}`;
+    const wh1Id = `wh-north-${testSuffix}`;
+    const wh2Id = `wh-south-${testSuffix}`;
+
     const { token: ownerTokenA } = await setupUserSession(merchantIdA, RoleEnum.OWNER, 'owner_a');
     const { token: warehouseTokenA } = await setupUserSession(
       merchantIdA,
@@ -197,6 +205,26 @@ async function runSearchSupertestSuite() {
     );
     const { token: ownerTokenB } = await setupUserSession(merchantIdB, RoleEnum.OWNER, 'owner_b');
 
+    // Scoped users for FEAT-RBAC-02 testing
+    const { token: branch1ScopedToken } = await setupUserSession(
+      merchantIdA,
+      RoleEnum.OPS_CSKH,
+      'branch1_scoped',
+      { store_scopes: [branch1Id], warehouse_scopes: [] }
+    );
+    const { token: wh1ScopedToken } = await setupUserSession(
+      merchantIdA,
+      RoleEnum.WAREHOUSE,
+      'wh1_scoped',
+      { store_scopes: [], warehouse_scopes: [wh1Id] }
+    );
+    const { token: emptyScopeToken } = await setupUserSession(
+      merchantIdA,
+      RoleEnum.OPS_CSKH,
+      'empty_scoped',
+      { store_scopes: [], warehouse_scopes: [] }
+    );
+
     // Seed domain aggregates for Merchant A
     const orderCodeA = `ORD-A-${testSuffix}`;
     const orderIdA = randomUUID();
@@ -204,6 +232,7 @@ async function runSearchSupertestSuite() {
       data: {
         id: orderIdA,
         merchant_id: merchantIdA,
+        branch_id: branch1Id,
         order_code: orderCodeA,
         recipient_name: 'Nguyễn Văn Alpha',
         recipient_phone: '0901234567',
@@ -214,17 +243,54 @@ async function runSearchSupertestSuite() {
       },
     });
 
+    // Secondary order in different branch and warehouse
+    const orderCodeA2 = `ORD-A2-${testSuffix}`;
+    const orderIdA2 = randomUUID();
+    await prisma.order.create({
+      data: {
+        id: orderIdA2,
+        merchant_id: merchantIdA,
+        branch_id: branch2Id,
+        warehouse_id: wh2Id,
+        order_code: orderCodeA2,
+        recipient_name: 'Trần Văn Beta Branch',
+        recipient_phone: '0909876543',
+        recipient_province: 'Hà Nội',
+        recipient_address: '456 Phố Huế',
+        cod_amount: 300000n,
+        created_at: new Date(),
+      },
+    });
+
     const trackingCodeA = `GHN${testSuffix}A`;
     const shipmentIdA = randomUUID();
     await prisma.shipment.create({
       data: {
         id: shipmentIdA,
         merchant_id: merchantIdA,
+        warehouse_id: wh1Id,
         order_id: orderIdA,
         order_code: orderCodeA,
         carrier_code: CarrierCodeEnum.GHN,
         carrier_account_id: carrierAccountIdA,
         tracking_code: trackingCodeA,
+        current_status: ShipmentStatusEnum.IN_TRANSIT,
+      },
+    });
+
+    const trackingCodeA2 = `GHN${testSuffix}A2`;
+    const shipmentIdA2 = randomUUID();
+    await prisma.shipment.create({
+      data: {
+        id: shipmentIdA2,
+        merchant_id: merchantIdA,
+        branch_id: branch2Id,
+        warehouse_id: wh2Id,
+        order_id: orderIdA2,
+        order_code: orderCodeA2,
+        carrier_code: CarrierCodeEnum.GHN,
+        carrier_account_id: carrierAccountIdA,
+        tracking_code: trackingCodeA2,
         current_status: ShipmentStatusEnum.IN_TRANSIT,
       },
     });
@@ -479,8 +545,94 @@ async function runSearchSupertestSuite() {
     assert.strictEqual(resAlias.body.data.total, 1);
     assert.strictEqual(resAlias.body.data.items[0].code, orderCodeA);
 
-    console.log('🎉 All 15 Search Supertest Acceptance Criteria Passed Successfully!');
+    // =========================================================================
+    // AC-COM-01-27: FEAT-RBAC-02 Branch Scope: User scoped to Branch 1 only sees Branch 1 orders
+    // =========================================================================
+    const resBranchScoped = await request(server)
+      .get(`/api/v1/search?q=ORD-A&type=ORDER`)
+      .set('Authorization', `Bearer ${branch1ScopedToken}`)
+      .expect(200);
+
+    assert.strictEqual(resBranchScoped.body.success, true);
+    assert.strictEqual(resBranchScoped.body.data.total, 1);
+    assert.strictEqual(resBranchScoped.body.data.items[0].code, orderCodeA);
+
+    // =========================================================================
+    // AC-COM-01-28: FEAT-RBAC-02 Warehouse Scope: User scoped to Warehouse 1 only sees Warehouse 1 shipments
+    // =========================================================================
+    const resWhScoped = await request(server)
+      .get(`/api/v1/search?q=GHN${testSuffix}&type=WAYBILL`)
+      .set('Authorization', `Bearer ${wh1ScopedToken}`)
+      .expect(200);
+
+    assert.strictEqual(resWhScoped.body.success, true);
+    assert.strictEqual(resWhScoped.body.data.total, 1);
+    assert.strictEqual(resWhScoped.body.data.items[0].code, trackingCodeA);
+
+    // =========================================================================
+    // AC-COM-01-29: User with empty scopes receives 0 results
+    // =========================================================================
+    const resEmptyScoped = await request(server)
+      .get(`/api/v1/search?q=ORD-A&type=ORDER`)
+      .set('Authorization', `Bearer ${emptyScopeToken}`)
+      .expect(200);
+
+    assert.strictEqual(resEmptyScoped.body.success, true);
+    assert.strictEqual(resEmptyScoped.body.data.total, 0);
+    assert.strictEqual(resEmptyScoped.body.data.items.length, 0);
+
+    // =========================================================================
+    // AC-COM-01-30: Audit masking handles formatted phone numbers
+    // =========================================================================
+    await request(server)
+      .get('/api/v1/search?q=090-123-4567&type=ORDER')
+      .set('Authorization', `Bearer ${ownerTokenA}`)
+      .expect(200);
+
+    const formattedPhoneLog = await prisma.auditLog.findFirst({
+      where: {
+        merchant_id: merchantIdA,
+        action: 'GLOBAL_SEARCH_QUERY',
+      },
+      orderBy: { created_at: 'desc' },
+    });
+    assert.ok(formattedPhoneLog, 'Formatted phone audit log must exist');
+    assert.strictEqual(
+      (formattedPhoneLog.new_value as any).query,
+      '090****567',
+      'Formatted phone number must be masked in audit log'
+    );
+
+    console.log('🎉 All Search Supertest Acceptance Criteria Passed Successfully!');
   } finally {
+    try {
+      const tenantIds = [merchantIdA, merchantIdB];
+      await prisma.auditLog.deleteMany({ where: { merchant_id: { in: tenantIds } } });
+      await prisma.claim.deleteMany({ where: { merchant_id: { in: tenantIds } } });
+      await prisma.discrepancy.deleteMany({ where: { merchant_id: { in: tenantIds } } });
+      await prisma.statementRow.deleteMany({
+        where: { statement: { merchant_id: { in: tenantIds } } },
+      });
+      await prisma.carrierStatement.deleteMany({ where: { merchant_id: { in: tenantIds } } });
+      await prisma.exceptionContactLog.deleteMany({
+        where: { user: { merchant_id: { in: tenantIds } } },
+      });
+      await prisma.exceptionCase.deleteMany({ where: { merchant_id: { in: tenantIds } } });
+      await prisma.shipmentEvent.deleteMany({
+        where: { shipment: { merchant_id: { in: tenantIds } } },
+      });
+      await prisma.returnRecord.deleteMany({ where: { merchant_id: { in: tenantIds } } });
+      await prisma.shipment.deleteMany({ where: { merchant_id: { in: tenantIds } } });
+      await prisma.order.deleteMany({ where: { merchant_id: { in: tenantIds } } });
+      await prisma.carrierAccount.deleteMany({ where: { merchant_id: { in: tenantIds } } });
+      await prisma.deviceSession.deleteMany({
+        where: { user: { merchant_id: { in: tenantIds } } },
+      });
+      await prisma.user.deleteMany({ where: { merchant_id: { in: tenantIds } } });
+      await prisma.merchant.deleteMany({ where: { id: { in: tenantIds } } });
+    } catch (cleanupErr) {
+      console.warn('⚠️ Search Supertest cleanup warning:', cleanupErr);
+    }
     await app.close();
   }
 }

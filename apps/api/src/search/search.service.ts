@@ -6,16 +6,29 @@ import { CanonicalApiException } from '../auth/auth.service';
 import type { ActorContext } from '../rbac/rbac.dto';
 import { SearchQueryDto, validateSearchQueryDto, ParsedSearchQuery } from './search.dto';
 import { SearchEntityType, SearchResultItem, SearchResponse } from '@shipde/contracts';
+import { isActiveStatus } from '@shipde/contracts';
 import { maskIdentifier } from '../invitations/invitations.service';
 
 export function maskQueryPii(query: string): string {
   if (!query) return '';
-  if (query.includes('@')) {
-    return maskIdentifier(query);
-  }
-  // Vietnamese phone numbers: 03x, 05x, 07x, 08x, 09x or +84
-  const phonePattern = /(?:\+84|0)[35789]\d{8}\b/g;
-  return query.replace(phonePattern, (match) => maskIdentifier(match));
+  // 1. Mask email addresses wherever they appear in the query
+  const emailPattern = /[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+/g;
+  let masked = query.replace(emailPattern, (match) => maskIdentifier(match));
+
+  // 2. Vietnamese phone numbers: contiguous or formatted with spaces/dots/hyphens (e.g. 090 123 4567, 090-123-4567, +84 90 123 4567)
+  const phonePattern = /(?:\+84|0)[35789](?:[\s.-]?\d){8}\b/g;
+  masked = masked.replace(phonePattern, (match) => {
+    const digitsOnly = match.replace(/[\s.-]/g, '');
+    return maskIdentifier(digitsOnly);
+  });
+
+  return masked;
+}
+
+export interface ActorScopeFilter {
+  hasUniversalAccess: boolean;
+  storeScopes: string[];
+  warehouseScopes: string[];
 }
 
 export function formatVnd(amount: bigint | number | null | undefined): string {
@@ -35,6 +48,54 @@ export class SearchService {
     return createHash('sha256')
       .update(ip || '127.0.0.1')
       .digest('hex');
+  }
+
+  async resolveActorScopes(actor: ActorContext): Promise<ActorScopeFilter> {
+    if (!actor.userId || !actor.merchantId) {
+      return { hasUniversalAccess: false, storeScopes: [], warehouseScopes: [] };
+    }
+
+    const user = await this.prisma.user.findFirst({
+      where: { id: actor.userId, merchant_id: actor.merchantId },
+      select: { role: true, status: true, store_scopes: true, warehouse_scopes: true },
+    });
+
+    if (!user || !isActiveStatus(user.status)) {
+      return { hasUniversalAccess: false, storeScopes: [], warehouseScopes: [] };
+    }
+
+    if (user.role === 'OWNER') {
+      return { hasUniversalAccess: true, storeScopes: [], warehouseScopes: [] };
+    }
+
+    const storeScopes = user.store_scopes || [];
+    const warehouseScopes = user.warehouse_scopes || [];
+
+    return {
+      hasUniversalAccess: false,
+      storeScopes,
+      warehouseScopes,
+    };
+  }
+
+  buildScopePredicate(scopes: ActorScopeFilter): Record<string, any> | null {
+    if (scopes.hasUniversalAccess) {
+      return null;
+    }
+
+    // Every present resource dimension must be authorized. Unknown dimensions
+    // cannot establish access, even when a user has a wildcard in one domain.
+    return {
+      AND: [
+        { OR: [{ branch_id: { not: null } }, { warehouse_id: { not: null } }] },
+        ...(scopes.storeScopes.includes('*')
+          ? []
+          : [{ OR: [{ branch_id: null }, { branch_id: { in: scopes.storeScopes } }] }]),
+        ...(scopes.warehouseScopes.includes('*')
+          ? []
+          : [{ OR: [{ warehouse_id: null }, { warehouse_id: { in: scopes.warehouseScopes } }] }]),
+      ],
+    };
   }
 
   async search(
@@ -86,6 +147,10 @@ export class SearchService {
       );
     }
 
+    // Resolve FEAT-RBAC-02 branch and warehouse scopes server-side
+    const actorScopes = await this.resolveActorScopes(actor);
+    const scopePredicate = this.buildScopePredicate(actorScopes);
+
     const items: SearchResultItem[] = [];
     const matchedTypes = new Set<string>();
 
@@ -99,15 +164,20 @@ export class SearchService {
 
     // 1. Orders Aggregate
     if (shouldQueryOrders) {
+      const whereOrder: any = {
+        merchant_id: actor.merchantId,
+        OR: [
+          { order_code: { contains: q, mode: 'insensitive' } },
+          { recipient_name: { contains: q, mode: 'insensitive' } },
+          { recipient_phone: { contains: q } },
+        ],
+      };
+      if (scopePredicate) {
+        whereOrder.AND = [scopePredicate];
+      }
+
       const orders = await this.prisma.order.findMany({
-        where: {
-          merchant_id: actor.merchantId,
-          OR: [
-            { order_code: { contains: q, mode: 'insensitive' } },
-            { recipient_name: { contains: q, mode: 'insensitive' } },
-            { recipient_phone: { contains: q } },
-          ],
-        },
+        where: whereOrder,
         take: limit,
         orderBy: { created_at: 'desc' },
       });
@@ -139,14 +209,19 @@ export class SearchService {
 
     // 2. Waybills / Shipments Aggregate
     if (shouldQueryWaybills) {
+      const whereShipment: any = {
+        merchant_id: actor.merchantId,
+        OR: [
+          { tracking_code: { contains: q, mode: 'insensitive' } },
+          { order_code: { contains: q, mode: 'insensitive' } },
+        ],
+      };
+      if (scopePredicate) {
+        whereShipment.AND = [scopePredicate];
+      }
+
       const shipments = await this.prisma.shipment.findMany({
-        where: {
-          merchant_id: actor.merchantId,
-          OR: [
-            { tracking_code: { contains: q, mode: 'insensitive' } },
-            { order_code: { contains: q, mode: 'insensitive' } },
-          ],
-        },
+        where: whereShipment,
         take: limit,
         orderBy: { created_at: 'desc' },
       });
@@ -173,14 +248,19 @@ export class SearchService {
 
     // 3. Batches / Carrier Statements Aggregate (Reconciliation)
     if (shouldQueryBatches) {
+      const whereStatement: any = {
+        merchant_id: actor.merchantId,
+        OR: [
+          { checksum: { contains: q, mode: 'insensitive' } },
+          { status: { contains: q, mode: 'insensitive' } },
+        ],
+      };
+      if (scopePredicate) {
+        whereStatement.AND = [scopePredicate];
+      }
+
       const statements = await this.prisma.carrierStatement.findMany({
-        where: {
-          merchant_id: actor.merchantId,
-          OR: [
-            { checksum: { contains: q, mode: 'insensitive' } },
-            { status: { contains: q, mode: 'insensitive' } },
-          ],
-        },
+        where: whereStatement,
         take: limit,
         orderBy: { created_at: 'desc' },
       });
@@ -208,15 +288,20 @@ export class SearchService {
 
     // 4. Cases Aggregate (Exceptions and Claims)
     if (shouldQueryCases) {
+      const whereException: any = {
+        merchant_id: actor.merchantId,
+        OR: [
+          { tracking_code: { contains: q, mode: 'insensitive' } },
+          { carrier_raw_reason: { contains: q, mode: 'insensitive' } },
+          { standard_reason: { contains: q, mode: 'insensitive' } },
+        ],
+      };
+      if (scopePredicate) {
+        whereException.AND = [scopePredicate];
+      }
+
       const exceptions = await this.prisma.exceptionCase.findMany({
-        where: {
-          merchant_id: actor.merchantId,
-          OR: [
-            { tracking_code: { contains: q, mode: 'insensitive' } },
-            { carrier_raw_reason: { contains: q, mode: 'insensitive' } },
-            { standard_reason: { contains: q, mode: 'insensitive' } },
-          ],
-        },
+        where: whereException,
         take: limit,
         orderBy: { created_at: 'desc' },
       });
@@ -240,14 +325,19 @@ export class SearchService {
         matchedTypes.add('CASE');
       }
 
+      const whereClaim: any = {
+        merchant_id: actor.merchantId,
+        OR: [
+          { carrier_ticket: { contains: q, mode: 'insensitive' } },
+          { claim_type: { contains: q, mode: 'insensitive' } },
+        ],
+      };
+      if (scopePredicate) {
+        whereClaim.AND = [scopePredicate];
+      }
+
       const claims = await this.prisma.claim.findMany({
-        where: {
-          merchant_id: actor.merchantId,
-          OR: [
-            { carrier_ticket: { contains: q, mode: 'insensitive' } },
-            { claim_type: { contains: q, mode: 'insensitive' } },
-          ],
-        },
+        where: whereClaim,
         take: limit,
         orderBy: { created_at: 'desc' },
       });
@@ -274,11 +364,16 @@ export class SearchService {
 
     // 5. Transactions / Discrepancies Aggregate (Reconciliation)
     if (shouldQueryTransactions) {
+      const whereDiscrepancy: any = {
+        merchant_id: actor.merchantId,
+        OR: [{ tracking_code: { contains: q, mode: 'insensitive' } }],
+      };
+      if (scopePredicate) {
+        whereDiscrepancy.AND = [scopePredicate];
+      }
+
       const discrepancies = await this.prisma.discrepancy.findMany({
-        where: {
-          merchant_id: actor.merchantId,
-          OR: [{ tracking_code: { contains: q, mode: 'insensitive' } }],
-        },
+        where: whereDiscrepancy,
         take: limit,
         orderBy: { created_at: 'desc' },
       });
@@ -303,6 +398,7 @@ export class SearchService {
       }
     }
 
+    const totalFound = items.length;
     // Truncate combined items to overall requested limit
     const finalItems = items.slice(0, limit);
 
@@ -312,7 +408,7 @@ export class SearchService {
         data: {
           merchant_id: actor.merchantId,
           user_id: actor.userId,
-          actor: actor.role || 'USER',
+          actor: actor.role || actor.userId || 'MERCHANT_USER',
           action: 'GLOBAL_SEARCH_QUERY',
           entity_type: 'search',
           entity_id: actor.merchantId,
@@ -320,7 +416,7 @@ export class SearchService {
             query: maskQueryPii(q),
             filter_type: type,
             limit,
-            total_results: finalItems.length,
+            total_results: totalFound,
             matched_types: Array.from(matchedTypes),
           },
           reason: correlationId ? `correlation_id:${correlationId}` : null,
@@ -335,7 +431,7 @@ export class SearchService {
       success: true,
       data: {
         query: q,
-        total: finalItems.length,
+        total: totalFound,
         items: finalItems,
       },
       meta: {

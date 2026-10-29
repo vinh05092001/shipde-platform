@@ -12,10 +12,10 @@
 | Assigned author | `GEMINI` |
 | Risk            | `HIGH` |
 | Risk domains    | `tenant isolation`, `rbac`, `pii masking`, `cross-domain search`, `audit` |
-| Allowed paths   | `docs/product-spec/work-items/FEAT-COM-01.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`, `docs/product-spec/contracts/openapi.yaml`, `packages/contracts/src/index.ts`, `packages/contracts/src/openapi.ts`, `apps/api/src/search/*`, `apps/api/src/app.module.ts`, `apps/web/src/components/*`, `apps/web/src/app/*` |
+| Allowed paths   | `docs/product-spec/work-items/FEAT-COM-01.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`, `docs/product-spec/contracts/openapi.yaml`, `packages/contracts/src/index.ts`, `packages/contracts/src/openapi.ts`, `apps/api/src/search/*`, `apps/api/src/app.module.ts`, `apps/web/src/components/*`, `apps/web/src/app/*`, `prisma/schema.prisma`, `prisma/migrations/*` |
 | Reviewer        | Codex — fresh independent task |
 | Branch          | `feat/feat-com-01` |
-| Pull Request    | Pending |
+| Pull Request    | #464 |
 
 ## Business outcome
 
@@ -127,26 +127,30 @@ Any authenticated merchant user can perform unified global search across primary
 | `AC-COM-01-24` | UI Recovery State: Recovery pathways | Provides retry button, reset-to-all button, clear input button across all error/empty states | PASS — Verified in `global-search-states.test.ts` |
 | `AC-COM-01-25` | UI Keyboard & Accessibility: Dialog & listbox | Fully implements `role="dialog"`, `aria-modal="true"`, `role="searchbox"`, `role="listbox"`, `role="option"`, `aria-selected="true"`, ArrowUp/Down, Enter, Esc | PASS — Verified in `global-search-states.test.ts` |
 | `AC-COM-01-26` | Standalone Search Page: `/search` screen | Standalone search interface rendered with header navigation and breadcrumbs back to main dashboard | PASS — Verified in `global-search-states.test.ts` |
+| `AC-COM-01-27` | FEAT-RBAC-02 Branch Scope: User scoped to specific branch | Only orders belonging to that branch returned in search; other branch orders excluded | PASS — Verified in `search.supertest.spec.ts` & `search.unit.spec.ts` |
+| `AC-COM-01-28` | FEAT-RBAC-02 Warehouse Scope: User scoped to specific warehouse | Only shipments belonging to that warehouse returned in search; other warehouse shipments excluded | PASS — Verified in `search.supertest.spec.ts` & `search.unit.spec.ts` |
+| `AC-COM-01-29` | Empty Scope Fail-Closed: Non-owner with empty scopes | Receives zero results; search fail-closed prevents unauthorized tenant data exposure | PASS — Verified in `search.supertest.spec.ts` & `search.unit.spec.ts` |
+| `AC-COM-01-30` | Universal Scope Access: OWNER or wildcard `*` scope | Searches all tenant resources across all branches and warehouses without restriction | PASS — Verified in `search.supertest.spec.ts` & `search.unit.spec.ts` |
 
 ## Verification commands
 
 - `pnpm install --frozen-lockfile` — PASSED (dependencies up-to-date)
-- `pnpm db:generate` — PASSED (Prisma Client v6.19.3 generated)
-- `pnpm lint` — PASSED (12 tasks successful, 0 errors, 0 warnings)
+- `pnpm db:generate` — PASSED (Prisma Client v6.19.3 generated with branch_id & warehouse_id)
+- `pnpm lint` — PASSED (0 errors, 0 warnings)
 - `pnpm format:check` — PASSED (all changed files 100% compliant)
-- `pnpm typecheck` — PASSED (12 tasks successful, 0 errors)
-- `pnpm --filter @shipde/api exec tsx --tsconfig tsconfig.json --test src/search/search.unit.spec.ts` — PASSED (all 24 unit tests passed)
-- `pnpm --filter @shipde/api exec tsx --tsconfig tsconfig.json src/search/search.supertest.spec.ts` — PASSED (all 15 supertest acceptance criteria passed)
+- `pnpm typecheck` — PASSED (0 errors across api and web)
+- `pnpm test:a11y` — PASSED (0 accessibility errors, aria-pressed added to category filters)
+- `pnpm --filter @shipde/api exec tsx --tsconfig tsconfig.json --test src/search/search.unit.spec.ts` — PASSED (all 28 unit tests passed)
+- `pnpm --filter @shipde/api exec tsx --tsconfig tsconfig.json src/search/search.supertest.spec.ts` — PASSED (all 19 supertest acceptance criteria passed)
 - `pnpm --filter @shipde/web exec tsx src/tests/global-search-states.test.ts` — PASSED (all 12 UI states & accessibility scenarios passed)
-- `pnpm --filter @shipde/web test` — PASSED (all web component and state suites green)
-- `pnpm contract:check` — PASSED (59 endpoints validated, 0 drift between OpenAPI 3.1.0 and @shipde/contracts)
 - `node scripts/ai/check-no-hardcode.mjs` — PASSED (0 raw instances, 0 new)
 
 ## Codex review record
 
 | Review round | Commit | Verdict | Findings resolved |
 |---|---|---|---|
-| 1 | Pending | Pending | Initial implementation |
+| 1 | `abd4d62d` | CHANGES_REQUIRED | Initial implementation of FEAT-COM-01 vertical slice |
+| 2 | Pending | Pending | Fixed P1 #1 (FEAT-RBAC-02 branch and warehouse scoping on all searched entities with resolveActorScopes and buildScopePredicate), P1 #2 (supertest cleanup of all created tenant rows in finally, suffixed unique tax_codes), P2 #3 (formatted phone number & email PII masking), P2 #4 (audit actor fallback), P2 #5 (accurate total result count & partial derivation), and P2 #6 (aria-pressed on category filter buttons). |
 
 ## Residual limitations
 
