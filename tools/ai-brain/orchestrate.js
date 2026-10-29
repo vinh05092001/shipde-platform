@@ -4389,7 +4389,9 @@ async function runOrchestration(goal, opts) {
       const checkpointSha = rec && rec.sha ? rec.sha : null;
       const ciConfig = ciGate.ciGateConfig(o.dispatch || o.registry?.dispatch);
       const isCiDisabled = o.ciGate === false || !ciConfig.enabled;
-      if (!completedBefore.has(item.id) && publishedBefore.has(item.id) && isCiDisabled) {
+      if (completedBefore.has(item.id)) {
+        outcome(item, ItemStatus.COMPLETED, 'CHECKPOINT_COMPLETED');
+      } else if (publishedBefore.has(item.id) && isCiDisabled) {
         outcome(
           item,
           ItemStatus.BLOCKED,
@@ -4398,7 +4400,7 @@ async function runOrchestration(goal, opts) {
             reasonCode: 'CI_GATE_DISABLED',
           }
         );
-      } else if (!checkpointSha || (checkpointReviewError && !publishedBefore.has(item.id))) {
+      } else if (!checkpointSha || checkpointReviewError) {
         outcome(item, ItemStatus.BLOCKED, checkpointReviewError || 'NO_REVIEWED_COMMIT', {
           reasonCode: 'CHECKPOINT_RECEIPT_INVALID',
         });
@@ -6848,19 +6850,21 @@ async function runOrchestration(goal, opts) {
 
   for (const entry of log.reviews) {
     if (!entry.sha) {
-      const refused = {
-        status: PublicationStatus.REFUSED,
-        workItemId: entry.workItemId,
-        reason:
-          entry.checkpointReviewError ||
-          'NO_REVIEWED_COMMIT: missing review record in checkpoint for ' + entry.workItemId,
-      };
-      log.publications.push(refused);
-      entry.publication = refused;
-      if (liveSteps[entry.workItemId]) {
-        liveSteps[entry.workItemId].publication = refused;
+      if (publishedBefore.has(entry.workItemId) || o.publication) {
+        const refused = {
+          status: PublicationStatus.REFUSED,
+          workItemId: entry.workItemId,
+          reason:
+            entry.checkpointReviewError ||
+            'NO_REVIEWED_COMMIT: missing review record in checkpoint for ' + entry.workItemId,
+        };
+        log.publications.push(refused);
+        entry.publication = refused;
+        if (liveSteps[entry.workItemId]) {
+          liveSteps[entry.workItemId].publication = refused;
+        }
+        recordPublishDecision(entry, refused);
       }
-      recordPublishDecision(entry, refused);
       continue;
     }
     const itemStep = liveSteps[entry.workItemId] || {};
@@ -7078,7 +7082,7 @@ async function runOrchestration(goal, opts) {
       }
     }
 
-    if (entry.checkpointReviewError) {
+    if (!completedBefore.has(entry.workItemId) && entry.checkpointReviewError) {
       for (let i = log.outcomes.length - 1; i >= 0; i -= 1) {
         if (log.outcomes[i].workItemId === entry.workItemId) {
           log.outcomes.splice(i, 1);
