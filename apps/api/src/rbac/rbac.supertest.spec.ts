@@ -17,6 +17,7 @@ import {
 } from '@shipde/testkit';
 import { seedDatabase, SEED_MERCHANT_ID } from '../../../../infra/docker/seed';
 import { SYSTEM_ROLE_IDS, RbacService } from './rbac.service';
+import { PLATFORM_PERMISSIONS } from './rbac.constants';
 import { RoleEnum } from '@prisma/client';
 
 /**
@@ -226,13 +227,17 @@ async function main() {
   console.log('--- Running RBAC Supertest End-to-End HTTP tests ---');
 
   // =========================================================================
-  // AC-RBAC-01-01: List permissions returns all 20 canonical permissions across categories
+  // AC-RBAC-01-01: List permissions returns all canonical permissions across categories
   // =========================================================================
   const permRes = await request(server)
     .get('/api/v1/permissions')
     .set('Authorization', `Bearer ${ownerToken}`)
     .expect(200);
-  assert.strictEqual(permRes.body.data.permissions.length, 20);
+  assert.strictEqual(permRes.body.data.permissions.length, PLATFORM_PERMISSIONS.length);
+  assert.deepStrictEqual(
+    permRes.body.data.permissions.map((permission: { code: string }) => permission.code).sort(),
+    PLATFORM_PERMISSIONS.map((permission) => permission.code).sort()
+  );
   assert.ok(permRes.body.data.categories.length >= 6);
 
   // =========================================================================
