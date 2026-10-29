@@ -582,6 +582,8 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
     const res = await service.getPermissions('corr-01');
     assert.strictEqual(res.meta.correlation_id, 'corr-01');
     assert.strictEqual(res.data.permissions.length, PLATFORM_PERMISSIONS.length);
+    assert.ok(res.data.permissions.some((p: any) => p.code === 'search:tenant_wide'));
+    assert.ok(res.data.permissions.some((p: any) => p.code === 'iam:shop_view'));
     assert.deepStrictEqual(
       [...res.data.categories].sort(),
       ['AUDIT', 'CLAIMS', 'IAM', 'ORDERS', 'RECONCILIATION', 'SHIPMENTS'].sort()

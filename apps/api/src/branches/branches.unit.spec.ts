@@ -1005,8 +1005,7 @@ describe('FEAT-ORG-02: Branches Unit Test Suite', () => {
         actorHasPermissions: async (actor: any, perms: string[]) =>
           Boolean(
             (perms.includes('iam:shop_config') && actor.hasPerm) ||
-              (perms.includes('iam:shop_view') &&
-                actor.customRoleId === 'role-authoritative-finance')
+            (perms.includes('iam:shop_view') && actor.customRoleId === 'role-authoritative-finance')
           ),
       };
       const controller = new BranchesController(mockBranchesService, mockRbacService);

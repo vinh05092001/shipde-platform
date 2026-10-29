@@ -13,12 +13,6 @@ export interface CanonicalPermissionDefinition {
 export const PLATFORM_PERMISSIONS: CanonicalPermissionDefinition[] = [
   // 1. IAM Domain
   {
-    code: 'iam:shop_view',
-    name: 'Xem cấu hình cửa hàng',
-    description: 'Xem thông tin cấu hình cửa hàng và chi nhánh trong phạm vi được phân quyền',
-    category: 'IAM',
-  },
-  {
     code: 'iam:shop_config',
     name: 'Cấu hình cửa hàng',
     description: 'Thiết lập thông tin cửa hàng, kho lấy hàng và kết nối kỹ thuật',
@@ -40,6 +34,12 @@ export const PLATFORM_PERMISSIONS: CanonicalPermissionDefinition[] = [
     code: 'iam:grant_action_permission',
     name: 'Cấp quyền hành động hãng',
     description: 'Ủy quyền cho nhân viên gửi lệnh L2 Execute trực tiếp tới hãng',
+    category: 'IAM',
+  },
+  {
+    code: 'search:tenant_wide',
+    name: 'Tìm kiếm toàn cửa hàng',
+    description: 'Search all tenant branches, warehouses and records with unassigned scope',
     category: 'IAM',
   },
 
@@ -147,6 +147,12 @@ export const PLATFORM_PERMISSIONS: CanonicalPermissionDefinition[] = [
     name: 'Xem nhật ký kiểm toán bất biến',
     description: 'Tra cứu lịch sử thao tác hệ thống, thay đổi vai trò và hành động nhân viên',
     category: 'AUDIT',
+  },
+  {
+    code: 'iam:shop_view',
+    name: 'Xem cấu hình cửa hàng',
+    description: 'Xem thông tin cấu hình cửa hàng và chi nhánh trong phạm vi được phân quyền',
+    category: 'IAM',
   },
 ];
 

@@ -328,6 +328,23 @@ export class BranchesService {
 
     const normalizedCode = dto.code.trim().toUpperCase();
 
+    // BR-BRANCH-05: A scoped actor may only create a branch inside their assigned
+    // store_scopes. Creating a branch outside that scope is a privilege escalation
+    // and must fail closed with 403 even though the actor holds iam:shop_config.
+    const scopedIdentifiers = await this.getActorStoreScopes(actor);
+    if (scopedIdentifiers !== null) {
+      const scopedSet = new Set(scopedIdentifiers);
+      if (!scopedSet.has(normalizedCode)) {
+        throw new CanonicalApiException(
+          HttpStatus.FORBIDDEN,
+          'FORBIDDEN',
+          'Người dùng không có quyền tạo chi nhánh ngoài phạm vi được phân quyền',
+          false,
+          'Vui lòng liên hệ quản trị viên để được phân quyền chi nhánh'
+        );
+      }
+    }
+
     // Check duplicate code in same merchant
     const existingWithCode = await this.prisma.branch.findFirst({
       where: {
@@ -344,23 +361,6 @@ export class BranchesService {
         false,
         'Vui lòng chọn một mã chi nhánh khác'
       );
-    }
-
-    // BR-BRANCH-05: A scoped actor may only create a branch inside their assigned
-    // store_scopes. Creating a branch outside that scope is a privilege escalation
-    // and must fail closed with 403 even though the actor holds iam:shop_config.
-    const scopedIdentifiers = await this.getActorStoreScopes(actor);
-    if (scopedIdentifiers !== null) {
-      const scopedSet = new Set(scopedIdentifiers);
-      if (!scopedSet.has(normalizedCode)) {
-        throw new CanonicalApiException(
-          HttpStatus.FORBIDDEN,
-          'FORBIDDEN',
-          'Người dùng không có quyền tạo chi nhánh ngoài phạm vi được phân quyền',
-          false,
-          'Vui lòng liên hệ quản trị viên để được phân quyền chi nhánh'
-        );
-      }
     }
 
     try {

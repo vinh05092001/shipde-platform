@@ -628,16 +628,33 @@ async function runBranchesSupertestSuite() {
       '  PASS: Custom role named "Non-Finance" cannot read branch detail (403 read guard).'
     );
 
-    // FINANCE role (view-only in RBAC matrix) may read the list but the server
-    // must report can_edit: false (no iam:shop_config on the FINANCE system role).
-    const { token: financeTokenA } = await setupUserSession(merchantIdA, RoleEnum.FINANCE, 'fin_a');
+    // View-only role (iam:shop_view in RBAC matrix) may read the list but the server
+    // must report can_edit: false (no iam:shop_config).
+    const financeRoleRes = await request(app.getHttpServer())
+      .post('/api/v1/roles')
+      .set('Authorization', `Bearer ${ownerTokenA}`)
+      .send({
+        name: `Finance Viewer ${testSuffix}`,
+        description: 'View-only role with iam:shop_view for branch read test',
+        permissions: ['iam:shop_view'],
+      })
+      .expect(201);
+    const financeRoleId = financeRoleRes.body.data.role.id;
+
+    const { token: financeTokenA } = await setupUserSession(
+      merchantIdA,
+      RoleEnum.ACCOUNTANT,
+      'fin_a',
+      [],
+      financeRoleId
+    );
     const resFinanceList = await request(app.getHttpServer())
       .get('/api/v1/branches')
       .set('Authorization', `Bearer ${financeTokenA}`)
       .expect(200);
     assert.strictEqual(resFinanceList.body.success, true);
     assert.strictEqual(resFinanceList.body.data.can_edit, false);
-    console.log('  PASS: FINANCE role reads branch list with server-derived can_edit=false.');
+    console.log('  PASS: View-only role reads branch list with server-derived can_edit=false.');
 
     // Owner (holds iam:shop_config) must receive can_edit: true on the list
     const resOwnerList = await request(app.getHttpServer())
