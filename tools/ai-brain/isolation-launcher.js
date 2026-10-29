@@ -352,8 +352,7 @@ function retainedRootHasOwnWriterRecord(opts, extra = {}) {
     if (!o.workItemId) return false;
     const baseId = String(o.workItemId).replace(/-(repair-\d+|review)$/, '');
     const targetRoot = extra.workerRoot || o.workerRoot;
-    const targetSha =
-      extra.retainedHeadSha || extra.retainWorkerHead || o.retainWorkerHead || o.baseSha;
+    const targetSha = extra.retainedHeadSha || extra.retainWorkerHead || o.retainWorkerHead;
     const targetRun = extra.runId || o.runId;
 
     if (!baseId || !targetRoot || !targetSha || !targetRun) {
@@ -384,7 +383,7 @@ function retainedRootHasOwnWriterRecord(opts, extra = {}) {
         return false;
       }
 
-      const recSha = rec.sha || rec.baseSha || rec.headSha;
+      const recSha = rec.sha || rec.headSha;
       if (!recSha) return false;
       if (String(recSha).toLowerCase() !== String(targetSha).toLowerCase()) {
         return false;
@@ -2133,6 +2132,7 @@ function getIsolatedLauncher() {
         'id_rsa*',
         'id_ed25519*',
       ]);
+      let commitRefusalReason = null;
       if (
         retainedHeadSha &&
         retainedHeadSha.toLowerCase() === retainWorkerHead.toLowerCase() &&
@@ -2250,7 +2250,8 @@ function getIsolatedLauncher() {
               { dir: opts.decisionDir || undefined }
             );
           }
-        } catch {
+        } catch (err) {
+          commitRefusalReason = (err && err.message) || String(err);
           // Fail closed: the dirty tree is reported as WORKER_HEAD_MISMATCH below.
         }
       }
@@ -2395,11 +2396,17 @@ function getIsolatedLauncher() {
             isTreeDirty(workerRoot)
           ) {
             errMsg =
-              'WORKER_HEAD_MISMATCH: retained worker root HEAD (' + retainedHeadSha + ') is dirty';
+              'WORKER_HEAD_MISMATCH: retained worker root HEAD (' +
+              retainedHeadSha +
+              ') is dirty' +
+              (commitRefusalReason ? ': ' + commitRefusalReason : '');
           }
 
           const err = new Error(errMsg);
           err.code = 'WORKER_HEAD_MISMATCH';
+          if (commitRefusalReason) {
+            err.refusalReason = commitRefusalReason;
+          }
           throw err;
         }
       }

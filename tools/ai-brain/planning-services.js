@@ -74,9 +74,20 @@ function defaultGit(cwd, args) {
     extra.push('-c', 'core.autocrlf=true');
   }
   if (args.includes('commit')) {
-    const isNoVerify = args.some(
-      (a) => a === '--no-verify' || a === '-n' || a.startsWith('--no-verify')
-    );
+    const isNoVerify = args.some((a) => {
+      if (typeof a !== 'string') return false;
+      if (a === '--no-verify' || a.startsWith('--no-verify') || a.startsWith('--no-ver')) {
+        return true;
+      }
+      if (a.startsWith('-') && !a.startsWith('--') && a.length > 1) {
+        for (let i = 1; i < a.length; i++) {
+          const ch = a[i];
+          if (ch === 'n') return true;
+          if ('mFcCut'.includes(ch)) break;
+        }
+      }
+      return false;
+    });
     const hasHooksPathOverride = args.some((a) => /core\.hooksPath/i.test(a));
     if (isNoVerify || hasHooksPathOverride) {
       return {

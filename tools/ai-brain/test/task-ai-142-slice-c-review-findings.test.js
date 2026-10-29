@@ -768,7 +768,11 @@ test('Round 3 Finding 14: context-pack and context7 use shell: false and array a
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ctxpack-'));
   const origSpawnSync = cp.spawnSync;
   const origSpawn = cp.spawn;
+  const origRepomixBin = process.env.SHIPDE_REPOMIX_BIN;
   try {
+    const fakeBin = path.join(tmp, process.platform === 'win32' ? 'repomix.cmd' : 'repomix');
+    fs.writeFileSync(fakeBin, 'fake');
+    process.env.SHIPDE_REPOMIX_BIN = fakeBin;
     fs.writeFileSync(path.join(tmp, 'file.txt'), 'hello');
     let packSpawnArgs = null;
     let packSpawnOpts = null;
@@ -784,6 +788,11 @@ test('Round 3 Finding 14: context-pack and context7 use shell: false and array a
     });
     assert.ok(pack.content);
     assert.equal(pack.packer, 'fallback'); // repomix mock status 1, cleanly fell back
+    assert.ok(Array.isArray(packSpawnArgs), 'packSpawnArgs must be an array');
+    assert.ok(packSpawnArgs.includes('--include'), 'packSpawnArgs must include --include');
+    assert.ok(packSpawnArgs.includes('--output'), 'packSpawnArgs must include --output');
+    assert.strictEqual(packSpawnOpts.shell, false, 'repomix spawnSync must use shell: false');
+    assert.strictEqual(packSpawnOpts.cwd, tmp, 'repomix spawnSync cwd must be root');
 
     const ctx7Calls = [];
     cp.spawn = (cmd, args, opts) => {
@@ -809,6 +818,11 @@ test('Round 3 Finding 14: context-pack and context7 use shell: false and array a
   } finally {
     cp.spawnSync = origSpawnSync;
     cp.spawn = origSpawn;
+    if (origRepomixBin !== undefined) {
+      process.env.SHIPDE_REPOMIX_BIN = origRepomixBin;
+    } else {
+      delete process.env.SHIPDE_REPOMIX_BIN;
+    }
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
@@ -1064,6 +1078,30 @@ test('Round 4 Finding 2: defaultGit rejects core.hooksPath override and --no-ver
     assert.equal(r4.ok, false);
     assert.match(
       r4.stderr,
+      /HOOK_CHECK_FAILED: core.hooksPath bypass or --no-verify is prohibited/
+    );
+
+    // 5. -qn combined short form bypass attempt
+    const r5 = defaultGit(tmp, ['commit', '-qn', '-m', 'bypass']);
+    assert.equal(r5.ok, false);
+    assert.match(
+      r5.stderr,
+      /HOOK_CHECK_FAILED: core.hooksPath bypass or --no-verify is prohibited/
+    );
+
+    // 6. -nq combined short form bypass attempt
+    const r6 = defaultGit(tmp, ['commit', '-nq', '-m', 'bypass']);
+    assert.equal(r6.ok, false);
+    assert.match(
+      r6.stderr,
+      /HOOK_CHECK_FAILED: core.hooksPath bypass or --no-verify is prohibited/
+    );
+
+    // 7. -an combined short form bypass attempt
+    const r7 = defaultGit(tmp, ['commit', '-an', '-m', 'bypass']);
+    assert.equal(r7.ok, false);
+    assert.match(
+      r7.stderr,
       /HOOK_CHECK_FAILED: core.hooksPath bypass or --no-verify is prohibited/
     );
   } finally {
@@ -1416,7 +1454,7 @@ test('Round 4 Finding 8: retained root repair fails closed on dirty .env or dirt
     // Secret file must cause refusal even with functioning hooks and valid allowedPaths
     await assert.rejects(
       () => Promise.resolve().then(() => getIsolatedLauncher()({ id: 'test' }, null, opts1)),
-      /WORKER_HEAD_MISMATCH.*is dirty/
+      /WORKER_HEAD_MISMATCH.*is dirty.*(WORKER_COMMIT_REFUSED: dirty tree contains sensitive files|sensitive files)/
     );
 
     let workerHead = cp
@@ -1424,8 +1462,9 @@ test('Round 4 Finding 8: retained root repair fails closed on dirty .env or dirt
       .trim();
     assert.equal(workerHead, headSha, 'HEAD must not advance by committing secrets');
 
-    // Remove .env and test dirty unauthorized file alone
-    fs.unlinkSync(path.join(workerRoot, '.env'));
+    // Restore .env to committed contents and test dirty unauthorized file alone
+    fs.writeFileSync(path.join(workerRoot, '.env'), 'SECRET_BASE=init\n', 'utf8');
+    cp.execSync('git checkout -- .env', { cwd: workerRoot, stdio: 'ignore' });
     fs.writeFileSync(path.join(workerRoot, 'unauthorized.txt'), 'illegal content\n', 'utf8');
 
     const opts2 = {
@@ -1434,10 +1473,10 @@ test('Round 4 Finding 8: retained root repair fails closed on dirty .env or dirt
       allowedPaths: ['docs/product-spec/work-items/FEAT-RETAIN-01.md'],
     };
 
-    // Unauthorized file outside allowedPaths must cause refusal
+    // Unauthorized file outside allowedPaths must cause refusal attributable to that unauthorized path
     await assert.rejects(
       () => Promise.resolve().then(() => getIsolatedLauncher()({ id: 'test' }, null, opts2)),
-      /WORKER_HEAD_MISMATCH.*is dirty/
+      /WORKER_HEAD_MISMATCH.*is dirty.*(WORKER_COMMIT_REFUSED: dirty file unauthorized\.txt outside allowed paths|unauthorized\.txt)/
     );
 
     workerHead = cp.execSync('git rev-parse HEAD', { cwd: workerRoot, encoding: 'utf8' }).trim();
