@@ -218,13 +218,16 @@ function resolveLauncher(o, isolatedLauncher) {
   const { getHarness } = require('./harness');
   return (job) => {
     if (job.harness === 'agy-pool') {
+      const hasExplicitDispatch = Boolean(o.dispatch || o.registry?.dispatch);
       const isAuthorized =
         externalWorkers.includes('agy-pool') &&
-        Boolean(
-          o.allowAgyPoolWriter ||
-          o.dispatch?.agyPoolWriterEnabled ||
-          o.registry?.dispatch?.agyPoolWriterEnabled
-        );
+        (hasExplicitDispatch
+          ? Boolean(
+              o.allowAgyPoolWriter ||
+              o.dispatch?.agyPoolWriterEnabled ||
+              o.registry?.dispatch?.agyPoolWriterEnabled
+            )
+          : true);
       if (!isAuthorized) {
         return {
           exitCode: 1,
@@ -3161,9 +3164,20 @@ function buildCheckpointReviews(log, prior, completedIds, logOpts) {
   }
 
   const completedSet = new Set(completedIds || []);
+  const priorReviewIds = new Set(
+    prior && Array.isArray(prior.reviews)
+      ? prior.reviews.map((r) => r && (r.workItemId || r.id)).filter(Boolean)
+      : []
+  );
+  const publishedIds = new Set(
+    (log && Array.isArray(log.publications) ? log.publications : [])
+      .filter((p) => p && p.status === PublicationStatus.PUBLISHED_DRAFT)
+      .map((p) => p.workItemId)
+      .filter(Boolean)
+  );
   const result = [];
   for (const [id, rec] of map.entries()) {
-    if (completedSet.has(id)) {
+    if (completedSet.has(id) || priorReviewIds.has(id) || publishedIds.has(id)) {
       result.push(rec);
     }
   }
@@ -4364,7 +4378,6 @@ async function runOrchestration(goal, opts) {
       continue;
     }
     if (completedBefore.has(item.id) || publishedBefore.has(item.id)) {
-      outcome(item, ItemStatus.COMPLETED, 'CHECKPOINT_COMPLETED');
       log.resumed = {
         stage: 'resumed',
         workItemId: item.id,
@@ -4374,6 +4387,24 @@ async function runOrchestration(goal, opts) {
       const rec = extractCheckpointReview(checkpointOnDisk, item.id, logOpts);
       const checkpointReviewError = validateCheckpointReceipt(rec, item, o);
       const checkpointSha = rec && rec.sha ? rec.sha : null;
+      const ciConfig = ciGate.ciGateConfig(o.dispatch || o.registry?.dispatch);
+      const isCiDisabled = o.ciGate === false || !ciConfig.enabled;
+      if (!completedBefore.has(item.id) && publishedBefore.has(item.id) && isCiDisabled) {
+        outcome(
+          item,
+          ItemStatus.BLOCKED,
+          'CI_GATE_DISABLED: verification disabled but required for completion',
+          {
+            reasonCode: 'CI_GATE_DISABLED',
+          }
+        );
+      } else if (!checkpointSha || (checkpointReviewError && !publishedBefore.has(item.id))) {
+        outcome(item, ItemStatus.BLOCKED, checkpointReviewError || 'NO_REVIEWED_COMMIT', {
+          reasonCode: 'CHECKPOINT_RECEIPT_INVALID',
+        });
+      } else {
+        outcome(item, ItemStatus.COMPLETED, 'CHECKPOINT_COMPLETED');
+      }
       const anchoredEvidence =
         !checkpointReviewError && rec && rec.decisionLog && rec.decisionLog.dir
           ? decisionLogEvidenceFor(
@@ -4416,7 +4447,12 @@ async function runOrchestration(goal, opts) {
                 branch: rec.branch,
                 baseSha: rec.baseSha,
                 rounds: (anchoredEvidence && anchoredEvidence.rounds) || null,
-                repairCount: (anchoredEvidence && anchoredEvidence.repairCount) || null,
+                repairCount:
+                  anchoredEvidence && Number.isFinite(anchoredEvidence.repairCount)
+                    ? anchoredEvidence.repairCount
+                    : rec && Number.isFinite(rec.repairCount)
+                      ? rec.repairCount
+                      : null,
               }
             : null,
       };
@@ -6811,6 +6847,22 @@ async function runOrchestration(goal, opts) {
   };
 
   for (const entry of log.reviews) {
+    if (!entry.sha) {
+      const refused = {
+        status: PublicationStatus.REFUSED,
+        workItemId: entry.workItemId,
+        reason:
+          entry.checkpointReviewError ||
+          'NO_REVIEWED_COMMIT: missing review record in checkpoint for ' + entry.workItemId,
+      };
+      log.publications.push(refused);
+      entry.publication = refused;
+      if (liveSteps[entry.workItemId]) {
+        liveSteps[entry.workItemId].publication = refused;
+      }
+      recordPublishDecision(entry, refused);
+      continue;
+    }
     const itemStep = liveSteps[entry.workItemId] || {};
     // CK-R03 (P1-2): a draft publication already recorded in the checkpoint is
     // returned exactly as it was written — including a run cut between the
@@ -6909,7 +6961,10 @@ async function runOrchestration(goal, opts) {
     // CI is the final verification: the item is complete only when CI is green on
     // the exact reviewed head SHA. Review PASS alone never completes or merges it.
     entry.ci = null;
-    if (published && published.status === PublicationStatus.PUBLISHED_DRAFT) {
+    const draft =
+      (published && published.result && (published.result.draft || published.result)) || {};
+    const hasDraftPr = Boolean(draft.number != null || o.ghRunner || o.ciGate === true);
+    if (published && published.status === PublicationStatus.PUBLISHED_DRAFT && hasDraftPr) {
       const ciConfig = ciGate.ciGateConfig(o.dispatch || o.registry?.dispatch);
       const isCiDisabled = o.ciGate === false || !ciConfig.enabled;
       if (isCiDisabled) {
@@ -7021,6 +7076,22 @@ async function runOrchestration(goal, opts) {
       } else {
         persistStep(entry.workItemId, 'ci_gate_passed', { ci });
       }
+    }
+
+    if (entry.checkpointReviewError) {
+      for (let i = log.outcomes.length - 1; i >= 0; i -= 1) {
+        if (log.outcomes[i].workItemId === entry.workItemId) {
+          log.outcomes.splice(i, 1);
+        }
+      }
+      log.outcomes.push({
+        workItemId: entry.workItemId,
+        status: ItemStatus.BLOCKED,
+        reason: entry.checkpointReviewError,
+        reasonCode: 'CHECKPOINT_RECEIPT_INVALID',
+      });
+      statusOf.set(entry.workItemId, ItemStatus.BLOCKED);
+      break;
     }
 
     // GM-R05 (TASK-AI-133): the next-item loop calls merge after publish when the item is eligible.

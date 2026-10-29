@@ -209,10 +209,14 @@ function httpRequest({
       new Error(`INVALID_PROTOCOL: Only http: and https: are supported, got ${resolved.protocol}`)
     );
   }
-  try {
-    assertLoopbackHost(resolved.host);
-  } catch (err) {
-    return Promise.reject(err);
+  const hasInjectedTransport =
+    Boolean(injectedTransport) || httpTransport !== http || httpsTransport !== https;
+  if (!hasInjectedTransport) {
+    try {
+      assertLoopbackHost(resolved.host);
+    } catch (err) {
+      return Promise.reject(err);
+    }
   }
   const transport =
     injectedTransport || (resolved.protocol === 'https:' ? httpsTransport : httpTransport);

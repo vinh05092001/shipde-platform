@@ -2040,6 +2040,14 @@ test('Round 8 Finding 1: published checkpoint entries retain receipt validation 
       null,
       'reviewed SHA must not fall back to launch.workerSha or passedRef'
     );
+
+    const outcome = (result.outcomes || []).find((o) => o.workItemId === workItemId);
+    assert.ok(outcome, 'outcome must exist for work item');
+    assert.equal(outcome.status, orchestrate.ItemStatus.BLOCKED, 'completion must be refused');
+    assert.equal(outcome.reasonCode, 'CHECKPOINT_RECEIPT_INVALID');
+    assert.equal(result.publications[0].status, orchestrate.PublicationStatus.REFUSED);
+    assert.match(String(result.publications[0].reason), /missing review record in checkpoint/);
+    assert.deepEqual(result.merges || [], [], 'merge must be refused');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
